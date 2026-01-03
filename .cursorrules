@@ -1,0 +1,234 @@
+# AV Stack Project Rules
+
+## Project Overview
+This is an autonomous vehicle (AV) stack for Unity 3D simulation. The project uses:
+- Python (PyTorch) for perception, trajectory planning, and control
+- Unity (C#) for simulation and vehicle control
+- FastAPI for Unity-Python communication bridge
+- Hybrid architecture: Perception → Trajectory → Control
+
+## Architecture
+
+### System Flow
+1. **Unity** captures camera frames and vehicle state
+2. **Bridge Server** (FastAPI) receives data from Unity
+3. **AV Stack** processes frames:
+   - **Perception**: CV-based lane detection (color masks, edge detection, Hough lines)
+   - **Trajectory**: Rule-based path planning with reference point smoothing
+   - **Control**: PID controller with feedforward (path curvature) + feedback (error correction)
+4. **Control commands** sent back to Unity
+5. **Data Recorder** saves everything to HDF5 files
+
+### Key Components
+
+**Perception** (`perception/inference.py`):
+- CV-based lane detection (no ML models currently)
+- Temporal filtering for stability
+- Jump detection to reject bad detections
+- Coordinate conversion (image → vehicle frame)
+
+**Trajectory** (`trajectory/inference.py`):
+- Rule-based planner (center of detected lanes)
+- Reference point smoothing (exponential smoothing)
+- Bias correction for systematic errors
+- Reference point at lookahead distance
+
+**Control** (`control/pid_controller.py`):
+- Feedforward: Path curvature → steering (bicycle model)
+- Feedback: PID controller for error correction
+- Integral reset mechanisms (prevent windup)
+- Rate limiting for smooth steering
+- Deadband on straight roads (disabled on curves)
+
+**Ground Truth Follower** (`tools/ground_truth_follower.py`):
+- Direct velocity control mode
+- Uses ground truth lane center for steering
+- Bypasses perception/trajectory (for data collection)
+
+### Coordinate Systems
+
+**Unity Vehicle Frame:**
+- Forward: +Y
+- Right: +X
+- Up: +Z
+- Heading: 0° = forward, positive = right turn
+
+**Image Frame:**
+- Origin: Top-left
+- X: Right (0 to width)
+- Y: Down (0 to height)
+
+**Vehicle Frame (from perception):**
+- Forward: +Y
+- Right: +X
+- Lateral error: Positive = right of target, Negative = left of target
+
+## Code Style
+
+### Python
+- Follow PEP 8 style guide
+- Use type hints where appropriate
+- Docstrings for all classes and public methods
+- Maximum line length: 100 characters
+- Use f-strings for string formatting
+- Prefer pathlib.Path over os.path
+
+### C# (Unity)
+- Follow Unity C# coding conventions
+- Use XML documentation comments for public APIs
+- PascalCase for public methods and properties
+- camelCase for private fields
+- Use [Header] attributes for Inspector organization
+
+## File Organization
+
+### Python Structure
+- Each module should have `__init__.py`
+- Keep related functionality together (perception/, trajectory/, control/)
+- Tests go in `tests/` directory
+- Analysis tools in `tools/analyze/`
+- Training scripts in `training/scripts/`
+
+### Unity Structure
+- Scripts in `Assets/Scripts/`
+- Prefabs in `Assets/Prefabs/`
+- Scenes in `Assets/Scenes/`
+- Materials in `Assets/Materials/`
+
+## Testing
+
+### Python Tests
+- Use pytest for Python tests
+- Test files should be in `tests/` directory
+- Test file naming: `test_*.py`
+- Place new test files in the test folder (user preference)
+- Run tests before committing: `pytest tests/`
+- Aim for >80% code coverage on critical paths
+
+### Unity Tests
+- Use Unity Test Framework if needed
+- Test scripts in `Assets/Tests/` or similar
+- Run Unity tests before major commits
+
+### Test Requirements
+- All bug fixes MUST include a test that reproduces the bug
+- New features MUST include unit tests
+- Tests should be deterministic and not flaky
+- Mock external dependencies (Unity bridge, file I/O, network)
+
+## Key Conventions
+
+### Data Recording
+- Use HDF5 format for recordings
+- Recordings go in `data/recordings/`
+- Include timestamps and frame IDs
+- Ground truth data in `ground_truth/` group
+
+### Model Training
+- Training configs in `training/configs/`
+- Checkpoints in `checkpoints/` (gitignored)
+- Use TensorBoard or wandb for logging
+
+### Communication
+- Bridge server runs on `http://localhost:8000` by default
+- Use JSON for data serialization
+- Handle connection errors gracefully
+
+## Unity-Python Integration
+
+### Component References
+- AVBridge should auto-find CarController on same GameObject
+- CameraCapture can be found anywhere in scene
+- Always check for null references before use
+
+### Error Handling
+- Log errors to Unity console with Debug.LogError
+- Python errors should be logged with print() or logging module
+- Handle network errors gracefully (Unity may not be running)
+
+## Documentation
+
+### Code Comments
+- Explain "why" not "what" in comments
+- Document complex algorithms
+- Include usage examples in docstrings
+
+### README Files
+- Keep README.md up to date
+- Document setup steps clearly
+- Include troubleshooting sections
+
+## Git
+
+### Ignore Patterns
+- Unity Library/ and Temp/ folders
+- Python __pycache__/ and *.pyc
+- Model checkpoints (*.pth, *.pt)
+- Data recordings (*.h5)
+- IDE files (.vscode/, .idea/)
+
+## Performance
+
+### Python
+- Use NumPy for array operations
+- Batch process when possible
+- Profile before optimizing
+
+### Unity
+- Avoid expensive operations in Update()
+- Use FixedUpdate() for physics
+- Cache component references
+
+## Debugging Workflow
+
+### Before Fixing a Bug
+1. **Reproduce the issue** - Create a minimal test case that demonstrates the bug
+2. **Document the bug** - Write down steps to reproduce, expected vs actual behavior
+3. **Identify root cause** - Use debugging tools, logs, and stack traces
+4. **Write a failing test** - Create a test that reproduces the bug (TDD approach)
+
+### When Fixing a Bug
+1. **Fix the root cause** - Don't just patch symptoms
+2. **Make the test pass** - The test written in step 1 should now pass
+3. **Run full test suite** - Ensure no regressions: `pytest tests/`
+4. **Verify in Unity** - Test the fix in the actual simulation if applicable
+5. **Update documentation** - If behavior changed, update relevant docs
+
+### Test Requirements for Bug Fixes
+- **MANDATORY**: Every bug fix must include a test that:
+  - Reproduces the original bug (before fix)
+  - Passes after the fix
+  - Is added to the appropriate test file
+- If a bug is hard to test, create an integration test or manual test checklist
+- Document edge cases discovered during debugging
+
+### Code Change Testing
+- Run tests after any code change: `pytest tests/ -v`
+- Run specific test file when modifying related code
+- Check test coverage for modified modules
+- Fix any failing tests before considering the change complete
+
+## Common Patterns
+
+### AV Stack Pipeline
+1. Get camera frame from Unity
+2. Run perception (lane detection)
+3. Plan trajectory from lanes
+4. Compute control commands (PID)
+5. Send commands back to Unity
+
+### Error Recovery
+- If perception fails, use CV fallback
+- If no lanes detected, drive straight slowly
+- If bridge disconnected, log error and retry
+
+### Debugging Tools
+- Use Python debugger (pdb) for complex issues
+- Use Unity Debug.Log for runtime debugging
+- Use pytest's `--pdb` flag to drop into debugger on failures
+- Log important state transitions and decisions
+
+## User Preferences
+- New Python test files should be placed in the test folder
+- Suggestions for ideas should be accompanied by insights
+- Brand uses clean white and black color scheme for marketing emails

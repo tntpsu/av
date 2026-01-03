@@ -1,0 +1,1115 @@
+"""
+Trajectory planning module.
+Takes lane lines from perception and generates desired trajectory.
+"""
+
+import numpy as np
+from typing import List, Optional, Tuple
+from dataclasses import dataclass
+import logging
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass
+class TrajectoryPoint:
+    """Single point in trajectory."""
+    x: float
+    y: float
+    heading: float  # radians
+    velocity: float  # m/s
+    curvature: float  # 1/m
+
+
+@dataclass
+class Trajectory:
+    """Complete trajectory."""
+    points: List[TrajectoryPoint]
+    length: float  # total length in meters
+
+
+class RuleBasedTrajectoryPlanner:
+    """
+    Rule-based trajectory planner.
+    Follows center of detected lanes.
+    """
+    
+    def __init__(self, lookahead_distance: float = 50.0, 
+                 point_spacing: float = 1.0, target_speed: float = 10.0,
+                 image_width: float = 640.0, image_height: float = 480.0,
+                 camera_fov: float = 75.0, camera_height: float = 1.2,
+                 lookahead_pixels: float = 200.0, bias_correction_threshold: float = 10.0,
+                 reference_smoothing: float = 0.7, lane_smoothing_alpha: float = 0.7,
+                 camera_offset_x: float = 0.0, distance_scaling_factor: float = 0.875):
+        """
+        Initialize trajectory planner.
+        
+        Args:
+            lookahead_distance: How far ahead to plan (meters)
+            point_spacing: Spacing between trajectory points (meters)
+            target_speed: Target speed for trajectory (m/s)
+            image_width: Camera image width in pixels
+            image_height: Camera image height in pixels
+            camera_fov: Camera field of view in degrees
+            camera_height: Camera height above ground in meters
+            lookahead_pixels: Lookahead distance in pixels (for coordinate conversion)
+            reference_smoothing: Exponential smoothing for reference points (0.0-1.0)
+            lane_smoothing_alpha: Exponential smoothing for lane coefficients (0.0-1.0, higher = more smoothing)
+        """
+        self.lookahead_distance = lookahead_distance
+        self.point_spacing = point_spacing
+        self.target_speed = target_speed
+        self.image_width = image_width
+        self.image_height = image_height
+        self.camera_fov = camera_fov
+        self.camera_height = camera_height
+        self.lookahead_pixels = lookahead_pixels
+        self.bias_correction_threshold = bias_correction_threshold
+        self.reference_smoothing = reference_smoothing
+        
+        # NEW: Camera offset correction (for calibration)
+        # camera_offset_x: Lateral offset of camera from vehicle center (meters, positive = right)
+        # This corrects for camera misalignment
+        self.camera_offset_x = camera_offset_x
+        
+        # NEW: Distance scaling factor to account for camera pitch
+        # When camera looks down, point 8m straight ahead in camera space is actually
+        # closer in world space when projected to ground. This scaling factor corrects for that.
+        # Default: 7/8 = 0.875 (based on visualizer tuning where 7m aligns correctly)
+        # This makes lanes appear correct width (7m instead of 8.5m)
+        self.distance_scaling_factor = distance_scaling_factor
+        
+        # For reference point smoothing
+        self.last_reference_x = None
+        self.last_reference_y = None
+        self.last_reference_heading = None
+        
+        # FIXED: Initialize temporal filtering for lane coefficients
+        self.lane_coeffs_history = []  # History of lane coefficients for smoothing
+        self.lane_smoothing_alpha = lane_smoothing_alpha  # Exponential smoothing factor
+        
+        # CRITICAL FIX: Track frames since last_center_coeffs was set
+        # This prevents locking in a biased first-frame trajectory
+        self._frames_since_last_center = 0
+        
+        # NEW: Adaptive bias correction - track bias history for persistent bias detection
+        self.bias_history = []  # History of reference point biases (in pixels)
+        self.bias_history_size = 30  # Track last 30 frames (~1 second at 30 FPS)
+        # FIXED: Relaxed threshold from 3.0 to 4.0 pixels to match current variance (3.78 pixels = 0.0545m)
+        # This allows adaptive corrections to trigger even with higher variance
+        self.persistent_bias_threshold_std = 4.0  # If std < this, bias is persistent (was 3.0, current variance = 3.78 pixels)
+        self.persistent_bias_threshold_mean = 1.0  # If mean > this, apply correction
+        
+        # Compute conversion factors from image to vehicle coordinates
+        # Using camera model: at lookahead distance, estimate pixel-to-meter conversion
+        # For typical AV camera: 75° FOV, 640x480 image
+        # At 10m lookahead: horizontal FOV ≈ 2 * 10 * tan(30°) ≈ 11.5m
+        # So 640 pixels ≈ 11.5m, or 1 pixel ≈ 0.018m horizontally
+        # For vertical: similar calculation
+        # More accurate would use camera calibration, but this is a reasonable approximation
+        fov_rad = np.radians(camera_fov)
+        # At typical lookahead (10-20m), estimate conversion
+        typical_lookahead = 15.0  # meters
+        width_at_lookahead = 2.0 * typical_lookahead * np.tan(fov_rad / 2.0)
+        self.pixel_to_meter_x = width_at_lookahead / image_width  # meters per pixel horizontally
+        # For vertical, assume similar FOV
+        height_at_lookahead = width_at_lookahead * (image_height / image_width)
+        self.pixel_to_meter_y = height_at_lookahead / image_height  # meters per pixel vertically
+    
+    def plan(self, lane_coeffs: List[Optional[np.ndarray]], 
+             vehicle_state: Optional[dict] = None) -> Trajectory:
+        """
+        Plan trajectory from lane lines.
+        
+        Args:
+            lane_coeffs: List of lane polynomial coefficients
+            vehicle_state: Current vehicle state (position, heading, etc.)
+        
+        Returns:
+            Planned trajectory
+        """
+        # FIXED: Apply temporal filtering to lane coefficients to reduce noise
+        lane_coeffs = self._smooth_lane_coeffs(lane_coeffs)
+        
+        # Filter out None lanes
+        valid_lanes = [coeffs for coeffs in lane_coeffs if coeffs is not None]
+        
+        if len(valid_lanes) == 0:
+            # No lanes detected - return straight trajectory
+            # IMPORTANT: Do NOT use last_center_coeffs here - that preserves bias!
+            # Always return a fresh, centered straight trajectory when lanes fail
+            return self._create_straight_trajectory(vehicle_state)
+        
+        # Find center lane or use single lane
+        # Note: lane_coeffs[0] should be left lane, lane_coeffs[1] should be right lane
+        if len(valid_lanes) >= 2:
+            # NEW: Solution 4 - Lane Detection Validation
+            # Validate lane detection before using
+            lane1 = valid_lanes[0]
+            lane2 = valid_lanes[1]
+            
+            # CRITICAL FIX: Check lane order at BOTTOM of image (y=image_height), not top!
+            # During turns, lanes can cross at the top (far away), but at bottom (close to vehicle)
+            # the left lane should still be on the left, right lane on the right
+            # y=0 is TOP of image (far away), y=image_height is BOTTOM (close to vehicle)
+            x1_at_bottom = np.polyval(lane1, self.image_height)
+            x2_at_bottom = np.polyval(lane2, self.image_height)
+            
+            # Also check at a middle position for robustness (in case bottom evaluation is unreliable)
+            y_middle = self.image_height // 2
+            x1_at_middle = np.polyval(lane1, y_middle)
+            x2_at_middle = np.polyval(lane2, y_middle)
+            
+            # Determine which is left and which is right
+            # Use bottom position as primary (closest to vehicle, most reliable)
+            # Fall back to middle if bottom is ambiguous (both near center)
+            image_center_x = self.image_width / 2.0
+            margin = self.image_width * 0.1  # 10% margin
+            
+            # Check if bottom positions are clearly separated
+            if abs(x1_at_bottom - x2_at_bottom) > margin:
+                # Bottom positions are clearly different - use them
+                if x1_at_bottom < x2_at_bottom:
+                    left_lane = lane1
+                    right_lane = lane2
+                else:
+                    left_lane = lane2
+                    right_lane = lane1
+            else:
+                # Bottom positions are too close (ambiguous) - use middle position
+                if x1_at_middle < x2_at_middle:
+                    left_lane = lane1
+                    right_lane = lane2
+                else:
+                    left_lane = lane2
+                    right_lane = lane1
+            
+            # NEW: Validate lane detection
+            # Check lane width (should be ~3.5m ± 0.5m at bottom of image)
+            # Convert pixel width to meters at bottom of image (closest to vehicle)
+            left_x_at_bottom = np.polyval(left_lane, self.image_height)
+            right_x_at_bottom = np.polyval(right_lane, self.image_height)
+            lane_width_pixels = abs(right_x_at_bottom - left_x_at_bottom)
+            
+            # Estimate distance at bottom of image (closest, ~0-2m ahead)
+            distance_at_bottom = 2.0  # meters (rough estimate)
+            fov_rad = np.radians(self.camera_fov)
+            width_at_bottom = 2.0 * distance_at_bottom * np.tan(fov_rad / 2.0)
+            pixel_to_meter_at_bottom = width_at_bottom / self.image_width
+            lane_width_meters = lane_width_pixels * pixel_to_meter_at_bottom
+            
+            # Validate lane width (typical: 3.5m ± 0.5m)
+            valid_lane_width = 3.0 <= lane_width_meters <= 4.0
+            
+            # Validate lane order (left should be left of center, right should be right of center)
+            image_center_x = self.image_width / 2.0
+            valid_lane_order = left_x_at_bottom < image_center_x < right_x_at_bottom
+            
+            # If validation fails, be more careful about using previous center lane
+            # CRITICAL FIX: Don't use last_center_coeffs if it's the first frame or if it's been too long
+            # This prevents locking in an initial bias
+            # CRITICAL FIX: Apply bias correction to last_center_coeffs when reusing it
+            # This ensures corrections happen even when validation fails
+            if not (valid_lane_width and valid_lane_order):
+                # Only use previous center lane if we have enough history (at least 5 frames)
+                # This prevents using a biased first-frame trajectory
+                if (hasattr(self, 'last_center_coeffs') and self.last_center_coeffs is not None and
+                    hasattr(self, '_frames_since_last_center') and self._frames_since_last_center < 10):
+                    # Use previous center lane to prevent bad detections from causing bias
+                    # CRITICAL: Apply bias correction to last_center_coeffs before using
+                    # This ensures corrections happen even when validation fails
+                    center_coeffs = self._apply_bias_correction_to_coeffs(
+                        self.last_center_coeffs, left_lane, right_lane
+                    )
+                    if not hasattr(self, '_frames_since_last_center'):
+                        self._frames_since_last_center = 0
+                    self._frames_since_last_center += 1
+                else:
+                    # No previous center or too old - use current (even if validation failed)
+                    # This prevents locking in bias from first frame
+                    center_coeffs = self._compute_center_lane(left_lane, right_lane)
+                    if hasattr(self, '_frames_since_last_center'):
+                        self._frames_since_last_center = 0
+            else:
+                # Validation passed - compute center lane
+                center_coeffs = self._compute_center_lane(left_lane, right_lane)
+                if hasattr(self, '_frames_since_last_center'):
+                    self._frames_since_last_center = 0
+            
+            trajectory_points = self._generate_trajectory_points(center_coeffs, vehicle_state)
+        else:
+            # Use single lane, offset to center
+            # If only one lane detected, offset by half lane width (1.75m) toward center
+            # CRITICAL FIX: Determine which lane it is and offset in correct direction
+            single_lane = valid_lanes[0]
+            
+            # Determine if it's left or right lane by checking position at bottom of image
+            lane_x_at_bottom = np.polyval(single_lane, self.image_height)
+            image_center_x = self.image_width / 2.0
+            
+            if lane_x_at_bottom < image_center_x:
+                # Left lane detected - offset RIGHT (positive) to get to center
+                offset_direction = 1.0
+            else:
+                # Right lane detected - offset LEFT (negative) to get to center
+                offset_direction = -1.0
+            
+            # Convert offset from meters to pixels at lookahead distance
+            # At lookahead distance, calculate pixel-to-meter conversion
+            fov_rad = np.radians(self.camera_fov)
+            width_at_lookahead = 2.0 * self.lookahead_distance * np.tan(fov_rad / 2.0)
+            pixel_to_meter = width_at_lookahead / self.image_width
+            
+            # Offset in meters (half lane width = 1.75m)
+            offset_meters = 1.75 * offset_direction
+            
+            # Convert to pixels
+            offset_pixels = offset_meters / pixel_to_meter
+            
+            # Apply offset to polynomial (in pixels)
+            lane_coeffs_offset = single_lane.copy()
+            lane_coeffs_offset[-1] += offset_pixels  # Adjust constant term (in pixels)
+            
+            trajectory_points = self._generate_trajectory_points(lane_coeffs_offset, vehicle_state)
+        
+        return Trajectory(points=trajectory_points, length=self.lookahead_distance)
+    
+    def _compute_center_lane(self, left_coeffs: np.ndarray, 
+                            right_coeffs: np.ndarray) -> np.ndarray:
+        """
+        Compute center lane between left and right lanes.
+        Assumes lanes are in image coordinates where:
+        - Left lane has negative x values (left side of image)
+        - Right lane has positive x values (right side of image)
+        Center is the average of the two lane polynomials.
+        
+        Args:
+            left_coeffs: Left lane polynomial coefficients
+            right_coeffs: Right lane polynomial coefficients
+        
+        Returns:
+            Center lane polynomial coefficients
+        """
+        # Compute center lane by averaging coefficients
+        # NOTE: This works correctly even when lanes converge in perspective
+        # Perspective convergence (lanes crossing) is NORMAL - parallel lines converge
+        # Averaging coefficients gives correct center because:
+        #   - At each y position: center_x = (left_x + right_x) / 2
+        #   - This is mathematically equivalent to averaging coefficients for polynomials
+        #   - When converted to vehicle coordinates, perspective is accounted for
+        # For curved roads, there may be small errors (<1px), but this is acceptable
+        # More sophisticated approach: sample points, compute midpoints, fit new polynomial
+        # But current approach is simpler and works well for most cases
+        
+        # CRITICAL FIX: When lanes have very different curvatures (asymmetric), averaging coefficients
+        # can give incorrect center. Use point-sampling method for better accuracy.
+        # Check if lanes have very different curvatures
+        left_curvature = abs(left_coeffs[0]) if len(left_coeffs) >= 3 else 0.0
+        right_curvature = abs(right_coeffs[0]) if len(right_coeffs) >= 3 else 0.0
+        curvature_diff = abs(left_curvature - right_curvature)
+        
+        # If curvature difference is large (>0.02), use point-sampling for accuracy
+        # This happens when car is far from center and perspective makes one lane appear more curved
+        if curvature_diff > 0.02:
+            # Sample points, compute midpoints, fit polynomial
+            y_samples = np.linspace(int(self.image_height * 0.3), int(self.image_height * 0.93), 20)
+            left_x_samples = np.polyval(left_coeffs, y_samples)
+            right_x_samples = np.polyval(right_coeffs, y_samples)
+            center_x_samples = (left_x_samples + right_x_samples) / 2.0
+            
+            # Fit polynomial to center points
+            center_coeffs = np.polyfit(y_samples, center_x_samples, deg=min(2, len(left_coeffs)-1))
+        else:
+            # Use simple averaging (faster, works well when curvatures are similar)
+            center_coeffs = (left_coeffs + right_coeffs) / 2.0
+        
+        # CRITICAL FIX: For straight roads, ensure center lane is STRAIGHT (heading = 0°)
+        # The 19.7° reference heading bias is caused by non-zero linear coefficient
+        # 
+        # IMPORTANT: Lanes appear non-parallel in image space when car is offset/angled (perspective)
+        # But the ROAD is still straight! We should check road curvature, not lane parallelism.
+        #
+        # Strategy: Check if road is straight (small quadratic coefficient)
+        # If road is straight, force center to be straight regardless of car position/angle
+        if len(center_coeffs) >= 3:
+            # Check quadratic coefficient (curvature)
+            center_quad = center_coeffs[0]  # a in ax^2 + bx + c
+            left_quad = left_coeffs[0] if len(left_coeffs) >= 3 else 0.0
+            right_quad = right_coeffs[0] if len(right_coeffs) >= 3 else 0.0
+            max_quad = max(abs(left_quad), abs(right_quad), abs(center_quad))
+            
+            # If road curvature is very small, road is straight
+            # Force center lane to be straight (zero linear coefficient)
+            # CRITICAL FIX: Don't force linear coefficient to 0 based on image-space curvature!
+            # The quadratic coefficient is in IMAGE SPACE (1/pixel), not VEHICLE SPACE (1/meter)
+            # We can't determine if a road is straight by checking image-space coefficients
+            # 
+            # REMOVED: This was too aggressive and broke curve detection on the oval track
+            # The heading computation will correctly identify straight roads based on vehicle-space coordinates
+            # if max_quad <= 0.005:  # This threshold is in wrong units (image space, not vehicle space)
+            #     center_coeffs = center_coeffs.copy()
+            #     center_coeffs[-2] = 0.0  # Force linear coefficient to zero
+        elif len(center_coeffs) >= 2:
+            # No quadratic coefficient - road is definitely straight
+            center_linear = center_coeffs[-2]
+            if abs(center_linear) > 0.01:  # Only fix if there's a significant slope
+                center_coeffs = center_coeffs.copy()
+                center_coeffs[-2] = 0.0  # Force linear coefficient to zero
+        
+        # FIXED: Add outlier rejection for stability
+        # CRITICAL FIX: Check if center lane is reasonable relative to LANE CENTER, not IMAGE CENTER!
+        # The trajectory should be centered between lanes, not at image center
+        # Image center ≠ Lane center (if lanes are not symmetric around image center)
+        
+        # Calculate actual lane center (midpoint between left and right lanes)
+        left_x_at_bottom = np.polyval(left_coeffs, self.image_height)
+        right_x_at_bottom = np.polyval(right_coeffs, self.image_height)
+        lane_center_at_bottom = (left_x_at_bottom + right_x_at_bottom) / 2.0
+        lane_width_pixels = abs(right_x_at_bottom - left_x_at_bottom)
+        
+        # Check if center lane is reasonable relative to lane center (not image center!)
+        center_x_at_bottom = np.polyval(center_coeffs, self.image_height)
+        center_offset_from_lane_center = abs(center_x_at_bottom - lane_center_at_bottom)
+        
+        # Reject if center lane is > 50 pixels from lane center OR lane width is unreasonable
+        # Typical lane width: 200-400 pixels (3.5-7m lane width)
+        # Changed threshold from 100 pixels (from image center) to 50 pixels (from lane center)
+        # This prevents rejecting valid trajectories that are correctly centered on lanes
+        # CRITICAL FIX: Only use last_center_coeffs if it's recent (within 10 frames)
+        # This prevents locking in a biased first-frame trajectory
+        # CRITICAL FIX: Apply bias correction to last_center_coeffs when reusing it
+        # This ensures corrections happen even when trajectories are rejected
+        if center_offset_from_lane_center > 50.0 or lane_width_pixels < 100 or lane_width_pixels > 500:
+            if (hasattr(self, 'last_center_coeffs') and self.last_center_coeffs is not None and
+                hasattr(self, '_frames_since_last_center') and self._frames_since_last_center < 10):
+                # Use previous center lane to prevent sudden jumps (but only if recent)
+                # CRITICAL: Apply bias correction to last_center_coeffs before returning
+                # This ensures corrections happen even when trajectories are rejected
+                corrected_coeffs = self._apply_bias_correction_to_coeffs(
+                    self.last_center_coeffs, left_coeffs, right_coeffs
+                )
+                if not hasattr(self, '_frames_since_last_center'):
+                    self._frames_since_last_center = 0
+                self._frames_since_last_center += 1
+                return corrected_coeffs
+        
+        # Store for next frame
+        self.last_center_coeffs = center_coeffs.copy()
+        # Reset counter when we successfully compute a new center lane
+        if hasattr(self, '_frames_since_last_center'):
+            self._frames_since_last_center = 0
+        
+        # FIXED: Check bias at multiple distances and apply stronger correction
+        # CRITICAL FIX: Check bias relative to LANE CENTER, not IMAGE CENTER!
+        # The trajectory should be centered between lanes, not at image center
+        # Image center ≠ Lane center (if lanes are not symmetric around image center)
+        
+        # Calculate actual lane center (midpoint between left and right lanes)
+        left_x_at_bottom = np.polyval(left_coeffs, self.image_height)
+        right_x_at_bottom = np.polyval(right_coeffs, self.image_height)
+        lane_center_at_bottom = (left_x_at_bottom + right_x_at_bottom) / 2.0
+        
+        # Check bias at bottom of image (y=image_height, closest to vehicle)
+        center_x_at_bottom = np.polyval(center_coeffs, self.image_height)
+        bias_at_bottom = center_x_at_bottom - lane_center_at_bottom  # FIXED: Use lane center, not image center
+        
+        # Check bias at lookahead distance (where reference point is computed)
+        # Convert lookahead distance to image y coordinate
+        typical_lookahead = 8.0  # meters (reference_lookahead)
+        y_image_at_lookahead = self.image_height - (typical_lookahead / self.pixel_to_meter_y)
+        y_image_at_lookahead = max(0, min(self.image_height - 1, y_image_at_lookahead))
+        
+        # Calculate lane center at lookahead distance
+        left_x_at_lookahead = np.polyval(left_coeffs, y_image_at_lookahead)
+        right_x_at_lookahead = np.polyval(right_coeffs, y_image_at_lookahead)
+        lane_center_at_lookahead = (left_x_at_lookahead + right_x_at_lookahead) / 2.0
+        
+        center_x_at_lookahead = np.polyval(center_coeffs, y_image_at_lookahead)
+        bias_at_lookahead = center_x_at_lookahead - lane_center_at_lookahead  # FIXED: Use lane center, not image center
+        
+        # Use the maximum bias (worst case)
+        max_bias = max(abs(bias_at_bottom), abs(bias_at_lookahead))
+        
+        # NEW: Solution 1 - Adaptive Bias Correction Threshold
+        # Track bias history to detect persistent small biases
+        self.bias_history.append(bias_at_lookahead)
+        if len(self.bias_history) > self.bias_history_size:
+            self.bias_history.pop(0)
+        
+        # FIXED: More aggressive bias correction to fix -0.41m trajectory offset
+        # Always apply correction when bias is significant, regardless of variance
+        should_correct = False
+        correction_factor = 0.0
+        
+        # Convert bias from pixels to approximate meters for threshold comparison
+        # At 8m lookahead: pixel_to_meter_x ≈ 0.0144 m/pixel
+        bias_meters = abs(bias_at_lookahead) * self.pixel_to_meter_x
+        
+        if len(self.bias_history) >= 10:  # Need at least 10 frames of history
+            bias_array = np.array(self.bias_history)
+            bias_mean = np.mean(bias_array)
+            bias_std = np.std(bias_array)
+            bias_abs_mean = np.mean(np.abs(bias_array))
+            bias_abs_mean_meters = bias_abs_mean * self.pixel_to_meter_x
+            
+            # FIXED: More aggressive thresholds - always correct significant bias
+            # Mechanism 1: Large bias (>0.2m) - always correct fully
+            if bias_meters > 0.2:  # ~14 pixels = 0.2m
+                should_correct = True
+                correction_factor = 1.0  # Full correction
+            # Mechanism 2: Persistent bias (low variance, >0.05m) - full correction
+            elif bias_std < self.persistent_bias_threshold_std and bias_abs_mean_meters > 0.05:
+                should_correct = True
+                correction_factor = 1.0  # Full correction for persistent biases
+            # Mechanism 3: Medium bias (>0.1m) - partial correction
+            elif bias_meters > 0.1:  # ~7 pixels = 0.1m
+                should_correct = True
+                correction_factor = 0.8  # Strong partial correction
+            # Mechanism 4: Significant mean bias (>0.05m) even with high variance - partial correction
+            elif bias_abs_mean_meters > 0.05:  # ~3.5 pixels = 0.05m
+                should_correct = True
+                # Reduce correction factor based on variance (higher variance = less correction)
+                variance_factor = min(1.0, self.persistent_bias_threshold_std / max(bias_std, 0.1))
+                correction_factor = 0.6 * variance_factor  # Partial correction for high variance
+            # Mechanism 5: Time-based persistence (if bias persists over time)
+            elif len(self.bias_history) >= 20:
+                recent_bias = bias_array[-20:]
+                consistent_direction = np.all(np.sign(recent_bias) == np.sign(bias_mean))
+                if consistent_direction and bias_abs_mean_meters > 0.03:  # ~2 pixels = 0.03m
+                    # Bias consistently in same direction - apply correction
+                    should_correct = True
+                    correction_factor = 0.4  # Conservative correction for high variance
+        elif abs(bias_at_lookahead) > self.bias_correction_threshold:
+            # Large bias even without history - correct immediately
+            should_correct = True
+            correction_factor = 1.0
+        
+        # Apply bias correction
+        if should_correct:
+            center_coeffs = center_coeffs.copy()
+            # Apply correction to constant term (affects all distances)
+            # Use bias at lookahead distance (where reference point is computed) for more accurate correction
+            center_coeffs[-1] -= bias_at_lookahead * correction_factor
+            
+            # Also adjust linear term if bias varies significantly with distance
+            if abs(bias_at_lookahead - bias_at_bottom) > 5.0:  # Significant variation
+                # Estimate linear correction needed
+                y_range = self.image_height - y_image_at_lookahead
+                if y_range > 0:
+                    linear_correction = (bias_at_lookahead - bias_at_bottom) / y_range
+                    if len(center_coeffs) >= 2:
+                        center_coeffs[-2] -= linear_correction * 0.5  # Partial correction to avoid overcorrection
+        
+        return center_coeffs
+    
+    def _apply_bias_correction_to_coeffs(self, center_coeffs: np.ndarray, 
+                                         left_coeffs: np.ndarray, 
+                                         right_coeffs: np.ndarray) -> np.ndarray:
+        """
+        Apply bias correction to center coefficients when reusing last_center_coeffs.
+        This ensures corrections happen even when trajectories are rejected.
+        
+        Args:
+            center_coeffs: Center lane coefficients to correct
+            left_coeffs: Left lane coefficients (for computing lane center)
+            right_coeffs: Right lane coefficients (for computing lane center)
+        
+        Returns:
+            Corrected center lane coefficients
+        """
+        # Calculate lane center at lookahead distance
+        typical_lookahead = 8.0  # meters (reference_lookahead)
+        y_image_at_lookahead = self.image_height - (typical_lookahead / self.pixel_to_meter_y)
+        y_image_at_lookahead = max(0, min(self.image_height - 1, y_image_at_lookahead))
+        
+        left_x_at_lookahead = np.polyval(left_coeffs, y_image_at_lookahead)
+        right_x_at_lookahead = np.polyval(right_coeffs, y_image_at_lookahead)
+        lane_center_at_lookahead = (left_x_at_lookahead + right_x_at_lookahead) / 2.0
+        
+        center_x_at_lookahead = np.polyval(center_coeffs, y_image_at_lookahead)
+        bias_at_lookahead = center_x_at_lookahead - lane_center_at_lookahead
+        
+        # Track bias history
+        self.bias_history.append(bias_at_lookahead)
+        if len(self.bias_history) > self.bias_history_size:
+            self.bias_history.pop(0)
+        
+        # Apply same bias correction logic as in _compute_center_lane
+        should_correct = False
+        correction_factor = 0.0
+        bias_meters = abs(bias_at_lookahead) * self.pixel_to_meter_x
+        
+        if len(self.bias_history) >= 10:
+            bias_array = np.array(self.bias_history)
+            bias_mean = np.mean(bias_array)
+            bias_std = np.std(bias_array)
+            bias_abs_mean = np.mean(np.abs(bias_array))
+            bias_abs_mean_meters = bias_abs_mean * self.pixel_to_meter_x
+            
+            if bias_meters > 0.2:
+                should_correct = True
+                correction_factor = 1.0
+            elif bias_std < self.persistent_bias_threshold_std and bias_abs_mean_meters > 0.05:
+                should_correct = True
+                correction_factor = 1.0
+            elif bias_meters > 0.1:
+                should_correct = True
+                correction_factor = 0.8
+            elif bias_abs_mean_meters > 0.05:
+                should_correct = True
+                variance_factor = min(1.0, self.persistent_bias_threshold_std / max(bias_std, 0.1))
+                correction_factor = 0.6 * variance_factor
+            elif len(self.bias_history) >= 20:
+                recent_bias = bias_array[-20:]
+                consistent_direction = np.all(np.sign(recent_bias) == np.sign(bias_mean))
+                if consistent_direction and bias_abs_mean_meters > 0.03:
+                    should_correct = True
+                    correction_factor = 0.4
+        elif abs(bias_at_lookahead) > self.bias_correction_threshold:
+            should_correct = True
+            correction_factor = 1.0
+        
+        # Apply correction
+        if should_correct:
+            corrected_coeffs = center_coeffs.copy()
+            corrected_coeffs[-1] -= bias_at_lookahead * correction_factor
+            return corrected_coeffs
+        
+        return center_coeffs
+    
+    def _smooth_lane_coeffs(self, lane_coeffs: List[Optional[np.ndarray]]) -> List[Optional[np.ndarray]]:
+        """
+        Apply temporal smoothing to lane coefficients to reduce noise.
+        Includes outlier rejection to handle yellow marker position variability.
+        
+        Args:
+            lane_coeffs: Current frame's lane coefficients
+        
+        Returns:
+            Smoothed lane coefficients
+        """
+        if len(self.lane_coeffs_history) == 0:
+            # First frame - no history, just store and return
+            self.lane_coeffs_history.append(lane_coeffs)
+            if len(self.lane_coeffs_history) > 5:
+                self.lane_coeffs_history.pop(0)
+            return lane_coeffs
+        
+        # Get previous frame's coefficients
+        prev_coeffs = self.lane_coeffs_history[-1]
+        
+        # Apply exponential moving average with outlier rejection
+        alpha = self.lane_smoothing_alpha
+        smoothed_coeffs = []
+        
+        for i, coeff in enumerate(lane_coeffs):
+            if coeff is not None:
+                # Check if we have previous coefficient for this lane
+                if i < len(prev_coeffs) and prev_coeffs[i] is not None:
+                    prev_coeff = prev_coeffs[i]
+                    
+                    # ROBUSTNESS FIX: Outlier rejection for sudden jumps
+                    # Check if current detection is consistent with previous
+                    # Evaluate both at a common y position (middle of image) to compare
+                    y_compare = self.image_height * 0.5  # Middle of image
+                    prev_x = np.polyval(prev_coeff, y_compare)
+                    curr_x = np.polyval(coeff, y_compare)
+                    
+                    # Calculate change in x position
+                    x_change = abs(curr_x - prev_x)
+                    max_reasonable_change = self.image_width * 0.15  # 15% of image width (96px for 640px)
+                    
+                    # If change is too large, it's likely an outlier (wrong detection or marker shift)
+                    # Use previous frame instead (temporal persistence)
+                    if x_change > max_reasonable_change:
+                        logger.warning(f"[ROBUSTNESS] Lane {i}: Large jump detected! "
+                                     f"x_change={x_change:.1f}px > {max_reasonable_change:.1f}px. "
+                                     f"Using previous frame (outlier rejection).")
+                        # Use previous frame (outlier rejection)
+                        smoothed_coeffs.append(prev_coeff)
+                    else:
+                        # Change is reasonable - apply smoothing
+                        if len(coeff) == len(prev_coeff):
+                            smoothed_coeff = alpha * prev_coeff + (1 - alpha) * coeff
+                            smoothed_coeffs.append(smoothed_coeff)
+                        else:
+                            # Different polynomial order - use current
+                            smoothed_coeffs.append(coeff)
+                else:
+                    # No previous coefficient - use current
+                    smoothed_coeffs.append(coeff)
+            else:
+                # Current is None - use previous if available
+                if i < len(prev_coeffs) and prev_coeffs[i] is not None:
+                    # Use previous (temporal persistence)
+                    smoothed_coeffs.append(prev_coeffs[i])
+                else:
+                    # Both are None
+                    smoothed_coeffs.append(None)
+        
+        # Store in history
+        self.lane_coeffs_history.append(smoothed_coeffs)
+        if len(self.lane_coeffs_history) > 5:
+            self.lane_coeffs_history.pop(0)
+        
+        return smoothed_coeffs
+    
+    def _offset_lane(self, lane_coeffs: np.ndarray, offset: float) -> np.ndarray:
+        """
+        Offset lane by given distance (perpendicular to lane direction).
+        
+        Args:
+            lane_coeffs: Lane polynomial coefficients
+            offset: Offset distance in meters (positive = right)
+        
+        Returns:
+            Offset lane coefficients
+        """
+        # Simplified: adjust constant term
+        # More accurate: compute perpendicular offset at each point
+        offset_coeffs = lane_coeffs.copy()
+        offset_coeffs[-1] += offset  # Adjust constant term
+        return offset_coeffs
+    
+    def _convert_image_to_vehicle_coords(self, x_pixels: float, y_pixels: float, 
+                                         lookahead_distance: float = 15.0,
+                                         horizontal_fov_override: Optional[float] = None) -> Tuple[float, float]:
+        """
+        Convert image pixel coordinates to vehicle coordinates.
+        
+        Args:
+            x_pixels: X coordinate in image (pixels, 0=left, width=right)
+            y_pixels: Y coordinate in image (pixels, 0=top, height=bottom)
+            lookahead_distance: Reference distance ahead in meters (for initial estimate)
+        
+        Returns:
+            (x_vehicle, y_vehicle) in meters
+            x_vehicle: lateral position (-left, +right)
+            y_vehicle: forward distance (0=vehicle, +forward)
+        """
+        # Convert from image coordinates to vehicle coordinates
+        # Image: (0,0) at top-left, x increases right, y increases down
+        # Vehicle: (0,0) at vehicle, x increases right, y increases forward
+        
+        # CRITICAL FIX: Use lookahead_distance directly when provided
+        # The issue: pixel_to_meter_y is calculated at fixed 15m, but actual distance varies
+        # When lookahead_distance is provided (e.g., 8m), it IS the actual distance!
+        # Don't try to calculate distance from y_pixels - use the provided distance
+        
+        fov_rad = np.radians(self.camera_fov)
+        
+        # DEBUG: Check if lookahead_distance is being used
+        # If lookahead_distance is provided and > 0, use it directly
+        # Otherwise, fall back to calculating from y_pixels
+        using_provided_distance = False
+        if lookahead_distance is not None and lookahead_distance > 0:
+            # Use provided lookahead_distance, but apply scaling factor to account for camera pitch
+            # When camera looks down, point 8m straight ahead in camera space is actually
+            # closer in world space when projected to ground (e.g., 7m instead of 8m)
+            # This scaling factor corrects the coordinate conversion to match reality
+            actual_distance = lookahead_distance * self.distance_scaling_factor
+            using_provided_distance = True
+        else:
+            # Fallback: estimate distance from y_pixels position
+            # Convert y: pixels to normalized position (0=top, 1=bottom)
+            y_from_bottom = self.image_height - y_pixels
+            y_normalized = y_from_bottom / self.image_height  # 0 (top) to 1 (bottom)
+            
+            # Use simplified perspective model
+            if y_normalized > 0.1:
+                # Near bottom: use inverse relationship
+                base_distance = 1.5  # meters at bottom
+                actual_distance = base_distance / y_normalized
+            else:
+                # Very far: use camera model
+                angle_from_vertical = (1.0 - y_normalized) * fov_rad / 2.0
+                if angle_from_vertical > 0.01:
+                    actual_distance = self.camera_height / np.tan(angle_from_vertical)
+                else:
+                    actual_distance = 15.0  # Fallback
+        
+        # Ensure reasonable bounds
+        actual_distance = max(0.5, min(actual_distance, 50.0))
+        
+        # CRITICAL FIX: Use HORIZONTAL FOV for lateral (x) conversion
+        # Unity's Camera.fieldOfView ALWAYS returns VERTICAL FOV, regardless of Inspector "Field of View Axis" setting.
+        # However, when Unity Inspector shows "Field of View Axis: Horizontal" and "Field of View: 110°",
+        # Unity converts it internally to vertical FOV (84.93° for 640x480), and calculates horizontal = 110°.
+        # 
+        # Our config (camera_fov = 110.0°) matches Unity's calculated horizontal FOV (110.00°),
+        # as verified by logs: "Unity fieldOfView = 84.93° (vertical), calculated horizontal = 110.00°"
+        # 
+        # Use Unity's reported horizontal FOV if available (most accurate), otherwise use config value
+        if horizontal_fov_override is not None and horizontal_fov_override > 0:
+            # Use Unity's actual reported horizontal FOV (most accurate)
+            horizontal_fov_rad = np.radians(horizontal_fov_override)
+        else:
+            # Fallback: Use config value directly as horizontal FOV (matches Unity Inspector)
+            horizontal_fov_rad = fov_rad
+        
+        # Now use horizontal FOV for lateral (x) conversion
+        width_at_actual_distance = 2.0 * actual_distance * np.tan(horizontal_fov_rad / 2.0)
+        pixel_to_meter_x_at_distance = width_at_actual_distance / self.image_width
+        
+        # Center x coordinate (image center = vehicle center)
+        x_center = self.image_width / 2.0
+        x_offset_pixels = x_pixels - x_center
+        
+        # Convert x: pixels to meters (lateral) using actual_distance
+        x_vehicle = x_offset_pixels * pixel_to_meter_x_at_distance
+        
+        # FIXED: Apply camera offset correction (for calibration)
+        x_vehicle += self.camera_offset_x
+        
+        # Clamp extreme values to reasonable bounds (±10m lateral)
+        # Increased from ±5m to allow for wider roads (7m) and off-center driving
+        # When car is at -3.5m (left edge of 7m road), right lane at +3.5m should be visible
+        # ±10m allows for up to 10m road width and ±5m car offset
+        # This prevents unrealistic coordinate conversions from extreme pixel values
+        # while still allowing proper lane width detection when off-center
+        x_vehicle = np.clip(x_vehicle, -10.0, 10.0)
+        
+        # Use actual_distance for y_vehicle (consistent scaling)
+        y_vehicle = actual_distance
+        
+        # DEBUG: Log coordinate conversion details (only for lane width calculations from av_stack.py)
+        # This helps identify if lookahead_distance is being used correctly
+        import inspect
+        try:
+            frame = inspect.currentframe()
+            caller_frame = frame.f_back if frame else None
+            is_lane_width_calc = False
+            if caller_frame:
+                caller_filename = caller_frame.f_code.co_filename
+                if 'av_stack.py' in caller_filename:
+                    is_lane_width_calc = True
+                    logger.info(f"[COORD DEBUG] Input: x_pixels={x_pixels:.1f}, y_pixels={y_pixels:.1f}, "
+                               f"lookahead_distance={lookahead_distance:.2f}m")
+                    logger.info(f"[COORD DEBUG] Distance: using_provided={using_provided_distance}, "
+                               f"actual_distance={actual_distance:.2f}m")
+                    # FIXED: Log correct FOV values
+                    if horizontal_fov_override is not None and horizontal_fov_override > 0:
+                        logger.info(f"[COORD DEBUG] FOV: using Unity's horizontal={np.degrees(horizontal_fov_rad):.1f}° (from Unity), "
+                                   f"config fallback={np.degrees(fov_rad):.1f}°")
+                    else:
+                        logger.info(f"[COORD DEBUG] FOV: using config horizontal={np.degrees(horizontal_fov_rad):.1f}° "
+                                   f"(Unity reports vertical=84.93°, horizontal=110.00°)")
+                    logger.info(f"[COORD DEBUG] Scaling: width_at_distance={width_at_actual_distance:.2f}m, "
+                               f"pixel_to_meter_x={pixel_to_meter_x_at_distance*1000:.3f}mm/px")
+                    logger.info(f"[COORD DEBUG] Output: x_vehicle={x_vehicle:.3f}m, y_vehicle={y_vehicle:.2f}m")
+        except:
+            pass  # Don't break if inspect fails
+        
+        # REMOVED: Clamp for lane width calculation - we want to see true detected values
+        # Note: Trajectory planning should handle bounds checking itself if needed
+        # Previously clamped to ±5m lateral, but this was hiding detection errors
+        
+        return x_vehicle, y_vehicle
+    
+    def _generate_trajectory_points(self, lane_coeffs: np.ndarray,
+                                    vehicle_state: Optional[dict]) -> List[TrajectoryPoint]:
+        """
+        Generate trajectory points from lane coefficients.
+        
+        Args:
+            lane_coeffs: Lane polynomial coefficients (in IMAGE coordinates)
+            vehicle_state: Current vehicle state
+        
+        Returns:
+            List of trajectory points (in VEHICLE coordinates)
+        """
+        points = []
+        
+        # Generate points along lane in vehicle coordinates
+        num_points = int(self.lookahead_distance / self.point_spacing)
+        
+        for i in range(num_points + 1):
+            # y_vehicle is forward distance in meters
+            y_vehicle = i * self.point_spacing
+            
+            if y_vehicle > self.lookahead_distance:
+                break
+            
+            # Convert vehicle y to image y for polynomial evaluation
+            # y_vehicle = 0 at vehicle, increases forward
+            # y_image: bottom of image (y=height) is closest, top (y=0) is farthest
+            # Use inverse of conversion: y_image = height - (y_vehicle / pixel_to_meter_y)
+            # But need to account for perspective - closer pixels are smaller
+            # For now, use simple linear mapping
+            y_image = self.image_height - (y_vehicle / self.pixel_to_meter_y)
+            y_image = max(0, min(self.image_height - 1, y_image))  # Clamp to image bounds
+            
+            # Compute x in image coordinates from polynomial
+            x_image = np.polyval(lane_coeffs, y_image)
+            
+            # Convert to vehicle coordinates (pass y_vehicle for distance-based scaling)
+            x_vehicle, y_vehicle_corrected = self._convert_image_to_vehicle_coords(
+                x_image, y_image, lookahead_distance=y_vehicle
+            )
+            
+            # Compute heading (derivative of polynomial in vehicle coords)
+            # FIXED: For straight roads, heading should be ~0°, not constant 9.04°
+            # The issue is that coordinate conversion may add constant bias to dx
+            # Solution: Use a more robust heading calculation that accounts for coordinate system
+            if len(lane_coeffs) >= 2:
+                # Sample nearby points for heading calculation
+                y1_vehicle = max(0, y_vehicle - 0.5)
+                y2_vehicle = y_vehicle + 0.5
+                y1_image = self.image_height - (y1_vehicle / self.pixel_to_meter_y)
+                y2_image = self.image_height - (y2_vehicle / self.pixel_to_meter_y)
+                y1_image = max(0, min(self.image_height - 1, y1_image))
+                y2_image = max(0, min(self.image_height - 1, y2_image))
+                x1_image = np.polyval(lane_coeffs, y1_image)
+                x2_image = np.polyval(lane_coeffs, y2_image)
+                
+                # FIXED: Use same lookahead_distance for both points to avoid coordinate conversion bias
+                # The issue: using different lookahead_distance values causes different pixel_to_meter scaling
+                # This can introduce constant bias in dx calculation
+                # Solution: Use average distance for both conversions
+                avg_distance = (y1_vehicle + y2_vehicle) / 2.0
+                x1_vehicle, _ = self._convert_image_to_vehicle_coords(x1_image, y1_image, lookahead_distance=avg_distance)
+                x2_vehicle, _ = self._convert_image_to_vehicle_coords(x2_image, y2_image, lookahead_distance=avg_distance)
+                
+                dx = x2_vehicle - x1_vehicle  # Lateral change (left/right)
+                dy = y2_vehicle - y1_vehicle  # Forward change (ahead/behind)
+                
+                # FIXED: For straight roads, if dx is very small, heading should be ~0°
+                # The constant 9.04° suggests coordinate conversion bias
+                # Check if the lane is actually straight (small dx relative to dy)
+                if abs(dx) < 0.01:  # Very small lateral change (< 1cm over 1m)
+                    # Lane is essentially straight - heading should be 0°
+                    heading = 0.0
+                else:
+                    # Heading: angle from forward direction (y-axis)
+                    # For vehicle coords: +y is forward (0°), +x is right (90°), -x is left (-90°)
+                    # arctan2(dx, dy) gives angle from +y axis
+                    heading = np.arctan2(dx, dy)
+                    
+                    # CRITICAL FIX: For straight roads, heading MUST be near 0°
+                    # The 19.7° reference heading bias is unacceptable for straight roads
+                    # Check if the road is actually straight (small quadratic coefficient)
+                    # If so, force heading to 0° regardless of what coordinate conversion says
+                    if len(lane_coeffs) >= 3:
+                        quadratic_coeff = lane_coeffs[0]  # a in ax^2 + bx + c
+                        linear_coeff = lane_coeffs[-2] if len(lane_coeffs) >= 2 else 0.0
+                        
+                        # CRITICAL FIX: Don't use image-space coefficients to determine if road is straight!
+                        # The quadratic coefficient is in IMAGE SPACE (1/pixel), not VEHICLE SPACE (1/meter)
+                        # 
+                        # Instead, trust the heading computed from vehicle-space coordinates
+                        # If heading is very small (< 1°), the road is straight in vehicle space
+                        # If heading is significant, we're on a curve - don't force it to 0!
+                        if abs(heading) < np.radians(1.0):  # < 1° = essentially straight in vehicle space
+                            heading = 0.0
+                        else:
+                            # Actual curve or significant heading - clip extreme values but don't force to 0
+                            heading = np.clip(heading, -np.radians(30.0), np.radians(30.0))
+                    else:
+                        # No quadratic coefficient - road is straight, heading should be 0°
+                        heading = 0.0
+            else:
+                heading = 0.0
+            
+            # Compute curvature (simplified)
+            curvature = self._compute_curvature(lane_coeffs, y_image)
+            
+            point = TrajectoryPoint(
+                x=x_vehicle,
+                y=y_vehicle_corrected,
+                heading=heading,
+                velocity=self.target_speed,
+                curvature=curvature
+            )
+            points.append(point)
+        
+        return points
+    
+    def _compute_curvature(self, lane_coeffs: np.ndarray, y: float) -> float:
+        """
+        Compute curvature at given y position.
+        
+        Args:
+            lane_coeffs: Lane polynomial coefficients
+            y: Y position
+        
+        Returns:
+            Curvature (1/m)
+        """
+        # For polynomial x = ay^2 + by + c
+        # Curvature = |d^2x/dy^2| / (1 + (dx/dy)^2)^(3/2)
+        if len(lane_coeffs) < 2:
+            return 0.0
+        
+        # First derivative
+        dx_dy = 2 * lane_coeffs[0] * y + lane_coeffs[1]
+        
+        # Second derivative
+        d2x_dy2 = 2 * lane_coeffs[0]
+        
+        # Curvature
+        denominator = (1 + dx_dy ** 2) ** 1.5
+        if denominator < 1e-6:
+            return 0.0
+        
+        curvature = abs(d2x_dy2) / denominator
+        return curvature
+    
+    def compute_reference_point_direct(self, left_coeffs: np.ndarray, 
+                                       right_coeffs: np.ndarray,
+                                       lookahead: float = 10.0) -> Optional[Dict]:
+        """
+        Compute reference point directly from lane coefficients at lookahead distance.
+        This is simpler and more direct than going through center lane polynomial.
+        
+        Args:
+            left_coeffs: Left lane polynomial coefficients
+            right_coeffs: Right lane polynomial coefficients
+            lookahead: Lookahead distance in meters
+        
+        Returns:
+            Reference point dict with x, y, heading, or None if invalid
+        """
+        # Convert lookahead distance to image y coordinate
+        # y_vehicle = 0 at vehicle, increases forward
+        # y_image: bottom (y=height) is closest, top (y=0) is farthest
+        y_image = self.image_height - (lookahead / self.pixel_to_meter_y)
+        y_image = max(0, min(self.image_height - 1, y_image))
+        
+        # Evaluate each lane at lookahead distance
+        left_x_image = np.polyval(left_coeffs, y_image)
+        right_x_image = np.polyval(right_coeffs, y_image)
+        
+        # Compute midpoint (lane center) in image space
+        center_x_image = (left_x_image + right_x_image) / 2.0
+        
+        # Convert to vehicle coordinates
+        center_x_vehicle, center_y_vehicle = self._convert_image_to_vehicle_coords(
+            center_x_image, y_image, lookahead_distance=lookahead
+        )
+        
+        # Compute heading from lane direction
+        # FIXED: Use a larger distance (2m) between points to avoid numerical issues
+        # The previous 50 pixels (~0.7m) was too small, causing large heading errors
+        # For a 50m radius curve, over 2m forward, lateral change = 2/50 = 0.04m
+        # Heading = arctan(0.04/2.0) = 0.02 rad = 1.15° (correct!)
+        # But with 0.7m dy, same dx gives arctan(0.04/0.7) = 0.057 rad = 3.3° (3x too high!)
+        distance_ahead = 2.0  # meters - larger distance for more accurate heading
+        lookahead_further = lookahead + distance_ahead
+        
+        # Convert lookahead_further to image y coordinate
+        y_image_further = self.image_height - (lookahead_further / self.pixel_to_meter_y)
+        y_image_further = max(0, min(self.image_height - 1, y_image_further))
+        
+        # Evaluate lanes at further point
+        left_x_further = np.polyval(left_coeffs, y_image_further)
+        right_x_further = np.polyval(right_coeffs, y_image_further)
+        center_x_further_image = (left_x_further + right_x_further) / 2.0
+        
+        # Convert further point to vehicle coords
+        center_x_further_vehicle, center_y_further_vehicle = self._convert_image_to_vehicle_coords(
+            center_x_further_image, y_image_further, lookahead_distance=lookahead_further
+        )
+        
+        # Compute heading: direction FROM lookahead TO further ahead
+        # This gives us the heading at the lookahead point
+        dx = center_x_further_vehicle - center_x_vehicle
+        dy = center_y_further_vehicle - center_y_vehicle
+        
+        if abs(dy) < 0.1:  # FIXED: Increased threshold from 0.01 to 0.1 (2m distance should give ~2m dy)
+            heading = 0.0
+        else:
+            heading = np.arctan2(dx, dy)
+        
+        # CRITICAL FIX: Don't use image-space polynomial coefficients to determine if road is straight!
+        # The polynomial coefficient (coeffs[0]) is in IMAGE SPACE (1/pixel), not VEHICLE SPACE (1/meter)
+        # 
+        # Problem: We were comparing image-space coefficients (e.g., 0.005 1/pixel) to vehicle-space 
+        # curvature thresholds (e.g., 0.02 1/meter). These are DIFFERENT UNITS!
+        # 
+        # A polynomial coefficient of 0.005 in image space might represent:
+        # - A straight road (if pixel-to-meter conversion is large)
+        # - A significant curve (if pixel-to-meter conversion is small)
+        # 
+        # Solution: Trust the heading computed in VEHICLE SPACE from coordinate conversion
+        # The heading is computed from actual vehicle-space coordinates (dx, dy in meters)
+        # If heading is very small (< 1°), the road is straight in vehicle space
+        # If heading is significant, we're on a curve - don't force it to 0!
+        # 
+        # Only force heading to 0° if the computed heading is essentially zero
+        if abs(heading) < np.radians(1.0):  # < 1° = essentially straight in vehicle space
+            heading = 0.0
+        # Otherwise, trust the coordinate conversion - it's computed in vehicle space
+        
+        return {
+            'x': center_x_vehicle,
+            'y': center_y_vehicle,
+            'heading': heading,
+            'velocity': self.target_speed,
+            'curvature': 0.0  # Simplified
+        }
+    
+    def _create_straight_trajectory(self, vehicle_state: Optional[dict]) -> Trajectory:
+        """
+        Create straight trajectory when no lanes detected.
+        
+        Args:
+            vehicle_state: Current vehicle state
+        
+        Returns:
+            Straight trajectory
+        """
+        points = []
+        num_points = int(self.lookahead_distance / self.point_spacing)
+        
+        heading = 0.0
+        if vehicle_state and 'heading' in vehicle_state:
+            heading = vehicle_state['heading']
+        
+        for i in range(num_points + 1):
+            y = i * self.point_spacing
+            x = 0.0  # Straight ahead
+            
+            point = TrajectoryPoint(
+                x=x,
+                y=y,
+                heading=heading,
+                velocity=self.target_speed * 0.5,  # Slower when no lanes
+                curvature=0.0
+            )
+            points.append(point)
+        
+        return Trajectory(points=points, length=self.lookahead_distance)
+
+
+class MLTrajectoryPlanner:
+    """
+    ML-based trajectory planner (placeholder for future implementation).
+    """
+    
+    def __init__(self, model_path: Optional[str] = None):
+        """
+        Initialize ML trajectory planner.
+        
+        Args:
+            model_path: Path to trained model
+        """
+        self.model_path = model_path
+        # TODO: Load model when implementing
+    
+    def plan(self, lane_coeffs: List[Optional[np.ndarray]], 
+             vehicle_state: Optional[dict] = None) -> Trajectory:
+        """
+        Plan trajectory using ML model.
+        
+        Args:
+            lane_coeffs: Lane polynomial coefficients
+            vehicle_state: Current vehicle state
+        
+        Returns:
+            Planned trajectory
+        """
+        # TODO: Implement ML-based planning
+        # For now, fallback to rule-based
+        planner = RuleBasedTrajectoryPlanner()
+        return planner.plan(lane_coeffs, vehicle_state)
+

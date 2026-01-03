@@ -1,0 +1,20 @@
+# Critical Lessons for AV Stack Development
+
+## Steering Direction Lesson (2025-12-25)
+
+**What Happened:**
+- Added negation fix → Removed it (theoretical reasoning) → Added back (data proved it)
+- Wasted time due to sign convention confusion
+
+**The Lesson:**
+- Test empirically, not theoretically
+- Write tests FIRST for control logic
+- Don't remove fixes based on theory alone
+- Verify with data, not just reasoning
+
+**Prevention:**
+- test_lateral_controller_steering_direction() catches this
+- Validation logging in av_stack.py warns if wrong
+- See DEVELOPMENT_GUIDELINES.md for full details
+
+**Remember:** "Test empirically, not theoretically. Data beats reasoning."

@@ -1,0 +1,91 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual Environment
+venv/
+env/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# PyTorch
+*.pth
+*.pt
+
+# Data
+data/recordings/*.h5
+data/recordings/*.hdf5
+captures/
+
+# Logs
+logs/
+*.log
+tensorboard_logs/
+wandb/
+
+# Unity
+unity/**/Library/
+unity/**/Temp/
+unity/**/obj/
+unity/**/*.csproj
+unity/**/*.sln
+unity/**/*.suo
+unity/**/*.user
+unity/**/*.userprefs
+unity/**/*.pidb
+unity/**/*.booproj
+unity/**/*.svd
+unity/**/*.pdb
+unity/**/*.opendb
+unity/**/*.VC.db
+unity/**/Logs/
+unity/**/*.log
+unity/**/UserSettings/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Checkpoints
+checkpoints/
+*.ckpt
+
+tmp/
+
+# Cursor IDE
+.cursor/
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Unity Package Cache (auto-generated)
+unity/**/PackageCache/

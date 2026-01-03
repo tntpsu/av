@@ -1,0 +1,330 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AV Stack Debug Visualizer</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <!-- Header -->
+        <header class="header">
+            <h1>AV Stack Debug Visualizer</h1>
+            <div class="header-controls">
+                <select id="recording-select" class="recording-select">
+                    <option value="">Select recording...</option>
+                </select>
+                <button id="load-btn" class="btn btn-primary">Load</button>
+                <button id="export-frame-btn" class="btn btn-secondary">Export Frame</button>
+                <button id="export-video-btn" class="btn btn-secondary">Export Video</button>
+            </div>
+        </header>
+
+        <!-- Main Content -->
+        <div class="main-content">
+            <!-- Left: Camera Frame Display -->
+            <div class="camera-panel">
+                <div class="canvas-container">
+                    <canvas id="camera-canvas" width="640" height="480"></canvas>
+                    <canvas id="overlay-canvas" width="640" height="480"></canvas>
+                    <canvas id="debug-overlay-canvas" width="640" height="480"></canvas>
+                </div>
+                
+                <!-- Debug Overlay Controls -->
+                <div class="debug-controls">
+                    <h3>Debug Overlays</h3>
+                    <div class="debug-toggles">
+                        <label><input type="checkbox" id="toggle-combined"> Combined</label>
+                        <label><input type="checkbox" id="toggle-edges"> Edges</label>
+                        <label><input type="checkbox" id="toggle-yellow-mask"> Yellow Mask</label>
+                        <label><input type="checkbox" id="toggle-histogram"> Histogram</label>
+                    </div>
+                    <div class="opacity-control">
+                        <label>Opacity: <span id="opacity-value">50</span>%</label>
+                        <input type="range" id="opacity-slider" min="0" max="100" value="50">
+                    </div>
+                </div>
+
+                <!-- Overlay Toggles -->
+                <div class="overlay-controls">
+                    <h3>Data Overlays</h3>
+                    <div class="overlay-toggles">
+                        <label><input type="checkbox" id="toggle-lanes" checked> Detected Lanes (Red Lines)</label>
+                        <label><input type="checkbox" id="toggle-detected-curves" checked> Detected Curves (Orange)</label>
+                        <label><input type="checkbox" id="toggle-ground-truth" checked> Ground Truth (Green)</label>
+                        <label><input type="checkbox" id="toggle-trajectory" checked> Trajectory</label>
+                        <label><input type="checkbox" id="toggle-reference" checked> Reference Point</label>
+                    </div>
+                    <div class="distance-control" style="margin-top: 1rem; padding-top: 1rem; border-top: 1px solid #444;">
+                        <label style="display: block; margin-bottom: 0.5rem;">
+                            Ground Truth Distance (m):
+                            <span id="gt-distance-value">7</span>
+                        </label>
+                        <input type="range" id="gt-distance-slider" min="5.0" max="10.0" step="0.1" value="7" style="width: 100%;">
+                        <small style="color: #888; display: block; margin-top: 0.25rem;">
+                            Adjust to align green lines with red lines<br/>
+                            <span id="gt-actual-distance-hint" style="font-size: 0.85em; color: #666;"></span>
+                        </small>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Middle: Legend Panel (uses space between camera and data) -->
+            <div class="legend-panel">
+                <h3>Visual Legend</h3>
+                <div class="overlay-legend" style="font-size: 0.9rem; color: #a0a0a0; line-height: 1.8;">
+                    <div><span style="color: #00ff00; font-weight: bold;">🟢 Green lines:</span> Ground truth lanes (where lanes should be)</div>
+                    <div style="margin-top: 0.75rem;"><span style="color: #ff0000; font-weight: bold;">🔴 Red lines:</span> Detected lane positions at lookahead (vehicle coords converted to pixels)</div>
+                    <div style="margin-top: 0.75rem;"><span style="color: #ff8800; font-weight: bold;">🟠 Orange curves:</span> Actual detected lane curves (polynomial curves in image space)</div>
+                    <div style="margin-top: 0.75rem;">🔴 <strong>Red dot/arrow:</strong> Reference point (target position at lookahead distance)</div>
+                    <div style="margin-top: 0.5rem; margin-left: 1rem;">Arrow shows <strong>desired heading direction</strong> (not steering angle)</div>
+                </div>
+            </div>
+
+            <!-- Right: Data Side Panel -->
+            <div class="data-panel">
+                <div class="tabs">
+                    <button class="tab-btn active" data-tab="all-data">All Data</button>
+                    <button class="tab-btn" data-tab="perception">Perception</button>
+                    <button class="tab-btn" data-tab="trajectory">Trajectory</button>
+                    <button class="tab-btn" data-tab="control">Control</button>
+                    <button class="tab-btn" data-tab="vehicle">Vehicle</button>
+                    <button class="tab-btn" data-tab="ground-truth">Ground Truth</button>
+                </div>
+
+                <div class="tab-content">
+                    <!-- All Data Tab -->
+                    <div id="all-data-tab" class="tab-pane active">
+                        <h3>Perception</h3>
+                        <table class="data-table">
+                            <tr><td>Method</td><td id="all-perception-method">-</td></tr>
+                            <tr><td>Confidence</td><td id="all-perception-confidence">-</td></tr>
+                            <tr><td>Lanes Detected</td><td id="all-perception-num-lanes">-</td></tr>
+                            <tr><td>Left Lane Line X</td><td id="all-perception-left-x">-</td></tr>
+                            <tr><td>Right Lane Line X</td><td id="all-perception-right-x">-</td></tr>
+                            <tr><td>Lane Width</td><td id="all-perception-width">-</td></tr>
+                            <tr><td>Using Stale Data</td><td id="all-perception-using-stale" style="color: #ff6b6b;">-</td></tr>
+                            <tr><td>Stale Reason</td><td id="all-perception-stale-reason" style="color: #ff6b6b;">-</td></tr>
+                            <tr><td>Left Jump (m)</td><td id="all-perception-left-jump">-</td></tr>
+                            <tr><td>Right Jump (m)</td><td id="all-perception-right-jump">-</td></tr>
+                            <tr><td>Jump Threshold (m)</td><td id="all-perception-jump-threshold">-</td></tr>
+                        </table>
+                        
+                        <h3>Camera Calibration</h3>
+                        <table class="data-table">
+                            <tr><td>8m Screen Y (px)</td><td id="all-vehicle-camera-8m-y">-</td></tr>
+                            <tr><td>Vertical FOV (°)</td><td id="all-vehicle-camera-fov-vertical">-</td></tr>
+                            <tr><td>Horizontal FOV (°)</td><td id="all-vehicle-camera-fov-horizontal">-</td></tr>
+                        </table>
+                        <h3>Camera Position (Unity)</h3>
+                        <table class="data-table">
+                            <tr><td>Position X (world)</td><td id="all-vehicle-camera-pos-x">-</td></tr>
+                            <tr><td>Height Above Ground</td><td id="all-vehicle-camera-pos-y">-</td></tr>
+                            <tr><td>Position Z (world)</td><td id="all-vehicle-camera-pos-z">-</td></tr>
+                            <tr><td>Forward X</td><td id="all-vehicle-camera-forward-x">-</td></tr>
+                            <tr><td>Forward Y</td><td id="all-vehicle-camera-forward-y">-</td></tr>
+                            <tr><td>Forward Z</td><td id="all-vehicle-camera-forward-z">-</td></tr>
+                        </table>
+                        <h3>Road Center Debug</h3>
+                        <table class="data-table">
+                            <tr><td>At Car X</td><td id="all-road-center-at-car-x">-</td></tr>
+                            <tr><td>At Car Y</td><td id="all-road-center-at-car-y">-</td></tr>
+                            <tr><td>At Car Z</td><td id="all-road-center-at-car-z">-</td></tr>
+                            <tr><td>At Lookahead X</td><td id="all-road-center-at-lookahead-x">-</td></tr>
+                            <tr><td>At Lookahead Y</td><td id="all-road-center-at-lookahead-y">-</td></tr>
+                            <tr><td>At Lookahead Z</td><td id="all-road-center-at-lookahead-z">-</td></tr>
+                            <tr><td>Reference T</td><td id="all-road-center-reference-t">-</td></tr>
+                            <tr><td>Car Offset X<br/><small style="color: #888;">(car X - road center X)</small></td><td id="all-road-center-offset-x">-</td></tr>
+                            <tr><td>Car Offset Z<br/><small style="color: #888;">(car Z - road center Z)</small></td><td id="all-road-center-offset-z">-</td></tr>
+                        </table>
+                        <h3>Trajectory</h3>
+                        <table class="data-table">
+                            <tr><td>Reference X (lateral)</td><td id="all-trajectory-x">-</td></tr>
+                            <tr><td>Reference Y (forward)</td><td id="all-trajectory-y">-</td></tr>
+                            <tr><td>Reference Heading</td><td id="all-trajectory-heading">-</td></tr>
+                            <tr><td>Reference Velocity</td><td id="all-trajectory-velocity">-</td></tr>
+                        </table>
+                        
+                        <h3>Control</h3>
+                        <table class="data-table">
+                            <tr><td>Steering</td><td id="all-control-steering">-</td></tr>
+                            <tr><td>Throttle</td><td id="all-control-throttle">-</td></tr>
+                            <tr><td>Brake</td><td id="all-control-brake">-</td></tr>
+                            <tr><td>Lateral Error</td><td id="all-control-lateral-error">-</td></tr>
+                            <tr><td>Heading Error</td><td id="all-control-heading-error">-</td></tr>
+                            <tr><td>Total Error</td><td id="all-control-total-error">-</td></tr>
+                            <tr><td>PID Integral</td><td id="all-control-pid-integral">-</td></tr>
+                            <tr><td>Using Stale Perception</td><td id="all-control-using-stale" style="color: #ff6b6b;">-</td></tr>
+                            <tr><td>Stale Reason</td><td id="all-control-stale-reason" style="color: #ff6b6b;">-</td></tr>
+                        </table>
+                        
+                        <h3>Vehicle</h3>
+                        <table class="data-table">
+                            <tr><td>Position X</td><td id="all-vehicle-x">-</td></tr>
+                            <tr><td>Position Y</td><td id="all-vehicle-y">-</td></tr>
+                            <tr><td>Position Z</td><td id="all-vehicle-z">-</td></tr>
+                            <tr><td>Speed</td><td id="all-vehicle-speed">-</td></tr>
+                            <tr><td>Heading</td><td id="all-vehicle-heading">-</td></tr>
+                            <tr><td>Steering Angle</td><td id="all-vehicle-steering">-</td></tr>
+                        </table>
+                        
+                        <h3>Ground Truth</h3>
+                        <table class="data-table">
+                            <tr><td>Left Lane Line X</td><td id="all-gt-left-x">-</td></tr>
+                            <tr><td>Right Lane Line X</td><td id="all-gt-right-x">-</td></tr>
+                            <tr><td>Lane Center X</td><td id="all-gt-center-x">-</td></tr>
+                            <tr><td>Lane Width</td><td id="all-gt-width">-</td></tr>
+                            <tr><td>Lane Width Error<br/><small style="color: #888;">(perception vs GT)</small></td><td id="all-gt-width-error">-</td></tr>
+                            <tr><td>Center Offset Error<br/><small style="color: #888;">(perception vs GT)</small></td><td id="all-gt-center-error">-</td></tr>
+                        </table>
+                    </div>
+
+                    <!-- Perception Tab -->
+                    <div id="perception-tab" class="tab-pane">
+                        <h3>Lane Detection</h3>
+                        <table class="data-table">
+                            <tr><td>Method</td><td id="perception-method">-</td></tr>
+                            <tr><td>Confidence</td><td id="perception-confidence">-</td></tr>
+                            <tr><td>Lanes Detected</td><td id="perception-num-lanes">-</td></tr>
+                            <tr><td>Left Lane Line X</td><td id="perception-left-x">-</td></tr>
+                            <tr><td>Right Lane Line X</td><td id="perception-right-x">-</td></tr>
+                            <tr><td>Lane Width</td><td id="perception-width">-</td></tr>
+                            <tr><td>Using Stale Data</td><td id="perception-using-stale" style="color: #ff6b6b;">-</td></tr>
+                            <tr><td>Stale Reason</td><td id="perception-stale-reason" style="color: #ff6b6b;">-</td></tr>
+                            <tr><td>Left Jump (m)</td><td id="perception-left-jump">-</td></tr>
+                            <tr><td>Right Jump (m)</td><td id="perception-right-jump">-</td></tr>
+                            <tr><td>Jump Threshold (m)</td><td id="perception-jump-threshold">-</td></tr>
+                        </table>
+                    </div>
+
+                    <!-- Trajectory Tab -->
+                    <div id="trajectory-tab" class="tab-pane">
+                        <h3>Reference Point</h3>
+                        <table class="data-table">
+                            <tr><td>X (lateral)</td><td id="trajectory-x">-</td></tr>
+                            <tr><td>Y (forward)</td><td id="trajectory-y">-</td></tr>
+                            <tr><td>Heading</td><td id="trajectory-heading">-</td></tr>
+                            <tr><td>Velocity</td><td id="trajectory-velocity">-</td></tr>
+                        </table>
+                        <h3>Raw Reference Point</h3>
+                        <table class="data-table">
+                            <tr><td>X (raw)</td><td id="trajectory-raw-x">-</td></tr>
+                            <tr><td>Y (raw)</td><td id="trajectory-raw-y">-</td></tr>
+                            <tr><td>Heading (raw)</td><td id="trajectory-raw-heading">-</td></tr>
+                        </table>
+                        <h3>Reference Point Debug</h3>
+                        <table class="data-table">
+                            <tr><td>Calculation Method</td><td id="trajectory-method">-</td></tr>
+                            <tr><td>Perception Center X</td><td id="trajectory-perception-center">-</td></tr>
+                            <tr><td>Trajectory vs Perception</td><td id="trajectory-vs-perception">-</td></tr>
+                        </table>
+                    </div>
+
+                    <!-- Control Tab -->
+                    <div id="control-tab" class="tab-pane">
+                        <h3>Control Commands</h3>
+                        <table class="data-table">
+                            <tr><td>Steering</td><td id="control-steering">-</td></tr>
+                            <tr><td>Throttle</td><td id="control-throttle">-</td></tr>
+                            <tr><td>Brake</td><td id="control-brake">-</td></tr>
+                        </table>
+                        <h3>PID State</h3>
+                        <table class="data-table">
+                            <tr><td>Lateral Error</td><td id="control-lateral-error">-</td></tr>
+                            <tr><td>Heading Error</td><td id="control-heading-error">-</td></tr>
+                            <tr><td>Total Error</td><td id="control-total-error">-</td></tr>
+                            <tr><td>PID Integral</td><td id="control-pid-integral">-</td></tr>
+                            <tr><td>PID Derivative</td><td id="control-pid-derivative">-</td></tr>
+                            <tr><td>PID Error</td><td id="control-pid-error">-</td></tr>
+                            <tr><td>Using Stale Perception</td><td id="control-using-stale" style="color: #ff6b6b;">-</td></tr>
+                            <tr><td>Stale Reason</td><td id="control-stale-reason" style="color: #ff6b6b;">-</td></tr>
+                        </table>
+                    </div>
+
+                    <!-- Vehicle Tab -->
+                    <div id="vehicle-tab" class="tab-pane">
+                        <h3>Camera Calibration</h3>
+                        <table class="data-table">
+                            <tr><td>8m Screen Y (px)</td><td id="vehicle-camera-8m-y">-</td></tr>
+                            <tr><td>8m Screen Y (status)</td><td id="vehicle-camera-8m-status">-</td></tr>
+                            <tr><td>Vertical FOV (°)</td><td id="vehicle-camera-fov-vertical">-</td></tr>
+                            <tr><td>Horizontal FOV (°)</td><td id="vehicle-camera-fov-horizontal">-</td></tr>
+                        </table>
+                        <h3>Camera Position (Unity)</h3>
+                        <table class="data-table">
+                            <tr><td>Position X (world)</td><td id="vehicle-camera-pos-x">-</td></tr>
+                            <tr><td>Height Above Ground</td><td id="vehicle-camera-pos-y">-</td></tr>
+                            <tr><td>Position Z (world)</td><td id="vehicle-camera-pos-z">-</td></tr>
+                            <tr><td>Forward X</td><td id="vehicle-camera-forward-x">-</td></tr>
+                            <tr><td>Forward Y</td><td id="vehicle-camera-forward-y">-</td></tr>
+                            <tr><td>Forward Z</td><td id="vehicle-camera-forward-z">-</td></tr>
+                        </table>
+                        <h3>Road Center Debug</h3>
+                        <table class="data-table">
+                            <tr><td>At Car X</td><td id="vehicle-road-center-at-car-x">-</td></tr>
+                            <tr><td>At Car Y</td><td id="vehicle-road-center-at-car-y">-</td></tr>
+                            <tr><td>At Car Z</td><td id="vehicle-road-center-at-car-z">-</td></tr>
+                            <tr><td>At Lookahead X</td><td id="vehicle-road-center-at-lookahead-x">-</td></tr>
+                            <tr><td>At Lookahead Y</td><td id="vehicle-road-center-at-lookahead-y">-</td></tr>
+                            <tr><td>At Lookahead Z</td><td id="vehicle-road-center-at-lookahead-z">-</td></tr>
+                            <tr><td>Reference T</td><td id="vehicle-road-center-reference-t">-</td></tr>
+                            <tr><td>Car Offset X<br/><small style="color: #888;">(car X - road center X)</small></td><td id="vehicle-road-center-offset-x">-</td></tr>
+                            <tr><td>Car Offset Z<br/><small style="color: #888;">(car Z - road center Z)</small></td><td id="vehicle-road-center-offset-z">-</td></tr>
+                        </table>
+                        <h3>Position</h3>
+                        <table class="data-table">
+                            <tr><td>X</td><td id="vehicle-x">-</td></tr>
+                            <tr><td>Y</td><td id="vehicle-y">-</td></tr>
+                            <tr><td>Z</td><td id="vehicle-z">-</td></tr>
+                        </table>
+                        <h3>Motion</h3>
+                        <table class="data-table">
+                            <tr><td>Speed</td><td id="vehicle-speed">-</td></tr>
+                            <tr><td>Heading</td><td id="vehicle-heading">-</td></tr>
+                            <tr><td>Steering Angle</td><td id="vehicle-steering">-</td></tr>
+                        </table>
+                    </div>
+
+                    <!-- Ground Truth Tab -->
+                    <div id="ground-truth-tab" class="tab-pane">
+                        <h3>Lane Positions</h3>
+                        <table class="data-table">
+                            <tr><td>Left Lane Line X</td><td id="gt-left-x">-</td></tr>
+                            <tr><td>Right Lane Line X</td><td id="gt-right-x">-</td></tr>
+                            <tr><td>Lane Center X</td><td id="gt-center-x">-</td></tr>
+                            <tr><td>Lane Width</td><td id="gt-width">-</td></tr>
+                        </table>
+                        <h3>Comparison</h3>
+                        <table class="data-table">
+                            <tr><td>Lane Width Error<br/><small style="color: #888;">(perception vs GT)</small></td><td id="gt-width-error">-</td></tr>
+                            <tr><td>Center Offset Error<br/><small style="color: #888;">(perception vs GT)</small></td><td id="gt-center-error">-</td></tr>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Bottom: Navigation Controls -->
+        <div class="navigation">
+            <button id="prev-frame-btn" class="btn btn-nav">◀</button>
+            <div class="frame-info">
+                <span>Frame: <span id="frame-number">0</span> / <span id="frame-count">0</span></span>
+                <input type="range" id="frame-slider" min="0" max="0" value="0" class="frame-slider">
+                <span>Time: <span id="frame-time">0.00</span>s</span>
+            </div>
+            <button id="next-frame-btn" class="btn btn-nav">▶</button>
+            <button id="play-pause-btn" class="btn btn-nav">▶ Play</button>
+            <div class="speed-control">
+                <label>Speed: <span id="speed-value">1x</span></label>
+                <input type="range" id="speed-slider" min="0.25" max="4" step="0.25" value="1">
+            </div>
+        </div>
+    </div>
+
+    <script src="data_loader.js"></script>
+    <script src="overlay_renderer.js"></script>
+    <script src="visualizer.js"></script>
+</body>
+</html>
+

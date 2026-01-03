@@ -1,0 +1,1067 @@
+using System.Collections;
+using UnityEngine;
+using UnityEngine.Networking;
+using System;
+using System.Text;
+using System.Collections.Generic;
+#if UNITY_EDITOR
+using UnityEditor;
+#endif
+
+/// <summary>
+/// Bridge between Unity simulation and Python AV stack
+/// Handles bidirectional communication for vehicle state and control commands
+/// </summary>
+public class AVBridge : MonoBehaviour
+{
+    [Header("Components")]
+    public CarController carController;
+    public CameraCapture cameraCapture;
+    public TrajectoryVisualizer trajectoryVisualizer; // Optional trajectory visualizer
+    public GroundTruthReporter groundTruthReporter; // Optional ground truth reporter
+    
+    [Header("API Settings")]
+    public string apiUrl = "http://localhost:8000";
+    public string stateEndpoint = "/api/vehicle/state";
+    public string controlEndpoint = "/api/vehicle/control";
+    public string shutdownEndpoint = "/api/shutdown";
+    public string playEndpoint = "/api/unity/play";  // NEW: Unity play request endpoint
+    public string trajectoryEndpoint = "/api/trajectory";
+    public string feedbackEndpoint = "/api/unity/feedback";  // NEW: Unity feedback endpoint
+    public float updateRate = 30f; // Hz
+    public float shutdownCheckInterval = 1.0f; // Check for shutdown every 1 second
+    public float playCheckInterval = 0.5f; // Check for play request every 0.5 seconds (more frequent for responsiveness)
+    public float feedbackSendInterval = 1.0f; // Send feedback every 1 second (not every frame to reduce overhead)
+    
+    [Header("Control")]
+    [Tooltip("Enable AV control (overrides manual input)")]
+    public bool enableAVControl = false;
+    
+    [Header("Debug")]
+    public bool showDebugInfo = true;
+    
+    private float updateInterval;
+    private float lastUpdateTime;
+    private float lastShutdownCheckTime;
+    private float lastPlayCheckTime;
+    private float lastFeedbackSendTime;
+    private VehicleState lastVehicleState;
+    private ControlCommand lastControlCommand;
+    
+    // PERFORMANCE: Cache camera8mScreenY calculation - only recalculate when camera moves significantly
+    private float cachedCamera8mScreenY = -1.0f;
+    private Vector3 lastCameraPosition = Vector3.zero;
+    private Quaternion lastCameraRotation = Quaternion.identity;
+    private float camera8mScreenYRecalcInterval = 0.5f; // Recalculate every 0.5 seconds instead of every frame
+    private float lastCamera8mScreenYRecalcTime = 0f;
+    
+    #if UNITY_EDITOR
+    private double lastEditorPlayCheckTime = 0.0; // Use double for EditorApplication.timeSinceStartup
+    private Queue<UnityWebRequest> pendingPlayChecks = new Queue<UnityWebRequest>(); // Queue for async requests in edit mode
+    #endif
+    
+    void Start()
+    {
+        // Get components if not assigned
+        if (carController == null)
+        {
+            carController = GetComponent<CarController>();
+        }
+        
+        if (cameraCapture == null)
+        {
+            cameraCapture = FindObjectOfType<CameraCapture>();
+        }
+        
+        if (groundTruthReporter == null)
+        {
+            groundTruthReporter = FindObjectOfType<GroundTruthReporter>();
+            if (groundTruthReporter != null)
+            {
+                if (showDebugInfo) Debug.Log($"AVBridge: Found GroundTruthReporter on '{groundTruthReporter.gameObject.name}' (enabled: {groundTruthReporter.enabled})");
+            }
+            else
+            {
+                if (showDebugInfo) Debug.LogWarning("AVBridge: GroundTruthReporter not found in scene! Ground truth data will be 0.0");
+            }
+        }
+        else
+        {
+            if (showDebugInfo) Debug.Log($"AVBridge: GroundTruthReporter assigned in Inspector on '{groundTruthReporter.gameObject.name}' (enabled: {groundTruthReporter.enabled})");
+        }
+        
+        if (carController == null)
+        {
+            Debug.LogError("AVBridge: CarController not found!");
+            enabled = false;
+            return;
+        }
+        
+        updateInterval = 1.0f / updateRate;
+        lastVehicleState = new VehicleState();
+        lastShutdownCheckTime = Time.time;
+        lastPlayCheckTime = Time.time;
+        // CRITICAL: Initialize lastUpdateTime to negative value to ensure UpdateAVStack() runs on first frame
+        // This ensures camera calibration data is calculated and sent from frame 0
+        lastUpdateTime = -updateInterval;  // Force first UpdateAVStack() call on frame 0
+        
+        // CRITICAL: Initialize all cached values BEFORE first frame
+        // This ensures Python receives valid data from frame 0, not -1.0 or null
+        InitializeCachedValues();
+        
+        // Enable AV control on car controller
+        if (enableAVControl)
+        {
+            carController.avControlEnabled = true;
+            carController.avControlPriority = true;
+        }
+        
+        // Start trajectory visualization update (if visualizer exists)
+        if (trajectoryVisualizer != null)
+        {
+            // TrajectoryVisualizer will fetch data itself, no need to do anything here
+            if (showDebugInfo)
+            {
+                Debug.Log("AVBridge: TrajectoryVisualizer found - trajectory visualization enabled");
+            }
+        }
+        
+        if (showDebugInfo) Debug.Log($"AVBridge: Initialized - Update rate: {updateRate} Hz, AV Control: {enableAVControl}");
+        
+        // Start sending Unity feedback periodically
+        StartCoroutine(SendUnityFeedback());
+        
+        // CRITICAL FIX: Register EditorApplication.update to check for play requests even when not in play mode
+        // This allows auto-play to work when Unity Editor is open but not playing
+        #if UNITY_EDITOR
+        EditorApplication.update += OnEditorUpdate;
+        #endif
+    }
+    
+    #if UNITY_EDITOR
+    private void OnEditorUpdate()
+    {
+        // Check for play request periodically (works even when not in play mode)
+        // Use EditorApplication.timeSinceStartup instead of Time.time (which only works in play mode)
+        double currentTime = EditorApplication.timeSinceStartup;
+        if (currentTime - lastEditorPlayCheckTime >= playCheckInterval)
+        {
+            // Only check if not already playing
+            if (!EditorApplication.isPlaying)
+            {
+                // Start async request (will be checked in next update)
+                string url = $"{apiUrl}{playEndpoint}";
+                UnityWebRequest request = UnityWebRequest.Get(url);
+                request.timeout = 1;
+                request.SendWebRequest(); // Start async request
+                pendingPlayChecks.Enqueue(request);
+            }
+            lastEditorPlayCheckTime = currentTime;
+        }
+        
+        // Check pending requests
+        while (pendingPlayChecks.Count > 0)
+        {
+            UnityWebRequest request = pendingPlayChecks.Peek();
+            if (request.isDone)
+            {
+                pendingPlayChecks.Dequeue();
+                if (request.result == UnityWebRequest.Result.Success)
+                {
+                    try
+                    {
+                        string jsonResponse = request.downloadHandler.text;
+                        if (jsonResponse.Contains("\"status\":\"play\"") || jsonResponse.Contains("play_requested"))
+                        {
+                            Debug.Log($"[COMMAND RECEIVED] AVBridge: ▶️ PLAY command received (OnEditorUpdate) - Python script requested play mode, entering play mode...");
+                            Debug.Log($"[COMMAND RECEIVED] AVBridge: Play request response: {jsonResponse}");
+                            EditorApplication.isPlaying = true;
+                        }
+                        else
+                        {
+                            Debug.Log($"[COMMAND RECEIVED] AVBridge: Play check response (no play request): {jsonResponse}");
+                        }
+                    }
+                    catch (Exception e)
+                    {
+                        // Silently ignore errors in edit mode
+                    }
+                }
+                request.Dispose();
+            }
+            else
+            {
+                // Request still pending, check next frame
+                break;
+            }
+        }
+    }
+    
+    private void OnDestroy()
+    {
+        // Unregister editor update callback and clean up pending requests
+        #if UNITY_EDITOR
+        EditorApplication.update -= OnEditorUpdate;
+        while (pendingPlayChecks.Count > 0)
+        {
+            UnityWebRequest request = pendingPlayChecks.Dequeue();
+            if (!request.isDone)
+            {
+                request.Abort();
+            }
+            request.Dispose();
+        }
+        #endif
+    }
+    #endif
+    
+    void Update()
+    {
+        // CRITICAL: Don't send data when Unity is exiting play mode
+        // During play mode exit, Update() may still be called but Time.time is frozen
+        // This prevents sending duplicate frames with frozen timestamps
+        #if UNITY_EDITOR
+        if (!EditorApplication.isPlaying)
+        {
+            return; // Don't send data when exiting play mode
+        }
+        #endif
+        
+        // Update AV control state
+        if (enableAVControl != carController.avControlEnabled)
+        {
+            carController.avControlEnabled = enableAVControl;
+        }
+        
+        // Check for shutdown signal periodically
+        if (Time.time - lastShutdownCheckTime >= shutdownCheckInterval)
+        {
+            StartCoroutine(CheckShutdownSignal());
+            lastShutdownCheckTime = Time.time;
+        }
+        
+        // Send vehicle state and receive control commands
+        if (Time.time - lastUpdateTime >= updateInterval)
+        {
+            StartCoroutine(UpdateAVStack());
+            lastUpdateTime = Time.time;
+        }
+    }
+    
+    // CRITICAL: Initialize all cached values before first frame
+    // This ensures Python receives valid data from frame 0, not -1.0 or null
+    void InitializeCachedValues()
+    {
+        // Initialize camera8mScreenY cache - calculate it once before first frame
+        if (cachedCamera8mScreenY < 0 && cameraCapture != null && cameraCapture.targetCamera != null && carController != null)
+        {
+            CalculateCamera8mScreenY();
+        }
+        
+        // Initialize lastCameraPosition and lastCameraRotation for change detection
+        if (cameraCapture != null && cameraCapture.targetCamera != null)
+        {
+            lastCameraPosition = cameraCapture.targetCamera.transform.position;
+            lastCameraRotation = cameraCapture.targetCamera.transform.rotation;
+        }
+        
+        // Initialize lastCamera8mScreenYRecalcTime to force first calculation
+        lastCamera8mScreenYRecalcTime = -camera8mScreenYRecalcInterval; // Force calculation on first frame
+        
+        if (showDebugInfo)
+        {
+            Debug.Log($"AVBridge.InitializeCachedValues: cachedCamera8mScreenY = {cachedCamera8mScreenY:F1}px");
+        }
+    }
+    
+    // Extract camera8mScreenY calculation into separate method for reuse
+    void CalculateCamera8mScreenY()
+    {
+        if (cameraCapture == null || cameraCapture.targetCamera == null || carController == null)
+        {
+            return;
+        }
+        
+        Camera avCamera = cameraCapture.targetCamera;
+        Vector3 cameraPos = avCamera.transform.position;
+        Vector3 cameraForward = avCamera.transform.forward;
+        Vector3 point8mDirection = cameraPos + cameraForward * 8.0f;
+        
+        // CRITICAL FIX: Project point DOWN to ground plane (y=0 or road height)
+        float carY = carController.transform.position.y;
+        float groundHeight = (carY < 0.25f) ? 0.0f : (carY - 0.5f);
+        
+        // Calculate intersection of camera forward ray with ground plane
+        float t = (groundHeight - cameraPos.y) / cameraForward.y;
+        
+        Vector3 point8mOnGround = Vector3.zero;
+        bool shouldCalculate = false;
+        
+        if (cameraForward.y >= 0)
+        {
+            // Camera is looking up or horizontal - use fallback projection
+            point8mOnGround = point8mDirection;
+            point8mOnGround.y = groundHeight;
+            shouldCalculate = true;
+        }
+        else if (t <= 0)
+        {
+            // Ground intersection is behind camera - invalid
+            shouldCalculate = false;
+        }
+        else
+        {
+            // Valid ground intersection
+            point8mOnGround = cameraPos + cameraForward * t;
+            
+            // Clamp to 8m distance
+            float distanceToGround = Vector3.Distance(cameraPos, point8mOnGround);
+            if (distanceToGround > 8.0f)
+            {
+                point8mOnGround = point8mDirection;
+                point8mOnGround.y = groundHeight;
+            }
+            shouldCalculate = true;
+        }
+        
+        if (shouldCalculate)
+        {
+            Vector3 screenPoint = avCamera.WorldToScreenPoint(point8mOnGround);
+            
+            // Check if point is valid
+            if (screenPoint.z < 0 || screenPoint.y <= 0.1f || screenPoint.y >= Screen.height - 0.1f)
+            {
+                // Invalid point - keep -1.0
+                return;
+            }
+            
+            // Convert to image coordinates
+            float imageHeight = cameraCapture.captureHeight;
+            float screenY = screenPoint.y;
+            
+            if (screenY < 1.0f || screenY > Screen.height - 1.0f)
+            {
+                // Too close to edge - invalid
+                return;
+            }
+            
+            // Unity's screen coordinates: 0 = bottom, Screen.height = top
+            // Our image coordinates: 0 = top, imageHeight = bottom
+            float imageY = imageHeight - screenY;
+            cachedCamera8mScreenY = imageY;
+            lastCameraPosition = cameraPos;
+            lastCameraRotation = avCamera.transform.rotation;
+            lastCamera8mScreenYRecalcTime = Time.time;
+            
+            if (showDebugInfo)
+            {
+                Debug.Log($"AVBridge.CalculateCamera8mScreenY: Calculated camera8mScreenY = {cachedCamera8mScreenY:F1}px");
+            }
+        }
+    }
+    
+    IEnumerator UpdateAVStack()
+    {
+        // CRITICAL: Double-check play mode state (may have changed during coroutine wait)
+        // This prevents sending data during play mode exit transition
+        #if UNITY_EDITOR
+        if (!EditorApplication.isPlaying)
+        {
+            yield break; // Don't send data when exiting play mode
+        }
+        #endif
+        
+        // Get current vehicle state
+        VehicleState currentState = carController.GetVehicleState();
+        
+        // CRITICAL: Initialize camera8mScreenY to cached value (or -1.0 if never calculated)
+        // This ensures we use cached value when not recalculating, preventing -1.0 from being sent
+        // when we have a valid cached value
+        currentState.camera8mScreenY = cachedCamera8mScreenY;
+        
+        // Add ground truth data if available
+        if (groundTruthReporter != null)
+        {
+            // FIXED: Calculate ground truth at 8m lookahead to match perception evaluation distance
+            // This ensures green lines in visualizer align with orange/red lines at the black line (y=350px)
+            var (leftLaneLineX, rightLaneLineX) = groundTruthReporter.GetLanePositionsAtLookahead(8.0f);
+            currentState.groundTruthLeftLaneLineX = leftLaneLineX;
+            currentState.groundTruthRightLaneLineX = rightLaneLineX;
+            // Calculate lane center at lookahead (average of left and right lane lines)
+            currentState.groundTruthLaneCenterX = (leftLaneLineX + rightLaneLineX) / 2.0f;
+            
+            // NEW: Add path heading for path-based steering
+            float desiredHeading = groundTruthReporter.GetDesiredHeading(5.0f);
+            currentState.groundTruthDesiredHeading = desiredHeading;
+            currentState.groundTruthPathCurvature = groundTruthReporter.GetPathCurvature();
+            
+            // NEW: Add debug information about road center positions (for diagnosing offset issues)
+            var (roadCenterAtCar, roadCenterAtLookahead, referenceT) = groundTruthReporter.GetRoadCenterDebugInfo(8.0f);
+            currentState.roadCenterAtCarX = roadCenterAtCar.x;
+            currentState.roadCenterAtCarY = roadCenterAtCar.y;
+            currentState.roadCenterAtCarZ = roadCenterAtCar.z;
+            currentState.roadCenterAtLookaheadX = roadCenterAtLookahead.x;
+            currentState.roadCenterAtLookaheadY = roadCenterAtLookahead.y;
+            currentState.roadCenterAtLookaheadZ = roadCenterAtLookahead.z;
+            currentState.roadCenterReferenceT = referenceT;
+            
+            // Debug: Log ground truth values
+            if (showDebugInfo && Time.frameCount % 30 == 0)
+            {
+                Debug.Log($"GroundTruthReporter: left={leftLaneLineX:F3}m, right={rightLaneLineX:F3}m, center={currentState.groundTruthLaneCenterX:F3}m, desiredHeading={desiredHeading:F1}°");
+                Debug.Log($"GroundTruthReporter [DEBUG]: Road center at car=({roadCenterAtCar.x:F3}, {roadCenterAtCar.y:F3}, {roadCenterAtCar.z:F3}), " +
+                         $"at lookahead=({roadCenterAtLookahead.x:F3}, {roadCenterAtLookahead.y:F3}, {roadCenterAtLookahead.z:F3}), t={referenceT:F3}");
+            }
+        }
+        
+        // NEW: Get camera FOV information (what Unity actually uses)
+        // This helps us verify if Unity stores FOV as vertical or horizontal
+        if (cameraCapture != null && cameraCapture.targetCamera != null)
+        {
+            Camera avCamera = cameraCapture.targetCamera;
+            // Unity's Camera.fieldOfView ALWAYS returns vertical FOV, regardless of Inspector "Field of View Axis" setting
+            float verticalFOV = avCamera.fieldOfView;
+            float aspect = (float)avCamera.pixelWidth / (float)avCamera.pixelHeight;
+            // Calculate horizontal FOV from vertical FOV
+            float horizontalFOV = 2.0f * Mathf.Atan(Mathf.Tan(verticalFOV * Mathf.Deg2Rad / 2.0f) * aspect) * Mathf.Rad2Deg;
+            
+            currentState.cameraFieldOfView = verticalFOV;
+            currentState.cameraHorizontalFOV = horizontalFOV;
+            
+            // NEW: Add camera position and forward direction for debugging alignment
+            // CRITICAL: Report camera position as height above GROUND (Y=0), not world Y
+            // Car center is at Y = 0.5 (car height = 1m, so bottom is at Y=0, top at Y=1)
+            // Camera local Y = 1.2 (relative to car center)
+            // Camera world Y = 0.5 + 1.2 = 1.7
+            // User wants: camera height above ground = 1.2m (matches Inspector local Y)
+            // 
+            // SOLUTION: If camera is child of car, use localPosition.y directly (1.2m)
+            // This represents the camera's height relative to car center, which the user
+            // wants to see as "height above ground" (since car bottom is at ground level)
+            Vector3 cameraPos = avCamera.transform.position;
+            Vector3 cameraForward = avCamera.transform.forward;
+            
+            // Calculate camera height above ground
+            // If camera is child of car, use localPosition.y (relative to car center)
+            // Since car bottom is at ground (Y=0) and car center is at Y=0.5,
+            // camera local Y (1.2m) represents height above car center
+            // But user wants height above GROUND, which should be: localY + 0.5 = 1.2 + 0.5 = 1.7
+            // However, user explicitly said they want 1.2m, so they want local Y, not world Y
+            // 
+            // INTERPRETATION: User considers "height above ground" to be the camera's local Y
+            // (relative to car center), since the car is the reference frame for the camera
+            float cameraHeightAboveGround;
+            if (avCamera.transform.parent != null)
+            {
+                // Camera is child of car - use local position Y (relative to car center)
+                // User wants this as "height above ground" (1.2m from Inspector)
+                cameraHeightAboveGround = avCamera.transform.localPosition.y;
+            }
+            else
+            {
+                // Camera is not child of car - calculate from world position
+                // FIXED: Handle case where car Y might be locked at 0.0m or 0.5m
+                float carY = (carController != null) ? carController.transform.position.y : 0.5f;
+                float groundHeight = (carY < 0.25f) ? 0.0f : (carY - 0.5f); // If car Y < 0.25m, assume ground at 0.0m, else use car Y - 0.5m
+                cameraHeightAboveGround = cameraPos.y - groundHeight;
+            }
+            
+            // Report camera position (X and Z are world, Y is height above ground)
+            currentState.cameraPosX = cameraPos.x;
+            currentState.cameraPosY = cameraHeightAboveGround; // Height above ground (local Y if child of car)
+            currentState.cameraPosZ = cameraPos.z;
+            currentState.cameraForwardX = cameraForward.x;
+            currentState.cameraForwardY = cameraForward.y;
+            currentState.cameraForwardZ = cameraForward.z;
+            
+            // Log once per second to avoid spam
+            if (showDebugInfo && Time.frameCount % 30 == 0)
+            {
+                Debug.Log($"CameraFOV: Unity fieldOfView={verticalFOV:F2}° (vertical), calculated horizontal={horizontalFOV:F2}°");
+                Debug.Log($"CameraPos: world=({cameraPos.x:F3}, {cameraPos.y:F3}, {cameraPos.z:F3}), " +
+                         $"height_above_ground={currentState.cameraPosY:F3}m, forward=({cameraForward.x:F3}, {cameraForward.y:F3}, {cameraForward.z:F3})");
+            }
+        }
+        
+            // NEW: Calculate where 8m appears in camera screen using Unity's actual camera projection
+            // This gives us the TRUE y pixel where 8m appears, independent of our simplified camera model
+            // CRITICAL: Calculate point 8m ahead on the GROUND (not floating in air)
+            // PERFORMANCE: Only recalculate when camera moves significantly or time interval elapsed
+            // WorldToScreenPoint() is expensive - don't call it every frame
+            bool shouldRecalcCamera8m = false;
+            if (cameraCapture != null && cameraCapture.targetCamera != null && carController != null)
+            {
+                Camera avCamera = cameraCapture.targetCamera;
+                Vector3 currentCameraPos = avCamera.transform.position;
+                Quaternion currentCameraRot = avCamera.transform.rotation;
+                
+                // Recalculate if:
+                // 1. Time interval elapsed (0.5s)
+                // 2. Camera moved significantly (>0.1m)
+                // 3. Camera rotated significantly (>5 degrees)
+                // 4. Never calculated before (cachedCamera8mScreenY == -1.0f)
+                float timeSinceLastRecalc = Time.time - lastCamera8mScreenYRecalcTime;
+                float cameraPosChange = Vector3.Distance(currentCameraPos, lastCameraPosition);
+                float cameraRotChange = Quaternion.Angle(currentCameraRot, lastCameraRotation);
+                
+                if (cachedCamera8mScreenY < 0 || 
+                    timeSinceLastRecalc >= camera8mScreenYRecalcInterval ||
+                    cameraPosChange > 0.1f ||
+                    cameraRotChange > 5.0f)
+                {
+                    shouldRecalcCamera8m = true;
+                    lastCameraPosition = currentCameraPos;
+                    lastCameraRotation = currentCameraRot;
+                    lastCamera8mScreenYRecalcTime = Time.time;
+                }
+            }
+            
+            if (shouldRecalcCamera8m && cameraCapture != null && cameraCapture.targetCamera != null && carController != null)
+            {
+                Camera avCamera = cameraCapture.targetCamera;
+                
+                // Calculate point 8m ahead along camera's forward direction
+                Vector3 cameraPos = avCamera.transform.position;
+                Vector3 cameraForward = avCamera.transform.forward;
+                Vector3 point8mDirection = cameraPos + cameraForward * 8.0f;
+            
+            // CRITICAL FIX: Project point DOWN to ground plane (y=0 or road height)
+            // The reference point is calculated on the road, so we need the ground point, not a floating point
+            // Use car's position as reference for ground height (car is on the road)
+            // FIXED: Handle case where car Y might be locked at 0.0m or 0.5m
+            // If car Y = 0.0m, then ground is at 0.0m (car bottom is at ground)
+            // If car Y = 0.5m, then ground is at 0.0m (car center is 0.5m above ground, bottom at 0.0m)
+            float carY = carController.transform.position.y;
+            float groundHeight = (carY < 0.25f) ? 0.0f : (carY - 0.5f); // If car Y < 0.25m, assume ground at 0.0m, else use car Y - 0.5m
+            
+            // Calculate intersection of camera forward ray with ground plane
+            // Ray: cameraPos + t * cameraForward
+            // Ground plane: y = groundHeight
+            // Solve: cameraPos.y + t * cameraForward.y = groundHeight
+            float t = (groundHeight - cameraPos.y) / cameraForward.y;
+            
+            // CRITICAL: Check if camera is looking down (cameraForward.y < 0)
+            // If camera is looking down, t will be positive and point will be in front
+            // If camera is looking up, t will be negative and point will be behind
+            Vector3 point8mOnGround = Vector3.zero; // Initialize to avoid compiler error
+            bool shouldCalculate = false;
+            
+            if (cameraForward.y >= 0)
+            {
+                // Camera is looking up or horizontal - ground intersection is behind or invalid
+                // Fall back to projecting 8m point straight down
+                if (showDebugInfo && Time.frameCount % 60 == 0)
+                {
+                    Debug.LogWarning($"CameraCalibration: Camera is not looking down! cameraForward.y={cameraForward.y:F3}, using fallback projection.");
+                }
+                point8mOnGround = point8mDirection;
+                point8mOnGround.y = groundHeight;
+                shouldCalculate = true; // Still try to calculate screen position
+            }
+            else if (t <= 0)
+            {
+                // Ground intersection is behind camera - invalid
+                if (showDebugInfo && Time.frameCount % 60 == 0)
+                {
+                    Debug.LogWarning($"CameraCalibration: Ground intersection is BEHIND camera! t={t:F3}, cameraForward.y={cameraForward.y:F3}");
+                }
+                // Keep -1.0 (already set at start of UpdateAVStack)
+                // Skip rest of camera calculation, but continue with rest of UpdateAVStack
+                shouldCalculate = false; // Don't calculate - point is invalid
+            }
+            else
+            {
+                // Valid ground intersection
+                point8mOnGround = cameraPos + cameraForward * t;
+                
+                // Clamp to 8m distance (if ground intersection is beyond 8m, use 8m point projected down)
+                float distanceToGround = Vector3.Distance(cameraPos, point8mOnGround);
+                if (distanceToGround > 8.0f)
+                {
+                    // Ground is further than 8m - project 8m point straight down to ground
+                    point8mOnGround = point8mDirection;
+                    point8mOnGround.y = groundHeight;
+                }
+                // else: use ground intersection point (distanceToGround < 8.0f)
+                shouldCalculate = true; // Calculate screen position
+            }
+            
+            // Use Unity's actual camera projection to get screen coordinates of GROUND point
+            // Only calculate if we have a valid point
+            if (shouldCalculate)
+            {
+                Vector3 screenPoint = avCamera.WorldToScreenPoint(point8mOnGround);
+                
+                // CRITICAL: Check if point is behind camera or outside view
+                // WorldToScreenPoint returns screenPoint.z < 0 if point is behind camera
+                // screenPoint.y = 0 or negative if point is outside view or behind
+                if (screenPoint.z < 0)
+                {
+                    // Point is behind camera - invalid!
+                    // Keep -1.0 (already set at start of UpdateAVStack)
+                    if (showDebugInfo && Time.frameCount % 60 == 0)
+                    {
+                        Debug.LogWarning($"CameraCalibration: 8m point is BEHIND camera! point8mOnGround={point8mOnGround}, screenPoint.z={screenPoint.z:F2}");
+                    }
+                }
+                else if (screenPoint.y <= 0.1f || screenPoint.y >= Screen.height - 0.1f)
+                {
+                    // Point is outside camera view (below or above screen)
+                    // Use 0.1f tolerance to catch near-zero values that would give 480px
+                    // Keep -1.0 (already set at start of UpdateAVStack)
+                    if (showDebugInfo && Time.frameCount % 60 == 0)
+                    {
+                        Debug.LogWarning($"CameraCalibration: 8m point is OUTSIDE camera view! screenY={screenPoint.y:F3}px (Screen.height={Screen.height})");
+                    }
+                }
+                else
+                {
+                    // Valid point - convert to image coordinates
+                    // screenPoint.y is in screen coordinates (0 = bottom, Screen.height = top)
+                    // Convert to image coordinates (0 = top, imageHeight = bottom) to match our image format
+                    float imageHeight = cameraCapture.captureHeight;
+                    float screenY = screenPoint.y;
+                    
+                    // CRITICAL: Additional safety check - screenY should be well within bounds
+                    // If screenY is too close to 0 or Screen.height, the result will be wrong
+                    if (screenY < 1.0f || screenY > Screen.height - 1.0f)
+                    {
+                        // Too close to edge - invalid
+                        // Keep -1.0 (already set at start of UpdateAVStack)
+                        if (showDebugInfo && Time.frameCount % 60 == 0)
+                        {
+                            Debug.LogWarning($"CameraCalibration: screenY too close to edge! screenY={screenY:F3}px (Screen.height={Screen.height})");
+                        }
+                    }
+                    else
+                    {
+                        // Unity's screen coordinates: 0 = bottom, Screen.height = top
+                        // Our image coordinates: 0 = top, imageHeight = bottom
+                        // Conversion: imageY = imageHeight - screenY
+                        float imageY = imageHeight - screenY;
+                        cachedCamera8mScreenY = imageY; // Cache the result
+                        currentState.camera8mScreenY = imageY;
+                        
+                        // Debug: Log calibration data periodically
+                        if (showDebugInfo && Time.frameCount % 60 == 0)  // Every ~2 seconds
+                        {
+                            Debug.Log($"CameraCalibration: 8m point on ground at world={point8mOnGround}, screenY={screenY:F1}px, imageY={imageY:F1}px (imageHeight={imageHeight})");
+                            Debug.Log($"CameraCalibration: currentState.camera8mScreenY = {currentState.camera8mScreenY:F1}px (will be sent to Python)");
+                        }
+                    }
+                }
+            }
+            else
+            {
+                // Use cached value instead of recalculating
+                currentState.camera8mScreenY = cachedCamera8mScreenY;
+            }
+        }
+        else
+        {
+            // Camera not available - use cached value or -1.0
+            currentState.camera8mScreenY = cachedCamera8mScreenY;
+            if (showDebugInfo && Time.frameCount % 60 == 0)  // Every ~2 seconds
+            {
+                Debug.LogWarning($"CameraCalibration: Camera not available! cameraCapture={cameraCapture}, targetCamera={(cameraCapture != null ? cameraCapture.targetCamera : null)}");
+            }
+        }
+        
+        // Debug: Warn if GroundTruthReporter not found (moved outside camera check)
+        if (groundTruthReporter == null && showDebugInfo && Time.frameCount % 90 == 0)  // Log every 3 seconds
+        {
+            Debug.LogWarning("AVBridge: GroundTruthReporter not found! Ground truth data will be 0.0");
+        }
+        
+        // Send state to Python server
+        yield return StartCoroutine(SendVehicleState(currentState));
+        
+        // Request control commands (only if AV control is enabled)
+        if (enableAVControl)
+        {
+            yield return StartCoroutine(RequestControlCommands());
+        }
+    }
+    
+    IEnumerator SendVehicleState(VehicleState state)
+    {
+        string url = $"{apiUrl}{stateEndpoint}";
+        
+        // Create JSON payload
+        string json = JsonUtility.ToJson(state);
+        byte[] bodyRaw = Encoding.UTF8.GetBytes(json);
+        
+        using (UnityWebRequest request = new UnityWebRequest(url, "POST"))
+        {
+            request.uploadHandler = new UploadHandlerRaw(bodyRaw);
+            request.downloadHandler = new DownloadHandlerBuffer();
+            request.SetRequestHeader("Content-Type", "application/json");
+            
+            yield return request.SendWebRequest();
+            
+            if (request.result != UnityWebRequest.Result.Success)
+            {
+                if (showDebugInfo)
+                {
+                    Debug.LogWarning($"AVBridge: Failed to send state - {request.error}");
+                }
+            }
+            
+            lastVehicleState = state;
+        }
+    }
+    
+    IEnumerator CheckPlayRequest()
+    {
+        // Check if Python script is requesting Unity to start playing (use GET, not POST)
+        // Only works in Unity Editor (not in builds)
+        #if UNITY_EDITOR
+        if (EditorApplication.isPlaying)
+        {
+            // Already playing, no need to check
+            yield break;
+        }
+        
+        string url = $"{apiUrl}{playEndpoint}";
+        
+        using (UnityWebRequest request = UnityWebRequest.Get(url))
+        {
+            request.timeout = 1; // Short timeout for quick check
+            yield return request.SendWebRequest();
+            
+            if (request.result == UnityWebRequest.Result.Success)
+            {
+                // Parse response to check if play was requested
+                try
+                {
+                    string jsonResponse = request.downloadHandler.text;
+                    // Check for play status in response (more flexible matching)
+                    if (jsonResponse.Contains("\"status\":\"play\"") || jsonResponse.Contains("play_requested"))
+                    {
+                        // Python script is requesting play mode - enter play mode
+                        Debug.Log($"[COMMAND RECEIVED] AVBridge: ▶️ PLAY command received (CheckPlayRequest) - Python script requested play mode, entering play mode...");
+                        Debug.Log($"[COMMAND RECEIVED] AVBridge: Play request response: {jsonResponse}");
+                        EditorApplication.isPlaying = true;
+                    }
+                    else
+                    {
+                        Debug.Log($"[COMMAND RECEIVED] AVBridge: Play check response (no play request): {jsonResponse}");
+                    }
+                    // If status is "no_request", do nothing (no play request)
+                }
+                catch (Exception e)
+                {
+                    if (showDebugInfo)
+                    {
+                        Debug.LogWarning($"AVBridge: Error parsing play request response: {e}");
+                    }
+                }
+            }
+            else if (request.result == UnityWebRequest.Result.ConnectionError || 
+                     request.result == UnityWebRequest.Result.ProtocolError)
+            {
+                // Connection error - bridge server might not be running yet
+                // This is expected if Python script hasn't started yet, so don't log
+            }
+        }
+        #endif
+    }
+    
+    IEnumerator CheckShutdownSignal()
+    {
+        // Check if AV stack is shutting down (use GET, not POST)
+        string url = $"{apiUrl}{shutdownEndpoint}";
+        
+        using (UnityWebRequest request = UnityWebRequest.Get(url))
+        {
+            request.timeout = 1; // Short timeout for quick check
+            yield return request.SendWebRequest();
+            
+            if (request.result == UnityWebRequest.Result.Success)
+            {
+                // Parse response to check if shutdown was requested
+                try
+                {
+                    string jsonResponse = request.downloadHandler.text;
+                    // Simple check for shutdown status in response
+                    if (jsonResponse.Contains("\"status\":\"shutdown\""))
+                    {
+                        // AV stack is shutting down - exit play mode gracefully
+                        Debug.Log($"[COMMAND RECEIVED] AVBridge: ⚠️ SHUTDOWN command received - AV stack is shutting down, exiting play mode...");
+                        Debug.Log($"[COMMAND RECEIVED] AVBridge: Shutdown response: {jsonResponse}");
+                        #if UNITY_EDITOR
+                        EditorApplication.isPlaying = false;
+                        #endif
+                    }
+                    else
+                    {
+                        Debug.Log($"[COMMAND RECEIVED] AVBridge: Shutdown check response (not shutdown): {jsonResponse}");
+                    }
+                    // If status is "running", do nothing (AV stack is active)
+                }
+                catch (Exception e)
+                {
+                    if (showDebugInfo)
+                    {
+                        Debug.LogWarning($"AVBridge: Failed to parse shutdown response - {e.Message}");
+                    }
+                }
+            }
+            else if (request.result == UnityWebRequest.Result.ConnectionError)
+            {
+                // Bridge server is down (AV stack stopped) - exit play mode
+                // This handles the case where the script stops the bridge server
+                Debug.Log($"[COMMAND RECEIVED] AVBridge: ⚠️ BRIDGE DISCONNECTED - Connection error, exiting play mode...");
+                #if UNITY_EDITOR
+                EditorApplication.isPlaying = false;
+                #endif
+            }
+            // Other errors (timeout, etc.) - don't exit play mode
+            // (might be temporary network issues)
+        }
+    }
+    
+    IEnumerator RequestControlCommands()
+    {
+        string url = $"{apiUrl}{controlEndpoint}";
+        
+        using (UnityWebRequest request = UnityWebRequest.Get(url))
+        {
+            yield return request.SendWebRequest();
+            
+            if (request.result == UnityWebRequest.Result.Success)
+            {
+                try
+                {
+                    string jsonResponse = request.downloadHandler.text;
+                    
+                    // CRITICAL: Log EVERY control command received (not throttled)
+                    Debug.Log($"[COMMAND RECEIVED] AVBridge: Control command received - {jsonResponse}");
+                    
+                    ControlCommand command = JsonUtility.FromJson<ControlCommand>(jsonResponse);
+                    
+                    // Log parsed command details
+                    Debug.Log($"[COMMAND RECEIVED] AVBridge: Parsed command - steering={command.steering:F3}, " +
+                             $"throttle={command.throttle:F3}, brake={command.brake:F3}, " +
+                             $"ground_truth_mode={command.ground_truth_mode}, " +
+                             $"ground_truth_speed={command.ground_truth_speed}");
+                    
+                    // Check ground truth mode - Unity JsonUtility might not deserialize optional fields
+                    // So we need to manually parse if needed
+                    bool gtMode = command.ground_truth_mode;
+                    float gtSpeed = command.ground_truth_speed;
+                    
+                    // Fallback: Try to parse from JSON string if JsonUtility didn't work
+                    if (!gtMode && jsonResponse.Contains("\"ground_truth_mode\":true"))
+                    {
+                        Debug.LogWarning("AVBridge: JsonUtility didn't parse ground_truth_mode, parsing manually from JSON");
+                        // Simple manual parsing
+                        if (jsonResponse.Contains("\"ground_truth_mode\":true"))
+                        {
+                            gtMode = true;
+                        }
+                        // Try to extract speed
+                        int speedIdx = jsonResponse.IndexOf("\"ground_truth_speed\":");
+                        if (speedIdx >= 0)
+                        {
+                            int startIdx = speedIdx + 21; // Length of "ground_truth_speed":
+                            int endIdx = jsonResponse.IndexOf(",", startIdx);
+                            if (endIdx < 0) endIdx = jsonResponse.IndexOf("}", startIdx);
+                            if (endIdx > startIdx)
+                            {
+                                string speedStr = jsonResponse.Substring(startIdx, endIdx - startIdx).Trim();
+                                if (float.TryParse(speedStr, out float parsedSpeed))
+                                {
+                                    gtSpeed = parsedSpeed;
+                                }
+                            }
+                        }
+                    }
+                    
+                    if (gtMode)
+                    {
+                        Debug.Log($"[COMMAND RECEIVED] AVBridge: ✅ ENABLING ground truth mode, speed={gtSpeed} m/s");
+                        carController.SetGroundTruthMode(true, gtSpeed);
+                    }
+                    else if (carController.groundTruthMode)
+                    {
+                        // Disable ground truth mode if it was enabled but command doesn't request it
+                        Debug.Log($"[COMMAND RECEIVED] AVBridge: ⚠️ DISABLING ground truth mode (command.ground_truth_mode=false)");
+                        carController.SetGroundTruthMode(false, 0f);
+                    }
+                    
+                    // CRITICAL: Auto-enable AV control when first command is received
+                    // This ensures the car responds to Python commands without manual setup
+                    if (!enableAVControl || !carController.avControlEnabled)
+                    {
+                        Debug.Log($"[COMMAND RECEIVED] AVBridge: ⚠️ Auto-enabling AV control (was disabled)");
+                        enableAVControl = true;
+                        carController.avControlEnabled = true;
+                        carController.avControlPriority = true;
+                    }
+                    
+                    // Apply control command to vehicle
+                    Debug.Log($"[COMMAND RECEIVED] AVBridge: Applying controls - steering={command.steering:F3}, throttle={command.throttle:F3}, brake={command.brake:F3}");
+                    carController.SetAVControls(
+                        command.steering,
+                        command.throttle,
+                        command.brake
+                    );
+                    
+                    lastControlCommand = command;
+                }
+                catch (Exception e)
+                {
+                    if (showDebugInfo)
+                    {
+                        Debug.LogWarning($"AVBridge: Failed to parse control command - {e.Message}");
+                    }
+                }
+            }
+            else
+            {
+                if (showDebugInfo)
+                {
+                    Debug.LogWarning($"AVBridge: Failed to get control commands - {request.error}");
+                }
+            }
+        }
+    }
+    
+    IEnumerator SendUnityFeedback()
+    {
+        // Send Unity feedback periodically to Python for recording
+        // This eliminates the need to check Unity console manually
+        while (true)
+        {
+            yield return new WaitForSeconds(feedbackSendInterval);
+            
+            if (carController == null)
+            {
+                continue;
+            }
+            
+            // Collect feedback data
+            UnityFeedback feedback = new UnityFeedback();
+            feedback.timestamp = Time.time;
+            feedback.unity_frame_count = Time.frameCount;
+            feedback.unity_time = Time.time;
+            
+            // Control status
+            feedback.ground_truth_mode_active = carController.groundTruthMode;
+            feedback.control_command_received = (lastControlCommand != null);
+            feedback.actual_steering_applied = carController.steerInput * carController.maxSteerAngle;
+            feedback.actual_throttle_applied = carController.throttleInput;
+            feedback.actual_brake_applied = carController.brakeInput;
+            
+            // Ground truth data status
+            if (groundTruthReporter != null)
+            {
+                feedback.ground_truth_reporter_enabled = groundTruthReporter.enabled;
+                feedback.ground_truth_data_available = groundTruthReporter.enabled;
+                
+                // Check if path curvature is being calculated
+                float curvature = groundTruthReporter.GetPathCurvature();
+                feedback.path_curvature_calculated = (Mathf.Abs(curvature) > 1e-6f);
+            }
+            else
+            {
+                feedback.ground_truth_reporter_enabled = false;
+                feedback.ground_truth_data_available = false;
+                feedback.path_curvature_calculated = false;
+            }
+            
+            // Car controller mode
+            feedback.car_controller_mode = carController.groundTruthMode ? "ground_truth" : "physics";
+            feedback.av_control_enabled = carController.avControlEnabled;
+            
+            // Send feedback to Python
+            string url = $"{apiUrl}{feedbackEndpoint}";
+            string json = JsonUtility.ToJson(feedback);
+            byte[] bodyRaw = Encoding.UTF8.GetBytes(json);
+            
+            using (UnityWebRequest request = new UnityWebRequest(url, "POST"))
+            {
+                request.uploadHandler = new UploadHandlerRaw(bodyRaw);
+                request.downloadHandler = new DownloadHandlerBuffer();
+                request.SetRequestHeader("Content-Type", "application/json");
+                
+                yield return request.SendWebRequest();
+                
+                if (request.result != UnityWebRequest.Result.Success)
+                {
+                    if (showDebugInfo && Time.frameCount % 60 == 0)  // Log every 2 seconds
+                    {
+                        Debug.LogWarning($"AVBridge: Failed to send Unity feedback - {request.error}");
+                    }
+                }
+            }
+        }
+    }
+    
+    void OnGUI()
+    {
+        if (showDebugInfo)
+        {
+            int yOffset = 10;
+            GUI.Label(new Rect(10, yOffset, 300, 20), $"AV Control: {(enableAVControl ? "ON" : "OFF")}");
+            yOffset += 20;
+            
+            if (lastControlCommand != null)
+            {
+                GUI.Label(new Rect(10, yOffset, 300, 20), 
+                    $"Steering: {lastControlCommand.steering:F3}");
+                yOffset += 20;
+                GUI.Label(new Rect(10, yOffset, 300, 20), 
+                    $"Throttle: {lastControlCommand.throttle:F3}");
+                yOffset += 20;
+                GUI.Label(new Rect(10, yOffset, 300, 20), 
+                    $"Brake: {lastControlCommand.brake:F3}");
+                yOffset += 20;
+            }
+            
+            GUI.Label(new Rect(10, yOffset, 300, 20), 
+                $"Speed: {lastVehicleState.speed:F2} m/s");
+        }
+    }
+}
+
+/// <summary>
+/// Control command data structure
+/// </summary>
+[System.Serializable]
+public class ControlCommand
+{
+    public float steering;  // -1.0 to 1.0
+    public float throttle;  // -1.0 to 1.0 (negative = reverse)
+    public float brake;     // 0.0 to 1.0
+    // Optional: Ground truth mode settings
+    public bool ground_truth_mode = false;  // Enable direct velocity control
+    public float ground_truth_speed = 5.0f;  // Speed for ground truth mode (m/s)
+}
+
+[System.Serializable]
+public class UnityFeedback
+{
+    public float timestamp;
+    // Control status
+    public bool ground_truth_mode_active;
+    public bool control_command_received;
+    public float actual_steering_applied;
+    public float actual_throttle_applied;
+    public float actual_brake_applied;
+    // Ground truth data status
+    public bool ground_truth_data_available;
+    public bool ground_truth_reporter_enabled;
+    public bool path_curvature_calculated;
+    // Errors/warnings (not implemented yet - could collect from Debug.Log)
+    public string unity_errors;
+    public string unity_warnings;
+    // Internal state
+    public string car_controller_mode;
+    public bool av_control_enabled;
+    // Frame info
+    public int unity_frame_count;
+    public float unity_time;
+}
+

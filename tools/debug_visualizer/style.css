@@ -1,0 +1,371 @@
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+    background: #1a1a1a;
+    color: #e0e0e0;
+    overflow: hidden;
+}
+
+.container {
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+}
+
+/* Header */
+.header {
+    background: #2a2a2a;
+    padding: 1rem;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    border-bottom: 1px solid #3a3a3a;
+}
+
+.header h1 {
+    font-size: 1.5rem;
+    color: #fff;
+}
+
+.header-controls {
+    display: flex;
+    gap: 0.5rem;
+    align-items: center;
+}
+
+.recording-select {
+    padding: 0.5rem;
+    background: #3a3a3a;
+    color: #e0e0e0;
+    border: 1px solid #4a4a4a;
+    border-radius: 4px;
+    min-width: 200px;
+}
+
+.btn {
+    padding: 0.5rem 1rem;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 0.9rem;
+    transition: background 0.2s;
+}
+
+.btn-primary {
+    background: #4a9eff;
+    color: white;
+}
+
+.btn-primary:hover {
+    background: #3a8eef;
+}
+
+.btn-secondary {
+    background: #5a5a5a;
+    color: #e0e0e0;
+}
+
+.btn-secondary:hover {
+    background: #6a6a6a;
+}
+
+.btn-nav {
+    background: #3a3a3a;
+    color: #e0e0e0;
+    padding: 0.5rem 1rem;
+    border: 1px solid #4a4a4a;
+}
+
+.btn-nav:hover {
+    background: #4a4a4a;
+}
+
+/* Main Content */
+.main-content {
+    display: flex;
+    flex: 1;
+    overflow: hidden;
+}
+
+/* Camera Panel */
+.camera-panel {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    padding: 1rem;
+    background: #1a1a1a;
+    overflow-y: auto;
+}
+
+.canvas-container {
+    position: relative;
+    width: 640px;
+    height: 480px;
+    margin-bottom: 1rem;
+    background: #000;
+    border: 2px solid #3a3a3a;
+    border-radius: 4px;
+    display: block;
+    pointer-events: none;
+}
+
+.canvas-container > canvas {
+    pointer-events: none;
+}
+
+#camera-canvas,
+#overlay-canvas,
+#debug-overlay-canvas {
+    position: absolute;
+    top: 0;
+    left: 0;
+    display: block;
+}
+
+#camera-canvas {
+    z-index: 1;
+}
+
+#overlay-canvas {
+    z-index: 2;
+    pointer-events: none;
+}
+
+#debug-overlay-canvas {
+    z-index: 3;
+    pointer-events: none;
+    opacity: 0.5;
+}
+
+.debug-controls,
+.overlay-controls {
+    background: #2a2a2a;
+    padding: 1rem;
+    border-radius: 4px;
+    margin-top: 1rem;
+    /* Move controls below canvas, not overlaying */
+}
+
+.debug-controls h3,
+.overlay-controls h3 {
+    margin-bottom: 0.5rem;
+    font-size: 1rem;
+    color: #fff;
+}
+
+.debug-toggles,
+.overlay-toggles {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1rem;
+    margin-bottom: 0.5rem;
+}
+
+.debug-toggles label,
+.overlay-toggles label {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    cursor: pointer;
+    user-select: none;
+}
+
+.debug-toggles input[type="checkbox"],
+.overlay-toggles input[type="checkbox"] {
+    cursor: pointer;
+    width: 18px;
+    height: 18px;
+    margin: 0;
+    flex-shrink: 0;
+    pointer-events: auto;
+    z-index: 10;
+    position: relative;
+}
+
+.opacity-control {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.opacity-control input[type="range"] {
+    flex: 1;
+}
+
+/* Legend Panel (between camera and data) */
+.legend-panel {
+    width: 250px;
+    background: #2a2a2a;
+    padding: 1rem;
+    border-left: 1px solid #3a3a3a;
+    border-right: 1px solid #3a3a3a;
+    overflow-y: auto;
+}
+
+.legend-panel h3 {
+    margin-bottom: 1rem;
+    font-size: 1rem;
+    color: #fff;
+}
+
+/* Data Panel */
+.data-panel {
+    width: 400px;
+    background: #2a2a2a;
+    display: flex;
+    flex-direction: column;
+}
+
+.tabs {
+    display: flex;
+    background: #1a1a1a;
+    border-bottom: 1px solid #3a3a3a;
+}
+
+.tab-btn {
+    flex: 1;
+    padding: 0.75rem;
+    background: transparent;
+    border: none;
+    color: #a0a0a0;
+    cursor: pointer;
+    border-bottom: 2px solid transparent;
+    transition: all 0.2s;
+}
+
+.tab-btn:hover {
+    background: #2a2a2a;
+    color: #e0e0e0;
+}
+
+.tab-btn.active {
+    color: #4a9eff;
+    border-bottom-color: #4a9eff;
+    background: #2a2a2a;
+}
+
+.tab-content {
+    flex: 1;
+    overflow-y: auto;
+    padding: 1rem;
+}
+
+.tab-pane {
+    display: none;
+}
+
+.tab-pane.active {
+    display: block;
+}
+
+.tab-pane h3 {
+    margin-top: 1rem;
+    margin-bottom: 0.5rem;
+    font-size: 1.1rem;
+    color: #fff;
+}
+
+.tab-pane h3:first-child {
+    margin-top: 0;
+}
+
+.data-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-bottom: 1rem;
+}
+
+.data-table td {
+    padding: 0.5rem;
+    border-bottom: 1px solid #3a3a3a;
+}
+
+.data-table td:first-child {
+    color: #a0a0a0;
+    font-weight: 500;
+    width: 50%;
+}
+
+.data-table td:last-child {
+    color: #e0e0e0;
+    font-family: 'Courier New', monospace;
+    text-align: right;
+}
+
+/* Navigation */
+.navigation {
+    background: #2a2a2a;
+    padding: 1rem;
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    border-top: 1px solid #3a3a3a;
+}
+
+.frame-info {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+}
+
+.frame-slider {
+    flex: 1;
+    height: 6px;
+    background: #3a3a3a;
+    border-radius: 3px;
+    outline: none;
+}
+
+.frame-slider::-webkit-slider-thumb {
+    appearance: none;
+    width: 16px;
+    height: 16px;
+    background: #4a9eff;
+    border-radius: 50%;
+    cursor: pointer;
+}
+
+.frame-slider::-moz-range-thumb {
+    width: 16px;
+    height: 16px;
+    background: #4a9eff;
+    border-radius: 50%;
+    cursor: pointer;
+    border: none;
+}
+
+.speed-control {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.speed-control input[type="range"] {
+    width: 100px;
+}
+
+/* Scrollbar */
+::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+}
+
+::-webkit-scrollbar-track {
+    background: #1a1a1a;
+}
+
+::-webkit-scrollbar-thumb {
+    background: #4a4a4a;
+    border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background: #5a5a5a;
+}
+
