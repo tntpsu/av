@@ -226,12 +226,12 @@ av/
 │   ├── recorder.py                 # HDF5 data recorder
 │   ├── formats/                    # Data format definitions
 │   └── recordings/                 # HDF5 recording files
-├── tools/                          # Analysis and utility tools
+├── tools/                          # Analysis and utility tools (see tools/README.md)
 │   ├── analyze/                    # Analysis scripts (see tools/analyze/README.md)
 │   │   ├── analyze_drive_overall.py      # Primary overall analysis
 │   │   ├── analyze_recording_comprehensive.py  # Detailed diagnostics
 │   │   └── ...                    # Specialized analysis tools
-│   ├── debug_visualizer/           # Web-based debug visualizer
+│   ├── debug_visualizer/           # Web-based debug visualizer (see tools/debug_visualizer/README.md)
 │   │   ├── server.py              # Visualizer backend server
 │   │   ├── index.html             # Visualizer frontend
 │   │   └── visualizer.js          # Visualization logic
@@ -284,6 +284,13 @@ pytest tests/ -v
 # Run specific test file
 pytest tests/test_control.py -v
 
+# Run tests by category (using markers)
+pytest tests/ -m unit          # Fast unit tests
+pytest tests/ -m integration   # Integration tests
+pytest tests/ -m control       # Control system tests
+pytest tests/ -m trajectory    # Trajectory planning tests
+pytest tests/ -m perception    # Perception tests
+
 # Run with coverage
 pytest tests/ --cov=perception --cov=trajectory --cov=control --cov-report=term-missing
 
@@ -293,11 +300,11 @@ pytest tests/ --pdb
 
 ### Test Categories
 
-- **Control Tests**: PID controller, steering logic, integral accumulation
-- **Trajectory Tests**: Reference point calculation, smoothing, bias correction
-- **Perception Tests**: Lane detection, coordinate conversion
-- **Integration Tests**: End-to-end scenarios, system stability
-- **Ground Truth Tests**: Ground truth following, coordinate system validation
+- **Control Tests** (`-m control`): PID controller, steering logic, integral accumulation
+- **Trajectory Tests** (`-m trajectory`): Reference point calculation, smoothing, bias correction
+- **Perception Tests** (`-m perception`): Lane detection, coordinate conversion
+- **Integration Tests** (`-m integration`): End-to-end scenarios, system stability
+- **Unit Tests** (`-m unit`): Fast, isolated unit tests
 
 See [tests/README.md](tests/README.md) for comprehensive test documentation.
 
@@ -355,13 +362,23 @@ See `requirements.txt` for complete list.
 
 ## Documentation
 
-- `README.md` - This file (project overview)
-- `README_STARTUP.md` - Detailed startup instructions and troubleshooting
-- `DEVELOPMENT_GUIDELINES.md` - Development best practices and critical lessons learned
-- `CONFIG_GUIDE.md` - Configuration system guide
-- `tools/analyze/README.md` - Analysis tools documentation
-- `tools/debug_visualizer/README.md` - Debug visualizer documentation
-- `tests/README.md` - Test suite documentation
+### Core Documentation
+- **[README.md](README.md)** - This file (project overview and quick start)
+- **[setup_unity.md](setup_unity.md)** - Unity setup instructions
+- **[CONFIG_GUIDE.md](CONFIG_GUIDE.md)** - Configuration system guide
+
+### Additional Documentation
+- **[docs/README.md](docs/README.md)** - Documentation index
+- **[docs/README_STARTUP.md](docs/README_STARTUP.md)** - Detailed startup instructions and troubleshooting
+- **[docs/DEVELOPMENT_GUIDELINES.md](docs/DEVELOPMENT_GUIDELINES.md)** - Development best practices and critical lessons learned
+- **[docs/AI_MEMORY_GUIDE.md](docs/AI_MEMORY_GUIDE.md)** - AI assistant memory and context guide
+- **[docs/archive/](docs/archive/)** - Historical analysis and investigation notes (archived)
+
+### Component Documentation
+- **[tools/README.md](tools/README.md)** - Tools directory documentation (data collection, tuning, diagnostics)
+- **[tools/analyze/README.md](tools/analyze/README.md)** - Analysis tools documentation
+- **[tools/debug_visualizer/README.md](tools/debug_visualizer/README.md)** - Debug visualizer documentation
+- **[tests/README.md](tests/README.md)** - Test suite documentation
 
 ## Roadmap
 
@@ -389,4 +406,4 @@ MIT License
 
 ## Contributing
 
-Contributions welcome! Please read `DEVELOPMENT_GUIDELINES.md` before submitting PRs.
+Contributions welcome! Please read `docs/DEVELOPMENT_GUIDELINES.md` before submitting PRs.

@@ -135,19 +135,29 @@ The script will ask if you want to kill the existing process. Say 'y' to restart
 
 ### AV Stack Options
 
-```bash
-# Use trained model
-python av_stack.py --model_path checkpoints/best.pth
+When running `av_stack.py` directly (not via `start_av_stack.sh`):
 
+```bash
 # Limit number of frames
 python av_stack.py --max_frames 1000
 
-# Disable data recording
+# Run for specific duration (seconds)
+python av_stack.py --duration 60
+
+# Disable data recording (recording is enabled by default)
 python av_stack.py --no-record
 
 # Custom bridge URL
 python av_stack.py --bridge_url http://localhost:8000
+
+# Custom config file
+python av_stack.py --config /path/to/custom_config.yaml
+
+# Custom recording directory
+python av_stack.py --recording_dir data/my_recordings
 ```
+
+**Note:** The `start_av_stack.sh` script automatically passes `--record` and `--bridge_url` to `av_stack.py`. Additional arguments like `--duration` and `--max_frames` are passed through.
 
 ### Generate Oval Road
 

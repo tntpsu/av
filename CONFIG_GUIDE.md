@@ -30,13 +30,15 @@ Location: `config/av_stack_config.yaml`
 ```yaml
 control:
   lateral:
-    kp: 0.3              # Proportional gain
-    ki: 0.0              # Integral gain (0 = disabled)
-    kd: 0.1              # Derivative gain
-    max_steering: 0.5    # Maximum steering angle
-    deadband: 0.02       # Deadband in radians (~1.1°)
-    heading_weight: 0.5  # Weight for heading error
-    lateral_weight: 0.5  # Weight for lateral error
+    kp: 1.0              # Proportional gain (tuned to prevent overcompensation)
+    ki: 0.002            # Integral gain (tuned via parameter sweep)
+    kd: 0.5              # Derivative gain (provides damping)
+    max_steering: 1.0    # Maximum steering angle (-1.0 to 1.0, full authority)
+    deadband: 0.01       # Deadband in radians (~0.57°)
+    heading_weight: 0.6  # Weight for heading error (prioritizes heading correction)
+    lateral_weight: 0.4  # Weight for lateral error
+    error_clip: 1.57     # Maximum error in radians (π/2 = 90 degrees)
+    integral_limit: 0.10 # Maximum integral term (prevents windup)
 ```
 
 **Tuning Guide:**
@@ -51,30 +53,49 @@ control:
 ```yaml
 control:
   longitudinal:
-    kp: 0.3
-    ki: 0.05
-    kd: 0.02
+    kp: 0.10             # Proportional gain (reduced to prevent aggressive acceleration)
+    ki: 0.01             # Integral gain (reduced to prevent overshoot)
+    kd: 0.01             # Derivative gain (damping)
     target_speed: 8.0    # Target speed in m/s
     max_speed: 10.0      # Maximum speed in m/s
     speed_smoothing: 0.7 # Smoothing factor (0-1)
+    speed_deadband: 0.1  # Speed error deadband in m/s
+    throttle_limit_threshold: 0.75  # Start reducing throttle at this fraction of max_speed
+    throttle_reduction_factor: 0.3  # Throttle multiplier when near max speed
+    brake_aggression: 2.0 # Brake PID gain multiplier
 ```
 
 ### Trajectory Planning
 
 ```yaml
 trajectory:
-  lookahead_distance: 20.0  # How far ahead to plan
-  reference_lookahead: 8.0  # Lookahead for reference point
+  lookahead_distance: 20.0  # How far ahead to plan in meters
+  point_spacing: 1.0        # Spacing between trajectory points in meters
+  target_speed: 8.0         # Target speed for trajectory in m/s
+  reference_lookahead: 8.0  # Lookahead distance for reference point in meters
+  image_width: 640         # Camera image width in pixels
+  image_height: 480        # Camera image height in pixels
+  camera_fov: 110.0        # Camera field of view in degrees (horizontal FOV)
+  camera_height: 1.2       # Camera height above ground in meters
+  camera_offset_x: 0.0     # Lateral offset of camera from vehicle center (meters)
+  distance_scaling_factor: 0.875  # Distance scaling to account for camera pitch
   bias_correction_threshold: 10.0  # Pixels - auto-correct bias
+  reference_smoothing: 0.80  # Exponential smoothing for reference point (0.0-1.0)
+  lane_smoothing_alpha: 0.8  # Exponential smoothing for lane coefficients (0.0-1.0)
 ```
 
 ### Safety Limits
 
 ```yaml
 safety:
-  max_speed: 10.0
-  emergency_brake_threshold: 2.0  # Emergency brake if speed > max * this
-  speed_prevention_threshold: 0.85  # Start preventing at 85% of max
+  max_speed: 10.0           # Hard speed limit in m/s
+  emergency_brake_threshold: 1.5  # Emergency brake if speed > max_speed * this
+  speed_prevention_threshold: 0.70  # Start preventing acceleration at this fraction of max_speed
+  speed_prevention_brake_threshold: 0.85  # Apply light brake at this fraction of max_speed
+  speed_prevention_brake_amount: 0.4  # Light brake amount when preventing speed
+  lane_width: 7.0           # Lane width in meters
+  car_width: 1.85           # Car width in meters
+  allowed_outside_lane: 1.0  # Allowed distance outside lane before emergency stop (meters)
 ```
 
 ## Usage
@@ -96,8 +117,8 @@ Edit `config/av_stack_config.yaml`:
 ```yaml
 control:
   lateral:
-    kp: 0.2              # Reduced from 0.3
-    deadband: 0.03       # Increased from 0.02 (less sensitive)
+    kp: 0.8              # Reduced from 1.0
+    deadband: 0.015      # Increased from 0.01 (less sensitive)
 ```
 
 ### Example: Increase Lane Centering Response

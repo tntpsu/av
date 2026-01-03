@@ -1,5 +1,5 @@
 #!/bin/bash
-# Wrapper script for analyze_recording.py that activates venv automatically
+# Wrapper script for analyze.py (comprehensive analysis) that activates venv automatically
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -13,6 +13,6 @@ else
     exit 1
 fi
 
-# Run the Python script
-exec python "$SCRIPT_DIR/analyze_recording.py" "$@"
+# Run the Python script (analyze.py is a wrapper for comprehensive analysis)
+exec python "$SCRIPT_DIR/analyze.py" "$@"
 
