@@ -190,22 +190,23 @@ public class RoadGenerator : MonoBehaviour
     /// </summary>
     void RemoveExistingRoad()
     {
-        GameObject existingRoad = GameObject.Find("Road");
-        if (existingRoad != null)
+        string[] names = {
+            "Road",
+            "StraightRoad",
+            "RoadStraight",
+            "lanelinelft",
+            "lanelinert",
+            "LeftLaneLine",
+            "RightLaneLine"
+        };
+
+        foreach (string name in names)
         {
-            DestroyImmediate(existingRoad);
-        }
-        
-        GameObject leftLine = GameObject.Find("lanelinelft");
-        if (leftLine != null)
-        {
-            DestroyImmediate(leftLine);
-        }
-        
-        GameObject rightLine = GameObject.Find("lanelinert");
-        if (rightLine != null)
-        {
-            DestroyImmediate(rightLine);
+            GameObject obj = GameObject.Find(name);
+            if (obj != null)
+            {
+                DestroyImmediate(obj);
+            }
         }
     }
     
@@ -411,10 +412,8 @@ public class RoadGenerator : MonoBehaviour
         // Clean up existing generated objects
         Cleanup();
 
-        if (replaceExistingRoad)
-        {
-            RemoveExistingRoad();
-        }
+        // Always remove scene road/lines when loading from YAML to avoid overlapping tracks.
+        RemoveExistingRoad();
 
         activeTrackConfig = config;
         Vector3 yamlOffset = new Vector3(config.offsetX, config.offsetY, config.offsetZ);
