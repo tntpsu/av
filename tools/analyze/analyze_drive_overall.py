@@ -126,7 +126,7 @@ class DriveAnalyzer:
                 self.data['lateral_error'] = np.array(f['control/lateral_error'][:]) if 'control/lateral_error' in f else None
                 self.data['heading_error'] = np.array(f['control/heading_error'][:]) if 'control/heading_error' in f else None
                 self.data['total_error'] = np.array(f['control/total_error'][:]) if 'control/total_error' in f else None
-        self.data['path_curvature_input'] = np.array(f['control/path_curvature_input'][:]) if 'control/path_curvature_input' in f else None
+                self.data['path_curvature_input'] = np.array(f['control/path_curvature_input'][:]) if 'control/path_curvature_input' in f else None
                 self.data['pid_integral'] = np.array(f['control/pid_integral'][:]) if 'control/pid_integral' in f else None
                 self.data['pid_derivative'] = np.array(f['control/pid_derivative'][:]) if 'control/pid_derivative' in f else None
                 
@@ -212,7 +212,7 @@ class DriveAnalyzer:
                 oscillation_frequency = positive_freqs[dominant_idx] if dominant_idx < len(positive_freqs) else 0.0
         
         # Control effort (integral of |steering|)
-        control_effort = np.trapz(np.abs(self.data['steering']), self.data['time'])
+        control_effort = np.trapezoid(np.abs(self.data['steering']), self.data['time'])
         
         # 3. PERCEPTION QUALITY
         lane_detection_rate = np.sum(self.data['num_lanes_detected'] >= 2) / n_frames * 100 if self.data['num_lanes_detected'] is not None else 0.0
