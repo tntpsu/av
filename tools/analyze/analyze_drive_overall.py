@@ -53,7 +53,8 @@ class DriveMetrics:
     heading_error_rmse: float
     heading_error_mean: float
     heading_error_max: float
-    time_in_lane: float  # % within ±0.5m
+    time_in_lane: float  # % within lane boundaries (primary)
+    time_in_lane_centered: float  # % within ±0.5m of center (secondary)
     
     # Control smoothness
     steering_jerk_mean: float
@@ -182,8 +183,16 @@ class DriveAnalyzer:
         heading_error_mean = np.mean(np.abs(self.data['heading_error'])) if self.data['heading_error'] is not None else 0.0
         heading_error_max = np.max(np.abs(self.data['heading_error'])) if self.data['heading_error'] is not None else 0.0
         
-        # Time in lane (±0.5m)
-        time_in_lane = np.sum(np.abs(self.data['lateral_error']) < 0.5) / n_frames * 100 if self.data['lateral_error'] is not None else 0.0
+        # Time in lane (primary: within lane boundaries if GT available)
+        time_in_lane_centered = (
+            np.sum(np.abs(self.data['lateral_error']) < 0.5) / n_frames * 100
+            if self.data['lateral_error'] is not None else 0.0
+        )
+        time_in_lane = time_in_lane_centered
+        in_lane_mask = None
+        if self.data['gt_left'] is not None and self.data['gt_right'] is not None:
+            in_lane_mask = (self.data['gt_left'] <= 0.0) & (0.0 <= self.data['gt_right'])
+            time_in_lane = np.sum(in_lane_mask) / n_frames * 100
         
         # 2. CONTROL SMOOTHNESS
         # Steering jerk (rate of change of steering rate)
@@ -296,7 +305,10 @@ class DriveAnalyzer:
         
         # 6. SAFETY METRICS
         # Out of lane events (lateral error > 1.0m, typical lane width is ~3.5m, so 1.0m is significant)
-        out_of_lane_mask = np.abs(self.data['lateral_error']) > 1.0 if self.data['lateral_error'] is not None else np.zeros(n_frames, dtype=bool)
+        if in_lane_mask is not None:
+            out_of_lane_mask = ~in_lane_mask
+        else:
+            out_of_lane_mask = np.abs(self.data['lateral_error']) > 1.0 if self.data['lateral_error'] is not None else np.zeros(n_frames, dtype=bool)
         out_of_lane_events = len(np.where(np.diff(out_of_lane_mask.astype(int)) > 0)[0])  # Count transitions into out-of-lane
         out_of_lane_time = np.sum(out_of_lane_mask) / n_frames * 100 if self.data['lateral_error'] is not None else 0.0
         
@@ -317,6 +329,7 @@ class DriveAnalyzer:
             heading_error_mean=heading_error_mean,
             heading_error_max=heading_error_max,
             time_in_lane=time_in_lane,
+            time_in_lane_centered=time_in_lane_centered,
             steering_jerk_mean=steering_jerk_mean,
             steering_jerk_max=steering_jerk_max,
             steering_rate_mean=steering_rate_mean,
@@ -414,7 +427,8 @@ class DriveAnalyzer:
         print(f"     Mean: {self.metrics.heading_error_mean:.4f} rad ({np.degrees(self.metrics.heading_error_mean):.2f}°)")
         print(f"     Max:  {self.metrics.heading_error_max:.4f} rad ({np.degrees(self.metrics.heading_error_max):.2f}°)")
         print()
-        print(f"   Time in Lane (±0.5m): {self.metrics.time_in_lane:.1f}%")
+        print(f"   Time in Lane (boundaries): {self.metrics.time_in_lane:.1f}%")
+        print(f"   Centeredness (±0.5m): {self.metrics.time_in_lane_centered:.1f}%")
         print()
         
         # 3. CONTROL SMOOTHNESS
