@@ -288,7 +288,11 @@ class Visualizer {
                 scope_indicator = `<span style="color: #a0a0a0;">📊 Metrics calculated for full drive</span>`;
             }
             
-            html += `<div style="color: #a0a0a0; margin-bottom: 1rem;">Drive Duration: ${summary.executive_summary.drive_duration.toFixed(1)}s | Frames: ${summary.executive_summary.total_frames} | Success Rate: ${summary.executive_summary.success_rate.toFixed(1)}%</div>`;
+            const centeredness = summary.path_tracking?.time_in_lane_centered;
+            const centerednessText = centeredness !== undefined && centeredness !== null
+                ? ` | Centeredness (±0.5m): ${centeredness.toFixed(1)}%`
+                : '';
+            html += `<div style="color: #a0a0a0; margin-bottom: 1rem;">Drive Duration: ${summary.executive_summary.drive_duration.toFixed(1)}s | Frames: ${summary.executive_summary.total_frames} | Success Rate: ${summary.executive_summary.success_rate.toFixed(1)}%${centerednessText}</div>`;
             
             // Unity timing health
             const unityGapMax = summary.system_health?.unity_time_gap_max ?? null;

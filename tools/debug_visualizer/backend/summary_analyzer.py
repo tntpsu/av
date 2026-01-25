@@ -202,15 +202,18 @@ def analyze_recording_summary(recording_path: Path, analyze_to_failure: bool = F
     heading_error_rmse = safe_float(np.sqrt(np.mean(data['heading_error']**2)) if data['heading_error'] is not None and len(data['heading_error']) > 0 else 0.0)
     heading_error_max = safe_float(np.max(np.abs(data['heading_error'])) if data['heading_error'] is not None and len(data['heading_error']) > 0 else 0.0)
     
-    # Time in Lane: Use ground truth boundaries if available (consistent with out-of-lane detection)
-    # Otherwise fall back to perception-based lateral_error
+    # Time in Lane:
+    # Primary: Use ground truth boundaries if available (car at x=0 is in lane if left <= 0 <= right)
+    # Secondary: Centeredness within ±0.5m (for tuning)
+    time_in_lane_centered = safe_float(
+        np.sum(np.abs(data['lateral_error']) < 0.5) / n_frames * 100
+        if data['lateral_error'] is not None and n_frames > 0 else 0.0
+    )
     if data['gt_left'] is not None and data['gt_right'] is not None:
-        # Car is at x=0, in lane if (left <= 0 <= right)
         in_lane_mask = (data['gt_left'] <= 0) & (0 <= data['gt_right'])
         time_in_lane = safe_float(np.sum(in_lane_mask) / n_frames * 100 if n_frames > 0 else 0.0)
     elif data['lateral_error'] is not None:
-        # Fallback: Use perception-based error with 0.5m threshold
-        time_in_lane = safe_float(np.sum(np.abs(data['lateral_error']) < 0.5) / n_frames * 100 if n_frames > 0 else 0.0)
+        time_in_lane = time_in_lane_centered
     else:
         time_in_lane = 0.0
     
@@ -520,7 +523,8 @@ def analyze_recording_summary(recording_path: Path, analyze_to_failure: bool = F
             "lateral_error_p95": safe_float(lateral_error_p95),
             "heading_error_rmse": safe_float(heading_error_rmse),
             "heading_error_max": safe_float(heading_error_max),
-            "time_in_lane": safe_float(time_in_lane)
+            "time_in_lane": safe_float(time_in_lane),
+            "time_in_lane_centered": safe_float(time_in_lane_centered)
         },
         "control_smoothness": {
             "steering_jerk_max": safe_float(steering_jerk_max),
