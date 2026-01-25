@@ -12,6 +12,9 @@ public class TrackConfig
     public float startT = -1f;
     public float startDistance = -1f;
     public bool startRandom = false;
+    public float offsetX = 0f;
+    public float offsetY = 0f;
+    public float offsetZ = 0f;
     public List<TrackSegment> segments = new List<TrackSegment>();
 }
 

@@ -24,6 +24,7 @@ public static class TrackLoader
 
         config = LoadFromText(File.ReadAllText(yamlPath));
         ApplyStartOverrides(args, config);
+        Debug.Log($"TrackLoader: Loaded YAML '{yamlPath}' name='{config.name}' segments={config.segments.Count}");
         return true;
     }
 
@@ -127,6 +128,18 @@ public static class TrackLoader
                 break;
             case "start_random":
                 config.startRandom = value == "true" || value == "1";
+                break;
+            case "offset_x":
+            case "track_offset_x":
+                if (TryParseFloat(value, out float ox)) config.offsetX = ox;
+                break;
+            case "offset_y":
+            case "track_offset_y":
+                if (TryParseFloat(value, out float oy)) config.offsetY = oy;
+                break;
+            case "offset_z":
+            case "track_offset_z":
+                if (TryParseFloat(value, out float oz)) config.offsetZ = oz;
                 break;
         }
     }

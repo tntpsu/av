@@ -133,12 +133,20 @@ public class RoadGenerator : MonoBehaviour
             hasYaml = true;
         }
 
+        if (hasYaml && config != null && config.segments.Count == 0)
+        {
+            Debug.LogWarning("Track YAML has no segments; falling back to oval.");
+            hasYaml = false;
+        }
+
         if (hasYaml && preferTrackYaml)
         {
+            Debug.Log($"RoadGenerator: Using YAML track '{config.name}' (segments={config.segments.Count})");
             GenerateTrackRoad(config);
         }
         else
         {
+            Debug.Log("RoadGenerator: Using built-in oval road.");
             GenerateOvalRoad();
         }
     }
@@ -409,8 +417,22 @@ public class RoadGenerator : MonoBehaviour
         }
 
         activeTrackConfig = config;
-        trackPath = TrackBuilder.BuildPath(config, trackOffset);
+        Vector3 yamlOffset = new Vector3(config.offsetX, config.offsetY, config.offsetZ);
+        if (yamlOffset == Vector3.zero && trackOffset != Vector3.zero)
+        {
+            Debug.LogWarning($"Track YAML has no offset; ignoring inspector trackOffset={trackOffset}");
+        }
+        Vector3 usedOffset = yamlOffset;
 
+        trackPath = TrackBuilder.BuildPath(config, usedOffset);
+        if (trackPath.TotalLength <= 0.1f || trackPath.Points.Count < 2)
+        {
+            Debug.LogError("TrackPath is empty after build; falling back to oval.");
+            GenerateOvalRoad();
+            return;
+        }
+
+        Debug.Log($"Track config: offset={usedOffset}, firstPoint={trackPath.Points[0]}, secondPoint={trackPath.Points[1]}");
         CreateRoadMeshFromPath(trackPath);
         CreateLaneLines();
 
@@ -423,7 +445,7 @@ public class RoadGenerator : MonoBehaviour
         }
         #endif
 
-        Debug.Log($"Track road generated: {config.name}, length={trackPath.TotalLength:F1}m");
+        Debug.Log($"Track road generated: {config.name}, length={trackPath.TotalLength:F1}m, points={trackPath.Points.Count}");
     }
     
     /// <summary>
