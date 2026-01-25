@@ -225,10 +225,12 @@ body {
     display: flex;
     background: #1a1a1a;
     border-bottom: 1px solid #3a3a3a;
+    overflow-x: auto;
+    white-space: nowrap;
 }
 
 .tab-btn {
-    flex: 1;
+    flex: 0 0 auto;
     padding: 0.75rem;
     background: transparent;
     border: none;

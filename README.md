@@ -6,14 +6,16 @@ A complete autonomous vehicle stack implementing perception, trajectory planning
 
 ### ✅ Implemented Features
 
-- **Perception**: Lane detection using traditional computer vision (color masks, edge detection, Hough lines) with polynomial fitting
+- **Perception**: Segmentation-based lane detection (default) with CV fallback (color masks, edge detection, Hough lines) and polynomial fitting
+- **Trained Segmentation Model**: Supports running a trained checkpoint via `--segmentation-checkpoint`
 - **Trajectory Planning**: Rule-based path planning with reference point smoothing and bias correction
 - **Control**: PID controller with feedforward (path curvature) + feedback (error correction) architecture
 - **Ground Truth Following**: Direct velocity control mode for precise ground truth path following
-- **Data Recording**: Automatic HDF5 recording of all frames, vehicle state, control commands, and ground truth data
+- **Data Recording**: Automatic HDF5 recording of all frames, vehicle state (including Unity time/frame count), control commands, and ground truth data
 - **Analysis Tools**: Comprehensive analysis suite for evaluating drive performance
 - **Debug Visualizer**: Web-based tool for visualizing recorded data with overlays
 - **Testing**: Extensive test suite covering control, trajectory, perception, and integration scenarios
+- **Standalone Unity Player Workflow**: Build and run the Unity player directly from scripts for automated testing
 
 ### 🔧 Current Architecture
 
@@ -22,7 +24,7 @@ Unity Simulator (C#)
     ↓ (camera feed, vehicle state, ground truth)
 Python Bridge/API (FastAPI)
     ↓
-Perception (CV-based) → Lane Detection
+Perception (Segmentation default, CV fallback) → Lane Detection
     ↓ (lane line coefficients, positions)
 Trajectory Planner (Rule-based) → Path Planning
     ↓ (reference point: x, y, heading)
@@ -35,7 +37,7 @@ Data Recorder (HDF5) ← All sensor data + commands + ground truth
 
 ### Key Components
 
-- **Perception**: `perception/inference.py` - CV-based lane detection with temporal filtering
+- **Perception**: `perception/inference.py` - Segmentation default with CV fallback and temporal filtering
 - **Trajectory**: `trajectory/inference.py` - Rule-based planner with reference point smoothing
 - **Control**: `control/pid_controller.py` - Feedforward + feedback PID controller
 - **Bridge**: `bridge/server.py` - FastAPI server for Unity-Python communication
@@ -65,7 +67,7 @@ Follow the detailed instructions in [setup_unity.md](setup_unity.md)
 
 **Option A: Standard AV Stack (Perception → Trajectory → Control)**
 ```bash
-# Basic startup
+# Basic startup (segmentation default)
 ./start_av_stack.sh
 
 # With Unity auto-launch and auto-play
@@ -73,6 +75,12 @@ Follow the detailed instructions in [setup_unity.md](setup_unity.md)
 
 # Run for specific duration (e.g., 60 seconds)
 ./start_av_stack.sh --duration 60 --launch-unity
+
+# Force CV-only mode
+./start_av_stack.sh --use-cv
+
+# Use a trained segmentation checkpoint
+./start_av_stack.sh --segmentation-checkpoint /path/to/checkpoint.pt
 
 # Force kill existing processes on port 8000
 ./start_av_stack.sh --force
@@ -88,6 +96,12 @@ python tools/ground_truth_follower.py --duration 60 --output my_test_run
 
 # With Unity auto-launch
 python tools/ground_truth_follower.py --duration 60 --launch-unity
+```
+
+**Option C: Standalone Unity Player (Automated Workflow)**
+```bash
+# Build and run Unity player for a 60s test (no editor interaction)
+./start_av_stack.sh --build-unity-player --skip-unity-build-if-clean --run-unity-player --duration 60
 ```
 
 **What each does:**
@@ -174,13 +188,27 @@ open tools/debug_visualizer/index.html
 ```
 
 **Features:**
-- Frame-by-frame navigation
-- Visual overlays (lane lines, trajectory, reference point, ground truth)
-- Debug visualizations (edges, masks, histograms)
-- Data side panel (perception, trajectory, control, vehicle state)
+
+**✅ Phase 1: Frame-Level Diagnostics (Complete)**
+- **Polynomial Inspector**: Analyze polynomial fitting for any frame
+  - Shows recorded vs. re-run detection
+  - Full system validation (what av_stack.py would do)
+  - Explains why detections would be rejected
+  - Provides recommendations for fixes
+- **On-Demand Debug Overlays**: Generate edges, yellow_mask, and combined for ANY frame
+  - No longer limited to every 30th frame
+  - Visualize detected points/edges that led to bad polynomial fits
+- Frame-by-frame navigation with keyboard controls
+- Visual overlays for lane lines, trajectory, and ground truth
+- Data side panel showing all frame data
 - Export frames as PNG
 
-See [tools/debug_visualizer/README.md](tools/debug_visualizer/README.md) for details.
+**🚧 Phase 2: Recording-Level Analysis (In Progress)**
+- Recording Summary tab (overall metrics and health graphs)
+- Issues Detection (auto-detect problematic frames and jump to them)
+- Trajectory vs Steering Diagnostic (identify which component is failing)
+
+See [tools/debug_visualizer/README.md](tools/debug_visualizer/README.md) for full details and [tools/debug_visualizer/CONSOLIDATION_PLAN.md](tools/debug_visualizer/CONSOLIDATION_PLAN.md) for the consolidation roadmap.
 
 ### Other Analysis Tools
 
@@ -211,8 +239,8 @@ av/
 │       │   └── Prefabs/           # Car prefab with camera
 │       └── .unity_autoplay         # Auto-play flag file
 ├── perception/                     # Perception module
-│   ├── inference.py                # CV-based lane detection
-│   └── models/                     # (Future: ML models)
+│   ├── inference.py                # Segmentation + CV fallback
+│   └── models/                     # Model definitions (checkpoints are gitignored)
 ├── trajectory/                     # Trajectory planning
 │   ├── inference.py                # Trajectory planning inference
 │   └── models/                     # Trajectory planning models
@@ -234,7 +262,9 @@ av/
 │   ├── debug_visualizer/           # Web-based debug visualizer (see tools/debug_visualizer/README.md)
 │   │   ├── server.py              # Visualizer backend server
 │   │   ├── index.html             # Visualizer frontend
-│   │   └── visualizer.js          # Visualization logic
+│   │   ├── visualizer.js          # Visualization logic
+│   │   ├── backend/               # Analysis backend modules (Phase 2)
+│   │   └── CONSOLIDATION_PLAN.md  # Tool consolidation roadmap
 │   ├── ground_truth_follower.py   # Ground truth path follower
 │   ├── replay_perception.py       # Perception replay tool
 │   └── calibrate_perception.py    # Perception calibration
@@ -353,7 +383,7 @@ This will run tests, format code, and check for issues before each commit.
 ## Requirements
 
 - Python 3.8+
-- PyTorch 1.12+ (for future ML models)
+- PyTorch 1.12+ (required for segmentation model)
 - Unity 2021.3 LTS or later
 - FastAPI
 - NumPy, OpenCV, h5py
@@ -369,6 +399,7 @@ See `requirements.txt` for complete list.
 
 ### Additional Documentation
 - **[docs/README.md](docs/README.md)** - Documentation index
+- **[docs/TODO.md](docs/TODO.md)** - Active and backlog TODO tracker
 - **[docs/README_STARTUP.md](docs/README_STARTUP.md)** - Detailed startup instructions and troubleshooting
 - **[docs/DEVELOPMENT_GUIDELINES.md](docs/DEVELOPMENT_GUIDELINES.md)** - Development best practices and critical lessons learned
 - **[docs/AI_MEMORY_GUIDE.md](docs/AI_MEMORY_GUIDE.md)** - AI assistant memory and context guide

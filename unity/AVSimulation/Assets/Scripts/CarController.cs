@@ -3,10 +3,15 @@
 
 using UnityEngine;
 using UnityEngine.InputSystem;
+#if ENABLE_PROFILER
+using UnityEngine.Profiling;
+#endif
 
 public class CarController : MonoBehaviour
 {
     public float maxSteerAngle = 30f;
+    [Tooltip("Wheelbase in meters (distance between front and rear axles)")]
+    public float wheelbaseMeters = 2.5f;
     [Tooltip("Acceleration in m/s² (ForceMode.Acceleration ignores mass, so this is direct acceleration) - Realistic car: 3-6 m/s²")]
     public float motorForce = 8f;  // FIXED: Set to realistic car acceleration (8 m/s² = 0-10 m/s in 1.25 seconds)
                                    // Increased from 5f to 8f to ensure it overcomes Unity's default friction
@@ -26,6 +31,11 @@ public class CarController : MonoBehaviour
     public bool avControlEnabled = false;
     [Tooltip("Priority: AV control overrides manual input when enabled")]
     public bool avControlPriority = true;
+    [Tooltip("Max age (seconds) of control commands before safe fallback")]
+    public float maxCommandAgeSeconds = 0.2f;
+    [Tooltip("Brake applied when command is stale")]
+    public float staleCommandBrake = 0.3f;
+    private float lastAvCommandTime = -999f;
     
     [Header("Ground Truth Mode")]
     [Tooltip("Use direct velocity/position control for precise ground truth following (bypasses physics forces)")]
@@ -41,6 +51,18 @@ public class CarController : MonoBehaviour
     private Vector3 lastPosition;
     private float lastPositionTime;
     private const float MAX_TELEPORT_DISTANCE = 2.0f; // Maximum allowed teleport distance (meters)
+
+    [Header("Diagnostics")]
+    [SerializeField] private bool logProfilerOnHitch = true;
+    [SerializeField] private float hitchThresholdSeconds = 0.2f;
+    [SerializeField] private int periodicProfilerLogFrames = 300;
+    private int lastProfilerLogFrame = -999;
+    [SerializeField] private bool logFixedUpdateGapSummary = true;
+    [SerializeField] private int fixedUpdateGapSummaryFrames = 300;
+    private float lastFixedUpdateRealtime = 0f;
+    private float fixedUpdateGapSum = 0f;
+    private float fixedUpdateGapMax = 0f;
+    private int fixedUpdateGapCount = 0;
     
     // PERFORMANCE: Cache GroundTruthReporter to avoid FindObjectOfType() every frame
     private GroundTruthReporter cachedGroundTruthReporter = null;
@@ -130,6 +152,8 @@ public class CarController : MonoBehaviour
                 inputActionAsset = allAssets[0];
             }
         }
+
+        // ProfilerRecorder not available in this target; using legacy Profiler API when enabled.
         
         // Set up input actions
         if (inputActionAsset != null)
@@ -202,6 +226,8 @@ public class CarController : MonoBehaviour
         {
             playerActionMap.Disable();
         }
+
+        // No profiler recorder disposal needed.
     }
 
     private void Update()
@@ -278,6 +304,34 @@ public class CarController : MonoBehaviour
 
     private void FixedUpdate()
     {
+        if (logFixedUpdateGapSummary && fixedUpdateGapSummaryFrames > 0)
+        {
+            float realtimeNow = Time.realtimeSinceStartup;
+            if (lastFixedUpdateRealtime > 0f)
+            {
+                float gap = realtimeNow - lastFixedUpdateRealtime;
+                fixedUpdateGapCount += 1;
+                fixedUpdateGapSum += gap;
+                if (gap > fixedUpdateGapMax)
+                {
+                    fixedUpdateGapMax = gap;
+                }
+
+                if (fixedUpdateGapCount >= fixedUpdateGapSummaryFrames)
+                {
+                    float avgGap = fixedUpdateGapSum / Mathf.Max(1, fixedUpdateGapCount);
+                    Debug.Log(
+                        $"[UNITY FIXED GAP] max={fixedUpdateGapMax:F4}s avg={avgGap:F4}s " +
+                        $"frames={fixedUpdateGapCount} frame={Time.frameCount} time={Time.time:F3}"
+                    );
+                    fixedUpdateGapCount = 0;
+                    fixedUpdateGapSum = 0f;
+                    fixedUpdateGapMax = 0f;
+                }
+            }
+            lastFixedUpdateRealtime = realtimeNow;
+        }
+
         // Update position tracking for teleportation detection (even in physics mode)
         if (rb != null)
         {
@@ -294,6 +348,24 @@ public class CarController : MonoBehaviour
                                    $"{positionChange:F2}m over {timeSinceLastPosition:F3}s. " +
                                    $"Unity may have paused/resumed.");
                 }
+
+                if (logProfilerOnHitch && timeSinceLastPosition > hitchThresholdSeconds)
+                {
+                    LogProfilerSnapshot($"HITCH (dt={timeSinceLastPosition:F3}s)", positionChange);
+                }
+            }
+
+            // Also log based on Unity's reported deltaTime (captures stalls even if position doesn't move)
+            if (logProfilerOnHitch && Time.deltaTime > hitchThresholdSeconds)
+            {
+                float positionChangeForDelta = Vector3.Distance(currentPosition, lastPosition);
+                LogProfilerSnapshot($"HITCH_DELTA (dt={Time.deltaTime:F3}s)", positionChangeForDelta);
+            }
+
+            if (logProfilerOnHitch && Time.frameCount - lastProfilerLogFrame >= periodicProfilerLogFrames)
+            {
+                lastProfilerLogFrame = Time.frameCount;
+                LogProfilerSnapshot("Periodic", 0.0f);
             }
             
             // Update tracking (but don't update if we're about to teleport in GT mode)
@@ -347,8 +419,41 @@ public class CarController : MonoBehaviour
         {
             // Normal Mode: Physics-based control for realistic car behavior
             // This emulates real-world car physics with forces, suitable for AV stack testing
+            // If AV control is enabled but commands are stale, apply safe fallback
+            if (avControlEnabled && !groundTruthMode)
+            {
+                float commandAge = Time.time - lastAvCommandTime;
+                if (commandAge > maxCommandAgeSeconds)
+                {
+                    avSteering = 0f;
+                    avThrottle = 0f;
+                    avBrake = Mathf.Clamp01(staleCommandBrake);
+                    steerInput = avSteering;
+                    throttleInput = avThrottle;
+                    brakeInput = avBrake;
+                }
+            }
             ApplyPhysicsControls();
         }
+    }
+
+    private void LogProfilerSnapshot(string reason, float positionChange)
+    {
+        long gcReserved = 0;
+        long gcUsed = 0;
+#if ENABLE_PROFILER
+        gcReserved = Profiler.GetTotalReservedMemoryLong();
+        gcUsed = Profiler.GetTotalAllocatedMemoryLong();
+#endif
+        long managedBytes = System.GC.GetTotalMemory(false);
+        Debug.Log(
+            $"[PROFILER] {reason} | frame={Time.frameCount} time={Time.time:F3}s " +
+            $"posJump={positionChange:F2}m | " +
+            $"gcReserved={gcReserved / (1024 * 1024)}MB gcUsed={gcUsed / (1024 * 1024)}MB " +
+            $"managed={managedBytes / (1024 * 1024)}MB " +
+            $"dt={Time.deltaTime:F4} sdt={Time.smoothDeltaTime:F4} udt={Time.unscaledDeltaTime:F4} " +
+            $"timescale={Time.timeScale:F2}"
+        );
     }
     
     private void ApplyGroundTruthControls()
@@ -659,6 +764,7 @@ public class CarController : MonoBehaviour
         avSteering = Mathf.Clamp(steering, -1f, 1f);
         avThrottle = Mathf.Clamp(throttle, -1f, 1f);
         avBrake = Mathf.Clamp01(brake);
+        lastAvCommandTime = Time.time;
     }
     
     /// <summary>
@@ -673,6 +779,23 @@ public class CarController : MonoBehaviour
         // Always log mode changes (not just when enabling)
         if (enabled && !wasEnabled)
         {
+            if (cachedGroundTruthReporter == null)
+            {
+                cachedGroundTruthReporter = GetComponent<GroundTruthReporter>();
+                if (cachedGroundTruthReporter == null)
+                {
+                    cachedGroundTruthReporter = FindObjectOfType<GroundTruthReporter>();
+                }
+            }
+            
+            if (cachedGroundTruthReporter != null)
+            {
+                cachedGroundTruthReporter.ResetTimeBasedReferenceToCar("Ground truth mode enabled");
+            }
+            else
+            {
+                Debug.LogWarning("CarController: GroundTruthReporter not found when enabling ground truth mode");
+            }
             Debug.Log($"CarController: ✅ Ground Truth Mode ENABLED - Direct velocity control at {speed} m/s");
         }
         else if (!enabled && wasEnabled)
@@ -699,7 +822,16 @@ public class CarController : MonoBehaviour
             speed = rb.linearVelocity.magnitude,
             steeringAngle = steerInput * maxSteerAngle,
             motorTorque = throttleInput * motorForce,
-            brakeTorque = brakeInput * brakeForce
+            brakeTorque = brakeInput * brakeForce,
+            maxSteerAngle = maxSteerAngle,
+            wheelbaseMeters = wheelbaseMeters,
+            fixedDeltaTime = Time.fixedDeltaTime,
+            unityTime = Time.time,
+            unityFrameCount = Time.frameCount,
+            unityDeltaTime = Time.deltaTime,
+            unitySmoothDeltaTime = Time.smoothDeltaTime,
+            unityUnscaledDeltaTime = Time.unscaledDeltaTime,
+            unityTimeScale = Time.timeScale
         };
     }
 }
@@ -718,6 +850,19 @@ public class VehicleState
     public float steeringAngle;
     public float motorTorque;
     public float brakeTorque;
+    public float maxSteerAngle = 30f;
+    public float wheelbaseMeters = 2.5f;
+    public float fixedDeltaTime = 0.02f;
+    public float unityTime = 0.0f;
+    public int unityFrameCount = 0;
+    public float unityDeltaTime = 0.0f;
+    public float unitySmoothDeltaTime = 0.0f;
+    public float unityUnscaledDeltaTime = 0.0f;
+    public float unityTimeScale = 1.0f;
+    // Bridge correlation fields (set by AVBridge before send)
+    public int requestId = 0;
+    public float unitySendRealtime = 0.0f; // Time.realtimeSinceStartup at send time
+    public long unitySendUtcMs = 0; // UTC epoch ms at send time
     
     // Ground truth lane line positions (optional, set by GroundTruthReporter)
     // These represent the painted lane line markings, not the drivable lanes
@@ -730,6 +875,10 @@ public class VehicleState
     
     // NEW: Camera calibration - actual screen y pixel where 8m appears (from Unity's WorldToScreenPoint)
     public float camera8mScreenY = -1.0f;  // -1.0 means not calculated yet
+    // NEW: Camera calibration - screen y pixel where ground truth lookahead appears
+    public float cameraLookaheadScreenY = -1.0f;  // -1.0 means not calculated yet
+    // NEW: Ground truth lookahead distance used for calibration
+    public float groundTruthLookaheadDistance = 8.0f;
     // NEW: Camera FOV information - what Unity actually uses
     public float cameraFieldOfView = 0.0f;  // Unity's Camera.fieldOfView value (always vertical FOV)
     public float cameraHorizontalFOV = 0.0f;  // Calculated horizontal FOV

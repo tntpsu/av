@@ -11,8 +11,8 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 from typing import Dict, List, Tuple
 
-# Add parent directory to path
-sys.path.insert(0, str(Path(__file__).parent.parent))
+# Add project root to path
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from tests.test_perception_ground_truth import PerceptionGroundTruthTest
 
@@ -261,17 +261,21 @@ def analyze_question_5(test: PerceptionGroundTruthTest) -> Dict:
     print("QUESTION 5: Are we handling curves correctly?")
     print("="*80)
     
-    # Identify curve sections (where heading is significant)
-    curve_threshold = 2.0  # degrees
-    curve_frames = np.where(np.abs(test.heading) > np.radians(curve_threshold))[0]
-    straight_frames = np.where(np.abs(test.heading) <= np.radians(curve_threshold))[0]
+    # Identify curve sections using ground truth when available
+    curve_threshold = 2.0  # degrees (fallback) / curvature_threshold for GT
+    curve_mask, curve_source = test.get_curve_mask(
+        curvature_threshold=0.01,
+        heading_threshold_deg=curve_threshold,
+    )
+    curve_frames = np.where(curve_mask)[0]
+    straight_frames = np.where(~curve_mask)[0]
     
     valid_curve_frames = [f for f in curve_frames if test.num_lanes_detected[f] >= 2]
     valid_straight_frames = [f for f in straight_frames if test.num_lanes_detected[f] >= 2]
     
-    print(f"\nFrame Classification:")
-    print(f"  Curve frames (heading > {curve_threshold}°): {len(curve_frames)}")
-    print(f"  Straight frames (heading ≤ {curve_threshold}°): {len(straight_frames)}")
+    print(f"\nFrame Classification (source: {curve_source}):")
+    print(f"  Curve frames: {len(curve_frames)}")
+    print(f"  Straight frames: {len(straight_frames)}")
     print(f"  Valid curve detections: {len(valid_curve_frames)}")
     print(f"  Valid straight detections: {len(valid_straight_frames)}")
     
@@ -333,13 +337,17 @@ def analyze_question_6(test: PerceptionGroundTruthTest) -> Dict:
     print("QUESTION 6: Are we handling straight roads correctly?")
     print("="*80)
     
-    # Identify straight sections
-    straight_threshold = 1.0  # degrees
-    straight_frames = np.where(np.abs(test.heading) <= np.radians(straight_threshold))[0]
+    # Identify straight sections using ground truth when available
+    straight_threshold = 1.0  # degrees (fallback) / curvature_threshold for GT
+    curve_mask, curve_source = test.get_curve_mask(
+        curvature_threshold=0.005,
+        heading_threshold_deg=straight_threshold,
+    )
+    straight_frames = np.where(~curve_mask)[0]
     valid_straight_frames = [f for f in straight_frames if test.num_lanes_detected[f] >= 2]
     
-    print(f"\nStraight Road Analysis:")
-    print(f"  Straight frames (heading ≤ {straight_threshold}°): {len(straight_frames)}")
+    print(f"\nStraight Road Analysis (source: {curve_source}):")
+    print(f"  Straight frames: {len(straight_frames)}")
     print(f"  Valid detections: {len(valid_straight_frames)}")
     
     if len(valid_straight_frames) == 0:

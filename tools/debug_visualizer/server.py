@@ -12,6 +12,14 @@ import base64
 from io import BytesIO
 from PIL import Image
 import json
+import sys
+
+# Add backend modules to path
+backend_path = Path(__file__).parent / "backend"
+sys.path.insert(0, str(backend_path))
+from summary_analyzer import analyze_recording_summary
+from diagnostics import analyze_trajectory_vs_steering
+from issue_detector import detect_issues
 
 app = Flask(__name__)
 CORS(app)  # Enable CORS for local development
@@ -49,12 +57,19 @@ def list_recordings():
     return jsonify(recordings)
 
 
-@app.route('/api/recording/<filename>/frames')
+@app.route('/api/recording/<path:filename>/frames')
 def get_frame_count(filename):
-    """Get total number of frames in recording."""
+    """Get total number of frames in recording.
+    
+    Uses <path:filename> to handle filenames with special characters.
+    """
+    # Decode URL-encoded filename if needed
+    from urllib.parse import unquote
+    filename = unquote(filename)
+    
     filepath = RECORDINGS_DIR / filename
     if not filepath.exists():
-        return jsonify({"error": "Recording not found"}), 404
+        return jsonify({"error": f"Recording not found: {filename}", "filepath": str(filepath)}), 404
     
     try:
         with h5py.File(filepath, 'r') as f:
@@ -66,19 +81,33 @@ def get_frame_count(filename):
                 frame_count = 0
             return jsonify({"frame_count": frame_count})
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        import traceback
+        error_msg = f"Error reading recording {filename}: {str(e)}"
+        print(f"[SERVER ERROR] {error_msg}")
+        print(f"[SERVER ERROR] Filepath: {filepath}")
+        print(f"[SERVER ERROR] File exists: {filepath.exists()}")
+        print(f"[SERVER ERROR] Traceback:\n{traceback.format_exc()}")
+        # Return error with more details for debugging
+        return jsonify({
+            "error": error_msg,
+            "filepath": str(filepath),
+            "file_exists": filepath.exists(),
+            "traceback": traceback.format_exc()
+        }), 500
 
 
-@app.route('/api/recording/<filename>/frame/<int:frame_index>')
+@app.route('/api/recording/<path:filename>/frame/<int:frame_index>')
 def get_frame_data(filename, frame_index):
     """Get all data for a specific frame.
     
     Uses timestamp-based synchronization to match data from different datasets
     that may have different lengths or frame indices.
     """
+    from urllib.parse import unquote
+    filename = unquote(filename)
     filepath = RECORDINGS_DIR / filename
     if not filepath.exists():
-        return jsonify({"error": "Recording not found"}), 404
+        return jsonify({"error": f"Recording not found: {filename}"}), 404
     
     try:
         with h5py.File(filepath, 'r') as f:
@@ -146,6 +175,13 @@ def get_frame_data(filename, frame_index):
                         'angular_velocity': numpy_to_list(f['vehicle/angular_velocity'][vehicle_idx]),
                         'speed': float(f['vehicle/speed'][vehicle_idx]),
                         'steering_angle': float(f['vehicle/steering_angle'][vehicle_idx])
+                        ,
+                        'unity_time': float(f['vehicle/unity_time'][vehicle_idx]) if 'vehicle/unity_time' in f and vehicle_idx is not None and vehicle_idx < len(f['vehicle/unity_time']) else None,
+                        'unity_frame_count': int(f['vehicle/unity_frame_count'][vehicle_idx]) if 'vehicle/unity_frame_count' in f and vehicle_idx is not None and vehicle_idx < len(f['vehicle/unity_frame_count']) else None,
+                        'unity_delta_time': float(f['vehicle/unity_delta_time'][vehicle_idx]) if 'vehicle/unity_delta_time' in f and vehicle_idx is not None and vehicle_idx < len(f['vehicle/unity_delta_time']) else None,
+                        'unity_smooth_delta_time': float(f['vehicle/unity_smooth_delta_time'][vehicle_idx]) if 'vehicle/unity_smooth_delta_time' in f and vehicle_idx is not None and vehicle_idx < len(f['vehicle/unity_smooth_delta_time']) else None,
+                        'unity_unscaled_delta_time': float(f['vehicle/unity_unscaled_delta_time'][vehicle_idx]) if 'vehicle/unity_unscaled_delta_time' in f and vehicle_idx is not None and vehicle_idx < len(f['vehicle/unity_unscaled_delta_time']) else None,
+                        'unity_time_scale': float(f['vehicle/unity_time_scale'][vehicle_idx]) if 'vehicle/unity_time_scale' in f and vehicle_idx is not None and vehicle_idx < len(f['vehicle/unity_time_scale']) else None
                     }
                     
                     # Calculate actual distance from camera to road center at lookahead (2D, XZ plane)
@@ -181,6 +217,71 @@ def get_frame_data(filename, frame_index):
                         frame_data['perception']['right_lane_line_x'] = float(f['perception/right_lane_line_x'][perception_idx])
                     elif 'perception/right_lane_x' in f and perception_idx < len(f['perception/right_lane_x']):
                         frame_data['perception']['right_lane_line_x'] = float(f['perception/right_lane_x'][perception_idx])  # Backward compatibility
+                    
+                    # NEW: Read perception health metrics
+                    if 'perception/consecutive_bad_detection_frames' in f and perception_idx < len(f['perception/consecutive_bad_detection_frames']):
+                        frame_data['perception']['consecutive_bad_detection_frames'] = int(f['perception/consecutive_bad_detection_frames'][perception_idx])
+                    if 'perception/perception_health_score' in f and perception_idx < len(f['perception/perception_health_score']):
+                        frame_data['perception']['perception_health_score'] = float(f['perception/perception_health_score'][perception_idx])
+                    if 'perception/perception_health_status' in f and perception_idx < len(f['perception/perception_health_status']):
+                        health_status = f['perception/perception_health_status'][perception_idx]
+                        if isinstance(health_status, bytes):
+                            health_status = health_status.decode('utf-8')
+                        frame_data['perception']['perception_health_status'] = health_status
+                    
+                    # NEW: Read stale data fields
+                    if 'perception/using_stale_data' in f and perception_idx < len(f['perception/using_stale_data']):
+                        frame_data['perception']['using_stale_data'] = bool(f['perception/using_stale_data'][perception_idx])
+                    if 'perception/stale_reason' in f and perception_idx < len(f['perception/stale_reason']):
+                        stale_reason = f['perception/stale_reason'][perception_idx]
+                        if isinstance(stale_reason, bytes):
+                            stale_reason = stale_reason.decode('utf-8')
+                        frame_data['perception']['stale_data_reason'] = stale_reason if stale_reason else None
+                    
+                    # NEW: Read jump detection fields (help understand why stale data is used)
+                    if 'perception/left_jump_magnitude' in f and perception_idx < len(f['perception/left_jump_magnitude']):
+                        left_jump = float(f['perception/left_jump_magnitude'][perception_idx])
+                        frame_data['perception']['left_jump_magnitude'] = left_jump if left_jump > 0.0 else None
+                    if 'perception/right_jump_magnitude' in f and perception_idx < len(f['perception/right_jump_magnitude']):
+                        right_jump = float(f['perception/right_jump_magnitude'][perception_idx])
+                        frame_data['perception']['right_jump_magnitude'] = right_jump if right_jump > 0.0 else None
+                    if 'perception/jump_threshold' in f and perception_idx < len(f['perception/jump_threshold']):
+                        jump_threshold = float(f['perception/jump_threshold'][perception_idx])
+                        frame_data['perception']['jump_threshold'] = jump_threshold if jump_threshold > 0.0 else None
+                    
+                    # NEW: Read instability diagnostic fields
+                    if 'perception/actual_detected_left_lane_x' in f and perception_idx < len(f['perception/actual_detected_left_lane_x']):
+                        actual_left = float(f['perception/actual_detected_left_lane_x'][perception_idx])
+                        frame_data['perception']['actual_detected_left_lane_x'] = actual_left if actual_left != 0.0 else None
+                    if 'perception/actual_detected_right_lane_x' in f and perception_idx < len(f['perception/actual_detected_right_lane_x']):
+                        actual_right = float(f['perception/actual_detected_right_lane_x'][perception_idx])
+                        frame_data['perception']['actual_detected_right_lane_x'] = actual_right if actual_right != 0.0 else None
+                    if 'perception/instability_width_change' in f and perception_idx < len(f['perception/instability_width_change']):
+                        width_change = float(f['perception/instability_width_change'][perception_idx])
+                        frame_data['perception']['instability_width_change'] = width_change if width_change > 0.0 else None
+                    if 'perception/instability_center_shift' in f and perception_idx < len(f['perception/instability_center_shift']):
+                        center_shift = float(f['perception/instability_center_shift'][perception_idx])
+                        frame_data['perception']['instability_center_shift'] = center_shift if center_shift > 0.0 else None
+                    
+                    # NEW: Read fit_points (points used for polynomial fitting)
+                    if 'perception/fit_points_left' in f and perception_idx < len(f['perception/fit_points_left']):
+                        try:
+                            fit_points_left_json = f['perception/fit_points_left'][perception_idx]
+                            if isinstance(fit_points_left_json, bytes):
+                                fit_points_left_json = fit_points_left_json.decode('utf-8')
+                            if fit_points_left_json:
+                                frame_data['perception']['fit_points_left'] = json.loads(fit_points_left_json)
+                        except Exception:
+                            pass
+                    if 'perception/fit_points_right' in f and perception_idx < len(f['perception/fit_points_right']):
+                        try:
+                            fit_points_right_json = f['perception/fit_points_right'][perception_idx]
+                            if isinstance(fit_points_right_json, bytes):
+                                fit_points_right_json = fit_points_right_json.decode('utf-8')
+                            if fit_points_right_json:
+                                frame_data['perception']['fit_points_right'] = json.loads(fit_points_right_json)
+                        except Exception:
+                            pass
                     
                     # Read lane line coefficients if available
                     if 'perception/lane_line_coefficients' in f and perception_idx < len(f['perception/lane_line_coefficients']):
@@ -304,6 +405,14 @@ def get_frame_data(filename, frame_index):
                         frame_data['control']['heading_error'] = heading_err_rad
                     if 'control/total_error' in f and control_idx < len(f['control/total_error']):
                         frame_data['control']['total_error'] = float(f['control/total_error'][control_idx])
+                    if 'control/is_straight' in f and control_idx < len(f['control/is_straight']):
+                        frame_data['control']['is_straight'] = int(f['control/is_straight'][control_idx]) == 1
+                    if 'control/straight_oscillation_rate' in f and control_idx < len(f['control/straight_oscillation_rate']):
+                        frame_data['control']['straight_oscillation_rate'] = float(f['control/straight_oscillation_rate'][control_idx])
+                    if 'control/tuned_deadband' in f and control_idx < len(f['control/tuned_deadband']):
+                        frame_data['control']['tuned_deadband'] = float(f['control/tuned_deadband'][control_idx])
+                    if 'control/tuned_error_smoothing_alpha' in f and control_idx < len(f['control/tuned_error_smoothing_alpha']):
+                        frame_data['control']['tuned_error_smoothing_alpha'] = float(f['control/tuned_error_smoothing_alpha'][control_idx])
             
             # Ground truth data - use same index as vehicle state (they should be synchronized)
             # Try new name first, fall back to old name for backward compatibility
@@ -357,12 +466,14 @@ def get_frame_data(filename, frame_index):
         return jsonify({"error": str(e)}), 500
 
 
-@app.route('/api/recording/<filename>/frame/<int:frame_index>/image')
+@app.route('/api/recording/<path:filename>/frame/<int:frame_index>/image')
 def get_frame_image(filename, frame_index):
     """Get camera frame as base64-encoded image."""
+    from urllib.parse import unquote
+    filename = unquote(filename)
     filepath = RECORDINGS_DIR / filename
     if not filepath.exists():
-        return jsonify({"error": "Recording not found"}), 404
+        return jsonify({"error": f"Recording not found: {filename}"}), 404
     
     try:
         with h5py.File(filepath, 'r') as f:
@@ -395,10 +506,477 @@ def get_debug_image(image_name):
     return jsonify({"error": "Debug image not found"}), 404
 
 
+@app.route('/api/recording/<path:filename>/frame/<int:frame_index>/generate-debug')
+def generate_debug_overlays(filename, frame_index):
+    """Generate debug overlays (edges, yellow_mask, combined) for a specific frame on-demand.
+    
+    This allows viewing debug overlays for any frame, not just every 30th frame.
+    """
+    from urllib.parse import unquote
+    filename = unquote(filename)
+    filepath = RECORDINGS_DIR / filename
+    if not filepath.exists():
+        return jsonify({"error": f"Recording not found: {filename}"}), 404
+    
+    try:
+        # Import here to avoid circular dependencies
+        import sys
+        from pathlib import Path
+        import base64
+        from io import BytesIO
+        from PIL import Image
+        
+        project_root = Path(__file__).parent.parent.parent
+        sys.path.insert(0, str(project_root))
+        
+        from perception.models.lane_detection import SimpleLaneDetector
+        import cv2
+        
+        with h5py.File(filepath, 'r') as f:
+            if 'camera/images' not in f or frame_index >= len(f['camera/images']):
+                return jsonify({"error": "Frame not found"}), 404
+            
+            # Load image
+            image = f['camera/images'][frame_index]
+            
+            # Re-run perception to get debug images AND fit_points
+            detector = SimpleLaneDetector()
+            # Call detect with return_debug=True to get fit_points
+            lane_coeffs, debug_info = detector.detect(image, return_debug=True)
+            
+            # Extract fit_points from debug_info
+            fit_points_left = None
+            fit_points_right = None
+            if debug_info and 'fit_points' in debug_info:
+                fit_points = debug_info['fit_points']
+                if isinstance(fit_points, dict):
+                    fit_points_left = fit_points.get('left')
+                    fit_points_right = fit_points.get('right')
+                    # Convert numpy arrays to lists for JSON serialization
+                    if fit_points_left is not None:
+                        fit_points_left = fit_points_left.tolist() if hasattr(fit_points_left, 'tolist') else fit_points_left
+                    if fit_points_right is not None:
+                        fit_points_right = fit_points_right.tolist() if hasattr(fit_points_right, 'tolist') else fit_points_right
+            
+            # Extract lane_line_coefficients from lane_coeffs (for orange curves)
+            # Format: [[left_a, left_b, left_c], [right_a, right_b, right_c]] or [None, ...] if not detected
+            lane_line_coefficients = []
+            if lane_coeffs[0] is not None:
+                lane_line_coefficients.append(lane_coeffs[0].tolist() if hasattr(lane_coeffs[0], 'tolist') else list(lane_coeffs[0]))
+            else:
+                lane_line_coefficients.append(None)
+            if lane_coeffs[1] is not None:
+                lane_line_coefficients.append(lane_coeffs[1].tolist() if hasattr(lane_coeffs[1], 'tolist') else list(lane_coeffs[1]))
+            else:
+                lane_line_coefficients.append(None)
+            
+            # Also generate the debug images manually (for consistency with existing code)
+            h, w = image.shape[:2]
+            
+            # Convert to grayscale
+            gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
+            blurred = cv2.GaussianBlur(gray, (5, 5), 0)
+            
+            # Generate yellow mask
+            hsv = cv2.cvtColor(image, cv2.COLOR_RGB2HSV)
+            yellow_mask = cv2.inRange(hsv, (15, 80, 80), (35, 255, 255))
+            
+            # Generate edges
+            mean_brightness = np.mean(gray)
+            brightness_factor = max(0.5, min(2.0, mean_brightness / 128.0))
+            median_val = np.median(blurred)
+            lower_threshold = int(max(10, median_val * 0.3))
+            upper_threshold = int(min(200, median_val * 2.0))
+            edges = cv2.Canny(blurred, lower_threshold, upper_threshold)
+            
+            # Generate combined
+            # Create ROI mask - MATCH ACTUAL DETECTION SETTINGS
+            # Detection uses: roi_margin=0 (0% margin, 100% width), start at 18% from top, exclude bottom 20%
+            roi_margin = 0  # No horizontal margin - use full image width (matches detection)
+            roi_mask = np.zeros((h, w), dtype=np.uint8)
+            roi_vertices = np.array([[
+                (roi_margin, int(h * 0.80)),  # Stop 20% from bottom (matches detection)
+                (w - roi_margin, int(h * 0.80)),
+                (w - roi_margin, int(h * 0.18)),  # Start at 18% from top (matches detection)
+                (roi_margin, int(h * 0.18))
+            ]], dtype=np.int32)
+            cv2.fillPoly(roi_mask, roi_vertices, 255)
+            
+            # Apply ROI to edges
+            edges_roi = cv2.bitwise_and(edges, roi_mask)
+            
+            # Combined (yellow mask + edges)
+            # NOTE: yellow_mask is created on full image, but we apply ROI mask here
+            # This matches the detection logic: yellow_mask is full image, then ROI is applied
+            yellow_mask_roi = cv2.bitwise_and(yellow_mask, roi_mask)
+            combined = cv2.bitwise_or(yellow_mask_roi, edges_roi)
+            
+            # Convert to base64 for JSON response
+            def image_to_base64(img_array, is_binary=False):
+                """Convert numpy array to base64 PNG."""
+                if is_binary:
+                    # Binary mask - convert to 3-channel for display
+                    img_3channel = cv2.cvtColor(img_array, cv2.COLOR_GRAY2RGB)
+                    img_pil = Image.fromarray(img_3channel)
+                else:
+                    img_pil = Image.fromarray(img_array)
+                
+                buffer = BytesIO()
+                img_pil.save(buffer, format='PNG')
+                img_str = base64.b64encode(buffer.getvalue()).decode('utf-8')
+                return f"data:image/png;base64,{img_str}"
+            
+            result = {
+                "frame_index": frame_index,
+                "edges": image_to_base64(edges_roi, is_binary=True),
+                "yellow_mask": image_to_base64(yellow_mask_roi, is_binary=True),
+                "combined": image_to_base64(combined, is_binary=True)
+            }
+            
+            # Add fit_points if available
+            if fit_points_left is not None:
+                result["fit_points_left"] = fit_points_left
+            if fit_points_right is not None:
+                result["fit_points_right"] = fit_points_right
+            
+            # Add lane_line_coefficients (for orange curves) - these are the newly generated coefficients
+            result["lane_line_coefficients"] = lane_line_coefficients
+            
+            return jsonify(result)
+            
+    except Exception as e:
+        import traceback
+        return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500
+
+
+@app.route('/api/recording/<path:filename>/frame/<int:frame_index>/polynomial-analysis')
+def get_polynomial_analysis(filename, frame_index):
+    """Get polynomial fitting analysis for a specific frame.
+    
+    Re-runs perception on the frame and returns detailed debug information
+    about detected line segments, points used for fitting, and polynomial evaluation.
+    """
+    from urllib.parse import unquote
+    filename = unquote(filename)
+    filepath = RECORDINGS_DIR / filename
+    if not filepath.exists():
+        return jsonify({"error": f"Recording not found: {filename}"}), 404
+    
+    try:
+        # Import here to avoid circular dependencies
+        import sys
+        from pathlib import Path
+        project_root = Path(__file__).parent.parent.parent
+        sys.path.insert(0, str(project_root))
+        
+        from perception.models.lane_detection import SimpleLaneDetector
+        
+        with h5py.File(filepath, 'r') as f:
+            if 'camera/images' not in f or frame_index >= len(f['camera/images']):
+                return jsonify({"error": "Frame not found"}), 404
+            
+            # Load image
+            image = f['camera/images'][frame_index]
+            
+            # Load what was actually recorded in the original run
+            recorded_data = {}
+            if 'perception/timestamps' in f and len(f['perception/timestamps']) > 0:
+                # Find matching perception frame by timestamp
+                camera_timestamp = float(f['camera/timestamps'][frame_index])
+                perception_timestamps = np.array(f['perception/timestamps'])
+                diffs = np.abs(perception_timestamps - camera_timestamp)
+                perception_idx = int(np.argmin(diffs)) if len(diffs) > 0 else None
+                
+                if perception_idx is not None and perception_idx < len(f['perception/timestamps']):
+                    recorded_data = {
+                        "num_lanes_detected": int(f['perception/num_lanes_detected'][perception_idx]) if 'perception/num_lanes_detected' in f and perception_idx < len(f['perception/num_lanes_detected']) else 0,
+                        "lane_coefficients": None,
+                        "using_stale_data": bool(f['perception/using_stale_data'][perception_idx]) if 'perception/using_stale_data' in f and perception_idx < len(f['perception/using_stale_data']) else False,
+                        "stale_data_reason": None
+                    }
+                    
+                    # Load recorded coefficients
+                    if 'perception/lane_line_coefficients' in f and perception_idx < len(f['perception/lane_line_coefficients']):
+                        recorded_coeffs = f['perception/lane_line_coefficients'][perception_idx]
+                        if hasattr(recorded_coeffs, '__len__') and len(recorded_coeffs) >= 6:
+                            # Flattened format: [left_a, left_b, left_c, right_a, right_b, right_c]
+                            recorded_data["lane_coefficients"] = [
+                                numpy_to_list(recorded_coeffs[0:3]) if not np.all(np.isnan(recorded_coeffs[0:3])) else None,
+                                numpy_to_list(recorded_coeffs[3:6]) if not np.all(np.isnan(recorded_coeffs[3:6])) else None
+                            ]
+                    
+                    if 'perception/stale_reason' in f and perception_idx < len(f['perception/stale_reason']):
+                        reason = f['perception/stale_reason'][perception_idx]
+                        if isinstance(reason, bytes):
+                            reason = reason.decode('utf-8')
+                        recorded_data["stale_data_reason"] = reason
+            
+            # Re-run perception with debug info (current code)
+            detector = SimpleLaneDetector()
+            result = detector.detect(image, return_debug=True)
+            
+            if isinstance(result, tuple) and len(result) == 2:
+                lane_coeffs, debug_info = result
+                
+                analysis = {
+                    "frame_index": frame_index,
+                    "recorded": recorded_data,  # What was actually recorded
+                    "rerun": {  # What current code detects
+                        "num_lanes_detected": sum(1 for c in lane_coeffs if c is not None),
+                        "lane_coefficients": [
+                            numpy_to_list(c) if c is not None else None 
+                            for c in lane_coeffs
+                        ]
+                    },
+                    "num_lanes_detected": sum(1 for c in lane_coeffs if c is not None),  # Keep for backward compatibility
+                    "lane_coefficients": [
+                        numpy_to_list(c) if c is not None else None 
+                        for c in lane_coeffs
+                    ],
+                    "debug_info": {}
+                }
+                
+                if debug_info:
+                    # Extract relevant debug information
+                    analysis["debug_info"] = {
+                        "num_lines_detected": debug_info.get('num_lines_detected', 0),
+                        "left_lines_count": debug_info.get('left_lines_count', 0),
+                        "right_lines_count": debug_info.get('right_lines_count', 0),
+                        "all_lines": numpy_to_list(debug_info.get('all_lines', [])),
+                        "validation_failures": debug_info.get('validation_failures', {})
+                    }
+                    
+                    # Add point information if available
+                    for lane_name in ['left', 'right']:
+                        points_key = f'{lane_name}_points_for_fit'
+                        if points_key in debug_info and debug_info[points_key] is not None:
+                            points = debug_info[points_key]
+                            analysis["debug_info"][f'{lane_name}_points'] = numpy_to_list(points)
+                            analysis["debug_info"][f'{lane_name}_points_count'] = len(points)
+                            if len(points) > 0:
+                                analysis["debug_info"][f'{lane_name}_y_range'] = [
+                                    float(np.min(points[:, 1])),
+                                    float(np.max(points[:, 1]))
+                                ]
+                                analysis["debug_info"][f'{lane_name}_x_range'] = [
+                                    float(np.min(points[:, 0])),
+                                    float(np.max(points[:, 0]))
+                                ]
+                
+                # Evaluate polynomials at various y positions
+                image_height = image.shape[0]
+                image_width = image.shape[1]
+                y_eval_points = [0, image_height // 4, image_height // 2, image_height * 3 // 4, image_height - 1]
+                
+                for lane_idx, lane_name in enumerate(['left', 'right']):
+                    if lane_coeffs[lane_idx] is not None:
+                        coeffs = lane_coeffs[lane_idx]
+                        evaluations = []
+                        for y_val in y_eval_points:
+                            x_eval = coeffs[0] * y_val * y_val + coeffs[1] * y_val + coeffs[2]
+                            evaluations.append({
+                                "y": int(y_val),
+                                "x": float(x_eval),
+                                "in_bounds": bool(0 <= x_eval <= image_width)  # Convert numpy bool to Python bool
+                            })
+                        analysis["debug_info"][f'{lane_name}_polynomial_evaluation'] = evaluations
+                
+                # NEW: Run full system validation (same as av_stack.py)
+                # This shows what the real system would reject
+                from trajectory.models.trajectory_planner import RuleBasedTrajectoryPlanner
+                
+                # Initialize planner (needed for coordinate conversion)
+                planner = RuleBasedTrajectoryPlanner(
+                    lookahead_distance=20.0,
+                    image_width=float(image_width),
+                    image_height=float(image_height)
+                )
+                
+                full_system_validation = {
+                    "polynomial_x_validation": {},
+                    "lane_width_validation": None,
+                    "would_reject": False,  # Python bool, should be fine
+                    "rejection_reasons": []
+                }
+                
+                # 1. Polynomial x-value validation (same as av_stack.py)
+                # CRITICAL: Only validate where we actually use the polynomial (lookahead distance)
+                # Don't check top of image (y=0) - extrapolation there can be extreme on curves
+                # Get lookahead y position from recording if available, otherwise use middle
+                try:
+                    # Try to get camera_8m_screen_y from recording (most accurate)
+                    y_image_at_lookahead = None
+                    if 'vehicle/camera_8m_screen_y' in h5_file and frame_idx < len(h5_file['vehicle/camera_8m_screen_y']):
+                        camera_8m_screen_y = float(h5_file['vehicle/camera_8m_screen_y'][frame_idx])
+                        if camera_8m_screen_y > 0:
+                            y_image_at_lookahead = int(camera_8m_screen_y)
+                    
+                    if y_image_at_lookahead is None:
+                        # Fallback: Use middle of image (typical lookahead position)
+                        y_image_at_lookahead = int(image_height * 0.7)  # Bottom 30% of image
+                except:
+                    # If we can't get it, use middle
+                    y_image_at_lookahead = int(image_height * 0.7)
+                
+                # CRITICAL: Only check at lookahead distance (where we actually use the polynomial)
+                # Don't check bottom - missing dashed lines can cause incorrect extrapolation there
+                # The polynomial is correct at the lookahead distance, which is what matters for control
+                y_check_positions = [y_image_at_lookahead]  # Only check where we actually use it
+                max_reasonable_x = image_width * 2.5  # Allow up to 2.5x image width (for curves)
+                min_reasonable_x = -image_width * 1.5  # Allow some negative (for curves)
+                
+                for lane_idx, lane_name in enumerate(['left', 'right']):
+                    if lane_coeffs[lane_idx] is not None and len(lane_coeffs[lane_idx]) >= 3:
+                        coeffs = lane_coeffs[lane_idx]
+                        extreme_detected = False
+                        extreme_positions = []
+                        
+                        for y_check in y_check_positions:
+                            x_eval = coeffs[0] * y_check * y_check + coeffs[1] * y_check + coeffs[2]
+                            if x_eval < min_reasonable_x or x_eval > max_reasonable_x:
+                                extreme_detected = True
+                                extreme_positions.append({
+                                    "y": int(y_check),
+                                    "x": float(x_eval),
+                                    "reason": f"x={x_eval:.1f}px outside range [{min_reasonable_x:.0f}, {max_reasonable_x:.0f}]px"
+                                })
+                        
+                        full_system_validation["polynomial_x_validation"][lane_name] = {
+                            "passed": bool(not extreme_detected),  # Convert to Python bool
+                            "extreme_positions": extreme_positions if extreme_detected else []
+                        }
+                        
+                        if extreme_detected:
+                            full_system_validation["would_reject"] = True
+                            full_system_validation["rejection_reasons"].append(f"{lane_name}_extreme_coefficients")
+                
+                # 2. Lane width validation (convert to vehicle coords and check width)
+                if (lane_coeffs[0] is not None and lane_coeffs[1] is not None and 
+                    len(lane_coeffs[0]) >= 3 and len(lane_coeffs[1]) >= 3):
+                    try:
+                        # Get lookahead distance and y position (simplified - use middle of image)
+                        lookahead_distance = 8.0  # meters (typical lookahead)
+                        y_image_at_lookahead = image_height * 0.7  # Bottom 30% of image
+                        
+                        # Evaluate polynomials at lookahead
+                        left_x_image = lane_coeffs[0][0] * y_image_at_lookahead * y_image_at_lookahead + \
+                                      lane_coeffs[0][1] * y_image_at_lookahead + lane_coeffs[0][2]
+                        right_x_image = lane_coeffs[1][0] * y_image_at_lookahead * y_image_at_lookahead + \
+                                       lane_coeffs[1][1] * y_image_at_lookahead + lane_coeffs[1][2]
+                        
+                        # Convert to vehicle coordinates (simplified - use planner's method)
+                        # Note: This is approximate - full conversion needs camera FOV from recording
+                        left_x_vehicle, _ = planner._convert_image_to_vehicle_coords(
+                            left_x_image, y_image_at_lookahead, lookahead_distance=lookahead_distance
+                        )
+                        right_x_vehicle, _ = planner._convert_image_to_vehicle_coords(
+                            right_x_image, y_image_at_lookahead, lookahead_distance=lookahead_distance
+                        )
+                        
+                        calculated_lane_width = right_x_vehicle - left_x_vehicle
+                        min_lane_width = 2.0  # meters
+                        max_lane_width = 10.0  # meters
+                        
+                        width_valid = min_lane_width <= calculated_lane_width <= max_lane_width
+                        
+                        full_system_validation["lane_width_validation"] = {
+                            "passed": bool(width_valid),  # Convert to Python bool
+                            "width_meters": float(calculated_lane_width),
+                            "left_x_vehicle": float(left_x_vehicle),
+                            "right_x_vehicle": float(right_x_vehicle),
+                            "expected_range": [float(min_lane_width), float(max_lane_width)]
+                        }
+                        
+                        if not width_valid:
+                            full_system_validation["would_reject"] = True
+                            full_system_validation["rejection_reasons"].append("invalid_width")
+                    except Exception as e:
+                        # If conversion fails, skip width validation
+                        full_system_validation["lane_width_validation"] = {
+                            "passed": None,
+                            "error": str(e)
+                        }
+                
+                analysis["full_system_validation"] = full_system_validation
+                
+                return jsonify(analysis)
+            else:
+                return jsonify({"error": "Failed to get debug info from detector"}), 500
+                
+    except Exception as e:
+        import traceback
+        return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500
+
+
 @app.route('/')
 def index():
     """Serve the main HTML file."""
     return send_from_directory(Path(__file__).parent, 'index.html')
+
+
+@app.route('/api/recording/<path:filename>/summary')
+def get_recording_summary(filename):
+    """Get recording summary metrics."""
+    from flask import request
+    from urllib.parse import unquote
+    
+    filename = unquote(filename)
+    filepath = RECORDINGS_DIR / filename
+    if not filepath.exists():
+        return jsonify({"error": f"Recording not found: {filename}"}), 404
+    
+    # Get query parameter for analyze_to_failure
+    analyze_to_failure = request.args.get('analyze_to_failure', 'false').lower() == 'true'
+    
+    try:
+        summary = analyze_recording_summary(filepath, analyze_to_failure=analyze_to_failure)
+        return jsonify(numpy_to_list(summary))
+    except Exception as e:
+        import traceback
+        return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500
+
+
+@app.route('/api/recording/<path:filename>/issues')
+def get_recording_issues(filename):
+    """Get detected issues in recording."""
+    from flask import request
+    from urllib.parse import unquote
+    
+    filename = unquote(filename)
+    filepath = RECORDINGS_DIR / filename
+    if not filepath.exists():
+        return jsonify({"error": f"Recording not found: {filename}"}), 404
+    
+    # Get query parameter for analyze_to_failure
+    analyze_to_failure = request.args.get('analyze_to_failure', 'false').lower() == 'true'
+    
+    try:
+        issues_data = detect_issues(filepath, analyze_to_failure=analyze_to_failure)
+        return jsonify(numpy_to_list(issues_data))
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/api/recording/<path:filename>/diagnostics')
+def get_recording_diagnostics(filename):
+    """Get trajectory vs steering diagnostic analysis."""
+    from flask import request
+    from urllib.parse import unquote
+    
+    filename = unquote(filename)
+    filepath = RECORDINGS_DIR / filename
+    if not filepath.exists():
+        return jsonify({"error": f"Recording not found: {filename}"}), 404
+    
+    # Get query parameter for analyze_to_failure
+    analyze_to_failure = request.args.get('analyze_to_failure', 'false').lower() == 'true'
+    
+    try:
+        diagnostics = analyze_trajectory_vs_steering(filepath, analyze_to_failure=analyze_to_failure)
+        return jsonify(numpy_to_list(diagnostics))
+    except Exception as e:
+        import traceback
+        return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500
 
 
 @app.route('/<path:filename>')

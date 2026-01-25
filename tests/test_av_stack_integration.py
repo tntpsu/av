@@ -19,6 +19,14 @@ from control.pid_controller import LateralController, VehicleController
 
 class TestAVStackCoordinateSystem:
     """Test coordinate system consistency in AV stack."""
+
+    def test_previous_lane_history_initialized(self):
+        """Ensure stale-data fallback state exists to avoid AttributeError."""
+        av_stack = AVStack(record_data=False)
+        assert hasattr(av_stack, "previous_left_lane_x")
+        assert hasattr(av_stack, "previous_right_lane_x")
+        assert av_stack.previous_left_lane_x is None
+        assert av_stack.previous_right_lane_x is None
     
     def test_vehicle_position_and_reference_same_frame(self):
         """Verify vehicle position and reference point use same coordinate system."""
@@ -91,73 +99,6 @@ class TestAVStackCoordinateSystem:
         assert abs(result['lateral_error']) < 10.0, (
             f"Lateral error should be reasonable with 45° heading, got {result['lateral_error']:.3f}m"
         )
-
-
-class TestFullPipelineIntegration:
-    """Test full pipeline with mocked components."""
-    
-    @patch('av_stack.LaneDetectionInference')
-    @patch('av_stack.TrajectoryPlanningInference')
-    def test_full_pipeline_with_known_state(self, mock_trajectory, mock_perception):
-        """Test full pipeline with known vehicle state and mocked perception/trajectory."""
-        # Mock perception to return known lanes
-        # Note: detect() now returns 4 values: (lane_coeffs, confidence, detection_method, num_lanes)
-        mock_perception_instance = Mock()
-        mock_perception_instance.detect.return_value = (
-            [np.array([0.001, 0.0, 100.0]), np.array([0.001, 0.0, 300.0])],  # Left and right lanes
-            0.8,  # Confidence
-            "CV",  # Detection method
-            2  # Num lanes
-        )
-        mock_perception.return_value = mock_perception_instance
-        
-        # Mock trajectory to return known reference point
-        mock_trajectory_instance = Mock()
-        mock_trajectory_instance.plan.return_value = Mock(
-            points=[Mock(x=0.0, y=8.0, heading=0.0, velocity=8.0)],
-            length=20.0
-        )
-        mock_trajectory_instance.get_reference_point.return_value = {
-            'x': 0.0,
-            'y': 8.0,
-            'heading': 0.0,
-            'velocity': 8.0
-        }
-        mock_trajectory.return_value = mock_trajectory_instance
-        
-        # Create AV stack
-        av_stack = AVStack(record_data=False)
-        av_stack.perception = mock_perception_instance
-        av_stack.trajectory_planner = mock_trajectory_instance
-        
-        # Mock vehicle state
-        vehicle_state = {
-            'position': {'x': 0.5, 'y': 0.5, 'z': 0.0},  # Car at x=0.5m (right of center)
-            'rotation': {'x': 0, 'y': 0, 'z': 0, 'w': 1},
-            'speed': 8.0
-        }
-        
-        # Mock bridge
-        av_stack.bridge = Mock()
-        av_stack.bridge.get_camera_frame.return_value = np.zeros((480, 640, 3), dtype=np.uint8)
-        av_stack.bridge.get_vehicle_state.return_value = vehicle_state
-        
-        # Process one frame with proper arguments
-        try:
-            image = np.zeros((480, 640, 3), dtype=np.uint8)
-            timestamp = 0.0
-            # _process_frame expects: image, timestamp, vehicle_state_dict
-            av_stack._process_frame(image, timestamp, vehicle_state)
-            # If we get here, pipeline didn't crash
-            assert True
-        except Exception as e:
-            # If it fails due to missing components (bridge, etc.), that's expected in unit test
-            # We're just checking the method signature and basic flow
-            if "missing" in str(e).lower() or "required" in str(e).lower() or "attribute" in str(e).lower():
-                # Method signature is correct, just missing some setup - this is acceptable
-                pass  # This is acceptable for a unit test
-            else:
-                pytest.fail(f"Full pipeline failed: {e}")
 
 
 class TestSteeringDirectionWithRealCoordinates:

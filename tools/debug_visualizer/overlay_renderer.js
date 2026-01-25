@@ -75,21 +75,101 @@ class OverlayRenderer {
     }
 
     /**
+     * Draw points used for polynomial fitting.
+     * @param {Array} points - Array of [x, y] points in image coordinates
+     * @param {string} color - Color for the points (default: different colors for left/right)
+     * @param {number} pointSize - Size of each point (default: 3)
+     */
+    drawFitPoints(points, color = '#ff00ff', pointSize = 3) {
+        if (!points || points.length === 0) return;
+        
+        this.ctx.fillStyle = color;
+        this.ctx.strokeStyle = color;
+        this.ctx.lineWidth = 1;
+        
+        for (const point of points) {
+            if (point && point.length >= 2) {
+                const x = point[0];
+                const y = point[1];
+                
+                // Only draw if point is within reasonable bounds
+                if (x >= -this.imageWidth && x <= this.imageWidth * 2 && 
+                    y >= 0 && y <= this.imageHeight) {
+                    // Draw filled circle
+                    this.ctx.beginPath();
+                    this.ctx.arc(x, y, pointSize, 0, 2 * Math.PI);
+                    this.ctx.fill();
+                    
+                    // Draw outline for better visibility
+                    this.ctx.stroke();
+                }
+            }
+        }
+    }
+
+    /**
      * Draw lane line from polynomial coefficients.
      */
     drawLaneLine(coeffs, color = '#00ff00', lineWidth = 2) {
         if (!coeffs || coeffs.length < 2) return;
+        
+        // NEW: Validate polynomial coefficients to detect extreme values
+        // Extreme coefficients can cause curves to go way outside image bounds
+        // Check if coefficients are reasonable (within expected range for lane detection)
+        if (coeffs.length >= 3) {
+            const a = coeffs[0];
+            const b = coeffs[1];
+            const c = coeffs[2];
+            
+            // Evaluate at middle and bottom of image (where we have actual detection points)
+            // Don't check top - extrapolation at top can be extreme on curves, which is OK
+            const yMid = this.imageHeight / 2;
+            const yBottom = this.imageHeight - 1;
+            
+            const xMid = a * yMid * yMid + b * yMid + c;
+            const xBottom = a * yBottom * yBottom + b * yBottom + c;
+            
+            // Check if polynomial produces extreme values outside reasonable bounds
+            // CRITICAL: Match the validation logic in av_stack.py
+            // Only check where we actually use the polynomial (lookahead distance + bottom)
+            // Use same thresholds as validation: 2.5x image width (more lenient for curves)
+            const maxReasonableX = this.imageWidth * 2.5;  // Match av_stack.py validation
+            const minReasonableX = -this.imageWidth * 1.5;  // Match av_stack.py validation
+            
+            // Only check middle and bottom (where we have actual detection points)
+            // Don't check top of image - extrapolation there can be extreme on curves, which is OK
+            if (xMid < minReasonableX || xMid > maxReasonableX ||
+                xBottom < minReasonableX || xBottom > maxReasonableX) {
+                // Extreme coefficients detected - log warning and use dashed line to indicate issue
+                console.warn(`[OverlayRenderer] Extreme lane coefficients detected: a=${a.toFixed(6)}, b=${b.toFixed(6)}, c=${c.toFixed(6)}. ` +
+                           `X values: mid=${xMid.toFixed(1)}, bottom=${xBottom.toFixed(1)} (range: ${minReasonableX.toFixed(0)} to ${maxReasonableX.toFixed(0)})`);
+                // Use dashed line and different color to indicate invalid coefficients
+                this.ctx.setLineDash([5, 5]);
+                color = '#ff0000'; // Red for invalid
+            } else {
+                this.ctx.setLineDash([]); // Solid line for valid
+            }
+        }
         
         this.ctx.strokeStyle = color;
         this.ctx.lineWidth = lineWidth;
         this.ctx.beginPath();
         
         // Evaluate polynomial at multiple y positions
+        // FIXED: Only draw curve within reasonable bounds to avoid showing extreme extrapolation
         const step = 10; // pixels
         let firstPoint = true;
+        let hasExtremeValues = false;
         
+        // Determine valid y range where polynomial produces reasonable x values
+        // Only draw where x is within reasonable bounds (not extreme)
+        const maxReasonableX = this.imageWidth * 2.5;
+        const minReasonableX = -this.imageWidth * 1.5;
+        let validYStart = null;
+        let validYEnd = null;
+        
+        // Find valid y range
         for (let y = 0; y <= this.imageHeight; y += step) {
-            // Evaluate polynomial: x = a*y^2 + b*y + c
             let x = 0;
             if (coeffs.length >= 3) {
                 x = coeffs[0] * y * y + coeffs[1] * y + coeffs[2];
@@ -99,18 +179,52 @@ class OverlayRenderer {
                 x = coeffs[0];
             }
             
-            // Clamp to image bounds
-            x = Math.max(0, Math.min(this.imageWidth - 1, x));
-            
-            if (firstPoint) {
-                this.ctx.moveTo(x, y);
-                firstPoint = false;
+            if (x >= minReasonableX && x <= maxReasonableX) {
+                if (validYStart === null) {
+                    validYStart = y;
+                }
+                validYEnd = y;
             } else {
-                this.ctx.lineTo(x, y);
+                hasExtremeValues = true;
             }
         }
         
-        this.ctx.stroke();
+        // Only draw if we have a valid range
+        if (validYStart !== null && validYEnd !== null && validYEnd > validYStart) {
+            // Draw only within valid range
+            for (let y = validYStart; y <= validYEnd; y += step) {
+                let x = 0;
+                if (coeffs.length >= 3) {
+                    x = coeffs[0] * y * y + coeffs[1] * y + coeffs[2];
+                } else if (coeffs.length >= 2) {
+                    x = coeffs[0] * y + coeffs[1];
+                } else {
+                    x = coeffs[0];
+                }
+                
+                // Clamp to image bounds for display
+                x = Math.max(0, Math.min(this.imageWidth - 1, x));
+                
+                if (firstPoint) {
+                    this.ctx.moveTo(x, y);
+                    firstPoint = false;
+                } else {
+                    this.ctx.lineTo(x, y);
+                }
+            }
+            
+            this.ctx.stroke();
+            
+            // Log if we had to clip due to extreme values
+            if (hasExtremeValues) {
+                console.warn(`[OverlayRenderer] Clipped lane curve drawing: valid range y=${validYStart}-${validYEnd}px (extreme values outside this range)`);
+            }
+        } else {
+            // No valid range - polynomial is extreme everywhere
+            console.warn(`[OverlayRenderer] Skipping lane curve drawing: polynomial produces extreme values at all y positions`);
+        }
+        
+        this.ctx.setLineDash([]); // Reset to solid for next draw
     }
 
     /**
@@ -222,8 +336,9 @@ class OverlayRenderer {
         // Otherwise fall back to simplified model
         const distance = refPoint.y; // Forward distance (lookahead, typically 8m)
         let pos;
-        if (yLookaheadOverride !== null && yLookaheadOverride > 0 && Math.abs(distance - 8.0) < 0.1) {
+        if (yLookaheadOverride !== null && yLookaheadOverride > 0 && Math.abs(distance - 8.0) < 1.5) {
             // Use actual 8m position from Unity (matches black line)
+            // CHANGED: Allow distances from 6.5m to 9.5m (was 7.9-8.1m) to handle config variations
             const horizontalFovRad = (this.cameraFov * Math.PI) / 180;
             const widthAtDistance = 2.0 * distance * Math.tan(horizontalFovRad / 2);
             const pixelToMeter = widthAtDistance / this.imageWidth;

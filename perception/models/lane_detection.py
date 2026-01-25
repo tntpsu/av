@@ -187,6 +187,877 @@ class SimpleLaneDetector:
         self.position_deviation_threshold = 50.0  # Max allowed x position change (pixels) for swap detection
         # Track if current frame's lanes were rejected due to temporal filtering (to prevent feedback loop)
         self.lanes_rejected_this_frame = [False, False]  # [left, right] - True if rejected due to curvature flip
+        # PHASE 2: Spatial clustering parameters
+        self.cluster_eps = 30.0  # Maximum distance between points in same cluster (pixels)
+        self.cluster_min_samples = 3  # Minimum points required to form a cluster
+    
+    def _evaluate_polynomial_safe(self, coeffs: np.ndarray, y: float, points: np.ndarray, 
+                                   w: int, h: int) -> float:
+        """
+        Safely evaluate polynomial with linear extrapolation when far from data points.
+        
+        This prevents unstable polynomial extrapolation by using linear extrapolation
+        when evaluating far from the data range (>50px).
+        
+        Args:
+            coeffs: Polynomial coefficients [a, b, c] for ax^2 + bx + c
+            y: Y position to evaluate at
+            points: Array of points used to fit the polynomial
+            w: Image width
+            h: Image height
+        
+        Returns:
+            X position at y, using polynomial or linear extrapolation
+        """
+        if len(points) < 2:
+            # Not enough points for linear extrapolation, use polynomial
+            return np.polyval(coeffs, y)
+        
+        y_min = np.min(points[:, 1])
+        y_max = np.max(points[:, 1])
+        
+        # Check if we're far from data range
+        extrapolation_distance = 0
+        if y < y_min:
+            extrapolation_distance = y_min - y
+        elif y > y_max:
+            extrapolation_distance = y - y_max
+        
+        if extrapolation_distance > 50:  # More than 50px from data
+            # Use linear extrapolation from nearest data points
+            sorted_indices = np.argsort(points[:, 1])
+            
+            if y < y_min:
+                # Extrapolate upward using first two points (top of data)
+                first_two = points[sorted_indices[:2]]
+                if first_two[1, 1] != first_two[0, 1]:
+                    slope = (first_two[1, 0] - first_two[0, 0]) / (first_two[1, 1] - first_two[0, 1])
+                    x = first_two[0, 0] + slope * (y - first_two[0, 1])
+                    # Clamp to reasonable bounds
+                    return np.clip(x, -w * 0.2, w * 1.2)
+                else:
+                    # Points have same y, use polynomial
+                    return np.polyval(coeffs, y)
+            else:  # y > y_max
+                # Extrapolate downward using last two points (bottom of data)
+                last_two = points[sorted_indices[-2:]]
+                if last_two[1, 1] != last_two[0, 1]:
+                    slope = (last_two[1, 0] - last_two[0, 0]) / (last_two[1, 1] - last_two[0, 1])
+                    x = last_two[1, 0] + slope * (y - last_two[1, 1])
+                    # Clamp to reasonable bounds
+                    return np.clip(x, -w * 0.2, w * 1.2)
+                else:
+                    # Points have same y, use polynomial
+                    return np.polyval(coeffs, y)
+        else:
+            # Close to data range, use polynomial (it's stable here)
+            return np.polyval(coeffs, y)
+    
+    def _spatial_cluster_points(self, points: np.ndarray, lane_idx: int, center_x: int, 
+                                w: int, h: int, lane_name: str) -> Optional[np.ndarray]:
+        """
+        PHASE 2: Spatial clustering to separate left/right clusters.
+        
+        Uses distance-based clustering from expected lane position to find points
+        that belong to the same lane line. This handles cross-lane contamination
+        and ensures we use points across the entire lane line (not just bottom).
+        
+        Args:
+            points: Array of points [[x1, y1], [x2, y2], ...]
+            lane_idx: 0 for left lane, 1 for right lane
+            center_x: Center x-coordinate of image
+            w: Image width
+            h: Image height
+            lane_name: 'left' or 'right' for logging
+        
+        Returns:
+            Clustered points array (all points within threshold of expected lane) or None if clustering fails
+        """
+        if len(points) < self.cluster_min_samples:
+            return None
+        
+        # IMPROVED: Cluster by distance from expected lane position
+        # Use previous frame's lane position as reference, or estimate from current points
+        # This works better on curves where x-position varies along y
+        
+        # Estimate expected lane x-position at each y
+        # If we have previous frame data, use it; otherwise fit a line to current points
+        if self.previous_lanes_x_at_bottom[lane_idx] is not None:
+            # Use previous frame's position as reference
+            prev_x_bottom = self.previous_lanes_x_at_bottom[lane_idx]
+            # For parallel lanes, x is roughly constant in image space
+            # But on curves, we need to account for perspective
+            # Simple model: x_expected ≈ prev_x (constant for now, can improve with polynomial)
+            expected_x = prev_x_bottom
+        else:
+            # No previous data - estimate from current points
+            # Use median x-position as reference (more robust than mean)
+            expected_x = np.median(points[:, 0])
+        
+        # Calculate distance from expected lane position for each point
+        # Use perpendicular distance (simplified: just x-distance for efficiency)
+        # On curves, we should use actual perpendicular distance, but x-distance is a good approximation
+        distances = np.abs(points[:, 0] - expected_x)
+        
+        # Cluster points that are close to expected lane position
+        # Use adaptive threshold based on lane width and image size
+        # Typical lane width in image: ~100-200px, so threshold should be ~50-100px
+        # IMPROVED: Use tighter threshold (8% instead of 15%) to prevent cross-lane contamination
+        # This is especially important in upper regions where perspective makes lanes appear closer
+        cluster_threshold = max(50.0, w * 0.08)  # At least 50px, or 8% of image width (tighter)
+        
+        # Find points within threshold
+        in_cluster_mask = distances <= cluster_threshold
+        clustered_points = points[in_cluster_mask]
+        
+        if len(clustered_points) < self.cluster_min_samples:
+            # Not enough points in cluster, try a more lenient threshold
+            cluster_threshold = max(80.0, w * 0.25)  # More lenient: 80px or 25% of width
+            in_cluster_mask = distances <= cluster_threshold
+            clustered_points = points[in_cluster_mask]
+            
+            if len(clustered_points) < self.cluster_min_samples:
+                # Still not enough, return all points
+                logger.warning(f"[SPATIAL CLUSTER] {lane_name}: Not enough points in cluster "
+                             f"({len(clustered_points)} < {self.cluster_min_samples}), using all {len(points)} points")
+                return points
+        
+        # Additional validation: ensure cluster is on correct side of center
+        cluster_mean_x = np.mean(clustered_points[:, 0])
+        cluster_y_range = np.max(clustered_points[:, 1]) - np.min(clustered_points[:, 1])
+        
+        # CRITICAL: Filter out points that are clearly on the wrong side of center
+        # This prevents cross-lane contamination even if cluster mean is acceptable
+        # Use stricter margin for top region points (they're further away, more prone to cross-lane)
+        margin = w * 0.08  # 8% margin (stricter than 10% to prevent cross-lane contamination)
+        if lane_idx == 0:  # Left lane
+            # Left lane points should be left of center (with margin for curves)
+            valid_mask = clustered_points[:, 0] < (center_x + margin)
+            if np.sum(~valid_mask) > 0:
+                logger.info(f"[SPATIAL CLUSTER] {lane_name}: Filtering {np.sum(~valid_mask)} points on wrong side "
+                           f"(x >= {center_x + margin:.0f}px)")
+                clustered_points = clustered_points[valid_mask]
+            if cluster_mean_x > center_x + margin:
+                logger.warning(f"[SPATIAL CLUSTER] {lane_name}: Cluster mean_x={cluster_mean_x:.1f} "
+                             f"is too far right (>{center_x + margin:.1f})")
+        else:  # Right lane
+            # Right lane points should be right of center (with margin for curves)
+            valid_mask = clustered_points[:, 0] > (center_x - margin)
+            if np.sum(~valid_mask) > 0:
+                logger.info(f"[SPATIAL CLUSTER] {lane_name}: Filtering {np.sum(~valid_mask)} points on wrong side "
+                           f"(x <= {center_x - margin:.0f}px)")
+                clustered_points = clustered_points[valid_mask]
+            if cluster_mean_x < center_x - margin:
+                logger.warning(f"[SPATIAL CLUSTER] {lane_name}: Cluster mean_x={cluster_mean_x:.1f} "
+                             f"is too far left (<{center_x - margin:.1f})")
+        
+        # Log clustering results
+        removed_count = len(points) - len(clustered_points)
+        if removed_count > 0:
+            logger.info(f"[SPATIAL CLUSTER] {lane_name}: Clustered {len(clustered_points)}/{len(points)} points "
+                       f"(removed {removed_count} outliers, y_range={cluster_y_range:.1f}px, "
+                       f"mean_x={cluster_mean_x:.1f}, threshold={cluster_threshold:.1f}px)")
+        
+        return clustered_points
+    
+    def _sample_points_per_row(self, lane_idx: int, yellow_mask: np.ndarray, white_mask: np.ndarray,
+                                lane_color_mask: np.ndarray, center_x: int, w: int, h: int,
+                                lane_name: str, previous_coeffs: Optional[np.ndarray] = None) -> Optional[np.ndarray]:
+        """
+        PHASE 1 (ROOT CAUSE FIX): Sample points directly from yellow mask using per-row sampling.
+        
+        This replaces Hough line detection as the primary point source. Instead of sparse,
+        bottom-heavy Hough segments, we sample one point per y-slice from the yellow mask.
+        This provides uniform y-coverage, eliminates extrapolation, and ensures stable regression.
+        
+        Args:
+            lane_idx: 0 for left lane, 1 for right lane
+            yellow_mask: Binary mask of yellow pixels
+            white_mask: Binary mask of white pixels (ROI-restricted)
+            lane_color_mask: Binary mask of lane-colored pixels (yellow + white)
+            center_x: Center x-coordinate of image
+            w: Image width
+            h: Image height
+            lane_name: 'left' or 'right' for logging
+            previous_coeffs: Previous frame's polynomial coefficients (for temporal prediction)
+        
+        Returns:
+            Array of points [[x1, y1], [x2, y2], ...] or None if insufficient points
+        """
+        roi_y_start = int(h * 0.18)
+        roi_y_end = int(h * 0.80)
+        lookahead_y_estimate = int(h * 0.73)
+        region_top_end = max(roi_y_start + 50, lookahead_y_estimate - 80)
+        
+        # Use lane-specific color mask (left = yellow, right = white)
+        primary_mask = yellow_mask if lane_idx == 0 else white_mask
+        sampling_mask = primary_mask.copy()
+        if np.sum(sampling_mask) < 100:  # If lane-specific mask is sparse, use combined mask
+            sampling_mask = lane_color_mask.copy()
+        
+        # Apply ROI
+        roi_mask = np.zeros((h, w), dtype=np.uint8)
+        roi_vertices = np.array([[(0, roi_y_end), (w, roi_y_end), (w, roi_y_start), (0, roi_y_start)]], dtype=np.int32)
+        cv2.fillPoly(roi_mask, roi_vertices, 255)
+        sampling_mask = cv2.bitwise_and(sampling_mask, roi_mask)
+        
+        # Per-row sampling: sample one point per y-slice (every 5-10px)
+        y_step = 8  # Sample every 8px (adjustable: 5-10px recommended)
+        points = []
+        
+        # Determine search region for each row based on lane side
+        # Use previous frame's polynomial to predict x at each y (if available)
+        use_temporal_prediction = (previous_coeffs is not None and 
+                                  self.previous_lanes_confidence[lane_idx] > 0.3)
+        
+        rows_checked = 0
+        rows_with_pixels = 0
+        rows_skipped_no_pixels = 0
+        rows_skipped_lateral = 0
+        rows_skipped_delta = 0
+        
+        top_region_y = int(h * 0.45)
+        min_top_pixels = max(40, int(0.001 * w * (region_top_end - roi_y_start)))
+        top_region_pixel_count = int(np.sum(primary_mask[roi_y_start:region_top_end, :] > 0))
+        top_region_has_pixels = top_region_pixel_count >= min_top_pixels
+        for y in range(roi_y_start, roi_y_end, y_step):
+            rows_checked += 1
+            if y < region_top_end and not top_region_has_pixels:
+                rows_skipped_no_pixels += 1
+                continue
+            # Extract horizontal band (y ± 2px for tolerance)
+            y_band_start = max(roi_y_start, y - 2)
+            y_band_end = min(roi_y_end, y + 2)
+            band_mask = sampling_mask[y_band_start:y_band_end, :]
+            
+            # Find yellow pixels in this band
+            y_coords, x_coords = np.where(band_mask > 0)
+            
+            if len(x_coords) == 0:
+                rows_skipped_no_pixels += 1
+                continue  # No pixels in this row
+            
+            # Apply lateral constraint (left lane < center, right lane > center)
+            margin = w * 0.15  # 15% margin for curves
+            if lane_idx == 0:  # Left lane
+                valid_mask = x_coords < (center_x + margin)
+            else:  # Right lane
+                valid_mask = x_coords > (center_x - margin)
+            
+            valid_x = x_coords[valid_mask]
+            if len(valid_x) == 0:
+                rows_skipped_lateral += 1
+                continue  # No valid pixels after lateral constraint
+            
+            min_row_pixels = 3
+            min_row_pixels_top = 5
+            if y < region_top_end:
+                if len(valid_x) < min_row_pixels_top:
+                    rows_skipped_no_pixels += 1
+                    continue
+                # Require a minimum contiguous run in the top band to avoid speckle noise
+                sorted_x = np.sort(valid_x)
+                max_run = 1
+                run_len = 1
+                for i in range(1, len(sorted_x)):
+                    if sorted_x[i] - sorted_x[i - 1] <= 1:
+                        run_len += 1
+                        if run_len > max_run:
+                            max_run = run_len
+                    else:
+                        run_len = 1
+                if max_run < 6:
+                    rows_skipped_no_pixels += 1
+                    continue
+            else:
+                if len(valid_x) < min_row_pixels:
+                    rows_skipped_no_pixels += 1
+                    continue
+
+            # Top-region guard: keep points near expected lane to prevent cross-lane swaps
+            if y < top_region_y:
+                top_margin = w * 0.05  # Stricter in far/top region
+                if lane_idx == 0:
+                    valid_x = valid_x[valid_x < (center_x + top_margin)]
+                else:
+                    valid_x = valid_x[valid_x > (center_x - top_margin)]
+                
+                if len(valid_x) == 0:
+                    rows_skipped_lateral += 1
+                    continue
+                
+                if len(points) > 0:
+                    expected_x = np.median([p[0] for p in points])
+                    expected_band = w * 0.10
+                    expected_mask = (valid_x >= expected_x - expected_band) & (valid_x <= expected_x + expected_band)
+                    if np.any(expected_mask):
+                        valid_x = valid_x[expected_mask]
+                    else:
+                        rows_skipped_lateral += 1
+                        continue
+            
+            # Use temporal prediction to narrow search if available
+            if use_temporal_prediction:
+                predicted_x = np.polyval(previous_coeffs, y)
+                search_width = w * 0.20  # 20% search width around prediction
+                x_min_search = max(0, int(predicted_x - search_width))
+                x_max_search = min(w, int(predicted_x + search_width))
+                search_mask = (valid_x >= x_min_search) & (valid_x <= x_max_search)
+                if np.sum(search_mask) > 0:
+                    valid_x = valid_x[search_mask]
+            
+            # Compute x as median of valid pixels (robust to outliers)
+            x = np.median(valid_x)
+            
+            # Validate: check maximum lateral delta between adjacent rows
+            if len(points) > 0:
+                prev_x = points[-1][0]
+                max_delta = w * 0.25  # Max 25% of image width change per row
+                if abs(x - prev_x) > max_delta:
+                    # Too large a jump - likely wrong lane or noise, skip this row
+                    rows_skipped_delta += 1
+                    logger.debug(f"[PER-ROW SAMPLING] {lane_name}: Skipping y={y}px (x={x:.1f}px, "
+                               f"delta={abs(x-prev_x):.1f}px > {max_delta:.1f}px)")
+                    continue
+            
+            rows_with_pixels += 1
+            points.append([float(x), float(y)])
+        
+        if len(points) < 3:
+            logger.warning(f"[PER-ROW SAMPLING] {lane_name}: Insufficient points ({len(points)} < 3)")
+            return None
+        
+        points_array = np.array(points) if len(points) > 0 else np.array([])
+        
+        if len(points_array) > 0:
+            logger.info(f"[PER-ROW SAMPLING] {lane_name}: Sampled {len(points)} points "
+                       f"(y-range: [{np.min(points_array[:, 1]):.0f}, {np.max(points_array[:, 1]):.0f}]px)")
+            logger.debug(f"[PER-ROW SAMPLING] {lane_name}: Rows checked={rows_checked}, "
+                        f"with pixels={rows_with_pixels}, skipped: no_pixels={rows_skipped_no_pixels}, "
+                        f"lateral={rows_skipped_lateral}, delta={rows_skipped_delta}")
+        else:
+            logger.warning(f"[PER-ROW SAMPLING] {lane_name}: No points sampled! "
+                          f"Rows checked={rows_checked}, skipped: no_pixels={rows_skipped_no_pixels}, "
+                          f"lateral={rows_skipped_lateral}, delta={rows_skipped_delta}")
+        
+        return points_array if len(points_array) > 0 else None
+    
+    def _supplement_points_from_mask(self, points: np.ndarray, lane_idx: int, 
+                                     yellow_mask: np.ndarray, white_mask: np.ndarray, lane_color_mask: np.ndarray,
+                                     center_x: int, w: int, h: int, lane_name: str,
+                                     expected_x: Optional[float] = None) -> np.ndarray:
+        """
+        PHASE 2 ENHANCEMENT: Supplement points from yellow mask to ensure consistent distribution.
+        
+        After clustering, checks if points are evenly distributed across y-range.
+        If gaps exist, samples points from yellow_mask to fill them.
+        
+        Args:
+            points: Existing clustered points
+            lane_idx: 0 for left lane, 1 for right lane
+            yellow_mask: Yellow lane mask (binary image)
+            white_mask: White lane mask (binary image, ROI-restricted)
+            lane_color_mask: Combined lane color mask (yellow + white)
+            center_x: Center x-coordinate of image
+            w: Image width
+            h: Image height
+            lane_name: 'left' or 'right' for logging
+            expected_x: Expected x-position of lane (for sampling region)
+        
+        Returns:
+            Supplemented points array with consistent y-distribution
+        """
+        if len(points) == 0:
+            return points
+        
+        # Determine expected x-position for sampling
+        # CRITICAL: For top region, use polynomial to predict x at top y, not bottom
+        # This is more accurate for curves where lane position changes with y
+        if expected_x is None:
+            if self.previous_lanes[lane_idx] is not None:
+                # Use previous frame's polynomial to predict x at top region
+                prev_coeffs = self.previous_lanes[lane_idx]
+                top_y = roi_y_start + (region_top_end - roi_y_start) // 2  # Middle of top region
+                expected_x = np.polyval(prev_coeffs, top_y)
+            elif len(points) > 0:
+                # Use median of current points, but also check if we can extrapolate
+                expected_x = np.median(points[:, 0])
+                # If we have a polynomial from current detection, use it to predict at top
+                # (This will be set later, but for now use median)
+            else:
+                expected_x = center_x  # Fallback to center
+        
+        # Check y-distribution of existing points
+        y_positions = points[:, 1]
+        y_min = np.min(y_positions)
+        y_max = np.max(y_positions)
+        y_range = y_max - y_min
+        
+        # Divide y-range into regions: top, middle, bottom
+        # IMPORTANT: Black dotted line (lookahead distance) is typically at ~73% from top (y=350px for 480px image)
+        # We want points both above and below this line for good polynomial fitting
+        roi_y_start = int(h * 0.18)  # ROI starts at 18% from top
+        roi_y_end = int(h * 0.80)     # ROI ends at 80% from top
+        
+        # Estimate lookahead distance (black dotted line) - typically 8m = ~73% from top
+        # This is where we evaluate the polynomial for control, so we need points around it
+        lookahead_y_estimate = int(h * 0.73)  # ~350px for 480px image
+        
+        # Define regions: Split ROI into regions that ensure coverage above and below lookahead
+        # CRITICAL: Black dotted line (lookahead) is at ~350px, we need points CLEARLY above it
+        # Region 1: Top (ROI start to well above lookahead - ensures points above black line)
+        # Region 2: Around lookahead (lookahead ± margin)  
+        # Region 3: Bottom (below lookahead to ROI end)
+        lookahead_margin = int(h * 0.05)  # 5% margin around lookahead (24px for 480px)
+        
+        # Top region should end well above lookahead to ensure we get points above black line
+        # EXPANDED: Use 50px above lookahead (instead of 80px) to include more yellow pixels
+        # This ensures we capture yellow lines that exist just below the original boundary
+        # Original: 80px above = 270px, New: 50px above = 300px (includes gap region)
+        region_top_end = max(roi_y_start + 50, lookahead_y_estimate - 50)  # 50px above lookahead (300px for 350px lookahead)
+        region_lookahead_start = lookahead_y_estimate - lookahead_margin  # 326px
+        region_lookahead_end = lookahead_y_estimate + lookahead_margin   # 374px
+        region_bottom_start = lookahead_y_estimate + lookahead_margin    # 374px
+        
+        # Count points in each region
+        top_points = np.sum((y_positions >= roi_y_start) & (y_positions < region_top_end))
+        # Gap region: between top and lookahead (where yellow mask often has pixels)
+        gap_start = region_top_end
+        gap_end = region_lookahead_start
+        gap_points = np.sum((y_positions >= gap_start) & (y_positions < gap_end))
+        lookahead_points = np.sum((y_positions >= region_lookahead_start) & (y_positions < region_lookahead_end))
+        bottom_points = np.sum((y_positions >= region_bottom_start) & (y_positions <= roi_y_end))
+        
+        # For backward compatibility, also count "middle" as the lookahead region
+        middle_points = lookahead_points
+        
+        # Minimum points per region (ensure at least 2-3 points per region)
+        min_points_per_region = 2
+        min_lookahead_points = 2  # Critical region - need points at lookahead distance
+        total_min_points = 6  # Minimum total points needed
+        
+        # CRITICAL: Check if points span the full y-range
+        # If points don't start near roi_y_start, we need aggressive supplementation
+        y_min_current = np.min(y_positions) if len(y_positions) > 0 else roi_y_end
+        y_max_current = np.max(y_positions) if len(y_positions) > 0 else roi_y_start
+        y_range_coverage = y_max_current - y_min_current
+        y_range_needed = roi_y_end - roi_y_start
+        
+        # If points don't span at least 70% of ROI, we need supplementation
+        # This ensures polynomial doesn't need to extrapolate >100px
+        coverage_ratio = y_range_coverage / y_range_needed if y_range_needed > 0 else 0.0
+        needs_aggressive_supplementation = coverage_ratio < 0.70 or y_min_current > roi_y_start + 50
+        
+        # If we have enough points overall and good distribution AND good y-range coverage, return early
+        if len(points) >= total_min_points and top_points >= min_points_per_region and \
+           lookahead_points >= min_lookahead_points and bottom_points >= min_points_per_region and \
+           not needs_aggressive_supplementation:
+            logger.debug(f"[POINT SUPPLEMENT] {lane_name}: Good distribution, no supplementation needed "
+                        f"(top={top_points}, gap={gap_points}, lookahead={lookahead_points}, bot={bottom_points}, "
+                        f"y_range={y_range_coverage:.0f}px, coverage={coverage_ratio*100:.0f}%)")
+            return points
+        
+        if needs_aggressive_supplementation:
+            logger.info(f"[POINT SUPPLEMENT] {lane_name}: NEEDS AGGRESSIVE SUPPLEMENTATION - "
+                       f"y_range={y_range_coverage:.0f}px ({coverage_ratio*100:.0f}% of ROI), "
+                       f"y_min={y_min_current:.0f}px (ROI starts at {roi_y_start}px)")
+        
+        logger.info(f"[POINT SUPPLEMENT] {lane_name}: Checking distribution - "
+                   f"top={top_points} (above), gap={gap_points} (between top/lookahead), "
+                   f"lookahead={lookahead_points} (at {lookahead_y_estimate}px), "
+                   f"bot={bottom_points} (below) (min={min_points_per_region} per region)")
+        
+        # Need to supplement points - sample from lane-specific mask when possible
+        # Left lane prefers yellow, right lane prefers white; fallback to combined if sparse
+        primary_mask = yellow_mask if lane_idx == 0 else white_mask
+        sampling_mask = primary_mask.copy()
+        if np.sum(sampling_mask) < 100:
+            sampling_mask = lane_color_mask.copy()
+        
+        # If there are no lane pixels in the top region, skip top supplementation entirely
+        min_top_pixels = max(40, int(0.001 * w * (region_top_end - roi_y_start)))
+        top_region_pixel_count = int(np.sum(primary_mask[roi_y_start:region_top_end, :] > 0))
+        top_region_has_pixels = top_region_pixel_count >= min_top_pixels
+        
+        # Restrict to ROI
+        roi_mask = np.zeros((h, w), dtype=np.uint8)
+        roi_vertices = np.array([[
+            (0, roi_y_end),
+            (w, roi_y_end),
+            (w, roi_y_start),
+            (0, roi_y_start)
+        ]], dtype=np.int32)
+        cv2.fillPoly(roi_mask, roi_vertices, 255)
+        sampling_mask = cv2.bitwise_and(sampling_mask, roi_mask)
+        
+        # Restrict to expected lane region (lateral constraint)
+        # CRITICAL: For top region, use polynomial to predict x at top, not bottom x
+        # This is more accurate because lanes curve and perspective changes x-position with y
+        # BUT: Only use polynomial if points span a reasonable y-range (avoid extreme extrapolation)
+        search_x = expected_x  # Default to expected_x
+        if len(points) >= 3:
+            try:
+                y_vals = points[:, 1]
+                x_vals = points[:, 0]
+                y_range = np.max(y_vals) - np.min(y_vals)
+                top_y_mid = roi_y_start + (region_top_end - roi_y_start) // 2
+                
+                # Only use polynomial if:
+                # 1. Points span at least 50px in y (enough to fit polynomial)
+                # 2. Top region is not too far from point range (extrapolation < 100px)
+                y_min = np.min(y_vals)
+                extrapolation_distance = y_min - top_y_mid
+                
+                if y_range >= 50 and extrapolation_distance < 100:
+                    coeffs = np.polyfit(y_vals, x_vals, min(2, len(points) - 1))
+                    predicted_x = np.polyval(coeffs, top_y_mid)
+                    # Validate prediction is reasonable (within image bounds)
+                    if 0 <= predicted_x < w:
+                        search_x = predicted_x
+                        logger.debug(f"[POINT SUPPLEMENT] {lane_name}: Using polynomial prediction for search: "
+                                   f"x={search_x:.1f}px at y={top_y_mid}px (was {expected_x:.1f}px at bottom)")
+                    else:
+                        logger.debug(f"[POINT SUPPLEMENT] {lane_name}: Polynomial prediction out of bounds "
+                                   f"({predicted_x:.1f}px), using expected_x ({expected_x:.1f}px)")
+                else:
+                    logger.debug(f"[POINT SUPPLEMENT] {lane_name}: Skipping polynomial prediction "
+                               f"(y_range={y_range:.1f}px, extrapolation={extrapolation_distance:.1f}px), "
+                               f"using expected_x ({expected_x:.1f}px)")
+            except Exception as e:
+                logger.debug(f"[POINT SUPPLEMENT] {lane_name}: Polynomial prediction failed: {e}, using expected_x")
+                pass  # Fallback to expected_x
+        
+        # Use wider search on curves and for upper regions where lanes curve more
+        # Base search width: 25% of image width (wider to catch curves and perspective effects)
+        base_search_width = w * 0.25
+        # For upper regions, use even wider search (lanes curve more at distance, perspective makes them appear wider apart)
+        search_width = max(100, base_search_width)  # At least 100px, or 25% of width
+        if lane_idx == 0:  # Left lane
+            x_min = max(0, int(search_x - search_width))
+            x_max = min(w, int(search_x + search_width))
+        else:  # Right lane
+            x_min = max(0, int(search_x - search_width))
+            x_max = min(w, int(search_x + search_width))
+        
+        # Create lateral mask
+        lateral_mask = np.zeros((h, w), dtype=np.uint8)
+        lateral_mask[:, x_min:x_max] = 255
+        sampling_mask = cv2.bitwise_and(sampling_mask, lateral_mask)
+        
+        # Sample points from regions that need more points
+        supplemented_points = points.tolist()
+        points_added = 0
+        
+        # CRITICAL: If points don't start near roi_y_start, we MUST supplement aggressively
+        # This prevents large extrapolation that causes polynomial rejection
+        y_min_current = np.min(y_positions) if len(y_positions) > 0 else roi_y_end
+        gap_to_top = y_min_current - roi_y_start
+        
+        # If there's a large gap (>100px) from ROI start to first point, supplement aggressively
+        needs_top_supplementation = (top_points < min_points_per_region) or (gap_to_top > 100)
+        
+        if needs_top_supplementation and not top_region_has_pixels:
+            logger.info(f"[POINT SUPPLEMENT] {lane_name}: Skipping top supplementation (no pixels in top region)")
+        
+        # Sample from top region if needed (ABOVE lookahead/black line)
+        if needs_top_supplementation and top_region_has_pixels:
+            # CRITICAL: If there's a large gap, sample from the ENTIRE gap region
+            # Don't just sample from "top region" - sample from roi_y_start all the way to where points start
+            if gap_to_top > 100:
+                # Sample from the entire gap: roi_y_start to y_min_current
+                gap_end = min(int(y_min_current), region_top_end)
+                region_mask = sampling_mask[roi_y_start:gap_end, :].copy()
+                logger.info(f"[POINT SUPPLEMENT] {lane_name}: Sampling from ENTIRE gap region "
+                           f"(y={roi_y_start}-{gap_end}px, gap={gap_to_top:.0f}px)")
+            else:
+                # Normal case: sample from top region
+                region_mask = sampling_mask[roi_y_start:region_top_end, :].copy()
+            y_coords, x_coords = np.where(region_mask > 0)
+            logger.debug(f"[POINT SUPPLEMENT] {lane_name}: Top region (above lookahead) - found {len(y_coords)} pixels in mask "
+                        f"(region: y={roi_y_start}-{region_top_end}, x={x_min}-{x_max})")
+            if len(y_coords) > 0:
+                # If we found very few pixels, try wide search to get more
+                if len(y_coords) < 5:
+                    # Try wide search to get more points
+                    # Use wider search width for top region (lanes curve more at distance)
+                    wider_search_width = w * 0.35  # 35% for top region (even wider)
+                    x_min_wide = max(0, int(search_x - wider_search_width))
+                    x_max_wide = min(w, int(search_x + wider_search_width))
+                    lateral_mask_wide = np.zeros((h, w), dtype=np.uint8)
+                    lateral_mask_wide[:, x_min_wide:x_max_wide] = 255
+                    sampling_mask_wide = cv2.bitwise_and(sampling_mask, roi_mask)
+                    sampling_mask_wide = cv2.bitwise_and(sampling_mask_wide, lateral_mask_wide)
+                    region_mask_wide = sampling_mask_wide[roi_y_start:region_top_end, :].copy()
+                    y_coords_wide, x_coords_wide = np.where(region_mask_wide > 0)
+                    if len(y_coords_wide) > len(y_coords):
+                        # Use wide search results, but filter by lateral constraint to prevent cross-lane contamination
+                        # CRITICAL: Filter out points that are clearly on the wrong side of center
+                        valid_mask = np.ones(len(y_coords_wide), dtype=bool)
+                        margin = w * 0.15  # 15% margin for curves (relaxed for top region)
+                        if lane_idx == 0:  # Left lane
+                            valid_mask = x_coords_wide < (center_x + margin)
+                        else:  # Right lane
+                            valid_mask = x_coords_wide > (center_x - margin)
+                        
+                        y_coords_filtered = y_coords_wide[valid_mask]
+                        x_coords_filtered = x_coords_wide[valid_mask]
+                        
+                        if len(y_coords_filtered) > len(y_coords):
+                            # Use filtered wide search results
+                            y_coords, x_coords = y_coords_filtered, x_coords_filtered
+                            logger.debug(f"[POINT SUPPLEMENT] {lane_name}: Using wide search for top region - found {len(y_coords)} pixels "
+                                       f"(x={x_min_wide}-{x_max_wide}, filtered from {len(y_coords_wide)} to remove cross-lane)")
+                        else:
+                            # Filtered results aren't better, keep original
+                            logger.debug(f"[POINT SUPPLEMENT] {lane_name}: Wide search found pixels but filtering removed too many "
+                                       f"({len(y_coords_filtered)} <= {len(y_coords)}), keeping original")
+                # Sample evenly spaced points - add MORE than minimum for better coverage
+                # Top region is critical for polynomial fitting (lanes curve more at distance)
+                # CRITICAL: Apply lateral constraint, but be MORE AGGRESSIVE in top region
+                # If yellow mask is sparse, we need to trust it more - if we can see it, use it!
+                # In top region (far away), perspective makes lanes appear closer, so relax constraint
+                valid_indices = []
+                # Use wider margin in top region (where we're far away and perspective distorts)
+                # Bottom region: 15% margin, Top region: 25% margin (more aggressive)
+                base_margin = w * 0.15
+                top_margin = w * 0.25  # More aggressive for top region
+                
+                for i in range(len(x_coords)):
+                    px = x_coords[i]
+                    py_abs = y_coords[i] + roi_y_start  # Absolute y position
+                    
+                    # Use wider margin in top half of gap region
+                    y_gap_mid = roi_y_start + (gap_end - roi_y_start) / 2
+                    if py_abs < y_gap_mid:
+                        margin = top_margin  # Top half: more aggressive
+                    else:
+                        margin = base_margin  # Bottom half: normal
+                    
+                    if lane_idx == 0:  # Left lane
+                        if px < (center_x + margin):
+                            valid_indices.append(i)
+                    else:  # Right lane
+                        if px > (center_x - margin):
+                            valid_indices.append(i)
+                
+                if len(valid_indices) > 0:
+                    # CRITICAL: If there's a large gap, add MORE points to fill it
+                    # Be AGGRESSIVE - if yellow mask exists and is clear, use it!
+                    # The yellow mask shows us the lane line clearly, so we should trust it
+                    if gap_to_top > 100:
+                        # Need to fill a large gap - add MORE points aggressively
+                        # Target: ~1 point per 20-25px to ensure good coverage
+                        num_to_add = max(min_points_per_region - top_points, 10, int(gap_to_top / 20))  # More aggressive: 1 per 20px
+                    else:
+                        num_to_add = max(min_points_per_region - top_points, 8)  # Add at least 8 points if available
+                    # Use ALL available valid pixels if we have a large gap (don't be too conservative)
+                    if gap_to_top > 100:
+                        num_to_add = min(num_to_add, len(valid_indices), 15)  # Cap at 15 to avoid overfitting, but use what we have
+                    else:
+                        num_to_add = min(num_to_add, len(valid_indices))
+                    # CRITICAL: Sample evenly across Y-RANGE, not just indices
+                    # This ensures points span the entire gap, not just cluster where pixels are dense
+                    if num_to_add > 0:
+                        valid_y_coords = y_coords[valid_indices] + roi_y_start  # Convert to absolute y
+                        valid_x_coords = x_coords[valid_indices]
+                        
+                        # Divide gap into num_to_add regions and sample one point from each region
+                        y_min_gap = roi_y_start
+                        y_max_gap = gap_end if gap_to_top > 100 else region_top_end
+                        y_gap_range = y_max_gap - y_min_gap
+                        
+                        points_added_this_round = 0
+                        for i in range(num_to_add):
+                            # Target y for this point (evenly distributed across gap)
+                            target_y = y_min_gap + (i + 0.5) * (y_gap_range / num_to_add)
+                            
+                            # Find pixel closest to target_y
+                            distances = np.abs(valid_y_coords - target_y)
+                            closest_idx = np.argmin(distances)
+                            
+                            # Add this point (avoid duplicates by checking if y is too close to existing)
+                            point_y = valid_y_coords[closest_idx]
+                            point_x = valid_x_coords[closest_idx]
+                            
+                            # Check if we already have a point very close to this y
+                            too_close = False
+                            for existing_point in supplemented_points:
+                                if abs(existing_point[1] - point_y) < 10:  # Within 10px
+                                    too_close = True
+                                    break
+                            
+                            if not too_close:
+                                supplemented_points.append([float(point_x), float(point_y)])
+                                points_added += 1
+                                points_added_this_round += 1
+                        
+                        logger.info(f"[POINT SUPPLEMENT] {lane_name}: Added {points_added_this_round} points evenly across gap "
+                                   f"(y={y_min_gap}-{y_max_gap}px, gap={gap_to_top:.0f}px, "
+                                   f"target distribution: {num_to_add} points)")
+                else:
+                    logger.warning(f"[POINT SUPPLEMENT] {lane_name}: No valid points after lateral constraint filtering "
+                                 f"(all {len(x_coords)} points were on wrong side)")
+            else:
+                # If no pixels in restricted region, try wider search for top region (lanes curve more at distance)
+                # IMPROVED: Also check gap region if top region is empty (yellow lines often in gap region)
+                # First try top region with wide search
+                search_x = expected_x
+                if len(points) >= 3:
+                    try:
+                        y_vals = points[:, 1]
+                        x_vals = points[:, 0]
+                        coeffs = np.polyfit(y_vals, x_vals, min(2, len(points) - 1))
+                        top_y_mid = roi_y_start + (region_top_end - roi_y_start) // 2
+                        search_x = np.polyval(coeffs, top_y_mid)
+                    except:
+                        pass
+                wider_search_width = w * 0.40  # 40% for top region (wider to catch curves)
+                x_min_wide = max(0, int(search_x - wider_search_width))
+                x_max_wide = min(w, int(search_x + wider_search_width))
+                lateral_mask_wide = np.zeros((h, w), dtype=np.uint8)
+                lateral_mask_wide[:, x_min_wide:x_max_wide] = 255
+                sampling_mask_wide = cv2.bitwise_and(lane_color_mask, roi_mask)
+                sampling_mask_wide = cv2.bitwise_and(sampling_mask_wide, lateral_mask_wide)
+                region_mask_wide = sampling_mask_wide[roi_y_start:region_top_end, :].copy()
+                y_coords, x_coords = np.where(region_mask_wide > 0)
+                logger.debug(f"[POINT SUPPLEMENT] {lane_name}: Top region (wide search) - found {len(y_coords)} pixels "
+                            f"(x={x_min_wide}-{x_max_wide})")
+                
+                # If still no pixels in top region, try gap region (where yellow lines often exist)
+                if len(y_coords) == 0:
+                    gap_start = region_top_end
+                    gap_end = region_lookahead_start
+                    gap_mask = sampling_mask_wide[gap_start:gap_end, :].copy()
+                    y_coords_gap, x_coords_gap = np.where(gap_mask > 0)
+                    if len(y_coords_gap) > 0:
+                        logger.debug(f"[POINT SUPPLEMENT] {lane_name}: Top region empty, using gap region - found {len(y_coords_gap)} pixels")
+                        # Use gap region pixels, but adjust y-coords to be relative to ROI start
+                        y_coords = y_coords_gap + gap_start - roi_y_start
+                        x_coords = x_coords_gap
+                if len(y_coords) > 0:
+                    # CRITICAL: Apply lateral constraint filtering before adding points
+                    # This prevents cross-lane contamination from wide search
+                    # RELAXED: Use 15% margin for top region (instead of 8%) to allow curves
+                    valid_indices = []
+                    margin = w * 0.15  # 15% margin (relaxed for curves and top region)
+                    for i in range(len(x_coords)):
+                        px = x_coords[i]
+                        if lane_idx == 0:  # Left lane
+                            if px < (center_x + margin):
+                                valid_indices.append(i)
+                        else:  # Right lane
+                            if px > (center_x - margin):
+                                valid_indices.append(i)
+                    
+                    if len(valid_indices) > 0:
+                        # Add more points in top region for better coverage (lanes curve more at distance)
+                        # Add up to 5-6 points (not just minimum) to ensure good polynomial fit
+                        num_to_add = max(min_points_per_region - top_points, 5)  # Add at least 5 points if available
+                        num_to_add = min(num_to_add, len(valid_indices))  # Don't exceed available valid pixels
+                        indices = np.linspace(0, len(valid_indices) - 1, num_to_add, dtype=int)
+                        for idx in indices:
+                            i = valid_indices[idx]
+                            supplemented_points.append([float(x_coords[i]), float(y_coords[i] + roi_y_start)])
+                            points_added += 1
+                        logger.info(f"[POINT SUPPLEMENT] {lane_name}: Added {num_to_add} points to top region (wide search, above black line, "
+                                   f"filtered from {len(x_coords)} to {len(valid_indices)} valid)")
+                    else:
+                        logger.warning(f"[POINT SUPPLEMENT] {lane_name}: Wide search found {len(x_coords)} pixels but all were on wrong side "
+                                     f"(left lane: all x >= {center_x + margin:.0f}px, right lane: all x <= {center_x - margin:.0f}px)")
+                else:
+                    logger.debug(f"[POINT SUPPLEMENT] {lane_name}: Top region - no pixels found even with wide search")
+        
+        # Sample from gap region (between top and lookahead) - yellow mask often has pixels here
+        if gap_points < min_points_per_region and gap_end > gap_start:  # Only if gap exists
+            region_mask = sampling_mask[gap_start:gap_end, :].copy()
+            y_coords, x_coords = np.where(region_mask > 0)
+            logger.debug(f"[POINT SUPPLEMENT] {lane_name}: Gap region - found {len(y_coords)} pixels in mask "
+                        f"(region: y={gap_start}-{gap_end}, x={x_min}-{x_max})")
+            if len(y_coords) > 0:
+                num_to_add = min_points_per_region - gap_points
+                indices = np.linspace(0, len(y_coords) - 1, min(num_to_add, len(y_coords)), dtype=int)
+                for idx in indices:
+                    supplemented_points.append([float(x_coords[idx]), float(y_coords[idx] + gap_start)])
+                    points_added += 1
+            else:
+                # Try wider search for gap region
+                wider_search_width = w * 0.25
+                x_min_wide = max(0, int(expected_x - wider_search_width))
+                x_max_wide = min(w, int(expected_x + wider_search_width))
+                lateral_mask_wide = np.zeros((h, w), dtype=np.uint8)
+                lateral_mask_wide[:, x_min_wide:x_max_wide] = 255
+                sampling_mask_wide = cv2.bitwise_and(lane_color_mask, roi_mask)
+                sampling_mask_wide = cv2.bitwise_and(sampling_mask_wide, lateral_mask_wide)
+                region_mask_wide = sampling_mask_wide[gap_start:gap_end, :].copy()
+                y_coords, x_coords = np.where(region_mask_wide > 0)
+                logger.debug(f"[POINT SUPPLEMENT] {lane_name}: Gap region (wide search) - found {len(y_coords)} pixels "
+                            f"(x={x_min_wide}-{x_max_wide})")
+                if len(y_coords) > 0:
+                    num_to_add = min_points_per_region - gap_points
+                    indices = np.linspace(0, len(y_coords) - 1, min(num_to_add, len(y_coords)), dtype=int)
+                    for idx in indices:
+                        supplemented_points.append([float(x_coords[idx]), float(y_coords[idx] + gap_start)])
+                        points_added += 1
+        
+        # CRITICAL: Sample from lookahead region (around black dotted line)
+        # This is where we evaluate the polynomial for control, so we MUST have points here
+        if lookahead_points < min_lookahead_points:
+            region_mask = sampling_mask[region_lookahead_start:region_lookahead_end, :].copy()
+            y_coords, x_coords = np.where(region_mask > 0)
+            logger.debug(f"[POINT SUPPLEMENT] {lane_name}: Lookahead region (black line) - found {len(y_coords)} pixels in mask "
+                        f"(region: y={region_lookahead_start}-{region_lookahead_end}, x={x_min}-{x_max})")
+            if len(y_coords) > 0:
+                num_to_add = min_lookahead_points - lookahead_points
+                indices = np.linspace(0, len(y_coords) - 1, min(num_to_add, len(y_coords)), dtype=int)
+                for idx in indices:
+                    supplemented_points.append([float(x_coords[idx]), float(y_coords[idx] + region_lookahead_start)])
+                    points_added += 1
+            else:
+                # Try wider search for lookahead region (critical for control)
+                wider_search_width = w * 0.25  # 25% for lookahead region
+                x_min_wide = max(0, int(expected_x - wider_search_width))
+                x_max_wide = min(w, int(expected_x + wider_search_width))
+                lateral_mask_wide = np.zeros((h, w), dtype=np.uint8)
+                lateral_mask_wide[:, x_min_wide:x_max_wide] = 255
+                sampling_mask_wide = cv2.bitwise_and(lane_color_mask, roi_mask)
+                sampling_mask_wide = cv2.bitwise_and(sampling_mask_wide, lateral_mask_wide)
+                region_mask_wide = sampling_mask_wide[region_lookahead_start:region_lookahead_end, :].copy()
+                y_coords, x_coords = np.where(region_mask_wide > 0)
+                logger.debug(f"[POINT SUPPLEMENT] {lane_name}: Lookahead region (wide search) - found {len(y_coords)} pixels "
+                            f"(x={x_min_wide}-{x_max_wide})")
+                if len(y_coords) > 0:
+                    num_to_add = min_lookahead_points - lookahead_points
+                    indices = np.linspace(0, len(y_coords) - 1, min(num_to_add, len(y_coords)), dtype=int)
+                    for idx in indices:
+                        supplemented_points.append([float(x_coords[idx]), float(y_coords[idx] + region_lookahead_start)])
+                        points_added += 1
+                else:
+                    logger.warning(f"[POINT SUPPLEMENT] {lane_name}: Lookahead region - no pixels found even with wide search "
+                                 f"(CRITICAL: polynomial evaluated here for control!)")
+        
+        # Note: "middle" region is now the lookahead region (handled above)
+        # This section is kept for backward compatibility but should not be needed
+        
+        # Sample from bottom region if needed
+        if bottom_points < min_points_per_region:
+            region_mask = sampling_mask[region_bottom_start:roi_y_end, :].copy()
+            y_coords, x_coords = np.where(region_mask > 0)
+            if len(y_coords) > 0:
+                num_to_add = min_points_per_region - bottom_points
+                indices = np.linspace(0, len(y_coords) - 1, min(num_to_add, len(y_coords)), dtype=int)
+                for idx in indices:
+                    supplemented_points.append([float(x_coords[idx]), float(y_coords[idx] + region_bottom_start)])
+                    points_added += 1
+        
+        if points_added > 0:
+            logger.info(f"[POINT SUPPLEMENT] {lane_name}: Added {points_added} points from mask "
+                       f"(top={top_points}, gap={gap_points}, lookahead={lookahead_points}, bot={bottom_points})")
+        else:
+            logger.warning(f"[POINT SUPPLEMENT] {lane_name}: No points added - no pixels found in sampling_mask "
+                          f"for regions needing points (top={top_points}, gap={gap_points}, "
+                          f"lookahead={lookahead_points}, bot={bottom_points})")
+        
+        return np.array(supplemented_points)
     
     def detect(self, image: np.ndarray, return_debug: bool = False) -> List[Optional[np.ndarray]]:
         """
@@ -246,19 +1117,20 @@ class SimpleLaneDetector:
         # - Car body/hood reflections
         # Only yellow and white lane markings are reliable for detection
         
-        # Create region of interest (lower 2/3 of image for camera perspective)
-        # BALANCED: Use moderate ROI (center 80%) to reduce noise while still
-        # allowing detection of both lanes even if car is offset
-        roi_margin = int(w * 0.10)  # 10% margin on each side (center 80%)
+        # Create region of interest (lower 62% of image for camera perspective)
+        # WIDENED: No horizontal margin (100% width) to detect lanes at full image width
+        # FIXED: Start ROI at 18% from top to include more of the road surface
+        # FIXED: Exclude bottom 20% (was 7%) to better exclude car hood/body
+        roi_margin = 0  # No horizontal margin - use full image width for yellow mask detection
         roi_mask = np.zeros((h, w), dtype=np.uint8)
-        # EXCLUDE: Sky (top), car body/hood (very bottom), and sides
-        # More restrictive to avoid car body and sky
-        # INCREASED: Exclude bottom 7% (was 5%) to better exclude car at different angles
+        # EXCLUDE: Sky (top), car body/hood (very bottom), but NOT sides
+        # More restrictive to avoid car body and sky, but allow full horizontal detection
+        # INCREASED: Exclude bottom 20% to better exclude car at different angles
         roi_vertices = np.array([[
-            (roi_margin, int(h * 0.93)),  # Stop 7% from bottom to exclude car hood/body (increased from 5%)
-            (w - roi_margin, int(h * 0.93)),
-            (w - roi_margin, h // 3),  # Focus on road ahead (exclude sky)
-            (roi_margin, h // 3)
+            (roi_margin, int(h * 0.80)),  # Stop 20% from bottom to exclude car hood/body
+            (w - roi_margin, int(h * 0.80)),
+            (w - roi_margin, int(h * 0.18)),  # Start at 18% from top - includes more road surface
+            (roi_margin, int(h * 0.18))
         ]], dtype=np.int32)
         cv2.fillPoly(roi_mask, roi_vertices, 255)
         
@@ -450,31 +1322,420 @@ class SimpleLaneDetector:
         # Fit polynomials to left and right lanes
         lanes = []
         validation_failures = {'left': [], 'right': []}
+        # Store points used for fitting (for debug visualization)
+        fit_points = {'left': None, 'right': None}
         
         for lane_idx, (line_group, lane_name) in enumerate([(left_lines, 'left'), (right_lines, 'right')]):
-            if len(line_group) == 0:
-                lanes.append(None)
-                validation_failures[lane_name].append('no_lines')
-                continue
+            previous_coeffs = self.previous_lanes[lane_idx]
             
-            # Collect all points
-            points = []
-            for line in line_group:
-                points.append([line[0], line[1]])
-                points.append([line[2], line[3]])
+            # ROOT CAUSE FIX: Use per-row sampling from yellow mask as PRIMARY point source
+            # Hough lines are only used for initial lane-side detection, not for regression points
+            # This provides uniform y-coverage, eliminates extrapolation, and ensures stable regression
+            per_row_points = self._sample_points_per_row(
+                lane_idx, yellow_mask, white_mask_roi, lane_color_mask, center_x, w, h, lane_name, previous_coeffs
+            )
             
-            points = np.array(points)
+            using_per_row_sampling = False
+            if per_row_points is not None and len(per_row_points) >= 3:
+                # Use per-row sampling points (dense, uniform coverage)
+                # CRITICAL: Per-row sampling already provides clean, evenly distributed points
+                # Skip aggressive filtering and clustering that were designed for Hough lines
+                points = per_row_points
+                using_per_row_sampling = True
+                logger.info(f"[ROOT CAUSE FIX] {lane_name}: Using per-row sampling ({len(points)} points, "
+                           f"y-range: [{np.min(points[:, 1]):.0f}, {np.max(points[:, 1]):.0f}]px)")
+            elif len(line_group) > 0:
+                # Fallback: Use Hough lines if per-row sampling failed (should be rare)
+                logger.warning(f"[ROOT CAUSE FIX] {lane_name}: Per-row sampling failed, falling back to Hough lines")
+                points = []
+                for line in line_group:
+                    points.append([line[0], line[1]])
+                    points.append([line[2], line[3]])
+                points = np.array(points)
+            else:
+                # No points from either method
+                if previous_coeffs is not None and self.previous_lanes_confidence[lane_idx] > 0.3:
+                    logger.info(f"[RELIABILITY] {lane_name}: No points detected, using previous frame")
+                    lanes.append(previous_coeffs.copy())
+                    validation_failures[lane_name].append('no_points_used_previous')
+                    continue
+                else:
+                    logger.warning(f"[RELIABILITY] {lane_name}: No points detected and no previous frame, rejecting")
+                    lanes.append(None)
+                    validation_failures[lane_name].append('no_points')
+                    continue
             
             if len(points) < 3:
-                lanes.append(None)
-                validation_failures[lane_name].append(f'insufficient_points_{len(points)}')
-                continue
+                # RELIABILITY: Use previous frame instead of rejecting
+                previous_coeffs = self.previous_lanes[lane_idx]
+                if previous_coeffs is not None and self.previous_lanes_confidence[lane_idx] > 0.3:
+                    logger.info(f"[RELIABILITY] {lane_name}: Insufficient points ({len(points)} < 3), using previous frame")
+                    lanes.append(previous_coeffs.copy())
+                    validation_failures[lane_name].append(f'insufficient_points_{len(points)}_used_previous')
+                    continue
+                else:
+                    logger.warning(f"[RELIABILITY] {lane_name}: Insufficient points ({len(points)} < 3) and no previous frame, rejecting")
+                    lanes.append(None)
+                    validation_failures[lane_name].append(f'insufficient_points_{len(points)}')
+                    continue
+            
+            # NEW: Filter out points from upcoming curves or other lanes
+            # NOTE: Skip aggressive filtering if using per-row sampling (already clean)
+            filtered_points = []
+            if not using_per_row_sampling and (self.previous_lanes_x_at_bottom[lane_idx] is not None and 
+                len(points) > 3):  # Only filter if we have temporal data and enough points
+                prev_lane_x_bottom = self.previous_lanes_x_at_bottom[lane_idx]  # x at bottom of image (y=h)
+                
+                # Estimate expected lane x position at each y using previous frame's position
+                # In image space, lanes converge slightly due to perspective (vanishing point)
+                # But for filtering, we use a simple model: x_expected ≈ prev_x (constant)
+                # This works because lanes are roughly parallel in vehicle coordinates
+                
+                for point in points:
+                    px, py = point[0], point[1]
+                    
+                    # PHASE 1 FIX: Lateral constraint - points must be on correct side of center
+                    # Left lane points should be left of center (px < center_x)
+                    # Right lane points should be right of center (px > center_x)
+                    # This prevents cross-lane contamination (e.g., right lane using left lane points)
+                    lateral_constraint_passed = False
+                    if lane_idx == 0:  # Left lane
+                        # Left lane: allow some margin for curves, but reject points clearly on right side
+                        # Use 10% of image width as margin (allows for curve, but catches wrong lane)
+                        margin = w * 0.10
+                        if px < center_x + margin:  # Left lane can be slightly right of center on curves
+                            lateral_constraint_passed = True
+                        else:
+                            logger.debug(f"[CURVE FILTER] {lane_name}: Filtered point at ({px:.1f}, {py:.1f}): "
+                                       f"LATERAL CONSTRAINT FAILED - left lane point is too far right "
+                                       f"(px={px:.1f} > center_x+margin={center_x + margin:.1f})")
+                    else:  # Right lane (lane_idx == 1)
+                        # Right lane: allow some margin for curves, but reject points clearly on left side
+                        margin = w * 0.10
+                        if px > center_x - margin:  # Right lane can be slightly left of center on curves
+                            lateral_constraint_passed = True
+                        else:
+                            logger.debug(f"[CURVE FILTER] {lane_name}: Filtered point at ({px:.1f}, {py:.1f}): "
+                                       f"LATERAL CONSTRAINT FAILED - right lane point is too far left "
+                                       f"(px={px:.1f} < center_x-margin={center_x - margin:.1f})")
+                    
+                    # If lateral constraint failed, skip this point
+                    if not lateral_constraint_passed:
+                        continue
+                    
+                    # Expected x at this y position
+                    # For parallel lanes in vehicle frame, x is roughly constant in image space
+                    # (perspective convergence is small for nearby lanes)
+                    x_expected = prev_lane_x_bottom
+                    
+                    # Calculate deviation from expected position
+                    x_deviation = abs(px - x_expected)
+                    
+                    # Tolerance: tighter at bottom (near vehicle), looser at top (far away)
+                    # But also: upper points that deviate significantly are likely from upcoming curves
+                    y_normalized = py / h  # 0 (top) to 1 (bottom)
+                    
+                    # Base tolerance: 60px at bottom, 120px at top
+                    base_tolerance = 60 + (1.0 - y_normalized) * 60
+                    
+                    # Stricter check for upper half: if point is far from expected, it's likely from upcoming curve
+                    # RELAXED: Increased from 80px to 120px to be less aggressive
+                    # We want to filter obvious upcoming curve points, but not filter valid lane points on curves
+                    if y_normalized < 0.5:  # Upper half of image
+                        # Tighter tolerance for upper points - they shouldn't deviate much if they're from current lane
+                        max_deviation = 120  # Relaxed: 120px max deviation for upper points (was 80px)
+                    else:
+                        # Lower half: more lenient (points are closer, more reliable)
+                        max_deviation = base_tolerance
+                    
+                    if x_deviation <= max_deviation:
+                        filtered_points.append(point)
+                    else:
+                        logger.debug(f"[CURVE FILTER] {lane_name}: Filtered point at ({px:.1f}, {py:.1f}): "
+                                   f"deviation={x_deviation:.1f}px > {max_deviation:.1f}px (expected={x_expected:.1f}px)")
+                
+                original_count = len(points)
+                if len(filtered_points) >= 3:
+                    points = np.array(filtered_points)
+                    removed_count = original_count - len(filtered_points)
+                    logger.info(f"[CURVE FILTER] {lane_name}: Filtered {len(filtered_points)}/{original_count} points "
+                              f"(removed {removed_count} from upcoming curves)")
+                else:
+                    # Not enough points after filtering - use all points but log warning
+                    logger.warning(f"[CURVE FILTER] {lane_name}: Filtering removed too many points "
+                                 f"({len(filtered_points)} < 3), using all {original_count} points")
+                    # Keep original points array
+            else:
+                # No temporal data - can't use deviation filter, but still apply lateral constraint
+                # PHASE 1 FIX: Even without temporal data, enforce lateral constraint
+                # This prevents obvious cross-lane contamination on first frame
+                filtered_points = []
+                for point in points:
+                    px, py = point[0], point[1]
+                    
+                    # Lateral constraint (same as above)
+                    lateral_constraint_passed = False
+                    if lane_idx == 0:  # Left lane
+                        margin = w * 0.10
+                        if px < center_x + margin:
+                            lateral_constraint_passed = True
+                        else:
+                            logger.debug(f"[CURVE FILTER] {lane_name}: Filtered point at ({px:.1f}, {py:.1f}): "
+                                       f"LATERAL CONSTRAINT FAILED (no temporal data) - left lane point too far right")
+                    else:  # Right lane
+                        margin = w * 0.10
+                        if px > center_x - margin:
+                            lateral_constraint_passed = True
+                        else:
+                            logger.debug(f"[CURVE FILTER] {lane_name}: Filtered point at ({px:.1f}, {py:.1f}): "
+                                       f"LATERAL CONSTRAINT FAILED (no temporal data) - right lane point too far left")
+                    
+                    if lateral_constraint_passed:
+                        filtered_points.append(point)
+                
+                original_count = len(points)
+                if len(filtered_points) >= 3:
+                    points = np.array(filtered_points)
+                    removed_count = original_count - len(filtered_points)
+                    if removed_count > 0:
+                        logger.info(f"[CURVE FILTER] {lane_name}: Applied lateral constraint (no temporal data): "
+                                  f"kept {len(filtered_points)}/{original_count} points")
+                else:
+                    # Not enough points after filtering - use all points but log warning
+                    logger.warning(f"[CURVE FILTER] {lane_name}: Lateral constraint removed too many points "
+                                 f"({len(filtered_points)} < 3), using all {original_count} points")
+                    points = np.array(points)
+            
+            # PHASE 2: Spatial clustering to separate left/right clusters
+            # NOTE: Skip clustering if using per-row sampling (already clean, evenly distributed)
+            expected_x_for_supplement = None
+            if not using_per_row_sampling and len(points) >= 6:  # Need enough points for clustering to be meaningful
+                clustered_points = self._spatial_cluster_points(
+                    points, lane_idx, center_x, w, h, lane_name
+                )
+                if clustered_points is not None and len(clustered_points) >= 3:
+                    points = clustered_points
+                    expected_x_for_supplement = np.median(points[:, 0])  # Use median for supplementation
+                    logger.info(f"[SPATIAL CLUSTER] {lane_name}: Using {len(points)} points from dominant cluster")
+                else:
+                    logger.warning(f"[SPATIAL CLUSTER] {lane_name}: Clustering failed or insufficient points, "
+                                 f"using all {len(points)} points")
+            elif using_per_row_sampling:
+                # Per-row sampling: use median for supplementation if needed
+                expected_x_for_supplement = np.median(points[:, 0]) if len(points) > 0 else center_x
+                logger.debug(f"[ROOT CAUSE FIX] {lane_name}: Skipping clustering (per-row sampling already clean)")
+            # If not enough points for clustering, use all points (clustering needs at least 6 points)
+            
+            # Set expected_x if not set by clustering
+            # CRITICAL: For supplementation, we need to predict x at the TOP region, not bottom
+            # Use a quick polynomial fit to current points to predict where lane should be at top
+            if expected_x_for_supplement is None:
+                if len(points) >= 3:
+                    try:
+                        # Fit polynomial to current points
+                        y_vals = points[:, 1]
+                        x_vals = points[:, 0]
+                        coeffs = np.polyfit(y_vals, x_vals, min(2, len(points) - 1))
+                        # Predict x at middle of top region (where we want to sample)
+                        roi_y_start = int(h * 0.18)
+                        lookahead_y_estimate = int(h * 0.73)
+                        region_top_end = max(roi_y_start + 50, lookahead_y_estimate - 80)
+                        top_y_mid = roi_y_start + (region_top_end - roi_y_start) // 2
+                        expected_x_for_supplement = np.polyval(coeffs, top_y_mid)
+                        logger.debug(f"[POINT SUPPLEMENT] {lane_name}: Using polynomial prediction for top region: "
+                                   f"x={expected_x_for_supplement:.1f}px at y={top_y_mid}px (from {len(points)} points)")
+                    except Exception as e:
+                        # Fallback to median
+                        expected_x_for_supplement = np.median(points[:, 0]) if len(points) > 0 else center_x
+                        logger.debug(f"[POINT SUPPLEMENT] {lane_name}: Polynomial prediction failed, using median: "
+                                   f"x={expected_x_for_supplement:.1f}px")
+                elif len(points) > 0:
+                    expected_x_for_supplement = np.median(points[:, 0])
+                else:
+                    expected_x_for_supplement = center_x
+            
+            # PHASE 2 ENHANCEMENT: Supplement points from yellow mask to ensure consistent distribution
+            # NOTE: If we used per-row sampling, only supplement if there's a gap at the top
+            # (per-row sampling already provides uniform coverage where yellow pixels exist)
+            y_min = np.min(points[:, 1])
+            roi_y_start = int(h * 0.18)
+            roi_y_end = int(h * 0.80)
+            y_range = np.max(points[:, 1]) - y_min
+            coverage_ratio = y_range / (roi_y_end - roi_y_start) if (roi_y_end - roi_y_start) > 0 else 0.0
+            gap_to_top = y_min - roi_y_start
+            
+            # For per-row sampling: only supplement if there's a gap at the top (no yellow pixels there)
+            # For Hough lines: supplement if coverage is poor
+            if using_per_row_sampling:
+                needs_supplementation = gap_to_top > 50  # Only if gap > 50px
+            else:
+                needs_supplementation = coverage_ratio < 0.70 or gap_to_top > 50
+            
+            if needs_supplementation and len(points) >= 3:
+                logger.info(f"[POINT SUPPLEMENT] {lane_name}: Coverage is poor ({coverage_ratio*100:.1f}%, gap={gap_to_top:.0f}px), "
+                           f"attempting supplementation with {len(points)} points")
+                try:
+                    points = self._supplement_points_from_mask(
+                        points, lane_idx, 
+                        yellow_mask,  # yellow_mask is defined in detect() scope
+                        white_mask_roi,  # white_mask_roi is defined in detect() scope
+                        lane_color_mask,  # lane_color_mask is defined in detect() scope
+                        center_x, w, h, lane_name, expected_x_for_supplement
+                    )
+                    logger.info(f"[POINT SUPPLEMENT] {lane_name}: Supplementation completed, now have {len(points)} points")
+                except Exception as e:
+                    logger.warning(f"[POINT SUPPLEMENT] {lane_name}: Failed to supplement points: {e}")
+                    import traceback
+                    logger.warning(f"[POINT SUPPLEMENT] {lane_name}: Traceback: {traceback.format_exc()}")
+            else:
+                logger.debug(f"[POINT SUPPLEMENT] {lane_name}: Good coverage ({coverage_ratio*100:.1f}%, gap={gap_to_top:.0f}px), "
+                            f"skipping supplementation")
+            
+            # CRITICAL: If points still don't span full range, use polynomial prediction to fill top gap
+            # This ensures polynomial doesn't need to extrapolate >100px
+            # For per-row sampling: use per-row logic to fill gaps (sample every 8px)
+            # For Hough lines: use synthetic points
+            roi_y_start = int(h * 0.18)
+            lookahead_y_estimate = int(h * 0.73)
+            region_top_end = max(roi_y_start + 50, lookahead_y_estimate - 50)
+            primary_mask = yellow_mask if lane_idx == 0 else white_mask_roi
+            sampling_mask = primary_mask.copy()
+            if np.sum(sampling_mask) < 100:
+                sampling_mask = lane_color_mask.copy()
+            min_top_pixels = max(40, int(0.001 * w * (region_top_end - roi_y_start)))
+            top_region_pixel_count = int(np.sum(primary_mask[roi_y_start:region_top_end, :] > 0))
+            top_region_has_pixels = top_region_pixel_count >= min_top_pixels
+            if not needs_supplementation or (needs_supplementation and len(points) >= 3):
+                y_min = np.min(points[:, 1])
+                roi_y_start = int(h * 0.18)
+                gap_to_top = y_min - roi_y_start
+                
+                if gap_to_top > 50 and not top_region_has_pixels:
+                    logger.info(f"[POINT SUPPLEMENT] {lane_name}: Skipping gap fill (no pixels in top region)")
+                
+                if gap_to_top > 50 and len(points) >= 3 and top_region_has_pixels:  # More aggressive: fill gaps >50px (not just >100px)
+                    if using_per_row_sampling:
+                        # Use per-row sampling logic: sample every 8px in the gap
+                        y_step = 8
+                        gap_points = []
+                        
+                        # Fit polynomial to existing points for prediction
+                        try:
+                            y_vals = points[:, 1]
+                            x_vals = points[:, 0]
+                            pred_coeffs = np.polyfit(y_vals, x_vals, min(2, len(points) - 1))
+                            
+                            # Sample every 8px in the gap region
+                            for y in range(roi_y_start, int(y_min), y_step):
+                                predicted_x = np.polyval(pred_coeffs, y)
+                                
+                                # Apply lane-side constraint
+                                margin = w * 0.20
+                                if lane_idx == 0:  # Left lane
+                                    predicted_x = min(predicted_x, center_x + margin)
+                                else:  # Right lane
+                                    predicted_x = max(predicted_x, center_x - margin)
+                                
+                                # Clamp to bounds
+                                predicted_x = np.clip(predicted_x, 0, w - 1)
+                                gap_points.append([predicted_x, float(y)])
+                            
+                            if len(gap_points) > 0:
+                                gap_points_array = np.array(gap_points)
+                                points = np.vstack([gap_points_array, points])
+                                logger.info(f"[ROOT CAUSE FIX] {lane_name}: Added {len(gap_points)} evenly-spaced points "
+                                           f"to fill gap (y={roi_y_start:.0f}-{y_min:.0f}px) using per-row sampling logic")
+                        except Exception as e:
+                            logger.warning(f"[ROOT CAUSE FIX] {lane_name}: Failed to fill gap with per-row sampling: {e}")
+                    else:
+                        # Hough lines: use synthetic points (old logic)
+                        # Fit a quick polynomial to current points to predict x at top
+                        try:
+                            y_vals = points[:, 1]
+                            x_vals = points[:, 0]
+                            
+                            # Remove outliers before fitting (to get better prediction)
+                            # Use IQR method to detect outliers
+                            q1, q3 = np.percentile(x_vals, [25, 75])
+                            iqr = q3 - q1
+                            if iqr > 0:  # Only filter if there's variation
+                                lower_bound = q1 - 1.5 * iqr
+                                upper_bound = q3 + 1.5 * iqr
+                                outlier_mask = (x_vals >= lower_bound) & (x_vals <= upper_bound)
+                                
+                                if np.sum(outlier_mask) >= 3:  # Need at least 3 points after outlier removal
+                                    y_vals_clean = y_vals[outlier_mask]
+                                    x_vals_clean = x_vals[outlier_mask]
+                                    # Use linear fit for prediction (more stable for extrapolation)
+                                    pred_coeffs = np.polyfit(y_vals_clean, x_vals_clean, deg=1)
+                                    logger.debug(f"[POINT SUPPLEMENT] {lane_name}: Removed {np.sum(~outlier_mask)} outliers "
+                                               f"before synthetic point generation")
+                                else:
+                                    # Not enough points after outlier removal, use all points
+                                    pred_coeffs = np.polyfit(y_vals, x_vals, deg=1)
+                            else:
+                                # No variation, use all points
+                                pred_coeffs = np.polyfit(y_vals, x_vals, deg=1)
+                            
+                            # Add synthetic points evenly spaced across the gap
+                            num_synthetic = min(8, int(gap_to_top / 30))  # More aggressive: ~1 point per 30px
+                            synthetic_points = []
+                            
+                            # Validate prediction before generating synthetic points
+                            # Check if prediction at y_min is reasonable
+                            predicted_x_at_y_min = np.polyval(pred_coeffs, y_min)
+                            margin = w * 0.20  # 20% margin for validation
+                            
+                            # Lane-side constraint: left lane should be left of center, right lane right of center
+                            if lane_idx == 0:  # Left lane
+                                max_reasonable_x = center_x + margin
+                                if predicted_x_at_y_min > max_reasonable_x:
+                                    logger.warning(f"[POINT SUPPLEMENT] {lane_name}: Prediction at y_min ({predicted_x_at_y_min:.1f}px) "
+                                                 f"is too far right for left lane (>{max_reasonable_x:.1f}px), skipping synthetic points")
+                                    raise ValueError("Invalid prediction for left lane")
+                            else:  # Right lane
+                                min_reasonable_x = center_x - margin
+                                if predicted_x_at_y_min < min_reasonable_x:
+                                    logger.warning(f"[POINT SUPPLEMENT] {lane_name}: Prediction at y_min ({predicted_x_at_y_min:.1f}px) "
+                                                 f"is too far left for right lane (<{min_reasonable_x:.1f}px), skipping synthetic points")
+                                    raise ValueError("Invalid prediction for right lane")
+                            
+                            # Check if prediction is within image bounds
+                            if predicted_x_at_y_min < -margin or predicted_x_at_y_min > w + margin:
+                                logger.warning(f"[POINT SUPPLEMENT] {lane_name}: Prediction at y_min ({predicted_x_at_y_min:.1f}px) "
+                                             f"is way outside image bounds [0, {w}], skipping synthetic points")
+                                raise ValueError("Prediction outside image bounds")
+                            
+                            for i in range(num_synthetic):
+                                target_y = roi_y_start + (i + 1) * (gap_to_top / (num_synthetic + 1))
+                                predicted_x = np.polyval(pred_coeffs, target_y)
+                                
+                                # Apply lane-side constraint
+                                if lane_idx == 0:  # Left lane
+                                    predicted_x = min(predicted_x, center_x + margin)
+                                else:  # Right lane
+                                    predicted_x = max(predicted_x, center_x - margin)
+                                
+                                # Clamp to image bounds
+                                predicted_x = np.clip(predicted_x, 0, w - 1)
+                                synthetic_points.append([predicted_x, target_y])
+                            
+                            # Add synthetic points to the beginning (they're at smaller y)
+                            points = np.vstack([np.array(synthetic_points), points])
+                            logger.info(f"[POINT SUPPLEMENT] {lane_name}: Added {len(synthetic_points)} synthetic points "
+                                       f"to fill top gap (y={roi_y_start:.0f}-{y_min:.0f}px) using linear prediction")
+                        except Exception as e:
+                            logger.debug(f"[POINT SUPPLEMENT] {lane_name}: Failed to add synthetic points: {e}")
             
             # FIX #1: Sort points by y (ascending) before fitting
             # This stabilizes polynomial fitting, especially on curves
             # Points should be ordered from top (small y) to bottom (large y) of image
             sort_indices = np.argsort(points[:, 1])
             points = points[sort_indices]
+            
+            # Store points used for fitting (for debug visualization)
+            if return_debug:
+                fit_points[lane_name] = points.copy()  # Store copy of points array
             
             try:
                 # Fit polynomial
@@ -487,27 +1748,64 @@ class SimpleLaneDetector:
                 x_min = np.min(points[:, 0])
                 x_max = np.max(points[:, 0])
                 
-                # FRAME 0 DEBUG: Log point statistics
+                # Log point statistics for debugging polynomial fit issues
                 if len(points) > 0:
-                    logger.info(f"[FRAME0 DEBUG] {lane_name} lane: {len(points)} points, "
+                    # Calculate point distribution (how evenly spread across y-range)
+                    y_std = np.std(points[:, 1]) if len(points) > 1 else 0.0
+                    x_std = np.std(points[:, 0]) if len(points) > 1 else 0.0
+                    
+                    logger.info(f"[POLY FIT] {lane_name} lane: {len(points)} points, "
                                f"y_range=[{y_min:.1f}, {y_max:.1f}] ({y_range:.1f}px), "
                                f"x_range=[{x_min:.1f}, {x_max:.1f}] ({x_range:.1f}px), "
-                               f"image_height={h}px")
+                               f"y_std={y_std:.1f}px, x_std={x_std:.1f}px")
                 
                 # If y_range is too small, polynomial will extrapolate poorly
                 # RELAXED: Reduced from 50px to 30px to allow left lane (which is farther away)
                 # Left lane often has smaller y_range due to perspective (farther = fewer pixels)
                 if y_range < 30:  # Less than 30 pixels vertical span (relaxed from 50px)
                     logger.warning(f"[FRAME0 DEBUG] {lane_name}: y_range too small ({y_range:.1f}px < 30px)")
-                    lanes.append(None)
-                    validation_failures[lane_name].append(f'insufficient_y_range_{y_range:.1f}px')
-                    continue
+                    # RELIABILITY: Use previous frame instead of rejecting
+                    previous_coeffs = self.previous_lanes[lane_idx]
+                    if previous_coeffs is not None and self.previous_lanes_confidence[lane_idx] > 0.3:
+                        logger.info(f"[RELIABILITY] {lane_name}: Using previous frame due to small y_range")
+                        lanes.append(previous_coeffs.copy())
+                        validation_failures[lane_name].append(f'insufficient_y_range_{y_range:.1f}px_used_previous')
+                        continue
+                    else:
+                        logger.warning(f"[RELIABILITY] {lane_name}: No previous frame, rejecting due to small y_range")
+                        lanes.append(None)
+                        validation_failures[lane_name].append(f'insufficient_y_range_{y_range:.1f}px')
+                        continue
                 
                 # Check if we need to extrapolate significantly
                 extrapolation_distance = h - y_max  # How far we need to extrapolate to reach bottom
-                if extrapolation_distance > 50:  # Need to extrapolate >50px
+                # RELAXED: Increased from 100px to 200px to match original behavior
+                # The original code accepted detections with up to ~160px extrapolation
+                # We want to prevent extreme cases (>200px) but allow reasonable extrapolation
+                max_extrapolation = 200  # Maximum allowed extrapolation (pixels)
+                
+                if extrapolation_distance > max_extrapolation:
+                    logger.warning(f"[FRAME0 DEBUG] {lane_name}: EXCESSIVE EXTRAPOLATION! "
+                                 f"y_max={y_max:.1f}px, h={h}px, extrapolation={extrapolation_distance:.1f}px > {max_extrapolation}px")
+                    # RELIABILITY: Use previous frame instead of rejecting
+                    previous_coeffs = self.previous_lanes[lane_idx]
+                    if previous_coeffs is not None and self.previous_lanes_confidence[lane_idx] > 0.3:
+                        logger.info(f"[RELIABILITY] {lane_name}: Using previous frame due to excessive extrapolation")
+                        lanes.append(previous_coeffs.copy())
+                        validation_failures[lane_name].append(f'excessive_extrapolation_{extrapolation_distance:.1f}px_used_previous')
+                        continue
+                    else:
+                        logger.warning(f"[RELIABILITY] {lane_name}: No previous frame, rejecting due to excessive extrapolation")
+                        lanes.append(None)
+                        validation_failures[lane_name].append(f'excessive_extrapolation_{extrapolation_distance:.1f}px')
+                        continue
+                elif extrapolation_distance > 100:  # Need to extrapolate >100px (warning threshold)
                     logger.warning(f"[FRAME0 DEBUG] {lane_name}: Large extrapolation needed! "
                                  f"y_max={y_max:.1f}px, h={h}px, extrapolation={extrapolation_distance:.1f}px")
+                
+                # RELAXED: Removed the "bottom 1/3" requirement - it was too strict
+                # The extrapolation check above is sufficient to catch cases where points don't reach bottom
+                # This allows detections on curves where points might be higher in the image
                 
                 # Fit polynomial with improved method for dashed lines and curves
                 # Use weighted fitting to emphasize near points (more accurate)
@@ -515,24 +1813,153 @@ class SimpleLaneDetector:
                 y = points[:, 1]
                 x = points[:, 0]
                 
-                # Weighted polynomial fitting: weight by y-position (closer to vehicle = higher weight)
-                # Points near vehicle (large y, bottom of image) are more accurate
-                # Use image height to normalize weights and avoid numerical issues
+                # IMPROVED: Edge-weighted polynomial fitting for better extrapolation
+                # Emphasize points at BOTH edges (top and bottom) to ensure good extrapolation
+                # This prevents polynomial from extrapolating poorly when points don't span full range
                 h_image = h  # Use image height for normalization
+                y_normalized = y / h_image  # Normalize y to [0, 1]
                 
-                # Weight by distance from top: weight = (y / h)^2
-                # This gives higher weight to points closer to vehicle (bottom of image)
-                # Normalizing by h keeps weights in [0, 1] range, avoiding numerical issues
-                weights = (y / h_image) ** 2
+                # Weight function: higher weight at edges (top and bottom), lower in middle
+                # This ensures polynomial fits well at both ends, enabling better extrapolation
+                # Formula: weight = 1 + 2 * min(y_norm, 1 - y_norm)
+                # This gives weight=3 at edges (y=0 or y=1) and weight=1 at middle (y=0.5)
+                edge_weights = 1.0 + 2.0 * np.minimum(y_normalized, 1.0 - y_normalized)
+                
+                # Also weight by distance from center of point distribution
+                # Points far from center (edges of distribution) are more important for extrapolation
+                y_center = np.mean(y)
+                y_std = np.std(y) if len(y) > 1 else 1.0
+                distance_weights = 1.0 + np.abs(y - y_center) / (y_std + 1.0)  # Higher weight for edge points
+                
+                # Combine both weighting strategies
+                weights = edge_weights * distance_weights
                 
                 # Use numpy's built-in weighted polyfit (numerically stable)
                 try:
                     coeffs = np.polyfit(y, x, deg=2, w=weights)
                     logger.debug(f"[POLY FIT] {lane_name}: Weighted fitting succeeded (using np.polyfit with weights)")
+                    
+                    # CRITICAL: If points don't span full range, validate and constrain polynomial
+                    # Check if polynomial extrapolates reasonably at ROI boundaries AND lookahead distance
+                    roi_y_start = int(h * 0.18)
+                    roi_y_end = int(h * 0.80)
+                    lookahead_y = int(h * 0.73)  # Where we actually USE the polynomial
+                    
+                    # Evaluate at top, lookahead, and bottom of ROI
+                    x_at_top = np.polyval(coeffs, roi_y_start)
+                    x_at_lookahead = np.polyval(coeffs, lookahead_y)
+                    x_at_bottom = np.polyval(coeffs, roi_y_end)
+                    
+                    # If extrapolation is extreme, use constrained fitting
+                    # Allow 10% margin for curves
+                    margin = w * 0.10
+                    needs_constraint = (x_at_top < -margin or x_at_top > w + margin) or \
+                                      (x_at_lookahead < -margin or x_at_lookahead > w + margin) or \
+                                      (x_at_bottom < -margin or x_at_bottom > w + margin)
+                    
+                    if needs_constraint and len(points) >= 3:
+                        # Use linear extrapolation from edge points instead of quadratic
+                        # This prevents extreme extrapolation when points don't span full range
+                        logger.info(f"[POLY FIT] {lane_name}: Polynomial extrapolates poorly "
+                                   f"(top: {x_at_top:.1f}px, lookahead: {x_at_lookahead:.1f}px, bottom: {x_at_bottom:.1f}px). "
+                                   f"Using constrained linear-quadratic blend.")
+                        
+                        # Fit linear to bottom points (more reliable for extrapolation)
+                        bottom_points = points[points[:, 1] >= np.median(points[:, 1])]
+                        if len(bottom_points) >= 2:
+                            linear_coeffs = np.polyfit(bottom_points[:, 1], bottom_points[:, 0], deg=1)
+                            
+                            # Blend: use quadratic in data range, linear for extrapolation
+                            # Evaluate both at key positions
+                            y_data_min, y_data_max = np.min(points[:, 1]), np.max(points[:, 1])
+                            
+                            # CRITICAL: ALWAYS constrain at lookahead distance (where we USE it)
+                            # This is the most important constraint - we MUST have valid polynomial at lookahead
+                            x_lookahead_linear = np.polyval(linear_coeffs, lookahead_y)
+                            x_lookahead_quad = np.polyval(coeffs, lookahead_y)
+                            x_lookahead_current = x_lookahead_quad
+                            
+                            # Blend: more weight to linear for extrapolation (more stable)
+                            x_lookahead_target = 0.7 * x_lookahead_linear + 0.3 * x_lookahead_quad
+                            # Clamp to reasonable bounds
+                            x_lookahead_target = np.clip(x_lookahead_target, -margin, w + margin)
+                            
+                            # ALWAYS adjust polynomial to match at lookahead (this is where we use it!)
+                            # Solve: a*y^2 + b*y + c = x_target
+                            # We adjust c to match (keeping a and b from weighted fit)
+                            coeffs[2] = x_lookahead_target - coeffs[0] * lookahead_y**2 - coeffs[1] * lookahead_y
+                            
+                            # Verify the constraint worked
+                            x_lookahead_after = np.polyval(coeffs, lookahead_y)
+                            logger.info(f"[POLY FIT] {lane_name}: Constrained at lookahead: {x_lookahead_current:.1f}px -> {x_lookahead_target:.1f}px (after: {x_lookahead_after:.1f}px)")
+                            
+                            # CRITICAL: Don't adjust top/bottom - they will be clamped during evaluation if needed
+                            # The lookahead constraint is the most important (where we USE the polynomial)
+                            # Top and bottom are only for visualization, so we can use _evaluate_polynomial_safe to clamp them
+                            logger.debug(f"[POLY FIT] {lane_name}: Lookahead constraint applied, top/bottom will use safe evaluation")
+                        
+                        logger.info(f"[POLY FIT] {lane_name}: Constrained polynomial: {coeffs}")
+                        
                 except Exception as e:
                     # Fallback to unweighted if weighted fitting fails
                     logger.warning(f"[POLY FIT] {lane_name}: Weighted fitting failed, using unweighted fallback: {type(e).__name__}: {e}")
                     coeffs = np.polyfit(y, x, deg=2)
+                
+                # NEW: Validate polynomial coefficients to catch extreme fits
+                # Extreme constant term (c) indicates polynomial is trying to fit points that don't form a smooth curve
+                # This can happen with sparse points, noisy detections, or points from upcoming curves
+                if len(coeffs) >= 3:
+                    a, b, c = coeffs[0], coeffs[1], coeffs[2]
+                    
+                    # Check if constant term is extreme (way outside image bounds)
+                    # For a 640px image, reasonable constant term should be roughly [-640, 1280]
+                    # Extreme values like |c| > 2000px indicate a bad fit
+                    max_reasonable_c = w * 3.0  # 3x image width is reasonable for perspective
+                    
+                    if abs(c) > max_reasonable_c:
+                        logger.warning(f"[POLY FIT] {lane_name}: EXTREME CONSTANT TERM detected! "
+                                     f"c={c:.1f}px (max reasonable: {max_reasonable_c:.1f}px). "
+                                     f"This suggests points don't form a smooth curve.")
+                        logger.warning(f"[POLY FIT] {lane_name}: Polynomial coefficients: a={a:.6f}, b={b:.6f}, c={c:.1f}")
+                        logger.warning(f"[POLY FIT] {lane_name}: Point stats: {len(points)} points, "
+                                     f"y_range=[{y_min:.1f}, {y_max:.1f}], x_range=[{x_min:.1f}, {x_max:.1f}]")
+                        
+                        # CRITICAL FIX: Check polynomial at lookahead distance (where we actually USE it)
+                        # Don't check at ROI boundaries - check where the polynomial is evaluated for control
+                        # Lookahead is typically 8m, which corresponds to ~y=350px for 480px image
+                        # This is more lenient for dashed lines which may have extreme constant terms
+                        # but are reasonable at the lookahead distance
+                        y_lookahead = int(h * 0.73)  # ~350px for 480px image (8m lookahead, ~73% from top)
+                        x_at_lookahead = a * y_lookahead * y_lookahead + b * y_lookahead + c
+                        
+                        logger.warning(f"[POLY FIT] {lane_name}: At lookahead distance (y={y_lookahead}px): "
+                                     f"x={x_at_lookahead:.1f}px")
+                        
+                        # Check if polynomial produces reasonable x values at lookahead distance
+                        # This is where we actually USE the polynomial for coordinate conversion
+                        # If it's reasonable here, accept the fit even if constant term is extreme
+                        max_reasonable_x = w * 2.5
+                        min_reasonable_x = -w * 1.5
+                        
+                        if (x_at_lookahead < min_reasonable_x or x_at_lookahead > max_reasonable_x):
+                            logger.warning(f"[POLY FIT] {lane_name}: Polynomial produces extreme x value "
+                                         f"at lookahead distance (x={x_at_lookahead:.1f}px, range: {min_reasonable_x:.0f} to {max_reasonable_x:.0f}px)")
+                            # RELIABILITY: Use previous frame instead of rejecting
+                            previous_coeffs = self.previous_lanes[lane_idx]
+                            if previous_coeffs is not None and self.previous_lanes_confidence[lane_idx] > 0.3:
+                                logger.info(f"[RELIABILITY] {lane_name}: Using previous frame due to extreme constant term")
+                                coeffs = previous_coeffs.copy()
+                                rejected_current_fit = True
+                                self.lanes_rejected_this_frame[lane_idx] = True
+                                # Continue with corrected coeffs
+                            else:
+                                logger.warning(f"[RELIABILITY] {lane_name}: No previous frame, rejecting due to extreme constant term")
+                                lanes.append(None)
+                                validation_failures[lane_name].append(f'extreme_constant_term_c_{c:.1f}px')
+                                continue
+                        else:
+                            logger.info(f"[POLY FIT] {lane_name}: Constant term is extreme (c={c:.1f}px) but polynomial is reasonable "
+                                      f"at lookahead distance (x={x_at_lookahead:.1f}px). Accepting fit.")
                 
                 # FIX #2: Temporal continuity - check for curvature sign flips and large deviations
                 # Use previous frame's fit as prior to prevent instability on curves
@@ -576,6 +2003,100 @@ class SimpleLaneDetector:
                 
                 logger.info(f"[FRAME0 DEBUG] {lane_name}: Fitted weighted polynomial coeffs={coeffs}")
                 
+                # PHASE 2: Polynomial Extrapolation Validation
+                # Check if polynomial extrapolates out of bounds at key positions
+                # This prevents poor polygon visualization and invalid detections
+                roi_y_start = int(h * 0.18)
+                lookahead_y = int(h * 0.73)
+                roi_y_end = int(h * 0.80)
+                
+                # Test polynomial at critical y-positions
+                # Use linear extrapolation for regions far from data points
+                test_y_positions = [
+                    roi_y_start,  # Top of ROI
+                    lookahead_y,  # Lookahead distance (where we use it)
+                    roi_y_end,    # Bottom of ROI
+                    y_min,        # Minimum y where we have points
+                    y_max,        # Maximum y where we have points
+                ]
+                
+                polynomial_valid = True
+                invalid_positions = []
+                for test_y in test_y_positions:
+                    # Use safe polynomial evaluation (linear extrapolation when far from data)
+                    test_x = self._evaluate_polynomial_safe(coeffs, test_y, points, w, h)
+                    
+                    # Allow some margin for curves (10% of image width on each side)
+                    margin = w * 0.10
+                    if test_x < -margin or test_x > w + margin:
+                        polynomial_valid = False
+                        invalid_positions.append((test_y, test_x))
+                
+                # Track if we rejected the current fit (to prevent storing rejected coefficients)
+                rejected_current_fit = False
+                
+                if not polynomial_valid:
+                    logger.warning(f"[POLY VALIDATION] {lane_name}: Polynomial extrapolates out of bounds!")
+                    for test_y, test_x in invalid_positions:
+                        logger.warning(f"[POLY VALIDATION] {lane_name}: At y={test_y}px: x={test_x:.1f}px (out of bounds)")
+                    
+                    # RELIABILITY FIX: Always produce a valid result, never reject
+                    # Strategy: Try previous frame first, then use clamped/adjusted polynomial
+                    previous_coeffs = self.previous_lanes[lane_idx]
+                    use_previous = (previous_coeffs is not None and 
+                                   self.previous_lanes_confidence[lane_idx] > 0.3)  # Lower threshold for reliability
+                    
+                    if use_previous:
+                        logger.info(f"[POLY VALIDATION] {lane_name}: Using previous frame's polynomial (current extrapolates poorly)")
+                        coeffs = previous_coeffs.copy()
+                        rejected_current_fit = True
+                        self.lanes_rejected_this_frame[lane_idx] = True
+                    else:
+                        # No previous frame or low confidence - fix the polynomial instead of rejecting
+                        logger.info(f"[POLY VALIDATION] {lane_name}: No reliable previous frame. Adjusting polynomial to stay in bounds.")
+                        
+                        # Strategy: Create a corrected polynomial that stays within bounds
+                        # Use the polynomial at valid positions, but clamp/adjust at invalid positions
+                        # Fit a new polynomial using only the valid evaluations
+                        valid_test_positions = []
+                        for test_y in test_y_positions:
+                            test_x = self._evaluate_polynomial_safe(coeffs, test_y, points, w, h)
+                            margin = w * 0.10
+                            # Clamp to valid range
+                            clamped_x = np.clip(test_x, -margin, w + margin)
+                            valid_test_positions.append((test_y, clamped_x))
+                        
+                        # If we have enough valid points, refit polynomial
+                        if len(valid_test_positions) >= 3:
+                            valid_y = np.array([p[0] for p in valid_test_positions])
+                            valid_x = np.array([p[1] for p in valid_test_positions])
+                            try:
+                                # Refit polynomial to clamped values
+                                corrected_coeffs = np.polyfit(valid_y, valid_x, deg=min(2, len(valid_test_positions) - 1))
+                                
+                                # Verify corrected polynomial is better
+                                all_valid = True
+                                for test_y in test_y_positions:
+                                    test_x = self._evaluate_polynomial_safe(corrected_coeffs, test_y, points, w, h)
+                                    margin = w * 0.10
+                                    if test_x < -margin or test_x > w + margin:
+                                        all_valid = False
+                                        break
+                                
+                                if all_valid:
+                                    logger.info(f"[POLY VALIDATION] {lane_name}: Corrected polynomial is valid")
+                                    coeffs = corrected_coeffs
+                                else:
+                                    logger.warning(f"[POLY VALIDATION] {lane_name}: Corrected polynomial still has issues, using original with clamping")
+                            except Exception as e:
+                                logger.warning(f"[POLY VALIDATION] {lane_name}: Failed to correct polynomial: {e}, using original with clamping")
+                        else:
+                            logger.warning(f"[POLY VALIDATION] {lane_name}: Not enough valid positions, using original with clamping")
+                        
+                        # Mark that we're using a corrected/adjusted polynomial
+                        # The polynomial will be clamped later in the code, but we accept it
+                        rejected_current_fit = False
+                
                 # Validate polynomial curvature (2nd degree coefficient)
                 # For a straight road with perspective, curvature should be reasonable
                 # Extreme curvature might indicate overfitting or incorrect detection
@@ -605,16 +2126,16 @@ class SimpleLaneDetector:
                     # Points reach close to bottom, safe to evaluate at h
                     evaluation_y = h
                 
-                # Evaluate at chosen y position
-                lane_x_at_bottom = np.polyval(coeffs, evaluation_y)
+                # Evaluate at chosen y position (use safe evaluation with linear extrapolation)
+                lane_x_at_bottom = self._evaluate_polynomial_safe(coeffs, evaluation_y, points, w, h)
                 
                 # FRAME 0 DEBUG: Log evaluation
                 logger.info(f"[FRAME0 DEBUG] {lane_name}: Evaluating at y={evaluation_y:.1f}px, "
                            f"result={lane_x_at_bottom:.1f}px")
                 
                 # Also evaluate at y_min and y_max (where we have actual points)
-                lane_x_at_y_min = np.polyval(coeffs, y_min)
-                lane_x_at_y_max = np.polyval(coeffs, y_max)
+                lane_x_at_y_min = self._evaluate_polynomial_safe(coeffs, y_min, points, w, h)
+                lane_x_at_y_max = self._evaluate_polynomial_safe(coeffs, y_max, points, w, h)
                 logger.info(f"[FRAME0 DEBUG] {lane_name}: At y_min={y_min:.1f}px: {lane_x_at_y_min:.1f}px, "
                            f"at y_max={y_max:.1f}px: {lane_x_at_y_max:.1f}px")
                 
@@ -666,12 +2187,24 @@ class SimpleLaneDetector:
                                 logger.info(f"[POLY DEBUG] {lane_name}: Using linear extrapolation instead: "
                                           f"{linear_extrapolation:.1f}px (was {lane_x_at_bottom:.1f}px)")
                                 lane_x_at_bottom = linear_extrapolation
-                        # If still invalid, reject
+                        # If still invalid, use previous frame
                         if abs(lane_x_at_bottom - center_x) > w * 0.9:
-                            logger.warning(f"[POLY DEBUG] {lane_name}: Still invalid after clamping/linear extrapolation. Rejecting.")
-                            lanes.append(None)
-                            validation_failures[lane_name].append(f'invalid_evaluation_{lane_x_at_bottom:.1f}px')
-                            continue
+                            logger.warning(f"[POLY DEBUG] {lane_name}: Still invalid after clamping/linear extrapolation.")
+                            # RELIABILITY: Use previous frame instead of rejecting
+                            previous_coeffs = self.previous_lanes[lane_idx]
+                            if previous_coeffs is not None and self.previous_lanes_confidence[lane_idx] > 0.3:
+                                logger.info(f"[RELIABILITY] {lane_name}: Using previous frame due to invalid evaluation")
+                                coeffs = previous_coeffs.copy()
+                                rejected_current_fit = True
+                                self.lanes_rejected_this_frame[lane_idx] = True
+                                # Recalculate lane_x_at_bottom with previous coeffs (use safe evaluation)
+                                lane_x_at_bottom = self._evaluate_polynomial_safe(coeffs, evaluation_y, points, w, h)
+                                lane_x_at_bottom = np.clip(lane_x_at_bottom, 0, w)
+                            else:
+                                logger.warning(f"[RELIABILITY] {lane_name}: No previous frame, rejecting due to invalid evaluation")
+                                lanes.append(None)
+                                validation_failures[lane_name].append(f'invalid_evaluation_{lane_x_at_bottom:.1f}px')
+                                continue
                 
                 # Expected lane positions: left lane should be left of center, right lane right of center
                 # RELAXED: Increased threshold to 90% to allow for car offset, wide lanes, and coordinate issues
@@ -684,16 +2217,35 @@ class SimpleLaneDetector:
                 if distance_from_center > max_reasonable_distance:
                     # Lane is too far from center - likely a road edge or false detection
                     # Skip this lane
-                    logger.warning(f"[POLY DEBUG] {lane_name}: Rejected - too_far_from_center "
+                    logger.warning(f"[POLY DEBUG] {lane_name}: Too far from center "
                                  f"({distance_from_center:.1f}px > {max_reasonable_distance:.1f}px)")
-                    lanes.append(None)
-                    validation_failures[lane_name].append(f'too_far_from_center_{distance_from_center:.1f}px')
-                    continue
+                    # RELIABILITY: Use previous frame instead of rejecting
+                    previous_coeffs = self.previous_lanes[lane_idx]
+                    if previous_coeffs is not None and self.previous_lanes_confidence[lane_idx] > 0.3:
+                        logger.info(f"[RELIABILITY] {lane_name}: Using previous frame due to too far from center")
+                        coeffs = previous_coeffs.copy()
+                        rejected_current_fit = True
+                        self.lanes_rejected_this_frame[lane_idx] = True
+                        # Continue with corrected coeffs
+                    else:
+                        logger.warning(f"[RELIABILITY] {lane_name}: No previous frame, rejecting due to too far from center")
+                        lanes.append(None)
+                        validation_failures[lane_name].append(f'too_far_from_center_{distance_from_center:.1f}px')
+                        continue
                 
                 lanes.append(coeffs)
             except Exception as e:
-                lanes.append(None)
-                validation_failures[lane_name].append(f'polyfit_failed_{str(e)}')
+                logger.warning(f"[POLY FIT] {lane_name}: Polynomial fitting failed: {e}")
+                # RELIABILITY: Use previous frame instead of rejecting
+                previous_coeffs = self.previous_lanes[lane_idx]
+                if previous_coeffs is not None and self.previous_lanes_confidence[lane_idx] > 0.3:
+                    logger.info(f"[RELIABILITY] {lane_name}: Using previous frame due to polyfit failure")
+                    lanes.append(previous_coeffs.copy())
+                    validation_failures[lane_name].append(f'polyfit_failed_{str(e)}_used_previous')
+                else:
+                    logger.warning(f"[RELIABILITY] {lane_name}: No previous frame, rejecting due to polyfit failure")
+                    lanes.append(None)
+                    validation_failures[lane_name].append(f'polyfit_failed_{str(e)}')
         
         # ADDITIONAL VALIDATION: Check if detected lane width is reasonable
         # If both lanes detected, check their separation
@@ -870,7 +2422,8 @@ class SimpleLaneDetector:
                 'right_lines_count': len(right_lines),
                 'skipped_short': skipped_short,
                 'skipped_center': skipped_center,
-                'validation_failures': validation_failures
+                'validation_failures': validation_failures,
+                'fit_points': fit_points  # Points used for polynomial fitting: {'left': np.array([[x, y], ...]), 'right': ...}
             }
             return lanes, debug_info
         return lanes
@@ -929,7 +2482,8 @@ class SimpleLaneDetector:
                     pass  # Skip if drawing fails
         
         # Draw final polynomial fits (green for left, cyan for right)
-        y_points = np.linspace(h // 3, h, 100).astype(np.float32)
+        # FIXED: Match ROI start position (18% from top) for consistency
+        y_points = np.linspace(int(h * 0.18), h, 100).astype(np.float32)
         
         if lane_coeffs is not None and len(lane_coeffs) > 0 and lane_coeffs[0] is not None:
             try:

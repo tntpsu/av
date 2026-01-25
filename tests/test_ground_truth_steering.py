@@ -40,6 +40,10 @@ class TestGroundTruthSteering:
         self.follower.lookahead_speed_factor = 1.5
         self.follower.prev_lane_center = 0.0
         self.follower.prev_steering_time = None
+        self.follower.lateral_correction_gain = 0.2  # Required for steering calculation
+        self.follower.max_steer_angle_deg = 30.0  # Required for exact steering calculation
+        self.follower.wheelbase = 2.5  # Required for exact steering calculation
+        self.follower.use_exact_steering = True  # Use exact calculation
     
     def test_steering_sign_when_car_left_of_center(self):
         """

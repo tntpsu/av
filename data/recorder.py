@@ -7,6 +7,8 @@ import h5py
 import numpy as np
 import json
 import time
+import threading
+import queue
 import logging
 from pathlib import Path
 from typing import Optional, Dict, Any, List
@@ -14,6 +16,8 @@ from datetime import datetime
 import cv2
 
 logger = logging.getLogger(__name__)
+
+UNITY_TIME_GAP_WARN_SECONDS = 0.2
 
 from .formats.data_format import (
     CameraFrame, VehicleState, ControlCommand,
@@ -25,7 +29,7 @@ class DataRecorder:
     """Records AV stack data to HDF5 format."""
     
     def __init__(self, output_dir: str, recording_name: Optional[str] = None,
-                 recording_type: Optional[str] = None):
+                 recording_type: Optional[str] = None, debug_timing: bool = False):
         """
         Initialize data recorder.
         
@@ -66,7 +70,23 @@ class DataRecorder:
         
         # Buffer for frames
         self.frame_buffer: List[RecordingFrame] = []
+        self.frame_buffer_lock = threading.Lock()
+        self.flush_queue: "queue.Queue[List[RecordingFrame]]" = queue.Queue()
+        self.flush_stop_event = threading.Event()
         self.frame_count = 0
+        self.last_unity_time: Optional[float] = None
+        self.last_unity_frame_count: Optional[int] = None
+        self.last_record_wall_time: Optional[float] = None
+        self.last_record_frame_id: Optional[int] = None
+        self.debug_timing = debug_timing
+        self.flush_every = 30
+        self.flush_queue_warn_threshold = 5
+        self.flush_thread = threading.Thread(
+            target=self._flush_worker,
+            name="DataRecorderFlushWorker",
+            daemon=True,
+        )
+        self.flush_thread.start()
         
         # Metadata
         self.metadata = {
@@ -74,6 +94,10 @@ class DataRecorder:
             "recording_name": recording_name,
             "recording_type": recording_type
         }
+
+    def _debug_print(self, message: str):
+        if self.debug_timing:
+            print(message)
     
     def _create_datasets(self):
         """Create HDF5 datasets for data storage."""
@@ -86,7 +110,10 @@ class DataRecorder:
             shape=(0, 480, 640, 3),
             maxshape=(None, 480, 640, 3),
             dtype=np.uint8,
-            compression="gzip"
+            compression="gzip",
+            compression_opts=4,
+            shuffle=True,
+            chunks=(30, 480, 640, 3)
         )
         self.h5_file.create_dataset(
             "camera/timestamps",
@@ -156,9 +183,59 @@ class DataRecorder:
             maxshape=max_shape,
             dtype=np.float32
         )
+        self.h5_file.create_dataset(
+            "vehicle/unity_time",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float64
+        )
+        self.h5_file.create_dataset(
+            "vehicle/unity_frame_count",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int32
+        )
+        self.h5_file.create_dataset(
+            "vehicle/unity_delta_time",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "vehicle/unity_smooth_delta_time",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "vehicle/unity_unscaled_delta_time",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "vehicle/unity_time_scale",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
         # NEW: Camera calibration - actual screen y pixel where 8m appears
         self.h5_file.create_dataset(
             "vehicle/camera_8m_screen_y",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        # NEW: Camera calibration - screen y for ground truth lookahead
+        self.h5_file.create_dataset(
+            "vehicle/camera_lookahead_screen_y",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        # NEW: Ground truth lookahead distance used for calibration
+        self.h5_file.create_dataset(
+            "vehicle/ground_truth_lookahead_distance",
             shape=(0,),
             maxshape=max_shape,
             dtype=np.float32
@@ -460,6 +537,30 @@ class DataRecorder:
             maxshape=max_shape,
             dtype=np.float32
         )
+        self.h5_file.create_dataset(
+            "control/is_straight",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int8
+        )
+        self.h5_file.create_dataset(
+            "control/straight_oscillation_rate",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/tuned_deadband",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/tuned_error_smoothing_alpha",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
         # NEW: Control stale data tracking
         self.h5_file.create_dataset(
             "control/using_stale_perception",
@@ -536,6 +637,64 @@ class DataRecorder:
             shape=(0,),
             maxshape=max_shape,
             dtype=np.float32
+        )
+        # NEW: Perception health monitoring
+        self.h5_file.create_dataset(
+            "perception/consecutive_bad_detection_frames",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int32
+        )
+        self.h5_file.create_dataset(
+            "perception/perception_health_score",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "perception/perception_health_status",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=h5py.string_dtype(encoding='utf-8', length=20)
+        )
+        # NEW: Diagnostic fields for perception instability
+        self.h5_file.create_dataset(
+            "perception/actual_detected_left_lane_x",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "perception/actual_detected_right_lane_x",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "perception/instability_width_change",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "perception/instability_center_shift",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        # NEW: Points used for polynomial fitting (for debug visualization)
+        # Store as JSON strings since HDF5 doesn't handle variable-length arrays well
+        self.h5_file.create_dataset(
+            "perception/fit_points_left",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=h5py.string_dtype(encoding='utf-8', length=10000)  # Max 10KB per frame
+        )
+        self.h5_file.create_dataset(
+            "perception/fit_points_right",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=h5py.string_dtype(encoding='utf-8', length=10000)
         )
         
         # Ground truth lane positions (from Unity)
@@ -654,12 +813,45 @@ class DataRecorder:
         Args:
             frame: RecordingFrame containing all data
         """
-        self.frame_buffer.append(frame)
-        self.frame_count += 1
-        
-        # Flush buffer periodically
-        if len(self.frame_buffer) >= 100:
-            self.flush()
+        now = time.time()
+        if self.last_record_wall_time is not None:
+            gap = now - self.last_record_wall_time
+            if gap > UNITY_TIME_GAP_WARN_SECONDS:
+                unity_time = None
+                unity_frame = None
+                if frame.vehicle_state is not None:
+                    unity_time = getattr(frame.vehicle_state, "unity_time", None)
+                    unity_frame = getattr(frame.vehicle_state, "unity_frame_count", None)
+                logger.warning(
+                    "[RECORDER_ARRIVAL_GAP] gap=%.3fs frame_id=%s prev_frame_id=%s "
+                    "unity_frame=%s unity_time=%s types=camera:%s vehicle:%s control:%s",
+                    gap,
+                    frame.frame_id,
+                    self.last_record_frame_id,
+                    unity_frame if unity_frame is not None else "n/a",
+                    f"{unity_time:.3f}" if unity_time is not None else "n/a",
+                    frame.camera_frame is not None,
+                    frame.vehicle_state is not None,
+                    frame.control_command is not None,
+                )
+                self._debug_print(
+                    "[RECORDER_ARRIVAL_GAP] "
+                    f"gap={gap:.3f}s frame_id={frame.frame_id} "
+                    f"unity_frame={unity_frame if unity_frame is not None else 'n/a'}"
+                )
+        self.last_record_wall_time = now
+        self.last_record_frame_id = frame.frame_id
+
+        with self.frame_buffer_lock:
+            self.frame_buffer.append(frame)
+            self.frame_count += 1
+
+            # Flush buffer periodically (async)
+            if len(self.frame_buffer) >= self.flush_every:
+                frames = self.frame_buffer
+                self.frame_buffer = []
+                self._debug_print(f"[RECORDER_FLUSH_START] buffer={len(frames)}")
+                self.flush_queue.put(frames)
     
     def record_camera_frame(self, camera_frame: CameraFrame):
         """Record camera frame."""
@@ -690,9 +882,37 @@ class DataRecorder:
     
     def flush(self):
         """Flush buffered frames to disk."""
-        if not self.frame_buffer:
+        with self.frame_buffer_lock:
+            if not self.frame_buffer:
+                return
+            frames = self.frame_buffer
+            self.frame_buffer = []
+        self._debug_print(f"[RECORDER_FLUSH_START] buffer={len(frames)}")
+        self.flush_queue.put(frames)
+    
+    def _flush_worker(self):
+        while not self.flush_stop_event.is_set() or not self.flush_queue.empty():
+            try:
+                frames = self.flush_queue.get(timeout=0.1)
+            except queue.Empty:
+                continue
+            if self.flush_queue.qsize() > self.flush_queue_warn_threshold:
+                logger.warning(
+                    "[RECORDER_QUEUE_BACKLOG] size=%d threshold=%d",
+                    self.flush_queue.qsize(),
+                    self.flush_queue_warn_threshold,
+                )
+            try:
+                self._flush_frames(frames)
+            finally:
+                self.flush_queue.task_done()
+
+    def _flush_frames(self, frames: List[RecordingFrame]):
+        if not frames:
             return
-        
+
+        flush_start = time.time()
+
         # Group frames by type and write to HDF5
         camera_frames = []
         vehicle_states = []
@@ -700,8 +920,8 @@ class DataRecorder:
         perception_outputs = []
         trajectory_outputs = []
         unity_feedbacks = []
-        
-        for frame in self.frame_buffer:
+
+        for frame in frames:
             if frame.camera_frame:
                 camera_frames.append(frame)
             if frame.vehicle_state:
@@ -714,119 +934,189 @@ class DataRecorder:
                 trajectory_outputs.append(frame)
             if frame.unity_feedback:
                 unity_feedbacks.append(frame)
-        
+
         # Debug: Log what we're collecting
-        if len(self.frame_buffer) > 0:
-            sample_frame = self.frame_buffer[0]
-            logger.info(f"[RECORDER] Flushing {len(self.frame_buffer)} frames: "
-                       f"camera={len(camera_frames)}, vehicle={len(vehicle_states)}, "
-                       f"control={len(control_commands)}, perception={len(perception_outputs)}, "
-                       f"trajectory={len(trajectory_outputs)}, unity={len(unity_feedbacks)}")
-            if len(vehicle_states) == 0 and len(self.frame_buffer) > 0:
-                logger.error(f"[RECORDER] ❌ CRITICAL: No vehicle states! Sample frame has vehicle_state={sample_frame.vehicle_state is not None}")
-                if sample_frame.vehicle_state is None:
-                    logger.error(f"[RECORDER] ❌ Sample frame vehicle_state is None - frames are being collected without vehicle data!")
-                    logger.error(f"[RECORDER] This will cause ground truth and camera data to not be recorded!")
-            if len(perception_outputs) == 0 and len(self.frame_buffer) > 0:
-                logger.warning(f"[RECORDER] ⚠️  No perception outputs! Sample frame has perception_output={sample_frame.perception_output is not None}")
-                if sample_frame.perception_output is None:
-                    logger.warning(f"[RECORDER] ⚠️  Sample frame perception_output is None - frames are being collected without perception data!")
-            if len(control_commands) == 0 and len(self.frame_buffer) > 0:
-                logger.warning(f"[RECORDER] ⚠️  No control commands! Sample frame has control_command={sample_frame.control_command is not None}")
-                if sample_frame.control_command is None:
-                    logger.warning(f"[RECORDER] ⚠️  Sample frame control_command is None - frames are being collected without control data!")
-            if len(trajectory_outputs) == 0 and len(self.frame_buffer) > 0:
-                logger.warning(f"[RECORDER] ⚠️  No trajectory outputs! Sample frame has trajectory_output={sample_frame.trajectory_output is not None}")
-                if sample_frame.trajectory_output is None:
-                    logger.warning(f"[RECORDER] ⚠️  Sample frame trajectory_output is None - frames are being collected without trajectory data!")
-        
+        sample_frame = frames[0]
+        logger.info(f"[RECORDER] Flushing {len(frames)} frames: "
+                   f"camera={len(camera_frames)}, vehicle={len(vehicle_states)}, "
+                   f"control={len(control_commands)}, perception={len(perception_outputs)}, "
+                   f"trajectory={len(trajectory_outputs)}, unity={len(unity_feedbacks)}")
+        if len(vehicle_states) == 0:
+            logger.error(f"[RECORDER] ❌ CRITICAL: No vehicle states! Sample frame has vehicle_state={sample_frame.vehicle_state is not None}")
+            if sample_frame.vehicle_state is None:
+                logger.error(f"[RECORDER] ❌ Sample frame vehicle_state is None - frames are being collected without vehicle data!")
+                logger.error(f"[RECORDER] This will cause ground truth and camera data to not be recorded!")
+        if len(perception_outputs) == 0:
+            logger.warning(f"[RECORDER] ⚠️  No perception outputs! Sample frame has perception_output={sample_frame.perception_output is not None}")
+            if sample_frame.perception_output is None:
+                logger.warning(f"[RECORDER] ⚠️  Sample frame perception_output is None - frames are being collected without perception data!")
+        if len(control_commands) == 0:
+            logger.warning(f"[RECORDER] ⚠️  No control commands! Sample frame has control_command={sample_frame.control_command is not None}")
+            if sample_frame.control_command is None:
+                logger.warning(f"[RECORDER] ⚠️  Sample frame control_command is None - frames are being collected without control data!")
+        if len(trajectory_outputs) == 0:
+            logger.warning(f"[RECORDER] ⚠️  No trajectory outputs! Sample frame has trajectory_output={sample_frame.trajectory_output is not None}")
+            if sample_frame.trajectory_output is None:
+                logger.warning(f"[RECORDER] ⚠️  Sample frame trajectory_output is None - frames are being collected without trajectory data!")
+
         # Write camera frames
         if camera_frames:
             try:
+                section_start = time.time()
                 self._write_camera_frames(camera_frames)
+                self._debug_print(
+                    f"[RECORDER_WRITE_CAMERA] duration={time.time() - section_start:.3f}s "
+                    f"count={len(camera_frames)}"
+                )
             except Exception as e:
                 logger.error(f"Error writing camera frames: {e}", exc_info=True)
-        
+
         # Write vehicle states
         if vehicle_states:
             try:
+                section_start = time.time()
                 self._write_vehicle_states(vehicle_states)
+                self._debug_print(
+                    f"[RECORDER_WRITE_VEHICLE] duration={time.time() - section_start:.3f}s "
+                    f"count={len(vehicle_states)}"
+                )
             except Exception as e:
                 logger.error(f"Error writing vehicle states: {e}", exc_info=True)
         else:
-            # CRITICAL: Log why vehicle states are empty
-            if len(self.frame_buffer) > 0:
-                sample_frame = self.frame_buffer[0]
-                logger.error(f"[RECORDER] ❌ No vehicle states to write! "
-                           f"Total frames: {len(self.frame_buffer)}, "
-                           f"Sample frame vehicle_state is None: {sample_frame.vehicle_state is None}")
-                if sample_frame.vehicle_state is None:
-                    logger.error(f"[RECORDER] ❌ CRITICAL: vehicle_state is None in RecordingFrame! "
-                               f"This means VehicleState creation failed or was skipped.")
-        
+            logger.error(f"[RECORDER] ❌ No vehicle states to write! "
+                       f"Total frames: {len(frames)}, "
+                       f"Sample frame vehicle_state is None: {sample_frame.vehicle_state is None}")
+            if sample_frame.vehicle_state is None:
+                logger.error(f"[RECORDER] ❌ CRITICAL: vehicle_state is None in RecordingFrame! "
+                           f"This means VehicleState creation failed or was skipped.")
+
         # Write control commands
         if control_commands:
             try:
+                section_start = time.time()
                 self._write_control_commands(control_commands)
+                self._debug_print(
+                    f"[RECORDER_WRITE_CONTROL] duration={time.time() - section_start:.3f}s "
+                    f"count={len(control_commands)}"
+                )
             except Exception as e:
                 logger.error(f"Error writing control commands: {e}", exc_info=True)
-        
+
         # Write perception outputs
         if perception_outputs:
             try:
+                section_start = time.time()
                 self._write_perception_outputs(perception_outputs)
+                self._debug_print(
+                    f"[RECORDER_WRITE_PERCEPTION] duration={time.time() - section_start:.3f}s "
+                    f"count={len(perception_outputs)}"
+                )
             except Exception as e:
                 logger.error(f"Error writing perception outputs: {e}", exc_info=True)
-        
+
         # Write trajectory outputs
         if trajectory_outputs:
             try:
+                section_start = time.time()
                 self._write_trajectory_outputs(trajectory_outputs)
+                self._debug_print(
+                    f"[RECORDER_WRITE_TRAJECTORY] duration={time.time() - section_start:.3f}s "
+                    f"count={len(trajectory_outputs)}"
+                )
             except Exception as e:
                 logger.error(f"Error writing trajectory outputs: {e}", exc_info=True)
-        
+
         # Write Unity feedback
         if unity_feedbacks:
             try:
+                section_start = time.time()
                 self._write_unity_feedback(unity_feedbacks)
+                self._debug_print(
+                    f"[RECORDER_WRITE_UNITY] duration={time.time() - section_start:.3f}s "
+                    f"count={len(unity_feedbacks)}"
+                )
             except Exception as e:
                 logger.error(f"Error writing Unity feedback: {e}", exc_info=True)
-        
-        self.frame_buffer.clear()
+
+        flush_start_time = time.time()
         self.h5_file.flush()
+        self._debug_print(f"[RECORDER_H5_FLUSH] duration={time.time() - flush_start_time:.3f}s")
+
+        flush_duration = time.time() - flush_start
+        if flush_duration > UNITY_TIME_GAP_WARN_SECONDS:
+            logger.warning("[RECORDER_FLUSH_SLOW] duration=%.3fs", flush_duration)
+            self._debug_print(f"[RECORDER_FLUSH_SLOW] duration={flush_duration:.3f}s")
+        else:
+            self._debug_print(f"[RECORDER_FLUSH_DONE] duration={flush_duration:.3f}s")
     
     def _write_camera_frames(self, frames: List[RecordingFrame]):
         """Write camera frames to HDF5."""
+        section_start = time.time()
         images = []
         timestamps = []
         frame_ids = []
+        resized_count = 0
         
         for frame in frames:
             img = frame.camera_frame.image
             # Resize if needed
             if img.shape[:2] != (480, 640):
+                resize_start = time.time()
                 img = cv2.resize(img, (640, 480))
+                resized_count += 1
+                resize_duration = time.time() - resize_start
+                if resize_duration > UNITY_TIME_GAP_WARN_SECONDS:
+                    self._debug_print("[RECORDER_CAMERA_RESIZE_SLOW] duration=%.3fs" % resize_duration)
             images.append(img)
             timestamps.append(frame.camera_frame.timestamp)
             frame_ids.append(frame.camera_frame.frame_id)
+
+        self._debug_print(
+            f"[RECORDER_CAMERA_PREP] duration={time.time() - section_start:.3f}s "
+            f"resized={resized_count}"
+        )
+
+        if len(timestamps) > 1:
+            diffs = np.diff(np.array(timestamps, dtype=np.float64))
+            gap_indices = np.where(diffs > UNITY_TIME_GAP_WARN_SECONDS)[0]
+            if gap_indices.size > 0:
+                first_idx = int(gap_indices[0])
+                logger.warning(
+                    "[CAMERA_TIMESTAMP_GAP_RECORDER] gaps=%d first_gap=%.3fs frame_id=%s->%s",
+                    int(gap_indices.size),
+                    float(diffs[first_idx]),
+                    frame_ids[first_idx],
+                    frame_ids[first_idx + 1],
+                )
         
         if images:
+            convert_start = time.time()
             images = np.array(images)
             timestamps = np.array(timestamps)
             frame_ids = np.array(frame_ids)
+            self._debug_print(f"[RECORDER_CAMERA_CONVERT] duration={time.time() - convert_start:.3f}s")
             
             # Resize datasets if needed
+            resize_start = time.time()
             current_size = self.h5_file["camera/images"].shape[0]
             new_size = current_size + len(images)
             
             self.h5_file["camera/images"].resize((new_size, 480, 640, 3))
             self.h5_file["camera/timestamps"].resize((new_size,))
             self.h5_file["camera/frame_ids"].resize((new_size,))
+            self._debug_print(f"[RECORDER_CAMERA_RESIZE_DS] duration={time.time() - resize_start:.3f}s")
             
             # Write data
+            write_start = time.time()
+            total_bytes = images.nbytes + timestamps.nbytes + frame_ids.nbytes
+            self._debug_print(
+                f"[RECORDER_CAMERA_WRITE_SIZE] bytes={total_bytes} current_size={current_size} "
+                f"new_size={new_size}"
+            )
             self.h5_file["camera/images"][current_size:] = images
             self.h5_file["camera/timestamps"][current_size:] = timestamps
             self.h5_file["camera/frame_ids"][current_size:] = frame_ids
+            self._debug_print(f"[RECORDER_CAMERA_WRITE] duration={time.time() - write_start:.3f}s")
     
     def _write_vehicle_states(self, frames: List[RecordingFrame]):
         """Write vehicle states to HDF5."""
@@ -839,6 +1129,12 @@ class DataRecorder:
         motor_torques = []
         brake_torques = []
         timestamps = []
+        unity_times = []
+        unity_frame_counts = []
+        unity_delta_times = []
+        unity_smooth_delta_times = []
+        unity_unscaled_delta_times = []
+        unity_time_scales = []
         
         # Ground truth data
         gt_left_lane_line_x = []
@@ -847,6 +1143,8 @@ class DataRecorder:
         gt_path_curvature = []
         gt_desired_heading = []
         camera_8m_screen_y = []  # NEW: Camera calibration data
+        camera_lookahead_screen_y = []  # NEW: Camera lookahead calibration data
+        ground_truth_lookahead_distance = []  # NEW: Lookahead distance used for ground truth
         camera_field_of_view = []  # NEW: Camera FOV data
         camera_horizontal_fov = []  # NEW: Camera horizontal FOV data
         camera_pos_x = []  # NEW: Camera position data
@@ -866,6 +1164,26 @@ class DataRecorder:
         
         for frame in frames:
             vs = frame.vehicle_state
+            unity_time = getattr(vs, 'unity_time', 0.0)
+            unity_frame_count = getattr(vs, 'unity_frame_count', 0)
+            if unity_time and self.last_unity_time:
+                unity_time_gap = unity_time - self.last_unity_time
+                frame_gap = unity_frame_count - (self.last_unity_frame_count or 0)
+                if unity_time_gap > UNITY_TIME_GAP_WARN_SECONDS:
+                    logger.warning(
+                        "[RECORDER_TIME_GAP] unity_time_gap=%.3fs frame_gap=%s unity_frame=%s",
+                        unity_time_gap,
+                        frame_gap,
+                        unity_frame_count
+                    )
+                    print(
+                        "[RECORDER_TIME_GAP] "
+                        f"unity_time_gap={unity_time_gap:.3f}s frame_gap={frame_gap} "
+                        f"unity_frame={unity_frame_count}"
+                    )
+            if unity_time:
+                self.last_unity_time = unity_time
+                self.last_unity_frame_count = unity_frame_count
             positions.append(vs.position)
             rotations.append(vs.rotation)
             velocities.append(vs.velocity)
@@ -875,6 +1193,12 @@ class DataRecorder:
             motor_torques.append(vs.motor_torque)
             brake_torques.append(vs.brake_torque)
             timestamps.append(vs.timestamp)
+            unity_times.append(unity_time)
+            unity_frame_counts.append(unity_frame_count)
+            unity_delta_times.append(getattr(vs, 'unity_delta_time', 0.0))
+            unity_smooth_delta_times.append(getattr(vs, 'unity_smooth_delta_time', 0.0))
+            unity_unscaled_delta_times.append(getattr(vs, 'unity_unscaled_delta_time', 0.0))
+            unity_time_scales.append(getattr(vs, 'unity_time_scale', 1.0))
             
             # Extract ground truth if available (from vehicle state)
             # CRITICAL: Check for new names first, then old names for backward compatibility
@@ -905,6 +1229,8 @@ class DataRecorder:
             # Extract camera calibration data
             cam_value = getattr(vs, 'camera_8m_screen_y', -1.0)
             camera_8m_screen_y.append(cam_value)
+            camera_lookahead_screen_y.append(getattr(vs, 'camera_lookahead_screen_y', -1.0))
+            ground_truth_lookahead_distance.append(getattr(vs, 'ground_truth_lookahead_distance', 8.0))
             
             # NEW: Extract camera FOV and position data
             camera_field_of_view.append(getattr(vs, 'camera_field_of_view', -1.0))
@@ -934,9 +1260,17 @@ class DataRecorder:
             # Resize all vehicle datasets
             for key in ["timestamps", "position", "rotation", "velocity", 
                        "angular_velocity", "speed", "steering_angle", 
-                       "motor_torque", "brake_torque", "camera_8m_screen_y"]:
+                       "motor_torque", "brake_torque", "camera_8m_screen_y",
+                       "camera_lookahead_screen_y", "ground_truth_lookahead_distance",
+                       "unity_time", "unity_frame_count", "unity_delta_time",
+                       "unity_smooth_delta_time", "unity_unscaled_delta_time",
+                       "unity_time_scale"]:
                 if key == "timestamps" or key in ["speed", "steering_angle", 
-                                                  "motor_torque", "brake_torque", "camera_8m_screen_y"]:
+                                                 "motor_torque", "brake_torque", "camera_8m_screen_y",
+                                                 "camera_lookahead_screen_y", "ground_truth_lookahead_distance",
+                                                 "unity_time", "unity_frame_count", "unity_delta_time",
+                                                 "unity_smooth_delta_time", "unity_unscaled_delta_time",
+                                                 "unity_time_scale"]:
                     self.h5_file[f"vehicle/{key}"].resize((new_size,))
                 else:
                     dim = 3 if key != "rotation" else 4
@@ -952,6 +1286,12 @@ class DataRecorder:
             self.h5_file["vehicle/steering_angle"][current_size:] = steering_angles
             self.h5_file["vehicle/motor_torque"][current_size:] = motor_torques
             self.h5_file["vehicle/brake_torque"][current_size:] = brake_torques
+            self.h5_file["vehicle/unity_time"][current_size:] = np.array(unity_times, dtype=np.float64)
+            self.h5_file["vehicle/unity_frame_count"][current_size:] = np.array(unity_frame_counts, dtype=np.int32)
+            self.h5_file["vehicle/unity_delta_time"][current_size:] = np.array(unity_delta_times, dtype=np.float32)
+            self.h5_file["vehicle/unity_smooth_delta_time"][current_size:] = np.array(unity_smooth_delta_times, dtype=np.float32)
+            self.h5_file["vehicle/unity_unscaled_delta_time"][current_size:] = np.array(unity_unscaled_delta_times, dtype=np.float32)
+            self.h5_file["vehicle/unity_time_scale"][current_size:] = np.array(unity_time_scales, dtype=np.float32)
             
             # Write ground truth data
             # CRITICAL: Wrap in try-except to prevent errors from blocking camera_8m_screen_y write
@@ -994,9 +1334,13 @@ class DataRecorder:
                 if len(camera_8m_screen_y) > 0:
                     # Convert to numpy array to ensure correct shape
                     camera_8m_screen_y_array = np.array(camera_8m_screen_y, dtype=np.float32)
+                    camera_lookahead_screen_y_array = np.array(camera_lookahead_screen_y, dtype=np.float32)
+                    ground_truth_lookahead_distance_array = np.array(ground_truth_lookahead_distance, dtype=np.float32)
                     # CRITICAL: Ensure the array has the correct shape (should be 1D with length matching positions)
                     if camera_8m_screen_y_array.shape[0] == len(positions):
                         self.h5_file["vehicle/camera_8m_screen_y"][current_size:] = camera_8m_screen_y_array
+                        self.h5_file["vehicle/camera_lookahead_screen_y"][current_size:] = camera_lookahead_screen_y_array
+                        self.h5_file["vehicle/ground_truth_lookahead_distance"][current_size:] = ground_truth_lookahead_distance_array
                         logger.debug(f"[RECORDER] Wrote {len(camera_8m_screen_y)} camera_8m_screen_y values (min={camera_8m_screen_y_array.min():.1f}, max={camera_8m_screen_y_array.max():.1f})")
                     else:
                         logger.warning(f"[RECORDER] camera_8m_screen_y length mismatch: {len(camera_8m_screen_y)} vs {len(positions)}. Skipping write.")
@@ -1004,6 +1348,8 @@ class DataRecorder:
                     logger.warning(f"[RECORDER] camera_8m_screen_y is empty! Expected {len(positions)} values. Filling with -1.0.")
                     # Fill with -1.0 to indicate no data
                     self.h5_file["vehicle/camera_8m_screen_y"][current_size:] = np.full(len(positions), -1.0, dtype=np.float32)
+                    self.h5_file["vehicle/camera_lookahead_screen_y"][current_size:] = np.full(len(positions), -1.0, dtype=np.float32)
+                    self.h5_file["vehicle/ground_truth_lookahead_distance"][current_size:] = np.full(len(positions), 8.0, dtype=np.float32)
             except Exception as e:
                 logger.error(f"[RECORDER] Error writing camera_8m_screen_y: {e}", exc_info=True)
             
@@ -1065,6 +1411,10 @@ class DataRecorder:
         raw_steerings = []
         lateral_corrections = []
         path_curvature_inputs = []
+        is_straight_list = []
+        straight_oscillation_rate_list = []
+        tuned_deadband_list = []
+        tuned_error_smoothing_alpha_list = []
         # NEW: Control stale data tracking
         using_stale_perception_list = []
         stale_perception_reason_list = []
@@ -1088,6 +1438,10 @@ class DataRecorder:
             raw_steerings.append(cc.raw_steering if cc.raw_steering is not None else 0.0)
             lateral_corrections.append(cc.lateral_correction if cc.lateral_correction is not None else 0.0)
             path_curvature_inputs.append(cc.path_curvature_input if cc.path_curvature_input is not None else 0.0)
+            is_straight_list.append(1 if getattr(cc, 'is_straight', False) else 0)
+            straight_oscillation_rate_list.append(getattr(cc, 'straight_oscillation_rate', 0.0) or 0.0)
+            tuned_deadband_list.append(getattr(cc, 'tuned_deadband', 0.0) or 0.0)
+            tuned_error_smoothing_alpha_list.append(getattr(cc, 'tuned_error_smoothing_alpha', 0.0) or 0.0)
             # NEW: Control stale data tracking
             using_stale_perception_list.append(cc.using_stale_perception if hasattr(cc, 'using_stale_perception') else False)
             stale_perception_reason_list.append(cc.stale_perception_reason if hasattr(cc, 'stale_perception_reason') and cc.stale_perception_reason else "")
@@ -1103,6 +1457,8 @@ class DataRecorder:
                        "lateral_error", "heading_error", "total_error",
                        "calculated_steering_angle_deg", "raw_steering", 
                        "lateral_correction", "path_curvature_input",
+                       "is_straight", "straight_oscillation_rate",
+                       "tuned_deadband", "tuned_error_smoothing_alpha",
                        "using_stale_perception", "stale_perception_reason"]:
                 self.h5_file[f"control/{key}"].resize((new_size,))
             
@@ -1124,6 +1480,10 @@ class DataRecorder:
             self.h5_file["control/raw_steering"][current_size:] = raw_steerings
             self.h5_file["control/lateral_correction"][current_size:] = lateral_corrections
             self.h5_file["control/path_curvature_input"][current_size:] = path_curvature_inputs
+            self.h5_file["control/is_straight"][current_size:] = np.array(is_straight_list, dtype=np.int8)
+            self.h5_file["control/straight_oscillation_rate"][current_size:] = straight_oscillation_rate_list
+            self.h5_file["control/tuned_deadband"][current_size:] = tuned_deadband_list
+            self.h5_file["control/tuned_error_smoothing_alpha"][current_size:] = tuned_error_smoothing_alpha_list
             # NEW: Write control stale data
             self.h5_file["control/using_stale_perception"][current_size:] = using_stale_perception_list
             stale_perception_reason_array = np.array(stale_perception_reason_list, dtype=h5py.string_dtype(encoding='utf-8', length=50))
@@ -1144,6 +1504,18 @@ class DataRecorder:
         left_jump_magnitude_list = []
         right_jump_magnitude_list = []
         jump_threshold_list = []
+        # NEW: Diagnostic fields for perception instability
+        actual_detected_left_lane_x_list = []
+        actual_detected_right_lane_x_list = []
+        instability_width_change_list = []
+        instability_center_shift_list = []
+        # NEW: Perception health tracking
+        consecutive_bad_frames_list = []
+        health_score_list = []
+        health_status_list = []
+        # NEW: Points used for polynomial fitting
+        fit_points_left_list = []
+        fit_points_right_list = []
         
         for frame in frames:
             po = frame.perception_output
@@ -1159,6 +1531,33 @@ class DataRecorder:
             left_jump_magnitude_list.append(po.left_jump_magnitude if hasattr(po, 'left_jump_magnitude') and po.left_jump_magnitude is not None else 0.0)
             right_jump_magnitude_list.append(po.right_jump_magnitude if hasattr(po, 'right_jump_magnitude') and po.right_jump_magnitude is not None else 0.0)
             jump_threshold_list.append(po.jump_threshold if hasattr(po, 'jump_threshold') and po.jump_threshold is not None else 0.0)
+            # NEW: Diagnostic fields for perception instability
+            actual_detected_left_lane_x_list.append(po.actual_detected_left_lane_x if hasattr(po, 'actual_detected_left_lane_x') and po.actual_detected_left_lane_x is not None else 0.0)
+            actual_detected_right_lane_x_list.append(po.actual_detected_right_lane_x if hasattr(po, 'actual_detected_right_lane_x') and po.actual_detected_right_lane_x is not None else 0.0)
+            instability_width_change_list.append(po.instability_width_change if hasattr(po, 'instability_width_change') and po.instability_width_change is not None else 0.0)
+            instability_center_shift_list.append(po.instability_center_shift if hasattr(po, 'instability_center_shift') and po.instability_center_shift is not None else 0.0)
+            # NEW: Perception health tracking
+            consecutive_bad_frames_list.append(po.consecutive_bad_detection_frames if hasattr(po, 'consecutive_bad_detection_frames') else 0)
+            health_score_list.append(po.perception_health_score if hasattr(po, 'perception_health_score') else 1.0)
+            health_status_list.append(po.perception_health_status if hasattr(po, 'perception_health_status') else "healthy")
+            # NEW: Points used for polynomial fitting
+            # Store as JSON strings since HDF5 doesn't handle variable-length arrays well
+            fit_points_left_json = ""
+            fit_points_right_json = ""
+            if hasattr(po, 'fit_points_left') and po.fit_points_left is not None:
+                try:
+                    import json
+                    fit_points_left_json = json.dumps(po.fit_points_left.tolist())
+                except Exception:
+                    pass
+            if hasattr(po, 'fit_points_right') and po.fit_points_right is not None:
+                try:
+                    import json
+                    fit_points_right_json = json.dumps(po.fit_points_right.tolist())
+                except Exception:
+                    pass
+            fit_points_left_list.append(fit_points_left_json)
+            fit_points_right_list.append(fit_points_right_json)
             
             # Store lane coefficients (flattened array of all coefficients)
             # Format: [coeff0_lane0, coeff1_lane0, coeff2_lane0, coeff0_lane1, ...]
@@ -1187,6 +1586,18 @@ class DataRecorder:
             self.h5_file["perception/left_jump_magnitude"].resize((new_size,))
             self.h5_file["perception/right_jump_magnitude"].resize((new_size,))
             self.h5_file["perception/jump_threshold"].resize((new_size,))
+            # NEW: Resize health monitoring datasets
+            self.h5_file["perception/consecutive_bad_detection_frames"].resize((new_size,))
+            self.h5_file["perception/perception_health_score"].resize((new_size,))
+            self.h5_file["perception/perception_health_status"].resize((new_size,))
+            # NEW: Resize instability diagnostic datasets
+            self.h5_file["perception/actual_detected_left_lane_x"].resize((new_size,))
+            self.h5_file["perception/actual_detected_right_lane_x"].resize((new_size,))
+            self.h5_file["perception/instability_width_change"].resize((new_size,))
+            self.h5_file["perception/instability_center_shift"].resize((new_size,))
+            # NEW: Resize fit_points datasets
+            self.h5_file["perception/fit_points_left"].resize((new_size,))
+            self.h5_file["perception/fit_points_right"].resize((new_size,))
             # Write data
             self.h5_file["perception/timestamps"][current_size:] = timestamps
             self.h5_file["perception/confidence"][current_size:] = confidences
@@ -1203,6 +1614,21 @@ class DataRecorder:
             self.h5_file["perception/left_jump_magnitude"][current_size:] = left_jump_magnitude_list
             self.h5_file["perception/right_jump_magnitude"][current_size:] = right_jump_magnitude_list
             self.h5_file["perception/jump_threshold"][current_size:] = jump_threshold_list
+            # NEW: Write instability diagnostic data
+            self.h5_file["perception/actual_detected_left_lane_x"][current_size:] = actual_detected_left_lane_x_list
+            self.h5_file["perception/actual_detected_right_lane_x"][current_size:] = actual_detected_right_lane_x_list
+            self.h5_file["perception/instability_width_change"][current_size:] = instability_width_change_list
+            self.h5_file["perception/instability_center_shift"][current_size:] = instability_center_shift_list
+            # NEW: Write health monitoring data
+            self.h5_file["perception/consecutive_bad_detection_frames"][current_size:] = consecutive_bad_frames_list
+            self.h5_file["perception/perception_health_score"][current_size:] = health_score_list
+            health_status_array = np.array(health_status_list, dtype=h5py.string_dtype(encoding='utf-8', length=20))
+            self.h5_file["perception/perception_health_status"][current_size:] = health_status_array
+            # NEW: Write fit_points (as JSON strings)
+            fit_points_left_array = np.array(fit_points_left_list, dtype=h5py.string_dtype(encoding='utf-8', length=10000))
+            fit_points_right_array = np.array(fit_points_right_list, dtype=h5py.string_dtype(encoding='utf-8', length=10000))
+            self.h5_file["perception/fit_points_left"][current_size:] = fit_points_left_array
+            self.h5_file["perception/fit_points_right"][current_size:] = fit_points_right_array
             
             # Write variable-length arrays (handle empty arrays properly)
             # CRITICAL: Always resize and write if we have data, even if some arrays are empty
@@ -1473,7 +1899,13 @@ class DataRecorder:
     def close(self):
         """Close the recording file."""
         try:
-            self.flush()
+            with self.frame_buffer_lock:
+                if self.frame_buffer:
+                    frames = self.frame_buffer
+                    self.frame_buffer = []
+                    self.flush_queue.put(frames)
+            self.flush_stop_event.set()
+            self.flush_thread.join(timeout=5.0)
         except Exception as e:
             logger.error(f"Error during final flush: {e}", exc_info=True)
             # Continue to close the file even if flush fails

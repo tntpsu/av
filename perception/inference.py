@@ -10,6 +10,7 @@ from pathlib import Path
 import logging
 
 from .models.lane_detection import LaneDetectionModel, SimpleLaneDetector, load_pretrained_model
+from .models.segmentation_model import load_segmentation_model
 
 logger = logging.getLogger(__name__)
 
@@ -18,7 +19,10 @@ class LaneDetectionInference:
     """Lane detection inference pipeline."""
     
     def __init__(self, model_path: Optional[str] = None, use_gpu: bool = True, 
-                 fallback_to_cv: bool = True):
+                 fallback_to_cv: bool = True,
+                 segmentation_model_path: Optional[str] = None,
+                 segmentation_mode: bool = False,
+                 segmentation_input_size: Tuple[int, int] = (320, 640)):
         """
         Initialize lane detection inference.
         
@@ -29,20 +33,33 @@ class LaneDetectionInference:
         """
         self.device = torch.device("cuda" if use_gpu and torch.cuda.is_available() else "cpu")
         self.fallback_to_cv = fallback_to_cv
+        self.segmentation_mode = segmentation_mode
+        self.segmentation_input_size = segmentation_input_size
         
-        # Track if model is trained (has checkpoint)
+        # Segmentation model (optional)
+        self.segmentation_model = None
+        self.segmentation_model_loaded = False
+        if self.segmentation_mode:
+            if segmentation_model_path and Path(segmentation_model_path).exists():
+                self.segmentation_model = load_segmentation_model(segmentation_model_path, self.device)
+                self.segmentation_model_loaded = True
+                logger.info(f"Loaded segmentation model from {segmentation_model_path}")
+            else:
+                logger.warning("Segmentation mode enabled but no checkpoint found - will use CV fallback")
+        
+        # Track if lane model is trained (has checkpoint)
         self.model_trained = model_path is not None and Path(model_path).exists()
         
-        # Load model
-        if self.model_trained:
-            self.model = load_pretrained_model(model_path)
-            logger.info(f"Loaded trained model from {model_path}")
-        else:
-            self.model = LaneDetectionModel()
-            logger.info("Using untrained model - will force CV fallback")
-        
-        self.model.to(self.device)
-        self.model.eval()
+        # Load lane model (unless segmentation mode is requested)
+        if not self.segmentation_mode:
+            if self.model_trained:
+                self.model = load_pretrained_model(model_path)
+                logger.info(f"Loaded trained model from {model_path}")
+            else:
+                self.model = LaneDetectionModel()
+                logger.info("Using untrained model - will force CV fallback")
+            self.model.to(self.device)
+            self.model.eval()
         
         # Fallback detector
         if fallback_to_cv:
@@ -122,7 +139,23 @@ class LaneDetectionInference:
         """
         original_shape = image.shape[:2]
         
-        # If model is untrained, skip ML inference and go straight to CV fallback
+        # Segmentation inference path
+        if self.segmentation_mode:
+            if not self.segmentation_model_loaded:
+                if self.fallback_to_cv:
+                    logger.info("Segmentation model missing, using CV fallback")
+                    self.last_detection_method = "cv"
+                    try:
+                        cv_lanes = self.cv_detector.detect(image, return_debug=False)
+                        cv_lanes_detected = sum(1 for c in cv_lanes if c is not None)
+                        logger.info(f"CV fallback: detected {cv_lanes_detected} lanes")
+                        return cv_lanes, 0.5
+                    except Exception as cv_error:
+                        logger.error(f"CV fallback failed: {cv_error}")
+                return [None, None], 0.0
+            return self._detect_with_segmentation(image)
+
+        # If lane model is untrained, skip ML inference and go straight to CV fallback
         if not self.model_trained and self.fallback_to_cv:
             logger.info("Model untrained, using CV fallback")
             self.last_detection_method = "cv"
@@ -197,6 +230,65 @@ class LaneDetectionInference:
             
             self.last_detection_method = "ml"  # Even if failed, we tried ML
             return [None, None], 0.0
+
+    def _detect_with_segmentation(
+        self, image: np.ndarray
+    ) -> Tuple[List[Optional[np.ndarray]], float]:
+        """Run segmentation model and fit lane polynomials."""
+        original_shape = image.shape[:2]
+        target_w, target_h = self.segmentation_input_size[1], self.segmentation_input_size[0]
+        resized = cv2.resize(image, (target_w, target_h), interpolation=cv2.INTER_LINEAR)
+        tensor = (
+            torch.from_numpy(resized.astype(np.float32) / 255.0)
+            .permute(2, 0, 1)
+            .unsqueeze(0)
+            .to(self.device)
+        )
+        with torch.no_grad():
+            logits = self.segmentation_model(tensor)
+            pred = torch.argmax(logits, dim=1).squeeze(0).cpu().numpy().astype(np.uint8)
+        lane_coeffs = self._mask_to_lane_coeffs(pred, original_shape)
+        # Confidence based on lane pixel coverage (mask is sparse, so raw mean is tiny).
+        total_pixels = float(pred.size)
+        lane_pixels = float(np.sum(pred > 0))
+        lane_ratio = lane_pixels / total_pixels if total_pixels > 0 else 0.0
+        confidence = min(1.0, lane_ratio / 0.01)  # 1% lane coverage -> confidence 1.0
+        self.last_detection_method = "segmentation"
+        return lane_coeffs, confidence
+
+    def _mask_to_lane_coeffs(
+        self, mask: np.ndarray, original_shape: Tuple[int, int]
+    ) -> List[Optional[np.ndarray]]:
+        """Convert a label mask into lane polynomial coefficients."""
+        h, w = original_shape
+        mask_resized = cv2.resize(mask, (w, h), interpolation=cv2.INTER_NEAREST)
+        lane_coeffs: List[Optional[np.ndarray]] = []
+        row_step = 5
+        min_rows = 6
+        min_pixels_per_row = 2
+
+        for lane_label in (1, 2):
+            ys, xs = np.where(mask_resized == lane_label)
+            if len(xs) == 0:
+                lane_coeffs.append(None)
+                continue
+            points = []
+            for y in range(0, h, row_step):
+                row_xs = xs[ys == y]
+                if len(row_xs) < min_pixels_per_row:
+                    continue
+                x_med = float(np.median(row_xs))
+                points.append([y, x_med])
+            if len(points) < min_rows:
+                lane_coeffs.append(None)
+                continue
+            points_arr = np.array(points)
+            try:
+                coeffs = np.polyfit(points_arr[:, 0], points_arr[:, 1], deg=2)
+            except Exception:
+                coeffs = None
+            lane_coeffs.append(coeffs)
+        return lane_coeffs
     
     def visualize(self, image: np.ndarray, lane_coeffs: List[Optional[np.ndarray]], 
                   color: Tuple[int, int, int] = (0, 255, 0), thickness: int = 3) -> np.ndarray:

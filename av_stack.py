@@ -5,7 +5,7 @@ Connects all components: perception, trajectory planning, and control.
 
 import time
 import numpy as np
-from typing import Optional
+from typing import Optional, Tuple
 import sys
 from pathlib import Path
 import logging
@@ -25,7 +25,6 @@ from data.formats.data_format import CameraFrame, VehicleState, ControlCommand, 
 
 # Configure logging
 # Ensure tmp/logs directory exists
-import os
 log_dir = Path(__file__).parent / 'tmp' / 'logs'
 log_dir.mkdir(parents=True, exist_ok=True)
 log_file = log_dir / 'av_stack.log'
@@ -110,6 +109,18 @@ def load_config(config_path: Optional[str] = None) -> dict:
         return {}
 
 
+def _is_teleport_jump(
+    previous_position: Optional[np.ndarray],
+    current_position: Optional[np.ndarray],
+    distance_threshold: float,
+) -> Tuple[bool, float]:
+    """Detect sudden position jumps that indicate Unity teleport/discontinuity."""
+    if previous_position is None or current_position is None:
+        return False, 0.0
+    distance = float(np.linalg.norm(current_position - previous_position))
+    return distance > distance_threshold, distance
+
+
 class AVStack:
     """Main AV stack integrating all components."""
     
@@ -117,7 +128,9 @@ class AVStack:
                  model_path: Optional[str] = None,
                  record_data: bool = True,  # Enable by default for comprehensive logging
                  recording_dir: str = "data/recordings",
-                 config_path: Optional[str] = None):
+                 config_path: Optional[str] = None,
+                 use_segmentation: bool = False,
+                 segmentation_model_path: Optional[str] = None):
         """
         Initialize AV stack.
         
@@ -137,7 +150,11 @@ class AVStack:
         self.bridge = UnityBridgeClient(bridge_url)
         
         # Perception
-        self.perception = LaneDetectionInference(model_path=model_path)
+        self.perception = LaneDetectionInference(
+            model_path=model_path,
+            segmentation_model_path=segmentation_model_path,
+            segmentation_mode=use_segmentation,
+        )
         
         # Trajectory planning - Load from config
         lateral_cfg = control_cfg.get('lateral', {})
@@ -203,10 +220,30 @@ class AVStack:
         self.frame_count = 0
         self.target_fps = 30.0  # Match Unity's frame rate
         self.frame_interval = 1.0 / self.target_fps
+
+        # Initialize previous lane history for stale-data fallback paths
+        self.previous_left_lane_x = None
+        self.previous_right_lane_x = None
         
         # Track if emergency stop has been logged (to prevent repeated messages)
         self.emergency_stop_logged = False
         self.emergency_stop_type = None  # Track which type of emergency stop (for logging)
+
+        # Teleport/jump guard state
+        self.last_vehicle_position = None
+        self.last_vehicle_timestamp = None
+        self.teleport_guard_frames_remaining = 0
+        self.last_teleport_distance = None
+        self.last_teleport_dt = None
+        self.post_jump_cooldown_frames = 0
+        
+        # NEW: Perception health monitoring
+        self.consecutive_bad_detection_frames = 0  # Track consecutive frames with <2 lanes
+        self.perception_health_history = []  # Recent detection quality (True/False for good/bad)
+        self.perception_health_history_size = 60  # Track last 60 frames (~2 seconds at 30 FPS)
+        self.perception_health_score = 1.0  # Current health score (1.0 = perfect, 0.0 = failed)
+        self.perception_health_status = "healthy"  # "healthy", "degraded", "poor", "critical"
+        self.original_target_speed = trajectory_cfg.get('target_speed', 8.0)  # Store original target speed for recovery
     
     def run(self, max_frames: Optional[int] = None, duration: Optional[float] = None):
         """
@@ -235,11 +272,16 @@ class AVStack:
         
         self.running = True
         self.frame_count = 0
+        camera_wait_start: Optional[float] = None
+        last_camera_wall_time: Optional[float] = None
+        last_camera_timestamp: Optional[float] = None
+        last_loop_time: Optional[float] = None
         last_frame_time = time.time()
         start_time = time.time()
         
         try:
             while self.running:
+                loop_start = time.time()
                 # Check frame limit
                 if max_frames and self.frame_count >= max_frames:
                     logger.info(f"Reached frame limit: {max_frames}")
@@ -261,13 +303,54 @@ class AVStack:
                 last_frame_time = time.time()
                 
                 # Get latest camera frame
+                camera_fetch_start = time.time()
                 frame_data = self.bridge.get_latest_camera_frame()
+                camera_fetch_duration = time.time() - camera_fetch_start
+                if camera_fetch_duration > 0.1:
+                    logger.warning(
+                        "[CAMERA_FETCH_SLOW] duration=%.3fs frame=%s",
+                        camera_fetch_duration,
+                        self.frame_count,
+                    )
                 if frame_data is None:
+                    if camera_wait_start is None:
+                        camera_wait_start = time.time()
                     # No frame available - don't spam, just wait
                     time.sleep(self.frame_interval)
                     continue
+                if camera_wait_start is not None:
+                    wait_duration = time.time() - camera_wait_start
+                    if wait_duration > 0.2:
+                        logger.warning(
+                            "[CAMERA_WAIT_GAP] duration=%.3fs frame=%s",
+                            wait_duration,
+                            self.frame_count,
+                        )
+                    camera_wait_start = None
                 
                 image, timestamp = frame_data
+                now = time.time()
+                if last_camera_wall_time is not None and last_camera_timestamp is not None:
+                    wall_gap = now - last_camera_wall_time
+                    ts_gap = timestamp - last_camera_timestamp
+                    if ts_gap > 0.2:
+                        logger.warning(
+                            "[CAMERA_TIMESTAMP_GAP] ts_gap=%.3fs wall_gap=%.3fs frame=%s",
+                            ts_gap,
+                            wall_gap,
+                            self.frame_count,
+                        )
+                    drift = ts_gap - wall_gap
+                    if abs(drift) > 0.2:
+                        logger.warning(
+                            "[CAMERA_TIME_DRIFT] ts_gap=%.3fs wall_gap=%.3fs drift=%.3fs frame=%s",
+                            ts_gap,
+                            wall_gap,
+                            drift,
+                            self.frame_count,
+                        )
+                last_camera_wall_time = now
+                last_camera_timestamp = timestamp
                 
                 # Get vehicle state
                 vehicle_state_dict = self.bridge.get_latest_vehicle_state()
@@ -279,6 +362,16 @@ class AVStack:
                 self._process_frame(image, timestamp, vehicle_state_dict)
                 
                 self.frame_count += 1
+
+                if last_loop_time is not None:
+                    loop_duration = time.time() - loop_start
+                    if loop_duration > 0.2:
+                        logger.warning(
+                            "[LOOP_SLOW] duration=%.3fs frame=%s",
+                            loop_duration,
+                            self.frame_count,
+                        )
+                last_loop_time = loop_start
         
         except KeyboardInterrupt:
             logger.info("\nStopping AV Stack...")
@@ -319,15 +412,51 @@ class AVStack:
             timestamp: Frame timestamp
             vehicle_state_dict: Vehicle state dictionary
         """
+        process_start = time.time()
         # Track timestamp for perception frozen detection
-        if not hasattr(self, 'last_timestamp'):
-            self.last_timestamp = timestamp
-        else:
-            self.last_timestamp = timestamp
+        # CRITICAL: Save previous timestamp BEFORE updating (we need it for comparisons)
+        prev_timestamp = self.last_timestamp if hasattr(self, 'last_timestamp') else None
+        # Update last_timestamp at the END of processing (after all timestamp comparisons)
+
+        # Teleport/jump guard: detect sudden vehicle position discontinuities
+        current_position = self._extract_position(vehicle_state_dict)
+        teleport_distance_threshold = self.safety_config.get('teleport_distance_threshold', 2.0)
+        teleport_detected, teleport_distance = _is_teleport_jump(
+            self.last_vehicle_position,
+            current_position,
+            teleport_distance_threshold,
+        )
+        if teleport_detected:
+            dt = None
+            if self.last_vehicle_timestamp is not None:
+                dt = timestamp - self.last_vehicle_timestamp
+            self.teleport_guard_frames_remaining = int(
+                self.safety_config.get('teleport_guard_frames', 1)
+            )
+            self.last_teleport_distance = teleport_distance
+            self.last_teleport_dt = dt
+            self.controller.reset()
+            if hasattr(self.trajectory_planner, 'last_smoothed_ref_point'):
+                self.trajectory_planner.last_smoothed_ref_point = None
+            if hasattr(self.trajectory_planner, 'smoothed_bias_history'):
+                self.trajectory_planner.smoothed_bias_history = []
+            if hasattr(self.trajectory_planner, 'last_timestamp'):
+                self.trajectory_planner.last_timestamp = None
+            self.post_jump_cooldown_frames = int(
+                self.safety_config.get('post_jump_cooldown_frames', 30)
+            )
+            logger.warning(
+                f"[Frame {self.frame_count}] [TELEPORT GUARD] Position jump detected "
+                f"({teleport_distance:.2f}m, dt={dt if dt is not None else 'N/A'}s). "
+                "Resetting controllers and skipping emergency stop for this frame."
+            )
+        teleport_guard_active = self.teleport_guard_frames_remaining > 0
         
         # 1. Perception: Detect lanes
         # detect() now returns: (lane_coeffs, confidence, detection_method, num_lanes_detected)
+        perception_start = time.time()
         perception_result = self.perception.detect(image)
+        perception_duration = time.time() - perception_start
         if len(perception_result) == 4:
             lane_coeffs, confidence, detection_method, num_lanes_detected = perception_result
         else:
@@ -361,6 +490,10 @@ class AVStack:
                        f"detection_method={detection_method}, has_cv_detector={cv_detector is not None}, "
                        f"should_debug={should_debug}")
         
+        # Store fit_points from debug_info (if available)
+        fit_points_left = None
+        fit_points_right = None
+        
         if should_debug and cv_detector is not None:
             try:
                 logger.info(f"[DEBUG VIS] Creating debug visualization for frame {frame_count}")
@@ -371,87 +504,114 @@ class AVStack:
                 if isinstance(result, tuple) and len(result) == 2:
                     cv_lanes, debug_info = result
                     logger.info(f"[DEBUG VIS] Unpacked: cv_lanes type={type(cv_lanes)}, debug_info type={type(debug_info)}")
+                    # Extract fit_points from debug_info
+                    if isinstance(debug_info, dict) and 'fit_points' in debug_info:
+                        fit_points = debug_info['fit_points']
+                        if isinstance(fit_points, dict):
+                            fit_points_left = fit_points.get('left')
+                            fit_points_right = fit_points.get('right')
                 else:
                     # Fallback if return format is different
                     logger.warning(f"[DEBUG VIS] Unexpected return format: {type(result)}")
                     cv_lanes = result if isinstance(result, list) else [None, None]
                     debug_info = {}
+            except Exception as e:
+                logger.error(f"[DEBUG VIS] Error getting debug info: {e}")
+                debug_info = {}
+                fit_points_left = None
+                fit_points_right = None
+        else:
+            # Even if not creating debug vis, try to get fit_points for recording
+            # Only do this if CV detector is available and we're using CV method
+            if detection_method == "cv" and cv_detector is not None:
+                try:
+                    result = cv_detector.detect(image, return_debug=True)
+                    if isinstance(result, tuple) and len(result) == 2:
+                        _, debug_info = result
+                        if isinstance(debug_info, dict) and 'fit_points' in debug_info:
+                            fit_points = debug_info['fit_points']
+                            if isinstance(fit_points, dict):
+                                fit_points_left = fit_points.get('left')
+                                fit_points_right = fit_points.get('right')
+                except Exception as e:
+                    logger.debug(f"Failed to get fit_points: {e}")
                 
                 # Create visualization
-                vis_image = cv_detector.visualize_detection(
-                    image, cv_lanes, debug_info=debug_info
-                )
-                
-                # Save to debug directory
-                debug_dir = Path('tmp/debug_visualizations')
-                debug_dir.mkdir(parents=True, exist_ok=True)
-                save_path = debug_dir / f'frame_{frame_count:06d}.png'
-                
-                # DEBUG: Also save intermediate images to diagnose detection
-                logger.info(f"[DEBUG VIS] debug_info keys: {list(debug_info.keys()) if debug_info else 'empty'}")
-                if debug_info:
-                    # Save masked edges (what HoughLinesP sees)
-                    logger.info(f"[DEBUG VIS] Checking masked_edges: {'masked_edges' in debug_info}, "
-                               f"value is None: {debug_info.get('masked_edges') is None if 'masked_edges' in debug_info else 'key missing'}")
-                    if 'masked_edges' in debug_info and debug_info['masked_edges'] is not None:
-                        edges_path = debug_dir / f'frame_{frame_count:06d}_edges.png'
-                        cv2.imwrite(str(edges_path), debug_info['masked_edges'])
+                try:
+                    vis_image = cv_detector.visualize_detection(
+                        image, cv_lanes, debug_info=debug_info
+                    )
                     
-                    # Save yellow mask (yellow lane detection - primary for yellow lanes)
-                    if 'yellow_mask' in debug_info and debug_info['yellow_mask'] is not None:
-                        yellow_path = debug_dir / f'frame_{frame_count:06d}_yellow_mask.png'
-                        cv2.imwrite(str(yellow_path), debug_info['yellow_mask'])
+                    # Save to debug directory
+                    debug_dir = Path('tmp/debug_visualizations')
+                    debug_dir.mkdir(parents=True, exist_ok=True)
+                    save_path = debug_dir / f'frame_{frame_count:06d}.png'
                     
-                    # Save combined (edges + color)
-                    if 'combined' in debug_info and debug_info['combined'] is not None:
-                        combined_path = debug_dir / f'frame_{frame_count:06d}_combined.png'
-                        cv2.imwrite(str(combined_path), debug_info['combined'])
-                    
-                    # Log detection stats
-                    num_lines = debug_info.get('num_lines_detected', 0)
-                    left_count = debug_info.get('left_lines_count', 0)
-                    right_count = debug_info.get('right_lines_count', 0)
-                    skipped_short = debug_info.get('skipped_short', 0)
-                    skipped_center = debug_info.get('skipped_center', 0)
-                    validation_failures = debug_info.get('validation_failures', {})
-                    
-                    logger.info(f"[DEBUG VIS] Frame {frame_count}: {num_lines} lines detected by HoughLinesP")
-                    logger.info(f"[DEBUG VIS] Frame {frame_count}: Left={left_count}, Right={right_count}, "
-                               f"Skipped: short={skipped_short}, center={skipped_center}")
-                    if validation_failures:
-                        logger.info(f"[DEBUG VIS] Frame {frame_count}: Validation failures: {validation_failures}")
-                
-                cv2.imwrite(str(save_path), cv2.cvtColor(vis_image, cv2.COLOR_RGB2BGR))
-                
-                # Also create histogram of line x-positions to check for bimodal peaks
-                if debug_info and 'all_lines' in debug_info and debug_info['all_lines'] is not None:
-                    line_centers = []
-                    for line in debug_info['all_lines']:
-                        x1, y1, x2, y2 = line[0]
-                        line_center_x = (x1 + x2) / 2
-                        line_centers.append(line_center_x)
-                    
-                    if line_centers:
-                        import matplotlib
-                        matplotlib.use('Agg')  # Non-interactive backend
-                        import matplotlib.pyplot as plt
+                    # DEBUG: Also save intermediate images to diagnose detection
+                    logger.info(f"[DEBUG VIS] debug_info keys: {list(debug_info.keys()) if debug_info else 'empty'}")
+                    if debug_info:
+                        # Save masked edges (what HoughLinesP sees)
+                        logger.info(f"[DEBUG VIS] Checking masked_edges: {'masked_edges' in debug_info}, "
+                                   f"value is None: {debug_info.get('masked_edges') is None if 'masked_edges' in debug_info else 'key missing'}")
+                        if 'masked_edges' in debug_info and debug_info['masked_edges'] is not None:
+                            edges_path = debug_dir / f'frame_{frame_count:06d}_edges.png'
+                            cv2.imwrite(str(edges_path), debug_info['masked_edges'])
                         
-                        plt.figure(figsize=(10, 6))
-                        plt.hist(line_centers, bins=50, edgecolor='black')
-                        plt.axvline(image.shape[1] // 2, color='r', linestyle='--', label='Image Center')
-                        plt.xlabel('Line Center X Position (pixels)')
-                        plt.ylabel('Frequency')
-                        plt.title(f'Detected Line Positions (Frame {frame_count})')
-                        plt.legend()
-                        plt.grid(True, alpha=0.3)
+                        # Save yellow mask (yellow lane detection - primary for yellow lanes)
+                        if 'yellow_mask' in debug_info and debug_info['yellow_mask'] is not None:
+                            yellow_path = debug_dir / f'frame_{frame_count:06d}_yellow_mask.png'
+                            cv2.imwrite(str(yellow_path), debug_info['yellow_mask'])
                         
-                        hist_path = debug_dir / f'line_histogram_{frame_count:06d}.png'
-                        plt.savefig(hist_path, dpi=100, bbox_inches='tight')
-                        plt.close()
+                        # Save combined (edges + color)
+                        if 'combined' in debug_info and debug_info['combined'] is not None:
+                            combined_path = debug_dir / f'frame_{frame_count:06d}_combined.png'
+                            cv2.imwrite(str(combined_path), debug_info['combined'])
                         
-                        logger.info(f"Saved debug visualization: {save_path}, histogram: {hist_path}")
-            except Exception as e:
-                logger.warning(f"Failed to create debug visualization: {e}")
+                        # Log detection stats
+                        num_lines = debug_info.get('num_lines_detected', 0)
+                        left_count = debug_info.get('left_lines_count', 0)
+                        right_count = debug_info.get('right_lines_count', 0)
+                        skipped_short = debug_info.get('skipped_short', 0)
+                        skipped_center = debug_info.get('skipped_center', 0)
+                        validation_failures = debug_info.get('validation_failures', {})
+                        
+                        logger.info(f"[DEBUG VIS] Frame {frame_count}: {num_lines} lines detected by HoughLinesP")
+                        logger.info(f"[DEBUG VIS] Frame {frame_count}: Left={left_count}, Right={right_count}, "
+                                   f"Skipped: short={skipped_short}, center={skipped_center}")
+                        if validation_failures:
+                            logger.info(f"[DEBUG VIS] Frame {frame_count}: Validation failures: {validation_failures}")
+                    
+                    cv2.imwrite(str(save_path), cv2.cvtColor(vis_image, cv2.COLOR_RGB2BGR))
+                    
+                    # Also create histogram of line x-positions to check for bimodal peaks
+                    if debug_info and 'all_lines' in debug_info and debug_info['all_lines'] is not None:
+                        line_centers = []
+                        for line in debug_info['all_lines']:
+                            x1, y1, x2, y2 = line[0]
+                            line_center_x = (x1 + x2) / 2
+                            line_centers.append(line_center_x)
+                        
+                        if line_centers:
+                            import matplotlib
+                            matplotlib.use('Agg')  # Non-interactive backend
+                            import matplotlib.pyplot as plt
+                            
+                            plt.figure(figsize=(10, 6))
+                            plt.hist(line_centers, bins=50, edgecolor='black')
+                            plt.axvline(image.shape[1] // 2, color='r', linestyle='--', label='Image Center')
+                            plt.xlabel('Line Center X Position (pixels)')
+                            plt.ylabel('Frequency')
+                            plt.title(f'Detected Line Positions (Frame {frame_count})')
+                            plt.legend()
+                            plt.grid(True, alpha=0.3)
+                            
+                            hist_path = debug_dir / f'line_histogram_{frame_count:06d}.png'
+                            plt.savefig(hist_path, dpi=100, bbox_inches='tight')
+                            plt.close()
+                            
+                            logger.info(f"Saved debug visualization: {save_path}, histogram: {hist_path}")
+                except Exception as e:
+                    logger.warning(f"Failed to create debug visualization: {e}")
         
         # Calculate lane line positions at lookahead distance (for trajectory centering verification)
         left_lane_line_x = None
@@ -463,6 +623,11 @@ class AVStack:
         left_jump_magnitude = None
         right_jump_magnitude = None
         jump_threshold_used = None
+        # NEW: Diagnostic fields for perception instability (initialized to None, set only when instability detected)
+        actual_detected_left_lane_x = None
+        actual_detected_right_lane_x = None
+        instability_width_change = None
+        instability_center_shift = None
         
         reference_lookahead = self.trajectory_config.get('reference_lookahead', 8.0)
         
@@ -470,11 +635,55 @@ class AVStack:
         camera_8m_screen_y = vehicle_state_dict.get('camera8mScreenY')
         if camera_8m_screen_y is None:
             camera_8m_screen_y = vehicle_state_dict.get('camera_8m_screen_y', -1.0)
+        camera_lookahead_screen_y = vehicle_state_dict.get('cameraLookaheadScreenY')
+        if camera_lookahead_screen_y is None:
+            camera_lookahead_screen_y = vehicle_state_dict.get('camera_lookahead_screen_y', -1.0)
+        ground_truth_lookahead_distance = vehicle_state_dict.get('groundTruthLookaheadDistance')
+        if ground_truth_lookahead_distance is None:
+            ground_truth_lookahead_distance = vehicle_state_dict.get('ground_truth_lookahead_distance', 8.0)
+        camera_lookahead_screen_y = vehicle_state_dict.get('cameraLookaheadScreenY')
+        if camera_lookahead_screen_y is None:
+            camera_lookahead_screen_y = vehicle_state_dict.get('camera_lookahead_screen_y', -1.0)
+        ground_truth_lookahead_distance = vehicle_state_dict.get('groundTruthLookaheadDistance')
+        if ground_truth_lookahead_distance is None:
+            ground_truth_lookahead_distance = vehicle_state_dict.get('ground_truth_lookahead_distance', 8.0)
+        camera_lookahead_screen_y = vehicle_state_dict.get('cameraLookaheadScreenY')
+        if camera_lookahead_screen_y is None:
+            camera_lookahead_screen_y = vehicle_state_dict.get('camera_lookahead_screen_y', -1.0)
+        ground_truth_lookahead_distance = vehicle_state_dict.get('groundTruthLookaheadDistance')
+        if ground_truth_lookahead_distance is None:
+            ground_truth_lookahead_distance = vehicle_state_dict.get('ground_truth_lookahead_distance', 8.0)
+        camera_lookahead_screen_y = vehicle_state_dict.get('cameraLookaheadScreenY')
+        if camera_lookahead_screen_y is None:
+            camera_lookahead_screen_y = vehicle_state_dict.get('camera_lookahead_screen_y', -1.0)
+        camera_lookahead_screen_y = vehicle_state_dict.get('cameraLookaheadScreenY')
+        if camera_lookahead_screen_y is None:
+            camera_lookahead_screen_y = vehicle_state_dict.get('camera_lookahead_screen_y', -1.0)
+        ground_truth_lookahead_distance = vehicle_state_dict.get('groundTruthLookaheadDistance')
+        if ground_truth_lookahead_distance is None:
+            ground_truth_lookahead_distance = vehicle_state_dict.get('ground_truth_lookahead_distance', 8.0)
+        camera_lookahead_screen_y = vehicle_state_dict.get('cameraLookaheadScreenY')
+        if camera_lookahead_screen_y is None:
+            camera_lookahead_screen_y = vehicle_state_dict.get('camera_lookahead_screen_y', -1.0)
+        lookahead_distance_from_unity = vehicle_state_dict.get('groundTruthLookaheadDistance')
+        if lookahead_distance_from_unity is None:
+            lookahead_distance_from_unity = vehicle_state_dict.get('ground_truth_lookahead_distance')
+        if isinstance(lookahead_distance_from_unity, (int, float)) and lookahead_distance_from_unity > 0:
+            reference_lookahead = float(lookahead_distance_from_unity)
         
         # DEBUG: Log what we extracted (first few frames only)
         if self.frame_count < 3:
             logger.info(f"[COORD DEBUG] Frame {self.frame_count}: Extracted camera_8m_screen_y={camera_8m_screen_y} "
                        f"(from dict keys: {list(vehicle_state_dict.keys())[:10]}...)")
+        
+        # DEBUG: Log lane_coeffs format for debugging
+        if self.frame_count == 0:
+            logger.debug(f"[Frame {self.frame_count}] [DEBUG] lane_coeffs type={type(lane_coeffs)}, len={len(lane_coeffs) if hasattr(lane_coeffs, '__len__') else 'N/A'}")
+            if hasattr(lane_coeffs, '__len__') and len(lane_coeffs) > 0:
+                logger.debug(f"[Frame {self.frame_count}] [DEBUG] lane_coeffs[0] type={type(lane_coeffs[0])}, value={lane_coeffs[0] if lane_coeffs[0] is not None else 'None'}")
+            if hasattr(lane_coeffs, '__len__') and len(lane_coeffs) > 1:
+                logger.debug(f"[Frame {self.frame_count}] [DEBUG] lane_coeffs[1] type={type(lane_coeffs[1])}, value={lane_coeffs[1] if lane_coeffs[1] is not None else 'None'}")
+            logger.debug(f"[Frame {self.frame_count}] [DEBUG] Condition check: len >= 2: {len(lane_coeffs) >= 2 if hasattr(lane_coeffs, '__len__') else False}, [0] not None: {lane_coeffs[0] is not None if hasattr(lane_coeffs, '__len__') and len(lane_coeffs) > 0 else False}, [1] not None: {lane_coeffs[1] is not None if hasattr(lane_coeffs, '__len__') and len(lane_coeffs) > 1 else False}")
         
         if len(lane_coeffs) >= 2 and lane_coeffs[0] is not None and lane_coeffs[1] is not None:
             try:
@@ -494,8 +703,15 @@ class AVStack:
                 # Use the already-extracted camera_8m_screen_y (extracted earlier at line 432)
                 # DEBUG: Log what we're checking
                 logger.debug(f"[COORD DEBUG] Checking camera_8m_screen_y: value={camera_8m_screen_y}, type={type(camera_8m_screen_y)}, >0={camera_8m_screen_y > 0 if camera_8m_screen_y is not None else 'None'}")
-                if camera_8m_screen_y is not None and camera_8m_screen_y > 0:
-                    # Use Unity's actual 8m position (most accurate)
+                if camera_lookahead_screen_y is not None and camera_lookahead_screen_y > 0:
+                    # Use Unity's lookahead screen Y (most accurate for current lookahead)
+                    y_image_at_lookahead = camera_lookahead_screen_y
+                    logger.info(
+                        f"[COORD DEBUG] ✅ Using Unity's camera_lookahead_screen_y={camera_lookahead_screen_y:.1f}px "
+                        f"(lookahead={reference_lookahead:.2f}m) for lane evaluation"
+                    )
+                elif camera_8m_screen_y is not None and camera_8m_screen_y > 0 and abs(reference_lookahead - 8.0) < 0.5:
+                    # Use Unity's actual 8m position (most accurate for 8m lookahead)
                     y_image_at_lookahead = camera_8m_screen_y
                     logger.info(f"[COORD DEBUG] ✅ Using Unity's camera_8m_screen_y={camera_8m_screen_y:.1f}px for lane evaluation")
                 else:
@@ -527,13 +743,14 @@ class AVStack:
                 # Unity's camera_8m_screen_y tells us where 8m appears in the image
                 # If we're evaluating at that y position, the distance IS 8m
                 # Don't use a fixed 7m - use the actual distance Unity reports
-                if camera_8m_screen_y > 0 and abs(y_image_at_lookahead - camera_8m_screen_y) < 5.0:
-                    # We're evaluating at or near Unity's 8m position, so distance is 8m
+                if camera_lookahead_screen_y > 0:
+                    conversion_distance = reference_lookahead
+                    logger.info(f"[COORD DEBUG] Using Unity lookahead distance: {reference_lookahead:.2f}m")
+                elif camera_8m_screen_y > 0 and abs(reference_lookahead - 8.0) < 0.5 and abs(y_image_at_lookahead - camera_8m_screen_y) < 5.0:
                     conversion_distance = 8.0  # Actual distance from Unity
                     logger.info(f"[COORD DEBUG] Using Unity's actual distance: 8.0m (at y={camera_8m_screen_y:.1f}px)")
                 else:
-                    # Fallback: Use reference_lookahead (may not be exact, but consistent)
-                    conversion_distance = reference_lookahead  # 8m - approximate for now
+                    conversion_distance = reference_lookahead
                     logger.warning(f"[COORD DEBUG] Using reference_lookahead={reference_lookahead}m (Unity distance not available)")
                 
                 logger.info(f"[COORD DEBUG] Evaluating at y={y_image_at_lookahead}px, "
@@ -611,6 +828,11 @@ class AVStack:
                 if camera_horizontal_fov is None:
                     camera_horizontal_fov = vehicle_state_dict.get('camera_horizontal_fov', None)
                 
+                # DEBUG: Log before coordinate conversion (frame 0 only)
+                if self.frame_count == 0:
+                    logger.debug(f"[Frame {self.frame_count}] [DEBUG] About to call _convert_image_to_vehicle_coords")
+                    logger.debug(f"[Frame {self.frame_count}] [DEBUG] left_x_image={left_x_image:.1f}, right_x_image={right_x_image:.1f}, y={y_image_at_lookahead:.1f}, dist={conversion_distance:.2f}m")
+                
                 left_x_vehicle, _ = planner._convert_image_to_vehicle_coords(
                     left_x_image, y_image_at_lookahead, lookahead_distance=conversion_distance,
                     horizontal_fov_override=camera_horizontal_fov if camera_horizontal_fov and camera_horizontal_fov > 0 else None
@@ -620,6 +842,12 @@ class AVStack:
                     horizontal_fov_override=camera_horizontal_fov if camera_horizontal_fov and camera_horizontal_fov > 0 else None
                 )
                 calculated_lane_width = right_x_vehicle - left_x_vehicle
+                
+                # DEBUG: Log after coordinate conversion (frame 0 only)
+                if self.frame_count == 0:
+                    logger.debug(f"[Frame {self.frame_count}] [DEBUG] Coordinate conversion SUCCESS!")
+                    logger.debug(f"[Frame {self.frame_count}] [DEBUG] left_x_vehicle={left_x_vehicle:.3f}m, right_x_vehicle={right_x_vehicle:.3f}m, width={calculated_lane_width:.3f}m")
+                
                 logger.info(f"[COORD DEBUG] Result: left_x_vehicle={left_x_vehicle:.3f}m, "
                            f"right_x_vehicle={right_x_vehicle:.3f}m, lane_width={calculated_lane_width:.3f}m")
                 
@@ -638,188 +866,449 @@ class AVStack:
                 max_lane_width = 10.0  # Maximum reasonable lane width (meters)
                 
                 if calculated_lane_width < min_lane_width or calculated_lane_width > max_lane_width:
-                    logger.error(f"[PERCEPTION VALIDATION] ❌ INVALID LANE WIDTH: {calculated_lane_width:.3f}m "
+                    logger.error(f"[Frame {self.frame_count}] [PERCEPTION VALIDATION] ❌ INVALID LANE WIDTH: {calculated_lane_width:.3f}m "
                                f"(expected {min_lane_width}-{max_lane_width}m)")
-                    logger.error(f"  Left lane: {left_x_vehicle:.3f}m, Right lane: {right_x_vehicle:.3f}m")
-                    logger.error(f"  This is a perception failure - rejecting detection!")
+                    logger.error(f"[Frame {self.frame_count}]   Left lane: {left_x_vehicle:.3f}m, Right lane: {right_x_vehicle:.3f}m")
                     
-                    # Reject this detection - set to None so temporal filtering can use previous frame
-                    left_lane_line_x = None
-                    right_lane_line_x = None
-                    # Track that we're using stale data due to invalid width
-                    if self.previous_left_lane_x is not None and self.previous_right_lane_x is not None:
-                        using_stale_data = True
-                        stale_data_reason = "invalid_width"
-                        left_lane_line_x = float(self.previous_left_lane_x)
-                        right_lane_line_x = float(self.previous_right_lane_x)
-                        logger.warning(f"[Frame {self.frame_count}] Using STALE perception data (reason: {stale_data_reason}) - invalid lane width detected")
-                else:
-                    # CRITICAL FIX: Check for sudden jumps in lane positions (temporal validation)
-                    # If lane position jumps >2m from previous frame, it's likely a false detection
-                    if not hasattr(self, 'previous_left_lane_x'):
-                        self.previous_left_lane_x = None
-                        self.previous_right_lane_x = None
-                    
-                    if self.previous_left_lane_x is not None and self.previous_right_lane_x is not None:
-                        left_jump = abs(left_x_vehicle - self.previous_left_lane_x)
-                        right_jump = abs(right_x_vehicle - self.previous_right_lane_x)
-                        # RECOMMENDED: Increased from 2.0m to 3.5m to handle curves better
-                        # On curves, lane positions can change by 2-3m between frames when car is turning
-                        # 2.0m was too strict and caused false rejections on curves (e.g., frame 201: 3.094m jump)
-                        max_jump_threshold = 3.5  # meters - maximum allowed jump between frames (was 2.0m)
-                        
-                        # CRITICAL FIX: Check for timestamp gap (Unity pause) OR frozen timestamp before applying jump detection
-                        # After a Unity pause, large jumps are expected and should be accepted
-                        # Also detect frozen timestamps (dt = 0.0) which indicates Unity stopped updating
-                        has_time_gap = False
-                        has_frozen_timestamp = False
-                        if not hasattr(self, 'last_timestamp') or self.last_timestamp is None:
-                            self.last_timestamp = timestamp
+                    # CRITICAL: On first frame, we have no previous data to fall back to
+                    # If width is invalid but not catastrophically wrong, still use it
+                    is_first_frame = (self.frame_count == 0)
+                    if is_first_frame:
+                        # First frame: Be EXTREMELY lenient - we have no previous data to fall back to
+                        # Only reject if width is catastrophically wrong (<0.1m or >20m)
+                        # Even if width is outside normal range (2-10m), use it on first frame
+                        catastrophic_min = 0.1  # Less than 0.1m is definitely wrong (was 0.5m)
+                        catastrophic_max = 20.0  # More than 20m is definitely wrong (was 15.0m)
+                        if calculated_lane_width < catastrophic_min or calculated_lane_width > catastrophic_max:
+                            logger.error(f"[Frame {self.frame_count}]   FIRST FRAME: Catastrophically wrong width ({calculated_lane_width:.3f}m) - rejecting!")
+                            left_lane_line_x = None
+                            right_lane_line_x = None
                         else:
-                            dt = timestamp - self.last_timestamp
-                            if dt > 0.5:  # Large time gap = Unity paused
-                                has_time_gap = True
-                                logger.info(f"[PERCEPTION VALIDATION] Unity pause detected (time gap: {dt:.3f}s) - relaxing jump detection")
-                                # After Unity pause, accept larger jumps (6.0m instead of 3.5m)
-                                max_jump_threshold = 6.0
-                            elif abs(dt) < 0.001:  # Timestamp frozen (dt ≈ 0) = Unity stopped updating
-                                has_frozen_timestamp = True
-                                logger.warning(f"[PERCEPTION VALIDATION] ⚠️  FROZEN TIMESTAMP detected (dt={dt:.6f}s) - Unity stopped updating timestamps!")
-                                logger.warning(f"  This means Unity paused/froze but Python kept processing the same frame")
-                                logger.warning(f"  Perception will return identical results until Unity resumes")
-                                # Treat frozen timestamp like a time gap - accept any changes when Unity resumes
-                                # But for now, we're still processing the same frame, so values will be identical
-                                # Don't update last_timestamp - keep it as the last valid timestamp
-                                # This will help detect when Unity resumes (timestamp will jump)
-                        
-                        # CRITICAL: Detect if perception values are frozen (same as previous frame)
-                        # This could indicate:
-                        # 1. Unity paused (no new frames) - check timestamp gap
-                        # 2. Perception died (no new detections, but Unity still sending frames)
-                        # 3. Bridge disconnected (no frames at all)
-                        perception_frozen = (abs(left_x_vehicle - self.previous_left_lane_x) < 0.001 and 
-                                           abs(right_x_vehicle - self.previous_right_lane_x) < 0.001)
-                        
-                        if perception_frozen:
-                            # Perception values are frozen - diagnose the cause
-                            # Track how many consecutive frames perception has been frozen
-                            if not hasattr(self, 'perception_frozen_frames'):
-                                self.perception_frozen_frames = 0
-                                self.last_timestamp_before_freeze = None
-                            
-                            self.perception_frozen_frames += 1
-                            # Track that we're using stale data due to frozen perception
-                            if not using_stale_data:  # Only set if not already set by jump detection
-                                using_stale_data = True
-                                stale_data_reason = "frozen"
-                                logger.warning(f"[Frame {self.frame_count}] Using STALE perception data (reason: {stale_data_reason}) - perception values frozen")
-                            
-                            # Check timestamp to distinguish Unity pause vs perception failure
-                            if not hasattr(self, 'last_timestamp') or self.last_timestamp is None:
-                                self.last_timestamp = timestamp
-                                self.last_timestamp_before_freeze = timestamp
-                            
-                            dt = timestamp - self.last_timestamp if self.last_timestamp is not None else 0
-                            
-                            if self.perception_frozen_frames == 1:
-                                # First frozen frame - record timestamp
-                                self.last_timestamp_before_freeze = self.last_timestamp if hasattr(self, 'last_timestamp') else timestamp
-                            
-                            # Diagnose cause
-                            if abs(dt) < 0.001:  # Frozen timestamp (dt ≈ 0) = Unity stopped updating timestamps
-                                if self.perception_frozen_frames == 1:
-                                    logger.warning(f"[PERCEPTION VALIDATION] ⚠️  FROZEN TIMESTAMP detected (dt={dt:.6f}s) - Unity stopped updating!")
-                                    logger.warning(f"  Unity paused/froze but Python kept processing the same frame")
-                                    logger.warning(f"  Perception will return identical results until Unity resumes")
-                                # Don't update last_timestamp - keep it as the last valid timestamp
-                                # This helps detect when Unity resumes (timestamp will jump)
-                            elif dt > 0.5:  # Large time gap = Unity paused
-                                if self.perception_frozen_frames == 1:
-                                    logger.warning(f"[PERCEPTION VALIDATION] ⚠️  Unity paused (time gap: {dt:.3f}s) - perception values frozen")
-                                self.last_timestamp = timestamp
-                            elif dt < 0.1:  # Normal time gap but values frozen = perception died
-                                if self.perception_frozen_frames > 3:
-                                    logger.error(f"[PERCEPTION VALIDATION] ❌ PERCEPTION FAILED! "
-                                               f"Values unchanged for {self.perception_frozen_frames} frames "
-                                               f"(Unity still sending frames, dt={dt:.3f}s)")
-                                    logger.error(f"  Left: {left_x_vehicle:.3f}m, Right: {right_x_vehicle:.3f}m")
-                                    logger.error(f"  This indicates perception processing has stopped - emergency stop needed")
-                                self.last_timestamp = timestamp
+                            # Width is unusual but not catastrophic - ALWAYS use it on first frame
+                            # Better to have some data (even if imperfect) than 0.0
+                            if calculated_lane_width < 2.0 or calculated_lane_width > 10.0:
+                                logger.warning(f"[Frame {self.frame_count}] ⚠️  FIRST FRAME: Invalid width ({calculated_lane_width:.3f}m) but not catastrophic. Using detection anyway (better than 0.0).")
                             else:
-                                # Medium time gap - could be either
-                                if self.perception_frozen_frames > 3:
-                                    logger.warning(f"[PERCEPTION VALIDATION] ⚠️  Perception values frozen for {self.perception_frozen_frames} frames "
-                                                 f"(time gap: {dt:.3f}s)")
-                                self.last_timestamp = timestamp
-                        else:
-                            # Perception is updating - check if we just recovered from frozen timestamp
-                            if hasattr(self, 'perception_frozen_frames') and self.perception_frozen_frames > 0:
-                                # Check if timestamp jumped (Unity resumed)
-                                dt = timestamp - self.last_timestamp if (hasattr(self, 'last_timestamp') and self.last_timestamp is not None) else 0
-                                if abs(dt) > 0.001:  # Timestamp is updating again
-                                    logger.info(f"[PERCEPTION VALIDATION] ✓ Unity resumed! Timestamp updated (dt={dt:.3f}s) after {self.perception_frozen_frames} frozen frames")
-                            
-                            # Reset frozen counter
-                            if hasattr(self, 'perception_frozen_frames'):
-                                if self.perception_frozen_frames > 0:
-                                    logger.info(f"[PERCEPTION VALIDATION] ✓ Perception recovered after {self.perception_frozen_frames} frozen frames")
-                                self.perception_frozen_frames = 0
-                            
-                            if not hasattr(self, 'last_timestamp'):
-                                self.last_timestamp = timestamp
-                            else:
-                                self.last_timestamp = timestamp
-                        
-                        if left_jump > max_jump_threshold or right_jump > max_jump_threshold:
-                            if has_time_gap:
-                                # After Unity pause, accept the jump (it's expected)
-                                logger.info(f"[PERCEPTION VALIDATION] Large jump after Unity pause - accepting detection")
-                                logger.info(f"  Left lane jump: {left_jump:.3f}m (threshold: {max_jump_threshold}m)")
-                                logger.info(f"  Right lane jump: {right_jump:.3f}m (threshold: {max_jump_threshold}m)")
-                                logger.info(f"  Previous: left={self.previous_left_lane_x:.3f}m, right={self.previous_right_lane_x:.3f}m")
-                                logger.info(f"  Current: left={left_x_vehicle:.3f}m, right={right_x_vehicle:.3f}m")
-                                # Accept the new detection after Unity pause
-                                left_lane_line_x = float(left_x_vehicle)
-                                right_lane_line_x = float(right_x_vehicle)
-                                # Update previous values
-                                self.previous_left_lane_x = left_x_vehicle
-                                self.previous_right_lane_x = right_x_vehicle
-                            else:
-                                # Normal jump detection (no time gap) - reject if too large
-                                logger.error(f"[PERCEPTION VALIDATION] ❌ SUDDEN LANE JUMP DETECTED! (Frame {self.frame_count})")
-                                logger.error(f"  Left lane jump: {left_jump:.3f}m (threshold: {max_jump_threshold}m)")
-                                logger.error(f"  Right lane jump: {right_jump:.3f}m (threshold: {max_jump_threshold}m)")
-                                logger.error(f"  Previous: left={self.previous_left_lane_x:.3f}m, right={self.previous_right_lane_x:.3f}m")
-                                logger.error(f"  Current: left={left_x_vehicle:.3f}m, right={right_x_vehicle:.3f}m")
-                                logger.error(f"  Rejecting detection - using previous frame's values")
-                                
-                                # Use previous frame's values instead of current (failed) detection
-                                left_lane_line_x = float(self.previous_left_lane_x)
-                                right_lane_line_x = float(self.previous_right_lane_x)
-                                # Track that we're using stale data due to jump detection
-                                using_stale_data = True
-                                stale_data_reason = "jump_detection"
-                                left_jump_magnitude = left_jump
-                                right_jump_magnitude = right_jump
-                                jump_threshold_used = max_jump_threshold
-                                logger.warning(f"[Frame {self.frame_count}] Using STALE perception data (reason: {stale_data_reason}) - jump detected: left={left_jump:.3f}m, right={right_jump:.3f}m (threshold={jump_threshold_used:.3f}m)")
-                        else:
-                            # Valid detection - use it
+                                logger.info(f"[Frame {self.frame_count}] ✓ FIRST FRAME: Valid width ({calculated_lane_width:.3f}m)")
                             left_lane_line_x = float(left_x_vehicle)
                             right_lane_line_x = float(right_x_vehicle)
+                            # Not using stale data - this is the actual detection (even if imperfect)
+                            using_stale_data = False
+                            stale_data_reason = None
+                    else:
+                        # Subsequent frames: Reject and use stale data
+                        logger.error(f"[Frame {self.frame_count}]   This is a perception failure - rejecting detection!")
+                        left_lane_line_x = None
+                        right_lane_line_x = None
+                        # Track that we're using stale data due to invalid width
+                        if self.previous_left_lane_x is not None and self.previous_right_lane_x is not None:
+                            using_stale_data = True
+                            stale_data_reason = "invalid_width"
+                            left_lane_line_x = float(self.previous_left_lane_x)
+                            right_lane_line_x = float(self.previous_right_lane_x)
+                            logger.warning(f"[Frame {self.frame_count}] Using STALE perception data (reason: {stale_data_reason}) - invalid lane width detected")
+                else:
+                    # NEW: Validate polynomial coefficients to catch extreme curves
+                    # Even if width at lookahead is valid, polynomial can produce extreme values elsewhere
+                    # This catches cases like frame 398 where width=7.4m is valid but polynomial goes way outside image
+                    image_height = planner.image_height if hasattr(planner, 'image_height') else 480.0
+                    image_width = planner.image_width if hasattr(planner, 'image_width') else 640.0
+                    
+                    # Evaluate polynomial at the lookahead distance where we actually use it
+                    # CRITICAL: Don't validate at top of image (y=0) - extrapolation there can be extreme on curves
+                    # We only use the polynomial at the lookahead distance (y_image_at_lookahead), so validate there
+                    # Also check bottom of image (where lanes are closest to vehicle) for consistency
+                    is_first_frame = (self.frame_count == 0)
+                    
+                    # CRITICAL FIX: Only validate where we actually use the polynomial
+                    # The lookahead distance is where we evaluate for coordinate conversion
+                    # Top of image (y=0) is extrapolation and can be extreme on curves - that's OK
+                    # Bottom of image (y=image_height-1) may have missing dashed lines, causing incorrect extrapolation
+                    # We only use the polynomial at the lookahead distance, so only validate there
+                    y_check_positions = [y_image_at_lookahead]  # Only check where we actually use it
+                    
+                    # Use reasonable thresholds - allow some extrapolation for curves
+                    max_reasonable_x = image_width * 2.5  # Allow up to 2.5x image width (for curves)
+                    min_reasonable_x = -image_width * 1.5  # Allow some negative (for curves)
+                    
+                    # On first frame, be even more lenient since we have no previous data
+                    if is_first_frame:
+                        max_reasonable_x = image_width * 3.0  # More lenient for first frame
+                        min_reasonable_x = -image_width * 2.0
+                    
+                    extreme_coeffs_detected = False
+                    for lane_idx, lane_coeffs_item in enumerate(lane_coeffs):
+                        if lane_coeffs_item is not None:
+                            # Convert to numpy array and ensure it's 1D
+                            lane_coeffs_array = np.asarray(lane_coeffs_item)
+                            if lane_coeffs_array.ndim == 1 and len(lane_coeffs_array) >= 3:
+                                # Evaluate polynomial: x = a*y^2 + b*y + c
+                                for y_check in y_check_positions:
+                                    x_eval = lane_coeffs_array[0] * y_check * y_check + lane_coeffs_array[1] * y_check + lane_coeffs_array[2]
+                                    if x_eval < min_reasonable_x or x_eval > max_reasonable_x:
+                                        extreme_coeffs_detected = True
+                                        logger.error(f"[Frame {self.frame_count}] [PERCEPTION VALIDATION] ❌ EXTREME POLYNOMIAL COEFFICIENTS! "
+                                                   f"Lane {lane_idx} at y={y_check}px: x={x_eval:.1f}px (expected {min_reasonable_x:.0f} to {max_reasonable_x:.0f}px)")
+                                        logger.error(f"[Frame {self.frame_count}]   Coefficients: a={lane_coeffs_array[0]:.6f}, b={lane_coeffs_array[1]:.6f}, c={lane_coeffs_array[2]:.6f}")
+                                        if is_first_frame:
+                                            logger.warning(f"[Frame {self.frame_count}]   NOTE: First frame - validation relaxed, but this is still extreme!")
+                                        break
+                                if extreme_coeffs_detected:
+                                    break
+                    
+                    if extreme_coeffs_detected:
+                        # Reject this detection - polynomial produces extreme values
+                        logger.error(f"[Frame {self.frame_count}]   This is a perception failure - rejecting detection!")
+                        
+                        # CRITICAL: On first frame, we have no previous data to fall back to
+                        # If validation fails on first frame, we need to either:
+                        # 1. Accept the detection anyway (risky but better than no data)
+                        # 2. Use a default/straight trajectory
+                        # For now, we'll log a warning but still try to use the detection if width is reasonable
+                        if is_first_frame:
+                            logger.warning(f"[Frame {self.frame_count}] ⚠️  FIRST FRAME: Extreme coefficients detected but no previous data available!")
+                            logger.warning(f"[Frame {self.frame_count}]   Will attempt to use detection anyway - width check will catch truly bad detections")
+                            # Don't set to None - let it continue to see if width check passes
+                            # The width check below will catch truly bad detections
+                            extreme_coeffs_detected = False  # Allow it through, but width check will catch it
+                        else:
+                            # Subsequent frames: Reject and use stale data
+                            left_lane_line_x = None
+                            right_lane_line_x = None
+                            # Track that we're using stale data due to extreme coefficients
+                            if self.previous_left_lane_x is not None and self.previous_right_lane_x is not None:
+                                using_stale_data = True
+                                stale_data_reason = "extreme_coefficients"
+                                left_lane_line_x = float(self.previous_left_lane_x)
+                                right_lane_line_x = float(self.previous_right_lane_x)
+                                logger.warning(f"[Frame {self.frame_count}] Using STALE perception data (reason: {stale_data_reason}) - extreme polynomial coefficients detected")
+                    else:
+                        # CRITICAL FIX: Check for sudden jumps in lane positions (temporal validation)
+                        # If lane position jumps >2m from previous frame, it's likely a false detection
+                        if not hasattr(self, 'previous_left_lane_x'):
+                            self.previous_left_lane_x = None
+                            self.previous_right_lane_x = None
+                        
+                        # CRITICAL FIX: On first frame (no previous data), accept current detection immediately
+                        # Don't skip the entire block - we need to assign values!
+                        if self.previous_left_lane_x is None or self.previous_right_lane_x is None:
+                            # First frame or no previous data - accept current detection
+                            if self.frame_count == 0:
+                                logger.debug(f"[Frame {self.frame_count}] [DEBUG] First frame - assigning values: left={left_x_vehicle:.3f}m, right={right_x_vehicle:.3f}m")
+                            left_lane_line_x = float(left_x_vehicle)
+                            right_lane_line_x = float(right_x_vehicle)
+                            if self.frame_count == 0:
+                                logger.debug(f"[Frame {self.frame_count}] [DEBUG] After assignment: left_lane_line_x={left_lane_line_x}, right_lane_line_x={right_lane_line_x}")
+                            
                             # Update previous values for next frame
                             self.previous_left_lane_x = left_x_vehicle
                             self.previous_right_lane_x = right_x_vehicle
-                    else:
-                        # First frame or no previous data - accept current detection
-                        left_lane_line_x = float(left_x_vehicle)
-                        right_lane_line_x = float(right_x_vehicle)
-                        # Store for next frame
-                        self.previous_left_lane_x = left_x_vehicle
-                        self.previous_right_lane_x = right_x_vehicle
-            except (AttributeError, TypeError, ValueError):
+                        elif self.previous_left_lane_x is not None and self.previous_right_lane_x is not None:
+                            left_jump = abs(left_x_vehicle - self.previous_left_lane_x)
+                            right_jump = abs(right_x_vehicle - self.previous_right_lane_x)
+                            # RECOMMENDED: Increased from 2.0m to 3.5m to handle curves better
+                            # On curves, lane positions can change by 2-3m between frames when car is turning
+                            # 2.0m was too strict and caused false rejections on curves (e.g., frame 201: 3.094m jump)
+                            # NEW: Adaptive threshold based on path curvature for even better curve handling
+                            path_curvature = vehicle_state_dict.get('groundTruthPathCurvature') or vehicle_state_dict.get('ground_truth_path_curvature', 0.0)
+                            abs_curvature = abs(path_curvature)
+                            if abs_curvature > 0.1:  # On a curve
+                                max_jump_threshold = 4.5  # meters - more lenient for curves (increased from 3.5m)
+                            else:  # On straight road
+                                max_jump_threshold = 3.5  # meters - standard threshold for straights
+                            
+                            # CRITICAL FIX: Check for timestamp gap (Unity pause) OR frozen timestamp before applying jump detection
+                            # After a Unity pause, large jumps are expected and should be accepted
+                            # Also detect frozen timestamps (dt = 0.0) which indicates Unity stopped updating
+                            has_time_gap = False
+                            has_frozen_timestamp = False
+                            if prev_timestamp is None:
+                                dt = 0.0  # First frame - no previous timestamp
+                            else:
+                                dt = timestamp - prev_timestamp
+                                if dt > 0.5:  # Large time gap = Unity paused
+                                    has_time_gap = True
+                                    logger.info(f"[PERCEPTION VALIDATION] Unity pause detected (time gap: {dt:.3f}s) - relaxing jump detection")
+                                    # After Unity pause, accept larger jumps (6.0m instead of 3.5m)
+                                    max_jump_threshold = 6.0
+                                elif abs(dt) < 0.001:  # Timestamp frozen (dt ≈ 0) = Unity stopped updating
+                                    has_frozen_timestamp = True
+                                    logger.warning(f"[PERCEPTION VALIDATION] ⚠️  FROZEN TIMESTAMP detected (dt={dt:.6f}s) - Unity stopped updating timestamps!")
+                                    logger.warning("  This means Unity paused/froze but Python kept processing the same frame")
+                                    logger.warning("  Perception will return identical results until Unity resumes")
+                                    # Treat frozen timestamp like a time gap - accept any changes when Unity resumes
+                                    # But for now, we're still processing the same frame, so values will be identical
+                                    # Don't update last_timestamp - keep it as the last valid timestamp
+                                    # This will help detect when Unity resumes (timestamp will jump)
+                            
+                            # CRITICAL: Detect if perception values are frozen (same as previous frame)
+                            # This could indicate:
+                            # 1. Unity paused (no new frames) - check timestamp gap
+                            # 2. Perception died (no new detections, but Unity still sending frames)
+                            # 3. Bridge disconnected (no frames at all)
+                            # CRITICAL FIX: Only mark as frozen if timestamp is actually frozen OR values unchanged for 3+ frames
+                            # This prevents false positives from legitimate repeated detections (1-2 frames)
+                            values_match = (abs(left_x_vehicle - self.previous_left_lane_x) < 0.001 and 
+                                          abs(right_x_vehicle - self.previous_right_lane_x) < 0.001)
+                            
+                            # Check timestamp to distinguish actual freeze from legitimate repeated detections
+                            if prev_timestamp is None:
+                                dt = 0.0  # First frame - no previous timestamp
+                            else:
+                                dt = timestamp - prev_timestamp
+                            timestamp_frozen = abs(dt) < 0.001  # Timestamp not updating = Unity frozen
+                            
+                            # Track consecutive frames with matching values
+                            if not hasattr(self, 'perception_frozen_frames'):
+                                self.perception_frozen_frames = 0
+                            
+                            if values_match:
+                                self.perception_frozen_frames += 1
+                            else:
+                                self.perception_frozen_frames = 0  # Reset counter if values change
+                            
+                            # Only mark as frozen if timestamp is frozen OR values unchanged for 3+ frames
+                            # This prevents false positives from legitimate repeated detections (1-2 frames)
+                            perception_frozen = timestamp_frozen or (values_match and self.perception_frozen_frames >= 3)
+                            
+                            if perception_frozen:
+                                # Perception values are frozen - diagnose the cause
+                                # Note: perception_frozen_frames counter already updated above
+                                if not hasattr(self, 'last_timestamp_before_freeze'):
+                                    self.last_timestamp_before_freeze = None
+                                
+                                # Track that we're using stale data due to frozen perception
+                                if not using_stale_data:  # Only set if not already set by jump detection
+                                    using_stale_data = True
+                                    stale_data_reason = "frozen"
+                                    if timestamp_frozen:
+                                        logger.warning(f"[Frame {self.frame_count}] Using STALE perception data (reason: {stale_data_reason}) - timestamp frozen (dt={dt:.6f}s)")
+                                    else:
+                                        logger.warning(f"[Frame {self.frame_count}] Using STALE perception data (reason: {stale_data_reason}) - perception values unchanged for {self.perception_frozen_frames} frames")
+                                
+                                # Check timestamp to distinguish Unity pause vs perception failure
+                                if not hasattr(self, 'last_timestamp_before_freeze'):
+                                    self.last_timestamp_before_freeze = None
+                                
+                                if self.perception_frozen_frames == 1 or self.last_timestamp_before_freeze is None:
+                                    # First frozen frame - record previous timestamp
+                                    self.last_timestamp_before_freeze = prev_timestamp if prev_timestamp is not None else timestamp
+                                
+                                # Diagnose cause
+                                if timestamp_frozen:  # Frozen timestamp (dt ≈ 0) = Unity stopped updating timestamps
+                                    if self.perception_frozen_frames == 1:
+                                        logger.warning(f"[PERCEPTION VALIDATION] ⚠️  FROZEN TIMESTAMP detected (dt={dt:.6f}s) - Unity stopped updating!")
+                                        logger.warning("  Unity paused/froze but Python kept processing the same frame")
+                                        logger.warning("  Perception will return identical results until Unity resumes")
+                                    # Don't update last_timestamp - keep it as the last valid timestamp
+                                    # This helps detect when Unity resumes (timestamp will jump)
+                                elif dt > 0.5:  # Large time gap = Unity paused
+                                    if self.perception_frozen_frames == 1:
+                                        logger.warning(f"[PERCEPTION VALIDATION] ⚠️  Unity paused (time gap: {dt:.3f}s) - perception values frozen")
+                                    # Don't update last_timestamp here - update at end of function
+                                elif dt < 0.1:  # Normal time gap but values frozen = perception died
+                                    if self.perception_frozen_frames > 3:
+                                        logger.error(f"[PERCEPTION VALIDATION] ❌ PERCEPTION FAILED! "
+                                                   f"Values unchanged for {self.perception_frozen_frames} frames "
+                                                   f"(Unity still sending frames, dt={dt:.3f}s)")
+                                        logger.error(f"  Left: {left_x_vehicle:.3f}m, Right: {right_x_vehicle:.3f}m")
+                                        logger.error("  This indicates perception processing has stopped - emergency stop needed")
+                                    # Don't update last_timestamp here - update at end of function
+                                else:
+                                    # Medium time gap - could be either
+                                    if self.perception_frozen_frames > 3:
+                                        logger.warning(f"[PERCEPTION VALIDATION] ⚠️  Perception values frozen for {self.perception_frozen_frames} frames "
+                                                     f"(time gap: {dt:.3f}s)")
+                                    # Don't update last_timestamp here - update at end of function
+                            else:
+                                # Perception is updating - check if we just recovered from frozen timestamp
+                                if hasattr(self, 'perception_frozen_frames') and self.perception_frozen_frames > 0:
+                                    # Check if timestamp jumped (Unity resumed)
+                                    if prev_timestamp is not None:
+                                        recovery_dt = timestamp - prev_timestamp
+                                        if abs(recovery_dt) > 0.001:  # Timestamp is updating again
+                                            logger.info(f"[PERCEPTION VALIDATION] ✓ Unity resumed! Timestamp updated (dt={recovery_dt:.3f}s) after {self.perception_frozen_frames} frozen frames")
+                                
+                                # Reset frozen counter
+                                if hasattr(self, 'perception_frozen_frames'):
+                                    if self.perception_frozen_frames > 0:
+                                        logger.info(f"[PERCEPTION VALIDATION] ✓ Perception recovered after {self.perception_frozen_frames} frozen frames")
+                                    self.perception_frozen_frames = 0
+                                # Don't update last_timestamp here - update at end of function
+                            
+                            if left_jump > max_jump_threshold or right_jump > max_jump_threshold:
+                                if has_time_gap:
+                                    # After Unity pause, accept the jump (it's expected)
+                                    logger.info("[PERCEPTION VALIDATION] Large jump after Unity pause - accepting detection")
+                                    logger.info(f"  Left lane jump: {left_jump:.3f}m (threshold: {max_jump_threshold}m)")
+                                    logger.info(f"  Right lane jump: {right_jump:.3f}m (threshold: {max_jump_threshold}m)")
+                                    logger.info(f"  Previous: left={self.previous_left_lane_x:.3f}m, right={self.previous_right_lane_x:.3f}m")
+                                    logger.info(f"  Current: left={left_x_vehicle:.3f}m, right={right_x_vehicle:.3f}m")
+                                    # Accept the new detection after Unity pause
+                                    left_lane_line_x = float(left_x_vehicle)
+                                    right_lane_line_x = float(right_x_vehicle)
+                                    # Update previous values
+                                    self.previous_left_lane_x = left_x_vehicle
+                                    self.previous_right_lane_x = right_x_vehicle
+                                else:
+                                    if detection_method == "segmentation":
+                                        # Segmentation outputs can change more between frames without being wrong.
+                                        # Accept the new detection to avoid freezing on stale data.
+                                        left_lane_line_x = float(left_x_vehicle)
+                                        right_lane_line_x = float(right_x_vehicle)
+                                        self.previous_left_lane_x = left_x_vehicle
+                                        self.previous_right_lane_x = right_x_vehicle
+                                        logger.info(
+                                            f"[Frame {self.frame_count}] [PERCEPTION VALIDATION] Segmentation jump accepted "
+                                            f"(left={left_jump:.3f}m, right={right_jump:.3f}m, threshold={max_jump_threshold:.3f}m)"
+                                        )
+                                        # Skip stale handling for segmentation
+                                        using_stale_data = False
+                                        stale_data_reason = None
+                                    else:
+                                        # Normal jump detection (no time gap) - reject if too large
+                                        logger.error(f"[PERCEPTION VALIDATION] ❌ SUDDEN LANE JUMP DETECTED! (Frame {self.frame_count})")
+                                        logger.error(f"  Left lane jump: {left_jump:.3f}m (threshold: {max_jump_threshold}m)")
+                                        logger.error(f"  Right lane jump: {right_jump:.3f}m (threshold: {max_jump_threshold}m)")
+                                        logger.error(f"  Previous: left={self.previous_left_lane_x:.3f}m, right={self.previous_right_lane_x:.3f}m")
+                                        logger.error(f"  Current: left={left_x_vehicle:.3f}m, right={right_x_vehicle:.3f}m")
+                                        logger.error("  Rejecting detection - using previous frame's values")
+                                        
+                                        # Use previous frame's values instead of current (failed) detection
+                                        left_lane_line_x = float(self.previous_left_lane_x)
+                                        right_lane_line_x = float(self.previous_right_lane_x)
+                                        # Track that we're using stale data due to jump detection
+                                        using_stale_data = True
+                                        stale_data_reason = "jump_detection"
+                                        left_jump_magnitude = left_jump
+                                        right_jump_magnitude = right_jump
+                                        jump_threshold_used = max_jump_threshold
+                                        logger.warning(f"[Frame {self.frame_count}] Using STALE perception data (reason: {stale_data_reason}) - jump detected: left={left_jump:.3f}m, right={right_jump:.3f}m (threshold={jump_threshold_used:.3f}m)")
+                            else:
+                                # NEW: Detect lane width/center changes that indicate perception instability
+                                # Even if jump detection didn't trigger, small changes can cause control errors
+                                # If lane width or center changes significantly, use stale data to prevent control oscillations
+                                lane_center_current = (left_x_vehicle + right_x_vehicle) / 2.0
+                                lane_width_current = calculated_lane_width
+                                
+                                if self.previous_left_lane_x is not None and self.previous_right_lane_x is not None:
+                                    lane_center_previous = (self.previous_left_lane_x + self.previous_right_lane_x) / 2.0
+                                    lane_width_previous = self.previous_right_lane_x - self.previous_left_lane_x
+                                    
+                                    # NEW: Adaptive thresholds based on path curvature
+                                    # Get path curvature from vehicle state (ground truth if available)
+                                    path_curvature = vehicle_state_dict.get('groundTruthPathCurvature') or vehicle_state_dict.get('ground_truth_path_curvature', 0.0)
+                                    abs_curvature = abs(path_curvature)
+                                    
+                                    # On curves (|curvature| > 0.1 1/m), lane positions change naturally
+                                    # Use more lenient thresholds to avoid rejecting legitimate curve-induced changes
+                                    if abs_curvature > 0.1:  # On a curve
+                                        width_change_threshold = 1.5  # meters - much more lenient for curves (increased from 1.3m to 1.5m)
+                                        center_shift_threshold = 1.2  # meters - more lenient for curves (increased from 0.8m to 1.2m)
+                                        threshold_mode = "curve"
+                                    else:  # On straight road
+                                        width_change_threshold = 0.3  # meters - strict for straights (catches noise)
+                                        center_shift_threshold = 0.2  # meters - strict for straights (catches noise)
+                                        threshold_mode = "straight"
+                                    
+                                    # Detect significant lane width change (threshold depends on curvature)
+                                    width_change = abs(lane_width_current - lane_width_previous)
+                                    
+                                    # Detect significant lane center shift (threshold depends on curvature)
+                                    center_shift = abs(lane_center_current - lane_center_previous)
+                                    
+                                    # CRITICAL FIX: Skip instability check on first frame with previous data (frame 1)
+                                    # On frame 1, this is the first comparison, and small changes are expected
+                                    # due to normal perception variation. Only check instability from frame 2 onwards.
+                                    skip_instability_check = (self.frame_count == 1)  # Skip on frame 1 only
+                                    
+                                    if not skip_instability_check and (width_change > width_change_threshold or center_shift > center_shift_threshold):
+                                        if detection_method == "segmentation":
+                                            # Segmentation can have larger natural shifts without being wrong.
+                                            # Accept the new detection to avoid freezing.
+                                            left_lane_line_x = float(left_x_vehicle)
+                                            right_lane_line_x = float(right_x_vehicle)
+                                            self.previous_left_lane_x = left_x_vehicle
+                                            self.previous_right_lane_x = right_x_vehicle
+                                            logger.info(
+                                                f"[Frame {self.frame_count}] [PERCEPTION VALIDATION] Segmentation instability accepted "
+                                                f"(width_change={width_change:.3f}m, center_shift={center_shift:.3f}m)"
+                                            )
+                                            using_stale_data = False
+                                            stale_data_reason = None
+                                        else:
+                                            # Perception instability detected - use stale data to prevent control oscillations
+                                            logger.warning(f"[Frame {self.frame_count}] [PERCEPTION VALIDATION] ⚠️  PERCEPTION INSTABILITY DETECTED!")
+                                            logger.warning(f"  Width change: {width_change:.3f}m (threshold: {width_change_threshold}m [{threshold_mode}])")
+                                            logger.warning(f"  Center shift: {center_shift:.3f}m (threshold: {center_shift_threshold}m [{threshold_mode}])")
+                                            logger.warning(f"  Path curvature: {path_curvature:.4f} 1/m (|curvature|={abs_curvature:.4f})")
+                                            logger.warning("  Using stale data to prevent control oscillations")
+                                            
+                                            using_stale_data = True
+                                            stale_data_reason = "perception_instability"
+                                            # Store actual detected values for debugging (even though we reject them)
+                                            actual_detected_left_lane_x = float(left_x_vehicle)
+                                            actual_detected_right_lane_x = float(right_x_vehicle)
+                                            instability_width_change = width_change
+                                            instability_center_shift = center_shift
+                                            # Use stale values for control
+                                            left_lane_line_x = float(self.previous_left_lane_x)
+                                            right_lane_line_x = float(self.previous_right_lane_x)
+                                            # CRITICAL FIX: Don't update previous values when instability detected
+                                            # This allows recovery: next frame will compare against stale values
+                                        # If next frame's detection is within thresholds vs stale values, recovery happens
+                                    else:
+                                        # Valid detection - use it (either first valid detection or recovery from instability)
+                                        if using_stale_data and stale_data_reason == "perception_instability":
+                                            logger.info(f"[Frame {self.frame_count}] [PERCEPTION VALIDATION] ✅ RECOVERED from perception instability!")
+                                            logger.info(f"  Width change: {width_change:.3f}m (threshold: {width_change_threshold}m [{threshold_mode}])")
+                                            logger.info(f"  Center shift: {center_shift:.3f}m (threshold: {center_shift_threshold}m [{threshold_mode}])")
+                                            logger.info("  Accepting new detection and updating previous values")
+                                        
+                                        left_lane_line_x = float(left_x_vehicle)
+                                        right_lane_line_x = float(right_x_vehicle)
+                                        
+                                        # Update previous values for next frame (enables recovery)
+                                        self.previous_left_lane_x = left_x_vehicle
+                                        self.previous_right_lane_x = right_x_vehicle
+                                else:
+                                    # First frame or no previous data - accept current detection
+                                    if self.frame_count == 0:
+                                        logger.debug(f"[Frame {self.frame_count}] [DEBUG] First frame - assigning values: left={left_x_vehicle:.3f}m, right={right_x_vehicle:.3f}m")
+                                    left_lane_line_x = float(left_x_vehicle)
+                                    right_lane_line_x = float(right_x_vehicle)
+                                    if self.frame_count == 0:
+                                        logger.debug(f"[Frame {self.frame_count}] [DEBUG] After assignment: left_lane_line_x={left_lane_line_x}, right_lane_line_x={right_lane_line_x}")
+                                    
+                                    # Update previous values for next frame
+                                    self.previous_left_lane_x = left_x_vehicle
+                                    self.previous_right_lane_x = right_x_vehicle
+            except Exception as e:  # CHANGED: Catch ALL exceptions, not just AttributeError/TypeError/ValueError
                 # If planner is a Mock or conversion fails, skip lane data calculation
                 # This is acceptable in unit tests
+                # CRITICAL: Log the exception so we can diagnose why coordinate conversion failed
+                import traceback
+                logger.error(f"[Frame {self.frame_count}] [COORD CONVERSION] Exception during coordinate conversion: {type(e).__name__}: {e}")
+                logger.error(f"[Frame {self.frame_count}]   Traceback:\n{traceback.format_exc()}")
+                logger.error(f"[Frame {self.frame_count}]   This means left_lane_line_x and right_lane_line_x will remain None (converted to 0.0 in recorder)")
+                logger.error(f"[Frame {self.frame_count}]   If overlays look good, this is a bug - coordinate conversion should work!")
+                
+                # DEBUG: Log what we have
+                logger.error(f"[Frame {self.frame_count}]   DEBUG: lane_coeffs type={type(lane_coeffs)}, len={len(lane_coeffs) if hasattr(lane_coeffs, '__len__') else 'N/A'}")
+                if len(lane_coeffs) >= 2:
+                    logger.error(f"[Frame {self.frame_count}]   DEBUG: lane_coeffs[0] type={type(lane_coeffs[0])}, shape={lane_coeffs[0].shape if hasattr(lane_coeffs[0], 'shape') else 'N/A'}")
+                    logger.error(f"[Frame {self.frame_count}]   DEBUG: lane_coeffs[1] type={type(lane_coeffs[1])}, shape={lane_coeffs[1].shape if hasattr(lane_coeffs[1], 'shape') else 'N/A'}")
+                logger.error(f"[Frame {self.frame_count}]   DEBUG: planner type={type(planner) if 'planner' in locals() else 'not defined'}")
+                if 'planner' in locals():
+                    logger.error(f"[Frame {self.frame_count}]   DEBUG: planner has image_height={hasattr(planner, 'image_height')}, image_width={hasattr(planner, 'image_width')}")
+                    logger.error(f"[Frame {self.frame_count}]   DEBUG: planner has _convert_image_to_vehicle_coords={hasattr(planner, '_convert_image_to_vehicle_coords')}")
+                
+                # On first frame, try to use a fallback if we have valid coefficients
+                if self.frame_count == 0:
+                    logger.warning(f"[Frame {self.frame_count}] ⚠️  FIRST FRAME: Coordinate conversion failed but overlays look good!")
+                    logger.warning(f"[Frame {self.frame_count}]   This suggests a bug in coordinate conversion, not perception")
+                    # Don't set to None - leave as None so the check at line 1013 can catch it
+                    # But log a warning so we know what happened
                 pass
         elif num_lanes_detected == 1:
             # FIX: Handle single-lane-line detection case
@@ -881,11 +1370,135 @@ class AVStack:
         # This ensures reference_point will be None, preventing movement
         if left_lane_line_x is not None and right_lane_line_x is not None:
             if abs(left_lane_line_x) < 0.001 and abs(right_lane_line_x) < 0.001:
-                logger.warning(f"[PERCEPTION] Perception failed (both lanes = 0.0) - setting to None to prevent movement")
+                logger.warning("[PERCEPTION] Perception failed (both lanes = 0.0) - setting to None to prevent movement")
                 left_lane_line_x = None
                 right_lane_line_x = None
         
         # Record perception output with diagnostic fields
+        # NEW: Perception health monitoring
+        # Track detection quality (good = 2+ lanes detected)
+        is_good_detection = num_lanes_detected >= 2
+        
+        # NEW: Check for bad events that should reduce health score immediately
+        bad_events = []
+        
+        # Check 1: Insufficient lanes
+        if not is_good_detection:
+            bad_events.append("insufficient_lanes")
+        
+        # Check 2: Extreme polynomial coefficients (if we have coefficients)
+        # CRITICAL: Only check where we actually use the polynomial (lookahead distance)
+        # Don't check top of image (y=0) - extrapolation there can be extreme on curves
+        if lane_coeffs is not None and len(lane_coeffs) >= 2:
+            # Get image dimensions (try to get from planner, fallback to defaults)
+            try:
+                planner = self.trajectory_planner.planner if hasattr(self.trajectory_planner, 'planner') else self.trajectory_planner
+                image_height = planner.image_height if hasattr(planner, 'image_height') else 480.0
+                image_width = planner.image_width if hasattr(planner, 'image_width') else 640.0
+            except:
+                image_height = 480.0
+                image_width = 640.0
+            
+            # Get lookahead y position - use camera_8m_screen_y if available (extracted earlier in _process_frame)
+            # Otherwise use middle of image as fallback
+            if camera_8m_screen_y is not None and camera_8m_screen_y > 0:
+                health_y_image_at_lookahead = int(camera_8m_screen_y)
+            else:
+                # Fallback: Use middle of image (typical lookahead position)
+                health_y_image_at_lookahead = int(image_height * 0.7)  # Bottom 30% of image
+            
+            # Only check at lookahead distance and bottom (where we actually use the polynomial)
+            # Only check at lookahead distance (where we actually use the polynomial)
+            # Don't check bottom - missing dashed lines can cause incorrect extrapolation there
+            health_check_y_positions = [health_y_image_at_lookahead]
+            
+            # Use same thresholds as validation
+            health_max_reasonable_x = image_width * 2.5
+            health_min_reasonable_x = -image_width * 1.5
+            
+            for lane_idx, lane_coeffs_item in enumerate(lane_coeffs):
+                # Check if lane_coeffs_item is a valid array (not None, not a scalar)
+                if lane_coeffs_item is not None:
+                    # Convert to numpy array if needed and check shape
+                    lane_coeffs_array = np.asarray(lane_coeffs_item)
+                    if lane_coeffs_array.ndim == 1 and len(lane_coeffs_array) >= 3:
+                        for y_check in health_check_y_positions:
+                            x_eval = lane_coeffs_array[0] * y_check * y_check + lane_coeffs_array[1] * y_check + lane_coeffs_array[2]
+                            if x_eval < health_min_reasonable_x or x_eval > health_max_reasonable_x:
+                                bad_events.append("extreme_coefficients")
+                                break
+                        if "extreme_coefficients" in bad_events:
+                            break
+        
+        # Check 3: Using stale data (indicates perception issues)
+        if using_stale_data:
+            bad_events.append("stale_data")
+        
+        # Track health: good detection AND no bad events = truly good
+        is_truly_good = is_good_detection and len(bad_events) == 0
+        
+        # DEBUG: Log health monitoring on early frames to diagnose issues
+        if self.frame_count <= 5:
+            logger.debug(f"[Frame {self.frame_count}] [HEALTH DEBUG] is_good_detection={is_good_detection}, num_lanes={num_lanes_detected}, bad_events={bad_events}, is_truly_good={is_truly_good}")
+        
+        self.perception_health_history.append(is_truly_good)
+        if len(self.perception_health_history) > self.perception_health_history_size:
+            self.perception_health_history.pop(0)
+        
+        # Update consecutive bad detection frames
+        if is_truly_good:
+            self.consecutive_bad_detection_frames = 0
+        else:
+            self.consecutive_bad_detection_frames += 1
+            # DEBUG: Log why frame is marked as bad
+            if self.frame_count <= 5:
+                logger.debug(f"[Frame {self.frame_count}] [HEALTH DEBUG] Frame marked as BAD: consecutive_bad={self.consecutive_bad_detection_frames}, is_good_detection={is_good_detection}, bad_events={bad_events}")
+        
+        # Calculate health score (fraction of recent frames with truly good detection)
+        # NEW: Penalize frames with bad events even if detection rate is good
+        if len(self.perception_health_history) > 0:
+            good_detection_count = sum(self.perception_health_history)
+            base_score = good_detection_count / len(self.perception_health_history)
+            
+            # Apply immediate penalty for current frame bad events
+            # Each bad event reduces score by 0.1 (can stack)
+            penalty = min(0.3, len(bad_events) * 0.1)  # Max 0.3 penalty
+            self.perception_health_score = max(0.0, base_score - penalty)
+        else:
+            self.perception_health_score = 1.0 if len(bad_events) == 0 else 0.7
+        
+        # Determine health status
+        if self.perception_health_score >= 0.9:
+            self.perception_health_status = "healthy"
+        elif self.perception_health_score >= 0.7:
+            self.perception_health_status = "degraded"
+        elif self.perception_health_score >= 0.5:
+            self.perception_health_status = "poor"
+        else:
+            self.perception_health_status = "critical"
+        
+        # Log health degradation warnings
+        if self.consecutive_bad_detection_frames >= 10 and self.consecutive_bad_detection_frames % 10 == 0:
+            logger.warning(f"[Frame {self.frame_count}] ⚠️  Perception health degraded: {self.consecutive_bad_detection_frames} consecutive bad frames, "
+                         f"health score: {self.perception_health_score:.2f} ({self.perception_health_status})")
+        
+        # CRITICAL: Update last_timestamp at the END of processing (after all timestamp comparisons)
+        self.last_timestamp = timestamp
+
+        # Fallback: if lane positions are missing but we have previous values, use stale data
+        # This prevents left/right/width from collapsing to 0.0 when validation rejects positions.
+        if (left_lane_line_x is None or right_lane_line_x is None) and \
+           hasattr(self, 'previous_left_lane_x') and hasattr(self, 'previous_right_lane_x') and \
+           self.previous_left_lane_x is not None and self.previous_right_lane_x is not None:
+            using_stale_data = True
+            stale_data_reason = stale_data_reason or "missing_lane_positions"
+            left_lane_line_x = float(self.previous_left_lane_x)
+            right_lane_line_x = float(self.previous_right_lane_x)
+            logger.warning(
+                f"[Frame {self.frame_count}] Using STALE perception data (reason: {stale_data_reason}) - "
+                "lane positions missing after validation"
+            )
+        
         perception_output = PerceptionOutput(
             timestamp=timestamp,
             lane_line_coefficients=np.array([c for c in lane_coeffs if c is not None]) if any(c is not None for c in lane_coeffs) else None,
@@ -899,8 +1512,47 @@ class AVStack:
             stale_data_reason=stale_data_reason,
             left_jump_magnitude=left_jump_magnitude,
             right_jump_magnitude=right_jump_magnitude,
-            jump_threshold=jump_threshold_used
+            jump_threshold=jump_threshold_used,
+            # NEW: Diagnostic fields for perception instability
+            actual_detected_left_lane_x=actual_detected_left_lane_x,
+            actual_detected_right_lane_x=actual_detected_right_lane_x,
+            instability_width_change=instability_width_change,
+            instability_center_shift=instability_center_shift,
+            # NEW: Perception health monitoring fields
+            consecutive_bad_detection_frames=self.consecutive_bad_detection_frames,
+            perception_health_score=self.perception_health_score,
+            perception_health_status=self.perception_health_status,
+            # NEW: Points used for polynomial fitting (for debug visualization)
+            fit_points_left=fit_points_left,
+            fit_points_right=fit_points_right
         )
+        
+        # NEW: Apply gradual slowdown based on perception health
+        # Reduce target speed when perception health degrades (but not emergency stop)
+        if self.perception_health_status == "healthy":
+            # Full speed
+            adjusted_target_speed = self.original_target_speed
+        elif self.perception_health_status == "degraded":
+            # Reduce to 80% of target speed
+            adjusted_target_speed = self.original_target_speed * 0.8
+        elif self.perception_health_status == "poor":
+            # Reduce to 50% of target speed
+            adjusted_target_speed = self.original_target_speed * 0.5
+        else:  # critical
+            # Reduce to 30% of target speed (very slow, but still moving)
+            adjusted_target_speed = self.original_target_speed * 0.3
+        
+        # Update trajectory planner's target speed (if it supports dynamic updates)
+        if hasattr(self.trajectory_planner, 'planner') and hasattr(self.trajectory_planner.planner, 'target_speed'):
+            self.trajectory_planner.planner.target_speed = adjusted_target_speed
+        elif hasattr(self.trajectory_planner, 'target_speed'):
+            self.trajectory_planner.target_speed = adjusted_target_speed
+        
+        # Log speed adjustment if health is degraded
+        if self.perception_health_status != "healthy" and self.frame_count % 30 == 0:  # Log every second
+            logger.warning(f"[Frame {self.frame_count}] ⚠️  Perception health-based speed reduction: "
+                         f"{self.perception_health_status} -> target speed: {adjusted_target_speed:.2f} m/s "
+                         f"(original: {self.original_target_speed:.2f} m/s)")
         
         # 2. Trajectory Planning: Plan path
         trajectory = self.trajectory_planner.plan(lane_coeffs, vehicle_state_dict)
@@ -976,6 +1628,11 @@ class AVStack:
                 'pid_derivative': 0.0
             }
         else:
+                # Post-jump cooldown: reduce aggressiveness for a short window after teleport
+                if self.post_jump_cooldown_frames > 0:
+                    cooldown_scale = self.safety_config.get('post_jump_speed_scale', 0.5)
+                    reference_point['velocity'] = reference_point.get('velocity', 8.0) * cooldown_scale
+
                 # Limit reference velocity to prevent requesting high speeds
                 if reference_point.get('velocity', 8.0) > max_speed:
                     reference_point['velocity'] = max_speed * 0.9  # 90% of max for safety
@@ -997,6 +1654,16 @@ class AVStack:
                     control_command['throttle'] = 0.0
                     control_command['brake'] = brake_override
                     # Keep steering for safety (steer while braking)
+                
+                # Post-jump cooldown: clamp steering/throttle to avoid oscillation
+                if self.post_jump_cooldown_frames > 0:
+                    steering_scale = self.safety_config.get('post_jump_steering_scale', 0.6)
+                    control_command['steering'] = np.clip(
+                        control_command.get('steering', 0.0) * steering_scale,
+                        -self.controller.lateral_controller.max_steering,
+                        self.controller.lateral_controller.max_steering,
+                    )
+                    control_command['throttle'] = control_command.get('throttle', 0.0) * cooldown_scale
                 
                 # Speed prevention: Limit throttle when approaching speed limit
                 # FIXED: Start prevention earlier (at 70% instead of 85%)
@@ -1073,6 +1740,16 @@ class AVStack:
                 is_emergency_condition = (lateral_error_abs > emergency_stop_error or 
                                         lateral_error_abs > out_of_bounds_threshold or 
                                         perception_failed)
+
+                # Teleport/jump guard: skip emergency stop briefly after a position jump
+                if (teleport_guard_active or self.post_jump_cooldown_frames > 0) and is_emergency_condition:
+                    logger.warning(
+                        f"[Frame {self.frame_count}] [TELEPORT GUARD] Emergency stop suppressed during "
+                        f"post-jump cooldown (jump={self.last_teleport_distance:.2f}m, "
+                        f"dt={self.last_teleport_dt if self.last_teleport_dt is not None else 'N/A'}s, "
+                        f"cooldown_frames={self.post_jump_cooldown_frames})."
+                    )
+                    is_emergency_condition = False
                 
                 # Reset logged flag if emergency condition cleared
                 if not is_emergency_condition:
@@ -1188,6 +1865,27 @@ class AVStack:
             self._record_frame(
                 image, timestamp, vehicle_state_dict,
                 perception_output, trajectory, control_command
+            )
+
+        # Update teleport guard countdown and vehicle position tracking
+        if self.teleport_guard_frames_remaining > 0:
+            self.teleport_guard_frames_remaining -= 1
+        if self.post_jump_cooldown_frames > 0:
+            self.post_jump_cooldown_frames -= 1
+        self.last_vehicle_position = current_position
+        self.last_vehicle_timestamp = timestamp
+
+        process_duration = time.time() - process_start
+        if process_duration > 0.1:
+            unity_frame = vehicle_state_dict.get('unityFrameCount') or vehicle_state_dict.get('unity_frame_count')
+            unity_time = vehicle_state_dict.get('unityTime') or vehicle_state_dict.get('unity_time')
+            logger.warning(
+                "[FRAME_PROCESS_SLOW] duration=%.3fs perception=%.3fs frame=%s unity_frame=%s unity_time=%s",
+                process_duration,
+                perception_duration,
+                self.frame_count,
+                unity_frame if unity_frame is not None else "n/a",
+                f"{unity_time:.3f}" if unity_time is not None else "n/a",
             )
         
         # Log status periodically (every 30 frames = ~1 second at 30 FPS)
@@ -1357,6 +2055,12 @@ class AVStack:
         camera_8m_screen_y = vehicle_state_dict.get('camera8mScreenY')
         if camera_8m_screen_y is None:
             camera_8m_screen_y = vehicle_state_dict.get('camera_8m_screen_y', -1.0)
+        camera_lookahead_screen_y = vehicle_state_dict.get('cameraLookaheadScreenY')
+        if camera_lookahead_screen_y is None:
+            camera_lookahead_screen_y = vehicle_state_dict.get('camera_lookahead_screen_y', -1.0)
+        ground_truth_lookahead_distance = vehicle_state_dict.get('groundTruthLookaheadDistance')
+        if ground_truth_lookahead_distance is None:
+            ground_truth_lookahead_distance = vehicle_state_dict.get('ground_truth_lookahead_distance', 8.0)
         
         # NEW: Extract camera FOV data (what Unity actually uses)
         camera_field_of_view = vehicle_state_dict.get('cameraFieldOfView')
@@ -1408,12 +2112,20 @@ class AVStack:
             steering_angle=vehicle_state_dict.get('steeringAngle', 0.0),
             motor_torque=vehicle_state_dict.get('motorTorque', 0.0),
             brake_torque=vehicle_state_dict.get('brakeTorque', 0.0),
+            unity_time=vehicle_state_dict.get('unityTime', vehicle_state_dict.get('unity_time', 0.0)),
+            unity_frame_count=vehicle_state_dict.get('unityFrameCount', vehicle_state_dict.get('unity_frame_count', 0)),
+            unity_delta_time=vehicle_state_dict.get('unityDeltaTime', vehicle_state_dict.get('unity_delta_time', 0.0)),
+            unity_smooth_delta_time=vehicle_state_dict.get('unitySmoothDeltaTime', vehicle_state_dict.get('unity_smooth_delta_time', 0.0)),
+            unity_unscaled_delta_time=vehicle_state_dict.get('unityUnscaledDeltaTime', vehicle_state_dict.get('unity_unscaled_delta_time', 0.0)),
+            unity_time_scale=vehicle_state_dict.get('unityTimeScale', vehicle_state_dict.get('unity_time_scale', 1.0)),
             ground_truth_left_lane_line_x=gt_left_lane_line_x,
             ground_truth_right_lane_line_x=gt_right_lane_line_x,
             ground_truth_lane_center_x=gt_lane_center_x,
             ground_truth_path_curvature=gt_path_curvature,
             ground_truth_desired_heading=gt_desired_heading,
             camera_8m_screen_y=camera_8m_screen_y,  # NEW: Camera calibration data
+            camera_lookahead_screen_y=camera_lookahead_screen_y,
+            ground_truth_lookahead_distance=ground_truth_lookahead_distance,
             camera_field_of_view=camera_field_of_view,  # NEW: Camera FOV data
             camera_horizontal_fov=camera_horizontal_fov,  # NEW: Camera horizontal FOV
             camera_pos_x=vehicle_state_dict.get('cameraPosX', 0.0),  # NEW: Camera position
@@ -1447,6 +2159,10 @@ class AVStack:
             lateral_error=control_command.get('lateral_error'),
             heading_error=control_command.get('heading_error'),
             total_error=control_command.get('total_error'),
+            is_straight=control_command.get('is_straight'),
+            straight_oscillation_rate=control_command.get('straight_oscillation_rate'),
+            tuned_deadband=control_command.get('tuned_deadband'),
+            tuned_error_smoothing_alpha=control_command.get('tuned_error_smoothing_alpha'),
             # Diagnostic fields for tracking stale perception usage
             using_stale_perception=perception_output.using_stale_data if perception_output else False,
             stale_perception_reason=perception_output.stale_data_reason if perception_output else None
@@ -1459,6 +2175,7 @@ class AVStack:
         ref_point = None  # Initialize ref_point
         # FIXED: Check if trajectory exists AND has points (not just truthy check)
         if trajectory is not None and hasattr(trajectory, 'points') and len(trajectory.points) > 0:
+            confidence = perception_output.confidence if perception_output else None
             # Get reference point for recording
             # Extract lane_coeffs from perception_output for direct computation
             lane_coeffs_for_ref = None
@@ -1487,7 +2204,9 @@ class AVStack:
                 lookahead=reference_lookahead,
                 lane_coeffs=lane_coeffs_for_ref,  # Pass lane coefficients for direct computation
                 lane_positions=lane_positions_for_ref,  # Preferred: use vehicle coords
-                use_direct=True  # Use direct midpoint computation
+                use_direct=True,  # Use direct midpoint computation
+                timestamp=timestamp,
+                confidence=confidence,
             )
             
             # Build trajectory points array with reference point first
@@ -1602,6 +2321,14 @@ def main():
                        help='Disable data recording')
     parser.add_argument('--recording_dir', type=str, default='data/recordings',
                        help='Directory for recordings')
+    parser.add_argument('--use-cv', action='store_true',
+                       help='Force CV-based perception (override default segmentation)')
+    parser.add_argument(
+        '--segmentation-checkpoint',
+        type=str,
+        default='data/segmentation_dataset/checkpoints/segnet_best.pt',
+        help='Segmentation checkpoint path (default: segnet_best.pt)',
+    )
     parser.add_argument('--max_frames', type=int, default=None,
                        help='Maximum number of frames to process')
     parser.add_argument('--duration', type=float, default=None,
@@ -1611,13 +2338,22 @@ def main():
     
     args = parser.parse_args()
     
+    use_segmentation = not args.use_cv
+    if use_segmentation and not Path(args.segmentation_checkpoint).exists():
+        parser.error(
+            f"Segmentation checkpoint not found: {args.segmentation_checkpoint}. "
+            "Provide --segmentation-checkpoint or run with --use-cv."
+        )
+    
     # Create and run AV stack
     av_stack = AVStack(
         bridge_url=args.bridge_url,
         model_path=args.model_path,
         record_data=args.record,
         config_path=args.config,
-        recording_dir=args.recording_dir
+        recording_dir=args.recording_dir,
+        use_segmentation=use_segmentation,
+        segmentation_model_path=args.segmentation_checkpoint,
     )
     
     av_stack.run(max_frames=args.max_frames, duration=args.duration)

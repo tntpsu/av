@@ -158,12 +158,20 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::CarController
   maxSteerAngle: 30
+  wheelbaseMeters: 2.5
   motorForce: 8
   brakeForce: 5000
   maxSpeed: 10
   inputActionAsset: {fileID: -944628639613478452, guid: 052faaac586de48259a63d0c4782560b, type: 3}
   avControlEnabled: 0
   avControlPriority: 1
+  maxCommandAgeSeconds: 0.2
+  staleCommandBrake: 0.3
+  groundTruthMode: 0
+  groundTruthSpeed: 5
+  logProfilerOnHitch: 1
+  hitchThresholdSeconds: 0.2
+  periodicProfilerLogFrames: 300
   steerInput: 0
   throttleInput: 0
   brakeInput: 0
@@ -187,9 +195,13 @@ MonoBehaviour:
   stateEndpoint: /api/vehicle/state
   controlEndpoint: /api/vehicle/control
   shutdownEndpoint: /api/shutdown
+  playEndpoint: /api/unity/play
   trajectoryEndpoint: /api/trajectory
+  feedbackEndpoint: /api/unity/feedback
   updateRate: 30
   shutdownCheckInterval: 1
+  playCheckInterval: 0.5
+  feedbackSendInterval: 1
   enableAVControl: 1
   showDebugInfo: 1
 --- !u!114 &5555555555555555555
@@ -237,6 +249,10 @@ MonoBehaviour:
   rightLaneXWorld: 3.5
   laneWidth: 7
   currentLane: 1
+  autoDetectRoadGenerator: 1
+  useTimeBasedReference: 1
+  referenceSpeed: 5
+  groundTruthLookaheadDistance: 6
 --- !u!1 &9000000000000000001
 GameObject:
   m_ObjectHideFlags: 0
@@ -342,6 +358,7 @@ MonoBehaviour:
   cameraEndpoint: /api/camera
   showDebugInfo: 1
   saveLocalImages: 0
+  useAsyncGPUReadback: 1
 --- !u!114 &2286305326873183381
 MonoBehaviour:
   m_ObjectHideFlags: 0

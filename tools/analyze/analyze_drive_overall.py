@@ -63,6 +63,9 @@ class DriveMetrics:
     steering_smoothness: float  # 1/std of steering
     oscillation_frequency: float
     control_effort: float
+    straight_frames: int
+    straight_oscillation_rate: float
+    straight_stability_score: float
     
     # Perception quality
     lane_detection_rate: float
@@ -123,6 +126,7 @@ class DriveAnalyzer:
                 self.data['lateral_error'] = np.array(f['control/lateral_error'][:]) if 'control/lateral_error' in f else None
                 self.data['heading_error'] = np.array(f['control/heading_error'][:]) if 'control/heading_error' in f else None
                 self.data['total_error'] = np.array(f['control/total_error'][:]) if 'control/total_error' in f else None
+        self.data['path_curvature_input'] = np.array(f['control/path_curvature_input'][:]) if 'control/path_curvature_input' in f else None
                 self.data['pid_integral'] = np.array(f['control/pid_integral'][:]) if 'control/pid_integral' in f else None
                 self.data['pid_derivative'] = np.array(f['control/pid_derivative'][:]) if 'control/pid_derivative' in f else None
                 
@@ -247,6 +251,22 @@ class DriveAnalyzer:
         if self.data['ref_heading'] is not None:
             curvature_changes = np.diff(self.data['ref_heading'])
             trajectory_smoothness = 1.0 / (np.std(curvature_changes) + 1e-6)
+
+        # Straight-away stability (steering sign changes on straight segments)
+        straight_frames = 0
+        straight_oscillation_rate = 0.0
+        straight_stability_score = 0.0
+        curvature_source = self.data['path_curvature_input']
+        if curvature_source is None:
+            curvature_source = self.data['ref_heading']
+        if curvature_source is not None and self.data['steering'] is not None:
+            straight_mask = np.abs(curvature_source) < 0.02
+            straight_frames = int(np.sum(straight_mask))
+            if straight_frames > 2:
+                steering_straight = self.data['steering'][straight_mask]
+                sign_changes = np.sum(np.sign(steering_straight[1:]) != np.sign(steering_straight[:-1]))
+                straight_oscillation_rate = sign_changes / max(1, len(steering_straight) - 1)
+                straight_stability_score = max(0.0, 1.0 - min(1.0, straight_oscillation_rate * 4.0))
         
         # Path curvature consistency
         path_curvature_consistency = 1.0 / (np.std(self.data['ref_heading']) + 1e-6) if self.data['ref_heading'] is not None else 0.0
@@ -304,6 +324,9 @@ class DriveAnalyzer:
             steering_smoothness=steering_smoothness,
             oscillation_frequency=oscillation_frequency,
             control_effort=control_effort,
+            straight_frames=straight_frames,
+            straight_oscillation_rate=straight_oscillation_rate,
+            straight_stability_score=straight_stability_score,
             lane_detection_rate=lane_detection_rate,
             perception_confidence_mean=perception_confidence_mean,
             perception_confidence_std=perception_confidence_std,
@@ -408,6 +431,11 @@ class DriveAnalyzer:
         print(f"   Steering Smoothness: {self.metrics.steering_smoothness:.2f} (higher is better)")
         print(f"   Oscillation Frequency: {self.metrics.oscillation_frequency:.2f} Hz")
         print(f"   Control Effort: {self.metrics.control_effort:.2f}")
+        print()
+        print(f"   Straight-Away Stability:")
+        print(f"     Straight Frames: {self.metrics.straight_frames}")
+        print(f"     Steering Sign-Change Rate: {self.metrics.straight_oscillation_rate:.3f}")
+        print(f"     Stability Score: {self.metrics.straight_stability_score:.2f} (higher is better)")
         print()
         
         # 4. PERCEPTION QUALITY

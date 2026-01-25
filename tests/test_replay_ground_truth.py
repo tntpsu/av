@@ -114,8 +114,8 @@ def test_lane_center_accuracy(recording_path: str = None):
         positions = np.array(f['vehicle/position'])
         rotations = np.array(f['vehicle/rotation'])
         num_lanes = np.array(f['perception/num_lanes_detected'])
-        left_lane_x = np.array(f['perception/left_lane_x'])
-        right_lane_x = np.array(f['perception/right_lane_x'])
+        left_lane_x = np.array(f['perception/left_lane_line_x'])
+        right_lane_x = np.array(f['perception/right_lane_line_x'])
         ref_x = np.array(f['trajectory/reference_point_x'])
         
         errors = []
@@ -196,8 +196,8 @@ def test_reference_point_accuracy(recording_path: str = None):
         positions = np.array(f['vehicle/position'])
         rotations = np.array(f['vehicle/rotation'])
         num_lanes = np.array(f['perception/num_lanes_detected'])
-        left_lane_x = np.array(f['perception/left_lane_x'])
-        right_lane_x = np.array(f['perception/right_lane_x'])
+        left_lane_x = np.array(f['perception/left_lane_line_x'])
+        right_lane_x = np.array(f['perception/right_lane_line_x'])
         ref_x = np.array(f['trajectory/reference_point_x'])
         
         errors = []
@@ -261,8 +261,8 @@ def test_lane_width_accuracy(recording_path: str = None):
         
         # Get data
         num_lanes = np.array(f['perception/num_lanes_detected'])
-        left_lane_x = np.array(f['perception/left_lane_x'])
-        right_lane_x = np.array(f['perception/right_lane_x'])
+        left_lane_x = np.array(f['perception/left_lane_line_x'])
+        right_lane_x = np.array(f['perception/right_lane_line_x'])
         
         widths = []
         valid_frames = 0

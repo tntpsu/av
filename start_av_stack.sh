@@ -8,6 +8,10 @@
 #   ./start_av_stack.sh --force            # Auto-kill existing processes and start
 #   ./start_av_stack.sh --launch-unity      # Launch Unity automatically
 #   ./start_av_stack.sh --unity-auto-play   # Launch Unity and auto-enter play mode
+#   ./start_av_stack.sh --build-unity-player  # Build Unity player (macOS)
+#   ./start_av_stack.sh --skip-unity-build-if-clean  # Skip build if no Unity changes
+#   ./start_av_stack.sh --run-unity-player    # Run Unity player executable (macOS)
+#   ./start_av_stack.sh --build-unity-player --run-unity-player  # Build then run
 #   ./start_av_stack.sh --record            # Start with data recording enabled
 #   ./start_av_stack.sh --duration 60       # Run for 60 seconds (similar to ground_truth_follower.py)
 #   ./start_av_stack.sh --duration 30 --launch-unity  # Run for 30 seconds and launch Unity
@@ -29,10 +33,41 @@ VENV_PATH="$SCRIPT_DIR/venv"
 FORCE_KILL=false
 LAUNCH_UNITY=false
 UNITY_AUTO_PLAY=false
+KEEP_UNITY_OPEN=false
+BUILD_UNITY_PLAYER=false
+RUN_UNITY_PLAYER=false
+UNITY_BUILD_PATH=""
+UNITY_CLI_PATH=""
+SKIP_UNITY_BUILD_IF_CLEAN=false
+
+usage() {
+    echo "Usage: ./start_av_stack.sh [options] [av_stack.py args]"
+    echo ""
+    echo "Script options:"
+    echo "  --force, -f            Auto-kill existing process on port 8000"
+    echo "  --launch-unity, -u     Launch Unity automatically"
+    echo "  --unity-auto-play, -p  Launch Unity and auto-enter Play mode"
+    echo "  --build-unity-player   Build Unity player executable (macOS)"
+    echo "  --run-unity-player     Run Unity player executable (macOS)"
+    echo "  --unity-build-path     Output path for Unity player (default: unity/AVSimulation/mybuild.app)"
+    echo "  --unity-path           Path to Unity executable for CLI builds"
+    echo "  --skip-unity-build-if-clean  Skip Unity build when no changes are detected"
+    echo "  --keep-unity-open      Do not quit Unity when the run ends"
+    echo "  --help, -h             Show this help message"
+    echo ""
+    echo "av_stack.py args are passed through, e.g.:"
+    echo "  --duration 60 --max_frames 300 --recording_dir data/recordings"
+}
 
 # Parse command line arguments
+# Keep non-script args to pass through to av_stack.py
+PASSTHROUGH_ARGS=()
 while [[ $# -gt 0 ]]; do
     case $1 in
+        --help|-h)
+            usage
+            exit 0
+            ;;
         --force|-f)
             FORCE_KILL=true
             shift
@@ -46,9 +81,34 @@ while [[ $# -gt 0 ]]; do
             UNITY_AUTO_PLAY=true
             shift
             ;;
+        --keep-unity-open)
+            KEEP_UNITY_OPEN=true
+            shift
+            ;;
+        --build-unity-player)
+            BUILD_UNITY_PLAYER=true
+            shift
+            ;;
+        --run-unity-player)
+            RUN_UNITY_PLAYER=true
+            shift
+            ;;
+        --unity-build-path)
+            UNITY_BUILD_PATH="$2"
+            shift 2
+            ;;
+        --unity-path)
+            UNITY_CLI_PATH="$2"
+            shift 2
+            ;;
+        --skip-unity-build-if-clean)
+            SKIP_UNITY_BUILD_IF_CLEAN=true
+            shift
+            ;;
         *)
-            # Pass through to av_stack.py
-            break
+            # Pass through to av_stack.py (preserve order and values)
+            PASSTHROUGH_ARGS+=("$1")
+            shift
             ;;
     esac
 done
@@ -138,6 +198,10 @@ mkdir -p "$SCRIPT_DIR/tmp/logs"
 AV_STACK_LOG="$SCRIPT_DIR/tmp/logs/av_stack.log"
 AV_BRIDGE_LOG="$SCRIPT_DIR/tmp/logs/av_bridge.log"
 
+if [ -z "$UNITY_BUILD_PATH" ]; then
+    UNITY_BUILD_PATH="$SCRIPT_DIR/unity/AVSimulation/mybuild.app"
+fi
+
 # Start bridge server in background
 echo -e "${BLUE}Starting bridge server on port $BRIDGE_PORT...${NC}"
 cd "$SCRIPT_DIR"
@@ -171,6 +235,61 @@ echo -e "${GREEN}═════════════════════
 echo ""
 
 # Launch Unity if requested
+if [ "$BUILD_UNITY_PLAYER" = true ]; then
+    echo -e "${BLUE}Building Unity player...${NC}"
+    BUILD_ARGS=()
+    if [ -n "$UNITY_CLI_PATH" ]; then
+        BUILD_ARGS+=(--unity-path "$UNITY_CLI_PATH")
+    fi
+    if [ -n "$UNITY_BUILD_PATH" ]; then
+        BUILD_ARGS+=(--build-path "$UNITY_BUILD_PATH")
+    fi
+    if [ "$SKIP_UNITY_BUILD_IF_CLEAN" = true ]; then
+        BUILD_ARGS+=(--skip-if-clean)
+    fi
+    "$SCRIPT_DIR/build_unity_player.sh" "${BUILD_ARGS[@]}"
+    echo ""
+fi
+
+UNITY_PLAYER_PID=""
+
+launch_unity_player() {
+    local app_path="$1"
+    if [ ! -d "$app_path" ]; then
+        echo -e "${RED}✗ Unity player not found at: $app_path${NC}"
+        return 1
+    fi
+
+    local plist_path="$app_path/Contents/Info.plist"
+    local exec_name=""
+    if [ -f "$plist_path" ]; then
+        exec_name=$(/usr/libexec/PlistBuddy -c "Print :CFBundleExecutable" "$plist_path" 2>/dev/null || true)
+    fi
+
+    local exec_path=""
+    if [ -n "$exec_name" ] && [ -f "$app_path/Contents/MacOS/$exec_name" ]; then
+        exec_path="$app_path/Contents/MacOS/$exec_name"
+    fi
+
+    echo -e "${BLUE}Launching Unity player...${NC}"
+    if [ -n "$exec_path" ]; then
+        "$exec_path" &
+        UNITY_PLAYER_PID=$!
+        echo -e "${GREEN}✓ Unity player launched (PID: $UNITY_PLAYER_PID)${NC}"
+    else
+        echo -e "${YELLOW}⚠ Could not resolve player executable; using 'open'${NC}"
+        open -n "$app_path" &
+        echo -e "${GREEN}✓ Unity player launched (via open)${NC}"
+    fi
+}
+
+if [ "$RUN_UNITY_PLAYER" = true ]; then
+    LAUNCH_UNITY=false
+    UNITY_AUTO_PLAY=false
+    launch_unity_player "$UNITY_BUILD_PATH"
+    echo ""
+fi
+
 if [ "$LAUNCH_UNITY" = true ]; then
     echo -e "${BLUE}Launching Unity...${NC}"
     UNITY_ARGS=""
@@ -207,6 +326,7 @@ else
     echo -e "${BLUE}4. Press ${GREEN}▶ PLAY${BLUE} in Unity${NC}"
     echo ""
     echo -e "${YELLOW}Or use: ${GREEN}./start_av_stack.sh --launch-unity${YELLOW} to auto-launch Unity${NC}"
+    echo -e "${YELLOW}Or use: ${GREEN}./start_av_stack.sh --run-unity-player${YELLOW} to run the built player${NC}"
     echo ""
     echo -e "${YELLOW}══════════════════════════════════════════════════════════${NC}"
     echo ""
@@ -232,29 +352,35 @@ cleanup() {
     
     # Handle Unity shutdown based on how it was started
     if [ "$LAUNCH_UNITY" = true ]; then
-        # Unity was launched by this script - quit it entirely
-        if [ -z "$UNITY_PID" ]; then
-            UNITY_PID=$(pgrep -f "Unity.*AVSimulation" | head -1 || echo "")
-        fi
-        
-        if [ ! -z "$UNITY_PID" ]; then
-            echo -e "${BLUE}Shutting down Unity (PID: $UNITY_PID)...${NC}"
-            echo -e "${BLUE}  (Unity will exit play mode automatically before quitting)${NC}"
-            # Send TERM signal - Unity Editor script will exit play mode then quit
-            kill -TERM $UNITY_PID 2>/dev/null || true
-            sleep 3  # Give Unity time to exit play mode and quit gracefully
-            # Force kill if still running
-            if kill -0 $UNITY_PID 2>/dev/null; then
-                echo -e "${YELLOW}Unity still running, forcing shutdown...${NC}"
-                kill -9 $UNITY_PID 2>/dev/null || true
-            else
-                echo -e "${GREEN}✓ Unity closed gracefully${NC}"
+        if [ "$KEEP_UNITY_OPEN" = true ]; then
+            echo -e "${BLUE}Unity was launched by this script${NC}"
+            echo -e "${BLUE}  Leaving Unity open (requested via --keep-unity-open)${NC}"
+            # Unity will exit play mode via shutdown endpoint polling
+        else
+            # Unity was launched by this script - quit it entirely
+            if [ -z "$UNITY_PID" ]; then
+                UNITY_PID=$(pgrep -f "Unity.*AVSimulation" | head -1 || echo "")
             fi
-        fi
-        
-        # Also kill the launch script if still running
-        if [ ! -z "$UNITY_SCRIPT_PID" ]; then
-            kill $UNITY_SCRIPT_PID 2>/dev/null || true
+            
+            if [ ! -z "$UNITY_PID" ]; then
+                echo -e "${BLUE}Shutting down Unity (PID: $UNITY_PID)...${NC}"
+                echo -e "${BLUE}  (Unity will exit play mode automatically before quitting)${NC}"
+                # Send TERM signal - Unity Editor script will exit play mode then quit
+                kill -TERM $UNITY_PID 2>/dev/null || true
+                sleep 3  # Give Unity time to exit play mode and quit gracefully
+                # Force kill if still running
+                if kill -0 $UNITY_PID 2>/dev/null; then
+                    echo -e "${YELLOW}Unity still running, forcing shutdown...${NC}"
+                    kill -9 $UNITY_PID 2>/dev/null || true
+                else
+                    echo -e "${GREEN}✓ Unity closed gracefully${NC}"
+                fi
+            fi
+            
+            # Also kill the launch script if still running
+            if [ ! -z "$UNITY_SCRIPT_PID" ]; then
+                kill $UNITY_SCRIPT_PID 2>/dev/null || true
+            fi
         fi
     else
         # Unity was manually started - just signal it to exit play mode (don't quit Unity)
@@ -268,9 +394,30 @@ cleanup() {
             # Unity will detect shutdown via /api/shutdown endpoint polling
         fi
     fi
+
+    if [ "$RUN_UNITY_PLAYER" = true ]; then
+        if [ "$KEEP_UNITY_OPEN" = true ]; then
+            echo -e "${BLUE}Unity player was launched by this script${NC}"
+            echo -e "${BLUE}  Leaving Unity player open (requested via --keep-unity-open)${NC}"
+        else
+            if [ ! -z "$UNITY_PLAYER_PID" ]; then
+                echo -e "${BLUE}Shutting down Unity player (PID: $UNITY_PLAYER_PID)...${NC}"
+                kill -TERM $UNITY_PLAYER_PID 2>/dev/null || true
+                sleep 2
+                if kill -0 $UNITY_PLAYER_PID 2>/dev/null; then
+                    echo -e "${YELLOW}Unity player still running, forcing shutdown...${NC}"
+                    kill -9 $UNITY_PLAYER_PID 2>/dev/null || true
+                else
+                    echo -e "${GREEN}✓ Unity player closed gracefully${NC}"
+                fi
+            else
+                echo -e "${YELLOW}Unity player PID not tracked; please close it manually if needed${NC}"
+            fi
+        fi
+    fi
     
     # Also kill the launch script if still running (only if we launched Unity)
-    if [ "$LAUNCH_UNITY" = true ] && [ ! -z "$UNITY_SCRIPT_PID" ]; then
+    if [ "$LAUNCH_UNITY" = true ] && [ "$KEEP_UNITY_OPEN" = false ] && [ ! -z "$UNITY_SCRIPT_PID" ]; then
         kill $UNITY_SCRIPT_PID 2>/dev/null || true
     fi
     
@@ -284,7 +431,7 @@ trap cleanup SIGINT SIGTERM
 # Enable recording by default for comprehensive logging
 # Redirect output to log file for monitoring
 # Pass through any additional arguments (e.g., --duration 60, --max_frames 1000)
-python "$SCRIPT_DIR/av_stack.py" --bridge_url "$BRIDGE_URL" --record "$@" 2>&1 | tee "$AV_STACK_LOG"
+python "$SCRIPT_DIR/av_stack.py" --bridge_url "$BRIDGE_URL" --record "${PASSTHROUGH_ARGS[@]}" 2>&1 | tee "$AV_STACK_LOG"
 EXIT_CODE=${PIPESTATUS[0]}  # Capture exit code of Python script (not tee)
 
 # CRITICAL: Call cleanup when script ends normally (not just on signals)

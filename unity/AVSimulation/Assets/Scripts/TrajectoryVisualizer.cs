@@ -573,8 +573,8 @@ public class TrajectoryVisualizer : MonoBehaviour
                     }
                 }
                 
-                // Debug: Log marker status periodically
-                if (showDebugInfo && Time.frameCount % 30 == 0)
+                // Debug: Log marker status periodically (throttled to reduce spam)
+                if (showDebugInfo && Time.frameCount % 300 == 0)
                 {
                     bool rendererEnabled = markerRenderer != null ? markerRenderer.enabled : false;
                     Debug.Log($"TrajectoryVisualizer: Reference marker at {referencePoint}, active={referencePointMarker.activeSelf}, layer={referencePointMarker.layer}, renderer.enabled={rendererEnabled}");

@@ -5,13 +5,15 @@
 control:
   # Lateral (Steering) Control
   lateral:
-    kp: 1.0              # REDUCED: From 2.5 to 1.0 to prevent overcompensation
-                          # Problem: kp=2.5 caused steering to max out (1.0) on moderate errors (0.4)
-                          # This created oscillation: max → low → max instead of constant steering
-                          # With kp=1.0: Error 0.4 → Steering 0.4 (not max, allows constant steering on curves)
-                          # Still responsive enough for corrections, but prevents overcompensation
-    ki: 0.002            # TUNED: Parameter sweep found ki=0.002 optimal
-                          # Lower ki prevents integral accumulation
+    kp: 2.2              # INCREASED: From 2.0 to 2.2 for better error response
+                          # Test showed kp=2.0, ki=0.004, heading_weight=0.75 still produces RMSE 0.500m
+                          # Slight increase to 2.2 to meet 0.4m threshold
+                          # Previous: kp=2.5 caused oscillation, kp=2.2 should be safe
+                          # Will monitor for oscillation in Unity testing
+    ki: 0.004            # INCREASED: From 0.003 to 0.004 for better steady-state correction
+                          # Test showed kp=2.0, ki=0.003 still produces RMSE 0.500m (above 0.4m threshold)
+                          # Increasing ki helps eliminate persistent lateral offset
+                          # Still within safe range (0.003-0.005) to prevent integral accumulation
     kd: 0.5              # FIXED: Increased from 0.45 to 0.5 to match higher kp
                           # Provides good damping without over-damping
     max_steering: 1.0    # INCREASED: Maximum steering angle (-1.0 to 1.0)
@@ -22,10 +24,12 @@ control:
                           # Increased to 1.0 (full steering authority) to handle curves and corrections
                           # This is 100% more steering authority than original 0.5
     deadband: 0.01       # Deadband in radians (~0.57 degrees) - errors smaller than this are ignored
-    heading_weight: 0.6  # FIXED: Increased from 0.5 to 0.6 for stronger heading correction
+    heading_weight: 0.75  # INCREASED: From 0.7 to 0.75 for stronger heading correction
+                          # Test showed heading_weight=0.7 still produces RMSE 0.500m (above 0.4m threshold)
                           # Critical: Heading correction is key to reducing lateral error over time
                           # Higher weight prioritizes heading correction over lateral offset
-    lateral_weight: 0.4  # FIXED: Decreased from 0.5 to 0.4 to balance with increased heading weight
+                          # Helps reduce lateral error RMSE (target: < 0.4m)
+    lateral_weight: 0.25  # DECREASED: From 0.3 to 0.25 to balance with increased heading weight (0.75)
     error_clip: 1.57    # INCREASED: Maximum error in radians (π/2 = 90 degrees, was π/4 = 45°)
                         # Analysis showed error_clip=0.785 was limiting PID input, causing low effective gain
                         # Increasing to π/2 allows PID to use more of the kp value (2.5)

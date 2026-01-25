@@ -103,6 +103,7 @@ class LateralController:
         """
         self.lookahead_distance = lookahead_distance
         self.max_steering = max_steering
+        self.base_deadband = deadband
         self.deadband = deadband
         self.heading_weight = heading_weight
         self.lateral_weight = lateral_weight
@@ -119,6 +120,26 @@ class LateralController:
         self.last_error_sign = None
         self.recent_large_error = False  # Track if we recently had large error (on curve)
         self.large_error_frames = 0  # Count consecutive frames with large error
+        
+        # NEW: Error smoothing to reduce sensitivity to perception noise
+        # Smooth lateral error before feeding to PID to prevent control oscillations from perception instability
+        self.smoothed_lateral_error = None
+        self.base_error_smoothing_alpha = 0.7  # Exponential smoothing: 70% new value, 30% old value (can be tuned)
+        self.error_smoothing_alpha = self.base_error_smoothing_alpha
+
+        # Straight-away adaptive tuning (deadband + smoothing)
+        self.straight_curvature_threshold = 0.02
+        self.straight_window = 60  # ~2 seconds at 30 FPS
+        self.straight_oscillation_high = 0.20
+        self.straight_oscillation_low = 0.05
+        self.deadband_min = 0.01
+        self.deadband_max = 0.08
+        self.smoothing_min = 0.60
+        self.smoothing_max = 0.90
+        self._straight_frames = 0
+        self._straight_sign_changes = 0
+        self._last_straight_sign = 0
+        self.straight_oscillation_rate = 0.0
     
     def compute_steering(self, current_heading: float, reference_point: dict,
                         vehicle_position: Optional[np.ndarray] = None, 
@@ -167,14 +188,10 @@ class LateralController:
         # Subtracting current_heading causes conflicts: car heading more right → negative heading_error
         # But lateral_error is positive → conflict!
         # Solution: heading_error = heading_to_ref (correction needed to point toward reference)
-        if abs(path_curvature) > 0.05:  # On a curve (curvature > ~3°)
-            # On curves: use heading_to_ref directly (correction needed)
-            # Don't subtract current_heading - it causes conflicts
-            # heading_to_ref already represents the heading correction needed
-            heading_error = heading_to_ref
-        else:
-            # Straight road: use heading_to_ref - current_heading (simple correction)
-            heading_error = heading_to_ref - current_heading
+        # NOTE: heading_to_ref is already computed in vehicle frame.
+        # Subtracting current_heading (world frame) causes large sign flips on straights.
+        # Use heading_to_ref directly for both straights and curves.
+        heading_error = heading_to_ref
         
         # Normalize error to [-pi, pi]
         heading_error = np.arctan2(np.sin(heading_error), np.cos(heading_error))
@@ -220,6 +237,21 @@ class LateralController:
         # But ref_x is still the best estimate we have
         lateral_error = base_lateral_error
         
+        # NEW: Smooth lateral error to reduce sensitivity to perception noise
+        # Perception instability can cause small changes in lane position that propagate to control
+        # Smoothing the error prevents control oscillations from perception noise
+        if self.smoothed_lateral_error is None:
+            self.smoothed_lateral_error = lateral_error
+        else:
+            # Exponential smoothing: blend new error with previous smoothed error
+            self.smoothed_lateral_error = (self.error_smoothing_alpha * lateral_error + 
+                                         (1.0 - self.error_smoothing_alpha) * self.smoothed_lateral_error)
+        
+        # Use smoothed error for control (but store original for recording/analysis)
+        # Steering sign convention: positive ref_x means target is to the RIGHT, so steering should be positive.
+        lateral_error_for_control = self.smoothed_lateral_error
+        lateral_error_for_recording = lateral_error  # Store original for analysis
+        
         # FIXED: Prioritize lateral_error when heading_error conflicts
         # Analysis showed 67% of frames have heading/lateral conflicts causing 24% sign errors
         # Solution: When conflicts occur, prioritize lateral_error (more reliable for steering)
@@ -234,18 +266,20 @@ class LateralController:
             # This prevents heading effect from dominating
             total_error = 0.8 * heading_error + 0.2 * lateral_error
         elif has_conflict:
-            # CRITICAL FIX: When conflicts occur, use ONLY lateral_error
+            # CRITICAL FIX: When conflicts occur, use ONLY lateral_error (smoothed)
             # On curves, heading_error can conflict with lateral_error
             # Lateral error is more reliable for steering direction
             # Use 100% lateral_error to prevent wrong steering sign
             # This is especially important on curves where heading_error might be noisy
-            total_error = lateral_error
+            total_error = lateral_error_for_control
         else:
             # Normal operation: use configurable weights (errors agree)
-            total_error = self.heading_weight * heading_error + self.lateral_weight * lateral_error
+            # Use smoothed lateral error for control to reduce perception noise sensitivity
+            total_error = self.heading_weight * heading_error + self.lateral_weight * lateral_error_for_control
         
         # Scale error to prevent overreaction
         total_error = np.clip(total_error, -self.error_clip, self.error_clip)
+        stored_total_error = total_error
         
         # Add deadband to prevent constant small corrections
         # CRITICAL FIX: Don't apply deadband when on curves - we need continuous steering
@@ -255,10 +289,9 @@ class LateralController:
             # Only apply deadband on straight roads, not on curves
             total_error = 0.0
         
-        # Store errors for metadata
-        stored_lateral_error = lateral_error
+        # Store errors for metadata (use original, not smoothed, for analysis)
+        stored_lateral_error = lateral_error_for_recording  # Store original for analysis
         stored_heading_error = heading_error
-        stored_total_error = total_error
         
         # FIXED: More aggressive integral reset to prevent accumulation (was 11.63x increase after 6s)
         # Strategy: Multiple reset mechanisms with stricter thresholds
@@ -553,6 +586,45 @@ class LateralController:
         
         # Apply additional smoothing to prevent oscillation
         steering = np.clip(steering_before_limits, -self.max_steering, self.max_steering)
+
+        # Straight-away adaptive tuning (deadband + smoothing)
+        is_straight = abs(path_curvature) < self.straight_curvature_threshold
+        if is_straight:
+            steering_sign = np.sign(steering) if abs(steering) > 0.02 else 0
+            if self._last_straight_sign != 0 and steering_sign != 0 and steering_sign != self._last_straight_sign:
+                self._straight_sign_changes += 1
+            if steering_sign != 0:
+                self._last_straight_sign = steering_sign
+            self._straight_frames += 1
+
+            if self._straight_frames >= self.straight_window:
+                self.straight_oscillation_rate = self._straight_sign_changes / max(1, self._straight_frames - 1)
+                if self.straight_oscillation_rate > self.straight_oscillation_high:
+                    # Too much weave on straight: increase deadband and smoothing
+                    self.deadband = min(self.deadband_max, self.deadband + 0.005)
+                    self.error_smoothing_alpha = min(self.smoothing_max, self.error_smoothing_alpha + 0.02)
+                elif self.straight_oscillation_rate < self.straight_oscillation_low:
+                    # Stable: relax toward baseline
+                    if self.deadband > self.base_deadband:
+                        self.deadband = max(self.base_deadband, self.deadband - 0.003)
+                    if self.error_smoothing_alpha > self.base_error_smoothing_alpha:
+                        self.error_smoothing_alpha = max(self.base_error_smoothing_alpha, self.error_smoothing_alpha - 0.01)
+                # Reset window counters
+                self._straight_frames = 0
+                self._straight_sign_changes = 0
+        else:
+            # Off straight: decay toward baseline
+            if self.deadband > self.base_deadband:
+                self.deadband = max(self.base_deadband, self.deadband - 0.002)
+            elif self.deadband < self.base_deadband:
+                self.deadband = min(self.base_deadband, self.deadband + 0.001)
+            if self.error_smoothing_alpha > self.base_error_smoothing_alpha:
+                self.error_smoothing_alpha = max(self.base_error_smoothing_alpha, self.error_smoothing_alpha - 0.005)
+            elif self.error_smoothing_alpha < self.base_error_smoothing_alpha:
+                self.error_smoothing_alpha = min(self.base_error_smoothing_alpha, self.error_smoothing_alpha + 0.003)
+            self._straight_frames = 0
+            self._straight_sign_changes = 0
+            self._last_straight_sign = 0
         
         if return_metadata:
             return {
@@ -562,7 +634,11 @@ class LateralController:
                 'heading_error': stored_heading_error,
                 'total_error': stored_total_error,
                 'pid_integral': pid_integral,
-                'pid_derivative': pid_derivative
+                'pid_derivative': pid_derivative,
+                'is_straight': is_straight,
+                'straight_oscillation_rate': self.straight_oscillation_rate,
+                'tuned_deadband': self.deadband,
+                'tuned_error_smoothing_alpha': self.error_smoothing_alpha
             }
         
         return steering

@@ -7,7 +7,7 @@
 Run the startup script:
 
 ```bash
-# Basic startup
+# Basic startup (segmentation default)
 ./start_av_stack.sh
 
 # With Unity auto-launch and auto-play
@@ -15,6 +15,9 @@ Run the startup script:
 
 # Force kill existing processes on port 8000
 ./start_av_stack.sh --force --launch-unity --unity-auto-play
+
+# Build and run standalone Unity player (no editor interaction)
+./start_av_stack.sh --build-unity-player --skip-unity-build-if-clean --run-unity-player --duration 60
 ```
 
 This script will:
@@ -25,6 +28,8 @@ This script will:
 - ✅ Start the AV stack (with data recording enabled by default)
 - ✅ Optionally launch Unity Editor (`--launch-unity`)
 - ✅ Optionally auto-enter play mode (`--unity-auto-play`)
+- ✅ Optionally build the standalone Unity player (`--build-unity-player`)
+- ✅ Optionally run the standalone Unity player (`--run-unity-player`)
 - ✅ Show you clear instructions for Unity
 
 ### Option 2: Manual Startup
@@ -105,10 +110,10 @@ The script will ask if you want to kill the existing process. Say 'y' to restart
 - Verify lane lines are visible (should be white) - if gray, materials may not be assigned
 
 ### Lane detection not working
+- By default, segmentation is used; force CV with `./start_av_stack.sh --use-cv`
 - Verify lane lines have white material assigned (should appear bright white in scene)
 - Check camera is positioned correctly on car (AVCamera GameObject)
-- Review CV detection logs: `grep "CV fallback" /tmp/av_stack.log`
-- Test CV detection on recorded frames: `python perception/test_cv_detection.py`
+- Review detection logs: `grep "CV fallback" /tmp/av_stack.log`
 
 ### Unity not auto-playing
 - Check `.unity_autoplay` flag file exists in Unity project root
@@ -129,9 +134,24 @@ The script will ask if you want to kill the existing process. Say 'y' to restart
 # Auto-enter play mode in Unity
 ./start_av_stack.sh --unity-auto-play
 
+# Build Unity player (macOS) and skip if no Unity changes
+./start_av_stack.sh --build-unity-player --skip-unity-build-if-clean
+
+# Run the standalone Unity player
+./start_av_stack.sh --run-unity-player
+
+# Build then run the player
+./start_av_stack.sh --build-unity-player --run-unity-player
+
+# Custom Unity paths
+./start_av_stack.sh --unity-path /Applications/Unity/Hub/Editor/6000.3.1f1/Unity.app/Contents/MacOS/Unity \
+  --unity-build-path /path/to/mybuild.app
+
 # Combine all options
 ./start_av_stack.sh --force --launch-unity --unity-auto-play
 ```
+
+**Note:** Unity Editor must be closed for CLI builds (`--build-unity-player`).
 
 ### AV Stack Options
 
@@ -152,6 +172,9 @@ python av_stack.py --bridge_url http://localhost:8000
 
 # Custom config file
 python av_stack.py --config /path/to/custom_config.yaml
+
+# Use a trained segmentation checkpoint
+python av_stack.py --segmentation-checkpoint /path/to/checkpoint.pt
 
 # Custom recording directory
 python av_stack.py --recording_dir data/my_recordings

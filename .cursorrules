@@ -22,7 +22,7 @@ This is an autonomous vehicle (AV) stack for Unity 3D simulation. The project us
 ### Key Components
 
 **Perception** (`perception/inference.py`):
-- CV-based lane detection (no ML models currently)
+- Segmentation-based lane detection (default) with CV fallback
 - Temporal filtering for stability
 - Jump detection to reject bad detections
 - Coordinate conversion (image → vehicle frame)

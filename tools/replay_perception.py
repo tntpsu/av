@@ -34,7 +34,13 @@ from data.recorder import DataRecorder
 from data.formats.data_format import CameraFrame, VehicleState, ControlCommand
 
 
-def replay_perception(input_recording: str, output_name: str = None, reference_lookahead: float = 7.0):
+def replay_perception(
+    input_recording: str,
+    output_name: str = None,
+    reference_lookahead: float = 7.0,
+    use_segmentation: bool = False,
+    segmentation_checkpoint: str = None,
+):
     """
     Replay perception stack against a recording using ground truth.
     
@@ -61,7 +67,9 @@ def replay_perception(input_recording: str, output_name: str = None, reference_l
         av_stack = AVStack(
             bridge_url="http://localhost:8000",  # Not used, but required
             record_data=True,  # Enable recording
-            recording_dir="data/recordings"
+            recording_dir="data/recordings",
+            use_segmentation=use_segmentation,
+            segmentation_model_path=segmentation_checkpoint,
         )
         
         # CRITICAL: Override reference_lookahead to match visualizer tuning
@@ -76,6 +84,7 @@ def replay_perception(input_recording: str, output_name: str = None, reference_l
         av_stack.recorder.metadata["recording_type"] = "perception_replay"
         av_stack.recorder.metadata["source_recording"] = Path(input_recording).name
         av_stack.recorder.metadata["reference_lookahead"] = reference_lookahead  # Record the tuning used
+        av_stack.recorder.metadata["perception_mode"] = "segmentation" if use_segmentation else "cv_or_ml"
         
         print("\nReplaying perception stack against recording...")
         print("="*80)
@@ -118,6 +127,12 @@ def replay_perception(input_recording: str, output_name: str = None, reference_l
                 'groundTruthRightLaneLineX': float(f["ground_truth/right_lane_line_x"][i]) if "ground_truth/right_lane_line_x" in f else float(f["ground_truth/right_lane_x"][i]),
                 'groundTruthLaneCenterX': float(f["ground_truth/lane_center_x"][i])
             }
+
+            # Ground truth path curvature/heading if present
+            if "ground_truth/path_curvature" in f:
+                vehicle_state_dict['groundTruthPathCurvature'] = float(f["ground_truth/path_curvature"][i])
+            if "ground_truth/desired_heading" in f:
+                vehicle_state_dict['groundTruthDesiredHeading'] = float(f["ground_truth/desired_heading"][i])
             
             # Add camera calibration data if available
             if "vehicle/camera_8m_screen_y" in f:
@@ -200,6 +215,10 @@ Examples:
                        help="Path to input recording (default: latest)")
     parser.add_argument("--output", type=str, default=None,
                        help="Output recording name")
+    parser.add_argument("--use-segmentation", action="store_true",
+                       help="Use segmentation model for perception replay")
+    parser.add_argument("--segmentation-checkpoint", type=str, default=None,
+                       help="Segmentation checkpoint path (required with --use-segmentation)")
     parser.add_argument("--reference-lookahead", type=float, default=7.0,
                        help="Reference lookahead distance in meters (default: 7.0m to match visualizer tuning)")
     parser.add_argument("--list", action="store_true",
@@ -252,7 +271,17 @@ Examples:
         print(f"  (You can specify a different recording: python tools/replay_perception.py <path>)")
         print(f"  (List recordings: python tools/replay_perception.py --list)\n")
     
-    output_file = replay_perception(input_file, args.output, args.reference_lookahead)
+    if args.use_segmentation and not args.segmentation_checkpoint:
+        print("Error: --segmentation-checkpoint is required with --use-segmentation")
+        sys.exit(1)
+    
+    output_file = replay_perception(
+        input_file,
+        args.output,
+        args.reference_lookahead,
+        use_segmentation=args.use_segmentation,
+        segmentation_checkpoint=args.segmentation_checkpoint,
+    )
     print(f"\nNow analyze the new recording:")
-    print(f"  python tools/analyze_perception_questions.py {output_file}")
+    print(f"  python tools/analyze/analyze_perception_questions.py {output_file}")
 

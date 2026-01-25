@@ -28,6 +28,12 @@ class VehicleState:
     steering_angle: float
     motor_torque: float
     brake_torque: float
+    unity_time: float = 0.0
+    unity_frame_count: int = 0
+    unity_delta_time: float = 0.0
+    unity_smooth_delta_time: float = 0.0
+    unity_unscaled_delta_time: float = 0.0
+    unity_time_scale: float = 1.0
     # Ground truth lane positions (optional, from Unity)
     ground_truth_left_lane_line_x: float = 0.0  # Left lane line (painted marking) position
     ground_truth_right_lane_line_x: float = 0.0  # Right lane line (painted marking) position
@@ -36,6 +42,8 @@ class VehicleState:
     ground_truth_path_curvature: float = 0.0  # Path curvature (1/meters) - CRITICAL for verification!
     ground_truth_desired_heading: float = 0.0  # Desired heading (degrees) - for heading error analysis
     camera_8m_screen_y: float = -1.0  # Actual screen y pixel where 8m appears (from Unity's WorldToScreenPoint) - for distance calibration
+    camera_lookahead_screen_y: float = -1.0  # Screen y pixel for ground truth lookahead distance
+    ground_truth_lookahead_distance: float = 8.0  # Lookahead distance used for ground truth
     # NEW: Camera FOV values from Unity
     camera_field_of_view: float = -1.0 # Unity's Camera.fieldOfView (vertical FOV)
     camera_horizontal_fov: float = -1.0 # Calculated horizontal FOV from Unity
@@ -83,6 +91,11 @@ class ControlCommand:
     # NEW: Diagnostic fields for tracking stale data usage
     using_stale_perception: bool = False  # True if control is using stale perception data
     stale_perception_reason: Optional[str] = None  # Reason: "jump_detection", "perception_failure", "frozen", etc.
+    # Straight-away stability metrics / tuning
+    is_straight: Optional[bool] = None
+    straight_oscillation_rate: Optional[float] = None
+    tuned_deadband: Optional[float] = None
+    tuned_error_smoothing_alpha: Optional[float] = None
 
 
 @dataclass
@@ -102,6 +115,18 @@ class PerceptionOutput:
     left_jump_magnitude: Optional[float] = None  # Magnitude of left lane jump (if jump detected)
     right_jump_magnitude: Optional[float] = None  # Magnitude of right lane jump (if jump detected)
     jump_threshold: Optional[float] = None  # Threshold used for jump detection
+    # NEW: Diagnostic fields for perception instability
+    actual_detected_left_lane_x: Optional[float] = None  # Actual detected left lane position (when rejected due to instability)
+    actual_detected_right_lane_x: Optional[float] = None  # Actual detected right lane position (when rejected due to instability)
+    instability_width_change: Optional[float] = None  # Width change that triggered instability detection
+    instability_center_shift: Optional[float] = None  # Center shift that triggered instability detection
+    # NEW: Perception health monitoring fields
+    consecutive_bad_detection_frames: int = 0  # Number of consecutive frames with <2 lanes detected
+    perception_health_score: float = 1.0  # Health score: 1.0 = perfect, 0.0 = failed (based on recent detection rate)
+    perception_health_status: str = "healthy"  # "healthy", "degraded", "poor", "critical"
+    # NEW: Points used for polynomial fitting (for debug visualization)
+    fit_points_left: Optional[np.ndarray] = None  # [[x, y], ...] points used for left lane fit
+    fit_points_right: Optional[np.ndarray] = None  # [[x, y], ...] points used for right lane fit
 
 
 @dataclass

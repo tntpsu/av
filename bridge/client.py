@@ -100,8 +100,41 @@ class UnityBridgeClient:
         except requests.RequestException:
             return None
     
-    def set_control_command(self, steering: float, throttle: float, brake: float, 
-                           ground_truth_mode: bool = False, ground_truth_speed: float = 5.0) -> bool:
+    def _build_control_command(
+        self,
+        steering: float,
+        throttle: float,
+        brake: float,
+        ground_truth_mode: bool = False,
+        ground_truth_speed: float = 5.0,
+        randomize_start: bool = False,
+        randomize_request_id: int = 0,
+        randomize_seed: int | None = None,
+    ) -> dict:
+        command = {
+            "steering": float(steering),
+            "throttle": float(throttle),
+            "brake": float(brake),
+            "ground_truth_mode": bool(ground_truth_mode),
+            "ground_truth_speed": float(ground_truth_speed),
+            "randomize_start": bool(randomize_start),
+            "randomize_request_id": int(randomize_request_id),
+        }
+        if randomize_seed is not None:
+            command["randomize_seed"] = int(randomize_seed)
+        return command
+
+    def set_control_command(
+        self,
+        steering: float,
+        throttle: float,
+        brake: float,
+        ground_truth_mode: bool = False,
+        ground_truth_speed: float = 5.0,
+        randomize_start: bool = False,
+        randomize_request_id: int = 0,
+        randomize_seed: int | None = None,
+    ) -> bool:
         """
         Set control command for Unity vehicle.
         
@@ -116,13 +149,16 @@ class UnityBridgeClient:
             True if successful, False otherwise
         """
         try:
-            command = {
-                "steering": float(steering),
-                "throttle": float(throttle),
-                "brake": float(brake),
-                "ground_truth_mode": ground_truth_mode,
-                "ground_truth_speed": float(ground_truth_speed)
-            }
+            command = self._build_control_command(
+                steering=steering,
+                throttle=throttle,
+                brake=brake,
+                ground_truth_mode=ground_truth_mode,
+                ground_truth_speed=ground_truth_speed,
+                randomize_start=randomize_start,
+                randomize_request_id=randomize_request_id,
+                randomize_seed=randomize_seed,
+            )
             
             response = self.session.post(
                 f"{self.base_url}/api/vehicle/control",

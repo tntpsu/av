@@ -31,6 +31,7 @@ ENV/
 *.swp
 *.swo
 *~
+*.code-workspace
 
 # Jupyter Notebook
 .ipynb_checkpoints
@@ -43,6 +44,7 @@ ENV/
 data/recordings/*.h5
 data/recordings/*.hdf5
 captures/
+data/segmentation_dataset/
 
 # Logs
 logs/
@@ -68,6 +70,10 @@ unity/**/*.VC.db
 unity/**/Logs/
 unity/**/*.log
 unity/**/UserSettings/
+unity/**/AVSimulation_BurstDebugInformation_DoNotShip/
+unity/**/ProfilerCaptures/
+unity/**/mybuild.app/
+unity/**/Assets/_Recovery/
 
 # OS
 .DS_Store

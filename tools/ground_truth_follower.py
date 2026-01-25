@@ -30,6 +30,7 @@ import time
 import numpy as np
 import logging
 from pathlib import Path
+from datetime import datetime
 import sys
 import subprocess
 import threading
@@ -40,6 +41,7 @@ import os
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from av_stack import AVStack
+from data.recorder import DataRecorder
 from data.formats.data_format import ControlCommand
 from typing import Optional
 import sys
@@ -95,14 +97,19 @@ class GroundTruthFollower:
     your perception stack against ground truth without needing Unity running.
     """
     
-    def __init__(self, bridge_url: str = "http://localhost:8000", 
-                 target_speed: float = 5.0,  # Constant speed
-                 lookahead: float = 8.0,
-                 start_bridge_server: bool = True,
-                 max_safe_speed: float = 10.0,  # Maximum safe speed
-                 speed_kp: float = 0.15,  # Speed control proportional gain
-                 speed_ki: float = 0.02,  # Speed control integral gain
-                 speed_kd: float = 0.05):  # Speed control derivative gain
+    def __init__(
+        self,
+        bridge_url: str = "http://localhost:8000",
+        target_speed: float = 5.0,  # Constant speed
+        lookahead: float = 8.0,
+        start_bridge_server: bool = True,
+        max_safe_speed: float = 10.0,  # Maximum safe speed
+        speed_kp: float = 0.15,  # Speed control proportional gain
+        speed_ki: float = 0.02,  # Speed control integral gain
+        speed_kd: float = 0.05,  # Speed control derivative gain
+        random_start: bool = False,
+        random_seed: Optional[int] = None,
+    ):
         """
         Initialize ground truth follower.
         
@@ -159,17 +166,12 @@ class GroundTruthFollower:
         self.base_speed = 3.0  # Base speed for gain calculation (m/s)
         
         # EXACT STEERING CALCULATION: Car physical properties (from Unity)
-        # Car scale: {x: 1.85, y: 1, z: 4} -> car length ~4m
-        # Typical wheelbase is ~60-70% of car length
+        # These are defaults and will be overridden by Unity vehicle state when available.
         self.wheelbase = 2.5  # meters (estimated from car length)
-        self.max_steer_angle_deg = 30.0  # degrees (from Unity: maxSteerAngle = 30f)
+        self.max_steer_angle_deg = 30.0  # degrees (Unity default)
         self.max_steer_angle_rad = np.deg2rad(self.max_steer_angle_deg)
-        
-        # Unity ground truth mode: steerAngle = steerInput * maxSteerAngle
-        # Then rotates by: steerAngle * Time.fixedDeltaTime (typically 0.02s)
-        # So: rotation_rate = steerInput * maxSteerAngle * (1 / fixedDeltaTime)
-        # For exact calculation, we need to know Unity's fixedDeltaTime
         self.unity_fixed_delta_time = 0.02  # Typical Unity FixedUpdate rate (50 Hz)
+        self.vehicle_params_source = "defaults"
         
         # Steering calculation mode
         self.use_exact_steering = True  # Use exact calculation from path geometry
@@ -217,6 +219,20 @@ class GroundTruthFollower:
         # Lateral error correction gain (small, just to stay centered)
         # Since path curvature handles the main steering, this is just a small correction
         self.lateral_correction_gain = 0.2  # Small gain for lateral error correction
+
+        # Curvature-based speed reduction and saturation fallback
+        self.min_target_speed = 2.0
+        self.curvature_speed_gain = 1.5  # Higher = reduce speed more on curves
+        self.steering_saturation_threshold = 0.9
+        self.steering_saturation_frames = 0
+        self.steering_saturation_limit = 3
+        self._speed_scale = 1.0
+        
+        # Randomized start support
+        self.random_start = random_start
+        self.random_seed = random_seed
+        self.randomize_request_id = 0
+        self.randomize_pending = False
         
         # Start bridge server if requested
         if self.start_bridge_server:
@@ -344,6 +360,34 @@ class GroundTruthFollower:
                 return exact_steering
             else:
                 return 0.0
+
+    def _update_vehicle_params(self, vehicle_state: dict) -> None:
+        """Update vehicle parameters from Unity state if available."""
+        try:
+            max_steer = float(vehicle_state.get("maxSteerAngle", 0.0))
+            wheelbase = float(vehicle_state.get("wheelbaseMeters", 0.0))
+            fixed_dt = float(vehicle_state.get("fixedDeltaTime", 0.0))
+        except (TypeError, ValueError):
+            return
+        
+        if max_steer > 0.0:
+            self.max_steer_angle_deg = max_steer
+            self.max_steer_angle_rad = np.deg2rad(self.max_steer_angle_deg)
+        if wheelbase > 0.0:
+            self.wheelbase = wheelbase
+        if fixed_dt > 0.0:
+            self.unity_fixed_delta_time = fixed_dt
+        
+        if max_steer > 0.0 or wheelbase > 0.0 or fixed_dt > 0.0:
+            self.vehicle_params_source = "unity_state"
+
+    @staticmethod
+    def _compute_speed_scale(curvature: float, gain: float, min_scale: float) -> float:
+        """Compute a speed scale factor based on path curvature."""
+        if curvature <= 0.0:
+            return 1.0
+        scale = 1.0 - (curvature * gain)
+        return float(np.clip(scale, min_scale, 1.0))
     
     def get_ground_truth_steering(self, vehicle_state: dict) -> float:
         """
@@ -365,6 +409,9 @@ class GroundTruthFollower:
             if isinstance(current_speed, (list, np.ndarray)):
                 current_speed = np.linalg.norm(current_speed) if len(current_speed) > 0 else 0.0
             current_speed = max(0.1, float(current_speed))  # Minimum 0.1 m/s to avoid division by zero
+            
+            # Update vehicle parameters from Unity state (max steer, wheelbase, fixed dt)
+            self._update_vehicle_params(vehicle_state)
             
             # Adjust gain based on speed
             # At higher speeds, reduce gain to prevent oversteering
@@ -428,6 +475,18 @@ class GroundTruthFollower:
             path_curvature = vehicle_state.get('groundTruthPathCurvature', 0.0) or vehicle_state.get('ground_truth_path_curvature', 0.0)
             lateral_correction = self.lateral_correction_gain * lane_center
             
+            # Curvature-based speed reduction (applied in speed controller)
+            self._speed_scale = self._compute_speed_scale(abs(path_curvature), self.curvature_speed_gain, 0.4)
+            
+            # Saturation fallback: reduce speed if steering saturates
+            if abs(raw_steering) >= self.steering_saturation_threshold:
+                self.steering_saturation_frames += 1
+            else:
+                self.steering_saturation_frames = max(0, self.steering_saturation_frames - 1)
+            
+            if self.steering_saturation_frames >= self.steering_saturation_limit:
+                self._speed_scale = min(self._speed_scale, 0.6)
+
             # Light smoothing to prevent sudden changes (optional, but helps stability)
             steering = (self.steering_smoothing * raw_steering + 
                        (1.0 - self.steering_smoothing) * self.last_steering)
@@ -450,7 +509,8 @@ class GroundTruthFollower:
                 logger.info(f"GT Steering [EXACT]: speed={current_speed:.2f}m/s, "
                            f"curvature={path_curvature:.4f} (1/m), "
                            f"lane_center={lane_center:.3f}m, "
-                           f"steering={steering:.3f} (raw={raw_steering:.3f})")
+                           f"steering={steering:.3f} (raw={raw_steering:.3f}), "
+                           f"speed_scale={self._speed_scale:.2f}, params={self.vehicle_params_source}")
                 
                 # CRITICAL: Verify coordinate system interpretation
                 if abs(lane_center) > 0.1:  # Only log when there's a significant offset
@@ -504,6 +564,15 @@ class GroundTruthFollower:
         logger.info(f"Starting ground truth following test (duration: {duration}s)")
         logger.info(f"Target speed: {self.target_speed} m/s")
         logger.info(f"Lookahead: {self.lookahead} m")
+        logger.info("Unity reminder: Ensure the CarController 'Ground Truth Mode' checkbox is enabled "
+                    "if you want GT mode active before the first control command.")
+        
+        if self.random_start:
+            self.randomize_request_id = int(time.time() * 1000)
+            self.randomize_pending = True
+            logger.info(
+                "Random start enabled: will request Unity to randomize oval start position."
+            )
         
         # Request Unity to start playing if requested
         if auto_play:
@@ -515,9 +584,23 @@ class GroundTruthFollower:
             else:
                 logger.warning("Failed to send play request to Unity. Unity may not be ready yet.")
         
-        # Override recording name if provided
+        # Override recording name if provided (recreate recorder so filename is correct)
         if recording_name and self.av_stack.recorder:
-            self.av_stack.recorder.recording_name = recording_name
+            try:
+                output_dir = str(self.av_stack.recorder.output_dir)
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                full_name = f"{recording_name}_{timestamp}"
+                # Close the original recorder (created at AVStack init)
+                self.av_stack.recorder.close()
+                self.av_stack.recorder = DataRecorder(
+                    output_dir=output_dir,
+                    recording_name=full_name,
+                    recording_type="gt_drive",
+                )
+                self.av_stack.recorder.metadata["recording_type"] = "gt_drive"
+                logger.info(f"Using recording name: {full_name}")
+            except Exception as e:
+                logger.error(f"Failed to reset recorder name: {e}", exc_info=True)
         
         # Wait for bridge connection (like normal AV stack)
         logger.info("Waiting for Unity bridge...")
@@ -641,9 +724,10 @@ class GroundTruthFollower:
                 # This makes the car follow the ground truth path (Unity needs steering commands to move)
                 steering = self.get_ground_truth_steering(vehicle_state)
                 
-                # PID speed control: maintain target speed
+                # PID speed control: maintain target speed (with curvature/saturation scaling)
                 # Tuned for Unity physics: motorForce=400, brake uses damping + velocity reduction
-                speed_error = self.target_speed - current_speed
+                effective_target_speed = max(self.min_target_speed, self.target_speed * self._speed_scale)
+                speed_error = effective_target_speed - current_speed
                 
                 # Emergency: speed way too high - maximum brake
                 if current_speed > self.max_safe_speed:
@@ -719,6 +803,16 @@ class GroundTruthFollower:
                     'throttle': float(throttle),
                     'brake': float(brake)
                 }
+                if self.randomize_pending:
+                    control_command_dict['randomize_start'] = True
+                    control_command_dict['randomize_request_id'] = self.randomize_request_id
+                    if self.random_seed is not None:
+                        control_command_dict['randomize_seed'] = int(self.random_seed)
+                    logger.info(
+                        "Requesting random start: request_id=%s, seed=%s",
+                        self.randomize_request_id,
+                        self.random_seed,
+                    )
                 
                 # Process frame through AV stack to run perception and record data
                 # This computes perception output (lane detection) and records everything
@@ -732,6 +826,8 @@ class GroundTruthFollower:
                         timestamp,
                         vehicle_state
                     )
+                    # Keep AVStack frame counter in sync to avoid repeated "Frame 0" logs.
+                    self.av_stack.frame_count += 1
                     
                     # Send our ground truth control command (not the computed one)
                     # Enable ground truth mode for direct velocity control
@@ -740,8 +836,13 @@ class GroundTruthFollower:
                         control_command_dict['throttle'],
                         control_command_dict['brake'],
                         ground_truth_mode=True,
-                        ground_truth_speed=self.target_speed
+                        ground_truth_speed=effective_target_speed,
+                        randomize_start=control_command_dict.get('randomize_start', False),
+                        randomize_request_id=control_command_dict.get('randomize_request_id', 0),
+                        randomize_seed=control_command_dict.get('randomize_seed')
                     )
+                    if control_success and self.randomize_pending:
+                        self.randomize_pending = False
                     
                     if not control_success:
                         logger.warning("Failed to send control command to Unity. Connection may be lost.")
@@ -771,7 +872,10 @@ class GroundTruthFollower:
                                 control_command_dict['throttle'],
                                 control_command_dict['brake'],
                                 ground_truth_mode=True,  # CRITICAL: Keep ground truth mode enabled!
-                                ground_truth_speed=self.target_speed
+                                ground_truth_speed=effective_target_speed,
+                                randomize_start=control_command_dict.get('randomize_start', False),
+                                randomize_request_id=control_command_dict.get('randomize_request_id', 0),
+                                randomize_seed=control_command_dict.get('randomize_seed')
                             )
                     except:
                         pass
@@ -840,6 +944,10 @@ def main():
                        help="Unity bridge URL (default: http://localhost:8000)")
     parser.add_argument("--auto-play", action="store_true",
                        help="Automatically start Unity play mode (requires Unity Editor to be open)")
+    parser.add_argument("--random-start", action="store_true",
+                       help="Randomize car start position on the oval")
+    parser.add_argument("--random-seed", type=int, default=None,
+                       help="Optional seed for random start reproducibility")
     
     args = parser.parse_args()
     
@@ -850,7 +958,9 @@ def main():
         max_safe_speed=10.0,
         speed_kp=0.15,  # Tuned for Unity: motorForce=400, smooth at 5 m/s
         speed_ki=0.02,  # Small integral for steady-state accuracy
-        speed_kd=0.05   # Derivative for damping oscillations
+        speed_kd=0.05,  # Derivative for damping oscillations
+        random_start=args.random_start,
+        random_seed=args.random_seed,
     )
     
     try:

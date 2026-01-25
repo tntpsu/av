@@ -31,6 +31,10 @@ public class GroundTruthReporter : MonoBehaviour
     
     [Tooltip("Reference speed for time-based path (m/s)")]
     public float referenceSpeed = 5.0f;
+
+    [Header("Ground Truth Lookahead")]
+    [Tooltip("Lookahead distance (m) used for ground truth lane positions and road-center debug")]
+    public float groundTruthLookaheadDistance = 8.0f;
     
     private Transform carTransform;
     private Camera avCamera;  // NEW: Camera reference for calculating ground truth from camera position
@@ -343,6 +347,101 @@ public class GroundTruthReporter : MonoBehaviour
         }
         
         return (position, direction);
+    }
+
+    /// <summary>
+    /// Reset time-based reference to the car's current position.
+    /// This prevents large jumps when ground truth mode is enabled after a delay.
+    /// </summary>
+    public bool ResetTimeBasedReferenceToCar(string reason = null)
+    {
+        if (!useTimeBasedReference || !useDynamicGroundTruth || roadGenerator == null)
+        {
+            return false;
+        }
+        
+        Vector3 carPos;
+        if (cachedCarRigidbody != null)
+        {
+            carPos = cachedCarRigidbody.position;
+        }
+        else if (carTransform != null)
+        {
+            cachedCarRigidbody = carTransform.GetComponent<Rigidbody>();
+            carPos = cachedCarRigidbody != null ? cachedCarRigidbody.position : carTransform.position;
+        }
+        else
+        {
+            Debug.LogWarning("GroundTruthReporter: ResetTimeBasedReferenceToCar - carTransform is null");
+            return false;
+        }
+        
+        float startT = FindClosestPointOnOval(carPos);
+        float startDistance = GetDistanceAlongPath(0f, startT);
+        if (referenceSpeed > 0.01f)
+        {
+            pathStartTime = Time.time - (startDistance / referenceSpeed);
+        }
+        else
+        {
+            pathStartTime = Time.time;
+        }
+        
+        string reasonText = string.IsNullOrWhiteSpace(reason) ? "" : $" Reason: {reason}.";
+        Debug.Log($"GroundTruthReporter: Reset time-based reference to car position at t={startT:F3}, " +
+                  $"distance={startDistance:F2}m.{reasonText}");
+        return true;
+    }
+
+    /// <summary>
+    /// Move the car to a random point on the oval and align its heading.
+    /// </summary>
+    public bool SetCarToRandomStart(int seed = -1)
+    {
+        if (!useDynamicGroundTruth || roadGenerator == null || carTransform == null)
+        {
+            Debug.LogWarning("GroundTruthReporter: Random start requires dynamic ground truth and car transform.");
+            return false;
+        }
+
+        if (seed >= 0)
+        {
+            UnityEngine.Random.InitState(seed);
+        }
+
+        float t = UnityEngine.Random.value;
+        Vector3 referencePosition = roadGenerator.GetOvalCenterPoint(t);
+        Vector3 referenceDirection = roadGenerator.GetOvalDirection(t);
+        if (referenceDirection.sqrMagnitude < 0.01f)
+        {
+            referenceDirection = Vector3.forward;
+        }
+
+        Vector3 currentPos = carTransform.position;
+        referencePosition.y = currentPos.y;  // Keep car height consistent
+        Quaternion targetRotation = Quaternion.LookRotation(referenceDirection.normalized, Vector3.up);
+
+        if (cachedCarRigidbody == null)
+        {
+            cachedCarRigidbody = carTransform.GetComponent<Rigidbody>();
+        }
+
+        if (cachedCarRigidbody != null)
+        {
+            cachedCarRigidbody.position = referencePosition;
+            cachedCarRigidbody.rotation = targetRotation;
+            cachedCarRigidbody.linearVelocity = Vector3.zero;
+            cachedCarRigidbody.angularVelocity = Vector3.zero;
+        }
+        else
+        {
+            carTransform.position = referencePosition;
+            carTransform.rotation = targetRotation;
+        }
+
+        ResetTimeBasedReferenceToCar("Random start");
+        Debug.Log($"GroundTruthReporter: Random start set to t={t:F3}, position={referencePosition}, direction={referenceDirection}");
+        return true;
     }
     
     /// <summary>

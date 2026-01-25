@@ -46,14 +46,14 @@ class PerceptionGroundTruthTest:
     def _load_data(self):
         """Load all data from recording."""
         # Ground truth
-        self.gt_left = self.h5_file["ground_truth/left_lane_x"][:]
-        self.gt_right = self.h5_file["ground_truth/right_lane_x"][:]
+        self.gt_left = self.h5_file["ground_truth/left_lane_line_x"][:]
+        self.gt_right = self.h5_file["ground_truth/right_lane_line_x"][:]
         self.gt_center = self.h5_file["ground_truth/lane_center_x"][:]
         self.gt_width = self.gt_right - self.gt_left
         
         # Perception
-        self.perception_left = self.h5_file["perception/left_lane_x"][:]
-        self.perception_right = self.h5_file["perception/right_lane_x"][:]
+        self.perception_left = self.h5_file["perception/left_lane_line_x"][:]
+        self.perception_right = self.h5_file["perception/right_lane_line_x"][:]
         self.perception_width = self.perception_right - self.perception_left
         self.num_lanes_detected = self.h5_file["perception/num_lanes_detected"][:]
         
@@ -61,6 +61,14 @@ class PerceptionGroundTruthTest:
         self.heading = np.degrees(self.h5_file["trajectory/reference_point_heading"][:])
         self.ref_x = self.h5_file["trajectory/reference_point_x"][:]
         self.ref_y = self.h5_file["trajectory/reference_point_y"][:]
+
+        # Ground truth heading/curvature (optional)
+        self.gt_desired_heading = None
+        self.gt_path_curvature = None
+        if "ground_truth/desired_heading" in self.h5_file:
+            self.gt_desired_heading = self.h5_file["ground_truth/desired_heading"][:]
+        if "ground_truth/path_curvature" in self.h5_file:
+            self.gt_path_curvature = self.h5_file["ground_truth/path_curvature"][:]
         
         # Vehicle state
         self.positions = self.h5_file["vehicle/position"][:]
@@ -111,6 +119,30 @@ class PerceptionGroundTruthTest:
             return np.degrees(heading_rad)
         else:
             return 0.0
+
+    def get_curve_mask(
+        self,
+        curvature_threshold: float = 0.01,
+        heading_threshold_deg: float = 2.0,
+    ) -> Tuple[np.ndarray, str]:
+        """
+        Return a boolean mask of curve frames and a description of the source.
+
+        Preference order:
+        1) ground_truth/path_curvature
+        2) ground_truth/desired_heading
+        3) perception heading (trajectory/reference_point_heading)
+        """
+        if self.gt_path_curvature is not None:
+            curve_mask = np.abs(self.gt_path_curvature) > curvature_threshold
+            source = f"path_curvature>|{curvature_threshold}|"
+        elif self.gt_desired_heading is not None:
+            curve_mask = np.abs(self.gt_desired_heading) > heading_threshold_deg
+            source = f"desired_heading>|{heading_threshold_deg}°|"
+        else:
+            curve_mask = np.abs(self.heading) > heading_threshold_deg
+            source = f"perception_heading>|{heading_threshold_deg}°|"
+        return curve_mask, source
     
     def analyze_frame(self, frame_idx: int) -> Dict:
         """
@@ -234,13 +266,20 @@ class PerceptionGroundTruthTest:
             self.h5_file.close()
 
 
-def test_perception_accuracy(recording_file: str):
+def test_perception_accuracy(recording_file: str = None):
     """
     Test perception accuracy against ground truth.
     
     Args:
-        recording_file: Path to recording file
+        recording_file: Path to recording file (default: latest)
     """
+    if recording_file is None:
+        recordings_dir = Path("data/recordings")
+        recordings = sorted(recordings_dir.glob("*.h5"), key=lambda p: p.stat().st_mtime, reverse=True)
+        if not recordings:
+            pytest.skip("No recordings found")
+        recording_file = str(recordings[0])
+    
     test = PerceptionGroundTruthTest(recording_file)
     
     try:

@@ -39,6 +39,28 @@ pytest tests/ --pdb
 pytest tests/test_control.py -v
 ```
 
+#### `test_control_lateral_error_performance.py` ⭐ **NEW**
+**Purpose:** Control system performance validation (catches tuning issues before Unity testing)
+
+**What it tests:**
+- Lateral error RMSE on straight roads (< 0.4m acceptable, < 0.2m good)
+- Lateral error RMSE on curved roads (< 0.4m acceptable)
+- Step response convergence (< 2 seconds, < 0.2m final error)
+
+**Why it's important:**
+- Uses same RMSE thresholds as Path Tracking metrics in debug visualizer
+- Catches control tuning issues **before** Unity testing
+- Would have caught the 0.565m RMSE issue that showed up in Unity
+
+**Run:**
+```bash
+pytest tests/test_control_lateral_error_performance.py -v
+```
+
+**If test fails:**
+- See `docs/CONTROL_TUNING_RECOMMENDATIONS.md` for tuning guidance
+- Typically indicates need to increase `kp` (proportional gain)
+
 #### `test_steering_controller.py`
 **Purpose:** Steering controller specific tests
 

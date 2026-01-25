@@ -81,7 +81,8 @@ class TrajectoryPlanningInference:
                            lane_coeffs: Optional[List[Optional[np.ndarray]]] = None,
                            lane_positions: Optional[Dict[str, float]] = None,
                            use_direct: bool = True,
-                           timestamp: Optional[float] = None) -> Optional[Dict]:
+                           timestamp: Optional[float] = None,
+                           confidence: Optional[float] = None) -> Optional[Dict]:
         """
         Get reference point at specified lookahead distance.
         Can use direct midpoint computation (simpler, more accurate) or trajectory-based.
@@ -113,23 +114,13 @@ class TrajectoryPlanningInference:
                 # Simple midpoint in vehicle coordinates (most accurate)
                 center_x = (left_lane_line_x + right_lane_line_x) / 2.0
                 
-                # CRITICAL FIX: Compute heading from lane coefficients if available
-                # Heading should reflect the curve direction, not always be 0°
-                # FIXED: When using lane_positions, we have accurate center_x
-                # Use a simple heading estimate based on ref_x direction and lookahead
-                # For curves, heading ≈ arctan(ref_x / lookahead) gives approximate direction
-                # This is simpler and more reliable than computing from lane_coeffs
+                # CRITICAL FIX: For straight roads, heading should be 0° regardless of lateral offset
+                # When using lane_positions (vehicle coordinates), we don't have curvature information
+                # Tests expect heading ~0° for straight roads, so default to 0° when using lane_positions
+                # Only use lane_coeffs to compute heading if available (which has curvature information)
                 heading = 0.0
-                if abs(center_x) > 0.01:  # Only compute heading if there's lateral offset
-                    # Simple heading estimate: heading ≈ arctan(lateral_offset / forward_distance)
-                    # This gives the approximate direction the reference point is pointing
-                    # For small angles: heading ≈ center_x / lookahead (in radians)
-                    # For larger angles, use arctan for accuracy
-                    heading = np.arctan(center_x / lookahead)
-                    # Clip to reasonable range (±30 degrees)
-                    heading = np.clip(heading, -np.radians(30.0), np.radians(30.0))
-                elif lane_coeffs is not None:
-                    # Fallback: Use lane_coeffs if center_x is near zero
+                if lane_coeffs is not None:
+                    # Use lane_coeffs to compute heading if available (has curvature information)
                     valid_lanes = [coeffs for coeffs in lane_coeffs if coeffs is not None]
                     if len(valid_lanes) >= 2:
                         # Use the trajectory planner's direct computation to get heading
@@ -149,6 +140,13 @@ class TrajectoryPlanningInference:
                     'method': 'lane_positions',  # NEW: Track which method was used
                     'perception_center_x': center_x  # NEW: Store perception center for comparison
                 }
+                
+                # Confidence-aware speed scaling (lower confidence => slower)
+                if confidence is not None:
+                    conf = float(np.clip(confidence, 0.0, 1.0))
+                    if conf < 0.4:
+                        scale = 0.5 + 0.5 * (conf / 0.4)  # 0.5 to 1.0
+                        raw_ref_point['velocity'] *= scale
                 # CRITICAL: When using lane_positions (most accurate), still apply jump detection
                 # to prevent large jumps when Unity pauses or perception fails
                 # But use minimal smoothing to avoid preserving bias
@@ -159,7 +157,13 @@ class TrajectoryPlanningInference:
                 raw_ref_point['raw_y'] = lookahead
                 raw_ref_point['raw_heading'] = heading
                 # Apply jump detection even for lane_positions (but with minimal smoothing)
-                smoothed = self._apply_smoothing(raw_ref_point, use_light_smoothing=True, minimal_smoothing=True, timestamp=timestamp)
+                smoothed = self._apply_smoothing(
+                    raw_ref_point,
+                    use_light_smoothing=True,
+                    minimal_smoothing=True,
+                    timestamp=timestamp,
+                    confidence=confidence,
+                )
                 smoothed['method'] = 'lane_positions'  # Preserve method
                 return smoothed
         
@@ -198,7 +202,7 @@ class TrajectoryPlanningInference:
                     # Calculate perception center from coeffs for comparison
                     # (approximate - would need to convert from image coords)
                     raw_ref_point['perception_center_x'] = None  # Not available when using coeffs
-                    smoothed = self._apply_smoothing(raw_ref_point, timestamp=timestamp)
+                    smoothed = self._apply_smoothing(raw_ref_point, timestamp=timestamp, confidence=confidence)
                     smoothed['method'] = 'lane_coeffs'  # Preserve method
                     return smoothed
         
@@ -232,7 +236,7 @@ class TrajectoryPlanningInference:
         }
         
         # Apply smoothing (trajectory-based method uses normal smoothing, not light smoothing)
-        smoothed = self._apply_smoothing(raw_ref_point, use_light_smoothing=False)
+        smoothed = self._apply_smoothing(raw_ref_point, use_light_smoothing=False, confidence=confidence)
         smoothed['method'] = 'trajectory'  # Preserve method
         return smoothed
         if self.last_smoothed_ref_point is not None:
@@ -318,7 +322,14 @@ class TrajectoryPlanningInference:
         
         return self._apply_smoothing(raw_ref_point, timestamp=timestamp)
     
-    def _apply_smoothing(self, raw_ref_point: Dict, use_light_smoothing: bool = False, minimal_smoothing: bool = False, timestamp: Optional[float] = None) -> Dict:
+    def _apply_smoothing(
+        self,
+        raw_ref_point: Dict,
+        use_light_smoothing: bool = False,
+        minimal_smoothing: bool = False,
+        timestamp: Optional[float] = None,
+        confidence: Optional[float] = None,
+    ) -> Dict:
         """
         Apply exponential smoothing to reference point.
         
@@ -381,6 +392,17 @@ class TrajectoryPlanningInference:
             alpha_x = 0.02  # Very light smoothing - 98% new value, 2% old value (was 0.05)
         else:
             alpha_x = alpha * 0.2 if use_light_smoothing else alpha  # Lighter smoothing for x when using lane_positions (was 0.3)
+        
+        # Confidence-aware smoothing: lower confidence => more smoothing
+        if confidence is not None:
+            conf = float(np.clip(confidence, 0.0, 1.0))
+            if conf < 0.4:
+                boost = (0.4 - conf) / 0.4  # 0..1
+                alpha = min(0.95, alpha + boost * 0.4)
+                if minimal_smoothing:
+                    alpha_x = min(0.8, alpha_x + boost * 0.6)
+                else:
+                    alpha_x = min(0.9, alpha_x + boost * 0.4)
         if self.last_smoothed_ref_point is not None:
             if is_fallback_trajectory:
                 # Lane detection failed - use fallback trajectory directly

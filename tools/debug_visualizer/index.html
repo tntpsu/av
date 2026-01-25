@@ -34,10 +34,15 @@
                 <!-- Debug Overlay Controls -->
                 <div class="debug-controls">
                     <h3>Debug Overlays</h3>
+                    <button id="generate-debug-btn" style="padding: 0.5rem 1rem; background: #4a90e2; color: white; border: none; border-radius: 4px; cursor: pointer; margin-bottom: 0.5rem; width: 100%;">
+                        Generate Debug Overlays (Current Frame)
+                    </button>
+                    
                     <div class="debug-toggles">
                         <label><input type="checkbox" id="toggle-combined"> Combined</label>
                         <label><input type="checkbox" id="toggle-edges"> Edges</label>
                         <label><input type="checkbox" id="toggle-yellow-mask"> Yellow Mask</label>
+                        <label><input type="checkbox" id="toggle-fit-points"> Fit Points (Magenta/Cyan)</label>
                         <label><input type="checkbox" id="toggle-histogram"> Histogram</label>
                     </div>
                     <div class="opacity-control">
@@ -56,17 +61,6 @@
                         <label><input type="checkbox" id="toggle-trajectory" checked> Trajectory</label>
                         <label><input type="checkbox" id="toggle-reference" checked> Reference Point</label>
                     </div>
-                    <div class="distance-control" style="margin-top: 1rem; padding-top: 1rem; border-top: 1px solid #444;">
-                        <label style="display: block; margin-bottom: 0.5rem;">
-                            Ground Truth Distance (m):
-                            <span id="gt-distance-value">7</span>
-                        </label>
-                        <input type="range" id="gt-distance-slider" min="5.0" max="10.0" step="0.1" value="7" style="width: 100%;">
-                        <small style="color: #888; display: block; margin-top: 0.25rem;">
-                            Adjust to align green lines with red lines<br/>
-                            <span id="gt-actual-distance-hint" style="font-size: 0.85em; color: #666;"></span>
-                        </small>
-                    </div>
                 </div>
             </div>
 
@@ -80,11 +74,42 @@
                     <div style="margin-top: 0.75rem;">🔴 <strong>Red dot/arrow:</strong> Reference point (target position at lookahead distance)</div>
                     <div style="margin-top: 0.5rem; margin-left: 1rem;">Arrow shows <strong>desired heading direction</strong> (not steering angle)</div>
                 </div>
+                <div style="margin-top: 1.5rem; padding-top: 1rem; border-top: 1px solid #444;">
+                    <label style="display: block; margin-bottom: 0.5rem; font-size: 0.9rem;">
+                        Ground Truth Distance (m):
+                    </label>
+                    <select id="gt-distance-select" style="width: 100%; padding: 0.5rem; background: #2a2a2a; color: white; border: 1px solid #444; border-radius: 4px;">
+                        <option value="auto" selected>Auto (from recording)</option>
+                        <option value="5.0">5.0m</option>
+                        <option value="5.5">5.5m</option>
+                        <option value="6.0">6.0m</option>
+                        <option value="6.5">6.5m</option>
+                        <option value="7.0">7.0m</option>
+                        <option value="7.5">7.5m</option>
+                        <option value="8.0">8.0m</option>
+                        <option value="8.5">8.5m</option>
+                        <option value="9.0">9.0m</option>
+                        <option value="9.5">9.5m</option>
+                        <option value="10.0">10.0m</option>
+                    </select>
+                    <small style="color: #888; display: block; margin-top: 0.25rem; font-size: 0.85rem;">
+                        Adjust to align green lines with red lines
+                    </small>
+                </div>
+                <div style="margin-top: 1rem; padding-top: 1rem; border-top: 1px solid #444;">
+                    <label style="display: flex; align-items: center; cursor: pointer; color: #e0e0e0; font-size: 0.9rem;" title="If checked, analysis stops at the point where the car went out of lane and stayed out (>10 consecutive frames out of lane). Applies to Summary and Diagnostics tabs.">
+                        <input type="checkbox" id="analyze-to-failure" style="margin-right: 0.5rem; cursor: pointer;">
+                        <span>Analyze to out of bounds</span>
+                    </label>
+                </div>
             </div>
 
             <!-- Right: Data Side Panel -->
             <div class="data-panel">
                 <div class="tabs">
+                    <button class="tab-btn" data-tab="summary">Summary</button>
+                    <button class="tab-btn" data-tab="issues">Issues</button>
+                    <button class="tab-btn" data-tab="diagnostics">Diagnostics</button>
                     <button class="tab-btn active" data-tab="all-data">All Data</button>
                     <button class="tab-btn" data-tab="perception">Perception</button>
                     <button class="tab-btn" data-tab="trajectory">Trajectory</button>
@@ -94,6 +119,33 @@
                 </div>
 
                 <div class="tab-content">
+                    <!-- Summary Tab -->
+                    <div id="summary-tab" class="tab-pane">
+                        <div id="summary-content">
+                            <p style="color: #888; text-align: center; padding: 2rem;">
+                                Load a recording to see summary metrics
+                            </p>
+                        </div>
+                    </div>
+                    
+                    <!-- Issues Tab -->
+                    <div id="issues-tab" class="tab-pane">
+                        <div id="issues-content" style="max-height: 70vh; overflow-y: auto; padding-right: 10px;">
+                            <p style="color: #888; text-align: center; padding: 2rem;">
+                                Load a recording to see detected issues
+                            </p>
+                        </div>
+                    </div>
+                    
+                    <!-- Diagnostics Tab -->
+                    <div id="diagnostics-tab" class="tab-pane">
+                        <div id="diagnostics-content" style="max-height: 70vh; overflow-y: auto; padding-right: 10px;">
+                            <p style="color: #888; text-align: center; padding: 2rem;">
+                                Load a recording to see trajectory vs steering diagnostics
+                            </p>
+                        </div>
+                    </div>
+
                     <!-- All Data Tab -->
                     <div id="all-data-tab" class="tab-pane active">
                         <h3>Perception</h3>
@@ -101,14 +153,21 @@
                             <tr><td>Method</td><td id="all-perception-method">-</td></tr>
                             <tr><td>Confidence</td><td id="all-perception-confidence">-</td></tr>
                             <tr><td>Lanes Detected</td><td id="all-perception-num-lanes">-</td></tr>
-                            <tr><td>Left Lane Line X</td><td id="all-perception-left-x">-</td></tr>
-                            <tr><td>Right Lane Line X</td><td id="all-perception-right-x">-</td></tr>
+                            <tr><td>Left Lane Line X<br/><small style="color: #888;">(stored/used)</small></td><td id="all-perception-left-x">-</td></tr>
+                            <tr id="all-perception-actual-left-row" style="display: none;"><td>Left Lane (Actual Detected)<br/><small style="color: #888;">(rejected)</small></td><td id="all-perception-actual-left-x" style="color: #ffa500;">-</td></tr>
+                            <tr><td>Right Lane Line X<br/><small style="color: #888;">(stored/used)</small></td><td id="all-perception-right-x">-</td></tr>
+                            <tr id="all-perception-actual-right-row" style="display: none;"><td>Right Lane (Actual Detected)<br/><small style="color: #888;">(rejected)</small></td><td id="all-perception-actual-right-x" style="color: #ffa500;">-</td></tr>
                             <tr><td>Lane Width</td><td id="all-perception-width">-</td></tr>
                             <tr><td>Using Stale Data</td><td id="all-perception-using-stale" style="color: #ff6b6b;">-</td></tr>
                             <tr><td>Stale Reason</td><td id="all-perception-stale-reason" style="color: #ff6b6b;">-</td></tr>
-                            <tr><td>Left Jump (m)</td><td id="all-perception-left-jump">-</td></tr>
-                            <tr><td>Right Jump (m)</td><td id="all-perception-right-jump">-</td></tr>
-                            <tr><td>Jump Threshold (m)</td><td id="all-perception-jump-threshold">-</td></tr>
+                            <tr id="all-perception-instability-row" style="display: none;"><td>Width Change (m)<br/><small style="color: #888;">vs prev frame</small></td><td id="all-perception-width-change" style="color: #ffa500;">-</td></tr>
+                            <tr id="all-perception-instability-row-2" style="display: none;"><td>Center Shift (m)<br/><small style="color: #888;">vs prev frame</small></td><td id="all-perception-center-shift" style="color: #ffa500;">-</td></tr>
+                            <tr id="all-perception-jump-row" style="display: none;"><td>Left Jump (m)</td><td id="all-perception-left-jump">-</td></tr>
+                            <tr id="all-perception-jump-row-2" style="display: none;"><td>Right Jump (m)</td><td id="all-perception-right-jump">-</td></tr>
+                            <tr id="all-perception-jump-row-3" style="display: none;"><td>Jump Threshold (m)</td><td id="all-perception-jump-threshold">-</td></tr>
+                            <tr><td style="border-top: 1px solid #444; padding-top: 0.5rem;">Consecutive Bad Frames</td><td id="all-perception-consecutive-bad" style="border-top: 1px solid #444; padding-top: 0.5rem;">-</td></tr>
+                            <tr><td>Health Score</td><td id="all-perception-health-score">-</td></tr>
+                            <tr><td>Health Status</td><td id="all-perception-health-status">-</td></tr>
                         </table>
                         
                         <h3>Camera Calibration</h3>
@@ -116,6 +175,16 @@
                             <tr><td>8m Screen Y (px)</td><td id="all-vehicle-camera-8m-y">-</td></tr>
                             <tr><td>Vertical FOV (°)</td><td id="all-vehicle-camera-fov-vertical">-</td></tr>
                             <tr><td>Horizontal FOV (°)</td><td id="all-vehicle-camera-fov-horizontal">-</td></tr>
+                        </table>
+                        <h3>Unity Timing</h3>
+                        <table class="data-table">
+                            <tr><td>Unity Time</td><td id="all-vehicle-unity-time">-</td></tr>
+                            <tr><td>Unity Frame</td><td id="all-vehicle-unity-frame">-</td></tr>
+                            <tr><td>Delta Time</td><td id="all-vehicle-unity-delta-time">-</td></tr>
+                            <tr><td>Smooth Delta Time</td><td id="all-vehicle-unity-smooth-delta-time">-</td></tr>
+                            <tr><td>Unscaled Delta Time</td><td id="all-vehicle-unity-unscaled-delta-time">-</td></tr>
+                            <tr><td>Time Scale</td><td id="all-vehicle-unity-time-scale">-</td></tr>
+                            <tr><td>Unity Time Gap</td><td id="all-vehicle-unity-time-gap">-</td></tr>
                         </table>
                         <h3>Camera Position (Unity)</h3>
                         <table class="data-table">
@@ -134,6 +203,7 @@
                             <tr><td>At Lookahead X</td><td id="all-road-center-at-lookahead-x">-</td></tr>
                             <tr><td>At Lookahead Y</td><td id="all-road-center-at-lookahead-y">-</td></tr>
                             <tr><td>At Lookahead Z</td><td id="all-road-center-at-lookahead-z">-</td></tr>
+                            <tr><td>Actual Distance (m)</td><td id="all-road-center-actual-distance">-</td></tr>
                             <tr><td>Reference T</td><td id="all-road-center-reference-t">-</td></tr>
                             <tr><td>Car Offset X<br/><small style="color: #888;">(car X - road center X)</small></td><td id="all-road-center-offset-x">-</td></tr>
                             <tr><td>Car Offset Z<br/><small style="color: #888;">(car Z - road center Z)</small></td><td id="all-road-center-offset-z">-</td></tr>
@@ -155,6 +225,10 @@
                             <tr><td>Heading Error</td><td id="all-control-heading-error">-</td></tr>
                             <tr><td>Total Error</td><td id="all-control-total-error">-</td></tr>
                             <tr><td>PID Integral</td><td id="all-control-pid-integral">-</td></tr>
+                            <tr><td>Is Straight</td><td id="all-control-is-straight">-</td></tr>
+                            <tr><td>Straight Oscillation Rate</td><td id="all-control-straight-oscillation-rate">-</td></tr>
+                            <tr><td>Tuned Deadband</td><td id="all-control-tuned-deadband">-</td></tr>
+                            <tr><td>Tuned Smoothing Alpha</td><td id="all-control-tuned-smoothing-alpha">-</td></tr>
                             <tr><td>Using Stale Perception</td><td id="all-control-using-stale" style="color: #ff6b6b;">-</td></tr>
                             <tr><td>Stale Reason</td><td id="all-control-stale-reason" style="color: #ff6b6b;">-</td></tr>
                         </table>
@@ -167,6 +241,7 @@
                             <tr><td>Speed</td><td id="all-vehicle-speed">-</td></tr>
                             <tr><td>Heading</td><td id="all-vehicle-heading">-</td></tr>
                             <tr><td>Steering Angle</td><td id="all-vehicle-steering">-</td></tr>
+                            <tr><td>Actual Distance to Road Center (m)</td><td id="all-vehicle-actual-distance">-</td></tr>
                         </table>
                         
                         <h3>Ground Truth</h3>
@@ -187,15 +262,33 @@
                             <tr><td>Method</td><td id="perception-method">-</td></tr>
                             <tr><td>Confidence</td><td id="perception-confidence">-</td></tr>
                             <tr><td>Lanes Detected</td><td id="perception-num-lanes">-</td></tr>
-                            <tr><td>Left Lane Line X</td><td id="perception-left-x">-</td></tr>
-                            <tr><td>Right Lane Line X</td><td id="perception-right-x">-</td></tr>
+                            <tr><td>Left Lane Line X<br/><small style="color: #888;">(stored/used)</small></td><td id="perception-left-x">-</td></tr>
+                            <tr id="perception-actual-left-row" style="display: none;"><td>Left Lane (Actual Detected)<br/><small style="color: #888;">(rejected)</small></td><td id="perception-actual-left-x" style="color: #ffa500;">-</td></tr>
+                            <tr><td>Right Lane Line X<br/><small style="color: #888;">(stored/used)</small></td><td id="perception-right-x">-</td></tr>
+                            <tr id="perception-actual-right-row" style="display: none;"><td>Right Lane (Actual Detected)<br/><small style="color: #888;">(rejected)</small></td><td id="perception-actual-right-x" style="color: #ffa500;">-</td></tr>
                             <tr><td>Lane Width</td><td id="perception-width">-</td></tr>
                             <tr><td>Using Stale Data</td><td id="perception-using-stale" style="color: #ff6b6b;">-</td></tr>
                             <tr><td>Stale Reason</td><td id="perception-stale-reason" style="color: #ff6b6b;">-</td></tr>
-                            <tr><td>Left Jump (m)</td><td id="perception-left-jump">-</td></tr>
-                            <tr><td>Right Jump (m)</td><td id="perception-right-jump">-</td></tr>
-                            <tr><td>Jump Threshold (m)</td><td id="perception-jump-threshold">-</td></tr>
+                            <tr id="perception-instability-row" style="display: none;"><td>Width Change (m)<br/><small style="color: #888;">vs prev frame</small></td><td id="perception-width-change" style="color: #ffa500;">-</td></tr>
+                            <tr id="perception-instability-row-2" style="display: none;"><td>Center Shift (m)<br/><small style="color: #888;">vs prev frame</small></td><td id="perception-center-shift" style="color: #ffa500;">-</td></tr>
+                            <tr id="perception-jump-row" style="display: none;"><td>Left Jump (m)</td><td id="perception-left-jump">-</td></tr>
+                            <tr id="perception-jump-row-2" style="display: none;"><td>Right Jump (m)</td><td id="perception-right-jump">-</td></tr>
+                            <tr id="perception-jump-row-3" style="display: none;"><td>Jump Threshold (m)</td><td id="perception-jump-threshold">-</td></tr>
+                            <tr><td style="border-top: 1px solid #444; padding-top: 0.5rem;">Consecutive Bad Frames</td><td id="perception-consecutive-bad" style="border-top: 1px solid #444; padding-top: 0.5rem;">-</td></tr>
+                            <tr><td>Health Score</td><td id="perception-health-score">-</td></tr>
+                            <tr><td>Health Status</td><td id="perception-health-status">-</td></tr>
                         </table>
+                        
+                        <!-- Polynomial Inspector -->
+                        <div style="margin-top: 1.5rem; border-top: 1px solid #444; padding-top: 1rem;">
+                            <h3 style="margin-bottom: 0.5rem;">Polynomial Inspector</h3>
+                            <button id="polynomial-inspector-btn" style="padding: 0.5rem 1rem; background: #4a90e2; color: white; border: none; border-radius: 4px; cursor: pointer; margin-bottom: 0.5rem;">
+                                Analyze Current Frame
+                            </button>
+                            <div id="polynomial-inspector-results" style="display: none; margin-top: 1rem; padding: 1rem; background: #2a2a2a; border-radius: 4px; font-size: 0.9rem;">
+                                <div id="polynomial-inspector-content">Loading...</div>
+                            </div>
+                        </div>
                     </div>
 
                     <!-- Trajectory Tab -->
@@ -237,6 +330,10 @@
                             <tr><td>PID Integral</td><td id="control-pid-integral">-</td></tr>
                             <tr><td>PID Derivative</td><td id="control-pid-derivative">-</td></tr>
                             <tr><td>PID Error</td><td id="control-pid-error">-</td></tr>
+                            <tr><td>Is Straight</td><td id="control-is-straight">-</td></tr>
+                            <tr><td>Straight Oscillation Rate</td><td id="control-straight-oscillation-rate">-</td></tr>
+                            <tr><td>Tuned Deadband</td><td id="control-tuned-deadband">-</td></tr>
+                            <tr><td>Tuned Smoothing Alpha</td><td id="control-tuned-smoothing-alpha">-</td></tr>
                             <tr><td>Using Stale Perception</td><td id="control-using-stale" style="color: #ff6b6b;">-</td></tr>
                             <tr><td>Stale Reason</td><td id="control-stale-reason" style="color: #ff6b6b;">-</td></tr>
                         </table>
@@ -250,6 +347,16 @@
                             <tr><td>8m Screen Y (status)</td><td id="vehicle-camera-8m-status">-</td></tr>
                             <tr><td>Vertical FOV (°)</td><td id="vehicle-camera-fov-vertical">-</td></tr>
                             <tr><td>Horizontal FOV (°)</td><td id="vehicle-camera-fov-horizontal">-</td></tr>
+                        </table>
+                        <h3>Unity Timing</h3>
+                        <table class="data-table">
+                            <tr><td>Unity Time</td><td id="vehicle-unity-time">-</td></tr>
+                            <tr><td>Unity Frame</td><td id="vehicle-unity-frame">-</td></tr>
+                            <tr><td>Delta Time</td><td id="vehicle-unity-delta-time">-</td></tr>
+                            <tr><td>Smooth Delta Time</td><td id="vehicle-unity-smooth-delta-time">-</td></tr>
+                            <tr><td>Unscaled Delta Time</td><td id="vehicle-unity-unscaled-delta-time">-</td></tr>
+                            <tr><td>Time Scale</td><td id="vehicle-unity-time-scale">-</td></tr>
+                            <tr><td>Unity Time Gap</td><td id="vehicle-unity-time-gap">-</td></tr>
                         </table>
                         <h3>Camera Position (Unity)</h3>
                         <table class="data-table">
@@ -268,6 +375,7 @@
                             <tr><td>At Lookahead X</td><td id="vehicle-road-center-at-lookahead-x">-</td></tr>
                             <tr><td>At Lookahead Y</td><td id="vehicle-road-center-at-lookahead-y">-</td></tr>
                             <tr><td>At Lookahead Z</td><td id="vehicle-road-center-at-lookahead-z">-</td></tr>
+                            <tr><td>Actual Distance (m)</td><td id="vehicle-road-center-actual-distance">-</td></tr>
                             <tr><td>Reference T</td><td id="vehicle-road-center-reference-t">-</td></tr>
                             <tr><td>Car Offset X<br/><small style="color: #888;">(car X - road center X)</small></td><td id="vehicle-road-center-offset-x">-</td></tr>
                             <tr><td>Car Offset Z<br/><small style="color: #888;">(car Z - road center Z)</small></td><td id="vehicle-road-center-offset-z">-</td></tr>
@@ -312,6 +420,8 @@
                 <span>Frame: <span id="frame-number">0</span> / <span id="frame-count">0</span></span>
                 <input type="range" id="frame-slider" min="0" max="0" value="0" class="frame-slider">
                 <span>Time: <span id="frame-time">0.00</span>s</span>
+                <input type="number" id="frame-jump-input" placeholder="Jump to frame..." min="0" style="width: 120px; padding: 0.25rem; margin-left: 0.5rem; background: #2a2a2a; color: white; border: 1px solid #444; border-radius: 4px;">
+                <button id="frame-jump-btn" class="btn btn-secondary" style="margin-left: 0.25rem; padding: 0.25rem 0.5rem;">Go</button>
             </div>
             <button id="next-frame-btn" class="btn btn-nav">▶</button>
             <button id="play-pause-btn" class="btn btn-nav">▶ Play</button>

@@ -39,14 +39,44 @@ public class AVBridge : MonoBehaviour
     
     [Header("Debug")]
     public bool showDebugInfo = true;
+    public bool logBridgeTimings = true;
+    public float bridgeTimingWarnThreshold = 0.2f;
+    public float bridgeStallLogCooldownSeconds = 1.0f;
+    public bool logUpdateHitches = true;
+    public float updateHitchThresholdSeconds = 0.2f;
+    public float updateHitchCooldownSeconds = 1.0f;
+    public bool logUpdateGapSummary = true;
+    public int updateGapSummaryFrames = 120;
+    public bool logFrameCountJumps = true;
+    public int frameCountJumpThreshold = 1;
+    public float unityTimeJumpThresholdSeconds = 0.2f;
     
     private float updateInterval;
     private float lastUpdateTime;
+    private bool updateInFlight = false;
     private float lastShutdownCheckTime;
     private float lastPlayCheckTime;
     private float lastFeedbackSendTime;
     private VehicleState lastVehicleState;
     private ControlCommand lastControlCommand;
+    private int lastRandomizeRequestId = -1;
+    private bool randomStartHandled = false;
+    private int updateSequence = 0;
+    private int currentUpdateSequence = 0;
+    private float updateStartRealtime = 0f;
+    private float lastUpdateStallLogRealtime = 0f;
+    private float lastUpdateRealtime = 0f;
+    private float lastUpdateHitchLogRealtime = 0f;
+    private int updateGapSampleCount = 0;
+    private float updateGapSum = 0f;
+    private float updateGapMax = 0f;
+    private int lastObservedFrameCount = -1;
+    private float lastSentUnityTime = -1f;
+    private int lastSentUnityFrameCount = -1;
+    private bool stateSendInFlight = false;
+    private float stateSendStartRealtime = 0f;
+    private bool controlRequestInFlight = false;
+    private float controlRequestStartRealtime = 0f;
     
     // PERFORMANCE: Cache camera8mScreenY calculation - only recalculate when camera moves significantly
     private float cachedCamera8mScreenY = -1.0f;
@@ -108,6 +138,8 @@ public class AVBridge : MonoBehaviour
         // CRITICAL: Initialize all cached values BEFORE first frame
         // This ensures Python receives valid data from frame 0, not -1.0 or null
         InitializeCachedValues();
+
+        lastUpdateRealtime = Time.realtimeSinceStartup;
         
         // Enable AV control on car controller
         if (enableAVControl)
@@ -226,6 +258,64 @@ public class AVBridge : MonoBehaviour
             return; // Don't send data when exiting play mode
         }
         #endif
+
+        // Detect main-thread hitches (Update gaps) even if FixedUpdate doesn't log them.
+        float realtimeNow = Time.realtimeSinceStartup;
+        float realtimeGap = realtimeNow - lastUpdateRealtime;
+        if (logFrameCountJumps && lastObservedFrameCount >= 0)
+        {
+            int frameDelta = Time.frameCount - lastObservedFrameCount;
+            if (frameDelta > frameCountJumpThreshold)
+            {
+                Debug.LogWarning(
+                    $"[UNITY FRAME JUMP] delta={frameDelta} frame={Time.frameCount} " +
+                    $"time={Time.time:F3} unscaled={Time.unscaledTime:F3} realtimeGap={realtimeGap:F3}s"
+                );
+            }
+        }
+        lastObservedFrameCount = Time.frameCount;
+        if (logUpdateHitches && realtimeGap > updateHitchThresholdSeconds)
+        {
+            if (realtimeNow - lastUpdateHitchLogRealtime > updateHitchCooldownSeconds)
+            {
+                float timeSinceStartup = Time.time;
+                float unscaledTime = Time.unscaledTime;
+                float fixedDelta = Time.fixedDeltaTime;
+                int vSync = QualitySettings.vSyncCount;
+                int targetFps = Application.targetFrameRate;
+                string targetFpsText = targetFps <= 0 ? "platform default" : targetFps.ToString();
+                Debug.LogWarning(
+                    $"[UNITY HITCH] Update gap {realtimeGap:F3}s frame={Time.frameCount} " +
+                    $"dt={Time.deltaTime:F4} sdt={Time.smoothDeltaTime:F4} " +
+                    $"udt={Time.unscaledDeltaTime:F4} timescale={Time.timeScale:F2} " +
+                    $"time={timeSinceStartup:F3} unscaled={unscaledTime:F3} fixedDt={fixedDelta:F3} " +
+                    $"vSync={vSync} targetFps={targetFpsText}"
+                );
+                lastUpdateHitchLogRealtime = realtimeNow;
+            }
+        }
+        if (logUpdateGapSummary && updateGapSummaryFrames > 0 && lastUpdateRealtime > 0f)
+        {
+            updateGapSampleCount += 1;
+            updateGapSum += realtimeGap;
+            if (realtimeGap > updateGapMax)
+            {
+                updateGapMax = realtimeGap;
+            }
+
+            if (updateGapSampleCount >= updateGapSummaryFrames)
+            {
+                float avgGap = updateGapSum / Mathf.Max(1, updateGapSampleCount);
+                Debug.Log(
+                    $"[UNITY UPDATE GAP] max={updateGapMax:F4}s avg={avgGap:F4}s " +
+                    $"frames={updateGapSampleCount} frame={Time.frameCount} time={Time.time:F3}"
+                );
+                updateGapSampleCount = 0;
+                updateGapSum = 0f;
+                updateGapMax = 0f;
+            }
+        }
+        lastUpdateRealtime = realtimeNow;
         
         // Update AV control state
         if (enableAVControl != carController.avControlEnabled)
@@ -241,10 +331,23 @@ public class AVBridge : MonoBehaviour
         }
         
         // Send vehicle state and receive control commands
-        if (Time.time - lastUpdateTime >= updateInterval)
+        if (!updateInFlight && Time.time - lastUpdateTime >= updateInterval)
         {
             StartCoroutine(UpdateAVStack());
             lastUpdateTime = Time.time;
+        }
+        else if (updateInFlight && logBridgeTimings && showDebugInfo)
+        {
+            float inFlightDuration = Time.realtimeSinceStartup - updateStartRealtime;
+            if (inFlightDuration > bridgeTimingWarnThreshold &&
+                Time.realtimeSinceStartup - lastUpdateStallLogRealtime > bridgeStallLogCooldownSeconds)
+            {
+                Debug.LogWarning(
+                    $"AVBridge: UpdateAVStack still in flight (id={currentUpdateSequence}, " +
+                    $"elapsed={inFlightDuration:F3}s, frame={Time.frameCount}, time={Time.time:F3}s)"
+                );
+                lastUpdateStallLogRealtime = Time.realtimeSinceStartup;
+            }
         }
     }
     
@@ -282,86 +385,87 @@ public class AVBridge : MonoBehaviour
             return;
         }
         
-        Camera avCamera = cameraCapture.targetCamera;
-        Vector3 cameraPos = avCamera.transform.position;
-        Vector3 cameraForward = avCamera.transform.forward;
-        Vector3 point8mDirection = cameraPos + cameraForward * 8.0f;
-        
-        // CRITICAL FIX: Project point DOWN to ground plane (y=0 or road height)
-        float carY = carController.transform.position.y;
-        float groundHeight = (carY < 0.25f) ? 0.0f : (carY - 0.5f);
-        
-        // Calculate intersection of camera forward ray with ground plane
-        float t = (groundHeight - cameraPos.y) / cameraForward.y;
-        
-        Vector3 point8mOnGround = Vector3.zero;
-        bool shouldCalculate = false;
-        
-        if (cameraForward.y >= 0)
+        float imageY = CalculateCameraScreenYAtDistance(8.0f);
+        if (imageY > 0)
         {
-            // Camera is looking up or horizontal - use fallback projection
-            point8mOnGround = point8mDirection;
-            point8mOnGround.y = groundHeight;
-            shouldCalculate = true;
-        }
-        else if (t <= 0)
-        {
-            // Ground intersection is behind camera - invalid
-            shouldCalculate = false;
-        }
-        else
-        {
-            // Valid ground intersection
-            point8mOnGround = cameraPos + cameraForward * t;
-            
-            // Clamp to 8m distance
-            float distanceToGround = Vector3.Distance(cameraPos, point8mOnGround);
-            if (distanceToGround > 8.0f)
-            {
-                point8mOnGround = point8mDirection;
-                point8mOnGround.y = groundHeight;
-            }
-            shouldCalculate = true;
-        }
-        
-        if (shouldCalculate)
-        {
-            Vector3 screenPoint = avCamera.WorldToScreenPoint(point8mOnGround);
-            
-            // Check if point is valid
-            if (screenPoint.z < 0 || screenPoint.y <= 0.1f || screenPoint.y >= Screen.height - 0.1f)
-            {
-                // Invalid point - keep -1.0
-                return;
-            }
-            
-            // Convert to image coordinates
-            float imageHeight = cameraCapture.captureHeight;
-            float screenY = screenPoint.y;
-            
-            if (screenY < 1.0f || screenY > Screen.height - 1.0f)
-            {
-                // Too close to edge - invalid
-                return;
-            }
-            
-            // Unity's screen coordinates: 0 = bottom, Screen.height = top
-            // Our image coordinates: 0 = top, imageHeight = bottom
-            float imageY = imageHeight - screenY;
             cachedCamera8mScreenY = imageY;
-            lastCameraPosition = cameraPos;
-            lastCameraRotation = avCamera.transform.rotation;
+            lastCameraPosition = cameraCapture.targetCamera.transform.position;
+            lastCameraRotation = cameraCapture.targetCamera.transform.rotation;
             lastCamera8mScreenYRecalcTime = Time.time;
-            
             if (showDebugInfo)
             {
                 Debug.Log($"AVBridge.CalculateCamera8mScreenY: Calculated camera8mScreenY = {cachedCamera8mScreenY:F1}px");
             }
         }
     }
+
+    float CalculateCameraScreenYAtDistance(float distanceMeters)
+    {
+        if (cameraCapture == null || cameraCapture.targetCamera == null || carController == null)
+        {
+            return -1.0f;
+        }
+        if (distanceMeters <= 0.01f)
+        {
+            return -1.0f;
+        }
+        
+        Camera avCamera = cameraCapture.targetCamera;
+        Vector3 cameraPos = avCamera.transform.position;
+        Vector3 cameraForward = avCamera.transform.forward;
+        Vector3 pointDirection = cameraPos + cameraForward * distanceMeters;
+        
+        // Project point onto ground plane
+        float carY = carController.transform.position.y;
+        float groundHeight = (carY < 0.25f) ? 0.0f : (carY - 0.5f);
+        float t = (groundHeight - cameraPos.y) / cameraForward.y;
+        
+        Vector3 pointOnGround;
+        if (cameraForward.y >= 0)
+        {
+            pointOnGround = pointDirection;
+            pointOnGround.y = groundHeight;
+        }
+        else if (t <= 0)
+        {
+            return -1.0f;
+        }
+        else
+        {
+            pointOnGround = cameraPos + cameraForward * t;
+            float distanceToGround = Vector3.Distance(cameraPos, pointOnGround);
+            if (distanceToGround > distanceMeters)
+            {
+                pointOnGround = pointDirection;
+                pointOnGround.y = groundHeight;
+            }
+        }
+        
+        Vector3 screenPoint = avCamera.WorldToScreenPoint(pointOnGround);
+        if (screenPoint.z < 0 || screenPoint.y <= 0.1f || screenPoint.y >= Screen.height - 0.1f)
+        {
+            return -1.0f;
+        }
+        
+        float screenY = screenPoint.y;
+        if (screenY < 1.0f || screenY > Screen.height - 1.0f)
+        {
+            return -1.0f;
+        }
+        
+        float imageHeight = cameraCapture.captureHeight;
+        return imageHeight - screenY;
+    }
     
     IEnumerator UpdateAVStack()
     {
+        updateInFlight = true;
+        updateSequence += 1;
+        int updateId = updateSequence;
+        currentUpdateSequence = updateId;
+        updateStartRealtime = Time.realtimeSinceStartup;
+        try
+        {
         // CRITICAL: Double-check play mode state (may have changed during coroutine wait)
         // This prevents sending data during play mode exit transition
         #if UNITY_EDITOR
@@ -373,6 +477,24 @@ public class AVBridge : MonoBehaviour
         
         // Get current vehicle state
         VehicleState currentState = carController.GetVehicleState();
+        currentState.requestId = updateId;
+        currentState.unitySendRealtime = Time.realtimeSinceStartup;
+        currentState.unitySendUtcMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+
+        if (logFrameCountJumps && lastSentUnityTime > 0f)
+        {
+            float unityTimeGap = currentState.unityTime - lastSentUnityTime;
+            int frameGap = currentState.unityFrameCount - lastSentUnityFrameCount;
+            if (unityTimeGap > unityTimeJumpThresholdSeconds)
+            {
+                Debug.LogWarning(
+                    $"[UNITY TIME JUMP] gap={unityTimeGap:F3}s frames={frameGap} " +
+                    $"frame={currentState.unityFrameCount} time={currentState.unityTime:F3}"
+                );
+            }
+        }
+        lastSentUnityTime = currentState.unityTime;
+        lastSentUnityFrameCount = currentState.unityFrameCount;
         
         // CRITICAL: Initialize camera8mScreenY to cached value (or -1.0 if never calculated)
         // This ensures we use cached value when not recalculating, preventing -1.0 from being sent
@@ -382,9 +504,17 @@ public class AVBridge : MonoBehaviour
         // Add ground truth data if available
         if (groundTruthReporter != null)
         {
+            float lookaheadDistance = groundTruthReporter.groundTruthLookaheadDistance;
+            if (lookaheadDistance <= 0.01f)
+            {
+                lookaheadDistance = 8.0f;
+            }
+            currentState.groundTruthLookaheadDistance = lookaheadDistance;
+            float lookaheadScreenY = CalculateCameraScreenYAtDistance(lookaheadDistance);
+            currentState.cameraLookaheadScreenY = lookaheadScreenY > 0 ? lookaheadScreenY : -1.0f;
             // FIXED: Calculate ground truth at 8m lookahead to match perception evaluation distance
             // This ensures green lines in visualizer align with orange/red lines at the black line (y=350px)
-            var (leftLaneLineX, rightLaneLineX) = groundTruthReporter.GetLanePositionsAtLookahead(8.0f);
+            var (leftLaneLineX, rightLaneLineX) = groundTruthReporter.GetLanePositionsAtLookahead(lookaheadDistance);
             currentState.groundTruthLeftLaneLineX = leftLaneLineX;
             currentState.groundTruthRightLaneLineX = rightLaneLineX;
             // Calculate lane center at lookahead (average of left and right lane lines)
@@ -396,7 +526,7 @@ public class AVBridge : MonoBehaviour
             currentState.groundTruthPathCurvature = groundTruthReporter.GetPathCurvature();
             
             // NEW: Add debug information about road center positions (for diagnosing offset issues)
-            var (roadCenterAtCar, roadCenterAtLookahead, referenceT) = groundTruthReporter.GetRoadCenterDebugInfo(8.0f);
+            var (roadCenterAtCar, roadCenterAtLookahead, referenceT) = groundTruthReporter.GetRoadCenterDebugInfo(lookaheadDistance);
             currentState.roadCenterAtCarX = roadCenterAtCar.x;
             currentState.roadCenterAtCarY = roadCenterAtCar.y;
             currentState.roadCenterAtCarZ = roadCenterAtCar.z;
@@ -422,6 +552,11 @@ public class AVBridge : MonoBehaviour
             // Unity's Camera.fieldOfView ALWAYS returns vertical FOV, regardless of Inspector "Field of View Axis" setting
             float verticalFOV = avCamera.fieldOfView;
             float aspect = (float)avCamera.pixelWidth / (float)avCamera.pixelHeight;
+            if (cameraCapture != null && cameraCapture.captureWidth > 0 && cameraCapture.captureHeight > 0)
+            {
+                // Use capture resolution aspect to match recorded frames (not Game view)
+                aspect = (float)cameraCapture.captureWidth / (float)cameraCapture.captureHeight;
+            }
             // Calculate horizontal FOV from vertical FOV
             float horizontalFOV = 2.0f * Mathf.Atan(Mathf.Tan(verticalFOV * Mathf.Deg2Rad / 2.0f) * aspect) * Mathf.Rad2Deg;
             
@@ -673,40 +808,110 @@ public class AVBridge : MonoBehaviour
             Debug.LogWarning("AVBridge: GroundTruthReporter not found! Ground truth data will be 0.0");
         }
         
-        // Send state to Python server
-        yield return StartCoroutine(SendVehicleState(currentState));
+        // Send state to Python server (fire-and-forget; don't stall control loop).
+        if (!stateSendInFlight)
+        {
+            StartCoroutine(SendVehicleState(currentState, updateId));
+        }
+        else if (logBridgeTimings && showDebugInfo)
+        {
+            float stateInFlightDuration = Time.realtimeSinceStartup - stateSendStartRealtime;
+            if (stateInFlightDuration > bridgeTimingWarnThreshold)
+            {
+                Debug.LogWarning(
+                    $"AVBridge: SendVehicleState still in flight (id={updateId}, " +
+                    $"elapsed={stateInFlightDuration:F3}s, frame={Time.frameCount}, time={Time.time:F3}s)"
+                );
+            }
+        }
         
         // Request control commands (only if AV control is enabled)
         if (enableAVControl)
         {
-            yield return StartCoroutine(RequestControlCommands());
+            if (!controlRequestInFlight)
+            {
+                StartCoroutine(RequestControlCommands(updateId));
+            }
+            else if (logBridgeTimings && showDebugInfo)
+            {
+                float controlInFlightDuration = Time.realtimeSinceStartup - controlRequestStartRealtime;
+                if (controlInFlightDuration > bridgeTimingWarnThreshold)
+                {
+                    Debug.LogWarning(
+                        $"AVBridge: RequestControlCommands still in flight (id={updateId}, " +
+                        $"elapsed={controlInFlightDuration:F3}s, frame={Time.frameCount}, time={Time.time:F3}s)"
+                    );
+                }
+            }
         }
+        }
+        finally
+        {
+            float totalDuration = Time.realtimeSinceStartup - updateStartRealtime;
+            if (logBridgeTimings && showDebugInfo && totalDuration > bridgeTimingWarnThreshold)
+            {
+                Debug.LogWarning(
+                    $"AVBridge: UpdateAVStack slow (id={currentUpdateSequence}, " +
+                    $"duration={totalDuration:F3}s, frame={Time.frameCount}, time={Time.time:F3}s)"
+                );
+            }
+            updateInFlight = false;
+        }
+        yield return null;
     }
     
-    IEnumerator SendVehicleState(VehicleState state)
+    IEnumerator SendVehicleState(VehicleState state, int updateId)
     {
+        if (stateSendInFlight)
+        {
+            yield break;
+        }
+
         string url = $"{apiUrl}{stateEndpoint}";
         
         // Create JSON payload
         string json = JsonUtility.ToJson(state);
         byte[] bodyRaw = Encoding.UTF8.GetBytes(json);
         
+        stateSendInFlight = true;
+        stateSendStartRealtime = Time.realtimeSinceStartup;
+
         using (UnityWebRequest request = new UnityWebRequest(url, "POST"))
         {
             request.uploadHandler = new UploadHandlerRaw(bodyRaw);
             request.downloadHandler = new DownloadHandlerBuffer();
             request.SetRequestHeader("Content-Type", "application/json");
-            
-            yield return request.SendWebRequest();
-            
+            request.timeout = 1;
+
+            float startRealtime = Time.realtimeSinceStartup;
+            try
+            {
+                yield return request.SendWebRequest();
+            }
+            finally
+            {
+                stateSendInFlight = false;
+            }
+
+            float duration = Time.realtimeSinceStartup - startRealtime;
+
             if (request.result != UnityWebRequest.Result.Success)
             {
                 if (showDebugInfo)
                 {
-                    Debug.LogWarning($"AVBridge: Failed to send state - {request.error}");
+                    Debug.LogWarning(
+                        $"AVBridge: Failed to send state (id={updateId}) - {request.error}"
+                    );
                 }
             }
-            
+            else if (logBridgeTimings && showDebugInfo && duration > bridgeTimingWarnThreshold)
+            {
+                Debug.LogWarning(
+                    $"AVBridge: SendVehicleState slow (id={updateId}, " +
+                    $"duration={duration:F3}s, frame={Time.frameCount}, time={Time.time:F3}s)"
+                );
+            }
+
             lastVehicleState = state;
         }
     }
@@ -765,6 +970,7 @@ public class AVBridge : MonoBehaviour
             }
         }
         #endif
+        yield break;
     }
     
     IEnumerator CheckShutdownSignal()
@@ -821,13 +1027,31 @@ public class AVBridge : MonoBehaviour
         }
     }
     
-    IEnumerator RequestControlCommands()
+    IEnumerator RequestControlCommands(int updateId)
     {
-        string url = $"{apiUrl}{controlEndpoint}";
+        if (controlRequestInFlight)
+        {
+            yield break;
+        }
+
+        long sendUtcMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        string url = $"{apiUrl}{controlEndpoint}?request_id={updateId}&unity_send_utc_ms={sendUtcMs}";
         
         using (UnityWebRequest request = UnityWebRequest.Get(url))
         {
-            yield return request.SendWebRequest();
+            request.timeout = 1;
+            controlRequestInFlight = true;
+            controlRequestStartRealtime = Time.realtimeSinceStartup;
+            float startRealtime = Time.realtimeSinceStartup;
+            try
+            {
+                yield return request.SendWebRequest();
+            }
+            finally
+            {
+                controlRequestInFlight = false;
+            }
+            float duration = Time.realtimeSinceStartup - startRealtime;
             
             if (request.result == UnityWebRequest.Result.Success)
             {
@@ -835,21 +1059,30 @@ public class AVBridge : MonoBehaviour
                 {
                     string jsonResponse = request.downloadHandler.text;
                     
-                    // CRITICAL: Log EVERY control command received (not throttled)
-                    Debug.Log($"[COMMAND RECEIVED] AVBridge: Control command received - {jsonResponse}");
+                    if (showDebugInfo && Time.frameCount % 30 == 0)
+                    {
+                        Debug.Log($"[COMMAND RECEIVED] AVBridge: Control command received - {jsonResponse}");
+                    }
                     
                     ControlCommand command = JsonUtility.FromJson<ControlCommand>(jsonResponse);
                     
-                    // Log parsed command details
-                    Debug.Log($"[COMMAND RECEIVED] AVBridge: Parsed command - steering={command.steering:F3}, " +
-                             $"throttle={command.throttle:F3}, brake={command.brake:F3}, " +
-                             $"ground_truth_mode={command.ground_truth_mode}, " +
-                             $"ground_truth_speed={command.ground_truth_speed}");
+                    if (showDebugInfo && Time.frameCount % 30 == 0)
+                    {
+                        Debug.Log($"[COMMAND RECEIVED] AVBridge: Parsed command - steering={command.steering:F3}, " +
+                                 $"throttle={command.throttle:F3}, brake={command.brake:F3}, " +
+                                 $"ground_truth_mode={command.ground_truth_mode}, " +
+                                 $"ground_truth_speed={command.ground_truth_speed}, " +
+                                 $"randomize_start={command.randomize_start}, " +
+                                 $"randomize_request_id={command.randomize_request_id}");
+                    }
                     
                     // Check ground truth mode - Unity JsonUtility might not deserialize optional fields
                     // So we need to manually parse if needed
                     bool gtMode = command.ground_truth_mode;
                     float gtSpeed = command.ground_truth_speed;
+                    bool randomizeStart = command.randomize_start;
+                    int randomizeRequestId = command.randomize_request_id;
+                    int randomizeSeed = command.randomize_seed;
                     
                     // Fallback: Try to parse from JSON string if JsonUtility didn't work
                     if (!gtMode && jsonResponse.Contains("\"ground_truth_mode\":true"))
@@ -877,6 +1110,42 @@ public class AVBridge : MonoBehaviour
                             }
                         }
                     }
+
+                    // Fallback: Parse random start fields if JsonUtility didn't populate them
+                    if (!randomizeStart && jsonResponse.Contains("\"randomize_start\":true"))
+                    {
+                        randomizeStart = true;
+                    }
+                    int randomizeIdIdx = jsonResponse.IndexOf("\"randomize_request_id\":", StringComparison.Ordinal);
+                    if (randomizeIdIdx >= 0)
+                    {
+                        int startIdx = randomizeIdIdx + 23; // Length of "randomize_request_id":
+                        int endIdx = jsonResponse.IndexOf(",", startIdx);
+                        if (endIdx < 0) endIdx = jsonResponse.IndexOf("}", startIdx);
+                        if (endIdx > startIdx)
+                        {
+                            string idStr = jsonResponse.Substring(startIdx, endIdx - startIdx).Trim();
+                            if (int.TryParse(idStr, out int parsedId))
+                            {
+                                randomizeRequestId = parsedId;
+                            }
+                        }
+                    }
+                    int randomizeSeedIdx = jsonResponse.IndexOf("\"randomize_seed\":", StringComparison.Ordinal);
+                    if (randomizeSeedIdx >= 0)
+                    {
+                        int startIdx = randomizeSeedIdx + 17; // Length of "randomize_seed":
+                        int endIdx = jsonResponse.IndexOf(",", startIdx);
+                        if (endIdx < 0) endIdx = jsonResponse.IndexOf("}", startIdx);
+                        if (endIdx > startIdx)
+                        {
+                            string seedStr = jsonResponse.Substring(startIdx, endIdx - startIdx).Trim();
+                            if (int.TryParse(seedStr, out int parsedSeed))
+                            {
+                                randomizeSeed = parsedSeed;
+                            }
+                        }
+                    }
                     
                     if (gtMode)
                     {
@@ -888,6 +1157,29 @@ public class AVBridge : MonoBehaviour
                         // Disable ground truth mode if it was enabled but command doesn't request it
                         Debug.Log($"[COMMAND RECEIVED] AVBridge: ⚠️ DISABLING ground truth mode (command.ground_truth_mode=false)");
                         carController.SetGroundTruthMode(false, 0f);
+                    }
+
+                    if (randomizeStart && !randomStartHandled)
+                    {
+                        if (groundTruthReporter == null)
+                        {
+                            groundTruthReporter = FindObjectOfType<GroundTruthReporter>();
+                        }
+                        if (groundTruthReporter != null)
+                        {
+                            Debug.Log("[COMMAND RECEIVED] AVBridge: 🎲 Randomizing start position on oval");
+                            groundTruthReporter.SetCarToRandomStart(randomizeSeed);
+                            lastRandomizeRequestId = randomizeRequestId;
+                            randomStartHandled = true;
+                        }
+                        else
+                        {
+                            Debug.LogWarning("AVBridge: GroundTruthReporter not found; cannot randomize start");
+                        }
+                    }
+                    else if (randomizeStart && randomStartHandled)
+                    {
+                        Debug.Log("[COMMAND RECEIVED] AVBridge: Random start already handled; skipping.");
                     }
                     
                     // CRITICAL: Auto-enable AV control when first command is received
@@ -901,7 +1193,10 @@ public class AVBridge : MonoBehaviour
                     }
                     
                     // Apply control command to vehicle
-                    Debug.Log($"[COMMAND RECEIVED] AVBridge: Applying controls - steering={command.steering:F3}, throttle={command.throttle:F3}, brake={command.brake:F3}");
+                    if (showDebugInfo && Time.frameCount % 30 == 0)
+                    {
+                        Debug.Log($"[COMMAND RECEIVED] AVBridge: Applying controls - steering={command.steering:F3}, throttle={command.throttle:F3}, brake={command.brake:F3}");
+                    }
                     carController.SetAVControls(
                         command.steering,
                         command.throttle,
@@ -922,8 +1217,18 @@ public class AVBridge : MonoBehaviour
             {
                 if (showDebugInfo)
                 {
-                    Debug.LogWarning($"AVBridge: Failed to get control commands - {request.error}");
+                    Debug.LogWarning(
+                        $"AVBridge: Failed to get control commands (id={updateId}) - {request.error}"
+                    );
                 }
+            }
+            
+            if (logBridgeTimings && showDebugInfo && duration > bridgeTimingWarnThreshold)
+            {
+                Debug.LogWarning(
+                    $"AVBridge: RequestControlCommands slow (id={updateId}, " +
+                    $"duration={duration:F3}s, frame={Time.frameCount}, time={Time.time:F3}s)"
+                );
             }
         }
     }
@@ -1038,6 +1343,10 @@ public class ControlCommand
     // Optional: Ground truth mode settings
     public bool ground_truth_mode = false;  // Enable direct velocity control
     public float ground_truth_speed = 5.0f;  // Speed for ground truth mode (m/s)
+    // Optional: Randomize start on oval
+    public bool randomize_start = false;
+    public int randomize_request_id = 0;
+    public int randomize_seed = -1;
 }
 
 [System.Serializable]

@@ -18,9 +18,17 @@ class DataLoader {
      */
     async loadRecordings() {
         try {
+            console.log(`Fetching recordings from ${API_BASE}/recordings`);
             const response = await fetch(`${API_BASE}/recordings`);
-            if (!response.ok) throw new Error('Failed to load recordings');
-            return await response.json();
+            console.log('Response status:', response.status, response.statusText);
+            if (!response.ok) {
+                const errorText = await response.text();
+                console.error('Failed to load recordings:', response.status, errorText);
+                return [];
+            }
+            const data = await response.json();
+            console.log('Recordings data received:', data);
+            return data;
         } catch (error) {
             console.error('Error loading recordings:', error);
             return [];

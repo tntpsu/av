@@ -37,7 +37,7 @@ public class RoadGenerator : MonoBehaviour
     public float dashLength = 3f;
     
     [Tooltip("Length of gap between dashes (meters)")]
-    public float gapLength = 3f;
+    public float gapLength = 0.75f;  // Reduced from 1.5f to 0.75f (half again) to make detection even easier
     
     [Header("Generation Settings")]
     [Tooltip("Number of segments per curve (higher = smoother)")]
@@ -321,12 +321,12 @@ public class RoadGenerator : MonoBehaviour
     /// </summary>
     void CreateLaneLines()
     {
-        // Left lane line (dashed - center line)
-        leftLaneLineObject = CreateDashedLaneLine("LeftLaneLine", -roadWidth * 0.5f, whiteLaneMaterial);
+        // Left lane line (yellow - left edge)
+        leftLaneLineObject = CreateDashedLaneLine("LeftLaneLine", -roadWidth * 0.5f, yellowLaneMaterial);
         generatedObjects.Add(leftLaneLineObject);
         
-        // Right lane line (solid - edge line)
-        rightLaneLineObject = CreateLaneLine("RightLaneLine", roadWidth * 0.5f, yellowLaneMaterial);
+        // Right lane line (white - right edge)
+        rightLaneLineObject = CreateLaneLine("RightLaneLine", roadWidth * 0.5f, whiteLaneMaterial);
         generatedObjects.Add(rightLaneLineObject);
     }
     
