@@ -145,6 +145,34 @@ public class GroundTruthReporter : MonoBehaviour
                 // Initialize time-based reference
                 if (useTimeBasedReference)
                 {
+                    // Optional: Override start position from track config
+                    if (roadGenerator.TryGetStartT(out float overrideStartT))
+                    {
+                        Vector3 startPos = roadGenerator.GetOvalCenterPoint(overrideStartT);
+                        Vector3 startDir = roadGenerator.GetOvalDirection(overrideStartT);
+
+                        if (carTransform != null)
+                        {
+                            if (cachedCarRigidbody != null)
+                            {
+                                cachedCarRigidbody.position = startPos;
+                                cachedCarRigidbody.rotation = Quaternion.LookRotation(startDir, Vector3.up);
+                                cachedCarRigidbody.velocity = Vector3.zero;
+                                cachedCarRigidbody.angularVelocity = Vector3.zero;
+                            }
+                            else
+                            {
+                                carTransform.position = startPos;
+                                carTransform.rotation = Quaternion.LookRotation(startDir, Vector3.up);
+                            }
+                        }
+
+                        float startDistance = GetDistanceAlongPath(0f, overrideStartT);
+                        pathStartTime = Time.time - (startDistance / referenceSpeed);
+                        Debug.Log($"GroundTruthReporter: Using start override t={overrideStartT:F3}, distance={startDistance:F2}m");
+                    }
+                    else
+                    {
                     // CRITICAL FIX: Initialize path reference based on car's starting position
                     // This prevents the car from jumping to path start (t=0) when ground truth mode activates
                     if (carTransform != null)
@@ -186,6 +214,7 @@ public class GroundTruthReporter : MonoBehaviour
                         pathStartTime = Time.time;
                         Debug.Log($"GroundTruthReporter: Using TIME-BASED reference path at {referenceSpeed}m/s. Path length: {ovalPathLength}m. " +
                                  $"WARNING: carTransform not found, starting at path beginning (t=0)");
+                    }
                     }
                 }
                 else

@@ -1,0 +1,10 @@
+name: circle
+road_width: 7.0
+lane_line_width: 0.3
+sample_spacing: 1.0
+loop: true
+segments:
+  - type: arc
+    radius: 50
+    angle_deg: 360
+    direction: right

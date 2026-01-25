@@ -39,6 +39,10 @@ RUN_UNITY_PLAYER=false
 UNITY_BUILD_PATH=""
 UNITY_CLI_PATH=""
 SKIP_UNITY_BUILD_IF_CLEAN=false
+TRACK_YAML_PATH=""
+START_T=""
+START_DISTANCE=""
+START_RANDOM=""
 
 usage() {
     echo "Usage: ./start_av_stack.sh [options] [av_stack.py args]"
@@ -53,6 +57,10 @@ usage() {
     echo "  --unity-path           Path to Unity executable for CLI builds"
     echo "  --skip-unity-build-if-clean  Skip Unity build when no changes are detected"
     echo "  --keep-unity-open      Do not quit Unity when the run ends"
+    echo "  --track-yaml           Path to track YAML for Unity runtime"
+    echo "  --start-t              Start position (0-1) along track"
+    echo "  --start-distance       Start position in meters along track"
+    echo "  --start-random         Randomize start position (true/false)"
     echo "  --help, -h             Show this help message"
     echo ""
     echo "av_stack.py args are passed through, e.g.:"
@@ -104,6 +112,22 @@ while [[ $# -gt 0 ]]; do
         --skip-unity-build-if-clean)
             SKIP_UNITY_BUILD_IF_CLEAN=true
             shift
+            ;;
+        --track-yaml)
+            TRACK_YAML_PATH="$2"
+            shift 2
+            ;;
+        --start-t)
+            START_T="$2"
+            shift 2
+            ;;
+        --start-distance)
+            START_DISTANCE="$2"
+            shift 2
+            ;;
+        --start-random)
+            START_RANDOM="$2"
+            shift 2
             ;;
         *)
             # Pass through to av_stack.py (preserve order and values)
@@ -252,6 +276,20 @@ if [ "$BUILD_UNITY_PLAYER" = true ]; then
 fi
 
 UNITY_PLAYER_PID=""
+UNITY_PLAYER_ARGS=()
+
+if [ -n "$TRACK_YAML_PATH" ]; then
+    UNITY_PLAYER_ARGS+=("--track-yaml" "$TRACK_YAML_PATH")
+fi
+if [ -n "$START_T" ]; then
+    UNITY_PLAYER_ARGS+=("--start-t" "$START_T")
+fi
+if [ -n "$START_DISTANCE" ]; then
+    UNITY_PLAYER_ARGS+=("--start-distance" "$START_DISTANCE")
+fi
+if [ -n "$START_RANDOM" ]; then
+    UNITY_PLAYER_ARGS+=("--start-random" "$START_RANDOM")
+fi
 
 launch_unity_player() {
     local app_path="$1"
@@ -273,12 +311,16 @@ launch_unity_player() {
 
     echo -e "${BLUE}Launching Unity player...${NC}"
     if [ -n "$exec_path" ]; then
-        "$exec_path" &
+        "$exec_path" "${UNITY_PLAYER_ARGS[@]}" &
         UNITY_PLAYER_PID=$!
         echo -e "${GREEN}✓ Unity player launched (PID: $UNITY_PLAYER_PID)${NC}"
     else
         echo -e "${YELLOW}⚠ Could not resolve player executable; using 'open'${NC}"
-        open -n "$app_path" &
+        if [ ${#UNITY_PLAYER_ARGS[@]} -gt 0 ]; then
+            open -n "$app_path" --args "${UNITY_PLAYER_ARGS[@]}" &
+        else
+            open -n "$app_path" &
+        fi
         echo -e "${GREEN}✓ Unity player launched (via open)${NC}"
     fi
 }

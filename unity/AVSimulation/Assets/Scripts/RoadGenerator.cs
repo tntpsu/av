@@ -52,6 +52,13 @@ public class RoadGenerator : MonoBehaviour
     [Tooltip("Road surface material")]
     public Material roadMaterial;
 
+    [Header("Track YAML")]
+    [Tooltip("Optional track YAML file for procedural track generation")]
+    public TextAsset trackYamlAsset;
+    
+    [Tooltip("Prefer YAML track over built-in oval when available")]
+    public bool preferTrackYaml = true;
+
     [Header("Placement")]
     [Tooltip("Offset the track from the origin")]
     public Vector3 trackOffset = Vector3.zero;
@@ -61,6 +68,8 @@ public class RoadGenerator : MonoBehaviour
     private GameObject rightLaneLineObject;
     private List<GameObject> generatedObjects = new List<GameObject>();
     private bool hasGenerated = false;
+    private TrackPath trackPath = null;
+    private TrackConfig activeTrackConfig = null;
     
     void OnEnable()
     {
@@ -75,7 +84,7 @@ public class RoadGenerator : MonoBehaviour
                 UnityEditor.EditorApplication.delayCall += () => {
                     if (this != null && generateOnStart && !hasGenerated)
                     {
-                        GenerateOvalRoad();
+                        GenerateRoad();
                         hasGenerated = true;
                     }
                 };
@@ -83,7 +92,7 @@ public class RoadGenerator : MonoBehaviour
             else
             #endif
             {
-                GenerateOvalRoad();
+                GenerateRoad();
                 hasGenerated = true;
             }
         }
@@ -96,15 +105,41 @@ public class RoadGenerator : MonoBehaviour
     public void RegenerateRoad()
     {
         hasGenerated = false;
-        GenerateOvalRoad();
+        GenerateRoad();
     }
     
     void Start()
     {
         if (generateOnStart && !hasGenerated)
         {
-            GenerateOvalRoad();
+            GenerateRoad();
             hasGenerated = true;
+        }
+    }
+
+    public void GenerateRoad()
+    {
+        TrackConfig config = null;
+        bool hasYaml = false;
+
+        if (Application.isPlaying)
+        {
+            hasYaml = TrackLoader.TryLoadFromCommandLine(out config);
+        }
+
+        if (!hasYaml && trackYamlAsset != null)
+        {
+            config = TrackLoader.LoadFromText(trackYamlAsset.text);
+            hasYaml = true;
+        }
+
+        if (hasYaml && preferTrackYaml)
+        {
+            GenerateTrackRoad(config);
+        }
+        else
+        {
+            GenerateOvalRoad();
         }
     }
     
@@ -115,6 +150,8 @@ public class RoadGenerator : MonoBehaviour
     {
         // Clean up existing generated objects
         Cleanup();
+        trackPath = null;
+        activeTrackConfig = null;
         
         // Remove existing road if requested
         if (replaceExistingRoad)
@@ -315,17 +352,98 @@ public class RoadGenerator : MonoBehaviour
         
         generatedObjects.Add(roadMeshObject);
     }
+
+    void CreateRoadMeshFromPath(TrackPath path)
+    {
+        if (path == null || path.Points.Count < 2)
+        {
+            Debug.LogError("TrackPath is empty; cannot build road mesh.");
+            return;
+        }
+
+        roadMeshObject = new GameObject("TrackRoad");
+        roadMeshObject.transform.SetParent(transform);
+
+        MeshFilter meshFilter = roadMeshObject.AddComponent<MeshFilter>();
+        MeshRenderer meshRenderer = roadMeshObject.AddComponent<MeshRenderer>();
+        MeshCollider meshCollider = roadMeshObject.AddComponent<MeshCollider>();
+
+        Mesh roadMesh = CreateLineMesh(path.Points, roadWidth);
+        roadMesh.name = "TrackRoadMesh";
+        meshFilter.mesh = roadMesh;
+        meshCollider.sharedMesh = roadMesh;
+
+        if (roadMaterial != null)
+        {
+            meshRenderer.material = roadMaterial;
+        }
+        else
+        {
+            Material defaultRoadMaterial = new Material(Shader.Find("Universal Render Pipeline/Lit"));
+            defaultRoadMaterial.color = new Color(0.3f, 0.3f, 0.3f, 1f);
+            meshRenderer.material = defaultRoadMaterial;
+        }
+
+        generatedObjects.Add(roadMeshObject);
+    }
+
+    public void GenerateTrackRoad(TrackConfig config)
+    {
+        if (config == null)
+        {
+            Debug.LogError("Track config is null; falling back to oval.");
+            GenerateOvalRoad();
+            return;
+        }
+
+        // Apply config overrides
+        roadWidth = config.roadWidth;
+        laneLineWidth = config.laneLineWidth;
+
+        // Clean up existing generated objects
+        Cleanup();
+
+        if (replaceExistingRoad)
+        {
+            RemoveExistingRoad();
+        }
+
+        activeTrackConfig = config;
+        trackPath = TrackBuilder.BuildPath(config, trackOffset);
+
+        CreateRoadMeshFromPath(trackPath);
+        CreateLaneLines();
+
+        hasGenerated = true;
+
+        #if UNITY_EDITOR
+        if (!Application.isPlaying)
+        {
+            UnityEditor.EditorUtility.SetDirty(this);
+        }
+        #endif
+
+        Debug.Log($"Track road generated: {config.name}, length={trackPath.TotalLength:F1}m");
+    }
     
     /// <summary>
     /// Create lane lines that follow the oval path.
     /// </summary>
     void CreateLaneLines()
     {
-        // Left lane line (yellow - left edge)
+        if (trackPath != null)
+        {
+            leftLaneLineObject = CreateDashedLaneLineFromPath("LeftLaneLine", -roadWidth * 0.5f, yellowLaneMaterial);
+            generatedObjects.Add(leftLaneLineObject);
+
+            rightLaneLineObject = CreateLaneLineFromPath("RightLaneLine", roadWidth * 0.5f, whiteLaneMaterial);
+            generatedObjects.Add(rightLaneLineObject);
+            return;
+        }
+
         leftLaneLineObject = CreateDashedLaneLine("LeftLaneLine", -roadWidth * 0.5f, yellowLaneMaterial);
         generatedObjects.Add(leftLaneLineObject);
-        
-        // Right lane line (white - right edge)
+
         rightLaneLineObject = CreateLaneLine("RightLaneLine", roadWidth * 0.5f, whiteLaneMaterial);
         generatedObjects.Add(rightLaneLineObject);
     }
@@ -510,6 +628,108 @@ public class RoadGenerator : MonoBehaviour
         
         return dashedLineParent;
     }
+
+    GameObject CreateLaneLineFromPath(string name, float offsetFromCenter, Material material)
+    {
+        List<Vector3> linePoints = SampleOffsetPoints(trackPath, offsetFromCenter, 1.0f);
+        return CreateLineObject(name, linePoints, material);
+    }
+
+    GameObject CreateDashedLaneLineFromPath(string name, float offsetFromCenter, Material material)
+    {
+        GameObject dashedLineParent = new GameObject(name);
+        dashedLineParent.transform.SetParent(transform);
+
+        List<Vector3> pathPoints = SampleOffsetPoints(trackPath, offsetFromCenter, 0.5f);
+        List<float> cumulativeDistances = new List<float>();
+        cumulativeDistances.Add(0f);
+        for (int i = 1; i < pathPoints.Count; i++)
+        {
+            float dist = Vector3.Distance(pathPoints[i - 1], pathPoints[i]);
+            cumulativeDistances.Add(cumulativeDistances[i - 1] + dist);
+        }
+
+        float totalLength = cumulativeDistances[cumulativeDistances.Count - 1];
+        float currentDistance = 0f;
+        bool isDash = true;
+
+        while (currentDistance < totalLength)
+        {
+            float segmentDistance = isDash ? dashLength : gapLength;
+            float endDistance = currentDistance + segmentDistance;
+
+            if (isDash)
+            {
+                List<Vector3> dashPoints = new List<Vector3>();
+                for (int i = 0; i < pathPoints.Count; i++)
+                {
+                    if (cumulativeDistances[i] >= currentDistance && cumulativeDistances[i] <= endDistance)
+                    {
+                        dashPoints.Add(pathPoints[i]);
+                    }
+                }
+
+                if (dashPoints.Count >= 2)
+                {
+                    GameObject dash = CreateLineObject($"{name}_dash", dashPoints, material);
+                    dash.transform.SetParent(dashedLineParent.transform);
+                    generatedObjects.Add(dash);
+                }
+            }
+
+            currentDistance = endDistance;
+            isDash = !isDash;
+        }
+
+        return dashedLineParent;
+    }
+
+    GameObject CreateLineObject(string name, List<Vector3> points, Material material)
+    {
+        GameObject laneLine = new GameObject(name);
+        laneLine.transform.SetParent(transform);
+
+        MeshFilter meshFilter = laneLine.AddComponent<MeshFilter>();
+        MeshRenderer meshRenderer = laneLine.AddComponent<MeshRenderer>();
+
+        Mesh lineMesh = CreateLineMesh(points, laneLineWidth);
+        meshFilter.mesh = lineMesh;
+
+        if (material != null)
+        {
+            meshRenderer.material = material;
+        }
+        else
+        {
+            Material defaultMaterial = new Material(Shader.Find("Universal Render Pipeline/Lit"));
+            defaultMaterial.color = Color.white;
+            meshRenderer.material = defaultMaterial;
+        }
+
+        return laneLine;
+    }
+
+    List<Vector3> SampleOffsetPoints(TrackPath path, float offsetFromCenter, float spacing)
+    {
+        List<Vector3> points = new List<Vector3>();
+        if (path == null || path.TotalLength <= 0f)
+        {
+            return points;
+        }
+
+        float step = Mathf.Max(0.2f, spacing);
+        for (float d = 0f; d <= path.TotalLength; d += step)
+        {
+            Vector3 center = path.GetPointAtDistance(d);
+            Vector3 direction = path.GetDirectionAtDistance(d);
+            Vector3 right = Vector3.Cross(Vector3.up, direction).normalized;
+            Vector3 lanePoint = center + right * offsetFromCenter;
+            lanePoint.y += 0.05f;
+            points.Add(lanePoint);
+        }
+
+        return points;
+    }
     
     /// <summary>
     /// Create a mesh for a line following a path of points.
@@ -586,6 +806,10 @@ public class RoadGenerator : MonoBehaviour
     /// </summary>
     public Vector3 GetOvalCenterPoint(float t)
     {
+        if (trackPath != null)
+        {
+            return trackPath.GetPointAtT(t);
+        }
         // Normalize t to 0-1 range
         t = Mathf.Repeat(t, 1f);
         
@@ -655,6 +879,10 @@ public class RoadGenerator : MonoBehaviour
     /// </summary>
     public Vector3 GetOvalDirection(float t)
     {
+        if (trackPath != null)
+        {
+            return trackPath.GetDirectionAtT(t);
+        }
         t = Mathf.Repeat(t, 1f);
 
         float delta = 0.0025f;
@@ -691,6 +919,35 @@ public class RoadGenerator : MonoBehaviour
         if (dir.sqrMagnitude < 1e-8f) return Vector3.right;
 
         return dir.normalized;
+    }
+
+    public bool TryGetStartT(out float startT)
+    {
+        startT = -1f;
+        if (activeTrackConfig == null)
+        {
+            return false;
+        }
+
+        if (activeTrackConfig.startRandom)
+        {
+            startT = Random.value;
+            return true;
+        }
+
+        if (activeTrackConfig.startT >= 0f)
+        {
+            startT = activeTrackConfig.startT;
+            return true;
+        }
+
+        if (activeTrackConfig.startDistance >= 0f && trackPath != null && trackPath.TotalLength > 0.1f)
+        {
+            startT = Mathf.Repeat(activeTrackConfig.startDistance / trackPath.TotalLength, 1f);
+            return true;
+        }
+
+        return false;
     }
     
     /// <summary>
