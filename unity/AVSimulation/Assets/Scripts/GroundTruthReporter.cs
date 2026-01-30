@@ -879,11 +879,11 @@ public class GroundTruthReporter : MonoBehaviour
     /// Get debug information about road center positions for diagnosing offset issues.
     /// Returns road center at car's location and at lookahead distance.
     /// </summary>
-    public (Vector3 roadCenterAtCar, Vector3 roadCenterAtLookahead, float referenceT) GetRoadCenterDebugInfo(float lookaheadDistance = 8.0f)
+    public (Vector3 roadCenterAtCar, Vector3 roadCenterAtLookahead, float lookaheadT, float carT) GetRoadCenterDebugInfo(float lookaheadDistance = 8.0f)
     {
         if (roadGenerator == null || carTransform == null)
         {
-            return (Vector3.zero, Vector3.zero, 0.0f);
+            return (Vector3.zero, Vector3.zero, 0.0f, 0.0f);
         }
         
         // Get car position
@@ -935,7 +935,7 @@ public class GroundTruthReporter : MonoBehaviour
         float projectionDistance = Vector3.Dot(toStraightAhead, directionLookahead);
         Vector3 roadCenterAtLookahead = roadCenterAtClosest + directionLookahead * projectionDistance;
         
-        return (roadCenterAtCar, roadCenterAtLookahead, tLookahead);
+        return (roadCenterAtCar, roadCenterAtLookahead, tLookahead, tCar);
     }
     
     /// <summary>
@@ -1173,6 +1173,39 @@ public class GroundTruthReporter : MonoBehaviour
             return 0f;
         }
     }
+
+    /// <summary>
+    /// Get speed limit at a reference t (0 to 1). Returns 0 if not set.
+    /// </summary>
+    public float GetSpeedLimitAtT(float t)
+    {
+        if (roadGenerator == null)
+        {
+            return 0f;
+        }
+        return roadGenerator.GetSpeedLimitAtT(t);
+    }
+
+    /// <summary>
+    /// Get total path length in meters (0 if unavailable).
+    /// </summary>
+    public float GetPathLength()
+    {
+        if (roadGenerator == null)
+        {
+            return 0f;
+        }
+        return roadGenerator.GetPathLength();
+    }
+
+    public float GetDefaultSpeedLimit()
+    {
+        if (roadGenerator == null)
+        {
+            return 0f;
+        }
+        return roadGenerator.GetDefaultSpeedLimit();
+    }
     
     /// <summary>
     /// Get path curvature at current position (for anticipatory steering).
@@ -1200,9 +1233,11 @@ public class GroundTruthReporter : MonoBehaviour
         Vector3 dirPrev = roadGenerator.GetOvalDirection(tPrev);
         Vector3 dirNext = roadGenerator.GetOvalDirection(tNext);
         
-        // Compute change in direction (curvature)
-        Vector3 dirChange = dirNext - dirPrev;
-        float curvature = dirChange.magnitude / (2.0f * dt * roadGenerator.turnRadius);
+        // Compute curvature using heading change over arc length
+        float pathLength = roadGenerator.GetPathLength();
+        float ds = 2.0f * dt * Mathf.Max(0.01f, pathLength);
+        float angle = Vector3.Angle(dirPrev, dirNext) * Mathf.Deg2Rad;
+        float curvature = ds > 0f ? angle / ds : 0f;
         
         // Determine sign (left vs right turn)
         Vector3 cross = Vector3.Cross(dirPrev, dirNext);

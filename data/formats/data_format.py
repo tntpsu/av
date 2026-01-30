@@ -62,6 +62,9 @@ class VehicleState:
     road_center_at_lookahead_y: float = 0.0  # Road center Y at 8m lookahead (world coords)
     road_center_at_lookahead_z: float = 0.0  # Road center Z at 8m lookahead (world coords)
     road_center_reference_t: float = 0.0  # Parameter t on road path for reference point
+    speed_limit: float = 0.0  # Speed limit at current reference point (m/s)
+    speed_limit_preview: float = 0.0  # Speed limit at preview distance ahead (m/s)
+    speed_limit_preview_distance: float = 0.0  # Preview distance used for speed limit (m)
 
 
 @dataclass
@@ -96,6 +99,17 @@ class ControlCommand:
     straight_oscillation_rate: Optional[float] = None
     tuned_deadband: Optional[float] = None
     tuned_error_smoothing_alpha: Optional[float] = None
+    emergency_stop: bool = False
+    # Target speed diagnostics
+    target_speed_raw: Optional[float] = None
+    target_speed_post_limits: Optional[float] = None
+    target_speed_planned: Optional[float] = None
+    target_speed_final: Optional[float] = None
+    target_speed_slew_active: bool = False
+    target_speed_ramp_active: bool = False
+    # Launch throttle ramp diagnostics
+    launch_throttle_cap: Optional[float] = None
+    launch_throttle_cap_active: bool = False
 
 
 @dataclass

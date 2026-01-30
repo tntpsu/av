@@ -146,6 +146,21 @@ def test_longitudinal_controller():
     assert 0.0 <= brake <= 1.0
 
 
+def test_longitudinal_rate_limit():
+    """Test longitudinal throttle/brake rate limiting."""
+    controller = LongitudinalController(
+        target_speed=10.0,
+        throttle_rate_limit=0.05,
+        brake_rate_limit=0.10
+    )
+
+    throttle1, brake1 = controller.compute_control(current_speed=0.0, reference_velocity=10.0)
+    throttle2, brake2 = controller.compute_control(current_speed=0.0, reference_velocity=10.0)
+
+    assert throttle2 - throttle1 <= 0.05 + 1e-6
+    assert brake2 - brake1 <= 0.10 + 1e-6
+
+
 def test_vehicle_controller():
     """Test combined vehicle controller."""
     controller = VehicleController()

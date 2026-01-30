@@ -279,6 +279,9 @@ UNITY_PLAYER_PID=""
 UNITY_PLAYER_ARGS=()
 
 if [ -n "$TRACK_YAML_PATH" ]; then
+    if [[ "$TRACK_YAML_PATH" != /* ]]; then
+        TRACK_YAML_PATH="$SCRIPT_DIR/$TRACK_YAML_PATH"
+    fi
     UNITY_PLAYER_ARGS+=("--track-yaml" "$TRACK_YAML_PATH")
 fi
 if [ -n "$START_T" ]; then

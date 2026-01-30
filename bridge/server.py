@@ -76,6 +76,7 @@ last_state_arrival_time: Optional[float] = None
 last_unity_send_realtime: Optional[float] = None
 last_unity_time: Optional[float] = None
 last_control_arrival_time: Optional[float] = None
+speed_limit_zero_streak: int = 0
 
 
 async def _decode_and_store_camera_frame(
@@ -161,6 +162,9 @@ class VehicleState(BaseModel):
     roadCenterAtLookaheadY: float = 0.0  # Road center Y at 8m lookahead (world coords)
     roadCenterAtLookaheadZ: float = 0.0  # Road center Z at 8m lookahead (world coords)
     roadCenterReferenceT: float = 0.0  # Parameter t on road path for reference point
+    speedLimit: float = 0.0  # Speed limit at current reference point (m/s)
+    speedLimitPreview: float = 0.0  # Speed limit at preview distance ahead (m/s)
+    speedLimitPreviewDistance: float = 0.0  # Preview distance used for speed limit (m)
 
 
 class ControlCommand(BaseModel):
@@ -173,6 +177,7 @@ class ControlCommand(BaseModel):
     randomize_start: bool = False  # Randomize car start on oval
     randomize_request_id: int = 0  # Deduplicate randomization requests
     randomize_seed: Optional[int] = None  # Optional seed for repeatability
+    emergency_stop: bool = False  # Emergency stop flag from AV stack
 
 
 class GroundTruthMode(BaseModel):
@@ -369,7 +374,7 @@ async def receive_vehicle_state(state: VehicleState):
 
     latest_vehicle_state = state.model_dump()
 
-    global last_state_arrival_time, last_unity_send_realtime, last_unity_time
+    global last_state_arrival_time, last_unity_send_realtime, last_unity_time, speed_limit_zero_streak
     duration = time.time() - start_time
     now = time.time()
     if last_state_arrival_time is not None:
@@ -449,6 +454,23 @@ async def receive_vehicle_state(state: VehicleState):
             state.unityFrameCount,
             state.unityTime,
         )
+
+    if state.speedLimit <= 0.01:
+        speed_limit_zero_streak += 1
+        if speed_limit_zero_streak % 60 == 0:
+            logger.warning(
+                "[SPEED_LIMIT_MISSING] streak=%d unity_frame=%s unity_time=%.3f",
+                speed_limit_zero_streak,
+                state.unityFrameCount,
+                state.unityTime,
+            )
+            print(
+                "[SPEED_LIMIT_MISSING] "
+                f"streak={speed_limit_zero_streak} unity_frame={state.unityFrameCount} "
+                f"unity_time={state.unityTime:.3f}"
+            )
+    else:
+        speed_limit_zero_streak = 0
 
     return {"status": "received"}
 

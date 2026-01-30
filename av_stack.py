@@ -4,6 +4,7 @@ Connects all components: perception, trajectory planning, and control.
 """
 
 import time
+import math
 import numpy as np
 from typing import Optional, Tuple
 import sys
@@ -19,6 +20,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from bridge.client import UnityBridgeClient
 from perception.inference import LaneDetectionInference
 from trajectory.inference import TrajectoryPlanningInference
+from trajectory.speed_planner import SpeedPlanner, SpeedPlannerConfig
 from control.pid_controller import VehicleController
 from data.recorder import DataRecorder
 from data.formats.data_format import CameraFrame, VehicleState, ControlCommand, PerceptionOutput, TrajectoryOutput, RecordingFrame
@@ -109,6 +111,51 @@ def load_config(config_path: Optional[str] = None) -> dict:
         return {}
 
 
+def _slew_limit_value(previous: float, target: float, max_rate: float, dt: float) -> float:
+    """Slew-limit a value by max_rate per second."""
+    if max_rate <= 0.0 or dt <= 0.0:
+        return float(target)
+    max_delta = max_rate * dt
+    return float(previous + np.clip(target - previous, -max_delta, max_delta))
+
+
+def _apply_speed_limit_preview(base_speed: float, preview_limit: float,
+                               preview_distance: float, max_decel: float) -> float:
+    """Clamp speed so we can meet an upcoming limit with a comfortable decel."""
+    if preview_limit <= 0.0 or preview_distance <= 0.0 or max_decel <= 0.0:
+        return float(base_speed)
+    max_allowed = math.sqrt(max((preview_limit ** 2) + (2.0 * max_decel * preview_distance), 0.0))
+    return float(min(base_speed, max_allowed))
+
+
+def _apply_target_speed_slew(previous: float, target: float, rate_up: float,
+                             rate_down: float, dt: float) -> float:
+    """Slew-limit target speed with asymmetric up/down rates."""
+    if dt <= 0.0:
+        return float(target)
+    adjusted = float(target)
+    if rate_up > 0.0 and adjusted > previous:
+        adjusted = min(adjusted, previous + (rate_up * dt))
+    if rate_down > 0.0 and adjusted < previous:
+        adjusted = max(adjusted, previous - (rate_down * dt))
+    return float(adjusted)
+
+
+def _apply_restart_ramp(desired_speed: float, current_speed: float,
+                        ramp_start_time: Optional[float], timestamp: float,
+                        ramp_seconds: float, stop_threshold: float) -> Tuple[float, Optional[float], bool]:
+    """Ramp target speed up after coming to a stop."""
+    if ramp_seconds <= 0.0:
+        return float(desired_speed), None, False
+    if current_speed <= stop_threshold and desired_speed > 0.0:
+        if ramp_start_time is None:
+            ramp_start_time = float(timestamp)
+        elapsed = max(0.0, float(timestamp) - float(ramp_start_time))
+        ramp_limit = float(desired_speed) * min(1.0, elapsed / ramp_seconds)
+        return float(min(desired_speed, ramp_limit)), ramp_start_time, True
+    return float(desired_speed), None, False
+
+
 def _is_teleport_jump(
     previous_position: Optional[np.ndarray],
     current_position: Optional[np.ndarray],
@@ -193,12 +240,29 @@ class AVStack:
             lookahead_distance=trajectory_cfg.get('reference_lookahead', 8.0),
             target_speed=longitudinal_cfg.get('target_speed', 8.0),
             max_speed=safety_cfg.get('max_speed', 10.0),
+            throttle_rate_limit=longitudinal_cfg.get('throttle_rate_limit', 0.08),
+            brake_rate_limit=longitudinal_cfg.get('brake_rate_limit', 0.15),
+            throttle_smoothing_alpha=longitudinal_cfg.get('throttle_smoothing_alpha', 0.6),
+            speed_smoothing_alpha=longitudinal_cfg.get('speed_smoothing', 0.6),
+            min_throttle_when_accel=longitudinal_cfg.get('min_throttle_when_accel', 0.0),
             max_steering=lateral_cfg.get('max_steering', 0.5),
             lateral_deadband=lateral_cfg.get('deadband', 0.02),
             lateral_heading_weight=lateral_cfg.get('heading_weight', 0.5),
             lateral_lateral_weight=lateral_cfg.get('lateral_weight', 0.5),
             lateral_error_clip=lateral_cfg.get('error_clip', np.pi / 4),
-            lateral_integral_limit=lateral_cfg.get('integral_limit', 0.10)  # FIXED: Read from config (default 0.10)
+            lateral_integral_limit=lateral_cfg.get('integral_limit', 0.10),  # FIXED: Read from config (default 0.10)
+            steering_smoothing_alpha=lateral_cfg.get('steering_smoothing_alpha', 0.7),
+            curve_feedforward_gain=lateral_cfg.get('curve_feedforward_gain', 1.0),
+            curve_feedforward_threshold=lateral_cfg.get('curve_feedforward_threshold', 0.02),
+            curve_feedforward_gain_min=lateral_cfg.get('curve_feedforward_gain_min', 1.0),
+            curve_feedforward_gain_max=lateral_cfg.get('curve_feedforward_gain_max', 1.0),
+            curve_feedforward_curvature_min=lateral_cfg.get('curve_feedforward_curvature_min', 0.005),
+            curve_feedforward_curvature_max=lateral_cfg.get('curve_feedforward_curvature_max', 0.03),
+            curve_feedforward_curvature_clamp=lateral_cfg.get('curve_feedforward_curvature_clamp', 0.03),
+            straight_curvature_threshold=lateral_cfg.get('straight_curvature_threshold', 0.01),
+            steering_rate_curvature_min=lateral_cfg.get('steering_rate_curvature_min', 0.005),
+            steering_rate_curvature_max=lateral_cfg.get('steering_rate_curvature_max', 0.03),
+            steering_rate_scale_min=lateral_cfg.get('steering_rate_scale_min', 0.5)
         )
         
         # Store config for use in _process_frame
@@ -206,6 +270,25 @@ class AVStack:
         self.control_config = control_cfg
         self.trajectory_config = trajectory_cfg
         self.safety_config = safety_cfg
+
+        # Speed planner (jerk-limited) configuration
+        speed_planner_cfg = trajectory_cfg.get('speed_planner', {})
+        self.speed_planner_enabled = bool(speed_planner_cfg.get('enabled', False))
+        self.speed_planner = None
+        if self.speed_planner_enabled:
+            default_dt = float(speed_planner_cfg.get('default_dt', 1.0 / 30.0))
+            planner_config = SpeedPlannerConfig(
+                max_accel=float(speed_planner_cfg.get('max_accel', 2.0)),
+                max_decel=float(speed_planner_cfg.get('max_decel', 3.0)),
+                max_jerk=float(speed_planner_cfg.get('max_jerk', 2.0)),
+                min_speed=float(speed_planner_cfg.get('min_speed', 0.0)),
+                launch_speed_floor=float(speed_planner_cfg.get('launch_speed_floor', 0.0)),
+                launch_speed_floor_threshold=float(speed_planner_cfg.get('launch_speed_floor_threshold', 0.0)),
+                reset_gap_seconds=float(speed_planner_cfg.get('reset_gap_seconds', 0.5)),
+                sync_speed_threshold=float(speed_planner_cfg.get('sync_speed_threshold', 3.0)),
+                default_dt=default_dt,
+            )
+            self.speed_planner = SpeedPlanner(planner_config)
         
         # Data recording (enabled by default for comprehensive logging)
         self.recorder = None
@@ -244,6 +327,17 @@ class AVStack:
         self.perception_health_score = 1.0  # Current health score (1.0 = perfect, 0.0 = failed)
         self.perception_health_status = "healthy"  # "healthy", "degraded", "poor", "critical"
         self.original_target_speed = trajectory_cfg.get('target_speed', 8.0)  # Store original target speed for recovery
+        # Speed limit smoothing state
+        self.last_speed_limit: Optional[float] = None
+        self.last_speed_limit_time: Optional[float] = None
+        # Target speed smoothing state
+        self.last_target_speed: Optional[float] = None
+        self.last_target_speed_time: Optional[float] = None
+        self.restart_ramp_start_time: Optional[float] = None
+        # Launch throttle ramp state
+        self.launch_throttle_ramp_start_time: Optional[float] = None
+        self.launch_throttle_ramp_armed: bool = True
+        self.launch_stop_candidate_start_time: Optional[float] = None
     
     def run(self, max_frames: Optional[int] = None, duration: Optional[float] = None):
         """
@@ -641,6 +735,19 @@ class AVStack:
         ground_truth_lookahead_distance = vehicle_state_dict.get('groundTruthLookaheadDistance')
         if ground_truth_lookahead_distance is None:
             ground_truth_lookahead_distance = vehicle_state_dict.get('ground_truth_lookahead_distance', 8.0)
+
+        speed_limit = vehicle_state_dict.get('speedLimit')
+        if speed_limit is None:
+            speed_limit = vehicle_state_dict.get('speed_limit', 0.0)
+        speed_limit_preview = vehicle_state_dict.get('speedLimitPreview')
+        if speed_limit_preview is None:
+            speed_limit_preview = vehicle_state_dict.get('speed_limit_preview', 0.0)
+        speed_limit_preview_distance = vehicle_state_dict.get('speedLimitPreviewDistance')
+        if speed_limit_preview_distance is None:
+            speed_limit_preview_distance = vehicle_state_dict.get(
+                'speed_limit_preview_distance',
+                self.trajectory_config.get('speed_limit_preview_distance', 0.0),
+            )
         camera_lookahead_screen_y = vehicle_state_dict.get('cameraLookaheadScreenY')
         if camera_lookahead_screen_y is None:
             camera_lookahead_screen_y = vehicle_state_dict.get('camera_lookahead_screen_y', -1.0)
@@ -1541,6 +1648,65 @@ class AVStack:
         else:  # critical
             # Reduce to 30% of target speed (very slow, but still moving)
             adjusted_target_speed = self.original_target_speed * 0.3
+
+        # Apply speed limits from map + curvature
+        path_curvature = vehicle_state_dict.get('groundTruthPathCurvature')
+        if path_curvature is None:
+            path_curvature = vehicle_state_dict.get('ground_truth_path_curvature', 0.0)
+        max_lateral_accel = self.trajectory_config.get('max_lateral_accel', 2.5)
+        min_curve_speed = self.trajectory_config.get('min_curve_speed', 0.0)
+        base_speed = adjusted_target_speed
+        smoothed_speed_limit = self._smooth_speed_limit(speed_limit, timestamp)
+        adjusted_target_speed = self._apply_speed_limits(
+            adjusted_target_speed,
+            speed_limit=smoothed_speed_limit,
+            path_curvature=path_curvature,
+            max_lateral_accel=max_lateral_accel,
+            min_curve_speed=min_curve_speed,
+        )
+        preview_decel = self.trajectory_config.get('speed_limit_preview_decel', 0.0)
+        if isinstance(speed_limit_preview, (int, float)) and speed_limit_preview > 0:
+            preview_target = _apply_speed_limit_preview(
+                adjusted_target_speed,
+                float(speed_limit_preview),
+                float(speed_limit_preview_distance),
+                float(preview_decel),
+            )
+            adjusted_target_speed = min(adjusted_target_speed, preview_target)
+        target_speed_post_limits = adjusted_target_speed
+        current_speed = vehicle_state_dict.get('speed', 0.0)
+        target_speed_planned = None
+        if self.speed_planner_enabled and self.speed_planner is not None:
+            planned_speed, planned_accel, planned_jerk, planner_active = self.speed_planner.step(
+                adjusted_target_speed,
+                current_speed=current_speed,
+                timestamp=timestamp,
+            )
+            adjusted_target_speed = planned_speed
+            target_speed_planned = planned_speed
+            target_speed_ramp_active = False
+            target_speed_slew_active = False
+        else:
+            adjusted_target_speed, target_speed_ramp_active, target_speed_slew_active = (
+                self._apply_target_speed_ramp(adjusted_target_speed, current_speed, timestamp)
+            )
+        target_speed_final = adjusted_target_speed
+        if adjusted_target_speed < base_speed and self.frame_count % 30 == 0:
+            curve_speed = None
+            if isinstance(path_curvature, (int, float)) and abs(path_curvature) > 1e-6 and max_lateral_accel > 0:
+                curve_speed = (max_lateral_accel / abs(path_curvature)) ** 0.5
+                if min_curve_speed > 0:
+                    curve_speed = max(curve_speed, min_curve_speed)
+            logger.info(
+                f"[Frame {self.frame_count}] Speed limit applied: "
+                f"base={base_speed:.2f} m/s, "
+                f"map_limit={float(speed_limit) if speed_limit else 0.0:.2f} m/s, "
+                f"curve_limit={curve_speed:.2f} m/s"
+                if curve_speed is not None
+                else f"[Frame {self.frame_count}] Speed limit applied: "
+                     f"base={base_speed:.2f} m/s, "
+                     f"map_limit={float(speed_limit) if speed_limit else 0.0:.2f} m/s"
+            )
         
         # Update trajectory planner's target speed (if it supports dynamic updates)
         if hasattr(self.trajectory_planner, 'planner') and hasattr(self.trajectory_planner.planner, 'target_speed'):
@@ -1558,7 +1724,6 @@ class AVStack:
         trajectory = self.trajectory_planner.plan(lane_coeffs, vehicle_state_dict)
         
         # Get current speed for safety checks (check BEFORE computing control)
-        current_speed = vehicle_state_dict.get('speed', 0.0)
         max_speed = self.safety_config.get('max_speed', 10.0)
         emergency_threshold = self.safety_config.get('emergency_brake_threshold', 2.0)
         prevention_threshold = self.safety_config.get('speed_prevention_threshold', 0.85)
@@ -1648,6 +1813,12 @@ class AVStack:
                 control_command = self.controller.compute_control(
                     current_state, reference_point, return_metadata=True
                 )
+                control_command['target_speed_raw'] = base_speed
+                control_command['target_speed_post_limits'] = target_speed_post_limits
+                control_command['target_speed_planned'] = target_speed_planned
+                control_command['target_speed_final'] = target_speed_final
+                control_command['target_speed_slew_active'] = target_speed_slew_active
+                control_command['target_speed_ramp_active'] = target_speed_ramp_active
                 
                 # If emergency braking was triggered, override throttle/brake but keep steering
                 if brake_override > 0:
@@ -1685,11 +1856,47 @@ class AVStack:
                         # FIXED: More aggressive brake amount (was 0.2, now 0.4)
                         control_command['brake'] = max(control_command.get('brake', 0.0), prevention_brake_amount)
                 
-                # Additional prevention: Start reducing throttle even earlier (at 60% of max)
-                elif current_speed > max_speed * 0.60:
-                    # Start gentle throttle reduction at 60% of max speed
-                    control_command['throttle'] = control_command.get('throttle', 0.0) * 0.7
-                
+                # Launch throttle ramp: cap throttle during stop -> start transitions
+                launch_cap_active = False
+                launch_cap = 0.0
+                if not self.speed_planner_enabled:
+                    launch_stop_threshold = longitudinal_cfg.get('launch_throttle_stop_threshold', 0.5)
+                    launch_ramp_seconds = longitudinal_cfg.get('launch_throttle_ramp_seconds', 0.0)
+                    launch_cap_min = longitudinal_cfg.get('launch_throttle_cap_min', 0.1)
+                    launch_cap_max = longitudinal_cfg.get('launch_throttle_cap_max', 0.6)
+                    launch_rearm_hysteresis = longitudinal_cfg.get('launch_throttle_rearm_hysteresis', 0.5)
+                    launch_stop_hold_seconds = longitudinal_cfg.get('launch_throttle_stop_hold_seconds', 0.5)
+                    launch_rearm_speed = float(launch_stop_threshold) + float(launch_rearm_hysteresis)
+                    if launch_ramp_seconds > 0.0:
+                        if current_speed > launch_rearm_speed:
+                            self.launch_throttle_ramp_armed = True
+                        if current_speed <= launch_stop_threshold:
+                            if self.launch_stop_candidate_start_time is None:
+                                self.launch_stop_candidate_start_time = float(timestamp)
+                        else:
+                            self.launch_stop_candidate_start_time = None
+                        if self.launch_throttle_ramp_start_time is None and self.launch_throttle_ramp_armed:
+                            if (
+                                current_speed <= launch_stop_threshold
+                                and control_command.get('throttle', 0.0) > 0.0
+                                and self.launch_stop_candidate_start_time is not None
+                                and (float(timestamp) - self.launch_stop_candidate_start_time) >= float(launch_stop_hold_seconds)
+                            ):
+                                self.launch_throttle_ramp_start_time = float(timestamp)
+                                self.launch_throttle_ramp_armed = False
+                        if self.launch_throttle_ramp_start_time is not None:
+                            elapsed = max(0.0, float(timestamp) - self.launch_throttle_ramp_start_time)
+                            if elapsed >= float(launch_ramp_seconds):
+                                self.launch_throttle_ramp_start_time = None
+                            else:
+                                ratio = min(1.0, elapsed / float(launch_ramp_seconds))
+                                launch_cap = float(launch_cap_min + (launch_cap_max - launch_cap_min) * ratio)
+                                launch_cap_active = True
+                                if control_command.get('throttle', 0.0) > 0.0:
+                                    control_command['throttle'] = min(control_command['throttle'], launch_cap)
+                control_command['launch_throttle_cap'] = launch_cap
+                control_command['launch_throttle_cap_active'] = launch_cap_active
+
                 # Additional safety: Ensure we don't exceed speed limit
                 # CRITICAL FIX: Use proportional brake instead of hard 0.8 to prevent sudden stops
                 if current_speed > max_speed:  # Over limit (shouldn't happen with prevention)
@@ -1764,7 +1971,7 @@ class AVStack:
                         logger.error(f"[Frame {self.frame_count}] EMERGENCY STOP: Lateral error {lateral_error_abs:.3f}m exceeds {emergency_stop_error}m threshold!")
                         self.emergency_stop_logged = True
                         self.emergency_stop_type = 'lateral_error_exceeded'
-                    control_command = {'steering': 0.0, 'throttle': 0.0, 'brake': 1.0, 'lateral_error': control_command.get('lateral_error', 0.0)}
+                    control_command = {'steering': 0.0, 'throttle': 0.0, 'brake': 1.0, 'lateral_error': control_command.get('lateral_error', 0.0), 'emergency_stop': True}
                     emergency_stop_triggered = True
                     # Reset PID to prevent further divergence
                     self.controller.lateral_controller.reset()
@@ -1780,7 +1987,7 @@ class AVStack:
                             self.emergency_stop_type = 'out_of_bounds'
                         logger.error(f"[Frame {self.frame_count}]   Stopping vehicle to prevent further off-road driving")
                         self.emergency_stop_logged = True
-                    control_command = {'steering': 0.0, 'throttle': 0.0, 'brake': 1.0, 'lateral_error': control_command.get('lateral_error', 0.0)}
+                    control_command = {'steering': 0.0, 'throttle': 0.0, 'brake': 1.0, 'lateral_error': control_command.get('lateral_error', 0.0), 'emergency_stop': True}
                     emergency_stop_triggered = True
                     # Reset PID to prevent further divergence
                     self.controller.lateral_controller.reset()
@@ -1864,7 +2071,8 @@ class AVStack:
         if self.recorder:
             self._record_frame(
                 image, timestamp, vehicle_state_dict,
-                perception_output, trajectory, control_command
+                perception_output, trajectory, control_command,
+                speed_limit
             )
 
         # Update teleport guard countdown and vehicle position tracking
@@ -1993,10 +2201,87 @@ class AVStack:
         if isinstance(position, dict):
             return np.array([position.get('x', 0.0), position.get('z', 0.0)])
         return np.array([0.0, 0.0])
+
+    @staticmethod
+    def _apply_speed_limits(
+        base_speed: float,
+        speed_limit: float,
+        path_curvature: float,
+        max_lateral_accel: float,
+        min_curve_speed: float = 0.0,
+    ) -> float:
+        """Clamp speed using map limits and curvature-based lateral acceleration."""
+        adjusted_speed = base_speed
+
+        if isinstance(speed_limit, (int, float)) and speed_limit > 0:
+            adjusted_speed = min(adjusted_speed, float(speed_limit))
+
+        if isinstance(path_curvature, (int, float)) and abs(path_curvature) > 1e-6:
+            if isinstance(max_lateral_accel, (int, float)) and max_lateral_accel > 0:
+                curve_speed = (max_lateral_accel / abs(path_curvature)) ** 0.5
+                if min_curve_speed > 0:
+                    curve_speed = max(curve_speed, min_curve_speed)
+                adjusted_speed = min(adjusted_speed, curve_speed)
+
+        return float(adjusted_speed)
+
+    def _smooth_speed_limit(self, raw_limit: float, timestamp: float) -> float:
+        """Smooth speed limit changes to avoid step inputs."""
+        if not isinstance(raw_limit, (int, float)) or raw_limit <= 0.0:
+            self.last_speed_limit = None
+            self.last_speed_limit_time = None
+            return 0.0
+
+        slew_rate = self.trajectory_config.get('speed_limit_slew_rate', 0.0)
+        if slew_rate <= 0.0 or self.last_speed_limit is None or self.last_speed_limit_time is None:
+            self.last_speed_limit = float(raw_limit)
+            self.last_speed_limit_time = float(timestamp)
+            return float(raw_limit)
+
+        dt = max(1e-3, float(timestamp) - float(self.last_speed_limit_time))
+        smoothed = _slew_limit_value(float(self.last_speed_limit), float(raw_limit), float(slew_rate), dt)
+        self.last_speed_limit = smoothed
+        self.last_speed_limit_time = float(timestamp)
+        return smoothed
+
+    def _apply_target_speed_ramp(self, desired_speed: float, current_speed: float,
+                                 timestamp: float) -> Tuple[float, bool, bool]:
+        """Smooth target speed changes and ramp after stops."""
+        if self.last_target_speed is None or self.last_target_speed_time is None:
+            self.last_target_speed = float(desired_speed)
+            self.last_target_speed_time = float(timestamp)
+            return float(desired_speed), False, False
+
+        dt = max(1e-3, float(timestamp) - float(self.last_target_speed_time))
+        longitudinal_cfg = self.control_config.get('longitudinal', {})
+        rate_up = float(longitudinal_cfg.get('target_speed_slew_rate_up', 0.0))
+        rate_down = float(longitudinal_cfg.get('target_speed_slew_rate_down', 0.0))
+        stop_threshold = float(longitudinal_cfg.get('target_speed_stop_threshold', 0.5))
+        ramp_seconds = float(longitudinal_cfg.get('target_speed_restart_ramp_seconds', 0.0))
+
+        ramped_speed, self.restart_ramp_start_time, ramp_active = _apply_restart_ramp(
+            desired_speed,
+            current_speed,
+            self.restart_ramp_start_time,
+            timestamp,
+            ramp_seconds,
+            stop_threshold,
+        )
+        adjusted = _apply_target_speed_slew(
+            float(self.last_target_speed),
+            float(ramped_speed),
+            rate_up,
+            rate_down,
+            dt,
+        )
+        slew_active = abs(adjusted - float(ramped_speed)) > 1e-6
+        self.last_target_speed = adjusted
+        self.last_target_speed_time = float(timestamp)
+        return adjusted, ramp_active, slew_active
     
     def _record_frame(self, image: np.ndarray, timestamp: float,
                      vehicle_state_dict: dict, perception_output: PerceptionOutput,
-                     trajectory, control_command: dict):
+                     trajectory, control_command: dict, speed_limit: float = 0.0):
         """Record frame data."""
         # Create camera frame
         camera_frame = CameraFrame(
@@ -2141,7 +2426,15 @@ class AVStack:
             road_center_at_lookahead_x=vehicle_state_dict.get('roadCenterAtLookaheadX', 0.0),
             road_center_at_lookahead_y=vehicle_state_dict.get('roadCenterAtLookaheadY', 0.0),
             road_center_at_lookahead_z=vehicle_state_dict.get('roadCenterAtLookaheadZ', 0.0),
-            road_center_reference_t=vehicle_state_dict.get('roadCenterReferenceT', 0.0)
+            road_center_reference_t=vehicle_state_dict.get('roadCenterReferenceT', 0.0),
+            speed_limit=speed_limit,
+            speed_limit_preview=vehicle_state_dict.get(
+                'speedLimitPreview', vehicle_state_dict.get('speed_limit_preview', 0.0)
+            ),
+            speed_limit_preview_distance=vehicle_state_dict.get(
+                'speedLimitPreviewDistance',
+                vehicle_state_dict.get('speed_limit_preview_distance', 0.0),
+            ),
         )
         
         # Create control command with metadata
@@ -2159,13 +2452,23 @@ class AVStack:
             lateral_error=control_command.get('lateral_error'),
             heading_error=control_command.get('heading_error'),
             total_error=control_command.get('total_error'),
+            path_curvature_input=control_command.get('path_curvature_input'),
             is_straight=control_command.get('is_straight'),
             straight_oscillation_rate=control_command.get('straight_oscillation_rate'),
             tuned_deadband=control_command.get('tuned_deadband'),
             tuned_error_smoothing_alpha=control_command.get('tuned_error_smoothing_alpha'),
             # Diagnostic fields for tracking stale perception usage
             using_stale_perception=perception_output.using_stale_data if perception_output else False,
-            stale_perception_reason=perception_output.stale_data_reason if perception_output else None
+            stale_perception_reason=perception_output.stale_data_reason if perception_output else None,
+            emergency_stop=bool(control_command.get('emergency_stop', False)),
+            target_speed_raw=control_command.get('target_speed_raw'),
+            target_speed_post_limits=control_command.get('target_speed_post_limits'),
+            target_speed_planned=control_command.get('target_speed_planned'),
+            target_speed_final=control_command.get('target_speed_final'),
+            target_speed_slew_active=bool(control_command.get('target_speed_slew_active', False)),
+            target_speed_ramp_active=bool(control_command.get('target_speed_ramp_active', False)),
+            launch_throttle_cap=control_command.get('launch_throttle_cap'),
+            launch_throttle_cap_active=bool(control_command.get('launch_throttle_cap_active', False))
         )
         
         # Create trajectory output

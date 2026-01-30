@@ -32,7 +32,19 @@ class TestConfigParameterFlow:
                         'deadband': 0.025,
                         'heading_weight': 0.6,
                         'lateral_weight': 0.4,
-                        'error_clip': 0.8
+                        'error_clip': 0.8,
+                        'steering_smoothing_alpha': 0.65,
+                        'curve_feedforward_gain': 1.2,
+                        'curve_feedforward_threshold': 0.03,
+                        'curve_feedforward_gain_min': 0.8,
+                        'curve_feedforward_gain_max': 1.3,
+                        'curve_feedforward_curvature_min': 0.004,
+                        'curve_feedforward_curvature_max': 0.025,
+                        'curve_feedforward_curvature_clamp': 0.03,
+                        'straight_curvature_threshold': 0.012,
+                        'steering_rate_curvature_min': 0.006,
+                        'steering_rate_curvature_max': 0.02,
+                        'steering_rate_scale_min': 0.55
                     }
                 }
             }
@@ -56,6 +68,18 @@ class TestConfigParameterFlow:
             assert lateral_ctrl.heading_weight == 0.6
             assert lateral_ctrl.lateral_weight == 0.4
             assert lateral_ctrl.error_clip == 0.8
+            assert lateral_ctrl.steering_smoothing_alpha == 0.65
+            assert lateral_ctrl.curve_feedforward_gain == 1.2
+            assert lateral_ctrl.curve_feedforward_threshold == 0.03
+            assert lateral_ctrl.curve_feedforward_gain_min == 0.8
+            assert lateral_ctrl.curve_feedforward_gain_max == 1.3
+            assert lateral_ctrl.curve_feedforward_curvature_min == 0.004
+            assert lateral_ctrl.curve_feedforward_curvature_max == 0.025
+            assert lateral_ctrl.curve_feedforward_curvature_clamp == 0.03
+            assert lateral_ctrl.straight_curvature_threshold == 0.012
+            assert lateral_ctrl.steering_rate_curvature_min == 0.006
+            assert lateral_ctrl.steering_rate_curvature_max == 0.02
+            assert lateral_ctrl.steering_rate_scale_min == 0.55
         finally:
             Path(config_path).unlink()
     
@@ -69,7 +93,10 @@ class TestConfigParameterFlow:
                         'ki': 0.06,
                         'kd': 0.03,
                         'target_speed': 9.0,
-                        'max_speed': 12.0
+                        'max_speed': 12.0,
+                        'throttle_rate_limit': 0.06,
+                        'brake_rate_limit': 0.12,
+                        'throttle_smoothing_alpha': 0.55
                     }
                 }
             }
@@ -86,6 +113,9 @@ class TestConfigParameterFlow:
             # Check that parameters reached the controller
             long_ctrl = av_stack.controller.longitudinal_controller
             assert long_ctrl.target_speed == 9.0
+            assert long_ctrl.throttle_rate_limit == 0.06
+            assert long_ctrl.brake_rate_limit == 0.12
+            assert long_ctrl.throttle_smoothing_alpha == 0.55
             # Note: max_speed is set in VehicleController, not LongitudinalController
             # The safety config max_speed is used in _process_frame, not in controller
             assert long_ctrl.pid_throttle.kp == 0.4

@@ -41,10 +41,22 @@ def analyze_recording_summary(recording_path: Path, analyze_to_failure: bool = F
             # Load timestamps
             if 'vehicle_state/timestamp' in f:
                 data['timestamps'] = np.array(f['vehicle_state/timestamp'][:])
+                data['speed'] = np.array(f['vehicle_state/speed'][:]) if 'vehicle_state/speed' in f else None
+                data['speed_limit'] = (
+                    np.array(f['vehicle_state/speed_limit'][:]) if 'vehicle_state/speed_limit' in f else None
+                )
             elif 'vehicle/timestamps' in f:
                 data['timestamps'] = np.array(f['vehicle/timestamps'][:])
+                data['speed'] = np.array(f['vehicle/speed'][:]) if 'vehicle/speed' in f else None
+                data['speed_limit'] = (
+                    np.array(f['vehicle/speed_limit'][:]) if 'vehicle/speed_limit' in f else None
+                )
             else:
                 data['timestamps'] = np.array(f['control/timestamp'][:])
+                data['speed'] = np.array(f['vehicle/speed'][:]) if 'vehicle/speed' in f else None
+                data['speed_limit'] = (
+                    np.array(f['vehicle/speed_limit'][:]) if 'vehicle/speed_limit' in f else None
+                )
             
             # Control data
             data['steering'] = np.array(f['control/steering'][:])
@@ -52,6 +64,11 @@ def analyze_recording_summary(recording_path: Path, analyze_to_failure: bool = F
             data['heading_error'] = np.array(f['control/heading_error'][:]) if 'control/heading_error' in f else None
             data['total_error'] = np.array(f['control/total_error'][:]) if 'control/total_error' in f else None
             data['pid_integral'] = np.array(f['control/pid_integral'][:]) if 'control/pid_integral' in f else None
+            data['emergency_stop'] = np.array(f['control/emergency_stop'][:]) if 'control/emergency_stop' in f else None
+            data['path_curvature_input'] = (
+                np.array(f['control/path_curvature_input'][:])
+                if 'control/path_curvature_input' in f else None
+            )
             data['is_straight'] = np.array(f['control/is_straight'][:]) if 'control/is_straight' in f else None
             data['straight_oscillation_rate'] = (
                 np.array(f['control/straight_oscillation_rate'][:])
@@ -68,6 +85,10 @@ def analyze_recording_summary(recording_path: Path, analyze_to_failure: bool = F
             # Trajectory data
             data['ref_x'] = np.array(f['trajectory/reference_point_x'][:]) if 'trajectory/reference_point_x' in f else None
             data['ref_heading'] = np.array(f['trajectory/reference_point_heading'][:]) if 'trajectory/reference_point_heading' in f else None
+            data['ref_velocity'] = (
+                np.array(f['trajectory/reference_point_velocity'][:])
+                if 'trajectory/reference_point_velocity' in f else None
+            )
             
             # Perception data
             data['num_lanes_detected'] = np.array(f['perception/num_lanes_detected'][:]) if 'perception/num_lanes_detected' in f else None
@@ -83,6 +104,10 @@ def analyze_recording_summary(recording_path: Path, analyze_to_failure: bool = F
             data['gt_center'] = np.array(f['ground_truth/lane_center_x'][:]) if 'ground_truth/lane_center_x' in f else None
             data['gt_left'] = np.array(f['ground_truth/left_lane_line_x'][:]) if 'ground_truth/left_lane_line_x' in f else None
             data['gt_right'] = np.array(f['ground_truth/right_lane_line_x'][:]) if 'ground_truth/right_lane_line_x' in f else None
+            data['gt_path_curvature'] = (
+                np.array(f['ground_truth/path_curvature'][:])
+                if 'ground_truth/path_curvature' in f else None
+            )
             
             # Load lane positions for stability calculation
             data['left_lane_x'] = np.array(f['perception/left_lane_line_x'][:]) if 'perception/left_lane_line_x' in f else None
@@ -105,23 +130,36 @@ def analyze_recording_summary(recording_path: Path, analyze_to_failure: bool = F
     # Ground truth shows the ACTUAL position of the car relative to the lane center
     # Perception-based error shows what the system THINKS the error is (can be wrong if perception fails)
     failure_frame = None
+    emergency_stop_frame = None
     
-    # Use ground truth if available, otherwise fall back to perception-based error
-    if data['gt_center'] is not None:
+    # Use ground truth boundaries if available, otherwise fall back to center/perception error
+    if data.get('gt_left') is not None and data.get('gt_right') is not None:
+        # Out of lane if car (x=0) is not between left/right boundaries.
+        gt_left = data['gt_left']
+        gt_right = data['gt_right']
+        out_of_lane_mask = ~((gt_left <= 0) & (0 <= gt_right))
+        error_data = np.where(
+            gt_left > 0,
+            np.abs(gt_left),
+            np.where(gt_right < 0, np.abs(gt_right), 0.0),
+        )
+        error_source = "ground_truth_boundaries"
+    elif data['gt_center'] is not None:
         # Ground truth lane_center_x: position of lane center relative to vehicle center (in vehicle frame)
-        # If gt_center_x > 0: lane center is to the RIGHT of vehicle → vehicle is LEFT of lane center
-        # If gt_center_x < 0: lane center is to the LEFT of vehicle → vehicle is RIGHT of lane center
         # Lateral error = -gt_center_x (negate because gt_center is position, not error)
         gt_lateral_error = -data['gt_center']
         error_data = gt_lateral_error
         error_source = "ground_truth"
+        out_of_lane_mask = np.abs(error_data) > 0.5
     elif data['lateral_error'] is not None:
         error_data = data['lateral_error']
         error_source = "perception"
+        out_of_lane_mask = np.abs(error_data) > 0.5
     else:
         error_data = None
+        out_of_lane_mask = None
     
-    if error_data is not None:
+    if error_data is not None and out_of_lane_mask is not None:
         # Define thresholds
         out_of_lane_threshold = 0.5  # meters (half a meter is a reasonable "out of lane" threshold)
         catastrophic_threshold = 2.0  # meters (catastrophic failure - car is way out)
@@ -150,8 +188,7 @@ def analyze_recording_summary(recording_path: Path, analyze_to_failure: bool = F
             if last_recovery_frame is not None:
                 consecutive_out_frames = 0
                 for i in range(last_recovery_frame + 1, len(error_data)):
-                    error = error_data[i]
-                    if abs(error) > out_of_lane_threshold:
+                    if out_of_lane_mask[i]:
                         consecutive_out_frames += 1
                         # If we've been out for enough frames, this is the failure point
                         if consecutive_out_frames >= min_consecutive_out and failure_frame is None:
@@ -163,8 +200,8 @@ def analyze_recording_summary(recording_path: Path, analyze_to_failure: bool = F
         # Fallback: If no catastrophic failure, use simple detection
         if failure_frame is None:
             consecutive_out_frames = 0
-            for i, error in enumerate(error_data):
-                if abs(error) > out_of_lane_threshold:
+            for i, is_out in enumerate(out_of_lane_mask):
+                if is_out:
                     consecutive_out_frames += 1
                     if consecutive_out_frames >= min_consecutive_out and failure_frame is None:
                         failure_frame = i - (min_consecutive_out - 1)
@@ -172,12 +209,22 @@ def analyze_recording_summary(recording_path: Path, analyze_to_failure: bool = F
                 else:
                     consecutive_out_frames = 0
         
-        # If we found a failure point AND analyze_to_failure is True, truncate data to that point
-        if failure_frame is not None and analyze_to_failure:
-            # Truncate all arrays to failure_frame
-            for key in data:
-                if isinstance(data[key], np.ndarray) and len(data[key]) > failure_frame:
-                    data[key] = data[key][:failure_frame]
+    if data.get('emergency_stop') is not None:
+        stop_indices = np.where(data['emergency_stop'] > 0)[0]
+        if stop_indices.size > 0:
+            emergency_stop_frame = int(stop_indices[0])
+
+    if emergency_stop_frame is not None:
+        if failure_frame is None or emergency_stop_frame < failure_frame:
+            failure_frame = emergency_stop_frame
+            error_source = "emergency_stop"
+
+    # If we found a failure point AND analyze_to_failure is True, truncate data to that point
+    if failure_frame is not None and analyze_to_failure:
+        # Truncate all arrays to failure_frame
+        for key in data:
+            if isinstance(data[key], np.ndarray) and len(data[key]) > failure_frame:
+                data[key] = data[key][:failure_frame]
     
     # Calculate metrics
     n_frames = len(data['steering'])
@@ -265,6 +312,72 @@ def analyze_recording_summary(recording_path: Path, analyze_to_failure: bool = F
         except:
             oscillation_frequency = 0.0
     oscillation_frequency = safe_float(oscillation_frequency)
+
+    # 2.5 SPEED CONTROL + COMFORT
+    speed_error_rmse = 0.0
+    speed_error_mean = 0.0
+    speed_error_max = 0.0
+    speed_overspeed_rate = 0.0
+    speed_limit_zero_rate = 0.0
+    if data.get('speed') is not None and data.get('ref_velocity') is not None:
+        n_speed = min(len(data['speed']), len(data['ref_velocity']))
+        if n_speed > 0:
+            speed = data['speed'][:n_speed]
+            ref_speed = data['ref_velocity'][:n_speed]
+            speed_error = speed - ref_speed
+            speed_error_rmse = safe_float(np.sqrt(np.mean(speed_error ** 2)))
+            speed_error_mean = safe_float(np.mean(np.abs(speed_error)))
+            speed_error_max = safe_float(np.max(np.abs(speed_error)))
+            overspeed_threshold = 0.5
+            speed_overspeed_rate = safe_float(np.sum(speed_error > overspeed_threshold) / n_speed * 100)
+    if data.get('speed_limit') is not None and len(data['speed_limit']) > 0:
+        speed_limit_zero_rate = safe_float(
+            np.sum(data['speed_limit'] <= 0.01) / len(data['speed_limit']) * 100.0
+        )
+
+    acceleration_mean = 0.0
+    acceleration_max = 0.0
+    acceleration_p95 = 0.0
+    jerk_mean = 0.0
+    jerk_max = 0.0
+    jerk_p95 = 0.0
+    lateral_accel_p95 = 0.0
+    lateral_jerk_p95 = 0.0
+    lateral_jerk_max = 0.0
+    if data.get('speed') is not None and len(data['speed']) > 1 and len(data['time']) > 1:
+        dt_series = np.diff(data['time'])
+        dt_series[dt_series <= 0] = dt
+        acceleration = np.diff(data['speed']) / dt_series
+        if acceleration.size > 0:
+            abs_accel = np.abs(acceleration)
+            acceleration_mean = safe_float(np.mean(abs_accel))
+            acceleration_max = safe_float(np.max(abs_accel))
+            acceleration_p95 = safe_float(np.percentile(abs_accel, 95))
+        if acceleration.size > 1:
+            jerk = np.diff(acceleration) / dt_series[1:]
+            if jerk.size > 0:
+                abs_jerk = np.abs(jerk)
+                jerk_mean = safe_float(np.mean(abs_jerk))
+                jerk_max = safe_float(np.max(abs_jerk))
+                jerk_p95 = safe_float(np.percentile(abs_jerk, 95))
+        curvature = None
+        if data.get('gt_path_curvature') is not None:
+            curvature = data['gt_path_curvature']
+        elif data.get('path_curvature_input') is not None:
+            curvature = data['path_curvature_input']
+        if curvature is not None:
+            n_lat = min(len(curvature), len(data['speed']))
+            if n_lat > 1:
+                lat_accel = (data['speed'][:n_lat] ** 2) * curvature[:n_lat]
+                abs_lat_accel = np.abs(lat_accel)
+                lateral_accel_p95 = safe_float(np.percentile(abs_lat_accel, 95))
+                lat_dt = np.diff(data['time'][:n_lat])
+                lat_dt[lat_dt <= 0] = dt
+                lat_jerk = np.diff(lat_accel) / lat_dt
+                if lat_jerk.size > 0:
+                    abs_lat_jerk = np.abs(lat_jerk)
+                    lateral_jerk_p95 = safe_float(np.percentile(abs_lat_jerk, 95))
+                    lateral_jerk_max = safe_float(np.max(abs_lat_jerk))
     
     # 3. PERCEPTION QUALITY
     lane_detection_rate = safe_float(np.sum(data['num_lanes_detected'] >= 2) / n_frames * 100 if data['num_lanes_detected'] is not None and n_frames > 0 else 0.0)
@@ -359,8 +472,27 @@ def analyze_recording_summary(recording_path: Path, analyze_to_failure: bool = F
         # Out of lane if: NOT (left <= 0 <= right)
         # This means: car is OUT if (left > 0) OR (right < 0)
         out_of_lane_mask = ~((gt_left <= 0) & (0 <= gt_right))
-        out_of_lane_events_count = int(np.sum(out_of_lane_mask) if len(out_of_lane_mask) > 0 else 0)
-        out_of_lane_time = safe_float(np.sum(out_of_lane_mask) / n_frames * 100 if n_frames > 0 else 0.0)
+        # Use sustained out-of-lane mask to avoid single-frame noise
+        min_consecutive_out = 10
+        sustained_mask = np.zeros_like(out_of_lane_mask, dtype=bool)
+        run_start = None
+        run_len = 0
+        for i, is_out in enumerate(out_of_lane_mask):
+            if is_out:
+                if run_start is None:
+                    run_start = i
+                run_len += 1
+            else:
+                if run_len >= min_consecutive_out and run_start is not None:
+                    sustained_mask[run_start:i] = True
+                run_start = None
+                run_len = 0
+        if run_len >= min_consecutive_out and run_start is not None:
+            sustained_mask[run_start:len(out_of_lane_mask)] = True
+
+        out_of_lane_time = safe_float(
+            np.sum(sustained_mask) / n_frames * 100 if n_frames > 0 else 0.0
+        )
         error_source = "ground_truth_boundaries"
         
         # For error calculation in events list, use distance outside lane
@@ -394,8 +526,27 @@ def analyze_recording_summary(recording_path: Path, analyze_to_failure: bool = F
             threshold = 1.75  # Half of typical 3.5m lane width
         
         out_of_lane_mask = np.abs(error_data) > threshold
-        out_of_lane_events_count = int(np.sum(out_of_lane_mask) if len(out_of_lane_mask) > 0 else 0)
-        out_of_lane_time = safe_float(np.sum(out_of_lane_mask) / n_frames * 100 if n_frames > 0 else 0.0)
+        # Use sustained out-of-lane mask to avoid single-frame noise
+        min_consecutive_out = 10
+        sustained_mask = np.zeros_like(out_of_lane_mask, dtype=bool)
+        run_start = None
+        run_len = 0
+        for i, is_out in enumerate(out_of_lane_mask):
+            if is_out:
+                if run_start is None:
+                    run_start = i
+                run_len += 1
+            else:
+                if run_len >= min_consecutive_out and run_start is not None:
+                    sustained_mask[run_start:i] = True
+                run_start = None
+                run_len = 0
+        if run_len >= min_consecutive_out and run_start is not None:
+            sustained_mask[run_start:len(out_of_lane_mask)] = True
+
+        out_of_lane_time = safe_float(
+            np.sum(sustained_mask) / n_frames * 100 if n_frames > 0 else 0.0
+        )
         error_data_for_events = np.abs(error_data)
         error_source = error_source if 'error_source' in locals() else "perception"
     else:
@@ -411,6 +562,7 @@ def analyze_recording_summary(recording_path: Path, analyze_to_failure: bool = F
         event_start = None
         event_max_error = 0.0
         
+        min_consecutive_out = 10
         for i, is_out in enumerate(out_of_lane_mask):
             if is_out:
                 if not in_event:
@@ -425,14 +577,15 @@ def analyze_recording_summary(recording_path: Path, analyze_to_failure: bool = F
                 if in_event:
                     # End of event
                     event_duration = i - event_start
-                    out_of_lane_events_list.append({
-                        'start_frame': int(event_start),
-                        'end_frame': int(i - 1),
-                        'duration_frames': int(event_duration),
-                        'duration_seconds': safe_float(event_duration * dt),
-                        'max_error': safe_float(event_max_error),
-                        'error_source': error_source
-                    })
+                    if event_duration >= min_consecutive_out:
+                        out_of_lane_events_list.append({
+                            'start_frame': int(event_start),
+                            'end_frame': int(i - 1),
+                            'duration_frames': int(event_duration),
+                            'duration_seconds': safe_float(event_duration * dt),
+                            'max_error': safe_float(event_max_error),
+                            'error_source': error_source
+                        })
                     in_event = False
                     event_start = None
                     event_max_error = 0.0
@@ -440,18 +593,19 @@ def analyze_recording_summary(recording_path: Path, analyze_to_failure: bool = F
         # Handle event that extends to end of data
         if in_event:
             event_duration = len(out_of_lane_mask) - event_start
-            out_of_lane_events_list.append({
-                'start_frame': int(event_start),
-                'end_frame': int(len(out_of_lane_mask) - 1),
-                'duration_frames': int(event_duration),
-                'duration_seconds': safe_float(event_duration * dt),
-                'max_error': safe_float(event_max_error),
-                'error_source': error_source
-            })
+            if event_duration >= min_consecutive_out:
+                out_of_lane_events_list.append({
+                    'start_frame': int(event_start),
+                    'end_frame': int(len(out_of_lane_mask) - 1),
+                    'duration_frames': int(event_duration),
+                    'duration_seconds': safe_float(event_duration * dt),
+                    'max_error': safe_float(event_max_error),
+                    'error_source': error_source
+                })
     else:
         out_of_lane_events_list = []
     
-    out_of_lane_events = out_of_lane_events_count
+    out_of_lane_events = len(out_of_lane_events_list)
     
     # Calculate overall score (0-100)
     score = 100.0
@@ -477,10 +631,18 @@ def analyze_recording_summary(recording_path: Path, analyze_to_failure: bool = F
         recommendations.append("Improve lane detection - check perception model or CV fallback")
     if stale_perception_rate > 10:
         recommendations.append("Reduce stale data usage - relax jump detection threshold or improve perception")
+    if speed_limit_zero_rate > 10:
+        recommendations.append("Speed limit missing - verify Unity track speed limits are sent to the bridge")
+    if emergency_stop_frame is not None:
+        recommendations.append("Emergency stop triggered - review lateral bounds and recovery logic")
     if pid_integral_max > 0.2:
         recommendations.append("Reduce PID integral accumulation - check integral reset mechanisms")
     if straight_oscillation_mean > 0.2:
         recommendations.append("Straight-line oscillation detected - increase deadband or smoothing")
+    if acceleration_p95 > 2.5:
+        recommendations.append("Reduce longitudinal acceleration spikes - tune throttle/brake gains")
+    if jerk_p95 > 5.0:
+        recommendations.append("Reduce longitudinal jerk - add rate limiting on throttle/brake")
     
     # Key issues
     key_issues = []
@@ -490,10 +652,18 @@ def analyze_recording_summary(recording_path: Path, analyze_to_failure: bool = F
         key_issues.append(f"Low lane detection rate ({lane_detection_rate:.1f}%)")
     if stale_perception_rate > 20:
         key_issues.append(f"High stale data usage ({stale_perception_rate:.1f}%)")
+    if speed_limit_zero_rate > 10:
+        key_issues.append(f"Speed limit missing ({speed_limit_zero_rate:.1f}%)")
+    if emergency_stop_frame is not None:
+        key_issues.append(f"Emergency stop at frame {emergency_stop_frame}")
     if steering_jerk_max > 2.0:
         key_issues.append("High steering jerk")
     if straight_oscillation_mean > 0.2:
         key_issues.append("Straight-line oscillation detected")
+    if acceleration_p95 > 2.5:
+        key_issues.append("High longitudinal acceleration")
+    if jerk_p95 > 5.0:
+        key_issues.append("High longitudinal jerk")
     
     return {
         "executive_summary": {
@@ -531,6 +701,29 @@ def analyze_recording_summary(recording_path: Path, analyze_to_failure: bool = F
             "steering_rate_max": safe_float(steering_rate_max),
             "steering_smoothness": safe_float(steering_smoothness),
             "oscillation_frequency": safe_float(oscillation_frequency)
+        },
+        "speed_control": {
+            "speed_error_rmse": safe_float(speed_error_rmse),
+            "speed_error_mean": safe_float(speed_error_mean),
+            "speed_error_max": safe_float(speed_error_max),
+            "speed_overspeed_rate": safe_float(speed_overspeed_rate),
+            "speed_limit_zero_rate": safe_float(speed_limit_zero_rate),
+            "acceleration_mean": safe_float(acceleration_mean),
+            "acceleration_p95": safe_float(acceleration_p95),
+            "acceleration_max": safe_float(acceleration_max),
+            "jerk_mean": safe_float(jerk_mean),
+            "jerk_p95": safe_float(jerk_p95),
+            "jerk_max": safe_float(jerk_max),
+            "lateral_accel_p95": safe_float(lateral_accel_p95),
+            "lateral_jerk_p95": safe_float(lateral_jerk_p95),
+            "lateral_jerk_max": safe_float(lateral_jerk_max)
+        },
+        "comfort": {
+            "steering_jerk_max": safe_float(steering_jerk_max),
+            "acceleration_p95": safe_float(acceleration_p95),
+            "jerk_p95": safe_float(jerk_p95),
+            "lateral_accel_p95": safe_float(lateral_accel_p95),
+            "lateral_jerk_p95": safe_float(lateral_jerk_p95)
         },
         "control_stability": {
             "straight_fraction": safe_float(straight_fraction),

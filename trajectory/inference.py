@@ -119,6 +119,7 @@ class TrajectoryPlanningInference:
                 # Tests expect heading ~0° for straight roads, so default to 0° when using lane_positions
                 # Only use lane_coeffs to compute heading if available (which has curvature information)
                 heading = 0.0
+                curvature = 0.0
                 if lane_coeffs is not None:
                     # Use lane_coeffs to compute heading if available (has curvature information)
                     valid_lanes = [coeffs for coeffs in lane_coeffs if coeffs is not None]
@@ -130,13 +131,14 @@ class TrajectoryPlanningInference:
                         )
                         if direct_ref is not None:
                             heading = direct_ref.get('heading', 0.0)
+                            curvature = direct_ref.get('curvature', 0.0)
                 
                 raw_ref_point = {
                     'x': center_x,
                     'y': lookahead,
                     'heading': heading,  # Use computed heading, not hardcoded 0°
                     'velocity': self.planner.target_speed,
-                    'curvature': 0.0,
+                    'curvature': curvature,
                     'method': 'lane_positions',  # NEW: Track which method was used
                     'perception_center_x': center_x  # NEW: Store perception center for comparison
                 }

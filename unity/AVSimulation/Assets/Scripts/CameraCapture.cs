@@ -63,6 +63,13 @@ public class CameraCapture : MonoBehaviour
     
     void Start()
     {
+        // Keep capturing when the player window loses focus.
+        Application.runInBackground = true;
+        if (showDebugInfo)
+        {
+            Debug.Log($"CameraCapture: runInBackground={Application.runInBackground}");
+        }
+
         // Try to find AVCamera by name first (more reliable than tag)
         if (targetCamera == null)
         {
@@ -161,11 +168,11 @@ public class CameraCapture : MonoBehaviour
         }
         #endif
         
-        // Check if it's time to capture
-        if (Time.time - lastCaptureTime >= captureInterval)
+        // Check if it's time to capture (use realtime to avoid focus/timescale stalls)
+        if (Time.realtimeSinceStartup - lastCaptureTime >= captureInterval)
         {
             CaptureAndSend();
-            lastCaptureTime = Time.time;
+            lastCaptureTime = Time.realtimeSinceStartup;
         }
     }
     

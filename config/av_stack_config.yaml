@@ -5,17 +5,9 @@
 control:
   # Lateral (Steering) Control
   lateral:
-    kp: 2.2              # INCREASED: From 2.0 to 2.2 for better error response
-                          # Test showed kp=2.0, ki=0.004, heading_weight=0.75 still produces RMSE 0.500m
-                          # Slight increase to 2.2 to meet 0.4m threshold
-                          # Previous: kp=2.5 caused oscillation, kp=2.2 should be safe
-                          # Will monitor for oscillation in Unity testing
-    ki: 0.004            # INCREASED: From 0.003 to 0.004 for better steady-state correction
-                          # Test showed kp=2.0, ki=0.003 still produces RMSE 0.500m (above 0.4m threshold)
-                          # Increasing ki helps eliminate persistent lateral offset
-                          # Still within safe range (0.003-0.005) to prevent integral accumulation
-    kd: 0.5              # FIXED: Increased from 0.45 to 0.5 to match higher kp
-                          # Provides good damping without over-damping
+    kp: 2.2              # Restored: stable curve correction
+    ki: 0.004            # Restored: stable steady-state offset removal
+    kd: 0.5              # Restored: damping for stability
     max_steering: 1.0    # INCREASED: Maximum steering angle (-1.0 to 1.0)
                           # Analysis showed:
                           #   - 16.5% of frames hit 0.5 limit on curves
@@ -23,39 +15,75 @@ control:
                           #   - Extreme error corrections need ~1.1 steering
                           # Increased to 1.0 (full steering authority) to handle curves and corrections
                           # This is 100% more steering authority than original 0.5
-    deadband: 0.01       # Deadband in radians (~0.57 degrees) - errors smaller than this are ignored
-    heading_weight: 0.75  # INCREASED: From 0.7 to 0.75 for stronger heading correction
-                          # Test showed heading_weight=0.7 still produces RMSE 0.500m (above 0.4m threshold)
-                          # Critical: Heading correction is key to reducing lateral error over time
-                          # Higher weight prioritizes heading correction over lateral offset
-                          # Helps reduce lateral error RMSE (target: < 0.4m)
-    lateral_weight: 0.25  # DECREASED: From 0.3 to 0.25 to balance with increased heading weight (0.75)
+    deadband: 0.01       # Restored: stable deadband
+    heading_weight: 0.75  # Restored: stable heading correction
+    lateral_weight: 0.25  # Restored: stable lateral balance
     error_clip: 1.57    # INCREASED: Maximum error in radians (π/2 = 90 degrees, was π/4 = 45°)
                         # Analysis showed error_clip=0.785 was limiting PID input, causing low effective gain
                         # Increasing to π/2 allows PID to use more of the kp value (2.5)
                         # This should improve effective gain from 13.7% to >40%
-    integral_limit: 0.10  # Maximum integral term (prevents windup) - REDUCED from 0.15 to prevent accumulation
-                          # Current issue: 11.63x increase after 6s - need stricter limit
+    integral_limit: 0.10  # Restored: prevent windup
+    steering_smoothing_alpha: 0.7  # Low-pass filter on steering command (comfort)
+    curve_feedforward_gain: 1.0  # Base feedforward steering gain
+    curve_feedforward_threshold: 0.02  # Curvature threshold to apply boost (1/m)
+    curve_feedforward_gain_min: 0.85  # Scheduled gain at low curvature
+    curve_feedforward_gain_max: 0.95  # Scheduled gain at high curvature
+    curve_feedforward_curvature_min: 0.005  # Start gain scheduling (1/m)
+    curve_feedforward_curvature_max: 0.02  # End gain scheduling (1/m)
+    curve_feedforward_curvature_clamp: 0.025  # Clamp curvature input (1/m)
+    straight_curvature_threshold: 0.01  # Straight detection threshold (1/m)
+    steering_rate_curvature_min: 0.005  # Begin rate scaling (1/m)
+    steering_rate_curvature_max: 0.02  # Max rate scaling (1/m)
+    steering_rate_scale_min: 0.7  # Minimum rate scale on sharp curves
   
   # Longitudinal (Speed) Control
   longitudinal:
-    kp: 0.10            # Proportional gain (FURTHER REDUCED: was 0.15, still too aggressive - car accelerates too fast)
-    ki: 0.01            # Integral gain (REDUCED: was 0.02, to prevent overshoot)
-    kd: 0.01            # Derivative gain (kept same for damping)
-    target_speed: 8.0    # Target speed in m/s
-    max_speed: 10.0      # Maximum allowed speed in m/s
-    speed_smoothing: 0.7 # Exponential smoothing factor (0.0 to 1.0, higher = more smoothing)
-    speed_deadband: 0.1  # Speed error deadband in m/s
-    throttle_limit_threshold: 0.75  # Start reducing throttle at this fraction of max_speed
-    throttle_reduction_factor: 0.3 # Throttle multiplier when near max speed
+    kp: 0.25            # Faster acceleration tracking
+    ki: 0.02            # Reduce steady-state error
+    kd: 0.01            # Slight damping for stability
+    target_speed: 12.0    # Target speed in m/s
+    max_speed: 12.0      # Maximum allowed speed in m/s
+    speed_smoothing: 0.3 # Less smoothing for better speed tracking
+    speed_deadband: 0.03  # Smaller deadband to reduce steady-state error
+    throttle_limit_threshold: 0.90  # Start reducing throttle at this fraction of max_speed
+    throttle_reduction_factor: 0.15 # Throttle multiplier when near max speed
     brake_aggression: 2.0 # Brake PID gain multiplier
+    throttle_rate_limit: 0.12 # Max throttle change per frame (responsiveness)
+    brake_rate_limit: 0.15    # Max brake change per frame (comfort)
+    throttle_smoothing_alpha: 0.6 # Low-pass filter on throttle command (comfort)
+    min_throttle_when_accel: 0.1 # Floor throttle when below target (prevents coasting)
+    target_speed_slew_rate_up: 2.0 # Max target speed increase per second (m/s^2)
+    target_speed_slew_rate_down: 3.0 # Max target speed decrease per second (m/s^2)
+    target_speed_stop_threshold: 0.5 # Consider stopped below this speed (m/s)
+    target_speed_restart_ramp_seconds: 2.5 # Ramp 0->target after stops (s)
+    launch_throttle_stop_threshold: 2.0 # Apply launch throttle cap below this speed (m/s)
+    launch_throttle_ramp_seconds: 2.5 # Ramp throttle cap after stops (s)
+    launch_throttle_cap_min: 0.15 # Initial throttle cap during launch
+    launch_throttle_cap_max: 0.55 # Final throttle cap after ramp
+    launch_throttle_rearm_hysteresis: 0.5 # Re-arm cap when speed exceeds stop threshold + this
+    launch_throttle_stop_hold_seconds: 0.5 # Require stop duration before arming launch cap
 
 # Trajectory Planning Parameters
 trajectory:
   lookahead_distance: 20.0  # How far ahead to plan in meters
   point_spacing: 1.0        # Spacing between trajectory points in meters
-  target_speed: 8.0         # Target speed for trajectory in m/s
-  reference_lookahead: 8.0  # Lookahead distance for reference point in meters
+  target_speed: 12.0         # Target speed for trajectory in m/s
+  reference_lookahead: 9.0  # Lookahead distance for reference point in meters
+  max_lateral_accel: 2.5    # Curve speed cap (m/s^2) for curvature-based speed limiting
+  min_curve_speed: 6.0      # Minimum allowed speed when limiting on curvature
+  speed_limit_slew_rate: 1.0  # Max change in speed limit per second (m/s^2)
+  speed_limit_preview_distance: 25.0  # Preview distance ahead for upcoming limits (m)
+  speed_limit_preview_decel: 1.0  # Comfortable decel used for preview cap (m/s^2)
+  speed_planner:
+    enabled: true
+    max_accel: 2.5  # m/s^2
+    max_decel: 3.0  # m/s^2
+    max_jerk: 2.0   # m/s^3
+    min_speed: 0.0
+    launch_speed_floor: 2.0
+    launch_speed_floor_threshold: 1.0
+    reset_gap_seconds: 0.5
+    sync_speed_threshold: 50.0
   
   # Camera/Image Parameters
   image_width: 640          # Camera image width in pixels
@@ -94,17 +122,17 @@ trajectory:
 
 # Speed Safety Limits
 safety:
-  max_speed: 10.0           # Hard speed limit in m/s
+  max_speed: 12.0           # Hard speed limit in m/s
   emergency_brake_threshold: 1.5  # Emergency brake if speed > max_speed * this (LOWERED: was 2.0, too high - allows 15 m/s!)
-  speed_prevention_threshold: 0.70 # Start preventing acceleration at this fraction of max_speed (LOWERED: was 0.80, too late)
-  speed_prevention_brake_threshold: 0.85  # Apply light brake at this fraction of max_speed (LOWERED: was 0.90, too late)
-  speed_prevention_brake_amount: 0.4  # Light brake amount when preventing speed (INCREASED: was 0.3, too weak)
+  speed_prevention_threshold: 0.90 # Start preventing acceleration at this fraction of max_speed
+  speed_prevention_brake_threshold: 0.95  # Apply light brake at this fraction of max_speed
+  speed_prevention_brake_amount: 0.2  # Light brake amount when preventing speed
   
   # NEW: Lateral error safety bounds (critical for long-term stability)
   # Critical: 89.4% steering direction errors and 8.95m max error indicate need for safety bounds
   max_lateral_error: 2.0  # Hard limit: If error exceeds 2.0m, apply aggressive correction
   recovery_lateral_error: 1.0  # Recovery trigger: If error exceeds 1.0m, initiate recovery mode
-  emergency_stop_error: 3.0  # Emergency stop: If error exceeds 3.0m, stop immediately
+  emergency_stop_error: 4.0  # TEMP: relax stop threshold for analysis runs
   
   # Out-of-bounds detection (calculated from lane/car dimensions)
   # Formula: threshold = (lane_width/2 - car_width/2 + allowed_outside_lane)

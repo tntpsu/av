@@ -62,6 +62,10 @@ def analyze_trajectory_vs_steering(recording_path: Path, analyze_to_failure: boo
             steering = None
             lateral_error = None
             heading_error = None
+            is_straight = None
+            path_curvature = None
+            gt_curvature = None
+            control_timestamps = None
             
             if has_control:
                 steering = np.array(f["control/steering"][:])
@@ -69,11 +73,21 @@ def analyze_trajectory_vs_steering(recording_path: Path, analyze_to_failure: boo
                     lateral_error = np.array(f["control/lateral_error"][:])
                 if "control/heading_error" in f:
                     heading_error = np.array(f["control/heading_error"][:])
+                if "control/is_straight" in f:
+                    is_straight = np.array(f["control/is_straight"][:]).astype(bool)
+                if "control/path_curvature_input" in f:
+                    path_curvature = np.array(f["control/path_curvature_input"][:])
+                if "control/timestamps" in f:
+                    control_timestamps = np.array(f["control/timestamps"][:])
             
             # Load ground truth for comparison
             gt_center = None
             if has_ground_truth:
                 gt_center = np.array(f["ground_truth/lane_center_x"][:])
+                if "ground_truth/path_curvature" in f:
+                    gt_curvature = np.array(f["ground_truth/path_curvature"][:])
+                    if path_curvature is None:
+                        path_curvature = gt_curvature
             
             # Load perception for understanding trajectory source
             perception_center = None
@@ -100,6 +114,14 @@ def analyze_trajectory_vs_steering(recording_path: Path, analyze_to_failure: boo
                 lateral_error = lateral_error[:min_len]
             if heading_error is not None:
                 heading_error = heading_error[:min_len]
+            if is_straight is not None:
+                is_straight = is_straight[:min_len]
+            if path_curvature is not None:
+                path_curvature = path_curvature[:min_len]
+            if gt_curvature is not None:
+                gt_curvature = gt_curvature[:min_len]
+            if control_timestamps is not None:
+                control_timestamps = control_timestamps[:min_len]
             if gt_center is not None:
                 gt_center = gt_center[:min_len]
             if perception_center is not None:
@@ -252,12 +274,19 @@ def analyze_trajectory_vs_steering(recording_path: Path, analyze_to_failure: boo
                     "max_error": None
                 }
             
+            # Build time axis (seconds) if timestamps available
+            if control_timestamps is not None and len(control_timestamps) > 0:
+                time_axis = control_timestamps - control_timestamps[0]
+            else:
+                time_axis = np.arange(min_len, dtype=np.float32) * 0.033
+
             # ANALYSIS 3: STEERING RESPONSE
             control_quality_score = 100.0
             steering_issues = []
             steering_warnings = []
             
             steering_correlation = None
+            steering_correlation_scope = "all"
             if steering is not None:
                 steering_abs = np.abs(steering)
                 mean_steering = safe_float(np.mean(steering_abs) if len(steering_abs) > 0 else 0.0)
@@ -279,17 +308,35 @@ def analyze_trajectory_vs_steering(recording_path: Path, analyze_to_failure: boo
                     steering_warnings.append("Steering barely changes (not responding to curves)")
                     control_quality_score -= 15
                 
-                # Check steering vs reference point correlation
+                # Check steering vs reference point correlation (prefer straight, low-curvature segments)
                 if len(ref_x) == len(steering):
-                    correlation = safe_float(np.corrcoef(ref_x, steering)[0, 1] if len(ref_x) > 1 else 0.0)
-                    steering_correlation = correlation
-                    
-                    if correlation < 0.3:
-                        steering_issues.append(f"Low correlation between steering and reference point ({correlation:.3f})")
-                        control_quality_score -= 30
-                    elif correlation < 0.5:
-                        steering_warnings.append(f"Moderate correlation ({correlation:.3f})")
-                        control_quality_score -= 10
+                    corr_ref = ref_x
+                    corr_steer = steering
+                    corr_mask = None
+                    if is_straight is not None:
+                        corr_mask = is_straight.copy()
+                        steering_correlation_scope = "straight"
+                    if path_curvature is not None:
+                        curvature_mask = np.abs(path_curvature) < 0.01
+                        corr_mask = curvature_mask if corr_mask is None else (corr_mask & curvature_mask)
+                        steering_correlation_scope = (
+                            "straight_low_curvature" if corr_mask is not None else "low_curvature"
+                        )
+                    if corr_mask is not None and np.any(corr_mask):
+                        corr_ref = ref_x[corr_mask]
+                        corr_steer = steering[corr_mask]
+                    if len(corr_ref) > 1 and np.std(corr_ref) > 1e-6 and np.std(corr_steer) > 1e-6:
+                        correlation = safe_float(np.corrcoef(corr_ref, corr_steer)[0, 1])
+                        steering_correlation = correlation
+                        
+                        if correlation < 0.3:
+                            steering_issues.append(
+                                f"Low correlation between steering and reference point ({correlation:.3f})"
+                            )
+                            control_quality_score -= 30
+                        elif correlation < 0.5:
+                            steering_warnings.append(f"Moderate correlation ({correlation:.3f})")
+                            control_quality_score -= 10
             else:
                 mean_steering = None
                 max_steering = None
@@ -339,6 +386,45 @@ def analyze_trajectory_vs_steering(recording_path: Path, analyze_to_failure: boo
                 }
             
             control_quality_score = max(0, control_quality_score)
+
+            # Lateral error hotspots (top-N frames)
+            hotspots = []
+            if lateral_error is not None and len(lateral_error) > 0:
+                abs_error = np.abs(lateral_error)
+                sorted_idx = np.argsort(abs_error)[::-1]
+                min_separation = 15
+                for idx in sorted_idx:
+                    if len(hotspots) >= 8:
+                        break
+                    if abs_error[idx] <= 0.0:
+                        break
+                    if any(abs(idx - h["frame"]) < min_separation for h in hotspots):
+                        continue
+                    curvature_val = float(path_curvature[idx]) if path_curvature is not None else 0.0
+                    gt_curvature_val = float(gt_curvature[idx]) if gt_curvature is not None else 0.0
+                    is_curve = abs(curvature_val) >= 0.01
+                    straight_flag = bool(is_straight[idx]) if is_straight is not None else None
+                    ref_x_val = float(ref_x[idx]) if ref_x is not None else 0.0
+                    steer_val = float(steering[idx]) if steering is not None else 0.0
+                    heading_val = float(heading_error[idx]) if heading_error is not None else 0.0
+                    sign_mismatch = (
+                        ref_x_val != 0.0
+                        and steer_val != 0.0
+                        and np.sign(ref_x_val) != np.sign(steer_val)
+                    )
+                    hotspots.append({
+                        "frame": int(idx),
+                        "time": safe_float(time_axis[idx]) if idx < len(time_axis) else 0.0,
+                        "lateral_error": safe_float(float(lateral_error[idx])),
+                        "steering": safe_float(steer_val),
+                        "ref_x": safe_float(ref_x_val),
+                        "heading_error": safe_float(heading_val),
+                        "is_straight": straight_flag,
+                        "curvature": safe_float(curvature_val),
+                        "gt_curvature": safe_float(gt_curvature_val),
+                        "segment": "curve" if is_curve else "straight",
+                        "sign_mismatch": bool(sign_mismatch),
+                    })
             
             # DIAGNOSIS SUMMARY
             # Only flag as an issue if score is actually below threshold (70%)
@@ -405,10 +491,12 @@ def analyze_trajectory_vs_steering(recording_path: Path, analyze_to_failure: boo
                         "max_change": max_steering_change
                     },
                     "steering_correlation": steering_correlation,
+                    "steering_correlation_scope": steering_correlation_scope,
                     "lateral_error": lateral_error_analysis,
                     "heading_error": heading_error_analysis,
                     "issues": steering_issues,
-                    "warnings": steering_warnings
+                    "warnings": steering_warnings,
+                    "lateral_error_hotspots": hotspots
                 },
                 "diagnosis": {
                     "primary_issue": primary_issue,

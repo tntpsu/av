@@ -21,7 +21,13 @@ public class CarController : MonoBehaviour
     [System.Obsolete("brakeForce is only used for reporting, not actual braking. Actual braking uses linearDamping and velocity reduction.")]
     public float brakeForce = 5000f;  // NOTE: This is ONLY for reporting brakeTorque, NOT for physics!
     [Tooltip("Maximum allowed speed in m/s - hard limit")]
-    public float maxSpeed = 10.0f;  // FIXED: Hard speed limit
+    public float maxSpeed = 13.0f;  // FIXED: Hard speed limit
+    [Tooltip("Start reducing throttle at this fraction of max speed")]
+    public float speedPreventionThreshold = 0.90f;
+    [Tooltip("Cut throttle completely at this fraction of max speed")]
+    public float speedPreventionCutoff = 0.98f;
+    [Tooltip("Throttle multiplier when near max speed")]
+    public float speedPreventionThrottleFactor = 0.15f;
     
     [Header("Input")]
     public InputActionAsset inputActionAsset;
@@ -43,6 +49,10 @@ public class CarController : MonoBehaviour
     [Tooltip("Speed for ground truth mode (m/s)")]
     public float groundTruthSpeed = 5.0f;
 
+    [Header("Speed Limit")]
+    [Tooltip("Speed limit at current reference point (m/s)")]
+    public float speedLimit = 0.0f;
+
     private Rigidbody rb;
     private InputActionMap playerActionMap;
     private InputAction moveAction;
@@ -63,7 +73,7 @@ public class CarController : MonoBehaviour
     private float fixedUpdateGapSum = 0f;
     private float fixedUpdateGapMax = 0f;
     private int fixedUpdateGapCount = 0;
-    
+
     // PERFORMANCE: Cache GroundTruthReporter to avoid FindObjectOfType() every frame
     private GroundTruthReporter cachedGroundTruthReporter = null;
 
@@ -75,6 +85,12 @@ public class CarController : MonoBehaviour
     private float avSteering = 0f;
     private float avThrottle = 0f;
     private float avBrake = 0f;
+    
+    // Ground truth cache (updated in Update, applied in FixedUpdate)
+    private Vector3 gtCachedReferencePosition = Vector3.zero;
+    private Vector3 gtCachedReferenceDirection = Vector3.zero;
+    private bool gtCachedReferenceValid = false;
+    private float gtCachedReferenceTime = 0f;
 
     private void Awake()
     {
@@ -98,6 +114,9 @@ public class CarController : MonoBehaviour
             // NOTE: Unity has both 'drag' (old) and 'linearDamping' (new) - set both to 0
             rb.linearDamping = 0f;
             rb.angularDamping = 0f;
+            
+            // In GT mode we directly move the rigidbody; interpolation can cause visual bounce.
+            rb.interpolation = RigidbodyInterpolation.None;
             // Also set the old 'drag' property if it exists (for compatibility)
             #if UNITY_2021_1_OR_NEWER
             // In Unity 2021+, drag is deprecated but might still exist
@@ -300,6 +319,8 @@ public class CarController : MonoBehaviour
             throttleInput = moveInput.y;
             brakeInput = 0f;
         }
+
+        UpdateGroundTruthCache();
     }
 
     private void FixedUpdate()
@@ -378,6 +399,37 @@ public class CarController : MonoBehaviour
         }
         
         ApplyControls();
+    }
+
+    private void UpdateGroundTruthCache()
+    {
+        if (!groundTruthMode)
+        {
+            gtCachedReferenceValid = false;
+            return;
+        }
+
+        // Cache GroundTruthReporter reference (Update timing) for FixedUpdate application.
+        if (cachedGroundTruthReporter == null)
+        {
+            cachedGroundTruthReporter = GetComponent<GroundTruthReporter>();
+            if (cachedGroundTruthReporter == null)
+            {
+                cachedGroundTruthReporter = FindObjectOfType<GroundTruthReporter>();
+            }
+        }
+
+        if (cachedGroundTruthReporter != null)
+        {
+            var (referencePosition, referenceDirection) = cachedGroundTruthReporter.GetCurrentReferencePath();
+            if (referenceDirection.sqrMagnitude > 0.01f)
+            {
+                gtCachedReferencePosition = referencePosition;
+                gtCachedReferenceDirection = referenceDirection;
+                gtCachedReferenceValid = true;
+                gtCachedReferenceTime = Time.time;
+            }
+        }
     }
 
     private void ApplyControls()
@@ -478,7 +530,18 @@ public class CarController : MonoBehaviour
         if (gtReporter != null)
         {
             // Get the current reference position and direction on the path
-            var (referencePosition, referenceDirection) = gtReporter.GetCurrentReferencePath();
+            Vector3 referencePosition;
+            Vector3 referenceDirection;
+            if (gtCachedReferenceValid && (Time.time - gtCachedReferenceTime) < 0.2f)
+            {
+                referencePosition = gtCachedReferencePosition;
+                referenceDirection = gtCachedReferenceDirection;
+            }
+            else
+            {
+                // If cache is stale, skip this physics tick to avoid jitter from Update/FixedUpdate mismatch.
+                return;
+            }
             
             if (referenceDirection.sqrMagnitude > 0.01f)
             {
@@ -630,12 +693,13 @@ public class CarController : MonoBehaviour
             Debug.Log($"CarController: throttleInput={throttleInput:F3}, brakeInput={brakeInput:F3}, currentSpeed={currentSpeed:F3} m/s, effectiveThrottle={effectiveThrottle:F3}, motorForce={motorForce:F1}");
         }
         
-        if (currentSpeed > maxSpeed * 0.85f)  // At 85% of max speed (8.5 m/s for 10 m/s max)
+        float effectiveMaxSpeed = (speedLimit > 0.0f) ? speedLimit : maxSpeed;
+        if (currentSpeed > effectiveMaxSpeed * speedPreventionThreshold)
         {
             // Reduce throttle input to prevent further acceleration
-            effectiveThrottle = throttleInput * 0.3f;  // Reduce throttle by 70% when near limit
+            effectiveThrottle = throttleInput * speedPreventionThrottleFactor;
         }
-        if (currentSpeed > maxSpeed * 0.95f)  // At 95% of max speed (9.5 m/s)
+        if (currentSpeed > effectiveMaxSpeed * speedPreventionCutoff)
         {
             // Almost at limit - cut throttle completely
             effectiveThrottle = 0.0f;
@@ -749,10 +813,10 @@ public class CarController : MonoBehaviour
         // Recalculate speed after applying forces (in case forces increased it)
         currentVelocity = rb.linearVelocity;
         currentSpeed = currentVelocity.magnitude;
-        if (currentSpeed > maxSpeed)
+        if (currentSpeed > effectiveMaxSpeed)
         {
             // Cap velocity to max speed immediately
-            rb.linearVelocity = currentVelocity.normalized * maxSpeed;
+            rb.linearVelocity = currentVelocity.normalized * effectiveMaxSpeed;
         }
     }
 
@@ -819,7 +883,7 @@ public class CarController : MonoBehaviour
             rotation = transform.rotation,
             velocity = rb.linearVelocity,
             angularVelocity = rb.angularVelocity,
-            speed = rb.linearVelocity.magnitude,
+            speed = groundTruthMode ? groundTruthSpeed : rb.linearVelocity.magnitude,
             steeringAngle = steerInput * maxSteerAngle,
             motorTorque = throttleInput * motorForce,
             brakeTorque = brakeInput * brakeForce,
@@ -834,6 +898,7 @@ public class CarController : MonoBehaviour
             unityTimeScale = Time.timeScale
         };
     }
+
 }
 
 /// <summary>
@@ -899,4 +964,7 @@ public class VehicleState
     public float roadCenterAtLookaheadY = 0.0f;  // Road center Y at 8m lookahead (world coords)
     public float roadCenterAtLookaheadZ = 0.0f;  // Road center Z at 8m lookahead (world coords)
     public float roadCenterReferenceT = 0.0f;  // Parameter t on road path for reference point
+    public float speedLimit = 0.0f;  // Speed limit at current reference point (m/s)
+    public float speedLimitPreview = 0.0f;  // Speed limit at preview distance ahead (m/s)
+    public float speedLimitPreviewDistance = 0.0f;  // Preview distance used for speed limit (m)
 }

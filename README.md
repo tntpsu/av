@@ -10,6 +10,7 @@ A complete autonomous vehicle stack implementing perception, trajectory planning
 - **Trained Segmentation Model**: Supports running a trained checkpoint via `--segmentation-checkpoint`
 - **Trajectory Planning**: Rule-based path planning with reference point smoothing and bias correction
 - **Control**: PID controller with feedforward (path curvature) + feedback (error correction) architecture
+- **Speed Planning**: Jerk-limited speed planner for smooth curve and limit transitions
 - **Ground Truth Following**: Direct velocity control mode for precise ground truth path following
 - **Data Recording**: Automatic HDF5 recording of all frames, vehicle state (including Unity time/frame count), control commands, and ground truth data
 - **Analysis Tools**: Comprehensive analysis suite for evaluating drive performance
@@ -46,7 +47,12 @@ Data Recorder (HDF5) ← All sensor data + commands + ground truth
 
 ## Quick Start
 
-### 1. Setup Python Environment
+### 1. Architecture
+
+See `docs/ARCHITECTURE.md` for the overall system design, layer responsibilities,
+and interface definitions.
+
+### 2. Setup Python Environment
 
 ```bash
 # Create virtual environment
@@ -88,14 +94,14 @@ Follow the detailed instructions in [setup_unity.md](setup_unity.md)
 
 **Option B: Ground Truth Follower (Direct GT Path Following)**
 ```bash
-# Follow ground truth path for 60 seconds
-python tools/ground_truth_follower.py --duration 60
+# One-command ground truth run (build optional)
+./start_ground_truth.sh --track-yaml tracks/oval.yml --duration 60 --speed 8.0
 
-# Custom output filename
-python tools/ground_truth_follower.py --duration 60 --output my_test_run
+# Constant speed (no GT PID braking)
+./start_ground_truth.sh --track-yaml tracks/oval.yml --duration 60 --speed 8.0 --constant-speed
 
-# With Unity auto-launch
-python tools/ground_truth_follower.py --duration 60 --launch-unity
+# Randomized start with reproducible seed
+./start_ground_truth.sh --track-yaml tracks/oval.yml --random-start --random-seed 50
 ```
 
 **Option C: Standalone Unity Player (Automated Workflow)**
@@ -106,7 +112,7 @@ python tools/ground_truth_follower.py --duration 60 --launch-unity
 
 **What each does:**
 - `start_av_stack.sh`: Runs full AV stack (perception → trajectory → control) - tests your perception and control
-- `ground_truth_follower.py`: Follows ground truth path directly - collects data for perception testing
+- `start_ground_truth.sh`: Runs Unity player + ground truth follower in one command
 
 #### Manual Startup (Alternative)
 

@@ -135,13 +135,17 @@ public class RoadGenerator : MonoBehaviour
 
         if (hasYaml && config != null && config.segments.Count == 0)
         {
-            Debug.LogWarning("Track YAML has no segments; falling back to oval.");
-            hasYaml = false;
+            bool hasTemplate = !string.IsNullOrEmpty(config.template);
+            if (!hasTemplate)
+            {
+                Debug.LogWarning("Track YAML has no segments and no template; falling back to oval.");
+                hasYaml = false;
+            }
         }
 
         if (hasYaml && preferTrackYaml)
         {
-            Debug.Log($"RoadGenerator: Using YAML track '{config.name}' (segments={config.segments.Count})");
+            Debug.Log($"RoadGenerator: Using YAML track '{config.name}' (template={config.template}, segments={config.segments.Count})");
             GenerateTrackRoad(config);
         }
         else
@@ -940,6 +944,47 @@ public class RoadGenerator : MonoBehaviour
         if (dir.sqrMagnitude < 1e-8f) return Vector3.right;
 
         return dir.normalized;
+    }
+
+    /// <summary>
+    /// Get total path length (track path if available, else oval length).
+    /// </summary>
+    public float GetPathLength()
+    {
+        if (trackPath != null)
+        {
+            return trackPath.TotalLength;
+        }
+        return (straightLength * 2f) + (2f * Mathf.PI * turnRadius);
+    }
+
+    /// <summary>
+    /// Get speed limit at parameter t (0 to 1). Returns 0 if not set.
+    /// </summary>
+    public float GetSpeedLimitAtT(float t)
+    {
+        if (trackPath != null)
+        {
+            float limit = trackPath.GetSpeedLimitAtT(t);
+            if (limit > 0f)
+            {
+                return limit;
+            }
+        }
+        if (activeTrackConfig != null && activeTrackConfig.speedLimit > 0f)
+        {
+            return activeTrackConfig.speedLimit;
+        }
+        return 0f;
+    }
+
+    public float GetDefaultSpeedLimit()
+    {
+        if (activeTrackConfig != null && activeTrackConfig.speedLimit > 0f)
+        {
+            return activeTrackConfig.speedLimit;
+        }
+        return 0f;
     }
 
     public bool TryGetStartT(out float startT)

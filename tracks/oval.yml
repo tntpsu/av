@@ -3,6 +3,11 @@ road_width: 7.0
 lane_line_width: 0.3
 sample_spacing: 1.0
 loop: true
+speed_limit_mph: 25.0
+start_x: -100
+start_z: 50
+start_heading_deg: 90
+start_t: 0.0
 segments:
   - type: straight
     length: 200
@@ -10,9 +15,11 @@ segments:
     radius: 50
     angle_deg: 180
     direction: right
+    speed_limit_mph: 18.0
   - type: straight
     length: 200
   - type: arc
     radius: 50
     angle_deg: 180
     direction: right
+    speed_limit_mph: 18.0

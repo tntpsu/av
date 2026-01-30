@@ -34,20 +34,28 @@
                 <!-- Debug Overlay Controls -->
                 <div class="debug-controls">
                     <h3>Debug Overlays</h3>
-                    <button id="generate-debug-btn" style="padding: 0.5rem 1rem; background: #4a90e2; color: white; border: none; border-radius: 4px; cursor: pointer; margin-bottom: 0.5rem; width: 100%;">
-                        Generate Debug Overlays (Current Frame)
-                    </button>
+                    <label style="display: flex; align-items: center; margin: 0.5rem 0; font-size: 0.9rem;">
+                        <input type="checkbox" id="toggle-cv-tools" style="margin-right: 0.5rem;">
+                        Show CV Debug Tools
+                    </label>
                     
-                    <div class="debug-toggles">
-                        <label><input type="checkbox" id="toggle-combined"> Combined</label>
-                        <label><input type="checkbox" id="toggle-edges"> Edges</label>
-                        <label><input type="checkbox" id="toggle-yellow-mask"> Yellow Mask</label>
-                        <label><input type="checkbox" id="toggle-fit-points"> Fit Points (Magenta/Cyan)</label>
-                        <label><input type="checkbox" id="toggle-histogram"> Histogram</label>
-                    </div>
-                    <div class="opacity-control">
-                        <label>Opacity: <span id="opacity-value">50</span>%</label>
-                        <input type="range" id="opacity-slider" min="0" max="100" value="50">
+                    <div id="cv-debug-overlay-controls" style="display: none;">
+                        <button id="generate-debug-btn" style="padding: 0.5rem 1rem; background: #4a90e2; color: white; border: none; border-radius: 4px; cursor: pointer; margin-bottom: 0.5rem; width: 100%;">
+                            Generate Debug Overlays (Current Frame)
+                        </button>
+                        <div class="debug-toggles">
+                            <div id="cv-debug-tools" style="display: none;">
+                                <label><input type="checkbox" id="toggle-combined"> Combined</label>
+                                <label><input type="checkbox" id="toggle-edges"> Edges</label>
+                                <label><input type="checkbox" id="toggle-yellow-mask"> Yellow Mask</label>
+                                <label><input type="checkbox" id="toggle-fit-points"> Fit Points (Magenta/Cyan)</label>
+                                <label><input type="checkbox" id="toggle-histogram"> Histogram</label>
+                            </div>
+                        </div>
+                        <div class="opacity-control">
+                            <label>Opacity: <span id="opacity-value">50</span>%</label>
+                            <input type="range" id="opacity-slider" min="0" max="100" value="50">
+                        </div>
                     </div>
                 </div>
 
@@ -55,8 +63,10 @@
                 <div class="overlay-controls">
                     <h3>Data Overlays</h3>
                     <div class="overlay-toggles">
-                        <label><input type="checkbox" id="toggle-lanes" checked> Detected Lanes (Red Lines)</label>
-                        <label><input type="checkbox" id="toggle-detected-curves" checked> Detected Curves (Orange)</label>
+                        <div id="cv-data-overlays" style="display: none;">
+                            <label><input type="checkbox" id="toggle-lanes" checked> Detected Lanes (Red Lines)</label>
+                            <label><input type="checkbox" id="toggle-detected-curves" checked> Detected Curves (Orange)</label>
+                        </div>
                         <label><input type="checkbox" id="toggle-ground-truth" checked> Ground Truth (Green)</label>
                         <label><input type="checkbox" id="toggle-trajectory" checked> Trajectory</label>
                         <label><input type="checkbox" id="toggle-reference" checked> Reference Point</label>
@@ -221,6 +231,18 @@
                             <tr><td>Steering</td><td id="all-control-steering">-</td></tr>
                             <tr><td>Throttle</td><td id="all-control-throttle">-</td></tr>
                             <tr><td>Brake</td><td id="all-control-brake">-</td></tr>
+                            <tr><td>Ref Point X</td><td id="all-control-ref-x">-</td></tr>
+                            <tr><td>Ref Point Y</td><td id="all-control-ref-y">-</td></tr>
+                            <tr><td>Ref Heading</td><td id="all-control-ref-heading">-</td></tr>
+                            <tr><td>Ref Speed</td><td id="all-control-ref-speed">-</td></tr>
+                            <tr><td>Target Speed (raw)</td><td id="all-control-target-speed-raw">-</td></tr>
+                            <tr><td>Target Speed (post limits)</td><td id="all-control-target-speed-post-limits">-</td></tr>
+                            <tr><td>Target Speed (planned)</td><td id="all-control-target-speed-planned">-</td></tr>
+                            <tr><td>Target Speed (final)</td><td id="all-control-target-speed-final">-</td></tr>
+                            <tr><td>Target Slew Active</td><td id="all-control-target-speed-slew-active">-</td></tr>
+                            <tr><td>Target Ramp Active</td><td id="all-control-target-speed-ramp-active">-</td></tr>
+                            <tr><td>Launch Throttle Cap</td><td id="all-control-launch-throttle-cap">-</td></tr>
+                            <tr><td>Launch Cap Active</td><td id="all-control-launch-throttle-cap-active">-</td></tr>
                             <tr><td>Lateral Error</td><td id="all-control-lateral-error">-</td></tr>
                             <tr><td>Heading Error</td><td id="all-control-heading-error">-</td></tr>
                             <tr><td>Total Error</td><td id="all-control-total-error">-</td></tr>
@@ -239,6 +261,9 @@
                             <tr><td>Position Y</td><td id="all-vehicle-y">-</td></tr>
                             <tr><td>Position Z</td><td id="all-vehicle-z">-</td></tr>
                             <tr><td>Speed</td><td id="all-vehicle-speed">-</td></tr>
+                            <tr><td>Speed Limit</td><td id="all-vehicle-speed-limit">-</td></tr>
+                            <tr><td>Speed Limit Preview</td><td id="all-vehicle-speed-limit-preview">-</td></tr>
+                            <tr><td>Preview Distance</td><td id="all-vehicle-speed-limit-preview-distance">-</td></tr>
                             <tr><td>Heading</td><td id="all-vehicle-heading">-</td></tr>
                             <tr><td>Steering Angle</td><td id="all-vehicle-steering">-</td></tr>
                             <tr><td>Actual Distance to Road Center (m)</td><td id="all-vehicle-actual-distance">-</td></tr>
@@ -250,6 +275,8 @@
                             <tr><td>Right Lane Line X</td><td id="all-gt-right-x">-</td></tr>
                             <tr><td>Lane Center X</td><td id="all-gt-center-x">-</td></tr>
                             <tr><td>Lane Width</td><td id="all-gt-width">-</td></tr>
+                            <tr><td>Path Curvature</td><td id="all-gt-path-curvature">-</td></tr>
+                            <tr><td>Curve Speed Limit</td><td id="all-gt-curve-speed-limit">-</td></tr>
                             <tr><td>Lane Width Error<br/><small style="color: #888;">(perception vs GT)</small></td><td id="all-gt-width-error">-</td></tr>
                             <tr><td>Center Offset Error<br/><small style="color: #888;">(perception vs GT)</small></td><td id="all-gt-center-error">-</td></tr>
                         </table>
@@ -321,6 +348,18 @@
                             <tr><td>Steering</td><td id="control-steering">-</td></tr>
                             <tr><td>Throttle</td><td id="control-throttle">-</td></tr>
                             <tr><td>Brake</td><td id="control-brake">-</td></tr>
+                            <tr><td>Ref Point X</td><td id="control-ref-x">-</td></tr>
+                            <tr><td>Ref Point Y</td><td id="control-ref-y">-</td></tr>
+                            <tr><td>Ref Heading</td><td id="control-ref-heading">-</td></tr>
+                            <tr><td>Ref Speed</td><td id="control-ref-speed">-</td></tr>
+                            <tr><td>Target Speed (raw)</td><td id="control-target-speed-raw">-</td></tr>
+                            <tr><td>Target Speed (post limits)</td><td id="control-target-speed-post-limits">-</td></tr>
+                            <tr><td>Target Speed (planned)</td><td id="control-target-speed-planned">-</td></tr>
+                            <tr><td>Target Speed (final)</td><td id="control-target-speed-final">-</td></tr>
+                            <tr><td>Target Slew Active</td><td id="control-target-speed-slew-active">-</td></tr>
+                            <tr><td>Target Ramp Active</td><td id="control-target-speed-ramp-active">-</td></tr>
+                            <tr><td>Launch Throttle Cap</td><td id="control-launch-throttle-cap">-</td></tr>
+                            <tr><td>Launch Cap Active</td><td id="control-launch-throttle-cap-active">-</td></tr>
                         </table>
                         <h3>PID State</h3>
                         <table class="data-table">
@@ -389,6 +428,9 @@
                         <h3>Motion</h3>
                         <table class="data-table">
                             <tr><td>Speed</td><td id="vehicle-speed">-</td></tr>
+                            <tr><td>Speed Limit</td><td id="vehicle-speed-limit">-</td></tr>
+                            <tr><td>Speed Limit Preview</td><td id="vehicle-speed-limit-preview">-</td></tr>
+                            <tr><td>Preview Distance</td><td id="vehicle-speed-limit-preview-distance">-</td></tr>
                             <tr><td>Heading</td><td id="vehicle-heading">-</td></tr>
                             <tr><td>Steering Angle</td><td id="vehicle-steering">-</td></tr>
                         </table>
@@ -402,6 +444,8 @@
                             <tr><td>Right Lane Line X</td><td id="gt-right-x">-</td></tr>
                             <tr><td>Lane Center X</td><td id="gt-center-x">-</td></tr>
                             <tr><td>Lane Width</td><td id="gt-width">-</td></tr>
+                            <tr><td>Path Curvature</td><td id="gt-path-curvature">-</td></tr>
+                            <tr><td>Curve Speed Limit</td><td id="gt-curve-speed-limit">-</td></tr>
                         </table>
                         <h3>Comparison</h3>
                         <table class="data-table">

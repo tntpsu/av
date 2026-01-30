@@ -166,6 +166,24 @@ class DataRecorder:
             dtype=np.float32
         )
         self.h5_file.create_dataset(
+            "vehicle/speed_limit",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "vehicle/speed_limit_preview",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "vehicle/speed_limit_preview_distance",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
             "vehicle/steering_angle",
             shape=(0,),
             maxshape=max_shape,
@@ -359,6 +377,60 @@ class DataRecorder:
             shape=(0,),
             maxshape=max_shape,
             dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/emergency_stop",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int8
+        )
+        self.h5_file.create_dataset(
+            "control/target_speed_raw",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/target_speed_post_limits",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/target_speed_planned",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/target_speed_final",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/target_speed_slew_active",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int8
+        )
+        self.h5_file.create_dataset(
+            "control/target_speed_ramp_active",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int8
+        )
+        self.h5_file.create_dataset(
+            "control/launch_throttle_cap",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/launch_throttle_cap_active",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int8
         )
         
         # Perception outputs (optional)
@@ -1125,6 +1197,9 @@ class DataRecorder:
         velocities = []
         angular_velocities = []
         speeds = []
+        speed_limits = []
+        speed_limit_previews = []
+        speed_limit_preview_distances = []
         steering_angles = []
         motor_torques = []
         brake_torques = []
@@ -1189,6 +1264,9 @@ class DataRecorder:
             velocities.append(vs.velocity)
             angular_velocities.append(vs.angular_velocity)
             speeds.append(vs.speed)
+            speed_limits.append(getattr(vs, 'speed_limit', 0.0))
+            speed_limit_previews.append(getattr(vs, 'speed_limit_preview', 0.0))
+            speed_limit_preview_distances.append(getattr(vs, 'speed_limit_preview_distance', 0.0))
             steering_angles.append(vs.steering_angle)
             motor_torques.append(vs.motor_torque)
             brake_torques.append(vs.brake_torque)
@@ -1258,14 +1336,16 @@ class DataRecorder:
             new_size = current_size + len(positions)
             
             # Resize all vehicle datasets
-            for key in ["timestamps", "position", "rotation", "velocity", 
-                       "angular_velocity", "speed", "steering_angle", 
+            for key in ["timestamps", "position", "rotation", "velocity",
+                       "angular_velocity", "speed", "speed_limit", "speed_limit_preview",
+                       "speed_limit_preview_distance", "steering_angle",
                        "motor_torque", "brake_torque", "camera_8m_screen_y",
                        "camera_lookahead_screen_y", "ground_truth_lookahead_distance",
                        "unity_time", "unity_frame_count", "unity_delta_time",
                        "unity_smooth_delta_time", "unity_unscaled_delta_time",
                        "unity_time_scale"]:
-                if key == "timestamps" or key in ["speed", "steering_angle", 
+                if key == "timestamps" or key in ["speed", "speed_limit", "speed_limit_preview",
+                                                 "speed_limit_preview_distance", "steering_angle",
                                                  "motor_torque", "brake_torque", "camera_8m_screen_y",
                                                  "camera_lookahead_screen_y", "ground_truth_lookahead_distance",
                                                  "unity_time", "unity_frame_count", "unity_delta_time",
@@ -1283,6 +1363,9 @@ class DataRecorder:
             self.h5_file["vehicle/velocity"][current_size:] = velocities
             self.h5_file["vehicle/angular_velocity"][current_size:] = angular_velocities
             self.h5_file["vehicle/speed"][current_size:] = speeds
+            self.h5_file["vehicle/speed_limit"][current_size:] = speed_limits
+            self.h5_file["vehicle/speed_limit_preview"][current_size:] = speed_limit_previews
+            self.h5_file["vehicle/speed_limit_preview_distance"][current_size:] = speed_limit_preview_distances
             self.h5_file["vehicle/steering_angle"][current_size:] = steering_angles
             self.h5_file["vehicle/motor_torque"][current_size:] = motor_torques
             self.h5_file["vehicle/brake_torque"][current_size:] = brake_torques
@@ -1418,6 +1501,15 @@ class DataRecorder:
         # NEW: Control stale data tracking
         using_stale_perception_list = []
         stale_perception_reason_list = []
+        emergency_stop_list = []
+        target_speed_raw_list = []
+        target_speed_post_limits_list = []
+        target_speed_planned_list = []
+        target_speed_final_list = []
+        target_speed_slew_active_list = []
+        target_speed_ramp_active_list = []
+        launch_throttle_cap_list = []
+        launch_throttle_cap_active_list = []
         
         for frame in frames:
             cc = frame.control_command
@@ -1445,13 +1537,22 @@ class DataRecorder:
             # NEW: Control stale data tracking
             using_stale_perception_list.append(cc.using_stale_perception if hasattr(cc, 'using_stale_perception') else False)
             stale_perception_reason_list.append(cc.stale_perception_reason if hasattr(cc, 'stale_perception_reason') and cc.stale_perception_reason else "")
+            emergency_stop_list.append(1 if getattr(cc, 'emergency_stop', False) else 0)
+            target_speed_raw_list.append(getattr(cc, 'target_speed_raw', 0.0) or 0.0)
+            target_speed_post_limits_list.append(getattr(cc, 'target_speed_post_limits', 0.0) or 0.0)
+            target_speed_planned_list.append(getattr(cc, 'target_speed_planned', 0.0) or 0.0)
+            target_speed_final_list.append(getattr(cc, 'target_speed_final', 0.0) or 0.0)
+            target_speed_slew_active_list.append(1 if getattr(cc, 'target_speed_slew_active', False) else 0)
+            target_speed_ramp_active_list.append(1 if getattr(cc, 'target_speed_ramp_active', False) else 0)
+            launch_throttle_cap_list.append(getattr(cc, 'launch_throttle_cap', 0.0) or 0.0)
+            launch_throttle_cap_active_list.append(1 if getattr(cc, 'launch_throttle_cap_active', False) else 0)
         
         if timestamps:
             current_size = self.h5_file["control/timestamps"].shape[0]
             new_size = current_size + len(timestamps)
             
             # Resize all control datasets
-            for key in ["timestamps", "steering", "throttle", "brake", 
+            for key in ["timestamps", "steering", "throttle", "brake",
                        "steering_before_limits", "throttle_before_limits", "brake_before_limits",
                        "pid_integral", "pid_derivative", "pid_error",
                        "lateral_error", "heading_error", "total_error",
@@ -1459,7 +1560,11 @@ class DataRecorder:
                        "lateral_correction", "path_curvature_input",
                        "is_straight", "straight_oscillation_rate",
                        "tuned_deadband", "tuned_error_smoothing_alpha",
-                       "using_stale_perception", "stale_perception_reason"]:
+                       "using_stale_perception", "stale_perception_reason",
+                       "emergency_stop", "target_speed_raw",
+                       "target_speed_post_limits", "target_speed_planned", "target_speed_final",
+                       "target_speed_slew_active", "target_speed_ramp_active",
+                       "launch_throttle_cap", "launch_throttle_cap_active"]:
                 self.h5_file[f"control/{key}"].resize((new_size,))
             
             # Write data
@@ -1488,6 +1593,15 @@ class DataRecorder:
             self.h5_file["control/using_stale_perception"][current_size:] = using_stale_perception_list
             stale_perception_reason_array = np.array(stale_perception_reason_list, dtype=h5py.string_dtype(encoding='utf-8', length=50))
             self.h5_file["control/stale_perception_reason"][current_size:] = stale_perception_reason_array
+            self.h5_file["control/emergency_stop"][current_size:] = emergency_stop_list
+            self.h5_file["control/target_speed_raw"][current_size:] = target_speed_raw_list
+            self.h5_file["control/target_speed_post_limits"][current_size:] = target_speed_post_limits_list
+            self.h5_file["control/target_speed_planned"][current_size:] = target_speed_planned_list
+            self.h5_file["control/target_speed_final"][current_size:] = target_speed_final_list
+            self.h5_file["control/target_speed_slew_active"][current_size:] = np.array(target_speed_slew_active_list, dtype=np.int8)
+            self.h5_file["control/target_speed_ramp_active"][current_size:] = np.array(target_speed_ramp_active_list, dtype=np.int8)
+            self.h5_file["control/launch_throttle_cap"][current_size:] = launch_throttle_cap_list
+            self.h5_file["control/launch_throttle_cap_active"][current_size:] = np.array(launch_throttle_cap_active_list, dtype=np.int8)
     
     def _write_perception_outputs(self, frames: List[RecordingFrame]):
         """Write perception outputs to HDF5."""

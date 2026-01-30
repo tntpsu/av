@@ -174,6 +174,9 @@ def get_frame_data(filename, frame_index):
                         'velocity': numpy_to_list(f['vehicle/velocity'][vehicle_idx]),
                         'angular_velocity': numpy_to_list(f['vehicle/angular_velocity'][vehicle_idx]),
                         'speed': float(f['vehicle/speed'][vehicle_idx]),
+                        'speed_limit': float(f['vehicle/speed_limit'][vehicle_idx]) if 'vehicle/speed_limit' in f and vehicle_idx is not None and vehicle_idx < len(f['vehicle/speed_limit']) else None,
+                        'speed_limit_preview': float(f['vehicle/speed_limit_preview'][vehicle_idx]) if 'vehicle/speed_limit_preview' in f and vehicle_idx is not None and vehicle_idx < len(f['vehicle/speed_limit_preview']) else None,
+                        'speed_limit_preview_distance': float(f['vehicle/speed_limit_preview_distance'][vehicle_idx]) if 'vehicle/speed_limit_preview_distance' in f and vehicle_idx is not None and vehicle_idx < len(f['vehicle/speed_limit_preview_distance']) else None,
                         'steering_angle': float(f['vehicle/steering_angle'][vehicle_idx])
                         ,
                         'unity_time': float(f['vehicle/unity_time'][vehicle_idx]) if 'vehicle/unity_time' in f and vehicle_idx is not None and vehicle_idx < len(f['vehicle/unity_time']) else None,
@@ -405,6 +408,22 @@ def get_frame_data(filename, frame_index):
                         frame_data['control']['heading_error'] = heading_err_rad
                     if 'control/total_error' in f and control_idx < len(f['control/total_error']):
                         frame_data['control']['total_error'] = float(f['control/total_error'][control_idx])
+                    if 'control/target_speed_raw' in f and control_idx < len(f['control/target_speed_raw']):
+                        frame_data['control']['target_speed_raw'] = float(f['control/target_speed_raw'][control_idx])
+                    if 'control/target_speed_post_limits' in f and control_idx < len(f['control/target_speed_post_limits']):
+                        frame_data['control']['target_speed_post_limits'] = float(f['control/target_speed_post_limits'][control_idx])
+                    if 'control/target_speed_planned' in f and control_idx < len(f['control/target_speed_planned']):
+                        frame_data['control']['target_speed_planned'] = float(f['control/target_speed_planned'][control_idx])
+                    if 'control/target_speed_final' in f and control_idx < len(f['control/target_speed_final']):
+                        frame_data['control']['target_speed_final'] = float(f['control/target_speed_final'][control_idx])
+                    if 'control/target_speed_slew_active' in f and control_idx < len(f['control/target_speed_slew_active']):
+                        frame_data['control']['target_speed_slew_active'] = int(f['control/target_speed_slew_active'][control_idx]) == 1
+                    if 'control/target_speed_ramp_active' in f and control_idx < len(f['control/target_speed_ramp_active']):
+                        frame_data['control']['target_speed_ramp_active'] = int(f['control/target_speed_ramp_active'][control_idx]) == 1
+                    if 'control/launch_throttle_cap' in f and control_idx < len(f['control/launch_throttle_cap']):
+                        frame_data['control']['launch_throttle_cap'] = float(f['control/launch_throttle_cap'][control_idx])
+                    if 'control/launch_throttle_cap_active' in f and control_idx < len(f['control/launch_throttle_cap_active']):
+                        frame_data['control']['launch_throttle_cap_active'] = int(f['control/launch_throttle_cap_active'][control_idx]) == 1
                     if 'control/is_straight' in f and control_idx < len(f['control/is_straight']):
                         frame_data['control']['is_straight'] = int(f['control/is_straight'][control_idx]) == 1
                     if 'control/straight_oscillation_rate' in f and control_idx < len(f['control/straight_oscillation_rate']):

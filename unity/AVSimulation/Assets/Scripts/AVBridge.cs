@@ -14,6 +14,7 @@ using UnityEditor;
 /// </summary>
 public class AVBridge : MonoBehaviour
 {
+    private static int lastOverlayFrame = -1;
     [Header("Components")]
     public CarController carController;
     public CameraCapture cameraCapture;
@@ -50,6 +51,10 @@ public class AVBridge : MonoBehaviour
     public bool logFrameCountJumps = true;
     public int frameCountJumpThreshold = 1;
     public float unityTimeJumpThresholdSeconds = 0.2f;
+
+    [Header("Speed Limit Preview")]
+    [Tooltip("Preview distance ahead (m) for upcoming speed limit checks")]
+    public float speedLimitPreviewDistance = 12.0f;
     
     private float updateInterval;
     private float lastUpdateTime;
@@ -77,6 +82,7 @@ public class AVBridge : MonoBehaviour
     private float stateSendStartRealtime = 0f;
     private bool controlRequestInFlight = false;
     private float controlRequestStartRealtime = 0f;
+    private float lastNonZeroSpeedLimit = 0f;
     
     // PERFORMANCE: Cache camera8mScreenY calculation - only recalculate when camera moves significantly
     private float cachedCamera8mScreenY = -1.0f;
@@ -92,6 +98,15 @@ public class AVBridge : MonoBehaviour
     
     void Start()
     {
+        // Force debug overlay on for player runs (prefab may have it disabled).
+        showDebugInfo = true;
+        // Keep sending data when the player window loses focus.
+        Application.runInBackground = true;
+        if (showDebugInfo)
+        {
+            Debug.Log($"AVBridge: runInBackground={Application.runInBackground}");
+        }
+
         // Get components if not assigned
         if (carController == null)
         {
@@ -114,6 +129,11 @@ public class AVBridge : MonoBehaviour
             {
                 if (showDebugInfo) Debug.LogWarning("AVBridge: GroundTruthReporter not found in scene! Ground truth data will be 0.0");
             }
+        }
+        if (groundTruthReporter != null && !groundTruthReporter.enabled)
+        {
+            groundTruthReporter.enabled = true;
+            if (showDebugInfo) Debug.Log("AVBridge: GroundTruthReporter was disabled; forcing enabled for track data.");
         }
         else
         {
@@ -526,7 +546,7 @@ public class AVBridge : MonoBehaviour
             currentState.groundTruthPathCurvature = groundTruthReporter.GetPathCurvature();
             
             // NEW: Add debug information about road center positions (for diagnosing offset issues)
-            var (roadCenterAtCar, roadCenterAtLookahead, referenceT) = groundTruthReporter.GetRoadCenterDebugInfo(lookaheadDistance);
+            var (roadCenterAtCar, roadCenterAtLookahead, referenceT, carT) = groundTruthReporter.GetRoadCenterDebugInfo(lookaheadDistance);
             currentState.roadCenterAtCarX = roadCenterAtCar.x;
             currentState.roadCenterAtCarY = roadCenterAtCar.y;
             currentState.roadCenterAtCarZ = roadCenterAtCar.z;
@@ -534,6 +554,56 @@ public class AVBridge : MonoBehaviour
             currentState.roadCenterAtLookaheadY = roadCenterAtLookahead.y;
             currentState.roadCenterAtLookaheadZ = roadCenterAtLookahead.z;
             currentState.roadCenterReferenceT = referenceT;
+            float computedSpeedLimit = groundTruthReporter.GetSpeedLimitAtT(carT);
+            float defaultSpeedLimit = groundTruthReporter.GetDefaultSpeedLimit();
+            if (computedSpeedLimit > 0f)
+            {
+                lastNonZeroSpeedLimit = computedSpeedLimit;
+            }
+            else if (lastNonZeroSpeedLimit > 0f)
+            {
+                computedSpeedLimit = lastNonZeroSpeedLimit;
+            }
+            else if (defaultSpeedLimit > 0f)
+            {
+                // Use top-level track default until per-segment limits are available.
+                computedSpeedLimit = defaultSpeedLimit;
+                lastNonZeroSpeedLimit = defaultSpeedLimit;
+            }
+            currentState.speedLimit = computedSpeedLimit;
+            float previewDistance = Mathf.Max(0f, speedLimitPreviewDistance);
+            currentState.speedLimitPreviewDistance = previewDistance;
+            float previewSpeedLimit = computedSpeedLimit;
+            if (previewDistance > 0.01f)
+            {
+                float pathLength = groundTruthReporter.GetPathLength();
+                if (pathLength > 0.01f)
+                {
+                    float previewT = Mathf.Repeat(carT + (previewDistance / pathLength), 1f);
+                    previewSpeedLimit = groundTruthReporter.GetSpeedLimitAtT(previewT);
+                    if (previewSpeedLimit <= 0f && lastNonZeroSpeedLimit > 0f)
+                    {
+                        previewSpeedLimit = lastNonZeroSpeedLimit;
+                    }
+                }
+            }
+            currentState.speedLimitPreview = previewSpeedLimit;
+            if (showDebugInfo && currentState.speedLimit <= 0f && Time.frameCount % 120 == 0)
+            {
+                Debug.LogWarning("AVBridge: Speed limit is 0; using fallback (if available). Check track speed limits.");
+            }
+            if (showDebugInfo && Time.frameCount % 120 == 0)
+            {
+                Debug.Log(
+                    $"AVBridge: SpeedLimit debug t={referenceT:F3} " +
+                    $"computed={computedSpeedLimit:F2}m/s default={defaultSpeedLimit:F2}m/s " +
+                    $"lastNonZero={lastNonZeroSpeedLimit:F2}m/s"
+                );
+            }
+            if (carController != null)
+            {
+                carController.speedLimit = currentState.speedLimit;
+            }
             
             // Debug: Log ground truth values
             if (showDebugInfo && Time.frameCount % 30 == 0)
@@ -1306,27 +1376,69 @@ public class AVBridge : MonoBehaviour
     
     void OnGUI()
     {
-        if (showDebugInfo)
+        showDebugInfo = true;
+        //if (showDebugInfo)
         {
+            if (Time.frameCount % 120 == 0 && Event.current.type == EventType.Repaint)
+            {
+                Debug.Log("[AVBridge] OnGUI tick");
+            }
+            if (Event.current.type != EventType.Repaint)
+            {
+                return;
+            }
+            if (Time.frameCount == lastOverlayFrame)
+            {
+                return;
+            }
+            lastOverlayFrame = Time.frameCount;
+            GUI.depth = -1000;
+            GUI.color = Color.white;
+            GUIStyle labelStyle = new GUIStyle(GUI.skin.label)
+            {
+                fontSize = 14,
+                normal = { textColor = Color.white }
+            };
             int yOffset = 10;
-            GUI.Label(new Rect(10, yOffset, 300, 20), $"AV Control: {(enableAVControl ? "ON" : "OFF")}");
-            yOffset += 20;
+            int xOffset = 10;
+            int lineHeight = 20;
+            int boxWidth = 320;
+            int boxHeight = 6 * lineHeight + 10;
+            GUI.Box(new Rect(xOffset - 6, yOffset - 6, boxWidth, boxHeight), GUIContent.none);
+            GUI.Label(new Rect(xOffset, yOffset, 300, lineHeight),
+                $"AV Control: {(enableAVControl ? "ON" : "OFF")}", labelStyle);
+            yOffset += lineHeight;
             
             if (lastControlCommand != null)
             {
-                GUI.Label(new Rect(10, yOffset, 300, 20), 
-                    $"Steering: {lastControlCommand.steering:F3}");
-                yOffset += 20;
-                GUI.Label(new Rect(10, yOffset, 300, 20), 
-                    $"Throttle: {lastControlCommand.throttle:F3}");
-                yOffset += 20;
-                GUI.Label(new Rect(10, yOffset, 300, 20), 
-                    $"Brake: {lastControlCommand.brake:F3}");
-                yOffset += 20;
+                GUI.Label(new Rect(xOffset, yOffset, 300, lineHeight),
+                    $"Steering: {lastControlCommand.steering:F3}", labelStyle);
+                yOffset += lineHeight;
+                GUI.Label(new Rect(xOffset, yOffset, 300, lineHeight),
+                    $"Throttle: {lastControlCommand.throttle:F3}", labelStyle);
+                yOffset += lineHeight;
+                GUI.Label(new Rect(xOffset, yOffset, 300, lineHeight),
+                    $"Brake Cmd: {lastControlCommand.brake:F3}", labelStyle);
+                yOffset += lineHeight;
+                if (carController != null)
+                {
+                    GUI.Label(new Rect(xOffset, yOffset, 300, lineHeight),
+                        $"Brake Applied: {carController.brakeInput:F3}", labelStyle);
+                    yOffset += lineHeight;
+                }
             }
-            
-            GUI.Label(new Rect(10, yOffset, 300, 20), 
-                $"Speed: {lastVehicleState.speed:F2} m/s");
+            if (lastVehicleState != null)
+            {
+                float speedMps = lastVehicleState.speed;
+                float speedMph = speedMps * 2.236936f;
+                float limitMps = lastVehicleState.speedLimit;
+                string limitText = limitMps > 0.0f ? $"{(limitMps * 2.236936f):F1} mph" : "-";
+                GUI.Label(new Rect(xOffset, yOffset, 300, lineHeight),
+                    $"Speed: {speedMph:F1} mph ({speedMps:F1} m/s)", labelStyle);
+                yOffset += lineHeight;
+                GUI.Label(new Rect(xOffset, yOffset, 300, lineHeight),
+                    $"Speed Limit: {limitText}", labelStyle);
+            }
         }
     }
 }
@@ -1340,6 +1452,7 @@ public class ControlCommand
     public float steering;  // -1.0 to 1.0
     public float throttle;  // -1.0 to 1.0 (negative = reverse)
     public float brake;     // 0.0 to 1.0
+    public bool emergency_stop = false;
     // Optional: Ground truth mode settings
     public bool ground_truth_mode = false;  // Enable direct velocity control
     public float ground_truth_speed = 5.0f;  // Speed for ground truth mode (m/s)

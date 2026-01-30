@@ -251,7 +251,52 @@ def detect_issues(recording_path: Path, analyze_to_failure: bool = False) -> Dic
                         "duration": int(consecutive_failures)
                     })
             
-            # 5. DETECT SUSTAINED OUT-OF-LANE EVENTS
+            # 5. DETECT NEGATIVE STEERING/REFERENCE CORRELATION WINDOWS
+            if "trajectory/reference_point_x" in f and has_control:
+                ref_x = np.array(f["trajectory/reference_point_x"][:num_frames])
+                steering = np.array(f["control/steering"][:num_frames])
+                is_straight = np.array(f["control/is_straight"][:num_frames]).astype(bool) if "control/is_straight" in f else None
+                curvature = None
+                if "ground_truth/path_curvature" in f:
+                    curvature = np.array(f["ground_truth/path_curvature"][:num_frames])
+                elif "control/path_curvature_input" in f:
+                    curvature = np.array(f["control/path_curvature_input"][:num_frames])
+                window_size = 60  # ~2 seconds at 30 FPS
+                min_std = 1e-4
+                last_issue_frame = None
+                for start in range(0, len(ref_x) - window_size + 1):
+                    end = start + window_size
+                    window_ref = ref_x[start:end]
+                    window_steer = steering[start:end]
+                    if is_straight is not None:
+                        straight_ratio = float(np.mean(is_straight[start:end]))
+                        if straight_ratio < 0.6:
+                            continue
+                    if curvature is not None:
+                        if float(np.mean(np.abs(curvature[start:end]))) >= 0.01:
+                            continue
+                    if np.std(window_ref) < min_std or np.std(window_steer) < min_std:
+                        continue
+                    corr = safe_float(np.corrcoef(window_ref, window_steer)[0, 1])
+                    if corr < -0.3:
+                        # Avoid spamming; enforce a cooldown
+                        issue_frame = end - 1
+                        if last_issue_frame is None or issue_frame - last_issue_frame >= window_size // 2:
+                            severity = "high" if corr < -0.6 else "medium"
+                            issues.append({
+                                "frame": int(issue_frame),
+                                "type": "negative_control_correlation",
+                                "severity": severity,
+                                "description": (
+                                    f"Negative steering vs reference correlation over {window_size} frames "
+                                    f"(corr={corr:.3f})."
+                                ),
+                                "correlation": float(corr),
+                                "window_frames": int(window_size),
+                            })
+                            last_issue_frame = issue_frame
+            
+            # 6. DETECT SUSTAINED OUT-OF-LANE EVENTS
             # CRITICAL: Use ground truth lane boundaries if available (most accurate)
             # Only use perception-based error as fallback - perception can be wrong!
             if has_ground_truth and "ground_truth/left_lane_line_x" in f and "ground_truth/right_lane_line_x" in f:
@@ -374,7 +419,7 @@ def detect_issues(recording_path: Path, analyze_to_failure: bool = False) -> Dic
                             "is_final_failure": is_final_failure
                         })
             
-            # 6. DETECT EMERGENCY STOPS
+            # 7. DETECT EMERGENCY STOPS
             if has_control and "control/emergency_stop" in f:
                 emergency_stops = np.array(f["control/emergency_stop"][:num_frames])
                 emergency_frames = np.where(emergency_stops)[0]

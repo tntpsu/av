@@ -53,15 +53,17 @@ control:
 ```yaml
 control:
   longitudinal:
-    kp: 0.10             # Proportional gain (reduced to prevent aggressive acceleration)
-    ki: 0.01             # Integral gain (reduced to prevent overshoot)
+    kp: 0.25             # Proportional gain (faster speed tracking)
+    ki: 0.02             # Integral gain (steady-state error)
     kd: 0.01             # Derivative gain (damping)
     target_speed: 8.0    # Target speed in m/s
     max_speed: 10.0      # Maximum speed in m/s
-    speed_smoothing: 0.7 # Smoothing factor (0-1)
+    speed_smoothing: 0.3 # Smoothing factor (0-1)
     speed_deadband: 0.1  # Speed error deadband in m/s
-    throttle_limit_threshold: 0.75  # Start reducing throttle at this fraction of max_speed
-    throttle_reduction_factor: 0.3  # Throttle multiplier when near max speed
+    throttle_rate_limit: 0.12 # Max throttle change per frame
+    brake_rate_limit: 0.15    # Max brake change per frame
+    throttle_smoothing_alpha: 0.6 # Low-pass filter on throttle command
+    min_throttle_when_accel: 0.1 # Floor throttle when below target
     brake_aggression: 2.0 # Brake PID gain multiplier
 ```
 
@@ -73,6 +75,16 @@ trajectory:
   point_spacing: 1.0        # Spacing between trajectory points in meters
   target_speed: 8.0         # Target speed for trajectory in m/s
   reference_lookahead: 8.0  # Lookahead distance for reference point in meters
+  speed_planner:
+    enabled: true
+    max_accel: 2.5          # Max acceleration (m/s^2)
+    max_decel: 3.0          # Max deceleration (m/s^2)
+    max_jerk: 2.0           # Max jerk (m/s^3)
+    min_speed: 0.0
+    launch_speed_floor: 2.0
+    launch_speed_floor_threshold: 1.0
+    reset_gap_seconds: 0.5
+    sync_speed_threshold: 50.0
   image_width: 640         # Camera image width in pixels
   image_height: 480        # Camera image height in pixels
   camera_fov: 110.0        # Camera field of view in degrees (horizontal FOV)

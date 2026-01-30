@@ -61,26 +61,30 @@ log_dir = Path(__file__).parent.parent / 'tmp' / 'logs'
 log_dir.mkdir(parents=True, exist_ok=True)
 log_file = log_dir / 'ground_truth_follower.log'
 
-# Use append mode and ensure we can write
-file_handler = logging.FileHandler(str(log_file), mode='a')
-file_handler.setLevel(logging.ERROR)  # Changed from INFO to ERROR to reduce expensive print operations
-console_handler = logging.StreamHandler()
-console_handler.setLevel(logging.ERROR)  # Changed from INFO to ERROR
 
-formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-file_handler.setFormatter(formatter)
-console_handler.setFormatter(formatter)
+def configure_logging(level: int) -> logging.Logger:
+    file_handler = logging.FileHandler(str(log_file), mode='a')
+    file_handler.setLevel(level)
+    console_handler = logging.StreamHandler()
+    console_handler.setLevel(level)
 
-# Configure root logger
-logging.basicConfig(
-    level=logging.ERROR,  # Changed from INFO to ERROR
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[console_handler, file_handler],
-    force=True  # Override any existing configuration
-)
-logger = logging.getLogger(__name__)
-logger.info(f"Logging to console and file: {log_file}")
-file_handler.flush()  # Ensure first log is written
+    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    file_handler.setFormatter(formatter)
+    console_handler.setFormatter(formatter)
+
+    logging.basicConfig(
+        level=level,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        handlers=[console_handler, file_handler],
+        force=True
+    )
+    logger = logging.getLogger(__name__)
+    logger.info(f"Logging to console and file: {log_file}")
+    file_handler.flush()
+    return logger
+
+
+logger = configure_logging(logging.ERROR)
 
 
 class GroundTruthFollower:
@@ -109,6 +113,7 @@ class GroundTruthFollower:
         speed_kd: float = 0.05,  # Speed control derivative gain
         random_start: bool = False,
         random_seed: Optional[int] = None,
+        constant_speed: bool = False,
     ):
         """
         Initialize ground truth follower.
@@ -131,6 +136,7 @@ class GroundTruthFollower:
         self.max_safe_speed = max_safe_speed
         self.bridge_server_process = None
         self.start_bridge_server = start_bridge_server
+        self.constant_speed = constant_speed
         
         # Speed control PID parameters (tuned for Unity physics)
         # Unity: motorForce=400, brake uses damping + velocity reduction
@@ -729,8 +735,11 @@ class GroundTruthFollower:
                 effective_target_speed = max(self.min_target_speed, self.target_speed * self._speed_scale)
                 speed_error = effective_target_speed - current_speed
                 
+                if self.constant_speed:
+                    throttle = 1.0
+                    brake = 0.0
                 # Emergency: speed way too high - maximum brake
-                if current_speed > self.max_safe_speed:
+                elif current_speed > self.max_safe_speed:
                     throttle = 0.0
                     brake = 1.0
                     # Reset PID to prevent windup
@@ -944,13 +953,21 @@ def main():
                        help="Unity bridge URL (default: http://localhost:8000)")
     parser.add_argument("--auto-play", action="store_true",
                        help="Automatically start Unity play mode (requires Unity Editor to be open)")
+    parser.add_argument("--verbose", action="store_true",
+                       help="Enable verbose logging for debugging")
     parser.add_argument("--random-start", action="store_true",
                        help="Randomize car start position on the oval")
     parser.add_argument("--random-seed", type=int, default=None,
                        help="Optional seed for random start reproducibility")
+    parser.add_argument("--constant-speed", action="store_true",
+                       help="Disable GT speed PID and move at constant speed")
     
     args = parser.parse_args()
     
+    if args.verbose:
+        global logger
+        logger = configure_logging(logging.INFO)
+
     follower = GroundTruthFollower(
         bridge_url=args.bridge_url,
         target_speed=args.speed,
@@ -961,6 +978,7 @@ def main():
         speed_kd=0.05,  # Derivative for damping oscillations
         random_start=args.random_start,
         random_seed=args.random_seed,
+        constant_speed=args.constant_speed,
     )
     
     try:

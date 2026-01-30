@@ -24,7 +24,7 @@ public static class TrackLoader
 
         config = LoadFromText(File.ReadAllText(yamlPath));
         ApplyStartOverrides(args, config);
-        Debug.Log($"TrackLoader: Loaded YAML '{yamlPath}' name='{config.name}' segments={config.segments.Count}");
+        Debug.Log($"TrackLoader: Loaded YAML '{yamlPath}' name='{config.name}' template='{config.template}' segments={config.segments.Count}");
         return true;
     }
 
@@ -72,6 +72,77 @@ public static class TrackLoader
             }
         }
 
+        if (config.speedLimit <= 0f)
+        {
+            float fallbackLimit = 0f;
+            bool inSegmentsFallback = false;
+            foreach (string rawLine in lines)
+            {
+                string fallbackLine = StripComment(rawLine).Trim();
+                if (string.IsNullOrEmpty(fallbackLine))
+                {
+                    continue;
+                }
+                if (fallbackLine.StartsWith("segments:"))
+                {
+                    inSegmentsFallback = true;
+                    continue;
+                }
+                if (inSegmentsFallback)
+                {
+                    if (fallbackLine.StartsWith("-"))
+                    {
+                        // new segment; stay in segments block
+                    }
+                    continue;
+                }
+                if (TrySplitKeyValue(fallbackLine, out string key, out string value))
+                {
+                    if (key == "speed_limit_mph" && TryParseFloat(value, out float mphValue))
+                    {
+                        fallbackLimit = MphToMps(mphValue);
+                        break;
+                    }
+                    if (key == "speed_limit" && TryParseFloat(value, out float mpsValue))
+                    {
+                        fallbackLimit = mpsValue;
+                        break;
+                    }
+                }
+            }
+            if (fallbackLimit > 0f)
+            {
+                config.speedLimit = fallbackLimit;
+                Debug.Log($"TrackLoader: Parsed fallback speed limit {fallbackLimit:F2} m/s");
+            }
+        }
+        if (config.speedLimit <= 0f)
+        {
+            float maxSegmentLimit = 0f;
+            foreach (var segment in config.segments)
+            {
+                if (segment != null && segment.speedLimit > maxSegmentLimit)
+                {
+                    maxSegmentLimit = segment.speedLimit;
+                }
+            }
+            if (maxSegmentLimit > 0f)
+            {
+                config.speedLimit = maxSegmentLimit;
+                Debug.LogWarning($"TrackLoader: Default speed limit missing; using max segment limit {maxSegmentLimit:F2} m/s");
+            }
+        }
+        if (config.speedLimit > 0f)
+        {
+            foreach (var segment in config.segments)
+            {
+                if (segment != null && segment.speedLimit <= 0f)
+                {
+                    segment.speedLimit = config.speedLimit;
+                }
+            }
+        }
+
         return config;
     }
 
@@ -108,6 +179,9 @@ public static class TrackLoader
             case "name":
                 config.name = Unquote(value);
                 break;
+            case "template":
+                config.template = Unquote(value).ToLowerInvariant();
+                break;
             case "road_width":
                 if (TryParseFloat(value, out float rw)) config.roadWidth = rw;
                 break;
@@ -129,6 +203,24 @@ public static class TrackLoader
             case "start_random":
                 config.startRandom = value == "true" || value == "1";
                 break;
+            case "start_x":
+                if (TryParseFloat(value, out float sx)) config.startX = sx;
+                break;
+            case "start_y":
+                if (TryParseFloat(value, out float sy)) config.startY = sy;
+                break;
+            case "start_z":
+                if (TryParseFloat(value, out float sz)) config.startZ = sz;
+                break;
+            case "start_heading_deg":
+                if (TryParseFloat(value, out float sh)) config.startHeadingDeg = sh;
+                break;
+            case "straight_length":
+                if (TryParseFloat(value, out float sl)) config.straightLength = sl;
+                break;
+            case "turn_radius":
+                if (TryParseFloat(value, out float tr)) config.turnRadius = tr;
+                break;
             case "offset_x":
             case "track_offset_x":
                 if (TryParseFloat(value, out float ox)) config.offsetX = ox;
@@ -140,6 +232,15 @@ public static class TrackLoader
             case "offset_z":
             case "track_offset_z":
                 if (TryParseFloat(value, out float oz)) config.offsetZ = oz;
+                break;
+            case "loop_connector":
+                if (TryParseBool(value, out bool loopConnector)) config.loopConnector = loopConnector;
+                break;
+            case "speed_limit":
+                if (TryParseFloat(value, out float speedLimit)) config.speedLimit = speedLimit;
+                break;
+            case "speed_limit_mph":
+                if (TryParseFloat(value, out float speedLimitMph)) config.speedLimit = MphToMps(speedLimitMph);
                 break;
         }
     }
@@ -175,7 +276,15 @@ public static class TrackLoader
             case "speed_limit":
                 if (TryParseFloat(value, out float limit)) segment.speedLimit = limit;
                 break;
+            case "speed_limit_mph":
+                if (TryParseFloat(value, out float limitMph)) segment.speedLimit = MphToMps(limitMph);
+                break;
         }
+    }
+
+    private static float MphToMps(float mph)
+    {
+        return mph * 0.44704f;
     }
 
     private static string StripComment(string line)
@@ -219,6 +328,27 @@ public static class TrackLoader
     private static bool TryParseFloat(string value, out float result)
     {
         return float.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out result);
+    }
+
+    private static bool TryParseBool(string value, out bool result)
+    {
+        result = false;
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return false;
+        }
+        string normalized = value.Trim().ToLowerInvariant();
+        if (normalized == "true" || normalized == "1" || normalized == "yes" || normalized == "y")
+        {
+            result = true;
+            return true;
+        }
+        if (normalized == "false" || normalized == "0" || normalized == "no" || normalized == "n")
+        {
+            result = false;
+            return true;
+        }
+        return false;
     }
 
     private static string GetArgValue(string[] args, params string[] keys)

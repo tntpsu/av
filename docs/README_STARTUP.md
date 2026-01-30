@@ -20,6 +20,24 @@ Run the startup script:
 ./start_av_stack.sh --build-unity-player --skip-unity-build-if-clean --run-unity-player --duration 60
 ```
 
+### Option 1b: Ground Truth Runner (Standalone Player)
+
+Use the ground-truth runner to bypass the AV stack and follow the ground-truth path:
+
+```bash
+# Oval baseline
+./start_ground_truth.sh --track-yaml tracks/oval.yml --duration 20 --speed 8.0
+
+# Constant speed (no PID braking)
+./start_ground_truth.sh --track-yaml tracks/oval.yml --duration 20 --speed 8.0 --constant-speed
+
+# Randomized start
+./start_ground_truth.sh --track-yaml tracks/oval.yml --random-start --random-seed 50
+
+# Override all arc radii (e.g., s-loop with radius 20)
+./start_ground_truth.sh --track-yaml tracks/s_loop.yml --arc-radius 20 --duration 20 --speed 8.0
+```
+
 This script will:
 - ✅ Check/create virtual environment
 - ✅ Install dependencies (first time only)

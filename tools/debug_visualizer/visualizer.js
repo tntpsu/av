@@ -119,6 +119,35 @@ class Visualizer {
         document.getElementById('toggle-edges').addEventListener('change', () => this.updateDebugOverlays());
         document.getElementById('toggle-yellow-mask').addEventListener('change', () => this.updateDebugOverlays());
         document.getElementById('toggle-histogram').addEventListener('change', () => this.updateDebugOverlays());
+
+        // CV tools visibility toggle
+        const cvToolsToggle = document.getElementById('toggle-cv-tools');
+        const cvDebugTools = document.getElementById('cv-debug-tools');
+        const cvDataOverlays = document.getElementById('cv-data-overlays');
+        const cvDebugOverlayControls = document.getElementById('cv-debug-overlay-controls');
+        const setCvToolsVisible = (show) => {
+            cvDebugTools.style.display = show ? 'block' : 'none';
+            cvDataOverlays.style.display = show ? 'block' : 'none';
+            cvDebugOverlayControls.style.display = show ? 'block' : 'none';
+            if (!show) {
+                document.getElementById('toggle-combined').checked = false;
+                document.getElementById('toggle-edges').checked = false;
+                document.getElementById('toggle-yellow-mask').checked = false;
+                document.getElementById('toggle-fit-points').checked = false;
+                document.getElementById('toggle-histogram').checked = false;
+                document.getElementById('toggle-lanes').checked = false;
+                document.getElementById('toggle-detected-curves').checked = false;
+                this.updateDebugOverlays();
+                this.updateOverlays();
+            }
+        };
+        if (cvToolsToggle) {
+            cvToolsToggle.checked = false;
+            setCvToolsVisible(false);
+            cvToolsToggle.addEventListener('change', (e) => {
+                setCvToolsVisible(e.target.checked);
+            });
+        }
         
         // Opacity control
         document.getElementById('opacity-slider').addEventListener('input', (e) => {
@@ -324,6 +353,34 @@ class Visualizer {
                     html += `<span style="color: #888;">Tuned Deadband: ${deadbandMean !== null ? deadbandMean.toFixed(3) : '-'} (max ${deadbandMax !== null ? deadbandMax.toFixed(3) : '-'}) | Smoothing α: ${smoothingMean !== null ? smoothingMean.toFixed(3) : '-'}</span>`;
                     html += '</div>';
                 }
+            }
+
+            // Speed control + comfort
+            const speedControl = summary.speed_control || null;
+            if (speedControl) {
+                const speedRmse = speedControl.speed_error_rmse ?? null;
+                const speedMean = speedControl.speed_error_mean ?? null;
+                const speedMax = speedControl.speed_error_max ?? null;
+                const overspeedRate = speedControl.speed_overspeed_rate ?? null;
+                const speedLimitZeroRate = speedControl.speed_limit_zero_rate ?? null;
+                if (speedRmse !== null) {
+                    const speedColor = speedRmse > 2.0 ? '#ff6b6b' : '#4caf50';
+                    html += '<div style="margin-bottom: 1rem; padding: 0.75rem; background: #1f1f1f; border-radius: 4px;">';
+                    html += `<strong style="color: ${speedColor};">Speed Control:</strong><br/>`;
+                    html += `<span style="color: #888;">Speed Error RMSE: ${speedRmse.toFixed(2)} m/s | Mean: ${speedMean !== null ? speedMean.toFixed(2) : '-'} | Max: ${speedMax !== null ? speedMax.toFixed(2) : '-'}</span><br/>`;
+                    html += `<span style="color: #888;">Overspeed Rate (>0.5 m/s): ${overspeedRate !== null ? overspeedRate.toFixed(1) : '-'}% | Speed Limit Missing: ${speedLimitZeroRate !== null ? speedLimitZeroRate.toFixed(1) : '-'}%</span>`;
+                    html += '</div>';
+                }
+            }
+            const comfort = summary.comfort || null;
+            if (comfort) {
+                const comfortColor = (comfort.acceleration_p95 > 2.5 || comfort.jerk_p95 > 5.0) ? '#ff6b6b' : '#4caf50';
+                const latAccelP95 = comfort.lateral_accel_p95 ?? null;
+                const latJerkP95 = comfort.lateral_jerk_p95 ?? null;
+                html += '<div style="margin-bottom: 1rem; padding: 0.75rem; background: #1f1f1f; border-radius: 4px;">';
+                html += `<strong style="color: ${comfortColor};">Comfort:</strong><br/>`;
+                html += `<span style="color: #888;">Accel P95: ${comfort.acceleration_p95.toFixed(2)} m/s² | Jerk P95: ${comfort.jerk_p95.toFixed(2)} m/s³ | Lat Accel P95: ${latAccelP95 !== null ? latAccelP95.toFixed(2) : '-'} m/s² | Lat Jerk P95: ${latJerkP95 !== null ? latJerkP95.toFixed(2) : '-'} m/s³ | Steering Jerk Max: ${comfort.steering_jerk_max.toFixed(2)}</span>`;
+                html += '</div>';
             }
             html += `<div style="margin-bottom: 1rem; padding: 0.5rem; background: #2a2a2a; border-radius: 4px;">${scope_indicator}</div>`;
             
@@ -637,6 +694,7 @@ class Visualizer {
             html += '<button class="issue-filter-btn" data-filter="extreme_coefficients" style="padding: 0.5rem 1rem; background: #555; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 0.9rem;">Extreme Coefficients</button>';
             html += '<button class="issue-filter-btn" data-filter="perception_instability" style="padding: 0.5rem 1rem; background: #555; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 0.9rem;">Perception Instability</button>';
             html += '<button class="issue-filter-btn" data-filter="high_lateral_error" style="padding: 0.5rem 1rem; background: #555; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 0.9rem;">High Lateral Error</button>';
+            html += '<button class="issue-filter-btn" data-filter="negative_control_correlation" style="padding: 0.5rem 1rem; background: #555; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 0.9rem;">Negative Correlation</button>';
             html += '<button class="issue-filter-btn" data-filter="perception_failure" style="padding: 0.5rem 1rem; background: #555; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 0.9rem;">Perception Failure</button>';
             html += '<button class="issue-filter-btn" data-filter="out_of_lane" style="padding: 0.5rem 1rem; background: #555; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 0.9rem;">Out of Lane</button>';
             html += '<button class="issue-filter-btn" data-filter="emergency_stop" style="padding: 0.5rem 1rem; background: #555; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 0.9rem;">Emergency Stop</button>';
@@ -659,6 +717,7 @@ class Visualizer {
                         'extreme_coefficients': '📐',
                         'perception_instability': '📊',
                         'high_lateral_error': '📏',
+                        'negative_control_correlation': '↔️',
                         'perception_failure': '👁️',
                         'out_of_lane': '🚫',
                         'emergency_stop': '🛑',
@@ -873,7 +932,13 @@ class Visualizer {
                 }
                 if (ctrl.steering_correlation !== null && ctrl.steering_correlation !== undefined) {
                     const corrColor = ctrl.steering_correlation > 0.7 ? '#4caf50' : ctrl.steering_correlation > 0.3 ? '#ffa500' : '#ff6b6b';
-                    html += `<tr><td>Steering Correlation:</td><td style="text-align: right; color: ${corrColor};">${ctrl.steering_correlation.toFixed(3)}</td></tr>`;
+                    const corrScopeMap = {
+                        straight: ' (straight)',
+                        straight_low_curvature: ' (straight, low curvature)',
+                        low_curvature: ' (low curvature)'
+                    };
+                    const corrScope = corrScopeMap[ctrl.steering_correlation_scope] || '';
+                    html += `<tr><td>Steering Correlation${corrScope}:</td><td style="text-align: right; color: ${corrColor};">${ctrl.steering_correlation.toFixed(3)}</td></tr>`;
                 }
                 if (ctrl.lateral_error) {
                     // Display RMSE if available (matches Path Tracking), otherwise fall back to mean
@@ -890,6 +955,47 @@ class Visualizer {
                     }
                 }
                 html += '</table>';
+
+                // Control quality breakdown (penalty drivers)
+                const breakdown = [];
+                if (ctrl.steering_correlation !== null && ctrl.steering_correlation !== undefined) {
+                    if (ctrl.steering_correlation < 0.3) {
+                        breakdown.push(`Low steering correlation (corr=${ctrl.steering_correlation.toFixed(3)} < 0.30)`);
+                    } else if (ctrl.steering_correlation < 0.5) {
+                        breakdown.push(`Moderate steering correlation (corr=${ctrl.steering_correlation.toFixed(3)})`);
+                    }
+                }
+                if (ctrl.lateral_error && ctrl.lateral_error.rmse !== null && ctrl.lateral_error.rmse !== undefined) {
+                    if (ctrl.lateral_error.rmse > 0.4) {
+                        breakdown.push(`High lateral RMSE (${ctrl.lateral_error.rmse.toFixed(3)}m > 0.40m)`);
+                    } else if (ctrl.lateral_error.rmse > 0.2) {
+                        breakdown.push(`Moderate lateral RMSE (${ctrl.lateral_error.rmse.toFixed(3)}m)`);
+                    }
+                }
+                if (ctrl.steering_stats && ctrl.steering_stats.mean_abs !== null && ctrl.steering_stats.mean_abs !== undefined) {
+                    if (ctrl.steering_stats.mean_abs < 0.05) {
+                        breakdown.push(`Very small mean steering (${ctrl.steering_stats.mean_abs.toFixed(3)})`);
+                    } else if (ctrl.steering_stats.mean_abs < 0.1) {
+                        breakdown.push(`Small mean steering (${ctrl.steering_stats.mean_abs.toFixed(3)})`);
+                    }
+                }
+                if (ctrl.steering_stats && ctrl.steering_stats.mean_change !== null && ctrl.steering_stats.mean_change !== undefined) {
+                    if (ctrl.steering_stats.mean_change < 0.01) {
+                        breakdown.push(`Steering barely changes (mean Δ=${ctrl.steering_stats.mean_change.toFixed(3)})`);
+                    }
+                }
+                html += '<div style="background: #1a1a1a; padding: 0.75rem; border-radius: 4px; margin-top: 1rem; border-left: 3px solid #4a90e2;">';
+                html += '<strong style="color: #4a90e2;">Control Quality Breakdown</strong><br/>';
+                if (breakdown.length > 0) {
+                    html += '<ul style="margin: 0.5rem 0; padding-left: 1.5rem; color: #e0e0e0;">';
+                    breakdown.forEach(item => {
+                        html += `<li>${item}</li>`;
+                    });
+                    html += '</ul>';
+                } else {
+                    html += '<div style="color: #4caf50; margin-top: 0.5rem;">No control penalties detected.</div>';
+                }
+                html += '</div>';
                 
                 if (ctrl.issues && ctrl.issues.length > 0) {
                     html += '<div style="background: #3a1a1a; padding: 0.75rem; border-radius: 4px; border-left: 3px solid #ff6b6b; margin-top: 1rem;">';
@@ -907,6 +1013,34 @@ class Visualizer {
                         html += `<li>${warning}</li>`;
                     });
                     html += '</ul></div>';
+                }
+
+                if (ctrl.lateral_error_hotspots && ctrl.lateral_error_hotspots.length > 0) {
+                    html += '<div style="background: #1a1a1a; padding: 0.75rem; border-radius: 4px; border-left: 3px solid #4a90e2; margin-top: 1rem;">';
+                    html += '<strong style="color: #4a90e2;">Lateral Error Hotspots</strong><br/>';
+                    html += '<div style="color: #888; font-size: 0.85rem; margin-bottom: 0.5rem;">Top frames by |lateral error| with context.</div>';
+                    html += '<div style="display: flex; flex-direction: column; gap: 0.5rem;">';
+                    ctrl.lateral_error_hotspots.forEach((spot) => {
+                        const mismatch = spot.sign_mismatch ? '⚠️ sign mismatch' : '';
+                        const seg = spot.segment ? spot.segment : 'unknown';
+                        const straight = spot.is_straight === null || spot.is_straight === undefined
+                            ? 'n/a'
+                            : (spot.is_straight ? 'yes' : 'no');
+                        html += '<div style="display: flex; justify-content: space-between; align-items: center; padding: 0.5rem; background: #2a2a2a; border-radius: 6px;">';
+                        html += '<div style="color: #e0e0e0; font-size: 0.9rem;">';
+                        html += `<strong>Frame ${spot.frame}</strong> · t=${spot.time.toFixed(2)}s · |err|=${Math.abs(spot.lateral_error).toFixed(3)}m · ${seg} · straight=${straight}<br/>`;
+                        html += `ref_x=${spot.ref_x.toFixed(3)} · steer=${spot.steering.toFixed(3)} · heading=${(spot.heading_error * 180 / Math.PI).toFixed(2)}°`;
+                        html += ` · curv=${spot.curvature.toFixed(4)} · gt_curv=${spot.gt_curvature.toFixed(4)} ${mismatch}`;
+                        html += '</div>';
+                        html += `<button style="padding: 0.25rem 0.75rem; background: #4a90e2; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 0.85rem;" onclick="window.visualizer.jumpToFrame(${spot.frame})">Jump →</button>`;
+                        html += '</div>';
+                    });
+                    html += '</div></div>';
+                } else {
+                    html += '<div style="background: #1a1a1a; padding: 0.75rem; border-radius: 4px; border-left: 3px solid #4a90e2; margin-top: 1rem;">';
+                    html += '<strong style="color: #4a90e2;">Lateral Error Hotspots</strong><br/>';
+                    html += '<div style="color: #4caf50; font-size: 0.9rem;">No significant hotspots detected.</div>';
+                    html += '</div>';
                 }
                 
                 html += '</div>';
@@ -1281,6 +1415,8 @@ class Visualizer {
         if (!this.currentFrameData || !this.currentFrameData.control) return;
         
         const c = this.currentFrameData.control;
+        const t = this.currentFrameData.trajectory || null;
+        const ref = t ? t.reference_point : null;
         
         const updateField = (id, value) => {
             const elem = document.getElementById(id);
@@ -1292,12 +1428,54 @@ class Visualizer {
         updateField('control-steering', c.steering !== undefined ? c.steering.toFixed(4) : '-');
         updateField('control-throttle', c.throttle !== undefined ? c.throttle.toFixed(4) : '-');
         updateField('control-brake', c.brake !== undefined ? c.brake.toFixed(4) : '-');
+        updateField('control-ref-x', ref && ref.x !== undefined ? `${ref.x.toFixed(3)}m` : '-');
+        updateField('control-ref-y', ref && ref.y !== undefined ? `${ref.y.toFixed(3)}m` : '-');
+        updateField(
+            'control-ref-heading',
+            ref && ref.heading !== undefined ? `${(ref.heading * 180 / Math.PI).toFixed(2)}°` : '-'
+        );
+        updateField(
+            'control-ref-speed',
+            ref && ref.velocity !== undefined ? `${ref.velocity.toFixed(2)} m/s` : '-'
+        );
         updateField('control-lateral-error', c.lateral_error !== undefined ? `${c.lateral_error.toFixed(3)}m` : '-');
         updateField('control-heading-error', c.heading_error !== undefined ? `${(c.heading_error * 180 / Math.PI).toFixed(2)}°` : '-');
         updateField('control-total-error', c.total_error !== undefined ? c.total_error.toFixed(4) : '-');
         updateField('control-pid-integral', c.pid_integral !== undefined ? c.pid_integral.toFixed(4) : '-');
         updateField('control-pid-derivative', c.pid_derivative !== undefined ? c.pid_derivative.toFixed(4) : '-');
         updateField('control-pid-error', c.pid_error !== undefined ? c.pid_error.toFixed(4) : '-');
+        updateField(
+            'control-target-speed-raw',
+            c.target_speed_raw !== undefined ? `${c.target_speed_raw.toFixed(2)} m/s` : '-'
+        );
+        updateField(
+            'control-target-speed-post-limits',
+            c.target_speed_post_limits !== undefined ? `${c.target_speed_post_limits.toFixed(2)} m/s` : '-'
+        );
+        updateField(
+            'control-target-speed-planned',
+            c.target_speed_planned !== undefined ? `${c.target_speed_planned.toFixed(2)} m/s` : '-'
+        );
+        updateField(
+            'control-target-speed-final',
+            c.target_speed_final !== undefined ? `${c.target_speed_final.toFixed(2)} m/s` : '-'
+        );
+        updateField(
+            'control-target-speed-slew-active',
+            c.target_speed_slew_active !== undefined ? (c.target_speed_slew_active ? 'YES' : 'NO') : '-'
+        );
+        updateField(
+            'control-target-speed-ramp-active',
+            c.target_speed_ramp_active !== undefined ? (c.target_speed_ramp_active ? 'YES' : 'NO') : '-'
+        );
+        updateField(
+            'control-launch-throttle-cap',
+            c.launch_throttle_cap !== undefined ? c.launch_throttle_cap.toFixed(3) : '-'
+        );
+        updateField(
+            'control-launch-throttle-cap-active',
+            c.launch_throttle_cap_active !== undefined ? (c.launch_throttle_cap_active ? 'YES' : 'NO') : '-'
+        );
         updateField('control-is-straight', c.is_straight !== undefined ? (c.is_straight ? 'YES' : 'NO') : '-');
         updateField('control-straight-oscillation-rate', c.straight_oscillation_rate !== undefined ? c.straight_oscillation_rate.toFixed(3) : '-');
         updateField('control-tuned-deadband', c.tuned_deadband !== undefined ? c.tuned_deadband.toFixed(3) : '-');
@@ -1317,6 +1495,7 @@ class Visualizer {
         if (!this.currentFrameData || !this.currentFrameData.vehicle) return;
         
         const v = this.currentFrameData.vehicle;
+        const mpsToMph = (mps) => mps * 2.236936;
         
         const updateField = (id, value) => {
             const elem = document.getElementById(id);
@@ -1517,7 +1696,32 @@ class Visualizer {
             updateField('vehicle-y', `${v.position[1].toFixed(3)}m`);
             updateField('vehicle-z', `${v.position[2].toFixed(3)}m`);
         }
-        updateField('vehicle-speed', v.speed !== undefined ? `${v.speed.toFixed(2)}m/s` : '-');
+        if (v.speed !== undefined && v.speed !== null) {
+            const speedMph = mpsToMph(v.speed);
+            updateField('vehicle-speed', `${v.speed.toFixed(2)} m/s (${speedMph.toFixed(1)} mph)`);
+        } else {
+            updateField('vehicle-speed', '-');
+        }
+        if (v.speed_limit !== undefined && v.speed_limit !== null && v.speed_limit > 0) {
+            const limitMph = mpsToMph(v.speed_limit);
+            updateField('vehicle-speed-limit', `${v.speed_limit.toFixed(2)} m/s (${limitMph.toFixed(1)} mph)`);
+        } else {
+            updateField('vehicle-speed-limit', '-');
+        }
+        if (v.speed_limit_preview !== undefined && v.speed_limit_preview !== null && v.speed_limit_preview > 0) {
+            const previewMph = mpsToMph(v.speed_limit_preview);
+            updateField(
+                'vehicle-speed-limit-preview',
+                `${v.speed_limit_preview.toFixed(2)} m/s (${previewMph.toFixed(1)} mph)`
+            );
+        } else {
+            updateField('vehicle-speed-limit-preview', '-');
+        }
+        if (v.speed_limit_preview_distance !== undefined && v.speed_limit_preview_distance !== null && v.speed_limit_preview_distance > 0) {
+            updateField('vehicle-speed-limit-preview-distance', `${v.speed_limit_preview_distance.toFixed(1)} m`);
+        } else {
+            updateField('vehicle-speed-limit-preview-distance', '-');
+        }
         
         // Calculate heading from quaternion
         if (v.rotation) {
@@ -1532,6 +1736,9 @@ class Visualizer {
         if (!this.currentFrameData || !this.currentFrameData.ground_truth) return;
         
         const gt = this.currentFrameData.ground_truth;
+        const maxLateralAccel = 2.5;
+        const minCurveSpeed = 2.0;
+        const mpsToMph = (mps) => mps * 2.236936;
         
         const updateField = (id, value) => {
             const elem = document.getElementById(id);
@@ -1546,6 +1753,22 @@ class Visualizer {
         updateField('gt-left-x', gt_left_lane_line_x !== undefined ? `${gt_left_lane_line_x.toFixed(3)}m` : '-');
         updateField('gt-right-x', gt_right_lane_line_x !== undefined ? `${gt_right_lane_line_x.toFixed(3)}m` : '-');
         updateField('gt-center-x', gt.lane_center_x !== undefined ? `${gt.lane_center_x.toFixed(3)}m` : '-');
+        if (gt.path_curvature !== undefined && gt.path_curvature !== null) {
+            updateField('gt-path-curvature', `${gt.path_curvature.toFixed(4)} 1/m`);
+            if (Math.abs(gt.path_curvature) > 1e-6) {
+                let curveSpeed = Math.sqrt(maxLateralAccel / Math.abs(gt.path_curvature));
+                curveSpeed = Math.max(curveSpeed, minCurveSpeed);
+                updateField(
+                    'gt-curve-speed-limit',
+                    `${curveSpeed.toFixed(2)} m/s (${mpsToMph(curveSpeed).toFixed(1)} mph)`
+                );
+            } else {
+                updateField('gt-curve-speed-limit', '-');
+            }
+        } else {
+            updateField('gt-path-curvature', '-');
+            updateField('gt-curve-speed-limit', '-');
+        }
         
         if (gt_left_lane_line_x !== undefined && gt_right_lane_line_x !== undefined) {
             const width = gt_right_lane_line_x - gt_left_lane_line_x;

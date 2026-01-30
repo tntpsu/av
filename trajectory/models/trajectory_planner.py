@@ -1074,12 +1074,15 @@ class RuleBasedTrajectoryPlanner:
             heading = 0.0
         # Otherwise, trust the coordinate conversion - it's computed in vehicle space
         
+        center_coeffs = (np.asarray(left_coeffs) + np.asarray(right_coeffs)) / 2.0
+        curvature = self._compute_curvature(center_coeffs, y_image)
+        
         return {
             'x': center_x_vehicle,
             'y': center_y_vehicle,
             'heading': heading,
             'velocity': self.target_speed,
-            'curvature': 0.0  # Simplified
+            'curvature': curvature
         }
     
     def _create_straight_trajectory(self, vehicle_state: Optional[dict]) -> Trajectory:

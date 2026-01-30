@@ -90,7 +90,15 @@ class LateralController:
                  lookahead_distance: float = 10.0, max_steering: float = 0.5,
                  deadband: float = 0.02, heading_weight: float = 0.5,
                  lateral_weight: float = 0.5, error_clip: float = np.pi / 4,
-                 integral_limit: float = 0.3):
+                 integral_limit: float = 0.3, steering_smoothing_alpha: float = 0.7,
+                 curve_feedforward_gain: float = 1.0, curve_feedforward_threshold: float = 0.02,
+                 curve_feedforward_gain_min: float = 1.0, curve_feedforward_gain_max: float = 1.0,
+                 curve_feedforward_curvature_min: float = 0.005, curve_feedforward_curvature_max: float = 0.03,
+                 curve_feedforward_curvature_clamp: float = 0.03,
+                 straight_curvature_threshold: float = 0.01,
+                 steering_rate_curvature_min: float = 0.005,
+                 steering_rate_curvature_max: float = 0.03,
+                 steering_rate_scale_min: float = 0.5):
         """
         Initialize lateral controller.
         
@@ -108,6 +116,18 @@ class LateralController:
         self.heading_weight = heading_weight
         self.lateral_weight = lateral_weight
         self.error_clip = error_clip
+        self.steering_smoothing_alpha = steering_smoothing_alpha
+        self.curve_feedforward_gain = curve_feedforward_gain
+        self.curve_feedforward_threshold = curve_feedforward_threshold
+        self.curve_feedforward_gain_min = curve_feedforward_gain_min
+        self.curve_feedforward_gain_max = curve_feedforward_gain_max
+        self.curve_feedforward_curvature_min = curve_feedforward_curvature_min
+        self.curve_feedforward_curvature_max = curve_feedforward_curvature_max
+        self.curve_feedforward_curvature_clamp = curve_feedforward_curvature_clamp
+        self.steering_rate_curvature_min = steering_rate_curvature_min
+        self.steering_rate_curvature_max = steering_rate_curvature_max
+        self.steering_rate_scale_min = steering_rate_scale_min
+        self.smoothed_steering = None
         self.pid = PIDController(
             kp=kp,
             ki=ki,
@@ -128,7 +148,7 @@ class LateralController:
         self.error_smoothing_alpha = self.base_error_smoothing_alpha
 
         # Straight-away adaptive tuning (deadband + smoothing)
-        self.straight_curvature_threshold = 0.02
+        self.straight_curvature_threshold = straight_curvature_threshold
         self.straight_window = 60  # ~2 seconds at 30 FPS
         self.straight_oscillation_high = 0.20
         self.straight_oscillation_low = 0.05
@@ -163,7 +183,7 @@ class LateralController:
         # Get reference point data
         ref_x = reference_point['x']  # Already in vehicle frame (meters, lateral offset)
         ref_y = reference_point['y']  # Already in vehicle frame (meters, forward distance)
-        desired_heading = reference_point['heading']  # Path curvature (not correction needed)
+        desired_heading = reference_point['heading']  # Path heading (used for sign + fallback)
         
         # Compute heading error
         # CRITICAL FIX: On curves, ref_heading represents path curvature, not correction needed
@@ -176,10 +196,24 @@ class LateralController:
         # This is the correction needed, not the path curvature
         heading_to_ref = np.arctan2(ref_x, ref_y) if ref_y > 0.1 else 0.0
         
-        # Use path curvature (ref_heading) only for feedforward, not for error calculation
+        # Use path curvature only for feedforward, not for error calculation
         # For error calculation, use heading_to_ref (correction needed)
         # But blend with ref_heading for smooth curves
-        path_curvature = desired_heading  # This is the path curvature
+        raw_ref_curvature = float(reference_point.get('curvature', 0.0) or 0.0)
+        path_curvature = raw_ref_curvature
+        if path_curvature != 0.0:
+            heading_sign = np.sign(desired_heading)
+            if heading_sign == 0.0:
+                heading_sign = 1.0
+            path_curvature = abs(path_curvature) * heading_sign
+            if self.curve_feedforward_curvature_clamp and self.curve_feedforward_curvature_clamp > 0.0:
+                path_curvature = np.clip(
+                    path_curvature,
+                    -self.curve_feedforward_curvature_clamp,
+                    self.curve_feedforward_curvature_clamp
+                )
+        curve_metric = path_curvature if path_curvature != 0.0 else desired_heading
+        curve_metric_abs = abs(curve_metric)
         
         # On curves, we need both:
         # 1. Heading to point toward reference (correction)
@@ -284,7 +318,7 @@ class LateralController:
         # Add deadband to prevent constant small corrections
         # CRITICAL FIX: Don't apply deadband when on curves - we need continuous steering
         # On curves, even small errors need correction to maintain path following
-        is_on_curve = abs(path_curvature) > 0.05  # On a curve (curvature > ~3°)
+        is_on_curve = curve_metric_abs > 0.05  # On a curve (curvature > ~3°)
         if abs(total_error) < self.deadband and not is_on_curve:
             # Only apply deadband on straight roads, not on curves
             total_error = 0.0
@@ -322,7 +356,7 @@ class LateralController:
         # FIXED: Disable resets entirely when on curves to prevent jerky steering
         if abs(total_error) > 0.3:  # Large error (likely on curve)
             # Check if we're on a curve (path curvature > threshold)
-            is_on_curve = abs(path_curvature) > 0.05  # On a curve (curvature > ~3°)
+            is_on_curve = curve_metric_abs > 0.05  # On a curve (curvature > ~3°)
             
             # Estimate if steering would be maxed out
             estimated_steering = abs(self.pid.kp * total_error + self.pid.integral)
@@ -345,7 +379,7 @@ class LateralController:
         # FIXED: Disable resets entirely when on curves to prevent jerky steering
         if self.last_error_sign is not None and np.sign(total_error) != self.last_error_sign:
             # Check if we're on a curve (path curvature > threshold)
-            is_on_curve = abs(path_curvature) > 0.05  # On a curve (curvature > ~3°)
+            is_on_curve = curve_metric_abs > 0.05  # On a curve (curvature > ~3°)
             
             # CRITICAL FIX: Never reset on sign change when on a curve
             # Error oscillation is normal on curves - we need constant steering, not resets
@@ -468,26 +502,43 @@ class LateralController:
         # Smooth the path curvature to prevent rapid feedforward changes
         if not hasattr(self, 'smoothed_path_curvature'):
             self.smoothed_path_curvature = 0.0
-        smoothing_alpha = 0.7  # Exponential smoothing factor (0.7 = 70% new, 30% old)
-        self.smoothed_path_curvature = (smoothing_alpha * path_curvature + 
+        smoothing_alpha = 0.7  # Restore smoothing for stability
+        self.smoothed_path_curvature = (smoothing_alpha * path_curvature +
                                         (1.0 - smoothing_alpha) * self.smoothed_path_curvature)
         
         feedforward_steering = 0.0
+        curve_gain_scheduled = 1.0
+        abs_curvature = abs(self.smoothed_path_curvature)
+        if self.curve_feedforward_curvature_min is not None and self.curve_feedforward_curvature_max is not None:
+            min_curv = max(1e-6, self.curve_feedforward_curvature_min)
+            max_curv = max(min_curv, self.curve_feedforward_curvature_max)
+            if abs_curvature <= min_curv:
+                curve_gain_scheduled = self.curve_feedforward_gain_min
+            elif abs_curvature >= max_curv:
+                curve_gain_scheduled = self.curve_feedforward_gain_max
+            else:
+                ratio = (abs_curvature - min_curv) / (max_curv - min_curv)
+                curve_gain_scheduled = self.curve_feedforward_gain_min + ratio * (
+                    self.curve_feedforward_gain_max - self.curve_feedforward_gain_min
+                )
         
-        if abs(self.smoothed_path_curvature) > 0.01:  # Only apply feedforward on curves
+        if abs_curvature > 0.01:  # Only apply feedforward on curves
             # Convert curvature (1/m) to steering angle using bicycle model
             # curvature = 1/radius, steering = atan(wheelbase / radius) = atan(wheelbase * curvature)
             # For small angles: steering ≈ wheelbase * curvature
             # Normalize to [-1, 1] range
             raw_steering = wheelbase * self.smoothed_path_curvature  # Use smoothed curvature
             # Clamp to reasonable range (max steering angle in radians)
-            max_steering_rad = np.radians(30.0)  # 30 degrees max steering
+            max_steering_rad = np.radians(30.0)  # Restore feedforward scaling
             feedforward_steering = np.clip(raw_steering / max_steering_rad, -1.0, 1.0)
             # Scale by max_steering to match our steering range
             feedforward_steering *= self.max_steering
+            if abs_curvature >= self.curve_feedforward_threshold:
+                feedforward_steering *= self.curve_feedforward_gain * curve_gain_scheduled
+                feedforward_steering = np.clip(feedforward_steering, -self.max_steering, self.max_steering)
         
         # Track curve-to-straight transition for smooth integral decay
-        is_on_curve = abs(path_curvature) > 0.05  # On a curve (curvature > ~3°)
+        is_on_curve = curve_metric_abs > 0.05  # On a curve (curvature > ~3°)
         if not hasattr(self, 'was_on_curve'):
             self.was_on_curve = False
         if not hasattr(self, 'straight_transition_counter'):
@@ -553,14 +604,28 @@ class LateralController:
         error_magnitude = abs(total_error)
         if error_magnitude > 0.6:
             # Very large error (> 0.6) - allow fast steering changes for recovery
-            max_steering_rate = 0.5  # Fast recovery (was 0.2)
+            max_steering_rate = 0.5  # Restore recovery rate
         elif error_magnitude > 0.3:
             # Moderate error (0.3-0.6) - moderate rate limit
-            max_steering_rate = 0.3  # Moderate (was 0.2)
+            max_steering_rate = 0.3  # Restore moderate rate
         else:
             # Small error (< 0.3) - slow rate limit for smoothness
-            max_steering_rate = 0.2  # Smooth (original)
+            max_steering_rate = 0.2  # Restore smooth rate
         
+        # Curvature-aware scaling: reduce steering rate on sharper curves to limit jerk
+        rate_scale = 1.0
+        min_curv = max(1e-6, self.steering_rate_curvature_min)
+        max_curv = max(min_curv, self.steering_rate_curvature_max)
+        if curve_metric_abs <= min_curv:
+            rate_scale = 1.0
+        elif curve_metric_abs >= max_curv:
+            rate_scale = max(0.0, self.steering_rate_scale_min)
+        else:
+            ratio = (curve_metric_abs - min_curv) / (max_curv - min_curv)
+            min_scale = max(0.0, self.steering_rate_scale_min)
+            rate_scale = 1.0 - ratio * (1.0 - min_scale)
+        max_steering_rate *= rate_scale
+
         # FIXED: Increased steering rate limit for better curve tracking
         # Required steering for 50m curve is only 0.095 normalized, but need to reach it quickly
         # Increased to 0.2 per frame (6.0 per second at 30 FPS) for more responsive steering
@@ -574,7 +639,7 @@ class LateralController:
         else:
             # First frame - allow larger initial steering (up to 0.5) to respond to initial state
             # This is critical when starting on a curve where we need immediate steering
-            max_initial_steering_rate = 0.5  # FIXED: Increased from 0.4 to 0.5 for better initial response
+            max_initial_steering_rate = 0.5  # Restore initial response
             steering_change = steering_before_limits - self.last_steering
             if abs(steering_change) > max_initial_steering_rate:
                 steering_change = np.clip(steering_change, -max_initial_steering_rate, max_initial_steering_rate)
@@ -586,9 +651,16 @@ class LateralController:
         
         # Apply additional smoothing to prevent oscillation
         steering = np.clip(steering_before_limits, -self.max_steering, self.max_steering)
+        if self.steering_smoothing_alpha is not None:
+            if self.smoothed_steering is None:
+                self.smoothed_steering = steering
+            else:
+                alpha = np.clip(self.steering_smoothing_alpha, 0.0, 1.0)
+                self.smoothed_steering = (alpha * steering) + ((1.0 - alpha) * self.smoothed_steering)
+            steering = self.smoothed_steering
 
         # Straight-away adaptive tuning (deadband + smoothing)
-        is_straight = abs(path_curvature) < self.straight_curvature_threshold
+        is_straight = curve_metric_abs < self.straight_curvature_threshold
         if is_straight:
             steering_sign = np.sign(steering) if abs(steering) > 0.02 else 0
             if self._last_straight_sign != 0 and steering_sign != 0 and steering_sign != self._last_straight_sign:
@@ -635,6 +707,10 @@ class LateralController:
                 'total_error': stored_total_error,
                 'pid_integral': pid_integral,
                 'pid_derivative': pid_derivative,
+                'path_curvature_input': path_curvature,
+                'path_curvature_raw': raw_ref_curvature,
+                'curve_feedforward_gain_scheduled': curve_gain_scheduled,
+                'curve_feedforward_curvature_used': self.smoothed_path_curvature,
                 'is_straight': is_straight,
                 'straight_oscillation_rate': self.straight_oscillation_rate,
                 'tuned_deadband': self.deadband,
@@ -650,6 +726,7 @@ class LateralController:
         self.last_error_sign = None
         if hasattr(self, 'last_steering'):
             self.last_steering = 0.0
+        self.smoothed_steering = None
 
 
 class LongitudinalController:
@@ -658,7 +735,10 @@ class LongitudinalController:
     """
     
     def __init__(self, kp: float = 0.3, ki: float = 0.05, kd: float = 0.02,
-                 target_speed: float = 8.0, max_speed: float = 10.0):
+                 target_speed: float = 8.0, max_speed: float = 10.0,
+                 throttle_rate_limit: float = 0.08, brake_rate_limit: float = 0.15,
+                 throttle_smoothing_alpha: float = 0.6, speed_smoothing_alpha: float = 0.7,
+                 min_throttle_when_accel: float = 0.0):
         """
         Initialize longitudinal controller.
         
@@ -672,6 +752,15 @@ class LongitudinalController:
         self.target_speed = target_speed
         self.max_speed = max_speed
         self.last_speed = 0.0  # For speed smoothing
+        self.throttle_rate_limit = throttle_rate_limit
+        self.brake_rate_limit = brake_rate_limit
+        self.throttle_smoothing_alpha = throttle_smoothing_alpha
+        self.speed_smoothing_alpha = speed_smoothing_alpha
+        self.min_throttle_when_accel = min_throttle_when_accel
+        self.last_throttle = 0.0
+        self.last_brake = 0.0
+        self.last_throttle_before_limits = 0.0
+        self.last_brake_before_limits = 0.0
         self.pid_throttle = PIDController(
             kp=kp,
             ki=ki,
@@ -713,6 +802,10 @@ class LongitudinalController:
             dt = 0.033
             self.pid_brake.update(speed_excess, dt)
             self.last_speed = current_speed
+            self.last_throttle = throttle
+            self.last_brake = brake
+            self.last_throttle_before_limits = throttle
+            self.last_brake_before_limits = brake
             return throttle, brake
         
         # Also limit reference velocity to prevent requesting high speeds
@@ -720,25 +813,32 @@ class LongitudinalController:
             reference_velocity = self.max_speed * 0.9  # Cap at 90% of max
         
         # Speed smoothing - filter rapid changes
-        alpha = 0.7  # Smoothing factor
+        alpha = self.speed_smoothing_alpha
         smoothed_speed = alpha * self.last_speed + (1 - alpha) * current_speed
         self.last_speed = smoothed_speed
         
         # Compute speed error using smoothed speed
         speed_error = reference_velocity - smoothed_speed
+        # Guard: never brake when actual speed is still below target.
+        # Smoothing can temporarily report a negative error while we're still under-speed.
+        raw_speed_error = reference_velocity - current_speed
+        if raw_speed_error > 0.0 and speed_error < 0.0:
+            speed_error = raw_speed_error
         
         dt = 0.033  # Assume ~30 Hz update rate
         
         # FIXED: Add hysteresis to prevent throttle/brake oscillation
         # Use different thresholds for throttle vs brake to create a "dead zone"
         # This prevents rapid switching when speed is near target
-        throttle_threshold = 0.15  # Need 0.15 m/s below target to throttle
-        brake_threshold = -0.15   # Need 0.15 m/s above target to brake
-        # Dead zone: -0.15 to +0.15 m/s = no throttle, no brake (coast)
+        throttle_threshold = 0.05  # Need 0.05 m/s below target to throttle
+        brake_threshold = -0.05   # Need 0.05 m/s above target to brake
+        # Dead zone: -0.05 to +0.05 m/s = no throttle, no brake (coast)
         
         if speed_error > throttle_threshold:  # Need to accelerate
             # Compute base throttle from PID
             base_throttle = self.pid_throttle.update(speed_error, dt)
+            if raw_speed_error > 0.2 and current_speed < reference_velocity:
+                base_throttle = max(base_throttle, self.min_throttle_when_accel)
             
             # FIXED: Add initial throttle limiting when starting from rest
             # CRITICAL FIX: Limit throttle to prevent unrealistic acceleration
@@ -781,12 +881,37 @@ class LongitudinalController:
             brake = 0.0
             # Don't reset controllers in dead zone - allows smooth transitions
         
+        self.last_throttle_before_limits = throttle
+        self.last_brake_before_limits = brake
+
+        if self.throttle_smoothing_alpha is not None:
+            alpha = np.clip(self.throttle_smoothing_alpha, 0.0, 1.0)
+            throttle = (alpha * throttle) + ((1.0 - alpha) * self.last_throttle)
+        if self.throttle_rate_limit > 0.0:
+            throttle = np.clip(
+                throttle,
+                self.last_throttle - self.throttle_rate_limit,
+                self.last_throttle + self.throttle_rate_limit
+            )
+        if self.brake_rate_limit > 0.0:
+            brake = np.clip(
+                brake,
+                self.last_brake - self.brake_rate_limit,
+                self.last_brake + self.brake_rate_limit
+            )
+        self.last_throttle = throttle
+        self.last_brake = brake
+
         return throttle, brake
     
     def reset(self):
         """Reset controllers."""
         self.pid_throttle.reset()
         self.pid_brake.reset()
+        self.last_throttle = 0.0
+        self.last_brake = 0.0
+        self.last_throttle_before_limits = 0.0
+        self.last_brake_before_limits = 0.0
 
 
 class VehicleController:
@@ -798,7 +923,19 @@ class VehicleController:
                  longitudinal_kp: float = 0.3, longitudinal_ki: float = 0.05, longitudinal_kd: float = 0.02,
                  lookahead_distance: float = 10.0, target_speed: float = 8.0, max_speed: float = 10.0, max_steering: float = 0.5,
                  lateral_deadband: float = 0.02, lateral_heading_weight: float = 0.5, lateral_lateral_weight: float = 0.5,
-                 lateral_error_clip: float = None, lateral_integral_limit: float = 0.3):
+                 lateral_error_clip: float = None, lateral_integral_limit: float = 0.3,
+                 throttle_rate_limit: float = 0.08, brake_rate_limit: float = 0.15,
+                 throttle_smoothing_alpha: float = 0.6, speed_smoothing_alpha: float = 0.7,
+                 min_throttle_when_accel: float = 0.0,
+                 steering_smoothing_alpha: float = 0.7,
+                 curve_feedforward_gain: float = 1.0, curve_feedforward_threshold: float = 0.02,
+                 curve_feedforward_gain_min: float = 1.0, curve_feedforward_gain_max: float = 1.0,
+                 curve_feedforward_curvature_min: float = 0.005, curve_feedforward_curvature_max: float = 0.03,
+                 curve_feedforward_curvature_clamp: float = 0.03,
+                 straight_curvature_threshold: float = 0.01,
+                 steering_rate_curvature_min: float = 0.005,
+                 steering_rate_curvature_max: float = 0.03,
+                 steering_rate_scale_min: float = 0.5):
         """
         Initialize vehicle controller.
         
@@ -827,14 +964,31 @@ class VehicleController:
             heading_weight=lateral_heading_weight,
             lateral_weight=lateral_lateral_weight,
             error_clip=lateral_error_clip,
-            integral_limit=lateral_integral_limit
+            integral_limit=lateral_integral_limit,
+            steering_smoothing_alpha=steering_smoothing_alpha,
+            curve_feedforward_gain=curve_feedforward_gain,
+            curve_feedforward_threshold=curve_feedforward_threshold,
+            curve_feedforward_gain_min=curve_feedforward_gain_min,
+            curve_feedforward_gain_max=curve_feedforward_gain_max,
+            curve_feedforward_curvature_min=curve_feedforward_curvature_min,
+            curve_feedforward_curvature_max=curve_feedforward_curvature_max,
+            curve_feedforward_curvature_clamp=curve_feedforward_curvature_clamp,
+            straight_curvature_threshold=straight_curvature_threshold,
+            steering_rate_curvature_min=steering_rate_curvature_min,
+            steering_rate_curvature_max=steering_rate_curvature_max,
+            steering_rate_scale_min=steering_rate_scale_min
         )
         self.longitudinal_controller = LongitudinalController(
             kp=longitudinal_kp,
             ki=longitudinal_ki,
             kd=longitudinal_kd,
             target_speed=target_speed,
-            max_speed=max_speed
+            max_speed=max_speed,
+            throttle_rate_limit=throttle_rate_limit,
+            brake_rate_limit=brake_rate_limit,
+            throttle_smoothing_alpha=throttle_smoothing_alpha,
+            speed_smoothing_alpha=speed_smoothing_alpha,
+            min_throttle_when_accel=min_throttle_when_accel
         )
     
     def compute_control(self, current_state: dict, reference_point: dict, 
@@ -887,8 +1041,8 @@ class VehicleController:
         if return_metadata:
             result.update(lateral_metadata)
             # For throttle/brake, we don't track before_limits separately yet
-            result['throttle_before_limits'] = throttle
-            result['brake_before_limits'] = brake
+            result['throttle_before_limits'] = self.longitudinal_controller.last_throttle_before_limits
+            result['brake_before_limits'] = self.longitudinal_controller.last_brake_before_limits
         
         return result
     

@@ -88,6 +88,22 @@ class DriveMetrics:
     error_conflict_rate: float
     stale_command_rate: float
     
+    # Speed control and comfort
+    speed_error_rmse: float
+    speed_error_mean: float
+    speed_error_max: float
+    speed_overspeed_rate: float
+    acceleration_mean: float
+    acceleration_max: float
+    acceleration_p95: float
+    jerk_mean: float
+    jerk_max: float
+    jerk_p95: float
+    lateral_accel_p95: float
+    lateral_jerk_p95: float
+    lateral_jerk_max: float
+    speed_limit_zero_rate: float
+    
     # Safety
     out_of_lane_events: int
     out_of_lane_time: float
@@ -96,11 +112,13 @@ class DriveMetrics:
 class DriveAnalyzer:
     """Comprehensive drive analysis."""
     
-    def __init__(self, recording_path: Path):
+    def __init__(self, recording_path: Path, stop_on_emergency: bool = True):
         """Initialize analyzer."""
         self.recording_path = recording_path
+        self.stop_on_emergency = stop_on_emergency
         self.data = {}
         self.metrics = None
+        self.emergency_stop_frame = None
         
     def load_data(self) -> bool:
         """Load all data from recording."""
@@ -112,10 +130,18 @@ class DriveAnalyzer:
                     self.data['position'] = np.array(f['vehicle_state/position'][:]) if 'vehicle_state/position' in f else None
                     self.data['speed'] = np.array(f['vehicle_state/speed'][:]) if 'vehicle_state/speed' in f else None
                     self.data['heading'] = np.array(f['vehicle_state/heading'][:]) if 'vehicle_state/heading' in f else None
+                    self.data['speed_limit'] = (
+                        np.array(f['vehicle_state/speed_limit'][:])
+                        if 'vehicle_state/speed_limit' in f else None
+                    )
                 elif 'vehicle/timestamps' in f:
                     self.data['timestamps'] = np.array(f['vehicle/timestamps'][:])
                     self.data['position'] = np.array(f['vehicle/position'][:]) if 'vehicle/position' in f else None
                     self.data['speed'] = np.array(f['vehicle/speed'][:]) if 'vehicle/speed' in f else None
+                    self.data['speed_limit'] = (
+                        np.array(f['vehicle/speed_limit'][:])
+                        if 'vehicle/speed_limit' in f else None
+                    )
                 else:
                     # Fallback to control timestamps
                     self.data['timestamps'] = np.array(f['control/timestamp'][:])
@@ -124,6 +150,9 @@ class DriveAnalyzer:
                 self.data['steering'] = np.array(f['control/steering'][:])
                 self.data['throttle'] = np.array(f['control/throttle'][:]) if 'control/throttle' in f else None
                 self.data['brake'] = np.array(f['control/brake'][:]) if 'control/brake' in f else None
+                self.data['emergency_stop'] = (
+                    np.array(f['control/emergency_stop'][:]) if 'control/emergency_stop' in f else None
+                )
                 self.data['lateral_error'] = np.array(f['control/lateral_error'][:]) if 'control/lateral_error' in f else None
                 self.data['heading_error'] = np.array(f['control/heading_error'][:]) if 'control/heading_error' in f else None
                 self.data['total_error'] = np.array(f['control/total_error'][:]) if 'control/total_error' in f else None
@@ -135,6 +164,10 @@ class DriveAnalyzer:
                 self.data['ref_x'] = np.array(f['trajectory/reference_point_x'][:]) if 'trajectory/reference_point_x' in f else None
                 self.data['ref_y'] = np.array(f['trajectory/reference_point_y'][:]) if 'trajectory/reference_point_y' in f else None
                 self.data['ref_heading'] = np.array(f['trajectory/reference_point_heading'][:]) if 'trajectory/reference_point_heading' in f else None
+                self.data['ref_velocity'] = (
+                    np.array(f['trajectory/reference_point_velocity'][:])
+                    if 'trajectory/reference_point_velocity' in f else None
+                )
                 
                 # Perception data
                 self.data['left_lane_x'] = np.array(f['perception/left_lane_line_x'][:]) if 'perception/left_lane_line_x' in f else None
@@ -153,6 +186,10 @@ class DriveAnalyzer:
                 self.data['gt_left'] = np.array(f['ground_truth/left_lane_line_x'][:]) if 'ground_truth/left_lane_line_x' in f else None
                 self.data['gt_right'] = np.array(f['ground_truth/right_lane_line_x'][:]) if 'ground_truth/right_lane_line_x' in f else None
                 self.data['gt_center'] = np.array(f['ground_truth/lane_center_x'][:]) if 'ground_truth/lane_center_x' in f else None
+                self.data['gt_path_curvature'] = (
+                    np.array(f['ground_truth/path_curvature'][:])
+                    if 'ground_truth/path_curvature' in f else None
+                )
                 
                 # Calculate time axis
                 if len(self.data['timestamps']) > 0:
@@ -167,21 +204,89 @@ class DriveAnalyzer:
     
     def calculate_metrics(self) -> DriveMetrics:
         """Calculate all metrics."""
+        if self.stop_on_emergency and self.data.get('emergency_stop') is not None:
+            emergency_indices = np.where(self.data['emergency_stop'] > 0)[0]
+            if emergency_indices.size > 0:
+                self.emergency_stop_frame = int(emergency_indices[0])
+                for key in self.data:
+                    if isinstance(self.data[key], np.ndarray) and len(self.data[key]) > self.emergency_stop_frame:
+                        self.data[key] = self.data[key][:self.emergency_stop_frame]
+
         n_frames = len(self.data['steering'])
         dt = np.mean(np.diff(self.data['time'])) if len(self.data['time']) > 1 else 0.033
         duration = self.data['time'][-1] if len(self.data['time']) > 0 else n_frames * dt
+        if n_frames == 0:
+            return DriveMetrics(
+                drive_duration=0.0,
+                total_frames=0,
+                success_rate=0.0,
+                lateral_error_rmse=0.0,
+                lateral_error_mean=0.0,
+                lateral_error_max=0.0,
+                lateral_error_std=0.0,
+                lateral_error_p50=0.0,
+                lateral_error_p95=0.0,
+                heading_error_rmse=0.0,
+                heading_error_mean=0.0,
+                heading_error_max=0.0,
+                time_in_lane=0.0,
+                time_in_lane_centered=0.0,
+                steering_jerk_mean=0.0,
+                steering_jerk_max=0.0,
+                steering_rate_mean=0.0,
+                steering_rate_max=0.0,
+                steering_smoothness=0.0,
+                oscillation_frequency=0.0,
+                control_effort=0.0,
+                straight_frames=0,
+                straight_oscillation_rate=0.0,
+                straight_stability_score=0.0,
+                lane_detection_rate=0.0,
+                perception_confidence_mean=0.0,
+                perception_confidence_std=0.0,
+                perception_jumps_detected=0,
+                stale_perception_rate=0.0,
+                perception_freeze_events=0,
+                trajectory_availability=0.0,
+                ref_point_accuracy_rmse=0.0,
+                trajectory_smoothness=0.0,
+                path_curvature_consistency=0.0,
+                pid_integral_max=0.0,
+                pid_reset_frequency=0.0,
+                error_conflict_rate=0.0,
+                stale_command_rate=0.0,
+                speed_error_rmse=0.0,
+                speed_error_mean=0.0,
+                speed_error_max=0.0,
+                speed_overspeed_rate=0.0,
+                acceleration_mean=0.0,
+                acceleration_max=0.0,
+                acceleration_p95=0.0,
+                jerk_mean=0.0,
+                jerk_max=0.0,
+                jerk_p95=0.0,
+                lateral_accel_p95=0.0,
+                lateral_jerk_p95=0.0,
+                lateral_jerk_max=0.0,
+                speed_limit_zero_rate=0.0,
+                out_of_lane_events=0,
+                out_of_lane_time=0.0
+            )
         
         # 1. PATH TRACKING METRICS
-        lateral_error_rmse = np.sqrt(np.mean(self.data['lateral_error']**2)) if self.data['lateral_error'] is not None else 0.0
-        lateral_error_mean = np.mean(np.abs(self.data['lateral_error'])) if self.data['lateral_error'] is not None else 0.0
-        lateral_error_max = np.max(np.abs(self.data['lateral_error'])) if self.data['lateral_error'] is not None else 0.0
-        lateral_error_std = np.std(self.data['lateral_error']) if self.data['lateral_error'] is not None else 0.0
-        lateral_error_p50 = np.percentile(np.abs(self.data['lateral_error']), 50) if self.data['lateral_error'] is not None else 0.0
-        lateral_error_p95 = np.percentile(np.abs(self.data['lateral_error']), 95) if self.data['lateral_error'] is not None else 0.0
+        lateral_error_valid = self.data['lateral_error'] is not None and len(self.data['lateral_error']) > 0
+        heading_error_valid = self.data['heading_error'] is not None and len(self.data['heading_error']) > 0
+
+        lateral_error_rmse = np.sqrt(np.mean(self.data['lateral_error']**2)) if lateral_error_valid else 0.0
+        lateral_error_mean = np.mean(np.abs(self.data['lateral_error'])) if lateral_error_valid else 0.0
+        lateral_error_max = np.max(np.abs(self.data['lateral_error'])) if lateral_error_valid else 0.0
+        lateral_error_std = np.std(self.data['lateral_error']) if lateral_error_valid else 0.0
+        lateral_error_p50 = np.percentile(np.abs(self.data['lateral_error']), 50) if lateral_error_valid else 0.0
+        lateral_error_p95 = np.percentile(np.abs(self.data['lateral_error']), 95) if lateral_error_valid else 0.0
         
-        heading_error_rmse = np.sqrt(np.mean(self.data['heading_error']**2)) if self.data['heading_error'] is not None else 0.0
-        heading_error_mean = np.mean(np.abs(self.data['heading_error'])) if self.data['heading_error'] is not None else 0.0
-        heading_error_max = np.max(np.abs(self.data['heading_error'])) if self.data['heading_error'] is not None else 0.0
+        heading_error_rmse = np.sqrt(np.mean(self.data['heading_error']**2)) if heading_error_valid else 0.0
+        heading_error_mean = np.mean(np.abs(self.data['heading_error'])) if heading_error_valid else 0.0
+        heading_error_max = np.max(np.abs(self.data['heading_error'])) if heading_error_valid else 0.0
         
         # Time in lane (primary: within lane boundaries if GT available)
         time_in_lane_centered = (
@@ -302,6 +407,72 @@ class DriveAnalyzer:
             with h5py.File(self.recording_path, 'r') as f:
                 stale_commands = np.array(f['control/using_stale_perception'][:])
                 stale_command_rate = np.sum(stale_commands) / n_frames * 100
+
+        # 5.5 SPEED CONTROL + COMFORT
+        speed_error_rmse = 0.0
+        speed_error_mean = 0.0
+        speed_error_max = 0.0
+        speed_overspeed_rate = 0.0
+        if self.data['speed'] is not None and self.data['ref_velocity'] is not None:
+            n_speed = min(len(self.data['speed']), len(self.data['ref_velocity']))
+            if n_speed > 0:
+                speed = self.data['speed'][:n_speed]
+                ref_speed = self.data['ref_velocity'][:n_speed]
+                speed_error = speed - ref_speed
+                speed_error_rmse = float(np.sqrt(np.mean(speed_error ** 2)))
+                speed_error_mean = float(np.mean(np.abs(speed_error)))
+                speed_error_max = float(np.max(np.abs(speed_error)))
+                overspeed_threshold = 0.5
+                speed_overspeed_rate = float(np.sum(speed_error > overspeed_threshold) / n_speed * 100)
+
+        acceleration_mean = 0.0
+        acceleration_max = 0.0
+        acceleration_p95 = 0.0
+        jerk_mean = 0.0
+        jerk_max = 0.0
+        jerk_p95 = 0.0
+        lateral_accel_p95 = 0.0
+        lateral_jerk_p95 = 0.0
+        lateral_jerk_max = 0.0
+        speed_limit_zero_rate = 0.0
+        if self.data['speed'] is not None and len(self.data['speed']) > 1 and len(self.data['time']) > 1:
+            dt_series = np.diff(self.data['time'])
+            dt_series[dt_series <= 0] = dt
+            acceleration = np.diff(self.data['speed']) / dt_series
+            if acceleration.size > 0:
+                abs_accel = np.abs(acceleration)
+                acceleration_mean = float(np.mean(abs_accel))
+                acceleration_max = float(np.max(abs_accel))
+                acceleration_p95 = float(np.percentile(abs_accel, 95))
+            if acceleration.size > 1:
+                jerk = np.diff(acceleration) / dt_series[1:]
+                if jerk.size > 0:
+                    abs_jerk = np.abs(jerk)
+                    jerk_mean = float(np.mean(abs_jerk))
+                    jerk_max = float(np.max(abs_jerk))
+                    jerk_p95 = float(np.percentile(abs_jerk, 95))
+            curvature = None
+            if self.data.get('gt_path_curvature') is not None:
+                curvature = self.data['gt_path_curvature']
+            elif self.data.get('path_curvature_input') is not None:
+                curvature = self.data['path_curvature_input']
+            if curvature is not None:
+                n_lat = min(len(curvature), len(self.data['speed']))
+                if n_lat > 1:
+                    lat_accel = (self.data['speed'][:n_lat] ** 2) * curvature[:n_lat]
+                    abs_lat_accel = np.abs(lat_accel)
+                    lateral_accel_p95 = float(np.percentile(abs_lat_accel, 95))
+                    lat_dt = np.diff(self.data['time'][:n_lat])
+                    lat_dt[lat_dt <= 0] = dt
+                    lat_jerk = np.diff(lat_accel) / lat_dt
+                    if lat_jerk.size > 0:
+                        abs_lat_jerk = np.abs(lat_jerk)
+                        lateral_jerk_p95 = float(np.percentile(abs_lat_jerk, 95))
+                        lateral_jerk_max = float(np.max(abs_lat_jerk))
+        if self.data.get('speed_limit') is not None and len(self.data['speed_limit']) > 0:
+            speed_limit_zero_rate = float(
+                np.sum(self.data['speed_limit'] <= 0.01) / len(self.data['speed_limit']) * 100
+            )
         
         # 6. SAFETY METRICS
         # Out of lane events (lateral error > 1.0m, typical lane width is ~3.5m, so 1.0m is significant)
@@ -354,6 +525,20 @@ class DriveAnalyzer:
             pid_reset_frequency=pid_reset_frequency,
             error_conflict_rate=error_conflict_rate,
             stale_command_rate=stale_command_rate,
+            speed_error_rmse=speed_error_rmse,
+            speed_error_mean=speed_error_mean,
+            speed_error_max=speed_error_max,
+            speed_overspeed_rate=speed_overspeed_rate,
+            acceleration_mean=acceleration_mean,
+            acceleration_max=acceleration_max,
+            acceleration_p95=acceleration_p95,
+            jerk_mean=jerk_mean,
+            jerk_max=jerk_max,
+            jerk_p95=jerk_p95,
+            lateral_accel_p95=lateral_accel_p95,
+            lateral_jerk_p95=lateral_jerk_p95,
+            lateral_jerk_max=lateral_jerk_max,
+            speed_limit_zero_rate=speed_limit_zero_rate,
             out_of_lane_events=out_of_lane_events,
             out_of_lane_time=out_of_lane_time
         )
@@ -378,6 +563,9 @@ class DriveAnalyzer:
         print(f"   Drive Duration: {self.metrics.drive_duration:.2f} seconds")
         print(f"   Total Frames: {self.metrics.total_frames}")
         print(f"   Success Rate: {self.metrics.success_rate:.1f}% (time in lane)")
+        if self.emergency_stop_frame is not None:
+            suffix = " (analysis truncated)" if self.stop_on_emergency else ""
+            print(f"   Emergency Stop Frame: {self.emergency_stop_frame}{suffix}")
         print()
         
         # Overall score (weighted combination)
@@ -402,6 +590,14 @@ class DriveAnalyzer:
             issues.append(f"Low detection rate ({self.metrics.lane_detection_rate:.1f}%)")
         if self.metrics.stale_perception_rate > 10:
             issues.append(f"High stale data usage ({self.metrics.stale_perception_rate:.1f}%)")
+        if self.metrics.speed_limit_zero_rate > 10:
+            issues.append(f"Speed limit missing ({self.metrics.speed_limit_zero_rate:.1f}%)")
+        if self.metrics.acceleration_p95 > 2.5:
+            issues.append("High longitudinal acceleration")
+        if self.metrics.jerk_p95 > 5.0:
+            issues.append("High longitudinal jerk")
+        if self.emergency_stop_frame is not None:
+            issues.append(f"Emergency stop at frame {self.emergency_stop_frame}")
         
         if issues:
             print("   Key Issues:")
@@ -452,8 +648,43 @@ class DriveAnalyzer:
         print(f"     Stability Score: {self.metrics.straight_stability_score:.2f} (higher is better)")
         print()
         
-        # 4. PERCEPTION QUALITY
-        print("4. PERCEPTION QUALITY")
+        # 4. SPEED CONTROL
+        print("4. SPEED CONTROL")
+        print("-" * 80)
+        print(f"   Speed Tracking Error:")
+        print(f"     RMSE: {self.metrics.speed_error_rmse:.3f} m/s")
+        print(f"     Mean: {self.metrics.speed_error_mean:.3f} m/s")
+        print(f"     Max:  {self.metrics.speed_error_max:.3f} m/s")
+        print(f"     Overspeed Rate (>0.5 m/s): {self.metrics.speed_overspeed_rate:.1f}%")
+        print()
+        print(f"   Speed Limit Missing: {self.metrics.speed_limit_zero_rate:.1f}%")
+        print()
+        
+        # 5. COMFORT
+        print("5. COMFORT")
+        print("-" * 80)
+        print(f"   Longitudinal Acceleration:")
+        print(f"     Mean: {self.metrics.acceleration_mean:.3f} m/s²")
+        print(f"     P95:  {self.metrics.acceleration_p95:.3f} m/s²")
+        print(f"     Max:  {self.metrics.acceleration_max:.3f} m/s²")
+        print()
+        print(f"   Longitudinal Jerk:")
+        print(f"     Mean: {self.metrics.jerk_mean:.3f} m/s³")
+        print(f"     P95:  {self.metrics.jerk_p95:.3f} m/s³")
+        print(f"     Max:  {self.metrics.jerk_max:.3f} m/s³")
+        print()
+        print(f"   Lateral Accel/Jerk (from curvature):")
+        print(f"     Accel P95: {self.metrics.lateral_accel_p95:.3f} m/s²")
+        print(f"     Jerk P95:  {self.metrics.lateral_jerk_p95:.3f} m/s³")
+        print(f"     Jerk Max:  {self.metrics.lateral_jerk_max:.3f} m/s³")
+        print()
+        print(f"   Steering Jerk:")
+        print(f"     Mean: {self.metrics.steering_jerk_mean:.3f} per s²")
+        print(f"     Max:  {self.metrics.steering_jerk_max:.3f} per s²")
+        print()
+        
+        # 6. PERCEPTION QUALITY
+        print("6. PERCEPTION QUALITY")
         print("-" * 80)
         print(f"   Lane Detection Rate: {self.metrics.lane_detection_rate:.1f}%")
         print(f"   Confidence:")
@@ -465,8 +696,8 @@ class DriveAnalyzer:
         print(f"   Perception Freeze Events: {self.metrics.perception_freeze_events}")
         print()
         
-        # 5. TRAJECTORY QUALITY
-        print("5. TRAJECTORY QUALITY")
+        # 7. TRAJECTORY QUALITY
+        print("7. TRAJECTORY QUALITY")
         print("-" * 80)
         print(f"   Trajectory Availability: {self.metrics.trajectory_availability:.1f}%")
         print(f"   Reference Point Accuracy (RMSE): {self.metrics.ref_point_accuracy_rmse:.4f} m")
@@ -474,8 +705,8 @@ class DriveAnalyzer:
         print(f"   Path Curvature Consistency: {self.metrics.path_curvature_consistency:.2f} (higher is better)")
         print()
         
-        # 6. SYSTEM HEALTH
-        print("6. SYSTEM HEALTH")
+        # 8. SYSTEM HEALTH
+        print("8. SYSTEM HEALTH")
         print("-" * 80)
         print(f"   PID Integral Max: {self.metrics.pid_integral_max:.4f}")
         print(f"   PID Reset Frequency: {self.metrics.pid_reset_frequency:.2f} per second")
@@ -483,15 +714,15 @@ class DriveAnalyzer:
         print(f"   Stale Command Rate: {self.metrics.stale_command_rate:.1f}%")
         print()
         
-        # 7. SAFETY METRICS
-        print("7. SAFETY METRICS")
+        # 9. SAFETY METRICS
+        print("9. SAFETY METRICS")
         print("-" * 80)
         print(f"   Out-of-Lane Events: {self.metrics.out_of_lane_events}")
         print(f"   Out-of-Lane Time: {self.metrics.out_of_lane_time:.1f}%")
         print()
         
-        # 8. RECOMMENDATIONS
-        print("8. RECOMMENDATIONS")
+        # 10. RECOMMENDATIONS
+        print("10. RECOMMENDATIONS")
         print("-" * 80)
         recommendations = []
         
@@ -505,10 +736,16 @@ class DriveAnalyzer:
             recommendations.append("Improve lane detection - check perception model or CV fallback")
         if self.metrics.stale_perception_rate > 10:
             recommendations.append("Reduce stale data usage - relax jump detection threshold or improve perception")
+        if self.metrics.speed_limit_zero_rate > 10:
+            recommendations.append("Speed limit missing - verify Unity track speed limits are sent to the bridge")
         if self.metrics.error_conflict_rate > 20:
             recommendations.append("Reduce error conflicts - check heading/lateral error weighting")
         if self.metrics.pid_integral_max > 0.2:
             recommendations.append("Reduce PID integral accumulation - check integral reset mechanisms")
+        if self.metrics.acceleration_p95 > 2.5:
+            recommendations.append("Reduce longitudinal acceleration spikes - tune throttle/brake gains")
+        if self.metrics.jerk_p95 > 5.0:
+            recommendations.append("Reduce longitudinal jerk - add rate limiting on throttle/brake")
         
         if recommendations:
             for i, rec in enumerate(recommendations, 1):
@@ -548,6 +785,9 @@ def main():
     parser.add_argument("recording", nargs="?", help="Path to recording file")
     parser.add_argument("--latest", action="store_true", help="Analyze latest recording")
     parser.add_argument("--list", action="store_true", help="List available recordings")
+    stop_group = parser.add_mutually_exclusive_group()
+    stop_group.add_argument("--stop-on-emergency", action="store_true", help="Stop analysis at emergency stop")
+    stop_group.add_argument("--no-stop-on-emergency", action="store_true", help="Analyze full run even after emergency stop")
     
     args = parser.parse_args()
     
@@ -576,7 +816,12 @@ def main():
         print(f"Error: Recording file not found: {recording_path}")
         return
     
-    analyzer = DriveAnalyzer(recording_path)
+    stop_on_emergency = True
+    if args.no_stop_on_emergency:
+        stop_on_emergency = False
+    elif args.stop_on_emergency:
+        stop_on_emergency = True
+    analyzer = DriveAnalyzer(recording_path, stop_on_emergency=stop_on_emergency)
     analyzer.print_report()
 
 
