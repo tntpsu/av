@@ -352,6 +352,48 @@ class DataRecorder:
             maxshape=max_shape,
             dtype=np.float32
         )
+        self.h5_file.create_dataset(
+            "vehicle/road_frame_lateral_offset",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "vehicle/road_heading_deg",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "vehicle/car_heading_deg",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "vehicle/heading_delta_deg",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "vehicle/road_frame_lane_center_offset",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "vehicle/road_frame_lane_center_error",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "vehicle/vehicle_frame_lookahead_offset",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
         
         # Control commands
         self.h5_file.create_dataset(
@@ -1236,6 +1278,13 @@ class DataRecorder:
         road_center_at_lookahead_y = []
         road_center_at_lookahead_z = []
         road_center_reference_t = []
+        road_frame_lateral_offset = []
+        road_heading_deg = []
+        car_heading_deg = []
+        heading_delta_deg = []
+        road_frame_lane_center_offset = []
+        road_frame_lane_center_error = []
+        vehicle_frame_lookahead_offset = []
         
         for frame in frames:
             vs = frame.vehicle_state
@@ -1327,6 +1376,13 @@ class DataRecorder:
             road_center_at_lookahead_y.append(getattr(vs, 'road_center_at_lookahead_y', 0.0))
             road_center_at_lookahead_z.append(getattr(vs, 'road_center_at_lookahead_z', 0.0))
             road_center_reference_t.append(getattr(vs, 'road_center_reference_t', 0.0))
+            road_frame_lateral_offset.append(getattr(vs, 'road_frame_lateral_offset', 0.0))
+            road_heading_deg.append(getattr(vs, 'road_heading_deg', 0.0))
+            car_heading_deg.append(getattr(vs, 'car_heading_deg', 0.0))
+            heading_delta_deg.append(getattr(vs, 'heading_delta_deg', 0.0))
+            road_frame_lane_center_offset.append(getattr(vs, 'road_frame_lane_center_offset', 0.0))
+            road_frame_lane_center_error.append(getattr(vs, 'road_frame_lane_center_error', 0.0))
+            vehicle_frame_lookahead_offset.append(getattr(vs, 'vehicle_frame_lookahead_offset', 0.0))
             # Debug: Log first few frames to see what we're getting
             if len(camera_8m_screen_y) <= 3:
                 logger.debug(f"[RECORDER] Frame {len(camera_8m_screen_y)-1}: camera_8m_screen_y = {cam_value} (from VehicleState)")
@@ -1472,6 +1528,40 @@ class DataRecorder:
                         self.h5_file["vehicle/road_center_at_lookahead_z"][current_size:] = np.array(road_center_at_lookahead_z, dtype=np.float32)
                         self.h5_file["vehicle/road_center_reference_t"].resize((current_size + len(road_center_reference_t),))
                         self.h5_file["vehicle/road_center_reference_t"][current_size:] = np.array(road_center_reference_t, dtype=np.float32)
+                        self.h5_file["vehicle/road_frame_lateral_offset"].resize((current_size + len(road_frame_lateral_offset),))
+                        self.h5_file["vehicle/road_frame_lateral_offset"][current_size:] = np.array(
+                            road_frame_lateral_offset, dtype=np.float32
+                        )
+                        self.h5_file["vehicle/road_heading_deg"].resize((current_size + len(road_heading_deg),))
+                        self.h5_file["vehicle/road_heading_deg"][current_size:] = np.array(
+                            road_heading_deg, dtype=np.float32
+                        )
+                        self.h5_file["vehicle/car_heading_deg"].resize((current_size + len(car_heading_deg),))
+                        self.h5_file["vehicle/car_heading_deg"][current_size:] = np.array(
+                            car_heading_deg, dtype=np.float32
+                        )
+                        self.h5_file["vehicle/heading_delta_deg"].resize((current_size + len(heading_delta_deg),))
+                        self.h5_file["vehicle/heading_delta_deg"][current_size:] = np.array(
+                            heading_delta_deg, dtype=np.float32
+                        )
+                        self.h5_file["vehicle/road_frame_lane_center_offset"].resize(
+                            (current_size + len(road_frame_lane_center_offset),)
+                        )
+                        self.h5_file["vehicle/road_frame_lane_center_offset"][current_size:] = np.array(
+                            road_frame_lane_center_offset, dtype=np.float32
+                        )
+                        self.h5_file["vehicle/road_frame_lane_center_error"].resize(
+                            (current_size + len(road_frame_lane_center_error),)
+                        )
+                        self.h5_file["vehicle/road_frame_lane_center_error"][current_size:] = np.array(
+                            road_frame_lane_center_error, dtype=np.float32
+                        )
+                        self.h5_file["vehicle/vehicle_frame_lookahead_offset"].resize(
+                            (current_size + len(vehicle_frame_lookahead_offset),)
+                        )
+                        self.h5_file["vehicle/vehicle_frame_lookahead_offset"][current_size:] = np.array(
+                            vehicle_frame_lookahead_offset, dtype=np.float32
+                        )
             except Exception as e:
                 logger.error(f"[RECORDER] Error writing camera FOV/position data: {e}", exc_info=True)
     

@@ -108,10 +108,39 @@ def analyze_recording_summary(recording_path: Path, analyze_to_failure: bool = F
                 np.array(f['ground_truth/path_curvature'][:])
                 if 'ground_truth/path_curvature' in f else None
             )
+
+            # Road-frame metrics (if available)
+            data['road_frame_lateral_offset'] = (
+                np.array(f['vehicle/road_frame_lateral_offset'][:])
+                if 'vehicle/road_frame_lateral_offset' in f else None
+            )
+            data['heading_delta_deg'] = (
+                np.array(f['vehicle/heading_delta_deg'][:])
+                if 'vehicle/heading_delta_deg' in f else None
+            )
+            data['road_frame_lane_center_offset'] = (
+                np.array(f['vehicle/road_frame_lane_center_offset'][:])
+                if 'vehicle/road_frame_lane_center_offset' in f else None
+            )
+            data['road_frame_lane_center_error'] = (
+                np.array(f['vehicle/road_frame_lane_center_error'][:])
+                if 'vehicle/road_frame_lane_center_error' in f else None
+            )
+            data['vehicle_frame_lookahead_offset'] = (
+                np.array(f['vehicle/vehicle_frame_lookahead_offset'][:])
+                if 'vehicle/vehicle_frame_lookahead_offset' in f else None
+            )
             
             # Load lane positions for stability calculation
             data['left_lane_x'] = np.array(f['perception/left_lane_line_x'][:]) if 'perception/left_lane_line_x' in f else None
             data['right_lane_x'] = np.array(f['perception/right_lane_line_x'][:]) if 'perception/right_lane_line_x' in f else None
+            data['perception_center'] = None
+            if data['left_lane_x'] is not None and data['right_lane_x'] is not None:
+                data['perception_center'] = (data['left_lane_x'] + data['right_lane_x']) / 2.0
+            elif 'perception/left_lane_x' in f and 'perception/right_lane_x' in f:
+                left_lane = np.array(f['perception/left_lane_x'][:])
+                right_lane = np.array(f['perception/right_lane_x'][:])
+                data['perception_center'] = (left_lane + right_lane) / 2.0
             
             # Unity timing (for hitch detection)
             data['unity_time'] = np.array(f['vehicle/unity_time'][:]) if 'vehicle/unity_time' in f else None
@@ -606,6 +635,136 @@ def analyze_recording_summary(recording_path: Path, analyze_to_failure: bool = F
         out_of_lane_events_list = []
     
     out_of_lane_events = len(out_of_lane_events_list)
+
+    # 7. TURN BIAS (road-frame offsets)
+    turn_bias = None
+    alignment_summary = None
+    if data.get('road_frame_lateral_offset') is not None:
+        curvature_source = None
+        if data.get('gt_path_curvature') is not None:
+            curvature_source = data['gt_path_curvature']
+        elif data.get('path_curvature_input') is not None:
+            curvature_source = data['path_curvature_input']
+
+        if curvature_source is not None:
+            offset = data['road_frame_lateral_offset']
+            heading_delta = data.get('heading_delta_deg')
+            steering = data.get('steering')
+            gt_center = data.get('gt_center')
+            p_center = data.get('perception_center')
+
+            n_bias = len(offset)
+            n_bias = min(n_bias, len(curvature_source))
+            if steering is not None:
+                n_bias = min(n_bias, len(steering))
+            if heading_delta is not None:
+                n_bias = min(n_bias, len(heading_delta))
+            if gt_center is not None:
+                n_bias = min(n_bias, len(gt_center))
+            if p_center is not None:
+                n_bias = min(n_bias, len(p_center))
+
+            offset = offset[:n_bias]
+            curvature_source = curvature_source[:n_bias]
+            if steering is not None:
+                steering = steering[:n_bias]
+            if heading_delta is not None:
+                heading_delta = heading_delta[:n_bias]
+            if gt_center is not None:
+                gt_center = gt_center[:n_bias]
+            if p_center is not None:
+                p_center = p_center[:n_bias]
+
+            curve_threshold = 0.002
+            curve_mask = np.abs(curvature_source) >= curve_threshold
+            left_mask = curve_mask & (curvature_source > 0)
+            right_mask = curve_mask & (curvature_source < 0)
+
+            def summarize_mask(mask):
+                if not np.any(mask):
+                    return {
+                        "frames": 0,
+                        "mean": 0.0,
+                        "p95_abs": 0.0,
+                        "max_abs": 0.0,
+                        "outside_rate": 0.0,
+                    }
+                vals = offset[mask]
+                outside = (curvature_source[mask] > 0) & (vals > 0)
+                outside |= (curvature_source[mask] < 0) & (vals < 0)
+                return {
+                    "frames": int(mask.sum()),
+                    "mean": safe_float(np.mean(vals)),
+                    "p95_abs": safe_float(np.percentile(np.abs(vals), 95)),
+                    "max_abs": safe_float(np.max(np.abs(vals))),
+                    "outside_rate": safe_float(np.mean(outside) * 100.0),
+                }
+
+            def top_turn_frames(mask, max_items=8, min_separation=12):
+                output = []
+                if not np.any(mask):
+                    return output
+                candidates = np.where(mask)[0]
+                sorted_idx = candidates[np.argsort(np.abs(offset[candidates]))[::-1]]
+                for idx in sorted_idx:
+                    if len(output) >= max_items:
+                        break
+                    if any(abs(idx - h["frame"]) < min_separation for h in output):
+                        continue
+                    curvature_val = float(curvature_source[idx])
+                    outside = (curvature_val > 0 and offset[idx] > 0) or (curvature_val < 0 and offset[idx] < 0)
+                    lane_center_error_val = None
+                    if data.get('road_frame_lane_center_error') is not None:
+                        lane_center_error_val = safe_float(
+                            float(data['road_frame_lane_center_error'][idx])
+                        )
+                    output.append({
+                        "frame": int(idx),
+                        "time": safe_float(data['time'][idx]) if idx < len(data['time']) else 0.0,
+                        "road_offset": safe_float(float(offset[idx])),
+                        "curvature": safe_float(curvature_val),
+                        "steering": safe_float(float(steering[idx])) if steering is not None else None,
+                        "heading_delta_deg": safe_float(float(heading_delta[idx])) if heading_delta is not None else None,
+                        "gt_center": safe_float(float(gt_center[idx])) if gt_center is not None else None,
+                        "perception_center": safe_float(float(p_center[idx])) if p_center is not None else None,
+                        "outside": bool(outside),
+                        "segment": "left" if curvature_val > 0 else "right",
+                        "lane_center_error": lane_center_error_val,
+                    })
+                return output
+
+            turn_bias = {
+                "curve_threshold": safe_float(curve_threshold),
+                "left_turn": summarize_mask(left_mask),
+                "right_turn": summarize_mask(right_mask),
+                "top_left": top_turn_frames(left_mask),
+                "top_right": top_turn_frames(right_mask),
+            }
+
+            if gt_center is not None and p_center is not None:
+                align_diff = p_center - gt_center
+                alignment_summary = {
+                    "perception_vs_gt_mean": safe_float(np.mean(align_diff)),
+                    "perception_vs_gt_p95_abs": safe_float(np.percentile(np.abs(align_diff), 95)),
+                    "perception_vs_gt_rmse": safe_float(np.sqrt(np.mean(align_diff ** 2))),
+                }
+            if data.get('road_frame_lane_center_error') is not None:
+                lane_center_error = data['road_frame_lane_center_error'][:n_bias]
+                if alignment_summary is None:
+                    alignment_summary = {}
+                alignment_summary.update({
+                    "road_frame_lane_center_error_mean": safe_float(np.mean(lane_center_error)),
+                    "road_frame_lane_center_error_p95_abs": safe_float(np.percentile(np.abs(lane_center_error), 95)),
+                    "road_frame_lane_center_error_rmse": safe_float(np.sqrt(np.mean(lane_center_error ** 2))),
+                })
+            if data.get('vehicle_frame_lookahead_offset') is not None:
+                vf_offset = data['vehicle_frame_lookahead_offset'][:n_bias]
+                if alignment_summary is None:
+                    alignment_summary = {}
+                alignment_summary.update({
+                    "vehicle_frame_lookahead_offset_mean": safe_float(np.mean(vf_offset)),
+                    "vehicle_frame_lookahead_offset_p95_abs": safe_float(np.percentile(np.abs(vf_offset), 95)),
+                })
     
     # Calculate overall score (0-100)
     score = 100.0
@@ -749,6 +908,8 @@ def analyze_recording_summary(recording_path: Path, analyze_to_failure: bool = F
             "trajectory_availability": safe_float(trajectory_availability),
             "ref_point_accuracy_rmse": safe_float(ref_point_accuracy_rmse)
         },
+        "turn_bias": turn_bias,
+        "alignment_summary": alignment_summary,
         "system_health": {
             "pid_integral_max": safe_float(pid_integral_max),
             "unity_time_gap_max": safe_float(unity_time_gap_max),

@@ -43,6 +43,8 @@ TRACK_YAML_PATH=""
 START_T=""
 START_DISTANCE=""
 START_RANDOM=""
+ARC_RADIUS=""
+TMP_TRACK_PATH=""
 
 usage() {
     echo "Usage: ./start_av_stack.sh [options] [av_stack.py args]"
@@ -58,6 +60,7 @@ usage() {
     echo "  --skip-unity-build-if-clean  Skip Unity build when no changes are detected"
     echo "  --keep-unity-open      Do not quit Unity when the run ends"
     echo "  --track-yaml           Path to track YAML for Unity runtime"
+    echo "  --arc-radius           Override all arc radii and use a temp track"
     echo "  --start-t              Start position (0-1) along track"
     echo "  --start-distance       Start position in meters along track"
     echo "  --start-random         Randomize start position (true/false)"
@@ -66,6 +69,15 @@ usage() {
     echo "av_stack.py args are passed through, e.g.:"
     echo "  --duration 60 --max_frames 300 --recording_dir data/recordings"
 }
+
+# Cleanup temp track on exit if we created one.
+cleanup() {
+    if [ -n "$TMP_TRACK_PATH" ] && [ -f "$TMP_TRACK_PATH" ]; then
+        rm -f "$TMP_TRACK_PATH"
+    fi
+}
+
+trap cleanup EXIT
 
 # Parse command line arguments
 # Keep non-script args to pass through to av_stack.py
@@ -117,6 +129,10 @@ while [[ $# -gt 0 ]]; do
             TRACK_YAML_PATH="$2"
             shift 2
             ;;
+        --arc-radius)
+            ARC_RADIUS="$2"
+            shift 2
+            ;;
         --start-t)
             START_T="$2"
             shift 2
@@ -152,6 +168,33 @@ fi
 # Activate virtual environment
 echo -e "${BLUE}Activating virtual environment...${NC}"
 source "$VENV_PATH/bin/activate"
+# If arc radius override is requested, generate a temp track from the base.
+if [ -n "$ARC_RADIUS" ]; then
+    if [ -z "$TRACK_YAML_PATH" ]; then
+        TRACK_YAML_PATH="$SCRIPT_DIR/tracks/oval.yml"
+    fi
+    if [[ "$TRACK_YAML_PATH" != /* ]]; then
+        TRACK_YAML_PATH="$SCRIPT_DIR/$TRACK_YAML_PATH"
+    fi
+    mkdir -p "$SCRIPT_DIR/tracks/generated"
+    TMP_TRACK_PATH="$SCRIPT_DIR/tracks/generated/av_stack_r${ARC_RADIUS}.yml"
+    "$VENV_PATH/bin/python" - <<PY
+from pathlib import Path
+import yaml
+
+track_path = Path(r"$TRACK_YAML_PATH")
+data = yaml.safe_load(track_path.read_text())
+for segment in data.get("segments", []):
+    if segment.get("type") == "arc":
+        segment["radius"] = float("$ARC_RADIUS")
+data["name"] = f"{data.get('name', 'track')}_r{int(float('$ARC_RADIUS'))}"
+out = Path(r"$TMP_TRACK_PATH")
+out.write_text(yaml.safe_dump(data, sort_keys=False))
+print(out)
+PY
+    TRACK_YAML_PATH="$TMP_TRACK_PATH"
+    echo -e "${BLUE}Arc radius override:${NC} ${ARC_RADIUS}m -> $TRACK_YAML_PATH"
+fi
 
 # Install/upgrade dependencies if needed
 if [ ! -f "$VENV_PATH/.deps_installed" ]; then

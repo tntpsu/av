@@ -45,6 +45,7 @@ data/recordings/*.h5
 data/recordings/*.hdf5
 captures/
 data/segmentation_dataset/
+tracks/generated/
 
 # Logs
 logs/

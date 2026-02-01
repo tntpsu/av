@@ -13,7 +13,7 @@ public class CarController : MonoBehaviour
     [Tooltip("Wheelbase in meters (distance between front and rear axles)")]
     public float wheelbaseMeters = 2.5f;
     [Tooltip("Acceleration in m/s² (ForceMode.Acceleration ignores mass, so this is direct acceleration) - Realistic car: 3-6 m/s²")]
-    public float motorForce = 8f;  // FIXED: Set to realistic car acceleration (8 m/s² = 0-10 m/s in 1.25 seconds)
+    public float motorForce = 6f;  // Tuned down to reduce acceleration spikes and jerk
                                    // Increased from 5f to 8f to ensure it overcomes Unity's default friction
                                    // Previous values (400f, 200f) were 50-100x too fast!
                                    // ForceMode.Acceleration ignores mass, so motorForce = acceleration in m/s²
@@ -69,10 +69,20 @@ public class CarController : MonoBehaviour
     private int lastProfilerLogFrame = -999;
     [SerializeField] private bool logFixedUpdateGapSummary = true;
     [SerializeField] private int fixedUpdateGapSummaryFrames = 300;
+    [SerializeField] private bool logCollisionEvents = true;
+    [SerializeField] private bool logSpeedDropEvents = true;
+    [SerializeField] private float speedDropThreshold = 3.0f; // m/s drop in one FixedUpdate
+    [SerializeField] private float speedDropAccelThreshold = 50.0f; // m/s^2 magnitude
     private float lastFixedUpdateRealtime = 0f;
     private float fixedUpdateGapSum = 0f;
     private float fixedUpdateGapMax = 0f;
     private int fixedUpdateGapCount = 0;
+    private float lastPhysicsSpeed = 0f;
+    private float lastPhysicsTime = -1f;
+    private float lastCollisionTime = -1f;
+    private string lastCollisionInfo = null;
+    [SerializeField] private float throttleSlewRatePerSecond = 2.0f; // max throttle change per second
+    private float lastThrottleApplied = 0f;
 
     // PERFORMANCE: Cache GroundTruthReporter to avoid FindObjectOfType() every frame
     private GroundTruthReporter cachedGroundTruthReporter = null;
@@ -686,11 +696,10 @@ public class CarController : MonoBehaviour
         // CRITICAL: Unity-side speed prevention - check BEFORE applying forces
         // This prevents overshoot when Python control loop is slower than physics timestep
         float effectiveThrottle = throttleInput;
-        
-        // DEBUG: Log throttle values to diagnose why car isn't moving
-        if (Time.frameCount % 60 == 0) // Log every 60 frames (~2 seconds at 30fps)
+        if (brakeInput > 0.02f)
         {
-            Debug.Log($"CarController: throttleInput={throttleInput:F3}, brakeInput={brakeInput:F3}, currentSpeed={currentSpeed:F3} m/s, effectiveThrottle={effectiveThrottle:F3}, motorForce={motorForce:F1}");
+            // Avoid throttle+brake overlap to prevent jerk spikes.
+            effectiveThrottle = 0f;
         }
         
         float effectiveMaxSpeed = (speedLimit > 0.0f) ? speedLimit : maxSpeed;
@@ -704,11 +713,23 @@ public class CarController : MonoBehaviour
             // Almost at limit - cut throttle completely
             effectiveThrottle = 0.0f;
         }
+
+        // Apply throttle slew limiting to avoid step inputs causing jerk spikes
+        float desiredThrottle = effectiveThrottle;
+        float maxDelta = throttleSlewRatePerSecond * Time.fixedDeltaTime;
+        float smoothedThrottle = Mathf.MoveTowards(lastThrottleApplied, desiredThrottle, maxDelta);
+        lastThrottleApplied = smoothedThrottle;
+
+        // DEBUG: Log throttle values to diagnose why car isn't moving
+        if (Time.frameCount % 60 == 0) // Log every 60 frames (~2 seconds at 30fps)
+        {
+            Debug.Log($"CarController: throttleInput={throttleInput:F3}, brakeInput={brakeInput:F3}, currentSpeed={currentSpeed:F3} m/s, effectiveThrottle={effectiveThrottle:F3}, smoothedThrottle={smoothedThrottle:F3}, motorForce={motorForce:F1}");
+        }
         
         // Throttle (handles both forward and backward movement)
         // Use Acceleration mode to ignore mass, making it more responsive
         // FIXED: Reduced motor force for better speed control
-        if (Mathf.Abs(effectiveThrottle) > 0.01f)
+        if (Mathf.Abs(smoothedThrottle) > 0.01f)
         {
             // CRITICAL: Wake up Rigidbody if it's sleeping (sleeping Rigidbody doesn't respond to forces!)
             // Unity puts Rigidbody to sleep when velocity < sleep threshold (0.005 m/s) to save computation
@@ -718,7 +739,7 @@ public class CarController : MonoBehaviour
                 rb.WakeUp();
                 if (Time.frameCount % 60 == 0)
                 {
-                    Debug.Log($"CarController: Woke up sleeping Rigidbody (throttle={effectiveThrottle:F3})");
+                    Debug.Log($"CarController: Woke up sleeping Rigidbody (throttle={smoothedThrottle:F3})");
                 }
             }
             
@@ -729,9 +750,9 @@ public class CarController : MonoBehaviour
             // Only apply boost when speed is very low (< 0.1 m/s) to avoid affecting speed control when moving
             // INCREASED: From 50% to 80% minimum throttle (6.4 m/s² force) to ensure car starts moving even when turning
             float minEffectiveThrottle = 0.8f; // Minimum 80% throttle to overcome static friction (was 0.5f)
-            float actualThrottle = effectiveThrottle;
+            float actualThrottle = smoothedThrottle;
             
-            if (currentSpeed < 0.1f && effectiveThrottle > 0.01f && effectiveThrottle < minEffectiveThrottle)
+            if (currentSpeed < 0.1f && smoothedThrottle > 0.01f && smoothedThrottle < minEffectiveThrottle)
             {
                 // Car is at rest and throttle is too low - boost to overcome static friction
                 // CRITICAL: When steering is high, need even more force to move forward
@@ -747,7 +768,7 @@ public class CarController : MonoBehaviour
                 }
                 if (Time.frameCount % 60 == 0)
                 {
-                    Debug.Log($"CarController: Boosting throttle from {effectiveThrottle:F3} to {actualThrottle:F3} to overcome static friction (speed={currentSpeed:F3} m/s, steering={steerInput:F3})");
+                    Debug.Log($"CarController: Boosting throttle from {smoothedThrottle:F3} to {actualThrottle:F3} to overcome static friction (speed={currentSpeed:F3} m/s, steering={steerInput:F3})");
                 }
             }
             
@@ -778,22 +799,15 @@ public class CarController : MonoBehaviour
         
         if (brakeInput > 0)
         {
-            // Increase linear damping (was 15f, now 30f for much stronger braking)
-            rb.linearDamping = brakeInput * 30f;
+            // Cap brake to avoid aggressive physics spikes
+            float brakeApplied = Mathf.Min(brakeInput, 0.2f);
+
+            // Increase linear damping for braking, but keep it gentle to avoid spikes
+            rb.linearDamping = brakeApplied * 5f;
             
             // Direct velocity reduction for immediate braking response
             // This helps when speed is very high and damping alone isn't enough
-            if (currentSpeed > 0.1f) // Only apply if moving
-            {
-                // Reduce velocity directly proportional to brake input
-                // More aggressive at higher speeds - FIXED: increased from 30% to 50% per frame
-                float reductionFactor = brakeInput * (1.0f + currentSpeed * 0.15f); // Scale with speed (increased from 0.1f to 0.15f)
-                reductionFactor = Mathf.Clamp01(reductionFactor);
-                rb.linearVelocity = currentVelocity * (1.0f - reductionFactor * 0.5f); // FIXED: Reduce by up to 50% per frame (was 30%)
-                // Update currentVelocity after reduction
-                currentVelocity = rb.linearVelocity;
-                currentSpeed = currentVelocity.magnitude;
-            }
+            // NOTE: Direct velocity reduction removed to avoid instantaneous decel spikes.
         }
         else
         {
@@ -818,6 +832,73 @@ public class CarController : MonoBehaviour
             // Cap velocity to max speed immediately
             rb.linearVelocity = currentVelocity.normalized * effectiveMaxSpeed;
         }
+
+        // Diagnostics: detect sudden speed drops (physics discontinuities/collisions)
+        if (logSpeedDropEvents)
+        {
+            float now = Time.time;
+            float dt = (lastPhysicsTime > 0f) ? (now - lastPhysicsTime) : Time.fixedDeltaTime;
+            if (dt > 0f)
+            {
+                float speedDrop = lastPhysicsSpeed - currentSpeed;
+                float accel = speedDrop / dt; // positive when slowing
+                if (speedDrop >= speedDropThreshold || accel >= speedDropAccelThreshold)
+                {
+                    string collisionNote = (lastCollisionTime > 0f && (now - lastCollisionTime) < 0.5f)
+                        ? $" recentCollision=({lastCollisionInfo})"
+                        : "";
+                    Debug.LogWarning(
+                        $"[SPEED_DROP] frame={Time.frameCount} dt={dt:F4}s " +
+                        $"speed={currentSpeed:F2}m/s drop={speedDrop:F2}m/s accel={-accel:F2}m/s^2 " +
+                        $"throttle={throttleInput:F3} brake={brakeInput:F3} " +
+                        $"damping={rb.linearDamping:F2}{collisionNote}"
+                    );
+                }
+            }
+            lastPhysicsSpeed = currentSpeed;
+            lastPhysicsTime = now;
+        }
+    }
+
+    private void OnCollisionEnter(Collision collision)
+    {
+        if (!logCollisionEvents)
+        {
+            return;
+        }
+        float impulseMag = collision.impulse.magnitude;
+        float relVel = collision.relativeVelocity.magnitude;
+        lastCollisionTime = Time.time;
+        lastCollisionInfo = $"{collision.collider.name} impulse={impulseMag:F2} relVel={relVel:F2} contacts={collision.contactCount}";
+        Debug.LogWarning($"[COLLISION_ENTER] frame={Time.frameCount} {lastCollisionInfo}");
+    }
+
+    private void OnCollisionStay(Collision collision)
+    {
+        if (!logCollisionEvents)
+        {
+            return;
+        }
+        if (Time.frameCount % 30 != 0)
+        {
+            return;
+        }
+        float impulseMag = collision.impulse.magnitude;
+        float relVel = collision.relativeVelocity.magnitude;
+        lastCollisionTime = Time.time;
+        lastCollisionInfo = $"{collision.collider.name} impulse={impulseMag:F2} relVel={relVel:F2} contacts={collision.contactCount}";
+        Debug.LogWarning($"[COLLISION_STAY] frame={Time.frameCount} {lastCollisionInfo}");
+    }
+
+    private void OnTriggerEnter(Collider other)
+    {
+        if (!logCollisionEvents)
+        {
+            return;
+        }
+        lastCollisionTime = Time.time;
+        lastCollisionInfo = $"{other.name} trigger";
+        Debug.LogWarning($"[TRIGGER_ENTER] frame={Time.frameCount} collider={other.name}");
     }
 
     /// <summary>
@@ -964,6 +1045,14 @@ public class VehicleState
     public float roadCenterAtLookaheadY = 0.0f;  // Road center Y at 8m lookahead (world coords)
     public float roadCenterAtLookaheadZ = 0.0f;  // Road center Z at 8m lookahead (world coords)
     public float roadCenterReferenceT = 0.0f;  // Parameter t on road path for reference point
+    // NEW: Road-frame alignment metrics (for diagnosing outside-of-lane bias)
+    public float roadFrameLateralOffset = 0.0f;  // Lateral offset from road center (m, +right)
+    public float roadHeadingDeg = 0.0f;  // Road tangent heading (deg)
+    public float carHeadingDeg = 0.0f;  // Car heading (deg)
+    public float headingDeltaDeg = 0.0f;  // Car - road heading delta (deg, -180..180)
+    public float roadFrameLaneCenterOffset = 0.0f;  // Road center lookahead offset in road frame (m, +right)
+    public float roadFrameLaneCenterError = 0.0f;  // Car offset vs lookahead center in road frame (m, +right)
+    public float vehicleFrameLookaheadOffset = 0.0f;  // Lookahead road center offset in vehicle frame (m, +right)
     public float speedLimit = 0.0f;  // Speed limit at current reference point (m/s)
     public float speedLimitPreview = 0.0f;  // Speed limit at preview distance ahead (m/s)
     public float speedLimitPreviewDistance = 0.0f;  // Preview distance used for speed limit (m)

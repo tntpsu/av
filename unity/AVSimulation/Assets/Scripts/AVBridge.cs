@@ -554,6 +554,25 @@ public class AVBridge : MonoBehaviour
             currentState.roadCenterAtLookaheadY = roadCenterAtLookahead.y;
             currentState.roadCenterAtLookaheadZ = roadCenterAtLookahead.z;
             currentState.roadCenterReferenceT = referenceT;
+            var (roadHeadingDeg, carHeadingDeg, headingDeltaDeg, roadLateralOffset) =
+                groundTruthReporter.GetRoadFrameMetrics();
+            currentState.roadHeadingDeg = roadHeadingDeg;
+            currentState.carHeadingDeg = carHeadingDeg;
+            currentState.headingDeltaDeg = headingDeltaDeg;
+            currentState.roadFrameLateralOffset = roadLateralOffset;
+            float headingRad = roadHeadingDeg * Mathf.Deg2Rad;
+            Vector3 roadRight = new Vector3(Mathf.Cos(headingRad), 0f, -Mathf.Sin(headingRad));
+            float laneCenterOffset = Vector3.Dot(roadCenterAtLookahead - roadCenterAtCar, roadRight);
+            currentState.roadFrameLaneCenterOffset = laneCenterOffset;
+            currentState.roadFrameLaneCenterError = roadLateralOffset - laneCenterOffset;
+            if (carController != null)
+            {
+                Vector3 carPos = carController.transform.position;
+                Vector3 carForward = carController.transform.forward.normalized;
+                Vector3 carRight = Vector3.Cross(Vector3.up, carForward).normalized;
+                float vehicleLookaheadOffset = Vector3.Dot(roadCenterAtLookahead - carPos, carRight);
+                currentState.vehicleFrameLookaheadOffset = vehicleLookaheadOffset;
+            }
             float computedSpeedLimit = groundTruthReporter.GetSpeedLimitAtT(carT);
             float defaultSpeedLimit = groundTruthReporter.GetDefaultSpeedLimit();
             if (computedSpeedLimit > 0f)

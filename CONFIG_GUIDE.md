@@ -39,6 +39,30 @@ control:
     lateral_weight: 0.4  # Weight for lateral error
     error_clip: 1.57     # Maximum error in radians (π/2 = 90 degrees)
     integral_limit: 0.10 # Maximum integral term (prevents windup)
+    control_mode: pid    # Lateral controller: pid|stanley (pid default)
+    stanley_k: 1.5  # Stanley cross-track gain
+    stanley_soft_speed: 2.0  # Soft speed term to avoid high gain at low speed
+    stanley_heading_weight: 1.0  # Heading error weight in Stanley mode
+    curve_feedforward_gain: 1.0  # Base feedforward steering gain
+    curve_feedforward_threshold: 0.012  # Curvature threshold for feedforward (1/m)
+    curve_feedforward_gain_min: 1.05  # Gain at low curvature
+    curve_feedforward_gain_max: 1.3  # Gain at high curvature
+    curve_feedforward_curvature_min: 0.003  # Start scheduling (1/m)
+    curve_feedforward_curvature_max: 0.015  # End scheduling (1/m)
+    curve_feedforward_curvature_clamp: 0.025  # Clamp curvature input (1/m)
+    steering_rate_curvature_min: 0.003  # Begin rate scaling (1/m)
+    steering_rate_curvature_max: 0.015  # Max rate scaling (1/m)
+    steering_rate_scale_min: 0.9  # Minimum rate scale on sharp curves
+    speed_gain_min_speed: 4.0  # Speed (m/s) below which no extra gain is applied
+    speed_gain_max_speed: 10.0  # Speed (m/s) where max gain is reached
+    speed_gain_min: 1.0  # Gain at/below min speed
+    speed_gain_max: 1.6  # Gain at/above max speed
+    speed_gain_curvature_min: 0.002  # Full speed gain below this curvature (1/m)
+    speed_gain_curvature_max: 0.008  # Fade speed gain out by this curvature (1/m)
+    feedback_gain_min: 1.1  # Feedback gain on higher curvature
+    feedback_gain_max: 1.4  # Feedback gain on gentle curves
+    feedback_gain_curvature_min: 0.003  # Full boost below this curvature (1/m)
+    feedback_gain_curvature_max: 0.03  # No boost above this curvature (1/m)
 ```
 
 **Tuning Guide:**
@@ -75,6 +99,22 @@ trajectory:
   point_spacing: 1.0        # Spacing between trajectory points in meters
   target_speed: 8.0         # Target speed for trajectory in m/s
   reference_lookahead: 8.0  # Lookahead distance for reference point in meters
+  dynamic_reference_lookahead: true  # Scale reference lookahead by speed/curvature
+  reference_lookahead_min: 3.0  # Minimum lookahead (meters)
+  reference_lookahead_scale_min: 0.55  # Minimum scale when shortening
+  reference_lookahead_speed_min: 4.0  # Start shortening above this speed (m/s)
+  reference_lookahead_speed_max: 10.0  # Max shortening at/above this speed (m/s)
+  reference_lookahead_curvature_min: 0.002  # Full shortening below this curvature (1/m)
+  reference_lookahead_curvature_max: 0.015  # No shortening above this curvature (1/m)
+  use_vehicle_frame_lookahead_ref: true  # Use Unity vehicle-frame lookahead offset for ref_x
+  vehicle_frame_lookahead_scale: 1.0  # Scale ref_x when curvature sign is unknown
+  vehicle_frame_lookahead_scale_left: 1.0  # Scale ref_x on left turns (curv > 0)
+  vehicle_frame_lookahead_scale_right: 1.05  # Scale ref_x on right turns (curv < 0)
+  max_lateral_accel: 1.3  # Curve speed cap (m/s^2)
+  min_curve_speed: 3.2  # Minimum allowed speed on curves (m/s)
+  speed_limit_slew_rate: 1.0  # Max change in speed limit per second (m/s^2)
+  speed_limit_preview_distance: 25.0  # Preview distance ahead for upcoming limits (m)
+  speed_limit_preview_decel: 1.0  # Comfortable decel used for preview cap (m/s^2)
   speed_planner:
     enabled: true
     max_accel: 2.5          # Max acceleration (m/s^2)

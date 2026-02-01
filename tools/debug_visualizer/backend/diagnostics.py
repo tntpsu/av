@@ -66,6 +66,9 @@ def analyze_trajectory_vs_steering(recording_path: Path, analyze_to_failure: boo
             path_curvature = None
             gt_curvature = None
             control_timestamps = None
+            throttle = None
+            brake = None
+            target_speed = None
             
             if has_control:
                 steering = np.array(f["control/steering"][:])
@@ -79,6 +82,14 @@ def analyze_trajectory_vs_steering(recording_path: Path, analyze_to_failure: boo
                     path_curvature = np.array(f["control/path_curvature_input"][:])
                 if "control/timestamps" in f:
                     control_timestamps = np.array(f["control/timestamps"][:])
+                if "control/throttle" in f:
+                    throttle = np.array(f["control/throttle"][:])
+                if "control/brake" in f:
+                    brake = np.array(f["control/brake"][:])
+                if "control/target_speed_final" in f:
+                    target_speed = np.array(f["control/target_speed_final"][:])
+                elif "control/target_speed_planned" in f:
+                    target_speed = np.array(f["control/target_speed_planned"][:])
             
             # Load ground truth for comparison
             gt_center = None
@@ -95,6 +106,10 @@ def analyze_trajectory_vs_steering(recording_path: Path, analyze_to_failure: boo
                 perception_left = np.array(f["perception/left_lane_line_x"][:])
                 perception_right = np.array(f["perception/right_lane_line_x"][:])
                 perception_center = (perception_left + perception_right) / 2.0
+
+            speed = None
+            if "vehicle/speed" in f:
+                speed = np.array(f["vehicle/speed"][:])
             
             # Align data lengths
             min_len = min(
@@ -103,6 +118,14 @@ def analyze_trajectory_vs_steering(recording_path: Path, analyze_to_failure: boo
                 len(gt_center) if gt_center is not None else len(ref_x),
                 len(perception_center) if perception_center is not None else len(ref_x)
             )
+            if speed is not None and len(speed) > 0:
+                min_len = min(min_len, len(speed))
+            if throttle is not None and len(throttle) > 0:
+                min_len = min(min_len, len(throttle))
+            if brake is not None and len(brake) > 0:
+                min_len = min(min_len, len(brake))
+            if target_speed is not None and len(target_speed) > 0:
+                min_len = min(min_len, len(target_speed))
             
             ref_x = ref_x[:min_len]
             ref_y = ref_y[:min_len]
@@ -126,6 +149,14 @@ def analyze_trajectory_vs_steering(recording_path: Path, analyze_to_failure: boo
                 gt_center = gt_center[:min_len]
             if perception_center is not None:
                 perception_center = perception_center[:min_len]
+            if speed is not None:
+                speed = speed[:min_len]
+            if throttle is not None:
+                throttle = throttle[:min_len]
+            if brake is not None:
+                brake = brake[:min_len]
+            if target_speed is not None:
+                target_speed = target_speed[:min_len]
             
             # Detect failure point and truncate if requested (same logic as summary_analyzer)
             failure_frame = None
@@ -425,6 +456,99 @@ def analyze_trajectory_vs_steering(recording_path: Path, analyze_to_failure: boo
                         "segment": "curve" if is_curve else "straight",
                         "sign_mismatch": bool(sign_mismatch),
                     })
+
+            # Lateral error disagreement (control vs ground truth)
+            disagreement_hotspots = []
+            if gt_center is not None and lateral_error is not None and len(gt_center) > 0:
+                gt_error = -gt_center
+                n_compare = min(len(gt_error), len(lateral_error))
+                diff = (lateral_error[:n_compare] - gt_error[:n_compare])
+                abs_diff = np.abs(diff)
+                sorted_idx = np.argsort(abs_diff)[::-1]
+                min_separation = 10
+                for idx in sorted_idx:
+                    if len(disagreement_hotspots) >= 10:
+                        break
+                    if abs_diff[idx] < 0.3:
+                        break
+                    if any(abs(idx - h["frame"]) < min_separation for h in disagreement_hotspots):
+                        continue
+                    curvature_val = float(path_curvature[idx]) if path_curvature is not None else 0.0
+                    gt_curvature_val = float(gt_curvature[idx]) if gt_curvature is not None else 0.0
+                    is_curve = abs(curvature_val) >= 0.01
+                    straight_flag = bool(is_straight[idx]) if is_straight is not None else None
+                    steer_val = float(steering[idx]) if steering is not None else 0.0
+                    disagreement_hotspots.append({
+                        "frame": int(idx),
+                        "time": safe_float(time_axis[idx]) if idx < len(time_axis) else 0.0,
+                        "lateral_error": safe_float(float(lateral_error[idx])),
+                        "gt_error": safe_float(float(gt_error[idx])),
+                        "diff": safe_float(float(diff[idx])),
+                        "steering": safe_float(steer_val),
+                        "is_straight": straight_flag,
+                        "curvature": safe_float(curvature_val),
+                        "gt_curvature": safe_float(gt_curvature_val),
+                        "segment": "curve" if is_curve else "straight",
+                    })
+
+            # Longitudinal accel/jerk hotspots (top-N frames)
+            accel_hotspots = []
+            jerk_hotspots = []
+            if speed is not None and len(speed) > 1:
+                n_series = min(len(speed), len(time_axis))
+                speed_series = speed[:n_series]
+                time_series = time_axis[:n_series]
+                dt_series = np.diff(time_series)
+                accel = np.zeros(n_series, dtype=np.float32)
+                valid_dt = dt_series > 1e-6
+                accel[1:] = np.divide(
+                    np.diff(speed_series),
+                    dt_series,
+                    out=np.zeros_like(dt_series, dtype=np.float32),
+                    where=valid_dt,
+                )
+                jerk = np.zeros(n_series, dtype=np.float32)
+                if n_series > 2:
+                    jerk_dt = dt_series[1:]
+                    valid_jerk_dt = jerk_dt > 1e-6
+                    jerk[2:] = np.divide(
+                        np.diff(accel[1:]),
+                        jerk_dt,
+                        out=np.zeros_like(jerk_dt, dtype=np.float32),
+                        where=valid_jerk_dt,
+                    )
+
+                def build_hotspots(values, max_items=8, min_separation=15):
+                    output = []
+                    sorted_idx = np.argsort(np.abs(values))[::-1]
+                    for idx in sorted_idx:
+                        if len(output) >= max_items:
+                            break
+                        if abs(values[idx]) <= 0.0:
+                            break
+                        if any(abs(idx - h["frame"]) < min_separation for h in output):
+                            continue
+                        curvature_val = float(path_curvature[idx]) if path_curvature is not None and idx < len(path_curvature) else 0.0
+                        gt_curvature_val = float(gt_curvature[idx]) if gt_curvature is not None and idx < len(gt_curvature) else 0.0
+                        is_curve = abs(curvature_val) >= 0.01
+                        output.append({
+                            "frame": int(idx),
+                            "time": safe_float(time_series[idx]) if idx < len(time_series) else 0.0,
+                            "speed": safe_float(float(speed_series[idx])) if idx < len(speed_series) else 0.0,
+                            "accel": safe_float(float(accel[idx])) if idx < len(accel) else 0.0,
+                            "jerk": safe_float(float(jerk[idx])) if idx < len(jerk) else 0.0,
+                            "throttle": safe_float(float(throttle[idx])) if throttle is not None and idx < len(throttle) else None,
+                            "brake": safe_float(float(brake[idx])) if brake is not None and idx < len(brake) else None,
+                            "target_speed": safe_float(float(target_speed[idx])) if target_speed is not None and idx < len(target_speed) else None,
+                            "steering": safe_float(float(steering[idx])) if steering is not None and idx < len(steering) else None,
+                            "curvature": safe_float(curvature_val),
+                            "gt_curvature": safe_float(gt_curvature_val),
+                            "segment": "curve" if is_curve else "straight",
+                        })
+                    return output
+
+                accel_hotspots = build_hotspots(accel)
+                jerk_hotspots = build_hotspots(jerk)
             
             # DIAGNOSIS SUMMARY
             # Only flag as an issue if score is actually below threshold (70%)
@@ -496,7 +620,10 @@ def analyze_trajectory_vs_steering(recording_path: Path, analyze_to_failure: boo
                     "heading_error": heading_error_analysis,
                     "issues": steering_issues,
                     "warnings": steering_warnings,
-                    "lateral_error_hotspots": hotspots
+                    "lateral_error_hotspots": hotspots,
+                    "lateral_error_disagreement_hotspots": disagreement_hotspots,
+                    "accel_hotspots": accel_hotspots,
+                    "jerk_hotspots": jerk_hotspots
                 },
                 "diagnosis": {
                     "primary_issue": primary_issue,

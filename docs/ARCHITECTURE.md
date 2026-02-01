@@ -111,6 +111,11 @@ sequenceDiagram
 - `trajectory/inference.py`: rule-based planner.
 - `trajectory/speed_planner.py`: jerk-limited speed planner.
 
+**Notes**
+- Dynamic reference lookahead scales by speed/curvature.
+- Optional vehicle-frame lookahead offset from Unity can override `ref_x` for turn alignment.
+- Curvature-based speed caps are applied before the speed planner.
+
 ### Control (Python)
 **Responsibilities**
 - Translate reference path into steering command.
@@ -119,6 +124,11 @@ sequenceDiagram
 
 **Key components**
 - `control/pid_controller.py`: lateral + longitudinal control.
+
+**Notes**
+- Lateral control uses PID with curve feedforward scheduling, steering rate limiting,
+  and optional speed-aware gain.
+- Longitudinal control enforces throttle/brake rate limits and ramp/slew logic.
 
 ### Recording and Analysis (Python)
 **Responsibilities**

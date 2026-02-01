@@ -18,6 +18,7 @@ class Visualizer {
         
         this.currentFrameData = null;
         this.previousPerceptionData = null;  // Track previous frame's perception data for change calculations
+        this.currentLongitudinalMetrics = null;
         this.currentImage = null;
         this.lastValidY8m = undefined;  // Cache last valid camera_8m_screen_y value
         this.groundTruthDistance = 7;  // Tunable distance for ground truth conversion (calibrated to account for camera pitch/height)
@@ -808,6 +809,10 @@ class Visualizer {
                 return;
             }
             
+            const fmtOpt = (value, digits = 3) => (value === null || value === undefined
+                ? '-'
+                : value.toFixed(digits));
+            
             // Build diagnostics HTML
             let html = '<div style="padding: 1rem;">';
             
@@ -1043,6 +1048,141 @@ class Visualizer {
                     html += '</div>';
                 }
                 
+                if (ctrl.lateral_error_disagreement_hotspots && ctrl.lateral_error_disagreement_hotspots.length > 0) {
+                    html += '<div style="background: #1a1a1a; padding: 0.75rem; border-radius: 4px; border-left: 3px solid #4a90e2; margin-top: 1rem;">';
+                    html += '<strong style="color: #4a90e2;">GT vs Control Disagreement</strong><br/>';
+                    html += '<div style="color: #888; font-size: 0.85rem; margin-bottom: 0.5rem;">Top frames by |control - GT| lateral error.</div>';
+                    html += '<div style="display: flex; flex-direction: column; gap: 0.5rem;">';
+                    ctrl.lateral_error_disagreement_hotspots.forEach((spot) => {
+                        const straight = spot.is_straight === null || spot.is_straight === undefined
+                            ? 'n/a'
+                            : (spot.is_straight ? 'yes' : 'no');
+                        html += '<div style="display: flex; justify-content: space-between; align-items: center; padding: 0.5rem; background: #2a2a2a; border-radius: 6px;">';
+                        html += '<div style="color: #e0e0e0; font-size: 0.9rem;">';
+                        html += `<strong>Frame ${spot.frame}</strong> · t=${spot.time.toFixed(2)}s · diff=${spot.diff.toFixed(3)}m · ${spot.segment} · straight=${straight}<br/>`;
+                        html += `ctrl=${spot.lateral_error.toFixed(3)}m · gt=${spot.gt_error.toFixed(3)}m · steer=${fmtOpt(spot.steering, 3)} · curv=${fmtOpt(spot.curvature, 4)} · gt_curv=${fmtOpt(spot.gt_curvature, 4)}`;
+                        html += '</div>';
+                        html += `<button style="padding: 0.25rem 0.75rem; background: #4a90e2; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 0.85rem;" onclick="window.visualizer.jumpToFrame(${spot.frame})">Jump →</button>`;
+                        html += '</div>';
+                    });
+                    html += '</div></div>';
+                } else {
+                    html += '<div style="background: #1a1a1a; padding: 0.75rem; border-radius: 4px; border-left: 3px solid #4a90e2; margin-top: 1rem;">';
+                    html += '<strong style="color: #4a90e2;">GT vs Control Disagreement</strong><br/>';
+                    html += '<div style="color: #4caf50; font-size: 0.9rem;">No significant disagreements detected.</div>';
+                    html += '</div>';
+                }
+                
+                if (ctrl.accel_hotspots && ctrl.accel_hotspots.length > 0) {
+                    html += '<div style="background: #1a1a1a; padding: 0.75rem; border-radius: 4px; border-left: 3px solid #4a90e2; margin-top: 1rem;">';
+                    html += '<strong style="color: #4a90e2;">Longitudinal Accel Hotspots</strong><br/>';
+                    html += '<div style="color: #888; font-size: 0.85rem; margin-bottom: 0.5rem;">Top frames by |accel| with context.</div>';
+                    html += '<div style="display: flex; flex-direction: column; gap: 0.5rem;">';
+                    ctrl.accel_hotspots.forEach((spot) => {
+                        html += '<div style="display: flex; justify-content: space-between; align-items: center; padding: 0.5rem; background: #2a2a2a; border-radius: 6px;">';
+                        html += '<div style="color: #e0e0e0; font-size: 0.9rem;">';
+                        html += `<strong>Frame ${spot.frame}</strong> · t=${spot.time.toFixed(2)}s · accel=${spot.accel.toFixed(2)} m/s² · jerk=${spot.jerk.toFixed(2)} m/s³ · speed=${spot.speed.toFixed(2)} m/s · ${spot.segment}<br/>`;
+                        html += `thr=${fmtOpt(spot.throttle, 2)} · brk=${fmtOpt(spot.brake, 2)} · tgt=${fmtOpt(spot.target_speed, 2)} · steer=${fmtOpt(spot.steering, 3)} · curv=${fmtOpt(spot.curvature, 4)} · gt_curv=${fmtOpt(spot.gt_curvature, 4)}`;
+                        html += '</div>';
+                        html += `<button style="padding: 0.25rem 0.75rem; background: #4a90e2; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 0.85rem;" onclick="window.visualizer.jumpToFrame(${spot.frame})">Jump →</button>`;
+                        html += '</div>';
+                    });
+                    html += '</div></div>';
+                } else {
+                    html += '<div style="background: #1a1a1a; padding: 0.75rem; border-radius: 4px; border-left: 3px solid #4a90e2; margin-top: 1rem;">';
+                    html += '<strong style="color: #4a90e2;">Longitudinal Accel Hotspots</strong><br/>';
+                    html += '<div style="color: #4caf50; font-size: 0.9rem;">No significant hotspots detected.</div>';
+                    html += '</div>';
+                }
+                
+                if (ctrl.jerk_hotspots && ctrl.jerk_hotspots.length > 0) {
+                    html += '<div style="background: #1a1a1a; padding: 0.75rem; border-radius: 4px; border-left: 3px solid #4a90e2; margin-top: 1rem;">';
+                    html += '<strong style="color: #4a90e2;">Longitudinal Jerk Hotspots</strong><br/>';
+                    html += '<div style="color: #888; font-size: 0.85rem; margin-bottom: 0.5rem;">Top frames by |jerk| with context.</div>';
+                    html += '<div style="display: flex; flex-direction: column; gap: 0.5rem;">';
+                    ctrl.jerk_hotspots.forEach((spot) => {
+                        html += '<div style="display: flex; justify-content: space-between; align-items: center; padding: 0.5rem; background: #2a2a2a; border-radius: 6px;">';
+                        html += '<div style="color: #e0e0e0; font-size: 0.9rem;">';
+                        html += `<strong>Frame ${spot.frame}</strong> · t=${spot.time.toFixed(2)}s · jerk=${spot.jerk.toFixed(2)} m/s³ · accel=${spot.accel.toFixed(2)} m/s² · speed=${spot.speed.toFixed(2)} m/s · ${spot.segment}<br/>`;
+                        html += `thr=${fmtOpt(spot.throttle, 2)} · brk=${fmtOpt(spot.brake, 2)} · tgt=${fmtOpt(spot.target_speed, 2)} · steer=${fmtOpt(spot.steering, 3)} · curv=${fmtOpt(spot.curvature, 4)} · gt_curv=${fmtOpt(spot.gt_curvature, 4)}`;
+                        html += '</div>';
+                        html += `<button style="padding: 0.25rem 0.75rem; background: #4a90e2; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 0.85rem;" onclick="window.visualizer.jumpToFrame(${spot.frame})">Jump →</button>`;
+                        html += '</div>';
+                    });
+                    html += '</div></div>';
+                } else {
+                    html += '<div style="background: #1a1a1a; padding: 0.75rem; border-radius: 4px; border-left: 3px solid #4a90e2; margin-top: 1rem;">';
+                    html += '<strong style="color: #4a90e2;">Longitudinal Jerk Hotspots</strong><br/>';
+                    html += '<div style="color: #4caf50; font-size: 0.9rem;">No significant hotspots detected.</div>';
+                    html += '</div>';
+                }
+
+                if (summary.turn_bias) {
+                    const turnBias = summary.turn_bias;
+                    const align = summary.alignment_summary || null;
+                    html += '<div style="background: #1a1a1a; padding: 0.75rem; border-radius: 4px; border-left: 3px solid #7b61ff; margin-top: 1rem;">';
+                    html += '<strong style="color: #b39bff;">Turn Bias (Road-Frame)</strong><br/>';
+                    html += `<div style="color: #888; font-size: 0.85rem; margin-bottom: 0.5rem;">Curve threshold |curv| ≥ ${turnBias.curve_threshold.toFixed(4)}.</div>`;
+
+                    const left = turnBias.left_turn || {};
+                    const right = turnBias.right_turn || {};
+                    html += '<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem;">';
+                    html += '<div style="background: #2a2a2a; padding: 0.5rem; border-radius: 6px;">';
+                    html += '<strong style="color: #b39bff;">Left Turns</strong><br/>';
+                    html += `frames=${left.frames ?? 0} · mean=${fmtOpt(left.mean, 3)}m · p95|=${fmtOpt(left.p95_abs, 3)}m · outside=${fmtOpt(left.outside_rate, 1)}%`;
+                    html += '</div>';
+                    html += '<div style="background: #2a2a2a; padding: 0.5rem; border-radius: 6px;">';
+                    html += '<strong style="color: #b39bff;">Right Turns</strong><br/>';
+                    html += `frames=${right.frames ?? 0} · mean=${fmtOpt(right.mean, 3)}m · p95|=${fmtOpt(right.p95_abs, 3)}m · outside=${fmtOpt(right.outside_rate, 1)}%`;
+                    html += '</div>';
+                    html += '</div>';
+
+                    if (align) {
+                        html += '<div style="margin-top: 0.5rem; color: #e0e0e0; font-size: 0.9rem;">';
+                        html += `Perception vs GT center: mean=${fmtOpt(align.perception_vs_gt_mean, 3)}m · `;
+                        html += `p95|=${fmtOpt(align.perception_vs_gt_p95_abs, 3)}m · rmse=${fmtOpt(align.perception_vs_gt_rmse, 3)}m`;
+                        if (align.road_frame_lane_center_error_mean !== undefined && align.road_frame_lane_center_error_mean !== null) {
+                            html += '<br/>';
+                            html += `Road-frame lane-center error: mean=${fmtOpt(align.road_frame_lane_center_error_mean, 3)}m · `;
+                            html += `p95|=${fmtOpt(align.road_frame_lane_center_error_p95_abs, 3)}m · rmse=${fmtOpt(align.road_frame_lane_center_error_rmse, 3)}m`;
+                        }
+                        if (align.vehicle_frame_lookahead_offset_mean !== undefined && align.vehicle_frame_lookahead_offset_mean !== null) {
+                            html += '<br/>';
+                            html += `Vehicle-frame lookahead offset: mean=${fmtOpt(align.vehicle_frame_lookahead_offset_mean, 3)}m · `;
+                            html += `p95|=${fmtOpt(align.vehicle_frame_lookahead_offset_p95_abs, 3)}m`;
+                        }
+                        html += '</div>';
+                    }
+
+                    const renderTurnList = (title, items) => {
+                        if (!items || items.length === 0) {
+                            html += `<div style="margin-top: 0.5rem; color: #4caf50; font-size: 0.9rem;">${title}: none</div>`;
+                            return;
+                        }
+                        html += `<div style="margin-top: 0.75rem; color: #e0e0e0; font-size: 0.9rem;"><strong>${title}</strong></div>`;
+                        html += '<div style="display: flex; flex-direction: column; gap: 0.5rem;">';
+                        items.forEach((spot) => {
+                            html += '<div style="display: flex; justify-content: space-between; align-items: center; padding: 0.5rem; background: #2a2a2a; border-radius: 6px;">';
+                            html += '<div style="color: #e0e0e0; font-size: 0.9rem;">';
+                            const outside = spot.outside ? 'outside' : 'inside';
+                            html += `<strong>Frame ${spot.frame}</strong> · t=${spot.time.toFixed(2)}s · offset=${spot.road_offset.toFixed(3)}m · ${outside}<br/>`;
+                            html += `curv=${spot.curvature.toFixed(4)} · steer=${fmtOpt(spot.steering, 3)} · hdgΔ=${fmtOpt(spot.heading_delta_deg, 2)}° · `;
+                            html += `gt_center=${fmtOpt(spot.gt_center, 3)} · p_center=${fmtOpt(spot.perception_center, 3)}`;
+                            if (spot.lane_center_error !== undefined && spot.lane_center_error !== null) {
+                                html += ` · lane_err=${fmtOpt(spot.lane_center_error, 3)}`;
+                            }
+                            html += '</div>';
+                            html += `<button style="padding: 0.25rem 0.75rem; background: #7b61ff; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 0.85rem;" onclick="window.visualizer.jumpToFrame(${spot.frame})">Jump →</button>`;
+                            html += '</div>';
+                        });
+                        html += '</div>';
+                    };
+
+                    renderTurnList('Top Left-Turn Offsets', turnBias.top_left);
+                    renderTurnList('Top Right-Turn Offsets', turnBias.top_right);
+                    html += '</div>';
+                }
+                
                 html += '</div>';
             }
             
@@ -1079,6 +1219,17 @@ class Visualizer {
             
             // Load frame data
             this.currentFrameData = await this.dataLoader.loadFrameData(frameIndex);
+            const prevFrameData = frameIndex > 0
+                ? await this.dataLoader.loadFrameData(frameIndex - 1)
+                : null;
+            const prevPrevFrameData = frameIndex > 1
+                ? await this.dataLoader.loadFrameData(frameIndex - 2)
+                : null;
+            this.currentLongitudinalMetrics = this.computeLongitudinalMetrics(
+                this.currentFrameData,
+                prevFrameData,
+                prevPrevFrameData
+            );
             
             // Load camera image
             const imageDataUrl = await this.dataLoader.loadFrameImage(frameIndex);
@@ -1411,6 +1562,45 @@ class Visualizer {
         }
     }
 
+    computeLongitudinalMetrics(currentFrame, prevFrame, prevPrevFrame) {
+        const currVehicle = currentFrame ? currentFrame.vehicle : null;
+        const prevVehicle = prevFrame ? prevFrame.vehicle : null;
+        const prevPrevVehicle = prevPrevFrame ? prevPrevFrame.vehicle : null;
+        if (!currVehicle || currVehicle.speed === undefined || currVehicle.speed === null) {
+            return { accel: null, jerk: null };
+        }
+
+        const currTime = currVehicle.timestamp ?? currentFrame?.camera?.timestamp ?? null;
+        const prevTime = prevVehicle?.timestamp ?? prevFrame?.camera?.timestamp ?? null;
+        const prevPrevTime = prevPrevVehicle?.timestamp ?? prevPrevFrame?.camera?.timestamp ?? null;
+
+        let accel = null;
+        let jerk = null;
+        if (prevVehicle && prevVehicle.speed !== undefined && prevVehicle.speed !== null && currTime !== null && prevTime !== null) {
+            const dt = currTime - prevTime;
+            if (dt > 1e-6) {
+                accel = (currVehicle.speed - prevVehicle.speed) / dt;
+            }
+        }
+        if (
+            accel !== null
+            && prevPrevVehicle
+            && prevPrevVehicle.speed !== undefined
+            && prevPrevVehicle.speed !== null
+            && prevTime !== null
+            && prevPrevTime !== null
+        ) {
+            const dtPrev = prevTime - prevPrevTime;
+            const dtCurr = currTime !== null && prevTime !== null ? (currTime - prevTime) : null;
+            if (dtPrev > 1e-6 && dtCurr !== null && dtCurr > 1e-6) {
+                const prevAccel = (prevVehicle.speed - prevPrevVehicle.speed) / dtPrev;
+                jerk = (accel - prevAccel) / dtCurr;
+            }
+        }
+
+        return { accel, jerk };
+    }
+
     updateControlData() {
         if (!this.currentFrameData || !this.currentFrameData.control) return;
         
@@ -1428,6 +1618,19 @@ class Visualizer {
         updateField('control-steering', c.steering !== undefined ? c.steering.toFixed(4) : '-');
         updateField('control-throttle', c.throttle !== undefined ? c.throttle.toFixed(4) : '-');
         updateField('control-brake', c.brake !== undefined ? c.brake.toFixed(4) : '-');
+        const longitudinal = this.currentLongitudinalMetrics || { accel: null, jerk: null };
+        updateField(
+            'control-accel',
+            longitudinal.accel !== null && longitudinal.accel !== undefined
+                ? `${longitudinal.accel.toFixed(2)} m/s²`
+                : '-'
+        );
+        updateField(
+            'control-jerk',
+            longitudinal.jerk !== null && longitudinal.jerk !== undefined
+                ? `${longitudinal.jerk.toFixed(2)} m/s³`
+                : '-'
+        );
         updateField('control-ref-x', ref && ref.x !== undefined ? `${ref.x.toFixed(3)}m` : '-');
         updateField('control-ref-y', ref && ref.y !== undefined ? `${ref.y.toFixed(3)}m` : '-');
         updateField(
@@ -1702,6 +1905,19 @@ class Visualizer {
         } else {
             updateField('vehicle-speed', '-');
         }
+        const longitudinal = this.currentLongitudinalMetrics || { accel: null, jerk: null };
+        updateField(
+            'vehicle-accel',
+            longitudinal.accel !== null && longitudinal.accel !== undefined
+                ? `${longitudinal.accel.toFixed(2)} m/s²`
+                : '-'
+        );
+        updateField(
+            'vehicle-jerk',
+            longitudinal.jerk !== null && longitudinal.jerk !== undefined
+                ? `${longitudinal.jerk.toFixed(2)} m/s³`
+                : '-'
+        );
         if (v.speed_limit !== undefined && v.speed_limit !== null && v.speed_limit > 0) {
             const limitMph = mpsToMph(v.speed_limit);
             updateField('vehicle-speed-limit', `${v.speed_limit.toFixed(2)} m/s (${limitMph.toFixed(1)} mph)`);

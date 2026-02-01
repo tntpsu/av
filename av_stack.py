@@ -21,6 +21,7 @@ from bridge.client import UnityBridgeClient
 from perception.inference import LaneDetectionInference
 from trajectory.inference import TrajectoryPlanningInference
 from trajectory.speed_planner import SpeedPlanner, SpeedPlannerConfig
+from trajectory.utils import compute_reference_lookahead
 from control.pid_controller import VehicleController
 from data.recorder import DataRecorder
 from data.formats.data_format import CameraFrame, VehicleState, ControlCommand, PerceptionOutput, TrajectoryOutput, RecordingFrame
@@ -262,7 +263,21 @@ class AVStack:
             straight_curvature_threshold=lateral_cfg.get('straight_curvature_threshold', 0.01),
             steering_rate_curvature_min=lateral_cfg.get('steering_rate_curvature_min', 0.005),
             steering_rate_curvature_max=lateral_cfg.get('steering_rate_curvature_max', 0.03),
-            steering_rate_scale_min=lateral_cfg.get('steering_rate_scale_min', 0.5)
+            steering_rate_scale_min=lateral_cfg.get('steering_rate_scale_min', 0.5),
+            speed_gain_min_speed=lateral_cfg.get('speed_gain_min_speed', 4.0),
+            speed_gain_max_speed=lateral_cfg.get('speed_gain_max_speed', 10.0),
+            speed_gain_min=lateral_cfg.get('speed_gain_min', 1.0),
+            speed_gain_max=lateral_cfg.get('speed_gain_max', 1.2),
+            speed_gain_curvature_min=lateral_cfg.get('speed_gain_curvature_min', 0.002),
+            speed_gain_curvature_max=lateral_cfg.get('speed_gain_curvature_max', 0.015),
+            control_mode=lateral_cfg.get('control_mode', 'pid'),
+            stanley_k=lateral_cfg.get('stanley_k', 1.0),
+            stanley_soft_speed=lateral_cfg.get('stanley_soft_speed', 2.0),
+            stanley_heading_weight=lateral_cfg.get('stanley_heading_weight', 1.0),
+            feedback_gain_min=lateral_cfg.get('feedback_gain_min', 1.0),
+            feedback_gain_max=lateral_cfg.get('feedback_gain_max', 1.2),
+            feedback_gain_curvature_min=lateral_cfg.get('feedback_gain_curvature_min', 0.002),
+            feedback_gain_curvature_max=lateral_cfg.get('feedback_gain_curvature_max', 0.015)
         )
         
         # Store config for use in _process_frame
@@ -723,7 +738,17 @@ class AVStack:
         instability_width_change = None
         instability_center_shift = None
         
+        current_speed = vehicle_state_dict.get('speed', 0.0)
         reference_lookahead = self.trajectory_config.get('reference_lookahead', 8.0)
+        reference_lookahead = compute_reference_lookahead(
+            base_lookahead=float(reference_lookahead),
+            current_speed=float(current_speed),
+            path_curvature=float(
+                vehicle_state_dict.get('groundTruthPathCurvature', 0.0)
+                or vehicle_state_dict.get('ground_truth_path_curvature', 0.0)
+            ),
+            config=self.trajectory_config,
+        )
         
         # Extract camera_8m_screen_y early so we can use it for lane evaluation
         camera_8m_screen_y = vehicle_state_dict.get('camera8mScreenY')
@@ -1674,7 +1699,6 @@ class AVStack:
             )
             adjusted_target_speed = min(adjusted_target_speed, preview_target)
         target_speed_post_limits = adjusted_target_speed
-        current_speed = vehicle_state_dict.get('speed', 0.0)
         target_speed_planned = None
         if self.speed_planner_enabled and self.speed_planner is not None:
             planned_speed, planned_accel, planned_jerk, planner_active = self.speed_planner.step(
@@ -1773,6 +1797,46 @@ class AVStack:
             use_direct=True,  # Use direct midpoint computation
             timestamp=timestamp  # Pass timestamp for time gap detection
         )
+
+        # Optional: Override reference x using vehicle-frame lookahead offset from Unity.
+        if reference_point is not None:
+            use_vehicle_frame_lookahead = self.trajectory_config.get(
+                'use_vehicle_frame_lookahead_ref', True
+            )
+            lookahead_offset = vehicle_state_dict.get('vehicleFrameLookaheadOffset', None)
+            if use_vehicle_frame_lookahead and lookahead_offset is not None:
+                try:
+                    lookahead_offset = float(lookahead_offset)
+                    left_scale = float(
+                        self.trajectory_config.get('vehicle_frame_lookahead_scale_left', 1.0)
+                    )
+                    right_scale = float(
+                        self.trajectory_config.get('vehicle_frame_lookahead_scale_right', 1.0)
+                    )
+                    base_scale = float(
+                        self.trajectory_config.get('vehicle_frame_lookahead_scale', 1.0)
+                    )
+                    curvature_sign = 0.0
+                    if reference_point is not None:
+                        curvature_sign = float(reference_point.get('curvature', 0.0) or 0.0)
+                    if curvature_sign == 0.0:
+                        curvature_sign = float(
+                            vehicle_state_dict.get('groundTruthPathCurvature', 0.0) or 0.0
+                        )
+                    if curvature_sign > 0.0:
+                        lookahead_scale = left_scale
+                    elif curvature_sign < 0.0:
+                        lookahead_scale = right_scale
+                    else:
+                        lookahead_scale = base_scale
+                    original_x = reference_point.get('x', 0.0)
+                    reference_point['vehicle_frame_lookahead_original_x'] = original_x
+                    reference_point['vehicle_frame_lookahead_offset'] = lookahead_offset
+                    reference_point['vehicle_frame_lookahead_scale'] = lookahead_scale
+                    reference_point['x'] = lookahead_offset * lookahead_scale
+                    reference_point['method'] = 'vehicle_frame_lookahead'
+                except (TypeError, ValueError):
+                    pass
         
         if reference_point is None:
             # No valid trajectory - stop vehicle safely
@@ -2427,6 +2491,13 @@ class AVStack:
             road_center_at_lookahead_y=vehicle_state_dict.get('roadCenterAtLookaheadY', 0.0),
             road_center_at_lookahead_z=vehicle_state_dict.get('roadCenterAtLookaheadZ', 0.0),
             road_center_reference_t=vehicle_state_dict.get('roadCenterReferenceT', 0.0),
+            road_frame_lateral_offset=vehicle_state_dict.get('roadFrameLateralOffset', 0.0),
+            road_heading_deg=vehicle_state_dict.get('roadHeadingDeg', 0.0),
+            car_heading_deg=vehicle_state_dict.get('carHeadingDeg', 0.0),
+            heading_delta_deg=vehicle_state_dict.get('headingDeltaDeg', 0.0),
+            road_frame_lane_center_offset=vehicle_state_dict.get('roadFrameLaneCenterOffset', 0.0),
+            road_frame_lane_center_error=vehicle_state_dict.get('roadFrameLaneCenterError', 0.0),
+            vehicle_frame_lookahead_offset=vehicle_state_dict.get('vehicleFrameLookaheadOffset', 0.0),
             speed_limit=speed_limit,
             speed_limit_preview=vehicle_state_dict.get(
                 'speedLimitPreview', vehicle_state_dict.get('speed_limit_preview', 0.0)

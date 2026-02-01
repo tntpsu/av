@@ -18,6 +18,9 @@ Run the startup script:
 
 # Build and run standalone Unity player (no editor interaction)
 ./start_av_stack.sh --build-unity-player --skip-unity-build-if-clean --run-unity-player --duration 60
+
+# Override all arc radii (e.g., s-loop with radius 20)
+./start_av_stack.sh --track-yaml tracks/s_loop.yml --arc-radius 20 --duration 60
 ```
 
 ### Option 1b: Ground Truth Runner (Standalone Player)
@@ -65,6 +68,16 @@ python -m bridge.server
 source venv/bin/activate
 python av_stack.py
 ```
+
+## Curve Sweep Tuning
+
+For systematic tuning across different curve radii, use the sweep tool:
+
+```bash
+python tools/analyze/curve_sweep.py --base-track tracks/s_loop.yml --arc-radii 20,30,40,60 --duration 40
+```
+
+This generates temporary tracks, runs the stack per radius, and prints summary metrics.
 
 ## Stopping the AV Stack
 

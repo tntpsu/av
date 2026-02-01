@@ -162,6 +162,13 @@ class VehicleState(BaseModel):
     roadCenterAtLookaheadY: float = 0.0  # Road center Y at 8m lookahead (world coords)
     roadCenterAtLookaheadZ: float = 0.0  # Road center Z at 8m lookahead (world coords)
     roadCenterReferenceT: float = 0.0  # Parameter t on road path for reference point
+    roadFrameLateralOffset: float = 0.0  # Lateral offset from road center (m, +right)
+    roadHeadingDeg: float = 0.0  # Road tangent heading (deg)
+    carHeadingDeg: float = 0.0  # Car heading (deg)
+    headingDeltaDeg: float = 0.0  # Car - road heading delta (deg, -180..180)
+    roadFrameLaneCenterOffset: float = 0.0  # Lookahead road center offset in road frame (m, +right)
+    roadFrameLaneCenterError: float = 0.0  # Car offset vs lookahead center (m, +right)
+    vehicleFrameLookaheadOffset: float = 0.0  # Lookahead road center offset in vehicle frame (m, +right)
     speedLimit: float = 0.0  # Speed limit at current reference point (m/s)
     speedLimitPreview: float = 0.0  # Speed limit at preview distance ahead (m/s)
     speedLimitPreviewDistance: float = 0.0  # Preview distance used for speed limit (m)

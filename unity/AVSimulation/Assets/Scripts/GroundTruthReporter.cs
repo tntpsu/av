@@ -937,6 +937,53 @@ public class GroundTruthReporter : MonoBehaviour
         
         return (roadCenterAtCar, roadCenterAtLookahead, tLookahead, tCar);
     }
+
+    /// <summary>
+    /// Get road-frame metrics at the car's current position.
+    /// Returns road heading, car heading, heading delta, and lateral offset from road center.
+    /// </summary>
+    public (float roadHeadingDeg, float carHeadingDeg, float headingDeltaDeg, float roadLateralOffset)
+        GetRoadFrameMetrics()
+    {
+        if (roadGenerator == null || carTransform == null)
+        {
+            return (0.0f, 0.0f, 0.0f, 0.0f);
+        }
+
+        // Get car position
+        Vector3 carPos;
+        if (cachedCarRigidbody == null)
+        {
+            cachedCarRigidbody = carTransform.GetComponent<Rigidbody>();
+        }
+        if (cachedCarRigidbody != null)
+        {
+            carPos = cachedCarRigidbody.position;
+        }
+        else
+        {
+            carPos = carTransform.position;
+        }
+
+        float tCar = FindClosestPointOnOval(carPos);
+        Vector3 roadCenterAtCar = roadGenerator.GetOvalCenterPoint(tCar);
+        Vector3 roadDirection = roadGenerator.GetOvalDirection(tCar).normalized;
+        Vector3 roadRight = Vector3.Cross(Vector3.up, roadDirection).normalized;
+
+        // Positive = car is to the right of road center in road frame.
+        float roadLateralOffset = Vector3.Dot(carPos - roadCenterAtCar, roadRight);
+
+        Vector3 carForward = carTransform.forward.normalized;
+        float roadHeadingDeg = Mathf.Atan2(roadDirection.x, roadDirection.z) * Mathf.Rad2Deg;
+        if (roadHeadingDeg < 0.0f) roadHeadingDeg += 360.0f;
+        float carHeadingDeg = Mathf.Atan2(carForward.x, carForward.z) * Mathf.Rad2Deg;
+        if (carHeadingDeg < 0.0f) carHeadingDeg += 360.0f;
+
+        // Signed difference in degrees (-180..180), positive = car heading to the right of road heading.
+        float headingDeltaDeg = Mathf.DeltaAngle(roadHeadingDeg, carHeadingDeg);
+
+        return (roadHeadingDeg, carHeadingDeg, headingDeltaDeg, roadLateralOffset);
+    }
     
     /// <summary>
     /// Get ground truth lane positions (left and right) in vehicle coordinates.
@@ -1217,32 +1264,43 @@ public class GroundTruthReporter : MonoBehaviour
         {
             return 0f; // Straight road
         }
-        
+
         // Find closest point on path
         Vector3 carPos = carTransform.position;
         float t = FindClosestPointOnOval(carPos);
-        
-        // Get direction at current point
-        Vector3 direction = roadGenerator.GetOvalDirection(t);
-        
-        // Sample nearby points to estimate curvature
-        float dt = 0.01f;
-        float tPrev = Mathf.Clamp01(t - dt);
-        float tNext = Mathf.Clamp01(t + dt);
-        
-        Vector3 dirPrev = roadGenerator.GetOvalDirection(tPrev);
-        Vector3 dirNext = roadGenerator.GetOvalDirection(tNext);
-        
-        // Compute curvature using heading change over arc length
-        float pathLength = roadGenerator.GetPathLength();
-        float ds = 2.0f * dt * Mathf.Max(0.01f, pathLength);
-        float angle = Vector3.Angle(dirPrev, dirNext) * Mathf.Deg2Rad;
-        float curvature = ds > 0f ? angle / ds : 0f;
-        
-        // Determine sign (left vs right turn)
-        Vector3 cross = Vector3.Cross(dirPrev, dirNext);
-        if (cross.y < 0) curvature = -curvature;
-        
+
+        // Use position-based curvature to handle piecewise-linear directions.
+        float pathLength = Mathf.Max(0.01f, roadGenerator.GetPathLength());
+        float sampleDistance = 1.0f; // meters along path for curvature estimate
+        float dt = sampleDistance / pathLength;
+        float tPrev = Mathf.Repeat(t - dt, 1f);
+        float tNext = Mathf.Repeat(t + dt, 1f);
+
+        Vector3 pPrev = roadGenerator.GetOvalCenterPoint(tPrev);
+        Vector3 pCurr = roadGenerator.GetOvalCenterPoint(t);
+        Vector3 pNext = roadGenerator.GetOvalCenterPoint(tNext);
+
+        Vector3 v1 = pCurr - pPrev;
+        Vector3 v2 = pNext - pCurr;
+        float a = v1.magnitude;
+        float b = v2.magnitude;
+        float c = (pNext - pPrev).magnitude;
+        if (a < 1e-4f || b < 1e-4f || c < 1e-4f)
+        {
+            return 0f;
+        }
+
+        // Curvature magnitude using triangle area (2*area / (a*b*c)).
+        Vector3 cross = Vector3.Cross(v1, v2);
+        float area2 = cross.magnitude;
+        float curvature = area2 / (a * b * c);
+
+        // Determine sign (left vs right turn).
+        if (cross.y < 0f)
+        {
+            curvature = -curvature;
+        }
+
         return curvature;
     }
     

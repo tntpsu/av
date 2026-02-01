@@ -98,7 +98,21 @@ class LateralController:
                  straight_curvature_threshold: float = 0.01,
                  steering_rate_curvature_min: float = 0.005,
                  steering_rate_curvature_max: float = 0.03,
-                 steering_rate_scale_min: float = 0.5):
+                 steering_rate_scale_min: float = 0.5,
+                 speed_gain_min_speed: float = 4.0,
+                 speed_gain_max_speed: float = 10.0,
+                 speed_gain_min: float = 1.0,
+                 speed_gain_max: float = 1.2,
+                 speed_gain_curvature_min: float = 0.002,
+                 speed_gain_curvature_max: float = 0.015,
+                 control_mode: str = "pid",
+                 stanley_k: float = 1.0,
+                 stanley_soft_speed: float = 2.0,
+                 stanley_heading_weight: float = 1.0,
+                 feedback_gain_min: float = 1.0,
+                 feedback_gain_max: float = 1.2,
+                 feedback_gain_curvature_min: float = 0.002,
+                 feedback_gain_curvature_max: float = 0.015):
         """
         Initialize lateral controller.
         
@@ -127,6 +141,20 @@ class LateralController:
         self.steering_rate_curvature_min = steering_rate_curvature_min
         self.steering_rate_curvature_max = steering_rate_curvature_max
         self.steering_rate_scale_min = steering_rate_scale_min
+        self.speed_gain_min_speed = speed_gain_min_speed
+        self.speed_gain_max_speed = speed_gain_max_speed
+        self.speed_gain_min = speed_gain_min
+        self.speed_gain_max = speed_gain_max
+        self.speed_gain_curvature_min = speed_gain_curvature_min
+        self.speed_gain_curvature_max = speed_gain_curvature_max
+        self.control_mode = control_mode
+        self.stanley_k = stanley_k
+        self.stanley_soft_speed = stanley_soft_speed
+        self.stanley_heading_weight = stanley_heading_weight
+        self.feedback_gain_min = feedback_gain_min
+        self.feedback_gain_max = feedback_gain_max
+        self.feedback_gain_curvature_min = feedback_gain_curvature_min
+        self.feedback_gain_curvature_max = feedback_gain_curvature_max
         self.smoothed_steering = None
         self.pid = PIDController(
             kp=kp,
@@ -162,7 +190,8 @@ class LateralController:
         self.straight_oscillation_rate = 0.0
     
     def compute_steering(self, current_heading: float, reference_point: dict,
-                        vehicle_position: Optional[np.ndarray] = None, 
+                        vehicle_position: Optional[np.ndarray] = None,
+                        current_speed: Optional[float] = None,
                         return_metadata: bool = False) -> float:
         """
         Compute steering command.
@@ -311,9 +340,26 @@ class LateralController:
             # Use smoothed lateral error for control to reduce perception noise sensitivity
             total_error = self.heading_weight * heading_error + self.lateral_weight * lateral_error_for_control
         
+        # Curvature-aware feedback gain (boost on gentle curves, neutral on sharp)
+        feedback_gain = 1.0
+        if self.feedback_gain_curvature_max > self.feedback_gain_curvature_min:
+            if curve_metric_abs <= self.feedback_gain_curvature_min:
+                feedback_gain = self.feedback_gain_max
+            elif curve_metric_abs >= self.feedback_gain_curvature_max:
+                feedback_gain = self.feedback_gain_min
+            else:
+                ratio = (curve_metric_abs - self.feedback_gain_curvature_min) / (
+                    self.feedback_gain_curvature_max - self.feedback_gain_curvature_min
+                )
+                feedback_gain = self.feedback_gain_max + ratio * (
+                    self.feedback_gain_min - self.feedback_gain_max
+                )
+        total_error_raw = total_error
+        total_error = total_error_raw * feedback_gain
+
         # Scale error to prevent overreaction
         total_error = np.clip(total_error, -self.error_clip, self.error_clip)
-        stored_total_error = total_error
+        stored_total_error = total_error_raw
         
         # Add deadband to prevent constant small corrections
         # CRITICAL FIX: Don't apply deadband when on curves - we need continuous steering
@@ -509,6 +555,9 @@ class LateralController:
         feedforward_steering = 0.0
         curve_gain_scheduled = 1.0
         abs_curvature = abs(self.smoothed_path_curvature)
+        speed_gain_final = 1.0
+        speed_gain_scale = 0.0
+        speed_gain_applied = False
         if self.curve_feedforward_curvature_min is not None and self.curve_feedforward_curvature_max is not None:
             min_curv = max(1e-6, self.curve_feedforward_curvature_min)
             max_curv = max(min_curv, self.curve_feedforward_curvature_max)
@@ -521,8 +570,34 @@ class LateralController:
                 curve_gain_scheduled = self.curve_feedforward_gain_min + ratio * (
                     self.curve_feedforward_gain_max - self.curve_feedforward_gain_min
                 )
-        
-        if abs_curvature > 0.01:  # Only apply feedforward on curves
+
+        if current_speed is not None and self.speed_gain_max_speed > self.speed_gain_min_speed:
+            if current_speed <= self.speed_gain_min_speed:
+                speed_gain = self.speed_gain_min
+            elif current_speed >= self.speed_gain_max_speed:
+                speed_gain = self.speed_gain_max
+            else:
+                ratio = (current_speed - self.speed_gain_min_speed) / (
+                    self.speed_gain_max_speed - self.speed_gain_min_speed
+                )
+                speed_gain = self.speed_gain_min + ratio * (self.speed_gain_max - self.speed_gain_min)
+            if self.speed_gain_curvature_max > self.speed_gain_curvature_min:
+                if curve_metric_abs <= self.speed_gain_curvature_min:
+                    speed_gain_scale = 1.0
+                elif curve_metric_abs >= self.speed_gain_curvature_max:
+                    speed_gain_scale = 0.0
+                else:
+                    ratio = (curve_metric_abs - self.speed_gain_curvature_min) / (
+                        self.speed_gain_curvature_max - self.speed_gain_curvature_min
+                    )
+                    speed_gain_scale = 1.0 - ratio
+            else:
+                speed_gain_scale = 1.0
+            speed_gain_final = 1.0 + (speed_gain - 1.0) * speed_gain_scale
+            speed_gain_applied = abs(speed_gain_final - 1.0) > 1e-3
+
+        min_curv_ff = max(1e-6, self.curve_feedforward_curvature_min or 0.0)
+        if abs_curvature >= min_curv_ff:  # Apply feedforward on any curve above min curvature
             # Convert curvature (1/m) to steering angle using bicycle model
             # curvature = 1/radius, steering = atan(wheelbase / radius) = atan(wheelbase * curvature)
             # For small angles: steering ≈ wheelbase * curvature
@@ -535,7 +610,7 @@ class LateralController:
             feedforward_steering *= self.max_steering
             if abs_curvature >= self.curve_feedforward_threshold:
                 feedforward_steering *= self.curve_feedforward_gain * curve_gain_scheduled
-                feedforward_steering = np.clip(feedforward_steering, -self.max_steering, self.max_steering)
+            feedforward_steering = np.clip(feedforward_steering, -self.max_steering, self.max_steering)
         
         # Track curve-to-straight transition for smooth integral decay
         is_on_curve = curve_metric_abs > 0.05  # On a curve (curvature > ~3°)
@@ -579,11 +654,25 @@ class LateralController:
         # Note: The steering direction issue (23.7% wrong) is caused by reference point smoothing
         # preserving bias when lane detection fails, not a sign error in the controller
         # The fix is in trajectory/inference.py to not preserve bias during lane failures
-        feedback_steering = self.pid.update(total_error, dt)
+        stanley_heading_term = 0.0
+        stanley_crosstrack_term = 0.0
+        stanley_speed = current_speed if current_speed is not None else 0.0
+        if self.control_mode == "stanley":
+            stanley_heading_term = self.stanley_heading_weight * heading_error
+            denom = max(self.stanley_soft_speed, float(stanley_speed))
+            stanley_crosstrack_term = np.arctan2(
+                self.stanley_k * lateral_error_for_control,
+                denom,
+            )
+            feedback_steering = stanley_heading_term + stanley_crosstrack_term
+        else:
+            feedback_steering = self.pid.update(total_error, dt)
         
         # Combine feedforward + feedback
         # Feedforward handles the curve, feedback corrects for errors
         steering_before_limits = feedforward_steering + feedback_steering
+        if speed_gain_final != 1.0:
+            steering_before_limits *= speed_gain_final
         
         # Get PID internal state
         pid_integral = self.pid.integral
@@ -711,6 +800,15 @@ class LateralController:
                 'path_curvature_raw': raw_ref_curvature,
                 'curve_feedforward_gain_scheduled': curve_gain_scheduled,
                 'curve_feedforward_curvature_used': self.smoothed_path_curvature,
+                'speed_gain_final': speed_gain_final,
+                'speed_gain_scale': speed_gain_scale,
+                'speed_gain_applied': speed_gain_applied,
+                'control_mode': self.control_mode,
+                'stanley_heading_term': stanley_heading_term,
+                'stanley_crosstrack_term': stanley_crosstrack_term,
+                'stanley_speed': stanley_speed,
+                'feedback_gain_scheduled': feedback_gain,
+                'total_error_scaled': total_error,
                 'is_straight': is_straight,
                 'straight_oscillation_rate': self.straight_oscillation_rate,
                 'tuned_deadband': self.deadband,
@@ -935,7 +1033,21 @@ class VehicleController:
                  straight_curvature_threshold: float = 0.01,
                  steering_rate_curvature_min: float = 0.005,
                  steering_rate_curvature_max: float = 0.03,
-                 steering_rate_scale_min: float = 0.5):
+                 steering_rate_scale_min: float = 0.5,
+                 speed_gain_min_speed: float = 4.0,
+                 speed_gain_max_speed: float = 10.0,
+                 speed_gain_min: float = 1.0,
+                 speed_gain_max: float = 1.2,
+                 speed_gain_curvature_min: float = 0.002,
+                 speed_gain_curvature_max: float = 0.015,
+                 control_mode: str = "pid",
+                 stanley_k: float = 1.0,
+                 stanley_soft_speed: float = 2.0,
+                 stanley_heading_weight: float = 1.0,
+                 feedback_gain_min: float = 1.0,
+                 feedback_gain_max: float = 1.2,
+                 feedback_gain_curvature_min: float = 0.002,
+                 feedback_gain_curvature_max: float = 0.015):
         """
         Initialize vehicle controller.
         
@@ -976,7 +1088,21 @@ class VehicleController:
             straight_curvature_threshold=straight_curvature_threshold,
             steering_rate_curvature_min=steering_rate_curvature_min,
             steering_rate_curvature_max=steering_rate_curvature_max,
-            steering_rate_scale_min=steering_rate_scale_min
+            steering_rate_scale_min=steering_rate_scale_min,
+            speed_gain_min_speed=speed_gain_min_speed,
+            speed_gain_max_speed=speed_gain_max_speed,
+            speed_gain_min=speed_gain_min,
+            speed_gain_max=speed_gain_max,
+            speed_gain_curvature_min=speed_gain_curvature_min,
+            speed_gain_curvature_max=speed_gain_curvature_max,
+            control_mode=control_mode,
+            stanley_k=stanley_k,
+            stanley_soft_speed=stanley_soft_speed,
+            stanley_heading_weight=stanley_heading_weight,
+            feedback_gain_min=feedback_gain_min,
+            feedback_gain_max=feedback_gain_max,
+            feedback_gain_curvature_min=feedback_gain_curvature_min,
+            feedback_gain_curvature_max=feedback_gain_curvature_max
         )
         self.longitudinal_controller = LongitudinalController(
             kp=longitudinal_kp,
@@ -1011,6 +1137,7 @@ class VehicleController:
             current_state.get('heading', 0.0),
             reference_point,
             current_state.get('position'),
+            current_state.get('speed', 0.0),
             return_metadata=return_metadata
         )
         
