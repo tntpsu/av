@@ -836,7 +836,9 @@ class LongitudinalController:
                  target_speed: float = 8.0, max_speed: float = 10.0,
                  throttle_rate_limit: float = 0.08, brake_rate_limit: float = 0.15,
                  throttle_smoothing_alpha: float = 0.6, speed_smoothing_alpha: float = 0.7,
-                 min_throttle_when_accel: float = 0.0):
+                 min_throttle_when_accel: float = 0.0, default_dt: float = 1.0 / 30.0,
+                 max_accel: float = 2.5, max_decel: float = 3.0, max_jerk: float = 2.0,
+                 accel_feedforward_gain: float = 1.0, decel_feedforward_gain: float = 1.0):
         """
         Initialize longitudinal controller.
         
@@ -855,10 +857,23 @@ class LongitudinalController:
         self.throttle_smoothing_alpha = throttle_smoothing_alpha
         self.speed_smoothing_alpha = speed_smoothing_alpha
         self.min_throttle_when_accel = min_throttle_when_accel
+        self.default_dt = default_dt
+        self.max_accel = max_accel
+        self.max_decel = max_decel
+        self.max_jerk = max_jerk
+        self.accel_feedforward_gain = accel_feedforward_gain
+        self.decel_feedforward_gain = decel_feedforward_gain
         self.last_throttle = 0.0
         self.last_brake = 0.0
         self.last_throttle_before_limits = 0.0
         self.last_brake_before_limits = 0.0
+        self.last_accel_feedforward = 0.0
+        self.last_brake_feedforward = 0.0
+        self.last_raw_speed = None
+        self.last_accel = None
+        self.last_jerk = None
+        self.last_accel_capped = False
+        self.last_jerk_capped = False
         self.pid_throttle = PIDController(
             kp=kp,
             ki=ki,
@@ -874,7 +889,13 @@ class LongitudinalController:
             output_limit=(0.0, 1.0)  # Brake range
         )
     
-    def compute_control(self, current_speed: float, reference_velocity: Optional[float] = None) -> Tuple[float, float]:
+    def compute_control(
+        self,
+        current_speed: float,
+        reference_velocity: Optional[float] = None,
+        dt: Optional[float] = None,
+        reference_accel: Optional[float] = None
+    ) -> Tuple[float, float]:
         """
         Compute throttle and brake commands with speed smoothing and limiting.
         
@@ -885,8 +906,21 @@ class LongitudinalController:
         Returns:
             Tuple of (throttle, brake) commands (0.0 to 1.0)
         """
+        if dt is None or dt <= 0.0:
+            dt = self.default_dt
+
         if reference_velocity is None:
             reference_velocity = self.target_speed
+
+        accel_feedforward = 0.0
+        brake_feedforward = 0.0
+        if reference_accel is not None:
+            if reference_accel > 0.0 and self.max_accel > 0.0:
+                accel_feedforward = min(reference_accel / self.max_accel, 1.0)
+                accel_feedforward *= self.accel_feedforward_gain
+            elif reference_accel < 0.0 and self.max_decel > 0.0:
+                brake_feedforward = min(-reference_accel / self.max_decel, 1.0)
+                brake_feedforward *= self.decel_feedforward_gain
         
         # Enforce hard speed limit - check FIRST before any other logic
         if current_speed > self.max_speed:
@@ -897,7 +931,6 @@ class LongitudinalController:
             throttle = 0.0
             self.pid_throttle.reset()
             # Update brake controller for smooth braking
-            dt = 0.033
             self.pid_brake.update(speed_excess, dt)
             self.last_speed = current_speed
             self.last_throttle = throttle
@@ -922,8 +955,6 @@ class LongitudinalController:
         raw_speed_error = reference_velocity - current_speed
         if raw_speed_error > 0.0 and speed_error < 0.0:
             speed_error = raw_speed_error
-        
-        dt = 0.033  # Assume ~30 Hz update rate
         
         # FIXED: Add hysteresis to prevent throttle/brake oscillation
         # Use different thresholds for throttle vs brake to create a "dead zone"
@@ -968,16 +999,56 @@ class LongitudinalController:
             else:
                 # Normal operation - full throttle
                 throttle = base_throttle
+            if accel_feedforward > 0.0:
+                throttle = np.clip(throttle + accel_feedforward, 0.0, 1.0)
             brake = 0.0
             self.pid_brake.reset()  # Reset brake controller
         elif speed_error < brake_threshold:  # Need to decelerate
             throttle = 0.0
             brake = self.pid_brake.update(-speed_error, dt)
+            if brake_feedforward > 0.0:
+                brake = np.clip(brake + brake_feedforward, 0.0, 1.0)
             self.pid_throttle.reset()  # Reset throttle controller
         else:  # Within dead zone - maintain current speed (coast)
             throttle = 0.0
             brake = 0.0
             # Don't reset controllers in dead zone - allows smooth transitions
+
+        accel_capped = False
+        jerk_capped = False
+        if self.last_raw_speed is not None and dt > 0.0:
+            measured_accel = (current_speed - self.last_raw_speed) / dt
+            if measured_accel > 0.0 and self.max_accel > 0.0 and measured_accel > self.max_accel:
+                if throttle > 0.0:
+                    scale = min(1.0, self.max_accel / measured_accel)
+                    throttle *= scale
+                    accel_capped = True
+            elif measured_accel < 0.0 and self.max_decel > 0.0 and abs(measured_accel) > self.max_decel:
+                if brake > 0.0:
+                    scale = min(1.0, self.max_decel / abs(measured_accel))
+                    brake *= scale
+                    accel_capped = True
+
+            if self.last_accel is not None and self.max_jerk > 0.0:
+                measured_jerk = (measured_accel - self.last_accel) / dt
+                if measured_jerk > 0.0 and measured_jerk > self.max_jerk:
+                    if throttle > 0.0:
+                        scale = min(1.0, self.max_jerk / measured_jerk)
+                        throttle *= scale
+                        jerk_capped = True
+                elif measured_jerk < 0.0 and abs(measured_jerk) > self.max_jerk:
+                    if brake > 0.0:
+                        scale = min(1.0, self.max_jerk / abs(measured_jerk))
+                        brake *= scale
+                        jerk_capped = True
+                self.last_jerk = measured_jerk
+            self.last_accel = measured_accel
+
+        self.last_raw_speed = current_speed
+        self.last_accel_feedforward = accel_feedforward
+        self.last_brake_feedforward = brake_feedforward
+        self.last_accel_capped = accel_capped
+        self.last_jerk_capped = jerk_capped
         
         self.last_throttle_before_limits = throttle
         self.last_brake_before_limits = brake
@@ -1025,6 +1096,12 @@ class VehicleController:
                  throttle_rate_limit: float = 0.08, brake_rate_limit: float = 0.15,
                  throttle_smoothing_alpha: float = 0.6, speed_smoothing_alpha: float = 0.7,
                  min_throttle_when_accel: float = 0.0,
+                 longitudinal_default_dt: float = 1.0 / 30.0,
+                 longitudinal_max_accel: float = 2.5,
+                 longitudinal_max_decel: float = 3.0,
+                 longitudinal_max_jerk: float = 2.0,
+                 longitudinal_accel_feedforward_gain: float = 1.0,
+                 longitudinal_decel_feedforward_gain: float = 1.0,
                  steering_smoothing_alpha: float = 0.7,
                  curve_feedforward_gain: float = 1.0, curve_feedforward_threshold: float = 0.02,
                  curve_feedforward_gain_min: float = 1.0, curve_feedforward_gain_max: float = 1.0,
@@ -1114,11 +1191,23 @@ class VehicleController:
             brake_rate_limit=brake_rate_limit,
             throttle_smoothing_alpha=throttle_smoothing_alpha,
             speed_smoothing_alpha=speed_smoothing_alpha,
-            min_throttle_when_accel=min_throttle_when_accel
+            min_throttle_when_accel=min_throttle_when_accel,
+            default_dt=longitudinal_default_dt,
+            max_accel=longitudinal_max_accel,
+            max_decel=longitudinal_max_decel,
+            max_jerk=longitudinal_max_jerk,
+            accel_feedforward_gain=longitudinal_accel_feedforward_gain,
+            decel_feedforward_gain=longitudinal_decel_feedforward_gain
         )
     
-    def compute_control(self, current_state: dict, reference_point: dict, 
-                       return_metadata: bool = False) -> dict:
+    def compute_control(
+        self,
+        current_state: dict,
+        reference_point: dict,
+        return_metadata: bool = False,
+        dt: Optional[float] = None,
+        reference_accel: Optional[float] = None
+    ) -> dict:
         """
         Compute control commands.
         
@@ -1151,7 +1240,9 @@ class VehicleController:
         # Longitudinal control
         throttle, brake = self.longitudinal_controller.compute_control(
             current_state.get('speed', 0.0),
-            reference_point.get('velocity')
+            reference_point.get('velocity'),
+            dt=dt,
+            reference_accel=reference_accel
         )
         
         result = {
@@ -1170,6 +1261,10 @@ class VehicleController:
             # For throttle/brake, we don't track before_limits separately yet
             result['throttle_before_limits'] = self.longitudinal_controller.last_throttle_before_limits
             result['brake_before_limits'] = self.longitudinal_controller.last_brake_before_limits
+            result['accel_feedforward'] = self.longitudinal_controller.last_accel_feedforward
+            result['brake_feedforward'] = self.longitudinal_controller.last_brake_feedforward
+            result['longitudinal_accel_capped'] = self.longitudinal_controller.last_accel_capped
+            result['longitudinal_jerk_capped'] = self.longitudinal_controller.last_jerk_capped
         
         return result
     

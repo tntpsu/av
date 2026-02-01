@@ -227,6 +227,16 @@ class AVStack:
         lateral_kp = lateral_cfg.get('kp', 0.3)
         lateral_ki = lateral_cfg.get('ki', 0.0)
         lateral_kd = lateral_cfg.get('kd', 0.1)
+        speed_planner_cfg = trajectory_cfg.get('speed_planner', {})
+        longitudinal_max_accel = float(
+            longitudinal_cfg.get('max_accel', speed_planner_cfg.get('max_accel', 2.5))
+        )
+        longitudinal_max_decel = float(
+            longitudinal_cfg.get('max_decel', speed_planner_cfg.get('max_decel', 3.0))
+        )
+        longitudinal_max_jerk = float(
+            longitudinal_cfg.get('max_jerk', speed_planner_cfg.get('max_jerk', 2.0))
+        )
         
         # Log controller parameters for debugging
         logger.info(f"[CONTROLLER] Lateral control parameters: kp={lateral_kp}, ki={lateral_ki}, kd={lateral_kd}")
@@ -246,6 +256,11 @@ class AVStack:
             throttle_smoothing_alpha=longitudinal_cfg.get('throttle_smoothing_alpha', 0.6),
             speed_smoothing_alpha=longitudinal_cfg.get('speed_smoothing', 0.6),
             min_throttle_when_accel=longitudinal_cfg.get('min_throttle_when_accel', 0.0),
+            longitudinal_max_accel=longitudinal_max_accel,
+            longitudinal_max_decel=longitudinal_max_decel,
+            longitudinal_max_jerk=longitudinal_max_jerk,
+            longitudinal_accel_feedforward_gain=longitudinal_cfg.get('accel_feedforward_gain', 1.0),
+            longitudinal_decel_feedforward_gain=longitudinal_cfg.get('decel_feedforward_gain', 1.0),
             max_steering=lateral_cfg.get('max_steering', 0.5),
             lateral_deadband=lateral_cfg.get('deadband', 0.02),
             lateral_heading_weight=lateral_cfg.get('heading_weight', 0.5),
@@ -287,15 +302,14 @@ class AVStack:
         self.safety_config = safety_cfg
 
         # Speed planner (jerk-limited) configuration
-        speed_planner_cfg = trajectory_cfg.get('speed_planner', {})
         self.speed_planner_enabled = bool(speed_planner_cfg.get('enabled', False))
         self.speed_planner = None
         if self.speed_planner_enabled:
             default_dt = float(speed_planner_cfg.get('default_dt', 1.0 / 30.0))
             planner_config = SpeedPlannerConfig(
-                max_accel=float(speed_planner_cfg.get('max_accel', 2.0)),
-                max_decel=float(speed_planner_cfg.get('max_decel', 3.0)),
-                max_jerk=float(speed_planner_cfg.get('max_jerk', 2.0)),
+                max_accel=longitudinal_max_accel,
+                max_decel=longitudinal_max_decel,
+                max_jerk=longitudinal_max_jerk,
                 min_speed=float(speed_planner_cfg.get('min_speed', 0.0)),
                 launch_speed_floor=float(speed_planner_cfg.get('launch_speed_floor', 0.0)),
                 launch_speed_floor_threshold=float(speed_planner_cfg.get('launch_speed_floor_threshold', 0.0)),
@@ -526,6 +540,21 @@ class AVStack:
         # CRITICAL: Save previous timestamp BEFORE updating (we need it for comparisons)
         prev_timestamp = self.last_timestamp if hasattr(self, 'last_timestamp') else None
         # Update last_timestamp at the END of processing (after all timestamp comparisons)
+
+        # Compute control dt from timestamps (fallback to target FPS)
+        raw_dt = None
+        if prev_timestamp is not None:
+            raw_dt = float(timestamp) - float(prev_timestamp)
+        default_control_dt = 1.0 / float(getattr(self, "target_fps", 30.0))
+        if raw_dt is not None and 0.0 < raw_dt < 0.5:
+            control_dt = raw_dt
+        else:
+            control_dt = default_control_dt
+        if self.frame_count % 120 == 0:
+            logger.debug(
+                f"[Frame {self.frame_count}] Longitudinal dt={control_dt:.4f}s "
+                f"(raw_dt={raw_dt if raw_dt is not None else 'N/A'})"
+            )
 
         # Teleport/jump guard: detect sudden vehicle position discontinuities
         current_position = self._extract_position(vehicle_state_dict)
@@ -1688,6 +1717,7 @@ class AVStack:
             path_curvature=path_curvature,
             max_lateral_accel=max_lateral_accel,
             min_curve_speed=min_curve_speed,
+            current_speed=current_speed,
         )
         preview_decel = self.trajectory_config.get('speed_limit_preview_decel', 0.0)
         if isinstance(speed_limit_preview, (int, float)) and speed_limit_preview > 0:
@@ -1700,6 +1730,7 @@ class AVStack:
             adjusted_target_speed = min(adjusted_target_speed, preview_target)
         target_speed_post_limits = adjusted_target_speed
         target_speed_planned = None
+        planned_accel = None
         if self.speed_planner_enabled and self.speed_planner is not None:
             planned_speed, planned_accel, planned_jerk, planner_active = self.speed_planner.step(
                 adjusted_target_speed,
@@ -1875,7 +1906,11 @@ class AVStack:
                 
                 # Get control command with metadata for recording
                 control_command = self.controller.compute_control(
-                    current_state, reference_point, return_metadata=True
+                    current_state,
+                    reference_point,
+                    return_metadata=True,
+                    dt=control_dt,
+                    reference_accel=planned_accel
                 )
                 control_command['target_speed_raw'] = base_speed
                 control_command['target_speed_post_limits'] = target_speed_post_limits
@@ -2273,6 +2308,7 @@ class AVStack:
         path_curvature: float,
         max_lateral_accel: float,
         min_curve_speed: float = 0.0,
+        current_speed: float | None = None,
     ) -> float:
         """Clamp speed using map limits and curvature-based lateral acceleration."""
         adjusted_speed = base_speed
@@ -2286,6 +2322,15 @@ class AVStack:
                 if min_curve_speed > 0:
                     curve_speed = max(curve_speed, min_curve_speed)
                 adjusted_speed = min(adjusted_speed, curve_speed)
+                if current_speed is not None and current_speed > 0.0:
+                    current_lat_accel = (current_speed ** 2) * abs(path_curvature)
+                    if current_lat_accel > max_lateral_accel and adjusted_speed < current_speed:
+                        logger.debug(
+                            "Lateral accel cap active: "
+                            f"lat_accel={current_lat_accel:.2f} m/s^2 "
+                            f"cap={max_lateral_accel:.2f} m/s^2 "
+                            f"curve_speed={curve_speed:.2f} m/s"
+                        )
 
         return float(adjusted_speed)
 
@@ -2517,6 +2562,10 @@ class AVStack:
             steering_before_limits=control_command.get('steering_before_limits'),
             throttle_before_limits=control_command.get('throttle_before_limits'),
             brake_before_limits=control_command.get('brake_before_limits'),
+            accel_feedforward=control_command.get('accel_feedforward'),
+            brake_feedforward=control_command.get('brake_feedforward'),
+            longitudinal_accel_capped=bool(control_command.get('longitudinal_accel_capped', False)),
+            longitudinal_jerk_capped=bool(control_command.get('longitudinal_jerk_capped', False)),
             pid_integral=control_command.get('pid_integral'),
             pid_derivative=control_command.get('pid_derivative'),
             pid_error=control_command.get('total_error'),  # Total error before PID

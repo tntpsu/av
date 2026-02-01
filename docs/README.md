@@ -7,6 +7,8 @@ This directory contains additional documentation for the AV Stack project.
 - **[README.md](../README.md)** - Main project documentation and quick start
 - **[setup_unity.md](../setup_unity.md)** - Unity setup instructions
 - **[CONFIG_GUIDE.md](../CONFIG_GUIDE.md)** - Configuration system guide
+- **[ROADMAP_PHASE2_PLUS.md](ROADMAP_PHASE2_PLUS.md)** - Phase 2+ roadmap with test gates
+- **[TODO.md](TODO.md)** - Near-term Phase 1 completion checklist
 
 ## Development Documentation
 

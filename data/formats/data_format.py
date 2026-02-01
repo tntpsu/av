@@ -86,6 +86,10 @@ class ControlCommand:
     steering_before_limits: Optional[float] = None
     throttle_before_limits: Optional[float] = None
     brake_before_limits: Optional[float] = None
+    accel_feedforward: Optional[float] = None
+    brake_feedforward: Optional[float] = None
+    longitudinal_accel_capped: bool = False
+    longitudinal_jerk_capped: bool = False
     # PID internal state
     pid_integral: Optional[float] = None  # Lateral PID integral term
     pid_derivative: Optional[float] = None  # Lateral PID derivative term

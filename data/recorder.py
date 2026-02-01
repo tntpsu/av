@@ -421,6 +421,30 @@ class DataRecorder:
             dtype=np.float32
         )
         self.h5_file.create_dataset(
+            "control/accel_feedforward",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/brake_feedforward",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/longitudinal_accel_capped",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int8
+        )
+        self.h5_file.create_dataset(
+            "control/longitudinal_jerk_capped",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int8
+        )
+        self.h5_file.create_dataset(
             "control/emergency_stop",
             shape=(0,),
             maxshape=max_shape,
@@ -1600,6 +1624,10 @@ class DataRecorder:
         target_speed_ramp_active_list = []
         launch_throttle_cap_list = []
         launch_throttle_cap_active_list = []
+        accel_feedforward_list = []
+        brake_feedforward_list = []
+        accel_capped_list = []
+        jerk_capped_list = []
         
         for frame in frames:
             cc = frame.control_command
@@ -1610,6 +1638,10 @@ class DataRecorder:
             steering_before.append(cc.steering_before_limits if cc.steering_before_limits is not None else cc.steering)
             throttle_before.append(cc.throttle_before_limits if cc.throttle_before_limits is not None else cc.throttle)
             brake_before.append(cc.brake_before_limits if cc.brake_before_limits is not None else cc.brake)
+            accel_feedforward_list.append(getattr(cc, 'accel_feedforward', 0.0) or 0.0)
+            brake_feedforward_list.append(getattr(cc, 'brake_feedforward', 0.0) or 0.0)
+            accel_capped_list.append(1 if getattr(cc, 'longitudinal_accel_capped', False) else 0)
+            jerk_capped_list.append(1 if getattr(cc, 'longitudinal_jerk_capped', False) else 0)
             pid_integrals.append(cc.pid_integral if cc.pid_integral is not None else 0.0)
             pid_derivatives.append(cc.pid_derivative if cc.pid_derivative is not None else 0.0)
             pid_errors.append(cc.pid_error if cc.pid_error is not None else 0.0)
@@ -1643,6 +1675,8 @@ class DataRecorder:
             
             # Resize all control datasets
             for key in ["timestamps", "steering", "throttle", "brake",
+                       "accel_feedforward", "brake_feedforward",
+                       "longitudinal_accel_capped", "longitudinal_jerk_capped",
                        "steering_before_limits", "throttle_before_limits", "brake_before_limits",
                        "pid_integral", "pid_derivative", "pid_error",
                        "lateral_error", "heading_error", "total_error",
@@ -1662,6 +1696,10 @@ class DataRecorder:
             self.h5_file["control/steering"][current_size:] = steerings
             self.h5_file["control/throttle"][current_size:] = throttles
             self.h5_file["control/brake"][current_size:] = brakes
+            self.h5_file["control/accel_feedforward"][current_size:] = accel_feedforward_list
+            self.h5_file["control/brake_feedforward"][current_size:] = brake_feedforward_list
+            self.h5_file["control/longitudinal_accel_capped"][current_size:] = np.array(accel_capped_list, dtype=np.int8)
+            self.h5_file["control/longitudinal_jerk_capped"][current_size:] = np.array(jerk_capped_list, dtype=np.int8)
             self.h5_file["control/steering_before_limits"][current_size:] = steering_before
             self.h5_file["control/throttle_before_limits"][current_size:] = throttle_before
             self.h5_file["control/brake_before_limits"][current_size:] = brake_before

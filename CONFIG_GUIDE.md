@@ -80,6 +80,11 @@ control:
     kp: 0.25             # Proportional gain (faster speed tracking)
     ki: 0.02             # Integral gain (steady-state error)
     kd: 0.01             # Derivative gain (damping)
+    max_accel: 2.5       # Max accel (m/s^2), aligned with speed planner
+    max_decel: 3.0       # Max decel (m/s^2), aligned with speed planner
+    max_jerk: 2.0        # Max jerk (m/s^3), aligned with speed planner
+    accel_feedforward_gain: 1.0  # Scale planner accel feedforward contribution
+    decel_feedforward_gain: 1.0  # Scale planner decel feedforward contribution
     target_speed: 8.0    # Target speed in m/s
     max_speed: 10.0      # Maximum speed in m/s
     speed_smoothing: 0.3 # Smoothing factor (0-1)

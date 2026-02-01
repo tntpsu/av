@@ -161,6 +161,68 @@ def test_longitudinal_rate_limit():
     assert brake2 - brake1 <= 0.10 + 1e-6
 
 
+def test_longitudinal_accel_feedforward():
+    """Feedforward accel should influence throttle/brake when PID gains are zero."""
+    controller = LongitudinalController(
+        kp=0.0,
+        ki=0.0,
+        kd=0.0,
+        target_speed=10.0,
+        max_accel=2.0,
+        max_decel=2.0,
+        throttle_rate_limit=1.0,
+        brake_rate_limit=1.0,
+        throttle_smoothing_alpha=1.0,
+        speed_smoothing_alpha=0.0
+    )
+
+    throttle, brake = controller.compute_control(
+        current_speed=5.0,
+        reference_velocity=10.0,
+        reference_accel=1.0,
+        dt=0.1
+    )
+    assert throttle == pytest.approx(0.5, rel=1e-3)
+    assert brake == pytest.approx(0.0, rel=1e-6)
+
+    throttle2, brake2 = controller.compute_control(
+        current_speed=10.0,
+        reference_velocity=5.0,
+        reference_accel=-1.0,
+        dt=0.1
+    )
+    assert throttle2 == pytest.approx(0.0, rel=1e-6)
+    assert brake2 == pytest.approx(0.5, rel=1e-3)
+
+
+def test_longitudinal_accel_cap():
+    """Acceleration cap should trigger when measured accel exceeds limits."""
+    controller = LongitudinalController(
+        kp=0.0,
+        ki=0.0,
+        kd=0.0,
+        target_speed=10.0,
+        max_accel=0.5,
+        max_decel=0.5,
+        max_jerk=1.0
+    )
+
+    controller.compute_control(
+        current_speed=0.0,
+        reference_velocity=10.0,
+        reference_accel=1.0,
+        dt=0.1
+    )
+    controller.compute_control(
+        current_speed=1.0,
+        reference_velocity=10.0,
+        reference_accel=1.0,
+        dt=0.1
+    )
+
+    assert controller.last_accel_capped is True
+
+
 def test_vehicle_controller():
     """Test combined vehicle controller."""
     controller = VehicleController()

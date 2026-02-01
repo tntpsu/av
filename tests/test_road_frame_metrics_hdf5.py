@@ -27,6 +27,7 @@ def test_recorder_writes_road_frame_metrics(tmp_path: Path) -> None:
             heading_delta_deg=5.0,
             road_frame_lane_center_offset=0.1,
             road_frame_lane_center_error=0.15,
+            vehicle_frame_lookahead_offset=-0.2,
         )
         frame = RecordingFrame(
             timestamp=0.0,
@@ -51,9 +52,11 @@ def test_recorder_writes_road_frame_metrics(tmp_path: Path) -> None:
         assert "vehicle/heading_delta_deg" in h5_file
         assert "vehicle/road_frame_lane_center_offset" in h5_file
         assert "vehicle/road_frame_lane_center_error" in h5_file
+        assert "vehicle/vehicle_frame_lookahead_offset" in h5_file
         assert float(h5_file["vehicle/road_frame_lateral_offset"][0]) == pytest.approx(0.25, rel=1e-6)
         assert float(h5_file["vehicle/road_heading_deg"][0]) == pytest.approx(45.0, rel=1e-6)
         assert float(h5_file["vehicle/car_heading_deg"][0]) == pytest.approx(50.0, rel=1e-6)
         assert float(h5_file["vehicle/heading_delta_deg"][0]) == pytest.approx(5.0, rel=1e-6)
         assert float(h5_file["vehicle/road_frame_lane_center_offset"][0]) == pytest.approx(0.1, rel=1e-6)
         assert float(h5_file["vehicle/road_frame_lane_center_error"][0]) == pytest.approx(0.15, rel=1e-6)
+        assert float(h5_file["vehicle/vehicle_frame_lookahead_offset"][0]) == pytest.approx(-0.2, rel=1e-6)
