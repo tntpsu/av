@@ -112,6 +112,9 @@ trajectory:
   vehicle_frame_lookahead_scale: 1.0     # Scale ref_x when curvature sign is unknown
   vehicle_frame_lookahead_scale_left: 1.0  # Scale ref_x on left turns (curv > 0)
   vehicle_frame_lookahead_scale_right: 1.05  # Scale ref_x on right turns (curv < 0)
+  curvature_smoothing_enabled: true  # Smooth curvature using a distance-based window
+  curvature_smoothing_window_m: 12.0  # Smoothing window length in meters
+  curvature_smoothing_min_speed: 2.0  # Min speed used for distance accumulation (m/s)
   max_lateral_accel: 1.3    # Curve speed cap (m/s^2) for curvature-based speed limiting
   min_curve_speed: 3.2      # Minimum allowed speed when limiting on curvature
   speed_limit_slew_rate: 1.0  # Max change in speed limit per second (m/s^2)

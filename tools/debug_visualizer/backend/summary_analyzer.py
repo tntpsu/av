@@ -3,12 +3,20 @@ Summary analyzer for recording-level metrics.
 Extracted from analyze_drive_overall.py for use in debug visualizer.
 """
 
-import numpy as np
-import h5py
+import math
+import sys
 from pathlib import Path
 from typing import Dict, Optional
+
+import h5py
+import numpy as np
+import yaml
 from scipy.fft import fft, fftfreq
-import math
+
+REPO_ROOT = Path(__file__).resolve().parents[3]
+sys.path.insert(0, str(REPO_ROOT))
+
+from trajectory.utils import smooth_curvature_distance
 
 
 def safe_float(value, default=0.0):
@@ -21,6 +29,17 @@ def safe_float(value, default=0.0):
         if math.isnan(value) or math.isinf(value):
             return default
     return float(value)
+
+
+def _load_config() -> dict:
+    config_path = REPO_ROOT / "config" / "av_stack_config.yaml"
+    if not config_path.exists():
+        return {}
+    try:
+        with config_path.open("r") as f:
+            return yaml.safe_load(f) or {}
+    except Exception:
+        return {}
 
 
 def analyze_recording_summary(recording_path: Path, analyze_to_failure: bool = False, h5_file=None) -> Dict:
@@ -379,6 +398,12 @@ def analyze_recording_summary(recording_path: Path, analyze_to_failure: bool = F
     lateral_accel_p95 = 0.0
     lateral_jerk_p95 = 0.0
     lateral_jerk_max = 0.0
+    config = _load_config()
+    traj_cfg = config.get('trajectory', {})
+    curvature_smoothing_enabled = bool(traj_cfg.get('curvature_smoothing_enabled', False))
+    curvature_window_m = float(traj_cfg.get('curvature_smoothing_window_m', 12.0))
+    curvature_min_speed = float(traj_cfg.get('curvature_smoothing_min_speed', 2.0))
+
     if data.get('speed') is not None and len(data['speed']) > 1 and len(data['time']) > 1:
         dt_series = np.diff(data['time'])
         dt_series[dt_series <= 0] = dt
@@ -422,7 +447,18 @@ def analyze_recording_summary(recording_path: Path, analyze_to_failure: bool = F
         if curvature is not None:
             n_lat = min(len(curvature), len(data['speed']))
             if n_lat > 1:
-                lat_accel = (data['speed'][:n_lat] ** 2) * curvature[:n_lat]
+                curvature_source = curvature[:n_lat]
+                if curvature_smoothing_enabled:
+                    curvature_source = np.array(
+                        smooth_curvature_distance(
+                            curvature_source,
+                            data['speed'][:n_lat],
+                            data['time'][:n_lat],
+                            curvature_window_m,
+                            curvature_min_speed,
+                        )
+                    )
+                lat_accel = (data['speed'][:n_lat] ** 2) * curvature_source
                 abs_lat_accel = np.abs(lat_accel)
                 lateral_accel_p95 = safe_float(np.percentile(abs_lat_accel, 95))
                 lat_dt = np.diff(data['time'][:n_lat])

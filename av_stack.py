@@ -21,7 +21,7 @@ from bridge.client import UnityBridgeClient
 from perception.inference import LaneDetectionInference
 from trajectory.inference import TrajectoryPlanningInference
 from trajectory.speed_planner import SpeedPlanner, SpeedPlannerConfig
-from trajectory.utils import compute_reference_lookahead
+from trajectory.utils import compute_reference_lookahead, curvature_smoothing_alpha
 from control.pid_controller import VehicleController
 from data.recorder import DataRecorder
 from data.formats.data_format import CameraFrame, VehicleState, ControlCommand, PerceptionOutput, TrajectoryOutput, RecordingFrame
@@ -374,6 +374,19 @@ class AVStack:
         self.launch_throttle_ramp_start_time: Optional[float] = None
         self.launch_throttle_ramp_armed: bool = True
         self.launch_stop_candidate_start_time: Optional[float] = None
+
+        # Curvature smoothing state (distance-based window)
+        self.curvature_smoothing_enabled = bool(
+            trajectory_cfg.get('curvature_smoothing_enabled', False)
+        )
+        self.curvature_smoothing_window_m = float(
+            trajectory_cfg.get('curvature_smoothing_window_m', 12.0)
+        )
+        self.curvature_smoothing_min_speed = float(
+            trajectory_cfg.get('curvature_smoothing_min_speed', 2.0)
+        )
+        self.smoothed_path_curvature: Optional[float] = None
+        self.last_curvature_time: Optional[float] = None
     
     def run(self, max_frames: Optional[int] = None, duration: Optional[float] = None):
         """
@@ -1711,9 +1724,19 @@ class AVStack:
             adjusted_target_speed = self.original_target_speed * 0.3
 
         # Apply speed limits from map + curvature
-        path_curvature = vehicle_state_dict.get('groundTruthPathCurvature')
-        if path_curvature is None:
-            path_curvature = vehicle_state_dict.get('ground_truth_path_curvature', 0.0)
+        path_curvature_raw = vehicle_state_dict.get('groundTruthPathCurvature')
+        if path_curvature_raw is None:
+            path_curvature_raw = vehicle_state_dict.get('ground_truth_path_curvature', 0.0)
+        path_curvature_smoothed = self._smooth_path_curvature(
+            float(path_curvature_raw) if isinstance(path_curvature_raw, (int, float)) else 0.0,
+            current_speed,
+            timestamp,
+        )
+        path_curvature = (
+            path_curvature_smoothed
+            if self.curvature_smoothing_enabled
+            else path_curvature_raw
+        )
         max_lateral_accel = self.trajectory_config.get('max_lateral_accel', 2.5)
         min_curve_speed = self.trajectory_config.get('min_curve_speed', 0.0)
         base_speed = adjusted_target_speed
@@ -2307,6 +2330,29 @@ class AVStack:
         if isinstance(position, dict):
             return np.array([position.get('x', 0.0), position.get('z', 0.0)])
         return np.array([0.0, 0.0])
+
+    def _smooth_path_curvature(self, raw_curvature: float, current_speed: float, timestamp: float) -> float:
+        """Smooth curvature using a distance-based EMA window."""
+        if not self.curvature_smoothing_enabled:
+            return float(raw_curvature)
+        if not isinstance(raw_curvature, (int, float)) or math.isnan(float(raw_curvature)):
+            return 0.0
+        if self.smoothed_path_curvature is None or self.last_curvature_time is None:
+            self.smoothed_path_curvature = float(raw_curvature)
+            self.last_curvature_time = float(timestamp)
+            return self.smoothed_path_curvature
+        dt = float(timestamp) - float(self.last_curvature_time)
+        if dt <= 0.0:
+            dt = 1e-3
+        min_speed = max(0.0, float(self.curvature_smoothing_min_speed))
+        distance = max(float(current_speed), min_speed) * dt
+        alpha = curvature_smoothing_alpha(distance, float(self.curvature_smoothing_window_m))
+        self.smoothed_path_curvature = (
+            alpha * float(raw_curvature)
+            + (1.0 - alpha) * float(self.smoothed_path_curvature)
+        )
+        self.last_curvature_time = float(timestamp)
+        return float(self.smoothed_path_curvature)
 
     @staticmethod
     def _apply_speed_limits(

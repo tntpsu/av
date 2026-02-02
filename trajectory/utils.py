@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import math
+from typing import Iterable
+
 
 def compute_reference_lookahead(
     base_lookahead: float,
@@ -48,3 +51,39 @@ def compute_reference_lookahead(
     min_lookahead = float(config.get("reference_lookahead_min", 4.0))
     min_lookahead = max(0.1, min_lookahead)
     return max(min_lookahead, base_lookahead * scale)
+
+
+def curvature_smoothing_alpha(distance_m: float, window_m: float) -> float:
+    """Compute EMA alpha for a distance-based smoothing window."""
+    if window_m <= 0.0:
+        return 1.0
+    distance_m = max(0.0, float(distance_m))
+    return float(1.0 - math.exp(-distance_m / window_m))
+
+
+def smooth_curvature_distance(
+    curvature: Iterable[float],
+    speed: Iterable[float],
+    timestamps: Iterable[float],
+    window_m: float,
+    min_speed: float = 0.0,
+) -> list[float]:
+    """Smooth curvature using a distance-based EMA over a spatial window."""
+    curvatures = list(curvature)
+    speeds = list(speed)
+    times = list(timestamps)
+    if not curvatures or len(curvatures) != len(speeds) or len(curvatures) != len(times):
+        return curvatures
+    if window_m <= 0.0:
+        return curvatures
+    min_speed = max(0.0, float(min_speed))
+    smoothed = [float(curvatures[0])]
+    for i in range(1, len(curvatures)):
+        dt = float(times[i]) - float(times[i - 1])
+        if dt <= 0.0:
+            dt = 1e-3
+        distance = max(float(speeds[i]), min_speed) * dt
+        alpha = curvature_smoothing_alpha(distance, window_m)
+        smoothed_value = alpha * float(curvatures[i]) + (1.0 - alpha) * smoothed[-1]
+        smoothed.append(smoothed_value)
+    return smoothed
