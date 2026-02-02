@@ -170,10 +170,14 @@ def test_longitudinal_accel_feedforward():
         target_speed=10.0,
         max_accel=2.0,
         max_decel=2.0,
+        max_jerk=100.0,
+        max_jerk_min=100.0,
+        max_jerk_max=100.0,
         throttle_rate_limit=1.0,
         brake_rate_limit=1.0,
         throttle_smoothing_alpha=1.0,
-        speed_smoothing_alpha=0.0
+        speed_smoothing_alpha=0.0,
+        speed_for_jerk_alpha=0.0
     )
 
     throttle, brake = controller.compute_control(
@@ -204,7 +208,8 @@ def test_longitudinal_accel_cap():
         target_speed=10.0,
         max_accel=0.5,
         max_decel=0.5,
-        max_jerk=1.0
+        max_jerk=100.0,
+        speed_for_jerk_alpha=0.0
     )
 
     controller.compute_control(

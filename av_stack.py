@@ -261,6 +261,13 @@ class AVStack:
             longitudinal_max_jerk=longitudinal_max_jerk,
             longitudinal_accel_feedforward_gain=longitudinal_cfg.get('accel_feedforward_gain', 1.0),
             longitudinal_decel_feedforward_gain=longitudinal_cfg.get('decel_feedforward_gain', 1.0),
+            longitudinal_speed_for_jerk_alpha=longitudinal_cfg.get('speed_for_jerk_alpha', 0.7),
+            longitudinal_jerk_error_min=longitudinal_cfg.get('jerk_error_min', 0.5),
+            longitudinal_jerk_error_max=longitudinal_cfg.get('jerk_error_max', 3.0),
+            longitudinal_max_jerk_min=longitudinal_cfg.get('max_jerk_min', longitudinal_max_jerk),
+            longitudinal_max_jerk_max=longitudinal_cfg.get('max_jerk_max', max(longitudinal_max_jerk, 6.0)),
+            longitudinal_jerk_cooldown_frames=int(longitudinal_cfg.get('jerk_cooldown_frames', 0)),
+            longitudinal_jerk_cooldown_scale=float(longitudinal_cfg.get('jerk_cooldown_scale', 0.6)),
             max_steering=lateral_cfg.get('max_steering', 0.5),
             lateral_deadband=lateral_cfg.get('deadband', 0.02),
             lateral_heading_weight=lateral_cfg.get('heading_weight', 0.5),
@@ -2342,13 +2349,23 @@ class AVStack:
             return 0.0
 
         slew_rate = self.trajectory_config.get('speed_limit_slew_rate', 0.0)
-        if slew_rate <= 0.0 or self.last_speed_limit is None or self.last_speed_limit_time is None:
+        slew_rate_up = self.trajectory_config.get('speed_limit_slew_rate_up', slew_rate)
+        slew_rate_down = self.trajectory_config.get('speed_limit_slew_rate_down', slew_rate)
+        if (slew_rate <= 0.0 and slew_rate_up <= 0.0 and slew_rate_down <= 0.0) or \
+           self.last_speed_limit is None or self.last_speed_limit_time is None:
             self.last_speed_limit = float(raw_limit)
             self.last_speed_limit_time = float(timestamp)
             return float(raw_limit)
 
         dt = max(1e-3, float(timestamp) - float(self.last_speed_limit_time))
-        smoothed = _slew_limit_value(float(self.last_speed_limit), float(raw_limit), float(slew_rate), dt)
+        if float(raw_limit) >= float(self.last_speed_limit):
+            rate = float(slew_rate_up)
+        else:
+            rate = float(slew_rate_down)
+        if rate <= 0.0:
+            smoothed = float(raw_limit)
+        else:
+            smoothed = _slew_limit_value(float(self.last_speed_limit), float(raw_limit), rate, dt)
         self.last_speed_limit = smoothed
         self.last_speed_limit_time = float(timestamp)
         return smoothed
@@ -2365,6 +2382,12 @@ class AVStack:
         longitudinal_cfg = self.control_config.get('longitudinal', {})
         rate_up = float(longitudinal_cfg.get('target_speed_slew_rate_up', 0.0))
         rate_down = float(longitudinal_cfg.get('target_speed_slew_rate_down', 0.0))
+        slew_error_min = float(longitudinal_cfg.get('target_speed_slew_error_min', 0.5))
+        slew_error_max = float(longitudinal_cfg.get('target_speed_slew_error_max', 3.0))
+        rate_up_min = float(longitudinal_cfg.get('target_speed_slew_rate_up_min', rate_up))
+        rate_up_max = float(longitudinal_cfg.get('target_speed_slew_rate_up_max', rate_up))
+        rate_down_min = float(longitudinal_cfg.get('target_speed_slew_rate_down_min', rate_down))
+        rate_down_max = float(longitudinal_cfg.get('target_speed_slew_rate_down_max', rate_down))
         stop_threshold = float(longitudinal_cfg.get('target_speed_stop_threshold', 0.5))
         ramp_seconds = float(longitudinal_cfg.get('target_speed_restart_ramp_seconds', 0.0))
 
@@ -2376,11 +2399,23 @@ class AVStack:
             ramp_seconds,
             stop_threshold,
         )
+        speed_error = abs(float(desired_speed) - float(current_speed))
+        if slew_error_max > slew_error_min:
+            ratio = np.clip(
+                (speed_error - slew_error_min) / (slew_error_max - slew_error_min),
+                0.0,
+                1.0,
+            )
+        else:
+            ratio = 1.0 if speed_error > 0.0 else 0.0
+        dynamic_rate_up = rate_up_min + ratio * (rate_up_max - rate_up_min)
+        dynamic_rate_down = rate_down_min + ratio * (rate_down_max - rate_down_min)
+
         adjusted = _apply_target_speed_slew(
             float(self.last_target_speed),
             float(ramped_speed),
-            rate_up,
-            rate_down,
+            dynamic_rate_up,
+            dynamic_rate_down,
             dt,
         )
         slew_active = abs(adjusted - float(ramped_speed)) > 1e-6

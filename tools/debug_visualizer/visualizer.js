@@ -380,7 +380,9 @@ class Visualizer {
                 const latJerkP95 = comfort.lateral_jerk_p95 ?? null;
                 html += '<div style="margin-bottom: 1rem; padding: 0.75rem; background: #1f1f1f; border-radius: 4px;">';
                 html += `<strong style="color: ${comfortColor};">Comfort:</strong><br/>`;
-                html += `<span style="color: #888;">Accel P95: ${comfort.acceleration_p95.toFixed(2)} m/s² | Jerk P95: ${comfort.jerk_p95.toFixed(2)} m/s³ | Lat Accel P95: ${latAccelP95 !== null ? latAccelP95.toFixed(2) : '-'} m/s² | Lat Jerk P95: ${latJerkP95 !== null ? latJerkP95.toFixed(2) : '-'} m/s³ | Steering Jerk Max: ${comfort.steering_jerk_max.toFixed(2)}</span>`;
+                const accelP95Filtered = comfort.acceleration_p95_filtered ?? null;
+                const jerkP95Filtered = comfort.jerk_p95_filtered ?? null;
+                html += `<span style="color: #888;">Accel P95: ${comfort.acceleration_p95.toFixed(2)} m/s²${accelP95Filtered !== null ? ` (filt ${accelP95Filtered.toFixed(2)})` : ''} | Jerk P95: ${comfort.jerk_p95.toFixed(2)} m/s³${jerkP95Filtered !== null ? ` (filt ${jerkP95Filtered.toFixed(2)})` : ''} | Lat Accel P95: ${latAccelP95 !== null ? latAccelP95.toFixed(2) : '-'} m/s² | Lat Jerk P95: ${latJerkP95 !== null ? latJerkP95.toFixed(2) : '-'} m/s³ | Steering Jerk Max: ${comfort.steering_jerk_max.toFixed(2)}</span>`;
                 html += '</div>';
             }
             html += `<div style="margin-bottom: 1rem; padding: 0.5rem; background: #2a2a2a; border-radius: 4px;">${scope_indicator}</div>`;

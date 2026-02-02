@@ -438,7 +438,13 @@ class DriveAnalyzer:
         if self.data['speed'] is not None and len(self.data['speed']) > 1 and len(self.data['time']) > 1:
             dt_series = np.diff(self.data['time'])
             dt_series[dt_series <= 0] = dt
-            acceleration = np.diff(self.data['speed']) / dt_series
+            # Filter speed to reduce derivative noise in accel/jerk metrics.
+            alpha = 0.7
+            filtered_speed = np.empty_like(self.data['speed'])
+            filtered_speed[0] = self.data['speed'][0]
+            for i in range(1, len(self.data['speed'])):
+                filtered_speed[i] = alpha * filtered_speed[i - 1] + (1.0 - alpha) * self.data['speed'][i]
+            acceleration = np.diff(filtered_speed) / dt_series
             if acceleration.size > 0:
                 abs_accel = np.abs(acceleration)
                 acceleration_mean = float(np.mean(abs_accel))
@@ -457,9 +463,9 @@ class DriveAnalyzer:
             elif self.data.get('path_curvature_input') is not None:
                 curvature = self.data['path_curvature_input']
             if curvature is not None:
-                n_lat = min(len(curvature), len(self.data['speed']))
+                n_lat = min(len(curvature), len(filtered_speed))
                 if n_lat > 1:
-                    lat_accel = (self.data['speed'][:n_lat] ** 2) * curvature[:n_lat]
+                    lat_accel = (filtered_speed[:n_lat] ** 2) * curvature[:n_lat]
                     abs_lat_accel = np.abs(lat_accel)
                     lateral_accel_p95 = float(np.percentile(abs_lat_accel, 95))
                     lat_dt = np.diff(self.data['time'][:n_lat])

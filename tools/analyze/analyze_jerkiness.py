@@ -29,8 +29,25 @@ def analyze_jerkiness(recording_file: str):
         # Load control data
         control_group = f['control']
         steering = control_group['steering'][:]
-        timestamps = control_group['timestamp'][:]
+        timestamps = control_group['timestamps'][:]
+        throttles = control_group['throttle'][:] if 'throttle' in control_group else None
+        brakes = control_group['brake'][:] if 'brake' in control_group else None
+        path_curvature_input = (
+            control_group['path_curvature_input'][:]
+            if 'path_curvature_input' in control_group
+            else None
+        )
         
+        # Load vehicle data for longitudinal jerk analysis
+        vehicle_group = f.get('vehicle', None)
+        vehicle_timestamps = None
+        speeds = None
+        if vehicle_group is not None:
+            if 'timestamps' in vehicle_group:
+                vehicle_timestamps = vehicle_group['timestamps'][:]
+            if 'speed' in vehicle_group:
+                speeds = vehicle_group['speed'][:]
+
         # Load trajectory data
         trajectory_group = f.get('trajectory', None)
         if trajectory_group is not None:
@@ -161,8 +178,53 @@ def analyze_jerkiness(recording_file: str):
             print("   ⚠️  WARNING: Frequent oscillation pattern detected!")
         print()
         
-        # 5. ROOT CAUSE ANALYSIS
-        print("5. ROOT CAUSE ANALYSIS:")
+        # 5. LONGITUDINAL JERK HOTSPOTS
+        print("5. LONGITUDINAL JERK HOTSPOTS:")
+        print("-" * 80)
+        if vehicle_timestamps is not None and speeds is not None and len(speeds) > 2:
+            dt = np.diff(vehicle_timestamps)
+            dt[dt <= 0] = 1e-3
+            alpha = 0.7
+            filtered_speed = np.empty_like(speeds)
+            filtered_speed[0] = speeds[0]
+            for i in range(1, len(speeds)):
+                filtered_speed[i] = alpha * filtered_speed[i - 1] + (1.0 - alpha) * speeds[i]
+            accel = np.diff(filtered_speed) / dt
+            jerk = np.diff(accel) / dt[1:]
+
+            top_n = min(10, len(jerk))
+            if top_n > 0:
+                top_idx = np.argsort(np.abs(jerk))[-top_n:][::-1]
+                print("   Top jerk events:")
+                for idx in top_idx:
+                    # Map jerk index to original frame index (offset by 2 due to diff)
+                    frame_idx = idx + 2
+                    t = vehicle_timestamps[frame_idx]
+                    speed = speeds[frame_idx]
+                    acc = accel[idx + 1] if idx + 1 < len(accel) else accel[-1]
+                    j = jerk[idx]
+                    steer = steering[frame_idx] if frame_idx < len(steering) else 0.0
+                    thr = throttles[frame_idx] if throttles is not None and frame_idx < len(throttles) else 0.0
+                    brk = brakes[frame_idx] if brakes is not None and frame_idx < len(brakes) else 0.0
+                    curv = (
+                        path_curvature_input[frame_idx]
+                        if path_curvature_input is not None and frame_idx < len(path_curvature_input)
+                        else 0.0
+                    )
+                    print(
+                        f"   frame={frame_idx:4d} t={t:7.3f} "
+                        f"speed={speed:6.2f} accel={acc:7.2f} jerk={j:8.2f} "
+                        f"thr={thr:4.2f} brk={brk:4.2f} steer={steer:5.2f} "
+                        f"curv={curv:7.4f}"
+                    )
+            else:
+                print("   Not enough samples for jerk analysis.")
+        else:
+            print("   Vehicle speed/timestamps not available.")
+        print()
+
+        # 6. ROOT CAUSE ANALYSIS
+        print("6. ROOT CAUSE ANALYSIS:")
         print("-" * 80)
         
         issues = []
@@ -197,8 +259,8 @@ def analyze_jerkiness(recording_file: str):
             print("   No obvious issues detected")
         print()
         
-        # 6. RECOMMENDATIONS
-        print("6. RECOMMENDATIONS:")
+        # 7. RECOMMENDATIONS
+        print("7. RECOMMENDATIONS:")
         print("-" * 80)
         
         if steering_zero_crossings > 10:

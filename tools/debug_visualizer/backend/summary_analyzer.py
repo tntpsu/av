@@ -370,6 +370,12 @@ def analyze_recording_summary(recording_path: Path, analyze_to_failure: bool = F
     jerk_mean = 0.0
     jerk_max = 0.0
     jerk_p95 = 0.0
+    acceleration_mean_filtered = 0.0
+    acceleration_max_filtered = 0.0
+    acceleration_p95_filtered = 0.0
+    jerk_mean_filtered = 0.0
+    jerk_max_filtered = 0.0
+    jerk_p95_filtered = 0.0
     lateral_accel_p95 = 0.0
     lateral_jerk_p95 = 0.0
     lateral_jerk_max = 0.0
@@ -389,6 +395,25 @@ def analyze_recording_summary(recording_path: Path, analyze_to_failure: bool = F
                 jerk_mean = safe_float(np.mean(abs_jerk))
                 jerk_max = safe_float(np.max(abs_jerk))
                 jerk_p95 = safe_float(np.percentile(abs_jerk, 95))
+        # Filtered speed for comfort metrics (reduce derivative noise)
+        alpha = 0.7
+        filtered_speed = np.empty_like(data['speed'])
+        filtered_speed[0] = data['speed'][0]
+        for i in range(1, len(data['speed'])):
+            filtered_speed[i] = alpha * filtered_speed[i - 1] + (1.0 - alpha) * data['speed'][i]
+        filtered_accel = np.diff(filtered_speed) / dt_series
+        if filtered_accel.size > 0:
+            abs_f_accel = np.abs(filtered_accel)
+            acceleration_mean_filtered = safe_float(np.mean(abs_f_accel))
+            acceleration_max_filtered = safe_float(np.max(abs_f_accel))
+            acceleration_p95_filtered = safe_float(np.percentile(abs_f_accel, 95))
+        if filtered_accel.size > 1:
+            filtered_jerk = np.diff(filtered_accel) / dt_series[1:]
+            if filtered_jerk.size > 0:
+                abs_f_jerk = np.abs(filtered_jerk)
+                jerk_mean_filtered = safe_float(np.mean(abs_f_jerk))
+                jerk_max_filtered = safe_float(np.max(abs_f_jerk))
+                jerk_p95_filtered = safe_float(np.percentile(abs_f_jerk, 95))
         curvature = None
         if data.get('gt_path_curvature') is not None:
             curvature = data['gt_path_curvature']
@@ -873,6 +898,12 @@ def analyze_recording_summary(recording_path: Path, analyze_to_failure: bool = F
             "jerk_mean": safe_float(jerk_mean),
             "jerk_p95": safe_float(jerk_p95),
             "jerk_max": safe_float(jerk_max),
+            "acceleration_mean_filtered": safe_float(acceleration_mean_filtered),
+            "acceleration_p95_filtered": safe_float(acceleration_p95_filtered),
+            "acceleration_max_filtered": safe_float(acceleration_max_filtered),
+            "jerk_mean_filtered": safe_float(jerk_mean_filtered),
+            "jerk_p95_filtered": safe_float(jerk_p95_filtered),
+            "jerk_max_filtered": safe_float(jerk_max_filtered),
             "lateral_accel_p95": safe_float(lateral_accel_p95),
             "lateral_jerk_p95": safe_float(lateral_jerk_p95),
             "lateral_jerk_max": safe_float(lateral_jerk_max)
@@ -881,6 +912,9 @@ def analyze_recording_summary(recording_path: Path, analyze_to_failure: bool = F
             "steering_jerk_max": safe_float(steering_jerk_max),
             "acceleration_p95": safe_float(acceleration_p95),
             "jerk_p95": safe_float(jerk_p95),
+            "acceleration_p95_filtered": safe_float(acceleration_p95_filtered),
+            "jerk_p95_filtered": safe_float(jerk_p95_filtered),
+            "jerk_max_filtered": safe_float(jerk_max_filtered),
             "lateral_accel_p95": safe_float(lateral_accel_p95),
             "lateral_jerk_p95": safe_float(lateral_jerk_p95)
         },

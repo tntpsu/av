@@ -838,7 +838,11 @@ class LongitudinalController:
                  throttle_smoothing_alpha: float = 0.6, speed_smoothing_alpha: float = 0.7,
                  min_throttle_when_accel: float = 0.0, default_dt: float = 1.0 / 30.0,
                  max_accel: float = 2.5, max_decel: float = 3.0, max_jerk: float = 2.0,
-                 accel_feedforward_gain: float = 1.0, decel_feedforward_gain: float = 1.0):
+                 accel_feedforward_gain: float = 1.0, decel_feedforward_gain: float = 1.0,
+                 speed_for_jerk_alpha: float = 0.7,
+                 jerk_error_min: float = 0.5, jerk_error_max: float = 3.0,
+                 max_jerk_min: float = 1.5, max_jerk_max: float = 6.0,
+                 jerk_cooldown_frames: int = 0, jerk_cooldown_scale: float = 0.6):
         """
         Initialize longitudinal controller.
         
@@ -861,8 +865,15 @@ class LongitudinalController:
         self.max_accel = max_accel
         self.max_decel = max_decel
         self.max_jerk = max_jerk
+        self.jerk_error_min = jerk_error_min
+        self.jerk_error_max = jerk_error_max
+        self.max_jerk_min = max_jerk_min
+        self.max_jerk_max = max_jerk_max
         self.accel_feedforward_gain = accel_feedforward_gain
         self.decel_feedforward_gain = decel_feedforward_gain
+        self.speed_for_jerk_alpha = speed_for_jerk_alpha
+        self.jerk_cooldown_frames = jerk_cooldown_frames
+        self.jerk_cooldown_scale = jerk_cooldown_scale
         self.last_throttle = 0.0
         self.last_brake = 0.0
         self.last_throttle_before_limits = 0.0
@@ -870,10 +881,13 @@ class LongitudinalController:
         self.last_accel_feedforward = 0.0
         self.last_brake_feedforward = 0.0
         self.last_raw_speed = None
+        self.last_filtered_speed = None
         self.last_accel = None
         self.last_jerk = None
         self.last_accel_capped = False
         self.last_jerk_capped = False
+        self.last_accel_cmd = 0.0
+        self.jerk_cooldown_remaining = 0
         self.pid_throttle = PIDController(
             kp=kp,
             ki=ki,
@@ -1017,7 +1031,12 @@ class LongitudinalController:
         accel_capped = False
         jerk_capped = False
         if self.last_raw_speed is not None and dt > 0.0:
-            measured_accel = (current_speed - self.last_raw_speed) / dt
+            if self.last_filtered_speed is None:
+                filtered_speed = current_speed
+            else:
+                alpha = np.clip(self.speed_for_jerk_alpha, 0.0, 1.0)
+                filtered_speed = (alpha * self.last_filtered_speed) + ((1.0 - alpha) * current_speed)
+            measured_accel = (filtered_speed - self.last_filtered_speed) / dt if self.last_filtered_speed is not None else 0.0
             if measured_accel > 0.0 and self.max_accel > 0.0 and measured_accel > self.max_accel:
                 if throttle > 0.0:
                     scale = min(1.0, self.max_accel / measured_accel)
@@ -1043,12 +1062,49 @@ class LongitudinalController:
                         jerk_capped = True
                 self.last_jerk = measured_jerk
             self.last_accel = measured_accel
+            self.last_filtered_speed = filtered_speed
+        elif self.last_filtered_speed is None:
+            # Initialize filtered speed for next step.
+            self.last_filtered_speed = current_speed
 
         self.last_raw_speed = current_speed
         self.last_accel_feedforward = accel_feedforward
         self.last_brake_feedforward = brake_feedforward
         self.last_accel_capped = accel_capped
         self.last_jerk_capped = jerk_capped
+
+        if self.last_jerk_capped and self.jerk_cooldown_frames > 0:
+            self.jerk_cooldown_remaining = self.jerk_cooldown_frames
+
+        if self.max_jerk > 0.0 and dt > 0.0:
+            speed_error = abs(float(reference_velocity) - float(current_speed)) if reference_velocity is not None else 0.0
+            if self.jerk_error_max > self.jerk_error_min:
+                jerk_ratio = np.clip(
+                    (speed_error - self.jerk_error_min) / (self.jerk_error_max - self.jerk_error_min),
+                    0.0,
+                    1.0,
+                )
+            else:
+                jerk_ratio = 1.0 if speed_error > 0.0 else 0.0
+            dynamic_max_jerk = self.max_jerk_min + jerk_ratio * (self.max_jerk_max - self.max_jerk_min)
+            accel_cmd = (throttle * self.max_accel) - (brake * self.max_decel)
+            accel_cmd_limited = np.clip(
+                accel_cmd,
+                self.last_accel_cmd - (dynamic_max_jerk * dt),
+                self.last_accel_cmd + (dynamic_max_jerk * dt),
+            )
+            if self.jerk_cooldown_remaining > 0:
+                accel_cmd_limited *= float(self.jerk_cooldown_scale)
+                self.jerk_cooldown_remaining -= 1
+            if accel_cmd_limited >= 0.0:
+                throttle = min(1.0, accel_cmd_limited / self.max_accel) if self.max_accel > 0.0 else 0.0
+                brake = 0.0
+            else:
+                throttle = 0.0
+                brake = min(1.0, abs(accel_cmd_limited) / self.max_decel) if self.max_decel > 0.0 else 0.0
+            self.last_accel_cmd = accel_cmd_limited
+        else:
+            self.last_accel_cmd = (throttle * self.max_accel) - (brake * self.max_decel)
         
         self.last_throttle_before_limits = throttle
         self.last_brake_before_limits = brake
@@ -1102,6 +1158,13 @@ class VehicleController:
                  longitudinal_max_jerk: float = 2.0,
                  longitudinal_accel_feedforward_gain: float = 1.0,
                  longitudinal_decel_feedforward_gain: float = 1.0,
+                 longitudinal_speed_for_jerk_alpha: float = 0.7,
+                 longitudinal_jerk_error_min: float = 0.5,
+                 longitudinal_jerk_error_max: float = 3.0,
+                 longitudinal_max_jerk_min: float = 1.5,
+                 longitudinal_max_jerk_max: float = 6.0,
+                 longitudinal_jerk_cooldown_frames: int = 0,
+                 longitudinal_jerk_cooldown_scale: float = 0.6,
                  steering_smoothing_alpha: float = 0.7,
                  curve_feedforward_gain: float = 1.0, curve_feedforward_threshold: float = 0.02,
                  curve_feedforward_gain_min: float = 1.0, curve_feedforward_gain_max: float = 1.0,
@@ -1197,7 +1260,14 @@ class VehicleController:
             max_decel=longitudinal_max_decel,
             max_jerk=longitudinal_max_jerk,
             accel_feedforward_gain=longitudinal_accel_feedforward_gain,
-            decel_feedforward_gain=longitudinal_decel_feedforward_gain
+            decel_feedforward_gain=longitudinal_decel_feedforward_gain,
+            speed_for_jerk_alpha=longitudinal_speed_for_jerk_alpha,
+            jerk_error_min=longitudinal_jerk_error_min,
+            jerk_error_max=longitudinal_jerk_error_max,
+            max_jerk_min=longitudinal_max_jerk_min,
+            max_jerk_max=longitudinal_max_jerk_max,
+            jerk_cooldown_frames=longitudinal_jerk_cooldown_frames,
+            jerk_cooldown_scale=longitudinal_jerk_cooldown_scale
         )
     
     def compute_control(

@@ -80,12 +80,25 @@ control:
     kp: 0.25             # Proportional gain (faster speed tracking)
     ki: 0.02             # Integral gain (steady-state error)
     kd: 0.01             # Derivative gain (damping)
-    max_accel: 2.5       # Max accel (m/s^2), aligned with speed planner
-    max_decel: 3.0       # Max decel (m/s^2), aligned with speed planner
-    max_jerk: 2.0        # Max jerk (m/s^3), aligned with speed planner
+    max_accel: 2.0       # Max accel (m/s^2), aligned with speed planner
+    max_decel: 2.5       # Max decel (m/s^2), aligned with speed planner
+    max_jerk: 1.5        # Max jerk (m/s^3), aligned with speed planner
+    max_jerk_min: 1.5    # Min jerk cap near target (m/s^3)
+    max_jerk_max: 6.0    # Max jerk cap when far from target (m/s^3)
+    jerk_error_min: 0.5  # Speed error where jerk cap starts ramping (m/s)
+    jerk_error_max: 3.0  # Speed error where max jerk is reached (m/s)
     accel_feedforward_gain: 1.0  # Scale planner accel feedforward contribution
     decel_feedforward_gain: 1.0  # Scale planner decel feedforward contribution
+    speed_for_jerk_alpha: 0.7    # Speed smoothing for accel/jerk caps (0-1)
+    jerk_cooldown_frames: 0      # Frames to damp after jerk cap triggers
+    jerk_cooldown_scale: 1.0     # Scale accel command during jerk cooldown
     target_speed: 8.0    # Target speed in m/s
+    target_speed_slew_error_min: 0.5 # Error where slew starts ramping up (m/s)
+    target_speed_slew_error_max: 3.0 # Error where max slew is reached (m/s)
+    target_speed_slew_rate_up_min: 0.6 # Min slew rate up when near target (m/s^2)
+    target_speed_slew_rate_up_max: 2.0 # Max slew rate up when far from target (m/s^2)
+    target_speed_slew_rate_down_min: 1.0 # Min slew rate down when near target (m/s^2)
+    target_speed_slew_rate_down_max: 3.0 # Max slew rate down when far from target (m/s^2)
     max_speed: 10.0      # Maximum speed in m/s
     speed_smoothing: 0.3 # Smoothing factor (0-1)
     speed_deadband: 0.1  # Speed error deadband in m/s
@@ -118,6 +131,8 @@ trajectory:
   max_lateral_accel: 1.3  # Curve speed cap (m/s^2)
   min_curve_speed: 3.2  # Minimum allowed speed on curves (m/s)
   speed_limit_slew_rate: 1.0  # Max change in speed limit per second (m/s^2)
+  speed_limit_slew_rate_up: 2.5  # Max increase in speed limit per second (m/s^2)
+  speed_limit_slew_rate_down: 1.5  # Max decrease in speed limit per second (m/s^2)
   speed_limit_preview_distance: 25.0  # Preview distance ahead for upcoming limits (m)
   speed_limit_preview_decel: 1.0  # Comfortable decel used for preview cap (m/s^2)
   speed_planner:

@@ -55,11 +55,18 @@ control:
     kp: 0.25            # Faster acceleration tracking
     ki: 0.02            # Reduce steady-state error
     kd: 0.01            # Slight damping for stability
-    max_accel: 2.5      # Max accel (m/s^2), aligned with speed planner
-    max_decel: 3.0      # Max decel (m/s^2), aligned with speed planner
-    max_jerk: 2.0       # Max jerk (m/s^3), aligned with speed planner
+    max_accel: 2.0      # Max accel (m/s^2), aligned with speed planner
+    max_decel: 2.5      # Max decel (m/s^2), aligned with speed planner
+    max_jerk: 1.5       # Max jerk (m/s^3), aligned with speed planner
+    max_jerk_min: 1.5   # Min jerk cap near target (m/s^3)
+    max_jerk_max: 6.0   # Max jerk cap when far from target (m/s^3)
+    jerk_error_min: 0.5 # Speed error where jerk cap starts ramping (m/s)
+    jerk_error_max: 3.0 # Speed error where max jerk is reached (m/s)
     accel_feedforward_gain: 1.0  # Scale planner accel feedforward contribution
     decel_feedforward_gain: 1.0  # Scale planner decel feedforward contribution
+    speed_for_jerk_alpha: 0.7    # Speed smoothing for accel/jerk caps (0-1)
+    jerk_cooldown_frames: 0      # Frames to damp after jerk cap triggers
+    jerk_cooldown_scale: 1.0     # Scale accel command during jerk cooldown
     target_speed: 12.0    # Target speed in m/s
     max_speed: 12.0      # Maximum allowed speed in m/s
     speed_smoothing: 0.3 # Less smoothing for better speed tracking
@@ -71,8 +78,14 @@ control:
     brake_rate_limit: 0.15    # Max brake change per frame (comfort)
     throttle_smoothing_alpha: 0.6 # Low-pass filter on throttle command (comfort)
     min_throttle_when_accel: 0.1 # Floor throttle when below target (prevents coasting)
-    target_speed_slew_rate_up: 2.0 # Max target speed increase per second (m/s^2)
-    target_speed_slew_rate_down: 3.0 # Max target speed decrease per second (m/s^2)
+    target_speed_slew_rate_up: 1.5 # Base target speed increase per second (m/s^2)
+    target_speed_slew_rate_down: 2.5 # Base target speed decrease per second (m/s^2)
+    target_speed_slew_error_min: 0.5 # Error where slew starts ramping up (m/s)
+    target_speed_slew_error_max: 3.0 # Error where max slew is reached (m/s)
+    target_speed_slew_rate_up_min: 0.6 # Min slew rate up when near target (m/s^2)
+    target_speed_slew_rate_up_max: 2.0 # Max slew rate up when far from target (m/s^2)
+    target_speed_slew_rate_down_min: 1.0 # Min slew rate down when near target (m/s^2)
+    target_speed_slew_rate_down_max: 3.0 # Max slew rate down when far from target (m/s^2)
     target_speed_stop_threshold: 0.5 # Consider stopped below this speed (m/s)
     target_speed_restart_ramp_seconds: 2.5 # Ramp 0->target after stops (s)
     launch_throttle_stop_threshold: 2.0 # Apply launch throttle cap below this speed (m/s)
@@ -102,6 +115,8 @@ trajectory:
   max_lateral_accel: 1.3    # Curve speed cap (m/s^2) for curvature-based speed limiting
   min_curve_speed: 3.2      # Minimum allowed speed when limiting on curvature
   speed_limit_slew_rate: 1.0  # Max change in speed limit per second (m/s^2)
+  speed_limit_slew_rate_up: 2.5  # Max increase in speed limit per second (m/s^2)
+  speed_limit_slew_rate_down: 1.5  # Max decrease in speed limit per second (m/s^2)
   speed_limit_preview_distance: 25.0  # Preview distance ahead for upcoming limits (m)
   speed_limit_preview_decel: 1.0  # Comfortable decel used for preview cap (m/s^2)
   speed_planner:
