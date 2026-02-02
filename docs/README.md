@@ -9,6 +9,7 @@ This directory contains additional documentation for the AV Stack project.
 - **[CONFIG_GUIDE.md](../CONFIG_GUIDE.md)** - Configuration system guide
 - **[ROADMAP_PHASE2_PLUS.md](ROADMAP_PHASE2_PLUS.md)** - Phase 2+ roadmap with test gates
 - **[TODO.md](TODO.md)** - Near-term Phase 1 completion checklist
+- **[ART_ASSETS.md](ART_ASSETS.md)** - Free car model and integration steps
 
 ## Development Documentation
 

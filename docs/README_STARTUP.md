@@ -112,6 +112,11 @@ Or press `Ctrl+C` in the terminal running the startup script.
 
 The car should start driving automatically!
 
+### Visual Car Model (Optional)
+
+To replace the default blue box with a real car mesh, see:
+`docs/ART_ASSETS.md` (free Kenney Car Kit + step-by-step swap instructions).
+
 **Scene Features:**
 - Extended 200-unit straight road
 - White lane markings (automatically assigned)
