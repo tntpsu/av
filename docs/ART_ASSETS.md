@@ -28,3 +28,4 @@ Recommended model file: `Models/FBX format/sedan-sports.fbx`.
 ## Notes
 - Prefer a low-poly model to keep render cost low.
 - Do not change the physics root hierarchy; only swap the visual mesh.
+- We keep only the selected car model in-repo to reduce repo size.
