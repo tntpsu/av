@@ -9,10 +9,11 @@ car prefab while keeping physics and scripts unchanged.
   Download: https://kenney.nl/assets/car-kit
 
 This pack is free and Unity-compatible. The CC0 license allows use without attribution.
+Recommended model file: `Models/FBX format/sedan-sports.fbx`.
 
 ## Integration Steps
 1. Download and unzip the asset.
-2. In Unity, import the model (drag the FBX/GLTF folder into `Assets/Art/CarKit/`).
+2. Place the asset under Unity: `unity/AVSimulation/Assets/Art/KenneyCarKit/`.
 3. Open `Assets/Prefabs/CarPrefab.prefab`.
 4. Replace the current visual mesh (blue box) with the imported car mesh:
    - Keep **CarController**, **AVBridge**, and **Camera** objects unchanged.
