@@ -24,10 +24,26 @@ def test_apply_speed_limit_preview_caps_speed() -> None:
     assert capped == expected
 
 
+def test_apply_speed_limit_preview_noop_when_far_from_brake_point() -> None:
+    assert av_module._apply_speed_limit_preview(
+        base_speed=12.0,
+        preview_limit=8.0,
+        preview_distance=20.0,
+        max_decel=1.0,
+    ) == math.sqrt((8.0 ** 2) + (2.0 * 1.0 * 20.0))
+
+
 def test_apply_speed_limit_preview_noop_when_invalid() -> None:
     assert av_module._apply_speed_limit_preview(10.0, 0.0, 10.0, 1.0) == 10.0
     assert av_module._apply_speed_limit_preview(10.0, 8.0, 0.0, 1.0) == 10.0
     assert av_module._apply_speed_limit_preview(10.0, 8.0, 10.0, 0.0) == 10.0
+
+
+def test_preview_min_distance_allows_release() -> None:
+    assert av_module._preview_min_distance_allows_release(12.0, 12.0, 0.5) is False
+    assert av_module._preview_min_distance_allows_release(12.0, 11.4, 0.5) is False
+    assert av_module._preview_min_distance_allows_release(12.0, 0.4, 0.5) is True
+    assert av_module._preview_min_distance_allows_release(None, 11.0, 0.5) is True
 
 
 def test_apply_target_speed_slew_asymmetric() -> None:

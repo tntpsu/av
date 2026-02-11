@@ -1,6 +1,6 @@
 name: s_loop
-road_width: 7.0
-lane_line_width: 0.3
+road_width: 7.2
+lane_line_width: 0.2
 sample_spacing: 1.0
 loop: true
 speed_limit_mph: 25.0
@@ -30,4 +30,4 @@ segments:
     direction: right
     speed_limit_mph: 18.0
   - type: straight
-    length: 60
+    length: 100

@@ -27,10 +27,30 @@ class TrajectoryPlanningInference:
         # Extract smoothing parameters before passing to planner
         reference_smoothing = kwargs.pop('reference_smoothing', 0.85)
         lane_smoothing_alpha = kwargs.pop('lane_smoothing_alpha', 0.7)  # NEW: Lane coefficient smoothing
+        center_spline_enabled = kwargs.pop('center_spline_enabled', False)
+        center_spline_degree = kwargs.pop('center_spline_degree', 2)
+        center_spline_samples = kwargs.pop('center_spline_samples', 20)
+        center_spline_alpha = kwargs.pop('center_spline_alpha', 0.7)
+        lane_position_smoothing_alpha = kwargs.pop('lane_position_smoothing_alpha', 0.1)
+        ref_point_jump_clamp_x = kwargs.pop('ref_point_jump_clamp_x', 0.0)
+        ref_point_jump_clamp_heading = kwargs.pop('ref_point_jump_clamp_heading', 0.0)
+        reference_x_max_abs = kwargs.pop('reference_x_max_abs', 0.0)
+        target_lane = kwargs.pop('target_lane', 'center')
+        target_lane_width_m = kwargs.pop('target_lane_width_m', 0.0)
+        ref_sign_flip_threshold = kwargs.pop('ref_sign_flip_threshold', 0.0)
+        ref_x_rate_limit = kwargs.pop('ref_x_rate_limit', 0.0)
+        multi_lookahead_enabled = kwargs.pop('multi_lookahead_enabled', False)
+        multi_lookahead_far_scale = kwargs.pop('multi_lookahead_far_scale', 1.5)
+        multi_lookahead_blend_alpha = kwargs.pop('multi_lookahead_blend_alpha', 0.35)
+        multi_lookahead_curvature_threshold = kwargs.pop('multi_lookahead_curvature_threshold', 0.01)
         
         if planner_type == "rule_based":
             # Pass lane smoothing to planner
             kwargs['lane_smoothing_alpha'] = lane_smoothing_alpha
+            kwargs['center_spline_enabled'] = center_spline_enabled
+            kwargs['center_spline_degree'] = center_spline_degree
+            kwargs['center_spline_samples'] = center_spline_samples
+            kwargs['center_spline_alpha'] = center_spline_alpha
             # Extract camera offset if provided
             camera_offset_x = kwargs.pop('camera_offset_x', 0.0)
             kwargs['camera_offset_x'] = camera_offset_x
@@ -45,6 +65,20 @@ class TrajectoryPlanningInference:
         
         # Store smoothing parameter for reference point smoothing
         self.reference_smoothing_alpha = reference_smoothing
+        self.lane_position_smoothing_alpha = float(np.clip(lane_position_smoothing_alpha, 0.0, 1.0))
+        self.ref_point_jump_clamp_x = float(np.clip(ref_point_jump_clamp_x, 0.0, 5.0))
+        self.ref_point_jump_clamp_heading = float(np.clip(ref_point_jump_clamp_heading, 0.0, 1.0))
+        self.reference_x_max_abs = float(np.clip(reference_x_max_abs, 0.0, 10.0))
+        self.target_lane = str(target_lane).lower()
+        self.target_lane_width_m = float(np.clip(target_lane_width_m, 0.0, 10.0))
+        self.ref_sign_flip_threshold = float(np.clip(ref_sign_flip_threshold, 0.0, 1.0))
+        self.ref_x_rate_limit = float(np.clip(ref_x_rate_limit, 0.0, 1.0))
+        self.multi_lookahead_enabled = bool(multi_lookahead_enabled)
+        self.multi_lookahead_far_scale = float(np.clip(multi_lookahead_far_scale, 1.0, 3.0))
+        self.multi_lookahead_blend_alpha = float(np.clip(multi_lookahead_blend_alpha, 0.0, 1.0))
+        self.multi_lookahead_curvature_threshold = float(
+            np.clip(multi_lookahead_curvature_threshold, 0.0, 0.1)
+        )
         
         # NEW: Solution 5 - Reference Point Smoothing with Bias Compensation
         # Track smoothed reference point bias for compensation
@@ -61,6 +95,93 @@ class TrajectoryPlanningInference:
         
         # For reference point smoothing
         self.last_smoothed_ref_point = None
+        self.ref_debug_counter = 0
+
+    def _compute_target_ref_from_coeffs(
+        self,
+        lane_coeffs: List[Optional[np.ndarray]],
+        lookahead: float,
+    ) -> Optional[Dict[str, float]]:
+        """Compute a target-lane reference from lane coefficients at a lookahead distance."""
+        valid_lanes = [coeffs for coeffs in lane_coeffs if coeffs is not None]
+        if len(valid_lanes) < 2:
+            return None
+
+        lane1 = valid_lanes[0]
+        lane2 = valid_lanes[1]
+        image_height = getattr(self.planner, "image_height", 480.0)
+        y_eval = float(image_height) - 1.0
+        lane1_x = float(np.polyval(lane1, y_eval))
+        lane2_x = float(np.polyval(lane2, y_eval))
+        if lane1_x < lane2_x:
+            left_coeffs, right_coeffs = lane1, lane2
+        else:
+            left_coeffs, right_coeffs = lane2, lane1
+
+        if not hasattr(self.planner, "pixel_to_meter_y"):
+            return None
+        pixel_to_meter_y = float(self.planner.pixel_to_meter_y)
+        if pixel_to_meter_y <= 0.0:
+            return None
+        y_image = float(image_height) - (float(lookahead) / pixel_to_meter_y)
+        y_image = max(0.0, min(float(image_height) - 1.0, y_image))
+
+        left_x_image = float(np.polyval(left_coeffs, y_image))
+        right_x_image = float(np.polyval(right_coeffs, y_image))
+
+        left_x_vehicle, _ = self.planner._convert_image_to_vehicle_coords(
+            left_x_image, y_image, lookahead_distance=lookahead
+        )
+        right_x_vehicle, _ = self.planner._convert_image_to_vehicle_coords(
+            right_x_image, y_image, lookahead_distance=lookahead
+        )
+
+        lane_width = right_x_vehicle - left_x_vehicle
+        use_target_width = self.target_lane_width_m > 0.0
+        if lane_width <= 0.0:
+            center_x = (left_x_vehicle + right_x_vehicle) / 2.0
+        elif self.target_lane == "right":
+            if use_target_width:
+                center_x = right_x_vehicle - (self.target_lane_width_m * 0.5)
+            else:
+                center_x = left_x_vehicle + (0.75 * lane_width)
+        elif self.target_lane == "left":
+            if use_target_width:
+                center_x = left_x_vehicle + (self.target_lane_width_m * 0.5)
+            else:
+                center_x = left_x_vehicle + (0.25 * lane_width)
+        else:
+            center_x = (left_x_vehicle + right_x_vehicle) / 2.0
+
+        heading = 0.0
+        curvature = 0.0
+        direct_ref = self.planner.compute_reference_point_direct(
+            left_coeffs, right_coeffs, lookahead
+        )
+        if direct_ref is not None:
+            heading = direct_ref.get("heading", 0.0)
+            curvature = direct_ref.get("curvature", 0.0)
+
+        return {
+            "x": float(center_x),
+            "y": float(lookahead),
+            "heading": float(heading),
+            "velocity": float(self.planner.target_speed),
+            "curvature": float(curvature),
+        }
+
+    def get_curvature_at_lookahead(
+        self,
+        lane_coeffs: Optional[List[Optional[np.ndarray]]],
+        lookahead: float,
+    ) -> Optional[float]:
+        """Return curvature at lookahead using lane coefficients (if available)."""
+        if lane_coeffs is None:
+            return None
+        ref = self._compute_target_ref_from_coeffs(lane_coeffs, lookahead)
+        if ref is None:
+            return None
+        return float(ref.get("curvature", 0.0))
     
     def plan(self, lane_coeffs: List[Optional[np.ndarray]], 
              vehicle_state: Optional[Dict] = None) -> Trajectory:
@@ -111,8 +232,17 @@ class TrajectoryPlanningInference:
                     logger.warning(f"[TRAJECTORY] Perception failed (both lanes = 0.0) - returning None to prevent movement")
                     return None
                 
-                # Simple midpoint in vehicle coordinates (most accurate)
-                center_x = (left_lane_line_x + right_lane_line_x) / 2.0
+                # Road center in vehicle coordinates (matches cyan line calculation in visualizer)
+                # This is what ref_x should be - the center of the detected road
+                lane_width = right_lane_line_x - left_lane_line_x
+                
+                if lane_width <= 0:
+                    center_x = (left_lane_line_x + right_lane_line_x) / 2.0
+                    logger.debug(f"[TRAJECTORY] Invalid lane_width={lane_width:.3f}, using road center")
+                else:
+                    # Road center = midpoint of detected lane lines (same as cyan line)
+                    center_x = (left_lane_line_x + right_lane_line_x) / 2.0
+                    logger.debug(f"[TRAJECTORY] Road center: left={left_lane_line_x:.3f}, right={right_lane_line_x:.3f}, center={center_x:.3f}")
                 
                 # CRITICAL FIX: For straight roads, heading should be 0° regardless of lateral offset
                 # When using lane_positions (vehicle coordinates), we don't have curvature information
@@ -158,6 +288,34 @@ class TrajectoryPlanningInference:
                 raw_ref_point['raw_x'] = center_x
                 raw_ref_point['raw_y'] = lookahead
                 raw_ref_point['raw_heading'] = heading
+                # DEBUG: Log calculation details for specific frames
+                if hasattr(self, 'frame_count') and self.frame_count in [134, 135, 136]:
+                    logger.warning(
+                        f"[TRAJECTORY DEBUG Frame {getattr(self, 'frame_count', '?')}] "
+                        f"left={left_lane_line_x:.3f} right={right_lane_line_x:.3f} "
+                        f"lane_width={lane_width:.3f} road_center={center_x:.3f} "
+                        f"raw_x={raw_ref_point['raw_x']:.3f}"
+                    )
+                # Optional: multi-lookahead blend using lane coefficients (better straight/curve transitions)
+                if (
+                    self.multi_lookahead_enabled
+                    and lane_coeffs is not None
+                    and abs(raw_ref_point.get('curvature', 0.0)) <= self.multi_lookahead_curvature_threshold
+                ):
+                    far_ref = self._compute_target_ref_from_coeffs(lane_coeffs, lookahead * self.multi_lookahead_far_scale)
+                    if far_ref is not None:
+                        alpha = self.multi_lookahead_blend_alpha
+                        raw_ref_point['heading'] = (
+                            (1.0 - alpha) * raw_ref_point['heading'] + alpha * far_ref['heading']
+                        )
+                        raw_ref_point['curvature'] = (
+                            (1.0 - alpha) * raw_ref_point['curvature'] + alpha * far_ref['curvature']
+                        )
+                        raw_ref_point['velocity'] = (
+                            (1.0 - alpha) * raw_ref_point['velocity'] + alpha * far_ref['velocity']
+                        )
+                        raw_ref_point['method'] = 'multi_lookahead_heading_blend'
+                        raw_ref_point['raw_heading'] = raw_ref_point['heading']
                 # Apply jump detection even for lane_positions (but with minimal smoothing)
                 smoothed = self._apply_smoothing(
                     raw_ref_point,
@@ -167,6 +325,18 @@ class TrajectoryPlanningInference:
                     confidence=confidence,
                 )
                 smoothed['method'] = 'lane_positions'  # Preserve method
+                self.ref_debug_counter += 1
+                if self.ref_debug_counter % 10 == 0:
+                    logger.info(
+                        "[TRAJECTORY REF DEBUG] lane_width=%.3f left=%.3f right=%.3f "
+                        "road_center=%.3f raw_x=%.3f smoothed_x=%.3f",
+                        lane_width,
+                        left_lane_line_x,
+                        right_lane_line_x,
+                        center_x,
+                        raw_ref_point['x'],
+                        smoothed.get('x', raw_ref_point['x'])
+                    )
                 return smoothed
         
         # FALLBACK: Use direct midpoint computation from lane coefficients
@@ -301,6 +471,11 @@ class TrajectoryPlanningInference:
         
         # Apply bias compensation
         smoothed_x += bias_compensation
+
+        if self.reference_x_max_abs > 0.0:
+            smoothed_x = float(np.clip(
+                smoothed_x, -self.reference_x_max_abs, self.reference_x_max_abs
+            ))
         
         # Update raw_ref_point with smoothed and compensated values
         raw_ref_point['x'] = smoothed_x
@@ -345,6 +520,19 @@ class TrajectoryPlanningInference:
         """
         # FIXED: Detect when trajectory planner used fallback (straight trajectory from lane failure)
         # CRITICAL FIX: Also detect when reference point jumps dramatically (perception failure)
+        if minimal_smoothing and self.last_smoothed_ref_point is not None:
+            raw_x = raw_ref_point.get('raw_x', raw_ref_point['x'])
+            last_x = self.last_smoothed_ref_point.get('x', 0.0)
+            if self.ref_sign_flip_threshold > 0.0:
+                if raw_x * last_x < 0 and abs(raw_x) < self.ref_sign_flip_threshold:
+                    raw_ref_point['raw_x'] = raw_x
+                    raw_ref_point['x'] = last_x
+            if self.ref_x_rate_limit > 0.0:
+                delta_x = raw_ref_point['x'] - last_x
+                if abs(delta_x) > self.ref_x_rate_limit:
+                    raw_ref_point['raw_x'] = raw_ref_point.get('raw_x', raw_x)
+                    raw_ref_point['x'] = last_x + np.sign(delta_x) * self.ref_x_rate_limit
+
         is_fallback_trajectory = (abs(raw_ref_point['x']) < 0.01 and 
                                   abs(raw_ref_point['heading']) < 0.01 and
                                   self.last_smoothed_ref_point is not None and
@@ -391,7 +579,7 @@ class TrajectoryPlanningInference:
         # With alpha_x = 0.02, we get 98% new value, 2% old value - should update quickly
         alpha = self.reference_smoothing_alpha
         if minimal_smoothing:
-            alpha_x = 0.02  # Very light smoothing - 98% new value, 2% old value (was 0.05)
+            alpha_x = self.lane_position_smoothing_alpha
         else:
             alpha_x = alpha * 0.2 if use_light_smoothing else alpha  # Lighter smoothing for x when using lane_positions (was 0.3)
         
@@ -406,6 +594,24 @@ class TrajectoryPlanningInference:
                 else:
                     alpha_x = min(0.9, alpha_x + boost * 0.4)
         if self.last_smoothed_ref_point is not None:
+            # Optional jump clamp to reduce reference jitter before smoothing.
+            if not has_time_gap:
+                if self.ref_point_jump_clamp_x > 0.0:
+                    raw_x = raw_ref_point.get('raw_x', raw_ref_point['x'])
+                    raw_ref_point['raw_x'] = raw_x
+                    last_x = self.last_smoothed_ref_point['x']
+                    delta_x = np.clip(raw_ref_point['x'] - last_x,
+                                      -self.ref_point_jump_clamp_x,
+                                      self.ref_point_jump_clamp_x)
+                    raw_ref_point['x'] = last_x + delta_x
+                if self.ref_point_jump_clamp_heading > 0.0:
+                    raw_heading = raw_ref_point.get('raw_heading', raw_ref_point['heading'])
+                    raw_ref_point['raw_heading'] = raw_heading
+                    last_heading = self.last_smoothed_ref_point['heading']
+                    delta_heading = np.clip(raw_ref_point['heading'] - last_heading,
+                                            -self.ref_point_jump_clamp_heading,
+                                            self.ref_point_jump_clamp_heading)
+                    raw_ref_point['heading'] = last_heading + delta_heading
             if is_fallback_trajectory:
                 # Lane detection failed - use fallback trajectory directly
                 smoothed_x = raw_ref_point['x']
@@ -488,9 +694,11 @@ class TrajectoryPlanningInference:
             'heading': smoothed_heading,
             'velocity': smoothed_velocity,
             'curvature': raw_ref_point.get('curvature', 0.0),
-            'raw_x': raw_ref_point.get('x', smoothed_x),
-            'raw_y': raw_ref_point.get('y', smoothed_y),
-            'raw_heading': raw_ref_point.get('heading', smoothed_heading)
+            'raw_x': raw_ref_point.get('raw_x', raw_ref_point.get('x', smoothed_x)),  # FIX: Read from 'raw_x' first, not 'x'
+            'raw_y': raw_ref_point.get('raw_y', raw_ref_point.get('y', smoothed_y)),
+            'raw_heading': raw_ref_point.get('raw_heading', raw_ref_point.get('heading', smoothed_heading)),
+            'perception_center_x': raw_ref_point.get('perception_center_x'),  # FIX: Preserve perception center for analysis
+            'method': raw_ref_point.get('method', 'unknown')  # Preserve method for debugging
         }
         
         self.last_smoothed_ref_point = {

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import math
-from typing import Iterable
+from typing import Iterable, Mapping, Sequence, Tuple
 
 
 def compute_reference_lookahead(
@@ -48,6 +48,12 @@ def compute_reference_lookahead(
             curv_scale = scale_min + ratio * (1.0 - scale_min)
         scale = min(scale, curv_scale)
 
+    tight_curv_threshold = float(config.get("reference_lookahead_tight_curvature_threshold", 0.0))
+    tight_scale = float(config.get("reference_lookahead_tight_scale", 1.0))
+    if tight_curv_threshold > 0.0 and abs_curv >= tight_curv_threshold:
+        tight_scale = max(0.1, min(1.0, tight_scale))
+        scale = min(scale, tight_scale)
+
     min_lookahead = float(config.get("reference_lookahead_min", 4.0))
     min_lookahead = max(0.1, min_lookahead)
     return max(min_lookahead, base_lookahead * scale)
@@ -87,3 +93,33 @@ def smooth_curvature_distance(
         smoothed_value = alpha * float(curvatures[i]) + (1.0 - alpha) * smoothed[-1]
         smoothed.append(smoothed_value)
     return smoothed
+
+
+def select_curvature_bin_limits(
+    abs_curvature: float,
+    bins: Sequence[Mapping[str, float]] | None,
+    default_max_lateral_accel: float,
+    default_min_curve_speed: float,
+) -> Tuple[float, float]:
+    """Select max lateral accel and min curve speed based on curvature bins."""
+    max_lateral_accel = float(default_max_lateral_accel)
+    min_curve_speed = float(default_min_curve_speed)
+    if not bins:
+        return max_lateral_accel, min_curve_speed
+    if not isinstance(abs_curvature, (int, float)):
+        return max_lateral_accel, min_curve_speed
+
+    curvature_val = float(abs_curvature)
+    for bin_cfg in bins:
+        if not isinstance(bin_cfg, Mapping):
+            continue
+        min_curv = float(bin_cfg.get("min_curvature", 0.0))
+        max_curv = float(bin_cfg.get("max_curvature", float("inf")))
+        if curvature_val < min_curv or curvature_val >= max_curv:
+            continue
+        if "max_lateral_accel" in bin_cfg:
+            max_lateral_accel = float(bin_cfg["max_lateral_accel"])
+        if "min_curve_speed" in bin_cfg:
+            min_curve_speed = float(bin_cfg["min_curve_speed"])
+        break
+    return max_lateral_accel, min_curve_speed

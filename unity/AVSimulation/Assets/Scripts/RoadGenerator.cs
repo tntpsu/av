@@ -20,10 +20,13 @@ public class RoadGenerator : MonoBehaviour
     public float turnRadius = 50f;
     
     [Tooltip("Width of the road")]
-    public float roadWidth = 7f;  // Changed from 10f to 7f (3.5m per lane - standard)
+    public float roadWidth = 7.2f;  // Two lanes (3.6m each)
     
     [Tooltip("Width of lane markings")]
-    public float laneLineWidth = 0.3f;
+    public float laneLineWidth = 0.2f;
+
+    [Tooltip("Gap between the double-yellow center lines (meters)")]
+    public float centerLineGap = 0.2f;
     
     [Header("Lane Markings")]
     [Tooltip("Material for white lane lines")]
@@ -51,6 +54,10 @@ public class RoadGenerator : MonoBehaviour
     
     [Tooltip("Road surface material")]
     public Material roadMaterial;
+    [Header("Friction (Option A)")]
+    public float roadStaticFriction = 0.6f;
+    public float roadDynamicFriction = 0.5f;
+    public PhysicsMaterialCombine roadFrictionCombine = PhysicsMaterialCombine.Average;
 
     [Header("Track YAML")]
     [Tooltip("Optional track YAML file for procedural track generation")]
@@ -66,6 +73,8 @@ public class RoadGenerator : MonoBehaviour
     private GameObject roadMeshObject;
     private GameObject leftLaneLineObject;
     private GameObject rightLaneLineObject;
+    private GameObject centerLeftLineObject;
+    private GameObject centerRightLineObject;
     private List<GameObject> generatedObjects = new List<GameObject>();
     private bool hasGenerated = false;
     private TrackPath trackPath = null;
@@ -349,6 +358,7 @@ public class RoadGenerator : MonoBehaviour
         // Add mesh collider
         MeshCollider meshCollider = roadMeshObject.AddComponent<MeshCollider>();
         meshCollider.sharedMesh = roadMesh;
+        meshCollider.material = CreateRoadPhysicMaterial();
         
         // Apply material - create default gray material if none provided
         if (roadMaterial != null)
@@ -385,6 +395,7 @@ public class RoadGenerator : MonoBehaviour
         roadMesh.name = "TrackRoadMesh";
         meshFilter.mesh = roadMesh;
         meshCollider.sharedMesh = roadMesh;
+        meshCollider.material = CreateRoadPhysicMaterial();
 
         if (roadMaterial != null)
         {
@@ -398,6 +409,18 @@ public class RoadGenerator : MonoBehaviour
         }
 
         generatedObjects.Add(roadMeshObject);
+    }
+
+    private PhysicsMaterial CreateRoadPhysicMaterial()
+    {
+        return new PhysicsMaterial("RoadPhysicMaterial")
+        {
+            staticFriction = roadStaticFriction,
+            dynamicFriction = roadDynamicFriction,
+            frictionCombine = roadFrictionCombine,
+            bounciness = 0.0f,
+            bounceCombine = PhysicsMaterialCombine.Minimum
+        };
     }
 
     public void GenerateTrackRoad(TrackConfig config)
@@ -426,6 +449,21 @@ public class RoadGenerator : MonoBehaviour
             Debug.LogWarning($"Track YAML has no offset; ignoring inspector trackOffset={trackOffset}");
         }
         Vector3 usedOffset = yamlOffset;
+
+        // Diagnostic: log scale + arc radii to validate curvature expectations (r20/r30, etc.).
+        if (config.segments != null && config.segments.Count > 0)
+        {
+            List<float> arcRadii = new List<float>();
+            foreach (TrackSegment segment in config.segments)
+            {
+                if (segment.type == "arc" && segment.radius > 0f)
+                {
+                    arcRadii.Add(segment.radius);
+                }
+            }
+            string radiusList = arcRadii.Count > 0 ? string.Join(", ", arcRadii) : "none";
+            Debug.Log($"RoadGenerator: track scale={transform.lossyScale} sampleSpacing={config.sampleSpacing:F2} arcRadii=[{radiusList}]");
+        }
 
         trackPath = TrackBuilder.BuildPath(config, usedOffset);
         if (trackPath.TotalLength <= 0.1f || trackPath.Points.Count < 2)
@@ -458,19 +496,27 @@ public class RoadGenerator : MonoBehaviour
     {
         if (trackPath != null)
         {
-            leftLaneLineObject = CreateDashedLaneLineFromPath("LeftLaneLine", -roadWidth * 0.5f, yellowLaneMaterial);
+            leftLaneLineObject = CreateLaneLineFromPath("LeftEdgeLine", -roadWidth * 0.5f, whiteLaneMaterial);
             generatedObjects.Add(leftLaneLineObject);
 
-            rightLaneLineObject = CreateLaneLineFromPath("RightLaneLine", roadWidth * 0.5f, whiteLaneMaterial);
+            rightLaneLineObject = CreateLaneLineFromPath("RightEdgeLine", roadWidth * 0.5f, whiteLaneMaterial);
             generatedObjects.Add(rightLaneLineObject);
+
+            centerLeftLineObject = CreateDashedLaneLineFromPath("CenterLine", 0f, yellowLaneMaterial);
+            generatedObjects.Add(centerLeftLineObject);
+            centerRightLineObject = null;
             return;
         }
 
-        leftLaneLineObject = CreateDashedLaneLine("LeftLaneLine", -roadWidth * 0.5f, yellowLaneMaterial);
+        leftLaneLineObject = CreateLaneLine("LeftEdgeLine", -roadWidth * 0.5f, whiteLaneMaterial);
         generatedObjects.Add(leftLaneLineObject);
 
-        rightLaneLineObject = CreateLaneLine("RightLaneLine", roadWidth * 0.5f, whiteLaneMaterial);
+        rightLaneLineObject = CreateLaneLine("RightEdgeLine", roadWidth * 0.5f, whiteLaneMaterial);
         generatedObjects.Add(rightLaneLineObject);
+
+        centerLeftLineObject = CreateDashedLaneLine("CenterLine", 0f, yellowLaneMaterial);
+        generatedObjects.Add(centerLeftLineObject);
+        centerRightLineObject = null;
     }
     
     /// <summary>

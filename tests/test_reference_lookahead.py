@@ -40,6 +40,29 @@ def test_reference_lookahead_no_scaling_when_disabled() -> None:
     assert lookahead == pytest.approx(9.0, rel=1e-6)
 
 
+def test_reference_lookahead_tight_curve_scale() -> None:
+    config = {
+        "dynamic_reference_lookahead": True,
+        "reference_lookahead_min": 3.0,
+        "reference_lookahead_scale_min": 0.7,
+        "reference_lookahead_speed_min": 8.0,
+        "reference_lookahead_speed_max": 12.0,
+        "reference_lookahead_curvature_min": 0.02,
+        "reference_lookahead_curvature_max": 0.03,
+        "reference_lookahead_tight_curvature_threshold": 0.02,
+        "reference_lookahead_tight_scale": 0.8,
+    }
+
+    lookahead = compute_reference_lookahead(
+        base_lookahead=10.0,
+        current_speed=4.0,
+        path_curvature=0.03,
+        config=config,
+    )
+
+    assert lookahead == pytest.approx(8.0, rel=1e-3)
+
+
 def test_stanley_mode_uses_heading_and_crosstrack() -> None:
     controller = LateralController(
         control_mode="stanley",

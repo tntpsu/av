@@ -3,7 +3,7 @@ Data format definitions for AV stack recordings.
 """
 
 from dataclasses import dataclass
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 import numpy as np
 
 
@@ -28,6 +28,9 @@ class VehicleState:
     steering_angle: float
     motor_torque: float
     brake_torque: float
+    steering_angle_actual: float = 0.0
+    steering_input: float = 0.0
+    desired_steer_angle: float = 0.0
     unity_time: float = 0.0
     unity_frame_count: int = 0
     unity_delta_time: float = 0.0
@@ -73,6 +76,13 @@ class VehicleState:
     speed_limit: float = 0.0  # Speed limit at current reference point (m/s)
     speed_limit_preview: float = 0.0  # Speed limit at preview distance ahead (m/s)
     speed_limit_preview_distance: float = 0.0  # Preview distance used for speed limit (m)
+    speed_limit_preview_min_distance: float = 0.0  # Distance to min limit in preview window (m)
+    speed_limit_preview_mid: float = 0.0  # Speed limit at mid preview distance (m/s)
+    speed_limit_preview_mid_distance: float = 0.0  # Mid preview distance (m)
+    speed_limit_preview_mid_min_distance: float = 0.0  # Distance to min limit in mid window (m)
+    speed_limit_preview_long: float = 0.0  # Speed limit at long preview distance (m/s)
+    speed_limit_preview_long_distance: float = 0.0  # Long preview distance (m)
+    speed_limit_preview_long_min_distance: float = 0.0  # Distance to min limit in long window (m)
 
 
 @dataclass
@@ -103,6 +113,10 @@ class ControlCommand:
     raw_steering: Optional[float] = None  # Steering before smoothing
     lateral_correction: Optional[float] = None  # Lateral correction term (k * lane_center)
     path_curvature_input: Optional[float] = None  # Path curvature used in calculation (1/meters)
+    feedforward_steering: Optional[float] = None  # Feedforward steering command
+    feedback_steering: Optional[float] = None  # Feedback steering command from PID/Stanley
+    total_error_scaled: Optional[float] = None  # Total error after scaling/deadband
+    straight_sign_flip_override_active: Optional[bool] = None  # Override active for sign flip on straights
     # NEW: Diagnostic fields for tracking stale data usage
     using_stale_perception: bool = False  # True if control is using stale perception data
     stale_perception_reason: Optional[str] = None  # Reason: "jump_detection", "perception_failure", "frozen", etc.
@@ -150,9 +164,16 @@ class PerceptionOutput:
     consecutive_bad_detection_frames: int = 0  # Number of consecutive frames with <2 lanes detected
     perception_health_score: float = 1.0  # Health score: 1.0 = perfect, 0.0 = failed (based on recent detection rate)
     perception_health_status: str = "healthy"  # "healthy", "degraded", "poor", "critical"
+    perception_bad_events: Optional[List[str]] = None  # Reasons that lowered health for this frame
+    perception_bad_events_recent: Optional[List[str]] = None  # Most recent bad events in health window
+    perception_timestamp_frozen: bool = False  # True if perception timestamp did not advance
+    perception_clamp_events: Optional[List[str]] = None  # Clamp/override events for debugging
+    reject_reason: Optional[str] = None  # Primary reason lane positions were rejected
     # NEW: Points used for polynomial fitting (for debug visualization)
     fit_points_left: Optional[np.ndarray] = None  # [[x, y], ...] points used for left lane fit
     fit_points_right: Optional[np.ndarray] = None  # [[x, y], ...] points used for right lane fit
+    # NEW: Segmentation mask (PNG bytes, label map with 0/1/2 classes)
+    segmentation_mask_png: Optional[bytes] = None
 
 
 @dataclass
@@ -199,6 +220,7 @@ class RecordingFrame:
     timestamp: float
     frame_id: int
     camera_frame: Optional[CameraFrame] = None
+    camera_topdown_frame: Optional[CameraFrame] = None
     vehicle_state: Optional[VehicleState] = None
     control_command: Optional[ControlCommand] = None
     perception_output: Optional[PerceptionOutput] = None

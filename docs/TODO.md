@@ -6,6 +6,13 @@
   accel_p95 <= 25 m/s^2, jerk_p95 <= 400 m/s^3, lat_jerk_p95 <= 5.0,
   emergency_stop_frame == 0.
 
+## Current Tuning Targets (Iterations)
+- **Comfort caps:** accel_p95 <= 3.0 m/s^2, jerk_p95 <= 6.0 m/s^3.
+- **Speed tracking:** planned vs actual RMSE <= 1.0 m/s, overspeed <= 10%.
+- **Iteration budget:** 5 runs before structural changes.
+- **Allowed levers:** longitudinal gains, slew/limits, planner feedforward.
+- **Scenario:** s_loop.yml, 40s duration.
+
 ### Work items
 - **Longitudinal dt:** use real dt in longitudinal control loop and log it.
 - **Planner feedforward:** add planner accel feedforward term into throttle/brake.

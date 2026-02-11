@@ -9,13 +9,13 @@ public class GroundTruthReporter : MonoBehaviour
 {
     [Header("Lane Configuration (Straight Road Only)")]
     [Tooltip("Left lane line X position in world coordinates (straight road only)")]
-    public float leftLaneXWorld = -3.5f;  // Left edge of road/lane
+    public float leftLaneXWorld = -3.6f;  // Left edge of road/lane
     
     [Tooltip("Right lane line X position in world coordinates (straight road only)")]
-    public float rightLaneXWorld = 3.5f;  // Right edge of road/lane
+    public float rightLaneXWorld = 3.6f;  // Right edge of road/lane
     
     [Tooltip("Lane width in meters (total road width if single lane)")]
-    public float laneWidth = 7.0f;  // Full road width (single lane, no center line yet)
+    public float laneWidth = 7.2f;  // Default single-lane width (straight-road only)
     
     [Header("Current Lane")]
     [Tooltip("Which lane the car is in (0=left, 1=right)")]
@@ -24,10 +24,15 @@ public class GroundTruthReporter : MonoBehaviour
     [Header("Road Detection")]
     [Tooltip("Auto-detect RoadGenerator for dynamic ground truth (oval track)")]
     public bool autoDetectRoadGenerator = true;
+    [Tooltip("Treat the center line as the left lane line when using dynamic ground truth")]
+    public bool useCenterLineAsLeftLane = true;
     
     [Header("Time-Based Reference Path")]
     [Tooltip("Use time-based reference path (moves at constant speed) instead of car position")]
     public bool useTimeBasedReference = true;
+
+    [Tooltip("Start the car in the center of the right lane when using dynamic ground truth")]
+    public bool startInRightLane = true;
     
     [Tooltip("Reference speed for time-based path (m/s)")]
     public float referenceSpeed = 5.0f;
@@ -42,12 +47,20 @@ public class GroundTruthReporter : MonoBehaviour
     private bool useDynamicGroundTruth = false;
     private float pathStartTime = 0f;
     private float ovalPathLength = 0f;
+    private bool? commandLineCenterLineAsLeftLane = null;
     
     // PERFORMANCE: Cache Rigidbody reference to avoid GetComponent() calls every frame
     private Rigidbody cachedCarRigidbody = null;
     
     void Start()
     {
+        commandLineCenterLineAsLeftLane = GetCommandLineBool("--gt-centerline-as-left-lane");
+        if (commandLineCenterLineAsLeftLane.HasValue)
+        {
+            useCenterLineAsLeftLane = commandLineCenterLineAsLeftLane.Value;
+            Debug.Log($"GroundTruthReporter: CLI override centerLineAsLeftLane={useCenterLineAsLeftLane}");
+        }
+
         // If attached to car, use this transform directly
         // Otherwise, find the car GameObject
         if (transform.name.Contains("Car") || GetComponent<CarController>() != null)
@@ -137,7 +150,13 @@ public class GroundTruthReporter : MonoBehaviour
             if (roadGenerator != null)
             {
                 useDynamicGroundTruth = true;
-                laneWidth = roadGenerator.roadWidth; // Use road width from RoadGenerator
+                // Ensure dynamic tracks treat the center line as the left lane line by default,
+                // unless overridden by command-line flag.
+                if (!commandLineCenterLineAsLeftLane.HasValue)
+                {
+                    useCenterLineAsLeftLane = true;
+                }
+                laneWidth = useCenterLineAsLeftLane ? roadGenerator.roadWidth * 0.5f : roadGenerator.roadWidth;
                 
                 // Calculate oval path length for time-based reference
                 CalculateOvalPathLength();
@@ -150,6 +169,12 @@ public class GroundTruthReporter : MonoBehaviour
                     {
                         Vector3 startPos = roadGenerator.GetOvalCenterPoint(overrideStartT);
                         Vector3 startDir = roadGenerator.GetOvalDirection(overrideStartT);
+                        if (startInRightLane)
+                        {
+                            Vector3 roadRight = Vector3.Cross(Vector3.up, startDir).normalized;
+                            float laneOffset = roadGenerator.roadWidth * 0.25f;
+                            startPos += roadRight * laneOffset;
+                        }
 
                         if (carTransform != null)
                         {
@@ -177,6 +202,26 @@ public class GroundTruthReporter : MonoBehaviour
                     // This prevents the car from jumping to path start (t=0) when ground truth mode activates
                     if (carTransform != null)
                     {
+                        if (startInRightLane)
+                        {
+                            Vector3 startPos = roadGenerator.GetOvalCenterPoint(0f);
+                            Vector3 startDir = roadGenerator.GetOvalDirection(0f);
+                            Vector3 roadRight = Vector3.Cross(Vector3.up, startDir).normalized;
+                            float laneOffset = roadGenerator.roadWidth * 0.25f;
+                            startPos += roadRight * laneOffset;
+                            if (cachedCarRigidbody != null)
+                            {
+                                cachedCarRigidbody.position = startPos;
+                                cachedCarRigidbody.rotation = Quaternion.LookRotation(startDir, Vector3.up);
+                                cachedCarRigidbody.velocity = Vector3.zero;
+                                cachedCarRigidbody.angularVelocity = Vector3.zero;
+                            }
+                            else
+                            {
+                                carTransform.position = startPos;
+                                carTransform.rotation = Quaternion.LookRotation(startDir, Vector3.up);
+                            }
+                        }
                         Vector3 carStartPos;
                         // PERFORMANCE: Use cached Rigidbody (already initialized above)
                         if (cachedCarRigidbody != null)
@@ -222,7 +267,11 @@ public class GroundTruthReporter : MonoBehaviour
                     Debug.Log($"GroundTruthReporter: Using CAR POSITION-based reference path");
                 }
                 
-                Debug.Log($"GroundTruthReporter: Found RoadGenerator - using DYNAMIC ground truth for oval track. Road width: {laneWidth}m");
+                Debug.Log(
+                    $"GroundTruthReporter: Found RoadGenerator - using DYNAMIC ground truth for oval track. " +
+                    $"roadWidth={roadGenerator.roadWidth:F2}m laneWidth={laneWidth:F2}m " +
+                    $"centerLineAsLeftLane={useCenterLineAsLeftLane}"
+                );
             }
             else
             {
@@ -237,6 +286,26 @@ public class GroundTruthReporter : MonoBehaviour
             Debug.Log($"GroundTruthReporter: Auto-detect disabled - using STATIC ground truth. " +
                      $"leftLaneXWorld={leftLaneXWorld}m, rightLaneXWorld={rightLaneXWorld}m, laneWidth={laneWidth}m");
         }
+    }
+
+    public static bool? ParseCommandLineBool(string[] args, string name)
+    {
+        for (int i = 0; i < args.Length - 1; i++)
+        {
+            if (args[i] == name)
+            {
+                string value = args[i + 1].Trim().ToLowerInvariant();
+                if (value == "true" || value == "1") return true;
+                if (value == "false" || value == "0") return false;
+                return null;
+            }
+        }
+        return null;
+    }
+
+    private static bool? GetCommandLineBool(string name)
+    {
+        return ParseCommandLineBool(System.Environment.GetCommandLineArgs(), name);
     }
     
     /// <summary>
@@ -358,8 +427,9 @@ public class GroundTruthReporter : MonoBehaviour
             t = FindClosestPointOnOval(carPos);
         }
         
-        Vector3 position = roadGenerator.GetOvalCenterPoint(t);
+        Vector3 roadCenter = roadGenerator.GetOvalCenterPoint(t);
         Vector3 direction = roadGenerator.GetOvalDirection(t);
+        Vector3 position = GetLaneCenterPosition(roadCenter, direction, roadGenerator.roadWidth, currentLane);
         
         // Validate direction vector
         if (direction.sqrMagnitude < 0.01f)
@@ -376,6 +446,19 @@ public class GroundTruthReporter : MonoBehaviour
         }
         
         return (position, direction);
+    }
+
+    public static Vector3 GetLaneCenterPosition(
+        Vector3 roadCenter,
+        Vector3 roadDirection,
+        float roadWidth,
+        int laneIndex
+    )
+    {
+        Vector3 roadRight = Vector3.Cross(Vector3.up, roadDirection).normalized;
+        float laneOffset = roadWidth * 0.25f;
+        float sign = laneIndex <= 0 ? -1f : 1f;
+        return roadCenter + roadRight * (laneOffset * sign);
     }
 
     /// <summary>
@@ -665,7 +748,9 @@ public class GroundTruthReporter : MonoBehaviour
         
         // Compute left and right lane positions in world space
         float halfWidth = roadGenerator.roadWidth * 0.5f;
-        Vector3 leftLaneWorld = roadCenter - roadRight * halfWidth;
+        Vector3 leftLaneWorld = useCenterLineAsLeftLane
+            ? roadCenter
+            : roadCenter - roadRight * halfWidth;
         Vector3 rightLaneWorld = roadCenter + roadRight * halfWidth;
         
         // Convert to vehicle coordinates (lateral offset)
@@ -853,7 +938,9 @@ public class GroundTruthReporter : MonoBehaviour
         // Calculate lane positions using camera's coordinate system
         // This ensures width is preserved when converting to vehicle coordinates
         float halfWidth = roadGenerator.roadWidth * 0.5f;
-        Vector3 leftLaneWorld = roadCenterAtStraightAhead - coordReferenceRight * halfWidth;
+        Vector3 leftLaneWorld = useCenterLineAsLeftLane
+            ? roadCenterAtStraightAhead
+            : roadCenterAtStraightAhead - coordReferenceRight * halfWidth;
         Vector3 rightLaneWorld = roadCenterAtStraightAhead + coordReferenceRight * halfWidth;
         
         // Convert to vehicle coordinates (lateral offset from camera, not car)
@@ -873,6 +960,39 @@ public class GroundTruthReporter : MonoBehaviour
         float rightXVehicle = Vector3.Dot(toRightLane, coordReferenceRight);
         
         return (leftXVehicle, rightXVehicle);
+    }
+
+    /// <summary>
+    /// Get ground truth lane center at lookahead distance for a specific lane.
+    /// Lane index: 0 = left, 1 = right.
+    /// </summary>
+    public float GetLaneCenterAtLookahead(float lookaheadDistance = 8.0f, int laneIndex = 1)
+    {
+        var (leftX, rightX) = GetLanePositionsAtLookahead(lookaheadDistance);
+        float laneWidth = rightX - leftX;
+        if (laneWidth <= 0.0001f)
+        {
+            return (leftX + rightX) * 0.5f;
+        }
+
+        // If center line is the left lane line, the "right lane" center is the midpoint
+        // between centerline and right edge.
+        if (useCenterLineAsLeftLane)
+        {
+            if (laneIndex <= 0)
+            {
+                return leftX - (laneWidth * 0.5f);
+            }
+            return (leftX + rightX) * 0.5f;
+        }
+
+        // Otherwise, left/right are road edges (two lanes).
+        float roadCenter = (leftX + rightX) * 0.5f;
+        if (laneIndex <= 0)
+        {
+            return roadCenter - (laneWidth * 0.25f);
+        }
+        return roadCenter + (laneWidth * 0.25f);
     }
     
     /// <summary>
@@ -1269,39 +1389,26 @@ public class GroundTruthReporter : MonoBehaviour
         Vector3 carPos = carTransform.position;
         float t = FindClosestPointOnOval(carPos);
 
-        // Use position-based curvature to handle piecewise-linear directions.
+        // Use direction-based curvature for polyline tracks to avoid underestimation.
+        // curvature ≈ (heading change) / (arc length).
         float pathLength = Mathf.Max(0.01f, roadGenerator.GetPathLength());
         float sampleDistance = 1.0f; // meters along path for curvature estimate
         float dt = sampleDistance / pathLength;
         float tPrev = Mathf.Repeat(t - dt, 1f);
         float tNext = Mathf.Repeat(t + dt, 1f);
 
-        Vector3 pPrev = roadGenerator.GetOvalCenterPoint(tPrev);
-        Vector3 pCurr = roadGenerator.GetOvalCenterPoint(t);
-        Vector3 pNext = roadGenerator.GetOvalCenterPoint(tNext);
-
-        Vector3 v1 = pCurr - pPrev;
-        Vector3 v2 = pNext - pCurr;
-        float a = v1.magnitude;
-        float b = v2.magnitude;
-        float c = (pNext - pPrev).magnitude;
-        if (a < 1e-4f || b < 1e-4f || c < 1e-4f)
+        Vector3 dirPrev = roadGenerator.GetOvalDirection(tPrev).normalized;
+        Vector3 dirNext = roadGenerator.GetOvalDirection(tNext).normalized;
+        if (dirPrev.sqrMagnitude < 1e-6f || dirNext.sqrMagnitude < 1e-6f)
         {
             return 0f;
         }
 
-        // Curvature magnitude using triangle area (2*area / (a*b*c)).
-        Vector3 cross = Vector3.Cross(v1, v2);
-        float area2 = cross.magnitude;
-        float curvature = area2 / (a * b * c);
-
-        // Determine sign (left vs right turn).
-        if (cross.y < 0f)
-        {
-            curvature = -curvature;
-        }
-
-        return curvature;
+        // Signed angle between directions around +Y (left turn = positive).
+        float headingDeltaDeg = Vector3.SignedAngle(dirPrev, dirNext, Vector3.up);
+        float headingDeltaRad = headingDeltaDeg * Mathf.Deg2Rad;
+        float arcLength = Mathf.Max(1e-4f, sampleDistance * 2f);
+        return headingDeltaRad / arcLength;
     }
     
     void OnDrawGizmos()

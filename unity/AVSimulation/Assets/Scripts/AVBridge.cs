@@ -20,6 +20,21 @@ public class AVBridge : MonoBehaviour
     public CameraCapture cameraCapture;
     public TrajectoryVisualizer trajectoryVisualizer; // Optional trajectory visualizer
     public GroundTruthReporter groundTruthReporter; // Optional ground truth reporter
+
+    [Header("Top-Down Debug Camera")]
+    public bool enableTopDownCamera = true;
+    public string topDownCameraName = "TopDownCamera";
+    [Tooltip("Height above the car in meters.")]
+    public float topDownHeight = 18f;
+    [Tooltip("Orthographic size for the top-down camera.")]
+    public float topDownOrthographicSize = 12f;
+    [Tooltip("Viewport X position for the top-down camera (0..1).")]
+    public float topDownViewportX = 0.7f;
+    [Tooltip("Viewport width for the top-down camera (0..1).")]
+    public float topDownViewportWidth = 0.3f;
+    public int topDownCaptureWidth = 640;
+    public int topDownCaptureHeight = 480;
+    public int topDownTargetFps = 15;
     
     [Header("API Settings")]
     public string apiUrl = "http://localhost:8000";
@@ -55,6 +70,13 @@ public class AVBridge : MonoBehaviour
     [Header("Speed Limit Preview")]
     [Tooltip("Preview distance ahead (m) for upcoming speed limit checks")]
     public float speedLimitPreviewDistance = 12.0f;
+public float speedLimitPreviewDistanceMid = 0.0f;
+public float speedLimitPreviewDistanceLong = 0.0f;
+public bool speedLimitPreviewAllowWrap = false;
+[Tooltip("Max normalized t jump allowed before preview is suppressed")]
+public float speedLimitPreviewMaxTDelta = 0.15f;
+    [Tooltip("Number of samples when scanning preview window for min speed limit")]
+    public int speedLimitPreviewSamples = 8;
     
     private float updateInterval;
     private float lastUpdateTime;
@@ -83,6 +105,10 @@ public class AVBridge : MonoBehaviour
     private bool controlRequestInFlight = false;
     private float controlRequestStartRealtime = 0f;
     private float lastNonZeroSpeedLimit = 0f;
+private float? lastCarT = null;
+
+    private Camera topDownCamera;
+    private CameraCapture topDownCapture;
     
     // PERFORMANCE: Cache camera8mScreenY calculation - only recalculate when camera moves significantly
     private float cachedCamera8mScreenY = -1.0f;
@@ -95,6 +121,70 @@ public class AVBridge : MonoBehaviour
     private double lastEditorPlayCheckTime = 0.0; // Use double for EditorApplication.timeSinceStartup
     private Queue<UnityWebRequest> pendingPlayChecks = new Queue<UnityWebRequest>(); // Queue for async requests in edit mode
     #endif
+
+    private float ComputePreviewSpeedLimit(
+        float carT,
+        float previewDistance,
+        float pathLength,
+        float fallbackLimit,
+        bool baseValid,
+        out float previewMinDistance
+    )
+    {
+        previewMinDistance = Mathf.Max(0f, previewDistance);
+        if (!baseValid || previewDistance <= 0.01f || pathLength <= 0.01f)
+        {
+            return fallbackLimit;
+        }
+
+        float previewT = carT + (previewDistance / pathLength);
+        if (!speedLimitPreviewAllowWrap && previewT > 1.0f)
+        {
+            return fallbackLimit;
+        }
+
+        int samples = Mathf.Max(2, speedLimitPreviewSamples);
+        float startDistance = carT * pathLength;
+        float endDistance = startDistance + previewDistance;
+        float previewSpeedLimit = fallbackLimit;
+
+        if (speedLimitPreviewAllowWrap)
+        {
+            float total = pathLength;
+            float window = Mathf.Min(previewDistance, total);
+            for (int i = 0; i < samples; i++)
+            {
+                float alpha = samples > 1 ? (float)i / (samples - 1) : 0f;
+                float distance = startDistance + (alpha * window);
+                float tSample = Mathf.Repeat(distance / total, 1f);
+                float limit = groundTruthReporter.GetSpeedLimitAtT(tSample);
+                if (limit > 0f && limit < previewSpeedLimit)
+                {
+                    previewSpeedLimit = limit;
+                    previewMinDistance = alpha * window;
+                }
+            }
+        }
+        else
+        {
+            float clampedEnd = Mathf.Min(endDistance, pathLength);
+            float span = Mathf.Max(0.01f, clampedEnd - startDistance);
+            for (int i = 0; i < samples; i++)
+            {
+                float alpha = samples > 1 ? (float)i / (samples - 1) : 0f;
+                float distance = startDistance + (alpha * span);
+                float tSample = Mathf.Clamp01(distance / pathLength);
+                float limit = groundTruthReporter.GetSpeedLimitAtT(tSample);
+                if (limit > 0f && limit < previewSpeedLimit)
+                {
+                    previewSpeedLimit = limit;
+                    previewMinDistance = distance - startDistance;
+                }
+            }
+        }
+
+        return previewSpeedLimit;
+    }
     
     void Start()
     {
@@ -117,6 +207,8 @@ public class AVBridge : MonoBehaviour
         {
             cameraCapture = FindObjectOfType<CameraCapture>();
         }
+
+        SetupTopDownCamera();
         
         if (groundTruthReporter == null)
         {
@@ -188,6 +280,93 @@ public class AVBridge : MonoBehaviour
         #if UNITY_EDITOR
         EditorApplication.update += OnEditorUpdate;
         #endif
+    }
+
+    private void SetupTopDownCamera()
+    {
+        if (!enableTopDownCamera)
+        {
+            return;
+        }
+
+        Camera mainCamera = null;
+        if (cameraCapture != null && cameraCapture.targetCamera != null)
+        {
+            mainCamera = cameraCapture.targetCamera;
+        }
+        else
+        {
+            GameObject avCam = GameObject.Find("AVCamera");
+            if (avCam != null)
+            {
+                mainCamera = avCam.GetComponent<Camera>();
+            }
+            if (mainCamera == null)
+            {
+                mainCamera = Camera.main;
+            }
+        }
+
+        float clampedX = Mathf.Clamp01(topDownViewportX);
+        float clampedWidth = Mathf.Clamp01(topDownViewportWidth);
+        if (mainCamera != null)
+        {
+            float mainWidth = Mathf.Clamp01(clampedX);
+            if (mainWidth <= 0.0f)
+            {
+                mainWidth = Mathf.Clamp01(1.0f - clampedWidth);
+                clampedX = Mathf.Clamp01(1.0f - clampedWidth);
+            }
+            mainCamera.rect = new Rect(0f, 0f, mainWidth, 1f);
+        }
+
+        GameObject existing = GameObject.Find(topDownCameraName);
+        if (existing != null)
+        {
+            topDownCamera = existing.GetComponent<Camera>();
+        }
+
+        if (topDownCamera == null)
+        {
+            GameObject topDownObj = new GameObject(topDownCameraName);
+            topDownObj.transform.SetParent(transform);
+            topDownObj.transform.localPosition = new Vector3(0f, topDownHeight, 0f);
+            topDownObj.transform.localRotation = Quaternion.Euler(90f, 0f, 0f);
+            topDownCamera = topDownObj.AddComponent<Camera>();
+        }
+
+        topDownCamera.orthographic = true;
+        topDownCamera.orthographicSize = topDownOrthographicSize;
+        topDownCamera.rect = new Rect(clampedX, 0f, clampedWidth, 1f);
+        if (mainCamera != null)
+        {
+            topDownCamera.depth = mainCamera.depth + 1f;
+            topDownCamera.cullingMask = mainCamera.cullingMask;
+        }
+
+        topDownCapture = topDownCamera.GetComponent<CameraCapture>();
+        if (topDownCapture == null)
+        {
+            topDownCapture = topDownCamera.gameObject.AddComponent<CameraCapture>();
+        }
+
+        if (cameraCapture != null)
+        {
+            topDownCapture.apiUrl = cameraCapture.apiUrl;
+            topDownCapture.cameraEndpoint = cameraCapture.cameraEndpoint;
+            topDownCapture.useAsyncGPUReadback = cameraCapture.useAsyncGPUReadback;
+        }
+        topDownCapture.targetCamera = topDownCamera;
+        topDownCapture.cameraId = "top_down";
+        topDownCapture.captureWidth = topDownCaptureWidth;
+        topDownCapture.captureHeight = topDownCaptureHeight;
+        topDownCapture.targetFPS = topDownTargetFps;
+        topDownCapture.showDebugInfo = false;
+        topDownCapture.logFrameMarkers = false;
+        topDownCapture.enforceCameraFov = false;
+        topDownCapture.enforceCameraAspect = false;
+        topDownCapture.enforceScreenResolution = false;
+        topDownCapture.enforceQualityLevel = false;
     }
     
     #if UNITY_EDITOR
@@ -537,8 +716,11 @@ public class AVBridge : MonoBehaviour
             var (leftLaneLineX, rightLaneLineX) = groundTruthReporter.GetLanePositionsAtLookahead(lookaheadDistance);
             currentState.groundTruthLeftLaneLineX = leftLaneLineX;
             currentState.groundTruthRightLaneLineX = rightLaneLineX;
-            // Calculate lane center at lookahead (average of left and right lane lines)
-            currentState.groundTruthLaneCenterX = (leftLaneLineX + rightLaneLineX) / 2.0f;
+            // Calculate lane center at lookahead (use lane index from GroundTruthReporter)
+            currentState.groundTruthLaneCenterX = groundTruthReporter.GetLaneCenterAtLookahead(
+                lookaheadDistance,
+                groundTruthReporter.currentLane
+            );
             
             // NEW: Add path heading for path-based steering
             float desiredHeading = groundTruthReporter.GetDesiredHeading(5.0f);
@@ -591,22 +773,77 @@ public class AVBridge : MonoBehaviour
             }
             currentState.speedLimit = computedSpeedLimit;
             float previewDistance = Mathf.Max(0f, speedLimitPreviewDistance);
-            currentState.speedLimitPreviewDistance = previewDistance;
+            float previewDistanceMid = Mathf.Max(0f, speedLimitPreviewDistanceMid);
+            float previewDistanceLong = Mathf.Max(0f, speedLimitPreviewDistanceLong);
             float previewSpeedLimit = computedSpeedLimit;
+            float previewMinDistance = previewDistance;
+            float previewSpeedLimitMid = computedSpeedLimit;
+            float previewMinDistanceMid = previewDistanceMid;
+            float previewSpeedLimitLong = computedSpeedLimit;
+            float previewMinDistanceLong = previewDistanceLong;
+            bool previewValid = true;
+            if (lastCarT.HasValue)
+            {
+                float deltaT = Mathf.Abs(carT - lastCarT.Value);
+                float wrappedDeltaT = Mathf.Min(deltaT, 1f - deltaT);
+                if (wrappedDeltaT > Mathf.Max(0.0f, speedLimitPreviewMaxTDelta))
+                {
+                    previewValid = false;
+                }
+            }
             if (previewDistance > 0.01f)
             {
                 float pathLength = groundTruthReporter.GetPathLength();
                 if (pathLength > 0.01f)
                 {
-                    float previewT = Mathf.Repeat(carT + (previewDistance / pathLength), 1f);
-                    previewSpeedLimit = groundTruthReporter.GetSpeedLimitAtT(previewT);
+                    previewSpeedLimit = ComputePreviewSpeedLimit(
+                        carT,
+                        previewDistance,
+                        pathLength,
+                        computedSpeedLimit,
+                        previewValid,
+                        out previewMinDistance
+                    );
+                    previewSpeedLimitMid = ComputePreviewSpeedLimit(
+                        carT,
+                        previewDistanceMid,
+                        pathLength,
+                        computedSpeedLimit,
+                        previewValid,
+                        out previewMinDistanceMid
+                    );
+                    previewSpeedLimitLong = ComputePreviewSpeedLimit(
+                        carT,
+                        previewDistanceLong,
+                        pathLength,
+                        computedSpeedLimit,
+                        previewValid,
+                        out previewMinDistanceLong
+                    );
                     if (previewSpeedLimit <= 0f && lastNonZeroSpeedLimit > 0f)
                     {
                         previewSpeedLimit = lastNonZeroSpeedLimit;
                     }
+                    if (previewSpeedLimitMid <= 0f && lastNonZeroSpeedLimit > 0f)
+                    {
+                        previewSpeedLimitMid = lastNonZeroSpeedLimit;
+                    }
+                    if (previewSpeedLimitLong <= 0f && lastNonZeroSpeedLimit > 0f)
+                    {
+                        previewSpeedLimitLong = lastNonZeroSpeedLimit;
+                    }
                 }
             }
             currentState.speedLimitPreview = previewSpeedLimit;
+            currentState.speedLimitPreviewDistance = previewDistance;
+            currentState.speedLimitPreviewMinDistance = previewMinDistance;
+            currentState.speedLimitPreviewMid = previewSpeedLimitMid;
+            currentState.speedLimitPreviewMidDistance = previewDistanceMid;
+            currentState.speedLimitPreviewMidMinDistance = previewMinDistanceMid;
+            currentState.speedLimitPreviewLong = previewSpeedLimitLong;
+            currentState.speedLimitPreviewLongDistance = previewDistanceLong;
+            currentState.speedLimitPreviewLongMinDistance = previewMinDistanceLong;
+            lastCarT = carT;
             if (showDebugInfo && currentState.speedLimit <= 0f && Time.frameCount % 120 == 0)
             {
                 Debug.LogWarning("AVBridge: Speed limit is 0; using fallback (if available). Check track speed limits.");

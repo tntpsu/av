@@ -20,11 +20,26 @@ class Visualizer {
         this.previousPerceptionData = null;  // Track previous frame's perception data for change calculations
         this.currentLongitudinalMetrics = null;
         this.currentImage = null;
+        this.currentTopdownImage = null;
         this.lastValidY8m = undefined;  // Cache last valid camera_8m_screen_y value
         this.groundTruthDistance = 7;  // Tunable distance for ground truth conversion (calibrated to account for camera pitch/height)
         this.generatedDebugCache = {};  // Cache for on-demand generated debug images
         this.lastUnityTime = null;
         this.lastUnityFrameIndex = null;
+        this.lastUnityFrameCount = null;
+        this.lastCameraTimestamp = null;
+        this.availableSignals = [];
+        this.chart = null;
+        this.chartXAxisKey = null;
+        this.chartTimeSeries = null;
+        this.chartUsesTime = false;
+        this.chartCursorValue = null;
+        this.chartCursorIndex = null;
+        this.chartCurvatureSeries = null;
+        this.chartSavedViews = this.loadChartViews();
+        this.lastChartViewName = this.loadLastChartViewName();
+        this.cameraGridHeightKey = 'debugVisualizer.cameraGridHeight';
+        this.topdownOrthoHalfSize = 12.0;
         
         this.setupEventListeners();
         this.loadRecordings();
@@ -33,6 +48,11 @@ class Visualizer {
     setupEventListeners() {
         // Recording selection
         document.getElementById('load-btn').addEventListener('click', () => this.loadSelectedRecording());
+        const recordingSelect = document.getElementById('recording-select');
+        if (recordingSelect) {
+            recordingSelect.addEventListener('focus', () => this.loadRecordings());
+            recordingSelect.addEventListener('click', () => this.loadRecordings());
+        }
         
         // Frame navigation
         document.getElementById('frame-slider').addEventListener('input', (e) => {
@@ -84,10 +104,21 @@ class Visualizer {
         // Overlay toggles
         document.getElementById('toggle-lanes').addEventListener('change', () => this.updateOverlays());
         document.getElementById('toggle-detected-curves').addEventListener('change', () => this.updateOverlays());
-        document.getElementById('toggle-fit-points').addEventListener('change', () => this.updateOverlays());
+        const fitPointsToggle = document.getElementById('toggle-fit-points');
+        if (fitPointsToggle) {
+            fitPointsToggle.addEventListener('change', () => this.updateOverlays());
+        }
         document.getElementById('toggle-trajectory').addEventListener('change', () => this.updateOverlays());
         document.getElementById('toggle-reference').addEventListener('change', () => this.updateOverlays());
         document.getElementById('toggle-ground-truth').addEventListener('change', () => this.updateOverlays());
+        const roiToggle = document.getElementById('toggle-perception-roi');
+        if (roiToggle) {
+            roiToggle.addEventListener('change', () => this.updateOverlays());
+        }
+        const segFitRoiToggle = document.getElementById('toggle-seg-fit-roi');
+        if (segFitRoiToggle) {
+            segFitRoiToggle.addEventListener('change', () => this.updateOverlays());
+        }
         
         // Ground truth distance dropdown
         const gtDistanceSelect = document.getElementById('gt-distance-select');
@@ -116,10 +147,66 @@ class Visualizer {
         });
         
         // Debug overlay toggles
-        document.getElementById('toggle-combined').addEventListener('change', () => this.updateDebugOverlays());
-        document.getElementById('toggle-edges').addEventListener('change', () => this.updateDebugOverlays());
-        document.getElementById('toggle-yellow-mask').addEventListener('change', () => this.updateDebugOverlays());
-        document.getElementById('toggle-histogram').addEventListener('change', () => this.updateDebugOverlays());
+        const combinedToggle = document.getElementById('toggle-combined');
+        if (combinedToggle) {
+            combinedToggle.addEventListener('change', () => this.updateDebugOverlays());
+        }
+        const edgesToggle = document.getElementById('toggle-edges');
+        if (edgesToggle) {
+            edgesToggle.addEventListener('change', () => this.updateDebugOverlays());
+        }
+        const yellowMaskToggle = document.getElementById('toggle-yellow-mask');
+        if (yellowMaskToggle) {
+            yellowMaskToggle.addEventListener('change', () => this.updateDebugOverlays());
+        }
+        const histogramToggle = document.getElementById('toggle-histogram');
+        if (histogramToggle) {
+            histogramToggle.addEventListener('change', () => this.updateDebugOverlays());
+        }
+        document.getElementById('toggle-seg-mask').addEventListener('change', () => this.updateOverlays());
+        document.getElementById('toggle-seg-fit-points').addEventListener('change', () => this.updateOverlays());
+
+        // Chart controls
+        const chartPlotBtn = document.getElementById('chart-plot-btn');
+        if (chartPlotBtn) {
+            chartPlotBtn.addEventListener('click', () => this.plotSelectedSignals());
+        }
+        const chartClearBtn = document.getElementById('chart-clear-btn');
+        if (chartClearBtn) {
+            chartClearBtn.addEventListener('click', () => this.clearChart());
+        }
+        const chartSaveBtn = document.getElementById('chart-save-btn');
+        if (chartSaveBtn) {
+            chartSaveBtn.addEventListener('click', () => this.saveChartView());
+        }
+        const chartLoadBtn = document.getElementById('chart-load-btn');
+        if (chartLoadBtn) {
+            chartLoadBtn.addEventListener('click', () => this.loadSelectedChartView());
+        }
+        const chartSavedViewsSelect = document.getElementById('chart-saved-views-select');
+        if (chartSavedViewsSelect) {
+            chartSavedViewsSelect.addEventListener('change', () => this.loadSelectedChartView());
+        }
+        const chartOverwriteBtn = document.getElementById('chart-overwrite-btn');
+        if (chartOverwriteBtn) {
+            chartOverwriteBtn.addEventListener('click', () => this.overwriteSelectedChartView());
+        }
+        const chartDeleteBtn = document.getElementById('chart-delete-btn');
+        if (chartDeleteBtn) {
+            chartDeleteBtn.addEventListener('click', () => this.deleteSelectedChartView());
+        }
+        const chartSearch = document.getElementById('chart-signal-search');
+        if (chartSearch) {
+            chartSearch.addEventListener('input', () => this.renderSignalList());
+        }
+
+        const legendToggleBtn = document.getElementById('legend-toggle-btn');
+        if (legendToggleBtn) {
+            legendToggleBtn.addEventListener('click', () => this.toggleLegend());
+        }
+
+        this.setupPanelResize();
+        this.setupCameraGridResize();
 
         // CV tools visibility toggle
         const cvToolsToggle = document.getElementById('toggle-cv-tools');
@@ -127,17 +214,26 @@ class Visualizer {
         const cvDataOverlays = document.getElementById('cv-data-overlays');
         const cvDebugOverlayControls = document.getElementById('cv-debug-overlay-controls');
         const setCvToolsVisible = (show) => {
-            cvDebugTools.style.display = show ? 'block' : 'none';
-            cvDataOverlays.style.display = show ? 'block' : 'none';
-            cvDebugOverlayControls.style.display = show ? 'block' : 'none';
+            if (cvDebugTools) {
+                cvDebugTools.style.display = show ? 'block' : 'none';
+            }
+            if (cvDataOverlays) {
+                cvDataOverlays.style.display = show ? 'block' : 'none';
+            }
+            if (cvDebugOverlayControls) {
+                cvDebugOverlayControls.style.display = show ? 'block' : 'none';
+            }
             if (!show) {
-                document.getElementById('toggle-combined').checked = false;
-                document.getElementById('toggle-edges').checked = false;
-                document.getElementById('toggle-yellow-mask').checked = false;
-                document.getElementById('toggle-fit-points').checked = false;
-                document.getElementById('toggle-histogram').checked = false;
-                document.getElementById('toggle-lanes').checked = false;
-                document.getElementById('toggle-detected-curves').checked = false;
+                const combined = document.getElementById('toggle-combined');
+                const edges = document.getElementById('toggle-edges');
+                const yellow = document.getElementById('toggle-yellow-mask');
+                const fitPoints = document.getElementById('toggle-fit-points');
+                const histogram = document.getElementById('toggle-histogram');
+                if (combined) combined.checked = false;
+                if (edges) edges.checked = false;
+                if (yellow) yellow.checked = false;
+                if (fitPoints) fitPoints.checked = false;
+                if (histogram) histogram.checked = false;
                 this.updateDebugOverlays();
                 this.updateOverlays();
             }
@@ -151,11 +247,20 @@ class Visualizer {
         }
         
         // Opacity control
-        document.getElementById('opacity-slider').addEventListener('input', (e) => {
-            const opacity = parseInt(e.target.value) / 100;
-            document.getElementById('opacity-value').textContent = e.target.value;
-            document.getElementById('debug-overlay-canvas').style.opacity = opacity;
-        });
+        const opacitySlider = document.getElementById('opacity-slider');
+        if (opacitySlider) {
+            opacitySlider.addEventListener('input', (e) => {
+                const opacity = parseInt(e.target.value) / 100;
+                const opacityValue = document.getElementById('opacity-value');
+                if (opacityValue) {
+                    opacityValue.textContent = e.target.value;
+                }
+                const debugCanvas = document.getElementById('debug-overlay-canvas');
+                if (debugCanvas) {
+                    debugCanvas.style.opacity = opacity;
+                }
+            });
+        }
         
         // Export buttons
         document.getElementById('export-frame-btn').addEventListener('click', () => this.exportFrame());
@@ -187,6 +292,7 @@ class Visualizer {
                 return;
             }
             
+            const currentValue = select.value || this.currentRecording || '';
             select.innerHTML = '<option value="">Select recording...</option>';
             
             if (!recordings || recordings.length === 0) {
@@ -205,6 +311,10 @@ class Visualizer {
                 option.textContent = rec.filename;
                 select.appendChild(option);
             });
+
+            if (currentValue && recordings.some(rec => rec.filename === currentValue)) {
+                select.value = currentValue;
+            }
             
             console.log(`Added ${recordings.length} recordings to dropdown`);
         } catch (error) {
@@ -227,10 +337,15 @@ class Visualizer {
             document.getElementById('frame-count').textContent = this.frameCount;
             document.getElementById('frame-slider').max = this.frameCount - 1;
             this.currentFrameIndex = 0;
+            this.lastUnityTime = null;
+            this.lastUnityFrameIndex = null;
+            this.lastUnityFrameCount = null;
+            this.lastCameraTimestamp = null;
             await this.goToFrame(0);
             await this.loadSummary();  // Load summary when recording is loaded
             await this.loadIssues();  // Load issues when recording is loaded
             await this.loadDiagnostics();  // Load diagnostics when recording is loaded
+            await this.loadSignalsList();
         } catch (error) {
             console.error('Error loading recording:', error);
             alert('Failed to load recording: ' + error.message);
@@ -267,6 +382,7 @@ class Visualizer {
             }
             
             const summary = await response.json();
+            this.summaryConfig = summary.config || null;
             
             if (summary.error) {
                 summaryContent.innerHTML = `<p style="color: #ff6b6b; text-align: center; padding: 2rem;">Error: ${summary.error}</p>`;
@@ -324,67 +440,22 @@ class Visualizer {
                 : '';
             html += `<div style="color: #a0a0a0; margin-bottom: 1rem;">Drive Duration: ${summary.executive_summary.drive_duration.toFixed(1)}s | Frames: ${summary.executive_summary.total_frames} | Success Rate: ${summary.executive_summary.success_rate.toFixed(1)}%${centerednessText}</div>`;
             
+            html += '<h3 style="margin: 1rem 0 0.5rem; color: #9bdcff;">System Health</h3>';
             // Unity timing health
             const unityGapMax = summary.system_health?.unity_time_gap_max ?? null;
             const unityGapCount = summary.system_health?.unity_time_gap_count ?? null;
             if (unityGapMax !== null && unityGapCount !== null) {
                 const gapColor = unityGapCount > 0 || unityGapMax > 0.2 ? '#ff6b6b' : '#4caf50';
                 const gapStatus = unityGapCount > 0 || unityGapMax > 0.2 ? '⚠️ Hitch Detected' : '✓ No Hitch';
-                html += '<div style="margin-bottom: 1rem; padding: 0.75rem; background: #1f1f1f; border-radius: 4px;">';
-                html += `<strong style="color: ${gapColor};">Unity Timing Health:</strong> `;
-                html += `<span style="color: ${gapColor};">${gapStatus}</span><br/>`;
-                html += `<span style="color: #888;">Max Unity Time Gap: ${unityGapMax.toFixed(3)}s | Gaps > 0.2s: ${unityGapCount}</span>`;
-                html += '</div>';
+                html += '<div style="background: #2a2a2a; padding: 1rem; border-radius: 8px; margin-bottom: 1rem;">';
+                html += '<h3 style="margin-top: 0; color: #4a90e2;">Unity Timing Health</h3>';
+                html += '<table style="width: 100%; color: #e0e0e0;">';
+                html += `<tr><td>Status:</td><td style="text-align: right; color: ${gapColor};">${gapStatus}</td></tr>`;
+                html += `<tr><td>Max Unity Time Gap:</td><td style="text-align: right; color: ${gapColor};">${unityGapMax.toFixed(3)}s</td></tr>`;
+                html += `<tr><td>Gaps > 0.2s:</td><td style="text-align: right; color: ${gapColor};">${unityGapCount}</td></tr>`;
+                html += '</table></div>';
             }
 
-            // Control stability (straight-line oscillation + adaptive deadband)
-            const controlStability = summary.control_stability || null;
-            if (controlStability) {
-                const oscMean = controlStability.straight_oscillation_mean ?? null;
-                const oscMax = controlStability.straight_oscillation_max ?? null;
-                const straightFrac = controlStability.straight_fraction ?? null;
-                const deadbandMean = controlStability.tuned_deadband_mean ?? null;
-                const deadbandMax = controlStability.tuned_deadband_max ?? null;
-                const smoothingMean = controlStability.tuned_smoothing_mean ?? null;
-                if (oscMean !== null && straightFrac !== null) {
-                    const stabilityColor = oscMean > 0.2 ? '#ff6b6b' : oscMean > 0.1 ? '#ffa500' : '#4caf50';
-                    html += '<div style="margin-bottom: 1rem; padding: 0.75rem; background: #1f1f1f; border-radius: 4px;">';
-                    html += `<strong style="color: ${stabilityColor};">Control Stability (Straight):</strong><br/>`;
-                    html += `<span style="color: #888;">Straight Coverage: ${straightFrac.toFixed(1)}% | Oscillation Mean: ${oscMean.toFixed(3)} | Max: ${oscMax !== null ? oscMax.toFixed(3) : '-'}</span><br/>`;
-                    html += `<span style="color: #888;">Tuned Deadband: ${deadbandMean !== null ? deadbandMean.toFixed(3) : '-'} (max ${deadbandMax !== null ? deadbandMax.toFixed(3) : '-'}) | Smoothing α: ${smoothingMean !== null ? smoothingMean.toFixed(3) : '-'}</span>`;
-                    html += '</div>';
-                }
-            }
-
-            // Speed control + comfort
-            const speedControl = summary.speed_control || null;
-            if (speedControl) {
-                const speedRmse = speedControl.speed_error_rmse ?? null;
-                const speedMean = speedControl.speed_error_mean ?? null;
-                const speedMax = speedControl.speed_error_max ?? null;
-                const overspeedRate = speedControl.speed_overspeed_rate ?? null;
-                const speedLimitZeroRate = speedControl.speed_limit_zero_rate ?? null;
-                if (speedRmse !== null) {
-                    const speedColor = speedRmse > 2.0 ? '#ff6b6b' : '#4caf50';
-                    html += '<div style="margin-bottom: 1rem; padding: 0.75rem; background: #1f1f1f; border-radius: 4px;">';
-                    html += `<strong style="color: ${speedColor};">Speed Control:</strong><br/>`;
-                    html += `<span style="color: #888;">Speed Error RMSE: ${speedRmse.toFixed(2)} m/s | Mean: ${speedMean !== null ? speedMean.toFixed(2) : '-'} | Max: ${speedMax !== null ? speedMax.toFixed(2) : '-'}</span><br/>`;
-                    html += `<span style="color: #888;">Overspeed Rate (>0.5 m/s): ${overspeedRate !== null ? overspeedRate.toFixed(1) : '-'}% | Speed Limit Missing: ${speedLimitZeroRate !== null ? speedLimitZeroRate.toFixed(1) : '-'}%</span>`;
-                    html += '</div>';
-                }
-            }
-            const comfort = summary.comfort || null;
-            if (comfort) {
-                const comfortColor = (comfort.acceleration_p95 > 2.5 || comfort.jerk_p95 > 5.0) ? '#ff6b6b' : '#4caf50';
-                const latAccelP95 = comfort.lateral_accel_p95 ?? null;
-                const latJerkP95 = comfort.lateral_jerk_p95 ?? null;
-                html += '<div style="margin-bottom: 1rem; padding: 0.75rem; background: #1f1f1f; border-radius: 4px;">';
-                html += `<strong style="color: ${comfortColor};">Comfort:</strong><br/>`;
-                const accelP95Filtered = comfort.acceleration_p95_filtered ?? null;
-                const jerkP95Filtered = comfort.jerk_p95_filtered ?? null;
-                html += `<span style="color: #888;">Accel P95: ${comfort.acceleration_p95.toFixed(2)} m/s²${accelP95Filtered !== null ? ` (filt ${accelP95Filtered.toFixed(2)})` : ''} | Jerk P95: ${comfort.jerk_p95.toFixed(2)} m/s³${jerkP95Filtered !== null ? ` (filt ${jerkP95Filtered.toFixed(2)})` : ''} | Lat Accel P95: ${latAccelP95 !== null ? latAccelP95.toFixed(2) : '-'} m/s² | Lat Jerk P95: ${latJerkP95 !== null ? latJerkP95.toFixed(2) : '-'} m/s³ | Steering Jerk Max: ${comfort.steering_jerk_max.toFixed(2)}</span>`;
-                html += '</div>';
-            }
             html += `<div style="margin-bottom: 1rem; padding: 0.5rem; background: #2a2a2a; border-radius: 4px;">${scope_indicator}</div>`;
             
             // Show failure detection info if applicable
@@ -485,85 +556,183 @@ class Visualizer {
                 return '#ff6b6b';  // Red
             };
             
-            // Path Tracking
-            html += '<div style="background: #2a2a2a; padding: 1rem; border-radius: 8px; margin-bottom: 1rem;">';
-            html += '<h3 style="margin-top: 0; color: #4a90e2;">Path Tracking</h3>';
-            html += '<table style="width: 100%; color: #e0e0e0;">';
-            
-            // Lateral Error RMSE: Good <0.2m, Acceptable <0.4m
-            const latErrColor = getColorForValue(summary.path_tracking.lateral_error_rmse, { good: 0.2, acceptable: 0.4 });
-            html += `<tr><td>Lateral Error (RMSE):</td><td style="text-align: right; color: ${latErrColor};">${summary.path_tracking.lateral_error_rmse.toFixed(3)}m</td></tr>`;
-            
-            // Lateral Error Max: Good <0.5m, Acceptable <1.0m
-            const latMaxColor = getColorForValue(summary.path_tracking.lateral_error_max, { good: 0.5, acceptable: 1.0 });
-            html += `<tr><td>Lateral Error (Max):</td><td style="text-align: right; color: ${latMaxColor};">${summary.path_tracking.lateral_error_max.toFixed(3)}m</td></tr>`;
-            
-            // Lateral Error P95: Good <0.4m, Acceptable <0.8m
-            const latP95Color = getColorForValue(summary.path_tracking.lateral_error_p95, { good: 0.4, acceptable: 0.8 });
-            html += `<tr><td>Lateral Error (P95):</td><td style="text-align: right; color: ${latP95Color};">${summary.path_tracking.lateral_error_p95.toFixed(3)}m</td></tr>`;
-            
-            // Heading Error RMSE: Good <10°, Acceptable <20°
-            const headingErrDeg = summary.path_tracking.heading_error_rmse * 180 / Math.PI;
-            const headingColor = getColorForValue(headingErrDeg, { good: 10, acceptable: 20 });
-            html += `<tr><td>Heading Error (RMSE):</td><td style="text-align: right; color: ${headingColor};">${headingErrDeg.toFixed(1)}°</td></tr>`;
-            
-            // Time in Lane: Good >90%, Acceptable >70%
-            const timeInLaneColor = summary.path_tracking.time_in_lane >= 90 ? '#4caf50' : summary.path_tracking.time_in_lane >= 70 ? '#ffa500' : '#ff6b6b';
-            html += `<tr><td>Time in Lane:</td><td style="text-align: right; color: ${timeInLaneColor};">${summary.path_tracking.time_in_lane.toFixed(1)}%</td></tr>`;
-            html += '</table></div>';
-            
-            // Control Smoothness
-            html += '<div style="background: #2a2a2a; padding: 1rem; border-radius: 8px; margin-bottom: 1rem;">';
-            html += '<h3 style="margin-top: 0; color: #4a90e2;">Control Smoothness</h3>';
-            html += '<table style="width: 100%; color: #e0e0e0;">';
-            
-            // Steering Jerk: Good <0.5/s², Acceptable <1.0/s² (lower is better)
-            const jerkColor = getColorForValue(summary.control_smoothness.steering_jerk_max, { good: 0.5, acceptable: 1.0 });
-            html += `<tr><td>Steering Jerk (Max):</td><td style="text-align: right; color: ${jerkColor};">${summary.control_smoothness.steering_jerk_max.toFixed(3)}/s²</td></tr>`;
-            
-            // Steering Rate: Good <2.0/s, Acceptable <4.0/s (lower is better)
-            const rateColor = getColorForValue(summary.control_smoothness.steering_rate_max, { good: 2.0, acceptable: 4.0 });
-            html += `<tr><td>Steering Rate (Max):</td><td style="text-align: right; color: ${rateColor};">${summary.control_smoothness.steering_rate_max.toFixed(3)}/s</td></tr>`;
-            
-            // Steering Smoothness: Good >2.0, Acceptable >1.0 (higher is better - inverse)
-            const smoothnessColor = summary.control_smoothness.steering_smoothness >= 2.0 ? '#4caf50' : summary.control_smoothness.steering_smoothness >= 1.0 ? '#ffa500' : '#ff6b6b';
-            html += `<tr><td>Steering Smoothness:</td><td style="text-align: right; color: ${smoothnessColor};">${summary.control_smoothness.steering_smoothness.toFixed(2)}</td></tr>`;
-            
-            // Oscillation Frequency: Good <1.0Hz, Acceptable <2.0Hz (lower is better)
-            const oscColor = getColorForValue(summary.control_smoothness.oscillation_frequency, { good: 1.0, acceptable: 2.0 });
-            html += `<tr><td>Oscillation Frequency:</td><td style="text-align: right; color: ${oscColor};">${summary.control_smoothness.oscillation_frequency.toFixed(2)}Hz</td></tr>`;
-            html += '</table></div>';
-            
+            html += '<h3 style="margin: 1rem 0 0.5rem; color: #9bdcff;">Perception</h3>';
             // Perception Quality
             html += '<div style="background: #2a2a2a; padding: 1rem; border-radius: 8px; margin-bottom: 1rem;">';
             html += '<h3 style="margin-top: 0; color: #4a90e2;">Perception Quality</h3>';
             html += '<table style="width: 100%; color: #e0e0e0;">';
-            html += `<tr><td>Lane Detection Rate:</td><td style="text-align: right; color: ${summary.perception_quality.lane_detection_rate >= 90 ? '#4caf50' : summary.perception_quality.lane_detection_rate >= 70 ? '#ffa500' : '#ff6b6b'};">${summary.perception_quality.lane_detection_rate.toFixed(1)}%</td></tr>`;
+            const laneDetColor = summary.perception_quality.lane_detection_rate >= 90 ? '#4caf50' : summary.perception_quality.lane_detection_rate >= 70 ? '#ffa500' : '#ff6b6b';
+            const staleColor = summary.perception_quality.stale_perception_rate < 10 ? '#4caf50' : summary.perception_quality.stale_perception_rate < 20 ? '#ffa500' : '#ff6b6b';
+            const stabilityScore = summary.perception_quality.perception_stability_score;
+            const stabilityColor = stabilityScore !== undefined
+                ? (stabilityScore >= 80 ? '#4caf50' : stabilityScore >= 60 ? '#ffa500' : '#ff6b6b')
+                : '#888';
+            const instabilityColor = summary.perception_quality.perception_instability_detected === 0 ? '#4caf50' : '#ff6b6b';
+            html += `<tr><td>Lane Detection Rate:</td><td style="text-align: right; color: ${laneDetColor};">${summary.perception_quality.lane_detection_rate.toFixed(1)}%</td></tr>`;
             html += `<tr><td>Confidence (Mean):</td><td style="text-align: right;">${summary.perception_quality.perception_confidence_mean.toFixed(3)}</td></tr>`;
             html += `<tr><td>Jumps Detected:</td><td style="text-align: right;">${summary.perception_quality.perception_jumps_detected || 0}</td></tr>`;
             if (summary.perception_quality.perception_instability_detected !== undefined) {
-                html += `<tr><td>Instability Events:</td><td style="text-align: right; color: ${summary.perception_quality.perception_instability_detected === 0 ? '#4caf50' : '#ff6b6b'};">${summary.perception_quality.perception_instability_detected}</td></tr>`;
+                html += `<tr><td>Instability Events:</td><td style="text-align: right; color: ${instabilityColor};">${summary.perception_quality.perception_instability_detected}</td></tr>`;
             }
-            html += `<tr><td>Stale Data Rate:</td><td style="text-align: right; color: ${summary.perception_quality.stale_perception_rate < 10 ? '#4caf50' : summary.perception_quality.stale_perception_rate < 20 ? '#ffa500' : '#ff6b6b'};">${summary.perception_quality.stale_perception_rate.toFixed(1)}%</td></tr>`;
-            if (summary.perception_quality.perception_stability_score !== undefined) {
-                html += `<tr><td>Stability Score:</td><td style="text-align: right; color: ${summary.perception_quality.perception_stability_score >= 80 ? '#4caf50' : summary.perception_quality.perception_stability_score >= 60 ? '#ffa500' : '#ff6b6b'};">${summary.perception_quality.perception_stability_score.toFixed(1)}%</td></tr>`;
+            html += `<tr><td>Stale Data Rate:</td><td style="text-align: right; color: ${staleColor};">${summary.perception_quality.stale_perception_rate.toFixed(1)}%</td></tr>`;
+            if (stabilityScore !== undefined) {
+                html += `<tr><td>Stability Score:</td><td style="text-align: right; color: ${stabilityColor};">${stabilityScore.toFixed(1)}%</td></tr>`;
+            }
+            if (summary.perception_quality.lane_line_jitter_p95 !== undefined) {
+                const jitterColor = getColorForValue(
+                    summary.perception_quality.lane_line_jitter_p95,
+                    { good: 0.3, acceptable: 0.6 }
+                );
+                html += `<tr><td>Lane Line Jitter (P95):</td><td style="text-align: right; color: ${jitterColor};">${summary.perception_quality.lane_line_jitter_p95.toFixed(3)}m</td></tr>`;
+            }
+            if (summary.perception_quality.reference_jitter_p95 !== undefined) {
+                const refJitterColor = getColorForValue(
+                    summary.perception_quality.reference_jitter_p95,
+                    { good: 0.15, acceptable: 0.25 }
+                );
+                html += `<tr><td>Reference Jitter (P95):</td><td style="text-align: right; color: ${refJitterColor};">${summary.perception_quality.reference_jitter_p95.toFixed(3)}m</td></tr>`;
+            }
+            if (summary.perception_quality.single_lane_rate !== undefined) {
+                const singleLaneColor = summary.perception_quality.single_lane_rate < 5 ? '#4caf50'
+                    : summary.perception_quality.single_lane_rate < 15 ? '#ffa500' : '#ff6b6b';
+                html += `<tr><td>Single Lane Rate:</td><td style="text-align: right; color: ${singleLaneColor};">${summary.perception_quality.single_lane_rate.toFixed(1)}%</td></tr>`;
+            }
+            if (summary.perception_quality.right_lane_low_visibility_rate !== undefined) {
+                const rightLowColor = summary.perception_quality.right_lane_low_visibility_rate < 5 ? '#4caf50'
+                    : summary.perception_quality.right_lane_low_visibility_rate < 15 ? '#ffa500' : '#ff6b6b';
+                html += `<tr><td>Right Lane Low Visibility:</td><td style="text-align: right; color: ${rightLowColor};">${summary.perception_quality.right_lane_low_visibility_rate.toFixed(1)}%</td></tr>`;
             }
             html += '</table></div>';
-            
+
+            html += '<h3 style="margin: 1rem 0 0.5rem; color: #9bdcff;">Lateral</h3>';
             // Trajectory Quality
             html += '<div style="background: #2a2a2a; padding: 1rem; border-radius: 8px; margin-bottom: 1rem;">';
             html += '<h3 style="margin-top: 0; color: #4a90e2;">Trajectory Quality</h3>';
             html += '<table style="width: 100%; color: #e0e0e0;">';
-            
-            // Availability: Good >95%, Acceptable >90%
             const availColor = summary.trajectory_quality.trajectory_availability >= 95 ? '#4caf50' : summary.trajectory_quality.trajectory_availability >= 90 ? '#ffa500' : '#ff6b6b';
             html += `<tr><td>Availability:</td><td style="text-align: right; color: ${availColor};">${summary.trajectory_quality.trajectory_availability.toFixed(1)}%</td></tr>`;
-            
-            // Reference Point Accuracy: Good <0.1m, Acceptable <0.2m (lower is better)
             const refAccColor = getColorForValue(summary.trajectory_quality.ref_point_accuracy_rmse, { good: 0.1, acceptable: 0.2 });
             html += `<tr><td>Reference Point Accuracy (RMSE):</td><td style="text-align: right; color: ${refAccColor};">${summary.trajectory_quality.ref_point_accuracy_rmse.toFixed(3)}m</td></tr>`;
             html += '</table></div>';
+
+            // Path Tracking
+            html += '<div style="background: #2a2a2a; padding: 1rem; border-radius: 8px; margin-bottom: 1rem;">';
+            html += '<h3 style="margin-top: 0; color: #4a90e2;">Path Tracking</h3>';
+            html += '<table style="width: 100%; color: #e0e0e0;">';
+            const latErrColor = getColorForValue(summary.path_tracking.lateral_error_rmse, { good: 0.2, acceptable: 0.4 });
+            html += `<tr><td>Lateral Error (RMSE):</td><td style="text-align: right; color: ${latErrColor};">${summary.path_tracking.lateral_error_rmse.toFixed(3)}m</td></tr>`;
+            const latMaxColor = getColorForValue(summary.path_tracking.lateral_error_max, { good: 0.5, acceptable: 1.0 });
+            html += `<tr><td>Lateral Error (Max):</td><td style="text-align: right; color: ${latMaxColor};">${summary.path_tracking.lateral_error_max.toFixed(3)}m</td></tr>`;
+            const latP95Color = getColorForValue(summary.path_tracking.lateral_error_p95, { good: 0.4, acceptable: 0.8 });
+            html += `<tr><td>Lateral Error (P95):</td><td style="text-align: right; color: ${latP95Color};">${summary.path_tracking.lateral_error_p95.toFixed(3)}m</td></tr>`;
+            const headingErrDeg = summary.path_tracking.heading_error_rmse * 180 / Math.PI;
+            const headingColor = getColorForValue(headingErrDeg, { good: 10, acceptable: 20 });
+            html += `<tr><td>Heading Error (RMSE):</td><td style="text-align: right; color: ${headingColor};">${headingErrDeg.toFixed(1)}°</td></tr>`;
+            const timeInLaneColor = summary.path_tracking.time_in_lane >= 90 ? '#4caf50' : summary.path_tracking.time_in_lane >= 70 ? '#ffa500' : '#ff6b6b';
+            html += `<tr><td>Time in Lane:</td><td style="text-align: right; color: ${timeInLaneColor};">${summary.path_tracking.time_in_lane.toFixed(1)}%</td></tr>`;
+            html += '</table></div>';
+
+            // Control Smoothness
+            html += '<div style="background: #2a2a2a; padding: 1rem; border-radius: 8px; margin-bottom: 1rem;">';
+            html += '<h3 style="margin-top: 0; color: #4a90e2;">Control Smoothness</h3>';
+            html += '<table style="width: 100%; color: #e0e0e0;">';
+            const jerkColor = getColorForValue(summary.control_smoothness.steering_jerk_max, { good: 0.5, acceptable: 1.0 });
+            html += `<tr><td>Steering Jerk (Max):</td><td style="text-align: right; color: ${jerkColor};">${summary.control_smoothness.steering_jerk_max.toFixed(3)}/s²</td></tr>`;
+            const rateColor = getColorForValue(summary.control_smoothness.steering_rate_max, { good: 2.0, acceptable: 4.0 });
+            html += `<tr><td>Steering Rate (Max):</td><td style="text-align: right; color: ${rateColor};">${summary.control_smoothness.steering_rate_max.toFixed(3)}/s</td></tr>`;
+            const smoothnessColor = summary.control_smoothness.steering_smoothness >= 2.0 ? '#4caf50' : summary.control_smoothness.steering_smoothness >= 1.0 ? '#ffa500' : '#ff6b6b';
+            html += `<tr><td>Steering Smoothness:</td><td style="text-align: right; color: ${smoothnessColor};">${summary.control_smoothness.steering_smoothness.toFixed(2)}</td></tr>`;
+            const oscColor = getColorForValue(summary.control_smoothness.oscillation_frequency, { good: 1.0, acceptable: 2.0 });
+            html += `<tr><td>Oscillation Frequency:</td><td style="text-align: right; color: ${oscColor};">${summary.control_smoothness.oscillation_frequency.toFixed(2)}Hz</td></tr>`;
+            html += '</table></div>';
+
+            // Control stability (straight-line oscillation + adaptive deadband)
+            const controlStability = summary.control_stability || null;
+            if (controlStability) {
+                const oscMean = controlStability.straight_oscillation_mean ?? null;
+                const oscMax = controlStability.straight_oscillation_max ?? null;
+                const straightFrac = controlStability.straight_fraction ?? null;
+                const deadbandMean = controlStability.tuned_deadband_mean ?? null;
+                const deadbandMax = controlStability.tuned_deadband_max ?? null;
+                const smoothingMean = controlStability.tuned_smoothing_mean ?? null;
+                if (oscMean !== null && straightFrac !== null) {
+                    const stabilityColor = oscMean > 0.2 ? '#ff6b6b' : oscMean > 0.1 ? '#ffa500' : '#4caf50';
+                    html += '<div style="background: #2a2a2a; padding: 1rem; border-radius: 8px; margin-bottom: 1rem;">';
+                    html += '<h3 style="margin-top: 0; color: #4a90e2;">Control Stability (Straight)</h3>';
+                    html += '<table style="width: 100%; color: #e0e0e0;">';
+                    html += `<tr><td>Straight Coverage:</td><td style="text-align: right;">${straightFrac.toFixed(1)}%</td></tr>`;
+                    html += `<tr><td>Oscillation Mean:</td><td style="text-align: right; color: ${stabilityColor};">${oscMean.toFixed(3)}</td></tr>`;
+                    html += `<tr><td>Oscillation Max:</td><td style="text-align: right;">${oscMax !== null ? oscMax.toFixed(3) : '-'}</td></tr>`;
+                    html += `<tr><td>Tuned Deadband (Mean):</td><td style="text-align: right;">${deadbandMean !== null ? deadbandMean.toFixed(3) : '-'}</td></tr>`;
+                    html += `<tr><td>Tuned Deadband (Max):</td><td style="text-align: right;">${deadbandMax !== null ? deadbandMax.toFixed(3) : '-'}</td></tr>`;
+                    html += `<tr><td>Smoothing α (Mean):</td><td style="text-align: right;">${smoothingMean !== null ? smoothingMean.toFixed(3) : '-'}</td></tr>`;
+                    if (controlStability.straight_sign_mismatch_rate !== undefined) {
+                        const mismatchRate = controlStability.straight_sign_mismatch_rate;
+                        const mismatchEvents = controlStability.straight_sign_mismatch_events ?? 0;
+                        const mismatchColor = mismatchRate > 15 ? '#ff6b6b' : mismatchRate > 5 ? '#ffa500' : '#4caf50';
+                        html += `<tr><td>Straight Sign Mismatch Rate:</td><td style="text-align: right; color: ${mismatchColor};">${mismatchRate.toFixed(1)}%</td></tr>`;
+                        html += `<tr><td>Straight Sign Mismatch Events:</td><td style="text-align: right;">${mismatchEvents}</td></tr>`;
+                    }
+                    html += '</table></div>';
+
+                }
+            }
             
+            html += '<h3 style="margin: 1rem 0 0.5rem; color: #9bdcff;">Longitudinal</h3>';
+            // Speed control
+            const speedControl = summary.speed_control || null;
+            if (speedControl) {
+                const speedRmse = speedControl.speed_error_rmse ?? null;
+                const speedMean = speedControl.speed_error_mean ?? null;
+                const speedMax = speedControl.speed_error_max ?? null;
+                const overspeedRate = speedControl.speed_overspeed_rate ?? null;
+                const speedLimitZeroRate = speedControl.speed_limit_zero_rate ?? null;
+                const surgeCount = speedControl.speed_surge_count ?? null;
+                const surgeAvgDrop = speedControl.speed_surge_avg_drop ?? null;
+                const surgeP95Drop = speedControl.speed_surge_p95_drop ?? null;
+                if (speedRmse !== null) {
+                    const speedColor = speedRmse > 2.0 ? '#ff6b6b' : '#4caf50';
+                    html += '<div style="background: #2a2a2a; padding: 1rem; border-radius: 8px; margin-bottom: 1rem;">';
+                    html += '<h3 style="margin-top: 0; color: #4a90e2;">Speed Control</h3>';
+                    html += '<table style="width: 100%; color: #e0e0e0;">';
+                    html += `<tr><td>Speed Error (RMSE):</td><td style="text-align: right; color: ${speedColor};">${speedRmse.toFixed(2)} m/s</td></tr>`;
+                    html += `<tr><td>Speed Error (Mean):</td><td style="text-align: right;">${speedMean !== null ? speedMean.toFixed(2) : '-'}</td></tr>`;
+                    html += `<tr><td>Speed Error (Max):</td><td style="text-align: right;">${speedMax !== null ? speedMax.toFixed(2) : '-'}</td></tr>`;
+                    html += `<tr><td>Overspeed Rate (>0.5 m/s):</td><td style="text-align: right;">${overspeedRate !== null ? overspeedRate.toFixed(1) : '-'}%</td></tr>`;
+                    html += `<tr><td>Speed Limit Missing:</td><td style="text-align: right;">${speedLimitZeroRate !== null ? speedLimitZeroRate.toFixed(1) : '-'}%</td></tr>`;
+                    if (surgeCount !== null) {
+                        html += `<tr><td>Straight Surge Drops (>=1.0 m/s):</td><td style="text-align: right;">${surgeCount}</td></tr>`;
+                        html += `<tr><td>Straight Surge Drop (Avg):</td><td style="text-align: right;">${surgeAvgDrop !== null ? surgeAvgDrop.toFixed(2) : '-'}</td></tr>`;
+                        html += `<tr><td>Straight Surge Drop (P95):</td><td style="text-align: right;">${surgeP95Drop !== null ? surgeP95Drop.toFixed(2) : '-'}</td></tr>`;
+                    }
+                    html += '</table></div>';
+                }
+            }
+            // Comfort
+            const comfort = summary.comfort || null;
+            if (comfort) {
+                const comfortColor = (comfort.acceleration_p95 > 2.5 || comfort.jerk_p95 > 5.0) ? '#ff6b6b' : '#4caf50';
+                const latAccelP95 = comfort.lateral_accel_p95 ?? null;
+                const latJerkP95 = comfort.lateral_jerk_p95 ?? null;
+                const accelP95Filtered = comfort.acceleration_p95_filtered ?? null;
+                const jerkP95Filtered = comfort.jerk_p95_filtered ?? null;
+                html += '<div style="background: #2a2a2a; padding: 1rem; border-radius: 8px; margin-bottom: 1rem;">';
+                html += '<h3 style="margin-top: 0; color: #4a90e2;">Comfort</h3>';
+                html += '<table style="width: 100%; color: #e0e0e0;">';
+                html += `<tr><td>Accel P95:</td><td style="text-align: right; color: ${comfortColor};">${comfort.acceleration_p95.toFixed(2)} m/s²</td></tr>`;
+                if (accelP95Filtered !== null) {
+                    html += `<tr><td>Accel P95 (Filt):</td><td style="text-align: right;">${accelP95Filtered.toFixed(2)} m/s²</td></tr>`;
+                }
+                html += `<tr><td>Jerk P95:</td><td style="text-align: right; color: ${comfortColor};">${comfort.jerk_p95.toFixed(2)} m/s³</td></tr>`;
+                if (jerkP95Filtered !== null) {
+                    html += `<tr><td>Jerk P95 (Filt):</td><td style="text-align: right;">${jerkP95Filtered.toFixed(2)} m/s³</td></tr>`;
+                }
+                html += `<tr><td>Lat Accel P95:</td><td style="text-align: right;">${latAccelP95 !== null ? latAccelP95.toFixed(2) : '-'} m/s²</td></tr>`;
+                html += `<tr><td>Lat Jerk P95:</td><td style="text-align: right;">${latJerkP95 !== null ? latJerkP95.toFixed(2) : '-'} m/s³</td></tr>`;
+                html += `<tr><td>Steering Jerk (Max):</td><td style="text-align: right;">${comfort.steering_jerk_max.toFixed(2)}</td></tr>`;
+                html += '</table></div>';
+            }
+
             // Safety
             html += '<div style="background: #2a2a2a; padding: 1rem; border-radius: 8px; margin-bottom: 1rem;">';
             html += '<h3 style="margin-top: 0; color: #4a90e2;">Safety</h3>';
@@ -699,6 +868,7 @@ class Visualizer {
             html += '<button class="issue-filter-btn" data-filter="high_lateral_error" style="padding: 0.5rem 1rem; background: #555; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 0.9rem;">High Lateral Error</button>';
             html += '<button class="issue-filter-btn" data-filter="negative_control_correlation" style="padding: 0.5rem 1rem; background: #555; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 0.9rem;">Negative Correlation</button>';
             html += '<button class="issue-filter-btn" data-filter="perception_failure" style="padding: 0.5rem 1rem; background: #555; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 0.9rem;">Perception Failure</button>';
+            html += '<button class="issue-filter-btn" data-filter="straight_sign_mismatch" style="padding: 0.5rem 1rem; background: #555; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 0.9rem;">Straight Sign Mismatch</button>';
             html += '<button class="issue-filter-btn" data-filter="out_of_lane" style="padding: 0.5rem 1rem; background: #555; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 0.9rem;">Out of Lane</button>';
             html += '<button class="issue-filter-btn" data-filter="emergency_stop" style="padding: 0.5rem 1rem; background: #555; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 0.9rem;">Emergency Stop</button>';
             html += '<button class="issue-filter-btn" data-filter="heading_jump" style="padding: 0.5rem 1rem; background: #555; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 0.9rem;">Heading Jump</button>';
@@ -722,6 +892,7 @@ class Visualizer {
                         'high_lateral_error': '📏',
                         'negative_control_correlation': '↔️',
                         'perception_failure': '👁️',
+                        'straight_sign_mismatch': '↩️',
                         'out_of_lane': '🚫',
                         'emergency_stop': '🛑',
                         'heading_jump': '🔄'
@@ -1233,14 +1404,24 @@ class Visualizer {
                 prevPrevFrameData
             );
             
-            // Load camera image
-            const imageDataUrl = await this.dataLoader.loadFrameImage(frameIndex);
-            await this.loadImage(imageDataUrl);
+            // Load camera images
+            const imageDataUrl = await this.dataLoader.loadFrameImage(frameIndex, 'front_center');
+            await this.loadImage(imageDataUrl, 'camera-canvas');
+            try {
+                const topdownUrl = await this.dataLoader.loadFrameImage(frameIndex, 'top_down');
+                await this.loadImage(topdownUrl, 'topdown-canvas');
+                this.updateTopdownOverlay();
+            } catch (error) {
+                this.clearCanvas('topdown-canvas');
+                this.currentTopdownImage = null;
+            }
             
             // Update displays
             this.updateDataPanel();
             this.updateOverlays();
             this.updateDebugOverlays();
+            this.updateTopdownOverlay();
+            this.updateChartCursor();
             
             // Update timestamp
             if (this.currentFrameData.camera) {
@@ -1252,20 +1433,36 @@ class Visualizer {
         }
     }
 
-    async loadImage(imageDataUrl) {
+    async loadImage(imageDataUrl, canvasId = 'camera-canvas') {
         return new Promise((resolve, reject) => {
             const img = new Image();
             img.onload = () => {
-                const canvas = document.getElementById('camera-canvas');
+                const canvas = document.getElementById(canvasId);
+                if (!canvas) {
+                    resolve();
+                    return;
+                }
                 const ctx = canvas.getContext('2d');
                 ctx.clearRect(0, 0, canvas.width, canvas.height);
                 ctx.drawImage(img, 0, 0);
                 this.currentImage = img;
+                if (canvasId === 'topdown-canvas') {
+                    this.currentTopdownImage = img;
+                }
                 resolve();
             };
             img.onerror = reject;
             img.src = imageDataUrl;
         });
+    }
+
+    clearCanvas(canvasId) {
+        const canvas = document.getElementById(canvasId);
+        if (!canvas) {
+            return;
+        }
+        const ctx = canvas.getContext('2d');
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
     }
 
     updateDataPanel() {
@@ -1277,6 +1474,172 @@ class Visualizer {
         this.updateControlData();
         this.updateVehicleData();
         this.updateGroundTruthData();
+    }
+
+    quatMultiply(a, b) {
+        return [
+            a[3] * b[0] + a[0] * b[3] + a[1] * b[2] - a[2] * b[1],
+            a[3] * b[1] - a[0] * b[2] + a[1] * b[3] + a[2] * b[0],
+            a[3] * b[2] + a[0] * b[1] - a[1] * b[0] + a[2] * b[3],
+            a[3] * b[3] - a[0] * b[0] - a[1] * b[1] - a[2] * b[2]
+        ];
+    }
+
+    quatRotateVec(v, q) {
+        const vq = [v.x, v.y, v.z, 0];
+        const qConj = [-q[0], -q[1], -q[2], q[3]];
+        const res = this.quatMultiply(this.quatMultiply(q, vq), qConj);
+        return { x: res[0], y: res[1], z: res[2] };
+    }
+
+    projectTrajectoryToImage(trajPoints) {
+        if (!this.currentFrameData || !this.currentFrameData.vehicle) {
+            return null;
+        }
+        const vehicle = this.currentFrameData.vehicle;
+        if (!vehicle.rotation || !vehicle.position) {
+            return null;
+        }
+        if (vehicle.camera_pos_x === null || vehicle.camera_forward_x === null) {
+            return null;
+        }
+
+        const q = vehicle.rotation;
+        if (!Array.isArray(q) || q.length < 4) {
+            return null;
+        }
+        const qInv = [-q[0], -q[1], -q[2], q[3]];
+
+        const camPosWorld = {
+            x: vehicle.camera_pos_x,
+            y: vehicle.camera_pos_y,
+            z: vehicle.camera_pos_z
+        };
+        const vehPosWorld = {
+            x: vehicle.position[0],
+            y: vehicle.position[1],
+            z: vehicle.position[2]
+        };
+        const camForwardWorld = {
+            x: vehicle.camera_forward_x,
+            y: vehicle.camera_forward_y,
+            z: vehicle.camera_forward_z
+        };
+
+        const camPosVehicle = this.quatRotateVec(
+            {
+                x: camPosWorld.x - vehPosWorld.x,
+                y: camPosWorld.y - vehPosWorld.y,
+                z: camPosWorld.z - vehPosWorld.z
+            },
+            qInv
+        );
+        const camForwardVehicle = this.quatRotateVec(camForwardWorld, qInv);
+        const forwardNorm = Math.hypot(camForwardVehicle.x, camForwardVehicle.y, camForwardVehicle.z) || 1.0;
+        const forward = {
+            x: camForwardVehicle.x / forwardNorm,
+            y: camForwardVehicle.y / forwardNorm,
+            z: camForwardVehicle.z / forwardNorm
+        };
+
+        const worldUp = { x: 0, y: 0, z: 1 };
+        const right = {
+            x: forward.y * worldUp.z - forward.z * worldUp.y,
+            y: forward.z * worldUp.x - forward.x * worldUp.z,
+            z: forward.x * worldUp.y - forward.y * worldUp.x
+        };
+        const rightNorm = Math.hypot(right.x, right.y, right.z) || 1.0;
+        right.x /= rightNorm;
+        right.y /= rightNorm;
+        right.z /= rightNorm;
+        const up = {
+            x: right.y * forward.z - right.z * forward.y,
+            y: right.z * forward.x - right.x * forward.z,
+            z: right.x * forward.y - right.y * forward.x
+        };
+
+        const width = this.overlayRenderer.imageWidth;
+        const height = this.overlayRenderer.imageHeight;
+        const cx = width / 2.0;
+        const cy = height / 2.0;
+        const hfov = vehicle.camera_horizontal_fov && vehicle.camera_horizontal_fov > 0
+            ? vehicle.camera_horizontal_fov
+            : this.overlayRenderer.cameraFov;
+        const vfov = vehicle.camera_field_of_view && vehicle.camera_field_of_view > 0
+            ? vehicle.camera_field_of_view
+            : (2.0 * Math.atan(Math.tan((hfov * Math.PI) / 360.0) * (height / width)) * (180 / Math.PI));
+
+        const fx = (width / 2.0) / Math.tan((hfov * Math.PI) / 360.0);
+        const fy = (height / 2.0) / Math.tan((vfov * Math.PI) / 360.0);
+
+        const points = [];
+        for (const point of trajPoints) {
+            if (point.y < 0) {
+                continue;
+            }
+            const p = {
+                x: point.x - camPosVehicle.x,
+                y: point.y - camPosVehicle.y,
+                z: 0 - camPosVehicle.z
+            };
+            const xCam = p.x * right.x + p.y * right.y + p.z * right.z;
+            const yCam = p.x * up.x + p.y * up.y + p.z * up.z;
+            const zCam = p.x * forward.x + p.y * forward.y + p.z * forward.z;
+            if (zCam <= 0.1) {
+                continue;
+            }
+            const xImg = cx + (xCam / zCam) * fx;
+            const yImg = cy - (yCam / zCam) * fy;
+            points.push({ x: xImg, y: yImg });
+        }
+
+        return points;
+    }
+
+    updateTopdownOverlay() {
+        const canvas = document.getElementById('topdown-canvas');
+        if (!canvas) return;
+        const ctx = canvas.getContext('2d');
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        if (this.currentTopdownImage) {
+            ctx.drawImage(this.currentTopdownImage, 0, 0);
+        }
+        if (!this.currentFrameData) return;
+        const showTrajectory = document.getElementById('toggle-trajectory')?.checked;
+        if (!showTrajectory) return;
+        const trajectory = this.currentFrameData.trajectory?.trajectory_points || [];
+        if (!trajectory.length) return;
+        const sortedTrajectory = [...trajectory].sort((a, b) => (a.y || 0) - (b.y || 0));
+
+        const pixelsPerMeter = canvas.height / (this.topdownOrthoHalfSize * 2.0);
+        const cx = canvas.width / 2.0;
+        const cy = canvas.height / 2.0;
+
+        ctx.save();
+        ctx.strokeStyle = '#00ffff';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        let first = true;
+        for (const point of sortedTrajectory) {
+            if (point.y < 0) {
+                continue;
+            }
+            const px = cx + (point.x * pixelsPerMeter);
+            const py = cy - (point.y * pixelsPerMeter);
+            if (first) {
+                ctx.moveTo(px, py);
+                first = false;
+            } else {
+                ctx.lineTo(px, py);
+            }
+        }
+        ctx.stroke();
+
+        ctx.fillStyle = '#ff3333';
+        ctx.beginPath();
+        ctx.arc(cx, cy, 4, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
     }
 
     updatePerceptionData() {
@@ -1296,17 +1659,56 @@ class Visualizer {
         updateField('perception-confidence', p.confidence !== undefined ? p.confidence.toFixed(3) : '-');
         updateField('perception-num-lanes', p.num_lanes_detected || '-');
 
+        const method = (p.detection_method || '').toLowerCase();
+        const isCv = method === 'cv';
+        const isSeg = method === 'segmentation';
+
         // Disable fit points toggle when not using CV detection
         const fitToggle = document.getElementById('toggle-fit-points');
         if (fitToggle) {
             const fitLabel = fitToggle.closest('label');
-            const isCv = (p.detection_method || '').toLowerCase() === 'cv';
             fitToggle.disabled = !isCv;
             if (!isCv) {
                 fitToggle.checked = false;
             }
             if (fitLabel) {
                 fitLabel.style.opacity = isCv ? '1.0' : '0.4';
+            }
+        }
+
+        // Hide detected curves toggle by default when not using CV
+        const curvesToggle = document.getElementById('toggle-detected-curves');
+        if (curvesToggle) {
+            const curvesLabel = curvesToggle.closest('label');
+            curvesToggle.disabled = !isCv;
+            if (!isCv) {
+                curvesToggle.checked = false;
+            }
+            if (curvesLabel) {
+                curvesLabel.style.opacity = isCv ? '1.0' : '0.4';
+            }
+        }
+
+        const segMaskToggle = document.getElementById('toggle-seg-mask');
+        if (segMaskToggle) {
+            const segLabel = segMaskToggle.closest('label');
+            segMaskToggle.disabled = !isSeg;
+            if (!isSeg) {
+                segMaskToggle.checked = false;
+            }
+            if (segLabel) {
+                segLabel.style.opacity = isSeg ? '1.0' : '0.4';
+            }
+        }
+        const segPointsToggle = document.getElementById('toggle-seg-fit-points');
+        if (segPointsToggle) {
+            const segLabel = segPointsToggle.closest('label');
+            segPointsToggle.disabled = !isSeg;
+            if (!isSeg) {
+                segPointsToggle.checked = false;
+            }
+            if (segLabel) {
+                segLabel.style.opacity = isSeg ? '1.0' : '0.4';
             }
         }
         const left_lane_line_x = p.left_lane_line_x !== undefined ? p.left_lane_line_x : (p.left_lane_x !== undefined ? p.left_lane_x : undefined);  // Backward compatibility
@@ -1320,16 +1722,14 @@ class Visualizer {
             // The recorded left_lane_line_x and right_lane_line_x are at 8.0m
             // Width scales linearly with distance (for same camera FOV)
             // If lines align at tunableDistance, use that for width calculation
-            const recordedDistance = 8.0; // Distance at which perception was measured
+            const recordedDistance = this.currentFrameData.vehicle && this.currentFrameData.vehicle.ground_truth_lookahead_distance
+                ? this.currentFrameData.vehicle.ground_truth_lookahead_distance
+                : 8.0;
             const tunableDistance = this.groundTruthDistance; // Distance from slider (where lines align)
             
-            // Calculate width at recorded distance
+            // Calculate width at recorded distance (raw perception width)
             const widthAtRecorded = right_lane_line_x - left_lane_line_x;
-            
-            // Scale width to tunable distance (width scales linearly with distance)
-            // This matches what's visually displayed when lines align
-            const width = widthAtRecorded * (tunableDistance / recordedDistance);
-            updateField('perception-width', `${width.toFixed(3)}m`);
+            updateField('perception-width', `${widthAtRecorded.toFixed(3)}m`);
         } else {
             updateField('perception-width', '-');
         }
@@ -1378,6 +1778,10 @@ class Visualizer {
         const staleReason = p.stale_data_reason || '-';
         updateField('perception-stale-reason', staleReason);
         updateField('all-perception-stale-reason', staleReason);
+        
+        const rejectReason = p.reject_reason || '-';
+        updateField('perception-reject-reason', rejectReason);
+        updateField('all-perception-reject-reason', rejectReason);
         
         // NEW: Dynamic visibility based on stale_reason
         const isInstability = staleReason === 'perception_instability';
@@ -1489,6 +1893,10 @@ class Visualizer {
         const consecutiveBad = p.consecutive_bad_detection_frames !== undefined ? p.consecutive_bad_detection_frames : 0;
         const healthScore = p.perception_health_score !== undefined ? p.perception_health_score : 1.0;
         const healthStatus = p.perception_health_status || 'healthy';
+        const badEvents = p.perception_bad_events || '-';
+        const badEventsRecent = p.perception_bad_events_recent || '-';
+        const clampEvents = p.perception_clamp_events || '-';
+        const timestampFrozen = p.perception_timestamp_frozen ? 'YES ⚠️' : 'NO';
         
         // Color code health status
         let healthColor = '#4caf50'; // green
@@ -1512,6 +1920,14 @@ class Visualizer {
             allStatusElem.textContent = healthStatus;
             allStatusElem.style.color = healthColor;
         }
+        updateField('perception-health-bad-events', badEvents);
+        updateField('all-perception-health-bad-events', badEvents);
+        updateField('perception-health-bad-events-recent', badEventsRecent);
+        updateField('all-perception-health-bad-events-recent', badEventsRecent);
+        updateField('perception-clamp-events', clampEvents);
+        updateField('all-perception-clamp-events', clampEvents);
+        updateField('perception-timestamp-frozen', timestampFrozen);
+        updateField('all-perception-timestamp-frozen', timestampFrozen);
     }
 
     updateTrajectoryData() {
@@ -1646,6 +2062,15 @@ class Visualizer {
         updateField('control-lateral-error', c.lateral_error !== undefined ? `${c.lateral_error.toFixed(3)}m` : '-');
         updateField('control-heading-error', c.heading_error !== undefined ? `${(c.heading_error * 180 / Math.PI).toFixed(2)}°` : '-');
         updateField('control-total-error', c.total_error !== undefined ? c.total_error.toFixed(4) : '-');
+        updateField('control-total-error-scaled', c.total_error_scaled !== undefined ? c.total_error_scaled.toFixed(4) : '-');
+        updateField('control-feedforward-steering', c.feedforward_steering !== undefined ? c.feedforward_steering.toFixed(4) : '-');
+        updateField('control-feedback-steering', c.feedback_steering !== undefined ? c.feedback_steering.toFixed(4) : '-');
+        updateField(
+            'control-straight-sign-flip-override',
+            c.straight_sign_flip_override_active !== undefined
+                ? (c.straight_sign_flip_override_active ? 'YES' : 'NO')
+                : '-'
+        );
         updateField('control-pid-integral', c.pid_integral !== undefined ? c.pid_integral.toFixed(4) : '-');
         updateField('control-pid-derivative', c.pid_derivative !== undefined ? c.pid_derivative.toFixed(4) : '-');
         updateField('control-pid-error', c.pid_error !== undefined ? c.pid_error.toFixed(4) : '-');
@@ -1772,6 +2197,19 @@ class Visualizer {
         } else {
             updateField('vehicle-camera-fov-horizontal', '- (not available)');
         }
+
+        const configFov = this.summaryConfig?.camera_fov;
+        if (configFov !== undefined && configFov !== null && configFov > 0) {
+            updateField('vehicle-camera-fov-config', `${configFov.toFixed(2)}°`);
+        } else {
+            updateField('vehicle-camera-fov-config', '-');
+        }
+        const configCameraHeight = this.summaryConfig?.camera_height;
+        if (configCameraHeight !== undefined && configCameraHeight !== null && configCameraHeight > 0) {
+            updateField('vehicle-camera-height-config', `${configCameraHeight.toFixed(2)}m`);
+        } else {
+            updateField('vehicle-camera-height-config', '-');
+        }
         
         // NEW: Display camera position and forward direction from Unity
         const cameraPosX = v.camera_pos_x;
@@ -1801,6 +2239,34 @@ class Visualizer {
             updateField('vehicle-camera-forward-z', '- (not available)');
         }
 
+        // NEW: Camera frame metadata (camera is the reference timeline)
+        const cameraInfo = this.currentFrameData.camera || {};
+        const cameraTimestamp = cameraInfo.timestamp;
+        const cameraFrameId = cameraInfo.frame_id;
+        updateField(
+            'vehicle-camera-timestamp',
+            cameraTimestamp !== undefined && cameraTimestamp !== null ? cameraTimestamp.toFixed(3) : '-'
+        );
+        updateField('vehicle-camera-frame-id', cameraFrameId !== undefined && cameraFrameId !== null ? cameraFrameId : '-');
+        
+        // Flag when camera timestamp is reused across sequential frames
+        let cameraTimestampReusedDisplay = '-';
+        let cameraTimestampReused = false;
+        if (cameraTimestamp !== undefined && cameraTimestamp !== null) {
+            if (this.lastCameraTimestamp !== null && this.lastUnityFrameIndex === this.currentFrameIndex - 1) {
+                cameraTimestampReused = cameraTimestamp === this.lastCameraTimestamp;
+                cameraTimestampReusedDisplay = cameraTimestampReused ? 'Yes' : 'No';
+            } else {
+                cameraTimestampReusedDisplay = 'No';
+            }
+            this.lastCameraTimestamp = cameraTimestamp;
+        }
+        updateField('vehicle-camera-timestamp-reused', cameraTimestampReusedDisplay);
+        const camReuseElem = document.getElementById('vehicle-camera-timestamp-reused');
+        const camReuseAllElem = document.getElementById('all-vehicle-camera-timestamp-reused');
+        if (camReuseElem) camReuseElem.style.color = cameraTimestampReused ? '#ff6b6b' : '';
+        if (camReuseAllElem) camReuseAllElem.style.color = cameraTimestampReused ? '#ff6b6b' : '';
+
         // NEW: Unity timing diagnostics
         const unityTime = v.unity_time;
         const unityFrame = v.unity_frame_count;
@@ -1827,6 +2293,43 @@ class Visualizer {
             this.lastUnityFrameIndex = this.currentFrameIndex;
         }
         updateField('vehicle-unity-time-gap', unityTimeGapDisplay);
+
+        // Flag when Unity frame/time is reused across sequential camera frames
+        let unityFrameReusedDisplay = '-';
+        let unityFrameReused = false;
+        if (unityFrame !== undefined && unityFrame !== null) {
+            if (this.lastUnityFrameCount !== null && this.lastUnityFrameIndex === this.currentFrameIndex - 1) {
+                unityFrameReused = unityFrame === this.lastUnityFrameCount;
+                unityFrameReusedDisplay = unityFrameReused ? 'Yes' : 'No';
+            } else {
+                unityFrameReusedDisplay = 'No';
+            }
+            this.lastUnityFrameCount = unityFrame;
+        }
+        updateField('vehicle-unity-frame-reused', unityFrameReusedDisplay);
+        const reuseElem = document.getElementById('vehicle-unity-frame-reused');
+        const reuseAllElem = document.getElementById('all-vehicle-unity-frame-reused');
+        if (reuseElem) reuseElem.style.color = unityFrameReused ? '#ff6b6b' : '';
+        if (reuseAllElem) reuseAllElem.style.color = unityFrameReused ? '#ff6b6b' : '';
+
+        // Steering debug (Unity-side)
+        const steeringInput = v.steering_input;
+        const desiredSteerAngle = v.desired_steer_angle ?? v.steering_angle;
+        const steeringAngleActual = v.steering_angle_actual;
+        updateField(
+            'vehicle-steering-input',
+            steeringInput !== undefined && steeringInput !== null ? steeringInput.toFixed(3) : '-'
+        );
+        updateField(
+            'vehicle-desired-steer-angle',
+            desiredSteerAngle !== undefined && desiredSteerAngle !== null ? desiredSteerAngle.toFixed(3) : '-'
+        );
+        updateField(
+            'vehicle-steering-angle-actual',
+            steeringAngleActual !== undefined && steeringAngleActual !== null
+                ? steeringAngleActual.toFixed(3)
+                : '-'
+        );
         
         // NEW: Display road center debug information
         const roadCenterAtCarX = v.road_center_at_car_x;
@@ -2055,6 +2558,25 @@ class Visualizer {
             // No vehicle data but we have cached value - use cached
             y8mActual = this.lastValidY8m;
         }
+
+        if (y8mActual !== null && y8mActual > 0) {
+            const baseDistance = 8.0 * ((this.overlayRenderer.imageHeight - y8mActual) / this.overlayRenderer.imageHeight);
+            this.overlayRenderer.setBaseDistance(baseDistance);
+        }
+
+        let yLookaheadActual = null;
+        if (this.currentFrameData.vehicle &&
+            this.currentFrameData.vehicle.camera_lookahead_screen_y !== undefined) {
+            const lookaheadY = this.currentFrameData.vehicle.camera_lookahead_screen_y;
+            if (lookaheadY > 0) {
+                yLookaheadActual = lookaheadY;
+                this.lastValidYLookahead = lookaheadY;
+            } else if (this.lastValidYLookahead !== undefined && this.lastValidYLookahead > 0) {
+                yLookaheadActual = this.lastValidYLookahead;
+            }
+        } else if (this.lastValidYLookahead !== undefined && this.lastValidYLookahead > 0) {
+            yLookaheadActual = this.lastValidYLookahead;
+        }
         
         // NEW: Update overlay renderer with Unity's actual horizontal FOV from recording
         // This ensures visualizer uses the same FOV that Unity actually uses (not hardcoded 110°)
@@ -2074,6 +2596,24 @@ class Visualizer {
             this.overlayRenderer.drawReferenceLine(350);
         }
         
+        // Draw segmentation mask (model output) before lane overlays
+        if (document.getElementById('toggle-seg-mask').checked) {
+            const p = this.currentFrameData.perception;
+            const method = p && p.detection_method ? String(p.detection_method).toLowerCase() : '';
+            if (method === 'segmentation' && p && p.segmentation_mask_png) {
+                const maskData = this.overlayRenderer.drawSegmentationMaskFromPng(
+                    p.segmentation_mask_png,
+                    '#ffd400',
+                    '#00bfff',
+                    0.75,
+                    () => this.updateOverlays()
+                );
+                if (maskData) {
+                    this.overlayRenderer.drawSegmentationMaskImageData(maskData);
+                }
+            }
+        }
+
         // Draw ground truth FIRST (green lines) - background layer
         if (document.getElementById('toggle-ground-truth').checked) {
             if (this.currentFrameData.ground_truth) {
@@ -2096,10 +2636,16 @@ class Visualizer {
         if (document.getElementById('toggle-detected-curves').checked) {
             // Prefer newly generated coefficients from debug overlays (if available)
             let laneCoeffs = null;
-            if (this.generatedCoefficientsCache && this.generatedCoefficientsCache[this.currentFrameIndex]) {
-                laneCoeffs = this.generatedCoefficientsCache[this.currentFrameIndex];
-            } else if (this.currentFrameData.perception && this.currentFrameData.perception.lane_line_coefficients) {
-                laneCoeffs = this.currentFrameData.perception.lane_line_coefficients;
+            const method = this.currentFrameData.perception && this.currentFrameData.perception.method
+                ? String(this.currentFrameData.perception.method).toLowerCase()
+                : '';
+            const allowCvCurves = method === '' || method.includes('cv');
+            if (allowCvCurves) {
+                if (this.generatedCoefficientsCache && this.generatedCoefficientsCache[this.currentFrameIndex]) {
+                    laneCoeffs = this.generatedCoefficientsCache[this.currentFrameIndex];
+                } else if (this.currentFrameData.perception && this.currentFrameData.perception.lane_line_coefficients) {
+                    laneCoeffs = this.currentFrameData.perception.lane_line_coefficients;
+                }
             }
             
             if (laneCoeffs) {
@@ -2114,13 +2660,15 @@ class Visualizer {
             } else {
                 console.log('[OVERLAY] No lane_line_coefficients available:', {
                     hasPerception: !!this.currentFrameData.perception,
-                    hasCoeffs: !!(this.currentFrameData.perception && this.currentFrameData.perception.lane_line_coefficients)
+                    hasCoeffs: !!(this.currentFrameData.perception && this.currentFrameData.perception.lane_line_coefficients),
+                    method
                 });
             }
         }
         
         // Draw fit points (points used for polynomial fitting) - NEW
-        if (document.getElementById('toggle-fit-points').checked) {
+        const fitPointsToggle = document.getElementById('toggle-fit-points');
+        if (fitPointsToggle && fitPointsToggle.checked) {
             // First try to use fit_points from generate-debug cache (on-demand, always current code)
             let fit_points_left = null;
             let fit_points_right = null;
@@ -2146,7 +2694,41 @@ class Visualizer {
                 this.overlayRenderer.drawFitPoints(fit_points_right, '#00ffff', 3);  // Cyan for right lane
             }
         }
+
+        if (document.getElementById('toggle-seg-fit-points').checked) {
+            const p = this.currentFrameData.perception;
+            const method = p && p.detection_method ? String(p.detection_method).toLowerCase() : '';
+            if (method === 'segmentation') {
+                if (p && p.fit_points_left && Array.isArray(p.fit_points_left) && p.fit_points_left.length > 0) {
+                    this.overlayRenderer.drawFitPoints(p.fit_points_left, '#ffd400', 3);  // Yellow for left lane
+                }
+                if (p && p.fit_points_right && Array.isArray(p.fit_points_right) && p.fit_points_right.length > 0) {
+                    this.overlayRenderer.drawFitPoints(p.fit_points_right, '#00bfff', 3);  // Blue for right lane
+                }
+            }
+        }
         
+        // Draw perception ROI (CV mask region)
+        const roiToggle = document.getElementById('toggle-perception-roi');
+        if (roiToggle && roiToggle.checked) {
+            const w = this.overlayRenderer.imageWidth;
+            const h = this.overlayRenderer.imageHeight;
+            const yTop = h * 0.18;
+            const yBottom = h * 0.80;
+            this.overlayRenderer.drawRoiRect(0, yTop, w, yBottom, '#ffd400', 2, true);
+        }
+        const segFitRoiToggle = document.getElementById('toggle-seg-fit-roi');
+        if (segFitRoiToggle && segFitRoiToggle.checked) {
+            const ratio = this.summaryConfig?.segmentation_fit_max_row_ratio;
+            const h = this.overlayRenderer.imageHeight;
+            const w = this.overlayRenderer.imageWidth;
+            if (ratio !== undefined && ratio !== null && ratio > 0) {
+                const yMax = h * ratio;
+                this.overlayRenderer.drawRoiRect(0, 0, w, yMax, '#00e5ff', 2, true);
+                this.overlayRenderer.drawHorizontalLine(yMax, '#00e5ff', 2, true);
+            }
+        }
+
         // Draw detected lane lines SECOND (red vertical lines) - overlay layer
         // This allows easy comparison: Green = GT, Red = Detected positions
         // FIXED: If we have polynomial coefficients, use them to draw red lines at y=350px
@@ -2154,12 +2736,16 @@ class Visualizer {
         if (document.getElementById('toggle-lanes').checked) {
             if (this.currentFrameData.perception) {
                 const p = this.currentFrameData.perception;
+                const isCv = (p.detection_method || '').toLowerCase() === 'cv';
                 // Extract perception lane line positions (with backward compatibility)
                 const left_lane_line_x = p.left_lane_line_x !== undefined ? p.left_lane_line_x : (p.left_lane_x !== undefined ? p.left_lane_x : undefined);
                 const right_lane_line_x = p.right_lane_line_x !== undefined ? p.right_lane_line_x : (p.right_lane_x !== undefined ? p.right_lane_x : undefined);
+                const perceptionDistance = this.currentFrameData.vehicle && this.currentFrameData.vehicle.ground_truth_lookahead_distance
+                    ? this.currentFrameData.vehicle.ground_truth_lookahead_distance
+                    : 8.0;
                 
-                // Prefer polynomial coefficients if available (matches orange curves exactly)
-                if (p.lane_line_coefficients && Array.isArray(p.lane_line_coefficients) && p.lane_line_coefficients.length >= 2) {
+                // Prefer polynomial coefficients only for CV (matches orange curves exactly)
+                if (isCv && p.lane_line_coefficients && Array.isArray(p.lane_line_coefficients) && p.lane_line_coefficients.length >= 2) {
                     // NEW: Use actual 8m position so red lines align with black line
                     this.overlayRenderer.drawLaneLinesFromCoefficients(p.lane_line_coefficients, 350, '#ff0000', y8mActual);
                 } else if (left_lane_line_x !== undefined && right_lane_line_x !== undefined) {
@@ -2167,7 +2753,24 @@ class Visualizer {
                     // FIXED: Keep red lines at fixed 8.0m (don't move visually)
                     // Width calculation will be updated separately using tunable distance
                     this.overlayRenderer.drawLaneLinesFromVehicleCoords(
-                        left_lane_line_x, right_lane_line_x, 8.0, '#ff0000', y8mActual
+                        left_lane_line_x, right_lane_line_x, perceptionDistance, '#ff0000', yLookaheadActual || y8mActual
+                    );
+                }
+
+                // Draw perceived center line (cyan) when available, regardless of curves/lines source
+                const perceptionCenterX = p.perception_lane_center_x !== undefined
+                    ? p.perception_lane_center_x
+                    : (
+                        left_lane_line_x !== undefined && right_lane_line_x !== undefined
+                            ? (left_lane_line_x + right_lane_line_x) / 2.0
+                            : undefined
+                    );
+                const perceptionLookahead = p.perception_lookahead_distance
+                    ? p.perception_lookahead_distance
+                    : perceptionDistance;
+                if (perceptionCenterX !== undefined) {
+                    this.overlayRenderer.drawCenterLineFromVehicleCoords(
+                        perceptionCenterX, perceptionLookahead, '#00ffff', yLookaheadActual || y8mActual
                     );
                 }
             }
@@ -2176,9 +2779,33 @@ class Visualizer {
         // Draw trajectory (if available)
         if (document.getElementById('toggle-trajectory').checked) {
             if (this.currentFrameData.trajectory && this.currentFrameData.trajectory.trajectory_points) {
+                let trajectoryMinY = Math.floor(this.overlayRenderer.imageHeight * 0.2);
+                if (y8mActual !== null && y8mActual > 0) {
+                    const pxPerMeter = (this.overlayRenderer.imageHeight - y8mActual) / 8.0;
+                    if (pxPerMeter > 0) {
+                        const metersToShow = 17.5;
+                        const yForMeters = this.overlayRenderer.imageHeight - (metersToShow * pxPerMeter);
+                        trajectoryMinY = Math.max(0, Math.floor(yForMeters));
+                    }
+                }
+
                 const trajPoints = this.currentFrameData.trajectory.trajectory_points;
-                // Convert to format expected by drawTrajectory: array of {x, y, heading}
-                this.overlayRenderer.drawTrajectory(trajPoints, '#ff00ff', 2);
+                const projected = this.projectTrajectoryToImage(trajPoints);
+                if (projected && projected.length > 1) {
+                    const clipped = projected.filter(pt => pt.y >= trajectoryMinY && pt.y <= this.overlayRenderer.imageHeight);
+                    this.overlayRenderer.drawImagePath(clipped, '#ff00ff', 2);
+                } else {
+                    const sortedPoints = [...trajPoints]
+                        .filter(point => point.y >= 0)
+                        .sort((a, b) => (a.y || 0) - (b.y || 0));
+                    this.overlayRenderer.drawTrajectory(
+                        sortedPoints,
+                        '#ff00ff',
+                        2,
+                        trajectoryMinY,
+                        this.overlayRenderer.imageHeight
+                    );
+                }
             }
         }
         
@@ -2192,14 +2819,23 @@ class Visualizer {
                     8,
                     y8mActual  // Use actual 8m position from Unity
                 );
+                if (this.currentFrameData.trajectory.reference_point_raw) {
+                    this.overlayRenderer.drawReferencePoint(
+                        this.currentFrameData.trajectory.reference_point_raw,
+                        '#ffa500',
+                        6,
+                        y8mActual
+                    );
+                }
             }
         }
+
+        this.updateTopdownOverlay();
     }
 
     async updateDebugOverlays() {
         const canvas = document.getElementById('debug-overlay-canvas');
         if (!canvas) {
-            console.warn('Debug overlay canvas not found');
             return;
         }
         
@@ -2222,7 +2858,10 @@ class Visualizer {
         ];
         
         // Collect all checked types
-        const checkedTypes = types.filter(type => document.getElementById(type.id).checked);
+        const checkedTypes = types.filter(type => {
+            const elem = document.getElementById(type.id);
+            return elem && elem.checked;
+        });
         
         if (checkedTypes.length === 0) return; // Nothing to show
         
@@ -2699,7 +3338,9 @@ class Visualizer {
             }
             
             // Update overlays to show new fit points and curves if checkboxes are checked
-            if (document.getElementById('toggle-fit-points').checked || document.getElementById('toggle-detected-curves').checked) {
+            const fitPointsToggle = document.getElementById('toggle-fit-points');
+            const curvesToggle = document.getElementById('toggle-detected-curves');
+            if ((fitPointsToggle && fitPointsToggle.checked) || (curvesToggle && curvesToggle.checked)) {
                 this.updateOverlays();
             }
             const cacheKey = `${this.currentRecording}_${this.currentFrameIndex}`;
@@ -2721,15 +3362,18 @@ class Visualizer {
             }
             
             // Auto-check the checkboxes
-            document.getElementById('toggle-edges').checked = true;
-            document.getElementById('toggle-yellow-mask').checked = true;
-            document.getElementById('toggle-combined').checked = true;
+            const edgesToggle = document.getElementById('toggle-edges');
+            const yellowToggle = document.getElementById('toggle-yellow-mask');
+            const combinedToggle = document.getElementById('toggle-combined');
+            if (edgesToggle) edgesToggle.checked = true;
+            if (yellowToggle) yellowToggle.checked = true;
+            if (combinedToggle) combinedToggle.checked = true;
             
             // Update debug overlays display
             await this.updateDebugOverlays();
             
             // Update overlays to show fit points if checkbox is checked
-            if (document.getElementById('toggle-fit-points').checked) {
+            if (fitPointsToggle && fitPointsToggle.checked) {
                 this.updateOverlays();
             }
             
@@ -2746,6 +3390,630 @@ class Visualizer {
         } finally {
             btn.disabled = false;
         }
+    }
+
+    async loadSignalsList() {
+        try {
+            const signals = await this.dataLoader.loadSignals();
+            this.availableSignals = signals;
+            this.renderSignalList();
+            this.populateXAxisOptions();
+            this.populateCurvatureOptions();
+            this.renderSavedViews();
+            this.applyLastChartView();
+        } catch (error) {
+            console.error('Error loading signals:', error);
+        }
+    }
+
+    populateXAxisOptions() {
+        const select = document.getElementById('chart-x-axis');
+        if (!select) return;
+        const signalNames = this.availableSignals.map(s => s.name);
+        select.innerHTML = '';
+        for (const name of signalNames) {
+            const option = document.createElement('option');
+            option.value = name;
+            option.textContent = name;
+            select.appendChild(option);
+        }
+        if (!signalNames.includes(this.chartXAxisKey)) {
+            const defaultKey = signalNames.find(name => name.includes('timestamps')) || signalNames[0] || '';
+            this.chartXAxisKey = defaultKey;
+        }
+        if (this.chartXAxisKey) {
+            select.value = this.chartXAxisKey;
+        }
+    }
+
+    populateCurvatureOptions() {
+        const select = document.getElementById('chart-curvature-signal');
+        if (!select) return;
+        const signalNames = this.availableSignals.map(s => s.name);
+        select.innerHTML = '';
+        const autoOption = document.createElement('option');
+        autoOption.value = '';
+        autoOption.textContent = 'Auto (curvature)';
+        select.appendChild(autoOption);
+        for (const name of signalNames) {
+            const option = document.createElement('option');
+            option.value = name;
+            option.textContent = name;
+            select.appendChild(option);
+        }
+    }
+
+    renderSignalList() {
+        const container = document.getElementById('chart-signal-list');
+        if (!container) return;
+        const query = (document.getElementById('chart-signal-search')?.value || '').toLowerCase();
+        const signals = this.availableSignals
+            .map(s => s.name)
+            .filter(name => !name.includes('timestamps'));
+        container.innerHTML = '';
+        for (const name of signals) {
+            if (query && !name.toLowerCase().includes(query)) continue;
+            const item = document.createElement('label');
+            item.className = 'chart-signal-item';
+            const checkbox = document.createElement('input');
+            checkbox.type = 'checkbox';
+            checkbox.value = name;
+            item.appendChild(checkbox);
+            const text = document.createElement('span');
+            text.textContent = name;
+            item.appendChild(text);
+            container.appendChild(item);
+        }
+    }
+
+    getSelectedSignals() {
+        const container = document.getElementById('chart-signal-list');
+        if (!container) return [];
+        const selected = [];
+        container.querySelectorAll('input[type="checkbox"]').forEach(cb => {
+            if (cb.checked) {
+                selected.push(cb.value);
+            }
+        });
+        return selected;
+    }
+
+    async plotSelectedSignals() {
+        const signals = this.getSelectedSignals();
+        const xAxisKey = document.getElementById('chart-x-axis')?.value || '';
+        if (!signals.length) {
+            alert('Select at least one signal to plot.');
+            return;
+        }
+        try {
+            const data = await this.dataLoader.loadTimeSeries(signals, xAxisKey);
+            await this.loadCurvatureSeries(xAxisKey, data.time?.length || data.signals[signals[0]].length);
+            this.renderChart(data);
+        } catch (error) {
+            console.error('Error plotting signals:', error);
+            alert(`Failed to plot signals: ${error.message}`);
+        }
+    }
+
+    renderChart(data) {
+        const ctx = document.getElementById('chart-canvas');
+        if (!ctx) return;
+        const labels = data.time || data.signals[Object.keys(data.signals)[0]].map((_, i) => i);
+        const usesTime = !!data.time;
+        this.chartTimeSeries = data.time || null;
+        this.chartUsesTime = usesTime;
+        const palette = [
+            '#4a90e2', '#e94f37', '#8bc34a', '#f4b400',
+            '#9c27b0', '#00bcd4', '#ff9800', '#cddc39',
+        ];
+        const datasets = Object.entries(data.signals).map(([name, values], idx) => {
+            const seriesData = usesTime
+                ? values.map((value, i) => ({ x: data.time[i], y: value }))
+                : values;
+            return {
+                label: name,
+                data: seriesData,
+                borderColor: palette[idx % palette.length],
+                borderWidth: 2,
+                pointRadius: 0,
+                fill: false,
+                tension: 0.2,
+            };
+        });
+
+        if (this.chart) {
+            const xType = this.chart.options.scales?.x?.type || 'category';
+            if ((usesTime && xType !== 'linear') || (!usesTime && xType !== 'category')) {
+                this.chart.destroy();
+                this.chart = null;
+            } else {
+                this.chart.data.labels = labels;
+                this.chart.data.datasets = datasets;
+                this.chart.update();
+                return;
+            }
+        }
+        const cursorPlugin = {
+            id: 'frameCursor',
+            afterDraw: (chart) => {
+                if (this.chartCursorValue === null && this.chartCursorIndex === null) {
+                    return;
+                }
+                const xScale = chart.scales.x;
+                const value = this.chartUsesTime ? this.chartCursorValue : this.chartCursorIndex;
+                if (value === null || value === undefined) {
+                    return;
+                }
+                const x = xScale.getPixelForValue(value);
+                if (!Number.isFinite(x)) {
+                    return;
+                }
+                const ctx2 = chart.ctx;
+                ctx2.save();
+                ctx2.strokeStyle = '#ffffff';
+                ctx2.lineWidth = 1;
+                ctx2.beginPath();
+                ctx2.moveTo(x, chart.chartArea.top);
+                ctx2.lineTo(x, chart.chartArea.bottom);
+                ctx2.stroke();
+                ctx2.restore();
+            },
+        };
+        const curveShadePlugin = {
+            id: 'curveShade',
+            beforeDatasetsDraw: (chart) => {
+                if (!this.chartCurvatureSeries || !this.isCurveShadingEnabled()) {
+                    return;
+                }
+                const xScale = chart.scales.x;
+                const ctx2 = chart.ctx;
+                const light = this.getCurveThresholdLight();
+                const dark = this.getCurveThresholdDark();
+                const timeSeries = this.chartTimeSeries;
+                const series = this.chartCurvatureSeries;
+                const isTime = this.chartUsesTime;
+
+                let current = null;
+                const ranges = [];
+                for (let i = 0; i < series.length; i++) {
+                    const value = Math.abs(series[i]);
+                    let level = 0;
+                    if (value >= dark) {
+                        level = 2;
+                    } else if (value >= light) {
+                        level = 1;
+                    }
+                    const xVal = isTime && timeSeries ? timeSeries[i] : i;
+                    if (level === 0) {
+                        if (current) {
+                            current.end = xVal;
+                            ranges.push(current);
+                            current = null;
+                        }
+                        continue;
+                    }
+                    if (!current || current.level !== level) {
+                        if (current) {
+                            current.end = xVal;
+                            ranges.push(current);
+                        }
+                        current = { start: xVal, end: xVal, level };
+                    } else {
+                        current.end = xVal;
+                    }
+                }
+                if (current) {
+                    ranges.push(current);
+                }
+
+                ctx2.save();
+                for (const range of ranges) {
+                    const color = range.level === 2 ? 'rgba(255,255,255,0.12)' : 'rgba(255,255,255,0.06)';
+                    const xStart = xScale.getPixelForValue(range.start);
+                    const xEnd = xScale.getPixelForValue(range.end);
+                    ctx2.fillStyle = color;
+                    ctx2.fillRect(xStart, chart.chartArea.top, xEnd - xStart, chart.chartArea.bottom - chart.chartArea.top);
+                }
+                ctx2.restore();
+            },
+        };
+        this.chart = new Chart(ctx, {
+            type: 'line',
+            data: { labels, datasets },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: { labels: { color: '#e0e0e0' } },
+                },
+                scales: {
+                    x: {
+                        type: usesTime ? 'linear' : 'category',
+                        ticks: { color: '#cfcfcf' },
+                        grid: { color: '#333' },
+                    },
+                    y: { ticks: { color: '#cfcfcf' }, grid: { color: '#333' } },
+                },
+            },
+            plugins: [curveShadePlugin, cursorPlugin],
+        });
+        this.updateChartCursor();
+    }
+
+    async loadCurvatureSeries(xAxisKey, expectedLength) {
+        this.chartCurvatureSeries = null;
+        if (!this.isCurveShadingEnabled()) {
+            return;
+        }
+        const curvatureKey = this.getCurvatureSignalKey();
+        if (!curvatureKey) {
+            return;
+        }
+        try {
+            const data = await this.dataLoader.loadTimeSeries([curvatureKey], xAxisKey);
+            const series = data.signals[curvatureKey] || [];
+            this.chartCurvatureSeries = series.slice(0, expectedLength);
+        } catch (error) {
+            console.warn('Failed to load curvature series:', error);
+        }
+    }
+
+    isCurveShadingEnabled() {
+        return !!document.getElementById('chart-shade-curves')?.checked;
+    }
+
+    getCurvatureSignalKey() {
+        const select = document.getElementById('chart-curvature-signal');
+        const chosen = select?.value || '';
+        if (chosen) {
+            return chosen;
+        }
+        const candidates = [
+            'ground_truth/path_curvature',
+            'vehicle/ground_truth_path_curvature',
+            'control/path_curvature_input',
+            'trajectory/curvature',
+        ];
+        return candidates.find(name => this.availableSignals.find(s => s.name === name));
+    }
+
+    getCurveThresholdLight() {
+        const value = parseFloat(document.getElementById('chart-curve-threshold-light')?.value);
+        return Number.isFinite(value) ? value : 0.01;
+    }
+
+    getCurveThresholdDark() {
+        const value = parseFloat(document.getElementById('chart-curve-threshold-dark')?.value);
+        return Number.isFinite(value) ? value : 0.02;
+    }
+
+    updateChartCursor() {
+        if (!this.chart) return;
+        if (this.chartUsesTime && this.chartTimeSeries) {
+            const idx = Math.min(this.currentFrameIndex, this.chartTimeSeries.length - 1);
+            this.chartCursorIndex = idx;
+            this.chartCursorValue = this.chartTimeSeries[idx];
+        } else {
+            this.chartCursorIndex = this.currentFrameIndex;
+            this.chartCursorValue = null;
+        }
+        this.chart.update('none');
+    }
+
+    clearChart() {
+        if (this.chart) {
+            this.chart.destroy();
+            this.chart = null;
+        }
+    }
+
+    loadChartViews() {
+        try {
+            const raw = localStorage.getItem('av_debug_chart_views');
+            const defaults = this.getDefaultChartViews();
+            if (raw) {
+                const saved = JSON.parse(raw);
+                const merged = [...saved];
+                for (const view of defaults) {
+                    if (!merged.some(existing => existing.name === view.name)) {
+                        merged.push(view);
+                    }
+                }
+                return merged;
+            }
+            return defaults;
+        } catch (error) {
+            return this.getDefaultChartViews();
+        }
+    }
+
+    getDefaultChartViews() {
+        return [
+            {
+                name: 'Steering Plan vs Command',
+                signals: [
+                    'ground_truth/path_curvature',
+                    'control/path_curvature_input',
+                    'control/steering'
+                ],
+                timeKey: 'vehicle/timestamps'
+            },
+            {
+                name: 'Perception Wiggle Debug',
+                signals: [
+                    'perception/left_lane_line_x',
+                    'perception/right_lane_line_x',
+                    'trajectory/reference_point_x',
+                    'vehicle/road_frame_lane_center_offset',
+                    'control/steering'
+                ],
+                timeKey: 'vehicle/timestamps'
+            },
+            {
+                name: 'Oscillation Lead-In',
+                signals: [
+                    'trajectory/reference_point_x',
+                    'trajectory/reference_point_raw_x',
+                    'derived/expected_right_center',
+                    'perception/right_lane_line_x',
+                    'perception/left_lane_line_x',
+                    'control/lateral_error',
+                    'control/heading_error',
+                    'control/steering',
+                    'vehicle/road_frame_lane_center_offset'
+                ],
+                timeKey: 'vehicle/timestamps'
+            },
+            {
+                name: 'Steering Errors vs Command',
+                signals: [
+                    'control/lateral_error',
+                    'control/heading_error',
+                    'control/total_error',
+                    'control/steering'
+                ],
+                timeKey: 'vehicle/timestamps'
+            },
+            {
+                name: 'Trajectory Reference vs Command',
+                signals: [
+                    'trajectory/reference_point_x',
+                    'trajectory/reference_point_heading',
+                    'trajectory/reference_point_velocity',
+                    'control/steering'
+                ],
+                timeKey: 'vehicle/timestamps'
+            }
+        ];
+    }
+
+    loadLastChartViewName() {
+        try {
+            return localStorage.getItem('av_debug_chart_view_last') || '';
+        } catch (error) {
+            return '';
+        }
+    }
+
+    saveLastChartViewName(name) {
+        this.lastChartViewName = name || '';
+        localStorage.setItem('av_debug_chart_view_last', this.lastChartViewName);
+    }
+
+    saveChartViews() {
+        localStorage.setItem('av_debug_chart_views', JSON.stringify(this.chartSavedViews));
+    }
+
+    saveChartView() {
+        const name = document.getElementById('chart-view-name')?.value?.trim();
+        if (!name) {
+            alert('Enter a view name.');
+            return;
+        }
+        const signals = this.getSelectedSignals();
+        if (!signals.length) {
+            alert('Select signals before saving.');
+            return;
+        }
+        const timeKey = document.getElementById('chart-x-axis')?.value || '';
+        this.chartSavedViews = this.chartSavedViews.filter(v => v.name !== name);
+        this.chartSavedViews.push({ name, signals, timeKey });
+        this.saveChartViews();
+        this.renderSavedViews();
+        document.getElementById('chart-view-name').value = '';
+    }
+
+    renderSavedViews() {
+        const select = document.getElementById('chart-saved-views-select');
+        if (!select) return;
+        const currentValue = select.value;
+        select.innerHTML = '';
+        const placeholder = document.createElement('option');
+        placeholder.value = '';
+        placeholder.textContent = this.chartSavedViews.length ? 'Select a view' : 'No saved views';
+        select.appendChild(placeholder);
+        for (const view of this.chartSavedViews) {
+            const option = document.createElement('option');
+            option.value = view.name;
+            option.textContent = view.name;
+            select.appendChild(option);
+        }
+        const preferred = currentValue || this.lastChartViewName;
+        if (preferred && this.chartSavedViews.some(v => v.name === preferred)) {
+            select.value = preferred;
+        }
+    }
+
+    loadSelectedChartView() {
+        const select = document.getElementById('chart-saved-views-select');
+        if (!select || !select.value) return;
+        const view = this.chartSavedViews.find(v => v.name === select.value);
+        if (view) {
+            this.applyChartView(view);
+        }
+    }
+
+    deleteSelectedChartView() {
+        const select = document.getElementById('chart-saved-views-select');
+        if (!select || !select.value) return;
+        this.deleteChartView(select.value);
+    }
+
+    overwriteSelectedChartView() {
+        const select = document.getElementById('chart-saved-views-select');
+        if (!select || !select.value) return;
+        const name = select.value;
+        const signals = this.getSelectedSignals();
+        if (!signals.length) {
+            alert('Select signals before overwriting.');
+            return;
+        }
+        const timeKey = document.getElementById('chart-x-axis')?.value || '';
+        this.chartSavedViews = this.chartSavedViews.filter(v => v.name !== name);
+        this.chartSavedViews.push({ name, signals, timeKey });
+        this.saveChartViews();
+        this.renderSavedViews();
+        this.saveLastChartViewName(name);
+    }
+
+    applyChartView(view) {
+        const select = document.getElementById('chart-x-axis');
+        if (select && view.timeKey) {
+            select.value = view.timeKey;
+        }
+        this.renderSignalList();
+        const container = document.getElementById('chart-signal-list');
+        if (container) {
+            container.querySelectorAll('input[type="checkbox"]').forEach(cb => {
+                cb.checked = view.signals.includes(cb.value);
+            });
+        }
+        this.plotSelectedSignals();
+        this.saveLastChartViewName(view.name);
+    }
+
+    deleteChartView(name) {
+        this.chartSavedViews = this.chartSavedViews.filter(v => v.name !== name);
+        if (name === this.lastChartViewName) {
+            this.saveLastChartViewName('');
+        }
+        this.saveChartViews();
+        this.renderSavedViews();
+    }
+
+    applyLastChartView() {
+        if (!this.lastChartViewName) return;
+        const view = this.chartSavedViews.find(v => v.name === this.lastChartViewName);
+        if (view) {
+            this.applyChartView(view);
+        }
+    }
+
+    toggleLegend() {
+        const panel = document.getElementById('legend-panel');
+        const btn = document.getElementById('legend-toggle-btn');
+        if (!panel || !btn) return;
+        panel.classList.toggle('collapsed');
+        btn.textContent = panel.classList.contains('collapsed') ? 'Legend' : 'Collapse';
+    }
+
+    setupPanelResize() {
+        const handle = document.getElementById('panel-resize-handle');
+        const cameraPanel = document.getElementById('camera-panel');
+        const dataPanel = document.getElementById('data-panel');
+        if (!handle || !cameraPanel || !dataPanel) return;
+
+        let dragging = false;
+        handle.addEventListener('mousedown', (event) => {
+            dragging = true;
+            document.body.style.cursor = 'col-resize';
+            event.preventDefault();
+        });
+        document.addEventListener('mousemove', (event) => {
+            if (!dragging) return;
+            const main = document.getElementById('main-content');
+            if (!main) return;
+            const rect = main.getBoundingClientRect();
+            const minLeft = 520;
+            const minRight = 320;
+            const maxLeft = rect.width - minRight - 6;
+            const leftWidth = event.clientX - rect.left;
+            const clamped = Math.max(minLeft, Math.min(maxLeft, leftWidth));
+            cameraPanel.style.flex = 'none';
+            cameraPanel.style.width = `${clamped}px`;
+            dataPanel.style.width = `${rect.width - clamped - 6}px`;
+        });
+        document.addEventListener('mouseup', () => {
+            if (dragging) {
+                dragging = false;
+                document.body.style.cursor = 'default';
+            }
+        });
+    }
+
+    setupCameraGridResize() {
+        const handle = document.getElementById('camera-grid-resize-handle');
+        const grid = document.getElementById('camera-grid');
+        const wrapper = document.getElementById('camera-grid-wrapper');
+        if (!handle || !grid) {
+            return;
+        }
+
+        const baseRect = grid.getBoundingClientRect();
+        const baseHeight = baseRect.height || 1;
+        const baseWidth = baseRect.width || 1;
+        this.cameraGridBaseHeight = baseHeight;
+        this.cameraGridBaseWidth = baseWidth;
+
+        const applyHeight = (height) => {
+            const clampedHeight = Math.max(200, height);
+            const scale = clampedHeight / this.cameraGridBaseHeight;
+            if (wrapper) {
+                wrapper.style.height = `${clampedHeight}px`;
+            }
+            grid.style.width = `${this.cameraGridBaseWidth}px`;
+            grid.style.height = `${this.cameraGridBaseHeight}px`;
+            grid.style.transform = `scale(${scale})`;
+        };
+
+        const savedHeight = localStorage.getItem(this.cameraGridHeightKey);
+        if (savedHeight) {
+            applyHeight(parseFloat(savedHeight));
+        }
+
+        let isResizing = false;
+        let startY = 0;
+        let startHeight = 0;
+
+        const onMouseMove = (e) => {
+            if (!isResizing) return;
+            const delta = e.clientY - startY;
+            const newHeight = Math.max(200, startHeight + delta);
+            applyHeight(newHeight);
+        };
+
+        const onMouseUp = () => {
+            if (!isResizing) return;
+            isResizing = false;
+            const currentHeight = wrapper
+                ? wrapper.getBoundingClientRect().height
+                : grid.getBoundingClientRect().height;
+            localStorage.setItem(this.cameraGridHeightKey, String(Math.round(currentHeight)));
+            document.body.style.cursor = '';
+            document.removeEventListener('mousemove', onMouseMove);
+            document.removeEventListener('mouseup', onMouseUp);
+        };
+
+        handle.addEventListener('mousedown', (e) => {
+            isResizing = true;
+            startY = e.clientY;
+            startHeight = wrapper
+                ? wrapper.getBoundingClientRect().height
+                : grid.getBoundingClientRect().height;
+            document.body.style.cursor = 'row-resize';
+            document.addEventListener('mousemove', onMouseMove);
+            document.addEventListener('mouseup', onMouseUp);
+        });
     }
 }
 

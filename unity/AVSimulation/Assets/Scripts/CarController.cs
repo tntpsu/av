@@ -9,7 +9,7 @@ using UnityEngine.Profiling;
 
 public class CarController : MonoBehaviour
 {
-    public float maxSteerAngle = 30f;
+    public float maxSteerAngle = 35f;
     [Tooltip("Wheelbase in meters (distance between front and rear axles)")]
     public float wheelbaseMeters = 2.5f;
     [Tooltip("Acceleration in m/s² (ForceMode.Acceleration ignores mass, so this is direct acceleration) - Realistic car: 3-6 m/s²")]
@@ -28,6 +28,7 @@ public class CarController : MonoBehaviour
     public float speedPreventionCutoff = 0.98f;
     [Tooltip("Throttle multiplier when near max speed")]
     public float speedPreventionThrottleFactor = 0.15f;
+
     
     [Header("Input")]
     public InputActionAsset inputActionAsset;
@@ -81,7 +82,7 @@ public class CarController : MonoBehaviour
     private float lastPhysicsTime = -1f;
     private float lastCollisionTime = -1f;
     private string lastCollisionInfo = null;
-    [SerializeField] private float throttleSlewRatePerSecond = 2.0f; // max throttle change per second
+    [SerializeField] private float throttleSlewRatePerSecond = 0.7f; // max throttle change per second
     private float lastThrottleApplied = 0f;
 
     // PERFORMANCE: Cache GroundTruthReporter to avoid FindObjectOfType() every frame
@@ -90,11 +91,53 @@ public class CarController : MonoBehaviour
     public float steerInput; // [-1, 1]
     public float throttleInput; // [0, 1]
     public float brakeInput; // [0, 1]
+    public float steerSlewRatePerSecond = 6.0f;
+    [Header("Friction (Option A)")]
+    public float carStaticFriction = 0.5f;
+    public float carDynamicFriction = 0.4f;
+    public PhysicsMaterialCombine carFrictionCombine = PhysicsMaterialCombine.Average;
+    [Header("Wheel Colliders (Option B)")]
+    public bool useWheelColliders = true;
+    public float wheelRadius = 0.35f;
+    public float wheelSuspensionDistance = 0.2f;
+    public float wheelSpring = 30000f;
+    public float wheelDamper = 6000f;
+    public float wheelMass = 20f;
+    public float maxMotorTorque = 1500f;
+    public float maxBrakeTorque = 3000f;
+    public float wheelPlacementWidthScale = 0.9f;
+    public float wheelPlacementLengthScale = 0.9f;
+    public bool logWheelColliderDebug = true;
+    [Header("Debug")]
+    public bool forceFreezeYForDebug = true;
+    [Header("Steering Actuator")]
+    [Tooltip("Max steer angle at low speed (deg)")]
+    public float maxSteerAngleLowSpeed = 30f;
+    [Tooltip("Max steer angle at high speed (deg)")]
+    public float maxSteerAngleHighSpeed = 16f;
+    [Tooltip("Speed (m/s) where max steer reaches the high-speed limit")]
+    public float maxSteerAngleFullSpeed = 12f;
+    [Tooltip("Steering rate limit (deg/s)")]
+    public float steeringRateLimitDegPerSec = 90f;
+    [Tooltip("Steering actuator time constant (s)")]
+    public float steeringTimeConstant = 0.25f;
+    [Tooltip("Disable steering actuator model and apply direct steering input.")]
+    public bool disableSteeringActuator = false;
 
     // AV control inputs (set by AVBridge)
     private float avSteering = 0f;
     private float avThrottle = 0f;
     private float avBrake = 0f;
+    private float lastSteerInput = 0f;
+    private float steeringAngleActual = 0f;
+    private float desiredSteerAngle = 0f;
+
+    private WheelCollider frontLeftWheel;
+    private WheelCollider frontRightWheel;
+    private WheelCollider rearLeftWheel;
+    private WheelCollider rearRightWheel;
+    private bool wheelCollidersReady = false;
+    private bool wheelOrientationLogged = false;
     
     // Ground truth cache (updated in Update, applied in FixedUpdate)
     private Vector3 gtCachedReferencePosition = Vector3.zero;
@@ -104,14 +147,31 @@ public class CarController : MonoBehaviour
 
     private void Awake()
     {
+        // Option B: force wheel-collider drivetrain on for tuning runs.
+        useWheelColliders = true;
+        logWheelColliderDebug = true;
         rb = GetComponent<Rigidbody>();
         
         // FIX: Prevent car from sinking into ground due to physics settling
         // Freeze Y position to keep car at correct height (prevents 0.5m → 0.2m drop)
         if (rb != null)
         {
-            // Freeze Y position to prevent sinking
-            rb.constraints = RigidbodyConstraints.FreezePositionY | RigidbodyConstraints.FreezeRotationX | RigidbodyConstraints.FreezeRotationZ;
+            if (forceFreezeYForDebug)
+            {
+                rb.constraints = RigidbodyConstraints.FreezePositionY
+                    | RigidbodyConstraints.FreezeRotationX
+                    | RigidbodyConstraints.FreezeRotationZ;
+            }
+            else if (useWheelColliders)
+            {
+                // Freeze rotation to keep car upright. Allow Y movement for wheel colliders.
+                rb.constraints = RigidbodyConstraints.FreezeRotationX | RigidbodyConstraints.FreezeRotationZ;
+            }
+            else
+            {
+                // Freeze Y position to prevent sinking in non-wheel-collider mode.
+                rb.constraints = RigidbodyConstraints.FreezePositionY | RigidbodyConstraints.FreezeRotationX | RigidbodyConstraints.FreezeRotationZ;
+            }
             
             // CRITICAL: Disable Rigidbody sleep threshold to prevent car from going to sleep
             // Unity puts Rigidbody to sleep when velocity < sleep threshold (0.005 m/s)
@@ -135,20 +195,132 @@ public class CarController : MonoBehaviour
             rb.angularDrag = 0f;
             #endif
             
-            // Ensure car starts at correct position (Y = 0.5m if car is 1m tall)
-            // This ensures bottom of car is at Y=0 (ground level)
-            Vector3 pos = transform.position;
-            if (pos.y < 0.4f || pos.y > 0.6f)
+            if (!useWheelColliders)
             {
-                // Car position seems wrong - set to 0.5m (assuming 1m tall car)
-                pos.y = 0.5f;
-                transform.position = pos;
-                Debug.Log($"CarController: Fixed car Y position to {pos.y}m (was {transform.position.y}m)");
+                // Ensure car starts at correct position (Y = 0.5m if car is 1m tall)
+                // This ensures bottom of car is at Y=0 (ground level)
+                Vector3 pos = transform.position;
+                if (pos.y < 0.4f || pos.y > 0.6f)
+                {
+                    // Car position seems wrong - set to 0.5m (assuming 1m tall car)
+                    pos.y = 0.5f;
+                    transform.position = pos;
+                    Debug.Log($"CarController: Fixed car Y position to {pos.y}m (was {transform.position.y}m)");
+                }
             }
             
             // Initialize teleportation tracking
             lastPosition = rb.position;
             lastPositionTime = Time.time;
+        }
+
+        ApplyCarFrictionMaterial();
+        if (useWheelColliders)
+        {
+            SetupWheelColliders();
+        }
+    }
+
+    private void SetupWheelColliders()
+    {
+        Collider bodyCollider = GetComponent<Collider>();
+        Bounds bounds = bodyCollider != null
+            ? bodyCollider.bounds
+            : new Bounds(transform.position, new Vector3(1.6f, 1.0f, 2.5f));
+        float halfWidth = bounds.extents.x * wheelPlacementWidthScale;
+        float halfLength = bounds.extents.z * wheelPlacementLengthScale;
+        float wheelY = bounds.min.y + wheelRadius;
+
+        Vector3 center = bounds.center;
+        Vector3[] wheelWorldPositions = new[]
+        {
+            center + new Vector3(-halfWidth, wheelY - center.y, halfLength),
+            center + new Vector3(halfWidth, wheelY - center.y, halfLength),
+            center + new Vector3(-halfWidth, wheelY - center.y, -halfLength),
+            center + new Vector3(halfWidth, wheelY - center.y, -halfLength)
+        };
+
+        frontLeftWheel = CreateWheelCollider("WheelFL", wheelWorldPositions[0]);
+        frontRightWheel = CreateWheelCollider("WheelFR", wheelWorldPositions[1]);
+        rearLeftWheel = CreateWheelCollider("WheelRL", wheelWorldPositions[2]);
+        rearRightWheel = CreateWheelCollider("WheelRR", wheelWorldPositions[3]);
+
+        wheelCollidersReady = frontLeftWheel != null && frontRightWheel != null
+            && rearLeftWheel != null && rearRightWheel != null;
+        Debug.Log(
+            $"WheelColliders: ready={wheelCollidersReady} boundsCenter={bounds.center} " +
+            $"halfWidth={halfWidth:F2} halfLength={halfLength:F2} wheelRadius={wheelRadius:F2}"
+        );
+    }
+
+    private void LogWheelOrientation(string label, WheelCollider wheel)
+    {
+        if (wheel == null)
+        {
+            Debug.LogWarning($"WheelOrientation: {label} is null");
+            return;
+        }
+        Vector3 fwd = wheel.transform.forward.normalized;
+        Vector3 right = wheel.transform.right.normalized;
+        Vector3 up = wheel.transform.up.normalized;
+        Debug.Log(
+            $"WheelOrientation: {label} forward=({fwd.x:F3},{fwd.y:F3},{fwd.z:F3}) " +
+            $"right=({right.x:F3},{right.y:F3},{right.z:F3}) " +
+            $"up=({up.x:F3},{up.y:F3},{up.z:F3})"
+        );
+    }
+
+    private WheelCollider CreateWheelCollider(string name, Vector3 worldPosition)
+    {
+        GameObject wheelObject = new GameObject(name);
+        wheelObject.transform.SetParent(transform, true);
+        wheelObject.transform.position = worldPosition;
+
+        WheelCollider wheel = wheelObject.AddComponent<WheelCollider>();
+        wheel.radius = wheelRadius;
+        wheel.suspensionDistance = wheelSuspensionDistance;
+        wheel.mass = wheelMass;
+
+        JointSpring spring = wheel.suspensionSpring;
+        spring.spring = wheelSpring;
+        spring.damper = wheelDamper;
+        spring.targetPosition = 0.5f;
+        wheel.suspensionSpring = spring;
+
+        WheelFrictionCurve forward = wheel.forwardFriction;
+        forward.extremumSlip = 0.4f;
+        forward.extremumValue = 1.0f;
+        forward.asymptoteSlip = 0.8f;
+        forward.asymptoteValue = 0.5f;
+        forward.stiffness = 1.2f;
+        wheel.forwardFriction = forward;
+
+        WheelFrictionCurve sideways = wheel.sidewaysFriction;
+        sideways.extremumSlip = 0.3f;
+        sideways.extremumValue = 1.0f;
+        sideways.asymptoteSlip = 0.7f;
+        sideways.asymptoteValue = 0.5f;
+        sideways.stiffness = 1.2f;
+        wheel.sidewaysFriction = sideways;
+
+        return wheel;
+    }
+
+    private void ApplyCarFrictionMaterial()
+    {
+        PhysicsMaterial carMaterial = new PhysicsMaterial("CarPhysicMaterial")
+        {
+            staticFriction = carStaticFriction,
+            dynamicFriction = carDynamicFriction,
+            frictionCombine = carFrictionCombine,
+            bounciness = 0.0f,
+            bounceCombine = PhysicsMaterialCombine.Minimum
+        };
+
+        Collider[] colliders = GetComponentsInChildren<Collider>();
+        foreach (Collider collider in colliders)
+        {
+            collider.material = carMaterial;
         }
     }
 
@@ -329,6 +501,12 @@ public class CarController : MonoBehaviour
             throttleInput = moveInput.y;
             brakeInput = 0f;
         }
+
+        // Steering actuator slew to reduce oscillation.
+        float desiredSteerInput = steerInput;
+        float maxSteerDelta = steerSlewRatePerSecond * Time.deltaTime;
+        steerInput = Mathf.MoveTowards(lastSteerInput, desiredSteerInput, maxSteerDelta);
+        lastSteerInput = steerInput;
 
         UpdateGroundTruthCache();
     }
@@ -683,10 +861,49 @@ public class CarController : MonoBehaviour
             }
         }
         
-        // Steering - rotate around Y axis only (horizontal steering)
-        float steerAngle = adjustedSteerInput * maxSteerAngle;
-        Quaternion rotation = Quaternion.Euler(0, steerAngle * Time.fixedDeltaTime, 0);
-        rb.MoveRotation(rb.rotation * rotation);
+        float steerAngle;
+        if (disableSteeringActuator)
+        {
+            desiredSteerAngle = adjustedSteerInput * maxSteerAngle;
+            steeringAngleActual = desiredSteerAngle;
+            steerAngle = steeringAngleActual;
+        }
+        else
+        {
+            float maxSteerAtSpeed = Mathf.Lerp(
+                maxSteerAngleLowSpeed,
+                maxSteerAngleHighSpeed,
+                Mathf.InverseLerp(0f, maxSteerAngleFullSpeed, currentSpeed)
+            );
+            desiredSteerAngle = adjustedSteerInput * maxSteerAtSpeed;
+            float actuatorAlpha = steeringTimeConstant > 0.0f
+                ? Time.fixedDeltaTime / (steeringTimeConstant + Time.fixedDeltaTime)
+                : 1.0f;
+            float filteredSteerAngle = Mathf.Lerp(steeringAngleActual, desiredSteerAngle, actuatorAlpha);
+            float maxSteerDelta = steeringRateLimitDegPerSec * Time.fixedDeltaTime;
+            steeringAngleActual = Mathf.MoveTowards(steeringAngleActual, filteredSteerAngle, maxSteerDelta);
+            steerAngle = steeringAngleActual;
+        }
+        if (!useWheelColliders || !wheelCollidersReady)
+        {
+            // Steering - rotate around Y axis only (horizontal steering)
+            Quaternion rotation = Quaternion.Euler(0, steerAngle * Time.fixedDeltaTime, 0);
+            rb.MoveRotation(rb.rotation * rotation);
+        }
+        else if (!wheelOrientationLogged)
+        {
+            wheelOrientationLogged = true;
+            LogWheelOrientation("FrontLeft", frontLeftWheel);
+            LogWheelOrientation("FrontRight", frontRightWheel);
+            LogWheelOrientation("RearLeft", rearLeftWheel);
+            LogWheelOrientation("RearRight", rearRightWheel);
+            Vector3 carFwd = transform.forward.normalized;
+            Vector3 carRight = transform.right.normalized;
+            Debug.Log(
+                $"CarOrientation: forward=({carFwd.x:F3},{carFwd.y:F3},{carFwd.z:F3}) " +
+                $"right=({carRight.x:F3},{carRight.y:F3},{carRight.z:F3})"
+            );
+        }
 
         // Braking and friction
         // FIXED: More aggressive braking with direct velocity reduction
@@ -726,14 +943,32 @@ public class CarController : MonoBehaviour
             Debug.Log($"CarController: throttleInput={throttleInput:F3}, brakeInput={brakeInput:F3}, currentSpeed={currentSpeed:F3} m/s, effectiveThrottle={effectiveThrottle:F3}, smoothedThrottle={smoothedThrottle:F3}, motorForce={motorForce:F1}");
         }
         
-        // Throttle (handles both forward and backward movement)
-        // Use Acceleration mode to ignore mass, making it more responsive
-        // FIXED: Reduced motor force for better speed control
-        if (Mathf.Abs(smoothedThrottle) > 0.01f)
+        if (useWheelColliders && wheelCollidersReady)
+        {
+            float motorTorque = smoothedThrottle * maxMotorTorque;
+            float brakeTorque = brakeInput * maxBrakeTorque;
+            frontLeftWheel.steerAngle = steerAngle;
+            frontRightWheel.steerAngle = steerAngle;
+            frontLeftWheel.motorTorque = motorTorque;
+            frontRightWheel.motorTorque = motorTorque;
+            rearLeftWheel.motorTorque = motorTorque;
+            rearRightWheel.motorTorque = motorTorque;
+            frontLeftWheel.brakeTorque = brakeTorque;
+            frontRightWheel.brakeTorque = brakeTorque;
+            rearLeftWheel.brakeTorque = brakeTorque;
+            rearRightWheel.brakeTorque = brakeTorque;
+            if (logWheelColliderDebug && Time.frameCount % 60 == 0)
+            {
+                Debug.Log(
+                    $"WheelColliders: grounded FL={frontLeftWheel.isGrounded} FR={frontRightWheel.isGrounded} " +
+                    $"RL={rearLeftWheel.isGrounded} RR={rearRightWheel.isGrounded}, " +
+                    $"motorTorque={motorTorque:F1}, brakeTorque={brakeTorque:F1}"
+                );
+            }
+        }
+        else if (Mathf.Abs(smoothedThrottle) > 0.01f)
         {
             // CRITICAL: Wake up Rigidbody if it's sleeping (sleeping Rigidbody doesn't respond to forces!)
-            // Unity puts Rigidbody to sleep when velocity < sleep threshold (0.005 m/s) to save computation
-            // But we need it awake to apply forces
             if (rb.IsSleeping())
             {
                 rb.WakeUp();
@@ -742,46 +977,23 @@ public class CarController : MonoBehaviour
                     Debug.Log($"CarController: Woke up sleeping Rigidbody (throttle={smoothedThrottle:F3})");
                 }
             }
-            
-            // CRITICAL FIX: Ensure minimum force to overcome static friction when starting from rest
-            // At low throttle (0.2), force might be too small (1.6 m/s²) to overcome static friction
-            // Static friction needs ~5.9 m/s² at full throttle, so at 20% throttle we need ~1.18 m/s²
-            // But Unity's default friction might be higher, so ensure minimum force when at rest
-            // Only apply boost when speed is very low (< 0.1 m/s) to avoid affecting speed control when moving
-            // INCREASED: From 50% to 80% minimum throttle (6.4 m/s² force) to ensure car starts moving even when turning
-            float minEffectiveThrottle = 0.8f; // Minimum 80% throttle to overcome static friction (was 0.5f)
+
+            float minEffectiveThrottle = 0.6f; // Minimum throttle to overcome static friction
             float actualThrottle = smoothedThrottle;
-            
             if (currentSpeed < 0.1f && smoothedThrottle > 0.01f && smoothedThrottle < minEffectiveThrottle)
             {
-                // Car is at rest and throttle is too low - boost to overcome static friction
-                // CRITICAL: When steering is high, need even more force to move forward
-                // High steering causes car to spin in place, so need stronger forward force
-                if (Mathf.Abs(steerInput) > 0.5f)
-                {
-                    // High steering - boost even more to overcome rotational inertia
-                    actualThrottle = 1.0f; // Full throttle when steering is high and speed is low
-                }
-                else
-                {
-                    actualThrottle = minEffectiveThrottle;
-                }
+                actualThrottle = minEffectiveThrottle;
                 if (Time.frameCount % 60 == 0)
                 {
                     Debug.Log($"CarController: Boosting throttle from {smoothedThrottle:F3} to {actualThrottle:F3} to overcome static friction (speed={currentSpeed:F3} m/s, steering={steerInput:F3})");
                 }
             }
-            
-            // CRITICAL: Always wake up Rigidbody when applying throttle (even if not sleeping)
-            // This ensures it responds to forces immediately
-            // Note: sleepThreshold is already disabled in Awake(), but wake up just in case
+
             rb.WakeUp();
-            
-            // Apply forward force using Acceleration mode (ignores mass, direct acceleration)
+
             Vector3 forwardForce = transform.forward * actualThrottle * motorForce;
             rb.AddForce(forwardForce, ForceMode.Acceleration);
-            
-            // DEBUG: Log force being applied and velocity (every frame when speed is very low to diagnose)
+
             if (currentSpeed < 0.1f || Time.frameCount % 60 == 0)
             {
                 Vector3 currentVel = rb.linearVelocity;
@@ -797,28 +1009,27 @@ public class CarController : MonoBehaviour
             rb.WakeUp();
         }
         
-        if (brakeInput > 0)
+        if (!useWheelColliders || !wheelCollidersReady)
         {
-            // Cap brake to avoid aggressive physics spikes
-            float brakeApplied = Mathf.Min(brakeInput, 0.2f);
+            if (brakeInput > 0)
+            {
+                // Cap brake to avoid aggressive physics spikes
+                float brakeApplied = Mathf.Min(brakeInput, 0.2f);
 
-            // Increase linear damping for braking, but keep it gentle to avoid spikes
-            rb.linearDamping = brakeApplied * 5f;
-            
-            // Direct velocity reduction for immediate braking response
-            // This helps when speed is very high and damping alone isn't enough
-            // NOTE: Direct velocity reduction removed to avoid instantaneous decel spikes.
-        }
-        else
-        {
-            // CRITICAL: Reset damping to 0 when not braking (allows car to coast)
-            // This MUST be done every frame to prevent drag from persisting
-            rb.linearDamping = 0f;
-            
-            // Also ensure old 'drag' property is reset (for compatibility)
+                // Increase linear damping for braking, but keep it gentle to avoid spikes
+                rb.linearDamping = brakeApplied * 5f;
+            }
+            else
+            {
+                // CRITICAL: Reset damping to 0 when not braking (allows car to coast)
+                // This MUST be done every frame to prevent drag from persisting
+                rb.linearDamping = 0f;
+                
+                // Also ensure old 'drag' property is reset (for compatibility)
             #if !UNITY_2021_1_OR_NEWER
             rb.drag = 0f;
             #endif
+            }
         }
         
         // FIXED: Hard speed limit - cap velocity at the END after all forces are applied
@@ -958,6 +1169,12 @@ public class CarController : MonoBehaviour
     /// </summary>
     public VehicleState GetVehicleState()
     {
+        float actualSteeringAngle = steeringAngleActual;
+        if (useWheelColliders && wheelCollidersReady)
+        {
+            actualSteeringAngle = -(frontLeftWheel.steerAngle + frontRightWheel.steerAngle) * 0.5f;
+        }
+
         return new VehicleState
         {
             position = transform.position,
@@ -965,7 +1182,10 @@ public class CarController : MonoBehaviour
             velocity = rb.linearVelocity,
             angularVelocity = rb.angularVelocity,
             speed = groundTruthMode ? groundTruthSpeed : rb.linearVelocity.magnitude,
-            steeringAngle = steerInput * maxSteerAngle,
+            steeringAngle = desiredSteerAngle,
+            steeringAngleActual = actualSteeringAngle,
+            steeringInput = steerInput,
+            desiredSteerAngle = desiredSteerAngle,
             motorTorque = throttleInput * motorForce,
             brakeTorque = brakeInput * brakeForce,
             maxSteerAngle = maxSteerAngle,
@@ -994,9 +1214,12 @@ public class VehicleState
     public Vector3 angularVelocity;
     public float speed;
     public float steeringAngle;
+    public float steeringAngleActual;
+    public float steeringInput;
+    public float desiredSteerAngle;
     public float motorTorque;
     public float brakeTorque;
-    public float maxSteerAngle = 30f;
+    public float maxSteerAngle = 35f;
     public float wheelbaseMeters = 2.5f;
     public float fixedDeltaTime = 0.02f;
     public float unityTime = 0.0f;
@@ -1056,4 +1279,11 @@ public class VehicleState
     public float speedLimit = 0.0f;  // Speed limit at current reference point (m/s)
     public float speedLimitPreview = 0.0f;  // Speed limit at preview distance ahead (m/s)
     public float speedLimitPreviewDistance = 0.0f;  // Preview distance used for speed limit (m)
+    public float speedLimitPreviewMinDistance = 0.0f;  // Distance to min limit in preview window (m)
+    public float speedLimitPreviewMid = 0.0f;  // Speed limit at mid preview distance (m/s)
+    public float speedLimitPreviewMidDistance = 0.0f;  // Mid preview distance (m)
+    public float speedLimitPreviewMidMinDistance = 0.0f;  // Distance to min limit in mid window (m)
+    public float speedLimitPreviewLong = 0.0f;  // Speed limit at long preview distance (m/s)
+    public float speedLimitPreviewLongDistance = 0.0f;  // Long preview distance (m)
+    public float speedLimitPreviewLongMinDistance = 0.0f;  // Distance to min limit in long window (m)
 }

@@ -25,7 +25,10 @@ class UnityBridgeClient:
         self.base_url = base_url.rstrip("/")
         self.session = requests.Session()
     
-    def get_latest_camera_frame(self) -> Optional[Tuple[np.ndarray, float]]:
+    def get_latest_camera_frame(
+        self,
+        camera_id: str = "front_center"
+    ) -> Optional[Tuple[np.ndarray, float, Optional[int]]]:
         """
         Get latest camera frame from Unity.
         
@@ -33,19 +36,24 @@ class UnityBridgeClient:
             Tuple of (image_array, timestamp) or None if not available
         """
         try:
-            response = self.session.get(f"{self.base_url}/api/camera/latest", timeout=0.5)
+            response = self.session.get(
+                f"{self.base_url}/api/camera/latest",
+                params={"camera_id": camera_id},
+                timeout=0.5,
+            )
             response.raise_for_status()
             
             data = response.json()
             img_base64 = data["image"]
             timestamp = data.get("timestamp", time.time())
+            frame_id = data.get("frame_id")
             
             # Decode base64 image
             img_bytes = base64.b64decode(img_base64)
             img = Image.open(io.BytesIO(img_bytes))
             img_array = np.array(img)
             
-            return img_array, timestamp
+            return img_array, timestamp, frame_id
         except requests.exceptions.Timeout:
             # Timeout is expected when no frame is available yet
             return None
@@ -189,8 +197,17 @@ class UnityBridgeClient:
             print(f"Error requesting Unity play: {e}")
             return False
     
-    def set_trajectory_data(self, trajectory_points: list, reference_point: list, 
-                           lateral_error: float) -> bool:
+    def set_trajectory_data(
+        self,
+        trajectory_points: list,
+        reference_point: list,
+        lateral_error: float,
+        perception_left_lane_x: float | None = None,
+        perception_right_lane_x: float | None = None,
+        perception_center_x: float | None = None,
+        perception_lookahead_m: float | None = None,
+        perception_valid: bool | None = None,
+    ) -> bool:
         """
         Set trajectory data for Unity visualization.
         
@@ -209,6 +226,16 @@ class UnityBridgeClient:
                 "lateral_error": float(lateral_error),
                 "timestamp": time.time()
             }
+            if perception_left_lane_x is not None:
+                trajectory_data["perception_left_lane_x"] = float(perception_left_lane_x)
+            if perception_right_lane_x is not None:
+                trajectory_data["perception_right_lane_x"] = float(perception_right_lane_x)
+            if perception_center_x is not None:
+                trajectory_data["perception_center_x"] = float(perception_center_x)
+            if perception_lookahead_m is not None:
+                trajectory_data["perception_lookahead_m"] = float(perception_lookahead_m)
+            if perception_valid is not None:
+                trajectory_data["perception_valid"] = bool(perception_valid)
             
             response = self.session.post(
                 f"{self.base_url}/api/trajectory",

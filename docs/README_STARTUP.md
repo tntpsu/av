@@ -25,7 +25,9 @@ Run the startup script:
 
 ### Option 1b: Ground Truth Runner (Standalone Player)
 
-Use the ground-truth runner to bypass the AV stack and follow the ground-truth path:
+Use the ground-truth runner to bypass the AV stack and follow the ground-truth path.
+This script **launches the built Unity player** (`unity/AVSimulation/mybuild.app`), so
+make sure it is built first (see build commands below):
 
 ```bash
 # Oval baseline
@@ -52,6 +54,35 @@ This script will:
 - ✅ Optionally build the standalone Unity player (`--build-unity-player`)
 - ✅ Optionally run the standalone Unity player (`--run-unity-player`)
 - ✅ Show you clear instructions for Unity
+
+### Option 1c: Ground Truth Follower (Bridge Only)
+
+Use this when the Unity player is **already running** (or Unity Editor is open):
+
+```bash
+# Bridge + ground truth follower only (Unity player must already be running)
+./start_ground_truth_follower.sh --duration 20 --speed 8.0
+```
+
+### Recommended Player-Only Workflow
+
+We generally do **not** run the Unity Editor during tests. Instead:
+
+```bash
+# Build the standalone player
+./start_av_stack.sh --build-unity-player
+
+# Run AV stack + player
+./start_av_stack.sh --run-unity-player --duration 60
+
+# Ground-truth run (player + GT follower)
+./start_ground_truth.sh --track-yaml tracks/s_loop.yml --duration 20 --speed 8.0
+```
+
+Manual verification checklist (GT right-lane target):
+- Build the Unity player.
+- Run a ground-truth pass on `s_loop`.
+- Confirm the car stays centered in the right lane (not road center).
 
 ### Option 2: Manual Startup
 

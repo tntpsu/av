@@ -86,6 +86,74 @@ def configure_logging(level: int) -> logging.Logger:
 
 logger = configure_logging(logging.ERROR)
 
+def _normalize_target_lane(target_lane: str) -> str:
+    lane = (target_lane or "right").strip().lower()
+    if lane not in {"right", "left", "center"}:
+        raise ValueError(f"Invalid target lane: {target_lane!r}. Use right, left, or center.")
+    return lane
+
+
+def compute_target_lane_center(
+    left_lane_line_x: Optional[float],
+    right_lane_line_x: Optional[float],
+    fallback_center: float,
+    target_lane: str,
+    single_lane_width_threshold_m: float = 5.0,
+) -> float:
+    """
+    Compute the desired lane center (right/left/center) from ground-truth lane lines.
+
+    Args:
+        left_lane_line_x: Left lane line lateral position in vehicle coords.
+        right_lane_line_x: Right lane line lateral position in vehicle coords.
+        fallback_center: Road center fallback if lane lines are unavailable.
+        target_lane: "right", "left", or "center".
+    """
+    if left_lane_line_x is None or right_lane_line_x is None:
+        return fallback_center
+    if not np.isfinite(left_lane_line_x) or not np.isfinite(right_lane_line_x):
+        return fallback_center
+    lane_width = right_lane_line_x - left_lane_line_x
+    if lane_width <= 1e-6:
+        return fallback_center
+    road_center = (left_lane_line_x + right_lane_line_x) / 2.0
+    if lane_width < single_lane_width_threshold_m:
+        return road_center
+    target_lane = _normalize_target_lane(target_lane)
+    if target_lane == "right":
+        return road_center + (lane_width * 0.25)
+    if target_lane == "left":
+        return road_center - (lane_width * 0.25)
+    return road_center
+
+
+def resolve_segmentation_settings(
+    use_cv: bool, segmentation_checkpoint: Optional[str]
+) -> tuple[bool, Optional[str]]:
+    use_segmentation = not use_cv
+    if use_segmentation:
+        if not segmentation_checkpoint:
+            raise FileNotFoundError(
+                "Segmentation checkpoint not provided. Use --segmentation-checkpoint or --use-cv."
+            )
+        if not Path(segmentation_checkpoint).exists():
+            raise FileNotFoundError(
+                f"Segmentation checkpoint not found: {segmentation_checkpoint}"
+            )
+    return use_segmentation, segmentation_checkpoint
+
+
+def resolve_lateral_correction_gain(
+    target_lane: str,
+    provided_gain: Optional[float],
+    default_center: float = 0.2,
+    default_offset: float = 0.8,
+) -> float:
+    target_lane = _normalize_target_lane(target_lane)
+    if provided_gain is not None:
+        return float(provided_gain)
+    return default_offset if target_lane != "center" else default_center
+
 
 class GroundTruthFollower:
     """
@@ -114,6 +182,11 @@ class GroundTruthFollower:
         random_start: bool = False,
         random_seed: Optional[int] = None,
         constant_speed: bool = False,
+        target_lane: str = "right",
+        use_segmentation: bool = True,
+        segmentation_model_path: Optional[str] = None,
+        single_lane_width_threshold_m: float = 5.0,
+        lateral_correction_gain: Optional[float] = None,
     ):
         """
         Initialize ground truth follower.
@@ -137,6 +210,8 @@ class GroundTruthFollower:
         self.bridge_server_process = None
         self.start_bridge_server = start_bridge_server
         self.constant_speed = constant_speed
+        self.target_lane = _normalize_target_lane(target_lane)
+        self.single_lane_width_threshold_m = float(single_lane_width_threshold_m)
         
         # Speed control PID parameters (tuned for Unity physics)
         # Unity: motorForce=400, brake uses damping + velocity reduction
@@ -152,7 +227,9 @@ class GroundTruthFollower:
         self.av_stack = AVStack(
             bridge_url=bridge_url,
             record_data=True,
-            recording_dir="data/recordings"
+            recording_dir="data/recordings",
+            use_segmentation=use_segmentation,
+            segmentation_model_path=segmentation_model_path,
         )
         
         # Mark as ground truth drive recording (for creating test recordings)
@@ -224,7 +301,10 @@ class GroundTruthFollower:
         
         # Lateral error correction gain (small, just to stay centered)
         # Since path curvature handles the main steering, this is just a small correction
-        self.lateral_correction_gain = 0.2  # Small gain for lateral error correction
+        self.lateral_correction_gain = resolve_lateral_correction_gain(
+            self.target_lane,
+            lateral_correction_gain,
+        )
 
         # Curvature-based speed reduction and saturation fallback
         self.min_target_speed = 2.0
@@ -302,6 +382,52 @@ class GroundTruthFollower:
                 self.bridge_server_process.kill()
             except Exception as e:
                 logger.warning(f"Error stopping bridge server: {e}")
+
+    @staticmethod
+    def _get_state_value(vehicle_state: dict, keys: list[str], default=None):
+        for key in keys:
+            if key in vehicle_state and vehicle_state[key] is not None:
+                return vehicle_state[key]
+        nested = vehicle_state.get("ground_truth")
+        if isinstance(nested, dict):
+            for key in keys:
+                if key in nested and nested[key] is not None:
+                    return nested[key]
+        return default
+
+    def _get_target_lane_center(self, vehicle_state: dict) -> float:
+        lane_center = self._get_state_value(
+            vehicle_state,
+            ["groundTruthLaneCenterX", "ground_truth_lane_center_x", "lane_center_x"],
+            0.0,
+        )
+        left_lane_line_x = self._get_state_value(
+            vehicle_state,
+            [
+                "groundTruthLeftLaneLineX",
+                "ground_truth_left_lane_line_x",
+                "groundTruthLeftLaneX",
+                "ground_truth_left_lane_x",
+            ],
+            None,
+        )
+        right_lane_line_x = self._get_state_value(
+            vehicle_state,
+            [
+                "groundTruthRightLaneLineX",
+                "ground_truth_right_lane_line_x",
+                "groundTruthRightLaneX",
+                "ground_truth_right_lane_x",
+            ],
+            None,
+        )
+        return compute_target_lane_center(
+            left_lane_line_x,
+            right_lane_line_x,
+            float(lane_center),
+            self.target_lane,
+            self.single_lane_width_threshold_m,
+        )
     
     def _calculate_exact_steering(self, vehicle_state: dict, current_speed: float) -> float:
         """
@@ -329,12 +455,8 @@ class GroundTruthFollower:
             0.0
         )
         
-        # Get lateral error (to stay centered in lane)
-        lane_center = (
-            vehicle_state.get('groundTruthLaneCenterX') or
-            vehicle_state.get('ground_truth_lane_center_x') or
-            0.0
-        )
+        # Get lateral error (to stay centered in target lane)
+        lane_center = self._get_target_lane_center(vehicle_state)
         
         # EXACT STEERING FROM PATH CURVATURE (bicycle model)
         # This is the mathematically exact steering needed to follow the path
@@ -433,13 +555,7 @@ class GroundTruthFollower:
             lookahead_distance = self.lookahead_base + self.lookahead_speed_factor * current_speed
             
             # Ground truth comes from Unity in vehicle_state_dict
-            # Check multiple possible key names
-            lane_center = (
-                vehicle_state.get('groundTruthLaneCenterX') or
-                vehicle_state.get('ground_truth_lane_center_x') or
-                vehicle_state.get('ground_truth', {}).get('lane_center_x') or
-                0.0
-            )
+            lane_center = self._get_target_lane_center(vehicle_state)
             
             # NEW: Get path heading for path-based steering
             desired_heading = (
@@ -703,7 +819,7 @@ class GroundTruthFollower:
                     continue
                 
                 last_frame_time = time.time()  # Update last frame time
-                image, timestamp = frame_data
+                image, timestamp, _ = frame_data
                 
                 # Get vehicle state
                 vehicle_state = self.bridge.get_latest_vehicle_state()
@@ -714,12 +830,7 @@ class GroundTruthFollower:
                 
                 # Safety checks before processing
                 current_speed = vehicle_state.get('speed', 0.0)
-                lane_center = (
-                    vehicle_state.get('groundTruthLaneCenterX') or
-                    vehicle_state.get('ground_truth_lane_center_x') or
-                    vehicle_state.get('ground_truth', {}).get('lane_center_x') or
-                    0.0
-                )
+                lane_center = self._get_target_lane_center(vehicle_state)
                 
                 # Safety: If speed is very high, apply maximum brake (don't stop script)
                 if current_speed > self.max_safe_speed:
@@ -961,12 +1072,35 @@ def main():
                        help="Optional seed for random start reproducibility")
     parser.add_argument("--constant-speed", action="store_true",
                        help="Disable GT speed PID and move at constant speed")
+    parser.add_argument("--target-lane", type=str, default="right",
+                       choices=["right", "left", "center"],
+                       help="Target lane center to follow (default: right)")
+    parser.add_argument("--single-lane-width-threshold", type=float, default=5.0,
+                       help="Lane width below this is treated as a single lane (default: 5.0m)")
+    parser.add_argument("--lateral-correction-gain", type=float, default=None,
+                       help="Optional lateral correction gain override")
+    parser.add_argument("--use-cv", action="store_true",
+                       help="Force CV-based perception (override default segmentation)")
+    parser.add_argument(
+        "--segmentation-checkpoint",
+        type=str,
+        default="data/segmentation_dataset/checkpoints/segnet_best.pt",
+        help="Segmentation checkpoint path (default: segnet_best.pt)",
+    )
     
     args = parser.parse_args()
     
     if args.verbose:
         global logger
         logger = configure_logging(logging.INFO)
+
+    try:
+        use_segmentation, seg_checkpoint = resolve_segmentation_settings(
+            args.use_cv, args.segmentation_checkpoint
+        )
+    except FileNotFoundError as exc:
+        parser.error(str(exc))
+        return 1
 
     follower = GroundTruthFollower(
         bridge_url=args.bridge_url,
@@ -979,6 +1113,11 @@ def main():
         random_start=args.random_start,
         random_seed=args.random_seed,
         constant_speed=args.constant_speed,
+        target_lane=args.target_lane,
+        use_segmentation=use_segmentation,
+        segmentation_model_path=seg_checkpoint,
+        single_lane_width_threshold_m=args.single_lane_width_threshold,
+        lateral_correction_gain=args.lateral_correction_gain,
     )
     
     try:

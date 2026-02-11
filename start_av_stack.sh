@@ -45,6 +45,7 @@ START_DISTANCE=""
 START_RANDOM=""
 ARC_RADIUS=""
 TMP_TRACK_PATH=""
+GT_CENTERLINE_AS_LEFT_LANE=""
 
 usage() {
     echo "Usage: ./start_av_stack.sh [options] [av_stack.py args]"
@@ -64,6 +65,7 @@ usage() {
     echo "  --start-t              Start position (0-1) along track"
     echo "  --start-distance       Start position in meters along track"
     echo "  --start-random         Randomize start position (true/false)"
+    echo "  --gt-centerline-as-left-lane BOOL  Use center line as left lane"
     echo "  --help, -h             Show this help message"
     echo ""
     echo "av_stack.py args are passed through, e.g.:"
@@ -143,6 +145,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --start-random)
             START_RANDOM="$2"
+            shift 2
+            ;;
+        --gt-centerline-as-left-lane)
+            GT_CENTERLINE_AS_LEFT_LANE="$2"
             shift 2
             ;;
         *)
@@ -335,6 +341,9 @@ if [ -n "$START_DISTANCE" ]; then
 fi
 if [ -n "$START_RANDOM" ]; then
     UNITY_PLAYER_ARGS+=("--start-random" "$START_RANDOM")
+fi
+if [ -n "$GT_CENTERLINE_AS_LEFT_LANE" ]; then
+    UNITY_PLAYER_ARGS+=("--gt-centerline-as-left-lane" "$GT_CENTERLINE_AS_LEFT_LANE")
 fi
 
 launch_unity_player() {

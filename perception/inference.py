@@ -22,7 +22,12 @@ class LaneDetectionInference:
                  fallback_to_cv: bool = True,
                  segmentation_model_path: Optional[str] = None,
                  segmentation_mode: bool = False,
-                 segmentation_input_size: Tuple[int, int] = (320, 640)):
+                 segmentation_input_size: Tuple[int, int] = (320, 640),
+                 segmentation_fit_max_row_ratio: float = 0.75,
+                 segmentation_ransac_enabled: bool = False,
+                 segmentation_ransac_residual_px: float = 6.0,
+                 segmentation_ransac_min_inliers: int = 10,
+                 segmentation_ransac_max_trials: int = 40):
         """
         Initialize lane detection inference.
         
@@ -35,10 +40,17 @@ class LaneDetectionInference:
         self.fallback_to_cv = fallback_to_cv
         self.segmentation_mode = segmentation_mode
         self.segmentation_input_size = segmentation_input_size
+        self.segmentation_fit_max_row_ratio = float(segmentation_fit_max_row_ratio)
+        self.segmentation_ransac_enabled = bool(segmentation_ransac_enabled)
+        self.segmentation_ransac_residual_px = float(segmentation_ransac_residual_px)
+        self.segmentation_ransac_min_inliers = int(segmentation_ransac_min_inliers)
+        self.segmentation_ransac_max_trials = int(segmentation_ransac_max_trials)
         
         # Segmentation model (optional)
         self.segmentation_model = None
         self.segmentation_model_loaded = False
+        self.last_segmentation_debug = None
+        self.last_segmentation_ransac_used = {"left": False, "right": False}
         if self.segmentation_mode:
             if segmentation_model_path and Path(segmentation_model_path).exists():
                 self.segmentation_model = load_segmentation_model(segmentation_model_path, self.device)
@@ -247,7 +259,15 @@ class LaneDetectionInference:
         with torch.no_grad():
             logits = self.segmentation_model(tensor)
             pred = torch.argmax(logits, dim=1).squeeze(0).cpu().numpy().astype(np.uint8)
-        lane_coeffs = self._mask_to_lane_coeffs(pred, original_shape)
+        lane_coeffs, fit_left, fit_right, mask_resized = self._mask_to_lane_data(
+            pred, original_shape
+        )
+        self.last_segmentation_debug = {
+            "fit_points_left": fit_left,
+            "fit_points_right": fit_right,
+            "mask": mask_resized,
+            "ransac_used": dict(self.last_segmentation_ransac_used),
+        }
         # Confidence based on lane pixel coverage (mask is sparse, so raw mean is tiny).
         total_pixels = float(pred.size)
         lane_pixels = float(np.sum(pred > 0))
@@ -260,35 +280,125 @@ class LaneDetectionInference:
         self, mask: np.ndarray, original_shape: Tuple[int, int]
     ) -> List[Optional[np.ndarray]]:
         """Convert a label mask into lane polynomial coefficients."""
+        lane_coeffs, _, _, _ = self._mask_to_lane_data(mask, original_shape)
+        return lane_coeffs
+
+    def _ransac_polyfit(
+        self,
+        points: np.ndarray,
+        degree: int,
+        residual_threshold: float,
+        min_inliers: int,
+        max_trials: int,
+    ) -> Optional[np.ndarray]:
+        """Robust polynomial fit with simple RANSAC.
+        
+        Fits x = f(y) for lane detection (x is lateral, y is forward distance).
+        Residuals are calculated in x-direction (lateral) to reject outliers.
+        
+        Note: points array convention is [y, x] where:
+        - points[:, 0] = y values (image row, forward distance) - independent variable
+        - points[:, 1] = x values (image column, lateral position) - dependent variable
+        """
+        if points.shape[0] < degree + 1:
+            return None
+
+        best_inliers = 0
+        best_coeffs = None
+        rng = np.random.default_rng()
+        # CORRECTED: Match the points array convention [y, x]
+        ys = points[:, 0]  # y values (image row, forward distance) - independent variable
+        xs = points[:, 1]  # x values (image column, lateral position) - dependent variable
+
+        for _ in range(max_trials):
+            sample_idx = rng.choice(points.shape[0], size=degree + 1, replace=False)
+            try:
+                # Fit x = f(y) - lateral position as function of forward distance
+                coeffs = np.polyfit(ys[sample_idx], xs[sample_idx], deg=degree)
+            except Exception:
+                continue
+
+            # Calculate residuals in x-direction (lateral) to reject outliers
+            residuals = np.abs(xs - np.polyval(coeffs, ys))
+            inlier_mask = residuals <= residual_threshold
+            inlier_count = int(np.sum(inlier_mask))
+            if inlier_count > best_inliers:
+                best_inliers = inlier_count
+                best_coeffs = coeffs
+                if best_inliers == points.shape[0]:
+                    break
+
+        if best_coeffs is None or best_inliers < min_inliers:
+            return None
+
+        # Calculate residuals in x-direction
+        inlier_residuals = np.abs(xs - np.polyval(best_coeffs, ys))
+        inliers = inlier_residuals <= residual_threshold
+        if np.sum(inliers) < min_inliers:
+            return None
+        try:
+            # Fit x = f(y) with inliers only
+            return np.polyfit(ys[inliers], xs[inliers], deg=degree)
+        except Exception:
+            return None
+
+    def _mask_to_lane_data(
+        self, mask: np.ndarray, original_shape: Tuple[int, int]
+    ) -> Tuple[List[Optional[np.ndarray]], List[List[float]], List[List[float]], np.ndarray]:
+        """Convert a label mask into lane polynomial coefficients + fit points."""
         h, w = original_shape
         mask_resized = cv2.resize(mask, (w, h), interpolation=cv2.INTER_NEAREST)
         lane_coeffs: List[Optional[np.ndarray]] = []
+        fit_points_left: List[List[float]] = []
+        fit_points_right: List[List[float]] = []
         row_step = 5
         min_rows = 6
         min_pixels_per_row = 2
 
+        max_row = int(h * np.clip(self.segmentation_fit_max_row_ratio, 0.1, 1.0))
+        ransac_used = {"left": False, "right": False}
         for lane_label in (1, 2):
             ys, xs = np.where(mask_resized == lane_label)
             if len(xs) == 0:
                 lane_coeffs.append(None)
                 continue
             points = []
-            for y in range(0, h, row_step):
+            for y in range(0, max_row, row_step):
                 row_xs = xs[ys == y]
                 if len(row_xs) < min_pixels_per_row:
                     continue
                 x_med = float(np.median(row_xs))
                 points.append([y, x_med])
+                if lane_label == 1:
+                    fit_points_left.append([x_med, float(y)])
+                else:
+                    fit_points_right.append([x_med, float(y)])
             if len(points) < min_rows:
                 lane_coeffs.append(None)
                 continue
             points_arr = np.array(points)
-            try:
-                coeffs = np.polyfit(points_arr[:, 0], points_arr[:, 1], deg=2)
-            except Exception:
-                coeffs = None
+            coeffs = None
+            if self.segmentation_ransac_enabled:
+                coeffs = self._ransac_polyfit(
+                    points_arr,
+                    degree=2,
+                    residual_threshold=self.segmentation_ransac_residual_px,
+                    min_inliers=self.segmentation_ransac_min_inliers,
+                    max_trials=self.segmentation_ransac_max_trials,
+                )
+                if coeffs is not None:
+                    if lane_label == 1:
+                        ransac_used["left"] = True
+                    else:
+                        ransac_used["right"] = True
+            if coeffs is None:
+                try:
+                    coeffs = np.polyfit(points_arr[:, 0], points_arr[:, 1], deg=2)
+                except Exception:
+                    coeffs = None
             lane_coeffs.append(coeffs)
-        return lane_coeffs
+        self.last_segmentation_ransac_used = ransac_used
+        return lane_coeffs, fit_points_left, fit_points_right, mask_resized
     
     def visualize(self, image: np.ndarray, lane_coeffs: List[Optional[np.ndarray]], 
                   color: Tuple[int, int, int] = (0, 255, 0), thickness: int = 3) -> np.ndarray:

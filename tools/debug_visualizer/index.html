@@ -3,14 +3,15 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AV Stack Debug Visualizer</title>
+    <title>PhilViz</title>
     <link rel="stylesheet" href="style.css">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 </head>
 <body>
     <div class="container">
         <!-- Header -->
         <header class="header">
-            <h1>AV Stack Debug Visualizer</h1>
+            <h1>PhilViz</h1>
             <div class="header-controls">
                 <select id="recording-select" class="recording-select">
                     <option value="">Select recording...</option>
@@ -22,69 +23,54 @@
         </header>
 
         <!-- Main Content -->
-        <div class="main-content">
+        <div class="main-content" id="main-content">
             <!-- Left: Camera Frame Display -->
-            <div class="camera-panel">
-                <div class="canvas-container">
-                    <canvas id="camera-canvas" width="640" height="480"></canvas>
-                    <canvas id="overlay-canvas" width="640" height="480"></canvas>
-                    <canvas id="debug-overlay-canvas" width="640" height="480"></canvas>
-                </div>
-                
-                <!-- Debug Overlay Controls -->
-                <div class="debug-controls">
-                    <h3>Debug Overlays</h3>
-                    <label style="display: flex; align-items: center; margin: 0.5rem 0; font-size: 0.9rem;">
-                        <input type="checkbox" id="toggle-cv-tools" style="margin-right: 0.5rem;">
-                        Show CV Debug Tools
-                    </label>
-                    
-                    <div id="cv-debug-overlay-controls" style="display: none;">
-                        <button id="generate-debug-btn" style="padding: 0.5rem 1rem; background: #4a90e2; color: white; border: none; border-radius: 4px; cursor: pointer; margin-bottom: 0.5rem; width: 100%;">
-                            Generate Debug Overlays (Current Frame)
-                        </button>
-                        <div class="debug-toggles">
-                            <div id="cv-debug-tools" style="display: none;">
-                                <label><input type="checkbox" id="toggle-combined"> Combined</label>
-                                <label><input type="checkbox" id="toggle-edges"> Edges</label>
-                                <label><input type="checkbox" id="toggle-yellow-mask"> Yellow Mask</label>
-                                <label><input type="checkbox" id="toggle-fit-points"> Fit Points (Magenta/Cyan)</label>
-                                <label><input type="checkbox" id="toggle-histogram"> Histogram</label>
-                            </div>
+            <div class="camera-panel" id="camera-panel">
+                <div class="camera-grid-wrapper" id="camera-grid-wrapper">
+                    <div class="camera-grid" id="camera-grid">
+                        <div class="canvas-container">
+                            <canvas id="camera-canvas" width="640" height="480"></canvas>
+                            <canvas id="overlay-canvas" width="640" height="480"></canvas>
                         </div>
-                        <div class="opacity-control">
-                            <label>Opacity: <span id="opacity-value">50</span>%</label>
-                            <input type="range" id="opacity-slider" min="0" max="100" value="50">
+                        <div class="canvas-container">
+                            <canvas id="topdown-canvas" width="640" height="480"></canvas>
                         </div>
                     </div>
                 </div>
+                <div class="camera-grid-resize-label">Drag to resize images</div>
+                <div class="camera-grid-resize-handle" id="camera-grid-resize-handle"></div>
 
                 <!-- Overlay Toggles -->
                 <div class="overlay-controls">
                     <h3>Data Overlays</h3>
                     <div class="overlay-toggles">
-                        <div id="cv-data-overlays" style="display: none;">
-                            <label><input type="checkbox" id="toggle-lanes" checked> Detected Lanes (Red Lines)</label>
-                            <label><input type="checkbox" id="toggle-detected-curves" checked> Detected Curves (Orange)</label>
+                        <label><input type="checkbox" id="toggle-seg-mask"> Segmentation Mask</label>
+                        <label><input type="checkbox" id="toggle-seg-fit-points"> Segmentation Fit Points</label>
+                        <label><input type="checkbox" id="toggle-perception-roi"> Perception ROI (CV mask)</label>
+                        <label><input type="checkbox" id="toggle-seg-fit-roi"> Segmentation Fit Range</label>
+                        <div id="cv-data-overlays">
+                            <label><input type="checkbox" id="toggle-detected-curves" checked> Detected Curves (Orange, CV only)</label>
                         </div>
                         <label><input type="checkbox" id="toggle-ground-truth" checked> Ground Truth (Green)</label>
+                        <label><input type="checkbox" id="toggle-lanes" checked> Detected Lanes (Red Lines)</label>
                         <label><input type="checkbox" id="toggle-trajectory" checked> Trajectory</label>
                         <label><input type="checkbox" id="toggle-reference" checked> Reference Point</label>
                     </div>
                 </div>
             </div>
 
-            <!-- Middle: Legend Panel (uses space between camera and data) -->
-            <div class="legend-panel">
+                <!-- Middle: Legend Panel (uses space between camera and data) -->
+            <div class="legend-panel collapsed" id="legend-panel">
                 <h3>Visual Legend</h3>
-                <div class="overlay-legend" style="font-size: 0.9rem; color: #a0a0a0; line-height: 1.8;">
+                <button id="legend-toggle-btn" class="btn btn-secondary legend-toggle">Collapse</button>
+                <div class="overlay-legend legend-extra" style="font-size: 0.9rem; color: #a0a0a0; line-height: 1.8;">
                     <div><span style="color: #00ff00; font-weight: bold;">🟢 Green lines:</span> Ground truth lanes (where lanes should be)</div>
                     <div style="margin-top: 0.75rem;"><span style="color: #ff0000; font-weight: bold;">🔴 Red lines:</span> Detected lane positions at lookahead (vehicle coords converted to pixels)</div>
                     <div style="margin-top: 0.75rem;"><span style="color: #ff8800; font-weight: bold;">🟠 Orange curves:</span> Actual detected lane curves (polynomial curves in image space)</div>
                     <div style="margin-top: 0.75rem;">🔴 <strong>Red dot/arrow:</strong> Reference point (target position at lookahead distance)</div>
                     <div style="margin-top: 0.5rem; margin-left: 1rem;">Arrow shows <strong>desired heading direction</strong> (not steering angle)</div>
                 </div>
-                <div style="margin-top: 1.5rem; padding-top: 1rem; border-top: 1px solid #444;">
+                <div class="legend-extra" style="margin-top: 1.5rem; padding-top: 1rem; border-top: 1px solid #444;">
                     <label style="display: block; margin-bottom: 0.5rem; font-size: 0.9rem;">
                         Ground Truth Distance (m):
                     </label>
@@ -106,7 +92,7 @@
                         Adjust to align green lines with red lines
                     </small>
                 </div>
-                <div style="margin-top: 1rem; padding-top: 1rem; border-top: 1px solid #444;">
+                <div class="legend-extra" style="margin-top: 1rem; padding-top: 1rem; border-top: 1px solid #444;">
                     <label style="display: flex; align-items: center; cursor: pointer; color: #e0e0e0; font-size: 0.9rem;" title="If checked, analysis stops at the point where the car went out of lane and stayed out (>10 consecutive frames out of lane). Applies to Summary and Diagnostics tabs.">
                         <input type="checkbox" id="analyze-to-failure" style="margin-right: 0.5rem; cursor: pointer;">
                         <span>Analyze to out of bounds</span>
@@ -114,8 +100,9 @@
                 </div>
             </div>
 
+            <div class="panel-resize-handle" id="panel-resize-handle"></div>
             <!-- Right: Data Side Panel -->
-            <div class="data-panel">
+            <div class="data-panel" id="data-panel">
                 <div class="tabs">
                     <button class="tab-btn" data-tab="summary">Summary</button>
                     <button class="tab-btn" data-tab="issues">Issues</button>
@@ -126,6 +113,7 @@
                     <button class="tab-btn" data-tab="control">Control</button>
                     <button class="tab-btn" data-tab="vehicle">Vehicle</button>
                     <button class="tab-btn" data-tab="ground-truth">Ground Truth</button>
+                    <button class="tab-btn" data-tab="charts">Charts</button>
                 </div>
 
                 <div class="tab-content">
@@ -170,6 +158,7 @@
                             <tr><td>Lane Width</td><td id="all-perception-width">-</td></tr>
                             <tr><td>Using Stale Data</td><td id="all-perception-using-stale" style="color: #ff6b6b;">-</td></tr>
                             <tr><td>Stale Reason</td><td id="all-perception-stale-reason" style="color: #ff6b6b;">-</td></tr>
+                            <tr><td>Reject Reason</td><td id="all-perception-reject-reason" style="color: #ff6b6b;">-</td></tr>
                             <tr id="all-perception-instability-row" style="display: none;"><td>Width Change (m)<br/><small style="color: #888;">vs prev frame</small></td><td id="all-perception-width-change" style="color: #ffa500;">-</td></tr>
                             <tr id="all-perception-instability-row-2" style="display: none;"><td>Center Shift (m)<br/><small style="color: #888;">vs prev frame</small></td><td id="all-perception-center-shift" style="color: #ffa500;">-</td></tr>
                             <tr id="all-perception-jump-row" style="display: none;"><td>Left Jump (m)</td><td id="all-perception-left-jump">-</td></tr>
@@ -178,6 +167,12 @@
                             <tr><td style="border-top: 1px solid #444; padding-top: 0.5rem;">Consecutive Bad Frames</td><td id="all-perception-consecutive-bad" style="border-top: 1px solid #444; padding-top: 0.5rem;">-</td></tr>
                             <tr><td>Health Score</td><td id="all-perception-health-score">-</td></tr>
                             <tr><td>Health Status</td><td id="all-perception-health-status">-</td></tr>
+                            <tr><td>Health Bad Events</td><td id="all-perception-health-bad-events">-</td></tr>
+                            <tr><td>Recent Bad Events</td><td id="all-perception-health-bad-events-recent">-</td></tr>
+                            <tr><td>Clamp Events</td><td id="all-perception-clamp-events">-</td></tr>
+                            <tr><td>Timestamp Frozen</td><td id="all-perception-timestamp-frozen">-</td></tr>
+                            <tr><td>Unity Frame Reused</td><td id="all-vehicle-unity-frame-reused">-</td></tr>
+                            <tr><td>Camera Timestamp Reused</td><td id="all-vehicle-camera-timestamp-reused">-</td></tr>
                         </table>
                         
                         <h3>Camera Calibration</h3>
@@ -185,9 +180,14 @@
                             <tr><td>8m Screen Y (px)</td><td id="all-vehicle-camera-8m-y">-</td></tr>
                             <tr><td>Vertical FOV (°)</td><td id="all-vehicle-camera-fov-vertical">-</td></tr>
                             <tr><td>Horizontal FOV (°)</td><td id="all-vehicle-camera-fov-horizontal">-</td></tr>
+                            <tr><td>Config Horizontal FOV (°)</td><td id="all-vehicle-camera-fov-config">-</td></tr>
+                            <tr><td>Config Camera Height (m)</td><td id="all-vehicle-camera-height-config">-</td></tr>
                         </table>
                         <h3>Unity Timing</h3>
                         <table class="data-table">
+                            <tr><td>Camera Timestamp</td><td id="all-vehicle-camera-timestamp">-</td></tr>
+                            <tr><td>Camera Frame ID</td><td id="all-vehicle-camera-frame-id">-</td></tr>
+                            <tr><td>Camera Timestamp Reused</td><td id="all-vehicle-camera-timestamp-reused">-</td></tr>
                             <tr><td>Unity Time</td><td id="all-vehicle-unity-time">-</td></tr>
                             <tr><td>Unity Frame</td><td id="all-vehicle-unity-frame">-</td></tr>
                             <tr><td>Delta Time</td><td id="all-vehicle-unity-delta-time">-</td></tr>
@@ -195,6 +195,13 @@
                             <tr><td>Unscaled Delta Time</td><td id="all-vehicle-unity-unscaled-delta-time">-</td></tr>
                             <tr><td>Time Scale</td><td id="all-vehicle-unity-time-scale">-</td></tr>
                             <tr><td>Unity Time Gap</td><td id="all-vehicle-unity-time-gap">-</td></tr>
+                            <tr><td>Unity Frame Reused</td><td id="all-vehicle-unity-frame-reused">-</td></tr>
+                        </table>
+                        <h3>Steering (Unity)</h3>
+                        <table class="data-table">
+                            <tr><td>Steering Input (norm)</td><td id="all-vehicle-steering-input">-</td></tr>
+                            <tr><td>Desired Steer Angle (°)</td><td id="all-vehicle-desired-steer-angle">-</td></tr>
+                            <tr><td>Steering Angle Actual (°)</td><td id="all-vehicle-steering-angle-actual">-</td></tr>
                         </table>
                         <h3>Camera Position (Unity)</h3>
                         <table class="data-table">
@@ -248,6 +255,10 @@
                             <tr><td>Lateral Error</td><td id="all-control-lateral-error">-</td></tr>
                             <tr><td>Heading Error</td><td id="all-control-heading-error">-</td></tr>
                             <tr><td>Total Error</td><td id="all-control-total-error">-</td></tr>
+                            <tr><td>Total Error (scaled)</td><td id="all-control-total-error-scaled">-</td></tr>
+                            <tr><td>Feedforward Steering</td><td id="all-control-feedforward-steering">-</td></tr>
+                            <tr><td>Feedback Steering</td><td id="all-control-feedback-steering">-</td></tr>
+                            <tr><td>Straight Sign Flip Override</td><td id="all-control-straight-sign-flip-override">-</td></tr>
                             <tr><td>PID Integral</td><td id="all-control-pid-integral">-</td></tr>
                             <tr><td>Is Straight</td><td id="all-control-is-straight">-</td></tr>
                             <tr><td>Straight Oscillation Rate</td><td id="all-control-straight-oscillation-rate">-</td></tr>
@@ -300,6 +311,7 @@
                             <tr><td>Lane Width</td><td id="perception-width">-</td></tr>
                             <tr><td>Using Stale Data</td><td id="perception-using-stale" style="color: #ff6b6b;">-</td></tr>
                             <tr><td>Stale Reason</td><td id="perception-stale-reason" style="color: #ff6b6b;">-</td></tr>
+                            <tr><td>Reject Reason</td><td id="perception-reject-reason" style="color: #ff6b6b;">-</td></tr>
                             <tr id="perception-instability-row" style="display: none;"><td>Width Change (m)<br/><small style="color: #888;">vs prev frame</small></td><td id="perception-width-change" style="color: #ffa500;">-</td></tr>
                             <tr id="perception-instability-row-2" style="display: none;"><td>Center Shift (m)<br/><small style="color: #888;">vs prev frame</small></td><td id="perception-center-shift" style="color: #ffa500;">-</td></tr>
                             <tr id="perception-jump-row" style="display: none;"><td>Left Jump (m)</td><td id="perception-left-jump">-</td></tr>
@@ -308,6 +320,10 @@
                             <tr><td style="border-top: 1px solid #444; padding-top: 0.5rem;">Consecutive Bad Frames</td><td id="perception-consecutive-bad" style="border-top: 1px solid #444; padding-top: 0.5rem;">-</td></tr>
                             <tr><td>Health Score</td><td id="perception-health-score">-</td></tr>
                             <tr><td>Health Status</td><td id="perception-health-status">-</td></tr>
+                            <tr><td>Health Bad Events</td><td id="perception-health-bad-events">-</td></tr>
+                            <tr><td>Recent Bad Events</td><td id="perception-health-bad-events-recent">-</td></tr>
+                            <tr><td>Clamp Events</td><td id="perception-clamp-events">-</td></tr>
+                            <tr><td>Timestamp Frozen</td><td id="perception-timestamp-frozen">-</td></tr>
                         </table>
                         
                         <!-- Polynomial Inspector -->
@@ -372,6 +388,10 @@
                             <tr><td>Lateral Error</td><td id="control-lateral-error">-</td></tr>
                             <tr><td>Heading Error</td><td id="control-heading-error">-</td></tr>
                             <tr><td>Total Error</td><td id="control-total-error">-</td></tr>
+                            <tr><td>Total Error (scaled)</td><td id="control-total-error-scaled">-</td></tr>
+                            <tr><td>Feedforward Steering</td><td id="control-feedforward-steering">-</td></tr>
+                            <tr><td>Feedback Steering</td><td id="control-feedback-steering">-</td></tr>
+                            <tr><td>Straight Sign Flip Override</td><td id="control-straight-sign-flip-override">-</td></tr>
                             <tr><td>PID Integral</td><td id="control-pid-integral">-</td></tr>
                             <tr><td>PID Derivative</td><td id="control-pid-derivative">-</td></tr>
                             <tr><td>PID Error</td><td id="control-pid-error">-</td></tr>
@@ -392,9 +412,14 @@
                             <tr><td>8m Screen Y (status)</td><td id="vehicle-camera-8m-status">-</td></tr>
                             <tr><td>Vertical FOV (°)</td><td id="vehicle-camera-fov-vertical">-</td></tr>
                             <tr><td>Horizontal FOV (°)</td><td id="vehicle-camera-fov-horizontal">-</td></tr>
+                            <tr><td>Config Horizontal FOV (°)</td><td id="vehicle-camera-fov-config">-</td></tr>
+                            <tr><td>Config Camera Height (m)</td><td id="vehicle-camera-height-config">-</td></tr>
                         </table>
                         <h3>Unity Timing</h3>
                         <table class="data-table">
+                            <tr><td>Camera Timestamp</td><td id="vehicle-camera-timestamp">-</td></tr>
+                            <tr><td>Camera Frame ID</td><td id="vehicle-camera-frame-id">-</td></tr>
+                            <tr><td>Camera Timestamp Reused</td><td id="vehicle-camera-timestamp-reused">-</td></tr>
                             <tr><td>Unity Time</td><td id="vehicle-unity-time">-</td></tr>
                             <tr><td>Unity Frame</td><td id="vehicle-unity-frame">-</td></tr>
                             <tr><td>Delta Time</td><td id="vehicle-unity-delta-time">-</td></tr>
@@ -402,6 +427,13 @@
                             <tr><td>Unscaled Delta Time</td><td id="vehicle-unity-unscaled-delta-time">-</td></tr>
                             <tr><td>Time Scale</td><td id="vehicle-unity-time-scale">-</td></tr>
                             <tr><td>Unity Time Gap</td><td id="vehicle-unity-time-gap">-</td></tr>
+                            <tr><td>Unity Frame Reused</td><td id="vehicle-unity-frame-reused">-</td></tr>
+                        </table>
+                        <h3>Steering (Unity)</h3>
+                        <table class="data-table">
+                            <tr><td>Steering Input (norm)</td><td id="vehicle-steering-input">-</td></tr>
+                            <tr><td>Desired Steer Angle (°)</td><td id="vehicle-desired-steer-angle">-</td></tr>
+                            <tr><td>Steering Angle Actual (°)</td><td id="vehicle-steering-angle-actual">-</td></tr>
                         </table>
                         <h3>Camera Position (Unity)</h3>
                         <table class="data-table">
@@ -460,6 +492,61 @@
                             <tr><td>Lane Width Error<br/><small style="color: #888;">(perception vs GT)</small></td><td id="gt-width-error">-</td></tr>
                             <tr><td>Center Offset Error<br/><small style="color: #888;">(perception vs GT)</small></td><td id="gt-center-error">-</td></tr>
                         </table>
+                    </div>
+
+                    <!-- Charts Tab -->
+                    <div id="charts-tab" class="tab-pane">
+                        <div class="chart-builder">
+                            <div class="chart-controls">
+                                <div class="chart-row">
+                                    <label>X Axis</label>
+                                    <select id="chart-x-axis"></select>
+                                </div>
+                                <div class="chart-row">
+                                    <label>Search Signals</label>
+                                    <input id="chart-signal-search" type="text" placeholder="e.g., vehicle/speed">
+                                </div>
+                                <div class="chart-row">
+                                    <label>Signals</label>
+                                    <div id="chart-signal-list" class="chart-signal-list"></div>
+                                </div>
+                                <div class="chart-row">
+                                    <label>Curve Shading</label>
+                                    <label class="chart-toggle">
+                                        <input type="checkbox" id="chart-shade-curves">
+                                        Shade curve sections
+                                    </label>
+                                    <select id="chart-curvature-signal"></select>
+                                </div>
+                                <div class="chart-row">
+                                    <label>Curve Thresholds</label>
+                                    <div class="chart-thresholds">
+                                        <input id="chart-curve-threshold-light" type="number" step="0.001" value="0.01">
+                                        <input id="chart-curve-threshold-dark" type="number" step="0.001" value="0.02">
+                                    </div>
+                                </div>
+                                <div class="chart-row chart-actions">
+                                    <button id="chart-plot-btn" class="btn btn-primary">Plot</button>
+                                    <button id="chart-clear-btn" class="btn btn-secondary">Clear</button>
+                                </div>
+                                <div class="chart-row chart-save">
+                                    <input id="chart-view-name" type="text" placeholder="Save view name">
+                                    <button id="chart-save-btn" class="btn btn-secondary">Save View</button>
+                                </div>
+                                <div class="chart-row">
+                                    <label>Saved Views</label>
+                                    <div class="chart-saved-views-row">
+                                        <select id="chart-saved-views-select"></select>
+                                        <button id="chart-load-btn" class="btn btn-secondary">Load</button>
+                                        <button id="chart-overwrite-btn" class="btn btn-secondary">Overwrite</button>
+                                        <button id="chart-delete-btn" class="btn btn-secondary">Delete</button>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="chart-canvas">
+                                <canvas id="chart-canvas" width="640" height="480"></canvas>
+                            </div>
+                        </div>
                     </div>
                 </div>
             </div>

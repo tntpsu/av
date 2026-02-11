@@ -16,6 +16,12 @@ VERBOSE=false
 RANDOM_START=false
 RANDOM_SEED=""
 CONSTANT_SPEED=false
+TARGET_LANE="right"
+USE_CV=false
+SEG_CHECKPOINT="$SCRIPT_DIR/data/segmentation_dataset/checkpoints/segnet_best.pt"
+SINGLE_LANE_WIDTH_THRESHOLD="5.0"
+LATERAL_CORRECTION_GAIN=""
+GT_CENTERLINE_AS_LEFT_LANE="false"
 
 TMP_TRACK_PATH=""
 UNITY_PID=""
@@ -31,6 +37,12 @@ print_usage() {
     echo "  --random-seed SEED          Seed for random start"
     echo "  --verbose                   Enable verbose ground truth logging"
     echo "  --constant-speed            Disable GT PID and run constant speed"
+    echo "  --target-lane LANE          Target lane center: right/left/center (default: right)"
+    echo "  --use-cv                    Force CV-based perception (override default segmentation)"
+    echo "  --segmentation-checkpoint P Segmentation checkpoint path"
+    echo "  --single-lane-width-threshold M  Treat lane width below this as single lane"
+    echo "  --lateral-correction-gain G  Optional lateral correction gain override"
+    echo "  --gt-centerline-as-left-lane BOOL  Use center line as left lane (default: false)"
     echo "  --arc-radius METERS         Override all arc radii and use a temp track"
     echo "  --build-unity-player        Build Unity player before running"
     echo "  --skip-unity-build-if-clean Skip Unity build if project is clean"
@@ -79,6 +91,30 @@ while [[ $# -gt 0 ]]; do
         --constant-speed)
             CONSTANT_SPEED=true
             shift
+            ;;
+        --target-lane)
+            TARGET_LANE="$2"
+            shift 2
+            ;;
+        --use-cv)
+            USE_CV=true
+            shift
+            ;;
+        --segmentation-checkpoint)
+            SEG_CHECKPOINT="$2"
+            shift 2
+            ;;
+        --single-lane-width-threshold)
+            SINGLE_LANE_WIDTH_THRESHOLD="$2"
+            shift 2
+            ;;
+        --lateral-correction-gain)
+            LATERAL_CORRECTION_GAIN="$2"
+            shift 2
+            ;;
+        --gt-centerline-as-left-lane)
+            GT_CENTERLINE_AS_LEFT_LANE="$2"
+            shift 2
             ;;
         --verbose)
             VERBOSE=true
@@ -170,7 +206,9 @@ if command -v lsof >/dev/null 2>&1; then
 fi
 
 echo "Launching Unity player..."
-"$UNITY_BUILD_PATH/Contents/MacOS/AVSimulation" --track-yaml "$TRACK_YAML_PATH" &
+"$UNITY_BUILD_PATH/Contents/MacOS/AVSimulation" \
+    --track-yaml "$TRACK_YAML_PATH" \
+    --gt-centerline-as-left-lane "$GT_CENTERLINE_AS_LEFT_LANE" &
 UNITY_PID=$!
 
 sleep 2
@@ -185,6 +223,21 @@ if [ -n "$RANDOM_SEED" ]; then
 fi
 if [ "$CONSTANT_SPEED" = true ]; then
     GT_ARGS+=(--constant-speed)
+fi
+if [ -n "$TARGET_LANE" ]; then
+    GT_ARGS+=(--target-lane "$TARGET_LANE")
+fi
+if [ "$USE_CV" = true ]; then
+    GT_ARGS+=(--use-cv)
+fi
+if [ "$USE_CV" = false ] && [ -n "$SEG_CHECKPOINT" ]; then
+    GT_ARGS+=(--segmentation-checkpoint "$SEG_CHECKPOINT")
+fi
+if [ -n "$SINGLE_LANE_WIDTH_THRESHOLD" ]; then
+    GT_ARGS+=(--single-lane-width-threshold "$SINGLE_LANE_WIDTH_THRESHOLD")
+fi
+if [ -n "$LATERAL_CORRECTION_GAIN" ]; then
+    GT_ARGS+=(--lateral-correction-gain "$LATERAL_CORRECTION_GAIN")
 fi
 
 if [ "$VERBOSE" = true ]; then

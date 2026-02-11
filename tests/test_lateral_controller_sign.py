@@ -33,3 +33,18 @@ def test_lateral_controller_heading_error_does_not_flip_on_straight() -> None:
     ref = _make_reference_point(x=1.0, y=8.0, heading=0.0)
     steering = controller.compute_steering(1.0, ref)
     assert steering > 0.0
+
+
+def test_lateral_controller_heading_and_lateral_negative_steer_left() -> None:
+    controller = LateralController(
+        kp=1.0,
+        ki=0.0,
+        kd=0.0,
+        max_steering=1.0,
+        heading_weight=0.5,
+        lateral_weight=0.5,
+    )
+    # Negative ref_x means target is left; negative heading means car needs left correction.
+    ref = _make_reference_point(x=-1.0, y=8.0, heading=0.0)
+    steering = controller.compute_steering(-0.5, ref)
+    assert steering < 0.0

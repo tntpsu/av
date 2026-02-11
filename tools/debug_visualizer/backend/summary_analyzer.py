@@ -5,6 +5,7 @@ Extracted from analyze_drive_overall.py for use in debug visualizer.
 
 import math
 import sys
+import json
 from pathlib import Path
 from typing import Dict, Optional
 
@@ -17,6 +18,76 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO_ROOT))
 
 from trajectory.utils import smooth_curvature_distance
+
+
+def _build_sign_mismatch_event(data: Dict, start_frame: int, end_frame: int) -> Dict:
+    """Build a straight sign-mismatch event record with a classified root cause."""
+    duration_frames = end_frame - start_frame + 1
+    duration_seconds = safe_float(
+        data['time'][end_frame] - data['time'][start_frame]
+    ) if data.get('time') is not None and len(data['time']) > end_frame else 0.0
+
+    err_series = data.get('total_error_scaled') if data.get('total_error_scaled') is not None else data.get('total_error')
+    steer_series = data.get('steering')
+    fb_series = data.get('feedback_steering')
+    before_series = data.get('steering_before_limits')
+
+    err_slice = err_series[start_frame:end_frame + 1] if err_series is not None else None
+    steer_slice = steer_series[start_frame:end_frame + 1] if steer_series is not None else None
+    fb_slice = fb_series[start_frame:end_frame + 1] if fb_series is not None else None
+    before_slice = before_series[start_frame:end_frame + 1] if before_series is not None else None
+
+    lanes = data.get('num_lanes_detected')
+    lanes_slice = lanes[start_frame:end_frame + 1] if lanes is not None else None
+    stale_ctrl = data.get('using_stale_perception')
+    stale_ctrl_slice = stale_ctrl[start_frame:end_frame + 1] if stale_ctrl is not None else None
+    stale_perc = data.get('using_stale_data')
+    stale_perc_slice = stale_perc[start_frame:end_frame + 1] if stale_perc is not None else None
+    override = data.get('straight_sign_flip_override_active')
+    override_slice = override[start_frame:end_frame + 1] if override is not None else None
+
+    stale_rate = 0.0
+    if stale_ctrl_slice is not None:
+        stale_rate = max(stale_rate, safe_float(float((stale_ctrl_slice > 0).mean()) * 100.0))
+    if stale_perc_slice is not None:
+        stale_rate = max(stale_rate, safe_float(float((stale_perc_slice > 0).mean()) * 100.0))
+    lanes_min = int(lanes_slice.min()) if lanes_slice is not None and lanes_slice.size > 0 else None
+
+    root_cause = "unknown"
+    if stale_rate > 0.0 or (lanes_min is not None and lanes_min < 2):
+        root_cause = "perception_stale_or_missing"
+    elif (
+        err_slice is not None and fb_slice is not None and before_slice is not None
+        and np.sign(np.mean(err_slice)) == np.sign(np.mean(fb_slice))
+        and np.sign(np.mean(before_slice)) != np.sign(np.mean(err_slice))
+    ):
+        root_cause = "rate_or_jerk_limit"
+    elif (
+        err_slice is not None and before_slice is not None and steer_slice is not None
+        and np.sign(np.mean(before_slice)) == np.sign(np.mean(err_slice))
+        and np.sign(np.mean(steer_slice)) != np.sign(np.mean(err_slice))
+    ):
+        root_cause = "smoothing"
+    elif (
+        err_slice is not None and fb_slice is not None
+        and np.sign(np.mean(fb_slice)) != np.sign(np.mean(err_slice))
+    ):
+        root_cause = "error_computation_or_sign"
+
+    override_rate = 0.0
+    if override_slice is not None and override_slice.size > 0:
+        override_rate = safe_float(float((override_slice > 0).mean()) * 100.0)
+
+    return {
+        "start_frame": int(start_frame),
+        "end_frame": int(end_frame),
+        "duration_frames": int(duration_frames),
+        "duration_seconds": safe_float(duration_seconds),
+        "root_cause": root_cause,
+        "stale_rate_percent": safe_float(stale_rate),
+        "lanes_min": lanes_min,
+        "override_rate_percent": safe_float(override_rate),
+    }
 
 
 def safe_float(value, default=0.0):
@@ -82,6 +153,10 @@ def analyze_recording_summary(recording_path: Path, analyze_to_failure: bool = F
             data['lateral_error'] = np.array(f['control/lateral_error'][:]) if 'control/lateral_error' in f else None
             data['heading_error'] = np.array(f['control/heading_error'][:]) if 'control/heading_error' in f else None
             data['total_error'] = np.array(f['control/total_error'][:]) if 'control/total_error' in f else None
+            data['total_error_scaled'] = (
+                np.array(f['control/total_error_scaled'][:])
+                if 'control/total_error_scaled' in f else None
+            )
             data['pid_integral'] = np.array(f['control/pid_integral'][:]) if 'control/pid_integral' in f else None
             data['emergency_stop'] = np.array(f['control/emergency_stop'][:]) if 'control/emergency_stop' in f else None
             data['path_curvature_input'] = (
@@ -100,6 +175,26 @@ def analyze_recording_summary(recording_path: Path, analyze_to_failure: bool = F
                 np.array(f['control/tuned_error_smoothing_alpha'][:])
                 if 'control/tuned_error_smoothing_alpha' in f else None
             )
+            data['steering_before_limits'] = (
+                np.array(f['control/steering_before_limits'][:])
+                if 'control/steering_before_limits' in f else None
+            )
+            data['feedback_steering'] = (
+                np.array(f['control/feedback_steering'][:])
+                if 'control/feedback_steering' in f else None
+            )
+            data['feedforward_steering'] = (
+                np.array(f['control/feedforward_steering'][:])
+                if 'control/feedforward_steering' in f else None
+            )
+            data['using_stale_perception'] = (
+                np.array(f['control/using_stale_perception'][:])
+                if 'control/using_stale_perception' in f else None
+            )
+            data['straight_sign_flip_override_active'] = (
+                np.array(f['control/straight_sign_flip_override_active'][:])
+                if 'control/straight_sign_flip_override_active' in f else None
+            )
             
             # Trajectory data
             data['ref_x'] = np.array(f['trajectory/reference_point_x'][:]) if 'trajectory/reference_point_x' in f else None
@@ -113,11 +208,24 @@ def analyze_recording_summary(recording_path: Path, analyze_to_failure: bool = F
             data['num_lanes_detected'] = np.array(f['perception/num_lanes_detected'][:]) if 'perception/num_lanes_detected' in f else None
             data['confidence'] = np.array(f['perception/confidence'][:]) if 'perception/confidence' in f else None
             data['using_stale_data'] = np.array(f['perception/using_stale_data'][:]) if 'perception/using_stale_data' in f else None
+            data['fit_points_left'] = (
+                f['perception/fit_points_left'][:] if 'perception/fit_points_left' in f else None
+            )
+            data['fit_points_right'] = (
+                f['perception/fit_points_right'][:] if 'perception/fit_points_right' in f else None
+            )
+            data['image_width'] = int(f['camera/image_width'][0]) if 'camera/image_width' in f else 640
             data['stale_reason'] = None
             if 'perception/stale_reason' in f:
                 stale_reasons = f['perception/stale_reason'][:]
                 if len(stale_reasons) > 0:
                     data['stale_reason'] = [s.decode('utf-8') if isinstance(s, bytes) else s for s in stale_reasons]
+            data['bad_events'] = None
+            if 'perception/perception_bad_events' in f:
+                bad_events_raw = f['perception/perception_bad_events'][:]
+                data['bad_events'] = [
+                    (b.decode('utf-8') if isinstance(b, bytes) else b) for b in bad_events_raw
+                ]
             
             # Ground truth (if available)
             data['gt_center'] = np.array(f['ground_truth/lane_center_x'][:]) if 'ground_truth/lane_center_x' in f else None
@@ -328,6 +436,10 @@ def analyze_recording_summary(recording_path: Path, analyze_to_failure: bool = F
     tuned_deadband_mean = 0.0
     tuned_deadband_max = 0.0
     tuned_smoothing_mean = 0.0
+    straight_sign_mismatch_rate = 0.0
+    straight_sign_mismatch_events = 0
+    straight_sign_mismatch_frames = 0
+    straight_sign_mismatch_events_list = []
     if data.get('is_straight') is not None and len(data['is_straight']) > 0:
         straight_mask = data['is_straight'][:n_frames] > 0
         straight_fraction = safe_float(np.sum(straight_mask) / max(1, n_frames) * 100.0)
@@ -344,6 +456,51 @@ def analyze_recording_summary(recording_path: Path, analyze_to_failure: bool = F
         if data.get('tuned_error_smoothing_alpha') is not None and len(data['tuned_error_smoothing_alpha']) > 0:
             tuned_smoothing = data['tuned_error_smoothing_alpha'][:n_frames]
             tuned_smoothing_mean = safe_float(np.mean(tuned_smoothing))
+
+        # Detect sign-mismatch events on straights (steering fighting scaled error)
+        error_series = data.get('total_error_scaled') if data.get('total_error_scaled') is not None else data.get('total_error')
+        if error_series is not None and len(error_series) > 0:
+            error_series = error_series[:n_frames]
+            steering_series = data['steering'][:n_frames]
+            valid_mask = straight_mask & (np.abs(error_series) >= 0.02) & (np.abs(steering_series) >= 0.02)
+            mismatch_mask = valid_mask & (np.sign(error_series) != np.sign(steering_series))
+            straight_sign_mismatch_frames = int(np.sum(mismatch_mask))
+            denom = int(np.sum(valid_mask))
+            if denom > 0:
+                straight_sign_mismatch_rate = safe_float(straight_sign_mismatch_frames / denom * 100.0)
+
+            # Count contiguous mismatch events (>=3 frames) and classify root cause.
+            min_event_len = 3
+            current = 0
+            event_start = None
+            for idx, flag in enumerate(mismatch_mask):
+                if flag:
+                    if current == 0:
+                        event_start = idx
+                    current += 1
+                else:
+                    if current >= min_event_len and event_start is not None:
+                        event_end = idx - 1
+                        straight_sign_mismatch_events += 1
+                        straight_sign_mismatch_events_list.append(
+                            _build_sign_mismatch_event(
+                                data=data,
+                                start_frame=event_start,
+                                end_frame=event_end,
+                            )
+                        )
+                    current = 0
+                    event_start = None
+            if current >= min_event_len and event_start is not None:
+                event_end = len(mismatch_mask) - 1
+                straight_sign_mismatch_events += 1
+                straight_sign_mismatch_events_list.append(
+                    _build_sign_mismatch_event(
+                        data=data,
+                        start_frame=event_start,
+                        end_frame=event_end,
+                    )
+                )
     
     # Oscillation frequency
     oscillation_frequency = 0.0
@@ -367,6 +524,9 @@ def analyze_recording_summary(recording_path: Path, analyze_to_failure: bool = F
     speed_error_max = 0.0
     speed_overspeed_rate = 0.0
     speed_limit_zero_rate = 0.0
+    speed_surge_count = 0
+    speed_surge_avg_drop = 0.0
+    speed_surge_p95_drop = 0.0
     if data.get('speed') is not None and data.get('ref_velocity') is not None:
         n_speed = min(len(data['speed']), len(data['ref_velocity']))
         if n_speed > 0:
@@ -400,9 +560,54 @@ def analyze_recording_summary(recording_path: Path, analyze_to_failure: bool = F
     lateral_jerk_max = 0.0
     config = _load_config()
     traj_cfg = config.get('trajectory', {})
+    perception_cfg = config.get('perception', {})
+    config_summary = {
+        "camera_fov": safe_float(traj_cfg.get("camera_fov", 0.0)),
+        "camera_height": safe_float(traj_cfg.get("camera_height", 0.0)),
+        "segmentation_fit_max_row_ratio": safe_float(
+            perception_cfg.get("segmentation_fit_max_row_ratio", 0.0)
+        ),
+    }
     curvature_smoothing_enabled = bool(traj_cfg.get('curvature_smoothing_enabled', False))
     curvature_window_m = float(traj_cfg.get('curvature_smoothing_window_m', 12.0))
     curvature_min_speed = float(traj_cfg.get('curvature_smoothing_min_speed', 2.0))
+
+    if data.get('speed') is not None:
+        curvature_series = None
+        if data.get('gt_path_curvature') is not None:
+            curvature_series = data['gt_path_curvature']
+        elif data.get('path_curvature_input') is not None:
+            curvature_series = data['path_curvature_input']
+        if curvature_series is not None:
+            n_surge = min(len(data['speed']), len(curvature_series))
+            speed_series = data['speed'][:n_surge]
+            curvature_series = curvature_series[:n_surge]
+            straight_threshold = float(traj_cfg.get('straight_speed_smoothing_curvature_threshold', 0.003))
+            min_drop = float(traj_cfg.get('speed_surge_min_drop', 1.0))
+            straight_mask = np.abs(curvature_series) <= straight_threshold
+            drops = []
+            i = 1
+            while i < len(speed_series) - 1:
+                if not straight_mask[i]:
+                    i += 1
+                    continue
+                if speed_series[i] > speed_series[i - 1] and speed_series[i] >= speed_series[i + 1]:
+                    max_idx = i
+                    j = i + 1
+                    while j < len(speed_series) - 1 and straight_mask[j]:
+                        if speed_series[j] <= speed_series[j - 1] and speed_series[j] < speed_series[j + 1]:
+                            drop = float(speed_series[max_idx] - speed_series[j])
+                            if drop >= min_drop:
+                                drops.append(drop)
+                            break
+                        j += 1
+                    i = j
+                else:
+                    i += 1
+            if drops:
+                speed_surge_count = len(drops)
+                speed_surge_avg_drop = safe_float(np.mean(drops))
+                speed_surge_p95_drop = safe_float(np.percentile(drops, 95))
 
     if data.get('speed') is not None and len(data['speed']) > 1 and len(data['time']) > 1:
         dt_series = np.diff(data['time'])
@@ -472,6 +677,7 @@ def analyze_recording_summary(recording_path: Path, analyze_to_failure: bool = F
     # 3. PERCEPTION QUALITY
     lane_detection_rate = safe_float(np.sum(data['num_lanes_detected'] >= 2) / n_frames * 100 if data['num_lanes_detected'] is not None and n_frames > 0 else 0.0)
     perception_confidence_mean = safe_float(np.mean(data['confidence']) if data['confidence'] is not None and len(data['confidence']) > 0 else 0.0)
+    single_lane_rate = safe_float(np.sum(data['num_lanes_detected'] < 2) / n_frames * 100 if data['num_lanes_detected'] is not None and n_frames > 0 else 0.0)
     
     # Count different types of perception issues
     perception_jumps_detected = 0
@@ -499,6 +705,12 @@ def analyze_recording_summary(recording_path: Path, analyze_to_failure: bool = F
     perception_stability_score = 100.0  # Start at 100, penalize for instability
     lane_position_variance = 0.0
     lane_width_variance = 0.0
+    lane_line_jitter_p95 = 0.0
+    lane_line_jitter_p99 = 0.0
+    reference_jitter_p95 = 0.0
+    reference_jitter_p99 = 0.0
+    right_lane_low_visibility_rate = 0.0
+    left_lane_low_visibility_rate = 0.0
     
     if data['left_lane_x'] is not None and data['right_lane_x'] is not None:
         left_lanes = data['left_lane_x'][:n_frames]
@@ -520,6 +732,49 @@ def analyze_recording_summary(recording_path: Path, analyze_to_failure: bool = F
             # Calculate variance (higher = less stable)
             lane_position_variance = safe_float(np.var(valid_centers))
             lane_width_variance = safe_float(np.var(valid_widths))
+
+            # Lane-line jitter: frame-to-frame movement (max of left/right)
+            if valid_centers.size > 1:
+                valid_left = left_lanes[valid_mask]
+                valid_right = right_lanes[valid_mask]
+                left_jitter = np.abs(np.diff(valid_left))
+                right_jitter = np.abs(np.diff(valid_right))
+                jitter = np.maximum(left_jitter, right_jitter)
+                if jitter.size > 0:
+                    lane_line_jitter_p95 = safe_float(np.percentile(jitter, 95))
+                    lane_line_jitter_p99 = safe_float(np.percentile(jitter, 99))
+
+        # Lane visibility based on fit points near image edges or too few points
+        if data.get('fit_points_left') is not None and data.get('fit_points_right') is not None:
+            min_points = 6
+            edge_margin = 12
+            width = data.get('image_width', 640)
+            left_low = 0
+            right_low = 0
+
+            def parse_points(raw) -> list:
+                if raw is None:
+                    return []
+                try:
+                    s = raw.decode('utf-8') if isinstance(raw, (bytes, bytearray, np.bytes_)) else str(raw)
+                    return json.loads(s)
+                except Exception:
+                    return []
+
+            for i in range(min(n_frames, len(data['fit_points_left']))):
+                left_pts = parse_points(data['fit_points_left'][i])
+                right_pts = parse_points(data['fit_points_right'][i])
+
+                left_xs = [p[0] for p in left_pts if isinstance(p, (list, tuple)) and len(p) >= 2]
+                right_xs = [p[0] for p in right_pts if isinstance(p, (list, tuple)) and len(p) >= 2]
+
+                if len(left_xs) < min_points or (left_xs and min(left_xs) < edge_margin):
+                    left_low += 1
+                if len(right_xs) < min_points or (right_xs and max(right_xs) > (width - edge_margin)):
+                    right_low += 1
+
+            right_lane_low_visibility_rate = safe_float(right_low / n_frames * 100 if n_frames > 0 else 0.0)
+            left_lane_low_visibility_rate = safe_float(left_low / n_frames * 100 if n_frames > 0 else 0.0)
             
             # Penalize high variance (instability)
             # Position variance > 0.1m² indicates instability
@@ -532,10 +787,25 @@ def analyze_recording_summary(recording_path: Path, analyze_to_failure: bool = F
             
             perception_stability_score = safe_float(max(0, perception_stability_score))
     
+    # Reference jitter (frame-to-frame movement)
+    if data.get('ref_x') is not None and len(data['ref_x']) > 1:
+        ref_jitter = np.abs(np.diff(data['ref_x'][:n_frames]))
+        if ref_jitter.size > 0:
+            reference_jitter_p95 = safe_float(np.percentile(ref_jitter, 95))
+            reference_jitter_p99 = safe_float(np.percentile(ref_jitter, 99))
+
     # Also penalize for detected instability events
     if perception_instability_detected > 0:
         instability_rate = (perception_instability_detected / n_frames) * 100
         perception_stability_score -= min(40, instability_rate * 2)  # -2 points per % of frames with instability
+        perception_stability_score = safe_float(max(0, perception_stability_score))
+
+    # Penalize high lane-line jitter even if not flagged as instability
+    if lane_line_jitter_p95 > 0.6:
+        perception_stability_score -= min(20, (lane_line_jitter_p95 - 0.6) * 40)
+        perception_stability_score = safe_float(max(0, perception_stability_score))
+    if right_lane_low_visibility_rate > 10.0:
+        perception_stability_score -= min(15, (right_lane_low_visibility_rate - 10.0) * 0.5)
         perception_stability_score = safe_float(max(0, perception_stability_score))
     
     # 4. TRAJECTORY QUALITY
@@ -804,27 +1074,47 @@ def analyze_recording_summary(recording_path: Path, analyze_to_failure: bool = F
 
             if gt_center is not None and p_center is not None:
                 align_diff = p_center - gt_center
-                alignment_summary = {
-                    "perception_vs_gt_mean": safe_float(np.mean(align_diff)),
-                    "perception_vs_gt_p95_abs": safe_float(np.percentile(np.abs(align_diff), 95)),
-                    "perception_vs_gt_rmse": safe_float(np.sqrt(np.mean(align_diff ** 2))),
-                }
+                if align_diff.size > 0:
+                    alignment_summary = {
+                        "perception_vs_gt_mean": safe_float(np.mean(align_diff)),
+                        "perception_vs_gt_p95_abs": safe_float(np.percentile(np.abs(align_diff), 95)),
+                        "perception_vs_gt_rmse": safe_float(np.sqrt(np.mean(align_diff ** 2))),
+                    }
+                else:
+                    alignment_summary = {
+                        "perception_vs_gt_mean": 0.0,
+                        "perception_vs_gt_p95_abs": 0.0,
+                        "perception_vs_gt_rmse": 0.0,
+                    }
             if data.get('road_frame_lane_center_error') is not None:
                 lane_center_error = data['road_frame_lane_center_error'][:n_bias]
                 if alignment_summary is None:
                     alignment_summary = {}
                 alignment_summary.update({
-                    "road_frame_lane_center_error_mean": safe_float(np.mean(lane_center_error)),
-                    "road_frame_lane_center_error_p95_abs": safe_float(np.percentile(np.abs(lane_center_error), 95)),
-                    "road_frame_lane_center_error_rmse": safe_float(np.sqrt(np.mean(lane_center_error ** 2))),
+                    "road_frame_lane_center_error_mean": (
+                        safe_float(np.mean(lane_center_error)) if lane_center_error.size > 0 else 0.0
+                    ),
+                    "road_frame_lane_center_error_p95_abs": (
+                        safe_float(np.percentile(np.abs(lane_center_error), 95))
+                        if lane_center_error.size > 0 else 0.0
+                    ),
+                    "road_frame_lane_center_error_rmse": (
+                        safe_float(np.sqrt(np.mean(lane_center_error ** 2)))
+                        if lane_center_error.size > 0 else 0.0
+                    ),
                 })
             if data.get('vehicle_frame_lookahead_offset') is not None:
                 vf_offset = data['vehicle_frame_lookahead_offset'][:n_bias]
                 if alignment_summary is None:
                     alignment_summary = {}
                 alignment_summary.update({
-                    "vehicle_frame_lookahead_offset_mean": safe_float(np.mean(vf_offset)),
-                    "vehicle_frame_lookahead_offset_p95_abs": safe_float(np.percentile(np.abs(vf_offset), 95)),
+                    "vehicle_frame_lookahead_offset_mean": (
+                        safe_float(np.mean(vf_offset)) if vf_offset.size > 0 else 0.0
+                    ),
+                    "vehicle_frame_lookahead_offset_p95_abs": (
+                        safe_float(np.percentile(np.abs(vf_offset), 95))
+                        if vf_offset.size > 0 else 0.0
+                    ),
                 })
     
     # Calculate overall score (0-100)
@@ -837,6 +1127,8 @@ def analyze_recording_summary(recording_path: Path, analyze_to_failure: bool = F
     perception_instability_penalty = safe_float(max(0, (100 - perception_stability_score) * 0.2))  # -0.2 points per stability point lost
     score -= min(20, perception_instability_penalty)  # Cap at 20 points
     score -= min(15, out_of_lane_time * 0.15)  # Penalize out-of-lane
+    if straight_sign_mismatch_rate > 5.0:
+        score -= min(12, straight_sign_mismatch_rate * 0.2)  # Penalize sign mismatches on straights
     score = safe_float(max(0, score))
     
     # Generate recommendations
@@ -849,6 +1141,10 @@ def analyze_recording_summary(recording_path: Path, analyze_to_failure: bool = F
         recommendations.append("Reduce oscillation - increase damping or reduce proportional gain")
     if lane_detection_rate < 90:
         recommendations.append("Improve lane detection - check perception model or CV fallback")
+    if lane_line_jitter_p95 > 0.6 or reference_jitter_p95 > 0.25:
+        recommendations.append("Reduce perception jitter - increase temporal smoothing or clamp lane-line deltas")
+    if right_lane_low_visibility_rate > 10 or single_lane_rate > 10:
+        recommendations.append("Right lane visibility drops - add single-lane fallback or widen camera FOV")
     if stale_perception_rate > 10:
         recommendations.append("Reduce stale data usage - relax jump detection threshold or improve perception")
     if speed_limit_zero_rate > 10:
@@ -859,6 +1155,8 @@ def analyze_recording_summary(recording_path: Path, analyze_to_failure: bool = F
         recommendations.append("Reduce PID integral accumulation - check integral reset mechanisms")
     if straight_oscillation_mean > 0.2:
         recommendations.append("Straight-line oscillation detected - increase deadband or smoothing")
+    if straight_sign_mismatch_events > 0:
+        recommendations.append("Steering sign mismatches on straights - relax straight smoothing or rate limits")
     if acceleration_p95 > 2.5:
         recommendations.append("Reduce longitudinal acceleration spikes - tune throttle/brake gains")
     if jerk_p95 > 5.0:
@@ -870,6 +1168,12 @@ def analyze_recording_summary(recording_path: Path, analyze_to_failure: bool = F
         key_issues.append(f"{out_of_lane_events} out-of-lane events")
     if lane_detection_rate < 80:
         key_issues.append(f"Low lane detection rate ({lane_detection_rate:.1f}%)")
+    if lane_line_jitter_p95 > 0.6:
+        key_issues.append(f"High lane-line jitter (p95={lane_line_jitter_p95:.2f}m)")
+    if reference_jitter_p95 > 0.25:
+        key_issues.append(f"High reference jitter (p95={reference_jitter_p95:.2f}m)")
+    if right_lane_low_visibility_rate > 10:
+        key_issues.append(f"Right lane low visibility ({right_lane_low_visibility_rate:.1f}%)")
     if stale_perception_rate > 20:
         key_issues.append(f"High stale data usage ({stale_perception_rate:.1f}%)")
     if speed_limit_zero_rate > 10:
@@ -880,6 +1184,8 @@ def analyze_recording_summary(recording_path: Path, analyze_to_failure: bool = F
         key_issues.append("High steering jerk")
     if straight_oscillation_mean > 0.2:
         key_issues.append("Straight-line oscillation detected")
+    if straight_sign_mismatch_events > 0:
+        key_issues.append("Steering sign mismatches on straights")
     if acceleration_p95 > 2.5:
         key_issues.append("High longitudinal acceleration")
     if jerk_p95 > 5.0:
@@ -903,7 +1209,10 @@ def analyze_recording_summary(recording_path: Path, analyze_to_failure: bool = F
                 "lane_detection_penalty": safe_float(min(20, (100 - lane_detection_rate) * 0.2)),
                 "stale_data_penalty": safe_float(min(15, stale_perception_rate * 0.15)),
                 "perception_instability_penalty": safe_float(min(20, perception_instability_penalty)),
-                "out_of_lane_penalty": safe_float(min(15, out_of_lane_time * 0.15))
+                "out_of_lane_penalty": safe_float(min(15, out_of_lane_time * 0.15)),
+                "straight_sign_mismatch_penalty": safe_float(
+                    min(12, straight_sign_mismatch_rate * 0.2) if straight_sign_mismatch_rate > 5.0 else 0.0
+                )
             }
         },
         "path_tracking": {
@@ -928,6 +1237,9 @@ def analyze_recording_summary(recording_path: Path, analyze_to_failure: bool = F
             "speed_error_max": safe_float(speed_error_max),
             "speed_overspeed_rate": safe_float(speed_overspeed_rate),
             "speed_limit_zero_rate": safe_float(speed_limit_zero_rate),
+            "speed_surge_count": int(speed_surge_count),
+            "speed_surge_avg_drop": safe_float(speed_surge_avg_drop),
+            "speed_surge_p95_drop": safe_float(speed_surge_p95_drop),
             "acceleration_mean": safe_float(acceleration_mean),
             "acceleration_p95": safe_float(acceleration_p95),
             "acceleration_max": safe_float(acceleration_max),
@@ -960,7 +1272,11 @@ def analyze_recording_summary(recording_path: Path, analyze_to_failure: bool = F
             "straight_oscillation_max": safe_float(straight_oscillation_max),
             "tuned_deadband_mean": safe_float(tuned_deadband_mean),
             "tuned_deadband_max": safe_float(tuned_deadband_max),
-            "tuned_smoothing_mean": safe_float(tuned_smoothing_mean)
+            "tuned_smoothing_mean": safe_float(tuned_smoothing_mean),
+            "straight_sign_mismatch_rate": safe_float(straight_sign_mismatch_rate),
+            "straight_sign_mismatch_events": int(straight_sign_mismatch_events),
+            "straight_sign_mismatch_frames": int(straight_sign_mismatch_frames),
+            "straight_sign_mismatch_events_list": straight_sign_mismatch_events_list
         },
         "perception_quality": {
             "lane_detection_rate": safe_float(lane_detection_rate),
@@ -972,7 +1288,14 @@ def analyze_recording_summary(recording_path: Path, analyze_to_failure: bool = F
             "stale_perception_rate": safe_float(stale_perception_rate),
             "perception_stability_score": safe_float(perception_stability_score),
             "lane_position_variance": safe_float(lane_position_variance),
-            "lane_width_variance": safe_float(lane_width_variance)
+            "lane_width_variance": safe_float(lane_width_variance),
+            "lane_line_jitter_p95": safe_float(lane_line_jitter_p95),
+            "lane_line_jitter_p99": safe_float(lane_line_jitter_p99),
+            "reference_jitter_p95": safe_float(reference_jitter_p95),
+            "reference_jitter_p99": safe_float(reference_jitter_p99),
+            "single_lane_rate": safe_float(single_lane_rate),
+            "right_lane_low_visibility_rate": safe_float(right_lane_low_visibility_rate),
+            "left_lane_low_visibility_rate": safe_float(left_lane_low_visibility_rate)
         },
         "trajectory_quality": {
             "trajectory_availability": safe_float(trajectory_availability),
@@ -991,6 +1314,7 @@ def analyze_recording_summary(recording_path: Path, analyze_to_failure: bool = F
             "out_of_lane_events_list": out_of_lane_events_list  # List of individual events with frame numbers
         },
         "recommendations": recommendations,
+        "config": config_summary,
         "time_series": {
             "time": data['time'].tolist(),
             "lateral_error": data['lateral_error'].tolist() if data['lateral_error'] is not None else None,

@@ -1,199 +1,297 @@
-# AV Stack Configuration File
-# All tunable parameters for the AV stack
-
-# Control Parameters
 control:
-  # Lateral (Steering) Control
   lateral:
-    kp: 2.2              # Restored: stable curve correction
-    ki: 0.004            # Restored: stable steady-state offset removal
-    kd: 0.5              # Restored: damping for stability
-    max_steering: 1.0    # INCREASED: Maximum steering angle (-1.0 to 1.0)
-                          # Analysis showed:
-                          #   - 16.5% of frames hit 0.5 limit on curves
-                          #   - Theoretical requirement for curve: ~1.19
-                          #   - Extreme error corrections need ~1.1 steering
-                          # Increased to 1.0 (full steering authority) to handle curves and corrections
-                          # This is 100% more steering authority than original 0.5
-    deadband: 0.01       # Restored: stable deadband
-    heading_weight: 0.75  # Restored: stable heading correction
-    lateral_weight: 0.25  # Restored: stable lateral balance
-    error_clip: 1.57    # INCREASED: Maximum error in radians (π/2 = 90 degrees, was π/4 = 45°)
-                        # Analysis showed error_clip=0.785 was limiting PID input, causing low effective gain
-                        # Increasing to π/2 allows PID to use more of the kp value (2.5)
-                        # This should improve effective gain from 13.7% to >40%
-    integral_limit: 0.10  # Restored: prevent windup
-    steering_smoothing_alpha: 0.7  # Low-pass filter on steering command (comfort)
-    control_mode: pid  # Lateral controller: pid|stanley
-    stanley_k: 1.5  # Stanley cross-track gain
-    stanley_soft_speed: 2.0  # Prevents high gain at very low speeds (m/s)
-    stanley_heading_weight: 1.0  # Weight on heading error term
-    feedback_gain_min: 1.1  # Feedback gain on higher curvature
-    feedback_gain_max: 1.4  # Feedback gain on gentle curves
-    feedback_gain_curvature_min: 0.003  # Full boost below this curvature (1/m)
-    feedback_gain_curvature_max: 0.03  # No boost above this curvature (1/m)
-    curve_feedforward_gain: 1.0  # Base feedforward steering gain
-    curve_feedforward_threshold: 0.012  # Curvature threshold to apply boost (1/m)
-    curve_feedforward_gain_min: 1.05  # Scheduled gain at low curvature
-    curve_feedforward_gain_max: 1.3  # Scheduled gain at high curvature
-    curve_feedforward_curvature_min: 0.003  # Start gain scheduling (1/m)
-    curve_feedforward_curvature_max: 0.015  # End gain scheduling (1/m)
-    curve_feedforward_curvature_clamp: 0.025  # Clamp curvature input (1/m)
-    straight_curvature_threshold: 0.01  # Straight detection threshold (1/m)
-    steering_rate_curvature_min: 0.003  # Begin rate scaling (1/m)
-    steering_rate_curvature_max: 0.015  # Max rate scaling (1/m)
-    steering_rate_scale_min: 0.9  # Minimum rate scale on sharp curves
-    speed_gain_min_speed: 4.0  # Speed (m/s) below which no extra steering gain is applied
-    speed_gain_max_speed: 10.0  # Speed (m/s) where max steering gain is reached
-    speed_gain_min: 1.0  # Steering gain multiplier at/below min speed
-    speed_gain_max: 1.6  # Steering gain multiplier at/above max speed
-    speed_gain_curvature_min: 0.002  # Apply speed gain fully below this curvature (1/m)
-    speed_gain_curvature_max: 0.008  # Fade speed gain out by this curvature (1/m)
-  
-  # Longitudinal (Speed) Control
+    kp: 1.1
+    ki: 0.004
+    kd: 0.18
+    max_steering: 0.6
+    deadband: 0.05  # Added deadband to ignore small perception drift errors (car is centered but perception drifts)
+    heading_weight: 0.5
+    lateral_weight: 0.5
+    error_clip: 1.57
+    integral_limit: 0.1
+    steering_smoothing_alpha: 0.9
+    control_mode: pid
+    stanley_k: 1.5
+    stanley_soft_speed: 2.0
+    stanley_heading_weight: 1.0
+    feedback_gain_min: 1.1
+    feedback_gain_max: 1.4
+    feedback_gain_curvature_min: 0.003
+    feedback_gain_curvature_max: 0.03
+    curve_feedforward_gain: 1.0
+    curve_feedforward_threshold: 0.012
+    curve_feedforward_gain_min: 1.0
+    curve_feedforward_gain_max: 1.15
+    curve_feedforward_curvature_min: 0.001  # Lowered from 0.003 to allow feedforward with current low curvature values
+    curve_feedforward_curvature_max: 0.015
+    curve_feedforward_curvature_clamp: 0.025
+    curvature_smoothing_alpha: 0.7
+    curvature_transition_threshold: 0.01
+    curvature_transition_alpha: 0.3
+    curve_feedforward_bins:
+    - min_curvature: 0.0
+      max_curvature: 0.02
+      gain_scale: 1.0
+    - min_curvature: 0.02
+      max_curvature: 10.0
+      gain_scale: 1.3
+    straight_curvature_threshold: 0.01
+    steering_rate_curvature_min: 0.003
+    steering_rate_curvature_max: 0.015
+    steering_rate_scale_min: 0.55
+    straight_sign_flip_error_threshold: 0.03
+    straight_sign_flip_rate: 0.5
+    straight_sign_flip_frames: 6
+    steering_jerk_limit: 0.12
+    speed_gain_min_speed: 4.0
+    speed_gain_max_speed: 10.0
+    speed_gain_min: 1.0
+    speed_gain_max: 1.5
+    speed_gain_curvature_min: 0.002
+    speed_gain_curvature_max: 0.008
   longitudinal:
-    kp: 0.25            # Faster acceleration tracking
-    ki: 0.02            # Reduce steady-state error
-    kd: 0.01            # Slight damping for stability
-    max_accel: 2.0      # Max accel (m/s^2), aligned with speed planner
-    max_decel: 2.5      # Max decel (m/s^2), aligned with speed planner
-    max_jerk: 1.5       # Max jerk (m/s^3), aligned with speed planner
-    max_jerk_min: 1.5   # Min jerk cap near target (m/s^3)
-    max_jerk_max: 6.0   # Max jerk cap when far from target (m/s^3)
-    jerk_error_min: 0.5 # Speed error where jerk cap starts ramping (m/s)
-    jerk_error_max: 3.0 # Speed error where max jerk is reached (m/s)
-    accel_feedforward_gain: 1.0  # Scale planner accel feedforward contribution
-    decel_feedforward_gain: 1.0  # Scale planner decel feedforward contribution
-    speed_for_jerk_alpha: 0.7    # Speed smoothing for accel/jerk caps (0-1)
-    jerk_cooldown_frames: 0      # Frames to damp after jerk cap triggers
-    jerk_cooldown_scale: 1.0     # Scale accel command during jerk cooldown
-    target_speed: 12.0    # Target speed in m/s
-    max_speed: 12.0      # Maximum allowed speed in m/s
-    speed_smoothing: 0.3 # Less smoothing for better speed tracking
-    speed_deadband: 0.03  # Smaller deadband to reduce steady-state error
-    throttle_limit_threshold: 0.90  # Start reducing throttle at this fraction of max_speed
-    throttle_reduction_factor: 0.15 # Throttle multiplier when near max speed
-    brake_aggression: 2.0 # Brake PID gain multiplier
-    throttle_rate_limit: 0.12 # Max throttle change per frame (responsiveness)
-    brake_rate_limit: 0.15    # Max brake change per frame (comfort)
-    throttle_smoothing_alpha: 0.6 # Low-pass filter on throttle command (comfort)
-    min_throttle_when_accel: 0.1 # Floor throttle when below target (prevents coasting)
-    target_speed_slew_rate_up: 1.5 # Base target speed increase per second (m/s^2)
-    target_speed_slew_rate_down: 2.5 # Base target speed decrease per second (m/s^2)
-    target_speed_slew_error_min: 0.5 # Error where slew starts ramping up (m/s)
-    target_speed_slew_error_max: 3.0 # Error where max slew is reached (m/s)
-    target_speed_slew_rate_up_min: 0.6 # Min slew rate up when near target (m/s^2)
-    target_speed_slew_rate_up_max: 2.0 # Max slew rate up when far from target (m/s^2)
-    target_speed_slew_rate_down_min: 1.0 # Min slew rate down when near target (m/s^2)
-    target_speed_slew_rate_down_max: 3.0 # Max slew rate down when far from target (m/s^2)
-    target_speed_stop_threshold: 0.5 # Consider stopped below this speed (m/s)
-    target_speed_restart_ramp_seconds: 2.5 # Ramp 0->target after stops (s)
-    launch_throttle_stop_threshold: 2.0 # Apply launch throttle cap below this speed (m/s)
-    launch_throttle_ramp_seconds: 2.5 # Ramp throttle cap after stops (s)
-    launch_throttle_cap_min: 0.15 # Initial throttle cap during launch
-    launch_throttle_cap_max: 0.55 # Final throttle cap after ramp
-    launch_throttle_rearm_hysteresis: 0.5 # Re-arm cap when speed exceeds stop threshold + this
-    launch_throttle_stop_hold_seconds: 0.5 # Require stop duration before arming launch cap
-
-# Trajectory Planning Parameters
+    kp: 0.25
+    ki: 0.02
+    kd: 0.01
+    max_accel: 1.2
+    max_decel: 2.4
+    max_jerk: 0.7
+    max_jerk_min: 1.5
+    max_jerk_max: 6.0
+    jerk_error_min: 0.5
+    jerk_error_max: 3.0
+    accel_feedforward_gain: 1.0
+    decel_feedforward_gain: 1.0
+    speed_for_jerk_alpha: 0.8
+    jerk_cooldown_frames: 5
+    jerk_cooldown_scale: 0.5
+    speed_error_to_accel_gain: 0.1
+    speed_error_deadband: 0.2
+    speed_error_gain_under: 0.12
+    speed_error_gain_over: 0.08
+    overspeed_accel_zero_threshold: 0.2
+    overspeed_brake_threshold: 0.4
+    overspeed_brake_min: 0.03
+    overspeed_brake_max: 0.18
+    overspeed_brake_gain: 0.25
+    accel_mode_threshold: 0.15
+    decel_mode_threshold: 0.1
+    speed_error_accel_threshold: 0.2
+    speed_error_brake_threshold: -0.6
+    mode_switch_min_time: 0.4
+    coast_hold_seconds: 0.7
+    coast_throttle_kp: 0.1
+    coast_throttle_max: 0.12
+    straight_throttle_cap: 0.3
+    straight_curvature_threshold: 0.003
+    accel_tracking_enabled: true
+    accel_tracking_error_scale: 0.35
+    accel_pid_kp: 0.5
+    accel_pid_ki: 0.02
+    accel_pid_kd: 0.02
+    throttle_curve_gamma: 1.4
+    throttle_curve_min: 0.0
+    speed_drag_gain: 0.035
+    accel_target_smoothing_alpha: 0.86
+    continuous_accel_control: true
+    continuous_accel_deadband: 0.05
+    startup_ramp_seconds: 4.0
+    startup_accel_limit: 0.7
+    startup_speed_threshold: 2.0
+    startup_throttle_cap: 0.15
+    startup_disable_accel_feedforward: true
+    low_speed_accel_limit: 0.8
+    low_speed_speed_threshold: 2.0
+    target_speed: 12.0
+    max_speed: 12.0
+    speed_smoothing: 0.3
+    speed_deadband: 0.03
+    throttle_limit_threshold: 0.9
+    throttle_reduction_factor: 0.15
+    brake_aggression: 2.0
+    throttle_rate_limit: 0.04
+    brake_rate_limit: 0.07
+    throttle_smoothing_alpha: 0.75
+    min_throttle_when_accel: 0.1
+    min_throttle_hold: 0.16
+    min_throttle_hold_speed: 4.0
+    target_speed_slew_rate_up: 1.5
+    target_speed_slew_rate_down: 2.5
+    target_speed_slew_error_min: 0.5
+    target_speed_slew_error_max: 3.0
+    target_speed_slew_rate_up_min: 0.6
+    target_speed_slew_rate_up_max: 2.0
+    target_speed_slew_rate_down_min: 1.0
+    target_speed_slew_rate_down_max: 3.0
+    target_speed_stop_threshold: 0.5
+    target_speed_restart_ramp_seconds: 2.5
+    launch_throttle_stop_threshold: 2.0
+    launch_throttle_ramp_seconds: 2.5
+    launch_throttle_cap_min: 0.15
+    launch_throttle_cap_max: 0.55
+    launch_throttle_rearm_hysteresis: 0.5
+    launch_throttle_stop_hold_seconds: 0.5
 trajectory:
-  lookahead_distance: 20.0  # How far ahead to plan in meters
-  point_spacing: 1.0        # Spacing between trajectory points in meters
-  target_speed: 12.0         # Target speed for trajectory in m/s
-  reference_lookahead: 9.0  # Lookahead distance for reference point in meters
-  dynamic_reference_lookahead: true  # Scale reference lookahead by speed/curvature
-  reference_lookahead_min: 3.0  # Minimum allowed lookahead (meters)
-  reference_lookahead_scale_min: 0.55  # Minimum scale when shortening lookahead
-  reference_lookahead_speed_min: 4.0  # Start shortening above this speed (m/s)
-  reference_lookahead_speed_max: 10.0  # Max shortening at/above this speed (m/s)
-  reference_lookahead_curvature_min: 0.002  # Full shortening below this curvature (1/m)
-  reference_lookahead_curvature_max: 0.015  # No shortening above this curvature (1/m)
-  use_vehicle_frame_lookahead_ref: true  # Use Unity vehicle-frame lookahead offset for ref_x
-  vehicle_frame_lookahead_scale: 1.0     # Scale ref_x when curvature sign is unknown
-  vehicle_frame_lookahead_scale_left: 1.0  # Scale ref_x on left turns (curv > 0)
-  vehicle_frame_lookahead_scale_right: 1.05  # Scale ref_x on right turns (curv < 0)
-  curvature_smoothing_enabled: true  # Smooth curvature using a distance-based window
-  curvature_smoothing_window_m: 12.0  # Smoothing window length in meters
-  curvature_smoothing_min_speed: 2.0  # Min speed used for distance accumulation (m/s)
-  max_lateral_accel: 1.3    # Curve speed cap (m/s^2) for curvature-based speed limiting
-  min_curve_speed: 3.2      # Minimum allowed speed when limiting on curvature
-  speed_limit_slew_rate: 1.0  # Max change in speed limit per second (m/s^2)
-  speed_limit_slew_rate_up: 2.5  # Max increase in speed limit per second (m/s^2)
-  speed_limit_slew_rate_down: 1.5  # Max decrease in speed limit per second (m/s^2)
-  speed_limit_preview_distance: 25.0  # Preview distance ahead for upcoming limits (m)
-  speed_limit_preview_decel: 1.0  # Comfortable decel used for preview cap (m/s^2)
+  lookahead_distance: 20.0
+  point_spacing: 1.0
+  target_speed: 12.0
+  reference_lookahead: 9.0
+  dynamic_reference_lookahead: true
+  reference_lookahead_min: 3.0
+  reference_lookahead_scale_min: 0.55
+  reference_lookahead_speed_min: 4.0
+  reference_lookahead_speed_max: 10.0
+  reference_lookahead_curvature_min: 0.002
+  reference_lookahead_curvature_max: 0.015
+  reference_lookahead_tight_curvature_threshold: 0.02
+  reference_lookahead_tight_scale: 0.7
+  use_vehicle_frame_lookahead_ref: false
+  vehicle_frame_lookahead_scale: 1.0
+  vehicle_frame_lookahead_scale_left: 1.0
+  vehicle_frame_lookahead_scale_right: 1.05
+  curvature_smoothing_enabled: true
+  curvature_smoothing_window_m: 12.0
+  curvature_smoothing_min_speed: 2.0
+  straight_speed_smoothing_alpha: 0.2
+  straight_speed_smoothing_curvature_threshold: 0.003
+  straight_speed_slew_rate_up: 0.4
+  straight_target_hold_seconds: 1.0
+  straight_target_hold_limit_delta: 0.3
+  target_speed_blend_window_m: 20.0
+  target_speed_blend_reset_seconds: 0.5
+  max_lateral_accel: 1.3
+  min_curve_speed: 3.2
+  curvature_bins:
+  - min_curvature: 0.0
+    max_curvature: 0.01
+    max_lateral_accel: 1.3
+    min_curve_speed: 3.2
+  - min_curvature: 0.01
+    max_curvature: 0.02
+    max_lateral_accel: 1.25
+    min_curve_speed: 3.1
+  - min_curvature: 0.02
+    max_curvature: 10.0
+    max_lateral_accel: 0.9
+    min_curve_speed: 3.0
+  speed_limit_slew_rate: 1.0
+  speed_limit_slew_rate_up: 2.5
+  speed_limit_slew_rate_down: 1.5
+  speed_limit_preview_distance: 12.0
+  speed_limit_preview_decel: 2.5
+  speed_limit_preview_stability_frames: 10
+  speed_limit_preview_change_delta: 0.3
+  speed_limit_preview_hold_curvature_threshold: 0.01
+  speed_limit_preview_hold_release_delta: 0.5
+  speed_limit_preview_hold_release_frames: 3
+  speed_limit_preview_hold_min_distance_margin: 0.5
+  curve_speed_preview_enabled: true
+  curve_speed_preview_lookahead_scale: 1.6
+  curve_speed_preview_distance: 10.0
+  curve_speed_preview_decel: 1.5
+  curve_speed_preview_min_curvature: 0.002
+  steering_speed_guard_enabled: true
+  steering_speed_guard_threshold: 0.55
+  steering_speed_guard_scale: 0.7
+  steering_speed_guard_min_speed: 3.0
+  curvature_limit_min_abs: 0.001
+  min_speed_limit_ratio: 0.6
+  min_speed_floor: 3.0
+  min_speed_curvature_max: 0.02
   speed_planner:
     enabled: true
-    max_accel: 2.5  # m/s^2
-    max_decel: 3.0  # m/s^2
-    max_jerk: 2.0   # m/s^3
+    max_accel: 2.0
+    max_decel: 2.5
+    max_jerk: 1.2
+    max_jerk_min: 0.6
+    max_jerk_max: 1.2
+    jerk_error_min: 0.3
+    jerk_error_max: 2.0
+    use_speed_dependent_limits: true
+    accel_speed_min: 0.0
+    accel_speed_max: 12.0
+    max_accel_at_speed_min: 1.2
+    max_accel_at_speed_max: 1.2
+    decel_speed_min: 0.0
+    decel_speed_max: 12.0
+    max_decel_at_speed_min: 2.5
+    max_decel_at_speed_max: 2.5
+    enforce_desired_speed_slew: true
     min_speed: 0.0
     launch_speed_floor: 2.0
     launch_speed_floor_threshold: 1.0
     reset_gap_seconds: 0.5
     sync_speed_threshold: 50.0
-  
-  # Camera/Image Parameters
-  image_width: 640          # Camera image width in pixels
-  image_height: 480         # Camera image height in pixels
-  camera_fov: 110.0         # Camera field of view in degrees (HORIZONTAL FOV - matches Unity Inspector)
-                             # Unity Inspector shows "Field of View Axis: Horizontal" with value 110°
-                             # This value is used directly as horizontal FOV for lateral coordinate conversion
-  camera_height: 1.2        # Camera height above ground in meters (matches Unity camera local Y)
-                             # From Unity scene: Camera local Y=0.5m + Car center Y=0.5m = 1.0m
-                             # Camera is positioned on hood edge (local z=0.5m forward from car center)
-  camera_offset_x: 0.0   # NEW: Lateral offset of camera from vehicle center (meters, positive = right)
-                         # RESET: Reverted to 0.0 - previous 0.47m caused massive overcorrection (112m bias)
-                         # Need to recalibrate more carefully with smaller increments
-                         # This compensates for camera misalignment and coordinate conversion bias
-  distance_scaling_factor: 0.875  # NEW: Distance scaling to account for camera pitch
-                                   # When camera looks down, point 8m straight ahead in camera space
-                                   # is actually closer in world space when projected to ground.
-                                   # Default: 7/8 = 0.875 (based on visualizer tuning where 7m aligns correctly)
-                                   # This corrects lane width from 8.5m to 7.0m
-  
-  # Center Lane Bias Correction
-  bias_correction_threshold: 10.0  # Pixels - if center lane offset > this, apply correction
-  
-  # Reference Point Smoothing
-  reference_smoothing: 0.80  # Exponential smoothing alpha (0.0-1.0, higher = more smoothing)
-                              # REVERTED: Back to 0.80 (was working better)
-                              # 0.77 caused 5.79x integral accumulation and diverging errors
-                              # 0.80 provides better stability (1.31x integral, converging errors)
-                              # Keep rate limit increase (0.15) for responsiveness
-  
-  # Lane Coefficient Temporal Filtering
-  lane_smoothing_alpha: 0.8  # Exponential smoothing for lane coefficients (0.0-1.0, higher = more smoothing)
-                              # REVERTED: Back to 0.8 (was working better)
-                              # Matches previous good state that had 1.31x integral accumulation
-                              # This prevents small pixel errors from amplifying into large meter errors
-
-# Speed Safety Limits
+    speed_error_gain: 0.0
+    speed_error_max_delta: 0.4
+    speed_error_deadband: 0.2
+    speed_limit_bias: -0.2
+    sync_under_target: false
+    sync_under_target_error: 0.2
+  image_width: 640
+  image_height: 480
+  camera_fov: 66.0
+  camera_height: 1.4
+  camera_offset_x: 0.0
+  distance_scaling_factor: 0.875
+  bias_correction_threshold: 10.0
+  reference_smoothing: 0.8
+  lane_smoothing_alpha: 0.8
+  center_spline_enabled: true
+  center_spline_degree: 2
+  center_spline_samples: 30
+  center_spline_alpha: 0.8
+  target_lane: right
+  target_lane_width_m: 3.6
+  ref_sign_flip_threshold: 0.12
+  ref_x_rate_limit: 0.08
+  multi_lookahead_enabled: true
+  multi_lookahead_far_scale: 1.4
+  multi_lookahead_blend_alpha: 0.25
+  multi_lookahead_curvature_threshold: 0.01
+  lane_position_smoothing_alpha: 0.75  # Increased from 0.65 to reduce impact of perception drift
+  ref_point_jump_clamp_x: 0.15
+  ref_point_jump_clamp_heading: 0.08
+  reference_x_max_abs: 3.2
 safety:
-  max_speed: 12.0           # Hard speed limit in m/s
-  emergency_brake_threshold: 1.5  # Emergency brake if speed > max_speed * this (LOWERED: was 2.0, too high - allows 15 m/s!)
-  speed_prevention_threshold: 0.90 # Start preventing acceleration at this fraction of max_speed
-  speed_prevention_brake_threshold: 0.95  # Apply light brake at this fraction of max_speed
-  speed_prevention_brake_amount: 0.2  # Light brake amount when preventing speed
-  
-  # NEW: Lateral error safety bounds (critical for long-term stability)
-  # Critical: 89.4% steering direction errors and 8.95m max error indicate need for safety bounds
-  max_lateral_error: 2.0  # Hard limit: If error exceeds 2.0m, apply aggressive correction
-  recovery_lateral_error: 1.0  # Recovery trigger: If error exceeds 1.0m, initiate recovery mode
-  emergency_stop_error: 4.0  # TEMP: relax stop threshold for analysis runs
-  
-  # Out-of-bounds detection (calculated from lane/car dimensions)
-  # Formula: threshold = (lane_width/2 - car_width/2 + allowed_outside_lane)
-  # This accounts for car width and allows some distance outside lane before emergency stop
-  # For 7m lane, 1.85m car, 1.0m allowed: threshold = 3.5 - 0.925 + 1.0 = 3.575m
-  lane_width: 7.0  # Lane width in meters (distance between lane lines)
-  car_width: 1.85  # Car width in meters (from Unity prefab scale.x)
-  allowed_outside_lane: 1.0  # Allowed distance outside lane before emergency stop (meters)
-                              # Car can be this far outside lane edge before triggering emergency stop
-
-# Logging
+  max_speed: 12.0
+  emergency_brake_threshold: 1.5
+  speed_prevention_threshold: 0.9
+  speed_prevention_brake_threshold: 0.95
+  speed_prevention_brake_amount: 0.2
+  max_lateral_error: 2.0
+  recovery_lateral_error: 1.0
+  emergency_stop_error: 4.0
+  lane_width: 7.0
+  car_width: 1.9
+  allowed_outside_lane: 1.0
 logging:
-  frame_log_interval: 30    # Log every N frames (30 = ~1 second at 30 FPS)
-  log_lateral_error: true   # Include lateral error in logs
-  log_reference_point: true # Include reference point in logs
-
+  frame_log_interval: 30
+  log_lateral_error: true
+  log_reference_point: true
+perception:
+  record_segmentation_mask: false
+  segmentation_fit_max_row_ratio: 0.75
+  segmentation_ransac_enabled: true  # Re-enabled - RANSAC was helping, not causing the issue
+  segmentation_ransac_residual_px: 10.0  # Tightened from 15.0 to catch outliers earlier (18.8px and 16.7px residuals were causing issues)
+  segmentation_ransac_min_inliers: 8  # Increased from 4 to require more inliers for robust fit
+  segmentation_ransac_max_trials: 100  # Tuned for good run - more thorough search
+  lane_width_min_m: 1.0
+  lane_width_max_m: 10.0
+  lane_center_change_clamp_m: 0.4
+  lane_width_change_clamp_m: 0.5
+  lane_line_change_clamp_m: 0.25  # Tuned for good run - catches 0.3m jumps
+  lane_side_sign_enforce: true
+  lane_side_sign_min_abs_m: 0.25  # Increased from 0.2 to be stricter about lane side violations
+  lane_center_ema_alpha: 0.15  # Decreased from 0.2 for EVEN MORE smoothing to reduce perception drift impact
+  lane_width_ema_alpha: 0.2  # Decreased from 0.3 for MORE smoothing to reduce perception drift impact
+  lane_center_gate_m: 0.3  # Tightened from 0.5 to catch smaller center jumps (perception was drifting 0.047m → 0.173m → -0.195m)
+  lane_width_gate_m: 0.6  # Tightened from 0.8 to reject larger width jumps
+  lane_center_ab_beta: 0.12
+  lane_width_ab_beta: 0.08
+lateral_control:
+  heading_weight: 0.5
+  lateral_weight: 0.5
+  steering_smoothing_alpha: 0.7
+  steering_rate_scale_min: 0.8
+  steering_jerk_limit: 0.0

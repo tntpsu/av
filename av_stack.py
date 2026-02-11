@@ -21,7 +21,11 @@ from bridge.client import UnityBridgeClient
 from perception.inference import LaneDetectionInference
 from trajectory.inference import TrajectoryPlanningInference
 from trajectory.speed_planner import SpeedPlanner, SpeedPlannerConfig
-from trajectory.utils import compute_reference_lookahead, curvature_smoothing_alpha
+from trajectory.utils import (
+    compute_reference_lookahead,
+    curvature_smoothing_alpha,
+    select_curvature_bin_limits,
+)
 from control.pid_controller import VehicleController
 from data.recorder import DataRecorder
 from data.formats.data_format import CameraFrame, VehicleState, ControlCommand, PerceptionOutput, TrajectoryOutput, RecordingFrame
@@ -41,6 +45,212 @@ logging.basicConfig(
     ]
 )
 logger = logging.getLogger(__name__)
+
+
+def clamp_lane_center_and_width(
+    current_center: float,
+    current_width: float,
+    previous_center: float,
+    previous_width: float,
+    max_center_delta: float,
+    max_width_delta: float,
+) -> Tuple[float, float, bool]:
+    """Clamp sudden lane center/width changes to avoid reference point jumps."""
+    clamped_center = current_center
+    clamped_width = current_width
+
+    if max_center_delta > 0.0:
+        center_delta = current_center - previous_center
+        if abs(center_delta) > max_center_delta:
+            clamped_center = previous_center + np.sign(center_delta) * max_center_delta
+
+    if max_width_delta > 0.0:
+        width_delta = current_width - previous_width
+        if abs(width_delta) > max_width_delta:
+            clamped_width = previous_width + np.sign(width_delta) * max_width_delta
+
+    was_clamped = (clamped_center != current_center) or (clamped_width != current_width)
+    return clamped_center, clamped_width, was_clamped
+
+
+def clamp_lane_line_deltas(
+    current_left: float,
+    current_right: float,
+    previous_left: float,
+    previous_right: float,
+    max_delta: float,
+) -> Tuple[float, float, bool]:
+    """Clamp sudden per-lane x changes to reduce perception jitter."""
+    if max_delta <= 0.0:
+        return current_left, current_right, False
+    clamped_left = previous_left + np.clip(current_left - previous_left, -max_delta, max_delta)
+    clamped_right = previous_right + np.clip(current_right - previous_right, -max_delta, max_delta)
+    was_clamped = (clamped_left != current_left) or (clamped_right != current_right)
+    return clamped_left, clamped_right, was_clamped
+
+
+def apply_lane_ema_gating(
+    lane_center: float,
+    lane_width: float,
+    lane_center_ema: float | None,
+    lane_width_ema: float | None,
+    center_gate_m: float,
+    width_gate_m: float,
+    center_alpha: float,
+    width_alpha: float,
+) -> Tuple[float, float, float, float, list, bool]:
+    """Apply EMA smoothing with measurement gating for lane center/width."""
+    gate_events: list = []
+    gated = False
+    center_alpha = min(max(center_alpha, 0.0), 1.0)
+    width_alpha = min(max(width_alpha, 0.0), 1.0)
+
+    if lane_center_ema is None or lane_width_ema is None:
+        return lane_center, lane_width, lane_center, lane_width, gate_events, gated
+
+    center_delta = abs(lane_center - lane_center_ema)
+    width_delta = abs(lane_width - lane_width_ema)
+    if center_gate_m > 0.0 and center_delta > center_gate_m:
+        gate_events.append("lane_center_gate_reject")
+        gated = True
+    if width_gate_m > 0.0 and width_delta > width_gate_m:
+        gate_events.append("lane_width_gate_reject")
+        gated = True
+    if gated:
+        return lane_center_ema, lane_width_ema, lane_center_ema, lane_width_ema, gate_events, gated
+
+    lane_center_ema = (center_alpha * lane_center) + ((1.0 - center_alpha) * lane_center_ema)
+    lane_width_ema = (width_alpha * lane_width) + ((1.0 - width_alpha) * lane_width_ema)
+    return lane_center_ema, lane_width_ema, lane_center_ema, lane_width_ema, gate_events, gated
+
+
+def apply_lane_alpha_beta_gating(
+    lane_center: float,
+    lane_width: float,
+    state_center: float | None,
+    state_center_vel: float | None,
+    state_width: float | None,
+    state_width_vel: float | None,
+    center_gate_m: float,
+    width_gate_m: float,
+    center_alpha: float,
+    center_beta: float,
+    width_alpha: float,
+    width_beta: float,
+    dt: float,
+) -> Tuple[float, float, float, float, float, float, list, bool]:
+    """Apply alpha-beta filter with measurement gating for lane center/width."""
+    gate_events: list = []
+    gated = False
+    center_alpha = min(max(center_alpha, 0.0), 1.0)
+    width_alpha = min(max(width_alpha, 0.0), 1.0)
+    center_beta = max(center_beta, 0.0)
+    width_beta = max(width_beta, 0.0)
+    dt = max(dt, 1e-3)
+
+    if state_center is None or state_center_vel is None:
+        state_center = lane_center
+        state_center_vel = 0.0
+    if state_width is None or state_width_vel is None:
+        state_width = lane_width
+        state_width_vel = 0.0
+
+    # Predict
+    pred_center = state_center + state_center_vel * dt
+    pred_width = state_width + state_width_vel * dt
+
+    center_residual = lane_center - pred_center
+    width_residual = lane_width - pred_width
+
+    if center_gate_m > 0.0 and abs(center_residual) > center_gate_m:
+        gate_events.append("lane_center_gate_reject")
+        gated = True
+    if width_gate_m > 0.0 and abs(width_residual) > width_gate_m:
+        gate_events.append("lane_width_gate_reject")
+        gated = True
+
+    if gated:
+        return (
+            pred_center,
+            pred_width,
+            pred_center,
+            state_center_vel,
+            pred_width,
+            state_width_vel,
+            gate_events,
+            gated,
+        )
+
+    # Update
+    updated_center = pred_center + center_alpha * center_residual
+    updated_center_vel = state_center_vel + (center_beta * center_residual / dt)
+    updated_width = pred_width + width_alpha * width_residual
+    updated_width_vel = state_width_vel + (width_beta * width_residual / dt)
+
+    return (
+        updated_center,
+        updated_width,
+        updated_center,
+        updated_center_vel,
+        updated_width,
+        updated_width_vel,
+        gate_events,
+        gated,
+    )
+
+
+def finalize_reject_reason(
+    reject_reason: Optional[str],
+    stale_data_reason: Optional[str],
+    clamp_events: Optional[list],
+) -> Optional[str]:
+    """Pick a human-readable rejection reason for diagnostics."""
+    if reject_reason:
+        return reject_reason
+    if stale_data_reason:
+        return stale_data_reason
+    if clamp_events:
+        return clamp_events[0]
+    return None
+
+
+def is_lane_low_visibility(
+    points: Optional[list],
+    image_width: float,
+    side: str,
+    min_points: int = 6,
+    edge_margin: int = 12,
+) -> bool:
+    """Return True when lane points are too few or hugging the image edge."""
+    if not points or len(points) < min_points:
+        return True
+    xs = [p[0] for p in points if isinstance(p, (list, tuple)) and len(p) >= 2]
+    if not xs:
+        return True
+    if side == "left":
+        return min(xs) < edge_margin
+    return max(xs) > (image_width - edge_margin)
+
+
+def estimate_single_lane_pair(
+    single_x_vehicle: float,
+    is_left_lane: bool,
+    last_width: Optional[float],
+    default_width: float,
+    width_min: float,
+    width_max: float,
+) -> Tuple[float, float]:
+    """Estimate missing lane boundary using last known width when available."""
+    width = default_width
+    if last_width is not None and width_min <= last_width <= width_max:
+        width = last_width
+    if is_left_lane:
+        left_lane_line_x = float(single_x_vehicle)
+        right_lane_line_x = float(single_x_vehicle + width)
+    else:
+        left_lane_line_x = float(single_x_vehicle - width)
+        right_lane_line_x = float(single_x_vehicle)
+    return left_lane_line_x, right_lane_line_x
 
 
 @dataclass
@@ -120,13 +330,59 @@ def _slew_limit_value(previous: float, target: float, max_rate: float, dt: float
     return float(previous + np.clip(target - previous, -max_delta, max_delta))
 
 
-def _apply_speed_limit_preview(base_speed: float, preview_limit: float,
-                               preview_distance: float, max_decel: float) -> float:
-    """Clamp speed so we can meet an upcoming limit with a comfortable decel."""
+def _apply_speed_limit_preview(
+    base_speed: float,
+    preview_limit: float,
+    preview_distance: float,
+    max_decel: float,
+) -> float:
+    """Return the preview-based cap (independent of current speed)."""
     if preview_limit <= 0.0 or preview_distance <= 0.0 or max_decel <= 0.0:
         return float(base_speed)
     max_allowed = math.sqrt(max((preview_limit ** 2) + (2.0 * max_decel * preview_distance), 0.0))
     return float(min(base_speed, max_allowed))
+
+
+def _apply_curve_speed_preview(
+    base_speed: float,
+    curvature: float,
+    max_lateral_accel: float,
+    min_curve_speed: float,
+    preview_distance: float,
+    max_decel: float,
+) -> Tuple[float, Optional[float]]:
+    """Preview-based cap using curvature lookahead (reduces speed before the curve)."""
+    if (
+        not isinstance(curvature, (int, float))
+        or abs(curvature) <= 1e-6
+        or max_lateral_accel <= 0.0
+        or preview_distance <= 0.0
+        or max_decel <= 0.0
+    ):
+        return float(base_speed), None
+    curve_speed = (float(max_lateral_accel) / abs(curvature)) ** 0.5
+    if min_curve_speed > 0.0:
+        curve_speed = max(curve_speed, float(min_curve_speed))
+    capped = _apply_speed_limit_preview(
+        float(base_speed),
+        float(curve_speed),
+        float(preview_distance),
+        float(max_decel),
+    )
+    return float(capped), float(curve_speed)
+
+
+def _preview_min_distance_allows_release(
+    preview_distance: float | None,
+    preview_min_distance: float | None,
+    margin: float,
+) -> bool:
+    """Return True if the preview min-distance suggests we can release the clamp."""
+    if not isinstance(preview_distance, (int, float)) or preview_distance <= 0.0:
+        return True
+    if not isinstance(preview_min_distance, (int, float)) or preview_min_distance <= 0.0:
+        return True
+    return float(preview_min_distance) <= float(margin)
 
 
 def _apply_target_speed_slew(previous: float, target: float, rate_up: float,
@@ -155,6 +411,24 @@ def _apply_restart_ramp(desired_speed: float, current_speed: float,
         ramp_limit = float(desired_speed) * min(1.0, elapsed / ramp_seconds)
         return float(min(desired_speed, ramp_limit)), ramp_start_time, True
     return float(desired_speed), None, False
+
+
+def _apply_steering_speed_guard(
+    desired_speed: float,
+    last_steering: Optional[float],
+    threshold: float,
+    scale: float,
+    min_speed: float,
+) -> Tuple[float, bool]:
+    """Reduce target speed when steering is saturated to prevent overshoot."""
+    if last_steering is None or threshold <= 0.0 or scale <= 0.0:
+        return float(desired_speed), False
+    if abs(float(last_steering)) < threshold:
+        return float(desired_speed), False
+    capped = max(float(min_speed), float(desired_speed) * float(scale))
+    if capped >= desired_speed:
+        return float(desired_speed), False
+    return float(capped), True
 
 
 def _is_teleport_jump(
@@ -193,15 +467,32 @@ class AVStack:
         control_cfg = config.get('control', {})
         trajectory_cfg = config.get('trajectory', {})
         safety_cfg = config.get('safety', {})
+        perception_cfg = config.get("perception", {}) if isinstance(config, dict) else {}
         
         # Bridge client
         self.bridge = UnityBridgeClient(bridge_url)
+        self.last_processed_unity_frame_count = None
         
         # Perception
         self.perception = LaneDetectionInference(
             model_path=model_path,
             segmentation_model_path=segmentation_model_path,
             segmentation_mode=use_segmentation,
+            segmentation_fit_max_row_ratio=float(
+                perception_cfg.get("segmentation_fit_max_row_ratio", 0.75)
+            ),
+            segmentation_ransac_enabled=bool(
+                perception_cfg.get("segmentation_ransac_enabled", False)
+            ),
+            segmentation_ransac_residual_px=float(
+                perception_cfg.get("segmentation_ransac_residual_px", 6.0)
+            ),
+            segmentation_ransac_min_inliers=int(
+                perception_cfg.get("segmentation_ransac_min_inliers", 10)
+            ),
+            segmentation_ransac_max_trials=int(
+                perception_cfg.get("segmentation_ransac_max_trials", 40)
+            ),
         )
         
         # Trajectory planning - Load from config
@@ -216,11 +507,29 @@ class AVStack:
             image_height=trajectory_cfg.get('image_height', 480.0),
             reference_smoothing=trajectory_cfg.get('reference_smoothing', 0.95),  # Increased to 0.95
             lane_smoothing_alpha=trajectory_cfg.get('lane_smoothing_alpha', 0.7),  # NEW: Lane coefficient smoothing
+            lane_position_smoothing_alpha=trajectory_cfg.get('lane_position_smoothing_alpha', 0.1),
+            ref_point_jump_clamp_x=trajectory_cfg.get('ref_point_jump_clamp_x', 0.0),
+            ref_point_jump_clamp_heading=trajectory_cfg.get('ref_point_jump_clamp_heading', 0.0),
+            reference_x_max_abs=trajectory_cfg.get('reference_x_max_abs', 0.0),
             camera_fov=trajectory_cfg.get('camera_fov', 75.0),
             camera_height=trajectory_cfg.get('camera_height', 1.2),
             bias_correction_threshold=trajectory_cfg.get('bias_correction_threshold', 10.0),
             camera_offset_x=trajectory_cfg.get('camera_offset_x', 0.0),  # NEW: Camera offset correction
-            distance_scaling_factor=trajectory_cfg.get('distance_scaling_factor', 0.875)  # NEW: Distance scaling (7/8 = 0.875)
+            distance_scaling_factor=trajectory_cfg.get('distance_scaling_factor', 0.875),  # NEW: Distance scaling (7/8 = 0.875)
+            target_lane=trajectory_cfg.get('target_lane', 'center'),
+            target_lane_width_m=trajectory_cfg.get('target_lane_width_m', 0.0),
+            ref_sign_flip_threshold=trajectory_cfg.get('ref_sign_flip_threshold', 0.0),
+            ref_x_rate_limit=trajectory_cfg.get('ref_x_rate_limit', 0.0),
+            multi_lookahead_enabled=trajectory_cfg.get('multi_lookahead_enabled', False),
+            multi_lookahead_far_scale=trajectory_cfg.get('multi_lookahead_far_scale', 1.5),
+            multi_lookahead_blend_alpha=trajectory_cfg.get('multi_lookahead_blend_alpha', 0.35),
+            multi_lookahead_curvature_threshold=trajectory_cfg.get(
+                'multi_lookahead_curvature_threshold', 0.01
+            ),
+            center_spline_enabled=trajectory_cfg.get('center_spline_enabled', False),
+            center_spline_degree=trajectory_cfg.get('center_spline_degree', 2),
+            center_spline_samples=trajectory_cfg.get('center_spline_samples', 20),
+            center_spline_alpha=trajectory_cfg.get('center_spline_alpha', 0.7)
         )
         
         # Control - Load from config
@@ -268,6 +577,87 @@ class AVStack:
             longitudinal_max_jerk_max=longitudinal_cfg.get('max_jerk_max', max(longitudinal_max_jerk, 6.0)),
             longitudinal_jerk_cooldown_frames=int(longitudinal_cfg.get('jerk_cooldown_frames', 0)),
             longitudinal_jerk_cooldown_scale=float(longitudinal_cfg.get('jerk_cooldown_scale', 0.6)),
+            longitudinal_min_throttle_hold=float(longitudinal_cfg.get('min_throttle_hold', 0.12)),
+            longitudinal_min_throttle_hold_speed=float(
+                longitudinal_cfg.get('min_throttle_hold_speed', 4.0)
+            ),
+            longitudinal_speed_error_to_accel_gain=float(longitudinal_cfg.get('speed_error_to_accel_gain', 0.5)),
+            longitudinal_speed_error_deadband=float(longitudinal_cfg.get('speed_error_deadband', 0.0)),
+            longitudinal_speed_error_gain_under=longitudinal_cfg.get('speed_error_gain_under'),
+            longitudinal_speed_error_gain_over=longitudinal_cfg.get('speed_error_gain_over'),
+            longitudinal_overspeed_accel_zero_threshold=float(
+                longitudinal_cfg.get('overspeed_accel_zero_threshold', 0.0)
+            ),
+            longitudinal_overspeed_brake_threshold=float(
+                longitudinal_cfg.get('overspeed_brake_threshold', 0.3)
+            ),
+            longitudinal_overspeed_brake_min=float(
+                longitudinal_cfg.get('overspeed_brake_min', 0.02)
+            ),
+            longitudinal_overspeed_brake_max=float(
+                longitudinal_cfg.get('overspeed_brake_max', 0.2)
+            ),
+            longitudinal_overspeed_brake_gain=float(
+                longitudinal_cfg.get('overspeed_brake_gain', 0.2)
+            ),
+            longitudinal_accel_mode_threshold=float(longitudinal_cfg.get('accel_mode_threshold', 0.2)),
+            longitudinal_decel_mode_threshold=float(longitudinal_cfg.get('decel_mode_threshold', 0.2)),
+            longitudinal_speed_error_accel_threshold=float(longitudinal_cfg.get('speed_error_accel_threshold', 0.2)),
+            longitudinal_speed_error_brake_threshold=float(longitudinal_cfg.get('speed_error_brake_threshold', -0.2)),
+            longitudinal_mode_switch_min_time=float(longitudinal_cfg.get('mode_switch_min_time', 0.4)),
+            longitudinal_coast_hold_seconds=float(longitudinal_cfg.get('coast_hold_seconds', 0.5)),
+            longitudinal_coast_throttle_kp=float(longitudinal_cfg.get('coast_throttle_kp', 0.1)),
+            longitudinal_coast_throttle_max=float(longitudinal_cfg.get('coast_throttle_max', 0.12)),
+            longitudinal_straight_throttle_cap=float(longitudinal_cfg.get('straight_throttle_cap', 0.45)),
+            longitudinal_straight_curvature_threshold=float(
+                longitudinal_cfg.get('straight_curvature_threshold', 0.003)
+            ),
+            longitudinal_accel_tracking_enabled=bool(longitudinal_cfg.get('accel_tracking_enabled', True)),
+            longitudinal_accel_tracking_error_scale=float(
+                longitudinal_cfg.get('accel_tracking_error_scale', 1.0)
+            ),
+            longitudinal_accel_pid_kp=float(longitudinal_cfg.get('accel_pid_kp', 0.4)),
+            longitudinal_accel_pid_ki=float(longitudinal_cfg.get('accel_pid_ki', 0.05)),
+            longitudinal_accel_pid_kd=float(longitudinal_cfg.get('accel_pid_kd', 0.02)),
+            longitudinal_throttle_curve_gamma=float(
+                longitudinal_cfg.get('throttle_curve_gamma', 1.0)
+            ),
+            longitudinal_throttle_curve_min=float(
+                longitudinal_cfg.get('throttle_curve_min', 0.0)
+            ),
+            longitudinal_speed_drag_gain=float(
+                longitudinal_cfg.get('speed_drag_gain', 0.0)
+            ),
+            longitudinal_accel_target_smoothing_alpha=float(
+                longitudinal_cfg.get('accel_target_smoothing_alpha', 0.6)
+            ),
+            longitudinal_continuous_accel_control=bool(
+                longitudinal_cfg.get('continuous_accel_control', False)
+            ),
+            longitudinal_continuous_accel_deadband=float(
+                longitudinal_cfg.get('continuous_accel_deadband', 0.05)
+            ),
+            longitudinal_startup_ramp_seconds=float(
+                longitudinal_cfg.get('startup_ramp_seconds', 2.5)
+            ),
+            longitudinal_startup_accel_limit=float(
+                longitudinal_cfg.get('startup_accel_limit', 1.2)
+            ),
+            longitudinal_startup_speed_threshold=float(
+                longitudinal_cfg.get('startup_speed_threshold', 2.0)
+            ),
+            longitudinal_startup_throttle_cap=float(
+                longitudinal_cfg.get('startup_throttle_cap', 0.0)
+            ),
+            longitudinal_startup_disable_accel_feedforward=bool(
+                longitudinal_cfg.get('startup_disable_accel_feedforward', True)
+            ),
+            longitudinal_low_speed_accel_limit=float(
+                longitudinal_cfg.get('low_speed_accel_limit', 0.0)
+            ),
+            longitudinal_low_speed_speed_threshold=float(
+                longitudinal_cfg.get('low_speed_speed_threshold', 0.0)
+            ),
             max_steering=lateral_cfg.get('max_steering', 0.5),
             lateral_deadband=lateral_cfg.get('deadband', 0.02),
             lateral_heading_weight=lateral_cfg.get('heading_weight', 0.5),
@@ -282,10 +672,18 @@ class AVStack:
             curve_feedforward_curvature_min=lateral_cfg.get('curve_feedforward_curvature_min', 0.005),
             curve_feedforward_curvature_max=lateral_cfg.get('curve_feedforward_curvature_max', 0.03),
             curve_feedforward_curvature_clamp=lateral_cfg.get('curve_feedforward_curvature_clamp', 0.03),
+            curve_feedforward_bins=lateral_cfg.get('curve_feedforward_bins', []),
+            curvature_smoothing_alpha=lateral_cfg.get('curvature_smoothing_alpha', 0.7),
+            curvature_transition_threshold=lateral_cfg.get('curvature_transition_threshold', 0.01),
+            curvature_transition_alpha=lateral_cfg.get('curvature_transition_alpha', 0.3),
             straight_curvature_threshold=lateral_cfg.get('straight_curvature_threshold', 0.01),
             steering_rate_curvature_min=lateral_cfg.get('steering_rate_curvature_min', 0.005),
             steering_rate_curvature_max=lateral_cfg.get('steering_rate_curvature_max', 0.03),
             steering_rate_scale_min=lateral_cfg.get('steering_rate_scale_min', 0.5),
+            straight_sign_flip_error_threshold=lateral_cfg.get('straight_sign_flip_error_threshold', 0.02),
+            straight_sign_flip_rate=lateral_cfg.get('straight_sign_flip_rate', 0.2),
+            straight_sign_flip_frames=lateral_cfg.get('straight_sign_flip_frames', 6),
+            steering_jerk_limit=lateral_cfg.get('steering_jerk_limit', 0.0),
             speed_gain_min_speed=lateral_cfg.get('speed_gain_min_speed', 4.0),
             speed_gain_max_speed=lateral_cfg.get('speed_gain_max_speed', 10.0),
             speed_gain_min=lateral_cfg.get('speed_gain_min', 1.0),
@@ -307,22 +705,57 @@ class AVStack:
         self.control_config = control_cfg
         self.trajectory_config = trajectory_cfg
         self.safety_config = safety_cfg
+        self.record_segmentation_mask = bool(
+            perception_cfg.get("record_segmentation_mask", False)
+        )
 
         # Speed planner (jerk-limited) configuration
         self.speed_planner_enabled = bool(speed_planner_cfg.get('enabled', False))
         self.speed_planner = None
+        self.speed_planner_speed_limit_bias = float(speed_planner_cfg.get('speed_limit_bias', 0.0))
         if self.speed_planner_enabled:
             default_dt = float(speed_planner_cfg.get('default_dt', 1.0 / 30.0))
             planner_config = SpeedPlannerConfig(
                 max_accel=longitudinal_max_accel,
                 max_decel=longitudinal_max_decel,
                 max_jerk=longitudinal_max_jerk,
+                max_jerk_min=float(speed_planner_cfg.get('max_jerk_min', 0.0)),
+                max_jerk_max=float(speed_planner_cfg.get('max_jerk_max', 0.0)),
+                jerk_error_min=float(speed_planner_cfg.get('jerk_error_min', 0.0)),
+                jerk_error_max=float(speed_planner_cfg.get('jerk_error_max', 0.0)),
                 min_speed=float(speed_planner_cfg.get('min_speed', 0.0)),
                 launch_speed_floor=float(speed_planner_cfg.get('launch_speed_floor', 0.0)),
                 launch_speed_floor_threshold=float(speed_planner_cfg.get('launch_speed_floor_threshold', 0.0)),
                 reset_gap_seconds=float(speed_planner_cfg.get('reset_gap_seconds', 0.5)),
                 sync_speed_threshold=float(speed_planner_cfg.get('sync_speed_threshold', 3.0)),
                 default_dt=default_dt,
+                speed_error_gain=float(speed_planner_cfg.get('speed_error_gain', 0.0)),
+                speed_error_max_delta=float(speed_planner_cfg.get('speed_error_max_delta', 0.0)),
+                speed_error_deadband=float(speed_planner_cfg.get('speed_error_deadband', 0.0)),
+                sync_under_target=bool(speed_planner_cfg.get('sync_under_target', True)),
+                sync_under_target_error=float(speed_planner_cfg.get('sync_under_target_error', 0.2)),
+                use_speed_dependent_limits=bool(
+                    speed_planner_cfg.get('use_speed_dependent_limits', False)
+                ),
+                accel_speed_min=float(speed_planner_cfg.get('accel_speed_min', 0.0)),
+                accel_speed_max=float(speed_planner_cfg.get('accel_speed_max', 0.0)),
+                max_accel_at_speed_min=float(
+                    speed_planner_cfg.get('max_accel_at_speed_min', 0.0)
+                ),
+                max_accel_at_speed_max=float(
+                    speed_planner_cfg.get('max_accel_at_speed_max', 0.0)
+                ),
+                decel_speed_min=float(speed_planner_cfg.get('decel_speed_min', 0.0)),
+                decel_speed_max=float(speed_planner_cfg.get('decel_speed_max', 0.0)),
+                max_decel_at_speed_min=float(
+                    speed_planner_cfg.get('max_decel_at_speed_min', 0.0)
+                ),
+                max_decel_at_speed_max=float(
+                    speed_planner_cfg.get('max_decel_at_speed_max', 0.0)
+                ),
+                enforce_desired_speed_slew=bool(
+                    speed_planner_cfg.get('enforce_desired_speed_slew', False)
+                ),
             )
             self.speed_planner = SpeedPlanner(planner_config)
         
@@ -331,6 +764,14 @@ class AVStack:
         if record_data:
             self.recorder = DataRecorder(recording_dir)
             logger.info(f"Data recording enabled: {self.recorder.output_file}")
+            self.recorder.metadata["segmentation_enabled"] = bool(use_segmentation)
+            if segmentation_model_path:
+                self.recorder.metadata["segmentation_checkpoint"] = str(
+                    segmentation_model_path
+                )
+            self.recorder.metadata["record_segmentation_mask"] = bool(
+                self.record_segmentation_mask
+            )
         else:
             logger.info("Data recording disabled")
         
@@ -343,6 +784,14 @@ class AVStack:
         # Initialize previous lane history for stale-data fallback paths
         self.previous_left_lane_x = None
         self.previous_right_lane_x = None
+        self.lane_center_ema = None
+        self.lane_width_ema = None
+        self.last_gt_lane_width = None
+        self.lane_center_ab = None
+        self.lane_center_ab_vel = None
+        self.lane_width_ab = None
+        self.lane_width_ab_vel = None
+        self.last_lane_filter_time = None
         
         # Track if emergency stop has been logged (to prevent repeated messages)
         self.emergency_stop_logged = False
@@ -366,6 +815,69 @@ class AVStack:
         # Speed limit smoothing state
         self.last_speed_limit: Optional[float] = None
         self.last_speed_limit_time: Optional[float] = None
+        # Speed limit preview hold state (prevents surge/slow oscillations before curves)
+        self.preview_hold_target: Optional[float] = None
+        self.preview_hold_active = False
+        self.preview_hold_curvature_threshold = float(
+            trajectory_cfg.get('speed_limit_preview_hold_curvature_threshold', 0.01)
+        )
+        self.preview_hold_release_delta = float(
+            trajectory_cfg.get('speed_limit_preview_hold_release_delta', 0.5)
+        )
+        self.preview_hold_min_distance_margin = float(
+            trajectory_cfg.get('speed_limit_preview_hold_min_distance_margin', 0.5)
+        )
+        self.preview_hold_release_frames = int(
+            trajectory_cfg.get('speed_limit_preview_hold_release_frames', 0)
+        )
+        self.preview_hold_release_count = 0
+        self.preview_clamp_active = False
+        self.preview_clamp_target: Optional[float] = None
+        # Target speed blending based on distance traveled (reduces surge/slow on short straights)
+        self.target_speed_blend_window_m = float(
+            trajectory_cfg.get('target_speed_blend_window_m', 0.0)
+        )
+        self.target_speed_blend_reset_seconds = float(
+            trajectory_cfg.get('target_speed_blend_reset_seconds', 0.5)
+        )
+        self.target_speed_blend_prev: Optional[float] = None
+        self.target_speed_blend_last_time: Optional[float] = None
+        # Straight-segment target speed smoothing state (reduce oscillations on straights)
+        self.straight_target_speed_smoothed: Optional[float] = None
+        self.straight_speed_smoothing_alpha = float(
+            trajectory_cfg.get('straight_speed_smoothing_alpha', 0.0)
+        )
+        self.straight_speed_smoothing_curvature_threshold = float(
+            trajectory_cfg.get('straight_speed_smoothing_curvature_threshold', 0.01)
+        )
+        self.straight_speed_slew_rate_up = float(
+            trajectory_cfg.get('straight_speed_slew_rate_up', 0.0)
+        )
+        self.straight_speed_last_time: Optional[float] = None
+        self.straight_target_hold_seconds = float(
+            trajectory_cfg.get('straight_target_hold_seconds', 0.0)
+        )
+        self.straight_target_hold_limit_delta = float(
+            trajectory_cfg.get('straight_target_hold_limit_delta', 0.2)
+        )
+        self.straight_target_hold_target: Optional[float] = None
+        self.straight_target_hold_start_time: Optional[float] = None
+        self.straight_target_hold_last_limit: Optional[float] = None
+        self.straight_target_hold_last_preview: Optional[float] = None
+        # Steering saturation speed guard (prevents overshoot on straights leading into curves)
+        self.steering_speed_guard_enabled = bool(
+            trajectory_cfg.get('steering_speed_guard_enabled', False)
+        )
+        self.steering_speed_guard_threshold = float(
+            trajectory_cfg.get('steering_speed_guard_threshold', 0.0)
+        )
+        self.steering_speed_guard_scale = float(
+            trajectory_cfg.get('steering_speed_guard_scale', 1.0)
+        )
+        self.steering_speed_guard_min_speed = float(
+            trajectory_cfg.get('steering_speed_guard_min_speed', 0.0)
+        )
+        self.last_steering_command: Optional[float] = None
         # Target speed smoothing state
         self.last_target_speed: Optional[float] = None
         self.last_target_speed_time: Optional[float] = None
@@ -382,8 +894,33 @@ class AVStack:
         self.curvature_smoothing_window_m = float(
             trajectory_cfg.get('curvature_smoothing_window_m', 12.0)
         )
+        # Preview stability filter (avoid oscillations from transient preview limits)
+        self.preview_limit_stability_frames = int(
+            trajectory_cfg.get('speed_limit_preview_stability_frames', 0)
+        )
+        self.preview_limit_change_delta = float(
+            trajectory_cfg.get('speed_limit_preview_change_delta', 0.2)
+        )
+        self.preview_limit_last: Optional[float] = None
+        self.preview_limit_streak = 0
         self.curvature_smoothing_min_speed = float(
             trajectory_cfg.get('curvature_smoothing_min_speed', 2.0)
+        )
+        # Curve speed preview (lookahead ramp before curve entry)
+        self.curve_speed_preview_enabled = bool(
+            trajectory_cfg.get('curve_speed_preview_enabled', False)
+        )
+        self.curve_speed_preview_lookahead_scale = float(
+            trajectory_cfg.get('curve_speed_preview_lookahead_scale', 1.5)
+        )
+        self.curve_speed_preview_distance = float(
+            trajectory_cfg.get('curve_speed_preview_distance', 12.0)
+        )
+        self.curve_speed_preview_decel = float(
+            trajectory_cfg.get('curve_speed_preview_decel', 2.5)
+        )
+        self.curve_speed_preview_min_curvature = float(
+            trajectory_cfg.get('curve_speed_preview_min_curvature', 0.002)
         )
         self.smoothed_path_curvature: Optional[float] = None
         self.last_curvature_time: Optional[float] = None
@@ -471,7 +1008,7 @@ class AVStack:
                         )
                     camera_wait_start = None
                 
-                image, timestamp = frame_data
+                image, timestamp, camera_frame_id = frame_data
                 now = time.time()
                 if last_camera_wall_time is not None and last_camera_timestamp is not None:
                     wall_gap = now - last_camera_wall_time
@@ -494,6 +1031,16 @@ class AVStack:
                         )
                 last_camera_wall_time = now
                 last_camera_timestamp = timestamp
+
+                if camera_frame_id is not None:
+                    if getattr(self, "last_camera_frame_id", None) == camera_frame_id:
+                        if self.frame_count % 30 == 0:
+                            logger.debug(
+                                f"[Frame {self.frame_count}] Skipping duplicate camera frame "
+                                f"(camera_frame_id={camera_frame_id})."
+                            )
+                        continue
+                    self.last_camera_frame_id = camera_frame_id
                 
                 # Get vehicle state
                 vehicle_state_dict = self.bridge.get_latest_vehicle_state()
@@ -502,7 +1049,12 @@ class AVStack:
                     continue
                 
                 # Process frame
-                self._process_frame(image, timestamp, vehicle_state_dict)
+                self._process_frame(
+                    image,
+                    timestamp,
+                    vehicle_state_dict,
+                    camera_frame_id=camera_frame_id,
+                )
                 
                 self.frame_count += 1
 
@@ -546,7 +1098,13 @@ class AVStack:
             delay = min(delay * 1.2, 2.0)  # Exponential backoff, max 2s
         return False
     
-    def _process_frame(self, image: np.ndarray, timestamp: float, vehicle_state_dict: dict):
+    def _process_frame(
+        self,
+        image: np.ndarray,
+        timestamp: float,
+        vehicle_state_dict: dict,
+        camera_frame_id: int | None = None,
+    ):
         """
         Process a single frame through the AV stack.
         
@@ -556,6 +1114,18 @@ class AVStack:
             vehicle_state_dict: Vehicle state dictionary
         """
         process_start = time.time()
+        unity_frame_count = vehicle_state_dict.get(
+            "unityFrameCount", vehicle_state_dict.get("unity_frame_count")
+        )
+        if unity_frame_count is not None:
+            if self.last_processed_unity_frame_count == unity_frame_count:
+                if self.frame_count % 30 == 0:
+                    logger.debug(
+                        f"[Frame {self.frame_count}] Skipping duplicate Unity frame "
+                        f"(unity_frame_count={unity_frame_count})."
+                    )
+                return
+            self.last_processed_unity_frame_count = unity_frame_count
         # Track timestamp for perception frozen detection
         # CRITICAL: Save previous timestamp BEFORE updating (we need it for comparisons)
         prev_timestamp = self.last_timestamp if hasattr(self, 'last_timestamp') else None
@@ -770,6 +1340,42 @@ class AVStack:
                             logger.info(f"Saved debug visualization: {save_path}, histogram: {hist_path}")
                 except Exception as e:
                     logger.warning(f"Failed to create debug visualization: {e}")
+
+        segmentation_mask_png = None
+        if detection_method == "segmentation":
+            seg_debug = getattr(self.perception, "last_segmentation_debug", None)
+            if isinstance(seg_debug, dict):
+                if fit_points_left is None:
+                    fit_points_left = seg_debug.get("fit_points_left")
+                if fit_points_right is None:
+                    fit_points_right = seg_debug.get("fit_points_right")
+                if self.record_segmentation_mask:
+                    mask = seg_debug.get("mask")
+                    if mask is not None:
+                        try:
+                            mask_uint8 = np.asarray(mask, dtype=np.uint8)
+                            success, encoded = cv2.imencode(".png", mask_uint8)
+                            if success:
+                                segmentation_mask_png = encoded.tobytes()
+                                if not getattr(self, "_segmentation_mask_logged", False):
+                                    logger.info(
+                                        "[SEGMENTATION MASK] Encoded mask bytes=%d shape=%s dtype=%s",
+                                        len(segmentation_mask_png),
+                                        getattr(mask_uint8, "shape", None),
+                                        getattr(mask_uint8, "dtype", None),
+                                    )
+                                    self._segmentation_mask_logged = True
+                        except Exception as e:
+                            logger.debug(f"Failed to encode segmentation mask: {e}")
+                    if not getattr(self, "_segmentation_mask_logged", False):
+                        logger.info(
+                            "[SEGMENTATION MASK] record=%s has_mask=%s shape=%s dtype=%s",
+                            self.record_segmentation_mask,
+                            mask is not None,
+                            getattr(mask, "shape", None),
+                            getattr(mask, "dtype", None),
+                        )
+                        self._segmentation_mask_logged = True
         
         # Calculate lane line positions at lookahead distance (for trajectory centering verification)
         left_lane_line_x = None
@@ -784,6 +1390,8 @@ class AVStack:
         # NEW: Diagnostic fields for perception instability (initialized to None, set only when instability detected)
         actual_detected_left_lane_x = None
         actual_detected_right_lane_x = None
+        reject_reason = None
+        clamp_events = []
         instability_width_change = None
         instability_center_shift = None
         
@@ -822,6 +1430,34 @@ class AVStack:
                 'speed_limit_preview_distance',
                 self.trajectory_config.get('speed_limit_preview_distance', 0.0),
             )
+        speed_limit_preview_min_distance = vehicle_state_dict.get(
+            'speedLimitPreviewMinDistance',
+            vehicle_state_dict.get('speed_limit_preview_min_distance', 0.0),
+        )
+        speed_limit_preview_mid = vehicle_state_dict.get(
+            'speedLimitPreviewMid',
+            vehicle_state_dict.get('speed_limit_preview_mid', 0.0),
+        )
+        speed_limit_preview_mid_distance = vehicle_state_dict.get(
+            'speedLimitPreviewMidDistance',
+            vehicle_state_dict.get('speed_limit_preview_mid_distance', 0.0),
+        )
+        speed_limit_preview_mid_min_distance = vehicle_state_dict.get(
+            'speedLimitPreviewMidMinDistance',
+            vehicle_state_dict.get('speed_limit_preview_mid_min_distance', 0.0),
+        )
+        speed_limit_preview_long = vehicle_state_dict.get(
+            'speedLimitPreviewLong',
+            vehicle_state_dict.get('speed_limit_preview_long', 0.0),
+        )
+        speed_limit_preview_long_distance = vehicle_state_dict.get(
+            'speedLimitPreviewLongDistance',
+            vehicle_state_dict.get('speed_limit_preview_long_distance', 0.0),
+        )
+        speed_limit_preview_long_min_distance = vehicle_state_dict.get(
+            'speedLimitPreviewLongMinDistance',
+            vehicle_state_dict.get('speed_limit_preview_long_min_distance', 0.0),
+        )
         camera_lookahead_screen_y = vehicle_state_dict.get('cameraLookaheadScreenY')
         if camera_lookahead_screen_y is None:
             camera_lookahead_screen_y = vehicle_state_dict.get('camera_lookahead_screen_y', -1.0)
@@ -1040,54 +1676,140 @@ class AVStack:
                     left_x_vehicle, right_x_vehicle = right_x_vehicle, left_x_vehicle
                     calculated_lane_width = right_x_vehicle - left_x_vehicle
                 
+                # CRITICAL FIX: Validate lane side consistency (left should be negative, right positive)
+                perception_cfg = self.config.get("perception", {}) if isinstance(self.config, dict) else {}
+                enforce_lane_sign = bool(perception_cfg.get("lane_side_sign_enforce", False))
+                sign_min_abs = float(perception_cfg.get("lane_side_sign_min_abs_m", 0.2))
+                if enforce_lane_sign and \
+                   self.previous_left_lane_x is not None and self.previous_right_lane_x is not None:
+                    skip_sign_enforce = False
+                    road_offset = vehicle_state_dict.get('roadFrameLaneCenterOffset')
+                    if road_offset is not None:
+                        lane_width_est = float(self.safety_config.get('lane_width', 7.2))
+                        lane_edge_threshold = max(0.1, (lane_width_est / 2.0) - 0.1)
+                        if abs(float(road_offset)) > lane_edge_threshold:
+                            skip_sign_enforce = True
+                            clamp_events.append("lane_side_sign_skip_out_of_bounds")
+                    if not skip_sign_enforce and (left_x_vehicle > -sign_min_abs or right_x_vehicle < sign_min_abs):
+                        clamp_events.append("lane_side_sign_violation")
+                        actual_detected_left_lane_x = left_x_vehicle
+                        actual_detected_right_lane_x = right_x_vehicle
+                        logger.warning(
+                            f"[Frame {self.frame_count}] [PERCEPTION VALIDATION] Lane side sign violation "
+                            f"(left={left_x_vehicle:.3f}m right={right_x_vehicle:.3f}m). Using previous."
+                        )
+                        left_x_vehicle = float(self.previous_left_lane_x)
+                        right_x_vehicle = float(self.previous_right_lane_x)
+                        calculated_lane_width = right_x_vehicle - left_x_vehicle
+                        using_stale_data = True
+                        stale_data_reason = "lane_side_sign_violation"
+                        reject_reason = reject_reason or stale_data_reason
+
                 # CRITICAL FIX: Validate lane width in vehicle coordinates (meters)
                 # This catches perception failures that weren't caught in pixel space
                 # Example: Frame 100 had width=1.712m (should be ~7.0m) - this would catch it!
-                min_lane_width = 2.0  # Minimum reasonable lane width (meters)
-                max_lane_width = 10.0  # Maximum reasonable lane width (meters)
+                perception_cfg = self.config.get("perception", {}) if isinstance(self.config, dict) else {}
+                min_lane_width = float(perception_cfg.get("lane_width_min_m", 2.0))
+                max_lane_width = float(perception_cfg.get("lane_width_max_m", 10.0))
                 
                 if calculated_lane_width < min_lane_width or calculated_lane_width > max_lane_width:
-                    logger.error(f"[Frame {self.frame_count}] [PERCEPTION VALIDATION] ❌ INVALID LANE WIDTH: {calculated_lane_width:.3f}m "
-                               f"(expected {min_lane_width}-{max_lane_width}m)")
-                    logger.error(f"[Frame {self.frame_count}]   Left lane: {left_x_vehicle:.3f}m, Right lane: {right_x_vehicle:.3f}m")
+                    logger.error(
+                        f"[Frame {self.frame_count}] [PERCEPTION VALIDATION] ❌ INVALID LANE WIDTH: "
+                        f"{calculated_lane_width:.3f}m (expected {min_lane_width}-{max_lane_width}m)"
+                    )
+                    logger.error(
+                        f"[Frame {self.frame_count}]   Left lane: {left_x_vehicle:.3f}m, "
+                        f"Right lane: {right_x_vehicle:.3f}m"
+                    )
                     
-                    # CRITICAL: On first frame, we have no previous data to fall back to
-                    # If width is invalid but not catastrophically wrong, still use it
+                    filled_from_visibility = False
+                    if self.previous_left_lane_x is not None and self.previous_right_lane_x is not None:
+                        left_low = is_lane_low_visibility(fit_points_left, image_width, "left")
+                        right_low = is_lane_low_visibility(fit_points_right, image_width, "right")
+                        last_width = float(self.previous_right_lane_x - self.previous_left_lane_x)
+
+                        if right_low and not left_low:
+                            left_lane_line_x, right_lane_line_x = estimate_single_lane_pair(
+                                single_x_vehicle=float(left_x_vehicle),
+                                is_left_lane=True,
+                                last_width=last_width,
+                                default_width=7.0,
+                                width_min=min_lane_width,
+                                width_max=max_lane_width,
+                            )
+                            calculated_lane_width = right_lane_line_x - left_lane_line_x
+                            logger.warning(
+                                f"[Frame {self.frame_count}] [PERCEPTION VALIDATION] "
+                                "Right lane low visibility; using left lane + last width to fill right."
+                            )
+                            using_stale_data = True
+                            stale_data_reason = "right_lane_low_visibility"
+                            reject_reason = reject_reason or stale_data_reason
+                            filled_from_visibility = True
+                        elif left_low and not right_low:
+                            left_lane_line_x, right_lane_line_x = estimate_single_lane_pair(
+                                single_x_vehicle=float(right_x_vehicle),
+                                is_left_lane=False,
+                                last_width=last_width,
+                                default_width=7.0,
+                                width_min=min_lane_width,
+                                width_max=max_lane_width,
+                            )
+                            calculated_lane_width = right_lane_line_x - left_lane_line_x
+                            logger.warning(
+                                f"[Frame {self.frame_count}] [PERCEPTION VALIDATION] "
+                                "Left lane low visibility; using right lane + last width to fill left."
+                            )
+                            using_stale_data = True
+                            stale_data_reason = "left_lane_low_visibility"
+                            reject_reason = reject_reason or stale_data_reason
+                            filled_from_visibility = True
+
                     is_first_frame = (self.frame_count == 0)
-                    if is_first_frame:
-                        # First frame: Be EXTREMELY lenient - we have no previous data to fall back to
-                        # Only reject if width is catastrophically wrong (<0.1m or >20m)
-                        # Even if width is outside normal range (2-10m), use it on first frame
-                        catastrophic_min = 0.1  # Less than 0.1m is definitely wrong (was 0.5m)
-                        catastrophic_max = 20.0  # More than 20m is definitely wrong (was 15.0m)
+                    if is_first_frame and not filled_from_visibility:
+                        catastrophic_min = 0.1
+                        catastrophic_max = 20.0
                         if calculated_lane_width < catastrophic_min or calculated_lane_width > catastrophic_max:
-                            logger.error(f"[Frame {self.frame_count}]   FIRST FRAME: Catastrophically wrong width ({calculated_lane_width:.3f}m) - rejecting!")
+                            logger.error(
+                                f"[Frame {self.frame_count}]   FIRST FRAME: Catastrophically wrong width "
+                                f"({calculated_lane_width:.3f}m) - rejecting!"
+                            )
                             left_lane_line_x = None
                             right_lane_line_x = None
+                            clamp_events.append("invalid_width_reject")
+                            clamp_events.append("invalid_width_reject")
                         else:
-                            # Width is unusual but not catastrophic - ALWAYS use it on first frame
-                            # Better to have some data (even if imperfect) than 0.0
                             if calculated_lane_width < 2.0 or calculated_lane_width > 10.0:
-                                logger.warning(f"[Frame {self.frame_count}] ⚠️  FIRST FRAME: Invalid width ({calculated_lane_width:.3f}m) but not catastrophic. Using detection anyway (better than 0.0).")
+                                logger.warning(
+                                    f"[Frame {self.frame_count}] ⚠️  FIRST FRAME: Invalid width "
+                                    f"({calculated_lane_width:.3f}m) but not catastrophic. Using detection anyway."
+                                )
                             else:
-                                logger.info(f"[Frame {self.frame_count}] ✓ FIRST FRAME: Valid width ({calculated_lane_width:.3f}m)")
+                                logger.info(
+                                    f"[Frame {self.frame_count}] ✓ FIRST FRAME: Valid width "
+                                    f"({calculated_lane_width:.3f}m)"
+                                )
                             left_lane_line_x = float(left_x_vehicle)
                             right_lane_line_x = float(right_x_vehicle)
-                            # Not using stale data - this is the actual detection (even if imperfect)
-                            using_stale_data = False
-                            stale_data_reason = None
-                    else:
-                        # Subsequent frames: Reject and use stale data
-                        logger.error(f"[Frame {self.frame_count}]   This is a perception failure - rejecting detection!")
+                            if not using_stale_data:
+                                using_stale_data = False
+                                stale_data_reason = None
+                    elif not filled_from_visibility:
+                        logger.error(
+                            f"[Frame {self.frame_count}]   This is a perception failure - rejecting detection!"
+                        )
                         left_lane_line_x = None
                         right_lane_line_x = None
-                        # Track that we're using stale data due to invalid width
                         if self.previous_left_lane_x is not None and self.previous_right_lane_x is not None:
                             using_stale_data = True
                             stale_data_reason = "invalid_width"
+                            reject_reason = reject_reason or stale_data_reason
                             left_lane_line_x = float(self.previous_left_lane_x)
                             right_lane_line_x = float(self.previous_right_lane_x)
-                            logger.warning(f"[Frame {self.frame_count}] Using STALE perception data (reason: {stale_data_reason}) - invalid lane width detected")
+                            logger.warning(
+                                f"[Frame {self.frame_count}] Using STALE perception data "
+                                f"(reason: {stale_data_reason}) - invalid lane width detected"
+                            )
                 else:
                     # NEW: Validate polynomial coefficients to catch extreme curves
                     # Even if width at lookahead is valid, polynomial can produce extreme values elsewhere
@@ -1156,6 +1878,7 @@ class AVStack:
                             # Subsequent frames: Reject and use stale data
                             left_lane_line_x = None
                             right_lane_line_x = None
+                            clamp_events.append("extreme_coeffs_reject")
                             # Track that we're using stale data due to extreme coefficients
                             if self.previous_left_lane_x is not None and self.previous_right_lane_x is not None:
                                 using_stale_data = True
@@ -1344,8 +2067,9 @@ class AVStack:
                                             f"(left={left_jump:.3f}m, right={right_jump:.3f}m, threshold={max_jump_threshold:.3f}m)"
                                         )
                                         # Skip stale handling for segmentation
-                                        using_stale_data = False
-                                        stale_data_reason = None
+                                        if not using_stale_data:
+                                            using_stale_data = False
+                                            stale_data_reason = None
                                     else:
                                         # Normal jump detection (no time gap) - reject if too large
                                         logger.error(f"[PERCEPTION VALIDATION] ❌ SUDDEN LANE JUMP DETECTED! (Frame {self.frame_count})")
@@ -1361,6 +2085,8 @@ class AVStack:
                                         # Track that we're using stale data due to jump detection
                                         using_stale_data = True
                                         stale_data_reason = "jump_detection"
+                                        reject_reason = reject_reason or stale_data_reason
+                                        clamp_events.append("jump_detection_reject")
                                         left_jump_magnitude = left_jump
                                         right_jump_magnitude = right_jump
                                         jump_threshold_used = max_jump_threshold
@@ -1376,10 +2102,123 @@ class AVStack:
                                     lane_center_previous = (self.previous_left_lane_x + self.previous_right_lane_x) / 2.0
                                     lane_width_previous = self.previous_right_lane_x - self.previous_left_lane_x
                                     
+                                    perception_cfg = self.config.get("perception", {}) if isinstance(self.config, dict) else {}
+                                    max_lane_delta = float(perception_cfg.get("lane_line_change_clamp_m", 0.0))
+                                    if max_lane_delta > 0.0:
+                                        clamped_left, clamped_right, was_lane_clamped = clamp_lane_line_deltas(
+                                            left_x_vehicle,
+                                            right_x_vehicle,
+                                            self.previous_left_lane_x,
+                                            self.previous_right_lane_x,
+                                            max_lane_delta,
+                                        )
+                                        if was_lane_clamped:
+                                            clamp_events.append("lane_line_delta_clamped")
+                                            left_x_vehicle = clamped_left
+                                            right_x_vehicle = clamped_right
+                                            lane_center_current = (left_x_vehicle + right_x_vehicle) / 2.0
+                                            lane_width_current = right_x_vehicle - left_x_vehicle
+                                            calculated_lane_width = lane_width_current
+                                            logger.warning(
+                                                f"[Frame {self.frame_count}] [PERCEPTION VALIDATION] Lane line clamp "
+                                                f"(left_delta={left_x_vehicle - self.previous_left_lane_x:.3f}m, "
+                                                f"right_delta={right_x_vehicle - self.previous_right_lane_x:.3f}m)"
+                                            )
+
+                                    max_center_delta = float(perception_cfg.get("lane_center_change_clamp_m", 0.4))
+                                    max_width_delta = float(perception_cfg.get("lane_width_change_clamp_m", 0.5))
+                                    clamped_center, clamped_width, was_clamped = clamp_lane_center_and_width(
+                                        lane_center_current,
+                                        lane_width_current,
+                                        lane_center_previous,
+                                        lane_width_previous,
+                                        max_center_delta,
+                                        max_width_delta,
+                                    )
+                                    if was_clamped:
+                                        clamp_events.append("lane_center_width_clamped")
+                                        left_x_vehicle = clamped_center - (clamped_width / 2.0)
+                                        right_x_vehicle = clamped_center + (clamped_width / 2.0)
+                                        lane_center_current = clamped_center
+                                        lane_width_current = clamped_width
+                                        calculated_lane_width = lane_width_current
+                                        logger.warning(
+                                            f"[Frame {self.frame_count}] [PERCEPTION VALIDATION] Lane shift clamped "
+                                            f"(center_delta={lane_center_current - lane_center_previous:.3f}m, "
+                                            f"width_delta={lane_width_current - lane_width_previous:.3f}m)"
+                                        )
+
+                                    # NEW: Temporal filtering + measurement gating for lane center/width
+                                    center_gate_m = float(perception_cfg.get("lane_center_gate_m", 0.0))
+                                    width_gate_m = float(perception_cfg.get("lane_width_gate_m", 0.0))
+                                    center_alpha = float(perception_cfg.get("lane_center_ema_alpha", 0.0))
+                                    width_alpha = float(perception_cfg.get("lane_width_ema_alpha", 0.0))
+                                    center_beta = float(perception_cfg.get("lane_center_ab_beta", 0.0))
+                                    width_beta = float(perception_cfg.get("lane_width_ab_beta", 0.0))
+                                    now_time = float(timestamp) if timestamp is not None else None
+                                    if self.last_lane_filter_time is None:
+                                        dt_lane = 1.0 / 30.0
+                                    elif now_time is not None:
+                                        dt_lane = max(1e-3, now_time - self.last_lane_filter_time)
+                                    else:
+                                        dt_lane = 1.0 / 30.0
+
+                                    if center_beta > 0.0 or width_beta > 0.0:
+                                        (
+                                            lane_center_current,
+                                            lane_width_current,
+                                            self.lane_center_ab,
+                                            self.lane_center_ab_vel,
+                                            self.lane_width_ab,
+                                            self.lane_width_ab_vel,
+                                            gate_events,
+                                            gated,
+                                        ) = apply_lane_alpha_beta_gating(
+                                            lane_center_current,
+                                            lane_width_current,
+                                            self.lane_center_ab,
+                                            self.lane_center_ab_vel,
+                                            self.lane_width_ab,
+                                            self.lane_width_ab_vel,
+                                            center_gate_m,
+                                            width_gate_m,
+                                            center_alpha,
+                                            center_beta,
+                                            width_alpha,
+                                            width_beta,
+                                            dt_lane,
+                                        )
+                                    elif center_alpha > 0.0 or width_alpha > 0.0:
+                                        (
+                                            lane_center_current,
+                                            lane_width_current,
+                                            self.lane_center_ema,
+                                            self.lane_width_ema,
+                                            gate_events,
+                                            gated,
+                                        ) = apply_lane_ema_gating(
+                                            lane_center_current,
+                                            lane_width_current,
+                                            self.lane_center_ema,
+                                            self.lane_width_ema,
+                                            center_gate_m,
+                                            width_gate_m,
+                                            center_alpha,
+                                            width_alpha,
+                                        )
+                                        if gate_events:
+                                            clamp_events.extend(gate_events)
+                                        if gated:
+                                            using_stale_data = True
+                                        stale_data_reason = stale_data_reason or "lane_center_width_gate"
+                                        reject_reason = reject_reason or stale_data_reason
+                                        left_x_vehicle = lane_center_current - (lane_width_current / 2.0)
+                                        right_x_vehicle = lane_center_current + (lane_width_current / 2.0)
+                                        calculated_lane_width = lane_width_current
+                                    if now_time is not None:
+                                        self.last_lane_filter_time = now_time
+                                    
                                     # NEW: Adaptive thresholds based on path curvature
-                                    # Get path curvature from vehicle state (ground truth if available)
-                                    path_curvature = vehicle_state_dict.get('groundTruthPathCurvature') or vehicle_state_dict.get('ground_truth_path_curvature', 0.0)
-                                    abs_curvature = abs(path_curvature)
                                     
                                     # On curves (|curvature| > 0.1 1/m), lane positions change naturally
                                     # Use more lenient thresholds to avoid rejecting legitimate curve-induced changes
@@ -1415,8 +2254,9 @@ class AVStack:
                                                 f"[Frame {self.frame_count}] [PERCEPTION VALIDATION] Segmentation instability accepted "
                                                 f"(width_change={width_change:.3f}m, center_shift={center_shift:.3f}m)"
                                             )
-                                            using_stale_data = False
-                                            stale_data_reason = None
+                                            if not using_stale_data:
+                                                using_stale_data = False
+                                                stale_data_reason = None
                                         else:
                                             # Perception instability detected - use stale data to prevent control oscillations
                                             logger.warning(f"[Frame {self.frame_count}] [PERCEPTION VALIDATION] ⚠️  PERCEPTION INSTABILITY DETECTED!")
@@ -1427,6 +2267,7 @@ class AVStack:
                                             
                                             using_stale_data = True
                                             stale_data_reason = "perception_instability"
+                                            reject_reason = reject_reason or stale_data_reason
                                             # Store actual detected values for debugging (even though we reject them)
                                             actual_detected_left_lane_x = float(left_x_vehicle)
                                             actual_detected_right_lane_x = float(right_x_vehicle)
@@ -1498,6 +2339,13 @@ class AVStack:
             valid_coeffs = [c for c in lane_coeffs if c is not None]
             if len(valid_coeffs) >= 1:
                 try:
+                    perception_cfg = self.config.get("perception", {}) if isinstance(self.config, dict) else {}
+                    width_min = float(perception_cfg.get("lane_width_min_m", 1.0))
+                    width_max = float(perception_cfg.get("lane_width_max_m", 10.0))
+                    last_width = None
+                    if self.previous_left_lane_x is not None and self.previous_right_lane_x is not None:
+                        last_width = float(self.previous_right_lane_x - self.previous_left_lane_x)
+
                     planner = self.trajectory_planner.planner if hasattr(self.trajectory_planner, 'planner') else self.trajectory_planner
                     image_height = planner.image_height if hasattr(planner, 'image_height') else 480.0
                     image_width = planner.image_width if hasattr(planner, 'image_width') else 640.0
@@ -1520,23 +2368,24 @@ class AVStack:
                         horizontal_fov_override=camera_horizontal_fov if camera_horizontal_fov and camera_horizontal_fov > 0 else None
                     )
                     
-                    # Estimate other lane based on standard lane width (3.5m per lane, 7m total)
+                    # Estimate other lane based on last known width when available
                     standard_lane_width = 7.0  # meters
-                    lane_half_width = standard_lane_width / 2.0
                     
                     # Determine if detected lane is left or right based on position relative to image center
                     image_center_x = image_width / 2.0
-                    if single_x_image < image_center_x:
-                        # Detected lane line is on left side - it's the left lane line
-                        left_lane_line_x = float(single_x_vehicle)
-                        right_lane_line_x = float(single_x_vehicle + standard_lane_width)
-                    else:
-                        # Detected lane line is on right side - it's the right lane line
-                        left_lane_line_x = float(single_x_vehicle - standard_lane_width)
-                        right_lane_line_x = float(single_x_vehicle)
+                    is_left_lane = single_x_image < image_center_x
+                    left_lane_line_x, right_lane_line_x = estimate_single_lane_pair(
+                        single_x_vehicle=single_x_vehicle,
+                        is_left_lane=is_left_lane,
+                        last_width=last_width,
+                        default_width=standard_lane_width,
+                        width_min=width_min,
+                        width_max=width_max,
+                    )
                     
                     logger.warning(f"[SINGLE LANE] Only 1 lane line detected. Detected at x={single_x_vehicle:.3f}m. "
-                                 f"Estimated: left={left_lane_line_x:.3f}m, right={right_lane_line_x:.3f}m")
+                                 f"Estimated: left={left_lane_line_x:.3f}m, right={right_lane_line_x:.3f}m "
+                                 f"(last_width={last_width}, bounds=({width_min}-{width_max}))")
                 except (AttributeError, TypeError, ValueError) as e:
                     logger.warning(f"[SINGLE LANE] Failed to process single lane line: {e}")
                     # Leave as 0.0 (default)
@@ -1559,6 +2408,7 @@ class AVStack:
         # NEW: Perception health monitoring
         # Track detection quality (good = 2+ lanes detected)
         is_good_detection = num_lanes_detected >= 2
+        timestamp_frozen = False
         
         # NEW: Check for bad events that should reduce health score immediately
         bad_events = []
@@ -1615,6 +2465,10 @@ class AVStack:
         if using_stale_data:
             bad_events.append("stale_data")
         
+        # Track most recent bad events for UI visibility when health lags.
+        if bad_events:
+            self.last_perception_bad_events = list(bad_events)
+
         # Track health: good detection AND no bad events = truly good
         is_truly_good = is_good_detection and len(bad_events) == 0
         
@@ -1657,6 +2511,10 @@ class AVStack:
             self.perception_health_status = "poor"
         else:
             self.perception_health_status = "critical"
+
+        recent_bad_events = None
+        if not bad_events and self.perception_health_status != "healthy":
+            recent_bad_events = getattr(self, "last_perception_bad_events", None)
         
         # Log health degradation warnings
         if self.consecutive_bad_detection_frames >= 10 and self.consecutive_bad_detection_frames % 10 == 0:
@@ -1673,6 +2531,8 @@ class AVStack:
            self.previous_left_lane_x is not None and self.previous_right_lane_x is not None:
             using_stale_data = True
             stale_data_reason = stale_data_reason or "missing_lane_positions"
+            reject_reason = reject_reason or stale_data_reason
+            clamp_events.append("missing_lane_positions")
             left_lane_line_x = float(self.previous_left_lane_x)
             right_lane_line_x = float(self.previous_right_lane_x)
             logger.warning(
@@ -1703,9 +2563,15 @@ class AVStack:
             consecutive_bad_detection_frames=self.consecutive_bad_detection_frames,
             perception_health_score=self.perception_health_score,
             perception_health_status=self.perception_health_status,
+            perception_bad_events=bad_events if bad_events else None,
+            perception_bad_events_recent=recent_bad_events,
+            perception_timestamp_frozen=timestamp_frozen,
+            perception_clamp_events=clamp_events if clamp_events else None,
+            reject_reason=finalize_reject_reason(reject_reason, stale_data_reason, clamp_events),
             # NEW: Points used for polynomial fitting (for debug visualization)
             fit_points_left=fit_points_left,
-            fit_points_right=fit_points_right
+            fit_points_right=fit_points_right,
+            segmentation_mask_png=segmentation_mask_png
         )
         
         # NEW: Apply gradual slowdown based on perception health
@@ -1739,8 +2605,52 @@ class AVStack:
         )
         max_lateral_accel = self.trajectory_config.get('max_lateral_accel', 2.5)
         min_curve_speed = self.trajectory_config.get('min_curve_speed', 0.0)
+        curvature_limit_min_abs = float(self.trajectory_config.get('curvature_limit_min_abs', 0.0))
+        curvature_bins = self.trajectory_config.get('curvature_bins', None)
+        if isinstance(path_curvature, (int, float)):
+            max_lateral_accel, min_curve_speed = select_curvature_bin_limits(
+                abs(path_curvature),
+                curvature_bins,
+                max_lateral_accel,
+                min_curve_speed,
+            )
+        curve_speed_limit = None
+        if (
+            isinstance(path_curvature, (int, float))
+            and abs(path_curvature) > max(curvature_limit_min_abs, 1e-6)
+            and isinstance(max_lateral_accel, (int, float))
+            and max_lateral_accel > 0.0
+        ):
+            curve_speed_limit = (float(max_lateral_accel) / abs(path_curvature)) ** 0.5
+            if isinstance(min_curve_speed, (int, float)) and min_curve_speed > 0.0:
+                curve_speed_limit = max(curve_speed_limit, float(min_curve_speed))
+        curve_preview_speed_limit = None
+        if (
+            self.curve_speed_preview_enabled
+            and lane_coeffs is not None
+            and self.curve_speed_preview_distance > 0.0
+        ):
+            preview_lookahead = reference_lookahead * self.curve_speed_preview_lookahead_scale
+            preview_curvature = self.trajectory_planner.get_curvature_at_lookahead(
+                lane_coeffs, preview_lookahead
+            )
+            if (
+                preview_curvature is not None
+                and abs(preview_curvature) >= self.curve_speed_preview_min_curvature
+            ):
+                adjusted_target_speed, curve_preview_speed_limit = _apply_curve_speed_preview(
+                    adjusted_target_speed,
+                    preview_curvature,
+                    max_lateral_accel,
+                    min_curve_speed,
+                    self.curve_speed_preview_distance,
+                    self.curve_speed_preview_decel,
+                )
         base_speed = adjusted_target_speed
         smoothed_speed_limit = self._smooth_speed_limit(speed_limit, timestamp)
+        min_speed_floor = self._compute_dynamic_speed_floor(
+            smoothed_speed_limit, path_curvature
+        )
         adjusted_target_speed = self._apply_speed_limits(
             adjusted_target_speed,
             speed_limit=smoothed_speed_limit,
@@ -1748,22 +2658,259 @@ class AVStack:
             max_lateral_accel=max_lateral_accel,
             min_curve_speed=min_curve_speed,
             current_speed=current_speed,
+            min_speed_limit_ratio=float(self.trajectory_config.get('min_speed_limit_ratio', 0.0)),
+            min_speed_floor=float(self.trajectory_config.get('min_speed_floor', 0.0)),
+            min_speed_curvature_max=float(self.trajectory_config.get('min_speed_curvature_max', 0.0)),
+            curvature_limit_min_abs=curvature_limit_min_abs,
         )
         preview_decel = self.trajectory_config.get('speed_limit_preview_decel', 0.0)
-        if isinstance(speed_limit_preview, (int, float)) and speed_limit_preview > 0:
-            preview_target = _apply_speed_limit_preview(
-                adjusted_target_speed,
-                float(speed_limit_preview),
-                float(speed_limit_preview_distance),
-                float(preview_decel),
+        preview_targets = []
+        pre_preview_speed = adjusted_target_speed
+        preview_limit_value = (
+            float(speed_limit_preview)
+            if isinstance(speed_limit_preview, (int, float))
+            else 0.0
+        )
+        if self.preview_limit_stability_frames > 0:
+            if (
+                self.preview_limit_last is None
+                or abs(preview_limit_value - self.preview_limit_last) > self.preview_limit_change_delta
+            ):
+                self.preview_limit_last = preview_limit_value
+                self.preview_limit_streak = 1
+            else:
+                self.preview_limit_streak += 1
+        else:
+            self.preview_limit_last = preview_limit_value
+
+        def add_preview_target(limit, distance, min_distance):
+            if not isinstance(limit, (int, float)) or limit <= 0:
+                return
+            preview_distance_value = distance
+            if (
+                isinstance(min_distance, (int, float))
+                and min_distance > 0
+                and (
+                    preview_distance_value is None
+                    or min_distance < preview_distance_value
+                )
+            ):
+                preview_distance_value = min_distance
+            if not isinstance(preview_distance_value, (int, float)) or preview_distance_value <= 0:
+                return
+            preview_targets.append(
+                _apply_speed_limit_preview(
+                    adjusted_target_speed,
+                    float(limit),
+                    float(preview_distance_value),
+                    float(preview_decel),
+                )
             )
-            adjusted_target_speed = min(adjusted_target_speed, preview_target)
+
+        def preview_min_distance_allows_release() -> bool:
+            margin = float(self.preview_hold_min_distance_margin)
+            return _preview_min_distance_allows_release(
+                speed_limit_preview_distance,
+                speed_limit_preview_min_distance,
+                margin,
+            )
+
+        add_preview_target(speed_limit_preview, speed_limit_preview_distance, speed_limit_preview_min_distance)
+        add_preview_target(
+            speed_limit_preview_mid,
+            speed_limit_preview_mid_distance,
+            speed_limit_preview_mid_min_distance,
+        )
+        add_preview_target(
+            speed_limit_preview_long,
+            speed_limit_preview_long_distance,
+            speed_limit_preview_long_min_distance,
+        )
+
+        preview_target = None
+        if preview_targets:
+            preview_target = min(preview_targets)
+            if (
+                self.preview_limit_stability_frames <= 0
+                or self.preview_limit_streak >= self.preview_limit_stability_frames
+            ):
+                adjusted_target_speed = min(adjusted_target_speed, preview_target)
         target_speed_post_limits = adjusted_target_speed
+        if preview_target is None or preview_limit_value <= 0.0:
+            self.preview_clamp_active = False
+            self.preview_clamp_target = None
+        else:
+            if preview_target < pre_preview_speed - 1e-6:
+                if self.preview_clamp_target is None or preview_target < self.preview_clamp_target - 1e-3:
+                    self.preview_clamp_target = preview_target
+                self.preview_clamp_active = True
+            elif self.preview_clamp_active and preview_min_distance_allows_release():
+                self.preview_clamp_active = False
+                self.preview_clamp_target = None
+        if self.preview_clamp_active and self.preview_clamp_target is not None:
+            target_speed_post_limits = min(target_speed_post_limits, self.preview_clamp_target)
+        if (
+            preview_target is not None
+            and preview_target < target_speed_post_limits - 1e-6
+        ):
+            if (self.preview_hold_target is None) or (
+                preview_target < self.preview_hold_target - 1e-3
+            ):
+                self.preview_hold_target = preview_target
+            self.preview_hold_active = True
+            self.preview_hold_release_count = 0
+        if self.preview_hold_active and self.preview_hold_target is not None:
+            release_preview_hold = False
+            if (
+                isinstance(path_curvature, (int, float))
+                and abs(path_curvature) >= self.preview_hold_curvature_threshold
+            ):
+                if curve_speed_limit is not None and preview_min_distance_allows_release():
+                    should_release = (
+                        float(curve_speed_limit)
+                        <= float(self.preview_hold_target) - float(self.preview_hold_release_delta)
+                    )
+                    if should_release:
+                        self.preview_hold_release_count += 1
+                    else:
+                        self.preview_hold_release_count = 0
+                    release_preview_hold = (
+                        self.preview_hold_release_frames <= 0
+                        or self.preview_hold_release_count >= self.preview_hold_release_frames
+                    )
+            if release_preview_hold:
+                self.preview_hold_active = False
+                self.preview_hold_target = None
+                self.preview_hold_release_count = 0
+            else:
+                adjusted_target_speed = min(adjusted_target_speed, self.preview_hold_target)
+        elif (
+            self.preview_hold_target is not None
+            and preview_target is not None
+            and preview_target > self.preview_hold_target + self.preview_hold_release_delta
+        ):
+            if (
+                (
+                    not isinstance(path_curvature, (int, float))
+                    or abs(path_curvature) < self.preview_hold_curvature_threshold
+                )
+                and preview_min_distance_allows_release()
+            ):
+                self.preview_hold_target = None
+                self.preview_hold_release_count = 0
+        steering_speed_guard_active = False
+        if self.steering_speed_guard_enabled:
+            adjusted_target_speed, steering_speed_guard_active = _apply_steering_speed_guard(
+                adjusted_target_speed,
+                self.last_steering_command,
+                self.steering_speed_guard_threshold,
+                self.steering_speed_guard_scale,
+                self.steering_speed_guard_min_speed,
+            )
+        if (
+            self.straight_target_hold_seconds > 0.0
+            and isinstance(path_curvature, (int, float))
+            and abs(path_curvature) <= self.straight_speed_smoothing_curvature_threshold
+        ):
+            limit_delta = self.straight_target_hold_limit_delta
+            limit_value = float(speed_limit) if isinstance(speed_limit, (int, float)) else 0.0
+            preview_value = preview_limit_value
+            if self.straight_target_hold_target is None:
+                self.straight_target_hold_target = adjusted_target_speed
+                self.straight_target_hold_start_time = timestamp
+                self.straight_target_hold_last_limit = limit_value
+                self.straight_target_hold_last_preview = preview_value
+            else:
+                limit_changed = (
+                    self.straight_target_hold_last_limit is None
+                    or abs(limit_value - self.straight_target_hold_last_limit) > limit_delta
+                )
+                preview_changed = (
+                    self.straight_target_hold_last_preview is None
+                    or abs(preview_value - self.straight_target_hold_last_preview) > limit_delta
+                )
+                if limit_changed or preview_changed:
+                    self.straight_target_hold_target = adjusted_target_speed
+                    self.straight_target_hold_start_time = timestamp
+                    self.straight_target_hold_last_limit = limit_value
+                    self.straight_target_hold_last_preview = preview_value
+                else:
+                    hold_elapsed = 0.0
+                    if (
+                        self.straight_target_hold_start_time is not None
+                        and timestamp is not None
+                    ):
+                        hold_elapsed = max(0.0, float(timestamp) - float(self.straight_target_hold_start_time))
+                    if hold_elapsed < self.straight_target_hold_seconds:
+                        adjusted_target_speed = max(
+                            adjusted_target_speed, self.straight_target_hold_target
+                        )
+                    else:
+                        self.straight_target_hold_target = adjusted_target_speed
+                        self.straight_target_hold_start_time = timestamp
+                        self.straight_target_hold_last_limit = limit_value
+                        self.straight_target_hold_last_preview = preview_value
+        else:
+            self.straight_target_hold_target = None
+            self.straight_target_hold_start_time = None
+        if self.target_speed_blend_window_m > 0.0:
+            dt = None
+            if self.target_speed_blend_last_time is not None and timestamp is not None:
+                dt = max(1e-3, float(timestamp) - float(self.target_speed_blend_last_time))
+            self.target_speed_blend_last_time = timestamp
+            if dt is None or dt > self.target_speed_blend_reset_seconds:
+                self.target_speed_blend_prev = adjusted_target_speed
+            elif self.target_speed_blend_prev is None:
+                self.target_speed_blend_prev = adjusted_target_speed
+            elif adjusted_target_speed > self.target_speed_blend_prev:
+                distance = max(0.0, float(current_speed)) * dt
+                alpha = curvature_smoothing_alpha(distance, self.target_speed_blend_window_m)
+                blended = alpha * adjusted_target_speed + (1.0 - alpha) * self.target_speed_blend_prev
+                self.target_speed_blend_prev = blended
+                adjusted_target_speed = blended
+            else:
+                self.target_speed_blend_prev = adjusted_target_speed
+        if (
+            self.speed_planner_enabled
+            and self.straight_speed_smoothing_alpha > 0.0
+            and isinstance(path_curvature, (int, float))
+            and abs(path_curvature) <= self.straight_speed_smoothing_curvature_threshold
+        ):
+            dt = None
+            if self.straight_speed_last_time is not None and timestamp is not None:
+                dt = max(1e-3, float(timestamp) - float(self.straight_speed_last_time))
+            self.straight_speed_last_time = timestamp
+            if self.straight_target_speed_smoothed is None:
+                self.straight_target_speed_smoothed = adjusted_target_speed
+            if (
+                adjusted_target_speed > self.straight_target_speed_smoothed
+                and self.straight_speed_slew_rate_up > 0.0
+                and dt is not None
+            ):
+                max_inc = self.straight_speed_slew_rate_up * dt
+                adjusted_target_speed = min(
+                    adjusted_target_speed, self.straight_target_speed_smoothed + max_inc
+                )
+            if adjusted_target_speed > self.straight_target_speed_smoothed:
+                alpha = self.straight_speed_smoothing_alpha
+                self.straight_target_speed_smoothed = (
+                    (1.0 - alpha) * self.straight_target_speed_smoothed + alpha * adjusted_target_speed
+                )
+            else:
+                # Allow immediate decreases to honor limits.
+                self.straight_target_speed_smoothed = adjusted_target_speed
+            adjusted_target_speed = self.straight_target_speed_smoothed
+        else:
+            self.straight_target_speed_smoothed = adjusted_target_speed
+            self.straight_speed_last_time = None
         target_speed_planned = None
         planned_accel = None
         if self.speed_planner_enabled and self.speed_planner is not None:
+            planner_target_speed = adjusted_target_speed + self.speed_planner_speed_limit_bias
+            if planner_target_speed < 0.0:
+                planner_target_speed = 0.0
             planned_speed, planned_accel, planned_jerk, planner_active = self.speed_planner.step(
-                adjusted_target_speed,
+                planner_target_speed,
                 current_speed=current_speed,
                 timestamp=timestamp,
             )
@@ -1926,6 +3073,8 @@ class AVStack:
                 # Limit reference velocity to prevent requesting high speeds
                 if reference_point.get('velocity', 8.0) > max_speed:
                     reference_point['velocity'] = max_speed * 0.9  # 90% of max for safety
+                if min_speed_floor is not None:
+                    reference_point['min_speed_floor'] = float(min_speed_floor)
                 
                 # 3. Control: Compute control commands
                 current_state = {
@@ -2048,7 +3197,11 @@ class AVStack:
                 # Formula: threshold = (lane_width/2 - car_width/2 + allowed_outside_lane)
                 # This means: car center can be this far from lane center before emergency stop
                 # For 7m lane, 1.85m car, 1.0m allowed: threshold = 3.5 - 0.925 + 1.0 = 3.575m
-                lane_width = self.safety_config.get('lane_width', 7.0)
+                lane_width = (
+                    self.last_gt_lane_width
+                    if self.last_gt_lane_width is not None
+                    else self.safety_config.get('lane_width', 7.0)
+                )
                 car_width = self.safety_config.get('car_width', 1.85)
                 allowed_outside_lane = self.safety_config.get('allowed_outside_lane', 1.0)
                 out_of_bounds_threshold = (lane_width / 2.0) - (car_width / 2.0) + allowed_outside_lane
@@ -2157,6 +3310,7 @@ class AVStack:
         else:
             # Ground truth mode active - ground truth follower will send control
             logger.debug("Skipping AV stack control send (ground truth mode active)")
+        self.last_steering_command = float(control_command.get('steering', 0.0))
         
         # 4b. Send trajectory data for visualization (if available)
         if reference_point is not None and trajectory and trajectory.points:
@@ -2189,19 +3343,42 @@ class AVStack:
             if self.frame_count % 30 == 0:  # Every ~1 second
                 logger.debug(f"Trajectory visualization: lateral_error={lateral_error:.4f}m (abs={abs(lateral_error):.4f}m)")
             
+            perception_left = left_lane_line_x if left_lane_line_x is not None else None
+            perception_right = right_lane_line_x if right_lane_line_x is not None else None
+            perception_valid = perception_left is not None and perception_right is not None
+            perception_center = None
+            if perception_valid:
+                perception_center = (float(perception_left) + float(perception_right)) / 2.0
+
             # Send to bridge for Unity visualization
             self.bridge.set_trajectory_data(
                 trajectory_points=trajectory_points_list,
                 reference_point=ref_point_list,
-                lateral_error=lateral_error
+                lateral_error=lateral_error,
+                perception_left_lane_x=perception_left,
+                perception_right_lane_x=perception_right,
+                perception_center_x=perception_center,
+                perception_lookahead_m=reference_lookahead,
+                perception_valid=perception_valid,
             )
         
         # 5. Record data if enabled
         if self.recorder:
+            topdown_frame_data = None
+            try:
+                topdown_frame_data = self.bridge.get_latest_camera_frame(camera_id="top_down")
+            except Exception:
+                topdown_frame_data = None
             self._record_frame(
-                image, timestamp, vehicle_state_dict,
-                perception_output, trajectory, control_command,
-                speed_limit
+                image,
+                timestamp,
+                vehicle_state_dict,
+                perception_output,
+                trajectory,
+                control_command,
+                speed_limit,
+                camera_frame_id=camera_frame_id,
+                topdown_frame_data=topdown_frame_data,
             )
 
         # Update teleport guard countdown and vehicle position tracking
@@ -2362,6 +3539,10 @@ class AVStack:
         max_lateral_accel: float,
         min_curve_speed: float = 0.0,
         current_speed: float | None = None,
+        min_speed_limit_ratio: float = 0.0,
+        min_speed_floor: float = 0.0,
+        min_speed_curvature_max: float = 0.0,
+        curvature_limit_min_abs: float = 0.0,
     ) -> float:
         """Clamp speed using map limits and curvature-based lateral acceleration."""
         adjusted_speed = base_speed
@@ -2369,7 +3550,10 @@ class AVStack:
         if isinstance(speed_limit, (int, float)) and speed_limit > 0:
             adjusted_speed = min(adjusted_speed, float(speed_limit))
 
-        if isinstance(path_curvature, (int, float)) and abs(path_curvature) > 1e-6:
+        if (
+            isinstance(path_curvature, (int, float))
+            and abs(path_curvature) > max(curvature_limit_min_abs, 1e-6)
+        ):
             if isinstance(max_lateral_accel, (int, float)) and max_lateral_accel > 0:
                 curve_speed = (max_lateral_accel / abs(path_curvature)) ** 0.5
                 if min_curve_speed > 0:
@@ -2385,7 +3569,34 @@ class AVStack:
                             f"curve_speed={curve_speed:.2f} m/s"
                         )
 
+        if isinstance(speed_limit, (int, float)) and speed_limit > 0.0:
+            if min_speed_limit_ratio > 0.0 or min_speed_floor > 0.0:
+                allow_floor = True
+                if isinstance(path_curvature, (int, float)) and min_speed_curvature_max > 0.0:
+                    allow_floor = abs(path_curvature) <= min_speed_curvature_max
+                if allow_floor:
+                    dynamic_floor = max(
+                        float(min_speed_floor),
+                        float(speed_limit) * float(min_speed_limit_ratio),
+                    )
+                    adjusted_speed = max(adjusted_speed, dynamic_floor)
+
         return float(adjusted_speed)
+
+    def _compute_dynamic_speed_floor(
+        self, speed_limit: float, path_curvature: float
+    ) -> float | None:
+        ratio = float(self.trajectory_config.get('min_speed_limit_ratio', 0.0))
+        floor = float(self.trajectory_config.get('min_speed_floor', 0.0))
+        max_curv = float(self.trajectory_config.get('min_speed_curvature_max', 0.0))
+        if ratio <= 0.0 and floor <= 0.0:
+            return None
+        if not isinstance(speed_limit, (int, float)) or float(speed_limit) <= 0.0:
+            return None
+        if isinstance(path_curvature, (int, float)) and max_curv > 0.0:
+            if abs(float(path_curvature)) > max_curv:
+                return None
+        return max(floor, float(speed_limit) * ratio)
 
     def _smooth_speed_limit(self, raw_limit: float, timestamp: float) -> float:
         """Smooth speed limit changes to avoid step inputs."""
@@ -2469,16 +3680,39 @@ class AVStack:
         self.last_target_speed_time = float(timestamp)
         return adjusted, ramp_active, slew_active
     
-    def _record_frame(self, image: np.ndarray, timestamp: float,
-                     vehicle_state_dict: dict, perception_output: PerceptionOutput,
-                     trajectory, control_command: dict, speed_limit: float = 0.0):
+    def _record_frame(
+        self,
+        image: np.ndarray,
+        timestamp: float,
+        vehicle_state_dict: dict,
+        perception_output: PerceptionOutput,
+        trajectory,
+        control_command: dict,
+        speed_limit: float = 0.0,
+        camera_frame_id: int | None = None,
+        topdown_frame_data: tuple[np.ndarray, float, int | None] | None = None,
+    ):
         """Record frame data."""
         # Create camera frame
         camera_frame = CameraFrame(
             image=image,
             timestamp=timestamp,
-            frame_id=self.frame_count
+            frame_id=camera_frame_id if camera_frame_id is not None else self.frame_count
         )
+
+        camera_topdown_frame = None
+        if topdown_frame_data is not None:
+            topdown_image, topdown_timestamp, topdown_frame_id = topdown_frame_data
+            camera_topdown_frame = CameraFrame(
+                image=topdown_image,
+                timestamp=topdown_timestamp,
+                frame_id=(
+                    topdown_frame_id
+                    if topdown_frame_id is not None
+                    else camera_frame.frame_id
+                ),
+                camera_id="top_down",
+            )
         
         # Create vehicle state
         position = self._extract_position(vehicle_state_dict)
@@ -2513,6 +3747,12 @@ class AVStack:
         gt_lane_center_x = vehicle_state_dict.get('groundTruthLaneCenterX') or vehicle_state_dict.get('ground_truth_lane_center_x', 0.0)
         gt_path_curvature = vehicle_state_dict.get('groundTruthPathCurvature') or vehicle_state_dict.get('ground_truth_path_curvature', 0.0)
         gt_desired_heading = vehicle_state_dict.get('groundTruthDesiredHeading') or vehicle_state_dict.get('ground_truth_desired_heading', 0.0)
+
+        # Cache ground-truth lane width for safety bounds (track-accurate width).
+        if gt_left_lane_line_x or gt_right_lane_line_x:
+            gt_lane_width = float(gt_right_lane_line_x - gt_left_lane_line_x)
+            if 1.0 <= gt_lane_width <= 20.0:
+                self.last_gt_lane_width = gt_lane_width
         
         # Log if we got ground truth data (or if it's missing)
         if self.frame_count % 30 == 0:  # Log every 30 frames
@@ -2585,6 +3825,15 @@ class AVStack:
             angular_velocity=np.array([0, 0, 0]),
             speed=vehicle_state_dict.get('speed', 0.0),
             steering_angle=vehicle_state_dict.get('steeringAngle', 0.0),
+            steering_angle_actual=vehicle_state_dict.get(
+                'steeringAngleActual', vehicle_state_dict.get('steering_angle_actual', 0.0)
+            ),
+            steering_input=vehicle_state_dict.get(
+                'steeringInput', vehicle_state_dict.get('steering_input', 0.0)
+            ),
+            desired_steer_angle=vehicle_state_dict.get(
+                'desiredSteerAngle', vehicle_state_dict.get('desired_steer_angle', 0.0)
+            ),
             motor_torque=vehicle_state_dict.get('motorTorque', 0.0),
             brake_torque=vehicle_state_dict.get('brakeTorque', 0.0),
             unity_time=vehicle_state_dict.get('unityTime', vehicle_state_dict.get('unity_time', 0.0)),
@@ -2632,6 +3881,34 @@ class AVStack:
                 'speedLimitPreviewDistance',
                 vehicle_state_dict.get('speed_limit_preview_distance', 0.0),
             ),
+            speed_limit_preview_min_distance=vehicle_state_dict.get(
+                'speedLimitPreviewMinDistance',
+                vehicle_state_dict.get('speed_limit_preview_min_distance', 0.0),
+            ),
+            speed_limit_preview_mid=vehicle_state_dict.get(
+                'speedLimitPreviewMid',
+                vehicle_state_dict.get('speed_limit_preview_mid', 0.0),
+            ),
+            speed_limit_preview_mid_distance=vehicle_state_dict.get(
+                'speedLimitPreviewMidDistance',
+                vehicle_state_dict.get('speed_limit_preview_mid_distance', 0.0),
+            ),
+            speed_limit_preview_mid_min_distance=vehicle_state_dict.get(
+                'speedLimitPreviewMidMinDistance',
+                vehicle_state_dict.get('speed_limit_preview_mid_min_distance', 0.0),
+            ),
+            speed_limit_preview_long=vehicle_state_dict.get(
+                'speedLimitPreviewLong',
+                vehicle_state_dict.get('speed_limit_preview_long', 0.0),
+            ),
+            speed_limit_preview_long_distance=vehicle_state_dict.get(
+                'speedLimitPreviewLongDistance',
+                vehicle_state_dict.get('speed_limit_preview_long_distance', 0.0),
+            ),
+            speed_limit_preview_long_min_distance=vehicle_state_dict.get(
+                'speedLimitPreviewLongMinDistance',
+                vehicle_state_dict.get('speed_limit_preview_long_min_distance', 0.0),
+            ),
         )
         
         # Create control command with metadata
@@ -2653,7 +3930,13 @@ class AVStack:
             lateral_error=control_command.get('lateral_error'),
             heading_error=control_command.get('heading_error'),
             total_error=control_command.get('total_error'),
+            total_error_scaled=control_command.get('total_error_scaled'),
             path_curvature_input=control_command.get('path_curvature_input'),
+            feedforward_steering=control_command.get('feedforward_steering'),
+            feedback_steering=control_command.get('feedback_steering'),
+            straight_sign_flip_override_active=control_command.get(
+                'straight_sign_flip_override_active'
+            ),
             is_straight=control_command.get('is_straight'),
             straight_oscillation_rate=control_command.get('straight_oscillation_rate'),
             tuned_deadband=control_command.get('tuned_deadband'),
@@ -2781,6 +4064,7 @@ class AVStack:
             timestamp=timestamp,
             frame_id=self.frame_count,
             camera_frame=camera_frame,
+            camera_topdown_frame=camera_topdown_frame,
             vehicle_state=vehicle_state,
             control_command=control_cmd,
             perception_output=perception_output,

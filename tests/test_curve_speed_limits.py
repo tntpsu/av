@@ -51,3 +51,18 @@ def test_apply_speed_limits_min_curve_speed():
         min_curve_speed=2.0,
     )
     assert speed == pytest.approx(2.0, rel=1e-6)
+
+
+def test_apply_speed_limits_ignores_small_curvature():
+    project_root = Path(__file__).resolve().parents[1]
+    av_module = _load_module("av_stack", project_root / "av_stack.py")
+
+    speed = av_module.AVStack._apply_speed_limits(
+        base_speed=12.0,
+        speed_limit=0.0,
+        path_curvature=0.0005,
+        max_lateral_accel=2.5,
+        min_curve_speed=0.0,
+        curvature_limit_min_abs=0.001,
+    )
+    assert speed == pytest.approx(12.0, rel=1e-6)

@@ -6,8 +6,8 @@ public class TrackConfig
 {
     public string name = "track";
     public string template = "";
-    public float roadWidth = 7f;
-    public float laneLineWidth = 0.3f;
+    public float roadWidth = 7.2f;
+    public float laneLineWidth = 0.2f;
     public float sampleSpacing = 1f;
     public bool loop = true;
     public bool loopConnector = false;

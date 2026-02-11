@@ -96,6 +96,10 @@ class DriveMetrics:
     speed_error_mean: float
     speed_error_max: float
     speed_overspeed_rate: float
+    planned_speed_error_rmse: float
+    planned_speed_error_mean: float
+    planned_speed_error_max: float
+    planned_overspeed_rate: float
     acceleration_mean: float
     acceleration_max: float
     acceleration_p95: float
@@ -106,6 +110,15 @@ class DriveMetrics:
     lateral_jerk_p95: float
     lateral_jerk_max: float
     speed_limit_zero_rate: float
+    speed_surge_count: int
+    speed_surge_avg_drop: float
+    speed_surge_p95_drop: float
+    speed_surge_transition_count: int
+    speed_surge_transition_avg_drop: float
+    speed_surge_transition_p95_drop: float
+    speed_surge_oscillation_count: int
+    speed_surge_oscillation_avg_drop: float
+    speed_surge_oscillation_p95_drop: float
     
     # Safety
     out_of_lane_events: int
@@ -174,6 +187,10 @@ class DriveAnalyzer:
                 self.data['path_curvature_input'] = np.array(f['control/path_curvature_input'][:]) if 'control/path_curvature_input' in f else None
                 self.data['pid_integral'] = np.array(f['control/pid_integral'][:]) if 'control/pid_integral' in f else None
                 self.data['pid_derivative'] = np.array(f['control/pid_derivative'][:]) if 'control/pid_derivative' in f else None
+                self.data['target_speed_planned'] = (
+                    np.array(f['control/target_speed_planned'][:])
+                    if 'control/target_speed_planned' in f else None
+                )
                 
                 # Trajectory data
                 self.data['ref_x'] = np.array(f['trajectory/reference_point_x'][:]) if 'trajectory/reference_point_x' in f else None
@@ -274,6 +291,10 @@ class DriveAnalyzer:
                 speed_error_mean=0.0,
                 speed_error_max=0.0,
                 speed_overspeed_rate=0.0,
+                planned_speed_error_rmse=0.0,
+                planned_speed_error_mean=0.0,
+                planned_speed_error_max=0.0,
+                planned_overspeed_rate=0.0,
                 acceleration_mean=0.0,
                 acceleration_max=0.0,
                 acceleration_p95=0.0,
@@ -284,6 +305,15 @@ class DriveAnalyzer:
                 lateral_jerk_p95=0.0,
                 lateral_jerk_max=0.0,
                 speed_limit_zero_rate=0.0,
+                speed_surge_count=0,
+                speed_surge_avg_drop=0.0,
+                speed_surge_p95_drop=0.0,
+                speed_surge_transition_count=0,
+                speed_surge_transition_avg_drop=0.0,
+                speed_surge_transition_p95_drop=0.0,
+                speed_surge_oscillation_count=0,
+                speed_surge_oscillation_avg_drop=0.0,
+                speed_surge_oscillation_p95_drop=0.0,
                 out_of_lane_events=0,
                 out_of_lane_time=0.0
             )
@@ -316,8 +346,18 @@ class DriveAnalyzer:
         
         # 2. CONTROL SMOOTHNESS
         # Steering jerk (rate of change of steering rate)
-        steering_rate = np.diff(self.data['steering']) / np.diff(self.data['time'])
-        steering_jerk = np.diff(steering_rate) / np.diff(self.data['time'][1:]) if len(steering_rate) > 1 else np.array([0.0])
+        steering_rate = np.array([])
+        steering_jerk = np.array([])
+        if len(self.data['steering']) > 1 and len(self.data['time']) > 1:
+            dt = np.diff(self.data['time'])
+            valid = dt > 1e-6
+            if np.any(valid):
+                steering_rate = np.diff(self.data['steering'])[valid] / dt[valid]
+                if len(steering_rate) > 1:
+                    dt2 = np.diff(self.data['time'][1:])[valid[1:]]
+                    valid2 = dt2 > 1e-6
+                    if np.any(valid2):
+                        steering_jerk = np.diff(steering_rate)[valid2] / dt2[valid2]
         steering_jerk_mean = np.mean(np.abs(steering_jerk)) if len(steering_jerk) > 0 else 0.0
         steering_jerk_max = np.max(np.abs(steering_jerk)) if len(steering_jerk) > 0 else 0.0
         
@@ -332,13 +372,17 @@ class DriveAnalyzer:
         oscillation_frequency = 0.0
         if self.data['lateral_error'] is not None and len(self.data['lateral_error']) > 10:
             error_centered = self.data['lateral_error'] - np.mean(self.data['lateral_error'])
-            fft_vals = fft(error_centered)
-            fft_freqs = fftfreq(len(error_centered), dt)
-            positive_freqs = fft_freqs[:len(fft_freqs)//2]
-            positive_fft = np.abs(fft_vals[:len(fft_vals)//2])
-            if len(positive_fft) > 1:
-                dominant_idx = np.argmax(positive_fft[1:]) + 1
-                oscillation_frequency = positive_freqs[dominant_idx] if dominant_idx < len(positive_freqs) else 0.0
+            time_diffs = np.diff(self.data['time'])
+            valid_diffs = time_diffs[time_diffs > 1e-6]
+            dt_mean = float(np.mean(valid_diffs)) if len(valid_diffs) > 0 else 0.0
+            if dt_mean > 0.0:
+                fft_vals = fft(error_centered)
+                fft_freqs = fftfreq(len(error_centered), dt_mean)
+                positive_freqs = fft_freqs[:len(fft_freqs)//2]
+                positive_fft = np.abs(fft_vals[:len(fft_vals)//2])
+                if len(positive_fft) > 1:
+                    dominant_idx = np.argmax(positive_fft[1:]) + 1
+                    oscillation_frequency = positive_freqs[dominant_idx] if dominant_idx < len(positive_freqs) else 0.0
         
         # Control effort (integral of |steering|)
         control_effort = np.trapezoid(np.abs(self.data['steering']), self.data['time'])
@@ -428,6 +472,10 @@ class DriveAnalyzer:
         speed_error_mean = 0.0
         speed_error_max = 0.0
         speed_overspeed_rate = 0.0
+        planned_speed_error_rmse = 0.0
+        planned_speed_error_mean = 0.0
+        planned_speed_error_max = 0.0
+        planned_overspeed_rate = 0.0
         if self.data['speed'] is not None and self.data['ref_velocity'] is not None:
             n_speed = min(len(self.data['speed']), len(self.data['ref_velocity']))
             if n_speed > 0:
@@ -439,6 +487,19 @@ class DriveAnalyzer:
                 speed_error_max = float(np.max(np.abs(speed_error)))
                 overspeed_threshold = 0.5
                 speed_overspeed_rate = float(np.sum(speed_error > overspeed_threshold) / n_speed * 100)
+        if self.data['speed'] is not None and self.data.get('target_speed_planned') is not None:
+            n_plan = min(len(self.data['speed']), len(self.data['target_speed_planned']))
+            if n_plan > 0:
+                speed = self.data['speed'][:n_plan]
+                planned = self.data['target_speed_planned'][:n_plan]
+                planned_error = speed - planned
+                planned_speed_error_rmse = float(np.sqrt(np.mean(planned_error ** 2)))
+                planned_speed_error_mean = float(np.mean(np.abs(planned_error)))
+                planned_speed_error_max = float(np.max(np.abs(planned_error)))
+                overspeed_threshold = 0.5
+                planned_overspeed_rate = float(
+                    np.sum(planned_error > overspeed_threshold) / n_plan * 100
+                )
 
         acceleration_mean = 0.0
         acceleration_max = 0.0
@@ -450,13 +511,24 @@ class DriveAnalyzer:
         lateral_jerk_p95 = 0.0
         lateral_jerk_max = 0.0
         speed_limit_zero_rate = 0.0
+        speed_surge_count = 0
+        speed_surge_avg_drop = 0.0
+        speed_surge_p95_drop = 0.0
+        speed_surge_transition_count = 0
+        speed_surge_transition_avg_drop = 0.0
+        speed_surge_transition_p95_drop = 0.0
+        speed_surge_oscillation_count = 0
+        speed_surge_oscillation_avg_drop = 0.0
+        speed_surge_oscillation_p95_drop = 0.0
         traj_cfg = self.config.get('trajectory', {})
         curvature_smoothing_enabled = bool(traj_cfg.get('curvature_smoothing_enabled', False))
         curvature_window_m = float(traj_cfg.get('curvature_smoothing_window_m', 12.0))
         curvature_min_speed = float(traj_cfg.get('curvature_smoothing_min_speed', 2.0))
         if self.data['speed'] is not None and len(self.data['speed']) > 1 and len(self.data['time']) > 1:
             dt_series = np.diff(self.data['time'])
-            dt_series[dt_series <= 0] = dt
+            positive_dt = dt_series[dt_series > 1e-6]
+            fallback_dt = float(np.mean(positive_dt)) if len(positive_dt) > 0 else 0.033
+            dt_series[dt_series <= 1e-6] = fallback_dt
             # Filter speed to reduce derivative noise in accel/jerk metrics.
             alpha = 0.7
             filtered_speed = np.empty_like(self.data['speed'])
@@ -499,7 +571,9 @@ class DriveAnalyzer:
                     abs_lat_accel = np.abs(lat_accel)
                     lateral_accel_p95 = float(np.percentile(abs_lat_accel, 95))
                     lat_dt = np.diff(self.data['time'][:n_lat])
-                    lat_dt[lat_dt <= 0] = dt
+                    lat_positive = lat_dt[lat_dt > 1e-6]
+                    lat_fallback = float(np.mean(lat_positive)) if len(lat_positive) > 0 else 0.033
+                    lat_dt[lat_dt <= 1e-6] = lat_fallback
                     lat_jerk = np.diff(lat_accel) / lat_dt
                     if lat_jerk.size > 0:
                         abs_lat_jerk = np.abs(lat_jerk)
@@ -509,6 +583,65 @@ class DriveAnalyzer:
             speed_limit_zero_rate = float(
                 np.sum(self.data['speed_limit'] <= 0.01) / len(self.data['speed_limit']) * 100
             )
+        if self.data['speed'] is not None:
+            curvature_series = None
+            if self.data.get('gt_path_curvature') is not None:
+                curvature_series = self.data['gt_path_curvature']
+            elif self.data.get('path_curvature_input') is not None:
+                curvature_series = self.data['path_curvature_input']
+            if curvature_series is not None:
+                n_surge = min(len(self.data['speed']), len(curvature_series))
+                speed_series = self.data['speed'][:n_surge]
+                curvature_series = curvature_series[:n_surge]
+                straight_threshold = float(traj_cfg.get('straight_speed_smoothing_curvature_threshold', 0.003))
+                min_drop = float(traj_cfg.get('speed_surge_min_drop', 1.0))
+                straight_mask = np.abs(curvature_series) <= straight_threshold
+                drops: list[float] = []
+                transition_drops: list[float] = []
+                oscillation_drops: list[float] = []
+                lookback_seconds = float(traj_cfg.get('speed_surge_transition_lookback_seconds', 1.0))
+                i = 1
+                while i < len(speed_series) - 1:
+                    if not straight_mask[i]:
+                        i += 1
+                        continue
+                    if speed_series[i] > speed_series[i - 1] and speed_series[i] >= speed_series[i + 1]:
+                        max_idx = i
+                        j = i + 1
+                        while j < len(speed_series) - 1 and straight_mask[j]:
+                            if speed_series[j] <= speed_series[j - 1] and speed_series[j] < speed_series[j + 1]:
+                                drop = float(speed_series[max_idx] - speed_series[j])
+                                if drop >= min_drop:
+                                    drops.append(drop)
+                                    if self.data.get('time') is not None and lookback_seconds > 0.0:
+                                        time_series = self.data['time'][:n_surge]
+                                        max_time = time_series[max_idx]
+                                        min_time = max_time - lookback_seconds
+                                        lookback_mask = (
+                                            (time_series >= min_time)
+                                            & (time_series <= max_time)
+                                        )
+                                        if np.any(np.abs(curvature_series[lookback_mask]) > straight_threshold):
+                                            transition_drops.append(drop)
+                                        else:
+                                            oscillation_drops.append(drop)
+                                break
+                            j += 1
+                        i = j
+                    else:
+                        i += 1
+                if drops:
+                    speed_surge_count = len(drops)
+                    speed_surge_avg_drop = float(np.mean(drops))
+                    speed_surge_p95_drop = float(np.percentile(drops, 95))
+                if transition_drops:
+                    speed_surge_transition_count = len(transition_drops)
+                    speed_surge_transition_avg_drop = float(np.mean(transition_drops))
+                    speed_surge_transition_p95_drop = float(np.percentile(transition_drops, 95))
+                if oscillation_drops:
+                    speed_surge_oscillation_count = len(oscillation_drops)
+                    speed_surge_oscillation_avg_drop = float(np.mean(oscillation_drops))
+                    speed_surge_oscillation_p95_drop = float(np.percentile(oscillation_drops, 95))
         
         # 6. SAFETY METRICS
         # Out of lane events (lateral error > 1.0m, typical lane width is ~3.5m, so 1.0m is significant)
@@ -565,6 +698,10 @@ class DriveAnalyzer:
             speed_error_mean=speed_error_mean,
             speed_error_max=speed_error_max,
             speed_overspeed_rate=speed_overspeed_rate,
+            planned_speed_error_rmse=planned_speed_error_rmse,
+            planned_speed_error_mean=planned_speed_error_mean,
+            planned_speed_error_max=planned_speed_error_max,
+            planned_overspeed_rate=planned_overspeed_rate,
             acceleration_mean=acceleration_mean,
             acceleration_max=acceleration_max,
             acceleration_p95=acceleration_p95,
@@ -575,6 +712,15 @@ class DriveAnalyzer:
             lateral_jerk_p95=lateral_jerk_p95,
             lateral_jerk_max=lateral_jerk_max,
             speed_limit_zero_rate=speed_limit_zero_rate,
+            speed_surge_count=speed_surge_count,
+            speed_surge_avg_drop=speed_surge_avg_drop,
+            speed_surge_p95_drop=speed_surge_p95_drop,
+            speed_surge_transition_count=speed_surge_transition_count,
+            speed_surge_transition_avg_drop=speed_surge_transition_avg_drop,
+            speed_surge_transition_p95_drop=speed_surge_transition_p95_drop,
+            speed_surge_oscillation_count=speed_surge_oscillation_count,
+            speed_surge_oscillation_avg_drop=speed_surge_oscillation_avg_drop,
+            speed_surge_oscillation_p95_drop=speed_surge_oscillation_p95_drop,
             out_of_lane_events=out_of_lane_events,
             out_of_lane_time=out_of_lane_time
         )
@@ -692,8 +838,22 @@ class DriveAnalyzer:
         print(f"     Mean: {self.metrics.speed_error_mean:.3f} m/s")
         print(f"     Max:  {self.metrics.speed_error_max:.3f} m/s")
         print(f"     Overspeed Rate (>0.5 m/s): {self.metrics.speed_overspeed_rate:.1f}%")
+        if self.metrics.planned_speed_error_rmse > 0.0:
+            print(f"   Planned Speed Tracking Error:")
+            print(f"     RMSE: {self.metrics.planned_speed_error_rmse:.3f} m/s")
+            print(f"     Mean: {self.metrics.planned_speed_error_mean:.3f} m/s")
+            print(f"     Max:  {self.metrics.planned_speed_error_max:.3f} m/s")
+            print(f"     Overspeed Rate (>0.5 m/s): {self.metrics.planned_overspeed_rate:.1f}%")
         print()
         print(f"   Speed Limit Missing: {self.metrics.speed_limit_zero_rate:.1f}%")
+        print(f"   Straight Surge Drops (>=1.0 m/s): {self.metrics.speed_surge_count} "
+              f"(avg {self.metrics.speed_surge_avg_drop:.2f}, p95 {self.metrics.speed_surge_p95_drop:.2f})")
+        print(f"     - Transition surges: {self.metrics.speed_surge_transition_count} "
+              f"(avg {self.metrics.speed_surge_transition_avg_drop:.2f}, "
+              f"p95 {self.metrics.speed_surge_transition_p95_drop:.2f})")
+        print(f"     - Oscillation surges: {self.metrics.speed_surge_oscillation_count} "
+              f"(avg {self.metrics.speed_surge_oscillation_avg_drop:.2f}, "
+              f"p95 {self.metrics.speed_surge_oscillation_p95_drop:.2f})")
         print()
         
         # 5. COMFORT

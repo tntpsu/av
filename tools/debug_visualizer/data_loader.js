@@ -53,6 +53,41 @@ class DataLoader {
     }
 
     /**
+     * Load available numeric signals for the current recording.
+     */
+    async loadSignals() {
+        if (!this.currentRecording) {
+            throw new Error('No recording loaded');
+        }
+        try {
+            const response = await fetch(`${API_BASE}/recording/${this.currentRecording}/signals`);
+            if (!response.ok) throw new Error('Failed to load signals');
+            const data = await response.json();
+            return data.signals || [];
+        } catch (error) {
+            console.error('Error loading signals:', error);
+            throw error;
+        }
+    }
+
+    /**
+     * Load time-series data for selected signals.
+     */
+    async loadTimeSeries(signals, timeKey = null) {
+        if (!this.currentRecording) {
+            throw new Error('No recording loaded');
+        }
+        const params = new URLSearchParams();
+        params.set('signals', signals.join(','));
+        if (timeKey) {
+            params.set('time', timeKey);
+        }
+        const response = await fetch(`${API_BASE}/recording/${this.currentRecording}/timeseries?${params.toString()}`);
+        if (!response.ok) throw new Error('Failed to load time series');
+        return response.json();
+    }
+
+    /**
      * Load frame data for a specific frame index.
      */
     async loadFrameData(frameIndex) {
@@ -90,13 +125,19 @@ class DataLoader {
     /**
      * Load camera frame image as base64.
      */
-    async loadFrameImage(frameIndex) {
+    async loadFrameImage(frameIndex, cameraId = 'front_center') {
         if (!this.currentRecording) {
             throw new Error('No recording loaded');
         }
 
         try {
-            const response = await fetch(`${API_BASE}/recording/${this.currentRecording}/frame/${frameIndex}/image`);
+            const params = new URLSearchParams();
+            if (cameraId) {
+                params.set('camera_id', cameraId);
+            }
+            const response = await fetch(
+                `${API_BASE}/recording/${this.currentRecording}/frame/${frameIndex}/image?${params.toString()}`
+            );
             if (!response.ok) throw new Error(`Failed to load frame image ${frameIndex}`);
             const data = await response.json();
             return data.image; // Base64 data URL

@@ -24,14 +24,14 @@ Transform:
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 1820642669467389734}
   serializedVersion: 2
-  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalRotation: {x: -0.043619387, y: 0, z: 0, w: 0.99904823}
   m_LocalPosition: {x: 0, y: 0, z: 0}
   m_LocalScale: {x: 0.77, y: 1, z: 0.42}
   m_ConstrainProportionsScale: 0
   m_Children:
   - {fileID: 5122828860999375085}
   m_Father: {fileID: 4381167177691393237}
-  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+  m_LocalEulerAnglesHint: {x: -5, y: 0, z: 0}
 --- !u!1 &6731699124901302757
 GameObject:
   m_ObjectHideFlags: 0
@@ -251,6 +251,8 @@ MonoBehaviour:
   frameCountJumpThreshold: 1
   unityTimeJumpThresholdSeconds: 0.2
   speedLimitPreviewDistance: 12
+  speedLimitPreviewDistanceMid: 0
+  speedLimitPreviewDistanceLong: 0
 --- !u!114 &5555555555555555555
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -297,7 +299,9 @@ MonoBehaviour:
   laneWidth: 7
   currentLane: 1
   autoDetectRoadGenerator: 1
+  useCenterLineAsLeftLane: 1
   useTimeBasedReference: 1
+  startInRightLane: 1
   referenceSpeed: 5
   groundTruthLookaheadDistance: 6
 --- !u!1 &9000000000000000001
@@ -328,7 +332,7 @@ Transform:
   m_GameObject: {fileID: 9000000000000000001}
   serializedVersion: 2
   m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
-  m_LocalPosition: {x: 0, y: 1.2, z: 0}
+  m_LocalPosition: {x: 0, y: 1.4, z: 0}
   m_LocalScale: {x: 1, y: 1, z: 1}
   m_ConstrainProportionsScale: 0
   m_Children: []
@@ -367,7 +371,7 @@ Camera:
     height: 1
   near clip plane: 0.3
   far clip plane: 1000
-  field of view: 75
+  field of view: 50
   orthographic: 0
   orthographic size: 5
   m_Depth: 0
@@ -403,6 +407,7 @@ MonoBehaviour:
   targetFPS: 30
   apiUrl: http://localhost:8000
   cameraEndpoint: /api/camera
+  cameraId: front_center
   showDebugInfo: 1
   saveLocalImages: 0
   useAsyncGPUReadback: 1

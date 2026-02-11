@@ -95,6 +95,7 @@ body {
 /* Camera Panel */
 .camera-panel {
     flex: 1;
+    min-width: 520px;
     display: flex;
     flex-direction: column;
     padding: 1rem;
@@ -102,10 +103,59 @@ body {
     overflow-y: auto;
 }
 
+.camera-grid-wrapper {
+    width: 100%;
+    height: 60vh;
+    overflow: hidden;
+}
+
+.camera-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
+    gap: 1rem;
+    align-items: start;
+    width: 100%;
+    transform-origin: top left;
+}
+
+.camera-grid-resize-handle {
+    height: 14px;
+    margin: 0.5rem 0 0;
+    cursor: row-resize;
+    background: #2a2a2a;
+    border: 1px solid #3a3a3a;
+    border-radius: 3px;
+    position: relative;
+    z-index: 5;
+    pointer-events: auto;
+}
+
+.camera-grid-resize-handle:hover {
+    background: #3a3a3a;
+}
+
+.camera-grid-resize-label {
+    font-size: 0.85rem;
+    color: #888;
+    margin-top: 0.5rem;
+    user-select: none;
+    pointer-events: none;
+}
+
+.panel-resize-handle {
+    width: 6px;
+    cursor: col-resize;
+    background: #2a2a2a;
+}
+
+.panel-resize-handle:hover {
+    background: #3a3a3a;
+}
+
 .canvas-container {
     position: relative;
-    width: 640px;
-    height: 480px;
+    width: 100%;
+    aspect-ratio: 4 / 3;
     margin-bottom: 1rem;
     background: #000;
     border: 2px solid #3a3a3a;
@@ -116,6 +166,8 @@ body {
 
 .canvas-container > canvas {
     pointer-events: none;
+    width: 100%;
+    height: 100%;
 }
 
 #camera-canvas,
@@ -166,6 +218,15 @@ body {
     margin-bottom: 0.5rem;
 }
 
+.overlay-controls {
+    max-height: 240px;
+    overflow-y: auto;
+}
+
+.overlay-controls .overlay-toggles {
+    padding-right: 0.5rem;
+}
+
 .debug-toggles label,
 .overlay-toggles label {
     display: flex;
@@ -205,6 +266,31 @@ body {
     border-left: 1px solid #3a3a3a;
     border-right: 1px solid #3a3a3a;
     overflow-y: auto;
+    position: relative;
+}
+
+.legend-panel.collapsed {
+    width: 36px;
+    padding: 0.5rem;
+}
+
+.legend-panel.collapsed .overlay-legend,
+.legend-panel.collapsed #gt-distance-select,
+.legend-panel.collapsed .legend-extra {
+    display: none;
+}
+
+.legend-toggle {
+    margin-top: 0.5rem;
+    width: 100%;
+}
+
+.legend-panel.collapsed .legend-toggle {
+    writing-mode: vertical-rl;
+    transform: rotate(180deg);
+    width: 26px;
+    padding: 0.25rem;
+    margin: 0 auto;
 }
 
 .legend-panel h3 {
@@ -215,7 +301,8 @@ body {
 
 /* Data Panel */
 .data-panel {
-    width: 400px;
+    width: 420px;
+    min-width: 320px;
     background: #2a2a2a;
     display: flex;
     flex-direction: column;
@@ -263,6 +350,125 @@ body {
 
 .tab-pane.active {
     display: block;
+}
+
+.chart-builder {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+    padding: 1rem 0;
+}
+
+.chart-controls {
+    width: 100%;
+    background: #2a2a2a;
+    border-radius: 6px;
+    padding: 1rem;
+}
+
+.chart-row {
+    margin-bottom: 0.75rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+}
+
+.chart-row label {
+    font-size: 0.85rem;
+    color: #cfcfcf;
+}
+
+.chart-row input,
+.chart-row select {
+    background: #3a3a3a;
+    border: 1px solid #4a4a4a;
+    border-radius: 4px;
+    color: #e0e0e0;
+    padding: 0.35rem 0.5rem;
+}
+
+.chart-toggle {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 0.85rem;
+}
+
+.chart-thresholds {
+    display: flex;
+    gap: 0.5rem;
+}
+
+.chart-thresholds input {
+    width: 100%;
+}
+
+.chart-signal-list {
+    max-height: 220px;
+    overflow-y: auto;
+    border: 1px solid #4a4a4a;
+    border-radius: 4px;
+    padding: 0.5rem;
+    background: #1f1f1f;
+}
+
+.chart-signal-item {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 0.85rem;
+    margin-bottom: 0.35rem;
+}
+
+.chart-actions {
+    flex-direction: row;
+    gap: 0.5rem;
+}
+
+.chart-save {
+    flex-direction: row;
+    gap: 0.5rem;
+}
+
+.chart-save input {
+    flex: 1;
+}
+
+.chart-saved-views {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+}
+
+.chart-saved-view {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+    font-size: 0.85rem;
+}
+
+.chart-saved-views-row {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.chart-saved-views-row select {
+    flex: 1;
+}
+
+.chart-canvas {
+    flex: 1;
+    background: #1a1a1a;
+    border: 1px solid #3a3a3a;
+    border-radius: 6px;
+    padding: 0.5rem;
+}
+
+.chart-canvas canvas {
+    width: 100%;
+    height: 480px;
 }
 
 .tab-pane h3 {

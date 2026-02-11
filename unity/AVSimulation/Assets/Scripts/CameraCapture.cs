@@ -24,6 +24,7 @@ public class CameraCapture : MonoBehaviour
     [Header("API Settings")]
     public string apiUrl = "http://localhost:8000";
     public string cameraEndpoint = "/api/camera";
+    public string cameraId = "front_center";
     
     [Header("Debug")]
     public bool showDebugInfo = true;
@@ -41,7 +42,7 @@ public class CameraCapture : MonoBehaviour
     public bool enforceQualityLevel = true;
     public int qualityLevelIndex = 0;
     public bool enforceCameraFov = true;
-    public float cameraFieldOfView = 84.93f;
+    public float cameraFieldOfView = 50f;
     public bool enforceCameraAspect = true;
     
     private RenderTexture renderTexture;
@@ -60,6 +61,9 @@ public class CameraCapture : MonoBehaviour
     private float lastCaptureRealtime = -1f;
     private float lastCaptureUnityTime = -1f;
     private float pendingReadbackStartRealtime = -1f;
+    private float lastSentTimestamp = -1f;
+    private double captureClock = 0.0;
+    private bool captureClockInitialized = false;
     
     void Start()
     {
@@ -168,11 +172,11 @@ public class CameraCapture : MonoBehaviour
         }
         #endif
         
-        // Check if it's time to capture (use realtime to avoid focus/timescale stalls)
-        if (Time.realtimeSinceStartup - lastCaptureTime >= captureInterval)
+        // Check if it's time to capture (use Unity time to stay in sync with state updates)
+        if (Time.time - lastCaptureTime >= captureInterval)
         {
             CaptureAndSend();
-            lastCaptureTime = Time.realtimeSinceStartup;
+            lastCaptureTime = Time.time;
         }
     }
     
@@ -192,15 +196,58 @@ public class CameraCapture : MonoBehaviour
         // Use RenderTexture.GetTemporary to avoid RenderPass issues
         RenderTexture previousActive = RenderTexture.active;
         RenderTexture previousTarget = targetCamera.targetTexture;
+        Rect previousRect = targetCamera.rect;
         
-        // Temporarily set target texture for rendering
+        // Temporarily set target texture for rendering and force full-rect capture
         targetCamera.targetTexture = renderTexture;
+        targetCamera.rect = new Rect(0f, 0f, 1f, 1f);
         targetCamera.Render();
         targetCamera.targetTexture = previousTarget; // Restore immediately
+        targetCamera.rect = previousRect;
 
-        float captureTime = Time.time;
+        float captureTime = Time.unscaledTime;
         int frameId = frameCount;
         float nowRealtime = Time.realtimeSinceStartup;
+        float fallbackDelta = captureInterval;
+        if (lastCaptureRealtime > 0f)
+        {
+            fallbackDelta = Mathf.Max(0.001f, nowRealtime - lastCaptureRealtime);
+        }
+        if (lastCaptureUnityTime > 0f && captureTime <= lastCaptureUnityTime)
+        {
+            float adjusted = lastCaptureUnityTime + fallbackDelta;
+            if (showDebugInfo)
+            {
+                Debug.LogWarning(
+                    $"CameraCapture: Time.time did not advance (t={captureTime:F6}). " +
+                    $"Adjusting to {adjusted:F6} (frameId={frameId}, unityFrame={Time.frameCount})."
+                );
+            }
+            captureTime = adjusted;
+        }
+
+        if (!captureClockInitialized)
+        {
+            captureClock = captureTime;
+            captureClockInitialized = true;
+        }
+        else
+        {
+            captureClock += captureInterval;
+            double drift = captureTime - captureClock;
+            if (Mathf.Abs((float)drift) > captureGapWarnSeconds)
+            {
+                if (showDebugInfo)
+                {
+                    Debug.LogWarning(
+                        $"CameraCapture: Capture clock drift {drift:F3}s. " +
+                        $"Resyncing to {captureTime:F6} (frameId={frameId})."
+                    );
+                }
+                captureClock = captureTime;
+            }
+        }
+        captureTime = (float)captureClock;
         if (lastCaptureUnityTime > 0f)
         {
             float timeGap = captureTime - lastCaptureUnityTime;
@@ -400,14 +447,30 @@ public class CameraCapture : MonoBehaviour
     IEnumerator SendImageToServer(byte[] imageData, float timestamp, int frameId)
     {
         string url = $"{apiUrl}{cameraEndpoint}";
+        float sendTimestamp = timestamp;
+        if (lastSentTimestamp > 0f && sendTimestamp <= lastSentTimestamp)
+        {
+            float minStep = Mathf.Max(0.001f, Time.unscaledDeltaTime);
+            float adjusted = lastSentTimestamp + minStep;
+            if (showDebugInfo)
+            {
+                Debug.LogWarning(
+                    $"CameraCapture: Non-monotonic timestamp {sendTimestamp:F6} " +
+                    $"(last={lastSentTimestamp:F6}). Adjusting to {adjusted:F6}."
+                );
+            }
+            sendTimestamp = adjusted;
+        }
+        lastSentTimestamp = sendTimestamp;
         
         // Create form data
         WWWForm form = new WWWForm();
         form.AddBinaryData("image", imageData, "frame.jpg", "image/jpeg");
-        form.AddField("timestamp", timestamp.ToString("F6"));
+        form.AddField("timestamp", sendTimestamp.ToString("R"));
         form.AddField("frame_id", frameId.ToString());
-        form.AddField("realtime_since_startup", Time.realtimeSinceStartup.ToString("F6"));
-        form.AddField("unscaled_time", Time.unscaledTime.ToString("F6"));
+        form.AddField("camera_id", cameraId);
+        form.AddField("realtime_since_startup", Time.realtimeSinceStartup.ToString("R"));
+        form.AddField("unscaled_time", Time.unscaledTime.ToString("R"));
         form.AddField("time_scale", Time.timeScale.ToString("F3"));
         
         using (UnityWebRequest request = UnityWebRequest.Post(url, form))

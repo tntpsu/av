@@ -11,6 +11,7 @@ Automatically detects problematic frames in recordings:
 
 import numpy as np
 import h5py
+import json
 from pathlib import Path
 from typing import Dict, List, Optional
 import math
@@ -26,6 +27,77 @@ def safe_float(value, default=0.0):
         if math.isnan(value) or math.isinf(value):
             return default
     return float(value)
+
+
+def _append_sign_mismatch_issue(
+    issues: List[Dict],
+    start_frame: int,
+    end_frame: int,
+    total_error: np.ndarray,
+    steering: np.ndarray,
+    before: Optional[np.ndarray],
+    feedback: Optional[np.ndarray],
+    stale_ctrl: Optional[np.ndarray],
+    stale_perc: Optional[np.ndarray],
+    num_lanes: Optional[np.ndarray],
+    override: Optional[np.ndarray],
+) -> None:
+    """Append a straight sign mismatch issue with a classified root cause."""
+    err_slice = total_error[start_frame:end_frame + 1]
+    steer_slice = steering[start_frame:end_frame + 1]
+    before_slice = before[start_frame:end_frame + 1] if before is not None else None
+    fb_slice = feedback[start_frame:end_frame + 1] if feedback is not None else None
+    stale_rate = 0.0
+    if stale_ctrl is not None:
+        stale_rate = max(stale_rate, safe_float(float((stale_ctrl[start_frame:end_frame + 1] > 0).mean()) * 100.0))
+    if stale_perc is not None:
+        stale_rate = max(stale_rate, safe_float(float((stale_perc[start_frame:end_frame + 1] > 0).mean()) * 100.0))
+    lanes_min = None
+    if num_lanes is not None and num_lanes.size > 0:
+        lanes_min = int(num_lanes[start_frame:end_frame + 1].min())
+    override_rate = 0.0
+    if override is not None:
+        override_rate = safe_float(float((override[start_frame:end_frame + 1] > 0).mean()) * 100.0)
+
+    root_cause = "unknown"
+    if stale_rate > 0.0 or (lanes_min is not None and lanes_min < 2):
+        root_cause = "perception_stale_or_missing"
+    elif (
+        fb_slice is not None and before_slice is not None
+        and np.sign(np.mean(err_slice)) == np.sign(np.mean(fb_slice))
+        and np.sign(np.mean(before_slice)) != np.sign(np.mean(err_slice))
+    ):
+        root_cause = "rate_or_jerk_limit"
+    elif (
+        before_slice is not None
+        and np.sign(np.mean(before_slice)) == np.sign(np.mean(err_slice))
+        and np.sign(np.mean(steer_slice)) != np.sign(np.mean(err_slice))
+    ):
+        root_cause = "smoothing"
+    elif (
+        fb_slice is not None
+        and np.sign(np.mean(fb_slice)) != np.sign(np.mean(err_slice))
+    ):
+        root_cause = "error_computation_or_sign"
+
+    duration = end_frame - start_frame + 1
+    severity = "high" if duration >= 10 else "medium"
+    issues.append({
+        "frame": int(start_frame),
+        "type": "straight_sign_mismatch",
+        "severity": severity,
+        "description": (
+            f"Straight sign mismatch for {duration} frames "
+            f"(root_cause={root_cause}, stale={stale_rate:.1f}%, "
+            f"lanes_min={lanes_min}, override={override_rate:.1f}%)."
+        ),
+        "duration": int(duration),
+        "root_cause": root_cause,
+        "stale_rate_percent": safe_float(stale_rate),
+        "lanes_min": lanes_min,
+        "override_rate_percent": safe_float(override_rate),
+        "end_frame": int(end_frame),
+    })
 
 
 def detect_issues(recording_path: Path, analyze_to_failure: bool = False) -> Dict:
@@ -178,6 +250,119 @@ def detect_issues(recording_path: Path, analyze_to_failure: bool = False) -> Dic
                                 "description": f"Perception instability detected: {reason}. Lane position/width changed significantly, causing control errors.",
                                 "stale_reason": str(reason)
                             })
+
+            # 2.6 DETECT RIGHT-LANE LOW VISIBILITY (lane exits FOV)
+            if has_perception and "perception/fit_points_right" in f:
+                right_raw = f["perception/fit_points_right"][:num_frames]
+                num_lanes = (
+                    np.array(f["perception/num_lanes_detected"][:num_frames])
+                    if "perception/num_lanes_detected" in f else None
+                )
+                image_width = int(f["camera/image_width"][0]) if "camera/image_width" in f else 640
+                edge_margin = 12
+                min_points = 6
+
+                def parse_points(raw) -> list:
+                    try:
+                        s = raw.decode('utf-8') if isinstance(raw, (bytes, bytearray, np.bytes_)) else str(raw)
+                        return json.loads(s)
+                    except Exception:
+                        return []
+
+                low_flags = []
+                for idx in range(len(right_raw)):
+                    pts = parse_points(right_raw[idx])
+                    xs = [p[0] for p in pts if isinstance(p, (list, tuple)) and len(p) >= 2]
+                    low = False
+                    if num_lanes is not None and num_lanes[idx] < 2:
+                        low = True
+                    if len(xs) < min_points:
+                        low = True
+                    elif xs and max(xs) > (image_width - edge_margin):
+                        low = True
+                    low_flags.append(low)
+
+                min_event_len = 3
+                current = 0
+                event_start = None
+                for idx, flag in enumerate(low_flags):
+                    if flag:
+                        if current == 0:
+                            event_start = idx
+                        current += 1
+                    else:
+                        if current >= min_event_len and event_start is not None:
+                            severity = "high" if current >= 10 else "medium"
+                            issues.append({
+                                "frame": int(event_start),
+                                "type": "right_lane_low_visibility",
+                                "severity": severity,
+                                "description": f"Right lane low visibility for {current} frames (likely exiting FOV on right turn).",
+                                "duration": int(current),
+                                "end_frame": int(idx - 1),
+                            })
+                        current = 0
+                        event_start = None
+                if current >= min_event_len and event_start is not None:
+                    severity = "high" if current >= 10 else "medium"
+                    issues.append({
+                        "frame": int(event_start),
+                        "type": "right_lane_low_visibility",
+                        "severity": severity,
+                        "description": f"Right lane low visibility for {current} frames (likely exiting FOV on right turn).",
+                        "duration": int(current),
+                        "end_frame": int(len(low_flags) - 1),
+                    })
+            
+            # 2.5 DETECT LANE-LINE JITTER (large frame-to-frame shifts)
+            if has_perception and "perception/left_lane_line_x" in f and "perception/right_lane_line_x" in f:
+                left = np.array(f["perception/left_lane_line_x"][:num_frames])
+                right = np.array(f["perception/right_lane_line_x"][:num_frames])
+                if left.size > 1 and right.size > 1:
+                    jitter = np.maximum(np.abs(np.diff(left)), np.abs(np.diff(right)))
+                    jitter_threshold = 0.8  # meters per frame
+                    min_event_len = 3
+                    current = 0
+                    event_start = None
+                    max_jitter = 0.0
+                    for idx, value in enumerate(jitter):
+                        if value > jitter_threshold:
+                            if current == 0:
+                                event_start = idx + 1  # jitter is between idx and idx+1
+                                max_jitter = value
+                            else:
+                                max_jitter = max(max_jitter, value)
+                            current += 1
+                        else:
+                            if current >= min_event_len and event_start is not None:
+                                severity = "high" if max_jitter > 1.5 or current >= 10 else "medium"
+                                issues.append({
+                                    "frame": int(event_start),
+                                    "type": "perception_lane_jitter",
+                                    "severity": severity,
+                                    "description": (
+                                        f"Lane-line jitter detected for {current} frames "
+                                        f"(max_dX={max_jitter:.2f}m)."
+                                    ),
+                                    "duration": int(current),
+                                    "max_jitter": safe_float(max_jitter)
+                                })
+                            current = 0
+                            event_start = None
+                            max_jitter = 0.0
+                    if current >= min_event_len and event_start is not None:
+                        severity = "high" if max_jitter > 1.5 or current >= 10 else "medium"
+                        issues.append({
+                            "frame": int(event_start),
+                            "type": "perception_lane_jitter",
+                            "severity": severity,
+                            "description": (
+                                f"Lane-line jitter detected for {current} frames "
+                                f"(max_dX={max_jitter:.2f}m)."
+                            ),
+                            "duration": int(current),
+                            "max_jitter": safe_float(max_jitter)
+                        })
             
             # 3. DETECT HIGH LATERAL ERROR (perception-based - indicates perception issues)
             # NOTE: This uses perception-based error, which can be wrong if perception fails
@@ -238,6 +423,82 @@ def detect_issues(recording_path: Path, analyze_to_failure: bool = False) -> Dic
                                 "description": f"Perception failure: <2 lanes detected for {consecutive_failures} frames (starting at frame {failure_start})",
                                 "duration": int(consecutive_failures)
                             })
+            
+            # 4.5 DETECT STRAIGHT SIGN MISMATCH EVENTS (steering vs error)
+            if has_control and "control/steering" in f:
+                steering = np.array(f["control/steering"][:num_frames])
+                total_error = None
+                if "control/total_error_scaled" in f:
+                    total_error = np.array(f["control/total_error_scaled"][:num_frames])
+                elif "control/total_error" in f:
+                    total_error = np.array(f["control/total_error"][:num_frames])
+                is_straight = np.array(f["control/is_straight"][:num_frames]) if "control/is_straight" in f else None
+                before = (
+                    np.array(f["control/steering_before_limits"][:num_frames])
+                    if "control/steering_before_limits" in f else None
+                )
+                feedback = (
+                    np.array(f["control/feedback_steering"][:num_frames])
+                    if "control/feedback_steering" in f else None
+                )
+                stale_ctrl = (
+                    np.array(f["control/using_stale_perception"][:num_frames])
+                    if "control/using_stale_perception" in f else None
+                )
+                stale_perc = (
+                    np.array(f["perception/using_stale_data"][:num_frames])
+                    if "perception/using_stale_data" in f else None
+                )
+                override = (
+                    np.array(f["control/straight_sign_flip_override_active"][:num_frames])
+                    if "control/straight_sign_flip_override_active" in f else None
+                )
+                if total_error is not None and is_straight is not None:
+                    valid = (
+                        (is_straight > 0)
+                        & (np.abs(total_error) >= 0.02)
+                        & (np.abs(steering) >= 0.02)
+                    )
+                    mismatch = valid & (np.sign(total_error) != np.sign(steering))
+                    min_event_len = 3
+                    current = 0
+                    event_start = None
+                    for idx, flag in enumerate(mismatch):
+                        if flag:
+                            if current == 0:
+                                event_start = idx
+                            current += 1
+                        else:
+                            if current >= min_event_len and event_start is not None:
+                                _append_sign_mismatch_issue(
+                                    issues=issues,
+                                    start_frame=event_start,
+                                    end_frame=idx - 1,
+                                    total_error=total_error,
+                                    steering=steering,
+                                    before=before,
+                                    feedback=feedback,
+                                    stale_ctrl=stale_ctrl,
+                                    stale_perc=stale_perc,
+                                    num_lanes=num_lanes if has_perception else None,
+                                    override=override,
+                                )
+                            current = 0
+                            event_start = None
+                    if current >= min_event_len and event_start is not None:
+                        _append_sign_mismatch_issue(
+                            issues=issues,
+                            start_frame=event_start,
+                            end_frame=len(mismatch) - 1,
+                            total_error=total_error,
+                            steering=steering,
+                            before=before,
+                            feedback=feedback,
+                            stale_ctrl=stale_ctrl,
+                            stale_perc=stale_perc,
+                            num_lanes=num_lanes if has_perception else None,
+                            override=override,
+                        )
                         consecutive_failures = 0
                         failure_start = None
                 

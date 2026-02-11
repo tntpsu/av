@@ -9,6 +9,7 @@ class OverlayRenderer {
         this.ctx = canvas.getContext('2d');
         this.imageWidth = 640;
         this.imageHeight = 480;
+        this.segmentationMaskCache = new Map();
         
         // Camera parameters (should match trajectory planner)
         // CRITICAL: Use Unity's actual horizontal FOV from recording (not hardcoded)
@@ -38,6 +39,65 @@ class OverlayRenderer {
         if (baseDistance > 0 && baseDistance < 10) {
             this.baseDistance = baseDistance;
         }
+    }
+
+    _hexToRgb(hex) {
+        const clean = hex.replace('#', '');
+        const bigint = parseInt(clean, 16);
+        const r = (bigint >> 16) & 255;
+        const g = (bigint >> 8) & 255;
+        const b = bigint & 255;
+        return { r, g, b };
+    }
+
+    drawSegmentationMaskFromPng(maskDataUrl, leftColor, rightColor, alpha = 0.5, onReady = null) {
+        if (!maskDataUrl) return;
+        if (this.segmentationMaskCache.has(maskDataUrl)) {
+            return this.segmentationMaskCache.get(maskDataUrl);
+        }
+
+        const img = new Image();
+        img.onload = () => {
+            const offscreen = document.createElement('canvas');
+            offscreen.width = this.imageWidth;
+            offscreen.height = this.imageHeight;
+            const offCtx = offscreen.getContext('2d');
+            offCtx.drawImage(img, 0, 0, offscreen.width, offscreen.height);
+            const imgData = offCtx.getImageData(0, 0, offscreen.width, offscreen.height);
+            const data = imgData.data;
+            const left = this._hexToRgb(leftColor);
+            const right = this._hexToRgb(rightColor);
+            const alphaVal = Math.round(Math.max(0, Math.min(1, alpha)) * 255);
+
+            for (let i = 0; i < data.length; i += 4) {
+                const label = data[i]; // Grayscale label from PNG
+                if (label === 1) {
+                    data[i] = left.r;
+                    data[i + 1] = left.g;
+                    data[i + 2] = left.b;
+                    data[i + 3] = alphaVal;
+                } else if (label === 2) {
+                    data[i] = right.r;
+                    data[i + 1] = right.g;
+                    data[i + 2] = right.b;
+                    data[i + 3] = alphaVal;
+                } else {
+                    data[i + 3] = 0;
+                }
+            }
+
+            this.segmentationMaskCache.set(maskDataUrl, imgData);
+            if (onReady) {
+                onReady();
+            }
+        };
+        img.src = maskDataUrl;
+        return null;
+    }
+
+    drawSegmentationMaskImageData(imageData) {
+        if (!imageData) return;
+        this.ctx.putImageData(imageData, 0, 0);
     }
 
     /**
@@ -105,6 +165,38 @@ class OverlayRenderer {
                 }
             }
         }
+    }
+
+    /**
+     * Draw a rectangular ROI in image coordinates.
+     */
+    drawRoiRect(x0, y0, x1, y1, color = '#ffd400', lineWidth = 2, dashed = true) {
+        this.ctx.save();
+        this.ctx.strokeStyle = color;
+        this.ctx.lineWidth = lineWidth;
+        if (dashed) {
+            this.ctx.setLineDash([6, 4]);
+        }
+        const left = Math.min(x0, x1);
+        const top = Math.min(y0, y1);
+        const width = Math.abs(x1 - x0);
+        const height = Math.abs(y1 - y0);
+        this.ctx.strokeRect(left, top, width, height);
+        this.ctx.restore();
+    }
+
+    drawHorizontalLine(y, color = '#ffd400', lineWidth = 2, dashed = true) {
+        this.ctx.save();
+        this.ctx.strokeStyle = color;
+        this.ctx.lineWidth = lineWidth;
+        if (dashed) {
+            this.ctx.setLineDash([6, 4]);
+        }
+        this.ctx.beginPath();
+        this.ctx.moveTo(0, y);
+        this.ctx.lineTo(this.imageWidth, y);
+        this.ctx.stroke();
+        this.ctx.restore();
     }
 
     /**
@@ -289,9 +381,40 @@ class OverlayRenderer {
     }
 
     /**
+     * Draw a single lane center line from vehicle coordinates.
+     * @param {number} centerX - Lane center x position in vehicle coords (meters)
+     * @param {number} distance - Lookahead distance (meters)
+     * @param {string} color - Line color
+     */
+    drawCenterLineFromVehicleCoords(centerX, distance = 8.0, color = '#00ffff', yLookaheadOverride = null) {
+        if (centerX === null || centerX === undefined) {
+            return;
+        }
+
+        const yLookahead = yLookaheadOverride !== null && yLookaheadOverride > 0 ? yLookaheadOverride : 350;
+        const horizontalFovRad = (this.cameraFov * Math.PI) / 180;
+        const widthAtDistance = 2.0 * distance * Math.tan(horizontalFovRad / 2);
+        const pixelToMeter = widthAtDistance / this.imageWidth;
+        const xCenter = this.imageWidth / 2;
+        const x = xCenter + (centerX / pixelToMeter);
+
+        const yStart = Math.floor(this.imageHeight * 0.33);
+        const yEnd = this.imageHeight;
+
+        this.ctx.strokeStyle = color;
+        this.ctx.lineWidth = 2;
+        this.ctx.setLineDash([4, 4]);
+        this.ctx.beginPath();
+        this.ctx.moveTo(x, yStart);
+        this.ctx.lineTo(x, yEnd);
+        this.ctx.stroke();
+        this.ctx.setLineDash([]);
+    }
+
+    /**
      * Draw trajectory points.
      */
-    drawTrajectory(trajectoryPoints, color = '#ff00ff', lineWidth = 2) {
+    drawTrajectory(trajectoryPoints, color = '#ff00ff', lineWidth = 2, yMin = null, yMax = null) {
         if (!trajectoryPoints || trajectoryPoints.length === 0) return;
         
         this.ctx.strokeStyle = color;
@@ -301,6 +424,12 @@ class OverlayRenderer {
         let firstPoint = true;
         for (const point of trajectoryPoints) {
             const pos = this.vehicleToImage(point.x, point.y, point.y);
+            if (yMin !== null && pos.y < yMin) {
+                continue;
+            }
+            if (yMax !== null && pos.y > yMax) {
+                continue;
+            }
             if (firstPoint) {
                 this.ctx.moveTo(pos.x, pos.y);
                 firstPoint = false;
@@ -309,6 +438,30 @@ class OverlayRenderer {
             }
         }
         
+        this.ctx.stroke();
+    }
+
+    /**
+     * Draw a path from image-space points.
+     */
+    drawImagePath(points, color = '#ff00ff', lineWidth = 2) {
+        if (!points || points.length === 0) return;
+
+        this.ctx.strokeStyle = color;
+        this.ctx.lineWidth = lineWidth;
+        this.ctx.beginPath();
+        let firstPoint = true;
+        for (const point of points) {
+            if (!Number.isFinite(point.x) || !Number.isFinite(point.y)) {
+                continue;
+            }
+            if (firstPoint) {
+                this.ctx.moveTo(point.x, point.y);
+                firstPoint = false;
+            } else {
+                this.ctx.lineTo(point.x, point.y);
+            }
+        }
         this.ctx.stroke();
     }
 

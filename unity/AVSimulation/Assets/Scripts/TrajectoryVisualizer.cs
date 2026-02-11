@@ -32,6 +32,15 @@ public class TrajectoryVisualizer : MonoBehaviour
     public float vehicleMarkerSize = 0.3f;     // Vehicle position marker size
     public bool alwaysVisible = true;          // Keep line visible even when no trajectory
     public int maxTrajectoryPoints = 30;       // Maximum points to display (increased from 20)
+    public bool showReferenceMarker = false;
+    public bool showVehicleMarker = false;
+
+    [Header("Perception Overlay")]
+    public bool showPerceptionLines = true;
+    public Color perceptionLaneColor = Color.red;
+    public Color perceptionCenterColor = Color.cyan;
+    public float perceptionLineWidth = 0.15f;
+    public float perceptionLineLength = 1.5f;
     
     [Header("Debug")]
     public bool showDebugInfo = true;
@@ -43,6 +52,14 @@ public class TrajectoryVisualizer : MonoBehaviour
     private float currentLateralError = 0f;
     private Transform vehicleTransform;
     private MaterialPropertyBlock materialPropertyBlock; // For per-instance material properties
+    private LineRenderer perceptionLeftLine;
+    private LineRenderer perceptionRightLine;
+    private LineRenderer perceptionCenterLine;
+    private float perceptionLeftX = float.NaN;
+    private float perceptionRightX = float.NaN;
+    private float perceptionCenterX = float.NaN;
+    private float perceptionLookahead = float.NaN;
+    private bool perceptionValid = false;
     
     void Start()
     {
@@ -143,6 +160,13 @@ public class TrajectoryVisualizer : MonoBehaviour
                 Debug.Log($"TrajectoryVisualizer: Created LineRenderer using Unity's default material (supports vertex colors), goodColor: R={goodColor.r}, G={goodColor.g}, B={goodColor.b}");
             }
         }
+
+        if (showPerceptionLines)
+        {
+            perceptionLeftLine = CreatePerceptionLine("PerceptionLeftLine", perceptionLaneColor);
+            perceptionRightLine = CreatePerceptionLine("PerceptionRightLine", perceptionLaneColor);
+            perceptionCenterLine = CreatePerceptionLine("PerceptionCenterLine", perceptionCenterColor);
+        }
         else
         {
             // If LineRenderer already exists, ensure it has a material with color property
@@ -171,8 +195,8 @@ public class TrajectoryVisualizer : MonoBehaviour
             }
         }
         
-        // Create reference point marker if not assigned
-        if (referencePointMarker == null)
+        // Create reference point marker if enabled
+        if (showReferenceMarker && referencePointMarker == null)
         {
             referencePointMarker = GameObject.CreatePrimitive(PrimitiveType.Sphere);
             referencePointMarker.name = "ReferencePointMarker";
@@ -236,8 +260,8 @@ public class TrajectoryVisualizer : MonoBehaviour
             }
         }
         
-        // Create vehicle position marker if not assigned
-        if (vehiclePositionMarker == null && vehicleTransform != null)
+        // Create vehicle position marker if enabled
+        if (showVehicleMarker && vehiclePositionMarker == null && vehicleTransform != null)
         {
             vehiclePositionMarker = GameObject.CreatePrimitive(PrimitiveType.Sphere);
             vehiclePositionMarker.name = "VehiclePositionMarker";
@@ -249,6 +273,15 @@ public class TrajectoryVisualizer : MonoBehaviour
             Destroy(vehiclePositionMarker.GetComponent<Collider>());
         }
         
+        if (!showReferenceMarker && referencePointMarker != null)
+        {
+            referencePointMarker.SetActive(false);
+        }
+        if (!showVehicleMarker && vehiclePositionMarker != null)
+        {
+            vehiclePositionMarker.SetActive(false);
+        }
+
         updateInterval = 1.0f / updateRate;
         lastUpdateTime = Time.time;
         
@@ -335,6 +368,13 @@ public class TrajectoryVisualizer : MonoBehaviour
                     
                     // Update lateral error for color coding
                     currentLateralError = data.lateral_error;
+                    
+                    // Update perception overlay data
+                    perceptionValid = data.perception_valid;
+                    perceptionLeftX = data.perception_left_lane_x;
+                    perceptionRightX = data.perception_right_lane_x;
+                    perceptionCenterX = data.perception_center_x;
+                    perceptionLookahead = data.perception_lookahead_m;
                     
                     // CRITICAL: Force color update immediately when data is received
                     if (trajectoryLine != null && trajectoryPoints.Length > 0)
@@ -459,10 +499,18 @@ public class TrajectoryVisualizer : MonoBehaviour
                 trajectoryLine.enabled = false;
             }
         }
+
+        UpdatePerceptionOverlay();
         
         // Update reference point marker
-        // CRITICAL: If marker is NULL, try to create it (in case Start() hasn't run or it was destroyed)
-        if (referencePointMarker == null)
+        if (!showReferenceMarker)
+        {
+            if (referencePointMarker != null)
+            {
+                referencePointMarker.SetActive(false);
+            }
+        }
+        else if (referencePointMarker == null)
         {
             if (showDebugInfo && Time.frameCount % 30 == 0)
             {
@@ -528,7 +576,7 @@ public class TrajectoryVisualizer : MonoBehaviour
             }
         }
         
-        if (referencePointMarker != null)
+        if (showReferenceMarker && referencePointMarker != null)
         {
             if (referencePoint != Vector3.zero)
             {
@@ -613,6 +661,70 @@ public class TrajectoryVisualizer : MonoBehaviour
             return Color.Lerp(warningColor, errorColor, t);
         }
     }
+
+    void UpdatePerceptionOverlay()
+    {
+        if (!showPerceptionLines)
+        {
+            return;
+        }
+
+        if (!perceptionValid || float.IsNaN(perceptionLookahead) || vehicleTransform == null)
+        {
+            if (perceptionLeftLine != null) perceptionLeftLine.enabled = false;
+            if (perceptionRightLine != null) perceptionRightLine.enabled = false;
+            if (perceptionCenterLine != null) perceptionCenterLine.enabled = false;
+            return;
+        }
+
+        UpdatePerceptionLine(perceptionLeftLine, perceptionLeftX, perceptionLookahead);
+        UpdatePerceptionLine(perceptionRightLine, perceptionRightX, perceptionLookahead);
+        UpdatePerceptionLine(perceptionCenterLine, perceptionCenterX, perceptionLookahead);
+    }
+
+    LineRenderer CreatePerceptionLine(string name, Color color)
+    {
+        GameObject lineObj = new GameObject(name);
+        lineObj.transform.SetParent(transform);
+        LineRenderer line = lineObj.AddComponent<LineRenderer>();
+
+        Shader lineShader = Shader.Find("Legacy Shaders/Particles/Alpha Blended Premultiply");
+        if (lineShader == null)
+        {
+            lineShader = Shader.Find("Sprites/Default");
+        }
+        line.material = new Material(lineShader);
+        line.material.color = color;
+
+        line.useWorldSpace = true;
+        line.startWidth = perceptionLineWidth;
+        line.endWidth = perceptionLineWidth;
+        line.positionCount = 0;
+        line.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+        line.receiveShadows = false;
+
+        return line;
+    }
+
+    void UpdatePerceptionLine(LineRenderer line, float x, float lookahead)
+    {
+        if (line == null || float.IsNaN(x) || float.IsNaN(lookahead) || vehicleTransform == null)
+        {
+            if (line != null) line.enabled = false;
+            return;
+        }
+
+        float halfLen = perceptionLineLength * 0.5f;
+        Vector3 startLocal = new Vector3(x, 0.05f, lookahead - halfLen);
+        Vector3 endLocal = new Vector3(x, 0.05f, lookahead + halfLen);
+        Vector3 startWorld = vehicleTransform.TransformPoint(startLocal);
+        Vector3 endWorld = vehicleTransform.TransformPoint(endLocal);
+
+        line.positionCount = 2;
+        line.SetPosition(0, startWorld);
+        line.SetPosition(1, endWorld);
+        line.enabled = true;
+    }
     
     void OnDrawGizmos()
     {
@@ -642,5 +754,10 @@ public class TrajectoryData
     public float[] reference_point;      // [x, y, heading, velocity]
     public float lateral_error;
     public float timestamp;
+    public float perception_left_lane_x;
+    public float perception_right_lane_x;
+    public float perception_center_x;
+    public float perception_lookahead_m;
+    public bool perception_valid;
 }
 

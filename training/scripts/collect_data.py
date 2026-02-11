@@ -52,7 +52,7 @@ def collect_data(bridge_url: str, output_dir: str, duration: float = 60.0,
                 time.sleep(0.01)
                 continue
             
-            image, timestamp = frame_data
+            image, timestamp, camera_frame_id = frame_data
             
             # Get vehicle state
             vehicle_state_dict = bridge.get_latest_vehicle_state()
@@ -67,7 +67,7 @@ def collect_data(bridge_url: str, output_dir: str, duration: float = 60.0,
             camera_frame = CameraFrame(
                 image=image,
                 timestamp=timestamp,
-                frame_id=frame_count
+                frame_id=camera_frame_id if camera_frame_id is not None else frame_count
             )
             
             # Create vehicle state

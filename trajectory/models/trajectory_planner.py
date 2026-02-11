@@ -40,7 +40,9 @@ class RuleBasedTrajectoryPlanner:
                  camera_fov: float = 75.0, camera_height: float = 1.2,
                  lookahead_pixels: float = 200.0, bias_correction_threshold: float = 10.0,
                  reference_smoothing: float = 0.7, lane_smoothing_alpha: float = 0.7,
-                 camera_offset_x: float = 0.0, distance_scaling_factor: float = 0.875):
+                 camera_offset_x: float = 0.0, distance_scaling_factor: float = 0.875,
+                 center_spline_enabled: bool = False, center_spline_degree: int = 2,
+                 center_spline_samples: int = 20, center_spline_alpha: float = 0.7):
         """
         Initialize trajectory planner.
         
@@ -78,6 +80,12 @@ class RuleBasedTrajectoryPlanner:
         # Default: 7/8 = 0.875 (based on visualizer tuning where 7m aligns correctly)
         # This makes lanes appear correct width (7m instead of 8.5m)
         self.distance_scaling_factor = distance_scaling_factor
+        
+        # NEW: Optional center spline smoothing to reduce trajectory jitter.
+        self.center_spline_enabled = center_spline_enabled
+        self.center_spline_degree = int(center_spline_degree)
+        self.center_spline_samples = int(center_spline_samples)
+        self.center_spline_alpha = float(center_spline_alpha)
         
         # For reference point smoothing
         self.last_reference_x = None
@@ -349,6 +357,18 @@ class RuleBasedTrajectoryPlanner:
         else:
             # Use simple averaging (faster, works well when curvatures are similar)
             center_coeffs = (left_coeffs + right_coeffs) / 2.0
+
+        if self.center_spline_enabled:
+            spline_coeffs = self._fit_center_spline(left_coeffs, right_coeffs)
+            if spline_coeffs is not None:
+                last_center = getattr(self, 'last_center_coeffs', None)
+                if (self.center_spline_alpha is not None and last_center is not None and
+                        len(spline_coeffs) == len(last_center)):
+                    spline_coeffs = (
+                        self.center_spline_alpha * last_center +
+                        (1.0 - self.center_spline_alpha) * spline_coeffs
+                    )
+                center_coeffs = spline_coeffs
         
         # CRITICAL FIX: For straight roads, ensure center lane is STRAIGHT (heading = 0°)
         # The 19.7° reference heading bias is caused by non-zero linear coefficient
@@ -528,6 +548,22 @@ class RuleBasedTrajectoryPlanner:
                         center_coeffs[-2] -= linear_correction * 0.5  # Partial correction to avoid overcorrection
         
         return center_coeffs
+
+    def _fit_center_spline(self, left_coeffs: np.ndarray,
+                           right_coeffs: np.ndarray) -> Optional[np.ndarray]:
+        """Fit a smooth centerline polynomial from sampled midpoints."""
+        if self.center_spline_samples < 4:
+            return None
+        y_start = int(self.image_height * 0.3)
+        y_end = int(self.image_height * 0.93)
+        y_samples = np.linspace(y_start, y_end, self.center_spline_samples)
+        left_x_samples = np.polyval(left_coeffs, y_samples)
+        right_x_samples = np.polyval(right_coeffs, y_samples)
+        center_x_samples = (left_x_samples + right_x_samples) / 2.0
+        degree = min(max(self.center_spline_degree, 1), 2)
+        if len(y_samples) <= degree:
+            return None
+        return np.polyfit(y_samples, center_x_samples, deg=degree)
     
     def _apply_bias_correction_to_coeffs(self, center_coeffs: np.ndarray, 
                                          left_coeffs: np.ndarray, 

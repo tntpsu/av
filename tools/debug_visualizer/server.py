@@ -5,7 +5,7 @@ Converts HDF5 recordings to JSON and serves camera frames.
 
 import h5py
 import numpy as np
-from flask import Flask, jsonify, send_from_directory
+from flask import Flask, jsonify, send_from_directory, request
 from flask_cors import CORS
 from pathlib import Path
 import base64
@@ -42,6 +42,16 @@ def numpy_to_list(obj):
     elif isinstance(obj, bytes):
         return obj.decode('utf-8')
     return obj
+
+
+def _is_numeric_series(dataset: h5py.Dataset) -> bool:
+    if not isinstance(dataset, h5py.Dataset):
+        return False
+    if dataset.ndim != 1:
+        return False
+    if dataset.dtype.kind not in ("i", "u", "f"):
+        return False
+    return True
 
 
 @app.route('/api/recordings')
@@ -96,6 +106,150 @@ def get_frame_count(filename):
         }), 500
 
 
+@app.route('/api/recording/<path:filename>/signals')
+def list_signals(filename):
+    """List numeric time-series signals available in the recording."""
+    from urllib.parse import unquote
+    filename = unquote(filename)
+    filepath = RECORDINGS_DIR / filename
+    if not filepath.exists():
+        return jsonify({"error": f"Recording not found: {filename}"}), 404
+
+    signals = []
+    try:
+        with h5py.File(filepath, 'r') as f:
+            def visit(name, obj):
+                if not isinstance(obj, h5py.Dataset):
+                    return
+                if name in ("camera/images", "camera/topdown_images"):
+                    return
+                if _is_numeric_series(obj):
+                    signals.append({
+                        "name": name,
+                        "length": int(obj.shape[0]),
+                        "dtype": str(obj.dtype),
+                    })
+
+            f.visititems(visit)
+
+            # Derived signals
+            if "vehicle/speed" in f and "vehicle/timestamps" in f:
+                signals.append({
+                    "name": "derived/distance_m",
+                    "length": int(min(len(f["vehicle/speed"]), len(f["vehicle/timestamps"]))),
+                    "dtype": "float64",
+                })
+            # Expected right lane center (for debugging ref_x_raw)
+            if "perception/right_lane_line_x" in f:
+                # Read config to get target_lane_width_m
+                import yaml
+                config_path = Path(__file__).parent.parent.parent / "config" / "av_stack_config.yaml"
+                target_lane_width = 3.6  # default
+                if config_path.exists():
+                    try:
+                        with open(config_path, 'r') as cfg:
+                            config = yaml.safe_load(cfg)
+                            target_lane_width = config.get('trajectory', {}).get('target_lane_width_m', 3.6)
+                    except:
+                        pass
+                signals.append({
+                    "name": "derived/expected_right_center",
+                    "length": int(len(f["perception/right_lane_line_x"])),
+                    "dtype": "float64",
+                })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+    signals.sort(key=lambda s: s["name"])
+    return jsonify({"signals": signals})
+
+
+@app.route('/api/recording/<path:filename>/timeseries')
+def get_timeseries(filename):
+    """Return aligned time-series data for selected signals."""
+    from urllib.parse import unquote
+    filename = unquote(filename)
+    filepath = RECORDINGS_DIR / filename
+    if not filepath.exists():
+        return jsonify({"error": f"Recording not found: {filename}"}), 404
+
+    signal_param = request.args.get("signals", "")
+    time_key = request.args.get("time", "")
+    signal_names = [s.strip() for s in signal_param.split(",") if s.strip()]
+    if not signal_names:
+        return jsonify({"error": "No signals provided"}), 400
+
+    try:
+        with h5py.File(filepath, 'r') as f:
+            if not time_key:
+                if "control/timestamps" in f:
+                    time_key = "control/timestamps"
+                elif "vehicle/timestamps" in f:
+                    time_key = "vehicle/timestamps"
+                elif "camera/timestamps" in f:
+                    time_key = "camera/timestamps"
+
+            time_series = None
+            if time_key and time_key in f and _is_numeric_series(f[time_key]):
+                time_series = f[time_key][:]
+
+            series = {}
+            min_len = len(time_series) if time_series is not None else None
+            for name in signal_names:
+                if name == "derived/distance_m":
+                    if "vehicle/speed" not in f or "vehicle/timestamps" not in f:
+                        continue
+                    speed = f["vehicle/speed"][:]
+                    base_time = f["vehicle/timestamps"][:]
+                    base_len = min(len(speed), len(base_time))
+                    speed = speed[:base_len]
+                    base_time = base_time[:base_len]
+                    dt = np.diff(base_time, prepend=base_time[0])
+                    dt[0] = 0.0
+                    distance = np.cumsum(speed * dt)
+                    series[name] = distance
+                    min_len = len(distance) if min_len is None else min(min_len, len(distance))
+                elif name == "derived/expected_right_center":
+                    if "perception/right_lane_line_x" not in f:
+                        continue
+                    # Read config to get target_lane_width_m
+                    import yaml
+                    config_path = Path(__file__).parent.parent.parent / "config" / "av_stack_config.yaml"
+                    target_lane_width = 3.6  # default
+                    if config_path.exists():
+                        try:
+                            with open(config_path, 'r') as cfg:
+                                config = yaml.safe_load(cfg)
+                                target_lane_width = config.get('trajectory', {}).get('target_lane_width_m', 3.6)
+                        except:
+                            pass
+                    right_lane_line_x = f["perception/right_lane_line_x"][:]
+                    expected_right_center = right_lane_line_x - (target_lane_width / 2.0)
+                    series[name] = expected_right_center
+                    min_len = len(expected_right_center) if min_len is None else min(min_len, len(expected_right_center))
+                else:
+                    if name not in f or not _is_numeric_series(f[name]):
+                        continue
+                    values = f[name][:]
+                    series[name] = values
+                    min_len = len(values) if min_len is None else min(min_len, len(values))
+
+            if min_len is None or min_len == 0:
+                return jsonify({"error": "No valid signals found"}), 400
+
+            payload = {
+                "time_key": time_key if time_series is not None else None,
+                "time": time_series[:min_len].astype(float).tolist() if time_series is not None else None,
+                "signals": {},
+            }
+            for name, values in series.items():
+                payload["signals"][name] = values[:min_len].astype(float).tolist()
+
+            return jsonify(payload)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route('/api/recording/<path:filename>/frame/<int:frame_index>')
 def get_frame_data(filename, frame_index):
     """Get all data for a specific frame.
@@ -121,6 +275,11 @@ def get_frame_data(filename, frame_index):
                     'timestamp': camera_timestamp,
                     'frame_id': int(f['camera/frame_ids'][frame_index])
                 }
+                if 'camera/topdown_images' in f and frame_index < len(f['camera/topdown_images']):
+                    frame_data['camera_topdown'] = {
+                        'timestamp': float(f['camera/topdown_timestamps'][frame_index]),
+                        'frame_id': int(f['camera/topdown_frame_ids'][frame_index])
+                    }
             else:
                 # No camera frame at this index - return empty
                 return jsonify(frame_data)
@@ -148,6 +307,8 @@ def get_frame_data(filename, frame_index):
                     frame_data['vehicle'] = {
                         # NEW: Camera calibration - actual y pixel where 8m appears
                         'camera_8m_screen_y': float(f['vehicle/camera_8m_screen_y'][vehicle_idx]) if 'vehicle/camera_8m_screen_y' in f and vehicle_idx is not None and vehicle_idx < len(f['vehicle/camera_8m_screen_y']) else None,
+                        'camera_lookahead_screen_y': float(f['vehicle/camera_lookahead_screen_y'][vehicle_idx]) if 'vehicle/camera_lookahead_screen_y' in f and vehicle_idx is not None and vehicle_idx < len(f['vehicle/camera_lookahead_screen_y']) else None,
+                        'ground_truth_lookahead_distance': float(f['vehicle/ground_truth_lookahead_distance'][vehicle_idx]) if 'vehicle/ground_truth_lookahead_distance' in f and vehicle_idx is not None and vehicle_idx < len(f['vehicle/ground_truth_lookahead_distance']) else None,
                         # NEW: Camera FOV values from Unity
                         'camera_field_of_view': float(f['vehicle/camera_field_of_view'][vehicle_idx]) if 'vehicle/camera_field_of_view' in f and vehicle_idx is not None and vehicle_idx < len(f['vehicle/camera_field_of_view']) else None,
                         'camera_horizontal_fov': float(f['vehicle/camera_horizontal_fov'][vehicle_idx]) if 'vehicle/camera_horizontal_fov' in f and vehicle_idx is not None and vehicle_idx < len(f['vehicle/camera_horizontal_fov']) else None,
@@ -177,8 +338,21 @@ def get_frame_data(filename, frame_index):
                         'speed_limit': float(f['vehicle/speed_limit'][vehicle_idx]) if 'vehicle/speed_limit' in f and vehicle_idx is not None and vehicle_idx < len(f['vehicle/speed_limit']) else None,
                         'speed_limit_preview': float(f['vehicle/speed_limit_preview'][vehicle_idx]) if 'vehicle/speed_limit_preview' in f and vehicle_idx is not None and vehicle_idx < len(f['vehicle/speed_limit_preview']) else None,
                         'speed_limit_preview_distance': float(f['vehicle/speed_limit_preview_distance'][vehicle_idx]) if 'vehicle/speed_limit_preview_distance' in f and vehicle_idx is not None and vehicle_idx < len(f['vehicle/speed_limit_preview_distance']) else None,
-                        'steering_angle': float(f['vehicle/steering_angle'][vehicle_idx])
+                        'speed_limit_preview_min_distance': float(f['vehicle/speed_limit_preview_min_distance'][vehicle_idx]) if 'vehicle/speed_limit_preview_min_distance' in f and vehicle_idx is not None and vehicle_idx < len(f['vehicle/speed_limit_preview_min_distance']) else None,
+                        'speed_limit_preview_mid': float(f['vehicle/speed_limit_preview_mid'][vehicle_idx]) if 'vehicle/speed_limit_preview_mid' in f and vehicle_idx is not None and vehicle_idx < len(f['vehicle/speed_limit_preview_mid']) else None,
+                        'speed_limit_preview_mid_distance': float(f['vehicle/speed_limit_preview_mid_distance'][vehicle_idx]) if 'vehicle/speed_limit_preview_mid_distance' in f and vehicle_idx is not None and vehicle_idx < len(f['vehicle/speed_limit_preview_mid_distance']) else None,
+                        'speed_limit_preview_mid_min_distance': float(f['vehicle/speed_limit_preview_mid_min_distance'][vehicle_idx]) if 'vehicle/speed_limit_preview_mid_min_distance' in f and vehicle_idx is not None and vehicle_idx < len(f['vehicle/speed_limit_preview_mid_min_distance']) else None,
+                        'speed_limit_preview_long': float(f['vehicle/speed_limit_preview_long'][vehicle_idx]) if 'vehicle/speed_limit_preview_long' in f and vehicle_idx is not None and vehicle_idx < len(f['vehicle/speed_limit_preview_long']) else None,
+                        'speed_limit_preview_long_distance': float(f['vehicle/speed_limit_preview_long_distance'][vehicle_idx]) if 'vehicle/speed_limit_preview_long_distance' in f and vehicle_idx is not None and vehicle_idx < len(f['vehicle/speed_limit_preview_long_distance']) else None,
+                        'speed_limit_preview_long_min_distance': float(f['vehicle/speed_limit_preview_long_min_distance'][vehicle_idx]) if 'vehicle/speed_limit_preview_long_min_distance' in f and vehicle_idx is not None and vehicle_idx < len(f['vehicle/speed_limit_preview_long_min_distance']) else None,
+                        'steering_angle': float(f['vehicle/steering_angle'][vehicle_idx]),
+                        'steering_angle_actual': float(f['vehicle/steering_angle_actual'][vehicle_idx])
+                        if 'vehicle/steering_angle_actual' in f and vehicle_idx is not None and vehicle_idx < len(f['vehicle/steering_angle_actual']) else None
                         ,
+                        'steering_input': float(f['vehicle/steering_input'][vehicle_idx])
+                        if 'vehicle/steering_input' in f and vehicle_idx is not None and vehicle_idx < len(f['vehicle/steering_input']) else None,
+                        'desired_steer_angle': float(f['vehicle/desired_steer_angle'][vehicle_idx])
+                        if 'vehicle/desired_steer_angle' in f and vehicle_idx is not None and vehicle_idx < len(f['vehicle/desired_steer_angle']) else None,
                         'unity_time': float(f['vehicle/unity_time'][vehicle_idx]) if 'vehicle/unity_time' in f and vehicle_idx is not None and vehicle_idx < len(f['vehicle/unity_time']) else None,
                         'unity_frame_count': int(f['vehicle/unity_frame_count'][vehicle_idx]) if 'vehicle/unity_frame_count' in f and vehicle_idx is not None and vehicle_idx < len(f['vehicle/unity_frame_count']) else None,
                         'unity_delta_time': float(f['vehicle/unity_delta_time'][vehicle_idx]) if 'vehicle/unity_delta_time' in f and vehicle_idx is not None and vehicle_idx < len(f['vehicle/unity_delta_time']) else None,
@@ -231,6 +405,27 @@ def get_frame_data(filename, frame_index):
                         if isinstance(health_status, bytes):
                             health_status = health_status.decode('utf-8')
                         frame_data['perception']['perception_health_status'] = health_status
+                    if 'perception/perception_bad_events' in f and perception_idx < len(f['perception/perception_bad_events']):
+                        bad_events = f['perception/perception_bad_events'][perception_idx]
+                        if isinstance(bad_events, bytes):
+                            bad_events = bad_events.decode('utf-8')
+                        frame_data['perception']['perception_bad_events'] = bad_events if bad_events else None
+                    if 'perception/perception_bad_events_recent' in f and perception_idx < len(f['perception/perception_bad_events_recent']):
+                        bad_events_recent = f['perception/perception_bad_events_recent'][perception_idx]
+                        if isinstance(bad_events_recent, bytes):
+                            bad_events_recent = bad_events_recent.decode('utf-8')
+                        frame_data['perception']['perception_bad_events_recent'] = (
+                            bad_events_recent if bad_events_recent else None
+                        )
+                    if 'perception/perception_clamp_events' in f and perception_idx < len(f['perception/perception_clamp_events']):
+                        clamp_events = f['perception/perception_clamp_events'][perception_idx]
+                        if isinstance(clamp_events, bytes):
+                            clamp_events = clamp_events.decode('utf-8')
+                        frame_data['perception']['perception_clamp_events'] = clamp_events if clamp_events else None
+                    if 'perception/perception_timestamp_frozen' in f and perception_idx < len(f['perception/perception_timestamp_frozen']):
+                        frame_data['perception']['perception_timestamp_frozen'] = bool(
+                            f['perception/perception_timestamp_frozen'][perception_idx]
+                        )
                     
                     # NEW: Read stale data fields
                     if 'perception/using_stale_data' in f and perception_idx < len(f['perception/using_stale_data']):
@@ -240,6 +435,11 @@ def get_frame_data(filename, frame_index):
                         if isinstance(stale_reason, bytes):
                             stale_reason = stale_reason.decode('utf-8')
                         frame_data['perception']['stale_data_reason'] = stale_reason if stale_reason else None
+                    if 'perception/reject_reason' in f and perception_idx < len(f['perception/reject_reason']):
+                        reject_reason = f['perception/reject_reason'][perception_idx]
+                        if isinstance(reject_reason, bytes):
+                            reject_reason = reject_reason.decode('utf-8')
+                        frame_data['perception']['reject_reason'] = reject_reason if reject_reason else None
                     
                     # NEW: Read jump detection fields (help understand why stale data is used)
                     if 'perception/left_jump_magnitude' in f and perception_idx < len(f['perception/left_jump_magnitude']):
@@ -283,6 +483,22 @@ def get_frame_data(filename, frame_index):
                                 fit_points_right_json = fit_points_right_json.decode('utf-8')
                             if fit_points_right_json:
                                 frame_data['perception']['fit_points_right'] = json.loads(fit_points_right_json)
+                        except Exception:
+                            pass
+                    if 'perception/segmentation_mask_png' in f and perception_idx < len(f['perception/segmentation_mask_png']):
+                        try:
+                            mask_bytes = f['perception/segmentation_mask_png'][perception_idx]
+                            has_data = False
+                            if isinstance(mask_bytes, np.ndarray):
+                                has_data = len(mask_bytes) > 0
+                                mask_bytes = mask_bytes.tobytes() if has_data else b""
+                            elif isinstance(mask_bytes, (bytes, bytearray)):
+                                has_data = len(mask_bytes) > 0
+                            if has_data:
+                                mask_b64 = base64.b64encode(mask_bytes).decode('utf-8')
+                                frame_data['perception']['segmentation_mask_png'] = (
+                                    f"data:image/png;base64,{mask_b64}"
+                                )
                         except Exception:
                             pass
                     
@@ -408,6 +624,18 @@ def get_frame_data(filename, frame_index):
                         frame_data['control']['heading_error'] = heading_err_rad
                     if 'control/total_error' in f and control_idx < len(f['control/total_error']):
                         frame_data['control']['total_error'] = float(f['control/total_error'][control_idx])
+                    if 'control/total_error_scaled' in f and control_idx < len(f['control/total_error_scaled']):
+                        frame_data['control']['total_error_scaled'] = float(f['control/total_error_scaled'][control_idx])
+                    if 'control/feedforward_steering' in f and control_idx < len(f['control/feedforward_steering']):
+                        frame_data['control']['feedforward_steering'] = float(f['control/feedforward_steering'][control_idx])
+                    if 'control/feedback_steering' in f and control_idx < len(f['control/feedback_steering']):
+                        frame_data['control']['feedback_steering'] = float(f['control/feedback_steering'][control_idx])
+                    if 'control/straight_sign_flip_override_active' in f and control_idx < len(
+                        f['control/straight_sign_flip_override_active']
+                    ):
+                        frame_data['control']['straight_sign_flip_override_active'] = (
+                            int(f['control/straight_sign_flip_override_active'][control_idx]) == 1
+                        )
                     if 'control/target_speed_raw' in f and control_idx < len(f['control/target_speed_raw']):
                         frame_data['control']['target_speed_raw'] = float(f['control/target_speed_raw'][control_idx])
                     if 'control/target_speed_post_limits' in f and control_idx < len(f['control/target_speed_post_limits']):
@@ -494,12 +722,19 @@ def get_frame_image(filename, frame_index):
     if not filepath.exists():
         return jsonify({"error": f"Recording not found: {filename}"}), 404
     
+    camera_id = request.args.get("camera_id", "front_center")
+    use_topdown = camera_id in ("top_down", "topdown")
+
     try:
         with h5py.File(filepath, 'r') as f:
-            if 'camera/images' not in f or frame_index >= len(f['camera/images']):
-                return jsonify({"error": "Frame not found"}), 404
-            
-            image = f['camera/images'][frame_index]
+            if use_topdown:
+                if 'camera/topdown_images' not in f or frame_index >= len(f['camera/topdown_images']):
+                    return jsonify({"error": "Frame not found"}), 404
+                image = f['camera/topdown_images'][frame_index]
+            else:
+                if 'camera/images' not in f or frame_index >= len(f['camera/images']):
+                    return jsonify({"error": "Frame not found"}), 404
+                image = f['camera/images'][frame_index]
             # Convert to PIL Image
             img = Image.fromarray(image)
             
@@ -711,7 +946,8 @@ def get_polynomial_analysis(filename, frame_index):
                         "num_lanes_detected": int(f['perception/num_lanes_detected'][perception_idx]) if 'perception/num_lanes_detected' in f and perception_idx < len(f['perception/num_lanes_detected']) else 0,
                         "lane_coefficients": None,
                         "using_stale_data": bool(f['perception/using_stale_data'][perception_idx]) if 'perception/using_stale_data' in f and perception_idx < len(f['perception/using_stale_data']) else False,
-                        "stale_data_reason": None
+                        "stale_data_reason": None,
+                        "reject_reason": None,
                     }
                     
                     # Load recorded coefficients
@@ -729,6 +965,11 @@ def get_polynomial_analysis(filename, frame_index):
                         if isinstance(reason, bytes):
                             reason = reason.decode('utf-8')
                         recorded_data["stale_data_reason"] = reason
+                    if 'perception/reject_reason' in f and perception_idx < len(f['perception/reject_reason']):
+                        reason = f['perception/reject_reason'][perception_idx]
+                        if isinstance(reason, bytes):
+                            reason = reason.decode('utf-8')
+                        recorded_data["reject_reason"] = reason
             
             # Re-run perception with debug info (current code)
             detector = SimpleLaneDetector()

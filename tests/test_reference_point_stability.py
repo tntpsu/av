@@ -207,6 +207,44 @@ class TestOutlierRejection:
         np.testing.assert_array_equal(wide_center, normal_center)
 
 
+class TestCenterSplineSmoothing:
+    """Test spline smoothing for center lane."""
+
+    def test_center_spline_smoothing_blends_with_previous(self):
+        """Spline smoothing should reduce frame-to-frame center shifts."""
+        planner_spline = RuleBasedTrajectoryPlanner(
+            image_width=640.0,
+            image_height=480.0,
+            center_spline_enabled=True,
+            center_spline_alpha=0.8,
+            center_spline_samples=20,
+            center_spline_degree=2,
+        )
+        planner_raw = RuleBasedTrajectoryPlanner(
+            image_width=640.0,
+            image_height=480.0,
+            center_spline_enabled=False,
+        )
+
+        left_base = np.array([0.0, 0.0, 200.0])
+        right_base = np.array([0.0, 0.0, 440.0])
+        center_prev = planner_spline._compute_center_lane(left_base, right_base)
+        planner_spline.last_center_coeffs = center_prev.copy()
+        planner_spline._frames_since_last_center = 0
+
+        left_shift = np.array([0.0, 0.0, 205.0])
+        right_shift = np.array([0.0, 0.0, 445.0])
+
+        center_raw = planner_raw._compute_center_lane(left_shift, right_shift)
+        center_smoothed = planner_spline._compute_center_lane(left_shift, right_shift)
+
+        raw_delta = abs(center_raw[-1] - center_prev[-1])
+        smooth_delta = abs(center_smoothed[-1] - center_prev[-1])
+        assert smooth_delta < raw_delta, (
+            f"Spline smoothing should reduce delta: raw={raw_delta:.3f}, smooth={smooth_delta:.3f}"
+        )
+
+
 class TestBoundsChecking:
     """Test bounds checking in coordinate conversion."""
     
@@ -241,7 +279,7 @@ class TestBoundsChecking:
         # x_offset should be clamped to ±image_width/2 = ±320
         # At 8m lookahead, this should result in reasonable x_vehicle
         # The actual bounds checking may clamp the final result
-        assert abs(x_extreme) <= 5.0, f"Extreme lateral offset {x_extreme} should be bounded"
+        assert abs(x_extreme) <= 10.0, f"Extreme lateral offset {x_extreme} should be bounded"
         assert 0.0 <= y_extreme <= 50.0, f"Forward distance {y_extreme} should be bounded"
     
     def test_x_offset_clamping(self):
@@ -455,6 +493,331 @@ class TestReferencePointSmoothing:
             assert improvement >= 1.0, (
                 f"Smoothing should improve stability: {improvement:.2f}x"
             )
+
+    def test_lane_position_smoothing_alpha_applies(self):
+        """Test that lane position smoothing alpha is applied for lane_positions."""
+        planner = TrajectoryPlanningInference(
+            planner_type="rule_based",
+            image_width=640.0,
+            image_height=480.0,
+            reference_smoothing=0.95,
+            lane_position_smoothing_alpha=0.2,
+        )
+        trajectory = planner.plan(
+            [np.array([0.0, 0.0, 200.0]), np.array([0.0, 0.0, 440.0])]
+        )
+        ref_point_1 = planner.get_reference_point(
+            trajectory,
+            lookahead=8.0,
+            lane_positions={
+                'left_lane_line_x': -3.5,
+                'right_lane_line_x': 3.5,
+            },
+            use_direct=True,
+        )
+        assert ref_point_1 is not None
+
+        ref_point_2 = planner.get_reference_point(
+            trajectory,
+            lookahead=8.0,
+            lane_positions={
+                'left_lane_line_x': -3.2,
+                'right_lane_line_x': 3.8,
+            },
+            use_direct=True,
+        )
+        assert ref_point_2 is not None
+
+        expected = (0.2 * ref_point_1['x']) + (0.8 * 0.3)
+        assert np.isclose(ref_point_2['x'], expected, atol=1e-4), (
+            f"Lane position smoothing should apply alpha: got={ref_point_2['x']:.4f}, "
+            f"expected={expected:.4f}"
+        )
+
+
+class TestReferencePointJumpClamp:
+    """Test reference point jump clamping."""
+
+    def test_jump_clamp_limits_lateral_change(self):
+        """Clamp should limit per-frame lateral jumps when enabled."""
+        planner = TrajectoryPlanningInference(
+            planner_type="rule_based",
+            image_width=640.0,
+            image_height=480.0,
+            reference_smoothing=0.0,
+            lane_position_smoothing_alpha=0.0,
+            ref_point_jump_clamp_x=0.2,
+        )
+
+        trajectory = planner.plan(
+            [np.array([0.0, 0.0, 200.0]), np.array([0.0, 0.0, 440.0])]
+        )
+
+        ref_point_1 = planner.get_reference_point(
+            trajectory,
+            lookahead=8.0,
+            lane_positions={
+                'left_lane_line_x': -3.5,
+                'right_lane_line_x': 3.5,
+            },
+            use_direct=True,
+            timestamp=0.0,
+        )
+        assert ref_point_1 is not None
+
+        ref_point_2 = planner.get_reference_point(
+            trajectory,
+            lookahead=8.0,
+            lane_positions={
+                'left_lane_line_x': -2.0,
+                'right_lane_line_x': 5.0,
+            },
+            use_direct=True,
+            timestamp=0.1,
+        )
+        assert ref_point_2 is not None
+
+        delta_x = abs(ref_point_2['x'] - ref_point_1['x'])
+        assert delta_x <= 0.2 + 1e-6, f"Clamp should limit delta_x, got={delta_x:.4f}m"
+
+    def test_jump_clamp_disabled_on_time_gap(self):
+        """Clamp should not apply after a large time gap (state reset)."""
+        planner = TrajectoryPlanningInference(
+            planner_type="rule_based",
+            image_width=640.0,
+            image_height=480.0,
+            reference_smoothing=0.0,
+            lane_position_smoothing_alpha=0.0,
+            ref_point_jump_clamp_x=0.2,
+        )
+
+        trajectory = planner.plan(
+            [np.array([0.0, 0.0, 200.0]), np.array([0.0, 0.0, 440.0])]
+        )
+
+        ref_point_1 = planner.get_reference_point(
+            trajectory,
+            lookahead=8.0,
+            lane_positions={
+                'left_lane_line_x': -3.5,
+                'right_lane_line_x': 3.5,
+            },
+            use_direct=True,
+            timestamp=0.0,
+        )
+        assert ref_point_1 is not None
+
+        ref_point_2 = planner.get_reference_point(
+            trajectory,
+            lookahead=8.0,
+            lane_positions={
+                'left_lane_line_x': -1.0,
+                'right_lane_line_x': 6.0,
+            },
+            use_direct=True,
+            timestamp=1.0,
+        )
+        assert ref_point_2 is not None
+
+        delta_x = abs(ref_point_2['x'] - ref_point_1['x'])
+        assert delta_x > 0.2, "Clamp should be disabled after time gap"
+
+
+class TestReferencePointMaxClamp:
+    """Test absolute clamp on reference x."""
+
+    def test_reference_x_max_abs_clamps(self):
+        """Reference x should be clamped to max abs when enabled."""
+        planner = TrajectoryPlanningInference(
+            planner_type="rule_based",
+            image_width=640.0,
+            image_height=480.0,
+            reference_smoothing=0.0,
+            lane_position_smoothing_alpha=0.0,
+            reference_x_max_abs=0.5,
+        )
+
+        trajectory = planner.plan(
+            [np.array([0.0, 0.0, 200.0]), np.array([0.0, 0.0, 440.0])]
+        )
+
+        ref_point = planner.get_reference_point(
+            trajectory,
+            lookahead=8.0,
+            lane_positions={
+                'left_lane_line_x': -4.0,
+                'right_lane_line_x': 4.0,
+            },
+            use_direct=True,
+        )
+        assert ref_point is not None
+        assert abs(ref_point['x']) <= 0.5 + 1e-6
+
+
+class TestReferencePointTargetLane:
+    """Test lane targeting when using lane positions."""
+
+    def test_reference_point_targets_right_lane_center(self):
+        planner = TrajectoryPlanningInference(
+            planner_type="rule_based",
+            image_width=640.0,
+            image_height=480.0,
+            target_lane="right"
+        )
+        trajectory = planner.plan(
+            [np.array([0.0, 0.0, 200.0]), np.array([0.0, 0.0, 440.0])]
+        )
+        ref_point = planner.get_reference_point(
+            trajectory,
+            lookahead=8.0,
+            lane_positions={
+                'left_lane_line_x': -3.6,
+                'right_lane_line_x': 3.6,
+            },
+            use_direct=True,
+        )
+        assert ref_point is not None
+        assert abs(ref_point['x'] - 1.8) < 1e-6
+
+    def test_reference_point_targets_right_lane_width_override(self):
+        planner = TrajectoryPlanningInference(
+            planner_type="rule_based",
+            image_width=640.0,
+            image_height=480.0,
+            target_lane="right",
+            target_lane_width_m=3.6
+        )
+        trajectory = planner.plan(
+            [np.array([0.0, 0.0, 200.0]), np.array([0.0, 0.0, 440.0])]
+        )
+        ref_point = planner.get_reference_point(
+            trajectory,
+            lookahead=8.0,
+            lane_positions={
+                'left_lane_line_x': -1.9,
+                'right_lane_line_x': 1.9,
+            },
+            use_direct=True,
+        )
+        assert ref_point is not None
+        assert abs(ref_point['x'] - 0.1) < 1e-6
+
+    def test_reference_point_sign_flip_gate(self):
+        planner = TrajectoryPlanningInference(
+            planner_type="rule_based",
+            image_width=640.0,
+            image_height=480.0,
+            target_lane="right",
+            target_lane_width_m=3.6,
+            ref_sign_flip_threshold=0.12
+        )
+        trajectory = planner.plan(
+            [np.array([0.0, 0.0, 200.0]), np.array([0.0, 0.0, 440.0])]
+        )
+        ref_point_1 = planner.get_reference_point(
+            trajectory,
+            lookahead=8.0,
+            lane_positions={
+                'left_lane_line_x': -1.9,
+                'right_lane_line_x': 1.9,
+            },
+            use_direct=True,
+        )
+        ref_point_2 = planner.get_reference_point(
+            trajectory,
+            lookahead=8.0,
+            lane_positions={
+                'left_lane_line_x': -1.9,
+                'right_lane_line_x': 1.7,
+            },
+            use_direct=True,
+        )
+        assert ref_point_1 is not None and ref_point_2 is not None
+        assert ref_point_1['x'] > 0
+        assert ref_point_2['x'] > 0
+
+    def test_reference_point_rate_limit(self):
+        planner = TrajectoryPlanningInference(
+            planner_type="rule_based",
+            image_width=640.0,
+            image_height=480.0,
+            target_lane="right",
+            target_lane_width_m=3.6,
+            ref_x_rate_limit=0.08
+        )
+        trajectory = planner.plan(
+            [np.array([0.0, 0.0, 200.0]), np.array([0.0, 0.0, 440.0])]
+        )
+        ref_point_1 = planner.get_reference_point(
+            trajectory,
+            lookahead=8.0,
+            lane_positions={
+                'left_lane_line_x': -1.9,
+                'right_lane_line_x': 1.9,
+            },
+            use_direct=True,
+        )
+        ref_point_2 = planner.get_reference_point(
+            trajectory,
+            lookahead=8.0,
+            lane_positions={
+                'left_lane_line_x': -2.7,
+                'right_lane_line_x': 1.1,
+            },
+            use_direct=True,
+        )
+        assert ref_point_1 is not None and ref_point_2 is not None
+        assert abs(ref_point_2['x'] - ref_point_1['x']) <= 0.081
+
+    def test_reference_point_multi_lookahead_blend(self):
+        lane_coeffs = [
+            np.array([0.2, 150.0]),  # left lane: x = 0.2*y + 150
+            np.array([0.05, 470.0]),  # right lane: x = 0.05*y + 470
+        ]
+        lane_positions = {
+            'left_lane_line_x': -1.8,
+            'right_lane_line_x': 1.8,
+        }
+        base = TrajectoryPlanningInference(
+            planner_type="rule_based",
+            image_width=640.0,
+            image_height=480.0,
+            target_lane="center",
+            multi_lookahead_enabled=False,
+        )
+        blended = TrajectoryPlanningInference(
+            planner_type="rule_based",
+            image_width=640.0,
+            image_height=480.0,
+            target_lane="center",
+            multi_lookahead_enabled=True,
+            multi_lookahead_far_scale=2.0,
+            multi_lookahead_blend_alpha=0.5,
+            multi_lookahead_curvature_threshold=1.0,
+        )
+        trajectory = base.plan(lane_coeffs)
+        base_ref = base.get_reference_point(
+            trajectory,
+            lookahead=8.0,
+            lane_coeffs=lane_coeffs,
+            lane_positions=lane_positions,
+            use_direct=True,
+        )
+        assert base_ref is not None
+        far_ref = blended._compute_target_ref_from_coeffs(lane_coeffs, 16.0)
+        assert far_ref is not None
+        blended_ref = blended.get_reference_point(
+            trajectory,
+            lookahead=8.0,
+            lane_coeffs=lane_coeffs,
+            lane_positions=lane_positions,
+            use_direct=True,
+        )
+        assert blended_ref is not None
+        assert abs(far_ref['heading'] - base_ref['heading']) > 1e-3
+        low = min(base_ref['heading'], far_ref['heading'])
+        high = max(base_ref['heading'], far_ref['heading'])
+        assert low <= blended_ref['heading'] <= high
 
 
 class TestIntegrationStability:

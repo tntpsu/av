@@ -59,19 +59,22 @@ app.add_middleware(
 latest_camera_frame: Optional[np.ndarray] = None
 latest_frame_timestamp: Optional[float] = None
 latest_frame_id: Optional[str] = None
+latest_camera_frames: dict[str, np.ndarray] = {}
+latest_frame_timestamps_by_id: dict[str, float] = {}
+latest_frame_ids_by_id: dict[str, str] = {}
 latest_vehicle_state: Optional[dict] = None
 latest_control_command: Optional[dict] = None
 latest_trajectory_data: Optional[dict] = None  # Trajectory data for visualization
 latest_unity_feedback: Optional[dict] = None  # Unity feedback/status data
 shutdown_requested: bool = False  # Track if AV stack is shutting down
 play_requested: bool = False  # Track if Unity should start playing
-camera_decode_in_flight: bool = False
-camera_drop_count: int = 0
-last_camera_arrival_time: Optional[float] = None
-last_camera_frame_id: Optional[str] = None
-last_camera_timestamp: Optional[float] = None
-last_camera_realtime: Optional[float] = None
-last_camera_unscaled: Optional[float] = None
+camera_decode_in_flight: dict[str, bool] = {}
+camera_drop_count: dict[str, int] = {}
+last_camera_arrival_time: dict[str, Optional[float]] = {}
+last_camera_frame_id: dict[str, Optional[str]] = {}
+last_camera_timestamp: dict[str, Optional[float]] = {}
+last_camera_realtime: dict[str, Optional[float]] = {}
+last_camera_unscaled: dict[str, Optional[float]] = {}
 last_state_arrival_time: Optional[float] = None
 last_unity_send_realtime: Optional[float] = None
 last_unity_time: Optional[float] = None
@@ -79,20 +82,31 @@ last_control_arrival_time: Optional[float] = None
 speed_limit_zero_streak: int = 0
 
 
+def _normalize_camera_id(camera_id: Optional[str]) -> str:
+    return camera_id or "front_center"
+
+
 async def _decode_and_store_camera_frame(
     image_data: bytes,
     timestamp: str,
     frame_id: str,
+    camera_id: str,
 ) -> None:
-    global latest_camera_frame, latest_frame_timestamp, latest_frame_id, camera_decode_in_flight
+    global latest_camera_frame, latest_frame_timestamp, latest_frame_id
+    global latest_camera_frames, latest_frame_timestamps_by_id, latest_frame_ids_by_id
+    global camera_decode_in_flight
 
     start_time = time.time()
     try:
         img = Image.open(io.BytesIO(image_data))
         img_array = np.array(img)
-        latest_camera_frame = img_array
-        latest_frame_timestamp = float(timestamp)
-        latest_frame_id = frame_id
+        latest_camera_frames[camera_id] = img_array
+        latest_frame_timestamps_by_id[camera_id] = float(timestamp)
+        latest_frame_ids_by_id[camera_id] = frame_id
+        if camera_id == "front_center":
+            latest_camera_frame = img_array
+            latest_frame_timestamp = float(timestamp)
+            latest_frame_id = frame_id
     finally:
         duration = time.time() - start_time
         if duration > SLOW_REQUEST_SECONDS:
@@ -104,7 +118,7 @@ async def _decode_and_store_camera_frame(
                 frame_id,
                 timestamp,
             )
-        camera_decode_in_flight = False
+        camera_decode_in_flight[camera_id] = False
 
 
 class VehicleState(BaseModel):
@@ -115,6 +129,9 @@ class VehicleState(BaseModel):
     angularVelocity: dict
     speed: float
     steeringAngle: float
+    steeringAngleActual: float = 0.0
+    steeringInput: float = 0.0
+    desiredSteerAngle: float = 0.0
     motorTorque: float
     brakeTorque: float
     # Vehicle parameters from Unity
@@ -172,6 +189,13 @@ class VehicleState(BaseModel):
     speedLimit: float = 0.0  # Speed limit at current reference point (m/s)
     speedLimitPreview: float = 0.0  # Speed limit at preview distance ahead (m/s)
     speedLimitPreviewDistance: float = 0.0  # Preview distance used for speed limit (m)
+    speedLimitPreviewMinDistance: float = 0.0  # Distance to min limit in preview window (m)
+    speedLimitPreviewMid: float = 0.0  # Speed limit at mid preview distance (m/s)
+    speedLimitPreviewMidDistance: float = 0.0  # Mid preview distance (m)
+    speedLimitPreviewMidMinDistance: float = 0.0  # Distance to min limit in mid window (m)
+    speedLimitPreviewLong: float = 0.0  # Speed limit at long preview distance (m/s)
+    speedLimitPreviewLongDistance: float = 0.0  # Long preview distance (m)
+    speedLimitPreviewLongMinDistance: float = 0.0  # Distance to min limit in long window (m)
 
 
 class ControlCommand(BaseModel):
@@ -222,6 +246,7 @@ async def receive_camera_frame(
     image: UploadFile = File(...),
     timestamp: str = Form(...),
     frame_id: str = Form(...),
+    camera_id: Optional[str] = Form(None),
     realtime_since_startup: Optional[str] = Form(None),
     unscaled_time: Optional[str] = Form(None),
     time_scale: Optional[str] = Form(None)
@@ -241,42 +266,48 @@ async def receive_camera_frame(
         # Read image data
         image_data = await image.read()
 
-        global last_camera_arrival_time, last_camera_frame_id, last_camera_timestamp
-        global last_camera_realtime, last_camera_unscaled
+        camera_key = _normalize_camera_id(camera_id)
+        last_arrival = last_camera_arrival_time.get(camera_key)
+        last_frame = last_camera_frame_id.get(camera_key)
+        last_timestamp = last_camera_timestamp.get(camera_key)
+        last_realtime = last_camera_realtime.get(camera_key)
+        last_unscaled = last_camera_unscaled.get(camera_key)
         now = time.time()
-        if last_camera_arrival_time is not None:
-            gap = now - last_camera_arrival_time
+        if last_arrival is not None:
+            gap = now - last_arrival
             if gap > UNITY_TIME_GAP_SECONDS:
                 logger.warning(
-                    "[ARRIVAL_GAP] /api/camera gap=%.3fs frame_id=%s prev_frame_id=%s",
+                    "[ARRIVAL_GAP] /api/camera gap=%.3fs frame_id=%s prev_frame_id=%s camera_id=%s",
                     gap,
                     frame_id,
-                    last_camera_frame_id,
+                    last_frame,
+                    camera_key,
                 )
                 print(
                     "[ARRIVAL_GAP] /api/camera "
-                    f"gap={gap:.3f}s frame_id={frame_id} prev_frame_id={last_camera_frame_id}"
+                    f"gap={gap:.3f}s frame_id={frame_id} prev_frame_id={last_frame} camera_id={camera_key}"
                 )
-        last_camera_arrival_time = now
-        last_camera_frame_id = frame_id
+        last_camera_arrival_time[camera_key] = now
+        last_camera_frame_id[camera_key] = frame_id
         try:
             ts_value = float(timestamp)
         except ValueError:
             ts_value = None
         if ts_value is not None:
-            if last_camera_timestamp is not None:
-                ts_gap = ts_value - last_camera_timestamp
+            if last_timestamp is not None:
+                ts_gap = ts_value - last_timestamp
                 if ts_gap > UNITY_TIME_GAP_SECONDS:
                     logger.warning(
-                        "[CAMERA_TIMESTAMP_GAP] ts_gap=%.3fs frame_id=%s",
+                        "[CAMERA_TIMESTAMP_GAP] ts_gap=%.3fs frame_id=%s camera_id=%s",
                         ts_gap,
                         frame_id,
+                        camera_key,
                     )
                     print(
                         "[CAMERA_TIMESTAMP_GAP] "
-                        f"ts_gap={ts_gap:.3f}s frame_id={frame_id}"
+                        f"ts_gap={ts_gap:.3f}s frame_id={frame_id} camera_id={camera_key}"
                     )
-            last_camera_timestamp = ts_value
+            last_camera_timestamp[camera_key] = ts_value
 
         def _parse_optional(value: Optional[str]) -> Optional[float]:
             if value is None:
@@ -288,35 +319,38 @@ async def receive_camera_frame(
 
         realtime_value = _parse_optional(realtime_since_startup)
         unscaled_value = _parse_optional(unscaled_time)
-        if realtime_value is not None and last_camera_realtime is not None:
-            rt_gap = realtime_value - last_camera_realtime
+        if realtime_value is not None and last_realtime is not None:
+            rt_gap = realtime_value - last_realtime
             if rt_gap > UNITY_TIME_GAP_SECONDS:
                 logger.warning(
-                    "[CAMERA_REALTIME_GAP] rt_gap=%.3fs frame_id=%s",
+                    "[CAMERA_REALTIME_GAP] rt_gap=%.3fs frame_id=%s camera_id=%s",
                     rt_gap,
                     frame_id,
+                    camera_key,
                 )
-        if unscaled_value is not None and last_camera_unscaled is not None:
-            us_gap = unscaled_value - last_camera_unscaled
+        if unscaled_value is not None and last_unscaled is not None:
+            us_gap = unscaled_value - last_unscaled
             if us_gap > UNITY_TIME_GAP_SECONDS:
                 logger.warning(
-                    "[CAMERA_UNSCALED_GAP] us_gap=%.3fs frame_id=%s",
+                    "[CAMERA_UNSCALED_GAP] us_gap=%.3fs frame_id=%s camera_id=%s",
                     us_gap,
                     frame_id,
+                    camera_key,
                 )
         if ts_value is not None and realtime_value is not None:
             drift = ts_value - realtime_value
             if abs(drift) > 0.2:
                 logger.warning(
-                    "[CAMERA_TIME_DRIFT] ts=%.3f realtime=%.3f drift=%.3f frame_id=%s scale=%s",
+                    "[CAMERA_TIME_DRIFT] ts=%.3f realtime=%.3f drift=%.3f frame_id=%s scale=%s camera_id=%s",
                     ts_value,
                     realtime_value,
                     drift,
                     frame_id,
                     time_scale or "n/a",
+                    camera_key,
                 )
-        last_camera_realtime = realtime_value or last_camera_realtime
-        last_camera_unscaled = unscaled_value or last_camera_unscaled
+        last_camera_realtime[camera_key] = realtime_value or last_realtime
+        last_camera_unscaled[camera_key] = unscaled_value or last_unscaled
 
         try:
             frame_id_int = int(frame_id)
@@ -336,32 +370,37 @@ async def receive_camera_frame(
         # Avoid blocking the event loop on JPEG decode.
         # If a decode is already in-flight, drop this frame.
         global camera_decode_in_flight, camera_drop_count
-        if camera_decode_in_flight:
-            camera_drop_count += 1
+        if camera_decode_in_flight.get(camera_key):
+            camera_drop_count[camera_key] = camera_drop_count.get(camera_key, 0) + 1
             response = {
                 "status": "received",
                 "frame_id": frame_id,
                 "timestamp": timestamp,
+                "camera_id": camera_key,
                 "dropped": True,
-                "dropped_count": camera_drop_count,
+                "dropped_count": camera_drop_count[camera_key],
             }
         else:
-            camera_decode_in_flight = True
-            asyncio.create_task(_decode_and_store_camera_frame(image_data, timestamp, frame_id))
+            camera_decode_in_flight[camera_key] = True
+            asyncio.create_task(
+                _decode_and_store_camera_frame(image_data, timestamp, frame_id, camera_key)
+            )
             response = {
                 "status": "received",
                 "frame_id": frame_id,
                 "timestamp": timestamp,
+                "camera_id": camera_key,
                 "dropped": False,
             }
         duration = time.time() - start_time
         if duration > SLOW_REQUEST_SECONDS:
             logger.warning(
-                "[SLOW] /api/camera duration=%.3fs bytes=%d frame_id=%s ts=%s",
+                "[SLOW] /api/camera duration=%.3fs bytes=%d frame_id=%s ts=%s camera_id=%s",
                 duration,
                 len(image_data),
                 frame_id,
                 timestamp,
+                camera_key,
             )
         return response
     except Exception as e:
@@ -579,20 +618,23 @@ async def set_control_command(command: ControlCommand):
 
 
 @app.get("/api/camera/latest")
-async def get_latest_camera_frame():
+async def get_latest_camera_frame(camera_id: str = "front_center"):
     """
     Get latest camera frame (for AV stack processing).
     
     Returns:
         Base64 encoded image
     """
-    global latest_camera_frame
-    
-    if latest_camera_frame is None:
+    global latest_camera_frame, latest_camera_frames
+    camera_key = _normalize_camera_id(camera_id)
+    frame = latest_camera_frames.get(camera_key)
+    if frame is None and camera_key == "front_center":
+        frame = latest_camera_frame
+    if frame is None:
         raise HTTPException(status_code=404, detail="No camera frame available")
     
     # Convert to JPEG
-    img = Image.fromarray(latest_camera_frame)
+    img = Image.fromarray(frame)
     buffer = io.BytesIO()
     img.save(buffer, format="JPEG")
     img_bytes = buffer.getvalue()
@@ -600,10 +642,23 @@ async def get_latest_camera_frame():
     # Encode to base64
     img_base64 = base64.b64encode(img_bytes).decode()
     
+    frame_id_value = None
+    try:
+        raw_frame_id = latest_frame_ids_by_id.get(camera_key)
+        if raw_frame_id is None and camera_key == "front_center":
+            raw_frame_id = latest_frame_id
+        frame_id_value = int(raw_frame_id) if raw_frame_id is not None else None
+    except (TypeError, ValueError):
+        frame_id_value = None
+    timestamp_value = latest_frame_timestamps_by_id.get(camera_key)
+    if timestamp_value is None and camera_key == "front_center":
+        timestamp_value = latest_frame_timestamp
     return {
         "image": img_base64,
-        "timestamp": latest_frame_timestamp,
-        "shape": list(latest_camera_frame.shape)
+        "timestamp": timestamp_value,
+        "frame_id": frame_id_value,
+        "camera_id": camera_key,
+        "shape": list(frame.shape)
     }
 
 
@@ -629,7 +684,7 @@ async def health_check():
     return {
         "status": "healthy",
         "timestamp": time.time(),
-        "has_camera_frame": latest_camera_frame is not None,
+        "has_camera_frame": latest_camera_frames.get("front_center") is not None or latest_camera_frame is not None,
         "has_vehicle_state": latest_vehicle_state is not None
     }
 

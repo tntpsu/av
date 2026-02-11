@@ -127,6 +127,28 @@ class DataRecorder:
             maxshape=max_shape,
             dtype=np.int32
         )
+        self.h5_file.create_dataset(
+            "camera/topdown_images",
+            shape=(0, 480, 640, 3),
+            maxshape=(None, 480, 640, 3),
+            dtype=np.uint8,
+            compression="gzip",
+            compression_opts=4,
+            shuffle=True,
+            chunks=(30, 480, 640, 3)
+        )
+        self.h5_file.create_dataset(
+            "camera/topdown_timestamps",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float64
+        )
+        self.h5_file.create_dataset(
+            "camera/topdown_frame_ids",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int32
+        )
         
         # Vehicle state
         self.h5_file.create_dataset(
@@ -184,7 +206,67 @@ class DataRecorder:
             dtype=np.float32
         )
         self.h5_file.create_dataset(
+            "vehicle/speed_limit_preview_min_distance",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "vehicle/speed_limit_preview_mid",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "vehicle/speed_limit_preview_mid_distance",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "vehicle/speed_limit_preview_mid_min_distance",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "vehicle/speed_limit_preview_long",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "vehicle/speed_limit_preview_long_distance",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "vehicle/speed_limit_preview_long_min_distance",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
             "vehicle/steering_angle",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "vehicle/steering_angle_actual",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "vehicle/steering_input",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "vehicle/desired_steer_angle",
             shape=(0,),
             maxshape=max_shape,
             dtype=np.float32
@@ -610,6 +692,18 @@ class DataRecorder:
             maxshape=max_shape,
             dtype=np.float32
         )
+        self.h5_file.create_dataset(
+            "control/feedforward_steering",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/feedback_steering",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
         
         # PID internal state
         self.h5_file.create_dataset(
@@ -629,6 +723,18 @@ class DataRecorder:
             shape=(0,),
             maxshape=max_shape,
             dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/total_error_scaled",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/straight_sign_flip_override_active",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int8
         )
         
         # Error breakdown
@@ -759,6 +865,12 @@ class DataRecorder:
             dtype=h5py.string_dtype(encoding='utf-8', length=50)
         )
         self.h5_file.create_dataset(
+            "perception/reject_reason",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=h5py.string_dtype(encoding='utf-8', length=100)
+        )
+        self.h5_file.create_dataset(
             "perception/left_jump_magnitude",
             shape=(0,),
             maxshape=max_shape,
@@ -794,6 +906,30 @@ class DataRecorder:
             shape=(0,),
             maxshape=max_shape,
             dtype=h5py.string_dtype(encoding='utf-8', length=20)
+        )
+        self.h5_file.create_dataset(
+            "perception/perception_bad_events",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=h5py.string_dtype(encoding='utf-8', length=100)
+        )
+        self.h5_file.create_dataset(
+            "perception/perception_bad_events_recent",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=h5py.string_dtype(encoding='utf-8', length=100)
+        )
+        self.h5_file.create_dataset(
+            "perception/perception_clamp_events",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=h5py.string_dtype(encoding='utf-8', length=100)
+        )
+        self.h5_file.create_dataset(
+            "perception/perception_timestamp_frozen",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.bool_
         )
         # NEW: Diagnostic fields for perception instability
         self.h5_file.create_dataset(
@@ -833,6 +969,12 @@ class DataRecorder:
             shape=(0,),
             maxshape=max_shape,
             dtype=h5py.string_dtype(encoding='utf-8', length=10000)
+        )
+        self.h5_file.create_dataset(
+            "perception/segmentation_mask_png",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=h5py.vlen_dtype(np.uint8)
         )
         
         # Ground truth lane positions (from Unity)
@@ -1053,6 +1195,7 @@ class DataRecorder:
 
         # Group frames by type and write to HDF5
         camera_frames = []
+        topdown_frames = []
         vehicle_states = []
         control_commands = []
         perception_outputs = []
@@ -1062,6 +1205,8 @@ class DataRecorder:
         for frame in frames:
             if frame.camera_frame:
                 camera_frames.append(frame)
+            if frame.camera_topdown_frame:
+                topdown_frames.append(frame)
             if frame.vehicle_state:
                 vehicle_states.append(frame)
             if frame.control_command:
@@ -1076,7 +1221,8 @@ class DataRecorder:
         # Debug: Log what we're collecting
         sample_frame = frames[0]
         logger.info(f"[RECORDER] Flushing {len(frames)} frames: "
-                   f"camera={len(camera_frames)}, vehicle={len(vehicle_states)}, "
+                   f"camera={len(camera_frames)}, topdown={len(topdown_frames)}, "
+                   f"vehicle={len(vehicle_states)}, "
                    f"control={len(control_commands)}, perception={len(perception_outputs)}, "
                    f"trajectory={len(trajectory_outputs)}, unity={len(unity_feedbacks)}")
         if len(vehicle_states) == 0:
@@ -1108,6 +1254,16 @@ class DataRecorder:
                 )
             except Exception as e:
                 logger.error(f"Error writing camera frames: {e}", exc_info=True)
+        if topdown_frames:
+            try:
+                section_start = time.time()
+                self._write_topdown_camera_frames(topdown_frames)
+                self._debug_print(
+                    f"[RECORDER_WRITE_TOPDOWN] duration={time.time() - section_start:.3f}s "
+                    f"count={len(topdown_frames)}"
+                )
+            except Exception as e:
+                logger.error(f"Error writing top-down camera frames: {e}", exc_info=True)
 
         # Write vehicle states
         if vehicle_states:
@@ -1255,6 +1411,59 @@ class DataRecorder:
             self.h5_file["camera/timestamps"][current_size:] = timestamps
             self.h5_file["camera/frame_ids"][current_size:] = frame_ids
             self._debug_print(f"[RECORDER_CAMERA_WRITE] duration={time.time() - write_start:.3f}s")
+
+    def _write_topdown_camera_frames(self, frames: List[RecordingFrame]):
+        """Write top-down camera frames to HDF5."""
+        section_start = time.time()
+        images = []
+        timestamps = []
+        frame_ids = []
+        resized_count = 0
+
+        for frame in frames:
+            img = frame.camera_topdown_frame.image
+            if img.shape[:2] != (480, 640):
+                resize_start = time.time()
+                img = cv2.resize(img, (640, 480))
+                resized_count += 1
+                resize_duration = time.time() - resize_start
+                if resize_duration > UNITY_TIME_GAP_WARN_SECONDS:
+                    self._debug_print("[RECORDER_TOPDOWN_RESIZE_SLOW] duration=%.3fs" % resize_duration)
+            images.append(img)
+            timestamps.append(frame.camera_topdown_frame.timestamp)
+            frame_ids.append(frame.camera_topdown_frame.frame_id)
+
+        self._debug_print(
+            f"[RECORDER_TOPDOWN_PREP] duration={time.time() - section_start:.3f}s "
+            f"resized={resized_count}"
+        )
+
+        if images:
+            convert_start = time.time()
+            images = np.array(images)
+            timestamps = np.array(timestamps)
+            frame_ids = np.array(frame_ids)
+            self._debug_print(f"[RECORDER_TOPDOWN_CONVERT] duration={time.time() - convert_start:.3f}s")
+
+            resize_start = time.time()
+            current_size = self.h5_file["camera/topdown_images"].shape[0]
+            new_size = current_size + len(images)
+
+            self.h5_file["camera/topdown_images"].resize((new_size, 480, 640, 3))
+            self.h5_file["camera/topdown_timestamps"].resize((new_size,))
+            self.h5_file["camera/topdown_frame_ids"].resize((new_size,))
+            self._debug_print(f"[RECORDER_TOPDOWN_RESIZE_DS] duration={time.time() - resize_start:.3f}s")
+
+            write_start = time.time()
+            total_bytes = images.nbytes + timestamps.nbytes + frame_ids.nbytes
+            self._debug_print(
+                f"[RECORDER_TOPDOWN_WRITE_SIZE] bytes={total_bytes} current_size={current_size} "
+                f"new_size={new_size}"
+            )
+            self.h5_file["camera/topdown_images"][current_size:] = images
+            self.h5_file["camera/topdown_timestamps"][current_size:] = timestamps
+            self.h5_file["camera/topdown_frame_ids"][current_size:] = frame_ids
+            self._debug_print(f"[RECORDER_TOPDOWN_WRITE] duration={time.time() - write_start:.3f}s")
     
     def _write_vehicle_states(self, frames: List[RecordingFrame]):
         """Write vehicle states to HDF5."""
@@ -1266,7 +1475,17 @@ class DataRecorder:
         speed_limits = []
         speed_limit_previews = []
         speed_limit_preview_distances = []
+        speed_limit_preview_min_distances = []
+        speed_limit_preview_mid = []
+        speed_limit_preview_mid_distances = []
+        speed_limit_preview_mid_min_distances = []
+        speed_limit_preview_long = []
+        speed_limit_preview_long_distances = []
+        speed_limit_preview_long_min_distances = []
         steering_angles = []
+        steering_angles_actual = []
+        steering_inputs = []
+        desired_steer_angles = []
         motor_torques = []
         brake_torques = []
         timestamps = []
@@ -1340,7 +1559,29 @@ class DataRecorder:
             speed_limits.append(getattr(vs, 'speed_limit', 0.0))
             speed_limit_previews.append(getattr(vs, 'speed_limit_preview', 0.0))
             speed_limit_preview_distances.append(getattr(vs, 'speed_limit_preview_distance', 0.0))
+            speed_limit_preview_min_distances.append(
+                getattr(vs, 'speed_limit_preview_min_distance', 0.0)
+            )
+            speed_limit_preview_mid.append(getattr(vs, 'speed_limit_preview_mid', 0.0))
+            speed_limit_preview_mid_distances.append(
+                getattr(vs, 'speed_limit_preview_mid_distance', 0.0)
+            )
+            speed_limit_preview_mid_min_distances.append(
+                getattr(vs, 'speed_limit_preview_mid_min_distance', 0.0)
+            )
+            speed_limit_preview_long.append(getattr(vs, 'speed_limit_preview_long', 0.0))
+            speed_limit_preview_long_distances.append(
+                getattr(vs, 'speed_limit_preview_long_distance', 0.0)
+            )
+            speed_limit_preview_long_min_distances.append(
+                getattr(vs, 'speed_limit_preview_long_min_distance', 0.0)
+            )
             steering_angles.append(vs.steering_angle)
+            steering_angles_actual.append(
+                vs.steering_angle_actual if vs.steering_angle_actual is not None else 0.0
+            )
+            steering_inputs.append(getattr(vs, 'steering_input', 0.0))
+            desired_steer_angles.append(getattr(vs, 'desired_steer_angle', 0.0))
             motor_torques.append(vs.motor_torque)
             brake_torques.append(vs.brake_torque)
             timestamps.append(vs.timestamp)
@@ -1418,14 +1659,26 @@ class DataRecorder:
             # Resize all vehicle datasets
             for key in ["timestamps", "position", "rotation", "velocity",
                        "angular_velocity", "speed", "speed_limit", "speed_limit_preview",
-                       "speed_limit_preview_distance", "steering_angle",
+                       "speed_limit_preview_distance", "speed_limit_preview_min_distance",
+                       "speed_limit_preview_mid", "speed_limit_preview_mid_distance",
+                       "speed_limit_preview_mid_min_distance", "speed_limit_preview_long",
+                       "speed_limit_preview_long_distance",
+                       "speed_limit_preview_long_min_distance",
+                      "steering_angle", "steering_angle_actual",
+                      "steering_input", "desired_steer_angle",
                        "motor_torque", "brake_torque", "camera_8m_screen_y",
                        "camera_lookahead_screen_y", "ground_truth_lookahead_distance",
                        "unity_time", "unity_frame_count", "unity_delta_time",
                        "unity_smooth_delta_time", "unity_unscaled_delta_time",
                        "unity_time_scale"]:
                 if key == "timestamps" or key in ["speed", "speed_limit", "speed_limit_preview",
-                                                 "speed_limit_preview_distance", "steering_angle",
+                                                "speed_limit_preview_distance", "speed_limit_preview_min_distance",
+                                                "speed_limit_preview_mid", "speed_limit_preview_mid_distance",
+                                                "speed_limit_preview_mid_min_distance", "speed_limit_preview_long",
+                                                "speed_limit_preview_long_distance",
+                                                "speed_limit_preview_long_min_distance",
+                                                "steering_angle", "steering_angle_actual",
+                                                "steering_input", "desired_steer_angle",
                                                  "motor_torque", "brake_torque", "camera_8m_screen_y",
                                                  "camera_lookahead_screen_y", "ground_truth_lookahead_distance",
                                                  "unity_time", "unity_frame_count", "unity_delta_time",
@@ -1446,7 +1699,27 @@ class DataRecorder:
             self.h5_file["vehicle/speed_limit"][current_size:] = speed_limits
             self.h5_file["vehicle/speed_limit_preview"][current_size:] = speed_limit_previews
             self.h5_file["vehicle/speed_limit_preview_distance"][current_size:] = speed_limit_preview_distances
+            self.h5_file["vehicle/speed_limit_preview_min_distance"][current_size:] = (
+                speed_limit_preview_min_distances
+            )
+            self.h5_file["vehicle/speed_limit_preview_mid"][current_size:] = speed_limit_preview_mid
+            self.h5_file["vehicle/speed_limit_preview_mid_distance"][current_size:] = (
+                speed_limit_preview_mid_distances
+            )
+            self.h5_file["vehicle/speed_limit_preview_mid_min_distance"][current_size:] = (
+                speed_limit_preview_mid_min_distances
+            )
+            self.h5_file["vehicle/speed_limit_preview_long"][current_size:] = speed_limit_preview_long
+            self.h5_file["vehicle/speed_limit_preview_long_distance"][current_size:] = (
+                speed_limit_preview_long_distances
+            )
+            self.h5_file["vehicle/speed_limit_preview_long_min_distance"][current_size:] = (
+                speed_limit_preview_long_min_distances
+            )
             self.h5_file["vehicle/steering_angle"][current_size:] = steering_angles
+            self.h5_file["vehicle/steering_angle_actual"][current_size:] = steering_angles_actual
+            self.h5_file["vehicle/steering_input"][current_size:] = steering_inputs
+            self.h5_file["vehicle/desired_steer_angle"][current_size:] = desired_steer_angles
             self.h5_file["vehicle/motor_torque"][current_size:] = motor_torques
             self.h5_file["vehicle/brake_torque"][current_size:] = brake_torques
             self.h5_file["vehicle/unity_time"][current_size:] = np.array(unity_times, dtype=np.float64)
@@ -1598,16 +1871,20 @@ class DataRecorder:
         steering_before = []
         throttle_before = []
         brake_before = []
+        feedforward_steering_list = []
+        feedback_steering_list = []
         pid_integrals = []
         pid_derivatives = []
         pid_errors = []
         lateral_errors = []
         heading_errors = []
         total_errors = []
+        total_error_scaled_list = []
         calculated_steering_angles = []
         raw_steerings = []
         lateral_corrections = []
         path_curvature_inputs = []
+        straight_sign_flip_override_list = []
         is_straight_list = []
         straight_oscillation_rate_list = []
         tuned_deadband_list = []
@@ -1638,6 +1915,8 @@ class DataRecorder:
             steering_before.append(cc.steering_before_limits if cc.steering_before_limits is not None else cc.steering)
             throttle_before.append(cc.throttle_before_limits if cc.throttle_before_limits is not None else cc.throttle)
             brake_before.append(cc.brake_before_limits if cc.brake_before_limits is not None else cc.brake)
+            feedforward_steering_list.append(getattr(cc, 'feedforward_steering', 0.0) or 0.0)
+            feedback_steering_list.append(getattr(cc, 'feedback_steering', 0.0) or 0.0)
             accel_feedforward_list.append(getattr(cc, 'accel_feedforward', 0.0) or 0.0)
             brake_feedforward_list.append(getattr(cc, 'brake_feedforward', 0.0) or 0.0)
             accel_capped_list.append(1 if getattr(cc, 'longitudinal_accel_capped', False) else 0)
@@ -1648,10 +1927,14 @@ class DataRecorder:
             lateral_errors.append(cc.lateral_error if cc.lateral_error is not None else 0.0)
             heading_errors.append(cc.heading_error if cc.heading_error is not None else 0.0)
             total_errors.append(cc.total_error if cc.total_error is not None else 0.0)
+            total_error_scaled_list.append(getattr(cc, 'total_error_scaled', 0.0) or 0.0)
             calculated_steering_angles.append(cc.calculated_steering_angle_deg if cc.calculated_steering_angle_deg is not None else 0.0)
             raw_steerings.append(cc.raw_steering if cc.raw_steering is not None else 0.0)
             lateral_corrections.append(cc.lateral_correction if cc.lateral_correction is not None else 0.0)
             path_curvature_inputs.append(cc.path_curvature_input if cc.path_curvature_input is not None else 0.0)
+            straight_sign_flip_override_list.append(
+                1 if getattr(cc, 'straight_sign_flip_override_active', False) else 0
+            )
             is_straight_list.append(1 if getattr(cc, 'is_straight', False) else 0)
             straight_oscillation_rate_list.append(getattr(cc, 'straight_oscillation_rate', 0.0) or 0.0)
             tuned_deadband_list.append(getattr(cc, 'tuned_deadband', 0.0) or 0.0)
@@ -1678,8 +1961,10 @@ class DataRecorder:
                        "accel_feedforward", "brake_feedforward",
                        "longitudinal_accel_capped", "longitudinal_jerk_capped",
                        "steering_before_limits", "throttle_before_limits", "brake_before_limits",
+                       "feedforward_steering", "feedback_steering",
                        "pid_integral", "pid_derivative", "pid_error",
-                       "lateral_error", "heading_error", "total_error",
+                       "lateral_error", "heading_error", "total_error", "total_error_scaled",
+                       "straight_sign_flip_override_active",
                        "calculated_steering_angle_deg", "raw_steering", 
                        "lateral_correction", "path_curvature_input",
                        "is_straight", "straight_oscillation_rate",
@@ -1703,12 +1988,18 @@ class DataRecorder:
             self.h5_file["control/steering_before_limits"][current_size:] = steering_before
             self.h5_file["control/throttle_before_limits"][current_size:] = throttle_before
             self.h5_file["control/brake_before_limits"][current_size:] = brake_before
+            self.h5_file["control/feedforward_steering"][current_size:] = feedforward_steering_list
+            self.h5_file["control/feedback_steering"][current_size:] = feedback_steering_list
             self.h5_file["control/pid_integral"][current_size:] = pid_integrals
             self.h5_file["control/pid_derivative"][current_size:] = pid_derivatives
             self.h5_file["control/pid_error"][current_size:] = pid_errors
             self.h5_file["control/lateral_error"][current_size:] = lateral_errors
             self.h5_file["control/heading_error"][current_size:] = heading_errors
             self.h5_file["control/total_error"][current_size:] = total_errors
+            self.h5_file["control/total_error_scaled"][current_size:] = total_error_scaled_list
+            self.h5_file["control/straight_sign_flip_override_active"][current_size:] = np.array(
+                straight_sign_flip_override_list, dtype=np.int8
+            )
             self.h5_file["control/calculated_steering_angle_deg"][current_size:] = calculated_steering_angles
             self.h5_file["control/raw_steering"][current_size:] = raw_steerings
             self.h5_file["control/lateral_correction"][current_size:] = lateral_corrections
@@ -1743,6 +2034,7 @@ class DataRecorder:
         # NEW: Stale data tracking
         using_stale_data_list = []
         stale_reason_list = []
+        reject_reason_list = []
         left_jump_magnitude_list = []
         right_jump_magnitude_list = []
         jump_threshold_list = []
@@ -1755,9 +2047,14 @@ class DataRecorder:
         consecutive_bad_frames_list = []
         health_score_list = []
         health_status_list = []
+        bad_events_list = []
+        bad_events_recent_list = []
+        clamp_events_list = []
+        timestamp_frozen_list = []
         # NEW: Points used for polynomial fitting
         fit_points_left_list = []
         fit_points_right_list = []
+        segmentation_mask_png_list = []
         
         for frame in frames:
             po = frame.perception_output
@@ -1770,6 +2067,9 @@ class DataRecorder:
             # NEW: Stale data tracking
             using_stale_data_list.append(po.using_stale_data if hasattr(po, 'using_stale_data') else False)
             stale_reason_list.append(po.stale_data_reason if hasattr(po, 'stale_data_reason') and po.stale_data_reason else "")
+            reject_reason_list.append(
+                po.reject_reason if hasattr(po, 'reject_reason') and po.reject_reason else ""
+            )
             left_jump_magnitude_list.append(po.left_jump_magnitude if hasattr(po, 'left_jump_magnitude') and po.left_jump_magnitude is not None else 0.0)
             right_jump_magnitude_list.append(po.right_jump_magnitude if hasattr(po, 'right_jump_magnitude') and po.right_jump_magnitude is not None else 0.0)
             jump_threshold_list.append(po.jump_threshold if hasattr(po, 'jump_threshold') and po.jump_threshold is not None else 0.0)
@@ -1782,6 +2082,24 @@ class DataRecorder:
             consecutive_bad_frames_list.append(po.consecutive_bad_detection_frames if hasattr(po, 'consecutive_bad_detection_frames') else 0)
             health_score_list.append(po.perception_health_score if hasattr(po, 'perception_health_score') else 1.0)
             health_status_list.append(po.perception_health_status if hasattr(po, 'perception_health_status') else "healthy")
+            bad_events_list.append(
+                ",".join(po.perception_bad_events)
+                if hasattr(po, 'perception_bad_events') and po.perception_bad_events
+                else ""
+            )
+            bad_events_recent_list.append(
+                ",".join(po.perception_bad_events_recent)
+                if hasattr(po, 'perception_bad_events_recent') and po.perception_bad_events_recent
+                else ""
+            )
+            clamp_events_list.append(
+                ",".join(po.perception_clamp_events)
+                if hasattr(po, 'perception_clamp_events') and po.perception_clamp_events
+                else ""
+            )
+            timestamp_frozen_list.append(
+                bool(getattr(po, 'perception_timestamp_frozen', False))
+            )
             # NEW: Points used for polynomial fitting
             # Store as JSON strings since HDF5 doesn't handle variable-length arrays well
             fit_points_left_json = ""
@@ -1789,17 +2107,33 @@ class DataRecorder:
             if hasattr(po, 'fit_points_left') and po.fit_points_left is not None:
                 try:
                     import json
-                    fit_points_left_json = json.dumps(po.fit_points_left.tolist())
+                    fit_points_left_value = (
+                        po.fit_points_left.tolist()
+                        if hasattr(po.fit_points_left, 'tolist')
+                        else po.fit_points_left
+                    )
+                    fit_points_left_json = json.dumps(fit_points_left_value)
                 except Exception:
                     pass
             if hasattr(po, 'fit_points_right') and po.fit_points_right is not None:
                 try:
                     import json
-                    fit_points_right_json = json.dumps(po.fit_points_right.tolist())
+                    fit_points_right_value = (
+                        po.fit_points_right.tolist()
+                        if hasattr(po.fit_points_right, 'tolist')
+                        else po.fit_points_right
+                    )
+                    fit_points_right_json = json.dumps(fit_points_right_value)
                 except Exception:
                     pass
             fit_points_left_list.append(fit_points_left_json)
             fit_points_right_list.append(fit_points_right_json)
+            if hasattr(po, 'segmentation_mask_png') and po.segmentation_mask_png is not None:
+                segmentation_mask_png_list.append(
+                    np.frombuffer(po.segmentation_mask_png, dtype=np.uint8)
+                )
+            else:
+                segmentation_mask_png_list.append(np.array([], dtype=np.uint8))
             
             # Store lane coefficients (flattened array of all coefficients)
             # Format: [coeff0_lane0, coeff1_lane0, coeff2_lane0, coeff0_lane1, ...]
@@ -1825,6 +2159,7 @@ class DataRecorder:
             # NEW: Resize stale data datasets
             self.h5_file["perception/using_stale_data"].resize((new_size,))
             self.h5_file["perception/stale_reason"].resize((new_size,))
+            self.h5_file["perception/reject_reason"].resize((new_size,))
             self.h5_file["perception/left_jump_magnitude"].resize((new_size,))
             self.h5_file["perception/right_jump_magnitude"].resize((new_size,))
             self.h5_file["perception/jump_threshold"].resize((new_size,))
@@ -1832,6 +2167,10 @@ class DataRecorder:
             self.h5_file["perception/consecutive_bad_detection_frames"].resize((new_size,))
             self.h5_file["perception/perception_health_score"].resize((new_size,))
             self.h5_file["perception/perception_health_status"].resize((new_size,))
+            self.h5_file["perception/perception_bad_events"].resize((new_size,))
+            self.h5_file["perception/perception_bad_events_recent"].resize((new_size,))
+            self.h5_file["perception/perception_clamp_events"].resize((new_size,))
+            self.h5_file["perception/perception_timestamp_frozen"].resize((new_size,))
             # NEW: Resize instability diagnostic datasets
             self.h5_file["perception/actual_detected_left_lane_x"].resize((new_size,))
             self.h5_file["perception/actual_detected_right_lane_x"].resize((new_size,))
@@ -1853,6 +2192,10 @@ class DataRecorder:
             self.h5_file["perception/using_stale_data"][current_size:] = using_stale_data_list
             stale_reason_array = np.array(stale_reason_list, dtype=h5py.string_dtype(encoding='utf-8', length=50))
             self.h5_file["perception/stale_reason"][current_size:] = stale_reason_array
+            reject_reason_array = np.array(
+                reject_reason_list, dtype=h5py.string_dtype(encoding='utf-8', length=100)
+            )
+            self.h5_file["perception/reject_reason"][current_size:] = reject_reason_array
             self.h5_file["perception/left_jump_magnitude"][current_size:] = left_jump_magnitude_list
             self.h5_file["perception/right_jump_magnitude"][current_size:] = right_jump_magnitude_list
             self.h5_file["perception/jump_threshold"][current_size:] = jump_threshold_list
@@ -1866,11 +2209,28 @@ class DataRecorder:
             self.h5_file["perception/perception_health_score"][current_size:] = health_score_list
             health_status_array = np.array(health_status_list, dtype=h5py.string_dtype(encoding='utf-8', length=20))
             self.h5_file["perception/perception_health_status"][current_size:] = health_status_array
+            bad_events_array = np.array(bad_events_list, dtype=h5py.string_dtype(encoding='utf-8', length=100))
+            self.h5_file["perception/perception_bad_events"][current_size:] = bad_events_array
+            bad_events_recent_array = np.array(
+                bad_events_recent_list, dtype=h5py.string_dtype(encoding='utf-8', length=100)
+            )
+            self.h5_file["perception/perception_bad_events_recent"][current_size:] = bad_events_recent_array
+            clamp_events_array = np.array(
+                clamp_events_list, dtype=h5py.string_dtype(encoding='utf-8', length=100)
+            )
+            self.h5_file["perception/perception_clamp_events"][current_size:] = clamp_events_array
+            self.h5_file["perception/perception_timestamp_frozen"][current_size:] = np.array(
+                timestamp_frozen_list, dtype=np.bool_
+            )
             # NEW: Write fit_points (as JSON strings)
             fit_points_left_array = np.array(fit_points_left_list, dtype=h5py.string_dtype(encoding='utf-8', length=10000))
             fit_points_right_array = np.array(fit_points_right_list, dtype=h5py.string_dtype(encoding='utf-8', length=10000))
             self.h5_file["perception/fit_points_left"][current_size:] = fit_points_left_array
             self.h5_file["perception/fit_points_right"][current_size:] = fit_points_right_array
+            self.h5_file["perception/segmentation_mask_png"].resize((new_size,))
+            for i, mask_arr in enumerate(segmentation_mask_png_list):
+                idx = current_size + i
+                self.h5_file["perception/segmentation_mask_png"][idx] = mask_arr
             
             # Write variable-length arrays (handle empty arrays properly)
             # CRITICAL: Always resize and write if we have data, even if some arrays are empty
