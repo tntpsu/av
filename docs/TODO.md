@@ -6,6 +6,37 @@
   accel_p95 <= 25 m/s^2, jerk_p95 <= 400 m/s^3, lat_jerk_p95 <= 5.0,
   emergency_stop_frame == 0.
 
+## ✅ Recent Accomplishments (2026-02-10)
+
+### Perception Stability Improvements
+- **Fixed RANSAC bug**: Corrected xs/ys coordinate swap in polynomial fitting
+- **Tuned RANSAC parameters**: threshold 10.0px, min_inliers 8 for robust outlier rejection
+- **Increased perception smoothing**: lane_center_ema_alpha 0.15 to reduce drift impact
+- **Tightened perception gating**: lane_center_gate_m 0.3m to catch smaller jumps
+- **Added lane line change clamp**: 0.25m to prevent sudden lane position jumps
+
+### Control Stability Improvements
+- **Added lateral deadband (0.05m)**: Prevents steering when car is centered but perception drifts
+- **Lowered feedforward threshold**: curve_feedforward_curvature_min 0.001 to activate with low curvature
+- **Improved trajectory smoothing**: lane_position_smoothing_alpha 0.75 for smoother ref_x
+
+### Results
+- ✅ **Stable straight-line driving**: No oscillation on straights
+- ✅ **Successfully reaches curves**: No overcorrection before curve entry
+- ⚠️ **Remaining issue**: Curve following needs improvement (understeering in curves)
+
+## Current Focus: Curve Following
+
+### Problem
+- Car understeers in curves (doesn't turn enough)
+- Path curvature is too low (~20x below ground truth)
+- Feedforward not activating due to low curvature values
+
+### Next Steps
+1. **Fix curvature calculation**: Convert from image-space to vehicle-space properly
+2. **Tune feedforward gains**: Ensure feedforward activates and provides adequate steering
+3. **Improve curve entry**: Better speed reduction and steering preparation for curves
+
 ## Current Tuning Targets (Iterations)
 - **Comfort caps:** accel_p95 <= 3.0 m/s^2, jerk_p95 <= 6.0 m/s^3.
 - **Speed tracking:** planned vs actual RMSE <= 1.0 m/s, overspeed <= 10%.
