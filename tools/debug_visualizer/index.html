@@ -90,6 +90,17 @@
                             <label title="Hide prepended reference point and show planner-only path. Use when isolating planner geometry from display serialization artifacts."><input type="checkbox" id="toggle-planner-only-trajectory"> Planner-Only Trajectory (Skip Prepended Ref Point)</label>
                             <label title="Use top-down camera calibration from recording for projection. Keep enabled for trustable top-down alignment."><input type="checkbox" id="toggle-topdown-calibrated-projection"> Top-Down Calibrated Projection</label>
                             <label title="Apply temporal smoothing to top-down trajectory display only. Use for readability; not used in metrics/control."><input type="checkbox" id="toggle-topdown-pose-smooth"> Smooth Top-Down Pose (Display Only)</label>
+                            <label title="Enable near-field main-camera projection blend to reduce short-range projection residuals. Diagnostic/display only."><input type="checkbox" id="toggle-main-nearfield-blend" checked> Main Near-Field Blend</label>
+                            <label title="Near-field vertical offset (meters) blended from 0m forward. Negative pulls near points downward in image.">
+                                Near-Field Y Offset (m):
+                                <input type="range" id="nearfield-y-offset-slider" min="-0.50" max="0.50" step="0.01" value="-0.20">
+                                <span id="nearfield-y-offset-value">-0.20</span>
+                            </label>
+                            <label title="Forward distance over which near-field blend decays to zero.">
+                                Near-Field Blend Distance (m):
+                                <input type="range" id="nearfield-blend-distance-slider" min="2.0" max="20.0" step="0.5" value="8.0">
+                                <span id="nearfield-blend-distance-value">8.0</span>
+                            </label>
                         </div>
                     </details>
                     </div>
@@ -422,6 +433,9 @@
                             <tr><td>Mirror Sanity</td><td id="projection-main-mirror-sanity">-</td></tr>
                             <tr><td>Turn Sign (Source)</td><td id="projection-source-turn-sign">-</td></tr>
                             <tr><td>Turn Sign (Main Visible)</td><td id="projection-main-turn-sign">-</td></tr>
+                            <tr><td>Near-Field Blend</td><td id="projection-main-nearfield-blend">-</td></tr>
+                            <tr><td>Near-Field Y Offset</td><td id="projection-main-nearfield-y-offset">-</td></tr>
+                            <tr><td>Near-Field Blend Distance</td><td id="projection-main-nearfield-blend-distance">-</td></tr>
                         </table>
                         <h3>Lateral Error at Lookahead</h3>
                         <table class="data-table">
@@ -689,7 +703,7 @@
 
     <script src="data_loader.js?v=20260213_issues_filters"></script>
     <script src="overlay_renderer.js?v=20260213_issues_filters"></script>
-    <script src="visualizer.js?v=20260215_right_lane_fiducials_v5"></script>
+    <script src="visualizer.js?v=20260215_projection_nearfield_step1c_v7"></script>
 </body>
 </html>
 

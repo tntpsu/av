@@ -59,6 +59,10 @@ class Visualizer {
         this.topdownProjectionToggleTouched = false;
         this.projectionDiagnostics = {};
         this.distanceScaleStartOffsetMeters = 2.0;
+        this.projectionNearFieldBlendEnabled = true;
+        this.projectionNearFieldGroundYOffsetMeters = -0.2;
+        this.projectionNearFieldBlendDistanceMeters = 8.0;
+        this.projectionNearFieldSettingsKey = 'debugVisualizer.projectionNearFieldSettings';
         
         this.setupEventListeners();
         this.loadRecordings();
@@ -98,6 +102,40 @@ class Visualizer {
             localStorage.setItem(this.checkboxStateKey, JSON.stringify(state));
         } catch (error) {
             console.warn('Could not persist checkbox state:', error);
+        }
+    }
+
+    restoreProjectionNearFieldSettings() {
+        try {
+            const raw = localStorage.getItem(this.projectionNearFieldSettingsKey);
+            if (!raw) return;
+            const saved = JSON.parse(raw);
+            if (!saved || typeof saved !== 'object') return;
+            if (Object.prototype.hasOwnProperty.call(saved, 'enabled')) {
+                this.projectionNearFieldBlendEnabled = Boolean(saved.enabled);
+            }
+            if (Object.prototype.hasOwnProperty.call(saved, 'offset')) {
+                const v = Number(saved.offset);
+                if (Number.isFinite(v)) this.projectionNearFieldGroundYOffsetMeters = v;
+            }
+            if (Object.prototype.hasOwnProperty.call(saved, 'distance')) {
+                const v = Number(saved.distance);
+                if (Number.isFinite(v) && v > 0.1) this.projectionNearFieldBlendDistanceMeters = v;
+            }
+        } catch (error) {
+            console.warn('Could not restore projection near-field settings:', error);
+        }
+    }
+
+    persistProjectionNearFieldSettings() {
+        try {
+            localStorage.setItem(this.projectionNearFieldSettingsKey, JSON.stringify({
+                enabled: Boolean(this.projectionNearFieldBlendEnabled),
+                offset: Number(this.projectionNearFieldGroundYOffsetMeters),
+                distance: Number(this.projectionNearFieldBlendDistanceMeters),
+            }));
+        } catch (error) {
+            console.warn('Could not persist projection near-field settings:', error);
         }
     }
 
@@ -279,6 +317,7 @@ class Visualizer {
     setupEventListeners() {
         // Restore persisted checkbox preferences before wiring listeners.
         this.restoreCheckboxState();
+        this.restoreProjectionNearFieldSettings();
         this.ensureCheckboxTooltips();
 
         // Recording selection
@@ -354,6 +393,49 @@ class Visualizer {
         const rightLaneFiducialsToggle = document.getElementById('toggle-right-lane-fiducials');
         if (rightLaneFiducialsToggle) {
             rightLaneFiducialsToggle.addEventListener('change', () => this.updateOverlays());
+        }
+        const nearfieldBlendToggle = document.getElementById('toggle-main-nearfield-blend');
+        if (nearfieldBlendToggle) {
+            nearfieldBlendToggle.checked = Boolean(this.projectionNearFieldBlendEnabled);
+            nearfieldBlendToggle.addEventListener('change', () => {
+                this.projectionNearFieldBlendEnabled = Boolean(nearfieldBlendToggle.checked);
+                this.persistProjectionNearFieldSettings();
+                this.updateOverlays();
+            });
+        }
+        const nearfieldOffsetSlider = document.getElementById('nearfield-y-offset-slider');
+        const nearfieldOffsetValue = document.getElementById('nearfield-y-offset-value');
+        if (nearfieldOffsetSlider) {
+            nearfieldOffsetSlider.value = String(this.projectionNearFieldGroundYOffsetMeters);
+            if (nearfieldOffsetValue) {
+                nearfieldOffsetValue.textContent = this.projectionNearFieldGroundYOffsetMeters.toFixed(2);
+            }
+            nearfieldOffsetSlider.addEventListener('input', () => {
+                const v = Number(nearfieldOffsetSlider.value);
+                if (Number.isFinite(v)) {
+                    this.projectionNearFieldGroundYOffsetMeters = v;
+                    if (nearfieldOffsetValue) nearfieldOffsetValue.textContent = v.toFixed(2);
+                    this.persistProjectionNearFieldSettings();
+                    this.updateOverlays();
+                }
+            });
+        }
+        const nearfieldBlendDistanceSlider = document.getElementById('nearfield-blend-distance-slider');
+        const nearfieldBlendDistanceValue = document.getElementById('nearfield-blend-distance-value');
+        if (nearfieldBlendDistanceSlider) {
+            nearfieldBlendDistanceSlider.value = String(this.projectionNearFieldBlendDistanceMeters);
+            if (nearfieldBlendDistanceValue) {
+                nearfieldBlendDistanceValue.textContent = this.projectionNearFieldBlendDistanceMeters.toFixed(1);
+            }
+            nearfieldBlendDistanceSlider.addEventListener('input', () => {
+                const v = Number(nearfieldBlendDistanceSlider.value);
+                if (Number.isFinite(v) && v > 0.1) {
+                    this.projectionNearFieldBlendDistanceMeters = v;
+                    if (nearfieldBlendDistanceValue) nearfieldBlendDistanceValue.textContent = v.toFixed(1);
+                    this.persistProjectionNearFieldSettings();
+                    this.updateOverlays();
+                }
+            });
         }
         const plannerOnlyTrajectoryToggle = document.getElementById('toggle-planner-only-trajectory');
         if (plannerOnlyTrajectoryToggle) {
@@ -2450,11 +2532,18 @@ class Visualizer {
         const groundY = Number.isFinite(Number(vehicle.road_center_at_car_y))
             ? Number(vehicle.road_center_at_car_y)
             : (Number.isFinite(Number(vehPosWorld.y)) ? Number(vehPosWorld.y) : 0.0);
-        const localToWorldGround = (xLocal, yLocal) => ({
-            x: vehPosWorld.x + (vehRight2D.x * xLocal) + (vehForward2D.x * yLocal),
-            y: groundY,
-            z: vehPosWorld.z + (vehRight2D.z * xLocal) + (vehForward2D.z * yLocal)
-        });
+        const localToWorldGround = (xLocal, yLocal) => {
+            const yForward = Number.isFinite(Number(yLocal)) ? Number(yLocal) : 0.0;
+            const blendDen = Math.max(1e-3, Number(this.projectionNearFieldBlendDistanceMeters) || 8.0);
+            const nearWeightRaw = Math.max(0.0, Math.min(1.0, 1.0 - (Math.max(0.0, yForward) / blendDen)));
+            const nearWeight = this.projectionNearFieldBlendEnabled ? nearWeightRaw : 0.0;
+            const blendedGroundY = groundY + ((Number(this.projectionNearFieldGroundYOffsetMeters) || 0.0) * nearWeight);
+            return {
+                x: vehPosWorld.x + (vehRight2D.x * xLocal) + (vehForward2D.x * yForward),
+                y: blendedGroundY,
+                z: vehPosWorld.z + (vehRight2D.z * xLocal) + (vehForward2D.z * yForward)
+            };
+        };
 
         const points = [];
         let sanityProjectedRightPx = null;
@@ -2535,6 +2624,9 @@ class Visualizer {
                 Number.isFinite(sanityProjectedLeftPx) &&
                 sanityProjectedRightPx > sanityProjectedLeftPx
             ) ? 'ok' : 'check',
+            main_nearfield_blend: this.projectionNearFieldBlendEnabled ? 'on' : 'off',
+            main_nearfield_y_offset_m: Number(this.projectionNearFieldGroundYOffsetMeters),
+            main_nearfield_blend_distance_m: Number(this.projectionNearFieldBlendDistanceMeters),
         };
 
         return points;
@@ -3381,6 +3473,19 @@ class Visualizer {
                 : '-'
         );
         updateField('projection-main-mirror-sanity', d.main_mirror_sanity || '-');
+        updateField('projection-main-nearfield-blend', d.main_nearfield_blend || '-');
+        updateField(
+            'projection-main-nearfield-y-offset',
+            Number.isFinite(Number(d.main_nearfield_y_offset_m))
+                ? `${Number(d.main_nearfield_y_offset_m).toFixed(2)} m`
+                : '-'
+        );
+        updateField(
+            'projection-main-nearfield-blend-distance',
+            Number.isFinite(Number(d.main_nearfield_blend_distance_m))
+                ? `${Number(d.main_nearfield_blend_distance_m).toFixed(1)} m`
+                : '-'
+        );
         updateField('projection-source-turn-sign', d.source_turn_sign || '-');
         updateField('projection-main-turn-sign', d.main_turn_sign || '-');
         const fmtErr = (v) => {
@@ -4299,6 +4404,9 @@ class Visualizer {
                         const diag = projected._diag || {};
                         this.projectionDiagnostics.main_first_visible_src_y_m = diag.main_first_visible_src_y_m;
                         this.projectionDiagnostics.main_mirror_sanity = diag.main_mirror_sanity || '-';
+                        this.projectionDiagnostics.main_nearfield_blend = diag.main_nearfield_blend || '-';
+                        this.projectionDiagnostics.main_nearfield_y_offset_m = diag.main_nearfield_y_offset_m;
+                        this.projectionDiagnostics.main_nearfield_blend_distance_m = diag.main_nearfield_blend_distance_m;
                         this.projectionDiagnostics.main_turn_sign = this.computeTurnSign(projected, 'srcX', 'srcY');
                     } else {
                         const sortedPoints = [...mainRenderTraj]
@@ -4313,6 +4421,9 @@ class Visualizer {
                         );
                         this.projectionDiagnostics.main_first_visible_src_y_m = null;
                         this.projectionDiagnostics.main_mirror_sanity = 'fallback';
+                        this.projectionDiagnostics.main_nearfield_blend = this.projectionNearFieldBlendEnabled ? 'on' : 'off';
+                        this.projectionDiagnostics.main_nearfield_y_offset_m = Number(this.projectionNearFieldGroundYOffsetMeters);
+                        this.projectionDiagnostics.main_nearfield_blend_distance_m = Number(this.projectionNearFieldBlendDistanceMeters);
                         this.projectionDiagnostics.main_turn_sign = this.computeTurnSign(mainRenderTraj, 'x', 'y');
                     }
                 }
@@ -4347,6 +4458,9 @@ class Visualizer {
         this.projectionDiagnostics.lateral_error_10m = lateralMetrics.err10m;
         this.projectionDiagnostics.lateral_error_15m = lateralMetrics.err15m;
         this.projectionDiagnostics.lateral_error_source = lateralMetrics.source;
+        this.projectionDiagnostics.main_nearfield_blend = this.projectionNearFieldBlendEnabled ? 'on' : 'off';
+        this.projectionDiagnostics.main_nearfield_y_offset_m = Number(this.projectionNearFieldGroundYOffsetMeters);
+        this.projectionDiagnostics.main_nearfield_blend_distance_m = Number(this.projectionNearFieldBlendDistanceMeters);
         const rightFidDiag = this.getRightLaneFiducialDiagnostics();
         this.projectionDiagnostics.right_fiducial_err_5m = rightFidDiag.err5m;
         this.projectionDiagnostics.right_fiducial_err_10m = rightFidDiag.err10m;
