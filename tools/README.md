@@ -2,6 +2,8 @@
 
 This directory contains utility scripts for data collection, analysis, tuning, and diagnostics. The `analyze/` and `debug_visualizer/` subdirectories have their own README files.
 
+For canonical startup/replay script behavior and defaults, use `docs/SCRIPT_RUNBOOK.md`.
+
 ## Quick Reference
 
 ### Data Collection & Recording

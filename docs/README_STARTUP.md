@@ -1,5 +1,7 @@
 # Quick Start Guide
 
+For a canonical "which script should I run?" map, see `docs/SCRIPT_RUNBOOK.md`.
+
 ## Starting the AV Stack
 
 ### Option 1: Automated Startup (Recommended)
@@ -43,17 +45,7 @@ make sure it is built first (see build commands below):
 ./start_ground_truth.sh --track-yaml tracks/s_loop.yml --arc-radius 20 --duration 20 --speed 8.0
 ```
 
-This script will:
-- ✅ Check/create virtual environment
-- ✅ Install dependencies (first time only)
-- ✅ Start the bridge server (kills existing if `--force` used)
-- ✅ Wait for services to be ready
-- ✅ Start the AV stack (with data recording enabled by default)
-- ✅ Optionally launch Unity Editor (`--launch-unity`)
-- ✅ Optionally auto-enter play mode (`--unity-auto-play`)
-- ✅ Optionally build the standalone Unity player (`--build-unity-player`)
-- ✅ Optionally run the standalone Unity player (`--run-unity-player`)
-- ✅ Show you clear instructions for Unity
+Canonical script behavior (what launches Unity vs bridge-only, defaults, and overrides) is defined in `docs/SCRIPT_RUNBOOK.md`.
 
 ### Option 1c: Ground Truth Follower (Bridge Only)
 

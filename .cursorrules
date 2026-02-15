@@ -232,3 +232,28 @@ This is an autonomous vehicle (AV) stack for Unity 3D simulation. The project us
 - New Python test files should be placed in the test folder
 - Suggestions for ideas should be accompanied by insights
 - Brand uses clean white and black color scheme for marketing emails
+
+## GT Run Logging Policy
+- For performance/benchmark runs, keep runtime logging minimal (default): use `tools/ground_truth_follower.py --log-level error` or `start_ground_truth.sh` with no logging flag.
+- For diagnosis runs, explicitly enable logs: `--diagnostic-logging` (info) or `--log-level debug` when needed.
+- Avoid enabling debug logging during latency benchmarking because it can distort timing and frame cadence.
+
+## GT Stream Sync Policy
+- Use one stream synchronization strategy per run across front/top-down/state via `--stream-sync-policy`.
+- Default is `aligned` (best-effort time alignment across streams at one sampling instant).
+- Use `queued` to enforce FIFO consumption across all streams for ordering investigations.
+- Use `latest` only when prioritizing recency over strict cross-stream alignment.
+
+## GT Replay Capture Defaults
+- When asked to run GT captures intended for replay with full stack compute active, use `start_ground_truth.sh` (not ad-hoc python invocation) so run flags are explicit and reproducible.
+- Preferred baseline command profile: `--strict-gt-pose --stream-sync-policy latest --log-level error`.
+- Switch to `--stream-sync-policy aligned` and `--diagnostic-logging` only for diagnosis runs where temporal pairing debug matters more than throughput.
+
+## Current Golden GT Sources (temporary)
+- Golden recording filename prefix is `golden_gt_YYYYMMDD_*` until explicitly updated.
+- Current golden files:
+- `data/recordings/golden_gt_20260214_oval_latest_20s.h5`
+- `data/recordings/golden_gt_20260214_sloop_latest_45s.h5`
+- `data/recordings/golden_gt_20260215_sloop_latest_30s.h5`
+- Treat these as canonical replay baselines for now; do not replace/remove unless user explicitly requests a golden refresh.
+- To promote/refresh golden recordings, use `tools/promote_golden_gt.sh` rather than manual rename.

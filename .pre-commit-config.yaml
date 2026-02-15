@@ -28,6 +28,11 @@ repos:
 
   - repo: local
     hooks:
+      - id: runbook-sync
+        name: Enforce script runbook updates
+        entry: python tools/check_runbook_sync.py
+        language: system
+        pass_filenames: true
       - id: pytest
         name: Run pytest
         entry: pytest

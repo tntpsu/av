@@ -24,6 +24,17 @@ jobs:
         pip install -r requirements.txt
         pip install pytest pytest-cov
     
+    - name: Enforce script runbook updates
+      shell: bash
+      run: |
+        if [ "${{ github.event_name }}" = "pull_request" ]; then
+          git fetch origin "${{ github.base_ref }}" --depth=1
+          CHANGED_FILES=$(git diff --name-only "origin/${{ github.base_ref }}...HEAD")
+        else
+          CHANGED_FILES=$(git diff --name-only HEAD~1...HEAD)
+        fi
+        python tools/check_runbook_sync.py $CHANGED_FILES
+    
     - name: Run tests
       run: |
         pytest tests/ -v --tb=short
