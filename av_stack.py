@@ -3999,6 +3999,10 @@ class AVStack:
         stream_front_unity_dt_ms = 0.0
         stream_topdown_unity_dt_ms = 0.0
         stream_topdown_front_dt_ms = 0.0
+        stream_front_source_timestamp = float(timestamp)
+        stream_topdown_source_timestamp = (
+            float(camera_topdown_frame.timestamp) if camera_topdown_frame is not None else 0.0
+        )
         if unity_time_value is not None:
             try:
                 stream_front_unity_dt_ms = float(timestamp - float(unity_time_value)) * 1000.0
@@ -4016,20 +4020,61 @@ class AVStack:
 
         last_front_id = getattr(self, "_last_recorded_front_frame_id", None)
         last_topdown_id = getattr(self, "_last_recorded_topdown_frame_id", None)
+        last_front_ts = getattr(self, "_last_recorded_front_timestamp", None)
+        last_topdown_ts = getattr(self, "_last_recorded_topdown_timestamp", None)
         stream_front_frame_id_delta = 0.0
         stream_topdown_frame_id_delta = 0.0
         stream_topdown_front_frame_id_delta = 0.0
+        stream_front_timestamp_reused = 0.0
+        stream_topdown_timestamp_reused = 0.0
+        stream_front_timestamp_non_monotonic = 0.0
+        stream_topdown_timestamp_non_monotonic = 0.0
+        stream_front_negative_frame_delta = 0.0
+        stream_topdown_negative_frame_delta = 0.0
+        stream_front_frame_id_reused = 0.0
+        stream_topdown_frame_id_reused = 0.0
+        stream_front_clock_jump = 0.0
+        stream_topdown_clock_jump = 0.0
         if camera_frame_id is not None and last_front_id is not None:
             stream_front_frame_id_delta = float(camera_frame_id - last_front_id)
+            if stream_front_frame_id_delta < 0.0:
+                stream_front_negative_frame_delta = 1.0
+            if abs(stream_front_frame_id_delta) < 1e-6:
+                stream_front_frame_id_reused = 1.0
         if camera_topdown_frame is not None:
             topdown_id = camera_topdown_frame.frame_id
             if topdown_id is not None and last_topdown_id is not None:
                 stream_topdown_frame_id_delta = float(topdown_id - last_topdown_id)
+                if stream_topdown_frame_id_delta < 0.0:
+                    stream_topdown_negative_frame_delta = 1.0
+                if abs(stream_topdown_frame_id_delta) < 1e-6:
+                    stream_topdown_frame_id_reused = 1.0
             if camera_frame_id is not None and topdown_id is not None:
                 stream_topdown_front_frame_id_delta = float(topdown_id - camera_frame_id)
             self._last_recorded_topdown_frame_id = topdown_id
         if camera_frame_id is not None:
             self._last_recorded_front_frame_id = camera_frame_id
+
+        if last_front_ts is not None:
+            dt_front = float(timestamp) - float(last_front_ts)
+            if abs(dt_front) < 1e-9:
+                stream_front_timestamp_reused = 1.0
+            if dt_front < 0.0:
+                stream_front_timestamp_non_monotonic = 1.0
+            if dt_front > 0.2:
+                stream_front_clock_jump = 1.0
+        self._last_recorded_front_timestamp = float(timestamp)
+        if camera_topdown_frame is not None:
+            topdown_ts = float(camera_topdown_frame.timestamp)
+            if last_topdown_ts is not None:
+                dt_topdown = topdown_ts - float(last_topdown_ts)
+                if abs(dt_topdown) < 1e-9:
+                    stream_topdown_timestamp_reused = 1.0
+                if dt_topdown < 0.0:
+                    stream_topdown_timestamp_non_monotonic = 1.0
+                if dt_topdown > 0.2:
+                    stream_topdown_clock_jump = 1.0
+            self._last_recorded_topdown_timestamp = topdown_ts
 
         # Bridge freshness/queue diagnostics at consume point.
         front_latest_age_ms = 0.0
@@ -4211,10 +4256,51 @@ class AVStack:
             camera_8m_screen_y=camera_8m_screen_y,  # NEW: Camera calibration data
             camera_lookahead_screen_y=camera_lookahead_screen_y,
             ground_truth_lookahead_distance=ground_truth_lookahead_distance,
+            oracle_trajectory_world_xyz=np.asarray(
+                vehicle_state_dict.get(
+                    'oracleTrajectoryWorldXYZ',
+                    vehicle_state_dict.get('oracle_trajectory_world_xyz', []),
+                ),
+                dtype=np.float32,
+            ),
+            oracle_trajectory_screen_xy=np.asarray(
+                vehicle_state_dict.get(
+                    'oracleTrajectoryScreenXY',
+                    vehicle_state_dict.get('oracle_trajectory_screen_xy', []),
+                ),
+                dtype=np.float32,
+            ),
+            right_lane_fiducials_vehicle_true_xy=np.asarray(
+                vehicle_state_dict.get(
+                    'rightLaneFiducialsVehicleTrueXY',
+                    vehicle_state_dict.get('right_lane_fiducials_vehicle_true_xy', []),
+                ),
+                dtype=np.float32,
+            ),
+            right_lane_fiducials_vehicle_monotonic_xy=np.asarray(
+                vehicle_state_dict.get(
+                    'rightLaneFiducialsVehicleMonotonicXY',
+                    vehicle_state_dict.get('right_lane_fiducials_vehicle_monotonic_xy', []),
+                ),
+                dtype=np.float32,
+            ),
+            right_lane_fiducials_world_xyz=np.asarray(
+                vehicle_state_dict.get(
+                    'rightLaneFiducialsWorldXYZ',
+                    vehicle_state_dict.get('right_lane_fiducials_world_xyz', []),
+                ),
+                dtype=np.float32,
+            ),
             right_lane_fiducials_vehicle_xy=np.asarray(
                 vehicle_state_dict.get(
                     'rightLaneFiducialsVehicleXY',
-                    vehicle_state_dict.get('right_lane_fiducials_vehicle_xy', []),
+                    vehicle_state_dict.get(
+                        'right_lane_fiducials_vehicle_xy',
+                        vehicle_state_dict.get(
+                            'rightLaneFiducialsVehicleTrueXY',
+                            vehicle_state_dict.get('right_lane_fiducials_vehicle_true_xy', []),
+                        ),
+                    ),
                 ),
                 dtype=np.float32,
             ),
@@ -4307,6 +4393,18 @@ class AVStack:
             stream_topdown_last_realtime_s=topdown_last_realtime_s,
             stream_front_timestamp_minus_realtime_ms=stream_front_timestamp_minus_realtime_ms,
             stream_topdown_timestamp_minus_realtime_ms=stream_topdown_timestamp_minus_realtime_ms,
+            stream_front_source_timestamp=stream_front_source_timestamp,
+            stream_topdown_source_timestamp=stream_topdown_source_timestamp,
+            stream_front_timestamp_reused=stream_front_timestamp_reused,
+            stream_topdown_timestamp_reused=stream_topdown_timestamp_reused,
+            stream_front_timestamp_non_monotonic=stream_front_timestamp_non_monotonic,
+            stream_topdown_timestamp_non_monotonic=stream_topdown_timestamp_non_monotonic,
+            stream_front_negative_frame_delta=stream_front_negative_frame_delta,
+            stream_topdown_negative_frame_delta=stream_topdown_negative_frame_delta,
+            stream_front_frame_id_reused=stream_front_frame_id_reused,
+            stream_topdown_frame_id_reused=stream_topdown_frame_id_reused,
+            stream_front_clock_jump=stream_front_clock_jump,
+            stream_topdown_clock_jump=stream_topdown_clock_jump,
             # NEW: Debug fields for diagnosing ground truth offset issues
             road_center_at_car_x=vehicle_state_dict.get('roadCenterAtCarX', 0.0),
             road_center_at_car_y=vehicle_state_dict.get('roadCenterAtCarY', 0.0),
@@ -4603,6 +4701,8 @@ class AVStack:
             diag_preclip_x0=traj_diag.get('diag_preclip_x0'),
             diag_preclip_x1=traj_diag.get('diag_preclip_x1'),
             diag_preclip_x2=traj_diag.get('diag_preclip_x2'),
+            diag_preclip_x_abs_max=traj_diag.get('diag_preclip_x_abs_max'),
+            diag_preclip_x_abs_p95=traj_diag.get('diag_preclip_x_abs_p95'),
             diag_postclip_x0=traj_diag.get('diag_postclip_x0'),
             diag_postclip_x1=traj_diag.get('diag_postclip_x1'),
             diag_postclip_x2=traj_diag.get('diag_postclip_x2'),

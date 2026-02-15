@@ -23,13 +23,15 @@ def find_latest_recording() -> Path | None:
     return candidates[-1] if candidates else None
 
 
-def parse_xy(flat: Any) -> list[dict[str, float]]:
+def parse_xy(flat: Any, stride: int = 2) -> list[dict[str, float]]:
     arr = np.asarray(flat, dtype=np.float64).reshape(-1)
     out: list[dict[str, float]] = []
-    n = arr.size // 2
+    if stride < 2:
+        stride = 2
+    n = arr.size // stride
     for i in range(n):
-        x = float(arr[2 * i])
-        y = float(arr[2 * i + 1])
+        x = float(arr[stride * i])
+        y = float(arr[stride * i + 1])
         if math.isfinite(x) and math.isfinite(y):
             out.append({"x": x, "y": y})
     return out
@@ -125,8 +127,8 @@ def main() -> None:
 
         rows: list[dict[str, Any]] = []
         for i in range(n):
-            planner = to_forward_monotonic(parse_xy(traj_pts[i]))
-            oracle = to_forward_monotonic(parse_xy(oracle_pts[i]))
+            planner = to_forward_monotonic(parse_xy(traj_pts[i], stride=3))
+            oracle = to_forward_monotonic(parse_xy(oracle_pts[i], stride=2))
             planner_shape = sample_shape(planner, 10.0)
             oracle_shape = sample_shape(oracle, 10.0)
             if planner_shape is None or oracle_shape is None:

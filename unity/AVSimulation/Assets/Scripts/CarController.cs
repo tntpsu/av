@@ -1411,12 +1411,17 @@ public class VehicleState
     public float groundTruthLookaheadDistance = 8.0f;
     // Oracle centerline samples in vehicle frame (flattened [x0,y0,x1,y1,...]).
     public float[] oracleTrajectoryXY = new float[0];
+    public float[] oracleTrajectoryWorldXYZ = new float[0];
+    public float[] oracleTrajectoryScreenXY = new float[0];
     public int oraclePointCount = 0;
     public float oracleHorizonMeters = 0.0f;
     public float oraclePointSpacingMeters = 0.0f;
     public bool oracleSamplesEnabled = false;
     // Right lane-line fiducials for projection diagnostics.
     public float[] rightLaneFiducialsVehicleXY = new float[0];
+    public float[] rightLaneFiducialsVehicleTrueXY = new float[0];
+    public float[] rightLaneFiducialsVehicleMonotonicXY = new float[0];
+    public float[] rightLaneFiducialsWorldXYZ = new float[0];
     public float[] rightLaneFiducialsScreenXY = new float[0];
     public int rightLaneFiducialsPointCount = 0;
     public float rightLaneFiducialsHorizonMeters = 0.0f;

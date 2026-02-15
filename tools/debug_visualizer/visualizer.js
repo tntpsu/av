@@ -235,10 +235,68 @@ class Visualizer {
         return segments;
     }
 
+    drawMainDistanceScaleFromWorldFiducials(stepMeters = 5, maxMeters = 30) {
+        const vehicle = this.currentFrameData?.vehicle || {};
+        const anchorsRaw = Array.isArray(vehicle.right_lane_fiducials_world_points)
+            ? vehicle.right_lane_fiducials_world_points
+            : [];
+        const anchors = anchorsRaw
+            .map((p) => ({ x: Number(p?.x), y: Number(p?.y), z: Number(p?.z) }))
+            .filter((p) => Number.isFinite(p.x) && Number.isFinite(p.y) && Number.isFinite(p.z));
+        if (anchors.length < 2) return false;
+
+        const spacingMeters = Math.max(0.5, Number(vehicle.right_lane_fiducials_spacing_meters) || 5.0);
+        const startOffset = Math.max(0, Number(this.distanceScaleStartOffsetMeters) || 0);
+        const maxSourceS = (anchors.length - 1) * spacingMeters;
+        let drawn = 0;
+
+        const sampleAnchorAtDistance = (sourceS) => {
+            const s = Math.max(0, Math.min(maxSourceS, sourceS));
+            const idxFloat = s / spacingMeters;
+            const i0 = Math.max(0, Math.min(anchors.length - 1, Math.floor(idxFloat)));
+            const i1 = Math.max(0, Math.min(anchors.length - 1, Math.ceil(idxFloat)));
+            const t = i1 === i0 ? 0 : (idxFloat - i0);
+            const p0 = anchors[i0];
+            const p1 = anchors[i1];
+            const x = p0.x + (p1.x - p0.x) * t;
+            const y = p0.y + (p1.y - p0.y) * t;
+            const z = p0.z + (p1.z - p0.z) * t;
+            const t0 = anchors[Math.max(0, i0 - 1)];
+            const t1 = anchors[Math.min(anchors.length - 1, i1 + 1)];
+            let tx = t1.x - t0.x;
+            let tz = t1.z - t0.z;
+            const norm = Math.hypot(tx, tz);
+            if (!Number.isFinite(norm) || norm < 1e-3) {
+                tx = p1.x - p0.x;
+                tz = p1.z - p0.z;
+            }
+            const tn = Math.hypot(tx, tz) || 1.0;
+            const nx = tz / tn;   // right normal in world XZ plane
+            const nz = -tx / tn;
+            return { x, y, z, nx, nz };
+        };
+
+        for (let displayS = 0; displayS <= maxMeters + 1e-6; displayS += stepMeters) {
+            const sourceS = startOffset + displayS;
+            if (sourceS > maxSourceS + 1e-6) continue;
+            const p = sampleAnchorAtDistance(sourceS);
+            const tickHalfMeters = 0.22;
+            const aWorld = { x: p.x - p.nx * tickHalfMeters, y: p.y, z: p.z - p.nz * tickHalfMeters };
+            const bWorld = { x: p.x + p.nx * tickHalfMeters, y: p.y, z: p.z + p.nz * tickHalfMeters };
+            const projected = this.projectWorldPointsToImage([aWorld, bWorld]);
+            if (!projected || projected.length < 2) continue;
+            this.overlayRenderer.drawImagePath(projected, '#ffffff', displayS === 0 ? 3 : 2);
+            drawn += 1;
+        }
+
+        return drawn > 0;
+    }
+
     drawMainDistanceScale() {
         const showScale = Boolean(document.getElementById('toggle-distance-scale')?.checked);
         if (!showScale) return;
         if (Boolean(this.currentOverlaySnapRisk)) return;
+        if (this.drawMainDistanceScaleFromWorldFiducials(5, 30)) return;
         const segments = this.getDistanceScaleSegments(5, 30);
         if (!segments.length) return;
         for (const seg of segments) {
@@ -2633,6 +2691,86 @@ class Visualizer {
         return points;
     }
 
+    projectWorldPointsToImage(worldPoints) {
+        if (!this.currentFrameData || !this.currentFrameData.vehicle || !Array.isArray(worldPoints)) {
+            return null;
+        }
+        const vehicle = this.currentFrameData.vehicle;
+        if (!vehicle.position || vehicle.camera_pos_x === null || vehicle.camera_forward_x === null) {
+            return null;
+        }
+        const camPosWorld = {
+            x: vehicle.camera_pos_x,
+            y: vehicle.camera_pos_y,
+            z: vehicle.camera_pos_z
+        };
+        const camForwardWorld = {
+            x: vehicle.camera_forward_x,
+            y: vehicle.camera_forward_y,
+            z: vehicle.camera_forward_z
+        };
+        const forwardNorm = Math.hypot(camForwardWorld.x, camForwardWorld.y, camForwardWorld.z) || 1.0;
+        const forward = {
+            x: camForwardWorld.x / forwardNorm,
+            y: camForwardWorld.y / forwardNorm,
+            z: camForwardWorld.z / forwardNorm
+        };
+        const worldUp = { x: 0, y: 1, z: 0 };
+        const right = {
+            x: worldUp.y * forward.z - worldUp.z * forward.y,
+            y: worldUp.z * forward.x - worldUp.x * forward.z,
+            z: worldUp.x * forward.y - worldUp.y * forward.x
+        };
+        const rightNorm = Math.hypot(right.x, right.y, right.z) || 1.0;
+        right.x /= rightNorm;
+        right.y /= rightNorm;
+        right.z /= rightNorm;
+        const up = {
+            x: forward.y * right.z - forward.z * right.y,
+            y: forward.z * right.x - forward.x * right.z,
+            z: forward.x * right.y - forward.y * right.x
+        };
+
+        const width = this.overlayRenderer.imageWidth;
+        const height = this.overlayRenderer.imageHeight;
+        const cx = width / 2.0;
+        const cy = height / 2.0;
+        const hfov = vehicle.camera_horizontal_fov && vehicle.camera_horizontal_fov > 0
+            ? vehicle.camera_horizontal_fov
+            : this.overlayRenderer.cameraFov;
+        const vfov = vehicle.camera_field_of_view && vehicle.camera_field_of_view > 0
+            ? vehicle.camera_field_of_view
+            : (2.0 * Math.atan(Math.tan((hfov * Math.PI) / 360.0) * (height / width)) * (180 / Math.PI));
+        const fx = (width / 2.0) / Math.tan((hfov * Math.PI) / 360.0);
+        const fy = (height / 2.0) / Math.tan((vfov * Math.PI) / 360.0);
+
+        const points = [];
+        for (const point of worldPoints) {
+            const wx = Number(point?.x);
+            const wy = Number(point?.y);
+            const wz = Number(point?.z);
+            if (!Number.isFinite(wx) || !Number.isFinite(wy) || !Number.isFinite(wz)) {
+                continue;
+            }
+            const p = {
+                x: wx - camPosWorld.x,
+                y: wy - camPosWorld.y,
+                z: wz - camPosWorld.z
+            };
+            const xCam = p.x * right.x + p.y * right.y + p.z * right.z;
+            const yCam = p.x * up.x + p.y * up.y + p.z * up.z;
+            const zCam = p.x * forward.x + p.y * forward.y + p.z * forward.z;
+            if (zCam <= 0.1) {
+                points.push(null);
+                continue;
+            }
+            const xImg = cx + (xCam / zCam) * fx;
+            const yImg = cy - (yCam / zCam) * fy;
+            points.push({ x: xImg, y: yImg });
+        }
+        return points;
+    }
+
     getDisplayTrajectoryPoints(trajPoints) {
         if (!Array.isArray(trajPoints) || trajPoints.length === 0) return [];
         const plannerOnly = Boolean(document.getElementById('toggle-planner-only-trajectory')?.checked);
@@ -2839,11 +2977,37 @@ class Visualizer {
             multiLookaheadActive: null,
             xClipCount: null,
             heavyXClipping: null,
+            preclipXAbsMax: null,
+            preclipXAbsP95: null,
             frontFrameIdDelta: null,
             frontUnityDtMs: null,
             overlaySnapRisk: null,
             controlCurvVsOracleRatio10m: null,
             underTurnFlag10m: null,
+            syncOverallStatus: null,
+            syncTrajStatus: null,
+            syncTrajReason: null,
+            syncControlStatus: null,
+            syncControlReason: null,
+            syncWindowMs: null,
+            syncDtCamTrajMs: null,
+            syncDtCamControlMs: null,
+            syncDtCamVehicleMs: null,
+            frontTsReused: null,
+            frontTsNonMonotonic: null,
+            frontIdReused: null,
+            frontNegativeDelta: null,
+            frontClockJump: null,
+            topTsReused: null,
+            topTsNonMonotonic: null,
+            topIdReused: null,
+            topNegativeDelta: null,
+            topClockJump: null,
+            contractMisalignedRisk: null,
+            cadenceRisk: null,
+            cadencePolicy: null,
+            cadenceFrameDeltaRiskThreshold: null,
+            cadenceUnityDtRiskThresholdMs: null,
         };
         const p = this.currentFrameData?.perception || {};
         const t = this.currentFrameData?.trajectory || {};
@@ -2874,6 +3038,14 @@ class Visualizer {
             out.xClipCount = xClipCount;
             out.heavyXClipping = xClipCount >= 8.0;
         }
+        const preclipXAbsMax = Number(t?.diag_preclip_x_abs_max);
+        if (Number.isFinite(preclipXAbsMax)) {
+            out.preclipXAbsMax = preclipXAbsMax;
+        }
+        const preclipXAbsP95 = Number(t?.diag_preclip_x_abs_p95);
+        if (Number.isFinite(preclipXAbsP95)) {
+            out.preclipXAbsP95 = preclipXAbsP95;
+        }
         const frontFrameIdDelta = Number(v?.stream_front_frame_id_delta);
         if (Number.isFinite(frontFrameIdDelta)) {
             out.frontFrameIdDelta = frontFrameIdDelta;
@@ -2882,9 +3054,47 @@ class Visualizer {
         if (Number.isFinite(frontUnityDtMs)) {
             out.frontUnityDtMs = frontUnityDtMs;
         }
-        const hasFrameDeltaRisk = Number.isFinite(frontFrameIdDelta) && frontFrameIdDelta >= 2.0;
-        const hasUnityDtRisk = Number.isFinite(frontUnityDtMs) && Math.abs(frontUnityDtMs) >= 20.0;
-        out.overlaySnapRisk = hasFrameDeltaRisk || hasUnityDtRisk;
+        const sync = this.currentFrameData?.sync || {};
+        const syncOverallStatus = String(sync?.overall_alignment_status || '');
+        const syncTrajStatus = String(sync?.trajectory_alignment_status || '');
+        const syncControlStatus = String(sync?.control_alignment_status || '');
+        out.syncOverallStatus = syncOverallStatus || null;
+        out.syncTrajStatus = syncTrajStatus || null;
+        out.syncTrajReason = String(sync?.trajectory_alignment_reason || '') || null;
+        out.syncControlStatus = syncControlStatus || null;
+        out.syncControlReason = String(sync?.control_alignment_reason || '') || null;
+        out.syncWindowMs = Number(sync?.alignment_window_ms);
+        out.syncDtCamTrajMs = Number(sync?.dt_cam_traj_ms);
+        out.syncDtCamControlMs = Number(sync?.dt_cam_control_ms);
+        out.syncDtCamVehicleMs = Number(sync?.dt_cam_vehicle_ms);
+        const syncPolicy = String(this.currentRecordingMeta?.metadata?.stream_sync_policy || '').toLowerCase();
+        const frameDeltaRiskThreshold = (syncPolicy === 'latest') ? 3.0 : 2.0;
+        const unityDtRiskThresholdMs = 20.0;
+        out.cadencePolicy = syncPolicy || 'unknown';
+        out.cadenceFrameDeltaRiskThreshold = frameDeltaRiskThreshold;
+        out.cadenceUnityDtRiskThresholdMs = unityDtRiskThresholdMs;
+        const hasFrameDeltaRisk = Number.isFinite(frontFrameIdDelta) && frontFrameIdDelta >= frameDeltaRiskThreshold;
+        const hasUnityDtRisk = Number.isFinite(frontUnityDtMs) && Math.abs(frontUnityDtMs) >= unityDtRiskThresholdMs;
+        const hasSyncAlignRisk = (
+            syncTrajStatus.toLowerCase() === 'misaligned' ||
+            syncTrajStatus.toLowerCase() === 'missing' ||
+            syncControlStatus.toLowerCase() === 'misaligned' ||
+            syncControlStatus.toLowerCase() === 'missing'
+        );
+        out.contractMisalignedRisk = hasSyncAlignRisk;
+        out.cadenceRisk = hasFrameDeltaRisk || hasUnityDtRisk;
+        out.overlaySnapRisk = hasSyncAlignRisk;
+
+        out.frontTsReused = Number(v?.stream_front_timestamp_reused);
+        out.frontTsNonMonotonic = Number(v?.stream_front_timestamp_non_monotonic);
+        out.frontIdReused = Number(v?.stream_front_frame_id_reused);
+        out.frontNegativeDelta = Number(v?.stream_front_negative_frame_delta);
+        out.frontClockJump = Number(v?.stream_front_clock_jump);
+        out.topTsReused = Number(v?.stream_topdown_timestamp_reused);
+        out.topTsNonMonotonic = Number(v?.stream_topdown_timestamp_non_monotonic);
+        out.topIdReused = Number(v?.stream_topdown_frame_id_reused);
+        out.topNegativeDelta = Number(v?.stream_topdown_negative_frame_delta);
+        out.topClockJump = Number(v?.stream_topdown_clock_jump);
 
         const controlCurv = Number(c?.path_curvature_input);
         const oracleMonotonic = this.toForwardMonotonicPath(Array.isArray(oraclePath) ? oraclePath : []);
@@ -2914,9 +3124,21 @@ class Visualizer {
             pairs: [],
         };
         const v = this.currentFrameData?.vehicle || {};
-        const vehiclePoints = Array.isArray(v.right_lane_fiducials_vehicle_points)
+        const vehicleWorldPoints = Array.isArray(v.right_lane_fiducials_world_points)
+            ? v.right_lane_fiducials_world_points
+            : [];
+        const vehicleTruePoints = Array.isArray(v.right_lane_fiducials_vehicle_true_points)
+            ? v.right_lane_fiducials_vehicle_true_points
+            : [];
+        const vehicleMonotonicPoints = Array.isArray(v.right_lane_fiducials_vehicle_monotonic_points)
+            ? v.right_lane_fiducials_vehicle_monotonic_points
+            : [];
+        const vehicleLegacyPoints = Array.isArray(v.right_lane_fiducials_vehicle_points)
             ? v.right_lane_fiducials_vehicle_points
             : [];
+        const vehiclePoints = vehicleTruePoints.length > 0
+            ? vehicleTruePoints
+            : (vehicleLegacyPoints.length > 0 ? vehicleLegacyPoints : vehicleMonotonicPoints);
         const screenPoints = Array.isArray(v.right_lane_fiducials_screen_points)
             ? v.right_lane_fiducials_screen_points
             : [];
@@ -2931,8 +3153,14 @@ class Visualizer {
         for (let i = 0; i < Math.min(vehiclePoints.length, screenPoints.length); i++) {
             const vp = vehiclePoints[i];
             const sp = screenPoints[i];
-            const projected = this.projectTrajectoryToImage([vp]);
-            const proj = (projected && projected.length > 0) ? projected[0] : null;
+            let proj = null;
+            if (vehicleWorldPoints.length > i) {
+                const worldProjected = this.projectWorldPointsToImage([vehicleWorldPoints[i]]);
+                proj = (worldProjected && worldProjected.length > 0) ? worldProjected[0] : null;
+            } else {
+                const projected = this.projectTrajectoryToImage([vp]);
+                proj = (projected && projected.length > 0) ? projected[0] : null;
+            }
             const validTruth = Boolean(sp && (sp.valid ?? true) && Number.isFinite(Number(sp.x)) && Number.isFinite(Number(sp.y)) && Number(sp.x) >= 0 && Number(sp.y) >= 0);
             const validProj = Boolean(proj && Number.isFinite(Number(proj.x)) && Number.isFinite(Number(proj.y)));
             const distance = i * spacing;
@@ -2945,7 +3173,12 @@ class Visualizer {
             }
             out.pairs.push({ distance, vehicle: vp, truth: sp, projected: proj, errPx });
         }
-        out.source = `unity_world_to_screen (${count}/${out.pairs.length} valid)`;
+        const vehicleSource = vehicleWorldPoints.length > 0
+            ? 'world_xyz'
+            : (vehicleTruePoints.length > 0
+                ? 'vehicle_true_xy'
+                : (vehicleLegacyPoints.length > 0 ? 'vehicle_xy_legacy' : 'vehicle_monotonic_xy'));
+        out.source = `unity_world_to_screen + ${vehicleSource} (${count}/${out.pairs.length} valid)`;
         out.meanErr = count > 0 ? (sum / count) : null;
         out.maxErr = maxErr;
 
@@ -3203,11 +3436,18 @@ class Visualizer {
                     if (!Number.isFinite(ax) || !Number.isFinite(ay) || !Number.isFinite(bx) || !Number.isFinite(by)) {
                         continue;
                     }
-                    const x0 = cx + (ax * pixelsPerMeter);
-                    const y0 = cy - (ay * pixelsPerMeter);
-                    const x1 = cx + (bx * pixelsPerMeter);
-                    const y1 = cy - (by * pixelsPerMeter);
-                    ctx.lineWidth = seg.s === 0 ? 3 : 2;
+                    let x0 = cx + (ax * pixelsPerMeter);
+                    let y0 = cy - (ay * pixelsPerMeter);
+                    let x1 = cx + (bx * pixelsPerMeter);
+                    let y1 = cy - (by * pixelsPerMeter);
+                    const topdownTickScale = 1.7;
+                    const mx = (x0 + x1) * 0.5;
+                    const my = (y0 + y1) * 0.5;
+                    x0 = mx + (x0 - mx) * topdownTickScale;
+                    y0 = my + (y0 - my) * topdownTickScale;
+                    x1 = mx + (x1 - mx) * topdownTickScale;
+                    y1 = my + (y1 - my) * topdownTickScale;
+                    ctx.lineWidth = seg.s === 0 ? 4 : 3;
                     ctx.beginPath();
                     ctx.moveTo(x0, y0);
                     ctx.lineTo(x1, y1);
@@ -3673,6 +3913,11 @@ class Visualizer {
             if (v === false) return 'off';
             return '-';
         };
+        const fmtFlag = (v) => {
+            if (v === true || Number(v) > 0.5) return 'on';
+            if (v === false || (Number.isFinite(Number(v)) && Number(v) <= 0.5)) return 'off';
+            return '-';
+        };
         updateField('projection-traj-heading-zero-gate', fmtBool(d.traj_heading_zero_gate));
         updateField('projection-traj-small-heading-gate', fmtBool(d.traj_small_heading_gate));
         updateField('projection-traj-multilookahead-active', fmtBool(d.traj_multilookahead_active));
@@ -3681,6 +3926,18 @@ class Visualizer {
             Number.isFinite(Number(d.traj_x_clip_count)) ? Number(d.traj_x_clip_count).toFixed(0) : '-'
         );
         updateField('projection-traj-heavy-x-clipping', fmtBool(d.traj_heavy_x_clipping));
+        updateField(
+            'projection-traj-preclip-abs-max',
+            Number.isFinite(Number(d.traj_preclip_abs_max))
+                ? `${Number(d.traj_preclip_abs_max).toFixed(2)} m`
+                : '-'
+        );
+        updateField(
+            'projection-traj-preclip-abs-p95',
+            Number.isFinite(Number(d.traj_preclip_abs_p95))
+                ? `${Number(d.traj_preclip_abs_p95).toFixed(2)} m`
+                : '-'
+        );
         updateField(
             'projection-traj-front-frame-delta',
             Number.isFinite(Number(d.traj_front_frame_delta))
@@ -3694,6 +3951,20 @@ class Visualizer {
                 : '-'
         );
         updateField('projection-traj-overlay-snap-risk', fmtBool(d.traj_overlay_snap_risk));
+        updateField('projection-traj-contract-misaligned-risk', fmtBool(d.traj_contract_misaligned_risk));
+        updateField('projection-traj-cadence-risk', fmtBool(d.traj_cadence_risk));
+        const cadencePolicy = String(d.traj_cadence_policy || 'unknown').toLowerCase();
+        const cadencePolicyLabel = cadencePolicy || 'unknown';
+        const cadenceFrameDeltaThreshold = Number(d.traj_cadence_frame_delta_threshold);
+        const cadenceUnityDtThresholdMs = Number(d.traj_cadence_unity_dt_threshold_ms);
+        if (Number.isFinite(cadenceFrameDeltaThreshold) && Number.isFinite(cadenceUnityDtThresholdMs)) {
+            updateField(
+                'projection-traj-cadence-policy',
+                `${cadencePolicyLabel} (frameΔ>=${cadenceFrameDeltaThreshold.toFixed(0)}, |dt|>=${cadenceUnityDtThresholdMs.toFixed(0)}ms)`
+            );
+        } else {
+            updateField('projection-traj-cadence-policy', '-');
+        }
         updateField(
             'projection-traj-control-curv-ratio-10m',
             Number.isFinite(Number(d.traj_control_curv_ratio_10m))
@@ -3702,6 +3973,37 @@ class Visualizer {
         );
         updateField('projection-traj-underturn-10m-flag', fmtBool(d.traj_underturn_10m_flag));
         updateField('projection-traj-waterfall-source', d.traj_waterfall_source || '-');
+        updateField('projection-sync-overall-status', d.sync_overall_status || '-');
+        updateField('projection-sync-traj-status', d.sync_traj_status || '-');
+        updateField('projection-sync-control-status', d.sync_control_status || '-');
+        updateField(
+            'projection-sync-window-ms',
+            Number.isFinite(Number(d.sync_window_ms)) ? Number(d.sync_window_ms).toFixed(1) : '-'
+        );
+        updateField(
+            'projection-sync-cam-traj-dt-ms',
+            Number.isFinite(Number(d.sync_dt_cam_traj_ms)) ? Number(d.sync_dt_cam_traj_ms).toFixed(2) : '-'
+        );
+        updateField(
+            'projection-sync-cam-control-dt-ms',
+            Number.isFinite(Number(d.sync_dt_cam_control_ms)) ? Number(d.sync_dt_cam_control_ms).toFixed(2) : '-'
+        );
+        updateField(
+            'projection-sync-cam-vehicle-dt-ms',
+            Number.isFinite(Number(d.sync_dt_cam_vehicle_ms)) ? Number(d.sync_dt_cam_vehicle_ms).toFixed(2) : '-'
+        );
+        updateField('projection-sync-traj-reason', d.sync_traj_reason || '-');
+        updateField('projection-sync-control-reason', d.sync_control_reason || '-');
+        updateField('projection-clock-front-ts-reused', fmtFlag(d.clock_front_ts_reused));
+        updateField('projection-clock-front-ts-nonmono', fmtFlag(d.clock_front_ts_nonmonotonic));
+        updateField('projection-clock-front-id-reused', fmtFlag(d.clock_front_id_reused));
+        updateField('projection-clock-front-negative-delta', fmtFlag(d.clock_front_negative_delta));
+        updateField('projection-clock-front-jump', fmtFlag(d.clock_front_jump));
+        updateField('projection-clock-top-ts-reused', fmtFlag(d.clock_top_ts_reused));
+        updateField('projection-clock-top-ts-nonmono', fmtFlag(d.clock_top_ts_nonmonotonic));
+        updateField('projection-clock-top-id-reused', fmtFlag(d.clock_top_id_reused));
+        updateField('projection-clock-top-negative-delta', fmtFlag(d.clock_top_negative_delta));
+        updateField('projection-clock-top-jump', fmtFlag(d.clock_top_jump));
         const fmtPx = (v) => Number.isFinite(Number(v)) ? `${Number(v).toFixed(1)} px` : '-';
         updateField('projection-right-fiducial-err-5m', fmtPx(d.right_fiducial_err_5m));
         updateField('projection-right-fiducial-err-10m', fmtPx(d.right_fiducial_err_10m));
@@ -4399,10 +4701,24 @@ class Visualizer {
         const vehicle = this.currentFrameData?.vehicle || {};
         const streamFrontFrameDelta = Number(vehicle.stream_front_frame_id_delta);
         const streamFrontUnityDtMs = Number(vehicle.stream_front_unity_dt_ms);
-        const frameDeltaRisk = Number.isFinite(streamFrontFrameDelta) && streamFrontFrameDelta >= 2.0;
-        const unityDtRisk = Number.isFinite(streamFrontUnityDtMs) && Math.abs(streamFrontUnityDtMs) >= 20.0;
-        const overlaySnapRisk = frameDeltaRisk || unityDtRisk;
-        this.currentOverlaySnapRisk = overlaySnapRisk;
+        const syncPolicy = String(this.currentRecordingMeta?.metadata?.stream_sync_policy || '').toLowerCase();
+        const frameDeltaRiskThreshold = (syncPolicy === 'latest') ? 3.0 : 2.0;
+        const unityDtRiskThresholdMs = 20.0;
+        const frameDeltaRisk = Number.isFinite(streamFrontFrameDelta) && streamFrontFrameDelta >= frameDeltaRiskThreshold;
+        const unityDtRisk = Number.isFinite(streamFrontUnityDtMs) && Math.abs(streamFrontUnityDtMs) >= unityDtRiskThresholdMs;
+        const cadenceRisk = frameDeltaRisk || unityDtRisk;
+        const sync = this.currentFrameData?.sync || {};
+        const syncTrajStatus = String(sync?.trajectory_alignment_status || '').toLowerCase();
+        const syncControlStatus = String(sync?.control_alignment_status || '').toLowerCase();
+        const hasSyncContract = Boolean(syncTrajStatus || syncControlStatus);
+        const overlayAlignmentRisk = (
+            syncTrajStatus === 'misaligned' ||
+            syncTrajStatus === 'missing' ||
+            syncControlStatus === 'misaligned' ||
+            syncControlStatus === 'missing'
+        );
+        const overlayDegradeRisk = hasSyncContract ? overlayAlignmentRisk : (cadenceRisk || overlayAlignmentRisk);
+        this.currentOverlaySnapRisk = overlayDegradeRisk;
         
         // Draw black reference line FIRST (shows where 8m actually appears)
         // This line is always drawn, using cached value if current frame doesn't have it
@@ -4612,7 +4928,7 @@ class Visualizer {
                             clipped.push(pt);
                             prev = pt;
                         }
-                        if (overlaySnapRisk) {
+                        if (overlayDegradeRisk) {
                             this.overlayRenderer.drawImagePoints(clipped, '#ff00ff', 2);
                         } else {
                             this.overlayRenderer.drawImagePath(clipped, '#ff00ff', 2);
@@ -4648,13 +4964,45 @@ class Visualizer {
 
         // Draw oracle trajectory (display only)
         if (document.getElementById('toggle-oracle-trajectory')?.checked) {
+            const oracleScreenPoints = this.currentFrameData?.vehicle?.oracle_trajectory_screen_points;
+            let drewScreenOracle = false;
+            if (Array.isArray(oracleScreenPoints) && oracleScreenPoints.length > 1) {
+                const validOracleScreenPoints = oracleScreenPoints
+                    .map((p) => ({ x: Number(p?.x), y: Number(p?.y), valid: Boolean(p?.valid) }))
+                    .filter((p) => Number.isFinite(p.x) && Number.isFinite(p.y) && p.valid);
+                if (validOracleScreenPoints.length > 1) {
+                    if (overlayDegradeRisk) {
+                        this.overlayRenderer.drawImagePoints(validOracleScreenPoints, '#66ff66', 2);
+                    } else {
+                        this.overlayRenderer.drawImagePath(validOracleScreenPoints, '#66ff66', 2);
+                    }
+                    drewScreenOracle = true;
+                }
+            }
+            const oracleWorldPoints = this.currentFrameData?.vehicle?.oracle_trajectory_world_points;
+            let drewWorldOracle = false;
+            if (!drewScreenOracle && Array.isArray(oracleWorldPoints) && oracleWorldPoints.length > 1) {
+                const projectedWorldOracle = this.projectWorldPointsToImage(oracleWorldPoints);
+                if (projectedWorldOracle && projectedWorldOracle.length > 1) {
+                    if (overlayDegradeRisk) {
+                        this.overlayRenderer.drawImagePoints(projectedWorldOracle, '#66ff66', 2);
+                    } else {
+                        this.overlayRenderer.drawImagePath(projectedWorldOracle, '#66ff66', 2);
+                    }
+                    drewWorldOracle = true;
+                }
+            }
             const oraclePoints = this.currentFrameData?.trajectory?.oracle_points;
-            if (Array.isArray(oraclePoints) && oraclePoints.length > 0) {
-                const renderOracle = this.toForwardMonotonicPath(oraclePoints);
+            const renderOracle = (Array.isArray(oraclePoints) && oraclePoints.length > 0)
+                ? this.toForwardMonotonicPath(oraclePoints)
+                : [];
+            if (renderOracle.length > 0) {
                 oraclePathForMetrics = renderOracle;
+            }
+            if (!drewScreenOracle && !drewWorldOracle && renderOracle.length > 0) {
                 const projectedOracle = this.projectTrajectoryToImage(renderOracle);
                 if (projectedOracle && projectedOracle.length > 1) {
-                    if (overlaySnapRisk) {
+                    if (overlayDegradeRisk) {
                         this.overlayRenderer.drawImagePoints(projectedOracle, '#66ff66', 2);
                     } else {
                         this.overlayRenderer.drawImagePath(projectedOracle, '#66ff66', 2);
@@ -4692,12 +5040,38 @@ class Visualizer {
         this.projectionDiagnostics.traj_multilookahead_active = trajWaterfall.multiLookaheadActive;
         this.projectionDiagnostics.traj_x_clip_count = trajWaterfall.xClipCount;
         this.projectionDiagnostics.traj_heavy_x_clipping = trajWaterfall.heavyXClipping;
+        this.projectionDiagnostics.traj_preclip_abs_max = trajWaterfall.preclipXAbsMax;
+        this.projectionDiagnostics.traj_preclip_abs_p95 = trajWaterfall.preclipXAbsP95;
         this.projectionDiagnostics.traj_front_frame_delta = trajWaterfall.frontFrameIdDelta;
         this.projectionDiagnostics.traj_front_unity_dt_ms = trajWaterfall.frontUnityDtMs;
         this.projectionDiagnostics.traj_overlay_snap_risk = trajWaterfall.overlaySnapRisk;
+        this.projectionDiagnostics.traj_contract_misaligned_risk = trajWaterfall.contractMisalignedRisk;
+        this.projectionDiagnostics.traj_cadence_risk = trajWaterfall.cadenceRisk;
+        this.projectionDiagnostics.traj_cadence_policy = trajWaterfall.cadencePolicy;
+        this.projectionDiagnostics.traj_cadence_frame_delta_threshold = trajWaterfall.cadenceFrameDeltaRiskThreshold;
+        this.projectionDiagnostics.traj_cadence_unity_dt_threshold_ms = trajWaterfall.cadenceUnityDtRiskThresholdMs;
         this.projectionDiagnostics.traj_control_curv_ratio_10m = trajWaterfall.controlCurvVsOracleRatio10m;
         this.projectionDiagnostics.traj_underturn_10m_flag = trajWaterfall.underTurnFlag10m;
         this.projectionDiagnostics.traj_waterfall_source = trajWaterfall.source;
+        this.projectionDiagnostics.sync_overall_status = trajWaterfall.syncOverallStatus;
+        this.projectionDiagnostics.sync_traj_status = trajWaterfall.syncTrajStatus;
+        this.projectionDiagnostics.sync_traj_reason = trajWaterfall.syncTrajReason;
+        this.projectionDiagnostics.sync_control_status = trajWaterfall.syncControlStatus;
+        this.projectionDiagnostics.sync_control_reason = trajWaterfall.syncControlReason;
+        this.projectionDiagnostics.sync_window_ms = trajWaterfall.syncWindowMs;
+        this.projectionDiagnostics.sync_dt_cam_traj_ms = trajWaterfall.syncDtCamTrajMs;
+        this.projectionDiagnostics.sync_dt_cam_control_ms = trajWaterfall.syncDtCamControlMs;
+        this.projectionDiagnostics.sync_dt_cam_vehicle_ms = trajWaterfall.syncDtCamVehicleMs;
+        this.projectionDiagnostics.clock_front_ts_reused = trajWaterfall.frontTsReused;
+        this.projectionDiagnostics.clock_front_ts_nonmonotonic = trajWaterfall.frontTsNonMonotonic;
+        this.projectionDiagnostics.clock_front_id_reused = trajWaterfall.frontIdReused;
+        this.projectionDiagnostics.clock_front_negative_delta = trajWaterfall.frontNegativeDelta;
+        this.projectionDiagnostics.clock_front_jump = trajWaterfall.frontClockJump;
+        this.projectionDiagnostics.clock_top_ts_reused = trajWaterfall.topTsReused;
+        this.projectionDiagnostics.clock_top_ts_nonmonotonic = trajWaterfall.topTsNonMonotonic;
+        this.projectionDiagnostics.clock_top_id_reused = trajWaterfall.topIdReused;
+        this.projectionDiagnostics.clock_top_negative_delta = trajWaterfall.topNegativeDelta;
+        this.projectionDiagnostics.clock_top_jump = trajWaterfall.topClockJump;
         this.projectionDiagnostics.main_nearfield_blend = this.projectionNearFieldBlendEnabled ? 'on' : 'off';
         this.projectionDiagnostics.main_nearfield_y_offset_m = Number(this.projectionNearFieldGroundYOffsetMeters);
         this.projectionDiagnostics.main_nearfield_blend_distance_m = Number(this.projectionNearFieldBlendDistanceMeters);

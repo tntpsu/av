@@ -430,12 +430,42 @@
                             <tr><td>Multi-Lookahead Blend Active</td><td id="projection-traj-multilookahead-active">-</td></tr>
                             <tr><td>X Clip Count</td><td id="projection-traj-x-clip-count">-</td></tr>
                             <tr><td>Heavy X Clipping (`>= 8`)</td><td id="projection-traj-heavy-x-clipping">-</td></tr>
+                            <tr><td>Preclip |X| Max (full path)</td><td id="projection-traj-preclip-abs-max">-</td></tr>
+                            <tr><td>Preclip |X| P95 (full path)</td><td id="projection-traj-preclip-abs-p95">-</td></tr>
                             <tr><td>Front Frame ID Delta</td><td id="projection-traj-front-frame-delta">-</td></tr>
                             <tr><td>Front Unity Δt (ms)</td><td id="projection-traj-front-unity-dt-ms">-</td></tr>
                             <tr><td>Overlay Snap Risk</td><td id="projection-traj-overlay-snap-risk">-</td></tr>
+                            <tr><td>Contract Misaligned Risk</td><td id="projection-traj-contract-misaligned-risk">-</td></tr>
+                            <tr><td>Cadence Risk</td><td id="projection-traj-cadence-risk">-</td></tr>
+                            <tr><td>Cadence Policy / Thresholds</td><td id="projection-traj-cadence-policy">-</td></tr>
                             <tr><td>Control Curvature / Oracle @10m</td><td id="projection-traj-control-curv-ratio-10m">-</td></tr>
                             <tr><td>Under-Turn Flag @10m</td><td id="projection-traj-underturn-10m-flag">-</td></tr>
                             <tr><td>Waterfall Source</td><td id="projection-traj-waterfall-source">-</td></tr>
+                        </table>
+                        <h3>Sync Contract</h3>
+                        <table class="data-table">
+                            <tr><td>Overall Alignment Status</td><td id="projection-sync-overall-status">-</td></tr>
+                            <tr><td>Trajectory Alignment</td><td id="projection-sync-traj-status">-</td></tr>
+                            <tr><td>Control Alignment</td><td id="projection-sync-control-status">-</td></tr>
+                            <tr><td>Alignment Window (ms)</td><td id="projection-sync-window-ms">-</td></tr>
+                            <tr><td>Camera ↔ Trajectory Δt (ms)</td><td id="projection-sync-cam-traj-dt-ms">-</td></tr>
+                            <tr><td>Camera ↔ Control Δt (ms)</td><td id="projection-sync-cam-control-dt-ms">-</td></tr>
+                            <tr><td>Camera ↔ Vehicle Δt (ms)</td><td id="projection-sync-cam-vehicle-dt-ms">-</td></tr>
+                            <tr><td>Trajectory Align Reason</td><td id="projection-sync-traj-reason">-</td></tr>
+                            <tr><td>Control Align Reason</td><td id="projection-sync-control-reason">-</td></tr>
+                        </table>
+                        <h3>Clock Integrity</h3>
+                        <table class="data-table">
+                            <tr><td>Front Timestamp Reused</td><td id="projection-clock-front-ts-reused">-</td></tr>
+                            <tr><td>Front Timestamp Non-Monotonic</td><td id="projection-clock-front-ts-nonmono">-</td></tr>
+                            <tr><td>Front Frame ID Reused</td><td id="projection-clock-front-id-reused">-</td></tr>
+                            <tr><td>Front Negative Frame Delta</td><td id="projection-clock-front-negative-delta">-</td></tr>
+                            <tr><td>Front Clock Jump</td><td id="projection-clock-front-jump">-</td></tr>
+                            <tr><td>Top-Down Timestamp Reused</td><td id="projection-clock-top-ts-reused">-</td></tr>
+                            <tr><td>Top-Down Timestamp Non-Monotonic</td><td id="projection-clock-top-ts-nonmono">-</td></tr>
+                            <tr><td>Top-Down Frame ID Reused</td><td id="projection-clock-top-id-reused">-</td></tr>
+                            <tr><td>Top-Down Negative Frame Delta</td><td id="projection-clock-top-negative-delta">-</td></tr>
+                            <tr><td>Top-Down Clock Jump</td><td id="projection-clock-top-jump">-</td></tr>
                         </table>
                     </div>
 
@@ -727,7 +757,7 @@
 
     <script src="data_loader.js?v=20260213_issues_filters"></script>
     <script src="overlay_renderer.js?v=20260213_issues_filters"></script>
-    <script src="visualizer.js?v=20260215_traj_sync_drift_v12"></script>
+    <script src="visualizer.js?v=20260216_oracle_screen_truth_topdown_hash_v17"></script>
 </body>
 </html>
 

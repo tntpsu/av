@@ -341,7 +341,37 @@ class DataRecorder:
             dtype=np.float32
         )
         self.h5_file.create_dataset(
+            "vehicle/oracle_trajectory_world_xyz",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=h5py.vlen_dtype(np.float32)
+        )
+        self.h5_file.create_dataset(
+            "vehicle/oracle_trajectory_screen_xy",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=h5py.vlen_dtype(np.float32)
+        )
+        self.h5_file.create_dataset(
             "vehicle/right_lane_fiducials_vehicle_xy",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=h5py.vlen_dtype(np.float32)
+        )
+        self.h5_file.create_dataset(
+            "vehicle/right_lane_fiducials_vehicle_true_xy",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=h5py.vlen_dtype(np.float32)
+        )
+        self.h5_file.create_dataset(
+            "vehicle/right_lane_fiducials_vehicle_monotonic_xy",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=h5py.vlen_dtype(np.float32)
+        )
+        self.h5_file.create_dataset(
+            "vehicle/right_lane_fiducials_world_xyz",
             shape=(0,),
             maxshape=max_shape,
             dtype=h5py.vlen_dtype(np.float32)
@@ -580,6 +610,78 @@ class DataRecorder:
         )
         self.h5_file.create_dataset(
             "vehicle/stream_topdown_timestamp_minus_realtime_ms",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "vehicle/stream_front_source_timestamp",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float64
+        )
+        self.h5_file.create_dataset(
+            "vehicle/stream_topdown_source_timestamp",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float64
+        )
+        self.h5_file.create_dataset(
+            "vehicle/stream_front_timestamp_reused",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "vehicle/stream_topdown_timestamp_reused",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "vehicle/stream_front_timestamp_non_monotonic",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "vehicle/stream_topdown_timestamp_non_monotonic",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "vehicle/stream_front_negative_frame_delta",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "vehicle/stream_topdown_negative_frame_delta",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "vehicle/stream_front_frame_id_reused",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "vehicle/stream_topdown_frame_id_reused",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "vehicle/stream_front_clock_jump",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "vehicle/stream_topdown_clock_jump",
             shape=(0,),
             maxshape=max_shape,
             dtype=np.float32
@@ -1047,6 +1149,8 @@ class DataRecorder:
         self.h5_file.create_dataset("trajectory/diag_preclip_x0", shape=(0,), maxshape=max_shape, dtype=np.float32)
         self.h5_file.create_dataset("trajectory/diag_preclip_x1", shape=(0,), maxshape=max_shape, dtype=np.float32)
         self.h5_file.create_dataset("trajectory/diag_preclip_x2", shape=(0,), maxshape=max_shape, dtype=np.float32)
+        self.h5_file.create_dataset("trajectory/diag_preclip_x_abs_max", shape=(0,), maxshape=max_shape, dtype=np.float32)
+        self.h5_file.create_dataset("trajectory/diag_preclip_x_abs_p95", shape=(0,), maxshape=max_shape, dtype=np.float32)
         self.h5_file.create_dataset("trajectory/diag_postclip_x0", shape=(0,), maxshape=max_shape, dtype=np.float32)
         self.h5_file.create_dataset("trajectory/diag_postclip_x1", shape=(0,), maxshape=max_shape, dtype=np.float32)
         self.h5_file.create_dataset("trajectory/diag_postclip_x2", shape=(0,), maxshape=max_shape, dtype=np.float32)
@@ -1904,7 +2008,12 @@ class DataRecorder:
         camera_8m_screen_y = []  # NEW: Camera calibration data
         camera_lookahead_screen_y = []  # NEW: Camera lookahead calibration data
         ground_truth_lookahead_distance = []  # NEW: Lookahead distance used for ground truth
+        oracle_trajectory_world_xyz = []
+        oracle_trajectory_screen_xy = []
         right_lane_fiducials_vehicle_xy = []
+        right_lane_fiducials_vehicle_true_xy = []
+        right_lane_fiducials_vehicle_monotonic_xy = []
+        right_lane_fiducials_world_xyz = []
         right_lane_fiducials_screen_xy = []
         right_lane_fiducials_point_count = []
         right_lane_fiducials_horizon_meters = []
@@ -1944,6 +2053,18 @@ class DataRecorder:
         stream_topdown_last_realtime_s = []
         stream_front_timestamp_minus_realtime_ms = []
         stream_topdown_timestamp_minus_realtime_ms = []
+        stream_front_source_timestamp = []
+        stream_topdown_source_timestamp = []
+        stream_front_timestamp_reused = []
+        stream_topdown_timestamp_reused = []
+        stream_front_timestamp_non_monotonic = []
+        stream_topdown_timestamp_non_monotonic = []
+        stream_front_negative_frame_delta = []
+        stream_topdown_negative_frame_delta = []
+        stream_front_frame_id_reused = []
+        stream_topdown_frame_id_reused = []
+        stream_front_clock_jump = []
+        stream_topdown_clock_jump = []
         # NEW: Debug fields for diagnosing ground truth offset issues
         road_center_at_car_x = []
         road_center_at_car_y = []
@@ -2062,9 +2183,39 @@ class DataRecorder:
             camera_8m_screen_y.append(cam_value)
             camera_lookahead_screen_y.append(getattr(vs, 'camera_lookahead_screen_y', -1.0))
             ground_truth_lookahead_distance.append(getattr(vs, 'ground_truth_lookahead_distance', 8.0))
+            oracle_trajectory_world_xyz.append(
+                np.asarray(
+                    getattr(vs, 'oracle_trajectory_world_xyz', np.array([], dtype=np.float32)),
+                    dtype=np.float32,
+                ).reshape(-1)
+            )
+            oracle_trajectory_screen_xy.append(
+                np.asarray(
+                    getattr(vs, 'oracle_trajectory_screen_xy', np.array([], dtype=np.float32)),
+                    dtype=np.float32,
+                ).reshape(-1)
+            )
             right_lane_fiducials_vehicle_xy.append(
                 np.asarray(
                     getattr(vs, 'right_lane_fiducials_vehicle_xy', np.array([], dtype=np.float32)),
+                    dtype=np.float32,
+                ).reshape(-1)
+            )
+            right_lane_fiducials_vehicle_true_xy.append(
+                np.asarray(
+                    getattr(vs, 'right_lane_fiducials_vehicle_true_xy', np.array([], dtype=np.float32)),
+                    dtype=np.float32,
+                ).reshape(-1)
+            )
+            right_lane_fiducials_vehicle_monotonic_xy.append(
+                np.asarray(
+                    getattr(vs, 'right_lane_fiducials_vehicle_monotonic_xy', np.array([], dtype=np.float32)),
+                    dtype=np.float32,
+                ).reshape(-1)
+            )
+            right_lane_fiducials_world_xyz.append(
+                np.asarray(
+                    getattr(vs, 'right_lane_fiducials_world_xyz', np.array([], dtype=np.float32)),
                     dtype=np.float32,
                 ).reshape(-1)
             )
@@ -2139,6 +2290,42 @@ class DataRecorder:
             )
             stream_topdown_timestamp_minus_realtime_ms.append(
                 getattr(vs, 'stream_topdown_timestamp_minus_realtime_ms', 0.0)
+            )
+            stream_front_source_timestamp.append(
+                getattr(vs, 'stream_front_source_timestamp', vs.timestamp)
+            )
+            stream_topdown_source_timestamp.append(
+                getattr(vs, 'stream_topdown_source_timestamp', 0.0)
+            )
+            stream_front_timestamp_reused.append(
+                getattr(vs, 'stream_front_timestamp_reused', 0.0)
+            )
+            stream_topdown_timestamp_reused.append(
+                getattr(vs, 'stream_topdown_timestamp_reused', 0.0)
+            )
+            stream_front_timestamp_non_monotonic.append(
+                getattr(vs, 'stream_front_timestamp_non_monotonic', 0.0)
+            )
+            stream_topdown_timestamp_non_monotonic.append(
+                getattr(vs, 'stream_topdown_timestamp_non_monotonic', 0.0)
+            )
+            stream_front_negative_frame_delta.append(
+                getattr(vs, 'stream_front_negative_frame_delta', 0.0)
+            )
+            stream_topdown_negative_frame_delta.append(
+                getattr(vs, 'stream_topdown_negative_frame_delta', 0.0)
+            )
+            stream_front_frame_id_reused.append(
+                getattr(vs, 'stream_front_frame_id_reused', 0.0)
+            )
+            stream_topdown_frame_id_reused.append(
+                getattr(vs, 'stream_topdown_frame_id_reused', 0.0)
+            )
+            stream_front_clock_jump.append(
+                getattr(vs, 'stream_front_clock_jump', 0.0)
+            )
+            stream_topdown_clock_jump.append(
+                getattr(vs, 'stream_topdown_clock_jump', 0.0)
             )
             # NEW: Debug fields for diagnosing ground truth offset issues
             road_center_at_car_x.append(getattr(vs, 'road_center_at_car_x', 0.0))
@@ -2277,11 +2464,31 @@ class DataRecorder:
             self.h5_file["vehicle/right_lane_fiducials_enabled"][current_size:] = np.array(
                 right_lane_fiducials_enabled, dtype=np.int8
             )
+            self.h5_file["vehicle/oracle_trajectory_world_xyz"].resize((new_size,))
+            self.h5_file["vehicle/oracle_trajectory_screen_xy"].resize((new_size,))
             self.h5_file["vehicle/right_lane_fiducials_vehicle_xy"].resize((new_size,))
+            self.h5_file["vehicle/right_lane_fiducials_vehicle_true_xy"].resize((new_size,))
+            self.h5_file["vehicle/right_lane_fiducials_vehicle_monotonic_xy"].resize((new_size,))
+            self.h5_file["vehicle/right_lane_fiducials_world_xyz"].resize((new_size,))
             self.h5_file["vehicle/right_lane_fiducials_screen_xy"].resize((new_size,))
             for i in range(len(positions)):
+                self.h5_file["vehicle/oracle_trajectory_world_xyz"][current_size + i] = (
+                    oracle_trajectory_world_xyz[i]
+                )
+                self.h5_file["vehicle/oracle_trajectory_screen_xy"][current_size + i] = (
+                    oracle_trajectory_screen_xy[i]
+                )
                 self.h5_file["vehicle/right_lane_fiducials_vehicle_xy"][current_size + i] = (
                     right_lane_fiducials_vehicle_xy[i]
+                )
+                self.h5_file["vehicle/right_lane_fiducials_vehicle_true_xy"][current_size + i] = (
+                    right_lane_fiducials_vehicle_true_xy[i]
+                )
+                self.h5_file["vehicle/right_lane_fiducials_vehicle_monotonic_xy"][current_size + i] = (
+                    right_lane_fiducials_vehicle_monotonic_xy[i]
+                )
+                self.h5_file["vehicle/right_lane_fiducials_world_xyz"][current_size + i] = (
+                    right_lane_fiducials_world_xyz[i]
                 )
                 self.h5_file["vehicle/right_lane_fiducials_screen_xy"][current_size + i] = (
                     right_lane_fiducials_screen_xy[i]
@@ -2418,6 +2625,30 @@ class DataRecorder:
                     self.h5_file["vehicle/stream_front_timestamp_minus_realtime_ms"][current_size:] = np.array(stream_front_timestamp_minus_realtime_ms, dtype=np.float32)
                     self.h5_file["vehicle/stream_topdown_timestamp_minus_realtime_ms"].resize((current_size + len(stream_topdown_timestamp_minus_realtime_ms),))
                     self.h5_file["vehicle/stream_topdown_timestamp_minus_realtime_ms"][current_size:] = np.array(stream_topdown_timestamp_minus_realtime_ms, dtype=np.float32)
+                    self.h5_file["vehicle/stream_front_source_timestamp"].resize((current_size + len(stream_front_source_timestamp),))
+                    self.h5_file["vehicle/stream_front_source_timestamp"][current_size:] = np.array(stream_front_source_timestamp, dtype=np.float64)
+                    self.h5_file["vehicle/stream_topdown_source_timestamp"].resize((current_size + len(stream_topdown_source_timestamp),))
+                    self.h5_file["vehicle/stream_topdown_source_timestamp"][current_size:] = np.array(stream_topdown_source_timestamp, dtype=np.float64)
+                    self.h5_file["vehicle/stream_front_timestamp_reused"].resize((current_size + len(stream_front_timestamp_reused),))
+                    self.h5_file["vehicle/stream_front_timestamp_reused"][current_size:] = np.array(stream_front_timestamp_reused, dtype=np.float32)
+                    self.h5_file["vehicle/stream_topdown_timestamp_reused"].resize((current_size + len(stream_topdown_timestamp_reused),))
+                    self.h5_file["vehicle/stream_topdown_timestamp_reused"][current_size:] = np.array(stream_topdown_timestamp_reused, dtype=np.float32)
+                    self.h5_file["vehicle/stream_front_timestamp_non_monotonic"].resize((current_size + len(stream_front_timestamp_non_monotonic),))
+                    self.h5_file["vehicle/stream_front_timestamp_non_monotonic"][current_size:] = np.array(stream_front_timestamp_non_monotonic, dtype=np.float32)
+                    self.h5_file["vehicle/stream_topdown_timestamp_non_monotonic"].resize((current_size + len(stream_topdown_timestamp_non_monotonic),))
+                    self.h5_file["vehicle/stream_topdown_timestamp_non_monotonic"][current_size:] = np.array(stream_topdown_timestamp_non_monotonic, dtype=np.float32)
+                    self.h5_file["vehicle/stream_front_negative_frame_delta"].resize((current_size + len(stream_front_negative_frame_delta),))
+                    self.h5_file["vehicle/stream_front_negative_frame_delta"][current_size:] = np.array(stream_front_negative_frame_delta, dtype=np.float32)
+                    self.h5_file["vehicle/stream_topdown_negative_frame_delta"].resize((current_size + len(stream_topdown_negative_frame_delta),))
+                    self.h5_file["vehicle/stream_topdown_negative_frame_delta"][current_size:] = np.array(stream_topdown_negative_frame_delta, dtype=np.float32)
+                    self.h5_file["vehicle/stream_front_frame_id_reused"].resize((current_size + len(stream_front_frame_id_reused),))
+                    self.h5_file["vehicle/stream_front_frame_id_reused"][current_size:] = np.array(stream_front_frame_id_reused, dtype=np.float32)
+                    self.h5_file["vehicle/stream_topdown_frame_id_reused"].resize((current_size + len(stream_topdown_frame_id_reused),))
+                    self.h5_file["vehicle/stream_topdown_frame_id_reused"][current_size:] = np.array(stream_topdown_frame_id_reused, dtype=np.float32)
+                    self.h5_file["vehicle/stream_front_clock_jump"].resize((current_size + len(stream_front_clock_jump),))
+                    self.h5_file["vehicle/stream_front_clock_jump"][current_size:] = np.array(stream_front_clock_jump, dtype=np.float32)
+                    self.h5_file["vehicle/stream_topdown_clock_jump"].resize((current_size + len(stream_topdown_clock_jump),))
+                    self.h5_file["vehicle/stream_topdown_clock_jump"][current_size:] = np.array(stream_topdown_clock_jump, dtype=np.float32)
                     
                     # NEW: Write debug fields for diagnosing ground truth offset issues
                     if len(road_center_at_car_x) > 0:
@@ -3024,6 +3255,8 @@ class DataRecorder:
         diag_preclip_x0 = []
         diag_preclip_x1 = []
         diag_preclip_x2 = []
+        diag_preclip_x_abs_max = []
+        diag_preclip_x_abs_p95 = []
         diag_postclip_x0 = []
         diag_postclip_x1 = []
         diag_postclip_x2 = []
@@ -3074,6 +3307,8 @@ class DataRecorder:
                 diag_preclip_x0.append(float(to.diag_preclip_x0 if to.diag_preclip_x0 is not None else np.nan))
                 diag_preclip_x1.append(float(to.diag_preclip_x1 if to.diag_preclip_x1 is not None else np.nan))
                 diag_preclip_x2.append(float(to.diag_preclip_x2 if to.diag_preclip_x2 is not None else np.nan))
+                diag_preclip_x_abs_max.append(float(to.diag_preclip_x_abs_max if to.diag_preclip_x_abs_max is not None else np.nan))
+                diag_preclip_x_abs_p95.append(float(to.diag_preclip_x_abs_p95 if to.diag_preclip_x_abs_p95 is not None else np.nan))
                 diag_postclip_x0.append(float(to.diag_postclip_x0 if to.diag_postclip_x0 is not None else np.nan))
                 diag_postclip_x1.append(float(to.diag_postclip_x1 if to.diag_postclip_x1 is not None else np.nan))
                 diag_postclip_x2.append(float(to.diag_postclip_x2 if to.diag_postclip_x2 is not None else np.nan))
@@ -3106,6 +3341,8 @@ class DataRecorder:
                 diag_preclip_x0.append(float(to.diag_preclip_x0 if (to and to.diag_preclip_x0 is not None) else np.nan))
                 diag_preclip_x1.append(float(to.diag_preclip_x1 if (to and to.diag_preclip_x1 is not None) else np.nan))
                 diag_preclip_x2.append(float(to.diag_preclip_x2 if (to and to.diag_preclip_x2 is not None) else np.nan))
+                diag_preclip_x_abs_max.append(float(to.diag_preclip_x_abs_max if (to and to.diag_preclip_x_abs_max is not None) else np.nan))
+                diag_preclip_x_abs_p95.append(float(to.diag_preclip_x_abs_p95 if (to and to.diag_preclip_x_abs_p95 is not None) else np.nan))
                 diag_postclip_x0.append(float(to.diag_postclip_x0 if (to and to.diag_postclip_x0 is not None) else np.nan))
                 diag_postclip_x1.append(float(to.diag_postclip_x1 if (to and to.diag_postclip_x1 is not None) else np.nan))
                 diag_postclip_x2.append(float(to.diag_postclip_x2 if (to and to.diag_postclip_x2 is not None) else np.nan))
@@ -3149,6 +3386,8 @@ class DataRecorder:
             self.h5_file["trajectory/diag_preclip_x0"].resize((new_size_rp,))
             self.h5_file["trajectory/diag_preclip_x1"].resize((new_size_rp,))
             self.h5_file["trajectory/diag_preclip_x2"].resize((new_size_rp,))
+            self.h5_file["trajectory/diag_preclip_x_abs_max"].resize((new_size_rp,))
+            self.h5_file["trajectory/diag_preclip_x_abs_p95"].resize((new_size_rp,))
             self.h5_file["trajectory/diag_postclip_x0"].resize((new_size_rp,))
             self.h5_file["trajectory/diag_postclip_x1"].resize((new_size_rp,))
             self.h5_file["trajectory/diag_postclip_x2"].resize((new_size_rp,))
@@ -3189,6 +3428,8 @@ class DataRecorder:
             self.h5_file["trajectory/diag_preclip_x0"][current_size_rp:] = np.array(diag_preclip_x0, dtype=np.float32)
             self.h5_file["trajectory/diag_preclip_x1"][current_size_rp:] = np.array(diag_preclip_x1, dtype=np.float32)
             self.h5_file["trajectory/diag_preclip_x2"][current_size_rp:] = np.array(diag_preclip_x2, dtype=np.float32)
+            self.h5_file["trajectory/diag_preclip_x_abs_max"][current_size_rp:] = np.array(diag_preclip_x_abs_max, dtype=np.float32)
+            self.h5_file["trajectory/diag_preclip_x_abs_p95"][current_size_rp:] = np.array(diag_preclip_x_abs_p95, dtype=np.float32)
             self.h5_file["trajectory/diag_postclip_x0"][current_size_rp:] = np.array(diag_postclip_x0, dtype=np.float32)
             self.h5_file["trajectory/diag_postclip_x1"][current_size_rp:] = np.array(diag_postclip_x1, dtype=np.float32)
             self.h5_file["trajectory/diag_postclip_x2"][current_size_rp:] = np.array(diag_postclip_x2, dtype=np.float32)

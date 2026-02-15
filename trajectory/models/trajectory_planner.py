@@ -150,6 +150,8 @@ class RuleBasedTrajectoryPlanner:
             "diag_preclip_x0": np.nan,
             "diag_preclip_x1": np.nan,
             "diag_preclip_x2": np.nan,
+            "diag_preclip_x_abs_max": np.nan,
+            "diag_preclip_x_abs_p95": np.nan,
             "diag_postclip_x0": np.nan,
             "diag_postclip_x1": np.nan,
             "diag_postclip_x2": np.nan,
@@ -1046,6 +1048,7 @@ class RuleBasedTrajectoryPlanner:
         post_minus_pre = [float(py - iy) for iy, py in zip(input_y, post_y)]
         pre_x = [float(v) for v in debug_trace.get("pre_clip_x", [])]
         post_x = [float(v) for v in debug_trace.get("post_clip_x", [])]
+        pre_x_abs = [abs(v) for v in pre_x if np.isfinite(v)]
         pre_inv = 1.0 if len(input_y) > 1 and input_y[0] > input_y[1] else 0.0
         post_inv = 1.0 if len(post_y) > 1 and post_y[0] > post_y[1] else 0.0
         introduced = 1.0 if (pre_inv < 0.5 and post_inv > 0.5) else 0.0
@@ -1070,6 +1073,8 @@ class RuleBasedTrajectoryPlanner:
             "diag_preclip_x0": self._diag_value_at(pre_x, 0),
             "diag_preclip_x1": self._diag_value_at(pre_x, 1),
             "diag_preclip_x2": self._diag_value_at(pre_x, 2),
+            "diag_preclip_x_abs_max": float(np.max(pre_x_abs)) if len(pre_x_abs) > 0 else np.nan,
+            "diag_preclip_x_abs_p95": float(np.percentile(np.array(pre_x_abs, dtype=np.float64), 95)) if len(pre_x_abs) > 0 else np.nan,
             "diag_postclip_x0": self._diag_value_at(post_x, 0),
             "diag_postclip_x1": self._diag_value_at(post_x, 1),
             "diag_postclip_x2": self._diag_value_at(post_x, 2),

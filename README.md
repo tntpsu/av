@@ -195,6 +195,15 @@ The baseline JSON should include:
 - Right-lane fiducial reprojection error (mean/p95/max pixels; 5m/10m/15m bins)
 - Planner-vs-oracle lateral gap stats (mean/p95 abs/max abs at 5m/10m/15m)
 
+### Sync-first engineering rationale
+
+To keep visualization and debugging fundamentals reliable, this project now uses a sync-first workflow:
+- Treat **time alignment contract** as the primary quality gate (`camera` vs `trajectory/control` timestamp agreement).
+- Treat frame-cadence indicators (for example frame-id deltas) as **secondary diagnostics**, not primary pass/fail.
+- Require deterministic replay parity and acceptance reports before concluding behavior quality.
+
+This ordering avoids conflating projection correctness with temporal misalignment and mirrors production AV debugging practice.
+
 See [tools/analyze/README.md](tools/analyze/README.md) for all analysis tools.
 
 ### Debug Visualizer

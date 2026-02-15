@@ -829,12 +829,53 @@ private float? lastCarT = null;
                     currentState.oracleHorizonMeters,
                     currentState.oraclePointSpacingMeters
                 );
+                float[] oracleWorldSamples = groundTruthReporter.GetOracleTrajectorySamplesWorld(
+                    currentState.oracleHorizonMeters,
+                    currentState.oraclePointSpacingMeters
+                );
                 currentState.oracleTrajectoryXY = oracleSamples ?? new float[0];
+                currentState.oracleTrajectoryWorldXYZ = oracleWorldSamples ?? new float[0];
                 currentState.oraclePointCount = currentState.oracleTrajectoryXY.Length / 2;
+                int oracleWorldPointCount = currentState.oracleTrajectoryWorldXYZ.Length / 3;
+                float[] oracleScreenSamples = new float[oracleWorldPointCount * 2];
+                for (int i = 0; i < oracleScreenSamples.Length; i++)
+                {
+                    oracleScreenSamples[i] = -1.0f;
+                }
+                Camera avCamera = cameraCapture != null ? cameraCapture.targetCamera : null;
+                if (avCamera != null && cameraCapture != null && oracleWorldPointCount > 0)
+                {
+                    float imageWidth = Mathf.Max(1.0f, cameraCapture.captureWidth);
+                    float imageHeight = Mathf.Max(1.0f, cameraCapture.captureHeight);
+                    float screenWidth = Mathf.Max(1.0f, avCamera.pixelWidth);
+                    float screenHeight = Mathf.Max(1.0f, avCamera.pixelHeight);
+                    for (int i = 0; i < oracleWorldPointCount; i++)
+                    {
+                        int baseIdx = 3 * i;
+                        Vector3 oracleWorldPoint = new Vector3(
+                            currentState.oracleTrajectoryWorldXYZ[baseIdx],
+                            currentState.oracleTrajectoryWorldXYZ[baseIdx + 1],
+                            currentState.oracleTrajectoryWorldXYZ[baseIdx + 2]
+                        );
+                        Vector3 screenPoint = avCamera.WorldToScreenPoint(oracleWorldPoint);
+                        if (screenPoint.z <= 0.0f) continue;
+                        if (screenPoint.x < 0.0f || screenPoint.x > screenWidth || screenPoint.y < 0.0f || screenPoint.y > screenHeight)
+                        {
+                            continue;
+                        }
+                        float imageX = (screenPoint.x / screenWidth) * imageWidth;
+                        float imageY = imageHeight - ((screenPoint.y / screenHeight) * imageHeight);
+                        oracleScreenSamples[2 * i] = imageX;
+                        oracleScreenSamples[2 * i + 1] = imageY;
+                    }
+                }
+                currentState.oracleTrajectoryScreenXY = oracleScreenSamples;
             }
             else
             {
                 currentState.oracleTrajectoryXY = new float[0];
+                currentState.oracleTrajectoryWorldXYZ = new float[0];
+                currentState.oracleTrajectoryScreenXY = new float[0];
                 currentState.oraclePointCount = 0;
             }
 
@@ -845,14 +886,32 @@ private float? lastCarT = null;
             if (enableRightLaneFiducials)
             {
                 Vector3[] fiducialWorldPoints;
-                float[] fiducialsVehicle = groundTruthReporter.GetRightLaneLineFiducialsVehicle(
+                float[] fiducialsVehicleMonotonic;
+                float[] fiducialsVehicleTrue = groundTruthReporter.GetRightLaneLineFiducialsVehicle(
                     currentState.rightLaneFiducialsHorizonMeters,
                     currentState.rightLaneFiducialsSpacingMeters,
+                    out fiducialsVehicleMonotonic,
                     out fiducialWorldPoints
                 );
-                currentState.rightLaneFiducialsVehicleXY = fiducialsVehicle ?? new float[0];
-                int pointCount = currentState.rightLaneFiducialsVehicleXY.Length / 2;
+                currentState.rightLaneFiducialsVehicleTrueXY = fiducialsVehicleTrue ?? new float[0];
+                currentState.rightLaneFiducialsVehicleMonotonicXY = fiducialsVehicleMonotonic ?? new float[0];
+                // Backward-compat alias: legacy field now maps to true vehicle-frame fiducials.
+                currentState.rightLaneFiducialsVehicleXY = currentState.rightLaneFiducialsVehicleTrueXY;
+                int pointCount = currentState.rightLaneFiducialsVehicleTrueXY.Length / 2;
                 currentState.rightLaneFiducialsPointCount = pointCount;
+                float[] worldSamples = new float[pointCount * 3];
+                if (fiducialWorldPoints != null)
+                {
+                    int usableCount = Mathf.Min(pointCount, fiducialWorldPoints.Length);
+                    for (int i = 0; i < usableCount; i++)
+                    {
+                        Vector3 wp = fiducialWorldPoints[i];
+                        worldSamples[3 * i] = wp.x;
+                        worldSamples[3 * i + 1] = wp.y;
+                        worldSamples[3 * i + 2] = wp.z;
+                    }
+                }
+                currentState.rightLaneFiducialsWorldXYZ = worldSamples;
 
                 float[] screenSamples = new float[pointCount * 2];
                 for (int i = 0; i < screenSamples.Length; i++)
@@ -888,6 +947,9 @@ private float? lastCarT = null;
             else
             {
                 currentState.rightLaneFiducialsVehicleXY = new float[0];
+                currentState.rightLaneFiducialsVehicleTrueXY = new float[0];
+                currentState.rightLaneFiducialsVehicleMonotonicXY = new float[0];
+                currentState.rightLaneFiducialsWorldXYZ = new float[0];
                 currentState.rightLaneFiducialsScreenXY = new float[0];
                 currentState.rightLaneFiducialsPointCount = 0;
             }

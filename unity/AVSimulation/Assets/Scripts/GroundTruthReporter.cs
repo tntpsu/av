@@ -1149,16 +1149,79 @@ public class GroundTruthReporter : MonoBehaviour
     }
 
     /// <summary>
+    /// Sample lane-center trajectory ahead of the car and return world-frame points.
+    /// Returns flattened [x0,y0,z0,x1,y1,z1,...].
+    /// </summary>
+    public float[] GetOracleTrajectorySamplesWorld(float horizonMeters = 50.0f, float pointSpacingMeters = 1.0f)
+    {
+        if (roadGenerator == null || carTransform == null)
+        {
+            return new float[0];
+        }
+
+        float spacing = Mathf.Max(0.1f, pointSpacingMeters);
+        float horizon = Mathf.Max(0.5f, horizonMeters);
+        int pointCount = Mathf.Max(2, Mathf.FloorToInt(horizon / spacing) + 1);
+
+        Vector3 carPos;
+        if (cachedCarRigidbody == null)
+        {
+            cachedCarRigidbody = carTransform.GetComponent<Rigidbody>();
+        }
+        if (cachedCarRigidbody != null)
+        {
+            carPos = cachedCarRigidbody.position;
+        }
+        else
+        {
+            carPos = carTransform.position;
+        }
+
+        Vector3 carForward = carTransform.forward.normalized;
+        float carT = FindClosestPointOnOval(carPos);
+        float pathLength = Mathf.Max(0.01f, roadGenerator.GetPathLength());
+
+        float[] samples = new float[pointCount * 3];
+        for (int i = 0; i < pointCount; i++)
+        {
+            float distanceAhead = i * spacing;
+            float t = Mathf.Repeat(carT + (distanceAhead / pathLength), 1.0f);
+            Vector3 roadCenter = roadGenerator.GetOvalCenterPoint(t);
+            Vector3 roadDirection = roadGenerator.GetOvalDirection(t);
+            if (roadDirection.sqrMagnitude < 0.01f)
+            {
+                roadDirection = carForward;
+            }
+            Vector3 laneCenterPoint = GetLaneCenterPosition(
+                roadCenter,
+                roadDirection.normalized,
+                roadGenerator.roadWidth,
+                currentLane
+            );
+            samples[3 * i] = laneCenterPoint.x;
+            samples[3 * i + 1] = laneCenterPoint.y;
+            samples[3 * i + 2] = laneCenterPoint.z;
+        }
+
+        return samples;
+    }
+
+    /// <summary>
     /// Sample the right lane line (painted right edge) ahead of the car.
-    /// Returns flattened vehicle-frame [x0,y0,x1,y1,...] and corresponding world points.
-    /// x=right(+), y=forward(+) where y is forced to distanceAhead for monotonic diagnostics.
+    /// Returns:
+    /// - true vehicle-frame samples [x0,y0,x1,y1,...] where y is the real forward projection
+    /// - monotonic samples [x0,y0,x1,y1,...] where y is forced to distanceAhead
+    /// - corresponding world points
+    /// x=right(+), y=forward(+)
     /// </summary>
     public float[] GetRightLaneLineFiducialsVehicle(
         float horizonMeters,
         float pointSpacingMeters,
+        out float[] monotonicSamples,
         out Vector3[] worldPoints
     )
     {
+        monotonicSamples = new float[0];
         worldPoints = new Vector3[0];
         if (roadGenerator == null || carTransform == null)
         {
@@ -1190,6 +1253,7 @@ public class GroundTruthReporter : MonoBehaviour
         float halfWidth = roadGenerator.roadWidth * 0.5f;
 
         float[] samples = new float[pointCount * 2];
+        monotonicSamples = new float[pointCount * 2];
         worldPoints = new Vector3[pointCount];
 
         for (int i = 0; i < pointCount; i++)
@@ -1215,7 +1279,11 @@ public class GroundTruthReporter : MonoBehaviour
 
             Vector3 toLaneLine = rightLaneLinePoint - carPos;
             samples[2 * i] = Vector3.Dot(toLaneLine, carRight);
-            samples[2 * i + 1] = distanceAhead;
+            // True vehicle-frame forward projection (used for reprojection diagnostics).
+            samples[2 * i + 1] = Vector3.Dot(toLaneLine, carForward);
+            // Monotonic forward distance (kept for distance-indexed diagnostics).
+            monotonicSamples[2 * i] = samples[2 * i];
+            monotonicSamples[2 * i + 1] = distanceAhead;
         }
 
         return samples;

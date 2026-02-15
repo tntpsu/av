@@ -73,6 +73,26 @@ def parse_flattened_xy_points(row, include_valid=False):
     return points
 
 
+def parse_flattened_xyz_points(row):
+    """Parse flattened [x0,y0,z0,x1,y1,z1,...] to point objects."""
+    if row is None:
+        return []
+    try:
+        arr = np.asarray(row, dtype=np.float32).reshape(-1)
+    except Exception:
+        return []
+    if arr.size < 3 or arr.size % 3 != 0:
+        return []
+    points = []
+    for i in range(0, arr.size, 3):
+        x = float(arr[i])
+        y = float(arr[i + 1])
+        z = float(arr[i + 2])
+        if np.isfinite(x) and np.isfinite(y) and np.isfinite(z):
+            points.append({"x": x, "y": y, "z": z})
+    return points
+
+
 def _is_numeric_series(dataset: h5py.Dataset) -> bool:
     if not isinstance(dataset, h5py.Dataset):
         return False
@@ -356,24 +376,42 @@ def get_frame_data(filename, frame_index):
                 # No camera frame at this index - return empty
                 return jsonify(frame_data)
             
-            # Helper function to find closest timestamp match
-            def find_closest_index(timestamps, target_ts, max_diff=0.1):
-                """Find index with closest timestamp, within max_diff seconds."""
-                if len(timestamps) == 0:
-                    return None
+            # Nearest-valid bounded pairing policy (seconds).
+            max_pair_diff_s = {
+                "vehicle": 0.2,
+                "perception": 0.2,
+                "trajectory": 0.2,
+                "control": 0.2,
+            }
+
+            # Helper function to find closest timestamp match.
+            def find_nearest_with_diff(timestamps, target_ts, max_diff=0.1):
+                """Find closest index and absolute diff (seconds), bounded by max_diff."""
+                if len(timestamps) == 0 or target_ts is None or not np.isfinite(target_ts):
+                    return None, None
                 diffs = np.abs(timestamps - target_ts)
-                closest_idx = np.argmin(diffs)
-                if diffs[closest_idx] <= max_diff:
-                    return int(closest_idx)
-                return None
+                closest_idx = int(np.argmin(diffs))
+                closest_diff = float(diffs[closest_idx])
+                if max_diff is not None and closest_diff > float(max_diff):
+                    return None, closest_diff
+                return closest_idx, closest_diff
             
             # Initialize indices
             vehicle_idx = None
+            perception_idx = None
+            trajectory_idx = None
+            control_idx = None
+            vehicle_dt_s = None
+            perception_dt_s = None
+            trajectory_dt_s = None
+            control_dt_s = None
             
             # Vehicle state - find closest by timestamp
             if 'vehicle/timestamps' in f and len(f['vehicle/timestamps']) > 0:
                 vehicle_timestamps = np.array(f['vehicle/timestamps'])
-                vehicle_idx = find_closest_index(vehicle_timestamps, camera_timestamp)
+                vehicle_idx, vehicle_dt_s = find_nearest_with_diff(
+                    vehicle_timestamps, camera_timestamp, max_diff=max_pair_diff_s["vehicle"]
+                )
                 
                 if vehicle_idx is not None and vehicle_idx < len(f['vehicle/position']):
                     frame_data['vehicle'] = {
@@ -443,6 +481,23 @@ def get_frame_data(filename, frame_index):
                         'unity_unscaled_delta_time': float(f['vehicle/unity_unscaled_delta_time'][vehicle_idx]) if 'vehicle/unity_unscaled_delta_time' in f and vehicle_idx is not None and vehicle_idx < len(f['vehicle/unity_unscaled_delta_time']) else None,
                         'unity_time_scale': float(f['vehicle/unity_time_scale'][vehicle_idx]) if 'vehicle/unity_time_scale' in f and vehicle_idx is not None and vehicle_idx < len(f['vehicle/unity_time_scale']) else None
                     }
+                    for stream_key in [
+                        'stream_front_source_timestamp',
+                        'stream_topdown_source_timestamp',
+                        'stream_front_timestamp_reused',
+                        'stream_topdown_timestamp_reused',
+                        'stream_front_timestamp_non_monotonic',
+                        'stream_topdown_timestamp_non_monotonic',
+                        'stream_front_negative_frame_delta',
+                        'stream_topdown_negative_frame_delta',
+                        'stream_front_frame_id_reused',
+                        'stream_topdown_frame_id_reused',
+                        'stream_front_clock_jump',
+                        'stream_topdown_clock_jump',
+                    ]:
+                        ds = f"vehicle/{stream_key}"
+                        if ds in f and vehicle_idx < len(f[ds]):
+                            frame_data['vehicle'][stream_key] = float(f[ds][vehicle_idx])
                     
                     # Calculate actual distance from camera to road center at lookahead (2D, XZ plane)
                     if (frame_data['vehicle'].get('camera_pos_x') is not None and 
@@ -463,6 +518,39 @@ def get_frame_data(filename, frame_index):
                         )
                     else:
                         frame_data['vehicle']['right_lane_fiducials_vehicle_points'] = []
+                    if 'vehicle/right_lane_fiducials_vehicle_true_xy' in f and vehicle_idx < len(f['vehicle/right_lane_fiducials_vehicle_true_xy']):
+                        frame_data['vehicle']['right_lane_fiducials_vehicle_true_points'] = parse_flattened_xy_points(
+                            f['vehicle/right_lane_fiducials_vehicle_true_xy'][vehicle_idx],
+                            include_valid=False,
+                        )
+                    else:
+                        frame_data['vehicle']['right_lane_fiducials_vehicle_true_points'] = []
+                    if 'vehicle/right_lane_fiducials_vehicle_monotonic_xy' in f and vehicle_idx < len(f['vehicle/right_lane_fiducials_vehicle_monotonic_xy']):
+                        frame_data['vehicle']['right_lane_fiducials_vehicle_monotonic_points'] = parse_flattened_xy_points(
+                            f['vehicle/right_lane_fiducials_vehicle_monotonic_xy'][vehicle_idx],
+                            include_valid=False,
+                        )
+                    else:
+                        frame_data['vehicle']['right_lane_fiducials_vehicle_monotonic_points'] = []
+                    if 'vehicle/right_lane_fiducials_world_xyz' in f and vehicle_idx < len(f['vehicle/right_lane_fiducials_world_xyz']):
+                        frame_data['vehicle']['right_lane_fiducials_world_points'] = parse_flattened_xyz_points(
+                            f['vehicle/right_lane_fiducials_world_xyz'][vehicle_idx],
+                        )
+                    else:
+                        frame_data['vehicle']['right_lane_fiducials_world_points'] = []
+                    if 'vehicle/oracle_trajectory_world_xyz' in f and vehicle_idx < len(f['vehicle/oracle_trajectory_world_xyz']):
+                        frame_data['vehicle']['oracle_trajectory_world_points'] = parse_flattened_xyz_points(
+                            f['vehicle/oracle_trajectory_world_xyz'][vehicle_idx],
+                        )
+                    else:
+                        frame_data['vehicle']['oracle_trajectory_world_points'] = []
+                    if 'vehicle/oracle_trajectory_screen_xy' in f and vehicle_idx < len(f['vehicle/oracle_trajectory_screen_xy']):
+                        frame_data['vehicle']['oracle_trajectory_screen_points'] = parse_flattened_xy_points(
+                            f['vehicle/oracle_trajectory_screen_xy'][vehicle_idx],
+                            include_valid=True,
+                        )
+                    else:
+                        frame_data['vehicle']['oracle_trajectory_screen_points'] = []
 
                     if 'vehicle/right_lane_fiducials_screen_xy' in f and vehicle_idx < len(f['vehicle/right_lane_fiducials_screen_xy']):
                         frame_data['vehicle']['right_lane_fiducials_screen_points'] = parse_flattened_xy_points(
@@ -475,10 +563,13 @@ def get_frame_data(filename, frame_index):
             # Perception data - find closest by timestamp
             if 'perception/timestamps' in f and len(f['perception/timestamps']) > 0:
                 perception_timestamps = np.array(f['perception/timestamps'])
-                perception_idx = find_closest_index(perception_timestamps, camera_timestamp)
+                perception_idx, perception_dt_s = find_nearest_with_diff(
+                    perception_timestamps, camera_timestamp, max_diff=max_pair_diff_s["perception"]
+                )
                 
                 if perception_idx is not None and perception_idx < len(f['perception/confidence']):
                     frame_data['perception'] = {
+                        'timestamp': float(perception_timestamps[perception_idx]),
                         'confidence': float(f['perception/confidence'][perception_idx]),
                         'detection_method': f['perception/detection_method'][perception_idx].decode('utf-8') if isinstance(f['perception/detection_method'][perception_idx], bytes) else str(f['perception/detection_method'][perception_idx]),
                         'num_lanes_detected': int(f['perception/num_lanes_detected'][perception_idx]) if 'perception/num_lanes_detected' in f and perception_idx < len(f['perception/num_lanes_detected']) else None
@@ -629,7 +720,9 @@ def get_frame_data(filename, frame_index):
             # Trajectory data - find closest by timestamp
             if 'trajectory/timestamps' in f and len(f['trajectory/timestamps']) > 0:
                 trajectory_timestamps = np.array(f['trajectory/timestamps'])
-                trajectory_idx = find_closest_index(trajectory_timestamps, camera_timestamp)
+                trajectory_idx, trajectory_dt_s = find_nearest_with_diff(
+                    trajectory_timestamps, camera_timestamp, max_diff=max_pair_diff_s["trajectory"]
+                )
                 
                 if trajectory_idx is not None and trajectory_idx < len(f['trajectory/reference_point_x']):
                     frame_data['trajectory'] = {
@@ -728,11 +821,46 @@ def get_frame_data(filename, frame_index):
                         frame_data['trajectory']['oracle_samples_enabled'] = bool(
                             f['trajectory/oracle_samples_enabled'][trajectory_idx]
                         )
+                    traj_diag_fields = [
+                        "diag_available",
+                        "diag_generated_by_fallback",
+                        "diag_points_generated",
+                        "diag_x_clip_count",
+                        "diag_pre_y0",
+                        "diag_pre_y1",
+                        "diag_pre_y2",
+                        "diag_post_y0",
+                        "diag_post_y1",
+                        "diag_post_y2",
+                        "diag_used_provided_distance0",
+                        "diag_used_provided_distance1",
+                        "diag_used_provided_distance2",
+                        "diag_post_minus_pre_y0",
+                        "diag_post_minus_pre_y1",
+                        "diag_post_minus_pre_y2",
+                        "diag_preclip_x0",
+                        "diag_preclip_x1",
+                        "diag_preclip_x2",
+                        "diag_preclip_x_abs_max",
+                        "diag_preclip_x_abs_p95",
+                        "diag_postclip_x0",
+                        "diag_postclip_x1",
+                        "diag_postclip_x2",
+                        "diag_first_segment_y0_gt_y1_pre",
+                        "diag_first_segment_y0_gt_y1_post",
+                        "diag_inversion_introduced_after_conversion",
+                    ]
+                    for diag_key in traj_diag_fields:
+                        ds = f"trajectory/{diag_key}"
+                        if ds in f and trajectory_idx < len(f[ds]):
+                            frame_data['trajectory'][diag_key] = float(f[ds][trajectory_idx])
             
             # Control data - find closest by timestamp
             if 'control/timestamps' in f and len(f['control/timestamps']) > 0:
                 control_timestamps = np.array(f['control/timestamps'])
-                control_idx = find_closest_index(control_timestamps, camera_timestamp)
+                control_idx, control_dt_s = find_nearest_with_diff(
+                    control_timestamps, camera_timestamp, max_diff=max_pair_diff_s["control"]
+                )
                 
                 if control_idx is not None and control_idx < len(f['control/steering']):
                     frame_data['control'] = {
@@ -864,7 +992,9 @@ def get_frame_data(filename, frame_index):
             # Unity feedback data (if available) - find closest by timestamp
             if 'unity_feedback/timestamps' in f and len(f['unity_feedback/timestamps']) > 0:
                 unity_timestamps = np.array(f['unity_feedback/timestamps'])
-                unity_idx = find_closest_index(unity_timestamps, camera_timestamp, max_diff=1.0)  # Larger tolerance (sent every 1s)
+                unity_idx, _unity_dt_s = find_nearest_with_diff(
+                    unity_timestamps, camera_timestamp, max_diff=1.0
+                )  # Larger tolerance (sent every 1s)
                 
                 if unity_idx is not None and unity_idx < len(f['unity_feedback/ground_truth_mode_active']):
                     frame_data['unity_feedback'] = {
@@ -873,6 +1003,58 @@ def get_frame_data(filename, frame_index):
                     }
                     if 'unity_feedback/actual_steering_applied' in f and unity_idx < len(f['unity_feedback/actual_steering_applied']):
                         frame_data['unity_feedback']['actual_steering_applied'] = float(f['unity_feedback/actual_steering_applied'][unity_idx])
+
+            alignment_window_ms = 20.0
+
+            def _alignment_for(dt_s, idx):
+                if camera_timestamp is None or not np.isfinite(camera_timestamp):
+                    return "missing", "camera_timestamp_invalid"
+                if idx is None:
+                    return "missing", "missing_sample_in_window"
+                if dt_s is None or not np.isfinite(dt_s):
+                    return "missing", "invalid_dt"
+                dt_ms = float(dt_s) * 1000.0
+                if abs(dt_ms) <= alignment_window_ms:
+                    return "aligned", "within_window"
+                return "misaligned", "out_of_window"
+
+            traj_status, traj_reason = _alignment_for(trajectory_dt_s, trajectory_idx)
+            control_status, control_reason = _alignment_for(control_dt_s, control_idx)
+            vehicle_status, vehicle_reason = _alignment_for(vehicle_dt_s, vehicle_idx)
+            overall = "aligned" if (traj_status == "aligned" and control_status == "aligned") else "degraded"
+
+            frame_data['sync'] = {
+                'alignment_window_ms': alignment_window_ms,
+                'camera_timestamp': float(camera_timestamp) if camera_timestamp is not None else None,
+                'vehicle_timestamp': frame_data.get('vehicle', {}).get('timestamp'),
+                'trajectory_timestamp': frame_data.get('trajectory', {}).get('timestamp'),
+                'control_timestamp': frame_data.get('control', {}).get('timestamp'),
+                'perception_timestamp': frame_data.get('perception', {}).get('timestamp'),
+                'dt_cam_vehicle_ms': float(vehicle_dt_s) * 1000.0 if vehicle_dt_s is not None else None,
+                'dt_cam_traj_ms': float(trajectory_dt_s) * 1000.0 if trajectory_dt_s is not None else None,
+                'dt_cam_control_ms': float(control_dt_s) * 1000.0 if control_dt_s is not None else None,
+                'dt_cam_perception_ms': float(perception_dt_s) * 1000.0 if perception_dt_s is not None else None,
+                'vehicle_alignment_status': vehicle_status,
+                'vehicle_alignment_reason': vehicle_reason,
+                'trajectory_alignment_status': traj_status,
+                'trajectory_alignment_reason': traj_reason,
+                'control_alignment_status': control_status,
+                'control_alignment_reason': control_reason,
+                'overall_alignment_status': overall,
+                'source_indices': {
+                    'camera_index': int(frame_index),
+                    'vehicle_index': int(vehicle_idx) if vehicle_idx is not None else None,
+                    'trajectory_index': int(trajectory_idx) if trajectory_idx is not None else None,
+                    'control_index': int(control_idx) if control_idx is not None else None,
+                    'perception_index': int(perception_idx) if perception_idx is not None else None,
+                },
+                'pairing_max_diff_ms': {
+                    'vehicle': float(max_pair_diff_s["vehicle"] * 1000.0),
+                    'trajectory': float(max_pair_diff_s["trajectory"] * 1000.0),
+                    'control': float(max_pair_diff_s["control"] * 1000.0),
+                    'perception': float(max_pair_diff_s["perception"] * 1000.0),
+                },
+            }
             
             return jsonify(frame_data)
     except Exception as e:

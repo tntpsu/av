@@ -178,11 +178,16 @@ class VehicleState(BaseModel):
     # NEW: Ground truth lookahead distance used for calibration
     groundTruthLookaheadDistance: float = 8.0
     oracleTrajectoryXY: Optional[list[float]] = None
+    oracleTrajectoryWorldXYZ: Optional[list[float]] = None
+    oracleTrajectoryScreenXY: Optional[list[float]] = None
     oraclePointCount: int = 0
     oracleHorizonMeters: float = 0.0
     oraclePointSpacingMeters: float = 0.0
     oracleSamplesEnabled: bool = False
     rightLaneFiducialsVehicleXY: Optional[list[float]] = None
+    rightLaneFiducialsVehicleTrueXY: Optional[list[float]] = None
+    rightLaneFiducialsVehicleMonotonicXY: Optional[list[float]] = None
+    rightLaneFiducialsWorldXYZ: Optional[list[float]] = None
     rightLaneFiducialsScreenXY: Optional[list[float]] = None
     rightLaneFiducialsPointCount: int = 0
     rightLaneFiducialsHorizonMeters: float = 0.0

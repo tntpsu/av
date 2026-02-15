@@ -47,7 +47,12 @@ class VehicleState:
     camera_8m_screen_y: float = -1.0  # Actual screen y pixel where 8m appears (from Unity's WorldToScreenPoint) - for distance calibration
     camera_lookahead_screen_y: float = -1.0  # Screen y pixel for ground truth lookahead distance
     ground_truth_lookahead_distance: float = 8.0  # Lookahead distance used for ground truth
+    oracle_trajectory_world_xyz: Optional[np.ndarray] = None  # Flattened [x0,y0,z0,x1,y1,z1,...] world frame
+    oracle_trajectory_screen_xy: Optional[np.ndarray] = None  # Flattened [u0,v0,u1,v1,...] image frame
     right_lane_fiducials_vehicle_xy: Optional[np.ndarray] = None  # Flattened [x0,y0,x1,y1,...]
+    right_lane_fiducials_vehicle_true_xy: Optional[np.ndarray] = None  # Flattened [x0,y0,x1,y1,...] true vehicle frame
+    right_lane_fiducials_vehicle_monotonic_xy: Optional[np.ndarray] = None  # Flattened [x0,y0,x1,y1,...] monotonic y=distanceAhead
+    right_lane_fiducials_world_xyz: Optional[np.ndarray] = None  # Flattened [x0,y0,z0,x1,y1,z1,...] world frame
     right_lane_fiducials_screen_xy: Optional[np.ndarray] = None  # Flattened [u0,v0,u1,v1,...] in image coords
     right_lane_fiducials_point_count: int = 0
     right_lane_fiducials_horizon_meters: float = 0.0
@@ -91,6 +96,19 @@ class VehicleState:
     stream_topdown_last_realtime_s: float = 0.0
     stream_front_timestamp_minus_realtime_ms: float = 0.0
     stream_topdown_timestamp_minus_realtime_ms: float = 0.0
+    # Stream clock-integrity diagnostics (instrumentation-only)
+    stream_front_source_timestamp: float = 0.0
+    stream_topdown_source_timestamp: float = 0.0
+    stream_front_timestamp_reused: float = 0.0
+    stream_topdown_timestamp_reused: float = 0.0
+    stream_front_timestamp_non_monotonic: float = 0.0
+    stream_topdown_timestamp_non_monotonic: float = 0.0
+    stream_front_negative_frame_delta: float = 0.0
+    stream_topdown_negative_frame_delta: float = 0.0
+    stream_front_frame_id_reused: float = 0.0
+    stream_topdown_frame_id_reused: float = 0.0
+    stream_front_clock_jump: float = 0.0
+    stream_topdown_clock_jump: float = 0.0
     # NEW: Debug fields for diagnosing ground truth offset issues
     road_center_at_car_x: float = 0.0  # Road center X at car's location (world coords)
     road_center_at_car_y: float = 0.0  # Road center Y at car's location (world coords)
@@ -274,6 +292,8 @@ class TrajectoryOutput:
     diag_preclip_x0: Optional[float] = None
     diag_preclip_x1: Optional[float] = None
     diag_preclip_x2: Optional[float] = None
+    diag_preclip_x_abs_max: Optional[float] = None
+    diag_preclip_x_abs_p95: Optional[float] = None
     diag_postclip_x0: Optional[float] = None
     diag_postclip_x1: Optional[float] = None
     diag_postclip_x2: Optional[float] = None

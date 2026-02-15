@@ -264,6 +264,7 @@ class GroundTruthFollower:
         if self.av_stack.recorder:
             self.av_stack.recorder.recording_type = "gt_drive"
             self.av_stack.recorder.metadata["recording_type"] = "gt_drive"
+            self.av_stack.recorder.metadata["stream_sync_policy"] = self.stream_sync_policy
         
         # Speed-adaptive steering control
         # Base gain - will be adjusted based on speed
@@ -857,6 +858,7 @@ class GroundTruthFollower:
                     recording_type="gt_drive",
                 )
                 self.av_stack.recorder.metadata["recording_type"] = "gt_drive"
+                self.av_stack.recorder.metadata["stream_sync_policy"] = self.stream_sync_policy
                 logger.info(f"Using recording name: {full_name}")
             except Exception as e:
                 logger.error(f"Failed to reset recorder name: {e}", exc_info=True)
