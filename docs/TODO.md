@@ -1,5 +1,159 @@
 # TODO: Near-Term (Phase 1 Completion)
 
+## Stack Isolation TODOs (Priority Execution Plan)
+
+This section is the active execution backlog for layer-by-layer validation.
+Use this before any further control tuning.
+
+### Stage 0: Baseline Protocol (Must pass before experiments)
+
+- [ ] Lock standard scenario template for all comparisons:
+  - Track: `tracks/s_loop.yml`
+  - Duration: `40s`
+  - Entry window: `25m -> 33m`
+  - Analysis scope: `to-failure`
+- [ ] Standardize A/B decision rule:
+  - Use repeated A/B (`>=5` repeats/arm)
+  - Decision from median/p25/p75, never single run
+- [ ] Standardize required report fields:
+  - first centerline-cross frame
+  - first failure frame
+  - time-to-failure
+  - feasibility class
+  - authority gap / transfer ratio / stale %
+
+Acceptance test:
+- [ ] One reference A/B report generated with the exact template above.
+
+### Stage 1: Perception Layer Isolation
+
+Available now:
+- `tools/replay_perception.py`
+- `tools/reprocess_recording.py` (legacy path)
+
+TODOs:
+- [ ] Define canonical "perception replay pack" output format for downstream use.
+- [ ] Add scripted comparison output (replay vs original) focused on:
+  - lane center drift
+  - stale events + stale reasons
+  - lane-side sign violations
+- [ ] Add pass/fail gate for perception replay reproducibility.
+
+Acceptance tests:
+- [ ] For a reference recording, replay output reproduces key failure window signals.
+- [ ] Perception regression test fails if stale% or lane-side violations exceed threshold.
+
+### Stage 2: Trajectory Layer Isolation
+
+Available now:
+- PhilViz trajectory diagnostics
+- `tools/analyze/analyze_curve_entry_feasibility.py`
+
+TODOs:
+- [ ] Implement trajectory-locked replay harness (placeholder:
+      `tools/analyze/replay_trajectory_locked.py`).
+- [ ] Add cross-lock sensitivity comparator (temporary standalone):
+      `tools/analyze/compare_crosslock_sensitivity.py`
+  - Inputs: self-lock and cross-lock summary JSON files
+  - Outputs: amplification ratios, upstream/downstream sensitivity call
+  - Purpose: quantify trajectory-reference sensitivity relative to replay baseline
+- [ ] Add trajectory quality gate independent of controller tuning:
+  - reference smoothness
+  - GT-reference deviation
+  - curve-entry consistency
+- [ ] Add trajectory-only comparison mode in analysis output.
+
+Acceptance tests:
+- [ ] Same trajectory can be replayed across controller variants.
+- [ ] Trajectory metrics remain stable when only controller params change.
+- [ ] Cross-lock comparator identifies when cross-lock deltas exceed self-lock
+      baseline by configured ratio thresholds.
+
+### Stage 3: Control Layer Isolation
+
+Available now:
+- `tools/analyze/run_ab_batch.py`
+- Steering limiter waterfall instrumentation
+- GT follower baseline
+- `tools/analyze/replay_control_locked.py` (implemented scaffold)
+
+TODOs:
+- [x] Implement control-only replay harness on fixed trajectory/timebase
+      (`tools/analyze/replay_control_locked.py`, scaffold version).
+- [x] Extend control-locked summary to include post-safety throttle/brake
+      attribution and override counters.
+- [ ] Add control stage-gates:
+  - no regression in failure timing medians
+  - no regression in stale% during entry
+  - no regression in comfort caps
+- [x] Add control-lock sensitivity comparator for self/cross matrix reporting
+      (`tools/analyze/compare_controllock_sensitivity.py`).
+- [ ] Add automated "reject promotion" rule when authority metrics improve but
+      failure medians worsen.
+
+Acceptance tests:
+- [ ] Control-only harness distinguishes limiter bottleneck from upstream errors.
+- [ ] Batch runner outputs automatic pass/reject for control candidate.
+
+### Stage 4: Integration + Timing Robustness
+
+Current gap:
+- acceptance-gated candidate promotion runs not yet automated in CI workflow.
+
+TODOs:
+- [x] Add deterministic latency injection profiles (0ms/50ms/100ms).
+- [x] Add deterministic perception perturbation profiles (seeded).
+- [x] Build integration stress runner
+      (`tools/analyze/run_latency_noise_suite.py`).
+- [x] Add cross-seed robustness gate before parameter promotion.
+- [x] Add latency/noise stress promotion policy:
+  - fail if worst_profile / baseline steering-mean ratio exceeds threshold
+  - require explicit rationale for any waived profile
+
+Acceptance tests:
+- [ ] Candidate config passes baseline + latency/noise stress gates.
+- [ ] Failure ordering remains explainable in diagnostics.
+
+### Stage 5: Cross-Layer Counterfactuals
+
+TODOs:
+- [ ] Build layer-swap evaluator (placeholder:
+- [x] Build layer-swap evaluator (placeholder:
+      `tools/analyze/counterfactual_layer_swap.py`) supporting:
+  - baseline perception + treatment control
+  - treatment perception + baseline control
+  - baseline trajectory + treatment control
+- [x] Fold cross-lock sensitivity comparator into unified isolation reporting
+      (do not leave as long-term standalone one-off).
+- [x] Add "upstream/downstream attribution scorecard" to final report.
+
+Acceptance tests:
+- [x] Tool can isolate which layer contributes most to failure delta.
+- [x] At least one historical regression is correctly re-attributed.
+
+### Stage 6: PhilViz Upstream/Downstream Clarity
+
+TODOs:
+- [x] Add GT-vs-perception lateral error side-by-side at hotspots.
+- [x] Add perception->trajectory attribution metrics.
+- [x] Add failure-frame upstream state card.
+- [x] Add causal event timeline view.
+- [x] Add graphical steering waterfall chart.
+
+Acceptance tests:
+- [x] For each failed run, PhilViz can answer:
+  - "What failed first?"
+  - "What was downstream consequence?"
+  - "Which single next lever is justified?"
+
+### Promotion Policy (Always-on)
+
+- [ ] No new parameter promoted without:
+  - repeated A/B significance by robust stats
+  - no regression on failure medians
+  - documented upstream/downstream call
+  - rollback condition written in report
+
 ## Phase 1: Finish Lane-Keeping + Longitudinal Fidelity
 - **Goal:** lock stable lane keeping with acceptable comfort on r20/r30.
 - **Test gate:** centered >= 70% on r20/r30, lateral_rmse <= 0.40m,

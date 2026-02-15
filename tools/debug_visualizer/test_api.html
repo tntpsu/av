@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Visualizer API Test</title>
+    <style>
+        body { font-family: monospace; padding: 20px; background: #1a1a1a; color: #e0e0e0; }
+        .section { margin: 20px 0; padding: 15px; background: #2a2a2a; border-radius: 4px; }
+        .error { color: #ff6b6b; }
+        .success { color: #51cf66; }
+        .warning { color: #ffa500; }
+        pre { background: #1a1a1a; padding: 10px; border-radius: 4px; overflow-x: auto; }
+        canvas { border: 2px solid #3a3a3a; margin: 10px 0; }
+        button { padding: 10px 20px; margin: 5px; background: #4a9eff; color: white; border: none; border-radius: 4px; cursor: pointer; }
+        button:hover { background: #3a8eef; }
+    </style>
+</head>
+<body>
+    <h1>Debug Visualizer API Test</h1>
+    <div id="results"></div>
+    
+    <script>
+        const recording = 'recording_20260215_094738.h5';
+        const resultsDiv = document.getElementById('results');
+        
+        function log(message, type = 'info') {
+            const className = type === 'error' ? 'error' : type === 'success' ? 'success' : type === 'warning' ? 'warning' : '';
+            resultsDiv.innerHTML += `<div class="${className}">${message}</div>`;
+        }
+        
+        function section(title) {
+            resultsDiv.innerHTML += `<div class="section"><h2>${title}</h2><div id="${title.replace(/\s+/g, '-')}"></div></div>`;
+            return document.getElementById(title.replace(/\s+/g, '-'));
+        }
+        
+        async function runTests() {
+            try {
+                // Test 1: Check recordings list
+                const sec1 = section('Test 1: Recordings List');
+                const recordingsResp = await fetch('/api/recordings');
+                const recordings = await recordingsResp.json();
+                const found = recordings.some(r => r.filename === recording);
+                sec1.innerHTML = `<div class="${found ? 'success' : 'error'}">
+                    Recording ${recording} ${found ? 'FOUND' : 'NOT FOUND'}
+                </div>
+                <div>Total recordings: ${recordings.length}</div>
+                <div>First 5: ${recordings.slice(0, 5).map(r => r.filename).join(', ')}</div>`;
+                
+                // Test 2: Check frame count
+                const sec2 = section('Test 2: Frame Count');
+                const framesResp = await fetch(`/api/recording/${recording}/frames`);
+                const framesData = await framesResp.json();
+                sec2.innerHTML = `<div class="success">Frame count: ${framesData.frame_count}</div>`;
+                
+                // Test 3: Load frame 0 data
+                const sec3 = section('Test 3: Frame 0 Data');
+                const frame0Resp = await fetch(`/api/recording/${recording}/frame/0`);
+                const frame0Data = await frame0Resp.json();
+                const dataKeys = Object.keys(frame0Data);
+                sec3.innerHTML = `<div class="success">Frame 0 loaded successfully</div>
+                <div>Top-level keys: ${dataKeys.join(', ')}</div>
+                <pre>${JSON.stringify(frame0Data.camera || {}, null, 2).substring(0, 500)}...</pre>`;
+                
+                // Test 4: Load and display image
+                const sec4 = section('Test 4: Camera Image');
+                const imageResp = await fetch(`/api/recording/${recording}/frame/0/image`);
+                const imageData = await imageResp.json();
+                
+                if (imageData.image) {
+                    sec4.innerHTML = `<div class="success">Image data loaded (length: ${imageData.image.length})</div>`;
+                    
+                    // Create canvas and draw image
+                    const canvas = document.createElement('canvas');
+                    canvas.width = 640;
+                    canvas.height = 480;
+                    sec4.appendChild(canvas);
+                    
+                    const ctx = canvas.getContext('2d');
+                    const img = new Image();
+                    
+                    img.onload = () => {
+                        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+                        sec4.innerHTML += `<div class="success">✓ Image rendered on canvas (${img.width}x${img.height})</div>`;
+                        
+                        // Check if canvas has content
+                        const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+                        const hasContent = imageData.data.some((v, i) => i % 4 < 3 && v !== 0);
+                        sec4.innerHTML += `<div class="${hasContent ? 'success' : 'error'}">
+                            Canvas has content: ${hasContent}
+                        </div>`;
+                    };
+                    
+                    img.onerror = () => {
+                        sec4.innerHTML += `<div class="error">✗ Failed to load image</div>`;
+                    };
+                    
+                    img.src = `data:image/jpeg;base64,${imageData.image}`;
+                } else {
+                    sec4.innerHTML = `<div class="error">No image data in response</div>`;
+                }
+                
+                // Test 5: Console errors
+                const sec5 = section('Test 5: Console Check');
+                sec5.innerHTML = `<div>Check browser console (F12) for any errors</div>
+                <button onclick="console.error('Test error from visualizer.js:123')">Generate Test Error</button>`;
+                
+            } catch (error) {
+                log(`Fatal error: ${error.message}`, 'error');
+                console.error('Test error:', error);
+            }
+        }
+        
+        // Run tests on load
+        window.addEventListener('load', runTests);
+        
+        // Monitor console errors
+        window.addEventListener('error', (e) => {
+            console.error('Caught error:', e.message, e.filename, e.lineno);
+        });
+    </script>
+</body>
+</html>

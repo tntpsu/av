@@ -71,6 +71,124 @@ python tools/analyze/analyze_recording_comprehensive.py data/recordings/recordin
 
 ### Specialized Analysis Tools
 
+Canonical script behavior and mode defaults are defined in `docs/SCRIPT_RUNBOOK.md`.
+
+#### `replay_trajectory_locked.py` ⭐ **LAYER ISOLATION (TRAJECTORY -> CONTROL)**
+**Canonical behavior:** See `docs/SCRIPT_RUNBOOK.md`.
+
+**Usage:**
+```bash
+# Lock trajectory to same recording
+python tools/analyze/replay_trajectory_locked.py data/recordings/recording_YYYYMMDD_HHMMSS.h5 --disable-vehicle-frame-lookahead-ref
+
+# Lock trajectory from a different recording
+python tools/analyze/replay_trajectory_locked.py data/recordings/input.h5 --lock-recording data/recordings/lock_source.h5 --disable-vehicle-frame-lookahead-ref
+```
+
+**When to use:** Before controller tuning, to separate trajectory/reference effects from control effects.
+
+---
+
+#### `run_latency_noise_suite.py` ⭐ **STAGE 4 STRESS SUITE**
+**Canonical behavior:** See `docs/SCRIPT_RUNBOOK.md`.
+
+**Usage:**
+```bash
+python tools/analyze/run_latency_noise_suite.py data/recordings/recording_YYYYMMDD_HHMMSS.h5 \
+  --noise-seeds 1337,2026,9001 \
+  --min-seed-pass-rate 1.0 \
+  --degrade-threshold 1.5 \
+  --output-prefix stage4_run \
+  --output-json tmp/analysis/stage4_run_report.json
+
+# Optional waiver (requires rationale)
+python tools/analyze/run_latency_noise_suite.py data/recordings/recording_YYYYMMDD_HHMMSS.h5 \
+  --waive-profiles latency_100ms \
+  --waive-rationale "known sim timing artifact under investigation"
+```
+
+**When to use:** Stage 4 integration/timing robustness gate before promoting changes.
+
+---
+
+#### `compare_crosslock_sensitivity.py` ⭐ **LAYER ISOLATION COMPARATOR**
+**Purpose:** Compare self-lock and cross-lock trajectory replay summaries.
+
+**What it does:**
+- Reads four summary JSON files (`A->A`, `B->B`, `A->B`, `B->A`)
+- Computes amplification ratios (cross-lock / self-lock) for mean and p95
+- Produces a sensitivity classification:
+  - `strong-trajectory-sensitivity`
+  - `moderate-trajectory-sensitivity`
+  - `low-trajectory-sensitivity`
+
+**Usage:**
+```bash
+python tools/analyze/compare_crosslock_sensitivity.py \
+  --self-a tmp/analysis/selflock_A_summary.json \
+  --self-b tmp/analysis/selflock_B_summary.json \
+  --cross-a-lock-b tmp/analysis/cross_A_lock_B_summary.json \
+  --cross-b-lock-a tmp/analysis/cross_B_lock_A_summary.json \
+  --output-json tmp/analysis/crosslock_comparison.json
+```
+
+**When to use:** After running trajectory-locked replays, to quantify whether
+trajectory changes dominate control output changes.
+
+---
+
+#### `replay_control_locked.py` ⭐ **LAYER ISOLATION (CONTROL LOCK)**
+**Canonical behavior:** See `docs/SCRIPT_RUNBOOK.md`.
+
+**Usage:**
+```bash
+# Lock control to same recording
+python tools/analyze/replay_control_locked.py data/recordings/recording_YYYYMMDD_HHMMSS.h5
+
+# Lock control from a different recording
+python tools/analyze/replay_control_locked.py data/recordings/input.h5 --lock-recording data/recordings/control_source.h5
+```
+
+**When to use:** To measure upstream sensitivity when controller outputs are held fixed.
+
+---
+
+#### `compare_controllock_sensitivity.py` ⭐ **CONTROL-LOCK COMPARATOR**
+**Purpose:** Summarize control-lock matrix results into a single sensitivity call.
+
+**What it does:**
+- Reads four control-lock summary JSONs (`A->A`, `B->B`, `A->B`, `B->A`)
+- Validates lock fidelity (vs_lock deltas near zero)
+- Aggregates cross-shift magnitudes (vs input source) for steering/throttle/brake
+- Produces a sensitivity classification
+
+**Usage:**
+```bash
+python tools/analyze/compare_controllock_sensitivity.py \
+  --self-a tmp/analysis/self_a_control_locked_summary.json \
+  --self-b tmp/analysis/self_b_control_locked_summary.json \
+  --cross-a-lock-b tmp/analysis/cross_a_lock_b_control_locked_summary.json \
+  --cross-b-lock-a tmp/analysis/cross_b_lock_a_control_locked_summary.json \
+  --output-json tmp/analysis/controllock_comparison.json
+```
+
+---
+
+#### `counterfactual_layer_swap.py` ⭐ **STAGE 5 UNIFIED ISOLATION REPORT**
+**Canonical behavior:** See `docs/SCRIPT_RUNBOOK.md`.
+
+**Usage:**
+```bash
+python tools/analyze/counterfactual_layer_swap.py \
+  data/recordings/baseline.h5 \
+  data/recordings/treatment.h5 \
+  --disable-vehicle-frame-lookahead-ref \
+  --output-prefix stage5_pair_ab \
+  --output-json tmp/analysis/stage5_pair_ab_report.json
+```
+
+---
+
 #### `analyze_trajectory.py`
 **Purpose:** Analyze trajectory planning accuracy against ground truth.
 
@@ -179,16 +297,21 @@ python tools/analyze/analyze_heading_opposition.py <recording_file>
 ---
 
 #### `analyze_perception_questions.py`
-**Purpose:** Analyze perception data to systematically answer 7 key questions about perception accuracy.
+**Purpose:** Analyze perception data to answer 7 scored questions plus one heading-contract diagnostic.
 
 **What it analyzes:**
-1. How accurate is lane detection?
-2. How consistent is lane detection?
-3. Are lanes detected in the correct positions?
-4. How does detection vary with road conditions?
-5. Are there systematic biases?
-6. How does detection compare to ground truth?
-7. What are common failure modes?
+1. Lane detection correctness/rate
+2. Lane position accuracy in vehicle coordinates
+3. Lane width accuracy vs ground truth
+4. Heading correctness (car heading vs GT desired heading)
+5. Curve handling robustness
+6. Straight-road handling robustness
+7. Temporal consistency
+8. **Diagnostic-only** heading contract check (`trajectory/reference_point_heading` vs `vehicle/heading_delta_deg`)
+
+**Heading contract note:**
+- Use `vehicle/car_heading_deg` vs `ground_truth/desired_heading` for scored heading correctness (Q4/Q6).
+- Use `trajectory/reference_point_heading` and `vehicle/heading_delta_deg` for planner/control diagnostics only (Q8).
 
 **Usage:**
 ```bash
