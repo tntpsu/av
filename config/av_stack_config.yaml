@@ -245,16 +245,18 @@ trajectory:
   camera_offset_x: 0.0
   distance_scaling_factor: 0.875
   bias_correction_threshold: 10.0
-  reference_smoothing: 0.8
+  reference_smoothing: 0.75
   lane_smoothing_alpha: 0.8
   center_spline_enabled: true
   center_spline_degree: 2
   center_spline_samples: 30
   center_spline_alpha: 0.8
+  x_clip_enabled: true
+  x_clip_limit_m: 15.0
   target_lane: right
   target_lane_width_m: 3.6
   ref_sign_flip_threshold: 0.12
-  ref_x_rate_limit: 0.08
+  ref_x_rate_limit: 0.12
   multi_lookahead_enabled: true
   multi_lookahead_far_scale: 1.4
   multi_lookahead_blend_alpha: 0.25

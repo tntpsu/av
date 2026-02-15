@@ -560,7 +560,9 @@ class AVStack:
             center_spline_enabled=trajectory_cfg.get('center_spline_enabled', False),
             center_spline_degree=trajectory_cfg.get('center_spline_degree', 2),
             center_spline_samples=trajectory_cfg.get('center_spline_samples', 20),
-            center_spline_alpha=trajectory_cfg.get('center_spline_alpha', 0.7)
+            center_spline_alpha=trajectory_cfg.get('center_spline_alpha', 0.7),
+            x_clip_enabled=trajectory_cfg.get('x_clip_enabled', True),
+            x_clip_limit_m=trajectory_cfg.get('x_clip_limit_m', 10.0),
         )
         
         # Control - Load from config

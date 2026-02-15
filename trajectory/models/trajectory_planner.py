@@ -42,7 +42,8 @@ class RuleBasedTrajectoryPlanner:
                  reference_smoothing: float = 0.7, lane_smoothing_alpha: float = 0.7,
                  camera_offset_x: float = 0.0, distance_scaling_factor: float = 0.875,
                  center_spline_enabled: bool = False, center_spline_degree: int = 2,
-                 center_spline_samples: int = 20, center_spline_alpha: float = 0.7):
+                 center_spline_samples: int = 20, center_spline_alpha: float = 0.7,
+                 x_clip_enabled: bool = True, x_clip_limit_m: float = 10.0):
         """
         Initialize trajectory planner.
         
@@ -86,6 +87,8 @@ class RuleBasedTrajectoryPlanner:
         self.center_spline_degree = int(center_spline_degree)
         self.center_spline_samples = int(center_spline_samples)
         self.center_spline_alpha = float(center_spline_alpha)
+        self.x_clip_enabled = bool(x_clip_enabled)
+        self.x_clip_limit_m = max(1.0, float(x_clip_limit_m))
         
         # For reference point smoothing
         self.last_reference_x = None
@@ -871,13 +874,10 @@ class RuleBasedTrajectoryPlanner:
         
         x_vehicle_pre_clip = x_vehicle
 
-        # Clamp extreme values to reasonable bounds (±10m lateral)
-        # Increased from ±5m to allow for wider roads (7m) and off-center driving
-        # When car is at -3.5m (left edge of 7m road), right lane at +3.5m should be visible
-        # ±10m allows for up to 10m road width and ±5m car offset
-        # This prevents unrealistic coordinate conversions from extreme pixel values
-        # while still allowing proper lane width detection when off-center
-        x_vehicle = np.clip(x_vehicle, -10.0, 10.0)
+        # Optional guardrail against extreme lateral conversion outliers.
+        # Keep configurable for turn-authority A/B testing on curves.
+        if self.x_clip_enabled:
+            x_vehicle = np.clip(x_vehicle, -self.x_clip_limit_m, self.x_clip_limit_m)
         was_clipped = abs(float(x_vehicle_pre_clip) - float(x_vehicle)) > 1e-6
 
         if debug_trace is not None:
