@@ -423,6 +423,20 @@
                             <tr><td>Perception Center X</td><td id="trajectory-perception-center">-</td></tr>
                             <tr><td>Trajectory vs Perception</td><td id="trajectory-vs-perception">-</td></tr>
                         </table>
+                        <h3>Trajectory Suppression Waterfall (Proxy)</h3>
+                        <table class="data-table">
+                            <tr><td>Heading Zero Gate (`|a_center| &lt; 0.01`)</td><td id="projection-traj-heading-zero-gate">-</td></tr>
+                            <tr><td>Small Heading Gate (`|heading| &lt; 1 deg`)</td><td id="projection-traj-small-heading-gate">-</td></tr>
+                            <tr><td>Multi-Lookahead Blend Active</td><td id="projection-traj-multilookahead-active">-</td></tr>
+                            <tr><td>X Clip Count</td><td id="projection-traj-x-clip-count">-</td></tr>
+                            <tr><td>Heavy X Clipping (`>= 8`)</td><td id="projection-traj-heavy-x-clipping">-</td></tr>
+                            <tr><td>Front Frame ID Delta</td><td id="projection-traj-front-frame-delta">-</td></tr>
+                            <tr><td>Front Unity Δt (ms)</td><td id="projection-traj-front-unity-dt-ms">-</td></tr>
+                            <tr><td>Overlay Snap Risk</td><td id="projection-traj-overlay-snap-risk">-</td></tr>
+                            <tr><td>Control Curvature / Oracle @10m</td><td id="projection-traj-control-curv-ratio-10m">-</td></tr>
+                            <tr><td>Under-Turn Flag @10m</td><td id="projection-traj-underturn-10m-flag">-</td></tr>
+                            <tr><td>Waterfall Source</td><td id="projection-traj-waterfall-source">-</td></tr>
+                        </table>
                     </div>
 
                     <!-- Projection Tab -->
@@ -713,7 +727,7 @@
 
     <script src="data_loader.js?v=20260213_issues_filters"></script>
     <script src="overlay_renderer.js?v=20260213_issues_filters"></script>
-    <script src="visualizer.js?v=20260215_turn_mismatch_metrics_v9"></script>
+    <script src="visualizer.js?v=20260215_traj_sync_drift_v12"></script>
 </body>
 </html>
 

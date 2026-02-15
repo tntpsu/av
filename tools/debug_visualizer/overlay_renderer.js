@@ -466,6 +466,23 @@ class OverlayRenderer {
     }
 
     /**
+     * Draw image-space points without connecting lines.
+     * Useful when per-frame stream sync is unstable and connected paths look misleading.
+     */
+    drawImagePoints(points, color = '#ff00ff', radius = 2) {
+        if (!points || points.length === 0) return;
+        this.ctx.fillStyle = color;
+        for (const point of points) {
+            if (!Number.isFinite(point.x) || !Number.isFinite(point.y)) {
+                continue;
+            }
+            this.ctx.beginPath();
+            this.ctx.arc(point.x, point.y, radius, 0, 2 * Math.PI);
+            this.ctx.fill();
+        }
+    }
+
+    /**
      * Draw black reference line at specified y pixel (shows where 8m appears).
      */
     drawReferenceLine(yPixel) {

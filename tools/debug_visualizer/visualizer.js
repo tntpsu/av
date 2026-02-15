@@ -238,6 +238,7 @@ class Visualizer {
     drawMainDistanceScale() {
         const showScale = Boolean(document.getElementById('toggle-distance-scale')?.checked);
         if (!showScale) return;
+        if (Boolean(this.currentOverlaySnapRisk)) return;
         const segments = this.getDistanceScaleSegments(5, 30);
         if (!segments.length) return;
         for (const seg of segments) {
@@ -2830,6 +2831,78 @@ class Visualizer {
         return out;
     }
 
+    computeTrajectorySuppressionWaterfall(plannerPath, oraclePath, turnMismatch) {
+        const out = {
+            source: 'proxy_from_current_frame',
+            headingZeroGate: null,
+            smallHeadingGate: null,
+            multiLookaheadActive: null,
+            xClipCount: null,
+            heavyXClipping: null,
+            frontFrameIdDelta: null,
+            frontUnityDtMs: null,
+            overlaySnapRisk: null,
+            controlCurvVsOracleRatio10m: null,
+            underTurnFlag10m: null,
+        };
+        const p = this.currentFrameData?.perception || {};
+        const t = this.currentFrameData?.trajectory || {};
+        const c = this.currentFrameData?.control || {};
+        const v = this.currentFrameData?.vehicle || {};
+
+        const coeffs = Array.isArray(p?.lane_line_coefficients) ? p.lane_line_coefficients : null;
+        if (coeffs && coeffs.length >= 2) {
+            const leftA = Number(Array.isArray(coeffs[0]) ? coeffs[0][0] : null);
+            const rightA = Number(Array.isArray(coeffs[1]) ? coeffs[1][0] : null);
+            if (Number.isFinite(leftA) && Number.isFinite(rightA)) {
+                const centerA = 0.5 * (leftA + rightA);
+                out.headingZeroGate = Math.abs(centerA) < 0.01;
+            }
+        }
+
+        const headingRad = Number(t?.reference_point?.heading ?? t?.reference_point_heading);
+        if (Number.isFinite(headingRad)) {
+            out.smallHeadingGate = Math.abs(headingRad) < (Math.PI / 180.0);
+        }
+
+        const method = String(t?.reference_point_method ?? '');
+        if (method) {
+            out.multiLookaheadActive = (method === 'multi_lookahead_heading_blend');
+        }
+        const xClipCount = Number(t?.diag_x_clip_count);
+        if (Number.isFinite(xClipCount)) {
+            out.xClipCount = xClipCount;
+            out.heavyXClipping = xClipCount >= 8.0;
+        }
+        const frontFrameIdDelta = Number(v?.stream_front_frame_id_delta);
+        if (Number.isFinite(frontFrameIdDelta)) {
+            out.frontFrameIdDelta = frontFrameIdDelta;
+        }
+        const frontUnityDtMs = Number(v?.stream_front_unity_dt_ms);
+        if (Number.isFinite(frontUnityDtMs)) {
+            out.frontUnityDtMs = frontUnityDtMs;
+        }
+        const hasFrameDeltaRisk = Number.isFinite(frontFrameIdDelta) && frontFrameIdDelta >= 2.0;
+        const hasUnityDtRisk = Number.isFinite(frontUnityDtMs) && Math.abs(frontUnityDtMs) >= 20.0;
+        out.overlaySnapRisk = hasFrameDeltaRisk || hasUnityDtRisk;
+
+        const controlCurv = Number(c?.path_curvature_input);
+        const oracleMonotonic = this.toForwardMonotonicPath(Array.isArray(oraclePath) ? oraclePath : []);
+        const oracleShape10 = this.samplePathShapeAtForwardDistance(oracleMonotonic, 10.0);
+        if (Number.isFinite(controlCurv) && oracleShape10 && Number.isFinite(Number(oracleShape10.curvature))) {
+            const oracleCurv10 = Number(oracleShape10.curvature);
+            if (Math.abs(oracleCurv10) >= 1e-4) {
+                out.controlCurvVsOracleRatio10m = Math.abs(controlCurv) / Math.abs(oracleCurv10);
+            }
+        }
+
+        const ratio10 = Number(turnMismatch?.curvatureRatio10m);
+        if (Number.isFinite(ratio10)) {
+            out.underTurnFlag10m = ratio10 < 0.6;
+        }
+        return out;
+    }
+
     getRightLaneFiducialDiagnostics() {
         const out = {
             source: 'unavailable',
@@ -3595,6 +3668,40 @@ class Visualizer {
         updateField('projection-curvature-ratio-10m', fmtRatio(d.curvature_ratio_10m));
         updateField('projection-curvature-ratio-15m', fmtRatio(d.curvature_ratio_15m));
         updateField('projection-turn-mismatch-source', d.turn_mismatch_source || '-');
+        const fmtBool = (v) => {
+            if (v === true) return 'on';
+            if (v === false) return 'off';
+            return '-';
+        };
+        updateField('projection-traj-heading-zero-gate', fmtBool(d.traj_heading_zero_gate));
+        updateField('projection-traj-small-heading-gate', fmtBool(d.traj_small_heading_gate));
+        updateField('projection-traj-multilookahead-active', fmtBool(d.traj_multilookahead_active));
+        updateField(
+            'projection-traj-x-clip-count',
+            Number.isFinite(Number(d.traj_x_clip_count)) ? Number(d.traj_x_clip_count).toFixed(0) : '-'
+        );
+        updateField('projection-traj-heavy-x-clipping', fmtBool(d.traj_heavy_x_clipping));
+        updateField(
+            'projection-traj-front-frame-delta',
+            Number.isFinite(Number(d.traj_front_frame_delta))
+                ? Number(d.traj_front_frame_delta).toFixed(0)
+                : '-'
+        );
+        updateField(
+            'projection-traj-front-unity-dt-ms',
+            Number.isFinite(Number(d.traj_front_unity_dt_ms))
+                ? Number(d.traj_front_unity_dt_ms).toFixed(2)
+                : '-'
+        );
+        updateField('projection-traj-overlay-snap-risk', fmtBool(d.traj_overlay_snap_risk));
+        updateField(
+            'projection-traj-control-curv-ratio-10m',
+            Number.isFinite(Number(d.traj_control_curv_ratio_10m))
+                ? `${Number(d.traj_control_curv_ratio_10m).toFixed(2)}x`
+                : '-'
+        );
+        updateField('projection-traj-underturn-10m-flag', fmtBool(d.traj_underturn_10m_flag));
+        updateField('projection-traj-waterfall-source', d.traj_waterfall_source || '-');
         const fmtPx = (v) => Number.isFinite(Number(v)) ? `${Number(v).toFixed(1)} px` : '-';
         updateField('projection-right-fiducial-err-5m', fmtPx(d.right_fiducial_err_5m));
         updateField('projection-right-fiducial-err-10m', fmtPx(d.right_fiducial_err_10m));
@@ -4288,6 +4395,14 @@ class Visualizer {
             const unityHorizontalFOV = this.currentFrameData.vehicle.camera_horizontal_fov;
             this.overlayRenderer.setCameraFov(unityHorizontalFOV);
         }
+
+        const vehicle = this.currentFrameData?.vehicle || {};
+        const streamFrontFrameDelta = Number(vehicle.stream_front_frame_id_delta);
+        const streamFrontUnityDtMs = Number(vehicle.stream_front_unity_dt_ms);
+        const frameDeltaRisk = Number.isFinite(streamFrontFrameDelta) && streamFrontFrameDelta >= 2.0;
+        const unityDtRisk = Number.isFinite(streamFrontUnityDtMs) && Math.abs(streamFrontUnityDtMs) >= 20.0;
+        const overlaySnapRisk = frameDeltaRisk || unityDtRisk;
+        this.currentOverlaySnapRisk = overlaySnapRisk;
         
         // Draw black reference line FIRST (shows where 8m actually appears)
         // This line is always drawn, using cached value if current frame doesn't have it
@@ -4497,7 +4612,11 @@ class Visualizer {
                             clipped.push(pt);
                             prev = pt;
                         }
-                        this.overlayRenderer.drawImagePath(clipped, '#ff00ff', 2);
+                        if (overlaySnapRisk) {
+                            this.overlayRenderer.drawImagePoints(clipped, '#ff00ff', 2);
+                        } else {
+                            this.overlayRenderer.drawImagePath(clipped, '#ff00ff', 2);
+                        }
                         const diag = projected._diag || {};
                         this.projectionDiagnostics.main_first_visible_src_y_m = diag.main_first_visible_src_y_m;
                         this.projectionDiagnostics.main_mirror_sanity = diag.main_mirror_sanity || '-';
@@ -4535,7 +4654,11 @@ class Visualizer {
                 oraclePathForMetrics = renderOracle;
                 const projectedOracle = this.projectTrajectoryToImage(renderOracle);
                 if (projectedOracle && projectedOracle.length > 1) {
-                    this.overlayRenderer.drawImagePath(projectedOracle, '#66ff66', 2);
+                    if (overlaySnapRisk) {
+                        this.overlayRenderer.drawImagePoints(projectedOracle, '#66ff66', 2);
+                    } else {
+                        this.overlayRenderer.drawImagePath(projectedOracle, '#66ff66', 2);
+                    }
                 } else {
                     const sortedOracle = [...renderOracle]
                         .filter(point => point.y >= 0)
@@ -4563,6 +4686,18 @@ class Visualizer {
         this.projectionDiagnostics.curvature_ratio_10m = turnMismatch.curvatureRatio10m;
         this.projectionDiagnostics.curvature_ratio_15m = turnMismatch.curvatureRatio15m;
         this.projectionDiagnostics.turn_mismatch_source = turnMismatch.source;
+        const trajWaterfall = this.computeTrajectorySuppressionWaterfall(plannerPathForMetrics, oraclePathForMetrics, turnMismatch);
+        this.projectionDiagnostics.traj_heading_zero_gate = trajWaterfall.headingZeroGate;
+        this.projectionDiagnostics.traj_small_heading_gate = trajWaterfall.smallHeadingGate;
+        this.projectionDiagnostics.traj_multilookahead_active = trajWaterfall.multiLookaheadActive;
+        this.projectionDiagnostics.traj_x_clip_count = trajWaterfall.xClipCount;
+        this.projectionDiagnostics.traj_heavy_x_clipping = trajWaterfall.heavyXClipping;
+        this.projectionDiagnostics.traj_front_frame_delta = trajWaterfall.frontFrameIdDelta;
+        this.projectionDiagnostics.traj_front_unity_dt_ms = trajWaterfall.frontUnityDtMs;
+        this.projectionDiagnostics.traj_overlay_snap_risk = trajWaterfall.overlaySnapRisk;
+        this.projectionDiagnostics.traj_control_curv_ratio_10m = trajWaterfall.controlCurvVsOracleRatio10m;
+        this.projectionDiagnostics.traj_underturn_10m_flag = trajWaterfall.underTurnFlag10m;
+        this.projectionDiagnostics.traj_waterfall_source = trajWaterfall.source;
         this.projectionDiagnostics.main_nearfield_blend = this.projectionNearFieldBlendEnabled ? 'on' : 'off';
         this.projectionDiagnostics.main_nearfield_y_offset_m = Number(this.projectionNearFieldGroundYOffsetMeters);
         this.projectionDiagnostics.main_nearfield_blend_distance_m = Number(this.projectionNearFieldBlendDistanceMeters);
