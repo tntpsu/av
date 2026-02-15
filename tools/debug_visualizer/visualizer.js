@@ -3008,6 +3008,13 @@ class Visualizer {
             cadencePolicy: null,
             cadenceFrameDeltaRiskThreshold: null,
             cadenceUnityDtRiskThresholdMs: null,
+            bandErr0to8m: null,
+            bandErr8to12m: null,
+            bandErr12to20m: null,
+            bandPlannerAbsXMax12to20m: null,
+            bandNearClipFrac12to20m: null,
+            dominantFailureBand: null,
+            triageHint: null,
         };
         const p = this.currentFrameData?.perception || {};
         const t = this.currentFrameData?.trajectory || {};
@@ -3109,6 +3116,69 @@ class Visualizer {
         const ratio10 = Number(turnMismatch?.curvatureRatio10m);
         if (Number.isFinite(ratio10)) {
             out.underTurnFlag10m = ratio10 < 0.6;
+        }
+
+        const plannerMonotonic = this.toForwardMonotonicPath(Array.isArray(plannerPath) ? plannerPath : []);
+        const oracleMonotonicForBands = this.toForwardMonotonicPath(Array.isArray(oraclePath) ? oraclePath : []);
+        const clipLimitM = Number(this.summaryConfig?.trajectory?.x_clip_limit_m);
+        const activeClipLimitM = Number.isFinite(clipLimitM) ? clipLimitM : 15.0;
+        const sampleBand = (yStart, yEnd, step = 1.0) => {
+            const errs = [];
+            const absXs = [];
+            const nearClip = [];
+            for (let y = yStart; y <= yEnd + 1e-6; y += step) {
+                const px = this.sampleLateralAtForwardDistance(plannerMonotonic, y);
+                const ox = this.sampleLateralAtForwardDistance(oracleMonotonicForBands, y);
+                if (Number.isFinite(px)) {
+                    const absX = Math.abs(px);
+                    absXs.push(absX);
+                    nearClip.push(absX >= (activeClipLimitM - 0.05) ? 1.0 : 0.0);
+                }
+                if (Number.isFinite(px) && Number.isFinite(ox)) {
+                    errs.push(Math.abs(px - ox));
+                }
+            }
+            return {
+                meanErr: errs.length > 0 ? (errs.reduce((a, b) => a + b, 0) / errs.length) : null,
+                absXMax: absXs.length > 0 ? Math.max(...absXs) : null,
+                nearClipFrac: nearClip.length > 0 ? (nearClip.reduce((a, b) => a + b, 0) / nearClip.length) : null,
+            };
+        };
+        if (plannerMonotonic.length >= 2 && oracleMonotonicForBands.length >= 2) {
+            const b0_8 = sampleBand(0.0, 8.0);
+            const b8_12 = sampleBand(8.0, 12.0);
+            const b12_20 = sampleBand(12.0, 20.0);
+            out.bandErr0to8m = b0_8.meanErr;
+            out.bandErr8to12m = b8_12.meanErr;
+            out.bandErr12to20m = b12_20.meanErr;
+            out.bandPlannerAbsXMax12to20m = b12_20.absXMax;
+            out.bandNearClipFrac12to20m = b12_20.nearClipFrac;
+
+            const e0 = Number(out.bandErr0to8m);
+            const e1 = Number(out.bandErr8to12m);
+            const e2 = Number(out.bandErr12to20m);
+            const nearClipFrac = Number(out.bandNearClipFrac12to20m);
+            const absXMaxFar = Number(out.bandPlannerAbsXMax12to20m);
+            if (Number.isFinite(e0) && Number.isFinite(e1) && Number.isFinite(e2)) {
+                const maxErr = Math.max(e0, e1, e2);
+                if (maxErr === e2) out.dominantFailureBand = '12-20m';
+                else if (maxErr === e1) out.dominantFailureBand = '8-12m';
+                else out.dominantFailureBand = '0-8m';
+            }
+
+            if (Number.isFinite(e2) && e2 > 4.0) {
+                if (Number.isFinite(nearClipFrac) && nearClipFrac > 0.25) {
+                    out.triageHint = 'farfield_postclip_distortion_likely';
+                } else if (Number.isFinite(absXMaxFar) && absXMaxFar > activeClipLimitM + 0.5) {
+                    out.triageHint = 'farfield_preclip_outlier_generation_likely';
+                } else {
+                    out.triageHint = 'farfield_generation_or_reference_mismatch';
+                }
+            } else if (Number.isFinite(e0) && e0 > 1.0) {
+                out.triageHint = 'nearfield_source_issue_or_reference_bias';
+            } else {
+                out.triageHint = 'no_strong_band_failure_detected';
+            }
         }
         return out;
     }
@@ -3972,6 +4042,38 @@ class Visualizer {
                 : '-'
         );
         updateField('projection-traj-underturn-10m-flag', fmtBool(d.traj_underturn_10m_flag));
+        updateField(
+            'projection-traj-band-err-0-8m',
+            Number.isFinite(Number(d.traj_band_err_0_8m))
+                ? `${Number(d.traj_band_err_0_8m).toFixed(2)} m`
+                : '-'
+        );
+        updateField(
+            'projection-traj-band-err-8-12m',
+            Number.isFinite(Number(d.traj_band_err_8_12m))
+                ? `${Number(d.traj_band_err_8_12m).toFixed(2)} m`
+                : '-'
+        );
+        updateField(
+            'projection-traj-band-err-12-20m',
+            Number.isFinite(Number(d.traj_band_err_12_20m))
+                ? `${Number(d.traj_band_err_12_20m).toFixed(2)} m`
+                : '-'
+        );
+        updateField(
+            'projection-traj-band-absx-max-12-20m',
+            Number.isFinite(Number(d.traj_band_absx_max_12_20m))
+                ? `${Number(d.traj_band_absx_max_12_20m).toFixed(2)} m`
+                : '-'
+        );
+        updateField(
+            'projection-traj-band-nearclip-frac-12-20m',
+            Number.isFinite(Number(d.traj_band_nearclip_frac_12_20m))
+                ? `${(Number(d.traj_band_nearclip_frac_12_20m) * 100.0).toFixed(0)}%`
+                : '-'
+        );
+        updateField('projection-traj-dominant-failure-band', d.traj_dominant_failure_band || '-');
+        updateField('projection-traj-triage-hint', d.traj_triage_hint || '-');
         updateField('projection-traj-waterfall-source', d.traj_waterfall_source || '-');
         updateField('projection-sync-overall-status', d.sync_overall_status || '-');
         updateField('projection-sync-traj-status', d.sync_traj_status || '-');
@@ -5052,6 +5154,13 @@ class Visualizer {
         this.projectionDiagnostics.traj_cadence_unity_dt_threshold_ms = trajWaterfall.cadenceUnityDtRiskThresholdMs;
         this.projectionDiagnostics.traj_control_curv_ratio_10m = trajWaterfall.controlCurvVsOracleRatio10m;
         this.projectionDiagnostics.traj_underturn_10m_flag = trajWaterfall.underTurnFlag10m;
+        this.projectionDiagnostics.traj_band_err_0_8m = trajWaterfall.bandErr0to8m;
+        this.projectionDiagnostics.traj_band_err_8_12m = trajWaterfall.bandErr8to12m;
+        this.projectionDiagnostics.traj_band_err_12_20m = trajWaterfall.bandErr12to20m;
+        this.projectionDiagnostics.traj_band_absx_max_12_20m = trajWaterfall.bandPlannerAbsXMax12to20m;
+        this.projectionDiagnostics.traj_band_nearclip_frac_12_20m = trajWaterfall.bandNearClipFrac12to20m;
+        this.projectionDiagnostics.traj_dominant_failure_band = trajWaterfall.dominantFailureBand;
+        this.projectionDiagnostics.traj_triage_hint = trajWaterfall.triageHint;
         this.projectionDiagnostics.traj_waterfall_source = trajWaterfall.source;
         this.projectionDiagnostics.sync_overall_status = trajWaterfall.syncOverallStatus;
         this.projectionDiagnostics.sync_traj_status = trajWaterfall.syncTrajStatus;
