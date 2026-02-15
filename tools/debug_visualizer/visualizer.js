@@ -12,6 +12,7 @@ class Visualizer {
         this.currentFrameIndex = 0;
         this.frameCount = 0;
         this.currentRecording = null;  // Track current recording filename
+        this.currentRecordingMeta = null;
         this.isPlaying = false;
         this.playSpeed = 1.0;
         this.playInterval = null;
@@ -36,16 +37,250 @@ class Visualizer {
         this.chartCursorValue = null;
         this.chartCursorIndex = null;
         this.chartCurvatureSeries = null;
+        this.chartSeriesData = null;
+        this.chartSeriesNames = [];
+        this.chartXMin = null;
+        this.chartXMax = null;
         this.chartSavedViews = this.loadChartViews();
         this.lastChartViewName = this.loadLastChartViewName();
         this.cameraGridHeightKey = 'debugVisualizer.cameraGridHeight';
+        this.panelSplitLeftWidthKey = 'debugVisualizer.panelSplitLeftWidthPx';
+        this.checkboxStateKey = 'debugVisualizer.checkboxState';
         this.topdownOrthoHalfSize = 12.0;
+        this.topdownAvailable = true;
+        this.showInformationalIssues = false;
+        this.curveEntryStartDistanceM = 34.0;
+        this.curveEntryWindowDistanceM = 8.0;
+        this.distanceFromStartSeries = null;
+        this.topdownSmoothedTrajectory = null;
+        this.topdownSmoothedFrameIndex = null;
+        this.topdownSmoothingAlpha = 0.45;
+        this.topdownCalibratedProjectionReady = false;
+        this.topdownProjectionToggleTouched = false;
+        this.projectionDiagnostics = {};
+        this.distanceScaleStartOffsetMeters = 2.0;
         
         this.setupEventListeners();
         this.loadRecordings();
     }
 
+    escapeHtml(value) {
+        return String(value ?? '')
+            .replaceAll('&', '&amp;')
+            .replaceAll('<', '&lt;')
+            .replaceAll('>', '&gt;')
+            .replaceAll('"', '&quot;')
+            .replaceAll("'", '&#39;');
+    }
+
+    restoreCheckboxState() {
+        try {
+            const raw = localStorage.getItem(this.checkboxStateKey);
+            if (!raw) return;
+            const saved = JSON.parse(raw);
+            if (!saved || typeof saved !== 'object') return;
+            document.querySelectorAll('input[type="checkbox"][id]').forEach((el) => {
+                if (Object.prototype.hasOwnProperty.call(saved, el.id)) {
+                    el.checked = Boolean(saved[el.id]);
+                }
+            });
+        } catch (error) {
+            console.warn('Could not restore checkbox state:', error);
+        }
+    }
+
+    persistCheckboxState() {
+        try {
+            const state = {};
+            document.querySelectorAll('input[type="checkbox"][id]').forEach((el) => {
+                state[el.id] = Boolean(el.checked);
+            });
+            localStorage.setItem(this.checkboxStateKey, JSON.stringify(state));
+        } catch (error) {
+            console.warn('Could not persist checkbox state:', error);
+        }
+    }
+
+    ensureCheckboxTooltips() {
+        // Provide at least a basic hover tooltip for any checkbox missing one.
+        document.querySelectorAll('label').forEach((label) => {
+            const cb = label.querySelector('input[type="checkbox"][id]');
+            if (!cb) return;
+            const text = (label.textContent || '').replace(/\s+/g, ' ').trim();
+            if (text && !label.getAttribute('title')) {
+                label.setAttribute('title', text);
+            }
+            if (text && !cb.getAttribute('title')) {
+                cb.setAttribute('title', label.getAttribute('title') || text);
+            }
+        });
+    }
+
+    computeTurnSign(points, xKey = 'x', yKey = 'y') {
+        if (!Array.isArray(points) || points.length < 2) return 'unknown';
+        const valid = points
+            .map((p) => ({ x: Number(p?.[xKey]), y: Number(p?.[yKey]) }))
+            .filter((p) => Number.isFinite(p.x) && Number.isFinite(p.y))
+            .sort((a, b) => a.y - b.y);
+        if (valid.length < 2) return 'unknown';
+        const first = valid[0];
+        const last = valid[Math.min(valid.length - 1, Math.max(1, Math.floor(valid.length * 0.4)))];
+        const dx = last.x - first.x;
+        if (Math.abs(dx) < 1e-3) return 'straight';
+        return dx > 0 ? 'right' : 'left';
+    }
+
+    getDistanceScaleSegments(stepMeters = 5, maxMeters = 30) {
+        const traj = this.currentFrameData?.trajectory;
+        if (!traj) return [];
+        const sourcePoints = (Array.isArray(traj.oracle_points) && traj.oracle_points.length > 1)
+            ? traj.oracle_points
+            : this.getDisplayTrajectoryPoints(traj.trajectory_points || []);
+
+        const center = this.toForwardMonotonicPath(sourcePoints);
+        if (center.length < 2) return [];
+
+        const gt = this.currentFrameData?.ground_truth || {};
+        const left = Number(gt.left_lane_line_x ?? gt.left_lane_x);
+        const right = Number(gt.right_lane_line_x ?? gt.right_lane_x);
+        const laneWidth = (
+            Number.isFinite(left) && Number.isFinite(right) && (right - left) > 1.0 && (right - left) < 8.0
+        ) ? (right - left) : 3.6;
+        const halfWidth = laneWidth * 0.5;
+
+        const cumulativeS = [0];
+        for (let i = 1; i < center.length; i++) {
+            const dx = center[i].x - center[i - 1].x;
+            const dy = center[i].y - center[i - 1].y;
+            cumulativeS.push(cumulativeS[i - 1] + Math.hypot(dx, dy));
+        }
+        const totalS = cumulativeS[cumulativeS.length - 1];
+        if (!Number.isFinite(totalS) || totalS <= 0) return [];
+
+        const sampleAtDistance = (sTarget) => {
+            const s = Math.max(0, Math.min(totalS, sTarget));
+            let i = 1;
+            while (i < cumulativeS.length && cumulativeS[i] < s) i++;
+            const i1 = Math.min(i, center.length - 1);
+            const i0 = Math.max(0, i1 - 1);
+            const segLen = Math.max(1e-6, cumulativeS[i1] - cumulativeS[i0]);
+            const t = (s - cumulativeS[i0]) / segLen;
+
+            const cx = center[i0].x + (center[i1].x - center[i0].x) * t;
+            const cy = center[i0].y + (center[i1].y - center[i0].y) * t;
+            const tx = center[i1].x - center[i0].x;
+            const ty = center[i1].y - center[i0].y;
+            const tNorm = Math.hypot(tx, ty) || 1.0;
+            const nx = ty / tNorm; // right normal in vehicle frame
+            const ny = -tx / tNorm;
+
+            const rx = cx + nx * halfWidth;
+            const ry = cy + ny * halfWidth;
+            const tickHalf = 0.22;
+            return {
+                s,
+                a: { x: rx - nx * tickHalf, y: ry - ny * tickHalf },
+                b: { x: rx + nx * tickHalf, y: ry + ny * tickHalf },
+            };
+        };
+
+        const segments = [];
+        const startOffset = Math.max(0, Number(this.distanceScaleStartOffsetMeters) || 0);
+        for (let displayS = 0; displayS <= maxMeters + 1e-6; displayS += stepMeters) {
+            const sourceS = startOffset + displayS;
+            if (sourceS <= totalS + 1e-6) {
+                const seg = sampleAtDistance(sourceS);
+                seg.s = displayS;
+                segments.push(seg);
+            }
+        }
+        return segments;
+    }
+
+    drawMainDistanceScale() {
+        const showScale = Boolean(document.getElementById('toggle-distance-scale')?.checked);
+        if (!showScale) return;
+        const segments = this.getDistanceScaleSegments(5, 30);
+        if (!segments.length) return;
+        for (const seg of segments) {
+            const projected = this.projectTrajectoryToImage([seg.a, seg.b]);
+            if (!projected || projected.length < 2) continue;
+            this.overlayRenderer.drawImagePath(projected, '#ffffff', seg.s === 0 ? 3 : 2);
+        }
+    }
+
+
+    async buildFailureFrameStateCard(summary) {
+        const failureDetected = summary?.executive_summary?.failure_detected;
+        const failureFrame = summary?.executive_summary?.failure_frame;
+        if (!failureDetected || failureFrame === null || failureFrame === undefined) {
+            return null;
+        }
+
+        try {
+            const frameData = await this.dataLoader.loadFrameData(Number(failureFrame));
+            const perception = frameData?.perception || {};
+            const control = frameData?.control || {};
+            const trajectory = frameData?.trajectory || {};
+            const groundTruth = frameData?.ground_truth || {};
+
+            const left = Number(perception.left_lane_line_x);
+            const right = Number(perception.right_lane_line_x);
+            const hasLeft = Number.isFinite(left);
+            const hasRight = Number.isFinite(right);
+            const perceptionCenter = hasLeft && hasRight ? (left + right) / 2.0 : null;
+            const gtCenter = Number.isFinite(Number(groundTruth.lane_center_x))
+                ? Number(groundTruth.lane_center_x)
+                : null;
+            const mismatch = (perceptionCenter !== null && gtCenter !== null)
+                ? Math.abs(perceptionCenter - gtCenter)
+                : null;
+
+            return {
+                failureFrame: Number(failureFrame),
+                perception: {
+                    numLanesDetected: perception.num_lanes_detected,
+                    leftLaneX: hasLeft ? left : null,
+                    rightLaneX: hasRight ? right : null,
+                    centerX: perceptionCenter,
+                    usingStaleData: Boolean(perception.using_stale_data),
+                    staleReason: perception.stale_data_reason || control.stale_reason || null,
+                },
+                groundTruth: {
+                    laneCenterX: gtCenter,
+                    pathCurvature: Number.isFinite(Number(groundTruth.path_curvature))
+                        ? Number(groundTruth.path_curvature)
+                        : null,
+                },
+                trajectory: {
+                    refX: Number.isFinite(Number(trajectory?.reference_point?.x))
+                        ? Number(trajectory.reference_point.x)
+                        : null,
+                    refHeading: Number.isFinite(Number(trajectory?.reference_point?.heading))
+                        ? Number(trajectory.reference_point.heading)
+                        : null,
+                },
+                control: {
+                    lateralError: Number.isFinite(Number(control.lateral_error))
+                        ? Number(control.lateral_error)
+                        : null,
+                    steering: Number.isFinite(Number(control.steering))
+                        ? Number(control.steering)
+                        : null,
+                },
+                gtVsPerceptionCenterMismatchM: mismatch,
+            };
+        } catch (error) {
+            console.warn('Could not build failure-frame state card:', error);
+            return null;
+        }
+    }
+
     setupEventListeners() {
+        // Restore persisted checkbox preferences before wiring listeners.
+        this.restoreCheckboxState();
+        this.ensureCheckboxTooltips();
+
         // Recording selection
         document.getElementById('load-btn').addEventListener('click', () => this.loadSelectedRecording());
         const recordingSelect = document.getElementById('recording-select');
@@ -103,12 +338,42 @@ class Visualizer {
         
         // Overlay toggles
         document.getElementById('toggle-lanes').addEventListener('change', () => this.updateOverlays());
-        document.getElementById('toggle-detected-curves').addEventListener('change', () => this.updateOverlays());
         const fitPointsToggle = document.getElementById('toggle-fit-points');
         if (fitPointsToggle) {
             fitPointsToggle.addEventListener('change', () => this.updateOverlays());
         }
         document.getElementById('toggle-trajectory').addEventListener('change', () => this.updateOverlays());
+        const oracleTrajectoryToggle = document.getElementById('toggle-oracle-trajectory');
+        if (oracleTrajectoryToggle) {
+            oracleTrajectoryToggle.addEventListener('change', () => this.updateOverlays());
+        }
+        const distanceScaleToggle = document.getElementById('toggle-distance-scale');
+        if (distanceScaleToggle) {
+            distanceScaleToggle.addEventListener('change', () => this.updateOverlays());
+        }
+        const rightLaneFiducialsToggle = document.getElementById('toggle-right-lane-fiducials');
+        if (rightLaneFiducialsToggle) {
+            rightLaneFiducialsToggle.addEventListener('change', () => this.updateOverlays());
+        }
+        const plannerOnlyTrajectoryToggle = document.getElementById('toggle-planner-only-trajectory');
+        if (plannerOnlyTrajectoryToggle) {
+            plannerOnlyTrajectoryToggle.addEventListener('change', () => this.updateOverlays());
+        }
+        const topdownSmoothToggle = document.getElementById('toggle-topdown-pose-smooth');
+        if (topdownSmoothToggle) {
+            topdownSmoothToggle.addEventListener('change', () => {
+                this.topdownSmoothedTrajectory = null;
+                this.topdownSmoothedFrameIndex = null;
+                this.updateTopdownOverlay();
+            });
+        }
+        const topdownCalibratedToggle = document.getElementById('toggle-topdown-calibrated-projection');
+        if (topdownCalibratedToggle) {
+            topdownCalibratedToggle.addEventListener('change', () => {
+                this.topdownProjectionToggleTouched = true;
+                this.updateTopdownOverlay();
+            });
+        }
         document.getElementById('toggle-reference').addEventListener('change', () => this.updateOverlays());
         document.getElementById('toggle-ground-truth').addEventListener('change', () => this.updateOverlays());
         const roiToggle = document.getElementById('toggle-perception-roi');
@@ -195,9 +460,29 @@ class Visualizer {
         if (chartDeleteBtn) {
             chartDeleteBtn.addEventListener('click', () => this.deleteSelectedChartView());
         }
+        const chartZoomInBtn = document.getElementById('chart-zoom-in-btn');
+        if (chartZoomInBtn) {
+            chartZoomInBtn.addEventListener('click', () => this.zoomChart(0.5));
+        }
+        const chartZoomOutBtn = document.getElementById('chart-zoom-out-btn');
+        if (chartZoomOutBtn) {
+            chartZoomOutBtn.addEventListener('click', () => this.zoomChart(2.0));
+        }
+        const chartZoomResetBtn = document.getElementById('chart-zoom-reset-btn');
+        if (chartZoomResetBtn) {
+            chartZoomResetBtn.addEventListener('click', () => this.resetChartZoom());
+        }
         const chartSearch = document.getElementById('chart-signal-search');
         if (chartSearch) {
             chartSearch.addEventListener('input', () => this.renderSignalList());
+        }
+        const quickApplyViewBtn = document.getElementById('quick-apply-view-btn');
+        if (quickApplyViewBtn) {
+            quickApplyViewBtn.addEventListener('click', () => this.applyQuickSelectedChartView());
+        }
+        const quickSavedViewsSelect = document.getElementById('quick-saved-views-select');
+        if (quickSavedViewsSelect) {
+            quickSavedViewsSelect.addEventListener('change', () => this.applyQuickSelectedChartView());
         }
 
         const legendToggleBtn = document.getElementById('legend-toggle-btn');
@@ -278,13 +563,27 @@ class Visualizer {
                 }
             });
         }
+        const entryStartDistanceInput = document.getElementById('diag-entry-start-distance');
+        const entryWindowDistanceInput = document.getElementById('diag-entry-window-distance');
+        [entryStartDistanceInput, entryWindowDistanceInput].forEach((input) => {
+            if (!input) return;
+            input.addEventListener('change', () => {
+                if (this.currentRecording) {
+                    this.loadSummary();
+                    this.loadDiagnostics();
+                }
+            });
+        });
+
+        // Persist all checkbox preferences so reload/open keeps current selections.
+        document.querySelectorAll('input[type="checkbox"][id]').forEach((el) => {
+            el.addEventListener('change', () => this.persistCheckboxState());
+        });
     }
 
     async loadRecordings() {
         try {
-            console.log('Loading recordings...');
             const recordings = await this.dataLoader.loadRecordings();
-            console.log('Recordings loaded:', recordings);
             
             const select = document.getElementById('recording-select');
             if (!select) {
@@ -296,7 +595,6 @@ class Visualizer {
             select.innerHTML = '<option value="">Select recording...</option>';
             
             if (!recordings || recordings.length === 0) {
-                console.warn('No recordings found');
                 const option = document.createElement('option');
                 option.value = '';
                 option.textContent = 'No recordings available';
@@ -315,8 +613,6 @@ class Visualizer {
             if (currentValue && recordings.some(rec => rec.filename === currentValue)) {
                 select.value = currentValue;
             }
-            
-            console.log(`Added ${recordings.length} recordings to dropdown`);
         } catch (error) {
             console.error('Error in loadRecordings:', error);
             const select = document.getElementById('recording-select');
@@ -334,6 +630,15 @@ class Visualizer {
         try {
             this.currentRecording = filename;  // Store current recording filename
             this.frameCount = await this.dataLoader.loadRecording(filename);
+            try {
+                this.currentRecordingMeta = await this.dataLoader.loadRecordingMeta(filename);
+            } catch (e) {
+                this.currentRecordingMeta = null;
+            }
+            this.updateRecordingMetaBadges();
+            await this.loadDistanceFromStartSeries();
+            this.topdownAvailable = Boolean(this.currentRecordingMeta?.topdown_available ?? true);
+            this.setTopdownAvailability(this.topdownAvailable);
             document.getElementById('frame-count').textContent = this.frameCount;
             document.getElementById('frame-slider').max = this.frameCount - 1;
             this.currentFrameIndex = 0;
@@ -341,14 +646,55 @@ class Visualizer {
             this.lastUnityFrameIndex = null;
             this.lastUnityFrameCount = null;
             this.lastCameraTimestamp = null;
+            this.topdownSmoothedTrajectory = null;
+            this.topdownSmoothedFrameIndex = null;
             await this.goToFrame(0);
             await this.loadSummary();  // Load summary when recording is loaded
             await this.loadIssues();  // Load issues when recording is loaded
             await this.loadDiagnostics();  // Load diagnostics when recording is loaded
             await this.loadSignalsList();
+            this.updateQuickChartValuesTable();
         } catch (error) {
             console.error('Error loading recording:', error);
             alert('Failed to load recording: ' + error.message);
+        }
+    }
+
+    humanizeRecordingType(value) {
+        const v = String(value || 'unknown');
+        return v.replaceAll('_', ' ');
+    }
+
+    updateRecordingMetaBadges() {
+        const typeBadge = document.getElementById('recording-type-badge');
+        const topdownBadge = document.getElementById('topdown-badge');
+        const meta = this.currentRecordingMeta || {};
+        if (typeBadge) {
+            const parts = [`type: ${this.humanizeRecordingType(meta.recording_type || 'unknown')}`];
+            if (meta.source_recording) parts.push(`src: ${meta.source_recording}`);
+            if (meta.lock_source_recording) parts.push(`lock: ${meta.lock_source_recording}`);
+            if (meta.control_lock_source_recording) parts.push(`ctrl lock: ${meta.control_lock_source_recording}`);
+            typeBadge.textContent = parts.join(' | ');
+            typeBadge.style.display = 'inline-flex';
+            typeBadge.title = parts.join('\n');
+        }
+        if (topdownBadge) {
+            const hasTop = Boolean(meta.topdown_available);
+            topdownBadge.textContent = hasTop ? 'top-down: available' : 'top-down: unavailable';
+            topdownBadge.style.color = hasTop ? '#4caf50' : '#ffb74d';
+            topdownBadge.style.display = 'inline-flex';
+        }
+    }
+
+    async loadDistanceFromStartSeries() {
+        this.distanceFromStartSeries = null;
+        if (!this.currentRecording) return;
+        try {
+            const data = await this.dataLoader.loadTimeSeries(['derived/distance_m'], 'vehicle/timestamps');
+            this.distanceFromStartSeries = data?.signals?.['derived/distance_m'] || null;
+        } catch (error) {
+            console.warn('Could not load derived distance series:', error);
+            this.distanceFromStartSeries = null;
         }
     }
     
@@ -368,14 +714,29 @@ class Visualizer {
             
             // Also load diagnostics for quick diagnosis (respect analyze_to_failure checkbox)
             let diagnostics = null;
+            let topdownDiagnostics = null;
             try {
-                const diagUrl = `/api/recording/${this.currentRecording}/diagnostics${analyzeToFailure ? '?analyze_to_failure=true' : ''}`;
+                const entryStartDistance = parseFloat(document.getElementById('diag-entry-start-distance')?.value || `${this.curveEntryStartDistanceM}`);
+                const entryWindowDistance = parseFloat(document.getElementById('diag-entry-window-distance')?.value || `${this.curveEntryWindowDistanceM}`);
+                const diagParams = new URLSearchParams();
+                if (analyzeToFailure) diagParams.set('analyze_to_failure', 'true');
+                if (Number.isFinite(entryStartDistance)) diagParams.set('curve_entry_start_distance_m', String(entryStartDistance));
+                if (Number.isFinite(entryWindowDistance)) diagParams.set('curve_entry_window_distance_m', String(entryWindowDistance));
+                const diagUrl = `/api/recording/${this.currentRecording}/diagnostics?${diagParams.toString()}`;
                 const diagResponse = await fetch(diagUrl);
                 if (diagResponse.ok) {
                     diagnostics = await diagResponse.json();
                 }
             } catch (e) {
                 console.warn('Could not load diagnostics:', e);
+            }
+            try {
+                const tdResp = await fetch(`/api/recording/${this.currentRecording}/topdown-diagnostics`);
+                if (tdResp.ok) {
+                    topdownDiagnostics = await tdResp.json();
+                }
+            } catch (e) {
+                console.warn('Could not load top-down diagnostics:', e);
             }
             if (!response.ok) {
                 throw new Error(`HTTP ${response.status}: ${await response.text()}`);
@@ -388,10 +749,23 @@ class Visualizer {
                 summaryContent.innerHTML = `<p style="color: #ff6b6b; text-align: center; padding: 2rem;">Error: ${summary.error}</p>`;
                 return;
             }
+
+            const failureStateCard = await this.buildFailureFrameStateCard(summary);
             
             // Build summary HTML
             let html = '<div style="padding: 1rem;">';
             
+            // Perception Questions Runner
+            html += '<div style="background: #2a2a2a; padding: 1rem; border-radius: 8px; margin-bottom: 1rem;">';
+            html += '<h3 style="margin-top: 0; color: #4a90e2;">Perception Questions (Q1-Q8)</h3>';
+            html += '<div style="display: flex; gap: 0.5rem; align-items: center; margin-bottom: 0.75rem;">';
+            html += '<button id="run-perception-questions-btn" style="padding: 0.45rem 0.9rem; background: #4a90e2; color: white; border: none; border-radius: 4px; cursor: pointer;">Run Q Script</button>';
+            html += '<span id="run-perception-questions-status" style="color: #a0a0a0; font-size: 0.9rem;">Run analyzer for this recording from PhilViz.</span>';
+            html += '</div>';
+            html += '<div id="run-perception-questions-parsed" style="margin-bottom: 0.5rem; color: #d0d0d0; font-size: 0.9rem;"></div>';
+            html += '<pre id="run-perception-questions-output" style="display: none; white-space: pre-wrap; max-height: 260px; overflow-y: auto; padding: 0.75rem; border-radius: 4px; background: #1a1a1a; color: #d8d8d8; font-size: 0.82rem;"></pre>';
+            html += '</div>';
+
             // Executive Summary
             html += '<div style="background: #2a2a2a; padding: 1.5rem; border-radius: 8px; margin-bottom: 1.5rem;">';
             html += '<h2 style="margin-top: 0; color: #4a90e2;">Executive Summary</h2>';
@@ -469,6 +843,29 @@ class Visualizer {
                     html += `<span style="color: #ffa500;">Check "Analyze to Failure" to see metrics for only the good portion of the drive.</span>`;
                 }
                 html += `</div>`;
+            }
+
+            if (failureStateCard) {
+                const p = failureStateCard.perception;
+                const gt = failureStateCard.groundTruth;
+                const tr = failureStateCard.trajectory;
+                const ctrl = failureStateCard.control;
+                const staleColor = p.usingStaleData ? '#ff6b6b' : '#4caf50';
+                html += '<div style="margin-top: 1rem; background: #1f2430; border: 1px solid #3b4252; padding: 1rem; border-radius: 8px;">';
+                html += '<h3 style="margin-top: 0; color: #9bdcff;">Failure-Frame Upstream State</h3>';
+                html += '<table style="width: 100%; color: #e0e0e0; font-size: 0.9rem;">';
+                html += `<tr><td>Failure Frame</td><td style="text-align: right;"><strong>${failureStateCard.failureFrame}</strong></td></tr>`;
+                html += `<tr><td>Lanes Detected</td><td style="text-align: right;">${p.numLanesDetected ?? '-'}</td></tr>`;
+                html += `<tr><td>Perception Left/Right</td><td style="text-align: right;">${p.leftLaneX !== null ? p.leftLaneX.toFixed(3) : '-'} / ${p.rightLaneX !== null ? p.rightLaneX.toFixed(3) : '-'}</td></tr>`;
+                html += `<tr><td>Perception Center vs GT Center</td><td style="text-align: right;">${p.centerX !== null ? p.centerX.toFixed(3) : '-'} / ${gt.laneCenterX !== null ? gt.laneCenterX.toFixed(3) : '-'}</td></tr>`;
+                html += `<tr><td>GT-Perception Center Mismatch</td><td style="text-align: right;">${failureStateCard.gtVsPerceptionCenterMismatchM !== null ? failureStateCard.gtVsPerceptionCenterMismatchM.toFixed(3) + 'm' : '-'}</td></tr>`;
+                html += `<tr><td>Using Stale Perception</td><td style="text-align: right; color: ${staleColor};">${p.usingStaleData ? 'YES' : 'NO'}</td></tr>`;
+                html += `<tr><td>Stale Reason</td><td style="text-align: right;">${this.escapeHtml(p.staleReason || '-')}</td></tr>`;
+                html += `<tr><td>Trajectory Ref X / Heading</td><td style="text-align: right;">${tr.refX !== null ? tr.refX.toFixed(3) : '-'} / ${tr.refHeading !== null ? tr.refHeading.toFixed(3) : '-'}</td></tr>`;
+                html += `<tr><td>Control Lateral Error / Steering</td><td style="text-align: right;">${ctrl.lateralError !== null ? ctrl.lateralError.toFixed(3) : '-'} / ${ctrl.steering !== null ? ctrl.steering.toFixed(3) : '-'}</td></tr>`;
+                html += '</table>';
+                html += `<div style="margin-top: 0.75rem;"><button style="padding: 0.3rem 0.8rem; background: #4a90e2; color: white; border: none; border-radius: 4px; cursor: pointer;" onclick="window.visualizer.jumpToFrame(${failureStateCard.failureFrame})">Jump to Failure Frame →</button></div>`;
+                html += '</div>';
             }
             
             if (summary.executive_summary.key_issues && summary.executive_summary.key_issues.length > 0) {
@@ -548,6 +945,70 @@ class Visualizer {
                 html += '</div>';
                 html += '</div>';
             }
+
+            // Top-down timing/projection diagnostics (instrumentation-only)
+            if (topdownDiagnostics && !topdownDiagnostics.error) {
+                const dtTraj = topdownDiagnostics.dt_topdown_traj || {};
+                const dtUnity = topdownDiagnostics.dt_topdown_unity || {};
+                const syncQuality = topdownDiagnostics.sync_quality || 'unknown';
+                const qualityColor = syncQuality === 'good' ? '#4caf50' : (syncQuality === 'warn' ? '#ffa500' : '#ff6b6b');
+                const missingTopdownProj = Array.isArray(topdownDiagnostics.topdown_projection_fields_missing)
+                    ? topdownDiagnostics.topdown_projection_fields_missing.length
+                    : 0;
+                const idxDeltaTraj = topdownDiagnostics.topdown_traj_index_delta || {};
+                const idxDeltaUnity = topdownDiagnostics.topdown_unity_index_delta || {};
+                const mismatchSuspected = !!topdownDiagnostics.timestamp_domain_mismatch_suspected;
+                const streamFrontUnity = topdownDiagnostics.stream_front_unity_dt_ms_stats || {};
+                const streamTopdownUnity = topdownDiagnostics.stream_topdown_unity_dt_ms_stats || {};
+                const streamTopdownFront = topdownDiagnostics.stream_topdown_front_dt_ms_stats || {};
+                const streamTopdownFrontFrame = topdownDiagnostics.stream_topdown_front_frame_id_delta_stats || {};
+                const streamFrontAge = topdownDiagnostics.stream_front_latest_age_ms_stats || {};
+                const streamTopdownAge = topdownDiagnostics.stream_topdown_latest_age_ms_stats || {};
+                const streamFrontQueue = topdownDiagnostics.stream_front_queue_depth_stats || {};
+                const streamTopdownQueue = topdownDiagnostics.stream_topdown_queue_depth_stats || {};
+                const streamFrontTsRealtime = topdownDiagnostics.stream_front_timestamp_minus_realtime_ms_stats || {};
+                const streamTopdownTsRealtime = topdownDiagnostics.stream_topdown_timestamp_minus_realtime_ms_stats || {};
+                const topdownOrthoStats = topdownDiagnostics.topdown_orthographic_size_stats || {};
+                const topdownMppStats = topdownDiagnostics.topdown_meters_per_pixel_stats || {};
+                const topdownForwardYStats = topdownDiagnostics.topdown_forward_y_stats || {};
+                const topdownReady = !!topdownDiagnostics.topdown_calibrated_projection_ready;
+                this.topdownCalibratedProjectionReady = topdownReady;
+                const topdownCalibratedToggle = document.getElementById('toggle-topdown-calibrated-projection');
+                if (topdownCalibratedToggle && !this.topdownProjectionToggleTouched) {
+                    // Default to calibrated projection only when diagnostics say it is safe.
+                    topdownCalibratedToggle.checked = topdownReady;
+                }
+                html += '<div style="background: #2a2a2a; padding: 1rem; border-radius: 8px; margin-bottom: 1.5rem; border-left: 4px solid #4a90e2;">';
+                html += '<h3 style="margin-top: 0; color: #4a90e2;">Top-Down Overlay Trust (Instrumentation)</h3>';
+                html += '<table style="width: 100%; color: #e0e0e0;">';
+                html += `<tr><td>Top-Down Sync Quality:</td><td style="text-align: right; color: ${qualityColor};">${syncQuality.toUpperCase()}</td></tr>`;
+                html += `<tr><td>Top-Down ↔ Trajectory Δt (P95):</td><td style="text-align: right;">${dtTraj.p95_ms !== null && dtTraj.p95_ms !== undefined ? dtTraj.p95_ms.toFixed(1) + ' ms' : '-'}</td></tr>`;
+                html += `<tr><td>Top-Down ↔ Trajectory Δt (Max):</td><td style="text-align: right;">${dtTraj.max_ms !== null && dtTraj.max_ms !== undefined ? dtTraj.max_ms.toFixed(1) + ' ms' : '-'}</td></tr>`;
+                html += `<tr><td>Top-Down ↔ Unity Δt (P95):</td><td style="text-align: right;">${dtUnity.p95_ms !== null && dtUnity.p95_ms !== undefined ? dtUnity.p95_ms.toFixed(1) + ' ms' : '-'}</td></tr>`;
+                html += `<tr><td>Top-Down ↔ Unity Δt (Max):</td><td style="text-align: right;">${dtUnity.max_ms !== null && dtUnity.max_ms !== undefined ? dtUnity.max_ms.toFixed(1) + ' ms' : '-'}</td></tr>`;
+                html += `<tr><td>Top-Down ↔ Trajectory Index Δ (P95 abs):</td><td style="text-align: right;">${idxDeltaTraj.p95_abs !== null && idxDeltaTraj.p95_abs !== undefined ? idxDeltaTraj.p95_abs.toFixed(1) + ' frames' : '-'}</td></tr>`;
+                html += `<tr><td>Top-Down ↔ Unity Index Δ (P95 abs):</td><td style="text-align: right;">${idxDeltaUnity.p95_abs !== null && idxDeltaUnity.p95_abs !== undefined ? idxDeltaUnity.p95_abs.toFixed(1) + ' frames' : '-'}</td></tr>`;
+                html += `<tr><td>Consume Lag Front↔Unity (P95 abs):</td><td style="text-align: right;">${streamFrontUnity.p95_abs !== null && streamFrontUnity.p95_abs !== undefined ? streamFrontUnity.p95_abs.toFixed(1) + ' ms' : '-'}</td></tr>`;
+                html += `<tr><td>Consume Lag TopDown↔Unity (P95 abs):</td><td style="text-align: right;">${streamTopdownUnity.p95_abs !== null && streamTopdownUnity.p95_abs !== undefined ? streamTopdownUnity.p95_abs.toFixed(1) + ' ms' : '-'}</td></tr>`;
+                html += `<tr><td>Consume Lag TopDown↔Front (P95 abs):</td><td style="text-align: right;">${streamTopdownFront.p95_abs !== null && streamTopdownFront.p95_abs !== undefined ? streamTopdownFront.p95_abs.toFixed(1) + ' ms' : '-'}</td></tr>`;
+                html += `<tr><td>Consume Frame Δ TopDown-Front (P95 abs):</td><td style="text-align: right;">${streamTopdownFrontFrame.p95_abs !== null && streamTopdownFrontFrame.p95_abs !== undefined ? streamTopdownFrontFrame.p95_abs.toFixed(1) + ' frames' : '-'}</td></tr>`;
+                html += `<tr><td>Bridge Front Latest Age (P95 abs):</td><td style="text-align: right;">${streamFrontAge.p95_abs !== null && streamFrontAge.p95_abs !== undefined ? streamFrontAge.p95_abs.toFixed(1) + ' ms' : '-'}</td></tr>`;
+                html += `<tr><td>Bridge TopDown Latest Age (P95 abs):</td><td style="text-align: right;">${streamTopdownAge.p95_abs !== null && streamTopdownAge.p95_abs !== undefined ? streamTopdownAge.p95_abs.toFixed(1) + ' ms' : '-'}</td></tr>`;
+                html += `<tr><td>Bridge Front Queue Depth (mean):</td><td style="text-align: right;">${streamFrontQueue.mean !== null && streamFrontQueue.mean !== undefined ? streamFrontQueue.mean.toFixed(1) : '-'}</td></tr>`;
+                html += `<tr><td>Bridge TopDown Queue Depth (mean):</td><td style="text-align: right;">${streamTopdownQueue.mean !== null && streamTopdownQueue.mean !== undefined ? streamTopdownQueue.mean.toFixed(1) : '-'}</td></tr>`;
+                html += `<tr><td>Front (timestamp - realtime) P95 abs:</td><td style="text-align: right;">${streamFrontTsRealtime.p95_abs !== null && streamFrontTsRealtime.p95_abs !== undefined ? streamFrontTsRealtime.p95_abs.toFixed(1) + ' ms' : '-'}</td></tr>`;
+                html += `<tr><td>TopDown (timestamp - realtime) P95 abs:</td><td style="text-align: right;">${streamTopdownTsRealtime.p95_abs !== null && streamTopdownTsRealtime.p95_abs !== undefined ? streamTopdownTsRealtime.p95_abs.toFixed(1) + ' ms' : '-'}</td></tr>`;
+                html += `<tr><td>Top-Down Projection Fields Missing:</td><td style="text-align: right; color: ${missingTopdownProj > 0 ? '#ffa500' : '#4caf50'};">${missingTopdownProj}</td></tr>`;
+                html += `<tr><td>Top-Down Ortho Size (mean):</td><td style="text-align: right;">${topdownOrthoStats.mean !== null && topdownOrthoStats.mean !== undefined ? topdownOrthoStats.mean.toFixed(2) : '-'}</td></tr>`;
+                html += `<tr><td>Top-Down Scale (m/px mean):</td><td style="text-align: right;">${topdownMppStats.mean !== null && topdownMppStats.mean !== undefined ? topdownMppStats.mean.toFixed(4) : '-'}</td></tr>`;
+                html += `<tr><td>Top-Down Forward Y (mean):</td><td style="text-align: right;">${topdownForwardYStats.mean !== null && topdownForwardYStats.mean !== undefined ? topdownForwardYStats.mean.toFixed(3) : '-'}</td></tr>`;
+                html += `<tr><td>Calibrated Projection Ready:</td><td style="text-align: right; color: ${topdownReady ? '#4caf50' : '#ffa500'};">${topdownReady ? 'YES' : 'NO'}</td></tr>`;
+                html += `<tr><td>Timestamp Domain Mismatch Suspected:</td><td style="text-align: right; color: ${mismatchSuspected ? '#ffa500' : '#4caf50'};">${mismatchSuspected ? 'YES' : 'NO'}</td></tr>`;
+                html += '</table>';
+                html += '<div style="margin-top: 0.5rem; color: #a0a0a0; font-size: 0.85rem;">';
+                html += 'Use this card to separate timing mismatch from projection/calibration gaps. No control behavior is affected.';
+                html += '</div></div>';
+            }
             
             // Helper function for color coding
             const getColorForValue = (value, thresholds) => {
@@ -601,6 +1062,11 @@ class Visualizer {
                 const rightLowColor = summary.perception_quality.right_lane_low_visibility_rate < 5 ? '#4caf50'
                     : summary.perception_quality.right_lane_low_visibility_rate < 15 ? '#ffa500' : '#ff6b6b';
                 html += `<tr><td>Right Lane Low Visibility:</td><td style="text-align: right; color: ${rightLowColor};">${summary.perception_quality.right_lane_low_visibility_rate.toFixed(1)}%</td></tr>`;
+            }
+            if (summary.perception_quality.right_lane_edge_contact_rate !== undefined) {
+                const edgeColor = summary.perception_quality.right_lane_edge_contact_rate < 20 ? '#4caf50'
+                    : summary.perception_quality.right_lane_edge_contact_rate < 50 ? '#ffa500' : '#ffb74d';
+                html += `<tr><td>Right Lane Edge Contact:</td><td style="text-align: right; color: ${edgeColor};">${summary.perception_quality.right_lane_edge_contact_rate.toFixed(1)}%</td></tr>`;
             }
             html += '</table></div>';
 
@@ -798,10 +1264,67 @@ class Visualizer {
             
             html += '</div>';
             summaryContent.innerHTML = html;
+            this.bindPerceptionQuestionsRunner();
             
         } catch (error) {
             console.error('Error loading summary:', error);
             summaryContent.innerHTML = `<p style="color: #ff6b6b; text-align: center; padding: 2rem;">Error loading summary: ${error.message}</p>`;
+        }
+    }
+
+    bindPerceptionQuestionsRunner() {
+        const runBtn = document.getElementById('run-perception-questions-btn');
+        if (!runBtn) return;
+        runBtn.onclick = () => this.runPerceptionQuestionsFromSummary();
+    }
+
+    async runPerceptionQuestionsFromSummary() {
+        if (!this.currentRecording) return;
+        const runBtn = document.getElementById('run-perception-questions-btn');
+        const statusEl = document.getElementById('run-perception-questions-status');
+        const parsedEl = document.getElementById('run-perception-questions-parsed');
+        const outputEl = document.getElementById('run-perception-questions-output');
+        if (!runBtn || !statusEl || !parsedEl || !outputEl) return;
+
+        runBtn.disabled = true;
+        runBtn.style.opacity = '0.7';
+        runBtn.style.cursor = 'not-allowed';
+        statusEl.textContent = 'Running analyzer...';
+        statusEl.style.color = '#ffa500';
+        parsedEl.innerHTML = '';
+        outputEl.style.display = 'none';
+        outputEl.textContent = '';
+
+        try {
+            const response = await fetch(
+                `/api/recording/${this.currentRecording}/run-perception-questions`,
+                { method: 'POST' }
+            );
+            const data = await response.json();
+            if (!response.ok || data.error) {
+                throw new Error(data.error || `HTTP ${response.status}`);
+            }
+
+            const questions = data.questions || {};
+            const ordered = ['q1', 'q2', 'q3', 'q4', 'q5', 'q6', 'q7', 'q8'];
+            const items = ordered
+                .filter((q) => questions[q] !== undefined)
+                .map((q) => `${q.toUpperCase()}: ${this.escapeHtml(questions[q])}`);
+            parsedEl.innerHTML = items.length > 0
+                ? `<strong>Parsed Results:</strong> ${items.join(' | ')}`
+                : '<strong>Parsed Results:</strong> unavailable';
+
+            outputEl.textContent = data.output || '(no output)';
+            outputEl.style.display = 'block';
+            statusEl.textContent = `Completed (exit code ${data.return_code})`;
+            statusEl.style.color = data.ok ? '#4caf50' : '#ff6b6b';
+        } catch (error) {
+            statusEl.textContent = `Failed: ${error.message}`;
+            statusEl.style.color = '#ff6b6b';
+        } finally {
+            runBtn.disabled = false;
+            runBtn.style.opacity = '1';
+            runBtn.style.cursor = 'pointer';
         }
     }
     
@@ -837,9 +1360,13 @@ class Visualizer {
             // Summary
             if (issuesData.summary) {
                 const summary = issuesData.summary;
+                const lowCount = Number(summary?.by_severity?.low || 0);
+                const totalCount = Number(summary?.total_issues || 0);
+                const actionableCount = Math.max(0, totalCount - lowCount);
                 html += '<div style="background: #2a2a2a; padding: 1rem; border-radius: 8px; margin-bottom: 1rem;">';
                 html += '<h3 style="margin-top: 0; color: #4a90e2;">Issues Summary</h3>';
                 html += `<div style="color: #e0e0e0; margin-bottom: 0.5rem;">Total Issues: <strong style="color: ${summary.total_issues > 0 ? '#ff6b6b' : '#4caf50'}">${summary.total_issues}</strong></div>`;
+                html += `<div style="color: #9fb3c8; margin-bottom: 0.25rem; font-size: 0.9rem;">Actionable by default (critical/high/medium): <strong>${actionableCount}</strong></div>`;
                 
                 if (summary.by_severity) {
                     html += '<div style="margin-top: 0.5rem; font-size: 0.9rem;">';
@@ -856,23 +1383,73 @@ class Visualizer {
                     html += typeList;
                     html += '</div>';
                 }
+                if (summary.road_departure_start_frame !== null && summary.road_departure_start_frame !== undefined) {
+                    html += `<div style="margin-top: 0.5rem; font-size: 0.9rem; color: #ffb74d;">Road departure starts: frame <strong>${summary.road_departure_start_frame}</strong></div>`;
+                }
+                if (summary.centerline_cross_start_frame !== null && summary.centerline_cross_start_frame !== undefined) {
+                    html += `<div style="margin-top: 0.25rem; font-size: 0.9rem; color: #ef5350;">Centerline crossed: frame <strong>${summary.centerline_cross_start_frame}</strong></div>`;
+                }
                 
                 html += '</div>';
             }
-            
-            // Filter buttons
+
+            // Filters and visibility controls (show before timeline for discoverability)
             html += '<div style="margin-bottom: 1rem; display: flex; gap: 0.5rem; flex-wrap: wrap;">';
             html += '<button class="issue-filter-btn active" data-filter="all" style="padding: 0.5rem 1rem; background: #4a90e2; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 0.9rem;">All</button>';
             html += '<button class="issue-filter-btn" data-filter="extreme_coefficients" style="padding: 0.5rem 1rem; background: #555; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 0.9rem;">Extreme Coefficients</button>';
             html += '<button class="issue-filter-btn" data-filter="perception_instability" style="padding: 0.5rem 1rem; background: #555; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 0.9rem;">Perception Instability</button>';
+            html += '<button class="issue-filter-btn" data-filter="right_lane_low_visibility" style="padding: 0.5rem 1rem; background: #555; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 0.9rem;">Right Lane Low Visibility</button>';
+            html += '<button class="issue-filter-btn" data-filter="right_lane_edge_contact" style="padding: 0.5rem 1rem; background: #555; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 0.9rem;">Right Lane Edge Contact</button>';
             html += '<button class="issue-filter-btn" data-filter="high_lateral_error" style="padding: 0.5rem 1rem; background: #555; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 0.9rem;">High Lateral Error</button>';
             html += '<button class="issue-filter-btn" data-filter="negative_control_correlation" style="padding: 0.5rem 1rem; background: #555; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 0.9rem;">Negative Correlation</button>';
             html += '<button class="issue-filter-btn" data-filter="perception_failure" style="padding: 0.5rem 1rem; background: #555; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 0.9rem;">Perception Failure</button>';
             html += '<button class="issue-filter-btn" data-filter="straight_sign_mismatch" style="padding: 0.5rem 1rem; background: #555; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 0.9rem;">Straight Sign Mismatch</button>';
+            html += '<button class="issue-filter-btn" data-filter="centerline_cross" style="padding: 0.5rem 1rem; background: #555; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 0.9rem;">Centerline Cross</button>';
             html += '<button class="issue-filter-btn" data-filter="out_of_lane" style="padding: 0.5rem 1rem; background: #555; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 0.9rem;">Out of Lane</button>';
             html += '<button class="issue-filter-btn" data-filter="emergency_stop" style="padding: 0.5rem 1rem; background: #555; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 0.9rem;">Emergency Stop</button>';
             html += '<button class="issue-filter-btn" data-filter="heading_jump" style="padding: 0.5rem 1rem; background: #555; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 0.9rem;">Heading Jump</button>';
             html += '</div>';
+            html += '<div style="margin-bottom: 0.75rem; display: flex; align-items: center; gap: 0.5rem; color: #9fb3c8; font-size: 0.9rem;">';
+            html += `<label style="display:flex; align-items:center; gap:0.4rem; cursor:pointer;"><input type="checkbox" id="toggle-show-informational-issues" ${this.showInformationalIssues ? 'checked' : ''}> Show informational/low-severity issues</label>`;
+            html += '</div>';
+
+            // Causal timeline (respect informational visibility toggle)
+            const timelineEvents = Array.isArray(issuesData.causal_timeline)
+                ? issuesData.causal_timeline.filter((event) =>
+                    this.showInformationalIssues || String(event?.severity || '').toLowerCase() !== 'low'
+                )
+                : [];
+            if (timelineEvents.length > 0) {
+                const phaseColor = {
+                    perception: '#4fc3f7',
+                    trajectory: '#ba68c8',
+                    control: '#ffb74d',
+                    downstream: '#ef5350',
+                };
+                const phaseIcon = {
+                    perception: '👁️',
+                    trajectory: '🛣️',
+                    control: '🎛️',
+                    downstream: '🚨',
+                };
+                html += '<div style="background: #2a2a2a; padding: 1rem; border-radius: 8px; margin-bottom: 1rem;">';
+                html += '<h3 style="margin-top: 0; color: #4a90e2;">Causal Event Timeline</h3>';
+                html += '<div style="display: flex; flex-direction: column; gap: 0.5rem;">';
+                timelineEvents.forEach((event, idx) => {
+                    const p = event.phase || 'downstream';
+                    const color = phaseColor[p] || '#888';
+                    const icon = phaseIcon[p] || '⚠️';
+                    const frame = Number(event.frame || 0);
+                    html += `<div style="display: flex; gap: 0.6rem; align-items: center; background: #1f1f1f; border-left: 3px solid ${color}; padding: 0.5rem 0.7rem; border-radius: 4px;">`;
+                    html += `<div style="color: ${color}; min-width: 84px; font-size: 0.82rem; font-weight: bold;">${icon} ${this.escapeHtml(p)}</div>`;
+                    html += `<div style="color: #cfd8dc; font-size: 0.82rem; min-width: 72px;">F${frame}</div>`;
+                    html += `<div style="color: #e0e0e0; font-size: 0.86rem; flex: 1;">${this.escapeHtml(event.type || 'event')}: ${this.escapeHtml(event.description || '')}</div>`;
+                    html += `<button style="padding: 0.2rem 0.6rem; background: #4a90e2; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 0.8rem;" onclick="window.visualizer.jumpToFrame(${frame})">Jump</button>`;
+                    html += `</div>`;
+                });
+                html += '</div>';
+                html += '</div>';
+            }
             
             // Issues list
             if (issuesData.issues && issuesData.issues.length > 0) {
@@ -889,20 +1466,26 @@ class Visualizer {
                     const typeIcon = {
                         'extreme_coefficients': '📐',
                         'perception_instability': '📊',
+                        'right_lane_low_visibility': '👀',
+                        'right_lane_edge_contact': '🧭',
                         'high_lateral_error': '📏',
                         'negative_control_correlation': '↔️',
                         'perception_failure': '👁️',
                         'straight_sign_mismatch': '↩️',
+                        'centerline_cross': '🚧',
                         'out_of_lane': '🚫',
                         'emergency_stop': '🛑',
                         'heading_jump': '🔄'
                     }[issue.type] || '⚠️';
                     
-                    html += `<div class="issue-item" data-issue-type="${issue.type}" style="background: #2a2a2a; padding: 1rem; border-radius: 8px; border-left: 4px solid ${severityColor}; cursor: pointer;" onclick="window.visualizer.jumpToFrame(${issue.frame})">`;
+                    html += `<div class="issue-item" data-issue-type="${issue.type}" data-issue-severity="${issue.severity || 'unknown'}" style="background: #2a2a2a; padding: 1rem; border-radius: 8px; border-left: 4px solid ${severityColor}; cursor: pointer;" onclick="window.visualizer.jumpToFrame(${issue.frame})">`;
                     html += `<div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 0.5rem;">`;
                     html += `<div style="flex: 1;">`;
                     html += `<div style="font-weight: bold; color: ${severityColor}; margin-bottom: 0.25rem;">${typeIcon} Frame ${issue.frame}: ${issue.type.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}</div>`;
                     html += `<div style="color: #e0e0e0; font-size: 0.9rem;">${issue.description}</div>`;
+                    if (issue.type === 'right_lane_low_visibility') {
+                        html += '<div style="margin-top: 0.35rem; color: #9fb3c8; font-size: 0.82rem;">Inspect with overlays: <strong>Model Perception Fit Points</strong> + <strong>Segmentation Fit Range</strong> (and CV ROI only if debugging CV fallback), then compare with Trajectory tab `perception_center_x` and Diagnostics GT-vs-Perception hotspots.</div>';
+                    }
                     html += `</div>`;
                     html += `<button style="padding: 0.25rem 0.75rem; background: #4a90e2; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 0.85rem; white-space: nowrap;" onclick="event.stopPropagation(); window.visualizer.jumpToFrame(${issue.frame})">Jump →</button>`;
                     html += `</div>`;
@@ -923,10 +1506,25 @@ class Visualizer {
             
             // Setup filter buttons
             const filterButtons = issuesContent.querySelectorAll('.issue-filter-btn');
+            const issueItems = issuesContent.querySelectorAll('.issue-item');
+            const informationalToggle = issuesContent.querySelector('#toggle-show-informational-issues');
+            let activeFilter = 'all';
+
+            const applyIssueVisibility = () => {
+                const showInformational = Boolean(this.showInformationalIssues);
+                issueItems.forEach(item => {
+                    const typeMatch = activeFilter === 'all' || item.dataset.issueType === activeFilter;
+                    const sev = String(item.dataset.issueSeverity || '').toLowerCase();
+                    const isInformational = sev === 'low';
+                    const severityMatch = showInformational || !isInformational;
+                    item.style.display = (typeMatch && severityMatch) ? 'block' : 'none';
+                });
+            };
+
             filterButtons.forEach(btn => {
                 btn.addEventListener('click', (e) => {
                     e.stopPropagation();
-                    const filter = btn.dataset.filter;
+                    activeFilter = btn.dataset.filter;
                     
                     // Update button states
                     filterButtons.forEach(b => {
@@ -939,17 +1537,16 @@ class Visualizer {
                         }
                     });
                     
-                    // Filter issues
-                    const issueItems = issuesContent.querySelectorAll('.issue-item');
-                    issueItems.forEach(item => {
-                        if (filter === 'all' || item.dataset.issueType === filter) {
-                            item.style.display = 'block';
-                        } else {
-                            item.style.display = 'none';
-                        }
-                    });
+                    applyIssueVisibility();
                 });
             });
+            if (informationalToggle) {
+                informationalToggle.addEventListener('change', () => {
+                    this.showInformationalIssues = Boolean(informationalToggle.checked);
+                    applyIssueVisibility();
+                });
+            }
+            applyIssueVisibility();
             
         } catch (error) {
             console.error('Error loading issues:', error);
@@ -965,11 +1562,25 @@ class Visualizer {
         
         // Check if "Analyze to Failure" checkbox is checked
         const analyzeToFailure = document.getElementById('analyze-to-failure')?.checked || false;
+        const entryStartDistance = parseFloat(document.getElementById('diag-entry-start-distance')?.value || `${this.curveEntryStartDistanceM}`);
+        const entryWindowDistance = parseFloat(document.getElementById('diag-entry-window-distance')?.value || `${this.curveEntryWindowDistanceM}`);
         
         diagnosticsContent.innerHTML = '<p style="color: #888; text-align: center; padding: 2rem;">Loading diagnostics...</p>';
         
         try {
-            const url = `/api/recording/${this.currentRecording}/diagnostics${analyzeToFailure ? '?analyze_to_failure=true' : ''}`;
+            const params = new URLSearchParams();
+            if (analyzeToFailure) {
+                params.set('analyze_to_failure', 'true');
+            }
+            if (Number.isFinite(entryStartDistance)) {
+                this.curveEntryStartDistanceM = entryStartDistance;
+                params.set('curve_entry_start_distance_m', String(entryStartDistance));
+            }
+            if (Number.isFinite(entryWindowDistance)) {
+                this.curveEntryWindowDistanceM = entryWindowDistance;
+                params.set('curve_entry_window_distance_m', String(entryWindowDistance));
+            }
+            const url = `/api/recording/${this.currentRecording}/diagnostics?${params.toString()}`;
             const response = await fetch(url);
             if (!response.ok) {
                 throw new Error(`HTTP ${response.status}: ${response.statusText}`);
@@ -1060,6 +1671,46 @@ class Visualizer {
                     html += `<tr><td>Accuracy vs Ground Truth (RMSE):</td><td style="text-align: right; color: ${accColor};">${traj.accuracy_vs_ground_truth.rmse.toFixed(3)}m</td></tr>`;
                 }
                 html += '</table>';
+
+                if (traj.perception_trajectory_attribution) {
+                    const attr = traj.perception_trajectory_attribution;
+                    const label = attr.attribution_label || 'unknown';
+                    const labelColor = label.includes('perception-driven')
+                        ? '#ffb74d'
+                        : (label.includes('trajectory-logic') ? '#ef5350' : '#4caf50');
+                    html += '<div style="background: #1a1a1a; padding: 0.75rem; border-radius: 4px; border-left: 3px solid #9b59b6; margin-top: 1rem;">';
+                    html += '<strong style="color: #d2a8ff;">Perception → Trajectory Attribution</strong><br/>';
+                    html += `<div style="margin-top: 0.4rem; color: ${labelColor};"><strong>${this.escapeHtml(label)}</strong></div>`;
+                    html += '<table style="width: 100%; color: #e0e0e0; margin-top: 0.5rem;">';
+                    html += `<tr><td>Ref vs Perception RMSE:</td><td style="text-align: right;">${fmtOpt(attr.ref_vs_perception_rmse, 3)}m</td></tr>`;
+                    html += `<tr><td>Ref vs Perception Bias:</td><td style="text-align: right;">${fmtOpt(attr.ref_vs_perception_bias, 3)}m</td></tr>`;
+                    html += `<tr><td>Ref vs Perception Corr:</td><td style="text-align: right;">${fmtOpt(attr.ref_vs_perception_correlation, 3)}</td></tr>`;
+                    html += `<tr><td>Best Lag:</td><td style="text-align: right;">${attr.best_lag_frames === null || attr.best_lag_frames === undefined ? '-' : `${attr.best_lag_frames} frames`}</td></tr>`;
+                    html += `<tr><td>Lag Correlation:</td><td style="text-align: right;">${fmtOpt(attr.best_lag_correlation, 3)}</td></tr>`;
+                    html += `<tr><td>Perception→Ref Gain:</td><td style="text-align: right;">${fmtOpt(attr.gain_perception_to_ref, 3)}</td></tr>`;
+                    html += `<tr><td>GT vs Perception RMSE:</td><td style="text-align: right;">${fmtOpt(attr.gt_perception_rmse, 3)}m</td></tr>`;
+                    html += `<tr><td>GT vs Trajectory RMSE:</td><td style="text-align: right;">${fmtOpt(attr.gt_ref_rmse, 3)}m</td></tr>`;
+                    html += `<tr><td>Stale Perception Rate:</td><td style="text-align: right;">${fmtOpt(attr.stale_perception_rate_pct, 1)}%</td></tr>`;
+                    html += '</table></div>';
+                }
+
+                if (traj.perception_trajectory_hotspots && traj.perception_trajectory_hotspots.length > 0) {
+                    html += '<div style="background: #1a1a1a; padding: 0.75rem; border-radius: 4px; border-left: 3px solid #9b59b6; margin-top: 1rem;">';
+                    html += '<strong style="color: #d2a8ff;">Perception → Trajectory Hotspots</strong><br/>';
+                    html += '<div style="color: #888; font-size: 0.85rem; margin-bottom: 0.5rem;">Frames where perception-vs-GT error is highest, side-by-side with trajectory.</div>';
+                    html += '<div style="display: flex; flex-direction: column; gap: 0.5rem;">';
+                    traj.perception_trajectory_hotspots.forEach((spot) => {
+                        html += '<div style="display: flex; justify-content: space-between; align-items: center; padding: 0.5rem; background: #2a2a2a; border-radius: 6px;">';
+                        html += '<div style="color: #e0e0e0; font-size: 0.9rem;">';
+                        html += `<strong>Frame ${spot.frame}</strong> · t=${spot.time.toFixed(2)}s · ${spot.segment}<br/>`;
+                        html += `perc_vs_gt=${fmtOpt(spot.perception_vs_gt, 3)}m · ref_vs_gt=${fmtOpt(spot.ref_vs_gt, 3)}m · ref_vs_perc=${fmtOpt(spot.ref_vs_perception, 3)}m<br/>`;
+                        html += `gt_center=${fmtOpt(spot.gt_center_x, 3)} · perc_center=${fmtOpt(spot.perception_center_x, 3)} · ref_x=${fmtOpt(spot.ref_x, 3)} · curv=${fmtOpt(spot.curvature, 4)}`;
+                        html += '</div>';
+                        html += `<button style="padding: 0.25rem 0.75rem; background: #7b61ff; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 0.85rem;" onclick="window.visualizer.jumpToFrame(${spot.frame})">Jump →</button>`;
+                        html += '</div>';
+                    });
+                    html += '</div></div>';
+                }
                 
                 if (traj.issues && traj.issues.length > 0) {
                     html += '<div style="background: #3a1a1a; padding: 0.75rem; border-radius: 4px; border-left: 3px solid #ff6b6b; margin-top: 1rem;">';
@@ -1133,6 +1784,118 @@ class Visualizer {
                     }
                 }
                 html += '</table>';
+
+                if (ctrl.steering_limiter_analysis && ctrl.steering_limiter_analysis.available) {
+                    const limiter = ctrl.steering_limiter_analysis;
+                    const dominant = limiter.dominant_stage || 'none';
+                    const dominantPct = limiter.dominant_stage_pct || 0;
+                    const domColor = dominant === 'hard_clip' || dominant === 'jerk_limit'
+                        ? '#ff6b6b'
+                        : (dominant === 'rate_limit' || dominant === 'smoothing' ? '#ffa500' : '#4caf50');
+                    html += '<div style="background: #1a1a1a; padding: 0.75rem; border-radius: 4px; margin-top: 1rem; border-left: 3px solid #7b61ff;">';
+                    html += '<strong style="color: #b39bff;">Steering Limiter Root Cause</strong><br/>';
+                    html += `<div style="margin-top: 0.35rem; color: ${domColor};">Dominant stage: <strong>${dominant}</strong> (${dominantPct.toFixed(1)}% of limited frames)</div>`;
+                    html += `<div style="margin-top: 0.35rem; color: #e0e0e0;">Limited frames: ${limiter.total_limited_frames}</div>`;
+                    html += '<table style="width: 100%; color: #e0e0e0; margin-top: 0.5rem;">';
+                    html += `<tr><td>Rate Delta Mean:</td><td style="text-align: right;">${(limiter.rate_delta_mean || 0).toFixed(4)}</td></tr>`;
+                    html += `<tr><td>Jerk Delta Mean:</td><td style="text-align: right;">${(limiter.jerk_delta_mean || 0).toFixed(4)}</td></tr>`;
+                    html += `<tr><td>Hard Clip Delta Mean:</td><td style="text-align: right;">${(limiter.hard_clip_delta_mean || 0).toFixed(4)}</td></tr>`;
+                    html += `<tr><td>Smoothing Delta Mean:</td><td style="text-align: right;">${(limiter.smoothing_delta_mean || 0).toFixed(4)}</td></tr>`;
+                    html += '</table>';
+
+                    // Graphical steering waterfall chart (Stage 6)
+                    const stageSeries = [
+                        { key: 'rate_limit', label: 'Rate Limit', mean: limiter.rate_delta_mean || 0, color: '#ffb74d' },
+                        { key: 'jerk_limit', label: 'Jerk Limit', mean: limiter.jerk_delta_mean || 0, color: '#ef5350' },
+                        { key: 'hard_clip', label: 'Hard Clip', mean: limiter.hard_clip_delta_mean || 0, color: '#ab47bc' },
+                        { key: 'smoothing', label: 'Smoothing', mean: limiter.smoothing_delta_mean || 0, color: '#42a5f5' },
+                    ];
+                    const totalMeanDelta = stageSeries.reduce((s, x) => s + Math.max(0, x.mean), 0);
+                    const counts = limiter.dominant_counts || {};
+                    const totalLimited = Math.max(1, limiter.total_limited_frames || 0);
+
+                    html += '<div style="margin-top: 0.8rem; background: #20242e; border: 1px solid #3b4252; border-radius: 6px; padding: 0.7rem;">';
+                    html += '<div style="color: #d2a8ff; font-weight: bold; margin-bottom: 0.4rem;">Graphical Steering Waterfall</div>';
+                    html += '<div style="color: #888; font-size: 0.82rem; margin-bottom: 0.55rem;">Bar length = mean steering reduction at each limiter stage. Dashed line markers show dominant-frame share per stage.</div>';
+
+                    stageSeries.forEach((stage) => {
+                        const widthPct = totalMeanDelta > 1e-9 ? (100.0 * Math.max(0, stage.mean) / totalMeanDelta) : 0.0;
+                        const sharePct = 100.0 * ((counts[stage.key] || 0) / totalLimited);
+                        html += '<div style="display: grid; grid-template-columns: 120px 1fr 92px; gap: 0.5rem; align-items: center; margin: 0.35rem 0;">';
+                        html += `<div style="color: #cfd8dc; font-size: 0.85rem;">${stage.label}</div>`;
+                        html += '<div style="position: relative; height: 12px; background: #131722; border-radius: 6px; overflow: hidden;">';
+                        html += `<div style="position:absolute; left:0; top:0; bottom:0; width:${widthPct.toFixed(1)}%; background:${stage.color};"></div>`;
+                        html += `<div style="position:absolute; left:${sharePct.toFixed(1)}%; top:0; bottom:0; border-left: 1px dashed #ffffffcc;"></div>`;
+                        html += '</div>';
+                        html += `<div style="color: #cfd8dc; font-size: 0.82rem; text-align: right;">Δ${(stage.mean || 0).toFixed(4)} · ${sharePct.toFixed(1)}%</div>`;
+                        html += '</div>';
+                    });
+
+                    html += '<div style="color: #7f8fa6; font-size: 0.8rem; margin-top: 0.35rem;">';
+                    html += `Total mean shaping Δ: ${totalMeanDelta.toFixed(4)} · Limited frames: ${limiter.total_limited_frames || 0}`;
+                    html += '</div>';
+                    html += '</div>';
+
+                    if (limiter.phase_breakdown) {
+                        const pb = limiter.phase_breakdown;
+                        const phaseRows = [
+                            ['pre_curve', pb.pre_curve],
+                            ['curve_entry', pb.curve_entry],
+                            ['curve_maintain', pb.curve_maintain],
+                            ['overall', pb.overall],
+                        ];
+                        html += `<div style="margin-top: 0.5rem; color: #e0e0e0; font-size: 0.9rem;">`;
+                        html += `Curve start frame: ${pb.curve_start_frame ?? '-'} (${pb.curve_start_source || 'unknown'})`;
+                        html += `</div>`;
+                        html += '<table style="width: 100%; color: #e0e0e0; margin-top: 0.5rem; font-size: 0.9rem;">';
+                        html += '<tr><th style="text-align:left;">Phase</th><th style="text-align:right;">Limited</th><th style="text-align:right;">Dominant</th><th style="text-align:right;">Dominant %</th></tr>';
+                        phaseRows.forEach(([name, info]) => {
+                            if (!info) return;
+                            html += `<tr><td>${name}</td><td style="text-align:right;">${info.limited_frames}/${info.frames}</td><td style="text-align:right;">${info.dominant_stage || 'none'}</td><td style="text-align:right;">${(info.dominant_pct || 0).toFixed(1)}%</td></tr>`;
+                        });
+                        html += '</table>';
+                        if (pb.curve_entry && pb.curve_entry.limited_frames > 0) {
+                            html += `<div style="margin-top: 0.35rem; color: #b39bff;">Curve-entry dominant limiter: <strong>${pb.curve_entry.dominant_stage}</strong> (${(pb.curve_entry.dominant_pct || 0).toFixed(1)}%)</div>`;
+                        }
+                    }
+                    html += '</div>';
+                }
+
+                if (ctrl.curve_entry_feasibility) {
+                    const feas = ctrl.curve_entry_feasibility;
+                    const cls = feas.primary_classification || 'mixed-or-unclear';
+                    const clsColorMap = {
+                        'speed-limited': '#ff6b6b',
+                        'steering-authority-limited': '#ff6b6b',
+                        'perception-limited': '#ffa500',
+                        'mixed-or-unclear': '#4a90e2',
+                    };
+                    const clsColor = clsColorMap[cls] || '#4a90e2';
+                    const speedFeas = feas.speed_feasibility || {};
+                    const auth = feas.steering_authority || {};
+                    const deltas = feas.limiter_deltas_entry_mean || {};
+                    const speedLimitedPct = speedFeas.speed_limited_pct || 0;
+
+                    html += '<div style="background: #1a1a1a; padding: 0.75rem; border-radius: 4px; margin-top: 1rem; border-left: 3px solid #00bcd4;">';
+                    html += '<strong style="color: #00e5ff;">Curve Entry Feasibility (Full Story)</strong><br/>';
+                    html += `<div style="margin-top: 0.35rem; color: ${clsColor};">Primary classification: <strong>${cls}</strong></div>`;
+                    html += `<div style="margin-top: 0.35rem; color: #e0e0e0;">Window: frames ${feas.entry_start_frame ?? '-'}-${feas.entry_end_frame ?? '-'} `
+                        + `(${feas.entry_frames ?? 0} frames), curve start ${feas.curve_start_frame ?? '-'} (${feas.curve_start_source || 'unknown'})</div>`;
+                    html += `<div style="margin-top: 0.2rem; color: #9ad6db; font-size: 0.9rem;">Distance window target: `
+                        + `${fmtOpt(feas.entry_start_distance_target_m, 2)}m + ${fmtOpt(feas.entry_window_distance_target_m, 2)}m `
+                        + `(used ${fmtOpt(feas.entry_start_distance_used_m, 2)}m to ${fmtOpt(feas.entry_end_distance_used_m, 2)}m)</div>`;
+
+                    html += '<table style="width: 100%; color: #e0e0e0; margin-top: 0.5rem;">';
+                    html += `<tr><td>v²·κ Mean / Max (budget ${fmtOpt(speedFeas.ay_budget, 2)}):</td><td style="text-align: right;">${fmtOpt(speedFeas.ay_mean, 3)} / ${fmtOpt(speedFeas.ay_max, 3)}</td></tr>`;
+                    html += `<tr><td>Speed-Limited Entry Frames:</td><td style="text-align: right; color: ${speedLimitedPct >= 30 ? '#ff6b6b' : '#4caf50'};">${fmtOpt(speedLimitedPct, 1)}%</td></tr>`;
+                    html += `<tr><td>Steering |pre| / |final| Mean:</td><td style="text-align: right;">${fmtOpt(auth.pre_abs_mean, 3)} / ${fmtOpt(auth.final_abs_mean, 3)}</td></tr>`;
+                    html += `<tr><td>Authority Gap Mean:</td><td style="text-align: right;">${fmtOpt(auth.authority_gap_mean, 3)}</td></tr>`;
+                    html += `<tr><td>Transfer Ratio Mean:</td><td style="text-align: right;">${fmtOpt(auth.transfer_ratio_mean, 3)}</td></tr>`;
+                    html += `<tr><td>Stale Perception During Entry:</td><td style="text-align: right; color: ${(feas.stale_perception_pct || 0) >= 50 ? '#ff6b6b' : '#4caf50'};">${fmtOpt(feas.stale_perception_pct, 1)}%</td></tr>`;
+                    html += `<tr><td>Limiter Δ Mean (rate/jerk/clip/smooth):</td><td style="text-align: right;">${fmtOpt(deltas.rate, 3)} / ${fmtOpt(deltas.jerk, 3)} / ${fmtOpt(deltas.hard_clip, 3)} / ${fmtOpt(deltas.smoothing, 3)}</td></tr>`;
+                    html += '</table>';
+                    html += '</div>';
+                }
 
                 // Control quality breakdown (penalty drivers)
                 const breakdown = [];
@@ -1245,6 +2008,32 @@ class Visualizer {
                     html += '<div style="color: #4caf50; font-size: 0.9rem;">No significant disagreements detected.</div>';
                     html += '</div>';
                 }
+
+                if (ctrl.gt_perception_hotspots && ctrl.gt_perception_hotspots.length > 0) {
+                    html += '<div style="background: #1a1a1a; padding: 0.75rem; border-radius: 4px; border-left: 3px solid #9b59b6; margin-top: 1rem;">';
+                    html += '<strong style="color: #d2a8ff;">GT vs Perception Lateral Error (Side-by-Side)</strong><br/>';
+                    html += '<div style="color: #888; font-size: 0.85rem; margin-bottom: 0.5rem;">Top frames by |perception_error - gt_error|.</div>';
+                    html += '<div style="display: flex; flex-direction: column; gap: 0.5rem;">';
+                    ctrl.gt_perception_hotspots.forEach((spot) => {
+                        const straight = spot.is_straight === null || spot.is_straight === undefined
+                            ? 'n/a'
+                            : (spot.is_straight ? 'yes' : 'no');
+                        html += '<div style="display: flex; justify-content: space-between; align-items: center; padding: 0.5rem; background: #2a2a2a; border-radius: 6px;">';
+                        html += '<div style="color: #e0e0e0; font-size: 0.9rem;">';
+                        html += `<strong>Frame ${spot.frame}</strong> · t=${spot.time.toFixed(2)}s · diff=${fmtOpt(spot.diff, 3)}m · ${spot.segment} · straight=${straight}<br/>`;
+                        html += `gt_err=${fmtOpt(spot.gt_error, 3)}m · perc_err=${fmtOpt(spot.perception_error, 3)}m · ctrl_err=${fmtOpt(spot.control_lateral_error, 3)}m<br/>`;
+                        html += `gt_center=${fmtOpt(spot.gt_center_x, 3)} · perc_center=${fmtOpt(spot.perception_center_x, 3)} · curv=${fmtOpt(spot.curvature, 4)} · gt_curv=${fmtOpt(spot.gt_curvature, 4)}`;
+                        html += '</div>';
+                        html += `<button style="padding: 0.25rem 0.75rem; background: #7b61ff; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 0.85rem;" onclick="window.visualizer.jumpToFrame(${spot.frame})">Jump →</button>`;
+                        html += '</div>';
+                    });
+                    html += '</div></div>';
+                } else {
+                    html += '<div style="background: #1a1a1a; padding: 0.75rem; border-radius: 4px; border-left: 3px solid #9b59b6; margin-top: 1rem;">';
+                    html += '<strong style="color: #d2a8ff;">GT vs Perception Lateral Error (Side-by-Side)</strong><br/>';
+                    html += '<div style="color: #4caf50; font-size: 0.9rem;">No significant GT-perception disagreement hotspots detected.</div>';
+                    html += '</div>';
+                }
                 
                 if (ctrl.accel_hotspots && ctrl.accel_hotspots.length > 0) {
                     html += '<div style="background: #1a1a1a; padding: 0.75rem; border-radius: 4px; border-left: 3px solid #4a90e2; margin-top: 1rem;">';
@@ -1290,9 +2079,30 @@ class Visualizer {
                     html += '</div>';
                 }
 
-                if (summary.turn_bias) {
-                    const turnBias = summary.turn_bias;
-                    const align = summary.alignment_summary || null;
+                if (ctrl.steering_limiter_hotspots && ctrl.steering_limiter_hotspots.length > 0) {
+                    html += '<div style="background: #1a1a1a; padding: 0.75rem; border-radius: 4px; border-left: 3px solid #7b61ff; margin-top: 1rem;">';
+                    html += '<strong style="color: #b39bff;">Steering Limiter Hotspots</strong><br/>';
+                    html += '<div style="color: #888; font-size: 0.85rem; margin-bottom: 0.5rem;">Top frames where command shaping most reduced steering authority.</div>';
+                    html += '<div style="display: flex; flex-direction: column; gap: 0.5rem;">';
+                    ctrl.steering_limiter_hotspots.forEach((spot) => {
+                        html += '<div style="display: flex; justify-content: space-between; align-items: center; padding: 0.5rem; background: #2a2a2a; border-radius: 6px;">';
+                        html += '<div style="color: #e0e0e0; font-size: 0.9rem;">';
+                        html += `<strong>Frame ${spot.frame}</strong> · t=${spot.time.toFixed(2)}s · dominant=${spot.dominant_stage} · Δ=${spot.dominant_delta.toFixed(4)}<br/>`;
+                        html += `rate=${spot.rate_delta.toFixed(4)} · jerk=${spot.jerk_delta.toFixed(4)} · hard=${spot.hard_clip_delta.toFixed(4)} · smooth=${spot.smoothing_delta.toFixed(4)}`;
+                        if (spot.lateral_error !== null && spot.lateral_error !== undefined) {
+                            html += ` · lat_err=${spot.lateral_error.toFixed(3)}m`;
+                        }
+                        html += ` · steer=${spot.steering.toFixed(3)} · curv=${spot.curvature.toFixed(4)}`;
+                        html += '</div>';
+                        html += `<button style="padding: 0.25rem 0.75rem; background: #4a90e2; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 0.85rem;" onclick="window.visualizer.jumpToFrame(${spot.frame})">Jump →</button>`;
+                        html += '</div>';
+                    });
+                    html += '</div></div>';
+                }
+
+                if (ctrl.turn_bias) {
+                    const turnBias = ctrl.turn_bias;
+                    const align = ctrl.alignment_summary || null;
                     html += '<div style="background: #1a1a1a; padding: 0.75rem; border-radius: 4px; border-left: 3px solid #7b61ff; margin-top: 1rem;">';
                     html += '<strong style="color: #b39bff;">Turn Bias (Road-Frame)</strong><br/>';
                     html += `<div style="color: #888; font-size: 0.85rem; margin-bottom: 0.5rem;">Curve threshold |curv| ≥ ${turnBias.curve_threshold.toFixed(4)}.</div>`;
@@ -1374,6 +2184,15 @@ class Visualizer {
         this.currentFrameIndex = frameIndex;
         document.getElementById('frame-slider').value = frameIndex;
         document.getElementById('frame-number').textContent = frameIndex;
+        const frameDistanceElem = document.getElementById('frame-distance-from-start');
+        if (frameDistanceElem) {
+            const d = this.distanceFromStartSeries && frameIndex < this.distanceFromStartSeries.length
+                ? this.distanceFromStartSeries[frameIndex]
+                : null;
+            frameDistanceElem.textContent = (d !== null && d !== undefined && Number.isFinite(d))
+                ? d.toFixed(2)
+                : '-';
+        }
         
         try {
             // Store previous frame's perception data before loading new frame (for change calculations)
@@ -1407,13 +2226,26 @@ class Visualizer {
             // Load camera images
             const imageDataUrl = await this.dataLoader.loadFrameImage(frameIndex, 'front_center');
             await this.loadImage(imageDataUrl, 'camera-canvas');
-            try {
-                const topdownUrl = await this.dataLoader.loadFrameImage(frameIndex, 'top_down');
-                await this.loadImage(topdownUrl, 'topdown-canvas');
-                this.updateTopdownOverlay();
-            } catch (error) {
-                this.clearCanvas('topdown-canvas');
-                this.currentTopdownImage = null;
+            if (this.topdownAvailable) {
+                try {
+                    const topdownUrl = await this.dataLoader.loadFrameImage(frameIndex, 'top_down');
+                    await this.loadImage(topdownUrl, 'topdown-canvas');
+                    this.setTopdownAvailability(true);
+                    this.updateTopdownOverlay();
+                } catch (error) {
+                    if (error && error.status === 404) {
+                        this.topdownAvailable = false;
+                        if (this.currentRecordingMeta) {
+                            this.currentRecordingMeta.topdown_available = false;
+                            this.updateRecordingMetaBadges();
+                        }
+                        this.setTopdownAvailability(false);
+                    } else {
+                        console.error('Error loading top-down image:', error);
+                    }
+                    this.clearCanvas('topdown-canvas');
+                    this.currentTopdownImage = null;
+                }
             }
             
             // Update displays
@@ -1422,6 +2254,7 @@ class Visualizer {
             this.updateDebugOverlays();
             this.updateTopdownOverlay();
             this.updateChartCursor();
+            this.updateQuickChartValuesTable();
             
             // Update timestamp
             if (this.currentFrameData.camera) {
@@ -1465,12 +2298,33 @@ class Visualizer {
         ctx.clearRect(0, 0, canvas.width, canvas.height);
     }
 
+    setTopdownAvailability(isAvailable) {
+        const topdownContainer = document.getElementById('topdown-container');
+        const quickPanelTitle = document.querySelector('.quick-debug-panel h3');
+        if (!topdownContainer) {
+            return;
+        }
+        if (isAvailable) {
+            topdownContainer.style.display = '';
+            if (quickPanelTitle) {
+                quickPanelTitle.textContent = 'Quick Chart Focus';
+            }
+        } else {
+            topdownContainer.style.display = 'none';
+            if (quickPanelTitle) {
+                const recType = this.currentRecordingMeta?.recording_type || 'unknown';
+                quickPanelTitle.textContent = `Quick Chart Focus (Top-Down unavailable: ${this.humanizeRecordingType(recType)})`;
+            }
+        }
+    }
+
     updateDataPanel() {
         if (!this.currentFrameData) return;
         
         // Update all tabs (including new "All Data" tab)
         this.updatePerceptionData();
         this.updateTrajectoryData();
+        this.updateProjectionData();
         this.updateControlData();
         this.updateVehicleData();
         this.updateGroundTruthData();
@@ -1508,8 +2362,6 @@ class Visualizer {
         if (!Array.isArray(q) || q.length < 4) {
             return null;
         }
-        const qInv = [-q[0], -q[1], -q[2], q[3]];
-
         const camPosWorld = {
             x: vehicle.camera_pos_x,
             y: vehicle.camera_pos_y,
@@ -1526,36 +2378,32 @@ class Visualizer {
             z: vehicle.camera_forward_z
         };
 
-        const camPosVehicle = this.quatRotateVec(
-            {
-                x: camPosWorld.x - vehPosWorld.x,
-                y: camPosWorld.y - vehPosWorld.y,
-                z: camPosWorld.z - vehPosWorld.z
-            },
-            qInv
-        );
-        const camForwardVehicle = this.quatRotateVec(camForwardWorld, qInv);
-        const forwardNorm = Math.hypot(camForwardVehicle.x, camForwardVehicle.y, camForwardVehicle.z) || 1.0;
+        // Build camera basis in WORLD frame and project world points into camera frame.
+        // Trajectory points are in vehicle frame: x=right, y=forward on road plane.
+        const forwardNorm = Math.hypot(camForwardWorld.x, camForwardWorld.y, camForwardWorld.z) || 1.0;
         const forward = {
-            x: camForwardVehicle.x / forwardNorm,
-            y: camForwardVehicle.y / forwardNorm,
-            z: camForwardVehicle.z / forwardNorm
+            x: camForwardWorld.x / forwardNorm,
+            y: camForwardWorld.y / forwardNorm,
+            z: camForwardWorld.z / forwardNorm
         };
 
-        const worldUp = { x: 0, y: 0, z: 1 };
+        // Unity world up is +Y. Build right-handed camera basis in world frame.
+        const worldUp = { x: 0, y: 1, z: 0 };
+        // Right = up x forward (not forward x up), otherwise X can be mirrored.
         const right = {
-            x: forward.y * worldUp.z - forward.z * worldUp.y,
-            y: forward.z * worldUp.x - forward.x * worldUp.z,
-            z: forward.x * worldUp.y - forward.y * worldUp.x
+            x: worldUp.y * forward.z - worldUp.z * forward.y,
+            y: worldUp.z * forward.x - worldUp.x * forward.z,
+            z: worldUp.x * forward.y - worldUp.y * forward.x
         };
         const rightNorm = Math.hypot(right.x, right.y, right.z) || 1.0;
         right.x /= rightNorm;
         right.y /= rightNorm;
         right.z /= rightNorm;
+        // Up = forward x right to keep basis orthonormal.
         const up = {
-            x: right.y * forward.z - right.z * forward.y,
-            y: right.z * forward.x - right.x * forward.z,
-            z: right.x * forward.y - right.y * forward.x
+            x: forward.y * right.z - forward.z * right.y,
+            y: forward.z * right.x - forward.x * right.z,
+            z: forward.x * right.y - forward.y * right.x
         };
 
         const width = this.overlayRenderer.imageWidth;
@@ -1572,15 +2420,61 @@ class Visualizer {
         const fx = (width / 2.0) / Math.tan((hfov * Math.PI) / 360.0);
         const fy = (height / 2.0) / Math.tan((vfov * Math.PI) / 360.0);
 
+        const vehForwardRaw = this.quatRotateVec({ x: 0, y: 0, z: 1 }, q);
+        const vehRightRaw = this.quatRotateVec({ x: 1, y: 0, z: 0 }, q);
+        const forward2DNorm = Math.hypot(vehForwardRaw.x, vehForwardRaw.z) || 1.0;
+        const vehForward2D = {
+            x: vehForwardRaw.x / forward2DNorm,
+            y: 0.0,
+            z: vehForwardRaw.z / forward2DNorm
+        };
+        let vehRight2DNorm = Math.hypot(vehRightRaw.x, vehRightRaw.z);
+        let vehRight2D;
+        if (vehRight2DNorm < 1e-6) {
+            // Fallback right vector derived from flattened forward vector.
+            vehRight2D = {
+                x: vehForward2D.z,
+                y: 0.0,
+                z: -vehForward2D.x
+            };
+            vehRight2DNorm = Math.hypot(vehRight2D.x, vehRight2D.z) || 1.0;
+            vehRight2D.x /= vehRight2DNorm;
+            vehRight2D.z /= vehRight2DNorm;
+        } else {
+            vehRight2D = {
+                x: vehRightRaw.x / vehRight2DNorm,
+                y: 0.0,
+                z: vehRightRaw.z / vehRight2DNorm
+            };
+        }
+        const groundY = Number.isFinite(Number(vehicle.road_center_at_car_y))
+            ? Number(vehicle.road_center_at_car_y)
+            : (Number.isFinite(Number(vehPosWorld.y)) ? Number(vehPosWorld.y) : 0.0);
+        const localToWorldGround = (xLocal, yLocal) => ({
+            x: vehPosWorld.x + (vehRight2D.x * xLocal) + (vehForward2D.x * yLocal),
+            y: groundY,
+            z: vehPosWorld.z + (vehRight2D.z * xLocal) + (vehForward2D.z * yLocal)
+        });
+
         const points = [];
+        let sanityProjectedRightPx = null;
+        let sanityProjectedLeftPx = null;
+        let firstVisibleSrcY = null;
         for (const point of trajPoints) {
             if (point.y < 0) {
                 continue;
             }
+            const localX = Number(point.x);
+            const localY = Number(point.y);
+            if (!Number.isFinite(localX) || !Number.isFinite(localY)) {
+                continue;
+            }
+            // Keep overlays on road plane: ignore body pitch/roll when mapping local x/y to world.
+            const worldPoint = localToWorldGround(localX, localY);
             const p = {
-                x: point.x - camPosVehicle.x,
-                y: point.y - camPosVehicle.y,
-                z: 0 - camPosVehicle.z
+                x: worldPoint.x - camPosWorld.x,
+                y: worldPoint.y - camPosWorld.y,
+                z: worldPoint.z - camPosWorld.z
             };
             const xCam = p.x * right.x + p.y * right.y + p.z * right.z;
             const yCam = p.x * up.x + p.y * up.y + p.z * up.z;
@@ -1590,10 +2484,276 @@ class Visualizer {
             }
             const xImg = cx + (xCam / zCam) * fx;
             const yImg = cy - (yCam / zCam) * fy;
-            points.push({ x: xImg, y: yImg });
+            points.push({ x: xImg, y: yImg, srcX: Number(point.x), srcY: Number(point.y) });
+            if (firstVisibleSrcY === null) {
+                firstVisibleSrcY = Number(point.y);
+            }
         }
 
+        // Projection sanity check: at the same forward distance, +x should land right of -x.
+        // This catches accidental handedness/sign flips in camera basis.
+        const sanityDistance = 8.0;
+        const sanityOffset = 1.0;
+        const sanityProject = (xLocal, zLocal) => {
+            const worldPoint = localToWorldGround(xLocal, zLocal);
+            const p = {
+                x: worldPoint.x - camPosWorld.x,
+                y: worldPoint.y - camPosWorld.y,
+                z: worldPoint.z - camPosWorld.z
+            };
+            const xCam = p.x * right.x + p.y * right.y + p.z * right.z;
+            const yCam = p.x * up.x + p.y * up.y + p.z * up.z;
+            const zCam = p.x * forward.x + p.y * forward.y + p.z * forward.z;
+            if (zCam <= 0.1) return null;
+            return { x: cx + (xCam / zCam) * fx, y: cy - (yCam / zCam) * fy };
+        };
+        const sanityRight = sanityProject(+sanityOffset, sanityDistance);
+        const sanityLeft = sanityProject(-sanityOffset, sanityDistance);
+        if (sanityRight && sanityLeft) {
+            sanityProjectedRightPx = sanityRight.x;
+            sanityProjectedLeftPx = sanityLeft.x;
+            if (
+                this._projectionSanityLoggedFrame !== this.currentFrameIndex &&
+                sanityProjectedRightPx <= sanityProjectedLeftPx
+            ) {
+                console.warn(
+                    '[Projection sanity] possible mirrored X in main camera projection',
+                    {
+                        frameIndex: this.currentFrameIndex,
+                        sanityProjectedRightPx,
+                        sanityProjectedLeftPx
+                    }
+                );
+                this._projectionSanityLoggedFrame = this.currentFrameIndex;
+            }
+        }
+
+        points._diag = {
+            main_first_visible_src_y_m: firstVisibleSrcY,
+            main_mirror_sanity: (
+                Number.isFinite(sanityProjectedRightPx) &&
+                Number.isFinite(sanityProjectedLeftPx) &&
+                sanityProjectedRightPx > sanityProjectedLeftPx
+            ) ? 'ok' : 'check',
+        };
+
         return points;
+    }
+
+    getDisplayTrajectoryPoints(trajPoints) {
+        if (!Array.isArray(trajPoints) || trajPoints.length === 0) return [];
+        const plannerOnly = Boolean(document.getElementById('toggle-planner-only-trajectory')?.checked);
+        if (!plannerOnly || trajPoints.length < 2) return trajPoints;
+        const rp = this.currentFrameData?.trajectory?.reference_point;
+        if (!rp || !Number.isFinite(Number(rp.x)) || !Number.isFinite(Number(rp.y))) {
+            return trajPoints;
+        }
+        const p0 = trajPoints[0];
+        const p0x = Number(p0?.x);
+        const p0y = Number(p0?.y);
+        if (!Number.isFinite(p0x) || !Number.isFinite(p0y)) {
+            return trajPoints;
+        }
+        // Drop only if first point is effectively the prepended reference point.
+        if (Math.abs(p0x - Number(rp.x)) < 1e-6 && Math.abs(p0y - Number(rp.y)) < 1e-6) {
+            return trajPoints.slice(1);
+        }
+        return trajPoints;
+    }
+
+    toForwardMonotonicPath(points) {
+        if (!Array.isArray(points) || points.length === 0) return [];
+        const validForward = points
+            .map((p) => ({ x: Number(p?.x), y: Number(p?.y) }))
+            .filter((p) => Number.isFinite(p.x) && Number.isFinite(p.y) && p.y >= 0);
+        if (validForward.length === 0) return [];
+
+        let minYIdx = 0;
+        let minY = Number.POSITIVE_INFINITY;
+        for (let i = 0; i < validForward.length; i++) {
+            if (validForward[i].y < minY) {
+                minY = validForward[i].y;
+                minYIdx = i;
+            }
+        }
+
+        const out = [];
+        let lastY = null;
+        for (let i = minYIdx; i < validForward.length; i++) {
+            const p = validForward[i];
+            if (lastY !== null && p.y + 1e-6 < lastY) {
+                continue;
+            }
+            out.push(p);
+            lastY = p.y;
+        }
+        return out;
+    }
+
+    sampleLateralAtForwardDistance(pathPoints, forwardMeters) {
+        if (!Array.isArray(pathPoints) || pathPoints.length < 2 || !Number.isFinite(forwardMeters)) {
+            return null;
+        }
+        const pts = pathPoints
+            .map((p) => ({ x: Number(p?.x), y: Number(p?.y) }))
+            .filter((p) => Number.isFinite(p.x) && Number.isFinite(p.y))
+            .sort((a, b) => a.y - b.y);
+        if (pts.length < 2) return null;
+        const yTarget = Number(forwardMeters);
+        if (yTarget < pts[0].y || yTarget > pts[pts.length - 1].y) return null;
+        for (let i = 1; i < pts.length; i++) {
+            const p0 = pts[i - 1];
+            const p1 = pts[i];
+            if (p1.y < yTarget) continue;
+            const dy = p1.y - p0.y;
+            if (Math.abs(dy) < 1e-6) return p1.x;
+            const t = (yTarget - p0.y) / dy;
+            return p0.x + (p1.x - p0.x) * t;
+        }
+        return null;
+    }
+
+    computeLateralErrorMetrics(plannerPath, oraclePath) {
+        const lookaheads = [5, 10, 15];
+        const out = {
+            source: 'unavailable',
+            err5m: null,
+            err10m: null,
+            err15m: null,
+        };
+        if (!Array.isArray(plannerPath) || plannerPath.length < 2) {
+            return out;
+        }
+
+        let baselinePath = null;
+        if (Array.isArray(oraclePath) && oraclePath.length >= 2) {
+            baselinePath = oraclePath;
+            out.source = 'oracle';
+        } else {
+            const gt = this.currentFrameData?.ground_truth || {};
+            const left = Number(gt.left_lane_line_x ?? gt.left_lane_x);
+            const right = Number(gt.right_lane_line_x ?? gt.right_lane_x);
+            const center = Number(gt.lane_center_x);
+            const centerX = Number.isFinite(center)
+                ? center
+                : (Number.isFinite(left) && Number.isFinite(right) ? (left + right) * 0.5 : null);
+            if (centerX !== null) {
+                baselinePath = lookaheads.map((y) => ({ x: centerX, y }));
+                out.source = 'gt_lane_center_constant_x';
+            }
+        }
+        if (!baselinePath || baselinePath.length < 2) return out;
+
+        const plannerMonotonic = this.toForwardMonotonicPath(plannerPath);
+        const baselineMonotonic = this.toForwardMonotonicPath(baselinePath);
+        if (plannerMonotonic.length < 2 || baselineMonotonic.length < 2) return out;
+
+        const errors = lookaheads.map((y) => {
+            const px = this.sampleLateralAtForwardDistance(plannerMonotonic, y);
+            const bx = this.sampleLateralAtForwardDistance(baselineMonotonic, y);
+            if (!Number.isFinite(px) || !Number.isFinite(bx)) return null;
+            return px - bx;
+        });
+        [out.err5m, out.err10m, out.err15m] = errors;
+        return out;
+    }
+
+    getRightLaneFiducialDiagnostics() {
+        const out = {
+            source: 'unavailable',
+            err5m: null,
+            err10m: null,
+            err15m: null,
+            meanErr: null,
+            maxErr: null,
+            pairs: [],
+        };
+        const v = this.currentFrameData?.vehicle || {};
+        const vehiclePoints = Array.isArray(v.right_lane_fiducials_vehicle_points)
+            ? v.right_lane_fiducials_vehicle_points
+            : [];
+        const screenPoints = Array.isArray(v.right_lane_fiducials_screen_points)
+            ? v.right_lane_fiducials_screen_points
+            : [];
+        const spacing = Number(v.right_lane_fiducials_spacing_meters);
+        if (vehiclePoints.length < 2 || screenPoints.length < 2 || !Number.isFinite(spacing) || spacing <= 0) {
+            return out;
+        }
+
+        let sum = 0;
+        let count = 0;
+        let maxErr = null;
+        for (let i = 0; i < Math.min(vehiclePoints.length, screenPoints.length); i++) {
+            const vp = vehiclePoints[i];
+            const sp = screenPoints[i];
+            const projected = this.projectTrajectoryToImage([vp]);
+            const proj = (projected && projected.length > 0) ? projected[0] : null;
+            const validTruth = Boolean(sp && (sp.valid ?? true) && Number.isFinite(Number(sp.x)) && Number.isFinite(Number(sp.y)) && Number(sp.x) >= 0 && Number(sp.y) >= 0);
+            const validProj = Boolean(proj && Number.isFinite(Number(proj.x)) && Number.isFinite(Number(proj.y)));
+            const distance = i * spacing;
+            let errPx = null;
+            if (validTruth && validProj) {
+                errPx = Math.hypot(Number(proj.x) - Number(sp.x), Number(proj.y) - Number(sp.y));
+                sum += errPx;
+                count += 1;
+                maxErr = (maxErr === null) ? errPx : Math.max(maxErr, errPx);
+            }
+            out.pairs.push({ distance, vehicle: vp, truth: sp, projected: proj, errPx });
+        }
+        out.source = `unity_world_to_screen (${count}/${out.pairs.length} valid)`;
+        out.meanErr = count > 0 ? (sum / count) : null;
+        out.maxErr = maxErr;
+
+        const readAt = (targetM) => {
+            const idx = Math.round(targetM / spacing);
+            if (idx < 0 || idx >= out.pairs.length) return null;
+            return out.pairs[idx].errPx;
+        };
+        out.err5m = readAt(5);
+        out.err10m = readAt(10);
+        out.err15m = readAt(15);
+        return out;
+    }
+
+    drawRightLaneFiducialsOverlay(fidDiag) {
+        if (!fidDiag || !Array.isArray(fidDiag.pairs) || fidDiag.pairs.length === 0) return;
+        const ctx = this.overlayRenderer.ctx;
+        ctx.save();
+        for (const p of fidDiag.pairs) {
+            const tx = Number(p?.truth?.x);
+            const ty = Number(p?.truth?.y);
+            const tValid = Boolean(p?.truth?.valid) && Number.isFinite(tx) && Number.isFinite(ty) && tx >= 0 && ty >= 0;
+            const px = Number(p?.projected?.x);
+            const py = Number(p?.projected?.y);
+            const pValid = Number.isFinite(px) && Number.isFinite(py);
+
+            if (tValid) {
+                ctx.strokeStyle = '#00ffff';
+                ctx.lineWidth = 2;
+                ctx.beginPath();
+                ctx.moveTo(tx - 6, ty);
+                ctx.lineTo(tx + 6, ty);
+                ctx.moveTo(tx, ty - 6);
+                ctx.lineTo(tx, ty + 6);
+                ctx.stroke();
+            }
+            if (pValid) {
+                ctx.strokeStyle = '#ffffff';
+                ctx.lineWidth = 2;
+                ctx.beginPath();
+                ctx.arc(px, py, 4, 0, Math.PI * 2);
+                ctx.stroke();
+            }
+            if (tValid && pValid) {
+                ctx.strokeStyle = 'rgba(255,0,0,0.5)';
+                ctx.lineWidth = 1;
+                ctx.beginPath();
+                ctx.moveTo(tx, ty);
+                ctx.lineTo(px, py);
+                ctx.stroke();
+            }
+        }
+        ctx.restore();
     }
 
     updateTopdownOverlay() {
@@ -1606,40 +2766,277 @@ class Visualizer {
         }
         if (!this.currentFrameData) return;
         const showTrajectory = document.getElementById('toggle-trajectory')?.checked;
-        if (!showTrajectory) return;
-        const trajectory = this.currentFrameData.trajectory?.trajectory_points || [];
-        if (!trajectory.length) return;
-        const sortedTrajectory = [...trajectory].sort((a, b) => (a.y || 0) - (b.y || 0));
+        const showOracle = document.getElementById('toggle-oracle-trajectory')?.checked;
+        const showDistanceScale = document.getElementById('toggle-distance-scale')?.checked;
+        if (!showTrajectory && !showOracle && !showDistanceScale) return;
+        const rawTrajectory = showTrajectory
+            ? (this.currentFrameData.trajectory?.trajectory_points || [])
+            : [];
+        const trajectory = this.getDisplayTrajectoryPoints(rawTrajectory);
+        const oracleTrajectory = this.currentFrameData.trajectory?.oracle_points || [];
+        if (!trajectory.length && !oracleTrajectory.length && !showDistanceScale) return;
 
-        const pixelsPerMeter = canvas.height / (this.topdownOrthoHalfSize * 2.0);
+        // #region agent log
+        if (this._agentTopdownLastLoggedFrame !== this.currentFrameIndex) {
+            fetch('http://127.0.0.1:7244/ingest/4b1a3fa9-dffd-42fc-a8f8-c8a4d88904be',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({runId:'pre-fix-topdown-v1',hypothesisId:'H1',location:'visualizer.js:updateTopdownOverlay:entry',message:'Topdown trajectory render entry',data:{frameIndex:this.currentFrameIndex,trajectoryCount:Array.isArray(trajectory)?trajectory.length:0,rawTrajectoryCount:Array.isArray(rawTrajectory)?rawTrajectory.length:0,topdownAvailable:this.topdownAvailable,recording:this.currentRecording||null},timestamp:Date.now()})}).catch(()=>{});
+        }
+        // #endregion
+
+        let nonFiniteCount = 0;
+        let negativeYCount = 0;
+        let monotonicBreaks = 0;
+        let prevY = null;
+        const samplePoints = [];
+        for (let i = 0; i < trajectory.length; i++) {
+            const p = trajectory[i];
+            const x = Number(p?.x);
+            const y = Number(p?.y);
+            if (!Number.isFinite(x) || !Number.isFinite(y)) {
+                nonFiniteCount += 1;
+                continue;
+            }
+            if (y < 0) {
+                negativeYCount += 1;
+            }
+            if (prevY !== null && y + 1e-6 < prevY) {
+                monotonicBreaks += 1;
+            }
+            prevY = y;
+            if (samplePoints.length < 8) {
+                samplePoints.push({ i, x, y });
+            }
+        }
+
+        // #region agent log
+        if (this._agentTopdownLastLoggedFrame !== this.currentFrameIndex) {
+            fetch('http://127.0.0.1:7244/ingest/4b1a3fa9-dffd-42fc-a8f8-c8a4d88904be',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({runId:'pre-fix-topdown-v1',hypothesisId:'H2',location:'visualizer.js:updateTopdownOverlay:raw-shape',message:'Raw trajectory shape metrics',data:{frameIndex:this.currentFrameIndex,nonFiniteCount,negativeYCount,monotonicBreaks,samplePoints},timestamp:Date.now()})}).catch(()=>{});
+        }
+        // #endregion
+
+        // Normalize top-down render path to the forward monotonic segment.
+        // Recorded trajectory can contain a prefixed far lookahead point before near points.
+        const validForwardPoints = trajectory.filter((p) =>
+            Number.isFinite(Number(p?.x)) &&
+            Number.isFinite(Number(p?.y)) &&
+            Number(p.y) >= 0
+        );
+        const hasPlannerPath = validForwardPoints.length > 0;
+        if (!hasPlannerPath && !oracleTrajectory.length && !showDistanceScale) return;
+        let minYIdx = 0;
+        let minY = Number.POSITIVE_INFINITY;
+        for (let i = 0; i < validForwardPoints.length; i++) {
+            const y = Number(validForwardPoints[i].y);
+            if (y < minY) {
+                minY = y;
+                minYIdx = i;
+            }
+        }
+        const renderPoints = [];
+        let renderBreaks = 0;
+        let lastYForRender = null;
+        for (let i = minYIdx; i < validForwardPoints.length; i++) {
+            const pt = validForwardPoints[i];
+            const y = Number(pt.y);
+            if (lastYForRender !== null && y + 1e-6 < lastYForRender) {
+                renderBreaks += 1;
+                continue;
+            }
+            renderPoints.push(pt);
+            lastYForRender = y;
+        }
+
+        const displayRenderPoints = this.getTopdownDisplayRenderPoints(renderPoints);
+
+        // #region agent log
+        if (this._agentTopdownLastLoggedFrame !== this.currentFrameIndex) {
+            fetch('http://127.0.0.1:7244/ingest/4b1a3fa9-dffd-42fc-a8f8-c8a4d88904be',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({runId:'post-fix-topdown-v2',hypothesisId:'H5',location:'visualizer.js:updateTopdownOverlay:normalized-shape',message:'Normalized trajectory path metrics',data:{frameIndex:this.currentFrameIndex,rawCount:rawTrajectory.length,displayCount:trajectory.length,validForwardCount:validForwardPoints.length,minYIdx,minY,normalizedCount:renderPoints.length,renderBreaks},timestamp:Date.now()})}).catch(()=>{});
+        }
+        // #endregion
+
+        const toggleEl = document.getElementById('toggle-topdown-calibrated-projection');
+        const useCalibratedTopdownProjection = Boolean(
+            (toggleEl && toggleEl.checked) || (!this.topdownProjectionToggleTouched && this.topdownCalibratedProjectionReady)
+        );
+        const topdownOrthoSize = Number(this.currentFrameData?.vehicle?.topdown_camera_orthographic_size);
+        const calibratedOrthoValid = Number.isFinite(topdownOrthoSize) && topdownOrthoSize > 0.01;
+        const activeOrthoHalfSize = (
+            useCalibratedTopdownProjection && calibratedOrthoValid
+                ? topdownOrthoSize
+                : this.topdownOrthoHalfSize
+        );
+        const pixelsPerMeter = canvas.height / (activeOrthoHalfSize * 2.0);
         const cx = canvas.width / 2.0;
         const cy = canvas.height / 2.0;
 
+        // #region agent log
+        if (this._agentTopdownLastLoggedFrame !== this.currentFrameIndex) {
+            const camTs = Number(this.currentFrameData?.camera?.timestamp);
+            const trajTs = Number(this.currentFrameData?.trajectory?.timestamp);
+            const tsDeltaMs = (Number.isFinite(camTs) && Number.isFinite(trajTs))
+                ? (trajTs - camTs) * 1000.0
+                : null;
+            fetch('http://127.0.0.1:7244/ingest/4b1a3fa9-dffd-42fc-a8f8-c8a4d88904be',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({runId:'post-fix-topdown-v3',hypothesisId:'H8',location:'visualizer.js:updateTopdownOverlay:timestamp-alignment',message:'Camera/trajectory timestamp alignment',data:{frameIndex:this.currentFrameIndex,cameraTs:Number.isFinite(camTs)?camTs:null,trajectoryTs:Number.isFinite(trajTs)?trajTs:null,tsDeltaMs},timestamp:Date.now()})}).catch(()=>{});
+        }
+        // #endregion
+
         ctx.save();
-        ctx.strokeStyle = '#00ffff';
+        ctx.strokeStyle = '#ff00ff';
         ctx.lineWidth = 2;
         ctx.beginPath();
         let first = true;
-        for (const point of sortedTrajectory) {
+        let prevPx = null;
+        let prevPy = null;
+        let drawnCount = 0;
+        let skippedNegativeY = 0;
+        let skippedNonFinite = 0;
+        let discontinuityBreaks = 0;
+        let pxMin = Number.POSITIVE_INFINITY;
+        let pxMax = Number.NEGATIVE_INFINITY;
+        let pyMin = Number.POSITIVE_INFINITY;
+        let pyMax = Number.NEGATIVE_INFINITY;
+        for (const point of displayRenderPoints) {
+            if (!Number.isFinite(point?.x) || !Number.isFinite(point?.y)) {
+                skippedNonFinite += 1;
+                continue;
+            }
             if (point.y < 0) {
+                skippedNegativeY += 1;
                 continue;
             }
             const px = cx + (point.x * pixelsPerMeter);
             const py = cy - (point.y * pixelsPerMeter);
-            if (first) {
+            pxMin = Math.min(pxMin, px);
+            pxMax = Math.max(pxMax, px);
+            pyMin = Math.min(pyMin, py);
+            pyMax = Math.max(pyMax, py);
+            if (first || prevPx === null || prevPy === null) {
                 ctx.moveTo(px, py);
                 first = false;
             } else {
                 ctx.lineTo(px, py);
             }
+            drawnCount += 1;
+            prevPx = px;
+            prevPy = py;
         }
         ctx.stroke();
+
+        if (showOracle && oracleTrajectory.length > 0) {
+            ctx.strokeStyle = '#66ff66';
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            let oracleFirst = true;
+            for (const point of oracleTrajectory) {
+                const ox = Number(point?.x);
+                const oy = Number(point?.y);
+                if (!Number.isFinite(ox) || !Number.isFinite(oy) || oy < 0) {
+                    continue;
+                }
+                const px = cx + (ox * pixelsPerMeter);
+                const py = cy - (oy * pixelsPerMeter);
+                if (oracleFirst) {
+                    ctx.moveTo(px, py);
+                    oracleFirst = false;
+                } else {
+                    ctx.lineTo(px, py);
+                }
+            }
+            if (!oracleFirst) {
+                ctx.stroke();
+            }
+        }
+
+        if (showDistanceScale) {
+            const scaleSegments = this.getDistanceScaleSegments(5, 30);
+            if (scaleSegments.length > 0) {
+                ctx.strokeStyle = '#ffffff';
+                for (const seg of scaleSegments) {
+                    const ax = Number(seg?.a?.x);
+                    const ay = Number(seg?.a?.y);
+                    const bx = Number(seg?.b?.x);
+                    const by = Number(seg?.b?.y);
+                    if (!Number.isFinite(ax) || !Number.isFinite(ay) || !Number.isFinite(bx) || !Number.isFinite(by)) {
+                        continue;
+                    }
+                    const x0 = cx + (ax * pixelsPerMeter);
+                    const y0 = cy - (ay * pixelsPerMeter);
+                    const x1 = cx + (bx * pixelsPerMeter);
+                    const y1 = cy - (by * pixelsPerMeter);
+                    ctx.lineWidth = seg.s === 0 ? 3 : 2;
+                    ctx.beginPath();
+                    ctx.moveTo(x0, y0);
+                    ctx.lineTo(x1, y1);
+                    ctx.stroke();
+                }
+            }
+        }
 
         ctx.fillStyle = '#ff3333';
         ctx.beginPath();
         ctx.arc(cx, cy, 4, 0, Math.PI * 2);
         ctx.fill();
         ctx.restore();
+
+        // #region agent log
+        if (this._agentTopdownLastLoggedFrame !== this.currentFrameIndex) {
+            let signFlips = 0;
+            let prevDxSign = null;
+            let maxAbsDxDy = 0;
+            for (let i = 1; i < displayRenderPoints.length; i++) {
+                const dx = Number(displayRenderPoints[i].x) - Number(displayRenderPoints[i - 1].x);
+                const dy = Number(displayRenderPoints[i].y) - Number(displayRenderPoints[i - 1].y);
+                if (Math.abs(dy) < 1e-6) continue;
+                const s = Math.sign(dx / dy);
+                if (prevDxSign !== null && s !== 0 && s !== prevDxSign) {
+                    signFlips += 1;
+                }
+                if (s !== 0) prevDxSign = s;
+                maxAbsDxDy = Math.max(maxAbsDxDy, Math.abs(dx / dy));
+            }
+            fetch('http://127.0.0.1:7244/ingest/4b1a3fa9-dffd-42fc-a8f8-c8a4d88904be',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({runId:'post-fix-topdown-v3',hypothesisId:'H6',location:'visualizer.js:updateTopdownOverlay:drawn',message:'Topdown normalized path geometry',data:{frameIndex:this.currentFrameIndex,drawnCount,skippedNegativeY,skippedNonFinite,discontinuityBreaks,bounds:{pxMin:Number.isFinite(pxMin)?pxMin:null,pxMax:Number.isFinite(pxMax)?pxMax:null,pyMin:Number.isFinite(pyMin)?pyMin:null,pyMax:Number.isFinite(pyMax)?pyMax:null},pixelsPerMeter,cx,cy,signFlips,maxAbsDxDy,firstPoint:displayRenderPoints[0]||null,lastPoint:displayRenderPoints[displayRenderPoints.length-1]||null,oracleCount:Array.isArray(oracleTrajectory)?oracleTrajectory.length:0,displaySmoothing:Boolean(document.getElementById('toggle-topdown-pose-smooth')?.checked)},timestamp:Date.now()})}).catch(()=>{});
+            this._agentTopdownLastLoggedFrame = this.currentFrameIndex;
+        }
+        // #endregion
+
+        this.projectionDiagnostics.topdown_turn_sign = this.computeTurnSign(displayRenderPoints, 'x', 'y');
+        this.projectionDiagnostics.topdown_calibrated = useCalibratedTopdownProjection ? 'on' : 'off';
+        this.projectionDiagnostics.topdown_smooth = Boolean(document.getElementById('toggle-topdown-pose-smooth')?.checked) ? 'on' : 'off';
+        this.projectionDiagnostics.planner_only = Boolean(document.getElementById('toggle-planner-only-trajectory')?.checked) ? 'on' : 'off';
+
+    }
+
+    getTopdownDisplayRenderPoints(renderPoints) {
+        const smoothEnabled = Boolean(document.getElementById('toggle-topdown-pose-smooth')?.checked);
+        if (!smoothEnabled || !Array.isArray(renderPoints) || renderPoints.length === 0) {
+            this.topdownSmoothedTrajectory = null;
+            this.topdownSmoothedFrameIndex = null;
+            return renderPoints;
+        }
+
+        const isSequential = (
+            this.topdownSmoothedFrameIndex !== null &&
+            this.currentFrameIndex === this.topdownSmoothedFrameIndex + 1
+        );
+        const sameLength = (
+            Array.isArray(this.topdownSmoothedTrajectory) &&
+            this.topdownSmoothedTrajectory.length === renderPoints.length
+        );
+
+        if (!isSequential || !sameLength) {
+            this.topdownSmoothedTrajectory = renderPoints.map((p) => ({ ...p }));
+            this.topdownSmoothedFrameIndex = this.currentFrameIndex;
+            return this.topdownSmoothedTrajectory;
+        }
+
+        const alpha = this.topdownSmoothingAlpha;
+        for (let i = 0; i < renderPoints.length; i++) {
+            const prev = this.topdownSmoothedTrajectory[i];
+            const cur = renderPoints[i];
+            prev.x = (1 - alpha) * prev.x + alpha * cur.x;
+            prev.y = (1 - alpha) * prev.y + alpha * cur.y;
+        }
+        this.topdownSmoothedFrameIndex = this.currentFrameIndex;
+        return this.topdownSmoothedTrajectory;
     }
 
     updatePerceptionData() {
@@ -1662,6 +3059,10 @@ class Visualizer {
         const method = (p.detection_method || '').toLowerCase();
         const isCv = method === 'cv';
         const isSeg = method === 'segmentation';
+        const hasModelFitPoints = Boolean(
+            (Array.isArray(p.fit_points_left) && p.fit_points_left.length > 0) ||
+            (Array.isArray(p.fit_points_right) && p.fit_points_right.length > 0)
+        );
 
         // Disable fit points toggle when not using CV detection
         const fitToggle = document.getElementById('toggle-fit-points');
@@ -1673,19 +3074,6 @@ class Visualizer {
             }
             if (fitLabel) {
                 fitLabel.style.opacity = isCv ? '1.0' : '0.4';
-            }
-        }
-
-        // Hide detected curves toggle by default when not using CV
-        const curvesToggle = document.getElementById('toggle-detected-curves');
-        if (curvesToggle) {
-            const curvesLabel = curvesToggle.closest('label');
-            curvesToggle.disabled = !isCv;
-            if (!isCv) {
-                curvesToggle.checked = false;
-            }
-            if (curvesLabel) {
-                curvesLabel.style.opacity = isCv ? '1.0' : '0.4';
             }
         }
 
@@ -1703,12 +3091,12 @@ class Visualizer {
         const segPointsToggle = document.getElementById('toggle-seg-fit-points');
         if (segPointsToggle) {
             const segLabel = segPointsToggle.closest('label');
-            segPointsToggle.disabled = !isSeg;
-            if (!isSeg) {
+            segPointsToggle.disabled = !(isSeg || hasModelFitPoints);
+            if (!(isSeg || hasModelFitPoints)) {
                 segPointsToggle.checked = false;
             }
             if (segLabel) {
-                segLabel.style.opacity = isSeg ? '1.0' : '0.4';
+                segLabel.style.opacity = (isSeg || hasModelFitPoints) ? '1.0' : '0.4';
             }
         }
         const left_lane_line_x = p.left_lane_line_x !== undefined ? p.left_lane_line_x : (p.left_lane_x !== undefined ? p.left_lane_x : undefined);  // Backward compatibility
@@ -1980,6 +3368,44 @@ class Visualizer {
         }
     }
 
+    updateProjectionData() {
+        const updateField = (id, value) => {
+            const elem = document.getElementById(id);
+            if (elem) elem.textContent = value;
+        };
+        const d = this.projectionDiagnostics || {};
+        updateField(
+            'projection-main-first-visible-y',
+            Number.isFinite(Number(d.main_first_visible_src_y_m))
+                ? `${Number(d.main_first_visible_src_y_m).toFixed(2)} m`
+                : '-'
+        );
+        updateField('projection-main-mirror-sanity', d.main_mirror_sanity || '-');
+        updateField('projection-source-turn-sign', d.source_turn_sign || '-');
+        updateField('projection-main-turn-sign', d.main_turn_sign || '-');
+        const fmtErr = (v) => {
+            if (!Number.isFinite(Number(v))) return '-';
+            const n = Number(v);
+            const side = n > 0 ? 'right' : (n < 0 ? 'left' : 'center');
+            return `${Math.abs(n).toFixed(3)} m (${side})`;
+        };
+        updateField('projection-lateral-error-5m', fmtErr(d.lateral_error_5m));
+        updateField('projection-lateral-error-10m', fmtErr(d.lateral_error_10m));
+        updateField('projection-lateral-error-15m', fmtErr(d.lateral_error_15m));
+        updateField('projection-lateral-error-source', d.lateral_error_source || '-');
+        const fmtPx = (v) => Number.isFinite(Number(v)) ? `${Number(v).toFixed(1)} px` : '-';
+        updateField('projection-right-fiducial-err-5m', fmtPx(d.right_fiducial_err_5m));
+        updateField('projection-right-fiducial-err-10m', fmtPx(d.right_fiducial_err_10m));
+        updateField('projection-right-fiducial-err-15m', fmtPx(d.right_fiducial_err_15m));
+        updateField('projection-right-fiducial-err-mean', fmtPx(d.right_fiducial_err_mean));
+        updateField('projection-right-fiducial-err-max', fmtPx(d.right_fiducial_err_max));
+        updateField('projection-right-fiducial-source', d.right_fiducial_source || '-');
+        updateField('projection-topdown-turn-sign', d.topdown_turn_sign || '-');
+        updateField('projection-topdown-calibrated', d.topdown_calibrated ?? '-');
+        updateField('projection-topdown-smooth', d.topdown_smooth ?? '-');
+        updateField('projection-planner-only', d.planner_only ?? '-');
+    }
+
     computeLongitudinalMetrics(currentFrame, prevFrame, prevPrevFrame) {
         const currVehicle = currentFrame ? currentFrame.vehicle : null;
         const prevVehicle = prevFrame ? prevFrame.vehicle : null;
@@ -2119,6 +3545,25 @@ class Visualizer {
         const stalePerceptionReason = c.stale_perception_reason || '-';
         updateField('control-stale-reason', stalePerceptionReason);
         updateField('all-control-stale-reason', stalePerceptionReason);
+
+        // Steering limiter waterfall diagnostics
+        const fmtSteer = (v) => (v !== undefined && v !== null ? Number(v).toFixed(4) : '-');
+        const fmtDelta = (v) => (v !== undefined && v !== null ? Number(v).toFixed(4) : '-');
+        const fmtFlag = (v) => (v ? 'YES ⚠️' : 'NO');
+        updateField('control-steering-pre-rate', fmtSteer(c.steering_pre_rate_limit));
+        updateField('control-steering-post-rate', fmtSteer(c.steering_post_rate_limit));
+        updateField('control-steering-post-jerk', fmtSteer(c.steering_post_jerk_limit));
+        updateField('control-steering-post-sign-flip', fmtSteer(c.steering_post_sign_flip));
+        updateField('control-steering-post-hard-clip', fmtSteer(c.steering_post_hard_clip));
+        updateField('control-steering-post-smoothing', fmtSteer(c.steering_post_smoothing));
+        updateField('control-steering-rate-limited', fmtFlag(!!c.steering_rate_limited_active));
+        updateField('control-steering-jerk-limited', fmtFlag(!!c.steering_jerk_limited_active));
+        updateField('control-steering-hard-clipped', fmtFlag(!!c.steering_hard_clip_active));
+        updateField('control-steering-smoothing-active', fmtFlag(!!c.steering_smoothing_active));
+        updateField('control-steering-rate-delta', fmtDelta(c.steering_rate_limited_delta));
+        updateField('control-steering-jerk-delta', fmtDelta(c.steering_jerk_limited_delta));
+        updateField('control-steering-hard-clip-delta', fmtDelta(c.steering_hard_clip_delta));
+        updateField('control-steering-smoothing-delta', fmtDelta(c.steering_smoothing_delta));
     }
 
     updateVehicleData() {
@@ -2241,13 +3686,23 @@ class Visualizer {
 
         // NEW: Camera frame metadata (camera is the reference timeline)
         const cameraInfo = this.currentFrameData.camera || {};
+        const topdownInfo = this.currentFrameData.camera_topdown || {};
+        const trajectoryInfo = this.currentFrameData.trajectory || {};
         const cameraTimestamp = cameraInfo.timestamp;
+        const topdownTimestamp = topdownInfo.timestamp;
         const cameraFrameId = cameraInfo.frame_id;
+        const topdownFrameId = topdownInfo.frame_id;
+        const trajectoryTimestamp = trajectoryInfo.timestamp;
         updateField(
             'vehicle-camera-timestamp',
             cameraTimestamp !== undefined && cameraTimestamp !== null ? cameraTimestamp.toFixed(3) : '-'
         );
+        updateField(
+            'vehicle-topdown-timestamp',
+            topdownTimestamp !== undefined && topdownTimestamp !== null ? topdownTimestamp.toFixed(3) : '-'
+        );
         updateField('vehicle-camera-frame-id', cameraFrameId !== undefined && cameraFrameId !== null ? cameraFrameId : '-');
+        updateField('vehicle-topdown-frame-id', topdownFrameId !== undefined && topdownFrameId !== null ? topdownFrameId : '-');
         
         // Flag when camera timestamp is reused across sequential frames
         let cameraTimestampReusedDisplay = '-';
@@ -2281,6 +3736,42 @@ class Visualizer {
         updateField('vehicle-unity-smooth-delta-time', unitySmoothDeltaTime !== undefined && unitySmoothDeltaTime !== null ? unitySmoothDeltaTime.toFixed(4) : '-');
         updateField('vehicle-unity-unscaled-delta-time', unityUnscaledDeltaTime !== undefined && unityUnscaledDeltaTime !== null ? unityUnscaledDeltaTime.toFixed(4) : '-');
         updateField('vehicle-unity-time-scale', unityTimeScale !== undefined && unityTimeScale !== null ? unityTimeScale.toFixed(2) : '-');
+
+        // Top-down sync diagnostics (frame-level)
+        let topdownTrajDeltaMs = null;
+        if (topdownTimestamp !== undefined && topdownTimestamp !== null &&
+            trajectoryTimestamp !== undefined && trajectoryTimestamp !== null) {
+            topdownTrajDeltaMs = (trajectoryTimestamp - topdownTimestamp) * 1000.0;
+        }
+        let topdownUnityDeltaMs = null;
+        if (topdownTimestamp !== undefined && topdownTimestamp !== null &&
+            unityTime !== undefined && unityTime !== null) {
+            topdownUnityDeltaMs = (unityTime - topdownTimestamp) * 1000.0;
+        }
+        const fmtDelta = (vMs) => (vMs === null || !Number.isFinite(vMs)) ? '-' : `${vMs.toFixed(1)} ms`;
+        updateField('vehicle-topdown-traj-delta', fmtDelta(topdownTrajDeltaMs));
+        updateField('vehicle-topdown-unity-delta', fmtDelta(topdownUnityDeltaMs));
+
+        let syncTrust = 'UNKNOWN';
+        let syncTrustColor = '#888';
+        if (topdownTrajDeltaMs !== null && Number.isFinite(topdownTrajDeltaMs)) {
+            const absDt = Math.abs(topdownTrajDeltaMs);
+            if (absDt <= 33.5) {
+                syncTrust = 'GOOD';
+                syncTrustColor = '#4caf50';
+            } else if (absDt <= 66.5) {
+                syncTrust = 'WARN';
+                syncTrustColor = '#ffa500';
+            } else {
+                syncTrust = 'POOR';
+                syncTrustColor = '#ff6b6b';
+            }
+        }
+        updateField('vehicle-topdown-sync-trust', syncTrust);
+        const trustElem = document.getElementById('vehicle-topdown-sync-trust');
+        const trustAllElem = document.getElementById('all-vehicle-topdown-sync-trust');
+        if (trustElem) trustElem.style.color = syncTrustColor;
+        if (trustAllElem) trustAllElem.style.color = syncTrustColor;
 
         // Compute time gap only for sequential frames
         let unityTimeGapDisplay = '-';
@@ -2410,6 +3901,13 @@ class Visualizer {
         } else {
             updateField('vehicle-speed', '-');
         }
+        const d = this.distanceFromStartSeries && this.currentFrameIndex < this.distanceFromStartSeries.length
+            ? this.distanceFromStartSeries[this.currentFrameIndex]
+            : null;
+        updateField(
+            'vehicle-distance-from-start',
+            (d !== null && d !== undefined && Number.isFinite(d)) ? `${d.toFixed(2)} m` : '-'
+        );
         const longitudinal = this.currentLongitudinalMetrics || { accel: null, jerk: null };
         updateField(
             'vehicle-accel',
@@ -2523,6 +4021,9 @@ class Visualizer {
 
     updateOverlays() {
         this.overlayRenderer.clear();
+        this.projectionDiagnostics = {};
+        let plannerPathForMetrics = [];
+        let oraclePathForMetrics = [];
         
         if (!this.currentFrameData) {
             console.log('[OVERLAY] No frame data available');
@@ -2534,8 +4035,7 @@ class Visualizer {
             hasGroundTruth: !!this.currentFrameData.ground_truth,
             hasTrajectory: !!this.currentFrameData.trajectory,
             toggleGroundTruth: document.getElementById('toggle-ground-truth').checked,
-            toggleLanes: document.getElementById('toggle-lanes').checked,
-            toggleCurves: document.getElementById('toggle-detected-curves').checked
+            toggleLanes: document.getElementById('toggle-lanes').checked
         });
         
         // NEW: Get actual 8m position from Unity camera calibration (if available)
@@ -2632,40 +4132,6 @@ class Visualizer {
             }
         }
         
-        // Draw detected lane curves FIRST (orange curves) - shows actual polynomial curves in image space
-        if (document.getElementById('toggle-detected-curves').checked) {
-            // Prefer newly generated coefficients from debug overlays (if available)
-            let laneCoeffs = null;
-            const method = this.currentFrameData.perception && this.currentFrameData.perception.method
-                ? String(this.currentFrameData.perception.method).toLowerCase()
-                : '';
-            const allowCvCurves = method === '' || method.includes('cv');
-            if (allowCvCurves) {
-                if (this.generatedCoefficientsCache && this.generatedCoefficientsCache[this.currentFrameIndex]) {
-                    laneCoeffs = this.generatedCoefficientsCache[this.currentFrameIndex];
-                } else if (this.currentFrameData.perception && this.currentFrameData.perception.lane_line_coefficients) {
-                    laneCoeffs = this.currentFrameData.perception.lane_line_coefficients;
-                }
-            }
-            
-            if (laneCoeffs) {
-                // Filter out None/null coefficients (only draw valid lanes)
-                const validCoeffs = laneCoeffs.filter(c => c !== null && c !== undefined && Array.isArray(c) && c.length >= 2);
-                if (validCoeffs.length > 0) {
-                    // Draw detected curves in orange to distinguish from the vertical lines
-                    this.overlayRenderer.drawDetectedLaneCurves(validCoeffs, '#ff8800');
-                } else {
-                    console.log('[OVERLAY] No valid lane coefficients to draw (all None or invalid)');
-                }
-            } else {
-                console.log('[OVERLAY] No lane_line_coefficients available:', {
-                    hasPerception: !!this.currentFrameData.perception,
-                    hasCoeffs: !!(this.currentFrameData.perception && this.currentFrameData.perception.lane_line_coefficients),
-                    method
-                });
-            }
-        }
-        
         // Draw fit points (points used for polynomial fitting) - NEW
         const fitPointsToggle = document.getElementById('toggle-fit-points');
         if (fitPointsToggle && fitPointsToggle.checked) {
@@ -2687,24 +4153,38 @@ class Visualizer {
             }
             
             // Draw points if available
-            if (fit_points_left && Array.isArray(fit_points_left) && fit_points_left.length > 0) {
-                this.overlayRenderer.drawFitPoints(fit_points_left, '#ff00ff', 3);  // Magenta for left lane
+            const cfgMin = Number.isFinite(Number(this.summaryConfig?.segmentation_fit_min_row_ratio))
+                ? Number(this.summaryConfig.segmentation_fit_min_row_ratio)
+                : 0.45;
+            const cfgMax = Number.isFinite(Number(this.summaryConfig?.segmentation_fit_max_row_ratio))
+                ? Number(this.summaryConfig.segmentation_fit_max_row_ratio)
+                : 0.85;
+            const leftFiltered = this.filterFitPointsToRoadRegion(fit_points_left, cfgMin, cfgMax);
+            const rightFiltered = this.filterFitPointsToRoadRegion(fit_points_right, cfgMin, cfgMax);
+            if (leftFiltered.length > 0) {
+                this.overlayRenderer.drawFitPoints(leftFiltered, '#ff00ff', 3);  // Magenta for left lane
             }
-            if (fit_points_right && Array.isArray(fit_points_right) && fit_points_right.length > 0) {
-                this.overlayRenderer.drawFitPoints(fit_points_right, '#00ffff', 3);  // Cyan for right lane
+            if (rightFiltered.length > 0) {
+                this.overlayRenderer.drawFitPoints(rightFiltered, '#00ffff', 3);  // Cyan for right lane
             }
         }
 
-        if (document.getElementById('toggle-seg-fit-points').checked) {
+        const segFitPointsToggle = document.getElementById('toggle-seg-fit-points');
+        if (segFitPointsToggle && segFitPointsToggle.checked) {
             const p = this.currentFrameData.perception;
-            const method = p && p.detection_method ? String(p.detection_method).toLowerCase() : '';
-            if (method === 'segmentation') {
-                if (p && p.fit_points_left && Array.isArray(p.fit_points_left) && p.fit_points_left.length > 0) {
-                    this.overlayRenderer.drawFitPoints(p.fit_points_left, '#ffd400', 3);  // Yellow for left lane
-                }
-                if (p && p.fit_points_right && Array.isArray(p.fit_points_right) && p.fit_points_right.length > 0) {
-                    this.overlayRenderer.drawFitPoints(p.fit_points_right, '#00bfff', 3);  // Blue for right lane
-                }
+            const cfgMin = Number.isFinite(Number(this.summaryConfig?.segmentation_fit_min_row_ratio))
+                ? Number(this.summaryConfig.segmentation_fit_min_row_ratio)
+                : 0.45;
+            const cfgMax = Number.isFinite(Number(this.summaryConfig?.segmentation_fit_max_row_ratio))
+                ? Number(this.summaryConfig.segmentation_fit_max_row_ratio)
+                : 0.85;
+            const leftFiltered = this.filterFitPointsToRoadRegion(p?.fit_points_left, cfgMin, cfgMax);
+            const rightFiltered = this.filterFitPointsToRoadRegion(p?.fit_points_right, cfgMin, cfgMax);
+            if (leftFiltered.length > 0) {
+                this.overlayRenderer.drawFitPoints(leftFiltered, '#ffd400', 3);  // Yellow for left lane
+            }
+            if (rightFiltered.length > 0) {
+                this.overlayRenderer.drawFitPoints(rightFiltered, '#00bfff', 3);  // Blue for right lane
             }
         }
         
@@ -2719,12 +4199,15 @@ class Visualizer {
         }
         const segFitRoiToggle = document.getElementById('toggle-seg-fit-roi');
         if (segFitRoiToggle && segFitRoiToggle.checked) {
-            const ratio = this.summaryConfig?.segmentation_fit_max_row_ratio;
+            const minRatio = this.summaryConfig?.segmentation_fit_min_row_ratio;
+            const maxRatio = this.summaryConfig?.segmentation_fit_max_row_ratio;
             const h = this.overlayRenderer.imageHeight;
             const w = this.overlayRenderer.imageWidth;
-            if (ratio !== undefined && ratio !== null && ratio > 0) {
-                const yMax = h * ratio;
-                this.overlayRenderer.drawRoiRect(0, 0, w, yMax, '#00e5ff', 2, true);
+            if (maxRatio !== undefined && maxRatio !== null && maxRatio > 0) {
+                const yMin = h * ((minRatio !== undefined && minRatio !== null) ? minRatio : 0.45);
+                const yMax = h * maxRatio;
+                this.overlayRenderer.drawRoiRect(0, yMin, w, yMax, '#00e5ff', 2, true);
+                this.overlayRenderer.drawHorizontalLine(yMin, '#00e5ff', 2, true);
                 this.overlayRenderer.drawHorizontalLine(yMax, '#00e5ff', 2, true);
             }
         }
@@ -2789,25 +4272,92 @@ class Visualizer {
                     }
                 }
 
-                const trajPoints = this.currentFrameData.trajectory.trajectory_points;
-                const projected = this.projectTrajectoryToImage(trajPoints);
-                if (projected && projected.length > 1) {
-                    const clipped = projected.filter(pt => pt.y >= trajectoryMinY && pt.y <= this.overlayRenderer.imageHeight);
-                    this.overlayRenderer.drawImagePath(clipped, '#ff00ff', 2);
+                const rawTrajPoints = this.currentFrameData.trajectory.trajectory_points;
+                const trajPoints = this.getDisplayTrajectoryPoints(rawTrajPoints);
+                const mainRenderTraj = this.toForwardMonotonicPath(trajPoints);
+                plannerPathForMetrics = mainRenderTraj;
+                this.projectionDiagnostics.source_turn_sign = this.computeTurnSign(mainRenderTraj, 'x', 'y');
+                if (mainRenderTraj.length) {
+                    const projected = this.projectTrajectoryToImage(mainRenderTraj);
+                    if (projected && projected.length > 1) {
+                        const clipped = [];
+                        let prev = null;
+                        for (const pt of projected) {
+                            if (!Number.isFinite(pt?.x) || !Number.isFinite(pt?.y)) continue;
+                            if (pt.y < trajectoryMinY || pt.y > this.overlayRenderer.imageHeight) continue;
+                            if (prev) {
+                                const jumpPx = Math.hypot(pt.x - prev.x, pt.y - prev.y);
+                                if (jumpPx > 140) {
+                                    prev = pt;
+                                    continue;
+                                }
+                            }
+                            clipped.push(pt);
+                            prev = pt;
+                        }
+                        this.overlayRenderer.drawImagePath(clipped, '#ff00ff', 2);
+                        const diag = projected._diag || {};
+                        this.projectionDiagnostics.main_first_visible_src_y_m = diag.main_first_visible_src_y_m;
+                        this.projectionDiagnostics.main_mirror_sanity = diag.main_mirror_sanity || '-';
+                        this.projectionDiagnostics.main_turn_sign = this.computeTurnSign(projected, 'srcX', 'srcY');
+                    } else {
+                        const sortedPoints = [...mainRenderTraj]
+                            .filter(point => point.y >= 0)
+                            .sort((a, b) => (a.y || 0) - (b.y || 0));
+                        this.overlayRenderer.drawTrajectory(
+                            sortedPoints,
+                            '#ff00ff',
+                            2,
+                            trajectoryMinY,
+                            this.overlayRenderer.imageHeight
+                        );
+                        this.projectionDiagnostics.main_first_visible_src_y_m = null;
+                        this.projectionDiagnostics.main_mirror_sanity = 'fallback';
+                        this.projectionDiagnostics.main_turn_sign = this.computeTurnSign(mainRenderTraj, 'x', 'y');
+                    }
+                }
+            }
+        }
+
+        // Draw oracle trajectory (display only)
+        if (document.getElementById('toggle-oracle-trajectory')?.checked) {
+            const oraclePoints = this.currentFrameData?.trajectory?.oracle_points;
+            if (Array.isArray(oraclePoints) && oraclePoints.length > 0) {
+                const renderOracle = this.toForwardMonotonicPath(oraclePoints);
+                oraclePathForMetrics = renderOracle;
+                const projectedOracle = this.projectTrajectoryToImage(renderOracle);
+                if (projectedOracle && projectedOracle.length > 1) {
+                    this.overlayRenderer.drawImagePath(projectedOracle, '#66ff66', 2);
                 } else {
-                    const sortedPoints = [...trajPoints]
+                    const sortedOracle = [...renderOracle]
                         .filter(point => point.y >= 0)
                         .sort((a, b) => (a.y || 0) - (b.y || 0));
                     this.overlayRenderer.drawTrajectory(
-                        sortedPoints,
-                        '#ff00ff',
+                        sortedOracle,
+                        '#66ff66',
                         2,
-                        trajectoryMinY,
+                        null,
                         this.overlayRenderer.imageHeight
                     );
                 }
             }
         }
+        const lateralMetrics = this.computeLateralErrorMetrics(plannerPathForMetrics, oraclePathForMetrics);
+        this.projectionDiagnostics.lateral_error_5m = lateralMetrics.err5m;
+        this.projectionDiagnostics.lateral_error_10m = lateralMetrics.err10m;
+        this.projectionDiagnostics.lateral_error_15m = lateralMetrics.err15m;
+        this.projectionDiagnostics.lateral_error_source = lateralMetrics.source;
+        const rightFidDiag = this.getRightLaneFiducialDiagnostics();
+        this.projectionDiagnostics.right_fiducial_err_5m = rightFidDiag.err5m;
+        this.projectionDiagnostics.right_fiducial_err_10m = rightFidDiag.err10m;
+        this.projectionDiagnostics.right_fiducial_err_15m = rightFidDiag.err15m;
+        this.projectionDiagnostics.right_fiducial_err_mean = rightFidDiag.meanErr;
+        this.projectionDiagnostics.right_fiducial_err_max = rightFidDiag.maxErr;
+        this.projectionDiagnostics.right_fiducial_source = rightFidDiag.source;
+        if (document.getElementById('toggle-right-lane-fiducials')?.checked) {
+            this.drawRightLaneFiducialsOverlay(rightFidDiag);
+        }
+        this.drawMainDistanceScale();
         
         // Draw reference point
         if (document.getElementById('toggle-reference').checked) {
@@ -2831,6 +4381,7 @@ class Visualizer {
         }
 
         this.updateTopdownOverlay();
+        this.updateProjectionData();
     }
 
     async updateDebugOverlays() {
@@ -2938,6 +4489,22 @@ class Visualizer {
         } else {
             console.warn('No debug images to display');
         }
+    }
+
+    filterFitPointsToRoadRegion(points, minRowRatio = 0.45, maxRowRatio = 0.85) {
+        if (!Array.isArray(points) || points.length === 0) {
+            return [];
+        }
+        const minY = this.overlayRenderer.imageHeight * minRowRatio;
+        const maxY = this.overlayRenderer.imageHeight * maxRowRatio;
+        return points.filter((pt) =>
+            Array.isArray(pt) &&
+            pt.length >= 2 &&
+            Number.isFinite(pt[0]) &&
+            Number.isFinite(pt[1]) &&
+            pt[1] >= minY &&
+            pt[1] <= maxY
+        );
     }
 
     switchTab(tabName) {
@@ -3329,18 +4896,9 @@ class Visualizer {
                 };
             }
             
-            // Store lane_line_coefficients in cache (for orange curves)
-            if (data.lane_line_coefficients) {
-                if (!this.generatedCoefficientsCache) {
-                    this.generatedCoefficientsCache = {};
-                }
-                this.generatedCoefficientsCache[this.currentFrameIndex] = data.lane_line_coefficients;
-            }
-            
-            // Update overlays to show new fit points and curves if checkboxes are checked
+            // Update overlays to show new fit points if checkbox is checked
             const fitPointsToggle = document.getElementById('toggle-fit-points');
-            const curvesToggle = document.getElementById('toggle-detected-curves');
-            if ((fitPointsToggle && fitPointsToggle.checked) || (curvesToggle && curvesToggle.checked)) {
+            if (fitPointsToggle && fitPointsToggle.checked) {
                 this.updateOverlays();
             }
             const cacheKey = `${this.currentRecording}_${this.currentFrameIndex}`;
@@ -3502,6 +5060,15 @@ class Visualizer {
         const usesTime = !!data.time;
         this.chartTimeSeries = data.time || null;
         this.chartUsesTime = usesTime;
+        this.chartSeriesData = data.signals || {};
+        this.chartSeriesNames = Object.keys(this.chartSeriesData);
+        if (labels.length) {
+            this.chartXMin = labels[0];
+            this.chartXMax = labels[labels.length - 1];
+        } else {
+            this.chartXMin = null;
+            this.chartXMax = null;
+        }
         const palette = [
             '#4a90e2', '#e94f37', '#8bc34a', '#f4b400',
             '#9c27b0', '#00bcd4', '#ff9800', '#cddc39',
@@ -3529,7 +5096,10 @@ class Visualizer {
             } else {
                 this.chart.data.labels = labels;
                 this.chart.data.datasets = datasets;
+                this.chart.options.scales.x.min = this.chartXMin;
+                this.chart.options.scales.x.max = this.chartXMax;
                 this.chart.update();
+                this.updateQuickChartValuesTable();
                 return;
             }
         }
@@ -3638,6 +5208,7 @@ class Visualizer {
             plugins: [curveShadePlugin, cursorPlugin],
         });
         this.updateChartCursor();
+        this.updateQuickChartValuesTable();
     }
 
     async loadCurvatureSeries(xAxisKey, expectedLength) {
@@ -3698,6 +5269,7 @@ class Visualizer {
             this.chartCursorValue = null;
         }
         this.chart.update('none');
+        this.updateQuickChartValuesTable();
     }
 
     clearChart() {
@@ -3705,6 +5277,11 @@ class Visualizer {
             this.chart.destroy();
             this.chart = null;
         }
+        this.chartSeriesData = null;
+        this.chartSeriesNames = [];
+        this.chartXMin = null;
+        this.chartXMax = null;
+        this.updateQuickChartValuesTable();
     }
 
     loadChartViews() {
@@ -3775,6 +5352,30 @@ class Visualizer {
                 timeKey: 'vehicle/timestamps'
             },
             {
+                name: 'Steering Limiter Waterfall',
+                signals: [
+                    'control/steering_pre_rate_limit',
+                    'control/steering_post_rate_limit',
+                    'control/steering_post_jerk_limit',
+                    'control/steering_post_hard_clip',
+                    'control/steering_post_smoothing',
+                    'control/steering'
+                ],
+                timeKey: 'vehicle/timestamps'
+            },
+            {
+                name: 'Steering Limiter Deltas',
+                signals: [
+                    'control/steering_rate_limited_delta',
+                    'control/steering_jerk_limited_delta',
+                    'control/steering_hard_clip_delta',
+                    'control/steering_smoothing_delta',
+                    'control/feedback_steering',
+                    'control/feedforward_steering'
+                ],
+                timeKey: 'vehicle/timestamps'
+            },
+            {
                 name: 'Trajectory Reference vs Command',
                 signals: [
                     'trajectory/reference_point_x',
@@ -3825,28 +5426,39 @@ class Visualizer {
 
     renderSavedViews() {
         const select = document.getElementById('chart-saved-views-select');
-        if (!select) return;
-        const currentValue = select.value;
-        select.innerHTML = '';
-        const placeholder = document.createElement('option');
-        placeholder.value = '';
-        placeholder.textContent = this.chartSavedViews.length ? 'Select a view' : 'No saved views';
-        select.appendChild(placeholder);
-        for (const view of this.chartSavedViews) {
-            const option = document.createElement('option');
-            option.value = view.name;
-            option.textContent = view.name;
-            select.appendChild(option);
-        }
-        const preferred = currentValue || this.lastChartViewName;
+        const quickSelect = document.getElementById('quick-saved-views-select');
+        const currentValue = select ? select.value : '';
+        const quickCurrentValue = quickSelect ? quickSelect.value : '';
+        const fillSelect = (el, placeholderText) => {
+            if (!el) return;
+            el.innerHTML = '';
+            const placeholder = document.createElement('option');
+            placeholder.value = '';
+            placeholder.textContent = this.chartSavedViews.length ? placeholderText : 'No saved views';
+            el.appendChild(placeholder);
+            for (const view of this.chartSavedViews) {
+                const option = document.createElement('option');
+                option.value = view.name;
+                option.textContent = view.name;
+                el.appendChild(option);
+            }
+        };
+        fillSelect(select, 'Select a view');
+        fillSelect(quickSelect, 'Quick select view');
+        const preferred = currentValue || quickCurrentValue || this.lastChartViewName;
         if (preferred && this.chartSavedViews.some(v => v.name === preferred)) {
-            select.value = preferred;
+            if (select) select.value = preferred;
+            if (quickSelect) quickSelect.value = preferred;
         }
     }
 
     loadSelectedChartView() {
         const select = document.getElementById('chart-saved-views-select');
         if (!select || !select.value) return;
+        const quickSelect = document.getElementById('quick-saved-views-select');
+        if (quickSelect) {
+            quickSelect.value = select.value;
+        }
         const view = this.chartSavedViews.find(v => v.name === select.value);
         if (view) {
             this.applyChartView(view);
@@ -3909,6 +5521,118 @@ class Visualizer {
         }
     }
 
+    applyQuickSelectedChartView() {
+        const quickSelect = document.getElementById('quick-saved-views-select');
+        const mainSelect = document.getElementById('chart-saved-views-select');
+        if (!quickSelect || !quickSelect.value) {
+            return;
+        }
+        if (mainSelect) {
+            mainSelect.value = quickSelect.value;
+        }
+        const view = this.chartSavedViews.find(v => v.name === quickSelect.value);
+        if (view) {
+            this.applyChartView(view);
+        }
+    }
+
+    updateQuickChartValuesTable() {
+        const body = document.getElementById('quick-chart-values-body');
+        if (!body) return;
+
+        if (!this.chartSeriesData || !this.chartSeriesNames.length) {
+            body.innerHTML = '<tr><td colspan="2" style="text-align: center; color: #888;">Plot a chart view to see values</td></tr>';
+            return;
+        }
+
+        const frameIndex = this.currentFrameIndex;
+        const rows = [];
+        for (const signal of this.chartSeriesNames) {
+            const series = this.chartSeriesData[signal] || [];
+            const value = frameIndex < series.length ? series[frameIndex] : null;
+            rows.push(
+                `<tr><td>${signal}</td><td>${this.formatQuickChartValue(value)}</td></tr>`
+            );
+        }
+        body.innerHTML = rows.length
+            ? rows.join('')
+            : '<tr><td colspan="2" style="text-align: center; color: #888;">No chart data available</td></tr>';
+    }
+
+    formatQuickChartValue(value) {
+        if (value === null || value === undefined || Number.isNaN(value)) {
+            return '-';
+        }
+        if (!Number.isFinite(value)) {
+            return String(value);
+        }
+        const abs = Math.abs(value);
+        if (abs >= 1000) return value.toFixed(2);
+        if (abs >= 100) return value.toFixed(3);
+        if (abs >= 1) return value.toFixed(4);
+        return value.toFixed(6);
+    }
+
+    zoomChart(factor) {
+        if (!this.chart || this.chartXMin === null || this.chartXMax === null) {
+            return;
+        }
+        const xScaleOpts = this.chart.options?.scales?.x;
+        if (!xScaleOpts) {
+            return;
+        }
+        const fullMin = this.chartXMin;
+        const fullMax = this.chartXMax;
+        let currentMin = xScaleOpts.min ?? fullMin;
+        let currentMax = xScaleOpts.max ?? fullMax;
+        if (!Number.isFinite(currentMin) || !Number.isFinite(currentMax)) {
+            currentMin = fullMin;
+            currentMax = fullMax;
+        }
+        const fullRange = fullMax - fullMin;
+        if (fullRange <= 0) {
+            return;
+        }
+        const center = this.chartUsesTime
+            ? (this.chartCursorValue ?? ((currentMin + currentMax) / 2))
+            : (this.chartCursorIndex ?? ((currentMin + currentMax) / 2));
+        const minRange = this.chartUsesTime ? Math.max(fullRange / 1000, 1e-6) : 1;
+        let nextRange = (currentMax - currentMin) * factor;
+        if (!Number.isFinite(nextRange) || nextRange <= 0) {
+            return;
+        }
+        nextRange = Math.min(fullRange, Math.max(minRange, nextRange));
+
+        let nextMin = center - (nextRange / 2);
+        let nextMax = center + (nextRange / 2);
+        if (nextMin < fullMin) {
+            nextMax += (fullMin - nextMin);
+            nextMin = fullMin;
+        }
+        if (nextMax > fullMax) {
+            nextMin -= (nextMax - fullMax);
+            nextMax = fullMax;
+        }
+        nextMin = Math.max(fullMin, nextMin);
+        nextMax = Math.min(fullMax, nextMax);
+        xScaleOpts.min = nextMin;
+        xScaleOpts.max = nextMax;
+        this.chart.update('none');
+    }
+
+    resetChartZoom() {
+        if (!this.chart || this.chartXMin === null || this.chartXMax === null) {
+            return;
+        }
+        const xScaleOpts = this.chart.options?.scales?.x;
+        if (!xScaleOpts) {
+            return;
+        }
+        xScaleOpts.min = this.chartXMin;
+        xScaleOpts.max = this.chartXMax;
+        this.chart.update('none');
+    }
+
     toggleLegend() {
         const panel = document.getElementById('legend-panel');
         const btn = document.getElementById('legend-toggle-btn');
@@ -3922,6 +5646,31 @@ class Visualizer {
         const cameraPanel = document.getElementById('camera-panel');
         const dataPanel = document.getElementById('data-panel');
         if (!handle || !cameraPanel || !dataPanel) return;
+
+        const applySplit = (requestedLeftWidth) => {
+            const main = document.getElementById('main-content');
+            if (!main) return;
+            const rect = main.getBoundingClientRect();
+            if (!rect || rect.width <= 0) return;
+            const minLeft = 520;
+            const minRight = 320;
+            const maxLeft = rect.width - minRight - 6;
+            const clamped = Math.max(minLeft, Math.min(maxLeft, requestedLeftWidth));
+            cameraPanel.style.flex = 'none';
+            cameraPanel.style.width = `${clamped}px`;
+            dataPanel.style.width = `${rect.width - clamped - 6}px`;
+        };
+
+        const savedLeft = localStorage.getItem(this.panelSplitLeftWidthKey);
+        if (savedLeft) {
+            const parsed = parseFloat(savedLeft);
+            if (Number.isFinite(parsed) && parsed >= 320 && parsed <= 4000) {
+                // Delay to ensure layout has settled before applying persisted split.
+                requestAnimationFrame(() => applySplit(parsed));
+            } else {
+                localStorage.removeItem(this.panelSplitLeftWidthKey);
+            }
+        }
 
         let dragging = false;
         handle.addEventListener('mousedown', (event) => {
@@ -3947,6 +5696,20 @@ class Visualizer {
             if (dragging) {
                 dragging = false;
                 document.body.style.cursor = 'default';
+                const leftWidth = cameraPanel.getBoundingClientRect().width;
+                if (Number.isFinite(leftWidth) && leftWidth > 0) {
+                    localStorage.setItem(this.panelSplitLeftWidthKey, String(Math.round(leftWidth)));
+                }
+            }
+        });
+
+        // Keep persisted split valid across browser resizes.
+        window.addEventListener('resize', () => {
+            const saved = localStorage.getItem(this.panelSplitLeftWidthKey);
+            if (!saved) return;
+            const parsed = parseFloat(saved);
+            if (Number.isFinite(parsed)) {
+                applySplit(parsed);
             }
         });
     }
@@ -3978,7 +5741,21 @@ class Visualizer {
 
         const savedHeight = localStorage.getItem(this.cameraGridHeightKey);
         if (savedHeight) {
-            applyHeight(parseFloat(savedHeight));
+            const parsed = parseFloat(savedHeight);
+            if (Number.isFinite(parsed) && parsed >= 300 && parsed <= 1400) {
+                applyHeight(parsed);
+            } else {
+                localStorage.removeItem(this.cameraGridHeightKey);
+                if (wrapper) wrapper.style.height = '60vh';
+                grid.style.width = '';
+                grid.style.height = '';
+                grid.style.transform = '';
+            }
+        } else {
+            if (wrapper) wrapper.style.height = '60vh';
+            grid.style.width = '';
+            grid.style.height = '';
+            grid.style.transform = '';
         }
 
         let isResizing = false;

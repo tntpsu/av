@@ -13,6 +13,9 @@ from io import BytesIO
 from PIL import Image
 import json
 import sys
+import logging
+import subprocess
+import re
 
 # Add backend modules to path
 backend_path = Path(__file__).parent / "backend"
@@ -23,10 +26,13 @@ from issue_detector import detect_issues
 
 app = Flask(__name__)
 CORS(app)  # Enable CORS for local development
+logging.getLogger("werkzeug").setLevel(logging.ERROR)
+app.logger.setLevel(logging.ERROR)
 
 # Paths
 RECORDINGS_DIR = Path(__file__).parent.parent.parent / "data" / "recordings"
 DEBUG_VIS_DIR = Path(__file__).parent.parent.parent / "tmp" / "debug_visualizations"
+REPO_ROOT = Path(__file__).parent.parent.parent
 
 
 def numpy_to_list(obj):
@@ -42,6 +48,29 @@ def numpy_to_list(obj):
     elif isinstance(obj, bytes):
         return obj.decode('utf-8')
     return obj
+
+
+def parse_flattened_xy_points(row, include_valid=False):
+    """Parse flattened [x0,y0,x1,y1,...] to point objects."""
+    if row is None:
+        return []
+    try:
+        arr = np.asarray(row, dtype=np.float32).reshape(-1)
+    except Exception:
+        return []
+    if arr.size < 2 or arr.size % 2 != 0:
+        return []
+    points = []
+    for i in range(0, arr.size, 2):
+        x = float(arr[i])
+        y = float(arr[i + 1])
+        if include_valid:
+            valid = bool(np.isfinite(x) and np.isfinite(y) and x >= 0.0 and y >= 0.0)
+            points.append({"x": x, "y": y, "valid": valid})
+        else:
+            if np.isfinite(x) and np.isfinite(y):
+                points.append({"x": x, "y": y})
+    return points
 
 
 def _is_numeric_series(dataset: h5py.Dataset) -> bool:
@@ -104,6 +133,49 @@ def get_frame_count(filename):
             "file_exists": filepath.exists(),
             "traceback": traceback.format_exc()
         }), 500
+
+
+@app.route('/api/recording/<path:filename>/meta')
+def get_recording_meta(filename):
+    """Get recording metadata (type/source/top-down availability)."""
+    from urllib.parse import unquote
+    filename = unquote(filename)
+    filepath = RECORDINGS_DIR / filename
+    if not filepath.exists():
+        return jsonify({"error": f"Recording not found: {filename}"}), 404
+
+    try:
+        with h5py.File(filepath, 'r') as f:
+            meta_raw = f.attrs.get('metadata')
+            metadata = {}
+            if meta_raw is not None:
+                try:
+                    meta_str = (
+                        meta_raw.decode('utf-8', 'ignore')
+                        if isinstance(meta_raw, (bytes, bytearray))
+                        else str(meta_raw)
+                    )
+                    metadata = json.loads(meta_str)
+                except Exception:
+                    metadata = {}
+
+            topdown_available = (
+                "camera/topdown_images" in f and len(f["camera/topdown_images"]) > 0
+            )
+            return jsonify(
+                {
+                    "recording_type": metadata.get("recording_type", "unknown"),
+                    "source_recording": metadata.get("source_recording"),
+                    "lock_source_recording": metadata.get("lock_source_recording"),
+                    "control_lock_source_recording": metadata.get("control_lock_source_recording"),
+                    "perception_mode": metadata.get("perception_mode"),
+                    "topdown_available": bool(topdown_available),
+                    "metadata": metadata,
+                }
+            )
+    except Exception as e:
+        import traceback
+        return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500
 
 
 @app.route('/api/recording/<path:filename>/signals')
@@ -309,6 +381,10 @@ def get_frame_data(filename, frame_index):
                         'camera_8m_screen_y': float(f['vehicle/camera_8m_screen_y'][vehicle_idx]) if 'vehicle/camera_8m_screen_y' in f and vehicle_idx is not None and vehicle_idx < len(f['vehicle/camera_8m_screen_y']) else None,
                         'camera_lookahead_screen_y': float(f['vehicle/camera_lookahead_screen_y'][vehicle_idx]) if 'vehicle/camera_lookahead_screen_y' in f and vehicle_idx is not None and vehicle_idx < len(f['vehicle/camera_lookahead_screen_y']) else None,
                         'ground_truth_lookahead_distance': float(f['vehicle/ground_truth_lookahead_distance'][vehicle_idx]) if 'vehicle/ground_truth_lookahead_distance' in f and vehicle_idx is not None and vehicle_idx < len(f['vehicle/ground_truth_lookahead_distance']) else None,
+                        'right_lane_fiducials_point_count': int(f['vehicle/right_lane_fiducials_point_count'][vehicle_idx]) if 'vehicle/right_lane_fiducials_point_count' in f and vehicle_idx is not None and vehicle_idx < len(f['vehicle/right_lane_fiducials_point_count']) else 0,
+                        'right_lane_fiducials_horizon_meters': float(f['vehicle/right_lane_fiducials_horizon_meters'][vehicle_idx]) if 'vehicle/right_lane_fiducials_horizon_meters' in f and vehicle_idx is not None and vehicle_idx < len(f['vehicle/right_lane_fiducials_horizon_meters']) else 0.0,
+                        'right_lane_fiducials_spacing_meters': float(f['vehicle/right_lane_fiducials_spacing_meters'][vehicle_idx]) if 'vehicle/right_lane_fiducials_spacing_meters' in f and vehicle_idx is not None and vehicle_idx < len(f['vehicle/right_lane_fiducials_spacing_meters']) else 0.0,
+                        'right_lane_fiducials_enabled': bool(f['vehicle/right_lane_fiducials_enabled'][vehicle_idx]) if 'vehicle/right_lane_fiducials_enabled' in f and vehicle_idx is not None and vehicle_idx < len(f['vehicle/right_lane_fiducials_enabled']) else False,
                         # NEW: Camera FOV values from Unity
                         'camera_field_of_view': float(f['vehicle/camera_field_of_view'][vehicle_idx]) if 'vehicle/camera_field_of_view' in f and vehicle_idx is not None and vehicle_idx < len(f['vehicle/camera_field_of_view']) else None,
                         'camera_horizontal_fov': float(f['vehicle/camera_horizontal_fov'][vehicle_idx]) if 'vehicle/camera_horizontal_fov' in f and vehicle_idx is not None and vehicle_idx < len(f['vehicle/camera_horizontal_fov']) else None,
@@ -319,6 +395,13 @@ def get_frame_data(filename, frame_index):
                         'camera_forward_x': float(f['vehicle/camera_forward_x'][vehicle_idx]) if 'vehicle/camera_forward_x' in f and vehicle_idx is not None and vehicle_idx < len(f['vehicle/camera_forward_x']) else None,
                         'camera_forward_y': float(f['vehicle/camera_forward_y'][vehicle_idx]) if 'vehicle/camera_forward_y' in f and vehicle_idx is not None and vehicle_idx < len(f['vehicle/camera_forward_y']) else None,
                         'camera_forward_z': float(f['vehicle/camera_forward_z'][vehicle_idx]) if 'vehicle/camera_forward_z' in f and vehicle_idx is not None and vehicle_idx < len(f['vehicle/camera_forward_z']) else None,
+                        'topdown_camera_pos_x': float(f['vehicle/topdown_camera_pos_x'][vehicle_idx]) if 'vehicle/topdown_camera_pos_x' in f and vehicle_idx is not None and vehicle_idx < len(f['vehicle/topdown_camera_pos_x']) else None,
+                        'topdown_camera_pos_y': float(f['vehicle/topdown_camera_pos_y'][vehicle_idx]) if 'vehicle/topdown_camera_pos_y' in f and vehicle_idx is not None and vehicle_idx < len(f['vehicle/topdown_camera_pos_y']) else None,
+                        'topdown_camera_pos_z': float(f['vehicle/topdown_camera_pos_z'][vehicle_idx]) if 'vehicle/topdown_camera_pos_z' in f and vehicle_idx is not None and vehicle_idx < len(f['vehicle/topdown_camera_pos_z']) else None,
+                        'topdown_camera_forward_x': float(f['vehicle/topdown_camera_forward_x'][vehicle_idx]) if 'vehicle/topdown_camera_forward_x' in f and vehicle_idx is not None and vehicle_idx < len(f['vehicle/topdown_camera_forward_x']) else None,
+                        'topdown_camera_forward_y': float(f['vehicle/topdown_camera_forward_y'][vehicle_idx]) if 'vehicle/topdown_camera_forward_y' in f and vehicle_idx is not None and vehicle_idx < len(f['vehicle/topdown_camera_forward_y']) else None,
+                        'topdown_camera_forward_z': float(f['vehicle/topdown_camera_forward_z'][vehicle_idx]) if 'vehicle/topdown_camera_forward_z' in f and vehicle_idx is not None and vehicle_idx < len(f['vehicle/topdown_camera_forward_z']) else None,
+                        'topdown_camera_orthographic_size': float(f['vehicle/topdown_camera_orthographic_size'][vehicle_idx]) if 'vehicle/topdown_camera_orthographic_size' in f and vehicle_idx is not None and vehicle_idx < len(f['vehicle/topdown_camera_orthographic_size']) else None,
                         # NEW: Debug fields for diagnosing ground truth offset issues
                         'road_center_at_car_x': float(f['vehicle/road_center_at_car_x'][vehicle_idx]) if 'vehicle/road_center_at_car_x' in f and vehicle_idx is not None and vehicle_idx < len(f['vehicle/road_center_at_car_x']) else None,
                         'road_center_at_car_y': float(f['vehicle/road_center_at_car_y'][vehicle_idx]) if 'vehicle/road_center_at_car_y' in f and vehicle_idx is not None and vehicle_idx < len(f['vehicle/road_center_at_car_y']) else None,
@@ -372,6 +455,22 @@ def get_frame_data(filename, frame_index):
                         road_z = frame_data['vehicle']['road_center_at_lookahead_z']
                         actual_dist = np.sqrt((road_x - cam_x)**2 + (road_z - cam_z)**2)
                         frame_data['vehicle']['actual_distance_to_road_center'] = float(actual_dist)
+
+                    if 'vehicle/right_lane_fiducials_vehicle_xy' in f and vehicle_idx < len(f['vehicle/right_lane_fiducials_vehicle_xy']):
+                        frame_data['vehicle']['right_lane_fiducials_vehicle_points'] = parse_flattened_xy_points(
+                            f['vehicle/right_lane_fiducials_vehicle_xy'][vehicle_idx],
+                            include_valid=False,
+                        )
+                    else:
+                        frame_data['vehicle']['right_lane_fiducials_vehicle_points'] = []
+
+                    if 'vehicle/right_lane_fiducials_screen_xy' in f and vehicle_idx < len(f['vehicle/right_lane_fiducials_screen_xy']):
+                        frame_data['vehicle']['right_lane_fiducials_screen_points'] = parse_flattened_xy_points(
+                            f['vehicle/right_lane_fiducials_screen_xy'][vehicle_idx],
+                            include_valid=True,
+                        )
+                    else:
+                        frame_data['vehicle']['right_lane_fiducials_screen_points'] = []
             
             # Perception data - find closest by timestamp
             if 'perception/timestamps' in f and len(f['perception/timestamps']) > 0:
@@ -534,6 +633,7 @@ def get_frame_data(filename, frame_index):
                 
                 if trajectory_idx is not None and trajectory_idx < len(f['trajectory/reference_point_x']):
                     frame_data['trajectory'] = {
+                        'timestamp': float(trajectory_timestamps[trajectory_idx]),
                         'reference_point': {
                             'x': float(f['trajectory/reference_point_x'][trajectory_idx]),
                             'y': float(f['trajectory/reference_point_y'][trajectory_idx]),
@@ -590,6 +690,44 @@ def get_frame_data(filename, frame_index):
                                 # Don't break the entire frame loading
                                 print(f"Warning: Error reading trajectory_points for frame {trajectory_idx}: {e}")
                                 frame_data['trajectory']['trajectory_points'] = []
+                    if 'trajectory/oracle_points' in f and trajectory_idx < len(f['trajectory/oracle_points']):
+                        oracle_points = f['trajectory/oracle_points'][trajectory_idx]
+                        if oracle_points is not None and len(oracle_points) > 0:
+                            try:
+                                if oracle_points.ndim == 2 and oracle_points.shape[1] == 2:
+                                    oracle_points_2d = oracle_points
+                                elif oracle_points.ndim == 1:
+                                    if len(oracle_points) % 2 == 0:
+                                        oracle_points_2d = oracle_points.reshape(-1, 2)
+                                    else:
+                                        oracle_points_2d = np.array([], dtype=np.float32).reshape(0, 2)
+                                else:
+                                    oracle_points_2d = np.array([], dtype=np.float32).reshape(0, 2)
+                                frame_data['trajectory']['oracle_points'] = [
+                                    {'x': float(p[0]), 'y': float(p[1])}
+                                    for p in oracle_points_2d
+                                ]
+                            except Exception as e:
+                                print(f"Warning: Error reading oracle_points for frame {trajectory_idx}: {e}")
+                                frame_data['trajectory']['oracle_points'] = []
+                        else:
+                            frame_data['trajectory']['oracle_points'] = []
+                    if 'trajectory/oracle_point_count' in f and trajectory_idx < len(f['trajectory/oracle_point_count']):
+                        frame_data['trajectory']['oracle_point_count'] = int(
+                            f['trajectory/oracle_point_count'][trajectory_idx]
+                        )
+                    if 'trajectory/oracle_horizon_meters' in f and trajectory_idx < len(f['trajectory/oracle_horizon_meters']):
+                        frame_data['trajectory']['oracle_horizon_meters'] = float(
+                            f['trajectory/oracle_horizon_meters'][trajectory_idx]
+                        )
+                    if 'trajectory/oracle_point_spacing_meters' in f and trajectory_idx < len(f['trajectory/oracle_point_spacing_meters']):
+                        frame_data['trajectory']['oracle_point_spacing_meters'] = float(
+                            f['trajectory/oracle_point_spacing_meters'][trajectory_idx]
+                        )
+                    if 'trajectory/oracle_samples_enabled' in f and trajectory_idx < len(f['trajectory/oracle_samples_enabled']):
+                        frame_data['trajectory']['oracle_samples_enabled'] = bool(
+                            f['trajectory/oracle_samples_enabled'][trajectory_idx]
+                        )
             
             # Control data - find closest by timestamp
             if 'control/timestamps' in f and len(f['control/timestamps']) > 0:
@@ -660,6 +798,34 @@ def get_frame_data(filename, frame_index):
                         frame_data['control']['tuned_deadband'] = float(f['control/tuned_deadband'][control_idx])
                     if 'control/tuned_error_smoothing_alpha' in f and control_idx < len(f['control/tuned_error_smoothing_alpha']):
                         frame_data['control']['tuned_error_smoothing_alpha'] = float(f['control/tuned_error_smoothing_alpha'][control_idx])
+                    if 'control/steering_pre_rate_limit' in f and control_idx < len(f['control/steering_pre_rate_limit']):
+                        frame_data['control']['steering_pre_rate_limit'] = float(f['control/steering_pre_rate_limit'][control_idx])
+                    if 'control/steering_post_rate_limit' in f and control_idx < len(f['control/steering_post_rate_limit']):
+                        frame_data['control']['steering_post_rate_limit'] = float(f['control/steering_post_rate_limit'][control_idx])
+                    if 'control/steering_post_jerk_limit' in f and control_idx < len(f['control/steering_post_jerk_limit']):
+                        frame_data['control']['steering_post_jerk_limit'] = float(f['control/steering_post_jerk_limit'][control_idx])
+                    if 'control/steering_post_sign_flip' in f and control_idx < len(f['control/steering_post_sign_flip']):
+                        frame_data['control']['steering_post_sign_flip'] = float(f['control/steering_post_sign_flip'][control_idx])
+                    if 'control/steering_post_hard_clip' in f and control_idx < len(f['control/steering_post_hard_clip']):
+                        frame_data['control']['steering_post_hard_clip'] = float(f['control/steering_post_hard_clip'][control_idx])
+                    if 'control/steering_post_smoothing' in f and control_idx < len(f['control/steering_post_smoothing']):
+                        frame_data['control']['steering_post_smoothing'] = float(f['control/steering_post_smoothing'][control_idx])
+                    if 'control/steering_rate_limited_active' in f and control_idx < len(f['control/steering_rate_limited_active']):
+                        frame_data['control']['steering_rate_limited_active'] = int(f['control/steering_rate_limited_active'][control_idx]) == 1
+                    if 'control/steering_jerk_limited_active' in f and control_idx < len(f['control/steering_jerk_limited_active']):
+                        frame_data['control']['steering_jerk_limited_active'] = int(f['control/steering_jerk_limited_active'][control_idx]) == 1
+                    if 'control/steering_hard_clip_active' in f and control_idx < len(f['control/steering_hard_clip_active']):
+                        frame_data['control']['steering_hard_clip_active'] = int(f['control/steering_hard_clip_active'][control_idx]) == 1
+                    if 'control/steering_smoothing_active' in f and control_idx < len(f['control/steering_smoothing_active']):
+                        frame_data['control']['steering_smoothing_active'] = int(f['control/steering_smoothing_active'][control_idx]) == 1
+                    if 'control/steering_rate_limited_delta' in f and control_idx < len(f['control/steering_rate_limited_delta']):
+                        frame_data['control']['steering_rate_limited_delta'] = float(f['control/steering_rate_limited_delta'][control_idx])
+                    if 'control/steering_jerk_limited_delta' in f and control_idx < len(f['control/steering_jerk_limited_delta']):
+                        frame_data['control']['steering_jerk_limited_delta'] = float(f['control/steering_jerk_limited_delta'][control_idx])
+                    if 'control/steering_hard_clip_delta' in f and control_idx < len(f['control/steering_hard_clip_delta']):
+                        frame_data['control']['steering_hard_clip_delta'] = float(f['control/steering_hard_clip_delta'][control_idx])
+                    if 'control/steering_smoothing_delta' in f and control_idx < len(f['control/steering_smoothing_delta']):
+                        frame_data['control']['steering_smoothing_delta'] = float(f['control/steering_smoothing_delta'][control_idx])
             
             # Ground truth data - use same index as vehicle state (they should be synchronized)
             # Try new name first, fall back to old name for backward compatibility
@@ -1230,10 +1396,814 @@ def get_recording_diagnostics(filename):
     
     # Get query parameter for analyze_to_failure
     analyze_to_failure = request.args.get('analyze_to_failure', 'false').lower() == 'true'
+    curve_entry_start_distance_m = request.args.get('curve_entry_start_distance_m', None)
+    curve_entry_window_distance_m = request.args.get('curve_entry_window_distance_m', None)
+    try:
+        curve_entry_start_distance_m = (
+            float(curve_entry_start_distance_m)
+            if curve_entry_start_distance_m is not None and curve_entry_start_distance_m != ''
+            else None
+        )
+    except (TypeError, ValueError):
+        curve_entry_start_distance_m = None
+    try:
+        curve_entry_window_distance_m = (
+            float(curve_entry_window_distance_m)
+            if curve_entry_window_distance_m is not None and curve_entry_window_distance_m != ''
+            else None
+        )
+    except (TypeError, ValueError):
+        curve_entry_window_distance_m = None
     
     try:
-        diagnostics = analyze_trajectory_vs_steering(filepath, analyze_to_failure=analyze_to_failure)
+        diagnostics = analyze_trajectory_vs_steering(
+            filepath,
+            analyze_to_failure=analyze_to_failure,
+            curve_entry_start_distance_m=curve_entry_start_distance_m,
+            curve_entry_window_distance_m=curve_entry_window_distance_m,
+        )
         return jsonify(numpy_to_list(diagnostics))
+    except Exception as e:
+        import traceback
+        return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500
+
+
+@app.route('/api/recording/<path:filename>/topdown-diagnostics')
+def get_topdown_diagnostics(filename):
+    """Return timing/projection diagnostics for top-down trajectory overlay trust."""
+    from urllib.parse import unquote
+
+    def _nearest_abs_deltas(reference_ts: np.ndarray, target_ts: np.ndarray) -> np.ndarray:
+        if reference_ts.size == 0 or target_ts.size == 0:
+            return np.array([], dtype=float)
+        idx = np.searchsorted(target_ts, reference_ts, side='left')
+        idx = np.clip(idx, 0, target_ts.size - 1)
+        prev_idx = np.clip(idx - 1, 0, target_ts.size - 1)
+        d1 = np.abs(reference_ts - target_ts[idx])
+        d0 = np.abs(reference_ts - target_ts[prev_idx])
+        return np.minimum(d0, d1)
+
+    def _stats_ms(seconds: np.ndarray) -> dict:
+        if seconds.size == 0:
+            return {"count": 0, "mean_ms": None, "p95_ms": None, "max_ms": None}
+        abs_ms = np.abs(seconds) * 1000.0
+        return {
+            "count": int(abs_ms.size),
+            "mean_ms": float(np.mean(abs_ms)),
+            "p95_ms": float(np.percentile(abs_ms, 95)),
+            "max_ms": float(np.max(abs_ms)),
+        }
+
+    def _quality_from_p95(p95_ms: float | None) -> str:
+        if p95_ms is None:
+            return "unknown"
+        if p95_ms <= 33.5:
+            return "good"
+        if p95_ms <= 66.5:
+            return "warn"
+        return "poor"
+
+    def _nearest_indices(reference_ts: np.ndarray, target_ts: np.ndarray) -> np.ndarray:
+        if reference_ts.size == 0 or target_ts.size == 0:
+            return np.array([], dtype=int)
+        idx = np.searchsorted(target_ts, reference_ts, side='left')
+        idx = np.clip(idx, 0, target_ts.size - 1)
+        prev_idx = np.clip(idx - 1, 0, target_ts.size - 1)
+        d1 = np.abs(reference_ts - target_ts[idx])
+        d0 = np.abs(reference_ts - target_ts[prev_idx])
+        choose_prev = d0 <= d1
+        return np.where(choose_prev, prev_idx, idx).astype(int)
+
+    def _stats_signed(arr: np.ndarray) -> dict:
+        if arr.size == 0:
+            return {
+                "count": 0,
+                "mean": None,
+                "p95_abs": None,
+                "max_abs": None,
+            }
+        abs_arr = np.abs(arr)
+        return {
+            "count": int(arr.size),
+            "mean": float(np.mean(arr)),
+            "p95_abs": float(np.percentile(abs_arr, 95)),
+            "max_abs": float(np.max(abs_arr)),
+        }
+
+    def _finite_stats(arr: np.ndarray) -> dict:
+        if arr.size == 0:
+            return {"count": 0, "valid_ratio": 0.0, "mean": None, "p95": None, "max": None}
+        finite = np.isfinite(arr)
+        valid = arr[finite]
+        if valid.size == 0:
+            return {"count": int(arr.size), "valid_ratio": 0.0, "mean": None, "p95": None, "max": None}
+        abs_valid = np.abs(valid)
+        return {
+            "count": int(arr.size),
+            "valid_ratio": float(np.mean(finite)),
+            "mean": float(np.mean(valid)),
+            "p95": float(np.percentile(valid, 95)),
+            "max": float(np.max(abs_valid)),
+        }
+
+    def _parse_traj_xy(row: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        arr = np.array(row, dtype=float).reshape(-1)
+        if arr.size < 3 or arr.size % 3 != 0:
+            return np.array([], dtype=float), np.array([], dtype=float)
+        arr = arr.reshape(-1, 3)
+        x = arr[:, 0]
+        y = arr[:, 1]
+        finite = np.isfinite(x) & np.isfinite(y)
+        if not np.any(finite):
+            return np.array([], dtype=float), np.array([], dtype=float)
+        return x[finite], y[finite]
+
+    def _parse_oracle_xy(row: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        arr = np.array(row, dtype=float).reshape(-1)
+        if arr.size < 2 or arr.size % 2 != 0:
+            return np.array([], dtype=float), np.array([], dtype=float)
+        arr = arr.reshape(-1, 2)
+        x = arr[:, 0]
+        y = arr[:, 1]
+        finite = np.isfinite(x) & np.isfinite(y)
+        if not np.any(finite):
+            return np.array([], dtype=float), np.array([], dtype=float)
+        return x[finite], y[finite]
+
+    def _prepare_curve(x: np.ndarray, y: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        if x.size == 0 or y.size == 0:
+            return np.array([], dtype=float), np.array([], dtype=float)
+        finite = np.isfinite(x) & np.isfinite(y)
+        if not np.any(finite):
+            return np.array([], dtype=float), np.array([], dtype=float)
+        x = x[finite]
+        y = y[finite]
+        order = np.argsort(y)
+        y_sorted = y[order]
+        x_sorted = x[order]
+        y_unique, unique_idx = np.unique(y_sorted, return_index=True)
+        x_unique = x_sorted[unique_idx]
+        return y_unique, x_unique
+
+    filename = unquote(filename)
+    filepath = RECORDINGS_DIR / filename
+    if not filepath.exists():
+        return jsonify({"error": f"Recording not found: {filename}"}), 404
+
+    try:
+        with h5py.File(filepath, 'r') as f:
+            topdown_ts = (
+                np.array(f['camera/topdown_timestamps'][:], dtype=float)
+                if 'camera/topdown_timestamps' in f
+                else np.array([], dtype=float)
+            )
+            topdown_frame_ids = (
+                np.array(f['camera/topdown_frame_ids'][:], dtype=float)
+                if 'camera/topdown_frame_ids' in f
+                else np.array([], dtype=float)
+            )
+            trajectory_ts = (
+                np.array(f['trajectory/timestamps'][:], dtype=float)
+                if 'trajectory/timestamps' in f
+                else np.array([], dtype=float)
+            )
+            unity_ts = (
+                np.array(f['vehicle/unity_time'][:], dtype=float)
+                if 'vehicle/unity_time' in f
+                else np.array([], dtype=float)
+            )
+
+            dt_topdown_traj = _nearest_abs_deltas(topdown_ts, trajectory_ts)
+            dt_topdown_unity = _nearest_abs_deltas(topdown_ts, unity_ts)
+            stats_traj = _stats_ms(dt_topdown_traj)
+            stats_unity = _stats_ms(dt_topdown_unity)
+            nearest_traj_idx = _nearest_indices(topdown_ts, trajectory_ts)
+            nearest_unity_idx = _nearest_indices(topdown_ts, unity_ts)
+            td_idx = np.arange(topdown_ts.size, dtype=float)
+            idx_delta_traj = (
+                nearest_traj_idx.astype(float) - td_idx
+                if nearest_traj_idx.size == topdown_ts.size
+                else np.array([], dtype=float)
+            )
+            idx_delta_unity = (
+                nearest_unity_idx.astype(float) - td_idx
+                if nearest_unity_idx.size == topdown_ts.size
+                else np.array([], dtype=float)
+            )
+            traj_period_ms = (
+                float(np.median(np.diff(trajectory_ts)) * 1000.0)
+                if trajectory_ts.size > 1
+                else None
+            )
+            unity_period_ms = (
+                float(np.median(np.diff(unity_ts)) * 1000.0)
+                if unity_ts.size > 1
+                else None
+            )
+            dt_topdown_traj_frames = (
+                (np.abs(dt_topdown_traj) * 1000.0) / traj_period_ms
+                if traj_period_ms and traj_period_ms > 1e-6
+                else np.array([], dtype=float)
+            )
+            dt_topdown_unity_frames = (
+                (np.abs(dt_topdown_unity) * 1000.0) / unity_period_ms
+                if unity_period_ms and unity_period_ms > 1e-6
+                else np.array([], dtype=float)
+            )
+            topdown_frame_id_step = (
+                np.diff(topdown_frame_ids) if topdown_frame_ids.size > 1 else np.array([], dtype=float)
+            )
+            topdown_frame_id_monotonic_ratio = (
+                float(np.mean(topdown_frame_id_step >= 0.0))
+                if topdown_frame_id_step.size > 0
+                else None
+            )
+            timestamp_domain_mismatch_suspected = (
+                stats_traj["p95_ms"] is not None
+                and stats_traj["p95_ms"] > 120.0
+                and _stats_signed(idx_delta_traj)["p95_abs"] is not None
+                and _stats_signed(idx_delta_traj)["p95_abs"] <= 3.0
+            )
+
+            # Consume-point lag metrics recorded by AV stack (if present).
+            stream_front_unity_dt_ms = (
+                np.array(f['vehicle/stream_front_unity_dt_ms'][:], dtype=float)
+                if 'vehicle/stream_front_unity_dt_ms' in f
+                else np.array([], dtype=float)
+            )
+            stream_topdown_unity_dt_ms = (
+                np.array(f['vehicle/stream_topdown_unity_dt_ms'][:], dtype=float)
+                if 'vehicle/stream_topdown_unity_dt_ms' in f
+                else np.array([], dtype=float)
+            )
+            stream_topdown_front_dt_ms = (
+                np.array(f['vehicle/stream_topdown_front_dt_ms'][:], dtype=float)
+                if 'vehicle/stream_topdown_front_dt_ms' in f
+                else np.array([], dtype=float)
+            )
+            stream_front_frame_id_delta = (
+                np.array(f['vehicle/stream_front_frame_id_delta'][:], dtype=float)
+                if 'vehicle/stream_front_frame_id_delta' in f
+                else np.array([], dtype=float)
+            )
+            stream_topdown_frame_id_delta = (
+                np.array(f['vehicle/stream_topdown_frame_id_delta'][:], dtype=float)
+                if 'vehicle/stream_topdown_frame_id_delta' in f
+                else np.array([], dtype=float)
+            )
+            stream_topdown_front_frame_id_delta = (
+                np.array(f['vehicle/stream_topdown_front_frame_id_delta'][:], dtype=float)
+                if 'vehicle/stream_topdown_front_frame_id_delta' in f
+                else np.array([], dtype=float)
+            )
+            stream_front_latest_age_ms = (
+                np.array(f['vehicle/stream_front_latest_age_ms'][:], dtype=float)
+                if 'vehicle/stream_front_latest_age_ms' in f
+                else np.array([], dtype=float)
+            )
+            stream_front_queue_depth = (
+                np.array(f['vehicle/stream_front_queue_depth'][:], dtype=float)
+                if 'vehicle/stream_front_queue_depth' in f
+                else np.array([], dtype=float)
+            )
+            stream_front_drop_count = (
+                np.array(f['vehicle/stream_front_drop_count'][:], dtype=float)
+                if 'vehicle/stream_front_drop_count' in f
+                else np.array([], dtype=float)
+            )
+            stream_front_decode_in_flight = (
+                np.array(f['vehicle/stream_front_decode_in_flight'][:], dtype=float)
+                if 'vehicle/stream_front_decode_in_flight' in f
+                else np.array([], dtype=float)
+            )
+            stream_topdown_latest_age_ms = (
+                np.array(f['vehicle/stream_topdown_latest_age_ms'][:], dtype=float)
+                if 'vehicle/stream_topdown_latest_age_ms' in f
+                else np.array([], dtype=float)
+            )
+            stream_topdown_queue_depth = (
+                np.array(f['vehicle/stream_topdown_queue_depth'][:], dtype=float)
+                if 'vehicle/stream_topdown_queue_depth' in f
+                else np.array([], dtype=float)
+            )
+            stream_topdown_drop_count = (
+                np.array(f['vehicle/stream_topdown_drop_count'][:], dtype=float)
+                if 'vehicle/stream_topdown_drop_count' in f
+                else np.array([], dtype=float)
+            )
+            stream_topdown_decode_in_flight = (
+                np.array(f['vehicle/stream_topdown_decode_in_flight'][:], dtype=float)
+                if 'vehicle/stream_topdown_decode_in_flight' in f
+                else np.array([], dtype=float)
+            )
+            stream_front_timestamp_minus_realtime_ms = (
+                np.array(f['vehicle/stream_front_timestamp_minus_realtime_ms'][:], dtype=float)
+                if 'vehicle/stream_front_timestamp_minus_realtime_ms' in f
+                else np.array([], dtype=float)
+            )
+            stream_topdown_timestamp_minus_realtime_ms = (
+                np.array(f['vehicle/stream_topdown_timestamp_minus_realtime_ms'][:], dtype=float)
+                if 'vehicle/stream_topdown_timestamp_minus_realtime_ms' in f
+                else np.array([], dtype=float)
+            )
+
+            # Projection input availability (for calibrated render feasibility).
+            projection_fields = [
+                'vehicle/camera_pos_x',
+                'vehicle/camera_pos_y',
+                'vehicle/camera_pos_z',
+                'vehicle/camera_forward_x',
+                'vehicle/camera_forward_y',
+                'vehicle/camera_forward_z',
+                'vehicle/camera_field_of_view',
+                'vehicle/camera_horizontal_fov',
+            ]
+            projection_availability = {}
+            for key in projection_fields:
+                if key not in f:
+                    projection_availability[key] = 0.0
+                    continue
+                arr = np.array(f[key][:], dtype=float)
+                projection_availability[key] = float(np.mean(np.isfinite(arr))) if arr.size > 0 else 0.0
+
+            # Explicit top-down camera calibration fields (currently not recorded).
+            topdown_projection_fields = [
+                'vehicle/topdown_camera_pos_x',
+                'vehicle/topdown_camera_pos_y',
+                'vehicle/topdown_camera_pos_z',
+                'vehicle/topdown_camera_forward_x',
+                'vehicle/topdown_camera_forward_y',
+                'vehicle/topdown_camera_forward_z',
+                'vehicle/topdown_camera_orthographic_size',
+                'vehicle/topdown_camera_field_of_view',
+            ]
+            missing_topdown_projection_fields = [k for k in topdown_projection_fields if k not in f]
+
+            # Compute top-down projection sanity metrics when calibration exists.
+            topdown_projection_availability = {}
+            for key in topdown_projection_fields:
+                if key not in f:
+                    topdown_projection_availability[key] = 0.0
+                    continue
+                arr = np.array(f[key][:], dtype=float)
+                finite = np.isfinite(arr)
+                if arr.size == 0:
+                    topdown_projection_availability[key] = 0.0
+                elif key.endswith("orthographic_size") or key.endswith("field_of_view"):
+                    topdown_projection_availability[key] = float(np.mean(finite & (arr > 0.0)))
+                else:
+                    topdown_projection_availability[key] = float(np.mean(finite))
+
+            topdown_forward_y = (
+                np.array(f['vehicle/topdown_camera_forward_y'][:], dtype=float)
+                if 'vehicle/topdown_camera_forward_y' in f
+                else np.array([], dtype=float)
+            )
+            topdown_ortho = (
+                np.array(f['vehicle/topdown_camera_orthographic_size'][:], dtype=float)
+                if 'vehicle/topdown_camera_orthographic_size' in f
+                else np.array([], dtype=float)
+            )
+            # Recorder currently stores top-down images at 640x480.
+            topdown_image_height_px = 480.0
+            topdown_meters_per_pixel = (
+                (2.0 * topdown_ortho) / topdown_image_height_px
+                if topdown_ortho.size > 0
+                else np.array([], dtype=float)
+            )
+            topdown_calibrated_projection_ready = (
+                len(missing_topdown_projection_fields) == 0
+                and topdown_ortho.size > 0
+                and float(np.mean(np.isfinite(topdown_ortho) & (topdown_ortho > 0.0))) > 0.95
+            )
+
+            # Step-1 trajectory geometry instrumentation (display vs planner separation).
+            trajectory_geometry = {
+                "available": False,
+                "frames_analyzed": 0,
+                "frames_with_non_monotonic_y": 0,
+                "frames_with_x_saturation": 0,
+                "sat_point_ratio": None,
+                "y_monotonic_breaks_stats": {"count": 0, "mean": None, "p95_abs": None, "max_abs": None},
+                "sat_points_per_frame_stats": {"count": 0, "mean": None, "p95_abs": None, "max_abs": None},
+                "first_point_ref_dx_stats": {"count": 0, "mean": None, "p95_abs": None, "max_abs": None},
+                "first_point_ref_dy_stats": {"count": 0, "mean": None, "p95_abs": None, "max_abs": None},
+                "first_point_ref_dist_stats": {"count": 0, "mean": None, "p95_abs": None, "max_abs": None},
+                "top_monotonic_break_frames": [],
+                "top_saturation_frames": [],
+            }
+            if (
+                "trajectory/trajectory_points" in f
+                and "trajectory/reference_point_x" in f
+                and "trajectory/reference_point_y" in f
+            ):
+                tp = f["trajectory/trajectory_points"]
+                ref_x = np.array(f["trajectory/reference_point_x"][:], dtype=float)
+                ref_y = np.array(f["trajectory/reference_point_y"][:], dtype=float)
+                n = min(len(tp), ref_x.size, ref_y.size)
+                breaks_arr = np.zeros(n, dtype=float)
+                sat_arr = np.zeros(n, dtype=float)
+                first_dx_arr = np.full(n, np.nan, dtype=float)
+                first_dy_arr = np.full(n, np.nan, dtype=float)
+                first_dist_arr = np.full(n, np.nan, dtype=float)
+                total_points = 0
+                total_sat_points = 0
+                for i in range(n):
+                    x, y = _parse_traj_xy(tp[i])
+                    if x.size == 0:
+                        continue
+                    breaks = float(np.sum(np.diff(y) < -1e-6)) if y.size > 1 else 0.0
+                    sat = float(np.sum(np.isclose(np.abs(x), 10.0, atol=1e-6)))
+                    breaks_arr[i] = breaks
+                    sat_arr[i] = sat
+                    total_points += int(x.size)
+                    total_sat_points += int(sat)
+                    if np.isfinite(ref_x[i]) and np.isfinite(ref_y[i]):
+                        dx = float(x[0] - ref_x[i])
+                        dy = float(y[0] - ref_y[i])
+                        first_dx_arr[i] = dx
+                        first_dy_arr[i] = dy
+                        first_dist_arr[i] = float(np.hypot(dx, dy))
+                monotonic_rank = np.argsort(-breaks_arr)
+                sat_rank = np.argsort(-sat_arr)
+                top_breaks = []
+                top_sat = []
+                for idx in monotonic_rank[:5]:
+                    if breaks_arr[idx] <= 0:
+                        continue
+                    top_breaks.append({"frame_idx": int(idx), "breaks": int(breaks_arr[idx])})
+                for idx in sat_rank[:5]:
+                    if sat_arr[idx] <= 0:
+                        continue
+                    top_sat.append({"frame_idx": int(idx), "sat_points": int(sat_arr[idx])})
+                valid_first = np.isfinite(first_dx_arr) & np.isfinite(first_dy_arr) & np.isfinite(first_dist_arr)
+                trajectory_geometry = {
+                    "available": True,
+                    "frames_analyzed": int(n),
+                    "frames_with_non_monotonic_y": int(np.sum(breaks_arr > 0)),
+                    "frames_with_x_saturation": int(np.sum(sat_arr > 0)),
+                    "sat_point_ratio": (float(total_sat_points) / float(total_points)) if total_points > 0 else None,
+                    "y_monotonic_breaks_stats": _stats_signed(breaks_arr),
+                    "sat_points_per_frame_stats": _stats_signed(sat_arr),
+                    "first_point_ref_dx_stats": _stats_signed(first_dx_arr[valid_first]),
+                    "first_point_ref_dy_stats": _stats_signed(first_dy_arr[valid_first]),
+                    "first_point_ref_dist_stats": _stats_signed(first_dist_arr[valid_first]),
+                    "top_monotonic_break_frames": top_breaks,
+                    "top_saturation_frames": top_sat,
+                }
+
+            # Source-isolation diagnostics: planner path vs serialized/augmented path.
+            trajectory_source_isolation = {
+                "available": False,
+                "frames_analyzed": 0,
+                "full_path_monotonic_breaks_stats": {"count": 0, "mean": None, "p95_abs": None, "max_abs": None},
+                "without_first_point_monotonic_breaks_stats": {"count": 0, "mean": None, "p95_abs": None, "max_abs": None},
+                "breaks_removed_by_dropping_first_point_ratio": None,
+                "first_point_equals_reference_ratio": None,
+                "first_point_y_greater_than_second_ratio": None,
+                "x_saturation_ratio_without_first_point": None,
+                "x_saturation_ratio_full_path": None,
+                "reference_vs_lane_center_error_stats": {"count": 0, "mean": None, "p95_abs": None, "max_abs": None},
+                "planner_vs_oracle_gap_metrics": {
+                    "frames_with_oracle_overlap": 0,
+                    "gap_at_lookahead_8m_stats": {"count": 0, "mean": None, "p95_abs": None, "max_abs": None},
+                    "mean_lateral_gap_0_20m_stats": {"count": 0, "mean": None, "p95_abs": None, "max_abs": None},
+                    "mean_lateral_gap_20_50m_stats": {"count": 0, "mean": None, "p95_abs": None, "max_abs": None},
+                    "max_lateral_gap_0_h_stats": {"count": 0, "mean": None, "p95_abs": None, "max_abs": None},
+                    "integrated_abs_gap_0_h_stats": {"count": 0, "mean": None, "p95_abs": None, "max_abs": None},
+                },
+                "generation_stage_diagnostics": {
+                    "available_ratio": None,
+                    "generated_by_fallback_ratio": None,
+                    "x_clip_count_stats": {"count": 0, "mean": None, "p95_abs": None, "max_abs": None},
+                    "first_segment_y0_gt_y1_pre_ratio": None,
+                    "first_segment_y0_gt_y1_post_ratio": None,
+                    "inversion_introduced_after_conversion_ratio": None,
+                    "used_provided_distance0_ratio": None,
+                    "used_provided_distance1_ratio": None,
+                    "used_provided_distance2_ratio": None,
+                    "post_minus_pre_y0_stats": {"count": 0, "mean": None, "p95_abs": None, "max_abs": None},
+                    "post_minus_pre_y1_stats": {"count": 0, "mean": None, "p95_abs": None, "max_abs": None},
+                    "post_minus_pre_y2_stats": {"count": 0, "mean": None, "p95_abs": None, "max_abs": None},
+                    "preclip_x0_stats": {"count": 0, "mean": None, "p95_abs": None, "max_abs": None},
+                    "postclip_x0_stats": {"count": 0, "mean": None, "p95_abs": None, "max_abs": None},
+                },
+            }
+            if (
+                "trajectory/trajectory_points" in f
+                and "trajectory/reference_point_x" in f
+                and "trajectory/reference_point_y" in f
+            ):
+                tp = f["trajectory/trajectory_points"]
+                ref_x = np.array(f["trajectory/reference_point_x"][:], dtype=float)
+                ref_y = np.array(f["trajectory/reference_point_y"][:], dtype=float)
+                # Optional centerline intent check when GT lane center is available.
+                gt_center = (
+                    np.array(f["ground_truth/lane_center_x"][:], dtype=float)
+                    if "ground_truth/lane_center_x" in f
+                    else np.array([], dtype=float)
+                )
+                n = min(len(tp), ref_x.size, ref_y.size)
+                breaks_full = np.zeros(n, dtype=float)
+                breaks_wo_first = np.zeros(n, dtype=float)
+                first_eq_ref = np.zeros(n, dtype=float)
+                first_y_gt_second = np.zeros(n, dtype=float)
+                sat_full_points = 0
+                sat_wo_first_points = 0
+                full_points = 0
+                wo_first_points = 0
+                ref_center_err = np.full(n, np.nan, dtype=float)
+                for i in range(n):
+                    x, y = _parse_traj_xy(tp[i])
+                    if x.size == 0:
+                        continue
+                    full_points += int(x.size)
+                    sat_full_points += int(np.sum(np.isclose(np.abs(x), 10.0, atol=1e-6)))
+                    if y.size > 1:
+                        breaks_full[i] = float(np.sum(np.diff(y) < -1e-6))
+                    if np.isfinite(ref_x[i]) and np.isfinite(ref_y[i]):
+                        first_eq_ref[i] = 1.0 if (abs(x[0] - ref_x[i]) < 1e-6 and abs(y[0] - ref_y[i]) < 1e-6) else 0.0
+                    if y.size > 1 and (y[0] > y[1]):
+                        first_y_gt_second[i] = 1.0
+                    if x.size > 1:
+                        x2 = x[1:]
+                        y2 = y[1:]
+                        wo_first_points += int(x2.size)
+                        sat_wo_first_points += int(np.sum(np.isclose(np.abs(x2), 10.0, atol=1e-6)))
+                        if y2.size > 1:
+                            breaks_wo_first[i] = float(np.sum(np.diff(y2) < -1e-6))
+                    if gt_center.size > i and np.isfinite(gt_center[i]) and np.isfinite(ref_x[i]):
+                        ref_center_err[i] = float(ref_x[i] - gt_center[i])
+                removed_ratio = None
+                full_break_sum = float(np.sum(breaks_full))
+                if full_break_sum > 0:
+                    removed_ratio = float((np.sum(breaks_full) - np.sum(breaks_wo_first)) / full_break_sum)
+                valid_ref_center = np.isfinite(ref_center_err)
+                gen_diag = trajectory_source_isolation["generation_stage_diagnostics"]
+                if "trajectory/diag_available" in f:
+                    diag_available = np.array(f["trajectory/diag_available"][:], dtype=float)
+                    m = min(int(n), int(diag_available.size))
+                    if m > 0:
+                        valid_diag = np.isfinite(diag_available[:m])
+                        if np.any(valid_diag):
+                            gen_diag["available_ratio"] = float(np.mean(diag_available[:m][valid_diag] > 0.5))
+                if "trajectory/diag_generated_by_fallback" in f:
+                    diag_fb = np.array(f["trajectory/diag_generated_by_fallback"][:], dtype=float)
+                    m = min(int(n), int(diag_fb.size))
+                    if m > 0:
+                        valid_fb = np.isfinite(diag_fb[:m])
+                        if np.any(valid_fb):
+                            gen_diag["generated_by_fallback_ratio"] = float(np.mean(diag_fb[:m][valid_fb] > 0.5))
+                if "trajectory/diag_x_clip_count" in f:
+                    clip = np.array(f["trajectory/diag_x_clip_count"][:], dtype=float)
+                    m = min(int(n), int(clip.size))
+                    if m > 0:
+                        valid_clip = np.isfinite(clip[:m])
+                        gen_diag["x_clip_count_stats"] = _stats_signed(clip[:m][valid_clip])
+                if "trajectory/diag_first_segment_y0_gt_y1_pre" in f:
+                    pre_inv = np.array(f["trajectory/diag_first_segment_y0_gt_y1_pre"][:], dtype=float)
+                    m = min(int(n), int(pre_inv.size))
+                    if m > 0:
+                        valid_pre = np.isfinite(pre_inv[:m])
+                        if np.any(valid_pre):
+                            gen_diag["first_segment_y0_gt_y1_pre_ratio"] = float(np.mean(pre_inv[:m][valid_pre] > 0.5))
+                if "trajectory/diag_first_segment_y0_gt_y1_post" in f:
+                    post_inv = np.array(f["trajectory/diag_first_segment_y0_gt_y1_post"][:], dtype=float)
+                    m = min(int(n), int(post_inv.size))
+                    if m > 0:
+                        valid_post = np.isfinite(post_inv[:m])
+                        if np.any(valid_post):
+                            gen_diag["first_segment_y0_gt_y1_post_ratio"] = float(np.mean(post_inv[:m][valid_post] > 0.5))
+                if "trajectory/diag_inversion_introduced_after_conversion" in f:
+                    intro = np.array(f["trajectory/diag_inversion_introduced_after_conversion"][:], dtype=float)
+                    m = min(int(n), int(intro.size))
+                    if m > 0:
+                        valid_intro = np.isfinite(intro[:m])
+                        if np.any(valid_intro):
+                            gen_diag["inversion_introduced_after_conversion_ratio"] = float(np.mean(intro[:m][valid_intro] > 0.5))
+                if "trajectory/diag_used_provided_distance0" in f:
+                    used0 = np.array(f["trajectory/diag_used_provided_distance0"][:], dtype=float)
+                    m = min(int(n), int(used0.size))
+                    if m > 0:
+                        valid0 = np.isfinite(used0[:m])
+                        if np.any(valid0):
+                            gen_diag["used_provided_distance0_ratio"] = float(np.mean(used0[:m][valid0] > 0.5))
+                if "trajectory/diag_used_provided_distance1" in f:
+                    used1 = np.array(f["trajectory/diag_used_provided_distance1"][:], dtype=float)
+                    m = min(int(n), int(used1.size))
+                    if m > 0:
+                        valid1 = np.isfinite(used1[:m])
+                        if np.any(valid1):
+                            gen_diag["used_provided_distance1_ratio"] = float(np.mean(used1[:m][valid1] > 0.5))
+                if "trajectory/diag_used_provided_distance2" in f:
+                    used2 = np.array(f["trajectory/diag_used_provided_distance2"][:], dtype=float)
+                    m = min(int(n), int(used2.size))
+                    if m > 0:
+                        valid2 = np.isfinite(used2[:m])
+                        if np.any(valid2):
+                            gen_diag["used_provided_distance2_ratio"] = float(np.mean(used2[:m][valid2] > 0.5))
+                if "trajectory/diag_post_minus_pre_y0" in f:
+                    delta0 = np.array(f["trajectory/diag_post_minus_pre_y0"][:], dtype=float)
+                    m = min(int(n), int(delta0.size))
+                    if m > 0:
+                        valid_delta0 = np.isfinite(delta0[:m])
+                        gen_diag["post_minus_pre_y0_stats"] = _stats_signed(delta0[:m][valid_delta0])
+                if "trajectory/diag_post_minus_pre_y1" in f:
+                    delta1 = np.array(f["trajectory/diag_post_minus_pre_y1"][:], dtype=float)
+                    m = min(int(n), int(delta1.size))
+                    if m > 0:
+                        valid_delta1 = np.isfinite(delta1[:m])
+                        gen_diag["post_minus_pre_y1_stats"] = _stats_signed(delta1[:m][valid_delta1])
+                if "trajectory/diag_post_minus_pre_y2" in f:
+                    delta2 = np.array(f["trajectory/diag_post_minus_pre_y2"][:], dtype=float)
+                    m = min(int(n), int(delta2.size))
+                    if m > 0:
+                        valid_delta2 = np.isfinite(delta2[:m])
+                        gen_diag["post_minus_pre_y2_stats"] = _stats_signed(delta2[:m][valid_delta2])
+                if "trajectory/diag_preclip_x0" in f:
+                    pre_x0 = np.array(f["trajectory/diag_preclip_x0"][:], dtype=float)
+                    m = min(int(n), int(pre_x0.size))
+                    if m > 0:
+                        valid_pre_x0 = np.isfinite(pre_x0[:m])
+                        gen_diag["preclip_x0_stats"] = _stats_signed(pre_x0[:m][valid_pre_x0])
+                if "trajectory/diag_postclip_x0" in f:
+                    post_x0 = np.array(f["trajectory/diag_postclip_x0"][:], dtype=float)
+                    m = min(int(n), int(post_x0.size))
+                    if m > 0:
+                        valid_post_x0 = np.isfinite(post_x0[:m])
+                        gen_diag["postclip_x0_stats"] = _stats_signed(post_x0[:m][valid_post_x0])
+
+                # Planner-vs-oracle gap metrics across near/far/full horizons.
+                oracle_gap_diag = trajectory_source_isolation["planner_vs_oracle_gap_metrics"]
+                if "trajectory/oracle_points" in f:
+                    oracle_ds = f["trajectory/oracle_points"]
+                    n_oracle = min(int(n), int(len(oracle_ds)))
+                    gap_8m = []
+                    gap_0_20 = []
+                    gap_20_50 = []
+                    gap_max_0_h = []
+                    gap_int_0_h = []
+                    for i in range(n_oracle):
+                        px, py = _parse_traj_xy(tp[i])
+                        ox, oy = _parse_oracle_xy(oracle_ds[i])
+                        if px.size < 2 or ox.size < 2:
+                            continue
+                        # Compare planner-only path (drop prepended reference point when present).
+                        if (
+                            np.isfinite(ref_x[i]) and np.isfinite(ref_y[i]) and
+                            abs(px[0] - ref_x[i]) < 1e-6 and abs(py[0] - ref_y[i]) < 1e-6 and
+                            px.size > 1
+                        ):
+                            px = px[1:]
+                            py = py[1:]
+                        p_y, p_x = _prepare_curve(px, py)
+                        o_y, o_x = _prepare_curve(ox, oy)
+                        if p_y.size < 2 or o_y.size < 2:
+                            continue
+                        y_min = max(float(p_y[0]), float(o_y[0]), 0.0)
+                        y_max = min(float(p_y[-1]), float(o_y[-1]), 50.0)
+                        if y_max <= y_min + 1e-6:
+                            continue
+                        ys = np.arange(y_min, y_max + 1e-6, 1.0, dtype=float)
+                        if ys.size < 2:
+                            ys = np.array([y_min, y_max], dtype=float)
+                        p_interp = np.interp(ys, p_y, p_x)
+                        o_interp = np.interp(ys, o_y, o_x)
+                        g = p_interp - o_interp
+                        abs_g = np.abs(g)
+                        if y_min <= 8.0 <= y_max:
+                            g8 = float(np.interp(8.0, ys, g))
+                            gap_8m.append(g8)
+                        near = (ys >= 0.0) & (ys <= 20.0)
+                        if np.any(near):
+                            gap_0_20.append(float(np.mean(abs_g[near])))
+                        far = (ys >= 20.0) & (ys <= 50.0)
+                        if np.any(far):
+                            gap_20_50.append(float(np.mean(abs_g[far])))
+                        gap_max_0_h.append(float(np.max(abs_g)))
+                        # Trapezoidal integral of absolute lateral gap across overlap horizon.
+                        gap_int_0_h.append(float(np.trapz(abs_g, ys)))
+                    oracle_gap_diag = {
+                        "frames_with_oracle_overlap": int(len(gap_max_0_h)),
+                        "gap_at_lookahead_8m_stats": _stats_signed(np.array(gap_8m, dtype=float)),
+                        "mean_lateral_gap_0_20m_stats": _stats_signed(np.array(gap_0_20, dtype=float)),
+                        "mean_lateral_gap_20_50m_stats": _stats_signed(np.array(gap_20_50, dtype=float)),
+                        "max_lateral_gap_0_h_stats": _stats_signed(np.array(gap_max_0_h, dtype=float)),
+                        "integrated_abs_gap_0_h_stats": _stats_signed(np.array(gap_int_0_h, dtype=float)),
+                    }
+                trajectory_source_isolation = {
+                    "available": True,
+                    "frames_analyzed": int(n),
+                    "full_path_monotonic_breaks_stats": _stats_signed(breaks_full),
+                    "without_first_point_monotonic_breaks_stats": _stats_signed(breaks_wo_first),
+                    "breaks_removed_by_dropping_first_point_ratio": removed_ratio,
+                    "first_point_equals_reference_ratio": float(np.mean(first_eq_ref)) if n > 0 else None,
+                    "first_point_y_greater_than_second_ratio": float(np.mean(first_y_gt_second)) if n > 0 else None,
+                    "x_saturation_ratio_without_first_point": (float(sat_wo_first_points) / float(wo_first_points)) if wo_first_points > 0 else None,
+                    "x_saturation_ratio_full_path": (float(sat_full_points) / float(full_points)) if full_points > 0 else None,
+                    "reference_vs_lane_center_error_stats": _stats_signed(ref_center_err[valid_ref_center]),
+                    "planner_vs_oracle_gap_metrics": oracle_gap_diag,
+                    "generation_stage_diagnostics": gen_diag,
+                }
+
+            return jsonify(
+                {
+                    "topdown_frames": int(topdown_ts.size),
+                    "trajectory_frames": int(trajectory_ts.size),
+                    "unity_frames": int(unity_ts.size),
+                    "dt_topdown_traj": stats_traj,
+                    "dt_topdown_unity": stats_unity,
+                    "dt_topdown_traj_frames": _finite_stats(dt_topdown_traj_frames),
+                    "dt_topdown_unity_frames": _finite_stats(dt_topdown_unity_frames),
+                    "topdown_traj_index_delta": _stats_signed(idx_delta_traj),
+                    "topdown_unity_index_delta": _stats_signed(idx_delta_unity),
+                    "topdown_frame_id_step_stats": _finite_stats(topdown_frame_id_step),
+                    "topdown_frame_id_monotonic_ratio": topdown_frame_id_monotonic_ratio,
+                    "trajectory_period_ms_median": traj_period_ms,
+                    "unity_period_ms_median": unity_period_ms,
+                    "timestamp_domain_mismatch_suspected": bool(timestamp_domain_mismatch_suspected),
+                    "stream_front_unity_dt_ms_stats": _stats_signed(stream_front_unity_dt_ms),
+                    "stream_topdown_unity_dt_ms_stats": _stats_signed(stream_topdown_unity_dt_ms),
+                    "stream_topdown_front_dt_ms_stats": _stats_signed(stream_topdown_front_dt_ms),
+                    "stream_front_frame_id_delta_stats": _stats_signed(stream_front_frame_id_delta),
+                    "stream_topdown_frame_id_delta_stats": _stats_signed(stream_topdown_frame_id_delta),
+                    "stream_topdown_front_frame_id_delta_stats": _stats_signed(stream_topdown_front_frame_id_delta),
+                    "stream_front_latest_age_ms_stats": _stats_signed(stream_front_latest_age_ms),
+                    "stream_front_queue_depth_stats": _stats_signed(stream_front_queue_depth),
+                    "stream_front_drop_count_stats": _stats_signed(stream_front_drop_count),
+                    "stream_front_decode_in_flight_stats": _stats_signed(stream_front_decode_in_flight),
+                    "stream_topdown_latest_age_ms_stats": _stats_signed(stream_topdown_latest_age_ms),
+                    "stream_topdown_queue_depth_stats": _stats_signed(stream_topdown_queue_depth),
+                    "stream_topdown_drop_count_stats": _stats_signed(stream_topdown_drop_count),
+                    "stream_topdown_decode_in_flight_stats": _stats_signed(stream_topdown_decode_in_flight),
+                    "stream_front_timestamp_minus_realtime_ms_stats": _stats_signed(
+                        stream_front_timestamp_minus_realtime_ms
+                    ),
+                    "stream_topdown_timestamp_minus_realtime_ms_stats": _stats_signed(
+                        stream_topdown_timestamp_minus_realtime_ms
+                    ),
+                    "sync_quality": _quality_from_p95(stats_traj["p95_ms"]),
+                    "projection_inputs_available_ratio": projection_availability,
+                    "topdown_projection_fields_missing": missing_topdown_projection_fields,
+                    "topdown_projection_inputs_available_ratio": topdown_projection_availability,
+                    "topdown_forward_y_stats": _finite_stats(topdown_forward_y),
+                    "topdown_orthographic_size_stats": _finite_stats(topdown_ortho),
+                    "topdown_meters_per_pixel_stats": _finite_stats(topdown_meters_per_pixel),
+                    "topdown_calibrated_projection_ready": bool(topdown_calibrated_projection_ready),
+                    "trajectory_geometry_diagnostics": trajectory_geometry,
+                    "trajectory_source_isolation": trajectory_source_isolation,
+                }
+            )
+    except Exception as e:
+        import traceback
+        return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500
+
+
+@app.route('/api/recording/<path:filename>/run-perception-questions', methods=['POST'])
+def run_perception_questions(filename):
+    """Run tools/analyze/analyze_perception_questions.py for a recording and return parsed results."""
+    from urllib.parse import unquote
+
+    filename = unquote(filename)
+    filepath = RECORDINGS_DIR / filename
+    if not filepath.exists():
+        return jsonify({"error": f"Recording not found: {filename}"}), 404
+
+    script_path = REPO_ROOT / "tools" / "analyze" / "analyze_perception_questions.py"
+    if not script_path.exists():
+        return jsonify({"error": f"Analyzer script not found: {script_path}"}), 500
+
+    try:
+        proc = subprocess.run(
+            [sys.executable, str(script_path), str(filepath)],
+            cwd=str(REPO_ROOT),
+            capture_output=True,
+            text=True,
+            timeout=240,
+            check=False,
+        )
+        stdout = proc.stdout or ""
+        stderr = proc.stderr or ""
+        combined_output = stdout if not stderr else f"{stdout}\n\n[stderr]\n{stderr}"
+
+        question_results = {}
+        for match in re.finditer(r"(?:✓|⚠️|❌)\s+Question\s+(\d+):\s+([A-Z]+)", stdout):
+            question_results[f"q{match.group(1)}"] = match.group(2)
+        # Q8 summary line format: "• Question 8 (diagnostic-only): Residual MAE ..."
+        q8_match = re.search(r"Question 8 \(diagnostic-only\):\s*(.+)", stdout)
+        if q8_match:
+            question_results["q8"] = q8_match.group(1).strip()
+
+        return jsonify(
+            {
+                "ok": proc.returncode == 0,
+                "return_code": proc.returncode,
+                "questions": question_results,
+                "output": combined_output,
+            }
+        )
+    except subprocess.TimeoutExpired:
+        return jsonify({"error": "Perception questions analysis timed out after 240s"}), 504
     except Exception as e:
         import traceback
         return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500
@@ -1250,5 +2220,5 @@ if __name__ == '__main__':
     print(f"Recordings directory: {RECORDINGS_DIR}")
     print(f"Debug visualizations directory: {DEBUG_VIS_DIR}")
     print(f"Server running at http://localhost:5001")
-    app.run(host='0.0.0.0', port=5001, debug=True)
+    app.run(host='0.0.0.0', port=5001, debug=False)
 

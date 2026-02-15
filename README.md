@@ -51,6 +51,7 @@ Data Recorder (HDF5) ← All sensor data + commands + ground truth
 
 See `docs/ARCHITECTURE.md` for the overall system design, layer responsibilities,
 and interface definitions.
+For a canonical script map (what to run for each intent), see `docs/SCRIPT_RUNBOOK.md`.
 
 ### 2. Setup Python Environment
 
@@ -102,6 +103,15 @@ Follow the detailed instructions in [setup_unity.md](setup_unity.md)
 
 # Randomized start with reproducible seed
 ./start_ground_truth.sh --track-yaml tracks/oval.yml --random-start --random-seed 50
+
+# Replay-quality GT capture (full stack running, low-overhead logging)
+./start_ground_truth.sh --track-yaml tracks/s_loop.yml --duration 60 --strict-gt-pose --stream-sync-policy latest --log-level error
+
+# Diagnosis run (more logs, better temporal pairing across streams)
+./start_ground_truth.sh --track-yaml tracks/s_loop.yml --duration 60 --strict-gt-pose --stream-sync-policy aligned --diagnostic-logging
+
+# Promote a recording to canonical golden naming (non-destructive copy by default)
+./tools/promote_golden_gt.sh --source data/recordings/recording_YYYYMMDD_HHMMSS.h5 --track sloop --duration 45s --sync-policy latest
 ```
 
 **Option C: Standalone Unity Player (Automated Workflow)**
@@ -110,9 +120,7 @@ Follow the detailed instructions in [setup_unity.md](setup_unity.md)
 ./start_av_stack.sh --build-unity-player --skip-unity-build-if-clean --run-unity-player --duration 60
 ```
 
-**What each does:**
-- `start_av_stack.sh`: Runs full AV stack (perception → trajectory → control) - tests your perception and control
-- `start_ground_truth.sh`: Runs Unity player + ground truth follower in one command
+**Script behavior reference:** See `docs/SCRIPT_RUNBOOK.md` for canonical script definitions and mode defaults.
 
 #### Manual Startup (Alternative)
 
@@ -169,6 +177,23 @@ python tools/analyze/analyze_drive_overall.py --list
 # Comprehensive analysis with root cause identification
 python tools/analyze/analyze_recording_comprehensive.py --latest
 ```
+
+**Projection/trajectory baseline workflow (curve diagnosis):**
+```bash
+# 1) Run GT capture (s_loop example)
+./start_ground_truth.sh --track-yaml tracks/s_loop.yml --duration 30 --strict-gt-pose --stream-sync-policy latest --log-level error
+
+# 2) Promote recording to golden tag
+./tools/promote_golden_gt.sh --source data/recordings/recording_YYYYMMDD_HHMMSS.h5 --track sloop --duration 30s --sync-policy latest --force
+
+# 3) Save baseline metrics artifact (projection + planner-vs-oracle gap)
+# Example output path:
+# tmp/analysis/gt_projection_baseline_recording_YYYYMMDD_HHMMSS.json
+```
+
+The baseline JSON should include:
+- Right-lane fiducial reprojection error (mean/p95/max pixels; 5m/10m/15m bins)
+- Planner-vs-oracle lateral gap stats (mean/p95 abs/max abs at 5m/10m/15m)
 
 See [tools/analyze/README.md](tools/analyze/README.md) for all analysis tools.
 
@@ -231,6 +256,10 @@ python tools/analyze/analyze_jerkiness.py --latest
 # Perception quality analysis
 python tools/analyze/analyze_perception_questions.py --latest
 ```
+
+`analyze_perception_questions.py` now reports:
+- Q1-Q7 scored checks (including heading correctness using `vehicle/car_heading_deg` vs `ground_truth/desired_heading`)
+- Q8 diagnostic-only planner/heading contract check (`trajectory/reference_point_heading` vs `vehicle/heading_delta_deg`)
 
 ## Project Structure
 

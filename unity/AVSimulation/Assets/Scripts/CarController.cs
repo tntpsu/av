@@ -49,6 +49,10 @@ public class CarController : MonoBehaviour
     public bool groundTruthMode = false;
     [Tooltip("Speed for ground truth mode (m/s)")]
     public float groundTruthSpeed = 5.0f;
+    [Tooltip("GT experiment: derive rotation (and velocity direction) from road-frame tangent at car position.")]
+    public bool gtRotationFromRoadFrame = false;
+    [Tooltip("GT experiment: skip MoveRotation() and leave heading unchanged.")]
+    public bool gtDisableMoveRotation = false;
 
     [Header("Speed Limit")]
     [Tooltip("Speed limit at current reference point (m/s)")]
@@ -57,6 +61,8 @@ public class CarController : MonoBehaviour
     private Rigidbody rb;
     private InputActionMap playerActionMap;
     private InputAction moveAction;
+    private RigidbodyConstraints baseConstraints;
+    private bool baseIsKinematic;
     
     // Teleportation prevention: Track last position to detect large jumps
     private Vector3 lastPosition;
@@ -144,6 +150,15 @@ public class CarController : MonoBehaviour
     private Vector3 gtCachedReferenceDirection = Vector3.zero;
     private bool gtCachedReferenceValid = false;
     private float gtCachedReferenceTime = 0f;
+    private Vector3 gtLastValidRoadFrameDirection = Vector3.forward;
+    private bool gtRotationDebugValid = false;
+    private bool gtRotationUsedRoadFrame = false;
+    private bool gtRotationRejectedRoadFrameHop = false;
+    private float gtRotationReferenceHeadingDeg = 0f;
+    private float gtRotationRoadFrameHeadingDeg = 0f;
+    private float gtRotationInputHeadingDeg = 0f;
+    private float gtRotationRoadVsRefDeltaDeg = 0f;
+    private float gtRotationAppliedDeltaDeg = 0f;
 
     private void Awake()
     {
@@ -172,6 +187,8 @@ public class CarController : MonoBehaviour
                 // Freeze Y position to prevent sinking in non-wheel-collider mode.
                 rb.constraints = RigidbodyConstraints.FreezePositionY | RigidbodyConstraints.FreezeRotationX | RigidbodyConstraints.FreezeRotationZ;
             }
+            baseConstraints = rb.constraints;
+            baseIsKinematic = rb.isKinematic;
             
             // CRITICAL: Disable Rigidbody sleep threshold to prevent car from going to sleep
             // Unity puts Rigidbody to sleep when velocity < sleep threshold (0.005 m/s)
@@ -326,6 +343,23 @@ public class CarController : MonoBehaviour
 
     private void Start()
     {
+        bool? cliGtRotationFromRoadFrame = ParseCommandLineBool(
+            System.Environment.GetCommandLineArgs(),
+            "--gt-rotation-from-road-frame"
+        );
+        if (cliGtRotationFromRoadFrame.HasValue)
+        {
+            gtRotationFromRoadFrame = cliGtRotationFromRoadFrame.Value;
+        }
+        bool? cliGtDisableMoveRotation = ParseCommandLineBool(
+            System.Environment.GetCommandLineArgs(),
+            "--gt-disable-move-rotation"
+        );
+        if (cliGtDisableMoveRotation.HasValue)
+        {
+            gtDisableMoveRotation = cliGtDisableMoveRotation.Value;
+        }
+
         // CRITICAL: Initialize cached GroundTruthReporter BEFORE first frame
         // This ensures it's available from frame 0, preventing null reference issues
         if (cachedGroundTruthReporter == null)
@@ -337,6 +371,9 @@ public class CarController : MonoBehaviour
                 cachedGroundTruthReporter = FindObjectOfType<GroundTruthReporter>();
             }
         }
+        gtLastValidRoadFrameDirection = transform.forward.sqrMagnitude > 0.01f
+            ? transform.forward.normalized
+            : Vector3.forward;
         
         // Try to load the InputActionAsset if not assigned
         if (inputActionAsset == null)
@@ -775,20 +812,83 @@ public class CarController : MonoBehaviour
                     }
                 }
                 
-                // Directly position the car on the path (or current position if teleport was rejected)
-                // Set position to reference position (road center)
-                rb.MovePosition(referencePosition);
+                // In GT mode use direct position assignment for deterministic path progression.
+                rb.position = referencePosition;
                 
                 // Update last position tracking
                 lastPosition = rb.position;
                 lastPositionTime = Time.time;
                 
-                // Set rotation to match path direction
-                Quaternion targetRotation = Quaternion.LookRotation(referenceDirection.normalized, Vector3.up);
-                rb.MoveRotation(targetRotation);
+                Vector3 orientationDirection = referenceDirection.normalized;
+                bool usedRoadFrame = false;
+                bool rejectedRoadFrameHop = false;
+                float roadFrameHeadingDeg = HeadingDegFromDirection(orientationDirection);
+                float referenceHeadingDeg = HeadingDegFromDirection(referenceDirection);
+                float roadVsRefDeltaDeg = 0f;
+                if (gtRotationFromRoadFrame && gtReporter != null)
+                {
+                    // Use reference-progress road tangent for stable GT heading.
+                    if (gtReporter.TryGetReferencePathDirection(out Vector3 roadFrameDirection))
+                    {
+                        Vector3 referenceDir = referenceDirection.normalized;
+                        Vector3 lastDir = gtLastValidRoadFrameDirection.sqrMagnitude > 0.01f
+                            ? gtLastValidRoadFrameDirection.normalized
+                            : referenceDir;
+
+                        float roadDeltaDeg = Vector3.Angle(lastDir, roadFrameDirection);
+                        float refDeltaDeg = Vector3.Angle(lastDir, referenceDir);
+                        roadVsRefDeltaDeg = Vector3.Angle(referenceDir, roadFrameDirection);
+
+                        // If closest-point tangent jumps sharply while reference tangent remains smooth,
+                        // treat it as a nearest-point alias and keep continuity with reference tangent.
+                        bool rejectRoadFrameHop = roadDeltaDeg > 1.5f && refDeltaDeg < roadDeltaDeg;
+                        rejectedRoadFrameHop = rejectRoadFrameHop;
+                        usedRoadFrame = !rejectRoadFrameHop;
+                        orientationDirection = rejectRoadFrameHop ? referenceDir : roadFrameDirection;
+                        gtLastValidRoadFrameDirection = orientationDirection;
+                        roadFrameHeadingDeg = HeadingDegFromDirection(roadFrameDirection);
+                    }
+                    else if (gtLastValidRoadFrameDirection.sqrMagnitude > 0.01f)
+                    {
+                        // Keep heading source consistent when road-frame lookup blips.
+                        orientationDirection = gtLastValidRoadFrameDirection;
+                        usedRoadFrame = true;
+                        roadFrameHeadingDeg = HeadingDegFromDirection(gtLastValidRoadFrameDirection);
+                        roadVsRefDeltaDeg = Vector3.Angle(referenceDirection.normalized, gtLastValidRoadFrameDirection.normalized);
+                    }
+                }
+
+                // Set rotation to match selected orientation direction unless explicitly disabled for experiment.
+                if (!gtDisableMoveRotation)
+                {
+                    float currentHeadingDeg = HeadingDegFromDirection(transform.forward);
+                    float inputHeadingDeg = HeadingDegFromDirection(orientationDirection);
+                    gtRotationAppliedDeltaDeg = Mathf.Abs(Mathf.DeltaAngle(currentHeadingDeg, inputHeadingDeg));
+                    gtRotationInputHeadingDeg = inputHeadingDeg;
+                    Quaternion targetRotation = Quaternion.LookRotation(orientationDirection, Vector3.up);
+                    rb.rotation = targetRotation;
+                }
+                else
+                {
+                    gtRotationAppliedDeltaDeg = 0f;
+                    gtRotationInputHeadingDeg = HeadingDegFromDirection(orientationDirection);
+                }
+                gtRotationDebugValid = true;
+                gtRotationUsedRoadFrame = usedRoadFrame;
+                gtRotationRejectedRoadFrameHop = rejectedRoadFrameHop;
+                gtRotationReferenceHeadingDeg = referenceHeadingDeg;
+                gtRotationRoadFrameHeadingDeg = roadFrameHeadingDeg;
+                gtRotationRoadVsRefDeltaDeg = roadVsRefDeltaDeg;
                 
-                // Set velocity to move forward along the path at constant speed
-                rb.linearVelocity = referenceDirection.normalized * groundTruthSpeed;
+                // Keep translational motion from reference path direction; rotation experiment only affects heading.
+                if (!rb.isKinematic)
+                {
+                    rb.linearVelocity = referenceDirection.normalized * groundTruthSpeed;
+                }
+                else
+                {
+                    rb.linearVelocity = Vector3.zero;
+                }
                 rb.angularVelocity = Vector3.zero;
                 
                 return; // Success - car is now directly on the path!
@@ -1131,6 +1231,14 @@ public class CarController : MonoBehaviour
         bool wasEnabled = groundTruthMode;
         groundTruthMode = enabled;
         groundTruthSpeed = speed;
+        if (rb != null)
+        {
+            rb.constraints = enabled
+                ? (baseConstraints | RigidbodyConstraints.FreezeRotationY)
+                : baseConstraints;
+            rb.isKinematic = enabled ? true : baseIsKinematic;
+            rb.angularVelocity = Vector3.zero;
+        }
         
         // Always log mode changes (not just when enabling)
         if (enabled && !wasEnabled)
@@ -1196,8 +1304,52 @@ public class CarController : MonoBehaviour
             unityDeltaTime = Time.deltaTime,
             unitySmoothDeltaTime = Time.smoothDeltaTime,
             unityUnscaledDeltaTime = Time.unscaledDeltaTime,
-            unityTimeScale = Time.timeScale
+            unityTimeScale = Time.timeScale,
+            gtRotationDebugValid = gtRotationDebugValid,
+            gtRotationUsedRoadFrame = gtRotationUsedRoadFrame,
+            gtRotationRejectedRoadFrameHop = gtRotationRejectedRoadFrameHop,
+            gtRotationReferenceHeadingDeg = gtRotationReferenceHeadingDeg,
+            gtRotationRoadFrameHeadingDeg = gtRotationRoadFrameHeadingDeg,
+            gtRotationInputHeadingDeg = gtRotationInputHeadingDeg,
+            gtRotationRoadVsRefDeltaDeg = gtRotationRoadVsRefDeltaDeg,
+            gtRotationAppliedDeltaDeg = gtRotationAppliedDeltaDeg
         };
+    }
+
+    private static float HeadingDegFromDirection(Vector3 dir)
+    {
+        if (dir.sqrMagnitude < 1e-6f)
+        {
+            return 0f;
+        }
+        Vector3 n = dir.normalized;
+        float heading = Mathf.Atan2(n.x, n.z) * Mathf.Rad2Deg;
+        if (heading < 0f)
+        {
+            heading += 360f;
+        }
+        return heading;
+    }
+
+    private static bool? ParseCommandLineBool(string[] args, string name)
+    {
+        for (int i = 0; i < args.Length - 1; i++)
+        {
+            if (args[i] == name)
+            {
+                string value = args[i + 1].Trim().ToLowerInvariant();
+                if (value == "true" || value == "1")
+                {
+                    return true;
+                }
+                if (value == "false" || value == "0")
+                {
+                    return false;
+                }
+                return null;
+            }
+        }
+        return null;
     }
 
 }
@@ -1228,6 +1380,15 @@ public class VehicleState
     public float unitySmoothDeltaTime = 0.0f;
     public float unityUnscaledDeltaTime = 0.0f;
     public float unityTimeScale = 1.0f;
+    // GT rotation input telemetry (exact values used to construct target rotation).
+    public bool gtRotationDebugValid = false;
+    public bool gtRotationUsedRoadFrame = false;
+    public bool gtRotationRejectedRoadFrameHop = false;
+    public float gtRotationReferenceHeadingDeg = 0.0f;
+    public float gtRotationRoadFrameHeadingDeg = 0.0f;
+    public float gtRotationInputHeadingDeg = 0.0f;
+    public float gtRotationRoadVsRefDeltaDeg = 0.0f;
+    public float gtRotationAppliedDeltaDeg = 0.0f;
     // Bridge correlation fields (set by AVBridge before send)
     public int requestId = 0;
     public float unitySendRealtime = 0.0f; // Time.realtimeSinceStartup at send time
@@ -1248,6 +1409,19 @@ public class VehicleState
     public float cameraLookaheadScreenY = -1.0f;  // -1.0 means not calculated yet
     // NEW: Ground truth lookahead distance used for calibration
     public float groundTruthLookaheadDistance = 8.0f;
+    // Oracle centerline samples in vehicle frame (flattened [x0,y0,x1,y1,...]).
+    public float[] oracleTrajectoryXY = new float[0];
+    public int oraclePointCount = 0;
+    public float oracleHorizonMeters = 0.0f;
+    public float oraclePointSpacingMeters = 0.0f;
+    public bool oracleSamplesEnabled = false;
+    // Right lane-line fiducials for projection diagnostics.
+    public float[] rightLaneFiducialsVehicleXY = new float[0];
+    public float[] rightLaneFiducialsScreenXY = new float[0];
+    public int rightLaneFiducialsPointCount = 0;
+    public float rightLaneFiducialsHorizonMeters = 0.0f;
+    public float rightLaneFiducialsSpacingMeters = 0.0f;
+    public bool rightLaneFiducialsEnabled = false;
     // NEW: Camera FOV information - what Unity actually uses
     public float cameraFieldOfView = 0.0f;  // Unity's Camera.fieldOfView value (always vertical FOV)
     public float cameraHorizontalFOV = 0.0f;  // Calculated horizontal FOV
@@ -1258,6 +1432,15 @@ public class VehicleState
     public float cameraForwardX = 0.0f;  // Camera forward X (normalized)
     public float cameraForwardY = 0.0f;  // Camera forward Y (normalized)
     public float cameraForwardZ = 0.0f;  // Camera forward Z (normalized)
+    // Top-down camera calibration/projection (for top-down overlay diagnostics)
+    public float topDownCameraPosX = 0.0f;
+    public float topDownCameraPosY = 0.0f;
+    public float topDownCameraPosZ = 0.0f;
+    public float topDownCameraForwardX = 0.0f;
+    public float topDownCameraForwardY = 0.0f;
+    public float topDownCameraForwardZ = 0.0f;
+    public float topDownCameraOrthographicSize = 0.0f;
+    public float topDownCameraFieldOfView = 0.0f;
     
     // NEW: Debug fields for diagnosing ground truth offset issues
     // Road center world positions (for debugging alignment)

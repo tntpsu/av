@@ -22,6 +22,13 @@ Interactive web-based debug visualizer for analyzing AV stack recordings. Displa
 - **Recording Summary Tab**: Overall metrics and health graphs ✅
 - **Issues Detection & Navigation**: Auto-detect problematic frames and jump to them ✅
 - **Trajectory vs Steering Diagnostic**: Identify which component is failing ✅
+- **Projection Tab Diagnostics**:
+  - First-visible trajectory source distance, turn-sign checks
+  - Planner-vs-oracle lateral error at 5m/10m/15m
+  - Right-lane fiducial reprojection error (5m/10m/15m + mean/max)
+- **Right-Lane Fiducials Overlay**:
+  - Unity screen-truth fiducials (`WorldToScreenPoint`) vs current projection
+  - Per-point connector lines for quick visual residual checks in front camera
 
 ## Setup
 
@@ -134,6 +141,8 @@ The server provides the following REST API endpoints:
 - `GET /api/recording/<filename>/summary?analyze_to_failure=<true|false>` - Get recording summary metrics
 - `GET /api/recording/<filename>/issues?analyze_to_failure=<true|false>` - Get detected issues
 - `GET /api/recording/<filename>/diagnostics?analyze_to_failure=<true|false>` - Get trajectory vs steering diagnostics
+- `GET /api/recording/<filename>/topdown-diagnostics` - Timing/projection trust diagnostics for top-down trajectory overlay
+- `POST /api/recording/<filename>/run-perception-questions` - Run `tools/analyze/analyze_perception_questions.py` and return Q1-Q8 output (used by Summary tab "Run Q Script" button)
 
 ### Debug Images (Legacy)
 - `GET /api/debug/<filename>/<frame_id>` - Get debug visualization image (if saved)

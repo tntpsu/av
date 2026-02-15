@@ -8,6 +8,7 @@ import base64
 import io
 import time
 import logging
+from collections import deque
 from pathlib import Path
 from typing import Optional
 from datetime import datetime
@@ -62,6 +63,9 @@ latest_frame_id: Optional[str] = None
 latest_camera_frames: dict[str, np.ndarray] = {}
 latest_frame_timestamps_by_id: dict[str, float] = {}
 latest_frame_ids_by_id: dict[str, str] = {}
+camera_frame_queues: dict[str, deque] = {}
+MAX_CAMERA_QUEUE_SIZE = 120
+vehicle_state_queue: deque = deque(maxlen=600)
 latest_vehicle_state: Optional[dict] = None
 latest_control_command: Optional[dict] = None
 latest_trajectory_data: Optional[dict] = None  # Trajectory data for visualization
@@ -103,6 +107,18 @@ async def _decode_and_store_camera_frame(
         latest_camera_frames[camera_id] = img_array
         latest_frame_timestamps_by_id[camera_id] = float(timestamp)
         latest_frame_ids_by_id[camera_id] = frame_id
+        queue = camera_frame_queues.get(camera_id)
+        if queue is None:
+            queue = deque(maxlen=MAX_CAMERA_QUEUE_SIZE)
+            camera_frame_queues[camera_id] = queue
+        queue.append(
+            {
+                "image": img_array,
+                "timestamp": float(timestamp),
+                "frame_id": frame_id,
+                "camera_id": camera_id,
+            }
+        )
         if camera_id == "front_center":
             latest_camera_frame = img_array
             latest_frame_timestamp = float(timestamp)
@@ -161,6 +177,17 @@ class VehicleState(BaseModel):
     cameraLookaheadScreenY: float = -1.0
     # NEW: Ground truth lookahead distance used for calibration
     groundTruthLookaheadDistance: float = 8.0
+    oracleTrajectoryXY: Optional[list[float]] = None
+    oraclePointCount: int = 0
+    oracleHorizonMeters: float = 0.0
+    oraclePointSpacingMeters: float = 0.0
+    oracleSamplesEnabled: bool = False
+    rightLaneFiducialsVehicleXY: Optional[list[float]] = None
+    rightLaneFiducialsScreenXY: Optional[list[float]] = None
+    rightLaneFiducialsPointCount: int = 0
+    rightLaneFiducialsHorizonMeters: float = 0.0
+    rightLaneFiducialsSpacingMeters: float = 0.0
+    rightLaneFiducialsEnabled: bool = False
     # NEW: Camera FOV information - what Unity actually uses
     cameraFieldOfView: float = 0.0  # Unity's Camera.fieldOfView value (always vertical FOV)
     cameraHorizontalFOV: float = 0.0  # Calculated horizontal FOV
@@ -171,6 +198,15 @@ class VehicleState(BaseModel):
     cameraForwardX: float = 0.0  # Camera forward X (normalized)
     cameraForwardY: float = 0.0  # Camera forward Y (normalized)
     cameraForwardZ: float = 0.0  # Camera forward Z (normalized)
+    # Top-down camera calibration/projection (for top-down overlay diagnostics)
+    topDownCameraPosX: float = 0.0
+    topDownCameraPosY: float = 0.0
+    topDownCameraPosZ: float = 0.0
+    topDownCameraForwardX: float = 0.0
+    topDownCameraForwardY: float = 0.0
+    topDownCameraForwardZ: float = 0.0
+    topDownCameraOrthographicSize: float = 0.0
+    topDownCameraFieldOfView: float = 0.0
     # NEW: Debug fields for diagnosing ground truth offset issues
     roadCenterAtCarX: float = 0.0  # Road center X at car's location (world coords)
     roadCenterAtCarY: float = 0.0  # Road center Y at car's location (world coords)
@@ -186,6 +222,15 @@ class VehicleState(BaseModel):
     roadFrameLaneCenterOffset: float = 0.0  # Lookahead road center offset in road frame (m, +right)
     roadFrameLaneCenterError: float = 0.0  # Car offset vs lookahead center (m, +right)
     vehicleFrameLookaheadOffset: float = 0.0  # Lookahead road center offset in vehicle frame (m, +right)
+    # GT rotation input telemetry (exact Unity inputs used for target rotation).
+    gtRotationDebugValid: bool = False
+    gtRotationUsedRoadFrame: bool = False
+    gtRotationRejectedRoadFrameHop: bool = False
+    gtRotationReferenceHeadingDeg: float = 0.0
+    gtRotationRoadFrameHeadingDeg: float = 0.0
+    gtRotationInputHeadingDeg: float = 0.0
+    gtRotationRoadVsRefDeltaDeg: float = 0.0
+    gtRotationAppliedDeltaDeg: float = 0.0
     speedLimit: float = 0.0  # Speed limit at current reference point (m/s)
     speedLimitPreview: float = 0.0  # Speed limit at preview distance ahead (m/s)
     speedLimitPreviewDistance: float = 0.0  # Preview distance used for speed limit (m)
@@ -367,31 +412,17 @@ async def receive_camera_frame(
                 now,
             )
 
-        # Avoid blocking the event loop on JPEG decode.
-        # If a decode is already in-flight, drop this frame.
+        # Decode and store every frame to preserve deterministic capture ordering.
         global camera_decode_in_flight, camera_drop_count
-        if camera_decode_in_flight.get(camera_key):
-            camera_drop_count[camera_key] = camera_drop_count.get(camera_key, 0) + 1
-            response = {
-                "status": "received",
-                "frame_id": frame_id,
-                "timestamp": timestamp,
-                "camera_id": camera_key,
-                "dropped": True,
-                "dropped_count": camera_drop_count[camera_key],
-            }
-        else:
-            camera_decode_in_flight[camera_key] = True
-            asyncio.create_task(
-                _decode_and_store_camera_frame(image_data, timestamp, frame_id, camera_key)
-            )
-            response = {
-                "status": "received",
-                "frame_id": frame_id,
-                "timestamp": timestamp,
-                "camera_id": camera_key,
-                "dropped": False,
-            }
+        camera_decode_in_flight[camera_key] = True
+        await _decode_and_store_camera_frame(image_data, timestamp, frame_id, camera_key)
+        response = {
+            "status": "received",
+            "frame_id": frame_id,
+            "timestamp": timestamp,
+            "camera_id": camera_key,
+            "dropped": False,
+        }
         duration = time.time() - start_time
         if duration > SLOW_REQUEST_SECONDS:
             logger.warning(
@@ -415,10 +446,11 @@ async def receive_vehicle_state(state: VehicleState):
     Args:
         state: Vehicle state data
     """
-    global latest_vehicle_state
+    global latest_vehicle_state, vehicle_state_queue
     start_time = time.time()
 
     latest_vehicle_state = state.model_dump()
+    vehicle_state_queue.append(latest_vehicle_state)
 
     global last_state_arrival_time, last_unity_send_realtime, last_unity_time, speed_limit_zero_streak
     duration = time.time() - start_time
@@ -653,12 +685,64 @@ async def get_latest_camera_frame(camera_id: str = "front_center"):
     timestamp_value = latest_frame_timestamps_by_id.get(camera_key)
     if timestamp_value is None and camera_key == "front_center":
         timestamp_value = latest_frame_timestamp
+    queue_obj = camera_frame_queues.get(camera_key)
+    queue_depth = len(queue_obj) if queue_obj is not None else 0
+    queue_capacity = int(queue_obj.maxlen) if queue_obj is not None and queue_obj.maxlen is not None else MAX_CAMERA_QUEUE_SIZE
+    drop_count = int(camera_drop_count.get(camera_key, 0))
+    decode_in_flight = bool(camera_decode_in_flight.get(camera_key, False))
+    arrival_time = last_camera_arrival_time.get(camera_key)
+    now = time.time()
+    age_ms = (now - arrival_time) * 1000.0 if arrival_time is not None else None
+    last_realtime = last_camera_realtime.get(camera_key)
+    last_unscaled = last_camera_unscaled.get(camera_key)
     return {
         "image": img_base64,
         "timestamp": timestamp_value,
         "frame_id": frame_id_value,
         "camera_id": camera_key,
-        "shape": list(frame.shape)
+        "shape": list(frame.shape),
+        # Stream freshness/queue diagnostics (instrumentation-only)
+        "queue_depth": queue_depth,
+        "queue_capacity": queue_capacity,
+        "drop_count": drop_count,
+        "decode_in_flight": decode_in_flight,
+        "latest_age_ms": age_ms,
+        "last_arrival_time": arrival_time,
+        "last_realtime_since_startup": last_realtime,
+        "last_unscaled_time": last_unscaled,
+    }
+
+
+@app.get("/api/camera/next")
+async def get_next_camera_frame(camera_id: str = "front_center"):
+    """Get next queued camera frame in FIFO order."""
+    camera_key = _normalize_camera_id(camera_id)
+    queue = camera_frame_queues.get(camera_key)
+    if queue is None or len(queue) == 0:
+        raise HTTPException(status_code=404, detail="No queued camera frame available")
+
+    item = queue.popleft()
+    frame = item["image"]
+
+    img = Image.fromarray(frame)
+    buffer = io.BytesIO()
+    img.save(buffer, format="JPEG")
+    img_bytes = buffer.getvalue()
+    img_base64 = base64.b64encode(img_bytes).decode()
+
+    frame_id_value = None
+    try:
+        frame_id_value = int(item.get("frame_id")) if item.get("frame_id") is not None else None
+    except (TypeError, ValueError):
+        frame_id_value = None
+
+    return {
+        "image": img_base64,
+        "timestamp": item.get("timestamp"),
+        "frame_id": frame_id_value,
+        "camera_id": camera_key,
+        "shape": list(frame.shape),
+        "queue_remaining": len(queue),
     }
 
 
@@ -676,6 +760,14 @@ async def get_latest_vehicle_state():
         raise HTTPException(status_code=404, detail="No vehicle state available")
     
     return latest_vehicle_state
+
+
+@app.get("/api/vehicle/state/next")
+async def get_next_vehicle_state():
+    """Get next queued vehicle state in FIFO order."""
+    if len(vehicle_state_queue) == 0:
+        raise HTTPException(status_code=404, detail="No queued vehicle state available")
+    return vehicle_state_queue.popleft()
 
 
 @app.get("/api/health")
@@ -846,6 +938,14 @@ async def receive_unity_feedback(feedback: UnityFeedback):
     latest_unity_feedback = feedback.model_dump()
     
     return {"status": "received"}
+
+
+@app.get("/api/unity/feedback/latest")
+async def get_latest_unity_feedback():
+    """Get latest Unity feedback/status payload."""
+    if latest_unity_feedback is None:
+        raise HTTPException(status_code=404, detail="No Unity feedback available")
+    return latest_unity_feedback
 
 
 def run_server(host: str = "0.0.0.0", port: int = 8000):

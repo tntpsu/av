@@ -12,6 +12,10 @@
         <!-- Header -->
         <header class="header">
             <h1>PhilViz</h1>
+            <div id="recording-meta" style="display:flex; gap:0.4rem; align-items:center; margin-right:0.8rem;">
+                <span id="recording-type-badge" style="display:none; padding:0.2rem 0.5rem; border-radius:999px; font-size:0.75rem; background:#2a2a2a; color:#cfd8dc; border:1px solid #444;">type</span>
+                <span id="topdown-badge" style="display:none; padding:0.2rem 0.5rem; border-radius:999px; font-size:0.75rem; background:#2a2a2a; color:#cfd8dc; border:1px solid #444;">topdown</span>
+            </div>
             <div class="header-controls">
                 <select id="recording-select" class="recording-select">
                     <option value="">Select recording...</option>
@@ -32,8 +36,32 @@
                             <canvas id="camera-canvas" width="640" height="480"></canvas>
                             <canvas id="overlay-canvas" width="640" height="480"></canvas>
                         </div>
-                        <div class="canvas-container">
-                            <canvas id="topdown-canvas" width="640" height="480"></canvas>
+                        <div class="topdown-column" id="topdown-column">
+                            <div class="canvas-container" id="topdown-container">
+                                <canvas id="topdown-canvas" width="640" height="480"></canvas>
+                            </div>
+                            <div class="quick-debug-panel">
+                                <h3>Quick Chart Focus</h3>
+                                <div class="quick-debug-controls">
+                                    <select id="quick-saved-views-select" class="recording-select">
+                                        <option value="">Select a saved view...</option>
+                                    </select>
+                                    <button id="quick-apply-view-btn" class="btn btn-secondary">Apply View</button>
+                                </div>
+                                <div class="quick-chart-values-wrap">
+                                    <table class="data-table quick-values-table">
+                                        <thead>
+                                            <tr>
+                                                <th>Signal</th>
+                                                <th>Value @ Current Frame</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody id="quick-chart-values-body">
+                                            <tr><td colspan="2" style="text-align: center; color: #888;">Plot a chart view to see values</td></tr>
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -44,20 +72,28 @@
                 <div class="overlay-controls">
                     <h3>Data Overlays</h3>
                     <div class="overlay-toggles">
-                        <label><input type="checkbox" id="toggle-seg-mask"> Segmentation Mask</label>
-                        <label><input type="checkbox" id="toggle-seg-fit-points"> Segmentation Fit Points</label>
-                        <label><input type="checkbox" id="toggle-perception-roi"> Perception ROI (CV mask)</label>
-                        <label><input type="checkbox" id="toggle-seg-fit-roi"> Segmentation Fit Range</label>
-                        <div id="cv-data-overlays">
-                            <label><input type="checkbox" id="toggle-detected-curves" checked> Detected Curves (Orange, CV only)</label>
+                        <label title="Show semantic segmentation mask overlay from recorded model output. Useful to inspect class coverage and mask quality."><input type="checkbox" id="toggle-seg-mask"> Segmentation Mask</label>
+                        <label title="Show sampled segmentation fit points used by lane fitting. Use when diagnosing perception fit quality."><input type="checkbox" id="toggle-seg-fit-points"> Model Perception Fit Points</label>
+                        <label title="Limit displayed segmentation fit points to the configured fit region-of-interest. Use to debug fit-range effects."><input type="checkbox" id="toggle-seg-fit-roi"> Segmentation Fit Range</label>
+                        <div id="cv-data-overlays"></div>
+                        <label title="Show ground-truth lane lines from recording (green). Use as oracle lane reference."><input type="checkbox" id="toggle-ground-truth" checked> Ground Truth (Green)</label>
+                        <label title="Show detected lane positions from perception (red). Compare against ground truth for drift/errors."><input type="checkbox" id="toggle-lanes" checked> Detected Lanes (Red Lines)</label>
+                        <label title="Show planner trajectory overlay (purple) in main and top-down views."><input type="checkbox" id="toggle-trajectory" checked> Trajectory</label>
+                        <label title="Show oracle trajectory overlay (green) from Unity lane-center samples."><input type="checkbox" id="toggle-oracle-trajectory"> Oracle Trajectory</label>
+                        <label title="Show distance ruler ticks along right lane side at 0m and every 5m ahead. Use to interpret where overlays begin in each camera."><input type="checkbox" id="toggle-distance-scale" checked> Distance Scale (5m)</label>
+                        <label title="Show Unity right-lane fiducials (screen-truth vs projected) for projection validation."><input type="checkbox" id="toggle-right-lane-fiducials"> Right-Lane Fiducials</label>
+                        <label title="Show controller reference point/heading target. Useful for control-debug alignment checks."><input type="checkbox" id="toggle-reference" checked> Reference Point</label>
+                    </div>
+                    <details class="overlay-advanced-debug" style="margin-top: 0.75rem;">
+                        <summary style="cursor: pointer; color: #bdbdbd;" title="Advanced display/debug toggles. Collapse when not actively debugging projection or serialization details.">Advanced Debug Overlays</summary>
+                        <div class="overlay-toggles" style="margin-top: 0.5rem;">
+                            <label title="Hide prepended reference point and show planner-only path. Use when isolating planner geometry from display serialization artifacts."><input type="checkbox" id="toggle-planner-only-trajectory"> Planner-Only Trajectory (Skip Prepended Ref Point)</label>
+                            <label title="Use top-down camera calibration from recording for projection. Keep enabled for trustable top-down alignment."><input type="checkbox" id="toggle-topdown-calibrated-projection"> Top-Down Calibrated Projection</label>
+                            <label title="Apply temporal smoothing to top-down trajectory display only. Use for readability; not used in metrics/control."><input type="checkbox" id="toggle-topdown-pose-smooth"> Smooth Top-Down Pose (Display Only)</label>
                         </div>
-                        <label><input type="checkbox" id="toggle-ground-truth" checked> Ground Truth (Green)</label>
-                        <label><input type="checkbox" id="toggle-lanes" checked> Detected Lanes (Red Lines)</label>
-                        <label><input type="checkbox" id="toggle-trajectory" checked> Trajectory</label>
-                        <label><input type="checkbox" id="toggle-reference" checked> Reference Point</label>
+                    </details>
                     </div>
                 </div>
-            </div>
 
                 <!-- Middle: Legend Panel (uses space between camera and data) -->
             <div class="legend-panel collapsed" id="legend-panel">
@@ -97,6 +133,16 @@
                         <input type="checkbox" id="analyze-to-failure" style="margin-right: 0.5rem; cursor: pointer;">
                         <span>Analyze to out of bounds</span>
                     </label>
+                    <div style="margin-top: 0.75rem; display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; color: #e0e0e0; font-size: 0.85rem;">
+                        <span>Entry window (distance):</span>
+                        <label>start
+                            <input id="diag-entry-start-distance" type="number" value="34" step="0.5" style="width: 70px; margin-left: 0.25rem; background: #2a2a2a; color: white; border: 1px solid #444; border-radius: 4px; padding: 0.2rem;">
+                        </label>
+                        <label>len
+                            <input id="diag-entry-window-distance" type="number" value="8" step="0.5" min="0.5" style="width: 70px; margin-left: 0.25rem; background: #2a2a2a; color: white; border: 1px solid #444; border-radius: 4px; padding: 0.2rem;">
+                        </label>
+                        <span style="color:#888;">meters from run start</span>
+                    </div>
                 </div>
             </div>
 
@@ -110,6 +156,7 @@
                     <button class="tab-btn active" data-tab="all-data">All Data</button>
                     <button class="tab-btn" data-tab="perception">Perception</button>
                     <button class="tab-btn" data-tab="trajectory">Trajectory</button>
+                    <button class="tab-btn" data-tab="projection">Projection</button>
                     <button class="tab-btn" data-tab="control">Control</button>
                     <button class="tab-btn" data-tab="vehicle">Vehicle</button>
                     <button class="tab-btn" data-tab="ground-truth">Ground Truth</button>
@@ -186,9 +233,14 @@
                         <h3>Unity Timing</h3>
                         <table class="data-table">
                             <tr><td>Camera Timestamp</td><td id="all-vehicle-camera-timestamp">-</td></tr>
+                            <tr><td>Top-Down Timestamp</td><td id="all-vehicle-topdown-timestamp">-</td></tr>
                             <tr><td>Camera Frame ID</td><td id="all-vehicle-camera-frame-id">-</td></tr>
+                            <tr><td>Top-Down Frame ID</td><td id="all-vehicle-topdown-frame-id">-</td></tr>
                             <tr><td>Camera Timestamp Reused</td><td id="all-vehicle-camera-timestamp-reused">-</td></tr>
                             <tr><td>Unity Time</td><td id="all-vehicle-unity-time">-</td></tr>
+                            <tr><td>Top-Down ↔ Trajectory Δt</td><td id="all-vehicle-topdown-traj-delta">-</td></tr>
+                            <tr><td>Top-Down ↔ Unity Δt</td><td id="all-vehicle-topdown-unity-delta">-</td></tr>
+                            <tr><td>Top-Down Sync Trust</td><td id="all-vehicle-topdown-sync-trust">-</td></tr>
                             <tr><td>Unity Frame</td><td id="all-vehicle-unity-frame">-</td></tr>
                             <tr><td>Delta Time</td><td id="all-vehicle-unity-delta-time">-</td></tr>
                             <tr><td>Smooth Delta Time</td><td id="all-vehicle-unity-smooth-delta-time">-</td></tr>
@@ -229,7 +281,7 @@
                         <table class="data-table">
                             <tr><td>Reference X (lateral)</td><td id="all-trajectory-x">-</td></tr>
                             <tr><td>Reference Y (forward)</td><td id="all-trajectory-y">-</td></tr>
-                            <tr><td>Reference Heading</td><td id="all-trajectory-heading">-</td></tr>
+                            <tr><td title="Planner-frame heading from trajectory/reference_point_heading">Reference Heading (planner frame)</td><td id="all-trajectory-heading">-</td></tr>
                             <tr><td>Reference Velocity</td><td id="all-trajectory-velocity">-</td></tr>
                         </table>
                         
@@ -242,7 +294,7 @@
                             <tr><td>Longitudinal Jerk</td><td id="all-control-jerk">-</td></tr>
                             <tr><td>Ref Point X</td><td id="all-control-ref-x">-</td></tr>
                             <tr><td>Ref Point Y</td><td id="all-control-ref-y">-</td></tr>
-                            <tr><td>Ref Heading</td><td id="all-control-ref-heading">-</td></tr>
+                            <tr><td title="Planner-frame heading passed to control">Ref Heading (planner frame)</td><td id="all-control-ref-heading">-</td></tr>
                             <tr><td>Ref Speed</td><td id="all-control-ref-speed">-</td></tr>
                             <tr><td>Target Speed (raw)</td><td id="all-control-target-speed-raw">-</td></tr>
                             <tr><td>Target Speed (post limits)</td><td id="all-control-target-speed-post-limits">-</td></tr>
@@ -274,12 +326,13 @@
                             <tr><td>Position Y</td><td id="all-vehicle-y">-</td></tr>
                             <tr><td>Position Z</td><td id="all-vehicle-z">-</td></tr>
                             <tr><td>Speed</td><td id="all-vehicle-speed">-</td></tr>
+                            <tr><td>Distance from Start</td><td id="all-vehicle-distance-from-start">-</td></tr>
                             <tr><td>Longitudinal Accel</td><td id="all-vehicle-accel">-</td></tr>
                             <tr><td>Longitudinal Jerk</td><td id="all-vehicle-jerk">-</td></tr>
                             <tr><td>Speed Limit</td><td id="all-vehicle-speed-limit">-</td></tr>
                             <tr><td>Speed Limit Preview</td><td id="all-vehicle-speed-limit-preview">-</td></tr>
                             <tr><td>Preview Distance</td><td id="all-vehicle-speed-limit-preview-distance">-</td></tr>
-                            <tr><td>Heading</td><td id="all-vehicle-heading">-</td></tr>
+                            <tr><td title="Vehicle world heading from pose/quaternion">Heading (vehicle/world)</td><td id="all-vehicle-heading">-</td></tr>
                             <tr><td>Steering Angle</td><td id="all-vehicle-steering">-</td></tr>
                             <tr><td>Actual Distance to Road Center (m)</td><td id="all-vehicle-actual-distance">-</td></tr>
                         </table>
@@ -344,20 +397,54 @@
                         <table class="data-table">
                             <tr><td>X (lateral)</td><td id="trajectory-x">-</td></tr>
                             <tr><td>Y (forward)</td><td id="trajectory-y">-</td></tr>
-                            <tr><td>Heading</td><td id="trajectory-heading">-</td></tr>
+                            <tr><td title="Planner-frame heading from trajectory/reference_point_heading">Heading (planner frame)</td><td id="trajectory-heading">-</td></tr>
                             <tr><td>Velocity</td><td id="trajectory-velocity">-</td></tr>
                         </table>
                         <h3>Raw Reference Point</h3>
                         <table class="data-table">
                             <tr><td>X (raw)</td><td id="trajectory-raw-x">-</td></tr>
                             <tr><td>Y (raw)</td><td id="trajectory-raw-y">-</td></tr>
-                            <tr><td>Heading (raw)</td><td id="trajectory-raw-heading">-</td></tr>
+                            <tr><td title="Raw planner-frame heading before smoothing">Heading (raw planner frame)</td><td id="trajectory-raw-heading">-</td></tr>
                         </table>
                         <h3>Reference Point Debug</h3>
                         <table class="data-table">
                             <tr><td>Calculation Method</td><td id="trajectory-method">-</td></tr>
                             <tr><td>Perception Center X</td><td id="trajectory-perception-center">-</td></tr>
                             <tr><td>Trajectory vs Perception</td><td id="trajectory-vs-perception">-</td></tr>
+                        </table>
+                    </div>
+
+                    <!-- Projection Tab -->
+                    <div id="projection-tab" class="tab-pane">
+                        <h3>Main Camera Projection</h3>
+                        <table class="data-table">
+                            <tr><td>First Visible Source Y</td><td id="projection-main-first-visible-y">-</td></tr>
+                            <tr><td>Mirror Sanity</td><td id="projection-main-mirror-sanity">-</td></tr>
+                            <tr><td>Turn Sign (Source)</td><td id="projection-source-turn-sign">-</td></tr>
+                            <tr><td>Turn Sign (Main Visible)</td><td id="projection-main-turn-sign">-</td></tr>
+                        </table>
+                        <h3>Lateral Error at Lookahead</h3>
+                        <table class="data-table">
+                            <tr><td>Error @ 5m</td><td id="projection-lateral-error-5m">-</td></tr>
+                            <tr><td>Error @ 10m</td><td id="projection-lateral-error-10m">-</td></tr>
+                            <tr><td>Error @ 15m</td><td id="projection-lateral-error-15m">-</td></tr>
+                            <tr><td>Error Source</td><td id="projection-lateral-error-source">-</td></tr>
+                        </table>
+                        <h3>Right-Lane Fiducial Projection Error</h3>
+                        <table class="data-table">
+                            <tr><td>Reproj Error @ 5m</td><td id="projection-right-fiducial-err-5m">-</td></tr>
+                            <tr><td>Reproj Error @ 10m</td><td id="projection-right-fiducial-err-10m">-</td></tr>
+                            <tr><td>Reproj Error @ 15m</td><td id="projection-right-fiducial-err-15m">-</td></tr>
+                            <tr><td>Mean Reproj Error</td><td id="projection-right-fiducial-err-mean">-</td></tr>
+                            <tr><td>Max Reproj Error</td><td id="projection-right-fiducial-err-max">-</td></tr>
+                            <tr><td>Fiducial Source</td><td id="projection-right-fiducial-source">-</td></tr>
+                        </table>
+                        <h3>Top-Down Display</h3>
+                        <table class="data-table">
+                            <tr><td>Turn Sign (Top-Down)</td><td id="projection-topdown-turn-sign">-</td></tr>
+                            <tr><td>Top-Down Calibrated</td><td id="projection-topdown-calibrated">-</td></tr>
+                            <tr><td>Smooth Top-Down Pose</td><td id="projection-topdown-smooth">-</td></tr>
+                            <tr><td>Planner-Only Path</td><td id="projection-planner-only">-</td></tr>
                         </table>
                     </div>
 
@@ -372,7 +459,7 @@
                             <tr><td>Longitudinal Jerk</td><td id="control-jerk">-</td></tr>
                             <tr><td>Ref Point X</td><td id="control-ref-x">-</td></tr>
                             <tr><td>Ref Point Y</td><td id="control-ref-y">-</td></tr>
-                            <tr><td>Ref Heading</td><td id="control-ref-heading">-</td></tr>
+                            <tr><td title="Planner-frame heading passed to control">Ref Heading (planner frame)</td><td id="control-ref-heading">-</td></tr>
                             <tr><td>Ref Speed</td><td id="control-ref-speed">-</td></tr>
                             <tr><td>Target Speed (raw)</td><td id="control-target-speed-raw">-</td></tr>
                             <tr><td>Target Speed (post limits)</td><td id="control-target-speed-post-limits">-</td></tr>
@@ -402,6 +489,23 @@
                             <tr><td>Using Stale Perception</td><td id="control-using-stale" style="color: #ff6b6b;">-</td></tr>
                             <tr><td>Stale Reason</td><td id="control-stale-reason" style="color: #ff6b6b;">-</td></tr>
                         </table>
+                        <h3>Steering Limiter Waterfall</h3>
+                        <table class="data-table">
+                            <tr><td>Pre Rate Limit</td><td id="control-steering-pre-rate">-</td></tr>
+                            <tr><td>Post Rate Limit</td><td id="control-steering-post-rate">-</td></tr>
+                            <tr><td>Post Jerk Limit</td><td id="control-steering-post-jerk">-</td></tr>
+                            <tr><td>Post Sign-Flip Override</td><td id="control-steering-post-sign-flip">-</td></tr>
+                            <tr><td>Post Hard Clip</td><td id="control-steering-post-hard-clip">-</td></tr>
+                            <tr><td>Post Smoothing (Final)</td><td id="control-steering-post-smoothing">-</td></tr>
+                            <tr><td>Rate Limited</td><td id="control-steering-rate-limited">-</td></tr>
+                            <tr><td>Jerk Limited</td><td id="control-steering-jerk-limited">-</td></tr>
+                            <tr><td>Hard Clipped</td><td id="control-steering-hard-clipped">-</td></tr>
+                            <tr><td>Smoothing Active</td><td id="control-steering-smoothing-active">-</td></tr>
+                            <tr><td>Rate Limit Delta</td><td id="control-steering-rate-delta">-</td></tr>
+                            <tr><td>Jerk Limit Delta</td><td id="control-steering-jerk-delta">-</td></tr>
+                            <tr><td>Hard Clip Delta</td><td id="control-steering-hard-clip-delta">-</td></tr>
+                            <tr><td>Smoothing Delta</td><td id="control-steering-smoothing-delta">-</td></tr>
+                        </table>
                     </div>
 
                     <!-- Vehicle Tab -->
@@ -418,9 +522,14 @@
                         <h3>Unity Timing</h3>
                         <table class="data-table">
                             <tr><td>Camera Timestamp</td><td id="vehicle-camera-timestamp">-</td></tr>
+                            <tr><td>Top-Down Timestamp</td><td id="vehicle-topdown-timestamp">-</td></tr>
                             <tr><td>Camera Frame ID</td><td id="vehicle-camera-frame-id">-</td></tr>
+                            <tr><td>Top-Down Frame ID</td><td id="vehicle-topdown-frame-id">-</td></tr>
                             <tr><td>Camera Timestamp Reused</td><td id="vehicle-camera-timestamp-reused">-</td></tr>
                             <tr><td>Unity Time</td><td id="vehicle-unity-time">-</td></tr>
+                            <tr><td>Top-Down ↔ Trajectory Δt</td><td id="vehicle-topdown-traj-delta">-</td></tr>
+                            <tr><td>Top-Down ↔ Unity Δt</td><td id="vehicle-topdown-unity-delta">-</td></tr>
+                            <tr><td>Top-Down Sync Trust</td><td id="vehicle-topdown-sync-trust">-</td></tr>
                             <tr><td>Unity Frame</td><td id="vehicle-unity-frame">-</td></tr>
                             <tr><td>Delta Time</td><td id="vehicle-unity-delta-time">-</td></tr>
                             <tr><td>Smooth Delta Time</td><td id="vehicle-unity-smooth-delta-time">-</td></tr>
@@ -466,12 +575,13 @@
                         <h3>Motion</h3>
                         <table class="data-table">
                             <tr><td>Speed</td><td id="vehicle-speed">-</td></tr>
+                            <tr><td>Distance from Start</td><td id="vehicle-distance-from-start">-</td></tr>
                             <tr><td>Longitudinal Accel</td><td id="vehicle-accel">-</td></tr>
                             <tr><td>Longitudinal Jerk</td><td id="vehicle-jerk">-</td></tr>
                             <tr><td>Speed Limit</td><td id="vehicle-speed-limit">-</td></tr>
                             <tr><td>Speed Limit Preview</td><td id="vehicle-speed-limit-preview">-</td></tr>
                             <tr><td>Preview Distance</td><td id="vehicle-speed-limit-preview-distance">-</td></tr>
-                            <tr><td>Heading</td><td id="vehicle-heading">-</td></tr>
+                            <tr><td title="Vehicle world heading from pose/quaternion">Heading (vehicle/world)</td><td id="vehicle-heading">-</td></tr>
                             <tr><td>Steering Angle</td><td id="vehicle-steering">-</td></tr>
                         </table>
                     </div>
@@ -544,6 +654,11 @@
                                 </div>
                             </div>
                             <div class="chart-canvas">
+                                <div class="chart-zoom-controls">
+                                    <button id="chart-zoom-in-btn" class="btn btn-secondary">Zoom In</button>
+                                    <button id="chart-zoom-out-btn" class="btn btn-secondary">Zoom Out</button>
+                                    <button id="chart-zoom-reset-btn" class="btn btn-secondary">Reset Zoom</button>
+                                </div>
                                 <canvas id="chart-canvas" width="640" height="480"></canvas>
                             </div>
                         </div>
@@ -559,6 +674,7 @@
                 <span>Frame: <span id="frame-number">0</span> / <span id="frame-count">0</span></span>
                 <input type="range" id="frame-slider" min="0" max="0" value="0" class="frame-slider">
                 <span>Time: <span id="frame-time">0.00</span>s</span>
+                <span>Distance: <span id="frame-distance-from-start">-</span>m</span>
                 <input type="number" id="frame-jump-input" placeholder="Jump to frame..." min="0" style="width: 120px; padding: 0.25rem; margin-left: 0.5rem; background: #2a2a2a; color: white; border: 1px solid #444; border-radius: 4px;">
                 <button id="frame-jump-btn" class="btn btn-secondary" style="margin-left: 0.25rem; padding: 0.25rem 0.5rem;">Go</button>
             </div>
@@ -571,9 +687,9 @@
         </div>
     </div>
 
-    <script src="data_loader.js"></script>
-    <script src="overlay_renderer.js"></script>
-    <script src="visualizer.js"></script>
+    <script src="data_loader.js?v=20260213_issues_filters"></script>
+    <script src="overlay_renderer.js?v=20260213_issues_filters"></script>
+    <script src="visualizer.js?v=20260215_right_lane_fiducials_v5"></script>
 </body>
 </html>
 

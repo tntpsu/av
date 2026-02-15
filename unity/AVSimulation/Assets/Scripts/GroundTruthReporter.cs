@@ -379,19 +379,41 @@ public class GroundTruthReporter : MonoBehaviour
         }
         
         float t;
+        Vector3 roadCenter;
+        Vector3 direction;
         if (useTimeBasedReference && useDynamicGroundTruth)
         {
-            t = GetTimeBasedReferenceT();
+            float pathLength = roadGenerator.GetPathLength();
+            float elapsedTime = Time.time - pathStartTime;
+            float distanceTraveled = referenceSpeed * elapsedTime;
+            if (pathLength > 0.01f)
+            {
+                float normalizedDistance = Mathf.Repeat(distanceTraveled, pathLength);
+                roadCenter = roadGenerator.GetCenterPointAtDistance(normalizedDistance);
+                float tangentSampleDistance = Mathf.Clamp(pathLength * 0.001f, 0.1f, 0.5f);
+                Vector3 prevPoint = roadGenerator.GetCenterPointAtDistance(normalizedDistance - tangentSampleDistance);
+                Vector3 nextPoint = roadGenerator.GetCenterPointAtDistance(normalizedDistance + tangentSampleDistance);
+                direction = (nextPoint - prevPoint);
+                if (direction.sqrMagnitude < 1e-6f)
+                {
+                    direction = roadGenerator.GetDirectionAtDistance(normalizedDistance);
+                }
+                t = normalizedDistance / pathLength;
+            }
+            else
+            {
+                t = GetTimeBasedReferenceT();
+                roadCenter = roadGenerator.GetOvalCenterPoint(t);
+                direction = roadGenerator.GetOvalDirection(t);
+            }
             
             // Debug: Log if t is stuck or invalid (every ~2 seconds)
             if (Time.frameCount % 60 == 0)
             {
-                float elapsedTime = Time.time - pathStartTime;
-                float distanceTraveled = referenceSpeed * elapsedTime;
-                float normalizedDistance = Mathf.Repeat(distanceTraveled, ovalPathLength);  // FIX: Use Mathf.Repeat, not %
+                float normalizedDistance = Mathf.Repeat(distanceTraveled, roadGenerator.GetPathLength());
                 Debug.Log($"GroundTruthReporter: Time-based reference - elapsedTime={elapsedTime:F2}s, " +
                          $"distanceTraveled={distanceTraveled:F2}m, normalizedDistance={normalizedDistance:F2}m, " +
-                         $"t={t:F4}, pathLength={ovalPathLength:F2}m");
+                         $"t={t:F4}, pathLength={roadGenerator.GetPathLength():F2}m");
             }
         }
         else
@@ -425,10 +447,10 @@ public class GroundTruthReporter : MonoBehaviour
                 return (Vector3.zero, Vector3.forward);
             }
             t = FindClosestPointOnOval(carPos);
+            roadCenter = roadGenerator.GetOvalCenterPoint(t);
+            direction = roadGenerator.GetOvalDirection(t);
         }
         
-        Vector3 roadCenter = roadGenerator.GetOvalCenterPoint(t);
-        Vector3 direction = roadGenerator.GetOvalDirection(t);
         Vector3 position = GetLaneCenterPosition(roadCenter, direction, roadGenerator.roadWidth, currentLane);
         
         // Validate direction vector
@@ -1059,6 +1081,147 @@ public class GroundTruthReporter : MonoBehaviour
     }
 
     /// <summary>
+    /// Sample lane-center trajectory ahead of the car and return vehicle-frame points.
+    /// Returns flattened [x0, y0, x1, y1, ...] where x=right(+), y=forward(+).
+    /// </summary>
+    public float[] GetOracleTrajectorySamplesVehicle(float horizonMeters = 50.0f, float pointSpacingMeters = 1.0f)
+    {
+        if (roadGenerator == null || carTransform == null)
+        {
+            return new float[0];
+        }
+
+        float spacing = Mathf.Max(0.1f, pointSpacingMeters);
+        float horizon = Mathf.Max(0.5f, horizonMeters);
+        int pointCount = Mathf.Max(2, Mathf.FloorToInt(horizon / spacing) + 1);
+
+        Vector3 carPos;
+        if (cachedCarRigidbody == null)
+        {
+            cachedCarRigidbody = carTransform.GetComponent<Rigidbody>();
+        }
+        if (cachedCarRigidbody != null)
+        {
+            carPos = cachedCarRigidbody.position;
+        }
+        else
+        {
+            carPos = carTransform.position;
+        }
+
+        Vector3 carForward = carTransform.forward.normalized;
+        Vector3 carRight = carTransform.right.normalized;
+        float carT = FindClosestPointOnOval(carPos);
+        float pathLength = Mathf.Max(0.01f, roadGenerator.GetPathLength());
+
+        float[] samples = new float[pointCount * 2];
+        for (int i = 0; i < pointCount; i++)
+        {
+            if (i == 0)
+            {
+                samples[0] = 0.0f;
+                samples[1] = 0.0f;
+                continue;
+            }
+            float distanceAhead = i * spacing;
+            float t = Mathf.Repeat(carT + (distanceAhead / pathLength), 1.0f);
+            Vector3 roadCenter = roadGenerator.GetOvalCenterPoint(t);
+            Vector3 roadDirection = roadGenerator.GetOvalDirection(t);
+            if (roadDirection.sqrMagnitude < 0.01f)
+            {
+                roadDirection = carForward;
+            }
+            // Oracle should follow selected lane center (right lane by default), not road centerline.
+            Vector3 laneCenterPoint = GetLaneCenterPosition(
+                roadCenter,
+                roadDirection.normalized,
+                roadGenerator.roadWidth,
+                currentLane
+            );
+            Vector3 toLaneCenter = laneCenterPoint - carPos;
+
+            samples[2 * i] = Vector3.Dot(toLaneCenter, carRight);
+            // Keep oracle horizon monotonic for stable comparison/visualization.
+            samples[2 * i + 1] = distanceAhead;
+        }
+
+        return samples;
+    }
+
+    /// <summary>
+    /// Sample the right lane line (painted right edge) ahead of the car.
+    /// Returns flattened vehicle-frame [x0,y0,x1,y1,...] and corresponding world points.
+    /// x=right(+), y=forward(+) where y is forced to distanceAhead for monotonic diagnostics.
+    /// </summary>
+    public float[] GetRightLaneLineFiducialsVehicle(
+        float horizonMeters,
+        float pointSpacingMeters,
+        out Vector3[] worldPoints
+    )
+    {
+        worldPoints = new Vector3[0];
+        if (roadGenerator == null || carTransform == null)
+        {
+            return new float[0];
+        }
+
+        float spacing = Mathf.Max(0.1f, pointSpacingMeters);
+        float horizon = Mathf.Max(0.5f, horizonMeters);
+        int pointCount = Mathf.Max(2, Mathf.FloorToInt(horizon / spacing) + 1);
+
+        Vector3 carPos;
+        if (cachedCarRigidbody == null)
+        {
+            cachedCarRigidbody = carTransform.GetComponent<Rigidbody>();
+        }
+        if (cachedCarRigidbody != null)
+        {
+            carPos = cachedCarRigidbody.position;
+        }
+        else
+        {
+            carPos = carTransform.position;
+        }
+
+        Vector3 carForward = carTransform.forward.normalized;
+        Vector3 carRight = carTransform.right.normalized;
+        float carT = FindClosestPointOnOval(carPos);
+        float pathLength = Mathf.Max(0.01f, roadGenerator.GetPathLength());
+        float halfWidth = roadGenerator.roadWidth * 0.5f;
+
+        float[] samples = new float[pointCount * 2];
+        worldPoints = new Vector3[pointCount];
+
+        for (int i = 0; i < pointCount; i++)
+        {
+            float distanceAhead = i * spacing;
+            float t = Mathf.Repeat(carT + (distanceAhead / pathLength), 1.0f);
+            Vector3 roadCenter = roadGenerator.GetOvalCenterPoint(t);
+            Vector3 roadDirection = roadGenerator.GetOvalDirection(t);
+            if (roadDirection.sqrMagnitude < 0.01f)
+            {
+                roadDirection = carForward;
+            }
+            Vector3 roadRight = Vector3.Cross(Vector3.up, roadDirection.normalized);
+            if (roadRight.sqrMagnitude < 0.01f)
+            {
+                roadRight = carRight;
+            }
+            roadRight.Normalize();
+
+            // Right painted lane line = right road edge.
+            Vector3 rightLaneLinePoint = roadCenter + roadRight * halfWidth;
+            worldPoints[i] = rightLaneLinePoint;
+
+            Vector3 toLaneLine = rightLaneLinePoint - carPos;
+            samples[2 * i] = Vector3.Dot(toLaneLine, carRight);
+            samples[2 * i + 1] = distanceAhead;
+        }
+
+        return samples;
+    }
+
+    /// <summary>
     /// Get road-frame metrics at the car's current position.
     /// Returns road heading, car heading, heading delta, and lateral offset from road center.
     /// </summary>
@@ -1104,7 +1267,66 @@ public class GroundTruthReporter : MonoBehaviour
 
         return (roadHeadingDeg, carHeadingDeg, headingDeltaDeg, roadLateralOffset);
     }
-    
+
+    /// <summary>
+    /// Get closest-point road tangent direction at the car position.
+    /// Returns false if dynamic ground-truth references are unavailable.
+    /// </summary>
+    public bool TryGetClosestRoadDirectionAtCar(out Vector3 roadDirection)
+    {
+        roadDirection = Vector3.zero;
+        if (roadGenerator == null || carTransform == null)
+        {
+            return false;
+        }
+
+        Vector3 carPos;
+        if (cachedCarRigidbody == null)
+        {
+            cachedCarRigidbody = carTransform.GetComponent<Rigidbody>();
+        }
+        if (cachedCarRigidbody != null)
+        {
+            carPos = cachedCarRigidbody.position;
+        }
+        else
+        {
+            carPos = carTransform.position;
+        }
+
+        float tCar = FindClosestPointOnOval(carPos);
+        Vector3 direction = roadGenerator.GetOvalDirection(tCar);
+        if (direction.sqrMagnitude < 0.01f)
+        {
+            return false;
+        }
+
+        roadDirection = direction.normalized;
+        return true;
+    }
+
+    /// <summary>
+    /// Get reference-path tangent direction at the current GT reference progress.
+    /// This is stable for GT playback because it follows the same parametric path as reference position.
+    /// </summary>
+    public bool TryGetReferencePathDirection(out Vector3 roadDirection)
+    {
+        roadDirection = Vector3.zero;
+        if (roadGenerator == null)
+        {
+            return false;
+        }
+
+        var (_, direction) = GetCurrentReferencePath();
+        if (direction.sqrMagnitude < 0.01f)
+        {
+            return false;
+        }
+
+        roadDirection = direction.normalized;
+        return true;
+    }
+
     /// <summary>
     /// Get ground truth lane positions (left and right) in vehicle coordinates.
     /// Uses dynamic calculation from RoadGenerator if available, otherwise uses static positions.

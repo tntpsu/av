@@ -340,6 +340,42 @@ class DataRecorder:
             maxshape=max_shape,
             dtype=np.float32
         )
+        self.h5_file.create_dataset(
+            "vehicle/right_lane_fiducials_vehicle_xy",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=h5py.vlen_dtype(np.float32)
+        )
+        self.h5_file.create_dataset(
+            "vehicle/right_lane_fiducials_screen_xy",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=h5py.vlen_dtype(np.float32)
+        )
+        self.h5_file.create_dataset(
+            "vehicle/right_lane_fiducials_point_count",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int32
+        )
+        self.h5_file.create_dataset(
+            "vehicle/right_lane_fiducials_horizon_meters",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "vehicle/right_lane_fiducials_spacing_meters",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "vehicle/right_lane_fiducials_enabled",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int8
+        )
         # NEW: Camera FOV values from Unity
         self.h5_file.create_dataset(
             "vehicle/camera_field_of_view",
@@ -386,6 +422,164 @@ class DataRecorder:
         )
         self.h5_file.create_dataset(
             "vehicle/camera_forward_z",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        # Top-down camera calibration/projection (for top-down overlay diagnostics)
+        self.h5_file.create_dataset(
+            "vehicle/topdown_camera_pos_x",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "vehicle/topdown_camera_pos_y",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "vehicle/topdown_camera_pos_z",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "vehicle/topdown_camera_forward_x",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "vehicle/topdown_camera_forward_y",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "vehicle/topdown_camera_forward_z",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "vehicle/topdown_camera_orthographic_size",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "vehicle/topdown_camera_field_of_view",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        # Stream consume-point lag diagnostics (instrumentation-only)
+        self.h5_file.create_dataset(
+            "vehicle/stream_front_unity_dt_ms",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "vehicle/stream_topdown_unity_dt_ms",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "vehicle/stream_topdown_front_dt_ms",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "vehicle/stream_topdown_front_frame_id_delta",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "vehicle/stream_front_frame_id_delta",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "vehicle/stream_topdown_frame_id_delta",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "vehicle/stream_front_latest_age_ms",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "vehicle/stream_front_queue_depth",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "vehicle/stream_front_drop_count",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "vehicle/stream_front_decode_in_flight",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "vehicle/stream_topdown_latest_age_ms",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "vehicle/stream_topdown_queue_depth",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "vehicle/stream_topdown_drop_count",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "vehicle/stream_topdown_decode_in_flight",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "vehicle/stream_front_last_realtime_s",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "vehicle/stream_topdown_last_realtime_s",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "vehicle/stream_front_timestamp_minus_realtime_ms",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "vehicle/stream_topdown_timestamp_minus_realtime_ms",
             shape=(0,),
             maxshape=max_shape,
             dtype=np.float32
@@ -476,7 +670,55 @@ class DataRecorder:
             maxshape=max_shape,
             dtype=np.float32
         )
-        
+        # GT rotation input telemetry (exact Unity inputs used for target rotation).
+        self.h5_file.create_dataset(
+            "vehicle/gt_rotation_debug_valid",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int8
+        )
+        self.h5_file.create_dataset(
+            "vehicle/gt_rotation_used_road_frame",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int8
+        )
+        self.h5_file.create_dataset(
+            "vehicle/gt_rotation_rejected_road_frame_hop",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int8
+        )
+        self.h5_file.create_dataset(
+            "vehicle/gt_rotation_reference_heading_deg",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "vehicle/gt_rotation_road_frame_heading_deg",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "vehicle/gt_rotation_input_heading_deg",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "vehicle/gt_rotation_road_vs_ref_delta_deg",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "vehicle/gt_rotation_applied_delta_deg",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
         # Control commands
         self.h5_file.create_dataset(
             "control/timestamps",
@@ -580,6 +822,90 @@ class DataRecorder:
             maxshape=max_shape,
             dtype=np.int8
         )
+        self.h5_file.create_dataset(
+            "control/steering_pre_rate_limit",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/steering_post_rate_limit",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/steering_post_jerk_limit",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/steering_post_sign_flip",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/steering_post_hard_clip",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/steering_post_smoothing",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/steering_rate_limited_active",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int8
+        )
+        self.h5_file.create_dataset(
+            "control/steering_jerk_limited_active",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int8
+        )
+        self.h5_file.create_dataset(
+            "control/steering_hard_clip_active",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int8
+        )
+        self.h5_file.create_dataset(
+            "control/steering_smoothing_active",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int8
+        )
+        self.h5_file.create_dataset(
+            "control/steering_rate_limited_delta",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/steering_jerk_limited_delta",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/steering_hard_clip_delta",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/steering_smoothing_delta",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
         
         # Perception outputs (optional)
         self.h5_file.create_dataset(
@@ -614,6 +940,36 @@ class DataRecorder:
             shape=(0,),
             maxshape=max_shape,
             dtype=h5py.vlen_dtype(np.float32)  # Variable-length array of float32 arrays
+        )
+        self.h5_file.create_dataset(
+            "trajectory/oracle_points",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=h5py.vlen_dtype(np.float32)
+        )
+        self.h5_file.create_dataset(
+            "trajectory/oracle_point_count",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int32
+        )
+        self.h5_file.create_dataset(
+            "trajectory/oracle_horizon_meters",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "trajectory/oracle_point_spacing_meters",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "trajectory/oracle_samples_enabled",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int8
         )
         # Reference point data (for drift analysis)
         self.h5_file.create_dataset(
@@ -672,6 +1028,31 @@ class DataRecorder:
             maxshape=max_shape,
             dtype=np.float32
         )
+        self.h5_file.create_dataset("trajectory/diag_available", shape=(0,), maxshape=max_shape, dtype=np.float32)
+        self.h5_file.create_dataset("trajectory/diag_generated_by_fallback", shape=(0,), maxshape=max_shape, dtype=np.float32)
+        self.h5_file.create_dataset("trajectory/diag_points_generated", shape=(0,), maxshape=max_shape, dtype=np.float32)
+        self.h5_file.create_dataset("trajectory/diag_x_clip_count", shape=(0,), maxshape=max_shape, dtype=np.float32)
+        self.h5_file.create_dataset("trajectory/diag_pre_y0", shape=(0,), maxshape=max_shape, dtype=np.float32)
+        self.h5_file.create_dataset("trajectory/diag_pre_y1", shape=(0,), maxshape=max_shape, dtype=np.float32)
+        self.h5_file.create_dataset("trajectory/diag_pre_y2", shape=(0,), maxshape=max_shape, dtype=np.float32)
+        self.h5_file.create_dataset("trajectory/diag_post_y0", shape=(0,), maxshape=max_shape, dtype=np.float32)
+        self.h5_file.create_dataset("trajectory/diag_post_y1", shape=(0,), maxshape=max_shape, dtype=np.float32)
+        self.h5_file.create_dataset("trajectory/diag_post_y2", shape=(0,), maxshape=max_shape, dtype=np.float32)
+        self.h5_file.create_dataset("trajectory/diag_used_provided_distance0", shape=(0,), maxshape=max_shape, dtype=np.float32)
+        self.h5_file.create_dataset("trajectory/diag_used_provided_distance1", shape=(0,), maxshape=max_shape, dtype=np.float32)
+        self.h5_file.create_dataset("trajectory/diag_used_provided_distance2", shape=(0,), maxshape=max_shape, dtype=np.float32)
+        self.h5_file.create_dataset("trajectory/diag_post_minus_pre_y0", shape=(0,), maxshape=max_shape, dtype=np.float32)
+        self.h5_file.create_dataset("trajectory/diag_post_minus_pre_y1", shape=(0,), maxshape=max_shape, dtype=np.float32)
+        self.h5_file.create_dataset("trajectory/diag_post_minus_pre_y2", shape=(0,), maxshape=max_shape, dtype=np.float32)
+        self.h5_file.create_dataset("trajectory/diag_preclip_x0", shape=(0,), maxshape=max_shape, dtype=np.float32)
+        self.h5_file.create_dataset("trajectory/diag_preclip_x1", shape=(0,), maxshape=max_shape, dtype=np.float32)
+        self.h5_file.create_dataset("trajectory/diag_preclip_x2", shape=(0,), maxshape=max_shape, dtype=np.float32)
+        self.h5_file.create_dataset("trajectory/diag_postclip_x0", shape=(0,), maxshape=max_shape, dtype=np.float32)
+        self.h5_file.create_dataset("trajectory/diag_postclip_x1", shape=(0,), maxshape=max_shape, dtype=np.float32)
+        self.h5_file.create_dataset("trajectory/diag_postclip_x2", shape=(0,), maxshape=max_shape, dtype=np.float32)
+        self.h5_file.create_dataset("trajectory/diag_first_segment_y0_gt_y1_pre", shape=(0,), maxshape=max_shape, dtype=np.float32)
+        self.h5_file.create_dataset("trajectory/diag_first_segment_y0_gt_y1_post", shape=(0,), maxshape=max_shape, dtype=np.float32)
+        self.h5_file.create_dataset("trajectory/diag_inversion_introduced_after_conversion", shape=(0,), maxshape=max_shape, dtype=np.float32)
         
         # Control command details
         self.h5_file.create_dataset(
@@ -735,6 +1116,24 @@ class DataRecorder:
             shape=(0,),
             maxshape=max_shape,
             dtype=np.int8
+        )
+        self.h5_file.create_dataset(
+            "control/straight_sign_flip_triggered",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int8
+        )
+        self.h5_file.create_dataset(
+            "control/straight_sign_flip_trigger_error",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/straight_sign_flip_frames_remaining",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int16
         )
         
         # Error breakdown
@@ -1505,6 +1904,12 @@ class DataRecorder:
         camera_8m_screen_y = []  # NEW: Camera calibration data
         camera_lookahead_screen_y = []  # NEW: Camera lookahead calibration data
         ground_truth_lookahead_distance = []  # NEW: Lookahead distance used for ground truth
+        right_lane_fiducials_vehicle_xy = []
+        right_lane_fiducials_screen_xy = []
+        right_lane_fiducials_point_count = []
+        right_lane_fiducials_horizon_meters = []
+        right_lane_fiducials_spacing_meters = []
+        right_lane_fiducials_enabled = []
         camera_field_of_view = []  # NEW: Camera FOV data
         camera_horizontal_fov = []  # NEW: Camera horizontal FOV data
         camera_pos_x = []  # NEW: Camera position data
@@ -1513,6 +1918,32 @@ class DataRecorder:
         camera_forward_x = []  # NEW: Camera forward direction data
         camera_forward_y = []
         camera_forward_z = []
+        topdown_camera_pos_x = []
+        topdown_camera_pos_y = []
+        topdown_camera_pos_z = []
+        topdown_camera_forward_x = []
+        topdown_camera_forward_y = []
+        topdown_camera_forward_z = []
+        topdown_camera_orthographic_size = []
+        topdown_camera_field_of_view = []
+        stream_front_unity_dt_ms = []
+        stream_topdown_unity_dt_ms = []
+        stream_topdown_front_dt_ms = []
+        stream_topdown_front_frame_id_delta = []
+        stream_front_frame_id_delta = []
+        stream_topdown_frame_id_delta = []
+        stream_front_latest_age_ms = []
+        stream_front_queue_depth = []
+        stream_front_drop_count = []
+        stream_front_decode_in_flight = []
+        stream_topdown_latest_age_ms = []
+        stream_topdown_queue_depth = []
+        stream_topdown_drop_count = []
+        stream_topdown_decode_in_flight = []
+        stream_front_last_realtime_s = []
+        stream_topdown_last_realtime_s = []
+        stream_front_timestamp_minus_realtime_ms = []
+        stream_topdown_timestamp_minus_realtime_ms = []
         # NEW: Debug fields for diagnosing ground truth offset issues
         road_center_at_car_x = []
         road_center_at_car_y = []
@@ -1528,6 +1959,14 @@ class DataRecorder:
         road_frame_lane_center_offset = []
         road_frame_lane_center_error = []
         vehicle_frame_lookahead_offset = []
+        gt_rotation_debug_valid = []
+        gt_rotation_used_road_frame = []
+        gt_rotation_rejected_road_frame_hop = []
+        gt_rotation_reference_heading_deg = []
+        gt_rotation_road_frame_heading_deg = []
+        gt_rotation_input_heading_deg = []
+        gt_rotation_road_vs_ref_delta_deg = []
+        gt_rotation_applied_delta_deg = []
         
         for frame in frames:
             vs = frame.vehicle_state
@@ -1623,6 +2062,30 @@ class DataRecorder:
             camera_8m_screen_y.append(cam_value)
             camera_lookahead_screen_y.append(getattr(vs, 'camera_lookahead_screen_y', -1.0))
             ground_truth_lookahead_distance.append(getattr(vs, 'ground_truth_lookahead_distance', 8.0))
+            right_lane_fiducials_vehicle_xy.append(
+                np.asarray(
+                    getattr(vs, 'right_lane_fiducials_vehicle_xy', np.array([], dtype=np.float32)),
+                    dtype=np.float32,
+                ).reshape(-1)
+            )
+            right_lane_fiducials_screen_xy.append(
+                np.asarray(
+                    getattr(vs, 'right_lane_fiducials_screen_xy', np.array([], dtype=np.float32)),
+                    dtype=np.float32,
+                ).reshape(-1)
+            )
+            right_lane_fiducials_point_count.append(
+                int(getattr(vs, 'right_lane_fiducials_point_count', 0))
+            )
+            right_lane_fiducials_horizon_meters.append(
+                float(getattr(vs, 'right_lane_fiducials_horizon_meters', 0.0))
+            )
+            right_lane_fiducials_spacing_meters.append(
+                float(getattr(vs, 'right_lane_fiducials_spacing_meters', 0.0))
+            )
+            right_lane_fiducials_enabled.append(
+                1 if getattr(vs, 'right_lane_fiducials_enabled', False) else 0
+            )
             
             # NEW: Extract camera FOV and position data
             camera_field_of_view.append(getattr(vs, 'camera_field_of_view', -1.0))
@@ -1633,6 +2096,50 @@ class DataRecorder:
             camera_forward_x.append(getattr(vs, 'camera_forward_x', 0.0))
             camera_forward_y.append(getattr(vs, 'camera_forward_y', 0.0))
             camera_forward_z.append(getattr(vs, 'camera_forward_z', 0.0))
+            topdown_camera_pos_x.append(getattr(vs, 'topdown_camera_pos_x', 0.0))
+            topdown_camera_pos_y.append(getattr(vs, 'topdown_camera_pos_y', 0.0))
+            topdown_camera_pos_z.append(getattr(vs, 'topdown_camera_pos_z', 0.0))
+            topdown_camera_forward_x.append(getattr(vs, 'topdown_camera_forward_x', 0.0))
+            topdown_camera_forward_y.append(getattr(vs, 'topdown_camera_forward_y', 0.0))
+            topdown_camera_forward_z.append(getattr(vs, 'topdown_camera_forward_z', 0.0))
+            topdown_camera_orthographic_size.append(
+                getattr(vs, 'topdown_camera_orthographic_size', 0.0)
+            )
+            topdown_camera_field_of_view.append(
+                getattr(vs, 'topdown_camera_field_of_view', 0.0)
+            )
+            stream_front_unity_dt_ms.append(getattr(vs, 'stream_front_unity_dt_ms', 0.0))
+            stream_topdown_unity_dt_ms.append(getattr(vs, 'stream_topdown_unity_dt_ms', 0.0))
+            stream_topdown_front_dt_ms.append(getattr(vs, 'stream_topdown_front_dt_ms', 0.0))
+            stream_topdown_front_frame_id_delta.append(
+                getattr(vs, 'stream_topdown_front_frame_id_delta', 0.0)
+            )
+            stream_front_frame_id_delta.append(getattr(vs, 'stream_front_frame_id_delta', 0.0))
+            stream_topdown_frame_id_delta.append(
+                getattr(vs, 'stream_topdown_frame_id_delta', 0.0)
+            )
+            stream_front_latest_age_ms.append(getattr(vs, 'stream_front_latest_age_ms', 0.0))
+            stream_front_queue_depth.append(getattr(vs, 'stream_front_queue_depth', 0.0))
+            stream_front_drop_count.append(getattr(vs, 'stream_front_drop_count', 0.0))
+            stream_front_decode_in_flight.append(
+                getattr(vs, 'stream_front_decode_in_flight', 0.0)
+            )
+            stream_topdown_latest_age_ms.append(getattr(vs, 'stream_topdown_latest_age_ms', 0.0))
+            stream_topdown_queue_depth.append(getattr(vs, 'stream_topdown_queue_depth', 0.0))
+            stream_topdown_drop_count.append(getattr(vs, 'stream_topdown_drop_count', 0.0))
+            stream_topdown_decode_in_flight.append(
+                getattr(vs, 'stream_topdown_decode_in_flight', 0.0)
+            )
+            stream_front_last_realtime_s.append(getattr(vs, 'stream_front_last_realtime_s', 0.0))
+            stream_topdown_last_realtime_s.append(
+                getattr(vs, 'stream_topdown_last_realtime_s', 0.0)
+            )
+            stream_front_timestamp_minus_realtime_ms.append(
+                getattr(vs, 'stream_front_timestamp_minus_realtime_ms', 0.0)
+            )
+            stream_topdown_timestamp_minus_realtime_ms.append(
+                getattr(vs, 'stream_topdown_timestamp_minus_realtime_ms', 0.0)
+            )
             # NEW: Debug fields for diagnosing ground truth offset issues
             road_center_at_car_x.append(getattr(vs, 'road_center_at_car_x', 0.0))
             road_center_at_car_y.append(getattr(vs, 'road_center_at_car_y', 0.0))
@@ -1648,6 +2155,30 @@ class DataRecorder:
             road_frame_lane_center_offset.append(getattr(vs, 'road_frame_lane_center_offset', 0.0))
             road_frame_lane_center_error.append(getattr(vs, 'road_frame_lane_center_error', 0.0))
             vehicle_frame_lookahead_offset.append(getattr(vs, 'vehicle_frame_lookahead_offset', 0.0))
+            gt_rotation_debug_valid.append(
+                1 if getattr(vs, 'gt_rotation_debug_valid', getattr(vs, 'gtRotationDebugValid', False)) else 0
+            )
+            gt_rotation_used_road_frame.append(
+                1 if getattr(vs, 'gt_rotation_used_road_frame', getattr(vs, 'gtRotationUsedRoadFrame', False)) else 0
+            )
+            gt_rotation_rejected_road_frame_hop.append(
+                1 if getattr(vs, 'gt_rotation_rejected_road_frame_hop', getattr(vs, 'gtRotationRejectedRoadFrameHop', False)) else 0
+            )
+            gt_rotation_reference_heading_deg.append(
+                getattr(vs, 'gt_rotation_reference_heading_deg', getattr(vs, 'gtRotationReferenceHeadingDeg', 0.0))
+            )
+            gt_rotation_road_frame_heading_deg.append(
+                getattr(vs, 'gt_rotation_road_frame_heading_deg', getattr(vs, 'gtRotationRoadFrameHeadingDeg', 0.0))
+            )
+            gt_rotation_input_heading_deg.append(
+                getattr(vs, 'gt_rotation_input_heading_deg', getattr(vs, 'gtRotationInputHeadingDeg', 0.0))
+            )
+            gt_rotation_road_vs_ref_delta_deg.append(
+                getattr(vs, 'gt_rotation_road_vs_ref_delta_deg', getattr(vs, 'gtRotationRoadVsRefDeltaDeg', 0.0))
+            )
+            gt_rotation_applied_delta_deg.append(
+                getattr(vs, 'gt_rotation_applied_delta_deg', getattr(vs, 'gtRotationAppliedDeltaDeg', 0.0))
+            )
             # Debug: Log first few frames to see what we're getting
             if len(camera_8m_screen_y) <= 3:
                 logger.debug(f"[RECORDER] Frame {len(camera_8m_screen_y)-1}: camera_8m_screen_y = {cam_value} (from VehicleState)")
@@ -1668,6 +2199,8 @@ class DataRecorder:
                       "steering_input", "desired_steer_angle",
                        "motor_torque", "brake_torque", "camera_8m_screen_y",
                        "camera_lookahead_screen_y", "ground_truth_lookahead_distance",
+                       "right_lane_fiducials_point_count", "right_lane_fiducials_horizon_meters",
+                       "right_lane_fiducials_spacing_meters", "right_lane_fiducials_enabled",
                        "unity_time", "unity_frame_count", "unity_delta_time",
                        "unity_smooth_delta_time", "unity_unscaled_delta_time",
                        "unity_time_scale"]:
@@ -1681,6 +2214,10 @@ class DataRecorder:
                                                 "steering_input", "desired_steer_angle",
                                                  "motor_torque", "brake_torque", "camera_8m_screen_y",
                                                  "camera_lookahead_screen_y", "ground_truth_lookahead_distance",
+                                                 "right_lane_fiducials_point_count",
+                                                 "right_lane_fiducials_horizon_meters",
+                                                 "right_lane_fiducials_spacing_meters",
+                                                 "right_lane_fiducials_enabled",
                                                  "unity_time", "unity_frame_count", "unity_delta_time",
                                                  "unity_smooth_delta_time", "unity_unscaled_delta_time",
                                                  "unity_time_scale"]:
@@ -1728,6 +2265,27 @@ class DataRecorder:
             self.h5_file["vehicle/unity_smooth_delta_time"][current_size:] = np.array(unity_smooth_delta_times, dtype=np.float32)
             self.h5_file["vehicle/unity_unscaled_delta_time"][current_size:] = np.array(unity_unscaled_delta_times, dtype=np.float32)
             self.h5_file["vehicle/unity_time_scale"][current_size:] = np.array(unity_time_scales, dtype=np.float32)
+            self.h5_file["vehicle/right_lane_fiducials_point_count"][current_size:] = np.array(
+                right_lane_fiducials_point_count, dtype=np.int32
+            )
+            self.h5_file["vehicle/right_lane_fiducials_horizon_meters"][current_size:] = np.array(
+                right_lane_fiducials_horizon_meters, dtype=np.float32
+            )
+            self.h5_file["vehicle/right_lane_fiducials_spacing_meters"][current_size:] = np.array(
+                right_lane_fiducials_spacing_meters, dtype=np.float32
+            )
+            self.h5_file["vehicle/right_lane_fiducials_enabled"][current_size:] = np.array(
+                right_lane_fiducials_enabled, dtype=np.int8
+            )
+            self.h5_file["vehicle/right_lane_fiducials_vehicle_xy"].resize((new_size,))
+            self.h5_file["vehicle/right_lane_fiducials_screen_xy"].resize((new_size,))
+            for i in range(len(positions)):
+                self.h5_file["vehicle/right_lane_fiducials_vehicle_xy"][current_size + i] = (
+                    right_lane_fiducials_vehicle_xy[i]
+                )
+                self.h5_file["vehicle/right_lane_fiducials_screen_xy"][current_size + i] = (
+                    right_lane_fiducials_screen_xy[i]
+                )
             
             # Write ground truth data
             # CRITICAL: Wrap in try-except to prevent errors from blocking camera_8m_screen_y write
@@ -1808,6 +2366,58 @@ class DataRecorder:
                     self.h5_file["vehicle/camera_forward_y"][current_size:] = np.array(camera_forward_y, dtype=np.float32)
                     self.h5_file["vehicle/camera_forward_z"].resize((current_size + len(camera_forward_z),))
                     self.h5_file["vehicle/camera_forward_z"][current_size:] = np.array(camera_forward_z, dtype=np.float32)
+                    self.h5_file["vehicle/topdown_camera_pos_x"].resize((current_size + len(topdown_camera_pos_x),))
+                    self.h5_file["vehicle/topdown_camera_pos_x"][current_size:] = np.array(topdown_camera_pos_x, dtype=np.float32)
+                    self.h5_file["vehicle/topdown_camera_pos_y"].resize((current_size + len(topdown_camera_pos_y),))
+                    self.h5_file["vehicle/topdown_camera_pos_y"][current_size:] = np.array(topdown_camera_pos_y, dtype=np.float32)
+                    self.h5_file["vehicle/topdown_camera_pos_z"].resize((current_size + len(topdown_camera_pos_z),))
+                    self.h5_file["vehicle/topdown_camera_pos_z"][current_size:] = np.array(topdown_camera_pos_z, dtype=np.float32)
+                    self.h5_file["vehicle/topdown_camera_forward_x"].resize((current_size + len(topdown_camera_forward_x),))
+                    self.h5_file["vehicle/topdown_camera_forward_x"][current_size:] = np.array(topdown_camera_forward_x, dtype=np.float32)
+                    self.h5_file["vehicle/topdown_camera_forward_y"].resize((current_size + len(topdown_camera_forward_y),))
+                    self.h5_file["vehicle/topdown_camera_forward_y"][current_size:] = np.array(topdown_camera_forward_y, dtype=np.float32)
+                    self.h5_file["vehicle/topdown_camera_forward_z"].resize((current_size + len(topdown_camera_forward_z),))
+                    self.h5_file["vehicle/topdown_camera_forward_z"][current_size:] = np.array(topdown_camera_forward_z, dtype=np.float32)
+                    self.h5_file["vehicle/topdown_camera_orthographic_size"].resize((current_size + len(topdown_camera_orthographic_size),))
+                    self.h5_file["vehicle/topdown_camera_orthographic_size"][current_size:] = np.array(topdown_camera_orthographic_size, dtype=np.float32)
+                    self.h5_file["vehicle/topdown_camera_field_of_view"].resize((current_size + len(topdown_camera_field_of_view),))
+                    self.h5_file["vehicle/topdown_camera_field_of_view"][current_size:] = np.array(topdown_camera_field_of_view, dtype=np.float32)
+                    self.h5_file["vehicle/stream_front_unity_dt_ms"].resize((current_size + len(stream_front_unity_dt_ms),))
+                    self.h5_file["vehicle/stream_front_unity_dt_ms"][current_size:] = np.array(stream_front_unity_dt_ms, dtype=np.float32)
+                    self.h5_file["vehicle/stream_topdown_unity_dt_ms"].resize((current_size + len(stream_topdown_unity_dt_ms),))
+                    self.h5_file["vehicle/stream_topdown_unity_dt_ms"][current_size:] = np.array(stream_topdown_unity_dt_ms, dtype=np.float32)
+                    self.h5_file["vehicle/stream_topdown_front_dt_ms"].resize((current_size + len(stream_topdown_front_dt_ms),))
+                    self.h5_file["vehicle/stream_topdown_front_dt_ms"][current_size:] = np.array(stream_topdown_front_dt_ms, dtype=np.float32)
+                    self.h5_file["vehicle/stream_topdown_front_frame_id_delta"].resize((current_size + len(stream_topdown_front_frame_id_delta),))
+                    self.h5_file["vehicle/stream_topdown_front_frame_id_delta"][current_size:] = np.array(stream_topdown_front_frame_id_delta, dtype=np.float32)
+                    self.h5_file["vehicle/stream_front_frame_id_delta"].resize((current_size + len(stream_front_frame_id_delta),))
+                    self.h5_file["vehicle/stream_front_frame_id_delta"][current_size:] = np.array(stream_front_frame_id_delta, dtype=np.float32)
+                    self.h5_file["vehicle/stream_topdown_frame_id_delta"].resize((current_size + len(stream_topdown_frame_id_delta),))
+                    self.h5_file["vehicle/stream_topdown_frame_id_delta"][current_size:] = np.array(stream_topdown_frame_id_delta, dtype=np.float32)
+                    self.h5_file["vehicle/stream_front_latest_age_ms"].resize((current_size + len(stream_front_latest_age_ms),))
+                    self.h5_file["vehicle/stream_front_latest_age_ms"][current_size:] = np.array(stream_front_latest_age_ms, dtype=np.float32)
+                    self.h5_file["vehicle/stream_front_queue_depth"].resize((current_size + len(stream_front_queue_depth),))
+                    self.h5_file["vehicle/stream_front_queue_depth"][current_size:] = np.array(stream_front_queue_depth, dtype=np.float32)
+                    self.h5_file["vehicle/stream_front_drop_count"].resize((current_size + len(stream_front_drop_count),))
+                    self.h5_file["vehicle/stream_front_drop_count"][current_size:] = np.array(stream_front_drop_count, dtype=np.float32)
+                    self.h5_file["vehicle/stream_front_decode_in_flight"].resize((current_size + len(stream_front_decode_in_flight),))
+                    self.h5_file["vehicle/stream_front_decode_in_flight"][current_size:] = np.array(stream_front_decode_in_flight, dtype=np.float32)
+                    self.h5_file["vehicle/stream_topdown_latest_age_ms"].resize((current_size + len(stream_topdown_latest_age_ms),))
+                    self.h5_file["vehicle/stream_topdown_latest_age_ms"][current_size:] = np.array(stream_topdown_latest_age_ms, dtype=np.float32)
+                    self.h5_file["vehicle/stream_topdown_queue_depth"].resize((current_size + len(stream_topdown_queue_depth),))
+                    self.h5_file["vehicle/stream_topdown_queue_depth"][current_size:] = np.array(stream_topdown_queue_depth, dtype=np.float32)
+                    self.h5_file["vehicle/stream_topdown_drop_count"].resize((current_size + len(stream_topdown_drop_count),))
+                    self.h5_file["vehicle/stream_topdown_drop_count"][current_size:] = np.array(stream_topdown_drop_count, dtype=np.float32)
+                    self.h5_file["vehicle/stream_topdown_decode_in_flight"].resize((current_size + len(stream_topdown_decode_in_flight),))
+                    self.h5_file["vehicle/stream_topdown_decode_in_flight"][current_size:] = np.array(stream_topdown_decode_in_flight, dtype=np.float32)
+                    self.h5_file["vehicle/stream_front_last_realtime_s"].resize((current_size + len(stream_front_last_realtime_s),))
+                    self.h5_file["vehicle/stream_front_last_realtime_s"][current_size:] = np.array(stream_front_last_realtime_s, dtype=np.float32)
+                    self.h5_file["vehicle/stream_topdown_last_realtime_s"].resize((current_size + len(stream_topdown_last_realtime_s),))
+                    self.h5_file["vehicle/stream_topdown_last_realtime_s"][current_size:] = np.array(stream_topdown_last_realtime_s, dtype=np.float32)
+                    self.h5_file["vehicle/stream_front_timestamp_minus_realtime_ms"].resize((current_size + len(stream_front_timestamp_minus_realtime_ms),))
+                    self.h5_file["vehicle/stream_front_timestamp_minus_realtime_ms"][current_size:] = np.array(stream_front_timestamp_minus_realtime_ms, dtype=np.float32)
+                    self.h5_file["vehicle/stream_topdown_timestamp_minus_realtime_ms"].resize((current_size + len(stream_topdown_timestamp_minus_realtime_ms),))
+                    self.h5_file["vehicle/stream_topdown_timestamp_minus_realtime_ms"][current_size:] = np.array(stream_topdown_timestamp_minus_realtime_ms, dtype=np.float32)
                     
                     # NEW: Write debug fields for diagnosing ground truth offset issues
                     if len(road_center_at_car_x) > 0:
@@ -1859,6 +2469,54 @@ class DataRecorder:
                         self.h5_file["vehicle/vehicle_frame_lookahead_offset"][current_size:] = np.array(
                             vehicle_frame_lookahead_offset, dtype=np.float32
                         )
+                        self.h5_file["vehicle/gt_rotation_debug_valid"].resize(
+                            (current_size + len(gt_rotation_debug_valid),)
+                        )
+                        self.h5_file["vehicle/gt_rotation_debug_valid"][current_size:] = np.array(
+                            gt_rotation_debug_valid, dtype=np.int8
+                        )
+                        self.h5_file["vehicle/gt_rotation_used_road_frame"].resize(
+                            (current_size + len(gt_rotation_used_road_frame),)
+                        )
+                        self.h5_file["vehicle/gt_rotation_used_road_frame"][current_size:] = np.array(
+                            gt_rotation_used_road_frame, dtype=np.int8
+                        )
+                        self.h5_file["vehicle/gt_rotation_rejected_road_frame_hop"].resize(
+                            (current_size + len(gt_rotation_rejected_road_frame_hop),)
+                        )
+                        self.h5_file["vehicle/gt_rotation_rejected_road_frame_hop"][current_size:] = np.array(
+                            gt_rotation_rejected_road_frame_hop, dtype=np.int8
+                        )
+                        self.h5_file["vehicle/gt_rotation_reference_heading_deg"].resize(
+                            (current_size + len(gt_rotation_reference_heading_deg),)
+                        )
+                        self.h5_file["vehicle/gt_rotation_reference_heading_deg"][current_size:] = np.array(
+                            gt_rotation_reference_heading_deg, dtype=np.float32
+                        )
+                        self.h5_file["vehicle/gt_rotation_road_frame_heading_deg"].resize(
+                            (current_size + len(gt_rotation_road_frame_heading_deg),)
+                        )
+                        self.h5_file["vehicle/gt_rotation_road_frame_heading_deg"][current_size:] = np.array(
+                            gt_rotation_road_frame_heading_deg, dtype=np.float32
+                        )
+                        self.h5_file["vehicle/gt_rotation_input_heading_deg"].resize(
+                            (current_size + len(gt_rotation_input_heading_deg),)
+                        )
+                        self.h5_file["vehicle/gt_rotation_input_heading_deg"][current_size:] = np.array(
+                            gt_rotation_input_heading_deg, dtype=np.float32
+                        )
+                        self.h5_file["vehicle/gt_rotation_road_vs_ref_delta_deg"].resize(
+                            (current_size + len(gt_rotation_road_vs_ref_delta_deg),)
+                        )
+                        self.h5_file["vehicle/gt_rotation_road_vs_ref_delta_deg"][current_size:] = np.array(
+                            gt_rotation_road_vs_ref_delta_deg, dtype=np.float32
+                        )
+                        self.h5_file["vehicle/gt_rotation_applied_delta_deg"].resize(
+                            (current_size + len(gt_rotation_applied_delta_deg),)
+                        )
+                        self.h5_file["vehicle/gt_rotation_applied_delta_deg"][current_size:] = np.array(
+                            gt_rotation_applied_delta_deg, dtype=np.float32
+                        )
             except Exception as e:
                 logger.error(f"[RECORDER] Error writing camera FOV/position data: {e}", exc_info=True)
     
@@ -1885,6 +2543,9 @@ class DataRecorder:
         lateral_corrections = []
         path_curvature_inputs = []
         straight_sign_flip_override_list = []
+        straight_sign_flip_triggered_list = []
+        straight_sign_flip_trigger_error_list = []
+        straight_sign_flip_frames_remaining_list = []
         is_straight_list = []
         straight_oscillation_rate_list = []
         tuned_deadband_list = []
@@ -1901,6 +2562,20 @@ class DataRecorder:
         target_speed_ramp_active_list = []
         launch_throttle_cap_list = []
         launch_throttle_cap_active_list = []
+        steering_pre_rate_limit_list = []
+        steering_post_rate_limit_list = []
+        steering_post_jerk_limit_list = []
+        steering_post_sign_flip_list = []
+        steering_post_hard_clip_list = []
+        steering_post_smoothing_list = []
+        steering_rate_limited_active_list = []
+        steering_jerk_limited_active_list = []
+        steering_hard_clip_active_list = []
+        steering_smoothing_active_list = []
+        steering_rate_limited_delta_list = []
+        steering_jerk_limited_delta_list = []
+        steering_hard_clip_delta_list = []
+        steering_smoothing_delta_list = []
         accel_feedforward_list = []
         brake_feedforward_list = []
         accel_capped_list = []
@@ -1935,6 +2610,15 @@ class DataRecorder:
             straight_sign_flip_override_list.append(
                 1 if getattr(cc, 'straight_sign_flip_override_active', False) else 0
             )
+            straight_sign_flip_triggered_list.append(
+                1 if getattr(cc, 'straight_sign_flip_triggered', False) else 0
+            )
+            straight_sign_flip_trigger_error_list.append(
+                getattr(cc, 'straight_sign_flip_trigger_error', 0.0) or 0.0
+            )
+            straight_sign_flip_frames_remaining_list.append(
+                int(getattr(cc, 'straight_sign_flip_frames_remaining', 0) or 0)
+            )
             is_straight_list.append(1 if getattr(cc, 'is_straight', False) else 0)
             straight_oscillation_rate_list.append(getattr(cc, 'straight_oscillation_rate', 0.0) or 0.0)
             tuned_deadband_list.append(getattr(cc, 'tuned_deadband', 0.0) or 0.0)
@@ -1951,6 +2635,20 @@ class DataRecorder:
             target_speed_ramp_active_list.append(1 if getattr(cc, 'target_speed_ramp_active', False) else 0)
             launch_throttle_cap_list.append(getattr(cc, 'launch_throttle_cap', 0.0) or 0.0)
             launch_throttle_cap_active_list.append(1 if getattr(cc, 'launch_throttle_cap_active', False) else 0)
+            steering_pre_rate_limit_list.append(getattr(cc, 'steering_pre_rate_limit', 0.0) or 0.0)
+            steering_post_rate_limit_list.append(getattr(cc, 'steering_post_rate_limit', 0.0) or 0.0)
+            steering_post_jerk_limit_list.append(getattr(cc, 'steering_post_jerk_limit', 0.0) or 0.0)
+            steering_post_sign_flip_list.append(getattr(cc, 'steering_post_sign_flip', 0.0) or 0.0)
+            steering_post_hard_clip_list.append(getattr(cc, 'steering_post_hard_clip', 0.0) or 0.0)
+            steering_post_smoothing_list.append(getattr(cc, 'steering_post_smoothing', 0.0) or 0.0)
+            steering_rate_limited_active_list.append(1 if getattr(cc, 'steering_rate_limited_active', False) else 0)
+            steering_jerk_limited_active_list.append(1 if getattr(cc, 'steering_jerk_limited_active', False) else 0)
+            steering_hard_clip_active_list.append(1 if getattr(cc, 'steering_hard_clip_active', False) else 0)
+            steering_smoothing_active_list.append(1 if getattr(cc, 'steering_smoothing_active', False) else 0)
+            steering_rate_limited_delta_list.append(getattr(cc, 'steering_rate_limited_delta', 0.0) or 0.0)
+            steering_jerk_limited_delta_list.append(getattr(cc, 'steering_jerk_limited_delta', 0.0) or 0.0)
+            steering_hard_clip_delta_list.append(getattr(cc, 'steering_hard_clip_delta', 0.0) or 0.0)
+            steering_smoothing_delta_list.append(getattr(cc, 'steering_smoothing_delta', 0.0) or 0.0)
         
         if timestamps:
             current_size = self.h5_file["control/timestamps"].shape[0]
@@ -1965,6 +2663,8 @@ class DataRecorder:
                        "pid_integral", "pid_derivative", "pid_error",
                        "lateral_error", "heading_error", "total_error", "total_error_scaled",
                        "straight_sign_flip_override_active",
+                       "straight_sign_flip_triggered", "straight_sign_flip_trigger_error",
+                       "straight_sign_flip_frames_remaining",
                        "calculated_steering_angle_deg", "raw_steering", 
                        "lateral_correction", "path_curvature_input",
                        "is_straight", "straight_oscillation_rate",
@@ -1973,7 +2673,14 @@ class DataRecorder:
                        "emergency_stop", "target_speed_raw",
                        "target_speed_post_limits", "target_speed_planned", "target_speed_final",
                        "target_speed_slew_active", "target_speed_ramp_active",
-                       "launch_throttle_cap", "launch_throttle_cap_active"]:
+                       "launch_throttle_cap", "launch_throttle_cap_active",
+                       "steering_pre_rate_limit", "steering_post_rate_limit",
+                       "steering_post_jerk_limit", "steering_post_sign_flip",
+                       "steering_post_hard_clip", "steering_post_smoothing",
+                       "steering_rate_limited_active", "steering_jerk_limited_active",
+                       "steering_hard_clip_active", "steering_smoothing_active",
+                       "steering_rate_limited_delta", "steering_jerk_limited_delta",
+                       "steering_hard_clip_delta", "steering_smoothing_delta"]:
                 self.h5_file[f"control/{key}"].resize((new_size,))
             
             # Write data
@@ -2000,6 +2707,15 @@ class DataRecorder:
             self.h5_file["control/straight_sign_flip_override_active"][current_size:] = np.array(
                 straight_sign_flip_override_list, dtype=np.int8
             )
+            self.h5_file["control/straight_sign_flip_triggered"][current_size:] = np.array(
+                straight_sign_flip_triggered_list, dtype=np.int8
+            )
+            self.h5_file["control/straight_sign_flip_trigger_error"][current_size:] = (
+                straight_sign_flip_trigger_error_list
+            )
+            self.h5_file["control/straight_sign_flip_frames_remaining"][current_size:] = np.array(
+                straight_sign_flip_frames_remaining_list, dtype=np.int16
+            )
             self.h5_file["control/calculated_steering_angle_deg"][current_size:] = calculated_steering_angles
             self.h5_file["control/raw_steering"][current_size:] = raw_steerings
             self.h5_file["control/lateral_correction"][current_size:] = lateral_corrections
@@ -2021,6 +2737,20 @@ class DataRecorder:
             self.h5_file["control/target_speed_ramp_active"][current_size:] = np.array(target_speed_ramp_active_list, dtype=np.int8)
             self.h5_file["control/launch_throttle_cap"][current_size:] = launch_throttle_cap_list
             self.h5_file["control/launch_throttle_cap_active"][current_size:] = np.array(launch_throttle_cap_active_list, dtype=np.int8)
+            self.h5_file["control/steering_pre_rate_limit"][current_size:] = steering_pre_rate_limit_list
+            self.h5_file["control/steering_post_rate_limit"][current_size:] = steering_post_rate_limit_list
+            self.h5_file["control/steering_post_jerk_limit"][current_size:] = steering_post_jerk_limit_list
+            self.h5_file["control/steering_post_sign_flip"][current_size:] = steering_post_sign_flip_list
+            self.h5_file["control/steering_post_hard_clip"][current_size:] = steering_post_hard_clip_list
+            self.h5_file["control/steering_post_smoothing"][current_size:] = steering_post_smoothing_list
+            self.h5_file["control/steering_rate_limited_active"][current_size:] = np.array(steering_rate_limited_active_list, dtype=np.int8)
+            self.h5_file["control/steering_jerk_limited_active"][current_size:] = np.array(steering_jerk_limited_active_list, dtype=np.int8)
+            self.h5_file["control/steering_hard_clip_active"][current_size:] = np.array(steering_hard_clip_active_list, dtype=np.int8)
+            self.h5_file["control/steering_smoothing_active"][current_size:] = np.array(steering_smoothing_active_list, dtype=np.int8)
+            self.h5_file["control/steering_rate_limited_delta"][current_size:] = steering_rate_limited_delta_list
+            self.h5_file["control/steering_jerk_limited_delta"][current_size:] = steering_jerk_limited_delta_list
+            self.h5_file["control/steering_hard_clip_delta"][current_size:] = steering_hard_clip_delta_list
+            self.h5_file["control/steering_smoothing_delta"][current_size:] = steering_smoothing_delta_list
     
     def _write_perception_outputs(self, frames: List[RecordingFrame]):
         """Write perception outputs to HDF5."""
@@ -2275,6 +3005,31 @@ class DataRecorder:
         ref_points_raw = []
         ref_methods = []  # NEW: Track which method was used
         perception_centers = []  # NEW: Track perception center
+        diag_available = []
+        diag_generated_by_fallback = []
+        diag_points_generated = []
+        diag_x_clip_count = []
+        diag_pre_y0 = []
+        diag_pre_y1 = []
+        diag_pre_y2 = []
+        diag_post_y0 = []
+        diag_post_y1 = []
+        diag_post_y2 = []
+        diag_used_provided_distance0 = []
+        diag_used_provided_distance1 = []
+        diag_used_provided_distance2 = []
+        diag_post_minus_pre_y0 = []
+        diag_post_minus_pre_y1 = []
+        diag_post_minus_pre_y2 = []
+        diag_preclip_x0 = []
+        diag_preclip_x1 = []
+        diag_preclip_x2 = []
+        diag_postclip_x0 = []
+        diag_postclip_x1 = []
+        diag_postclip_x2 = []
+        diag_first_segment_y0_gt_y1_pre = []
+        diag_first_segment_y0_gt_y1_post = []
+        diag_inversion_introduced_after_conversion = []
         for frame in frames:
             if frame.trajectory_output and frame.trajectory_output.reference_point:
                 rp = frame.trajectory_output.reference_point
@@ -2299,12 +3054,64 @@ class DataRecorder:
                 if perception_center is None:
                     perception_center = rp.get('perception_center_x', 0.0)  # Fallback to dict value
                 perception_centers.append(perception_center if perception_center is not None else 0.0)
+                to = frame.trajectory_output
+                diag_available.append(float(to.diag_available if to.diag_available is not None else np.nan))
+                diag_generated_by_fallback.append(float(to.diag_generated_by_fallback if to.diag_generated_by_fallback is not None else np.nan))
+                diag_points_generated.append(float(to.diag_points_generated if to.diag_points_generated is not None else np.nan))
+                diag_x_clip_count.append(float(to.diag_x_clip_count if to.diag_x_clip_count is not None else np.nan))
+                diag_pre_y0.append(float(to.diag_pre_y0 if to.diag_pre_y0 is not None else np.nan))
+                diag_pre_y1.append(float(to.diag_pre_y1 if to.diag_pre_y1 is not None else np.nan))
+                diag_pre_y2.append(float(to.diag_pre_y2 if to.diag_pre_y2 is not None else np.nan))
+                diag_post_y0.append(float(to.diag_post_y0 if to.diag_post_y0 is not None else np.nan))
+                diag_post_y1.append(float(to.diag_post_y1 if to.diag_post_y1 is not None else np.nan))
+                diag_post_y2.append(float(to.diag_post_y2 if to.diag_post_y2 is not None else np.nan))
+                diag_used_provided_distance0.append(float(to.diag_used_provided_distance0 if to.diag_used_provided_distance0 is not None else np.nan))
+                diag_used_provided_distance1.append(float(to.diag_used_provided_distance1 if to.diag_used_provided_distance1 is not None else np.nan))
+                diag_used_provided_distance2.append(float(to.diag_used_provided_distance2 if to.diag_used_provided_distance2 is not None else np.nan))
+                diag_post_minus_pre_y0.append(float(to.diag_post_minus_pre_y0 if to.diag_post_minus_pre_y0 is not None else np.nan))
+                diag_post_minus_pre_y1.append(float(to.diag_post_minus_pre_y1 if to.diag_post_minus_pre_y1 is not None else np.nan))
+                diag_post_minus_pre_y2.append(float(to.diag_post_minus_pre_y2 if to.diag_post_minus_pre_y2 is not None else np.nan))
+                diag_preclip_x0.append(float(to.diag_preclip_x0 if to.diag_preclip_x0 is not None else np.nan))
+                diag_preclip_x1.append(float(to.diag_preclip_x1 if to.diag_preclip_x1 is not None else np.nan))
+                diag_preclip_x2.append(float(to.diag_preclip_x2 if to.diag_preclip_x2 is not None else np.nan))
+                diag_postclip_x0.append(float(to.diag_postclip_x0 if to.diag_postclip_x0 is not None else np.nan))
+                diag_postclip_x1.append(float(to.diag_postclip_x1 if to.diag_postclip_x1 is not None else np.nan))
+                diag_postclip_x2.append(float(to.diag_postclip_x2 if to.diag_postclip_x2 is not None else np.nan))
+                diag_first_segment_y0_gt_y1_pre.append(float(to.diag_first_segment_y0_gt_y1_pre if to.diag_first_segment_y0_gt_y1_pre is not None else np.nan))
+                diag_first_segment_y0_gt_y1_post.append(float(to.diag_first_segment_y0_gt_y1_post if to.diag_first_segment_y0_gt_y1_post is not None else np.nan))
+                diag_inversion_introduced_after_conversion.append(float(to.diag_inversion_introduced_after_conversion if to.diag_inversion_introduced_after_conversion is not None else np.nan))
             else:
                 # No reference point for this frame - append zeros
                 ref_points.append([0.0, 0.0, 0.0, 0.0])
                 ref_points_raw.append([0.0, 0.0, 0.0])
                 ref_methods.append('none')
                 perception_centers.append(0.0)
+                to = frame.trajectory_output
+                diag_available.append(float(to.diag_available if (to and to.diag_available is not None) else np.nan))
+                diag_generated_by_fallback.append(float(to.diag_generated_by_fallback if (to and to.diag_generated_by_fallback is not None) else np.nan))
+                diag_points_generated.append(float(to.diag_points_generated if (to and to.diag_points_generated is not None) else np.nan))
+                diag_x_clip_count.append(float(to.diag_x_clip_count if (to and to.diag_x_clip_count is not None) else np.nan))
+                diag_pre_y0.append(float(to.diag_pre_y0 if (to and to.diag_pre_y0 is not None) else np.nan))
+                diag_pre_y1.append(float(to.diag_pre_y1 if (to and to.diag_pre_y1 is not None) else np.nan))
+                diag_pre_y2.append(float(to.diag_pre_y2 if (to and to.diag_pre_y2 is not None) else np.nan))
+                diag_post_y0.append(float(to.diag_post_y0 if (to and to.diag_post_y0 is not None) else np.nan))
+                diag_post_y1.append(float(to.diag_post_y1 if (to and to.diag_post_y1 is not None) else np.nan))
+                diag_post_y2.append(float(to.diag_post_y2 if (to and to.diag_post_y2 is not None) else np.nan))
+                diag_used_provided_distance0.append(float(to.diag_used_provided_distance0 if (to and to.diag_used_provided_distance0 is not None) else np.nan))
+                diag_used_provided_distance1.append(float(to.diag_used_provided_distance1 if (to and to.diag_used_provided_distance1 is not None) else np.nan))
+                diag_used_provided_distance2.append(float(to.diag_used_provided_distance2 if (to and to.diag_used_provided_distance2 is not None) else np.nan))
+                diag_post_minus_pre_y0.append(float(to.diag_post_minus_pre_y0 if (to and to.diag_post_minus_pre_y0 is not None) else np.nan))
+                diag_post_minus_pre_y1.append(float(to.diag_post_minus_pre_y1 if (to and to.diag_post_minus_pre_y1 is not None) else np.nan))
+                diag_post_minus_pre_y2.append(float(to.diag_post_minus_pre_y2 if (to and to.diag_post_minus_pre_y2 is not None) else np.nan))
+                diag_preclip_x0.append(float(to.diag_preclip_x0 if (to and to.diag_preclip_x0 is not None) else np.nan))
+                diag_preclip_x1.append(float(to.diag_preclip_x1 if (to and to.diag_preclip_x1 is not None) else np.nan))
+                diag_preclip_x2.append(float(to.diag_preclip_x2 if (to and to.diag_preclip_x2 is not None) else np.nan))
+                diag_postclip_x0.append(float(to.diag_postclip_x0 if (to and to.diag_postclip_x0 is not None) else np.nan))
+                diag_postclip_x1.append(float(to.diag_postclip_x1 if (to and to.diag_postclip_x1 is not None) else np.nan))
+                diag_postclip_x2.append(float(to.diag_postclip_x2 if (to and to.diag_postclip_x2 is not None) else np.nan))
+                diag_first_segment_y0_gt_y1_pre.append(float(to.diag_first_segment_y0_gt_y1_pre if (to and to.diag_first_segment_y0_gt_y1_pre is not None) else np.nan))
+                diag_first_segment_y0_gt_y1_post.append(float(to.diag_first_segment_y0_gt_y1_post if (to and to.diag_first_segment_y0_gt_y1_post is not None) else np.nan))
+                diag_inversion_introduced_after_conversion.append(float(to.diag_inversion_introduced_after_conversion if (to and to.diag_inversion_introduced_after_conversion is not None) else np.nan))
         
         if ref_points:
             ref_points_array = np.array(ref_points, dtype=np.float32)
@@ -2323,6 +3130,31 @@ class DataRecorder:
             # NEW: Resize debug datasets
             self.h5_file["trajectory/reference_point_method"].resize((new_size_rp,))
             self.h5_file["trajectory/perception_center_x"].resize((new_size_rp,))
+            self.h5_file["trajectory/diag_available"].resize((new_size_rp,))
+            self.h5_file["trajectory/diag_generated_by_fallback"].resize((new_size_rp,))
+            self.h5_file["trajectory/diag_points_generated"].resize((new_size_rp,))
+            self.h5_file["trajectory/diag_x_clip_count"].resize((new_size_rp,))
+            self.h5_file["trajectory/diag_pre_y0"].resize((new_size_rp,))
+            self.h5_file["trajectory/diag_pre_y1"].resize((new_size_rp,))
+            self.h5_file["trajectory/diag_pre_y2"].resize((new_size_rp,))
+            self.h5_file["trajectory/diag_post_y0"].resize((new_size_rp,))
+            self.h5_file["trajectory/diag_post_y1"].resize((new_size_rp,))
+            self.h5_file["trajectory/diag_post_y2"].resize((new_size_rp,))
+            self.h5_file["trajectory/diag_used_provided_distance0"].resize((new_size_rp,))
+            self.h5_file["trajectory/diag_used_provided_distance1"].resize((new_size_rp,))
+            self.h5_file["trajectory/diag_used_provided_distance2"].resize((new_size_rp,))
+            self.h5_file["trajectory/diag_post_minus_pre_y0"].resize((new_size_rp,))
+            self.h5_file["trajectory/diag_post_minus_pre_y1"].resize((new_size_rp,))
+            self.h5_file["trajectory/diag_post_minus_pre_y2"].resize((new_size_rp,))
+            self.h5_file["trajectory/diag_preclip_x0"].resize((new_size_rp,))
+            self.h5_file["trajectory/diag_preclip_x1"].resize((new_size_rp,))
+            self.h5_file["trajectory/diag_preclip_x2"].resize((new_size_rp,))
+            self.h5_file["trajectory/diag_postclip_x0"].resize((new_size_rp,))
+            self.h5_file["trajectory/diag_postclip_x1"].resize((new_size_rp,))
+            self.h5_file["trajectory/diag_postclip_x2"].resize((new_size_rp,))
+            self.h5_file["trajectory/diag_first_segment_y0_gt_y1_pre"].resize((new_size_rp,))
+            self.h5_file["trajectory/diag_first_segment_y0_gt_y1_post"].resize((new_size_rp,))
+            self.h5_file["trajectory/diag_inversion_introduced_after_conversion"].resize((new_size_rp,))
             
             # Write smoothed data
             self.h5_file["trajectory/reference_point_x"][current_size_rp:] = ref_points_array[:, 0]
@@ -2338,9 +3170,39 @@ class DataRecorder:
             method_bytes = [m.encode('utf-8') if isinstance(m, str) else b'unknown' for m in ref_methods]
             self.h5_file["trajectory/reference_point_method"][current_size_rp:] = method_bytes
             self.h5_file["trajectory/perception_center_x"][current_size_rp:] = np.array(perception_centers, dtype=np.float32)
+            self.h5_file["trajectory/diag_available"][current_size_rp:] = np.array(diag_available, dtype=np.float32)
+            self.h5_file["trajectory/diag_generated_by_fallback"][current_size_rp:] = np.array(diag_generated_by_fallback, dtype=np.float32)
+            self.h5_file["trajectory/diag_points_generated"][current_size_rp:] = np.array(diag_points_generated, dtype=np.float32)
+            self.h5_file["trajectory/diag_x_clip_count"][current_size_rp:] = np.array(diag_x_clip_count, dtype=np.float32)
+            self.h5_file["trajectory/diag_pre_y0"][current_size_rp:] = np.array(diag_pre_y0, dtype=np.float32)
+            self.h5_file["trajectory/diag_pre_y1"][current_size_rp:] = np.array(diag_pre_y1, dtype=np.float32)
+            self.h5_file["trajectory/diag_pre_y2"][current_size_rp:] = np.array(diag_pre_y2, dtype=np.float32)
+            self.h5_file["trajectory/diag_post_y0"][current_size_rp:] = np.array(diag_post_y0, dtype=np.float32)
+            self.h5_file["trajectory/diag_post_y1"][current_size_rp:] = np.array(diag_post_y1, dtype=np.float32)
+            self.h5_file["trajectory/diag_post_y2"][current_size_rp:] = np.array(diag_post_y2, dtype=np.float32)
+            self.h5_file["trajectory/diag_used_provided_distance0"][current_size_rp:] = np.array(diag_used_provided_distance0, dtype=np.float32)
+            self.h5_file["trajectory/diag_used_provided_distance1"][current_size_rp:] = np.array(diag_used_provided_distance1, dtype=np.float32)
+            self.h5_file["trajectory/diag_used_provided_distance2"][current_size_rp:] = np.array(diag_used_provided_distance2, dtype=np.float32)
+            self.h5_file["trajectory/diag_post_minus_pre_y0"][current_size_rp:] = np.array(diag_post_minus_pre_y0, dtype=np.float32)
+            self.h5_file["trajectory/diag_post_minus_pre_y1"][current_size_rp:] = np.array(diag_post_minus_pre_y1, dtype=np.float32)
+            self.h5_file["trajectory/diag_post_minus_pre_y2"][current_size_rp:] = np.array(diag_post_minus_pre_y2, dtype=np.float32)
+            self.h5_file["trajectory/diag_preclip_x0"][current_size_rp:] = np.array(diag_preclip_x0, dtype=np.float32)
+            self.h5_file["trajectory/diag_preclip_x1"][current_size_rp:] = np.array(diag_preclip_x1, dtype=np.float32)
+            self.h5_file["trajectory/diag_preclip_x2"][current_size_rp:] = np.array(diag_preclip_x2, dtype=np.float32)
+            self.h5_file["trajectory/diag_postclip_x0"][current_size_rp:] = np.array(diag_postclip_x0, dtype=np.float32)
+            self.h5_file["trajectory/diag_postclip_x1"][current_size_rp:] = np.array(diag_postclip_x1, dtype=np.float32)
+            self.h5_file["trajectory/diag_postclip_x2"][current_size_rp:] = np.array(diag_postclip_x2, dtype=np.float32)
+            self.h5_file["trajectory/diag_first_segment_y0_gt_y1_pre"][current_size_rp:] = np.array(diag_first_segment_y0_gt_y1_pre, dtype=np.float32)
+            self.h5_file["trajectory/diag_first_segment_y0_gt_y1_post"][current_size_rp:] = np.array(diag_first_segment_y0_gt_y1_post, dtype=np.float32)
+            self.h5_file["trajectory/diag_inversion_introduced_after_conversion"][current_size_rp:] = np.array(diag_inversion_introduced_after_conversion, dtype=np.float32)
         
         # NEW: Write trajectory points (full path, not just reference point)
         trajectory_points_list = []
+        oracle_points_list = []
+        oracle_point_counts = []
+        oracle_horizons = []
+        oracle_spacings = []
+        oracle_enabled = []
         for frame in frames:
             if frame.trajectory_output and frame.trajectory_output.trajectory_points is not None:
                 # trajectory_points is [N, 3] array (x, y, heading)
@@ -2375,6 +3237,43 @@ class DataRecorder:
             else:
                 # No trajectory points for this frame - store empty array
                 trajectory_points_list.append(np.array([], dtype=np.float32).reshape(0, 3))
+
+            # Oracle points are tracked per frame alongside trajectory points.
+            if frame.trajectory_output and frame.trajectory_output.oracle_points is not None:
+                oracle_pts = frame.trajectory_output.oracle_points
+                if oracle_pts.ndim == 1:
+                    if oracle_pts.size % 2 == 0:
+                        oracle_pts = oracle_pts.reshape(-1, 2)
+                    else:
+                        logger.warning(
+                            f"[RECORDER] Oracle points has invalid 1D shape {oracle_pts.shape}, "
+                            f"size {oracle_pts.size} not divisible by 2. Using empty array."
+                        )
+                        oracle_pts = np.array([], dtype=np.float32).reshape(0, 2)
+                elif oracle_pts.ndim == 2:
+                    if oracle_pts.shape[1] != 2:
+                        logger.warning(
+                            f"[RECORDER] Oracle points has shape {oracle_pts.shape}, expected [N, 2]. Using empty array."
+                        )
+                        oracle_pts = np.array([], dtype=np.float32).reshape(0, 2)
+                else:
+                    logger.warning(
+                        f"[RECORDER] Oracle points has invalid shape {oracle_pts.shape}, expected 1D or 2D. Using empty array."
+                    )
+                    oracle_pts = np.array([], dtype=np.float32).reshape(0, 2)
+                oracle_points_list.append(oracle_pts.astype(np.float32))
+            else:
+                oracle_points_list.append(np.array([], dtype=np.float32).reshape(0, 2))
+            if frame.trajectory_output:
+                oracle_point_counts.append(int(frame.trajectory_output.oracle_point_count or 0))
+                oracle_horizons.append(float(frame.trajectory_output.oracle_horizon_meters or 0.0))
+                oracle_spacings.append(float(frame.trajectory_output.oracle_point_spacing_meters or 0.0))
+                oracle_enabled.append(1 if frame.trajectory_output.oracle_samples_enabled else 0)
+            else:
+                oracle_point_counts.append(0)
+                oracle_horizons.append(0.0)
+                oracle_spacings.append(0.0)
+                oracle_enabled.append(0)
         
         if trajectory_points_list:
             # Resize trajectory_points dataset
@@ -2392,6 +3291,11 @@ class DataRecorder:
             
             new_size_traj = current_size_traj + len(trajectory_points_list)
             self.h5_file["trajectory/trajectory_points"].resize((new_size_traj,))
+            self.h5_file["trajectory/oracle_points"].resize((new_size_traj,))
+            self.h5_file["trajectory/oracle_point_count"].resize((new_size_traj,))
+            self.h5_file["trajectory/oracle_horizon_meters"].resize((new_size_traj,))
+            self.h5_file["trajectory/oracle_point_spacing_meters"].resize((new_size_traj,))
+            self.h5_file["trajectory/oracle_samples_enabled"].resize((new_size_traj,))
             
             # Write trajectory points (variable-length arrays)
             for i, traj_points in enumerate(trajectory_points_list):
@@ -2439,6 +3343,31 @@ class DataRecorder:
                     logger.error(f"  dataset shape: {self.h5_file['trajectory/trajectory_points'].shape}")
                     # Use empty array as fallback
                     self.h5_file["trajectory/trajectory_points"][current_size_traj + i] = np.array([], dtype=np.float32)
+
+                # Oracle points are vlen float arrays flattened from [N, 2].
+                oracle_pts = oracle_points_list[i]
+                if oracle_pts.ndim == 2:
+                    oracle_pts_flat = oracle_pts.flatten()
+                else:
+                    oracle_pts_flat = oracle_pts
+                try:
+                    self.h5_file["trajectory/oracle_points"][current_size_traj + i] = oracle_pts_flat
+                except (TypeError, ValueError) as e:
+                    logger.error(f"[RECORDER] Error writing oracle points at index {current_size_traj + i}: {e}")
+                    self.h5_file["trajectory/oracle_points"][current_size_traj + i] = np.array([], dtype=np.float32)
+
+            self.h5_file["trajectory/oracle_point_count"][current_size_traj:new_size_traj] = np.array(
+                oracle_point_counts, dtype=np.int32
+            )
+            self.h5_file["trajectory/oracle_horizon_meters"][current_size_traj:new_size_traj] = np.array(
+                oracle_horizons, dtype=np.float32
+            )
+            self.h5_file["trajectory/oracle_point_spacing_meters"][current_size_traj:new_size_traj] = np.array(
+                oracle_spacings, dtype=np.float32
+            )
+            self.h5_file["trajectory/oracle_samples_enabled"][current_size_traj:new_size_traj] = np.array(
+                oracle_enabled, dtype=np.int8
+            )
     
     def _write_unity_feedback(self, frames: List[RecordingFrame]):
         """Write Unity feedback data to HDF5."""

@@ -47,6 +47,12 @@ class VehicleState:
     camera_8m_screen_y: float = -1.0  # Actual screen y pixel where 8m appears (from Unity's WorldToScreenPoint) - for distance calibration
     camera_lookahead_screen_y: float = -1.0  # Screen y pixel for ground truth lookahead distance
     ground_truth_lookahead_distance: float = 8.0  # Lookahead distance used for ground truth
+    right_lane_fiducials_vehicle_xy: Optional[np.ndarray] = None  # Flattened [x0,y0,x1,y1,...]
+    right_lane_fiducials_screen_xy: Optional[np.ndarray] = None  # Flattened [u0,v0,u1,v1,...] in image coords
+    right_lane_fiducials_point_count: int = 0
+    right_lane_fiducials_horizon_meters: float = 0.0
+    right_lane_fiducials_spacing_meters: float = 0.0
+    right_lane_fiducials_enabled: bool = False
     # NEW: Camera FOV values from Unity
     camera_field_of_view: float = -1.0 # Unity's Camera.fieldOfView (vertical FOV)
     camera_horizontal_fov: float = -1.0 # Calculated horizontal FOV from Unity
@@ -57,6 +63,34 @@ class VehicleState:
     camera_forward_x: float = 0.0  # Camera forward X (normalized)
     camera_forward_y: float = 0.0  # Camera forward Y (normalized)
     camera_forward_z: float = 0.0  # Camera forward Z (normalized)
+    # Top-down camera calibration/projection (for top-down overlay diagnostics)
+    topdown_camera_pos_x: float = 0.0
+    topdown_camera_pos_y: float = 0.0
+    topdown_camera_pos_z: float = 0.0
+    topdown_camera_forward_x: float = 0.0
+    topdown_camera_forward_y: float = 0.0
+    topdown_camera_forward_z: float = 0.0
+    topdown_camera_orthographic_size: float = 0.0
+    topdown_camera_field_of_view: float = 0.0
+    # Stream consume-point lag diagnostics (instrumentation-only)
+    stream_front_unity_dt_ms: float = 0.0
+    stream_topdown_unity_dt_ms: float = 0.0
+    stream_topdown_front_dt_ms: float = 0.0
+    stream_topdown_front_frame_id_delta: float = 0.0
+    stream_front_frame_id_delta: float = 0.0
+    stream_topdown_frame_id_delta: float = 0.0
+    stream_front_latest_age_ms: float = 0.0
+    stream_front_queue_depth: float = 0.0
+    stream_front_drop_count: float = 0.0
+    stream_front_decode_in_flight: float = 0.0
+    stream_topdown_latest_age_ms: float = 0.0
+    stream_topdown_queue_depth: float = 0.0
+    stream_topdown_drop_count: float = 0.0
+    stream_topdown_decode_in_flight: float = 0.0
+    stream_front_last_realtime_s: float = 0.0
+    stream_topdown_last_realtime_s: float = 0.0
+    stream_front_timestamp_minus_realtime_ms: float = 0.0
+    stream_topdown_timestamp_minus_realtime_ms: float = 0.0
     # NEW: Debug fields for diagnosing ground truth offset issues
     road_center_at_car_x: float = 0.0  # Road center X at car's location (world coords)
     road_center_at_car_y: float = 0.0  # Road center Y at car's location (world coords)
@@ -73,6 +107,15 @@ class VehicleState:
     road_frame_lane_center_offset: float = 0.0  # Lookahead road center offset in road frame (m, +right)
     road_frame_lane_center_error: float = 0.0  # Car offset vs lookahead center (m, +right)
     vehicle_frame_lookahead_offset: float = 0.0  # Lookahead road center offset in vehicle frame (m, +right)
+    # GT rotation input telemetry (exact Unity inputs used for target rotation).
+    gt_rotation_debug_valid: bool = False
+    gt_rotation_used_road_frame: bool = False
+    gt_rotation_rejected_road_frame_hop: bool = False
+    gt_rotation_reference_heading_deg: float = 0.0
+    gt_rotation_road_frame_heading_deg: float = 0.0
+    gt_rotation_input_heading_deg: float = 0.0
+    gt_rotation_road_vs_ref_delta_deg: float = 0.0
+    gt_rotation_applied_delta_deg: float = 0.0
     speed_limit: float = 0.0  # Speed limit at current reference point (m/s)
     speed_limit_preview: float = 0.0  # Speed limit at preview distance ahead (m/s)
     speed_limit_preview_distance: float = 0.0  # Preview distance used for speed limit (m)
@@ -117,6 +160,9 @@ class ControlCommand:
     feedback_steering: Optional[float] = None  # Feedback steering command from PID/Stanley
     total_error_scaled: Optional[float] = None  # Total error after scaling/deadband
     straight_sign_flip_override_active: Optional[bool] = None  # Override active for sign flip on straights
+    straight_sign_flip_triggered: Optional[bool] = None  # Trigger condition became true this frame
+    straight_sign_flip_trigger_error: Optional[float] = None  # |total_error_scaled| at trigger check
+    straight_sign_flip_frames_remaining: Optional[int] = None  # Override frames remaining after update
     # NEW: Diagnostic fields for tracking stale data usage
     using_stale_perception: bool = False  # True if control is using stale perception data
     stale_perception_reason: Optional[str] = None  # Reason: "jump_detection", "perception_failure", "frozen", etc.
@@ -136,6 +182,21 @@ class ControlCommand:
     # Launch throttle ramp diagnostics
     launch_throttle_cap: Optional[float] = None
     launch_throttle_cap_active: bool = False
+    # Steering limiter waterfall diagnostics (for root-cause attribution)
+    steering_pre_rate_limit: Optional[float] = None
+    steering_post_rate_limit: Optional[float] = None
+    steering_post_jerk_limit: Optional[float] = None
+    steering_post_sign_flip: Optional[float] = None
+    steering_post_hard_clip: Optional[float] = None
+    steering_post_smoothing: Optional[float] = None
+    steering_rate_limited_active: bool = False
+    steering_jerk_limited_active: bool = False
+    steering_hard_clip_active: bool = False
+    steering_smoothing_active: bool = False
+    steering_rate_limited_delta: Optional[float] = None
+    steering_jerk_limited_delta: Optional[float] = None
+    steering_hard_clip_delta: Optional[float] = None
+    steering_smoothing_delta: Optional[float] = None
 
 
 @dataclass
@@ -181,12 +242,44 @@ class TrajectoryOutput:
     """Trajectory planning output."""
     timestamp: float
     trajectory_points: Optional[np.ndarray] = None  # [N, 3] (x, y, heading)
+    oracle_points: Optional[np.ndarray] = None  # [N, 2] oracle centerline samples (x, y)
+    oracle_point_count: Optional[int] = None
+    oracle_horizon_meters: Optional[float] = None
+    oracle_point_spacing_meters: Optional[float] = None
+    oracle_samples_enabled: bool = False
     velocities: Optional[np.ndarray] = None  # [N] velocities at each point
     curvature: Optional[float] = None
     reference_point: Optional[Dict] = None  # Reference point dict with x, y, heading, velocity
+    trajectory_source: Optional[str] = None  # "planner" or "oracle"
     # NEW: Debug fields for tracking reference point calculation method
     reference_point_method: Optional[str] = None  # "lane_positions", "lane_coeffs", "trajectory", or None
     perception_center_x: Optional[float] = None  # Perception center before trajectory calculation (for comparison)
+    # Planner source-isolation diagnostics (instrumentation-only)
+    diag_available: Optional[float] = None
+    diag_generated_by_fallback: Optional[float] = None
+    diag_points_generated: Optional[float] = None
+    diag_x_clip_count: Optional[float] = None
+    diag_pre_y0: Optional[float] = None
+    diag_pre_y1: Optional[float] = None
+    diag_pre_y2: Optional[float] = None
+    diag_post_y0: Optional[float] = None
+    diag_post_y1: Optional[float] = None
+    diag_post_y2: Optional[float] = None
+    diag_used_provided_distance0: Optional[float] = None
+    diag_used_provided_distance1: Optional[float] = None
+    diag_used_provided_distance2: Optional[float] = None
+    diag_post_minus_pre_y0: Optional[float] = None
+    diag_post_minus_pre_y1: Optional[float] = None
+    diag_post_minus_pre_y2: Optional[float] = None
+    diag_preclip_x0: Optional[float] = None
+    diag_preclip_x1: Optional[float] = None
+    diag_preclip_x2: Optional[float] = None
+    diag_postclip_x0: Optional[float] = None
+    diag_postclip_x1: Optional[float] = None
+    diag_postclip_x2: Optional[float] = None
+    diag_first_segment_y0_gt_y1_pre: Optional[float] = None
+    diag_first_segment_y0_gt_y1_post: Optional[float] = None
+    diag_inversion_introduced_after_conversion: Optional[float] = None
 
 
 @dataclass

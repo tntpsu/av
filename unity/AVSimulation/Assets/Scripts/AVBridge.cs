@@ -35,6 +35,22 @@ public class AVBridge : MonoBehaviour
     public int topDownCaptureWidth = 640;
     public int topDownCaptureHeight = 480;
     public int topDownTargetFps = 15;
+
+    [Header("Oracle Trajectory Telemetry")]
+    [Tooltip("Send Unity centerline samples (oracle) in vehicle frame.")]
+    public bool enableOracleSamples = true;
+    [Tooltip("Oracle sampling horizon in meters.")]
+    public float oracleHorizonMeters = 30.0f;
+    [Tooltip("Oracle sample spacing in meters.")]
+    public float oraclePointSpacingMeters = 1.0f;
+
+    [Header("Right Lane Fiducials (Projection Diagnostics)")]
+    [Tooltip("Send right-lane fiducials and Unity screen projections for projection validation.")]
+    public bool enableRightLaneFiducials = true;
+    [Tooltip("Fiducial horizon in meters.")]
+    public float rightLaneFiducialsHorizonMeters = 30.0f;
+    [Tooltip("Fiducial spacing in meters.")]
+    public float rightLaneFiducialsSpacingMeters = 5.0f;
     
     [Header("API Settings")]
     public string apiUrl = "http://localhost:8000";
@@ -106,6 +122,7 @@ public float speedLimitPreviewMaxTDelta = 0.15f;
     private float controlRequestStartRealtime = 0f;
     private float lastNonZeroSpeedLimit = 0f;
 private float? lastCarT = null;
+    private bool useFixedUpdateBridgeLoop = false;
 
     private Camera topDownCamera;
     private CameraCapture topDownCapture;
@@ -188,6 +205,13 @@ private float? lastCarT = null;
     
     void Start()
     {
+        bool? cliDisableTopDown = ParseCommandLineBool(System.Environment.GetCommandLineArgs(), "--gt-disable-topdown");
+        if (cliDisableTopDown.HasValue && cliDisableTopDown.Value)
+        {
+            enableTopDownCamera = false;
+            DisableExistingTopDownCaptures();
+        }
+
         // Force debug overlay on for player runs (prefab may have it disabled).
         showDebugInfo = true;
         // Keep sending data when the player window loses focus.
@@ -239,7 +263,13 @@ private float? lastCarT = null;
             return;
         }
         
-        updateInterval = 1.0f / updateRate;
+        if (cameraCapture != null && cameraCapture.gtSyncCapture)
+        {
+            // Align bridge state/control loop with GT sync cadence to reduce periodic pose jumps.
+            updateRate = 1.0f / Mathf.Max(0.001f, Time.fixedDeltaTime);
+            useFixedUpdateBridgeLoop = true;
+        }
+        updateInterval = 1.0f / Mathf.Max(1f, updateRate);
         lastVehicleState = new VehicleState();
         lastShutdownCheckTime = Time.time;
         lastPlayCheckTime = Time.time;
@@ -280,6 +310,52 @@ private float? lastCarT = null;
         #if UNITY_EDITOR
         EditorApplication.update += OnEditorUpdate;
         #endif
+    }
+
+    private static bool? ParseCommandLineBool(string[] args, string name)
+    {
+        for (int i = 0; i < args.Length - 1; i++)
+        {
+            if (args[i] == name)
+            {
+                string value = args[i + 1].Trim().ToLowerInvariant();
+                if (value == "true" || value == "1")
+                {
+                    return true;
+                }
+                if (value == "false" || value == "0")
+                {
+                    return false;
+                }
+                return null;
+            }
+        }
+        return null;
+    }
+
+    private void DisableExistingTopDownCaptures()
+    {
+        CameraCapture[] captures = FindObjectsOfType<CameraCapture>();
+        foreach (CameraCapture capture in captures)
+        {
+            if (capture == null)
+            {
+                continue;
+            }
+            if (!string.Equals(capture.cameraId, "top_down", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+            capture.enabled = false;
+            if (capture.targetCamera != null)
+            {
+                capture.targetCamera.enabled = false;
+            }
+            if (showDebugInfo)
+            {
+                Debug.Log($"AVBridge: Disabled existing top-down capture '{capture.name}'.");
+            }
+        }
     }
 
     private void SetupTopDownCamera()
@@ -529,24 +605,40 @@ private float? lastCarT = null;
             lastShutdownCheckTime = Time.time;
         }
         
-        // Send vehicle state and receive control commands
-        if (!updateInFlight && Time.time - lastUpdateTime >= updateInterval)
+        // Send vehicle state and receive control commands (Update-driven when not GT sync).
+        if (!useFixedUpdateBridgeLoop)
+        {
+            if (!updateInFlight && Time.time - lastUpdateTime >= updateInterval)
+            {
+                StartCoroutine(UpdateAVStack());
+                lastUpdateTime = Time.time;
+            }
+            else if (updateInFlight && logBridgeTimings && showDebugInfo)
+            {
+                float inFlightDuration = Time.realtimeSinceStartup - updateStartRealtime;
+                if (inFlightDuration > bridgeTimingWarnThreshold &&
+                    Time.realtimeSinceStartup - lastUpdateStallLogRealtime > bridgeStallLogCooldownSeconds)
+                {
+                    Debug.LogWarning(
+                        $"AVBridge: UpdateAVStack still in flight (id={currentUpdateSequence}, " +
+                        $"elapsed={inFlightDuration:F3}s, frame={Time.frameCount}, time={Time.time:F3}s)"
+                    );
+                    lastUpdateStallLogRealtime = Time.realtimeSinceStartup;
+                }
+            }
+        }
+    }
+
+    void FixedUpdate()
+    {
+        if (!useFixedUpdateBridgeLoop)
+        {
+            return;
+        }
+        if (!updateInFlight)
         {
             StartCoroutine(UpdateAVStack());
             lastUpdateTime = Time.time;
-        }
-        else if (updateInFlight && logBridgeTimings && showDebugInfo)
-        {
-            float inFlightDuration = Time.realtimeSinceStartup - updateStartRealtime;
-            if (inFlightDuration > bridgeTimingWarnThreshold &&
-                Time.realtimeSinceStartup - lastUpdateStallLogRealtime > bridgeStallLogCooldownSeconds)
-            {
-                Debug.LogWarning(
-                    $"AVBridge: UpdateAVStack still in flight (id={currentUpdateSequence}, " +
-                    $"elapsed={inFlightDuration:F3}s, frame={Time.frameCount}, time={Time.time:F3}s)"
-                );
-                lastUpdateStallLogRealtime = Time.realtimeSinceStartup;
-            }
         }
     }
     
@@ -726,6 +818,77 @@ private float? lastCarT = null;
             float desiredHeading = groundTruthReporter.GetDesiredHeading(5.0f);
             currentState.groundTruthDesiredHeading = desiredHeading;
             currentState.groundTruthPathCurvature = groundTruthReporter.GetPathCurvature();
+
+            // Oracle centerline samples (instrumentation-only).
+            currentState.oracleSamplesEnabled = enableOracleSamples;
+            currentState.oracleHorizonMeters = Mathf.Clamp(oracleHorizonMeters, 0.5f, 30.0f);
+            currentState.oraclePointSpacingMeters = Mathf.Max(0.1f, oraclePointSpacingMeters);
+            if (enableOracleSamples)
+            {
+                float[] oracleSamples = groundTruthReporter.GetOracleTrajectorySamplesVehicle(
+                    currentState.oracleHorizonMeters,
+                    currentState.oraclePointSpacingMeters
+                );
+                currentState.oracleTrajectoryXY = oracleSamples ?? new float[0];
+                currentState.oraclePointCount = currentState.oracleTrajectoryXY.Length / 2;
+            }
+            else
+            {
+                currentState.oracleTrajectoryXY = new float[0];
+                currentState.oraclePointCount = 0;
+            }
+
+            // Right-lane fiducials for projection diagnostics.
+            currentState.rightLaneFiducialsEnabled = enableRightLaneFiducials;
+            currentState.rightLaneFiducialsHorizonMeters = Mathf.Clamp(rightLaneFiducialsHorizonMeters, 1.0f, 40.0f);
+            currentState.rightLaneFiducialsSpacingMeters = Mathf.Clamp(rightLaneFiducialsSpacingMeters, 1.0f, 10.0f);
+            if (enableRightLaneFiducials)
+            {
+                Vector3[] fiducialWorldPoints;
+                float[] fiducialsVehicle = groundTruthReporter.GetRightLaneLineFiducialsVehicle(
+                    currentState.rightLaneFiducialsHorizonMeters,
+                    currentState.rightLaneFiducialsSpacingMeters,
+                    out fiducialWorldPoints
+                );
+                currentState.rightLaneFiducialsVehicleXY = fiducialsVehicle ?? new float[0];
+                int pointCount = currentState.rightLaneFiducialsVehicleXY.Length / 2;
+                currentState.rightLaneFiducialsPointCount = pointCount;
+
+                float[] screenSamples = new float[pointCount * 2];
+                for (int i = 0; i < screenSamples.Length; i++)
+                {
+                    screenSamples[i] = -1.0f;
+                }
+                Camera avCamera = cameraCapture != null ? cameraCapture.targetCamera : null;
+                if (avCamera != null && cameraCapture != null && fiducialWorldPoints != null)
+                {
+                    float imageWidth = Mathf.Max(1.0f, cameraCapture.captureWidth);
+                    float imageHeight = Mathf.Max(1.0f, cameraCapture.captureHeight);
+                    float screenWidth = Mathf.Max(1.0f, Screen.width);
+                    float screenHeight = Mathf.Max(1.0f, Screen.height);
+                    int usableCount = Mathf.Min(pointCount, fiducialWorldPoints.Length);
+                    for (int i = 0; i < usableCount; i++)
+                    {
+                        Vector3 screenPoint = avCamera.WorldToScreenPoint(fiducialWorldPoints[i]);
+                        if (screenPoint.z <= 0.0f) continue;
+                        if (screenPoint.x < 0.0f || screenPoint.x > screenWidth || screenPoint.y < 0.0f || screenPoint.y > screenHeight)
+                        {
+                            continue;
+                        }
+                        float imageX = (screenPoint.x / screenWidth) * imageWidth;
+                        float imageY = imageHeight - ((screenPoint.y / screenHeight) * imageHeight);
+                        screenSamples[2 * i] = imageX;
+                        screenSamples[2 * i + 1] = imageY;
+                    }
+                }
+                currentState.rightLaneFiducialsScreenXY = screenSamples;
+            }
+            else
+            {
+                currentState.rightLaneFiducialsVehicleXY = new float[0];
+                currentState.rightLaneFiducialsScreenXY = new float[0];
+                currentState.rightLaneFiducialsPointCount = 0;
+            }
             
             // NEW: Add debug information about road center positions (for diagnosing offset issues)
             var (roadCenterAtCar, roadCenterAtLookahead, referenceT, carT) = groundTruthReporter.GetRoadCenterDebugInfo(lookaheadDistance);
@@ -934,6 +1097,25 @@ private float? lastCarT = null;
             currentState.cameraForwardX = cameraForward.x;
             currentState.cameraForwardY = cameraForward.y;
             currentState.cameraForwardZ = cameraForward.z;
+
+            // Top-down camera calibration/projection (instrumentation-only).
+            if (topDownCamera != null)
+            {
+                Vector3 tdPos = topDownCamera.transform.position;
+                Vector3 tdForward = topDownCamera.transform.forward;
+                currentState.topDownCameraPosX = tdPos.x;
+                currentState.topDownCameraPosY = tdPos.y; // world Y for projection diagnostics
+                currentState.topDownCameraPosZ = tdPos.z;
+                currentState.topDownCameraForwardX = tdForward.x;
+                currentState.topDownCameraForwardY = tdForward.y;
+                currentState.topDownCameraForwardZ = tdForward.z;
+                currentState.topDownCameraOrthographicSize = topDownCamera.orthographic
+                    ? topDownCamera.orthographicSize
+                    : 0.0f;
+                currentState.topDownCameraFieldOfView = topDownCamera.orthographic
+                    ? 0.0f
+                    : topDownCamera.fieldOfView;
+            }
             
             // Log once per second to avoid spam
             if (showDebugInfo && Time.frameCount % 30 == 0)

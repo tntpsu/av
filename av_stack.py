@@ -232,6 +232,34 @@ def is_lane_low_visibility(
     return max(xs) > (image_width - edge_margin)
 
 
+def is_lane_low_visibility_at_lookahead(
+    points: Optional[list],
+    image_width: float,
+    side: str,
+    y_lookahead: float,
+    min_points_in_band: int = 4,
+    y_band_half_height: float = 18.0,
+    edge_margin: int = 12,
+) -> bool:
+    """
+    Return True when lane support is weak specifically around the lookahead row.
+
+    This catches dashed-line gaps at lookahead that global fit-point counts can miss.
+    """
+    if points is None:
+        return True
+    valid = [p for p in points if isinstance(p, (list, tuple)) and len(p) >= 2]
+    if not valid:
+        return True
+    band_points = [p for p in valid if abs(float(p[1]) - float(y_lookahead)) <= y_band_half_height]
+    if len(band_points) < min_points_in_band:
+        return True
+    xs = [float(p[0]) for p in band_points]
+    if side == "left":
+        return min(xs) < edge_margin
+    return max(xs) > (image_width - edge_margin)
+
+
 def estimate_single_lane_pair(
     single_x_vehicle: float,
     is_left_lane: bool,
@@ -478,6 +506,9 @@ class AVStack:
             model_path=model_path,
             segmentation_model_path=segmentation_model_path,
             segmentation_mode=use_segmentation,
+            segmentation_fit_min_row_ratio=float(
+                perception_cfg.get("segmentation_fit_min_row_ratio", 0.45)
+            ),
             segmentation_fit_max_row_ratio=float(
                 perception_cfg.get("segmentation_fit_max_row_ratio", 0.75)
             ),
@@ -673,6 +704,8 @@ class AVStack:
             curve_feedforward_curvature_max=lateral_cfg.get('curve_feedforward_curvature_max', 0.03),
             curve_feedforward_curvature_clamp=lateral_cfg.get('curve_feedforward_curvature_clamp', 0.03),
             curve_feedforward_bins=lateral_cfg.get('curve_feedforward_bins', []),
+            curvature_scale_factor=lateral_cfg.get('curvature_scale_factor', 1.0),
+            curvature_scale_threshold=lateral_cfg.get('curvature_scale_threshold', 0.0005),
             curvature_smoothing_alpha=lateral_cfg.get('curvature_smoothing_alpha', 0.7),
             curvature_transition_threshold=lateral_cfg.get('curvature_transition_threshold', 0.01),
             curvature_transition_alpha=lateral_cfg.get('curvature_transition_alpha', 0.3),
@@ -680,10 +713,15 @@ class AVStack:
             steering_rate_curvature_min=lateral_cfg.get('steering_rate_curvature_min', 0.005),
             steering_rate_curvature_max=lateral_cfg.get('steering_rate_curvature_max', 0.03),
             steering_rate_scale_min=lateral_cfg.get('steering_rate_scale_min', 0.5),
+            curve_rate_floor_moderate_error=lateral_cfg.get('curve_rate_floor_moderate_error', 0.20),
+            curve_rate_floor_large_error=lateral_cfg.get('curve_rate_floor_large_error', 0.24),
             straight_sign_flip_error_threshold=lateral_cfg.get('straight_sign_flip_error_threshold', 0.02),
             straight_sign_flip_rate=lateral_cfg.get('straight_sign_flip_rate', 0.2),
             straight_sign_flip_frames=lateral_cfg.get('straight_sign_flip_frames', 6),
             steering_jerk_limit=lateral_cfg.get('steering_jerk_limit', 0.0),
+            steering_jerk_curve_scale_max=lateral_cfg.get('steering_jerk_curve_scale_max', 1.0),
+            steering_jerk_curve_min=lateral_cfg.get('steering_jerk_curve_min', 0.003),
+            steering_jerk_curve_max=lateral_cfg.get('steering_jerk_curve_max', 0.015),
             speed_gain_min_speed=lateral_cfg.get('speed_gain_min_speed', 4.0),
             speed_gain_max_speed=lateral_cfg.get('speed_gain_max_speed', 10.0),
             speed_gain_min=lateral_cfg.get('speed_gain_min', 1.0),
@@ -697,13 +735,16 @@ class AVStack:
             feedback_gain_min=lateral_cfg.get('feedback_gain_min', 1.0),
             feedback_gain_max=lateral_cfg.get('feedback_gain_max', 1.2),
             feedback_gain_curvature_min=lateral_cfg.get('feedback_gain_curvature_min', 0.002),
-            feedback_gain_curvature_max=lateral_cfg.get('feedback_gain_curvature_max', 0.015)
+            feedback_gain_curvature_max=lateral_cfg.get('feedback_gain_curvature_max', 0.015),
+            curvature_stale_hold_seconds=lateral_cfg.get('curvature_stale_hold_seconds', 0.30),
+            curvature_stale_hold_min_abs=lateral_cfg.get('curvature_stale_hold_min_abs', 0.0005)
         )
         
         # Store config for use in _process_frame
         self.config = config
         self.control_config = control_cfg
         self.trajectory_config = trajectory_cfg
+        self.trajectory_source = str(trajectory_cfg.get('trajectory_source', 'planner')).lower()
         self.safety_config = safety_cfg
         self.record_segmentation_mask = bool(
             perception_cfg.get("record_segmentation_mask", False)
@@ -796,6 +837,8 @@ class AVStack:
         # Track if emergency stop has been logged (to prevent repeated messages)
         self.emergency_stop_logged = False
         self.emergency_stop_type = None  # Track which type of emergency stop (for logging)
+        self.emergency_stop_latched = False
+        self.emergency_stop_latched_since_wall_time: Optional[float] = None
 
         # Teleport/jump guard state
         self.last_vehicle_position = None
@@ -811,6 +854,7 @@ class AVStack:
         self.perception_health_history_size = 60  # Track last 60 frames (~2 seconds at 30 FPS)
         self.perception_health_score = 1.0  # Current health score (1.0 = perfect, 0.0 = failed)
         self.perception_health_status = "healthy"  # "healthy", "degraded", "poor", "critical"
+        self.cv_instability_breach_frames = 0
         self.original_target_speed = trajectory_cfg.get('target_speed', 8.0)  # Store original target speed for recovery
         # Speed limit smoothing state
         self.last_speed_limit: Optional[float] = None
@@ -966,6 +1010,23 @@ class AVStack:
                 if max_frames and self.frame_count >= max_frames:
                     logger.info(f"Reached frame limit: {max_frames}")
                     break
+
+                # Optional early-stop: end run a short time after emergency stop latches.
+                end_after_emergency_s = float(
+                    self.safety_config.get('emergency_stop_end_run_after_seconds', 0.0)
+                )
+                if (
+                    end_after_emergency_s > 0.0
+                    and self.emergency_stop_latched
+                    and self.emergency_stop_latched_since_wall_time is not None
+                ):
+                    elapsed_since_latch = time.time() - self.emergency_stop_latched_since_wall_time
+                    if elapsed_since_latch >= end_after_emergency_s:
+                        logger.info(
+                            f"Ending run {end_after_emergency_s:.1f}s after emergency stop latch "
+                            f"(elapsed={elapsed_since_latch:.2f}s)"
+                        )
+                        break
                 
                 # Check duration limit
                 if duration is not None:
@@ -984,7 +1045,7 @@ class AVStack:
                 
                 # Get latest camera frame
                 camera_fetch_start = time.time()
-                frame_data = self.bridge.get_latest_camera_frame()
+                frame_data = self.bridge.get_latest_camera_frame_with_metadata()
                 camera_fetch_duration = time.time() - camera_fetch_start
                 if camera_fetch_duration > 0.1:
                     logger.warning(
@@ -1008,7 +1069,7 @@ class AVStack:
                         )
                     camera_wait_start = None
                 
-                image, timestamp, camera_frame_id = frame_data
+                image, timestamp, camera_frame_id, camera_frame_meta = frame_data
                 now = time.time()
                 if last_camera_wall_time is not None and last_camera_timestamp is not None:
                     wall_gap = now - last_camera_wall_time
@@ -1054,6 +1115,7 @@ class AVStack:
                     timestamp,
                     vehicle_state_dict,
                     camera_frame_id=camera_frame_id,
+                    camera_frame_meta=camera_frame_meta,
                 )
                 
                 self.frame_count += 1
@@ -1104,6 +1166,8 @@ class AVStack:
         timestamp: float,
         vehicle_state_dict: dict,
         camera_frame_id: int | None = None,
+        camera_frame_meta: dict | None = None,
+        topdown_frame_data: tuple[np.ndarray, float, int | None] | None = None,
     ):
         """
         Process a single frame through the AV stack.
@@ -1675,6 +1739,58 @@ class AVStack:
                                  f"left={left_x_vehicle:.3f}m, right={right_x_vehicle:.3f}m")
                     left_x_vehicle, right_x_vehicle = right_x_vehicle, left_x_vehicle
                     calculated_lane_width = right_x_vehicle - left_x_vehicle
+
+                # Lookahead-local visibility gate: when dashed centerline gaps land near
+                # lookahead row, one lane can be weak while global fit still exists.
+                if self.previous_left_lane_x is not None and self.previous_right_lane_x is not None and not using_stale_data:
+                    left_low_lookahead = is_lane_low_visibility_at_lookahead(
+                        fit_points_left, image_width, "left", y_image_at_lookahead
+                    )
+                    right_low_lookahead = is_lane_low_visibility_at_lookahead(
+                        fit_points_right, image_width, "right", y_image_at_lookahead
+                    )
+                    if right_low_lookahead and not left_low_lookahead:
+                        clamp_events.append("right_lane_lookahead_low_visibility")
+                        actual_detected_left_lane_x = left_x_vehicle
+                        actual_detected_right_lane_x = right_x_vehicle
+                        last_width = float(self.previous_right_lane_x - self.previous_left_lane_x)
+                        left_x_vehicle, right_x_vehicle = estimate_single_lane_pair(
+                            single_x_vehicle=float(left_x_vehicle),
+                            is_left_lane=True,
+                            last_width=last_width,
+                            default_width=7.0,
+                            width_min=1.0,
+                            width_max=10.0,
+                        )
+                        calculated_lane_width = right_x_vehicle - left_x_vehicle
+                        using_stale_data = True
+                        stale_data_reason = "right_lane_low_visibility"
+                        reject_reason = reject_reason or stale_data_reason
+                        logger.warning(
+                            f"[Frame {self.frame_count}] [PERCEPTION VALIDATION] "
+                            "Right lane low visibility near lookahead; using left lane + last width."
+                        )
+                    elif left_low_lookahead and not right_low_lookahead:
+                        clamp_events.append("left_lane_lookahead_low_visibility")
+                        actual_detected_left_lane_x = left_x_vehicle
+                        actual_detected_right_lane_x = right_x_vehicle
+                        last_width = float(self.previous_right_lane_x - self.previous_left_lane_x)
+                        left_x_vehicle, right_x_vehicle = estimate_single_lane_pair(
+                            single_x_vehicle=float(right_x_vehicle),
+                            is_left_lane=False,
+                            last_width=last_width,
+                            default_width=7.0,
+                            width_min=1.0,
+                            width_max=10.0,
+                        )
+                        calculated_lane_width = right_x_vehicle - left_x_vehicle
+                        using_stale_data = True
+                        stale_data_reason = "left_lane_low_visibility"
+                        reject_reason = reject_reason or stale_data_reason
+                        logger.warning(
+                            f"[Frame {self.frame_count}] [PERCEPTION VALIDATION] "
+                            "Left lane low visibility near lookahead; using right lane + last width."
+                        )
                 
                 # CRITICAL FIX: Validate lane side consistency (left should be negative, right positive)
                 perception_cfg = self.config.get("perception", {}) if isinstance(self.config, dict) else {}
@@ -1724,8 +1840,16 @@ class AVStack:
                     
                     filled_from_visibility = False
                     if self.previous_left_lane_x is not None and self.previous_right_lane_x is not None:
-                        left_low = is_lane_low_visibility(fit_points_left, image_width, "left")
-                        right_low = is_lane_low_visibility(fit_points_right, image_width, "right")
+                        left_low = is_lane_low_visibility(
+                            fit_points_left, image_width, "left"
+                        ) or is_lane_low_visibility_at_lookahead(
+                            fit_points_left, image_width, "left", y_image_at_lookahead
+                        )
+                        right_low = is_lane_low_visibility(
+                            fit_points_right, image_width, "right"
+                        ) or is_lane_low_visibility_at_lookahead(
+                            fit_points_right, image_width, "right", y_image_at_lookahead
+                        )
                         last_width = float(self.previous_right_lane_x - self.previous_left_lane_x)
 
                         if right_low and not left_low:
@@ -2241,8 +2365,16 @@ class AVStack:
                                     # On frame 1, this is the first comparison, and small changes are expected
                                     # due to normal perception variation. Only check instability from frame 2 onwards.
                                     skip_instability_check = (self.frame_count == 1)  # Skip on frame 1 only
+                                    instability_breach = (
+                                        width_change > width_change_threshold
+                                        or center_shift > center_shift_threshold
+                                    )
+                                    if not skip_instability_check and detection_method == "cv" and instability_breach:
+                                        self.cv_instability_breach_frames += 1
+                                    elif detection_method == "cv":
+                                        self.cv_instability_breach_frames = 0
                                     
-                                    if not skip_instability_check and (width_change > width_change_threshold or center_shift > center_shift_threshold):
+                                    if not skip_instability_check and instability_breach:
                                         if detection_method == "segmentation":
                                             # Segmentation can have larger natural shifts without being wrong.
                                             # Accept the new detection to avoid freezing.
@@ -2257,6 +2389,18 @@ class AVStack:
                                             if not using_stale_data:
                                                 using_stale_data = False
                                                 stale_data_reason = None
+                                        elif detection_method == "cv" and self.cv_instability_breach_frames < 2:
+                                            # For CV mode, require persistence before freezing to avoid latching on tiny one-frame overshoots.
+                                            left_lane_line_x = float(left_x_vehicle)
+                                            right_lane_line_x = float(right_x_vehicle)
+                                            self.previous_left_lane_x = left_x_vehicle
+                                            self.previous_right_lane_x = right_x_vehicle
+                                            using_stale_data = False
+                                            stale_data_reason = None
+                                            logger.info(
+                                                f"[Frame {self.frame_count}] [PERCEPTION VALIDATION] CV instability pre-filter accepted "
+                                                f"(count={self.cv_instability_breach_frames}, width_change={width_change:.3f}m, center_shift={center_shift:.3f}m)"
+                                            )
                                         else:
                                             # Perception instability detected - use stale data to prevent control oscillations
                                             logger.warning(f"[Frame {self.frame_count}] [PERCEPTION VALIDATION] ⚠️  PERCEPTION INSTABILITY DETECTED!")
@@ -2293,6 +2437,8 @@ class AVStack:
                                         # Update previous values for next frame (enables recovery)
                                         self.previous_left_lane_x = left_x_vehicle
                                         self.previous_right_lane_x = right_x_vehicle
+                                        if detection_method == "cv":
+                                            self.cv_instability_breach_frames = 0
                                 else:
                                     # First frame or no previous data - accept current detection
                                     if self.frame_count == 0:
@@ -2410,8 +2556,9 @@ class AVStack:
         is_good_detection = num_lanes_detected >= 2
         timestamp_frozen = False
         
-        # NEW: Check for bad events that should reduce health score immediately
+        # NEW: Check events that affect health score.
         bad_events = []
+        managed_events = []
         
         # Check 1: Insufficient lanes
         if not is_good_detection:
@@ -2461,15 +2608,28 @@ class AVStack:
                         if "extreme_coefficients" in bad_events:
                             break
         
-        # Check 3: Using stale data (indicates perception issues)
+        # Check 3: Using stale data.
+        # Treat dashed-line visibility fallback as managed behavior (informational),
+        # not a hard health failure, unless additional bad events are present.
         if using_stale_data:
-            bad_events.append("stale_data")
+            managed_visibility_fallback = False
+            if stale_data_reason in {"left_lane_low_visibility", "right_lane_low_visibility"}:
+                managed_visibility_fallback = True
+            if not managed_visibility_fallback and clamp_events:
+                managed_visibility_fallback = any(
+                    ev in {"left_lane_lookahead_low_visibility", "right_lane_lookahead_low_visibility"}
+                    for ev in clamp_events
+                )
+            if not managed_visibility_fallback:
+                bad_events.append("stale_data")
+            else:
+                managed_events.append("managed_visibility_fallback")
         
         # Track most recent bad events for UI visibility when health lags.
         if bad_events:
             self.last_perception_bad_events = list(bad_events)
 
-        # Track health: good detection AND no bad events = truly good
+        # Track health: good detection AND no hard bad events = truly good
         is_truly_good = is_good_detection and len(bad_events) == 0
         
         # DEBUG: Log health monitoring on early frames to diagnose issues
@@ -2495,9 +2655,11 @@ class AVStack:
             good_detection_count = sum(self.perception_health_history)
             base_score = good_detection_count / len(self.perception_health_history)
             
-            # Apply immediate penalty for current frame bad events
-            # Each bad event reduces score by 0.1 (can stack)
-            penalty = min(0.3, len(bad_events) * 0.1)  # Max 0.3 penalty
+            # Apply immediate penalties for current-frame events.
+            # Hard failures penalize strongly; managed visibility fallback penalizes lightly.
+            hard_penalty = min(0.3, len(bad_events) * 0.1)
+            managed_penalty = min(0.06, len(managed_events) * 0.02)
+            penalty = hard_penalty + managed_penalty
             self.perception_health_score = max(0.0, base_score - penalty)
         else:
             self.perception_health_score = 1.0 if len(bad_events) == 0 else 0.7
@@ -2954,6 +3116,8 @@ class AVStack:
         
         # 2. Trajectory Planning: Plan path
         trajectory = self.trajectory_planner.plan(lane_coeffs, vehicle_state_dict)
+        oracle_points_xy = self._extract_oracle_points_xy(vehicle_state_dict)
+        trajectory_source_active = self.trajectory_source if self.trajectory_source in ("planner", "oracle") else "planner"
         
         # Get current speed for safety checks (check BEFORE computing control)
         max_speed = self.safety_config.get('max_speed', 10.0)
@@ -3006,8 +3170,22 @@ class AVStack:
             timestamp=timestamp  # Pass timestamp for time gap detection
         )
 
+        if trajectory_source_active == 'oracle':
+            oracle_ref = self._build_oracle_reference_point(
+                oracle_points_xy,
+                reference_lookahead,
+                adjusted_target_speed,
+            )
+            if oracle_ref is not None:
+                reference_point = oracle_ref
+            elif self.frame_count % 60 == 0:
+                logger.warning(
+                    "[Frame %s] trajectory_source=oracle requested but oracle points unavailable; falling back to planner reference.",
+                    self.frame_count,
+                )
+
         # Optional: Override reference x using vehicle-frame lookahead offset from Unity.
-        if reference_point is not None:
+        if reference_point is not None and trajectory_source_active != 'oracle':
             use_vehicle_frame_lookahead = self.trajectory_config.get(
                 'use_vehicle_frame_lookahead_ref', True
             )
@@ -3089,7 +3267,8 @@ class AVStack:
                     reference_point,
                     return_metadata=True,
                     dt=control_dt,
-                    reference_accel=planned_accel
+                    reference_accel=planned_accel,
+                    using_stale_perception=using_stale_data
                 )
                 control_command['target_speed_raw'] = base_speed
                 control_command['target_speed_post_limits'] = target_speed_post_limits
@@ -3224,6 +3403,9 @@ class AVStack:
                 
                 # CRITICAL: Track if emergency stop was triggered to prevent overwriting
                 emergency_stop_triggered = False
+                emergency_stop_release_speed = float(
+                    self.safety_config.get('emergency_stop_release_speed', 0.2)
+                )
                 
                 # Check if emergency condition exists
                 is_emergency_condition = (lateral_error_abs > emergency_stop_error or 
@@ -3231,7 +3413,11 @@ class AVStack:
                                         perception_failed)
 
                 # Teleport/jump guard: skip emergency stop briefly after a position jump
-                if (teleport_guard_active or self.post_jump_cooldown_frames > 0) and is_emergency_condition:
+                if (
+                    not self.emergency_stop_latched
+                    and (teleport_guard_active or self.post_jump_cooldown_frames > 0)
+                    and is_emergency_condition
+                ):
                     logger.warning(
                         f"[Frame {self.frame_count}] [TELEPORT GUARD] Emergency stop suppressed during "
                         f"post-jump cooldown (jump={self.last_teleport_distance:.2f}m, "
@@ -3239,20 +3425,40 @@ class AVStack:
                         f"cooldown_frames={self.post_jump_cooldown_frames})."
                     )
                     is_emergency_condition = False
+
+                if self.emergency_stop_latched and current_speed <= emergency_stop_release_speed:
+                    logger.info(
+                        f"[Frame {self.frame_count}] Emergency stop latch released at "
+                        f"{current_speed:.3f} m/s (threshold {emergency_stop_release_speed:.3f} m/s)"
+                    )
+                    self.emergency_stop_latched = False
+                    self.emergency_stop_latched_since_wall_time = None
                 
                 # Reset logged flag if emergency condition cleared
-                if not is_emergency_condition:
+                if not is_emergency_condition and not self.emergency_stop_latched:
                     if self.emergency_stop_logged:
                         logger.info(f"Emergency stop condition cleared. Lateral error: {lateral_error_abs:.3f}m")
                     self.emergency_stop_logged = False
                     self.emergency_stop_type = None
-                
-                if lateral_error_abs > emergency_stop_error:
+
+                if self.emergency_stop_latched and current_speed > emergency_stop_release_speed:
+                    control_command = {
+                        'steering': 0.0,
+                        'throttle': 0.0,
+                        'brake': 1.0,
+                        'lateral_error': control_command.get('lateral_error', 0.0),
+                        'emergency_stop': True,
+                    }
+                    emergency_stop_triggered = True
+                elif lateral_error_abs > emergency_stop_error:
                     # Emergency stop: Error exceeds 3.0m - stop immediately
                     if not self.emergency_stop_logged or self.emergency_stop_type != 'lateral_error_exceeded':
                         logger.error(f"[Frame {self.frame_count}] EMERGENCY STOP: Lateral error {lateral_error_abs:.3f}m exceeds {emergency_stop_error}m threshold!")
                         self.emergency_stop_logged = True
                         self.emergency_stop_type = 'lateral_error_exceeded'
+                    self.emergency_stop_latched = True
+                    if self.emergency_stop_latched_since_wall_time is None:
+                        self.emergency_stop_latched_since_wall_time = time.time()
                     control_command = {'steering': 0.0, 'throttle': 0.0, 'brake': 1.0, 'lateral_error': control_command.get('lateral_error', 0.0), 'emergency_stop': True}
                     emergency_stop_triggered = True
                     # Reset PID to prevent further divergence
@@ -3269,6 +3475,9 @@ class AVStack:
                             self.emergency_stop_type = 'out_of_bounds'
                         logger.error(f"[Frame {self.frame_count}]   Stopping vehicle to prevent further off-road driving")
                         self.emergency_stop_logged = True
+                    self.emergency_stop_latched = True
+                    if self.emergency_stop_latched_since_wall_time is None:
+                        self.emergency_stop_latched_since_wall_time = time.time()
                     control_command = {'steering': 0.0, 'throttle': 0.0, 'brake': 1.0, 'lateral_error': control_command.get('lateral_error', 0.0), 'emergency_stop': True}
                     emergency_stop_triggered = True
                     # Reset PID to prevent further divergence
@@ -3364,11 +3573,20 @@ class AVStack:
         
         # 5. Record data if enabled
         if self.recorder:
-            topdown_frame_data = None
-            try:
-                topdown_frame_data = self.bridge.get_latest_camera_frame(camera_id="top_down")
-            except Exception:
-                topdown_frame_data = None
+            topdown_frame_meta: dict | None = None
+            if topdown_frame_data is None:
+                try:
+                    td_data = self.bridge.get_latest_camera_frame_with_metadata(
+                        camera_id="top_down"
+                    )
+                    if td_data is not None:
+                        td_image, td_ts, td_id, td_meta = td_data
+                        topdown_frame_data = (td_image, td_ts, td_id)
+                        topdown_frame_meta = td_meta
+                    else:
+                        topdown_frame_data = None
+                except Exception:
+                    topdown_frame_data = None
             self._record_frame(
                 image,
                 timestamp,
@@ -3377,8 +3595,12 @@ class AVStack:
                 trajectory,
                 control_command,
                 speed_limit,
+                runtime_reference_point=reference_point,
+                trajectory_source=trajectory_source_active,
                 camera_frame_id=camera_frame_id,
+                camera_frame_meta=camera_frame_meta,
                 topdown_frame_data=topdown_frame_data,
+                topdown_frame_meta=topdown_frame_meta,
             )
 
         # Update teleport guard countdown and vehicle position tracking
@@ -3679,6 +3901,56 @@ class AVStack:
         self.last_target_speed = adjusted
         self.last_target_speed_time = float(timestamp)
         return adjusted, ramp_active, slew_active
+
+    def _extract_oracle_points_xy(self, vehicle_state_dict: dict) -> Optional[np.ndarray]:
+        """Extract oracle points from Unity payload as [N, 2] array."""
+        oracle_raw = vehicle_state_dict.get(
+            "oracleTrajectoryXY", vehicle_state_dict.get("oracle_trajectory_xy")
+        )
+        if oracle_raw is None:
+            return None
+        try:
+            arr = np.asarray(oracle_raw, dtype=np.float32).reshape(-1)
+        except (TypeError, ValueError):
+            return None
+        if arr.size < 4 or arr.size % 2 != 0:
+            return None
+        arr2 = arr.reshape(-1, 2)
+        finite = np.isfinite(arr2[:, 0]) & np.isfinite(arr2[:, 1])
+        arr2 = arr2[finite]
+        return arr2 if arr2.shape[0] >= 2 else None
+
+    def _build_oracle_reference_point(
+        self, oracle_points_xy: np.ndarray, lookahead_m: float, target_speed: float
+    ) -> Optional[dict]:
+        """Build control reference point from oracle trajectory samples."""
+        if oracle_points_xy is None or oracle_points_xy.shape[0] < 2:
+            return None
+        x = oracle_points_xy[:, 0].astype(float)
+        y = oracle_points_xy[:, 1].astype(float)
+        valid = np.isfinite(x) & np.isfinite(y) & (y >= 0.0)
+        if np.sum(valid) < 2:
+            return None
+        x = x[valid]
+        y = y[valid]
+        idx = int(np.argmin(np.abs(y - float(lookahead_m))))
+        i0 = max(0, idx - 1)
+        i1 = min(len(x) - 1, idx + 1)
+        if i1 == i0:
+            heading = 0.0
+        else:
+            dx = float(x[i1] - x[i0])
+            dy = float(y[i1] - y[i0])
+            heading = float(np.arctan2(dx, dy)) if abs(dy) > 1e-6 else 0.0
+        return {
+            "x": float(x[idx]),
+            "y": float(y[idx]),
+            "heading": heading,
+            "velocity": float(target_speed),
+            "curvature": 0.0,
+            "method": "oracle",
+            "oracle_ref_index": idx,
+        }
     
     def _record_frame(
         self,
@@ -3689,8 +3961,12 @@ class AVStack:
         trajectory,
         control_command: dict,
         speed_limit: float = 0.0,
+        runtime_reference_point: Optional[dict] = None,
+        trajectory_source: str = "planner",
         camera_frame_id: int | None = None,
+        camera_frame_meta: dict | None = None,
         topdown_frame_data: tuple[np.ndarray, float, int | None] | None = None,
+        topdown_frame_meta: dict | None = None,
     ):
         """Record frame data."""
         # Create camera frame
@@ -3713,6 +3989,89 @@ class AVStack:
                 ),
                 camera_id="top_down",
             )
+
+        # Stream consume-point lag diagnostics (instrumentation-only).
+        unity_time_value = vehicle_state_dict.get(
+            'unityTime', vehicle_state_dict.get('unity_time')
+        )
+        stream_front_unity_dt_ms = 0.0
+        stream_topdown_unity_dt_ms = 0.0
+        stream_topdown_front_dt_ms = 0.0
+        if unity_time_value is not None:
+            try:
+                stream_front_unity_dt_ms = float(timestamp - float(unity_time_value)) * 1000.0
+            except (TypeError, ValueError):
+                stream_front_unity_dt_ms = 0.0
+            if camera_topdown_frame is not None:
+                try:
+                    stream_topdown_unity_dt_ms = (
+                        float(camera_topdown_frame.timestamp - float(unity_time_value)) * 1000.0
+                    )
+                except (TypeError, ValueError):
+                    stream_topdown_unity_dt_ms = 0.0
+        if camera_topdown_frame is not None:
+            stream_topdown_front_dt_ms = float(camera_topdown_frame.timestamp - timestamp) * 1000.0
+
+        last_front_id = getattr(self, "_last_recorded_front_frame_id", None)
+        last_topdown_id = getattr(self, "_last_recorded_topdown_frame_id", None)
+        stream_front_frame_id_delta = 0.0
+        stream_topdown_frame_id_delta = 0.0
+        stream_topdown_front_frame_id_delta = 0.0
+        if camera_frame_id is not None and last_front_id is not None:
+            stream_front_frame_id_delta = float(camera_frame_id - last_front_id)
+        if camera_topdown_frame is not None:
+            topdown_id = camera_topdown_frame.frame_id
+            if topdown_id is not None and last_topdown_id is not None:
+                stream_topdown_frame_id_delta = float(topdown_id - last_topdown_id)
+            if camera_frame_id is not None and topdown_id is not None:
+                stream_topdown_front_frame_id_delta = float(topdown_id - camera_frame_id)
+            self._last_recorded_topdown_frame_id = topdown_id
+        if camera_frame_id is not None:
+            self._last_recorded_front_frame_id = camera_frame_id
+
+        # Bridge freshness/queue diagnostics at consume point.
+        front_latest_age_ms = 0.0
+        front_queue_depth = 0.0
+        front_drop_count = 0.0
+        front_decode_in_flight = 0.0
+        topdown_latest_age_ms = 0.0
+        topdown_queue_depth = 0.0
+        topdown_drop_count = 0.0
+        topdown_decode_in_flight = 0.0
+        front_last_realtime_s = 0.0
+        topdown_last_realtime_s = 0.0
+        stream_front_timestamp_minus_realtime_ms = 0.0
+        stream_topdown_timestamp_minus_realtime_ms = 0.0
+        if camera_frame_meta is not None:
+            try:
+                front_latest_age_ms = float(camera_frame_meta.get("latest_age_ms") or 0.0)
+                front_queue_depth = float(camera_frame_meta.get("queue_depth") or 0.0)
+                front_drop_count = float(camera_frame_meta.get("drop_count") or 0.0)
+                front_decode_in_flight = 1.0 if camera_frame_meta.get("decode_in_flight") else 0.0
+                front_last_realtime_s = float(
+                    camera_frame_meta.get("last_realtime_since_startup") or 0.0
+                )
+                if front_last_realtime_s > 0.0:
+                    stream_front_timestamp_minus_realtime_ms = (
+                        float(timestamp) - front_last_realtime_s
+                    ) * 1000.0
+            except (TypeError, ValueError):
+                pass
+        if topdown_frame_meta is not None:
+            try:
+                topdown_latest_age_ms = float(topdown_frame_meta.get("latest_age_ms") or 0.0)
+                topdown_queue_depth = float(topdown_frame_meta.get("queue_depth") or 0.0)
+                topdown_drop_count = float(topdown_frame_meta.get("drop_count") or 0.0)
+                topdown_decode_in_flight = 1.0 if topdown_frame_meta.get("decode_in_flight") else 0.0
+                topdown_last_realtime_s = float(
+                    topdown_frame_meta.get("last_realtime_since_startup") or 0.0
+                )
+                if topdown_last_realtime_s > 0.0 and camera_topdown_frame is not None:
+                    stream_topdown_timestamp_minus_realtime_ms = (
+                        float(camera_topdown_frame.timestamp) - topdown_last_realtime_s
+                    ) * 1000.0
+            except (TypeError, ValueError):
+                pass
         
         # Create vehicle state
         position = self._extract_position(vehicle_state_dict)
@@ -3850,6 +4209,44 @@ class AVStack:
             camera_8m_screen_y=camera_8m_screen_y,  # NEW: Camera calibration data
             camera_lookahead_screen_y=camera_lookahead_screen_y,
             ground_truth_lookahead_distance=ground_truth_lookahead_distance,
+            right_lane_fiducials_vehicle_xy=np.asarray(
+                vehicle_state_dict.get(
+                    'rightLaneFiducialsVehicleXY',
+                    vehicle_state_dict.get('right_lane_fiducials_vehicle_xy', []),
+                ),
+                dtype=np.float32,
+            ),
+            right_lane_fiducials_screen_xy=np.asarray(
+                vehicle_state_dict.get(
+                    'rightLaneFiducialsScreenXY',
+                    vehicle_state_dict.get('right_lane_fiducials_screen_xy', []),
+                ),
+                dtype=np.float32,
+            ),
+            right_lane_fiducials_point_count=int(
+                vehicle_state_dict.get(
+                    'rightLaneFiducialsPointCount',
+                    vehicle_state_dict.get('right_lane_fiducials_point_count', 0),
+                )
+            ),
+            right_lane_fiducials_horizon_meters=float(
+                vehicle_state_dict.get(
+                    'rightLaneFiducialsHorizonMeters',
+                    vehicle_state_dict.get('right_lane_fiducials_horizon_meters', 0.0),
+                )
+            ),
+            right_lane_fiducials_spacing_meters=float(
+                vehicle_state_dict.get(
+                    'rightLaneFiducialsSpacingMeters',
+                    vehicle_state_dict.get('right_lane_fiducials_spacing_meters', 0.0),
+                )
+            ),
+            right_lane_fiducials_enabled=bool(
+                vehicle_state_dict.get(
+                    'rightLaneFiducialsEnabled',
+                    vehicle_state_dict.get('right_lane_fiducials_enabled', False),
+                )
+            ),
             camera_field_of_view=camera_field_of_view,  # NEW: Camera FOV data
             camera_horizontal_fov=camera_horizontal_fov,  # NEW: Camera horizontal FOV
             camera_pos_x=vehicle_state_dict.get('cameraPosX', 0.0),  # NEW: Camera position
@@ -3858,6 +4255,56 @@ class AVStack:
             camera_forward_x=vehicle_state_dict.get('cameraForwardX', 0.0),  # NEW: Camera forward
             camera_forward_y=vehicle_state_dict.get('cameraForwardY', 0.0),
             camera_forward_z=vehicle_state_dict.get('cameraForwardZ', 0.0),
+            topdown_camera_pos_x=vehicle_state_dict.get(
+                'topDownCameraPosX',
+                vehicle_state_dict.get('topdown_camera_pos_x', 0.0),
+            ),
+            topdown_camera_pos_y=vehicle_state_dict.get(
+                'topDownCameraPosY',
+                vehicle_state_dict.get('topdown_camera_pos_y', 0.0),
+            ),
+            topdown_camera_pos_z=vehicle_state_dict.get(
+                'topDownCameraPosZ',
+                vehicle_state_dict.get('topdown_camera_pos_z', 0.0),
+            ),
+            topdown_camera_forward_x=vehicle_state_dict.get(
+                'topDownCameraForwardX',
+                vehicle_state_dict.get('topdown_camera_forward_x', 0.0),
+            ),
+            topdown_camera_forward_y=vehicle_state_dict.get(
+                'topDownCameraForwardY',
+                vehicle_state_dict.get('topdown_camera_forward_y', 0.0),
+            ),
+            topdown_camera_forward_z=vehicle_state_dict.get(
+                'topDownCameraForwardZ',
+                vehicle_state_dict.get('topdown_camera_forward_z', 0.0),
+            ),
+            topdown_camera_orthographic_size=vehicle_state_dict.get(
+                'topDownCameraOrthographicSize',
+                vehicle_state_dict.get('topdown_camera_orthographic_size', 0.0),
+            ),
+            topdown_camera_field_of_view=vehicle_state_dict.get(
+                'topDownCameraFieldOfView',
+                vehicle_state_dict.get('topdown_camera_field_of_view', 0.0),
+            ),
+            stream_front_unity_dt_ms=stream_front_unity_dt_ms,
+            stream_topdown_unity_dt_ms=stream_topdown_unity_dt_ms,
+            stream_topdown_front_dt_ms=stream_topdown_front_dt_ms,
+            stream_topdown_front_frame_id_delta=stream_topdown_front_frame_id_delta,
+            stream_front_frame_id_delta=stream_front_frame_id_delta,
+            stream_topdown_frame_id_delta=stream_topdown_frame_id_delta,
+            stream_front_latest_age_ms=front_latest_age_ms,
+            stream_front_queue_depth=front_queue_depth,
+            stream_front_drop_count=front_drop_count,
+            stream_front_decode_in_flight=front_decode_in_flight,
+            stream_topdown_latest_age_ms=topdown_latest_age_ms,
+            stream_topdown_queue_depth=topdown_queue_depth,
+            stream_topdown_drop_count=topdown_drop_count,
+            stream_topdown_decode_in_flight=topdown_decode_in_flight,
+            stream_front_last_realtime_s=front_last_realtime_s,
+            stream_topdown_last_realtime_s=topdown_last_realtime_s,
+            stream_front_timestamp_minus_realtime_ms=stream_front_timestamp_minus_realtime_ms,
+            stream_topdown_timestamp_minus_realtime_ms=stream_topdown_timestamp_minus_realtime_ms,
             # NEW: Debug fields for diagnosing ground truth offset issues
             road_center_at_car_x=vehicle_state_dict.get('roadCenterAtCarX', 0.0),
             road_center_at_car_y=vehicle_state_dict.get('roadCenterAtCarY', 0.0),
@@ -3873,6 +4320,38 @@ class AVStack:
             road_frame_lane_center_offset=vehicle_state_dict.get('roadFrameLaneCenterOffset', 0.0),
             road_frame_lane_center_error=vehicle_state_dict.get('roadFrameLaneCenterError', 0.0),
             vehicle_frame_lookahead_offset=vehicle_state_dict.get('vehicleFrameLookaheadOffset', 0.0),
+            gt_rotation_debug_valid=vehicle_state_dict.get(
+                'gtRotationDebugValid',
+                vehicle_state_dict.get('gt_rotation_debug_valid', False),
+            ),
+            gt_rotation_used_road_frame=vehicle_state_dict.get(
+                'gtRotationUsedRoadFrame',
+                vehicle_state_dict.get('gt_rotation_used_road_frame', False),
+            ),
+            gt_rotation_rejected_road_frame_hop=vehicle_state_dict.get(
+                'gtRotationRejectedRoadFrameHop',
+                vehicle_state_dict.get('gt_rotation_rejected_road_frame_hop', False),
+            ),
+            gt_rotation_reference_heading_deg=vehicle_state_dict.get(
+                'gtRotationReferenceHeadingDeg',
+                vehicle_state_dict.get('gt_rotation_reference_heading_deg', 0.0),
+            ),
+            gt_rotation_road_frame_heading_deg=vehicle_state_dict.get(
+                'gtRotationRoadFrameHeadingDeg',
+                vehicle_state_dict.get('gt_rotation_road_frame_heading_deg', 0.0),
+            ),
+            gt_rotation_input_heading_deg=vehicle_state_dict.get(
+                'gtRotationInputHeadingDeg',
+                vehicle_state_dict.get('gt_rotation_input_heading_deg', 0.0),
+            ),
+            gt_rotation_road_vs_ref_delta_deg=vehicle_state_dict.get(
+                'gtRotationRoadVsRefDeltaDeg',
+                vehicle_state_dict.get('gt_rotation_road_vs_ref_delta_deg', 0.0),
+            ),
+            gt_rotation_applied_delta_deg=vehicle_state_dict.get(
+                'gtRotationAppliedDeltaDeg',
+                vehicle_state_dict.get('gt_rotation_applied_delta_deg', 0.0),
+            ),
             speed_limit=speed_limit,
             speed_limit_preview=vehicle_state_dict.get(
                 'speedLimitPreview', vehicle_state_dict.get('speed_limit_preview', 0.0)
@@ -3937,6 +4416,15 @@ class AVStack:
             straight_sign_flip_override_active=control_command.get(
                 'straight_sign_flip_override_active'
             ),
+            straight_sign_flip_triggered=control_command.get(
+                'straight_sign_flip_triggered'
+            ),
+            straight_sign_flip_trigger_error=control_command.get(
+                'straight_sign_flip_trigger_error'
+            ),
+            straight_sign_flip_frames_remaining=control_command.get(
+                'straight_sign_flip_frames_remaining'
+            ),
             is_straight=control_command.get('is_straight'),
             straight_oscillation_rate=control_command.get('straight_oscillation_rate'),
             tuned_deadband=control_command.get('tuned_deadband'),
@@ -3952,7 +4440,21 @@ class AVStack:
             target_speed_slew_active=bool(control_command.get('target_speed_slew_active', False)),
             target_speed_ramp_active=bool(control_command.get('target_speed_ramp_active', False)),
             launch_throttle_cap=control_command.get('launch_throttle_cap'),
-            launch_throttle_cap_active=bool(control_command.get('launch_throttle_cap_active', False))
+            launch_throttle_cap_active=bool(control_command.get('launch_throttle_cap_active', False)),
+            steering_pre_rate_limit=control_command.get('steering_pre_rate_limit'),
+            steering_post_rate_limit=control_command.get('steering_post_rate_limit'),
+            steering_post_jerk_limit=control_command.get('steering_post_jerk_limit'),
+            steering_post_sign_flip=control_command.get('steering_post_sign_flip'),
+            steering_post_hard_clip=control_command.get('steering_post_hard_clip'),
+            steering_post_smoothing=control_command.get('steering_post_smoothing'),
+            steering_rate_limited_active=bool(control_command.get('steering_rate_limited_active', False)),
+            steering_jerk_limited_active=bool(control_command.get('steering_jerk_limited_active', False)),
+            steering_hard_clip_active=bool(control_command.get('steering_hard_clip_active', False)),
+            steering_smoothing_active=bool(control_command.get('steering_smoothing_active', False)),
+            steering_rate_limited_delta=control_command.get('steering_rate_limited_delta'),
+            steering_jerk_limited_delta=control_command.get('steering_jerk_limited_delta'),
+            steering_hard_clip_delta=control_command.get('steering_hard_clip_delta'),
+            steering_smoothing_delta=control_command.get('steering_smoothing_delta')
         )
         
         # Create trajectory output
@@ -3986,15 +4488,18 @@ class AVStack:
                     'right_lane_line_x': perception_output.right_lane_line_x
                 }
             
-            ref_point = self.trajectory_planner.get_reference_point(
-                trajectory, 
-                lookahead=reference_lookahead,
-                lane_coeffs=lane_coeffs_for_ref,  # Pass lane coefficients for direct computation
-                lane_positions=lane_positions_for_ref,  # Preferred: use vehicle coords
-                use_direct=True,  # Use direct midpoint computation
-                timestamp=timestamp,
-                confidence=confidence,
-            )
+            if runtime_reference_point is not None:
+                ref_point = dict(runtime_reference_point)
+            else:
+                ref_point = self.trajectory_planner.get_reference_point(
+                    trajectory, 
+                    lookahead=reference_lookahead,
+                    lane_coeffs=lane_coeffs_for_ref,  # Pass lane coefficients for direct computation
+                    lane_positions=lane_positions_for_ref,  # Preferred: use vehicle coords
+                    use_direct=True,  # Use direct midpoint computation
+                    timestamp=timestamp,
+                    confidence=confidence,
+                )
             
             # Build trajectory points array with reference point first
             points_list = []
@@ -4019,14 +4524,89 @@ class AVStack:
         if ref_point:
             ref_point_method = ref_point.get('method')  # 'lane_positions', 'lane_coeffs', or 'trajectory'
             perception_center_x = ref_point.get('perception_center_x')  # Perception center before trajectory calc
+        oracle_points = None
+        oracle_point_count = None
+        oracle_horizon_meters = None
+        oracle_point_spacing_meters = None
+        oracle_samples_enabled = False
+        oracle_raw = vehicle_state_dict.get(
+            'oracleTrajectoryXY',
+            vehicle_state_dict.get('oracle_trajectory_xy'),
+        )
+        if oracle_raw is not None:
+            try:
+                oracle_arr = np.asarray(oracle_raw, dtype=np.float32).reshape(-1)
+                if oracle_arr.size >= 2 and oracle_arr.size % 2 == 0:
+                    oracle_points = oracle_arr.reshape(-1, 2)
+            except (ValueError, TypeError):
+                oracle_points = None
+        oracle_point_count = int(
+            vehicle_state_dict.get(
+                'oraclePointCount',
+                vehicle_state_dict.get(
+                    'oracle_point_count',
+                    oracle_points.shape[0] if oracle_points is not None else 0,
+                ),
+            )
+        )
+        oracle_horizon_meters = float(
+            vehicle_state_dict.get(
+                'oracleHorizonMeters',
+                vehicle_state_dict.get('oracle_horizon_meters', 0.0),
+            )
+        )
+        oracle_point_spacing_meters = float(
+            vehicle_state_dict.get(
+                'oraclePointSpacingMeters',
+                vehicle_state_dict.get('oracle_point_spacing_meters', 0.0),
+            )
+        )
+        oracle_samples_enabled = bool(
+            vehicle_state_dict.get(
+                'oracleSamplesEnabled',
+                vehicle_state_dict.get('oracle_samples_enabled', False),
+            )
+        )
+        traj_diag = self.trajectory_planner.get_last_generation_diagnostics()
         
         trajectory_output = TrajectoryOutput(
             timestamp=timestamp,
             trajectory_points=trajectory_points,
+            trajectory_source=str(trajectory_source),
+            oracle_points=oracle_points,
+            oracle_point_count=oracle_point_count,
+            oracle_horizon_meters=oracle_horizon_meters,
+            oracle_point_spacing_meters=oracle_point_spacing_meters,
+            oracle_samples_enabled=oracle_samples_enabled,
             velocities=velocities,
             reference_point=ref_point,  # Store reference point for analysis
             reference_point_method=ref_point_method,  # NEW: Track which method was used
-            perception_center_x=perception_center_x  # NEW: Store perception center for comparison
+            perception_center_x=perception_center_x,  # NEW: Store perception center for comparison
+            diag_available=traj_diag.get('diag_available'),
+            diag_generated_by_fallback=traj_diag.get('diag_generated_by_fallback'),
+            diag_points_generated=traj_diag.get('diag_points_generated'),
+            diag_x_clip_count=traj_diag.get('diag_x_clip_count'),
+            diag_pre_y0=traj_diag.get('diag_pre_y0'),
+            diag_pre_y1=traj_diag.get('diag_pre_y1'),
+            diag_pre_y2=traj_diag.get('diag_pre_y2'),
+            diag_post_y0=traj_diag.get('diag_post_y0'),
+            diag_post_y1=traj_diag.get('diag_post_y1'),
+            diag_post_y2=traj_diag.get('diag_post_y2'),
+            diag_used_provided_distance0=traj_diag.get('diag_used_provided_distance0'),
+            diag_used_provided_distance1=traj_diag.get('diag_used_provided_distance1'),
+            diag_used_provided_distance2=traj_diag.get('diag_used_provided_distance2'),
+            diag_post_minus_pre_y0=traj_diag.get('diag_post_minus_pre_y0'),
+            diag_post_minus_pre_y1=traj_diag.get('diag_post_minus_pre_y1'),
+            diag_post_minus_pre_y2=traj_diag.get('diag_post_minus_pre_y2'),
+            diag_preclip_x0=traj_diag.get('diag_preclip_x0'),
+            diag_preclip_x1=traj_diag.get('diag_preclip_x1'),
+            diag_preclip_x2=traj_diag.get('diag_preclip_x2'),
+            diag_postclip_x0=traj_diag.get('diag_postclip_x0'),
+            diag_postclip_x1=traj_diag.get('diag_postclip_x1'),
+            diag_postclip_x2=traj_diag.get('diag_postclip_x2'),
+            diag_first_segment_y0_gt_y1_pre=traj_diag.get('diag_first_segment_y0_gt_y1_pre'),
+            diag_first_segment_y0_gt_y1_post=traj_diag.get('diag_first_segment_y0_gt_y1_post'),
+            diag_inversion_introduced_after_conversion=traj_diag.get('diag_inversion_introduced_after_conversion'),
         )
         
         # Allow ground truth follower to override control command for recording
