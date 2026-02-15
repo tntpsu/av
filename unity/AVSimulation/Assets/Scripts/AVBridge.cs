@@ -864,8 +864,10 @@ private float? lastCarT = null;
                 {
                     float imageWidth = Mathf.Max(1.0f, cameraCapture.captureWidth);
                     float imageHeight = Mathf.Max(1.0f, cameraCapture.captureHeight);
-                    float screenWidth = Mathf.Max(1.0f, Screen.width);
-                    float screenHeight = Mathf.Max(1.0f, Screen.height);
+                    // Use camera pixel dimensions, not global screen dimensions.
+                    // WorldToScreenPoint is reported in camera pixel space (or its target texture space).
+                    float screenWidth = Mathf.Max(1.0f, avCamera.pixelWidth);
+                    float screenHeight = Mathf.Max(1.0f, avCamera.pixelHeight);
                     int usableCount = Mathf.Min(pointCount, fiducialWorldPoints.Length);
                     for (int i = 0; i < usableCount; i++)
                     {

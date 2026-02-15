@@ -232,6 +232,12 @@ This is an autonomous vehicle (AV) stack for Unity 3D simulation. The project us
 - New Python test files should be placed in the test folder
 - Suggestions for ideas should be accompanied by insights
 - Brand uses clean white and black color scheme for marketing emails
+- Proactively recommend a commit checkpoint after each issue is resolved and validated.
+- Commit recommendation gate (default):
+  1) root cause identified and fix implemented,
+  2) targeted validation passes (tests/analysis/run evidence),
+  3) no major regressions observed in adjacent metrics/flows.
+- For larger changes, suggest splitting into small commits by concern (instrumentation, behavior change, docs).
 
 ## GT Run Logging Policy
 - For performance/benchmark runs, keep runtime logging minimal (default): use `tools/ground_truth_follower.py --log-level error` or `start_ground_truth.sh` with no logging flag.
