@@ -12,6 +12,7 @@ Automatically detects problematic frames in recordings:
 import numpy as np
 import h5py
 import json
+import time
 from pathlib import Path
 from typing import Dict, List, Optional
 import math
@@ -27,6 +28,93 @@ def safe_float(value, default=0.0):
         if math.isnan(value) or math.isinf(value):
             return default
     return float(value)
+
+
+def _agent_debug_log(hypothesis_id: str, location: str, message: str, data: Dict):
+    # region agent log
+    try:
+        repo_root = Path(__file__).resolve().parents[3]
+        log_path = repo_root / ".cursor" / "debug.log"
+        payload = {
+            "runId": "instability-v1",
+            "hypothesisId": hypothesis_id,
+            "location": location,
+            "message": message,
+            "data": data,
+            "timestamp": int(time.time() * 1000),
+        }
+        with open(log_path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(payload) + "\n")
+    except Exception:
+        pass
+    # endregion
+
+
+def build_causal_timeline(issues: List[Dict], failure_frame: Optional[int] = None) -> List[Dict]:
+    """Build a phase-ordered causal event timeline from detected issues."""
+    phase_by_type = {
+        "extreme_coefficients": "perception",
+        "perception_instability": "perception",
+        "perception_failure": "perception",
+        "perception_lane_jitter": "perception",
+        "right_lane_low_visibility": "perception",
+        "right_lane_edge_contact": "perception",
+        "negative_control_correlation": "trajectory",
+        "steering_limiter_dominant": "control",
+        "straight_sign_mismatch": "control",
+        "high_lateral_error": "downstream",
+        "out_of_lane": "downstream",
+        "emergency_stop": "downstream",
+        "heading_jump": "downstream",
+    }
+    phase_order = {"perception": 0, "trajectory": 1, "control": 2, "downstream": 3}
+    severity_order = {"critical": 0, "high": 1, "medium": 2, "low": 3}
+
+    timeline: List[Dict] = []
+    for issue in issues:
+        issue_type = str(issue.get("type", "unknown"))
+        phase = phase_by_type.get(issue_type, "downstream")
+        frame = int(issue.get("frame", 0))
+        item = {
+            "phase": phase,
+            "frame": frame,
+            "type": issue_type,
+            "severity": str(issue.get("severity", "medium")),
+            "description": str(issue.get("description", "")),
+        }
+        if "end_frame" in issue:
+            item["end_frame"] = int(issue["end_frame"])
+        if "duration" in issue:
+            item["duration"] = int(issue["duration"])
+        timeline.append(item)
+
+    timeline.sort(
+        key=lambda x: (
+            int(x.get("frame", 0)),
+            phase_order.get(str(x.get("phase", "downstream")), 99),
+            severity_order.get(str(x.get("severity", "low")), 99),
+        )
+    )
+
+    if failure_frame is not None:
+        timeline.append(
+            {
+                "phase": "downstream",
+                "frame": int(failure_frame),
+                "type": "failure_frame",
+                "severity": "critical",
+                "description": "Final failure frame reached (analyze-to-failure cutoff).",
+            }
+        )
+        timeline.sort(
+            key=lambda x: (
+                int(x.get("frame", 0)),
+                phase_order.get(str(x.get("phase", "downstream")), 99),
+                severity_order.get(str(x.get("severity", "low")), 99),
+            )
+        )
+
+    return timeline
 
 
 def _append_sign_mismatch_issue(
@@ -114,6 +202,17 @@ def detect_issues(recording_path: Path, analyze_to_failure: bool = False) -> Dic
     issues = []
     
     try:
+        # region agent log
+        _agent_debug_log(
+            "H0",
+            "issue_detector.py:detect_issues:entry",
+            "Detect issues entry",
+            {
+                "recording": str(recording_path),
+                "analyze_to_failure": bool(analyze_to_failure),
+            },
+        )
+        # endregion
         with h5py.File(recording_path, 'r') as f:
             # Check data availability
             has_perception = "perception/left_lane_line_x" in f
@@ -240,16 +339,289 @@ def detect_issues(recording_path: Path, analyze_to_failure: bool = False) -> Dic
                 if len(stale_reasons) > 0:
                     # Decode bytes if needed
                     stale_reasons_list = [s.decode('utf-8') if isinstance(s, bytes) else s for s in stale_reasons]
-                    
+                    left_lane_series = (
+                        np.array(f["perception/left_lane_line_x"][:num_frames], dtype=float)
+                        if "perception/left_lane_line_x" in f
+                        else None
+                    )
+                    right_lane_series = (
+                        np.array(f["perception/right_lane_line_x"][:num_frames], dtype=float)
+                        if "perception/right_lane_line_x" in f
+                        else None
+                    )
+                    num_lanes_series = (
+                        np.array(f["perception/num_lanes_detected"][:num_frames], dtype=float)
+                        if "perception/num_lanes_detected" in f
+                        else None
+                    )
+                    perception_ts = (
+                        np.array(f["perception/timestamps"][:num_frames], dtype=float)
+                        if "perception/timestamps" in f
+                        else None
+                    )
+                    fit_points_right = (
+                        f["perception/fit_points_right"][:num_frames]
+                        if "perception/fit_points_right" in f
+                        else None
+                    )
+                    fit_points_left = (
+                        f["perception/fit_points_left"][:num_frames]
+                        if "perception/fit_points_left" in f
+                        else None
+                    )
+                    detection_method_series = (
+                        f["perception/detection_method"][:num_frames]
+                        if "perception/detection_method" in f
+                        else None
+                    )
+                    actual_left_series = (
+                        np.array(f["perception/actual_detected_left_lane_x"][:num_frames], dtype=float)
+                        if "perception/actual_detected_left_lane_x" in f
+                        else None
+                    )
+                    actual_right_series = (
+                        np.array(f["perception/actual_detected_right_lane_x"][:num_frames], dtype=float)
+                        if "perception/actual_detected_right_lane_x" in f
+                        else None
+                    )
+                    instability_width_series = (
+                        np.array(f["perception/instability_width_change"][:num_frames], dtype=float)
+                        if "perception/instability_width_change" in f
+                        else None
+                    )
+                    instability_center_series = (
+                        np.array(f["perception/instability_center_shift"][:num_frames], dtype=float)
+                        if "perception/instability_center_shift" in f
+                        else None
+                    )
+                    heading_delta_deg = (
+                        np.array(f["vehicle/heading_delta_deg"][:num_frames], dtype=float)
+                        if "vehicle/heading_delta_deg" in f
+                        else None
+                    )
+                    road_lateral_offset = (
+                        np.array(f["vehicle/road_frame_lateral_offset"][:num_frames], dtype=float)
+                        if "vehicle/road_frame_lateral_offset" in f
+                        else None
+                    )
+                    steering_cmd = (
+                        np.array(f["control/steering"][:num_frames], dtype=float)
+                        if "control/steering" in f
+                        else None
+                    )
+                    control_curvature = (
+                        np.array(f["control/path_curvature_input"][:num_frames], dtype=float)
+                        if "control/path_curvature_input" in f
+                        else None
+                    )
+
+                    # Group contiguous instability frames into one event so we don't
+                    # flood the issues list with one entry per frame.
+                    min_event_len = 1
+                    current = 0
+                    event_start = None
+                    reason_counts: Dict[str, int] = {}
+                    instability_windows: List[Dict[str, object]] = []
                     for frame_idx, reason in enumerate(stale_reasons_list):
-                        if reason and 'instability' in str(reason).lower():
-                            issues.append({
-                                "frame": int(frame_idx),
-                                "type": "perception_instability",
-                                "severity": "high",
-                                "description": f"Perception instability detected: {reason}. Lane position/width changed significantly, causing control errors.",
-                                "stale_reason": str(reason)
-                            })
+                        is_instability = bool(reason and 'instability' in str(reason).lower())
+                        if is_instability:
+                            if current == 0:
+                                event_start = frame_idx
+                                reason_counts = {}
+                            current += 1
+                            reason_key = str(reason).strip()
+                            reason_counts[reason_key] = reason_counts.get(reason_key, 0) + 1
+                        else:
+                            if current >= min_event_len and event_start is not None:
+                                dominant_reason = max(reason_counts, key=reason_counts.get) if reason_counts else "instability"
+                                severity = "high" if current >= 10 else "medium"
+                                end_idx = int(frame_idx - 1)
+                                window = {"start": int(event_start), "end": end_idx, "duration": int(current)}
+                                instability_windows.append(window)
+                                issues.append({
+                                    "frame": int(event_start),
+                                    "type": "perception_instability",
+                                    "severity": severity,
+                                    "description": (
+                                        f"Perception instability period: {current} frames "
+                                        f"(dominant reason: {dominant_reason})."
+                                    ),
+                                    "duration": int(current),
+                                    "end_frame": end_idx,
+                                    "dominant_stale_reason": dominant_reason,
+                                    "stale_reasons": reason_counts,
+                                })
+                            current = 0
+                            event_start = None
+                            reason_counts = {}
+                    if current >= min_event_len and event_start is not None:
+                        dominant_reason = max(reason_counts, key=reason_counts.get) if reason_counts else "instability"
+                        severity = "high" if current >= 10 else "medium"
+                        end_idx = int(len(stale_reasons_list) - 1)
+                        window = {"start": int(event_start), "end": end_idx, "duration": int(current)}
+                        instability_windows.append(window)
+                        issues.append({
+                            "frame": int(event_start),
+                            "type": "perception_instability",
+                            "severity": severity,
+                            "description": (
+                                f"Perception instability period: {current} frames "
+                                f"(dominant reason: {dominant_reason})."
+                            ),
+                            "duration": int(current),
+                            "end_frame": end_idx,
+                            "dominant_stale_reason": dominant_reason,
+                            "stale_reasons": reason_counts,
+                        })
+
+                    def _parse_points(raw) -> list:
+                        try:
+                            s = raw.decode("utf-8") if isinstance(raw, (bytes, bytearray, np.bytes_)) else str(raw)
+                            return json.loads(s)
+                        except Exception:
+                            return []
+
+                    instability_diagnostics = []
+                    for w in instability_windows[:4]:
+                        s = int(w["start"])
+                        e = int(w["end"])
+                        diag = {"start": s, "end": e, "duration": int(w["duration"])}
+
+                        if left_lane_series is not None and right_lane_series is not None:
+                            sl = left_lane_series[s:e + 1]
+                            sr = right_lane_series[s:e + 1]
+                            sw = sr - sl
+                            if sl.size > 0:
+                                diag["left_x_start"] = safe_float(sl[0], None)
+                                diag["left_x_end"] = safe_float(sl[-1], None)
+                                diag["left_dx_peak"] = safe_float(np.max(np.abs(np.diff(sl))) if sl.size > 1 else 0.0)
+                                diag["right_x_start"] = safe_float(sr[0], None)
+                                diag["right_x_end"] = safe_float(sr[-1], None)
+                                diag["right_dx_peak"] = safe_float(np.max(np.abs(np.diff(sr))) if sr.size > 1 else 0.0)
+                                diag["lane_width_start"] = safe_float(sw[0], None)
+                                diag["lane_width_end"] = safe_float(sw[-1], None)
+                                diag["lane_width_shift_abs"] = safe_float(abs(sw[-1] - sw[0]), None)
+                                diag["lane_width_jitter_p95"] = safe_float(
+                                    np.percentile(np.abs(np.diff(sw)), 95) if sw.size > 1 else 0.0
+                                )
+
+                        if num_lanes_series is not None:
+                            sn = num_lanes_series[s:e + 1]
+                            if sn.size > 0:
+                                diag["num_lanes_min"] = safe_float(np.min(sn), None)
+                                diag["num_lanes_max"] = safe_float(np.max(sn), None)
+                                diag["num_lanes_lt2_frames"] = int(np.sum(sn < 2))
+
+                        if perception_ts is not None:
+                            st = perception_ts[s:e + 1]
+                            if st.size > 1:
+                                dts = np.diff(st)
+                                diag["timestamp_repeat_frames"] = int(np.sum(np.isclose(dts, 0.0, atol=1e-9)))
+                                diag["timestamp_dt_p95_ms"] = safe_float(np.percentile(dts * 1000.0, 95), None)
+
+                        if fit_points_right is not None:
+                            edge_margin = 12
+                            image_width = int(f["camera/image_width"][0]) if "camera/image_width" in f else 640
+                            edge_hits = 0
+                            right_max_x = []
+                            left_min_x = []
+                            for i in range(s, e + 1):
+                                pts = _parse_points(fit_points_right[i])
+                                xs = [p[0] for p in pts if isinstance(p, (list, tuple)) and len(p) >= 2]
+                                if xs and max(xs) > (image_width - edge_margin):
+                                    edge_hits += 1
+                                if xs:
+                                    right_max_x.append(float(max(xs)))
+                                if fit_points_left is not None:
+                                    left_pts = _parse_points(fit_points_left[i])
+                                    left_xs = [p[0] for p in left_pts if isinstance(p, (list, tuple)) and len(p) >= 2]
+                                    if left_xs:
+                                        left_min_x.append(float(min(left_xs)))
+                            diag["right_edge_contact_frames"] = int(edge_hits)
+                            diag["right_edge_contact_rate_pct"] = safe_float(
+                                (edge_hits / max(1, (e - s + 1))) * 100.0, None
+                            )
+                            if right_max_x:
+                                diag["right_fit_max_x_shift_px"] = safe_float(
+                                    max(right_max_x) - min(right_max_x), None
+                                )
+                            if left_min_x:
+                                diag["left_fit_min_x_shift_px"] = safe_float(
+                                    max(left_min_x) - min(left_min_x), None
+                                )
+
+                        if detection_method_series is not None:
+                            methods = []
+                            for i in range(s, e + 1):
+                                m = detection_method_series[i]
+                                methods.append(
+                                    m.decode("utf-8") if isinstance(m, (bytes, bytearray, np.bytes_)) else str(m)
+                                )
+                            counts: Dict[str, int] = {}
+                            for m in methods:
+                                key = m.strip().lower()
+                                counts[key] = counts.get(key, 0) + 1
+                            diag["detection_method_counts"] = counts
+
+                        if actual_left_series is not None and actual_right_series is not None:
+                            al = actual_left_series[s:e + 1]
+                            ar = actual_right_series[s:e + 1]
+                            if al.size > 1 and ar.size > 1:
+                                diag["actual_left_dx_peak"] = safe_float(np.max(np.abs(np.diff(al))), None)
+                                diag["actual_right_dx_peak"] = safe_float(np.max(np.abs(np.diff(ar))), None)
+                                diag["actual_lane_width_shift_abs"] = safe_float(
+                                    abs((ar[-1] - al[-1]) - (ar[0] - al[0])), None
+                                )
+
+                        if instability_width_series is not None:
+                            iw = instability_width_series[s:e + 1]
+                            if iw.size > 0:
+                                diag["instability_width_change_max"] = safe_float(np.max(iw), None)
+                                diag["instability_width_change_start"] = safe_float(iw[0], None)
+
+                        if instability_center_series is not None:
+                            ic = instability_center_series[s:e + 1]
+                            if ic.size > 0:
+                                diag["instability_center_shift_max"] = safe_float(np.max(ic), None)
+                                diag["instability_center_shift_start"] = safe_float(ic[0], None)
+
+                        if heading_delta_deg is not None:
+                            hd = heading_delta_deg[s:e + 1]
+                            if hd.size > 0:
+                                diag["heading_delta_abs_p95_deg"] = safe_float(
+                                    np.percentile(np.abs(hd), 95), None
+                                )
+                                diag["heading_delta_peak_deg"] = safe_float(np.max(np.abs(hd)), None)
+
+                        if road_lateral_offset is not None:
+                            ro = road_lateral_offset[s:e + 1]
+                            if ro.size > 0:
+                                diag["road_lateral_offset_shift_abs"] = safe_float(abs(ro[-1] - ro[0]), None)
+
+                        if steering_cmd is not None:
+                            st = steering_cmd[s:e + 1]
+                            if st.size > 0:
+                                diag["steering_abs_p95"] = safe_float(np.percentile(np.abs(st), 95), None)
+
+                        if control_curvature is not None:
+                            cc = control_curvature[s:e + 1]
+                            if cc.size > 0:
+                                diag["path_curvature_abs_p95"] = safe_float(np.percentile(np.abs(cc), 95), None)
+
+                        instability_diagnostics.append(diag)
+
+                    # region agent log
+                    _agent_debug_log(
+                        "H1",
+                        "issue_detector.py:perception_instability:windows",
+                        "Instability windows diagnostics",
+                        {
+                            "recording": str(recording_path),
+                            "window_count": int(len(instability_windows)),
+                            "windows": instability_diagnostics,
+                        },
+                    )
+                    # endregion
 
             # 2.6 DETECT RIGHT-LANE LOW VISIBILITY (lane exits FOV)
             if has_perception and "perception/fit_points_right" in f:
@@ -270,17 +642,20 @@ def detect_issues(recording_path: Path, analyze_to_failure: bool = False) -> Dic
                         return []
 
                 low_flags = []
+                edge_flags = []
                 for idx in range(len(right_raw)):
                     pts = parse_points(right_raw[idx])
                     xs = [p[0] for p in pts if isinstance(p, (list, tuple)) and len(p) >= 2]
                     low = False
+                    edge_contact = False
                     if num_lanes is not None and num_lanes[idx] < 2:
                         low = True
                     if len(xs) < min_points:
                         low = True
                     elif xs and max(xs) > (image_width - edge_margin):
-                        low = True
+                        edge_contact = True
                     low_flags.append(low)
+                    edge_flags.append(edge_contact)
 
                 min_event_len = 3
                 current = 0
@@ -312,6 +687,36 @@ def detect_issues(recording_path: Path, analyze_to_failure: bool = False) -> Dic
                         "description": f"Right lane low visibility for {current} frames (likely exiting FOV on right turn).",
                         "duration": int(current),
                         "end_frame": int(len(low_flags) - 1),
+                    })
+
+                # Track right-lane edge contact separately from true low-visibility.
+                edge_current = 0
+                edge_start = None
+                for idx, flag in enumerate(edge_flags):
+                    if flag:
+                        if edge_current == 0:
+                            edge_start = idx
+                        edge_current += 1
+                    else:
+                        if edge_current >= min_event_len and edge_start is not None:
+                            issues.append({
+                                "frame": int(edge_start),
+                                "type": "right_lane_edge_contact",
+                                "severity": "low",
+                                "description": f"Right lane touches image edge for {edge_current} frames (FOV boundary contact).",
+                                "duration": int(edge_current),
+                                "end_frame": int(idx - 1),
+                            })
+                        edge_current = 0
+                        edge_start = None
+                if edge_current >= min_event_len and edge_start is not None:
+                    issues.append({
+                        "frame": int(edge_start),
+                        "type": "right_lane_edge_contact",
+                        "severity": "low",
+                        "description": f"Right lane touches image edge for {edge_current} frames (FOV boundary contact).",
+                        "duration": int(edge_current),
+                        "end_frame": int(len(edge_flags) - 1),
                     })
             
             # 2.5 DETECT LANE-LINE JITTER (large frame-to-frame shifts)
@@ -556,10 +961,77 @@ def detect_issues(recording_path: Path, analyze_to_failure: bool = False) -> Dic
                                 "window_frames": int(window_size),
                             })
                             last_issue_frame = issue_frame
+
+            # 5.5 DETECT DOMINANT STEERING LIMITER ROOT CAUSE
+            if has_control:
+                rate_delta = (
+                    np.abs(np.array(f["control/steering_rate_limited_delta"][:num_frames]))
+                    if "control/steering_rate_limited_delta" in f
+                    else None
+                )
+                jerk_delta = (
+                    np.abs(np.array(f["control/steering_jerk_limited_delta"][:num_frames]))
+                    if "control/steering_jerk_limited_delta" in f
+                    else None
+                )
+                hard_delta = (
+                    np.abs(np.array(f["control/steering_hard_clip_delta"][:num_frames]))
+                    if "control/steering_hard_clip_delta" in f
+                    else None
+                )
+                smooth_delta = (
+                    np.abs(np.array(f["control/steering_smoothing_delta"][:num_frames]))
+                    if "control/steering_smoothing_delta" in f
+                    else None
+                )
+                stage_arrays = []
+                stage_names = []
+                if rate_delta is not None:
+                    stage_arrays.append(rate_delta)
+                    stage_names.append("rate_limit")
+                if jerk_delta is not None:
+                    stage_arrays.append(jerk_delta)
+                    stage_names.append("jerk_limit")
+                if hard_delta is not None:
+                    stage_arrays.append(hard_delta)
+                    stage_names.append("hard_clip")
+                if smooth_delta is not None:
+                    stage_arrays.append(smooth_delta)
+                    stage_names.append("smoothing")
+
+                if stage_arrays:
+                    stacked = np.vstack(stage_arrays)
+                    max_vals = np.max(stacked, axis=0)
+                    max_idx = np.argmax(stacked, axis=0)
+                    threshold = 1e-4
+                    limited = max_vals > threshold
+                    limited_count = int(np.sum(limited))
+                    if limited_count > 0:
+                        counts = {name: 0 for name in stage_names}
+                        for i in np.where(limited)[0]:
+                            counts[stage_names[int(max_idx[i])]] += 1
+                        dominant_stage = max(counts, key=counts.get)
+                        dominant_pct = 100.0 * counts[dominant_stage] / max(1, limited_count)
+                        severity = "high" if dominant_stage in ("jerk_limit", "hard_clip") else "medium"
+                        if dominant_pct >= 35.0:
+                            peak_idx = int(np.argmax(max_vals))
+                            issues.append({
+                                "frame": peak_idx,
+                                "type": "steering_limiter_dominant",
+                                "severity": severity,
+                                "description": (
+                                    f"Steering limiter root cause: {dominant_stage} dominates "
+                                    f"({dominant_pct:.1f}% of limited frames)."
+                                ),
+                                "dominant_stage": dominant_stage,
+                                "dominant_pct": float(dominant_pct),
+                                "limited_frames": limited_count,
+                            })
             
             # 6. DETECT SUSTAINED OUT-OF-LANE EVENTS
             # CRITICAL: Use ground truth lane boundaries if available (most accurate)
             # Only use perception-based error as fallback - perception can be wrong!
+            centerline_cross_start_frame = None
             if has_ground_truth and "ground_truth/left_lane_line_x" in f and "ground_truth/right_lane_line_x" in f:
                 # Use ground truth lane boundaries (most accurate)
                 gt_left = np.array(f["ground_truth/left_lane_line_x"][:num_frames])
@@ -579,6 +1051,30 @@ def detect_issues(recording_path: Path, analyze_to_failure: bool = False) -> Dic
                     else:
                         # Car is in lane
                         out_of_lane_distances[i] = 0.0
+
+                # Detect centerline crossing onset (crossing left lane boundary) to help
+                # users ignore downstream diagnostics after entering unsupported state.
+                cross_flags = gt_left > 0.0
+                min_cross_frames = 3
+                run = 0
+                for i, crossed in enumerate(cross_flags):
+                    if crossed:
+                        run += 1
+                        if run >= min_cross_frames:
+                            centerline_cross_start_frame = i - (min_cross_frames - 1)
+                            break
+                    else:
+                        run = 0
+                if centerline_cross_start_frame is not None:
+                    issues.append({
+                        "frame": int(centerline_cross_start_frame),
+                        "type": "centerline_cross",
+                        "severity": "high",
+                        "description": (
+                            f"Centerline crossed at frame {centerline_cross_start_frame} "
+                            f"(left boundary exceeded for >= {min_cross_frames} frames)."
+                        ),
+                    })
                 
                 lateral_error_abs = out_of_lane_distances
                 error_source = "ground_truth_boundaries"
@@ -726,6 +1222,10 @@ def detect_issues(recording_path: Path, analyze_to_failure: bool = False) -> Dic
             
             # Sort issues by frame number
             issues.sort(key=lambda x: x["frame"])
+            first_out_of_lane = next(
+                (int(i["frame"]) for i in issues if i.get("type") == "out_of_lane"),
+                None,
+            )
             
             # Count by type
             issue_counts = {}
@@ -735,8 +1235,15 @@ def detect_issues(recording_path: Path, analyze_to_failure: bool = False) -> Dic
             
             return {
                 "issues": issues,
+                "causal_timeline": build_causal_timeline(issues, failure_frame=failure_frame),
                 "summary": {
                     "total_issues": len(issues),
+                    "road_departure_start_frame": first_out_of_lane,
+                    "centerline_cross_start_frame": (
+                        int(centerline_cross_start_frame)
+                        if centerline_cross_start_frame is not None
+                        else None
+                    ),
                     "by_type": issue_counts,
                     "by_severity": {
                         "critical": len([i for i in issues if i["severity"] == "critical"]),

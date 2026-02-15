@@ -23,6 +23,7 @@ class LaneDetectionInference:
                  segmentation_model_path: Optional[str] = None,
                  segmentation_mode: bool = False,
                  segmentation_input_size: Tuple[int, int] = (320, 640),
+                 segmentation_fit_min_row_ratio: float = 0.45,
                  segmentation_fit_max_row_ratio: float = 0.75,
                  segmentation_ransac_enabled: bool = False,
                  segmentation_ransac_residual_px: float = 6.0,
@@ -40,6 +41,7 @@ class LaneDetectionInference:
         self.fallback_to_cv = fallback_to_cv
         self.segmentation_mode = segmentation_mode
         self.segmentation_input_size = segmentation_input_size
+        self.segmentation_fit_min_row_ratio = float(segmentation_fit_min_row_ratio)
         self.segmentation_fit_max_row_ratio = float(segmentation_fit_max_row_ratio)
         self.segmentation_ransac_enabled = bool(segmentation_ransac_enabled)
         self.segmentation_ransac_residual_px = float(segmentation_ransac_residual_px)
@@ -355,7 +357,10 @@ class LaneDetectionInference:
         min_rows = 6
         min_pixels_per_row = 2
 
-        max_row = int(h * np.clip(self.segmentation_fit_max_row_ratio, 0.1, 1.0))
+        min_row_ratio = float(np.clip(self.segmentation_fit_min_row_ratio, 0.0, 0.95))
+        max_row_ratio = float(np.clip(self.segmentation_fit_max_row_ratio, min_row_ratio + 0.02, 1.0))
+        min_row = int(h * min_row_ratio)
+        max_row = int(h * max_row_ratio)
         ransac_used = {"left": False, "right": False}
         for lane_label in (1, 2):
             ys, xs = np.where(mask_resized == lane_label)
@@ -363,7 +368,7 @@ class LaneDetectionInference:
                 lane_coeffs.append(None)
                 continue
             points = []
-            for y in range(0, max_row, row_step):
+            for y in range(min_row, max_row, row_step):
                 row_xs = xs[ys == y]
                 if len(row_xs) < min_pixels_per_row:
                     continue

@@ -1005,6 +1005,48 @@ public class RoadGenerator : MonoBehaviour
     }
 
     /// <summary>
+    /// Get center point at distance along path.
+    /// Uses native track path distance lookup when available.
+    /// </summary>
+    public Vector3 GetCenterPointAtDistance(float distance)
+    {
+        if (trackPath != null)
+        {
+            return trackPath.GetPointAtDistance(distance);
+        }
+
+        float pathLength = GetPathLength();
+        if (pathLength <= 0.001f)
+        {
+            return GetOvalCenterPoint(0f);
+        }
+
+        float t = Mathf.Repeat(distance, pathLength) / pathLength;
+        return GetOvalCenterPoint(t);
+    }
+
+    /// <summary>
+    /// Get tangent direction at distance along path.
+    /// Uses native track path distance lookup when available.
+    /// </summary>
+    public Vector3 GetDirectionAtDistance(float distance)
+    {
+        if (trackPath != null)
+        {
+            return trackPath.GetDirectionAtDistance(distance);
+        }
+
+        float pathLength = GetPathLength();
+        if (pathLength <= 0.001f)
+        {
+            return GetOvalDirection(0f);
+        }
+
+        float t = Mathf.Repeat(distance, pathLength) / pathLength;
+        return GetOvalDirection(t);
+    }
+
+    /// <summary>
     /// Get speed limit at parameter t (0 to 1). Returns 0 if not set.
     /// </summary>
     public float GetSpeedLimitAtT(float t)

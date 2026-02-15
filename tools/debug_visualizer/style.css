@@ -118,6 +118,20 @@ body {
     transform-origin: top left;
 }
 
+.camera-grid.topdown-unavailable {
+    grid-template-columns: minmax(0, 1fr);
+}
+
+.topdown-column {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+
+.topdown-column .canvas-container {
+    margin-bottom: 0;
+}
+
 .camera-grid-resize-handle {
     height: 14px;
     margin: 0.5rem 0 0;
@@ -256,6 +270,61 @@ body {
 
 .opacity-control input[type="range"] {
     flex: 1;
+}
+
+.quick-debug-panel {
+    background: #2a2a2a;
+    border-radius: 4px;
+    padding: 0.75rem;
+    min-height: 180px;
+}
+
+.quick-debug-panel h3 {
+    margin-bottom: 0.5rem;
+    font-size: 1rem;
+    color: #fff;
+}
+
+.quick-debug-controls {
+    display: flex;
+    gap: 0.5rem;
+    align-items: center;
+    margin-bottom: 0.5rem;
+}
+
+.quick-debug-controls select {
+    flex: 1;
+    min-width: 180px;
+}
+
+.quick-chart-values-wrap {
+    max-height: 220px;
+    overflow-y: auto;
+    border: 1px solid #3a3a3a;
+    border-radius: 4px;
+}
+
+.quick-values-table {
+    margin-bottom: 0;
+}
+
+.quick-values-table th {
+    padding: 0.5rem;
+    border-bottom: 1px solid #3a3a3a;
+    color: #a0a0a0;
+    font-size: 0.85rem;
+    text-align: left;
+    background: #222;
+    position: sticky;
+    top: 0;
+}
+
+.quick-values-table th:last-child {
+    text-align: right;
+}
+
+.quick-values-table td:first-child {
+    font-size: 0.85rem;
 }
 
 /* Legend Panel (between camera and data) */
@@ -459,16 +528,23 @@ body {
 }
 
 .chart-canvas {
-    flex: 1;
+    flex: none;
     background: #1a1a1a;
     border: 1px solid #3a3a3a;
     border-radius: 6px;
     padding: 0.5rem;
+    height: clamp(220px, 36vh, 320px);
+}
+
+.chart-zoom-controls {
+    display: flex;
+    gap: 0.5rem;
+    margin-bottom: 0.5rem;
 }
 
 .chart-canvas canvas {
     width: 100%;
-    height: 480px;
+    height: 100% !important;
 }
 
 .tab-pane h3 {

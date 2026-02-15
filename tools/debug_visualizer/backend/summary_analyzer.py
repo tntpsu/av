@@ -564,6 +564,9 @@ def analyze_recording_summary(recording_path: Path, analyze_to_failure: bool = F
     config_summary = {
         "camera_fov": safe_float(traj_cfg.get("camera_fov", 0.0)),
         "camera_height": safe_float(traj_cfg.get("camera_height", 0.0)),
+        "segmentation_fit_min_row_ratio": safe_float(
+            perception_cfg.get("segmentation_fit_min_row_ratio", 0.0)
+        ),
         "segmentation_fit_max_row_ratio": safe_float(
             perception_cfg.get("segmentation_fit_max_row_ratio", 0.0)
         ),
@@ -710,6 +713,7 @@ def analyze_recording_summary(recording_path: Path, analyze_to_failure: bool = F
     reference_jitter_p95 = 0.0
     reference_jitter_p99 = 0.0
     right_lane_low_visibility_rate = 0.0
+    right_lane_edge_contact_rate = 0.0
     left_lane_low_visibility_rate = 0.0
     
     if data['left_lane_x'] is not None and data['right_lane_x'] is not None:
@@ -751,6 +755,7 @@ def analyze_recording_summary(recording_path: Path, analyze_to_failure: bool = F
             width = data.get('image_width', 640)
             left_low = 0
             right_low = 0
+            right_edge_contact = 0
 
             def parse_points(raw) -> list:
                 if raw is None:
@@ -770,10 +775,18 @@ def analyze_recording_summary(recording_path: Path, analyze_to_failure: bool = F
 
                 if len(left_xs) < min_points or (left_xs and min(left_xs) < edge_margin):
                     left_low += 1
-                if len(right_xs) < min_points or (right_xs and max(right_xs) > (width - edge_margin)):
+                right_low_flag = False
+                if data.get('num_lanes_detected') is not None and i < len(data['num_lanes_detected']) and data['num_lanes_detected'][i] < 2:
+                    right_low_flag = True
+                if len(right_xs) < min_points:
+                    right_low_flag = True
+                if right_xs and max(right_xs) > (width - edge_margin):
+                    right_edge_contact += 1
+                if right_low_flag:
                     right_low += 1
 
             right_lane_low_visibility_rate = safe_float(right_low / n_frames * 100 if n_frames > 0 else 0.0)
+            right_lane_edge_contact_rate = safe_float(right_edge_contact / n_frames * 100 if n_frames > 0 else 0.0)
             left_lane_low_visibility_rate = safe_float(left_low / n_frames * 100 if n_frames > 0 else 0.0)
             
             # Penalize high variance (instability)
@@ -1145,6 +1158,8 @@ def analyze_recording_summary(recording_path: Path, analyze_to_failure: bool = F
         recommendations.append("Reduce perception jitter - increase temporal smoothing or clamp lane-line deltas")
     if right_lane_low_visibility_rate > 10 or single_lane_rate > 10:
         recommendations.append("Right lane visibility drops - add single-lane fallback or widen camera FOV")
+    elif right_lane_edge_contact_rate > 20:
+        recommendations.append("Right lane frequently touches image edge on right turns - treat as FOV-limited and rely on single-lane corridor logic")
     if stale_perception_rate > 10:
         recommendations.append("Reduce stale data usage - relax jump detection threshold or improve perception")
     if speed_limit_zero_rate > 10:
@@ -1174,6 +1189,8 @@ def analyze_recording_summary(recording_path: Path, analyze_to_failure: bool = F
         key_issues.append(f"High reference jitter (p95={reference_jitter_p95:.2f}m)")
     if right_lane_low_visibility_rate > 10:
         key_issues.append(f"Right lane low visibility ({right_lane_low_visibility_rate:.1f}%)")
+    elif right_lane_edge_contact_rate > 20:
+        key_issues.append(f"Right lane at image edge often ({right_lane_edge_contact_rate:.1f}%)")
     if stale_perception_rate > 20:
         key_issues.append(f"High stale data usage ({stale_perception_rate:.1f}%)")
     if speed_limit_zero_rate > 10:
@@ -1295,6 +1312,7 @@ def analyze_recording_summary(recording_path: Path, analyze_to_failure: bool = F
             "reference_jitter_p99": safe_float(reference_jitter_p99),
             "single_lane_rate": safe_float(single_lane_rate),
             "right_lane_low_visibility_rate": safe_float(right_lane_low_visibility_rate),
+            "right_lane_edge_contact_rate": safe_float(right_lane_edge_contact_rate),
             "left_lane_low_visibility_rate": safe_float(left_lane_low_visibility_rate)
         },
         "trajectory_quality": {

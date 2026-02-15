@@ -18,16 +18,11 @@ class DataLoader {
      */
     async loadRecordings() {
         try {
-            console.log(`Fetching recordings from ${API_BASE}/recordings`);
             const response = await fetch(`${API_BASE}/recordings`);
-            console.log('Response status:', response.status, response.statusText);
             if (!response.ok) {
-                const errorText = await response.text();
-                console.error('Failed to load recordings:', response.status, errorText);
                 return [];
             }
             const data = await response.json();
-            console.log('Recordings data received:', data);
             return data;
         } catch (error) {
             console.error('Error loading recordings:', error);
@@ -48,6 +43,24 @@ class DataLoader {
             return data.frame_count;
         } catch (error) {
             console.error('Error loading recording:', error);
+            throw error;
+        }
+    }
+
+    /**
+     * Load recording metadata.
+     */
+    async loadRecordingMeta(filename = null) {
+        const target = filename || this.currentRecording;
+        if (!target) {
+            throw new Error('No recording specified');
+        }
+        try {
+            const response = await fetch(`${API_BASE}/recording/${target}/meta`, { cache: 'no-store' });
+            if (!response.ok) throw new Error('Failed to load recording metadata');
+            return await response.json();
+        } catch (error) {
+            console.error('Error loading recording metadata:', error);
             throw error;
         }
     }
@@ -138,7 +151,12 @@ class DataLoader {
             const response = await fetch(
                 `${API_BASE}/recording/${this.currentRecording}/frame/${frameIndex}/image?${params.toString()}`
             );
-            if (!response.ok) throw new Error(`Failed to load frame image ${frameIndex}`);
+            if (!response.ok) {
+                const error = new Error(`Failed to load frame image ${frameIndex}`);
+                error.status = response.status;
+                error.cameraId = cameraId;
+                throw error;
+            }
             const data = await response.json();
             return data.image; // Base64 data URL
         } catch (error) {

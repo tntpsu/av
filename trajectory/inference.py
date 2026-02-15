@@ -196,6 +196,13 @@ class TrajectoryPlanningInference:
             Planned trajectory
         """
         return self.planner.plan(lane_coeffs, vehicle_state)
+
+    def get_last_generation_diagnostics(self) -> Dict[str, float]:
+        """Expose planner generation diagnostics (instrumentation-only)."""
+        getter = getattr(self.planner, "get_last_generation_diagnostics", None)
+        if callable(getter):
+            return getter()
+        return {}
     
     def get_reference_point(self, trajectory: Trajectory, 
                            lookahead: float = 10.0,

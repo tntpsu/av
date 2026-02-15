@@ -36,6 +36,8 @@ import subprocess
 import threading
 import signal
 import os
+from collections import deque
+import copy
 
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -43,6 +45,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from av_stack import AVStack
 from data.recorder import DataRecorder
 from data.formats.data_format import ControlCommand
+from data.formats.data_format import PerceptionOutput
 from typing import Optional
 import sys
 from pathlib import Path
@@ -155,6 +158,15 @@ def resolve_lateral_correction_gain(
     return default_offset if target_lane != "center" else default_center
 
 
+def _normalize_stream_sync_policy(policy: str) -> str:
+    sync_policy = (policy or "aligned").strip().lower()
+    if sync_policy not in {"aligned", "queued", "latest"}:
+        raise ValueError(
+            f"Invalid stream_sync_policy: {policy!r}. Use aligned, queued, or latest."
+        )
+    return sync_policy
+
+
 class GroundTruthFollower:
     """
     Drive car using ground truth data to collect ground truth recordings.
@@ -187,6 +199,11 @@ class GroundTruthFollower:
         segmentation_model_path: Optional[str] = None,
         single_lane_width_threshold_m: float = 5.0,
         lateral_correction_gain: Optional[float] = None,
+        strict_gt_pose: bool = False,
+        strict_gt_feedback: bool = False,
+        fast_record: bool = False,
+        record_state_lag_frames: int = 0,
+        stream_sync_policy: str = "aligned",
     ):
         """
         Initialize ground truth follower.
@@ -212,6 +229,17 @@ class GroundTruthFollower:
         self.constant_speed = constant_speed
         self.target_lane = _normalize_target_lane(target_lane)
         self.single_lane_width_threshold_m = float(single_lane_width_threshold_m)
+        self.strict_gt_pose = bool(strict_gt_pose)
+        self.strict_gt_feedback = bool(strict_gt_feedback)
+        self.fast_record = bool(fast_record)
+        self.record_state_lag_frames = max(0, int(record_state_lag_frames))
+        self.stream_sync_policy = _normalize_stream_sync_policy(stream_sync_policy)
+        self.sync_camera_tolerance_s = 0.050
+        self.sync_state_tolerance_s = 0.050
+        self.sync_alignment_attempts = 3
+        self._vehicle_state_history = deque(maxlen=self.record_state_lag_frames + 4)
+        self._strict_missing_feedback_streak = 0
+        self._strict_invalid_feedback_streak = 0
         
         # Speed control PID parameters (tuned for Unity physics)
         # Unity: motorForce=400, brake uses damping + velocity reduction
@@ -428,7 +456,47 @@ class GroundTruthFollower:
             self.target_lane,
             self.single_lane_width_threshold_m,
         )
-    
+
+    def _is_gt_presnap_start_frame(self, vehicle_state: dict) -> bool:
+        """
+        Detect the known GT startup artifact where first recorded frame is pre-snap.
+        Observed signature: left/right lane lines reported as ~0.0 / ~3.6 with lane center ~1.8.
+        """
+        left_lane_line_x = self._get_state_value(
+            vehicle_state,
+            [
+                "groundTruthLeftLaneLineX",
+                "ground_truth_left_lane_line_x",
+                "groundTruthLeftLaneX",
+                "ground_truth_left_lane_x",
+            ],
+            None,
+        )
+        right_lane_line_x = self._get_state_value(
+            vehicle_state,
+            [
+                "groundTruthRightLaneLineX",
+                "ground_truth_right_lane_line_x",
+                "groundTruthRightLaneX",
+                "ground_truth_right_lane_x",
+            ],
+            None,
+        )
+        lane_center_x = self._get_state_value(
+            vehicle_state,
+            ["groundTruthLaneCenterX", "ground_truth_lane_center_x", "lane_center_x"],
+            None,
+        )
+
+        try:
+            left = float(left_lane_line_x)
+            right = float(right_lane_line_x)
+            center = float(lane_center_x)
+        except (TypeError, ValueError):
+            return False
+
+        return abs(left) < 0.2 and right > 2.5 and center > 1.0
+
     def _calculate_exact_steering(self, vehicle_state: dict, current_speed: float) -> float:
         """
         Calculate EXACT steering angle using bicycle model and path geometry.
@@ -665,7 +733,10 @@ class GroundTruthFollower:
         """Wait for first frame from Unity with exponential backoff."""
         delay = initial_delay
         for attempt in range(max_retries):
-            frame_data = self.bridge.get_latest_camera_frame()
+            frame_data = self.bridge.get_next_camera_frame()
+            if frame_data is None:
+                # Backward-compatible fallback for older bridge servers.
+                frame_data = self.bridge.get_latest_camera_frame()
             if frame_data is not None:
                 return True
             if attempt % 5 == 0:  # Log every 5 attempts
@@ -673,6 +744,71 @@ class GroundTruthFollower:
             time.sleep(delay)
             delay = min(delay * 1.2, 2.0)  # Exponential backoff, max 2s
         return False
+
+    def _fetch_synchronized_inputs(
+        self,
+    ) -> tuple[np.ndarray, float, int | None, dict, tuple[np.ndarray, float, int | None] | None] | None:
+        if self.stream_sync_policy == "queued":
+            frame_data = self.bridge.get_next_camera_frame()
+            vehicle_state = self.bridge.get_next_vehicle_state()
+            topdown_frame_data = self.bridge.get_next_camera_frame(camera_id="top_down")
+            if frame_data is None or vehicle_state is None:
+                return None
+            image, timestamp, camera_frame_id = frame_data
+            return image, timestamp, camera_frame_id, vehicle_state, topdown_frame_data
+
+        if self.stream_sync_policy == "latest":
+            frame_data = self.bridge.get_latest_camera_frame()
+            vehicle_state = self.bridge.get_latest_vehicle_state()
+            topdown_frame_data = self.bridge.get_latest_camera_frame(camera_id="top_down")
+            if frame_data is None or vehicle_state is None:
+                return None
+            image, timestamp, camera_frame_id = frame_data
+            return image, timestamp, camera_frame_id, vehicle_state, topdown_frame_data
+
+        # aligned: best-effort temporal alignment on a shared sampling instant.
+        best_result = None
+        best_score = float("inf")
+        for _ in range(self.sync_alignment_attempts):
+            frame_data = self.bridge.get_latest_camera_frame()
+            vehicle_state = self.bridge.get_latest_vehicle_state()
+            topdown_frame_data = self.bridge.get_latest_camera_frame(camera_id="top_down")
+            if frame_data is None or vehicle_state is None:
+                time.sleep(0.002)
+                continue
+
+            image, front_ts, camera_frame_id = frame_data
+            unity_time = vehicle_state.get("unityTime", vehicle_state.get("unity_time"))
+            try:
+                state_ts = float(unity_time) if unity_time is not None else None
+            except (TypeError, ValueError):
+                state_ts = None
+
+            top_ts = None
+            if topdown_frame_data is not None:
+                _, top_ts, _ = topdown_frame_data
+
+            camera_gap = abs(front_ts - top_ts) if top_ts is not None else 0.0
+            state_gap = abs(front_ts - state_ts) if state_ts is not None else 0.0
+            score = camera_gap + state_gap
+            if score < best_score:
+                best_score = score
+                best_result = (
+                    image,
+                    front_ts,
+                    camera_frame_id,
+                    vehicle_state,
+                    topdown_frame_data,
+                )
+
+            camera_ok = (top_ts is None) or (camera_gap <= self.sync_camera_tolerance_s)
+            state_ok = (state_ts is None) or (state_gap <= self.sync_state_tolerance_s)
+            if camera_ok and state_ok:
+                return best_result
+
+            time.sleep(0.002)
+
+        return best_result
     
     def run(self, duration: float = 60.0, recording_name: Optional[str] = None, auto_play: bool = False):
         """
@@ -686,6 +822,7 @@ class GroundTruthFollower:
         logger.info(f"Starting ground truth following test (duration: {duration}s)")
         logger.info(f"Target speed: {self.target_speed} m/s")
         logger.info(f"Lookahead: {self.lookahead} m")
+        logger.info(f"Stream sync policy: {self.stream_sync_policy}")
         logger.info("Unity reminder: Ensure the CarController 'Ground Truth Mode' checkbox is enabled "
                     "if you want GT mode active before the first control command.")
         
@@ -757,15 +894,81 @@ class GroundTruthFollower:
         consecutive_failures = 0
         max_consecutive_failures = 100  # ~3 seconds at 30ms sleep
         no_frame_timeout = 5.0  # If no frames for 5 seconds, warn
+        target_loop_hz = 30.0
+        target_loop_interval = 1.0 / target_loop_hz
+        last_camera_timestamp: Optional[float] = None
+        last_unity_frame_count: Optional[int] = None
+        last_unity_time: Optional[float] = None
+        stale_state_skip_count = 0
+        skipped_presnap_start_frame = False
+        health_check_interval = 0.5
+        last_health_check_time = 0.0
+        health_ok_cached = True
+        strict_feedback_poll_every_n_frames = 3
+        strict_missing_feedback_limit = 40
+        strict_invalid_feedback_limit = 10
+
+        # Warm-up: latch Unity into GT mode before recording frames so startup data
+        # does not include pre-GT physics heading transients.
+        if self.strict_gt_pose:
+            gt_latch_deadline = time.time() + 3.0
+            gt_latched = False
+            while time.time() < gt_latch_deadline:
+                try:
+                    self.bridge.set_control_command(
+                        0.0,
+                        0.0,
+                        0.0,
+                        ground_truth_mode=True,
+                        ground_truth_speed=max(self.min_target_speed, self.target_speed),
+                        randomize_start=False,
+                        randomize_request_id=0,
+                        randomize_seed=None,
+                    )
+                    feedback = self.bridge.get_latest_unity_feedback()
+                    if feedback:
+                        gt_mode_active = bool(feedback.get("ground_truth_mode_active", False))
+                        gt_data_available = bool(feedback.get("ground_truth_data_available", False))
+                        gt_reporter_enabled = bool(feedback.get("ground_truth_reporter_enabled", False))
+                        car_mode = str(feedback.get("car_controller_mode", "unknown"))
+                        if gt_mode_active and gt_data_available and gt_reporter_enabled and car_mode == "ground_truth":
+                            gt_latched = True
+                            break
+                except Exception:
+                    pass
+                time.sleep(0.05)
+            if gt_latched:
+                logger.info("GT startup latch acquired: Unity reports ground_truth mode active before recording.")
+            else:
+                logger.warning("GT startup latch not confirmed within 3.0s; continuing run.")
+
+            # Startup alignment: drop any queued pre-transition vehicle states so
+            # recorded frame 0 starts from post-latch GT timing.
+            if self.fast_record and self.stream_sync_policy == "queued":
+                drained_states = 0
+                while True:
+                    queued_state = self.bridge.get_next_vehicle_state()
+                    if queued_state is None:
+                        break
+                    drained_states += 1
+                if drained_states > 0:
+                    logger.info(
+                        "Drained %d queued vehicle states after GT latch for startup alignment.",
+                        drained_states,
+                    )
         
         try:
             while time.time() - start_time < duration:
+                loop_start_time = time.time()
                 # Check for connection health
-                try:
-                    health_ok = self.bridge.health_check()
-                except Exception as e:
-                    logger.warning(f"Bridge health check exception: {e}")
-                    health_ok = False
+                if (loop_start_time - last_health_check_time) >= health_check_interval:
+                    try:
+                        health_ok_cached = self.bridge.health_check()
+                    except Exception as e:
+                        logger.warning(f"Bridge health check exception: {e}")
+                        health_ok_cached = False
+                    last_health_check_time = loop_start_time
+                health_ok = health_ok_cached
                 
                 if not health_ok:
                     consecutive_failures += 1
@@ -808,24 +1011,79 @@ class GroundTruthFollower:
                 
                 consecutive_failures = 0  # Reset on successful health check
                 
-                # Get current frame
-                frame_data = self.bridge.get_latest_camera_frame()
-                if frame_data is None:
-                    # Check if we've been waiting too long for frames
+                synced_inputs = self._fetch_synchronized_inputs()
+                if synced_inputs is None:
                     if time.time() - last_frame_time > no_frame_timeout:
-                        logger.warning(f"No frames received for {no_frame_timeout}s. Unity may have stopped.")
-                        logger.warning("Check Unity console for errors.")
-                    time.sleep(0.01)
+                        logger.warning(
+                            "No synchronized frame/state inputs for %.1fs. Unity may have stopped.",
+                            no_frame_timeout,
+                        )
+                    time.sleep(0.002 if self.fast_record else 0.01)
                     continue
-                
-                last_frame_time = time.time()  # Update last frame time
-                image, timestamp, _ = frame_data
-                
-                # Get vehicle state
-                vehicle_state = self.bridge.get_latest_vehicle_state()
-                if vehicle_state is None:
-                    logger.warning("Got frame but no vehicle state. Retrying...")
-                    time.sleep(0.01)
+
+                image, timestamp, camera_frame_id, vehicle_state, topdown_frame_data = synced_inputs
+                last_frame_time = time.time()
+
+                if not self.fast_record:
+                    if last_camera_timestamp is not None and timestamp == last_camera_timestamp:
+                        # No fresh frame yet; poll again quickly.
+                        time.sleep(0.002)
+                        continue
+
+                    # Require fresh Unity state to avoid repeated-pose stair stepping in recordings.
+                    unity_frame_count = vehicle_state.get("unityFrameCount", vehicle_state.get("unity_frame_count"))
+                    unity_time = vehicle_state.get("unityTime", vehicle_state.get("unity_time"))
+                    is_stale_state = False
+                    try:
+                        if unity_frame_count is not None:
+                            unity_frame_count = int(unity_frame_count)
+                            if last_unity_frame_count is not None and unity_frame_count <= last_unity_frame_count:
+                                is_stale_state = True
+                        if (not is_stale_state) and unity_time is not None:
+                            unity_time = float(unity_time)
+                            if last_unity_time is not None and unity_time <= (last_unity_time + 1e-6):
+                                is_stale_state = True
+                    except (TypeError, ValueError):
+                        # If fields are malformed, proceed without freshness gating this frame.
+                        is_stale_state = False
+
+                    if is_stale_state:
+                        stale_state_skip_count += 1
+                        if stale_state_skip_count % 60 == 0:
+                            logger.info(
+                                "Skipping stale vehicle state frames=%s unity_time=%s (skips=%d)",
+                                unity_frame_count,
+                                unity_time,
+                                stale_state_skip_count,
+                            )
+                        time.sleep(0.002)
+                        continue
+
+                    stale_state_skip_count = 0
+                    if unity_frame_count is not None:
+                        last_unity_frame_count = int(unity_frame_count)
+                    if unity_time is not None:
+                        last_unity_time = float(unity_time)
+                    last_camera_timestamp = timestamp
+                else:
+                    unity_time = vehicle_state.get("unityTime", vehicle_state.get("unity_time"))
+                    try:
+                        if unity_time is not None:
+                            timestamp = float(unity_time)
+                    except (TypeError, ValueError):
+                        pass
+                self._vehicle_state_history.append(copy.deepcopy(vehicle_state))
+
+                # Drop exactly one known GT pre-snap startup artifact frame so recorded frame 0 is GT-aligned.
+                if (
+                    self.strict_gt_pose
+                    and frame_count == 0
+                    and not skipped_presnap_start_frame
+                    and self._is_gt_presnap_start_frame(vehicle_state)
+                ):
+                    skipped_presnap_start_frame = True
+                    logger.info("Skipping GT pre-snap startup frame so recording starts post-alignment.")
+                    time.sleep(0.002)
                     continue
                 
                 # Safety checks before processing
@@ -839,14 +1097,23 @@ class GroundTruthFollower:
                 
                 # Compute steering from ground truth lane center
                 # This makes the car follow the ground truth path (Unity needs steering commands to move)
-                steering = self.get_ground_truth_steering(vehicle_state)
+                if self.strict_gt_pose:
+                    steering = 0.0
+                else:
+                    steering = self.get_ground_truth_steering(vehicle_state)
                 
                 # PID speed control: maintain target speed (with curvature/saturation scaling)
                 # Tuned for Unity physics: motorForce=400, brake uses damping + velocity reduction
                 effective_target_speed = max(self.min_target_speed, self.target_speed * self._speed_scale)
                 speed_error = effective_target_speed - current_speed
                 
-                if self.constant_speed:
+                if self.strict_gt_pose:
+                    # Strict GT pose mode: do not drive motion from steering/throttle/brake.
+                    # Keep ground_truth_mode enabled and let Unity GT reference path own pose.
+                    throttle = 0.0
+                    brake = 0.0
+                    effective_target_speed = max(self.min_target_speed, self.target_speed)
+                elif self.constant_speed:
                     throttle = 1.0
                     brake = 0.0
                 # Emergency: speed way too high - maximum brake
@@ -934,23 +1201,8 @@ class GroundTruthFollower:
                         self.random_seed,
                     )
                 
-                # Process frame through AV stack to run perception and record data
-                # This computes perception output (lane detection) and records everything
-                # We override the control command with ground truth steering to follow GT path
-                # The recorded perception output can be compared to GT later
                 try:
-                    # Process frame normally (perception, trajectory, recording)
-                    # This will compute control but we'll override it
-                    self.av_stack._process_frame(
-                        image,
-                        timestamp,
-                        vehicle_state
-                    )
-                    # Keep AVStack frame counter in sync to avoid repeated "Frame 0" logs.
-                    self.av_stack.frame_count += 1
-                    
-                    # Send our ground truth control command (not the computed one)
-                    # Enable ground truth mode for direct velocity control
+                    # Send GT command first so the frame we record reflects requested GT mode.
                     control_success = self.bridge.set_control_command(
                         control_command_dict['steering'],
                         control_command_dict['throttle'],
@@ -966,6 +1218,84 @@ class GroundTruthFollower:
                     
                     if not control_success:
                         logger.warning("Failed to send control command to Unity. Connection may be lost.")
+
+                    # Process frame through AV stack to run perception and record data
+                    # This computes perception output (lane detection) and records everything
+                    # We override the control command with ground truth steering to follow GT path
+                    # The recorded perception output can be compared to GT later
+                    if self.fast_record:
+                        record_vehicle_state = vehicle_state
+                        if self.record_state_lag_frames > 0 and len(self._vehicle_state_history) > self.record_state_lag_frames:
+                            record_vehicle_state = self._vehicle_state_history[
+                                -(self.record_state_lag_frames + 1)
+                            ]
+                        speed_limit = record_vehicle_state.get(
+                            "speedLimit",
+                            record_vehicle_state.get("speed_limit", 0.0),
+                        )
+                        self.av_stack._record_frame(
+                            image=image,
+                            timestamp=timestamp,
+                            vehicle_state_dict=record_vehicle_state,
+                            perception_output=PerceptionOutput(
+                                timestamp=timestamp,
+                                detection_method="gt_fast_record",
+                            ),
+                            trajectory=None,
+                            control_command=control_command_dict,
+                            speed_limit=float(speed_limit) if speed_limit is not None else 0.0,
+                            camera_frame_id=camera_frame_id,
+                            topdown_frame_data=topdown_frame_data,
+                        )
+                    else:
+                        # Process frame normally (perception, trajectory, recording)
+                        # This will compute control but we'll override it
+                        self.av_stack._process_frame(
+                            image,
+                            timestamp,
+                            vehicle_state,
+                            camera_frame_id=camera_frame_id,
+                            topdown_frame_data=topdown_frame_data,
+                        )
+                    # Keep AVStack frame counter in sync to avoid repeated "Frame 0" logs.
+                    self.av_stack.frame_count += 1
+                    
+                    if self.strict_gt_feedback and (frame_count % strict_feedback_poll_every_n_frames == 0):
+                        feedback = self.bridge.get_latest_unity_feedback()
+                        gt_mode_active = False
+                        gt_data_available = False
+                        gt_reporter_enabled = False
+                        car_mode = "unknown"
+                        if not feedback:
+                            self._strict_missing_feedback_streak += 1
+                        else:
+                            self._strict_missing_feedback_streak = 0
+                            gt_mode_active = bool(feedback.get("ground_truth_mode_active", False))
+                            gt_data_available = bool(feedback.get("ground_truth_data_available", False))
+                            gt_reporter_enabled = bool(feedback.get("ground_truth_reporter_enabled", False))
+                            car_mode = str(feedback.get("car_controller_mode", "unknown"))
+                            # Give Unity a brief warmup window to latch GT mode.
+                            if frame_count > 30:
+                                if (not gt_mode_active) or (not gt_data_available) or (not gt_reporter_enabled) or (car_mode != "ground_truth"):
+                                    self._strict_invalid_feedback_streak += 1
+                                else:
+                                    self._strict_invalid_feedback_streak = 0
+                            else:
+                                self._strict_invalid_feedback_streak = 0
+                        if self._strict_missing_feedback_streak > strict_missing_feedback_limit:
+                            raise RuntimeError(
+                                "Strict GT feedback integrity failure: missing Unity feedback "
+                                f"for >{strict_missing_feedback_limit} polls"
+                            )
+                        if self._strict_invalid_feedback_streak > strict_invalid_feedback_limit:
+                            raise RuntimeError(
+                                "Strict GT feedback integrity failure: "
+                                f"ground_truth_mode_active={gt_mode_active}, "
+                                f"ground_truth_data_available={gt_data_available}, "
+                                f"ground_truth_reporter_enabled={gt_reporter_enabled}, "
+                                f"car_controller_mode={car_mode}, "
+                                f"invalid_streak={self._strict_invalid_feedback_streak}"
+                            )
                     
                     # Clear override
                     self.av_stack._gt_control_override = None
@@ -978,6 +1308,9 @@ class GroundTruthFollower:
                     error_str = str(e).lower()
                     if any(keyword in error_str for keyword in ["recorder", "h5", "hdf5", "file", "disk", "memory"]):
                         logger.error("Critical error detected (recording/file system). Stopping.")
+                        break
+                    if "strict gt feedback integrity failure" in error_str:
+                        logger.error("Critical strict GT integrity failure. Stopping.")
                         break
                     # For other errors, continue but log
                     logger.warning(f"Continuing after error (frame {frame_count})...")
@@ -1009,8 +1342,16 @@ class GroundTruthFollower:
                     logger.info(f"Frame {frame_count}, elapsed: {elapsed:.1f}s, "
                               f"speed: {current_speed:.2f} m/s, steering: {steering:.3f}")
                 
-                # Sleep to maintain ~30 fps
-                time.sleep(1.0 / 30.0)
+                # In fast-record GT mode, poll aggressively for the next frame so we do not
+                # miss intermediate camera frames due phase drift with a fixed 30Hz sleep.
+                if self.fast_record:
+                    time.sleep(0.001)
+                else:
+                    # Pace loop to ~30Hz without adding extra delay on slow iterations.
+                    elapsed = time.time() - loop_start_time
+                    sleep_remaining = target_loop_interval - elapsed
+                    if sleep_remaining > 0:
+                        time.sleep(sleep_remaining)
         
         except KeyboardInterrupt:
             logger.info("Test interrupted by user")
@@ -1064,8 +1405,18 @@ def main():
                        help="Unity bridge URL (default: http://localhost:8000)")
     parser.add_argument("--auto-play", action="store_true",
                        help="Automatically start Unity play mode (requires Unity Editor to be open)")
-    parser.add_argument("--verbose", action="store_true",
-                       help="Enable verbose logging for debugging")
+    parser.add_argument(
+        "--log-level",
+        type=str,
+        choices=["error", "info", "debug"],
+        default="error",
+        help="Runtime log level (default: error). Use info/debug for diagnosis runs.",
+    )
+    parser.add_argument(
+        "--verbose",
+        action="store_true",
+        help="Compatibility alias for --log-level info",
+    )
     parser.add_argument("--random-start", action="store_true",
                        help="Randomize car start position on the oval")
     parser.add_argument("--random-seed", type=int, default=None,
@@ -1079,6 +1430,34 @@ def main():
                        help="Lane width below this is treated as a single lane (default: 5.0m)")
     parser.add_argument("--lateral-correction-gain", type=float, default=None,
                        help="Optional lateral correction gain override")
+    parser.add_argument(
+        "--strict-gt-pose",
+        action="store_true",
+        help="Enable strict GT pose mode (send zero steering/throttle/brake; rely on Unity GT reference path).",
+    )
+    parser.add_argument(
+        "--strict-gt-feedback",
+        action="store_true",
+        help="Fail run if Unity feedback is missing or GT mode/data flags are not continuously valid.",
+    )
+    parser.add_argument(
+        "--fast-record",
+        action="store_true",
+        help="Fast GT recording path: skip full perception/trajectory compute and record camera+vehicle+GT control.",
+    )
+    parser.add_argument(
+        "--record-state-lag-frames",
+        type=int,
+        default=0,
+        help="For fast-record mode, record vehicle state from N frames earlier to test camera/state phase alignment.",
+    )
+    parser.add_argument(
+        "--stream-sync-policy",
+        type=str,
+        choices=["aligned", "queued", "latest"],
+        default="aligned",
+        help="Synchronization policy for front/top-down/state streams (default: aligned).",
+    )
     parser.add_argument("--use-cv", action="store_true",
                        help="Force CV-based perception (override default segmentation)")
     parser.add_argument(
@@ -1090,9 +1469,15 @@ def main():
     
     args = parser.parse_args()
     
-    if args.verbose:
-        global logger
-        logger = configure_logging(logging.INFO)
+    selected_level = {
+        "error": logging.ERROR,
+        "info": logging.INFO,
+        "debug": logging.DEBUG,
+    }[args.log_level]
+    if args.verbose and args.log_level == "error":
+        selected_level = logging.INFO
+    global logger
+    logger = configure_logging(selected_level)
 
     try:
         use_segmentation, seg_checkpoint = resolve_segmentation_settings(
@@ -1118,6 +1503,11 @@ def main():
         segmentation_model_path=seg_checkpoint,
         single_lane_width_threshold_m=args.single_lane_width_threshold,
         lateral_correction_gain=args.lateral_correction_gain,
+        strict_gt_pose=args.strict_gt_pose,
+        strict_gt_feedback=args.strict_gt_feedback,
+        fast_record=args.fast_record,
+        record_state_lag_frames=args.record_state_lag_frames,
+        stream_sync_policy=args.stream_sync_policy,
     )
     
     try:

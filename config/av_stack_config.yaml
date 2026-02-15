@@ -25,6 +25,10 @@ control:
     curve_feedforward_curvature_min: 0.001  # Lowered from 0.003 to allow feedforward with current low curvature values
     curve_feedforward_curvature_max: 0.015
     curve_feedforward_curvature_clamp: 0.025
+    curvature_scale_factor: 20.0  # Scale curvature for feedforward (to match GT, ~20x based on analysis)
+    curvature_scale_threshold: 0.0005  # Only scale when curvature > this (avoid noise on straights)
+    curvature_stale_hold_seconds: 0.30  # Hold last valid curvature briefly when perception is stale
+    curvature_stale_hold_min_abs: 0.0005  # Only hold when previous curvature is meaningfully non-zero
     curvature_smoothing_alpha: 0.7
     curvature_transition_threshold: 0.01
     curvature_transition_alpha: 0.3
@@ -39,10 +43,15 @@ control:
     steering_rate_curvature_min: 0.003
     steering_rate_curvature_max: 0.015
     steering_rate_scale_min: 0.55
+    curve_rate_floor_moderate_error: 0.20
+    curve_rate_floor_large_error: 0.24
     straight_sign_flip_error_threshold: 0.03
     straight_sign_flip_rate: 0.5
     straight_sign_flip_frames: 6
     steering_jerk_limit: 0.12
+    steering_jerk_curve_scale_max: 1.0
+    steering_jerk_curve_min: 0.003
+    steering_jerk_curve_max: 0.015
     speed_gain_min_speed: 4.0
     speed_gain_max_speed: 10.0
     speed_gain_min: 1.0
@@ -132,6 +141,7 @@ control:
     launch_throttle_rearm_hysteresis: 0.5
     launch_throttle_stop_hold_seconds: 0.5
 trajectory:
+  trajectory_source: planner  # planner|oracle (oracle is diagnostics/baseline mode)
   lookahead_distance: 20.0
   point_spacing: 1.0
   target_speed: 12.0
@@ -188,7 +198,7 @@ trajectory:
   curve_speed_preview_enabled: true
   curve_speed_preview_lookahead_scale: 1.6
   curve_speed_preview_distance: 10.0
-  curve_speed_preview_decel: 1.5
+  curve_speed_preview_decel: 1.8
   curve_speed_preview_min_curvature: 0.002
   steering_speed_guard_enabled: true
   steering_speed_guard_threshold: 0.55
@@ -262,6 +272,8 @@ safety:
   max_lateral_error: 2.0
   recovery_lateral_error: 1.0
   emergency_stop_error: 4.0
+  emergency_stop_release_speed: 0.2
+  emergency_stop_end_run_after_seconds: 3.0
   lane_width: 7.0
   car_width: 1.9
   allowed_outside_lane: 1.0
@@ -271,6 +283,7 @@ logging:
   log_reference_point: true
 perception:
   record_segmentation_mask: false
+  segmentation_fit_min_row_ratio: 0.45
   segmentation_fit_max_row_ratio: 0.75
   segmentation_ransac_enabled: true  # Re-enabled - RANSAC was helping, not causing the issue
   segmentation_ransac_residual_px: 10.0  # Tightened from 15.0 to catch outliers earlier (18.8px and 16.7px residuals were causing issues)

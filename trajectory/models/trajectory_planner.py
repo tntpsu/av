@@ -4,7 +4,7 @@ Takes lane lines from perception and generates desired trajectory.
 """
 
 import numpy as np
-from typing import List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 from dataclasses import dataclass
 import logging
 
@@ -123,6 +123,47 @@ class RuleBasedTrajectoryPlanner:
         # For vertical, assume similar FOV
         height_at_lookahead = width_at_lookahead * (image_height / image_width)
         self.pixel_to_meter_y = height_at_lookahead / image_height  # meters per pixel vertically
+        self.last_generation_diagnostics: Dict[str, float] = self._empty_generation_diagnostics()
+
+    def _empty_generation_diagnostics(self) -> Dict[str, float]:
+        """Default per-frame trajectory generation diagnostics (instrumentation-only)."""
+        return {
+            "diag_available": 0.0,
+            "diag_generated_by_fallback": 0.0,
+            "diag_points_generated": 0.0,
+            "diag_x_clip_count": 0.0,
+            "diag_pre_y0": np.nan,
+            "diag_pre_y1": np.nan,
+            "diag_pre_y2": np.nan,
+            "diag_post_y0": np.nan,
+            "diag_post_y1": np.nan,
+            "diag_post_y2": np.nan,
+            "diag_used_provided_distance0": np.nan,
+            "diag_used_provided_distance1": np.nan,
+            "diag_used_provided_distance2": np.nan,
+            "diag_post_minus_pre_y0": np.nan,
+            "diag_post_minus_pre_y1": np.nan,
+            "diag_post_minus_pre_y2": np.nan,
+            "diag_preclip_x0": np.nan,
+            "diag_preclip_x1": np.nan,
+            "diag_preclip_x2": np.nan,
+            "diag_postclip_x0": np.nan,
+            "diag_postclip_x1": np.nan,
+            "diag_postclip_x2": np.nan,
+            "diag_first_segment_y0_gt_y1_pre": np.nan,
+            "diag_first_segment_y0_gt_y1_post": np.nan,
+            "diag_inversion_introduced_after_conversion": np.nan,
+        }
+
+    @staticmethod
+    def _diag_value_at(values: List[float], idx: int) -> float:
+        if idx < len(values):
+            return float(values[idx])
+        return np.nan
+
+    def get_last_generation_diagnostics(self) -> Dict[str, float]:
+        """Get most recent planner generation diagnostics."""
+        return dict(self.last_generation_diagnostics)
     
     def plan(self, lane_coeffs: List[Optional[np.ndarray]], 
              vehicle_state: Optional[dict] = None) -> Trajectory:
@@ -136,6 +177,9 @@ class RuleBasedTrajectoryPlanner:
         Returns:
             Planned trajectory
         """
+        # Reset diagnostics per planning step (avoid stale values on fallback paths).
+        self.last_generation_diagnostics = self._empty_generation_diagnostics()
+
         # FIXED: Apply temporal filtering to lane coefficients to reduce noise
         lane_coeffs = self._smooth_lane_coeffs(lane_coeffs)
         
@@ -736,7 +780,8 @@ class RuleBasedTrajectoryPlanner:
     
     def _convert_image_to_vehicle_coords(self, x_pixels: float, y_pixels: float, 
                                          lookahead_distance: float = 15.0,
-                                         horizontal_fov_override: Optional[float] = None) -> Tuple[float, float]:
+                                         horizontal_fov_override: Optional[float] = None,
+                                         debug_trace: Optional[Dict[str, Any]] = None) -> Tuple[float, float]:
         """
         Convert image pixel coordinates to vehicle coordinates.
         
@@ -765,7 +810,7 @@ class RuleBasedTrajectoryPlanner:
         # If lookahead_distance is provided and > 0, use it directly
         # Otherwise, fall back to calculating from y_pixels
         using_provided_distance = False
-        if lookahead_distance is not None and lookahead_distance > 0:
+        if lookahead_distance is not None and lookahead_distance >= 0:
             # Use provided lookahead_distance, but apply scaling factor to account for camera pitch
             # When camera looks down, point 8m straight ahead in camera space is actually
             # closer in world space when projected to ground (e.g., 7m instead of 8m)
@@ -824,6 +869,8 @@ class RuleBasedTrajectoryPlanner:
         # FIXED: Apply camera offset correction (for calibration)
         x_vehicle += self.camera_offset_x
         
+        x_vehicle_pre_clip = x_vehicle
+
         # Clamp extreme values to reasonable bounds (±10m lateral)
         # Increased from ±5m to allow for wider roads (7m) and off-center driving
         # When car is at -3.5m (left edge of 7m road), right lane at +3.5m should be visible
@@ -831,6 +878,15 @@ class RuleBasedTrajectoryPlanner:
         # This prevents unrealistic coordinate conversions from extreme pixel values
         # while still allowing proper lane width detection when off-center
         x_vehicle = np.clip(x_vehicle, -10.0, 10.0)
+        was_clipped = abs(float(x_vehicle_pre_clip) - float(x_vehicle)) > 1e-6
+
+        if debug_trace is not None:
+            debug_trace.setdefault("input_y", []).append(float(lookahead_distance))
+            debug_trace.setdefault("post_y", []).append(float(actual_distance))
+            debug_trace.setdefault("used_provided_distance", []).append(1.0 if using_provided_distance else 0.0)
+            debug_trace.setdefault("pre_clip_x", []).append(float(x_vehicle_pre_clip))
+            debug_trace.setdefault("post_clip_x", []).append(float(x_vehicle))
+            debug_trace["clip_count"] = int(debug_trace.get("clip_count", 0)) + (1 if was_clipped else 0)
         
         # Use actual_distance for y_vehicle (consistent scaling)
         y_vehicle = actual_distance
@@ -882,6 +938,7 @@ class RuleBasedTrajectoryPlanner:
             List of trajectory points (in VEHICLE coordinates)
         """
         points = []
+        debug_trace: Dict[str, Any] = {"clip_count": 0}
         
         # Generate points along lane in vehicle coordinates
         num_points = int(self.lookahead_distance / self.point_spacing)
@@ -907,7 +964,7 @@ class RuleBasedTrajectoryPlanner:
             
             # Convert to vehicle coordinates (pass y_vehicle for distance-based scaling)
             x_vehicle, y_vehicle_corrected = self._convert_image_to_vehicle_coords(
-                x_image, y_image, lookahead_distance=y_vehicle
+                x_image, y_image, lookahead_distance=y_vehicle, debug_trace=debug_trace
             )
             
             # Compute heading (derivative of polynomial in vehicle coords)
@@ -983,11 +1040,49 @@ class RuleBasedTrajectoryPlanner:
             )
             points.append(point)
         
+        input_y = [float(v) for v in debug_trace.get("input_y", [])]
+        post_y = [float(v) for v in debug_trace.get("post_y", [])]
+        used_provided = [float(v) for v in debug_trace.get("used_provided_distance", [])]
+        post_minus_pre = [float(py - iy) for iy, py in zip(input_y, post_y)]
+        pre_x = [float(v) for v in debug_trace.get("pre_clip_x", [])]
+        post_x = [float(v) for v in debug_trace.get("post_clip_x", [])]
+        pre_inv = 1.0 if len(input_y) > 1 and input_y[0] > input_y[1] else 0.0
+        post_inv = 1.0 if len(post_y) > 1 and post_y[0] > post_y[1] else 0.0
+        introduced = 1.0 if (pre_inv < 0.5 and post_inv > 0.5) else 0.0
+
+        self.last_generation_diagnostics = {
+            "diag_available": 1.0,
+            "diag_generated_by_fallback": 0.0,
+            "diag_points_generated": float(len(points)),
+            "diag_x_clip_count": float(debug_trace.get("clip_count", 0)),
+            "diag_pre_y0": self._diag_value_at(input_y, 0),
+            "diag_pre_y1": self._diag_value_at(input_y, 1),
+            "diag_pre_y2": self._diag_value_at(input_y, 2),
+            "diag_post_y0": self._diag_value_at(post_y, 0),
+            "diag_post_y1": self._diag_value_at(post_y, 1),
+            "diag_post_y2": self._diag_value_at(post_y, 2),
+            "diag_used_provided_distance0": self._diag_value_at(used_provided, 0),
+            "diag_used_provided_distance1": self._diag_value_at(used_provided, 1),
+            "diag_used_provided_distance2": self._diag_value_at(used_provided, 2),
+            "diag_post_minus_pre_y0": self._diag_value_at(post_minus_pre, 0),
+            "diag_post_minus_pre_y1": self._diag_value_at(post_minus_pre, 1),
+            "diag_post_minus_pre_y2": self._diag_value_at(post_minus_pre, 2),
+            "diag_preclip_x0": self._diag_value_at(pre_x, 0),
+            "diag_preclip_x1": self._diag_value_at(pre_x, 1),
+            "diag_preclip_x2": self._diag_value_at(pre_x, 2),
+            "diag_postclip_x0": self._diag_value_at(post_x, 0),
+            "diag_postclip_x1": self._diag_value_at(post_x, 1),
+            "diag_postclip_x2": self._diag_value_at(post_x, 2),
+            "diag_first_segment_y0_gt_y1_pre": pre_inv if len(input_y) > 1 else np.nan,
+            "diag_first_segment_y0_gt_y1_post": post_inv if len(post_y) > 1 else np.nan,
+            "diag_inversion_introduced_after_conversion": introduced if len(input_y) > 1 and len(post_y) > 1 else np.nan,
+        }
+
         return points
     
     def _compute_curvature(self, lane_coeffs: np.ndarray, y: float) -> float:
         """
-        Compute curvature at given y position.
+        Compute curvature at given y position (image-space, kept for backward compatibility).
         
         Args:
             lane_coeffs: Lane polynomial coefficients
@@ -1013,6 +1108,81 @@ class RuleBasedTrajectoryPlanner:
             return 0.0
         
         curvature = abs(d2x_dy2) / denominator
+        return curvature
+    
+    def _compute_curvature_from_points(self, points: List[TrajectoryPoint], point_idx: int) -> float:
+        """
+        Compute curvature from vehicle-space trajectory points.
+        This is more accurate than image-space calculation.
+        
+        Args:
+            points: List of trajectory points in vehicle coordinates
+            point_idx: Index of point to compute curvature for
+        
+        Returns:
+            Curvature (1/m) in vehicle space
+        """
+        if len(points) < 2 or point_idx < 0 or point_idx >= len(points):
+            return 0.0
+        
+        # For the first point, use forward difference
+        if point_idx == 0:
+            if len(points) < 2:
+                return 0.0
+            p0 = points[0]
+            p1 = points[1]
+            ds = np.sqrt((p1.x - p0.x)**2 + (p1.y - p0.y)**2)
+            if ds < 1e-6:
+                return 0.0
+            d_theta = p1.heading - p0.heading
+            # Normalize heading difference to [-pi, pi]
+            while d_theta > np.pi:
+                d_theta -= 2 * np.pi
+            while d_theta < -np.pi:
+                d_theta += 2 * np.pi
+            curvature = abs(d_theta / ds)
+            return curvature
+        
+        # For the last point, use backward difference
+        if point_idx == len(points) - 1:
+            p0 = points[point_idx - 1]
+            p1 = points[point_idx]
+            ds = np.sqrt((p1.x - p0.x)**2 + (p1.y - p0.y)**2)
+            if ds < 1e-6:
+                return 0.0
+            d_theta = p1.heading - p0.heading
+            # Normalize heading difference to [-pi, pi]
+            while d_theta > np.pi:
+                d_theta -= 2 * np.pi
+            while d_theta < -np.pi:
+                d_theta += 2 * np.pi
+            curvature = abs(d_theta / ds)
+            return curvature
+        
+        # For middle points, use central difference (more accurate)
+        p_prev = points[point_idx - 1]
+        p_curr = points[point_idx]
+        p_next = points[point_idx + 1]
+        
+        # Compute arc lengths
+        ds1 = np.sqrt((p_curr.x - p_prev.x)**2 + (p_curr.y - p_prev.y)**2)
+        ds2 = np.sqrt((p_next.x - p_curr.x)**2 + (p_next.y - p_curr.y)**2)
+        ds_total = ds1 + ds2
+        
+        if ds_total < 1e-6:
+            return 0.0
+        
+        # Compute heading change
+        d_theta = p_next.heading - p_prev.heading
+        # Normalize heading difference to [-pi, pi]
+        while d_theta > np.pi:
+            d_theta -= 2 * np.pi
+        while d_theta < -np.pi:
+            d_theta += 2 * np.pi
+        
+        # Curvature = d(heading)/d(arc_length)
+        curvature = abs(d_theta / ds_total)
+        
         return curvature
     
     def compute_reference_point_direct(self, left_coeffs: np.ndarray, 
@@ -1151,6 +1321,13 @@ class RuleBasedTrajectoryPlanner:
             )
             points.append(point)
         
+        self.last_generation_diagnostics = {
+            **self._empty_generation_diagnostics(),
+            "diag_available": 1.0,
+            "diag_generated_by_fallback": 1.0,
+            "diag_points_generated": float(len(points)),
+            "diag_x_clip_count": 0.0,
+        }
         return Trajectory(points=points, length=self.lookahead_distance)
 
 

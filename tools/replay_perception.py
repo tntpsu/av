@@ -94,6 +94,20 @@ def replay_perception(
             image = f["camera/images"][i]
             timestamp = float(f["camera/timestamps"][i])
             frame_id = int(f["camera/frame_ids"][i])
+            topdown_frame_data = None
+            if "camera/topdown_images" in f and i < len(f["camera/topdown_images"]):
+                topdown_image = f["camera/topdown_images"][i]
+                topdown_timestamp = (
+                    float(f["camera/topdown_timestamps"][i])
+                    if "camera/topdown_timestamps" in f and i < len(f["camera/topdown_timestamps"])
+                    else timestamp
+                )
+                topdown_frame_id = (
+                    int(f["camera/topdown_frame_ids"][i])
+                    if "camera/topdown_frame_ids" in f and i < len(f["camera/topdown_frame_ids"])
+                    else frame_id
+                )
+                topdown_frame_data = (topdown_image, topdown_timestamp, topdown_frame_id)
             
             # Load vehicle state (with all required fields)
             vehicle_state_dict = {
@@ -133,10 +147,24 @@ def replay_perception(
                 vehicle_state_dict['groundTruthPathCurvature'] = float(f["ground_truth/path_curvature"][i])
             if "ground_truth/desired_heading" in f:
                 vehicle_state_dict['groundTruthDesiredHeading'] = float(f["ground_truth/desired_heading"][i])
+            if "vehicle/car_heading_deg" in f:
+                vehicle_state_dict['carHeadingDeg'] = float(f["vehicle/car_heading_deg"][i])
+            if "vehicle/road_heading_deg" in f:
+                vehicle_state_dict['roadHeadingDeg'] = float(f["vehicle/road_heading_deg"][i])
+            if "vehicle/heading_delta_deg" in f:
+                vehicle_state_dict['headingDeltaDeg'] = float(f["vehicle/heading_delta_deg"][i])
             
             # Add camera calibration data if available
             if "vehicle/camera_8m_screen_y" in f:
                 vehicle_state_dict['camera8mScreenY'] = float(f["vehicle/camera_8m_screen_y"][i])
+            if "vehicle/camera_lookahead_screen_y" in f:
+                vehicle_state_dict['cameraLookaheadScreenY'] = float(
+                    f["vehicle/camera_lookahead_screen_y"][i]
+                )
+            if "vehicle/ground_truth_lookahead_distance" in f:
+                vehicle_state_dict['groundTruthLookaheadDistance'] = float(
+                    f["vehicle/ground_truth_lookahead_distance"][i]
+                )
             if "vehicle/camera_field_of_view" in f:
                 vehicle_state_dict['cameraFieldOfView'] = float(f["vehicle/camera_field_of_view"][i])
             if "vehicle/camera_horizontal_fov" in f:
@@ -144,38 +172,56 @@ def replay_perception(
             
             # Add camera position and forward direction if available
             if "vehicle/camera_pos_x" in f:
-                vehicle_state_dict['cameraPosition'] = {
-                    'x': float(f["vehicle/camera_pos_x"][i]),
-                    'y': float(f["vehicle/camera_pos_y"][i]) if "vehicle/camera_pos_y" in f else 0.0,
-                    'z': float(f["vehicle/camera_pos_z"][i]) if "vehicle/camera_pos_z" in f else 0.0
-                }
+                cam_pos_x = float(f["vehicle/camera_pos_x"][i])
+                cam_pos_y = float(f["vehicle/camera_pos_y"][i]) if "vehicle/camera_pos_y" in f else 0.0
+                cam_pos_z = float(f["vehicle/camera_pos_z"][i]) if "vehicle/camera_pos_z" in f else 0.0
+                vehicle_state_dict['cameraPosition'] = {'x': cam_pos_x, 'y': cam_pos_y, 'z': cam_pos_z}
+                # AV stack recorder expects flat camelCase keys.
+                vehicle_state_dict['cameraPosX'] = cam_pos_x
+                vehicle_state_dict['cameraPosY'] = cam_pos_y
+                vehicle_state_dict['cameraPosZ'] = cam_pos_z
             if "vehicle/camera_forward_x" in f:
+                cam_forward_x = float(f["vehicle/camera_forward_x"][i])
+                cam_forward_y = float(f["vehicle/camera_forward_y"][i]) if "vehicle/camera_forward_y" in f else 0.0
+                cam_forward_z = float(f["vehicle/camera_forward_z"][i]) if "vehicle/camera_forward_z" in f else 0.0
                 vehicle_state_dict['cameraForward'] = {
-                    'x': float(f["vehicle/camera_forward_x"][i]),
-                    'y': float(f["vehicle/camera_forward_y"][i]) if "vehicle/camera_forward_y" in f else 0.0,
-                    'z': float(f["vehicle/camera_forward_z"][i]) if "vehicle/camera_forward_z" in f else 0.0
+                    'x': cam_forward_x,
+                    'y': cam_forward_y,
+                    'z': cam_forward_z
                 }
+                vehicle_state_dict['cameraForwardX'] = cam_forward_x
+                vehicle_state_dict['cameraForwardY'] = cam_forward_y
+                vehicle_state_dict['cameraForwardZ'] = cam_forward_z
             
             # Process frame with FIXED code
             # This will run perception and trajectory planning with the fixed coordinate conversion
+            original_send = None
+            original_get_latest_camera_frame = None
             try:
                 # Mock the bridge to prevent it from trying to send commands
-                original_send = None
                 if hasattr(av_stack.bridge, 'set_control_command'):
                     original_send = av_stack.bridge.set_control_command
                     av_stack.bridge.set_control_command = lambda *args, **kwargs: True
+                if hasattr(av_stack.bridge, 'get_latest_camera_frame'):
+                    original_get_latest_camera_frame = av_stack.bridge.get_latest_camera_frame
+                    av_stack.bridge.get_latest_camera_frame = (
+                        lambda camera_id="front_center", td=topdown_frame_data:
+                            td if camera_id == "top_down" else None
+                    )
                 
                 av_stack._process_frame(image, timestamp, vehicle_state_dict)
                 
-                # Restore original method
-                if original_send:
-                    av_stack.bridge.set_control_command = original_send
-                    
             except Exception as e:
                 print(f"Error processing frame {i}: {e}")
                 import traceback
                 traceback.print_exc()
                 continue
+            finally:
+                # Always restore patched bridge methods, even on frame errors.
+                if original_send:
+                    av_stack.bridge.set_control_command = original_send
+                if original_get_latest_camera_frame:
+                    av_stack.bridge.get_latest_camera_frame = original_get_latest_camera_frame
             
             if i % 30 == 0:
                 print(f"Processed {i}/{num_frames} frames...")

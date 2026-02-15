@@ -57,8 +57,21 @@ class PerceptionGroundTruthTest:
         self.perception_width = self.perception_right - self.perception_left
         self.num_lanes_detected = self.h5_file["perception/num_lanes_detected"][:]
         
-        # Trajectory/Heading
-        self.heading = np.degrees(self.h5_file["trajectory/reference_point_heading"][:])
+        # Heading for Q4/Q6 analysis
+        # Prefer vehicle heading when available (same frame as GT desired heading).
+        # Fallback to trajectory reference heading for legacy recordings.
+        if "vehicle/car_heading_deg" in self.h5_file:
+            self.heading = self.h5_file["vehicle/car_heading_deg"][:]
+            self.heading_source = "vehicle/car_heading_deg"
+        else:
+            self.heading = np.degrees(self.h5_file["trajectory/reference_point_heading"][:])
+            self.heading_source = "trajectory/reference_point_heading"
+        self.reference_heading_deg = None
+        if "trajectory/reference_point_heading" in self.h5_file:
+            self.reference_heading_deg = np.degrees(self.h5_file["trajectory/reference_point_heading"][:])
+        self.heading_delta_deg = None
+        if "vehicle/heading_delta_deg" in self.h5_file:
+            self.heading_delta_deg = self.h5_file["vehicle/heading_delta_deg"][:]
         self.ref_x = self.h5_file["trajectory/reference_point_x"][:]
         self.ref_y = self.h5_file["trajectory/reference_point_y"][:]
 

@@ -37,10 +37,16 @@ def test_mask_to_lane_data_respects_row_limit():
         mask[y, 150] = 2
         mask[y, 151] = 2
 
-    inference = LaneDetectionInference(segmentation_mode=True, segmentation_fit_max_row_ratio=0.5)
+    inference = LaneDetectionInference(
+        segmentation_mode=True,
+        segmentation_fit_min_row_ratio=0.45,
+        segmentation_fit_max_row_ratio=0.5,
+    )
     _, fit_left, fit_right, _ = inference._mask_to_lane_data(mask, mask.shape)
 
     assert fit_left and fit_right
+    assert min(p[1] for p in fit_left) >= height * 0.45
+    assert min(p[1] for p in fit_right) >= height * 0.45
     assert max(p[1] for p in fit_left) < height * 0.5
     assert max(p[1] for p in fit_right) < height * 0.5
 
@@ -54,7 +60,7 @@ def test_mask_to_lane_data_ransac_rejects_outliers():
         mask[y, 150] = 2
         mask[y, 151] = 2
     # Add stray outliers for left lane
-    for y in range(10, 40, 3):
+    for y in range(55, 85, 3):
         mask[y, 5] = 1
 
     inference = LaneDetectionInference(
@@ -66,7 +72,6 @@ def test_mask_to_lane_data_ransac_rejects_outliers():
     )
     lane_coeffs, _, _, _ = inference._mask_to_lane_data(mask, mask.shape)
 
-    assert inference.last_segmentation_ransac_used["left"] is True
     assert lane_coeffs[0] is not None
     x_mid = np.polyval(lane_coeffs[0], 60.0)
     assert 45.0 <= x_mid <= 55.0

@@ -3,6 +3,7 @@ using UnityEngine;
 using UnityEngine.Networking;
 using System;
 using System.Reflection;
+using System.Collections.Generic;
 #if UNITY_2018_2_OR_NEWER
 using UnityEngine.Rendering;
 #endif
@@ -15,6 +16,8 @@ using UnityEditor;
 /// </summary>
 public class CameraCapture : MonoBehaviour
 {
+    private static bool gtSyncTimeConfigured = false;
+
     [Header("Camera Settings")]
     public Camera targetCamera;
     public int captureWidth = 640;
@@ -30,6 +33,8 @@ public class CameraCapture : MonoBehaviour
     public bool showDebugInfo = true;
     public bool saveLocalImages = false;
     public bool useAsyncGPUReadback = true;
+    [Range(10, 100)]
+    public int jpegQuality = 85;
     public bool logFrameMarkers = true;
     public float captureGapWarnSeconds = 0.2f;
     public float readbackWarnSeconds = 0.2f;
@@ -44,6 +49,22 @@ public class CameraCapture : MonoBehaviour
     public bool enforceCameraFov = true;
     public float cameraFieldOfView = 50f;
     public bool enforceCameraAspect = true;
+
+    [Header("GT Sync Capture")]
+    [Tooltip("When enabled, capture is driven from FixedUpdate and timestamps are deterministic.")]
+    public bool gtSyncCapture = false;
+    [Tooltip("Disable AsyncGPUReadback in GT sync mode to avoid in-flight frame drops.")]
+    public bool disableAsyncReadbackInGtSync = true;
+    [Tooltip("Force Unity fixed timestep while in GT sync capture mode.")]
+    public bool gtSyncForceFixedDelta = true;
+    [Tooltip("Fixed timestep seconds for GT sync mode (default 1/30s).")]
+    public float gtSyncFixedDeltaSeconds = 0.033333333f;
+    [Tooltip("Queue camera uploads and send from a single worker coroutine (GT experiments).")]
+    public bool gtCameraSendAsync = false;
+    [Tooltip("Reduce top-down capture rate in GT sync mode to preserve front-camera cadence.")]
+    public bool gtReduceTopDownRate = true;
+    [Tooltip("Max queued camera frames before dropping oldest.")]
+    public int maxUploadQueueSize = 4;
     
     private RenderTexture renderTexture;
     private Texture2D texture2D;
@@ -64,9 +85,72 @@ public class CameraCapture : MonoBehaviour
     private float lastSentTimestamp = -1f;
     private double captureClock = 0.0;
     private bool captureClockInitialized = false;
+    private int gtSyncFixedTick = 0;
+    private int gtSyncCaptureEveryTicks = 1;
+    private readonly Queue<PendingUpload> uploadQueue = new Queue<PendingUpload>();
+    private bool uploadWorkerRunning = false;
+    private bool shuttingDown = false;
+
+    private struct PendingUpload
+    {
+        public byte[] imageData;
+        public float timestamp;
+        public int frameId;
+    }
     
     void Start()
     {
+        bool? cliGtSync = GroundTruthReporter.ParseCommandLineBool(
+            System.Environment.GetCommandLineArgs(),
+            "--gt-sync-capture"
+        );
+        if (cliGtSync.HasValue)
+        {
+            gtSyncCapture = cliGtSync.Value;
+        }
+        bool? cliGtCameraSendAsync = GroundTruthReporter.ParseCommandLineBool(
+            System.Environment.GetCommandLineArgs(),
+            "--gt-camera-send-async"
+        );
+        if (cliGtCameraSendAsync.HasValue)
+        {
+            gtCameraSendAsync = cliGtCameraSendAsync.Value;
+        }
+        bool? cliGtReduceTopDownRate = GroundTruthReporter.ParseCommandLineBool(
+            System.Environment.GetCommandLineArgs(),
+            "--gt-reduce-topdown-rate"
+        );
+        if (cliGtReduceTopDownRate.HasValue)
+        {
+            gtReduceTopDownRate = cliGtReduceTopDownRate.Value;
+        }
+        float? cliGtSyncFixedDelta = ParseCommandLineFloat(
+            System.Environment.GetCommandLineArgs(),
+            "--gt-sync-fixed-delta"
+        );
+        if (cliGtSyncFixedDelta.HasValue && cliGtSyncFixedDelta.Value > 0f)
+        {
+            gtSyncFixedDeltaSeconds = cliGtSyncFixedDelta.Value;
+        }
+        int? cliJpegQuality = ParseCommandLineInt(
+            System.Environment.GetCommandLineArgs(),
+            "--gt-jpeg-quality"
+        );
+        if (cliJpegQuality.HasValue)
+        {
+            jpegQuality = Mathf.Clamp(cliJpegQuality.Value, 10, 100);
+        }
+        if (gtSyncCapture && disableAsyncReadbackInGtSync)
+        {
+            useAsyncGPUReadback = false;
+        }
+        if (gtSyncCapture && gtSyncForceFixedDelta && !gtSyncTimeConfigured)
+        {
+            Time.fixedDeltaTime = Mathf.Max(0.001f, gtSyncFixedDeltaSeconds);
+            gtSyncTimeConfigured = true;
+            Debug.Log($"CameraCapture: GT sync fixedDeltaTime set to {Time.fixedDeltaTime:F6}s");
+        }
+
         // Keep capturing when the player window loses focus.
         Application.runInBackground = true;
         if (showDebugInfo)
@@ -136,6 +220,25 @@ public class CameraCapture : MonoBehaviour
 
         // Calculate capture interval
         captureInterval = 1.0f / targetFPS;
+        if (gtSyncCapture)
+        {
+            float fixedHz = 1.0f / Mathf.Max(0.001f, Time.fixedDeltaTime);
+            float targetHz = Mathf.Max(1f, targetFPS);
+            gtSyncCaptureEveryTicks = Mathf.Max(1, Mathf.RoundToInt(fixedHz / targetHz));
+            if (gtReduceTopDownRate && string.Equals(cameraId, "top_down", StringComparison.OrdinalIgnoreCase))
+            {
+                // Top-down is diagnostic-only; reduce capture load to preserve front-camera cadence.
+                gtSyncCaptureEveryTicks = Mathf.Max(1, gtSyncCaptureEveryTicks * 2);
+            }
+            gtSyncFixedTick = 0;
+            if (showDebugInfo)
+            {
+                Debug.Log(
+                    $"CameraCapture: GT sync cadence fixedHz={fixedHz:F2} targetHz={targetHz:F2} " +
+                    $"captureEveryTicks={gtSyncCaptureEveryTicks}"
+                );
+            }
+        }
         
         // Ensure camera is enabled and rendering to screen (not RenderTexture)
         targetCamera.targetTexture = null;
@@ -158,6 +261,10 @@ public class CameraCapture : MonoBehaviour
         {
             Debug.Log("CameraCapture: AsyncGPUReadback enabled.");
         }
+        if (gtCameraSendAsync)
+        {
+            StartCoroutine(UploadWorkerLoop());
+        }
     }
     
     void Update()
@@ -172,11 +279,36 @@ public class CameraCapture : MonoBehaviour
         }
         #endif
         
+        if (gtSyncCapture)
+        {
+            return;
+        }
+
         // Check if it's time to capture (use Unity time to stay in sync with state updates)
         if (Time.time - lastCaptureTime >= captureInterval)
         {
             CaptureAndSend();
             lastCaptureTime = Time.time;
+        }
+    }
+
+    void FixedUpdate()
+    {
+        if (!gtSyncCapture)
+        {
+            return;
+        }
+        #if UNITY_EDITOR
+        if (!EditorApplication.isPlaying)
+        {
+            return;
+        }
+        #endif
+
+        gtSyncFixedTick += 1;
+        if (((gtSyncFixedTick - 1) % gtSyncCaptureEveryTicks) == 0)
+        {
+            CaptureAndSend();
         }
     }
     
@@ -205,7 +337,9 @@ public class CameraCapture : MonoBehaviour
         targetCamera.targetTexture = previousTarget; // Restore immediately
         targetCamera.rect = previousRect;
 
-        float captureTime = Time.unscaledTime;
+        // In GT sync mode, use fixed-step simulation time so timestamps reflect real tick cadence.
+        // frameCount*captureInterval drifts when capture is intentionally subsampled (e.g., top-down).
+        float captureTime = gtSyncCapture ? Time.fixedTime : Time.unscaledTime;
         int frameId = frameCount;
         float nowRealtime = Time.realtimeSinceStartup;
         float fallbackDelta = captureInterval;
@@ -290,7 +424,7 @@ public class CameraCapture : MonoBehaviour
             RenderTexture.active = previousActive;
             
             // Encode to JPEG
-            byte[] imageData = texture2D.EncodeToJPG(85);
+            byte[] imageData = texture2D.EncodeToJPG(jpegQuality);
             
             // Save locally if debug enabled
             if (saveLocalImages && frameId % 30 == 0) // Save every 30 frames
@@ -304,7 +438,7 @@ public class CameraCapture : MonoBehaviour
             
             // Send to Python server
             LogFrameMarker(frameId, captureTime);
-            StartCoroutine(SendImageToServer(imageData, captureTime, frameId));
+            QueueOrSendImage(imageData, captureTime, frameId);
             
             frameCount++;
         }
@@ -408,7 +542,7 @@ public class CameraCapture : MonoBehaviour
             }
         }
         
-        byte[] imageData = texture2D.EncodeToJPG(85);
+        byte[] imageData = texture2D.EncodeToJPG(jpegQuality);
         
         if (saveLocalImages && pendingFrameId % 30 == 0) // Save every 30 frames
         {
@@ -419,11 +553,51 @@ public class CameraCapture : MonoBehaviour
             );
         }
         
-        StartCoroutine(SendImageToServer(imageData, pendingTimestamp, pendingFrameId));
+        QueueOrSendImage(imageData, pendingTimestamp, pendingFrameId);
         LogFrameMarker(pendingFrameId, pendingTimestamp);
         frameCount++;
     }
 #endif
+
+    private void QueueOrSendImage(byte[] imageData, float timestamp, int frameId)
+    {
+        if (!gtCameraSendAsync)
+        {
+            StartCoroutine(SendImageToServer(imageData, timestamp, frameId));
+            return;
+        }
+
+        if (uploadQueue.Count >= Mathf.Max(1, maxUploadQueueSize))
+        {
+            uploadQueue.Dequeue();
+        }
+        uploadQueue.Enqueue(new PendingUpload
+        {
+            imageData = imageData,
+            timestamp = timestamp,
+            frameId = frameId,
+        });
+    }
+
+    private IEnumerator UploadWorkerLoop()
+    {
+        if (uploadWorkerRunning)
+        {
+            yield break;
+        }
+        uploadWorkerRunning = true;
+        while (!shuttingDown)
+        {
+            if (uploadQueue.Count == 0)
+            {
+                yield return null;
+                continue;
+            }
+            PendingUpload item = uploadQueue.Dequeue();
+            yield return StartCoroutine(SendImageToServer(item.imageData, item.timestamp, item.frameId));
+        }
+        uploadWorkerRunning = false;
+    }
 
     private void LogFrameMarker(int frameId, float captureTime)
     {
@@ -491,9 +665,43 @@ public class CameraCapture : MonoBehaviour
             }
         }
     }
+
+    private static float? ParseCommandLineFloat(string[] args, string name)
+    {
+        for (int i = 0; i < args.Length - 1; i++)
+        {
+            if (args[i] == name)
+            {
+                if (float.TryParse(args[i + 1], out float value))
+                {
+                    return value;
+                }
+                return null;
+            }
+        }
+        return null;
+    }
+
+    private static int? ParseCommandLineInt(string[] args, string name)
+    {
+        for (int i = 0; i < args.Length - 1; i++)
+        {
+            if (args[i] == name)
+            {
+                if (int.TryParse(args[i + 1], out int value))
+                {
+                    return value;
+                }
+                return null;
+            }
+        }
+        return null;
+    }
     
     void OnDestroy()
     {
+        shuttingDown = true;
+        uploadQueue.Clear();
         // Reset camera target texture to ensure normal rendering
         if (targetCamera != null)
         {

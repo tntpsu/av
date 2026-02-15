@@ -12,7 +12,7 @@ SKIP_UNITY_BUILD_IF_CLEAN=false
 DURATION=20
 SPEED=8.0
 ARC_RADIUS=""
-VERBOSE=false
+LOG_LEVEL="error"
 RANDOM_START=false
 RANDOM_SEED=""
 CONSTANT_SPEED=false
@@ -21,7 +21,20 @@ USE_CV=false
 SEG_CHECKPOINT="$SCRIPT_DIR/data/segmentation_dataset/checkpoints/segnet_best.pt"
 SINGLE_LANE_WIDTH_THRESHOLD="5.0"
 LATERAL_CORRECTION_GAIN=""
-GT_CENTERLINE_AS_LEFT_LANE="false"
+GT_CENTERLINE_AS_LEFT_LANE="true"
+STRICT_GT_POSE=false
+STRICT_GT_FEEDBACK=false
+FAST_RECORD=false
+GT_SYNC_CAPTURE=true
+GT_SYNC_FIXED_DELTA="0.033333333"
+GT_DISABLE_TOPDOWN=false
+GT_RECORD_STATE_LAG_FRAMES="0"
+STREAM_SYNC_POLICY="aligned"
+GT_JPEG_QUALITY="85"
+GT_CAMERA_SEND_ASYNC="true"
+GT_REDUCE_TOPDOWN_RATE="true"
+GT_ROTATION_FROM_ROAD_FRAME="false"
+GT_DISABLE_MOVE_ROTATION="false"
 
 TMP_TRACK_PATH=""
 UNITY_PID=""
@@ -35,14 +48,29 @@ print_usage() {
     echo "  --speed MPS                 Ground truth target speed (default: 8.0)"
     echo "  --random-start              Randomize start position"
     echo "  --random-seed SEED          Seed for random start"
-    echo "  --verbose                   Enable verbose ground truth logging"
+    echo "  --log-level LEVEL           Ground-truth logging: error/info/debug (default: error)"
+    echo "  --diagnostic-logging        Shortcut for --log-level info"
+    echo "  --verbose                   Compatibility alias for --log-level info"
     echo "  --constant-speed            Disable GT PID and run constant speed"
     echo "  --target-lane LANE          Target lane center: right/left/center (default: right)"
     echo "  --use-cv                    Force CV-based perception (override default segmentation)"
     echo "  --segmentation-checkpoint P Segmentation checkpoint path"
     echo "  --single-lane-width-threshold M  Treat lane width below this as single lane"
     echo "  --lateral-correction-gain G  Optional lateral correction gain override"
-    echo "  --gt-centerline-as-left-lane BOOL  Use center line as left lane (default: false)"
+    echo "  --gt-centerline-as-left-lane BOOL  Use center line as left lane (default: true)"
+    echo "  --strict-gt-pose            Send zero manual controls; Unity GT reference path owns pose"
+    echo "  --strict-gt-feedback        Fail if Unity GT feedback integrity is not continuously valid"
+    echo "  --fast-record               Skip full stack compute; record GT/control/camera fast path"
+    echo "  --gt-sync-capture BOOL      Enable deterministic GT sensor capture mode (default: true)"
+    echo "  --gt-sync-fixed-delta SEC   Fixed timestep for GT sync mode (default: 0.033333333)"
+    echo "  --gt-disable-topdown BOOL   Disable top-down camera capture for GT runs (default: false)"
+    echo "  --gt-record-state-lag-frames N  Fast-record: use N-frame lagged vehicle state (default: 0)"
+    echo "  --stream-sync-policy MODE  Stream sync policy: aligned/queued/latest (default: aligned)"
+    echo "  --gt-jpeg-quality Q         JPEG quality for Unity camera upload (10-100, default: 85)"
+    echo "  --gt-camera-send-async BOOL Queue camera uploads through single worker (default: true)"
+    echo "  --gt-reduce-topdown-rate BOOL Reduce top-down camera capture cadence (default: true)"
+    echo "  --gt-rotation-from-road-frame BOOL  Use road-frame tangent for GT rotation/velocity direction (default: false)"
+    echo "  --gt-disable-move-rotation BOOL  Skip MoveRotation in GT mode for one-run heading experiment (default: false)"
     echo "  --arc-radius METERS         Override all arc radii and use a temp track"
     echo "  --build-unity-player        Build Unity player before running"
     echo "  --skip-unity-build-if-clean Skip Unity build if project is clean"
@@ -116,8 +144,68 @@ while [[ $# -gt 0 ]]; do
             GT_CENTERLINE_AS_LEFT_LANE="$2"
             shift 2
             ;;
+        --strict-gt-pose)
+            STRICT_GT_POSE=true
+            shift
+            ;;
+        --strict-gt-feedback)
+            STRICT_GT_FEEDBACK=true
+            shift
+            ;;
+        --fast-record)
+            FAST_RECORD=true
+            shift
+            ;;
+        --gt-sync-capture)
+            GT_SYNC_CAPTURE="$2"
+            shift 2
+            ;;
+        --gt-sync-fixed-delta)
+            GT_SYNC_FIXED_DELTA="$2"
+            shift 2
+            ;;
+        --gt-disable-topdown)
+            GT_DISABLE_TOPDOWN="$2"
+            shift 2
+            ;;
+        --gt-record-state-lag-frames)
+            GT_RECORD_STATE_LAG_FRAMES="$2"
+            shift 2
+            ;;
+        --stream-sync-policy)
+            STREAM_SYNC_POLICY="$2"
+            shift 2
+            ;;
+        --gt-jpeg-quality)
+            GT_JPEG_QUALITY="$2"
+            shift 2
+            ;;
+        --gt-camera-send-async)
+            GT_CAMERA_SEND_ASYNC="$2"
+            shift 2
+            ;;
+        --gt-reduce-topdown-rate)
+            GT_REDUCE_TOPDOWN_RATE="$2"
+            shift 2
+            ;;
+        --gt-rotation-from-road-frame)
+            GT_ROTATION_FROM_ROAD_FRAME="$2"
+            shift 2
+            ;;
+        --gt-disable-move-rotation)
+            GT_DISABLE_MOVE_ROTATION="$2"
+            shift 2
+            ;;
+        --log-level)
+            LOG_LEVEL="$2"
+            shift 2
+            ;;
+        --diagnostic-logging)
+            LOG_LEVEL="info"
+            shift
+            ;;
         --verbose)
-            VERBOSE=true
+            LOG_LEVEL="info"
             shift
             ;;
         --build-unity-player)
@@ -151,6 +239,22 @@ done
 if [[ "$TRACK_YAML_PATH" != /* ]]; then
     TRACK_YAML_PATH="$SCRIPT_DIR/$TRACK_YAML_PATH"
 fi
+
+case "$LOG_LEVEL" in
+    error|info|debug) ;;
+    *)
+        echo "Invalid --log-level: $LOG_LEVEL (expected: error, info, or debug)"
+        exit 1
+        ;;
+esac
+
+case "$STREAM_SYNC_POLICY" in
+    aligned|queued|latest) ;;
+    *)
+        echo "Invalid --stream-sync-policy: $STREAM_SYNC_POLICY (expected: aligned, queued, or latest)"
+        exit 1
+        ;;
+esac
 
 PYTHON_BIN="$SCRIPT_DIR/venv/bin/python"
 if [ ! -x "$PYTHON_BIN" ]; then
@@ -208,7 +312,15 @@ fi
 echo "Launching Unity player..."
 "$UNITY_BUILD_PATH/Contents/MacOS/AVSimulation" \
     --track-yaml "$TRACK_YAML_PATH" \
-    --gt-centerline-as-left-lane "$GT_CENTERLINE_AS_LEFT_LANE" &
+    --gt-centerline-as-left-lane "$GT_CENTERLINE_AS_LEFT_LANE" \
+    --gt-sync-capture "$GT_SYNC_CAPTURE" \
+    --gt-sync-fixed-delta "$GT_SYNC_FIXED_DELTA" \
+    --gt-disable-topdown "$GT_DISABLE_TOPDOWN" \
+    --gt-jpeg-quality "$GT_JPEG_QUALITY" \
+    --gt-camera-send-async "$GT_CAMERA_SEND_ASYNC" \
+    --gt-reduce-topdown-rate "$GT_REDUCE_TOPDOWN_RATE" \
+    --gt-rotation-from-road-frame "$GT_ROTATION_FROM_ROAD_FRAME" \
+    --gt-disable-move-rotation "$GT_DISABLE_MOVE_ROTATION" &
 UNITY_PID=$!
 
 sleep 2
@@ -239,12 +351,22 @@ fi
 if [ -n "$LATERAL_CORRECTION_GAIN" ]; then
     GT_ARGS+=(--lateral-correction-gain "$LATERAL_CORRECTION_GAIN")
 fi
-
-if [ "$VERBOSE" = true ]; then
-    echo "Starting ground truth follower (verbose)..."
-    "$PYTHON_BIN" -u tools/ground_truth_follower.py "${GT_ARGS[@]}" --verbose
-else
-    echo "Starting ground truth follower (quiet unless errors)..."
-    "$PYTHON_BIN" tools/ground_truth_follower.py "${GT_ARGS[@]}"
+if [ "$STRICT_GT_POSE" = true ]; then
+    GT_ARGS+=(--strict-gt-pose)
 fi
+if [ "$STRICT_GT_FEEDBACK" = true ]; then
+    GT_ARGS+=(--strict-gt-feedback)
+fi
+if [ "$FAST_RECORD" = true ]; then
+    GT_ARGS+=(--fast-record)
+fi
+if [ -n "$GT_RECORD_STATE_LAG_FRAMES" ]; then
+    GT_ARGS+=(--record-state-lag-frames "$GT_RECORD_STATE_LAG_FRAMES")
+fi
+if [ -n "$STREAM_SYNC_POLICY" ]; then
+    GT_ARGS+=(--stream-sync-policy "$STREAM_SYNC_POLICY")
+fi
+
+echo "Starting ground truth follower (log level: $LOG_LEVEL)..."
+"$PYTHON_BIN" tools/ground_truth_follower.py "${GT_ARGS[@]}" --log-level "$LOG_LEVEL"
 echo "Ground truth run finished."

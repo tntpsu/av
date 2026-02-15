@@ -17,6 +17,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from tests.test_perception_ground_truth import PerceptionGroundTruthTest
 
 
+def _wrap_angle_deg(delta_deg: np.ndarray) -> np.ndarray:
+    """Wrap angle difference to [-180, 180] degrees."""
+    return (delta_deg + 180.0) % 360.0 - 180.0
+
+
 def analyze_question_1(test: PerceptionGroundTruthTest) -> Dict:
     """
     Question 1: Are we detecting the correct lane lines?
@@ -208,35 +213,35 @@ def analyze_question_4(test: PerceptionGroundTruthTest) -> Dict:
         print("❌ Cannot analyze - no valid detections")
         return {'status': 'FAIL'}
     
-    # Compute expected heading from ground truth
-    expected_headings = []
-    for i in valid_frames:
-        expected = test.compute_expected_heading(i)
-        expected_headings.append(expected)
-    
-    expected_headings = np.array(expected_headings)
-    actual_headings = test.heading[valid_frames]
-    heading_errors = actual_headings - expected_headings
+    actual_headings = np.asarray(test.heading[valid_frames], dtype=float)
+    if getattr(test, "gt_desired_heading", None) is not None:
+        expected_headings = np.asarray(test.gt_desired_heading[valid_frames], dtype=float)
+        expected_source = "ground_truth/desired_heading"
+    else:
+        expected_headings = np.array([test.compute_expected_heading(i) for i in valid_frames], dtype=float)
+        expected_source = "compute_expected_heading fallback"
+    heading_errors = _wrap_angle_deg(actual_headings - expected_headings)
     
     print(f"\nHeading Analysis:")
+    print(f"  Actual source: {getattr(test, 'heading_source', 'unknown')}")
+    print(f"  Expected source: {expected_source}")
     print(f"  Actual heading: {np.mean(np.abs(actual_headings)):.1f}° ± {np.std(actual_headings):.1f}°")
     print(f"  Expected heading: {np.mean(np.abs(expected_headings)):.1f}° ± {np.std(expected_headings):.1f}°")
     print(f"  Mean absolute error: {np.mean(np.abs(heading_errors)):.1f}°")
     print(f"  Max error: {np.max(np.abs(heading_errors)):.1f}°")
     
-    # For a 50m radius curve, expected heading should be ~2.86°
-    expected_curve_heading = 2.86
     actual_mean_heading = np.mean(np.abs(actual_headings))
+    expected_mean_heading = np.mean(np.abs(expected_headings))
+    print(f"\nHeading Magnitude Comparison:")
+    print(f"  Actual mean |heading|: {actual_mean_heading:.2f}°")
+    print(f"  Expected mean |heading|: {expected_mean_heading:.2f}°")
+    ratio = (actual_mean_heading / expected_mean_heading) if expected_mean_heading > 1e-6 else float("inf")
+    print(f"  Magnitude ratio: {ratio:.2f}x")
     
-    print(f"\nCurve Analysis:")
-    print(f"  Expected heading for 50m curve: ~{expected_curve_heading:.2f}°")
-    print(f"  Actual mean heading: {actual_mean_heading:.2f}°")
-    print(f"  Ratio: {actual_mean_heading/expected_curve_heading:.1f}x")
-    
-    if actual_mean_heading > expected_curve_heading * 2.0:
+    if np.mean(np.abs(heading_errors)) > 20.0:
         status = 'FAIL'
-        print(f"\n❌ CRITICAL: Heading is {actual_mean_heading/expected_curve_heading:.1f}x too high!")
-        print(f"    This suggests coordinate conversion or heading calculation is wrong")
+        print(f"\n❌ CRITICAL: Heading error is very large ({np.mean(np.abs(heading_errors)):.1f}° MAE)")
+        print("    This suggests coordinate conversion or heading calculation is wrong")
     elif np.mean(np.abs(heading_errors)) > 5.0:
         status = 'WARN'
         print(f"\n⚠️  WARNING: Heading error is large ({np.mean(np.abs(heading_errors)):.1f}°)")
@@ -248,8 +253,8 @@ def analyze_question_4(test: PerceptionGroundTruthTest) -> Dict:
         'status': status,
         'heading_mae': np.mean(np.abs(heading_errors)),
         'actual_mean_heading': actual_mean_heading,
-        'expected_mean_heading': np.mean(np.abs(expected_headings)),
-        'heading_ratio': actual_mean_heading / expected_curve_heading if expected_curve_heading > 0 else 0
+        'expected_mean_heading': expected_mean_heading,
+        'heading_ratio': ratio
     }
 
 
@@ -359,7 +364,7 @@ def analyze_question_6(test: PerceptionGroundTruthTest) -> Dict:
     mean_heading = np.mean(np.abs(straight_headings))
     
     print(f"\nHeading on Straights:")
-    print(f"  Mean absolute heading: {np.degrees(mean_heading):.2f}°")
+    print(f"  Mean absolute heading: {mean_heading:.2f}°")
     print(f"  Max heading: {np.max(np.abs(straight_headings)):.2f}°")
     print(f"  Expected: ~0°")
     
@@ -376,7 +381,7 @@ def analyze_question_6(test: PerceptionGroundTruthTest) -> Dict:
     
     if mean_heading > np.radians(2.0):
         status = 'WARN'
-        print(f"\n⚠️  WARNING: Heading on straights is too high ({np.degrees(mean_heading):.2f}°)")
+        print(f"\n⚠️  WARNING: Heading on straights is too high ({mean_heading:.2f}°)")
     elif left_std > 0.3 or right_std > 0.3:
         status = 'WARN'
         print(f"\n⚠️  WARNING: Position is not stable on straights")
@@ -465,6 +470,68 @@ def analyze_question_7(test: PerceptionGroundTruthTest) -> Dict:
     }
 
 
+def analyze_question_8_heading_diagnostics(test: PerceptionGroundTruthTest) -> Dict:
+    """
+    Non-scoring diagnostics:
+    Compare planner/reference heading with vehicle heading-delta to
+    separate frame-contract issues from true behavior issues.
+    """
+    print("\n" + "="*80)
+    print("QUESTION 8 (DIAGNOSTIC-ONLY): Planner/Heading Contract Check")
+    print("="*80)
+
+    reference_heading = getattr(test, "reference_heading_deg", None)
+    heading_delta = getattr(test, "heading_delta_deg", None)
+    if reference_heading is None:
+        print("\nNo trajectory/reference_point_heading present; skipping Q8 diagnostics.")
+        return {"available": False, "reason": "missing_reference_heading", "status": "SKIP"}
+    if heading_delta is None:
+        print("\nNo vehicle/heading_delta_deg present; skipping Q8 diagnostics.")
+        return {"available": False, "reason": "missing_heading_delta", "status": "SKIP"}
+
+    valid_frames = np.where(test.num_lanes_detected >= 2)[0]
+    if len(valid_frames) == 0:
+        print("\nNo valid frames for diagnostics.")
+        return {"available": False, "reason": "no_valid_frames", "status": "SKIP"}
+
+    ref = np.asarray(reference_heading[valid_frames], dtype=float)
+    delta = np.asarray(heading_delta[valid_frames], dtype=float)
+    residual = _wrap_angle_deg(ref - delta)
+
+    curve_mask, curve_source = test.get_curve_mask(curvature_threshold=0.01, heading_threshold_deg=2.0)
+    curve_valid = curve_mask[valid_frames]
+    straight_valid = ~curve_valid
+
+    print("\nReference vs Vehicle Delta:")
+    print("  Compare: trajectory/reference_point_heading - vehicle/heading_delta_deg")
+    print(f"  Valid frames: {len(valid_frames)}")
+    print(f"  Mean absolute residual: {np.mean(np.abs(residual)):.2f}°")
+    print(f"  P95 absolute residual: {np.percentile(np.abs(residual), 95):.2f}°")
+    print(f"  Max absolute residual: {np.max(np.abs(residual)):.2f}°")
+    print(f"  Classification source: {curve_source}")
+
+    if np.any(straight_valid):
+        straight_residual = residual[straight_valid]
+        print(
+            f"  Straights MAE/P95: {np.mean(np.abs(straight_residual)):.2f}° / "
+            f"{np.percentile(np.abs(straight_residual), 95):.2f}°"
+        )
+    if np.any(curve_valid):
+        curve_residual = residual[curve_valid]
+        print(
+            f"  Curves MAE/P95: {np.mean(np.abs(curve_residual)):.2f}° / "
+            f"{np.percentile(np.abs(curve_residual), 95):.2f}°"
+        )
+
+    return {
+        "available": True,
+        "status": "DIAGNOSTIC",
+        "residual_mae_deg": float(np.mean(np.abs(residual))),
+        "residual_p95_deg": float(np.percentile(np.abs(residual), 95)),
+        "residual_max_deg": float(np.max(np.abs(residual))),
+    }
+
+
 def main():
     """Main analysis function."""
     import argparse
@@ -514,6 +581,7 @@ def main():
         results['q5'] = analyze_question_5(test)
         results['q6'] = analyze_question_6(test)
         results['q7'] = analyze_question_7(test)
+        heading_diag = analyze_question_8_heading_diagnostics(test)
         
         # Summary
         print("\n" + "="*80)
@@ -524,6 +592,13 @@ def main():
             status = result.get('status', 'UNKNOWN')
             status_symbol = '✓' if status == 'PASS' else '⚠️' if status == 'WARN' else '❌'
             print(f"{status_symbol} Question {i}: {status}")
+        if heading_diag.get("available"):
+            print(
+                "• Question 8 (diagnostic-only): "
+                f"Residual MAE {heading_diag['residual_mae_deg']:.2f}°"
+            )
+        else:
+            print("• Question 8 (diagnostic-only): SKIP")
         
         print("\n" + "="*80)
         

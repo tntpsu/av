@@ -35,6 +35,17 @@ class UnityBridgeClient:
         Returns:
             Tuple of (image_array, timestamp) or None if not available
         """
+        frame = self.get_latest_camera_frame_with_metadata(camera_id=camera_id)
+        if frame is None:
+            return None
+        image, timestamp, frame_id, _meta = frame
+        return image, timestamp, frame_id
+
+    def get_latest_camera_frame_with_metadata(
+        self,
+        camera_id: str = "front_center"
+    ) -> Optional[Tuple[np.ndarray, float, Optional[int], Dict]]:
+        """Get latest camera frame plus bridge freshness metadata."""
         try:
             response = self.session.get(
                 f"{self.base_url}/api/camera/latest",
@@ -42,29 +53,71 @@ class UnityBridgeClient:
                 timeout=0.5,
             )
             response.raise_for_status()
-            
+
             data = response.json()
             img_base64 = data["image"]
             timestamp = data.get("timestamp", time.time())
             frame_id = data.get("frame_id")
-            
-            # Decode base64 image
+
             img_bytes = base64.b64decode(img_base64)
             img = Image.open(io.BytesIO(img_bytes))
             img_array = np.array(img)
-            
-            return img_array, timestamp, frame_id
+
+            meta = {
+                "queue_depth": data.get("queue_depth"),
+                "queue_capacity": data.get("queue_capacity"),
+                "drop_count": data.get("drop_count"),
+                "decode_in_flight": data.get("decode_in_flight"),
+                "latest_age_ms": data.get("latest_age_ms"),
+                "last_arrival_time": data.get("last_arrival_time"),
+                "last_realtime_since_startup": data.get("last_realtime_since_startup"),
+                "last_unscaled_time": data.get("last_unscaled_time"),
+            }
+            return img_array, timestamp, frame_id, meta
         except requests.exceptions.Timeout:
-            # Timeout is expected when no frame is available yet
             return None
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 404:
-                # 404 is expected when Unity hasn't sent frames yet
                 return None
-            # Other HTTP errors should be logged
             return None
         except requests.RequestException:
-            # Other errors (connection, etc.) - return None silently
+            return None
+
+    def get_next_camera_frame(
+        self,
+        camera_id: str = "front_center"
+    ) -> Optional[Tuple[np.ndarray, float, Optional[int]]]:
+        """
+        Get next queued camera frame from Unity (FIFO order).
+
+        Returns:
+            Tuple of (image_array, timestamp, frame_id) or None if unavailable
+        """
+        try:
+            response = self.session.get(
+                f"{self.base_url}/api/camera/next",
+                params={"camera_id": camera_id},
+                timeout=0.5,
+            )
+            response.raise_for_status()
+
+            data = response.json()
+            img_base64 = data["image"]
+            timestamp = data.get("timestamp", time.time())
+            frame_id = data.get("frame_id")
+
+            img_bytes = base64.b64decode(img_base64)
+            img = Image.open(io.BytesIO(img_bytes))
+            img_array = np.array(img)
+
+            return img_array, timestamp, frame_id
+        except requests.exceptions.Timeout:
+            return None
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 404:
+                return None
+            return None
+        except requests.RequestException:
             return None
     
     def get_latest_vehicle_state(self) -> Optional[Dict]:
@@ -76,6 +129,26 @@ class UnityBridgeClient:
         """
         try:
             response = self.session.get(f"{self.base_url}/api/vehicle/state/latest", timeout=0.5)
+            response.raise_for_status()
+            return response.json()
+        except requests.exceptions.Timeout:
+            return None
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 404:
+                return None
+            return None
+        except requests.RequestException:
+            return None
+
+    def get_next_vehicle_state(self) -> Optional[Dict]:
+        """
+        Get next queued vehicle state from Unity bridge (FIFO order).
+
+        Returns:
+            Vehicle state dictionary or None if unavailable
+        """
+        try:
+            response = self.session.get(f"{self.base_url}/api/vehicle/state/next", timeout=0.5)
             response.raise_for_status()
             return response.json()
         except requests.exceptions.Timeout:
