@@ -2705,6 +2705,33 @@ class Visualizer {
         return null;
     }
 
+    samplePathShapeAtForwardDistance(pathPoints, forwardMeters, halfWindowMeters = 0.5) {
+        if (!Array.isArray(pathPoints) || pathPoints.length < 3 || !Number.isFinite(forwardMeters)) {
+            return null;
+        }
+        const h = Number(halfWindowMeters);
+        if (!Number.isFinite(h) || h <= 0) return null;
+        const y0 = Number(forwardMeters) - h;
+        const y1 = Number(forwardMeters);
+        const y2 = Number(forwardMeters) + h;
+        const x0 = this.sampleLateralAtForwardDistance(pathPoints, y0);
+        const x1 = this.sampleLateralAtForwardDistance(pathPoints, y1);
+        const x2 = this.sampleLateralAtForwardDistance(pathPoints, y2);
+        if (!Number.isFinite(x0) || !Number.isFinite(x1) || !Number.isFinite(x2)) {
+            return null;
+        }
+
+        const dxdy = (x2 - x0) / (2.0 * h);
+        const d2xdy2 = (x2 - (2.0 * x1) + x0) / (h * h);
+        const headingRad = Math.atan2(dxdy, 1.0);
+        const denom = Math.pow(1.0 + (dxdy * dxdy), 1.5);
+        const curvature = Math.abs(denom) > 1e-8 ? (d2xdy2 / denom) : null;
+        return {
+            headingRad,
+            curvature,
+        };
+    }
+
     computeLateralErrorMetrics(plannerPath, oraclePath) {
         const lookaheads = [5, 10, 15];
         const out = {
@@ -2747,6 +2774,59 @@ class Visualizer {
             return px - bx;
         });
         [out.err5m, out.err10m, out.err15m] = errors;
+        return out;
+    }
+
+    computeTurnStrengthMismatchMetrics(plannerPath, oraclePath) {
+        const out = {
+            source: 'unavailable',
+            headingDelta5mDeg: null,
+            headingDelta10mDeg: null,
+            headingDelta15mDeg: null,
+            curvatureRatio5m: null,
+            curvatureRatio10m: null,
+            curvatureRatio15m: null,
+        };
+        if (!Array.isArray(plannerPath) || plannerPath.length < 3 || !Array.isArray(oraclePath) || oraclePath.length < 3) {
+            return out;
+        }
+        const lookaheads = [5, 10, 15];
+        const plannerMonotonic = this.toForwardMonotonicPath(plannerPath);
+        const oracleMonotonic = this.toForwardMonotonicPath(oraclePath);
+        if (plannerMonotonic.length < 3 || oracleMonotonic.length < 3) return out;
+
+        const headingDeltas = [];
+        const curvatureRatios = [];
+        const wrapAngleRad = (a) => {
+            let out = Number(a);
+            if (!Number.isFinite(out)) return null;
+            while (out > Math.PI) out -= (2.0 * Math.PI);
+            while (out < -Math.PI) out += (2.0 * Math.PI);
+            return out;
+        };
+        for (const y of lookaheads) {
+            const plannerShape = this.samplePathShapeAtForwardDistance(plannerMonotonic, y);
+            const oracleShape = this.samplePathShapeAtForwardDistance(oracleMonotonic, y);
+            if (!plannerShape || !oracleShape) {
+                headingDeltas.push(null);
+                curvatureRatios.push(null);
+                continue;
+            }
+            const dhWrapped = wrapAngleRad(Number(plannerShape.headingRad) - Number(oracleShape.headingRad));
+            const dh = dhWrapped === null ? null : (dhWrapped * (180 / Math.PI));
+            headingDeltas.push(Number.isFinite(dh) ? dh : null);
+
+            const kp = Number(plannerShape.curvature);
+            const ko = Number(oracleShape.curvature);
+            if (Number.isFinite(kp) && Number.isFinite(ko) && Math.abs(ko) >= 1e-4) {
+                curvatureRatios.push(kp / ko);
+            } else {
+                curvatureRatios.push(null);
+            }
+        }
+        [out.headingDelta5mDeg, out.headingDelta10mDeg, out.headingDelta15mDeg] = headingDeltas;
+        [out.curvatureRatio5m, out.curvatureRatio10m, out.curvatureRatio15m] = curvatureRatios;
+        out.source = 'planner_vs_oracle';
         return out;
     }
 
@@ -3498,6 +3578,23 @@ class Visualizer {
         updateField('projection-lateral-error-10m', fmtErr(d.lateral_error_10m));
         updateField('projection-lateral-error-15m', fmtErr(d.lateral_error_15m));
         updateField('projection-lateral-error-source', d.lateral_error_source || '-');
+        const fmtDeg = (v) => {
+            if (!Number.isFinite(Number(v))) return '-';
+            const n = Number(v);
+            const side = n > 0 ? 'right' : (n < 0 ? 'left' : 'aligned');
+            return `${Math.abs(n).toFixed(2)} deg (${side})`;
+        };
+        const fmtRatio = (v) => {
+            if (!Number.isFinite(Number(v))) return '-';
+            return `${Number(v).toFixed(2)}x`;
+        };
+        updateField('projection-heading-delta-5m', fmtDeg(d.heading_delta_5m_deg));
+        updateField('projection-heading-delta-10m', fmtDeg(d.heading_delta_10m_deg));
+        updateField('projection-heading-delta-15m', fmtDeg(d.heading_delta_15m_deg));
+        updateField('projection-curvature-ratio-5m', fmtRatio(d.curvature_ratio_5m));
+        updateField('projection-curvature-ratio-10m', fmtRatio(d.curvature_ratio_10m));
+        updateField('projection-curvature-ratio-15m', fmtRatio(d.curvature_ratio_15m));
+        updateField('projection-turn-mismatch-source', d.turn_mismatch_source || '-');
         const fmtPx = (v) => Number.isFinite(Number(v)) ? `${Number(v).toFixed(1)} px` : '-';
         updateField('projection-right-fiducial-err-5m', fmtPx(d.right_fiducial_err_5m));
         updateField('projection-right-fiducial-err-10m', fmtPx(d.right_fiducial_err_10m));
@@ -4458,6 +4555,14 @@ class Visualizer {
         this.projectionDiagnostics.lateral_error_10m = lateralMetrics.err10m;
         this.projectionDiagnostics.lateral_error_15m = lateralMetrics.err15m;
         this.projectionDiagnostics.lateral_error_source = lateralMetrics.source;
+        const turnMismatch = this.computeTurnStrengthMismatchMetrics(plannerPathForMetrics, oraclePathForMetrics);
+        this.projectionDiagnostics.heading_delta_5m_deg = turnMismatch.headingDelta5mDeg;
+        this.projectionDiagnostics.heading_delta_10m_deg = turnMismatch.headingDelta10mDeg;
+        this.projectionDiagnostics.heading_delta_15m_deg = turnMismatch.headingDelta15mDeg;
+        this.projectionDiagnostics.curvature_ratio_5m = turnMismatch.curvatureRatio5m;
+        this.projectionDiagnostics.curvature_ratio_10m = turnMismatch.curvatureRatio10m;
+        this.projectionDiagnostics.curvature_ratio_15m = turnMismatch.curvatureRatio15m;
+        this.projectionDiagnostics.turn_mismatch_source = turnMismatch.source;
         this.projectionDiagnostics.main_nearfield_blend = this.projectionNearFieldBlendEnabled ? 'on' : 'off';
         this.projectionDiagnostics.main_nearfield_y_offset_m = Number(this.projectionNearFieldGroundYOffsetMeters);
         this.projectionDiagnostics.main_nearfield_blend_distance_m = Number(this.projectionNearFieldBlendDistanceMeters);

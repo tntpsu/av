@@ -444,6 +444,16 @@
                             <tr><td>Error @ 15m</td><td id="projection-lateral-error-15m">-</td></tr>
                             <tr><td>Error Source</td><td id="projection-lateral-error-source">-</td></tr>
                         </table>
+                        <h3>Turn-Strength Mismatch (Planner vs Oracle)</h3>
+                        <table class="data-table">
+                            <tr><td>Heading Delta @ 5m</td><td id="projection-heading-delta-5m">-</td></tr>
+                            <tr><td>Heading Delta @ 10m</td><td id="projection-heading-delta-10m">-</td></tr>
+                            <tr><td>Heading Delta @ 15m</td><td id="projection-heading-delta-15m">-</td></tr>
+                            <tr><td>Curvature Ratio @ 5m</td><td id="projection-curvature-ratio-5m">-</td></tr>
+                            <tr><td>Curvature Ratio @ 10m</td><td id="projection-curvature-ratio-10m">-</td></tr>
+                            <tr><td>Curvature Ratio @ 15m</td><td id="projection-curvature-ratio-15m">-</td></tr>
+                            <tr><td>Mismatch Source</td><td id="projection-turn-mismatch-source">-</td></tr>
+                        </table>
                         <h3>Right-Lane Fiducial Projection Error</h3>
                         <table class="data-table">
                             <tr><td>Reproj Error @ 5m</td><td id="projection-right-fiducial-err-5m">-</td></tr>
@@ -703,7 +713,7 @@
 
     <script src="data_loader.js?v=20260213_issues_filters"></script>
     <script src="overlay_renderer.js?v=20260213_issues_filters"></script>
-    <script src="visualizer.js?v=20260215_projection_nearfield_step1d_v8"></script>
+    <script src="visualizer.js?v=20260215_turn_mismatch_metrics_v9"></script>
 </body>
 </html>
 
