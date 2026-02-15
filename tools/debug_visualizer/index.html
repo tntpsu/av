@@ -93,13 +93,13 @@
                             <label title="Enable near-field main-camera projection blend to reduce short-range projection residuals. Diagnostic/display only."><input type="checkbox" id="toggle-main-nearfield-blend" checked> Main Near-Field Blend</label>
                             <label title="Near-field vertical offset (meters) blended from 0m forward. Negative pulls near points downward in image.">
                                 Near-Field Y Offset (m):
-                                <input type="range" id="nearfield-y-offset-slider" min="-0.50" max="0.50" step="0.01" value="-0.20">
-                                <span id="nearfield-y-offset-value">-0.20</span>
+                                <input type="range" id="nearfield-y-offset-slider" min="-0.50" max="0.50" step="0.01" value="-0.30">
+                                <span id="nearfield-y-offset-value">-0.30</span>
                             </label>
                             <label title="Forward distance over which near-field blend decays to zero.">
                                 Near-Field Blend Distance (m):
-                                <input type="range" id="nearfield-blend-distance-slider" min="2.0" max="20.0" step="0.5" value="8.0">
-                                <span id="nearfield-blend-distance-value">8.0</span>
+                                <input type="range" id="nearfield-blend-distance-slider" min="2.0" max="20.0" step="0.5" value="10.0">
+                                <span id="nearfield-blend-distance-value">10.0</span>
                             </label>
                         </div>
                     </details>
@@ -703,7 +703,7 @@
 
     <script src="data_loader.js?v=20260213_issues_filters"></script>
     <script src="overlay_renderer.js?v=20260213_issues_filters"></script>
-    <script src="visualizer.js?v=20260215_projection_nearfield_step1c_v7"></script>
+    <script src="visualizer.js?v=20260215_projection_nearfield_step1d_v8"></script>
 </body>
 </html>
 

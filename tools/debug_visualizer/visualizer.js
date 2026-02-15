@@ -60,8 +60,8 @@ class Visualizer {
         this.projectionDiagnostics = {};
         this.distanceScaleStartOffsetMeters = 2.0;
         this.projectionNearFieldBlendEnabled = true;
-        this.projectionNearFieldGroundYOffsetMeters = -0.2;
-        this.projectionNearFieldBlendDistanceMeters = 8.0;
+        this.projectionNearFieldGroundYOffsetMeters = -0.3;
+        this.projectionNearFieldBlendDistanceMeters = 10.0;
         this.projectionNearFieldSettingsKey = 'debugVisualizer.projectionNearFieldSettings';
         
         this.setupEventListeners();
@@ -2534,7 +2534,7 @@ class Visualizer {
             : (Number.isFinite(Number(vehPosWorld.y)) ? Number(vehPosWorld.y) : 0.0);
         const localToWorldGround = (xLocal, yLocal) => {
             const yForward = Number.isFinite(Number(yLocal)) ? Number(yLocal) : 0.0;
-            const blendDen = Math.max(1e-3, Number(this.projectionNearFieldBlendDistanceMeters) || 8.0);
+            const blendDen = Math.max(1e-3, Number(this.projectionNearFieldBlendDistanceMeters) || 10.0);
             const nearWeightRaw = Math.max(0.0, Math.min(1.0, 1.0 - (Math.max(0.0, yForward) / blendDen)));
             const nearWeight = this.projectionNearFieldBlendEnabled ? nearWeightRaw : 0.0;
             const blendedGroundY = groundY + ((Number(this.projectionNearFieldGroundYOffsetMeters) || 0.0) * nearWeight);
