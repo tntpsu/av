@@ -43,7 +43,14 @@ class RuleBasedTrajectoryPlanner:
                  camera_offset_x: float = 0.0, distance_scaling_factor: float = 0.875,
                  center_spline_enabled: bool = False, center_spline_degree: int = 2,
                  center_spline_samples: int = 20, center_spline_alpha: float = 0.7,
-                 x_clip_enabled: bool = True, x_clip_limit_m: float = 10.0):
+                 x_clip_enabled: bool = True, x_clip_limit_m: float = 10.0,
+                 trajectory_eval_y_min_ratio: float = 0.0,
+                 centerline_midpoint_mode: str = "pointwise",
+                 projection_model: str = "legacy",
+                 calibrated_fx_px: float = 0.0,
+                 calibrated_fy_px: float = 0.0,
+                 calibrated_cx_px: float = 0.0,
+                 calibrated_cy_px: float = 0.0):
         """
         Initialize trajectory planner.
         
@@ -89,6 +96,15 @@ class RuleBasedTrajectoryPlanner:
         self.center_spline_alpha = float(center_spline_alpha)
         self.x_clip_enabled = bool(x_clip_enabled)
         self.x_clip_limit_m = max(1.0, float(x_clip_limit_m))
+        self.trajectory_eval_y_min_ratio = float(np.clip(trajectory_eval_y_min_ratio, 0.0, 0.95))
+        mode = str(centerline_midpoint_mode).strip().lower()
+        self.centerline_midpoint_mode = mode if mode in {"pointwise", "coeff_average"} else "pointwise"
+        proj_model = str(projection_model).strip().lower()
+        self.projection_model = proj_model if proj_model in {"legacy", "calibrated_pinhole"} else "legacy"
+        self.calibrated_fx_px = float(calibrated_fx_px)
+        self.calibrated_fy_px = float(calibrated_fy_px)
+        self.calibrated_cx_px = float(calibrated_cx_px) if calibrated_cx_px > 0.0 else (float(image_width) * 0.5)
+        self.calibrated_cy_px = float(calibrated_cy_px) if calibrated_cy_px > 0.0 else (float(image_height) * 0.5)
         
         # For reference point smoothing
         self.last_reference_x = None
@@ -152,6 +168,12 @@ class RuleBasedTrajectoryPlanner:
             "diag_preclip_x2": np.nan,
             "diag_preclip_x_abs_max": np.nan,
             "diag_preclip_x_abs_p95": np.nan,
+            "diag_preclip_mean_12_20m_lane_source_x": np.nan,
+            "diag_preclip_mean_12_20m_distance_scale_delta_x": np.nan,
+            "diag_preclip_mean_12_20m_camera_offset_delta_x": np.nan,
+            "diag_preclip_abs_mean_12_20m_lane_source_x": np.nan,
+            "diag_preclip_abs_mean_12_20m_distance_scale_delta_x": np.nan,
+            "diag_preclip_abs_mean_12_20m_camera_offset_delta_x": np.nan,
             "diag_postclip_x0": np.nan,
             "diag_postclip_x1": np.nan,
             "diag_postclip_x2": np.nan,
@@ -392,9 +414,11 @@ class RuleBasedTrajectoryPlanner:
         right_curvature = abs(right_coeffs[0]) if len(right_coeffs) >= 3 else 0.0
         curvature_diff = abs(left_curvature - right_curvature)
         
-        # If curvature difference is large (>0.02), use point-sampling for accuracy
-        # This happens when car is far from center and perspective makes one lane appear more curved
-        if curvature_diff > 0.02:
+        use_pointwise_midpoint = (
+            self.centerline_midpoint_mode == "pointwise" or curvature_diff > 0.02
+        )
+        # If configured for pointwise midpoint or curvature difference is large, use point-sampling.
+        if use_pointwise_midpoint:
             # Sample points, compute midpoints, fit polynomial
             y_samples = np.linspace(int(self.image_height * 0.3), int(self.image_height * 0.93), 20)
             left_x_samples = np.polyval(left_coeffs, y_samples)
@@ -860,19 +884,40 @@ class RuleBasedTrajectoryPlanner:
             # Fallback: Use config value directly as horizontal FOV (matches Unity Inspector)
             horizontal_fov_rad = fov_rad
         
-        # Now use horizontal FOV for lateral (x) conversion
-        width_at_actual_distance = 2.0 * actual_distance * np.tan(horizontal_fov_rad / 2.0)
-        pixel_to_meter_x_at_distance = width_at_actual_distance / self.image_width
-        
-        # Center x coordinate (image center = vehicle center)
-        x_center = self.image_width / 2.0
-        x_offset_pixels = x_pixels - x_center
-        
-        # Convert x: pixels to meters (lateral) using actual_distance
-        x_vehicle = x_offset_pixels * pixel_to_meter_x_at_distance
-        
+        # Diagnostics-only decomposition: isolate distance-scaling contribution.
+        # When using provided lookahead, conversion scales distance by distance_scaling_factor.
+        # This captures how much that scaling changes lateral x in meters.
+        if using_provided_distance and lookahead_distance is not None:
+            base_distance_for_x = float(max(0.5, min(float(lookahead_distance), 50.0)))
+        else:
+            base_distance_for_x = actual_distance
+
+        # Calibrated pinhole model for lateral conversion (A/B with legacy model).
+        if self.projection_model == "calibrated_pinhole":
+            fx_px = self.calibrated_fx_px if self.calibrated_fx_px > 1.0 else (
+                (0.5 * float(self.image_width)) / max(np.tan(horizontal_fov_rad * 0.5), 1e-6)
+            )
+            x_center = self.calibrated_cx_px
+            # y_center reserved for future full ground-plane intersection.
+            _ = self.calibrated_cy_px
+            x_lane_source = ((x_pixels - x_center) / max(fx_px, 1e-6)) * float(actual_distance)
+            x_lane_source_unscaled = ((x_pixels - x_center) / max(fx_px, 1e-6)) * float(base_distance_for_x)
+            width_at_actual_distance = 2.0 * actual_distance * np.tan(horizontal_fov_rad / 2.0)
+            pixel_to_meter_x_at_distance = width_at_actual_distance / self.image_width
+        else:
+            width_at_actual_distance = 2.0 * actual_distance * np.tan(horizontal_fov_rad / 2.0)
+            width_at_base_distance = 2.0 * base_distance_for_x * np.tan(horizontal_fov_rad / 2.0)
+            pixel_to_meter_x_at_distance = width_at_actual_distance / self.image_width
+            pixel_to_meter_x_base = width_at_base_distance / self.image_width
+            x_center = self.image_width / 2.0
+            x_offset_pixels = x_pixels - x_center
+            x_lane_source = x_offset_pixels * pixel_to_meter_x_at_distance
+            x_lane_source_unscaled = x_offset_pixels * pixel_to_meter_x_base
+        x_distance_scale_delta = x_lane_source - x_lane_source_unscaled
+
         # FIXED: Apply camera offset correction (for calibration)
-        x_vehicle += self.camera_offset_x
+        x_camera_offset_delta = self.camera_offset_x
+        x_vehicle = x_lane_source + x_camera_offset_delta
         
         x_vehicle_pre_clip = x_vehicle
 
@@ -888,6 +933,9 @@ class RuleBasedTrajectoryPlanner:
             debug_trace.setdefault("used_provided_distance", []).append(1.0 if using_provided_distance else 0.0)
             debug_trace.setdefault("pre_clip_x", []).append(float(x_vehicle_pre_clip))
             debug_trace.setdefault("post_clip_x", []).append(float(x_vehicle))
+            debug_trace.setdefault("pre_clip_x_lane_source", []).append(float(x_lane_source_unscaled))
+            debug_trace.setdefault("pre_clip_x_distance_scale_delta", []).append(float(x_distance_scale_delta))
+            debug_trace.setdefault("pre_clip_x_camera_offset_delta", []).append(float(x_camera_offset_delta))
             debug_trace["clip_count"] = int(debug_trace.get("clip_count", 0)) + (1 if was_clipped else 0)
         
         # Use actual_distance for y_vehicle (consistent scaling)
@@ -958,8 +1006,12 @@ class RuleBasedTrajectoryPlanner:
             # Use inverse of conversion: y_image = height - (y_vehicle / pixel_to_meter_y)
             # But need to account for perspective - closer pixels are smaller
             # For now, use simple linear mapping
-            y_image = self.image_height - (y_vehicle / self.pixel_to_meter_y)
-            y_image = max(0, min(self.image_height - 1, y_image))  # Clamp to image bounds
+            y_image_raw = self.image_height - (y_vehicle / self.pixel_to_meter_y)
+            y_image = max(0, min(self.image_height - 1, y_image_raw))  # Clamp to image bounds
+            if self.trajectory_eval_y_min_ratio > 0.0:
+                min_eval_y = float(self.image_height) * self.trajectory_eval_y_min_ratio
+                # Reduce far-field extrapolation by avoiding the top-most image rows.
+                y_image = max(min_eval_y, y_image)
             
             # Compute x in image coordinates from polynomial
             x_image = np.polyval(lane_coeffs, y_image)
@@ -1048,6 +1100,9 @@ class RuleBasedTrajectoryPlanner:
         post_minus_pre = [float(py - iy) for iy, py in zip(input_y, post_y)]
         pre_x = [float(v) for v in debug_trace.get("pre_clip_x", [])]
         post_x = [float(v) for v in debug_trace.get("post_clip_x", [])]
+        pre_x_lane_source = [float(v) for v in debug_trace.get("pre_clip_x_lane_source", [])]
+        pre_x_distance_scale_delta = [float(v) for v in debug_trace.get("pre_clip_x_distance_scale_delta", [])]
+        pre_x_camera_offset_delta = [float(v) for v in debug_trace.get("pre_clip_x_camera_offset_delta", [])]
         pre_x_abs = [abs(v) for v in pre_x if np.isfinite(v)]
         post_x_abs = [abs(v) for v in post_x if np.isfinite(v)]
         y_for_bands = [float(v) for v in post_y]
@@ -1078,6 +1133,14 @@ class RuleBasedTrajectoryPlanner:
             flags = [1.0 if s >= near_clip_threshold else 0.0 for s in samples]
             return float(np.mean(np.array(flags, dtype=np.float64)))
 
+        def _mean_signed(vals: List[float], idx: List[int]) -> float:
+            if len(idx) == 0:
+                return np.nan
+            samples = [float(vals[i]) for i in idx if i < len(vals) and np.isfinite(vals[i])]
+            if len(samples) == 0:
+                return np.nan
+            return float(np.mean(np.array(samples, dtype=np.float64)))
+
         idx_0_8 = _band_indices(0.0, 8.0)
         idx_8_12 = _band_indices(8.0, 12.0)
         idx_12_20 = _band_indices(12.0, 20.0)
@@ -1107,6 +1170,12 @@ class RuleBasedTrajectoryPlanner:
             "diag_preclip_x2": self._diag_value_at(pre_x, 2),
             "diag_preclip_x_abs_max": float(np.max(pre_x_abs)) if len(pre_x_abs) > 0 else np.nan,
             "diag_preclip_x_abs_p95": float(np.percentile(np.array(pre_x_abs, dtype=np.float64), 95)) if len(pre_x_abs) > 0 else np.nan,
+            "diag_preclip_mean_12_20m_lane_source_x": _mean_signed(pre_x_lane_source, idx_12_20),
+            "diag_preclip_mean_12_20m_distance_scale_delta_x": _mean_signed(pre_x_distance_scale_delta, idx_12_20),
+            "diag_preclip_mean_12_20m_camera_offset_delta_x": _mean_signed(pre_x_camera_offset_delta, idx_12_20),
+            "diag_preclip_abs_mean_12_20m_lane_source_x": _mean_abs(pre_x_lane_source, idx_12_20),
+            "diag_preclip_abs_mean_12_20m_distance_scale_delta_x": _mean_abs(pre_x_distance_scale_delta, idx_12_20),
+            "diag_preclip_abs_mean_12_20m_camera_offset_delta_x": _mean_abs(pre_x_camera_offset_delta, idx_12_20),
             "diag_preclip_abs_mean_0_8m": _mean_abs(pre_x, idx_0_8),
             "diag_preclip_abs_mean_8_12m": _mean_abs(pre_x, idx_8_12),
             "diag_preclip_abs_mean_12_20m": _mean_abs(pre_x, idx_12_20),

@@ -3023,6 +3023,33 @@ class Visualizer {
             headingZeroGate: null,
             smallHeadingGate: null,
             multiLookaheadActive: null,
+            smoothingJumpReject: null,
+            refXRateLimitActive: null,
+            rawRefHeading: null,
+            smoothedRefHeading: null,
+            headingSuppressionAbs: null,
+            rawRefX: null,
+            smoothedRefX: null,
+            refXSuppressionAbs: null,
+            smoothingAlpha: null,
+            smoothingAlphaX: null,
+            mlHeadingBase: null,
+            mlHeadingFar: null,
+            mlHeadingBlended: null,
+            mlBlendAlpha: null,
+            dynamicHorizonM: null,
+            dynamicHorizonBaseM: null,
+            dynamicHorizonMinM: null,
+            dynamicHorizonMaxM: null,
+            dynamicHorizonSpeedScale: null,
+            dynamicHorizonCurvatureScale: null,
+            dynamicHorizonConfidenceScale: null,
+            dynamicHorizonFinalScale: null,
+            dynamicHorizonSpeedMps: null,
+            dynamicHorizonCurvatureAbs: null,
+            dynamicHorizonConfidenceUsed: null,
+            dynamicHorizonLimiterCode: null,
+            dynamicHorizonApplied: null,
             xClipCount: null,
             heavyXClipping: null,
             preclipXAbsMax: null,
@@ -3030,6 +3057,12 @@ class Visualizer {
             preclipAbsMean0to8m: null,
             preclipAbsMean8to12m: null,
             preclipAbsMean12to20m: null,
+            preclipAbsMean12to20mLaneSourceX: null,
+            preclipAbsMean12to20mDistanceScaleDeltaX: null,
+            preclipAbsMean12to20mCameraOffsetDeltaX: null,
+            preclipMean12to20mLaneSourceX: null,
+            preclipMean12to20mDistanceScaleDeltaX: null,
+            preclipMean12to20mCameraOffsetDeltaX: null,
             postclipAbsMean12to20m: null,
             postclipNearClipFrac12to20m: null,
             frontFrameIdDelta: null,
@@ -3093,6 +3126,126 @@ class Visualizer {
         if (method) {
             out.multiLookaheadActive = (method === 'multi_lookahead_heading_blend');
         }
+        const diagHeadingZeroGate = Number(t?.diag_heading_zero_gate_active);
+        if (Number.isFinite(diagHeadingZeroGate)) {
+            out.headingZeroGate = diagHeadingZeroGate > 0.5;
+        }
+        const diagSmallHeadingGate = Number(t?.diag_small_heading_gate_active);
+        if (Number.isFinite(diagSmallHeadingGate)) {
+            out.smallHeadingGate = diagSmallHeadingGate > 0.5;
+        }
+        const diagMultiLookaheadActive = Number(t?.diag_multi_lookahead_active);
+        if (Number.isFinite(diagMultiLookaheadActive)) {
+            out.multiLookaheadActive = diagMultiLookaheadActive > 0.5;
+        }
+        const diagSmoothingJumpReject = Number(t?.diag_smoothing_jump_reject);
+        if (Number.isFinite(diagSmoothingJumpReject)) {
+            out.smoothingJumpReject = diagSmoothingJumpReject > 0.5;
+        }
+        const diagRefXRateLimitActive = Number(t?.diag_ref_x_rate_limit_active);
+        if (Number.isFinite(diagRefXRateLimitActive)) {
+            out.refXRateLimitActive = diagRefXRateLimitActive > 0.5;
+        }
+        const diagRawRefHeading = Number(t?.diag_raw_ref_heading);
+        if (Number.isFinite(diagRawRefHeading)) {
+            out.rawRefHeading = diagRawRefHeading;
+        }
+        const diagSmoothedRefHeading = Number(t?.diag_smoothed_ref_heading);
+        if (Number.isFinite(diagSmoothedRefHeading)) {
+            out.smoothedRefHeading = diagSmoothedRefHeading;
+        }
+        const diagHeadingSuppressionAbs = Number(t?.diag_heading_suppression_abs);
+        if (Number.isFinite(diagHeadingSuppressionAbs)) {
+            out.headingSuppressionAbs = diagHeadingSuppressionAbs;
+        }
+        const diagRawRefX = Number(t?.diag_raw_ref_x);
+        if (Number.isFinite(diagRawRefX)) {
+            out.rawRefX = diagRawRefX;
+        }
+        const diagSmoothedRefX = Number(t?.diag_smoothed_ref_x);
+        if (Number.isFinite(diagSmoothedRefX)) {
+            out.smoothedRefX = diagSmoothedRefX;
+        }
+        const diagRefXSuppressionAbs = Number(t?.diag_ref_x_suppression_abs);
+        if (Number.isFinite(diagRefXSuppressionAbs)) {
+            out.refXSuppressionAbs = diagRefXSuppressionAbs;
+        }
+        const diagSmoothingAlpha = Number(t?.diag_smoothing_alpha);
+        if (Number.isFinite(diagSmoothingAlpha)) {
+            out.smoothingAlpha = diagSmoothingAlpha;
+        }
+        const diagSmoothingAlphaX = Number(t?.diag_smoothing_alpha_x);
+        if (Number.isFinite(diagSmoothingAlphaX)) {
+            out.smoothingAlphaX = diagSmoothingAlphaX;
+        }
+        const diagMlHeadingBase = Number(t?.diag_multi_lookahead_heading_base);
+        if (Number.isFinite(diagMlHeadingBase)) {
+            out.mlHeadingBase = diagMlHeadingBase;
+        }
+        const diagMlHeadingFar = Number(t?.diag_multi_lookahead_heading_far);
+        if (Number.isFinite(diagMlHeadingFar)) {
+            out.mlHeadingFar = diagMlHeadingFar;
+        }
+        const diagMlHeadingBlended = Number(t?.diag_multi_lookahead_heading_blended);
+        if (Number.isFinite(diagMlHeadingBlended)) {
+            out.mlHeadingBlended = diagMlHeadingBlended;
+        }
+        const diagMlBlendAlpha = Number(t?.diag_multi_lookahead_blend_alpha);
+        if (Number.isFinite(diagMlBlendAlpha)) {
+            out.mlBlendAlpha = diagMlBlendAlpha;
+        }
+        const diagDynamicHorizonM = Number(t?.diag_dynamic_effective_horizon_m);
+        if (Number.isFinite(diagDynamicHorizonM)) {
+            out.dynamicHorizonM = diagDynamicHorizonM;
+        }
+        const diagDynamicHorizonBaseM = Number(t?.diag_dynamic_effective_horizon_base_m);
+        if (Number.isFinite(diagDynamicHorizonBaseM)) {
+            out.dynamicHorizonBaseM = diagDynamicHorizonBaseM;
+        }
+        const diagDynamicHorizonMinM = Number(t?.diag_dynamic_effective_horizon_min_m);
+        if (Number.isFinite(diagDynamicHorizonMinM)) {
+            out.dynamicHorizonMinM = diagDynamicHorizonMinM;
+        }
+        const diagDynamicHorizonMaxM = Number(t?.diag_dynamic_effective_horizon_max_m);
+        if (Number.isFinite(diagDynamicHorizonMaxM)) {
+            out.dynamicHorizonMaxM = diagDynamicHorizonMaxM;
+        }
+        const diagDynamicSpeedScale = Number(t?.diag_dynamic_effective_horizon_speed_scale);
+        if (Number.isFinite(diagDynamicSpeedScale)) {
+            out.dynamicHorizonSpeedScale = diagDynamicSpeedScale;
+        }
+        const diagDynamicCurvatureScale = Number(t?.diag_dynamic_effective_horizon_curvature_scale);
+        if (Number.isFinite(diagDynamicCurvatureScale)) {
+            out.dynamicHorizonCurvatureScale = diagDynamicCurvatureScale;
+        }
+        const diagDynamicConfidenceScale = Number(t?.diag_dynamic_effective_horizon_confidence_scale);
+        if (Number.isFinite(diagDynamicConfidenceScale)) {
+            out.dynamicHorizonConfidenceScale = diagDynamicConfidenceScale;
+        }
+        const diagDynamicFinalScale = Number(t?.diag_dynamic_effective_horizon_final_scale);
+        if (Number.isFinite(diagDynamicFinalScale)) {
+            out.dynamicHorizonFinalScale = diagDynamicFinalScale;
+        }
+        const diagDynamicSpeedMps = Number(t?.diag_dynamic_effective_horizon_speed_mps);
+        if (Number.isFinite(diagDynamicSpeedMps)) {
+            out.dynamicHorizonSpeedMps = diagDynamicSpeedMps;
+        }
+        const diagDynamicCurvatureAbs = Number(t?.diag_dynamic_effective_horizon_curvature_abs);
+        if (Number.isFinite(diagDynamicCurvatureAbs)) {
+            out.dynamicHorizonCurvatureAbs = diagDynamicCurvatureAbs;
+        }
+        const diagDynamicConfidenceUsed = Number(t?.diag_dynamic_effective_horizon_confidence_used);
+        if (Number.isFinite(diagDynamicConfidenceUsed)) {
+            out.dynamicHorizonConfidenceUsed = diagDynamicConfidenceUsed;
+        }
+        const diagDynamicLimiterCode = Number(t?.diag_dynamic_effective_horizon_limiter_code);
+        if (Number.isFinite(diagDynamicLimiterCode)) {
+            out.dynamicHorizonLimiterCode = diagDynamicLimiterCode;
+        }
+        const diagDynamicApplied = Number(t?.diag_dynamic_effective_horizon_applied);
+        if (Number.isFinite(diagDynamicApplied)) {
+            out.dynamicHorizonApplied = diagDynamicApplied > 0.5;
+        }
         const xClipCount = Number(t?.diag_x_clip_count);
         if (Number.isFinite(xClipCount)) {
             out.xClipCount = xClipCount;
@@ -3117,6 +3270,30 @@ class Visualizer {
         const preclipAbsMean12to20m = Number(t?.diag_preclip_abs_mean_12_20m);
         if (Number.isFinite(preclipAbsMean12to20m)) {
             out.preclipAbsMean12to20m = preclipAbsMean12to20m;
+        }
+        const preclipAbsMean12to20mLaneSourceX = Number(t?.diag_preclip_abs_mean_12_20m_lane_source_x);
+        if (Number.isFinite(preclipAbsMean12to20mLaneSourceX)) {
+            out.preclipAbsMean12to20mLaneSourceX = preclipAbsMean12to20mLaneSourceX;
+        }
+        const preclipAbsMean12to20mDistanceScaleDeltaX = Number(t?.diag_preclip_abs_mean_12_20m_distance_scale_delta_x);
+        if (Number.isFinite(preclipAbsMean12to20mDistanceScaleDeltaX)) {
+            out.preclipAbsMean12to20mDistanceScaleDeltaX = preclipAbsMean12to20mDistanceScaleDeltaX;
+        }
+        const preclipAbsMean12to20mCameraOffsetDeltaX = Number(t?.diag_preclip_abs_mean_12_20m_camera_offset_delta_x);
+        if (Number.isFinite(preclipAbsMean12to20mCameraOffsetDeltaX)) {
+            out.preclipAbsMean12to20mCameraOffsetDeltaX = preclipAbsMean12to20mCameraOffsetDeltaX;
+        }
+        const preclipMean12to20mLaneSourceX = Number(t?.diag_preclip_mean_12_20m_lane_source_x);
+        if (Number.isFinite(preclipMean12to20mLaneSourceX)) {
+            out.preclipMean12to20mLaneSourceX = preclipMean12to20mLaneSourceX;
+        }
+        const preclipMean12to20mDistanceScaleDeltaX = Number(t?.diag_preclip_mean_12_20m_distance_scale_delta_x);
+        if (Number.isFinite(preclipMean12to20mDistanceScaleDeltaX)) {
+            out.preclipMean12to20mDistanceScaleDeltaX = preclipMean12to20mDistanceScaleDeltaX;
+        }
+        const preclipMean12to20mCameraOffsetDeltaX = Number(t?.diag_preclip_mean_12_20m_camera_offset_delta_x);
+        if (Number.isFinite(preclipMean12to20mCameraOffsetDeltaX)) {
+            out.preclipMean12to20mCameraOffsetDeltaX = preclipMean12to20mCameraOffsetDeltaX;
         }
         const postclipAbsMean12to20m = Number(t?.diag_postclip_abs_mean_12_20m);
         if (Number.isFinite(postclipAbsMean12to20m)) {
@@ -4064,6 +4241,120 @@ class Visualizer {
         updateField('projection-traj-heading-zero-gate', fmtBool(d.traj_heading_zero_gate));
         updateField('projection-traj-small-heading-gate', fmtBool(d.traj_small_heading_gate));
         updateField('projection-traj-multilookahead-active', fmtBool(d.traj_multilookahead_active));
+        updateField('projection-traj-smoothing-jump-reject', fmtBool(d.traj_smoothing_jump_reject));
+        updateField('projection-traj-ref-x-rate-limit-active', fmtBool(d.traj_ref_x_rate_limit_active));
+        updateField(
+            'projection-traj-raw-ref-heading',
+            Number.isFinite(Number(d.traj_raw_ref_heading))
+                ? `${Number(d.traj_raw_ref_heading).toFixed(3)} rad`
+                : '-'
+        );
+        updateField(
+            'projection-traj-smoothed-ref-heading',
+            Number.isFinite(Number(d.traj_smoothed_ref_heading))
+                ? `${Number(d.traj_smoothed_ref_heading).toFixed(3)} rad`
+                : '-'
+        );
+        updateField(
+            'projection-traj-heading-suppression-abs',
+            Number.isFinite(Number(d.traj_heading_suppression_abs))
+                ? `${Number(d.traj_heading_suppression_abs).toFixed(3)} rad`
+                : '-'
+        );
+        updateField(
+            'projection-traj-raw-ref-x',
+            Number.isFinite(Number(d.traj_raw_ref_x))
+                ? `${Number(d.traj_raw_ref_x).toFixed(3)} m`
+                : '-'
+        );
+        updateField(
+            'projection-traj-smoothed-ref-x',
+            Number.isFinite(Number(d.traj_smoothed_ref_x))
+                ? `${Number(d.traj_smoothed_ref_x).toFixed(3)} m`
+                : '-'
+        );
+        updateField(
+            'projection-traj-ref-x-suppression-abs',
+            Number.isFinite(Number(d.traj_ref_x_suppression_abs))
+                ? `${Number(d.traj_ref_x_suppression_abs).toFixed(3)} m`
+                : '-'
+        );
+        if (Number.isFinite(Number(d.traj_smoothing_alpha)) && Number.isFinite(Number(d.traj_smoothing_alpha_x))) {
+            updateField(
+                'projection-traj-smoothing-alpha-pair',
+                `${Number(d.traj_smoothing_alpha).toFixed(2)} / ${Number(d.traj_smoothing_alpha_x).toFixed(2)}`
+            );
+        } else {
+            updateField('projection-traj-smoothing-alpha-pair', '-');
+        }
+        if (
+            Number.isFinite(Number(d.traj_ml_heading_base)) &&
+            Number.isFinite(Number(d.traj_ml_heading_far)) &&
+            Number.isFinite(Number(d.traj_ml_heading_blended))
+        ) {
+            updateField(
+                'projection-traj-ml-heading-breakdown',
+                `${Number(d.traj_ml_heading_base).toFixed(3)} / ${Number(d.traj_ml_heading_far).toFixed(3)} / ${Number(d.traj_ml_heading_blended).toFixed(3)} rad`
+            );
+        } else {
+            updateField('projection-traj-ml-heading-breakdown', '-');
+        }
+        updateField(
+            'projection-traj-ml-blend-alpha',
+            Number.isFinite(Number(d.traj_ml_blend_alpha))
+                ? Number(d.traj_ml_blend_alpha).toFixed(2)
+                : '-'
+        );
+        updateField(
+            'projection-traj-dynamic-horizon-m',
+            Number.isFinite(Number(d.traj_dynamic_horizon_m))
+                ? `${Number(d.traj_dynamic_horizon_m).toFixed(2)} m`
+                : '-'
+        );
+        if (
+            Number.isFinite(Number(d.traj_dynamic_horizon_base_m)) &&
+            Number.isFinite(Number(d.traj_dynamic_horizon_min_m)) &&
+            Number.isFinite(Number(d.traj_dynamic_horizon_max_m))
+        ) {
+            updateField(
+                'projection-traj-dynamic-horizon-bounds-m',
+                `${Number(d.traj_dynamic_horizon_base_m).toFixed(2)} / ${Number(d.traj_dynamic_horizon_min_m).toFixed(2)} / ${Number(d.traj_dynamic_horizon_max_m).toFixed(2)}`
+            );
+        } else {
+            updateField('projection-traj-dynamic-horizon-bounds-m', '-');
+        }
+        if (
+            Number.isFinite(Number(d.traj_dynamic_horizon_speed_scale)) &&
+            Number.isFinite(Number(d.traj_dynamic_horizon_curvature_scale)) &&
+            Number.isFinite(Number(d.traj_dynamic_horizon_confidence_scale)) &&
+            Number.isFinite(Number(d.traj_dynamic_horizon_final_scale))
+        ) {
+            updateField(
+                'projection-traj-dynamic-horizon-scales',
+                `${Number(d.traj_dynamic_horizon_speed_scale).toFixed(2)} / ${Number(d.traj_dynamic_horizon_curvature_scale).toFixed(2)} / ${Number(d.traj_dynamic_horizon_confidence_scale).toFixed(2)} / ${Number(d.traj_dynamic_horizon_final_scale).toFixed(2)}`
+            );
+        } else {
+            updateField('projection-traj-dynamic-horizon-scales', '-');
+        }
+        if (
+            Number.isFinite(Number(d.traj_dynamic_horizon_speed_mps)) &&
+            Number.isFinite(Number(d.traj_dynamic_horizon_curvature_abs)) &&
+            Number.isFinite(Number(d.traj_dynamic_horizon_confidence_used))
+        ) {
+            updateField(
+                'projection-traj-dynamic-horizon-inputs',
+                `${Number(d.traj_dynamic_horizon_speed_mps).toFixed(2)} m/s / ${Number(d.traj_dynamic_horizon_curvature_abs).toFixed(4)} / ${Number(d.traj_dynamic_horizon_confidence_used).toFixed(2)}`
+            );
+        } else {
+            updateField('projection-traj-dynamic-horizon-inputs', '-');
+        }
+        updateField(
+            'projection-traj-dynamic-horizon-limiter-code',
+            Number.isFinite(Number(d.traj_dynamic_horizon_limiter_code))
+                ? Number(d.traj_dynamic_horizon_limiter_code).toFixed(0)
+                : '-'
+        );
+        updateField('projection-traj-dynamic-horizon-applied', fmtBool(d.traj_dynamic_horizon_applied));
         updateField(
             'projection-traj-x-clip-count',
             Number.isFinite(Number(d.traj_x_clip_count)) ? Number(d.traj_x_clip_count).toFixed(0) : '-'
@@ -4097,6 +4388,42 @@ class Visualizer {
             'projection-traj-preclip-mean-12-20m',
             Number.isFinite(Number(d.traj_preclip_mean_12_20m))
                 ? `${Number(d.traj_preclip_mean_12_20m).toFixed(2)} m`
+                : '-'
+        );
+        updateField(
+            'projection-traj-preclip-lane-source-abs-mean-12-20m',
+            Number.isFinite(Number(d.traj_preclip_lane_source_abs_mean_12_20m))
+                ? `${Number(d.traj_preclip_lane_source_abs_mean_12_20m).toFixed(2)} m`
+                : '-'
+        );
+        updateField(
+            'projection-traj-preclip-distance-scale-abs-mean-12-20m',
+            Number.isFinite(Number(d.traj_preclip_distance_scale_abs_mean_12_20m))
+                ? `${Number(d.traj_preclip_distance_scale_abs_mean_12_20m).toFixed(2)} m`
+                : '-'
+        );
+        updateField(
+            'projection-traj-preclip-camera-offset-abs-mean-12-20m',
+            Number.isFinite(Number(d.traj_preclip_camera_offset_abs_mean_12_20m))
+                ? `${Number(d.traj_preclip_camera_offset_abs_mean_12_20m).toFixed(2)} m`
+                : '-'
+        );
+        updateField(
+            'projection-traj-preclip-distance-scale-mean-12-20m',
+            Number.isFinite(Number(d.traj_preclip_distance_scale_mean_12_20m))
+                ? `${Number(d.traj_preclip_distance_scale_mean_12_20m).toFixed(2)} m`
+                : '-'
+        );
+        updateField(
+            'projection-traj-preclip-lane-source-mean-12-20m',
+            Number.isFinite(Number(d.traj_preclip_lane_source_mean_12_20m))
+                ? `${Number(d.traj_preclip_lane_source_mean_12_20m).toFixed(2)} m`
+                : '-'
+        );
+        updateField(
+            'projection-traj-preclip-camera-offset-mean-12-20m',
+            Number.isFinite(Number(d.traj_preclip_camera_offset_mean_12_20m))
+                ? `${Number(d.traj_preclip_camera_offset_mean_12_20m).toFixed(2)} m`
                 : '-'
         );
         updateField(
@@ -5243,6 +5570,33 @@ class Visualizer {
         this.projectionDiagnostics.traj_heading_zero_gate = trajWaterfall.headingZeroGate;
         this.projectionDiagnostics.traj_small_heading_gate = trajWaterfall.smallHeadingGate;
         this.projectionDiagnostics.traj_multilookahead_active = trajWaterfall.multiLookaheadActive;
+        this.projectionDiagnostics.traj_smoothing_jump_reject = trajWaterfall.smoothingJumpReject;
+        this.projectionDiagnostics.traj_ref_x_rate_limit_active = trajWaterfall.refXRateLimitActive;
+        this.projectionDiagnostics.traj_raw_ref_heading = trajWaterfall.rawRefHeading;
+        this.projectionDiagnostics.traj_smoothed_ref_heading = trajWaterfall.smoothedRefHeading;
+        this.projectionDiagnostics.traj_heading_suppression_abs = trajWaterfall.headingSuppressionAbs;
+        this.projectionDiagnostics.traj_raw_ref_x = trajWaterfall.rawRefX;
+        this.projectionDiagnostics.traj_smoothed_ref_x = trajWaterfall.smoothedRefX;
+        this.projectionDiagnostics.traj_ref_x_suppression_abs = trajWaterfall.refXSuppressionAbs;
+        this.projectionDiagnostics.traj_smoothing_alpha = trajWaterfall.smoothingAlpha;
+        this.projectionDiagnostics.traj_smoothing_alpha_x = trajWaterfall.smoothingAlphaX;
+        this.projectionDiagnostics.traj_ml_heading_base = trajWaterfall.mlHeadingBase;
+        this.projectionDiagnostics.traj_ml_heading_far = trajWaterfall.mlHeadingFar;
+        this.projectionDiagnostics.traj_ml_heading_blended = trajWaterfall.mlHeadingBlended;
+        this.projectionDiagnostics.traj_ml_blend_alpha = trajWaterfall.mlBlendAlpha;
+        this.projectionDiagnostics.traj_dynamic_horizon_m = trajWaterfall.dynamicHorizonM;
+        this.projectionDiagnostics.traj_dynamic_horizon_base_m = trajWaterfall.dynamicHorizonBaseM;
+        this.projectionDiagnostics.traj_dynamic_horizon_min_m = trajWaterfall.dynamicHorizonMinM;
+        this.projectionDiagnostics.traj_dynamic_horizon_max_m = trajWaterfall.dynamicHorizonMaxM;
+        this.projectionDiagnostics.traj_dynamic_horizon_speed_scale = trajWaterfall.dynamicHorizonSpeedScale;
+        this.projectionDiagnostics.traj_dynamic_horizon_curvature_scale = trajWaterfall.dynamicHorizonCurvatureScale;
+        this.projectionDiagnostics.traj_dynamic_horizon_confidence_scale = trajWaterfall.dynamicHorizonConfidenceScale;
+        this.projectionDiagnostics.traj_dynamic_horizon_final_scale = trajWaterfall.dynamicHorizonFinalScale;
+        this.projectionDiagnostics.traj_dynamic_horizon_speed_mps = trajWaterfall.dynamicHorizonSpeedMps;
+        this.projectionDiagnostics.traj_dynamic_horizon_curvature_abs = trajWaterfall.dynamicHorizonCurvatureAbs;
+        this.projectionDiagnostics.traj_dynamic_horizon_confidence_used = trajWaterfall.dynamicHorizonConfidenceUsed;
+        this.projectionDiagnostics.traj_dynamic_horizon_limiter_code = trajWaterfall.dynamicHorizonLimiterCode;
+        this.projectionDiagnostics.traj_dynamic_horizon_applied = trajWaterfall.dynamicHorizonApplied;
         this.projectionDiagnostics.traj_x_clip_count = trajWaterfall.xClipCount;
         this.projectionDiagnostics.traj_heavy_x_clipping = trajWaterfall.heavyXClipping;
         this.projectionDiagnostics.traj_preclip_abs_max = trajWaterfall.preclipXAbsMax;
@@ -5250,6 +5604,12 @@ class Visualizer {
         this.projectionDiagnostics.traj_preclip_mean_0_8m = trajWaterfall.preclipAbsMean0to8m;
         this.projectionDiagnostics.traj_preclip_mean_8_12m = trajWaterfall.preclipAbsMean8to12m;
         this.projectionDiagnostics.traj_preclip_mean_12_20m = trajWaterfall.preclipAbsMean12to20m;
+        this.projectionDiagnostics.traj_preclip_lane_source_abs_mean_12_20m = trajWaterfall.preclipAbsMean12to20mLaneSourceX;
+        this.projectionDiagnostics.traj_preclip_distance_scale_abs_mean_12_20m = trajWaterfall.preclipAbsMean12to20mDistanceScaleDeltaX;
+        this.projectionDiagnostics.traj_preclip_camera_offset_abs_mean_12_20m = trajWaterfall.preclipAbsMean12to20mCameraOffsetDeltaX;
+        this.projectionDiagnostics.traj_preclip_lane_source_mean_12_20m = trajWaterfall.preclipMean12to20mLaneSourceX;
+        this.projectionDiagnostics.traj_preclip_distance_scale_mean_12_20m = trajWaterfall.preclipMean12to20mDistanceScaleDeltaX;
+        this.projectionDiagnostics.traj_preclip_camera_offset_mean_12_20m = trajWaterfall.preclipMean12to20mCameraOffsetDeltaX;
         this.projectionDiagnostics.traj_postclip_mean_12_20m = trajWaterfall.postclipAbsMean12to20m;
         this.projectionDiagnostics.traj_postclip_nearclip_frac_12_20m = trajWaterfall.postclipNearClipFrac12to20m;
         this.projectionDiagnostics.traj_front_frame_delta = trajWaterfall.frontFrameIdDelta;

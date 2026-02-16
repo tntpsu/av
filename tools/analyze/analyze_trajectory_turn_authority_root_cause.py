@@ -2,8 +2,8 @@
 """
 Analyze trajectory turn-authority suppressors against oracle mismatch.
 
-This script computes per-frame proxy flags and correlates them with
-under-turn events (default: curvature ratio at 10m < 0.6).
+This script prefers recorded suppressor diagnostics (when present) and
+falls back to proxy flags for older recordings.
 """
 
 from __future__ import annotations
@@ -124,6 +124,7 @@ def main() -> None:
         ctrl_curv = np.asarray(f["control/path_curvature_input"])
 
         n = min(len(traj_pts), len(oracle_pts), len(ref_heading), len(ref_method), len(coeffs), len(ctrl_curv))
+        tgrp = f["trajectory"]
 
         rows: list[dict[str, Any]] = []
         for i in range(n):
@@ -159,14 +160,54 @@ def main() -> None:
             if math.isfinite(control_curv):
                 control_vs_oracle = abs(control_curv) / abs(ko)
 
+            diag_heading_zero = None
+            if "diag_heading_zero_gate_active" in tgrp:
+                val = float(np.asarray(tgrp["diag_heading_zero_gate_active"])[i])
+                if math.isfinite(val):
+                    diag_heading_zero = val > 0.5
+            diag_small_heading = None
+            if "diag_small_heading_gate_active" in tgrp:
+                val = float(np.asarray(tgrp["diag_small_heading_gate_active"])[i])
+                if math.isfinite(val):
+                    diag_small_heading = val > 0.5
+            diag_multi_lookahead = None
+            if "diag_multi_lookahead_active" in tgrp:
+                val = float(np.asarray(tgrp["diag_multi_lookahead_active"])[i])
+                if math.isfinite(val):
+                    diag_multi_lookahead = val > 0.5
+            diag_jump_reject = None
+            if "diag_smoothing_jump_reject" in tgrp:
+                val = float(np.asarray(tgrp["diag_smoothing_jump_reject"])[i])
+                if math.isfinite(val):
+                    diag_jump_reject = val > 0.5
+            diag_rate_limit = None
+            if "diag_ref_x_rate_limit_active" in tgrp:
+                val = float(np.asarray(tgrp["diag_ref_x_rate_limit_active"])[i])
+                if math.isfinite(val):
+                    diag_rate_limit = val > 0.5
+            diag_dyn_applied = None
+            if "diag_dynamic_effective_horizon_applied" in tgrp:
+                val = float(np.asarray(tgrp["diag_dynamic_effective_horizon_applied"])[i])
+                if math.isfinite(val):
+                    diag_dyn_applied = val > 0.5
+            diag_dyn_limiter_code = None
+            if "diag_dynamic_effective_horizon_limiter_code" in tgrp:
+                val = float(np.asarray(tgrp["diag_dynamic_effective_horizon_limiter_code"])[i])
+                if math.isfinite(val):
+                    diag_dyn_limiter_code = val
+
             rows.append(
                 {
                     "frame": i,
                     "ratio10": ratio10,
                     "underturn10": bool(ratio10 < args.underturn_threshold),
-                    "heading_zero_gate": bool(heading_zero_gate),
-                    "small_heading_gate": bool(small_heading_gate),
-                    "multi_lookahead_active": method == "multi_lookahead_heading_blend",
+                    "heading_zero_gate": bool(diag_heading_zero if diag_heading_zero is not None else heading_zero_gate),
+                    "small_heading_gate": bool(diag_small_heading if diag_small_heading is not None else small_heading_gate),
+                    "multi_lookahead_active": bool(diag_multi_lookahead if diag_multi_lookahead is not None else (method == "multi_lookahead_heading_blend")),
+                    "smoothing_jump_reject_active": bool(diag_jump_reject) if diag_jump_reject is not None else False,
+                    "ref_x_rate_limit_active": bool(diag_rate_limit) if diag_rate_limit is not None else False,
+                    "dynamic_effective_horizon_applied": bool(diag_dyn_applied) if diag_dyn_applied is not None else False,
+                    "dynamic_effective_horizon_confidence_limited": bool(diag_dyn_limiter_code == 3.0) if diag_dyn_limiter_code is not None else False,
                     "x_clip_count": float(np.asarray(f["trajectory/diag_x_clip_count"])[i]) if "diag_x_clip_count" in f["trajectory"] else None,
                     "x_clip_any": bool(
                         ("diag_x_clip_count" in f["trajectory"]) and math.isfinite(float(np.asarray(f["trajectory/diag_x_clip_count"])[i])) and float(np.asarray(f["trajectory/diag_x_clip_count"])[i]) > 0.0
@@ -207,9 +248,13 @@ def main() -> None:
         "underturn_frames": under_n,
         "underturn_rate": base_under_rate,
         "flags": {
-            "heading_zero_gate_proxy": summarize_flag("heading_zero_gate"),
-            "small_heading_gate_proxy": summarize_flag("small_heading_gate"),
+            "heading_zero_gate_active": summarize_flag("heading_zero_gate"),
+            "small_heading_gate_active": summarize_flag("small_heading_gate"),
             "multi_lookahead_active": summarize_flag("multi_lookahead_active"),
+            "smoothing_jump_reject_active": summarize_flag("smoothing_jump_reject_active"),
+            "ref_x_rate_limit_active": summarize_flag("ref_x_rate_limit_active"),
+            "dynamic_effective_horizon_applied": summarize_flag("dynamic_effective_horizon_applied"),
+            "dynamic_effective_horizon_confidence_limited": summarize_flag("dynamic_effective_horizon_confidence_limited"),
             "x_clip_any": summarize_flag("x_clip_any"),
             "x_clip_heavy": summarize_flag("x_clip_heavy"),
             "control_curvature_low_proxy": summarize_flag("control_curv_low"),

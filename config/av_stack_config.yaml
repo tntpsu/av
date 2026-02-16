@@ -253,6 +253,13 @@ trajectory:
   center_spline_alpha: 0.8
   x_clip_enabled: true
   x_clip_limit_m: 15.0
+  trajectory_eval_y_min_ratio: 0.10
+  centerline_midpoint_mode: coeff_average
+  projection_model: legacy
+  calibrated_fx_px: 0.0
+  calibrated_fy_px: 0.0
+  calibrated_cx_px: 0.0
+  calibrated_cy_px: 0.0
   target_lane: right
   target_lane_width_m: 3.6
   ref_sign_flip_threshold: 0.12
@@ -261,6 +268,15 @@ trajectory:
   multi_lookahead_far_scale: 1.4
   multi_lookahead_blend_alpha: 0.25
   multi_lookahead_curvature_threshold: 0.01
+  multi_lookahead_curve_heading_smoothing_alpha: 0.75
+  multi_lookahead_curve_heading_min_abs_rad: 0.05
+  dynamic_effective_horizon_enabled: false  # Phase 1 diagnostics-only; behavior application comes later
+  dynamic_effective_horizon_min_m: 3.0
+  dynamic_effective_horizon_max_m: 20.0
+  dynamic_effective_horizon_speed_scale: 0.35
+  dynamic_effective_horizon_curvature_scale: 0.15
+  dynamic_effective_horizon_confidence_floor: 0.6
+  dynamic_effective_horizon_confidence_fallback: 1.0
   lane_position_smoothing_alpha: 0.75  # Increased from 0.65 to reduce impact of perception drift
   ref_point_jump_clamp_x: 0.15
   ref_point_jump_clamp_heading: 0.08

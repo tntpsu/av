@@ -43,6 +43,14 @@ class TrajectoryPlanningInference:
         multi_lookahead_far_scale = kwargs.pop('multi_lookahead_far_scale', 1.5)
         multi_lookahead_blend_alpha = kwargs.pop('multi_lookahead_blend_alpha', 0.35)
         multi_lookahead_curvature_threshold = kwargs.pop('multi_lookahead_curvature_threshold', 0.01)
+        multi_lookahead_curve_heading_smoothing_alpha = kwargs.pop(
+            'multi_lookahead_curve_heading_smoothing_alpha',
+            reference_smoothing,
+        )
+        multi_lookahead_curve_heading_min_abs_rad = kwargs.pop(
+            'multi_lookahead_curve_heading_min_abs_rad',
+            0.05,
+        )
         
         if planner_type == "rule_based":
             # Pass lane smoothing to planner
@@ -79,6 +87,12 @@ class TrajectoryPlanningInference:
         self.multi_lookahead_curvature_threshold = float(
             np.clip(multi_lookahead_curvature_threshold, 0.0, 0.1)
         )
+        self.multi_lookahead_curve_heading_smoothing_alpha = float(
+            np.clip(multi_lookahead_curve_heading_smoothing_alpha, 0.0, 0.99)
+        )
+        self.multi_lookahead_curve_heading_min_abs_rad = float(
+            np.clip(multi_lookahead_curve_heading_min_abs_rad, 0.0, 1.0)
+        )
         
         # NEW: Solution 5 - Reference Point Smoothing with Bias Compensation
         # Track smoothed reference point bias for compensation
@@ -96,6 +110,7 @@ class TrajectoryPlanningInference:
         # For reference point smoothing
         self.last_smoothed_ref_point = None
         self.ref_debug_counter = 0
+        self.last_reference_diagnostics: Dict[str, float] = {}
 
     def _compute_target_ref_from_coeffs(
         self,
@@ -203,6 +218,10 @@ class TrajectoryPlanningInference:
         if callable(getter):
             return getter()
         return {}
+
+    def get_last_reference_diagnostics(self) -> Dict[str, float]:
+        """Expose latest reference-point diagnostics."""
+        return dict(self.last_reference_diagnostics)
     
     def get_reference_point(self, trajectory: Trajectory, 
                            lookahead: float = 10.0,
@@ -210,7 +229,8 @@ class TrajectoryPlanningInference:
                            lane_positions: Optional[Dict[str, float]] = None,
                            use_direct: bool = True,
                            timestamp: Optional[float] = None,
-                           confidence: Optional[float] = None) -> Optional[Dict]:
+                           confidence: Optional[float] = None,
+                           dynamic_horizon_diag: Optional[Dict[str, float]] = None) -> Optional[Dict]:
         """
         Get reference point at specified lookahead distance.
         Can use direct midpoint computation (simpler, more accurate) or trajectory-based.
@@ -227,6 +247,36 @@ class TrajectoryPlanningInference:
             Reference point with x, y, heading, velocity, curvature
             Also includes raw (unsmoothed) values for analysis
         """
+        dynamic_diag_defaults = {
+            'diag_dynamic_effective_horizon_m': np.nan,
+            'diag_dynamic_effective_horizon_base_m': np.nan,
+            'diag_dynamic_effective_horizon_min_m': np.nan,
+            'diag_dynamic_effective_horizon_max_m': np.nan,
+            'diag_dynamic_effective_horizon_speed_scale': np.nan,
+            'diag_dynamic_effective_horizon_curvature_scale': np.nan,
+            'diag_dynamic_effective_horizon_confidence_scale': np.nan,
+            'diag_dynamic_effective_horizon_final_scale': np.nan,
+            'diag_dynamic_effective_horizon_speed_mps': np.nan,
+            'diag_dynamic_effective_horizon_curvature_abs': np.nan,
+            'diag_dynamic_effective_horizon_confidence_used': np.nan,
+            'diag_dynamic_effective_horizon_limiter_code': np.nan,
+            'diag_dynamic_effective_horizon_applied': 0.0,
+        }
+
+        def _attach_dynamic_horizon_diag(target: Dict) -> None:
+            for key, default in dynamic_diag_defaults.items():
+                target.setdefault(key, default)
+            if dynamic_horizon_diag:
+                for key, value in dynamic_horizon_diag.items():
+                    if not isinstance(key, str) or not key.startswith('diag_dynamic_effective_horizon_'):
+                        continue
+                    try:
+                        v = float(value)
+                    except (TypeError, ValueError):
+                        continue
+                    if np.isfinite(v):
+                        target[key] = v
+
         # PREFERRED: Use lane positions in vehicle coordinates if available (most accurate)
         if use_direct and lane_positions is not None:
             left_lane_line_x = lane_positions.get('left_lane_line_x') or lane_positions.get('left_lane_x')  # Backward compatibility
@@ -295,6 +345,23 @@ class TrajectoryPlanningInference:
                 raw_ref_point['raw_x'] = center_x
                 raw_ref_point['raw_y'] = lookahead
                 raw_ref_point['raw_heading'] = heading
+                raw_ref_point['diag_heading_zero_gate_active'] = 0.0
+                raw_ref_point['diag_small_heading_gate_active'] = (
+                    1.0 if abs(np.degrees(float(heading))) < 1.0 else 0.0
+                )
+                raw_ref_point['diag_multi_lookahead_active'] = 0.0
+                raw_ref_point['diag_multi_lookahead_blend_alpha'] = 0.0
+                raw_ref_point['diag_multi_lookahead_heading_base'] = float(heading)
+                raw_ref_point['diag_multi_lookahead_heading_far'] = float(heading)
+                raw_ref_point['diag_multi_lookahead_heading_blended'] = float(heading)
+                if lane_coeffs is not None:
+                    valid_lanes_for_gate = [coeffs for coeffs in lane_coeffs if coeffs is not None]
+                    if len(valid_lanes_for_gate) >= 2:
+                        c0 = np.asarray(valid_lanes_for_gate[0], dtype=np.float64).reshape(-1)
+                        c1 = np.asarray(valid_lanes_for_gate[1], dtype=np.float64).reshape(-1)
+                        if c0.size >= 1 and c1.size >= 1 and np.isfinite(c0[0]) and np.isfinite(c1[0]):
+                            center_a = 0.5 * (float(c0[0]) + float(c1[0]))
+                            raw_ref_point['diag_heading_zero_gate_active'] = 1.0 if abs(center_a) < 0.01 else 0.0
                 # DEBUG: Log calculation details for specific frames
                 if hasattr(self, 'frame_count') and self.frame_count in [134, 135, 136]:
                     logger.warning(
@@ -312,8 +379,11 @@ class TrajectoryPlanningInference:
                     far_ref = self._compute_target_ref_from_coeffs(lane_coeffs, lookahead * self.multi_lookahead_far_scale)
                     if far_ref is not None:
                         alpha = self.multi_lookahead_blend_alpha
+                        base_heading = float(raw_ref_point.get('heading', 0.0))
+                        far_heading = float(far_ref.get('heading', base_heading))
+                        blended_heading = (1.0 - alpha) * base_heading + alpha * far_heading
                         raw_ref_point['heading'] = (
-                            (1.0 - alpha) * raw_ref_point['heading'] + alpha * far_ref['heading']
+                            blended_heading
                         )
                         raw_ref_point['curvature'] = (
                             (1.0 - alpha) * raw_ref_point['curvature'] + alpha * far_ref['curvature']
@@ -323,7 +393,13 @@ class TrajectoryPlanningInference:
                         )
                         raw_ref_point['method'] = 'multi_lookahead_heading_blend'
                         raw_ref_point['raw_heading'] = raw_ref_point['heading']
+                        raw_ref_point['diag_multi_lookahead_active'] = 1.0
+                        raw_ref_point['diag_multi_lookahead_blend_alpha'] = float(alpha)
+                        raw_ref_point['diag_multi_lookahead_heading_base'] = float(base_heading)
+                        raw_ref_point['diag_multi_lookahead_heading_far'] = float(far_heading)
+                        raw_ref_point['diag_multi_lookahead_heading_blended'] = float(blended_heading)
                 # Apply jump detection even for lane_positions (but with minimal smoothing)
+                _attach_dynamic_horizon_diag(raw_ref_point)
                 smoothed = self._apply_smoothing(
                     raw_ref_point,
                     use_light_smoothing=True,
@@ -381,6 +457,7 @@ class TrajectoryPlanningInference:
                     # Calculate perception center from coeffs for comparison
                     # (approximate - would need to convert from image coords)
                     raw_ref_point['perception_center_x'] = None  # Not available when using coeffs
+                    _attach_dynamic_horizon_diag(raw_ref_point)
                     smoothed = self._apply_smoothing(raw_ref_point, timestamp=timestamp, confidence=confidence)
                     smoothed['method'] = 'lane_coeffs'  # Preserve method
                     return smoothed
@@ -415,9 +492,19 @@ class TrajectoryPlanningInference:
         }
         
         # Apply smoothing (trajectory-based method uses normal smoothing, not light smoothing)
+        _attach_dynamic_horizon_diag(raw_ref_point)
         smoothed = self._apply_smoothing(raw_ref_point, use_light_smoothing=False, confidence=confidence)
         smoothed['method'] = 'trajectory'  # Preserve method
         return smoothed
+        raw_heading_for_diag = float(raw_ref_point.get('raw_heading', raw_ref_point.get('heading', 0.0)))
+        heading_alpha = alpha
+        if (
+            float(raw_ref_point.get('diag_multi_lookahead_active', 0.0)) > 0.5
+            and abs(raw_heading_for_diag) >= self.multi_lookahead_curve_heading_min_abs_rad
+        ):
+            # Reduce heading smoothing only on meaningful multi-lookahead turns.
+            heading_alpha = min(heading_alpha, self.multi_lookahead_curve_heading_smoothing_alpha)
+
         if self.last_smoothed_ref_point is not None:
             if is_fallback_trajectory:
                 # Lane detection failed - use fallback trajectory directly (no smoothing to preserve bias)
@@ -431,7 +518,7 @@ class TrajectoryPlanningInference:
                 # Use lighter smoothing for x when use_light_smoothing is True
                 smoothed_x = alpha_x * self.last_smoothed_ref_point['x'] + (1 - alpha_x) * raw_ref_point['x']
                 smoothed_y = alpha * self.last_smoothed_ref_point['y'] + (1 - alpha) * raw_ref_point['y']
-                smoothed_heading = alpha * self.last_smoothed_ref_point['heading'] + (1 - alpha) * raw_ref_point['heading']
+                smoothed_heading = heading_alpha * self.last_smoothed_ref_point['heading'] + (1 - heading_alpha) * raw_ref_point['heading']
                 smoothed_velocity = alpha * self.last_smoothed_ref_point['velocity'] + (1 - alpha) * raw_ref_point['velocity']
         else:
             smoothed_x = raw_ref_point['x']
@@ -525,6 +612,16 @@ class TrajectoryPlanningInference:
         Returns:
             Smoothed reference point dict
         """
+        # Defaults for instrumentation flags
+        raw_ref_point.setdefault('diag_ref_x_rate_limit_active', 0.0)
+        raw_ref_point.setdefault('diag_heading_zero_gate_active', 0.0)
+        raw_ref_point.setdefault('diag_small_heading_gate_active', 0.0)
+        raw_ref_point.setdefault('diag_multi_lookahead_active', 0.0)
+        raw_ref_point.setdefault('diag_multi_lookahead_blend_alpha', 0.0)
+        raw_ref_point.setdefault('diag_multi_lookahead_heading_base', raw_ref_point.get('raw_heading', raw_ref_point.get('heading', 0.0)))
+        raw_ref_point.setdefault('diag_multi_lookahead_heading_far', raw_ref_point.get('raw_heading', raw_ref_point.get('heading', 0.0)))
+        raw_ref_point.setdefault('diag_multi_lookahead_heading_blended', raw_ref_point.get('raw_heading', raw_ref_point.get('heading', 0.0)))
+
         # FIXED: Detect when trajectory planner used fallback (straight trajectory from lane failure)
         # CRITICAL FIX: Also detect when reference point jumps dramatically (perception failure)
         if minimal_smoothing and self.last_smoothed_ref_point is not None:
@@ -539,6 +636,7 @@ class TrajectoryPlanningInference:
                 if abs(delta_x) > self.ref_x_rate_limit:
                     raw_ref_point['raw_x'] = raw_ref_point.get('raw_x', raw_x)
                     raw_ref_point['x'] = last_x + np.sign(delta_x) * self.ref_x_rate_limit
+                    raw_ref_point['diag_ref_x_rate_limit_active'] = 1.0
 
         is_fallback_trajectory = (abs(raw_ref_point['x']) < 0.01 and 
                                   abs(raw_ref_point['heading']) < 0.01 and
@@ -559,6 +657,7 @@ class TrajectoryPlanningInference:
                 logger.warning(f"Large time gap detected: {dt:.3f}s - resetting reference point state")
                 self.last_smoothed_ref_point = None
         
+        diag_smoothing_jump_reject = 0.0
         if self.last_smoothed_ref_point is not None:
             ref_x_change = abs(raw_ref_point['x'] - self.last_smoothed_ref_point['x'])
             ref_heading_change = abs(raw_ref_point['heading'] - self.last_smoothed_ref_point['heading'])
@@ -600,6 +699,14 @@ class TrajectoryPlanningInference:
                     alpha_x = min(0.8, alpha_x + boost * 0.6)
                 else:
                     alpha_x = min(0.9, alpha_x + boost * 0.4)
+        raw_heading_for_diag = float(raw_ref_point.get('raw_heading', raw_ref_point.get('heading', 0.0)))
+        heading_alpha = alpha
+        if (
+            float(raw_ref_point.get('diag_multi_lookahead_active', 0.0)) > 0.5
+            and abs(raw_heading_for_diag) >= self.multi_lookahead_curve_heading_min_abs_rad
+        ):
+            # Reduce heading smoothing only on meaningful multi-lookahead turns.
+            heading_alpha = min(heading_alpha, self.multi_lookahead_curve_heading_smoothing_alpha)
         if self.last_smoothed_ref_point is not None:
             # Optional jump clamp to reduce reference jitter before smoothing.
             if not has_time_gap:
@@ -651,12 +758,13 @@ class TrajectoryPlanningInference:
                     smoothed_y = self.last_smoothed_ref_point['y']
                     smoothed_heading = self.last_smoothed_ref_point['heading']
                     smoothed_velocity = self.last_smoothed_ref_point['velocity']
+                    diag_smoothing_jump_reject = 1.0
             else:
                 # Normal smoothing
                 # Use lighter smoothing for x when use_light_smoothing is True
                 smoothed_x = alpha_x * self.last_smoothed_ref_point['x'] + (1 - alpha_x) * raw_ref_point['x']
                 smoothed_y = alpha * self.last_smoothed_ref_point['y'] + (1 - alpha) * raw_ref_point['y']
-                smoothed_heading = alpha * self.last_smoothed_ref_point['heading'] + (1 - alpha) * raw_ref_point['heading']
+                smoothed_heading = heading_alpha * self.last_smoothed_ref_point['heading'] + (1 - heading_alpha) * raw_ref_point['heading']
                 smoothed_velocity = alpha * self.last_smoothed_ref_point['velocity'] + (1 - alpha) * raw_ref_point['velocity']
         else:
             smoothed_x = raw_ref_point['x']
@@ -705,8 +813,33 @@ class TrajectoryPlanningInference:
             'raw_y': raw_ref_point.get('raw_y', raw_ref_point.get('y', smoothed_y)),
             'raw_heading': raw_ref_point.get('raw_heading', raw_ref_point.get('heading', smoothed_heading)),
             'perception_center_x': raw_ref_point.get('perception_center_x'),  # FIX: Preserve perception center for analysis
-            'method': raw_ref_point.get('method', 'unknown')  # Preserve method for debugging
+            'method': raw_ref_point.get('method', 'unknown'),  # Preserve method for debugging
+            'diag_heading_zero_gate_active': float(raw_ref_point.get('diag_heading_zero_gate_active', 0.0)),
+            'diag_small_heading_gate_active': float(raw_ref_point.get('diag_small_heading_gate_active', 0.0)),
+            'diag_multi_lookahead_active': float(raw_ref_point.get('diag_multi_lookahead_active', 0.0)),
+            'diag_smoothing_jump_reject': float(diag_smoothing_jump_reject),
+            'diag_ref_x_rate_limit_active': float(raw_ref_point.get('diag_ref_x_rate_limit_active', 0.0)),
+            'diag_raw_ref_x': float(raw_ref_point.get('raw_x', raw_ref_point.get('x', smoothed_x))),
+            'diag_smoothed_ref_x': float(smoothed_x),
+            'diag_ref_x_suppression_abs': float(abs(smoothed_x - raw_ref_point.get('raw_x', raw_ref_point.get('x', smoothed_x)))),
+            'diag_raw_ref_heading': float(raw_ref_point.get('raw_heading', raw_ref_point.get('heading', smoothed_heading))),
+            'diag_smoothed_ref_heading': float(smoothed_heading),
+            'diag_heading_suppression_abs': float(abs(smoothed_heading - raw_ref_point.get('raw_heading', raw_ref_point.get('heading', smoothed_heading)))),
+            'diag_smoothing_alpha': float(heading_alpha),
+            'diag_smoothing_alpha_x': float(alpha_x),
+            'diag_multi_lookahead_heading_base': float(raw_ref_point.get('diag_multi_lookahead_heading_base', raw_ref_point.get('raw_heading', smoothed_heading))),
+            'diag_multi_lookahead_heading_far': float(raw_ref_point.get('diag_multi_lookahead_heading_far', raw_ref_point.get('raw_heading', smoothed_heading))),
+            'diag_multi_lookahead_heading_blended': float(raw_ref_point.get('diag_multi_lookahead_heading_blended', raw_ref_point.get('raw_heading', smoothed_heading))),
+            'diag_multi_lookahead_blend_alpha': float(raw_ref_point.get('diag_multi_lookahead_blend_alpha', 0.0)),
         }
+        for key, value in raw_ref_point.items():
+            if isinstance(key, str) and key.startswith('diag_dynamic_effective_horizon_'):
+                try:
+                    v = float(value)
+                except (TypeError, ValueError):
+                    continue
+                if np.isfinite(v):
+                    result[key] = v
         
         self.last_smoothed_ref_point = {
             'x': smoothed_x,
@@ -714,6 +847,11 @@ class TrajectoryPlanningInference:
             'heading': smoothed_heading,
             'velocity': smoothed_velocity,
             'curvature': raw_ref_point.get('curvature', 0.0)
+        }
+        self.last_reference_diagnostics = {
+            k: float(v)
+            for k, v in result.items()
+            if isinstance(k, str) and k.startswith('diag_') and np.isfinite(float(v))
         }
         
         return result

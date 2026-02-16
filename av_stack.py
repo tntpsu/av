@@ -23,6 +23,7 @@ from trajectory.inference import TrajectoryPlanningInference
 from trajectory.speed_planner import SpeedPlanner, SpeedPlannerConfig
 from trajectory.utils import (
     compute_reference_lookahead,
+    compute_dynamic_effective_horizon,
     curvature_smoothing_alpha,
     select_curvature_bin_limits,
 )
@@ -557,12 +558,26 @@ class AVStack:
             multi_lookahead_curvature_threshold=trajectory_cfg.get(
                 'multi_lookahead_curvature_threshold', 0.01
             ),
+            multi_lookahead_curve_heading_smoothing_alpha=trajectory_cfg.get(
+                'multi_lookahead_curve_heading_smoothing_alpha',
+                trajectory_cfg.get('reference_smoothing', 0.95),
+            ),
+            multi_lookahead_curve_heading_min_abs_rad=trajectory_cfg.get(
+                'multi_lookahead_curve_heading_min_abs_rad', 0.05
+            ),
             center_spline_enabled=trajectory_cfg.get('center_spline_enabled', False),
             center_spline_degree=trajectory_cfg.get('center_spline_degree', 2),
             center_spline_samples=trajectory_cfg.get('center_spline_samples', 20),
             center_spline_alpha=trajectory_cfg.get('center_spline_alpha', 0.7),
             x_clip_enabled=trajectory_cfg.get('x_clip_enabled', True),
             x_clip_limit_m=trajectory_cfg.get('x_clip_limit_m', 10.0),
+            trajectory_eval_y_min_ratio=trajectory_cfg.get('trajectory_eval_y_min_ratio', 0.0),
+            centerline_midpoint_mode=trajectory_cfg.get('centerline_midpoint_mode', 'pointwise'),
+            projection_model=trajectory_cfg.get('projection_model', 'legacy'),
+            calibrated_fx_px=trajectory_cfg.get('calibrated_fx_px', 0.0),
+            calibrated_fy_px=trajectory_cfg.get('calibrated_fy_px', 0.0),
+            calibrated_cx_px=trajectory_cfg.get('calibrated_cx_px', 0.0),
+            calibrated_cy_px=trajectory_cfg.get('calibrated_cy_px', 0.0),
         )
         
         # Control - Load from config
@@ -1553,6 +1568,17 @@ class AVStack:
             lookahead_distance_from_unity = vehicle_state_dict.get('ground_truth_lookahead_distance')
         if isinstance(lookahead_distance_from_unity, (int, float)) and lookahead_distance_from_unity > 0:
             reference_lookahead = float(lookahead_distance_from_unity)
+
+        dynamic_horizon_diag = compute_dynamic_effective_horizon(
+            base_horizon_m=float(reference_lookahead),
+            current_speed_mps=float(current_speed),
+            path_curvature=float(
+                vehicle_state_dict.get('groundTruthPathCurvature', 0.0)
+                or vehicle_state_dict.get('ground_truth_path_curvature', 0.0)
+            ),
+            confidence=float(confidence) if isinstance(confidence, (int, float)) else None,
+            config=self.trajectory_config,
+        )
         
         # DEBUG: Log what we extracted (first few frames only)
         if self.frame_count < 3:
@@ -3169,7 +3195,9 @@ class AVStack:
             lane_coeffs=lane_coeffs,  # Pass lane coefficients for direct computation
             lane_positions={'left_lane_line_x': left_lane_line_x, 'right_lane_line_x': right_lane_line_x},  # Preferred: use vehicle coords
             use_direct=True,  # Use direct midpoint computation
-            timestamp=timestamp  # Pass timestamp for time gap detection
+            timestamp=timestamp,  # Pass timestamp for time gap detection
+            confidence=confidence,
+            dynamic_horizon_diag=dynamic_horizon_diag,
         )
 
         if trajectory_source_active == 'oracle':
@@ -4599,6 +4627,7 @@ class AVStack:
                     use_direct=True,  # Use direct midpoint computation
                     timestamp=timestamp,
                     confidence=confidence,
+                    dynamic_horizon_diag=dynamic_horizon_diag,
                 )
             
             # Build trajectory points array with reference point first
@@ -4668,6 +4697,11 @@ class AVStack:
             )
         )
         traj_diag = self.trajectory_planner.get_last_generation_diagnostics()
+        ref_diag = {}
+        ref_getter = getattr(self.trajectory_planner, 'get_last_reference_diagnostics', None)
+        if callable(ref_getter):
+            ref_diag = ref_getter() or {}
+        ref_point_diag = ref_point if isinstance(ref_point, dict) else {}
         
         trajectory_output = TrajectoryOutput(
             timestamp=timestamp,
@@ -4703,6 +4737,42 @@ class AVStack:
             diag_preclip_x2=traj_diag.get('diag_preclip_x2'),
             diag_preclip_x_abs_max=traj_diag.get('diag_preclip_x_abs_max'),
             diag_preclip_x_abs_p95=traj_diag.get('diag_preclip_x_abs_p95'),
+            diag_preclip_mean_12_20m_lane_source_x=traj_diag.get('diag_preclip_mean_12_20m_lane_source_x'),
+            diag_preclip_mean_12_20m_distance_scale_delta_x=traj_diag.get('diag_preclip_mean_12_20m_distance_scale_delta_x'),
+            diag_preclip_mean_12_20m_camera_offset_delta_x=traj_diag.get('diag_preclip_mean_12_20m_camera_offset_delta_x'),
+            diag_preclip_abs_mean_12_20m_lane_source_x=traj_diag.get('diag_preclip_abs_mean_12_20m_lane_source_x'),
+            diag_preclip_abs_mean_12_20m_distance_scale_delta_x=traj_diag.get('diag_preclip_abs_mean_12_20m_distance_scale_delta_x'),
+            diag_preclip_abs_mean_12_20m_camera_offset_delta_x=traj_diag.get('diag_preclip_abs_mean_12_20m_camera_offset_delta_x'),
+            diag_heading_zero_gate_active=ref_diag.get('diag_heading_zero_gate_active', ref_point_diag.get('diag_heading_zero_gate_active')),
+            diag_small_heading_gate_active=ref_diag.get('diag_small_heading_gate_active', ref_point_diag.get('diag_small_heading_gate_active')),
+            diag_multi_lookahead_active=ref_diag.get('diag_multi_lookahead_active', ref_point_diag.get('diag_multi_lookahead_active')),
+            diag_smoothing_jump_reject=ref_diag.get('diag_smoothing_jump_reject', ref_point_diag.get('diag_smoothing_jump_reject')),
+            diag_ref_x_rate_limit_active=ref_diag.get('diag_ref_x_rate_limit_active', ref_point_diag.get('diag_ref_x_rate_limit_active')),
+            diag_raw_ref_x=ref_diag.get('diag_raw_ref_x', ref_point_diag.get('diag_raw_ref_x')),
+            diag_smoothed_ref_x=ref_diag.get('diag_smoothed_ref_x', ref_point_diag.get('diag_smoothed_ref_x')),
+            diag_ref_x_suppression_abs=ref_diag.get('diag_ref_x_suppression_abs', ref_point_diag.get('diag_ref_x_suppression_abs')),
+            diag_raw_ref_heading=ref_diag.get('diag_raw_ref_heading', ref_point_diag.get('diag_raw_ref_heading')),
+            diag_smoothed_ref_heading=ref_diag.get('diag_smoothed_ref_heading', ref_point_diag.get('diag_smoothed_ref_heading')),
+            diag_heading_suppression_abs=ref_diag.get('diag_heading_suppression_abs', ref_point_diag.get('diag_heading_suppression_abs')),
+            diag_smoothing_alpha=ref_diag.get('diag_smoothing_alpha', ref_point_diag.get('diag_smoothing_alpha')),
+            diag_smoothing_alpha_x=ref_diag.get('diag_smoothing_alpha_x', ref_point_diag.get('diag_smoothing_alpha_x')),
+            diag_multi_lookahead_heading_base=ref_diag.get('diag_multi_lookahead_heading_base', ref_point_diag.get('diag_multi_lookahead_heading_base')),
+            diag_multi_lookahead_heading_far=ref_diag.get('diag_multi_lookahead_heading_far', ref_point_diag.get('diag_multi_lookahead_heading_far')),
+            diag_multi_lookahead_heading_blended=ref_diag.get('diag_multi_lookahead_heading_blended', ref_point_diag.get('diag_multi_lookahead_heading_blended')),
+            diag_multi_lookahead_blend_alpha=ref_diag.get('diag_multi_lookahead_blend_alpha', ref_point_diag.get('diag_multi_lookahead_blend_alpha')),
+            diag_dynamic_effective_horizon_m=ref_diag.get('diag_dynamic_effective_horizon_m', ref_point_diag.get('diag_dynamic_effective_horizon_m')),
+            diag_dynamic_effective_horizon_base_m=ref_diag.get('diag_dynamic_effective_horizon_base_m', ref_point_diag.get('diag_dynamic_effective_horizon_base_m')),
+            diag_dynamic_effective_horizon_min_m=ref_diag.get('diag_dynamic_effective_horizon_min_m', ref_point_diag.get('diag_dynamic_effective_horizon_min_m')),
+            diag_dynamic_effective_horizon_max_m=ref_diag.get('diag_dynamic_effective_horizon_max_m', ref_point_diag.get('diag_dynamic_effective_horizon_max_m')),
+            diag_dynamic_effective_horizon_speed_scale=ref_diag.get('diag_dynamic_effective_horizon_speed_scale', ref_point_diag.get('diag_dynamic_effective_horizon_speed_scale')),
+            diag_dynamic_effective_horizon_curvature_scale=ref_diag.get('diag_dynamic_effective_horizon_curvature_scale', ref_point_diag.get('diag_dynamic_effective_horizon_curvature_scale')),
+            diag_dynamic_effective_horizon_confidence_scale=ref_diag.get('diag_dynamic_effective_horizon_confidence_scale', ref_point_diag.get('diag_dynamic_effective_horizon_confidence_scale')),
+            diag_dynamic_effective_horizon_final_scale=ref_diag.get('diag_dynamic_effective_horizon_final_scale', ref_point_diag.get('diag_dynamic_effective_horizon_final_scale')),
+            diag_dynamic_effective_horizon_speed_mps=ref_diag.get('diag_dynamic_effective_horizon_speed_mps', ref_point_diag.get('diag_dynamic_effective_horizon_speed_mps')),
+            diag_dynamic_effective_horizon_curvature_abs=ref_diag.get('diag_dynamic_effective_horizon_curvature_abs', ref_point_diag.get('diag_dynamic_effective_horizon_curvature_abs')),
+            diag_dynamic_effective_horizon_confidence_used=ref_diag.get('diag_dynamic_effective_horizon_confidence_used', ref_point_diag.get('diag_dynamic_effective_horizon_confidence_used')),
+            diag_dynamic_effective_horizon_limiter_code=ref_diag.get('diag_dynamic_effective_horizon_limiter_code', ref_point_diag.get('diag_dynamic_effective_horizon_limiter_code')),
+            diag_dynamic_effective_horizon_applied=ref_diag.get('diag_dynamic_effective_horizon_applied', ref_point_diag.get('diag_dynamic_effective_horizon_applied')),
             diag_preclip_abs_mean_0_8m=traj_diag.get('diag_preclip_abs_mean_0_8m'),
             diag_preclip_abs_mean_8_12m=traj_diag.get('diag_preclip_abs_mean_8_12m'),
             diag_preclip_abs_mean_12_20m=traj_diag.get('diag_preclip_abs_mean_12_20m'),

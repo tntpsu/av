@@ -100,6 +100,76 @@ def analyze_trajectory_layer_localization(rec: Path, clip_limit_m: float = 15.0)
         preclip_12_20 = np.asarray(t["diag_preclip_abs_mean_12_20m"][:n], dtype=np.float64) if "diag_preclip_abs_mean_12_20m" in t else np.array([], dtype=np.float64)
         postclip_12_20 = np.asarray(t["diag_postclip_abs_mean_12_20m"][:n], dtype=np.float64) if "diag_postclip_abs_mean_12_20m" in t else np.array([], dtype=np.float64)
         nearclip_12_20 = np.asarray(t["diag_postclip_near_clip_frac_12_20m"][:n], dtype=np.float64) if "diag_postclip_near_clip_frac_12_20m" in t else np.array([], dtype=np.float64)
+        comp_lane_abs_12_20 = (
+            np.asarray(t["diag_preclip_abs_mean_12_20m_lane_source_x"][:n], dtype=np.float64)
+            if "diag_preclip_abs_mean_12_20m_lane_source_x" in t
+            else np.array([], dtype=np.float64)
+        )
+        comp_dist_abs_12_20 = (
+            np.asarray(t["diag_preclip_abs_mean_12_20m_distance_scale_delta_x"][:n], dtype=np.float64)
+            if "diag_preclip_abs_mean_12_20m_distance_scale_delta_x" in t
+            else np.array([], dtype=np.float64)
+        )
+        comp_offset_abs_12_20 = (
+            np.asarray(t["diag_preclip_abs_mean_12_20m_camera_offset_delta_x"][:n], dtype=np.float64)
+            if "diag_preclip_abs_mean_12_20m_camera_offset_delta_x" in t
+            else np.array([], dtype=np.float64)
+        )
+        comp_lane_signed_12_20 = (
+            np.asarray(t["diag_preclip_mean_12_20m_lane_source_x"][:n], dtype=np.float64)
+            if "diag_preclip_mean_12_20m_lane_source_x" in t
+            else np.array([], dtype=np.float64)
+        )
+        comp_dist_signed_12_20 = (
+            np.asarray(t["diag_preclip_mean_12_20m_distance_scale_delta_x"][:n], dtype=np.float64)
+            if "diag_preclip_mean_12_20m_distance_scale_delta_x" in t
+            else np.array([], dtype=np.float64)
+        )
+        comp_offset_signed_12_20 = (
+            np.asarray(t["diag_preclip_mean_12_20m_camera_offset_delta_x"][:n], dtype=np.float64)
+            if "diag_preclip_mean_12_20m_camera_offset_delta_x" in t
+            else np.array([], dtype=np.float64)
+        )
+        jump_reject = (
+            np.asarray(t["diag_smoothing_jump_reject"][:n], dtype=np.float64)
+            if "diag_smoothing_jump_reject" in t
+            else np.array([], dtype=np.float64)
+        )
+        rate_limit = (
+            np.asarray(t["diag_ref_x_rate_limit_active"][:n], dtype=np.float64)
+            if "diag_ref_x_rate_limit_active" in t
+            else np.array([], dtype=np.float64)
+        )
+        heading_suppr = (
+            np.asarray(t["diag_heading_suppression_abs"][:n], dtype=np.float64)
+            if "diag_heading_suppression_abs" in t
+            else np.array([], dtype=np.float64)
+        )
+        x_suppr = (
+            np.asarray(t["diag_ref_x_suppression_abs"][:n], dtype=np.float64)
+            if "diag_ref_x_suppression_abs" in t
+            else np.array([], dtype=np.float64)
+        )
+        dyn_horizon = (
+            np.asarray(t["diag_dynamic_effective_horizon_m"][:n], dtype=np.float64)
+            if "diag_dynamic_effective_horizon_m" in t
+            else np.array([], dtype=np.float64)
+        )
+        dyn_final_scale = (
+            np.asarray(t["diag_dynamic_effective_horizon_final_scale"][:n], dtype=np.float64)
+            if "diag_dynamic_effective_horizon_final_scale" in t
+            else np.array([], dtype=np.float64)
+        )
+        dyn_limiter_code = (
+            np.asarray(t["diag_dynamic_effective_horizon_limiter_code"][:n], dtype=np.float64)
+            if "diag_dynamic_effective_horizon_limiter_code" in t
+            else np.array([], dtype=np.float64)
+        )
+        dyn_applied = (
+            np.asarray(t["diag_dynamic_effective_horizon_applied"][:n], dtype=np.float64)
+            if "diag_dynamic_effective_horizon_applied" in t
+            else np.array([], dtype=np.float64)
+        )
 
         result: dict[str, Any] = {
             "recording": str(rec),
@@ -157,6 +227,70 @@ def analyze_trajectory_layer_localization(rec: Path, clip_limit_m: float = 15.0)
                 "preclip_abs_mean_12_20m": summarize(preclip_12_20[np.isfinite(preclip_12_20)].tolist()),
                 "postclip_abs_mean_12_20m": summarize(postclip_12_20[np.isfinite(postclip_12_20)].tolist()),
                 "postclip_near_clip_frac_12_20m": summarize(nearclip_12_20[np.isfinite(nearclip_12_20)].tolist()),
+            }
+        if (
+            comp_lane_abs_12_20.size > 0
+            or comp_dist_abs_12_20.size > 0
+            or comp_offset_abs_12_20.size > 0
+        ):
+            result["planner_source_components_12_20m"] = {
+                "lane_source_abs_mean_x": summarize(
+                    comp_lane_abs_12_20[np.isfinite(comp_lane_abs_12_20)].tolist()
+                ),
+                "distance_scale_delta_abs_mean_x": summarize(
+                    comp_dist_abs_12_20[np.isfinite(comp_dist_abs_12_20)].tolist()
+                ),
+                "camera_offset_delta_abs_mean_x": summarize(
+                    comp_offset_abs_12_20[np.isfinite(comp_offset_abs_12_20)].tolist()
+                ),
+                "lane_source_signed_mean_x": summarize(
+                    comp_lane_signed_12_20[np.isfinite(comp_lane_signed_12_20)].tolist()
+                ),
+                "distance_scale_delta_signed_mean_x": summarize(
+                    comp_dist_signed_12_20[np.isfinite(comp_dist_signed_12_20)].tolist()
+                ),
+                "camera_offset_delta_signed_mean_x": summarize(
+                    comp_offset_signed_12_20[np.isfinite(comp_offset_signed_12_20)].tolist()
+                ),
+            }
+        if jump_reject.size > 0 or rate_limit.size > 0 or heading_suppr.size > 0 or x_suppr.size > 0:
+            result["reference_suppression"] = {
+                "jump_reject_rate": float(
+                    np.mean(jump_reject[np.isfinite(jump_reject)] > 0.5)
+                ) if np.isfinite(jump_reject).any() else None,
+                "ref_x_rate_limit_rate": float(
+                    np.mean(rate_limit[np.isfinite(rate_limit)] > 0.5)
+                ) if np.isfinite(rate_limit).any() else None,
+                "heading_suppression_abs": summarize(
+                    heading_suppr[np.isfinite(heading_suppr)].tolist()
+                ),
+                "ref_x_suppression_abs": summarize(
+                    x_suppr[np.isfinite(x_suppr)].tolist()
+                ),
+            }
+        if (
+            dyn_horizon.size > 0
+            or dyn_final_scale.size > 0
+            or dyn_limiter_code.size > 0
+            or dyn_applied.size > 0
+        ):
+            limiter_valid = dyn_limiter_code[np.isfinite(dyn_limiter_code)]
+            result["dynamic_effective_horizon"] = {
+                "effective_horizon_m": summarize(
+                    dyn_horizon[np.isfinite(dyn_horizon)].tolist()
+                ),
+                "final_scale": summarize(
+                    dyn_final_scale[np.isfinite(dyn_final_scale)].tolist()
+                ),
+                "applied_rate": float(
+                    np.mean(dyn_applied[np.isfinite(dyn_applied)] > 0.5)
+                ) if np.isfinite(dyn_applied).any() else None,
+                "limiter_code_distribution": {
+                    "none_0": int(np.sum(limiter_valid == 0.0)),
+                    "speed_1": int(np.sum(limiter_valid == 1.0)),
+                    "curvature_2": int(np.sum(limiter_valid == 2.0)),
+                    "confidence_3": int(np.sum(limiter_valid == 3.0)),
+                } if limiter_valid.size > 0 else None,
             }
 
         hint = "insufficient_data"

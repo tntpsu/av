@@ -438,6 +438,23 @@
                             <tr><td>Heading Zero Gate (`|a_center| &lt; 0.01`)</td><td id="projection-traj-heading-zero-gate">-</td></tr>
                             <tr><td>Small Heading Gate (`|heading| &lt; 1 deg`)</td><td id="projection-traj-small-heading-gate">-</td></tr>
                             <tr><td>Multi-Lookahead Blend Active</td><td id="projection-traj-multilookahead-active">-</td></tr>
+                            <tr><td>Smoothing Jump Reject Active</td><td id="projection-traj-smoothing-jump-reject">-</td></tr>
+                            <tr><td>Ref X Rate-Limit Active</td><td id="projection-traj-ref-x-rate-limit-active">-</td></tr>
+                            <tr><td>Raw Ref Heading</td><td id="projection-traj-raw-ref-heading">-</td></tr>
+                            <tr><td>Smoothed Ref Heading</td><td id="projection-traj-smoothed-ref-heading">-</td></tr>
+                            <tr><td>Heading Suppression |Δ|</td><td id="projection-traj-heading-suppression-abs">-</td></tr>
+                            <tr><td>Raw Ref X</td><td id="projection-traj-raw-ref-x">-</td></tr>
+                            <tr><td>Smoothed Ref X</td><td id="projection-traj-smoothed-ref-x">-</td></tr>
+                            <tr><td>Ref X Suppression |Δ|</td><td id="projection-traj-ref-x-suppression-abs">-</td></tr>
+                            <tr><td>Smoothing Alpha / Alpha X</td><td id="projection-traj-smoothing-alpha-pair">-</td></tr>
+                            <tr><td>ML Heading Base / Far / Blended</td><td id="projection-traj-ml-heading-breakdown">-</td></tr>
+                            <tr><td>ML Blend Alpha</td><td id="projection-traj-ml-blend-alpha">-</td></tr>
+                            <tr><td>Dynamic Effective Horizon (m)</td><td id="projection-traj-dynamic-horizon-m">-</td></tr>
+                            <tr><td>Dynamic Horizon Base / Min / Max (m)</td><td id="projection-traj-dynamic-horizon-bounds-m">-</td></tr>
+                            <tr><td>Dynamic Horizon Scales (speed / curv / conf / final)</td><td id="projection-traj-dynamic-horizon-scales">-</td></tr>
+                            <tr><td>Dynamic Horizon Inputs (speed / |curv| / conf)</td><td id="projection-traj-dynamic-horizon-inputs">-</td></tr>
+                            <tr><td>Dynamic Horizon Limiter Code</td><td id="projection-traj-dynamic-horizon-limiter-code">-</td></tr>
+                            <tr><td>Dynamic Horizon Applied</td><td id="projection-traj-dynamic-horizon-applied">-</td></tr>
                             <tr><td>X Clip Count</td><td id="projection-traj-x-clip-count">-</td></tr>
                             <tr><td>Heavy X Clipping (`>= 8`)</td><td id="projection-traj-heavy-x-clipping">-</td></tr>
                             <tr><td>Preclip |X| Max (full path)</td><td id="projection-traj-preclip-abs-max">-</td></tr>
@@ -445,6 +462,12 @@
                             <tr><td>Preclip |X| Mean 0-8m (planner source)</td><td id="projection-traj-preclip-mean-0-8m">-</td></tr>
                             <tr><td>Preclip |X| Mean 8-12m (planner source)</td><td id="projection-traj-preclip-mean-8-12m">-</td></tr>
                             <tr><td>Preclip |X| Mean 12-20m (planner source)</td><td id="projection-traj-preclip-mean-12-20m">-</td></tr>
+                            <tr><td>Preclip |X| Mean 12-20m (lane source only)</td><td id="projection-traj-preclip-lane-source-abs-mean-12-20m">-</td></tr>
+                            <tr><td>Preclip |ΔX| Mean 12-20m (distance scaling)</td><td id="projection-traj-preclip-distance-scale-abs-mean-12-20m">-</td></tr>
+                            <tr><td>Preclip |ΔX| Mean 12-20m (camera offset)</td><td id="projection-traj-preclip-camera-offset-abs-mean-12-20m">-</td></tr>
+                            <tr><td>Preclip X Mean 12-20m (lane source only, signed)</td><td id="projection-traj-preclip-lane-source-mean-12-20m">-</td></tr>
+                            <tr><td>Preclip ΔX Mean 12-20m (distance scaling, signed)</td><td id="projection-traj-preclip-distance-scale-mean-12-20m">-</td></tr>
+                            <tr><td>Preclip ΔX Mean 12-20m (camera offset, signed)</td><td id="projection-traj-preclip-camera-offset-mean-12-20m">-</td></tr>
                             <tr><td>Postclip |X| Mean 12-20m</td><td id="projection-traj-postclip-mean-12-20m">-</td></tr>
                             <tr><td>Postclip Near-Clip Frac 12-20m</td><td id="projection-traj-postclip-nearclip-frac-12-20m">-</td></tr>
                             <tr><td>Front Frame ID Delta</td><td id="projection-traj-front-frame-delta">-</td></tr>
