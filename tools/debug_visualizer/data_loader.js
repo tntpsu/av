@@ -66,6 +66,24 @@ class DataLoader {
     }
 
     /**
+     * Load run-level trajectory layer localization summary.
+     */
+    async loadTrajectoryLayerLocalization(filename = null, clipLimitM = null) {
+        const target = filename || this.currentRecording;
+        if (!target) {
+            throw new Error('No recording specified');
+        }
+        const params = new URLSearchParams();
+        if (Number.isFinite(Number(clipLimitM))) {
+            params.set('clip_limit_m', String(Number(clipLimitM)));
+        }
+        const suffix = params.toString() ? `?${params.toString()}` : '';
+        const response = await fetch(`${API_BASE}/recording/${target}/trajectory-layer-localization${suffix}`, { cache: 'no-store' });
+        if (!response.ok) throw new Error('Failed to load trajectory layer localization');
+        return response.json();
+    }
+
+    /**
      * Load available numeric signals for the current recording.
      */
     async loadSignals() {

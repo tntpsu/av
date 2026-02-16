@@ -1049,6 +1049,38 @@ class RuleBasedTrajectoryPlanner:
         pre_x = [float(v) for v in debug_trace.get("pre_clip_x", [])]
         post_x = [float(v) for v in debug_trace.get("post_clip_x", [])]
         pre_x_abs = [abs(v) for v in pre_x if np.isfinite(v)]
+        post_x_abs = [abs(v) for v in post_x if np.isfinite(v)]
+        y_for_bands = [float(v) for v in post_y]
+        clip_limit = float(self.x_clip_limit_m)
+        near_clip_threshold = max(0.0, clip_limit - 0.05)
+
+        def _band_indices(y0: float, y1: float) -> List[int]:
+            idx: List[int] = []
+            for i, yv in enumerate(y_for_bands):
+                if np.isfinite(yv) and (y0 <= yv <= y1):
+                    idx.append(i)
+            return idx
+
+        def _mean_abs(vals: List[float], idx: List[int]) -> float:
+            if len(idx) == 0:
+                return np.nan
+            samples = [abs(float(vals[i])) for i in idx if i < len(vals) and np.isfinite(vals[i])]
+            if len(samples) == 0:
+                return np.nan
+            return float(np.mean(np.array(samples, dtype=np.float64)))
+
+        def _near_clip_frac(vals: List[float], idx: List[int]) -> float:
+            if len(idx) == 0:
+                return np.nan
+            samples = [abs(float(vals[i])) for i in idx if i < len(vals) and np.isfinite(vals[i])]
+            if len(samples) == 0:
+                return np.nan
+            flags = [1.0 if s >= near_clip_threshold else 0.0 for s in samples]
+            return float(np.mean(np.array(flags, dtype=np.float64)))
+
+        idx_0_8 = _band_indices(0.0, 8.0)
+        idx_8_12 = _band_indices(8.0, 12.0)
+        idx_12_20 = _band_indices(12.0, 20.0)
         pre_inv = 1.0 if len(input_y) > 1 and input_y[0] > input_y[1] else 0.0
         post_inv = 1.0 if len(post_y) > 1 and post_y[0] > post_y[1] else 0.0
         introduced = 1.0 if (pre_inv < 0.5 and post_inv > 0.5) else 0.0
@@ -1075,9 +1107,16 @@ class RuleBasedTrajectoryPlanner:
             "diag_preclip_x2": self._diag_value_at(pre_x, 2),
             "diag_preclip_x_abs_max": float(np.max(pre_x_abs)) if len(pre_x_abs) > 0 else np.nan,
             "diag_preclip_x_abs_p95": float(np.percentile(np.array(pre_x_abs, dtype=np.float64), 95)) if len(pre_x_abs) > 0 else np.nan,
+            "diag_preclip_abs_mean_0_8m": _mean_abs(pre_x, idx_0_8),
+            "diag_preclip_abs_mean_8_12m": _mean_abs(pre_x, idx_8_12),
+            "diag_preclip_abs_mean_12_20m": _mean_abs(pre_x, idx_12_20),
             "diag_postclip_x0": self._diag_value_at(post_x, 0),
             "diag_postclip_x1": self._diag_value_at(post_x, 1),
             "diag_postclip_x2": self._diag_value_at(post_x, 2),
+            "diag_postclip_abs_mean_0_8m": _mean_abs(post_x, idx_0_8),
+            "diag_postclip_abs_mean_8_12m": _mean_abs(post_x, idx_8_12),
+            "diag_postclip_abs_mean_12_20m": _mean_abs(post_x, idx_12_20),
+            "diag_postclip_near_clip_frac_12_20m": _near_clip_frac(post_x, idx_12_20),
             "diag_first_segment_y0_gt_y1_pre": pre_inv if len(input_y) > 1 else np.nan,
             "diag_first_segment_y0_gt_y1_post": post_inv if len(post_y) > 1 else np.nan,
             "diag_inversion_introduced_after_conversion": introduced if len(input_y) > 1 and len(post_y) > 1 else np.nan,

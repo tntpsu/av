@@ -294,9 +294,16 @@ class TrajectoryOutput:
     diag_preclip_x2: Optional[float] = None
     diag_preclip_x_abs_max: Optional[float] = None
     diag_preclip_x_abs_p95: Optional[float] = None
+    diag_preclip_abs_mean_0_8m: Optional[float] = None
+    diag_preclip_abs_mean_8_12m: Optional[float] = None
+    diag_preclip_abs_mean_12_20m: Optional[float] = None
     diag_postclip_x0: Optional[float] = None
     diag_postclip_x1: Optional[float] = None
     diag_postclip_x2: Optional[float] = None
+    diag_postclip_abs_mean_0_8m: Optional[float] = None
+    diag_postclip_abs_mean_8_12m: Optional[float] = None
+    diag_postclip_abs_mean_12_20m: Optional[float] = None
+    diag_postclip_near_clip_frac_12_20m: Optional[float] = None
     diag_first_segment_y0_gt_y1_pre: Optional[float] = None
     diag_first_segment_y0_gt_y1_post: Optional[float] = None
     diag_inversion_introduced_after_conversion: Optional[float] = None

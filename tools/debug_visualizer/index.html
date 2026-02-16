@@ -423,6 +423,16 @@
                             <tr><td>Perception Center X</td><td id="trajectory-perception-center">-</td></tr>
                             <tr><td>Trajectory vs Perception</td><td id="trajectory-vs-perception">-</td></tr>
                         </table>
+                        <h3>Trajectory Layer Localization (Run Summary)</h3>
+                        <table class="data-table">
+                            <tr><td>Localization Hint</td><td id="trajectory-layer-summary-hint">-</td></tr>
+                            <tr><td>Dominant Error Band</td><td id="trajectory-layer-summary-dominant-band">-</td></tr>
+                            <tr><td>X Clip Any Rate</td><td id="trajectory-layer-summary-xclip-rate">-</td></tr>
+                            <tr><td>Lateral Error Mean 0-8m</td><td id="trajectory-layer-summary-err-0-8m">-</td></tr>
+                            <tr><td>Lateral Error Mean 8-12m</td><td id="trajectory-layer-summary-err-8-12m">-</td></tr>
+                            <tr><td>Lateral Error Mean 12-20m</td><td id="trajectory-layer-summary-err-12-20m">-</td></tr>
+                            <tr><td>Preclip |X| P95</td><td id="trajectory-layer-summary-preclip-p95">-</td></tr>
+                        </table>
                         <h3>Trajectory Suppression Waterfall (Proxy)</h3>
                         <table class="data-table">
                             <tr><td>Heading Zero Gate (`|a_center| &lt; 0.01`)</td><td id="projection-traj-heading-zero-gate">-</td></tr>
@@ -432,6 +442,11 @@
                             <tr><td>Heavy X Clipping (`>= 8`)</td><td id="projection-traj-heavy-x-clipping">-</td></tr>
                             <tr><td>Preclip |X| Max (full path)</td><td id="projection-traj-preclip-abs-max">-</td></tr>
                             <tr><td>Preclip |X| P95 (full path)</td><td id="projection-traj-preclip-abs-p95">-</td></tr>
+                            <tr><td>Preclip |X| Mean 0-8m (planner source)</td><td id="projection-traj-preclip-mean-0-8m">-</td></tr>
+                            <tr><td>Preclip |X| Mean 8-12m (planner source)</td><td id="projection-traj-preclip-mean-8-12m">-</td></tr>
+                            <tr><td>Preclip |X| Mean 12-20m (planner source)</td><td id="projection-traj-preclip-mean-12-20m">-</td></tr>
+                            <tr><td>Postclip |X| Mean 12-20m</td><td id="projection-traj-postclip-mean-12-20m">-</td></tr>
+                            <tr><td>Postclip Near-Clip Frac 12-20m</td><td id="projection-traj-postclip-nearclip-frac-12-20m">-</td></tr>
                             <tr><td>Front Frame ID Delta</td><td id="projection-traj-front-frame-delta">-</td></tr>
                             <tr><td>Front Unity Δt (ms)</td><td id="projection-traj-front-unity-dt-ms">-</td></tr>
                             <tr><td>Overlay Snap Risk</td><td id="projection-traj-overlay-snap-risk">-</td></tr>
@@ -762,9 +777,9 @@
         </div>
     </div>
 
-    <script src="data_loader.js?v=20260213_issues_filters"></script>
+    <script src="data_loader.js?v=20260216_traj_layer_summary_api_v19"></script>
     <script src="overlay_renderer.js?v=20260213_issues_filters"></script>
-    <script src="visualizer.js?v=20260216_traj_band_triage_waterfall_v18"></script>
+    <script src="visualizer.js?v=20260216_traj_layer_summary_api_v19"></script>
 </body>
 </html>
 

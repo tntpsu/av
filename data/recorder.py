@@ -1151,9 +1151,16 @@ class DataRecorder:
         self.h5_file.create_dataset("trajectory/diag_preclip_x2", shape=(0,), maxshape=max_shape, dtype=np.float32)
         self.h5_file.create_dataset("trajectory/diag_preclip_x_abs_max", shape=(0,), maxshape=max_shape, dtype=np.float32)
         self.h5_file.create_dataset("trajectory/diag_preclip_x_abs_p95", shape=(0,), maxshape=max_shape, dtype=np.float32)
+        self.h5_file.create_dataset("trajectory/diag_preclip_abs_mean_0_8m", shape=(0,), maxshape=max_shape, dtype=np.float32)
+        self.h5_file.create_dataset("trajectory/diag_preclip_abs_mean_8_12m", shape=(0,), maxshape=max_shape, dtype=np.float32)
+        self.h5_file.create_dataset("trajectory/diag_preclip_abs_mean_12_20m", shape=(0,), maxshape=max_shape, dtype=np.float32)
         self.h5_file.create_dataset("trajectory/diag_postclip_x0", shape=(0,), maxshape=max_shape, dtype=np.float32)
         self.h5_file.create_dataset("trajectory/diag_postclip_x1", shape=(0,), maxshape=max_shape, dtype=np.float32)
         self.h5_file.create_dataset("trajectory/diag_postclip_x2", shape=(0,), maxshape=max_shape, dtype=np.float32)
+        self.h5_file.create_dataset("trajectory/diag_postclip_abs_mean_0_8m", shape=(0,), maxshape=max_shape, dtype=np.float32)
+        self.h5_file.create_dataset("trajectory/diag_postclip_abs_mean_8_12m", shape=(0,), maxshape=max_shape, dtype=np.float32)
+        self.h5_file.create_dataset("trajectory/diag_postclip_abs_mean_12_20m", shape=(0,), maxshape=max_shape, dtype=np.float32)
+        self.h5_file.create_dataset("trajectory/diag_postclip_near_clip_frac_12_20m", shape=(0,), maxshape=max_shape, dtype=np.float32)
         self.h5_file.create_dataset("trajectory/diag_first_segment_y0_gt_y1_pre", shape=(0,), maxshape=max_shape, dtype=np.float32)
         self.h5_file.create_dataset("trajectory/diag_first_segment_y0_gt_y1_post", shape=(0,), maxshape=max_shape, dtype=np.float32)
         self.h5_file.create_dataset("trajectory/diag_inversion_introduced_after_conversion", shape=(0,), maxshape=max_shape, dtype=np.float32)
@@ -3257,9 +3264,16 @@ class DataRecorder:
         diag_preclip_x2 = []
         diag_preclip_x_abs_max = []
         diag_preclip_x_abs_p95 = []
+        diag_preclip_abs_mean_0_8m = []
+        diag_preclip_abs_mean_8_12m = []
+        diag_preclip_abs_mean_12_20m = []
         diag_postclip_x0 = []
         diag_postclip_x1 = []
         diag_postclip_x2 = []
+        diag_postclip_abs_mean_0_8m = []
+        diag_postclip_abs_mean_8_12m = []
+        diag_postclip_abs_mean_12_20m = []
+        diag_postclip_near_clip_frac_12_20m = []
         diag_first_segment_y0_gt_y1_pre = []
         diag_first_segment_y0_gt_y1_post = []
         diag_inversion_introduced_after_conversion = []
@@ -3309,9 +3323,16 @@ class DataRecorder:
                 diag_preclip_x2.append(float(to.diag_preclip_x2 if to.diag_preclip_x2 is not None else np.nan))
                 diag_preclip_x_abs_max.append(float(to.diag_preclip_x_abs_max if to.diag_preclip_x_abs_max is not None else np.nan))
                 diag_preclip_x_abs_p95.append(float(to.diag_preclip_x_abs_p95 if to.diag_preclip_x_abs_p95 is not None else np.nan))
+                diag_preclip_abs_mean_0_8m.append(float(to.diag_preclip_abs_mean_0_8m if to.diag_preclip_abs_mean_0_8m is not None else np.nan))
+                diag_preclip_abs_mean_8_12m.append(float(to.diag_preclip_abs_mean_8_12m if to.diag_preclip_abs_mean_8_12m is not None else np.nan))
+                diag_preclip_abs_mean_12_20m.append(float(to.diag_preclip_abs_mean_12_20m if to.diag_preclip_abs_mean_12_20m is not None else np.nan))
                 diag_postclip_x0.append(float(to.diag_postclip_x0 if to.diag_postclip_x0 is not None else np.nan))
                 diag_postclip_x1.append(float(to.diag_postclip_x1 if to.diag_postclip_x1 is not None else np.nan))
                 diag_postclip_x2.append(float(to.diag_postclip_x2 if to.diag_postclip_x2 is not None else np.nan))
+                diag_postclip_abs_mean_0_8m.append(float(to.diag_postclip_abs_mean_0_8m if to.diag_postclip_abs_mean_0_8m is not None else np.nan))
+                diag_postclip_abs_mean_8_12m.append(float(to.diag_postclip_abs_mean_8_12m if to.diag_postclip_abs_mean_8_12m is not None else np.nan))
+                diag_postclip_abs_mean_12_20m.append(float(to.diag_postclip_abs_mean_12_20m if to.diag_postclip_abs_mean_12_20m is not None else np.nan))
+                diag_postclip_near_clip_frac_12_20m.append(float(to.diag_postclip_near_clip_frac_12_20m if to.diag_postclip_near_clip_frac_12_20m is not None else np.nan))
                 diag_first_segment_y0_gt_y1_pre.append(float(to.diag_first_segment_y0_gt_y1_pre if to.diag_first_segment_y0_gt_y1_pre is not None else np.nan))
                 diag_first_segment_y0_gt_y1_post.append(float(to.diag_first_segment_y0_gt_y1_post if to.diag_first_segment_y0_gt_y1_post is not None else np.nan))
                 diag_inversion_introduced_after_conversion.append(float(to.diag_inversion_introduced_after_conversion if to.diag_inversion_introduced_after_conversion is not None else np.nan))
@@ -3343,9 +3364,16 @@ class DataRecorder:
                 diag_preclip_x2.append(float(to.diag_preclip_x2 if (to and to.diag_preclip_x2 is not None) else np.nan))
                 diag_preclip_x_abs_max.append(float(to.diag_preclip_x_abs_max if (to and to.diag_preclip_x_abs_max is not None) else np.nan))
                 diag_preclip_x_abs_p95.append(float(to.diag_preclip_x_abs_p95 if (to and to.diag_preclip_x_abs_p95 is not None) else np.nan))
+                diag_preclip_abs_mean_0_8m.append(float(to.diag_preclip_abs_mean_0_8m if (to and to.diag_preclip_abs_mean_0_8m is not None) else np.nan))
+                diag_preclip_abs_mean_8_12m.append(float(to.diag_preclip_abs_mean_8_12m if (to and to.diag_preclip_abs_mean_8_12m is not None) else np.nan))
+                diag_preclip_abs_mean_12_20m.append(float(to.diag_preclip_abs_mean_12_20m if (to and to.diag_preclip_abs_mean_12_20m is not None) else np.nan))
                 diag_postclip_x0.append(float(to.diag_postclip_x0 if (to and to.diag_postclip_x0 is not None) else np.nan))
                 diag_postclip_x1.append(float(to.diag_postclip_x1 if (to and to.diag_postclip_x1 is not None) else np.nan))
                 diag_postclip_x2.append(float(to.diag_postclip_x2 if (to and to.diag_postclip_x2 is not None) else np.nan))
+                diag_postclip_abs_mean_0_8m.append(float(to.diag_postclip_abs_mean_0_8m if (to and to.diag_postclip_abs_mean_0_8m is not None) else np.nan))
+                diag_postclip_abs_mean_8_12m.append(float(to.diag_postclip_abs_mean_8_12m if (to and to.diag_postclip_abs_mean_8_12m is not None) else np.nan))
+                diag_postclip_abs_mean_12_20m.append(float(to.diag_postclip_abs_mean_12_20m if (to and to.diag_postclip_abs_mean_12_20m is not None) else np.nan))
+                diag_postclip_near_clip_frac_12_20m.append(float(to.diag_postclip_near_clip_frac_12_20m if (to and to.diag_postclip_near_clip_frac_12_20m is not None) else np.nan))
                 diag_first_segment_y0_gt_y1_pre.append(float(to.diag_first_segment_y0_gt_y1_pre if (to and to.diag_first_segment_y0_gt_y1_pre is not None) else np.nan))
                 diag_first_segment_y0_gt_y1_post.append(float(to.diag_first_segment_y0_gt_y1_post if (to and to.diag_first_segment_y0_gt_y1_post is not None) else np.nan))
                 diag_inversion_introduced_after_conversion.append(float(to.diag_inversion_introduced_after_conversion if (to and to.diag_inversion_introduced_after_conversion is not None) else np.nan))
@@ -3388,9 +3416,16 @@ class DataRecorder:
             self.h5_file["trajectory/diag_preclip_x2"].resize((new_size_rp,))
             self.h5_file["trajectory/diag_preclip_x_abs_max"].resize((new_size_rp,))
             self.h5_file["trajectory/diag_preclip_x_abs_p95"].resize((new_size_rp,))
+            self.h5_file["trajectory/diag_preclip_abs_mean_0_8m"].resize((new_size_rp,))
+            self.h5_file["trajectory/diag_preclip_abs_mean_8_12m"].resize((new_size_rp,))
+            self.h5_file["trajectory/diag_preclip_abs_mean_12_20m"].resize((new_size_rp,))
             self.h5_file["trajectory/diag_postclip_x0"].resize((new_size_rp,))
             self.h5_file["trajectory/diag_postclip_x1"].resize((new_size_rp,))
             self.h5_file["trajectory/diag_postclip_x2"].resize((new_size_rp,))
+            self.h5_file["trajectory/diag_postclip_abs_mean_0_8m"].resize((new_size_rp,))
+            self.h5_file["trajectory/diag_postclip_abs_mean_8_12m"].resize((new_size_rp,))
+            self.h5_file["trajectory/diag_postclip_abs_mean_12_20m"].resize((new_size_rp,))
+            self.h5_file["trajectory/diag_postclip_near_clip_frac_12_20m"].resize((new_size_rp,))
             self.h5_file["trajectory/diag_first_segment_y0_gt_y1_pre"].resize((new_size_rp,))
             self.h5_file["trajectory/diag_first_segment_y0_gt_y1_post"].resize((new_size_rp,))
             self.h5_file["trajectory/diag_inversion_introduced_after_conversion"].resize((new_size_rp,))
@@ -3430,9 +3465,16 @@ class DataRecorder:
             self.h5_file["trajectory/diag_preclip_x2"][current_size_rp:] = np.array(diag_preclip_x2, dtype=np.float32)
             self.h5_file["trajectory/diag_preclip_x_abs_max"][current_size_rp:] = np.array(diag_preclip_x_abs_max, dtype=np.float32)
             self.h5_file["trajectory/diag_preclip_x_abs_p95"][current_size_rp:] = np.array(diag_preclip_x_abs_p95, dtype=np.float32)
+            self.h5_file["trajectory/diag_preclip_abs_mean_0_8m"][current_size_rp:] = np.array(diag_preclip_abs_mean_0_8m, dtype=np.float32)
+            self.h5_file["trajectory/diag_preclip_abs_mean_8_12m"][current_size_rp:] = np.array(diag_preclip_abs_mean_8_12m, dtype=np.float32)
+            self.h5_file["trajectory/diag_preclip_abs_mean_12_20m"][current_size_rp:] = np.array(diag_preclip_abs_mean_12_20m, dtype=np.float32)
             self.h5_file["trajectory/diag_postclip_x0"][current_size_rp:] = np.array(diag_postclip_x0, dtype=np.float32)
             self.h5_file["trajectory/diag_postclip_x1"][current_size_rp:] = np.array(diag_postclip_x1, dtype=np.float32)
             self.h5_file["trajectory/diag_postclip_x2"][current_size_rp:] = np.array(diag_postclip_x2, dtype=np.float32)
+            self.h5_file["trajectory/diag_postclip_abs_mean_0_8m"][current_size_rp:] = np.array(diag_postclip_abs_mean_0_8m, dtype=np.float32)
+            self.h5_file["trajectory/diag_postclip_abs_mean_8_12m"][current_size_rp:] = np.array(diag_postclip_abs_mean_8_12m, dtype=np.float32)
+            self.h5_file["trajectory/diag_postclip_abs_mean_12_20m"][current_size_rp:] = np.array(diag_postclip_abs_mean_12_20m, dtype=np.float32)
+            self.h5_file["trajectory/diag_postclip_near_clip_frac_12_20m"][current_size_rp:] = np.array(diag_postclip_near_clip_frac_12_20m, dtype=np.float32)
             self.h5_file["trajectory/diag_first_segment_y0_gt_y1_pre"][current_size_rp:] = np.array(diag_first_segment_y0_gt_y1_pre, dtype=np.float32)
             self.h5_file["trajectory/diag_first_segment_y0_gt_y1_post"][current_size_rp:] = np.array(diag_first_segment_y0_gt_y1_post, dtype=np.float32)
             self.h5_file["trajectory/diag_inversion_introduced_after_conversion"][current_size_rp:] = np.array(diag_inversion_introduced_after_conversion, dtype=np.float32)

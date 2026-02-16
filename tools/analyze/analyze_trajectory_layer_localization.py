@@ -83,23 +83,9 @@ def summarize(vals: list[float]) -> dict[str, float | int | None]:
     }
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description="Trajectory layer/location localization report.")
-    parser.add_argument("recording", nargs="?", help="Recording .h5 path")
-    parser.add_argument("--latest", action="store_true", help="Use latest recording")
-    parser.add_argument("--clip-limit-m", type=float, default=15.0)
-    parser.add_argument("--output-json", type=str, default="")
-    args = parser.parse_args()
-
-    rec = Path(args.recording) if args.recording else find_latest_recording()
-    if args.latest:
-        rec = find_latest_recording()
-    if rec is None or not rec.exists():
-        raise SystemExit("No recording found.")
-
+def analyze_trajectory_layer_localization(rec: Path, clip_limit_m: float = 15.0) -> dict[str, Any]:
     bands = [(0.0, 8.0, [2, 4, 6, 8]), (8.0, 12.0, [8, 9, 10, 11, 12]), (12.0, 20.0, [12, 14, 16, 18, 20])]
-    clip_limit = float(args.clip_limit_m)
-
+    clip_limit = float(clip_limit_m)
     with h5py.File(rec, "r") as f:
         t = f["trajectory"]
         n = min(len(t["trajectory_points"]), len(t["oracle_points"]))
@@ -109,6 +95,11 @@ def main() -> None:
             if "diag_preclip_x_abs_max" in t
             else np.full(n, np.nan, dtype=np.float64)
         )
+        preclip_0_8 = np.asarray(t["diag_preclip_abs_mean_0_8m"][:n], dtype=np.float64) if "diag_preclip_abs_mean_0_8m" in t else np.array([], dtype=np.float64)
+        preclip_8_12 = np.asarray(t["diag_preclip_abs_mean_8_12m"][:n], dtype=np.float64) if "diag_preclip_abs_mean_8_12m" in t else np.array([], dtype=np.float64)
+        preclip_12_20 = np.asarray(t["diag_preclip_abs_mean_12_20m"][:n], dtype=np.float64) if "diag_preclip_abs_mean_12_20m" in t else np.array([], dtype=np.float64)
+        postclip_12_20 = np.asarray(t["diag_postclip_abs_mean_12_20m"][:n], dtype=np.float64) if "diag_postclip_abs_mean_12_20m" in t else np.array([], dtype=np.float64)
+        nearclip_12_20 = np.asarray(t["diag_postclip_near_clip_frac_12_20m"][:n], dtype=np.float64) if "diag_postclip_near_clip_frac_12_20m" in t else np.array([], dtype=np.float64)
 
         result: dict[str, Any] = {
             "recording": str(rec),
@@ -159,6 +150,14 @@ def main() -> None:
         near_clip_far = result["bands"]["12-20m"]["near_clip_fraction"]["mean"]
         premax_p95 = float(np.nanpercentile(premax, 95)) if np.isfinite(premax).any() else None
         result["preclip_abs_max_p95_m"] = premax_p95
+        if preclip_0_8.size > 0:
+            result["planner_source_bands"] = {
+                "preclip_abs_mean_0_8m": summarize(preclip_0_8[np.isfinite(preclip_0_8)].tolist()),
+                "preclip_abs_mean_8_12m": summarize(preclip_8_12[np.isfinite(preclip_8_12)].tolist()),
+                "preclip_abs_mean_12_20m": summarize(preclip_12_20[np.isfinite(preclip_12_20)].tolist()),
+                "postclip_abs_mean_12_20m": summarize(postclip_12_20[np.isfinite(postclip_12_20)].tolist()),
+                "postclip_near_clip_frac_12_20m": summarize(nearclip_12_20[np.isfinite(nearclip_12_20)].tolist()),
+            }
 
         hint = "insufficient_data"
         if all(v is not None for v in [e0, e1, e2]):
@@ -175,6 +174,24 @@ def main() -> None:
                 hint = "no_dominant_layer_local_issue"
         result["localization_hint"] = hint
 
+    return result
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Trajectory layer/location localization report.")
+    parser.add_argument("recording", nargs="?", help="Recording .h5 path")
+    parser.add_argument("--latest", action="store_true", help="Use latest recording")
+    parser.add_argument("--clip-limit-m", type=float, default=15.0)
+    parser.add_argument("--output-json", type=str, default="")
+    args = parser.parse_args()
+
+    rec = Path(args.recording) if args.recording else find_latest_recording()
+    if args.latest:
+        rec = find_latest_recording()
+    if rec is None or not rec.exists():
+        raise SystemExit("No recording found.")
+
+    result = analyze_trajectory_layer_localization(rec, clip_limit_m=float(args.clip_limit_m))
     out_path = (
         Path(args.output_json)
         if args.output_json

@@ -793,6 +793,7 @@ class Visualizer {
             await this.loadSummary();  // Load summary when recording is loaded
             await this.loadIssues();  // Load issues when recording is loaded
             await this.loadDiagnostics();  // Load diagnostics when recording is loaded
+            await this.loadTrajectoryLayerLocalizationSummary();
             await this.loadSignalsList();
             this.updateQuickChartValuesTable();
         } catch (error) {
@@ -836,6 +837,53 @@ class Visualizer {
         } catch (error) {
             console.warn('Could not load derived distance series:', error);
             this.distanceFromStartSeries = null;
+        }
+    }
+
+    async loadTrajectoryLayerLocalizationSummary() {
+        const setField = (id, value) => {
+            const el = document.getElementById(id);
+            if (el) el.textContent = value;
+        };
+        if (!this.currentRecording) return;
+        const clipLimit = Number(this.summaryConfig?.trajectory?.x_clip_limit_m);
+        try {
+            const summary = await this.dataLoader.loadTrajectoryLayerLocalization(
+                this.currentRecording,
+                Number.isFinite(clipLimit) ? clipLimit : null
+            );
+            const b0 = Number(summary?.bands?.['0-8m']?.lateral_error_abs_m?.mean);
+            const b1 = Number(summary?.bands?.['8-12m']?.lateral_error_abs_m?.mean);
+            const b2 = Number(summary?.bands?.['12-20m']?.lateral_error_abs_m?.mean);
+            const hint = String(summary?.localization_hint || '-');
+            const clipRate = Number(summary?.x_clip_any_rate);
+            const preclipP95 = Number(summary?.preclip_abs_max_p95_m);
+            const dominantBand = (() => {
+                const vals = [
+                    { k: '0-8m', v: b0 },
+                    { k: '8-12m', v: b1 },
+                    { k: '12-20m', v: b2 },
+                ].filter((x) => Number.isFinite(x.v));
+                if (!vals.length) return '-';
+                vals.sort((a, b) => b.v - a.v);
+                return vals[0].k;
+            })();
+            setField('trajectory-layer-summary-hint', hint);
+            setField('trajectory-layer-summary-dominant-band', dominantBand);
+            setField('trajectory-layer-summary-xclip-rate', Number.isFinite(clipRate) ? `${(clipRate * 100).toFixed(1)}%` : '-');
+            setField('trajectory-layer-summary-err-0-8m', Number.isFinite(b0) ? `${b0.toFixed(2)} m` : '-');
+            setField('trajectory-layer-summary-err-8-12m', Number.isFinite(b1) ? `${b1.toFixed(2)} m` : '-');
+            setField('trajectory-layer-summary-err-12-20m', Number.isFinite(b2) ? `${b2.toFixed(2)} m` : '-');
+            setField('trajectory-layer-summary-preclip-p95', Number.isFinite(preclipP95) ? `${preclipP95.toFixed(2)} m` : '-');
+        } catch (error) {
+            console.warn('Could not load trajectory layer localization summary:', error);
+            setField('trajectory-layer-summary-hint', 'error');
+            setField('trajectory-layer-summary-dominant-band', '-');
+            setField('trajectory-layer-summary-xclip-rate', '-');
+            setField('trajectory-layer-summary-err-0-8m', '-');
+            setField('trajectory-layer-summary-err-8-12m', '-');
+            setField('trajectory-layer-summary-err-12-20m', '-');
+            setField('trajectory-layer-summary-preclip-p95', '-');
         }
     }
     
@@ -2979,6 +3027,11 @@ class Visualizer {
             heavyXClipping: null,
             preclipXAbsMax: null,
             preclipXAbsP95: null,
+            preclipAbsMean0to8m: null,
+            preclipAbsMean8to12m: null,
+            preclipAbsMean12to20m: null,
+            postclipAbsMean12to20m: null,
+            postclipNearClipFrac12to20m: null,
             frontFrameIdDelta: null,
             frontUnityDtMs: null,
             overlaySnapRisk: null,
@@ -3052,6 +3105,26 @@ class Visualizer {
         const preclipXAbsP95 = Number(t?.diag_preclip_x_abs_p95);
         if (Number.isFinite(preclipXAbsP95)) {
             out.preclipXAbsP95 = preclipXAbsP95;
+        }
+        const preclipAbsMean0to8m = Number(t?.diag_preclip_abs_mean_0_8m);
+        if (Number.isFinite(preclipAbsMean0to8m)) {
+            out.preclipAbsMean0to8m = preclipAbsMean0to8m;
+        }
+        const preclipAbsMean8to12m = Number(t?.diag_preclip_abs_mean_8_12m);
+        if (Number.isFinite(preclipAbsMean8to12m)) {
+            out.preclipAbsMean8to12m = preclipAbsMean8to12m;
+        }
+        const preclipAbsMean12to20m = Number(t?.diag_preclip_abs_mean_12_20m);
+        if (Number.isFinite(preclipAbsMean12to20m)) {
+            out.preclipAbsMean12to20m = preclipAbsMean12to20m;
+        }
+        const postclipAbsMean12to20m = Number(t?.diag_postclip_abs_mean_12_20m);
+        if (Number.isFinite(postclipAbsMean12to20m)) {
+            out.postclipAbsMean12to20m = postclipAbsMean12to20m;
+        }
+        const postclipNearClipFrac12to20m = Number(t?.diag_postclip_near_clip_frac_12_20m);
+        if (Number.isFinite(postclipNearClipFrac12to20m)) {
+            out.postclipNearClipFrac12to20m = postclipNearClipFrac12to20m;
         }
         const frontFrameIdDelta = Number(v?.stream_front_frame_id_delta);
         if (Number.isFinite(frontFrameIdDelta)) {
@@ -4006,6 +4079,36 @@ class Visualizer {
             'projection-traj-preclip-abs-p95',
             Number.isFinite(Number(d.traj_preclip_abs_p95))
                 ? `${Number(d.traj_preclip_abs_p95).toFixed(2)} m`
+                : '-'
+        );
+        updateField(
+            'projection-traj-preclip-mean-0-8m',
+            Number.isFinite(Number(d.traj_preclip_mean_0_8m))
+                ? `${Number(d.traj_preclip_mean_0_8m).toFixed(2)} m`
+                : '-'
+        );
+        updateField(
+            'projection-traj-preclip-mean-8-12m',
+            Number.isFinite(Number(d.traj_preclip_mean_8_12m))
+                ? `${Number(d.traj_preclip_mean_8_12m).toFixed(2)} m`
+                : '-'
+        );
+        updateField(
+            'projection-traj-preclip-mean-12-20m',
+            Number.isFinite(Number(d.traj_preclip_mean_12_20m))
+                ? `${Number(d.traj_preclip_mean_12_20m).toFixed(2)} m`
+                : '-'
+        );
+        updateField(
+            'projection-traj-postclip-mean-12-20m',
+            Number.isFinite(Number(d.traj_postclip_mean_12_20m))
+                ? `${Number(d.traj_postclip_mean_12_20m).toFixed(2)} m`
+                : '-'
+        );
+        updateField(
+            'projection-traj-postclip-nearclip-frac-12-20m',
+            Number.isFinite(Number(d.traj_postclip_nearclip_frac_12_20m))
+                ? `${(Number(d.traj_postclip_nearclip_frac_12_20m) * 100.0).toFixed(0)}%`
                 : '-'
         );
         updateField(
@@ -5144,6 +5247,11 @@ class Visualizer {
         this.projectionDiagnostics.traj_heavy_x_clipping = trajWaterfall.heavyXClipping;
         this.projectionDiagnostics.traj_preclip_abs_max = trajWaterfall.preclipXAbsMax;
         this.projectionDiagnostics.traj_preclip_abs_p95 = trajWaterfall.preclipXAbsP95;
+        this.projectionDiagnostics.traj_preclip_mean_0_8m = trajWaterfall.preclipAbsMean0to8m;
+        this.projectionDiagnostics.traj_preclip_mean_8_12m = trajWaterfall.preclipAbsMean8to12m;
+        this.projectionDiagnostics.traj_preclip_mean_12_20m = trajWaterfall.preclipAbsMean12to20m;
+        this.projectionDiagnostics.traj_postclip_mean_12_20m = trajWaterfall.postclipAbsMean12to20m;
+        this.projectionDiagnostics.traj_postclip_nearclip_frac_12_20m = trajWaterfall.postclipNearClipFrac12to20m;
         this.projectionDiagnostics.traj_front_frame_delta = trajWaterfall.frontFrameIdDelta;
         this.projectionDiagnostics.traj_front_unity_dt_ms = trajWaterfall.frontUnityDtMs;
         this.projectionDiagnostics.traj_overlay_snap_risk = trajWaterfall.overlaySnapRisk;

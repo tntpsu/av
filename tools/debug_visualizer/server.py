@@ -20,9 +20,13 @@ import re
 # Add backend modules to path
 backend_path = Path(__file__).parent / "backend"
 sys.path.insert(0, str(backend_path))
+# Add analysis modules to path
+analysis_path = Path(__file__).parent.parent / "analyze"
+sys.path.insert(0, str(analysis_path))
 from summary_analyzer import analyze_recording_summary
 from diagnostics import analyze_trajectory_vs_steering
 from issue_detector import detect_issues
+from analyze_trajectory_layer_localization import analyze_trajectory_layer_localization
 
 app = Flask(__name__)
 CORS(app)  # Enable CORS for local development
@@ -843,9 +847,16 @@ def get_frame_data(filename, frame_index):
                         "diag_preclip_x2",
                         "diag_preclip_x_abs_max",
                         "diag_preclip_x_abs_p95",
+                        "diag_preclip_abs_mean_0_8m",
+                        "diag_preclip_abs_mean_8_12m",
+                        "diag_preclip_abs_mean_12_20m",
                         "diag_postclip_x0",
                         "diag_postclip_x1",
                         "diag_postclip_x2",
+                        "diag_postclip_abs_mean_0_8m",
+                        "diag_postclip_abs_mean_8_12m",
+                        "diag_postclip_abs_mean_12_20m",
+                        "diag_postclip_near_clip_frac_12_20m",
                         "diag_first_segment_y0_gt_y1_pre",
                         "diag_first_segment_y0_gt_y1_post",
                         "diag_inversion_introduced_after_conversion",
@@ -1605,6 +1616,30 @@ def get_recording_diagnostics(filename):
             curve_entry_window_distance_m=curve_entry_window_distance_m,
         )
         return jsonify(numpy_to_list(diagnostics))
+    except Exception as e:
+        import traceback
+        return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500
+
+
+@app.route('/api/recording/<path:filename>/trajectory-layer-localization')
+def get_trajectory_layer_localization(filename):
+    """Get run-level trajectory layer/location localization summary."""
+    from urllib.parse import unquote
+
+    filename = unquote(filename)
+    filepath = RECORDINGS_DIR / filename
+    if not filepath.exists():
+        return jsonify({"error": f"Recording not found: {filename}"}), 404
+
+    clip_limit_m_raw = request.args.get('clip_limit_m', '15.0')
+    try:
+        clip_limit_m = float(clip_limit_m_raw)
+    except (TypeError, ValueError):
+        clip_limit_m = 15.0
+
+    try:
+        summary = analyze_trajectory_layer_localization(filepath, clip_limit_m=clip_limit_m)
+        return jsonify(numpy_to_list(summary))
     except Exception as e:
         import traceback
         return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500
