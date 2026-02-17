@@ -444,7 +444,7 @@ See `requirements.txt` for complete list.
 ### Additional Documentation
 - **[docs/README.md](docs/README.md)** - Documentation index
 - **[docs/TODO.md](docs/TODO.md)** - Active and backlog TODO tracker
-- **[docs/ROADMAP_PHASE2_PLUS.md](docs/ROADMAP_PHASE2_PLUS.md)** - Phase 2+ roadmap with test gates
+- **[docs/ROADMAP.md](docs/ROADMAP.md)** - Unified robust full-stack roadmap with layered phases, incremental lane-keeping ladder, status tracking, and promotion gates
 - **[docs/README_STARTUP.md](docs/README_STARTUP.md)** - Detailed startup instructions and troubleshooting
 - **[docs/DEVELOPMENT_GUIDELINES.md](docs/DEVELOPMENT_GUIDELINES.md)** - Development best practices and critical lessons learned
 - **[docs/AI_MEMORY_GUIDE.md](docs/AI_MEMORY_GUIDE.md)** - AI assistant memory and context guide

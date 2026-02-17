@@ -8,7 +8,7 @@ This directory contains additional documentation for the AV Stack project.
 - **[SCRIPT_RUNBOOK.md](SCRIPT_RUNBOOK.md)** - Canonical script intent map (what to run for each workflow)
 - **[setup_unity.md](../setup_unity.md)** - Unity setup instructions
 - **[CONFIG_GUIDE.md](../CONFIG_GUIDE.md)** - Configuration system guide
-- **[ROADMAP_PHASE2_PLUS.md](ROADMAP_PHASE2_PLUS.md)** - Phase 2+ roadmap with test gates
+- **[ROADMAP.md](ROADMAP.md)** - Unified robust full-stack roadmap (single source of truth)
 - **[TODO.md](TODO.md)** - Near-term Phase 1 completion checklist
 - **[ART_ASSETS.md](ART_ASSETS.md)** - Free car model and integration steps
 - **[STACK_ISOLATION_TESTING_PLAYBOOK.md](STACK_ISOLATION_TESTING_PLAYBOOK.md)** - Layer-isolation test strategy, current tool coverage, and root-cause workflow

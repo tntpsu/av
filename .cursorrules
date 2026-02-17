@@ -243,6 +243,12 @@ This is an autonomous vehicle (AV) stack for Unity 3D simulation. The project us
   2) location within layer (where in time/lookahead/pipeline stage the failure starts).
 - If triage gaps are discovered during validation (missing signal, coarse metric, ambiguous attribution), treat adding that instrumentation as part of done criteria before declaring root cause confidence.
 
+## Roadmap Governance Rule
+- `docs/ROADMAP.md` is the single source of truth for long-term direction and current stage execution.
+- Any change that affects scope, phase/stage status, promotion gates, sequencing, or done criteria MUST include a same-PR update to `docs/ROADMAP.md`.
+- Do not deviate from roadmap sequencing unless explicitly requested by the user; if sequencing changes, update `docs/ROADMAP.md` first (or in the same change) and state the reason.
+- Keep completed phases/tasks crossed out in `docs/ROADMAP.md` and move current focus markers forward as work is promoted.
+
 ## GT Run Logging Policy
 - For performance/benchmark runs, keep runtime logging minimal (default): use `tools/ground_truth_follower.py --log-level error` or `start_ground_truth.sh` with no logging flag.
 - For diagnosis runs, explicitly enable logs: `--diagnostic-logging` (info) or `--log-level debug` when needed.
