@@ -3083,8 +3083,17 @@ class Visualizer {
         const out = {
             source: 'proxy_from_current_frame',
             headingZeroGate: null,
+            headingZeroGateCenterA: null,
+            headingZeroGateThreshold: 0.004,
+            headingZeroGateCenterAOnThreshold: 0.004,
+            headingZeroGateCenterAOffThreshold: 0.008,
+            headingZeroGateHeadingOnThresholdRad: 0.035,
+            headingZeroGateHeadingOffThresholdRad: 0.061,
             smallHeadingGate: null,
+            smallHeadingGateHeadingRad: null,
+            smallHeadingGateThresholdRad: (Math.PI / 180.0),
             multiLookaheadActive: null,
+            multiLookaheadMethod: null,
             smoothingJumpReject: null,
             refXRateLimitActive: null,
             rawRefHeading: null,
@@ -3156,6 +3165,8 @@ class Visualizer {
             cadencePolicy: null,
             cadenceFrameDeltaRiskThreshold: null,
             cadenceUnityDtRiskThresholdMs: null,
+            cadenceFrameDeltaRisk: null,
+            cadenceUnityDtRisk: null,
             bandErr0to8m: null,
             bandErr8to12m: null,
             bandErr12to20m: null,
@@ -3168,6 +3179,24 @@ class Visualizer {
         const t = this.currentFrameData?.trajectory || {};
         const c = this.currentFrameData?.control || {};
         const v = this.currentFrameData?.vehicle || {};
+        const trajCfg = this.summaryConfig?.trajectory || {};
+        const cfgHeadingAOn = Number(trajCfg?.traj_heading_zero_gate_center_a_on_abs_max);
+        const cfgHeadingAOff = Number(trajCfg?.traj_heading_zero_gate_center_a_off_abs_max);
+        const cfgHeadingOn = Number(trajCfg?.traj_heading_zero_gate_heading_on_abs_rad);
+        const cfgHeadingOff = Number(trajCfg?.traj_heading_zero_gate_heading_off_abs_rad);
+        if (Number.isFinite(cfgHeadingAOn)) {
+            out.headingZeroGateCenterAOnThreshold = cfgHeadingAOn;
+            out.headingZeroGateThreshold = cfgHeadingAOn;
+        }
+        if (Number.isFinite(cfgHeadingAOff)) {
+            out.headingZeroGateCenterAOffThreshold = cfgHeadingAOff;
+        }
+        if (Number.isFinite(cfgHeadingOn)) {
+            out.headingZeroGateHeadingOnThresholdRad = cfgHeadingOn;
+        }
+        if (Number.isFinite(cfgHeadingOff)) {
+            out.headingZeroGateHeadingOffThresholdRad = cfgHeadingOff;
+        }
 
         const coeffs = Array.isArray(p?.lane_line_coefficients) ? p.lane_line_coefficients : null;
         if (coeffs && coeffs.length >= 2) {
@@ -3175,17 +3204,20 @@ class Visualizer {
             const rightA = Number(Array.isArray(coeffs[1]) ? coeffs[1][0] : null);
             if (Number.isFinite(leftA) && Number.isFinite(rightA)) {
                 const centerA = 0.5 * (leftA + rightA);
+                out.headingZeroGateCenterA = centerA;
                 out.headingZeroGate = Math.abs(centerA) < 0.01;
             }
         }
 
         const headingRad = Number(t?.reference_point?.heading ?? t?.reference_point_heading);
         if (Number.isFinite(headingRad)) {
+            out.smallHeadingGateHeadingRad = headingRad;
             out.smallHeadingGate = Math.abs(headingRad) < (Math.PI / 180.0);
         }
 
         const method = String(t?.reference_point_method ?? '');
         if (method) {
+            out.multiLookaheadMethod = method;
             out.multiLookaheadActive = (method === 'multi_lookahead_heading_blend');
         }
         const diagHeadingZeroGate = Number(t?.diag_heading_zero_gate_active);
@@ -3394,6 +3426,8 @@ class Visualizer {
         out.cadenceUnityDtRiskThresholdMs = unityDtRiskThresholdMs;
         const hasFrameDeltaRisk = Number.isFinite(frontFrameIdDelta) && frontFrameIdDelta >= frameDeltaRiskThreshold;
         const hasUnityDtRisk = Number.isFinite(frontUnityDtMs) && Math.abs(frontUnityDtMs) >= unityDtRiskThresholdMs;
+        out.cadenceFrameDeltaRisk = hasFrameDeltaRisk;
+        out.cadenceUnityDtRisk = hasUnityDtRisk;
         const hasSyncAlignRisk = (
             syncTrajStatus.toLowerCase() === 'misaligned' ||
             syncTrajStatus.toLowerCase() === 'missing' ||
@@ -4326,11 +4360,68 @@ class Visualizer {
             }
             return `${label} (${rounded})`;
         };
-        updateField('projection-traj-heading-zero-gate', fmtBool(d.traj_heading_zero_gate));
-        updateField('projection-traj-small-heading-gate', fmtBool(d.traj_small_heading_gate));
-        updateField('projection-traj-multilookahead-active', fmtBool(d.traj_multilookahead_active));
-        updateField('projection-traj-smoothing-jump-reject', fmtBool(d.traj_smoothing_jump_reject));
-        updateField('projection-traj-ref-x-rate-limit-active', fmtBool(d.traj_ref_x_rate_limit_active));
+        const fmtGate = (state, expr) => {
+            if (state === true) return `ON (${expr})`;
+            if (state === false) return `OFF (${expr})`;
+            return '-';
+        };
+        const headingZeroCenterA = Number(d.traj_heading_zero_gate_center_a);
+        const headingZeroAOn = Number(d.traj_heading_zero_gate_center_a_on_threshold);
+        const headingZeroAOff = Number(d.traj_heading_zero_gate_center_a_off_threshold);
+        const headingZeroRawHeading = Number(d.traj_raw_ref_heading);
+        const headingZeroHOn = Number(d.traj_heading_zero_gate_heading_on_threshold_rad);
+        const headingZeroHOff = Number(d.traj_heading_zero_gate_heading_off_threshold_rad);
+        const headingZeroExpr = (
+            Number.isFinite(headingZeroCenterA) &&
+            Number.isFinite(headingZeroRawHeading) &&
+            Number.isFinite(headingZeroAOn) &&
+            Number.isFinite(headingZeroAOff) &&
+            Number.isFinite(headingZeroHOn) &&
+            Number.isFinite(headingZeroHOff)
+                ? (
+                    d.traj_heading_zero_gate
+                        ? `(|a|=${Math.abs(headingZeroCenterA).toFixed(4)}<=${headingZeroAOff.toFixed(4)} && |h|=${Math.abs(headingZeroRawHeading).toFixed(4)}<=${headingZeroHOff.toFixed(4)}) [hys-keep]`
+                        : `(|a|=${Math.abs(headingZeroCenterA).toFixed(4)}<${headingZeroAOn.toFixed(4)} && |h|=${Math.abs(headingZeroRawHeading).toFixed(4)}<${headingZeroHOn.toFixed(4)}) [hys-on]`
+                )
+                : 'diag_heading_zero_gate_active > 0.5'
+        );
+        updateField('projection-traj-heading-zero-gate', fmtGate(d.traj_heading_zero_gate, headingZeroExpr));
+        updateField(
+            'projection-traj-heading-zero-gate-inputs',
+            Number.isFinite(headingZeroCenterA) &&
+            Number.isFinite(headingZeroRawHeading) &&
+            Number.isFinite(headingZeroAOn) &&
+            Number.isFinite(headingZeroAOff) &&
+            Number.isFinite(headingZeroHOn) &&
+            Number.isFinite(headingZeroHOff)
+                ? `|a|=${Math.abs(headingZeroCenterA).toFixed(4)} (on<${headingZeroAOn.toFixed(4)}, off>${headingZeroAOff.toFixed(4)}), |h|=${Math.abs(headingZeroRawHeading).toFixed(4)}rad (on<${headingZeroHOn.toFixed(4)}, off>${headingZeroHOff.toFixed(4)})`
+                : '-'
+        );
+        const smallHeadingRaw = Number(d.traj_raw_ref_heading);
+        const smallHeadingThreshold = Number(d.traj_small_heading_gate_threshold_rad);
+        const smallHeadingExpr = (
+            Number.isFinite(smallHeadingRaw) && Number.isFinite(smallHeadingThreshold)
+                ? `|${smallHeadingRaw.toFixed(4)} rad| ${d.traj_small_heading_gate ? '<' : '>='} ${smallHeadingThreshold.toFixed(4)}`
+                : '|raw_ref_heading| < 0.01745 rad'
+        );
+        updateField('projection-traj-small-heading-gate', fmtGate(d.traj_small_heading_gate, smallHeadingExpr));
+        updateField(
+            'projection-traj-small-heading-gate-inputs',
+            Number.isFinite(smallHeadingRaw) && Number.isFinite(smallHeadingThreshold)
+                ? `|heading|=${Math.abs(smallHeadingRaw).toFixed(4)} rad / th=${smallHeadingThreshold.toFixed(4)}`
+                : '-'
+        );
+        const mlMethod = String(d.traj_multilookahead_method || '').trim();
+        const mlExpr = mlMethod ? `method == "${mlMethod}"` : 'diag_multi_lookahead_active > 0.5';
+        updateField('projection-traj-multilookahead-active', fmtGate(d.traj_multilookahead_active, mlExpr));
+        updateField(
+            'projection-traj-smoothing-jump-reject',
+            fmtGate(d.traj_smoothing_jump_reject, 'diag_smoothing_jump_reject > 0.5')
+        );
+        updateField(
+            'projection-traj-ref-x-rate-limit-active',
+            fmtGate(d.traj_ref_x_rate_limit_active, 'diag_ref_x_rate_limit_active > 0.5')
+        );
         updateField(
             'projection-traj-raw-ref-heading',
             Number.isFinite(Number(d.traj_raw_ref_heading))
@@ -4440,12 +4531,22 @@ class Visualizer {
             'projection-traj-dynamic-horizon-limiter-code',
             fmtDynamicLimiterCode(d.traj_dynamic_horizon_limiter_code)
         );
-        updateField('projection-traj-dynamic-horizon-applied', fmtBool(d.traj_dynamic_horizon_applied));
+        updateField(
+            'projection-traj-dynamic-horizon-applied',
+            fmtGate(d.traj_dynamic_horizon_applied, 'diag_dynamic_effective_horizon_applied > 0.5')
+        );
         updateField(
             'projection-traj-x-clip-count',
             Number.isFinite(Number(d.traj_x_clip_count)) ? Number(d.traj_x_clip_count).toFixed(0) : '-'
         );
-        updateField('projection-traj-heavy-x-clipping', fmtBool(d.traj_heavy_x_clipping));
+        const xClipCount = Number(d.traj_x_clip_count);
+        updateField(
+            'projection-traj-heavy-x-clipping',
+            fmtGate(
+                d.traj_heavy_x_clipping,
+                Number.isFinite(xClipCount) ? `${xClipCount.toFixed(1)} >= 8.0` : 'x_clip_count >= 8.0'
+            )
+        );
         updateField(
             'projection-traj-preclip-abs-max',
             Number.isFinite(Number(d.traj_preclip_abs_max))
@@ -4536,9 +4637,22 @@ class Visualizer {
                 ? Number(d.traj_front_unity_dt_ms).toFixed(2)
                 : '-'
         );
-        updateField('projection-traj-overlay-snap-risk', fmtBool(d.traj_overlay_snap_risk));
-        updateField('projection-traj-contract-misaligned-risk', fmtBool(d.traj_contract_misaligned_risk));
-        updateField('projection-traj-cadence-risk', fmtBool(d.traj_cadence_risk));
+        updateField(
+            'projection-traj-overlay-snap-risk',
+            fmtGate(d.traj_overlay_snap_risk, 'sync traj/control status is misaligned or missing')
+        );
+        updateField(
+            'projection-traj-contract-misaligned-risk',
+            fmtGate(d.traj_contract_misaligned_risk, 'sync traj/control status is misaligned or missing')
+        );
+        const frameDeltaRiskExpr = Number.isFinite(Number(d.traj_front_frame_delta)) && Number.isFinite(Number(d.traj_cadence_frame_delta_threshold))
+            ? `frameΔ=${Number(d.traj_front_frame_delta).toFixed(1)} >= ${Number(d.traj_cadence_frame_delta_threshold).toFixed(1)}`
+            : 'frameΔ exceeds threshold';
+        const unityDtRiskExpr = Number.isFinite(Number(d.traj_front_unity_dt_ms)) && Number.isFinite(Number(d.traj_cadence_unity_dt_threshold_ms))
+            ? `|unityΔt|=${Math.abs(Number(d.traj_front_unity_dt_ms)).toFixed(1)}ms >= ${Number(d.traj_cadence_unity_dt_threshold_ms).toFixed(1)}ms`
+            : '|unityΔt| exceeds threshold';
+        const cadenceExpr = `${frameDeltaRiskExpr} OR ${unityDtRiskExpr}`;
+        updateField('projection-traj-cadence-risk', fmtGate(d.traj_cadence_risk, cadenceExpr));
         const cadencePolicy = String(d.traj_cadence_policy || 'unknown').toLowerCase();
         const cadencePolicyLabel = cadencePolicy || 'unknown';
         const cadenceFrameDeltaThreshold = Number(d.traj_cadence_frame_delta_threshold);
@@ -4557,7 +4671,14 @@ class Visualizer {
                 ? `${Number(d.traj_control_curv_ratio_10m).toFixed(2)}x`
                 : '-'
         );
-        updateField('projection-traj-underturn-10m-flag', fmtBool(d.traj_underturn_10m_flag));
+        const ratio10 = Number(d.traj_control_curv_ratio_10m);
+        updateField(
+            'projection-traj-underturn-10m-flag',
+            fmtGate(
+                d.traj_underturn_10m_flag,
+                Number.isFinite(ratio10) ? `ratio10=${ratio10.toFixed(2)} < 0.60` : 'curvature_ratio_10m < 0.60'
+            )
+        );
         updateField(
             'projection-traj-band-err-0-8m',
             Number.isFinite(Number(d.traj_band_err_0_8m))
@@ -5935,8 +6056,17 @@ class Visualizer {
         this.projectionDiagnostics.turn_mismatch_source = turnMismatch.source;
         const trajWaterfall = this.computeTrajectorySuppressionWaterfall(plannerPathForMetrics, oraclePathForMetrics, turnMismatch);
         this.projectionDiagnostics.traj_heading_zero_gate = trajWaterfall.headingZeroGate;
+        this.projectionDiagnostics.traj_heading_zero_gate_center_a = trajWaterfall.headingZeroGateCenterA;
+        this.projectionDiagnostics.traj_heading_zero_gate_threshold = trajWaterfall.headingZeroGateThreshold;
+        this.projectionDiagnostics.traj_heading_zero_gate_center_a_on_threshold = trajWaterfall.headingZeroGateCenterAOnThreshold;
+        this.projectionDiagnostics.traj_heading_zero_gate_center_a_off_threshold = trajWaterfall.headingZeroGateCenterAOffThreshold;
+        this.projectionDiagnostics.traj_heading_zero_gate_heading_on_threshold_rad = trajWaterfall.headingZeroGateHeadingOnThresholdRad;
+        this.projectionDiagnostics.traj_heading_zero_gate_heading_off_threshold_rad = trajWaterfall.headingZeroGateHeadingOffThresholdRad;
         this.projectionDiagnostics.traj_small_heading_gate = trajWaterfall.smallHeadingGate;
+        this.projectionDiagnostics.traj_small_heading_gate_heading_rad = trajWaterfall.smallHeadingGateHeadingRad;
+        this.projectionDiagnostics.traj_small_heading_gate_threshold_rad = trajWaterfall.smallHeadingGateThresholdRad;
         this.projectionDiagnostics.traj_multilookahead_active = trajWaterfall.multiLookaheadActive;
+        this.projectionDiagnostics.traj_multilookahead_method = trajWaterfall.multiLookaheadMethod;
         this.projectionDiagnostics.traj_smoothing_jump_reject = trajWaterfall.smoothingJumpReject;
         this.projectionDiagnostics.traj_ref_x_rate_limit_active = trajWaterfall.refXRateLimitActive;
         this.projectionDiagnostics.traj_raw_ref_heading = trajWaterfall.rawRefHeading;
@@ -5987,6 +6117,8 @@ class Visualizer {
         this.projectionDiagnostics.traj_cadence_policy = trajWaterfall.cadencePolicy;
         this.projectionDiagnostics.traj_cadence_frame_delta_threshold = trajWaterfall.cadenceFrameDeltaRiskThreshold;
         this.projectionDiagnostics.traj_cadence_unity_dt_threshold_ms = trajWaterfall.cadenceUnityDtRiskThresholdMs;
+        this.projectionDiagnostics.traj_cadence_frame_delta_risk = trajWaterfall.cadenceFrameDeltaRisk;
+        this.projectionDiagnostics.traj_cadence_unity_dt_risk = trajWaterfall.cadenceUnityDtRisk;
         this.projectionDiagnostics.traj_control_curv_ratio_10m = trajWaterfall.controlCurvVsOracleRatio10m;
         this.projectionDiagnostics.traj_underturn_10m_flag = trajWaterfall.underTurnFlag10m;
         this.projectionDiagnostics.traj_band_err_0_8m = trajWaterfall.bandErr0to8m;

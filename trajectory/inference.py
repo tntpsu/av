@@ -39,6 +39,14 @@ class TrajectoryPlanningInference:
         target_lane_width_m = kwargs.pop('target_lane_width_m', 0.0)
         ref_sign_flip_threshold = kwargs.pop('ref_sign_flip_threshold', 0.0)
         ref_x_rate_limit = kwargs.pop('ref_x_rate_limit', 0.0)
+        ref_x_rate_limit_turn_heading_min_abs_rad = kwargs.pop(
+            'ref_x_rate_limit_turn_heading_min_abs_rad',
+            0.08,
+        )
+        ref_x_rate_limit_turn_scale_max = kwargs.pop(
+            'ref_x_rate_limit_turn_scale_max',
+            2.5,
+        )
         multi_lookahead_enabled = kwargs.pop('multi_lookahead_enabled', False)
         multi_lookahead_far_scale = kwargs.pop('multi_lookahead_far_scale', 1.5)
         multi_lookahead_blend_alpha = kwargs.pop('multi_lookahead_blend_alpha', 0.35)
@@ -50,6 +58,22 @@ class TrajectoryPlanningInference:
         multi_lookahead_curve_heading_min_abs_rad = kwargs.pop(
             'multi_lookahead_curve_heading_min_abs_rad',
             0.05,
+        )
+        traj_heading_zero_gate_center_a_on_abs_max = kwargs.pop(
+            'traj_heading_zero_gate_center_a_on_abs_max',
+            0.004,
+        )
+        traj_heading_zero_gate_center_a_off_abs_max = kwargs.pop(
+            'traj_heading_zero_gate_center_a_off_abs_max',
+            0.008,
+        )
+        traj_heading_zero_gate_heading_on_abs_rad = kwargs.pop(
+            'traj_heading_zero_gate_heading_on_abs_rad',
+            np.radians(2.0),
+        )
+        traj_heading_zero_gate_heading_off_abs_rad = kwargs.pop(
+            'traj_heading_zero_gate_heading_off_abs_rad',
+            np.radians(3.5),
         )
         
         if planner_type == "rule_based":
@@ -81,6 +105,12 @@ class TrajectoryPlanningInference:
         self.target_lane_width_m = float(np.clip(target_lane_width_m, 0.0, 10.0))
         self.ref_sign_flip_threshold = float(np.clip(ref_sign_flip_threshold, 0.0, 1.0))
         self.ref_x_rate_limit = float(np.clip(ref_x_rate_limit, 0.0, 1.0))
+        self.ref_x_rate_limit_turn_heading_min_abs_rad = float(
+            np.clip(ref_x_rate_limit_turn_heading_min_abs_rad, 0.0, 1.5)
+        )
+        self.ref_x_rate_limit_turn_scale_max = float(
+            np.clip(ref_x_rate_limit_turn_scale_max, 1.0, 6.0)
+        )
         self.multi_lookahead_enabled = bool(multi_lookahead_enabled)
         self.multi_lookahead_far_scale = float(np.clip(multi_lookahead_far_scale, 1.0, 3.0))
         self.multi_lookahead_blend_alpha = float(np.clip(multi_lookahead_blend_alpha, 0.0, 1.0))
@@ -92,6 +122,32 @@ class TrajectoryPlanningInference:
         )
         self.multi_lookahead_curve_heading_min_abs_rad = float(
             np.clip(multi_lookahead_curve_heading_min_abs_rad, 0.0, 1.0)
+        )
+        self.traj_heading_zero_gate_center_a_on_abs_max = float(
+            np.clip(traj_heading_zero_gate_center_a_on_abs_max, 0.0, 0.1)
+        )
+        self.traj_heading_zero_gate_center_a_off_abs_max = float(
+            np.clip(
+                max(
+                    traj_heading_zero_gate_center_a_off_abs_max,
+                    self.traj_heading_zero_gate_center_a_on_abs_max,
+                ),
+                0.0,
+                0.2,
+            )
+        )
+        self.traj_heading_zero_gate_heading_on_abs_rad = float(
+            np.clip(traj_heading_zero_gate_heading_on_abs_rad, 0.0, 1.0)
+        )
+        self.traj_heading_zero_gate_heading_off_abs_rad = float(
+            np.clip(
+                max(
+                    traj_heading_zero_gate_heading_off_abs_rad,
+                    self.traj_heading_zero_gate_heading_on_abs_rad,
+                ),
+                0.0,
+                1.2,
+            )
         )
         
         # NEW: Solution 5 - Reference Point Smoothing with Bias Compensation
@@ -111,6 +167,43 @@ class TrajectoryPlanningInference:
         self.last_smoothed_ref_point = None
         self.ref_debug_counter = 0
         self.last_reference_diagnostics: Dict[str, float] = {}
+        self.heading_zero_gate_active = False
+
+    def _update_heading_zero_gate(
+        self,
+        lane_coeffs: Optional[List[Optional[np.ndarray]]],
+        raw_heading_rad: float,
+    ) -> bool:
+        """Hysteretic straightness gate using both center-a and raw heading."""
+        center_a_abs = np.nan
+        if lane_coeffs is not None:
+            valid_lanes = [coeffs for coeffs in lane_coeffs if coeffs is not None]
+            if len(valid_lanes) >= 2:
+                c0 = np.asarray(valid_lanes[0], dtype=np.float64).reshape(-1)
+                c1 = np.asarray(valid_lanes[1], dtype=np.float64).reshape(-1)
+                if c0.size >= 1 and c1.size >= 1 and np.isfinite(c0[0]) and np.isfinite(c1[0]):
+                    center_a_abs = abs(0.5 * (float(c0[0]) + float(c1[0])))
+
+        heading_abs = abs(float(raw_heading_rad)) if np.isfinite(float(raw_heading_rad)) else np.nan
+        active = bool(self.heading_zero_gate_active)
+
+        if active:
+            if (
+                (np.isfinite(center_a_abs) and center_a_abs > self.traj_heading_zero_gate_center_a_off_abs_max)
+                or (np.isfinite(heading_abs) and heading_abs > self.traj_heading_zero_gate_heading_off_abs_rad)
+            ):
+                active = False
+        else:
+            if (
+                np.isfinite(center_a_abs)
+                and np.isfinite(heading_abs)
+                and center_a_abs < self.traj_heading_zero_gate_center_a_on_abs_max
+                and heading_abs < self.traj_heading_zero_gate_heading_on_abs_rad
+            ):
+                active = True
+
+        self.heading_zero_gate_active = active
+        return active
 
     def _compute_target_ref_from_coeffs(
         self,
@@ -345,7 +438,9 @@ class TrajectoryPlanningInference:
                 raw_ref_point['raw_x'] = center_x
                 raw_ref_point['raw_y'] = lookahead
                 raw_ref_point['raw_heading'] = heading
-                raw_ref_point['diag_heading_zero_gate_active'] = 0.0
+                raw_ref_point['diag_heading_zero_gate_active'] = (
+                    1.0 if self._update_heading_zero_gate(lane_coeffs, heading) else 0.0
+                )
                 raw_ref_point['diag_small_heading_gate_active'] = (
                     1.0 if abs(np.degrees(float(heading))) < 1.0 else 0.0
                 )
@@ -354,14 +449,6 @@ class TrajectoryPlanningInference:
                 raw_ref_point['diag_multi_lookahead_heading_base'] = float(heading)
                 raw_ref_point['diag_multi_lookahead_heading_far'] = float(heading)
                 raw_ref_point['diag_multi_lookahead_heading_blended'] = float(heading)
-                if lane_coeffs is not None:
-                    valid_lanes_for_gate = [coeffs for coeffs in lane_coeffs if coeffs is not None]
-                    if len(valid_lanes_for_gate) >= 2:
-                        c0 = np.asarray(valid_lanes_for_gate[0], dtype=np.float64).reshape(-1)
-                        c1 = np.asarray(valid_lanes_for_gate[1], dtype=np.float64).reshape(-1)
-                        if c0.size >= 1 and c1.size >= 1 and np.isfinite(c0[0]) and np.isfinite(c1[0]):
-                            center_a = 0.5 * (float(c0[0]) + float(c1[0]))
-                            raw_ref_point['diag_heading_zero_gate_active'] = 1.0 if abs(center_a) < 0.01 else 0.0
                 # DEBUG: Log calculation details for specific frames
                 if hasattr(self, 'frame_count') and self.frame_count in [134, 135, 136]:
                     logger.warning(
@@ -457,6 +544,13 @@ class TrajectoryPlanningInference:
                     # Calculate perception center from coeffs for comparison
                     # (approximate - would need to convert from image coords)
                     raw_ref_point['perception_center_x'] = None  # Not available when using coeffs
+                    raw_heading = float(raw_ref_point.get('raw_heading', raw_ref_point.get('heading', 0.0)))
+                    raw_ref_point['diag_heading_zero_gate_active'] = (
+                        1.0 if self._update_heading_zero_gate(lane_coeffs, raw_heading) else 0.0
+                    )
+                    raw_ref_point['diag_small_heading_gate_active'] = (
+                        1.0 if abs(np.degrees(raw_heading)) < 1.0 else 0.0
+                    )
                     _attach_dynamic_horizon_diag(raw_ref_point)
                     smoothed = self._apply_smoothing(raw_ref_point, timestamp=timestamp, confidence=confidence)
                     smoothed['method'] = 'lane_coeffs'  # Preserve method
@@ -490,6 +584,13 @@ class TrajectoryPlanningInference:
             'method': 'trajectory',  # NEW: Track which method was used
             'perception_center_x': None  # Not available when using trajectory points
         }
+        raw_heading = float(raw_ref_point.get('raw_heading', raw_ref_point.get('heading', 0.0)))
+        raw_ref_point['diag_heading_zero_gate_active'] = (
+            1.0 if self._update_heading_zero_gate(lane_coeffs, raw_heading) else 0.0
+        )
+        raw_ref_point['diag_small_heading_gate_active'] = (
+            1.0 if abs(np.degrees(raw_heading)) < 1.0 else 0.0
+        )
         
         # Apply smoothing (trajectory-based method uses normal smoothing, not light smoothing)
         _attach_dynamic_horizon_diag(raw_ref_point)
@@ -632,10 +733,28 @@ class TrajectoryPlanningInference:
                     raw_ref_point['raw_x'] = raw_x
                     raw_ref_point['x'] = last_x
             if self.ref_x_rate_limit > 0.0:
+                # Relax ref_x rate limiting on meaningful turns to avoid over-suppressing
+                # legitimate curve-entry reference changes.
+                effective_ref_x_rate_limit = self.ref_x_rate_limit
+                raw_heading_for_rate_limit = float(
+                    raw_ref_point.get('raw_heading', raw_ref_point.get('heading', 0.0))
+                )
+                if (
+                    self.ref_x_rate_limit_turn_heading_min_abs_rad > 1e-6
+                    and np.isfinite(raw_heading_for_rate_limit)
+                ):
+                    heading_abs = abs(raw_heading_for_rate_limit)
+                    turn_ratio = heading_abs / self.ref_x_rate_limit_turn_heading_min_abs_rad
+                    turn_ratio = float(np.clip(turn_ratio, 0.0, 1.0))
+                    turn_scale = (
+                        1.0
+                        + turn_ratio * (self.ref_x_rate_limit_turn_scale_max - 1.0)
+                    )
+                    effective_ref_x_rate_limit = self.ref_x_rate_limit * turn_scale
                 delta_x = raw_ref_point['x'] - last_x
-                if abs(delta_x) > self.ref_x_rate_limit:
+                if abs(delta_x) > effective_ref_x_rate_limit:
                     raw_ref_point['raw_x'] = raw_ref_point.get('raw_x', raw_x)
-                    raw_ref_point['x'] = last_x + np.sign(delta_x) * self.ref_x_rate_limit
+                    raw_ref_point['x'] = last_x + np.sign(delta_x) * effective_ref_x_rate_limit
                     raw_ref_point['diag_ref_x_rate_limit_active'] = 1.0
 
         is_fallback_trajectory = (abs(raw_ref_point['x']) < 0.01 and 

@@ -199,10 +199,8 @@ def compute_dynamic_effective_horizon(
         ]
         limiter_code = min(candidates, key=lambda item: item[0])[1]
 
-    # Phase 1 keeps this diagnostics-only.
-    applied = 0.0
-    if bool(config.get("dynamic_effective_horizon_enabled", False)):
-        applied = 0.0
+    # Phase 2: when enabled, downstream trajectory generation may apply this horizon.
+    applied = 1.0 if bool(config.get("dynamic_effective_horizon_enabled", False)) else 0.0
 
     return {
         "diag_dynamic_effective_horizon_m": float(effective_horizon),

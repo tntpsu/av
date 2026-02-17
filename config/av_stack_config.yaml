@@ -4,7 +4,7 @@ control:
     ki: 0.004
     kd: 0.18
     max_steering: 0.6
-    deadband: 0.05  # Added deadband to ignore small perception drift errors (car is centered but perception drifts)
+    deadband: 0.05
     heading_weight: 0.5
     lateral_weight: 0.5
     error_clip: 1.57
@@ -22,13 +22,13 @@ control:
     curve_feedforward_threshold: 0.012
     curve_feedforward_gain_min: 1.0
     curve_feedforward_gain_max: 1.15
-    curve_feedforward_curvature_min: 0.001  # Lowered from 0.003 to allow feedforward with current low curvature values
+    curve_feedforward_curvature_min: 0.001
     curve_feedforward_curvature_max: 0.015
     curve_feedforward_curvature_clamp: 0.025
-    curvature_scale_factor: 20.0  # Scale curvature for feedforward (to match GT, ~20x based on analysis)
-    curvature_scale_threshold: 0.0005  # Only scale when curvature > this (avoid noise on straights)
-    curvature_stale_hold_seconds: 0.30  # Hold last valid curvature briefly when perception is stale
-    curvature_stale_hold_min_abs: 0.0005  # Only hold when previous curvature is meaningfully non-zero
+    curvature_scale_factor: 20.0
+    curvature_scale_threshold: 0.0005
+    curvature_stale_hold_seconds: 0.3
+    curvature_stale_hold_min_abs: 0.0005
     curvature_smoothing_alpha: 0.7
     curvature_transition_threshold: 0.01
     curvature_transition_alpha: 0.3
@@ -43,7 +43,7 @@ control:
     steering_rate_curvature_min: 0.003
     steering_rate_curvature_max: 0.015
     steering_rate_scale_min: 0.55
-    curve_rate_floor_moderate_error: 0.20
+    curve_rate_floor_moderate_error: 0.2
     curve_rate_floor_large_error: 0.24
     straight_sign_flip_error_threshold: 0.03
     straight_sign_flip_rate: 0.5
@@ -141,7 +141,7 @@ control:
     launch_throttle_rearm_hysteresis: 0.5
     launch_throttle_stop_hold_seconds: 0.5
 trajectory:
-  trajectory_source: planner  # planner|oracle (oracle is diagnostics/baseline mode)
+  trajectory_source: planner
   lookahead_distance: 20.0
   point_spacing: 1.0
   target_speed: 12.0
@@ -253,7 +253,7 @@ trajectory:
   center_spline_alpha: 0.8
   x_clip_enabled: true
   x_clip_limit_m: 15.0
-  trajectory_eval_y_min_ratio: 0.10
+  trajectory_eval_y_min_ratio: 0.1
   centerline_midpoint_mode: coeff_average
   projection_model: legacy
   calibrated_fx_px: 0.0
@@ -264,20 +264,27 @@ trajectory:
   target_lane_width_m: 3.6
   ref_sign_flip_threshold: 0.12
   ref_x_rate_limit: 0.12
+  ref_x_rate_limit_turn_heading_min_abs_rad: 0.08
+  ref_x_rate_limit_turn_scale_max: 2.5
   multi_lookahead_enabled: true
   multi_lookahead_far_scale: 1.4
   multi_lookahead_blend_alpha: 0.25
   multi_lookahead_curvature_threshold: 0.01
   multi_lookahead_curve_heading_smoothing_alpha: 0.75
   multi_lookahead_curve_heading_min_abs_rad: 0.05
-  dynamic_effective_horizon_enabled: false  # Phase 1 diagnostics-only; behavior application comes later
+  traj_heading_zero_gate_center_a_on_abs_max: 0.004
+  traj_heading_zero_gate_center_a_off_abs_max: 0.008
+  traj_heading_zero_gate_heading_on_abs_rad: 0.035
+  traj_heading_zero_gate_heading_off_abs_rad: 0.061
+  dynamic_effective_horizon_enabled: true
   dynamic_effective_horizon_min_m: 3.0
   dynamic_effective_horizon_max_m: 20.0
   dynamic_effective_horizon_speed_scale: 0.35
   dynamic_effective_horizon_curvature_scale: 0.15
+  dynamic_effective_horizon_farfield_scale_min: 0.85
   dynamic_effective_horizon_confidence_floor: 0.6
   dynamic_effective_horizon_confidence_fallback: 1.0
-  lane_position_smoothing_alpha: 0.75  # Increased from 0.65 to reduce impact of perception drift
+  lane_position_smoothing_alpha: 0.75
   ref_point_jump_clamp_x: 0.15
   ref_point_jump_clamp_heading: 0.08
   reference_x_max_abs: 3.2
@@ -303,21 +310,21 @@ perception:
   record_segmentation_mask: false
   segmentation_fit_min_row_ratio: 0.45
   segmentation_fit_max_row_ratio: 0.75
-  segmentation_ransac_enabled: true  # Re-enabled - RANSAC was helping, not causing the issue
-  segmentation_ransac_residual_px: 10.0  # Tightened from 15.0 to catch outliers earlier (18.8px and 16.7px residuals were causing issues)
-  segmentation_ransac_min_inliers: 8  # Increased from 4 to require more inliers for robust fit
-  segmentation_ransac_max_trials: 100  # Tuned for good run - more thorough search
+  segmentation_ransac_enabled: true
+  segmentation_ransac_residual_px: 10.0
+  segmentation_ransac_min_inliers: 8
+  segmentation_ransac_max_trials: 100
   lane_width_min_m: 1.0
   lane_width_max_m: 10.0
   lane_center_change_clamp_m: 0.4
   lane_width_change_clamp_m: 0.5
-  lane_line_change_clamp_m: 0.25  # Tuned for good run - catches 0.3m jumps
+  lane_line_change_clamp_m: 0.25
   lane_side_sign_enforce: true
-  lane_side_sign_min_abs_m: 0.25  # Increased from 0.2 to be stricter about lane side violations
-  lane_center_ema_alpha: 0.15  # Decreased from 0.2 for EVEN MORE smoothing to reduce perception drift impact
-  lane_width_ema_alpha: 0.2  # Decreased from 0.3 for MORE smoothing to reduce perception drift impact
-  lane_center_gate_m: 0.3  # Tightened from 0.5 to catch smaller center jumps (perception was drifting 0.047m → 0.173m → -0.195m)
-  lane_width_gate_m: 0.6  # Tightened from 0.8 to reject larger width jumps
+  lane_side_sign_min_abs_m: 0.25
+  lane_center_ema_alpha: 0.15
+  lane_width_ema_alpha: 0.2
+  lane_center_gate_m: 0.3
+  lane_width_gate_m: 0.6
   lane_center_ab_beta: 0.12
   lane_width_ab_beta: 0.08
 lateral_control:

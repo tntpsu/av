@@ -437,16 +437,18 @@
                         <table class="data-table">
                             <tr><td>Raw Ref Heading</td><td id="projection-traj-raw-ref-heading">-</td></tr>
                             <tr><td>Raw Ref X</td><td id="projection-traj-raw-ref-x">-</td></tr>
-                            <tr><td>Heading Zero Gate (`|a_center| &lt; 0.01`)</td><td id="projection-traj-heading-zero-gate">-</td></tr>
-                            <tr><td>Small Heading Gate (`|heading| &lt; 1 deg`)</td><td id="projection-traj-small-heading-gate">-</td></tr>
-                            <tr><td>Smoothing Jump Reject Active</td><td id="projection-traj-smoothing-jump-reject">-</td></tr>
-                            <tr><td>Ref X Rate-Limit Active</td><td id="projection-traj-ref-x-rate-limit-active">-</td></tr>
+                            <tr><td title="Hysteretic straightness gate from center curvature proxy + raw heading. ON while |a_center| and |raw_heading| stay below OFF thresholds; turns ON only when both fall below tighter ON thresholds.">Heading Zero Gate (Hysteretic `a_center + raw_heading`)</td><td id="projection-traj-heading-zero-gate">-</td></tr>
+                            <tr><td title="Raw gate inputs for heading-zero hysteresis: |a_center| and |raw_heading| with ON/OFF thresholds.">Heading Zero Gate Inputs (`|a_center|, |raw_heading| / on-off th`)</td><td id="projection-traj-heading-zero-gate-inputs">-</td></tr>
+                            <tr><td title="Small-heading proxy gate. ON when |raw_ref_heading| < 1 degree (0.01745 rad).">Small Heading Gate (`|raw_ref_heading| &lt; 1 deg`)</td><td id="projection-traj-small-heading-gate">-</td></tr>
+                            <tr><td title="Raw gate inputs for small-heading check: absolute raw heading vs threshold.">Small Heading Gate Inputs (`|raw_heading| / threshold`)</td><td id="projection-traj-small-heading-gate-inputs">-</td></tr>
+                            <tr><td title="ON when diag_smoothing_jump_reject > 0.5 (smoothing layer rejected a jump).">Smoothing Jump Reject Active</td><td id="projection-traj-smoothing-jump-reject">-</td></tr>
+                            <tr><td title="ON when diag_ref_x_rate_limit_active > 0.5 (ref_x change exceeded rate cap).">Ref X Rate-Limit Active</td><td id="projection-traj-ref-x-rate-limit-active">-</td></tr>
                             <tr><td>Smoothed Ref Heading</td><td id="projection-traj-smoothed-ref-heading">-</td></tr>
                             <tr><td>Heading Suppression |Δ|</td><td id="projection-traj-heading-suppression-abs">-</td></tr>
                             <tr><td>Smoothed Ref X</td><td id="projection-traj-smoothed-ref-x">-</td></tr>
                             <tr><td>Ref X Suppression |Δ|</td><td id="projection-traj-ref-x-suppression-abs">-</td></tr>
                             <tr><td>Smoothing Alpha / Alpha X</td><td id="projection-traj-smoothing-alpha-pair">-</td></tr>
-                            <tr><td>Multi-Lookahead Blend Active</td><td id="projection-traj-multilookahead-active">-</td></tr>
+                            <tr><td title="ON when reference method is multi_lookahead_heading_blend (or diag flag indicates active).">Multi-Lookahead Blend Active</td><td id="projection-traj-multilookahead-active">-</td></tr>
                             <tr><td>ML Heading Base / Far / Blended</td><td id="projection-traj-ml-heading-breakdown">-</td></tr>
                             <tr><td>ML Blend Alpha</td><td id="projection-traj-ml-blend-alpha">-</td></tr>
                             <tr><td>Dynamic Effective Horizon (m)</td><td id="projection-traj-dynamic-horizon-m">-</td></tr>
@@ -454,7 +456,7 @@
                             <tr><td>Dynamic Horizon Scales (speed / curv / conf / final)</td><td id="projection-traj-dynamic-horizon-scales">-</td></tr>
                             <tr><td>Dynamic Horizon Inputs (speed / |curv| / conf)</td><td id="projection-traj-dynamic-horizon-inputs">-</td></tr>
                             <tr><td>Dynamic Horizon Limiter Code</td><td id="projection-traj-dynamic-horizon-limiter-code">-</td></tr>
-                            <tr><td>Dynamic Horizon Applied</td><td id="projection-traj-dynamic-horizon-applied">-</td></tr>
+                            <tr><td title="ON when dynamic effective horizon policy is behaviorally applied this frame (diag_dynamic_effective_horizon_applied > 0.5).">Dynamic Horizon Applied</td><td id="projection-traj-dynamic-horizon-applied">-</td></tr>
                             <tr><td>X Clip Count</td><td id="projection-traj-x-clip-count">-</td></tr>
                             <tr><td>Heavy X Clipping (`>= 8`)</td><td id="projection-traj-heavy-x-clipping">-</td></tr>
                             <tr><td>Preclip |X| Max (full path)</td><td id="projection-traj-preclip-abs-max">-</td></tr>
@@ -472,12 +474,12 @@
                             <tr><td>Postclip Near-Clip Frac 12-20m</td><td id="projection-traj-postclip-nearclip-frac-12-20m">-</td></tr>
                             <tr><td>Front Frame ID Delta</td><td id="projection-traj-front-frame-delta">-</td></tr>
                             <tr><td>Front Unity Δt (ms)</td><td id="projection-traj-front-unity-dt-ms">-</td></tr>
-                            <tr><td>Overlay Snap Risk</td><td id="projection-traj-overlay-snap-risk">-</td></tr>
-                            <tr><td>Contract Misaligned Risk</td><td id="projection-traj-contract-misaligned-risk">-</td></tr>
-                            <tr><td>Cadence Risk</td><td id="projection-traj-cadence-risk">-</td></tr>
+                            <tr><td title="Current implementation: mirrors sync-contract misalignment risk (trajectory/control sync status is misaligned/missing).">Overlay Snap Risk</td><td id="projection-traj-overlay-snap-risk">-</td></tr>
+                            <tr><td title="ON when sync trajectory/control status is misaligned or missing.">Contract Misaligned Risk</td><td id="projection-traj-contract-misaligned-risk">-</td></tr>
+                            <tr><td title="ON when front frame delta exceeds policy threshold OR front unity dt exceeds threshold.">Cadence Risk</td><td id="projection-traj-cadence-risk">-</td></tr>
                             <tr><td>Cadence Policy / Thresholds</td><td id="projection-traj-cadence-policy">-</td></tr>
                             <tr><td>Control Curvature / Oracle @10m</td><td id="projection-traj-control-curv-ratio-10m">-</td></tr>
-                            <tr><td>Under-Turn Flag @10m</td><td id="projection-traj-underturn-10m-flag">-</td></tr>
+                            <tr><td title="ON when curvature_ratio_10m < 0.6 (planner turning weaker than oracle at 10m).">Under-Turn Flag @10m</td><td id="projection-traj-underturn-10m-flag">-</td></tr>
                             <tr><td>Lateral Error Mean 0-8m</td><td id="projection-traj-band-err-0-8m">-</td></tr>
                             <tr><td>Lateral Error Mean 8-12m</td><td id="projection-traj-band-err-8-12m">-</td></tr>
                             <tr><td>Lateral Error Mean 12-20m</td><td id="projection-traj-band-err-12-20m">-</td></tr>
@@ -815,7 +817,7 @@
 
     <script src="data_loader.js?v=20260216_ego_anchor_default_v37"></script>
     <script src="overlay_renderer.js?v=20260213_issues_filters"></script>
-    <script src="visualizer.js?v=20260216_ego_anchor_default_v37"></script>
+    <script src="visualizer.js?v=20260217_traj_gate_hysteresis_v39"></script>
 </body>
 </html>
 

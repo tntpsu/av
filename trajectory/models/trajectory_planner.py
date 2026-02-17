@@ -50,7 +50,8 @@ class RuleBasedTrajectoryPlanner:
                  calibrated_fx_px: float = 0.0,
                  calibrated_fy_px: float = 0.0,
                  calibrated_cx_px: float = 0.0,
-                 calibrated_cy_px: float = 0.0):
+                 calibrated_cy_px: float = 0.0,
+                 dynamic_effective_horizon_farfield_scale_min: float = 0.85):
         """
         Initialize trajectory planner.
         
@@ -105,6 +106,9 @@ class RuleBasedTrajectoryPlanner:
         self.calibrated_fy_px = float(calibrated_fy_px)
         self.calibrated_cx_px = float(calibrated_cx_px) if calibrated_cx_px > 0.0 else (float(image_width) * 0.5)
         self.calibrated_cy_px = float(calibrated_cy_px) if calibrated_cy_px > 0.0 else (float(image_height) * 0.5)
+        self.dynamic_effective_horizon_farfield_scale_min = float(
+            np.clip(dynamic_effective_horizon_farfield_scale_min, 0.5, 1.0)
+        )
         
         # For reference point smoothing
         self.last_reference_x = None
@@ -989,6 +993,25 @@ class RuleBasedTrajectoryPlanner:
         """
         points = []
         debug_trace: Dict[str, Any] = {"clip_count": 0}
+        effective_horizon_m = float(self.lookahead_distance)
+        effective_horizon_applied = 0.0
+        if isinstance(vehicle_state, dict):
+            effective_horizon_applied = float(
+                vehicle_state.get(
+                    "dynamicEffectiveHorizonApplied",
+                    vehicle_state.get("dynamic_effective_horizon_applied", 0.0),
+                )
+            )
+            horizon_candidate = vehicle_state.get(
+                "dynamicEffectiveHorizonMeters",
+                vehicle_state.get("dynamic_effective_horizon_m", self.lookahead_distance),
+            )
+            try:
+                horizon_candidate = float(horizon_candidate)
+            except (TypeError, ValueError):
+                horizon_candidate = float(self.lookahead_distance)
+            if np.isfinite(horizon_candidate) and horizon_candidate > 0.1:
+                effective_horizon_m = min(float(self.lookahead_distance), float(horizon_candidate))
         
         # Generate points along lane in vehicle coordinates
         num_points = int(self.lookahead_distance / self.point_spacing)
@@ -1085,6 +1108,17 @@ class RuleBasedTrajectoryPlanner:
             # Compute curvature (simplified)
             curvature = self._compute_curvature(lane_coeffs, y_image)
             
+            # Phase 2: conservatively attenuate far-field lateral contribution beyond effective horizon.
+            if (
+                effective_horizon_applied > 0.5
+                and effective_horizon_m < self.lookahead_distance - 1e-6
+                and y_vehicle_corrected > effective_horizon_m
+            ):
+                far_span = max(1e-3, self.lookahead_distance - effective_horizon_m)
+                far_ratio = np.clip((y_vehicle_corrected - effective_horizon_m) / far_span, 0.0, 1.0)
+                scale = 1.0 - (1.0 - self.dynamic_effective_horizon_farfield_scale_min) * far_ratio
+                x_vehicle = float(x_vehicle) * float(scale)
+
             point = TrajectoryPoint(
                 x=x_vehicle,
                 y=y_vehicle_corrected,

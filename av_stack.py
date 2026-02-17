@@ -552,6 +552,12 @@ class AVStack:
             target_lane_width_m=trajectory_cfg.get('target_lane_width_m', 0.0),
             ref_sign_flip_threshold=trajectory_cfg.get('ref_sign_flip_threshold', 0.0),
             ref_x_rate_limit=trajectory_cfg.get('ref_x_rate_limit', 0.0),
+            ref_x_rate_limit_turn_heading_min_abs_rad=trajectory_cfg.get(
+                'ref_x_rate_limit_turn_heading_min_abs_rad', 0.08
+            ),
+            ref_x_rate_limit_turn_scale_max=trajectory_cfg.get(
+                'ref_x_rate_limit_turn_scale_max', 2.5
+            ),
             multi_lookahead_enabled=trajectory_cfg.get('multi_lookahead_enabled', False),
             multi_lookahead_far_scale=trajectory_cfg.get('multi_lookahead_far_scale', 1.5),
             multi_lookahead_blend_alpha=trajectory_cfg.get('multi_lookahead_blend_alpha', 0.35),
@@ -564,6 +570,18 @@ class AVStack:
             ),
             multi_lookahead_curve_heading_min_abs_rad=trajectory_cfg.get(
                 'multi_lookahead_curve_heading_min_abs_rad', 0.05
+            ),
+            traj_heading_zero_gate_center_a_on_abs_max=trajectory_cfg.get(
+                'traj_heading_zero_gate_center_a_on_abs_max', 0.004
+            ),
+            traj_heading_zero_gate_center_a_off_abs_max=trajectory_cfg.get(
+                'traj_heading_zero_gate_center_a_off_abs_max', 0.008
+            ),
+            traj_heading_zero_gate_heading_on_abs_rad=trajectory_cfg.get(
+                'traj_heading_zero_gate_heading_on_abs_rad', 0.035
+            ),
+            traj_heading_zero_gate_heading_off_abs_rad=trajectory_cfg.get(
+                'traj_heading_zero_gate_heading_off_abs_rad', 0.061
             ),
             center_spline_enabled=trajectory_cfg.get('center_spline_enabled', False),
             center_spline_degree=trajectory_cfg.get('center_spline_degree', 2),
@@ -3141,6 +3159,21 @@ class AVStack:
             logger.warning(f"[Frame {self.frame_count}] ⚠️  Perception health-based speed reduction: "
                          f"{self.perception_health_status} -> target speed: {adjusted_target_speed:.2f} m/s "
                          f"(original: {self.original_target_speed:.2f} m/s)")
+
+        # Phase 2 integration: pass effective horizon policy into trajectory generation.
+        # Keep both camel/snake keys for compatibility with existing naming patterns.
+        vehicle_state_dict["dynamicEffectiveHorizonMeters"] = float(
+            dynamic_horizon_diag.get("diag_dynamic_effective_horizon_m", reference_lookahead)
+        )
+        vehicle_state_dict["dynamic_effective_horizon_m"] = float(
+            dynamic_horizon_diag.get("diag_dynamic_effective_horizon_m", reference_lookahead)
+        )
+        vehicle_state_dict["dynamicEffectiveHorizonApplied"] = float(
+            dynamic_horizon_diag.get("diag_dynamic_effective_horizon_applied", 0.0)
+        )
+        vehicle_state_dict["dynamic_effective_horizon_applied"] = float(
+            dynamic_horizon_diag.get("diag_dynamic_effective_horizon_applied", 0.0)
+        )
         
         # 2. Trajectory Planning: Plan path
         trajectory = self.trajectory_planner.plan(lane_coeffs, vehicle_state_dict)
@@ -3187,7 +3220,14 @@ class AVStack:
         # Always compute steering (even during braking) for safety
         # Get reference point - use configurable lookahead
         # NEW: Use direct midpoint computation (simpler, more accurate)
-        reference_lookahead = self.trajectory_config.get('reference_lookahead', 8.0)
+        reference_lookahead = float(reference_lookahead)
+        dynamic_horizon_applied = float(
+            dynamic_horizon_diag.get("diag_dynamic_effective_horizon_applied", 0.0)
+        )
+        if dynamic_horizon_applied > 0.5:
+            reference_lookahead = float(
+                dynamic_horizon_diag.get("diag_dynamic_effective_horizon_m", reference_lookahead)
+            )
         # Pass timestamp for jump detection (handles Unity pauses)
         reference_point = self.trajectory_planner.get_reference_point(
             trajectory, 
@@ -4627,7 +4667,18 @@ class AVStack:
                     # Array of arrays: convert to list
                     lane_coeffs_for_ref = [coeffs for coeffs in coeffs_array]
             
-            reference_lookahead = self.trajectory_config.get('reference_lookahead', 8.0)
+            reference_lookahead = float(self.trajectory_config.get('reference_lookahead', 8.0))
+            runtime_ref_diag = runtime_reference_point if isinstance(runtime_reference_point, dict) else {}
+            dynamic_horizon_applied = float(
+                runtime_ref_diag.get("diag_dynamic_effective_horizon_applied", 0.0)
+            )
+            if dynamic_horizon_applied > 0.5:
+                reference_lookahead = float(
+                    runtime_ref_diag.get(
+                        "diag_dynamic_effective_horizon_m",
+                        reference_lookahead,
+                    )
+                )
             # Get lane positions from perception_output for most accurate reference point
             lane_positions_for_ref = None
             if perception_output:
@@ -4647,7 +4698,6 @@ class AVStack:
                     use_direct=True,  # Use direct midpoint computation
                     timestamp=timestamp,
                     confidence=confidence,
-                    dynamic_horizon_diag=dynamic_horizon_diag,
                 )
             
             # Build trajectory points array with reference point first
