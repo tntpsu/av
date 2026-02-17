@@ -581,6 +581,14 @@ body {
     text-align: right;
 }
 
+.data-table tr.waterfall-limiter-active td {
+    background: rgba(255, 170, 0, 0.12);
+}
+
+.data-table tr.waterfall-first-limiter td {
+    background: rgba(255, 64, 64, 0.20);
+}
+
 /* Navigation */
 .navigation {
     background: #2a2a2a;

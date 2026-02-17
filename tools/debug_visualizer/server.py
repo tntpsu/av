@@ -54,6 +54,19 @@ def numpy_to_list(obj):
     return obj
 
 
+def sanitize_non_finite_for_json(obj):
+    """Recursively replace NaN/Inf with None for strict JSON compatibility."""
+    if isinstance(obj, dict):
+        return {k: sanitize_non_finite_for_json(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [sanitize_non_finite_for_json(item) for item in obj]
+    if isinstance(obj, np.generic):
+        obj = obj.item()
+    if isinstance(obj, float):
+        return obj if np.isfinite(obj) else None
+    return obj
+
+
 def parse_flattened_xy_points(row, include_valid=False):
     """Parse flattened [x0,y0,x1,y1,...] to point objects."""
     if row is None:
@@ -1001,6 +1014,49 @@ def get_frame_data(filename, frame_index):
                         frame_data['control']['steering_hard_clip_delta'] = float(f['control/steering_hard_clip_delta'][control_idx])
                     if 'control/steering_smoothing_delta' in f and control_idx < len(f['control/steering_smoothing_delta']):
                         frame_data['control']['steering_smoothing_delta'] = float(f['control/steering_smoothing_delta'][control_idx])
+                    if 'control/steering_rate_limit_base_from_error' in f and control_idx < len(f['control/steering_rate_limit_base_from_error']):
+                        frame_data['control']['steering_rate_limit_base_from_error'] = float(f['control/steering_rate_limit_base_from_error'][control_idx])
+                    if 'control/steering_rate_limit_curve_scale' in f and control_idx < len(f['control/steering_rate_limit_curve_scale']):
+                        frame_data['control']['steering_rate_limit_curve_scale'] = float(f['control/steering_rate_limit_curve_scale'][control_idx])
+                    if 'control/steering_rate_limit_curve_metric_abs' in f and control_idx < len(f['control/steering_rate_limit_curve_metric_abs']):
+                        frame_data['control']['steering_rate_limit_curve_metric_abs'] = float(f['control/steering_rate_limit_curve_metric_abs'][control_idx])
+                    if 'control/steering_rate_limit_curve_metric_source' in f and control_idx < len(f['control/steering_rate_limit_curve_metric_source']):
+                        source_val = f['control/steering_rate_limit_curve_metric_source'][control_idx]
+                        if isinstance(source_val, bytes):
+                            source_val = source_val.decode('utf-8', 'ignore')
+                        frame_data['control']['steering_rate_limit_curve_metric_source'] = str(source_val)
+                    if 'control/steering_rate_limit_curve_min' in f and control_idx < len(f['control/steering_rate_limit_curve_min']):
+                        frame_data['control']['steering_rate_limit_curve_min'] = float(f['control/steering_rate_limit_curve_min'][control_idx])
+                    if 'control/steering_rate_limit_curve_max' in f and control_idx < len(f['control/steering_rate_limit_curve_max']):
+                        frame_data['control']['steering_rate_limit_curve_max'] = float(f['control/steering_rate_limit_curve_max'][control_idx])
+                    if 'control/steering_rate_limit_scale_min' in f and control_idx < len(f['control/steering_rate_limit_scale_min']):
+                        frame_data['control']['steering_rate_limit_scale_min'] = float(f['control/steering_rate_limit_scale_min'][control_idx])
+                    if 'control/steering_rate_limit_curve_regime_code' in f and control_idx < len(f['control/steering_rate_limit_curve_regime_code']):
+                        frame_data['control']['steering_rate_limit_curve_regime_code'] = float(f['control/steering_rate_limit_curve_regime_code'][control_idx])
+                    if 'control/steering_rate_limit_after_curve' in f and control_idx < len(f['control/steering_rate_limit_after_curve']):
+                        frame_data['control']['steering_rate_limit_after_curve'] = float(f['control/steering_rate_limit_after_curve'][control_idx])
+                    if 'control/steering_rate_limit_after_floor' in f and control_idx < len(f['control/steering_rate_limit_after_floor']):
+                        frame_data['control']['steering_rate_limit_after_floor'] = float(f['control/steering_rate_limit_after_floor'][control_idx])
+                    if 'control/steering_rate_limit_effective' in f and control_idx < len(f['control/steering_rate_limit_effective']):
+                        frame_data['control']['steering_rate_limit_effective'] = float(f['control/steering_rate_limit_effective'][control_idx])
+                    if 'control/steering_rate_limit_requested_delta' in f and control_idx < len(f['control/steering_rate_limit_requested_delta']):
+                        frame_data['control']['steering_rate_limit_requested_delta'] = float(f['control/steering_rate_limit_requested_delta'][control_idx])
+                    if 'control/steering_rate_limit_margin' in f and control_idx < len(f['control/steering_rate_limit_margin']):
+                        frame_data['control']['steering_rate_limit_margin'] = float(f['control/steering_rate_limit_margin'][control_idx])
+                    if 'control/steering_rate_limit_unlock_delta_needed' in f and control_idx < len(f['control/steering_rate_limit_unlock_delta_needed']):
+                        frame_data['control']['steering_rate_limit_unlock_delta_needed'] = float(f['control/steering_rate_limit_unlock_delta_needed'][control_idx])
+                    if 'control/steering_jerk_limit_effective' in f and control_idx < len(f['control/steering_jerk_limit_effective']):
+                        frame_data['control']['steering_jerk_limit_effective'] = float(f['control/steering_jerk_limit_effective'][control_idx])
+                    if 'control/steering_jerk_curve_scale' in f and control_idx < len(f['control/steering_jerk_curve_scale']):
+                        frame_data['control']['steering_jerk_curve_scale'] = float(f['control/steering_jerk_curve_scale'][control_idx])
+                    if 'control/steering_jerk_limit_requested_rate_delta' in f and control_idx < len(f['control/steering_jerk_limit_requested_rate_delta']):
+                        frame_data['control']['steering_jerk_limit_requested_rate_delta'] = float(f['control/steering_jerk_limit_requested_rate_delta'][control_idx])
+                    if 'control/steering_jerk_limit_allowed_rate_delta' in f and control_idx < len(f['control/steering_jerk_limit_allowed_rate_delta']):
+                        frame_data['control']['steering_jerk_limit_allowed_rate_delta'] = float(f['control/steering_jerk_limit_allowed_rate_delta'][control_idx])
+                    if 'control/steering_jerk_limit_margin' in f and control_idx < len(f['control/steering_jerk_limit_margin']):
+                        frame_data['control']['steering_jerk_limit_margin'] = float(f['control/steering_jerk_limit_margin'][control_idx])
+                    if 'control/steering_jerk_limit_unlock_rate_delta_needed' in f and control_idx < len(f['control/steering_jerk_limit_unlock_rate_delta_needed']):
+                        frame_data['control']['steering_jerk_limit_unlock_rate_delta_needed'] = float(f['control/steering_jerk_limit_unlock_rate_delta_needed'][control_idx])
             
             # Ground truth data - use same index as vehicle state (they should be synchronized)
             # Try new name first, fall back to old name for backward compatibility
@@ -1103,14 +1159,14 @@ def get_frame_data(filename, frame_index):
                 },
             }
             
-            return jsonify(frame_data)
+            return jsonify(sanitize_non_finite_for_json(frame_data))
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
 
 @app.route('/api/recording/<path:filename>/frame/<int:frame_index>/image')
 def get_frame_image(filename, frame_index):
-    """Get camera frame as base64-encoded image."""
+    """Get camera frame as JSON data URL or raw PNG."""
     from urllib.parse import unquote
     filename = unquote(filename)
     filepath = RECORDINGS_DIR / filename
@@ -1133,12 +1189,19 @@ def get_frame_image(filename, frame_index):
             # Convert to PIL Image
             img = Image.fromarray(image)
             
-            # Convert to base64
+            # Encode PNG once and return either raw bytes or JSON data URL.
             buffer = BytesIO()
             img.save(buffer, format='PNG')
-            img_str = base64.b64encode(buffer.getvalue()).decode('utf-8')
-            
-            return jsonify({"image": f"data:image/png;base64,{img_str}"})
+            png_bytes = buffer.getvalue()
+            if request.args.get("format") == "png":
+                response = app.response_class(png_bytes, mimetype="image/png")
+                response.headers["Cache-Control"] = "no-store, max-age=0"
+                return response
+
+            img_str = base64.b64encode(png_bytes).decode('utf-8')
+            response = jsonify({"image": f"data:image/png;base64,{img_str}"})
+            response.headers["Cache-Control"] = "no-store, max-age=0"
+            return response
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -2335,7 +2398,7 @@ def get_topdown_diagnostics(filename):
                             gap_20_50.append(float(np.mean(abs_g[far])))
                         gap_max_0_h.append(float(np.max(abs_g)))
                         # Trapezoidal integral of absolute lateral gap across overlap horizon.
-                        gap_int_0_h.append(float(np.trapz(abs_g, ys)))
+                        gap_int_0_h.append(float(np.trapezoid(abs_g, ys)))
                     oracle_gap_diag = {
                         "frames_with_oracle_overlap": int(len(gap_max_0_h)),
                         "gap_at_lookahead_8m_stats": _stats_signed(np.array(gap_8m, dtype=float)),

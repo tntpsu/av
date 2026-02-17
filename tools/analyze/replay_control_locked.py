@@ -48,6 +48,64 @@ def _get_len(f: h5py.File, key: str) -> int:
     return int(len(f[key])) if key in f else 0
 
 
+def _dataset_row_to_list(source_file: h5py.File, key: str, idx: int) -> list[float]:
+    if key not in source_file or idx >= len(source_file[key]):
+        return []
+    row = np.asarray(source_file[key][idx]).reshape(-1)
+    if row.size == 0:
+        return []
+    return row.astype(np.float32).tolist()
+
+
+def _inject_oracle_and_fiducials(source_file: h5py.File, idx: int, d: Dict[str, object]) -> None:
+    oracle_xy = _dataset_row_to_list(source_file, "trajectory/oracle_points", idx)
+    if oracle_xy:
+        d["oracleTrajectoryXY"] = oracle_xy
+        d["oracle_trajectory_xy"] = oracle_xy
+    if "trajectory/oracle_point_count" in source_file and idx < len(source_file["trajectory/oracle_point_count"]):
+        d["oraclePointCount"] = int(source_file["trajectory/oracle_point_count"][idx])
+        d["oracle_point_count"] = int(source_file["trajectory/oracle_point_count"][idx])
+    if "trajectory/oracle_horizon_meters" in source_file and idx < len(source_file["trajectory/oracle_horizon_meters"]):
+        d["oracleHorizonMeters"] = float(source_file["trajectory/oracle_horizon_meters"][idx])
+        d["oracle_horizon_meters"] = float(source_file["trajectory/oracle_horizon_meters"][idx])
+    if "trajectory/oracle_point_spacing_meters" in source_file and idx < len(source_file["trajectory/oracle_point_spacing_meters"]):
+        d["oraclePointSpacingMeters"] = float(source_file["trajectory/oracle_point_spacing_meters"][idx])
+        d["oracle_point_spacing_meters"] = float(source_file["trajectory/oracle_point_spacing_meters"][idx])
+    if "trajectory/oracle_samples_enabled" in source_file and idx < len(source_file["trajectory/oracle_samples_enabled"]):
+        enabled = bool(source_file["trajectory/oracle_samples_enabled"][idx])
+        d["oracleSamplesEnabled"] = enabled
+        d["oracle_samples_enabled"] = enabled
+
+    oracle_world = _dataset_row_to_list(source_file, "vehicle/oracle_trajectory_world_xyz", idx)
+    if oracle_world:
+        d["oracleTrajectoryWorldXYZ"] = oracle_world
+        d["oracle_trajectory_world_xyz"] = oracle_world
+    oracle_screen = _dataset_row_to_list(source_file, "vehicle/oracle_trajectory_screen_xy", idx)
+    if oracle_screen:
+        d["oracleTrajectoryScreenXY"] = oracle_screen
+        d["oracle_trajectory_screen_xy"] = oracle_screen
+
+    for key in (
+        "vehicle/right_lane_fiducials_vehicle_true_xy",
+        "vehicle/right_lane_fiducials_vehicle_monotonic_xy",
+        "vehicle/right_lane_fiducials_world_xyz",
+        "vehicle/right_lane_fiducials_vehicle_xy",
+        "vehicle/right_lane_fiducials_screen_xy",
+    ):
+        vals = _dataset_row_to_list(source_file, key, idx)
+        if vals:
+            d[key.split("/", 1)[1]] = vals
+    for key, caster in (
+        ("vehicle/right_lane_fiducials_point_count", int),
+        ("vehicle/right_lane_fiducials_horizon_meters", float),
+        ("vehicle/right_lane_fiducials_spacing_meters", float),
+    ):
+        if key in source_file and idx < len(source_file[key]):
+            d[key.split("/", 1)[1]] = caster(source_file[key][idx])
+    if "vehicle/right_lane_fiducials_enabled" in source_file and idx < len(source_file["vehicle/right_lane_fiducials_enabled"]):
+        d["right_lane_fiducials_enabled"] = bool(source_file["vehicle/right_lane_fiducials_enabled"][idx])
+
+
 def _build_vehicle_state_dict(source_file: h5py.File, idx: int) -> Dict[str, object]:
     d: Dict[str, object] = {
         "position": {
@@ -77,6 +135,39 @@ def _build_vehicle_state_dict(source_file: h5py.File, idx: int) -> Dict[str, obj
         "brakeTorque": float(source_file["vehicle/brake_torque"][idx]) if "vehicle/brake_torque" in source_file else 0.0,
     }
 
+    def _copy_vehicle_scalar(dataset_name: str, out_key: str, caster=float) -> None:
+        full_key = f"vehicle/{dataset_name}"
+        if full_key in source_file and idx < len(source_file[full_key]):
+            try:
+                d[out_key] = caster(source_file[full_key][idx])
+            except (TypeError, ValueError):
+                return
+
+    # Preserve front-camera mounting/projection context for replayed frames.
+    # Without these fields, main-camera trajectory projection falls back and can appear unmounted.
+    _copy_vehicle_scalar("camera_pos_x", "cameraPosX")
+    _copy_vehicle_scalar("camera_pos_y", "cameraPosY")
+    _copy_vehicle_scalar("camera_pos_z", "cameraPosZ")
+    _copy_vehicle_scalar("camera_forward_x", "cameraForwardX")
+    _copy_vehicle_scalar("camera_forward_y", "cameraForwardY")
+    _copy_vehicle_scalar("camera_forward_z", "cameraForwardZ")
+    _copy_vehicle_scalar("camera_field_of_view", "cameraFieldOfView")
+    _copy_vehicle_scalar("camera_horizontal_fov", "cameraHorizontalFOV")
+    _copy_vehicle_scalar("camera_8m_screen_y", "camera8mScreenY")
+    _copy_vehicle_scalar("camera_lookahead_screen_y", "cameraLookaheadScreenY")
+    _copy_vehicle_scalar("ground_truth_lookahead_distance", "groundTruthLookaheadDistance")
+    _copy_vehicle_scalar("road_center_at_car_x", "roadCenterAtCarX")
+    _copy_vehicle_scalar("road_center_at_car_y", "roadCenterAtCarY")
+    _copy_vehicle_scalar("road_center_at_car_z", "roadCenterAtCarZ")
+    _copy_vehicle_scalar("topdown_camera_pos_x", "topDownCameraPosX")
+    _copy_vehicle_scalar("topdown_camera_pos_y", "topDownCameraPosY")
+    _copy_vehicle_scalar("topdown_camera_pos_z", "topDownCameraPosZ")
+    _copy_vehicle_scalar("topdown_camera_forward_x", "topDownCameraForwardX")
+    _copy_vehicle_scalar("topdown_camera_forward_y", "topDownCameraForwardY")
+    _copy_vehicle_scalar("topdown_camera_forward_z", "topDownCameraForwardZ")
+    _copy_vehicle_scalar("topdown_camera_orthographic_size", "topDownCameraOrthographicSize")
+    _copy_vehicle_scalar("topdown_camera_field_of_view", "topDownCameraFieldOfView")
+
     # Ground truth names vary between old/new recordings.
     if "ground_truth/left_lane_line_x" in source_file:
         d["groundTruthLeftLaneLineX"] = float(source_file["ground_truth/left_lane_line_x"][idx])
@@ -93,6 +184,7 @@ def _build_vehicle_state_dict(source_file: h5py.File, idx: int) -> Dict[str, obj
     if "ground_truth/desired_heading" in source_file:
         d["groundTruthDesiredHeading"] = float(source_file["ground_truth/desired_heading"][idx])
 
+    _inject_oracle_and_fiducials(source_file, idx, d)
     return d
 
 
@@ -160,18 +252,29 @@ def replay_control_locked(
         original_compute_control = av_stack.controller.compute_control
         original_send = None
         original_get_camera_frame = None
+        original_get_camera_frame_with_metadata = None
         if hasattr(av_stack.bridge, "set_control_command"):
             original_send = av_stack.bridge.set_control_command
             av_stack.bridge.set_control_command = lambda *args, **kwargs: True
         if hasattr(av_stack.bridge, "get_latest_camera_frame"):
             original_get_camera_frame = av_stack.bridge.get_latest_camera_frame
+        if hasattr(av_stack.bridge, "get_latest_camera_frame_with_metadata"):
+            original_get_camera_frame_with_metadata = (
+                av_stack.bridge.get_latest_camera_frame_with_metadata
+            )
 
         frame_holder = {"idx": 0}
         has_topdown_input = "camera/topdown_images" in in_f and len(in_f["camera/topdown_images"]) > 0
         av_stack.recorder.metadata["topdown_replayed_from_input"] = bool(has_topdown_input)
-        if has_topdown_input and original_get_camera_frame is not None:
+        if has_topdown_input and (
+            original_get_camera_frame is not None
+            or original_get_camera_frame_with_metadata is not None
+        ):
             topdown_images = in_f["camera/topdown_images"]
-            cam_timestamps = in_f["camera/timestamps"]
+            if "camera/topdown_timestamps" in in_f and len(in_f["camera/topdown_timestamps"]) > 0:
+                topdown_timestamps = in_f["camera/topdown_timestamps"]
+            else:
+                topdown_timestamps = in_f["camera/timestamps"]
 
             def _replay_get_latest_camera_frame(*args, **kwargs):
                 camera_id = kwargs.get("camera_id")
@@ -179,10 +282,38 @@ def replay_control_locked(
                     camera_id = args[0]
                 if camera_id in ("top_down", "topdown"):
                     i = min(frame_holder["idx"], len(topdown_images) - 1)
-                    return topdown_images[i], float(cam_timestamps[i]), None
+                    return topdown_images[i], float(topdown_timestamps[i]), None
+                if original_get_camera_frame is None:
+                    return None
                 return original_get_camera_frame(*args, **kwargs)
 
+            def _replay_get_latest_camera_frame_with_metadata(*args, **kwargs):
+                camera_id = kwargs.get("camera_id")
+                if camera_id is None and len(args) >= 1:
+                    camera_id = args[0]
+                if camera_id in ("top_down", "topdown"):
+                    i = min(frame_holder["idx"], len(topdown_images) - 1)
+                    topdown_ts = float(topdown_timestamps[i])
+                    meta = {
+                        "queue_depth": 0.0,
+                        "queue_capacity": 0.0,
+                        "drop_count": 0.0,
+                        "decode_in_flight": False,
+                        "latest_age_ms": 0.0,
+                        "last_arrival_time": None,
+                        "last_realtime_since_startup": topdown_ts,
+                        "last_unscaled_time": None,
+                    }
+                    return topdown_images[i], topdown_ts, None, meta
+                if original_get_camera_frame_with_metadata is None:
+                    return None
+                return original_get_camera_frame_with_metadata(*args, **kwargs)
+
             av_stack.bridge.get_latest_camera_frame = _replay_get_latest_camera_frame
+            if original_get_camera_frame_with_metadata is not None:
+                av_stack.bridge.get_latest_camera_frame_with_metadata = (
+                    _replay_get_latest_camera_frame_with_metadata
+                )
 
         def _locked_compute_control(*args, **kwargs):
             i = frame_holder["idx"]
@@ -215,6 +346,10 @@ def replay_control_locked(
                 av_stack.bridge.set_control_command = original_send
             if original_get_camera_frame is not None:
                 av_stack.bridge.get_latest_camera_frame = original_get_camera_frame
+            if original_get_camera_frame_with_metadata is not None:
+                av_stack.bridge.get_latest_camera_frame_with_metadata = (
+                    original_get_camera_frame_with_metadata
+                )
             av_stack.recorder.close()
 
     output_path = Path(av_stack.recorder.output_file)

@@ -1008,6 +1008,126 @@ class DataRecorder:
             maxshape=max_shape,
             dtype=np.float32
         )
+        self.h5_file.create_dataset(
+            "control/steering_rate_limit_base_from_error",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/steering_rate_limit_curve_scale",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/steering_rate_limit_curve_metric_abs",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/steering_rate_limit_curve_metric_source",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=h5py.string_dtype(encoding='utf-8', length=40)
+        )
+        self.h5_file.create_dataset(
+            "control/steering_rate_limit_curve_min",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/steering_rate_limit_curve_max",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/steering_rate_limit_scale_min",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/steering_rate_limit_curve_regime_code",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/steering_rate_limit_after_curve",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/steering_rate_limit_after_floor",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/steering_rate_limit_effective",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/steering_rate_limit_requested_delta",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/steering_rate_limit_margin",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/steering_rate_limit_unlock_delta_needed",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/steering_jerk_limit_effective",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/steering_jerk_curve_scale",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/steering_jerk_limit_requested_rate_delta",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/steering_jerk_limit_allowed_rate_delta",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/steering_jerk_limit_margin",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/steering_jerk_limit_unlock_rate_delta_needed",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
         
         # Perception outputs (optional)
         self.h5_file.create_dataset(
@@ -2850,6 +2970,26 @@ class DataRecorder:
         steering_jerk_limited_delta_list = []
         steering_hard_clip_delta_list = []
         steering_smoothing_delta_list = []
+        steering_rate_limit_base_from_error_list = []
+        steering_rate_limit_curve_scale_list = []
+        steering_rate_limit_curve_metric_abs_list = []
+        steering_rate_limit_curve_metric_source_list = []
+        steering_rate_limit_curve_min_list = []
+        steering_rate_limit_curve_max_list = []
+        steering_rate_limit_scale_min_list = []
+        steering_rate_limit_curve_regime_code_list = []
+        steering_rate_limit_after_curve_list = []
+        steering_rate_limit_after_floor_list = []
+        steering_rate_limit_effective_list = []
+        steering_rate_limit_requested_delta_list = []
+        steering_rate_limit_margin_list = []
+        steering_rate_limit_unlock_delta_needed_list = []
+        steering_jerk_limit_effective_list = []
+        steering_jerk_curve_scale_list = []
+        steering_jerk_limit_requested_rate_delta_list = []
+        steering_jerk_limit_allowed_rate_delta_list = []
+        steering_jerk_limit_margin_list = []
+        steering_jerk_limit_unlock_rate_delta_needed_list = []
         accel_feedforward_list = []
         brake_feedforward_list = []
         accel_capped_list = []
@@ -2923,6 +3063,28 @@ class DataRecorder:
             steering_jerk_limited_delta_list.append(getattr(cc, 'steering_jerk_limited_delta', 0.0) or 0.0)
             steering_hard_clip_delta_list.append(getattr(cc, 'steering_hard_clip_delta', 0.0) or 0.0)
             steering_smoothing_delta_list.append(getattr(cc, 'steering_smoothing_delta', 0.0) or 0.0)
+            steering_rate_limit_base_from_error_list.append(getattr(cc, 'steering_rate_limit_base_from_error', 0.0) or 0.0)
+            steering_rate_limit_curve_scale_list.append(getattr(cc, 'steering_rate_limit_curve_scale', 0.0) or 0.0)
+            steering_rate_limit_curve_metric_abs_list.append(getattr(cc, 'steering_rate_limit_curve_metric_abs', 0.0) or 0.0)
+            steering_rate_limit_curve_metric_source_list.append(
+                str(getattr(cc, 'steering_rate_limit_curve_metric_source', '') or '')
+            )
+            steering_rate_limit_curve_min_list.append(getattr(cc, 'steering_rate_limit_curve_min', 0.0) or 0.0)
+            steering_rate_limit_curve_max_list.append(getattr(cc, 'steering_rate_limit_curve_max', 0.0) or 0.0)
+            steering_rate_limit_scale_min_list.append(getattr(cc, 'steering_rate_limit_scale_min', 0.0) or 0.0)
+            steering_rate_limit_curve_regime_code_list.append(getattr(cc, 'steering_rate_limit_curve_regime_code', 0.0) or 0.0)
+            steering_rate_limit_after_curve_list.append(getattr(cc, 'steering_rate_limit_after_curve', 0.0) or 0.0)
+            steering_rate_limit_after_floor_list.append(getattr(cc, 'steering_rate_limit_after_floor', 0.0) or 0.0)
+            steering_rate_limit_effective_list.append(getattr(cc, 'steering_rate_limit_effective', 0.0) or 0.0)
+            steering_rate_limit_requested_delta_list.append(getattr(cc, 'steering_rate_limit_requested_delta', 0.0) or 0.0)
+            steering_rate_limit_margin_list.append(getattr(cc, 'steering_rate_limit_margin', 0.0) or 0.0)
+            steering_rate_limit_unlock_delta_needed_list.append(getattr(cc, 'steering_rate_limit_unlock_delta_needed', 0.0) or 0.0)
+            steering_jerk_limit_effective_list.append(getattr(cc, 'steering_jerk_limit_effective', 0.0) or 0.0)
+            steering_jerk_curve_scale_list.append(getattr(cc, 'steering_jerk_curve_scale', 0.0) or 0.0)
+            steering_jerk_limit_requested_rate_delta_list.append(getattr(cc, 'steering_jerk_limit_requested_rate_delta', 0.0) or 0.0)
+            steering_jerk_limit_allowed_rate_delta_list.append(getattr(cc, 'steering_jerk_limit_allowed_rate_delta', 0.0) or 0.0)
+            steering_jerk_limit_margin_list.append(getattr(cc, 'steering_jerk_limit_margin', 0.0) or 0.0)
+            steering_jerk_limit_unlock_rate_delta_needed_list.append(getattr(cc, 'steering_jerk_limit_unlock_rate_delta_needed', 0.0) or 0.0)
         
         if timestamps:
             current_size = self.h5_file["control/timestamps"].shape[0]
@@ -2954,7 +3116,18 @@ class DataRecorder:
                        "steering_rate_limited_active", "steering_jerk_limited_active",
                        "steering_hard_clip_active", "steering_smoothing_active",
                        "steering_rate_limited_delta", "steering_jerk_limited_delta",
-                       "steering_hard_clip_delta", "steering_smoothing_delta"]:
+                       "steering_hard_clip_delta", "steering_smoothing_delta",
+                       "steering_rate_limit_base_from_error", "steering_rate_limit_curve_scale",
+                       "steering_rate_limit_curve_metric_abs", "steering_rate_limit_curve_metric_source",
+                       "steering_rate_limit_curve_min",
+                       "steering_rate_limit_curve_max", "steering_rate_limit_scale_min",
+                       "steering_rate_limit_curve_regime_code",
+                       "steering_rate_limit_after_curve", "steering_rate_limit_after_floor",
+                       "steering_rate_limit_effective", "steering_rate_limit_requested_delta",
+                       "steering_rate_limit_margin", "steering_rate_limit_unlock_delta_needed",
+                       "steering_jerk_limit_effective", "steering_jerk_curve_scale",
+                       "steering_jerk_limit_requested_rate_delta", "steering_jerk_limit_allowed_rate_delta",
+                       "steering_jerk_limit_margin", "steering_jerk_limit_unlock_rate_delta_needed"]:
                 self.h5_file[f"control/{key}"].resize((new_size,))
             
             # Write data
@@ -3025,6 +3198,29 @@ class DataRecorder:
             self.h5_file["control/steering_jerk_limited_delta"][current_size:] = steering_jerk_limited_delta_list
             self.h5_file["control/steering_hard_clip_delta"][current_size:] = steering_hard_clip_delta_list
             self.h5_file["control/steering_smoothing_delta"][current_size:] = steering_smoothing_delta_list
+            self.h5_file["control/steering_rate_limit_base_from_error"][current_size:] = steering_rate_limit_base_from_error_list
+            self.h5_file["control/steering_rate_limit_curve_scale"][current_size:] = steering_rate_limit_curve_scale_list
+            self.h5_file["control/steering_rate_limit_curve_metric_abs"][current_size:] = steering_rate_limit_curve_metric_abs_list
+            self.h5_file["control/steering_rate_limit_curve_metric_source"][current_size:] = np.array(
+                steering_rate_limit_curve_metric_source_list,
+                dtype=h5py.string_dtype(encoding='utf-8', length=40),
+            )
+            self.h5_file["control/steering_rate_limit_curve_min"][current_size:] = steering_rate_limit_curve_min_list
+            self.h5_file["control/steering_rate_limit_curve_max"][current_size:] = steering_rate_limit_curve_max_list
+            self.h5_file["control/steering_rate_limit_scale_min"][current_size:] = steering_rate_limit_scale_min_list
+            self.h5_file["control/steering_rate_limit_curve_regime_code"][current_size:] = steering_rate_limit_curve_regime_code_list
+            self.h5_file["control/steering_rate_limit_after_curve"][current_size:] = steering_rate_limit_after_curve_list
+            self.h5_file["control/steering_rate_limit_after_floor"][current_size:] = steering_rate_limit_after_floor_list
+            self.h5_file["control/steering_rate_limit_effective"][current_size:] = steering_rate_limit_effective_list
+            self.h5_file["control/steering_rate_limit_requested_delta"][current_size:] = steering_rate_limit_requested_delta_list
+            self.h5_file["control/steering_rate_limit_margin"][current_size:] = steering_rate_limit_margin_list
+            self.h5_file["control/steering_rate_limit_unlock_delta_needed"][current_size:] = steering_rate_limit_unlock_delta_needed_list
+            self.h5_file["control/steering_jerk_limit_effective"][current_size:] = steering_jerk_limit_effective_list
+            self.h5_file["control/steering_jerk_curve_scale"][current_size:] = steering_jerk_curve_scale_list
+            self.h5_file["control/steering_jerk_limit_requested_rate_delta"][current_size:] = steering_jerk_limit_requested_rate_delta_list
+            self.h5_file["control/steering_jerk_limit_allowed_rate_delta"][current_size:] = steering_jerk_limit_allowed_rate_delta_list
+            self.h5_file["control/steering_jerk_limit_margin"][current_size:] = steering_jerk_limit_margin_list
+            self.h5_file["control/steering_jerk_limit_unlock_rate_delta_needed"][current_size:] = steering_jerk_limit_unlock_rate_delta_needed_list
     
     def _write_perception_outputs(self, frames: List[RecordingFrame]):
         """Write perception outputs to HDF5."""

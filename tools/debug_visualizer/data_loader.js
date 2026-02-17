@@ -166,8 +166,10 @@ class DataLoader {
             if (cameraId) {
                 params.set('camera_id', cameraId);
             }
+            params.set('format', 'png');
             const response = await fetch(
-                `${API_BASE}/recording/${this.currentRecording}/frame/${frameIndex}/image?${params.toString()}`
+                `${API_BASE}/recording/${this.currentRecording}/frame/${frameIndex}/image?${params.toString()}`,
+                { cache: 'no-store' }
             );
             if (!response.ok) {
                 const error = new Error(`Failed to load frame image ${frameIndex}`);
@@ -175,9 +177,40 @@ class DataLoader {
                 error.cameraId = cameraId;
                 throw error;
             }
-            const data = await response.json();
-            return data.image; // Base64 data URL
+            const blob = await response.blob();
+            if (!blob || blob.size === 0) {
+                throw new Error(`Empty image payload for frame ${frameIndex}, camera ${cameraId}`);
+            }
+            const imageUrl = URL.createObjectURL(blob);
+            return imageUrl;
         } catch (error) {
+            // Fallback to JSON data URL path when blob decoding path fails in-browser.
+            if (!(error && error.status === 404)) {
+                try {
+                    const fallbackParams = new URLSearchParams();
+                    if (cameraId) {
+                        fallbackParams.set('camera_id', cameraId);
+                    }
+                    const fallbackResp = await fetch(
+                        `${API_BASE}/recording/${this.currentRecording}/frame/${frameIndex}/image?${fallbackParams.toString()}`,
+                        { cache: 'no-store' }
+                    );
+                    if (!fallbackResp.ok) {
+                        const fallbackErr = new Error(`Failed fallback frame image load ${frameIndex}`);
+                        fallbackErr.status = fallbackResp.status;
+                        fallbackErr.cameraId = cameraId;
+                        throw fallbackErr;
+                    }
+                    const data = await fallbackResp.json();
+                    if (!data || typeof data.image !== 'string' || !data.image.startsWith('data:image/')) {
+                        throw new Error(`Invalid fallback image payload for frame ${frameIndex}, camera ${cameraId}`);
+                    }
+                    return data.image;
+                } catch (fallbackError) {
+                    console.error(`Error loading frame image ${frameIndex} (fallback also failed):`, fallbackError);
+                    throw fallbackError;
+                }
+            }
             console.error(`Error loading frame image ${frameIndex}:`, error);
             throw error;
         }

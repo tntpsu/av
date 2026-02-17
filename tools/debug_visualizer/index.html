@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>PhilViz</title>
-    <link rel="stylesheet" href="style.css">
+    <link rel="stylesheet" href="style.css?v=20260216_ego_anchor_default_v37">
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 </head>
 <body>
@@ -435,18 +435,18 @@
                         </table>
                         <h3>Trajectory Suppression Waterfall (Proxy)</h3>
                         <table class="data-table">
+                            <tr><td>Raw Ref Heading</td><td id="projection-traj-raw-ref-heading">-</td></tr>
+                            <tr><td>Raw Ref X</td><td id="projection-traj-raw-ref-x">-</td></tr>
                             <tr><td>Heading Zero Gate (`|a_center| &lt; 0.01`)</td><td id="projection-traj-heading-zero-gate">-</td></tr>
                             <tr><td>Small Heading Gate (`|heading| &lt; 1 deg`)</td><td id="projection-traj-small-heading-gate">-</td></tr>
-                            <tr><td>Multi-Lookahead Blend Active</td><td id="projection-traj-multilookahead-active">-</td></tr>
                             <tr><td>Smoothing Jump Reject Active</td><td id="projection-traj-smoothing-jump-reject">-</td></tr>
                             <tr><td>Ref X Rate-Limit Active</td><td id="projection-traj-ref-x-rate-limit-active">-</td></tr>
-                            <tr><td>Raw Ref Heading</td><td id="projection-traj-raw-ref-heading">-</td></tr>
                             <tr><td>Smoothed Ref Heading</td><td id="projection-traj-smoothed-ref-heading">-</td></tr>
                             <tr><td>Heading Suppression |Δ|</td><td id="projection-traj-heading-suppression-abs">-</td></tr>
-                            <tr><td>Raw Ref X</td><td id="projection-traj-raw-ref-x">-</td></tr>
                             <tr><td>Smoothed Ref X</td><td id="projection-traj-smoothed-ref-x">-</td></tr>
                             <tr><td>Ref X Suppression |Δ|</td><td id="projection-traj-ref-x-suppression-abs">-</td></tr>
                             <tr><td>Smoothing Alpha / Alpha X</td><td id="projection-traj-smoothing-alpha-pair">-</td></tr>
+                            <tr><td>Multi-Lookahead Blend Active</td><td id="projection-traj-multilookahead-active">-</td></tr>
                             <tr><td>ML Heading Base / Far / Blended</td><td id="projection-traj-ml-heading-breakdown">-</td></tr>
                             <tr><td>ML Blend Alpha</td><td id="projection-traj-ml-blend-alpha">-</td></tr>
                             <tr><td>Dynamic Effective Horizon (m)</td><td id="projection-traj-dynamic-horizon-m">-</td></tr>
@@ -605,19 +605,32 @@
                         <h3>Steering Limiter Waterfall</h3>
                         <table class="data-table">
                             <tr><td>Pre Rate Limit</td><td id="control-steering-pre-rate">-</td></tr>
-                            <tr><td>Post Rate Limit</td><td id="control-steering-post-rate">-</td></tr>
-                            <tr><td>Post Jerk Limit</td><td id="control-steering-post-jerk">-</td></tr>
-                            <tr><td>Post Sign-Flip Override</td><td id="control-steering-post-sign-flip">-</td></tr>
-                            <tr><td>Post Hard Clip</td><td id="control-steering-post-hard-clip">-</td></tr>
-                            <tr><td>Post Smoothing (Final)</td><td id="control-steering-post-smoothing">-</td></tr>
+                            <tr><td>Rate Limit Schedule (Base(Error) / CurveScale / AfterCurveScale / AfterCurveFloor / FinalEffective)</td><td id="control-steering-rate-schedule">-</td></tr>
+                            <tr><td>Rate Curve Inputs (|curveMetric| / min / max / scaleMin)</td><td id="control-steering-rate-curve-inputs">-</td></tr>
+                            <tr><td>Rate Curve Metric Source</td><td id="control-steering-rate-curve-source">-</td></tr>
+                            <tr><td>Rate Curve Regime</td><td id="control-steering-rate-curve-regime">-</td></tr>
+                            <tr><td>AfterCurve Limiter Cause</td><td id="control-steering-rate-aftercurve-cause">-</td></tr>
+                            <tr><td>Rate Requested Δ / Margin / Unlock Needed</td><td id="control-steering-rate-thresholds">-</td></tr>
                             <tr><td>Rate Limited</td><td id="control-steering-rate-limited">-</td></tr>
-                            <tr><td>Jerk Limited</td><td id="control-steering-jerk-limited">-</td></tr>
-                            <tr><td>Hard Clipped</td><td id="control-steering-hard-clipped">-</td></tr>
-                            <tr><td>Smoothing Active</td><td id="control-steering-smoothing-active">-</td></tr>
                             <tr><td>Rate Limit Delta</td><td id="control-steering-rate-delta">-</td></tr>
+                            <tr><td>Post Rate Limit</td><td id="control-steering-post-rate">-</td></tr>
+
+                            <tr><td>Jerk Limit (effective / curveScale)</td><td id="control-steering-jerk-schedule">-</td></tr>
+                            <tr><td>Jerk Requested Δrate / Allowed Δrate</td><td id="control-steering-jerk-thresholds">-</td></tr>
+                            <tr><td>Jerk Margin / Unlock Needed</td><td id="control-steering-jerk-unlock">-</td></tr>
+                            <tr><td>Jerk Limited</td><td id="control-steering-jerk-limited">-</td></tr>
                             <tr><td>Jerk Limit Delta</td><td id="control-steering-jerk-delta">-</td></tr>
+                            <tr><td>Post Jerk Limit</td><td id="control-steering-post-jerk">-</td></tr>
+
+                            <tr><td>Post Sign-Flip Override</td><td id="control-steering-post-sign-flip">-</td></tr>
+
+                            <tr><td>Hard Clipped</td><td id="control-steering-hard-clipped">-</td></tr>
                             <tr><td>Hard Clip Delta</td><td id="control-steering-hard-clip-delta">-</td></tr>
+                            <tr><td>Post Hard Clip</td><td id="control-steering-post-hard-clip">-</td></tr>
+
+                            <tr><td>Smoothing Active</td><td id="control-steering-smoothing-active">-</td></tr>
                             <tr><td>Smoothing Delta</td><td id="control-steering-smoothing-delta">-</td></tr>
+                            <tr><td>Post Smoothing (Final)</td><td id="control-steering-post-smoothing">-</td></tr>
                         </table>
                     </div>
 
@@ -800,9 +813,9 @@
         </div>
     </div>
 
-    <script src="data_loader.js?v=20260216_traj_layer_summary_api_v19"></script>
+    <script src="data_loader.js?v=20260216_ego_anchor_default_v37"></script>
     <script src="overlay_renderer.js?v=20260213_issues_filters"></script>
-    <script src="visualizer.js?v=20260216_traj_layer_summary_api_v19"></script>
+    <script src="visualizer.js?v=20260216_ego_anchor_default_v37"></script>
 </body>
 </html>
 

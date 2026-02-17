@@ -312,6 +312,7 @@ class LateralController:
         self._was_using_stale_perception = using_stale_perception
 
         curve_metric = path_curvature if path_curvature != 0.0 else desired_heading
+        curve_metric_source = "path_curvature" if path_curvature != 0.0 else "desired_heading_fallback"
         curve_metric_abs = abs(curve_metric)
         
         # On curves, we need both:
@@ -798,6 +799,24 @@ class LateralController:
         steering_jerk_limited_delta = 0.0
         steering_hard_clip_delta = 0.0
         steering_smoothing_delta = 0.0
+        steering_rate_limit_base_from_error = 0.0
+        steering_rate_limit_curve_scale = 1.0
+        steering_rate_limit_curve_metric_abs = float(curve_metric_abs)
+        steering_rate_limit_curve_metric_source = curve_metric_source
+        steering_rate_limit_curve_min = 0.0
+        steering_rate_limit_curve_max = 0.0
+        steering_rate_limit_scale_min = 0.0
+        steering_rate_limit_curve_regime_code = 0.0
+        steering_rate_limit_after_curve = 0.0
+        steering_rate_limit_after_floor = 0.0
+        steering_rate_limit_effective = 0.0
+        steering_rate_limit_requested_delta = 0.0
+        steering_rate_limit_margin = 0.0
+        steering_rate_limit_unlock_delta_needed = 0.0
+        steering_jerk_limit_requested_rate_delta = 0.0
+        steering_jerk_limit_allowed_rate_delta = 0.0
+        steering_jerk_limit_margin = 0.0
+        steering_jerk_limit_unlock_rate_delta_needed = 0.0
         
         # Get PID internal state
         pid_integral = self.pid.integral
@@ -826,20 +845,29 @@ class LateralController:
         else:
             # Small error (< 0.3) - slow rate limit for smoothness
             max_steering_rate = 0.08
+        steering_rate_limit_base_from_error = float(max_steering_rate)
         
         # Curvature-aware scaling: reduce steering rate on sharper curves to limit jerk
         rate_scale = 1.0
         min_curv = max(1e-6, self.steering_rate_curvature_min)
         max_curv = max(min_curv, self.steering_rate_curvature_max)
+        steering_rate_limit_curve_min = float(min_curv)
+        steering_rate_limit_curve_max = float(max_curv)
+        steering_rate_limit_scale_min = float(max(0.0, self.steering_rate_scale_min))
         if curve_metric_abs <= min_curv:
             rate_scale = 1.0
+            steering_rate_limit_curve_regime_code = 0.0
         elif curve_metric_abs >= max_curv:
             rate_scale = max(0.0, self.steering_rate_scale_min)
+            steering_rate_limit_curve_regime_code = 2.0
         else:
             ratio = (curve_metric_abs - min_curv) / (max_curv - min_curv)
             min_scale = max(0.0, self.steering_rate_scale_min)
             rate_scale = 1.0 - ratio * (1.0 - min_scale)
+            steering_rate_limit_curve_regime_code = 1.0
+        steering_rate_limit_curve_scale = float(rate_scale)
         max_steering_rate *= rate_scale
+        steering_rate_limit_after_curve = float(max_steering_rate)
 
         # Industry-style mode scheduling:
         # keep straightaway behavior unchanged, but guarantee curve-entry authority
@@ -849,6 +877,7 @@ class LateralController:
                 max_steering_rate = max(max_steering_rate, self.curve_rate_floor_large_error)
             elif error_magnitude > 0.3:
                 max_steering_rate = max(max_steering_rate, self.curve_rate_floor_moderate_error)
+        steering_rate_limit_after_floor = float(max_steering_rate)
 
         # Sign-flip override: allow corrections to reverse quickly when error flips sign.
         if not hasattr(self, '_sign_flip_override_frames'):
@@ -871,6 +900,7 @@ class LateralController:
             max_steering_rate = max(max_steering_rate, self.straight_sign_flip_rate)
             self._sign_flip_override_frames -= 1
         sign_flip_frames_remaining = int(self._sign_flip_override_frames)
+        steering_rate_limit_effective = float(max_steering_rate)
 
         # FIXED: Increased steering rate limit for better curve tracking
         # Required steering for 50m curve is only 0.095 normalized, but need to reach it quickly
@@ -881,6 +911,7 @@ class LateralController:
         if hasattr(self, '_steering_rate_limit_active'):
             rate_in = steering_before_limits
             steering_change = steering_before_limits - self.last_steering
+            steering_rate_limit_requested_delta = abs(steering_change)
             steering_change = np.clip(steering_change, -max_steering_rate, max_steering_rate)
             steering_before_limits = self.last_steering + steering_change
             steering_rate_limited_delta = abs(steering_before_limits - rate_in)
@@ -891,6 +922,7 @@ class LateralController:
             max_initial_steering_rate = 0.25
             rate_in = steering_before_limits
             steering_change = steering_before_limits - self.last_steering
+            steering_rate_limit_requested_delta = abs(steering_change)
             if abs(steering_change) > max_initial_steering_rate:
                 steering_change = np.clip(steering_change, -max_initial_steering_rate, max_initial_steering_rate)
                 steering_before_limits = self.last_steering + steering_change
@@ -899,6 +931,10 @@ class LateralController:
             # Activate normal rate limiting for next frame
             self._steering_rate_limit_active = True
         steering_post_rate_limit = steering_before_limits
+        steering_rate_limit_margin = steering_rate_limit_effective - steering_rate_limit_requested_delta
+        steering_rate_limit_unlock_delta_needed = max(
+            0.0, steering_rate_limit_requested_delta - steering_rate_limit_effective
+        )
 
         # Curvature-aware jerk relaxation: keep straight stability, allow faster turn-in on curves.
         jerk_curve_scale = 1.0
@@ -921,7 +957,9 @@ class LateralController:
                 self.last_steering_rate = 0.0
             steering_change = steering_before_limits - self.last_steering
             current_rate = steering_change / dt
+            steering_jerk_limit_requested_rate_delta = abs(current_rate - self.last_steering_rate)
             max_rate_delta = effective_steering_jerk_limit * dt
+            steering_jerk_limit_allowed_rate_delta = max_rate_delta
             rate_delta = np.clip(
                 current_rate - self.last_steering_rate,
                 -max_rate_delta,
@@ -933,8 +971,26 @@ class LateralController:
             steering_jerk_limited_delta = abs(steering_before_limits - jerk_in)
             steering_jerk_limited_active = steering_jerk_limited_delta > 1e-6
         elif dt > 0.0:
+            steering_change = steering_before_limits - self.last_steering
+            current_rate = steering_change / dt
+            prev_rate = getattr(self, 'last_steering_rate', 0.0)
+            steering_jerk_limit_requested_rate_delta = abs(current_rate - prev_rate)
+            steering_jerk_limit_allowed_rate_delta = (
+                effective_steering_jerk_limit * dt if effective_steering_jerk_limit > 0.0 else float('inf')
+            )
             self.last_steering_rate = (steering_before_limits - self.last_steering) / dt
         steering_post_jerk_limit = steering_before_limits
+        if np.isfinite(steering_jerk_limit_allowed_rate_delta):
+            steering_jerk_limit_margin = (
+                steering_jerk_limit_allowed_rate_delta - steering_jerk_limit_requested_rate_delta
+            )
+            steering_jerk_limit_unlock_rate_delta_needed = max(
+                0.0,
+                steering_jerk_limit_requested_rate_delta - steering_jerk_limit_allowed_rate_delta,
+            )
+        else:
+            steering_jerk_limit_margin = 0.0
+            steering_jerk_limit_unlock_rate_delta_needed = 0.0
 
         if sign_flip_override_active:
             # Ensure we are actually moving toward reversing sign when error flips.
@@ -1060,8 +1116,26 @@ class LateralController:
                 'steering_jerk_limited_delta': steering_jerk_limited_delta,
                 'steering_hard_clip_delta': steering_hard_clip_delta,
                 'steering_smoothing_delta': steering_smoothing_delta,
+                'steering_rate_limit_base_from_error': steering_rate_limit_base_from_error,
+                'steering_rate_limit_curve_scale': steering_rate_limit_curve_scale,
+                'steering_rate_limit_curve_metric_abs': steering_rate_limit_curve_metric_abs,
+                'steering_rate_limit_curve_metric_source': steering_rate_limit_curve_metric_source,
+                'steering_rate_limit_curve_min': steering_rate_limit_curve_min,
+                'steering_rate_limit_curve_max': steering_rate_limit_curve_max,
+                'steering_rate_limit_scale_min': steering_rate_limit_scale_min,
+                'steering_rate_limit_curve_regime_code': steering_rate_limit_curve_regime_code,
+                'steering_rate_limit_after_curve': steering_rate_limit_after_curve,
+                'steering_rate_limit_after_floor': steering_rate_limit_after_floor,
+                'steering_rate_limit_effective': steering_rate_limit_effective,
+                'steering_rate_limit_requested_delta': steering_rate_limit_requested_delta,
+                'steering_rate_limit_margin': steering_rate_limit_margin,
+                'steering_rate_limit_unlock_delta_needed': steering_rate_limit_unlock_delta_needed,
                 'steering_jerk_limit_effective': effective_steering_jerk_limit,
                 'steering_jerk_curve_scale': jerk_curve_scale,
+                'steering_jerk_limit_requested_rate_delta': steering_jerk_limit_requested_rate_delta,
+                'steering_jerk_limit_allowed_rate_delta': steering_jerk_limit_allowed_rate_delta,
+                'steering_jerk_limit_margin': steering_jerk_limit_margin,
+                'steering_jerk_limit_unlock_rate_delta_needed': steering_jerk_limit_unlock_rate_delta_needed,
                 'speed_gain_final': speed_gain_final,
                 'speed_gain_scale': speed_gain_scale,
                 'speed_gain_applied': speed_gain_applied,

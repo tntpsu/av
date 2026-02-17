@@ -63,6 +63,7 @@ class Visualizer {
         this.projectionNearFieldGroundYOffsetMeters = -0.3;
         this.projectionNearFieldBlendDistanceMeters = 10.0;
         this.projectionNearFieldSettingsKey = 'debugVisualizer.projectionNearFieldSettings';
+        this.frameLoadRequestId = 0;
         
         this.setupEventListeners();
         this.loadRecordings();
@@ -770,6 +771,11 @@ class Visualizer {
         
         try {
             this.currentRecording = filename;  // Store current recording filename
+            this.frameLoadRequestId += 1; // Invalidate in-flight frame loads from prior recording
+            this.clearCanvas('camera-canvas');
+            this.clearCanvas('topdown-canvas');
+            this.currentImage = null;
+            this.currentTopdownImage = null;
             this.frameCount = await this.dataLoader.loadRecording(filename);
             try {
                 this.currentRecordingMeta = await this.dataLoader.loadRecordingMeta(filename);
@@ -2369,6 +2375,8 @@ class Visualizer {
 
     async goToFrame(frameIndex) {
         if (frameIndex < 0 || frameIndex >= this.frameCount) return;
+        const requestId = ++this.frameLoadRequestId;
+        const requestRecording = this.currentRecording;
         
         this.currentFrameIndex = frameIndex;
         document.getElementById('frame-slider').value = frameIndex;
@@ -2400,12 +2408,15 @@ class Visualizer {
             
             // Load frame data
             this.currentFrameData = await this.dataLoader.loadFrameData(frameIndex);
+            if (requestId !== this.frameLoadRequestId || requestRecording !== this.currentRecording) return;
             const prevFrameData = frameIndex > 0
                 ? await this.dataLoader.loadFrameData(frameIndex - 1)
                 : null;
+            if (requestId !== this.frameLoadRequestId || requestRecording !== this.currentRecording) return;
             const prevPrevFrameData = frameIndex > 1
                 ? await this.dataLoader.loadFrameData(frameIndex - 2)
                 : null;
+            if (requestId !== this.frameLoadRequestId || requestRecording !== this.currentRecording) return;
             this.currentLongitudinalMetrics = this.computeLongitudinalMetrics(
                 this.currentFrameData,
                 prevFrameData,
@@ -2413,12 +2424,23 @@ class Visualizer {
             );
             
             // Load camera images
-            const imageDataUrl = await this.dataLoader.loadFrameImage(frameIndex, 'front_center');
-            await this.loadImage(imageDataUrl, 'camera-canvas');
+            try {
+                const imageDataUrl = await this.dataLoader.loadFrameImage(frameIndex, 'front_center');
+                if (requestId !== this.frameLoadRequestId || requestRecording !== this.currentRecording) return;
+                const drewFront = await this.loadImage(imageDataUrl, 'camera-canvas', requestId, requestRecording);
+                if (!drewFront) return;
+            } catch (error) {
+                if (requestId !== this.frameLoadRequestId || requestRecording !== this.currentRecording) return;
+                console.error('Error loading front camera image:', error);
+                this.clearCanvas('camera-canvas');
+                this.currentImage = null;
+            }
             if (this.topdownAvailable) {
                 try {
                     const topdownUrl = await this.dataLoader.loadFrameImage(frameIndex, 'top_down');
-                    await this.loadImage(topdownUrl, 'topdown-canvas');
+                    if (requestId !== this.frameLoadRequestId || requestRecording !== this.currentRecording) return;
+                    const drewTopdown = await this.loadImage(topdownUrl, 'topdown-canvas', requestId, requestRecording);
+                    if (!drewTopdown) return;
                     this.setTopdownAvailability(true);
                     this.updateTopdownOverlay();
                 } catch (error) {
@@ -2455,13 +2477,32 @@ class Visualizer {
         }
     }
 
-    async loadImage(imageDataUrl, canvasId = 'camera-canvas') {
+    async loadImage(imageDataUrl, canvasId = 'camera-canvas', requestId = null, requestRecording = null) {
         return new Promise((resolve, reject) => {
+            if (!imageDataUrl || typeof imageDataUrl !== 'string') {
+                reject(new Error(`Invalid image payload for ${canvasId}`));
+                return;
+            }
+            const isBlobUrl = imageDataUrl.startsWith('blob:');
+            const releaseBlobUrl = () => {
+                if (isBlobUrl) {
+                    try { URL.revokeObjectURL(imageDataUrl); } catch (_) {}
+                }
+            };
             const img = new Image();
             img.onload = () => {
+                if (
+                    requestId !== null &&
+                    (requestId !== this.frameLoadRequestId || requestRecording !== this.currentRecording)
+                ) {
+                    releaseBlobUrl();
+                    resolve(false);
+                    return;
+                }
                 const canvas = document.getElementById(canvasId);
                 if (!canvas) {
-                    resolve();
+                    releaseBlobUrl();
+                    resolve(false);
                     return;
                 }
                 const ctx = canvas.getContext('2d');
@@ -2471,9 +2512,13 @@ class Visualizer {
                 if (canvasId === 'topdown-canvas') {
                     this.currentTopdownImage = img;
                 }
-                resolve();
+                releaseBlobUrl();
+                resolve(true);
             };
-            img.onerror = reject;
+            img.onerror = () => {
+                releaseBlobUrl();
+                reject(new Error(`Image decode failed for ${canvasId}`));
+            };
             img.src = imageDataUrl;
         });
     }
@@ -2867,6 +2912,23 @@ class Visualizer {
             lastY = p.y;
         }
         return out;
+    }
+
+    alignPathStartToAnchor(points, anchorPoint) {
+        const path = this.toForwardMonotonicPath(points);
+        if (!Array.isArray(path) || path.length === 0) return [];
+        const p0 = path[0] || {};
+        const p0x = Number(p0?.x);
+        const p0y = Number(p0?.y);
+        const ax = Number(anchorPoint?.x);
+        const ay = Number(anchorPoint?.y);
+        if (!Number.isFinite(p0x) || !Number.isFinite(p0y) || !Number.isFinite(ax) || !Number.isFinite(ay)) {
+            return path;
+        }
+        return path.map((p) => ({
+            x: Number(p?.x) - p0x + ax,
+            y: Number(p?.y) - p0y + ay,
+        }));
     }
 
     sampleLateralAtForwardDistance(pathPoints, forwardMeters) {
@@ -4233,10 +4295,36 @@ class Visualizer {
             if (v === false) return 'off';
             return '-';
         };
+        const setTrajectoryWaterfallRowHighlight = (id, isActive, isFirst) => {
+            const elem = document.getElementById(id);
+            if (!elem) return;
+            const row = elem.closest('tr');
+            if (!row) return;
+            row.classList.remove('waterfall-limiter-active', 'waterfall-first-limiter');
+            if (isActive) {
+                row.classList.add(isFirst ? 'waterfall-first-limiter' : 'waterfall-limiter-active');
+            }
+        };
         const fmtFlag = (v) => {
             if (v === true || Number(v) > 0.5) return 'on';
             if (v === false || (Number.isFinite(Number(v)) && Number(v) <= 0.5)) return 'off';
             return '-';
+        };
+        const fmtDynamicLimiterCode = (v) => {
+            if (!Number.isFinite(Number(v))) return '-';
+            const code = Number(v);
+            const rounded = Math.round(code);
+            const labelMap = {
+                0: 'none',
+                1: 'speed',
+                2: 'curvature',
+                3: 'confidence',
+            };
+            const label = labelMap[rounded] || 'unknown';
+            if (Math.abs(code - rounded) > 1e-6) {
+                return `${label} (${code.toFixed(2)})`;
+            }
+            return `${label} (${rounded})`;
         };
         updateField('projection-traj-heading-zero-gate', fmtBool(d.traj_heading_zero_gate));
         updateField('projection-traj-small-heading-gate', fmtBool(d.traj_small_heading_gate));
@@ -4350,9 +4438,7 @@ class Visualizer {
         }
         updateField(
             'projection-traj-dynamic-horizon-limiter-code',
-            Number.isFinite(Number(d.traj_dynamic_horizon_limiter_code))
-                ? Number(d.traj_dynamic_horizon_limiter_code).toFixed(0)
-                : '-'
+            fmtDynamicLimiterCode(d.traj_dynamic_horizon_limiter_code)
         );
         updateField('projection-traj-dynamic-horizon-applied', fmtBool(d.traj_dynamic_horizon_applied));
         updateField(
@@ -4505,6 +4591,55 @@ class Visualizer {
         updateField('projection-traj-dominant-failure-band', d.traj_dominant_failure_band || '-');
         updateField('projection-traj-triage-hint', d.traj_triage_hint || '-');
         updateField('projection-traj-waterfall-source', d.traj_waterfall_source || '-');
+
+        // Highlight trajectory limiter path: first active stage in red, other active stages in amber.
+        const firstTrajectoryLimiter = d.traj_heading_zero_gate
+            ? 'heading_zero'
+            : d.traj_small_heading_gate
+                ? 'small_heading'
+                : d.traj_smoothing_jump_reject
+                    ? 'smoothing_jump'
+                    : d.traj_ref_x_rate_limit_active
+                        ? 'refx_rate'
+                        : (Number(d.traj_x_clip_count) > 0.5 || d.traj_heavy_x_clipping)
+                            ? 'x_clip'
+                            : d.traj_dynamic_horizon_applied
+                                ? 'dynamic_horizon'
+                                : null;
+        const trajStageRows = {
+            heading_zero: ['projection-traj-heading-zero-gate'],
+            small_heading: ['projection-traj-small-heading-gate'],
+            smoothing_jump: ['projection-traj-smoothing-jump-reject'],
+            refx_rate: ['projection-traj-ref-x-rate-limit-active'],
+            x_clip: [
+                'projection-traj-x-clip-count',
+                'projection-traj-heavy-x-clipping',
+                'projection-traj-postclip-nearclip-frac-12-20m',
+            ],
+            dynamic_horizon: [
+                'projection-traj-dynamic-horizon-m',
+                'projection-traj-dynamic-horizon-scales',
+                'projection-traj-dynamic-horizon-limiter-code',
+                'projection-traj-dynamic-horizon-applied',
+            ],
+        };
+        const trajStageActive = {
+            heading_zero: !!d.traj_heading_zero_gate,
+            small_heading: !!d.traj_small_heading_gate,
+            smoothing_jump: !!d.traj_smoothing_jump_reject,
+            refx_rate: !!d.traj_ref_x_rate_limit_active,
+            x_clip: Number(d.traj_x_clip_count) > 0.5 || !!d.traj_heavy_x_clipping,
+            dynamic_horizon: !!d.traj_dynamic_horizon_applied,
+        };
+        for (const stageName of Object.keys(trajStageRows)) {
+            for (const rowId of trajStageRows[stageName]) {
+                setTrajectoryWaterfallRowHighlight(
+                    rowId,
+                    trajStageActive[stageName],
+                    firstTrajectoryLimiter === stageName
+                );
+            }
+        }
         updateField('projection-sync-overall-status', d.sync_overall_status || '-');
         updateField('projection-sync-traj-status', d.sync_traj_status || '-');
         updateField('projection-sync-control-status', d.sync_control_status || '-');
@@ -4693,6 +4828,16 @@ class Visualizer {
         const fmtSteer = (v) => (v !== undefined && v !== null ? Number(v).toFixed(4) : '-');
         const fmtDelta = (v) => (v !== undefined && v !== null ? Number(v).toFixed(4) : '-');
         const fmtFlag = (v) => (v ? 'YES ⚠️' : 'NO');
+        const setWaterfallRowHighlight = (id, isActive, isFirst) => {
+            const elem = document.getElementById(id);
+            if (!elem) return;
+            const row = elem.closest('tr');
+            if (!row) return;
+            row.classList.remove('waterfall-limiter-active', 'waterfall-first-limiter');
+            if (isActive) {
+                row.classList.add(isFirst ? 'waterfall-first-limiter' : 'waterfall-limiter-active');
+            }
+        };
         updateField('control-steering-pre-rate', fmtSteer(c.steering_pre_rate_limit));
         updateField('control-steering-post-rate', fmtSteer(c.steering_post_rate_limit));
         updateField('control-steering-post-jerk', fmtSteer(c.steering_post_jerk_limit));
@@ -4707,6 +4852,167 @@ class Visualizer {
         updateField('control-steering-jerk-delta', fmtDelta(c.steering_jerk_limited_delta));
         updateField('control-steering-hard-clip-delta', fmtDelta(c.steering_hard_clip_delta));
         updateField('control-steering-smoothing-delta', fmtDelta(c.steering_smoothing_delta));
+        if (
+            c.steering_rate_limit_base_from_error !== undefined &&
+            c.steering_rate_limit_curve_scale !== undefined &&
+            c.steering_rate_limit_after_curve !== undefined &&
+            c.steering_rate_limit_after_floor !== undefined &&
+            c.steering_rate_limit_effective !== undefined
+        ) {
+            updateField(
+                'control-steering-rate-schedule',
+                `${Number(c.steering_rate_limit_base_from_error).toFixed(4)} / ${Number(c.steering_rate_limit_curve_scale).toFixed(3)} / ${Number(c.steering_rate_limit_after_curve).toFixed(4)} / ${Number(c.steering_rate_limit_after_floor).toFixed(4)} / ${Number(c.steering_rate_limit_effective).toFixed(4)}`
+            );
+        } else {
+            updateField('control-steering-rate-schedule', '-');
+        }
+        if (
+            c.steering_rate_limit_requested_delta !== undefined &&
+            c.steering_rate_limit_margin !== undefined &&
+            c.steering_rate_limit_unlock_delta_needed !== undefined
+        ) {
+            updateField(
+                'control-steering-rate-thresholds',
+                `${Number(c.steering_rate_limit_requested_delta).toFixed(4)} / ${Number(c.steering_rate_limit_margin).toFixed(4)} / ${Number(c.steering_rate_limit_unlock_delta_needed).toFixed(4)}`
+            );
+        } else {
+            updateField('control-steering-rate-thresholds', '-');
+        }
+        if (
+            c.steering_rate_limit_curve_metric_abs !== undefined &&
+            c.steering_rate_limit_curve_min !== undefined &&
+            c.steering_rate_limit_curve_max !== undefined &&
+            c.steering_rate_limit_scale_min !== undefined
+        ) {
+            updateField(
+                'control-steering-rate-curve-inputs',
+                `${Number(c.steering_rate_limit_curve_metric_abs).toFixed(4)} / ${Number(c.steering_rate_limit_curve_min).toFixed(4)} / ${Number(c.steering_rate_limit_curve_max).toFixed(4)} / ${Number(c.steering_rate_limit_scale_min).toFixed(3)}`
+            );
+        } else {
+            updateField('control-steering-rate-curve-inputs', '-');
+        }
+        updateField(
+            'control-steering-rate-curve-source',
+            c.steering_rate_limit_curve_metric_source
+                ? String(c.steering_rate_limit_curve_metric_source)
+                : '-'
+        );
+        const regimeCode = Number(c.steering_rate_limit_curve_regime_code);
+        if (Number.isFinite(regimeCode)) {
+            const regimeMap = {
+                0: 'below_min_curvature (curveScale=1.0)',
+                1: 'interpolated_between_min_max',
+                2: 'at_scale_floor (curveScale=scaleMin)',
+            };
+            updateField(
+                'control-steering-rate-curve-regime',
+                `${regimeMap[Math.round(regimeCode)] || 'unknown'} (${regimeCode.toFixed(0)})`
+            );
+        } else {
+            updateField('control-steering-rate-curve-regime', '-');
+        }
+        if (
+            c.steering_rate_limit_base_from_error !== undefined &&
+            c.steering_rate_limit_after_curve !== undefined &&
+            c.steering_rate_limit_curve_scale !== undefined
+        ) {
+            const base = Number(c.steering_rate_limit_base_from_error);
+            const afterCurve = Number(c.steering_rate_limit_after_curve);
+            const scale = Number(c.steering_rate_limit_curve_scale);
+            let cause = 'none (curveScale=1.0)';
+            if (Number.isFinite(scale) && scale < 0.999) {
+                cause = 'curveScale applied';
+            }
+            if (Number.isFinite(base) && Number.isFinite(afterCurve) && Math.abs(base - afterCurve) <= 1e-6) {
+                cause = 'no reduction from curve scaling';
+            }
+            updateField('control-steering-rate-aftercurve-cause', cause);
+        } else {
+            updateField('control-steering-rate-aftercurve-cause', '-');
+        }
+        if (
+            c.steering_jerk_limit_effective !== undefined &&
+            c.steering_jerk_curve_scale !== undefined
+        ) {
+            updateField(
+                'control-steering-jerk-schedule',
+                `${Number(c.steering_jerk_limit_effective).toFixed(4)} / ${Number(c.steering_jerk_curve_scale).toFixed(3)}`
+            );
+        } else {
+            updateField('control-steering-jerk-schedule', '-');
+        }
+        if (
+            c.steering_jerk_limit_requested_rate_delta !== undefined &&
+            c.steering_jerk_limit_allowed_rate_delta !== undefined
+        ) {
+            updateField(
+                'control-steering-jerk-thresholds',
+                `${Number(c.steering_jerk_limit_requested_rate_delta).toFixed(4)} / ${Number(c.steering_jerk_limit_allowed_rate_delta).toFixed(4)}`
+            );
+        } else {
+            updateField('control-steering-jerk-thresholds', '-');
+        }
+        if (
+            c.steering_jerk_limit_margin !== undefined &&
+            c.steering_jerk_limit_unlock_rate_delta_needed !== undefined
+        ) {
+            updateField(
+                'control-steering-jerk-unlock',
+                `${Number(c.steering_jerk_limit_margin).toFixed(4)} / ${Number(c.steering_jerk_limit_unlock_rate_delta_needed).toFixed(4)}`
+            );
+        } else {
+            updateField('control-steering-jerk-unlock', '-');
+        }
+
+        const firstLimiter = c.steering_rate_limited_active
+            ? 'rate'
+            : c.steering_jerk_limited_active
+                ? 'jerk'
+                : c.steering_hard_clip_active
+                    ? 'hard'
+                    : c.steering_smoothing_active
+                        ? 'smooth'
+                        : null;
+
+        const stageRows = {
+            rate: [
+                'control-steering-rate-limited',
+                'control-steering-rate-delta',
+                'control-steering-post-rate',
+                'control-steering-rate-thresholds',
+                'control-steering-rate-schedule',
+            ],
+            jerk: [
+                'control-steering-jerk-limited',
+                'control-steering-jerk-delta',
+                'control-steering-post-jerk',
+                'control-steering-jerk-thresholds',
+                'control-steering-jerk-schedule',
+            ],
+            hard: [
+                'control-steering-hard-clipped',
+                'control-steering-hard-clip-delta',
+                'control-steering-post-hard-clip',
+            ],
+            smooth: [
+                'control-steering-smoothing-active',
+                'control-steering-smoothing-delta',
+                'control-steering-post-smoothing',
+            ],
+        };
+
+        const stageActive = {
+            rate: !!c.steering_rate_limited_active,
+            jerk: !!c.steering_jerk_limited_active,
+            hard: !!c.steering_hard_clip_active,
+            smooth: !!c.steering_smoothing_active,
+        };
+
+        for (const stage of Object.keys(stageRows)) {
+            for (const rowId of stageRows[stage]) {
+                setWaterfallRowHighlight(rowId, stageActive[stage], firstLimiter === stage);
+            }
+        }
     }
 
     updateVehicleData() {
@@ -5167,6 +5473,7 @@ class Visualizer {
         this.projectionDiagnostics = {};
         let plannerPathForMetrics = [];
         let oraclePathForMetrics = [];
+        let compareMountDebug = null;
         
         if (!this.currentFrameData) {
             console.log('[OVERLAY] No frame data available');
@@ -5427,6 +5734,7 @@ class Visualizer {
         // Draw trajectory (if available)
         if (document.getElementById('toggle-trajectory').checked) {
             if (this.currentFrameData.trajectory && this.currentFrameData.trajectory.trajectory_points) {
+                const egoAnchoredCompareMode = true;
                 let trajectoryMinY = Math.floor(this.overlayRenderer.imageHeight * 0.2);
                 if (y8mActual !== null && y8mActual > 0) {
                     const pxPerMeter = (this.overlayRenderer.imageHeight - y8mActual) / 8.0;
@@ -5440,16 +5748,26 @@ class Visualizer {
                 const rawTrajPoints = this.currentFrameData.trajectory.trajectory_points;
                 const trajPoints = this.getDisplayTrajectoryPoints(rawTrajPoints);
                 const mainRenderTraj = this.toForwardMonotonicPath(trajPoints);
+                let mainRenderTrajDisplay = mainRenderTraj;
+                if (egoAnchoredCompareMode) {
+                    const oraclePointsForAnchor = this.currentFrameData?.trajectory?.oracle_points;
+                    const oracleRenderForAnchor = (Array.isArray(oraclePointsForAnchor) && oraclePointsForAnchor.length > 0)
+                        ? this.toForwardMonotonicPath(oraclePointsForAnchor)
+                        : [];
+                    const oracleAnchor = oracleRenderForAnchor.length > 0 ? oracleRenderForAnchor[0] : { x: 0.0, y: 0.0 };
+                    mainRenderTrajDisplay = this.alignPathStartToAnchor(mainRenderTraj, oracleAnchor);
+                }
                 plannerPathForMetrics = mainRenderTraj;
                 this.projectionDiagnostics.source_turn_sign = this.computeTurnSign(mainRenderTraj, 'x', 'y');
-                if (mainRenderTraj.length) {
-                    const projected = this.projectTrajectoryToImage(mainRenderTraj);
+                if (mainRenderTrajDisplay.length) {
+                    const projected = this.projectTrajectoryToImage(mainRenderTrajDisplay);
                     if (projected && projected.length > 1) {
                         const clipped = [];
                         let prev = null;
                         for (const pt of projected) {
                             if (!Number.isFinite(pt?.x) || !Number.isFinite(pt?.y)) continue;
-                            if (pt.y < trajectoryMinY || pt.y > this.overlayRenderer.imageHeight) continue;
+                            if (pt.y > this.overlayRenderer.imageHeight) continue;
+                            if (!egoAnchoredCompareMode && pt.y < trajectoryMinY) continue;
                             if (prev) {
                                 const jumpPx = Math.hypot(pt.x - prev.x, pt.y - prev.y);
                                 if (jumpPx > 140) {
@@ -5459,6 +5777,30 @@ class Visualizer {
                             }
                             clipped.push(pt);
                             prev = pt;
+                        }
+                        if (egoAnchoredCompareMode && clipped.length > 0) {
+                            const oracleScreenPoints = this.currentFrameData?.vehicle?.oracle_trajectory_screen_points;
+                            const oracleFirstValid = Array.isArray(oracleScreenPoints)
+                                ? oracleScreenPoints.find((p) =>
+                                    Number.isFinite(Number(p?.x)) &&
+                                    Number.isFinite(Number(p?.y)) &&
+                                    Boolean(p?.valid)
+                                )
+                                : null;
+                            if (oracleFirstValid) {
+                                const dx = Number(oracleFirstValid.x) - Number(clipped[0].x);
+                                const dy = Number(oracleFirstValid.y) - Number(clipped[0].y);
+                                for (const p of clipped) {
+                                    p.x = Number(p.x) + dx;
+                                    p.y = Number(p.y) + dy;
+                                }
+                                compareMountDebug = {
+                                    plannerStart: { x: Number(clipped[0].x), y: Number(clipped[0].y) },
+                                    oracleStart: { x: Number(oracleFirstValid.x), y: Number(oracleFirstValid.y) },
+                                    dxPx: Number(dx),
+                                    dyPx: Number(dy),
+                                };
+                            }
                         }
                         if (overlayDegradeRisk) {
                             this.overlayRenderer.drawImagePoints(clipped, '#ff00ff', 2);
@@ -5473,7 +5815,7 @@ class Visualizer {
                         this.projectionDiagnostics.main_nearfield_blend_distance_m = diag.main_nearfield_blend_distance_m;
                         this.projectionDiagnostics.main_turn_sign = this.computeTurnSign(projected, 'srcX', 'srcY');
                     } else {
-                        const sortedPoints = [...mainRenderTraj]
+                        const sortedPoints = [...mainRenderTrajDisplay]
                             .filter(point => point.y >= 0)
                             .sort((a, b) => (a.y || 0) - (b.y || 0));
                         this.overlayRenderer.drawTrajectory(
@@ -5551,6 +5893,31 @@ class Visualizer {
                         this.overlayRenderer.imageHeight
                     );
                 }
+            }
+        }
+        const egoAnchoredCompareMode = true;
+        if (egoAnchoredCompareMode && compareMountDebug) {
+            const ps = compareMountDebug.plannerStart;
+            const os = compareMountDebug.oracleStart;
+            const residualPx = Math.hypot(Number(ps.x) - Number(os.x), Number(ps.y) - Number(os.y));
+            this.projectionDiagnostics.traj_compare_mount_dx_px = Number(compareMountDebug.dxPx);
+            this.projectionDiagnostics.traj_compare_mount_dy_px = Number(compareMountDebug.dyPx);
+            this.projectionDiagnostics.traj_compare_mount_residual_px = Number(residualPx);
+
+            // Draw explicit mount markers so start-point alignment is visually unambiguous.
+            const ctx = this.overlayRenderer.ctx;
+            if (ctx) {
+                ctx.save();
+                ctx.lineWidth = 2;
+                ctx.strokeStyle = '#66ff66';
+                ctx.beginPath();
+                ctx.arc(os.x, os.y, 6, 0, Math.PI * 2);
+                ctx.stroke();
+                ctx.strokeStyle = '#ff00ff';
+                ctx.beginPath();
+                ctx.arc(ps.x, ps.y, 3, 0, Math.PI * 2);
+                ctx.stroke();
+                ctx.restore();
             }
         }
         const lateralMetrics = this.computeLateralErrorMetrics(plannerPathForMetrics, oraclePathForMetrics);

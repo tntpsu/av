@@ -215,6 +215,26 @@ class ControlCommand:
     steering_jerk_limited_delta: Optional[float] = None
     steering_hard_clip_delta: Optional[float] = None
     steering_smoothing_delta: Optional[float] = None
+    steering_rate_limit_base_from_error: Optional[float] = None
+    steering_rate_limit_curve_scale: Optional[float] = None
+    steering_rate_limit_curve_metric_abs: Optional[float] = None
+    steering_rate_limit_curve_metric_source: Optional[str] = None
+    steering_rate_limit_curve_min: Optional[float] = None
+    steering_rate_limit_curve_max: Optional[float] = None
+    steering_rate_limit_scale_min: Optional[float] = None
+    steering_rate_limit_curve_regime_code: Optional[float] = None
+    steering_rate_limit_after_curve: Optional[float] = None
+    steering_rate_limit_after_floor: Optional[float] = None
+    steering_rate_limit_effective: Optional[float] = None
+    steering_rate_limit_requested_delta: Optional[float] = None
+    steering_rate_limit_margin: Optional[float] = None
+    steering_rate_limit_unlock_delta_needed: Optional[float] = None
+    steering_jerk_limit_effective: Optional[float] = None
+    steering_jerk_curve_scale: Optional[float] = None
+    steering_jerk_limit_requested_rate_delta: Optional[float] = None
+    steering_jerk_limit_allowed_rate_delta: Optional[float] = None
+    steering_jerk_limit_margin: Optional[float] = None
+    steering_jerk_limit_unlock_rate_delta_needed: Optional[float] = None
 
 
 @dataclass

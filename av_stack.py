@@ -4582,7 +4582,27 @@ class AVStack:
             steering_rate_limited_delta=control_command.get('steering_rate_limited_delta'),
             steering_jerk_limited_delta=control_command.get('steering_jerk_limited_delta'),
             steering_hard_clip_delta=control_command.get('steering_hard_clip_delta'),
-            steering_smoothing_delta=control_command.get('steering_smoothing_delta')
+            steering_smoothing_delta=control_command.get('steering_smoothing_delta'),
+            steering_rate_limit_base_from_error=control_command.get('steering_rate_limit_base_from_error'),
+            steering_rate_limit_curve_scale=control_command.get('steering_rate_limit_curve_scale'),
+            steering_rate_limit_curve_metric_abs=control_command.get('steering_rate_limit_curve_metric_abs'),
+            steering_rate_limit_curve_metric_source=control_command.get('steering_rate_limit_curve_metric_source'),
+            steering_rate_limit_curve_min=control_command.get('steering_rate_limit_curve_min'),
+            steering_rate_limit_curve_max=control_command.get('steering_rate_limit_curve_max'),
+            steering_rate_limit_scale_min=control_command.get('steering_rate_limit_scale_min'),
+            steering_rate_limit_curve_regime_code=control_command.get('steering_rate_limit_curve_regime_code'),
+            steering_rate_limit_after_curve=control_command.get('steering_rate_limit_after_curve'),
+            steering_rate_limit_after_floor=control_command.get('steering_rate_limit_after_floor'),
+            steering_rate_limit_effective=control_command.get('steering_rate_limit_effective'),
+            steering_rate_limit_requested_delta=control_command.get('steering_rate_limit_requested_delta'),
+            steering_rate_limit_margin=control_command.get('steering_rate_limit_margin'),
+            steering_rate_limit_unlock_delta_needed=control_command.get('steering_rate_limit_unlock_delta_needed'),
+            steering_jerk_limit_effective=control_command.get('steering_jerk_limit_effective'),
+            steering_jerk_curve_scale=control_command.get('steering_jerk_curve_scale'),
+            steering_jerk_limit_requested_rate_delta=control_command.get('steering_jerk_limit_requested_rate_delta'),
+            steering_jerk_limit_allowed_rate_delta=control_command.get('steering_jerk_limit_allowed_rate_delta'),
+            steering_jerk_limit_margin=control_command.get('steering_jerk_limit_margin'),
+            steering_jerk_limit_unlock_rate_delta_needed=control_command.get('steering_jerk_limit_unlock_rate_delta_needed')
         )
         
         # Create trajectory output
