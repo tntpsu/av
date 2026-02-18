@@ -273,3 +273,19 @@ This is an autonomous vehicle (AV) stack for Unity 3D simulation. The project us
 - `data/recordings/golden_gt_20260215_sloop_latest_30s.h5`
 - Treat these as canonical replay baselines for now; do not replace/remove unless user explicitly requests a golden refresh.
 - To promote/refresh golden recordings, use `tools/promote_golden_gt.sh` rather than manual rename.
+
+## Pre-Failure Attribution Rule
+- Root-cause analysis for lane-keeping/perception MUST focus on lead-up to first failure only.
+- Define first failure as earliest of:
+  1) first sustained centerline crossing, or
+  2) first out-of-bounds / emergency-stop threshold event.
+- For default reporting and tuning decisions:
+  - Ignore post-failure perception behavior and metrics.
+  - Do not attribute root cause using signals after first failure.
+  - Use pre-failure window metrics (including phase-to-failure and cross-minus/cross-plus lead-up windows).
+- Post-failure analysis is allowed only when explicitly requested by the user.
+
+## Stage 1 Canonical Start Rule
+- For Stage 1 lane-keeping promotion/tuning, use canonical start only: `start_t=0.0`.
+- Do not run or use non-canonical starts (`start_t != 0.0`) for promotion decisions unless explicitly requested by the user.
+- If non-canonical starts are run for exploration, label them exploratory only and do not use them to block or promote Stage 1 decisions.

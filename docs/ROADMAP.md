@@ -1,7 +1,7 @@
 # Robust Full-Stack Roadmap (Unified, Layered, and Gated)
 
 **Last Updated:** 2026-02-17  
-**Current Focus:** Layer 2, Stage 1 (First-Turn Entry Reliability) + Phase 2 completion gates  
+**Current Focus:** Layer 2, Stage 1 (First-Turn Entry Reliability) micro-steps for low-visibility fallback containment + Phase 2 completion gates  
 **Change-Control Rule:** If scope, stage, phase status, or promotion gates change, update this roadmap in the same PR/commit before considering work complete.
 
 ## Scope
@@ -48,6 +48,92 @@ This is the practical de-risk sequence for implementation and testing.
 
 ### Stage 1: First-Turn Entry Reliability (Current Focus)
 **Goal:** clear first turn without centerline crossing, out-of-bounds, or comfort breach.
+
+**Canonical validation policy (active)**
+- Stage 1 promotion/tuning gates use canonical start only: `start_t=0.0`.
+- Non-canonical starts are exploratory and are not used for Stage 1 promotion decisions unless explicitly requested.
+
+**Current micro-steps (tracked and gated)**
+- `S1-M1` (done): add bounded low-visibility fallback controls in perception path:
+  - `perception.low_visibility_fallback_blend_alpha`
+  - `perception.low_visibility_fallback_max_consecutive_frames`
+  - `perception.low_visibility_fallback_center_shift_cap_m`
+- `S1-M2` (done): run A/B gate for fallback TTL (`max_consecutive_frames=1000` vs `8`, 2 pairs, 45s, `s_loop`):
+  - result: median first centerline cross improved from `185.5` -> `201.0` frames with bounded TTL.
+  - interpretation: bounded hold helps delay first failure in this scenario.
+- `S1-M3` (done, low-confidence): run focused A/B for blend alpha (`1.0` vs `0.35`, 1 pair, 45s):
+  - result: stale percentage improved (`31.6%` -> `11.1%`) and authority gap reduced (`0.450` -> `0.418`) with `0.35`, but centerline-cross changed (`199` -> `191`) in opposite direction.
+  - interpretation: blend needs more repeats before promotion decision.
+- `S1-M4` (next): run 3-pair A/B for blend alpha and center-shift cap to de-noise variance and lock defaults.
+- `S1-M5` (next): if `S1-M4` passes, add PhilViz row for fallback mode state (`active`, `ttl_exceeded`, `blend_alpha`, `center_shift_cap`) for direct attribution.
+- `S1-M6` (done): add control attribution telemetry for pre-failure triage:
+  - per-frame `control/steering_authority_gap`
+  - per-frame `control/steering_transfer_ratio`
+  - per-frame `control/steering_first_limiter_stage_code` (`0=none,1=rate,2=jerk,3=hard_clip,4=smoothing`)
+  - curve-entry summary now includes `first_limiter_hit_frame` and `first_limiter_hit_stage`.
+- `S1-M7` (done): run control A/B for curve-entry assist toggle (`curve_entry_assist_enabled=0` vs `1`, 2 pairs, 45s, `s_loop`):
+  - result: median first centerline cross improved from `189.5` -> `201.5` frames with assist ON.
+  - result: median time-to-failure improved from `10.058s` -> `10.350s`.
+  - interpretation: assist ON helps delay first failure; root classification remains `steering-authority-limited`.
+- `S1-M8` (done): run 3-pair bounded sweep for assist strength (`rate_boost`, `jerk_boost`) with watchdog/rearm unchanged:
+  - `rate_boost`: `1.12` vs `1.25` -> `1.25` regressed (median cross `199` -> `189`, median TTF `10.116s` -> `9.883s`).
+  - `jerk_boost`: `1.08` vs `1.20` -> mixed/inconclusive (`cross` improved `185` -> `192`, but TTF regressed `10.183s` -> `9.633s` and transfer ratio worsened).
+  - interpretation: do not promote stronger boosts yet; keep conservative assist strengths.
+- `S1-M9` (done): run 3-pair confirmation at conservative assist settings (`enabled=true`, `rate_boost=1.12`, `jerk_boost=1.08`) vs assist OFF:
+  - centerline cross median improved: `174` -> `192` (assist ON better).
+  - first-failure median improved: `174` -> `192` (assist ON better).
+  - time-to-failure median regressed: `11.133s` -> `10.500s` (assist ON worse in this sample).
+  - interpretation: directional gain on crossing exists, but promotion is blocked due to mixed TTF outcome; keep assist default OFF until one more confirmation pass.
+- `S1-M10` (done): run final deterministic 3-pair confirmation at fixed canonical start (`start_t=0.0`) with explicit comfort fields in batch output:
+  - centerline cross median: `174` -> `174` (no gain with assist ON).
+  - first-failure median: `174` -> `174` (no gain with assist ON).
+  - time-to-failure median: `11.117s` -> `11.417s` (slight gain with assist ON).
+  - classification remained `steering-authority-limited` in all runs.
+  - comfort fields are now emitted by batch harness but currently unavailable (`n/a`) from summary source for these runs.
+  - decision: hold default as assist OFF until either crossing gains appear at fixed start or control architecture checkpoint is taken.
+- `S1-M11` (done): implement and evaluate entry-phase limiter schedule + handoff (`curve_entry_schedule_frames: 0` vs `20`, fixed `start_t=0.0`, 3 pairs, 45s):
+  - centerline cross median: `189` -> `193` (small gain), but one run regressed (`193` -> `187`).
+  - first-failure median: `189` -> `193` (small gain), with the same regression run.
+  - time-to-failure median: `10.133s` -> `9.751s` (regression).
+  - classification remained `steering-authority-limited` in all runs.
+  - decision: do not promote schedule as default; keep it OFF and take the architecture checkpoint for stronger control-policy shaping.
+- `S1-M12` (done): architecture-checkpoint experiment with phase-structured commit mode (`curve_commit_mode_enabled: false` vs `true`, fixed `start_t=0.0`, 3 pairs, fail-fast emergency stop `0.5s`):
+  - centerline cross median: `203` -> `205` (slight gain).
+  - first-failure median: `203` -> `205` (slight gain).
+  - time-to-failure median: `10.100s` -> `9.883s` (regression).
+  - classification remained `steering-authority-limited` in all runs.
+  - decision: do not promote commit mode as default; retain OFF and continue architecture checkpoint toward stronger phase scheduling + speed/trajectory co-shaping.
+- `S1-M13` (done): add bounded speed/authority coupling (temporary curve-mode speed cap while commit mode is active) + fail-fast A/B validation (`curve_commit_mode_enabled: false` vs `true`, fixed `start_t=0.0`, 3 pairs, `emergency_stop_end_run_after_seconds=0.5`):
+  - activation verified in treatment recordings (`curve_commit_mode_active` and `curve_mode_speed_cap_clamped` > 0 frames).
+  - centerline cross median: `197` -> `208` (improved).
+  - first-failure median: `197` -> `209` (improved).
+  - time-to-failure median: `9.817s` -> `10.083s` (improved).
+  - caveat: one treatment trial switched to `mixed-or-unclear` classification (no centerline cross before OOB frame).
+  - decision: keep default OFF for now; run one more fixed-start confirmation pass before any promotion.
+- `S1-M14` (done): fixed-start confirmation pass for S1-M13 under fail-fast settings (`curve_commit_mode_enabled: false` vs `true`, fixed `start_t=0.0`, 3 pairs, `emergency_stop_end_run_after_seconds=0.5`):
+  - centerline cross median: `185` -> `206` (improved).
+  - first-failure median: `185` -> `206` (improved).
+  - time-to-failure median: `9.967s` -> `9.900s` (slight regression).
+  - classification: treatment produced `2x steering-authority-limited`, `1x mixed-or-unclear`.
+  - decision: hold defaults OFF; require one additional confirmation at a second fixed start before promotion.
+- `S1-M15` (done): second fixed-start confirmation attempt at `start_t=0.20` (same fail-fast A/B protocol):
+  - regime shifted away from steering-limited to `perception-limited` / `mixed-or-unclear`.
+  - baseline mostly had no centerline-cross signal before failure; treatment mostly became perception-limited.
+  - decision: this start is not a valid control-promotion gate for S1-M13.
+- `S1-M16` (done): replacement second-start confirmation at `start_t=0.10`:
+  - both arms classified primarily as `perception-limited` (with one `mixed-or-unclear` treatment run).
+  - no centerline-cross metric available in either arm (`n/a`) for promotion criteria.
+  - treatment had lower median first-failure frame/time than baseline and higher stale percentage.
+  - decision: do not promote coupled commit+speed-cap policy yet; keep defaults OFF and return to upstream perception stabilization for non-canonical starts before reattempting multi-start control promotion.
+- `S1-M17` (done): lock Stage 1 gating to canonical start only (`start_t=0.0`) per user decision:
+  - canonical start is now the only source for Stage 1 promote/hold decisions.
+  - non-canonical starts are explicitly exploratory unless user requests otherwise.
+- `S1-M18` (done): rerun canonical gate after policy lock (`curve_commit_mode_enabled: false` vs `true`, fixed `start_t=0.0`, 3 pairs, fail-fast `0.5s`):
+  - centerline cross median: `201` -> `197.5` (worse).
+  - first-failure median: `201` -> `211` (better).
+  - time-to-failure median: `10.117s` -> `10.999s` (better).
+  - treatment classification shifted (`2x mixed-or-unclear`, `1x steering-authority-limited`) and stale percentage increased (`15.8%` -> `30.8%`).
+  - decision: hold default OFF; not promotable due mixed signal and centerline-cross regression on canonical gate.
 
 **Gate to pass Stage 1**
 - No centerline cross in first-turn window.

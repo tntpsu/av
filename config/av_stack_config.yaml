@@ -52,6 +52,31 @@ control:
     steering_jerk_curve_scale_max: 1.0
     steering_jerk_curve_min: 0.003
     steering_jerk_curve_max: 0.015
+    curve_entry_assist_enabled: false
+    curve_entry_assist_error_min: 0.3
+    curve_entry_assist_heading_error_min: 0.1
+    curve_entry_assist_curvature_min: 0.01
+    curve_entry_assist_rate_boost: 1.12
+    curve_entry_assist_jerk_boost: 1.08
+    curve_entry_assist_max_frames: 18
+    curve_entry_assist_watchdog_rate_delta_max: 0.22
+    curve_entry_assist_rearm_frames: 20
+    curve_entry_schedule_enabled: false
+    curve_entry_schedule_frames: 20.0
+    curve_entry_schedule_min_rate: 0.24
+    curve_entry_schedule_min_jerk: 0.16
+    curve_entry_schedule_min_hold_frames: 6
+    curve_entry_schedule_handoff_transfer_ratio: 0.68
+    curve_entry_schedule_handoff_error_fall: 0.03
+    curve_commit_mode_enabled: false
+    curve_commit_mode_max_frames: 20
+    curve_commit_mode_min_rate: 0.22
+    curve_commit_mode_min_jerk: 0.14
+    curve_commit_mode_transfer_ratio_target: 0.72
+    curve_commit_mode_error_fall: 0.03
+    curve_mode_speed_cap_enabled: false
+    curve_mode_speed_cap_mps: 7.2
+    curve_mode_speed_cap_min_ratio: 0.55
     speed_gain_min_speed: 4.0
     speed_gain_max_speed: 10.0
     speed_gain_min: 1.0
@@ -308,6 +333,10 @@ logging:
   log_reference_point: true
 perception:
   record_segmentation_mask: false
+  low_visibility_fallback_enabled: true
+  low_visibility_fallback_blend_alpha: 0.35
+  low_visibility_fallback_max_consecutive_frames: 8
+  low_visibility_fallback_center_shift_cap_m: 0.25
   segmentation_fit_min_row_ratio: 0.45
   segmentation_fit_max_row_ratio: 0.75
   segmentation_ransac_enabled: true

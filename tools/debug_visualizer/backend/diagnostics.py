@@ -87,6 +87,8 @@ def analyze_trajectory_vs_steering(
             steering_jerk_limited_delta = None
             steering_hard_clip_delta = None
             steering_smoothing_delta = None
+            steering_authority_gap = None
+            steering_first_limiter_stage_code = None
             
             if has_control:
                 steering = np.array(f["control/steering"][:])
@@ -128,6 +130,12 @@ def analyze_trajectory_vs_steering(
                     steering_hard_clip_delta = np.array(f["control/steering_hard_clip_delta"][:])
                 if "control/steering_smoothing_delta" in f:
                     steering_smoothing_delta = np.array(f["control/steering_smoothing_delta"][:])
+                if "control/steering_authority_gap" in f:
+                    steering_authority_gap = np.array(f["control/steering_authority_gap"][:])
+                if "control/steering_first_limiter_stage_code" in f:
+                    steering_first_limiter_stage_code = np.array(
+                        f["control/steering_first_limiter_stage_code"][:]
+                    )
             
             # Load ground truth for comparison
             gt_center = None
@@ -221,6 +229,10 @@ def analyze_trajectory_vs_steering(
                 steering_hard_clip_delta = steering_hard_clip_delta[:min_len]
             if steering_smoothing_delta is not None:
                 steering_smoothing_delta = steering_smoothing_delta[:min_len]
+            if steering_authority_gap is not None:
+                steering_authority_gap = steering_authority_gap[:min_len]
+            if steering_first_limiter_stage_code is not None:
+                steering_first_limiter_stage_code = steering_first_limiter_stage_code[:min_len]
 
             # Preserve full aligned series for distance-based feasibility analysis.
             speed_full = speed.copy() if speed is not None else None
@@ -243,6 +255,14 @@ def analyze_trajectory_vs_steering(
             )
             steering_smoothing_delta_full = (
                 steering_smoothing_delta.copy() if steering_smoothing_delta is not None else None
+            )
+            steering_authority_gap_full = (
+                steering_authority_gap.copy() if steering_authority_gap is not None else None
+            )
+            steering_first_limiter_stage_code_full = (
+                steering_first_limiter_stage_code.copy()
+                if steering_first_limiter_stage_code is not None
+                else None
             )
             using_stale_perception_full = (
                 using_stale_perception.copy() if using_stale_perception is not None else None
@@ -1106,6 +1126,16 @@ def analyze_trajectory_vs_steering(
                         if steering_smoothing_delta_full is not None
                         else smoothing_delta
                     )
+                    authority_gap_src = (
+                        steering_authority_gap_full
+                        if steering_authority_gap_full is not None
+                        else None
+                    )
+                    first_limiter_stage_src = (
+                        steering_first_limiter_stage_code_full
+                        if steering_first_limiter_stage_code_full is not None
+                        else None
+                    )
                     if control_timestamps_full is not None and len(control_timestamps_full) > 0:
                         time_axis_src = control_timestamps_full - control_timestamps_full[0]
                     else:
@@ -1174,6 +1204,16 @@ def analyze_trajectory_vs_steering(
                     k_e = np.abs(path_curvature_src[entry_start2:entry_end2])
                     pre_e = np.abs(steering_pre_src[entry_start2:entry_end2])
                     fin_e = np.abs(steering_final[entry_start2:entry_end2])
+                    authority_gap_e_precomputed = (
+                        authority_gap_src[entry_start2:entry_end2]
+                        if authority_gap_src is not None
+                        else None
+                    )
+                    first_limiter_stage_e = (
+                        first_limiter_stage_src[entry_start2:entry_end2]
+                        if first_limiter_stage_src is not None
+                        else None
+                    )
                     stale_e = (
                         stale_src[entry_start2:entry_end2]
                         if stale_src is not None
@@ -1186,7 +1226,10 @@ def analyze_trajectory_vs_steering(
                         speed_margin = ay_budget - ay
                         speed_limited_pct = 100.0 * float(np.mean(ay > ay_budget))
 
-                        authority_gap = np.maximum(pre_e - fin_e, 0.0)
+                        if authority_gap_e_precomputed is not None and len(authority_gap_e_precomputed) == len(pre_e):
+                            authority_gap = np.maximum(authority_gap_e_precomputed, 0.0)
+                        else:
+                            authority_gap = np.maximum(pre_e - fin_e, 0.0)
                         transfer_ratio = np.divide(
                             fin_e,
                             np.maximum(pre_e, 1e-6),
@@ -1221,6 +1264,41 @@ def analyze_trajectory_vs_steering(
                             if smooth_src is not None
                             else 0.0
                         )
+                        first_limiter_hit_frame = None
+                        first_limiter_hit_stage = "none"
+                        if first_limiter_stage_e is not None and len(first_limiter_stage_e) > 0:
+                            hit_idx = np.where(first_limiter_stage_e > 0.5)[0]
+                            if len(hit_idx) > 0:
+                                first_limiter_hit_frame = int(entry_start2 + int(hit_idx[0]))
+                                stage_code = int(round(float(first_limiter_stage_e[int(hit_idx[0])])))
+                                stage_map = {
+                                    1: "rate_limit",
+                                    2: "jerk_limit",
+                                    3: "hard_clip",
+                                    4: "smoothing",
+                                }
+                                first_limiter_hit_stage = stage_map.get(stage_code, "none")
+                        elif rate_src is not None or jerk_src is not None or clip_src is not None or smooth_src is not None:
+                            first_hits = []
+                            if rate_src is not None:
+                                idxs = np.where(rate_src[entry_start2:entry_end2] > 1e-4)[0]
+                                if len(idxs) > 0:
+                                    first_hits.append((int(idxs[0]), "rate_limit"))
+                            if jerk_src is not None:
+                                idxs = np.where(jerk_src[entry_start2:entry_end2] > 1e-4)[0]
+                                if len(idxs) > 0:
+                                    first_hits.append((int(idxs[0]), "jerk_limit"))
+                            if clip_src is not None:
+                                idxs = np.where(clip_src[entry_start2:entry_end2] > 1e-4)[0]
+                                if len(idxs) > 0:
+                                    first_hits.append((int(idxs[0]), "hard_clip"))
+                            if smooth_src is not None:
+                                idxs = np.where(smooth_src[entry_start2:entry_end2] > 1e-4)[0]
+                                if len(idxs) > 0:
+                                    first_hits.append((int(idxs[0]), "smoothing"))
+                            if first_hits:
+                                first_offset, first_limiter_hit_stage = min(first_hits, key=lambda x: x[0])
+                                first_limiter_hit_frame = int(entry_start2 + first_offset)
 
                         mean_gap = float(np.mean(authority_gap))
                         speed_limited = speed_limited_pct >= 30.0
@@ -1268,6 +1346,8 @@ def analyze_trajectory_vs_steering(
                                 "hard_clip": safe_float(clip_e),
                                 "smoothing": safe_float(smooth_e),
                             },
+                            "first_limiter_hit_frame": first_limiter_hit_frame,
+                            "first_limiter_hit_stage": first_limiter_hit_stage,
                             "stale_perception_pct": safe_float(stale_pct),
                             "primary_classification": primary_classification,
                         }

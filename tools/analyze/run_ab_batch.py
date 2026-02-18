@@ -16,7 +16,7 @@ import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import h5py
 import numpy as np
@@ -32,7 +32,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 
-def _set_nested(cfg: dict, dotted_key: str, value: float) -> None:
+def _set_nested(cfg: dict, dotted_key: str, value: Any) -> None:
     keys = dotted_key.split(".")
     node = cfg
     for k in keys[:-1]:
@@ -112,6 +112,9 @@ class TrialMetrics:
     entry_start_dist_m: Optional[float]
     entry_end_dist_m: Optional[float]
     stale_reason_counts: Dict[str, int]
+    jerk_p95: Optional[float]
+    lateral_jerk_p95: Optional[float]
+    lateral_accel_p95: Optional[float]
 
 
 def _analyze_recording(
@@ -121,6 +124,7 @@ def _analyze_recording(
     entry_window_distance_m: float,
 ) -> TrialMetrics:
     from tools.debug_visualizer.backend.diagnostics import analyze_trajectory_vs_steering
+    from tools.debug_visualizer.backend.summary_analyzer import analyze_recording_summary
 
     with h5py.File(recording_path, "r") as f:
         ts = np.asarray(f["vehicle/timestamps"][:], dtype=float)
@@ -145,6 +149,11 @@ def _analyze_recording(
 
     entry_start_frame = feas.get("entry_start_frame")
     entry_end_frame = feas.get("entry_end_frame")
+    summary = analyze_recording_summary(str(recording_path))
+    comfort = ((summary.get("metrics") or {}).get("comfort") or {})
+    jerk_p95 = comfort.get("jerk_p95")
+    lateral_jerk_p95 = comfort.get("lateral_jerk_p95")
+    lateral_accel_p95 = comfort.get("lateral_accel_p95")
     stale_reasons: Dict[str, int] = {}
     if entry_start_frame is not None and entry_end_frame is not None:
         with h5py.File(recording_path, "r") as f:
@@ -170,6 +179,9 @@ def _analyze_recording(
         entry_start_dist_m=feas.get("entry_start_distance_used_m"),
         entry_end_dist_m=feas.get("entry_end_distance_used_m"),
         stale_reason_counts=stale_reasons,
+        jerk_p95=jerk_p95,
+        lateral_jerk_p95=lateral_jerk_p95,
+        lateral_accel_p95=lateral_accel_p95,
     )
 
 
@@ -195,6 +207,9 @@ def _summarize(label: str, trials: List[TrialMetrics]) -> None:
         "transfer_ratio_mean",
         "stale_pct",
         "speed_limited_pct",
+        "jerk_p95",
+        "lateral_jerk_p95",
+        "lateral_accel_p95",
     ]:
         vals = collect(metric)
         if not vals:
@@ -218,18 +233,21 @@ def _summarize(label: str, trials: List[TrialMetrics]) -> None:
         print(f"top_stale_reasons: {top}")
 
 
-def _run_once(track_yaml: str, duration_s: int) -> Path:
+def _run_once(track_yaml: str, duration_s: int, start_t: Optional[float] = None) -> Path:
     before = set(RECORDINGS_DIR.glob("*.h5"))
+    cmd = [
+        str(START_SCRIPT),
+        "--run-unity-player",
+        "--duration",
+        str(duration_s),
+        "--track-yaml",
+        str(Path(track_yaml).resolve()),
+        "--force",
+    ]
+    if start_t is not None:
+        cmd.extend(["--start-t", f"{float(start_t):.6f}"])
     subprocess.run(
-        [
-            str(START_SCRIPT),
-            "--run-unity-player",
-            "--duration",
-            str(duration_s),
-            "--track-yaml",
-            str(Path(track_yaml).resolve()),
-            "--force",
-        ],
+        cmd,
         cwd=REPO_ROOT,
         check=True,
     )
@@ -243,32 +261,88 @@ def _run_once(track_yaml: str, duration_s: int) -> Path:
 def main() -> int:
     parser = argparse.ArgumentParser(description="Batch A/B runner with robust stats.")
     parser.add_argument("--param", required=True, help="Dotted config key, e.g. control.lateral.kp")
-    parser.add_argument("--a", required=True, type=float, help="Baseline value")
-    parser.add_argument("--b", required=True, type=float, help="Treatment value")
+    parser.add_argument(
+        "--a",
+        required=True,
+        help="Baseline value (YAML scalar, e.g. 0.2, true, 12)",
+    )
+    parser.add_argument(
+        "--b",
+        required=True,
+        help="Treatment value (YAML scalar, e.g. 0.3, false, 20)",
+    )
     parser.add_argument("--repeats", type=int, default=5, help="Number of A/B pairs")
     parser.add_argument("--track-yaml", default=str(REPO_ROOT / "tracks" / "s_loop.yml"))
     parser.add_argument("--duration", type=int, default=40)
     parser.add_argument("--curve-start-frame", type=int, default=174)
     parser.add_argument("--entry-start-distance-m", type=float, default=25.0)
     parser.add_argument("--entry-window-distance-m", type=float, default=8.0)
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=20260217,
+        help="Seed for deterministic per-pair start-t sampling",
+    )
+    parser.add_argument(
+        "--fixed-start-t",
+        type=float,
+        default=None,
+        help="If set, use this exact start_t for every pair (overrides seeded sampling)",
+    )
+    parser.add_argument(
+        "--emergency-stop-end-run-after-seconds",
+        type=float,
+        default=None,
+        help=(
+            "Override safety.emergency_stop_end_run_after_seconds during batch runs "
+            "(e.g. 0.5 for faster fail-fast loops)"
+        ),
+    )
     args = parser.parse_args()
 
     if args.repeats < 1:
         raise ValueError("--repeats must be >= 1")
+    value_a = yaml.safe_load(args.a)
+    value_b = yaml.safe_load(args.b)
 
     original_text = CONFIG_PATH.read_text()
     trials_a: List[TrialMetrics] = []
     trials_b: List[TrialMetrics] = []
+    rng = np.random.default_rng(args.seed)
 
     try:
         for i in range(args.repeats):
+            pair_start_t = (
+                float(args.fixed_start_t)
+                if args.fixed_start_t is not None
+                else float(rng.uniform(0.0, 1.0))
+            )
             print(f"\n--- Pair {i+1}/{args.repeats}: A then B ---")
-            for label, value, store in [("A", args.a, trials_a), ("B", args.b, trials_b)]:
+            if args.fixed_start_t is None:
+                print(f"[pair] start_t={pair_start_t:.6f} (seed={args.seed})")
+            else:
+                print(f"[pair] start_t={pair_start_t:.6f} (fixed)")
+            for label, value, store in [("A", value_a, trials_a), ("B", value_b, trials_b)]:
                 cfg = yaml.safe_load(CONFIG_PATH.read_text())
                 _set_nested(cfg, args.param, value)
+                if args.emergency_stop_end_run_after_seconds is not None:
+                    _set_nested(
+                        cfg,
+                        "safety.emergency_stop_end_run_after_seconds",
+                        float(args.emergency_stop_end_run_after_seconds),
+                    )
                 CONFIG_PATH.write_text(yaml.safe_dump(cfg, sort_keys=False))
                 print(f"[{label}] {args.param}={value}")
-                rec = _run_once(track_yaml=args.track_yaml, duration_s=args.duration)
+                if args.emergency_stop_end_run_after_seconds is not None:
+                    print(
+                        f"[{label}] safety.emergency_stop_end_run_after_seconds="
+                        f"{float(args.emergency_stop_end_run_after_seconds):.3f}"
+                    )
+                rec = _run_once(
+                    track_yaml=args.track_yaml,
+                    duration_s=args.duration,
+                    start_t=pair_start_t,
+                )
                 metrics = _analyze_recording(
                     rec,
                     curve_start_frame=args.curve_start_frame,
@@ -280,7 +354,8 @@ def main() -> int:
                     f"[{label}] recording={metrics.recording} cross={metrics.centerline_cross_frame} "
                     f"fail={metrics.first_failure_frame} ttf={metrics.time_to_failure_s} "
                     f"class={metrics.feasibility_classification} gap={metrics.authority_gap_mean} "
-                    f"transfer={metrics.transfer_ratio_mean} stale={metrics.stale_pct}"
+                    f"transfer={metrics.transfer_ratio_mean} stale={metrics.stale_pct} "
+                    f"jerk_p95={metrics.jerk_p95} lat_jerk_p95={metrics.lateral_jerk_p95}"
                 )
     finally:
         CONFIG_PATH.write_text(original_text)

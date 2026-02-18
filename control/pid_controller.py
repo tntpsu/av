@@ -114,6 +114,28 @@ class LateralController:
                  steering_jerk_curve_scale_max: float = 1.0,
                  steering_jerk_curve_min: float = 0.003,
                  steering_jerk_curve_max: float = 0.015,
+                 curve_entry_assist_enabled: bool = False,
+                 curve_entry_assist_error_min: float = 0.30,
+                 curve_entry_assist_heading_error_min: float = 0.10,
+                 curve_entry_assist_curvature_min: float = 0.010,
+                 curve_entry_assist_rate_boost: float = 1.15,
+                 curve_entry_assist_jerk_boost: float = 1.10,
+                 curve_entry_assist_max_frames: int = 18,
+                 curve_entry_assist_watchdog_rate_delta_max: float = 0.22,
+                 curve_entry_assist_rearm_frames: int = 20,
+                 curve_entry_schedule_enabled: bool = False,
+                 curve_entry_schedule_frames: int = 18,
+                 curve_entry_schedule_min_rate: float = 0.22,
+                 curve_entry_schedule_min_jerk: float = 0.14,
+                 curve_entry_schedule_min_hold_frames: int = 6,
+                 curve_entry_schedule_handoff_transfer_ratio: float = 0.65,
+                 curve_entry_schedule_handoff_error_fall: float = 0.03,
+                 curve_commit_mode_enabled: bool = False,
+                 curve_commit_mode_max_frames: int = 20,
+                 curve_commit_mode_min_rate: float = 0.22,
+                 curve_commit_mode_min_jerk: float = 0.14,
+                 curve_commit_mode_transfer_ratio_target: float = 0.72,
+                 curve_commit_mode_error_fall: float = 0.03,
                  speed_gain_min_speed: float = 4.0,
                  speed_gain_max_speed: float = 10.0,
                  speed_gain_min: float = 1.0,
@@ -173,6 +195,36 @@ class LateralController:
         self.steering_jerk_curve_scale_max = max(1.0, float(steering_jerk_curve_scale_max))
         self.steering_jerk_curve_min = max(1e-6, float(steering_jerk_curve_min))
         self.steering_jerk_curve_max = max(self.steering_jerk_curve_min, float(steering_jerk_curve_max))
+        self.curve_entry_assist_enabled = bool(curve_entry_assist_enabled)
+        self.curve_entry_assist_error_min = max(0.0, float(curve_entry_assist_error_min))
+        self.curve_entry_assist_heading_error_min = max(0.0, float(curve_entry_assist_heading_error_min))
+        self.curve_entry_assist_curvature_min = max(0.0, float(curve_entry_assist_curvature_min))
+        self.curve_entry_assist_rate_boost = max(1.0, float(curve_entry_assist_rate_boost))
+        self.curve_entry_assist_jerk_boost = max(1.0, float(curve_entry_assist_jerk_boost))
+        self.curve_entry_assist_max_frames = max(0, int(curve_entry_assist_max_frames))
+        self.curve_entry_assist_watchdog_rate_delta_max = max(
+            0.05, float(curve_entry_assist_watchdog_rate_delta_max)
+        )
+        self.curve_entry_assist_rearm_frames = max(0, int(curve_entry_assist_rearm_frames))
+        self.curve_entry_schedule_enabled = bool(curve_entry_schedule_enabled)
+        self.curve_entry_schedule_frames = max(0, int(curve_entry_schedule_frames))
+        self.curve_entry_schedule_min_rate = max(0.0, float(curve_entry_schedule_min_rate))
+        self.curve_entry_schedule_min_jerk = max(0.0, float(curve_entry_schedule_min_jerk))
+        self.curve_entry_schedule_min_hold_frames = max(0, int(curve_entry_schedule_min_hold_frames))
+        self.curve_entry_schedule_handoff_transfer_ratio = float(
+            np.clip(curve_entry_schedule_handoff_transfer_ratio, 0.0, 1.0)
+        )
+        self.curve_entry_schedule_handoff_error_fall = max(
+            0.0, float(curve_entry_schedule_handoff_error_fall)
+        )
+        self.curve_commit_mode_enabled = bool(curve_commit_mode_enabled)
+        self.curve_commit_mode_max_frames = max(0, int(curve_commit_mode_max_frames))
+        self.curve_commit_mode_min_rate = max(0.0, float(curve_commit_mode_min_rate))
+        self.curve_commit_mode_min_jerk = max(0.0, float(curve_commit_mode_min_jerk))
+        self.curve_commit_mode_transfer_ratio_target = float(
+            np.clip(curve_commit_mode_transfer_ratio_target, 0.0, 1.0)
+        )
+        self.curve_commit_mode_error_fall = max(0.0, float(curve_commit_mode_error_fall))
         self.speed_gain_min_speed = speed_gain_min_speed
         self.speed_gain_max_speed = speed_gain_max_speed
         self.speed_gain_min = speed_gain_min
@@ -230,6 +282,13 @@ class LateralController:
         self._straight_sign_changes = 0
         self._last_straight_sign = 0
         self.straight_oscillation_rate = 0.0
+        self._curve_entry_assist_frames_remaining = 0
+        self._curve_entry_assist_rearm_remaining = 0
+        self._curve_entry_schedule_frames_remaining = 0
+        self._curve_entry_schedule_elapsed_frames = 0
+        self._curve_commit_mode_frames_remaining = 0
+        self._prev_is_straight = True
+        self._last_error_magnitude = 0.0
     
     def compute_steering(self, current_heading: float, reference_point: dict,
                         vehicle_position: Optional[np.ndarray] = None,
@@ -813,10 +872,24 @@ class LateralController:
         steering_rate_limit_requested_delta = 0.0
         steering_rate_limit_margin = 0.0
         steering_rate_limit_unlock_delta_needed = 0.0
+        curve_entry_assist_active = False
+        curve_entry_assist_triggered = False
+        curve_entry_assist_rearm_remaining = int(self._curve_entry_assist_rearm_remaining)
         steering_jerk_limit_requested_rate_delta = 0.0
         steering_jerk_limit_allowed_rate_delta = 0.0
         steering_jerk_limit_margin = 0.0
         steering_jerk_limit_unlock_rate_delta_needed = 0.0
+        curve_entry_schedule_active = False
+        curve_entry_schedule_triggered = False
+        curve_entry_schedule_handoff_triggered = False
+        curve_entry_schedule_frames_remaining = int(self._curve_entry_schedule_frames_remaining)
+        curve_commit_mode_active = False
+        curve_commit_mode_triggered = False
+        curve_commit_mode_handoff_triggered = False
+        curve_commit_mode_frames_remaining = int(self._curve_commit_mode_frames_remaining)
+        steering_authority_gap = 0.0
+        steering_transfer_ratio = 1.0
+        steering_first_limiter_stage_code = 0.0
         
         # Get PID internal state
         pid_integral = self.pid.integral
@@ -836,6 +909,38 @@ class LateralController:
         # Large errors: Fast rate limit (recovery)
         error_magnitude = abs(total_error)
         is_straight = curve_metric_abs < self.straight_curvature_threshold
+        if (
+            self.curve_entry_schedule_enabled
+            and self.curve_entry_schedule_frames > 0
+            and self._prev_is_straight
+            and not is_straight
+        ):
+            self._curve_entry_schedule_frames_remaining = self.curve_entry_schedule_frames
+            self._curve_entry_schedule_elapsed_frames = 0
+            curve_entry_schedule_triggered = True
+        if (
+            self.curve_commit_mode_enabled
+            and not self.curve_entry_schedule_enabled
+            and self._prev_is_straight
+            and not is_straight
+            and self._curve_commit_mode_frames_remaining <= 0
+        ):
+            self._curve_commit_mode_frames_remaining = self.curve_commit_mode_max_frames
+            curve_commit_mode_triggered = self._curve_commit_mode_frames_remaining > 0
+        if (
+            self.curve_commit_mode_enabled
+            and not self.curve_entry_schedule_enabled
+            and not is_straight
+            and self._curve_commit_mode_frames_remaining <= 0
+            and error_magnitude >= 0.25
+            and error_magnitude > (self._last_error_magnitude + 0.01)
+        ):
+            self._curve_commit_mode_frames_remaining = self.curve_commit_mode_max_frames
+            curve_commit_mode_triggered = self._curve_commit_mode_frames_remaining > 0
+        if self._curve_entry_schedule_frames_remaining > 0:
+            curve_entry_schedule_active = True
+            self._curve_entry_schedule_elapsed_frames += 1
+        curve_entry_schedule_frames_remaining = int(self._curve_entry_schedule_frames_remaining)
         if error_magnitude > 0.6:
             # Very large error (> 0.6) - allow fast steering changes for recovery
             max_steering_rate = 0.24
@@ -877,7 +982,46 @@ class LateralController:
                 max_steering_rate = max(max_steering_rate, self.curve_rate_floor_large_error)
             elif error_magnitude > 0.3:
                 max_steering_rate = max(max_steering_rate, self.curve_rate_floor_moderate_error)
+        if self._curve_entry_schedule_frames_remaining > 0:
+            max_steering_rate = max(max_steering_rate, self.curve_entry_schedule_min_rate)
+        if self._curve_commit_mode_frames_remaining > 0:
+            curve_commit_mode_active = True
+            max_steering_rate = max(max_steering_rate, self.curve_commit_mode_min_rate)
         steering_rate_limit_after_floor = float(max_steering_rate)
+
+        # Bounded curve-entry authority assist:
+        # temporarily boost limits during curve turn-in when error is worsening and limiter pressure exists.
+        if self._curve_entry_assist_rearm_remaining > 0:
+            self._curve_entry_assist_rearm_remaining -= 1
+        if self._curve_entry_assist_frames_remaining > 0:
+            self._curve_entry_assist_frames_remaining -= 1
+        if self.curve_entry_assist_enabled:
+            raw_rate_request = abs(steering_before_limits - self.last_steering)
+            error_rising = error_magnitude > (self._last_error_magnitude + 0.02)
+            curve_entry_candidate = (
+                (not is_straight)
+                and curve_metric_abs >= self.curve_entry_assist_curvature_min
+                and abs(heading_error) >= self.curve_entry_assist_heading_error_min
+                and error_magnitude >= self.curve_entry_assist_error_min
+                and error_rising
+            )
+            limiter_pressure = raw_rate_request > max_steering_rate
+            watchdog_trip = raw_rate_request > self.curve_entry_assist_watchdog_rate_delta_max
+            if watchdog_trip:
+                self._curve_entry_assist_frames_remaining = 0
+                self._curve_entry_assist_rearm_remaining = self.curve_entry_assist_rearm_frames
+            elif (
+                self._curve_entry_assist_rearm_remaining <= 0
+                and self._curve_entry_assist_frames_remaining <= 0
+                and curve_entry_candidate
+                and limiter_pressure
+            ):
+                self._curve_entry_assist_frames_remaining = self.curve_entry_assist_max_frames
+                curve_entry_assist_triggered = True
+            if self._curve_entry_assist_frames_remaining > 0:
+                curve_entry_assist_active = True
+                max_steering_rate *= self.curve_entry_assist_rate_boost
+            curve_entry_assist_rearm_remaining = int(self._curve_entry_assist_rearm_remaining)
 
         # Sign-flip override: allow corrections to reverse quickly when error flips sign.
         if not hasattr(self, '_sign_flip_override_frames'):
@@ -935,6 +1079,45 @@ class LateralController:
         steering_rate_limit_unlock_delta_needed = max(
             0.0, steering_rate_limit_requested_delta - steering_rate_limit_effective
         )
+        pre_rate_transfer = abs(steering_post_rate_limit) / max(abs(steering_pre_rate_limit), 1e-6)
+        error_recovering_schedule = (
+            error_magnitude + self.curve_entry_schedule_handoff_error_fall
+        ) <= self._last_error_magnitude
+        error_recovering_commit = (
+            error_magnitude + self.curve_commit_mode_error_fall
+        ) <= self._last_error_magnitude
+        if self._curve_entry_schedule_frames_remaining > 0:
+            hold_complete = self._curve_entry_schedule_elapsed_frames >= self.curve_entry_schedule_min_hold_frames
+            if hold_complete and (
+                pre_rate_transfer >= self.curve_entry_schedule_handoff_transfer_ratio
+                or error_recovering_schedule
+            ):
+                self._curve_entry_schedule_frames_remaining = 0
+                self._curve_entry_schedule_elapsed_frames = 0
+                curve_entry_schedule_handoff_triggered = True
+                if self.curve_commit_mode_enabled and not is_straight:
+                    self._curve_commit_mode_frames_remaining = self.curve_commit_mode_max_frames
+                    curve_commit_mode_triggered = self._curve_commit_mode_frames_remaining > 0
+            else:
+                self._curve_entry_schedule_frames_remaining -= 1
+            curve_entry_schedule_frames_remaining = int(
+                max(0, self._curve_entry_schedule_frames_remaining)
+            )
+        if self._curve_commit_mode_frames_remaining > 0:
+            if (
+                is_straight
+                or (
+                    pre_rate_transfer >= self.curve_commit_mode_transfer_ratio_target
+                    and error_recovering_commit
+                )
+            ):
+                self._curve_commit_mode_frames_remaining = 0
+                curve_commit_mode_handoff_triggered = True
+            else:
+                self._curve_commit_mode_frames_remaining -= 1
+            curve_commit_mode_frames_remaining = int(
+                max(0, self._curve_commit_mode_frames_remaining)
+            )
 
         # Curvature-aware jerk relaxation: keep straight stability, allow faster turn-in on curves.
         jerk_curve_scale = 1.0
@@ -949,6 +1132,18 @@ class LateralController:
             )
             jerk_curve_scale = 1.0 + jerk_ratio * (self.steering_jerk_curve_scale_max - 1.0)
         effective_steering_jerk_limit = self.steering_jerk_limit * jerk_curve_scale
+        if curve_entry_assist_active:
+            effective_steering_jerk_limit *= self.curve_entry_assist_jerk_boost
+        if self._curve_entry_schedule_frames_remaining > 0:
+            effective_steering_jerk_limit = max(
+                effective_steering_jerk_limit,
+                self.curve_entry_schedule_min_jerk,
+            )
+        if self._curve_commit_mode_frames_remaining > 0:
+            effective_steering_jerk_limit = max(
+                effective_steering_jerk_limit,
+                self.curve_commit_mode_min_jerk,
+            )
 
         # Optional jerk limit: constrain change in steering rate per frame.
         if effective_steering_jerk_limit > 0.0 and dt > 0.0 and not sign_flip_override_active:
@@ -1025,6 +1220,25 @@ class LateralController:
             steering_smoothing_delta = abs(steering - smoothing_in)
             steering_smoothing_active = steering_smoothing_delta > 1e-6
         steering_post_smoothing = steering
+        # Explicit attribution signals for control triage.
+        pre_abs = abs(steering_pre_rate_limit)
+        final_abs = abs(steering_post_smoothing)
+        steering_authority_gap = max(pre_abs - final_abs, 0.0)
+        steering_transfer_ratio = np.clip(
+            final_abs / max(pre_abs, 1e-6),
+            0.0,
+            1.0,
+        )
+        if steering_rate_limited_delta > 1e-6:
+            steering_first_limiter_stage_code = 1.0
+        elif steering_jerk_limited_delta > 1e-6:
+            steering_first_limiter_stage_code = 2.0
+        elif steering_hard_clip_delta > 1e-6:
+            steering_first_limiter_stage_code = 3.0
+        elif steering_smoothing_delta > 1e-6:
+            steering_first_limiter_stage_code = 4.0
+        else:
+            steering_first_limiter_stage_code = 0.0
 
         # Straight-away adaptive tuning (deadband + smoothing)
         if is_straight:
@@ -1083,6 +1297,8 @@ class LateralController:
             self._straight_sign_changes = 0
             self._last_straight_sign = 0
         
+        self._last_error_magnitude = error_magnitude
+        self._prev_is_straight = is_straight
         if return_metadata:
             return {
                 'steering': steering,
@@ -1130,12 +1346,26 @@ class LateralController:
                 'steering_rate_limit_requested_delta': steering_rate_limit_requested_delta,
                 'steering_rate_limit_margin': steering_rate_limit_margin,
                 'steering_rate_limit_unlock_delta_needed': steering_rate_limit_unlock_delta_needed,
+                'curve_entry_assist_active': curve_entry_assist_active,
+                'curve_entry_assist_triggered': curve_entry_assist_triggered,
+                'curve_entry_assist_rearm_frames_remaining': curve_entry_assist_rearm_remaining,
+                'curve_entry_schedule_active': curve_entry_schedule_active,
+                'curve_entry_schedule_triggered': curve_entry_schedule_triggered,
+                'curve_entry_schedule_handoff_triggered': curve_entry_schedule_handoff_triggered,
+                'curve_entry_schedule_frames_remaining': curve_entry_schedule_frames_remaining,
+                'curve_commit_mode_active': curve_commit_mode_active,
+                'curve_commit_mode_triggered': curve_commit_mode_triggered,
+                'curve_commit_mode_handoff_triggered': curve_commit_mode_handoff_triggered,
+                'curve_commit_mode_frames_remaining': curve_commit_mode_frames_remaining,
                 'steering_jerk_limit_effective': effective_steering_jerk_limit,
                 'steering_jerk_curve_scale': jerk_curve_scale,
                 'steering_jerk_limit_requested_rate_delta': steering_jerk_limit_requested_rate_delta,
                 'steering_jerk_limit_allowed_rate_delta': steering_jerk_limit_allowed_rate_delta,
                 'steering_jerk_limit_margin': steering_jerk_limit_margin,
                 'steering_jerk_limit_unlock_rate_delta_needed': steering_jerk_limit_unlock_rate_delta_needed,
+                'steering_authority_gap': steering_authority_gap,
+                'steering_transfer_ratio': steering_transfer_ratio,
+                'steering_first_limiter_stage_code': steering_first_limiter_stage_code,
                 'speed_gain_final': speed_gain_final,
                 'speed_gain_scale': speed_gain_scale,
                 'speed_gain_applied': speed_gain_applied,
@@ -1154,7 +1384,6 @@ class LateralController:
                 'tuned_deadband': self.deadband,
                 'tuned_error_smoothing_alpha': self.error_smoothing_alpha
             }
-        
         return steering
     
     def reset(self):
@@ -1162,8 +1391,17 @@ class LateralController:
         self.pid.reset()
         self.small_error_count = 0
         self.last_error_sign = None
+        self._curve_entry_assist_frames_remaining = 0
+        self._curve_entry_assist_rearm_remaining = 0
+        self._curve_entry_schedule_frames_remaining = 0
+        self._curve_entry_schedule_elapsed_frames = 0
+        self._curve_commit_mode_frames_remaining = 0
+        self._prev_is_straight = True
+        self._last_error_magnitude = 0.0
         if hasattr(self, 'last_steering'):
             self.last_steering = 0.0
+        if hasattr(self, 'last_steering_rate'):
+            self.last_steering_rate = 0.0
         self.smoothed_steering = None
 
 
@@ -1940,6 +2178,28 @@ class VehicleController:
                  steering_jerk_curve_scale_max: float = 1.0,
                  steering_jerk_curve_min: float = 0.003,
                  steering_jerk_curve_max: float = 0.015,
+                 curve_entry_assist_enabled: bool = False,
+                 curve_entry_assist_error_min: float = 0.30,
+                 curve_entry_assist_heading_error_min: float = 0.10,
+                 curve_entry_assist_curvature_min: float = 0.010,
+                 curve_entry_assist_rate_boost: float = 1.15,
+                 curve_entry_assist_jerk_boost: float = 1.10,
+                 curve_entry_assist_max_frames: int = 18,
+                 curve_entry_assist_watchdog_rate_delta_max: float = 0.22,
+                 curve_entry_assist_rearm_frames: int = 20,
+                 curve_entry_schedule_enabled: bool = False,
+                 curve_entry_schedule_frames: int = 18,
+                 curve_entry_schedule_min_rate: float = 0.22,
+                 curve_entry_schedule_min_jerk: float = 0.14,
+                 curve_entry_schedule_min_hold_frames: int = 6,
+                 curve_entry_schedule_handoff_transfer_ratio: float = 0.65,
+                 curve_entry_schedule_handoff_error_fall: float = 0.03,
+                 curve_commit_mode_enabled: bool = False,
+                 curve_commit_mode_max_frames: int = 20,
+                 curve_commit_mode_min_rate: float = 0.22,
+                 curve_commit_mode_min_jerk: float = 0.14,
+                 curve_commit_mode_transfer_ratio_target: float = 0.72,
+                 curve_commit_mode_error_fall: float = 0.03,
                  speed_gain_min_speed: float = 4.0,
                  speed_gain_max_speed: float = 10.0,
                  speed_gain_min: float = 1.0,
@@ -2010,6 +2270,28 @@ class VehicleController:
             steering_jerk_curve_scale_max=steering_jerk_curve_scale_max,
             steering_jerk_curve_min=steering_jerk_curve_min,
             steering_jerk_curve_max=steering_jerk_curve_max,
+            curve_entry_assist_enabled=curve_entry_assist_enabled,
+            curve_entry_assist_error_min=curve_entry_assist_error_min,
+            curve_entry_assist_heading_error_min=curve_entry_assist_heading_error_min,
+            curve_entry_assist_curvature_min=curve_entry_assist_curvature_min,
+            curve_entry_assist_rate_boost=curve_entry_assist_rate_boost,
+            curve_entry_assist_jerk_boost=curve_entry_assist_jerk_boost,
+            curve_entry_assist_max_frames=curve_entry_assist_max_frames,
+            curve_entry_assist_watchdog_rate_delta_max=curve_entry_assist_watchdog_rate_delta_max,
+            curve_entry_assist_rearm_frames=curve_entry_assist_rearm_frames,
+            curve_entry_schedule_enabled=curve_entry_schedule_enabled,
+            curve_entry_schedule_frames=curve_entry_schedule_frames,
+            curve_entry_schedule_min_rate=curve_entry_schedule_min_rate,
+            curve_entry_schedule_min_jerk=curve_entry_schedule_min_jerk,
+            curve_entry_schedule_min_hold_frames=curve_entry_schedule_min_hold_frames,
+            curve_entry_schedule_handoff_transfer_ratio=curve_entry_schedule_handoff_transfer_ratio,
+            curve_entry_schedule_handoff_error_fall=curve_entry_schedule_handoff_error_fall,
+            curve_commit_mode_enabled=curve_commit_mode_enabled,
+            curve_commit_mode_max_frames=curve_commit_mode_max_frames,
+            curve_commit_mode_min_rate=curve_commit_mode_min_rate,
+            curve_commit_mode_min_jerk=curve_commit_mode_min_jerk,
+            curve_commit_mode_transfer_ratio_target=curve_commit_mode_transfer_ratio_target,
+            curve_commit_mode_error_fall=curve_commit_mode_error_fall,
             speed_gain_min_speed=speed_gain_min_speed,
             speed_gain_max_speed=speed_gain_max_speed,
             speed_gain_min=speed_gain_min,

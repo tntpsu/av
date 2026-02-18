@@ -197,6 +197,9 @@ class ControlCommand:
     target_speed_final: Optional[float] = None
     target_speed_slew_active: bool = False
     target_speed_ramp_active: bool = False
+    curve_mode_speed_cap_active: bool = False
+    curve_mode_speed_cap_clamped: bool = False
+    curve_mode_speed_cap_value: Optional[float] = None
     # Launch throttle ramp diagnostics
     launch_throttle_cap: Optional[float] = None
     launch_throttle_cap_active: bool = False
@@ -229,12 +232,27 @@ class ControlCommand:
     steering_rate_limit_requested_delta: Optional[float] = None
     steering_rate_limit_margin: Optional[float] = None
     steering_rate_limit_unlock_delta_needed: Optional[float] = None
+    curve_entry_assist_active: bool = False
+    curve_entry_assist_triggered: bool = False
+    curve_entry_assist_rearm_frames_remaining: Optional[int] = None
+    curve_entry_schedule_active: bool = False
+    curve_entry_schedule_triggered: bool = False
+    curve_entry_schedule_handoff_triggered: bool = False
+    curve_entry_schedule_frames_remaining: Optional[int] = None
+    curve_commit_mode_active: bool = False
+    curve_commit_mode_triggered: bool = False
+    curve_commit_mode_handoff_triggered: bool = False
+    curve_commit_mode_frames_remaining: Optional[int] = None
     steering_jerk_limit_effective: Optional[float] = None
     steering_jerk_curve_scale: Optional[float] = None
     steering_jerk_limit_requested_rate_delta: Optional[float] = None
     steering_jerk_limit_allowed_rate_delta: Optional[float] = None
     steering_jerk_limit_margin: Optional[float] = None
     steering_jerk_limit_unlock_rate_delta_needed: Optional[float] = None
+    # Control attribution helpers for pre-failure triage
+    steering_authority_gap: Optional[float] = None
+    steering_transfer_ratio: Optional[float] = None
+    steering_first_limiter_stage_code: Optional[float] = None  # 0=none,1=rate,2=jerk,3=hard_clip,4=smoothing
 
 
 @dataclass

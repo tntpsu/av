@@ -1014,6 +1014,20 @@ def get_frame_data(filename, frame_index):
                         frame_data['control']['steering_hard_clip_delta'] = float(f['control/steering_hard_clip_delta'][control_idx])
                     if 'control/steering_smoothing_delta' in f and control_idx < len(f['control/steering_smoothing_delta']):
                         frame_data['control']['steering_smoothing_delta'] = float(f['control/steering_smoothing_delta'][control_idx])
+                    if 'control/steering_authority_gap' in f and control_idx < len(f['control/steering_authority_gap']):
+                        frame_data['control']['steering_authority_gap'] = float(
+                            f['control/steering_authority_gap'][control_idx]
+                        )
+                    if 'control/steering_transfer_ratio' in f and control_idx < len(f['control/steering_transfer_ratio']):
+                        frame_data['control']['steering_transfer_ratio'] = float(
+                            f['control/steering_transfer_ratio'][control_idx]
+                        )
+                    if 'control/steering_first_limiter_stage_code' in f and control_idx < len(
+                        f['control/steering_first_limiter_stage_code']
+                    ):
+                        frame_data['control']['steering_first_limiter_stage_code'] = float(
+                            f['control/steering_first_limiter_stage_code'][control_idx]
+                        )
                     if 'control/steering_rate_limit_base_from_error' in f and control_idx < len(f['control/steering_rate_limit_base_from_error']):
                         frame_data['control']['steering_rate_limit_base_from_error'] = float(f['control/steering_rate_limit_base_from_error'][control_idx])
                     if 'control/steering_rate_limit_curve_scale' in f and control_idx < len(f['control/steering_rate_limit_curve_scale']):

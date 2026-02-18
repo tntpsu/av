@@ -281,9 +281,35 @@ class Visualizer {
             const sourceS = startOffset + displayS;
             if (sourceS > maxSourceS + 1e-6) continue;
             const p = sampleAnchorAtDistance(sourceS);
-            const tickHalfMeters = 0.22;
-            const aWorld = { x: p.x - p.nx * tickHalfMeters, y: p.y, z: p.z - p.nz * tickHalfMeters };
-            const bWorld = { x: p.x + p.nx * tickHalfMeters, y: p.y, z: p.z + p.nz * tickHalfMeters };
+            // Draw hash marks outward from the right edge (outside-only), not straddling across the edge.
+            // Choose sign in image-space to prevent occasional far-field left-flips.
+            const edgeOffsetMeters = 0.02;
+            const tickLengthMeters = 0.44;
+            const edgeWorld = { x: p.x, y: p.y, z: p.z };
+            const plusProbeWorld = { x: p.x + (p.nx * 0.2), y: p.y, z: p.z + (p.nz * 0.2) };
+            const minusProbeWorld = { x: p.x - (p.nx * 0.2), y: p.y, z: p.z - (p.nz * 0.2) };
+            let outwardSign = 1.0;
+            const plusProj = this.projectWorldPointsToImage([edgeWorld, plusProbeWorld]);
+            const minusProj = this.projectWorldPointsToImage([edgeWorld, minusProbeWorld]);
+            if (
+                Array.isArray(plusProj) && plusProj.length >= 2 &&
+                Array.isArray(minusProj) && minusProj.length >= 2 &&
+                Number.isFinite(Number(plusProj[1]?.x)) &&
+                Number.isFinite(Number(minusProj[1]?.x))
+            ) {
+                // For right-edge hashes, outside should appear to image-right.
+                outwardSign = Number(plusProj[1].x) >= Number(minusProj[1].x) ? 1.0 : -1.0;
+            }
+            const aWorld = {
+                x: p.x + (p.nx * edgeOffsetMeters * outwardSign),
+                y: p.y,
+                z: p.z + (p.nz * edgeOffsetMeters * outwardSign),
+            };
+            const bWorld = {
+                x: p.x + (p.nx * (edgeOffsetMeters + tickLengthMeters) * outwardSign),
+                y: p.y,
+                z: p.z + (p.nz * (edgeOffsetMeters + tickLengthMeters) * outwardSign),
+            };
             const projected = this.projectWorldPointsToImage([aWorld, bWorld]);
             if (!projected || projected.length < 2) continue;
             this.overlayRenderer.drawImagePath(projected, '#ffffff', displayS === 0 ? 3 : 2);
@@ -2931,6 +2957,49 @@ class Visualizer {
         }));
     }
 
+    trimPathToForwardHorizon(points, horizonMeters) {
+        const path = this.toForwardMonotonicPath(points);
+        const hz = Number(horizonMeters);
+        if (!Array.isArray(path) || path.length === 0 || !Number.isFinite(hz)) return path;
+        const maxY = Math.max(0.0, hz);
+        const out = [];
+
+        for (let i = 0; i < path.length; i++) {
+            const curr = path[i];
+            const currY = Number(curr?.y);
+            const currX = Number(curr?.x);
+            if (!Number.isFinite(currY) || !Number.isFinite(currX)) continue;
+
+            if (currY <= maxY + 1e-6) {
+                out.push({ x: currX, y: currY });
+                continue;
+            }
+
+            if (i > 0) {
+                const prev = path[i - 1];
+                const prevY = Number(prev?.y);
+                const prevX = Number(prev?.x);
+                const dy = currY - prevY;
+                if (
+                    Number.isFinite(prevY) &&
+                    Number.isFinite(prevX) &&
+                    Number.isFinite(dy) &&
+                    Math.abs(dy) > 1e-6 &&
+                    prevY < maxY
+                ) {
+                    const t = (maxY - prevY) / dy;
+                    out.push({
+                        x: prevX + ((currX - prevX) * t),
+                        y: maxY,
+                    });
+                }
+            }
+            break;
+        }
+
+        return out.length > 0 ? out : [];
+    }
+
     sampleLateralAtForwardDistance(pathPoints, forwardMeters) {
         if (!Array.isArray(pathPoints) || pathPoints.length < 2 || !Number.isFinite(forwardMeters)) {
             return null;
@@ -3667,8 +3736,16 @@ class Visualizer {
             ? (this.currentFrameData.trajectory?.trajectory_points || [])
             : [];
         const trajectory = this.getDisplayTrajectoryPoints(rawTrajectory);
+        const trajDiag = this.currentFrameData?.trajectory || {};
+        const dynamicHorizonApplied = Number(trajDiag?.diag_dynamic_effective_horizon_applied) > 0.5;
+        const dynamicHorizonMeters = Number(trajDiag?.diag_dynamic_effective_horizon_m);
+        const trajectoryTopdownDisplaySource = (
+            dynamicHorizonApplied && Number.isFinite(dynamicHorizonMeters)
+        )
+            ? this.trimPathToForwardHorizon(trajectory, dynamicHorizonMeters)
+            : this.toForwardMonotonicPath(trajectory);
         const oracleTrajectory = this.currentFrameData.trajectory?.oracle_points || [];
-        if (!trajectory.length && !oracleTrajectory.length && !showDistanceScale) return;
+        if (!trajectoryTopdownDisplaySource.length && !oracleTrajectory.length && !showDistanceScale) return;
 
         // #region agent log
         if (this._agentTopdownLastLoggedFrame !== this.currentFrameIndex) {
@@ -3681,8 +3758,8 @@ class Visualizer {
         let monotonicBreaks = 0;
         let prevY = null;
         const samplePoints = [];
-        for (let i = 0; i < trajectory.length; i++) {
-            const p = trajectory[i];
+        for (let i = 0; i < trajectoryTopdownDisplaySource.length; i++) {
+            const p = trajectoryTopdownDisplaySource[i];
             const x = Number(p?.x);
             const y = Number(p?.y);
             if (!Number.isFinite(x) || !Number.isFinite(y)) {
@@ -3703,13 +3780,13 @@ class Visualizer {
 
         // #region agent log
         if (this._agentTopdownLastLoggedFrame !== this.currentFrameIndex) {
-            fetch('http://127.0.0.1:7244/ingest/4b1a3fa9-dffd-42fc-a8f8-c8a4d88904be',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({runId:'pre-fix-topdown-v1',hypothesisId:'H2',location:'visualizer.js:updateTopdownOverlay:raw-shape',message:'Raw trajectory shape metrics',data:{frameIndex:this.currentFrameIndex,nonFiniteCount,negativeYCount,monotonicBreaks,samplePoints},timestamp:Date.now()})}).catch(()=>{});
+            fetch('http://127.0.0.1:7244/ingest/4b1a3fa9-dffd-42fc-a8f8-c8a4d88904be',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({runId:'pre-fix-topdown-v1',hypothesisId:'H2',location:'visualizer.js:updateTopdownOverlay:raw-shape',message:'Raw trajectory shape metrics',data:{frameIndex:this.currentFrameIndex,nonFiniteCount,negativeYCount,monotonicBreaks,samplePoints,trimmedByDynamicHorizon:dynamicHorizonApplied && Number.isFinite(dynamicHorizonMeters),dynamicHorizonMeters:Number.isFinite(dynamicHorizonMeters)?dynamicHorizonMeters:null,rawCount:Array.isArray(trajectory)?trajectory.length:0,keptCount:Array.isArray(trajectoryTopdownDisplaySource)?trajectoryTopdownDisplaySource.length:0},timestamp:Date.now()})}).catch(()=>{});
         }
         // #endregion
 
         // Normalize top-down render path to the forward monotonic segment.
         // Recorded trajectory can contain a prefixed far lookahead point before near points.
-        const validForwardPoints = trajectory.filter((p) =>
+        const validForwardPoints = trajectoryTopdownDisplaySource.filter((p) =>
             Number.isFinite(Number(p?.x)) &&
             Number.isFinite(Number(p?.y)) &&
             Number(p.y) >= 0
@@ -3903,6 +3980,14 @@ class Visualizer {
         this.projectionDiagnostics.topdown_calibrated = useCalibratedTopdownProjection ? 'on' : 'off';
         this.projectionDiagnostics.topdown_smooth = Boolean(document.getElementById('toggle-topdown-pose-smooth')?.checked) ? 'on' : 'off';
         this.projectionDiagnostics.planner_only = Boolean(document.getElementById('toggle-planner-only-trajectory')?.checked) ? 'on' : 'off';
+        this.projectionDiagnostics.topdown_traj_display_trimmed_dynamic_horizon = (
+            dynamicHorizonApplied && Number.isFinite(dynamicHorizonMeters)
+        );
+        this.projectionDiagnostics.topdown_traj_display_trimmed_dynamic_horizon_m = (
+            Number.isFinite(dynamicHorizonMeters) ? Number(dynamicHorizonMeters) : null
+        );
+        this.projectionDiagnostics.topdown_traj_display_trimmed_points_raw = Number(trajectory.length);
+        this.projectionDiagnostics.topdown_traj_display_trimmed_points_kept = Number(trajectoryTopdownDisplaySource.length);
 
     }
 
@@ -4948,7 +5033,11 @@ class Visualizer {
         // Steering limiter waterfall diagnostics
         const fmtSteer = (v) => (v !== undefined && v !== null ? Number(v).toFixed(4) : '-');
         const fmtDelta = (v) => (v !== undefined && v !== null ? Number(v).toFixed(4) : '-');
-        const fmtFlag = (v) => (v ? 'YES ⚠️' : 'NO');
+        const fmtActualLimitState = (ruleExists, actuallyClipped) => {
+            if (actuallyClipped) return 'YES ⚠️ (clipped)';
+            if (ruleExists) return 'YES (rule active, no clip)';
+            return 'NO';
+        };
         const setWaterfallRowHighlight = (id, isActive, isFirst) => {
             const elem = document.getElementById(id);
             if (!elem) return;
@@ -4959,16 +5048,31 @@ class Visualizer {
                 row.classList.add(isFirst ? 'waterfall-first-limiter' : 'waterfall-limiter-active');
             }
         };
+        const limiterEps = 1e-4;
+        const rateDelta = Number(c.steering_rate_limited_delta);
+        const jerkDelta = Number(c.steering_jerk_limited_delta);
+        const hardClipDelta = Number(c.steering_hard_clip_delta);
+        const smoothingDelta = Number(c.steering_smoothing_delta);
+        const rateRuleExists = Number.isFinite(Number(c.steering_rate_limit_effective))
+            && Number(c.steering_rate_limit_effective) > 0.0;
+        const jerkRuleExists = Number.isFinite(Number(c.steering_jerk_limit_effective))
+            && Number(c.steering_jerk_limit_effective) > 0.0;
+        const hardRuleExists = true; // hard clip boundary exists whenever max steering is finite.
+        const smoothingRuleExists = true; // smoothing stage exists even when it has zero effect.
+        const rateActuallyLimited = Number.isFinite(rateDelta) && Math.abs(rateDelta) > limiterEps;
+        const jerkActuallyLimited = Number.isFinite(jerkDelta) && Math.abs(jerkDelta) > limiterEps;
+        const hardActuallyLimited = Number.isFinite(hardClipDelta) && Math.abs(hardClipDelta) > limiterEps;
+        const smoothingActuallyLimited = Number.isFinite(smoothingDelta) && Math.abs(smoothingDelta) > limiterEps;
         updateField('control-steering-pre-rate', fmtSteer(c.steering_pre_rate_limit));
         updateField('control-steering-post-rate', fmtSteer(c.steering_post_rate_limit));
         updateField('control-steering-post-jerk', fmtSteer(c.steering_post_jerk_limit));
         updateField('control-steering-post-sign-flip', fmtSteer(c.steering_post_sign_flip));
         updateField('control-steering-post-hard-clip', fmtSteer(c.steering_post_hard_clip));
         updateField('control-steering-post-smoothing', fmtSteer(c.steering_post_smoothing));
-        updateField('control-steering-rate-limited', fmtFlag(!!c.steering_rate_limited_active));
-        updateField('control-steering-jerk-limited', fmtFlag(!!c.steering_jerk_limited_active));
-        updateField('control-steering-hard-clipped', fmtFlag(!!c.steering_hard_clip_active));
-        updateField('control-steering-smoothing-active', fmtFlag(!!c.steering_smoothing_active));
+        updateField('control-steering-rate-limited', fmtActualLimitState(rateRuleExists, rateActuallyLimited));
+        updateField('control-steering-jerk-limited', fmtActualLimitState(jerkRuleExists, jerkActuallyLimited));
+        updateField('control-steering-hard-clipped', fmtActualLimitState(hardRuleExists, hardActuallyLimited));
+        updateField('control-steering-smoothing-active', fmtActualLimitState(smoothingRuleExists, smoothingActuallyLimited));
         updateField('control-steering-rate-delta', fmtDelta(c.steering_rate_limited_delta));
         updateField('control-steering-jerk-delta', fmtDelta(c.steering_jerk_limited_delta));
         updateField('control-steering-hard-clip-delta', fmtDelta(c.steering_hard_clip_delta));
@@ -4998,6 +5102,24 @@ class Visualizer {
             );
         } else {
             updateField('control-steering-rate-thresholds', '-');
+        }
+        if (
+            c.curve_entry_assist_active !== undefined ||
+            c.curve_entry_assist_triggered !== undefined ||
+            c.curve_entry_assist_rearm_frames_remaining !== undefined
+        ) {
+            const active = c.curve_entry_assist_active ? 'ON' : 'OFF';
+            const triggered = c.curve_entry_assist_triggered ? 'YES' : 'NO';
+            const rearm = c.curve_entry_assist_rearm_frames_remaining !== undefined &&
+                c.curve_entry_assist_rearm_frames_remaining !== null
+                ? Number(c.curve_entry_assist_rearm_frames_remaining).toFixed(0)
+                : '-';
+            updateField(
+                'control-steering-curve-entry-assist',
+                `${active} / ${triggered} / ${rearm}`
+            );
+        } else {
+            updateField('control-steering-curve-entry-assist', '-');
         }
         if (
             c.steering_rate_limit_curve_metric_abs !== undefined &&
@@ -5085,13 +5207,13 @@ class Visualizer {
             updateField('control-steering-jerk-unlock', '-');
         }
 
-        const firstLimiter = c.steering_rate_limited_active
+        const firstLimiter = rateActuallyLimited
             ? 'rate'
-            : c.steering_jerk_limited_active
+            : jerkActuallyLimited
                 ? 'jerk'
-                : c.steering_hard_clip_active
+                : hardActuallyLimited
                     ? 'hard'
-                    : c.steering_smoothing_active
+                    : smoothingActuallyLimited
                         ? 'smooth'
                         : null;
 
@@ -5123,10 +5245,10 @@ class Visualizer {
         };
 
         const stageActive = {
-            rate: !!c.steering_rate_limited_active,
-            jerk: !!c.steering_jerk_limited_active,
-            hard: !!c.steering_hard_clip_active,
-            smooth: !!c.steering_smoothing_active,
+            rate: rateActuallyLimited,
+            jerk: jerkActuallyLimited,
+            hard: hardActuallyLimited,
+            smooth: smoothingActuallyLimited,
         };
 
         for (const stage of Object.keys(stageRows)) {
@@ -5594,7 +5716,8 @@ class Visualizer {
         this.projectionDiagnostics = {};
         let plannerPathForMetrics = [];
         let oraclePathForMetrics = [];
-        let compareMountDebug = null;
+        const forceMainViewEgoAnchoring = true;
+        const mainViewAnchorPoint = { x: 0.0, y: 1.5 };
         
         if (!this.currentFrameData) {
             console.log('[OVERLAY] No frame data available');
@@ -5855,7 +5978,6 @@ class Visualizer {
         // Draw trajectory (if available)
         if (document.getElementById('toggle-trajectory').checked) {
             if (this.currentFrameData.trajectory && this.currentFrameData.trajectory.trajectory_points) {
-                const egoAnchoredCompareMode = true;
                 let trajectoryMinY = Math.floor(this.overlayRenderer.imageHeight * 0.2);
                 if (y8mActual !== null && y8mActual > 0) {
                     const pxPerMeter = (this.overlayRenderer.imageHeight - y8mActual) / 8.0;
@@ -5869,15 +5991,25 @@ class Visualizer {
                 const rawTrajPoints = this.currentFrameData.trajectory.trajectory_points;
                 const trajPoints = this.getDisplayTrajectoryPoints(rawTrajPoints);
                 const mainRenderTraj = this.toForwardMonotonicPath(trajPoints);
-                let mainRenderTrajDisplay = mainRenderTraj;
-                if (egoAnchoredCompareMode) {
-                    const oraclePointsForAnchor = this.currentFrameData?.trajectory?.oracle_points;
-                    const oracleRenderForAnchor = (Array.isArray(oraclePointsForAnchor) && oraclePointsForAnchor.length > 0)
-                        ? this.toForwardMonotonicPath(oraclePointsForAnchor)
-                        : [];
-                    const oracleAnchor = oracleRenderForAnchor.length > 0 ? oracleRenderForAnchor[0] : { x: 0.0, y: 0.0 };
-                    mainRenderTrajDisplay = this.alignPathStartToAnchor(mainRenderTraj, oracleAnchor);
-                }
+                const trajDiag = this.currentFrameData?.trajectory || {};
+                const dynamicHorizonApplied = Number(trajDiag?.diag_dynamic_effective_horizon_applied) > 0.5;
+                const dynamicHorizonMeters = Number(trajDiag?.diag_dynamic_effective_horizon_m);
+                const mainRenderTrajDisplaySource = (
+                    dynamicHorizonApplied && Number.isFinite(dynamicHorizonMeters)
+                )
+                    ? this.trimPathToForwardHorizon(mainRenderTraj, dynamicHorizonMeters)
+                    : mainRenderTraj;
+                const mainRenderTrajDisplay = forceMainViewEgoAnchoring
+                    ? this.alignPathStartToAnchor(mainRenderTrajDisplaySource, mainViewAnchorPoint)
+                    : mainRenderTrajDisplaySource;
+                this.projectionDiagnostics.traj_display_trimmed_dynamic_horizon = (
+                    dynamicHorizonApplied && Number.isFinite(dynamicHorizonMeters)
+                );
+                this.projectionDiagnostics.traj_display_trimmed_dynamic_horizon_m = (
+                    Number.isFinite(dynamicHorizonMeters) ? Number(dynamicHorizonMeters) : null
+                );
+                this.projectionDiagnostics.traj_display_trimmed_points_raw = Number(mainRenderTraj.length);
+                this.projectionDiagnostics.traj_display_trimmed_points_kept = Number(mainRenderTrajDisplaySource.length);
                 plannerPathForMetrics = mainRenderTraj;
                 this.projectionDiagnostics.source_turn_sign = this.computeTurnSign(mainRenderTraj, 'x', 'y');
                 if (mainRenderTrajDisplay.length) {
@@ -5888,7 +6020,7 @@ class Visualizer {
                         for (const pt of projected) {
                             if (!Number.isFinite(pt?.x) || !Number.isFinite(pt?.y)) continue;
                             if (pt.y > this.overlayRenderer.imageHeight) continue;
-                            if (!egoAnchoredCompareMode && pt.y < trajectoryMinY) continue;
+                            if (!forceMainViewEgoAnchoring && pt.y < trajectoryMinY) continue;
                             if (prev) {
                                 const jumpPx = Math.hypot(pt.x - prev.x, pt.y - prev.y);
                                 if (jumpPx > 140) {
@@ -5898,30 +6030,6 @@ class Visualizer {
                             }
                             clipped.push(pt);
                             prev = pt;
-                        }
-                        if (egoAnchoredCompareMode && clipped.length > 0) {
-                            const oracleScreenPoints = this.currentFrameData?.vehicle?.oracle_trajectory_screen_points;
-                            const oracleFirstValid = Array.isArray(oracleScreenPoints)
-                                ? oracleScreenPoints.find((p) =>
-                                    Number.isFinite(Number(p?.x)) &&
-                                    Number.isFinite(Number(p?.y)) &&
-                                    Boolean(p?.valid)
-                                )
-                                : null;
-                            if (oracleFirstValid) {
-                                const dx = Number(oracleFirstValid.x) - Number(clipped[0].x);
-                                const dy = Number(oracleFirstValid.y) - Number(clipped[0].y);
-                                for (const p of clipped) {
-                                    p.x = Number(p.x) + dx;
-                                    p.y = Number(p.y) + dy;
-                                }
-                                compareMountDebug = {
-                                    plannerStart: { x: Number(clipped[0].x), y: Number(clipped[0].y) },
-                                    oracleStart: { x: Number(oracleFirstValid.x), y: Number(oracleFirstValid.y) },
-                                    dxPx: Number(dx),
-                                    dyPx: Number(dy),
-                                };
-                            }
                         }
                         if (overlayDegradeRisk) {
                             this.overlayRenderer.drawImagePoints(clipped, '#ff00ff', 2);
@@ -5961,7 +6069,7 @@ class Visualizer {
         if (document.getElementById('toggle-oracle-trajectory')?.checked) {
             const oracleScreenPoints = this.currentFrameData?.vehicle?.oracle_trajectory_screen_points;
             let drewScreenOracle = false;
-            if (Array.isArray(oracleScreenPoints) && oracleScreenPoints.length > 1) {
+            if (!forceMainViewEgoAnchoring && Array.isArray(oracleScreenPoints) && oracleScreenPoints.length > 1) {
                 const validOracleScreenPoints = oracleScreenPoints
                     .map((p) => ({ x: Number(p?.x), y: Number(p?.y), valid: Boolean(p?.valid) }))
                     .filter((p) => Number.isFinite(p.x) && Number.isFinite(p.y) && p.valid);
@@ -5976,7 +6084,7 @@ class Visualizer {
             }
             const oracleWorldPoints = this.currentFrameData?.vehicle?.oracle_trajectory_world_points;
             let drewWorldOracle = false;
-            if (!drewScreenOracle && Array.isArray(oracleWorldPoints) && oracleWorldPoints.length > 1) {
+            if (!forceMainViewEgoAnchoring && !drewScreenOracle && Array.isArray(oracleWorldPoints) && oracleWorldPoints.length > 1) {
                 const projectedWorldOracle = this.projectWorldPointsToImage(oracleWorldPoints);
                 if (projectedWorldOracle && projectedWorldOracle.length > 1) {
                     if (overlayDegradeRisk) {
@@ -5994,8 +6102,11 @@ class Visualizer {
             if (renderOracle.length > 0) {
                 oraclePathForMetrics = renderOracle;
             }
-            if (!drewScreenOracle && !drewWorldOracle && renderOracle.length > 0) {
-                const projectedOracle = this.projectTrajectoryToImage(renderOracle);
+            const renderOracleDisplay = forceMainViewEgoAnchoring
+                ? this.alignPathStartToAnchor(renderOracle, mainViewAnchorPoint)
+                : renderOracle;
+            if (!drewScreenOracle && !drewWorldOracle && renderOracleDisplay.length > 0) {
+                const projectedOracle = this.projectTrajectoryToImage(renderOracleDisplay);
                 if (projectedOracle && projectedOracle.length > 1) {
                     if (overlayDegradeRisk) {
                         this.overlayRenderer.drawImagePoints(projectedOracle, '#66ff66', 2);
@@ -6003,7 +6114,7 @@ class Visualizer {
                         this.overlayRenderer.drawImagePath(projectedOracle, '#66ff66', 2);
                     }
                 } else {
-                    const sortedOracle = [...renderOracle]
+                    const sortedOracle = [...renderOracleDisplay]
                         .filter(point => point.y >= 0)
                         .sort((a, b) => (a.y || 0) - (b.y || 0));
                     this.overlayRenderer.drawTrajectory(
@@ -6016,30 +6127,29 @@ class Visualizer {
                 }
             }
         }
-        const egoAnchoredCompareMode = true;
-        if (egoAnchoredCompareMode && compareMountDebug) {
-            const ps = compareMountDebug.plannerStart;
-            const os = compareMountDebug.oracleStart;
-            const residualPx = Math.hypot(Number(ps.x) - Number(os.x), Number(ps.y) - Number(os.y));
-            this.projectionDiagnostics.traj_compare_mount_dx_px = Number(compareMountDebug.dxPx);
-            this.projectionDiagnostics.traj_compare_mount_dy_px = Number(compareMountDebug.dyPx);
-            this.projectionDiagnostics.traj_compare_mount_residual_px = Number(residualPx);
-
-            // Draw explicit mount markers so start-point alignment is visually unambiguous.
-            const ctx = this.overlayRenderer.ctx;
-            if (ctx) {
-                ctx.save();
-                ctx.lineWidth = 2;
-                ctx.strokeStyle = '#66ff66';
-                ctx.beginPath();
-                ctx.arc(os.x, os.y, 6, 0, Math.PI * 2);
-                ctx.stroke();
-                ctx.strokeStyle = '#ff00ff';
-                ctx.beginPath();
-                ctx.arc(ps.x, ps.y, 3, 0, Math.PI * 2);
-                ctx.stroke();
-                ctx.restore();
+        if (forceMainViewEgoAnchoring) {
+            const projectedAnchor = this.projectTrajectoryToImage([mainViewAnchorPoint]);
+            if (Array.isArray(projectedAnchor) && projectedAnchor.length > 0) {
+                const anchorPx = projectedAnchor[0];
+                const ctx = this.overlayRenderer.ctx;
+                if (ctx && Number.isFinite(Number(anchorPx?.x)) && Number.isFinite(Number(anchorPx?.y))) {
+                    ctx.save();
+                    ctx.strokeStyle = '#ffffff';
+                    ctx.fillStyle = '#ffffff';
+                    ctx.lineWidth = 1.5;
+                    ctx.beginPath();
+                    ctx.arc(anchorPx.x, anchorPx.y, 3, 0, Math.PI * 2);
+                    ctx.fill();
+                    ctx.beginPath();
+                    ctx.arc(anchorPx.x, anchorPx.y, 6, 0, Math.PI * 2);
+                    ctx.stroke();
+                    ctx.restore();
+                }
+                this.projectionDiagnostics.traj_compare_anchor_px_x = Number(anchorPx?.x);
+                this.projectionDiagnostics.traj_compare_anchor_px_y = Number(anchorPx?.y);
             }
+            this.projectionDiagnostics.traj_compare_anchor_local_x_m = Number(mainViewAnchorPoint.x);
+            this.projectionDiagnostics.traj_compare_anchor_local_y_m = Number(mainViewAnchorPoint.y);
         }
         const lateralMetrics = this.computeLateralErrorMetrics(plannerPathForMetrics, oraclePathForMetrics);
         this.projectionDiagnostics.lateral_error_5m = lateralMetrics.err5m;
@@ -7174,6 +7284,8 @@ class Visualizer {
                     'control/steering_jerk_limited_delta',
                     'control/steering_hard_clip_delta',
                     'control/steering_smoothing_delta',
+                    'control/steering_authority_gap',
+                    'control/steering_first_limiter_stage_code',
                     'control/feedback_steering',
                     'control/feedforward_steering'
                 ],

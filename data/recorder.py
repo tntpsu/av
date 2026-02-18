@@ -913,6 +913,24 @@ class DataRecorder:
             dtype=np.int8
         )
         self.h5_file.create_dataset(
+            "control/curve_mode_speed_cap_active",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int8
+        )
+        self.h5_file.create_dataset(
+            "control/curve_mode_speed_cap_clamped",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int8
+        )
+        self.h5_file.create_dataset(
+            "control/curve_mode_speed_cap_value",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
             "control/launch_throttle_cap",
             shape=(0,),
             maxshape=max_shape,
@@ -1093,6 +1111,72 @@ class DataRecorder:
             dtype=np.float32
         )
         self.h5_file.create_dataset(
+            "control/curve_entry_assist_active",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int8
+        )
+        self.h5_file.create_dataset(
+            "control/curve_entry_assist_triggered",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int8
+        )
+        self.h5_file.create_dataset(
+            "control/curve_entry_assist_rearm_frames_remaining",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int16
+        )
+        self.h5_file.create_dataset(
+            "control/curve_entry_schedule_active",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int8
+        )
+        self.h5_file.create_dataset(
+            "control/curve_entry_schedule_triggered",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int8
+        )
+        self.h5_file.create_dataset(
+            "control/curve_entry_schedule_handoff_triggered",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int8
+        )
+        self.h5_file.create_dataset(
+            "control/curve_entry_schedule_frames_remaining",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int16
+        )
+        self.h5_file.create_dataset(
+            "control/curve_commit_mode_active",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int8
+        )
+        self.h5_file.create_dataset(
+            "control/curve_commit_mode_triggered",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int8
+        )
+        self.h5_file.create_dataset(
+            "control/curve_commit_mode_handoff_triggered",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int8
+        )
+        self.h5_file.create_dataset(
+            "control/curve_commit_mode_frames_remaining",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int16
+        )
+        self.h5_file.create_dataset(
             "control/steering_jerk_limit_effective",
             shape=(0,),
             maxshape=max_shape,
@@ -1124,6 +1208,24 @@ class DataRecorder:
         )
         self.h5_file.create_dataset(
             "control/steering_jerk_limit_unlock_rate_delta_needed",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/steering_authority_gap",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/steering_transfer_ratio",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/steering_first_limiter_stage_code",
             shape=(0,),
             maxshape=max_shape,
             dtype=np.float32
@@ -2954,6 +3056,9 @@ class DataRecorder:
         target_speed_final_list = []
         target_speed_slew_active_list = []
         target_speed_ramp_active_list = []
+        curve_mode_speed_cap_active_list = []
+        curve_mode_speed_cap_clamped_list = []
+        curve_mode_speed_cap_value_list = []
         launch_throttle_cap_list = []
         launch_throttle_cap_active_list = []
         steering_pre_rate_limit_list = []
@@ -2984,12 +3089,26 @@ class DataRecorder:
         steering_rate_limit_requested_delta_list = []
         steering_rate_limit_margin_list = []
         steering_rate_limit_unlock_delta_needed_list = []
+        curve_entry_assist_active_list = []
+        curve_entry_assist_triggered_list = []
+        curve_entry_assist_rearm_frames_remaining_list = []
+        curve_entry_schedule_active_list = []
+        curve_entry_schedule_triggered_list = []
+        curve_entry_schedule_handoff_triggered_list = []
+        curve_entry_schedule_frames_remaining_list = []
+        curve_commit_mode_active_list = []
+        curve_commit_mode_triggered_list = []
+        curve_commit_mode_handoff_triggered_list = []
+        curve_commit_mode_frames_remaining_list = []
         steering_jerk_limit_effective_list = []
         steering_jerk_curve_scale_list = []
         steering_jerk_limit_requested_rate_delta_list = []
         steering_jerk_limit_allowed_rate_delta_list = []
         steering_jerk_limit_margin_list = []
         steering_jerk_limit_unlock_rate_delta_needed_list = []
+        steering_authority_gap_list = []
+        steering_transfer_ratio_list = []
+        steering_first_limiter_stage_code_list = []
         accel_feedforward_list = []
         brake_feedforward_list = []
         accel_capped_list = []
@@ -3047,6 +3166,15 @@ class DataRecorder:
             target_speed_final_list.append(getattr(cc, 'target_speed_final', 0.0) or 0.0)
             target_speed_slew_active_list.append(1 if getattr(cc, 'target_speed_slew_active', False) else 0)
             target_speed_ramp_active_list.append(1 if getattr(cc, 'target_speed_ramp_active', False) else 0)
+            curve_mode_speed_cap_active_list.append(
+                1 if getattr(cc, 'curve_mode_speed_cap_active', False) else 0
+            )
+            curve_mode_speed_cap_clamped_list.append(
+                1 if getattr(cc, 'curve_mode_speed_cap_clamped', False) else 0
+            )
+            curve_mode_speed_cap_value_list.append(
+                getattr(cc, 'curve_mode_speed_cap_value', 0.0) or 0.0
+            )
             launch_throttle_cap_list.append(getattr(cc, 'launch_throttle_cap', 0.0) or 0.0)
             launch_throttle_cap_active_list.append(1 if getattr(cc, 'launch_throttle_cap_active', False) else 0)
             steering_pre_rate_limit_list.append(getattr(cc, 'steering_pre_rate_limit', 0.0) or 0.0)
@@ -3079,12 +3207,46 @@ class DataRecorder:
             steering_rate_limit_requested_delta_list.append(getattr(cc, 'steering_rate_limit_requested_delta', 0.0) or 0.0)
             steering_rate_limit_margin_list.append(getattr(cc, 'steering_rate_limit_margin', 0.0) or 0.0)
             steering_rate_limit_unlock_delta_needed_list.append(getattr(cc, 'steering_rate_limit_unlock_delta_needed', 0.0) or 0.0)
+            curve_entry_assist_active_list.append(1 if getattr(cc, 'curve_entry_assist_active', False) else 0)
+            curve_entry_assist_triggered_list.append(1 if getattr(cc, 'curve_entry_assist_triggered', False) else 0)
+            curve_entry_assist_rearm_frames_remaining_list.append(
+                int(getattr(cc, 'curve_entry_assist_rearm_frames_remaining', 0) or 0)
+            )
+            curve_entry_schedule_active_list.append(
+                1 if getattr(cc, 'curve_entry_schedule_active', False) else 0
+            )
+            curve_entry_schedule_triggered_list.append(
+                1 if getattr(cc, 'curve_entry_schedule_triggered', False) else 0
+            )
+            curve_entry_schedule_handoff_triggered_list.append(
+                1 if getattr(cc, 'curve_entry_schedule_handoff_triggered', False) else 0
+            )
+            curve_entry_schedule_frames_remaining_list.append(
+                int(getattr(cc, 'curve_entry_schedule_frames_remaining', 0) or 0)
+            )
+            curve_commit_mode_active_list.append(
+                1 if getattr(cc, 'curve_commit_mode_active', False) else 0
+            )
+            curve_commit_mode_triggered_list.append(
+                1 if getattr(cc, 'curve_commit_mode_triggered', False) else 0
+            )
+            curve_commit_mode_handoff_triggered_list.append(
+                1 if getattr(cc, 'curve_commit_mode_handoff_triggered', False) else 0
+            )
+            curve_commit_mode_frames_remaining_list.append(
+                int(getattr(cc, 'curve_commit_mode_frames_remaining', 0) or 0)
+            )
             steering_jerk_limit_effective_list.append(getattr(cc, 'steering_jerk_limit_effective', 0.0) or 0.0)
             steering_jerk_curve_scale_list.append(getattr(cc, 'steering_jerk_curve_scale', 0.0) or 0.0)
             steering_jerk_limit_requested_rate_delta_list.append(getattr(cc, 'steering_jerk_limit_requested_rate_delta', 0.0) or 0.0)
             steering_jerk_limit_allowed_rate_delta_list.append(getattr(cc, 'steering_jerk_limit_allowed_rate_delta', 0.0) or 0.0)
             steering_jerk_limit_margin_list.append(getattr(cc, 'steering_jerk_limit_margin', 0.0) or 0.0)
             steering_jerk_limit_unlock_rate_delta_needed_list.append(getattr(cc, 'steering_jerk_limit_unlock_rate_delta_needed', 0.0) or 0.0)
+            steering_authority_gap_list.append(getattr(cc, 'steering_authority_gap', 0.0) or 0.0)
+            steering_transfer_ratio_list.append(getattr(cc, 'steering_transfer_ratio', 0.0) or 0.0)
+            steering_first_limiter_stage_code_list.append(
+                getattr(cc, 'steering_first_limiter_stage_code', 0.0) or 0.0
+            )
         
         if timestamps:
             current_size = self.h5_file["control/timestamps"].shape[0]
@@ -3109,6 +3271,8 @@ class DataRecorder:
                        "emergency_stop", "target_speed_raw",
                        "target_speed_post_limits", "target_speed_planned", "target_speed_final",
                        "target_speed_slew_active", "target_speed_ramp_active",
+                       "curve_mode_speed_cap_active", "curve_mode_speed_cap_clamped",
+                       "curve_mode_speed_cap_value",
                        "launch_throttle_cap", "launch_throttle_cap_active",
                        "steering_pre_rate_limit", "steering_post_rate_limit",
                        "steering_post_jerk_limit", "steering_post_sign_flip",
@@ -3125,9 +3289,17 @@ class DataRecorder:
                        "steering_rate_limit_after_curve", "steering_rate_limit_after_floor",
                        "steering_rate_limit_effective", "steering_rate_limit_requested_delta",
                        "steering_rate_limit_margin", "steering_rate_limit_unlock_delta_needed",
+                       "curve_entry_assist_active", "curve_entry_assist_triggered",
+                       "curve_entry_assist_rearm_frames_remaining",
+                       "curve_entry_schedule_active", "curve_entry_schedule_triggered",
+                       "curve_entry_schedule_handoff_triggered", "curve_entry_schedule_frames_remaining",
+                       "curve_commit_mode_active", "curve_commit_mode_triggered",
+                       "curve_commit_mode_handoff_triggered", "curve_commit_mode_frames_remaining",
                        "steering_jerk_limit_effective", "steering_jerk_curve_scale",
                        "steering_jerk_limit_requested_rate_delta", "steering_jerk_limit_allowed_rate_delta",
-                       "steering_jerk_limit_margin", "steering_jerk_limit_unlock_rate_delta_needed"]:
+                       "steering_jerk_limit_margin", "steering_jerk_limit_unlock_rate_delta_needed",
+                       "steering_authority_gap", "steering_transfer_ratio",
+                       "steering_first_limiter_stage_code"]:
                 self.h5_file[f"control/{key}"].resize((new_size,))
             
             # Write data
@@ -3182,6 +3354,13 @@ class DataRecorder:
             self.h5_file["control/target_speed_final"][current_size:] = target_speed_final_list
             self.h5_file["control/target_speed_slew_active"][current_size:] = np.array(target_speed_slew_active_list, dtype=np.int8)
             self.h5_file["control/target_speed_ramp_active"][current_size:] = np.array(target_speed_ramp_active_list, dtype=np.int8)
+            self.h5_file["control/curve_mode_speed_cap_active"][current_size:] = np.array(
+                curve_mode_speed_cap_active_list, dtype=np.int8
+            )
+            self.h5_file["control/curve_mode_speed_cap_clamped"][current_size:] = np.array(
+                curve_mode_speed_cap_clamped_list, dtype=np.int8
+            )
+            self.h5_file["control/curve_mode_speed_cap_value"][current_size:] = curve_mode_speed_cap_value_list
             self.h5_file["control/launch_throttle_cap"][current_size:] = launch_throttle_cap_list
             self.h5_file["control/launch_throttle_cap_active"][current_size:] = np.array(launch_throttle_cap_active_list, dtype=np.int8)
             self.h5_file["control/steering_pre_rate_limit"][current_size:] = steering_pre_rate_limit_list
@@ -3215,12 +3394,48 @@ class DataRecorder:
             self.h5_file["control/steering_rate_limit_requested_delta"][current_size:] = steering_rate_limit_requested_delta_list
             self.h5_file["control/steering_rate_limit_margin"][current_size:] = steering_rate_limit_margin_list
             self.h5_file["control/steering_rate_limit_unlock_delta_needed"][current_size:] = steering_rate_limit_unlock_delta_needed_list
+            self.h5_file["control/curve_entry_assist_active"][current_size:] = np.array(
+                curve_entry_assist_active_list, dtype=np.int8
+            )
+            self.h5_file["control/curve_entry_assist_triggered"][current_size:] = np.array(
+                curve_entry_assist_triggered_list, dtype=np.int8
+            )
+            self.h5_file["control/curve_entry_assist_rearm_frames_remaining"][current_size:] = np.array(
+                curve_entry_assist_rearm_frames_remaining_list, dtype=np.int16
+            )
+            self.h5_file["control/curve_entry_schedule_active"][current_size:] = np.array(
+                curve_entry_schedule_active_list, dtype=np.int8
+            )
+            self.h5_file["control/curve_entry_schedule_triggered"][current_size:] = np.array(
+                curve_entry_schedule_triggered_list, dtype=np.int8
+            )
+            self.h5_file["control/curve_entry_schedule_handoff_triggered"][current_size:] = np.array(
+                curve_entry_schedule_handoff_triggered_list, dtype=np.int8
+            )
+            self.h5_file["control/curve_entry_schedule_frames_remaining"][current_size:] = np.array(
+                curve_entry_schedule_frames_remaining_list, dtype=np.int16
+            )
+            self.h5_file["control/curve_commit_mode_active"][current_size:] = np.array(
+                curve_commit_mode_active_list, dtype=np.int8
+            )
+            self.h5_file["control/curve_commit_mode_triggered"][current_size:] = np.array(
+                curve_commit_mode_triggered_list, dtype=np.int8
+            )
+            self.h5_file["control/curve_commit_mode_handoff_triggered"][current_size:] = np.array(
+                curve_commit_mode_handoff_triggered_list, dtype=np.int8
+            )
+            self.h5_file["control/curve_commit_mode_frames_remaining"][current_size:] = np.array(
+                curve_commit_mode_frames_remaining_list, dtype=np.int16
+            )
             self.h5_file["control/steering_jerk_limit_effective"][current_size:] = steering_jerk_limit_effective_list
             self.h5_file["control/steering_jerk_curve_scale"][current_size:] = steering_jerk_curve_scale_list
             self.h5_file["control/steering_jerk_limit_requested_rate_delta"][current_size:] = steering_jerk_limit_requested_rate_delta_list
             self.h5_file["control/steering_jerk_limit_allowed_rate_delta"][current_size:] = steering_jerk_limit_allowed_rate_delta_list
             self.h5_file["control/steering_jerk_limit_margin"][current_size:] = steering_jerk_limit_margin_list
             self.h5_file["control/steering_jerk_limit_unlock_rate_delta_needed"][current_size:] = steering_jerk_limit_unlock_rate_delta_needed_list
+            self.h5_file["control/steering_authority_gap"][current_size:] = steering_authority_gap_list
+            self.h5_file["control/steering_transfer_ratio"][current_size:] = steering_transfer_ratio_list
+            self.h5_file["control/steering_first_limiter_stage_code"][current_size:] = steering_first_limiter_stage_code_list
     
     def _write_perception_outputs(self, frames: List[RecordingFrame]):
         """Write perception outputs to HDF5."""

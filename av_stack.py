@@ -282,6 +282,38 @@ def estimate_single_lane_pair(
     return left_lane_line_x, right_lane_line_x
 
 
+def blend_lane_pair_with_previous(
+    estimated_left_lane_x: float,
+    estimated_right_lane_x: float,
+    previous_left_lane_x: float,
+    previous_right_lane_x: float,
+    blend_alpha: float,
+    center_shift_cap_m: float,
+) -> Tuple[float, float]:
+    """
+    Blend fallback-estimated lanes with previous lanes and cap center shift.
+
+    This keeps fallback bounded when dashed-line gaps are transient so
+    synthetic lane reconstruction does not cause large centerline jumps.
+    """
+    alpha = float(np.clip(blend_alpha, 0.0, 1.0))
+    left_lane_x = (1.0 - alpha) * float(previous_left_lane_x) + alpha * float(
+        estimated_left_lane_x
+    )
+    right_lane_x = (1.0 - alpha) * float(previous_right_lane_x) + alpha * float(
+        estimated_right_lane_x
+    )
+    prev_center = 0.5 * (float(previous_left_lane_x) + float(previous_right_lane_x))
+    center = 0.5 * (left_lane_x + right_lane_x)
+    center_shift = center - prev_center
+    cap = max(0.0, float(center_shift_cap_m))
+    if cap > 0.0 and abs(center_shift) > cap:
+        correction = np.sign(center_shift) * (abs(center_shift) - cap)
+        left_lane_x -= correction
+        right_lane_x -= correction
+    return float(left_lane_x), float(right_lane_x)
+
+
 @dataclass
 class ControlConfig:
     """Control configuration parameters."""
@@ -757,6 +789,60 @@ class AVStack:
             steering_jerk_curve_scale_max=lateral_cfg.get('steering_jerk_curve_scale_max', 1.0),
             steering_jerk_curve_min=lateral_cfg.get('steering_jerk_curve_min', 0.003),
             steering_jerk_curve_max=lateral_cfg.get('steering_jerk_curve_max', 0.015),
+            curve_entry_assist_enabled=bool(lateral_cfg.get('curve_entry_assist_enabled', False)),
+            curve_entry_assist_error_min=float(lateral_cfg.get('curve_entry_assist_error_min', 0.30)),
+            curve_entry_assist_heading_error_min=float(
+                lateral_cfg.get('curve_entry_assist_heading_error_min', 0.10)
+            ),
+            curve_entry_assist_curvature_min=float(
+                lateral_cfg.get('curve_entry_assist_curvature_min', 0.010)
+            ),
+            curve_entry_assist_rate_boost=float(lateral_cfg.get('curve_entry_assist_rate_boost', 1.15)),
+            curve_entry_assist_jerk_boost=float(lateral_cfg.get('curve_entry_assist_jerk_boost', 1.10)),
+            curve_entry_assist_max_frames=int(lateral_cfg.get('curve_entry_assist_max_frames', 18)),
+            curve_entry_assist_watchdog_rate_delta_max=float(
+                lateral_cfg.get('curve_entry_assist_watchdog_rate_delta_max', 0.22)
+            ),
+            curve_entry_assist_rearm_frames=int(lateral_cfg.get('curve_entry_assist_rearm_frames', 20)),
+            curve_entry_schedule_enabled=bool(
+                lateral_cfg.get('curve_entry_schedule_enabled', False)
+            ),
+            curve_entry_schedule_frames=int(
+                lateral_cfg.get('curve_entry_schedule_frames', 18)
+            ),
+            curve_entry_schedule_min_rate=float(
+                lateral_cfg.get('curve_entry_schedule_min_rate', 0.22)
+            ),
+            curve_entry_schedule_min_jerk=float(
+                lateral_cfg.get('curve_entry_schedule_min_jerk', 0.14)
+            ),
+            curve_entry_schedule_min_hold_frames=int(
+                lateral_cfg.get('curve_entry_schedule_min_hold_frames', 6)
+            ),
+            curve_entry_schedule_handoff_transfer_ratio=float(
+                lateral_cfg.get('curve_entry_schedule_handoff_transfer_ratio', 0.65)
+            ),
+            curve_entry_schedule_handoff_error_fall=float(
+                lateral_cfg.get('curve_entry_schedule_handoff_error_fall', 0.03)
+            ),
+            curve_commit_mode_enabled=bool(
+                lateral_cfg.get('curve_commit_mode_enabled', False)
+            ),
+            curve_commit_mode_max_frames=int(
+                lateral_cfg.get('curve_commit_mode_max_frames', 20)
+            ),
+            curve_commit_mode_min_rate=float(
+                lateral_cfg.get('curve_commit_mode_min_rate', 0.22)
+            ),
+            curve_commit_mode_min_jerk=float(
+                lateral_cfg.get('curve_commit_mode_min_jerk', 0.14)
+            ),
+            curve_commit_mode_transfer_ratio_target=float(
+                lateral_cfg.get('curve_commit_mode_transfer_ratio_target', 0.72)
+            ),
+            curve_commit_mode_error_fall=float(
+                lateral_cfg.get('curve_commit_mode_error_fall', 0.03)
+            ),
             speed_gain_min_speed=lateral_cfg.get('speed_gain_min_speed', 4.0),
             speed_gain_max_speed=lateral_cfg.get('speed_gain_max_speed', 10.0),
             speed_gain_min=lateral_cfg.get('speed_gain_min', 1.0),
@@ -781,6 +867,15 @@ class AVStack:
         self.trajectory_config = trajectory_cfg
         self.trajectory_source = str(trajectory_cfg.get('trajectory_source', 'planner')).lower()
         self.safety_config = safety_cfg
+        self.curve_mode_speed_cap_enabled = bool(
+            lateral_cfg.get('curve_mode_speed_cap_enabled', False)
+        )
+        self.curve_mode_speed_cap_mps = float(
+            lateral_cfg.get('curve_mode_speed_cap_mps', 7.0)
+        )
+        self.curve_mode_speed_cap_min_ratio = float(
+            lateral_cfg.get('curve_mode_speed_cap_min_ratio', 0.55)
+        )
         self.record_segmentation_mask = bool(
             perception_cfg.get("record_segmentation_mask", False)
         )
@@ -860,6 +955,7 @@ class AVStack:
         # Initialize previous lane history for stale-data fallback paths
         self.previous_left_lane_x = None
         self.previous_right_lane_x = None
+        self.low_visibility_fallback_streak = 0
         self.lane_center_ema = None
         self.lane_width_ema = None
         self.last_gt_lane_width = None
@@ -1786,9 +1882,28 @@ class AVStack:
                     left_x_vehicle, right_x_vehicle = right_x_vehicle, left_x_vehicle
                     calculated_lane_width = right_x_vehicle - left_x_vehicle
 
+                perception_cfg = self.config.get("perception", {}) if isinstance(self.config, dict) else {}
+                low_visibility_fallback_enabled = bool(
+                    perception_cfg.get("low_visibility_fallback_enabled", True)
+                )
+                low_visibility_fallback_blend_alpha = float(
+                    perception_cfg.get("low_visibility_fallback_blend_alpha", 0.35)
+                )
+                low_visibility_fallback_max_consecutive_frames = int(
+                    perception_cfg.get("low_visibility_fallback_max_consecutive_frames", 8)
+                )
+                low_visibility_fallback_center_shift_cap_m = float(
+                    perception_cfg.get("low_visibility_fallback_center_shift_cap_m", 0.25)
+                )
+                low_visibility_fallback_used = False
                 # Lookahead-local visibility gate: when dashed centerline gaps land near
                 # lookahead row, one lane can be weak while global fit still exists.
-                if self.previous_left_lane_x is not None and self.previous_right_lane_x is not None and not using_stale_data:
+                if (
+                    low_visibility_fallback_enabled
+                    and self.previous_left_lane_x is not None
+                    and self.previous_right_lane_x is not None
+                    and not using_stale_data
+                ):
                     left_low_lookahead = is_lane_low_visibility_at_lookahead(
                         fit_points_left, image_width, "left", y_image_at_lookahead
                     )
@@ -1799,44 +1914,80 @@ class AVStack:
                         clamp_events.append("right_lane_lookahead_low_visibility")
                         actual_detected_left_lane_x = left_x_vehicle
                         actual_detected_right_lane_x = right_x_vehicle
-                        last_width = float(self.previous_right_lane_x - self.previous_left_lane_x)
-                        left_x_vehicle, right_x_vehicle = estimate_single_lane_pair(
-                            single_x_vehicle=float(left_x_vehicle),
-                            is_left_lane=True,
-                            last_width=last_width,
-                            default_width=7.0,
-                            width_min=1.0,
-                            width_max=10.0,
-                        )
-                        calculated_lane_width = right_x_vehicle - left_x_vehicle
-                        using_stale_data = True
-                        stale_data_reason = "right_lane_low_visibility"
-                        reject_reason = reject_reason or stale_data_reason
-                        logger.warning(
-                            f"[Frame {self.frame_count}] [PERCEPTION VALIDATION] "
-                            "Right lane low visibility near lookahead; using left lane + last width."
-                        )
+                        if self.low_visibility_fallback_streak < low_visibility_fallback_max_consecutive_frames:
+                            last_width = float(self.previous_right_lane_x - self.previous_left_lane_x)
+                            est_left, est_right = estimate_single_lane_pair(
+                                single_x_vehicle=float(left_x_vehicle),
+                                is_left_lane=True,
+                                last_width=last_width,
+                                default_width=7.0,
+                                width_min=1.0,
+                                width_max=10.0,
+                            )
+                            left_x_vehicle, right_x_vehicle = blend_lane_pair_with_previous(
+                                est_left,
+                                est_right,
+                                float(self.previous_left_lane_x),
+                                float(self.previous_right_lane_x),
+                                low_visibility_fallback_blend_alpha,
+                                low_visibility_fallback_center_shift_cap_m,
+                            )
+                            calculated_lane_width = right_x_vehicle - left_x_vehicle
+                            using_stale_data = True
+                            stale_data_reason = "right_lane_low_visibility"
+                            reject_reason = reject_reason or stale_data_reason
+                            low_visibility_fallback_used = True
+                            logger.warning(
+                                f"[Frame {self.frame_count}] [PERCEPTION VALIDATION] "
+                                "Right lane low visibility near lookahead; using bounded blended fallback."
+                            )
+                        else:
+                            clamp_events.append("low_visibility_fallback_ttl_exceeded")
+                            logger.warning(
+                                f"[Frame {self.frame_count}] [PERCEPTION VALIDATION] "
+                                "Right lane low visibility fallback skipped (TTL exceeded)."
+                            )
                     elif left_low_lookahead and not right_low_lookahead:
                         clamp_events.append("left_lane_lookahead_low_visibility")
                         actual_detected_left_lane_x = left_x_vehicle
                         actual_detected_right_lane_x = right_x_vehicle
-                        last_width = float(self.previous_right_lane_x - self.previous_left_lane_x)
-                        left_x_vehicle, right_x_vehicle = estimate_single_lane_pair(
-                            single_x_vehicle=float(right_x_vehicle),
-                            is_left_lane=False,
-                            last_width=last_width,
-                            default_width=7.0,
-                            width_min=1.0,
-                            width_max=10.0,
-                        )
-                        calculated_lane_width = right_x_vehicle - left_x_vehicle
-                        using_stale_data = True
-                        stale_data_reason = "left_lane_low_visibility"
-                        reject_reason = reject_reason or stale_data_reason
-                        logger.warning(
-                            f"[Frame {self.frame_count}] [PERCEPTION VALIDATION] "
-                            "Left lane low visibility near lookahead; using right lane + last width."
-                        )
+                        if self.low_visibility_fallback_streak < low_visibility_fallback_max_consecutive_frames:
+                            last_width = float(self.previous_right_lane_x - self.previous_left_lane_x)
+                            est_left, est_right = estimate_single_lane_pair(
+                                single_x_vehicle=float(right_x_vehicle),
+                                is_left_lane=False,
+                                last_width=last_width,
+                                default_width=7.0,
+                                width_min=1.0,
+                                width_max=10.0,
+                            )
+                            left_x_vehicle, right_x_vehicle = blend_lane_pair_with_previous(
+                                est_left,
+                                est_right,
+                                float(self.previous_left_lane_x),
+                                float(self.previous_right_lane_x),
+                                low_visibility_fallback_blend_alpha,
+                                low_visibility_fallback_center_shift_cap_m,
+                            )
+                            calculated_lane_width = right_x_vehicle - left_x_vehicle
+                            using_stale_data = True
+                            stale_data_reason = "left_lane_low_visibility"
+                            reject_reason = reject_reason or stale_data_reason
+                            low_visibility_fallback_used = True
+                            logger.warning(
+                                f"[Frame {self.frame_count}] [PERCEPTION VALIDATION] "
+                                "Left lane low visibility near lookahead; using bounded blended fallback."
+                            )
+                        else:
+                            clamp_events.append("low_visibility_fallback_ttl_exceeded")
+                            logger.warning(
+                                f"[Frame {self.frame_count}] [PERCEPTION VALIDATION] "
+                                "Left lane low visibility fallback skipped (TTL exceeded)."
+                            )
+                if low_visibility_fallback_used:
+                    self.low_visibility_fallback_streak += 1
+                else:
+                    self.low_visibility_fallback_streak = 0
                 
                 # CRITICAL FIX: Validate lane side consistency (left should be negative, right positive)
                 perception_cfg = self.config.get("perception", {}) if isinstance(self.config, dict) else {}
@@ -1885,7 +2036,11 @@ class AVStack:
                     )
                     
                     filled_from_visibility = False
-                    if self.previous_left_lane_x is not None and self.previous_right_lane_x is not None:
+                    if (
+                        low_visibility_fallback_enabled
+                        and self.previous_left_lane_x is not None
+                        and self.previous_right_lane_x is not None
+                    ):
                         left_low = is_lane_low_visibility(
                             fit_points_left, image_width, "left"
                         ) or is_lane_low_visibility_at_lookahead(
@@ -1899,41 +2054,73 @@ class AVStack:
                         last_width = float(self.previous_right_lane_x - self.previous_left_lane_x)
 
                         if right_low and not left_low:
-                            left_lane_line_x, right_lane_line_x = estimate_single_lane_pair(
-                                single_x_vehicle=float(left_x_vehicle),
-                                is_left_lane=True,
-                                last_width=last_width,
-                                default_width=7.0,
-                                width_min=min_lane_width,
-                                width_max=max_lane_width,
-                            )
-                            calculated_lane_width = right_lane_line_x - left_lane_line_x
-                            logger.warning(
-                                f"[Frame {self.frame_count}] [PERCEPTION VALIDATION] "
-                                "Right lane low visibility; using left lane + last width to fill right."
-                            )
-                            using_stale_data = True
-                            stale_data_reason = "right_lane_low_visibility"
-                            reject_reason = reject_reason or stale_data_reason
-                            filled_from_visibility = True
+                            if self.low_visibility_fallback_streak < low_visibility_fallback_max_consecutive_frames:
+                                est_left, est_right = estimate_single_lane_pair(
+                                    single_x_vehicle=float(left_x_vehicle),
+                                    is_left_lane=True,
+                                    last_width=last_width,
+                                    default_width=7.0,
+                                    width_min=min_lane_width,
+                                    width_max=max_lane_width,
+                                )
+                                left_lane_line_x, right_lane_line_x = blend_lane_pair_with_previous(
+                                    est_left,
+                                    est_right,
+                                    float(self.previous_left_lane_x),
+                                    float(self.previous_right_lane_x),
+                                    low_visibility_fallback_blend_alpha,
+                                    low_visibility_fallback_center_shift_cap_m,
+                                )
+                                calculated_lane_width = right_lane_line_x - left_lane_line_x
+                                logger.warning(
+                                    f"[Frame {self.frame_count}] [PERCEPTION VALIDATION] "
+                                    "Right lane low visibility; using bounded blended fallback to fill right."
+                                )
+                                using_stale_data = True
+                                stale_data_reason = "right_lane_low_visibility"
+                                reject_reason = reject_reason or stale_data_reason
+                                low_visibility_fallback_used = True
+                                filled_from_visibility = True
+                            else:
+                                clamp_events.append("low_visibility_fallback_ttl_exceeded")
+                                logger.warning(
+                                    f"[Frame {self.frame_count}] [PERCEPTION VALIDATION] "
+                                    "Right lane low visibility fallback skipped (TTL exceeded)."
+                                )
                         elif left_low and not right_low:
-                            left_lane_line_x, right_lane_line_x = estimate_single_lane_pair(
-                                single_x_vehicle=float(right_x_vehicle),
-                                is_left_lane=False,
-                                last_width=last_width,
-                                default_width=7.0,
-                                width_min=min_lane_width,
-                                width_max=max_lane_width,
-                            )
-                            calculated_lane_width = right_lane_line_x - left_lane_line_x
-                            logger.warning(
-                                f"[Frame {self.frame_count}] [PERCEPTION VALIDATION] "
-                                "Left lane low visibility; using right lane + last width to fill left."
-                            )
-                            using_stale_data = True
-                            stale_data_reason = "left_lane_low_visibility"
-                            reject_reason = reject_reason or stale_data_reason
-                            filled_from_visibility = True
+                            if self.low_visibility_fallback_streak < low_visibility_fallback_max_consecutive_frames:
+                                est_left, est_right = estimate_single_lane_pair(
+                                    single_x_vehicle=float(right_x_vehicle),
+                                    is_left_lane=False,
+                                    last_width=last_width,
+                                    default_width=7.0,
+                                    width_min=min_lane_width,
+                                    width_max=max_lane_width,
+                                )
+                                left_lane_line_x, right_lane_line_x = blend_lane_pair_with_previous(
+                                    est_left,
+                                    est_right,
+                                    float(self.previous_left_lane_x),
+                                    float(self.previous_right_lane_x),
+                                    low_visibility_fallback_blend_alpha,
+                                    low_visibility_fallback_center_shift_cap_m,
+                                )
+                                calculated_lane_width = right_lane_line_x - left_lane_line_x
+                                logger.warning(
+                                    f"[Frame {self.frame_count}] [PERCEPTION VALIDATION] "
+                                    "Left lane low visibility; using bounded blended fallback to fill left."
+                                )
+                                using_stale_data = True
+                                stale_data_reason = "left_lane_low_visibility"
+                                reject_reason = reject_reason or stale_data_reason
+                                low_visibility_fallback_used = True
+                                filled_from_visibility = True
+                            else:
+                                clamp_events.append("low_visibility_fallback_ttl_exceeded")
+                                logger.warning(
+                                    f"[Frame {self.frame_count}] [PERCEPTION VALIDATION] "
+                                    "Left lane low visibility fallback skipped (TTL exceeded)."
+                                )
 
                     is_first_frame = (self.frame_count == 0)
                     if is_first_frame and not filled_from_visibility:
@@ -3111,6 +3298,33 @@ class AVStack:
         else:
             self.straight_target_speed_smoothed = adjusted_target_speed
             self.straight_speed_last_time = None
+        curve_mode_speed_cap_active = False
+        curve_mode_speed_cap_clamped = False
+        curve_mode_speed_cap_value = None
+        if self.curve_mode_speed_cap_enabled:
+            lat_ctrl = getattr(self.controller, "lateral_controller", None)
+            entry_frames_remaining = int(
+                getattr(lat_ctrl, "_curve_entry_schedule_frames_remaining", 0) or 0
+            )
+            commit_frames_remaining = int(
+                getattr(lat_ctrl, "_curve_commit_mode_frames_remaining", 0) or 0
+            )
+            curve_mode_speed_cap_active = (
+                entry_frames_remaining > 0 or commit_frames_remaining > 0
+            )
+            if curve_mode_speed_cap_active:
+                min_ratio = float(np.clip(self.curve_mode_speed_cap_min_ratio, 0.0, 1.0))
+                cap_speed = max(
+                    0.0,
+                    max(
+                        self.curve_mode_speed_cap_mps,
+                        min_ratio * float(base_speed),
+                    ),
+                )
+                curve_mode_speed_cap_value = float(cap_speed)
+                if adjusted_target_speed > cap_speed:
+                    adjusted_target_speed = cap_speed
+                    curve_mode_speed_cap_clamped = True
         target_speed_planned = None
         planned_accel = None
         if self.speed_planner_enabled and self.speed_planner is not None:
@@ -3346,6 +3560,9 @@ class AVStack:
                 control_command['target_speed_final'] = target_speed_final
                 control_command['target_speed_slew_active'] = target_speed_slew_active
                 control_command['target_speed_ramp_active'] = target_speed_ramp_active
+                control_command['curve_mode_speed_cap_active'] = curve_mode_speed_cap_active
+                control_command['curve_mode_speed_cap_clamped'] = curve_mode_speed_cap_clamped
+                control_command['curve_mode_speed_cap_value'] = curve_mode_speed_cap_value
                 
                 # If emergency braking was triggered, override throttle/brake but keep steering
                 if brake_override > 0:
@@ -4607,6 +4824,13 @@ class AVStack:
             target_speed_final=control_command.get('target_speed_final'),
             target_speed_slew_active=bool(control_command.get('target_speed_slew_active', False)),
             target_speed_ramp_active=bool(control_command.get('target_speed_ramp_active', False)),
+            curve_mode_speed_cap_active=bool(
+                control_command.get('curve_mode_speed_cap_active', False)
+            ),
+            curve_mode_speed_cap_clamped=bool(
+                control_command.get('curve_mode_speed_cap_clamped', False)
+            ),
+            curve_mode_speed_cap_value=control_command.get('curve_mode_speed_cap_value'),
             launch_throttle_cap=control_command.get('launch_throttle_cap'),
             launch_throttle_cap_active=bool(control_command.get('launch_throttle_cap_active', False)),
             steering_pre_rate_limit=control_command.get('steering_pre_rate_limit'),
@@ -4637,12 +4861,38 @@ class AVStack:
             steering_rate_limit_requested_delta=control_command.get('steering_rate_limit_requested_delta'),
             steering_rate_limit_margin=control_command.get('steering_rate_limit_margin'),
             steering_rate_limit_unlock_delta_needed=control_command.get('steering_rate_limit_unlock_delta_needed'),
+            curve_entry_assist_active=bool(control_command.get('curve_entry_assist_active', False)),
+            curve_entry_assist_triggered=bool(control_command.get('curve_entry_assist_triggered', False)),
+            curve_entry_assist_rearm_frames_remaining=control_command.get(
+                'curve_entry_assist_rearm_frames_remaining'
+            ),
+            curve_entry_schedule_active=bool(control_command.get('curve_entry_schedule_active', False)),
+            curve_entry_schedule_triggered=bool(control_command.get('curve_entry_schedule_triggered', False)),
+            curve_entry_schedule_handoff_triggered=bool(
+                control_command.get('curve_entry_schedule_handoff_triggered', False)
+            ),
+            curve_entry_schedule_frames_remaining=control_command.get(
+                'curve_entry_schedule_frames_remaining'
+            ),
+            curve_commit_mode_active=bool(control_command.get('curve_commit_mode_active', False)),
+            curve_commit_mode_triggered=bool(
+                control_command.get('curve_commit_mode_triggered', False)
+            ),
+            curve_commit_mode_handoff_triggered=bool(
+                control_command.get('curve_commit_mode_handoff_triggered', False)
+            ),
+            curve_commit_mode_frames_remaining=control_command.get(
+                'curve_commit_mode_frames_remaining'
+            ),
             steering_jerk_limit_effective=control_command.get('steering_jerk_limit_effective'),
             steering_jerk_curve_scale=control_command.get('steering_jerk_curve_scale'),
             steering_jerk_limit_requested_rate_delta=control_command.get('steering_jerk_limit_requested_rate_delta'),
             steering_jerk_limit_allowed_rate_delta=control_command.get('steering_jerk_limit_allowed_rate_delta'),
             steering_jerk_limit_margin=control_command.get('steering_jerk_limit_margin'),
-            steering_jerk_limit_unlock_rate_delta_needed=control_command.get('steering_jerk_limit_unlock_rate_delta_needed')
+            steering_jerk_limit_unlock_rate_delta_needed=control_command.get('steering_jerk_limit_unlock_rate_delta_needed'),
+            steering_authority_gap=control_command.get('steering_authority_gap'),
+            steering_transfer_ratio=control_command.get('steering_transfer_ratio'),
+            steering_first_limiter_stage_code=control_command.get('steering_first_limiter_stage_code')
         )
         
         # Create trajectory output

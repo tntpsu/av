@@ -36,7 +36,7 @@ public class TrajectoryVisualizer : MonoBehaviour
     public bool showVehicleMarker = false;
 
     [Header("Perception Overlay")]
-    public bool showPerceptionLines = true;
+    public bool showPerceptionLines = false;
     public Color perceptionLaneColor = Color.red;
     public Color perceptionCenterColor = Color.cyan;
     public float perceptionLineWidth = 0.15f;
@@ -63,6 +63,17 @@ public class TrajectoryVisualizer : MonoBehaviour
     
     void Start()
     {
+        // Keep recordings clean by default: disable Unity perception helper lines unless explicitly requested.
+        bool? perceptionLinesOverride = GetCommandLineBool("--unity-show-perception-lines");
+        if (perceptionLinesOverride.HasValue)
+        {
+            showPerceptionLines = perceptionLinesOverride.Value;
+        }
+        else
+        {
+            showPerceptionLines = false;
+        }
+
         // CRITICAL FIX: Ensure goodColor is actually green (not yellow from Inspector)
         // If goodColor is yellow, the line will always be yellow!
         if (goodColor.r > 0.5f || goodColor.g < 0.5f || goodColor.b > 0.5f)
@@ -292,6 +303,26 @@ public class TrajectoryVisualizer : MonoBehaviour
         {
             Debug.Log("TrajectoryVisualizer: Initialized");
         }
+    }
+
+    private static bool? ParseCommandLineBool(string[] args, string name)
+    {
+        for (int i = 0; i < args.Length - 1; i++)
+        {
+            if (args[i] == name)
+            {
+                string value = args[i + 1].Trim().ToLowerInvariant();
+                if (value == "true" || value == "1") return true;
+                if (value == "false" || value == "0") return false;
+                return null;
+            }
+        }
+        return null;
+    }
+
+    private static bool? GetCommandLineBool(string name)
+    {
+        return ParseCommandLineBool(System.Environment.GetCommandLineArgs(), name);
     }
     
     void Update()
