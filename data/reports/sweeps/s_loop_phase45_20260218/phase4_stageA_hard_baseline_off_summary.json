@@ -1,0 +1,29 @@
+{
+  "input_recording": "data/recordings/recording_20260218_003307.h5",
+  "lock_recording": "data/recordings/recording_20260218_003307.h5",
+  "output_recording": "/Users/philiptullai/Documents/Coding/av/data/recordings/recording_20260218_120727.h5",
+  "frames_processed": 226,
+  "missing_locked_reference_frames": 0,
+  "latency": {
+    "lock_latency_ms": 0.0,
+    "lock_latency_frames_arg": 0,
+    "derived_fps": 29.999580005880446,
+    "derived_dt_s": 0.033333799999999414,
+    "latency_frames_from_ms": 0,
+    "total_latency_frames": 0,
+    "latency_clamped_frames": 0
+  },
+  "noise": {
+    "seed": 1337,
+    "std_x": 0.0,
+    "std_heading": 0.0,
+    "std_velocity": 0.0,
+    "std_curvature": 0.0
+  },
+  "steering_abs_diff_mean_vs_source": 0.09203349063103985,
+  "steering_abs_diff_p95_vs_source": 0.44258964657783506,
+  "throttle_abs_diff_mean_vs_source": 0.08190033375459328,
+  "throttle_abs_diff_p95_vs_source": 0.1599999964237213,
+  "brake_abs_diff_mean_vs_source": 0.05028085983219243,
+  "brake_abs_diff_p95_vs_source": 0.0885941032320261
+}

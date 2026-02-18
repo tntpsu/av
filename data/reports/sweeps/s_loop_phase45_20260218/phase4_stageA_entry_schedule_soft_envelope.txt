@@ -1,0 +1,22 @@
+recording: data/recordings/recording_20260218_120646.h5
+frames_total: 286
+initial_lane_sign: +0 (median_first_60=0.000)
+curve_start: 165 (t=11.32s) [auto_heading]
+centerline_cross: n/a
+offroad_emergency_stop: 276 (t=17.78s)
+first_failure: 276 (t=17.78s) reason=offroad_emergency_stop
+analysis_window: [0, 276)
+time_in_lane_before_failure: 14.67s
+
+phase_metrics (computed only before first failure):
+phase,frames,duration_s,stale_pct,ff_abs_mean,curvature_abs_mean,ff_engaged_pct
+straight,165,8.40,0.0,0.0000,0.00000,0.0
+curve_entry,18,0.80,100.0,0.0000,0.00000,0.0
+curve_commit,28,1.72,100.0,0.0000,0.00000,0.0
+curve_steady,65,3.65,100.0,0.0000,0.00000,0.0
+
+phase_authority_envelope:
+phase,transfer_p50,transfer_p25,gap_mean,gap_p95,rate_clip_pct,jerk_clip_pct,first_rate_pct,first_jerk_pct,sched_active_pct,commit_active_pct,assist_active_pct,envelope_pass,failed_checks
+curve_entry,0.995,0.993,0.0018,0.0033,0.0,50.0,0.0,50.0,0.0,0.0,0.0,1,none
+curve_commit,1.000,1.000,0.0000,0.0000,92.9,100.0,92.9,7.1,0.0,0.0,0.0,1,none
+curve_steady,0.802,0.802,0.0890,0.1485,49.2,86.2,49.2,43.1,0.0,0.0,0.0,1,none

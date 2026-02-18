@@ -1,0 +1,215 @@
+[0;34m╔══════════════════════════════════════════════════════════╗[0m
+[0;34m║          AV Stack Startup Script                        ║[0m
+[0;34m╚══════════════════════════════════════════════════════════╝[0m
+
+[0;34mActivating virtual environment...[0m
+[0;34mStarting bridge server on port 8000...[0m
+[0;32m✓ Bridge server started (PID: 28778)[0m
+  Logs: /Users/philiptullai/Documents/Coding/av/tmp/logs/av_bridge.log
+[0;34mWaiting for bridge server to be ready...[0m
+[0;32m✓ Bridge server is ready![0m
+
+[0;32m══════════════════════════════════════════════════════════[0m
+[0;32mBridge Server Status:[0m
+  URL: http://localhost:8000
+  Health: checking...
+[0;32m══════════════════════════════════════════════════════════[0m
+
+[0;34mLaunching Unity player...[0m
+[0;32m✓ Unity player launched (PID: 28788)[0m
+
+[1;33m╔══════════════════════════════════════════════════════════╗[0m
+[1;33m║              NEXT STEPS - UNITY EDITOR                  ║[0m
+[1;33m╚══════════════════════════════════════════════════════════╝[0m
+
+[0;34m1. Open Unity Editor[0m
+   Project: /Users/philiptullai/Documents/Coding/av/unity/AVSimulation
+
+[0;34m2. Open the scene[0m
+   Assets/Scenes/SampleScene.unity
+
+[0;34m3. In the Inspector, select your Car GameObject:[0m
+   • AV Bridge component → Check 'Enable AV Control'
+   • Make sure Car Controller and Camera Capture are assigned
+
+[0;34m4. Press [0;32m▶ PLAY[0;34m in Unity[0m
+
+[1;33mOr use: [0;32m./start_av_stack.sh --launch-unity[1;33m to auto-launch Unity[0m
+[1;33mOr use: [0;32m./start_av_stack.sh --run-unity-player[1;33m to run the built player[0m
+
+[1;33m══════════════════════════════════════════════════════════[0m
+
+[0;34mStarting AV Stack...[0m
+[0;34mPress Ctrl+C to stop everything[0m
+
+[UnityMemory] Configuration Parameters - Can be set up in boot.config
+    "memorysetup-allocator-temp-initial-block-size-main=262144"
+    "memorysetup-allocator-temp-initial-block-size-worker=262144"
+    "memorysetup-temp-allocator-size-background-worker=32768"
+    "memorysetup-temp-allocator-size-job-worker=262144"
+    "memorysetup-temp-allocator-size-preload-manager=262144"
+    "memorysetup-temp-allocator-size-nav-mesh-worker=65536"
+    "memorysetup-temp-allocator-size-audio-worker=65536"
+    "memorysetup-temp-allocator-size-cloud-worker=32768"
+    "memorysetup-bucket-allocator-granularity=16"
+    "memorysetup-bucket-allocator-bucket-count=8"
+    "memorysetup-bucket-allocator-block-size=4194304"
+    "memorysetup-bucket-allocator-block-count=1"
+    "memorysetup-main-allocator-block-size=16777216"
+    "memorysetup-thread-allocator-block-size=16777216"
+    "memorysetup-gfx-main-allocator-block-size=16777216"
+    "memorysetup-gfx-thread-allocator-block-size=16777216"
+    "memorysetup-cache-allocator-block-size=4194304"
+    "memorysetup-typetree-allocator-block-size=2097152"
+    "memorysetup-profiler-bucket-allocator-granularity=16"
+    "memorysetup-profiler-bucket-allocator-bucket-count=8"
+    "memorysetup-profiler-bucket-allocator-block-size=4194304"
+    "memorysetup-profiler-bucket-allocator-block-count=1"
+    "memorysetup-profiler-allocator-block-size=16777216"
+    "memorysetup-profiler-editor-allocator-block-size=1048576"
+    "memorysetup-temp-allocator-size-main=4194304"
+    "memorysetup-job-temp-allocator-block-size=2097152"
+    "memorysetup-job-temp-allocator-block-size-background=1048576"
+    "memorysetup-job-temp-allocator-reduction-small-platforms=262144"
+    "memorysetup-temp-allocator-size-gfx=262144"
+2026-02-18 12:11:31,816 - __main__ - ERROR - [Frame 294] EMERGENCY STOP: Car out of bounds! Lateral error 1.859m exceeds 1.849999237060547m threshold!
+2026-02-18 12:11:31,816 - __main__ - ERROR - [Frame 294]   Stopping vehicle to prevent further off-road driving
+Recording saved to: data/recordings/recording_20260218_121113.h5
+
+[1;33mShutting down...[0m
+[0;34mSignaling bridge server of shutdown...[0m
+[0;34mShutting down Unity player (PID: 28788)...[0m
+[0;32m✓ Unity player closed gracefully[0m
+[0;32m✓ Services stopped[0m
+
+[1;33mShutting down...[0m
+[0;34mSignaling bridge server of shutdown...[0m
+[0;34mShutting down Unity player (PID: 28788)...[0m
+[0;32m✓ Unity player closed gracefully[0m
+[0;32m✓ Services stopped[0m
+[0;34m╔══════════════════════════════════════════════════════════╗[0m
+[0;34m║          AV Stack Startup Script                        ║[0m
+[0;34m╚══════════════════════════════════════════════════════════╝[0m
+
+[0;34mActivating virtual environment...[0m
+[0;34mStarting bridge server on port 8000...[0m
+[0;32m✓ Bridge server started (PID: 28957)[0m
+  Logs: /Users/philiptullai/Documents/Coding/av/tmp/logs/av_bridge.log
+[0;34mWaiting for bridge server to be ready...[0m
+[0;32m✓ Bridge server is ready![0m
+
+[0;32m══════════════════════════════════════════════════════════[0m
+[0;32mBridge Server Status:[0m
+  URL: http://localhost:8000
+  Health: checking...
+[0;32m══════════════════════════════════════════════════════════[0m
+
+[0;34mLaunching Unity player...[0m
+[0;32m✓ Unity player launched (PID: 28967)[0m
+
+[1;33m╔══════════════════════════════════════════════════════════╗[0m
+[1;33m║              NEXT STEPS - UNITY EDITOR                  ║[0m
+[1;33m╚══════════════════════════════════════════════════════════╝[0m
+
+[0;34m1. Open Unity Editor[0m
+   Project: /Users/philiptullai/Documents/Coding/av/unity/AVSimulation
+
+[0;34m2. Open the scene[0m
+   Assets/Scenes/SampleScene.unity
+
+[0;34m3. In the Inspector, select your Car GameObject:[0m
+   • AV Bridge component → Check 'Enable AV Control'
+   • Make sure Car Controller and Camera Capture are assigned
+
+[0;34m4. Press [0;32m▶ PLAY[0;34m in Unity[0m
+
+[1;33mOr use: [0;32m./start_av_stack.sh --launch-unity[1;33m to auto-launch Unity[0m
+[1;33mOr use: [0;32m./start_av_stack.sh --run-unity-player[1;33m to run the built player[0m
+
+[1;33m══════════════════════════════════════════════════════════[0m
+
+[0;34mStarting AV Stack...[0m
+[0;34mPress Ctrl+C to stop everything[0m
+
+[UnityMemory] Configuration Parameters - Can be set up in boot.config
+    "memorysetup-allocator-temp-initial-block-size-main=262144"
+    "memorysetup-allocator-temp-initial-block-size-worker=262144"
+    "memorysetup-temp-allocator-size-background-worker=32768"
+    "memorysetup-temp-allocator-size-job-worker=262144"
+    "memorysetup-temp-allocator-size-preload-manager=262144"
+    "memorysetup-temp-allocator-size-nav-mesh-worker=65536"
+    "memorysetup-temp-allocator-size-audio-worker=65536"
+    "memorysetup-temp-allocator-size-cloud-worker=32768"
+    "memorysetup-bucket-allocator-granularity=16"
+    "memorysetup-bucket-allocator-bucket-count=8"
+    "memorysetup-bucket-allocator-block-size=4194304"
+    "memorysetup-bucket-allocator-block-count=1"
+    "memorysetup-main-allocator-block-size=16777216"
+    "memorysetup-thread-allocator-block-size=16777216"
+    "memorysetup-gfx-main-allocator-block-size=16777216"
+    "memorysetup-gfx-thread-allocator-block-size=16777216"
+    "memorysetup-cache-allocator-block-size=4194304"
+    "memorysetup-typetree-allocator-block-size=2097152"
+    "memorysetup-profiler-bucket-allocator-granularity=16"
+    "memorysetup-profiler-bucket-allocator-bucket-count=8"
+    "memorysetup-profiler-bucket-allocator-block-size=4194304"
+    "memorysetup-profiler-bucket-allocator-block-count=1"
+    "memorysetup-profiler-allocator-block-size=16777216"
+    "memorysetup-profiler-editor-allocator-block-size=1048576"
+    "memorysetup-temp-allocator-size-main=4194304"
+    "memorysetup-job-temp-allocator-block-size=2097152"
+    "memorysetup-job-temp-allocator-block-size-background=1048576"
+    "memorysetup-job-temp-allocator-reduction-small-platforms=262144"
+    "memorysetup-temp-allocator-size-gfx=262144"
+2026-02-18 12:11:50,531 - __main__ - ERROR - [Frame 140] EMERGENCY STOP: Car out of bounds! Lateral error 1.881m exceeds 1.8500000715255738m threshold!
+2026-02-18 12:11:50,531 - __main__ - ERROR - [Frame 140]   Stopping vehicle to prevent further off-road driving
+Recording saved to: data/recordings/recording_20260218_121140.h5
+
+[1;33mShutting down...[0m
+[0;34mSignaling bridge server of shutdown...[0m
+[0;34mShutting down Unity player (PID: 28967)...[0m
+[0;32m✓ Unity player closed gracefully[0m
+[0;32m✓ Services stopped[0m
+
+[1;33mShutting down...[0m
+[0;34mSignaling bridge server of shutdown...[0m
+[0;34mShutting down Unity player (PID: 28967)...[0m
+[0;32m✓ Unity player closed gracefully[0m
+[0;32m✓ Services stopped[0m
+
+--- Pair 1/1: A then B ---
+[pair] start_t=0.050000 (fixed)
+[A] control.lateral.curve_entry_schedule_enabled=False
+[A] safety.emergency_stop_end_run_after_seconds=0.500
+[A] recording=recording_20260218_121113.h5 cross=None fail=291 ttf=15.500386750000002 class=perception-limited gap=4.1756316932151094e-05 transfer=0.9999305009841919 stale=64.28571428571429 jerk_p95=None lat_jerk_p95=None
+[B] control.lateral.curve_entry_schedule_enabled=True
+[B] safety.emergency_stop_end_run_after_seconds=0.500
+[B] recording=recording_20260218_121140.h5 cross=None fail=134 ttf=6.71673977 class=perception-limited gap=0.0 transfer=0.0 stale=100.0 jerk_p95=None lat_jerk_p95=None
+
+=== A summary (1 trials) ===
+centerline_cross_frame: n/a
+first_failure_frame: median=291.000 p25=291.000 p75=291.000
+time_to_failure_s: median=15.500 p25=15.500 p75=15.500
+authority_gap_mean: median=0.000 p25=0.000 p75=0.000
+transfer_ratio_mean: median=1.000 p25=1.000 p75=1.000
+stale_pct: median=64.286 p25=64.286 p75=64.286
+speed_limited_pct: median=0.000 p25=0.000 p75=0.000
+jerk_p95: n/a
+lateral_jerk_p95: n/a
+lateral_accel_p95: n/a
+feasibility_class_counts: {'perception-limited': 1}
+top_stale_reasons: [('lane_side_sign_violation', 12), ('left_lane_low_visibility', 5), ('missing_lane_positions', 1)]
+
+=== B summary (1 trials) ===
+centerline_cross_frame: n/a
+first_failure_frame: median=134.000 p25=134.000 p75=134.000
+time_to_failure_s: median=6.717 p25=6.717 p75=6.717
+authority_gap_mean: median=0.000 p25=0.000 p75=0.000
+transfer_ratio_mean: median=0.000 p25=0.000 p75=0.000
+stale_pct: median=100.000 p25=100.000 p75=100.000
+speed_limited_pct: median=0.000 p25=0.000 p75=0.000
+jerk_p95: n/a
+lateral_jerk_p95: n/a
+lateral_accel_p95: n/a
+feasibility_class_counts: {'perception-limited': 1}
+top_stale_reasons: [('right_lane_low_visibility', 1)]
