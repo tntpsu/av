@@ -61,11 +61,11 @@ control:
     curve_entry_assist_max_frames: 18
     curve_entry_assist_watchdog_rate_delta_max: 0.22
     curve_entry_assist_rearm_frames: 20
-    curve_entry_schedule_enabled: false
-    curve_entry_schedule_frames: 20.0
-    curve_entry_schedule_min_rate: 0.24
+    curve_entry_schedule_enabled: true
+    curve_entry_schedule_frames: 24
+    curve_entry_schedule_min_rate: 0.22
     curve_entry_schedule_min_jerk: 0.16
-    curve_entry_schedule_min_hold_frames: 6
+    curve_entry_schedule_min_hold_frames: 8
     curve_entry_schedule_handoff_transfer_ratio: 0.68
     curve_entry_schedule_handoff_error_fall: 0.03
     curve_commit_mode_enabled: false

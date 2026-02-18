@@ -1,7 +1,7 @@
 # Robust Full-Stack Roadmap (Unified, Layered, and Gated)
 
-**Last Updated:** 2026-02-17  
-**Current Focus:** Layer 2, Stage 1 (First-Turn Entry Reliability) micro-steps for low-visibility fallback containment + Phase 2 completion gates  
+**Last Updated:** 2026-02-18  
+**Current Focus:** Layer 2, Stage 1 (First-Turn Entry Reliability) canonical sweep loop (phase-envelope scoring + candidate promotion)  
 **Change-Control Rule:** If scope, stage, phase status, or promotion gates change, update this roadmap in the same PR/commit before considering work complete.
 
 ## Scope
@@ -134,6 +134,30 @@ This is the practical de-risk sequence for implementation and testing.
   - time-to-failure median: `10.117s` -> `10.999s` (better).
   - treatment classification shifted (`2x mixed-or-unclear`, `1x steering-authority-limited`) and stale percentage increased (`15.8%` -> `30.8%`).
   - decision: hold default OFF; not promotable due mixed signal and centerline-cross regression on canonical gate.
+- `S1-M19` (done): define phase-based curve authority envelope + scoring contracts from existing telemetry:
+  - added phase envelope config: `tools/analyze/curve_authority_envelope.yaml`.
+  - `tools/analyze/analyze_phase_to_failure.py` now emits `curve_entry`, `curve_commit`, `curve_steady` authority metrics and pass/fail checks.
+- `S1-M20` (done): diagnostics hardening for unambiguous failure triage packets:
+  - added `tools/analyze/build_failure_packet.py` to emit `packet.json` + frame-window `window.csv`.
+  - packet includes `first_limiter_hit_frame` and per-stage limiter deltas around failure.
+- `S1-M21` (done): reusable canonical sweep harness:
+  - added `tools/analyze/sweep_curve_gated_policies.py` (fixed `start_t=0.0`, fail-fast emergency stop override, ranked outputs).
+  - outputs are written to `data/reports/sweeps/s_loop_curve_sweep_<timestamp>/`.
+- `S1-M22` (done): first-pass + validation sweep execution on `s_loop`:
+  - first-pass (1 repeat) briefly favored `entry_commit_aggressive` due one non-failure run.
+  - validation (2 repeats) ranked `entry_schedule_soft` best with median first-failure `232.5` vs baseline `189.0`.
+  - report artifacts: `data/reports/sweeps/s_loop_curve_sweep_20260218_003008/` and `data/reports/sweeps/s_loop_curve_sweep_20260218_003219/`.
+- `S1-M23` (done): promote best validated candidate to baseline config:
+  - promoted `entry_schedule_soft` parameters:
+    - `curve_entry_schedule_enabled: true`
+    - `curve_entry_schedule_frames: 24`
+    - `curve_entry_schedule_min_rate: 0.22`
+    - `curve_entry_schedule_min_jerk: 0.16`
+    - `curve_entry_schedule_min_hold_frames: 8`
+  - `curve_commit_mode_enabled` remains `false` pending further evidence.
+- `S1-M24` (done): calibrate phase-envelope targets against canonical sweep telemetry and re-score:
+  - updated envelope targets in `tools/analyze/curve_authority_envelope.yaml` to avoid all-zero pass states.
+  - calibrated validation ranking remains `entry_schedule_soft` best.
 
 **Gate to pass Stage 1**
 - No centerline cross in first-turn window.
