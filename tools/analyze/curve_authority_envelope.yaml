@@ -1,0 +1,20 @@
+phase_windows:
+  entry_frames: 18
+  commit_frames: 28
+
+targets:
+  entry:
+    transfer_ratio_p50_min: 0.50
+    authority_gap_p95_max: 0.35
+    rate_clip_pct_max: 100.0
+    jerk_clip_pct_max: 100.0
+  commit:
+    transfer_ratio_p50_min: 0.85
+    authority_gap_p95_max: 0.12
+    rate_clip_pct_max: 100.0
+    jerk_clip_pct_max: 100.0
+  steady:
+    transfer_ratio_p50_min: 0.75
+    authority_gap_p95_max: 0.30
+    rate_clip_pct_max: 100.0
+    jerk_clip_pct_max: 100.0

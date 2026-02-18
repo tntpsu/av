@@ -16,10 +16,11 @@ from __future__ import annotations
 import argparse
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Any, Dict, Optional, Tuple
 
 import h5py
 import numpy as np
+import yaml
 
 
 @dataclass
@@ -105,6 +106,115 @@ def _phase_stats(
     return frames, duration, stale_pct, ff_abs_mean, curv_abs_mean, ff_engaged_pct
 
 
+def _safe_slice(arr: Optional[np.ndarray], s: int, e: int) -> np.ndarray:
+    if arr is None:
+        return np.asarray([], dtype=float)
+    s_clamped = max(0, min(int(s), len(arr)))
+    e_clamped = max(s_clamped, min(int(e), len(arr)))
+    return np.asarray(arr[s_clamped:e_clamped], dtype=float)
+
+
+def _nanmean(arr: np.ndarray) -> float:
+    return float(np.nanmean(arr)) if arr.size else float("nan")
+
+
+def _quant(arr: np.ndarray, q: float) -> float:
+    return float(np.nanquantile(arr, q)) if arr.size else float("nan")
+
+
+def _as_int_array(f: h5py.File, key: str) -> Optional[np.ndarray]:
+    if key not in f:
+        return None
+    return np.asarray(f[key][:], dtype=int)
+
+
+def _default_envelope() -> Dict[str, Any]:
+    # Defaults aligned with current s_loop calibrated envelope.
+    return {
+        "phase_windows": {
+            "entry_frames": 18,
+            "commit_frames": 28,
+        },
+        "targets": {
+            "entry": {
+                "transfer_ratio_p50_min": 0.50,
+                "authority_gap_p95_max": 0.35,
+                "rate_clip_pct_max": 100.0,
+                "jerk_clip_pct_max": 100.0,
+            },
+            "commit": {
+                "transfer_ratio_p50_min": 0.85,
+                "authority_gap_p95_max": 0.12,
+                "rate_clip_pct_max": 100.0,
+                "jerk_clip_pct_max": 100.0,
+            },
+            "steady": {
+                "transfer_ratio_p50_min": 0.75,
+                "authority_gap_p95_max": 0.30,
+                "rate_clip_pct_max": 100.0,
+                "jerk_clip_pct_max": 100.0,
+            },
+        },
+    }
+
+
+def _load_envelope(path: Optional[Path]) -> Dict[str, Any]:
+    if path is None:
+        return _default_envelope()
+    raw = yaml.safe_load(path.read_text())
+    if not isinstance(raw, dict):
+        raise ValueError(f"Invalid envelope config (expected mapping): {path}")
+    return raw
+
+
+def _phase_authority_metrics(
+    phase: Phase,
+    transfer_ratio: Optional[np.ndarray],
+    authority_gap: Optional[np.ndarray],
+    rate_clip_delta: Optional[np.ndarray],
+    jerk_clip_delta: Optional[np.ndarray],
+    first_limiter_code: Optional[np.ndarray],
+    schedule_active: Optional[np.ndarray],
+    commit_active: Optional[np.ndarray],
+    assist_active: Optional[np.ndarray],
+) -> Dict[str, float]:
+    s = max(0, phase.start)
+    e = max(s, phase.end_exclusive)
+    tr = _safe_slice(transfer_ratio, s, e)
+    gap = _safe_slice(authority_gap, s, e)
+    rate = _safe_slice(rate_clip_delta, s, e)
+    jerk = _safe_slice(jerk_clip_delta, s, e)
+    limiter_code = _safe_slice(first_limiter_code, s, e)
+    sched = _safe_slice(schedule_active, s, e)
+    commit = _safe_slice(commit_active, s, e)
+    assist = _safe_slice(assist_active, s, e)
+    n = max(1, e - s)
+    return {
+        "transfer_ratio_p50": _quant(tr, 0.50),
+        "transfer_ratio_p25": _quant(tr, 0.25),
+        "authority_gap_mean": _nanmean(gap),
+        "authority_gap_p95": _quant(gap, 0.95),
+        "rate_clip_pct": float(np.mean(rate > 1e-6) * 100.0) if rate.size else 0.0,
+        "jerk_clip_pct": float(np.mean(jerk > 1e-6) * 100.0) if jerk.size else 0.0,
+        "first_limiter_rate_pct": float(np.mean(limiter_code == 1.0) * 100.0) if limiter_code.size else 0.0,
+        "first_limiter_jerk_pct": float(np.mean(limiter_code == 2.0) * 100.0) if limiter_code.size else 0.0,
+        "curve_entry_schedule_active_pct": float(np.sum(sched > 0.5) * 100.0 / n),
+        "curve_commit_mode_active_pct": float(np.sum(commit > 0.5) * 100.0 / n),
+        "curve_entry_assist_active_pct": float(np.sum(assist > 0.5) * 100.0 / n),
+    }
+
+
+def _score_phase(metrics: Dict[str, float], targets: Dict[str, float]) -> Tuple[bool, Dict[str, bool]]:
+    checks = {
+        "transfer_ratio_p50_min": float(metrics["transfer_ratio_p50"]) >= float(targets.get("transfer_ratio_p50_min", -1e9)),
+        "authority_gap_p95_max": float(metrics["authority_gap_p95"]) <= float(targets.get("authority_gap_p95_max", 1e9)),
+        "rate_clip_pct_max": float(metrics["rate_clip_pct"]) <= float(targets.get("rate_clip_pct_max", 1e9)),
+        "jerk_clip_pct_max": float(metrics["jerk_clip_pct"]) <= float(targets.get("jerk_clip_pct_max", 1e9)),
+    }
+    passed = bool(all(checks.values()))
+    return passed, checks
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Phase-to-failure lane analysis for an H5 recording.")
     parser.add_argument("recording", type=Path, help="Path to .h5 recording")
@@ -125,6 +235,18 @@ def main() -> None:
         type=int,
         default=20,
         help="Number of frames used for curve-entry phase",
+    )
+    parser.add_argument(
+        "--commit-length-frames",
+        type=int,
+        default=28,
+        help="Number of frames used for curve-commit phase",
+    )
+    parser.add_argument(
+        "--envelope-config",
+        type=Path,
+        default=None,
+        help="Optional YAML defining phase envelope targets",
     )
     parser.add_argument(
         "--heading-entry-threshold-deg",
@@ -172,6 +294,14 @@ def main() -> None:
         curv = _as_float_array(f, "control/path_curvature_input")
         emergency_stop = _as_bool_array(f, "control/emergency_stop")
         road_heading = _as_float_array(f, "vehicle/road_heading_deg")
+        transfer_ratio = _as_float_array(f, "control/steering_transfer_ratio")
+        authority_gap = _as_float_array(f, "control/steering_authority_gap")
+        rate_clip_delta = _as_float_array(f, "control/steering_rate_limited_delta")
+        jerk_clip_delta = _as_float_array(f, "control/steering_jerk_limited_delta")
+        first_limiter_code = _as_float_array(f, "control/steering_first_limiter_stage_code")
+        schedule_active = _as_int_array(f, "control/curve_entry_schedule_active")
+        commit_active = _as_int_array(f, "control/curve_commit_mode_active")
+        assist_active = _as_int_array(f, "control/curve_entry_assist_active")
 
     n = len(signal)
     init_window = min(60, n)
@@ -217,11 +347,18 @@ def main() -> None:
             failure_reason = "offroad_emergency_stop"
 
     # Build phases only up to failure.
-    entry_end = min(analysis_end, curve_start + max(1, args.entry_length_frames))
+    envelope_cfg = _load_envelope(args.envelope_config)
+    envelope_phase = envelope_cfg.get("phase_windows", {})
+    entry_len = int(envelope_phase.get("entry_frames", args.entry_length_frames))
+    commit_len = int(envelope_phase.get("commit_frames", args.commit_length_frames))
+
+    entry_end = min(analysis_end, curve_start + max(1, entry_len))
+    commit_end = min(analysis_end, entry_end + max(1, commit_len))
     phases = [
         Phase("straight", 0, min(curve_start, analysis_end)),
         Phase("curve_entry", min(curve_start, analysis_end), entry_end),
-        Phase("curve_maintain", entry_end, analysis_end),
+        Phase("curve_commit", entry_end, commit_end),
+        Phase("curve_steady", commit_end, analysis_end),
     ]
 
     print(f"recording: {args.recording}")
@@ -246,6 +383,40 @@ def main() -> None:
         print(
             f"{ph.name},{frames},{dur:.2f},{stale_pct:.1f},{ff_abs_mean:.4f},"
             f"{curv_abs_mean:.5f},{ff_engaged_pct:.1f}"
+        )
+
+    print("\nphase_authority_envelope:")
+    print(
+        "phase,transfer_p50,transfer_p25,gap_mean,gap_p95,rate_clip_pct,jerk_clip_pct,"
+        "first_rate_pct,first_jerk_pct,sched_active_pct,commit_active_pct,assist_active_pct,"
+        "envelope_pass,failed_checks"
+    )
+    targets = envelope_cfg.get("targets", {})
+    for ph in phases:
+        if ph.name not in ("curve_entry", "curve_commit", "curve_steady"):
+            continue
+        metrics = _phase_authority_metrics(
+            ph,
+            transfer_ratio=transfer_ratio,
+            authority_gap=authority_gap,
+            rate_clip_delta=rate_clip_delta,
+            jerk_clip_delta=jerk_clip_delta,
+            first_limiter_code=first_limiter_code,
+            schedule_active=schedule_active,
+            commit_active=commit_active,
+            assist_active=assist_active,
+        )
+        phase_targets = targets.get(ph.name.replace("curve_", ""), {})
+        passed, checks = _score_phase(metrics, phase_targets)
+        failed_checks = [k for k, ok in checks.items() if not ok]
+        print(
+            f"{ph.name},{metrics['transfer_ratio_p50']:.3f},{metrics['transfer_ratio_p25']:.3f},"
+            f"{metrics['authority_gap_mean']:.4f},{metrics['authority_gap_p95']:.4f},"
+            f"{metrics['rate_clip_pct']:.1f},{metrics['jerk_clip_pct']:.1f},"
+            f"{metrics['first_limiter_rate_pct']:.1f},{metrics['first_limiter_jerk_pct']:.1f},"
+            f"{metrics['curve_entry_schedule_active_pct']:.1f},{metrics['curve_commit_mode_active_pct']:.1f},"
+            f"{metrics['curve_entry_assist_active_pct']:.1f},{int(passed)},"
+            f"{'|'.join(failed_checks) if failed_checks else 'none'}"
         )
 
 
