@@ -1,0 +1,10 @@
+{
+  "recording": "data/recordings/recording_20260218_003330.h5",
+  "failure_frame": 276,
+  "failure_reason": "offroad_emergency_stop",
+  "failure_time_s": 17.78306,
+  "first_limiter_hit_frame": 115,
+  "first_limiter_hit_time_s": 8.699975,
+  "window_start": 246,
+  "window_end_exclusive": 286
+}

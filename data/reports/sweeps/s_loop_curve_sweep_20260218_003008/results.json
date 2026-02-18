@@ -1,0 +1,150 @@
+{
+  "ranked": [
+    {
+      "name": "entry_commit_aggressive",
+      "params": {
+        "lateral_control.curve_entry_schedule_enabled": true,
+        "lateral_control.curve_entry_schedule_frames": 32,
+        "lateral_control.curve_entry_schedule_min_rate": 0.26,
+        "lateral_control.curve_entry_schedule_min_jerk": 0.2,
+        "lateral_control.curve_entry_schedule_min_hold_frames": 12,
+        "lateral_control.curve_commit_mode_enabled": true,
+        "lateral_control.curve_commit_mode_max_frames": 42,
+        "lateral_control.curve_commit_mode_min_rate": 0.24,
+        "lateral_control.curve_commit_mode_min_jerk": 0.18
+      },
+      "samples": [
+        {
+          "recording": "recording_20260218_003125.h5",
+          "first_failure_frame": null,
+          "offroad_frame": null,
+          "time_to_failure_s": null,
+          "jerk_p95": null,
+          "envelope_passes": {
+            "curve_entry": 0,
+            "curve_commit": 0,
+            "curve_steady": 0
+          },
+          "envelope_pass_rate": 0.0
+        }
+      ],
+      "aggregate": {
+        "median_failure_frame": 9999.0,
+        "emergency_stop_rate_pct": 0.0,
+        "envelope_pass_rate_pct": 0.0,
+        "median_jerk_p95": 0.0,
+        "score": 9999.0
+      }
+    },
+    {
+      "name": "baseline_off",
+      "params": {
+        "lateral_control.curve_entry_schedule_enabled": false,
+        "lateral_control.curve_commit_mode_enabled": false,
+        "lateral_control.curve_entry_assist_enabled": false
+      },
+      "samples": [
+        {
+          "recording": "recording_20260218_003011.h5",
+          "first_failure_frame": 188,
+          "offroad_frame": 203,
+          "time_to_failure_s": 10.283853,
+          "jerk_p95": null,
+          "envelope_passes": {
+            "curve_entry": 0,
+            "curve_commit": 0,
+            "curve_steady": 0
+          },
+          "envelope_pass_rate": 0.0
+        }
+      ],
+      "aggregate": {
+        "median_failure_frame": 188.0,
+        "emergency_stop_rate_pct": 100.0,
+        "envelope_pass_rate_pct": 0.0,
+        "median_jerk_p95": 0.0,
+        "score": -12.0
+      }
+    },
+    {
+      "name": "entry_schedule_soft",
+      "params": {
+        "lateral_control.curve_entry_schedule_enabled": true,
+        "lateral_control.curve_entry_schedule_frames": 24,
+        "lateral_control.curve_entry_schedule_min_rate": 0.22,
+        "lateral_control.curve_entry_schedule_min_jerk": 0.16,
+        "lateral_control.curve_entry_schedule_min_hold_frames": 8,
+        "lateral_control.curve_commit_mode_enabled": false,
+        "lateral_control.curve_entry_assist_enabled": false
+      },
+      "samples": [
+        {
+          "recording": "recording_20260218_003034.h5",
+          "first_failure_frame": 179,
+          "offroad_frame": 211,
+          "time_to_failure_s": 9.633630270000001,
+          "jerk_p95": null,
+          "envelope_passes": {
+            "curve_entry": 0,
+            "curve_commit": 0,
+            "curve_steady": 0
+          },
+          "envelope_pass_rate": 0.0
+        }
+      ],
+      "aggregate": {
+        "median_failure_frame": 179.0,
+        "emergency_stop_rate_pct": 100.0,
+        "envelope_pass_rate_pct": 0.0,
+        "median_jerk_p95": 0.0,
+        "score": -21.0
+      }
+    },
+    {
+      "name": "entry_commit_balanced",
+      "params": {
+        "lateral_control.curve_entry_schedule_enabled": true,
+        "lateral_control.curve_entry_schedule_frames": 28,
+        "lateral_control.curve_entry_schedule_min_rate": 0.24,
+        "lateral_control.curve_entry_schedule_min_jerk": 0.18,
+        "lateral_control.curve_entry_schedule_min_hold_frames": 10,
+        "lateral_control.curve_commit_mode_enabled": true,
+        "lateral_control.curve_commit_mode_max_frames": 36,
+        "lateral_control.curve_commit_mode_min_rate": 0.22,
+        "lateral_control.curve_commit_mode_min_jerk": 0.16
+      },
+      "samples": [
+        {
+          "recording": "recording_20260218_003102.h5",
+          "first_failure_frame": 174,
+          "offroad_frame": 199,
+          "time_to_failure_s": 9.833318720000001,
+          "jerk_p95": null,
+          "envelope_passes": {
+            "curve_entry": 0,
+            "curve_commit": 0,
+            "curve_steady": 0
+          },
+          "envelope_pass_rate": 0.0
+        }
+      ],
+      "aggregate": {
+        "median_failure_frame": 174.0,
+        "emergency_stop_rate_pct": 100.0,
+        "envelope_pass_rate_pct": 0.0,
+        "median_jerk_p95": 0.0,
+        "score": -26.0
+      }
+    }
+  ],
+  "config": {
+    "track_yaml": "tracks/s_loop.yml",
+    "duration": 30,
+    "repeats": 1,
+    "fixed_start_t": 0.0,
+    "curve_start_frame": 174,
+    "entry_start_distance_m": 25.0,
+    "entry_window_distance_m": 8.0,
+    "emergency_stop_end_run_after_seconds": 0.5
+  }
+}
