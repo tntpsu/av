@@ -158,6 +158,14 @@ This is the practical de-risk sequence for implementation and testing.
 - `S1-M24` (done): calibrate phase-envelope targets against canonical sweep telemetry and re-score:
   - updated envelope targets in `tools/analyze/curve_authority_envelope.yaml` to avoid all-zero pass states.
   - calibrated validation ranking remains `entry_schedule_soft` best.
+- `S1-M25` (done): execute literal Phase 4 completion from the `s_loop` tuning plan:
+  - Stage A trajectory-locked screen was run for baseline vs promoted candidate (`phase4_stageA_*` artifacts).
+  - Stage A result was non-discriminative (no clear reject signal), so Stage B was used as decider.
+  - Stage B canonical A/B (`start_t=0.0`, repeats=2) favored promoted policy by first-failure/time-to-failure medians.
+- `S1-M26` (done): execute Phase 5 post-promotion robustness mini-set:
+  - ran additional fixed-start A/B checks at `start_t=0.05` and `start_t=0.10`.
+  - outcomes were perception-limited on non-canonical starts; canonical promotion remains valid and baseline unchanged.
+  - consolidated artifacts under `data/reports/sweeps/s_loop_phase45_20260218/`.
 
 **Gate to pass Stage 1**
 - No centerline cross in first-turn window.
