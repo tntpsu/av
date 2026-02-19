@@ -1129,6 +1129,96 @@ class DataRecorder:
             dtype=np.int16
         )
         self.h5_file.create_dataset(
+            "control/dynamic_curve_authority_active",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int8
+        )
+        self.h5_file.create_dataset(
+            "control/dynamic_curve_rate_request_delta",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/dynamic_curve_rate_deficit",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/dynamic_curve_rate_boost",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/dynamic_curve_jerk_boost_factor",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/dynamic_curve_lateral_accel_est_g",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/dynamic_curve_lateral_jerk_est_gps",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/dynamic_curve_lateral_jerk_est_smoothed_gps",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/dynamic_curve_speed_scale",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/dynamic_curve_comfort_scale",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/dynamic_curve_comfort_accel_gate",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/dynamic_curve_comfort_jerk_penalty",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/dynamic_curve_rate_boost_cap_effective",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/dynamic_curve_jerk_boost_cap_effective",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/dynamic_curve_authority_deficit_streak",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int16
+        )
+        self.h5_file.create_dataset(
             "control/curve_entry_schedule_active",
             shape=(0,),
             maxshape=max_shape,
@@ -1316,6 +1406,12 @@ class DataRecorder:
         )
         self.h5_file.create_dataset(
             "trajectory/reference_point_velocity",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "trajectory/reference_point_curvature",
             shape=(0,),
             maxshape=max_shape,
             dtype=np.float32
@@ -1554,6 +1650,54 @@ class DataRecorder:
             shape=(0,),
             maxshape=max_shape,
             dtype=np.int8
+        )
+        self.h5_file.create_dataset(
+            "control/is_control_straight_proxy",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int8
+        )
+        self.h5_file.create_dataset(
+            "control/curve_upcoming",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int8
+        )
+        self.h5_file.create_dataset(
+            "control/curve_at_car",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int8
+        )
+        self.h5_file.create_dataset(
+            "control/curve_at_car_distance_remaining_m",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/is_road_straight",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int8
+        )
+        self.h5_file.create_dataset(
+            "control/road_curvature_valid",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int8
+        )
+        self.h5_file.create_dataset(
+            "control/road_curvature_abs",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/road_curvature_source",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=h5py.string_dtype(encoding='utf-8', length=64)
         )
         self.h5_file.create_dataset(
             "control/straight_oscillation_rate",
@@ -3043,6 +3187,14 @@ class DataRecorder:
         straight_sign_flip_trigger_error_list = []
         straight_sign_flip_frames_remaining_list = []
         is_straight_list = []
+        is_control_straight_proxy_list = []
+        curve_upcoming_list = []
+        curve_at_car_list = []
+        curve_at_car_distance_remaining_m_list = []
+        is_road_straight_list = []
+        road_curvature_valid_list = []
+        road_curvature_abs_list = []
+        road_curvature_source_list = []
         straight_oscillation_rate_list = []
         tuned_deadband_list = []
         tuned_error_smoothing_alpha_list = []
@@ -3092,6 +3244,21 @@ class DataRecorder:
         curve_entry_assist_active_list = []
         curve_entry_assist_triggered_list = []
         curve_entry_assist_rearm_frames_remaining_list = []
+        dynamic_curve_authority_active_list = []
+        dynamic_curve_rate_request_delta_list = []
+        dynamic_curve_rate_deficit_list = []
+        dynamic_curve_rate_boost_list = []
+        dynamic_curve_jerk_boost_factor_list = []
+        dynamic_curve_lateral_accel_est_g_list = []
+        dynamic_curve_lateral_jerk_est_gps_list = []
+        dynamic_curve_lateral_jerk_est_smoothed_gps_list = []
+        dynamic_curve_speed_scale_list = []
+        dynamic_curve_comfort_scale_list = []
+        dynamic_curve_comfort_accel_gate_list = []
+        dynamic_curve_comfort_jerk_penalty_list = []
+        dynamic_curve_rate_boost_cap_effective_list = []
+        dynamic_curve_jerk_boost_cap_effective_list = []
+        dynamic_curve_authority_deficit_streak_list = []
         curve_entry_schedule_active_list = []
         curve_entry_schedule_triggered_list = []
         curve_entry_schedule_handoff_triggered_list = []
@@ -3153,6 +3320,26 @@ class DataRecorder:
                 int(getattr(cc, 'straight_sign_flip_frames_remaining', 0) or 0)
             )
             is_straight_list.append(1 if getattr(cc, 'is_straight', False) else 0)
+            is_control_straight_proxy_list.append(
+                1 if getattr(cc, 'is_control_straight_proxy', False) else 0
+            )
+            curve_upcoming_list.append(1 if getattr(cc, 'curve_upcoming', False) else 0)
+            curve_at_car_list.append(1 if getattr(cc, 'curve_at_car', False) else 0)
+            curve_at_car_distance_remaining_m_list.append(
+                getattr(cc, 'curve_at_car_distance_remaining_m', np.nan)
+            )
+            is_road_straight_list.append(
+                1 if getattr(cc, 'is_road_straight', False) else 0
+            )
+            road_curvature_valid_list.append(
+                1 if getattr(cc, 'road_curvature_valid', False) else 0
+            )
+            road_curvature_abs_list.append(
+                getattr(cc, 'road_curvature_abs', 0.0) or 0.0
+            )
+            road_curvature_source_list.append(
+                getattr(cc, 'road_curvature_source', None) or ''
+            )
             straight_oscillation_rate_list.append(getattr(cc, 'straight_oscillation_rate', 0.0) or 0.0)
             tuned_deadband_list.append(getattr(cc, 'tuned_deadband', 0.0) or 0.0)
             tuned_error_smoothing_alpha_list.append(getattr(cc, 'tuned_error_smoothing_alpha', 0.0) or 0.0)
@@ -3212,6 +3399,51 @@ class DataRecorder:
             curve_entry_assist_rearm_frames_remaining_list.append(
                 int(getattr(cc, 'curve_entry_assist_rearm_frames_remaining', 0) or 0)
             )
+            dynamic_curve_authority_active_list.append(
+                1 if getattr(cc, 'dynamic_curve_authority_active', False) else 0
+            )
+            dynamic_curve_rate_request_delta_list.append(
+                getattr(cc, 'dynamic_curve_rate_request_delta', 0.0) or 0.0
+            )
+            dynamic_curve_rate_deficit_list.append(
+                getattr(cc, 'dynamic_curve_rate_deficit', 0.0) or 0.0
+            )
+            dynamic_curve_rate_boost_list.append(
+                getattr(cc, 'dynamic_curve_rate_boost', 0.0) or 0.0
+            )
+            dynamic_curve_jerk_boost_factor_list.append(
+                getattr(cc, 'dynamic_curve_jerk_boost_factor', 1.0) or 1.0
+            )
+            dynamic_curve_lateral_accel_est_g_list.append(
+                getattr(cc, 'dynamic_curve_lateral_accel_est_g', 0.0) or 0.0
+            )
+            dynamic_curve_lateral_jerk_est_gps_list.append(
+                getattr(cc, 'dynamic_curve_lateral_jerk_est_gps', 0.0) or 0.0
+            )
+            dynamic_curve_lateral_jerk_est_smoothed_gps_list.append(
+                getattr(cc, 'dynamic_curve_lateral_jerk_est_smoothed_gps', 0.0) or 0.0
+            )
+            dynamic_curve_speed_scale_list.append(
+                getattr(cc, 'dynamic_curve_speed_scale', 1.0) or 1.0
+            )
+            dynamic_curve_comfort_scale_list.append(
+                getattr(cc, 'dynamic_curve_comfort_scale', 1.0) or 1.0
+            )
+            dynamic_curve_comfort_accel_gate_list.append(
+                getattr(cc, 'dynamic_curve_comfort_accel_gate', 1.0) or 1.0
+            )
+            dynamic_curve_comfort_jerk_penalty_list.append(
+                getattr(cc, 'dynamic_curve_comfort_jerk_penalty', 1.0) or 1.0
+            )
+            dynamic_curve_rate_boost_cap_effective_list.append(
+                getattr(cc, 'dynamic_curve_rate_boost_cap_effective', 0.0) or 0.0
+            )
+            dynamic_curve_jerk_boost_cap_effective_list.append(
+                getattr(cc, 'dynamic_curve_jerk_boost_cap_effective', 1.0) or 1.0
+            )
+            dynamic_curve_authority_deficit_streak_list.append(
+                int(getattr(cc, 'dynamic_curve_authority_deficit_streak', 0) or 0)
+            )
             curve_entry_schedule_active_list.append(
                 1 if getattr(cc, 'curve_entry_schedule_active', False) else 0
             )
@@ -3265,8 +3497,10 @@ class DataRecorder:
                        "straight_sign_flip_frames_remaining",
                        "calculated_steering_angle_deg", "raw_steering", 
                        "lateral_correction", "path_curvature_input",
-                       "is_straight", "straight_oscillation_rate",
-                       "tuned_deadband", "tuned_error_smoothing_alpha",
+                       "is_straight", "is_control_straight_proxy", "curve_upcoming",
+                       "curve_at_car", "curve_at_car_distance_remaining_m", "is_road_straight",
+                       "road_curvature_valid", "road_curvature_abs", "straight_oscillation_rate",
+                       "road_curvature_source", "tuned_deadband", "tuned_error_smoothing_alpha",
                        "using_stale_perception", "stale_perception_reason",
                        "emergency_stop", "target_speed_raw",
                        "target_speed_post_limits", "target_speed_planned", "target_speed_final",
@@ -3291,6 +3525,18 @@ class DataRecorder:
                        "steering_rate_limit_margin", "steering_rate_limit_unlock_delta_needed",
                        "curve_entry_assist_active", "curve_entry_assist_triggered",
                        "curve_entry_assist_rearm_frames_remaining",
+                       "dynamic_curve_authority_active", "dynamic_curve_rate_request_delta",
+                       "dynamic_curve_rate_deficit", "dynamic_curve_rate_boost",
+                       "dynamic_curve_jerk_boost_factor",
+                       "dynamic_curve_lateral_accel_est_g",
+                       "dynamic_curve_lateral_jerk_est_gps",
+                       "dynamic_curve_lateral_jerk_est_smoothed_gps",
+                       "dynamic_curve_speed_scale", "dynamic_curve_comfort_scale",
+                       "dynamic_curve_comfort_accel_gate",
+                       "dynamic_curve_comfort_jerk_penalty",
+                       "dynamic_curve_rate_boost_cap_effective",
+                       "dynamic_curve_jerk_boost_cap_effective",
+                       "dynamic_curve_authority_deficit_streak",
                        "curve_entry_schedule_active", "curve_entry_schedule_triggered",
                        "curve_entry_schedule_handoff_triggered", "curve_entry_schedule_frames_remaining",
                        "curve_commit_mode_active", "curve_commit_mode_triggered",
@@ -3340,6 +3586,31 @@ class DataRecorder:
             self.h5_file["control/lateral_correction"][current_size:] = lateral_corrections
             self.h5_file["control/path_curvature_input"][current_size:] = path_curvature_inputs
             self.h5_file["control/is_straight"][current_size:] = np.array(is_straight_list, dtype=np.int8)
+            self.h5_file["control/is_control_straight_proxy"][current_size:] = np.array(
+                is_control_straight_proxy_list, dtype=np.int8
+            )
+            self.h5_file["control/curve_upcoming"][current_size:] = np.array(
+                curve_upcoming_list, dtype=np.int8
+            )
+            self.h5_file["control/curve_at_car"][current_size:] = np.array(
+                curve_at_car_list, dtype=np.int8
+            )
+            self.h5_file["control/curve_at_car_distance_remaining_m"][current_size:] = (
+                curve_at_car_distance_remaining_m_list
+            )
+            self.h5_file["control/is_road_straight"][current_size:] = np.array(
+                is_road_straight_list, dtype=np.int8
+            )
+            self.h5_file["control/road_curvature_valid"][current_size:] = np.array(
+                road_curvature_valid_list, dtype=np.int8
+            )
+            self.h5_file["control/road_curvature_abs"][current_size:] = road_curvature_abs_list
+            road_curvature_source_array = np.array(
+                road_curvature_source_list, dtype=h5py.string_dtype(encoding='utf-8', length=64)
+            )
+            self.h5_file["control/road_curvature_source"][current_size:] = (
+                road_curvature_source_array
+            )
             self.h5_file["control/straight_oscillation_rate"][current_size:] = straight_oscillation_rate_list
             self.h5_file["control/tuned_deadband"][current_size:] = tuned_deadband_list
             self.h5_file["control/tuned_error_smoothing_alpha"][current_size:] = tuned_error_smoothing_alpha_list
@@ -3402,6 +3673,51 @@ class DataRecorder:
             )
             self.h5_file["control/curve_entry_assist_rearm_frames_remaining"][current_size:] = np.array(
                 curve_entry_assist_rearm_frames_remaining_list, dtype=np.int16
+            )
+            self.h5_file["control/dynamic_curve_authority_active"][current_size:] = np.array(
+                dynamic_curve_authority_active_list, dtype=np.int8
+            )
+            self.h5_file["control/dynamic_curve_rate_request_delta"][current_size:] = (
+                dynamic_curve_rate_request_delta_list
+            )
+            self.h5_file["control/dynamic_curve_rate_deficit"][current_size:] = (
+                dynamic_curve_rate_deficit_list
+            )
+            self.h5_file["control/dynamic_curve_rate_boost"][current_size:] = (
+                dynamic_curve_rate_boost_list
+            )
+            self.h5_file["control/dynamic_curve_jerk_boost_factor"][current_size:] = (
+                dynamic_curve_jerk_boost_factor_list
+            )
+            self.h5_file["control/dynamic_curve_lateral_accel_est_g"][current_size:] = (
+                dynamic_curve_lateral_accel_est_g_list
+            )
+            self.h5_file["control/dynamic_curve_lateral_jerk_est_gps"][current_size:] = (
+                dynamic_curve_lateral_jerk_est_gps_list
+            )
+            self.h5_file["control/dynamic_curve_lateral_jerk_est_smoothed_gps"][current_size:] = (
+                dynamic_curve_lateral_jerk_est_smoothed_gps_list
+            )
+            self.h5_file["control/dynamic_curve_speed_scale"][current_size:] = (
+                dynamic_curve_speed_scale_list
+            )
+            self.h5_file["control/dynamic_curve_comfort_scale"][current_size:] = (
+                dynamic_curve_comfort_scale_list
+            )
+            self.h5_file["control/dynamic_curve_comfort_accel_gate"][current_size:] = (
+                dynamic_curve_comfort_accel_gate_list
+            )
+            self.h5_file["control/dynamic_curve_comfort_jerk_penalty"][current_size:] = (
+                dynamic_curve_comfort_jerk_penalty_list
+            )
+            self.h5_file["control/dynamic_curve_rate_boost_cap_effective"][current_size:] = (
+                dynamic_curve_rate_boost_cap_effective_list
+            )
+            self.h5_file["control/dynamic_curve_jerk_boost_cap_effective"][current_size:] = (
+                dynamic_curve_jerk_boost_cap_effective_list
+            )
+            self.h5_file["control/dynamic_curve_authority_deficit_streak"][current_size:] = np.array(
+                dynamic_curve_authority_deficit_streak_list, dtype=np.int16
             )
             self.h5_file["control/curve_entry_schedule_active"][current_size:] = np.array(
                 curve_entry_schedule_active_list, dtype=np.int8
@@ -3688,6 +4004,7 @@ class DataRecorder:
         # Write reference points (smoothed and raw)
         ref_points = []
         ref_points_raw = []
+        ref_curvatures = []
         ref_methods = []  # NEW: Track which method was used
         perception_centers = []  # NEW: Track perception center
         diag_available = []
@@ -3769,6 +4086,9 @@ class DataRecorder:
                     rp.get('heading', 0.0),
                     rp.get('velocity', 0.0)
                 ])
+                ref_curvatures.append(
+                    float(frame.trajectory_output.curvature if frame.trajectory_output.curvature is not None else rp.get('curvature', 0.0))
+                )
                 # Raw (before smoothing) values
                 ref_points_raw.append([
                     rp.get('raw_x', rp.get('x', 0.0)),
@@ -3859,6 +4179,7 @@ class DataRecorder:
                 # No reference point for this frame - append zeros
                 ref_points.append([0.0, 0.0, 0.0, 0.0])
                 ref_points_raw.append([0.0, 0.0, 0.0])
+                ref_curvatures.append(0.0)
                 ref_methods.append('none')
                 perception_centers.append(0.0)
                 to = frame.trajectory_output
@@ -3944,6 +4265,7 @@ class DataRecorder:
             self.h5_file["trajectory/reference_point_y"].resize((new_size_rp,))
             self.h5_file["trajectory/reference_point_heading"].resize((new_size_rp,))
             self.h5_file["trajectory/reference_point_velocity"].resize((new_size_rp,))
+            self.h5_file["trajectory/reference_point_curvature"].resize((new_size_rp,))
             self.h5_file["trajectory/reference_point_raw_x"].resize((new_size_rp,))
             self.h5_file["trajectory/reference_point_raw_y"].resize((new_size_rp,))
             self.h5_file["trajectory/reference_point_raw_heading"].resize((new_size_rp,))
@@ -4026,6 +4348,9 @@ class DataRecorder:
             self.h5_file["trajectory/reference_point_y"][current_size_rp:] = ref_points_array[:, 1]
             self.h5_file["trajectory/reference_point_heading"][current_size_rp:] = ref_points_array[:, 2]
             self.h5_file["trajectory/reference_point_velocity"][current_size_rp:] = ref_points_array[:, 3]
+            self.h5_file["trajectory/reference_point_curvature"][current_size_rp:] = np.array(
+                ref_curvatures, dtype=np.float32
+            )
             # Write raw data
             self.h5_file["trajectory/reference_point_raw_x"][current_size_rp:] = ref_points_raw_array[:, 0]
             self.h5_file["trajectory/reference_point_raw_y"][current_size_rp:] = ref_points_raw_array[:, 1]

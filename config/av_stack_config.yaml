@@ -40,6 +40,16 @@ control:
       max_curvature: 10.0
       gain_scale: 1.3
     straight_curvature_threshold: 0.01
+    curve_upcoming_enter_threshold: 0.012
+    curve_upcoming_exit_threshold: 0.009
+    curve_upcoming_on_frames: 2
+    curve_upcoming_off_frames: 2
+    curve_phase_use_distance_track: true
+    curve_phase_track_name: s_loop
+    curve_at_car_distance_min_m: 0.0
+    road_curve_enter_threshold: 0.011
+    road_curve_exit_threshold: 0.009
+    road_straight_hold_invalid_frames: 6
     steering_rate_curvature_min: 0.003
     steering_rate_curvature_max: 0.015
     steering_rate_scale_min: 0.55
@@ -65,15 +75,40 @@ control:
     curve_entry_schedule_frames: 24
     curve_entry_schedule_min_rate: 0.22
     curve_entry_schedule_min_jerk: 0.16
-    curve_entry_schedule_min_hold_frames: 8
+    curve_entry_schedule_min_hold_frames: 12
+    curve_entry_schedule_min_curve_progress_ratio: 0.2
+    curve_entry_schedule_fallback_only_when_dynamic: true
+    curve_entry_schedule_fallback_deficit_frames: 6
+    curve_entry_schedule_fallback_rate_deficit_min: 0.03
+    curve_entry_schedule_fallback_rearm_cooldown_frames: 18
     curve_entry_schedule_handoff_transfer_ratio: 0.68
     curve_entry_schedule_handoff_error_fall: 0.03
-    curve_commit_mode_enabled: false
-    curve_commit_mode_max_frames: 20
+    dynamic_curve_authority_enabled: true
+    dynamic_curve_rate_deficit_deadband: 0.01
+    dynamic_curve_rate_boost_gain: 1.0
+    dynamic_curve_rate_boost_max: 0.3
+    dynamic_curve_jerk_boost_gain: 4.0
+    dynamic_curve_jerk_boost_max_factor: 3.5
+    dynamic_curve_comfort_lat_accel_comfort_max_g: 0.18
+    dynamic_curve_comfort_lat_accel_peak_max_g: 0.25
+    dynamic_curve_comfort_lat_jerk_comfort_max_gps: 0.30
+    dynamic_curve_lat_jerk_smoothing_alpha: 0.25
+    dynamic_curve_lat_jerk_soft_start_ratio: 0.60
+    dynamic_curve_lat_jerk_soft_floor_scale: 0.35
+    dynamic_curve_speed_low_mps: 4.0
+    dynamic_curve_speed_high_mps: 10.0
+    dynamic_curve_speed_boost_max_scale: 1.4
+    curve_commit_mode_enabled: true
+    curve_commit_mode_max_frames: 24
     curve_commit_mode_min_rate: 0.22
-    curve_commit_mode_min_jerk: 0.14
+    curve_commit_mode_min_jerk: 4.0
     curve_commit_mode_transfer_ratio_target: 0.72
     curve_commit_mode_error_fall: 0.03
+    curve_commit_mode_exit_consecutive_frames: 4
+    curve_commit_mode_retrigger_on_dynamic_deficit: true
+    curve_commit_mode_dynamic_deficit_frames: 8
+    curve_commit_mode_dynamic_deficit_min: 0.03
+    curve_commit_mode_retrigger_cooldown_frames: 12
     curve_mode_speed_cap_enabled: false
     curve_mode_speed_cap_mps: 7.2
     curve_mode_speed_cap_min_ratio: 0.55

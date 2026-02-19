@@ -589,6 +589,27 @@ body {
     background: rgba(255, 64, 64, 0.20);
 }
 
+.data-table tr.compact-subrow td {
+    font-size: 0.82rem;
+    padding-top: 0.2rem;
+    padding-bottom: 0.2rem;
+    border-bottom: 1px dotted #3a3a3a;
+}
+
+.data-table tr.compact-subrow td:first-child {
+    color: #8f8f8f;
+    font-weight: 400;
+}
+
+.data-table tr.compact-subrow td:last-child {
+    text-align: left;
+    color: #cfcfcf;
+    white-space: normal;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+    font-size: 0.78rem;
+}
+
 /* Navigation */
 .navigation {
     background: #2a2a2a;

@@ -1054,8 +1054,8 @@ def detect_issues(recording_path: Path, analyze_to_failure: bool = False) -> Dic
 
                 # Detect centerline crossing onset (crossing left lane boundary) to help
                 # users ignore downstream diagnostics after entering unsupported state.
-                cross_flags = gt_left > 0.0
-                min_cross_frames = 3
+                cross_flags = gt_left > 1e-3
+                min_cross_frames = 1
                 run = 0
                 for i, crossed in enumerate(cross_flags):
                     if crossed:
@@ -1072,7 +1072,7 @@ def detect_issues(recording_path: Path, analyze_to_failure: bool = False) -> Dic
                         "severity": "high",
                         "description": (
                             f"Centerline crossed at frame {centerline_cross_start_frame} "
-                            f"(left boundary exceeded for >= {min_cross_frames} frames)."
+                            f"(left boundary exceeded for >= {min_cross_frames} frame)."
                         ),
                     })
                 

@@ -86,6 +86,8 @@ TODOs:
   - no regression in failure timing medians
   - no regression in stale% during entry
   - no regression in comfort caps
+- [x] Tighten centerline failure onset to first intrusion in analyzer and visualizer diagnostics.
+- [x] Rework dynamic comfort policy to use `g_lat` hard guard + smoothed `g_jerk` soft penalty telemetry.
 - [x] Add control-lock sensitivity comparator for self/cross matrix reporting
       (`tools/analyze/compare_controllock_sensitivity.py`).
 - [ ] Add automated "reject promotion" rule when authority metrics improve but

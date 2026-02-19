@@ -46,9 +46,10 @@ def _find_centerline_cross(
 ) -> Optional[int]:
     if len(signal) == 0 or initial_sign == 0:
         return None
+    threshold = max(1e-3, float(min_abs))
     for i in range(max(0, search_start), len(signal) - persist_frames + 1):
         w = signal[i : i + persist_frames]
-        if np.any(np.abs(w) < min_abs):
+        if np.any(np.abs(w) < threshold):
             continue
         if np.all(np.sign(w) == -initial_sign):
             return i
@@ -78,8 +79,13 @@ def main() -> None:
         default="lane_center_error",
         help="Signal for centerline-cross detection",
     )
-    parser.add_argument("--cross-min-abs", type=float, default=0.15, help="Centerline-cross min abs")
-    parser.add_argument("--cross-persist-frames", type=int, default=4, help="Cross persistence")
+    parser.add_argument(
+        "--cross-min-abs",
+        type=float,
+        default=0.0,
+        help="Centerline intrusion min abs (0.0 => any intrusion)",
+    )
+    parser.add_argument("--cross-persist-frames", type=int, default=1, help="Intrusion persistence")
     parser.add_argument(
         "--max-lateral-accel",
         type=float,

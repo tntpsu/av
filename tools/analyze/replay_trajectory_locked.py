@@ -26,8 +26,6 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from av_stack import AVStack  # noqa: E402
-
 DEFAULT_SEGMENTATION_CHECKPOINT = (
     REPO_ROOT / "data" / "segmentation_dataset" / "checkpoints" / "segnet_best.pt"
 )
@@ -138,8 +136,21 @@ def _load_locked_reference(lock_file: h5py.File, idx: int) -> Optional[Dict[str,
     if "trajectory/reference_point_method" in lock_file:
         method = _decode_bytes(lock_file["trajectory/reference_point_method"][idx])
     curvature = 0.0
-    if "trajectory/path_curvature" in lock_file and idx < len(lock_file["trajectory/path_curvature"]):
+    curvature_source = "missing"
+    if "trajectory/reference_point_curvature" in lock_file and idx < len(
+        lock_file["trajectory/reference_point_curvature"]
+    ):
+        curvature = float(lock_file["trajectory/reference_point_curvature"][idx])
+        curvature_source = "trajectory_reference_point_curvature"
+    elif "trajectory/path_curvature" in lock_file and idx < len(lock_file["trajectory/path_curvature"]):
         curvature = float(lock_file["trajectory/path_curvature"][idx])
+        curvature_source = "trajectory_path_curvature"
+    elif "ground_truth/path_curvature" in lock_file and idx < len(lock_file["ground_truth/path_curvature"]):
+        curvature = float(lock_file["ground_truth/path_curvature"][idx])
+        curvature_source = "ground_truth_path_curvature"
+    elif "control/path_curvature_input" in lock_file and idx < len(lock_file["control/path_curvature_input"]):
+        curvature = float(lock_file["control/path_curvature_input"][idx])
+        curvature_source = "control_path_curvature_input"
     perception_center_x = 0.0
     if "trajectory/perception_center_x" in lock_file:
         perception_center_x = float(lock_file["trajectory/perception_center_x"][idx])
@@ -151,6 +162,7 @@ def _load_locked_reference(lock_file: h5py.File, idx: int) -> Optional[Dict[str,
         "velocity": velocity,
         "method": f"locked:{method}" if method else "locked",
         "curvature": curvature,
+        "curvature_source": curvature_source,
         "perception_center_x": perception_center_x,
     }
     # Keep replay diagnostics finite for downstream JSON/visualizer compatibility.
@@ -291,6 +303,8 @@ def replay_trajectory_locked(
     noise_std_velocity: float = 0.0,
     noise_std_curvature: float = 0.0,
 ) -> Dict[str, object]:
+    from av_stack import AVStack  # Imported lazily for lightweight helper tests.
+
     if output_name is None:
         output_name = f"trajectory_locked_{input_recording.stem}"
 

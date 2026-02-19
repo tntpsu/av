@@ -52,6 +52,9 @@ class Visualizer {
         this.curveEntryStartDistanceM = 34.0;
         this.curveEntryWindowDistanceM = 8.0;
         this.distanceFromStartSeries = null;
+        this.distanceFromStartSeriesSource = 'none';
+        this.expectedTrackKey = 's_loop';
+        this.trackCurveWindows = null;
         this.topdownSmoothedTrajectory = null;
         this.topdownSmoothedFrameIndex = null;
         this.topdownSmoothingAlpha = 0.45;
@@ -809,6 +812,7 @@ class Visualizer {
                 this.currentRecordingMeta = null;
             }
             this.updateRecordingMetaBadges();
+            await this.loadTrackCurveWindows('s_loop');
             await this.loadDistanceFromStartSeries();
             this.topdownAvailable = Boolean(this.currentRecordingMeta?.topdown_available ?? true);
             this.setTopdownAvailability(this.topdownAvailable);
@@ -862,13 +866,122 @@ class Visualizer {
 
     async loadDistanceFromStartSeries() {
         this.distanceFromStartSeries = null;
+        this.distanceFromStartSeriesSource = 'none';
         if (!this.currentRecording) return;
         try {
-            const data = await this.dataLoader.loadTimeSeries(['derived/distance_m'], 'vehicle/timestamps');
-            this.distanceFromStartSeries = data?.signals?.['derived/distance_m'] || null;
+            const data = await this.dataLoader.loadTimeSeries(
+                ['vehicle/road_center_reference_t', 'derived/distance_m'],
+                'vehicle/timestamps'
+            );
+            const tSeries = data?.signals?.['vehicle/road_center_reference_t'] || null;
+            const trackTotal = Number(this.trackCurveWindows?.total_length_m);
+            if (Array.isArray(tSeries) && Number.isFinite(trackTotal) && trackTotal > 0) {
+                this.distanceFromStartSeries = tSeries.map((tRaw) => {
+                    const t = Number(tRaw);
+                    if (!Number.isFinite(t)) return null;
+                    if (t > 1.5) {
+                        const d = ((t % trackTotal) + trackTotal) % trackTotal;
+                        return d;
+                    }
+                    const tNorm = ((t % 1.0) + 1.0) % 1.0;
+                    return tNorm * trackTotal;
+                });
+                this.distanceFromStartSeriesSource = 'track_progress';
+            } else {
+                this.distanceFromStartSeries = data?.signals?.['derived/distance_m'] || null;
+                this.distanceFromStartSeriesSource = this.distanceFromStartSeries ? 'integrated_speed' : 'none';
+            }
         } catch (error) {
             console.warn('Could not load derived distance series:', error);
             this.distanceFromStartSeries = null;
+            this.distanceFromStartSeriesSource = 'none';
+        }
+    }
+
+    async loadTrackCurveWindows(trackName = this.expectedTrackKey) {
+        this.trackCurveWindows = null;
+        try {
+            const data = await this.dataLoader.loadTrackCurveWindows(trackName);
+            if (data && Array.isArray(data.curve_windows) && Number.isFinite(Number(data.total_length_m))) {
+                this.trackCurveWindows = data;
+                this.expectedTrackKey = String(data.track_key || trackName);
+                return;
+            }
+        } catch (error) {
+            console.warn(`Could not load track curve windows for ${trackName}:`, error);
+        }
+    }
+
+    getExpectedCurveState(distanceMeters) {
+        const tw = this.trackCurveWindows;
+        if (!tw || !Array.isArray(tw.curve_windows) || !Number.isFinite(Number(tw.total_length_m))) {
+            return null;
+        }
+        const total = Number(tw.total_length_m);
+        if (!Number.isFinite(distanceMeters) || total <= 0) return null;
+
+        const dNorm = ((Number(distanceMeters) % total) + total) % total;
+        for (const c of tw.curve_windows) {
+            const start = Number(c.start_m);
+            const end = Number(c.end_m);
+            if (Number.isFinite(start) && Number.isFinite(end) && dNorm >= start && dNorm < end) {
+                return {
+                    inCurve: true,
+                    curveIndex: Number(c.curve_index) || null,
+                    start,
+                    end,
+                    distanceNorm: dNorm,
+                };
+            }
+        }
+
+        let best = null;
+        for (const c of tw.curve_windows) {
+            const start = Number(c.start_m);
+            if (!Number.isFinite(start)) continue;
+            let delta = start - dNorm;
+            if (delta < 0) delta += total;
+            if (best === null || delta < best.delta) {
+                best = { curveIndex: Number(c.curve_index) || null, start, delta };
+            }
+        }
+        return {
+            inCurve: false,
+            distanceNorm: dNorm,
+            nextCurveIndex: best ? best.curveIndex : null,
+            nextCurveStart: best ? best.start : null,
+            nextCurveDelta: best ? best.delta : null,
+        };
+    }
+
+    updateExpectedCurveDisplays(frameIndex) {
+        const frameDistanceElem = document.getElementById('frame-distance-from-start');
+        const expectedElem = document.getElementById('frame-expected-curve-window');
+        const d = this.distanceFromStartSeries && frameIndex < this.distanceFromStartSeries.length
+            ? Number(this.distanceFromStartSeries[frameIndex])
+            : null;
+        if (frameDistanceElem) {
+            frameDistanceElem.textContent = (d !== null && Number.isFinite(d))
+                ? d.toFixed(2)
+                : '-';
+            frameDistanceElem.title = this.distanceFromStartSeriesSource === 'track_progress'
+                ? 'Distance from track progress (road_center_reference_t)'
+                : (this.distanceFromStartSeriesSource === 'integrated_speed'
+                    ? 'Distance from integrated speed (derived)'
+                    : 'Distance source unavailable');
+        }
+        if (!expectedElem) return;
+        const state = this.getExpectedCurveState(d);
+        if (!state) {
+            expectedElem.textContent = '-';
+            return;
+        }
+        if (state.inCurve) {
+            expectedElem.textContent = `${this.expectedTrackKey}: CURVE C${state.curveIndex} (${state.start.toFixed(2)}-${state.end.toFixed(2)}m)`;
+        } else if (state.nextCurveStart !== null && state.nextCurveDelta !== null) {
+            expectedElem.textContent = `${this.expectedTrackKey}: STRAIGHT -> next C${state.nextCurveIndex} in ${state.nextCurveDelta.toFixed(2)}m (@${state.nextCurveStart.toFixed(2)}m)`;
+        } else {
+            expectedElem.textContent = `${this.expectedTrackKey}: STRAIGHT`;
         }
     }
 
@@ -2407,15 +2520,7 @@ class Visualizer {
         this.currentFrameIndex = frameIndex;
         document.getElementById('frame-slider').value = frameIndex;
         document.getElementById('frame-number').textContent = frameIndex;
-        const frameDistanceElem = document.getElementById('frame-distance-from-start');
-        if (frameDistanceElem) {
-            const d = this.distanceFromStartSeries && frameIndex < this.distanceFromStartSeries.length
-                ? this.distanceFromStartSeries[frameIndex]
-                : null;
-            frameDistanceElem.textContent = (d !== null && d !== undefined && Number.isFinite(d))
-                ? d.toFixed(2)
-                : '-';
-        }
+        this.updateExpectedCurveDisplays(frameIndex);
         
         try {
             // Store previous frame's perception data before loading new frame (for change calculations)
@@ -5016,7 +5121,97 @@ class Visualizer {
             'control-launch-throttle-cap-active',
             c.launch_throttle_cap_active !== undefined ? (c.launch_throttle_cap_active ? 'YES' : 'NO') : '-'
         );
+        updateField(
+            'control-is-control-straight-proxy',
+            c.is_control_straight_proxy !== undefined
+                ? (c.is_control_straight_proxy ? 'YES' : 'NO')
+                : '-'
+        );
         updateField('control-is-straight', c.is_straight !== undefined ? (c.is_straight ? 'YES' : 'NO') : '-');
+        updateField(
+            'control-is-road-straight',
+            c.road_curvature_valid
+                ? (c.is_road_straight ? 'YES' : 'NO')
+                : '-'
+        );
+        updateField(
+            'control-road-curvature-valid',
+            c.road_curvature_valid !== undefined && c.road_curvature_valid !== null
+                ? (c.road_curvature_valid ? 'YES' : 'NO')
+                : '-'
+        );
+        updateField(
+            'control-road-curvature-abs',
+            c.road_curvature_valid && c.road_curvature_abs !== undefined && c.road_curvature_abs !== null
+                ? Number(c.road_curvature_abs).toFixed(4)
+                : '-'
+        );
+        const schedFmtCfg = (v) => (v !== undefined && v !== null ? (v ? 'cfg=ON' : 'cfg=OFF') : 'cfg=?');
+        const schedFmtOnOff = (v) => (v !== undefined && v !== null ? (v ? 'ON' : 'OFF') : 'missing');
+        const schedFmtYesNo = (v) => (v !== undefined && v !== null ? (v ? 'YES' : 'NO') : 'missing');
+        const schedFmtInt = (v) => (
+            v !== undefined && v !== null && Number.isFinite(Number(v)) ? Number(v).toFixed(0) : '-'
+        );
+        const schedFmtFloat = (v, digits = 3) => (
+            v !== undefined && v !== null && Number.isFinite(Number(v)) ? Number(v).toFixed(digits) : '-'
+        );
+        const roadStraightLabel = c.road_curvature_valid
+                ? (c.is_road_straight ? 'YES' : 'NO')
+                : 'missing';
+        const roadValidLabel = c.road_curvature_valid !== undefined && c.road_curvature_valid !== null
+            ? (c.road_curvature_valid ? 'YES' : 'NO')
+            : 'missing';
+        const proxyStraightLabel = c.is_control_straight_proxy !== undefined && c.is_control_straight_proxy !== null
+            ? (c.is_control_straight_proxy ? 'YES' : 'NO')
+            : 'missing';
+        const curveUpcomingLabel = c.curve_upcoming !== undefined && c.curve_upcoming !== null
+            ? (c.curve_upcoming ? 'YES' : 'NO')
+            : 'missing';
+        const curveAtCarLabel = c.curve_at_car !== undefined && c.curve_at_car !== null
+            ? (c.curve_at_car ? 'YES' : 'NO')
+            : 'missing';
+        const curveAtCarRemLabel = schedFmtFloat(c.curve_at_car_distance_remaining_m, 2);
+        const dynActiveLabel = c.dynamic_curve_authority_active !== undefined && c.dynamic_curve_authority_active !== null
+            ? (c.dynamic_curve_authority_active ? 'YES' : 'NO')
+            : 'missing';
+        const roadSourceLabel = c.road_curvature_source ? String(c.road_curvature_source) : '-';
+        const holdRemLabel = schedFmtInt(c.road_straight_invalid_hold_frames_remaining);
+        updateField(
+            'control-steering-curve-entry-schedule-primary',
+            `${schedFmtCfg(c.curve_entry_schedule_enabled_cfg)} / ${schedFmtOnOff(c.curve_entry_schedule_active)} / ${schedFmtYesNo(c.curve_entry_schedule_triggered)} / ${schedFmtYesNo(c.curve_entry_schedule_handoff_triggered)} / ${schedFmtInt(c.curve_entry_schedule_frames_remaining)}`
+        );
+        updateField(
+            'control-steering-curve-entry-schedule-context',
+            `proxy=${proxyStraightLabel}, upcoming=${curveUpcomingLabel}, atCar=${curveAtCarLabel}, remM=${curveAtCarRemLabel}, prog=${schedFmtFloat(c.current_curve_progress_ratio, 3)}, dynActive=${dynActiveLabel}, def=${schedFmtFloat(c.dynamic_curve_rate_deficit, 3)}, boostR=${schedFmtFloat(c.dynamic_curve_rate_boost, 3)}, boostJ=${schedFmtFloat(c.dynamic_curve_jerk_boost_factor, 2)}, boostCapR=${schedFmtFloat(c.dynamic_curve_rate_boost_cap_effective, 3)}, boostCapJ=${schedFmtFloat(c.dynamic_curve_jerk_boost_cap_effective, 2)}, gLat=${schedFmtFloat(c.dynamic_curve_lateral_accel_est_g, 3)}, gJRaw=${schedFmtFloat(c.dynamic_curve_lateral_jerk_est_gps, 3)}, gJSm=${schedFmtFloat(c.dynamic_curve_lateral_jerk_est_smoothed_gps, 3)}, sScale=${schedFmtFloat(c.dynamic_curve_speed_scale, 2)}, cScale=${schedFmtFloat(c.dynamic_curve_comfort_scale, 2)}, aGate=${schedFmtFloat(c.dynamic_curve_comfort_accel_gate, 2)}, jPen=${schedFmtFloat(c.dynamic_curve_comfort_jerk_penalty, 2)}, streak=${schedFmtInt(c.dynamic_curve_authority_deficit_streak)}, kProxy=${schedFmtFloat(c.steering_rate_limit_curve_metric_abs, 4)}, upEnter=${schedFmtFloat(c.curve_upcoming_enter_threshold_cfg, 4)}, upExit=${schedFmtFloat(c.curve_upcoming_exit_threshold_cfg, 4)}, road=${roadStraightLabel}, valid=${roadValidLabel}, source=${roadSourceLabel}, kRoad=${schedFmtFloat(c.road_curvature_abs, 4)}, enter=${schedFmtFloat(c.road_curve_enter_threshold_cfg, 4)}, exit=${schedFmtFloat(c.road_curve_exit_threshold_cfg, 4)}, holdRem=${holdRemLabel}`
+        );
+        updateField(
+            'control-steering-curve-entry-schedule-params',
+            `f=${schedFmtInt(c.curve_entry_schedule_frames_cfg)}, r=${schedFmtFloat(c.curve_entry_schedule_min_rate_cfg, 3)}, j=${schedFmtFloat(c.curve_entry_schedule_min_jerk_cfg, 3)}, hold=${schedFmtInt(c.curve_entry_schedule_min_hold_frames_cfg)}, progMin=${schedFmtFloat(c.curve_entry_schedule_min_curve_progress_ratio_cfg, 2)}, fbDyn=${schedFmtCfg(c.curve_entry_schedule_fallback_only_when_dynamic_cfg)}, fbN=${schedFmtInt(c.curve_entry_schedule_fallback_deficit_frames_cfg)}, fbDef=${schedFmtFloat(c.curve_entry_schedule_fallback_rate_deficit_min_cfg, 3)}, dyn=${schedFmtCfg(c.dynamic_curve_authority_enabled_cfg)}, dDB=${schedFmtFloat(c.dynamic_curve_rate_deficit_deadband_cfg, 3)}, dGain=${schedFmtFloat(c.dynamic_curve_rate_boost_gain_cfg, 2)}, dMax=${schedFmtFloat(c.dynamic_curve_rate_boost_max_cfg, 2)}, gComfort=${schedFmtFloat(c.dynamic_curve_comfort_lat_accel_comfort_max_g_cfg, 2)}, gPeak=${schedFmtFloat(c.dynamic_curve_comfort_lat_accel_peak_max_g_cfg, 2)}, gJComfort=${schedFmtFloat(c.dynamic_curve_comfort_lat_jerk_comfort_max_gps_cfg, 2)}, jAlpha=${schedFmtFloat(c.dynamic_curve_lat_jerk_smoothing_alpha_cfg, 2)}, jStart=${schedFmtFloat(c.dynamic_curve_lat_jerk_soft_start_ratio_cfg, 2)}, jFloor=${schedFmtFloat(c.dynamic_curve_lat_jerk_soft_floor_scale_cfg, 2)}, vLo=${schedFmtFloat(c.dynamic_curve_speed_low_mps_cfg, 1)}, vHi=${schedFmtFloat(c.dynamic_curve_speed_high_mps_cfg, 1)}, sMax=${schedFmtFloat(c.dynamic_curve_speed_boost_max_scale_cfg, 2)}`
+        );
+        const frameDistance = this.distanceFromStartSeries && this.currentFrameIndex < this.distanceFromStartSeries.length
+            ? Number(this.distanceFromStartSeries[this.currentFrameIndex])
+            : null;
+        const refLookahead = ref && Number.isFinite(Number(ref.y)) ? Number(ref.y) : null;
+        const expectedAtCar = this.getExpectedCurveState(frameDistance);
+        const expectedAtRef = this.getExpectedCurveState(
+            Number.isFinite(frameDistance) && Number.isFinite(refLookahead)
+                ? (frameDistance + refLookahead)
+                : null
+        );
+        const fmtExpected = (state) => {
+            if (!state) return 'n/a';
+            if (state.inCurve) {
+                return `C${state.curveIndex} ${state.start.toFixed(1)}-${state.end.toFixed(1)}m`;
+            }
+            if (state.nextCurveStart !== null && state.nextCurveDelta !== null) {
+                return `straight -> C${state.nextCurveIndex} in ${state.nextCurveDelta.toFixed(1)}m`;
+            }
+            return 'straight';
+        };
+        updateField(
+            'control-expected-curve-window',
+            `${this.expectedTrackKey}: car=${fmtExpected(expectedAtCar)} | ref=${fmtExpected(expectedAtRef)}`
+        );
         updateField('control-straight-oscillation-rate', c.straight_oscillation_rate !== undefined ? c.straight_oscillation_rate.toFixed(3) : '-');
         updateField('control-tuned-deadband', c.tuned_deadband !== undefined ? c.tuned_deadband.toFixed(3) : '-');
         updateField('control-tuned-smoothing-alpha', c.tuned_error_smoothing_alpha !== undefined ? c.tuned_error_smoothing_alpha.toFixed(3) : '-');
@@ -5103,24 +5298,32 @@ class Visualizer {
         } else {
             updateField('control-steering-rate-thresholds', '-');
         }
-        if (
-            c.curve_entry_assist_active !== undefined ||
-            c.curve_entry_assist_triggered !== undefined ||
-            c.curve_entry_assist_rearm_frames_remaining !== undefined
-        ) {
-            const active = c.curve_entry_assist_active ? 'ON' : 'OFF';
-            const triggered = c.curve_entry_assist_triggered ? 'YES' : 'NO';
-            const rearm = c.curve_entry_assist_rearm_frames_remaining !== undefined &&
-                c.curve_entry_assist_rearm_frames_remaining !== null
-                ? Number(c.curve_entry_assist_rearm_frames_remaining).toFixed(0)
-                : '-';
-            updateField(
-                'control-steering-curve-entry-assist',
-                `${active} / ${triggered} / ${rearm}`
-            );
-        } else {
-            updateField('control-steering-curve-entry-assist', '-');
-        }
+        const fmtCfg = (v) => (v !== undefined && v !== null ? (v ? 'cfg=ON' : 'cfg=OFF') : 'cfg=?');
+        const fmtOnOff = (v) => (v !== undefined && v !== null ? (v ? 'ON' : 'OFF') : 'missing');
+        const fmtYesNo = (v) => (v !== undefined && v !== null ? (v ? 'YES' : 'NO') : 'missing');
+        const fmtIntOrDash = (v) => (
+            v !== undefined && v !== null && Number.isFinite(Number(v))
+                ? Number(v).toFixed(0)
+                : '-'
+        );
+        const fmtFloatOrDash = (v, digits = 3) => (
+            v !== undefined && v !== null && Number.isFinite(Number(v))
+                ? Number(v).toFixed(digits)
+                : '-'
+        );
+
+        updateField(
+            'control-steering-curve-entry-assist',
+            `${fmtCfg(c.curve_entry_assist_enabled_cfg)} / ${fmtOnOff(c.curve_entry_assist_active)} / ${fmtYesNo(c.curve_entry_assist_triggered)} / ${fmtIntOrDash(c.curve_entry_assist_rearm_frames_remaining)} / ${fmtFloatOrDash(c.curve_entry_assist_rate_boost_cfg)}x,${fmtFloatOrDash(c.curve_entry_assist_jerk_boost_cfg)}x`
+        );
+        updateField(
+            'control-steering-curve-commit-mode',
+            `${fmtCfg(c.curve_commit_mode_enabled_cfg)} / ${fmtOnOff(c.curve_commit_mode_active)} / ${fmtYesNo(c.curve_commit_mode_triggered)} / ${fmtYesNo(c.curve_commit_mode_handoff_triggered)} / ${fmtIntOrDash(c.curve_commit_mode_frames_remaining)} / f=${fmtIntOrDash(c.curve_commit_mode_max_frames_cfg)},r=${fmtFloatOrDash(c.curve_commit_mode_min_rate_cfg, 3)},j=${fmtFloatOrDash(c.curve_commit_mode_min_jerk_cfg, 3)},x=${fmtIntOrDash(c.curve_commit_mode_exit_consecutive_frames_cfg)}`
+        );
+        updateField(
+            'control-steering-curve-mode-speed-cap',
+            `${fmtCfg(c.curve_mode_speed_cap_enabled_cfg)} / ${fmtOnOff(c.curve_mode_speed_cap_active)} / ${fmtYesNo(c.curve_mode_speed_cap_clamped)} / ${fmtFloatOrDash(c.curve_mode_speed_cap_value, 3)} / cap=${fmtFloatOrDash(c.curve_mode_speed_cap_mps_cfg, 2)},minRatio=${fmtFloatOrDash(c.curve_mode_speed_cap_min_ratio_cfg, 2)}`
+        );
         if (
             c.steering_rate_limit_curve_metric_abs !== undefined &&
             c.steering_rate_limit_curve_min !== undefined &&

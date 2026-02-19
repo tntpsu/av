@@ -62,6 +62,689 @@ def test_lateral_controller_metadata_includes_steering_terms():
     assert isinstance(meta['total_error_scaled'], float)
 
 
+def test_lateral_controller_straight_proxy_alias_matches_legacy_flag():
+    """Control straight proxy should match legacy is_straight exactly."""
+    controller = LateralController(kp=1.0, kd=0.2, straight_curvature_threshold=0.01)
+    reference_point = {
+        'x': 0.1,
+        'y': 10.0,
+        'heading': 0.012,
+        'velocity': 10.0,
+        'curvature': 0.0,
+    }
+    meta = controller.compute_steering(
+        current_heading=0.0,
+        reference_point=reference_point,
+        return_metadata=True,
+    )
+
+    assert 'is_straight' in meta
+    assert 'is_control_straight_proxy' in meta
+    assert meta['is_control_straight_proxy'] == meta['is_straight']
+
+
+def test_lateral_controller_reports_road_straight_validity_separately():
+    """Road-straight signal should track curvature validity independently of proxy."""
+    controller = LateralController(
+        kp=1.0,
+        kd=0.2,
+        straight_curvature_threshold=0.01,
+        road_straight_hold_invalid_frames=0,
+    )
+
+    # No curvature provided -> road curvature invalid, proxy still evaluated from fallback.
+    meta_missing = controller.compute_steering(
+        current_heading=0.0,
+        reference_point={
+            'x': 0.0,
+            'y': 10.0,
+            'heading': 0.02,  # fallback proxy says not straight
+            'velocity': 10.0,
+        },
+        return_metadata=True,
+    )
+    assert meta_missing['road_curvature_valid'] is False
+    assert meta_missing['is_road_straight'] is None
+    assert meta_missing['is_control_straight_proxy'] is False
+
+    # Curvature provided (even zero) with no "missing" source -> valid road curvature.
+    meta_zero_curv = controller.compute_steering(
+        current_heading=0.0,
+        reference_point={
+            'x': 0.0,
+            'y': 10.0,
+            'heading': 0.02,
+            'velocity': 10.0,
+            'curvature': 0.0,
+        },
+        return_metadata=True,
+    )
+    assert bool(meta_zero_curv['road_curvature_valid']) is True
+    assert meta_zero_curv['road_curvature_abs'] == pytest.approx(0.0)
+    assert meta_zero_curv['is_road_straight'] is True
+    assert meta_zero_curv['is_control_straight_proxy'] is False
+
+    # Explicit missing source keeps road signal unknown while proxy still works.
+    meta_missing_source = controller.compute_steering(
+        current_heading=0.0,
+        reference_point={
+            'x': 0.0,
+            'y': 10.0,
+            'heading': 0.02,
+            'velocity': 10.0,
+            'curvature': 0.0,
+            'curvature_source': 'missing',
+        },
+        return_metadata=True,
+    )
+    assert bool(meta_missing_source['road_curvature_valid']) is False
+    assert meta_missing_source['is_road_straight'] is None
+    assert meta_missing_source['is_control_straight_proxy'] is False
+
+
+def test_lateral_controller_curve_upcoming_gates_curve_entry_schedule():
+    """Curve-entry schedule should arm when curve_at_car rises (after distance wait)."""
+    controller = LateralController(
+        kp=1.0,
+        kd=0.2,
+        curve_entry_schedule_enabled=True,
+        curve_entry_schedule_frames=8,
+        curve_upcoming_enter_threshold=0.010,
+        curve_upcoming_exit_threshold=0.008,
+        curve_upcoming_on_frames=2,
+        curve_upcoming_off_frames=1,
+    )
+    base_ref = {'x': 0.0, 'y': 0.05, 'velocity': 10.0}
+
+    m0 = controller.compute_steering(
+        current_heading=0.0,
+        reference_point={**base_ref, 'heading': 0.011, 'curvature': 0.011},
+        current_speed=10.0,
+        return_metadata=True,
+    )
+    assert m0['curve_upcoming'] is False
+    assert m0['curve_at_car'] is False
+    assert m0['curve_entry_schedule_triggered'] is False
+
+    m1 = controller.compute_steering(
+        current_heading=0.0,
+        reference_point={**base_ref, 'heading': 0.012, 'curvature': 0.012},
+        current_speed=10.0,
+        return_metadata=True,
+    )
+    assert m1['curve_upcoming'] is True
+    assert m1['curve_at_car'] is True
+    assert m1['curve_entry_schedule_triggered'] is True
+
+
+def test_lateral_controller_curve_upcoming_gates_curve_commit_trigger():
+    """Curve-commit trigger should wait for curve_at_car stabilization."""
+    controller = LateralController(
+        kp=1.0,
+        kd=0.2,
+        curve_entry_schedule_enabled=False,
+        curve_commit_mode_enabled=True,
+        curve_commit_mode_max_frames=12,
+        curve_upcoming_enter_threshold=0.010,
+        curve_upcoming_exit_threshold=0.008,
+        curve_upcoming_on_frames=2,
+        curve_upcoming_off_frames=1,
+    )
+    base_ref = {'x': 0.0, 'y': 0.05, 'velocity': 10.0}
+
+    m0 = controller.compute_steering(
+        current_heading=0.0,
+        reference_point={**base_ref, 'heading': 0.011, 'curvature': 0.011},
+        current_speed=10.0,
+        return_metadata=True,
+    )
+    assert m0['curve_upcoming'] is False
+    assert m0['curve_at_car'] is False
+    assert m0['curve_commit_mode_triggered'] is False
+
+    m1 = controller.compute_steering(
+        current_heading=0.0,
+        reference_point={**base_ref, 'heading': 0.012, 'curvature': 0.012},
+        current_speed=10.0,
+        return_metadata=True,
+    )
+    assert m1['curve_upcoming'] is True
+    assert m1['curve_at_car'] is True
+    assert m1['curve_commit_mode_triggered'] is True
+
+
+def test_lateral_controller_curve_at_car_waits_out_reference_distance():
+    """curve_at_car should remain false until traveled distance reaches initial reference y."""
+    controller = LateralController(
+        kp=1.0,
+        kd=0.2,
+        curve_upcoming_enter_threshold=0.010,
+        curve_upcoming_exit_threshold=0.008,
+        curve_upcoming_on_frames=1,
+        curve_upcoming_off_frames=1,
+    )
+    ref = {'x': 0.0, 'y': 4.6, 'heading': 0.02, 'velocity': 10.0, 'curvature': 0.0}
+
+    m0 = controller.compute_steering(
+        current_heading=0.0,
+        reference_point=ref,
+        current_speed=10.0,
+        return_metadata=True,
+    )
+    assert m0['curve_upcoming'] is True
+    assert m0['curve_at_car'] is False
+    assert m0['curve_at_car_distance_remaining_m'] == pytest.approx(4.6 - (10.0 * 0.033), rel=1e-2)
+
+    # Advance ~4.6m at 10m/s with dt=0.033s internal step.
+    for _ in range(13):
+        m = controller.compute_steering(
+            current_heading=0.0,
+            reference_point=ref,
+            current_speed=10.0,
+            return_metadata=True,
+        )
+    assert m['curve_at_car'] is True
+
+
+def test_curve_commit_mode_does_not_exit_on_proxy_straight_alone():
+    """Commit mode should not hand off solely because proxy becomes straight."""
+    controller = LateralController(
+        kp=1.0,
+        kd=0.2,
+        curve_entry_schedule_enabled=False,
+        curve_commit_mode_enabled=True,
+        curve_commit_mode_max_frames=6,
+        curve_upcoming_enter_threshold=0.010,
+        curve_upcoming_exit_threshold=0.008,
+        curve_upcoming_on_frames=1,
+        curve_upcoming_off_frames=1,
+    )
+    # Trigger commit.
+    m0 = controller.compute_steering(
+        current_heading=0.0,
+        reference_point={'x': 0.0, 'y': 0.05, 'heading': 0.02, 'velocity': 10.0, 'curvature': 0.02},
+        current_speed=10.0,
+        return_metadata=True,
+    )
+    assert m0['curve_commit_mode_triggered'] is True
+
+    # Next frame: proxy goes straight (heading near zero). Commit should persist by countdown.
+    m1 = controller.compute_steering(
+        current_heading=0.0,
+        reference_point={'x': 0.0, 'y': 0.05, 'heading': 0.0, 'velocity': 10.0, 'curvature': 0.0},
+        current_speed=10.0,
+        return_metadata=True,
+    )
+    assert m1['is_straight'] is True
+    assert m1['curve_commit_mode_active'] is True
+    assert m1['curve_commit_mode_handoff_triggered'] is False
+    assert int(m1['curve_commit_mode_frames_remaining']) > 0
+
+
+def test_curve_commit_mode_exit_requires_consecutive_handoff_frames():
+    """Commit handoff should require configured consecutive qualifying frames."""
+    controller = LateralController(
+        kp=1.0,
+        kd=0.2,
+        curve_entry_schedule_enabled=False,
+        curve_commit_mode_enabled=True,
+        curve_commit_mode_max_frames=10,
+        curve_commit_mode_exit_consecutive_frames=3,
+    )
+    controller._curve_commit_mode_frames_remaining = 6
+    ref = {'x': 0.3, 'y': 8.0, 'heading': 0.0, 'velocity': 8.0, 'curvature': 0.01}
+
+    # Force three qualifying handoff candidates in a row.
+    m0 = m1 = m2 = None
+    for i in range(3):
+        controller._last_error_magnitude = 1.0  # keeps "error_recovering_commit" true
+        m = controller.compute_steering(
+            current_heading=0.0,
+            reference_point=ref,
+            current_speed=8.0,
+            dt=0.033,
+            return_metadata=True,
+        )
+        if i == 0:
+            m0 = m
+        elif i == 1:
+            m1 = m
+        else:
+            m2 = m
+
+    assert m0['curve_commit_mode_handoff_triggered'] is False
+    assert m1['curve_commit_mode_handoff_triggered'] is False
+    assert m2['curve_commit_mode_handoff_triggered'] is True
+
+
+def test_curve_entry_schedule_handoff_respects_min_hold_frames():
+    """Entry schedule handoff should not occur before configured hold window."""
+    controller = LateralController(
+        kp=1.0,
+        kd=0.2,
+        curve_entry_schedule_enabled=True,
+        curve_entry_schedule_frames=24,
+        curve_entry_schedule_min_hold_frames=4,
+        curve_entry_schedule_handoff_transfer_ratio=0.0,
+    )
+    controller._curve_entry_schedule_frames_remaining = 6
+    controller._curve_entry_schedule_elapsed_frames = 0
+    ref = {'x': 0.2, 'y': 8.0, 'heading': 0.0, 'velocity': 8.0, 'curvature': 0.01}
+
+    m0 = m1 = m2 = m3 = None
+    for i in range(4):
+        controller._last_error_magnitude = 1.0
+        m = controller.compute_steering(
+            current_heading=0.0,
+            reference_point=ref,
+            current_speed=8.0,
+            dt=0.033,
+            return_metadata=True,
+        )
+        if i == 0:
+            m0 = m
+        elif i == 1:
+            m1 = m
+        elif i == 2:
+            m2 = m
+        else:
+            m3 = m
+
+    assert m0['curve_entry_schedule_handoff_triggered'] is False
+    assert m1['curve_entry_schedule_handoff_triggered'] is False
+    assert m2['curve_entry_schedule_handoff_triggered'] is False
+    assert m3['curve_entry_schedule_handoff_triggered'] is True
+
+
+def test_curve_entry_schedule_handoff_waits_for_curve_progress_ratio():
+    """Distance-track handoff should wait until configured in-curve progress ratio."""
+    controller = LateralController(
+        kp=1.0,
+        kd=0.2,
+        curve_phase_use_distance_track=True,
+        curve_phase_track_name='s_loop',
+        curve_entry_schedule_enabled=True,
+        curve_entry_schedule_frames=24,
+        curve_entry_schedule_min_hold_frames=1,
+        curve_entry_schedule_min_curve_progress_ratio=0.20,
+        curve_entry_schedule_handoff_transfer_ratio=0.0,
+    )
+    ref = {'x': 0.2, 'y': 4.7, 'heading': 0.0, 'velocity': 8.0, 'curvature': 0.01}
+    total_len = 452.0353755551324
+
+    # Trigger inside the first curve.
+    m0 = controller.compute_steering(
+        current_heading=0.0,
+        reference_point=ref,
+        current_speed=8.0,
+        road_center_reference_t=25.2 / total_len,
+        dt=0.033,
+        return_metadata=True,
+    )
+    assert m0['curve_entry_schedule_triggered'] is True
+
+    # Early in curve (~8% progress): hold elapsed but handoff still blocked by progress gate.
+    m1 = controller.compute_steering(
+        current_heading=0.0,
+        reference_point=ref,
+        current_speed=8.0,
+        road_center_reference_t=30.0 / total_len,
+        dt=0.033,
+        return_metadata=True,
+    )
+    assert m1['curve_entry_schedule_handoff_triggered'] is False
+
+    # Deeper into curve (~24% progress): handoff can now occur.
+    m2 = controller.compute_steering(
+        current_heading=0.0,
+        reference_point=ref,
+        current_speed=8.0,
+        road_center_reference_t=40.0 / total_len,
+        dt=0.033,
+        return_metadata=True,
+    )
+    assert m2['curve_entry_schedule_handoff_triggered'] is True
+
+
+def test_dynamic_curve_authority_boosts_rate_limit_in_curve():
+    """Dynamic authority should raise steering-rate limit when deficit exists in-curve."""
+    common = dict(
+        kp=1.0,
+        kd=0.2,
+        curve_entry_schedule_enabled=False,
+        curve_commit_mode_enabled=False,
+        curve_upcoming_enter_threshold=0.005,
+        curve_upcoming_exit_threshold=0.004,
+        curve_upcoming_on_frames=1,
+        curve_upcoming_off_frames=1,
+        dynamic_curve_rate_boost_gain=1.0,
+        dynamic_curve_rate_boost_max=0.20,
+    )
+    controller_dynamic = LateralController(
+        **common,
+        dynamic_curve_authority_enabled=True,
+    )
+    controller_static = LateralController(
+        **common,
+        dynamic_curve_authority_enabled=False,
+    )
+    ref = {'x': 1.5, 'y': 0.0, 'heading': 0.2, 'velocity': 8.0, 'curvature': 0.02}
+
+    m_dyn = controller_dynamic.compute_steering(
+        current_heading=0.0,
+        reference_point=ref,
+        current_speed=8.0,
+        dt=0.033,
+        return_metadata=True,
+    )
+    m_static = controller_static.compute_steering(
+        current_heading=0.0,
+        reference_point=ref,
+        current_speed=8.0,
+        dt=0.033,
+        return_metadata=True,
+    )
+
+    assert m_dyn['curve_at_car'] is True
+    assert m_dyn['dynamic_curve_authority_active'] is True
+    assert float(m_dyn['dynamic_curve_rate_boost']) > 0.0
+    assert float(m_dyn['steering_rate_limit_effective']) > float(
+        m_static['steering_rate_limit_effective']
+    )
+
+
+def test_curve_entry_schedule_dynamic_fallback_waits_for_deficit_streak():
+    """With dynamic fallback mode, schedule should trigger only after deficit streak threshold."""
+    controller = LateralController(
+        kp=1.0,
+        kd=0.2,
+        curve_entry_schedule_enabled=True,
+        curve_entry_schedule_frames=12,
+        curve_entry_schedule_min_hold_frames=10,
+        curve_entry_schedule_fallback_only_when_dynamic=True,
+        curve_entry_schedule_fallback_deficit_frames=2,
+        curve_entry_schedule_fallback_rate_deficit_min=0.0,
+        dynamic_curve_authority_enabled=True,
+        dynamic_curve_rate_boost_gain=0.0,
+        curve_commit_mode_enabled=False,
+        curve_upcoming_enter_threshold=0.005,
+        curve_upcoming_exit_threshold=0.004,
+        curve_upcoming_on_frames=1,
+        curve_upcoming_off_frames=1,
+    )
+    ref = {'x': 1.5, 'y': 0.0, 'heading': 0.2, 'velocity': 8.0, 'curvature': 0.02}
+
+    m0 = controller.compute_steering(
+        current_heading=0.0,
+        reference_point=ref,
+        current_speed=8.0,
+        dt=0.033,
+        return_metadata=True,
+    )
+    m1 = controller.compute_steering(
+        current_heading=0.0,
+        reference_point=ref,
+        current_speed=8.0,
+        dt=0.033,
+        return_metadata=True,
+    )
+    m2 = controller.compute_steering(
+        current_heading=0.0,
+        reference_point=ref,
+        current_speed=8.0,
+        dt=0.033,
+        return_metadata=True,
+    )
+
+    assert m0['curve_entry_schedule_triggered'] is False
+    assert m1['curve_entry_schedule_triggered'] is False
+    assert m2['curve_entry_schedule_triggered'] is True
+
+
+def test_curve_entry_schedule_dynamic_fallback_triggers_once_per_curve_segment():
+    """Dynamic fallback should not retrigger schedule repeatedly while staying in same curve."""
+    controller = LateralController(
+        kp=1.0,
+        kd=0.2,
+        curve_entry_schedule_enabled=True,
+        curve_entry_schedule_frames=2,
+        curve_entry_schedule_min_hold_frames=10,
+        curve_entry_schedule_fallback_only_when_dynamic=True,
+        curve_entry_schedule_fallback_deficit_frames=1,
+        curve_entry_schedule_fallback_rate_deficit_min=0.0,
+        dynamic_curve_authority_enabled=True,
+        dynamic_curve_rate_boost_gain=0.0,
+        curve_commit_mode_enabled=False,
+        curve_upcoming_enter_threshold=0.005,
+        curve_upcoming_exit_threshold=0.004,
+        curve_upcoming_on_frames=1,
+        curve_upcoming_off_frames=1,
+    )
+    ref = {'x': 1.5, 'y': 0.0, 'heading': 0.2, 'velocity': 8.0, 'curvature': 0.02}
+
+    triggers = 0
+    for _ in range(8):
+        m = controller.compute_steering(
+            current_heading=0.0,
+            reference_point=ref,
+            current_speed=8.0,
+            dt=0.033,
+            return_metadata=True,
+        )
+        if m['curve_entry_schedule_triggered']:
+            triggers += 1
+
+    assert triggers == 1
+
+
+def test_dynamic_curve_boost_cap_scales_with_speed_and_comfort():
+    """Dynamic boost cap should increase at low speed and shut down past comfort envelope."""
+    base = dict(
+        kp=1.0,
+        kd=0.2,
+        curve_entry_schedule_enabled=False,
+        curve_commit_mode_enabled=False,
+        curve_upcoming_enter_threshold=0.005,
+        curve_upcoming_exit_threshold=0.004,
+        curve_upcoming_on_frames=1,
+        curve_upcoming_off_frames=1,
+        dynamic_curve_authority_enabled=True,
+        dynamic_curve_rate_boost_gain=1.0,
+        dynamic_curve_rate_boost_max=0.30,
+        dynamic_curve_speed_low_mps=4.0,
+        dynamic_curve_speed_high_mps=10.0,
+        dynamic_curve_speed_boost_max_scale=1.4,
+        dynamic_curve_comfort_lat_accel_comfort_max_g=0.18,
+        dynamic_curve_comfort_lat_accel_peak_max_g=0.25,
+        dynamic_curve_comfort_lat_jerk_comfort_max_gps=0.30,
+    )
+    ref = {'x': 1.5, 'y': 0.0, 'heading': 0.2, 'velocity': 8.0, 'curvature': 0.02}
+
+    low_speed = LateralController(**base).compute_steering(
+        current_heading=0.0,
+        reference_point=ref,
+        current_speed=4.0,
+        dt=0.033,
+        return_metadata=True,
+    )
+    high_speed = LateralController(**base).compute_steering(
+        current_heading=0.0,
+        reference_point=ref,
+        current_speed=10.0,
+        dt=0.033,
+        return_metadata=True,
+    )
+    assert low_speed['dynamic_curve_speed_scale'] > high_speed['dynamic_curve_speed_scale']
+    assert (
+        low_speed['dynamic_curve_rate_boost_cap_effective']
+        > high_speed['dynamic_curve_rate_boost_cap_effective']
+    )
+
+    over_comfort_ref = {'x': 1.5, 'y': 0.0, 'heading': 0.2, 'velocity': 10.0, 'curvature': 0.03}
+    over_comfort = LateralController(**base).compute_steering(
+        current_heading=0.0,
+        reference_point=over_comfort_ref,
+        current_speed=10.0,
+        dt=0.033,
+        return_metadata=True,
+    )
+    assert over_comfort['dynamic_curve_lateral_accel_est_g'] > 0.25
+    assert over_comfort['dynamic_curve_comfort_scale'] == 0.0
+    assert over_comfort['dynamic_curve_rate_boost_cap_effective'] == 0.0
+    assert over_comfort['dynamic_curve_rate_boost'] == 0.0
+
+
+def test_dynamic_curve_jerk_soft_penalty_does_not_hard_disable_boost():
+    """A single high jerk frame should soft-dampen boost, not hard-disable it."""
+    controller = LateralController(
+        kp=1.0,
+        kd=0.2,
+        curve_entry_schedule_enabled=False,
+        curve_commit_mode_enabled=False,
+        dynamic_curve_authority_enabled=True,
+        dynamic_curve_rate_boost_gain=1.0,
+        dynamic_curve_rate_boost_max=0.30,
+        dynamic_curve_comfort_lat_accel_comfort_max_g=0.18,
+        dynamic_curve_comfort_lat_accel_peak_max_g=0.25,
+        dynamic_curve_comfort_lat_jerk_comfort_max_gps=0.30,
+        dynamic_curve_lat_jerk_smoothing_alpha=0.25,
+        dynamic_curve_lat_jerk_soft_start_ratio=0.60,
+        dynamic_curve_lat_jerk_soft_floor_scale=0.35,
+        curve_upcoming_enter_threshold=0.005,
+        curve_upcoming_exit_threshold=0.004,
+        curve_upcoming_on_frames=1,
+        curve_upcoming_off_frames=1,
+    )
+    # Prime history at low curvature.
+    controller.compute_steering(
+        current_heading=0.0,
+        reference_point={'x': 0.5, 'y': 0.0, 'heading': 0.0, 'velocity': 8.0, 'curvature': 0.001},
+        current_speed=8.0,
+        dt=0.033,
+        return_metadata=True,
+    )
+    # Sudden curvature jump creates high raw jerk estimate.
+    m = controller.compute_steering(
+        current_heading=0.0,
+        reference_point={'x': 1.5, 'y': 0.0, 'heading': 0.2, 'velocity': 8.0, 'curvature': 0.02},
+        current_speed=8.0,
+        dt=0.033,
+        return_metadata=True,
+    )
+    assert m['dynamic_curve_lateral_jerk_est_gps'] > m['dynamic_curve_lateral_jerk_est_smoothed_gps']
+    assert 0.0 < float(m['dynamic_curve_comfort_jerk_penalty']) <= 1.0
+    assert float(m['dynamic_curve_rate_boost_cap_effective']) > 0.0
+
+
+def test_distance_track_curve_phase_arms_upcoming_before_curve_start():
+    """Distance-track phase should arm upcoming before start and at_car at curve start."""
+    controller = LateralController(
+        kp=1.0,
+        kd=0.2,
+        curve_phase_use_distance_track=True,
+        curve_phase_track_name='s_loop',
+        curve_entry_schedule_enabled=True,
+        curve_entry_schedule_frames=8,
+    )
+    base_ref = {'x': 0.0, 'y': 4.7, 'heading': 0.0, 'velocity': 8.0, 'curvature': 0.0}
+
+    # ~20.5m along track, first curve at 25m and lookahead=4.7: upcoming should be true.
+    m0 = controller.compute_steering(
+        current_heading=0.0,
+        reference_point=base_ref,
+        current_speed=8.0,
+        road_center_reference_t=20.5 / 452.0353755551324,
+        return_metadata=True,
+    )
+    assert m0['curve_upcoming'] is True
+    assert m0['curve_at_car'] is False
+    assert m0['curve_entry_schedule_triggered'] is False
+
+    # Slightly into curve start -> at_car true and schedule triggers.
+    m1 = controller.compute_steering(
+        current_heading=0.0,
+        reference_point=base_ref,
+        current_speed=8.0,
+        road_center_reference_t=25.2 / 452.0353755551324,
+        return_metadata=True,
+    )
+    assert m1['curve_upcoming'] is True
+    assert m1['curve_at_car'] is True
+    assert m1['curve_entry_schedule_triggered'] is True
+
+
+def test_lateral_controller_road_straight_hysteresis_and_invalid_hold():
+    """Road-straight should use enter/exit hysteresis and hold state on invalid gaps."""
+    controller = LateralController(
+        kp=1.0,
+        kd=0.2,
+        straight_curvature_threshold=0.01,
+        road_curve_enter_threshold=0.012,
+        road_curve_exit_threshold=0.008,
+        road_straight_hold_invalid_frames=2,
+    )
+    base_ref = {'x': 0.0, 'y': 10.0, 'heading': 0.0, 'velocity': 10.0}
+
+    m0 = controller.compute_steering(
+        current_heading=0.0,
+        reference_point={**base_ref, 'curvature': 0.007},
+        return_metadata=True,
+    )
+    assert m0['is_road_straight'] is True
+
+    # Between exit and enter thresholds: hold previous straight state.
+    m1 = controller.compute_steering(
+        current_heading=0.0,
+        reference_point={**base_ref, 'curvature': 0.010},
+        return_metadata=True,
+    )
+    assert m1['is_road_straight'] is True
+
+    # Exceed enter threshold: transition to curve.
+    m2 = controller.compute_steering(
+        current_heading=0.0,
+        reference_point={**base_ref, 'curvature': 0.013},
+        return_metadata=True,
+    )
+    assert m2['is_road_straight'] is False
+
+    # Back into hysteresis band: hold curve state.
+    m3 = controller.compute_steering(
+        current_heading=0.0,
+        reference_point={**base_ref, 'curvature': 0.010},
+        return_metadata=True,
+    )
+    assert m3['is_road_straight'] is False
+
+    # Below exit threshold: transition back to straight.
+    m4 = controller.compute_steering(
+        current_heading=0.0,
+        reference_point={**base_ref, 'curvature': 0.007},
+        return_metadata=True,
+    )
+    assert m4['is_road_straight'] is True
+
+    # Missing curvature: hold prior state for configured invalid-frame hold.
+    m5 = controller.compute_steering(
+        current_heading=0.0,
+        reference_point={**base_ref},
+        return_metadata=True,
+    )
+    m6 = controller.compute_steering(
+        current_heading=0.0,
+        reference_point={**base_ref},
+        return_metadata=True,
+    )
+    m7 = controller.compute_steering(
+        current_heading=0.0,
+        reference_point={**base_ref},
+        return_metadata=True,
+    )
+    assert m5['is_road_straight'] is True
+    assert m6['is_road_straight'] is True
+    assert m7['is_road_straight'] is None
+
+
 def test_lateral_controller_sign_flip_override_on_straight():
     """Sign-flip override should activate on straight when error reverses."""
     controller = LateralController(

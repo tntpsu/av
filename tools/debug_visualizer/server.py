@@ -16,6 +16,9 @@ import sys
 import logging
 import subprocess
 import re
+import yaml
+import yaml
+import math
 
 # Add backend modules to path
 backend_path = Path(__file__).parent / "backend"
@@ -37,6 +40,84 @@ app.logger.setLevel(logging.ERROR)
 RECORDINGS_DIR = Path(__file__).parent.parent.parent / "data" / "recordings"
 DEBUG_VIS_DIR = Path(__file__).parent.parent.parent / "tmp" / "debug_visualizations"
 REPO_ROOT = Path(__file__).parent.parent.parent
+
+
+def _load_lateral_control_config() -> dict:
+    """Read current control config for UI state/context fields."""
+    config_path = REPO_ROOT / "config" / "av_stack_config.yaml"
+    if not config_path.exists():
+        return {}
+    try:
+        with open(config_path, "r") as cfg:
+            config = yaml.safe_load(cfg) or {}
+    except Exception:
+        return {}
+    lateral_cfg = {}
+    control_lateral = (config.get("control", {}) or {}).get("lateral", {}) or {}
+    root_lateral = config.get("lateral_control", {}) or {}
+    if isinstance(control_lateral, dict):
+        lateral_cfg.update(control_lateral)
+    if isinstance(root_lateral, dict):
+        lateral_cfg.update(root_lateral)
+    return lateral_cfg
+
+
+def _load_track_curve_windows(track_name: str) -> dict:
+    """Build canonical curve windows from a track YAML definition."""
+    safe_name = re.sub(r"[^a-zA-Z0-9_\\-]", "", str(track_name or "").strip())
+    if not safe_name:
+        raise ValueError("Track name is required")
+    track_path = REPO_ROOT / "tracks" / f"{safe_name}.yml"
+    if not track_path.exists():
+        raise FileNotFoundError(f"Track YAML not found: {track_path}")
+
+    with open(track_path, "r") as f:
+        cfg = yaml.safe_load(f) or {}
+
+    segments = cfg.get("segments", []) or []
+    s = 0.0
+    seg_out = []
+    curve_out = []
+    curve_idx = 0
+    for idx, segment in enumerate(segments):
+        seg = segment or {}
+        seg_type = str(seg.get("type", "straight")).strip().lower()
+        start_m = s
+        length_m = 0.0
+        out = {
+            "segment_index": int(idx),
+            "type": seg_type,
+            "start_m": float(start_m),
+        }
+        if seg_type == "arc":
+            radius = float(seg.get("radius", 0.0) or 0.0)
+            angle_deg = float(seg.get("angle_deg", seg.get("angle", 0.0)) or 0.0)
+            angle_rad = math.radians(abs(angle_deg))
+            length_m = max(0.0, radius * angle_rad)
+            out["radius_m"] = radius
+            out["angle_deg"] = angle_deg
+            out["direction"] = str(seg.get("direction", "left")).strip().lower()
+            curve_idx += 1
+            out["curve_index"] = int(curve_idx)
+        else:
+            length_m = max(0.0, float(seg.get("length", 0.0) or 0.0))
+            out["length_m"] = length_m
+
+        s += length_m
+        out["end_m"] = float(s)
+        out["segment_length_m"] = float(length_m)
+        seg_out.append(out)
+        if seg_type == "arc":
+            curve_out.append(out)
+
+    return {
+        "track_name": cfg.get("name", safe_name),
+        "track_key": safe_name,
+        "loop": bool(cfg.get("loop", False)),
+        "total_length_m": float(s),
+        "curve_windows": curve_out,
+        "segments": seg_out,
+    }
 
 
 def numpy_to_list(obj):
@@ -359,6 +440,18 @@ def get_timeseries(filename):
         return jsonify({"error": str(e)}), 500
 
 
+@app.route('/api/track/<track_name>/curve-windows')
+def get_track_curve_windows(track_name):
+    """Return canonical segment and curve distance windows for a track."""
+    try:
+        payload = _load_track_curve_windows(track_name)
+        return jsonify(payload)
+    except FileNotFoundError as e:
+        return jsonify({"error": str(e)}), 404
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route('/api/recording/<path:filename>/frame/<int:frame_index>')
 def get_frame_data(filename, frame_index):
     """Get all data for a specific frame.
@@ -373,6 +466,7 @@ def get_frame_data(filename, frame_index):
         return jsonify({"error": f"Recording not found: {filename}"}), 404
     
     try:
+        lateral_cfg = _load_lateral_control_config()
         with h5py.File(filepath, 'r') as f:
             frame_data = {}
             
@@ -980,6 +1074,60 @@ def get_frame_data(filename, frame_index):
                         frame_data['control']['launch_throttle_cap_active'] = int(f['control/launch_throttle_cap_active'][control_idx]) == 1
                     if 'control/is_straight' in f and control_idx < len(f['control/is_straight']):
                         frame_data['control']['is_straight'] = int(f['control/is_straight'][control_idx]) == 1
+                    if 'control/is_control_straight_proxy' in f and control_idx < len(
+                        f['control/is_control_straight_proxy']
+                    ):
+                        frame_data['control']['is_control_straight_proxy'] = int(
+                            f['control/is_control_straight_proxy'][control_idx]
+                        ) == 1
+                    elif 'control/is_straight' in f and control_idx < len(f['control/is_straight']):
+                        # Backward compatibility for older recordings.
+                        frame_data['control']['is_control_straight_proxy'] = int(
+                            f['control/is_straight'][control_idx]
+                        ) == 1
+                    if 'control/curve_upcoming' in f and control_idx < len(
+                        f['control/curve_upcoming']
+                    ):
+                        frame_data['control']['curve_upcoming'] = int(
+                            f['control/curve_upcoming'][control_idx]
+                        ) == 1
+                    if 'control/curve_at_car' in f and control_idx < len(
+                        f['control/curve_at_car']
+                    ):
+                        frame_data['control']['curve_at_car'] = int(
+                            f['control/curve_at_car'][control_idx]
+                        ) == 1
+                    if 'control/curve_at_car_distance_remaining_m' in f and control_idx < len(
+                        f['control/curve_at_car_distance_remaining_m']
+                    ):
+                        frame_data['control']['curve_at_car_distance_remaining_m'] = float(
+                            f['control/curve_at_car_distance_remaining_m'][control_idx]
+                        )
+                    if 'control/is_road_straight' in f and control_idx < len(f['control/is_road_straight']):
+                        frame_data['control']['is_road_straight'] = int(
+                            f['control/is_road_straight'][control_idx]
+                        ) == 1
+                    if 'control/road_curvature_valid' in f and control_idx < len(
+                        f['control/road_curvature_valid']
+                    ):
+                        frame_data['control']['road_curvature_valid'] = int(
+                            f['control/road_curvature_valid'][control_idx]
+                        ) == 1
+                    if 'control/road_curvature_abs' in f and control_idx < len(
+                        f['control/road_curvature_abs']
+                    ):
+                        frame_data['control']['road_curvature_abs'] = float(
+                            f['control/road_curvature_abs'][control_idx]
+                        )
+                    if 'control/road_curvature_source' in f and control_idx < len(
+                        f['control/road_curvature_source']
+                    ):
+                        source_val = f['control/road_curvature_source'][control_idx]
+                        if isinstance(source_val, bytes):
+                            source_val = source_val.decode('utf-8', 'ignore')
+                        frame_data['control']['road_curvature_source'] = (
+                            str(source_val) if source_val is not None else ''
+                        )
                     if 'control/straight_oscillation_rate' in f and control_idx < len(f['control/straight_oscillation_rate']):
                         frame_data['control']['straight_oscillation_rate'] = float(f['control/straight_oscillation_rate'][control_idx])
                     if 'control/tuned_deadband' in f and control_idx < len(f['control/tuned_deadband']):
@@ -1059,6 +1207,168 @@ def get_frame_data(filename, frame_index):
                         frame_data['control']['steering_rate_limit_margin'] = float(f['control/steering_rate_limit_margin'][control_idx])
                     if 'control/steering_rate_limit_unlock_delta_needed' in f and control_idx < len(f['control/steering_rate_limit_unlock_delta_needed']):
                         frame_data['control']['steering_rate_limit_unlock_delta_needed'] = float(f['control/steering_rate_limit_unlock_delta_needed'][control_idx])
+                    if 'control/curve_entry_assist_active' in f and control_idx < len(f['control/curve_entry_assist_active']):
+                        frame_data['control']['curve_entry_assist_active'] = int(
+                            f['control/curve_entry_assist_active'][control_idx]
+                        ) == 1
+                    if 'control/curve_entry_assist_triggered' in f and control_idx < len(f['control/curve_entry_assist_triggered']):
+                        frame_data['control']['curve_entry_assist_triggered'] = int(
+                            f['control/curve_entry_assist_triggered'][control_idx]
+                        ) == 1
+                    if 'control/curve_entry_assist_rearm_frames_remaining' in f and control_idx < len(
+                        f['control/curve_entry_assist_rearm_frames_remaining']
+                    ):
+                        frame_data['control']['curve_entry_assist_rearm_frames_remaining'] = int(
+                            f['control/curve_entry_assist_rearm_frames_remaining'][control_idx]
+                        )
+                    if 'control/dynamic_curve_authority_active' in f and control_idx < len(
+                        f['control/dynamic_curve_authority_active']
+                    ):
+                        frame_data['control']['dynamic_curve_authority_active'] = int(
+                            f['control/dynamic_curve_authority_active'][control_idx]
+                        ) == 1
+                    if 'control/dynamic_curve_rate_request_delta' in f and control_idx < len(
+                        f['control/dynamic_curve_rate_request_delta']
+                    ):
+                        frame_data['control']['dynamic_curve_rate_request_delta'] = float(
+                            f['control/dynamic_curve_rate_request_delta'][control_idx]
+                        )
+                    if 'control/dynamic_curve_rate_deficit' in f and control_idx < len(
+                        f['control/dynamic_curve_rate_deficit']
+                    ):
+                        frame_data['control']['dynamic_curve_rate_deficit'] = float(
+                            f['control/dynamic_curve_rate_deficit'][control_idx]
+                        )
+                    if 'control/dynamic_curve_rate_boost' in f and control_idx < len(
+                        f['control/dynamic_curve_rate_boost']
+                    ):
+                        frame_data['control']['dynamic_curve_rate_boost'] = float(
+                            f['control/dynamic_curve_rate_boost'][control_idx]
+                        )
+                    if 'control/dynamic_curve_jerk_boost_factor' in f and control_idx < len(
+                        f['control/dynamic_curve_jerk_boost_factor']
+                    ):
+                        frame_data['control']['dynamic_curve_jerk_boost_factor'] = float(
+                            f['control/dynamic_curve_jerk_boost_factor'][control_idx]
+                        )
+                    if 'control/dynamic_curve_lateral_accel_est_g' in f and control_idx < len(
+                        f['control/dynamic_curve_lateral_accel_est_g']
+                    ):
+                        frame_data['control']['dynamic_curve_lateral_accel_est_g'] = float(
+                            f['control/dynamic_curve_lateral_accel_est_g'][control_idx]
+                        )
+                    if 'control/dynamic_curve_lateral_jerk_est_gps' in f and control_idx < len(
+                        f['control/dynamic_curve_lateral_jerk_est_gps']
+                    ):
+                        frame_data['control']['dynamic_curve_lateral_jerk_est_gps'] = float(
+                            f['control/dynamic_curve_lateral_jerk_est_gps'][control_idx]
+                        )
+                    if 'control/dynamic_curve_lateral_jerk_est_smoothed_gps' in f and control_idx < len(
+                        f['control/dynamic_curve_lateral_jerk_est_smoothed_gps']
+                    ):
+                        frame_data['control']['dynamic_curve_lateral_jerk_est_smoothed_gps'] = float(
+                            f['control/dynamic_curve_lateral_jerk_est_smoothed_gps'][control_idx]
+                        )
+                    if 'control/dynamic_curve_speed_scale' in f and control_idx < len(
+                        f['control/dynamic_curve_speed_scale']
+                    ):
+                        frame_data['control']['dynamic_curve_speed_scale'] = float(
+                            f['control/dynamic_curve_speed_scale'][control_idx]
+                        )
+                    if 'control/dynamic_curve_comfort_scale' in f and control_idx < len(
+                        f['control/dynamic_curve_comfort_scale']
+                    ):
+                        frame_data['control']['dynamic_curve_comfort_scale'] = float(
+                            f['control/dynamic_curve_comfort_scale'][control_idx]
+                        )
+                    if 'control/dynamic_curve_comfort_accel_gate' in f and control_idx < len(
+                        f['control/dynamic_curve_comfort_accel_gate']
+                    ):
+                        frame_data['control']['dynamic_curve_comfort_accel_gate'] = float(
+                            f['control/dynamic_curve_comfort_accel_gate'][control_idx]
+                        )
+                    if 'control/dynamic_curve_comfort_jerk_penalty' in f and control_idx < len(
+                        f['control/dynamic_curve_comfort_jerk_penalty']
+                    ):
+                        frame_data['control']['dynamic_curve_comfort_jerk_penalty'] = float(
+                            f['control/dynamic_curve_comfort_jerk_penalty'][control_idx]
+                        )
+                    if 'control/dynamic_curve_rate_boost_cap_effective' in f and control_idx < len(
+                        f['control/dynamic_curve_rate_boost_cap_effective']
+                    ):
+                        frame_data['control']['dynamic_curve_rate_boost_cap_effective'] = float(
+                            f['control/dynamic_curve_rate_boost_cap_effective'][control_idx]
+                        )
+                    if 'control/dynamic_curve_jerk_boost_cap_effective' in f and control_idx < len(
+                        f['control/dynamic_curve_jerk_boost_cap_effective']
+                    ):
+                        frame_data['control']['dynamic_curve_jerk_boost_cap_effective'] = float(
+                            f['control/dynamic_curve_jerk_boost_cap_effective'][control_idx]
+                        )
+                    if 'control/dynamic_curve_authority_deficit_streak' in f and control_idx < len(
+                        f['control/dynamic_curve_authority_deficit_streak']
+                    ):
+                        frame_data['control']['dynamic_curve_authority_deficit_streak'] = int(
+                            f['control/dynamic_curve_authority_deficit_streak'][control_idx]
+                        )
+                    if 'control/curve_entry_schedule_active' in f and control_idx < len(f['control/curve_entry_schedule_active']):
+                        frame_data['control']['curve_entry_schedule_active'] = int(
+                            f['control/curve_entry_schedule_active'][control_idx]
+                        ) == 1
+                    if 'control/curve_entry_schedule_triggered' in f and control_idx < len(f['control/curve_entry_schedule_triggered']):
+                        frame_data['control']['curve_entry_schedule_triggered'] = int(
+                            f['control/curve_entry_schedule_triggered'][control_idx]
+                        ) == 1
+                    if 'control/curve_entry_schedule_handoff_triggered' in f and control_idx < len(
+                        f['control/curve_entry_schedule_handoff_triggered']
+                    ):
+                        frame_data['control']['curve_entry_schedule_handoff_triggered'] = int(
+                            f['control/curve_entry_schedule_handoff_triggered'][control_idx]
+                        ) == 1
+                    if 'control/curve_entry_schedule_frames_remaining' in f and control_idx < len(
+                        f['control/curve_entry_schedule_frames_remaining']
+                    ):
+                        frame_data['control']['curve_entry_schedule_frames_remaining'] = int(
+                            f['control/curve_entry_schedule_frames_remaining'][control_idx]
+                        )
+                    if 'control/curve_commit_mode_active' in f and control_idx < len(f['control/curve_commit_mode_active']):
+                        frame_data['control']['curve_commit_mode_active'] = int(
+                            f['control/curve_commit_mode_active'][control_idx]
+                        ) == 1
+                    if 'control/curve_commit_mode_triggered' in f and control_idx < len(f['control/curve_commit_mode_triggered']):
+                        frame_data['control']['curve_commit_mode_triggered'] = int(
+                            f['control/curve_commit_mode_triggered'][control_idx]
+                        ) == 1
+                    if 'control/curve_commit_mode_handoff_triggered' in f and control_idx < len(
+                        f['control/curve_commit_mode_handoff_triggered']
+                    ):
+                        frame_data['control']['curve_commit_mode_handoff_triggered'] = int(
+                            f['control/curve_commit_mode_handoff_triggered'][control_idx]
+                        ) == 1
+                    if 'control/curve_commit_mode_frames_remaining' in f and control_idx < len(
+                        f['control/curve_commit_mode_frames_remaining']
+                    ):
+                        frame_data['control']['curve_commit_mode_frames_remaining'] = int(
+                            f['control/curve_commit_mode_frames_remaining'][control_idx]
+                        )
+                    if 'control/curve_mode_speed_cap_active' in f and control_idx < len(
+                        f['control/curve_mode_speed_cap_active']
+                    ):
+                        frame_data['control']['curve_mode_speed_cap_active'] = int(
+                            f['control/curve_mode_speed_cap_active'][control_idx]
+                        ) == 1
+                    if 'control/curve_mode_speed_cap_clamped' in f and control_idx < len(
+                        f['control/curve_mode_speed_cap_clamped']
+                    ):
+                        frame_data['control']['curve_mode_speed_cap_clamped'] = int(
+                            f['control/curve_mode_speed_cap_clamped'][control_idx]
+                        ) == 1
+                    if 'control/curve_mode_speed_cap_value' in f and control_idx < len(
+                        f['control/curve_mode_speed_cap_value']
+                    ):
+                        frame_data['control']['curve_mode_speed_cap_value'] = float(
+                            f['control/curve_mode_speed_cap_value'][control_idx]
+                        )
                     if 'control/steering_jerk_limit_effective' in f and control_idx < len(f['control/steering_jerk_limit_effective']):
                         frame_data['control']['steering_jerk_limit_effective'] = float(f['control/steering_jerk_limit_effective'][control_idx])
                     if 'control/steering_jerk_curve_scale' in f and control_idx < len(f['control/steering_jerk_curve_scale']):
@@ -1072,6 +1382,152 @@ def get_frame_data(filename, frame_index):
                     if 'control/steering_jerk_limit_unlock_rate_delta_needed' in f and control_idx < len(f['control/steering_jerk_limit_unlock_rate_delta_needed']):
                         frame_data['control']['steering_jerk_limit_unlock_rate_delta_needed'] = float(f['control/steering_jerk_limit_unlock_rate_delta_needed'][control_idx])
             
+            # Always expose current config-side policy state, even when per-frame control
+            # telemetry is unavailable for this frame.
+            if 'control' not in frame_data:
+                frame_data['control'] = {}
+            frame_data['control']['curve_entry_assist_enabled_cfg'] = bool(
+                lateral_cfg.get('curve_entry_assist_enabled', False)
+            )
+            frame_data['control']['curve_entry_assist_rate_boost_cfg'] = float(
+                lateral_cfg.get('curve_entry_assist_rate_boost', 1.0)
+            )
+            frame_data['control']['curve_entry_assist_jerk_boost_cfg'] = float(
+                lateral_cfg.get('curve_entry_assist_jerk_boost', 1.0)
+            )
+            frame_data['control']['curve_entry_schedule_enabled_cfg'] = bool(
+                lateral_cfg.get('curve_entry_schedule_enabled', False)
+            )
+            frame_data['control']['curve_entry_schedule_frames_cfg'] = int(
+                lateral_cfg.get('curve_entry_schedule_frames', 0)
+            )
+            frame_data['control']['curve_entry_schedule_min_rate_cfg'] = float(
+                lateral_cfg.get('curve_entry_schedule_min_rate', 0.0)
+            )
+            frame_data['control']['curve_entry_schedule_min_jerk_cfg'] = float(
+                lateral_cfg.get('curve_entry_schedule_min_jerk', 0.0)
+            )
+            frame_data['control']['curve_entry_schedule_min_hold_frames_cfg'] = int(
+                lateral_cfg.get('curve_entry_schedule_min_hold_frames', 12)
+            )
+            frame_data['control']['curve_entry_schedule_min_curve_progress_ratio_cfg'] = float(
+                lateral_cfg.get('curve_entry_schedule_min_curve_progress_ratio', 0.20)
+            )
+            frame_data['control']['curve_entry_schedule_fallback_only_when_dynamic_cfg'] = bool(
+                lateral_cfg.get('curve_entry_schedule_fallback_only_when_dynamic', False)
+            )
+            frame_data['control']['curve_entry_schedule_fallback_deficit_frames_cfg'] = int(
+                lateral_cfg.get('curve_entry_schedule_fallback_deficit_frames', 6)
+            )
+            frame_data['control']['curve_entry_schedule_fallback_rate_deficit_min_cfg'] = float(
+                lateral_cfg.get('curve_entry_schedule_fallback_rate_deficit_min', 0.03)
+            )
+            frame_data['control']['curve_entry_schedule_fallback_rearm_cooldown_frames_cfg'] = int(
+                lateral_cfg.get('curve_entry_schedule_fallback_rearm_cooldown_frames', 18)
+            )
+            frame_data['control']['dynamic_curve_authority_enabled_cfg'] = bool(
+                lateral_cfg.get('dynamic_curve_authority_enabled', True)
+            )
+            frame_data['control']['dynamic_curve_rate_deficit_deadband_cfg'] = float(
+                lateral_cfg.get('dynamic_curve_rate_deficit_deadband', 0.01)
+            )
+            frame_data['control']['dynamic_curve_rate_boost_gain_cfg'] = float(
+                lateral_cfg.get('dynamic_curve_rate_boost_gain', 1.0)
+            )
+            frame_data['control']['dynamic_curve_rate_boost_max_cfg'] = float(
+                lateral_cfg.get('dynamic_curve_rate_boost_max', 0.30)
+            )
+            frame_data['control']['dynamic_curve_jerk_boost_gain_cfg'] = float(
+                lateral_cfg.get('dynamic_curve_jerk_boost_gain', 4.0)
+            )
+            frame_data['control']['dynamic_curve_jerk_boost_max_factor_cfg'] = float(
+                lateral_cfg.get('dynamic_curve_jerk_boost_max_factor', 3.5)
+            )
+            frame_data['control']['dynamic_curve_comfort_lat_accel_comfort_max_g_cfg'] = float(
+                lateral_cfg.get('dynamic_curve_comfort_lat_accel_comfort_max_g', 0.18)
+            )
+            frame_data['control']['dynamic_curve_comfort_lat_accel_peak_max_g_cfg'] = float(
+                lateral_cfg.get('dynamic_curve_comfort_lat_accel_peak_max_g', 0.25)
+            )
+            frame_data['control']['dynamic_curve_comfort_lat_jerk_comfort_max_gps_cfg'] = float(
+                lateral_cfg.get('dynamic_curve_comfort_lat_jerk_comfort_max_gps', 0.30)
+            )
+            frame_data['control']['dynamic_curve_lat_jerk_smoothing_alpha_cfg'] = float(
+                lateral_cfg.get('dynamic_curve_lat_jerk_smoothing_alpha', 0.25)
+            )
+            frame_data['control']['dynamic_curve_lat_jerk_soft_start_ratio_cfg'] = float(
+                lateral_cfg.get('dynamic_curve_lat_jerk_soft_start_ratio', 0.60)
+            )
+            frame_data['control']['dynamic_curve_lat_jerk_soft_floor_scale_cfg'] = float(
+                lateral_cfg.get('dynamic_curve_lat_jerk_soft_floor_scale', 0.35)
+            )
+            frame_data['control']['dynamic_curve_speed_low_mps_cfg'] = float(
+                lateral_cfg.get('dynamic_curve_speed_low_mps', 4.0)
+            )
+            frame_data['control']['dynamic_curve_speed_high_mps_cfg'] = float(
+                lateral_cfg.get('dynamic_curve_speed_high_mps', 10.0)
+            )
+            frame_data['control']['dynamic_curve_speed_boost_max_scale_cfg'] = float(
+                lateral_cfg.get('dynamic_curve_speed_boost_max_scale', 1.4)
+            )
+            frame_data['control']['curve_commit_mode_retrigger_on_dynamic_deficit_cfg'] = bool(
+                lateral_cfg.get('curve_commit_mode_retrigger_on_dynamic_deficit', True)
+            )
+            frame_data['control']['curve_commit_mode_dynamic_deficit_frames_cfg'] = int(
+                lateral_cfg.get('curve_commit_mode_dynamic_deficit_frames', 8)
+            )
+            frame_data['control']['curve_commit_mode_dynamic_deficit_min_cfg'] = float(
+                lateral_cfg.get('curve_commit_mode_dynamic_deficit_min', 0.03)
+            )
+            frame_data['control']['curve_commit_mode_retrigger_cooldown_frames_cfg'] = int(
+                lateral_cfg.get('curve_commit_mode_retrigger_cooldown_frames', 12)
+            )
+            frame_data['control']['straight_curvature_threshold_cfg'] = float(
+                lateral_cfg.get('straight_curvature_threshold', 0.0)
+            )
+            frame_data['control']['curve_upcoming_enter_threshold_cfg'] = float(
+                lateral_cfg.get('curve_upcoming_enter_threshold', 0.012)
+            )
+            frame_data['control']['curve_upcoming_exit_threshold_cfg'] = float(
+                lateral_cfg.get('curve_upcoming_exit_threshold', 0.009)
+            )
+            frame_data['control']['curve_at_car_distance_min_m_cfg'] = float(
+                lateral_cfg.get('curve_at_car_distance_min_m', 0.0)
+            )
+            frame_data['control']['road_curve_enter_threshold_cfg'] = float(
+                lateral_cfg.get('road_curve_enter_threshold', lateral_cfg.get('straight_curvature_threshold', 0.0))
+            )
+            frame_data['control']['road_curve_exit_threshold_cfg'] = float(
+                lateral_cfg.get('road_curve_exit_threshold', lateral_cfg.get('straight_curvature_threshold', 0.0))
+            )
+            frame_data['control']['road_straight_hold_invalid_frames_cfg'] = int(
+                lateral_cfg.get('road_straight_hold_invalid_frames', 0)
+            )
+            frame_data['control']['curve_commit_mode_enabled_cfg'] = bool(
+                lateral_cfg.get('curve_commit_mode_enabled', False)
+            )
+            frame_data['control']['curve_commit_mode_max_frames_cfg'] = int(
+                lateral_cfg.get('curve_commit_mode_max_frames', 0)
+            )
+            frame_data['control']['curve_commit_mode_min_rate_cfg'] = float(
+                lateral_cfg.get('curve_commit_mode_min_rate', 0.0)
+            )
+            frame_data['control']['curve_commit_mode_min_jerk_cfg'] = float(
+                lateral_cfg.get('curve_commit_mode_min_jerk', 0.0)
+            )
+            frame_data['control']['curve_commit_mode_exit_consecutive_frames_cfg'] = int(
+                lateral_cfg.get('curve_commit_mode_exit_consecutive_frames', 4)
+            )
+            frame_data['control']['curve_mode_speed_cap_enabled_cfg'] = bool(
+                lateral_cfg.get('curve_mode_speed_cap_enabled', False)
+            )
+            frame_data['control']['curve_mode_speed_cap_mps_cfg'] = float(
+                lateral_cfg.get('curve_mode_speed_cap_mps', 0.0)
+            )
+            frame_data['control']['curve_mode_speed_cap_min_ratio_cfg'] = float(
+                lateral_cfg.get('curve_mode_speed_cap_min_ratio', 0.0)
+            )
+
             # Ground truth data - use same index as vehicle state (they should be synchronized)
             # Try new name first, fall back to old name for backward compatibility
             if 'ground_truth/left_lane_line_x' in f and len(f['ground_truth/left_lane_line_x']) > 0:

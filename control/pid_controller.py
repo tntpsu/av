@@ -5,6 +5,9 @@ Handles both lateral (steering) and longitudinal (throttle/brake) control.
 
 import numpy as np
 from typing import Optional, Tuple, Dict, Union, Any
+from pathlib import Path
+import math
+import yaml
 
 
 class PIDController:
@@ -102,6 +105,16 @@ class LateralController:
                  curvature_transition_threshold: float = 0.01,
                  curvature_transition_alpha: float = 0.3,
                  straight_curvature_threshold: float = 0.01,
+                 curve_upcoming_enter_threshold: float = 0.012,
+                 curve_upcoming_exit_threshold: float = 0.009,
+                 curve_upcoming_on_frames: int = 2,
+                 curve_upcoming_off_frames: int = 2,
+                 curve_phase_use_distance_track: bool = False,
+                 curve_phase_track_name: Optional[str] = None,
+                 curve_at_car_distance_min_m: float = 0.0,
+                 road_curve_enter_threshold: Optional[float] = None,
+                 road_curve_exit_threshold: Optional[float] = None,
+                 road_straight_hold_invalid_frames: int = 6,
                  steering_rate_curvature_min: float = 0.005,
                  steering_rate_curvature_max: float = 0.03,
                  steering_rate_scale_min: float = 0.5,
@@ -127,15 +140,40 @@ class LateralController:
                  curve_entry_schedule_frames: int = 18,
                  curve_entry_schedule_min_rate: float = 0.22,
                  curve_entry_schedule_min_jerk: float = 0.14,
-                 curve_entry_schedule_min_hold_frames: int = 6,
+                 curve_entry_schedule_min_hold_frames: int = 12,
+                 curve_entry_schedule_min_curve_progress_ratio: float = 0.20,
+                 curve_entry_schedule_fallback_only_when_dynamic: bool = False,
+                 curve_entry_schedule_fallback_deficit_frames: int = 6,
+                 curve_entry_schedule_fallback_rate_deficit_min: float = 0.03,
+                 curve_entry_schedule_fallback_rearm_cooldown_frames: int = 18,
                  curve_entry_schedule_handoff_transfer_ratio: float = 0.65,
                  curve_entry_schedule_handoff_error_fall: float = 0.03,
+                 dynamic_curve_authority_enabled: bool = True,
+                 dynamic_curve_rate_deficit_deadband: float = 0.01,
+                 dynamic_curve_rate_boost_gain: float = 1.0,
+                 dynamic_curve_rate_boost_max: float = 0.30,
+                 dynamic_curve_jerk_boost_gain: float = 4.0,
+                 dynamic_curve_jerk_boost_max_factor: float = 3.5,
+                 dynamic_curve_comfort_lat_accel_comfort_max_g: float = 0.18,
+                 dynamic_curve_comfort_lat_accel_peak_max_g: float = 0.25,
+                 dynamic_curve_comfort_lat_jerk_comfort_max_gps: float = 0.30,
+                 dynamic_curve_lat_jerk_smoothing_alpha: float = 0.25,
+                 dynamic_curve_lat_jerk_soft_start_ratio: float = 0.60,
+                 dynamic_curve_lat_jerk_soft_floor_scale: float = 0.35,
+                 dynamic_curve_speed_low_mps: float = 4.0,
+                 dynamic_curve_speed_high_mps: float = 10.0,
+                 dynamic_curve_speed_boost_max_scale: float = 1.4,
                  curve_commit_mode_enabled: bool = False,
                  curve_commit_mode_max_frames: int = 20,
                  curve_commit_mode_min_rate: float = 0.22,
                  curve_commit_mode_min_jerk: float = 0.14,
                  curve_commit_mode_transfer_ratio_target: float = 0.72,
                  curve_commit_mode_error_fall: float = 0.03,
+                 curve_commit_mode_exit_consecutive_frames: int = 4,
+                 curve_commit_mode_retrigger_on_dynamic_deficit: bool = True,
+                 curve_commit_mode_dynamic_deficit_frames: int = 8,
+                 curve_commit_mode_dynamic_deficit_min: float = 0.03,
+                 curve_commit_mode_retrigger_cooldown_frames: int = 12,
                  speed_gain_min_speed: float = 4.0,
                  speed_gain_max_speed: float = 10.0,
                  speed_gain_min: float = 1.0,
@@ -211,11 +249,63 @@ class LateralController:
         self.curve_entry_schedule_min_rate = max(0.0, float(curve_entry_schedule_min_rate))
         self.curve_entry_schedule_min_jerk = max(0.0, float(curve_entry_schedule_min_jerk))
         self.curve_entry_schedule_min_hold_frames = max(0, int(curve_entry_schedule_min_hold_frames))
+        self.curve_entry_schedule_min_curve_progress_ratio = float(
+            np.clip(curve_entry_schedule_min_curve_progress_ratio, 0.0, 1.0)
+        )
+        self.curve_entry_schedule_fallback_only_when_dynamic = bool(
+            curve_entry_schedule_fallback_only_when_dynamic
+        )
+        self.curve_entry_schedule_fallback_deficit_frames = max(
+            1, int(curve_entry_schedule_fallback_deficit_frames)
+        )
+        self.curve_entry_schedule_fallback_rate_deficit_min = max(
+            0.0, float(curve_entry_schedule_fallback_rate_deficit_min)
+        )
+        self.curve_entry_schedule_fallback_rearm_cooldown_frames = max(
+            0, int(curve_entry_schedule_fallback_rearm_cooldown_frames)
+        )
         self.curve_entry_schedule_handoff_transfer_ratio = float(
             np.clip(curve_entry_schedule_handoff_transfer_ratio, 0.0, 1.0)
         )
         self.curve_entry_schedule_handoff_error_fall = max(
             0.0, float(curve_entry_schedule_handoff_error_fall)
+        )
+        self.dynamic_curve_authority_enabled = bool(dynamic_curve_authority_enabled)
+        self.dynamic_curve_rate_deficit_deadband = max(
+            0.0, float(dynamic_curve_rate_deficit_deadband)
+        )
+        self.dynamic_curve_rate_boost_gain = max(0.0, float(dynamic_curve_rate_boost_gain))
+        self.dynamic_curve_rate_boost_max = max(0.0, float(dynamic_curve_rate_boost_max))
+        self.dynamic_curve_jerk_boost_gain = max(0.0, float(dynamic_curve_jerk_boost_gain))
+        self.dynamic_curve_jerk_boost_max_factor = max(
+            1.0, float(dynamic_curve_jerk_boost_max_factor)
+        )
+        self.dynamic_curve_comfort_lat_accel_comfort_max_g = max(
+            1e-3, float(dynamic_curve_comfort_lat_accel_comfort_max_g)
+        )
+        self.dynamic_curve_comfort_lat_accel_peak_max_g = max(
+            self.dynamic_curve_comfort_lat_accel_comfort_max_g,
+            float(dynamic_curve_comfort_lat_accel_peak_max_g),
+        )
+        self.dynamic_curve_comfort_lat_jerk_comfort_max_gps = max(
+            1e-3, float(dynamic_curve_comfort_lat_jerk_comfort_max_gps)
+        )
+        self.dynamic_curve_lat_jerk_smoothing_alpha = float(
+            np.clip(dynamic_curve_lat_jerk_smoothing_alpha, 0.0, 1.0)
+        )
+        self.dynamic_curve_lat_jerk_soft_start_ratio = float(
+            np.clip(dynamic_curve_lat_jerk_soft_start_ratio, 0.0, 1.0)
+        )
+        self.dynamic_curve_lat_jerk_soft_floor_scale = float(
+            np.clip(dynamic_curve_lat_jerk_soft_floor_scale, 0.0, 1.0)
+        )
+        self.dynamic_curve_speed_low_mps = max(0.0, float(dynamic_curve_speed_low_mps))
+        self.dynamic_curve_speed_high_mps = max(
+            self.dynamic_curve_speed_low_mps + 1e-3,
+            float(dynamic_curve_speed_high_mps),
+        )
+        self.dynamic_curve_speed_boost_max_scale = max(
+            1.0, float(dynamic_curve_speed_boost_max_scale)
         )
         self.curve_commit_mode_enabled = bool(curve_commit_mode_enabled)
         self.curve_commit_mode_max_frames = max(0, int(curve_commit_mode_max_frames))
@@ -225,6 +315,21 @@ class LateralController:
             np.clip(curve_commit_mode_transfer_ratio_target, 0.0, 1.0)
         )
         self.curve_commit_mode_error_fall = max(0.0, float(curve_commit_mode_error_fall))
+        self.curve_commit_mode_exit_consecutive_frames = max(
+            1, int(curve_commit_mode_exit_consecutive_frames)
+        )
+        self.curve_commit_mode_retrigger_on_dynamic_deficit = bool(
+            curve_commit_mode_retrigger_on_dynamic_deficit
+        )
+        self.curve_commit_mode_dynamic_deficit_frames = max(
+            1, int(curve_commit_mode_dynamic_deficit_frames)
+        )
+        self.curve_commit_mode_dynamic_deficit_min = max(
+            0.0, float(curve_commit_mode_dynamic_deficit_min)
+        )
+        self.curve_commit_mode_retrigger_cooldown_frames = max(
+            0, int(curve_commit_mode_retrigger_cooldown_frames)
+        )
         self.speed_gain_min_speed = speed_gain_min_speed
         self.speed_gain_max_speed = speed_gain_max_speed
         self.speed_gain_min = speed_gain_min
@@ -268,6 +373,43 @@ class LateralController:
 
         # Straight-away adaptive tuning (deadband + smoothing)
         self.straight_curvature_threshold = straight_curvature_threshold
+        self.curve_upcoming_enter_threshold = max(0.0, float(curve_upcoming_enter_threshold))
+        self.curve_upcoming_exit_threshold = max(0.0, float(curve_upcoming_exit_threshold))
+        if self.curve_upcoming_exit_threshold > self.curve_upcoming_enter_threshold:
+            self.curve_upcoming_exit_threshold = self.curve_upcoming_enter_threshold
+        self.curve_upcoming_on_frames = max(1, int(curve_upcoming_on_frames))
+        self.curve_upcoming_off_frames = max(1, int(curve_upcoming_off_frames))
+        self.curve_phase_use_distance_track = bool(curve_phase_use_distance_track)
+        self.curve_phase_track_name = str(curve_phase_track_name or "").strip()
+        self.curve_at_car_distance_min_m = max(0.0, float(curve_at_car_distance_min_m))
+        self._track_curve_windows: list[tuple[float, float]] = []
+        self._track_total_length_m: Optional[float] = None
+        if self.curve_phase_use_distance_track and self.curve_phase_track_name:
+            self._load_track_curve_windows(self.curve_phase_track_name)
+        self._curve_upcoming_state = False
+        self._curve_upcoming_on_counter = 0
+        self._curve_upcoming_off_counter = 0
+        self._curve_at_car_state = False
+        self._curve_at_car_distance_remaining = None
+        road_enter_threshold = (
+            float(straight_curvature_threshold)
+            if road_curve_enter_threshold is None
+            else float(road_curve_enter_threshold)
+        )
+        road_exit_threshold = (
+            float(straight_curvature_threshold)
+            if road_curve_exit_threshold is None
+            else float(road_curve_exit_threshold)
+        )
+        road_enter_threshold = max(0.0, road_enter_threshold)
+        road_exit_threshold = max(0.0, road_exit_threshold)
+        if road_exit_threshold > road_enter_threshold:
+            road_exit_threshold = road_enter_threshold
+        self.road_curve_enter_threshold = road_enter_threshold
+        self.road_curve_exit_threshold = road_exit_threshold
+        self.road_straight_hold_invalid_frames = max(0, int(road_straight_hold_invalid_frames))
+        self._road_straight_state = True
+        self._road_straight_invalid_frames_remaining = 0
         self.straight_window = 60  # ~2 seconds at 30 FPS
         self.straight_oscillation_high = 0.20
         self.straight_oscillation_low = 0.05
@@ -286,13 +428,27 @@ class LateralController:
         self._curve_entry_assist_rearm_remaining = 0
         self._curve_entry_schedule_frames_remaining = 0
         self._curve_entry_schedule_elapsed_frames = 0
+        self._curve_entry_schedule_fallback_fired_for_curve = False
+        self._curve_entry_schedule_fallback_last_curve_index = None
+        self._curve_entry_schedule_fallback_cooldown_remaining = 0
+        self._dynamic_authority_deficit_streak = 0
+        self._dynamic_commit_deficit_streak = 0
+        self._last_lateral_accel_est_g = 0.0
+        self._last_lateral_accel_est_initialized = False
+        self._smoothed_lateral_jerk_est_gps = 0.0
         self._curve_commit_mode_frames_remaining = 0
+        self._curve_commit_retrigger_cooldown_remaining = 0
+        self._curve_commit_handoff_streak = 0
         self._prev_is_straight = True
+        self._prev_curve_upcoming = False
+        self._prev_curve_at_car = False
         self._last_error_magnitude = 0.0
     
     def compute_steering(self, current_heading: float, reference_point: dict,
                         vehicle_position: Optional[np.ndarray] = None,
                         current_speed: Optional[float] = None,
+                        road_center_reference_t: Optional[float] = None,
+                        dt: Optional[float] = None,
                         return_metadata: bool = False,
                         using_stale_perception: bool = False) -> Union[float, Dict[str, Any]]:
         """
@@ -331,7 +487,14 @@ class LateralController:
         # Use path curvature only for feedforward, not for error calculation
         # For error calculation, use heading_to_ref (correction needed)
         # But blend with ref_heading for smooth curves
-        raw_ref_curvature = float(reference_point.get('curvature', 0.0) or 0.0)
+        raw_ref_curvature_value = reference_point.get('curvature')
+        raw_ref_curvature_source = str(reference_point.get('curvature_source', '') or '')
+        road_curvature_valid = bool(
+            raw_ref_curvature_value is not None
+            and np.isfinite(float(raw_ref_curvature_value))
+            and raw_ref_curvature_source.lower() not in {"missing", "placeholder"}
+        )
+        raw_ref_curvature = float(raw_ref_curvature_value) if road_curvature_valid else 0.0
         path_curvature = raw_ref_curvature
         if path_curvature != 0.0:
             heading_sign = np.sign(desired_heading)
@@ -344,7 +507,8 @@ class LateralController:
                     -self.curve_feedforward_curvature_clamp,
                     self.curve_feedforward_curvature_clamp
                 )
-        dt = 0.033  # Assume ~30 Hz update rate
+        dt = float(dt) if dt is not None and np.isfinite(float(dt)) else 0.033
+        dt = float(np.clip(dt, 1e-3, 0.25))
         hold_frames = int(round(self.curvature_stale_hold_seconds / dt)) if dt > 0.0 else 0
         if using_stale_perception and not self._was_using_stale_perception:
             self._curvature_hold_frames_remaining = hold_frames
@@ -887,6 +1051,20 @@ class LateralController:
         curve_commit_mode_triggered = False
         curve_commit_mode_handoff_triggered = False
         curve_commit_mode_frames_remaining = int(self._curve_commit_mode_frames_remaining)
+        dynamic_curve_rate_request_delta = 0.0
+        dynamic_curve_rate_deficit = 0.0
+        dynamic_curve_rate_boost = 0.0
+        dynamic_curve_jerk_boost_factor = 1.0
+        dynamic_curve_authority_active = False
+        dynamic_curve_lateral_accel_est_g = 0.0
+        dynamic_curve_lateral_jerk_est_gps = 0.0
+        dynamic_curve_lateral_jerk_est_smoothed_gps = 0.0
+        dynamic_curve_speed_scale = 1.0
+        dynamic_curve_comfort_scale = 1.0
+        dynamic_curve_comfort_accel_gate = 1.0
+        dynamic_curve_comfort_jerk_penalty = 1.0
+        dynamic_curve_rate_boost_cap_effective = self.dynamic_curve_rate_boost_max
+        dynamic_curve_jerk_boost_cap_effective = self.dynamic_curve_jerk_boost_max_factor
         steering_authority_gap = 0.0
         steering_transfer_ratio = 1.0
         steering_first_limiter_stage_code = 0.0
@@ -909,20 +1087,133 @@ class LateralController:
         # Large errors: Fast rate limit (recovery)
         error_magnitude = abs(total_error)
         is_straight = curve_metric_abs < self.straight_curvature_threshold
+        is_control_straight_proxy = is_straight
+        curve_phase_source = "metric_proxy"
+        distance_to_next_curve_start_m = None
+        current_curve_progress_ratio = None
+        current_curve_index = None
+        distance_curve_state = self._compute_distance_curve_state(
+            road_center_reference_t=road_center_reference_t,
+            lookahead_m=max(0.0, float(ref_y)),
+        )
+        if distance_curve_state is not None:
+            curve_phase_source = "distance_track"
+            curve_upcoming = bool(distance_curve_state["curve_upcoming"])
+            curve_at_car = bool(distance_curve_state["curve_at_car"])
+            distance_to_next_curve_start_m = float(distance_curve_state["distance_to_next_curve_start_m"])
+            if distance_curve_state.get("current_curve_progress_ratio") is not None:
+                current_curve_progress_ratio = float(
+                    distance_curve_state["current_curve_progress_ratio"]
+                )
+            if distance_curve_state.get("current_curve_index") is not None:
+                current_curve_index = int(distance_curve_state["current_curve_index"])
+            self._curve_upcoming_state = curve_upcoming
+            self._curve_at_car_state = curve_at_car
+            self._curve_at_car_distance_remaining = distance_to_next_curve_start_m
+        else:
+            if self._curve_upcoming_state:
+                if curve_metric_abs <= self.curve_upcoming_exit_threshold:
+                    self._curve_upcoming_off_counter += 1
+                else:
+                    self._curve_upcoming_off_counter = 0
+                if self._curve_upcoming_off_counter >= self.curve_upcoming_off_frames:
+                    self._curve_upcoming_state = False
+                    self._curve_upcoming_off_counter = 0
+                    self._curve_upcoming_on_counter = 0
+            else:
+                if curve_metric_abs >= self.curve_upcoming_enter_threshold:
+                    self._curve_upcoming_on_counter += 1
+                else:
+                    self._curve_upcoming_on_counter = 0
+                if self._curve_upcoming_on_counter >= self.curve_upcoming_on_frames:
+                    self._curve_upcoming_state = True
+                    self._curve_upcoming_on_counter = 0
+                    self._curve_upcoming_off_counter = 0
+            curve_upcoming = bool(self._curve_upcoming_state)
+            if curve_upcoming and not self._prev_curve_upcoming:
+                ref_distance_ahead = max(0.0, float(ref_y))
+                self._curve_at_car_distance_remaining = max(
+                    self.curve_at_car_distance_min_m,
+                    ref_distance_ahead,
+                )
+            if not curve_upcoming:
+                self._curve_at_car_state = False
+                self._curve_at_car_distance_remaining = None
+            elif self._curve_at_car_distance_remaining is not None:
+                speed_for_distance = (
+                    float(current_speed)
+                    if current_speed is not None and np.isfinite(float(current_speed))
+                    else float(reference_point.get('velocity', 0.0) or 0.0)
+                )
+                distance_step = max(0.0, speed_for_distance) * dt
+                self._curve_at_car_distance_remaining = max(
+                    0.0,
+                    float(self._curve_at_car_distance_remaining) - float(distance_step),
+                )
+                if self._curve_at_car_distance_remaining <= 1e-3:
+                    self._curve_at_car_state = True
+            curve_at_car = bool(self._curve_at_car_state)
+            distance_to_next_curve_start_m = (
+                float(self._curve_at_car_distance_remaining)
+                if self._curve_at_car_distance_remaining is not None
+                else None
+            )
+        road_curvature_abs = float(abs(path_curvature)) if road_curvature_valid else None
+        if road_curvature_abs is not None:
+            if road_curvature_abs >= self.road_curve_enter_threshold:
+                self._road_straight_state = False
+            elif road_curvature_abs <= self.road_curve_exit_threshold:
+                self._road_straight_state = True
+            self._road_straight_invalid_frames_remaining = self.road_straight_hold_invalid_frames
+            is_road_straight = self._road_straight_state
+        elif self._road_straight_invalid_frames_remaining > 0:
+            is_road_straight = self._road_straight_state
+            self._road_straight_invalid_frames_remaining -= 1
+        else:
+            is_road_straight = None
+        if not curve_at_car:
+            self._curve_entry_schedule_fallback_fired_for_curve = False
+        if self._curve_entry_schedule_fallback_cooldown_remaining > 0:
+            self._curve_entry_schedule_fallback_cooldown_remaining -= 1
+        if self._curve_commit_retrigger_cooldown_remaining > 0:
+            self._curve_commit_retrigger_cooldown_remaining -= 1
+        using_dynamic_schedule_fallback = (
+            self.dynamic_curve_authority_enabled
+            and self.curve_entry_schedule_fallback_only_when_dynamic
+        )
+        schedule_trigger_condition = (not self._prev_curve_at_car) and curve_at_car
+        if using_dynamic_schedule_fallback:
+            schedule_trigger_condition = (
+                curve_at_car
+                and self._curve_entry_schedule_frames_remaining <= 0
+                and not self._curve_entry_schedule_fallback_fired_for_curve
+                and self._curve_entry_schedule_fallback_cooldown_remaining <= 0
+                and (
+                    self._dynamic_authority_deficit_streak
+                    >= self.curve_entry_schedule_fallback_deficit_frames
+                )
+            )
         if (
             self.curve_entry_schedule_enabled
             and self.curve_entry_schedule_frames > 0
-            and self._prev_is_straight
-            and not is_straight
+            and schedule_trigger_condition
         ):
             self._curve_entry_schedule_frames_remaining = self.curve_entry_schedule_frames
             self._curve_entry_schedule_elapsed_frames = 0
             curve_entry_schedule_triggered = True
+            if using_dynamic_schedule_fallback:
+                self._curve_entry_schedule_fallback_fired_for_curve = True
+                self._curve_entry_schedule_fallback_cooldown_remaining = (
+                    self.curve_entry_schedule_fallback_rearm_cooldown_frames
+                )
+                self._dynamic_authority_deficit_streak = 0
+                if current_curve_index is not None:
+                    self._curve_entry_schedule_fallback_last_curve_index = int(current_curve_index)
         if (
             self.curve_commit_mode_enabled
             and not self.curve_entry_schedule_enabled
-            and self._prev_is_straight
-            and not is_straight
+            and not self._prev_curve_at_car
+            and curve_at_car
             and self._curve_commit_mode_frames_remaining <= 0
         ):
             self._curve_commit_mode_frames_remaining = self.curve_commit_mode_max_frames
@@ -930,7 +1221,7 @@ class LateralController:
         if (
             self.curve_commit_mode_enabled
             and not self.curve_entry_schedule_enabled
-            and not is_straight
+            and curve_at_car
             and self._curve_commit_mode_frames_remaining <= 0
             and error_magnitude >= 0.25
             and error_magnitude > (self._last_error_magnitude + 0.01)
@@ -941,6 +1232,7 @@ class LateralController:
             curve_entry_schedule_active = True
             self._curve_entry_schedule_elapsed_frames += 1
         curve_entry_schedule_frames_remaining = int(self._curve_entry_schedule_frames_remaining)
+        dynamic_curve_rate_request_delta = float(abs(steering_before_limits - self.last_steering))
         if error_magnitude > 0.6:
             # Very large error (> 0.6) - allow fast steering changes for recovery
             max_steering_rate = 0.24
@@ -987,6 +1279,124 @@ class LateralController:
         if self._curve_commit_mode_frames_remaining > 0:
             curve_commit_mode_active = True
             max_steering_rate = max(max_steering_rate, self.curve_commit_mode_min_rate)
+        speed_for_comfort = (
+            float(current_speed)
+            if current_speed is not None and np.isfinite(float(current_speed))
+            else float(reference_point.get('velocity', 0.0) or 0.0)
+        )
+        speed_for_comfort = max(0.0, speed_for_comfort)
+        dynamic_curve_lateral_accel_est_g = float(
+            (speed_for_comfort * speed_for_comfort * float(curve_metric_abs)) / 9.81
+        )
+        if dt > 0.0 and self._last_lateral_accel_est_initialized:
+            dynamic_curve_lateral_jerk_est_gps = float(
+                abs(dynamic_curve_lateral_accel_est_g - self._last_lateral_accel_est_g) / dt
+            )
+        else:
+            dynamic_curve_lateral_jerk_est_gps = 0.0
+        self._last_lateral_accel_est_g = dynamic_curve_lateral_accel_est_g
+        self._last_lateral_accel_est_initialized = True
+        jerk_alpha = self.dynamic_curve_lat_jerk_smoothing_alpha
+        dynamic_curve_lateral_jerk_est_smoothed_gps = float(
+            jerk_alpha * dynamic_curve_lateral_jerk_est_gps
+            + (1.0 - jerk_alpha) * self._smoothed_lateral_jerk_est_gps
+        )
+        self._smoothed_lateral_jerk_est_gps = dynamic_curve_lateral_jerk_est_smoothed_gps
+        speed_ratio = (
+            (self.dynamic_curve_speed_high_mps - speed_for_comfort)
+            / max(1e-3, self.dynamic_curve_speed_high_mps - self.dynamic_curve_speed_low_mps)
+        )
+        speed_ratio = float(np.clip(speed_ratio, 0.0, 1.0))
+        dynamic_curve_speed_scale = float(
+            1.0 + speed_ratio * (self.dynamic_curve_speed_boost_max_scale - 1.0)
+        )
+        accel_headroom = (
+            self.dynamic_curve_comfort_lat_accel_peak_max_g - dynamic_curve_lateral_accel_est_g
+        ) / max(
+            1e-3,
+            self.dynamic_curve_comfort_lat_accel_peak_max_g
+            - self.dynamic_curve_comfort_lat_accel_comfort_max_g,
+        )
+        dynamic_curve_comfort_accel_gate = float(np.clip(accel_headroom, 0.0, 1.0))
+        jerk_ratio = (
+            dynamic_curve_lateral_jerk_est_smoothed_gps
+            / max(1e-3, self.dynamic_curve_comfort_lat_jerk_comfort_max_gps)
+        )
+        if jerk_ratio <= self.dynamic_curve_lat_jerk_soft_start_ratio:
+            dynamic_curve_comfort_jerk_penalty = 1.0
+        else:
+            jerk_penalty_ratio = (jerk_ratio - self.dynamic_curve_lat_jerk_soft_start_ratio) / max(
+                1e-3, 1.0 - self.dynamic_curve_lat_jerk_soft_start_ratio
+            )
+            dynamic_curve_comfort_jerk_penalty = float(
+                np.clip(
+                    1.0
+                    - jerk_penalty_ratio * (1.0 - self.dynamic_curve_lat_jerk_soft_floor_scale),
+                    self.dynamic_curve_lat_jerk_soft_floor_scale,
+                    1.0,
+                )
+            )
+        # g_lat is the hard comfort guardrail; jerk only soft-damps authority.
+        dynamic_curve_comfort_scale = float(
+            np.clip(
+                dynamic_curve_comfort_accel_gate * dynamic_curve_comfort_jerk_penalty,
+                0.0,
+                1.0,
+            )
+        )
+        dynamic_curve_rate_boost_cap_effective = float(
+            self.dynamic_curve_rate_boost_max
+            * dynamic_curve_speed_scale
+            * dynamic_curve_comfort_scale
+        )
+        dynamic_curve_jerk_boost_cap_effective = float(
+            1.0
+            + (self.dynamic_curve_jerk_boost_max_factor - 1.0)
+            * dynamic_curve_speed_scale
+            * dynamic_curve_comfort_scale
+        )
+        if self.dynamic_curve_authority_enabled and curve_at_car:
+            dynamic_curve_authority_active = True
+            raw_deficit = dynamic_curve_rate_request_delta - max_steering_rate
+            deficit = max(0.0, raw_deficit - self.dynamic_curve_rate_deficit_deadband)
+            dynamic_curve_rate_deficit = float(deficit)
+            if dynamic_curve_rate_deficit >= self.curve_entry_schedule_fallback_rate_deficit_min:
+                self._dynamic_authority_deficit_streak += 1
+            else:
+                self._dynamic_authority_deficit_streak = 0
+            if dynamic_curve_rate_deficit >= self.curve_commit_mode_dynamic_deficit_min:
+                self._dynamic_commit_deficit_streak += 1
+            else:
+                self._dynamic_commit_deficit_streak = 0
+            dynamic_curve_rate_boost = float(
+                np.clip(
+                    dynamic_curve_rate_deficit * self.dynamic_curve_rate_boost_gain,
+                    0.0,
+                    dynamic_curve_rate_boost_cap_effective,
+                )
+            )
+            max_steering_rate += dynamic_curve_rate_boost
+        else:
+            self._dynamic_authority_deficit_streak = 0
+            self._dynamic_commit_deficit_streak = 0
+        if (
+            self.curve_commit_mode_enabled
+            and self.curve_commit_mode_retrigger_on_dynamic_deficit
+            and curve_at_car
+            and self._curve_commit_mode_frames_remaining <= 0
+            and self._curve_entry_schedule_frames_remaining <= 0
+            and self._curve_commit_retrigger_cooldown_remaining <= 0
+            and self._dynamic_commit_deficit_streak >= self.curve_commit_mode_dynamic_deficit_frames
+        ):
+            self._curve_commit_mode_frames_remaining = self.curve_commit_mode_max_frames
+            curve_commit_mode_triggered = self._curve_commit_mode_frames_remaining > 0
+            self._curve_commit_retrigger_cooldown_remaining = (
+                self.curve_commit_mode_retrigger_cooldown_frames
+            )
+            self._dynamic_commit_deficit_streak = 0
+            if self._curve_commit_mode_frames_remaining > 0:
+                curve_commit_mode_active = True
+                max_steering_rate = max(max_steering_rate, self.curve_commit_mode_min_rate)
         steering_rate_limit_after_floor = float(max_steering_rate)
 
         # Bounded curve-entry authority assist:
@@ -999,7 +1409,7 @@ class LateralController:
             raw_rate_request = abs(steering_before_limits - self.last_steering)
             error_rising = error_magnitude > (self._last_error_magnitude + 0.02)
             curve_entry_candidate = (
-                (not is_straight)
+                curve_at_car
                 and curve_metric_abs >= self.curve_entry_assist_curvature_min
                 and abs(heading_error) >= self.curve_entry_assist_heading_error_min
                 and error_magnitude >= self.curve_entry_assist_error_min
@@ -1088,13 +1498,18 @@ class LateralController:
         ) <= self._last_error_magnitude
         if self._curve_entry_schedule_frames_remaining > 0:
             hold_complete = self._curve_entry_schedule_elapsed_frames >= self.curve_entry_schedule_min_hold_frames
-            if hold_complete and (
+            progress_complete = (
+                current_curve_progress_ratio is None
+                or current_curve_progress_ratio >= self.curve_entry_schedule_min_curve_progress_ratio
+            )
+            if hold_complete and progress_complete and (
                 pre_rate_transfer >= self.curve_entry_schedule_handoff_transfer_ratio
                 or error_recovering_schedule
             ):
                 self._curve_entry_schedule_frames_remaining = 0
                 self._curve_entry_schedule_elapsed_frames = 0
                 curve_entry_schedule_handoff_triggered = True
+                self._curve_commit_handoff_streak = 0
                 if self.curve_commit_mode_enabled and not is_straight:
                     self._curve_commit_mode_frames_remaining = self.curve_commit_mode_max_frames
                     curve_commit_mode_triggered = self._curve_commit_mode_frames_remaining > 0
@@ -1104,15 +1519,18 @@ class LateralController:
                 max(0, self._curve_entry_schedule_frames_remaining)
             )
         if self._curve_commit_mode_frames_remaining > 0:
-            if (
-                is_straight
-                or (
-                    pre_rate_transfer >= self.curve_commit_mode_transfer_ratio_target
-                    and error_recovering_commit
-                )
-            ):
+            commit_handoff_candidate = (
+                pre_rate_transfer >= self.curve_commit_mode_transfer_ratio_target
+                and error_recovering_commit
+            )
+            if commit_handoff_candidate:
+                self._curve_commit_handoff_streak += 1
+            else:
+                self._curve_commit_handoff_streak = 0
+            if self._curve_commit_handoff_streak >= self.curve_commit_mode_exit_consecutive_frames:
                 self._curve_commit_mode_frames_remaining = 0
                 curve_commit_mode_handoff_triggered = True
+                self._curve_commit_handoff_streak = 0
             else:
                 self._curve_commit_mode_frames_remaining -= 1
             curve_commit_mode_frames_remaining = int(
@@ -1144,6 +1562,15 @@ class LateralController:
                 effective_steering_jerk_limit,
                 self.curve_commit_mode_min_jerk,
             )
+        if dynamic_curve_authority_active:
+            dynamic_curve_jerk_boost_factor = float(
+                np.clip(
+                    1.0 + dynamic_curve_rate_deficit * self.dynamic_curve_jerk_boost_gain,
+                    1.0,
+                    dynamic_curve_jerk_boost_cap_effective,
+                )
+            )
+            effective_steering_jerk_limit *= dynamic_curve_jerk_boost_factor
 
         # Optional jerk limit: constrain change in steering rate per frame.
         if effective_steering_jerk_limit > 0.0 and dt > 0.0 and not sign_flip_override_active:
@@ -1299,6 +1726,8 @@ class LateralController:
         
         self._last_error_magnitude = error_magnitude
         self._prev_is_straight = is_straight
+        self._prev_curve_upcoming = curve_upcoming
+        self._prev_curve_at_car = curve_at_car
         if return_metadata:
             return {
                 'steering': steering,
@@ -1349,14 +1778,88 @@ class LateralController:
                 'curve_entry_assist_active': curve_entry_assist_active,
                 'curve_entry_assist_triggered': curve_entry_assist_triggered,
                 'curve_entry_assist_rearm_frames_remaining': curve_entry_assist_rearm_remaining,
+                'dynamic_curve_authority_active': dynamic_curve_authority_active,
+                'dynamic_curve_rate_request_delta': dynamic_curve_rate_request_delta,
+                'dynamic_curve_rate_deficit': dynamic_curve_rate_deficit,
+                'dynamic_curve_rate_boost': dynamic_curve_rate_boost,
+                'dynamic_curve_jerk_boost_factor': dynamic_curve_jerk_boost_factor,
+                'dynamic_curve_lateral_accel_est_g': dynamic_curve_lateral_accel_est_g,
+                'dynamic_curve_lateral_jerk_est_gps': dynamic_curve_lateral_jerk_est_gps,
+                'dynamic_curve_lateral_jerk_est_smoothed_gps': (
+                    dynamic_curve_lateral_jerk_est_smoothed_gps
+                ),
+                'dynamic_curve_speed_scale': dynamic_curve_speed_scale,
+                'dynamic_curve_comfort_scale': dynamic_curve_comfort_scale,
+                'dynamic_curve_comfort_accel_gate': dynamic_curve_comfort_accel_gate,
+                'dynamic_curve_comfort_jerk_penalty': dynamic_curve_comfort_jerk_penalty,
+                'dynamic_curve_rate_boost_cap_effective': dynamic_curve_rate_boost_cap_effective,
+                'dynamic_curve_jerk_boost_cap_effective': dynamic_curve_jerk_boost_cap_effective,
+                'dynamic_curve_authority_deficit_streak': int(self._dynamic_authority_deficit_streak),
+                'dynamic_curve_commit_deficit_streak': int(self._dynamic_commit_deficit_streak),
+                'dynamic_curve_comfort_lat_accel_comfort_max_g': (
+                    self.dynamic_curve_comfort_lat_accel_comfort_max_g
+                ),
+                'dynamic_curve_comfort_lat_accel_peak_max_g': (
+                    self.dynamic_curve_comfort_lat_accel_peak_max_g
+                ),
+                'dynamic_curve_comfort_lat_jerk_comfort_max_gps': (
+                    self.dynamic_curve_comfort_lat_jerk_comfort_max_gps
+                ),
+                'dynamic_curve_lat_jerk_smoothing_alpha': (
+                    self.dynamic_curve_lat_jerk_smoothing_alpha
+                ),
+                'dynamic_curve_lat_jerk_soft_start_ratio': (
+                    self.dynamic_curve_lat_jerk_soft_start_ratio
+                ),
+                'dynamic_curve_lat_jerk_soft_floor_scale': (
+                    self.dynamic_curve_lat_jerk_soft_floor_scale
+                ),
                 'curve_entry_schedule_active': curve_entry_schedule_active,
                 'curve_entry_schedule_triggered': curve_entry_schedule_triggered,
                 'curve_entry_schedule_handoff_triggered': curve_entry_schedule_handoff_triggered,
                 'curve_entry_schedule_frames_remaining': curve_entry_schedule_frames_remaining,
+                'curve_entry_schedule_min_hold_frames': self.curve_entry_schedule_min_hold_frames,
+                'curve_entry_schedule_min_curve_progress_ratio': (
+                    self.curve_entry_schedule_min_curve_progress_ratio
+                ),
+                'curve_entry_schedule_fallback_only_when_dynamic': (
+                    self.curve_entry_schedule_fallback_only_when_dynamic
+                ),
+                'curve_entry_schedule_fallback_deficit_frames': (
+                    self.curve_entry_schedule_fallback_deficit_frames
+                ),
+                'curve_entry_schedule_fallback_rate_deficit_min': (
+                    self.curve_entry_schedule_fallback_rate_deficit_min
+                ),
+                'curve_entry_schedule_fallback_rearm_cooldown_frames': (
+                    self.curve_entry_schedule_fallback_rearm_cooldown_frames
+                ),
+                'curve_entry_schedule_fallback_cooldown_remaining': (
+                    self._curve_entry_schedule_fallback_cooldown_remaining
+                ),
                 'curve_commit_mode_active': curve_commit_mode_active,
                 'curve_commit_mode_triggered': curve_commit_mode_triggered,
                 'curve_commit_mode_handoff_triggered': curve_commit_mode_handoff_triggered,
                 'curve_commit_mode_frames_remaining': curve_commit_mode_frames_remaining,
+                'curve_commit_mode_exit_handoff_streak': int(self._curve_commit_handoff_streak),
+                'curve_commit_mode_exit_consecutive_frames': (
+                    self.curve_commit_mode_exit_consecutive_frames
+                ),
+                'curve_commit_mode_retrigger_on_dynamic_deficit': (
+                    self.curve_commit_mode_retrigger_on_dynamic_deficit
+                ),
+                'curve_commit_mode_dynamic_deficit_frames': (
+                    self.curve_commit_mode_dynamic_deficit_frames
+                ),
+                'curve_commit_mode_dynamic_deficit_min': (
+                    self.curve_commit_mode_dynamic_deficit_min
+                ),
+                'curve_commit_mode_retrigger_cooldown_frames': (
+                    self.curve_commit_mode_retrigger_cooldown_frames
+                ),
+                'curve_commit_mode_retrigger_cooldown_remaining': (
+                    self._curve_commit_retrigger_cooldown_remaining
+                ),
                 'steering_jerk_limit_effective': effective_steering_jerk_limit,
                 'steering_jerk_curve_scale': jerk_curve_scale,
                 'steering_jerk_limit_requested_rate_delta': steering_jerk_limit_requested_rate_delta,
@@ -1376,6 +1879,27 @@ class LateralController:
                 'feedback_gain_scheduled': feedback_gain,
                 'total_error_scaled': total_error,
                 'is_straight': is_straight,
+                'is_control_straight_proxy': is_control_straight_proxy,
+                'curve_upcoming': curve_upcoming,
+                'curve_at_car': curve_at_car,
+                'curve_at_car_distance_remaining_m': distance_to_next_curve_start_m,
+                'curve_at_car_distance_min_m': self.curve_at_car_distance_min_m,
+                'curve_phase_source': curve_phase_source,
+                'distance_to_next_curve_start_m': distance_to_next_curve_start_m,
+                'current_curve_progress_ratio': current_curve_progress_ratio,
+                'curve_upcoming_enter_threshold': self.curve_upcoming_enter_threshold,
+                'curve_upcoming_exit_threshold': self.curve_upcoming_exit_threshold,
+                'is_road_straight': is_road_straight,
+                'road_curvature_valid': road_curvature_valid,
+                'road_curvature_abs': road_curvature_abs,
+                'road_curvature_source': (
+                    raw_ref_curvature_source if raw_ref_curvature_source else 'planner_default'
+                ),
+                'road_curve_enter_threshold': self.road_curve_enter_threshold,
+                'road_curve_exit_threshold': self.road_curve_exit_threshold,
+                'road_straight_invalid_hold_frames_remaining': (
+                    self._road_straight_invalid_frames_remaining
+                ),
                 'straight_sign_flip_override_active': sign_flip_override_active,
                 'straight_sign_flip_triggered': sign_flip_triggered,
                 'straight_sign_flip_trigger_error': sign_flip_trigger_error,
@@ -1395,14 +1919,123 @@ class LateralController:
         self._curve_entry_assist_rearm_remaining = 0
         self._curve_entry_schedule_frames_remaining = 0
         self._curve_entry_schedule_elapsed_frames = 0
+        self._curve_entry_schedule_fallback_fired_for_curve = False
+        self._curve_entry_schedule_fallback_last_curve_index = None
+        self._curve_entry_schedule_fallback_cooldown_remaining = 0
+        self._dynamic_authority_deficit_streak = 0
+        self._dynamic_commit_deficit_streak = 0
+        self._last_lateral_accel_est_g = 0.0
+        self._last_lateral_accel_est_initialized = False
+        self._smoothed_lateral_jerk_est_gps = 0.0
         self._curve_commit_mode_frames_remaining = 0
+        self._curve_commit_retrigger_cooldown_remaining = 0
+        self._curve_commit_handoff_streak = 0
         self._prev_is_straight = True
+        self._prev_curve_upcoming = False
+        self._prev_curve_at_car = False
         self._last_error_magnitude = 0.0
+        self._curve_upcoming_state = False
+        self._curve_upcoming_on_counter = 0
+        self._curve_upcoming_off_counter = 0
+        self._curve_at_car_state = False
+        self._curve_at_car_distance_remaining = None
+        self._road_straight_state = True
+        self._road_straight_invalid_frames_remaining = 0
         if hasattr(self, 'last_steering'):
             self.last_steering = 0.0
         if hasattr(self, 'last_steering_rate'):
             self.last_steering_rate = 0.0
         self.smoothed_steering = None
+
+    def _load_track_curve_windows(self, track_name: str) -> None:
+        """Load curve windows from tracks/<track_name>.yml."""
+        self._track_curve_windows = []
+        self._track_total_length_m = None
+        track_path = Path(__file__).resolve().parents[1] / "tracks" / f"{track_name}.yml"
+        if not track_path.exists():
+            return
+        try:
+            with open(track_path, "r") as f:
+                cfg = yaml.safe_load(f) or {}
+            s = 0.0
+            windows: list[tuple[float, float]] = []
+            for segment in cfg.get("segments", []) or []:
+                seg = segment or {}
+                seg_type = str(seg.get("type", "straight")).strip().lower()
+                if seg_type == "arc":
+                    radius = float(seg.get("radius", 0.0) or 0.0)
+                    angle_deg = float(seg.get("angle_deg", seg.get("angle", 0.0)) or 0.0)
+                    seg_len = max(0.0, radius * math.radians(abs(angle_deg)))
+                    windows.append((s, s + seg_len))
+                else:
+                    seg_len = max(0.0, float(seg.get("length", 0.0) or 0.0))
+                s += seg_len
+            if s > 1e-3 and windows:
+                self._track_total_length_m = float(s)
+                self._track_curve_windows = windows
+        except Exception:
+            self._track_curve_windows = []
+            self._track_total_length_m = None
+
+    def _compute_distance_curve_state(
+        self, road_center_reference_t: Optional[float], lookahead_m: float
+    ) -> Optional[Dict[str, float]]:
+        """Compute curve state from track distance when track windows are available."""
+        if (
+            not self.curve_phase_use_distance_track
+            or self._track_total_length_m is None
+            or not self._track_curve_windows
+            or road_center_reference_t is None
+            or not np.isfinite(float(road_center_reference_t))
+        ):
+            return None
+
+        total = float(self._track_total_length_m)
+        t = float(road_center_reference_t)
+        if t > 1.5:
+            distance_m = t % total
+        else:
+            distance_m = (t % 1.0) * total
+
+        in_curve = False
+        next_curve_delta = None
+        curve_start_m = None
+        curve_end_m = None
+        current_curve_index = None
+        for curve_idx, (start_m, end_m) in enumerate(self._track_curve_windows, start=1):
+            if start_m <= distance_m < end_m:
+                in_curve = True
+                next_curve_delta = 0.0
+                curve_start_m = float(start_m)
+                curve_end_m = float(end_m)
+                current_curve_index = int(curve_idx)
+                break
+        if not in_curve:
+            for start_m, _ in self._track_curve_windows:
+                delta = start_m - distance_m
+                if delta < 0.0:
+                    delta += total
+                if next_curve_delta is None or delta < next_curve_delta:
+                    next_curve_delta = delta
+
+        if next_curve_delta is None:
+            next_curve_delta = 0.0
+        upcoming_horizon = max(self.curve_at_car_distance_min_m, float(max(0.0, lookahead_m)))
+        curve_upcoming = bool(in_curve or next_curve_delta <= upcoming_horizon)
+        curve_at_car = bool(in_curve)
+        current_curve_progress_ratio = None
+        if in_curve and curve_start_m is not None and curve_end_m is not None:
+            curve_len_m = max(1e-6, curve_end_m - curve_start_m)
+            current_curve_progress_ratio = float(
+                np.clip((distance_m - curve_start_m) / curve_len_m, 0.0, 1.0)
+            )
+        return {
+            "curve_upcoming": float(curve_upcoming),
+            "curve_at_car": float(curve_at_car),
+            "distance_to_next_curve_start_m": float(next_curve_delta),
+            "current_curve_progress_ratio": current_curve_progress_ratio,
+            "current_curve_index": current_curve_index if in_curve else None,
+        }
 
 
 class LongitudinalController:
@@ -2166,6 +2799,16 @@ class VehicleController:
                  curvature_transition_threshold: float = 0.01,
                  curvature_transition_alpha: float = 0.3,
                  straight_curvature_threshold: float = 0.01,
+                 curve_upcoming_enter_threshold: float = 0.012,
+                 curve_upcoming_exit_threshold: float = 0.009,
+                 curve_upcoming_on_frames: int = 2,
+                 curve_upcoming_off_frames: int = 2,
+                 curve_phase_use_distance_track: bool = False,
+                 curve_phase_track_name: Optional[str] = None,
+                 curve_at_car_distance_min_m: float = 0.0,
+                 road_curve_enter_threshold: Optional[float] = None,
+                 road_curve_exit_threshold: Optional[float] = None,
+                 road_straight_hold_invalid_frames: int = 6,
                  steering_rate_curvature_min: float = 0.005,
                  steering_rate_curvature_max: float = 0.03,
                  steering_rate_scale_min: float = 0.5,
@@ -2191,15 +2834,40 @@ class VehicleController:
                  curve_entry_schedule_frames: int = 18,
                  curve_entry_schedule_min_rate: float = 0.22,
                  curve_entry_schedule_min_jerk: float = 0.14,
-                 curve_entry_schedule_min_hold_frames: int = 6,
+                 curve_entry_schedule_min_hold_frames: int = 12,
+                 curve_entry_schedule_min_curve_progress_ratio: float = 0.20,
+                 curve_entry_schedule_fallback_only_when_dynamic: bool = False,
+                 curve_entry_schedule_fallback_deficit_frames: int = 6,
+                 curve_entry_schedule_fallback_rate_deficit_min: float = 0.03,
+                 curve_entry_schedule_fallback_rearm_cooldown_frames: int = 18,
                  curve_entry_schedule_handoff_transfer_ratio: float = 0.65,
                  curve_entry_schedule_handoff_error_fall: float = 0.03,
+                 dynamic_curve_authority_enabled: bool = True,
+                 dynamic_curve_rate_deficit_deadband: float = 0.01,
+                 dynamic_curve_rate_boost_gain: float = 1.0,
+                 dynamic_curve_rate_boost_max: float = 0.30,
+                 dynamic_curve_jerk_boost_gain: float = 4.0,
+                 dynamic_curve_jerk_boost_max_factor: float = 3.5,
+                 dynamic_curve_comfort_lat_accel_comfort_max_g: float = 0.18,
+                 dynamic_curve_comfort_lat_accel_peak_max_g: float = 0.25,
+                 dynamic_curve_comfort_lat_jerk_comfort_max_gps: float = 0.30,
+                 dynamic_curve_lat_jerk_smoothing_alpha: float = 0.25,
+                 dynamic_curve_lat_jerk_soft_start_ratio: float = 0.60,
+                 dynamic_curve_lat_jerk_soft_floor_scale: float = 0.35,
+                 dynamic_curve_speed_low_mps: float = 4.0,
+                 dynamic_curve_speed_high_mps: float = 10.0,
+                 dynamic_curve_speed_boost_max_scale: float = 1.4,
                  curve_commit_mode_enabled: bool = False,
                  curve_commit_mode_max_frames: int = 20,
                  curve_commit_mode_min_rate: float = 0.22,
                  curve_commit_mode_min_jerk: float = 0.14,
                  curve_commit_mode_transfer_ratio_target: float = 0.72,
                  curve_commit_mode_error_fall: float = 0.03,
+                 curve_commit_mode_exit_consecutive_frames: int = 4,
+                 curve_commit_mode_retrigger_on_dynamic_deficit: bool = True,
+                 curve_commit_mode_dynamic_deficit_frames: int = 8,
+                 curve_commit_mode_dynamic_deficit_min: float = 0.03,
+                 curve_commit_mode_retrigger_cooldown_frames: int = 12,
                  speed_gain_min_speed: float = 4.0,
                  speed_gain_max_speed: float = 10.0,
                  speed_gain_min: float = 1.0,
@@ -2258,6 +2926,16 @@ class VehicleController:
             curvature_transition_threshold=curvature_transition_threshold,
             curvature_transition_alpha=curvature_transition_alpha,
             straight_curvature_threshold=straight_curvature_threshold,
+            curve_upcoming_enter_threshold=curve_upcoming_enter_threshold,
+            curve_upcoming_exit_threshold=curve_upcoming_exit_threshold,
+            curve_upcoming_on_frames=curve_upcoming_on_frames,
+            curve_upcoming_off_frames=curve_upcoming_off_frames,
+            curve_phase_use_distance_track=curve_phase_use_distance_track,
+            curve_phase_track_name=curve_phase_track_name,
+            curve_at_car_distance_min_m=curve_at_car_distance_min_m,
+            road_curve_enter_threshold=road_curve_enter_threshold,
+            road_curve_exit_threshold=road_curve_exit_threshold,
+            road_straight_hold_invalid_frames=road_straight_hold_invalid_frames,
             steering_rate_curvature_min=steering_rate_curvature_min,
             steering_rate_curvature_max=steering_rate_curvature_max,
             steering_rate_scale_min=steering_rate_scale_min,
@@ -2284,14 +2962,63 @@ class VehicleController:
             curve_entry_schedule_min_rate=curve_entry_schedule_min_rate,
             curve_entry_schedule_min_jerk=curve_entry_schedule_min_jerk,
             curve_entry_schedule_min_hold_frames=curve_entry_schedule_min_hold_frames,
+            curve_entry_schedule_min_curve_progress_ratio=(
+                curve_entry_schedule_min_curve_progress_ratio
+            ),
+            curve_entry_schedule_fallback_only_when_dynamic=(
+                curve_entry_schedule_fallback_only_when_dynamic
+            ),
+            curve_entry_schedule_fallback_deficit_frames=(
+                curve_entry_schedule_fallback_deficit_frames
+            ),
+            curve_entry_schedule_fallback_rate_deficit_min=(
+                curve_entry_schedule_fallback_rate_deficit_min
+            ),
+            curve_entry_schedule_fallback_rearm_cooldown_frames=(
+                curve_entry_schedule_fallback_rearm_cooldown_frames
+            ),
             curve_entry_schedule_handoff_transfer_ratio=curve_entry_schedule_handoff_transfer_ratio,
             curve_entry_schedule_handoff_error_fall=curve_entry_schedule_handoff_error_fall,
+            dynamic_curve_authority_enabled=dynamic_curve_authority_enabled,
+            dynamic_curve_rate_deficit_deadband=dynamic_curve_rate_deficit_deadband,
+            dynamic_curve_rate_boost_gain=dynamic_curve_rate_boost_gain,
+            dynamic_curve_rate_boost_max=dynamic_curve_rate_boost_max,
+            dynamic_curve_jerk_boost_gain=dynamic_curve_jerk_boost_gain,
+            dynamic_curve_jerk_boost_max_factor=dynamic_curve_jerk_boost_max_factor,
+            dynamic_curve_comfort_lat_accel_comfort_max_g=(
+                dynamic_curve_comfort_lat_accel_comfort_max_g
+            ),
+            dynamic_curve_comfort_lat_accel_peak_max_g=(
+                dynamic_curve_comfort_lat_accel_peak_max_g
+            ),
+            dynamic_curve_comfort_lat_jerk_comfort_max_gps=(
+                dynamic_curve_comfort_lat_jerk_comfort_max_gps
+            ),
+            dynamic_curve_lat_jerk_smoothing_alpha=dynamic_curve_lat_jerk_smoothing_alpha,
+            dynamic_curve_lat_jerk_soft_start_ratio=dynamic_curve_lat_jerk_soft_start_ratio,
+            dynamic_curve_lat_jerk_soft_floor_scale=dynamic_curve_lat_jerk_soft_floor_scale,
+            dynamic_curve_speed_low_mps=dynamic_curve_speed_low_mps,
+            dynamic_curve_speed_high_mps=dynamic_curve_speed_high_mps,
+            dynamic_curve_speed_boost_max_scale=dynamic_curve_speed_boost_max_scale,
             curve_commit_mode_enabled=curve_commit_mode_enabled,
             curve_commit_mode_max_frames=curve_commit_mode_max_frames,
             curve_commit_mode_min_rate=curve_commit_mode_min_rate,
             curve_commit_mode_min_jerk=curve_commit_mode_min_jerk,
             curve_commit_mode_transfer_ratio_target=curve_commit_mode_transfer_ratio_target,
             curve_commit_mode_error_fall=curve_commit_mode_error_fall,
+            curve_commit_mode_exit_consecutive_frames=curve_commit_mode_exit_consecutive_frames,
+            curve_commit_mode_retrigger_on_dynamic_deficit=(
+                curve_commit_mode_retrigger_on_dynamic_deficit
+            ),
+            curve_commit_mode_dynamic_deficit_frames=(
+                curve_commit_mode_dynamic_deficit_frames
+            ),
+            curve_commit_mode_dynamic_deficit_min=(
+                curve_commit_mode_dynamic_deficit_min
+            ),
+            curve_commit_mode_retrigger_cooldown_frames=(
+                curve_commit_mode_retrigger_cooldown_frames
+            ),
             speed_gain_min_speed=speed_gain_min_speed,
             speed_gain_max_speed=speed_gain_max_speed,
             speed_gain_min=speed_gain_min,
@@ -2402,6 +3129,8 @@ class VehicleController:
             reference_point,
             current_state.get('position'),
             current_state.get('speed', 0.0),
+            road_center_reference_t=current_state.get('road_center_reference_t'),
+            dt=dt,
             return_metadata=return_metadata,
             using_stale_perception=using_stale_perception
         )

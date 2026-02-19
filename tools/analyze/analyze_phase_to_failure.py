@@ -59,9 +59,10 @@ def _find_centerline_cross(
     if n == 0 or initial_sign == 0:
         return None
 
+    threshold = max(1e-3, float(min_abs))
     for i in range(max(0, search_start), n - persist_frames + 1):
         window = signal[i : i + persist_frames]
-        if np.any(np.abs(window) < min_abs):
+        if np.any(np.abs(window) < threshold):
             continue
         # Require full persistence of opposite sign in window.
         if np.all(np.sign(window) == -initial_sign):
@@ -257,14 +258,14 @@ def main() -> None:
     parser.add_argument(
         "--cross-min-abs",
         type=float,
-        default=0.15,
-        help="Minimum absolute magnitude for centerline crossing detection",
+        default=0.0,
+        help="Minimum absolute magnitude for centerline intrusion (0.0 => any intrusion)",
     )
     parser.add_argument(
         "--cross-persist-frames",
         type=int,
-        default=4,
-        help="Required consecutive opposite-sign frames for crossing detection",
+        default=1,
+        help="Consecutive opposite-sign frames required for intrusion detection",
     )
     args = parser.parse_args()
 

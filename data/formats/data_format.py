@@ -186,6 +186,14 @@ class ControlCommand:
     stale_perception_reason: Optional[str] = None  # Reason: "jump_detection", "perception_failure", "frozen", etc.
     # Straight-away stability metrics / tuning
     is_straight: Optional[bool] = None
+    is_control_straight_proxy: Optional[bool] = None
+    curve_upcoming: Optional[bool] = None
+    curve_at_car: Optional[bool] = None
+    curve_at_car_distance_remaining_m: Optional[float] = None
+    is_road_straight: Optional[bool] = None
+    road_curvature_valid: Optional[bool] = None
+    road_curvature_abs: Optional[float] = None
+    road_curvature_source: Optional[str] = None
     straight_oscillation_rate: Optional[float] = None
     tuned_deadband: Optional[float] = None
     tuned_error_smoothing_alpha: Optional[float] = None
@@ -235,6 +243,21 @@ class ControlCommand:
     curve_entry_assist_active: bool = False
     curve_entry_assist_triggered: bool = False
     curve_entry_assist_rearm_frames_remaining: Optional[int] = None
+    dynamic_curve_authority_active: bool = False
+    dynamic_curve_rate_request_delta: Optional[float] = None
+    dynamic_curve_rate_deficit: Optional[float] = None
+    dynamic_curve_rate_boost: Optional[float] = None
+    dynamic_curve_jerk_boost_factor: Optional[float] = None
+    dynamic_curve_lateral_accel_est_g: Optional[float] = None
+    dynamic_curve_lateral_jerk_est_gps: Optional[float] = None
+    dynamic_curve_lateral_jerk_est_smoothed_gps: Optional[float] = None
+    dynamic_curve_speed_scale: Optional[float] = None
+    dynamic_curve_comfort_scale: Optional[float] = None
+    dynamic_curve_comfort_accel_gate: Optional[float] = None
+    dynamic_curve_comfort_jerk_penalty: Optional[float] = None
+    dynamic_curve_rate_boost_cap_effective: Optional[float] = None
+    dynamic_curve_jerk_boost_cap_effective: Optional[float] = None
+    dynamic_curve_authority_deficit_streak: Optional[int] = None
     curve_entry_schedule_active: bool = False
     curve_entry_schedule_triggered: bool = False
     curve_entry_schedule_handoff_triggered: bool = False

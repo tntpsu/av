@@ -52,8 +52,8 @@ def _latest_recording(previous: set[Path]) -> Optional[Path]:
 def _find_centerline_cross(
     signal: np.ndarray,
     curve_start_frame: int,
-    min_abs: float = 0.15,
-    persist_frames: int = 4,
+    min_abs: float = 0.0,
+    persist_frames: int = 1,
 ) -> Optional[int]:
     if len(signal) == 0:
         return None
@@ -61,9 +61,10 @@ def _find_centerline_cross(
     initial_sign = int(np.sign(init)) if abs(init) >= 1e-3 else int(np.sign(signal[0]))
     if initial_sign == 0:
         return None
+    threshold = max(1e-3, float(min_abs))
     for i in range(max(0, curve_start_frame), len(signal) - persist_frames + 1):
         w = signal[i : i + persist_frames]
-        if np.any(np.abs(w) < min_abs):
+        if np.any(np.abs(w) < threshold):
             continue
         if np.all(np.sign(w) == -initial_sign):
             return i

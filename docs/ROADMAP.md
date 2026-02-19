@@ -1,7 +1,7 @@
 # Robust Full-Stack Roadmap (Unified, Layered, and Gated)
 
 **Last Updated:** 2026-02-18  
-**Current Focus:** Layer 2, Stage 1 (First-Turn Entry Reliability) canonical sweep loop (phase-envelope scoring + candidate promotion)  
+**Current Focus:** Layer 2, Stage 1 (First-Turn Entry Reliability) authority-stack consistency under comfort-aware dynamic policy  
 **Change-Control Rule:** If scope, stage, phase status, or promotion gates change, update this roadmap in the same PR/commit before considering work complete.
 
 ## Scope
@@ -166,6 +166,11 @@ This is the practical de-risk sequence for implementation and testing.
   - ran additional fixed-start A/B checks at `start_t=0.05` and `start_t=0.10`.
   - outcomes were perception-limited on non-canonical starts; canonical promotion remains valid and baseline unchanged.
   - consolidated artifacts under `data/reports/sweeps/s_loop_phase45_20260218/`.
+- `S1-M27` (done): tighten crossing attribution + comfort-policy reshaping for dynamic authority:
+  - centerline-cross detection now treats first intrusion as failure onset (`persist=1`, near-zero threshold guard) across analyzers and PhilViz issue detection.
+  - dynamic comfort policy now uses `g_lat` as hard guardrail and `g_jerk` as soft damped penalty (with smoothing + floor) to avoid one-frame jerk spikes zeroing authority.
+  - added telemetry for smoothed jerk and split comfort gates (`accel_gate`, `jerk_penalty`) in HDF5 + PhilViz.
+- `S1-M28` (next): align downstream limiter stack with comfort-aware dynamic authority so boosted upstream authority is not immediately discarded by later limiter stages.
 
 **Gate to pass Stage 1**
 - No centerline cross in first-turn window.

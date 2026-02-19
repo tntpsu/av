@@ -43,14 +43,17 @@ def _first_idx(mask: np.ndarray) -> Optional[int]:
     return int(idx[0]) if len(idx) else None
 
 
-def _find_centerline_cross(signal: np.ndarray, curve_start: int, min_abs: float = 0.15, persist: int = 4) -> Optional[int]:
+def _find_centerline_cross(
+    signal: np.ndarray, curve_start: int, min_abs: float = 0.0, persist: int = 1
+) -> Optional[int]:
     init = float(np.median(signal[: min(60, len(signal))]))
     sign0 = int(np.sign(init)) if abs(init) >= 1e-3 else int(np.sign(signal[0])) if len(signal) else 0
     if sign0 == 0:
         return None
+    threshold = max(1e-3, float(min_abs))
     for i in range(max(0, curve_start), len(signal) - persist + 1):
         w = signal[i : i + persist]
-        if np.any(np.abs(w) < min_abs):
+        if np.any(np.abs(w) < threshold):
             continue
         if np.all(np.sign(w) == -sign0):
             return i

@@ -99,16 +99,22 @@ def _first_true(mask: np.ndarray) -> Optional[int]:
     return int(idx[0]) if len(idx) else None
 
 
-def _find_centerline_cross(signal: np.ndarray, curve_start_frame: int, min_abs: float = 0.15, persist_frames: int = 4) -> Optional[int]:
+def _find_centerline_cross(
+    signal: np.ndarray,
+    curve_start_frame: int,
+    min_abs: float = 0.0,
+    persist_frames: int = 1,
+) -> Optional[int]:
     if len(signal) == 0:
         return None
     init = float(np.median(signal[: min(60, len(signal))]))
     initial_sign = int(np.sign(init)) if abs(init) >= 1e-3 else int(np.sign(signal[0]))
     if initial_sign == 0:
         return None
+    threshold = max(1e-3, float(min_abs))
     for i in range(max(0, curve_start_frame), len(signal) - persist_frames + 1):
         w = signal[i : i + persist_frames]
-        if np.any(np.abs(w) < min_abs):
+        if np.any(np.abs(w) < threshold):
             continue
         if np.all(np.sign(w) == -initial_sign):
             return i

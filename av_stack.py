@@ -777,6 +777,26 @@ class AVStack:
             curvature_transition_threshold=lateral_cfg.get('curvature_transition_threshold', 0.01),
             curvature_transition_alpha=lateral_cfg.get('curvature_transition_alpha', 0.3),
             straight_curvature_threshold=lateral_cfg.get('straight_curvature_threshold', 0.01),
+            curve_upcoming_enter_threshold=float(
+                lateral_cfg.get('curve_upcoming_enter_threshold', 0.012)
+            ),
+            curve_upcoming_exit_threshold=float(
+                lateral_cfg.get('curve_upcoming_exit_threshold', 0.009)
+            ),
+            curve_upcoming_on_frames=int(lateral_cfg.get('curve_upcoming_on_frames', 2)),
+            curve_upcoming_off_frames=int(lateral_cfg.get('curve_upcoming_off_frames', 2)),
+            curve_phase_use_distance_track=bool(
+                lateral_cfg.get('curve_phase_use_distance_track', False)
+            ),
+            curve_phase_track_name=lateral_cfg.get('curve_phase_track_name'),
+            curve_at_car_distance_min_m=float(
+                lateral_cfg.get('curve_at_car_distance_min_m', 0.0)
+            ),
+            road_curve_enter_threshold=lateral_cfg.get('road_curve_enter_threshold'),
+            road_curve_exit_threshold=lateral_cfg.get('road_curve_exit_threshold'),
+            road_straight_hold_invalid_frames=int(
+                lateral_cfg.get('road_straight_hold_invalid_frames', 6)
+            ),
             steering_rate_curvature_min=lateral_cfg.get('steering_rate_curvature_min', 0.005),
             steering_rate_curvature_max=lateral_cfg.get('steering_rate_curvature_max', 0.03),
             steering_rate_scale_min=lateral_cfg.get('steering_rate_scale_min', 0.5),
@@ -817,13 +837,73 @@ class AVStack:
                 lateral_cfg.get('curve_entry_schedule_min_jerk', 0.14)
             ),
             curve_entry_schedule_min_hold_frames=int(
-                lateral_cfg.get('curve_entry_schedule_min_hold_frames', 6)
+                lateral_cfg.get('curve_entry_schedule_min_hold_frames', 12)
+            ),
+            curve_entry_schedule_min_curve_progress_ratio=float(
+                lateral_cfg.get('curve_entry_schedule_min_curve_progress_ratio', 0.20)
+            ),
+            curve_entry_schedule_fallback_only_when_dynamic=bool(
+                lateral_cfg.get('curve_entry_schedule_fallback_only_when_dynamic', False)
+            ),
+            curve_entry_schedule_fallback_deficit_frames=int(
+                lateral_cfg.get('curve_entry_schedule_fallback_deficit_frames', 6)
+            ),
+            curve_entry_schedule_fallback_rate_deficit_min=float(
+                lateral_cfg.get('curve_entry_schedule_fallback_rate_deficit_min', 0.03)
+            ),
+            curve_entry_schedule_fallback_rearm_cooldown_frames=int(
+                lateral_cfg.get('curve_entry_schedule_fallback_rearm_cooldown_frames', 18)
             ),
             curve_entry_schedule_handoff_transfer_ratio=float(
                 lateral_cfg.get('curve_entry_schedule_handoff_transfer_ratio', 0.65)
             ),
             curve_entry_schedule_handoff_error_fall=float(
                 lateral_cfg.get('curve_entry_schedule_handoff_error_fall', 0.03)
+            ),
+            dynamic_curve_authority_enabled=bool(
+                lateral_cfg.get('dynamic_curve_authority_enabled', True)
+            ),
+            dynamic_curve_rate_deficit_deadband=float(
+                lateral_cfg.get('dynamic_curve_rate_deficit_deadband', 0.01)
+            ),
+            dynamic_curve_rate_boost_gain=float(
+                lateral_cfg.get('dynamic_curve_rate_boost_gain', 1.0)
+            ),
+            dynamic_curve_rate_boost_max=float(
+                lateral_cfg.get('dynamic_curve_rate_boost_max', 0.30)
+            ),
+            dynamic_curve_jerk_boost_gain=float(
+                lateral_cfg.get('dynamic_curve_jerk_boost_gain', 4.0)
+            ),
+            dynamic_curve_jerk_boost_max_factor=float(
+                lateral_cfg.get('dynamic_curve_jerk_boost_max_factor', 3.5)
+            ),
+            dynamic_curve_comfort_lat_accel_comfort_max_g=float(
+                lateral_cfg.get('dynamic_curve_comfort_lat_accel_comfort_max_g', 0.18)
+            ),
+            dynamic_curve_comfort_lat_accel_peak_max_g=float(
+                lateral_cfg.get('dynamic_curve_comfort_lat_accel_peak_max_g', 0.25)
+            ),
+            dynamic_curve_comfort_lat_jerk_comfort_max_gps=float(
+                lateral_cfg.get('dynamic_curve_comfort_lat_jerk_comfort_max_gps', 0.30)
+            ),
+            dynamic_curve_lat_jerk_smoothing_alpha=float(
+                lateral_cfg.get('dynamic_curve_lat_jerk_smoothing_alpha', 0.25)
+            ),
+            dynamic_curve_lat_jerk_soft_start_ratio=float(
+                lateral_cfg.get('dynamic_curve_lat_jerk_soft_start_ratio', 0.60)
+            ),
+            dynamic_curve_lat_jerk_soft_floor_scale=float(
+                lateral_cfg.get('dynamic_curve_lat_jerk_soft_floor_scale', 0.35)
+            ),
+            dynamic_curve_speed_low_mps=float(
+                lateral_cfg.get('dynamic_curve_speed_low_mps', 4.0)
+            ),
+            dynamic_curve_speed_high_mps=float(
+                lateral_cfg.get('dynamic_curve_speed_high_mps', 10.0)
+            ),
+            dynamic_curve_speed_boost_max_scale=float(
+                lateral_cfg.get('dynamic_curve_speed_boost_max_scale', 1.4)
             ),
             curve_commit_mode_enabled=bool(
                 lateral_cfg.get('curve_commit_mode_enabled', False)
@@ -842,6 +922,21 @@ class AVStack:
             ),
             curve_commit_mode_error_fall=float(
                 lateral_cfg.get('curve_commit_mode_error_fall', 0.03)
+            ),
+            curve_commit_mode_exit_consecutive_frames=int(
+                lateral_cfg.get('curve_commit_mode_exit_consecutive_frames', 4)
+            ),
+            curve_commit_mode_retrigger_on_dynamic_deficit=bool(
+                lateral_cfg.get('curve_commit_mode_retrigger_on_dynamic_deficit', True)
+            ),
+            curve_commit_mode_dynamic_deficit_frames=int(
+                lateral_cfg.get('curve_commit_mode_dynamic_deficit_frames', 8)
+            ),
+            curve_commit_mode_dynamic_deficit_min=float(
+                lateral_cfg.get('curve_commit_mode_dynamic_deficit_min', 0.03)
+            ),
+            curve_commit_mode_retrigger_cooldown_frames=int(
+                lateral_cfg.get('curve_commit_mode_retrigger_cooldown_frames', 12)
             ),
             speed_gain_min_speed=lateral_cfg.get('speed_gain_min_speed', 4.0),
             speed_gain_max_speed=lateral_cfg.get('speed_gain_max_speed', 10.0),
@@ -3542,7 +3637,11 @@ class AVStack:
                 current_state = {
                     'heading': self._extract_heading(vehicle_state_dict),
                     'speed': current_speed,
-                    'position': self._extract_position(vehicle_state_dict)
+                    'position': self._extract_position(vehicle_state_dict),
+                    'road_center_reference_t': vehicle_state_dict.get(
+                        'roadCenterReferenceT',
+                        vehicle_state_dict.get('road_center_reference_t')
+                    ),
                 }
                 
                 # Get control command with metadata for recording
@@ -4811,6 +4910,16 @@ class AVStack:
                 'straight_sign_flip_frames_remaining'
             ),
             is_straight=control_command.get('is_straight'),
+            is_control_straight_proxy=control_command.get('is_control_straight_proxy'),
+            curve_upcoming=control_command.get('curve_upcoming'),
+            curve_at_car=control_command.get('curve_at_car'),
+            curve_at_car_distance_remaining_m=control_command.get(
+                'curve_at_car_distance_remaining_m'
+            ),
+            is_road_straight=control_command.get('is_road_straight'),
+            road_curvature_valid=control_command.get('road_curvature_valid'),
+            road_curvature_abs=control_command.get('road_curvature_abs'),
+            road_curvature_source=control_command.get('road_curvature_source'),
             straight_oscillation_rate=control_command.get('straight_oscillation_rate'),
             tuned_deadband=control_command.get('tuned_deadband'),
             tuned_error_smoothing_alpha=control_command.get('tuned_error_smoothing_alpha'),
@@ -4865,6 +4974,43 @@ class AVStack:
             curve_entry_assist_triggered=bool(control_command.get('curve_entry_assist_triggered', False)),
             curve_entry_assist_rearm_frames_remaining=control_command.get(
                 'curve_entry_assist_rearm_frames_remaining'
+            ),
+            dynamic_curve_authority_active=bool(
+                control_command.get('dynamic_curve_authority_active', False)
+            ),
+            dynamic_curve_rate_request_delta=control_command.get(
+                'dynamic_curve_rate_request_delta'
+            ),
+            dynamic_curve_rate_deficit=control_command.get('dynamic_curve_rate_deficit'),
+            dynamic_curve_rate_boost=control_command.get('dynamic_curve_rate_boost'),
+            dynamic_curve_jerk_boost_factor=control_command.get(
+                'dynamic_curve_jerk_boost_factor'
+            ),
+            dynamic_curve_lateral_accel_est_g=control_command.get(
+                'dynamic_curve_lateral_accel_est_g'
+            ),
+            dynamic_curve_lateral_jerk_est_gps=control_command.get(
+                'dynamic_curve_lateral_jerk_est_gps'
+            ),
+            dynamic_curve_lateral_jerk_est_smoothed_gps=control_command.get(
+                'dynamic_curve_lateral_jerk_est_smoothed_gps'
+            ),
+            dynamic_curve_speed_scale=control_command.get('dynamic_curve_speed_scale'),
+            dynamic_curve_comfort_scale=control_command.get('dynamic_curve_comfort_scale'),
+            dynamic_curve_comfort_accel_gate=control_command.get(
+                'dynamic_curve_comfort_accel_gate'
+            ),
+            dynamic_curve_comfort_jerk_penalty=control_command.get(
+                'dynamic_curve_comfort_jerk_penalty'
+            ),
+            dynamic_curve_rate_boost_cap_effective=control_command.get(
+                'dynamic_curve_rate_boost_cap_effective'
+            ),
+            dynamic_curve_jerk_boost_cap_effective=control_command.get(
+                'dynamic_curve_jerk_boost_cap_effective'
+            ),
+            dynamic_curve_authority_deficit_streak=control_command.get(
+                'dynamic_curve_authority_deficit_streak'
             ),
             curve_entry_schedule_active=bool(control_command.get('curve_entry_schedule_active', False)),
             curve_entry_schedule_triggered=bool(control_command.get('curve_entry_schedule_triggered', False)),
@@ -5033,6 +5179,11 @@ class AVStack:
             oracle_point_spacing_meters=oracle_point_spacing_meters,
             oracle_samples_enabled=oracle_samples_enabled,
             velocities=velocities,
+            curvature=(
+                float(ref_point.get("curvature", 0.0))
+                if isinstance(ref_point, dict)
+                else None
+            ),
             reference_point=ref_point,  # Store reference point for analysis
             reference_point_method=ref_point_method,  # NEW: Track which method was used
             perception_center_x=perception_center_x,  # NEW: Store perception center for comparison

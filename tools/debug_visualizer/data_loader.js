@@ -119,6 +119,15 @@ class DataLoader {
     }
 
     /**
+     * Load canonical curve windows from a track definition.
+     */
+    async loadTrackCurveWindows(trackName = 's_loop') {
+        const response = await fetch(`${API_BASE}/track/${trackName}/curve-windows`, { cache: 'no-store' });
+        if (!response.ok) throw new Error(`Failed to load track curve windows: ${trackName}`);
+        return response.json();
+    }
+
+    /**
      * Load frame data for a specific frame index.
      */
     async loadFrameData(frameIndex) {

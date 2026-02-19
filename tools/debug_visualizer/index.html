@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>PhilViz</title>
-    <link rel="stylesheet" href="style.css?v=20260216_ego_anchor_default_v37">
+    <link rel="stylesheet" href="style.css?v=20260218_curve_schedule_compact_v43">
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 </head>
 <body>
@@ -597,7 +597,11 @@
                             <tr><td>PID Integral</td><td id="control-pid-integral">-</td></tr>
                             <tr><td>PID Derivative</td><td id="control-pid-derivative">-</td></tr>
                             <tr><td>PID Error</td><td id="control-pid-error">-</td></tr>
-                            <tr><td>Is Straight</td><td id="control-is-straight">-</td></tr>
+                            <tr><td>Is Control Straight Proxy</td><td id="control-is-control-straight-proxy">-</td></tr>
+                            <tr><td>Is Straight (legacy alias)</td><td id="control-is-straight">-</td></tr>
+                            <tr><td>Is Road Straight</td><td id="control-is-road-straight">-</td></tr>
+                            <tr><td>Road Curvature Valid</td><td id="control-road-curvature-valid">-</td></tr>
+                            <tr><td>Road Curvature |k|</td><td id="control-road-curvature-abs">-</td></tr>
                             <tr><td>Straight Oscillation Rate</td><td id="control-straight-oscillation-rate">-</td></tr>
                             <tr><td>Tuned Deadband</td><td id="control-tuned-deadband">-</td></tr>
                             <tr><td>Tuned Smoothing Alpha</td><td id="control-tuned-smoothing-alpha">-</td></tr>
@@ -613,7 +617,13 @@
                             <tr><td>Rate Curve Regime</td><td id="control-steering-rate-curve-regime">-</td></tr>
                             <tr><td>AfterCurve Limiter Cause</td><td id="control-steering-rate-aftercurve-cause">-</td></tr>
                             <tr><td>Rate Requested Δ / Margin / Unlock Needed</td><td id="control-steering-rate-thresholds">-</td></tr>
-                            <tr><td>Curve Entry Assist (active / triggered / rearmFrames)</td><td id="control-steering-curve-entry-assist">-</td></tr>
+                            <tr><td>Curve Entry Assist (cfg / active / triggered / rearmFrames / boosts)</td><td id="control-steering-curve-entry-assist">-</td></tr>
+                            <tr><td>Curve Entry Schedule (cfg / active / triggered / handoff / framesRemain)</td><td id="control-steering-curve-entry-schedule-primary">-</td></tr>
+                            <tr class="compact-subrow"><td>&nbsp;&nbsp;Context (proxy/upcoming/atCar/road)</td><td id="control-steering-curve-entry-schedule-context">-</td></tr>
+                            <tr class="compact-subrow"><td>&nbsp;&nbsp;Params</td><td id="control-steering-curve-entry-schedule-params">-</td></tr>
+                            <tr><td>Expected Curve Window (track)</td><td id="control-expected-curve-window">-</td></tr>
+                            <tr><td>Curve Commit Mode (cfg / active / triggered / handoff / framesRemain / params)</td><td id="control-steering-curve-commit-mode">-</td></tr>
+                            <tr><td>Curve Mode Speed Cap (cfg / active / clamped / capValue / params)</td><td id="control-steering-curve-mode-speed-cap">-</td></tr>
                             <tr><td>Rate Limited</td><td id="control-steering-rate-limited">-</td></tr>
                             <tr><td>Rate Limit Delta</td><td id="control-steering-rate-delta">-</td></tr>
                             <tr><td>Post Rate Limit</td><td id="control-steering-post-rate">-</td></tr>
@@ -804,6 +814,7 @@
                 <input type="range" id="frame-slider" min="0" max="0" value="0" class="frame-slider">
                 <span>Time: <span id="frame-time">0.00</span>s</span>
                 <span>Distance: <span id="frame-distance-from-start">-</span>m</span>
+                <span>Expected: <span id="frame-expected-curve-window">-</span></span>
                 <input type="number" id="frame-jump-input" placeholder="Jump to frame..." min="0" style="width: 120px; padding: 0.25rem; margin-left: 0.5rem; background: #2a2a2a; color: white; border: 1px solid #444; border-radius: 4px;">
                 <button id="frame-jump-btn" class="btn btn-secondary" style="margin-left: 0.25rem; padding: 0.25rem 0.5rem;">Go</button>
             </div>
@@ -816,9 +827,9 @@
         </div>
     </div>
 
-    <script src="data_loader.js?v=20260216_ego_anchor_default_v37"></script>
+    <script src="data_loader.js?v=20260218_track_curve_windows_v44"></script>
     <script src="overlay_renderer.js?v=20260213_issues_filters"></script>
-    <script src="visualizer.js?v=20260217_curve_entry_assist_v40"></script>
+    <script src="visualizer.js?v=20260218_dynamic_curve_softjerk_v49"></script>
 </body>
 </html>
 
