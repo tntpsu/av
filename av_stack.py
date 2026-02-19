@@ -878,6 +878,12 @@ class AVStack:
             dynamic_curve_jerk_boost_max_factor=float(
                 lateral_cfg.get('dynamic_curve_jerk_boost_max_factor', 3.5)
             ),
+            dynamic_curve_hard_clip_boost_gain=float(
+                lateral_cfg.get('dynamic_curve_hard_clip_boost_gain', 1.0)
+            ),
+            dynamic_curve_hard_clip_boost_max=float(
+                lateral_cfg.get('dynamic_curve_hard_clip_boost_max', 0.12)
+            ),
             dynamic_curve_comfort_lat_accel_comfort_max_g=float(
                 lateral_cfg.get('dynamic_curve_comfort_lat_accel_comfort_max_g', 0.18)
             ),
@@ -5008,6 +5014,13 @@ class AVStack:
             ),
             dynamic_curve_jerk_boost_cap_effective=control_command.get(
                 'dynamic_curve_jerk_boost_cap_effective'
+            ),
+            dynamic_curve_hard_clip_boost=control_command.get('dynamic_curve_hard_clip_boost'),
+            dynamic_curve_hard_clip_boost_cap_effective=control_command.get(
+                'dynamic_curve_hard_clip_boost_cap_effective'
+            ),
+            dynamic_curve_hard_clip_limit_effective=control_command.get(
+                'dynamic_curve_hard_clip_limit_effective'
             ),
             dynamic_curve_authority_deficit_streak=control_command.get(
                 'dynamic_curve_authority_deficit_streak'

@@ -154,6 +154,8 @@ class LateralController:
                  dynamic_curve_rate_boost_max: float = 0.30,
                  dynamic_curve_jerk_boost_gain: float = 4.0,
                  dynamic_curve_jerk_boost_max_factor: float = 3.5,
+                 dynamic_curve_hard_clip_boost_gain: float = 1.0,
+                 dynamic_curve_hard_clip_boost_max: float = 0.12,
                  dynamic_curve_comfort_lat_accel_comfort_max_g: float = 0.18,
                  dynamic_curve_comfort_lat_accel_peak_max_g: float = 0.25,
                  dynamic_curve_comfort_lat_jerk_comfort_max_gps: float = 0.30,
@@ -279,6 +281,12 @@ class LateralController:
         self.dynamic_curve_jerk_boost_gain = max(0.0, float(dynamic_curve_jerk_boost_gain))
         self.dynamic_curve_jerk_boost_max_factor = max(
             1.0, float(dynamic_curve_jerk_boost_max_factor)
+        )
+        self.dynamic_curve_hard_clip_boost_gain = max(
+            0.0, float(dynamic_curve_hard_clip_boost_gain)
+        )
+        self.dynamic_curve_hard_clip_boost_max = max(
+            0.0, float(dynamic_curve_hard_clip_boost_max)
         )
         self.dynamic_curve_comfort_lat_accel_comfort_max_g = max(
             1e-3, float(dynamic_curve_comfort_lat_accel_comfort_max_g)
@@ -1065,6 +1073,9 @@ class LateralController:
         dynamic_curve_comfort_jerk_penalty = 1.0
         dynamic_curve_rate_boost_cap_effective = self.dynamic_curve_rate_boost_max
         dynamic_curve_jerk_boost_cap_effective = self.dynamic_curve_jerk_boost_max_factor
+        dynamic_curve_hard_clip_boost = 0.0
+        dynamic_curve_hard_clip_boost_cap_effective = self.dynamic_curve_hard_clip_boost_max
+        dynamic_curve_hard_clip_limit_effective = self.max_steering
         steering_authority_gap = 0.0
         steering_transfer_ratio = 1.0
         steering_first_limiter_stage_code = 0.0
@@ -1355,6 +1366,11 @@ class LateralController:
             * dynamic_curve_speed_scale
             * dynamic_curve_comfort_scale
         )
+        dynamic_curve_hard_clip_boost_cap_effective = float(
+            self.dynamic_curve_hard_clip_boost_max
+            * dynamic_curve_speed_scale
+            * dynamic_curve_comfort_scale
+        )
         if self.dynamic_curve_authority_enabled and curve_at_car:
             dynamic_curve_authority_active = True
             raw_deficit = dynamic_curve_rate_request_delta - max_steering_rate
@@ -1628,7 +1644,26 @@ class LateralController:
         
         # Apply additional smoothing to prevent oscillation
         clip_in = steering_before_limits
-        steering = np.clip(steering_before_limits, -self.max_steering, self.max_steering)
+        if dynamic_curve_authority_active:
+            clip_overflow = max(0.0, abs(clip_in) - self.max_steering)
+            dynamic_curve_hard_clip_boost = float(
+                np.clip(
+                    max(
+                        dynamic_curve_rate_deficit * self.dynamic_curve_hard_clip_boost_gain,
+                        clip_overflow,
+                    ),
+                    0.0,
+                    dynamic_curve_hard_clip_boost_cap_effective,
+                )
+            )
+        dynamic_curve_hard_clip_limit_effective = float(
+            np.clip(self.max_steering + dynamic_curve_hard_clip_boost, 0.0, 1.0)
+        )
+        steering = np.clip(
+            steering_before_limits,
+            -dynamic_curve_hard_clip_limit_effective,
+            dynamic_curve_hard_clip_limit_effective,
+        )
         steering_hard_clip_delta = abs(steering - clip_in)
         steering_hard_clip_active = steering_hard_clip_delta > 1e-6
         steering_post_hard_clip = steering
@@ -1794,6 +1829,13 @@ class LateralController:
                 'dynamic_curve_comfort_jerk_penalty': dynamic_curve_comfort_jerk_penalty,
                 'dynamic_curve_rate_boost_cap_effective': dynamic_curve_rate_boost_cap_effective,
                 'dynamic_curve_jerk_boost_cap_effective': dynamic_curve_jerk_boost_cap_effective,
+                'dynamic_curve_hard_clip_boost': dynamic_curve_hard_clip_boost,
+                'dynamic_curve_hard_clip_boost_cap_effective': (
+                    dynamic_curve_hard_clip_boost_cap_effective
+                ),
+                'dynamic_curve_hard_clip_limit_effective': (
+                    dynamic_curve_hard_clip_limit_effective
+                ),
                 'dynamic_curve_authority_deficit_streak': int(self._dynamic_authority_deficit_streak),
                 'dynamic_curve_commit_deficit_streak': int(self._dynamic_commit_deficit_streak),
                 'dynamic_curve_comfort_lat_accel_comfort_max_g': (
@@ -1814,6 +1856,8 @@ class LateralController:
                 'dynamic_curve_lat_jerk_soft_floor_scale': (
                     self.dynamic_curve_lat_jerk_soft_floor_scale
                 ),
+                'dynamic_curve_hard_clip_boost_gain': self.dynamic_curve_hard_clip_boost_gain,
+                'dynamic_curve_hard_clip_boost_max': self.dynamic_curve_hard_clip_boost_max,
                 'curve_entry_schedule_active': curve_entry_schedule_active,
                 'curve_entry_schedule_triggered': curve_entry_schedule_triggered,
                 'curve_entry_schedule_handoff_triggered': curve_entry_schedule_handoff_triggered,
@@ -2848,6 +2892,8 @@ class VehicleController:
                  dynamic_curve_rate_boost_max: float = 0.30,
                  dynamic_curve_jerk_boost_gain: float = 4.0,
                  dynamic_curve_jerk_boost_max_factor: float = 3.5,
+                 dynamic_curve_hard_clip_boost_gain: float = 1.0,
+                 dynamic_curve_hard_clip_boost_max: float = 0.12,
                  dynamic_curve_comfort_lat_accel_comfort_max_g: float = 0.18,
                  dynamic_curve_comfort_lat_accel_peak_max_g: float = 0.25,
                  dynamic_curve_comfort_lat_jerk_comfort_max_gps: float = 0.30,
@@ -2985,6 +3031,8 @@ class VehicleController:
             dynamic_curve_rate_boost_max=dynamic_curve_rate_boost_max,
             dynamic_curve_jerk_boost_gain=dynamic_curve_jerk_boost_gain,
             dynamic_curve_jerk_boost_max_factor=dynamic_curve_jerk_boost_max_factor,
+            dynamic_curve_hard_clip_boost_gain=dynamic_curve_hard_clip_boost_gain,
+            dynamic_curve_hard_clip_boost_max=dynamic_curve_hard_clip_boost_max,
             dynamic_curve_comfort_lat_accel_comfort_max_g=(
                 dynamic_curve_comfort_lat_accel_comfort_max_g
             ),

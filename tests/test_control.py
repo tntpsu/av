@@ -636,6 +636,55 @@ def test_dynamic_curve_jerk_soft_penalty_does_not_hard_disable_boost():
     assert float(m['dynamic_curve_rate_boost_cap_effective']) > 0.0
 
 
+def test_dynamic_curve_hard_clip_boost_relaxes_clip_under_comfort_headroom():
+    """Dynamic authority should be able to lift hard clip limit when comfort allows."""
+    base = dict(
+        kp=1.0,
+        kd=0.2,
+        max_steering=0.2,
+        curve_entry_schedule_enabled=False,
+        curve_commit_mode_enabled=False,
+        dynamic_curve_authority_enabled=True,
+        dynamic_curve_rate_boost_gain=1.0,
+        dynamic_curve_rate_boost_max=0.30,
+        dynamic_curve_hard_clip_boost_max=0.12,
+        dynamic_curve_comfort_lat_accel_comfort_max_g=0.18,
+        dynamic_curve_comfort_lat_accel_peak_max_g=0.25,
+        dynamic_curve_comfort_lat_jerk_comfort_max_gps=0.30,
+        curve_upcoming_enter_threshold=0.005,
+        curve_upcoming_exit_threshold=0.004,
+        curve_upcoming_on_frames=1,
+        curve_upcoming_off_frames=1,
+    )
+    ref = {'x': 2.0, 'y': 0.0, 'heading': 0.4, 'velocity': 8.0, 'curvature': 0.02}
+    with_clip_controller = LateralController(**base)
+    with_clip_controller.last_steering = -0.5
+    with_clip_boost = with_clip_controller.compute_steering(
+        current_heading=0.0,
+        reference_point=ref,
+        current_speed=8.0,
+        dt=0.033,
+        return_metadata=True,
+    )
+    no_clip_controller = LateralController(
+        **{**base, 'dynamic_curve_hard_clip_boost_gain': 0.0}
+    )
+    no_clip_controller.last_steering = -0.5
+    no_clip_boost = no_clip_controller.compute_steering(
+        current_heading=0.0,
+        reference_point=ref,
+        current_speed=8.0,
+        dt=0.033,
+        return_metadata=True,
+    )
+    assert with_clip_boost['dynamic_curve_authority_active'] is True
+    assert float(with_clip_boost['dynamic_curve_hard_clip_limit_effective']) > 0.2
+    assert float(with_clip_boost['dynamic_curve_hard_clip_boost']) > 0.0
+    assert float(with_clip_boost['dynamic_curve_hard_clip_limit_effective']) > float(
+        no_clip_boost['dynamic_curve_hard_clip_limit_effective']
+    )
+
+
 def test_distance_track_curve_phase_arms_upcoming_before_curve_start():
     """Distance-track phase should arm upcoming before start and at_car at curve start."""
     controller = LateralController(

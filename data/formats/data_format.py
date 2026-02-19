@@ -257,6 +257,9 @@ class ControlCommand:
     dynamic_curve_comfort_jerk_penalty: Optional[float] = None
     dynamic_curve_rate_boost_cap_effective: Optional[float] = None
     dynamic_curve_jerk_boost_cap_effective: Optional[float] = None
+    dynamic_curve_hard_clip_boost: Optional[float] = None
+    dynamic_curve_hard_clip_boost_cap_effective: Optional[float] = None
+    dynamic_curve_hard_clip_limit_effective: Optional[float] = None
     dynamic_curve_authority_deficit_streak: Optional[int] = None
     curve_entry_schedule_active: bool = False
     curve_entry_schedule_triggered: bool = False

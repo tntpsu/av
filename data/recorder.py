@@ -1213,6 +1213,24 @@ class DataRecorder:
             dtype=np.float32
         )
         self.h5_file.create_dataset(
+            "control/dynamic_curve_hard_clip_boost",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/dynamic_curve_hard_clip_boost_cap_effective",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/dynamic_curve_hard_clip_limit_effective",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
             "control/dynamic_curve_authority_deficit_streak",
             shape=(0,),
             maxshape=max_shape,
@@ -3258,6 +3276,9 @@ class DataRecorder:
         dynamic_curve_comfort_jerk_penalty_list = []
         dynamic_curve_rate_boost_cap_effective_list = []
         dynamic_curve_jerk_boost_cap_effective_list = []
+        dynamic_curve_hard_clip_boost_list = []
+        dynamic_curve_hard_clip_boost_cap_effective_list = []
+        dynamic_curve_hard_clip_limit_effective_list = []
         dynamic_curve_authority_deficit_streak_list = []
         curve_entry_schedule_active_list = []
         curve_entry_schedule_triggered_list = []
@@ -3441,6 +3462,15 @@ class DataRecorder:
             dynamic_curve_jerk_boost_cap_effective_list.append(
                 getattr(cc, 'dynamic_curve_jerk_boost_cap_effective', 1.0) or 1.0
             )
+            dynamic_curve_hard_clip_boost_list.append(
+                getattr(cc, 'dynamic_curve_hard_clip_boost', 0.0) or 0.0
+            )
+            dynamic_curve_hard_clip_boost_cap_effective_list.append(
+                getattr(cc, 'dynamic_curve_hard_clip_boost_cap_effective', 0.0) or 0.0
+            )
+            dynamic_curve_hard_clip_limit_effective_list.append(
+                getattr(cc, 'dynamic_curve_hard_clip_limit_effective', 0.0) or 0.0
+            )
             dynamic_curve_authority_deficit_streak_list.append(
                 int(getattr(cc, 'dynamic_curve_authority_deficit_streak', 0) or 0)
             )
@@ -3536,6 +3566,9 @@ class DataRecorder:
                        "dynamic_curve_comfort_jerk_penalty",
                        "dynamic_curve_rate_boost_cap_effective",
                        "dynamic_curve_jerk_boost_cap_effective",
+                       "dynamic_curve_hard_clip_boost",
+                       "dynamic_curve_hard_clip_boost_cap_effective",
+                       "dynamic_curve_hard_clip_limit_effective",
                        "dynamic_curve_authority_deficit_streak",
                        "curve_entry_schedule_active", "curve_entry_schedule_triggered",
                        "curve_entry_schedule_handoff_triggered", "curve_entry_schedule_frames_remaining",
@@ -3715,6 +3748,15 @@ class DataRecorder:
             )
             self.h5_file["control/dynamic_curve_jerk_boost_cap_effective"][current_size:] = (
                 dynamic_curve_jerk_boost_cap_effective_list
+            )
+            self.h5_file["control/dynamic_curve_hard_clip_boost"][current_size:] = (
+                dynamic_curve_hard_clip_boost_list
+            )
+            self.h5_file["control/dynamic_curve_hard_clip_boost_cap_effective"][current_size:] = (
+                dynamic_curve_hard_clip_boost_cap_effective_list
+            )
+            self.h5_file["control/dynamic_curve_hard_clip_limit_effective"][current_size:] = (
+                dynamic_curve_hard_clip_limit_effective_list
             )
             self.h5_file["control/dynamic_curve_authority_deficit_streak"][current_size:] = np.array(
                 dynamic_curve_authority_deficit_streak_list, dtype=np.int16

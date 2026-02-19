@@ -170,7 +170,15 @@ This is the practical de-risk sequence for implementation and testing.
   - centerline-cross detection now treats first intrusion as failure onset (`persist=1`, near-zero threshold guard) across analyzers and PhilViz issue detection.
   - dynamic comfort policy now uses `g_lat` as hard guardrail and `g_jerk` as soft damped penalty (with smoothing + floor) to avoid one-frame jerk spikes zeroing authority.
   - added telemetry for smoothed jerk and split comfort gates (`accel_gate`, `jerk_penalty`) in HDF5 + PhilViz.
-- `S1-M28` (next): align downstream limiter stack with comfort-aware dynamic authority so boosted upstream authority is not immediately discarded by later limiter stages.
+- `S1-M28` (done): align downstream limiter stack with comfort-aware dynamic authority:
+  - added comfort-aware dynamic hard-clip lift (`dynamic_curve_hard_clip_boost_*`) so clip ceiling can expand when `g_lat` headroom exists.
+  - exposed hard-clip boost/cap/effective-limit telemetry in HDF5 + PhilViz.
+  - added control test coverage for reduced hard-clip loss when dynamic clip lift is enabled.
+- `S1-M29` (in progress): validate clip-lift behavior on canonical 25s sanity runs:
+  - latest validation recording: `data/recordings/recording_20260218_233236.h5`.
+  - first intrusion moved to frame `204` and no offroad emergency stop occurred in this run.
+  - hard-clip lift engaged (`dynamic_curve_hard_clip_boost` nonzero) with effective clip ceiling rising above base cap.
+- `S1-M30` (next): tune hard-clip lift gain/cap with canonical A/B so authority gain improves first-intrusion timing without comfort regressions.
 
 **Gate to pass Stage 1**
 - No centerline cross in first-turn window.

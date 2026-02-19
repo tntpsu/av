@@ -1305,6 +1305,24 @@ def get_frame_data(filename, frame_index):
                         frame_data['control']['dynamic_curve_jerk_boost_cap_effective'] = float(
                             f['control/dynamic_curve_jerk_boost_cap_effective'][control_idx]
                         )
+                    if 'control/dynamic_curve_hard_clip_boost' in f and control_idx < len(
+                        f['control/dynamic_curve_hard_clip_boost']
+                    ):
+                        frame_data['control']['dynamic_curve_hard_clip_boost'] = float(
+                            f['control/dynamic_curve_hard_clip_boost'][control_idx]
+                        )
+                    if 'control/dynamic_curve_hard_clip_boost_cap_effective' in f and control_idx < len(
+                        f['control/dynamic_curve_hard_clip_boost_cap_effective']
+                    ):
+                        frame_data['control']['dynamic_curve_hard_clip_boost_cap_effective'] = float(
+                            f['control/dynamic_curve_hard_clip_boost_cap_effective'][control_idx]
+                        )
+                    if 'control/dynamic_curve_hard_clip_limit_effective' in f and control_idx < len(
+                        f['control/dynamic_curve_hard_clip_limit_effective']
+                    ):
+                        frame_data['control']['dynamic_curve_hard_clip_limit_effective'] = float(
+                            f['control/dynamic_curve_hard_clip_limit_effective'][control_idx]
+                        )
                     if 'control/dynamic_curve_authority_deficit_streak' in f and control_idx < len(
                         f['control/dynamic_curve_authority_deficit_streak']
                     ):
@@ -1442,6 +1460,12 @@ def get_frame_data(filename, frame_index):
             )
             frame_data['control']['dynamic_curve_jerk_boost_max_factor_cfg'] = float(
                 lateral_cfg.get('dynamic_curve_jerk_boost_max_factor', 3.5)
+            )
+            frame_data['control']['dynamic_curve_hard_clip_boost_gain_cfg'] = float(
+                lateral_cfg.get('dynamic_curve_hard_clip_boost_gain', 1.0)
+            )
+            frame_data['control']['dynamic_curve_hard_clip_boost_max_cfg'] = float(
+                lateral_cfg.get('dynamic_curve_hard_clip_boost_max', 0.12)
             )
             frame_data['control']['dynamic_curve_comfort_lat_accel_comfort_max_g_cfg'] = float(
                 lateral_cfg.get('dynamic_curve_comfort_lat_accel_comfort_max_g', 0.18)

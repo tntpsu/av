@@ -88,6 +88,8 @@ TODOs:
   - no regression in comfort caps
 - [x] Tighten centerline failure onset to first intrusion in analyzer and visualizer diagnostics.
 - [x] Rework dynamic comfort policy to use `g_lat` hard guard + smoothed `g_jerk` soft penalty telemetry.
+- [x] Align downstream hard clip with comfort-aware dynamic authority (`dynamic_curve_hard_clip_boost_*`).
+- [x] Validate hard-clip lift in canonical 25s sanity run before starting gain/cap A/B sweep.
 - [x] Add control-lock sensitivity comparator for self/cross matrix reporting
       (`tools/analyze/compare_controllock_sensitivity.py`).
 - [ ] Add automated "reject promotion" rule when authority metrics improve but
