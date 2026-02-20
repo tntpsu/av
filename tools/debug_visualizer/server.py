@@ -1110,6 +1110,18 @@ def get_frame_data(filename, frame_index):
                         frame_data['control']['target_speed_slew_active'] = int(f['control/target_speed_slew_active'][control_idx]) == 1
                     if 'control/target_speed_ramp_active' in f and control_idx < len(f['control/target_speed_ramp_active']):
                         frame_data['control']['target_speed_ramp_active'] = int(f['control/target_speed_ramp_active'][control_idx]) == 1
+                    if 'control/speed_governor_comfort_speed' in f and control_idx < len(f['control/speed_governor_comfort_speed']):
+                        frame_data['control']['speed_governor_comfort_speed'] = float(f['control/speed_governor_comfort_speed'][control_idx])
+                    if 'control/speed_governor_preview_speed' in f and control_idx < len(f['control/speed_governor_preview_speed']):
+                        frame_data['control']['speed_governor_preview_speed'] = float(f['control/speed_governor_preview_speed'][control_idx])
+                    if 'control/speed_governor_horizon_speed' in f and control_idx < len(f['control/speed_governor_horizon_speed']):
+                        frame_data['control']['speed_governor_horizon_speed'] = float(f['control/speed_governor_horizon_speed'][control_idx])
+                    for pp_key in ['pp_alpha', 'pp_lookahead_distance', 'pp_geometric_steering',
+                                   'pp_feedback_steering', 'pp_ref_jump_clamped',
+                                   'pp_stale_hold_active', 'pp_pipeline_bypass_active']:
+                        ds_name = f'control/{pp_key}'
+                        if ds_name in f and control_idx < len(f[ds_name]):
+                            frame_data['control'][pp_key] = float(f[ds_name][control_idx])
                     if 'control/launch_throttle_cap' in f and control_idx < len(f['control/launch_throttle_cap']):
                         frame_data['control']['launch_throttle_cap'] = float(f['control/launch_throttle_cap'][control_idx])
                     if 'control/launch_throttle_cap_active' in f and control_idx < len(f['control/launch_throttle_cap_active']):

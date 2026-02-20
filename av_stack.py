@@ -33,6 +33,7 @@ from trajectory.utils import (
     select_curvature_bin_limits,
 )
 from control.pid_controller import VehicleController
+from control.speed_governor import build_speed_governor, SpeedGovernorOutput
 from data.recorder import DataRecorder
 from data.formats.data_format import CameraFrame, VehicleState, ControlCommand, PerceptionOutput, TrajectoryOutput, RecordingFrame
 
@@ -1080,6 +1081,7 @@ class AVStack:
             pp_min_lookahead=lateral_cfg.get('pp_min_lookahead', 0.5),
             pp_ref_jump_clamp=lateral_cfg.get('pp_ref_jump_clamp', 0.5),
             pp_stale_decay=lateral_cfg.get('pp_stale_decay', 0.98),
+            pp_max_steering_rate=lateral_cfg.get('pp_max_steering_rate', 0.4),
             feedback_gain_min=lateral_cfg.get('feedback_gain_min', 1.0),
             feedback_gain_max=lateral_cfg.get('feedback_gain_max', 1.2),
             feedback_gain_curvature_min=lateral_cfg.get('feedback_gain_curvature_min', 0.002),
@@ -1119,9 +1121,9 @@ class AVStack:
         if self.speed_planner_enabled:
             default_dt = float(speed_planner_cfg.get('default_dt', 1.0 / 30.0))
             planner_config = SpeedPlannerConfig(
-                max_accel=longitudinal_max_accel,
-                max_decel=longitudinal_max_decel,
-                max_jerk=longitudinal_max_jerk,
+                max_accel=float(speed_planner_cfg.get('max_accel', 2.0)),
+                max_decel=float(speed_planner_cfg.get('max_decel', 2.5)),
+                max_jerk=float(speed_planner_cfg.get('max_jerk', 1.2)),
                 max_jerk_min=float(speed_planner_cfg.get('max_jerk_min', 0.0)),
                 max_jerk_max=float(speed_planner_cfg.get('max_jerk_max', 0.0)),
                 jerk_error_min=float(speed_planner_cfg.get('jerk_error_min', 0.0)),
@@ -1161,7 +1163,15 @@ class AVStack:
                 ),
             )
             self.speed_planner = SpeedPlanner(planner_config)
-        
+
+        # Speed governor: clean replacement for 12-layer speed suppression cascade
+        self.speed_governor = build_speed_governor(trajectory_cfg, speed_planner_cfg)
+        self.use_speed_governor = bool(trajectory_cfg.get('speed_governor', {}).get('enabled', True))
+        self.consecutive_stale_frames = 0
+        self.stale_speed_hold_threshold = int(
+            trajectory_cfg.get('speed_governor', {}).get('stale_speed_hold_frames', 3)
+        )
+
         # Data recording (enabled by default for comprehensive logging)
         self.recorder = None
         if record_data:
@@ -1961,8 +1971,9 @@ class AVStack:
         lookahead_distance_from_unity = vehicle_state_dict.get('groundTruthLookaheadDistance')
         if lookahead_distance_from_unity is None:
             lookahead_distance_from_unity = vehicle_state_dict.get('ground_truth_lookahead_distance')
+        gt_lookahead_distance = None
         if isinstance(lookahead_distance_from_unity, (int, float)) and lookahead_distance_from_unity > 0:
-            reference_lookahead = float(lookahead_distance_from_unity)
+            gt_lookahead_distance = float(lookahead_distance_from_unity)
 
         dynamic_horizon_diag = compute_dynamic_effective_horizon(
             base_horizon_m=float(reference_lookahead),
@@ -2007,14 +2018,14 @@ class AVStack:
                 # Use the already-extracted camera_8m_screen_y (extracted earlier at line 432)
                 # DEBUG: Log what we're checking
                 logger.debug(f"[COORD DEBUG] Checking camera_8m_screen_y: value={camera_8m_screen_y}, type={type(camera_8m_screen_y)}, >0={camera_8m_screen_y > 0 if camera_8m_screen_y is not None else 'None'}")
+                coord_conversion_distance = gt_lookahead_distance if gt_lookahead_distance is not None else reference_lookahead
                 if camera_lookahead_screen_y is not None and camera_lookahead_screen_y > 0:
-                    # Use Unity's lookahead screen Y (most accurate for current lookahead)
                     y_image_at_lookahead = camera_lookahead_screen_y
                     logger.info(
                         f"[COORD DEBUG] ✅ Using Unity's camera_lookahead_screen_y={camera_lookahead_screen_y:.1f}px "
-                        f"(lookahead={reference_lookahead:.2f}m) for lane evaluation"
+                        f"(lookahead={coord_conversion_distance:.2f}m) for lane evaluation"
                     )
-                elif camera_8m_screen_y is not None and camera_8m_screen_y > 0 and abs(reference_lookahead - 8.0) < 0.5:
+                elif camera_8m_screen_y is not None and camera_8m_screen_y > 0 and abs(coord_conversion_distance - 8.0) < 0.5:
                     # Use Unity's actual 8m position (most accurate for 8m lookahead)
                     y_image_at_lookahead = camera_8m_screen_y
                     logger.info(f"[COORD DEBUG] ✅ Using Unity's camera_8m_screen_y={camera_8m_screen_y:.1f}px for lane evaluation")
@@ -2027,10 +2038,10 @@ class AVStack:
                     # y_from_bottom = 0.1875 * image_height = 90 pixels
                     # y_pixels = image_height - 90 = 390 pixels
                     base_distance = 1.5  # meters at bottom
-                    if reference_lookahead < base_distance:
+                    if coord_conversion_distance < base_distance:
                         y_image_at_lookahead = image_height
                     else:
-                        y_normalized = base_distance / reference_lookahead
+                        y_normalized = base_distance / coord_conversion_distance
                         y_from_bottom = y_normalized * image_height
                         y_image_at_lookahead = image_height - y_from_bottom
                     logger.warning(f"[COORD DEBUG] camera_8m_screen_y not available ({camera_8m_screen_y}), using fallback y={y_image_at_lookahead:.1f}px")
@@ -2048,14 +2059,14 @@ class AVStack:
                 # If we're evaluating at that y position, the distance IS 8m
                 # Don't use a fixed 7m - use the actual distance Unity reports
                 if camera_lookahead_screen_y > 0:
-                    conversion_distance = reference_lookahead
-                    logger.info(f"[COORD DEBUG] Using Unity lookahead distance: {reference_lookahead:.2f}m")
-                elif camera_8m_screen_y > 0 and abs(reference_lookahead - 8.0) < 0.5 and abs(y_image_at_lookahead - camera_8m_screen_y) < 5.0:
-                    conversion_distance = 8.0  # Actual distance from Unity
+                    conversion_distance = coord_conversion_distance
+                    logger.info(f"[COORD DEBUG] Using Unity lookahead distance: {coord_conversion_distance:.2f}m")
+                elif camera_8m_screen_y > 0 and abs(coord_conversion_distance - 8.0) < 0.5 and abs(y_image_at_lookahead - camera_8m_screen_y) < 5.0:
+                    conversion_distance = 8.0
                     logger.info(f"[COORD DEBUG] Using Unity's actual distance: 8.0m (at y={camera_8m_screen_y:.1f}px)")
                 else:
-                    conversion_distance = reference_lookahead
-                    logger.warning(f"[COORD DEBUG] Using reference_lookahead={reference_lookahead}m (Unity distance not available)")
+                    conversion_distance = coord_conversion_distance
+                    logger.warning(f"[COORD DEBUG] Using coord_conversion_distance={coord_conversion_distance}m (Unity distance not available)")
                 
                 logger.info(f"[COORD DEBUG] Evaluating at y={y_image_at_lookahead}px, "
                            f"using fixed distance={conversion_distance:.2f}m for coordinate conversion")
@@ -3250,22 +3261,7 @@ class AVStack:
             segmentation_mask_png=segmentation_mask_png
         )
         
-        # NEW: Apply gradual slowdown based on perception health
-        # Reduce target speed when perception health degrades (but not emergency stop)
-        if self.perception_health_status == "healthy":
-            # Full speed
-            adjusted_target_speed = self.original_target_speed
-        elif self.perception_health_status == "degraded":
-            # Reduce to 80% of target speed
-            adjusted_target_speed = self.original_target_speed * 0.8
-        elif self.perception_health_status == "poor":
-            # Reduce to 50% of target speed
-            adjusted_target_speed = self.original_target_speed * 0.5
-        else:  # critical
-            # Reduce to 30% of target speed (very slow, but still moving)
-            adjusted_target_speed = self.original_target_speed * 0.3
-
-        # Apply speed limits from map + curvature
+        # --- Input preparation (stays in av_stack) ---
         path_curvature_raw = vehicle_state_dict.get('groundTruthPathCurvature')
         if path_curvature_raw is None:
             path_curvature_raw = vehicle_state_dict.get('ground_truth_path_curvature', 0.0)
@@ -3281,7 +3277,6 @@ class AVStack:
         )
         max_lateral_accel = self.trajectory_config.get('max_lateral_accel', 2.5)
         min_curve_speed = self.trajectory_config.get('min_curve_speed', 0.0)
-        curvature_limit_min_abs = float(self.trajectory_config.get('curvature_limit_min_abs', 0.0))
         curvature_bins = self.trajectory_config.get('curvature_bins', None)
         if isinstance(path_curvature, (int, float)):
             max_lateral_accel, min_curve_speed = select_curvature_bin_limits(
@@ -3290,368 +3285,75 @@ class AVStack:
                 max_lateral_accel,
                 min_curve_speed,
             )
-        curve_speed_limit = None
-        if (
-            isinstance(path_curvature, (int, float))
-            and abs(path_curvature) > max(curvature_limit_min_abs, 1e-6)
-            and isinstance(max_lateral_accel, (int, float))
-            and max_lateral_accel > 0.0
-        ):
-            curve_speed_limit = (float(max_lateral_accel) / abs(path_curvature)) ** 0.5
-            if isinstance(min_curve_speed, (int, float)) and min_curve_speed > 0.0:
-                curve_speed_limit = max(curve_speed_limit, float(min_curve_speed))
-        curve_preview_speed_limit = None
-        if (
-            self.curve_speed_preview_enabled
-            and lane_coeffs is not None
-            and self.curve_speed_preview_distance > 0.0
-        ):
-            preview_lookahead = reference_lookahead * self.curve_speed_preview_lookahead_scale
+
+        # Get preview curvature for anticipatory deceleration
+        preview_curvature = None
+        if lane_coeffs is not None:
+            preview_lookahead = reference_lookahead * self.speed_governor.config.curve_preview_lookahead_scale
             preview_curvature = self.trajectory_planner.get_curvature_at_lookahead(
                 lane_coeffs, preview_lookahead
             )
-            if (
-                preview_curvature is not None
-                and abs(preview_curvature) >= self.curve_speed_preview_min_curvature
-            ):
-                adjusted_target_speed, curve_preview_speed_limit = _apply_curve_speed_preview(
-                    adjusted_target_speed,
-                    preview_curvature,
-                    max_lateral_accel,
-                    min_curve_speed,
-                    self.curve_speed_preview_distance,
-                    self.curve_speed_preview_decel,
-                )
-        base_speed = adjusted_target_speed
-        smoothed_speed_limit = self._smooth_speed_limit(speed_limit, timestamp)
-        min_speed_floor = self._compute_dynamic_speed_floor(
-            smoothed_speed_limit, path_curvature
-        )
-        adjusted_target_speed = self._apply_speed_limits(
-            adjusted_target_speed,
-            speed_limit=smoothed_speed_limit,
-            path_curvature=path_curvature,
-            max_lateral_accel=max_lateral_accel,
-            min_curve_speed=min_curve_speed,
-            current_speed=current_speed,
-            min_speed_limit_ratio=float(self.trajectory_config.get('min_speed_limit_ratio', 0.0)),
-            min_speed_floor=float(self.trajectory_config.get('min_speed_floor', 0.0)),
-            min_speed_curvature_max=float(self.trajectory_config.get('min_speed_curvature_max', 0.0)),
-            curvature_limit_min_abs=curvature_limit_min_abs,
-        )
-        preview_decel = self.trajectory_config.get('speed_limit_preview_decel', 0.0)
-        preview_targets = []
-        pre_preview_speed = adjusted_target_speed
-        preview_limit_value = (
-            float(speed_limit_preview)
-            if isinstance(speed_limit_preview, (int, float))
-            else 0.0
-        )
-        if self.preview_limit_stability_frames > 0:
-            if (
-                self.preview_limit_last is None
-                or abs(preview_limit_value - self.preview_limit_last) > self.preview_limit_change_delta
-            ):
-                self.preview_limit_last = preview_limit_value
-                self.preview_limit_streak = 1
-            else:
-                self.preview_limit_streak += 1
+
+        # Use perception horizon (lookahead_distance from config) for guardrail,
+        # not the control reference_lookahead
+        perception_horizon_m = float(self.trajectory_config.get('lookahead_distance', 20.0))
+
+        # Stale perception speed hold: don't accelerate when blind
+        if using_stale_data:
+            self.consecutive_stale_frames += 1
         else:
-            self.preview_limit_last = preview_limit_value
-
-        def add_preview_target(limit, distance, min_distance):
-            if not isinstance(limit, (int, float)) or limit <= 0:
-                return
-            preview_distance_value = distance
-            if (
-                isinstance(min_distance, (int, float))
-                and min_distance > 0
-                and (
-                    preview_distance_value is None
-                    or min_distance < preview_distance_value
-                )
-            ):
-                preview_distance_value = min_distance
-            if not isinstance(preview_distance_value, (int, float)) or preview_distance_value <= 0:
-                return
-            preview_targets.append(
-                _apply_speed_limit_preview(
-                    adjusted_target_speed,
-                    float(limit),
-                    float(preview_distance_value),
-                    float(preview_decel),
-                )
-            )
-
-        def preview_min_distance_allows_release() -> bool:
-            margin = float(self.preview_hold_min_distance_margin)
-            return _preview_min_distance_allows_release(
-                speed_limit_preview_distance,
-                speed_limit_preview_min_distance,
-                margin,
-            )
-
-        add_preview_target(speed_limit_preview, speed_limit_preview_distance, speed_limit_preview_min_distance)
-        add_preview_target(
-            speed_limit_preview_mid,
-            speed_limit_preview_mid_distance,
-            speed_limit_preview_mid_min_distance,
+            self.consecutive_stale_frames = 0
+        stale_speed_hold_active = (
+            self.consecutive_stale_frames >= self.stale_speed_hold_threshold
         )
-        add_preview_target(
-            speed_limit_preview_long,
-            speed_limit_preview_long_distance,
-            speed_limit_preview_long_min_distance,
+        effective_track_limit = float(self.original_target_speed)
+        if stale_speed_hold_active and current_speed > 0:
+            effective_track_limit = min(effective_track_limit, float(current_speed))
+
+        # --- Speed Governor: single call replaces 12 serial suppression layers ---
+        gov_output: SpeedGovernorOutput = self.speed_governor.compute_target_speed(
+            track_speed_limit=effective_track_limit,
+            curvature=float(path_curvature) if isinstance(path_curvature, (int, float)) else 0.0,
+            preview_curvature=float(preview_curvature) if preview_curvature is not None else None,
+            perception_horizon_m=perception_horizon_m,
+            current_speed=float(current_speed),
+            timestamp=float(timestamp) if timestamp is not None else 0.0,
+            confidence=float(confidence) if isinstance(confidence, (int, float)) else None,
         )
 
-        preview_target = None
-        if preview_targets:
-            preview_target = min(preview_targets)
-            if (
-                self.preview_limit_stability_frames <= 0
-                or self.preview_limit_streak >= self.preview_limit_stability_frames
-            ):
-                adjusted_target_speed = min(adjusted_target_speed, preview_target)
-        target_speed_post_limits = adjusted_target_speed
-        if preview_target is None or preview_limit_value <= 0.0:
-            self.preview_clamp_active = False
-            self.preview_clamp_target = None
-        else:
-            if preview_target < pre_preview_speed - 1e-6:
-                if self.preview_clamp_target is None or preview_target < self.preview_clamp_target - 1e-3:
-                    self.preview_clamp_target = preview_target
-                self.preview_clamp_active = True
-            elif self.preview_clamp_active and preview_min_distance_allows_release():
-                self.preview_clamp_active = False
-                self.preview_clamp_target = None
-        if self.preview_clamp_active and self.preview_clamp_target is not None:
-            target_speed_post_limits = min(target_speed_post_limits, self.preview_clamp_target)
-        if (
-            preview_target is not None
-            and preview_target < target_speed_post_limits - 1e-6
-        ):
-            if (self.preview_hold_target is None) or (
-                preview_target < self.preview_hold_target - 1e-3
-            ):
-                self.preview_hold_target = preview_target
-            self.preview_hold_active = True
-            self.preview_hold_release_count = 0
-        if self.preview_hold_active and self.preview_hold_target is not None:
-            release_preview_hold = False
-            if (
-                isinstance(path_curvature, (int, float))
-                and abs(path_curvature) >= self.preview_hold_curvature_threshold
-            ):
-                if curve_speed_limit is not None and preview_min_distance_allows_release():
-                    should_release = (
-                        float(curve_speed_limit)
-                        <= float(self.preview_hold_target) - float(self.preview_hold_release_delta)
-                    )
-                    if should_release:
-                        self.preview_hold_release_count += 1
-                    else:
-                        self.preview_hold_release_count = 0
-                    release_preview_hold = (
-                        self.preview_hold_release_frames <= 0
-                        or self.preview_hold_release_count >= self.preview_hold_release_frames
-                    )
-            if release_preview_hold:
-                self.preview_hold_active = False
-                self.preview_hold_target = None
-                self.preview_hold_release_count = 0
-            else:
-                adjusted_target_speed = min(adjusted_target_speed, self.preview_hold_target)
-        elif (
-            self.preview_hold_target is not None
-            and preview_target is not None
-            and preview_target > self.preview_hold_target + self.preview_hold_release_delta
-        ):
-            if (
-                (
-                    not isinstance(path_curvature, (int, float))
-                    or abs(path_curvature) < self.preview_hold_curvature_threshold
-                )
-                and preview_min_distance_allows_release()
-            ):
-                self.preview_hold_target = None
-                self.preview_hold_release_count = 0
+        adjusted_target_speed = gov_output.target_speed
+        target_speed_final = adjusted_target_speed
+        base_speed = float(self.original_target_speed)
+        target_speed_planned = gov_output.planned_speed
+        planned_accel = gov_output.planned_accel
+        target_speed_ramp_active = False
+        target_speed_slew_active = False
+
+        # Telemetry compatibility: legacy variables for HDF5 recording
+        curve_speed_limit = gov_output.comfort_speed if gov_output.comfort_speed < 1e6 else None
+        curve_preview_speed_limit = gov_output.preview_speed
         steering_speed_guard_active = False
-        if self.steering_speed_guard_enabled:
-            adjusted_target_speed, steering_speed_guard_active = _apply_steering_speed_guard(
-                adjusted_target_speed,
-                self.last_steering_command,
-                self.steering_speed_guard_threshold,
-                self.steering_speed_guard_scale,
-                self.steering_speed_guard_min_speed,
-            )
-        if (
-            self.straight_target_hold_seconds > 0.0
-            and isinstance(path_curvature, (int, float))
-            and abs(path_curvature) <= self.straight_speed_smoothing_curvature_threshold
-        ):
-            limit_delta = self.straight_target_hold_limit_delta
-            limit_value = float(speed_limit) if isinstance(speed_limit, (int, float)) else 0.0
-            preview_value = preview_limit_value
-            if self.straight_target_hold_target is None:
-                self.straight_target_hold_target = adjusted_target_speed
-                self.straight_target_hold_start_time = timestamp
-                self.straight_target_hold_last_limit = limit_value
-                self.straight_target_hold_last_preview = preview_value
-            else:
-                limit_changed = (
-                    self.straight_target_hold_last_limit is None
-                    or abs(limit_value - self.straight_target_hold_last_limit) > limit_delta
-                )
-                preview_changed = (
-                    self.straight_target_hold_last_preview is None
-                    or abs(preview_value - self.straight_target_hold_last_preview) > limit_delta
-                )
-                if limit_changed or preview_changed:
-                    self.straight_target_hold_target = adjusted_target_speed
-                    self.straight_target_hold_start_time = timestamp
-                    self.straight_target_hold_last_limit = limit_value
-                    self.straight_target_hold_last_preview = preview_value
-                else:
-                    hold_elapsed = 0.0
-                    if (
-                        self.straight_target_hold_start_time is not None
-                        and timestamp is not None
-                    ):
-                        hold_elapsed = max(0.0, float(timestamp) - float(self.straight_target_hold_start_time))
-                    if hold_elapsed < self.straight_target_hold_seconds:
-                        adjusted_target_speed = max(
-                            adjusted_target_speed, self.straight_target_hold_target
-                        )
-                    else:
-                        self.straight_target_hold_target = adjusted_target_speed
-                        self.straight_target_hold_start_time = timestamp
-                        self.straight_target_hold_last_limit = limit_value
-                        self.straight_target_hold_last_preview = preview_value
-        else:
-            self.straight_target_hold_target = None
-            self.straight_target_hold_start_time = None
-        if self.target_speed_blend_window_m > 0.0:
-            dt = None
-            if self.target_speed_blend_last_time is not None and timestamp is not None:
-                dt = max(1e-3, float(timestamp) - float(self.target_speed_blend_last_time))
-            self.target_speed_blend_last_time = timestamp
-            if dt is None or dt > self.target_speed_blend_reset_seconds:
-                self.target_speed_blend_prev = adjusted_target_speed
-            elif self.target_speed_blend_prev is None:
-                self.target_speed_blend_prev = adjusted_target_speed
-            elif adjusted_target_speed > self.target_speed_blend_prev:
-                distance = max(0.0, float(current_speed)) * dt
-                alpha = curvature_smoothing_alpha(distance, self.target_speed_blend_window_m)
-                blended = alpha * adjusted_target_speed + (1.0 - alpha) * self.target_speed_blend_prev
-                self.target_speed_blend_prev = blended
-                adjusted_target_speed = blended
-            else:
-                self.target_speed_blend_prev = adjusted_target_speed
-        if (
-            self.speed_planner_enabled
-            and self.straight_speed_smoothing_alpha > 0.0
-            and isinstance(path_curvature, (int, float))
-            and abs(path_curvature) <= self.straight_speed_smoothing_curvature_threshold
-        ):
-            dt = None
-            if self.straight_speed_last_time is not None and timestamp is not None:
-                dt = max(1e-3, float(timestamp) - float(self.straight_speed_last_time))
-            self.straight_speed_last_time = timestamp
-            if self.straight_target_speed_smoothed is None:
-                self.straight_target_speed_smoothed = adjusted_target_speed
-            if (
-                adjusted_target_speed > self.straight_target_speed_smoothed
-                and self.straight_speed_slew_rate_up > 0.0
-                and dt is not None
-            ):
-                max_inc = self.straight_speed_slew_rate_up * dt
-                adjusted_target_speed = min(
-                    adjusted_target_speed, self.straight_target_speed_smoothed + max_inc
-                )
-            if adjusted_target_speed > self.straight_target_speed_smoothed:
-                alpha = self.straight_speed_smoothing_alpha
-                self.straight_target_speed_smoothed = (
-                    (1.0 - alpha) * self.straight_target_speed_smoothed + alpha * adjusted_target_speed
-                )
-            else:
-                # Allow immediate decreases to honor limits.
-                self.straight_target_speed_smoothed = adjusted_target_speed
-            adjusted_target_speed = self.straight_target_speed_smoothed
-        else:
-            self.straight_target_speed_smoothed = adjusted_target_speed
-            self.straight_speed_last_time = None
         curve_mode_speed_cap_active = False
         curve_mode_speed_cap_clamped = False
         curve_mode_speed_cap_value = None
-        if self.curve_mode_speed_cap_enabled:
-            lat_ctrl = getattr(self.controller, "lateral_controller", None)
-            entry_frames_remaining = int(
-                getattr(lat_ctrl, "_curve_entry_schedule_frames_remaining", 0) or 0
-            )
-            commit_frames_remaining = int(
-                getattr(lat_ctrl, "_curve_commit_mode_frames_remaining", 0) or 0
-            )
-            curve_mode_speed_cap_active = (
-                entry_frames_remaining > 0 or commit_frames_remaining > 0
-            )
-            if curve_mode_speed_cap_active:
-                min_ratio = float(np.clip(self.curve_mode_speed_cap_min_ratio, 0.0, 1.0))
-                cap_speed = max(
-                    0.0,
-                    max(
-                        self.curve_mode_speed_cap_mps,
-                        min_ratio * float(base_speed),
-                    ),
-                )
-                curve_mode_speed_cap_value = float(cap_speed)
-                if adjusted_target_speed > cap_speed:
-                    adjusted_target_speed = cap_speed
-                    curve_mode_speed_cap_clamped = True
-        speed_horizon_guardrail_diag = {
-            'diag_speed_horizon_guardrail_active': 0.0,
-            'diag_speed_horizon_guardrail_margin_m': np.nan,
-            'diag_speed_horizon_guardrail_horizon_m': np.nan,
-            'diag_speed_horizon_guardrail_time_headway_s': np.nan,
-            'diag_speed_horizon_guardrail_margin_buffer_m': np.nan,
-            'diag_speed_horizon_guardrail_allowed_speed_mps': np.nan,
-            'diag_speed_horizon_guardrail_target_speed_before_mps': np.nan,
-            'diag_speed_horizon_guardrail_target_speed_after_mps': np.nan,
-        }
-        guardrail_result = apply_speed_horizon_guardrail(
-            target_speed_mps=float(adjusted_target_speed),
-            effective_horizon_m=float(
-                dynamic_horizon_diag.get('diag_dynamic_effective_horizon_m', reference_lookahead)
-            ),
-            dynamic_horizon_applied=bool(
-                float(dynamic_horizon_diag.get('diag_dynamic_effective_horizon_applied', 0.0)) > 0.5
-            ),
-            config=self.trajectory_config,
-        )
-        adjusted_target_speed = float(guardrail_result.get('target_speed_mps', adjusted_target_speed))
-        for key in speed_horizon_guardrail_diag:
-            value = guardrail_result.get(key)
-            if isinstance(value, (int, float)):
-                speed_horizon_guardrail_diag[key] = float(value)
 
-        target_speed_planned = None
-        planned_accel = None
-        if self.speed_planner_enabled and self.speed_planner is not None:
-            planner_target_speed = adjusted_target_speed + self.speed_planner_speed_limit_bias
-            if planner_target_speed < 0.0:
-                planner_target_speed = 0.0
-            planned_speed, planned_accel, planned_jerk, planner_active = self.speed_planner.step(
-                planner_target_speed,
-                current_speed=current_speed,
-                timestamp=timestamp,
-            )
-            adjusted_target_speed = planned_speed
-            target_speed_planned = planned_speed
-            target_speed_ramp_active = False
-            target_speed_slew_active = False
-        else:
-            adjusted_target_speed, target_speed_ramp_active, target_speed_slew_active = (
-                self._apply_target_speed_ramp(adjusted_target_speed, current_speed, timestamp)
-            )
-        target_speed_final = adjusted_target_speed
+        # Horizon guardrail diagnostics from governor
+        speed_horizon_guardrail_diag = {}
+        for k, v in gov_output.horizon_diag.items():
+            if k.startswith('diag_speed_horizon_guardrail_'):
+                speed_horizon_guardrail_diag[k] = float(v) if isinstance(v, (int, float)) else float('nan')
+        if not speed_horizon_guardrail_diag:
+            speed_horizon_guardrail_diag = {
+                'diag_speed_horizon_guardrail_active': 1.0 if gov_output.horizon_guardrail_active else 0.0,
+                'diag_speed_horizon_guardrail_margin_m': gov_output.horizon_guardrail_margin_m,
+                'diag_speed_horizon_guardrail_horizon_m': gov_output.effective_horizon_m,
+                'diag_speed_horizon_guardrail_time_headway_s': self.speed_governor.config.horizon_guardrail_time_headway_s,
+                'diag_speed_horizon_guardrail_margin_buffer_m': self.speed_governor.config.horizon_guardrail_margin_m,
+                'diag_speed_horizon_guardrail_allowed_speed_mps': gov_output.horizon_speed if gov_output.horizon_speed is not None else float('nan'),
+                'diag_speed_horizon_guardrail_target_speed_before_mps': float(self.original_target_speed),
+                'diag_speed_horizon_guardrail_target_speed_after_mps': adjusted_target_speed,
+            }
+
         if adjusted_target_speed < base_speed and self.frame_count % 30 == 0:
             curve_speed = None
             if isinstance(path_curvature, (int, float)) and abs(path_curvature) > 1e-6 and max_lateral_accel > 0:
@@ -3682,19 +3384,16 @@ class AVStack:
                          f"(original: {self.original_target_speed:.2f} m/s)")
 
         # Phase 2 integration: pass effective horizon policy into trajectory generation.
-        # Keep both camel/snake keys for compatibility with existing naming patterns.
-        vehicle_state_dict["dynamicEffectiveHorizonMeters"] = float(
+        gov_horizon_m = gov_output.effective_horizon_m if gov_output.effective_horizon_m > 0 else float(
             dynamic_horizon_diag.get("diag_dynamic_effective_horizon_m", reference_lookahead)
         )
-        vehicle_state_dict["dynamic_effective_horizon_m"] = float(
-            dynamic_horizon_diag.get("diag_dynamic_effective_horizon_m", reference_lookahead)
-        )
-        vehicle_state_dict["dynamicEffectiveHorizonApplied"] = float(
+        gov_horizon_applied = 1.0 if gov_output.horizon_guardrail_active else float(
             dynamic_horizon_diag.get("diag_dynamic_effective_horizon_applied", 0.0)
         )
-        vehicle_state_dict["dynamic_effective_horizon_applied"] = float(
-            dynamic_horizon_diag.get("diag_dynamic_effective_horizon_applied", 0.0)
-        )
+        vehicle_state_dict["dynamicEffectiveHorizonMeters"] = gov_horizon_m
+        vehicle_state_dict["dynamic_effective_horizon_m"] = gov_horizon_m
+        vehicle_state_dict["dynamicEffectiveHorizonApplied"] = gov_horizon_applied
+        vehicle_state_dict["dynamic_effective_horizon_applied"] = gov_horizon_applied
         
         # 2. Trajectory Planning: Plan path
         trajectory = self.trajectory_planner.plan(lane_coeffs, vehicle_state_dict)
@@ -3842,8 +3541,9 @@ class AVStack:
                 # Limit reference velocity to prevent requesting high speeds
                 if reference_point.get('velocity', 8.0) > max_speed:
                     reference_point['velocity'] = max_speed * 0.9  # 90% of max for safety
-                if min_speed_floor is not None:
-                    reference_point['min_speed_floor'] = float(min_speed_floor)
+                gov_min_speed = self.speed_governor.config.comfort_governor_min_speed
+                if gov_min_speed > 0:
+                    reference_point['min_speed_floor'] = float(gov_min_speed)
 
                 # B2: Use curvature_preview from A4 to further cap speed.
                 # The existing curve_speed_preview uses lane_coeffs at 1.6x;
@@ -3885,7 +3585,7 @@ class AVStack:
                     using_stale_perception=using_stale_data
                 )
                 control_command['target_speed_raw'] = base_speed
-                control_command['target_speed_post_limits'] = target_speed_post_limits
+                control_command['target_speed_post_limits'] = adjusted_target_speed
                 control_command['target_speed_planned'] = target_speed_planned
                 control_command['target_speed_final'] = target_speed_final
                 control_command['target_speed_slew_active'] = target_speed_slew_active
@@ -3893,6 +3593,10 @@ class AVStack:
                 control_command['curve_mode_speed_cap_active'] = curve_mode_speed_cap_active
                 control_command['curve_mode_speed_cap_clamped'] = curve_mode_speed_cap_clamped
                 control_command['curve_mode_speed_cap_value'] = curve_mode_speed_cap_value
+                control_command['speed_governor_active_limiter'] = gov_output.active_limiter
+                control_command['speed_governor_comfort_speed'] = gov_output.comfort_speed if gov_output.comfort_speed < 1e6 else -1.0
+                control_command['speed_governor_preview_speed'] = gov_output.preview_speed if gov_output.preview_speed is not None else -1.0
+                control_command['speed_governor_horizon_speed'] = gov_output.horizon_speed if gov_output.horizon_speed is not None else -1.0
                 
                 # If emergency braking was triggered, override throttle/brake but keep steering
                 if brake_override > 0:
@@ -5245,6 +4949,10 @@ class AVStack:
                 control_command.get('curve_mode_speed_cap_clamped', False)
             ),
             curve_mode_speed_cap_value=control_command.get('curve_mode_speed_cap_value'),
+            speed_governor_active_limiter=control_command.get('speed_governor_active_limiter', 'none'),
+            speed_governor_comfort_speed=control_command.get('speed_governor_comfort_speed'),
+            speed_governor_preview_speed=control_command.get('speed_governor_preview_speed'),
+            speed_governor_horizon_speed=control_command.get('speed_governor_horizon_speed'),
             launch_throttle_cap=control_command.get('launch_throttle_cap'),
             launch_throttle_cap_active=bool(control_command.get('launch_throttle_cap_active', False)),
             steering_pre_rate_limit=control_command.get('steering_pre_rate_limit'),
@@ -5388,6 +5096,7 @@ class AVStack:
             pp_feedback_steering=control_command.get('pp_feedback_steering'),
             pp_ref_jump_clamped=bool(control_command.get('pp_ref_jump_clamped', 0) > 0.5),
             pp_stale_hold_active=bool(control_command.get('pp_stale_hold_active', 0) > 0.5),
+            pp_pipeline_bypass_active=bool(control_command.get('pp_pipeline_bypass_active', 0) > 0.5),
         )
         
         # Create trajectory output

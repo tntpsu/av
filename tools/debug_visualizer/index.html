@@ -11,7 +11,7 @@
     <div class="container">
         <!-- Header -->
         <header class="header">
-            <h1>PhilViz <span id="philviz-build-version" style="font-size:0.8rem; color:#9aa0a6; font-weight:500;">v20260220_pure_pursuit_v63</span></h1>
+            <h1>PhilViz <span id="philviz-build-version" style="font-size:0.8rem; color:#9aa0a6; font-weight:500;">v20260220_pp_pipeline_v65</span></h1>
             <div id="recording-meta" style="display:flex; gap:0.4rem; align-items:center; margin-right:0.8rem;">
                 <span id="recording-type-badge" style="display:none; padding:0.2rem 0.5rem; border-radius:999px; font-size:0.75rem; background:#2a2a2a; color:#cfd8dc; border:1px solid #444;">type</span>
                 <span id="topdown-badge" style="display:none; padding:0.2rem 0.5rem; border-radius:999px; font-size:0.75rem; background:#2a2a2a; color:#cfd8dc; border:1px solid #444;">topdown</span>
@@ -603,6 +603,12 @@
                             <tr><td>Launch Throttle Cap</td><td id="control-launch-throttle-cap">-</td></tr>
                             <tr><td>Launch Cap Active</td><td id="control-launch-throttle-cap-active">-</td></tr>
                         </table>
+                        <h4>Speed Governor</h4>
+                        <table class="data-table">
+                            <tr><td>Comfort Speed</td><td id="control-speed-governor-comfort">-</td></tr>
+                            <tr><td>Preview Speed</td><td id="control-speed-governor-preview">-</td></tr>
+                            <tr><td>Horizon Speed</td><td id="control-speed-governor-horizon">-</td></tr>
+                        </table>
                         <h3>PID State</h3>
                         <table class="data-table">
                             <tr><td>Lateral Error</td><td id="control-lateral-error">-</td></tr>
@@ -625,6 +631,7 @@
                                 <tr><td>PP Feedback Steering</td><td id="control-pp-feedback">-</td></tr>
                                 <tr><td>PP Ref Jump Clamped</td><td id="control-pp-jump-clamped">-</td></tr>
                                 <tr><td>PP Stale Hold Active</td><td id="control-pp-stale-hold">-</td></tr>
+                                <tr><td>PP Pipeline Bypass</td><td id="control-pp-pipeline-bypass">-</td></tr>
                             </table>
                         </div>
                         <table>
@@ -640,6 +647,7 @@
                             <tr><td>Stale Reason</td><td id="control-stale-reason" style="color: #ff6b6b;">-</td></tr>
                         </table>
                         <h3>Steering Limiter Waterfall</h3>
+                        <div id="waterfall-pp-bypass-note" style="display:none; margin:0.3rem 0; padding:0.4rem 0.6rem; background:#1b3a1b; border:1px solid #4caf50; border-radius:4px; color:#a5d6a7; font-size:0.8rem;">PP mode: jerk limit and EMA smoothing bypassed (geometric steering delivered directly)</div>
                         <table class="data-table">
                             <tr><td>Pre Rate Limit</td><td id="control-steering-pre-rate">-</td></tr>
                             <tr><td>Rate Limit Schedule (Base(Error) / CurveScale / AfterCurveScale / AfterCurveFloor / FinalEffective)</td><td id="control-steering-rate-schedule">-</td></tr>

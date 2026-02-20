@@ -5670,6 +5670,8 @@ class Visualizer {
                 updateField('control-pp-feedback', c.pp_feedback_steering !== undefined ? c.pp_feedback_steering.toFixed(4) : '-');
                 updateField('control-pp-jump-clamped', c.pp_ref_jump_clamped > 0.5 ? 'YES' : 'NO');
                 updateField('control-pp-stale-hold', c.pp_stale_hold_active > 0.5 ? 'YES' : 'NO');
+                const bypassActive = c.pp_pipeline_bypass_active > 0.5;
+                updateField('control-pp-pipeline-bypass', bypassActive ? 'YES' : 'NO');
             }
         }
         updateField(
@@ -5695,6 +5697,21 @@ class Visualizer {
         updateField(
             'control-target-speed-ramp-active',
             c.target_speed_ramp_active !== undefined ? (c.target_speed_ramp_active ? 'YES' : 'NO') : '-'
+        );
+        const comfortSpd = c.speed_governor_comfort_speed;
+        const previewSpd = c.speed_governor_preview_speed;
+        const horizonSpd = c.speed_governor_horizon_speed;
+        updateField(
+            'control-speed-governor-comfort',
+            comfortSpd !== undefined && comfortSpd > 0 ? `${comfortSpd.toFixed(2)} m/s` : '∞ (straight)'
+        );
+        updateField(
+            'control-speed-governor-preview',
+            previewSpd !== undefined && previewSpd > 0 ? `${previewSpd.toFixed(2)} m/s` : '-'
+        );
+        updateField(
+            'control-speed-governor-horizon',
+            horizonSpd !== undefined && horizonSpd > 0 ? `${horizonSpd.toFixed(2)} m/s` : '-'
         );
         updateField(
             'control-launch-throttle-cap',
@@ -5834,6 +5851,11 @@ class Visualizer {
         updateField('all-control-stale-reason', stalePerceptionReason);
 
         // Steering limiter waterfall diagnostics
+        // PP pipeline bypass note
+        const ppBypassNote = document.getElementById('waterfall-pp-bypass-note');
+        if (ppBypassNote) {
+            ppBypassNote.style.display = (c.pp_pipeline_bypass_active > 0.5) ? '' : 'none';
+        }
         const fmtSteer = (v) => (v !== undefined && v !== null ? Number(v).toFixed(4) : '-');
         const fmtDelta = (v) => (v !== undefined && v !== null ? Number(v).toFixed(4) : '-');
         const fmtActualLimitState = (ruleExists, actuallyClipped) => {

@@ -205,9 +205,31 @@ This is the practical de-risk sequence for implementation and testing.
   - **Implementation:** `pure_pursuit` control mode in `LateralController` computes `steering = atan(2 * wheelbase * sin(alpha) / ld)` directly from reference point geometry. Bypasses PID-specific feedforward, curve entry scheduling, dynamic authority, commit mode, feedback gain scheduling, and deadband.
   - **Safety nets:** Reference point jump clamping (0.5m/frame), stale perception hold with 0.98/frame decay, small PID feedback (0.15 gain) for disturbance rejection.
   - **Telemetry:** pp_alpha, pp_lookahead_distance, pp_geometric_steering, pp_feedback_steering, pp_ref_jump_clamped, pp_stale_hold_active in HDF5 + PhilViz v63.
-  - **E2E validation (2 runs, canonical start, s-loop 40s):** PP: 768 frames (full 40s, no failure), mean|gcx|=0.42m, 0% hard clip, 0 sign changes. PID baseline: 655 frames (emergency stop), mean|gcx|=0.60m, 22% hard clip, 19 sign changes.
-  - **Architecture escalation checkpoint addressed:** PP implementation IS the architecture escalation; PID oscillation was unfixable via tuning, geometric controller resolved it.
+  - **E2E validation (2 runs, canonical start, s-loop 40s):** Initial runs showed improvement but PID-era post-processing pipeline (jerk limit, EMA smoothing) defeated PP steering — see S1-M35 for fix.
+  - **Architecture escalation checkpoint addressed:** PP implementation IS the architecture escalation; PID oscillation was unfixable via tuning, geometric controller resolved it. Pipeline bypass (S1-M35) was required to deliver PP's output cleanly.
   - **Rollback:** `control_mode: pid` (one line config change); all PID machinery preserved.
+
+- `S1-M34` (done): Speed control architecture — comfort governor consolidation:
+  - **Problem:** 12 serial speed suppression layers compounding to limit speed (mean 4.35 m/s, target 12 m/s). Each layer independently "safe" but compounding effect was severe.
+  - **Phase 0 bug fixes:** (a) Speed planner `max_accel`/`max_jerk` override bug (planner used longitudinal's limits instead of its own), (b) `launch_speed_floor` pathological acceleration (uncapped recalculated accel), (c) Unity GT lookahead override (fixed value replacing dynamic scaling).
+  - **Architecture:** Extracted `control/speed_governor.py` module — standalone `SpeedGovernor` class with 4 clean concerns: (1) physics-based comfort governor `v = sqrt(max_lat_accel_g * 9.81 / |curvature|)`, (2) curve preview anticipatory deceleration, (3) perception horizon guardrail (decoupled from control lookahead), (4) jerk-limited speed planner.
+  - **Removed:** 8 redundant layers (curvature bins, `_apply_speed_limits`, `speed_limit_preview` cascade, `steering_speed_guard`, `straight_target_hold`, `target_speed_blend`, `straight_speed_smoothing`, `curve_mode_speed_cap`, `perception_health_status` percentage reductions).
+  - **Config:** Single global `comfort_governor_max_lat_accel_g: 0.25` threshold.
+  - **PP lookahead fix:** `reference_lookahead_scale_min: 1.0` (lookahead no longer shrinks with speed).
+  - **Stale hold:** Speed capped at current when perception stale for 3+ consecutive frames.
+  - **Longitudinal tuning:** `startup_ramp_seconds: 2.5` (from 4.0), `straight_throttle_cap: 0.45` (from 0.3), `throttle_rate_limit: 0.06` (from 0.04).
+  - **Telemetry:** `speed_governor_comfort_speed`, `speed_governor_preview_speed`, `speed_governor_horizon_speed` in HDF5 + PhilViz v64.
+  - **Tests:** 33 unit tests (7 Phase 0 bugfix + 19 SpeedGovernor + 7 existing planner), all passing.
+  - **Validation:** E2E Unity validation pending.
+
+- `S1-M35` (done): PP steering pipeline bypass — eliminate phase-lag oscillation:
+  - **Problem:** S1-M33 PP implementation kept PID-era steering post-processing pipeline active (jerk limiting at 0.12/s², EMA smoothing alpha=0.9, adaptive rate computation, sign flip override). This introduced 0.3-0.5s phase lag that defeated PP's geometric steering: jerk limiter active 85% of turn frames, steering transfer ratio as low as 0.34, and re-introduced the oscillation PP was meant to fix.
+  - **Fix:** Bypass jerk limiting, EMA smoothing, sign flip override, adaptive rate computation, and straight-away adaptive tuning when `control_mode == "pure_pursuit"`. PP path uses only: (1) simple fixed rate limit (`pp_max_steering_rate: 0.4`), (2) hard clip (`max_steering`). Turn feasibility governor and lateral accel estimation still computed for speed governor and telemetry.
+  - **Config:** `pp_max_steering_rate: 0.4`, `pp_feedback_gain: 0.0` (pure geometric for initial validation). `reference_lookahead_scale_min: 0.45`, `reference_lookahead_tight_scale: 0.55` (shorter lookahead for stronger PP authority in curves).
+  - **Telemetry:** `pp_pipeline_bypass_active` flag in HDF5 + PhilViz v65. Waterfall bypass note in diagnostics.
+  - **Tests:** 66 unit tests passing (3 new PP pipeline tests + 10 existing PP + 53 PID/longitudinal). Zero PID regressions.
+  - **E2E validation (s-loop, canonical start):** Failure at F571 (vs F295 pre-bypass). Oscillation eliminated (0.01 sign-change rate). Jerk limited: 0%, EMA smoothing: 0%, transfer ratio ~1.0. Remaining failure is upstream reference point loss in second S-turn transition (trajectory/perception issue, not control).
+  - **Next:** Fix reference point stability during curve transitions (trajectory module).
 
 **Gate to pass Stage 1**
 - No centerline cross in first-turn window.
@@ -262,8 +284,8 @@ These are the long-term product capabilities layered on top of the ladder above.
 - jerk_p95 <= 400 m/s^3.
 - lat_jerk_p95 <= 5.0.
 
-**Post-Phase-2 hard stop (ADDRESSED via S1-M33)**
-- Architecture escalation decision: **Pure Pursuit implemented** (S1-M33). PID oscillation was unfixable via tuning; geometric Pure Pursuit controller eliminates oscillation by design. PP completed full 40s s-loop with zero oscillation, zero hard clip, and 30% lower lateral error than PID. Rollback to PID available via `control_mode: pid`.
+**Post-Phase-2 hard stop (ADDRESSED via S1-M33 + S1-M35)**
+- Architecture escalation decision: **Pure Pursuit implemented** (S1-M33) with **pipeline bypass** (S1-M35). PID oscillation was unfixable via tuning; geometric Pure Pursuit controller with direct-delivery pipeline eliminates oscillation by design. Current gating issue: reference point stability during S-turn transitions (trajectory/perception, not control). Rollback to PID available via `control_mode: pid`.
 
 ### Phase 3: Behavior Layer + Lead Vehicle Integration
 **Goal:** realistic car-following with jerk-limited deceleration.

@@ -208,6 +208,11 @@ class ControlCommand:
     curve_mode_speed_cap_active: bool = False
     curve_mode_speed_cap_clamped: bool = False
     curve_mode_speed_cap_value: Optional[float] = None
+    # Speed governor diagnostics
+    speed_governor_active_limiter: str = "none"
+    speed_governor_comfort_speed: Optional[float] = None
+    speed_governor_preview_speed: Optional[float] = None
+    speed_governor_horizon_speed: Optional[float] = None
     # Launch throttle ramp diagnostics
     launch_throttle_cap: Optional[float] = None
     launch_throttle_cap_active: bool = False
@@ -309,6 +314,7 @@ class ControlCommand:
     pp_feedback_steering: Optional[float] = None
     pp_ref_jump_clamped: bool = False
     pp_stale_hold_active: bool = False
+    pp_pipeline_bypass_active: bool = False
 
 
 @dataclass

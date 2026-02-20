@@ -253,6 +253,10 @@ def analyze_recording_summary(recording_path: Path, analyze_to_failure: bool = F
                 np.array(f['control/pp_stale_hold_active'][:])
                 if 'control/pp_stale_hold_active' in f else None
             )
+            data['pp_pipeline_bypass_active'] = (
+                np.array(f['control/pp_pipeline_bypass_active'][:])
+                if 'control/pp_pipeline_bypass_active' in f else None
+            )
             
             # Trajectory data
             data['ref_x'] = np.array(f['trajectory/reference_point_x'][:]) if 'trajectory/reference_point_x' in f else None

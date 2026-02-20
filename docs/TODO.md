@@ -10,9 +10,20 @@
 - [x] Update PhilViz v63 with control mode indicator and PP diagnostics
 - [x] E2E validation: 2 runs on s-loop, PP completes full 40s with 0 oscillation
 - [x] Revert counterproductive PID tuning, keep bug fixes
-- [ ] **Next:** Reduce mean |gcx| from 0.42m toward 0.35m (likely trajectory ref point offset)
-- [ ] **Next:** Lookahead distance sweep (5/7/9m) for tighter curve tracking
-- [ ] **Next:** Evaluate PP feedback gain sweep (0.0, 0.1, 0.2)
+
+## PP Steering Pipeline Bypass (S1-M35) — Completed
+
+- [x] Bypass PID-era jerk limiting, EMA smoothing, sign flip override, adaptive rate computation in PP mode
+- [x] Extract turn feasibility governor computation for PP path (speed governor needs it)
+- [x] Add `pp_max_steering_rate` param (simple fixed rate limit, default 0.4)
+- [x] Set `pp_feedback_gain: 0.0` for pure geometric initial validation
+- [x] Add `pp_pipeline_bypass_active` telemetry field to HDF5 + PhilViz v65
+- [x] 66 unit tests passing (3 new PP pipeline, 10 existing PP, 53 PID/longitudinal)
+- [x] E2E validation: F571 (vs F295 pre-bypass), 0% jerk/smoothing active, oscillation eliminated
+- [x] Tuned lookahead: `reference_lookahead_scale_min: 0.45`, `reference_lookahead_tight_scale: 0.55`
+- [ ] **Next:** Fix reference point loss during S-turn transitions (F566-567 in latest recording)
+- [ ] **Next:** Evaluate `pp_feedback_gain` sweep (0.0, 0.1, 0.15) for steady-state drift correction
+- [ ] **Next:** Rate limit sweep: `pp_max_steering_rate` at 0.25, 0.35, 0.45
 
 ## Stack Isolation TODOs (Priority Execution Plan)
 

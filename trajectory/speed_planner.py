@@ -184,6 +184,7 @@ class SpeedPlanner:
         ):
             planned_speed = max(planned_speed, self.config.launch_speed_floor)
             planned_accel = (planned_speed - self._last_speed) / max(dt, 1e-3)
+            planned_accel = min(planned_accel, max_accel)
 
         if planned_speed < self.config.min_speed:
             planned_speed = self.config.min_speed

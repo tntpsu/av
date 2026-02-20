@@ -117,6 +117,10 @@ class DriveMetrics:
     speed_surge_transition_avg_drop: float
     speed_surge_transition_p95_drop: float
     speed_surge_oscillation_count: int
+    speed_governor_comfort_active_rate: float
+    speed_governor_horizon_active_rate: float
+    speed_governor_mean_comfort_speed: float
+    speed_governor_mean_speed: float
     speed_surge_oscillation_avg_drop: float
     speed_surge_oscillation_p95_drop: float
     
@@ -314,6 +318,10 @@ class DriveAnalyzer:
                 speed_surge_oscillation_count=0,
                 speed_surge_oscillation_avg_drop=0.0,
                 speed_surge_oscillation_p95_drop=0.0,
+                speed_governor_comfort_active_rate=0.0,
+                speed_governor_horizon_active_rate=0.0,
+                speed_governor_mean_comfort_speed=0.0,
+                speed_governor_mean_speed=0.0,
                 out_of_lane_events=0,
                 out_of_lane_time=0.0
             )
@@ -643,6 +651,29 @@ class DriveAnalyzer:
                     speed_surge_oscillation_avg_drop = float(np.mean(oscillation_drops))
                     speed_surge_oscillation_p95_drop = float(np.percentile(oscillation_drops, 95))
         
+        # 5.6 SPEED GOVERNOR METRICS
+        speed_governor_comfort_active_rate = 0.0
+        speed_governor_horizon_active_rate = 0.0
+        speed_governor_mean_comfort_speed = 0.0
+        speed_governor_mean_speed = 0.0
+        try:
+            with h5py.File(self.recording_path, 'r') as f:
+                if 'control/speed_governor_comfort_speed' in f:
+                    comfort_arr = np.array(f['control/speed_governor_comfort_speed'][:n_frames])
+                    valid = comfort_arr[comfort_arr > 0]
+                    if len(valid) > 0:
+                        speed_governor_comfort_active_rate = float(len(valid) / n_frames * 100)
+                        speed_governor_mean_comfort_speed = float(np.mean(valid))
+                if 'control/speed_governor_horizon_speed' in f:
+                    horizon_arr = np.array(f['control/speed_governor_horizon_speed'][:n_frames])
+                    valid_h = horizon_arr[horizon_arr > 0]
+                    if len(valid_h) > 0:
+                        speed_governor_horizon_active_rate = float(len(valid_h) / n_frames * 100)
+                if self.data['speed'] is not None:
+                    speed_governor_mean_speed = float(np.mean(self.data['speed'][:n_frames]))
+        except Exception:
+            pass
+
         # 6. SAFETY METRICS
         # Out of lane events (lateral error > 1.0m, typical lane width is ~3.5m, so 1.0m is significant)
         if in_lane_mask is not None:
@@ -721,6 +752,10 @@ class DriveAnalyzer:
             speed_surge_oscillation_count=speed_surge_oscillation_count,
             speed_surge_oscillation_avg_drop=speed_surge_oscillation_avg_drop,
             speed_surge_oscillation_p95_drop=speed_surge_oscillation_p95_drop,
+            speed_governor_comfort_active_rate=speed_governor_comfort_active_rate,
+            speed_governor_horizon_active_rate=speed_governor_horizon_active_rate,
+            speed_governor_mean_comfort_speed=speed_governor_mean_comfort_speed,
+            speed_governor_mean_speed=speed_governor_mean_speed,
             out_of_lane_events=out_of_lane_events,
             out_of_lane_time=out_of_lane_time
         )

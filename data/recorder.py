@@ -948,6 +948,24 @@ class DataRecorder:
             dtype=np.float32
         )
         self.h5_file.create_dataset(
+            "control/speed_governor_comfort_speed",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/speed_governor_preview_speed",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/speed_governor_horizon_speed",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
             "control/launch_throttle_cap",
             shape=(0,),
             maxshape=max_shape,
@@ -1513,6 +1531,12 @@ class DataRecorder:
         )
         self.h5_file.create_dataset(
             "control/pp_stale_hold_active",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/pp_pipeline_bypass_active",
             shape=(0,),
             maxshape=max_shape,
             dtype=np.float32
@@ -3436,6 +3460,9 @@ class DataRecorder:
         curve_mode_speed_cap_active_list = []
         curve_mode_speed_cap_clamped_list = []
         curve_mode_speed_cap_value_list = []
+        speed_governor_comfort_speed_list = []
+        speed_governor_preview_speed_list = []
+        speed_governor_horizon_speed_list = []
         launch_throttle_cap_list = []
         launch_throttle_cap_active_list = []
         steering_pre_rate_limit_list = []
@@ -3531,6 +3558,7 @@ class DataRecorder:
         pp_feedback_steering_list = []
         pp_ref_jump_clamped_list = []
         pp_stale_hold_active_list = []
+        pp_pipeline_bypass_active_list = []
         accel_feedforward_list = []
         brake_feedforward_list = []
         accel_capped_list = []
@@ -3616,6 +3644,15 @@ class DataRecorder:
             )
             curve_mode_speed_cap_value_list.append(
                 getattr(cc, 'curve_mode_speed_cap_value', 0.0) or 0.0
+            )
+            speed_governor_comfort_speed_list.append(
+                getattr(cc, 'speed_governor_comfort_speed', -1.0) or -1.0
+            )
+            speed_governor_preview_speed_list.append(
+                getattr(cc, 'speed_governor_preview_speed', -1.0) or -1.0
+            )
+            speed_governor_horizon_speed_list.append(
+                getattr(cc, 'speed_governor_horizon_speed', -1.0) or -1.0
             )
             launch_throttle_cap_list.append(getattr(cc, 'launch_throttle_cap', 0.0) or 0.0)
             launch_throttle_cap_active_list.append(1 if getattr(cc, 'launch_throttle_cap_active', False) else 0)
@@ -3812,6 +3849,7 @@ class DataRecorder:
             pp_feedback_steering_list.append(getattr(cc, 'pp_feedback_steering', 0.0) or 0.0)
             pp_ref_jump_clamped_list.append(float(getattr(cc, 'pp_ref_jump_clamped', False)))
             pp_stale_hold_active_list.append(float(getattr(cc, 'pp_stale_hold_active', False)))
+            pp_pipeline_bypass_active_list.append(float(getattr(cc, 'pp_pipeline_bypass_active', False)))
         
         if timestamps:
             current_size = self.h5_file["control/timestamps"].shape[0]
@@ -3840,6 +3878,8 @@ class DataRecorder:
                        "target_speed_slew_active", "target_speed_ramp_active",
                        "curve_mode_speed_cap_active", "curve_mode_speed_cap_clamped",
                        "curve_mode_speed_cap_value",
+                       "speed_governor_comfort_speed", "speed_governor_preview_speed",
+                       "speed_governor_horizon_speed",
                        "launch_throttle_cap", "launch_throttle_cap_active",
                        "steering_pre_rate_limit", "steering_post_rate_limit",
                        "steering_post_jerk_limit", "steering_post_sign_flip",
@@ -3896,7 +3936,8 @@ class DataRecorder:
                        "steering_first_limiter_stage_code",
                        "pp_alpha", "pp_lookahead_distance",
                        "pp_geometric_steering", "pp_feedback_steering",
-                       "pp_ref_jump_clamped", "pp_stale_hold_active"]:
+                       "pp_ref_jump_clamped", "pp_stale_hold_active",
+                       "pp_pipeline_bypass_active"]:
                 self.h5_file[f"control/{key}"].resize((new_size,))
             
             # Write data
@@ -3983,6 +4024,9 @@ class DataRecorder:
                 curve_mode_speed_cap_clamped_list, dtype=np.int8
             )
             self.h5_file["control/curve_mode_speed_cap_value"][current_size:] = curve_mode_speed_cap_value_list
+            self.h5_file["control/speed_governor_comfort_speed"][current_size:] = speed_governor_comfort_speed_list
+            self.h5_file["control/speed_governor_preview_speed"][current_size:] = speed_governor_preview_speed_list
+            self.h5_file["control/speed_governor_horizon_speed"][current_size:] = speed_governor_horizon_speed_list
             self.h5_file["control/launch_throttle_cap"][current_size:] = launch_throttle_cap_list
             self.h5_file["control/launch_throttle_cap_active"][current_size:] = np.array(launch_throttle_cap_active_list, dtype=np.int8)
             self.h5_file["control/steering_pre_rate_limit"][current_size:] = steering_pre_rate_limit_list
@@ -4181,6 +4225,7 @@ class DataRecorder:
             self.h5_file["control/pp_feedback_steering"][current_size:] = pp_feedback_steering_list
             self.h5_file["control/pp_ref_jump_clamped"][current_size:] = pp_ref_jump_clamped_list
             self.h5_file["control/pp_stale_hold_active"][current_size:] = pp_stale_hold_active_list
+            self.h5_file["control/pp_pipeline_bypass_active"][current_size:] = pp_pipeline_bypass_active_list
     
     def _write_perception_outputs(self, frames: List[RecordingFrame]):
         """Write perception outputs to HDF5."""

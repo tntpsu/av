@@ -15,10 +15,11 @@ control:
     stanley_soft_speed: 2.0
     stanley_heading_weight: 1.0
     # Pure Pursuit params (active when control_mode=pure_pursuit)
-    pp_feedback_gain: 0.15  # PID feedback blend (0=pure geometric, 1=full PID)
+    pp_feedback_gain: 0.0  # pure geometric for initial validation; add 0.1-0.15 back if drift appears
     pp_min_lookahead: 0.5  # min effective lookahead distance (m), prevents singularity
     pp_ref_jump_clamp: 0.5  # max ref_x change per frame (m), second safety net
     pp_stale_decay: 0.98  # per-frame steering decay when perception is stale
+    pp_max_steering_rate: 0.4  # simple rate limit for PP mode (per-frame delta); PID-era adaptive rate/jerk/smoothing bypassed
     feedback_gain_min: 1.1
     feedback_gain_max: 1.4
     feedback_gain_curvature_min: 0.003
@@ -186,7 +187,7 @@ control:
     coast_hold_seconds: 0.7
     coast_throttle_kp: 0.1
     coast_throttle_max: 0.12
-    straight_throttle_cap: 0.3
+    straight_throttle_cap: 0.45
     straight_curvature_threshold: 0.003
     accel_tracking_enabled: true
     accel_tracking_error_scale: 0.35
@@ -199,7 +200,7 @@ control:
     accel_target_smoothing_alpha: 0.86
     continuous_accel_control: true
     continuous_accel_deadband: 0.05
-    startup_ramp_seconds: 4.0
+    startup_ramp_seconds: 2.5
     startup_accel_limit: 0.7
     startup_speed_threshold: 2.0
     startup_throttle_cap: 0.15
@@ -213,7 +214,7 @@ control:
     throttle_limit_threshold: 0.9
     throttle_reduction_factor: 0.15
     brake_aggression: 2.0
-    throttle_rate_limit: 0.04
+    throttle_rate_limit: 0.06
     brake_rate_limit: 0.07
     throttle_smoothing_alpha: 0.75
     min_throttle_when_accel: 0.1
@@ -242,14 +243,14 @@ trajectory:
   target_speed: 12.0
   reference_lookahead: 9.0
   dynamic_reference_lookahead: true
-  reference_lookahead_min: 3.0
-  reference_lookahead_scale_min: 0.55
+  reference_lookahead_min: 2.5
+  reference_lookahead_scale_min: 0.45
   reference_lookahead_speed_min: 4.0
   reference_lookahead_speed_max: 10.0
   reference_lookahead_curvature_min: 0.002
   reference_lookahead_curvature_max: 0.015
-  reference_lookahead_tight_curvature_threshold: 0.02
-  reference_lookahead_tight_scale: 0.7
+  reference_lookahead_tight_curvature_threshold: 0.01
+  reference_lookahead_tight_scale: 0.55
   use_vehicle_frame_lookahead_ref: false
   vehicle_frame_lookahead_scale: 1.0
   vehicle_frame_lookahead_scale_left: 1.0
@@ -399,6 +400,14 @@ trajectory:
   speed_horizon_guardrail_margin_m: 1.0
   speed_horizon_guardrail_min_speed_mps: 3.0
   speed_horizon_guardrail_gain: 1.0
+  speed_governor:
+    enabled: true
+    comfort_governor_max_lat_accel_g: 0.25
+    comfort_governor_min_speed: 3.0
+    curve_preview_enabled: true
+    curve_preview_lookahead_scale: 1.6
+    curve_preview_max_decel_mps2: 1.8
+    curve_preview_min_curvature: 0.002
   lane_position_smoothing_alpha: 0.35
   ref_point_jump_clamp_x: 0.15
   ref_point_jump_clamp_heading: 0.08

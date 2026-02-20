@@ -2175,6 +2175,12 @@ def test_pure_pursuit_no_oscillation():
         ref = _pp_ref(2.0 - i * 0.01, 8.0)
         meta = ctrl.compute_steering(0.0, ref, return_metadata=True)
         steerings.append(meta['steering'])
+        assert not meta.get('steering_jerk_limited_active', False), \
+            f"Frame {i}: jerk limiting should not be active in PP mode"
+        assert not meta.get('steering_smoothing_active', False), \
+            f"Frame {i}: EMA smoothing should not be active in PP mode"
+        assert meta.get('pp_pipeline_bypass_active', 0) > 0.5, \
+            f"Frame {i}: PP pipeline bypass should be active"
     sign_changes = sum(1 for i in range(1, len(steerings))
                        if steerings[i] * steerings[i-1] < 0
                        and abs(steerings[i]) > 0.01)
@@ -2210,7 +2216,52 @@ def test_pure_pursuit_metadata_fields():
     meta = ctrl.compute_steering(0.0, _pp_ref(1.0, 8.0), return_metadata=True)
     for field in ['pp_alpha', 'pp_lookahead_distance', 'pp_geometric_steering',
                   'pp_feedback_steering', 'pp_ref_jump_clamped', 'pp_stale_hold_active',
-                  'control_mode']:
+                  'pp_pipeline_bypass_active', 'control_mode']:
         assert field in meta, f"Missing PP telemetry field: {field}"
     assert meta['control_mode'] == 'pure_pursuit'
+    assert meta['pp_pipeline_bypass_active'] > 0.5
+
+
+def test_pure_pursuit_pipeline_no_phase_lag():
+    """PP steering reaches target within 2-3 frames (no pipeline delay)."""
+    ctrl = _make_pp_controller()
+    target_ref = _pp_ref(2.0, 8.0)
+    target_meta = _make_pp_controller().compute_steering(
+        0.0, target_ref, return_metadata=True)
+    target_geom = abs(target_meta['pp_geometric_steering'])
+
+    for i in range(5):
+        meta = ctrl.compute_steering(0.0, target_ref, return_metadata=True,
+                                     current_speed=5.0, dt=0.033)
+    actual = abs(meta['steering'])
+    assert actual >= 0.9 * target_geom, (
+        f"PP steering {actual:.4f} should be >=90% of geometric {target_geom:.4f} by frame 5"
+    )
+    assert not meta.get('steering_jerk_limited_active', False)
+    assert not meta.get('steering_smoothing_active', False)
+
+
+def test_pure_pursuit_rate_limit_caps_extreme_jump():
+    """PP rate limit prevents >pp_max_steering_rate change per frame."""
+    pp_rate = 0.3
+    ctrl = _make_pp_controller(pp_max_steering_rate=pp_rate)
+    ctrl.compute_steering(0.0, _pp_ref(0.0, 10.0), return_metadata=True,
+                          current_speed=5.0, dt=0.033)
+    meta = ctrl.compute_steering(0.0, _pp_ref(5.0, 5.0), return_metadata=True,
+                                 current_speed=5.0, dt=0.033)
+    steer_delta = abs(meta['steering'] - 0.0)
+    assert steer_delta <= pp_rate + 1e-6, (
+        f"Steering delta {steer_delta:.4f} exceeded pp_max_steering_rate {pp_rate}"
+    )
+
+
+def test_pure_pursuit_hard_clip_enforced():
+    """Hard clip at max_steering even in PP mode."""
+    max_steer = 0.4
+    ctrl = _make_pp_controller(max_steering=max_steer, pp_max_steering_rate=1.0)
+    meta = ctrl.compute_steering(0.0, _pp_ref(8.0, 3.0), return_metadata=True,
+                                 current_speed=5.0, dt=0.033)
+    assert abs(meta['steering']) <= max_steer + 1e-6, (
+        f"Steering {abs(meta['steering']):.4f} exceeded max_steering {max_steer}"
+    )
 

@@ -213,6 +213,7 @@ class LateralController:
                  pp_min_lookahead: float = 0.5,
                  pp_ref_jump_clamp: float = 0.5,
                  pp_stale_decay: float = 0.98,
+                 pp_max_steering_rate: float = 0.4,
                  feedback_gain_min: float = 1.0,
                  feedback_gain_max: float = 1.2,
                  feedback_gain_curvature_min: float = 0.002,
@@ -437,6 +438,7 @@ class LateralController:
         self.pp_min_lookahead = max(0.1, float(pp_min_lookahead))
         self.pp_ref_jump_clamp = max(0.1, float(pp_ref_jump_clamp))
         self.pp_stale_decay = float(np.clip(pp_stale_decay, 0.5, 1.0))
+        self.pp_max_steering_rate = max(0.05, float(pp_max_steering_rate))
         self._pp_last_ref_x = 0.0
         self._pp_last_valid_steering = 0.0
         self._pp_stale_frames = 0
@@ -1344,12 +1346,161 @@ class LateralController:
             self._road_straight_invalid_frames_remaining -= 1
         else:
             is_road_straight = None
-        single_owner_entry_phase = bool(
-            self.dynamic_curve_single_owner_mode
-            and self.dynamic_curve_entry_governor_enabled
-            and (curve_upcoming or curve_at_car)
-        )
-        if single_owner_entry_phase:
+
+        # --- PP pipeline bypass: skip PID-era adaptive rate computation ---
+        # PP output is geometrically smooth; the adaptive rate scaling, curve
+        # entry scheduling, dynamic authority, and comfort scaling are PID
+        # compensating mechanisms that introduce phase lag on PP output.
+        pp_pipeline_bypass_active = (self.control_mode == "pure_pursuit")
+
+        if pp_pipeline_bypass_active:
+            max_steering_rate = self.pp_max_steering_rate
+            entry_phase_active = False
+            single_owner_entry_phase = False
+
+            # Turn feasibility and lateral accel diagnostics (needed by speed
+            # governor and telemetry regardless of control mode)
+            speed_for_comfort = (
+                float(current_speed)
+                if current_speed is not None and np.isfinite(float(current_speed))
+                else float(reference_point.get('velocity', 0.0) or 0.0)
+            )
+            speed_for_comfort = max(0.0, speed_for_comfort)
+            turn_feasibility_curvature_abs = float(curve_metric_abs)
+            turn_feasibility_speed_mps = float(speed_for_comfort)
+            dynamic_curve_lateral_accel_est_g = float(
+                (speed_for_comfort * speed_for_comfort * float(curve_metric_abs)) / 9.81
+            )
+            turn_feasibility_required_lat_accel_g = float(dynamic_curve_lateral_accel_est_g)
+            turn_feasibility_comfort_limit_g = float(self.dynamic_curve_comfort_lat_accel_comfort_max_g)
+            turn_feasibility_peak_limit_g = float(self.dynamic_curve_comfort_lat_accel_peak_max_g)
+            turn_feasibility_selected_limit_g = float(
+                self.dynamic_curve_comfort_lat_accel_peak_max_g
+                if self.turn_feasibility_use_peak_bound
+                else self.dynamic_curve_comfort_lat_accel_comfort_max_g
+            )
+            turn_feasibility_active = bool(
+                self.turn_feasibility_governor_enabled
+                and turn_feasibility_curvature_abs >= self.turn_feasibility_curvature_min
+                and not is_straight
+            )
+            if turn_feasibility_active:
+                effective_limit_g = max(
+                    0.0,
+                    turn_feasibility_selected_limit_g - self.turn_feasibility_guardband_g,
+                )
+                turn_feasibility_margin_g = float(effective_limit_g - turn_feasibility_required_lat_accel_g)
+                if turn_feasibility_curvature_abs > 1e-9 and effective_limit_g > 0.0:
+                    turn_feasibility_speed_limit_mps = float(
+                        np.sqrt((effective_limit_g * 9.81) / turn_feasibility_curvature_abs)
+                    )
+                else:
+                    turn_feasibility_speed_limit_mps = 0.0
+                turn_feasibility_speed_delta_mps = float(
+                    max(0.0, turn_feasibility_speed_mps - turn_feasibility_speed_limit_mps)
+                )
+                turn_feasibility_infeasible = bool(turn_feasibility_margin_g < 0.0)
+
+            if dt > 0.0 and self._last_lateral_accel_est_initialized:
+                dynamic_curve_lateral_jerk_est_gps = float(
+                    abs(dynamic_curve_lateral_accel_est_g - self._last_lateral_accel_est_g) / dt
+                )
+            else:
+                dynamic_curve_lateral_jerk_est_gps = 0.0
+            self._last_lateral_accel_est_g = dynamic_curve_lateral_accel_est_g
+            self._last_lateral_accel_est_initialized = True
+            jerk_alpha = self.dynamic_curve_lat_jerk_smoothing_alpha
+            dynamic_curve_lateral_jerk_est_smoothed_gps = float(
+                jerk_alpha * dynamic_curve_lateral_jerk_est_gps
+                + (1.0 - jerk_alpha) * self._smoothed_lateral_jerk_est_gps
+            )
+            self._smoothed_lateral_jerk_est_gps = dynamic_curve_lateral_jerk_est_smoothed_gps
+
+            steering_rate_limit_effective = float(max_steering_rate)
+
+            # Rate clip (same logic as PID path, just with fixed max_steering_rate)
+            if hasattr(self, '_steering_rate_limit_active'):
+                rate_in = steering_before_limits
+                steering_change = steering_before_limits - self.last_steering
+                steering_rate_limit_requested_delta = abs(steering_change)
+                steering_change = np.clip(steering_change, -max_steering_rate, max_steering_rate)
+                steering_before_limits = self.last_steering + steering_change
+                steering_rate_limited_delta = abs(steering_before_limits - rate_in)
+                steering_rate_limited_active = steering_rate_limited_delta > 1e-6
+            else:
+                rate_in = steering_before_limits
+                steering_change = steering_before_limits - self.last_steering
+                steering_rate_limit_requested_delta = abs(steering_change)
+                max_initial_steering_rate = 0.25
+                if abs(steering_change) > max_initial_steering_rate:
+                    steering_change = np.clip(steering_change, -max_initial_steering_rate, max_initial_steering_rate)
+                    steering_before_limits = self.last_steering + steering_change
+                steering_rate_limited_delta = abs(steering_before_limits - rate_in)
+                steering_rate_limited_active = steering_rate_limited_delta > 1e-6
+                self._steering_rate_limit_active = True
+
+            steering_post_rate_limit = steering_before_limits
+            steering_rate_limit_margin = steering_rate_limit_effective - steering_rate_limit_requested_delta
+            steering_rate_limit_unlock_delta_needed = max(
+                0.0, steering_rate_limit_requested_delta - steering_rate_limit_effective
+            )
+
+            # Skip jerk limiting -- PP output is geometrically smooth
+            steering_change_for_rate = steering_before_limits - self.last_steering
+            self.last_steering_rate = steering_change_for_rate / dt if dt > 0 else 0.0
+            steering_post_jerk_limit = steering_before_limits
+
+            # Skip sign flip override -- PP doesn't have sign lag
+            steering_post_sign_flip = steering_before_limits
+
+            # Hard clip (safety, always active)
+            steering = np.clip(
+                steering_before_limits,
+                -self.max_steering,
+                self.max_steering,
+            )
+            steering_hard_clip_delta = abs(steering - steering_before_limits)
+            steering_hard_clip_active = steering_hard_clip_delta > 1e-6
+            steering_post_hard_clip = steering
+            self.last_steering = steering
+
+            # Skip EMA smoothing -- PP output doesn't need it
+            self.smoothed_steering = steering
+            steering_post_smoothing = steering
+
+            # Attribution signals
+            pre_abs = abs(steering_pre_rate_limit)
+            final_abs = abs(steering_post_smoothing)
+            steering_authority_gap = max(pre_abs - final_abs, 0.0)
+            steering_transfer_ratio = np.clip(
+                final_abs / max(pre_abs, 1e-6), 0.0, 1.0,
+            )
+            if steering_rate_limited_delta > 1e-6:
+                steering_first_limiter_stage_code = 1.0
+            elif steering_hard_clip_delta > 1e-6:
+                steering_first_limiter_stage_code = 3.0
+            else:
+                steering_first_limiter_stage_code = 0.0
+
+            # Update state for next frame (PP path)
+            self._last_error_magnitude = error_magnitude
+            self._prev_is_straight = is_straight
+            self._prev_entry_phase_active = entry_phase_active
+            self._prev_curve_upcoming = curve_upcoming
+            self._prev_curve_at_car = curve_at_car
+
+        # --- PID/Stanley path: adaptive rate computation, jerk limit, smoothing ---
+        # When PP bypass is active, all of these are skipped (handled in the PP
+        # block above). The guards below prevent the PID pipeline from
+        # overwriting PP's already-computed steering outputs.
+
+        if not pp_pipeline_bypass_active:
+            single_owner_entry_phase = bool(
+                self.dynamic_curve_single_owner_mode
+                and self.dynamic_curve_entry_governor_enabled
+                and (curve_upcoming or curve_at_car)
+            )
+        if not pp_pipeline_bypass_active and single_owner_entry_phase:
             self._curve_entry_schedule_frames_remaining = 0
             self._curve_entry_schedule_elapsed_frames = 0
             self._curve_commit_mode_frames_remaining = 0
@@ -1789,12 +1940,13 @@ class LateralController:
             curve_entry_assist_rearm_remaining = int(self._curve_entry_assist_rearm_remaining)
 
         # Sign-flip override: allow corrections to reverse quickly when error flips sign.
+        # PP bypass: sign flip override not needed (PP doesn't have sign lag)
         if not hasattr(self, '_sign_flip_override_frames'):
             self._sign_flip_override_frames = 0
         sign_flip_override_active = False
         sign_flip_triggered = False
         sign_flip_trigger_error = abs(total_error_scaled)
-        if (
+        if not pp_pipeline_bypass_active and (
             abs(total_error_scaled) >= self.straight_sign_flip_error_threshold
             and abs(self.last_steering) > 0.02
             and np.sign(total_error_scaled) != np.sign(self.last_steering)
@@ -1804,20 +1956,17 @@ class LateralController:
                 self._sign_flip_override_frames,
                 int(self.straight_sign_flip_frames),
             )
-        if self._sign_flip_override_frames > 0:
+        if not pp_pipeline_bypass_active and self._sign_flip_override_frames > 0:
             sign_flip_override_active = True
             max_steering_rate = max(max_steering_rate, self.straight_sign_flip_rate)
             self._sign_flip_override_frames -= 1
         sign_flip_frames_remaining = int(self._sign_flip_override_frames)
         steering_rate_limit_effective = float(max_steering_rate)
 
-        # FIXED: Increased steering rate limit for better curve tracking
-        # Required steering for 50m curve is only 0.095 normalized, but need to reach it quickly
-        # Increased to 0.2 per frame (6.0 per second at 30 FPS) for more responsive steering
-        # This allows reaching required steering (0.095) in ~0.5 frames instead of ~0.6 frames
-        # FIXED: On first frame, allow larger initial steering to respond to initial state
-        # This is important when starting on a curve - we need immediate steering response
-        if hasattr(self, '_steering_rate_limit_active'):
+        # PID/Stanley rate clip, jerk limit, smoothing -- skipped when PP bypass is active
+        if pp_pipeline_bypass_active:
+            pass  # PP bypass handled rate clip, jerk, sign flip, hard clip, smoothing above
+        elif hasattr(self, '_steering_rate_limit_active'):
             rate_in = steering_before_limits
             steering_change = steering_before_limits - self.last_steering
             steering_rate_limit_requested_delta = abs(steering_change)
@@ -1940,7 +2089,10 @@ class LateralController:
             effective_steering_jerk_limit *= curve_unwind_jerk_scale
 
         # Optional jerk limit: constrain change in steering rate per frame.
-        if effective_steering_jerk_limit > 0.0 and dt > 0.0 and not sign_flip_override_active:
+        # PP bypass: jerk limiting skipped (PP output is geometrically smooth)
+        if pp_pipeline_bypass_active:
+            pass
+        elif effective_steering_jerk_limit > 0.0 and dt > 0.0 and not sign_flip_override_active:
             jerk_in = steering_before_limits
             if not hasattr(self, 'last_steering_rate'):
                 self.last_steering_rate = 0.0
@@ -1991,69 +2143,71 @@ class LateralController:
                     )
         steering_post_sign_flip = steering_before_limits
 
-        # Apply additional smoothing to prevent oscillation
-        clip_in = steering_before_limits
-        if dynamic_curve_authority_active:
-            clip_overflow = max(0.0, abs(clip_in) - self.max_steering)
-            dynamic_curve_hard_clip_boost = float(
-                np.clip(
-                    max(
-                        dynamic_curve_rate_deficit * self.dynamic_curve_hard_clip_boost_gain,
-                        clip_overflow,
-                    ),
-                    0.0,
-                    dynamic_curve_hard_clip_boost_cap_effective,
+        # Hard clip, EMA smoothing, and attribution -- skipped when PP bypass active
+        # (PP bypass already computed hard clip, set self.last_steering, skipped EMA,
+        # and computed attribution signals in its own block above)
+        if not pp_pipeline_bypass_active:
+            clip_in = steering_before_limits
+            if dynamic_curve_authority_active:
+                clip_overflow = max(0.0, abs(clip_in) - self.max_steering)
+                dynamic_curve_hard_clip_boost = float(
+                    np.clip(
+                        max(
+                            dynamic_curve_rate_deficit * self.dynamic_curve_hard_clip_boost_gain,
+                            clip_overflow,
+                        ),
+                        0.0,
+                        dynamic_curve_hard_clip_boost_cap_effective,
+                    )
                 )
+            dynamic_curve_hard_clip_limit_effective = float(
+                np.clip(self.max_steering + dynamic_curve_hard_clip_boost, 0.0, 1.0)
             )
-        dynamic_curve_hard_clip_limit_effective = float(
-            np.clip(self.max_steering + dynamic_curve_hard_clip_boost, 0.0, 1.0)
-        )
-        steering = np.clip(
-            steering_before_limits,
-            -dynamic_curve_hard_clip_limit_effective,
-            dynamic_curve_hard_clip_limit_effective,
-        )
-        steering_hard_clip_delta = abs(steering - clip_in)
-        steering_hard_clip_active = steering_hard_clip_delta > 1e-6
-        steering_post_hard_clip = steering
-        self.last_steering = steering
-        if self.steering_smoothing_alpha is not None:
-            smoothing_in = steering
-            if sign_flip_override_active:
-                # Skip smoothing when reversing sign on straights to avoid stickiness.
-                self.smoothed_steering = steering
-            else:
-                if self.smoothed_steering is None:
+            steering = np.clip(
+                steering_before_limits,
+                -dynamic_curve_hard_clip_limit_effective,
+                dynamic_curve_hard_clip_limit_effective,
+            )
+            steering_hard_clip_delta = abs(steering - clip_in)
+            steering_hard_clip_active = steering_hard_clip_delta > 1e-6
+            steering_post_hard_clip = steering
+            self.last_steering = steering
+            if self.steering_smoothing_alpha is not None:
+                smoothing_in = steering
+                if sign_flip_override_active:
                     self.smoothed_steering = steering
                 else:
-                    alpha = np.clip(self.steering_smoothing_alpha, 0.0, 1.0)
-                    self.smoothed_steering = (alpha * steering) + ((1.0 - alpha) * self.smoothed_steering)
-            steering = self.smoothed_steering
-            steering_smoothing_delta = abs(steering - smoothing_in)
-            steering_smoothing_active = steering_smoothing_delta > 1e-6
-        steering_post_smoothing = steering
-        # Explicit attribution signals for control triage.
-        pre_abs = abs(steering_pre_rate_limit)
-        final_abs = abs(steering_post_smoothing)
-        steering_authority_gap = max(pre_abs - final_abs, 0.0)
-        steering_transfer_ratio = np.clip(
-            final_abs / max(pre_abs, 1e-6),
-            0.0,
-            1.0,
-        )
-        if steering_rate_limited_delta > 1e-6:
-            steering_first_limiter_stage_code = 1.0
-        elif steering_jerk_limited_delta > 1e-6:
-            steering_first_limiter_stage_code = 2.0
-        elif steering_hard_clip_delta > 1e-6:
-            steering_first_limiter_stage_code = 3.0
-        elif steering_smoothing_delta > 1e-6:
-            steering_first_limiter_stage_code = 4.0
-        else:
-            steering_first_limiter_stage_code = 0.0
+                    if self.smoothed_steering is None:
+                        self.smoothed_steering = steering
+                    else:
+                        alpha = np.clip(self.steering_smoothing_alpha, 0.0, 1.0)
+                        self.smoothed_steering = (alpha * steering) + ((1.0 - alpha) * self.smoothed_steering)
+                steering = self.smoothed_steering
+                steering_smoothing_delta = abs(steering - smoothing_in)
+                steering_smoothing_active = steering_smoothing_delta > 1e-6
+            steering_post_smoothing = steering
+            pre_abs = abs(steering_pre_rate_limit)
+            final_abs = abs(steering_post_smoothing)
+            steering_authority_gap = max(pre_abs - final_abs, 0.0)
+            steering_transfer_ratio = np.clip(
+                final_abs / max(pre_abs, 1e-6),
+                0.0,
+                1.0,
+            )
+        if not pp_pipeline_bypass_active:
+            if steering_rate_limited_delta > 1e-6:
+                steering_first_limiter_stage_code = 1.0
+            elif steering_jerk_limited_delta > 1e-6:
+                steering_first_limiter_stage_code = 2.0
+            elif steering_hard_clip_delta > 1e-6:
+                steering_first_limiter_stage_code = 3.0
+            elif steering_smoothing_delta > 1e-6:
+                steering_first_limiter_stage_code = 4.0
+            else:
+                steering_first_limiter_stage_code = 0.0
 
-        # Straight-away adaptive tuning (deadband + smoothing)
-        if is_straight:
+        # Straight-away adaptive tuning -- PID only (PP doesn't use deadband/smoothing)
+        if not pp_pipeline_bypass_active and is_straight:
             steering_sign = np.sign(steering) if abs(steering) > 0.02 else 0
             if self._last_straight_sign != 0 and steering_sign != 0 and steering_sign != self._last_straight_sign:
                 self._straight_sign_changes += 1
@@ -2337,6 +2491,7 @@ class LateralController:
                 'pp_feedback_steering': pp_feedback_steering_val,
                 'pp_ref_jump_clamped': float(pp_ref_jump_clamped),
                 'pp_stale_hold_active': float(pp_stale_hold_active),
+                'pp_pipeline_bypass_active': float(pp_pipeline_bypass_active),
                 'feedback_gain_scheduled': feedback_gain,
                 'total_error_scaled': total_error,
                 'is_straight': is_straight,
@@ -3375,6 +3530,7 @@ class VehicleController:
                  pp_min_lookahead: float = 0.5,
                  pp_ref_jump_clamp: float = 0.5,
                  pp_stale_decay: float = 0.98,
+                 pp_max_steering_rate: float = 0.4,
                  feedback_gain_min: float = 1.0,
                  feedback_gain_max: float = 1.2,
                  feedback_gain_curvature_min: float = 0.002,
@@ -3572,6 +3728,7 @@ class VehicleController:
             pp_min_lookahead=pp_min_lookahead,
             pp_ref_jump_clamp=pp_ref_jump_clamp,
             pp_stale_decay=pp_stale_decay,
+            pp_max_steering_rate=pp_max_steering_rate,
             feedback_gain_min=feedback_gain_min,
             feedback_gain_max=feedback_gain_max,
             feedback_gain_curvature_min=feedback_gain_curvature_min,
