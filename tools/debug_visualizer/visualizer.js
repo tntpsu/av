@@ -1177,18 +1177,19 @@ class Visualizer {
                     { name: 'Lateral Error RMSE', value: breakdown.lateral_error_penalty, max: 30 },
                     { name: 'Steering Jerk', value: breakdown.steering_jerk_penalty, max: 20 },
                     { name: 'Lane Detection', value: breakdown.lane_detection_penalty, max: 20 },
-                    { name: 'Stale Data', value: breakdown.stale_data_penalty, max: 15 },
+                    { name: 'Stale Hard Data', value: breakdown.stale_data_penalty, max: 15 },
                     { name: 'Perception Instability', value: breakdown.perception_instability_penalty || 0, max: 20 },
                     { name: 'Out-of-Lane', value: breakdown.out_of_lane_penalty, max: 15 }
                 ];
                 
                 penalties.forEach(penalty => {
                     if (penalty.value > 0.01) {
-                        const color = penalty.value > penalty.max * 0.7 ? '#ff6b6b' : penalty.value > penalty.max * 0.4 ? '#ffa500' : '#ffa500';
-                        html += `<span style="color: ${color};">  -${penalty.value.toFixed(1)}</span> <span style="color: #888;">${penalty.name}</span><br/>`;
+                        const color = penalty.value > penalty.max * 0.7 ? '#ff6b6b' : '#ffa500';
+                        html += `<span style="color: ${color};">  -${penalty.value.toFixed(1)}</span> <span style="color: #888;">${penalty.name} (max ${penalty.max})</span><br/>`;
                     }
                 });
-                
+                html += '<div style="margin-top: 0.4rem; color: #9fb3c8;">Stale penalty uses hard stale only (managed low-visibility fallback excluded).</div>';
+                html += '<div style="margin-top: 0.25rem; color: #9fb3c8;">Overall score uses only the penalties listed here; some cards (e.g., top-down overlay trust) are informational diagnostics.</div>';
                 html += '</div>';
             }
             
@@ -1325,20 +1326,17 @@ class Visualizer {
                 html += `Control Quality: <span style="color: ${ctrlScore >= 80 ? '#4caf50' : ctrlScore >= 60 ? '#ffa500' : '#ff6b6b'}">${ctrlScore.toFixed(1)}%</span>`;
                 html += '</div>';
                 
-                if (diag.recommendations && diag.recommendations.length > 0) {
-                    html += '<div style="margin-top: 0.75rem; padding-top: 0.75rem; border-top: 1px solid #444;">';
-                    html += '<strong style="color: #ffa500; font-size: 0.9rem;">Top Recommendations:</strong><ul style="margin: 0.5rem 0; padding-left: 1.5rem; color: #e0e0e0; font-size: 0.9rem;">';
-                    diag.recommendations.slice(0, 3).forEach(rec => {
-                        html += `<li style="margin-bottom: 0.25rem;">${rec}</li>`;
-                    });
-                    html += '</ul></div>';
-                }
-                
                 html += '<div style="margin-top: 0.75rem; padding-top: 0.75rem; border-top: 1px solid #444;">';
                 html += '<button onclick="window.visualizer.switchTab(\'diagnostics\')" style="padding: 0.5rem 1rem; background: #4a90e2; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 0.9rem;">View Full Diagnostics →</button>';
                 html += '</div>';
                 html += '</div>';
             }
+
+            const withLimitHint = (text, color, limitText) => {
+                const isNonGreen = color && color !== '#4caf50' && color !== '#e0e0e0' && color !== '#888';
+                if (!isNonGreen || !limitText) return text;
+                return `${text} <span style="color:#a0a0a0;">(limit: ${limitText})</span>`;
+            };
 
             // Top-down timing/projection diagnostics (instrumentation-only)
             if (topdownDiagnostics && !topdownDiagnostics.error) {
@@ -1375,7 +1373,7 @@ class Visualizer {
                 html += '<div style="background: #2a2a2a; padding: 1rem; border-radius: 8px; margin-bottom: 1.5rem; border-left: 4px solid #4a90e2;">';
                 html += '<h3 style="margin-top: 0; color: #4a90e2;">Top-Down Overlay Trust (Instrumentation)</h3>';
                 html += '<table style="width: 100%; color: #e0e0e0;">';
-                html += `<tr><td>Top-Down Sync Quality:</td><td style="text-align: right; color: ${qualityColor};">${syncQuality.toUpperCase()}</td></tr>`;
+                html += `<tr><td>Top-Down Sync Quality:</td><td style="text-align: right; color: ${qualityColor};">${withLimitHint(syncQuality.toUpperCase(), qualityColor, 'GOOD')}</td></tr>`;
                 html += `<tr><td>Top-Down ↔ Trajectory Δt (P95):</td><td style="text-align: right;">${dtTraj.p95_ms !== null && dtTraj.p95_ms !== undefined ? dtTraj.p95_ms.toFixed(1) + ' ms' : '-'}</td></tr>`;
                 html += `<tr><td>Top-Down ↔ Trajectory Δt (Max):</td><td style="text-align: right;">${dtTraj.max_ms !== null && dtTraj.max_ms !== undefined ? dtTraj.max_ms.toFixed(1) + ' ms' : '-'}</td></tr>`;
                 html += `<tr><td>Top-Down ↔ Unity Δt (P95):</td><td style="text-align: right;">${dtUnity.p95_ms !== null && dtUnity.p95_ms !== undefined ? dtUnity.p95_ms.toFixed(1) + ' ms' : '-'}</td></tr>`;
@@ -1392,12 +1390,15 @@ class Visualizer {
                 html += `<tr><td>Bridge TopDown Queue Depth (mean):</td><td style="text-align: right;">${streamTopdownQueue.mean !== null && streamTopdownQueue.mean !== undefined ? streamTopdownQueue.mean.toFixed(1) : '-'}</td></tr>`;
                 html += `<tr><td>Front (timestamp - realtime) P95 abs:</td><td style="text-align: right;">${streamFrontTsRealtime.p95_abs !== null && streamFrontTsRealtime.p95_abs !== undefined ? streamFrontTsRealtime.p95_abs.toFixed(1) + ' ms' : '-'}</td></tr>`;
                 html += `<tr><td>TopDown (timestamp - realtime) P95 abs:</td><td style="text-align: right;">${streamTopdownTsRealtime.p95_abs !== null && streamTopdownTsRealtime.p95_abs !== undefined ? streamTopdownTsRealtime.p95_abs.toFixed(1) + ' ms' : '-'}</td></tr>`;
-                html += `<tr><td>Top-Down Projection Fields Missing:</td><td style="text-align: right; color: ${missingTopdownProj > 0 ? '#ffa500' : '#4caf50'};">${missingTopdownProj}</td></tr>`;
+                const missingProjColor = missingTopdownProj > 0 ? '#ffa500' : '#4caf50';
+                html += `<tr><td>Top-Down Projection Fields Missing:</td><td style="text-align: right; color: ${missingProjColor};">${withLimitHint(String(missingTopdownProj), missingProjColor, '0')}</td></tr>`;
                 html += `<tr><td>Top-Down Ortho Size (mean):</td><td style="text-align: right;">${topdownOrthoStats.mean !== null && topdownOrthoStats.mean !== undefined ? topdownOrthoStats.mean.toFixed(2) : '-'}</td></tr>`;
                 html += `<tr><td>Top-Down Scale (m/px mean):</td><td style="text-align: right;">${topdownMppStats.mean !== null && topdownMppStats.mean !== undefined ? topdownMppStats.mean.toFixed(4) : '-'}</td></tr>`;
                 html += `<tr><td>Top-Down Forward Y (mean):</td><td style="text-align: right;">${topdownForwardYStats.mean !== null && topdownForwardYStats.mean !== undefined ? topdownForwardYStats.mean.toFixed(3) : '-'}</td></tr>`;
-                html += `<tr><td>Calibrated Projection Ready:</td><td style="text-align: right; color: ${topdownReady ? '#4caf50' : '#ffa500'};">${topdownReady ? 'YES' : 'NO'}</td></tr>`;
-                html += `<tr><td>Timestamp Domain Mismatch Suspected:</td><td style="text-align: right; color: ${mismatchSuspected ? '#ffa500' : '#4caf50'};">${mismatchSuspected ? 'YES' : 'NO'}</td></tr>`;
+                const readyColor = topdownReady ? '#4caf50' : '#ffa500';
+                const mismatchColor = mismatchSuspected ? '#ffa500' : '#4caf50';
+                html += `<tr><td>Calibrated Projection Ready:</td><td style="text-align: right; color: ${readyColor};">${withLimitHint(topdownReady ? 'YES' : 'NO', readyColor, 'YES')}</td></tr>`;
+                html += `<tr><td>Timestamp Domain Mismatch Suspected:</td><td style="text-align: right; color: ${mismatchColor};">${withLimitHint(mismatchSuspected ? 'YES' : 'NO', mismatchColor, 'NO')}</td></tr>`;
                 html += '</table>';
                 html += '<div style="margin-top: 0.5rem; color: #a0a0a0; font-size: 0.85rem;">';
                 html += 'Use this card to separate timing mismatch from projection/calibration gaps. No control behavior is affected.';
@@ -1428,46 +1429,46 @@ class Visualizer {
                 ? (stabilityScore >= 80 ? '#4caf50' : stabilityScore >= 60 ? '#ffa500' : '#ff6b6b')
                 : '#888';
             const instabilityColor = summary.perception_quality.perception_instability_detected === 0 ? '#4caf50' : '#ff6b6b';
-            html += `<tr><td>Lane Detection Rate:</td><td style="text-align: right; color: ${laneDetColor};">${summary.perception_quality.lane_detection_rate.toFixed(1)}%</td></tr>`;
+            html += `<tr><td>Lane Detection Rate:</td><td style="text-align: right; color: ${laneDetColor};">${withLimitHint(summary.perception_quality.lane_detection_rate.toFixed(1) + '%', laneDetColor, '>=90%')}</td></tr>`;
             html += `<tr><td>Confidence (Mean):</td><td style="text-align: right;">${summary.perception_quality.perception_confidence_mean.toFixed(3)}</td></tr>`;
             html += `<tr><td>Jumps Detected:</td><td style="text-align: right;">${summary.perception_quality.perception_jumps_detected || 0}</td></tr>`;
             if (summary.perception_quality.perception_instability_detected !== undefined) {
                 html += `<tr><td>Instability Events:</td><td style="text-align: right; color: ${instabilityColor};">${summary.perception_quality.perception_instability_detected}</td></tr>`;
             }
             html += `<tr><td>Stale Raw Rate:</td><td style="text-align: right;">${staleRawRate.toFixed(1)}%</td></tr>`;
-            html += `<tr><td>Stale Hard Rate:</td><td style="text-align: right; color: ${staleHardColor};">${staleHardRate.toFixed(1)}%</td></tr>`;
+            html += `<tr><td>Stale Hard Rate:</td><td style="text-align: right; color: ${staleHardColor};">${withLimitHint(staleHardRate.toFixed(1) + '%', staleHardColor, '<10%')}</td></tr>`;
             html += `<tr><td>Stale Visibility Fallback:</td><td style="text-align: right;">${staleVisibilityRate.toFixed(1)}%</td></tr>`;
             if (stabilityScore !== undefined) {
-                html += `<tr><td>Stability Score:</td><td style="text-align: right; color: ${stabilityColor};">${stabilityScore.toFixed(1)}%</td></tr>`;
+                html += `<tr><td>Stability Score:</td><td style="text-align: right; color: ${stabilityColor};">${withLimitHint(stabilityScore.toFixed(1) + '%', stabilityColor, '>=80%')}</td></tr>`;
             }
             if (summary.perception_quality.lane_line_jitter_p95 !== undefined) {
                 const jitterColor = getColorForValue(
                     summary.perception_quality.lane_line_jitter_p95,
                     { good: 0.3, acceptable: 0.6 }
                 );
-                html += `<tr><td>Lane Line Jitter (P95):</td><td style="text-align: right; color: ${jitterColor};">${summary.perception_quality.lane_line_jitter_p95.toFixed(3)}m</td></tr>`;
+                html += `<tr><td>Lane Line Jitter (P95):</td><td style="text-align: right; color: ${jitterColor};">${withLimitHint(summary.perception_quality.lane_line_jitter_p95.toFixed(3) + 'm', jitterColor, '<=0.30m')}</td></tr>`;
             }
             if (summary.perception_quality.reference_jitter_p95 !== undefined) {
                 const refJitterColor = getColorForValue(
                     summary.perception_quality.reference_jitter_p95,
                     { good: 0.15, acceptable: 0.25 }
                 );
-                html += `<tr><td>Reference Jitter (P95):</td><td style="text-align: right; color: ${refJitterColor};">${summary.perception_quality.reference_jitter_p95.toFixed(3)}m</td></tr>`;
+                html += `<tr><td>Reference Jitter (P95):</td><td style="text-align: right; color: ${refJitterColor};">${withLimitHint(summary.perception_quality.reference_jitter_p95.toFixed(3) + 'm', refJitterColor, '<=0.15m')}</td></tr>`;
             }
             if (summary.perception_quality.single_lane_rate !== undefined) {
                 const singleLaneColor = summary.perception_quality.single_lane_rate < 5 ? '#4caf50'
                     : summary.perception_quality.single_lane_rate < 15 ? '#ffa500' : '#ff6b6b';
-                html += `<tr><td>Single Lane Rate:</td><td style="text-align: right; color: ${singleLaneColor};">${summary.perception_quality.single_lane_rate.toFixed(1)}%</td></tr>`;
+                html += `<tr><td>Single Lane Rate:</td><td style="text-align: right; color: ${singleLaneColor};">${withLimitHint(summary.perception_quality.single_lane_rate.toFixed(1) + '%', singleLaneColor, '<5%')}</td></tr>`;
             }
             if (summary.perception_quality.right_lane_low_visibility_rate !== undefined) {
                 const rightLowColor = summary.perception_quality.right_lane_low_visibility_rate < 5 ? '#4caf50'
                     : summary.perception_quality.right_lane_low_visibility_rate < 15 ? '#ffa500' : '#ff6b6b';
-                html += `<tr><td>Right Lane Low Visibility:</td><td style="text-align: right; color: ${rightLowColor};">${summary.perception_quality.right_lane_low_visibility_rate.toFixed(1)}%</td></tr>`;
+                html += `<tr><td>Right Lane Low Visibility:</td><td style="text-align: right; color: ${rightLowColor};">${withLimitHint(summary.perception_quality.right_lane_low_visibility_rate.toFixed(1) + '%', rightLowColor, '<5%')}</td></tr>`;
             }
             if (summary.perception_quality.right_lane_edge_contact_rate !== undefined) {
                 const edgeColor = summary.perception_quality.right_lane_edge_contact_rate < 20 ? '#4caf50'
                     : summary.perception_quality.right_lane_edge_contact_rate < 50 ? '#ffa500' : '#ffb74d';
-                html += `<tr><td>Right Lane Edge Contact:</td><td style="text-align: right; color: ${edgeColor};">${summary.perception_quality.right_lane_edge_contact_rate.toFixed(1)}%</td></tr>`;
+                html += `<tr><td>Right Lane Edge Contact:</td><td style="text-align: right; color: ${edgeColor};">${withLimitHint(summary.perception_quality.right_lane_edge_contact_rate.toFixed(1) + '%', edgeColor, '<20%')}</td></tr>`;
             }
             html += '</table></div>';
 
@@ -1477,9 +1478,9 @@ class Visualizer {
             html += '<h3 style="margin-top: 0; color: #4a90e2;">Trajectory Quality</h3>';
             html += '<table style="width: 100%; color: #e0e0e0;">';
             const availColor = summary.trajectory_quality.trajectory_availability >= 95 ? '#4caf50' : summary.trajectory_quality.trajectory_availability >= 90 ? '#ffa500' : '#ff6b6b';
-            html += `<tr><td>Availability:</td><td style="text-align: right; color: ${availColor};">${summary.trajectory_quality.trajectory_availability.toFixed(1)}%</td></tr>`;
+            html += `<tr><td>Availability:</td><td style="text-align: right; color: ${availColor};">${withLimitHint(summary.trajectory_quality.trajectory_availability.toFixed(1) + '%', availColor, '>=95%')}</td></tr>`;
             const refAccColor = getColorForValue(summary.trajectory_quality.ref_point_accuracy_rmse, { good: 0.1, acceptable: 0.2 });
-            html += `<tr><td>Reference Point Accuracy (RMSE):</td><td style="text-align: right; color: ${refAccColor};">${summary.trajectory_quality.ref_point_accuracy_rmse.toFixed(3)}m</td></tr>`;
+            html += `<tr><td>Reference Point Accuracy (RMSE):</td><td style="text-align: right; color: ${refAccColor};">${withLimitHint(summary.trajectory_quality.ref_point_accuracy_rmse.toFixed(3) + 'm', refAccColor, '<=0.10m')}</td></tr>`;
             html += '</table></div>';
 
             // Path Tracking
@@ -1487,16 +1488,16 @@ class Visualizer {
             html += '<h3 style="margin-top: 0; color: #4a90e2;">Path Tracking</h3>';
             html += '<table style="width: 100%; color: #e0e0e0;">';
             const latErrColor = getColorForValue(summary.path_tracking.lateral_error_rmse, { good: 0.2, acceptable: 0.4 });
-            html += `<tr><td>Lateral Error (RMSE):</td><td style="text-align: right; color: ${latErrColor};">${summary.path_tracking.lateral_error_rmse.toFixed(3)}m</td></tr>`;
+            html += `<tr><td>Lateral Error (RMSE):</td><td style="text-align: right; color: ${latErrColor};">${withLimitHint(summary.path_tracking.lateral_error_rmse.toFixed(3) + 'm', latErrColor, '<=0.20m')}</td></tr>`;
             const latMaxColor = getColorForValue(summary.path_tracking.lateral_error_max, { good: 0.5, acceptable: 1.0 });
-            html += `<tr><td>Lateral Error (Max):</td><td style="text-align: right; color: ${latMaxColor};">${summary.path_tracking.lateral_error_max.toFixed(3)}m</td></tr>`;
+            html += `<tr><td>Lateral Error (Max):</td><td style="text-align: right; color: ${latMaxColor};">${withLimitHint(summary.path_tracking.lateral_error_max.toFixed(3) + 'm', latMaxColor, '<=0.50m')}</td></tr>`;
             const latP95Color = getColorForValue(summary.path_tracking.lateral_error_p95, { good: 0.4, acceptable: 0.8 });
-            html += `<tr><td>Lateral Error (P95):</td><td style="text-align: right; color: ${latP95Color};">${summary.path_tracking.lateral_error_p95.toFixed(3)}m</td></tr>`;
+            html += `<tr><td>Lateral Error (P95):</td><td style="text-align: right; color: ${latP95Color};">${withLimitHint(summary.path_tracking.lateral_error_p95.toFixed(3) + 'm', latP95Color, '<=0.40m')}</td></tr>`;
             const headingErrDeg = summary.path_tracking.heading_error_rmse * 180 / Math.PI;
             const headingColor = getColorForValue(headingErrDeg, { good: 10, acceptable: 20 });
-            html += `<tr><td>Heading Error (RMSE):</td><td style="text-align: right; color: ${headingColor};">${headingErrDeg.toFixed(1)}°</td></tr>`;
+            html += `<tr><td>Heading Error (RMSE):</td><td style="text-align: right; color: ${headingColor};">${withLimitHint(headingErrDeg.toFixed(1) + '°', headingColor, '<=10°')}</td></tr>`;
             const timeInLaneColor = summary.path_tracking.time_in_lane >= 90 ? '#4caf50' : summary.path_tracking.time_in_lane >= 70 ? '#ffa500' : '#ff6b6b';
-            html += `<tr><td>Time in Lane:</td><td style="text-align: right; color: ${timeInLaneColor};">${summary.path_tracking.time_in_lane.toFixed(1)}%</td></tr>`;
+            html += `<tr><td>Time in Lane:</td><td style="text-align: right; color: ${timeInLaneColor};">${withLimitHint(summary.path_tracking.time_in_lane.toFixed(1) + '%', timeInLaneColor, '>=90%')}</td></tr>`;
             html += '</table></div>';
 
             // Passenger comfort (primary, g-based)
@@ -1523,9 +1524,9 @@ class Visualizer {
                 html += '<h3 style="margin-top: 0; color: #4a90e2;">Passenger Comfort (Gs)</h3>';
                 html += '<div style="color: #a0a0a0; margin-bottom: 0.5rem; font-size: 0.85rem;">Primary comfort gates are in g / g/s (SI shown in parentheses).</div>';
                 html += '<table style="width: 100%; color: #e0e0e0;">';
-                html += `<tr><td>Accel P95:</td><td style="text-align: right; color: ${accelColor};">${accelP95G !== null ? accelP95G.toFixed(2) : '-'} g (${accelP95SI !== null ? accelP95SI.toFixed(2) : '-'} m/s²)</td></tr>`;
+                html += `<tr><td>Accel P95:</td><td style="text-align: right; color: ${accelColor};">${withLimitHint(`${accelP95G !== null ? accelP95G.toFixed(2) : '-'} g (${accelP95SI !== null ? accelP95SI.toFixed(2) : '-'} m/s²)`, accelColor, `<=${accelGateG.toFixed(2)} g`)}</td></tr>`;
                 html += `<tr><td>Accel P95 (Filt):</td><td style="text-align: right;">${accelP95FiltG !== null ? accelP95FiltG.toFixed(2) : '-'} g (${accelP95FiltSI !== null ? accelP95FiltSI.toFixed(2) : '-'} m/s²)</td></tr>`;
-                html += `<tr><td>Jerk P95:</td><td style="text-align: right; color: ${jerkColor};">${jerkP95Gps !== null ? jerkP95Gps.toFixed(2) : '-'} g/s (${jerkP95SI !== null ? jerkP95SI.toFixed(2) : '-'} m/s³)</td></tr>`;
+                html += `<tr><td>Jerk P95:</td><td style="text-align: right; color: ${jerkColor};">${withLimitHint(`${jerkP95Gps !== null ? jerkP95Gps.toFixed(2) : '-'} g/s (${jerkP95SI !== null ? jerkP95SI.toFixed(2) : '-'} m/s³)`, jerkColor, `<=${jerkGateGps.toFixed(2)} g/s`)}</td></tr>`;
                 html += `<tr><td>Jerk P95 (Filt):</td><td style="text-align: right;">${jerkP95FiltGps !== null ? jerkP95FiltGps.toFixed(2) : '-'} g/s (${jerkP95FiltSI !== null ? jerkP95FiltSI.toFixed(2) : '-'} m/s³)</td></tr>`;
                 html += `<tr><td>Lat Accel P95:</td><td style="text-align: right;">${latAccelP95G !== null ? latAccelP95G.toFixed(3) : '-'} g (${latAccelP95SI !== null ? latAccelP95SI.toFixed(2) : '-'} m/s²)</td></tr>`;
                 html += `<tr><td>Lat Jerk P95:</td><td style="text-align: right;">${latJerkP95Gps !== null ? latJerkP95Gps.toFixed(3) : '-'} g/s (${latJerkP95SI !== null ? latJerkP95SI.toFixed(2) : '-'} m/s³)</td></tr>`;
@@ -1538,14 +1539,22 @@ class Visualizer {
             html += '<h3 style="margin-top: 0; color: #4a90e2;">Controller Diagnostics</h3>';
             html += '<div style="color: #a0a0a0; margin-bottom: 0.5rem; font-size: 0.85rem;">Steering-domain metrics for controller tuning, not direct ride comfort gates.</div>';
             html += '<table style="width: 100%; color: #e0e0e0;">';
-            const jerkColor = getColorForValue(summary.control_smoothness.steering_jerk_max, { good: 0.5, acceptable: 1.0 });
-            html += `<tr><td>Steering Jerk (Max):</td><td style="text-align: right; color: ${jerkColor};">${summary.control_smoothness.steering_jerk_max.toFixed(3)}/s²</td></tr>`;
+            const steerJerkColor = getColorForValue(summary.control_smoothness.steering_jerk_max, { good: 0.5, acceptable: 1.0 });
+            html += `<tr><td>Steering Jerk (Max):</td><td style="text-align: right; color: ${steerJerkColor};">${withLimitHint(summary.control_smoothness.steering_jerk_max.toFixed(3) + '/s²', steerJerkColor, '<=0.50/s²')}</td></tr>`;
             const rateColor = getColorForValue(summary.control_smoothness.steering_rate_max, { good: 2.0, acceptable: 4.0 });
-            html += `<tr><td>Steering Rate (Max):</td><td style="text-align: right; color: ${rateColor};">${summary.control_smoothness.steering_rate_max.toFixed(3)}/s</td></tr>`;
+            html += `<tr><td>Steering Rate (Max):</td><td style="text-align: right; color: ${rateColor};">${withLimitHint(summary.control_smoothness.steering_rate_max.toFixed(3) + '/s', rateColor, '<=2.0/s')}</td></tr>`;
             const smoothnessColor = summary.control_smoothness.steering_smoothness >= 2.0 ? '#4caf50' : summary.control_smoothness.steering_smoothness >= 1.0 ? '#ffa500' : '#ff6b6b';
-            html += `<tr><td>Steering Smoothness:</td><td style="text-align: right; color: ${smoothnessColor};">${summary.control_smoothness.steering_smoothness.toFixed(2)}</td></tr>`;
+            html += `<tr><td>Steering Smoothness:</td><td style="text-align: right; color: ${smoothnessColor};">${withLimitHint(summary.control_smoothness.steering_smoothness.toFixed(2), smoothnessColor, '>=2.0')}</td></tr>`;
             const oscColor = getColorForValue(summary.control_smoothness.oscillation_frequency, { good: 1.0, acceptable: 2.0 });
-            html += `<tr><td>Oscillation Frequency:</td><td style="text-align: right; color: ${oscColor};">${summary.control_smoothness.oscillation_frequency.toFixed(2)}Hz</td></tr>`;
+            html += `<tr><td>Oscillation Frequency:</td><td style="text-align: right; color: ${oscColor};">${withLimitHint(summary.control_smoothness.oscillation_frequency.toFixed(2) + 'Hz', oscColor, '<=1.0Hz')}</td></tr>`;
+            if (comfort) {
+                const ctrlAccelG = comfort.acceleration_p95_g ?? null;
+                const ctrlJerkGps = comfort.jerk_p95_gps ?? null;
+                const ctrlAccelColor = ctrlAccelG === null ? '#888' : getColorForValue(ctrlAccelG, { good: 0.25, acceptable: 0.38 });
+                const ctrlJerkColor = ctrlJerkGps === null ? '#888' : getColorForValue(ctrlJerkGps, { good: 0.51, acceptable: 0.77 });
+                html += `<tr><td>Longitudinal Accel P95 (Outcome):</td><td style="text-align: right; color: ${ctrlAccelColor};">${withLimitHint(ctrlAccelG !== null ? ctrlAccelG.toFixed(2) + ' g' : '-', ctrlAccelColor, '<=0.25 g')}</td></tr>`;
+                html += `<tr><td>Longitudinal Jerk P95 (Outcome):</td><td style="text-align: right; color: ${ctrlJerkColor};">${withLimitHint(ctrlJerkGps !== null ? ctrlJerkGps.toFixed(2) + ' g/s' : '-', ctrlJerkColor, '<=0.51 g/s')}</td></tr>`;
+            }
             html += '</table></div>';
 
             // Control stability (straight-line oscillation + adaptive deadband)
@@ -1563,7 +1572,7 @@ class Visualizer {
                     html += '<h3 style="margin-top: 0; color: #4a90e2;">Control Stability (Straight)</h3>';
                     html += '<table style="width: 100%; color: #e0e0e0;">';
                     html += `<tr><td>Straight Coverage:</td><td style="text-align: right;">${straightFrac.toFixed(1)}%</td></tr>`;
-                    html += `<tr><td>Oscillation Mean:</td><td style="text-align: right; color: ${stabilityColor};">${oscMean.toFixed(3)}</td></tr>`;
+                    html += `<tr><td>Oscillation Mean:</td><td style="text-align: right; color: ${stabilityColor};">${withLimitHint(oscMean.toFixed(3), stabilityColor, '<=0.10')}</td></tr>`;
                     html += `<tr><td>Oscillation Max:</td><td style="text-align: right;">${oscMax !== null ? oscMax.toFixed(3) : '-'}</td></tr>`;
                     html += `<tr><td>Tuned Deadband (Mean):</td><td style="text-align: right;">${deadbandMean !== null ? deadbandMean.toFixed(3) : '-'}</td></tr>`;
                     html += `<tr><td>Tuned Deadband (Max):</td><td style="text-align: right;">${deadbandMax !== null ? deadbandMax.toFixed(3) : '-'}</td></tr>`;
@@ -1572,7 +1581,7 @@ class Visualizer {
                         const mismatchRate = controlStability.straight_sign_mismatch_rate;
                         const mismatchEvents = controlStability.straight_sign_mismatch_events ?? 0;
                         const mismatchColor = mismatchRate > 15 ? '#ff6b6b' : mismatchRate > 5 ? '#ffa500' : '#4caf50';
-                        html += `<tr><td>Straight Sign Mismatch Rate:</td><td style="text-align: right; color: ${mismatchColor};">${mismatchRate.toFixed(1)}%</td></tr>`;
+                        html += `<tr><td>Straight Sign Mismatch Rate:</td><td style="text-align: right; color: ${mismatchColor};">${withLimitHint(mismatchRate.toFixed(1) + '%', mismatchColor, '<=5%')}</td></tr>`;
                         html += `<tr><td>Straight Sign Mismatch Events:</td><td style="text-align: right;">${mismatchEvents}</td></tr>`;
                     }
                     html += '</table></div>';
@@ -1597,7 +1606,7 @@ class Visualizer {
                     html += '<div style="background: #2a2a2a; padding: 1rem; border-radius: 8px; margin-bottom: 1rem;">';
                     html += '<h3 style="margin-top: 0; color: #4a90e2;">Speed Control</h3>';
                     html += '<table style="width: 100%; color: #e0e0e0;">';
-                    html += `<tr><td>Speed Error (RMSE):</td><td style="text-align: right; color: ${speedColor};">${speedRmse.toFixed(2)} m/s</td></tr>`;
+                    html += `<tr><td>Speed Error (RMSE):</td><td style="text-align: right; color: ${speedColor};">${withLimitHint(speedRmse.toFixed(2) + ' m/s', speedColor, '<=2.0 m/s')}</td></tr>`;
                     html += `<tr><td>Speed Error (Mean):</td><td style="text-align: right;">${speedMean !== null ? speedMean.toFixed(2) : '-'}</td></tr>`;
                     html += `<tr><td>Speed Error (Max):</td><td style="text-align: right;">${speedMax !== null ? speedMax.toFixed(2) : '-'}</td></tr>`;
                     html += `<tr><td>Overspeed Rate (>0.5 m/s):</td><td style="text-align: right;">${overspeedRate !== null ? overspeedRate.toFixed(1) : '-'}%</td></tr>`;
@@ -1616,8 +1625,10 @@ class Visualizer {
             html += '<div style="background: #2a2a2a; padding: 1rem; border-radius: 8px; margin-bottom: 1rem;">';
             html += '<h3 style="margin-top: 0; color: #4a90e2;">Safety</h3>';
             html += '<table style="width: 100%; color: #e0e0e0; margin-bottom: 1rem;">';
-            html += `<tr><td>Out-of-Lane Events:</td><td style="text-align: right; color: ${summary.safety.out_of_lane_events === 0 ? '#4caf50' : '#ff6b6b'};">${summary.safety.out_of_lane_events}</td></tr>`;
-            html += `<tr><td>Out-of-Lane Time:</td><td style="text-align: right; color: ${summary.safety.out_of_lane_time < 5 ? '#4caf50' : summary.safety.out_of_lane_time < 10 ? '#ffa500' : '#ff6b6b'};">${summary.safety.out_of_lane_time.toFixed(1)}%</td></tr>`;
+            const outEventsColor = summary.safety.out_of_lane_events === 0 ? '#4caf50' : '#ff6b6b';
+            const outTimeColor = summary.safety.out_of_lane_time < 5 ? '#4caf50' : summary.safety.out_of_lane_time < 10 ? '#ffa500' : '#ff6b6b';
+            html += `<tr><td>Out-of-Lane Events:</td><td style="text-align: right; color: ${outEventsColor};">${withLimitHint(String(summary.safety.out_of_lane_events), outEventsColor, '0')}</td></tr>`;
+            html += `<tr><td>Out-of-Lane Time:</td><td style="text-align: right; color: ${outTimeColor};">${withLimitHint(summary.safety.out_of_lane_time.toFixed(1) + '%', outTimeColor, '<5%')}</td></tr>`;
             html += '</table>';
             
             // Out-of-Lane Events List
