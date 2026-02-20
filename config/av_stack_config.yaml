@@ -10,14 +10,15 @@ control:
     error_clip: 1.57
     integral_limit: 0.1
     steering_smoothing_alpha: 0.9
-    control_mode: pure_pursuit
+    control_mode: pure_pursuit  # pid | stanley | pure_pursuit
     stanley_k: 1.5
     stanley_soft_speed: 2.0
     stanley_heading_weight: 1.0
-    pp_feedback_gain: 0.15
-    pp_min_lookahead: 0.5
-    pp_ref_jump_clamp: 0.5
-    pp_stale_decay: 0.98
+    # Pure Pursuit params (active when control_mode=pure_pursuit)
+    pp_feedback_gain: 0.15  # PID feedback blend (0=pure geometric, 1=full PID)
+    pp_min_lookahead: 0.5  # min effective lookahead distance (m), prevents singularity
+    pp_ref_jump_clamp: 0.5  # max ref_x change per frame (m), second safety net
+    pp_stale_decay: 0.98  # per-frame steering decay when perception is stale
     feedback_gain_min: 1.1
     feedback_gain_max: 1.4
     feedback_gain_curvature_min: 0.003

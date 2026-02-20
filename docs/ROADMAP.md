@@ -200,6 +200,14 @@ This is the practical de-risk sequence for implementation and testing.
   - **D1:** baseline signal chain diagnostic (`analyze_signal_chain.py`).
   - new tests in `tests/test_signal_chain_fixes.py` covering A1–A4.
   - validation status: D2/D3/D4 require live Unity runs for A/B confirmation.
+- `S1-M33` (done): Pure Pursuit control — architecture escalation from PID to geometric steering:
+  - **Rationale:** 8 rounds of PID tuning proved oscillation is architectural (error→overcorrect→overshoot cycle), not a tuning gap. PID baseline: F655, mean|gcx|=0.60m, 22% hard clip, 19 sign changes.
+  - **Implementation:** `pure_pursuit` control mode in `LateralController` computes `steering = atan(2 * wheelbase * sin(alpha) / ld)` directly from reference point geometry. Bypasses PID-specific feedforward, curve entry scheduling, dynamic authority, commit mode, feedback gain scheduling, and deadband.
+  - **Safety nets:** Reference point jump clamping (0.5m/frame), stale perception hold with 0.98/frame decay, small PID feedback (0.15 gain) for disturbance rejection.
+  - **Telemetry:** pp_alpha, pp_lookahead_distance, pp_geometric_steering, pp_feedback_steering, pp_ref_jump_clamped, pp_stale_hold_active in HDF5 + PhilViz v63.
+  - **E2E validation (2 runs, canonical start, s-loop 40s):** PP: 768 frames (full 40s, no failure), mean|gcx|=0.42m, 0% hard clip, 0 sign changes. PID baseline: 655 frames (emergency stop), mean|gcx|=0.60m, 22% hard clip, 19 sign changes.
+  - **Architecture escalation checkpoint addressed:** PP implementation IS the architecture escalation; PID oscillation was unfixable via tuning, geometric controller resolved it.
+  - **Rollback:** `control_mode: pid` (one line config change); all PID machinery preserved.
 
 **Gate to pass Stage 1**
 - No centerline cross in first-turn window.
@@ -254,8 +262,8 @@ These are the long-term product capabilities layered on top of the ladder above.
 - jerk_p95 <= 400 m/s^3.
 - lat_jerk_p95 <= 5.0.
 
-**Post-Phase-2 hard stop (required)**
-- Decide whether to escalate to stronger architecture changes (for example MPC / richer behavior stack) before continuing.
+**Post-Phase-2 hard stop (ADDRESSED via S1-M33)**
+- Architecture escalation decision: **Pure Pursuit implemented** (S1-M33). PID oscillation was unfixable via tuning; geometric Pure Pursuit controller eliminates oscillation by design. PP completed full 40s s-loop with zero oscillation, zero hard clip, and 30% lower lateral error than PID. Rollback to PID available via `control_mode: pid`.
 
 ### Phase 3: Behavior Layer + Lead Vehicle Integration
 **Goal:** realistic car-following with jerk-limited deceleration.

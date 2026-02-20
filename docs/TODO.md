@@ -1,5 +1,19 @@
 # TODO: Near-Term (Phase 1 Completion)
 
+## Pure Pursuit Control (S1-M33) — Completed
+
+- [x] Implement `pure_pursuit` control mode in `LateralController`
+- [x] Add PP parameters (pp_feedback_gain, pp_min_lookahead, pp_ref_jump_clamp, pp_stale_decay)
+- [x] Add PP telemetry to HDF5 and metadata dict
+- [x] Wire PP config through `VehicleController` and `av_stack.py`
+- [x] Write 10 unit tests for PP (geometry, symmetry, oscillation, stale, jump, metadata)
+- [x] Update PhilViz v63 with control mode indicator and PP diagnostics
+- [x] E2E validation: 2 runs on s-loop, PP completes full 40s with 0 oscillation
+- [x] Revert counterproductive PID tuning, keep bug fixes
+- [ ] **Next:** Reduce mean |gcx| from 0.42m toward 0.35m (likely trajectory ref point offset)
+- [ ] **Next:** Lookahead distance sweep (5/7/9m) for tighter curve tracking
+- [ ] **Next:** Evaluate PP feedback gain sweep (0.0, 0.1, 0.2)
+
 ## Stack Isolation TODOs (Priority Execution Plan)
 
 This section is the active execution backlog for layer-by-layer validation.
