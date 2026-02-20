@@ -170,7 +170,7 @@ control:
     jerk_cooldown_frames: 5
     jerk_cooldown_scale: 0.5
     speed_error_to_accel_gain: 0.1
-    speed_error_deadband: 0.2
+    speed_error_deadband: 0.05
     speed_error_gain_under: 0.12
     speed_error_gain_over: 0.08
     overspeed_accel_zero_threshold: 0.2
@@ -321,7 +321,7 @@ trajectory:
     decel_speed_max: 12.0
     max_decel_at_speed_min: 2.5
     max_decel_at_speed_max: 2.5
-    enforce_desired_speed_slew: true
+    enforce_desired_speed_slew: false
     min_speed: 0.0
     launch_speed_floor: 2.0
     launch_speed_floor_threshold: 1.0
@@ -395,7 +395,7 @@ trajectory:
   far_band_contribution_cap_start_m: 12.0
   far_band_contribution_cap_gain: 0.45
   speed_horizon_guardrail_enabled: true
-  speed_horizon_guardrail_time_headway_s: 1.8
+  speed_horizon_guardrail_time_headway_s: 0.8
   speed_horizon_guardrail_margin_m: 1.0
   speed_horizon_guardrail_min_speed_mps: 3.0
   speed_horizon_guardrail_gain: 1.0
