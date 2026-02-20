@@ -47,6 +47,20 @@ class TrajectoryPlanningInference:
             'ref_x_rate_limit_turn_scale_max',
             2.5,
         )
+        ref_sign_flip_disable_on_turn = kwargs.pop('ref_sign_flip_disable_on_turn', True)
+        ref_sign_flip_disable_heading_min_abs_rad = kwargs.pop(
+            'ref_sign_flip_disable_heading_min_abs_rad',
+            0.03,
+        )
+        ref_x_rate_limit_precurve_enabled = kwargs.pop('ref_x_rate_limit_precurve_enabled', True)
+        ref_x_rate_limit_precurve_heading_min_abs_rad = kwargs.pop(
+            'ref_x_rate_limit_precurve_heading_min_abs_rad',
+            0.03,
+        )
+        ref_x_rate_limit_precurve_scale_max = kwargs.pop(
+            'ref_x_rate_limit_precurve_scale_max',
+            4.0,
+        )
         multi_lookahead_enabled = kwargs.pop('multi_lookahead_enabled', False)
         multi_lookahead_far_scale = kwargs.pop('multi_lookahead_far_scale', 1.5)
         multi_lookahead_blend_alpha = kwargs.pop('multi_lookahead_blend_alpha', 0.35)
@@ -110,6 +124,17 @@ class TrajectoryPlanningInference:
         )
         self.ref_x_rate_limit_turn_scale_max = float(
             np.clip(ref_x_rate_limit_turn_scale_max, 1.0, 6.0)
+        )
+        self.ref_sign_flip_disable_on_turn = bool(ref_sign_flip_disable_on_turn)
+        self.ref_sign_flip_disable_heading_min_abs_rad = float(
+            np.clip(ref_sign_flip_disable_heading_min_abs_rad, 0.0, 1.0)
+        )
+        self.ref_x_rate_limit_precurve_enabled = bool(ref_x_rate_limit_precurve_enabled)
+        self.ref_x_rate_limit_precurve_heading_min_abs_rad = float(
+            np.clip(ref_x_rate_limit_precurve_heading_min_abs_rad, 0.0, 1.0)
+        )
+        self.ref_x_rate_limit_precurve_scale_max = float(
+            np.clip(ref_x_rate_limit_precurve_scale_max, 1.0, 8.0)
         )
         self.multi_lookahead_enabled = bool(multi_lookahead_enabled)
         self.multi_lookahead_far_scale = float(np.clip(multi_lookahead_far_scale, 1.0, 3.0))
@@ -372,8 +397,12 @@ class TrajectoryPlanningInference:
 
         # PREFERRED: Use lane positions in vehicle coordinates if available (most accurate)
         if use_direct and lane_positions is not None:
-            left_lane_line_x = lane_positions.get('left_lane_line_x') or lane_positions.get('left_lane_x')  # Backward compatibility
-            right_lane_line_x = lane_positions.get('right_lane_line_x') or lane_positions.get('right_lane_x')  # Backward compatibility
+            left_lane_line_x = lane_positions.get('left_lane_line_x')  # Backward compatibility
+            if left_lane_line_x is None:
+                left_lane_line_x = lane_positions.get('left_lane_x')
+            right_lane_line_x = lane_positions.get('right_lane_line_x')  # Backward compatibility
+            if right_lane_line_x is None:
+                right_lane_line_x = lane_positions.get('right_lane_x')
             if left_lane_line_x is not None and right_lane_line_x is not None:
                 # CRITICAL FIX: If both lanes are 0.0 (perception failed), return None
                 # Don't drive when perception fails - car should not move
@@ -386,9 +415,20 @@ class TrajectoryPlanningInference:
                 # This is what ref_x should be - the center of the detected road
                 lane_width = right_lane_line_x - left_lane_line_x
                 
+                use_target_width = self.target_lane_width_m > 0.0
                 if lane_width <= 0:
                     center_x = (left_lane_line_x + right_lane_line_x) / 2.0
                     logger.debug(f"[TRAJECTORY] Invalid lane_width={lane_width:.3f}, using road center")
+                elif self.target_lane == "right":
+                    if use_target_width:
+                        center_x = right_lane_line_x - (self.target_lane_width_m * 0.5)
+                    else:
+                        center_x = left_lane_line_x + (0.75 * lane_width)
+                elif self.target_lane == "left":
+                    if use_target_width:
+                        center_x = left_lane_line_x + (self.target_lane_width_m * 0.5)
+                    else:
+                        center_x = left_lane_line_x + (0.25 * lane_width)
                 else:
                     # Road center = midpoint of detected lane lines (same as cyan line)
                     center_x = (left_lane_line_x + right_lane_line_x) / 2.0
@@ -728,22 +768,33 @@ class TrajectoryPlanningInference:
         if minimal_smoothing and self.last_smoothed_ref_point is not None:
             raw_x = raw_ref_point.get('raw_x', raw_ref_point['x'])
             last_x = self.last_smoothed_ref_point.get('x', 0.0)
+            raw_heading_for_limiters = float(
+                raw_ref_point.get('raw_heading', raw_ref_point.get('heading', 0.0))
+            )
+            heading_abs_for_limiters = (
+                abs(raw_heading_for_limiters) if np.isfinite(raw_heading_for_limiters) else 0.0
+            )
             if self.ref_sign_flip_threshold > 0.0:
-                if raw_x * last_x < 0 and abs(raw_x) < self.ref_sign_flip_threshold:
+                sign_flip_is_turning = (
+                    self.ref_sign_flip_disable_on_turn
+                    and heading_abs_for_limiters >= self.ref_sign_flip_disable_heading_min_abs_rad
+                )
+                if (
+                    raw_x * last_x < 0
+                    and abs(raw_x) < self.ref_sign_flip_threshold
+                    and not sign_flip_is_turning
+                ):
                     raw_ref_point['raw_x'] = raw_x
                     raw_ref_point['x'] = last_x
             if self.ref_x_rate_limit > 0.0:
                 # Relax ref_x rate limiting on meaningful turns to avoid over-suppressing
                 # legitimate curve-entry reference changes.
                 effective_ref_x_rate_limit = self.ref_x_rate_limit
-                raw_heading_for_rate_limit = float(
-                    raw_ref_point.get('raw_heading', raw_ref_point.get('heading', 0.0))
-                )
                 if (
                     self.ref_x_rate_limit_turn_heading_min_abs_rad > 1e-6
-                    and np.isfinite(raw_heading_for_rate_limit)
+                    and np.isfinite(raw_heading_for_limiters)
                 ):
-                    heading_abs = abs(raw_heading_for_rate_limit)
+                    heading_abs = abs(raw_heading_for_limiters)
                     turn_ratio = heading_abs / self.ref_x_rate_limit_turn_heading_min_abs_rad
                     turn_ratio = float(np.clip(turn_ratio, 0.0, 1.0))
                     turn_scale = (
@@ -751,6 +802,24 @@ class TrajectoryPlanningInference:
                         + turn_ratio * (self.ref_x_rate_limit_turn_scale_max - 1.0)
                     )
                     effective_ref_x_rate_limit = self.ref_x_rate_limit * turn_scale
+                if (
+                    self.ref_x_rate_limit_precurve_enabled
+                    and self.ref_x_rate_limit_precurve_heading_min_abs_rad > 1e-6
+                    and np.isfinite(raw_heading_for_limiters)
+                ):
+                    precurve_ratio = (
+                        heading_abs_for_limiters
+                        / self.ref_x_rate_limit_precurve_heading_min_abs_rad
+                    )
+                    precurve_ratio = float(np.clip(precurve_ratio, 0.0, 1.0))
+                    precurve_scale = (
+                        1.0
+                        + precurve_ratio * (self.ref_x_rate_limit_precurve_scale_max - 1.0)
+                    )
+                    effective_ref_x_rate_limit = max(
+                        effective_ref_x_rate_limit,
+                        self.ref_x_rate_limit * precurve_scale,
+                    )
                 delta_x = raw_ref_point['x'] - last_x
                 if abs(delta_x) > effective_ref_x_rate_limit:
                     raw_ref_point['raw_x'] = raw_ref_point.get('raw_x', raw_x)

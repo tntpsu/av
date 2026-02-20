@@ -170,6 +170,31 @@ def analyze_trajectory_layer_localization(rec: Path, clip_limit_m: float = 15.0)
             if "diag_dynamic_effective_horizon_applied" in t
             else np.array([], dtype=np.float64)
         )
+        far_band_active = (
+            np.asarray(t["diag_far_band_contribution_limited_active"][:n], dtype=np.float64)
+            if "diag_far_band_contribution_limited_active" in t
+            else np.array([], dtype=np.float64)
+        )
+        far_band_scale_mean = (
+            np.asarray(t["diag_far_band_contribution_scale_mean_12_20m"][:n], dtype=np.float64)
+            if "diag_far_band_contribution_scale_mean_12_20m" in t
+            else np.array([], dtype=np.float64)
+        )
+        far_band_limited_frac = (
+            np.asarray(t["diag_far_band_contribution_limited_frac_12_20m"][:n], dtype=np.float64)
+            if "diag_far_band_contribution_limited_frac_12_20m" in t
+            else np.array([], dtype=np.float64)
+        )
+        speed_horizon_guardrail_active = (
+            np.asarray(t["diag_speed_horizon_guardrail_active"][:n], dtype=np.float64)
+            if "diag_speed_horizon_guardrail_active" in t
+            else np.array([], dtype=np.float64)
+        )
+        speed_horizon_guardrail_margin = (
+            np.asarray(t["diag_speed_horizon_guardrail_margin_m"][:n], dtype=np.float64)
+            if "diag_speed_horizon_guardrail_margin_m" in t
+            else np.array([], dtype=np.float64)
+        )
 
         result: dict[str, Any] = {
             "recording": str(rec),
@@ -291,6 +316,33 @@ def analyze_trajectory_layer_localization(rec: Path, clip_limit_m: float = 15.0)
                     "curvature_2": int(np.sum(limiter_valid == 2.0)),
                     "confidence_3": int(np.sum(limiter_valid == 3.0)),
                 } if limiter_valid.size > 0 else None,
+            }
+        if (
+            far_band_active.size > 0
+            or far_band_scale_mean.size > 0
+            or far_band_limited_frac.size > 0
+        ):
+            result["far_band_contribution_cap"] = {
+                "active_rate": float(
+                    np.mean(far_band_active[np.isfinite(far_band_active)] > 0.5)
+                ) if np.isfinite(far_band_active).any() else None,
+                "scale_mean_12_20m": summarize(
+                    far_band_scale_mean[np.isfinite(far_band_scale_mean)].tolist()
+                ),
+                "limited_frac_12_20m": summarize(
+                    far_band_limited_frac[np.isfinite(far_band_limited_frac)].tolist()
+                ),
+            }
+        if speed_horizon_guardrail_active.size > 0 or speed_horizon_guardrail_margin.size > 0:
+            result["speed_horizon_guardrail"] = {
+                "active_rate": float(
+                    np.mean(
+                        speed_horizon_guardrail_active[np.isfinite(speed_horizon_guardrail_active)] > 0.5
+                    )
+                ) if np.isfinite(speed_horizon_guardrail_active).any() else None,
+                "margin_m": summarize(
+                    speed_horizon_guardrail_margin[np.isfinite(speed_horizon_guardrail_margin)].tolist()
+                ),
             }
 
         hint = "insufficient_data"

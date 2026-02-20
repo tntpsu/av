@@ -53,6 +53,9 @@ class Visualizer {
         this.curveEntryWindowDistanceM = 8.0;
         this.distanceFromStartSeries = null;
         this.distanceFromStartSeriesSource = 'none';
+        this.rightLaneCenterBaseline = null;
+        this.rightLaneCenterSource = 'none';
+        this.rightLaneCenterAlertThresholdM = 0.35;
         this.expectedTrackKey = 's_loop';
         this.trackCurveWindows = null;
         this.topdownSmoothedTrajectory = null;
@@ -814,6 +817,7 @@ class Visualizer {
             this.updateRecordingMetaBadges();
             await this.loadTrackCurveWindows('s_loop');
             await this.loadDistanceFromStartSeries();
+            await this.loadRightLaneCenterBaseline();
             this.topdownAvailable = Boolean(this.currentRecordingMeta?.topdown_available ?? true);
             this.setTopdownAvailability(this.topdownAvailable);
             document.getElementById('frame-count').textContent = this.frameCount;
@@ -875,7 +879,24 @@ class Visualizer {
             );
             const tSeries = data?.signals?.['vehicle/road_center_reference_t'] || null;
             const trackTotal = Number(this.trackCurveWindows?.total_length_m);
-            if (Array.isArray(tSeries) && Number.isFinite(trackTotal) && trackTotal > 0) {
+            const tSeriesFinite = Array.isArray(tSeries)
+                ? tSeries
+                    .map((x) => Number(x))
+                    .filter((x) => Number.isFinite(x))
+                : [];
+            const hasTrackProgressVariation = tSeriesFinite.length > 1 && (() => {
+                const first = tSeriesFinite[0];
+                for (let i = 1; i < tSeriesFinite.length; i += 1) {
+                    if (Math.abs(tSeriesFinite[i] - first) > 1e-6) return true;
+                }
+                return false;
+            })();
+            if (
+                Array.isArray(tSeries)
+                && Number.isFinite(trackTotal)
+                && trackTotal > 0
+                && hasTrackProgressVariation
+            ) {
                 this.distanceFromStartSeries = tSeries.map((tRaw) => {
                     const t = Number(tRaw);
                     if (!Number.isFinite(t)) return null;
@@ -889,12 +910,49 @@ class Visualizer {
                 this.distanceFromStartSeriesSource = 'track_progress';
             } else {
                 this.distanceFromStartSeries = data?.signals?.['derived/distance_m'] || null;
-                this.distanceFromStartSeriesSource = this.distanceFromStartSeries ? 'integrated_speed' : 'none';
+                if (this.distanceFromStartSeries && Array.isArray(tSeries) && !hasTrackProgressVariation) {
+                    this.distanceFromStartSeriesSource = 'integrated_speed_fallback_track_progress_flat';
+                } else {
+                    this.distanceFromStartSeriesSource = this.distanceFromStartSeries ? 'integrated_speed' : 'none';
+                }
             }
         } catch (error) {
             console.warn('Could not load derived distance series:', error);
             this.distanceFromStartSeries = null;
             this.distanceFromStartSeriesSource = 'none';
+        }
+    }
+
+    async loadRightLaneCenterBaseline() {
+        this.rightLaneCenterBaseline = null;
+        this.rightLaneCenterSource = 'none';
+        if (!this.currentRecording) return;
+        try {
+            const data = await this.dataLoader.loadTimeSeries(
+                ['vehicle/road_frame_lane_center_error', 'control/lateral_error'],
+                'vehicle/timestamps'
+            );
+            const laneCenterSeries = data?.signals?.['vehicle/road_frame_lane_center_error'] || null;
+            const lateralErrorSeries = data?.signals?.['control/lateral_error'] || null;
+            const pickedSeries = Array.isArray(laneCenterSeries) ? laneCenterSeries : lateralErrorSeries;
+            if (!Array.isArray(pickedSeries) || pickedSeries.length === 0) return;
+            const finite = pickedSeries
+                .slice(0, Math.min(60, pickedSeries.length))
+                .map((x) => Number(x))
+                .filter((x) => Number.isFinite(x));
+            if (finite.length === 0) return;
+            finite.sort((a, b) => a - b);
+            const mid = Math.floor(finite.length / 2);
+            this.rightLaneCenterBaseline = finite.length % 2
+                ? finite[mid]
+                : 0.5 * (finite[mid - 1] + finite[mid]);
+            this.rightLaneCenterSource = Array.isArray(laneCenterSeries)
+                ? 'vehicle/road_frame_lane_center_error'
+                : 'control/lateral_error';
+        } catch (error) {
+            console.warn('Could not load right-lane center baseline:', error);
+            this.rightLaneCenterBaseline = null;
+            this.rightLaneCenterSource = 'none';
         }
     }
 
@@ -966,9 +1024,11 @@ class Visualizer {
                 : '-';
             frameDistanceElem.title = this.distanceFromStartSeriesSource === 'track_progress'
                 ? 'Distance from track progress (road_center_reference_t)'
-                : (this.distanceFromStartSeriesSource === 'integrated_speed'
-                    ? 'Distance from integrated speed (derived)'
-                    : 'Distance source unavailable');
+                : (this.distanceFromStartSeriesSource === 'integrated_speed_fallback_track_progress_flat'
+                    ? 'Distance from integrated speed (track progress was flat in this recording)'
+                    : (this.distanceFromStartSeriesSource === 'integrated_speed'
+                        ? 'Distance from integrated speed (derived)'
+                        : 'Distance source unavailable'));
         }
         if (!expectedElem) return;
         const state = this.getExpectedCurveState(d);
@@ -2685,14 +2745,23 @@ class Visualizer {
 
     updateDataPanel() {
         if (!this.currentFrameData) return;
-        
-        // Update all tabs (including new "All Data" tab)
-        this.updatePerceptionData();
-        this.updateTrajectoryData();
-        this.updateProjectionData();
-        this.updateControlData();
-        this.updateVehicleData();
-        this.updateGroundTruthData();
+
+        // Keep overlay redraw resilient: one panel failure should not block frame rendering.
+        const safeUpdate = (label, fn) => {
+            try {
+                fn();
+            } catch (error) {
+                console.error(`Error updating ${label} panel:`, error);
+            }
+        };
+
+        // Update all tabs (including "All Data" tab).
+        safeUpdate('perception', () => this.updatePerceptionData());
+        safeUpdate('trajectory', () => this.updateTrajectoryData());
+        safeUpdate('projection', () => this.updateProjectionData());
+        safeUpdate('control', () => this.updateControlData());
+        safeUpdate('vehicle', () => this.updateVehicleData());
+        safeUpdate('ground_truth', () => this.updateGroundTruthData());
     }
 
     quatMultiply(a, b) {
@@ -3295,6 +3364,19 @@ class Visualizer {
             dynamicHorizonConfidenceUsed: null,
             dynamicHorizonLimiterCode: null,
             dynamicHorizonApplied: null,
+            speedHorizonGuardrailActive: null,
+            speedHorizonGuardrailMarginM: null,
+            speedHorizonGuardrailHorizonM: null,
+            speedHorizonGuardrailTimeHeadwayS: null,
+            speedHorizonGuardrailMarginBufferM: null,
+            speedHorizonGuardrailAllowedSpeedMps: null,
+            speedHorizonGuardrailTargetSpeedBeforeMps: null,
+            speedHorizonGuardrailTargetSpeedAfterMps: null,
+            farBandContributionLimitedActive: null,
+            farBandContributionLimitStartM: null,
+            farBandContributionLimitGain: null,
+            farBandContributionScaleMean12to20m: null,
+            farBandContributionLimitedFrac12to20m: null,
             xClipCount: null,
             heavyXClipping: null,
             preclipXAbsMax: null,
@@ -3513,6 +3595,66 @@ class Visualizer {
         const diagDynamicApplied = Number(t?.diag_dynamic_effective_horizon_applied);
         if (Number.isFinite(diagDynamicApplied)) {
             out.dynamicHorizonApplied = diagDynamicApplied > 0.5;
+        }
+        const diagSpeedHorizonGuardrailActive = Number(t?.diag_speed_horizon_guardrail_active);
+        if (Number.isFinite(diagSpeedHorizonGuardrailActive)) {
+            out.speedHorizonGuardrailActive = diagSpeedHorizonGuardrailActive > 0.5;
+        }
+        const diagSpeedHorizonGuardrailMarginM = Number(t?.diag_speed_horizon_guardrail_margin_m);
+        if (Number.isFinite(diagSpeedHorizonGuardrailMarginM)) {
+            out.speedHorizonGuardrailMarginM = diagSpeedHorizonGuardrailMarginM;
+        }
+        const diagSpeedHorizonGuardrailHorizonM = Number(t?.diag_speed_horizon_guardrail_horizon_m);
+        if (Number.isFinite(diagSpeedHorizonGuardrailHorizonM)) {
+            out.speedHorizonGuardrailHorizonM = diagSpeedHorizonGuardrailHorizonM;
+        }
+        const diagSpeedHorizonGuardrailTimeHeadwayS = Number(t?.diag_speed_horizon_guardrail_time_headway_s);
+        if (Number.isFinite(diagSpeedHorizonGuardrailTimeHeadwayS)) {
+            out.speedHorizonGuardrailTimeHeadwayS = diagSpeedHorizonGuardrailTimeHeadwayS;
+        }
+        const diagSpeedHorizonGuardrailMarginBufferM = Number(t?.diag_speed_horizon_guardrail_margin_buffer_m);
+        if (Number.isFinite(diagSpeedHorizonGuardrailMarginBufferM)) {
+            out.speedHorizonGuardrailMarginBufferM = diagSpeedHorizonGuardrailMarginBufferM;
+        }
+        const diagSpeedHorizonGuardrailAllowedSpeedMps = Number(t?.diag_speed_horizon_guardrail_allowed_speed_mps);
+        if (Number.isFinite(diagSpeedHorizonGuardrailAllowedSpeedMps)) {
+            out.speedHorizonGuardrailAllowedSpeedMps = diagSpeedHorizonGuardrailAllowedSpeedMps;
+        }
+        const diagSpeedHorizonGuardrailTargetSpeedBeforeMps = Number(
+            t?.diag_speed_horizon_guardrail_target_speed_before_mps
+        );
+        if (Number.isFinite(diagSpeedHorizonGuardrailTargetSpeedBeforeMps)) {
+            out.speedHorizonGuardrailTargetSpeedBeforeMps = diagSpeedHorizonGuardrailTargetSpeedBeforeMps;
+        }
+        const diagSpeedHorizonGuardrailTargetSpeedAfterMps = Number(
+            t?.diag_speed_horizon_guardrail_target_speed_after_mps
+        );
+        if (Number.isFinite(diagSpeedHorizonGuardrailTargetSpeedAfterMps)) {
+            out.speedHorizonGuardrailTargetSpeedAfterMps = diagSpeedHorizonGuardrailTargetSpeedAfterMps;
+        }
+        const diagFarBandContributionLimitedActive = Number(t?.diag_far_band_contribution_limited_active);
+        if (Number.isFinite(diagFarBandContributionLimitedActive)) {
+            out.farBandContributionLimitedActive = diagFarBandContributionLimitedActive > 0.5;
+        }
+        const diagFarBandContributionLimitStartM = Number(t?.diag_far_band_contribution_limit_start_m);
+        if (Number.isFinite(diagFarBandContributionLimitStartM)) {
+            out.farBandContributionLimitStartM = diagFarBandContributionLimitStartM;
+        }
+        const diagFarBandContributionLimitGain = Number(t?.diag_far_band_contribution_limit_gain);
+        if (Number.isFinite(diagFarBandContributionLimitGain)) {
+            out.farBandContributionLimitGain = diagFarBandContributionLimitGain;
+        }
+        const diagFarBandContributionScaleMean1220 = Number(
+            t?.diag_far_band_contribution_scale_mean_12_20m
+        );
+        if (Number.isFinite(diagFarBandContributionScaleMean1220)) {
+            out.farBandContributionScaleMean12to20m = diagFarBandContributionScaleMean1220;
+        }
+        const diagFarBandContributionLimitedFrac1220 = Number(
+            t?.diag_far_band_contribution_limited_frac_12_20m
+        );
+        if (Number.isFinite(diagFarBandContributionLimitedFrac1220)) {
+            out.farBandContributionLimitedFrac12to20m = diagFarBandContributionLimitedFrac1220;
         }
         const xClipCount = Number(t?.diag_x_clip_count);
         if (Number.isFinite(xClipCount)) {
@@ -4142,7 +4284,6 @@ class Visualizer {
             if (elem) elem.textContent = value;
             if (allElem) allElem.textContent = value;
         };
-        
         updateField('perception-method', p.detection_method || '-');
         updateField('perception-confidence', p.confidence !== undefined ? p.confidence.toFixed(3) : '-');
         updateField('perception-num-lanes', p.num_lanes_detected || '-');
@@ -4726,6 +4867,72 @@ class Visualizer {
             fmtGate(d.traj_dynamic_horizon_applied, 'diag_dynamic_effective_horizon_applied > 0.5')
         );
         updateField(
+            'projection-traj-speed-horizon-guardrail-active',
+            fmtGate(
+                d.traj_speed_horizon_guardrail_active,
+                'diag_speed_horizon_guardrail_active > 0.5'
+            )
+        );
+        updateField(
+            'projection-traj-speed-horizon-guardrail-margin-m',
+            Number.isFinite(Number(d.traj_speed_horizon_guardrail_margin_m))
+                ? `${Number(d.traj_speed_horizon_guardrail_margin_m).toFixed(2)} m`
+                : '-'
+        );
+        if (
+            Number.isFinite(Number(d.traj_speed_horizon_guardrail_allowed_speed_mps)) &&
+            Number.isFinite(Number(d.traj_speed_horizon_guardrail_target_speed_before_mps)) &&
+            Number.isFinite(Number(d.traj_speed_horizon_guardrail_target_speed_after_mps))
+        ) {
+            updateField(
+                'projection-traj-speed-horizon-guardrail-speeds',
+                `${Number(d.traj_speed_horizon_guardrail_allowed_speed_mps).toFixed(2)} / ${Number(d.traj_speed_horizon_guardrail_target_speed_before_mps).toFixed(2)} / ${Number(d.traj_speed_horizon_guardrail_target_speed_after_mps).toFixed(2)}`
+            );
+        } else {
+            updateField('projection-traj-speed-horizon-guardrail-speeds', '-');
+        }
+        if (
+            Number.isFinite(Number(d.traj_speed_horizon_guardrail_time_headway_s)) &&
+            Number.isFinite(Number(d.traj_speed_horizon_guardrail_margin_buffer_m))
+        ) {
+            updateField(
+                'projection-traj-speed-horizon-guardrail-params',
+                `${Number(d.traj_speed_horizon_guardrail_time_headway_s).toFixed(2)} s / ${Number(d.traj_speed_horizon_guardrail_margin_buffer_m).toFixed(2)} m`
+            );
+        } else {
+            updateField('projection-traj-speed-horizon-guardrail-params', '-');
+        }
+        updateField(
+            'projection-traj-far-band-cap-active',
+            fmtGate(
+                d.traj_far_band_contribution_limited_active,
+                'diag_far_band_contribution_limited_active > 0.5'
+            )
+        );
+        if (
+            Number.isFinite(Number(d.traj_far_band_contribution_limit_start_m)) &&
+            Number.isFinite(Number(d.traj_far_band_contribution_limit_gain))
+        ) {
+            updateField(
+                'projection-traj-far-band-cap-params',
+                `${Number(d.traj_far_band_contribution_limit_start_m).toFixed(1)} m / ${Number(d.traj_far_band_contribution_limit_gain).toFixed(2)}`
+            );
+        } else {
+            updateField('projection-traj-far-band-cap-params', '-');
+        }
+        updateField(
+            'projection-traj-far-band-cap-scale-mean',
+            Number.isFinite(Number(d.traj_far_band_contribution_scale_mean_12_20m))
+                ? Number(d.traj_far_band_contribution_scale_mean_12_20m).toFixed(2)
+                : '-'
+        );
+        updateField(
+            'projection-traj-far-band-cap-limited-frac',
+            Number.isFinite(Number(d.traj_far_band_contribution_limited_frac_12_20m))
+                ? Number(d.traj_far_band_contribution_limited_frac_12_20m).toFixed(2)
+                : '-'
+        );
+        updateField(
             'projection-traj-x-clip-count',
             Number.isFinite(Number(d.traj_x_clip_count)) ? Number(d.traj_x_clip_count).toFixed(0) : '-'
         );
@@ -5047,6 +5254,14 @@ class Visualizer {
             if (elem) elem.textContent = value;
             if (allElem) allElem.textContent = value;
         };
+        const setControlRowVisible = (id, visible) => {
+            [id, `all-${id}`].forEach((fieldId) => {
+                const elem = document.getElementById(fieldId);
+                if (!elem) return;
+                const row = elem.closest('tr');
+                if (row) row.style.display = visible ? '' : 'none';
+            });
+        };
         
         updateField('control-steering', c.steering !== undefined ? c.steering.toFixed(4) : '-');
         updateField('control-throttle', c.throttle !== undefined ? c.throttle.toFixed(4) : '-');
@@ -5176,17 +5391,42 @@ class Visualizer {
             : 'missing';
         const roadSourceLabel = c.road_curvature_source ? String(c.road_curvature_source) : '-';
         const holdRemLabel = schedFmtInt(c.road_straight_invalid_hold_frames_remaining);
+        const vehicleFrame = this.currentFrameData?.vehicle || {};
+        const laneCenterRaw = Number.isFinite(Number(vehicleFrame.road_frame_lane_center_error))
+            ? Number(vehicleFrame.road_frame_lane_center_error)
+            : (Number.isFinite(Number(c.lateral_error)) ? Number(c.lateral_error) : null);
+        const rightLaneDev = (
+            Number.isFinite(laneCenterRaw) && Number.isFinite(this.rightLaneCenterBaseline)
+        )
+            ? (laneCenterRaw - this.rightLaneCenterBaseline)
+            : null;
+        const rightLaneDevAbs = Number.isFinite(rightLaneDev) ? Math.abs(rightLaneDev) : null;
+        const rightLaneState = Number.isFinite(rightLaneDevAbs)
+            ? (rightLaneDevAbs > this.rightLaneCenterAlertThresholdM ? 'OFFCENTER⚠' : 'centered')
+            : 'missing';
         updateField(
             'control-steering-curve-entry-schedule-primary',
             `${schedFmtCfg(c.curve_entry_schedule_enabled_cfg)} / ${schedFmtOnOff(c.curve_entry_schedule_active)} / ${schedFmtYesNo(c.curve_entry_schedule_triggered)} / ${schedFmtYesNo(c.curve_entry_schedule_handoff_triggered)} / ${schedFmtInt(c.curve_entry_schedule_frames_remaining)}`
         );
         updateField(
             'control-steering-curve-entry-schedule-context',
-            `proxy=${proxyStraightLabel}, upcoming=${curveUpcomingLabel}, atCar=${curveAtCarLabel}, remM=${curveAtCarRemLabel}, prog=${schedFmtFloat(c.current_curve_progress_ratio, 3)}, dynActive=${dynActiveLabel}, def=${schedFmtFloat(c.dynamic_curve_rate_deficit, 3)}, boostR=${schedFmtFloat(c.dynamic_curve_rate_boost, 3)}, boostJ=${schedFmtFloat(c.dynamic_curve_jerk_boost_factor, 2)}, boostCapR=${schedFmtFloat(c.dynamic_curve_rate_boost_cap_effective, 3)}, boostCapJ=${schedFmtFloat(c.dynamic_curve_jerk_boost_cap_effective, 2)}, clipBoost=${schedFmtFloat(c.dynamic_curve_hard_clip_boost, 3)}/${schedFmtFloat(c.dynamic_curve_hard_clip_boost_cap_effective, 3)}, clipLim=${schedFmtFloat(c.dynamic_curve_hard_clip_limit_effective, 3)}, gLat=${schedFmtFloat(c.dynamic_curve_lateral_accel_est_g, 3)}, gJRaw=${schedFmtFloat(c.dynamic_curve_lateral_jerk_est_gps, 3)}, gJSm=${schedFmtFloat(c.dynamic_curve_lateral_jerk_est_smoothed_gps, 3)}, sScale=${schedFmtFloat(c.dynamic_curve_speed_scale, 2)}, cScale=${schedFmtFloat(c.dynamic_curve_comfort_scale, 2)}, aGate=${schedFmtFloat(c.dynamic_curve_comfort_accel_gate, 2)}, jPen=${schedFmtFloat(c.dynamic_curve_comfort_jerk_penalty, 2)}, streak=${schedFmtInt(c.dynamic_curve_authority_deficit_streak)}, kProxy=${schedFmtFloat(c.steering_rate_limit_curve_metric_abs, 4)}, upEnter=${schedFmtFloat(c.curve_upcoming_enter_threshold_cfg, 4)}, upExit=${schedFmtFloat(c.curve_upcoming_exit_threshold_cfg, 4)}, road=${roadStraightLabel}, valid=${roadValidLabel}, source=${roadSourceLabel}, kRoad=${schedFmtFloat(c.road_curvature_abs, 4)}, enter=${schedFmtFloat(c.road_curve_enter_threshold_cfg, 4)}, exit=${schedFmtFloat(c.road_curve_exit_threshold_cfg, 4)}, holdRem=${holdRemLabel}`
+            `proxy=${proxyStraightLabel}, upcoming=${curveUpcomingLabel}, atCar=${curveAtCarLabel}, remM=${curveAtCarRemLabel}, prog=${schedFmtFloat(c.current_curve_progress_ratio, 3)}, road=${roadStraightLabel}, valid=${roadValidLabel}, source=${roadSourceLabel}, kRoad=${schedFmtFloat(c.road_curvature_abs, 4)}, holdRem=${holdRemLabel}`
         );
         updateField(
             'control-steering-curve-entry-schedule-params',
-            `f=${schedFmtInt(c.curve_entry_schedule_frames_cfg)}, r=${schedFmtFloat(c.curve_entry_schedule_min_rate_cfg, 3)}, j=${schedFmtFloat(c.curve_entry_schedule_min_jerk_cfg, 3)}, hold=${schedFmtInt(c.curve_entry_schedule_min_hold_frames_cfg)}, progMin=${schedFmtFloat(c.curve_entry_schedule_min_curve_progress_ratio_cfg, 2)}, fbDyn=${schedFmtCfg(c.curve_entry_schedule_fallback_only_when_dynamic_cfg)}, fbN=${schedFmtInt(c.curve_entry_schedule_fallback_deficit_frames_cfg)}, fbDef=${schedFmtFloat(c.curve_entry_schedule_fallback_rate_deficit_min_cfg, 3)}, dyn=${schedFmtCfg(c.dynamic_curve_authority_enabled_cfg)}, dDB=${schedFmtFloat(c.dynamic_curve_rate_deficit_deadband_cfg, 3)}, dGain=${schedFmtFloat(c.dynamic_curve_rate_boost_gain_cfg, 2)}, dMax=${schedFmtFloat(c.dynamic_curve_rate_boost_max_cfg, 2)}, dClipGain=${schedFmtFloat(c.dynamic_curve_hard_clip_boost_gain_cfg, 2)}, dClipMax=${schedFmtFloat(c.dynamic_curve_hard_clip_boost_max_cfg, 2)}, gComfort=${schedFmtFloat(c.dynamic_curve_comfort_lat_accel_comfort_max_g_cfg, 2)}, gPeak=${schedFmtFloat(c.dynamic_curve_comfort_lat_accel_peak_max_g_cfg, 2)}, gJComfort=${schedFmtFloat(c.dynamic_curve_comfort_lat_jerk_comfort_max_gps_cfg, 2)}, jAlpha=${schedFmtFloat(c.dynamic_curve_lat_jerk_smoothing_alpha_cfg, 2)}, jStart=${schedFmtFloat(c.dynamic_curve_lat_jerk_soft_start_ratio_cfg, 2)}, jFloor=${schedFmtFloat(c.dynamic_curve_lat_jerk_soft_floor_scale_cfg, 2)}, vLo=${schedFmtFloat(c.dynamic_curve_speed_low_mps_cfg, 1)}, vHi=${schedFmtFloat(c.dynamic_curve_speed_high_mps_cfg, 1)}, sMax=${schedFmtFloat(c.dynamic_curve_speed_boost_max_scale_cfg, 2)}`
+            `f=${schedFmtInt(c.curve_entry_schedule_frames_cfg)}, r=${schedFmtFloat(c.curve_entry_schedule_min_rate_cfg, 3)}, j=${schedFmtFloat(c.curve_entry_schedule_min_jerk_cfg, 3)}, hold=${schedFmtInt(c.curve_entry_schedule_min_hold_frames_cfg)}, progMin=${schedFmtFloat(c.curve_entry_schedule_min_curve_progress_ratio_cfg, 2)}, fbDyn=${schedFmtCfg(c.curve_entry_schedule_fallback_only_when_dynamic_cfg)}, fbN=${schedFmtInt(c.curve_entry_schedule_fallback_deficit_frames_cfg)}, fbDef=${schedFmtFloat(c.curve_entry_schedule_fallback_rate_deficit_min_cfg, 3)}`
+        );
+        updateField(
+            'control-steering-dynamic-governor-primary',
+            `${schedFmtCfg(c.dynamic_curve_authority_enabled_cfg)} / ${schedFmtCfg(c.dynamic_curve_entry_governor_enabled_cfg)} / ${schedFmtCfg(c.dynamic_curve_single_owner_mode_cfg)} / ${dynActiveLabel} / ${schedFmtYesNo(c.dynamic_curve_entry_governor_active)} / ${schedFmtFloat(c.dynamic_curve_entry_governor_scale, 2)}`
+        );
+        updateField(
+            'control-steering-dynamic-governor-context',
+            `def=${schedFmtFloat(c.dynamic_curve_rate_deficit, 3)}, boostR=${schedFmtFloat(c.dynamic_curve_rate_boost, 3)}, boostJ=${schedFmtFloat(c.dynamic_curve_jerk_boost_factor, 2)}, boostCapR=${schedFmtFloat(c.dynamic_curve_rate_boost_cap_effective, 3)}, boostCapJ=${schedFmtFloat(c.dynamic_curve_jerk_boost_cap_effective, 2)}, clipBoost=${schedFmtFloat(c.dynamic_curve_hard_clip_boost, 3)}/${schedFmtFloat(c.dynamic_curve_hard_clip_boost_cap_effective, 3)}, clipLim=${schedFmtFloat(c.dynamic_curve_hard_clip_limit_effective, 3)}, gLat=${schedFmtFloat(c.dynamic_curve_lateral_accel_est_g, 3)}, gJRaw=${schedFmtFloat(c.dynamic_curve_lateral_jerk_est_gps, 3)}, gJSm=${schedFmtFloat(c.dynamic_curve_lateral_jerk_est_smoothed_gps, 3)}, sScale=${schedFmtFloat(c.dynamic_curve_speed_scale, 2)}, cScale=${schedFmtFloat(c.dynamic_curve_comfort_scale, 2)}, aGate=${schedFmtFloat(c.dynamic_curve_comfort_accel_gate, 2)}, jPen=${schedFmtFloat(c.dynamic_curve_comfort_jerk_penalty, 2)}, feasA=${schedFmtYesNo(c.turn_feasibility_active)}, feasInf=${schedFmtYesNo(c.turn_feasibility_infeasible)}, feasReqG=${schedFmtFloat(c.turn_feasibility_required_lat_accel_g, 3)}, feasLimG=${schedFmtFloat(c.turn_feasibility_selected_limit_g, 3)}, feasMarginG=${schedFmtFloat(c.turn_feasibility_margin_g, 3)}, feasVLim=${schedFmtFloat(c.turn_feasibility_speed_limit_mps, 2)}, feasVDelta=${schedFmtFloat(c.turn_feasibility_speed_delta_mps, 2)}, unwind=${schedFmtYesNo(c.curve_unwind_active)}, uwRem=${schedFmtInt(c.curve_unwind_frames_remaining)}, uwProg=${schedFmtFloat(c.curve_unwind_progress, 2)}, uwRate=${schedFmtFloat(c.curve_unwind_rate_scale, 2)}, uwJerk=${schedFmtFloat(c.curve_unwind_jerk_scale, 2)}, uwIDec=${schedFmtFloat(c.curve_unwind_integral_decay_applied, 2)}, rightDev=${schedFmtFloat(rightLaneDev, 3)}(${rightLaneState}), streak=${schedFmtInt(c.dynamic_curve_authority_deficit_streak)}, kProxy=${schedFmtFloat(c.steering_rate_limit_curve_metric_abs, 4)}, upEnter=${schedFmtFloat(c.curve_upcoming_enter_threshold_cfg, 4)}, upExit=${schedFmtFloat(c.curve_upcoming_exit_threshold_cfg, 4)}, enter=${schedFmtFloat(c.road_curve_enter_threshold_cfg, 4)}, exit=${schedFmtFloat(c.road_curve_exit_threshold_cfg, 4)}`
+        );
+        updateField(
+            'control-steering-dynamic-governor-params',
+            `govEx=${schedFmtCfg(c.dynamic_curve_entry_governor_exclusive_mode_cfg)}, govAnt=${schedFmtCfg(c.dynamic_curve_entry_governor_anticipatory_enabled_cfg)}, govUpW=${schedFmtFloat(c.dynamic_curve_entry_governor_upcoming_phase_weight_cfg, 2)}, precurve=${schedFmtCfg(c.dynamic_curve_authority_precurve_enabled_cfg)}, precurveScale=${schedFmtFloat(c.dynamic_curve_authority_precurve_scale_cfg, 2)}, singleOwner=${schedFmtCfg(c.dynamic_curve_single_owner_mode_cfg)}, soMinR=${schedFmtFloat(c.dynamic_curve_single_owner_min_rate_cfg, 3)}, soMinJ=${schedFmtFloat(c.dynamic_curve_single_owner_min_jerk_cfg, 3)}, govGain=${schedFmtFloat(c.dynamic_curve_entry_governor_gain_cfg, 2)}, govMax=${schedFmtFloat(c.dynamic_curve_entry_governor_max_scale_cfg, 2)}, govStale=${schedFmtFloat(c.dynamic_curve_entry_governor_stale_floor_scale_cfg, 2)}, dDB=${schedFmtFloat(c.dynamic_curve_rate_deficit_deadband_cfg, 3)}, dGain=${schedFmtFloat(c.dynamic_curve_rate_boost_gain_cfg, 2)}, dMax=${schedFmtFloat(c.dynamic_curve_rate_boost_max_cfg, 2)}, dClipGain=${schedFmtFloat(c.dynamic_curve_hard_clip_boost_gain_cfg, 2)}, dClipMax=${schedFmtFloat(c.dynamic_curve_hard_clip_boost_max_cfg, 2)}, feasEn=${schedFmtCfg(c.turn_feasibility_governor_enabled_cfg)}, feasPeak=${schedFmtCfg(c.turn_feasibility_use_peak_bound_cfg)}, feasKMin=${schedFmtFloat(c.turn_feasibility_curvature_min_cfg, 4)}, feasGB=${schedFmtFloat(c.turn_feasibility_guardband_g_cfg, 3)}, uwEn=${schedFmtCfg(c.curve_unwind_policy_enabled_cfg)}, uwF=${schedFmtInt(c.curve_unwind_frames_cfg)}, uwR0=${schedFmtFloat(c.curve_unwind_rate_scale_start_cfg, 2)}, uwR1=${schedFmtFloat(c.curve_unwind_rate_scale_end_cfg, 2)}, uwJ0=${schedFmtFloat(c.curve_unwind_jerk_scale_start_cfg, 2)}, uwJ1=${schedFmtFloat(c.curve_unwind_jerk_scale_end_cfg, 2)}, uwID=${schedFmtFloat(c.curve_unwind_integral_decay_cfg, 2)}, rightDevAlert=${schedFmtFloat(this.rightLaneCenterAlertThresholdM, 2)}, rightRef=${schedFmtFloat(this.rightLaneCenterBaseline, 3)}@${this.rightLaneCenterSource}, gComfort=${schedFmtFloat(c.dynamic_curve_comfort_lat_accel_comfort_max_g_cfg, 2)}, gPeak=${schedFmtFloat(c.dynamic_curve_comfort_lat_accel_peak_max_g_cfg, 2)}, gJComfort=${schedFmtFloat(c.dynamic_curve_comfort_lat_jerk_comfort_max_gps_cfg, 2)}, jAlpha=${schedFmtFloat(c.dynamic_curve_lat_jerk_smoothing_alpha_cfg, 2)}, jStart=${schedFmtFloat(c.dynamic_curve_lat_jerk_soft_start_ratio_cfg, 2)}, jFloor=${schedFmtFloat(c.dynamic_curve_lat_jerk_soft_floor_scale_cfg, 2)}, vLo=${schedFmtFloat(c.dynamic_curve_speed_low_mps_cfg, 1)}, vHi=${schedFmtFloat(c.dynamic_curve_speed_high_mps_cfg, 1)}, sMax=${schedFmtFloat(c.dynamic_curve_speed_boost_max_scale_cfg, 2)}`
         );
         const frameDistance = this.distanceFromStartSeries && this.currentFrameIndex < this.distanceFromStartSeries.length
             ? Number(this.distanceFromStartSeries[this.currentFrameIndex])
@@ -5324,6 +5564,23 @@ class Visualizer {
             'control-steering-curve-mode-speed-cap',
             `${fmtCfg(c.curve_mode_speed_cap_enabled_cfg)} / ${fmtOnOff(c.curve_mode_speed_cap_active)} / ${fmtYesNo(c.curve_mode_speed_cap_clamped)} / ${fmtFloatOrDash(c.curve_mode_speed_cap_value, 3)} / cap=${fmtFloatOrDash(c.curve_mode_speed_cap_mps_cfg, 2)},minRatio=${fmtFloatOrDash(c.curve_mode_speed_cap_min_ratio_cfg, 2)}`
         );
+        const toBool = (v) => v === true || v === 1;
+        const scheduleVisible = toBool(c.curve_entry_schedule_enabled_cfg);
+        const dynGovernorVisible = toBool(c.dynamic_curve_authority_enabled_cfg)
+            || toBool(c.dynamic_curve_entry_governor_enabled_cfg)
+            || toBool(c.dynamic_curve_single_owner_mode_cfg);
+        const assistVisible = toBool(c.curve_entry_assist_enabled_cfg);
+        const commitVisible = toBool(c.curve_commit_mode_enabled_cfg);
+        const speedCapVisible = toBool(c.curve_mode_speed_cap_enabled_cfg);
+        setControlRowVisible('control-steering-curve-entry-assist', assistVisible);
+        setControlRowVisible('control-steering-curve-entry-schedule-primary', scheduleVisible);
+        setControlRowVisible('control-steering-curve-entry-schedule-context', scheduleVisible);
+        setControlRowVisible('control-steering-curve-entry-schedule-params', scheduleVisible);
+        setControlRowVisible('control-steering-dynamic-governor-primary', dynGovernorVisible);
+        setControlRowVisible('control-steering-dynamic-governor-context', dynGovernorVisible);
+        setControlRowVisible('control-steering-dynamic-governor-params', dynGovernorVisible);
+        setControlRowVisible('control-steering-curve-commit-mode', commitVisible);
+        setControlRowVisible('control-steering-curve-mode-speed-cap', speedCapVisible);
         if (
             c.steering_rate_limit_curve_metric_abs !== undefined &&
             c.steering_rate_limit_curve_min !== undefined &&
@@ -6407,6 +6664,19 @@ class Visualizer {
         this.projectionDiagnostics.traj_dynamic_horizon_confidence_used = trajWaterfall.dynamicHorizonConfidenceUsed;
         this.projectionDiagnostics.traj_dynamic_horizon_limiter_code = trajWaterfall.dynamicHorizonLimiterCode;
         this.projectionDiagnostics.traj_dynamic_horizon_applied = trajWaterfall.dynamicHorizonApplied;
+        this.projectionDiagnostics.traj_speed_horizon_guardrail_active = trajWaterfall.speedHorizonGuardrailActive;
+        this.projectionDiagnostics.traj_speed_horizon_guardrail_margin_m = trajWaterfall.speedHorizonGuardrailMarginM;
+        this.projectionDiagnostics.traj_speed_horizon_guardrail_horizon_m = trajWaterfall.speedHorizonGuardrailHorizonM;
+        this.projectionDiagnostics.traj_speed_horizon_guardrail_time_headway_s = trajWaterfall.speedHorizonGuardrailTimeHeadwayS;
+        this.projectionDiagnostics.traj_speed_horizon_guardrail_margin_buffer_m = trajWaterfall.speedHorizonGuardrailMarginBufferM;
+        this.projectionDiagnostics.traj_speed_horizon_guardrail_allowed_speed_mps = trajWaterfall.speedHorizonGuardrailAllowedSpeedMps;
+        this.projectionDiagnostics.traj_speed_horizon_guardrail_target_speed_before_mps = trajWaterfall.speedHorizonGuardrailTargetSpeedBeforeMps;
+        this.projectionDiagnostics.traj_speed_horizon_guardrail_target_speed_after_mps = trajWaterfall.speedHorizonGuardrailTargetSpeedAfterMps;
+        this.projectionDiagnostics.traj_far_band_contribution_limited_active = trajWaterfall.farBandContributionLimitedActive;
+        this.projectionDiagnostics.traj_far_band_contribution_limit_start_m = trajWaterfall.farBandContributionLimitStartM;
+        this.projectionDiagnostics.traj_far_band_contribution_limit_gain = trajWaterfall.farBandContributionLimitGain;
+        this.projectionDiagnostics.traj_far_band_contribution_scale_mean_12_20m = trajWaterfall.farBandContributionScaleMean12to20m;
+        this.projectionDiagnostics.traj_far_band_contribution_limited_frac_12_20m = trajWaterfall.farBandContributionLimitedFrac12to20m;
         this.projectionDiagnostics.traj_x_clip_count = trajWaterfall.xClipCount;
         this.projectionDiagnostics.traj_heavy_x_clipping = trajWaterfall.heavyXClipping;
         this.projectionDiagnostics.traj_preclip_abs_max = trajWaterfall.preclipXAbsMax;
@@ -7491,6 +7761,22 @@ class Visualizer {
                     'control/steering_first_limiter_stage_code',
                     'control/feedback_steering',
                     'control/feedforward_steering'
+                ],
+                timeKey: 'vehicle/timestamps'
+            },
+            {
+                name: 'Curve Limiters + Overturn Attribution',
+                signals: [
+                    'control/steering_pre_rate_limit',
+                    'control/steering_post_smoothing',
+                    'control/steering_authority_gap',
+                    'control/steering_first_limiter_stage_code',
+                    'control/steering_hard_clip_delta',
+                    'control/dynamic_curve_rate_deficit',
+                    'control/dynamic_curve_entry_governor_scale',
+                    'control/dynamic_curve_comfort_scale',
+                    'control/pid_integral',
+                    'control/lateral_error'
                 ],
                 timeKey: 'vehicle/timestamps'
             },

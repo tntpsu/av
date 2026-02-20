@@ -217,3 +217,52 @@ def compute_dynamic_effective_horizon(
         "diag_dynamic_effective_horizon_limiter_code": float(limiter_code),
         "diag_dynamic_effective_horizon_applied": float(applied),
     }
+
+
+def apply_speed_horizon_guardrail(
+    target_speed_mps: float,
+    effective_horizon_m: float,
+    dynamic_horizon_applied: bool,
+    config: Mapping[str, object],
+) -> dict[str, float]:
+    """
+    Apply a lightweight speed-horizon consistency guardrail.
+
+    The guardrail enforces a minimum planning-distance budget:
+      required_horizon = speed * time_headway + margin_buffer
+
+    If the dynamic horizon is applied and falls below that budget, speed is
+    conservatively reduced toward the allowed speed implied by the same budget.
+    """
+    target_before = max(0.0, float(target_speed_mps))
+    horizon = max(0.1, float(effective_horizon_m))
+    applied = 1.0 if bool(dynamic_horizon_applied) else 0.0
+
+    enabled = bool(config.get("speed_horizon_guardrail_enabled", False))
+    time_headway = max(0.1, float(config.get("speed_horizon_guardrail_time_headway_s", 1.8)))
+    margin_buffer = max(0.0, float(config.get("speed_horizon_guardrail_margin_m", 1.0)))
+    min_speed = max(0.0, float(config.get("speed_horizon_guardrail_min_speed_mps", 3.0)))
+    gain = max(0.0, min(1.0, float(config.get("speed_horizon_guardrail_gain", 1.0))))
+
+    required_horizon = target_before * time_headway + margin_buffer
+    horizon_margin = horizon - required_horizon
+    allowed_speed = max(0.0, (horizon - margin_buffer) / time_headway)
+
+    guardrail_active = 0.0
+    target_after = target_before
+    if enabled and applied > 0.5 and horizon_margin < 0.0:
+        guardrail_active = 1.0
+        capped_speed = min(target_before, allowed_speed)
+        target_after = max(min_speed, target_before + (capped_speed - target_before) * gain)
+
+    return {
+        "target_speed_mps": float(target_after),
+        "diag_speed_horizon_guardrail_active": float(guardrail_active),
+        "diag_speed_horizon_guardrail_margin_m": float(horizon_margin),
+        "diag_speed_horizon_guardrail_horizon_m": float(horizon),
+        "diag_speed_horizon_guardrail_time_headway_s": float(time_headway),
+        "diag_speed_horizon_guardrail_margin_buffer_m": float(margin_buffer),
+        "diag_speed_horizon_guardrail_allowed_speed_mps": float(allowed_speed),
+        "diag_speed_horizon_guardrail_target_speed_before_mps": float(target_before),
+        "diag_speed_horizon_guardrail_target_speed_after_mps": float(target_after),
+    }

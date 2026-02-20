@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Tuple
 
 import h5py
 import numpy as np
@@ -56,6 +56,39 @@ def _find_centerline_cross(
     return None
 
 
+def _find_outside_lane_touch(
+    left_line_x: np.ndarray,
+    right_line_x: np.ndarray,
+    margin: float,
+    persist_frames: int,
+    search_start: int = 0,
+) -> Tuple[Optional[int], str]:
+    """Find first outside-lane touch (left/right/both) in vehicle frame."""
+    if len(left_line_x) == 0 or len(right_line_x) == 0:
+        return None, "none"
+    threshold = max(0.0, float(margin))
+    persist = max(1, int(persist_frames))
+    n = min(len(left_line_x), len(right_line_x))
+    left = left_line_x[:n]
+    right = right_line_x[:n]
+    # Ignore obviously missing samples where both lanes are zero.
+    valid = (np.abs(left) > 1e-6) | (np.abs(right) > 1e-6)
+    left_touch = left > threshold
+    right_touch = right < -threshold
+    for i in range(max(0, search_start), n - persist + 1):
+        if not np.all(valid[i : i + persist]):
+            continue
+        w_left = left_touch[i : i + persist]
+        w_right = right_touch[i : i + persist]
+        if np.all(w_left) and np.all(w_right):
+            return i, "outside_lane_both"
+        if np.all(w_left):
+            return i, "outside_lane_left"
+        if np.all(w_right):
+            return i, "outside_lane_right"
+    return None, "none"
+
+
 def _safe_mean(x: np.ndarray) -> float:
     if x.size == 0:
         return 0.0
@@ -87,6 +120,30 @@ def main() -> None:
     )
     parser.add_argument("--cross-persist-frames", type=int, default=1, help="Intrusion persistence")
     parser.add_argument(
+        "--first-touch-frame",
+        type=int,
+        default=None,
+        help="Optional manual first-touch frame override (bypasses auto touch detection).",
+    )
+    parser.add_argument(
+        "--failure-event",
+        choices=["either_touch", "centerline", "outside_lane"],
+        default="either_touch",
+        help="Event used to define first touch when --first-touch-frame is not provided.",
+    )
+    parser.add_argument(
+        "--outside-lane-margin",
+        type=float,
+        default=0.05,
+        help="Outside-lane touch margin in meters (vehicle frame).",
+    )
+    parser.add_argument(
+        "--outside-persist-frames",
+        type=int,
+        default=1,
+        help="Persistence frames for outside-lane touch.",
+    )
+    parser.add_argument(
         "--max-lateral-accel",
         type=float,
         default=1.3,
@@ -104,6 +161,12 @@ def main() -> None:
         default=50.0,
         help="Stale-perception percentage threshold for perception-limited classification",
     )
+    parser.add_argument(
+        "--telemetry-speed-limited-threshold-pct",
+        type=float,
+        default=30.0,
+        help="Threshold for classifying speed-limited from turn_feasibility_infeasible telemetry",
+    )
     args = parser.parse_args()
 
     if not args.recording.exists():
@@ -119,6 +182,10 @@ def main() -> None:
         stale = _as_bool_array(f, "control/using_stale_perception")
         if stale is None:
             stale = _as_bool_array(f, "perception/using_stale_data")
+        gt_left = _as_float_array(f, "ground_truth/left_lane_line_x")
+        gt_right = _as_float_array(f, "ground_truth/right_lane_line_x")
+        perception_left = _as_float_array(f, "perception/left_lane_line_x")
+        perception_right = _as_float_array(f, "perception/right_lane_line_x")
 
         s_pre = _as_float_array(f, "control/steering_pre_rate_limit")
         s_final = _as_float_array(f, "control/steering_post_smoothing")
@@ -128,6 +195,12 @@ def main() -> None:
         d_jerk = _as_float_array(f, "control/steering_jerk_limited_delta")
         d_clip = _as_float_array(f, "control/steering_hard_clip_delta")
         d_smooth = _as_float_array(f, "control/steering_smoothing_delta")
+        turn_feasibility_active = _as_bool_array(f, "control/turn_feasibility_active")
+        turn_feasibility_infeasible = _as_bool_array(f, "control/turn_feasibility_infeasible")
+        turn_feasibility_margin_g = _as_float_array(f, "control/turn_feasibility_margin_g")
+        turn_feasibility_speed_delta_mps = _as_float_array(
+            f, "control/turn_feasibility_speed_delta_mps"
+        )
 
     needed = [ts, speed, kappa, s_pre, s_final]
     if any(x is None for x in needed):
@@ -155,10 +228,26 @@ def main() -> None:
         d_clip = d_clip[:n]
     if d_smooth is not None:
         d_smooth = d_smooth[:n]
+    if turn_feasibility_active is not None:
+        turn_feasibility_active = turn_feasibility_active[:n]
+    if turn_feasibility_infeasible is not None:
+        turn_feasibility_infeasible = turn_feasibility_infeasible[:n]
+    if turn_feasibility_margin_g is not None:
+        turn_feasibility_margin_g = turn_feasibility_margin_g[:n]
+    if turn_feasibility_speed_delta_mps is not None:
+        turn_feasibility_speed_delta_mps = turn_feasibility_speed_delta_mps[:n]
     if lce is not None:
         lce = lce[:n]
     if lo is not None:
         lo = lo[:n]
+    if gt_left is not None:
+        gt_left = gt_left[:n]
+    if gt_right is not None:
+        gt_right = gt_right[:n]
+    if perception_left is not None:
+        perception_left = perception_left[:n]
+    if perception_right is not None:
+        perception_right = perception_right[:n]
 
     signal = lce if args.centerline_signal == "lane_center_error" else lo
     if signal is None:
@@ -178,8 +267,51 @@ def main() -> None:
         persist_frames=max(1, args.cross_persist_frames),
         search_start=curve_start,
     )
+    outside_source = "none"
+    outside_frame: Optional[int] = None
+    outside_reason = "none"
+    if gt_left is not None and gt_right is not None:
+        outside_frame, outside_reason = _find_outside_lane_touch(
+            gt_left,
+            gt_right,
+            margin=args.outside_lane_margin,
+            persist_frames=args.outside_persist_frames,
+            search_start=curve_start,
+        )
+        outside_source = "ground_truth"
+    elif perception_left is not None and perception_right is not None:
+        outside_frame, outside_reason = _find_outside_lane_touch(
+            perception_left,
+            perception_right,
+            margin=args.outside_lane_margin,
+            persist_frames=args.outside_persist_frames,
+            search_start=curve_start,
+        )
+        outside_source = "perception"
+
     offroad = _first_true_idx(emergency_stop)
-    fail_candidates = [x for x in [cross, offroad] if x is not None]
+    first_touch_reason = "none"
+    if args.first_touch_frame is not None:
+        first_touch = int(np.clip(args.first_touch_frame, 0, max(0, n - 1)))
+        first_touch_reason = "manual_override"
+    elif args.failure_event == "centerline":
+        first_touch = cross if cross is not None else n
+        first_touch_reason = "centerline_cross" if cross is not None else "none"
+    elif args.failure_event == "outside_lane":
+        first_touch = outside_frame if outside_frame is not None else n
+        first_touch_reason = outside_reason if outside_frame is not None else "none"
+    else:
+        touch_candidates = []
+        if cross is not None:
+            touch_candidates.append((cross, "centerline_cross"))
+        if outside_frame is not None:
+            touch_candidates.append((outside_frame, outside_reason))
+        if touch_candidates:
+            first_touch, first_touch_reason = min(touch_candidates, key=lambda x: x[0])
+        else:
+            first_touch = n
+
+    fail_candidates = [x for x in [first_touch, offroad] if x is not None and x < n]
     first_failure = min(fail_candidates) if fail_candidates else n
 
     entry_start = curve_start
@@ -211,11 +343,48 @@ def main() -> None:
     smooth_mean = _safe_mean(d_smooth[sl]) if d_smooth is not None else 0.0
 
     speed_limited_pct = float(np.mean(ay_e > args.max_lateral_accel) * 100.0) if ay_e.size else 0.0
+    telemetry_present = (
+        turn_feasibility_active is not None
+        and turn_feasibility_infeasible is not None
+        and turn_feasibility_margin_g is not None
+        and turn_feasibility_speed_delta_mps is not None
+    )
+    telemetry_active_mask = (
+        turn_feasibility_active[sl] if telemetry_present else np.zeros(max(0, entry_end - entry_start), dtype=bool)
+    )
+    telemetry_active_pct = (
+        float(np.mean(telemetry_active_mask) * 100.0)
+        if telemetry_present and telemetry_active_mask.size
+        else 0.0
+    )
+    telemetry_infeasible_pct = (
+        float(np.mean(turn_feasibility_infeasible[sl]) * 100.0)
+        if telemetry_present and turn_feasibility_infeasible[sl].size
+        else 0.0
+    )
+    telemetry_margin_mean = (
+        _safe_mean(turn_feasibility_margin_g[sl]) if telemetry_present else 0.0
+    )
+    telemetry_margin_min = (
+        float(np.min(turn_feasibility_margin_g[sl]))
+        if telemetry_present and turn_feasibility_margin_g[sl].size
+        else 0.0
+    )
+    telemetry_speed_delta_mean = (
+        _safe_mean(turn_feasibility_speed_delta_mps[sl]) if telemetry_present else 0.0
+    )
+    telemetry_speed_delta_max = (
+        _safe_max(turn_feasibility_speed_delta_mps[sl]) if telemetry_present else 0.0
+    )
     authority_limited = _safe_mean(authority_gap) > args.authority_gap_threshold
     perception_limited = stale_pct >= args.stale_threshold_pct
 
-    # Priority order: if speed infeasible often, call it speed-limited first.
-    if speed_limited_pct >= 30.0:
+    # Priority order:
+    # 1) turn_feasibility_* telemetry (source-of-truth when present)
+    # 2) legacy v^2*kappa feasibility as secondary fallback
+    if telemetry_present and telemetry_infeasible_pct >= args.telemetry_speed_limited_threshold_pct:
+        primary = "speed-limited"
+    elif not telemetry_present and speed_limited_pct >= 30.0:
         primary = "speed-limited"
     elif authority_limited:
         primary = "steering-authority-limited"
@@ -227,12 +396,30 @@ def main() -> None:
     print(f"recording: {args.recording}")
     print(f"frames_total: {n}")
     print(f"curve_entry_window: [{entry_start}, {entry_end}) ({max(0, entry_end-entry_start)} frames)")
+    print(
+        f"first_touch_frame: {first_touch if first_touch < n else 'none'}"
+        f" ({first_touch_reason})"
+    )
+    print(
+        f"touch_events: centerline={cross if cross is not None else 'none'}, "
+        f"outside_lane={outside_frame if outside_frame is not None else 'none'} "
+        f"(source={outside_source}, reason={outside_reason}, margin={args.outside_lane_margin:.3f}m)"
+    )
     print(f"first_failure_frame: {first_failure if first_failure < n else 'none'}")
     print("")
     print("curve_entry_story:")
     print(f"- speed_feasibility: mean(v^2*kappa)={_safe_mean(ay_e):.3f} m/s^2, max={_safe_max(ay_e):.3f} m/s^2, budget={args.max_lateral_accel:.3f}")
     print(f"- speed_margin: mean={_safe_mean(speed_margin_e):.3f}, min={float(np.min(speed_margin_e)) if speed_margin_e.size else 0.0:.3f}")
     print(f"- speed_limited_frames_pct: {speed_limited_pct:.1f}%")
+    if telemetry_present:
+        print(
+            f"- turn_feasibility_telemetry: active_pct={telemetry_active_pct:.1f}%, "
+            f"infeasible_pct={telemetry_infeasible_pct:.1f}%, "
+            f"margin_g_mean={telemetry_margin_mean:.3f}, margin_g_min={telemetry_margin_min:.3f}, "
+            f"speed_delta_mean={telemetry_speed_delta_mean:.3f} m/s, speed_delta_max={telemetry_speed_delta_max:.3f} m/s"
+        )
+    else:
+        print("- turn_feasibility_telemetry: unavailable (legacy recording)")
     print(f"- steering_authority: mean|pre|={_safe_mean(pre_abs):.3f}, mean|final|={_safe_mean(final_abs):.3f}, mean_gap={_safe_mean(authority_gap):.3f}")
     print(f"- steering_transfer_ratio_mean: {_safe_mean(authority_ratio):.3f}")
     print(f"- limiter_deltas_mean: rate={rate_mean:.3f}, jerk={jerk_mean:.3f}, clip={clip_mean:.3f}, smooth={smooth_mean:.3f}")

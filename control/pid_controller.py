@@ -156,6 +156,18 @@ class LateralController:
                  dynamic_curve_jerk_boost_max_factor: float = 3.5,
                  dynamic_curve_hard_clip_boost_gain: float = 1.0,
                  dynamic_curve_hard_clip_boost_max: float = 0.12,
+                 dynamic_curve_entry_governor_enabled: bool = True,
+                 dynamic_curve_entry_governor_gain: float = 1.2,
+                 dynamic_curve_entry_governor_max_scale: float = 1.8,
+                 dynamic_curve_entry_governor_stale_floor_scale: float = 1.15,
+                 dynamic_curve_entry_governor_exclusive_mode: bool = True,
+                 dynamic_curve_entry_governor_anticipatory_enabled: bool = True,
+                 dynamic_curve_entry_governor_upcoming_phase_weight: float = 0.55,
+                 dynamic_curve_authority_precurve_enabled: bool = True,
+                 dynamic_curve_authority_precurve_scale: float = 0.8,
+                 dynamic_curve_single_owner_mode: bool = False,
+                 dynamic_curve_single_owner_min_rate: float = 0.22,
+                 dynamic_curve_single_owner_min_jerk: float = 0.6,
                  dynamic_curve_comfort_lat_accel_comfort_max_g: float = 0.18,
                  dynamic_curve_comfort_lat_accel_peak_max_g: float = 0.25,
                  dynamic_curve_comfort_lat_jerk_comfort_max_gps: float = 0.30,
@@ -165,6 +177,17 @@ class LateralController:
                  dynamic_curve_speed_low_mps: float = 4.0,
                  dynamic_curve_speed_high_mps: float = 10.0,
                  dynamic_curve_speed_boost_max_scale: float = 1.4,
+                 turn_feasibility_governor_enabled: bool = True,
+                 turn_feasibility_curvature_min: float = 0.002,
+                 turn_feasibility_guardband_g: float = 0.015,
+                 turn_feasibility_use_peak_bound: bool = True,
+                 curve_unwind_policy_enabled: bool = False,
+                 curve_unwind_frames: int = 12,
+                 curve_unwind_rate_scale_start: float = 1.0,
+                 curve_unwind_rate_scale_end: float = 0.8,
+                 curve_unwind_jerk_scale_start: float = 1.0,
+                 curve_unwind_jerk_scale_end: float = 0.7,
+                 curve_unwind_integral_decay: float = 0.85,
                  curve_commit_mode_enabled: bool = False,
                  curve_commit_mode_max_frames: int = 20,
                  curve_commit_mode_min_rate: float = 0.22,
@@ -288,6 +311,38 @@ class LateralController:
         self.dynamic_curve_hard_clip_boost_max = max(
             0.0, float(dynamic_curve_hard_clip_boost_max)
         )
+        self.dynamic_curve_entry_governor_enabled = bool(dynamic_curve_entry_governor_enabled)
+        self.dynamic_curve_entry_governor_gain = max(
+            0.0, float(dynamic_curve_entry_governor_gain)
+        )
+        self.dynamic_curve_entry_governor_max_scale = max(
+            1.0, float(dynamic_curve_entry_governor_max_scale)
+        )
+        self.dynamic_curve_entry_governor_stale_floor_scale = float(
+            np.clip(dynamic_curve_entry_governor_stale_floor_scale, 1.0, 2.0)
+        )
+        self.dynamic_curve_entry_governor_exclusive_mode = bool(
+            dynamic_curve_entry_governor_exclusive_mode
+        )
+        self.dynamic_curve_entry_governor_anticipatory_enabled = bool(
+            dynamic_curve_entry_governor_anticipatory_enabled
+        )
+        self.dynamic_curve_entry_governor_upcoming_phase_weight = float(
+            np.clip(dynamic_curve_entry_governor_upcoming_phase_weight, 0.0, 1.0)
+        )
+        self.dynamic_curve_authority_precurve_enabled = bool(
+            dynamic_curve_authority_precurve_enabled
+        )
+        self.dynamic_curve_authority_precurve_scale = float(
+            np.clip(dynamic_curve_authority_precurve_scale, 0.0, 1.0)
+        )
+        self.dynamic_curve_single_owner_mode = bool(dynamic_curve_single_owner_mode)
+        self.dynamic_curve_single_owner_min_rate = max(
+            0.0, float(dynamic_curve_single_owner_min_rate)
+        )
+        self.dynamic_curve_single_owner_min_jerk = max(
+            0.0, float(dynamic_curve_single_owner_min_jerk)
+        )
         self.dynamic_curve_comfort_lat_accel_comfort_max_g = max(
             1e-3, float(dynamic_curve_comfort_lat_accel_comfort_max_g)
         )
@@ -314,6 +369,27 @@ class LateralController:
         )
         self.dynamic_curve_speed_boost_max_scale = max(
             1.0, float(dynamic_curve_speed_boost_max_scale)
+        )
+        self.turn_feasibility_governor_enabled = bool(turn_feasibility_governor_enabled)
+        self.turn_feasibility_curvature_min = max(1e-6, float(turn_feasibility_curvature_min))
+        self.turn_feasibility_guardband_g = max(0.0, float(turn_feasibility_guardband_g))
+        self.turn_feasibility_use_peak_bound = bool(turn_feasibility_use_peak_bound)
+        self.curve_unwind_policy_enabled = bool(curve_unwind_policy_enabled)
+        self.curve_unwind_frames = max(0, int(curve_unwind_frames))
+        self.curve_unwind_rate_scale_start = float(
+            np.clip(curve_unwind_rate_scale_start, 0.0, 1.5)
+        )
+        self.curve_unwind_rate_scale_end = float(
+            np.clip(curve_unwind_rate_scale_end, 0.0, 1.5)
+        )
+        self.curve_unwind_jerk_scale_start = float(
+            np.clip(curve_unwind_jerk_scale_start, 0.0, 1.5)
+        )
+        self.curve_unwind_jerk_scale_end = float(
+            np.clip(curve_unwind_jerk_scale_end, 0.0, 1.5)
+        )
+        self.curve_unwind_integral_decay = float(
+            np.clip(curve_unwind_integral_decay, 0.0, 1.0)
         )
         self.curve_commit_mode_enabled = bool(curve_commit_mode_enabled)
         self.curve_commit_mode_max_frames = max(0, int(curve_commit_mode_max_frames))
@@ -447,7 +523,9 @@ class LateralController:
         self._curve_commit_mode_frames_remaining = 0
         self._curve_commit_retrigger_cooldown_remaining = 0
         self._curve_commit_handoff_streak = 0
+        self._curve_unwind_frames_remaining = 0
         self._prev_is_straight = True
+        self._prev_entry_phase_active = False
         self._prev_curve_upcoming = False
         self._prev_curve_at_car = False
         self._last_error_magnitude = 0.0
@@ -1076,9 +1154,30 @@ class LateralController:
         dynamic_curve_hard_clip_boost = 0.0
         dynamic_curve_hard_clip_boost_cap_effective = self.dynamic_curve_hard_clip_boost_max
         dynamic_curve_hard_clip_limit_effective = self.max_steering
+        dynamic_curve_entry_governor_active = False
+        dynamic_curve_entry_governor_scale = 1.0
+        dynamic_curve_entry_governor_rate_scale = 1.0
+        dynamic_curve_entry_governor_jerk_scale = 1.0
         steering_authority_gap = 0.0
         steering_transfer_ratio = 1.0
         steering_first_limiter_stage_code = 0.0
+        curve_unwind_active = False
+        curve_unwind_frames_remaining = int(self._curve_unwind_frames_remaining)
+        curve_unwind_progress = 0.0
+        curve_unwind_rate_scale = 1.0
+        curve_unwind_jerk_scale = 1.0
+        curve_unwind_integral_decay_applied = 1.0
+        turn_feasibility_active = False
+        turn_feasibility_infeasible = False
+        turn_feasibility_curvature_abs = 0.0
+        turn_feasibility_speed_mps = 0.0
+        turn_feasibility_required_lat_accel_g = 0.0
+        turn_feasibility_comfort_limit_g = 0.0
+        turn_feasibility_peak_limit_g = 0.0
+        turn_feasibility_selected_limit_g = 0.0
+        turn_feasibility_margin_g = 0.0
+        turn_feasibility_speed_limit_mps = 0.0
+        turn_feasibility_speed_delta_mps = 0.0
         
         # Get PID internal state
         pid_integral = self.pid.integral
@@ -1182,12 +1281,55 @@ class LateralController:
             self._road_straight_invalid_frames_remaining -= 1
         else:
             is_road_straight = None
+        single_owner_entry_phase = bool(
+            self.dynamic_curve_single_owner_mode
+            and self.dynamic_curve_entry_governor_enabled
+            and (curve_upcoming or curve_at_car)
+        )
+        if single_owner_entry_phase:
+            self._curve_entry_schedule_frames_remaining = 0
+            self._curve_entry_schedule_elapsed_frames = 0
+            self._curve_commit_mode_frames_remaining = 0
+            self._curve_commit_handoff_streak = 0
         if not curve_at_car:
             self._curve_entry_schedule_fallback_fired_for_curve = False
         if self._curve_entry_schedule_fallback_cooldown_remaining > 0:
             self._curve_entry_schedule_fallback_cooldown_remaining -= 1
         if self._curve_commit_retrigger_cooldown_remaining > 0:
             self._curve_commit_retrigger_cooldown_remaining -= 1
+        if self.curve_unwind_policy_enabled:
+            if curve_at_car:
+                self._curve_unwind_frames_remaining = 0
+            elif self._prev_curve_at_car and self.curve_unwind_frames > 0:
+                self._curve_unwind_frames_remaining = self.curve_unwind_frames
+            if self._curve_unwind_frames_remaining > 0:
+                curve_unwind_active = True
+                curve_unwind_frames_remaining = int(self._curve_unwind_frames_remaining)
+                unwind_total = max(1, self.curve_unwind_frames)
+                curve_unwind_progress = float(
+                    np.clip(
+                        (unwind_total - self._curve_unwind_frames_remaining) / unwind_total,
+                        0.0,
+                        1.0,
+                    )
+                )
+                curve_unwind_rate_scale = float(
+                    self.curve_unwind_rate_scale_start
+                    + (self.curve_unwind_rate_scale_end - self.curve_unwind_rate_scale_start)
+                    * curve_unwind_progress
+                )
+                curve_unwind_jerk_scale = float(
+                    self.curve_unwind_jerk_scale_start
+                    + (self.curve_unwind_jerk_scale_end - self.curve_unwind_jerk_scale_start)
+                    * curve_unwind_progress
+                )
+                if abs(self.pid.integral) > 1e-6:
+                    self.pid.integral *= self.curve_unwind_integral_decay
+                    curve_unwind_integral_decay_applied = self.curve_unwind_integral_decay
+                self._curve_unwind_frames_remaining = max(
+                    0, self._curve_unwind_frames_remaining - 1
+                )
+                curve_unwind_frames_remaining = int(self._curve_unwind_frames_remaining)
         using_dynamic_schedule_fallback = (
             self.dynamic_curve_authority_enabled
             and self.curve_entry_schedule_fallback_only_when_dynamic
@@ -1205,6 +1347,8 @@ class LateralController:
                 )
             )
         if (
+            not single_owner_entry_phase
+            and
             self.curve_entry_schedule_enabled
             and self.curve_entry_schedule_frames > 0
             and schedule_trigger_condition
@@ -1221,6 +1365,8 @@ class LateralController:
                 if current_curve_index is not None:
                     self._curve_entry_schedule_fallback_last_curve_index = int(current_curve_index)
         if (
+            not single_owner_entry_phase
+            and
             self.curve_commit_mode_enabled
             and not self.curve_entry_schedule_enabled
             and not self._prev_curve_at_car
@@ -1230,6 +1376,8 @@ class LateralController:
             self._curve_commit_mode_frames_remaining = self.curve_commit_mode_max_frames
             curve_commit_mode_triggered = self._curve_commit_mode_frames_remaining > 0
         if (
+            not single_owner_entry_phase
+            and
             self.curve_commit_mode_enabled
             and not self.curve_entry_schedule_enabled
             and curve_at_car
@@ -1276,6 +1424,40 @@ class LateralController:
         steering_rate_limit_curve_scale = float(rate_scale)
         max_steering_rate *= rate_scale
         steering_rate_limit_after_curve = float(max_steering_rate)
+        dynamic_curve_entry_governor_anticipatory_active = bool(
+            self.dynamic_curve_entry_governor_anticipatory_enabled
+            and curve_upcoming
+            and not curve_at_car
+        )
+        entry_phase_active_pre = bool(
+            curve_at_car
+            or curve_entry_schedule_active
+            or self._curve_commit_mode_frames_remaining > 0
+            or dynamic_curve_entry_governor_anticipatory_active
+        )
+        if self.curve_unwind_policy_enabled:
+            if entry_phase_active_pre:
+                self._curve_unwind_frames_remaining = 0
+            elif (
+                (self._prev_entry_phase_active or ((not self._prev_is_straight) and is_straight))
+                and self.curve_unwind_frames > 0
+            ):
+                self._curve_unwind_frames_remaining = max(
+                    self._curve_unwind_frames_remaining,
+                    self.curve_unwind_frames,
+                )
+        entry_governor_exclusive_active_pre = (
+            self.dynamic_curve_entry_governor_enabled
+            and self.dynamic_curve_entry_governor_exclusive_mode
+            and entry_phase_active_pre
+        )
+        dynamic_curve_precurve_active = bool(
+            self.dynamic_curve_authority_precurve_enabled
+            and dynamic_curve_entry_governor_anticipatory_active
+        )
+        dynamic_curve_context_scale = (
+            self.dynamic_curve_authority_precurve_scale if dynamic_curve_precurve_active else 1.0
+        )
 
         # Industry-style mode scheduling:
         # keep straightaway behavior unchanged, but guarantee curve-entry authority
@@ -1285,20 +1467,58 @@ class LateralController:
                 max_steering_rate = max(max_steering_rate, self.curve_rate_floor_large_error)
             elif error_magnitude > 0.3:
                 max_steering_rate = max(max_steering_rate, self.curve_rate_floor_moderate_error)
-        if self._curve_entry_schedule_frames_remaining > 0:
+        if self._curve_entry_schedule_frames_remaining > 0 and not entry_governor_exclusive_active_pre:
             max_steering_rate = max(max_steering_rate, self.curve_entry_schedule_min_rate)
         if self._curve_commit_mode_frames_remaining > 0:
             curve_commit_mode_active = True
-            max_steering_rate = max(max_steering_rate, self.curve_commit_mode_min_rate)
+            if not entry_governor_exclusive_active_pre:
+                max_steering_rate = max(max_steering_rate, self.curve_commit_mode_min_rate)
+        if single_owner_entry_phase:
+            max_steering_rate = max(
+                max_steering_rate,
+                steering_rate_limit_base_from_error,
+                self.dynamic_curve_single_owner_min_rate,
+            )
         speed_for_comfort = (
             float(current_speed)
             if current_speed is not None and np.isfinite(float(current_speed))
             else float(reference_point.get('velocity', 0.0) or 0.0)
         )
         speed_for_comfort = max(0.0, speed_for_comfort)
+        turn_feasibility_curvature_abs = float(curve_metric_abs)
+        turn_feasibility_speed_mps = float(speed_for_comfort)
         dynamic_curve_lateral_accel_est_g = float(
             (speed_for_comfort * speed_for_comfort * float(curve_metric_abs)) / 9.81
         )
+        turn_feasibility_required_lat_accel_g = float(dynamic_curve_lateral_accel_est_g)
+        turn_feasibility_comfort_limit_g = float(self.dynamic_curve_comfort_lat_accel_comfort_max_g)
+        turn_feasibility_peak_limit_g = float(self.dynamic_curve_comfort_lat_accel_peak_max_g)
+        turn_feasibility_selected_limit_g = float(
+            self.dynamic_curve_comfort_lat_accel_peak_max_g
+            if self.turn_feasibility_use_peak_bound
+            else self.dynamic_curve_comfort_lat_accel_comfort_max_g
+        )
+        turn_feasibility_active = bool(
+            self.turn_feasibility_governor_enabled
+            and turn_feasibility_curvature_abs >= self.turn_feasibility_curvature_min
+            and (curve_upcoming or curve_at_car or not is_straight)
+        )
+        if turn_feasibility_active:
+            effective_limit_g = max(
+                0.0,
+                turn_feasibility_selected_limit_g - self.turn_feasibility_guardband_g,
+            )
+            turn_feasibility_margin_g = float(effective_limit_g - turn_feasibility_required_lat_accel_g)
+            if turn_feasibility_curvature_abs > 1e-9 and effective_limit_g > 0.0:
+                turn_feasibility_speed_limit_mps = float(
+                    np.sqrt((effective_limit_g * 9.81) / turn_feasibility_curvature_abs)
+                )
+            else:
+                turn_feasibility_speed_limit_mps = 0.0
+            turn_feasibility_speed_delta_mps = float(
+                max(0.0, turn_feasibility_speed_mps - turn_feasibility_speed_limit_mps)
+            )
+            turn_feasibility_infeasible = bool(turn_feasibility_margin_g < 0.0)
         if dt > 0.0 and self._last_lateral_accel_est_initialized:
             dynamic_curve_lateral_jerk_est_gps = float(
                 abs(dynamic_curve_lateral_accel_est_g - self._last_lateral_accel_est_g) / dt
@@ -1359,19 +1579,22 @@ class LateralController:
             self.dynamic_curve_rate_boost_max
             * dynamic_curve_speed_scale
             * dynamic_curve_comfort_scale
+            * dynamic_curve_context_scale
         )
         dynamic_curve_jerk_boost_cap_effective = float(
             1.0
             + (self.dynamic_curve_jerk_boost_max_factor - 1.0)
             * dynamic_curve_speed_scale
             * dynamic_curve_comfort_scale
+            * dynamic_curve_context_scale
         )
         dynamic_curve_hard_clip_boost_cap_effective = float(
             self.dynamic_curve_hard_clip_boost_max
             * dynamic_curve_speed_scale
             * dynamic_curve_comfort_scale
+            * dynamic_curve_context_scale
         )
-        if self.dynamic_curve_authority_enabled and curve_at_car:
+        if self.dynamic_curve_authority_enabled and (curve_at_car or dynamic_curve_precurve_active):
             dynamic_curve_authority_active = True
             raw_deficit = dynamic_curve_rate_request_delta - max_steering_rate
             deficit = max(0.0, raw_deficit - self.dynamic_curve_rate_deficit_deadband)
@@ -1395,7 +1618,52 @@ class LateralController:
         else:
             self._dynamic_authority_deficit_streak = 0
             self._dynamic_commit_deficit_streak = 0
+        entry_phase_active = bool(entry_phase_active_pre)
         if (
+            self.dynamic_curve_entry_governor_enabled
+            and dynamic_curve_authority_active
+            and entry_phase_active
+        ):
+            if curve_entry_schedule_active:
+                phase_weight = 1.0
+            elif self._curve_commit_mode_frames_remaining > 0:
+                phase_weight = 0.75
+            elif dynamic_curve_entry_governor_anticipatory_active:
+                phase_weight = self.dynamic_curve_entry_governor_upcoming_phase_weight
+            else:
+                phase_weight = 0.6
+            demand_ratio = float(
+                np.clip(
+                    (dynamic_curve_rate_request_delta / max(max_steering_rate, 1e-3)) - 1.0,
+                    0.0,
+                    1.0,
+                )
+            )
+            base_scale = 1.0 + (
+                self.dynamic_curve_entry_governor_gain
+                * phase_weight
+                * demand_ratio
+                * dynamic_curve_comfort_scale
+            )
+            dynamic_curve_entry_governor_scale = float(
+                np.clip(
+                    base_scale,
+                    1.0,
+                    self.dynamic_curve_entry_governor_max_scale,
+                )
+            )
+            if using_stale_perception:
+                dynamic_curve_entry_governor_scale = max(
+                    dynamic_curve_entry_governor_scale,
+                    self.dynamic_curve_entry_governor_stale_floor_scale,
+                )
+            dynamic_curve_entry_governor_active = dynamic_curve_entry_governor_scale > 1.0 + 1e-6
+            dynamic_curve_entry_governor_rate_scale = dynamic_curve_entry_governor_scale
+            dynamic_curve_entry_governor_jerk_scale = dynamic_curve_entry_governor_scale
+            max_steering_rate *= dynamic_curve_entry_governor_rate_scale
+        if (
+            not single_owner_entry_phase
+            and
             self.curve_commit_mode_enabled
             and self.curve_commit_mode_retrigger_on_dynamic_deficit
             and curve_at_car
@@ -1412,7 +1680,10 @@ class LateralController:
             self._dynamic_commit_deficit_streak = 0
             if self._curve_commit_mode_frames_remaining > 0:
                 curve_commit_mode_active = True
-                max_steering_rate = max(max_steering_rate, self.curve_commit_mode_min_rate)
+                if not entry_governor_exclusive_active_pre:
+                    max_steering_rate = max(max_steering_rate, self.curve_commit_mode_min_rate)
+        if curve_unwind_active:
+            max_steering_rate *= curve_unwind_rate_scale
         steering_rate_limit_after_floor = float(max_steering_rate)
 
         # Bounded curve-entry authority assist:
@@ -1421,7 +1692,11 @@ class LateralController:
             self._curve_entry_assist_rearm_remaining -= 1
         if self._curve_entry_assist_frames_remaining > 0:
             self._curve_entry_assist_frames_remaining -= 1
-        if self.curve_entry_assist_enabled:
+        if (
+            self.curve_entry_assist_enabled
+            and not entry_governor_exclusive_active_pre
+            and not single_owner_entry_phase
+        ):
             raw_rate_request = abs(steering_before_limits - self.last_steering)
             error_rising = error_magnitude > (self._last_error_magnitude + 0.02)
             curve_entry_candidate = (
@@ -1446,7 +1721,8 @@ class LateralController:
                 curve_entry_assist_triggered = True
             if self._curve_entry_assist_frames_remaining > 0:
                 curve_entry_assist_active = True
-                max_steering_rate *= self.curve_entry_assist_rate_boost
+                if not dynamic_curve_entry_governor_active:
+                    max_steering_rate *= self.curve_entry_assist_rate_boost
             curve_entry_assist_rearm_remaining = int(self._curve_entry_assist_rearm_remaining)
 
         # Sign-flip override: allow corrections to reverse quickly when error flips sign.
@@ -1512,7 +1788,7 @@ class LateralController:
         error_recovering_commit = (
             error_magnitude + self.curve_commit_mode_error_fall
         ) <= self._last_error_magnitude
-        if self._curve_entry_schedule_frames_remaining > 0:
+        if self._curve_entry_schedule_frames_remaining > 0 and not single_owner_entry_phase:
             hold_complete = self._curve_entry_schedule_elapsed_frames >= self.curve_entry_schedule_min_hold_frames
             progress_complete = (
                 current_curve_progress_ratio is None
@@ -1534,7 +1810,7 @@ class LateralController:
             curve_entry_schedule_frames_remaining = int(
                 max(0, self._curve_entry_schedule_frames_remaining)
             )
-        if self._curve_commit_mode_frames_remaining > 0:
+        if self._curve_commit_mode_frames_remaining > 0 and not single_owner_entry_phase:
             commit_handoff_candidate = (
                 pre_rate_transfer >= self.curve_commit_mode_transfer_ratio_target
                 and error_recovering_commit
@@ -1567,16 +1843,26 @@ class LateralController:
             jerk_curve_scale = 1.0 + jerk_ratio * (self.steering_jerk_curve_scale_max - 1.0)
         effective_steering_jerk_limit = self.steering_jerk_limit * jerk_curve_scale
         if curve_entry_assist_active:
-            effective_steering_jerk_limit *= self.curve_entry_assist_jerk_boost
+            if not dynamic_curve_entry_governor_active:
+                effective_steering_jerk_limit *= self.curve_entry_assist_jerk_boost
+        if dynamic_curve_entry_governor_active:
+            effective_steering_jerk_limit *= dynamic_curve_entry_governor_jerk_scale
         if self._curve_entry_schedule_frames_remaining > 0:
-            effective_steering_jerk_limit = max(
-                effective_steering_jerk_limit,
-                self.curve_entry_schedule_min_jerk,
-            )
+            if not entry_governor_exclusive_active_pre:
+                effective_steering_jerk_limit = max(
+                    effective_steering_jerk_limit,
+                    self.curve_entry_schedule_min_jerk,
+                )
         if self._curve_commit_mode_frames_remaining > 0:
+            if not entry_governor_exclusive_active_pre:
+                effective_steering_jerk_limit = max(
+                    effective_steering_jerk_limit,
+                    self.curve_commit_mode_min_jerk,
+                )
+        if single_owner_entry_phase:
             effective_steering_jerk_limit = max(
                 effective_steering_jerk_limit,
-                self.curve_commit_mode_min_jerk,
+                self.dynamic_curve_single_owner_min_jerk,
             )
         if dynamic_curve_authority_active:
             dynamic_curve_jerk_boost_factor = float(
@@ -1587,6 +1873,8 @@ class LateralController:
                 )
             )
             effective_steering_jerk_limit *= dynamic_curve_jerk_boost_factor
+        if curve_unwind_active:
+            effective_steering_jerk_limit *= curve_unwind_jerk_scale
 
         # Optional jerk limit: constrain change in steering rate per frame.
         if effective_steering_jerk_limit > 0.0 and dt > 0.0 and not sign_flip_override_active:
@@ -1761,6 +2049,7 @@ class LateralController:
         
         self._last_error_magnitude = error_magnitude
         self._prev_is_straight = is_straight
+        self._prev_entry_phase_active = entry_phase_active
         self._prev_curve_upcoming = curve_upcoming
         self._prev_curve_at_car = curve_at_car
         if return_metadata:
@@ -1836,6 +2125,10 @@ class LateralController:
                 'dynamic_curve_hard_clip_limit_effective': (
                     dynamic_curve_hard_clip_limit_effective
                 ),
+                'dynamic_curve_entry_governor_active': dynamic_curve_entry_governor_active,
+                'dynamic_curve_entry_governor_scale': dynamic_curve_entry_governor_scale,
+                'dynamic_curve_entry_governor_rate_scale': dynamic_curve_entry_governor_rate_scale,
+                'dynamic_curve_entry_governor_jerk_scale': dynamic_curve_entry_governor_jerk_scale,
                 'dynamic_curve_authority_deficit_streak': int(self._dynamic_authority_deficit_streak),
                 'dynamic_curve_commit_deficit_streak': int(self._dynamic_commit_deficit_streak),
                 'dynamic_curve_comfort_lat_accel_comfort_max_g': (
@@ -1858,6 +2151,36 @@ class LateralController:
                 ),
                 'dynamic_curve_hard_clip_boost_gain': self.dynamic_curve_hard_clip_boost_gain,
                 'dynamic_curve_hard_clip_boost_max': self.dynamic_curve_hard_clip_boost_max,
+                'dynamic_curve_entry_governor_enabled': self.dynamic_curve_entry_governor_enabled,
+                'dynamic_curve_entry_governor_gain': self.dynamic_curve_entry_governor_gain,
+                'dynamic_curve_entry_governor_max_scale': self.dynamic_curve_entry_governor_max_scale,
+                'dynamic_curve_entry_governor_stale_floor_scale': (
+                    self.dynamic_curve_entry_governor_stale_floor_scale
+                ),
+                'dynamic_curve_entry_governor_exclusive_mode': (
+                    self.dynamic_curve_entry_governor_exclusive_mode
+                ),
+                'dynamic_curve_entry_governor_anticipatory_enabled': (
+                    self.dynamic_curve_entry_governor_anticipatory_enabled
+                ),
+                'dynamic_curve_entry_governor_upcoming_phase_weight': (
+                    self.dynamic_curve_entry_governor_upcoming_phase_weight
+                ),
+                'dynamic_curve_entry_governor_anticipatory_active': (
+                    dynamic_curve_entry_governor_anticipatory_active
+                ),
+                'dynamic_curve_authority_precurve_enabled': (
+                    self.dynamic_curve_authority_precurve_enabled
+                ),
+                'dynamic_curve_authority_precurve_scale': (
+                    self.dynamic_curve_authority_precurve_scale
+                ),
+                'dynamic_curve_single_owner_mode': self.dynamic_curve_single_owner_mode,
+                'dynamic_curve_single_owner_min_rate': self.dynamic_curve_single_owner_min_rate,
+                'dynamic_curve_single_owner_min_jerk': self.dynamic_curve_single_owner_min_jerk,
+                'dynamic_curve_single_owner_active': single_owner_entry_phase,
+                'dynamic_curve_precurve_active': dynamic_curve_precurve_active,
+                'dynamic_curve_context_scale': dynamic_curve_context_scale,
                 'curve_entry_schedule_active': curve_entry_schedule_active,
                 'curve_entry_schedule_triggered': curve_entry_schedule_triggered,
                 'curve_entry_schedule_handoff_triggered': curve_entry_schedule_handoff_triggered,
@@ -1913,6 +2236,32 @@ class LateralController:
                 'steering_authority_gap': steering_authority_gap,
                 'steering_transfer_ratio': steering_transfer_ratio,
                 'steering_first_limiter_stage_code': steering_first_limiter_stage_code,
+                'curve_unwind_active': curve_unwind_active,
+                'curve_unwind_frames_remaining': curve_unwind_frames_remaining,
+                'curve_unwind_progress': curve_unwind_progress,
+                'curve_unwind_rate_scale': curve_unwind_rate_scale,
+                'curve_unwind_jerk_scale': curve_unwind_jerk_scale,
+                'curve_unwind_integral_decay_applied': curve_unwind_integral_decay_applied,
+                'turn_feasibility_active': turn_feasibility_active,
+                'turn_feasibility_infeasible': turn_feasibility_infeasible,
+                'turn_feasibility_curvature_abs': turn_feasibility_curvature_abs,
+                'turn_feasibility_speed_mps': turn_feasibility_speed_mps,
+                'turn_feasibility_required_lat_accel_g': turn_feasibility_required_lat_accel_g,
+                'turn_feasibility_comfort_limit_g': turn_feasibility_comfort_limit_g,
+                'turn_feasibility_peak_limit_g': turn_feasibility_peak_limit_g,
+                'turn_feasibility_selected_limit_g': turn_feasibility_selected_limit_g,
+                'turn_feasibility_guardband_g': self.turn_feasibility_guardband_g,
+                'turn_feasibility_margin_g': turn_feasibility_margin_g,
+                'turn_feasibility_speed_limit_mps': turn_feasibility_speed_limit_mps,
+                'turn_feasibility_speed_delta_mps': turn_feasibility_speed_delta_mps,
+                'turn_feasibility_use_peak_bound': self.turn_feasibility_use_peak_bound,
+                'curve_unwind_policy_enabled': self.curve_unwind_policy_enabled,
+                'curve_unwind_frames': self.curve_unwind_frames,
+                'curve_unwind_rate_scale_start': self.curve_unwind_rate_scale_start,
+                'curve_unwind_rate_scale_end': self.curve_unwind_rate_scale_end,
+                'curve_unwind_jerk_scale_start': self.curve_unwind_jerk_scale_start,
+                'curve_unwind_jerk_scale_end': self.curve_unwind_jerk_scale_end,
+                'curve_unwind_integral_decay': self.curve_unwind_integral_decay,
                 'speed_gain_final': speed_gain_final,
                 'speed_gain_scale': speed_gain_scale,
                 'speed_gain_applied': speed_gain_applied,
@@ -1974,7 +2323,9 @@ class LateralController:
         self._curve_commit_mode_frames_remaining = 0
         self._curve_commit_retrigger_cooldown_remaining = 0
         self._curve_commit_handoff_streak = 0
+        self._curve_unwind_frames_remaining = 0
         self._prev_is_straight = True
+        self._prev_entry_phase_active = False
         self._prev_curve_upcoming = False
         self._prev_curve_at_car = False
         self._last_error_magnitude = 0.0
@@ -2894,6 +3245,18 @@ class VehicleController:
                  dynamic_curve_jerk_boost_max_factor: float = 3.5,
                  dynamic_curve_hard_clip_boost_gain: float = 1.0,
                  dynamic_curve_hard_clip_boost_max: float = 0.12,
+                 dynamic_curve_entry_governor_enabled: bool = True,
+                 dynamic_curve_entry_governor_gain: float = 1.2,
+                 dynamic_curve_entry_governor_max_scale: float = 1.8,
+                 dynamic_curve_entry_governor_stale_floor_scale: float = 1.15,
+                 dynamic_curve_entry_governor_exclusive_mode: bool = True,
+                 dynamic_curve_entry_governor_anticipatory_enabled: bool = True,
+                 dynamic_curve_entry_governor_upcoming_phase_weight: float = 0.55,
+                 dynamic_curve_authority_precurve_enabled: bool = True,
+                 dynamic_curve_authority_precurve_scale: float = 0.8,
+                 dynamic_curve_single_owner_mode: bool = False,
+                 dynamic_curve_single_owner_min_rate: float = 0.22,
+                 dynamic_curve_single_owner_min_jerk: float = 0.6,
                  dynamic_curve_comfort_lat_accel_comfort_max_g: float = 0.18,
                  dynamic_curve_comfort_lat_accel_peak_max_g: float = 0.25,
                  dynamic_curve_comfort_lat_jerk_comfort_max_gps: float = 0.30,
@@ -2903,6 +3266,17 @@ class VehicleController:
                  dynamic_curve_speed_low_mps: float = 4.0,
                  dynamic_curve_speed_high_mps: float = 10.0,
                  dynamic_curve_speed_boost_max_scale: float = 1.4,
+                 turn_feasibility_governor_enabled: bool = True,
+                 turn_feasibility_curvature_min: float = 0.002,
+                 turn_feasibility_guardband_g: float = 0.015,
+                 turn_feasibility_use_peak_bound: bool = True,
+                 curve_unwind_policy_enabled: bool = False,
+                 curve_unwind_frames: int = 12,
+                 curve_unwind_rate_scale_start: float = 1.0,
+                 curve_unwind_rate_scale_end: float = 0.8,
+                 curve_unwind_jerk_scale_start: float = 1.0,
+                 curve_unwind_jerk_scale_end: float = 0.7,
+                 curve_unwind_integral_decay: float = 0.85,
                  curve_commit_mode_enabled: bool = False,
                  curve_commit_mode_max_frames: int = 20,
                  curve_commit_mode_min_rate: float = 0.22,
@@ -3033,6 +3407,28 @@ class VehicleController:
             dynamic_curve_jerk_boost_max_factor=dynamic_curve_jerk_boost_max_factor,
             dynamic_curve_hard_clip_boost_gain=dynamic_curve_hard_clip_boost_gain,
             dynamic_curve_hard_clip_boost_max=dynamic_curve_hard_clip_boost_max,
+            dynamic_curve_entry_governor_enabled=dynamic_curve_entry_governor_enabled,
+            dynamic_curve_entry_governor_gain=dynamic_curve_entry_governor_gain,
+            dynamic_curve_entry_governor_max_scale=dynamic_curve_entry_governor_max_scale,
+            dynamic_curve_entry_governor_stale_floor_scale=(
+                dynamic_curve_entry_governor_stale_floor_scale
+            ),
+            dynamic_curve_entry_governor_exclusive_mode=(
+                dynamic_curve_entry_governor_exclusive_mode
+            ),
+            dynamic_curve_entry_governor_anticipatory_enabled=(
+                dynamic_curve_entry_governor_anticipatory_enabled
+            ),
+            dynamic_curve_entry_governor_upcoming_phase_weight=(
+                dynamic_curve_entry_governor_upcoming_phase_weight
+            ),
+            dynamic_curve_authority_precurve_enabled=(
+                dynamic_curve_authority_precurve_enabled
+            ),
+            dynamic_curve_authority_precurve_scale=dynamic_curve_authority_precurve_scale,
+            dynamic_curve_single_owner_mode=dynamic_curve_single_owner_mode,
+            dynamic_curve_single_owner_min_rate=dynamic_curve_single_owner_min_rate,
+            dynamic_curve_single_owner_min_jerk=dynamic_curve_single_owner_min_jerk,
             dynamic_curve_comfort_lat_accel_comfort_max_g=(
                 dynamic_curve_comfort_lat_accel_comfort_max_g
             ),
@@ -3048,6 +3444,17 @@ class VehicleController:
             dynamic_curve_speed_low_mps=dynamic_curve_speed_low_mps,
             dynamic_curve_speed_high_mps=dynamic_curve_speed_high_mps,
             dynamic_curve_speed_boost_max_scale=dynamic_curve_speed_boost_max_scale,
+            turn_feasibility_governor_enabled=turn_feasibility_governor_enabled,
+            turn_feasibility_curvature_min=turn_feasibility_curvature_min,
+            turn_feasibility_guardband_g=turn_feasibility_guardband_g,
+            turn_feasibility_use_peak_bound=turn_feasibility_use_peak_bound,
+            curve_unwind_policy_enabled=curve_unwind_policy_enabled,
+            curve_unwind_frames=curve_unwind_frames,
+            curve_unwind_rate_scale_start=curve_unwind_rate_scale_start,
+            curve_unwind_rate_scale_end=curve_unwind_rate_scale_end,
+            curve_unwind_jerk_scale_start=curve_unwind_jerk_scale_start,
+            curve_unwind_jerk_scale_end=curve_unwind_jerk_scale_end,
+            curve_unwind_integral_decay=curve_unwind_integral_decay,
             curve_commit_mode_enabled=curve_commit_mode_enabled,
             curve_commit_mode_max_frames=curve_commit_mode_max_frames,
             curve_commit_mode_min_rate=curve_commit_mode_min_rate,

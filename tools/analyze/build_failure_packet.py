@@ -100,6 +100,8 @@ def main() -> int:
         if ts is None:
             n_fallback = len(f["control/steering"][:])
             ts = np.arange(n_fallback, dtype=float) * (1.0 / 30.0)
+        speed = _read_float(f, "vehicle/speed")
+        kappa = _read_float(f, "control/path_curvature_input")
         lane_center_error = _read_float(f, "vehicle/road_frame_lane_center_error")
         emergency_stop = _read_bool(f, "control/emergency_stop")
 
@@ -113,6 +115,12 @@ def main() -> int:
         schedule_active = _read_float(f, "control/curve_entry_schedule_active")
         commit_active = _read_float(f, "control/curve_commit_mode_active")
         assist_active = _read_float(f, "control/curve_entry_assist_active")
+        turn_feasibility_active = _read_bool(f, "control/turn_feasibility_active")
+        turn_feasibility_infeasible = _read_bool(f, "control/turn_feasibility_infeasible")
+        turn_feasibility_margin_g = _read_float(f, "control/turn_feasibility_margin_g")
+        turn_feasibility_speed_delta_mps = _read_float(
+            f, "control/turn_feasibility_speed_delta_mps"
+        )
 
     if any(x is None for x in [rate_delta, jerk_delta, clip_delta, smooth_delta]):
         raise KeyError("Missing limiter delta datasets in recording.")
@@ -123,6 +131,55 @@ def main() -> int:
     failure_frame = failure.frame if failure.frame is not None else max(0, len(ts) - 1)
     s = max(0, failure_frame - args.window_before)
     e = min(len(ts), failure_frame + args.window_after + 1)
+    sl = slice(s, e)
+
+    telemetry_present = all(
+        x is not None
+        for x in (
+            turn_feasibility_active,
+            turn_feasibility_infeasible,
+            turn_feasibility_margin_g,
+            turn_feasibility_speed_delta_mps,
+        )
+    )
+    telemetry_active_pct = (
+        float(np.mean(turn_feasibility_active[sl]) * 100.0)  # type: ignore[index]
+        if telemetry_present and e > s
+        else 0.0
+    )
+    if telemetry_present and e > s:
+        active_mask = turn_feasibility_active[sl]  # type: ignore[index]
+        infeasible_window = turn_feasibility_infeasible[sl]  # type: ignore[index]
+        margin_window = turn_feasibility_margin_g[sl]  # type: ignore[index]
+        speed_delta_window = turn_feasibility_speed_delta_mps[sl]  # type: ignore[index]
+        if np.any(active_mask):
+            telemetry_infeasible_pct = float(np.mean(infeasible_window[active_mask]) * 100.0)
+            telemetry_margin_mean = float(np.mean(margin_window[active_mask]))
+            telemetry_margin_min = float(np.min(margin_window[active_mask]))
+            telemetry_speed_delta_mean = float(np.mean(speed_delta_window[active_mask]))
+            telemetry_speed_delta_max = float(np.max(speed_delta_window[active_mask]))
+        else:
+            telemetry_infeasible_pct = 0.0
+            telemetry_margin_mean = 0.0
+            telemetry_margin_min = 0.0
+            telemetry_speed_delta_mean = 0.0
+            telemetry_speed_delta_max = 0.0
+    else:
+        telemetry_infeasible_pct = 0.0
+        telemetry_margin_mean = 0.0
+        telemetry_margin_min = 0.0
+        telemetry_speed_delta_mean = 0.0
+        telemetry_speed_delta_max = 0.0
+
+    legacy_speed_limited_pct = None
+    if speed is not None and kappa is not None:
+        n_speed = min(len(speed), len(kappa), len(ts))
+        if n_speed > 0:
+            ss = max(0, min(s, n_speed))
+            ee = max(ss, min(e, n_speed))
+            ay = (speed[ss:ee] ** 2) * np.abs(kappa[ss:ee])
+            if ay.size:
+                legacy_speed_limited_pct = float(np.mean(ay > 1.3) * 100.0)
 
     packet: Dict[str, object] = {
         "recording": str(args.recording),
@@ -133,12 +190,28 @@ def main() -> int:
         "first_limiter_hit_time_s": float(ts[first_limiter]) if first_limiter is not None else None,
         "window_start": s,
         "window_end_exclusive": e,
+        "speed_feasibility": {
+            "source": "turn_feasibility_telemetry" if telemetry_present else "legacy_v2kappa",
+            "telemetry_active_pct": telemetry_active_pct,
+            "telemetry_infeasible_pct": telemetry_infeasible_pct,
+            "telemetry_margin_g_mean": telemetry_margin_mean,
+            "telemetry_margin_g_min": telemetry_margin_min,
+            "telemetry_speed_delta_mps_mean": telemetry_speed_delta_mean,
+            "telemetry_speed_delta_mps_max": telemetry_speed_delta_max,
+            "legacy_speed_limited_pct_v2kappa": legacy_speed_limited_pct,
+            "is_speed_limited": bool(
+                telemetry_infeasible_pct >= 30.0
+                if telemetry_present
+                else (legacy_speed_limited_pct is not None and legacy_speed_limited_pct >= 30.0)
+            ),
+        },
     }
     (out_dir / "packet.json").write_text(json.dumps(packet, indent=2))
 
     header = (
         "frame,time_s,transfer_ratio,authority_gap,rate_clip_delta,jerk_clip_delta,"
-        "hard_clip_delta,smoothing_delta,first_stage,entry_schedule_active,commit_active,entry_assist_active"
+        "hard_clip_delta,smoothing_delta,first_stage,entry_schedule_active,commit_active,entry_assist_active,"
+        "turn_feas_active,turn_feas_infeasible,turn_feas_margin_g,turn_feas_speed_delta_mps"
     )
     rows = [header]
     for i in range(s, e):
@@ -150,7 +223,11 @@ def main() -> int:
             f"{(first_stage[i] if first_stage is not None else np.nan):.1f},"
             f"{(schedule_active[i] if schedule_active is not None else np.nan):.0f},"
             f"{(commit_active[i] if commit_active is not None else np.nan):.0f},"
-            f"{(assist_active[i] if assist_active is not None else np.nan):.0f}"
+            f"{(assist_active[i] if assist_active is not None else np.nan):.0f},"
+            f"{(turn_feasibility_active[i] if turn_feasibility_active is not None else np.nan):.0f},"
+            f"{(turn_feasibility_infeasible[i] if turn_feasibility_infeasible is not None else np.nan):.0f},"
+            f"{(turn_feasibility_margin_g[i] if turn_feasibility_margin_g is not None else np.nan):.6f},"
+            f"{(turn_feasibility_speed_delta_mps[i] if turn_feasibility_speed_delta_mps is not None else np.nan):.6f}"
         )
     (out_dir / "window.csv").write_text("\n".join(rows) + "\n")
 
@@ -161,6 +238,16 @@ def main() -> int:
         f"- failure_frame: `{failure.frame}` ({failure.reason})",
         f"- first_limiter_hit_frame: `{first_limiter}`",
         f"- window: `[{s}, {e})`",
+        f"- speed_feasibility_source: `{packet['speed_feasibility']['source']}`",
+        (
+            f"- speed_limited: `{packet['speed_feasibility']['is_speed_limited']}` "
+            f"(telemetry_infeasible_pct={telemetry_infeasible_pct:.1f}%)"
+            if telemetry_present
+            else (
+                f"- speed_limited: `{packet['speed_feasibility']['is_speed_limited']}` "
+                f"(legacy_v2kappa_pct={legacy_speed_limited_pct if legacy_speed_limited_pct is not None else 0.0:.1f}%)"
+            )
+        ),
         "",
         "Artifacts:",
         "- `packet.json`",

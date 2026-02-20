@@ -51,7 +51,10 @@ class RuleBasedTrajectoryPlanner:
                  calibrated_fy_px: float = 0.0,
                  calibrated_cx_px: float = 0.0,
                  calibrated_cy_px: float = 0.0,
-                 dynamic_effective_horizon_farfield_scale_min: float = 0.85):
+                 dynamic_effective_horizon_farfield_scale_min: float = 0.85,
+                 far_band_contribution_cap_enabled: bool = True,
+                 far_band_contribution_cap_start_m: float = 12.0,
+                 far_band_contribution_cap_gain: float = 0.35):
         """
         Initialize trajectory planner.
         
@@ -109,6 +112,9 @@ class RuleBasedTrajectoryPlanner:
         self.dynamic_effective_horizon_farfield_scale_min = float(
             np.clip(dynamic_effective_horizon_farfield_scale_min, 0.5, 1.0)
         )
+        self.far_band_contribution_cap_enabled = bool(far_band_contribution_cap_enabled)
+        self.far_band_contribution_cap_start_m = float(np.clip(far_band_contribution_cap_start_m, 0.0, 50.0))
+        self.far_band_contribution_cap_gain = float(np.clip(far_band_contribution_cap_gain, 0.0, 1.0))
         
         # For reference point smoothing
         self.last_reference_x = None
@@ -184,6 +190,11 @@ class RuleBasedTrajectoryPlanner:
             "diag_first_segment_y0_gt_y1_pre": np.nan,
             "diag_first_segment_y0_gt_y1_post": np.nan,
             "diag_inversion_introduced_after_conversion": np.nan,
+            "diag_far_band_contribution_limited_active": 0.0,
+            "diag_far_band_contribution_limit_start_m": np.nan,
+            "diag_far_band_contribution_limit_gain": np.nan,
+            "diag_far_band_contribution_scale_mean_12_20m": np.nan,
+            "diag_far_band_contribution_limited_frac_12_20m": np.nan,
         }
 
     @staticmethod
@@ -1015,6 +1026,11 @@ class RuleBasedTrajectoryPlanner:
         
         # Generate points along lane in vehicle coordinates
         num_points = int(self.lookahead_distance / self.point_spacing)
+        far_band_scale_samples: List[float] = []
+        far_band_limited_flags: List[float] = []
+        far_band_limited_any_flags: List[float] = []
+        far_band_limit_start_m = np.nan
+        far_band_limit_gain = np.nan
         
         for i in range(num_points + 1):
             # y_vehicle is forward distance in meters
@@ -1109,6 +1125,7 @@ class RuleBasedTrajectoryPlanner:
             curvature = self._compute_curvature(lane_coeffs, y_image)
             
             # Phase 2: conservatively attenuate far-field lateral contribution beyond effective horizon.
+            scale_dynamic_horizon = 1.0
             if (
                 effective_horizon_applied > 0.5
                 and effective_horizon_m < self.lookahead_distance - 1e-6
@@ -1116,8 +1133,36 @@ class RuleBasedTrajectoryPlanner:
             ):
                 far_span = max(1e-3, self.lookahead_distance - effective_horizon_m)
                 far_ratio = np.clip((y_vehicle_corrected - effective_horizon_m) / far_span, 0.0, 1.0)
-                scale = 1.0 - (1.0 - self.dynamic_effective_horizon_farfield_scale_min) * far_ratio
-                x_vehicle = float(x_vehicle) * float(scale)
+                scale_dynamic_horizon = 1.0 - (
+                    1.0 - self.dynamic_effective_horizon_farfield_scale_min
+                ) * far_ratio
+
+            scale_far_band_cap = 1.0
+            if (
+                self.far_band_contribution_cap_enabled
+                and effective_horizon_applied > 0.5
+                and y_vehicle_corrected >= self.far_band_contribution_cap_start_m
+                and self.lookahead_distance > self.far_band_contribution_cap_start_m + 1e-6
+            ):
+                cap_ratio = np.clip(
+                    (y_vehicle_corrected - self.far_band_contribution_cap_start_m)
+                    / (self.lookahead_distance - self.far_band_contribution_cap_start_m),
+                    0.0,
+                    1.0,
+                )
+                scale_far_band_cap = max(
+                    self.dynamic_effective_horizon_farfield_scale_min,
+                    1.0 - self.far_band_contribution_cap_gain * cap_ratio,
+                )
+                far_band_limit_start_m = float(self.far_band_contribution_cap_start_m)
+                far_band_limit_gain = float(self.far_band_contribution_cap_gain)
+
+            combined_scale = float(min(scale_dynamic_horizon, scale_far_band_cap))
+            x_vehicle = float(x_vehicle) * combined_scale
+            far_band_limited_any_flags.append(1.0 if combined_scale < 0.999 else 0.0)
+            if 12.0 <= float(y_vehicle_corrected) <= 20.0:
+                far_band_scale_samples.append(float(combined_scale))
+                far_band_limited_flags.append(1.0 if combined_scale < 0.999 else 0.0)
 
             point = TrajectoryPoint(
                 x=x_vehicle,
@@ -1223,6 +1268,21 @@ class RuleBasedTrajectoryPlanner:
             "diag_first_segment_y0_gt_y1_pre": pre_inv if len(input_y) > 1 else np.nan,
             "diag_first_segment_y0_gt_y1_post": post_inv if len(post_y) > 1 else np.nan,
             "diag_inversion_introduced_after_conversion": introduced if len(input_y) > 1 and len(post_y) > 1 else np.nan,
+            "diag_far_band_contribution_limited_active": (
+                1.0 if np.any(np.asarray(far_band_limited_any_flags, dtype=np.float64) > 0.5) else 0.0
+            ),
+            "diag_far_band_contribution_limit_start_m": far_band_limit_start_m,
+            "diag_far_band_contribution_limit_gain": far_band_limit_gain,
+            "diag_far_band_contribution_scale_mean_12_20m": (
+                float(np.mean(np.asarray(far_band_scale_samples, dtype=np.float64)))
+                if len(far_band_scale_samples) > 0
+                else np.nan
+            ),
+            "diag_far_band_contribution_limited_frac_12_20m": (
+                float(np.mean(np.asarray(far_band_limited_flags, dtype=np.float64)))
+                if len(far_band_limited_flags) > 0
+                else np.nan
+            ),
         }
 
         return points

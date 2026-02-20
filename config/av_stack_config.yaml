@@ -71,7 +71,7 @@ control:
     curve_entry_assist_max_frames: 18
     curve_entry_assist_watchdog_rate_delta_max: 0.22
     curve_entry_assist_rearm_frames: 20
-    curve_entry_schedule_enabled: true
+    curve_entry_schedule_enabled: false
     curve_entry_schedule_frames: 24
     curve_entry_schedule_min_rate: 0.22
     curve_entry_schedule_min_jerk: 0.16
@@ -86,11 +86,23 @@ control:
     dynamic_curve_authority_enabled: true
     dynamic_curve_rate_deficit_deadband: 0.01
     dynamic_curve_rate_boost_gain: 1.0
-    dynamic_curve_rate_boost_max: 0.3
+    dynamic_curve_rate_boost_max: 0.34
     dynamic_curve_jerk_boost_gain: 4.0
-    dynamic_curve_jerk_boost_max_factor: 3.5
+    dynamic_curve_jerk_boost_max_factor: 3.8
     dynamic_curve_hard_clip_boost_gain: 1.0
-    dynamic_curve_hard_clip_boost_max: 0.12
+    dynamic_curve_hard_clip_boost_max: 0.2
+    dynamic_curve_entry_governor_enabled: true
+    dynamic_curve_entry_governor_gain: 1.2
+    dynamic_curve_entry_governor_max_scale: 1.8
+    dynamic_curve_entry_governor_stale_floor_scale: 1.15
+    dynamic_curve_entry_governor_exclusive_mode: true
+    dynamic_curve_entry_governor_anticipatory_enabled: true
+    dynamic_curve_entry_governor_upcoming_phase_weight: 0.75
+    dynamic_curve_authority_precurve_enabled: true
+    dynamic_curve_authority_precurve_scale: 1.0
+    dynamic_curve_single_owner_mode: true
+    dynamic_curve_single_owner_min_rate: 0.22
+    dynamic_curve_single_owner_min_jerk: 0.6
     dynamic_curve_comfort_lat_accel_comfort_max_g: 0.18
     dynamic_curve_comfort_lat_accel_peak_max_g: 0.25
     dynamic_curve_comfort_lat_jerk_comfort_max_gps: 0.30
@@ -100,7 +112,18 @@ control:
     dynamic_curve_speed_low_mps: 4.0
     dynamic_curve_speed_high_mps: 10.0
     dynamic_curve_speed_boost_max_scale: 1.4
-    curve_commit_mode_enabled: true
+    turn_feasibility_governor_enabled: true
+    turn_feasibility_curvature_min: 0.002
+    turn_feasibility_guardband_g: 0.015
+    turn_feasibility_use_peak_bound: true
+    curve_unwind_policy_enabled: true
+    curve_unwind_frames: 12
+    curve_unwind_rate_scale_start: 1.0
+    curve_unwind_rate_scale_end: 0.8
+    curve_unwind_jerk_scale_start: 1.0
+    curve_unwind_jerk_scale_end: 0.7
+    curve_unwind_integral_decay: 0.85
+    curve_commit_mode_enabled: false
     curve_commit_mode_max_frames: 24
     curve_commit_mode_min_rate: 0.22
     curve_commit_mode_min_jerk: 4.0
@@ -326,8 +349,13 @@ trajectory:
   target_lane_width_m: 3.6
   ref_sign_flip_threshold: 0.12
   ref_x_rate_limit: 0.12
-  ref_x_rate_limit_turn_heading_min_abs_rad: 0.08
+  ref_x_rate_limit_turn_heading_min_abs_rad: 0.06
   ref_x_rate_limit_turn_scale_max: 2.5
+  ref_sign_flip_disable_on_turn: true
+  ref_sign_flip_disable_heading_min_abs_rad: 0.02
+  ref_x_rate_limit_precurve_enabled: true
+  ref_x_rate_limit_precurve_heading_min_abs_rad: 0.03
+  ref_x_rate_limit_precurve_scale_max: 5.0
   multi_lookahead_enabled: true
   multi_lookahead_far_scale: 1.4
   multi_lookahead_blend_alpha: 0.25
@@ -346,7 +374,15 @@ trajectory:
   dynamic_effective_horizon_farfield_scale_min: 0.85
   dynamic_effective_horizon_confidence_floor: 0.6
   dynamic_effective_horizon_confidence_fallback: 1.0
-  lane_position_smoothing_alpha: 0.75
+  far_band_contribution_cap_enabled: true
+  far_band_contribution_cap_start_m: 12.0
+  far_band_contribution_cap_gain: 0.35
+  speed_horizon_guardrail_enabled: true
+  speed_horizon_guardrail_time_headway_s: 1.8
+  speed_horizon_guardrail_margin_m: 1.0
+  speed_horizon_guardrail_min_speed_mps: 3.0
+  speed_horizon_guardrail_gain: 1.0
+  lane_position_smoothing_alpha: 0.35
   ref_point_jump_clamp_x: 0.15
   ref_point_jump_clamp_heading: 0.08
   reference_x_max_abs: 3.2
@@ -361,6 +397,8 @@ safety:
   emergency_stop_error: 4.0
   emergency_stop_release_speed: 0.2
   emergency_stop_end_run_after_seconds: 3.0
+  emergency_stop_use_gt_lane_boundaries: true
+  emergency_stop_gt_lane_boundary_margin: 0.05
   lane_width: 7.0
   car_width: 1.9
   allowed_outside_lane: 1.0

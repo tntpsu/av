@@ -1231,10 +1231,136 @@ class DataRecorder:
             dtype=np.float32
         )
         self.h5_file.create_dataset(
+            "control/dynamic_curve_entry_governor_active",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int8
+        )
+        self.h5_file.create_dataset(
+            "control/dynamic_curve_entry_governor_scale",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
             "control/dynamic_curve_authority_deficit_streak",
             shape=(0,),
             maxshape=max_shape,
             dtype=np.int16
+        )
+        self.h5_file.create_dataset(
+            "control/turn_feasibility_active",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int8
+        )
+        self.h5_file.create_dataset(
+            "control/turn_feasibility_infeasible",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int8
+        )
+        self.h5_file.create_dataset(
+            "control/turn_feasibility_curvature_abs",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/turn_feasibility_speed_mps",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/turn_feasibility_required_lat_accel_g",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/turn_feasibility_comfort_limit_g",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/turn_feasibility_peak_limit_g",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/turn_feasibility_selected_limit_g",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/turn_feasibility_guardband_g",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/turn_feasibility_margin_g",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/turn_feasibility_speed_limit_mps",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/turn_feasibility_speed_delta_mps",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/turn_feasibility_use_peak_bound",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int8
+        )
+        self.h5_file.create_dataset(
+            "control/curve_unwind_active",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int8
+        )
+        self.h5_file.create_dataset(
+            "control/curve_unwind_frames_remaining",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int16
+        )
+        self.h5_file.create_dataset(
+            "control/curve_unwind_progress",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/curve_unwind_rate_scale",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/curve_unwind_jerk_scale",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/curve_unwind_integral_decay_applied",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
         )
         self.h5_file.create_dataset(
             "control/curve_entry_schedule_active",
@@ -1536,6 +1662,19 @@ class DataRecorder:
         self.h5_file.create_dataset("trajectory/diag_first_segment_y0_gt_y1_pre", shape=(0,), maxshape=max_shape, dtype=np.float32)
         self.h5_file.create_dataset("trajectory/diag_first_segment_y0_gt_y1_post", shape=(0,), maxshape=max_shape, dtype=np.float32)
         self.h5_file.create_dataset("trajectory/diag_inversion_introduced_after_conversion", shape=(0,), maxshape=max_shape, dtype=np.float32)
+        self.h5_file.create_dataset("trajectory/diag_far_band_contribution_limited_active", shape=(0,), maxshape=max_shape, dtype=np.float32)
+        self.h5_file.create_dataset("trajectory/diag_far_band_contribution_limit_start_m", shape=(0,), maxshape=max_shape, dtype=np.float32)
+        self.h5_file.create_dataset("trajectory/diag_far_band_contribution_limit_gain", shape=(0,), maxshape=max_shape, dtype=np.float32)
+        self.h5_file.create_dataset("trajectory/diag_far_band_contribution_scale_mean_12_20m", shape=(0,), maxshape=max_shape, dtype=np.float32)
+        self.h5_file.create_dataset("trajectory/diag_far_band_contribution_limited_frac_12_20m", shape=(0,), maxshape=max_shape, dtype=np.float32)
+        self.h5_file.create_dataset("trajectory/diag_speed_horizon_guardrail_active", shape=(0,), maxshape=max_shape, dtype=np.float32)
+        self.h5_file.create_dataset("trajectory/diag_speed_horizon_guardrail_margin_m", shape=(0,), maxshape=max_shape, dtype=np.float32)
+        self.h5_file.create_dataset("trajectory/diag_speed_horizon_guardrail_horizon_m", shape=(0,), maxshape=max_shape, dtype=np.float32)
+        self.h5_file.create_dataset("trajectory/diag_speed_horizon_guardrail_time_headway_s", shape=(0,), maxshape=max_shape, dtype=np.float32)
+        self.h5_file.create_dataset("trajectory/diag_speed_horizon_guardrail_margin_buffer_m", shape=(0,), maxshape=max_shape, dtype=np.float32)
+        self.h5_file.create_dataset("trajectory/diag_speed_horizon_guardrail_allowed_speed_mps", shape=(0,), maxshape=max_shape, dtype=np.float32)
+        self.h5_file.create_dataset("trajectory/diag_speed_horizon_guardrail_target_speed_before_mps", shape=(0,), maxshape=max_shape, dtype=np.float32)
+        self.h5_file.create_dataset("trajectory/diag_speed_horizon_guardrail_target_speed_after_mps", shape=(0,), maxshape=max_shape, dtype=np.float32)
         
         # Control command details
         self.h5_file.create_dataset(
@@ -3279,7 +3418,28 @@ class DataRecorder:
         dynamic_curve_hard_clip_boost_list = []
         dynamic_curve_hard_clip_boost_cap_effective_list = []
         dynamic_curve_hard_clip_limit_effective_list = []
+        dynamic_curve_entry_governor_active_list = []
+        dynamic_curve_entry_governor_scale_list = []
         dynamic_curve_authority_deficit_streak_list = []
+        turn_feasibility_active_list = []
+        turn_feasibility_infeasible_list = []
+        turn_feasibility_curvature_abs_list = []
+        turn_feasibility_speed_mps_list = []
+        turn_feasibility_required_lat_accel_g_list = []
+        turn_feasibility_comfort_limit_g_list = []
+        turn_feasibility_peak_limit_g_list = []
+        turn_feasibility_selected_limit_g_list = []
+        turn_feasibility_guardband_g_list = []
+        turn_feasibility_margin_g_list = []
+        turn_feasibility_speed_limit_mps_list = []
+        turn_feasibility_speed_delta_mps_list = []
+        turn_feasibility_use_peak_bound_list = []
+        curve_unwind_active_list = []
+        curve_unwind_frames_remaining_list = []
+        curve_unwind_progress_list = []
+        curve_unwind_rate_scale_list = []
+        curve_unwind_jerk_scale_list = []
+        curve_unwind_integral_decay_applied_list = []
         curve_entry_schedule_active_list = []
         curve_entry_schedule_triggered_list = []
         curve_entry_schedule_handoff_triggered_list = []
@@ -3471,8 +3631,71 @@ class DataRecorder:
             dynamic_curve_hard_clip_limit_effective_list.append(
                 getattr(cc, 'dynamic_curve_hard_clip_limit_effective', 0.0) or 0.0
             )
+            dynamic_curve_entry_governor_active_list.append(
+                1 if getattr(cc, 'dynamic_curve_entry_governor_active', False) else 0
+            )
+            dynamic_curve_entry_governor_scale_list.append(
+                getattr(cc, 'dynamic_curve_entry_governor_scale', 1.0) or 1.0
+            )
             dynamic_curve_authority_deficit_streak_list.append(
                 int(getattr(cc, 'dynamic_curve_authority_deficit_streak', 0) or 0)
+            )
+            turn_feasibility_active_list.append(
+                1 if getattr(cc, 'turn_feasibility_active', False) else 0
+            )
+            turn_feasibility_infeasible_list.append(
+                1 if getattr(cc, 'turn_feasibility_infeasible', False) else 0
+            )
+            turn_feasibility_curvature_abs_list.append(
+                getattr(cc, 'turn_feasibility_curvature_abs', 0.0) or 0.0
+            )
+            turn_feasibility_speed_mps_list.append(
+                getattr(cc, 'turn_feasibility_speed_mps', 0.0) or 0.0
+            )
+            turn_feasibility_required_lat_accel_g_list.append(
+                getattr(cc, 'turn_feasibility_required_lat_accel_g', 0.0) or 0.0
+            )
+            turn_feasibility_comfort_limit_g_list.append(
+                getattr(cc, 'turn_feasibility_comfort_limit_g', 0.0) or 0.0
+            )
+            turn_feasibility_peak_limit_g_list.append(
+                getattr(cc, 'turn_feasibility_peak_limit_g', 0.0) or 0.0
+            )
+            turn_feasibility_selected_limit_g_list.append(
+                getattr(cc, 'turn_feasibility_selected_limit_g', 0.0) or 0.0
+            )
+            turn_feasibility_guardband_g_list.append(
+                getattr(cc, 'turn_feasibility_guardband_g', 0.0) or 0.0
+            )
+            turn_feasibility_margin_g_list.append(
+                getattr(cc, 'turn_feasibility_margin_g', 0.0) or 0.0
+            )
+            turn_feasibility_speed_limit_mps_list.append(
+                getattr(cc, 'turn_feasibility_speed_limit_mps', 0.0) or 0.0
+            )
+            turn_feasibility_speed_delta_mps_list.append(
+                getattr(cc, 'turn_feasibility_speed_delta_mps', 0.0) or 0.0
+            )
+            turn_feasibility_use_peak_bound_list.append(
+                1 if getattr(cc, 'turn_feasibility_use_peak_bound', False) else 0
+            )
+            curve_unwind_active_list.append(
+                1 if getattr(cc, 'curve_unwind_active', False) else 0
+            )
+            curve_unwind_frames_remaining_list.append(
+                int(getattr(cc, 'curve_unwind_frames_remaining', 0) or 0)
+            )
+            curve_unwind_progress_list.append(
+                getattr(cc, 'curve_unwind_progress', 0.0) or 0.0
+            )
+            curve_unwind_rate_scale_list.append(
+                getattr(cc, 'curve_unwind_rate_scale', 1.0) or 1.0
+            )
+            curve_unwind_jerk_scale_list.append(
+                getattr(cc, 'curve_unwind_jerk_scale', 1.0) or 1.0
+            )
+            curve_unwind_integral_decay_applied_list.append(
+                getattr(cc, 'curve_unwind_integral_decay_applied', 1.0) or 1.0
             )
             curve_entry_schedule_active_list.append(
                 1 if getattr(cc, 'curve_entry_schedule_active', False) else 0
@@ -3569,7 +3792,19 @@ class DataRecorder:
                        "dynamic_curve_hard_clip_boost",
                        "dynamic_curve_hard_clip_boost_cap_effective",
                        "dynamic_curve_hard_clip_limit_effective",
+                       "dynamic_curve_entry_governor_active",
+                       "dynamic_curve_entry_governor_scale",
                        "dynamic_curve_authority_deficit_streak",
+                       "turn_feasibility_active", "turn_feasibility_infeasible",
+                       "turn_feasibility_curvature_abs", "turn_feasibility_speed_mps",
+                       "turn_feasibility_required_lat_accel_g",
+                       "turn_feasibility_comfort_limit_g", "turn_feasibility_peak_limit_g",
+                       "turn_feasibility_selected_limit_g", "turn_feasibility_guardband_g",
+                       "turn_feasibility_margin_g", "turn_feasibility_speed_limit_mps",
+                       "turn_feasibility_speed_delta_mps", "turn_feasibility_use_peak_bound",
+                       "curve_unwind_active", "curve_unwind_frames_remaining",
+                       "curve_unwind_progress", "curve_unwind_rate_scale",
+                       "curve_unwind_jerk_scale", "curve_unwind_integral_decay_applied",
                        "curve_entry_schedule_active", "curve_entry_schedule_triggered",
                        "curve_entry_schedule_handoff_triggered", "curve_entry_schedule_frames_remaining",
                        "curve_commit_mode_active", "curve_commit_mode_triggered",
@@ -3758,8 +3993,71 @@ class DataRecorder:
             self.h5_file["control/dynamic_curve_hard_clip_limit_effective"][current_size:] = (
                 dynamic_curve_hard_clip_limit_effective_list
             )
+            self.h5_file["control/dynamic_curve_entry_governor_active"][current_size:] = np.array(
+                dynamic_curve_entry_governor_active_list, dtype=np.int8
+            )
+            self.h5_file["control/dynamic_curve_entry_governor_scale"][current_size:] = (
+                dynamic_curve_entry_governor_scale_list
+            )
             self.h5_file["control/dynamic_curve_authority_deficit_streak"][current_size:] = np.array(
                 dynamic_curve_authority_deficit_streak_list, dtype=np.int16
+            )
+            self.h5_file["control/turn_feasibility_active"][current_size:] = np.array(
+                turn_feasibility_active_list, dtype=np.int8
+            )
+            self.h5_file["control/turn_feasibility_infeasible"][current_size:] = np.array(
+                turn_feasibility_infeasible_list, dtype=np.int8
+            )
+            self.h5_file["control/turn_feasibility_curvature_abs"][current_size:] = (
+                turn_feasibility_curvature_abs_list
+            )
+            self.h5_file["control/turn_feasibility_speed_mps"][current_size:] = (
+                turn_feasibility_speed_mps_list
+            )
+            self.h5_file["control/turn_feasibility_required_lat_accel_g"][current_size:] = (
+                turn_feasibility_required_lat_accel_g_list
+            )
+            self.h5_file["control/turn_feasibility_comfort_limit_g"][current_size:] = (
+                turn_feasibility_comfort_limit_g_list
+            )
+            self.h5_file["control/turn_feasibility_peak_limit_g"][current_size:] = (
+                turn_feasibility_peak_limit_g_list
+            )
+            self.h5_file["control/turn_feasibility_selected_limit_g"][current_size:] = (
+                turn_feasibility_selected_limit_g_list
+            )
+            self.h5_file["control/turn_feasibility_guardband_g"][current_size:] = (
+                turn_feasibility_guardband_g_list
+            )
+            self.h5_file["control/turn_feasibility_margin_g"][current_size:] = (
+                turn_feasibility_margin_g_list
+            )
+            self.h5_file["control/turn_feasibility_speed_limit_mps"][current_size:] = (
+                turn_feasibility_speed_limit_mps_list
+            )
+            self.h5_file["control/turn_feasibility_speed_delta_mps"][current_size:] = (
+                turn_feasibility_speed_delta_mps_list
+            )
+            self.h5_file["control/turn_feasibility_use_peak_bound"][current_size:] = np.array(
+                turn_feasibility_use_peak_bound_list, dtype=np.int8
+            )
+            self.h5_file["control/curve_unwind_active"][current_size:] = np.array(
+                curve_unwind_active_list, dtype=np.int8
+            )
+            self.h5_file["control/curve_unwind_frames_remaining"][current_size:] = np.array(
+                curve_unwind_frames_remaining_list, dtype=np.int16
+            )
+            self.h5_file["control/curve_unwind_progress"][current_size:] = (
+                curve_unwind_progress_list
+            )
+            self.h5_file["control/curve_unwind_rate_scale"][current_size:] = (
+                curve_unwind_rate_scale_list
+            )
+            self.h5_file["control/curve_unwind_jerk_scale"][current_size:] = (
+                curve_unwind_jerk_scale_list
+            )
+            self.h5_file["control/curve_unwind_integral_decay_applied"][current_size:] = (
+                curve_unwind_integral_decay_applied_list
             )
             self.h5_file["control/curve_entry_schedule_active"][current_size:] = np.array(
                 curve_entry_schedule_active_list, dtype=np.int8
@@ -4119,6 +4417,19 @@ class DataRecorder:
         diag_first_segment_y0_gt_y1_pre = []
         diag_first_segment_y0_gt_y1_post = []
         diag_inversion_introduced_after_conversion = []
+        diag_far_band_contribution_limited_active = []
+        diag_far_band_contribution_limit_start_m = []
+        diag_far_band_contribution_limit_gain = []
+        diag_far_band_contribution_scale_mean_12_20m = []
+        diag_far_band_contribution_limited_frac_12_20m = []
+        diag_speed_horizon_guardrail_active = []
+        diag_speed_horizon_guardrail_margin_m = []
+        diag_speed_horizon_guardrail_horizon_m = []
+        diag_speed_horizon_guardrail_time_headway_s = []
+        diag_speed_horizon_guardrail_margin_buffer_m = []
+        diag_speed_horizon_guardrail_allowed_speed_mps = []
+        diag_speed_horizon_guardrail_target_speed_before_mps = []
+        diag_speed_horizon_guardrail_target_speed_after_mps = []
         for frame in frames:
             if frame.trajectory_output and frame.trajectory_output.reference_point:
                 rp = frame.trajectory_output.reference_point
@@ -4217,6 +4528,19 @@ class DataRecorder:
                 diag_first_segment_y0_gt_y1_pre.append(float(to.diag_first_segment_y0_gt_y1_pre if to.diag_first_segment_y0_gt_y1_pre is not None else np.nan))
                 diag_first_segment_y0_gt_y1_post.append(float(to.diag_first_segment_y0_gt_y1_post if to.diag_first_segment_y0_gt_y1_post is not None else np.nan))
                 diag_inversion_introduced_after_conversion.append(float(to.diag_inversion_introduced_after_conversion if to.diag_inversion_introduced_after_conversion is not None else np.nan))
+                diag_far_band_contribution_limited_active.append(float(to.diag_far_band_contribution_limited_active if to.diag_far_band_contribution_limited_active is not None else np.nan))
+                diag_far_band_contribution_limit_start_m.append(float(to.diag_far_band_contribution_limit_start_m if to.diag_far_band_contribution_limit_start_m is not None else np.nan))
+                diag_far_band_contribution_limit_gain.append(float(to.diag_far_band_contribution_limit_gain if to.diag_far_band_contribution_limit_gain is not None else np.nan))
+                diag_far_band_contribution_scale_mean_12_20m.append(float(to.diag_far_band_contribution_scale_mean_12_20m if to.diag_far_band_contribution_scale_mean_12_20m is not None else np.nan))
+                diag_far_band_contribution_limited_frac_12_20m.append(float(to.diag_far_band_contribution_limited_frac_12_20m if to.diag_far_band_contribution_limited_frac_12_20m is not None else np.nan))
+                diag_speed_horizon_guardrail_active.append(float(to.diag_speed_horizon_guardrail_active if to.diag_speed_horizon_guardrail_active is not None else np.nan))
+                diag_speed_horizon_guardrail_margin_m.append(float(to.diag_speed_horizon_guardrail_margin_m if to.diag_speed_horizon_guardrail_margin_m is not None else np.nan))
+                diag_speed_horizon_guardrail_horizon_m.append(float(to.diag_speed_horizon_guardrail_horizon_m if to.diag_speed_horizon_guardrail_horizon_m is not None else np.nan))
+                diag_speed_horizon_guardrail_time_headway_s.append(float(to.diag_speed_horizon_guardrail_time_headway_s if to.diag_speed_horizon_guardrail_time_headway_s is not None else np.nan))
+                diag_speed_horizon_guardrail_margin_buffer_m.append(float(to.diag_speed_horizon_guardrail_margin_buffer_m if to.diag_speed_horizon_guardrail_margin_buffer_m is not None else np.nan))
+                diag_speed_horizon_guardrail_allowed_speed_mps.append(float(to.diag_speed_horizon_guardrail_allowed_speed_mps if to.diag_speed_horizon_guardrail_allowed_speed_mps is not None else np.nan))
+                diag_speed_horizon_guardrail_target_speed_before_mps.append(float(to.diag_speed_horizon_guardrail_target_speed_before_mps if to.diag_speed_horizon_guardrail_target_speed_before_mps is not None else np.nan))
+                diag_speed_horizon_guardrail_target_speed_after_mps.append(float(to.diag_speed_horizon_guardrail_target_speed_after_mps if to.diag_speed_horizon_guardrail_target_speed_after_mps is not None else np.nan))
             else:
                 # No reference point for this frame - append zeros
                 ref_points.append([0.0, 0.0, 0.0, 0.0])
@@ -4295,6 +4619,19 @@ class DataRecorder:
                 diag_first_segment_y0_gt_y1_pre.append(float(to.diag_first_segment_y0_gt_y1_pre if (to and to.diag_first_segment_y0_gt_y1_pre is not None) else np.nan))
                 diag_first_segment_y0_gt_y1_post.append(float(to.diag_first_segment_y0_gt_y1_post if (to and to.diag_first_segment_y0_gt_y1_post is not None) else np.nan))
                 diag_inversion_introduced_after_conversion.append(float(to.diag_inversion_introduced_after_conversion if (to and to.diag_inversion_introduced_after_conversion is not None) else np.nan))
+                diag_far_band_contribution_limited_active.append(float(to.diag_far_band_contribution_limited_active if (to and to.diag_far_band_contribution_limited_active is not None) else np.nan))
+                diag_far_band_contribution_limit_start_m.append(float(to.diag_far_band_contribution_limit_start_m if (to and to.diag_far_band_contribution_limit_start_m is not None) else np.nan))
+                diag_far_band_contribution_limit_gain.append(float(to.diag_far_band_contribution_limit_gain if (to and to.diag_far_band_contribution_limit_gain is not None) else np.nan))
+                diag_far_band_contribution_scale_mean_12_20m.append(float(to.diag_far_band_contribution_scale_mean_12_20m if (to and to.diag_far_band_contribution_scale_mean_12_20m is not None) else np.nan))
+                diag_far_band_contribution_limited_frac_12_20m.append(float(to.diag_far_band_contribution_limited_frac_12_20m if (to and to.diag_far_band_contribution_limited_frac_12_20m is not None) else np.nan))
+                diag_speed_horizon_guardrail_active.append(float(to.diag_speed_horizon_guardrail_active if (to and to.diag_speed_horizon_guardrail_active is not None) else np.nan))
+                diag_speed_horizon_guardrail_margin_m.append(float(to.diag_speed_horizon_guardrail_margin_m if (to and to.diag_speed_horizon_guardrail_margin_m is not None) else np.nan))
+                diag_speed_horizon_guardrail_horizon_m.append(float(to.diag_speed_horizon_guardrail_horizon_m if (to and to.diag_speed_horizon_guardrail_horizon_m is not None) else np.nan))
+                diag_speed_horizon_guardrail_time_headway_s.append(float(to.diag_speed_horizon_guardrail_time_headway_s if (to and to.diag_speed_horizon_guardrail_time_headway_s is not None) else np.nan))
+                diag_speed_horizon_guardrail_margin_buffer_m.append(float(to.diag_speed_horizon_guardrail_margin_buffer_m if (to and to.diag_speed_horizon_guardrail_margin_buffer_m is not None) else np.nan))
+                diag_speed_horizon_guardrail_allowed_speed_mps.append(float(to.diag_speed_horizon_guardrail_allowed_speed_mps if (to and to.diag_speed_horizon_guardrail_allowed_speed_mps is not None) else np.nan))
+                diag_speed_horizon_guardrail_target_speed_before_mps.append(float(to.diag_speed_horizon_guardrail_target_speed_before_mps if (to and to.diag_speed_horizon_guardrail_target_speed_before_mps is not None) else np.nan))
+                diag_speed_horizon_guardrail_target_speed_after_mps.append(float(to.diag_speed_horizon_guardrail_target_speed_after_mps if (to and to.diag_speed_horizon_guardrail_target_speed_after_mps is not None) else np.nan))
         
         if ref_points:
             ref_points_array = np.array(ref_points, dtype=np.float32)
@@ -4384,6 +4721,19 @@ class DataRecorder:
             self.h5_file["trajectory/diag_first_segment_y0_gt_y1_pre"].resize((new_size_rp,))
             self.h5_file["trajectory/diag_first_segment_y0_gt_y1_post"].resize((new_size_rp,))
             self.h5_file["trajectory/diag_inversion_introduced_after_conversion"].resize((new_size_rp,))
+            self.h5_file["trajectory/diag_far_band_contribution_limited_active"].resize((new_size_rp,))
+            self.h5_file["trajectory/diag_far_band_contribution_limit_start_m"].resize((new_size_rp,))
+            self.h5_file["trajectory/diag_far_band_contribution_limit_gain"].resize((new_size_rp,))
+            self.h5_file["trajectory/diag_far_band_contribution_scale_mean_12_20m"].resize((new_size_rp,))
+            self.h5_file["trajectory/diag_far_band_contribution_limited_frac_12_20m"].resize((new_size_rp,))
+            self.h5_file["trajectory/diag_speed_horizon_guardrail_active"].resize((new_size_rp,))
+            self.h5_file["trajectory/diag_speed_horizon_guardrail_margin_m"].resize((new_size_rp,))
+            self.h5_file["trajectory/diag_speed_horizon_guardrail_horizon_m"].resize((new_size_rp,))
+            self.h5_file["trajectory/diag_speed_horizon_guardrail_time_headway_s"].resize((new_size_rp,))
+            self.h5_file["trajectory/diag_speed_horizon_guardrail_margin_buffer_m"].resize((new_size_rp,))
+            self.h5_file["trajectory/diag_speed_horizon_guardrail_allowed_speed_mps"].resize((new_size_rp,))
+            self.h5_file["trajectory/diag_speed_horizon_guardrail_target_speed_before_mps"].resize((new_size_rp,))
+            self.h5_file["trajectory/diag_speed_horizon_guardrail_target_speed_after_mps"].resize((new_size_rp,))
             
             # Write smoothed data
             self.h5_file["trajectory/reference_point_x"][current_size_rp:] = ref_points_array[:, 0]
@@ -4472,6 +4822,19 @@ class DataRecorder:
             self.h5_file["trajectory/diag_first_segment_y0_gt_y1_pre"][current_size_rp:] = np.array(diag_first_segment_y0_gt_y1_pre, dtype=np.float32)
             self.h5_file["trajectory/diag_first_segment_y0_gt_y1_post"][current_size_rp:] = np.array(diag_first_segment_y0_gt_y1_post, dtype=np.float32)
             self.h5_file["trajectory/diag_inversion_introduced_after_conversion"][current_size_rp:] = np.array(diag_inversion_introduced_after_conversion, dtype=np.float32)
+            self.h5_file["trajectory/diag_far_band_contribution_limited_active"][current_size_rp:] = np.array(diag_far_band_contribution_limited_active, dtype=np.float32)
+            self.h5_file["trajectory/diag_far_band_contribution_limit_start_m"][current_size_rp:] = np.array(diag_far_band_contribution_limit_start_m, dtype=np.float32)
+            self.h5_file["trajectory/diag_far_band_contribution_limit_gain"][current_size_rp:] = np.array(diag_far_band_contribution_limit_gain, dtype=np.float32)
+            self.h5_file["trajectory/diag_far_band_contribution_scale_mean_12_20m"][current_size_rp:] = np.array(diag_far_band_contribution_scale_mean_12_20m, dtype=np.float32)
+            self.h5_file["trajectory/diag_far_band_contribution_limited_frac_12_20m"][current_size_rp:] = np.array(diag_far_band_contribution_limited_frac_12_20m, dtype=np.float32)
+            self.h5_file["trajectory/diag_speed_horizon_guardrail_active"][current_size_rp:] = np.array(diag_speed_horizon_guardrail_active, dtype=np.float32)
+            self.h5_file["trajectory/diag_speed_horizon_guardrail_margin_m"][current_size_rp:] = np.array(diag_speed_horizon_guardrail_margin_m, dtype=np.float32)
+            self.h5_file["trajectory/diag_speed_horizon_guardrail_horizon_m"][current_size_rp:] = np.array(diag_speed_horizon_guardrail_horizon_m, dtype=np.float32)
+            self.h5_file["trajectory/diag_speed_horizon_guardrail_time_headway_s"][current_size_rp:] = np.array(diag_speed_horizon_guardrail_time_headway_s, dtype=np.float32)
+            self.h5_file["trajectory/diag_speed_horizon_guardrail_margin_buffer_m"][current_size_rp:] = np.array(diag_speed_horizon_guardrail_margin_buffer_m, dtype=np.float32)
+            self.h5_file["trajectory/diag_speed_horizon_guardrail_allowed_speed_mps"][current_size_rp:] = np.array(diag_speed_horizon_guardrail_allowed_speed_mps, dtype=np.float32)
+            self.h5_file["trajectory/diag_speed_horizon_guardrail_target_speed_before_mps"][current_size_rp:] = np.array(diag_speed_horizon_guardrail_target_speed_before_mps, dtype=np.float32)
+            self.h5_file["trajectory/diag_speed_horizon_guardrail_target_speed_after_mps"][current_size_rp:] = np.array(diag_speed_horizon_guardrail_target_speed_after_mps, dtype=np.float32)
         
         # NEW: Write trajectory points (full path, not just reference point)
         trajectory_points_list = []

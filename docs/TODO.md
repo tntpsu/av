@@ -92,6 +92,8 @@ TODOs:
 - [x] Validate hard-clip lift in canonical 25s sanity run before starting gain/cap A/B sweep.
 - [x] Add control-lock sensitivity comparator for self/cross matrix reporting
       (`tools/analyze/compare_controllock_sensitivity.py`).
+- [ ] Replace GT-dependent boundary emergency stop trigger with perception/trajectory
+      boundary inference (keep left/right off-road symmetry without GT).
 - [ ] Add automated "reject promotion" rule when authority metrics improve but
       failure medians worsen.
 

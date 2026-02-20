@@ -260,6 +260,8 @@ class ControlCommand:
     dynamic_curve_hard_clip_boost: Optional[float] = None
     dynamic_curve_hard_clip_boost_cap_effective: Optional[float] = None
     dynamic_curve_hard_clip_limit_effective: Optional[float] = None
+    dynamic_curve_entry_governor_active: Optional[bool] = None
+    dynamic_curve_entry_governor_scale: Optional[float] = None
     dynamic_curve_authority_deficit_streak: Optional[int] = None
     curve_entry_schedule_active: bool = False
     curve_entry_schedule_triggered: bool = False
@@ -279,6 +281,27 @@ class ControlCommand:
     steering_authority_gap: Optional[float] = None
     steering_transfer_ratio: Optional[float] = None
     steering_first_limiter_stage_code: Optional[float] = None  # 0=none,1=rate,2=jerk,3=hard_clip,4=smoothing
+    # Explicit unwind policy diagnostics (Phase 2)
+    curve_unwind_active: Optional[bool] = None
+    curve_unwind_frames_remaining: Optional[int] = None
+    curve_unwind_progress: Optional[float] = None
+    curve_unwind_rate_scale: Optional[float] = None
+    curve_unwind_jerk_scale: Optional[float] = None
+    curve_unwind_integral_decay_applied: Optional[float] = None
+    # Telemetry-only turn feasibility governor diagnostics (no behavior change in Phase 1)
+    turn_feasibility_active: Optional[bool] = None
+    turn_feasibility_infeasible: Optional[bool] = None
+    turn_feasibility_curvature_abs: Optional[float] = None
+    turn_feasibility_speed_mps: Optional[float] = None
+    turn_feasibility_required_lat_accel_g: Optional[float] = None
+    turn_feasibility_comfort_limit_g: Optional[float] = None
+    turn_feasibility_peak_limit_g: Optional[float] = None
+    turn_feasibility_selected_limit_g: Optional[float] = None
+    turn_feasibility_guardband_g: Optional[float] = None
+    turn_feasibility_margin_g: Optional[float] = None
+    turn_feasibility_speed_limit_mps: Optional[float] = None
+    turn_feasibility_speed_delta_mps: Optional[float] = None
+    turn_feasibility_use_peak_bound: Optional[bool] = None
 
 
 @dataclass
@@ -394,6 +417,14 @@ class TrajectoryOutput:
     diag_dynamic_effective_horizon_confidence_used: Optional[float] = None
     diag_dynamic_effective_horizon_limiter_code: Optional[float] = None
     diag_dynamic_effective_horizon_applied: Optional[float] = None
+    diag_speed_horizon_guardrail_active: Optional[float] = None
+    diag_speed_horizon_guardrail_margin_m: Optional[float] = None
+    diag_speed_horizon_guardrail_horizon_m: Optional[float] = None
+    diag_speed_horizon_guardrail_time_headway_s: Optional[float] = None
+    diag_speed_horizon_guardrail_margin_buffer_m: Optional[float] = None
+    diag_speed_horizon_guardrail_allowed_speed_mps: Optional[float] = None
+    diag_speed_horizon_guardrail_target_speed_before_mps: Optional[float] = None
+    diag_speed_horizon_guardrail_target_speed_after_mps: Optional[float] = None
     diag_preclip_abs_mean_0_8m: Optional[float] = None
     diag_preclip_abs_mean_8_12m: Optional[float] = None
     diag_preclip_abs_mean_12_20m: Optional[float] = None
@@ -407,6 +438,11 @@ class TrajectoryOutput:
     diag_first_segment_y0_gt_y1_pre: Optional[float] = None
     diag_first_segment_y0_gt_y1_post: Optional[float] = None
     diag_inversion_introduced_after_conversion: Optional[float] = None
+    diag_far_band_contribution_limited_active: Optional[float] = None
+    diag_far_band_contribution_limit_start_m: Optional[float] = None
+    diag_far_band_contribution_limit_gain: Optional[float] = None
+    diag_far_band_contribution_scale_mean_12_20m: Optional[float] = None
+    diag_far_band_contribution_limited_frac_12_20m: Optional[float] = None
 
 
 @dataclass

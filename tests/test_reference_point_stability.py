@@ -769,6 +769,52 @@ class TestReferencePointTargetLane:
         assert ref_point_1 is not None and ref_point_2 is not None
         assert abs(ref_point_2['x'] - ref_point_1['x']) <= 0.081
 
+    def test_reference_point_rate_limit_relaxes_on_precurve_heading(self):
+        base_kwargs = dict(
+            planner_type="rule_based",
+            image_width=640.0,
+            image_height=480.0,
+            target_lane="right",
+            target_lane_width_m=3.6,
+            lane_position_smoothing_alpha=0.0,
+            ref_x_rate_limit=0.08,
+            ref_x_rate_limit_turn_heading_min_abs_rad=0.08,
+            ref_x_rate_limit_turn_scale_max=1.0,
+            ref_sign_flip_threshold=0.0,
+            ref_sign_flip_disable_on_turn=False,
+            ref_x_rate_limit_precurve_heading_min_abs_rad=0.03,
+            ref_x_rate_limit_precurve_scale_max=4.0,
+        )
+        enabled = TrajectoryPlanningInference(
+            **{**base_kwargs, "ref_x_rate_limit_precurve_enabled": True}
+        )
+        disabled = TrajectoryPlanningInference(
+            **{**base_kwargs, "ref_x_rate_limit_precurve_enabled": False}
+        )
+
+        seed_point = {'x': 0.0, 'y': 8.0, 'heading': 0.0, 'velocity': 8.0}
+        enabled.last_smoothed_ref_point = dict(seed_point)
+        disabled.last_smoothed_ref_point = dict(seed_point)
+
+        raw = {
+            'x': 0.40,
+            'y': 8.0,
+            'heading': 0.06,
+            'velocity': 8.0,
+            'raw_x': 0.40,
+            'raw_heading': 0.06,
+        }
+        with_relax = enabled._apply_smoothing(
+            dict(raw), use_light_smoothing=True, minimal_smoothing=True
+        )
+        without_relax = disabled._apply_smoothing(
+            dict(raw), use_light_smoothing=True, minimal_smoothing=True
+        )
+
+        assert with_relax['x'] > without_relax['x']
+        assert with_relax['x'] == pytest.approx(0.32, rel=1e-3, abs=1e-3)
+        assert without_relax['x'] == pytest.approx(0.08, rel=1e-3, abs=1e-3)
+
     def test_reference_point_multi_lookahead_blend(self):
         lane_coeffs = [
             np.array([0.2, 150.0]),  # left lane: x = 0.2*y + 150

@@ -195,6 +195,16 @@ def main() -> None:
                 val = float(np.asarray(tgrp["diag_dynamic_effective_horizon_limiter_code"])[i])
                 if math.isfinite(val):
                     diag_dyn_limiter_code = val
+            diag_far_band_active = None
+            if "diag_far_band_contribution_limited_active" in tgrp:
+                val = float(np.asarray(tgrp["diag_far_band_contribution_limited_active"])[i])
+                if math.isfinite(val):
+                    diag_far_band_active = val > 0.5
+            diag_speed_horizon_guardrail_active = None
+            if "diag_speed_horizon_guardrail_active" in tgrp:
+                val = float(np.asarray(tgrp["diag_speed_horizon_guardrail_active"])[i])
+                if math.isfinite(val):
+                    diag_speed_horizon_guardrail_active = val > 0.5
 
             rows.append(
                 {
@@ -208,6 +218,8 @@ def main() -> None:
                     "ref_x_rate_limit_active": bool(diag_rate_limit) if diag_rate_limit is not None else False,
                     "dynamic_effective_horizon_applied": bool(diag_dyn_applied) if diag_dyn_applied is not None else False,
                     "dynamic_effective_horizon_confidence_limited": bool(diag_dyn_limiter_code == 3.0) if diag_dyn_limiter_code is not None else False,
+                    "far_band_contribution_limited_active": bool(diag_far_band_active) if diag_far_band_active is not None else False,
+                    "speed_horizon_guardrail_active": bool(diag_speed_horizon_guardrail_active) if diag_speed_horizon_guardrail_active is not None else False,
                     "x_clip_count": float(np.asarray(f["trajectory/diag_x_clip_count"])[i]) if "diag_x_clip_count" in f["trajectory"] else None,
                     "x_clip_any": bool(
                         ("diag_x_clip_count" in f["trajectory"]) and math.isfinite(float(np.asarray(f["trajectory/diag_x_clip_count"])[i])) and float(np.asarray(f["trajectory/diag_x_clip_count"])[i]) > 0.0
@@ -255,6 +267,8 @@ def main() -> None:
             "ref_x_rate_limit_active": summarize_flag("ref_x_rate_limit_active"),
             "dynamic_effective_horizon_applied": summarize_flag("dynamic_effective_horizon_applied"),
             "dynamic_effective_horizon_confidence_limited": summarize_flag("dynamic_effective_horizon_confidence_limited"),
+            "far_band_contribution_limited_active": summarize_flag("far_band_contribution_limited_active"),
+            "speed_horizon_guardrail_active": summarize_flag("speed_horizon_guardrail_active"),
             "x_clip_any": summarize_flag("x_clip_any"),
             "x_clip_heavy": summarize_flag("x_clip_heavy"),
             "control_curvature_low_proxy": summarize_flag("control_curv_low"),

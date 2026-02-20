@@ -1003,6 +1003,19 @@ def get_frame_data(filename, frame_index):
                         "diag_first_segment_y0_gt_y1_pre",
                         "diag_first_segment_y0_gt_y1_post",
                         "diag_inversion_introduced_after_conversion",
+                        "diag_far_band_contribution_limited_active",
+                        "diag_far_band_contribution_limit_start_m",
+                        "diag_far_band_contribution_limit_gain",
+                        "diag_far_band_contribution_scale_mean_12_20m",
+                        "diag_far_band_contribution_limited_frac_12_20m",
+                        "diag_speed_horizon_guardrail_active",
+                        "diag_speed_horizon_guardrail_margin_m",
+                        "diag_speed_horizon_guardrail_horizon_m",
+                        "diag_speed_horizon_guardrail_time_headway_s",
+                        "diag_speed_horizon_guardrail_margin_buffer_m",
+                        "diag_speed_horizon_guardrail_allowed_speed_mps",
+                        "diag_speed_horizon_guardrail_target_speed_before_mps",
+                        "diag_speed_horizon_guardrail_target_speed_after_mps",
                     ]
                     for diag_key in traj_diag_fields:
                         ds = f"trajectory/{diag_key}"
@@ -1323,11 +1336,137 @@ def get_frame_data(filename, frame_index):
                         frame_data['control']['dynamic_curve_hard_clip_limit_effective'] = float(
                             f['control/dynamic_curve_hard_clip_limit_effective'][control_idx]
                         )
+                    if 'control/dynamic_curve_entry_governor_active' in f and control_idx < len(
+                        f['control/dynamic_curve_entry_governor_active']
+                    ):
+                        frame_data['control']['dynamic_curve_entry_governor_active'] = int(
+                            f['control/dynamic_curve_entry_governor_active'][control_idx]
+                        )
+                    if 'control/dynamic_curve_entry_governor_scale' in f and control_idx < len(
+                        f['control/dynamic_curve_entry_governor_scale']
+                    ):
+                        frame_data['control']['dynamic_curve_entry_governor_scale'] = float(
+                            f['control/dynamic_curve_entry_governor_scale'][control_idx]
+                        )
                     if 'control/dynamic_curve_authority_deficit_streak' in f and control_idx < len(
                         f['control/dynamic_curve_authority_deficit_streak']
                     ):
                         frame_data['control']['dynamic_curve_authority_deficit_streak'] = int(
                             f['control/dynamic_curve_authority_deficit_streak'][control_idx]
+                        )
+                    if 'control/turn_feasibility_active' in f and control_idx < len(
+                        f['control/turn_feasibility_active']
+                    ):
+                        frame_data['control']['turn_feasibility_active'] = int(
+                            f['control/turn_feasibility_active'][control_idx]
+                        ) == 1
+                    if 'control/turn_feasibility_infeasible' in f and control_idx < len(
+                        f['control/turn_feasibility_infeasible']
+                    ):
+                        frame_data['control']['turn_feasibility_infeasible'] = int(
+                            f['control/turn_feasibility_infeasible'][control_idx]
+                        ) == 1
+                    if 'control/turn_feasibility_curvature_abs' in f and control_idx < len(
+                        f['control/turn_feasibility_curvature_abs']
+                    ):
+                        frame_data['control']['turn_feasibility_curvature_abs'] = float(
+                            f['control/turn_feasibility_curvature_abs'][control_idx]
+                        )
+                    if 'control/turn_feasibility_speed_mps' in f and control_idx < len(
+                        f['control/turn_feasibility_speed_mps']
+                    ):
+                        frame_data['control']['turn_feasibility_speed_mps'] = float(
+                            f['control/turn_feasibility_speed_mps'][control_idx]
+                        )
+                    if 'control/turn_feasibility_required_lat_accel_g' in f and control_idx < len(
+                        f['control/turn_feasibility_required_lat_accel_g']
+                    ):
+                        frame_data['control']['turn_feasibility_required_lat_accel_g'] = float(
+                            f['control/turn_feasibility_required_lat_accel_g'][control_idx]
+                        )
+                    if 'control/turn_feasibility_comfort_limit_g' in f and control_idx < len(
+                        f['control/turn_feasibility_comfort_limit_g']
+                    ):
+                        frame_data['control']['turn_feasibility_comfort_limit_g'] = float(
+                            f['control/turn_feasibility_comfort_limit_g'][control_idx]
+                        )
+                    if 'control/turn_feasibility_peak_limit_g' in f and control_idx < len(
+                        f['control/turn_feasibility_peak_limit_g']
+                    ):
+                        frame_data['control']['turn_feasibility_peak_limit_g'] = float(
+                            f['control/turn_feasibility_peak_limit_g'][control_idx]
+                        )
+                    if 'control/turn_feasibility_selected_limit_g' in f and control_idx < len(
+                        f['control/turn_feasibility_selected_limit_g']
+                    ):
+                        frame_data['control']['turn_feasibility_selected_limit_g'] = float(
+                            f['control/turn_feasibility_selected_limit_g'][control_idx]
+                        )
+                    if 'control/turn_feasibility_guardband_g' in f and control_idx < len(
+                        f['control/turn_feasibility_guardband_g']
+                    ):
+                        frame_data['control']['turn_feasibility_guardband_g'] = float(
+                            f['control/turn_feasibility_guardband_g'][control_idx]
+                        )
+                    if 'control/turn_feasibility_margin_g' in f and control_idx < len(
+                        f['control/turn_feasibility_margin_g']
+                    ):
+                        frame_data['control']['turn_feasibility_margin_g'] = float(
+                            f['control/turn_feasibility_margin_g'][control_idx]
+                        )
+                    if 'control/turn_feasibility_speed_limit_mps' in f and control_idx < len(
+                        f['control/turn_feasibility_speed_limit_mps']
+                    ):
+                        frame_data['control']['turn_feasibility_speed_limit_mps'] = float(
+                            f['control/turn_feasibility_speed_limit_mps'][control_idx]
+                        )
+                    if 'control/turn_feasibility_speed_delta_mps' in f and control_idx < len(
+                        f['control/turn_feasibility_speed_delta_mps']
+                    ):
+                        frame_data['control']['turn_feasibility_speed_delta_mps'] = float(
+                            f['control/turn_feasibility_speed_delta_mps'][control_idx]
+                        )
+                    if 'control/turn_feasibility_use_peak_bound' in f and control_idx < len(
+                        f['control/turn_feasibility_use_peak_bound']
+                    ):
+                        frame_data['control']['turn_feasibility_use_peak_bound'] = int(
+                            f['control/turn_feasibility_use_peak_bound'][control_idx]
+                        ) == 1
+                    if 'control/curve_unwind_active' in f and control_idx < len(
+                        f['control/curve_unwind_active']
+                    ):
+                        frame_data['control']['curve_unwind_active'] = int(
+                            f['control/curve_unwind_active'][control_idx]
+                        ) == 1
+                    if 'control/curve_unwind_frames_remaining' in f and control_idx < len(
+                        f['control/curve_unwind_frames_remaining']
+                    ):
+                        frame_data['control']['curve_unwind_frames_remaining'] = int(
+                            f['control/curve_unwind_frames_remaining'][control_idx]
+                        )
+                    if 'control/curve_unwind_progress' in f and control_idx < len(
+                        f['control/curve_unwind_progress']
+                    ):
+                        frame_data['control']['curve_unwind_progress'] = float(
+                            f['control/curve_unwind_progress'][control_idx]
+                        )
+                    if 'control/curve_unwind_rate_scale' in f and control_idx < len(
+                        f['control/curve_unwind_rate_scale']
+                    ):
+                        frame_data['control']['curve_unwind_rate_scale'] = float(
+                            f['control/curve_unwind_rate_scale'][control_idx]
+                        )
+                    if 'control/curve_unwind_jerk_scale' in f and control_idx < len(
+                        f['control/curve_unwind_jerk_scale']
+                    ):
+                        frame_data['control']['curve_unwind_jerk_scale'] = float(
+                            f['control/curve_unwind_jerk_scale'][control_idx]
+                        )
+                    if 'control/curve_unwind_integral_decay_applied' in f and control_idx < len(
+                        f['control/curve_unwind_integral_decay_applied']
+                    ):
+                        frame_data['control']['curve_unwind_integral_decay_applied'] = float(
+                            f['control/curve_unwind_integral_decay_applied'][control_idx]
                         )
                     if 'control/curve_entry_schedule_active' in f and control_idx < len(f['control/curve_entry_schedule_active']):
                         frame_data['control']['curve_entry_schedule_active'] = int(
@@ -1467,6 +1606,42 @@ def get_frame_data(filename, frame_index):
             frame_data['control']['dynamic_curve_hard_clip_boost_max_cfg'] = float(
                 lateral_cfg.get('dynamic_curve_hard_clip_boost_max', 0.12)
             )
+            frame_data['control']['dynamic_curve_entry_governor_enabled_cfg'] = bool(
+                lateral_cfg.get('dynamic_curve_entry_governor_enabled', True)
+            )
+            frame_data['control']['dynamic_curve_entry_governor_gain_cfg'] = float(
+                lateral_cfg.get('dynamic_curve_entry_governor_gain', 1.2)
+            )
+            frame_data['control']['dynamic_curve_entry_governor_max_scale_cfg'] = float(
+                lateral_cfg.get('dynamic_curve_entry_governor_max_scale', 1.8)
+            )
+            frame_data['control']['dynamic_curve_entry_governor_stale_floor_scale_cfg'] = float(
+                lateral_cfg.get('dynamic_curve_entry_governor_stale_floor_scale', 1.15)
+            )
+            frame_data['control']['dynamic_curve_entry_governor_exclusive_mode_cfg'] = bool(
+                lateral_cfg.get('dynamic_curve_entry_governor_exclusive_mode', True)
+            )
+            frame_data['control']['dynamic_curve_entry_governor_anticipatory_enabled_cfg'] = bool(
+                lateral_cfg.get('dynamic_curve_entry_governor_anticipatory_enabled', True)
+            )
+            frame_data['control']['dynamic_curve_entry_governor_upcoming_phase_weight_cfg'] = float(
+                lateral_cfg.get('dynamic_curve_entry_governor_upcoming_phase_weight', 0.55)
+            )
+            frame_data['control']['dynamic_curve_authority_precurve_enabled_cfg'] = bool(
+                lateral_cfg.get('dynamic_curve_authority_precurve_enabled', True)
+            )
+            frame_data['control']['dynamic_curve_authority_precurve_scale_cfg'] = float(
+                lateral_cfg.get('dynamic_curve_authority_precurve_scale', 0.8)
+            )
+            frame_data['control']['dynamic_curve_single_owner_mode_cfg'] = bool(
+                lateral_cfg.get('dynamic_curve_single_owner_mode', False)
+            )
+            frame_data['control']['dynamic_curve_single_owner_min_rate_cfg'] = float(
+                lateral_cfg.get('dynamic_curve_single_owner_min_rate', 0.22)
+            )
+            frame_data['control']['dynamic_curve_single_owner_min_jerk_cfg'] = float(
+                lateral_cfg.get('dynamic_curve_single_owner_min_jerk', 0.6)
+            )
             frame_data['control']['dynamic_curve_comfort_lat_accel_comfort_max_g_cfg'] = float(
                 lateral_cfg.get('dynamic_curve_comfort_lat_accel_comfort_max_g', 0.18)
             )
@@ -1493,6 +1668,39 @@ def get_frame_data(filename, frame_index):
             )
             frame_data['control']['dynamic_curve_speed_boost_max_scale_cfg'] = float(
                 lateral_cfg.get('dynamic_curve_speed_boost_max_scale', 1.4)
+            )
+            frame_data['control']['turn_feasibility_governor_enabled_cfg'] = bool(
+                lateral_cfg.get('turn_feasibility_governor_enabled', True)
+            )
+            frame_data['control']['turn_feasibility_curvature_min_cfg'] = float(
+                lateral_cfg.get('turn_feasibility_curvature_min', 0.002)
+            )
+            frame_data['control']['turn_feasibility_guardband_g_cfg'] = float(
+                lateral_cfg.get('turn_feasibility_guardband_g', 0.015)
+            )
+            frame_data['control']['turn_feasibility_use_peak_bound_cfg'] = bool(
+                lateral_cfg.get('turn_feasibility_use_peak_bound', True)
+            )
+            frame_data['control']['curve_unwind_policy_enabled_cfg'] = bool(
+                lateral_cfg.get('curve_unwind_policy_enabled', False)
+            )
+            frame_data['control']['curve_unwind_frames_cfg'] = int(
+                lateral_cfg.get('curve_unwind_frames', 12)
+            )
+            frame_data['control']['curve_unwind_rate_scale_start_cfg'] = float(
+                lateral_cfg.get('curve_unwind_rate_scale_start', 1.0)
+            )
+            frame_data['control']['curve_unwind_rate_scale_end_cfg'] = float(
+                lateral_cfg.get('curve_unwind_rate_scale_end', 0.8)
+            )
+            frame_data['control']['curve_unwind_jerk_scale_start_cfg'] = float(
+                lateral_cfg.get('curve_unwind_jerk_scale_start', 1.0)
+            )
+            frame_data['control']['curve_unwind_jerk_scale_end_cfg'] = float(
+                lateral_cfg.get('curve_unwind_jerk_scale_end', 0.7)
+            )
+            frame_data['control']['curve_unwind_integral_decay_cfg'] = float(
+                lateral_cfg.get('curve_unwind_integral_decay', 0.85)
             )
             frame_data['control']['curve_commit_mode_retrigger_on_dynamic_deficit_cfg'] = bool(
                 lateral_cfg.get('curve_commit_mode_retrigger_on_dynamic_deficit', True)
@@ -2123,7 +2331,11 @@ def get_polynomial_analysis(filename, frame_index):
 @app.route('/')
 def index():
     """Serve the main HTML file."""
-    return send_from_directory(Path(__file__).parent, 'index.html')
+    response = send_from_directory(Path(__file__).parent, 'index.html')
+    response.headers["Cache-Control"] = "no-store, max-age=0"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["Expires"] = "0"
+    return response
 
 
 @app.route('/api/recording/<path:filename>/summary')
@@ -3022,7 +3234,12 @@ def run_perception_questions(filename):
 @app.route('/<path:filename>')
 def serve_static(filename):
     """Serve static files (JS, CSS)."""
-    return send_from_directory(Path(__file__).parent, filename)
+    response = send_from_directory(Path(__file__).parent, filename)
+    if filename.endswith((".js", ".css", ".html")):
+        response.headers["Cache-Control"] = "no-store, max-age=0"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+    return response
 
 
 if __name__ == '__main__':

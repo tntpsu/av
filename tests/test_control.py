@@ -685,6 +685,306 @@ def test_dynamic_curve_hard_clip_boost_relaxes_clip_under_comfort_headroom():
     )
 
 
+def test_dynamic_curve_entry_governor_applies_stale_floor_and_scales_jerk_limit():
+    """Entry governor should keep minimum authority under stale input and scale jerk with rate."""
+    base = dict(
+        kp=1.0,
+        kd=0.2,
+        curve_entry_schedule_enabled=True,
+        curve_entry_schedule_frames=12,
+        curve_entry_schedule_min_rate=0.22,
+        curve_entry_schedule_min_jerk=0.14,
+        dynamic_curve_authority_enabled=True,
+        dynamic_curve_entry_governor_enabled=True,
+        dynamic_curve_entry_governor_gain=1.2,
+        dynamic_curve_entry_governor_max_scale=1.8,
+        dynamic_curve_entry_governor_stale_floor_scale=1.2,
+        curve_upcoming_enter_threshold=0.005,
+        curve_upcoming_exit_threshold=0.004,
+        curve_upcoming_on_frames=1,
+        curve_upcoming_off_frames=1,
+    )
+    ref = {'x': 1.6, 'y': 0.0, 'heading': 0.25, 'velocity': 8.0, 'curvature': 0.02}
+
+    with_governor = LateralController(**base).compute_steering(
+        current_heading=0.0,
+        reference_point=ref,
+        current_speed=8.0,
+        dt=0.033,
+        using_stale_perception=True,
+        return_metadata=True,
+    )
+    no_governor = LateralController(
+        **{**base, 'dynamic_curve_entry_governor_enabled': False}
+    ).compute_steering(
+        current_heading=0.0,
+        reference_point=ref,
+        current_speed=8.0,
+        dt=0.033,
+        using_stale_perception=True,
+        return_metadata=True,
+    )
+
+    assert with_governor['dynamic_curve_entry_governor_active'] is True
+    assert float(with_governor['dynamic_curve_entry_governor_scale']) >= 1.2
+    assert float(with_governor['dynamic_curve_entry_governor_jerk_scale']) >= 1.2
+    assert float(with_governor['steering_rate_limit_effective']) > float(
+        no_governor['steering_rate_limit_effective']
+    )
+
+
+def test_dynamic_curve_entry_governor_exclusive_mode_disables_entry_assist_stacking():
+    """Exclusive governor mode should prevent entry-assist stacking while governor is active."""
+    controller = LateralController(
+        kp=1.0,
+        kd=0.2,
+        curve_entry_schedule_enabled=True,
+        curve_entry_schedule_frames=10,
+        curve_entry_schedule_min_rate=0.22,
+        curve_entry_schedule_min_jerk=0.14,
+        curve_entry_assist_enabled=True,
+        curve_entry_assist_error_min=0.05,
+        curve_entry_assist_heading_error_min=0.01,
+        curve_entry_assist_curvature_min=0.001,
+        curve_entry_assist_rate_boost=1.4,
+        curve_entry_assist_jerk_boost=1.4,
+        dynamic_curve_authority_enabled=True,
+        dynamic_curve_entry_governor_enabled=True,
+        dynamic_curve_entry_governor_exclusive_mode=True,
+        curve_upcoming_enter_threshold=0.005,
+        curve_upcoming_exit_threshold=0.004,
+        curve_upcoming_on_frames=1,
+        curve_upcoming_off_frames=1,
+    )
+    m = controller.compute_steering(
+        current_heading=0.0,
+        reference_point={'x': 1.4, 'y': 0.0, 'heading': 0.22, 'velocity': 8.0, 'curvature': 0.02},
+        current_speed=8.0,
+        dt=0.033,
+        using_stale_perception=True,
+        return_metadata=True,
+    )
+    assert m['dynamic_curve_entry_governor_active'] is True
+    assert m['curve_entry_assist_active'] is False
+
+
+def test_dynamic_curve_entry_governor_anticipatory_phase_starts_before_curve_at_car():
+    """Anticipatory mode should raise authority while curve is upcoming (before at_car)."""
+    base = dict(
+        kp=1.0,
+        kd=0.2,
+        curve_phase_use_distance_track=True,
+        curve_phase_track_name='s_loop',
+        dynamic_curve_authority_enabled=True,
+        dynamic_curve_entry_governor_enabled=True,
+        dynamic_curve_entry_governor_exclusive_mode=True,
+        dynamic_curve_entry_governor_gain=1.2,
+        dynamic_curve_entry_governor_upcoming_phase_weight=0.6,
+        dynamic_curve_entry_governor_anticipatory_enabled=True,
+        dynamic_curve_authority_precurve_enabled=True,
+        dynamic_curve_authority_precurve_scale=0.9,
+    )
+    ref = {'x': 1.4, 'y': 4.7, 'heading': 0.22, 'velocity': 8.0, 'curvature': 0.02}
+    road_t_precurve = 20.5 / 452.0353755551324
+
+    anticipatory = LateralController(**base).compute_steering(
+        current_heading=0.0,
+        reference_point=ref,
+        current_speed=8.0,
+        road_center_reference_t=road_t_precurve,
+        dt=0.033,
+        return_metadata=True,
+    )
+    baseline = LateralController(
+        **{
+            **base,
+            'dynamic_curve_entry_governor_anticipatory_enabled': False,
+            'dynamic_curve_authority_precurve_enabled': False,
+        }
+    ).compute_steering(
+        current_heading=0.0,
+        reference_point=ref,
+        current_speed=8.0,
+        road_center_reference_t=road_t_precurve,
+        dt=0.033,
+        return_metadata=True,
+    )
+
+    assert anticipatory['curve_upcoming'] is True
+    assert anticipatory['curve_at_car'] is False
+    assert anticipatory['dynamic_curve_entry_governor_anticipatory_active'] is True
+    assert anticipatory['dynamic_curve_authority_active'] is True
+    assert anticipatory['dynamic_curve_entry_governor_active'] is True
+    assert float(anticipatory['steering_rate_limit_effective']) > float(
+        baseline['steering_rate_limit_effective']
+    )
+
+
+def test_dynamic_curve_single_owner_mode_disables_aux_entry_layers_and_applies_floors():
+    """Single-owner mode should disable schedule/commit/assist and enforce rate/jerk floors."""
+    controller = LateralController(
+        kp=1.0,
+        kd=0.2,
+        curve_phase_use_distance_track=True,
+        curve_phase_track_name='s_loop',
+        curve_entry_schedule_enabled=True,
+        curve_entry_schedule_frames=12,
+        curve_commit_mode_enabled=True,
+        curve_entry_assist_enabled=True,
+        curve_entry_assist_error_min=0.05,
+        curve_entry_assist_heading_error_min=0.01,
+        curve_entry_assist_curvature_min=0.001,
+        dynamic_curve_authority_enabled=True,
+        dynamic_curve_entry_governor_enabled=True,
+        dynamic_curve_single_owner_mode=True,
+        dynamic_curve_single_owner_min_rate=0.22,
+        dynamic_curve_single_owner_min_jerk=0.6,
+    )
+    ref = {'x': 1.2, 'y': 4.7, 'heading': 0.2, 'velocity': 8.0, 'curvature': 0.02}
+    m = controller.compute_steering(
+        current_heading=0.0,
+        reference_point=ref,
+        current_speed=8.0,
+        road_center_reference_t=20.5 / 452.0353755551324,
+        dt=0.033,
+        return_metadata=True,
+    )
+    assert m['curve_upcoming'] is True
+    assert m['curve_at_car'] is False
+    assert m['dynamic_curve_single_owner_active'] is True
+    assert m['curve_entry_schedule_active'] is False
+    assert m['curve_commit_mode_active'] is False
+    assert m['curve_entry_assist_active'] is False
+    assert float(m['steering_rate_limit_effective']) >= 0.22
+    assert float(m['steering_jerk_limit_effective']) >= 0.6
+
+
+def test_turn_feasibility_governor_reports_margin_and_speed_limit():
+    """Feasibility telemetry should report comfort-envelope headroom consistently."""
+    controller = LateralController(
+        kp=1.0,
+        kd=0.2,
+        dynamic_curve_comfort_lat_accel_comfort_max_g=0.18,
+        dynamic_curve_comfort_lat_accel_peak_max_g=0.25,
+        turn_feasibility_governor_enabled=True,
+        turn_feasibility_curvature_min=0.002,
+        turn_feasibility_guardband_g=0.015,
+        turn_feasibility_use_peak_bound=True,
+    )
+    curvature = 0.02
+    speed = 8.0
+    m = controller.compute_steering(
+        current_heading=0.0,
+        reference_point={'x': 1.2, 'y': 0.0, 'heading': 0.2, 'velocity': speed, 'curvature': curvature},
+        current_speed=speed,
+        dt=0.033,
+        return_metadata=True,
+    )
+    expected_required = (speed * speed * curvature) / 9.81
+    expected_selected = 0.25
+    expected_effective = expected_selected - 0.015
+    expected_speed_limit = np.sqrt((expected_effective * 9.81) / curvature)
+    assert m['turn_feasibility_active'] is True
+    assert np.isclose(float(m['turn_feasibility_required_lat_accel_g']), expected_required, atol=1e-6)
+    assert np.isclose(float(m['turn_feasibility_selected_limit_g']), expected_selected, atol=1e-6)
+    assert np.isclose(float(m['turn_feasibility_margin_g']), expected_effective - expected_required, atol=1e-6)
+    assert np.isclose(float(m['turn_feasibility_speed_limit_mps']), expected_speed_limit, atol=1e-6)
+
+
+def test_turn_feasibility_governor_is_telemetry_only_no_actuation_change():
+    """Turning feasibility telemetry must not alter steering behavior in Phase 1."""
+    base = dict(
+        kp=1.0,
+        kd=0.2,
+        dynamic_curve_authority_enabled=True,
+        dynamic_curve_entry_governor_enabled=True,
+        turn_feasibility_curvature_min=0.002,
+        turn_feasibility_guardband_g=0.015,
+        turn_feasibility_use_peak_bound=True,
+    )
+    ref = {'x': 1.2, 'y': 0.0, 'heading': 0.2, 'velocity': 8.0, 'curvature': 0.02}
+    with_telemetry = LateralController(**{**base, 'turn_feasibility_governor_enabled': True}).compute_steering(
+        current_heading=0.0,
+        reference_point=ref,
+        current_speed=8.0,
+        dt=0.033,
+        return_metadata=True,
+    )
+    without_telemetry = LateralController(
+        **{**base, 'turn_feasibility_governor_enabled': False}
+    ).compute_steering(
+        current_heading=0.0,
+        reference_point=ref,
+        current_speed=8.0,
+        dt=0.033,
+        return_metadata=True,
+    )
+    assert np.isclose(
+        float(with_telemetry['steering_rate_limit_effective']),
+        float(without_telemetry['steering_rate_limit_effective']),
+        atol=1e-9,
+    )
+    assert np.isclose(
+        float(with_telemetry['steering']),
+        float(without_telemetry['steering']),
+        atol=1e-9,
+    )
+
+
+def test_curve_unwind_policy_scales_limits_and_decays_integral():
+    """Unwind policy should reduce post-curve authority and decay integral deterministically."""
+    base = dict(
+        kp=1.0,
+        ki=0.2,
+        kd=0.2,
+        curve_upcoming_enter_threshold=0.5,
+        curve_upcoming_exit_threshold=0.4,
+        curve_unwind_frames=6,
+        curve_unwind_rate_scale_start=0.9,
+        curve_unwind_rate_scale_end=0.6,
+        curve_unwind_jerk_scale_start=0.9,
+        curve_unwind_jerk_scale_end=0.6,
+        curve_unwind_integral_decay=0.5,
+        steering_jerk_limit=0.2,
+    )
+    ref = {'x': 0.8, 'y': 0.0, 'heading': 0.0, 'velocity': 8.0, 'curvature': 0.0}
+
+    with_unwind = LateralController(
+        **{**base, 'curve_unwind_policy_enabled': True}
+    )
+    without_unwind = LateralController(
+        **{**base, 'curve_unwind_policy_enabled': False}
+    )
+    for c in (with_unwind, without_unwind):
+        c._prev_curve_at_car = True
+        c.pid.integral = 0.2
+
+    m_with = with_unwind.compute_steering(
+        current_heading=0.0,
+        reference_point=ref,
+        current_speed=8.0,
+        dt=0.033,
+        return_metadata=True,
+    )
+    m_without = without_unwind.compute_steering(
+        current_heading=0.0,
+        reference_point=ref,
+        current_speed=8.0,
+        dt=0.033,
+        return_metadata=True,
+    )
+
+    assert m_with['curve_unwind_active'] is True
+    assert int(m_with['curve_unwind_frames_remaining']) >= 0
+    assert float(m_with['curve_unwind_rate_scale']) < 1.0
+    assert float(m_with['curve_unwind_jerk_scale']) < 1.0
+    assert np.isclose(float(m_with['curve_unwind_integral_decay_applied']), 0.5, atol=1e-9)
+    assert float(m_with['steering_rate_limit_effective']) < float(
+        m_without['steering_rate_limit_effective']
+    )
+    assert abs(with_unwind.pid.integral) < abs(without_unwind.pid.integral)
+
+
 def test_distance_track_curve_phase_arms_upcoming_before_curve_start():
     """Distance-track phase should arm upcoming before start and at_car at curve start."""
     controller = LateralController(

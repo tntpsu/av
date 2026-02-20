@@ -24,6 +24,7 @@ from trajectory.speed_planner import SpeedPlanner, SpeedPlannerConfig
 from trajectory.utils import (
     compute_reference_lookahead,
     compute_dynamic_effective_horizon,
+    apply_speed_horizon_guardrail,
     curvature_smoothing_alpha,
     select_curvature_bin_limits,
 )
@@ -590,6 +591,21 @@ class AVStack:
             ref_x_rate_limit_turn_scale_max=trajectory_cfg.get(
                 'ref_x_rate_limit_turn_scale_max', 2.5
             ),
+            ref_sign_flip_disable_on_turn=bool(
+                trajectory_cfg.get('ref_sign_flip_disable_on_turn', True)
+            ),
+            ref_sign_flip_disable_heading_min_abs_rad=float(
+                trajectory_cfg.get('ref_sign_flip_disable_heading_min_abs_rad', 0.03)
+            ),
+            ref_x_rate_limit_precurve_enabled=bool(
+                trajectory_cfg.get('ref_x_rate_limit_precurve_enabled', True)
+            ),
+            ref_x_rate_limit_precurve_heading_min_abs_rad=float(
+                trajectory_cfg.get('ref_x_rate_limit_precurve_heading_min_abs_rad', 0.03)
+            ),
+            ref_x_rate_limit_precurve_scale_max=float(
+                trajectory_cfg.get('ref_x_rate_limit_precurve_scale_max', 4.0)
+            ),
             multi_lookahead_enabled=trajectory_cfg.get('multi_lookahead_enabled', False),
             multi_lookahead_far_scale=trajectory_cfg.get('multi_lookahead_far_scale', 1.5),
             multi_lookahead_blend_alpha=trajectory_cfg.get('multi_lookahead_blend_alpha', 0.35),
@@ -628,6 +644,18 @@ class AVStack:
             calibrated_fy_px=trajectory_cfg.get('calibrated_fy_px', 0.0),
             calibrated_cx_px=trajectory_cfg.get('calibrated_cx_px', 0.0),
             calibrated_cy_px=trajectory_cfg.get('calibrated_cy_px', 0.0),
+            dynamic_effective_horizon_farfield_scale_min=trajectory_cfg.get(
+                'dynamic_effective_horizon_farfield_scale_min', 0.85
+            ),
+            far_band_contribution_cap_enabled=trajectory_cfg.get(
+                'far_band_contribution_cap_enabled', True
+            ),
+            far_band_contribution_cap_start_m=trajectory_cfg.get(
+                'far_band_contribution_cap_start_m', 12.0
+            ),
+            far_band_contribution_cap_gain=trajectory_cfg.get(
+                'far_band_contribution_cap_gain', 0.35
+            ),
         )
         
         # Control - Load from config
@@ -884,6 +912,42 @@ class AVStack:
             dynamic_curve_hard_clip_boost_max=float(
                 lateral_cfg.get('dynamic_curve_hard_clip_boost_max', 0.12)
             ),
+            dynamic_curve_entry_governor_enabled=bool(
+                lateral_cfg.get('dynamic_curve_entry_governor_enabled', True)
+            ),
+            dynamic_curve_entry_governor_gain=float(
+                lateral_cfg.get('dynamic_curve_entry_governor_gain', 1.2)
+            ),
+            dynamic_curve_entry_governor_max_scale=float(
+                lateral_cfg.get('dynamic_curve_entry_governor_max_scale', 1.8)
+            ),
+            dynamic_curve_entry_governor_stale_floor_scale=float(
+                lateral_cfg.get('dynamic_curve_entry_governor_stale_floor_scale', 1.15)
+            ),
+            dynamic_curve_entry_governor_exclusive_mode=bool(
+                lateral_cfg.get('dynamic_curve_entry_governor_exclusive_mode', True)
+            ),
+            dynamic_curve_entry_governor_anticipatory_enabled=bool(
+                lateral_cfg.get('dynamic_curve_entry_governor_anticipatory_enabled', True)
+            ),
+            dynamic_curve_entry_governor_upcoming_phase_weight=float(
+                lateral_cfg.get('dynamic_curve_entry_governor_upcoming_phase_weight', 0.55)
+            ),
+            dynamic_curve_authority_precurve_enabled=bool(
+                lateral_cfg.get('dynamic_curve_authority_precurve_enabled', True)
+            ),
+            dynamic_curve_authority_precurve_scale=float(
+                lateral_cfg.get('dynamic_curve_authority_precurve_scale', 0.8)
+            ),
+            dynamic_curve_single_owner_mode=bool(
+                lateral_cfg.get('dynamic_curve_single_owner_mode', True)
+            ),
+            dynamic_curve_single_owner_min_rate=float(
+                lateral_cfg.get('dynamic_curve_single_owner_min_rate', 0.22)
+            ),
+            dynamic_curve_single_owner_min_jerk=float(
+                lateral_cfg.get('dynamic_curve_single_owner_min_jerk', 0.6)
+            ),
             dynamic_curve_comfort_lat_accel_comfort_max_g=float(
                 lateral_cfg.get('dynamic_curve_comfort_lat_accel_comfort_max_g', 0.18)
             ),
@@ -910,6 +974,39 @@ class AVStack:
             ),
             dynamic_curve_speed_boost_max_scale=float(
                 lateral_cfg.get('dynamic_curve_speed_boost_max_scale', 1.4)
+            ),
+            turn_feasibility_governor_enabled=bool(
+                lateral_cfg.get('turn_feasibility_governor_enabled', True)
+            ),
+            turn_feasibility_curvature_min=float(
+                lateral_cfg.get('turn_feasibility_curvature_min', 0.002)
+            ),
+            turn_feasibility_guardband_g=float(
+                lateral_cfg.get('turn_feasibility_guardband_g', 0.015)
+            ),
+            turn_feasibility_use_peak_bound=bool(
+                lateral_cfg.get('turn_feasibility_use_peak_bound', True)
+            ),
+            curve_unwind_policy_enabled=bool(
+                lateral_cfg.get('curve_unwind_policy_enabled', False)
+            ),
+            curve_unwind_frames=int(
+                lateral_cfg.get('curve_unwind_frames', 12)
+            ),
+            curve_unwind_rate_scale_start=float(
+                lateral_cfg.get('curve_unwind_rate_scale_start', 1.0)
+            ),
+            curve_unwind_rate_scale_end=float(
+                lateral_cfg.get('curve_unwind_rate_scale_end', 0.8)
+            ),
+            curve_unwind_jerk_scale_start=float(
+                lateral_cfg.get('curve_unwind_jerk_scale_start', 1.0)
+            ),
+            curve_unwind_jerk_scale_end=float(
+                lateral_cfg.get('curve_unwind_jerk_scale_end', 0.7)
+            ),
+            curve_unwind_integral_decay=float(
+                lateral_cfg.get('curve_unwind_integral_decay', 0.85)
             ),
             curve_commit_mode_enabled=bool(
                 lateral_cfg.get('curve_commit_mode_enabled', False)
@@ -3426,6 +3523,32 @@ class AVStack:
                 if adjusted_target_speed > cap_speed:
                     adjusted_target_speed = cap_speed
                     curve_mode_speed_cap_clamped = True
+        speed_horizon_guardrail_diag = {
+            'diag_speed_horizon_guardrail_active': 0.0,
+            'diag_speed_horizon_guardrail_margin_m': np.nan,
+            'diag_speed_horizon_guardrail_horizon_m': np.nan,
+            'diag_speed_horizon_guardrail_time_headway_s': np.nan,
+            'diag_speed_horizon_guardrail_margin_buffer_m': np.nan,
+            'diag_speed_horizon_guardrail_allowed_speed_mps': np.nan,
+            'diag_speed_horizon_guardrail_target_speed_before_mps': np.nan,
+            'diag_speed_horizon_guardrail_target_speed_after_mps': np.nan,
+        }
+        guardrail_result = apply_speed_horizon_guardrail(
+            target_speed_mps=float(adjusted_target_speed),
+            effective_horizon_m=float(
+                dynamic_horizon_diag.get('diag_dynamic_effective_horizon_m', reference_lookahead)
+            ),
+            dynamic_horizon_applied=bool(
+                float(dynamic_horizon_diag.get('diag_dynamic_effective_horizon_applied', 0.0)) > 0.5
+            ),
+            config=self.trajectory_config,
+        )
+        adjusted_target_speed = float(guardrail_result.get('target_speed_mps', adjusted_target_speed))
+        for key in speed_horizon_guardrail_diag:
+            value = guardrail_result.get(key)
+            if isinstance(value, (int, float)):
+                speed_horizon_guardrail_diag[key] = float(value)
+
         target_speed_planned = None
         planned_accel = None
         if self.speed_planner_enabled and self.speed_planner is not None:
@@ -3776,6 +3899,58 @@ class AVStack:
                 car_width = self.safety_config.get('car_width', 1.85)
                 allowed_outside_lane = self.safety_config.get('allowed_outside_lane', 1.0)
                 out_of_bounds_threshold = (lane_width / 2.0) - (car_width / 2.0) + allowed_outside_lane
+                use_gt_lane_boundary_stop = bool(
+                    self.safety_config.get('emergency_stop_use_gt_lane_boundaries', False)
+                )
+                gt_lane_boundary_margin = float(
+                    self.safety_config.get('emergency_stop_gt_lane_boundary_margin', 0.05)
+                )
+                def _first_present(keys):
+                    for key in keys:
+                        if key in vehicle_state_dict and vehicle_state_dict.get(key) is not None:
+                            return vehicle_state_dict.get(key)
+                    return None
+
+                gt_left_lane_line_x = _first_present(
+                    [
+                        'groundTruthLeftLaneLineX',
+                        'ground_truth_left_lane_line_x',
+                        'groundTruthLeftLaneX',
+                        'ground_truth_left_lane_x',
+                    ]
+                )
+                gt_right_lane_line_x = _first_present(
+                    [
+                        'groundTruthRightLaneLineX',
+                        'ground_truth_right_lane_line_x',
+                        'groundTruthRightLaneX',
+                        'ground_truth_right_lane_x',
+                    ]
+                )
+                gt_boundary_offroad_left = False
+                gt_boundary_offroad_right = False
+                gt_boundary_offroad = False
+                if use_gt_lane_boundary_stop:
+                    try:
+                        if gt_left_lane_line_x is not None and gt_right_lane_line_x is not None:
+                            gt_left_lane_line_x = float(gt_left_lane_line_x)
+                            gt_right_lane_line_x = float(gt_right_lane_line_x)
+                            gt_bounds_available = (
+                                abs(gt_left_lane_line_x) > 1e-6
+                                or abs(gt_right_lane_line_x) > 1e-6
+                            )
+                            if gt_bounds_available:
+                                gt_boundary_offroad_left = (
+                                    gt_left_lane_line_x > gt_lane_boundary_margin
+                                )
+                                gt_boundary_offroad_right = (
+                                    gt_right_lane_line_x < -gt_lane_boundary_margin
+                                )
+                                gt_boundary_offroad = (
+                                    gt_boundary_offroad_left or gt_boundary_offroad_right
+                                )
+                    except (TypeError, ValueError):
+                        gt_boundary_offroad = False
                 
                 # Also check if perception is frozen (stopped updating)
                 # Distinguish between Unity pause (time gap) vs perception failure (no time gap)
@@ -3802,7 +3977,8 @@ class AVStack:
                 # Check if emergency condition exists
                 is_emergency_condition = (lateral_error_abs > emergency_stop_error or 
                                         lateral_error_abs > out_of_bounds_threshold or 
-                                        perception_failed)
+                                        perception_failed or
+                                        gt_boundary_offroad)
 
                 # Teleport/jump guard: skip emergency stop briefly after a position jump
                 if (
@@ -3855,13 +4031,32 @@ class AVStack:
                     emergency_stop_triggered = True
                     # Reset PID to prevent further divergence
                     self.controller.lateral_controller.reset()
-                elif lateral_error_abs > out_of_bounds_threshold or perception_failed:
+                elif lateral_error_abs > out_of_bounds_threshold or perception_failed or gt_boundary_offroad:
                     # Out of bounds or perception failed - emergency stop
-                    if not self.emergency_stop_logged or self.emergency_stop_type != ('perception_failed' if perception_failed else 'out_of_bounds'):
+                    gt_offroad_type = None
+                    if gt_boundary_offroad_left and gt_boundary_offroad_right:
+                        gt_offroad_type = 'gt_both_offroad'
+                    elif gt_boundary_offroad_left:
+                        gt_offroad_type = 'gt_left_offroad'
+                    elif gt_boundary_offroad_right:
+                        gt_offroad_type = 'gt_right_offroad'
+                    emergency_type = (
+                        'perception_failed'
+                        if perception_failed
+                        else (gt_offroad_type if gt_offroad_type is not None else 'out_of_bounds')
+                    )
+                    if not self.emergency_stop_logged or self.emergency_stop_type != emergency_type:
                         if perception_failed:
                             logger.error(f"[Frame {self.frame_count}] EMERGENCY STOP: Perception FAILED! Frozen for {self.perception_frozen_frames} frames "
                                        f"(Unity still running, perception processing stopped)")
                             self.emergency_stop_type = 'perception_failed'
+                        elif gt_offroad_type is not None:
+                            logger.error(
+                                f"[Frame {self.frame_count}] EMERGENCY STOP: GT lane-boundary offroad "
+                                f"(left_x={gt_left_lane_line_x:.3f}m, right_x={gt_right_lane_line_x:.3f}m, "
+                                f"margin={gt_lane_boundary_margin:.3f}m, type={gt_offroad_type})"
+                            )
+                            self.emergency_stop_type = gt_offroad_type
                         else:
                             logger.error(f"[Frame {self.frame_count}] EMERGENCY STOP: Car out of bounds! Lateral error {lateral_error_abs:.3f}m exceeds {out_of_bounds_threshold}m threshold!")
                             self.emergency_stop_type = 'out_of_bounds'
@@ -3993,6 +4188,7 @@ class AVStack:
                 camera_frame_meta=camera_frame_meta,
                 topdown_frame_data=topdown_frame_data,
                 topdown_frame_meta=topdown_frame_meta,
+                speed_horizon_guardrail_diag=speed_horizon_guardrail_diag,
             )
 
         # Update teleport guard countdown and vehicle position tracking
@@ -4359,6 +4555,7 @@ class AVStack:
         camera_frame_meta: dict | None = None,
         topdown_frame_data: tuple[np.ndarray, float, int | None] | None = None,
         topdown_frame_meta: dict | None = None,
+        speed_horizon_guardrail_diag: Optional[dict] = None,
     ):
         """Record frame data."""
         # Create camera frame
@@ -5022,6 +5219,12 @@ class AVStack:
             dynamic_curve_hard_clip_limit_effective=control_command.get(
                 'dynamic_curve_hard_clip_limit_effective'
             ),
+            dynamic_curve_entry_governor_active=control_command.get(
+                'dynamic_curve_entry_governor_active'
+            ),
+            dynamic_curve_entry_governor_scale=control_command.get(
+                'dynamic_curve_entry_governor_scale'
+            ),
             dynamic_curve_authority_deficit_streak=control_command.get(
                 'dynamic_curve_authority_deficit_streak'
             ),
@@ -5051,7 +5254,32 @@ class AVStack:
             steering_jerk_limit_unlock_rate_delta_needed=control_command.get('steering_jerk_limit_unlock_rate_delta_needed'),
             steering_authority_gap=control_command.get('steering_authority_gap'),
             steering_transfer_ratio=control_command.get('steering_transfer_ratio'),
-            steering_first_limiter_stage_code=control_command.get('steering_first_limiter_stage_code')
+            steering_first_limiter_stage_code=control_command.get('steering_first_limiter_stage_code'),
+            curve_unwind_active=bool(control_command.get('curve_unwind_active', False)),
+            curve_unwind_frames_remaining=control_command.get('curve_unwind_frames_remaining'),
+            curve_unwind_progress=control_command.get('curve_unwind_progress'),
+            curve_unwind_rate_scale=control_command.get('curve_unwind_rate_scale'),
+            curve_unwind_jerk_scale=control_command.get('curve_unwind_jerk_scale'),
+            curve_unwind_integral_decay_applied=control_command.get(
+                'curve_unwind_integral_decay_applied'
+            ),
+            turn_feasibility_active=bool(control_command.get('turn_feasibility_active', False)),
+            turn_feasibility_infeasible=bool(control_command.get('turn_feasibility_infeasible', False)),
+            turn_feasibility_curvature_abs=control_command.get('turn_feasibility_curvature_abs'),
+            turn_feasibility_speed_mps=control_command.get('turn_feasibility_speed_mps'),
+            turn_feasibility_required_lat_accel_g=control_command.get(
+                'turn_feasibility_required_lat_accel_g'
+            ),
+            turn_feasibility_comfort_limit_g=control_command.get('turn_feasibility_comfort_limit_g'),
+            turn_feasibility_peak_limit_g=control_command.get('turn_feasibility_peak_limit_g'),
+            turn_feasibility_selected_limit_g=control_command.get('turn_feasibility_selected_limit_g'),
+            turn_feasibility_guardband_g=control_command.get('turn_feasibility_guardband_g'),
+            turn_feasibility_margin_g=control_command.get('turn_feasibility_margin_g'),
+            turn_feasibility_speed_limit_mps=control_command.get('turn_feasibility_speed_limit_mps'),
+            turn_feasibility_speed_delta_mps=control_command.get('turn_feasibility_speed_delta_mps'),
+            turn_feasibility_use_peak_bound=bool(
+                control_command.get('turn_feasibility_use_peak_bound', True)
+            ),
         )
         
         # Create trajectory output
@@ -5181,6 +5409,8 @@ class AVStack:
         if callable(ref_getter):
             ref_diag = ref_getter() or {}
         ref_point_diag = ref_point if isinstance(ref_point, dict) else {}
+        if not isinstance(speed_horizon_guardrail_diag, dict):
+            speed_horizon_guardrail_diag = {}
         
         trajectory_output = TrajectoryOutput(
             timestamp=timestamp,
@@ -5257,6 +5487,14 @@ class AVStack:
             diag_dynamic_effective_horizon_confidence_used=ref_diag.get('diag_dynamic_effective_horizon_confidence_used', ref_point_diag.get('diag_dynamic_effective_horizon_confidence_used')),
             diag_dynamic_effective_horizon_limiter_code=ref_diag.get('diag_dynamic_effective_horizon_limiter_code', ref_point_diag.get('diag_dynamic_effective_horizon_limiter_code')),
             diag_dynamic_effective_horizon_applied=ref_diag.get('diag_dynamic_effective_horizon_applied', ref_point_diag.get('diag_dynamic_effective_horizon_applied')),
+            diag_speed_horizon_guardrail_active=speed_horizon_guardrail_diag.get('diag_speed_horizon_guardrail_active'),
+            diag_speed_horizon_guardrail_margin_m=speed_horizon_guardrail_diag.get('diag_speed_horizon_guardrail_margin_m'),
+            diag_speed_horizon_guardrail_horizon_m=speed_horizon_guardrail_diag.get('diag_speed_horizon_guardrail_horizon_m'),
+            diag_speed_horizon_guardrail_time_headway_s=speed_horizon_guardrail_diag.get('diag_speed_horizon_guardrail_time_headway_s'),
+            diag_speed_horizon_guardrail_margin_buffer_m=speed_horizon_guardrail_diag.get('diag_speed_horizon_guardrail_margin_buffer_m'),
+            diag_speed_horizon_guardrail_allowed_speed_mps=speed_horizon_guardrail_diag.get('diag_speed_horizon_guardrail_allowed_speed_mps'),
+            diag_speed_horizon_guardrail_target_speed_before_mps=speed_horizon_guardrail_diag.get('diag_speed_horizon_guardrail_target_speed_before_mps'),
+            diag_speed_horizon_guardrail_target_speed_after_mps=speed_horizon_guardrail_diag.get('diag_speed_horizon_guardrail_target_speed_after_mps'),
             diag_preclip_abs_mean_0_8m=traj_diag.get('diag_preclip_abs_mean_0_8m'),
             diag_preclip_abs_mean_8_12m=traj_diag.get('diag_preclip_abs_mean_8_12m'),
             diag_preclip_abs_mean_12_20m=traj_diag.get('diag_preclip_abs_mean_12_20m'),
@@ -5270,6 +5508,11 @@ class AVStack:
             diag_first_segment_y0_gt_y1_pre=traj_diag.get('diag_first_segment_y0_gt_y1_pre'),
             diag_first_segment_y0_gt_y1_post=traj_diag.get('diag_first_segment_y0_gt_y1_post'),
             diag_inversion_introduced_after_conversion=traj_diag.get('diag_inversion_introduced_after_conversion'),
+            diag_far_band_contribution_limited_active=traj_diag.get('diag_far_band_contribution_limited_active'),
+            diag_far_band_contribution_limit_start_m=traj_diag.get('diag_far_band_contribution_limit_start_m'),
+            diag_far_band_contribution_limit_gain=traj_diag.get('diag_far_band_contribution_limit_gain'),
+            diag_far_band_contribution_scale_mean_12_20m=traj_diag.get('diag_far_band_contribution_scale_mean_12_20m'),
+            diag_far_band_contribution_limited_frac_12_20m=traj_diag.get('diag_far_band_contribution_limited_frac_12_20m'),
         )
         
         # Allow ground truth follower to override control command for recording
