@@ -8,6 +8,10 @@ import math
 import numpy as np
 from typing import Optional, Tuple
 import sys
+import os
+import json
+import hashlib
+import subprocess
 from pathlib import Path
 import logging
 import yaml
@@ -558,6 +562,12 @@ class AVStack:
             segmentation_ransac_max_trials=int(
                 perception_cfg.get("segmentation_ransac_max_trials", 40)
             ),
+            model_fallback_confidence_hard_threshold=float(
+                perception_cfg.get("model_fallback_confidence_hard_threshold", 0.1)
+            ),
+            model_fallback_zero_lane_confidence_threshold=float(
+                perception_cfg.get("model_fallback_zero_lane_confidence_threshold", 0.6)
+            ),
         )
         
         # Trajectory planning - Load from config
@@ -655,6 +665,21 @@ class AVStack:
             ),
             far_band_contribution_cap_gain=trajectory_cfg.get(
                 'far_band_contribution_cap_gain', 0.35
+            ),
+            heading_zero_quad_threshold=trajectory_cfg.get(
+                'heading_zero_quad_threshold', 0.005
+            ),
+            heading_zero_curvature_guard=trajectory_cfg.get(
+                'heading_zero_curvature_guard', 0.002
+            ),
+            smoothing_alpha_curve_reduction=trajectory_cfg.get(
+                'smoothing_alpha_curve_reduction', 0.15
+            ),
+            ref_x_rate_limit_curvature_min=trajectory_cfg.get(
+                'ref_x_rate_limit_curvature_min', 0.003
+            ),
+            ref_x_rate_limit_curvature_scale_max=trajectory_cfg.get(
+                'ref_x_rate_limit_curvature_scale_max', 3.0
             ),
         )
         
@@ -1051,12 +1076,21 @@ class AVStack:
             stanley_k=lateral_cfg.get('stanley_k', 1.0),
             stanley_soft_speed=lateral_cfg.get('stanley_soft_speed', 2.0),
             stanley_heading_weight=lateral_cfg.get('stanley_heading_weight', 1.0),
+            pp_feedback_gain=lateral_cfg.get('pp_feedback_gain', 0.15),
+            pp_min_lookahead=lateral_cfg.get('pp_min_lookahead', 0.5),
+            pp_ref_jump_clamp=lateral_cfg.get('pp_ref_jump_clamp', 0.5),
+            pp_stale_decay=lateral_cfg.get('pp_stale_decay', 0.98),
             feedback_gain_min=lateral_cfg.get('feedback_gain_min', 1.0),
             feedback_gain_max=lateral_cfg.get('feedback_gain_max', 1.2),
             feedback_gain_curvature_min=lateral_cfg.get('feedback_gain_curvature_min', 0.002),
             feedback_gain_curvature_max=lateral_cfg.get('feedback_gain_curvature_max', 0.015),
             curvature_stale_hold_seconds=lateral_cfg.get('curvature_stale_hold_seconds', 0.30),
-            curvature_stale_hold_min_abs=lateral_cfg.get('curvature_stale_hold_min_abs', 0.0005)
+            curvature_stale_hold_min_abs=lateral_cfg.get('curvature_stale_hold_min_abs', 0.0005),
+            base_error_smoothing_alpha=lateral_cfg.get('base_error_smoothing_alpha', 0.7),
+            heading_error_smoothing_alpha=lateral_cfg.get('heading_error_smoothing_alpha', 0.45),
+            straight_window_frames=int(lateral_cfg.get('straight_window_frames', 60)),
+            straight_oscillation_high=lateral_cfg.get('straight_oscillation_high', 0.20),
+            straight_oscillation_low=lateral_cfg.get('straight_oscillation_low', 0.05),
         )
         
         # Store config for use in _process_frame
@@ -1141,6 +1175,55 @@ class AVStack:
             self.recorder.metadata["record_segmentation_mask"] = bool(
                 self.record_segmentation_mask
             )
+            # Attach provenance metadata so recording selection/compare can be release-aware.
+            git_sha_full = "unknown"
+            git_sha_short = "unknown"
+            try:
+                repo_root = Path(__file__).resolve().parent
+                git_sha_full = subprocess.check_output(
+                    ["git", "rev-parse", "HEAD"],
+                    cwd=str(repo_root),
+                    stderr=subprocess.DEVNULL,
+                    text=True,
+                ).strip() or "unknown"
+                git_sha_short = git_sha_full[:8] if git_sha_full != "unknown" else "unknown"
+            except Exception:
+                pass
+
+            try:
+                cfg_fingerprint = hashlib.sha256(
+                    json.dumps(self.config or {}, sort_keys=True, default=str).encode("utf-8")
+                ).hexdigest()
+            except Exception:
+                cfg_fingerprint = "unknown"
+
+            replay_type = os.getenv("AV_REPLAY_TYPE", "live")
+            candidate_label = os.getenv("AV_CANDIDATE_LABEL", "candidate")
+            policy_profile = os.getenv("AV_POLICY_PROFILE", "unknown")
+            software_version = os.getenv("AV_SOFTWARE_VERSION", "unknown")
+            build_label = os.getenv("AV_BUILD_LABEL", "unknown")
+            track_id = os.getenv("AV_TRACK_ID", "unknown")
+            duration_target_s = float(os.getenv("AV_DURATION_TARGET_S", "0") or 0.0)
+            start_t = float(os.getenv("AV_START_T", "0") or 0.0)
+            run_command = os.getenv("AV_RUN_COMMAND", "")
+
+            self.recorder.metadata["recording_provenance"] = {
+                "software_version": software_version,
+                "build_label": build_label,
+                "git_sha_full": git_sha_full,
+                "git_sha_short": git_sha_short,
+                "config_fingerprint_sha256": cfg_fingerprint,
+                "replay_type": replay_type,
+                "policy_profile": policy_profile,
+                "track_id": track_id,
+                "duration_target_s": duration_target_s,
+                "start_t": start_t,
+                "run_command": run_command,
+                "recorded_at_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                "analyze_to_failure_default": True,
+                "notes": "",
+                "candidate_label": candidate_label,
+            }
         else:
             logger.info("Data recording disabled")
         
@@ -3761,6 +3844,25 @@ class AVStack:
                     reference_point['velocity'] = max_speed * 0.9  # 90% of max for safety
                 if min_speed_floor is not None:
                     reference_point['min_speed_floor'] = float(min_speed_floor)
+
+                # B2: Use curvature_preview from A4 to further cap speed.
+                # The existing curve_speed_preview uses lane_coeffs at 1.6x;
+                # curvature_preview from the reference point provides a
+                # complementary signal at 1.5x that survives smoothing.
+                curv_preview = float(reference_point.get('curvature_preview', 0.0) or 0.0)
+                speed_cap_curvature_target = 0.0
+                if (
+                    self.curve_mode_speed_cap_enabled
+                    and abs(curv_preview) > 0.003
+                ):
+                    a_lat_max = 0.25 * 9.80665  # 0.25g comfort limit
+                    v_max_feasible = float(np.sqrt(a_lat_max / abs(curv_preview)))
+                    v_max_feasible = max(v_max_feasible, 3.0)
+                    speed_cap_curvature_target = v_max_feasible
+                    current_vel = reference_point.get('velocity', 8.0)
+                    if current_vel > v_max_feasible:
+                        reference_point['velocity'] = v_max_feasible
+                reference_point['speed_cap_curvature_target_mps'] = speed_cap_curvature_target
                 
                 # 3. Control: Compute control commands
                 current_state = {
@@ -5280,6 +5382,12 @@ class AVStack:
             turn_feasibility_use_peak_bound=bool(
                 control_command.get('turn_feasibility_use_peak_bound', True)
             ),
+            pp_alpha=control_command.get('pp_alpha'),
+            pp_lookahead_distance=control_command.get('pp_lookahead_distance'),
+            pp_geometric_steering=control_command.get('pp_geometric_steering'),
+            pp_feedback_steering=control_command.get('pp_feedback_steering'),
+            pp_ref_jump_clamped=bool(control_command.get('pp_ref_jump_clamped', 0) > 0.5),
+            pp_stale_hold_active=bool(control_command.get('pp_stale_hold_active', 0) > 0.5),
         )
         
         # Create trajectory output

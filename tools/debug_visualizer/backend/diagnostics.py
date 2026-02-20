@@ -1493,3 +1493,310 @@ def analyze_trajectory_vs_steering(
         import traceback
         return {"error": str(e), "traceback": traceback.format_exc()}
 
+
+def _safe_read_array(f: h5py.File, key: str) -> np.ndarray:
+    """Read HDF5 dataset as float array, returning empty array if missing."""
+    if key not in f:
+        return np.array([], dtype=np.float64)
+    arr = np.asarray(f[key][:], dtype=np.float64)
+    arr = np.where(np.isfinite(arr), arr, 0.0)
+    return arr
+
+
+def analyze_signal_chain(f: h5py.File, failure_frame: Optional[int] = None) -> Dict:
+    """
+    Analyze trajectory-to-control signal chain for PhilViz diagnostics.
+
+    Reads diagnostic channels from HDF5, determines failure frame from emergency_stop
+    if not provided, and computes signal delay and suppression metrics.
+
+    Args:
+        f: Open h5py File handle
+        failure_frame: Optional frame index; if None, inferred from first control/emergency_stop > 0.5
+
+    Returns:
+        Dictionary with signal_delay_frames, heading_zero_total_frames,
+        rate_limit_total_frames, jerk_limit_total_frames,
+        steering_rate_limit_total_frames, failure_frame, total_frames,
+        per_frame_data, and suppression_summary.
+    """
+    # Read all channels with safe fallback
+    traj_heading_raw = _safe_read_array(f, "trajectory/diag_raw_ref_heading")
+    traj_heading_smoothed = _safe_read_array(f, "trajectory/reference_point_heading")
+    traj_curvature = _safe_read_array(f, "trajectory/reference_point_curvature")
+    traj_curvature_preview = _safe_read_array(f, "trajectory/reference_point_curvature_preview")
+    traj_rate_limit_active = _safe_read_array(f, "trajectory/diag_ref_x_rate_limit_active")
+    traj_heading_zero_gate = _safe_read_array(f, "trajectory/diag_heading_zero_gate_active")
+    traj_curvature_alpha_reduction = _safe_read_array(f, "trajectory/diag_curvature_aware_alpha_reduction")
+    traj_curvature_rate_scale = _safe_read_array(f, "trajectory/diag_curvature_rate_limit_scale")
+    traj_heading_from_history = _safe_read_array(f, "trajectory/diag_heading_from_history")
+
+    if "control/smoothed_path_curvature" in f:
+        ctrl_path_curvature = _safe_read_array(f, "control/smoothed_path_curvature")
+    else:
+        ctrl_path_curvature = _safe_read_array(f, "control/path_curvature_input")
+
+    ctrl_limiter_code = _safe_read_array(f, "control/steering_first_limiter_stage_code")
+    ctrl_feedforward = _safe_read_array(f, "control/feedforward_steering")
+    ctrl_steering = _safe_read_array(f, "control/steering")
+    ctrl_steering_rate_limited = _safe_read_array(f, "control/steering_rate_limited_active")
+    ctrl_steering_jerk_limited = _safe_read_array(f, "control/steering_jerk_limited_active")
+
+    speed = _safe_read_array(f, "vehicle/speed")
+    emergency_stop = _safe_read_array(f, "control/emergency_stop")
+
+    # Determine failure_frame
+    if failure_frame is None and len(emergency_stop) > 0:
+        fail_indices = np.where(emergency_stop > 0.5)[0]
+        if len(fail_indices) > 0:
+            failure_frame = int(fail_indices[0])
+        else:
+            failure_frame = len(emergency_stop)
+    elif failure_frame is None:
+        failure_frame = max(
+            len(traj_heading_raw),
+            len(ctrl_feedforward),
+            len(ctrl_steering),
+            len(speed),
+        ) or 0
+
+    # Align lengths: use min length up to failure_frame
+    arrays = [
+        traj_heading_raw, traj_heading_smoothed, traj_curvature, traj_curvature_preview,
+        traj_rate_limit_active, traj_heading_zero_gate, traj_curvature_alpha_reduction,
+        traj_curvature_rate_scale, traj_heading_from_history, ctrl_path_curvature,
+        ctrl_limiter_code, ctrl_feedforward, ctrl_steering,
+        ctrl_steering_rate_limited, ctrl_steering_jerk_limited, speed,
+    ]
+    n = failure_frame
+    for arr in arrays:
+        if len(arr) > 0:
+            n = min(n, len(arr))
+    n = max(0, int(n))
+
+    if n < 1:
+        return {
+            "error": "Insufficient aligned data for signal chain analysis",
+            "failure_frame": failure_frame,
+            "total_frames": 0,
+            "signal_delay_frames": None,
+            "heading_zero_total_frames": 0,
+            "rate_limit_total_frames": 0,
+            "jerk_limit_total_frames": 0,
+            "steering_rate_limit_total_frames": 0,
+            "per_frame_data": [],
+            "suppression_summary": {},
+        }
+
+    scope = slice(0, n)
+    traj_heading_raw = traj_heading_raw[scope] if len(traj_heading_raw) >= n else np.zeros(n)
+    traj_heading_smoothed = traj_heading_smoothed[scope] if len(traj_heading_smoothed) >= n else np.zeros(n)
+    traj_curvature = traj_curvature[scope] if len(traj_curvature) >= n else np.zeros(n)
+    traj_curvature_preview = traj_curvature_preview[scope] if len(traj_curvature_preview) >= n else np.zeros(n)
+    traj_rate_limit_active = traj_rate_limit_active[scope] if len(traj_rate_limit_active) >= n else np.zeros(n)
+    traj_heading_zero_gate = traj_heading_zero_gate[scope] if len(traj_heading_zero_gate) >= n else np.zeros(n)
+    traj_curvature_alpha_reduction = traj_curvature_alpha_reduction[scope] if len(traj_curvature_alpha_reduction) >= n else np.zeros(n)
+    traj_curvature_rate_scale = traj_curvature_rate_scale[scope] if len(traj_curvature_rate_scale) >= n else np.ones(n)
+    traj_heading_from_history = traj_heading_from_history[scope] if len(traj_heading_from_history) >= n else np.zeros(n)
+    ctrl_limiter_code = ctrl_limiter_code[scope] if len(ctrl_limiter_code) >= n else np.zeros(n)
+    ctrl_feedforward = ctrl_feedforward[scope] if len(ctrl_feedforward) >= n else np.zeros(n)
+    ctrl_steering = ctrl_steering[scope] if len(ctrl_steering) >= n else np.zeros(n)
+    ctrl_steering_rate_limited = ctrl_steering_rate_limited[scope] if len(ctrl_steering_rate_limited) >= n else np.zeros(n)
+    ctrl_steering_jerk_limited = ctrl_steering_jerk_limited[scope] if len(ctrl_steering_jerk_limited) >= n else np.zeros(n)
+    speed = speed[scope] if len(speed) >= n else np.zeros(n)
+
+    # Signal delay: frames between |traj_heading_smoothed| > 0.01 and |ctrl_feedforward| > 0.01
+    heading_threshold = 0.01
+    ff_threshold = 0.01
+    traj_heading_onset = None
+    for i in range(n):
+        if abs(traj_heading_smoothed[i]) > heading_threshold:
+            traj_heading_onset = i
+            break
+    ctrl_ff_onset = None
+    for i in range(n):
+        if abs(ctrl_feedforward[i]) > ff_threshold:
+            ctrl_ff_onset = i
+            break
+    signal_delay_frames = None
+    if traj_heading_onset is not None and ctrl_ff_onset is not None:
+        signal_delay_frames = ctrl_ff_onset - traj_heading_onset
+
+    # Suppression counts
+    heading_zero_total_frames = int(np.sum(traj_heading_zero_gate > 0.5))
+    rate_limit_total_frames = int(np.sum(traj_rate_limit_active > 0.5))
+    jerk_limit_total_frames = int(np.sum(ctrl_steering_jerk_limited > 0.5))
+    steering_rate_limit_total_frames = int(np.sum(ctrl_steering_rate_limited > 0.5))
+
+    # Per-frame window: 30 frames before heading onset to failure_frame
+    heading_onset_frame = traj_heading_onset if traj_heading_onset is not None else 0
+    window_start = max(0, heading_onset_frame - 30)
+    window_end = min(n, failure_frame)
+    per_frame_data: List[Dict] = []
+    for i in range(window_start, window_end):
+        row = {
+            "frame": i,
+            "traj_heading_raw": safe_float(float(traj_heading_raw[i]) if i < len(traj_heading_raw) else 0.0),
+            "traj_heading_smoothed": safe_float(float(traj_heading_smoothed[i]) if i < len(traj_heading_smoothed) else 0.0),
+            "traj_curvature": safe_float(float(traj_curvature[i]) if i < len(traj_curvature) else 0.0),
+            "curvature_preview": safe_float(float(traj_curvature_preview[i]) if i < len(traj_curvature_preview) else 0.0),
+            "heading_zero_gate": safe_float(float(traj_heading_zero_gate[i]) if i < len(traj_heading_zero_gate) else 0.0),
+            "rate_limit_active": safe_float(float(traj_rate_limit_active[i]) if i < len(traj_rate_limit_active) else 0.0),
+            "curvature_alpha_reduction": safe_float(float(traj_curvature_alpha_reduction[i]) if i < len(traj_curvature_alpha_reduction) else 0.0),
+            "curvature_rate_scale": safe_float(float(traj_curvature_rate_scale[i]) if i < len(traj_curvature_rate_scale) else 1.0),
+            "heading_from_history": safe_float(float(traj_heading_from_history[i]) if i < len(traj_heading_from_history) else 0.0),
+            "ctrl_feedforward": safe_float(float(ctrl_feedforward[i]) if i < len(ctrl_feedforward) else 0.0),
+            "ctrl_steering": safe_float(float(ctrl_steering[i]) if i < len(ctrl_steering) else 0.0),
+            "ctrl_limiter_code": int(ctrl_limiter_code[i]) if i < len(ctrl_limiter_code) else 0,
+            "speed_mps": safe_float(float(speed[i]) if i < len(speed) else 0.0),
+        }
+        per_frame_data.append(row)
+
+    suppression_summary = {
+        "heading_zero_total_frames": heading_zero_total_frames,
+        "rate_limit_total_frames": rate_limit_total_frames,
+        "jerk_limit_total_frames": jerk_limit_total_frames,
+        "steering_rate_limit_total_frames": steering_rate_limit_total_frames,
+        "traj_heading_onset_frame": traj_heading_onset,
+        "ctrl_feedforward_onset_frame": ctrl_ff_onset,
+    }
+
+    return {
+        "signal_delay_frames": signal_delay_frames,
+        "heading_zero_total_frames": heading_zero_total_frames,
+        "rate_limit_total_frames": rate_limit_total_frames,
+        "jerk_limit_total_frames": jerk_limit_total_frames,
+        "steering_rate_limit_total_frames": steering_rate_limit_total_frames,
+        "failure_frame": failure_frame,
+        "total_frames": n,
+        "per_frame_data": per_frame_data,
+        "suppression_summary": suppression_summary,
+    }
+
+
+def analyze_speed_curvature(f: h5py.File, failure_frame: Optional[int] = None) -> Dict:
+    """
+    Analyze speed-curvature feasibility (overspeed vs v_max feasible).
+
+    Reads vehicle/speed, trajectory curvature, control speed cap and emergency stop.
+    Computes v_max_feasible = sqrt(2.45 / abs(curvature)) for curvature > 0.001.
+    Returns per-frame data, overspeed counts, peak ratio, speed at curve entry,
+    and decel lead time (frames between curvature_preview > 0.003 and curvature > 0.003).
+
+    Args:
+        f: Open h5py File handle
+        failure_frame: Optional frame limit; if None, inferred from first emergency_stop > 0.5
+
+    Returns:
+        Dictionary with per_frame_data, overspeed_frames, peak_overspeed_ratio,
+        speed_at_curve_entry, decel_lead_time_frames, etc.
+    """
+    speed = _safe_read_array(f, "vehicle/speed")
+    curvature = _safe_read_array(f, "trajectory/reference_point_curvature")
+    curvature_preview = _safe_read_array(f, "trajectory/reference_point_curvature_preview")
+    speed_cap_target = _safe_read_array(f, "control/speed_cap_curvature_target_mps")
+    emergency_stop = _safe_read_array(f, "control/emergency_stop")
+
+    # Determine failure_frame
+    if failure_frame is None and len(emergency_stop) > 0:
+        fail_indices = np.where(emergency_stop > 0.5)[0]
+        if len(fail_indices) > 0:
+            failure_frame = int(fail_indices[0])
+        else:
+            failure_frame = len(emergency_stop)
+    elif failure_frame is None:
+        failure_frame = max(len(speed), len(curvature), len(curvature_preview)) or 0
+
+    arrays = [speed, curvature, curvature_preview, speed_cap_target]
+    n = failure_frame
+    for arr in arrays:
+        if len(arr) > 0:
+            n = min(n, len(arr))
+    n = max(0, int(n))
+
+    if n < 1:
+        return {
+            "error": "Insufficient data for speed-curvature analysis",
+            "per_frame_data": [],
+            "overspeed_frames": 0,
+            "peak_overspeed_ratio": None,
+            "speed_at_curve_entry": None,
+            "v_max_feasible_at_entry": None,
+            "decel_lead_time_frames": None,
+        }
+
+    scope = slice(0, n)
+    speed = speed[scope] if len(speed) >= n else np.zeros(n)
+    curvature = curvature[scope] if len(curvature) >= n else np.zeros(n)
+    curvature_preview = curvature_preview[scope] if len(curvature_preview) >= n else np.zeros(n)
+    speed_cap_target = speed_cap_target[scope] if len(speed_cap_target) >= n else np.zeros(n)
+
+    # v_max_feasible = sqrt(2.45 / abs(curvature)) for curvature > 0.001
+    abs_kappa = np.abs(curvature)
+    v_max_feasible = np.zeros(n, dtype=np.float64)
+    valid = abs_kappa > 0.001
+    v_max_feasible[valid] = np.sqrt(2.45 / abs_kappa[valid])
+    v_max_feasible[~valid] = np.inf
+
+    # Overspeed: speed > v_max_feasible where curvature is meaningful
+    overspeed = np.zeros(n, dtype=bool)
+    overspeed[valid] = speed[valid] > v_max_feasible[valid]
+
+    per_frame_data: List[Dict] = []
+    for i in range(n):
+        per_frame_data.append({
+            "frame": i,
+            "speed": safe_float(float(speed[i]) if i < len(speed) else 0.0),
+            "curvature": safe_float(float(curvature[i]) if i < len(curvature) else 0.0),
+            "curvature_preview": safe_float(float(curvature_preview[i]) if i < len(curvature_preview) else 0.0),
+            "v_max_feasible": (
+                safe_float(float(v_max_feasible[i])) if v_max_feasible[i] < 1e9 else None
+            ),
+            "speed_cap_target": safe_float(float(speed_cap_target[i]) if i < len(speed_cap_target) else 0.0),
+            "overspeed": bool(overspeed[i]) if i < len(overspeed) else False,
+        })
+
+    overspeed_frames = int(np.sum(overspeed))
+
+    # peak_overspeed_ratio = max(speed / v_max_feasible) over valid curvature frames
+    ratio = np.zeros(n)
+    ratio[valid] = np.divide(speed[valid], v_max_feasible[valid], out=np.zeros_like(speed[valid]), where=v_max_feasible[valid] > 1e-6)
+    peak_overspeed_ratio = None
+    if np.any(valid):
+        peak_overspeed_ratio = safe_float(float(np.max(ratio)))
+
+    # speed_at_curve_entry: speed when curvature first > 0.005
+    curve_entry_frame = None
+    for i in range(n):
+        if abs(curvature[i]) > 0.005:
+            curve_entry_frame = i
+            break
+    speed_at_curve_entry = None
+    v_max_feasible_at_entry = None
+    if curve_entry_frame is not None and curve_entry_frame < len(speed):
+        speed_at_curve_entry = safe_float(float(speed[curve_entry_frame]))
+        if v_max_feasible[curve_entry_frame] < 1e9:
+            v_max_feasible_at_entry = safe_float(float(v_max_feasible[curve_entry_frame]))
+
+    # decel_lead_time_frames: frames between curvature_preview > 0.003 and curvature > 0.003
+    preview_onset = None
+    curvature_onset = None
+    for i in range(n):
+        if preview_onset is None and abs(curvature_preview[i]) > 0.003:
+            preview_onset = i
+        if curvature_onset is None and abs(curvature[i]) > 0.003:
+            curvature_onset = i
+            break
+    decel_lead_time_frames = None
+    if preview_onset is not None and curvature_onset is not None and preview_onset <= curvature_onset:
+        decel_lead_time_frames = curvature_onset - preview_onset
+
+    return {
+        "per_frame_data": per_frame_data,
+        "overspeed_frames": overspeed_frames,
+        "peak_overspeed_ratio": peak_overspeed_ratio,
+        "speed_at_curve_entry": speed_at_curve_entry,
+        "v_max_feasible_at_entry": v_max_feasible_at_entry,
+        "decel_lead_time_frames": decel_lead_time_frames,
+    }
+

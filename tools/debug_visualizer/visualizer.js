@@ -13,6 +13,8 @@ class Visualizer {
         this.frameCount = 0;
         this.currentRecording = null;  // Track current recording filename
         this.currentRecordingMeta = null;
+        this.availableRecordings = [];
+        this.pendingDiagnosticsFocus = null;
         this.isPlaying = false;
         this.playSpeed = 1.0;
         this.playInterval = null;
@@ -758,6 +760,7 @@ class Visualizer {
     async loadRecordings() {
         try {
             const recordings = await this.dataLoader.loadRecordings();
+            this.availableRecordings = Array.isArray(recordings) ? recordings : [];
             
             const select = document.getElementById('recording-select');
             if (!select) {
@@ -780,12 +783,20 @@ class Visualizer {
             recordings.forEach(rec => {
                 const option = document.createElement('option');
                 option.value = rec.filename;
-                option.textContent = rec.filename;
+                const prov = rec.recording_provenance || {};
+                const version = prov.software_version || rec.software_version || 'unknown';
+                const sha = prov.git_sha_short || rec.git_sha_short || 'unknown';
+                const replayType = prov.replay_type || rec.replay_type || 'unknown';
+                option.textContent = `${rec.filename} | ${version} | ${sha} | ${replayType}`;
                 select.appendChild(option);
             });
 
             if (currentValue && recordings.some(rec => rec.filename === currentValue)) {
                 select.value = currentValue;
+            }
+            const comparePane = document.getElementById('compare-tab');
+            if (comparePane && comparePane.classList.contains('active')) {
+                await this.loadCompare();
             }
         } catch (error) {
             console.error('Error in loadRecordings:', error);
@@ -831,6 +842,7 @@ class Visualizer {
             this.topdownSmoothedFrameIndex = null;
             await this.goToFrame(0);
             await this.loadSummary();  // Load summary when recording is loaded
+            await this.loadCompare();  // Keep compare tab in sync with current baseline
             await this.loadIssues();  // Load issues when recording is loaded
             await this.loadDiagnostics();  // Load diagnostics when recording is loaded
             await this.loadTrajectoryLayerLocalizationSummary();
@@ -1162,9 +1174,38 @@ class Visualizer {
 
             // Executive Summary
             html += '<div style="background: #2a2a2a; padding: 1.5rem; border-radius: 8px; margin-bottom: 1.5rem;">';
-            html += '<h2 style="margin-top: 0; color: #4a90e2;">Executive Summary</h2>';
+            html += '<h2 id="summary-section-executive" style="margin-top: 0; color: #4a90e2;">Executive Summary</h2>';
+
+            if (summary.executive_summary.failure_detected) {
+                html += `<div style="background: #3a1a1a; padding: 0.75rem; border-radius: 4px; border-left: 3px solid #ff6b6b; margin: 0.6rem 0 1rem;">`;
+                html += `<strong style="color: #ff6b6b;">⚠️ Failure Detected:</strong> `;
+                html += `Car went out of lane at frame ${summary.executive_summary.failure_frame} and stayed out (using ${summary.executive_summary.failure_detection_source || 'unknown'} data). `;
+                if (summary.executive_summary.analyzed_to_failure) {
+                    html += `<span style="color: #4caf50;">All metrics below are calculated only up to this point.</span>`;
+                } else {
+                    html += `<span style="color: #ffa500;">Check "Analyze to Failure" to scope metrics to the good portion.</span>`;
+                }
+                html += `</div>`;
+            }
+
             html += `<div style="font-size: 2rem; font-weight: bold; color: ${summary.executive_summary.overall_score >= 80 ? '#4caf50' : summary.executive_summary.overall_score >= 60 ? '#ffa500' : '#ff6b6b'}; margin: 1rem 0;">`;
             html += `Overall Score: ${summary.executive_summary.overall_score.toFixed(1)}/100</div>`;
+
+            const provenance = summary.recording_provenance || summary?.metadata?.recording_provenance || null;
+            if (provenance) {
+                const provPairs = [
+                    ['Candidate', provenance.candidate_label || 'unknown'],
+                    ['Version', provenance.software_version || 'unknown'],
+                    ['Git', provenance.git_sha_short || provenance.git_sha_full || 'unknown'],
+                    ['Replay', provenance.replay_type || 'unknown'],
+                    ['Policy', provenance.policy_profile || 'unknown'],
+                    ['Track', provenance.track_id || 'unknown'],
+                ];
+                html += '<div style="margin: 0.5rem 0 1rem; padding: 0.6rem; background: #1a1a1a; border-radius: 4px; font-size: 0.85rem;">';
+                html += '<strong style="color: #9bdcff;">Recording Provenance</strong><br/>';
+                html += provPairs.map(([k, v]) => `<span style="color:#888;">${k}:</span> ${this.escapeHtml(String(v))}`).join(' | ');
+                html += '</div>';
+            }
             
             // Score Breakdown
             if (summary.executive_summary.score_breakdown) {
@@ -1190,6 +1231,32 @@ class Visualizer {
                 });
                 html += '<div style="margin-top: 0.4rem; color: #9fb3c8;">Stale penalty uses hard stale only (managed low-visibility fallback excluded).</div>';
                 html += '<div style="margin-top: 0.25rem; color: #9fb3c8;">Overall score uses only the penalties listed here; some cards (e.g., top-down overlay trust) are informational diagnostics.</div>';
+                html += '</div>';
+            }
+
+            if (summary.layer_scores && summary.layer_score_breakdown) {
+                html += '<div style="margin-top: 0.8rem; display: grid; grid-template-columns: repeat(auto-fit,minmax(220px,1fr)); gap: 0.5rem;">';
+                const layerOrder = ['Safety', 'Trajectory', 'Control', 'Perception', 'LongitudinalComfort'];
+                layerOrder.forEach((layer) => {
+                    const score = Number(summary.layer_scores[layer]);
+                    if (!Number.isFinite(score)) return;
+                    const color = score >= 80 ? '#4caf50' : (score >= 60 ? '#ffa500' : '#ff6b6b');
+                    const breakdown = summary.layer_score_breakdown[layer];
+                    const totalDeduction = Number(breakdown?.total_deduction ?? (100 - score));
+                    html += '<div style="background:#1a1a1a; border-radius:4px; padding:0.5rem 0.6rem;">';
+                    html += `<div style="display:flex; justify-content:space-between;"><strong style="color:#9bdcff;">${this.escapeHtml(layer)}</strong><span style="color:${color};">${score.toFixed(1)}</span></div>`;
+                    html += `<div style="font-size:0.8rem; color:#9fb3c8;">Base 100 - ${Number.isFinite(totalDeduction) ? totalDeduction.toFixed(1) : '-'} = ${score.toFixed(1)}</div>`;
+                    const deductions = Array.isArray(breakdown?.deductions) ? breakdown.deductions : [];
+                    const activeDeductions = deductions.filter((d) => Number(d?.value || 0) > 0.01).slice(0, 3);
+                    if (activeDeductions.length > 0) {
+                        html += '<div style="margin-top:0.25rem; font-size:0.78rem; color:#a8b4c0;">';
+                        activeDeductions.forEach((d) => {
+                            html += `<div>- ${this.escapeHtml(String(d.name || 'Deduction'))}: ${Number(d.value).toFixed(1)} <span style="color:#7f8c98;">(${this.escapeHtml(String(d.limit || 'n/a'))})</span></div>`;
+                        });
+                        html += '</div>';
+                    }
+                    html += '</div>';
+                });
                 html += '</div>';
             }
             
@@ -1226,19 +1293,23 @@ class Visualizer {
             }
 
             html += `<div style="margin-bottom: 1rem; padding: 0.5rem; background: #2a2a2a; border-radius: 4px;">${scope_indicator}</div>`;
-            
-            // Show failure detection info if applicable
-            if (summary.executive_summary.failure_detected) {
-                html += `<div style="background: #3a1a1a; padding: 0.75rem; border-radius: 4px; border-left: 3px solid #ff6b6b; margin-top: 1rem;">`;
-                html += `<strong style="color: #ff6b6b;">⚠️ Failure Detected:</strong> `;
-                html += `Car went out of lane at frame ${summary.executive_summary.failure_frame} and stayed out (using ${summary.executive_summary.failure_detection_source || 'unknown'} data). `;
-                if (summary.executive_summary.analyzed_to_failure) {
-                    html += `<span style="color: #4caf50;">All metrics below are calculated only up to this point.</span>`;
-                } else {
-                    html += `<span style="color: #ffa500;">Check "Analyze to Failure" to see metrics for only the good portion of the drive.</span>`;
-                }
-                html += `</div>`;
-            }
+
+            html += '<div style="display:flex; flex-wrap:wrap; gap:0.4rem; margin-bottom: 0.4rem;">';
+            const navTargets = [
+                ['Executive', 'summary-section-executive'],
+                ['Perception', 'summary-section-perception'],
+                ['Trajectory', 'summary-section-trajectory'],
+                ['PathTracking', 'summary-section-path-tracking'],
+                ['PassengerComfort', 'summary-section-passenger-comfort'],
+                ['ControllerDiag', 'summary-section-controller-diagnostics'],
+                ['Longitudinal', 'summary-section-longitudinal'],
+                ['Safety', 'summary-section-safety'],
+                ['Diagnostics', 'summary-section-diagnostics'],
+            ];
+            navTargets.forEach(([label, target]) => {
+                html += `<button onclick="document.getElementById('${target}')?.scrollIntoView({behavior:'smooth', block:'start'})" style="padding:0.25rem 0.55rem; background:#1a1a1a; color:#cfd8dc; border:1px solid #444; border-radius:4px; cursor:pointer; font-size:0.8rem;">${label}</button>`;
+            });
+            html += '</div>';
 
             if (failureStateCard) {
                 const p = failureStateCard.perception;
@@ -1278,57 +1349,30 @@ class Visualizer {
                 const primaryIssue = diag.primary_issue || 'unknown';
                 const trajScore = diag.trajectory_score || 0;
                 const ctrlScore = diag.control_score || 0;
-                
-                // Determine severity based on actual scores, not just which is lower
+
                 let diagnosisColor = '#4caf50';
-                let diagnosisIcon = '✓';
-                let diagnosisText = 'System appears to be working correctly';
-                
+                let diagnosisText = 'No dominant root-cause signal';
                 if (primaryIssue === 'trajectory') {
-                    // Use score to determine severity
                     if (trajScore < 70) {
-                        diagnosisColor = '#ff6b6b';  // Red for poor
-                        diagnosisIcon = '⚠️';
-                        diagnosisText = 'Trajectory planning needs attention';
+                        diagnosisColor = '#ff6b6b';
+                        diagnosisText = 'Trajectory-limited symptoms detected';
                     } else if (trajScore < 80) {
-                        diagnosisColor = '#ffa500';  // Orange for acceptable
-                        diagnosisIcon = '⚠️';
-                        diagnosisText = 'Trajectory planning may need improvement';
-                    } else {
-                        // Score is good, but still flagged as primary issue (shouldn't happen with new logic)
-                        diagnosisColor = '#4caf50';
-                        diagnosisIcon = '✓';
-                        diagnosisText = 'System appears to be working correctly';
+                        diagnosisColor = '#ffa500';
+                        diagnosisText = 'Trajectory may be contributing';
                     }
                 } else if (primaryIssue === 'control') {
-                    // Use score to determine severity
                     if (ctrlScore < 70) {
-                        diagnosisColor = '#ff6b6b';  // Red for poor
-                        diagnosisIcon = '⚠️';
-                        diagnosisText = 'Control system needs tuning';
+                        diagnosisColor = '#ff6b6b';
+                        diagnosisText = 'Control-limited symptoms detected';
                     } else if (ctrlScore < 80) {
-                        diagnosisColor = '#ffa500';  // Orange for acceptable
-                        diagnosisIcon = '⚠️';
-                        diagnosisText = 'Control system may need tuning';
-                    } else {
-                        // Score is good, but still flagged as primary issue (shouldn't happen with new logic)
-                        diagnosisColor = '#4caf50';
-                        diagnosisIcon = '✓';
-                        diagnosisText = 'System appears to be working correctly';
+                        diagnosisColor = '#ffa500';
+                        diagnosisText = 'Control may be contributing';
                     }
                 }
-                
-                html += '<div style="background: #2a2a2a; padding: 1rem; border-radius: 8px; margin-bottom: 1.5rem; border-left: 4px solid ' + diagnosisColor + ';">';
-                html += '<h3 style="margin-top: 0; color: #4a90e2;">Quick Diagnosis</h3>';
-                html += `<div style="font-size: 1.1rem; font-weight: bold; color: ${diagnosisColor}; margin: 0.5rem 0;">${diagnosisIcon} ${diagnosisText}</div>`;
-                html += '<div style="color: #a0a0a0; margin: 0.5rem 0; font-size: 0.9rem;">';
-                html += `Trajectory Quality: <span style="color: ${trajScore >= 80 ? '#4caf50' : trajScore >= 60 ? '#ffa500' : '#ff6b6b'}">${trajScore.toFixed(1)}%</span> | `;
-                html += `Control Quality: <span style="color: ${ctrlScore >= 80 ? '#4caf50' : ctrlScore >= 60 ? '#ffa500' : '#ff6b6b'}">${ctrlScore.toFixed(1)}%</span>`;
-                html += '</div>';
-                
-                html += '<div style="margin-top: 0.75rem; padding-top: 0.75rem; border-top: 1px solid #444;">';
-                html += '<button onclick="window.visualizer.switchTab(\'diagnostics\')" style="padding: 0.5rem 1rem; background: #4a90e2; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 0.9rem;">View Full Diagnostics →</button>';
-                html += '</div>';
+
+                html += `<div id="summary-section-diagnostics" style="background: #2a2a2a; padding: 0.75rem 1rem; border-radius: 8px; margin-bottom: 1.25rem; border-left: 4px solid ${diagnosisColor}; display:flex; justify-content:space-between; align-items:center; gap:0.75rem;">`;
+                html += `<div style="color: #e0e0e0; font-size: 0.92rem;"><strong style="color:${diagnosisColor};">Diagnostics pointer:</strong> ${this.escapeHtml(diagnosisText)}. Deep root-cause remains in Diagnostics tab.</div>`;
+                html += '<button onclick="window.visualizer.switchTab(\'diagnostics\')" style="padding: 0.4rem 0.8rem; background: #4a90e2; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 0.85rem; white-space: nowrap;">Open Diagnostics →</button>';
                 html += '</div>';
             }
 
@@ -1413,7 +1457,7 @@ class Visualizer {
             };
             const G_MPS2 = 9.80665;
             
-            html += '<h3 style="margin: 1rem 0 0.5rem; color: #9bdcff;">Perception</h3>';
+            html += '<h3 id="summary-section-perception" style="margin: 1rem 0 0.5rem; color: #9bdcff;">Perception</h3>';
             // Perception Quality
             html += '<div style="background: #2a2a2a; padding: 1rem; border-radius: 8px; margin-bottom: 1rem;">';
             html += '<h3 style="margin-top: 0; color: #4a90e2;">Perception Quality</h3>';
@@ -1472,7 +1516,7 @@ class Visualizer {
             }
             html += '</table></div>';
 
-            html += '<h3 style="margin: 1rem 0 0.5rem; color: #9bdcff;">Lateral</h3>';
+            html += '<h3 id="summary-section-trajectory" style="margin: 1rem 0 0.5rem; color: #9bdcff;">Lateral</h3>';
             // Trajectory Quality
             html += '<div style="background: #2a2a2a; padding: 1rem; border-radius: 8px; margin-bottom: 1rem;">';
             html += '<h3 style="margin-top: 0; color: #4a90e2;">Trajectory Quality</h3>';
@@ -1485,7 +1529,7 @@ class Visualizer {
 
             // Path Tracking
             html += '<div style="background: #2a2a2a; padding: 1rem; border-radius: 8px; margin-bottom: 1rem;">';
-            html += '<h3 style="margin-top: 0; color: #4a90e2;">Path Tracking</h3>';
+            html += '<h3 id="summary-section-path-tracking" style="margin-top: 0; color: #4a90e2;">Path Tracking</h3>';
             html += '<table style="width: 100%; color: #e0e0e0;">';
             const latErrColor = getColorForValue(summary.path_tracking.lateral_error_rmse, { good: 0.2, acceptable: 0.4 });
             html += `<tr><td>Lateral Error (RMSE):</td><td style="text-align: right; color: ${latErrColor};">${withLimitHint(summary.path_tracking.lateral_error_rmse.toFixed(3) + 'm', latErrColor, '<=0.20m')}</td></tr>`;
@@ -1521,7 +1565,7 @@ class Visualizer {
                 const jerkColor = jerkP95Gps !== null ? getColorForValue(jerkP95Gps, { good: jerkGateGps, acceptable: jerkGateGps * 1.5 }) : '#888';
 
                 html += '<div style="background: #2a2a2a; padding: 1rem; border-radius: 8px; margin-bottom: 1rem;">';
-                html += '<h3 style="margin-top: 0; color: #4a90e2;">Passenger Comfort (Gs)</h3>';
+                html += '<h3 id="summary-section-passenger-comfort" style="margin-top: 0; color: #4a90e2;">Passenger Comfort (Gs)</h3>';
                 html += '<div style="color: #a0a0a0; margin-bottom: 0.5rem; font-size: 0.85rem;">Primary comfort gates are in g / g/s (SI shown in parentheses).</div>';
                 html += '<table style="width: 100%; color: #e0e0e0;">';
                 html += `<tr><td>Accel P95:</td><td style="text-align: right; color: ${accelColor};">${withLimitHint(`${accelP95G !== null ? accelP95G.toFixed(2) : '-'} g (${accelP95SI !== null ? accelP95SI.toFixed(2) : '-'} m/s²)`, accelColor, `<=${accelGateG.toFixed(2)} g`)}</td></tr>`;
@@ -1534,9 +1578,27 @@ class Visualizer {
                 html += '</table></div>';
             }
 
+            // Control mode indicator
+            const controlMode = summary.control_mode || 'pid';
+            const modeLabel = controlMode === 'pure_pursuit' ? 'Pure Pursuit' : controlMode === 'stanley' ? 'Stanley' : 'PID';
+            const modeColor = controlMode === 'pure_pursuit' ? '#4caf50' : '#4a90e2';
+            html += '<div style="background: #2a2a2a; padding: 1rem; border-radius: 8px; margin-bottom: 1rem;">';
+            html += '<h3 id="summary-section-control-mode" style="margin-top: 0; color: #4a90e2;">Control Mode</h3>';
+            html += '<table style="width: 100%; color: #e0e0e0;">';
+            html += `<tr><td>Active Mode:</td><td style="text-align: right; color: ${modeColor}; font-weight: bold;">${modeLabel}</td></tr>`;
+            if (controlMode === 'pure_pursuit') {
+                const ppFbGain = summary.pp_feedback_gain ?? '-';
+                const ppMeanLd = summary.pp_mean_lookahead_distance ?? '-';
+                const ppJumpCount = summary.pp_ref_jump_clamped_count ?? 0;
+                html += `<tr><td>PP Feedback Gain:</td><td style="text-align: right;">${typeof ppFbGain === 'number' ? ppFbGain.toFixed(2) : ppFbGain}</td></tr>`;
+                html += `<tr><td>Mean Lookahead Distance:</td><td style="text-align: right;">${typeof ppMeanLd === 'number' ? ppMeanLd.toFixed(2) + 'm' : ppMeanLd}</td></tr>`;
+                html += `<tr><td>Ref Jump Clamp Events:</td><td style="text-align: right;">${ppJumpCount}</td></tr>`;
+            }
+            html += '</table></div>';
+
             // Controller diagnostics (secondary, steering-domain)
             html += '<div style="background: #2a2a2a; padding: 1rem; border-radius: 8px; margin-bottom: 1rem;">';
-            html += '<h3 style="margin-top: 0; color: #4a90e2;">Controller Diagnostics</h3>';
+            html += '<h3 id="summary-section-controller-diagnostics" style="margin-top: 0; color: #4a90e2;">Controller Diagnostics</h3>';
             html += '<div style="color: #a0a0a0; margin-bottom: 0.5rem; font-size: 0.85rem;">Steering-domain metrics for controller tuning, not direct ride comfort gates.</div>';
             html += '<table style="width: 100%; color: #e0e0e0;">';
             const steerJerkColor = getColorForValue(summary.control_smoothness.steering_jerk_max, { good: 0.5, acceptable: 1.0 });
@@ -1589,7 +1651,7 @@ class Visualizer {
                 }
             }
             
-            html += '<h3 style="margin: 1rem 0 0.5rem; color: #9bdcff;">Longitudinal</h3>';
+            html += '<h3 id="summary-section-longitudinal" style="margin: 1rem 0 0.5rem; color: #9bdcff;">Longitudinal</h3>';
             // Speed control
             const speedControl = summary.speed_control || null;
             if (speedControl) {
@@ -1623,7 +1685,7 @@ class Visualizer {
 
             // Safety
             html += '<div style="background: #2a2a2a; padding: 1rem; border-radius: 8px; margin-bottom: 1rem;">';
-            html += '<h3 style="margin-top: 0; color: #4a90e2;">Safety</h3>';
+            html += '<h3 id="summary-section-safety" style="margin-top: 0; color: #4a90e2;">Safety</h3>';
             html += '<table style="width: 100%; color: #e0e0e0; margin-bottom: 1rem;">';
             const outEventsColor = summary.safety.out_of_lane_events === 0 ? '#4caf50' : '#ff6b6b';
             const outTimeColor = summary.safety.out_of_lane_time < 5 ? '#4caf50' : summary.safety.out_of_lane_time < 10 ? '#ffa500' : '#ff6b6b';
@@ -1752,6 +1814,139 @@ class Visualizer {
         }
     }
     
+    async loadCompare() {
+        const compareContent = document.getElementById('compare-content');
+        if (!compareContent) return;
+        const recordings = this.availableRecordings || [];
+        if (!recordings.length) {
+            compareContent.innerHTML = '<p style="color: #888; text-align: center; padding: 2rem;">No recordings available.</p>';
+            return;
+        }
+        const baseline = this.currentRecording || recordings[0].filename;
+        const selected = recordings.slice(0, 10).map((r) => r.filename);
+        compareContent.innerHTML = '<p style="color: #888; text-align: center; padding: 2rem;">Loading compare data...</p>';
+        try {
+            const analyzeToFailure = document.getElementById('analyze-to-failure')?.checked || false;
+            const params = new URLSearchParams({
+                recordings: selected.join(','),
+                baseline,
+                analyze_to_failure: analyzeToFailure ? 'true' : 'false',
+            });
+            const response = await fetch(`/api/compare?${params.toString()}`);
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+            }
+            const data = await response.json();
+            if (data.error) {
+                throw new Error(data.error);
+            }
+            const rows = Array.isArray(data.rows) ? data.rows : [];
+            let html = '<div style="padding: 1rem;">';
+            html += '<h3 style="margin-top:0; color:#4a90e2;">Compare (MVP)</h3>';
+            html += `<div style="margin-bottom:0.6rem; color:#9fb3c8;">Baseline: <strong>${this.escapeHtml(data.baseline || baseline)}</strong> | Showing top ${rows.length} recordings</div>`;
+            html += '<div style="overflow-x:auto;"><table style="width:100%; border-collapse:collapse; font-size:0.85rem;">';
+            html += '<tr style="color:#9bdcff; border-bottom:1px solid #444;">';
+            html += '<th style="text-align:left; padding:0.4rem;">Recording</th>';
+            html += '<th style="text-align:right; padding:0.4rem;">Overall</th><th style="text-align:right; padding:0.4rem;">Gate</th>';
+            html += '<th style="text-align:right; padding:0.4rem;">Stale Hard % Δ</th><th style="text-align:right; padding:0.4rem;">Authority Gap Δ</th><th style="text-align:right; padding:0.4rem;">Transfer Ratio Δ</th>';
+            html += '<th style="text-align:right; padding:0.4rem;">Accel P95 g Δ</th><th style="text-align:right; padding:0.4rem;">Jerk P95 g/s Δ</th>';
+            html += '<th style="text-align:right; padding:0.4rem;">Sig Delay Δ</th><th style="text-align:right; padding:0.4rem;">HZ Frames Δ</th><th style="text-align:right; padding:0.4rem;">Rate Lim Δ</th>';
+            html += '<th style="text-align:right; padding:0.4rem;">Speed@Entry Δ</th><th style="text-align:right; padding:0.4rem;">v_max@Entry Δ</th><th style="text-align:right; padding:0.4rem;">Decel Lead Δ</th>';
+            html += '<th style="text-align:right; padding:0.4rem;">Replay</th><th style="text-align:right; padding:0.4rem;">Version</th></tr>';
+            rows.forEach((row) => {
+                const d = row.delta_vs_baseline || {};
+                const prov = row.recording_provenance || {};
+                const score = Number(row.overall_score || 0);
+                const scoreColor = score >= 80 ? '#4caf50' : (score >= 60 ? '#ffa500' : '#ff6b6b');
+                const gateColor = row.gate_pass ? '#4caf50' : '#ff6b6b';
+                const fmt = (v) => Number.isFinite(Number(v)) ? Number(v).toFixed(2) : '-';
+                const fmtInt = (v) => (v != null && Number.isFinite(Number(v))) ? String(Math.round(Number(v))) : '-';
+                html += '<tr style="border-bottom:1px solid #333;">';
+                html += `<td style="padding:0.35rem;">${this.escapeHtml(row.recording || '-')}</td>`;
+                html += `<td style="text-align:right; color:${scoreColor}; padding:0.35rem;">${fmt(score)}</td>`;
+                html += `<td style="text-align:right; color:${gateColor}; padding:0.35rem;">${row.gate_pass ? 'PASS' : 'FAIL'}</td>`;
+                html += `<td style="text-align:right; padding:0.35rem;">${fmt(d.stale_hard_rate)}</td>`;
+                html += `<td style="text-align:right; padding:0.35rem;">${fmt(d.authority_gap_mean)}</td>`;
+                html += `<td style="text-align:right; padding:0.35rem;">${fmt(d.transfer_ratio_mean)}</td>`;
+                html += `<td style="text-align:right; padding:0.35rem;">${fmt(d.accel_p95_g)}</td>`;
+                html += `<td style="text-align:right; padding:0.35rem;">${fmt(d.jerk_p95_gps)}</td>`;
+                html += `<td style="text-align:right; padding:0.35rem;">${fmtInt(d.signal_delay_frames)}</td>`;
+                html += `<td style="text-align:right; padding:0.35rem;">${fmtInt(d.heading_zero_frames)}</td>`;
+                html += `<td style="text-align:right; padding:0.35rem;">${fmtInt(d.rate_limit_active_frames)}</td>`;
+                html += `<td style="text-align:right; padding:0.35rem;">${fmt(d.speed_at_curve_entry_mps)}</td>`;
+                html += `<td style="text-align:right; padding:0.35rem;">${fmt(d.v_max_feasible_at_entry)}</td>`;
+                html += `<td style="text-align:right; padding:0.35rem;">${fmtInt(d.decel_lead_time_frames)}</td>`;
+                html += `<td style="text-align:right; padding:0.35rem;">${this.escapeHtml(prov.replay_type || 'unknown')}</td>`;
+                html += `<td style="text-align:right; padding:0.35rem;">${this.escapeHtml(prov.software_version || 'unknown')}</td>`;
+                html += '</tr>';
+            });
+            html += '</table></div></div>';
+            compareContent.innerHTML = html;
+        } catch (error) {
+            compareContent.innerHTML = `<p style="color: #ff6b6b; text-align: center; padding: 2rem;">Compare load failed: ${this.escapeHtml(error.message)}</p>`;
+        }
+    }
+
+    diagnosticsFocusForIssueType(issueType) {
+        const t = String(issueType || '').toLowerCase();
+        if (t.includes('negative_control_correlation')) {
+            return { sectionId: 'diag-section-trajectory', focusId: 'diag-focus-trajectory-attribution' };
+        }
+        if (
+            t.includes('perception')
+            || t.includes('lane')
+            || t.includes('visibility')
+            || t.includes('coeff')
+        ) {
+            return { sectionId: 'diag-section-trajectory', focusId: 'diag-focus-trajectory-attribution' };
+        }
+        if (t.includes('trajectory_suppressed_curve_entry')) {
+            return { sectionId: 'diag-section-signal-chain', focusId: 'diag-focus-signal-suppression' };
+        }
+        if (t.includes('speed_exceeded_feasible')) {
+            return { sectionId: 'diag-section-speed-curvature', focusId: 'diag-section-speed-curvature' };
+        }
+        if (t.includes('centerline_cross')) {
+            return { sectionId: 'diag-section-control', focusId: 'diag-focus-control-feasibility' };
+        }
+        if (
+            t.includes('control')
+            || t.includes('steering')
+            || t.includes('limiter')
+            || t.includes('sign_mismatch')
+        ) {
+            return { sectionId: 'diag-section-control', focusId: 'diag-focus-control-limiter' };
+        }
+        if (
+            t.includes('out_of_lane')
+            || t.includes('emergency')
+            || t.includes('heading_jump')
+            || t.includes('failure')
+            || t.includes('high_lateral_error')
+        ) {
+            return { sectionId: 'diag-section-control', focusId: 'diag-focus-control-hotspots' };
+        }
+        return { sectionId: 'diag-section-summary', focusId: 'diag-section-summary' };
+    }
+
+    openDiagnosticsForIssue(issueId, issueType, frame, startFrame, endFrame) {
+        const safeFrame = Number.isFinite(Number(frame)) ? Number(frame) : 0;
+        const safeStart = Number.isFinite(Number(startFrame)) ? Number(startFrame) : safeFrame;
+        const safeEnd = Number.isFinite(Number(endFrame)) ? Number(endFrame) : safeFrame;
+        const target = this.diagnosticsFocusForIssueType(issueType);
+        this.pendingDiagnosticsFocus = {
+            issueId: String(issueId || ''),
+            issueType: String(issueType || ''),
+            frame: safeFrame,
+            startFrame: safeStart,
+            endFrame: safeEnd,
+            sectionId: target.sectionId,
+            focusId: target.focusId,
+        };
+        this.switchTab('diagnostics');
+        this.jumpToFrame(safeFrame);
+    }
+
     async loadIssues() {
         if (!this.currentRecording) return;
         
@@ -1864,60 +2059,28 @@ class Visualizer {
                     const color = phaseColor[p] || '#888';
                     const icon = phaseIcon[p] || '⚠️';
                     const frame = Number(event.frame || 0);
-                    html += `<div style="display: flex; gap: 0.6rem; align-items: center; background: #1f1f1f; border-left: 3px solid ${color}; padding: 0.5rem 0.7rem; border-radius: 4px;">`;
+                    const endFrame = Number(event.end_frame ?? frame);
+                    const duration = Number(event.duration ?? (endFrame - frame + 1));
+                    const spanText = Number.isFinite(endFrame) && endFrame > frame
+                        ? ` (${frame}-${endFrame}, ${duration} frames)`
+                        : '';
+                    const issueType = String(event.type || 'unknown');
+                    const issueId = String(event.issue_id || `${issueType}:${frame}:${idx}`);
+                    const issueIdJs = issueId.replaceAll('\\', '\\\\').replaceAll("'", "\\'");
+                    const issueTypeJs = issueType.replaceAll('\\', '\\\\').replaceAll("'", "\\'");
+                    html += `<div class="timeline-event-item" data-issue-id="${this.escapeHtml(issueId)}" data-issue-type="${this.escapeHtml(issueType)}" data-issue-severity="${this.escapeHtml(String(event.severity || 'unknown'))}" style="display: flex; gap: 0.6rem; align-items: center; background: #1f1f1f; border-left: 3px solid ${color}; padding: 0.5rem 0.7rem; border-radius: 4px;">`;
                     html += `<div style="color: ${color}; min-width: 84px; font-size: 0.82rem; font-weight: bold;">${icon} ${this.escapeHtml(p)}</div>`;
                     html += `<div style="color: #cfd8dc; font-size: 0.82rem; min-width: 72px;">F${frame}</div>`;
-                    html += `<div style="color: #e0e0e0; font-size: 0.86rem; flex: 1;">${this.escapeHtml(event.type || 'event')}: ${this.escapeHtml(event.description || '')}</div>`;
+                    html += `<div style="color: #e0e0e0; font-size: 0.86rem; flex: 1;">${this.escapeHtml(event.type || 'event')}: ${this.escapeHtml(event.description || '')}${this.escapeHtml(spanText)}</div>`;
                     html += `<button style="padding: 0.2rem 0.6rem; background: #4a90e2; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 0.8rem;" onclick="window.visualizer.jumpToFrame(${frame})">Jump</button>`;
+                    html += `<button style="padding: 0.2rem 0.6rem; background: #7b61ff; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 0.8rem;" onclick="window.visualizer.openDiagnosticsForIssue('${issueIdJs}', '${issueTypeJs}', ${frame}, ${frame}, ${Number.isFinite(endFrame) ? endFrame : frame})">Why?</button>`;
                     html += `</div>`;
                 });
                 html += '</div>';
                 html += '</div>';
             }
-            
-            // Issues list
-            if (issuesData.issues && issuesData.issues.length > 0) {
-                html += '<div id="issues-list" style="display: flex; flex-direction: column; gap: 0.75rem;">';
-                
-                issuesData.issues.forEach((issue, idx) => {
-                    const severityColor = {
-                        'critical': '#ff6b6b',
-                        'high': '#ff6b6b',
-                        'medium': '#ffa500',
-                        'low': '#ffa500'
-                    }[issue.severity] || '#888';
-                    
-                    const typeIcon = {
-                        'extreme_coefficients': '📐',
-                        'perception_instability': '📊',
-                        'right_lane_low_visibility': '👀',
-                        'right_lane_edge_contact': '🧭',
-                        'high_lateral_error': '📏',
-                        'negative_control_correlation': '↔️',
-                        'perception_failure': '👁️',
-                        'straight_sign_mismatch': '↩️',
-                        'centerline_cross': '🚧',
-                        'out_of_lane': '🚫',
-                        'emergency_stop': '🛑',
-                        'heading_jump': '🔄'
-                    }[issue.type] || '⚠️';
-                    
-                    html += `<div class="issue-item" data-issue-type="${issue.type}" data-issue-severity="${issue.severity || 'unknown'}" style="background: #2a2a2a; padding: 1rem; border-radius: 8px; border-left: 4px solid ${severityColor}; cursor: pointer;" onclick="window.visualizer.jumpToFrame(${issue.frame})">`;
-                    html += `<div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 0.5rem;">`;
-                    html += `<div style="flex: 1;">`;
-                    html += `<div style="font-weight: bold; color: ${severityColor}; margin-bottom: 0.25rem;">${typeIcon} Frame ${issue.frame}: ${issue.type.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}</div>`;
-                    html += `<div style="color: #e0e0e0; font-size: 0.9rem;">${issue.description}</div>`;
-                    if (issue.type === 'right_lane_low_visibility') {
-                        html += '<div style="margin-top: 0.35rem; color: #9fb3c8; font-size: 0.82rem;">Inspect with overlays: <strong>Model Perception Fit Points</strong> + <strong>Segmentation Fit Range</strong> (and CV ROI only if debugging CV fallback), then compare with Trajectory tab `perception_center_x` and Diagnostics GT-vs-Perception hotspots.</div>';
-                    }
-                    html += `</div>`;
-                    html += `<button style="padding: 0.25rem 0.75rem; background: #4a90e2; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 0.85rem; white-space: nowrap;" onclick="event.stopPropagation(); window.visualizer.jumpToFrame(${issue.frame})">Jump →</button>`;
-                    html += `</div>`;
-                    html += `</div>`;
-                });
-                
-                html += '</div>';
-            } else {
+
+            if (timelineEvents.length === 0) {
                 html += '<div style="background: #2a2a2a; padding: 2rem; border-radius: 8px; text-align: center; color: #4caf50;">';
                 html += '<div style="font-size: 2rem; margin-bottom: 0.5rem;">✓</div>';
                 html += '<div style="font-size: 1.1rem; font-weight: bold; margin-bottom: 0.25rem;">No Issues Detected</div>';
@@ -1930,18 +2093,18 @@ class Visualizer {
             
             // Setup filter buttons
             const filterButtons = issuesContent.querySelectorAll('.issue-filter-btn');
-            const issueItems = issuesContent.querySelectorAll('.issue-item');
+            const timelineItems = issuesContent.querySelectorAll('.timeline-event-item');
             const informationalToggle = issuesContent.querySelector('#toggle-show-informational-issues');
             let activeFilter = 'all';
 
             const applyIssueVisibility = () => {
                 const showInformational = Boolean(this.showInformationalIssues);
-                issueItems.forEach(item => {
+                timelineItems.forEach(item => {
                     const typeMatch = activeFilter === 'all' || item.dataset.issueType === activeFilter;
                     const sev = String(item.dataset.issueSeverity || '').toLowerCase();
                     const isInformational = sev === 'low';
                     const severityMatch = showInformational || !isInformational;
-                    item.style.display = (typeMatch && severityMatch) ? 'block' : 'none';
+                    item.style.display = (typeMatch && severityMatch) ? 'flex' : 'none';
                 });
             };
 
@@ -2020,13 +2183,31 @@ class Visualizer {
             const fmtOpt = (value, digits = 3) => (value === null || value === undefined
                 ? '-'
                 : value.toFixed(digits));
+            const diagnosticsFocus = this.pendingDiagnosticsFocus;
+            const focusChip = (focusId) => {
+                if (!diagnosticsFocus || diagnosticsFocus.focusId !== focusId) return '';
+                const label = diagnosticsFocus.issueType
+                    ? diagnosticsFocus.issueType.replaceAll('_', ' ')
+                    : 'selected issue';
+                return ` <span style="display:inline-block; margin-left:0.45rem; padding:0.08rem 0.42rem; border-radius:999px; background:#7b61ff; color:#fff; font-size:0.73rem; font-weight:600;">Focused by issue: ${this.escapeHtml(label)}</span>`;
+            };
             
             // Build diagnostics HTML
             let html = '<div style="padding: 1rem;">';
+
+            if (diagnosticsFocus) {
+                const focusLabel = diagnosticsFocus.issueType
+                    ? diagnosticsFocus.issueType.replaceAll('_', ' ')
+                    : 'selected event';
+                html += '<div style="background:#1f2430; border:1px solid #3b4252; border-left:4px solid #7b61ff; padding:0.7rem 0.85rem; border-radius:6px; margin-bottom:0.9rem;">';
+                html += `<div style="color:#d2a8ff; font-weight:bold;">Diagnostics Focus</div>`;
+                html += `<div style="color:#d0d8e2; font-size:0.88rem; margin-top:0.2rem;">Event: ${this.escapeHtml(focusLabel)} | Frames ${diagnosticsFocus.startFrame}-${diagnosticsFocus.endFrame} (jump frame ${diagnosticsFocus.frame})</div>`;
+                html += '</div>';
+            }
             
             // Diagnosis Summary
             html += '<div style="background: #2a2a2a; padding: 1.5rem; border-radius: 8px; margin-bottom: 1.5rem;">';
-            html += '<h2 style="margin-top: 0; color: #4a90e2;">Diagnosis Summary</h2>';
+            html += '<h2 id="diag-section-summary" style="margin-top: 0; color: #4a90e2;">Diagnosis Summary</h2>';
             
             const primaryIssue = diagnostics.diagnosis?.primary_issue || 'unknown';
             const trajScore = diagnostics.diagnosis?.trajectory_score || 0;
@@ -2081,7 +2262,7 @@ class Visualizer {
                 const trajColor = traj.quality_score >= 80 ? '#4caf50' : traj.quality_score >= 60 ? '#ffa500' : '#ff6b6b';
                 
                 html += '<div style="background: #2a2a2a; padding: 1rem; border-radius: 8px; margin-bottom: 1rem;">';
-                html += '<h3 style="margin-top: 0; color: #4a90e2;">Trajectory Quality</h3>';
+                html += '<h3 id="diag-section-trajectory" style="margin-top: 0; color: #4a90e2;">Trajectory Quality</h3>';
                 html += `<div style="font-size: 1.5rem; font-weight: bold; color: ${trajColor}; margin-bottom: 1rem;">${traj.quality_score.toFixed(1)}%</div>`;
                 
                 html += '<table style="width: 100%; color: #e0e0e0; margin-bottom: 1rem;">';
@@ -2102,8 +2283,8 @@ class Visualizer {
                     const labelColor = label.includes('perception-driven')
                         ? '#ffb74d'
                         : (label.includes('trajectory-logic') ? '#ef5350' : '#4caf50');
-                    html += '<div style="background: #1a1a1a; padding: 0.75rem; border-radius: 4px; border-left: 3px solid #9b59b6; margin-top: 1rem;">';
-                    html += '<strong style="color: #d2a8ff;">Perception → Trajectory Attribution</strong><br/>';
+                    html += '<div id="diag-focus-trajectory-attribution" style="background: #1a1a1a; padding: 0.75rem; border-radius: 4px; border-left: 3px solid #9b59b6; margin-top: 1rem;">';
+                    html += `<strong style="color: #d2a8ff;">Perception → Trajectory Attribution</strong>${focusChip('diag-focus-trajectory-attribution')}<br/>`;
                     html += `<div style="margin-top: 0.4rem; color: ${labelColor};"><strong>${this.escapeHtml(label)}</strong></div>`;
                     html += '<table style="width: 100%; color: #e0e0e0; margin-top: 0.5rem;">';
                     html += `<tr><td>Ref vs Perception RMSE:</td><td style="text-align: right;">${fmtOpt(attr.ref_vs_perception_rmse, 3)}m</td></tr>`;
@@ -2119,8 +2300,8 @@ class Visualizer {
                 }
 
                 if (traj.perception_trajectory_hotspots && traj.perception_trajectory_hotspots.length > 0) {
-                    html += '<div style="background: #1a1a1a; padding: 0.75rem; border-radius: 4px; border-left: 3px solid #9b59b6; margin-top: 1rem;">';
-                    html += '<strong style="color: #d2a8ff;">Perception → Trajectory Hotspots</strong><br/>';
+                    html += '<div id="diag-focus-trajectory-hotspots" style="background: #1a1a1a; padding: 0.75rem; border-radius: 4px; border-left: 3px solid #9b59b6; margin-top: 1rem;">';
+                    html += `<strong style="color: #d2a8ff;">Perception → Trajectory Hotspots</strong>${focusChip('diag-focus-trajectory-hotspots')}<br/>`;
                     html += '<div style="color: #888; font-size: 0.85rem; margin-bottom: 0.5rem;">Frames where perception-vs-GT error is highest, side-by-side with trajectory.</div>';
                     html += '<div style="display: flex; flex-direction: column; gap: 0.5rem;">';
                     traj.perception_trajectory_hotspots.forEach((spot) => {
@@ -2137,8 +2318,8 @@ class Visualizer {
                 }
                 
                 if (traj.issues && traj.issues.length > 0) {
-                    html += '<div style="background: #3a1a1a; padding: 0.75rem; border-radius: 4px; border-left: 3px solid #ff6b6b; margin-top: 1rem;">';
-                    html += '<strong style="color: #ff6b6b;">Issues:</strong><ul style="margin: 0.5rem 0; padding-left: 1.5rem; color: #ff6b6b;">';
+                    html += '<div id="diag-focus-trajectory-issues" style="background: #3a1a1a; padding: 0.75rem; border-radius: 4px; border-left: 3px solid #ff6b6b; margin-top: 1rem;">';
+                    html += `<strong style="color: #ff6b6b;">Issues:</strong>${focusChip('diag-focus-trajectory-issues')}<ul style="margin: 0.5rem 0; padding-left: 1.5rem; color: #ff6b6b;">`;
                     traj.issues.forEach(issue => {
                         html += `<li>${issue}</li>`;
                     });
@@ -2163,7 +2344,7 @@ class Visualizer {
                 const ctrlColor = ctrl.quality_score >= 80 ? '#4caf50' : ctrl.quality_score >= 60 ? '#ffa500' : '#ff6b6b';
                 
                 html += '<div style="background: #2a2a2a; padding: 1rem; border-radius: 8px; margin-bottom: 1rem;">';
-                html += '<h3 style="margin-top: 0; color: #4a90e2;">Control Quality</h3>';
+                html += '<h3 id="diag-section-control" style="margin-top: 0; color: #4a90e2;">Control Quality</h3>';
                 html += `<div style="font-size: 1.5rem; font-weight: bold; color: ${ctrlColor}; margin-bottom: 1rem;">${ctrl.quality_score.toFixed(1)}%</div>`;
                 
                 // Add comparison note if RMSE is available
@@ -2216,8 +2397,8 @@ class Visualizer {
                     const domColor = dominant === 'hard_clip' || dominant === 'jerk_limit'
                         ? '#ff6b6b'
                         : (dominant === 'rate_limit' || dominant === 'smoothing' ? '#ffa500' : '#4caf50');
-                    html += '<div style="background: #1a1a1a; padding: 0.75rem; border-radius: 4px; margin-top: 1rem; border-left: 3px solid #7b61ff;">';
-                    html += '<strong style="color: #b39bff;">Steering Limiter Root Cause</strong><br/>';
+                    html += '<div id="diag-focus-control-limiter" style="background: #1a1a1a; padding: 0.75rem; border-radius: 4px; margin-top: 1rem; border-left: 3px solid #7b61ff;">';
+                    html += `<strong style="color: #b39bff;">Steering Limiter Root Cause</strong>${focusChip('diag-focus-control-limiter')}<br/>`;
                     html += `<div style="margin-top: 0.35rem; color: ${domColor};">Dominant stage: <strong>${dominant}</strong> (${dominantPct.toFixed(1)}% of limited frames)</div>`;
                     html += `<div style="margin-top: 0.35rem; color: #e0e0e0;">Limited frames: ${limiter.total_limited_frames}</div>`;
                     html += '<table style="width: 100%; color: #e0e0e0; margin-top: 0.5rem;">';
@@ -2300,8 +2481,8 @@ class Visualizer {
                     const deltas = feas.limiter_deltas_entry_mean || {};
                     const speedLimitedPct = speedFeas.speed_limited_pct || 0;
 
-                    html += '<div style="background: #1a1a1a; padding: 0.75rem; border-radius: 4px; margin-top: 1rem; border-left: 3px solid #00bcd4;">';
-                    html += '<strong style="color: #00e5ff;">Curve Entry Feasibility (Full Story)</strong><br/>';
+                    html += '<div id="diag-focus-control-feasibility" style="background: #1a1a1a; padding: 0.75rem; border-radius: 4px; margin-top: 1rem; border-left: 3px solid #00bcd4;">';
+                    html += `<strong style="color: #00e5ff;">Curve Entry Feasibility (Full Story)</strong>${focusChip('diag-focus-control-feasibility')}<br/>`;
                     html += `<div style="margin-top: 0.35rem; color: ${clsColor};">Primary classification: <strong>${cls}</strong></div>`;
                     html += `<div style="margin-top: 0.35rem; color: #e0e0e0;">Window: frames ${feas.entry_start_frame ?? '-'}-${feas.entry_end_frame ?? '-'} `
                         + `(${feas.entry_frames ?? 0} frames), curve start ${feas.curve_start_frame ?? '-'} (${feas.curve_start_source || 'unknown'})</div>`;
@@ -2349,8 +2530,8 @@ class Visualizer {
                         breakdown.push(`Steering barely changes (mean Δ=${ctrl.steering_stats.mean_change.toFixed(3)})`);
                     }
                 }
-                html += '<div style="background: #1a1a1a; padding: 0.75rem; border-radius: 4px; margin-top: 1rem; border-left: 3px solid #4a90e2;">';
-                html += '<strong style="color: #4a90e2;">Control Quality Breakdown</strong><br/>';
+                html += '<div id="diag-focus-control-breakdown" style="background: #1a1a1a; padding: 0.75rem; border-radius: 4px; margin-top: 1rem; border-left: 3px solid #4a90e2;">';
+                html += `<strong style="color: #4a90e2;">Control Quality Breakdown</strong>${focusChip('diag-focus-control-breakdown')}<br/>`;
                 if (breakdown.length > 0) {
                     html += '<ul style="margin: 0.5rem 0; padding-left: 1.5rem; color: #e0e0e0;">';
                     breakdown.forEach(item => {
@@ -2363,8 +2544,8 @@ class Visualizer {
                 html += '</div>';
                 
                 if (ctrl.issues && ctrl.issues.length > 0) {
-                    html += '<div style="background: #3a1a1a; padding: 0.75rem; border-radius: 4px; border-left: 3px solid #ff6b6b; margin-top: 1rem;">';
-                    html += '<strong style="color: #ff6b6b;">Issues:</strong><ul style="margin: 0.5rem 0; padding-left: 1.5rem; color: #ff6b6b;">';
+                    html += '<div id="diag-focus-control-issues" style="background: #3a1a1a; padding: 0.75rem; border-radius: 4px; border-left: 3px solid #ff6b6b; margin-top: 1rem;">';
+                    html += `<strong style="color: #ff6b6b;">Issues:</strong>${focusChip('diag-focus-control-issues')}<ul style="margin: 0.5rem 0; padding-left: 1.5rem; color: #ff6b6b;">`;
                     ctrl.issues.forEach(issue => {
                         html += `<li>${issue}</li>`;
                     });
@@ -2381,8 +2562,8 @@ class Visualizer {
                 }
 
                 if (ctrl.lateral_error_hotspots && ctrl.lateral_error_hotspots.length > 0) {
-                    html += '<div style="background: #1a1a1a; padding: 0.75rem; border-radius: 4px; border-left: 3px solid #4a90e2; margin-top: 1rem;">';
-                    html += '<strong style="color: #4a90e2;">Lateral Error Hotspots</strong><br/>';
+                    html += '<div id="diag-focus-control-hotspots" style="background: #1a1a1a; padding: 0.75rem; border-radius: 4px; border-left: 3px solid #4a90e2; margin-top: 1rem;">';
+                    html += `<strong style="color: #4a90e2;">Lateral Error Hotspots</strong>${focusChip('diag-focus-control-hotspots')}<br/>`;
                     html += '<div style="color: #888; font-size: 0.85rem; margin-bottom: 0.5rem;">Top frames by |lateral error| with context.</div>';
                     html += '<div style="display: flex; flex-direction: column; gap: 0.5rem;">';
                     ctrl.lateral_error_hotspots.forEach((spot) => {
@@ -2402,8 +2583,8 @@ class Visualizer {
                     });
                     html += '</div></div>';
                 } else {
-                    html += '<div style="background: #1a1a1a; padding: 0.75rem; border-radius: 4px; border-left: 3px solid #4a90e2; margin-top: 1rem;">';
-                    html += '<strong style="color: #4a90e2;">Lateral Error Hotspots</strong><br/>';
+                    html += '<div id="diag-focus-control-hotspots" style="background: #1a1a1a; padding: 0.75rem; border-radius: 4px; border-left: 3px solid #4a90e2; margin-top: 1rem;">';
+                    html += `<strong style="color: #4a90e2;">Lateral Error Hotspots</strong>${focusChip('diag-focus-control-hotspots')}<br/>`;
                     html += '<div style="color: #4caf50; font-size: 0.9rem;">No significant hotspots detected.</div>';
                     html += '</div>';
                 }
@@ -2593,12 +2774,155 @@ class Visualizer {
                 html += '</div>';
             }
             
+            // V1: Signal Chain Waterfall Panel
+            html += '<div id="diag-section-signal-chain" style="background: #2a2a2a; padding: 1rem; border-radius: 8px; margin-bottom: 1rem;">';
+            html += '<h3 style="margin-top: 0; color: #4a90e2;">Signal Chain Analysis</h3>';
+            html += '<div id="signal-chain-content" style="color: #aaa;">Loading signal chain data...</div>';
+            html += '</div>';
+
+            // V3: Speed-Curvature Feasibility Panel
+            html += '<div id="diag-section-speed-curvature" style="background: #2a2a2a; padding: 1rem; border-radius: 8px; margin-bottom: 1rem;">';
+            html += '<h3 style="margin-top: 0; color: #4a90e2;">Speed-Curvature Feasibility</h3>';
+            html += '<div id="speed-curvature-content" style="color: #aaa;">Loading speed-curvature data...</div>';
+            html += '</div>';
+
             html += '</div>';
             diagnosticsContent.innerHTML = html;
+
+            // Async fetch for signal chain and speed-curvature data
+            this._loadSignalChainPanel();
+            this._loadSpeedCurvaturePanel();
+
+            if (diagnosticsFocus && diagnosticsFocus.sectionId) {
+                const primaryTargetId = diagnosticsFocus.focusId || diagnosticsFocus.sectionId;
+                let target = diagnosticsContent.querySelector(`#${primaryTargetId}`);
+                if (!target) {
+                    target = diagnosticsContent.querySelector(`#${diagnosticsFocus.sectionId}`);
+                }
+                if (target) {
+                    target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                    const previousBoxShadow = target.style.boxShadow;
+                    target.style.boxShadow = '0 0 0 2px #7b61ff';
+                    setTimeout(() => {
+                        target.style.boxShadow = previousBoxShadow;
+                    }, 1800);
+                }
+                this.pendingDiagnosticsFocus = null;
+            }
             
         } catch (error) {
             console.error('Error loading diagnostics:', error);
             diagnosticsContent.innerHTML = `<p style="color: #ff6b6b; text-align: center; padding: 2rem;">Error loading diagnostics: ${error.message}</p>`;
+        }
+    }
+
+    async _loadSignalChainPanel() {
+        const container = document.getElementById('signal-chain-content');
+        if (!container) return;
+        try {
+            const resp = await fetch(`/api/signal-chain/${encodeURIComponent(this.currentRecording)}`);
+            if (!resp.ok) { container.innerHTML = '<span style="color:#888;">Signal chain data unavailable.</span>'; return; }
+            const data = await resp.json();
+            let h = '';
+
+            // Summary card
+            const sd = data.signal_delay_frames;
+            const delayColor = sd != null && sd > 10 ? '#ff6b6b' : '#4caf50';
+            h += '<div style="display:flex;gap:1.5rem;flex-wrap:wrap;margin-bottom:1rem;">';
+            h += `<div style="background:#1e1e1e;padding:0.75rem 1rem;border-radius:6px;min-width:120px;"><div style="color:#888;font-size:0.8rem;">Signal Delay</div><div style="font-size:1.3rem;font-weight:bold;color:${delayColor};">${sd != null ? sd + ' frames' : 'N/A'}</div></div>`;
+            h += `<div style="background:#1e1e1e;padding:0.75rem 1rem;border-radius:6px;min-width:120px;"><div style="color:#888;font-size:0.8rem;">Heading Zeroed</div><div style="font-size:1.3rem;font-weight:bold;color:#e0e0e0;">${data.heading_zero_total_frames ?? '?'} frames</div></div>`;
+            h += `<div style="background:#1e1e1e;padding:0.75rem 1rem;border-radius:6px;min-width:120px;"><div style="color:#888;font-size:0.8rem;">Rate Limit Active</div><div style="font-size:1.3rem;font-weight:bold;color:#e0e0e0;">${data.rate_limit_total_frames ?? '?'} frames</div></div>`;
+            h += `<div style="background:#1e1e1e;padding:0.75rem 1rem;border-radius:6px;min-width:120px;"><div style="color:#888;font-size:0.8rem;">Jerk Limited</div><div style="font-size:1.3rem;font-weight:bold;color:#e0e0e0;">${data.jerk_limit_total_frames ?? '?'} frames</div></div>`;
+            h += `<div style="background:#1e1e1e;padding:0.75rem 1rem;border-radius:6px;min-width:120px;"><div style="color:#888;font-size:0.8rem;">Failure Frame</div><div style="font-size:1.3rem;font-weight:bold;color:#e0e0e0;">${data.failure_frame ?? 'none'}</div></div>`;
+            h += '</div>';
+
+            // Per-frame table
+            const frames = data.per_frame_data || [];
+            if (frames.length > 0) {
+                h += '<div id="diag-focus-signal-suppression" style="overflow-x:auto;max-height:400px;overflow-y:auto;">';
+                h += '<table style="width:100%;border-collapse:collapse;font-size:0.75rem;color:#ccc;">';
+                h += '<thead style="position:sticky;top:0;background:#1e1e1e;z-index:1;"><tr>';
+                const cols = ['Frame','Heading Raw','Heading Smooth','Curvature','Curv Preview','HZ Gate','Rate Lim','Alpha Red','Curv Scale','Hist','FF Steer','Steering','Limiter','Speed'];
+                cols.forEach(c => { h += `<th style="padding:4px 6px;text-align:right;border-bottom:1px solid #444;white-space:nowrap;">${c}</th>`; });
+                h += '</tr></thead><tbody>';
+                for (const fr of frames) {
+                    const hzg = fr.heading_zero_gate ? 1 : 0;
+                    const rl = fr.rate_limit_active ? 1 : 0;
+                    const rowBg = hzg ? 'rgba(255,107,107,0.08)' : (rl ? 'rgba(255,193,7,0.08)' : '');
+                    h += `<tr style="background:${rowBg};">`;
+                    h += `<td style="padding:2px 6px;text-align:right;">${fr.frame}</td>`;
+                    h += `<td style="padding:2px 6px;text-align:right;">${(fr.traj_heading_raw ?? 0).toFixed(4)}</td>`;
+                    h += `<td style="padding:2px 6px;text-align:right;">${(fr.traj_heading_smoothed ?? 0).toFixed(4)}</td>`;
+                    h += `<td style="padding:2px 6px;text-align:right;">${(fr.traj_curvature ?? 0).toFixed(5)}</td>`;
+                    h += `<td style="padding:2px 6px;text-align:right;">${(fr.curvature_preview ?? 0).toFixed(5)}</td>`;
+                    h += `<td style="padding:2px 6px;text-align:center;color:${hzg ? '#ff6b6b' : '#4caf50'};">${hzg ? 'ON' : '-'}</td>`;
+                    h += `<td style="padding:2px 6px;text-align:center;color:${rl ? '#ffc107' : '#4caf50'};">${rl ? 'ON' : '-'}</td>`;
+                    h += `<td style="padding:2px 6px;text-align:right;">${(fr.curvature_alpha_reduction ?? 0).toFixed(3)}</td>`;
+                    h += `<td style="padding:2px 6px;text-align:right;">${(fr.curvature_rate_scale ?? 1).toFixed(2)}</td>`;
+                    h += `<td style="padding:2px 6px;text-align:center;">${fr.heading_from_history ? 'Y' : '-'}</td>`;
+                    h += `<td style="padding:2px 6px;text-align:right;">${(fr.ctrl_feedforward ?? 0).toFixed(4)}</td>`;
+                    h += `<td style="padding:2px 6px;text-align:right;">${(fr.ctrl_steering ?? 0).toFixed(4)}</td>`;
+                    h += `<td style="padding:2px 6px;text-align:right;">${fr.ctrl_limiter_code ?? 0}</td>`;
+                    h += `<td style="padding:2px 6px;text-align:right;">${(fr.speed_mps ?? 0).toFixed(2)}</td>`;
+                    h += '</tr>';
+                }
+                h += '</tbody></table></div>';
+            }
+            container.innerHTML = h;
+        } catch (e) {
+            container.innerHTML = `<span style="color:#ff6b6b;">Error: ${e.message}</span>`;
+        }
+    }
+
+    async _loadSpeedCurvaturePanel() {
+        const container = document.getElementById('speed-curvature-content');
+        if (!container) return;
+        try {
+            const resp = await fetch(`/api/speed-curvature/${encodeURIComponent(this.currentRecording)}`);
+            if (!resp.ok) { container.innerHTML = '<span style="color:#888;">Speed-curvature data unavailable.</span>'; return; }
+            const data = await resp.json();
+            let h = '';
+
+            if (data.error) {
+                container.innerHTML = `<span style="color:#ff6b6b;">${data.error}</span>`;
+                return;
+            }
+
+            // Summary card
+            const overspeedColor = (data.overspeed_frames ?? 0) > 0 ? '#ff6b6b' : '#4caf50';
+            h += '<div style="display:flex;gap:1.5rem;flex-wrap:wrap;margin-bottom:1rem;">';
+            h += `<div style="background:#1e1e1e;padding:0.75rem 1rem;border-radius:6px;min-width:120px;"><div style="color:#888;font-size:0.8rem;">Overspeed Frames</div><div style="font-size:1.3rem;font-weight:bold;color:${overspeedColor};">${data.overspeed_frames ?? '0'}</div></div>`;
+            h += `<div style="background:#1e1e1e;padding:0.75rem 1rem;border-radius:6px;min-width:120px;"><div style="color:#888;font-size:0.8rem;">Peak Overspeed Ratio</div><div style="font-size:1.3rem;font-weight:bold;color:#e0e0e0;">${data.peak_overspeed_ratio != null ? data.peak_overspeed_ratio.toFixed(3) : 'N/A'}</div></div>`;
+            h += `<div style="background:#1e1e1e;padding:0.75rem 1rem;border-radius:6px;min-width:120px;"><div style="color:#888;font-size:0.8rem;">Speed at Curve Entry</div><div style="font-size:1.3rem;font-weight:bold;color:#e0e0e0;">${data.speed_at_curve_entry != null ? data.speed_at_curve_entry.toFixed(2) + ' m/s' : 'N/A'}</div></div>`;
+            h += `<div style="background:#1e1e1e;padding:0.75rem 1rem;border-radius:6px;min-width:120px;"><div style="color:#888;font-size:0.8rem;">Decel Lead Time</div><div style="font-size:1.3rem;font-weight:bold;color:#e0e0e0;">${data.decel_lead_time_frames != null ? data.decel_lead_time_frames + ' frames' : 'N/A'}</div></div>`;
+            h += '</div>';
+
+            // Per-frame table
+            const frames = data.per_frame_data || [];
+            if (frames.length > 0) {
+                h += '<div style="overflow-x:auto;max-height:400px;overflow-y:auto;">';
+                h += '<table style="width:100%;border-collapse:collapse;font-size:0.75rem;color:#ccc;">';
+                h += '<thead style="position:sticky;top:0;background:#1e1e1e;z-index:1;"><tr>';
+                const cols = ['Frame', 'Speed', 'Curvature', 'Curv Preview', 'v_max_feas', 'Cap Target', 'Overspeed'];
+                cols.forEach(c => { h += `<th style="padding:4px 6px;text-align:right;border-bottom:1px solid #444;white-space:nowrap;">${c}</th>`; });
+                h += '</tr></thead><tbody>';
+                for (const fr of frames) {
+                    const rowBg = fr.overspeed ? 'rgba(255,107,107,0.15)' : '';
+                    h += `<tr style="background:${rowBg};">`;
+                    h += `<td style="padding:2px 6px;text-align:right;">${fr.frame}</td>`;
+                    h += `<td style="padding:2px 6px;text-align:right;">${(fr.speed ?? 0).toFixed(2)}</td>`;
+                    h += `<td style="padding:2px 6px;text-align:right;">${(fr.curvature ?? 0).toFixed(5)}</td>`;
+                    h += `<td style="padding:2px 6px;text-align:right;">${(fr.curvature_preview ?? 0).toFixed(5)}</td>`;
+                    h += `<td style="padding:2px 6px;text-align:right;">${fr.v_max_feasible != null ? fr.v_max_feasible.toFixed(2) : '-'}</td>`;
+                    h += `<td style="padding:2px 6px;text-align:right;">${(fr.speed_cap_target ?? 0).toFixed(2)}</td>`;
+                    h += `<td style="padding:2px 6px;text-align:center;color:${fr.overspeed ? '#ff6b6b' : '#4caf50'};">${fr.overspeed ? 'YES' : '-'}</td>`;
+                    h += '</tr>';
+                }
+                h += '</tbody></table></div>';
+            }
+            container.innerHTML = h;
+        } catch (e) {
+            container.innerHTML = `<span style="color:#ff6b6b;">Error: ${e.message}</span>`;
         }
     }
 
@@ -5334,6 +5658,20 @@ class Visualizer {
         updateField('control-pid-integral', c.pid_integral !== undefined ? c.pid_integral.toFixed(4) : '-');
         updateField('control-pid-derivative', c.pid_derivative !== undefined ? c.pid_derivative.toFixed(4) : '-');
         updateField('control-pid-error', c.pid_error !== undefined ? c.pid_error.toFixed(4) : '-');
+        // Pure Pursuit diagnostics
+        const ppContainer = document.getElementById('control-pp-section');
+        if (ppContainer) {
+            const isPP = c.control_mode === 'pure_pursuit';
+            ppContainer.style.display = isPP ? '' : 'none';
+            if (isPP) {
+                updateField('control-pp-alpha', c.pp_alpha !== undefined ? `${(c.pp_alpha * 180 / Math.PI).toFixed(2)}°` : '-');
+                updateField('control-pp-lookahead', c.pp_lookahead_distance !== undefined ? `${c.pp_lookahead_distance.toFixed(2)}m` : '-');
+                updateField('control-pp-geometric', c.pp_geometric_steering !== undefined ? c.pp_geometric_steering.toFixed(4) : '-');
+                updateField('control-pp-feedback', c.pp_feedback_steering !== undefined ? c.pp_feedback_steering.toFixed(4) : '-');
+                updateField('control-pp-jump-clamped', c.pp_ref_jump_clamped > 0.5 ? 'YES' : 'NO');
+                updateField('control-pp-stale-hold', c.pp_stale_hold_active > 0.5 ? 'YES' : 'NO');
+            }
+        }
         updateField(
             'control-target-speed-raw',
             c.target_speed_raw !== undefined ? `${c.target_speed_raw.toFixed(2)} m/s` : '-'
@@ -6948,6 +7286,8 @@ class Visualizer {
         if (this.currentRecording) {
             if (tabName === 'summary') {
                 this.loadSummary();
+            } else if (tabName === 'compare') {
+                this.loadCompare();
             } else if (tabName === 'issues') {
                 this.loadIssues();
             } else if (tabName === 'diagnostics') {

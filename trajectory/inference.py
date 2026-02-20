@@ -89,7 +89,12 @@ class TrajectoryPlanningInference:
             'traj_heading_zero_gate_heading_off_abs_rad',
             np.radians(3.5),
         )
-        
+
+        # A3: Curvature-aware smoothing parameters
+        smoothing_alpha_curve_reduction = kwargs.pop('smoothing_alpha_curve_reduction', 0.15)
+        ref_x_rate_limit_curvature_min = kwargs.pop('ref_x_rate_limit_curvature_min', 0.003)
+        ref_x_rate_limit_curvature_scale_max = kwargs.pop('ref_x_rate_limit_curvature_scale_max', 3.0)
+
         if planner_type == "rule_based":
             # Pass lane smoothing to planner
             kwargs['lane_smoothing_alpha'] = lane_smoothing_alpha
@@ -193,6 +198,17 @@ class TrajectoryPlanningInference:
         self.ref_debug_counter = 0
         self.last_reference_diagnostics: Dict[str, float] = {}
         self.heading_zero_gate_active = False
+
+        # A2: Lane center history for heading estimation when lane_coeffs unavailable
+        self._center_x_history: list = []
+        self._center_x_history_max = 5
+
+        # A3: Curvature-aware smoothing and rate limiting
+        self._smoothing_alpha_curve_reduction = float(smoothing_alpha_curve_reduction)
+        self._ref_x_rate_limit_curvature_min = float(ref_x_rate_limit_curvature_min)
+        self._ref_x_rate_limit_curvature_scale_max = float(ref_x_rate_limit_curvature_scale_max)
+        self._last_curvature: float = 0.0
+        self._curvature_increasing_frames: int = 0
 
     def _update_heading_zero_gate(
         self,
@@ -434,24 +450,33 @@ class TrajectoryPlanningInference:
                     center_x = (left_lane_line_x + right_lane_line_x) / 2.0
                     logger.debug(f"[TRAJECTORY] Road center: left={left_lane_line_x:.3f}, right={right_lane_line_x:.3f}, center={center_x:.3f}")
                 
-                # CRITICAL FIX: For straight roads, heading should be 0° regardless of lateral offset
-                # When using lane_positions (vehicle coordinates), we don't have curvature information
-                # Tests expect heading ~0° for straight roads, so default to 0° when using lane_positions
-                # Only use lane_coeffs to compute heading if available (which has curvature information)
                 heading = 0.0
                 curvature = 0.0
+                heading_from_history = False
                 if lane_coeffs is not None:
-                    # Use lane_coeffs to compute heading if available (has curvature information)
                     valid_lanes = [coeffs for coeffs in lane_coeffs if coeffs is not None]
                     if len(valid_lanes) >= 2:
-                        # Use the trajectory planner's direct computation to get heading
-                        # This properly handles curvature and computes heading from lane geometry
                         direct_ref = self.planner.compute_reference_point_direct(
                             valid_lanes[0], valid_lanes[1], lookahead
                         )
                         if direct_ref is not None:
                             heading = direct_ref.get('heading', 0.0)
                             curvature = direct_ref.get('curvature', 0.0)
+
+                # A2: When lane_coeffs didn't provide heading, derive from
+                # center_x history (arctan2 of lateral motion over frames).
+                if heading == 0.0 and len(self._center_x_history) >= 3:
+                    recent = self._center_x_history[-3:]
+                    dx_hist = recent[-1] - recent[0]
+                    n_hist = len(recent) - 1
+                    if abs(dx_hist) > 0.005 and n_hist > 0:
+                        heading = float(np.arctan2(dx_hist, lookahead * 0.1 * n_hist))
+                        heading_from_history = True
+
+                # Update center_x history ring buffer
+                self._center_x_history.append(center_x)
+                if len(self._center_x_history) > self._center_x_history_max:
+                    self._center_x_history = self._center_x_history[-self._center_x_history_max:]
                 
                 raw_ref_point = {
                     'x': center_x,
@@ -478,6 +503,14 @@ class TrajectoryPlanningInference:
                 raw_ref_point['raw_x'] = center_x
                 raw_ref_point['raw_y'] = lookahead
                 raw_ref_point['raw_heading'] = heading
+                raw_ref_point['diag_heading_from_history'] = 1.0 if heading_from_history else 0.0
+                # A4: curvature preview at 1.5x lookahead for feedforward priming
+                curvature_preview = self.get_curvature_at_lookahead(
+                    lane_coeffs, lookahead * 1.5
+                )
+                raw_ref_point['curvature_preview'] = (
+                    float(curvature_preview) if curvature_preview is not None else 0.0
+                )
                 raw_ref_point['diag_heading_zero_gate_active'] = (
                     1.0 if self._update_heading_zero_gate(lane_coeffs, heading) else 0.0
                 )
@@ -621,9 +654,16 @@ class TrajectoryPlanningInference:
             'heading': target_point.heading,
             'velocity': target_point.velocity,
             'curvature': target_point.curvature,
-            'method': 'trajectory',  # NEW: Track which method was used
-            'perception_center_x': None  # Not available when using trajectory points
+            'method': 'trajectory',
+            'perception_center_x': None,
         }
+        # A4: curvature preview for trajectory-based path
+        curvature_preview = self.get_curvature_at_lookahead(
+            lane_coeffs, lookahead * 1.5
+        )
+        raw_ref_point['curvature_preview'] = (
+            float(curvature_preview) if curvature_preview is not None else 0.0
+        )
         raw_heading = float(raw_ref_point.get('raw_heading', raw_ref_point.get('heading', 0.0)))
         raw_ref_point['diag_heading_zero_gate_active'] = (
             1.0 if self._update_heading_zero_gate(lane_coeffs, raw_heading) else 0.0
@@ -820,6 +860,27 @@ class TrajectoryPlanningInference:
                         effective_ref_x_rate_limit,
                         self.ref_x_rate_limit * precurve_scale,
                     )
+                # A3: Scale rate limit directly from curvature, breaking the
+                # self-defeating cycle (heading zeroed → rate limit stays tight).
+                curvature_for_rate = abs(float(
+                    raw_ref_point.get('curvature', 0.0)
+                ))
+                diag_curvature_rate_limit_scale = 1.0
+                if (
+                    self._ref_x_rate_limit_curvature_min > 1e-6
+                    and curvature_for_rate > self._ref_x_rate_limit_curvature_min
+                ):
+                    curv_ratio = min(
+                        1.0,
+                        curvature_for_rate / (self._ref_x_rate_limit_curvature_min * 3.0),
+                    )
+                    curv_scale = 1.0 + curv_ratio * (self._ref_x_rate_limit_curvature_scale_max - 1.0)
+                    effective_ref_x_rate_limit = max(
+                        effective_ref_x_rate_limit,
+                        self.ref_x_rate_limit * curv_scale,
+                    )
+                    diag_curvature_rate_limit_scale = curv_scale
+                raw_ref_point['diag_curvature_rate_limit_scale'] = diag_curvature_rate_limit_scale
                 delta_x = raw_ref_point['x'] - last_x
                 if abs(delta_x) > effective_ref_x_rate_limit:
                     raw_ref_point['raw_x'] = raw_ref_point.get('raw_x', raw_x)
@@ -875,7 +936,24 @@ class TrajectoryPlanningInference:
         if minimal_smoothing:
             alpha_x = self.lane_position_smoothing_alpha
         else:
-            alpha_x = alpha * 0.2 if use_light_smoothing else alpha  # Lighter smoothing for x when using lane_positions (was 0.3)
+            alpha_x = alpha * 0.2 if use_light_smoothing else alpha
+
+        # A3: Reduce smoothing alpha when curvature is increasing (approaching
+        # a curve). Track curvature trend; only reduce after 3+ consecutive
+        # frames of increasing curvature to avoid noise-triggered relaxation.
+        raw_curvature = abs(float(raw_ref_point.get('curvature', 0.0)))
+        diag_curvature_aware_alpha_reduction = 0.0
+        if raw_curvature > self._last_curvature + 1e-5:
+            self._curvature_increasing_frames += 1
+        else:
+            self._curvature_increasing_frames = max(0, self._curvature_increasing_frames - 1)
+        if self._curvature_increasing_frames >= 3 and self._smoothing_alpha_curve_reduction > 0:
+            alpha_reduction = self._smoothing_alpha_curve_reduction
+            alpha = max(0.12, alpha - alpha_reduction)
+            alpha_x = max(0.05, alpha_x - alpha_reduction)
+            diag_curvature_aware_alpha_reduction = alpha_reduction
+        self._last_curvature = raw_curvature
+        raw_ref_point['diag_curvature_aware_alpha_reduction'] = diag_curvature_aware_alpha_reduction
         
         # Confidence-aware smoothing: lower confidence => more smoothing
         if confidence is not None:
@@ -1019,6 +1097,10 @@ class TrajectoryPlanningInference:
             'diag_multi_lookahead_heading_far': float(raw_ref_point.get('diag_multi_lookahead_heading_far', raw_ref_point.get('raw_heading', smoothed_heading))),
             'diag_multi_lookahead_heading_blended': float(raw_ref_point.get('diag_multi_lookahead_heading_blended', raw_ref_point.get('raw_heading', smoothed_heading))),
             'diag_multi_lookahead_blend_alpha': float(raw_ref_point.get('diag_multi_lookahead_blend_alpha', 0.0)),
+            'curvature_preview': float(raw_ref_point.get('curvature_preview', 0.0)),
+            'diag_heading_from_history': float(raw_ref_point.get('diag_heading_from_history', 0.0)),
+            'diag_curvature_aware_alpha_reduction': float(raw_ref_point.get('diag_curvature_aware_alpha_reduction', 0.0)),
+            'diag_curvature_rate_limit_scale': float(raw_ref_point.get('diag_curvature_rate_limit_scale', 1.0)),
         }
         for key, value in raw_ref_point.items():
             if isinstance(key, str) and key.startswith('diag_dynamic_effective_horizon_'):

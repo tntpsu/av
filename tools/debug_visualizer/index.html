@@ -4,14 +4,14 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>PhilViz</title>
-    <link rel="stylesheet" href="style.css?v=20260218_curve_schedule_compact_v43">
+    <link rel="stylesheet" href="style.css?v=20260220_issues_diagnostics_focus_v60">
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 </head>
 <body>
     <div class="container">
         <!-- Header -->
         <header class="header">
-            <h1>PhilViz <span id="philviz-build-version" style="font-size:0.8rem; color:#9aa0a6; font-weight:500;">v20260219_control_visibility_fix_v59</span></h1>
+            <h1>PhilViz <span id="philviz-build-version" style="font-size:0.8rem; color:#9aa0a6; font-weight:500;">v20260220_pure_pursuit_v63</span></h1>
             <div id="recording-meta" style="display:flex; gap:0.4rem; align-items:center; margin-right:0.8rem;">
                 <span id="recording-type-badge" style="display:none; padding:0.2rem 0.5rem; border-radius:999px; font-size:0.75rem; background:#2a2a2a; color:#cfd8dc; border:1px solid #444;">type</span>
                 <span id="topdown-badge" style="display:none; padding:0.2rem 0.5rem; border-radius:999px; font-size:0.75rem; background:#2a2a2a; color:#cfd8dc; border:1px solid #444;">topdown</span>
@@ -162,6 +162,7 @@
             <div class="data-panel" id="data-panel">
                 <div class="tabs">
                     <button class="tab-btn" data-tab="summary">Summary</button>
+                    <button class="tab-btn" data-tab="compare">Compare</button>
                     <button class="tab-btn" data-tab="issues">Issues</button>
                     <button class="tab-btn" data-tab="diagnostics">Diagnostics</button>
                     <button class="tab-btn active" data-tab="all-data">All Data</button>
@@ -180,6 +181,15 @@
                         <div id="summary-content">
                             <p style="color: #888; text-align: center; padding: 2rem;">
                                 Load a recording to see summary metrics
+                            </p>
+                        </div>
+                    </div>
+
+                    <!-- Compare Tab -->
+                    <div id="compare-tab" class="tab-pane">
+                        <div id="compare-content" style="max-height: 70vh; overflow-y: auto; padding-right: 10px;">
+                            <p style="color: #888; text-align: center; padding: 2rem;">
+                                Load recordings to compare baseline/candidate deltas
                             </p>
                         </div>
                     </div>
@@ -605,6 +615,19 @@
                             <tr><td>PID Integral</td><td id="control-pid-integral">-</td></tr>
                             <tr><td>PID Derivative</td><td id="control-pid-derivative">-</td></tr>
                             <tr><td>PID Error</td><td id="control-pid-error">-</td></tr>
+                        </table>
+                        <div id="control-pp-section" style="display:none; margin-top: 0.5rem;">
+                            <h4 style="margin: 0.5rem 0; color: #4caf50;">Pure Pursuit</h4>
+                            <table>
+                                <tr><td>PP Alpha (angle to ref)</td><td id="control-pp-alpha">-</td></tr>
+                                <tr><td>PP Lookahead Distance</td><td id="control-pp-lookahead">-</td></tr>
+                                <tr><td>PP Geometric Steering</td><td id="control-pp-geometric">-</td></tr>
+                                <tr><td>PP Feedback Steering</td><td id="control-pp-feedback">-</td></tr>
+                                <tr><td>PP Ref Jump Clamped</td><td id="control-pp-jump-clamped">-</td></tr>
+                                <tr><td>PP Stale Hold Active</td><td id="control-pp-stale-hold">-</td></tr>
+                            </table>
+                        </div>
+                        <table>
                             <tr><td>Is Control Straight Proxy</td><td id="control-is-control-straight-proxy">-</td></tr>
                             <tr><td>Is Straight (legacy alias)</td><td id="control-is-straight">-</td></tr>
                             <tr><td>Is Road Straight</td><td id="control-is-road-straight">-</td></tr>

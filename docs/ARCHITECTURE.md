@@ -186,9 +186,25 @@ Ground truth mode is a Unity-side bypass:
 - Safety limits are enforced both in Python (planning/control) and Unity (speed caps).
 - Timing is tracked from Unity (`Time.time`, `realtimeSinceStartup`) for drift checks.
 
+## Signal Chain (S1-M32)
+
+The trajectory-to-control signal chain has multiple suppression stages that can delay steering intent:
+
+1. **Trajectory heading zeroing** — forces heading to 0° on perceived straight roads. A curvature guard (`heading_zero_curvature_guard`) prevents zeroing when real curvature is present.
+2. **Trajectory smoothing** — EMA smoothing on reference point x/y. Alpha is curvature-aware: reduces when curvature is increasing.
+3. **Trajectory rate limiting** — caps per-frame reference-x change. Rate limit scales up with curvature (`ref_x_rate_limit_curvature_scale_max`).
+4. **Control curvature smoothing** — EMA on path curvature for feedforward (α=0.5).
+5. **Curvature preview blend** — curvature at 1.5× lookahead blended 30% into feedforward for early priming.
+6. **Steering rate/jerk limits** — hardware-like limits. Straight→curve integral flush clears straight-line bias.
+7. **Speed cap** — curvature-based speed limit (`v_max = sqrt(a_lat / |κ|)` at 0.25g) prevents overspeed into turns.
+
+Diagnostics: `tools/analyze/analyze_signal_chain.py` measures delay, suppression, and speed feasibility.
+PhilViz Diagnostics tab shows signal chain waterfall (V1) and speed-curvature overlay (V3).
+
 ## Where to Start
 
 - End-to-end: `av_stack.py`
 - Bridge API: `bridge/server.py`
 - Unity control path: `AVBridge.cs` -> `CarController.cs`
 - Ground truth flow: `tools/ground_truth_follower.py`
+- Signal chain diagnostic: `tools/analyze/analyze_signal_chain.py`

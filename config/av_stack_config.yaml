@@ -10,14 +10,23 @@ control:
     error_clip: 1.57
     integral_limit: 0.1
     steering_smoothing_alpha: 0.9
-    control_mode: pid
+    control_mode: pure_pursuit
     stanley_k: 1.5
     stanley_soft_speed: 2.0
     stanley_heading_weight: 1.0
+    pp_feedback_gain: 0.15
+    pp_min_lookahead: 0.5
+    pp_ref_jump_clamp: 0.5
+    pp_stale_decay: 0.98
     feedback_gain_min: 1.1
     feedback_gain_max: 1.4
     feedback_gain_curvature_min: 0.003
     feedback_gain_curvature_max: 0.03
+    base_error_smoothing_alpha: 0.7
+    heading_error_smoothing_alpha: 0.45
+    straight_window_frames: 60
+    straight_oscillation_high: 0.2
+    straight_oscillation_low: 0.05
     curve_feedforward_gain: 1.0
     curve_feedforward_threshold: 0.012
     curve_feedforward_gain_min: 1.0
@@ -25,11 +34,11 @@ control:
     curve_feedforward_curvature_min: 0.001
     curve_feedforward_curvature_max: 0.015
     curve_feedforward_curvature_clamp: 0.025
-    curvature_scale_factor: 20.0
+    curvature_scale_factor: 12.0
     curvature_scale_threshold: 0.0005
     curvature_stale_hold_seconds: 0.3
     curvature_stale_hold_min_abs: 0.0005
-    curvature_smoothing_alpha: 0.7
+    curvature_smoothing_alpha: 0.5        # C1: reduced from 0.7 (trajectory now provides smoother curvature)
     curvature_transition_threshold: 0.01
     curvature_transition_alpha: 0.3
     curve_feedforward_bins:
@@ -134,8 +143,8 @@ control:
     curve_commit_mode_dynamic_deficit_frames: 8
     curve_commit_mode_dynamic_deficit_min: 0.03
     curve_commit_mode_retrigger_cooldown_frames: 12
-    curve_mode_speed_cap_enabled: false
-    curve_mode_speed_cap_mps: 7.2
+    curve_mode_speed_cap_enabled: true       # B1: Enable curvature-based speed cap
+    curve_mode_speed_cap_mps: 8.0            # B1: Start conservative (was 7.2)
     curve_mode_speed_cap_min_ratio: 0.55
     speed_gain_min_speed: 4.0
     speed_gain_max_speed: 10.0
@@ -362,6 +371,13 @@ trajectory:
   multi_lookahead_curvature_threshold: 0.01
   multi_lookahead_curve_heading_smoothing_alpha: 0.75
   multi_lookahead_curve_heading_min_abs_rad: 0.05
+  # A1: Planner heading-zero gate thresholds (image-space)
+  heading_zero_quad_threshold: 0.005      # tighter than old 0.01; image-space quadratic coeff
+  heading_zero_curvature_guard: 0.001     # lowered from 0.002: recordings show heading zeroed at curvature 0.0005-0.0015
+  # A3: Curvature-aware smoothing / rate-limit relaxation
+  smoothing_alpha_curve_reduction: 0.15   # alpha reduction when curvature increasing (3+ frames)
+  ref_x_rate_limit_curvature_min: 0.003   # curvature threshold for rate limit relaxation
+  ref_x_rate_limit_curvature_scale_max: 3.0  # max rate limit multiplier from curvature
   traj_heading_zero_gate_center_a_on_abs_max: 0.004
   traj_heading_zero_gate_center_a_off_abs_max: 0.008
   traj_heading_zero_gate_heading_on_abs_rad: 0.035
@@ -376,7 +392,7 @@ trajectory:
   dynamic_effective_horizon_confidence_fallback: 1.0
   far_band_contribution_cap_enabled: true
   far_band_contribution_cap_start_m: 12.0
-  far_band_contribution_cap_gain: 0.35
+  far_band_contribution_cap_gain: 0.45
   speed_horizon_guardrail_enabled: true
   speed_horizon_guardrail_time_headway_s: 1.8
   speed_horizon_guardrail_margin_m: 1.0
@@ -418,6 +434,8 @@ perception:
   segmentation_ransac_residual_px: 10.0
   segmentation_ransac_min_inliers: 8
   segmentation_ransac_max_trials: 100
+  model_fallback_confidence_hard_threshold: 0.1
+  model_fallback_zero_lane_confidence_threshold: 0.6
   lane_width_min_m: 1.0
   lane_width_max_m: 10.0
   lane_center_change_clamp_m: 0.4

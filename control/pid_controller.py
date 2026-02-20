@@ -209,12 +209,21 @@ class LateralController:
                  stanley_k: float = 1.0,
                  stanley_soft_speed: float = 2.0,
                  stanley_heading_weight: float = 1.0,
+                 pp_feedback_gain: float = 0.15,
+                 pp_min_lookahead: float = 0.5,
+                 pp_ref_jump_clamp: float = 0.5,
+                 pp_stale_decay: float = 0.98,
                  feedback_gain_min: float = 1.0,
                  feedback_gain_max: float = 1.2,
                  feedback_gain_curvature_min: float = 0.002,
                  feedback_gain_curvature_max: float = 0.015,
                  curvature_stale_hold_seconds: float = 0.30,
-                 curvature_stale_hold_min_abs: float = 0.0005):
+                 curvature_stale_hold_min_abs: float = 0.0005,
+                 base_error_smoothing_alpha: float = 0.7,
+                 heading_error_smoothing_alpha: float = 0.45,
+                 straight_window_frames: int = 60,
+                 straight_oscillation_high: float = 0.20,
+                 straight_oscillation_low: float = 0.05):
         """
         Initialize lateral controller.
         
@@ -424,6 +433,14 @@ class LateralController:
         self.stanley_k = stanley_k
         self.stanley_soft_speed = stanley_soft_speed
         self.stanley_heading_weight = stanley_heading_weight
+        self.pp_feedback_gain = max(0.0, float(pp_feedback_gain))
+        self.pp_min_lookahead = max(0.1, float(pp_min_lookahead))
+        self.pp_ref_jump_clamp = max(0.1, float(pp_ref_jump_clamp))
+        self.pp_stale_decay = float(np.clip(pp_stale_decay, 0.5, 1.0))
+        self._pp_last_ref_x = 0.0
+        self._pp_last_valid_steering = 0.0
+        self._pp_stale_frames = 0
+        self.smoothed_path_curvature = 0.0
         self.feedback_gain_min = feedback_gain_min
         self.feedback_gain_max = feedback_gain_max
         self.feedback_gain_curvature_min = feedback_gain_curvature_min
@@ -450,10 +467,14 @@ class LateralController:
         # NEW: Error smoothing to reduce sensitivity to perception noise
         # Smooth lateral + heading errors before feeding to PID to prevent control oscillations from perception instability
         self.smoothed_lateral_error = None
-        self.base_error_smoothing_alpha = 0.7  # Exponential smoothing: 70% new value, 30% old value (can be tuned)
+        self.base_error_smoothing_alpha = float(
+            np.clip(base_error_smoothing_alpha, 0.0, 1.0)
+        )
         self.error_smoothing_alpha = self.base_error_smoothing_alpha
         self.smoothed_heading_error = None
-        self.heading_error_smoothing_alpha = 0.45  # Less smoothing to reduce lag/overshoot
+        self.heading_error_smoothing_alpha = float(
+            np.clip(heading_error_smoothing_alpha, 0.0, 1.0)
+        )
 
         # Straight-away adaptive tuning (deadband + smoothing)
         self.straight_curvature_threshold = straight_curvature_threshold
@@ -494,9 +515,11 @@ class LateralController:
         self.road_straight_hold_invalid_frames = max(0, int(road_straight_hold_invalid_frames))
         self._road_straight_state = True
         self._road_straight_invalid_frames_remaining = 0
-        self.straight_window = 60  # ~2 seconds at 30 FPS
-        self.straight_oscillation_high = 0.20
-        self.straight_oscillation_low = 0.05
+        self.straight_window = max(10, int(straight_window_frames))
+        self.straight_oscillation_high = max(0.0, float(straight_oscillation_high))
+        self.straight_oscillation_low = max(0.0, float(straight_oscillation_low))
+        if self.straight_oscillation_low > self.straight_oscillation_high:
+            self.straight_oscillation_low = self.straight_oscillation_high
         self.deadband_min = 0.01
         self.deadband_max = 0.08
         self.smoothing_min = 0.60
@@ -933,167 +956,207 @@ class LateralController:
                 self.pid.integral *= decay_factor
         # If steering IS maxed out OR error is large (on curve), don't decay the integral
         
-        # INDUSTRY STANDARD: Feedforward + Feedback Control
-        # Real AV companies use geometric feedforward based on path curvature
-        # This is better than adaptive kp - it's the proper way to handle curves
-        # Feedforward: Calculate required steering from path geometry (bicycle model)
-        # Feedback: PID corrects for errors and disturbances
-        
-        # Calculate feedforward steering from path curvature
-        # Using bicycle model: steering = atan(wheelbase * curvature)
-        # For normalized steering (-1 to 1), we need to scale by max steering angle
-        wheelbase = 2.5  # meters (typical car wheelbase)
-        
-        # FIXED: Add smoothing to feedforward to prevent jerky steering from noisy curvature
-        # Smooth the path curvature to prevent rapid feedforward changes
-        if not hasattr(self, 'smoothed_path_curvature'):
-            self.smoothed_path_curvature = 0.0
-        smoothing_alpha = self.curvature_smoothing_alpha
-        if abs(path_curvature - self.smoothed_path_curvature) > self.curvature_transition_threshold:
-            smoothing_alpha = min(smoothing_alpha, self.curvature_transition_alpha)
-        self.smoothed_path_curvature = (
-            smoothing_alpha * path_curvature +
-            (1.0 - smoothing_alpha) * self.smoothed_path_curvature
-        )
-        
-        feedforward_steering = 0.0
-        curve_gain_scheduled = 1.0
-        abs_curvature = abs(self.smoothed_path_curvature)
-        speed_gain_final = 1.0
-        speed_gain_scale = 0.0
-        speed_gain_applied = False
-        if self.curve_feedforward_curvature_min is not None and self.curve_feedforward_curvature_max is not None:
-            min_curv = max(1e-6, self.curve_feedforward_curvature_min)
-            max_curv = max(min_curv, self.curve_feedforward_curvature_max)
-            if abs_curvature <= min_curv:
-                curve_gain_scheduled = self.curve_feedforward_gain_min
-            elif abs_curvature >= max_curv:
-                curve_gain_scheduled = self.curve_feedforward_gain_max
-            else:
-                ratio = (abs_curvature - min_curv) / (max_curv - min_curv)
-                curve_gain_scheduled = self.curve_feedforward_gain_min + ratio * (
-                    self.curve_feedforward_gain_max - self.curve_feedforward_gain_min
-                )
-
-        curve_feedforward_scale = 1.0
-        for bin_cfg in self.curve_feedforward_bins:
-            if not isinstance(bin_cfg, dict):
-                continue
-            min_curv = float(bin_cfg.get('min_curvature', 0.0))
-            max_curv = float(bin_cfg.get('max_curvature', float('inf')))
-            if abs_curvature < min_curv or abs_curvature >= max_curv:
-                continue
-            curve_feedforward_scale = float(bin_cfg.get('gain_scale', 1.0))
-            break
-
-        if current_speed is not None and self.speed_gain_max_speed > self.speed_gain_min_speed:
-            if current_speed <= self.speed_gain_min_speed:
-                speed_gain = self.speed_gain_min
-            elif current_speed >= self.speed_gain_max_speed:
-                speed_gain = self.speed_gain_max
-            else:
-                ratio = (current_speed - self.speed_gain_min_speed) / (
-                    self.speed_gain_max_speed - self.speed_gain_min_speed
-                )
-                speed_gain = self.speed_gain_min + ratio * (self.speed_gain_max - self.speed_gain_min)
-            if self.speed_gain_curvature_max > self.speed_gain_curvature_min:
-                if curve_metric_abs <= self.speed_gain_curvature_min:
-                    speed_gain_scale = 1.0
-                elif curve_metric_abs >= self.speed_gain_curvature_max:
-                    speed_gain_scale = 0.0
-                else:
-                    ratio = (curve_metric_abs - self.speed_gain_curvature_min) / (
-                        self.speed_gain_curvature_max - self.speed_gain_curvature_min
-                    )
-                    speed_gain_scale = 1.0 - ratio
-            else:
-                speed_gain_scale = 1.0
-            speed_gain_final = 1.0 + (speed_gain - 1.0) * speed_gain_scale
-            speed_gain_applied = abs(speed_gain_final - 1.0) > 1e-3
-
-        min_curv_ff = max(1e-6, self.curve_feedforward_curvature_min or 0.0)
-        if abs_curvature >= min_curv_ff:  # Apply feedforward on any curve above min curvature
-            # Apply curvature scaling (only when above threshold to avoid amplifying noise on straights)
-            scaled_curvature = self.smoothed_path_curvature
-            if abs(self.smoothed_path_curvature) > self.curvature_scale_threshold:
-                scaled_curvature = self.smoothed_path_curvature * self.curvature_scale_factor
-            
-            # Convert curvature (1/m) to steering angle using bicycle model
-            # curvature = 1/radius, steering = atan(wheelbase / radius) = atan(wheelbase * curvature)
-            # For small angles: steering ≈ wheelbase * curvature
-            # Normalize to [-1, 1] range
-            raw_steering = wheelbase * scaled_curvature  # Use scaled curvature
-            # Clamp to reasonable range (max steering angle in radians)
-            max_steering_rad = np.radians(30.0)  # Restore feedforward scaling
-            feedforward_steering = np.clip(raw_steering / max_steering_rad, -1.0, 1.0)
-            # Scale by max_steering to match our steering range
-            feedforward_steering *= self.max_steering
-            if abs_curvature >= self.curve_feedforward_threshold:
-                feedforward_steering *= self.curve_feedforward_gain * curve_gain_scheduled
-            feedforward_steering *= curve_feedforward_scale
-            feedforward_steering = np.clip(feedforward_steering, -self.max_steering, self.max_steering)
-        
-        # Track curve-to-straight transition for smooth integral decay
-        is_on_curve = curve_metric_abs > 0.05  # On a curve (curvature > ~3°)
-        if not hasattr(self, 'was_on_curve'):
-            self.was_on_curve = False
-        if not hasattr(self, 'straight_transition_counter'):
-            self.straight_transition_counter = 0
-        
-        # Detect transition from curve to straight
-        transition_to_straight = self.was_on_curve and not is_on_curve
-        
-        # CRITICAL FIX: Gradually decay integral when transitioning from curve to straight
-        # Instead of immediately resetting (which causes jerky steering), gradually decay
-        # The integral accumulates during curves to maintain steering
-        # When entering straight road, we need to smoothly reduce the integral
-        if transition_to_straight:
-            # Start transition counter
-            self.straight_transition_counter = 0
-        
-        # Gradually decay integral over ~0.5 seconds (15 frames) when on straight after curve
-        if not is_on_curve and self.straight_transition_counter < 15:
-            # Only decay if error is small (we're actually on straight, not just low curvature)
-            if abs(total_error) < 0.15:  # Small error = actually on straight road
-                # Exponential decay: reduce integral by 30% each frame
-                # After 15 frames: 0.7^15 ≈ 0.005 (essentially zero)
-                decay_factor = 0.70  # 30% decay per frame
-                self.pid.integral *= decay_factor
-                self.straight_transition_counter += 1
-            else:
-                # Error is still large - we're not fully on straight yet, keep integral
-                self.straight_transition_counter = 0  # Reset counter
-        elif is_on_curve:
-            # Back on curve - reset transition counter
-            self.straight_transition_counter = 0
-        
-        # Update state
-        self.was_on_curve = is_on_curve
-        
-        # Update PID controller (feedback term)
-        total_error_scaled = total_error
-        # Note: The steering direction issue (23.7% wrong) is caused by reference point smoothing
-        # preserving bias when lane detection fails, not a sign error in the controller
-        # The fix is in trajectory/inference.py to not preserve bias during lane failures
+        # PP telemetry defaults
+        pp_alpha = 0.0
+        pp_lookahead_distance = 0.0
+        pp_geometric_steering = 0.0
+        pp_feedback_steering_val = 0.0
+        pp_ref_jump_clamped = False
+        pp_stale_hold_active = False
         stanley_heading_term = 0.0
         stanley_crosstrack_term = 0.0
         stanley_speed = current_speed if current_speed is not None else 0.0
-        if self.control_mode == "stanley":
-            stanley_heading_term = self.stanley_heading_weight * heading_error
-            denom = max(self.stanley_soft_speed, float(stanley_speed))
-            stanley_crosstrack_term = np.arctan2(
-                self.stanley_k * lateral_error_for_control,
-                denom,
+        total_error_scaled = total_error
+
+        if self.control_mode == "pure_pursuit":
+            # Pure Pursuit: compute steering from geometry, not error correction
+            pp_ref_x = float(reference_point['x'])
+            pp_ref_y = float(reference_point['y'])
+
+            # Ref jump clamping (second safety net after trajectory's jump clamp)
+            ref_x_delta = pp_ref_x - self._pp_last_ref_x
+            if abs(ref_x_delta) > self.pp_ref_jump_clamp:
+                pp_ref_x = self._pp_last_ref_x + np.sign(ref_x_delta) * self.pp_ref_jump_clamp
+                pp_ref_jump_clamped = True
+            self._pp_last_ref_x = pp_ref_x
+
+            if using_stale_perception:
+                self._pp_stale_frames += 1
+                pp_stale_hold_active = True
+                pp_geometric_steering = self._pp_last_valid_steering * (
+                    self.pp_stale_decay ** self._pp_stale_frames
+                )
+            else:
+                self._pp_stale_frames = 0
+                ld = np.sqrt(pp_ref_x**2 + pp_ref_y**2)
+                ld = max(ld, self.pp_min_lookahead)
+                alpha = np.arctan2(pp_ref_x, pp_ref_y)
+
+                wheelbase = 2.5
+                steering_rad = np.arctan(2.0 * wheelbase * np.sin(alpha) / ld)
+                max_steering_rad = np.radians(30.0)
+                pp_geometric_steering = float(
+                    np.clip(steering_rad / max_steering_rad, -1.0, 1.0)
+                )
+                pp_geometric_steering *= self.max_steering
+                self._pp_last_valid_steering = pp_geometric_steering
+                pp_alpha = float(alpha)
+                pp_lookahead_distance = float(ld)
+
+            pp_feedback_steering_val = float(
+                self.pid.update(lateral_error_for_control, dt) * self.pp_feedback_gain
             )
-            feedback_steering = stanley_heading_term + stanley_crosstrack_term
+
+            feedforward_steering = pp_geometric_steering
+            feedback_steering = pp_feedback_steering_val
+            steering_before_limits = pp_geometric_steering + pp_feedback_steering_val
+            speed_gain_final = 1.0
+            speed_gain_scale = 0.0
+            speed_gain_applied = False
+            curve_gain_scheduled = 1.0
+            curve_feedforward_scale = 1.0
+            abs_curvature = curve_metric_abs
+
         else:
-            feedback_steering = self.pid.update(total_error, dt)
-        
-        # Combine feedforward + feedback
-        # Feedforward handles the curve, feedback corrects for errors
-        steering_before_limits = feedforward_steering + feedback_steering
-        if speed_gain_final != 1.0:
-            steering_before_limits *= speed_gain_final
+            # PID / Stanley: feedforward from curvature + feedback from error
+            wheelbase = 2.5
+            if not hasattr(self, 'smoothed_path_curvature'):
+                self.smoothed_path_curvature = 0.0
+            smoothing_alpha = self.curvature_smoothing_alpha
+            if abs(path_curvature - self.smoothed_path_curvature) > self.curvature_transition_threshold:
+                smoothing_alpha = min(smoothing_alpha, self.curvature_transition_alpha)
+            self.smoothed_path_curvature = (
+                smoothing_alpha * path_curvature +
+                (1.0 - smoothing_alpha) * self.smoothed_path_curvature
+            )
+
+            curvature_preview = float(reference_point.get('curvature_preview', 0.0) or 0.0)
+            preview_blend = 0.3
+            if (
+                abs(curvature_preview) > abs(self.smoothed_path_curvature) + 0.001
+                and abs(curvature_preview) > 0.003
+            ):
+                self.smoothed_path_curvature = (
+                    (1.0 - preview_blend) * self.smoothed_path_curvature
+                    + preview_blend * curvature_preview
+                )
+
+            feedforward_steering = 0.0
+            curve_gain_scheduled = 1.0
+            abs_curvature = abs(self.smoothed_path_curvature)
+            speed_gain_final = 1.0
+            speed_gain_scale = 0.0
+            speed_gain_applied = False
+            if self.curve_feedforward_curvature_min is not None and self.curve_feedforward_curvature_max is not None:
+                min_curv = max(1e-6, self.curve_feedforward_curvature_min)
+                max_curv = max(min_curv, self.curve_feedforward_curvature_max)
+                if abs_curvature <= min_curv:
+                    curve_gain_scheduled = self.curve_feedforward_gain_min
+                elif abs_curvature >= max_curv:
+                    curve_gain_scheduled = self.curve_feedforward_gain_max
+                else:
+                    ratio = (abs_curvature - min_curv) / (max_curv - min_curv)
+                    curve_gain_scheduled = self.curve_feedforward_gain_min + ratio * (
+                        self.curve_feedforward_gain_max - self.curve_feedforward_gain_min
+                    )
+
+            curve_feedforward_scale = 1.0
+            for bin_cfg in self.curve_feedforward_bins:
+                if not isinstance(bin_cfg, dict):
+                    continue
+                min_curv = float(bin_cfg.get('min_curvature', 0.0))
+                max_curv = float(bin_cfg.get('max_curvature', float('inf')))
+                if abs_curvature < min_curv or abs_curvature >= max_curv:
+                    continue
+                curve_feedforward_scale = float(bin_cfg.get('gain_scale', 1.0))
+                break
+
+            if current_speed is not None and self.speed_gain_max_speed > self.speed_gain_min_speed:
+                if current_speed <= self.speed_gain_min_speed:
+                    speed_gain = self.speed_gain_min
+                elif current_speed >= self.speed_gain_max_speed:
+                    speed_gain = self.speed_gain_max
+                else:
+                    ratio = (current_speed - self.speed_gain_min_speed) / (
+                        self.speed_gain_max_speed - self.speed_gain_min_speed
+                    )
+                    speed_gain = self.speed_gain_min + ratio * (self.speed_gain_max - self.speed_gain_min)
+                if self.speed_gain_curvature_max > self.speed_gain_curvature_min:
+                    if curve_metric_abs <= self.speed_gain_curvature_min:
+                        speed_gain_scale = 1.0
+                    elif curve_metric_abs >= self.speed_gain_curvature_max:
+                        speed_gain_scale = 0.0
+                    else:
+                        ratio = (curve_metric_abs - self.speed_gain_curvature_min) / (
+                            self.speed_gain_curvature_max - self.speed_gain_curvature_min
+                        )
+                        speed_gain_scale = 1.0 - ratio
+                else:
+                    speed_gain_scale = 1.0
+                speed_gain_final = 1.0 + (speed_gain - 1.0) * speed_gain_scale
+                speed_gain_applied = abs(speed_gain_final - 1.0) > 1e-3
+
+            min_curv_ff = max(1e-6, self.curve_feedforward_curvature_min or 0.0)
+            if abs_curvature >= min_curv_ff:
+                scaled_curvature = self.smoothed_path_curvature
+                if abs(self.smoothed_path_curvature) > self.curvature_scale_threshold:
+                    scaled_curvature = self.smoothed_path_curvature * self.curvature_scale_factor
+                raw_steering = wheelbase * scaled_curvature
+                max_steering_rad = np.radians(30.0)
+                feedforward_steering = np.clip(raw_steering / max_steering_rad, -1.0, 1.0)
+                feedforward_steering *= self.max_steering
+                if abs_curvature >= self.curve_feedforward_threshold:
+                    feedforward_steering *= self.curve_feedforward_gain * curve_gain_scheduled
+                feedforward_steering *= curve_feedforward_scale
+                feedforward_steering = np.clip(feedforward_steering, -self.max_steering, self.max_steering)
+
+            # Track curve-to-straight transition for smooth integral decay
+            is_on_curve = curve_metric_abs > 0.05
+            if not hasattr(self, 'was_on_curve'):
+                self.was_on_curve = False
+            if not hasattr(self, 'straight_transition_counter'):
+                self.straight_transition_counter = 0
+
+            transition_to_straight = self.was_on_curve and not is_on_curve
+            transition_to_curve = not self.was_on_curve and is_on_curve
+
+            if not hasattr(self, '_curve_entry_decay_remaining'):
+                self._curve_entry_decay_remaining = 0
+            if transition_to_curve:
+                self._curve_entry_decay_remaining = 5
+            if self._curve_entry_decay_remaining > 0:
+                self.pid.integral *= 0.35
+                self._curve_entry_decay_remaining -= 1
+
+            if transition_to_straight:
+                self.straight_transition_counter = 0
+
+            if not is_on_curve and self.straight_transition_counter < 15:
+                if abs(total_error) < 0.15:
+                    decay_factor = 0.70
+                    self.pid.integral *= decay_factor
+                    self.straight_transition_counter += 1
+                else:
+                    self.straight_transition_counter = 0
+            elif is_on_curve:
+                self.straight_transition_counter = 0
+
+            self.was_on_curve = is_on_curve
+
+            if self.control_mode == "stanley":
+                stanley_heading_term = self.stanley_heading_weight * heading_error
+                denom = max(self.stanley_soft_speed, float(stanley_speed))
+                stanley_crosstrack_term = np.arctan2(
+                    self.stanley_k * lateral_error_for_control,
+                    denom,
+                )
+                feedback_steering = stanley_heading_term + stanley_crosstrack_term
+            else:
+                feedback_steering = self.pid.update(total_error, dt)
+
+            steering_before_limits = feedforward_steering + feedback_steering
+            if speed_gain_final != 1.0:
+                steering_before_limits *= speed_gain_final
         steering_pre_rate_limit = steering_before_limits
         steering_post_rate_limit = steering_before_limits
         steering_post_jerk_limit = steering_before_limits
@@ -1928,8 +1991,6 @@ class LateralController:
                     )
         steering_post_sign_flip = steering_before_limits
 
-        self.last_steering = steering_before_limits
-        
         # Apply additional smoothing to prevent oscillation
         clip_in = steering_before_limits
         if dynamic_curve_authority_active:
@@ -1955,6 +2016,7 @@ class LateralController:
         steering_hard_clip_delta = abs(steering - clip_in)
         steering_hard_clip_active = steering_hard_clip_delta > 1e-6
         steering_post_hard_clip = steering
+        self.last_steering = steering
         if self.steering_smoothing_alpha is not None:
             smoothing_in = steering
             if sign_flip_override_active:
@@ -2269,6 +2331,12 @@ class LateralController:
                 'stanley_heading_term': stanley_heading_term,
                 'stanley_crosstrack_term': stanley_crosstrack_term,
                 'stanley_speed': stanley_speed,
+                'pp_alpha': pp_alpha,
+                'pp_lookahead_distance': pp_lookahead_distance,
+                'pp_geometric_steering': pp_geometric_steering,
+                'pp_feedback_steering': pp_feedback_steering_val,
+                'pp_ref_jump_clamped': float(pp_ref_jump_clamped),
+                'pp_stale_hold_active': float(pp_stale_hold_active),
                 'feedback_gain_scheduled': feedback_gain,
                 'total_error_scaled': total_error,
                 'is_straight': is_straight,
@@ -3183,6 +3251,11 @@ class VehicleController:
                  longitudinal_low_speed_accel_limit: float = 0.0,
                  longitudinal_low_speed_speed_threshold: float = 0.0,
                  steering_smoothing_alpha: float = 0.7,
+                 base_error_smoothing_alpha: float = 0.7,
+                 heading_error_smoothing_alpha: float = 0.45,
+                 straight_window_frames: int = 60,
+                 straight_oscillation_high: float = 0.20,
+                 straight_oscillation_low: float = 0.05,
                  curve_feedforward_gain: float = 1.0, curve_feedforward_threshold: float = 0.02,
                  curve_feedforward_gain_min: float = 1.0, curve_feedforward_gain_max: float = 1.0,
                  curve_feedforward_curvature_min: float = 0.005, curve_feedforward_curvature_max: float = 0.03,
@@ -3298,6 +3371,10 @@ class VehicleController:
                  stanley_k: float = 1.0,
                  stanley_soft_speed: float = 2.0,
                  stanley_heading_weight: float = 1.0,
+                 pp_feedback_gain: float = 0.15,
+                 pp_min_lookahead: float = 0.5,
+                 pp_ref_jump_clamp: float = 0.5,
+                 pp_stale_decay: float = 0.98,
                  feedback_gain_min: float = 1.0,
                  feedback_gain_max: float = 1.2,
                  feedback_gain_curvature_min: float = 0.002,
@@ -3334,6 +3411,11 @@ class VehicleController:
             error_clip=lateral_error_clip,
             integral_limit=lateral_integral_limit,
             steering_smoothing_alpha=steering_smoothing_alpha,
+            base_error_smoothing_alpha=base_error_smoothing_alpha,
+            heading_error_smoothing_alpha=heading_error_smoothing_alpha,
+            straight_window_frames=straight_window_frames,
+            straight_oscillation_high=straight_oscillation_high,
+            straight_oscillation_low=straight_oscillation_low,
             curve_feedforward_gain=curve_feedforward_gain,
             curve_feedforward_threshold=curve_feedforward_threshold,
             curve_feedforward_gain_min=curve_feedforward_gain_min,
@@ -3342,6 +3424,8 @@ class VehicleController:
             curve_feedforward_curvature_max=curve_feedforward_curvature_max,
             curve_feedforward_curvature_clamp=curve_feedforward_curvature_clamp,
             curve_feedforward_bins=curve_feedforward_bins,
+            curvature_scale_factor=curvature_scale_factor,
+            curvature_scale_threshold=curvature_scale_threshold,
             curvature_smoothing_alpha=curvature_smoothing_alpha,
             curvature_transition_threshold=curvature_transition_threshold,
             curvature_transition_alpha=curvature_transition_alpha,
@@ -3416,11 +3500,11 @@ class VehicleController:
             dynamic_curve_entry_governor_exclusive_mode=(
                 dynamic_curve_entry_governor_exclusive_mode
             ),
-            dynamic_curve_entry_governor_anticipatory_enabled=(
-                dynamic_curve_entry_governor_anticipatory_enabled
-            ),
             dynamic_curve_entry_governor_upcoming_phase_weight=(
                 dynamic_curve_entry_governor_upcoming_phase_weight
+            ),
+            dynamic_curve_entry_governor_anticipatory_enabled=(
+                dynamic_curve_entry_governor_anticipatory_enabled
             ),
             dynamic_curve_authority_precurve_enabled=(
                 dynamic_curve_authority_precurve_enabled
@@ -3484,6 +3568,10 @@ class VehicleController:
             stanley_k=stanley_k,
             stanley_soft_speed=stanley_soft_speed,
             stanley_heading_weight=stanley_heading_weight,
+            pp_feedback_gain=pp_feedback_gain,
+            pp_min_lookahead=pp_min_lookahead,
+            pp_ref_jump_clamp=pp_ref_jump_clamp,
+            pp_stale_decay=pp_stale_decay,
             feedback_gain_min=feedback_gain_min,
             feedback_gain_max=feedback_gain_max,
             feedback_gain_curvature_min=feedback_gain_curvature_min,

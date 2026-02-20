@@ -92,7 +92,24 @@ class DataRecorder:
         self.metadata = {
             "recording_start_time": datetime.now().isoformat(),
             "recording_name": recording_name,
-            "recording_type": recording_type
+            "recording_type": recording_type,
+            "recording_provenance": {
+                "software_version": "unknown",
+                "build_label": "unknown",
+                "git_sha_full": "unknown",
+                "git_sha_short": "unknown",
+                "config_fingerprint_sha256": "unknown",
+                "replay_type": "unknown",
+                "policy_profile": "unknown",
+                "track_id": "unknown",
+                "duration_target_s": 0.0,
+                "start_t": 0.0,
+                "run_command": "",
+                "recorded_at_utc": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "analyze_to_failure_default": True,
+                "notes": "",
+                "candidate_label": "unknown",
+            },
         }
 
     def _debug_print(self, message: str):
@@ -1464,6 +1481,42 @@ class DataRecorder:
             maxshape=max_shape,
             dtype=np.float32
         )
+        self.h5_file.create_dataset(
+            "control/pp_alpha",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/pp_lookahead_distance",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/pp_geometric_steering",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/pp_feedback_steering",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/pp_ref_jump_clamped",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/pp_stale_hold_active",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
         
         # Perception outputs (optional)
         self.h5_file.create_dataset(
@@ -1560,6 +1613,18 @@ class DataRecorder:
             maxshape=max_shape,
             dtype=np.float32
         )
+        self.h5_file.create_dataset(
+            "trajectory/reference_point_curvature_preview",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/speed_cap_curvature_target_mps",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
         # Reference point before smoothing (raw values)
         self.h5_file.create_dataset(
             "trajectory/reference_point_raw_x",
@@ -1620,6 +1685,9 @@ class DataRecorder:
         self.h5_file.create_dataset("trajectory/diag_preclip_abs_mean_12_20m_distance_scale_delta_x", shape=(0,), maxshape=max_shape, dtype=np.float32)
         self.h5_file.create_dataset("trajectory/diag_preclip_abs_mean_12_20m_camera_offset_delta_x", shape=(0,), maxshape=max_shape, dtype=np.float32)
         self.h5_file.create_dataset("trajectory/diag_heading_zero_gate_active", shape=(0,), maxshape=max_shape, dtype=np.float32)
+        self.h5_file.create_dataset("trajectory/diag_heading_from_history", shape=(0,), maxshape=max_shape, dtype=np.float32)
+        self.h5_file.create_dataset("trajectory/diag_curvature_aware_alpha_reduction", shape=(0,), maxshape=max_shape, dtype=np.float32)
+        self.h5_file.create_dataset("trajectory/diag_curvature_rate_limit_scale", shape=(0,), maxshape=max_shape, dtype=np.float32)
         self.h5_file.create_dataset("trajectory/diag_small_heading_gate_active", shape=(0,), maxshape=max_shape, dtype=np.float32)
         self.h5_file.create_dataset("trajectory/diag_multi_lookahead_active", shape=(0,), maxshape=max_shape, dtype=np.float32)
         self.h5_file.create_dataset("trajectory/diag_smoothing_jump_reject", shape=(0,), maxshape=max_shape, dtype=np.float32)
@@ -3457,6 +3525,12 @@ class DataRecorder:
         steering_authority_gap_list = []
         steering_transfer_ratio_list = []
         steering_first_limiter_stage_code_list = []
+        pp_alpha_list = []
+        pp_lookahead_distance_list = []
+        pp_geometric_steering_list = []
+        pp_feedback_steering_list = []
+        pp_ref_jump_clamped_list = []
+        pp_stale_hold_active_list = []
         accel_feedforward_list = []
         brake_feedforward_list = []
         accel_capped_list = []
@@ -3732,6 +3806,12 @@ class DataRecorder:
             steering_first_limiter_stage_code_list.append(
                 getattr(cc, 'steering_first_limiter_stage_code', 0.0) or 0.0
             )
+            pp_alpha_list.append(getattr(cc, 'pp_alpha', 0.0) or 0.0)
+            pp_lookahead_distance_list.append(getattr(cc, 'pp_lookahead_distance', 0.0) or 0.0)
+            pp_geometric_steering_list.append(getattr(cc, 'pp_geometric_steering', 0.0) or 0.0)
+            pp_feedback_steering_list.append(getattr(cc, 'pp_feedback_steering', 0.0) or 0.0)
+            pp_ref_jump_clamped_list.append(float(getattr(cc, 'pp_ref_jump_clamped', False)))
+            pp_stale_hold_active_list.append(float(getattr(cc, 'pp_stale_hold_active', False)))
         
         if timestamps:
             current_size = self.h5_file["control/timestamps"].shape[0]
@@ -3813,7 +3893,10 @@ class DataRecorder:
                        "steering_jerk_limit_requested_rate_delta", "steering_jerk_limit_allowed_rate_delta",
                        "steering_jerk_limit_margin", "steering_jerk_limit_unlock_rate_delta_needed",
                        "steering_authority_gap", "steering_transfer_ratio",
-                       "steering_first_limiter_stage_code"]:
+                       "steering_first_limiter_stage_code",
+                       "pp_alpha", "pp_lookahead_distance",
+                       "pp_geometric_steering", "pp_feedback_steering",
+                       "pp_ref_jump_clamped", "pp_stale_hold_active"]:
                 self.h5_file[f"control/{key}"].resize((new_size,))
             
             # Write data
@@ -4092,6 +4175,12 @@ class DataRecorder:
             self.h5_file["control/steering_authority_gap"][current_size:] = steering_authority_gap_list
             self.h5_file["control/steering_transfer_ratio"][current_size:] = steering_transfer_ratio_list
             self.h5_file["control/steering_first_limiter_stage_code"][current_size:] = steering_first_limiter_stage_code_list
+            self.h5_file["control/pp_alpha"][current_size:] = pp_alpha_list
+            self.h5_file["control/pp_lookahead_distance"][current_size:] = pp_lookahead_distance_list
+            self.h5_file["control/pp_geometric_steering"][current_size:] = pp_geometric_steering_list
+            self.h5_file["control/pp_feedback_steering"][current_size:] = pp_feedback_steering_list
+            self.h5_file["control/pp_ref_jump_clamped"][current_size:] = pp_ref_jump_clamped_list
+            self.h5_file["control/pp_stale_hold_active"][current_size:] = pp_stale_hold_active_list
     
     def _write_perception_outputs(self, frames: List[RecordingFrame]):
         """Write perception outputs to HDF5."""
@@ -4345,7 +4434,9 @@ class DataRecorder:
         ref_points = []
         ref_points_raw = []
         ref_curvatures = []
-        ref_methods = []  # NEW: Track which method was used
+        ref_curvature_previews = []
+        ref_speed_cap_curv_targets = []
+        ref_methods = []
         perception_centers = []  # NEW: Track perception center
         diag_available = []
         diag_generated_by_fallback = []
@@ -4375,6 +4466,9 @@ class DataRecorder:
         diag_preclip_abs_mean_12_20m_distance_scale_delta_x = []
         diag_preclip_abs_mean_12_20m_camera_offset_delta_x = []
         diag_heading_zero_gate_active = []
+        diag_heading_from_history = []
+        diag_curvature_aware_alpha_reduction = []
+        diag_curvature_rate_limit_scale = []
         diag_small_heading_gate_active = []
         diag_multi_lookahead_active = []
         diag_smoothing_jump_reject = []
@@ -4442,6 +4536,12 @@ class DataRecorder:
                 ref_curvatures.append(
                     float(frame.trajectory_output.curvature if frame.trajectory_output.curvature is not None else rp.get('curvature', 0.0))
                 )
+                ref_curvature_previews.append(
+                    float(rp.get('curvature_preview', 0.0))
+                )
+                ref_speed_cap_curv_targets.append(
+                    float(rp.get('speed_cap_curvature_target_mps', 0.0))
+                )
                 # Raw (before smoothing) values
                 ref_points_raw.append([
                     rp.get('raw_x', rp.get('x', 0.0)),
@@ -4486,6 +4586,9 @@ class DataRecorder:
                 diag_preclip_abs_mean_12_20m_distance_scale_delta_x.append(float(to.diag_preclip_abs_mean_12_20m_distance_scale_delta_x if to.diag_preclip_abs_mean_12_20m_distance_scale_delta_x is not None else np.nan))
                 diag_preclip_abs_mean_12_20m_camera_offset_delta_x.append(float(to.diag_preclip_abs_mean_12_20m_camera_offset_delta_x if to.diag_preclip_abs_mean_12_20m_camera_offset_delta_x is not None else np.nan))
                 diag_heading_zero_gate_active.append(float(to.diag_heading_zero_gate_active if to.diag_heading_zero_gate_active is not None else np.nan))
+                diag_heading_from_history.append(float(to.diag_heading_from_history if to.diag_heading_from_history is not None else np.nan))
+                diag_curvature_aware_alpha_reduction.append(float(to.diag_curvature_aware_alpha_reduction if to.diag_curvature_aware_alpha_reduction is not None else np.nan))
+                diag_curvature_rate_limit_scale.append(float(to.diag_curvature_rate_limit_scale if to.diag_curvature_rate_limit_scale is not None else np.nan))
                 diag_small_heading_gate_active.append(float(to.diag_small_heading_gate_active if to.diag_small_heading_gate_active is not None else np.nan))
                 diag_multi_lookahead_active.append(float(to.diag_multi_lookahead_active if to.diag_multi_lookahead_active is not None else np.nan))
                 diag_smoothing_jump_reject.append(float(to.diag_smoothing_jump_reject if to.diag_smoothing_jump_reject is not None else np.nan))
@@ -4546,6 +4649,8 @@ class DataRecorder:
                 ref_points.append([0.0, 0.0, 0.0, 0.0])
                 ref_points_raw.append([0.0, 0.0, 0.0])
                 ref_curvatures.append(0.0)
+                ref_curvature_previews.append(0.0)
+                ref_speed_cap_curv_targets.append(0.0)
                 ref_methods.append('none')
                 perception_centers.append(0.0)
                 to = frame.trajectory_output
@@ -4577,6 +4682,9 @@ class DataRecorder:
                 diag_preclip_abs_mean_12_20m_distance_scale_delta_x.append(float(to.diag_preclip_abs_mean_12_20m_distance_scale_delta_x if (to and to.diag_preclip_abs_mean_12_20m_distance_scale_delta_x is not None) else np.nan))
                 diag_preclip_abs_mean_12_20m_camera_offset_delta_x.append(float(to.diag_preclip_abs_mean_12_20m_camera_offset_delta_x if (to and to.diag_preclip_abs_mean_12_20m_camera_offset_delta_x is not None) else np.nan))
                 diag_heading_zero_gate_active.append(float(to.diag_heading_zero_gate_active if (to and to.diag_heading_zero_gate_active is not None) else np.nan))
+                diag_heading_from_history.append(float(to.diag_heading_from_history if (to and to.diag_heading_from_history is not None) else np.nan))
+                diag_curvature_aware_alpha_reduction.append(float(to.diag_curvature_aware_alpha_reduction if (to and to.diag_curvature_aware_alpha_reduction is not None) else np.nan))
+                diag_curvature_rate_limit_scale.append(float(to.diag_curvature_rate_limit_scale if (to and to.diag_curvature_rate_limit_scale is not None) else np.nan))
                 diag_small_heading_gate_active.append(float(to.diag_small_heading_gate_active if (to and to.diag_small_heading_gate_active is not None) else np.nan))
                 diag_multi_lookahead_active.append(float(to.diag_multi_lookahead_active if (to and to.diag_multi_lookahead_active is not None) else np.nan))
                 diag_smoothing_jump_reject.append(float(to.diag_smoothing_jump_reject if (to and to.diag_smoothing_jump_reject is not None) else np.nan))
@@ -4679,6 +4787,9 @@ class DataRecorder:
             self.h5_file["trajectory/diag_preclip_abs_mean_12_20m_distance_scale_delta_x"].resize((new_size_rp,))
             self.h5_file["trajectory/diag_preclip_abs_mean_12_20m_camera_offset_delta_x"].resize((new_size_rp,))
             self.h5_file["trajectory/diag_heading_zero_gate_active"].resize((new_size_rp,))
+            self.h5_file["trajectory/diag_heading_from_history"].resize((new_size_rp,))
+            self.h5_file["trajectory/diag_curvature_aware_alpha_reduction"].resize((new_size_rp,))
+            self.h5_file["trajectory/diag_curvature_rate_limit_scale"].resize((new_size_rp,))
             self.h5_file["trajectory/diag_small_heading_gate_active"].resize((new_size_rp,))
             self.h5_file["trajectory/diag_multi_lookahead_active"].resize((new_size_rp,))
             self.h5_file["trajectory/diag_smoothing_jump_reject"].resize((new_size_rp,))
@@ -4743,6 +4854,14 @@ class DataRecorder:
             self.h5_file["trajectory/reference_point_curvature"][current_size_rp:] = np.array(
                 ref_curvatures, dtype=np.float32
             )
+            self.h5_file["trajectory/reference_point_curvature_preview"].resize((new_size_rp,))
+            self.h5_file["trajectory/reference_point_curvature_preview"][current_size_rp:] = np.array(
+                ref_curvature_previews, dtype=np.float32
+            )
+            self.h5_file["control/speed_cap_curvature_target_mps"].resize((new_size_rp,))
+            self.h5_file["control/speed_cap_curvature_target_mps"][current_size_rp:] = np.array(
+                ref_speed_cap_curv_targets, dtype=np.float32
+            )
             # Write raw data
             self.h5_file["trajectory/reference_point_raw_x"][current_size_rp:] = ref_points_raw_array[:, 0]
             self.h5_file["trajectory/reference_point_raw_y"][current_size_rp:] = ref_points_raw_array[:, 1]
@@ -4780,6 +4899,9 @@ class DataRecorder:
             self.h5_file["trajectory/diag_preclip_abs_mean_12_20m_distance_scale_delta_x"][current_size_rp:] = np.array(diag_preclip_abs_mean_12_20m_distance_scale_delta_x, dtype=np.float32)
             self.h5_file["trajectory/diag_preclip_abs_mean_12_20m_camera_offset_delta_x"][current_size_rp:] = np.array(diag_preclip_abs_mean_12_20m_camera_offset_delta_x, dtype=np.float32)
             self.h5_file["trajectory/diag_heading_zero_gate_active"][current_size_rp:] = np.array(diag_heading_zero_gate_active, dtype=np.float32)
+            self.h5_file["trajectory/diag_heading_from_history"][current_size_rp:] = np.array(diag_heading_from_history, dtype=np.float32)
+            self.h5_file["trajectory/diag_curvature_aware_alpha_reduction"][current_size_rp:] = np.array(diag_curvature_aware_alpha_reduction, dtype=np.float32)
+            self.h5_file["trajectory/diag_curvature_rate_limit_scale"][current_size_rp:] = np.array(diag_curvature_rate_limit_scale, dtype=np.float32)
             self.h5_file["trajectory/diag_small_heading_gate_active"][current_size_rp:] = np.array(diag_small_heading_gate_active, dtype=np.float32)
             self.h5_file["trajectory/diag_multi_lookahead_active"][current_size_rp:] = np.array(diag_multi_lookahead_active, dtype=np.float32)
             self.h5_file["trajectory/diag_smoothing_jump_reject"][current_size_rp:] = np.array(diag_smoothing_jump_reject, dtype=np.float32)

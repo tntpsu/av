@@ -116,6 +116,36 @@ def _load_config() -> dict:
         return {}
 
 
+def _detect_control_mode(data):
+    pp_geo = data.get('pp_geometric_steering')
+    if pp_geo is not None and np.any(np.abs(pp_geo) > 1e-6):
+        return 'pure_pursuit'
+    return 'pid'
+
+def _pp_feedback_gain(data):
+    pp_fb = data.get('pp_feedback_steering')
+    pp_geo = data.get('pp_geometric_steering')
+    if pp_fb is not None and pp_geo is not None:
+        mask = np.abs(pp_geo) > 0.01
+        if np.any(mask):
+            return float(np.mean(np.abs(pp_fb[mask]) / np.abs(pp_geo[mask])))
+    return None
+
+def _pp_mean_ld(data):
+    ld = data.get('pp_lookahead_distance')
+    if ld is not None:
+        valid = ld[ld > 0.1]
+        if len(valid) > 0:
+            return float(np.mean(valid))
+    return None
+
+def _pp_jump_count(data):
+    jc = data.get('pp_ref_jump_clamped')
+    if jc is not None:
+        return int(np.sum(jc > 0.5))
+    return 0
+
+
 def analyze_recording_summary(recording_path: Path, analyze_to_failure: bool = False, h5_file=None) -> Dict:
     """
     Analyze a recording and return summary metrics.
@@ -198,6 +228,31 @@ def analyze_recording_summary(recording_path: Path, analyze_to_failure: bool = F
                 np.array(f['control/straight_sign_flip_override_active'][:])
                 if 'control/straight_sign_flip_override_active' in f else None
             )
+            # Pure Pursuit telemetry
+            data['pp_alpha'] = (
+                np.array(f['control/pp_alpha'][:])
+                if 'control/pp_alpha' in f else None
+            )
+            data['pp_lookahead_distance'] = (
+                np.array(f['control/pp_lookahead_distance'][:])
+                if 'control/pp_lookahead_distance' in f else None
+            )
+            data['pp_geometric_steering'] = (
+                np.array(f['control/pp_geometric_steering'][:])
+                if 'control/pp_geometric_steering' in f else None
+            )
+            data['pp_feedback_steering'] = (
+                np.array(f['control/pp_feedback_steering'][:])
+                if 'control/pp_feedback_steering' in f else None
+            )
+            data['pp_ref_jump_clamped'] = (
+                np.array(f['control/pp_ref_jump_clamped'][:])
+                if 'control/pp_ref_jump_clamped' in f else None
+            )
+            data['pp_stale_hold_active'] = (
+                np.array(f['control/pp_stale_hold_active'][:])
+                if 'control/pp_stale_hold_active' in f else None
+            )
             
             # Trajectory data
             data['ref_x'] = np.array(f['trajectory/reference_point_x'][:]) if 'trajectory/reference_point_x' in f else None
@@ -205,6 +260,18 @@ def analyze_recording_summary(recording_path: Path, analyze_to_failure: bool = F
             data['ref_velocity'] = (
                 np.array(f['trajectory/reference_point_velocity'][:])
                 if 'trajectory/reference_point_velocity' in f else None
+            )
+            data['diag_heading_zero_gate_active'] = (
+                np.array(f['trajectory/diag_heading_zero_gate_active'][:])
+                if 'trajectory/diag_heading_zero_gate_active' in f else None
+            )
+            data['diag_ref_x_rate_limit_active'] = (
+                np.array(f['trajectory/diag_ref_x_rate_limit_active'][:])
+                if 'trajectory/diag_ref_x_rate_limit_active' in f else None
+            )
+            data['reference_point_curvature'] = (
+                np.array(f['trajectory/reference_point_curvature'][:])
+                if 'trajectory/reference_point_curvature' in f else None
             )
             
             # Perception data
@@ -1157,20 +1224,285 @@ def analyze_recording_summary(recording_path: Path, analyze_to_failure: bool = F
                     ),
                 })
     
-    # Calculate overall score (0-100)
-    score = 100.0
-    score -= min(30, lateral_error_rmse * 50)  # Penalize lateral error
-    score -= min(20, steering_jerk_max * 10)  # Penalize jerk
-    score -= min(20, (100 - lane_detection_rate) * 0.2)  # Penalize detection failures
-    # Penalize only hard stale events (exclude managed low-visibility fallback).
-    score -= min(15, stale_hard_rate * 0.15)
-    # NEW: Penalize perception instability (even if not caught by stale_data)
-    perception_instability_penalty = safe_float(max(0, (100 - perception_stability_score) * 0.2))  # -0.2 points per stability point lost
-    score -= min(20, perception_instability_penalty)  # Cap at 20 points
-    score -= min(15, out_of_lane_time * 0.15)  # Penalize out-of-lane
-    if straight_sign_mismatch_rate > 5.0:
-        score -= min(12, straight_sign_mismatch_rate * 0.2)  # Penalize sign mismatches on straights
-    score = safe_float(max(0, score))
+    # Layered scoring model (0-100 per layer) with hybrid cap.
+    # Deadline preset weights:
+    #   Safety 0.32, Trajectory 0.30, Control 0.16, Perception 0.14, LongitudinalComfort 0.08
+    # Hybrid cap:
+    #   if critical layer red -> cap 59
+    #   elif critical layer yellow -> cap 79
+    #   else cap 100
+    lane_detection_penalty = safe_float(min(20, (100 - lane_detection_rate) * 0.2))
+    stale_data_penalty = safe_float(min(15, stale_hard_rate * 0.15))
+    perception_instability_penalty = safe_float(max(0, (100 - perception_stability_score) * 0.2))
+    perception_instability_penalty = safe_float(min(20, perception_instability_penalty))
+    lane_jitter_penalty = safe_float(min(10, max(0.0, lane_line_jitter_p95 - 0.30) * 30.0))
+    reference_jitter_penalty = safe_float(min(10, max(0.0, reference_jitter_p95 - 0.15) * 40.0))
+
+    trajectory_lateral_rmse_penalty = safe_float(min(30, lateral_error_rmse * 50))
+    trajectory_lateral_p95_penalty = safe_float(min(20, max(0.0, lateral_error_p95 - 0.40) * 35.0))
+    trajectory_heading_penalty = safe_float(min(20, max(0.0, np.degrees(heading_error_rmse) - 10.0) * 2.5))
+
+    control_steering_jerk_penalty = safe_float(min(20, steering_jerk_max * 10))
+    control_oscillation_penalty = safe_float(
+        min(15, max(0.0, oscillation_frequency - 1.0) * 7.0)
+    )
+    control_sign_mismatch_penalty = safe_float(
+        min(12, straight_sign_mismatch_rate * 0.2) if straight_sign_mismatch_rate > 5.0 else 0.0
+    )
+
+    longitudinal_accel_penalty = safe_float(
+        min(20, max(0.0, (acceleration_p95 / G_MPS2) - 0.25) * 120.0)
+    )
+    longitudinal_jerk_penalty = safe_float(
+        min(20, max(0.0, (jerk_p95 / G_MPS2) - 0.51) * 50.0)
+    )
+
+    safety_out_of_lane_penalty = safe_float(min(35, out_of_lane_time * 0.35))
+    safety_event_penalty = 0.0
+    if out_of_lane_events > 0:
+        safety_event_penalty += 25.0
+    if emergency_stop_frame is not None:
+        safety_event_penalty += 20.0
+    safety_event_penalty = safe_float(min(45, safety_event_penalty))
+
+    # 8. SIGNAL INTEGRITY
+    signal_integrity_heading_penalty = 0.0
+    signal_integrity_rate_limit_penalty = 0.0
+    signal_integrity_speed_feasibility_penalty = 0.0
+    heading_suppression_rate = 0.0
+    rate_limit_saturation_rate = 0.0
+    speed_feasibility_violation_frames = 0
+
+    curvature_source = None
+    for _cs_key in ('reference_point_curvature', 'path_curvature_input', 'gt_path_curvature'):
+        _cs_val = data.get(_cs_key)
+        if _cs_val is not None and (not hasattr(_cs_val, '__len__') or len(_cs_val) > 0):
+            curvature_source = _cs_val
+            break
+    if (
+        curvature_source is not None
+        and data.get('speed') is not None
+        and len(curvature_source) > 0
+        and len(data['speed']) > 0
+    ):
+        n_sig = min(n_frames, len(curvature_source), len(data['speed']))
+        curvature_arr = np.asarray(curvature_source[:n_sig], dtype=np.float64)
+        speed_arr = np.asarray(data['speed'][:n_sig], dtype=np.float64)
+        curve_threshold = 0.003
+        curve_mask = np.abs(curvature_arr) > curve_threshold
+        n_curve = int(np.sum(curve_mask))
+
+        # For heading suppression check, use a lower threshold (0.0005)
+        # because suppression happens on curve approach where curvature
+        # is still building up (0.001-0.003 range).
+        approach_threshold = 0.0005
+        approach_mask = np.abs(curvature_arr) > approach_threshold
+        n_approach = int(np.sum(approach_mask))
+
+        if n_approach > 0:
+            heading_gate = data.get('diag_heading_zero_gate_active')
+            rate_limit = data.get('diag_ref_x_rate_limit_active')
+            if heading_gate is not None and len(heading_gate) >= n_sig:
+                heading_active = np.asarray(heading_gate[:n_sig]) > 0.5
+                heading_suppression_rate = safe_float(
+                    np.sum(heading_active & approach_mask) / n_approach * 100.0
+                )
+                if heading_suppression_rate > 20.0:
+                    signal_integrity_heading_penalty = safe_float(
+                        min(25.0, (heading_suppression_rate - 20.0) * 0.625)
+                    )
+            if rate_limit is not None and len(rate_limit) >= n_sig:
+                rate_limit_active = np.asarray(rate_limit[:n_sig]) > 0.5
+                rate_limit_saturation_rate = safe_float(
+                    np.sum(rate_limit_active & approach_mask) / n_approach * 100.0
+                )
+                if rate_limit_saturation_rate > 30.0:
+                    signal_integrity_rate_limit_penalty = safe_float(
+                        min(20.0, (rate_limit_saturation_rate - 30.0) * 0.4)
+                    )
+
+        if n_curve > 0:
+            pass  # Speed feasibility uses original curve_mask below
+
+        # Speed feasibility: speed > sqrt(2.45/|curvature|) is a violation
+        curvature_eps = 1e-6
+        abs_curv = np.abs(curvature_arr)
+        v_max = np.where(abs_curv > curvature_eps, np.sqrt(2.45 / abs_curv), np.inf)
+        speed_feasibility_violation_frames = int(np.sum(speed_arr > v_max))
+        if speed_feasibility_violation_frames > 5:
+            capped = min(speed_feasibility_violation_frames, 30)
+            signal_integrity_speed_feasibility_penalty = safe_float(
+                min(15.0, (capped - 5) * 0.6)
+            )
+
+    layer_breakdowns = {
+        "Perception": {
+            "base_score": 100.0,
+            "deductions": [
+                {
+                    "name": "Lane Detection",
+                    "value": lane_detection_penalty,
+                    "limit": ">=90%",
+                },
+                {
+                    "name": "Stale Hard Data",
+                    "value": stale_data_penalty,
+                    "limit": "<10%",
+                },
+                {
+                    "name": "Perception Instability",
+                    "value": perception_instability_penalty,
+                    "limit": "stability>=80%",
+                },
+                {
+                    "name": "Lane Line Jitter P95",
+                    "value": lane_jitter_penalty,
+                    "limit": "<=0.30m",
+                },
+                {
+                    "name": "Reference Jitter P95",
+                    "value": reference_jitter_penalty,
+                    "limit": "<=0.15m",
+                },
+            ],
+        },
+        "Trajectory": {
+            "base_score": 100.0,
+            "deductions": [
+                {
+                    "name": "Lateral Error RMSE",
+                    "value": trajectory_lateral_rmse_penalty,
+                    "limit": "<=0.20m",
+                },
+                {
+                    "name": "Lateral Error P95",
+                    "value": trajectory_lateral_p95_penalty,
+                    "limit": "<=0.40m",
+                },
+                {
+                    "name": "Heading Error RMSE",
+                    "value": trajectory_heading_penalty,
+                    "limit": "<=10deg",
+                },
+            ],
+        },
+        "Control": {
+            "base_score": 100.0,
+            "deductions": [
+                {
+                    "name": "Steering Jerk",
+                    "value": control_steering_jerk_penalty,
+                    "limit": "<=0.50/s^2",
+                },
+                {
+                    "name": "Oscillation Frequency",
+                    "value": control_oscillation_penalty,
+                    "limit": "<=1.0Hz",
+                },
+                {
+                    "name": "Straight Sign Mismatch",
+                    "value": control_sign_mismatch_penalty,
+                    "limit": "<=5%",
+                },
+            ],
+        },
+        "LongitudinalComfort": {
+            "base_score": 100.0,
+            "deductions": [
+                {
+                    "name": "Acceleration P95",
+                    "value": longitudinal_accel_penalty,
+                    "limit": "<=0.25g",
+                },
+                {
+                    "name": "Jerk P95",
+                    "value": longitudinal_jerk_penalty,
+                    "limit": "<=0.51g/s",
+                },
+            ],
+        },
+        "Safety": {
+            "base_score": 100.0,
+            "deductions": [
+                {
+                    "name": "Out Of Lane Time",
+                    "value": safety_out_of_lane_penalty,
+                    "limit": "<5%",
+                },
+                {
+                    "name": "Out Of Lane / Emergency Events",
+                    "value": safety_event_penalty,
+                    "limit": "none",
+                },
+            ],
+        },
+        "SignalIntegrity": {
+            "base_score": 100.0,
+            "deductions": [
+                {
+                    "name": "Heading Suppression Rate (curves)",
+                    "value": signal_integrity_heading_penalty,
+                    "limit": "<=20%",
+                },
+                {
+                    "name": "Rate Limit Saturation Rate (curves)",
+                    "value": signal_integrity_rate_limit_penalty,
+                    "limit": "<=30%",
+                },
+                {
+                    "name": "Speed Feasibility Violations",
+                    "value": signal_integrity_speed_feasibility_penalty,
+                    "limit": "<=5 frames",
+                },
+            ],
+        },
+    }
+
+    layer_scores: Dict[str, float] = {}
+    for layer_name, layer in layer_breakdowns.items():
+        total_deduction = sum(float(d.get("value", 0.0)) for d in layer["deductions"])
+        layer_score = safe_float(max(0.0, 100.0 - total_deduction))
+        layer["total_deduction"] = safe_float(total_deduction)
+        layer["final_score"] = layer_score
+        layer_scores[layer_name] = layer_score
+
+    # Scale existing weights by 0.92 to make room for SignalIntegrity 0.08 (sum to 1.0)
+    layer_weights = {
+        "Safety": 0.32 * 0.92,
+        "Trajectory": 0.30 * 0.92,
+        "Control": 0.16 * 0.92,
+        "Perception": 0.14 * 0.92,
+        "LongitudinalComfort": 0.08 * 0.92,
+        "SignalIntegrity": 0.08,
+    }
+
+    weighted_contributions = {
+        layer: safe_float(layer_scores.get(layer, 0.0) * weight)
+        for layer, weight in layer_weights.items()
+    }
+    overall_base = safe_float(sum(weighted_contributions.values()))
+
+    critical_layers = ("Safety", "Trajectory")
+    critical_cap = 100.0
+    cap_reason = "none"
+    critical_layer_colors: Dict[str, str] = {}
+    for layer in critical_layers:
+        score_val = layer_scores.get(layer, 0.0)
+        if score_val < 60.0:
+            critical_layer_colors[layer] = "red"
+        elif score_val < 80.0:
+            critical_layer_colors[layer] = "yellow"
+        else:
+            critical_layer_colors[layer] = "green"
+
+    if any(color == "red" for color in critical_layer_colors.values()):
+        critical_cap = 59.0
+        cap_reason = "critical_red_layer"
+    elif any(color == "yellow" for color in critical_layer_colors.values()):
+        critical_cap = 79.0
+        cap_reason = "critical_yellow_layer"
+
+    score = safe_float(min(overall_base, critical_cap))
     
     # Generate recommendations
     recommendations = []
@@ -1249,16 +1581,21 @@ def analyze_recording_summary(recording_path: Path, analyze_to_failure: bool = F
             "failure_detection_source": error_source if error_data is not None else "none",
             "score_breakdown": {
                 "base_score": 100.0,
-                "lateral_error_penalty": safe_float(min(30, lateral_error_rmse * 50)),
-                "steering_jerk_penalty": safe_float(min(20, steering_jerk_max * 10)),
-                "lane_detection_penalty": safe_float(min(20, (100 - lane_detection_rate) * 0.2)),
-                "stale_data_penalty": safe_float(min(15, stale_hard_rate * 0.15)),
-                "perception_instability_penalty": safe_float(min(20, perception_instability_penalty)),
-                "out_of_lane_penalty": safe_float(min(15, out_of_lane_time * 0.15)),
-                "straight_sign_mismatch_penalty": safe_float(
-                    min(12, straight_sign_mismatch_rate * 0.2) if straight_sign_mismatch_rate > 5.0 else 0.0
-                )
-            }
+                "lateral_error_penalty": trajectory_lateral_rmse_penalty,
+                "steering_jerk_penalty": control_steering_jerk_penalty,
+                "lane_detection_penalty": lane_detection_penalty,
+                "stale_data_penalty": stale_data_penalty,
+                "perception_instability_penalty": perception_instability_penalty,
+                "out_of_lane_penalty": safety_out_of_lane_penalty,
+                "straight_sign_mismatch_penalty": control_sign_mismatch_penalty,
+                "layer_weights": layer_weights,
+                "layer_scores": layer_scores,
+                "layer_weighted_contributions": weighted_contributions,
+                "overall_base_score": overall_base,
+                "overall_cap": critical_cap,
+                "cap_reason": cap_reason,
+                "critical_layer_status": critical_layer_colors,
+            },
         },
         "path_tracking": {
             "lateral_error_rmse": safe_float(lateral_error_rmse),
@@ -1270,6 +1607,12 @@ def analyze_recording_summary(recording_path: Path, analyze_to_failure: bool = F
             "time_in_lane": safe_float(time_in_lane),
             "time_in_lane_centered": safe_float(time_in_lane_centered)
         },
+        "layer_scores": layer_scores,
+        "layer_score_breakdown": layer_breakdowns,
+        "control_mode": _detect_control_mode(data),
+        "pp_feedback_gain": _pp_feedback_gain(data),
+        "pp_mean_lookahead_distance": _pp_mean_ld(data),
+        "pp_ref_jump_clamped_count": _pp_jump_count(data),
         "control_smoothness": {
             "steering_jerk_max": safe_float(steering_jerk_max),
             "steering_rate_max": safe_float(steering_rate_max),

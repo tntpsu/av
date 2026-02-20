@@ -62,6 +62,8 @@ def build_causal_timeline(issues: List[Dict], failure_frame: Optional[int] = Non
         "negative_control_correlation": "trajectory",
         "steering_limiter_dominant": "control",
         "straight_sign_mismatch": "control",
+        "trajectory_suppressed_curve_entry": "trajectory",
+        "speed_exceeded_feasible": "control",
         "high_lateral_error": "downstream",
         "out_of_lane": "downstream",
         "emergency_stop": "downstream",
@@ -82,6 +84,8 @@ def build_causal_timeline(issues: List[Dict], failure_frame: Optional[int] = Non
             "severity": str(issue.get("severity", "medium")),
             "description": str(issue.get("description", "")),
         }
+        if "issue_id" in issue:
+            item["issue_id"] = str(issue["issue_id"])
         if "end_frame" in issue:
             item["end_frame"] = int(issue["end_frame"])
         if "duration" in issue:
@@ -95,6 +99,36 @@ def build_causal_timeline(issues: List[Dict], failure_frame: Optional[int] = Non
             severity_order.get(str(x.get("severity", "low")), 99),
         )
     )
+
+    # Compact contiguous same-type events into transition-style entries
+    # (keep first on-transition frame and extend duration/end frame).
+    compacted: List[Dict] = []
+    for item in timeline:
+        frame = int(item.get("frame", 0))
+        end_frame = int(item.get("end_frame", frame))
+        if compacted:
+            prev = compacted[-1]
+            prev_frame = int(prev.get("frame", 0))
+            prev_end = int(prev.get("end_frame", prev_frame))
+            same_bucket = (
+                str(prev.get("type")) == str(item.get("type"))
+                and str(prev.get("phase")) == str(item.get("phase"))
+                and str(prev.get("severity")) == str(item.get("severity"))
+            )
+            if same_bucket and frame <= (prev_end + 1):
+                new_end = max(prev_end, end_frame)
+                prev["end_frame"] = new_end
+                prev["duration"] = int(new_end - prev_frame + 1)
+                prev["transition_first_frame"] = int(prev_frame)
+                continue
+
+        if end_frame > frame:
+            item = dict(item)
+            item["duration"] = int(end_frame - frame + 1)
+            item["transition_first_frame"] = int(frame)
+        compacted.append(item)
+
+    timeline = compacted
 
     if failure_frame is not None:
         timeline.append(
@@ -1178,17 +1212,217 @@ def detect_issues(recording_path: Path, analyze_to_failure: bool = False) -> Dic
             
             # 7. DETECT EMERGENCY STOPS
             if has_control and "control/emergency_stop" in f:
-                emergency_stops = np.array(f["control/emergency_stop"][:num_frames])
-                emergency_frames = np.where(emergency_stops)[0]
-                
-                for frame_idx in emergency_frames:
-                    issues.append({
-                        "frame": int(frame_idx),
-                        "type": "emergency_stop",
-                        "severity": "critical",
-                        "description": "Emergency stop triggered"
-                    })
+                emergency_stops = np.array(f["control/emergency_stop"][:num_frames]).astype(bool)
+                if emergency_stops.size > 0:
+                    # Transition pattern: report only OFF->ON boundaries and duration.
+                    rising = list(np.where((~emergency_stops[:-1]) & emergency_stops[1:])[0] + 1)
+                    if emergency_stops[0]:
+                        rising = [0] + rising
+                    for start_idx in rising:
+                        end_idx = start_idx
+                        while end_idx + 1 < emergency_stops.size and emergency_stops[end_idx + 1]:
+                            end_idx += 1
+                        issues.append(
+                            {
+                                "frame": int(start_idx),
+                                "type": "emergency_stop",
+                                "severity": "critical",
+                                "description": (
+                                    f"Emergency stop transitioned ON at frame {int(start_idx)}"
+                                ),
+                                "end_frame": int(end_idx),
+                                "duration": int(end_idx - start_idx + 1),
+                            }
+                        )
             
+            # 7.5 DETECT TRAJECTORY SUPPRESSED CURVE ENTRY
+            failure_frame_emergency = None
+            if "control/emergency_stop" in f:
+                em_stop = np.array(f["control/emergency_stop"][:num_frames], dtype=np.float64)
+                if em_stop.size > 0:
+                    fail_idx = np.where(em_stop > 0.5)[0]
+                    if len(fail_idx) > 0:
+                        failure_frame_emergency = int(fail_idx[0])
+
+            if failure_frame_emergency is not None and failure_frame_emergency >= 30:
+                heading_zero_gate = (
+                    np.array(f["trajectory/diag_heading_zero_gate_active"][:num_frames])
+                    if "trajectory/diag_heading_zero_gate_active" in f
+                    else None
+                )
+                curvature = (
+                    np.array(f["trajectory/reference_point_curvature"][:num_frames])
+                    if "trajectory/reference_point_curvature" in f
+                    else None
+                )
+                rate_limit_active = (
+                    np.array(f["trajectory/diag_ref_x_rate_limit_active"][:num_frames])
+                    if "trajectory/diag_ref_x_rate_limit_active" in f
+                    else None
+                )
+
+                pre_fail_start = max(0, failure_frame_emergency - 30)
+                pre_fail_end = failure_frame_emergency - 1
+
+                if heading_zero_gate is not None and heading_zero_gate.size > 0 and curvature is not None and curvature.size > 0:
+                    n_align = min(len(heading_zero_gate), len(curvature))
+                    hzg = heading_zero_gate[:n_align]
+                    curv = curvature[:n_align]
+                    gate_active = (hzg > 0.5) if np.issubdtype(hzg.dtype, np.floating) else (hzg.astype(bool))
+                    in_curve = np.abs(curv) > 0.003
+                    overlap = gate_active & in_curve
+                    pre_fail_overlap = overlap[pre_fail_start : pre_fail_end + 1]
+                    if np.any(pre_fail_overlap):
+                        start_idx = int(np.where(overlap)[0][0])
+                        end_idx = int(np.where(overlap)[0][-1])
+                        issues.append({
+                            "issue_id": "trajectory_suppressed_curve_entry",
+                            "type": "trajectory_suppressed_curve_entry",
+                            "frame": int(start_idx),
+                            "end_frame": int(end_idx),
+                            "severity": "critical",
+                            "description": (
+                                "Heading-zero gate active during curve (curvature>0.003) "
+                                "in 30 frames before failure."
+                            ),
+                            "deep_link_target": "diag-section-signal-chain",
+                            "focus_id": "diag-focus-signal-suppression",
+                        })
+                    else:
+                        overlap_anywhere = np.where(overlap)[0]
+                        if len(overlap_anywhere) > 0:
+                            start_idx = int(overlap_anywhere[0])
+                            end_idx = int(overlap_anywhere[-1])
+                            issues.append({
+                                "issue_id": "trajectory_suppressed_curve_entry",
+                                "type": "trajectory_suppressed_curve_entry",
+                                "frame": int(start_idx),
+                                "end_frame": int(end_idx),
+                                "severity": "warning",
+                                "description": (
+                                    "Heading-zero gate active during curve (transient, "
+                                    "not in pre-failure window)."
+                                ),
+                                "deep_link_target": "diag-section-signal-chain",
+                                "focus_id": "diag-focus-signal-suppression",
+                            })
+
+                if rate_limit_active is not None and rate_limit_active.size > 0:
+                    rate_bool = (rate_limit_active > 0.5) if rate_limit_active.dtype == np.float64 else rate_limit_active.astype(bool)
+                    run = 0
+                    run_start = None
+                    rate_limit_emitted_critical = False
+                    for i in range(rate_bool.size):
+                        if rate_bool[i]:
+                            if run == 0:
+                                run_start = i
+                            run += 1
+                        else:
+                            if run >= 10 and run_start is not None:
+                                in_pre_fail = run_start <= pre_fail_end and (run_start + run - 1) >= pre_fail_start
+                                if in_pre_fail and not rate_limit_emitted_critical:
+                                    issues.append({
+                                        "issue_id": "trajectory_suppressed_curve_entry",
+                                        "type": "trajectory_suppressed_curve_entry",
+                                        "frame": int(run_start),
+                                        "end_frame": int(run_start + run - 1),
+                                        "severity": "critical",
+                                        "description": (
+                                            f"Ref-x rate limit active for {run} consecutive frames "
+                                            "during curve approach (30 frames before failure)."
+                                        ),
+                                        "deep_link_target": "diag-section-signal-chain",
+                                        "focus_id": "diag-focus-signal-suppression",
+                                    })
+                                    rate_limit_emitted_critical = True
+                                elif not in_pre_fail:
+                                    issues.append({
+                                        "issue_id": "trajectory_suppressed_curve_entry",
+                                        "type": "trajectory_suppressed_curve_entry",
+                                        "frame": int(run_start),
+                                        "end_frame": int(run_start + run - 1),
+                                        "severity": "warning",
+                                        "description": (
+                                            f"Ref-x rate limit active for {run} consecutive frames "
+                                            "(transient, not in pre-failure window)."
+                                        ),
+                                        "deep_link_target": "diag-section-signal-chain",
+                                        "focus_id": "diag-focus-signal-suppression",
+                                    })
+                            run = 0
+                            run_start = None
+                    if run >= 10 and run_start is not None:
+                        in_pre_fail = run_start <= pre_fail_end and (run_start + run - 1) >= pre_fail_start
+                        if in_pre_fail and not rate_limit_emitted_critical:
+                            issues.append({
+                                "issue_id": "trajectory_suppressed_curve_entry",
+                                "type": "trajectory_suppressed_curve_entry",
+                                "frame": int(run_start),
+                                "end_frame": int(run_start + run - 1),
+                                "severity": "critical",
+                                "description": (
+                                    f"Ref-x rate limit active for {run} consecutive frames "
+                                    "during curve approach (30 frames before failure)."
+                                ),
+                                "deep_link_target": "diag-section-signal-chain",
+                                "focus_id": "diag-focus-signal-suppression",
+                            })
+                        elif not in_pre_fail:
+                            issues.append({
+                                "issue_id": "trajectory_suppressed_curve_entry",
+                                "type": "trajectory_suppressed_curve_entry",
+                                "frame": int(run_start),
+                                "end_frame": int(run_start + run - 1),
+                                "severity": "warning",
+                                "description": (
+                                    f"Ref-x rate limit active for {run} consecutive frames "
+                                    "(transient, not in pre-failure window)."
+                                ),
+                                "deep_link_target": "diag-section-signal-chain",
+                                "focus_id": "diag-focus-signal-suppression",
+                            })
+
+            # 7.6 DETECT SPEED EXCEEDED FEASIBLE
+            if "vehicle/speed" in f and "trajectory/reference_point_curvature" in f:
+                speed_arr = np.array(f["vehicle/speed"][:num_frames], dtype=np.float64)
+                curv_arr = np.array(f["trajectory/reference_point_curvature"][:num_frames], dtype=np.float64)
+                if speed_arr.size > 0 and curv_arr.size > 0:
+                    n = min(len(speed_arr), len(curv_arr))
+                    speed_arr = speed_arr[:n]
+                    curv_arr = curv_arr[:n]
+                    curv_abs = np.abs(curv_arr)
+                    curv_abs_safe = np.where(curv_abs < 1e-9, 1e-9, curv_abs)
+                    v_max_feasible = np.sqrt(2.45 / curv_abs_safe)
+                    overspeed = (speed_arr > v_max_feasible) & (curv_abs > 0.003)
+                    overspeed_frames = np.where(overspeed)[0]
+                    if len(overspeed_frames) > 0:
+                        ratios = np.where(
+                            v_max_feasible > 1e-9,
+                            speed_arr / np.maximum(v_max_feasible, 1e-9),
+                            0.0,
+                        )
+                        max_ratio = float(np.max(ratios[overspeed]))
+                        start_frame = int(overspeed_frames[0])
+                        end_frame = int(overspeed_frames[-1])
+                        is_pre_failure = False
+                        if failure_frame_emergency is not None:
+                            pre_start = max(0, failure_frame_emergency - 30)
+                            pre_end = failure_frame_emergency - 1
+                            is_pre_failure = np.any((overspeed_frames >= pre_start) & (overspeed_frames <= pre_end))
+                        severity = "critical" if is_pre_failure else "warning"
+                        issues.append({
+                            "issue_id": "speed_exceeded_feasible",
+                            "type": "speed_exceeded_feasible",
+                            "frame": int(start_frame),
+                            "end_frame": int(end_frame),
+                            "severity": severity,
+                            "description": (
+                                f"Speed exceeded feasible limit for curvature "
+                                f"(max ratio {max_ratio:.2f}x, 0.25g)."
+                            ),
+                            "deep_link_target": "diag-section-speed-curvature",
+                        })
+
             # 7. DETECT HEADING JUMPS (0° → 180° or similar large jumps)
             if has_vehicle:
                 if "vehicle_state/heading" in f:
@@ -1222,6 +1456,9 @@ def detect_issues(recording_path: Path, analyze_to_failure: bool = False) -> Dic
             
             # Sort issues by frame number
             issues.sort(key=lambda x: x["frame"])
+            for idx, issue in enumerate(issues):
+                if "issue_id" not in issue:
+                    issue["issue_id"] = f"{issue.get('type', 'issue')}:{int(issue.get('frame', 0))}:{idx}"
             first_out_of_lane = next(
                 (int(i["frame"]) for i in issues if i.get("type") == "out_of_lane"),
                 None,

@@ -2116,3 +2116,101 @@ def test_vehicle_controller():
     assert 0.0 <= commands['throttle'] <= 1.0
     assert 0.0 <= commands['brake'] <= 1.0
 
+
+# ── Pure Pursuit Tests ──────────────────────────────────────────────────
+
+
+def _make_pp_controller(**kwargs):
+    defaults = dict(kp=1.0, ki=0.0, kd=0.1, control_mode="pure_pursuit",
+                    pp_feedback_gain=0.0, max_steering=0.6)
+    defaults.update(kwargs)
+    return LateralController(**defaults)
+
+
+def _pp_ref(x, y, heading=0.0, velocity=10.0, curvature=0.0):
+    return {'x': x, 'y': y, 'heading': heading, 'velocity': velocity,
+            'curvature': curvature}
+
+
+def test_pure_pursuit_straight_road():
+    ctrl = _make_pp_controller()
+    meta = ctrl.compute_steering(0.0, _pp_ref(0.0, 10.0), return_metadata=True)
+    assert abs(meta['steering']) < 0.02
+
+
+def test_pure_pursuit_right_turn():
+    ctrl = _make_pp_controller()
+    meta = ctrl.compute_steering(0.0, _pp_ref(3.0, 6.0), return_metadata=True)
+    assert meta['steering'] > 0.01
+    assert meta['pp_geometric_steering'] > 0.05
+
+
+def test_pure_pursuit_left_turn():
+    ctrl = _make_pp_controller()
+    meta = ctrl.compute_steering(0.0, _pp_ref(-3.0, 6.0), return_metadata=True)
+    assert meta['steering'] < -0.01
+    assert meta['pp_geometric_steering'] < -0.05
+
+
+def test_pure_pursuit_sharp_turn():
+    ctrl = _make_pp_controller()
+    gentle = ctrl.compute_steering(0.0, _pp_ref(1.0, 10.0), return_metadata=True)
+    ctrl2 = _make_pp_controller()
+    sharp = ctrl2.compute_steering(0.0, _pp_ref(5.0, 5.0), return_metadata=True)
+    assert abs(sharp['steering']) > abs(gentle['steering'])
+
+
+def test_pure_pursuit_steering_symmetry():
+    ctrl_r = _make_pp_controller()
+    right = ctrl_r.compute_steering(0.0, _pp_ref(3.0, 8.0), return_metadata=True)
+    ctrl_l = _make_pp_controller()
+    left = ctrl_l.compute_steering(0.0, _pp_ref(-3.0, 8.0), return_metadata=True)
+    assert abs(right['steering'] + left['steering']) < 0.01
+
+
+def test_pure_pursuit_no_oscillation():
+    ctrl = _make_pp_controller()
+    steerings = []
+    for i in range(100):
+        ref = _pp_ref(2.0 - i * 0.01, 8.0)
+        meta = ctrl.compute_steering(0.0, ref, return_metadata=True)
+        steerings.append(meta['steering'])
+    sign_changes = sum(1 for i in range(1, len(steerings))
+                       if steerings[i] * steerings[i-1] < 0
+                       and abs(steerings[i]) > 0.01)
+    assert sign_changes <= 2
+
+
+def test_pure_pursuit_feedback_gain_zero():
+    ctrl = _make_pp_controller(pp_feedback_gain=0.0)
+    meta = ctrl.compute_steering(0.0, _pp_ref(2.0, 10.0), return_metadata=True)
+    assert abs(meta['pp_feedback_steering']) < 1e-6
+    assert abs(meta['pp_geometric_steering']) > 0.01
+
+
+def test_pure_pursuit_stale_perception_hold():
+    ctrl = _make_pp_controller()
+    meta1 = ctrl.compute_steering(0.0, _pp_ref(2.0, 8.0), return_metadata=True)
+    steer_fresh = meta1['steering']
+    meta2 = ctrl.compute_steering(0.0, _pp_ref(2.0, 8.0),
+                                  return_metadata=True, using_stale_perception=True)
+    assert meta2['pp_stale_hold_active'] > 0.5
+    assert abs(meta2['pp_geometric_steering']) <= abs(steer_fresh) + 0.01
+
+
+def test_pure_pursuit_ref_jump_clamped():
+    ctrl = _make_pp_controller(pp_ref_jump_clamp=0.5)
+    ctrl.compute_steering(0.0, _pp_ref(0.0, 10.0), return_metadata=True)
+    meta = ctrl.compute_steering(0.0, _pp_ref(3.0, 10.0), return_metadata=True)
+    assert meta['pp_ref_jump_clamped'] > 0.5
+
+
+def test_pure_pursuit_metadata_fields():
+    ctrl = _make_pp_controller()
+    meta = ctrl.compute_steering(0.0, _pp_ref(1.0, 8.0), return_metadata=True)
+    for field in ['pp_alpha', 'pp_lookahead_distance', 'pp_geometric_steering',
+                  'pp_feedback_steering', 'pp_ref_jump_clamped', 'pp_stale_hold_active',
+                  'control_mode']:
+        assert field in meta, f"Missing PP telemetry field: {field}"
+    assert meta['control_mode'] == 'pure_pursuit'
+

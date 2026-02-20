@@ -185,17 +185,25 @@ Acceptance tests:
 - ✅ **Successfully reaches curves**: No overcorrection before curve entry
 - ⚠️ **Remaining issue**: Curve following needs improvement (understeering in curves)
 
-## Current Focus: Curve Following
+## Current Focus: S-Loop Turn Clearance (S1-M32)
 
-### Problem
-- Car understeers in curves (doesn't turn enough)
-- Path curvature is too low (~20x below ground truth)
-- Feedforward not activating due to low curvature values
+### Completed (2026-02-20)
+- [x] **A1:** Curvature guard on heading zeroing (trajectory_planner.py) — prevents false straight-road classification on curve approach
+- [x] **A2:** Heading from lane-center history when lane_coeffs unavailable
+- [x] **A3:** Curvature-aware smoothing alpha reduction + rate-limit relaxation
+- [x] **A4:** Curvature preview at 1.5× lookahead for feedforward priming
+- [x] **B1:** Curvature-based speed cap enabled (8.0 m/s default)
+- [x] **B2:** Curvature preview → early deceleration (0.25g comfort limit)
+- [x] **C1:** Control curvature_smoothing_alpha 0.7 → 0.5
+- [x] **C2:** Curvature preview blended into feedforward (30% blend)
+- [x] **C3:** Straight→curve integral decay (5-frame flush)
+- [x] **V1–V5:** PhilViz auto-triage package (signal chain, suppression, speed-curvature, compare, scoring)
+- [x] **D1:** Baseline signal chain diagnostic script
 
-### Next Steps
-1. **Fix curvature calculation**: Convert from image-space to vehicle-space properly
-2. **Tune feedforward gains**: Ensure feedforward activates and provides adequate steering
-3. **Improve curve entry**: Better speed reduction and steering preparation for curves
+### Pending (Requires Live Unity)
+- [ ] **D2:** A/B validation (3 repeats, canonical start, Mann-Whitney p<0.10)
+- [ ] **D3:** Control fine-tuning if comfort/oscillation issues after D2
+- [ ] **D4:** Full s-loop multi-turn validation + Stage 1 promotion gate
 
 ## Current Tuning Targets (Iterations)
 - **Comfort caps:** accel_p95 <= 3.0 m/s^2, jerk_p95 <= 6.0 m/s^3.

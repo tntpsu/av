@@ -302,6 +302,13 @@ class ControlCommand:
     turn_feasibility_speed_limit_mps: Optional[float] = None
     turn_feasibility_speed_delta_mps: Optional[float] = None
     turn_feasibility_use_peak_bound: Optional[bool] = None
+    # Pure Pursuit telemetry
+    pp_alpha: Optional[float] = None
+    pp_lookahead_distance: Optional[float] = None
+    pp_geometric_steering: Optional[float] = None
+    pp_feedback_steering: Optional[float] = None
+    pp_ref_jump_clamped: bool = False
+    pp_stale_hold_active: bool = False
 
 
 @dataclass
@@ -354,6 +361,7 @@ class TrajectoryOutput:
     oracle_samples_enabled: bool = False
     velocities: Optional[np.ndarray] = None  # [N] velocities at each point
     curvature: Optional[float] = None
+    curvature_preview: Optional[float] = None
     reference_point: Optional[Dict] = None  # Reference point dict with x, y, heading, velocity
     trajectory_source: Optional[str] = None  # "planner" or "oracle"
     # NEW: Debug fields for tracking reference point calculation method
@@ -388,6 +396,9 @@ class TrajectoryOutput:
     diag_preclip_abs_mean_12_20m_distance_scale_delta_x: Optional[float] = None
     diag_preclip_abs_mean_12_20m_camera_offset_delta_x: Optional[float] = None
     diag_heading_zero_gate_active: Optional[float] = None
+    diag_heading_from_history: Optional[float] = None
+    diag_curvature_aware_alpha_reduction: Optional[float] = None
+    diag_curvature_rate_limit_scale: Optional[float] = None
     diag_small_heading_gate_active: Optional[float] = None
     diag_multi_lookahead_active: Optional[float] = None
     diag_smoothing_jump_reject: Optional[float] = None

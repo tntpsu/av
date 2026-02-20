@@ -27,7 +27,7 @@ sys.path.insert(0, str(backend_path))
 analysis_path = Path(__file__).parent.parent / "analyze"
 sys.path.insert(0, str(analysis_path))
 from summary_analyzer import analyze_recording_summary
-from diagnostics import analyze_trajectory_vs_steering
+from diagnostics import analyze_trajectory_vs_steering, analyze_signal_chain, analyze_speed_curvature
 from issue_detector import detect_issues
 from analyze_trajectory_layer_localization import analyze_trajectory_layer_localization
 
@@ -201,16 +201,52 @@ def _is_numeric_series(dataset: h5py.Dataset) -> bool:
     return True
 
 
+def _read_recording_metadata_dict(h5_file: h5py.File) -> dict:
+    meta_raw = h5_file.attrs.get("metadata")
+    if meta_raw is None:
+        return {}
+    try:
+        meta_str = (
+            meta_raw.decode("utf-8", "ignore")
+            if isinstance(meta_raw, (bytes, bytearray))
+            else str(meta_raw)
+        )
+        parsed = json.loads(meta_str)
+        return parsed if isinstance(parsed, dict) else {}
+    except Exception:
+        return {}
+
+
 @app.route('/api/recordings')
 def list_recordings():
     """List all available HDF5 recordings."""
     recordings = []
     if RECORDINGS_DIR.exists():
         for file in sorted(RECORDINGS_DIR.glob("*.h5"), reverse=True):
-            recordings.append({
+            rec = {
                 "filename": file.name,
-                "path": str(file.relative_to(RECORDINGS_DIR.parent.parent))
-            })
+                "path": str(file.relative_to(RECORDINGS_DIR.parent.parent)),
+            }
+            try:
+                with h5py.File(file, "r") as f:
+                    metadata = _read_recording_metadata_dict(f)
+                    provenance = metadata.get("recording_provenance", {})
+                    if not isinstance(provenance, dict):
+                        provenance = {}
+                    rec["recording_type"] = metadata.get("recording_type", "unknown")
+                    rec["recording_provenance"] = provenance
+                    rec["recorded_at_utc"] = provenance.get("recorded_at_utc") or metadata.get(
+                        "recording_start_time"
+                    )
+                    rec["software_version"] = provenance.get("software_version", "unknown")
+                    rec["git_sha_short"] = provenance.get("git_sha_short", "unknown")
+                    rec["replay_type"] = provenance.get("replay_type", "unknown")
+                    rec["policy_profile"] = provenance.get("policy_profile", "unknown")
+                    rec["track_id"] = provenance.get("track_id", "unknown")
+                    rec["candidate_label"] = provenance.get("candidate_label", "unknown")
+            except Exception:
+                pass
+            recordings.append(rec)
     return jsonify(recordings)
 
 
@@ -264,18 +300,10 @@ def get_recording_meta(filename):
 
     try:
         with h5py.File(filepath, 'r') as f:
-            meta_raw = f.attrs.get('metadata')
-            metadata = {}
-            if meta_raw is not None:
-                try:
-                    meta_str = (
-                        meta_raw.decode('utf-8', 'ignore')
-                        if isinstance(meta_raw, (bytes, bytearray))
-                        else str(meta_raw)
-                    )
-                    metadata = json.loads(meta_str)
-                except Exception:
-                    metadata = {}
+            metadata = _read_recording_metadata_dict(f)
+            provenance = metadata.get("recording_provenance", {})
+            if not isinstance(provenance, dict):
+                provenance = {}
 
             topdown_available = (
                 "camera/topdown_images" in f and len(f["camera/topdown_images"]) > 0
@@ -289,6 +317,7 @@ def get_recording_meta(filename):
                     "perception_mode": metadata.get("perception_mode"),
                     "topdown_available": bool(topdown_available),
                     "metadata": metadata,
+                    "recording_provenance": provenance,
                 }
             )
     except Exception as e:
@@ -2354,10 +2383,143 @@ def get_recording_summary(filename):
     
     try:
         summary = analyze_recording_summary(filepath, analyze_to_failure=analyze_to_failure)
+        if isinstance(summary, dict):
+            with h5py.File(filepath, "r") as f:
+                metadata = _read_recording_metadata_dict(f)
+                provenance = metadata.get("recording_provenance", {})
+                if not isinstance(provenance, dict):
+                    provenance = {}
+                summary.setdefault("recording_provenance", provenance)
         return jsonify(numpy_to_list(summary))
     except Exception as e:
         import traceback
         return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500
+
+
+@app.route('/api/compare')
+def get_compare_summary():
+    """Compare multiple recordings using summary-level gate metrics."""
+    recordings_raw = request.args.get("recordings", "")
+    baseline_name = request.args.get("baseline", "").strip()
+    analyze_to_failure = request.args.get('analyze_to_failure', 'true').lower() == 'true'
+    filenames = [x.strip() for x in recordings_raw.split(",") if x.strip()]
+    if not filenames:
+        return jsonify({"error": "No recordings specified"}), 400
+
+    rows = []
+    for filename in filenames:
+        filepath = RECORDINGS_DIR / filename
+        if not filepath.exists():
+            continue
+        try:
+            summary = analyze_recording_summary(filepath, analyze_to_failure=analyze_to_failure)
+            if not isinstance(summary, dict) or summary.get("error"):
+                continue
+            with h5py.File(filepath, "r") as f:
+                metadata = _read_recording_metadata_dict(f)
+                provenance = metadata.get("recording_provenance", {})
+                if not isinstance(provenance, dict):
+                    provenance = {}
+
+                # V4: Signal chain and speed-curvature metrics
+                signal_chain = analyze_signal_chain(f, failure_frame=None)
+                speed_curvature = analyze_speed_curvature(f, failure_frame=None)
+
+            row = {
+                "recording": filename,
+                "overall_score": float(summary.get("executive_summary", {}).get("overall_score", 0.0)),
+                "gate_pass": bool(
+                    summary.get("executive_summary", {}).get("overall_score", 0.0) >= 60.0
+                    and not summary.get("executive_summary", {}).get("failure_detected", False)
+                ),
+                "safety_out_of_lane_events": int(summary.get("safety", {}).get("out_of_lane_events", 0)),
+                "safety_out_of_lane_time": float(summary.get("safety", {}).get("out_of_lane_time", 0.0)),
+                "stale_hard_rate": float(summary.get("perception_quality", {}).get("stale_hard_rate", 0.0)),
+                "authority_gap_mean": float(summary.get("turn_bias", {}).get("road_frame_lane_center_error_rmse", 0.0)),
+                "transfer_ratio_mean": float(
+                    summary.get("diagnostic_summary", {}).get("transfer_ratio_mean", 0.0)
+                    if isinstance(summary.get("diagnostic_summary"), dict)
+                    else 0.0
+                ),
+                "accel_p95_g": float(summary.get("comfort", {}).get("acceleration_p95_g", 0.0)),
+                "jerk_p95_gps": float(summary.get("comfort", {}).get("jerk_p95_gps", 0.0)),
+                "recording_provenance": provenance,
+                # V4: Signal chain metrics
+                "signal_delay_frames": (
+                    int(signal_chain["signal_delay_frames"])
+                    if signal_chain.get("signal_delay_frames") is not None
+                    else None
+                ),
+                "heading_zero_frames": int(signal_chain.get("heading_zero_total_frames", 0)),
+                "rate_limit_active_frames": int(signal_chain.get("rate_limit_total_frames", 0)),
+                # V4: Speed-curvature metrics
+                "speed_at_curve_entry_mps": (
+                    float(speed_curvature["speed_at_curve_entry"])
+                    if speed_curvature.get("speed_at_curve_entry") is not None
+                    else None
+                ),
+                "v_max_feasible_at_entry": (
+                    float(speed_curvature["v_max_feasible_at_entry"])
+                    if speed_curvature.get("v_max_feasible_at_entry") is not None
+                    else None
+                ),
+                "decel_lead_time_frames": (
+                    int(speed_curvature["decel_lead_time_frames"])
+                    if speed_curvature.get("decel_lead_time_frames") is not None
+                    else None
+                ),
+            }
+            rows.append(row)
+        except Exception:
+            continue
+
+    if not rows:
+        return jsonify({"error": "No comparable recordings found"}), 404
+
+    baseline_row = None
+    if baseline_name:
+        baseline_row = next((r for r in rows if r["recording"] == baseline_name), None)
+    if baseline_row is None:
+        baseline_row = rows[0]
+
+    baseline_metrics = {
+        "overall_score": baseline_row["overall_score"],
+        "safety_out_of_lane_events": baseline_row["safety_out_of_lane_events"],
+        "safety_out_of_lane_time": baseline_row["safety_out_of_lane_time"],
+        "stale_hard_rate": baseline_row["stale_hard_rate"],
+        "authority_gap_mean": baseline_row["authority_gap_mean"],
+        "transfer_ratio_mean": baseline_row["transfer_ratio_mean"],
+        "accel_p95_g": baseline_row["accel_p95_g"],
+        "jerk_p95_gps": baseline_row["jerk_p95_gps"],
+        "signal_delay_frames": baseline_row.get("signal_delay_frames"),
+        "heading_zero_frames": baseline_row.get("heading_zero_frames", 0),
+        "rate_limit_active_frames": baseline_row.get("rate_limit_active_frames", 0),
+        "speed_at_curve_entry_mps": baseline_row.get("speed_at_curve_entry_mps"),
+        "v_max_feasible_at_entry": baseline_row.get("v_max_feasible_at_entry"),
+        "decel_lead_time_frames": baseline_row.get("decel_lead_time_frames"),
+    }
+
+    def _safe_delta(row_val, base_val):
+        if row_val is None or base_val is None:
+            return None
+        try:
+            return float(row_val) - float(base_val)
+        except (TypeError, ValueError):
+            return None
+
+    for row in rows:
+        row["delta_vs_baseline"] = {
+            metric: _safe_delta(row.get(metric), baseline_metrics.get(metric))
+            for metric in baseline_metrics
+        }
+
+    return jsonify(
+        {
+            "baseline": baseline_row["recording"],
+            "rows": rows,
+            "analyze_to_failure": analyze_to_failure,
+        }
+    )
 
 
 @app.route('/api/recording/<path:filename>/issues')
@@ -2421,6 +2583,60 @@ def get_recording_diagnostics(filename):
             curve_entry_window_distance_m=curve_entry_window_distance_m,
         )
         return jsonify(numpy_to_list(diagnostics))
+    except Exception as e:
+        import traceback
+        return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500
+
+
+@app.route('/api/signal-chain/<path:recording>')
+def get_signal_chain(recording):
+    """Get signal chain diagnostic analysis for a recording."""
+    from urllib.parse import unquote
+
+    recording = unquote(recording)
+    filepath = RECORDINGS_DIR / recording
+    if not filepath.exists():
+        return jsonify({"error": f"Recording not found: {recording}"}), 404
+
+    failure_frame_param = request.args.get("failure_frame", None)
+    failure_frame = None
+    if failure_frame_param is not None and failure_frame_param != "":
+        try:
+            failure_frame = int(failure_frame_param)
+        except (TypeError, ValueError):
+            pass
+
+    try:
+        with h5py.File(filepath, "r") as f:
+            result = analyze_signal_chain(f, failure_frame=failure_frame)
+        return jsonify(numpy_to_list(result))
+    except Exception as e:
+        import traceback
+        return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500
+
+
+@app.route('/api/speed-curvature/<path:recording>')
+def get_speed_curvature(recording):
+    """Get speed-curvature feasibility analysis for a recording."""
+    from urllib.parse import unquote
+
+    recording = unquote(recording)
+    filepath = RECORDINGS_DIR / recording
+    if not filepath.exists():
+        return jsonify({"error": f"Recording not found: {recording}"}), 404
+
+    failure_frame_param = request.args.get("failure_frame", None)
+    failure_frame = None
+    if failure_frame_param is not None and failure_frame_param != "":
+        try:
+            failure_frame = int(failure_frame_param)
+        except (TypeError, ValueError):
+            pass
+
+    try:
+        with h5py.File(filepath, "r") as f:
+            result = analyze_speed_curvature(f, failure_frame=failure_frame)
+        return jsonify(numpy_to_list(result))
     except Exception as e:
         import traceback
         return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500

@@ -28,7 +28,9 @@ class LaneDetectionInference:
                  segmentation_ransac_enabled: bool = False,
                  segmentation_ransac_residual_px: float = 6.0,
                  segmentation_ransac_min_inliers: int = 10,
-                 segmentation_ransac_max_trials: int = 40):
+                 segmentation_ransac_max_trials: int = 40,
+                 model_fallback_confidence_hard_threshold: float = 0.1,
+                 model_fallback_zero_lane_confidence_threshold: float = 0.6):
         """
         Initialize lane detection inference.
         
@@ -47,6 +49,12 @@ class LaneDetectionInference:
         self.segmentation_ransac_residual_px = float(segmentation_ransac_residual_px)
         self.segmentation_ransac_min_inliers = int(segmentation_ransac_min_inliers)
         self.segmentation_ransac_max_trials = int(segmentation_ransac_max_trials)
+        self.model_fallback_confidence_hard_threshold = float(
+            model_fallback_confidence_hard_threshold
+        )
+        self.model_fallback_zero_lane_confidence_threshold = float(
+            model_fallback_zero_lane_confidence_threshold
+        )
         
         # Segmentation model (optional)
         self.segmentation_model = None
@@ -206,7 +214,13 @@ class LaneDetectionInference:
             # Check if we should use CV fallback:
             # 1. Model confidence is very low (< 0.1), OR
             # 2. No lanes detected but confidence is moderate (untrained model giving false confidence)
-            if (confidence < 0.1) or (lanes_detected == 0 and confidence < 0.6):
+            if (
+                confidence < self.model_fallback_confidence_hard_threshold
+                or (
+                    lanes_detected == 0
+                    and confidence < self.model_fallback_zero_lane_confidence_threshold
+                )
+            ):
                 # Model likely untrained or not working, try CV fallback
                 if self.fallback_to_cv:
                     try:

@@ -54,7 +54,9 @@ class RuleBasedTrajectoryPlanner:
                  dynamic_effective_horizon_farfield_scale_min: float = 0.85,
                  far_band_contribution_cap_enabled: bool = True,
                  far_band_contribution_cap_start_m: float = 12.0,
-                 far_band_contribution_cap_gain: float = 0.35):
+                 far_band_contribution_cap_gain: float = 0.35,
+                 heading_zero_quad_threshold: float = 0.005,
+                 heading_zero_curvature_guard: float = 0.002):
         """
         Initialize trajectory planner.
         
@@ -115,6 +117,8 @@ class RuleBasedTrajectoryPlanner:
         self.far_band_contribution_cap_enabled = bool(far_band_contribution_cap_enabled)
         self.far_band_contribution_cap_start_m = float(np.clip(far_band_contribution_cap_start_m, 0.0, 50.0))
         self.far_band_contribution_cap_gain = float(np.clip(far_band_contribution_cap_gain, 0.0, 1.0))
+        self.heading_zero_quad_threshold = float(max(0.0, heading_zero_quad_threshold))
+        self.heading_zero_curvature_guard = float(max(0.0, heading_zero_curvature_guard))
         
         # For reference point smoothing
         self.last_reference_x = None
@@ -1090,39 +1094,40 @@ class RuleBasedTrajectoryPlanner:
                 # The constant 9.04° suggests coordinate conversion bias
                 # Check if the lane is actually straight (small dx relative to dy)
                 if abs(dx) < 0.01:  # Very small lateral change (< 1cm over 1m)
-                    # Lane is essentially straight - heading should be 0°
                     heading = 0.0
+                    curvature = self._compute_curvature(lane_coeffs, y_image)
                 else:
                     # Heading: angle from forward direction (y-axis)
                     # For vehicle coords: +y is forward (0°), +x is right (90°), -x is left (-90°)
                     # arctan2(dx, dy) gives angle from +y axis
                     heading = np.arctan2(dx, dy)
                     
-                    # CRITICAL FIX: For straight roads, heading MUST be near 0°
-                    # The 19.7° reference heading bias is unacceptable for straight roads
-                    # Check if the road is actually straight (small quadratic coefficient)
-                    # If so, force heading to 0° regardless of what coordinate conversion says
+                    # Compute curvature early so it can inform the heading zero decision
+                    curvature = self._compute_curvature(lane_coeffs, y_image)
+
+                    # For straight roads, heading MUST be near 0° to avoid bias.
+                    # But on curve approach, allow heading through even if the
+                    # image-space quadratic coefficient appears small.  The
+                    # curvature guard prevents zeroing heading when a real curve
+                    # is present (R1-validated: 0.002 has zero false positives
+                    # on straights).
                     if len(lane_coeffs) >= 3:
                         quadratic_coeff = lane_coeffs[0]  # a in ax^2 + bx + c
-                        
-                        # For straight roads (small curvature), force heading to 0°
-                        # Test expects heading ~0° when quadratic coefficient < 0.01
-                        # This matches test_trajectory_heading_fix_with_real_data.py expectations
-                        if abs(quadratic_coeff) < 0.01:  # Small curvature = straight road
+
+                        quad_below = abs(quadratic_coeff) < self.heading_zero_quad_threshold
+                        curv_below = abs(curvature) < self.heading_zero_curvature_guard
+
+                        if quad_below and curv_below:
                             heading = 0.0
-                        elif abs(heading) < np.radians(1.0):  # < 1° = essentially straight in vehicle space
+                        elif abs(heading) < np.radians(1.0):
                             heading = 0.0
                         else:
-                            # Actual curve or significant heading - clip extreme values but don't force to 0
                             heading = np.clip(heading, -np.radians(30.0), np.radians(30.0))
                     else:
-                        # No quadratic coefficient - road is straight, heading should be 0°
                         heading = 0.0
             else:
                 heading = 0.0
-            
-            # Compute curvature (simplified)
-            curvature = self._compute_curvature(lane_coeffs, y_image)
+                curvature = self._compute_curvature(lane_coeffs, y_image) if len(lane_coeffs) >= 2 else 0.0
             
             # Phase 2: conservatively attenuate far-field lateral contribution beyond effective horizon.
             scale_dynamic_horizon = 1.0
@@ -1483,9 +1488,11 @@ class RuleBasedTrajectoryPlanner:
                              f"dx={dx:.3f}m, dy={dy:.3f}m. Setting heading=0.0 to prevent 180° jump.")
                 self._heading_180_warning_logged = True
             heading = 0.0
-        elif abs(heading) < np.radians(1.0):  # < 1° = essentially straight in vehicle space
-            heading = 0.0
-        # Otherwise, trust the coordinate conversion - it's computed in vehicle space
+        else:
+            center_coeffs_early = (np.asarray(left_coeffs) + np.asarray(right_coeffs)) / 2.0
+            curvature_early = self._compute_curvature(center_coeffs_early, y_image)
+            if abs(heading) < np.radians(1.0) and abs(curvature_early) < self.heading_zero_curvature_guard:
+                heading = 0.0
         
         center_coeffs = (np.asarray(left_coeffs) + np.asarray(right_coeffs)) / 2.0
         curvature = self._compute_curvature(center_coeffs, y_image)

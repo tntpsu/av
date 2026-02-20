@@ -1,7 +1,7 @@
 # Robust Full-Stack Roadmap (Unified, Layered, and Gated)
 
-**Last Updated:** 2026-02-18  
-**Current Focus:** Layer 2, Stage 1 (First-Turn Entry Reliability) authority-stack consistency under comfort-aware dynamic policy  
+**Last Updated:** 2026-02-20  
+**Current Focus:** Layer 2, Stage 1 (First-Turn Entry Reliability) signal-chain clearance + curvature-based speed + control refinement  
 **Change-Control Rule:** If scope, stage, phase status, or promotion gates change, update this roadmap in the same PR/commit before considering work complete.
 
 ## Scope
@@ -174,11 +174,32 @@ This is the practical de-risk sequence for implementation and testing.
   - added comfort-aware dynamic hard-clip lift (`dynamic_curve_hard_clip_boost_*`) so clip ceiling can expand when `g_lat` headroom exists.
   - exposed hard-clip boost/cap/effective-limit telemetry in HDF5 + PhilViz.
   - added control test coverage for reduced hard-clip loss when dynamic clip lift is enabled.
-- `S1-M29` (in progress): validate clip-lift behavior on canonical 25s sanity runs:
+- `S1-M29` (done): validate clip-lift behavior on canonical 25s sanity runs:
   - latest validation recording: `data/recordings/recording_20260218_233236.h5`.
   - first intrusion moved to frame `204` and no offroad emergency stop occurred in this run.
   - hard-clip lift engaged (`dynamic_curve_hard_clip_boost` nonzero) with effective clip ceiling rising above base cap.
-- `S1-M30` (next): tune hard-clip lift gain/cap with canonical A/B so authority gain improves first-intrusion timing without comfort regressions.
+- `S1-M30` (done): tune authority transfer under canonical A/B and lock trajectory-side cap gain:
+  - executed canonical repeated gate package (`repeats=3`, fixed `start_t=0.0`) with dynamic horizon A/B.
+  - result: treatment improved authority transfer and failure timing (`authority_gap_mean` ~`0.316 -> 0.006`, `transfer_ratio_mean` ~`0.462 -> 0.988`, `time_to_failure_s` ~`10.27 -> 24.45` median), with higher stale usage dominated by `left_lane_low_visibility`.
+  - trajectory sweep (`far_band_contribution_cap_gain: 0.35 -> 0.45`) improved authority and reduced stale in single-pair canonical pass; promoted `0.45` into config for next gate cycle.
+- `S1-M31` (done): add Stage-1 promotion evidence package + summary/compare triage upgrades:
+  - baseline freeze and analyzer consistency report: `data/reports/baseline_freeze_report.json`.
+  - mandatory E2E promotion suite report: `data/reports/e2e_promotion_suite_report.json` (explicitly separate from unit/integration verification).
+  - PhilViz now includes layered summary scoring (hybrid-cap), waterfall section navigation, failure banner priority, compare tab MVP, and recording provenance surfacing.
+- `S1-M32` (done): S-loop turn clearance — signal chain + speed + control:
+  - **A1:** curvature guard prevents heading zeroing on curve approach (trajectory_planner.py).
+  - **A2:** heading estimated from lane-center history when lane_coeffs unavailable.
+  - **A3:** curvature-aware smoothing alpha reduction and rate-limit relaxation.
+  - **A4:** curvature_preview at 1.5× lookahead for early feedforward priming.
+  - **B1:** curvature-based speed cap enabled at 8.0 m/s default.
+  - **B2:** curvature_preview triggers deceleration before curve entry (0.25g comfort cap).
+  - **C1:** control curvature_smoothing_alpha reduced 0.7 → 0.5.
+  - **C2:** curvature_preview blended into feedforward for 30% early priming.
+  - **C3:** straight→curve integral decay (flush straight-line bias in 5 frames).
+  - **V1–V5:** PhilViz auto-triage: signal chain waterfall, suppression attribution, speed-curvature overlay, compare tab auto-populate, Signal Integrity score layer.
+  - **D1:** baseline signal chain diagnostic (`analyze_signal_chain.py`).
+  - new tests in `tests/test_signal_chain_fixes.py` covering A1–A4.
+  - validation status: D2/D3/D4 require live Unity runs for A/B confirmation.
 
 **Gate to pass Stage 1**
 - No centerline cross in first-turn window.
