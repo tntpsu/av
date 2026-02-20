@@ -1,0 +1,10 @@
+{
+  "recording": "data/recordings/recording_20260219_002023.h5",
+  "failure_frame": 201,
+  "failure_reason": "centerline_cross",
+  "failure_time_s": 13.3276434,
+  "first_limiter_hit_frame": 138,
+  "first_limiter_hit_time_s": 10.160675,
+  "window_start": 176,
+  "window_end_exclusive": 207
+}

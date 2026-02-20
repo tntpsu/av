@@ -3,7 +3,7 @@ control:
     kp: 1.1
     ki: 0.004
     kd: 0.18
-    max_steering: 0.6
+    max_steering: 0.7
     deadband: 0.05
     heading_weight: 0.5
     lateral_weight: 0.5
@@ -146,7 +146,7 @@ control:
     curve_commit_mode_dynamic_deficit_min: 0.03
     curve_commit_mode_retrigger_cooldown_frames: 12
     curve_mode_speed_cap_enabled: true       # B1: Enable curvature-based speed cap
-    curve_mode_speed_cap_mps: 8.0            # B1: Start conservative (was 7.2)
+    curve_mode_speed_cap_mps: 7.5            # Reduced for S-turn transitions (was 8.0)
     curve_mode_speed_cap_min_ratio: 0.55
     speed_gain_min_speed: 4.0
     speed_gain_max_speed: 10.0
@@ -359,14 +359,14 @@ trajectory:
   target_lane: right
   target_lane_width_m: 3.6
   ref_sign_flip_threshold: 0.12
-  ref_x_rate_limit: 0.12
-  ref_x_rate_limit_turn_heading_min_abs_rad: 0.06
-  ref_x_rate_limit_turn_scale_max: 2.5
+  ref_x_rate_limit: 0.22
+  ref_x_rate_limit_turn_heading_min_abs_rad: 0.04
+  ref_x_rate_limit_turn_scale_max: 4.0
   ref_sign_flip_disable_on_turn: true
   ref_sign_flip_disable_heading_min_abs_rad: 0.02
   ref_x_rate_limit_precurve_enabled: true
   ref_x_rate_limit_precurve_heading_min_abs_rad: 0.03
-  ref_x_rate_limit_precurve_scale_max: 5.0
+  ref_x_rate_limit_precurve_scale_max: 6.0
   multi_lookahead_enabled: true
   multi_lookahead_far_scale: 1.4
   multi_lookahead_blend_alpha: 0.25
@@ -378,8 +378,8 @@ trajectory:
   heading_zero_curvature_guard: 0.001     # lowered from 0.002: recordings show heading zeroed at curvature 0.0005-0.0015
   # A3: Curvature-aware smoothing / rate-limit relaxation
   smoothing_alpha_curve_reduction: 0.15   # alpha reduction when curvature increasing (3+ frames)
-  ref_x_rate_limit_curvature_min: 0.003   # curvature threshold for rate limit relaxation
-  ref_x_rate_limit_curvature_scale_max: 3.0  # max rate limit multiplier from curvature
+  ref_x_rate_limit_curvature_min: 0.001   # curvature threshold for rate limit relaxation (lowered for S-turn transitions)
+  ref_x_rate_limit_curvature_scale_max: 5.0  # max rate limit multiplier from curvature
   traj_heading_zero_gate_center_a_on_abs_max: 0.004
   traj_heading_zero_gate_center_a_off_abs_max: 0.008
   traj_heading_zero_gate_heading_on_abs_rad: 0.035
@@ -408,7 +408,7 @@ trajectory:
     curve_preview_lookahead_scale: 1.6
     curve_preview_max_decel_mps2: 1.8
     curve_preview_min_curvature: 0.002
-  lane_position_smoothing_alpha: 0.35
+  lane_position_smoothing_alpha: 0.20
   ref_point_jump_clamp_x: 0.15
   ref_point_jump_clamp_heading: 0.08
   reference_x_max_abs: 3.2

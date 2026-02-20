@@ -1,0 +1,75 @@
+{
+  "generated_at_utc": "2026-02-20T17:56:58Z",
+  "matrix_path": "/Users/philiptullai/Documents/Coding/av/tools/analyze/canonical_e2e_matrix.yaml",
+  "rows": [
+    {
+      "recording_id": "oval_latest_20s",
+      "path": "/Users/philiptullai/Documents/Coding/av/data/recordings/golden_gt_20260214_oval_latest_20s.h5",
+      "track_id": "oval",
+      "duration_target_s": 20.0,
+      "overall_score": 100.0,
+      "failure_detected": false,
+      "stale_hard_rate": 0.0,
+      "accel_p95_g": 0.0,
+      "jerk_p95_gps": 0.0,
+      "out_of_lane_events": 0,
+      "gates": {
+        "safety_no_failure": true,
+        "stale_hard_rate_ok": true,
+        "comfort_accel_ok": true,
+        "comfort_jerk_ok": true,
+        "overall_score_ok": true
+      },
+      "gate_pass": true
+    },
+    {
+      "recording_id": "sloop_latest_45s",
+      "path": "/Users/philiptullai/Documents/Coding/av/data/recordings/golden_gt_20260214_sloop_latest_45s.h5",
+      "track_id": "s_loop",
+      "duration_target_s": 45.0,
+      "overall_score": 100.0,
+      "failure_detected": false,
+      "stale_hard_rate": 0.0,
+      "accel_p95_g": 0.0,
+      "jerk_p95_gps": 0.0,
+      "out_of_lane_events": 0,
+      "gates": {
+        "safety_no_failure": true,
+        "stale_hard_rate_ok": true,
+        "comfort_accel_ok": true,
+        "comfort_jerk_ok": true,
+        "overall_score_ok": true
+      },
+      "gate_pass": true
+    },
+    {
+      "recording_id": "sloop_latest_30s",
+      "path": "/Users/philiptullai/Documents/Coding/av/data/recordings/golden_gt_20260215_sloop_latest_30s.h5",
+      "track_id": "s_loop",
+      "duration_target_s": 30.0,
+      "overall_score": 99.99541734860884,
+      "failure_detected": false,
+      "stale_hard_rate": 0.0,
+      "accel_p95_g": 0.0,
+      "jerk_p95_gps": 0.0,
+      "out_of_lane_events": 0,
+      "gates": {
+        "safety_no_failure": true,
+        "stale_hard_rate_ok": true,
+        "comfort_accel_ok": true,
+        "comfort_jerk_ok": true,
+        "overall_score_ok": true
+      },
+      "gate_pass": true
+    }
+  ],
+  "aggregate_gate_pass": true,
+  "ab_repeat3": {
+    "command": "/Users/philiptullai/Documents/Coding/av/venv/bin/python /Users/philiptullai/Documents/Coding/av/tools/analyze/run_ab_batch.py --param trajectory.dynamic_effective_horizon_enabled --a false --b true --repeats 3 --duration 45 --track-yaml /Users/philiptullai/Documents/Coding/av/tracks/s_loop.yml --fixed-start-t 0.0",
+    "return_code": 0,
+    "stdout": "ERROR - [Frame 225] EMERGENCY STOP: Car out of bounds! Lateral error 1.907m exceeds 1.8500002764165402m threshold!\n2026-02-20 12:55:22,487 - __main__ - ERROR - [Frame 225]   Stopping vehicle to prevent further off-road driving\n2026-02-20 12:55:23,772 - __main__ - ERROR - [Frame 251] EMERGENCY STOP: Lateral error 4.067m exceeds 4.0m threshold!\nRecording saved to: data/recordings/recording_20260220_125507.h5\n\n\u001b[1;33mShutting down...\u001b[0m\n\u001b[0;34mSignaling bridge server of shutdown...\u001b[0m\n\u001b[0;34mShutting down Unity player (PID: 89109)...\u001b[0m\n\u001b[0;32m\u2713 Unity player closed gracefully\u001b[0m\n\u001b[0;32m\u2713 Services stopped\u001b[0m\n\n\u001b[1;33mShutting down...\u001b[0m\n\u001b[0;34mSignaling bridge server of shutdown...\u001b[0m\n\u001b[0;34mShutting down Unity player (PID: 89109)...\u001b[0m\n\u001b[0;32m\u2713 Unity player closed gracefully\u001b[0m\n\u001b[0;32m\u2713 Services stopped\u001b[0m\n\u001b[0;34m\u2554\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2557\u001b[0m\n\u001b[0;34m\u2551          AV Stack Startup Script                        \u2551\u001b[0m\n\u001b[0;34m\u255a\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u255d\u001b[0m\n\n\u001b[0;34mActivating virtual environment...\u001b[0m\n\u001b[0;34mStarting bridge server on port 8000...\u001b[0m\n\u001b[0;32m\u2713 Bridge server started (PID: 89883)\u001b[0m\n  Logs: /Users/philiptullai/Documents/Coding/av/tmp/logs/av_bridge.log\n\u001b[0;34mWaiting for bridge server to be ready...\u001b[0m\n\u001b[0;32m\u2713 Bridge server is ready!\u001b[0m\n\n\u001b[0;32m\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u001b[0m\n\u001b[0;32mBridge Server Status:\u001b[0m\n  URL: http://localhost:8000\n  Health: checking...\n\u001b[0;32m\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u001b[0m\n\n\u001b[0;34mLaunching Unity player...\u001b[0m\n\u001b[0;32m\u2713 Unity player launched (PID: 89900)\u001b[0m\n\n\u001b[1;33m\u2554\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2557\u001b[0m\n\u001b[1;33m\u2551              NEXT STEPS - UNITY EDITOR                  \u2551\u001b[0m\n\u001b[1;33m\u255a\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u255d\u001b[0m\n\n\u001b[0;34m1. Open Unity Editor\u001b[0m\n   Project: /Users/philiptullai/Documents/Coding/av/unity/AVSimulation\n\n\u001b[0;34m2. Open the scene\u001b[0m\n   Assets/Scenes/SampleScene.unity\n\n\u001b[0;34m3. In the Inspector, select your Car GameObject:\u001b[0m\n   \u2022 AV Bridge component \u2192 Check 'Enable AV Control'\n   \u2022 Make sure Car Controller and Camera Capture are assigned\n\n\u001b[0;34m4. Press \u001b[0;32m\u25b6 PLAY\u001b[0;34m in Unity\u001b[0m\n\n\u001b[1;33mOr use: \u001b[0;32m./start_av_stack.sh --launch-unity\u001b[1;33m to auto-launch Unity\u001b[0m\n\u001b[1;33mOr use: \u001b[0;32m./start_av_stack.sh --run-unity-player\u001b[1;33m to run the built player\u001b[0m\n\n\u001b[1;33m\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u001b[0m\n\n\u001b[0;34mStarting AV Stack...\u001b[0m\n\u001b[0;34mPress Ctrl+C to stop everything\u001b[0m\n\n[UnityMemory] Configuration Parameters - Can be set up in boot.config\n    \"memorysetup-allocator-temp-initial-block-size-main=262144\"\n    \"memorysetup-allocator-temp-initial-block-size-worker=262144\"\n    \"memorysetup-temp-allocator-size-background-worker=32768\"\n    \"memorysetup-temp-allocator-size-job-worker=262144\"\n    \"memorysetup-temp-allocator-size-preload-manager=262144\"\n    \"memorysetup-temp-allocator-size-nav-mesh-worker=65536\"\n    \"memorysetup-temp-allocator-size-audio-worker=65536\"\n    \"memorysetup-temp-allocator-size-cloud-worker=32768\"\n    \"memorysetup-bucket-allocator-granularity=16\"\n    \"memorysetup-bucket-allocator-bucket-count=8\"\n    \"memorysetup-bucket-allocator-block-size=4194304\"\n    \"memorysetup-bucket-allocator-block-count=1\"\n    \"memorysetup-main-allocator-block-size=16777216\"\n    \"memorysetup-thread-allocator-block-size=16777216\"\n    \"memorysetup-gfx-main-allocator-block-size=16777216\"\n    \"memorysetup-gfx-thread-allocator-block-size=16777216\"\n    \"memorysetup-cache-allocator-block-size=4194304\"\n    \"memorysetup-typetree-allocator-block-size=2097152\"\n    \"memorysetup-profiler-bucket-allocator-granularity=16\"\n    \"memorysetup-profiler-bucket-allocator-bucket-count=8\"\n    \"memorysetup-profiler-bucket-allocator-block-size=4194304\"\n    \"memorysetup-profiler-bucket-allocator-block-count=1\"\n    \"memorysetup-profiler-allocator-block-size=16777216\"\n    \"memorysetup-profiler-editor-allocator-block-size=1048576\"\n    \"memorysetup-temp-allocator-size-main=4194304\"\n    \"memorysetup-job-temp-allocator-block-size=2097152\"\n    \"memorysetup-job-temp-allocator-block-size-background=1048576\"\n    \"memorysetup-job-temp-allocator-reduction-small-platforms=262144\"\n    \"memorysetup-temp-allocator-size-gfx=262144\"\n2026-02-20 12:56:31,615 - __main__ - ERROR - [Frame 485] EMERGENCY STOP: GT lane-boundary offroad (left_x=0.067m, right_x=3.667m, margin=0.050m, type=gt_left_offroad)\n2026-02-20 12:56:31,615 - __main__ - ERROR - [Frame 485]   Stopping vehicle to prevent further off-road driving\nRecording saved to: data/recordings/recording_20260220_125604.h5\n\n\u001b[1;33mShutting down...\u001b[0m\n\u001b[0;34mSignaling bridge server of shutdown...\u001b[0m\n\u001b[0;34mShutting down Unity player (PID: 89900)...\u001b[0m\n\u001b[0;32m\u2713 Unity player closed gracefully\u001b[0m\n\u001b[0;32m\u2713 Services stopped\u001b[0m\n\n\u001b[1;33mShutting down...\u001b[0m\n\u001b[0;34mSignaling bridge server of shutdown...\u001b[0m\n\u001b[0;34mShutting down Unity player (PID: 89900)...\u001b[0m\n\u001b[0;32m\u2713 Unity player closed gracefully\u001b[0m\n\u001b[0;32m\u2713 Services stopped\u001b[0m\n\n--- Pair 1/3: A then B ---\n[pair] start_t=0.000000 (fixed)\n[A] trajectory.dynamic_effective_horizon_enabled=False\n[A] recording=recording_20260220_125122.h5 cross=None fail=196 ttf=10.266455650000001 class=steering-authority-limited gap=0.3159579336643219 transfer=0.4624529182910919 stale=8.695652173913043 jerk_p95=None lat_jerk_p95=None\n[B] trajectory.dynamic_effective_horizon_enabled=True\n[B] recording=recording_20260220_125219.h5 cross=None fail=363 ttf=18.68368257 class=mixed-or-unclear gap=0.0047660996206104755 transfer=0.9858623743057251 stale=25.37313432835821 jerk_p95=None lat_jerk_p95=None\n\n--- Pair 2/3: A then B ---\n[pair] start_t=0.000000 (fixed)\n[A] trajectory.dynamic_effective_horizon_enabled=False\n[A] recording=recording_20260220_125315.h5 cross=None fail=200 ttf=10.4004862 class=steering-authority-limited gap=0.321749746799469 transfer=0.45539161562919617 stale=19.047619047619047 jerk_p95=None lat_jerk_p95=None\n[B] trajectory.dynamic_effective_horizon_enabled=True\n[B] recording=recording_20260220_125411.h5 cross=None fail=716 ttf=36.833742369999996 class=mixed-or-unclear gap=0.0059320987202227116 transfer=0.9887845516204834 stale=31.428571428571427 jerk_p95=None lat_jerk_p95=None\n\n--- Pair 3/3: A then B ---\n[pair] start_t=0.000000 (fixed)\n[A] trajectory.dynamic_effective_horizon_enabled=False\n[A] recording=recording_20260220_125507.h5 cross=None fail=194 ttf=10.0669307 class=steering-authority-limited gap=0.29276078939437866 transfer=0.5093672871589661 stale=15.0 jerk_p95=None lat_jerk_p95=None\n[B] trajectory.dynamic_effective_horizon_enabled=True\n[B] recording=recording_20260220_125604.h5 cross=None fail=484 ttf=24.449359389999998 class=mixed-or-unclear gap=0.005654655396938324 transfer=0.9884608387947083 stale=26.08695652173913 jerk_p95=None lat_jerk_p95=None\n\n=== A summary (3 trials) ===\ncenterline_cross_frame: n/a\nfirst_failure_frame: median=196.000 p25=195.000 p75=198.000\ntime_to_failure_s: median=10.266 p25=10.167 p75=10.333\nauthority_gap_mean: median=0.316 p25=0.304 p75=0.319\ntransfer_ratio_mean: median=0.462 p25=0.459 p75=0.486\nstale_pct: median=15.000 p25=11.848 p75=17.024\nspeed_limited_pct: median=0.000 p25=0.000 p75=0.000\njerk_p95: n/a\nlateral_jerk_p95: n/a\nlateral_accel_p95: n/a\nfeasibility_class_counts: {'steering-authority-limited': 3}\ntop_stale_reasons: [('left_lane_low_visibility', 9)]\n\n=== B summary (3 trials) ===\ncenterline_cross_frame: n/a\nfirst_failure_frame: median=484.000 p25=423.500 p75=600.000\ntime_to_failure_s: median=24.449 p25=21.567 p75=30.642\nauthority_gap_mean: median=0.006 p25=0.005 p75=0.006\ntransfer_ratio_mean: median=0.988 p25=0.987 p75=0.989\nstale_pct: median=26.087 p25=25.730 p75=28.758\nspeed_limited_pct: median=0.000 p25=0.000 p75=0.000\njerk_p95: n/a\nlateral_jerk_p95: n/a\nlateral_accel_p95: n/a\nfeasibility_class_counts: {'mixed-or-unclear': 3}\ntop_stale_reasons: [('left_lane_low_visibility', 57)]\n",
+    "stderr": "",
+    "ok": true
+  },
+  "verification_scope_note": "This report is E2E promotion evidence and is separate from unit/integration verification."
+}

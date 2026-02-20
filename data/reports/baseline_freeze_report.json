@@ -1,0 +1,70 @@
+{
+  "generated_at_utc": "2026-02-20T17:51:08Z",
+  "matrix_path": "/Users/philiptullai/Documents/Coding/av/tools/analyze/canonical_e2e_matrix.yaml",
+  "rows": [
+    {
+      "recording": "/Users/philiptullai/Documents/Coding/av/data/recordings/golden_gt_20260214_oval_latest_20s.h5",
+      "overall_score": 100.0,
+      "failure_detected": false,
+      "stale_hard_rate_summary_pct": 0.0,
+      "stale_pct_diagnostics_pct": 0.0,
+      "stale_cross_analyzer_delta_pct": 0.0,
+      "authority_gap_mean": 0.0,
+      "transfer_ratio_mean": 0.0,
+      "comfort_accel_p95_g": 0.0,
+      "comfort_jerk_p95_gps": 0.0,
+      "safety_out_of_lane_events": 0,
+      "root_cause_underturn_rate": 0.0,
+      "consistency": {
+        "stale_rate_alignment_pass": true,
+        "stale_rate_alignment_threshold_pct": 5.0
+      },
+      "recording_id": "oval_latest_20s",
+      "track_id": "oval",
+      "duration_target_s": 20.0
+    },
+    {
+      "recording": "/Users/philiptullai/Documents/Coding/av/data/recordings/golden_gt_20260214_sloop_latest_45s.h5",
+      "overall_score": 100.0,
+      "failure_detected": false,
+      "stale_hard_rate_summary_pct": 0.0,
+      "stale_pct_diagnostics_pct": 0.0,
+      "stale_cross_analyzer_delta_pct": 0.0,
+      "authority_gap_mean": 0.0,
+      "transfer_ratio_mean": 0.0,
+      "comfort_accel_p95_g": 0.0,
+      "comfort_jerk_p95_gps": 0.0,
+      "safety_out_of_lane_events": 0,
+      "root_cause_underturn_rate": 0.0,
+      "consistency": {
+        "stale_rate_alignment_pass": true,
+        "stale_rate_alignment_threshold_pct": 5.0
+      },
+      "recording_id": "sloop_latest_45s",
+      "track_id": "s_loop",
+      "duration_target_s": 45.0
+    },
+    {
+      "recording": "/Users/philiptullai/Documents/Coding/av/data/recordings/golden_gt_20260215_sloop_latest_30s.h5",
+      "overall_score": 99.99541734860884,
+      "failure_detected": false,
+      "stale_hard_rate_summary_pct": 0.0,
+      "stale_pct_diagnostics_pct": 0.0,
+      "stale_cross_analyzer_delta_pct": 0.0,
+      "authority_gap_mean": 0.0,
+      "transfer_ratio_mean": 0.0,
+      "comfort_accel_p95_g": 0.0,
+      "comfort_jerk_p95_gps": 0.0,
+      "safety_out_of_lane_events": 0,
+      "root_cause_underturn_rate": 0.6072727272727273,
+      "consistency": {
+        "stale_rate_alignment_pass": true,
+        "stale_rate_alignment_threshold_pct": 5.0
+      },
+      "recording_id": "sloop_latest_30s",
+      "track_id": "s_loop",
+      "duration_target_s": 30.0
+    }
+  ],
+  "all_consistency_pass": true
+}

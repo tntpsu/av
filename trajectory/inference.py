@@ -209,6 +209,9 @@ class TrajectoryPlanningInference:
         self._ref_x_rate_limit_curvature_scale_max = float(ref_x_rate_limit_curvature_scale_max)
         self._last_curvature: float = 0.0
         self._curvature_increasing_frames: int = 0
+        self._last_raw_x: float = 0.0
+        self._raw_x_rate_history: list = []
+        self._raw_x_rate_history_max: int = 5
 
     def _update_heading_zero_gate(
         self,
@@ -881,6 +884,19 @@ class TrajectoryPlanningInference:
                     )
                     diag_curvature_rate_limit_scale = curv_scale
                 raw_ref_point['diag_curvature_rate_limit_scale'] = diag_curvature_rate_limit_scale
+                raw_x_rate = abs(raw_ref_point['x'] - self._last_raw_x)
+                self._raw_x_rate_history.append(raw_x_rate)
+                if len(self._raw_x_rate_history) > self._raw_x_rate_history_max:
+                    self._raw_x_rate_history.pop(0)
+                if len(self._raw_x_rate_history) >= 3:
+                    recent_mean_rate = float(np.mean(self._raw_x_rate_history[-3:]))
+                    if recent_mean_rate > self.ref_x_rate_limit * 1.5:
+                        drift_scale = min(4.0, 1.0 + recent_mean_rate / self.ref_x_rate_limit)
+                        effective_ref_x_rate_limit = max(
+                            effective_ref_x_rate_limit,
+                            self.ref_x_rate_limit * drift_scale,
+                        )
+                self._last_raw_x = float(raw_ref_point.get('raw_x', raw_ref_point['x']))
                 delta_x = raw_ref_point['x'] - last_x
                 if abs(delta_x) > effective_ref_x_rate_limit:
                     raw_ref_point['raw_x'] = raw_ref_point.get('raw_x', raw_x)

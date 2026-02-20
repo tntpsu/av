@@ -1,0 +1,21 @@
+{
+  "recording": "data/recordings/recording_20260220_110820.h5",
+  "failure_frame": 218,
+  "failure_reason": "offroad_emergency_stop",
+  "failure_time_s": 14.0718479,
+  "first_limiter_hit_frame": 71,
+  "first_limiter_hit_time_s": 6.755644,
+  "window_start": 188,
+  "window_end_exclusive": 249,
+  "speed_feasibility": {
+    "source": "turn_feasibility_telemetry",
+    "telemetry_active_pct": 52.459016393442624,
+    "telemetry_infeasible_pct": 0.0,
+    "telemetry_margin_g_mean": 0.1861698403954506,
+    "telemetry_margin_g_min": 0.1402943730354309,
+    "telemetry_speed_delta_mps_mean": 0.0,
+    "telemetry_speed_delta_mps_max": 0.0,
+    "legacy_speed_limited_pct_v2kappa": 0.0,
+    "is_speed_limited": false
+  }
+}

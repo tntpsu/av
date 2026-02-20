@@ -229,7 +229,14 @@ This is the practical de-risk sequence for implementation and testing.
   - **Telemetry:** `pp_pipeline_bypass_active` flag in HDF5 + PhilViz v65. Waterfall bypass note in diagnostics.
   - **Tests:** 66 unit tests passing (3 new PP pipeline tests + 10 existing PP + 53 PID/longitudinal). Zero PID regressions.
   - **E2E validation (s-loop, canonical start):** Failure at F571 (vs F295 pre-bypass). Oscillation eliminated (0.01 sign-change rate). Jerk limited: 0%, EMA smoothing: 0%, transfer ratio ~1.0. Remaining failure is upstream reference point loss in second S-turn transition (trajectory/perception issue, not control).
-  - **Next:** Fix reference point stability during curve transitions (trajectory module).
+
+- `S1-M36` (done): Trajectory ref tracking + speed governor tuning — clear s-loop:
+  - **Problem:** S1-M35 showed PP control was correct but trajectory `ref_x` lagged GT center by up to 0.86m during S-turn transitions. Root cause: `ref_x_rate_limit: 0.12` too tight for rapid lane center movement (0.25+ m/frame). Curvature-based scaling didn't activate because curvature at the reference point is near-zero during transitions. Also, speed 10+ m/s was too fast for turn radius.
+  - **Fix 1 (ref tracking):** `ref_x_rate_limit: 0.12→0.22`, `ref_x_rate_limit_turn_scale_max: 2.5→4.0`, `ref_x_rate_limit_precurve_scale_max: 5.0→6.0`, `ref_x_rate_limit_curvature_min: 0.003→0.001`, `ref_x_rate_limit_curvature_scale_max: 3.0→5.0`, `lane_position_smoothing_alpha: 0.35→0.20`. Added drift-rate-based dynamic rate limit relaxation in trajectory module.
+  - **Fix 2 (speed):** `curve_mode_speed_cap_mps: 8.0→7.5`.
+  - **Fix 3 (steering authority):** `max_steering: 0.6→0.7`.
+  - **E2E validation (s-loop, canonical start):** Full 40s run, 733 frames, **0 out-of-lane events**. Lag max: 0.37m (vs 0.86m), rate limit active: 0% (vs 5%), speed in curves: 7.2 mean / 9.3 max (vs 10+ m/s). Closest margin to boundary: 0.46m left, 0.55m right.
+  - **Remaining:** Lateral error RMSE 0.55m, P95 0.97m — tuning opportunity. Stale rate 20.7% (all `left_lane_low_visibility`, 0 sign violations).
 
 **Gate to pass Stage 1**
 - No centerline cross in first-turn window.

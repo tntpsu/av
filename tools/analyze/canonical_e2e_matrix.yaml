@@ -1,0 +1,24 @@
+version: 1
+description: Canonical Stage 1 replay matrix for baseline and promotion checks.
+defaults:
+  analyze_to_failure: true
+  start_t: 0.0
+recordings:
+  - id: oval_latest_20s
+    path: data/recordings/golden_gt_20260214_oval_latest_20s.h5
+    track_id: oval
+    duration_target_s: 20.0
+    replay_type: replay
+    candidate_label: baseline
+  - id: sloop_latest_45s
+    path: data/recordings/golden_gt_20260214_sloop_latest_45s.h5
+    track_id: s_loop
+    duration_target_s: 45.0
+    replay_type: replay
+    candidate_label: baseline
+  - id: sloop_latest_30s
+    path: data/recordings/golden_gt_20260215_sloop_latest_30s.h5
+    track_id: s_loop
+    duration_target_s: 30.0
+    replay_type: replay
+    candidate_label: baseline

@@ -21,9 +21,19 @@
 - [x] 66 unit tests passing (3 new PP pipeline, 10 existing PP, 53 PID/longitudinal)
 - [x] E2E validation: F571 (vs F295 pre-bypass), 0% jerk/smoothing active, oscillation eliminated
 - [x] Tuned lookahead: `reference_lookahead_scale_min: 0.45`, `reference_lookahead_tight_scale: 0.55`
-- [ ] **Next:** Fix reference point loss during S-turn transitions (F566-567 in latest recording)
-- [ ] **Next:** Evaluate `pp_feedback_gain` sweep (0.0, 0.1, 0.15) for steady-state drift correction
+
+## Trajectory Ref Tracking + Speed Tuning (S1-M36) — Completed
+
+- [x] Increase `ref_x_rate_limit: 0.12→0.22` and scaling factors for S-turn transitions
+- [x] Add drift-rate-based dynamic rate limit relaxation in trajectory smoothing
+- [x] Lower `ref_x_rate_limit_curvature_min: 0.003→0.001` and increase scale max to 5.0
+- [x] Reduce `curve_mode_speed_cap_mps: 8.0→7.5`
+- [x] Increase `max_steering: 0.6→0.7` for more PP authority
+- [x] E2E validation: Full 40s s-loop, 733 frames, 0 out-of-lane events
+- [ ] **Next:** Reduce lateral error RMSE (currently 0.55m, target <0.40m)
+- [ ] **Next:** Evaluate `pp_feedback_gain` sweep (0.0, 0.1, 0.15) for steady-state drift
 - [ ] **Next:** Rate limit sweep: `pp_max_steering_rate` at 0.25, 0.35, 0.45
+- [ ] **Next:** Comfort tuning (lat accel P95 1.37 m/s², longitudinal jerk P95 83 m/s³)
 
 ## Stack Isolation TODOs (Priority Execution Plan)
 
