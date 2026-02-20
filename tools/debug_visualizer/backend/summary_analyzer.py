@@ -19,6 +19,9 @@ sys.path.insert(0, str(REPO_ROOT))
 
 from trajectory.utils import smooth_curvature_distance
 
+G_MPS2 = 9.80665
+LOW_VISIBILITY_STALE_REASONS = {"left_lane_low_visibility", "right_lane_low_visibility"}
+
 
 def _build_sign_mismatch_event(data: Dict, start_frame: int, end_frame: int) -> Dict:
     """Build a straight sign-mismatch event record with a classified root cause."""
@@ -701,7 +704,31 @@ def analyze_recording_summary(recording_path: Path, analyze_to_failure: bool = F
                 elif 'width' in r_str or 'invalid' in r_str:
                     perception_invalid_width_detected += 1
     
-    stale_perception_rate = safe_float(np.sum(data['using_stale_data']) / n_frames * 100 if data['using_stale_data'] is not None and n_frames > 0 else 0.0)
+    stale_perception_rate = safe_float(
+        np.sum(data['using_stale_data']) / n_frames * 100
+        if data['using_stale_data'] is not None and n_frames > 0
+        else 0.0
+    )
+    stale_raw_rate = stale_perception_rate
+    stale_hard_rate = 0.0
+    stale_fallback_visibility_rate = 0.0
+    if data['using_stale_data'] is not None and n_frames > 0:
+        stale_flags = np.asarray(data['using_stale_data'][:n_frames]).astype(bool)
+        stale_reasons = data['stale_reason'] if data['stale_reason'] is not None else []
+        hard_count = 0
+        fallback_count = 0
+        for i, is_stale in enumerate(stale_flags):
+            if not is_stale:
+                continue
+            reason = ""
+            if i < len(stale_reasons) and stale_reasons[i] is not None:
+                reason = str(stale_reasons[i]).strip().lower()
+            if reason in LOW_VISIBILITY_STALE_REASONS:
+                fallback_count += 1
+            else:
+                hard_count += 1
+        stale_hard_rate = safe_float(hard_count / n_frames * 100)
+        stale_fallback_visibility_rate = safe_float(fallback_count / n_frames * 100)
     
     # NEW: Calculate perception stability metrics (lane position/width variance)
     # High variance indicates perception instability even if not caught by stale_data
@@ -1135,7 +1162,8 @@ def analyze_recording_summary(recording_path: Path, analyze_to_failure: bool = F
     score -= min(30, lateral_error_rmse * 50)  # Penalize lateral error
     score -= min(20, steering_jerk_max * 10)  # Penalize jerk
     score -= min(20, (100 - lane_detection_rate) * 0.2)  # Penalize detection failures
-    score -= min(15, stale_perception_rate * 0.15)  # Penalize stale data
+    # Penalize only hard stale events (exclude managed low-visibility fallback).
+    score -= min(15, stale_hard_rate * 0.15)
     # NEW: Penalize perception instability (even if not caught by stale_data)
     perception_instability_penalty = safe_float(max(0, (100 - perception_stability_score) * 0.2))  # -0.2 points per stability point lost
     score -= min(20, perception_instability_penalty)  # Cap at 20 points
@@ -1160,7 +1188,7 @@ def analyze_recording_summary(recording_path: Path, analyze_to_failure: bool = F
         recommendations.append("Right lane visibility drops - add single-lane fallback or widen camera FOV")
     elif right_lane_edge_contact_rate > 20:
         recommendations.append("Right lane frequently touches image edge on right turns - treat as FOV-limited and rely on single-lane corridor logic")
-    if stale_perception_rate > 10:
+    if stale_hard_rate > 10:
         recommendations.append("Reduce stale data usage - relax jump detection threshold or improve perception")
     if speed_limit_zero_rate > 10:
         recommendations.append("Speed limit missing - verify Unity track speed limits are sent to the bridge")
@@ -1191,8 +1219,8 @@ def analyze_recording_summary(recording_path: Path, analyze_to_failure: bool = F
         key_issues.append(f"Right lane low visibility ({right_lane_low_visibility_rate:.1f}%)")
     elif right_lane_edge_contact_rate > 20:
         key_issues.append(f"Right lane at image edge often ({right_lane_edge_contact_rate:.1f}%)")
-    if stale_perception_rate > 20:
-        key_issues.append(f"High stale data usage ({stale_perception_rate:.1f}%)")
+    if stale_hard_rate > 20:
+        key_issues.append(f"High hard stale data usage ({stale_hard_rate:.1f}%)")
     if speed_limit_zero_rate > 10:
         key_issues.append(f"Speed limit missing ({speed_limit_zero_rate:.1f}%)")
     if emergency_stop_frame is not None:
@@ -1224,7 +1252,7 @@ def analyze_recording_summary(recording_path: Path, analyze_to_failure: bool = F
                 "lateral_error_penalty": safe_float(min(30, lateral_error_rmse * 50)),
                 "steering_jerk_penalty": safe_float(min(20, steering_jerk_max * 10)),
                 "lane_detection_penalty": safe_float(min(20, (100 - lane_detection_rate) * 0.2)),
-                "stale_data_penalty": safe_float(min(15, stale_perception_rate * 0.15)),
+                "stale_data_penalty": safe_float(min(15, stale_hard_rate * 0.15)),
                 "perception_instability_penalty": safe_float(min(20, perception_instability_penalty)),
                 "out_of_lane_penalty": safe_float(min(15, out_of_lane_time * 0.15)),
                 "straight_sign_mismatch_penalty": safe_float(
@@ -1281,7 +1309,21 @@ def analyze_recording_summary(recording_path: Path, analyze_to_failure: bool = F
             "jerk_p95_filtered": safe_float(jerk_p95_filtered),
             "jerk_max_filtered": safe_float(jerk_max_filtered),
             "lateral_accel_p95": safe_float(lateral_accel_p95),
-            "lateral_jerk_p95": safe_float(lateral_jerk_p95)
+            "lateral_jerk_p95": safe_float(lateral_jerk_p95),
+            "acceleration_p95_g": safe_float(acceleration_p95 / G_MPS2),
+            "acceleration_p95_filtered_g": safe_float(acceleration_p95_filtered / G_MPS2),
+            "jerk_p95_gps": safe_float(jerk_p95 / G_MPS2),
+            "jerk_p95_filtered_gps": safe_float(jerk_p95_filtered / G_MPS2),
+            "lateral_accel_p95_g": safe_float(lateral_accel_p95 / G_MPS2),
+            "lateral_jerk_p95_gps": safe_float(lateral_jerk_p95 / G_MPS2),
+            "comfort_gate_thresholds_g": {
+                "longitudinal_accel_p95_g": 0.25,
+                "longitudinal_jerk_p95_gps": 0.51
+            },
+            "comfort_gate_thresholds_si": {
+                "longitudinal_accel_p95_mps2": safe_float(0.25 * G_MPS2),
+                "longitudinal_jerk_p95_mps3": safe_float(0.51 * G_MPS2)
+            }
         },
         "control_stability": {
             "straight_fraction": safe_float(straight_fraction),
@@ -1303,6 +1345,9 @@ def analyze_recording_summary(recording_path: Path, analyze_to_failure: bool = F
             "perception_extreme_coeffs_detected": int(perception_extreme_coeffs_detected),
             "perception_invalid_width_detected": int(perception_invalid_width_detected),
             "stale_perception_rate": safe_float(stale_perception_rate),
+            "stale_raw_rate": safe_float(stale_raw_rate),
+            "stale_hard_rate": safe_float(stale_hard_rate),
+            "stale_fallback_visibility_rate": safe_float(stale_fallback_visibility_rate),
             "perception_stability_score": safe_float(perception_stability_score),
             "lane_position_variance": safe_float(lane_position_variance),
             "lane_width_variance": safe_float(lane_width_variance),

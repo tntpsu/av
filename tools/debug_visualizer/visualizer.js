@@ -1410,6 +1410,7 @@ class Visualizer {
                 if (value <= thresholds.acceptable) return '#ffa500';  // Orange
                 return '#ff6b6b';  // Red
             };
+            const G_MPS2 = 9.80665;
             
             html += '<h3 style="margin: 1rem 0 0.5rem; color: #9bdcff;">Perception</h3>';
             // Perception Quality
@@ -1417,7 +1418,11 @@ class Visualizer {
             html += '<h3 style="margin-top: 0; color: #4a90e2;">Perception Quality</h3>';
             html += '<table style="width: 100%; color: #e0e0e0;">';
             const laneDetColor = summary.perception_quality.lane_detection_rate >= 90 ? '#4caf50' : summary.perception_quality.lane_detection_rate >= 70 ? '#ffa500' : '#ff6b6b';
-            const staleColor = summary.perception_quality.stale_perception_rate < 10 ? '#4caf50' : summary.perception_quality.stale_perception_rate < 20 ? '#ffa500' : '#ff6b6b';
+            const staleRawRate = summary.perception_quality.stale_raw_rate ?? summary.perception_quality.stale_perception_rate ?? 0;
+            const staleHardRate = summary.perception_quality.stale_hard_rate ?? staleRawRate;
+            const staleVisibilityRate = summary.perception_quality.stale_fallback_visibility_rate
+                ?? Math.max(0, staleRawRate - staleHardRate);
+            const staleHardColor = staleHardRate < 10 ? '#4caf50' : staleHardRate < 20 ? '#ffa500' : '#ff6b6b';
             const stabilityScore = summary.perception_quality.perception_stability_score;
             const stabilityColor = stabilityScore !== undefined
                 ? (stabilityScore >= 80 ? '#4caf50' : stabilityScore >= 60 ? '#ffa500' : '#ff6b6b')
@@ -1429,7 +1434,9 @@ class Visualizer {
             if (summary.perception_quality.perception_instability_detected !== undefined) {
                 html += `<tr><td>Instability Events:</td><td style="text-align: right; color: ${instabilityColor};">${summary.perception_quality.perception_instability_detected}</td></tr>`;
             }
-            html += `<tr><td>Stale Data Rate:</td><td style="text-align: right; color: ${staleColor};">${summary.perception_quality.stale_perception_rate.toFixed(1)}%</td></tr>`;
+            html += `<tr><td>Stale Raw Rate:</td><td style="text-align: right;">${staleRawRate.toFixed(1)}%</td></tr>`;
+            html += `<tr><td>Stale Hard Rate:</td><td style="text-align: right; color: ${staleHardColor};">${staleHardRate.toFixed(1)}%</td></tr>`;
+            html += `<tr><td>Stale Visibility Fallback:</td><td style="text-align: right;">${staleVisibilityRate.toFixed(1)}%</td></tr>`;
             if (stabilityScore !== undefined) {
                 html += `<tr><td>Stability Score:</td><td style="text-align: right; color: ${stabilityColor};">${stabilityScore.toFixed(1)}%</td></tr>`;
             }
@@ -1492,9 +1499,44 @@ class Visualizer {
             html += `<tr><td>Time in Lane:</td><td style="text-align: right; color: ${timeInLaneColor};">${summary.path_tracking.time_in_lane.toFixed(1)}%</td></tr>`;
             html += '</table></div>';
 
-            // Control Smoothness
+            // Passenger comfort (primary, g-based)
+            const comfort = summary.comfort || null;
+            if (comfort) {
+                const accelP95SI = comfort.acceleration_p95 ?? null;
+                const accelP95FiltSI = comfort.acceleration_p95_filtered ?? null;
+                const jerkP95SI = comfort.jerk_p95 ?? null;
+                const jerkP95FiltSI = comfort.jerk_p95_filtered ?? null;
+                const latAccelP95SI = comfort.lateral_accel_p95 ?? null;
+                const latJerkP95SI = comfort.lateral_jerk_p95 ?? null;
+                const accelP95G = comfort.acceleration_p95_g ?? (accelP95SI !== null ? accelP95SI / G_MPS2 : null);
+                const accelP95FiltG = comfort.acceleration_p95_filtered_g ?? (accelP95FiltSI !== null ? accelP95FiltSI / G_MPS2 : null);
+                const jerkP95Gps = comfort.jerk_p95_gps ?? (jerkP95SI !== null ? jerkP95SI / G_MPS2 : null);
+                const jerkP95FiltGps = comfort.jerk_p95_filtered_gps ?? (jerkP95FiltSI !== null ? jerkP95FiltSI / G_MPS2 : null);
+                const latAccelP95G = comfort.lateral_accel_p95_g ?? (latAccelP95SI !== null ? latAccelP95SI / G_MPS2 : null);
+                const latJerkP95Gps = comfort.lateral_jerk_p95_gps ?? (latJerkP95SI !== null ? latJerkP95SI / G_MPS2 : null);
+                const accelGateG = comfort.comfort_gate_thresholds_g?.longitudinal_accel_p95_g ?? 0.25;
+                const jerkGateGps = comfort.comfort_gate_thresholds_g?.longitudinal_jerk_p95_gps ?? 0.51;
+                const accelColor = accelP95G !== null ? getColorForValue(accelP95G, { good: accelGateG, acceptable: accelGateG * 1.5 }) : '#888';
+                const jerkColor = jerkP95Gps !== null ? getColorForValue(jerkP95Gps, { good: jerkGateGps, acceptable: jerkGateGps * 1.5 }) : '#888';
+
+                html += '<div style="background: #2a2a2a; padding: 1rem; border-radius: 8px; margin-bottom: 1rem;">';
+                html += '<h3 style="margin-top: 0; color: #4a90e2;">Passenger Comfort (Gs)</h3>';
+                html += '<div style="color: #a0a0a0; margin-bottom: 0.5rem; font-size: 0.85rem;">Primary comfort gates are in g / g/s (SI shown in parentheses).</div>';
+                html += '<table style="width: 100%; color: #e0e0e0;">';
+                html += `<tr><td>Accel P95:</td><td style="text-align: right; color: ${accelColor};">${accelP95G !== null ? accelP95G.toFixed(2) : '-'} g (${accelP95SI !== null ? accelP95SI.toFixed(2) : '-'} m/s²)</td></tr>`;
+                html += `<tr><td>Accel P95 (Filt):</td><td style="text-align: right;">${accelP95FiltG !== null ? accelP95FiltG.toFixed(2) : '-'} g (${accelP95FiltSI !== null ? accelP95FiltSI.toFixed(2) : '-'} m/s²)</td></tr>`;
+                html += `<tr><td>Jerk P95:</td><td style="text-align: right; color: ${jerkColor};">${jerkP95Gps !== null ? jerkP95Gps.toFixed(2) : '-'} g/s (${jerkP95SI !== null ? jerkP95SI.toFixed(2) : '-'} m/s³)</td></tr>`;
+                html += `<tr><td>Jerk P95 (Filt):</td><td style="text-align: right;">${jerkP95FiltGps !== null ? jerkP95FiltGps.toFixed(2) : '-'} g/s (${jerkP95FiltSI !== null ? jerkP95FiltSI.toFixed(2) : '-'} m/s³)</td></tr>`;
+                html += `<tr><td>Lat Accel P95:</td><td style="text-align: right;">${latAccelP95G !== null ? latAccelP95G.toFixed(3) : '-'} g (${latAccelP95SI !== null ? latAccelP95SI.toFixed(2) : '-'} m/s²)</td></tr>`;
+                html += `<tr><td>Lat Jerk P95:</td><td style="text-align: right;">${latJerkP95Gps !== null ? latJerkP95Gps.toFixed(3) : '-'} g/s (${latJerkP95SI !== null ? latJerkP95SI.toFixed(2) : '-'} m/s³)</td></tr>`;
+                html += `<tr><td>Comfort Gates:</td><td style="text-align: right;">Accel ≤ ${accelGateG.toFixed(2)} g, Jerk ≤ ${jerkGateGps.toFixed(2)} g/s</td></tr>`;
+                html += '</table></div>';
+            }
+
+            // Controller diagnostics (secondary, steering-domain)
             html += '<div style="background: #2a2a2a; padding: 1rem; border-radius: 8px; margin-bottom: 1rem;">';
-            html += '<h3 style="margin-top: 0; color: #4a90e2;">Control Smoothness</h3>';
+            html += '<h3 style="margin-top: 0; color: #4a90e2;">Controller Diagnostics</h3>';
+            html += '<div style="color: #a0a0a0; margin-bottom: 0.5rem; font-size: 0.85rem;">Steering-domain metrics for controller tuning, not direct ride comfort gates.</div>';
             html += '<table style="width: 100%; color: #e0e0e0;">';
             const jerkColor = getColorForValue(summary.control_smoothness.steering_jerk_max, { good: 0.5, acceptable: 1.0 });
             html += `<tr><td>Steering Jerk (Max):</td><td style="text-align: right; color: ${jerkColor};">${summary.control_smoothness.steering_jerk_max.toFixed(3)}/s²</td></tr>`;
@@ -1568,30 +1610,7 @@ class Visualizer {
                     html += '</table></div>';
                 }
             }
-            // Comfort
-            const comfort = summary.comfort || null;
-            if (comfort) {
-                const comfortColor = (comfort.acceleration_p95 > 2.5 || comfort.jerk_p95 > 5.0) ? '#ff6b6b' : '#4caf50';
-                const latAccelP95 = comfort.lateral_accel_p95 ?? null;
-                const latJerkP95 = comfort.lateral_jerk_p95 ?? null;
-                const accelP95Filtered = comfort.acceleration_p95_filtered ?? null;
-                const jerkP95Filtered = comfort.jerk_p95_filtered ?? null;
-                html += '<div style="background: #2a2a2a; padding: 1rem; border-radius: 8px; margin-bottom: 1rem;">';
-                html += '<h3 style="margin-top: 0; color: #4a90e2;">Comfort</h3>';
-                html += '<table style="width: 100%; color: #e0e0e0;">';
-                html += `<tr><td>Accel P95:</td><td style="text-align: right; color: ${comfortColor};">${comfort.acceleration_p95.toFixed(2)} m/s²</td></tr>`;
-                if (accelP95Filtered !== null) {
-                    html += `<tr><td>Accel P95 (Filt):</td><td style="text-align: right;">${accelP95Filtered.toFixed(2)} m/s²</td></tr>`;
-                }
-                html += `<tr><td>Jerk P95:</td><td style="text-align: right; color: ${comfortColor};">${comfort.jerk_p95.toFixed(2)} m/s³</td></tr>`;
-                if (jerkP95Filtered !== null) {
-                    html += `<tr><td>Jerk P95 (Filt):</td><td style="text-align: right;">${jerkP95Filtered.toFixed(2)} m/s³</td></tr>`;
-                }
-                html += `<tr><td>Lat Accel P95:</td><td style="text-align: right;">${latAccelP95 !== null ? latAccelP95.toFixed(2) : '-'} m/s²</td></tr>`;
-                html += `<tr><td>Lat Jerk P95:</td><td style="text-align: right;">${latJerkP95 !== null ? latJerkP95.toFixed(2) : '-'} m/s³</td></tr>`;
-                html += `<tr><td>Steering Jerk (Max):</td><td style="text-align: right;">${comfort.steering_jerk_max.toFixed(2)}</td></tr>`;
-                html += '</table></div>';
-            }
+            // Comfort metrics are shown in Passenger Comfort (Gs) card above.
 
             // Safety
             html += '<div style="background: #2a2a2a; padding: 1rem; border-radius: 8px; margin-bottom: 1rem;">';
