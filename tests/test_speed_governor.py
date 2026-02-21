@@ -27,12 +27,16 @@ def _make_governor(
     planner_enabled: bool = True,
     horizon_enabled: bool = True,
     preview_enabled: bool = True,
+    curvature_calibration_scale: float = 1.0,
+    curvature_history_frames: int = 5,
     **overrides,
 ) -> SpeedGovernor:
     """Helper to build a SpeedGovernor with common defaults."""
     gov_cfg = SpeedGovernorConfig(
         comfort_governor_max_lat_accel_g=max_lat_accel_g,
         comfort_governor_min_speed=3.0,
+        curvature_calibration_scale=curvature_calibration_scale,
+        curvature_history_frames=curvature_history_frames,
         curve_preview_enabled=preview_enabled,
         curve_preview_lookahead_scale=1.6,
         curve_preview_max_decel_mps2=1.8,
@@ -289,6 +293,20 @@ class TestBuildSpeedGovernor:
         )
         assert out.target_speed > 0.0
 
+    def test_build_with_calibration_scale(self):
+        """build_speed_governor should read curvature_calibration_scale."""
+        trajectory_cfg = {
+            "speed_governor": {
+                "comfort_governor_max_lat_accel_g": 0.20,
+                "curvature_calibration_scale": 2.5,
+                "curvature_history_frames": 5,
+            },
+        }
+        speed_planner_cfg = {"enabled": False}
+        gov = build_speed_governor(trajectory_cfg, speed_planner_cfg)
+        assert gov.config.curvature_calibration_scale == 2.5
+        assert gov.config.curvature_history_frames == 5
+
     def test_build_fallback_to_trajectory_cfg(self):
         """When speed_governor section is absent, should fall back to
         trajectory config values."""
@@ -302,3 +320,140 @@ class TestBuildSpeedGovernor:
         assert not gov.config.curve_preview_enabled
         assert not gov.config.horizon_guardrail_enabled
         assert gov.speed_planner is None
+
+
+# --- Curvature Calibration Scale ---
+
+class TestCurvatureCalibrationScale:
+    def test_scaled_curvature_gives_lower_speed(self):
+        """With calibration scale > 1, comfort speed should be lower than unscaled."""
+        curvature = 0.01
+        gov_unscaled = _make_governor(
+            max_lat_accel_g=0.20, curvature_calibration_scale=1.0,
+            planner_enabled=False, horizon_enabled=False, preview_enabled=False,
+        )
+        gov_scaled = _make_governor(
+            max_lat_accel_g=0.20, curvature_calibration_scale=2.5,
+            planner_enabled=False, horizon_enabled=False, preview_enabled=False,
+        )
+        out_unscaled = gov_unscaled.compute_target_speed(
+            20.0, curvature, None, 20.0, 5.0, 0.0)
+        out_scaled = gov_scaled.compute_target_speed(
+            20.0, curvature, None, 20.0, 5.0, 0.0)
+        assert out_scaled.comfort_speed < out_unscaled.comfort_speed
+        ratio = out_unscaled.comfort_speed / out_scaled.comfort_speed
+        expected_ratio = math.sqrt(2.5)
+        assert abs(ratio - expected_ratio) < 0.01
+
+    def test_calibration_scale_applies_to_preview(self):
+        """Preview governor should also use calibration scale."""
+        preview_k = 0.01
+        gov_unscaled = _make_governor(
+            max_lat_accel_g=0.20, curvature_calibration_scale=1.0,
+            planner_enabled=False, horizon_enabled=False,
+        )
+        gov_scaled = _make_governor(
+            max_lat_accel_g=0.20, curvature_calibration_scale=2.5,
+            planner_enabled=False, horizon_enabled=False,
+        )
+        out_unscaled = gov_unscaled.compute_target_speed(
+            20.0, 0.0, preview_k, 20.0, 10.0, 0.0)
+        out_scaled = gov_scaled.compute_target_speed(
+            20.0, 0.0, preview_k, 20.0, 10.0, 0.0)
+        assert out_scaled.target_speed < out_unscaled.target_speed
+
+    def test_scale_1_matches_unscaled_physics(self):
+        """With scale=1.0, formula should match original physics exactly."""
+        curvature = 0.015
+        max_g = 0.20
+        expected = math.sqrt(max_g * G / curvature)
+        gov = _make_governor(
+            max_lat_accel_g=max_g, curvature_calibration_scale=1.0,
+            planner_enabled=False, horizon_enabled=False, preview_enabled=False,
+        )
+        out = gov.compute_target_speed(20.0, curvature, None, 20.0, 5.0, 0.0)
+        assert abs(out.comfort_speed - expected) < 0.01
+
+
+# --- Curvature History Max ---
+
+class TestCurvatureHistoryMax:
+    def test_zero_curvature_after_curve_holds_speed(self):
+        """After seeing curvature, a transition to zero should still limit speed
+        via history max for N frames."""
+        gov = _make_governor(
+            max_lat_accel_g=0.20, curvature_calibration_scale=2.5,
+            curvature_history_frames=5,
+            planner_enabled=False, horizon_enabled=False, preview_enabled=False,
+        )
+        out_curve = gov.compute_target_speed(
+            20.0, 0.010, None, 20.0, 5.0, 0.0)
+        comfort_during_curve = out_curve.comfort_speed
+
+        out_zero = gov.compute_target_speed(
+            20.0, 0.0, None, 20.0, 5.0, 0.1)
+        assert out_zero.comfort_speed == comfort_during_curve, (
+            "History max should hold the curvature from previous frame"
+        )
+
+    def test_history_expires_after_n_frames(self):
+        """After N+1 frames of zero curvature, history should clear."""
+        gov = _make_governor(
+            max_lat_accel_g=0.20, curvature_calibration_scale=2.5,
+            curvature_history_frames=3,
+            planner_enabled=False, horizon_enabled=False, preview_enabled=False,
+        )
+        gov.compute_target_speed(20.0, 0.010, None, 20.0, 5.0, 0.0)
+        for i in range(4):
+            out = gov.compute_target_speed(
+                20.0, 0.0, None, 20.0, 5.0, (i + 1) * 0.033)
+        assert out.comfort_speed == float("inf"), (
+            "After 4 zero-curvature frames with history=3, curve should expire"
+        )
+
+    def test_reset_clears_history(self):
+        """reset() should clear curvature history."""
+        gov = _make_governor(
+            max_lat_accel_g=0.20, curvature_calibration_scale=2.5,
+            curvature_history_frames=5,
+            planner_enabled=False, horizon_enabled=False, preview_enabled=False,
+        )
+        gov.compute_target_speed(20.0, 0.010, None, 20.0, 5.0, 0.0)
+        gov.reset()
+        out = gov.compute_target_speed(20.0, 0.0, None, 20.0, 5.0, 0.1)
+        assert out.comfort_speed == float("inf")
+
+
+# --- Different Radii Produce Different Speeds ---
+
+class TestDifferentRadiiSpeeds:
+    def test_tighter_curve_slower_speed(self):
+        """Tighter curvature (smaller radius) should produce lower comfort speed."""
+        gov = _make_governor(
+            max_lat_accel_g=0.20, curvature_calibration_scale=2.5,
+            planner_enabled=False, horizon_enabled=False, preview_enabled=False,
+        )
+        radii = [80, 60, 40, 25]  # meters
+        speeds = []
+        for r in radii:
+            gov.reset()
+            k = 1.0 / r
+            out = gov.compute_target_speed(20.0, k, None, 20.0, 5.0, 0.0)
+            speeds.append(out.comfort_speed)
+
+        for i in range(len(speeds) - 1):
+            assert speeds[i] > speeds[i + 1], (
+                f"Radius {radii[i]}m ({speeds[i]:.1f} m/s) should give higher "
+                f"speed than {radii[i+1]}m ({speeds[i+1]:.1f} m/s)"
+            )
+
+    def test_expected_speed_at_sloop_curvature(self):
+        """At typical S-loop measured curvature (0.010), speed should be ~8.9 m/s."""
+        gov = _make_governor(
+            max_lat_accel_g=0.20, curvature_calibration_scale=2.5,
+            planner_enabled=False, horizon_enabled=False, preview_enabled=False,
+        )
+        out = gov.compute_target_speed(20.0, 0.010, None, 20.0, 5.0, 0.0)
+        expected = math.sqrt(0.20 * G / (0.010 * 2.5))
+        assert abs(out.comfort_speed - expected) < 0.1
+        assert 8.0 < out.comfort_speed < 10.0, f"Expected ~8.9, got {out.comfort_speed}"

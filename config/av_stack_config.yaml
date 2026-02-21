@@ -15,7 +15,8 @@ control:
     stanley_soft_speed: 2.0
     stanley_heading_weight: 1.0
     # Pure Pursuit params (active when control_mode=pure_pursuit)
-    pp_feedback_gain: 0.0  # pure geometric for initial validation; add 0.1-0.15 back if drift appears
+    pp_feedback_gain: 0.10
+    pp_max_steering_jerk: 30.0
     pp_min_lookahead: 0.5  # min effective lookahead distance (m), prevents singularity
     pp_ref_jump_clamp: 0.5  # max ref_x change per frame (m), second safety net
     pp_stale_decay: 0.98  # per-frame steering decay when perception is stale
@@ -265,20 +266,20 @@ trajectory:
   straight_target_hold_limit_delta: 0.3
   target_speed_blend_window_m: 20.0
   target_speed_blend_reset_seconds: 0.5
-  max_lateral_accel: 1.3
-  min_curve_speed: 3.2
+  max_lateral_accel: 3.0
+  min_curve_speed: 3.0
   curvature_bins:
   - min_curvature: 0.0
     max_curvature: 0.01
-    max_lateral_accel: 1.3
-    min_curve_speed: 3.2
+    max_lateral_accel: 3.0
+    min_curve_speed: 3.0
   - min_curvature: 0.01
     max_curvature: 0.02
-    max_lateral_accel: 1.25
-    min_curve_speed: 3.1
+    max_lateral_accel: 3.0
+    min_curve_speed: 3.0
   - min_curvature: 0.02
     max_curvature: 10.0
-    max_lateral_accel: 0.9
+    max_lateral_accel: 3.0
     min_curve_speed: 3.0
   speed_limit_slew_rate: 1.0
   speed_limit_slew_rate_up: 2.5
@@ -402,8 +403,10 @@ trajectory:
   speed_horizon_guardrail_gain: 1.0
   speed_governor:
     enabled: true
-    comfort_governor_max_lat_accel_g: 0.25
+    comfort_governor_max_lat_accel_g: 0.20
     comfort_governor_min_speed: 3.0
+    curvature_calibration_scale: 2.5
+    curvature_history_frames: 5
     curve_preview_enabled: true
     curve_preview_lookahead_scale: 1.6
     curve_preview_max_decel_mps2: 1.8

@@ -1082,6 +1082,7 @@ class AVStack:
             pp_ref_jump_clamp=lateral_cfg.get('pp_ref_jump_clamp', 0.5),
             pp_stale_decay=lateral_cfg.get('pp_stale_decay', 0.98),
             pp_max_steering_rate=lateral_cfg.get('pp_max_steering_rate', 0.4),
+            pp_max_steering_jerk=lateral_cfg.get('pp_max_steering_jerk', 30.0),
             feedback_gain_min=lateral_cfg.get('feedback_gain_min', 1.0),
             feedback_gain_max=lateral_cfg.get('feedback_gain_max', 1.2),
             feedback_gain_curvature_min=lateral_cfg.get('feedback_gain_curvature_min', 0.002),
@@ -1101,15 +1102,7 @@ class AVStack:
         self.trajectory_config = trajectory_cfg
         self.trajectory_source = str(trajectory_cfg.get('trajectory_source', 'planner')).lower()
         self.safety_config = safety_cfg
-        self.curve_mode_speed_cap_enabled = bool(
-            lateral_cfg.get('curve_mode_speed_cap_enabled', False)
-        )
-        self.curve_mode_speed_cap_mps = float(
-            lateral_cfg.get('curve_mode_speed_cap_mps', 7.0)
-        )
-        self.curve_mode_speed_cap_min_ratio = float(
-            lateral_cfg.get('curve_mode_speed_cap_min_ratio', 0.55)
-        )
+        
         self.record_segmentation_mask = bool(
             perception_cfg.get("record_segmentation_mask", False)
         )
@@ -3333,9 +3326,7 @@ class AVStack:
         curve_speed_limit = gov_output.comfort_speed if gov_output.comfort_speed < 1e6 else None
         curve_preview_speed_limit = gov_output.preview_speed
         steering_speed_guard_active = False
-        curve_mode_speed_cap_active = False
-        curve_mode_speed_cap_clamped = False
-        curve_mode_speed_cap_value = None
+        
 
         # Horizon guardrail diagnostics from governor
         speed_horizon_guardrail_diag = {}
@@ -3545,24 +3536,6 @@ class AVStack:
                 if gov_min_speed > 0:
                     reference_point['min_speed_floor'] = float(gov_min_speed)
 
-                # B2: Use curvature_preview from A4 to further cap speed.
-                # The existing curve_speed_preview uses lane_coeffs at 1.6x;
-                # curvature_preview from the reference point provides a
-                # complementary signal at 1.5x that survives smoothing.
-                curv_preview = float(reference_point.get('curvature_preview', 0.0) or 0.0)
-                speed_cap_curvature_target = 0.0
-                if (
-                    self.curve_mode_speed_cap_enabled
-                    and abs(curv_preview) > 0.003
-                ):
-                    a_lat_max = 0.25 * 9.80665  # 0.25g comfort limit
-                    v_max_feasible = float(np.sqrt(a_lat_max / abs(curv_preview)))
-                    v_max_feasible = max(v_max_feasible, 3.0)
-                    speed_cap_curvature_target = v_max_feasible
-                    current_vel = reference_point.get('velocity', 8.0)
-                    if current_vel > v_max_feasible:
-                        reference_point['velocity'] = v_max_feasible
-                reference_point['speed_cap_curvature_target_mps'] = speed_cap_curvature_target
                 
                 # 3. Control: Compute control commands
                 current_state = {
@@ -3590,9 +3563,6 @@ class AVStack:
                 control_command['target_speed_final'] = target_speed_final
                 control_command['target_speed_slew_active'] = target_speed_slew_active
                 control_command['target_speed_ramp_active'] = target_speed_ramp_active
-                control_command['curve_mode_speed_cap_active'] = curve_mode_speed_cap_active
-                control_command['curve_mode_speed_cap_clamped'] = curve_mode_speed_cap_clamped
-                control_command['curve_mode_speed_cap_value'] = curve_mode_speed_cap_value
                 control_command['speed_governor_active_limiter'] = gov_output.active_limiter
                 control_command['speed_governor_comfort_speed'] = gov_output.comfort_speed if gov_output.comfort_speed < 1e6 else -1.0
                 control_command['speed_governor_preview_speed'] = gov_output.preview_speed if gov_output.preview_speed is not None else -1.0
@@ -4942,13 +4912,6 @@ class AVStack:
             target_speed_final=control_command.get('target_speed_final'),
             target_speed_slew_active=bool(control_command.get('target_speed_slew_active', False)),
             target_speed_ramp_active=bool(control_command.get('target_speed_ramp_active', False)),
-            curve_mode_speed_cap_active=bool(
-                control_command.get('curve_mode_speed_cap_active', False)
-            ),
-            curve_mode_speed_cap_clamped=bool(
-                control_command.get('curve_mode_speed_cap_clamped', False)
-            ),
-            curve_mode_speed_cap_value=control_command.get('curve_mode_speed_cap_value'),
             speed_governor_active_limiter=control_command.get('speed_governor_active_limiter', 'none'),
             speed_governor_comfort_speed=control_command.get('speed_governor_comfort_speed'),
             speed_governor_preview_speed=control_command.get('speed_governor_preview_speed'),
@@ -5096,6 +5059,8 @@ class AVStack:
             pp_feedback_steering=control_command.get('pp_feedback_steering'),
             pp_ref_jump_clamped=bool(control_command.get('pp_ref_jump_clamped', 0) > 0.5),
             pp_stale_hold_active=bool(control_command.get('pp_stale_hold_active', 0) > 0.5),
+            pp_steering_jerk_limited=bool(control_command.get('pp_steering_jerk_limited', 0) > 0.5),
+            pp_effective_steering_rate=float(control_command.get('pp_effective_steering_rate', 0.0)),
             pp_pipeline_bypass_active=bool(control_command.get('pp_pipeline_bypass_active', 0) > 0.5),
         )
         

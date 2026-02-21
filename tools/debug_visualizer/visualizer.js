@@ -5950,10 +5950,6 @@ class Visualizer {
             'control-steering-curve-commit-mode',
             `${fmtCfg(c.curve_commit_mode_enabled_cfg)} / ${fmtOnOff(c.curve_commit_mode_active)} / ${fmtYesNo(c.curve_commit_mode_triggered)} / ${fmtYesNo(c.curve_commit_mode_handoff_triggered)} / ${fmtIntOrDash(c.curve_commit_mode_frames_remaining)} / f=${fmtIntOrDash(c.curve_commit_mode_max_frames_cfg)},r=${fmtFloatOrDash(c.curve_commit_mode_min_rate_cfg, 3)},j=${fmtFloatOrDash(c.curve_commit_mode_min_jerk_cfg, 3)},x=${fmtIntOrDash(c.curve_commit_mode_exit_consecutive_frames_cfg)}`
         );
-        updateField(
-            'control-steering-curve-mode-speed-cap',
-            `${fmtCfg(c.curve_mode_speed_cap_enabled_cfg)} / ${fmtOnOff(c.curve_mode_speed_cap_active)} / ${fmtYesNo(c.curve_mode_speed_cap_clamped)} / ${fmtFloatOrDash(c.curve_mode_speed_cap_value, 3)} / cap=${fmtFloatOrDash(c.curve_mode_speed_cap_mps_cfg, 2)},minRatio=${fmtFloatOrDash(c.curve_mode_speed_cap_min_ratio_cfg, 2)}`
-        );
         const toBool = (v) => v === true || v === 1;
         const scheduleVisible = toBool(c.curve_entry_schedule_enabled_cfg);
         const dynGovernorVisible = toBool(c.dynamic_curve_authority_enabled_cfg)
@@ -5961,7 +5957,6 @@ class Visualizer {
             || toBool(c.dynamic_curve_single_owner_mode_cfg);
         const assistVisible = toBool(c.curve_entry_assist_enabled_cfg);
         const commitVisible = toBool(c.curve_commit_mode_enabled_cfg);
-        const speedCapVisible = toBool(c.curve_mode_speed_cap_enabled_cfg);
         setControlRowVisible('control-steering-curve-entry-assist', assistVisible);
         setControlRowVisible('control-steering-curve-entry-schedule-primary', scheduleVisible);
         setControlRowVisible('control-steering-curve-entry-schedule-context', scheduleVisible);
@@ -5970,7 +5965,7 @@ class Visualizer {
         setControlRowVisible('control-steering-dynamic-governor-context', dynGovernorVisible);
         setControlRowVisible('control-steering-dynamic-governor-params', dynGovernorVisible);
         setControlRowVisible('control-steering-curve-commit-mode', commitVisible);
-        setControlRowVisible('control-steering-curve-mode-speed-cap', speedCapVisible);
+        
         if (
             c.steering_rate_limit_curve_metric_abs !== undefined &&
             c.steering_rate_limit_curve_min !== undefined &&

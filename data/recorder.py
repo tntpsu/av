@@ -929,24 +929,7 @@ class DataRecorder:
             maxshape=max_shape,
             dtype=np.int8
         )
-        self.h5_file.create_dataset(
-            "control/curve_mode_speed_cap_active",
-            shape=(0,),
-            maxshape=max_shape,
-            dtype=np.int8
-        )
-        self.h5_file.create_dataset(
-            "control/curve_mode_speed_cap_clamped",
-            shape=(0,),
-            maxshape=max_shape,
-            dtype=np.int8
-        )
-        self.h5_file.create_dataset(
-            "control/curve_mode_speed_cap_value",
-            shape=(0,),
-            maxshape=max_shape,
-            dtype=np.float32
-        )
+        
         self.h5_file.create_dataset(
             "control/speed_governor_comfort_speed",
             shape=(0,),
@@ -1536,6 +1519,18 @@ class DataRecorder:
             dtype=np.float32
         )
         self.h5_file.create_dataset(
+            "control/pp_steering_jerk_limited",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/pp_effective_steering_rate",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
             "control/pp_pipeline_bypass_active",
             shape=(0,),
             maxshape=max_shape,
@@ -1643,12 +1638,7 @@ class DataRecorder:
             maxshape=max_shape,
             dtype=np.float32
         )
-        self.h5_file.create_dataset(
-            "control/speed_cap_curvature_target_mps",
-            shape=(0,),
-            maxshape=max_shape,
-            dtype=np.float32
-        )
+        
         # Reference point before smoothing (raw values)
         self.h5_file.create_dataset(
             "trajectory/reference_point_raw_x",
@@ -3457,9 +3447,7 @@ class DataRecorder:
         target_speed_final_list = []
         target_speed_slew_active_list = []
         target_speed_ramp_active_list = []
-        curve_mode_speed_cap_active_list = []
-        curve_mode_speed_cap_clamped_list = []
-        curve_mode_speed_cap_value_list = []
+        
         speed_governor_comfort_speed_list = []
         speed_governor_preview_speed_list = []
         speed_governor_horizon_speed_list = []
@@ -3558,6 +3546,8 @@ class DataRecorder:
         pp_feedback_steering_list = []
         pp_ref_jump_clamped_list = []
         pp_stale_hold_active_list = []
+        pp_steering_jerk_limited_list = []
+        pp_effective_steering_rate_list = []
         pp_pipeline_bypass_active_list = []
         accel_feedforward_list = []
         brake_feedforward_list = []
@@ -3636,15 +3626,7 @@ class DataRecorder:
             target_speed_final_list.append(getattr(cc, 'target_speed_final', 0.0) or 0.0)
             target_speed_slew_active_list.append(1 if getattr(cc, 'target_speed_slew_active', False) else 0)
             target_speed_ramp_active_list.append(1 if getattr(cc, 'target_speed_ramp_active', False) else 0)
-            curve_mode_speed_cap_active_list.append(
-                1 if getattr(cc, 'curve_mode_speed_cap_active', False) else 0
-            )
-            curve_mode_speed_cap_clamped_list.append(
-                1 if getattr(cc, 'curve_mode_speed_cap_clamped', False) else 0
-            )
-            curve_mode_speed_cap_value_list.append(
-                getattr(cc, 'curve_mode_speed_cap_value', 0.0) or 0.0
-            )
+            
             speed_governor_comfort_speed_list.append(
                 getattr(cc, 'speed_governor_comfort_speed', -1.0) or -1.0
             )
@@ -3849,6 +3831,8 @@ class DataRecorder:
             pp_feedback_steering_list.append(getattr(cc, 'pp_feedback_steering', 0.0) or 0.0)
             pp_ref_jump_clamped_list.append(float(getattr(cc, 'pp_ref_jump_clamped', False)))
             pp_stale_hold_active_list.append(float(getattr(cc, 'pp_stale_hold_active', False)))
+            pp_steering_jerk_limited_list.append(float(getattr(cc, 'pp_steering_jerk_limited', False)))
+            pp_effective_steering_rate_list.append(float(getattr(cc, 'pp_effective_steering_rate', 0.0)))
             pp_pipeline_bypass_active_list.append(float(getattr(cc, 'pp_pipeline_bypass_active', False)))
         
         if timestamps:
@@ -3876,8 +3860,6 @@ class DataRecorder:
                        "emergency_stop", "target_speed_raw",
                        "target_speed_post_limits", "target_speed_planned", "target_speed_final",
                        "target_speed_slew_active", "target_speed_ramp_active",
-                       "curve_mode_speed_cap_active", "curve_mode_speed_cap_clamped",
-                       "curve_mode_speed_cap_value",
                        "speed_governor_comfort_speed", "speed_governor_preview_speed",
                        "speed_governor_horizon_speed",
                        "launch_throttle_cap", "launch_throttle_cap_active",
@@ -3937,6 +3919,7 @@ class DataRecorder:
                        "pp_alpha", "pp_lookahead_distance",
                        "pp_geometric_steering", "pp_feedback_steering",
                        "pp_ref_jump_clamped", "pp_stale_hold_active",
+                       "pp_steering_jerk_limited", "pp_effective_steering_rate",
                        "pp_pipeline_bypass_active"]:
                 self.h5_file[f"control/{key}"].resize((new_size,))
             
@@ -4017,13 +4000,7 @@ class DataRecorder:
             self.h5_file["control/target_speed_final"][current_size:] = target_speed_final_list
             self.h5_file["control/target_speed_slew_active"][current_size:] = np.array(target_speed_slew_active_list, dtype=np.int8)
             self.h5_file["control/target_speed_ramp_active"][current_size:] = np.array(target_speed_ramp_active_list, dtype=np.int8)
-            self.h5_file["control/curve_mode_speed_cap_active"][current_size:] = np.array(
-                curve_mode_speed_cap_active_list, dtype=np.int8
-            )
-            self.h5_file["control/curve_mode_speed_cap_clamped"][current_size:] = np.array(
-                curve_mode_speed_cap_clamped_list, dtype=np.int8
-            )
-            self.h5_file["control/curve_mode_speed_cap_value"][current_size:] = curve_mode_speed_cap_value_list
+            
             self.h5_file["control/speed_governor_comfort_speed"][current_size:] = speed_governor_comfort_speed_list
             self.h5_file["control/speed_governor_preview_speed"][current_size:] = speed_governor_preview_speed_list
             self.h5_file["control/speed_governor_horizon_speed"][current_size:] = speed_governor_horizon_speed_list
@@ -4225,6 +4202,8 @@ class DataRecorder:
             self.h5_file["control/pp_feedback_steering"][current_size:] = pp_feedback_steering_list
             self.h5_file["control/pp_ref_jump_clamped"][current_size:] = pp_ref_jump_clamped_list
             self.h5_file["control/pp_stale_hold_active"][current_size:] = pp_stale_hold_active_list
+            self.h5_file["control/pp_steering_jerk_limited"][current_size:] = pp_steering_jerk_limited_list
+            self.h5_file["control/pp_effective_steering_rate"][current_size:] = pp_effective_steering_rate_list
             self.h5_file["control/pp_pipeline_bypass_active"][current_size:] = pp_pipeline_bypass_active_list
     
     def _write_perception_outputs(self, frames: List[RecordingFrame]):
@@ -4480,7 +4459,6 @@ class DataRecorder:
         ref_points_raw = []
         ref_curvatures = []
         ref_curvature_previews = []
-        ref_speed_cap_curv_targets = []
         ref_methods = []
         perception_centers = []  # NEW: Track perception center
         diag_available = []
@@ -4584,9 +4562,7 @@ class DataRecorder:
                 ref_curvature_previews.append(
                     float(rp.get('curvature_preview', 0.0))
                 )
-                ref_speed_cap_curv_targets.append(
-                    float(rp.get('speed_cap_curvature_target_mps', 0.0))
-                )
+                
                 # Raw (before smoothing) values
                 ref_points_raw.append([
                     rp.get('raw_x', rp.get('x', 0.0)),
@@ -4695,7 +4671,6 @@ class DataRecorder:
                 ref_points_raw.append([0.0, 0.0, 0.0])
                 ref_curvatures.append(0.0)
                 ref_curvature_previews.append(0.0)
-                ref_speed_cap_curv_targets.append(0.0)
                 ref_methods.append('none')
                 perception_centers.append(0.0)
                 to = frame.trajectory_output
@@ -4902,10 +4877,6 @@ class DataRecorder:
             self.h5_file["trajectory/reference_point_curvature_preview"].resize((new_size_rp,))
             self.h5_file["trajectory/reference_point_curvature_preview"][current_size_rp:] = np.array(
                 ref_curvature_previews, dtype=np.float32
-            )
-            self.h5_file["control/speed_cap_curvature_target_mps"].resize((new_size_rp,))
-            self.h5_file["control/speed_cap_curvature_target_mps"][current_size_rp:] = np.array(
-                ref_speed_cap_curv_targets, dtype=np.float32
             )
             # Write raw data
             self.h5_file["trajectory/reference_point_raw_x"][current_size_rp:] = ref_points_raw_array[:, 0]

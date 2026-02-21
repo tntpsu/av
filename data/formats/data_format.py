@@ -205,9 +205,6 @@ class ControlCommand:
     target_speed_final: Optional[float] = None
     target_speed_slew_active: bool = False
     target_speed_ramp_active: bool = False
-    curve_mode_speed_cap_active: bool = False
-    curve_mode_speed_cap_clamped: bool = False
-    curve_mode_speed_cap_value: Optional[float] = None
     # Speed governor diagnostics
     speed_governor_active_limiter: str = "none"
     speed_governor_comfort_speed: Optional[float] = None
@@ -314,6 +311,8 @@ class ControlCommand:
     pp_feedback_steering: Optional[float] = None
     pp_ref_jump_clamped: bool = False
     pp_stale_hold_active: bool = False
+    pp_steering_jerk_limited: bool = False
+    pp_effective_steering_rate: float = 0.0
     pp_pipeline_bypass_active: bool = False
 
 

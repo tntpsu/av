@@ -2265,3 +2265,54 @@ def test_pure_pursuit_hard_clip_enforced():
         f"Steering {abs(meta['steering']):.4f} exceeded max_steering {max_steer}"
     )
 
+
+def test_pp_steering_jerk_bounded():
+    """Steering jerk between consecutive PP frames should not exceed pp_max_steering_jerk
+    when the rate limit (not the hard steering clip) is the binding constraint."""
+    pp_jerk = 25.0
+    dt = 0.033
+    ctrl = _make_pp_controller(pp_max_steering_rate=0.4, pp_max_steering_jerk=pp_jerk,
+                               max_steering=1.0)
+    ctrl.compute_steering(0.0, _pp_ref(0.0, 10.0), return_metadata=True,
+                          current_speed=5.0, dt=dt)
+    steerings = []
+    for i in range(20):
+        ref_x = 2.0 if i < 8 else -2.0
+        meta = ctrl.compute_steering(0.0, _pp_ref(ref_x, 8.0), return_metadata=True,
+                                     current_speed=5.0, dt=dt)
+        steerings.append(meta['steering'])
+
+    rates = [(steerings[i+1] - steerings[i]) / dt for i in range(len(steerings) - 1)]
+    jerks = [abs(rates[i+1] - rates[i]) / dt for i in range(len(rates) - 1)]
+    max_jerk = max(jerks) if jerks else 0.0
+    assert max_jerk <= pp_jerk + 1.0, (
+        f"Max steering jerk {max_jerk:.2f} exceeded pp_max_steering_jerk {pp_jerk}"
+    )
+
+
+def test_pp_rate_ramp_converges():
+    """PP steering should converge to the geometric target despite jerk limiting."""
+    ctrl = _make_pp_controller(pp_max_steering_rate=0.4, pp_max_steering_jerk=30.0,
+                               max_steering=0.7)
+    dt = 0.033
+    ctrl.compute_steering(0.0, _pp_ref(0.0, 10.0), return_metadata=True,
+                          current_speed=5.0, dt=dt)
+    ref = _pp_ref(3.0, 6.0)
+    for _ in range(30):
+        meta = ctrl.compute_steering(0.0, ref, return_metadata=True,
+                                     current_speed=5.0, dt=dt)
+
+    ctrl_nojerk = _make_pp_controller(pp_max_steering_rate=0.4,
+                                       pp_max_steering_jerk=1000.0,
+                                       max_steering=0.7)
+    ctrl_nojerk.compute_steering(0.0, _pp_ref(0.0, 10.0), return_metadata=True,
+                                  current_speed=5.0, dt=dt)
+    for _ in range(30):
+        meta_nj = ctrl_nojerk.compute_steering(0.0, ref, return_metadata=True,
+                                                current_speed=5.0, dt=dt)
+
+    assert abs(meta['steering'] - meta_nj['steering']) < 0.02, (
+        f"Jerk-limited steering {meta['steering']:.4f} didn't converge to "
+        f"target {meta_nj['steering']:.4f} after 30 frames"
+    )
+

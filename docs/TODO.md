@@ -30,10 +30,34 @@
 - [x] Reduce `curve_mode_speed_cap_mps: 8.0→7.5`
 - [x] Increase `max_steering: 0.6→0.7` for more PP authority
 - [x] E2E validation: Full 40s s-loop, 733 frames, 0 out-of-lane events
-- [ ] **Next:** Reduce lateral error RMSE (currently 0.55m, target <0.40m)
-- [ ] **Next:** Evaluate `pp_feedback_gain` sweep (0.0, 0.1, 0.15) for steady-state drift
+- [x] **Next:** Reduce lateral error RMSE — achieved via S1-M37 (0.55m → 0.32m)
+- [x] **Next:** Evaluate `pp_feedback_gain` — set to 0.10 in S1-M37
+
+## Dynamic Per-Radius Speed Control + PP Tuning (S1-M37) — Completed
+
+- [x] Add `curvature_calibration_scale: 2.5` to comfort governor (compensates for pipeline under-measurement)
+- [x] Lower `comfort_governor_max_lat_accel_g: 0.25→0.20` (physically meaningful passenger comfort)
+- [x] Add curvature history tracking (max of last 5 frames) to prevent speed spikes during transitions
+- [x] Remove ad-hoc curvature cap block from `av_stack.py` (duplicate of comfort governor)
+- [x] Remove unused `curve_mode_speed_cap_mps` and associated dead variables/telemetry
+- [x] Raise curvature bins `max_lateral_accel` to 3.0 m/s² (safety-only, comfort governor is binding)
+- [x] Set `pp_feedback_gain: 0.0→0.10` for steady-state drift correction
+- [x] 9 new unit tests (calibration scale, curvature history, per-radius speed), 124 total passing
+- [x] 3x E2E validation: All 100% in lane, lat RMSE 0.32m (target <0.40m achieved)
+- [x] **Next:** Steering jerk reduction — achieved via S1-M38 (max 93-123 → 47-65, P95 21-25)
+- [ ] **Next:** Comfort tuning (longitudinal accel/jerk P95)
 - [ ] **Next:** Rate limit sweep: `pp_max_steering_rate` at 0.25, 0.35, 0.45
-- [ ] **Next:** Comfort tuning (lat accel P95 1.37 m/s², longitudinal jerk P95 83 m/s³)
+
+## PP Steering Jerk Reduction (S1-M38) — Completed
+
+- [x] Add `pp_max_steering_jerk: 30.0` parameter (per s²) to `LateralController` and `VehicleController`
+- [x] Replace hard-clip rate limiter with jerk-limited rate ramp in PP bypass path
+- [x] Add max_steering ceiling anticipation to prevent jerk from hard clip at boundary
+- [x] Track `_pp_last_steering_rate` post-clip (decays on stale perception)
+- [x] Wire parameter through `av_stack.py` config and `av_stack_config.yaml`
+- [x] Add `pp_steering_jerk_limited` and `pp_effective_steering_rate` telemetry to HDF5 + PhilViz v68
+- [x] 2 new unit tests (jerk bounded, rate ramp convergence), 126 total passing
+- [x] 3x E2E validation: All 100% in lane, jerk max 47-65 (from 93-123), P95 21-25 (target <30), lat RMSE 0.34m (no regression)
 
 ## Stack Isolation TODOs (Priority Execution Plan)
 

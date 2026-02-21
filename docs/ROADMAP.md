@@ -238,6 +238,22 @@ This is the practical de-risk sequence for implementation and testing.
   - **E2E validation (s-loop, canonical start):** Full 40s run, 733 frames, **0 out-of-lane events**. Lag max: 0.37m (vs 0.86m), rate limit active: 0% (vs 5%), speed in curves: 7.2 mean / 9.3 max (vs 10+ m/s). Closest margin to boundary: 0.46m left, 0.55m right.
   - **Remaining:** Lateral error RMSE 0.55m, P95 0.97m — tuning opportunity. Stale rate 20.7% (all `left_lane_low_visibility`, 0 sign violations).
 
+- `S1-M37` (done): Dynamic per-radius speed control + PP tuning:
+  - **Problem:** Speed control used 6 redundant limiting mechanisms; only track speed limit (8.0 m/s) was active. Comfort governor (0.25g) was too permissive for measured curvatures. Every curve got the same fixed speed. Lateral RMSE was 0.55m (target < 0.40m). Pipeline measured ~40% of actual curvature.
+  - **Fix 1 (calibrated comfort governor):** `comfort_governor_max_lat_accel_g: 0.25→0.20`, added `curvature_calibration_scale: 2.5` to compensate for pipeline under-measurement. Formula: `v = sqrt(a_lat / (|k| * scale))`. Keeps physics meaningful (0.20g = real passenger comfort), scale absorbs pipeline distortion.
+  - **Fix 2 (curvature history):** Track last 5 curvature values, use `max(history)` for comfort speed to prevent speed spikes during S-turn transitions where curvature momentarily drops to zero.
+  - **Fix 3 (cleanup):** Removed ad-hoc curvature cap block (duplicate of comfort governor), removed unused `curve_mode_speed_cap_mps` and associated dead variables/telemetry. Raised curvature bins to safety-only (3.0 m/s²).
+  - **Fix 4 (lateral error):** `pp_feedback_gain: 0.0→0.10` for steady-state drift correction.
+  - **Tests:** 124 tests passing (9 new: calibration scale, curvature history, per-radius speed).
+  - **E2E validation (3x s-loop, canonical start):** All 3 runs: 100% in lane, 0 out-of-lane events. Lateral RMSE: 0.320m / 0.329m / 0.325m (from 0.55m baseline, target < 0.40m — achieved). Centeredness: 90.8% / 93.3% / 90.7%. Score: 78.1 / 78.0 / 78.1.
+
+- `S1-M38` (done): PP steering jerk reduction via jerk-limited rate ramp:
+  - **Problem:** Steering jerk was the largest score penalty (-20 points). 61-73% of jerk events occurred at hard PP rate limit clip transitions (rate jumping from "following demand" to "clamped at 0.4" in one frame). Max jerk: 93-123/s² across 3 baseline runs.
+  - **Fix (jerk-limited rate ramp):** Added `pp_max_steering_jerk: 30.0` (per s²) parameter. Instead of hard-clipping the rate, the rate itself ramps with bounded jerk: `max_rate_delta = pp_max_steering_jerk * dt²`. Also added max_steering ceiling anticipation to prevent jerk from hard clip at max_steering boundary. State tracked via `_pp_last_steering_rate` (post-clip, post-ceiling, decayed on stale perception).
+  - **Telemetry:** New HDF5 fields `control/pp_steering_jerk_limited` (flag) and `control/pp_effective_steering_rate` (rate tracking).
+  - **Tests:** 126 tests passing (2 new: jerk bounded, rate ramp convergence). All existing PP tests pass.
+  - **E2E validation (3x s-loop, canonical start):** All 3 runs: 100% in lane, 0 out-of-lane events. Jerk (proper dt): max 47.0-64.6/s² (from 93-123), P95 21.0-24.8/s² (target <30), events >30: 10-15 (from 31-33). Lateral RMSE: 0.338-0.348m (no regression). Speed: mean 6.0-6.2, max 9.6-9.9 m/s.
+
 **Gate to pass Stage 1**
 - No centerline cross in first-turn window.
 - No out-of-bounds in first-turn window.

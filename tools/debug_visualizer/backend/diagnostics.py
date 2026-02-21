@@ -1694,7 +1694,6 @@ def analyze_speed_curvature(f: h5py.File, failure_frame: Optional[int] = None) -
     speed = _safe_read_array(f, "vehicle/speed")
     curvature = _safe_read_array(f, "trajectory/reference_point_curvature")
     curvature_preview = _safe_read_array(f, "trajectory/reference_point_curvature_preview")
-    speed_cap_target = _safe_read_array(f, "control/speed_cap_curvature_target_mps")
     emergency_stop = _safe_read_array(f, "control/emergency_stop")
 
     # Determine failure_frame
@@ -1707,7 +1706,7 @@ def analyze_speed_curvature(f: h5py.File, failure_frame: Optional[int] = None) -
     elif failure_frame is None:
         failure_frame = max(len(speed), len(curvature), len(curvature_preview)) or 0
 
-    arrays = [speed, curvature, curvature_preview, speed_cap_target]
+    arrays = [speed, curvature, curvature_preview]
     n = failure_frame
     for arr in arrays:
         if len(arr) > 0:
@@ -1729,7 +1728,6 @@ def analyze_speed_curvature(f: h5py.File, failure_frame: Optional[int] = None) -
     speed = speed[scope] if len(speed) >= n else np.zeros(n)
     curvature = curvature[scope] if len(curvature) >= n else np.zeros(n)
     curvature_preview = curvature_preview[scope] if len(curvature_preview) >= n else np.zeros(n)
-    speed_cap_target = speed_cap_target[scope] if len(speed_cap_target) >= n else np.zeros(n)
 
     # v_max_feasible = sqrt(2.45 / abs(curvature)) for curvature > 0.001
     abs_kappa = np.abs(curvature)
@@ -1752,7 +1750,6 @@ def analyze_speed_curvature(f: h5py.File, failure_frame: Optional[int] = None) -
             "v_max_feasible": (
                 safe_float(float(v_max_feasible[i])) if v_max_feasible[i] < 1e9 else None
             ),
-            "speed_cap_target": safe_float(float(speed_cap_target[i]) if i < len(speed_cap_target) else 0.0),
             "overspeed": bool(overspeed[i]) if i < len(overspeed) else False,
         })
 

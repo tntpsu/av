@@ -30,8 +30,10 @@ class SpeedGovernorConfig:
     """Configuration for the speed governor."""
 
     # Comfort governor
-    comfort_governor_max_lat_accel_g: float = 0.25
+    comfort_governor_max_lat_accel_g: float = 0.20
     comfort_governor_min_speed: float = 3.0
+    curvature_calibration_scale: float = 1.0
+    curvature_history_frames: int = 5
 
     # Curve preview (anticipatory deceleration)
     curve_preview_enabled: bool = True
@@ -100,11 +102,13 @@ class SpeedGovernor:
         self.speed_planner: Optional[SpeedPlanner] = None
         if config.speed_planner_enabled:
             self.speed_planner = SpeedPlanner(planner_config)
+        self._curvature_history: list[float] = []
 
     def reset(self) -> None:
         """Reset internal state (speed planner)."""
         if self.speed_planner is not None:
             self.speed_planner.reset()
+        self._curvature_history.clear()
 
     def compute_target_speed(
         self,
@@ -132,8 +136,14 @@ class SpeedGovernor:
         """
         target = max(0.0, float(track_speed_limit))
 
-        # --- 1. Comfort governor ---
-        comfort_speed = self._compute_comfort_speed(curvature)
+        # --- 1. Comfort governor (with curvature history stabilization) ---
+        abs_curv = abs(float(curvature)) if isinstance(curvature, (int, float)) else 0.0
+        self._curvature_history.append(abs_curv)
+        max_history = max(1, self.config.curvature_history_frames)
+        if len(self._curvature_history) > max_history:
+            self._curvature_history = self._curvature_history[-max_history:]
+        stabilized_curvature = max(self._curvature_history)
+        comfort_speed = self._compute_comfort_speed(stabilized_curvature)
         target = min(target, comfort_speed)
 
         # --- 2. Curve preview ---
@@ -196,12 +206,13 @@ class SpeedGovernor:
         )
 
     def _compute_comfort_speed(self, curvature: float) -> float:
-        """Physics-based comfortable speed: v = sqrt(a_lat_max / |curvature|)."""
+        """Physics-based comfortable speed: v = sqrt(a_lat_max / (|k| * scale))."""
         abs_curv = abs(float(curvature)) if isinstance(curvature, (int, float)) else 0.0
-        if abs_curv < 1e-6:
+        scaled_curv = abs_curv * self.config.curvature_calibration_scale
+        if scaled_curv < 1e-6:
             return float("inf")
         a_lat_max = self.config.comfort_governor_max_lat_accel_g * G
-        v_comfort = math.sqrt(a_lat_max / abs_curv)
+        v_comfort = math.sqrt(a_lat_max / scaled_curv)
         return max(v_comfort, self.config.comfort_governor_min_speed)
 
     def _compute_preview_speed(
@@ -216,8 +227,11 @@ class SpeedGovernor:
         if abs_curv < self.config.curve_preview_min_curvature:
             return None
 
+        scaled_curv = abs_curv * self.config.curvature_calibration_scale
+        if scaled_curv < 1e-6:
+            return None
         a_lat_max = self.config.comfort_governor_max_lat_accel_g * G
-        curve_speed = math.sqrt(a_lat_max / abs_curv)
+        curve_speed = math.sqrt(a_lat_max / scaled_curv)
         curve_speed = max(curve_speed, self.config.comfort_governor_min_speed)
 
         if curve_speed >= current_target:
@@ -298,11 +312,17 @@ def build_speed_governor(trajectory_cfg: dict, speed_planner_cfg: dict) -> Speed
 
     gov_config = SpeedGovernorConfig(
         comfort_governor_max_lat_accel_g=float(
-            gov_cfg_section.get("comfort_governor_max_lat_accel_g", 0.25)
+            gov_cfg_section.get("comfort_governor_max_lat_accel_g", 0.20)
         ),
         comfort_governor_min_speed=float(
             gov_cfg_section.get("comfort_governor_min_speed",
                                 trajectory_cfg.get("min_speed_floor", 3.0))
+        ),
+        curvature_calibration_scale=float(
+            gov_cfg_section.get("curvature_calibration_scale", 1.0)
+        ),
+        curvature_history_frames=int(
+            gov_cfg_section.get("curvature_history_frames", 5)
         ),
         curve_preview_enabled=bool(
             gov_cfg_section.get("curve_preview_enabled",

@@ -1118,7 +1118,8 @@ def get_frame_data(filename, frame_index):
                         frame_data['control']['speed_governor_horizon_speed'] = float(f['control/speed_governor_horizon_speed'][control_idx])
                     for pp_key in ['pp_alpha', 'pp_lookahead_distance', 'pp_geometric_steering',
                                    'pp_feedback_steering', 'pp_ref_jump_clamped',
-                                   'pp_stale_hold_active', 'pp_pipeline_bypass_active']:
+                                   'pp_stale_hold_active', 'pp_steering_jerk_limited',
+                                   'pp_effective_steering_rate', 'pp_pipeline_bypass_active']:
                         ds_name = f'control/{pp_key}'
                         if ds_name in f and control_idx < len(f[ds_name]):
                             frame_data['control'][pp_key] = float(f[ds_name][control_idx])
@@ -1549,24 +1550,7 @@ def get_frame_data(filename, frame_index):
                         frame_data['control']['curve_commit_mode_frames_remaining'] = int(
                             f['control/curve_commit_mode_frames_remaining'][control_idx]
                         )
-                    if 'control/curve_mode_speed_cap_active' in f and control_idx < len(
-                        f['control/curve_mode_speed_cap_active']
-                    ):
-                        frame_data['control']['curve_mode_speed_cap_active'] = int(
-                            f['control/curve_mode_speed_cap_active'][control_idx]
-                        ) == 1
-                    if 'control/curve_mode_speed_cap_clamped' in f and control_idx < len(
-                        f['control/curve_mode_speed_cap_clamped']
-                    ):
-                        frame_data['control']['curve_mode_speed_cap_clamped'] = int(
-                            f['control/curve_mode_speed_cap_clamped'][control_idx]
-                        ) == 1
-                    if 'control/curve_mode_speed_cap_value' in f and control_idx < len(
-                        f['control/curve_mode_speed_cap_value']
-                    ):
-                        frame_data['control']['curve_mode_speed_cap_value'] = float(
-                            f['control/curve_mode_speed_cap_value'][control_idx]
-                        )
+                    
                     if 'control/steering_jerk_limit_effective' in f and control_idx < len(f['control/steering_jerk_limit_effective']):
                         frame_data['control']['steering_jerk_limit_effective'] = float(f['control/steering_jerk_limit_effective'][control_idx])
                     if 'control/steering_jerk_curve_scale' in f and control_idx < len(f['control/steering_jerk_curve_scale']):
@@ -1790,15 +1774,6 @@ def get_frame_data(filename, frame_index):
             )
             frame_data['control']['curve_commit_mode_exit_consecutive_frames_cfg'] = int(
                 lateral_cfg.get('curve_commit_mode_exit_consecutive_frames', 4)
-            )
-            frame_data['control']['curve_mode_speed_cap_enabled_cfg'] = bool(
-                lateral_cfg.get('curve_mode_speed_cap_enabled', False)
-            )
-            frame_data['control']['curve_mode_speed_cap_mps_cfg'] = float(
-                lateral_cfg.get('curve_mode_speed_cap_mps', 0.0)
-            )
-            frame_data['control']['curve_mode_speed_cap_min_ratio_cfg'] = float(
-                lateral_cfg.get('curve_mode_speed_cap_min_ratio', 0.0)
             )
 
             # Ground truth data - use same index as vehicle state (they should be synchronized)

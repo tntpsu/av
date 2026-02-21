@@ -214,6 +214,7 @@ class LateralController:
                  pp_ref_jump_clamp: float = 0.5,
                  pp_stale_decay: float = 0.98,
                  pp_max_steering_rate: float = 0.4,
+                 pp_max_steering_jerk: float = 30.0,
                  feedback_gain_min: float = 1.0,
                  feedback_gain_max: float = 1.2,
                  feedback_gain_curvature_min: float = 0.002,
@@ -439,9 +440,11 @@ class LateralController:
         self.pp_ref_jump_clamp = max(0.1, float(pp_ref_jump_clamp))
         self.pp_stale_decay = float(np.clip(pp_stale_decay, 0.5, 1.0))
         self.pp_max_steering_rate = max(0.05, float(pp_max_steering_rate))
+        self.pp_max_steering_jerk = max(0.0, float(pp_max_steering_jerk))
         self._pp_last_ref_x = 0.0
         self._pp_last_valid_steering = 0.0
         self._pp_stale_frames = 0
+        self._pp_last_steering_rate = 0.0
         self.smoothed_path_curvature = 0.0
         self.feedback_gain_min = feedback_gain_min
         self.feedback_gain_max = feedback_gain_max
@@ -965,6 +968,7 @@ class LateralController:
         pp_feedback_steering_val = 0.0
         pp_ref_jump_clamped = False
         pp_stale_hold_active = False
+        pp_steering_jerk_limited = False
         stanley_heading_term = 0.0
         stanley_crosstrack_term = 0.0
         stanley_speed = current_speed if current_speed is not None else 0.0
@@ -988,6 +992,7 @@ class LateralController:
                 pp_geometric_steering = self._pp_last_valid_steering * (
                     self.pp_stale_decay ** self._pp_stale_frames
                 )
+                self._pp_last_steering_rate *= self.pp_stale_decay
             else:
                 self._pp_stale_frames = 0
                 ld = np.sqrt(pp_ref_x**2 + pp_ref_y**2)
@@ -1417,27 +1422,36 @@ class LateralController:
             self._smoothed_lateral_jerk_est_gps = dynamic_curve_lateral_jerk_est_smoothed_gps
 
             steering_rate_limit_effective = float(max_steering_rate)
+            pp_steering_jerk_limited = False
 
-            # Rate clip (same logic as PID path, just with fixed max_steering_rate)
-            if hasattr(self, '_steering_rate_limit_active'):
-                rate_in = steering_before_limits
-                steering_change = steering_before_limits - self.last_steering
-                steering_rate_limit_requested_delta = abs(steering_change)
-                steering_change = np.clip(steering_change, -max_steering_rate, max_steering_rate)
-                steering_before_limits = self.last_steering + steering_change
-                steering_rate_limited_delta = abs(steering_before_limits - rate_in)
-                steering_rate_limited_active = steering_rate_limited_delta > 1e-6
-            else:
-                rate_in = steering_before_limits
-                steering_change = steering_before_limits - self.last_steering
-                steering_rate_limit_requested_delta = abs(steering_change)
-                max_initial_steering_rate = 0.25
-                if abs(steering_change) > max_initial_steering_rate:
-                    steering_change = np.clip(steering_change, -max_initial_steering_rate, max_initial_steering_rate)
-                    steering_before_limits = self.last_steering + steering_change
-                steering_rate_limited_delta = abs(steering_before_limits - rate_in)
-                steering_rate_limited_active = steering_rate_limited_delta > 1e-6
+            rate_in = steering_before_limits
+            desired_rate = steering_before_limits - self.last_steering
+            steering_rate_limit_requested_delta = abs(desired_rate)
+
+            if not hasattr(self, '_steering_rate_limit_active'):
+                max_initial_rate = 0.25
+                desired_rate = np.clip(desired_rate, -max_initial_rate, max_initial_rate)
                 self._steering_rate_limit_active = True
+                self._pp_last_steering_rate = desired_rate
+
+            if self.pp_max_steering_jerk > 0.0 and dt > 0.0:
+                max_rate_delta = self.pp_max_steering_jerk * dt * dt
+                rate_delta = desired_rate - self._pp_last_steering_rate
+                if abs(rate_delta) > max_rate_delta:
+                    rate_delta = np.clip(rate_delta, -max_rate_delta, max_rate_delta)
+                    pp_steering_jerk_limited = True
+                effective_rate = self._pp_last_steering_rate + rate_delta
+            else:
+                effective_rate = desired_rate
+
+            effective_rate = np.clip(effective_rate, -max_steering_rate, max_steering_rate)
+            max_rate_to_ceil = self.max_steering - self.last_steering
+            min_rate_to_floor = -self.max_steering - self.last_steering
+            effective_rate = np.clip(effective_rate, min_rate_to_floor, max_rate_to_ceil)
+
+            steering_before_limits = self.last_steering + effective_rate
+            steering_rate_limited_delta = abs(steering_before_limits - rate_in)
+            steering_rate_limited_active = steering_rate_limited_delta > 1e-6
 
             steering_post_rate_limit = steering_before_limits
             steering_rate_limit_margin = steering_rate_limit_effective - steering_rate_limit_requested_delta
@@ -1445,7 +1459,6 @@ class LateralController:
                 0.0, steering_rate_limit_requested_delta - steering_rate_limit_effective
             )
 
-            # Skip jerk limiting -- PP output is geometrically smooth
             steering_change_for_rate = steering_before_limits - self.last_steering
             self.last_steering_rate = steering_change_for_rate / dt if dt > 0 else 0.0
             steering_post_jerk_limit = steering_before_limits
@@ -1462,6 +1475,7 @@ class LateralController:
             steering_hard_clip_delta = abs(steering - steering_before_limits)
             steering_hard_clip_active = steering_hard_clip_delta > 1e-6
             steering_post_hard_clip = steering
+            self._pp_last_steering_rate = float(steering - self.last_steering)
             self.last_steering = steering
 
             # Skip EMA smoothing -- PP output doesn't need it
@@ -2491,6 +2505,8 @@ class LateralController:
                 'pp_feedback_steering': pp_feedback_steering_val,
                 'pp_ref_jump_clamped': float(pp_ref_jump_clamped),
                 'pp_stale_hold_active': float(pp_stale_hold_active),
+                'pp_steering_jerk_limited': float(pp_steering_jerk_limited) if pp_pipeline_bypass_active else 0.0,
+                'pp_effective_steering_rate': float(self._pp_last_steering_rate) if pp_pipeline_bypass_active else 0.0,
                 'pp_pipeline_bypass_active': float(pp_pipeline_bypass_active),
                 'feedback_gain_scheduled': feedback_gain,
                 'total_error_scaled': total_error,
@@ -3531,6 +3547,7 @@ class VehicleController:
                  pp_ref_jump_clamp: float = 0.5,
                  pp_stale_decay: float = 0.98,
                  pp_max_steering_rate: float = 0.4,
+                 pp_max_steering_jerk: float = 30.0,
                  feedback_gain_min: float = 1.0,
                  feedback_gain_max: float = 1.2,
                  feedback_gain_curvature_min: float = 0.002,
@@ -3729,6 +3746,7 @@ class VehicleController:
             pp_ref_jump_clamp=pp_ref_jump_clamp,
             pp_stale_decay=pp_stale_decay,
             pp_max_steering_rate=pp_max_steering_rate,
+            pp_max_steering_jerk=pp_max_steering_jerk,
             feedback_gain_min=feedback_gain_min,
             feedback_gain_max=feedback_gain_max,
             feedback_gain_curvature_min=feedback_gain_curvature_min,
