@@ -10,7 +10,7 @@ All tunable parameters for the AV stack are now configurable via `config/av_stac
 
 1. **Perception noise** - Lane detection isn't perfect, small errors accumulate
 2. **Coordinate conversion** - Small errors in pixel-to-meter conversion
-3. **PID controller** - Responds to tiny errors (but deadband prevents over-correction)
+3. **Lateral controller** - Pure Pursuit or PID responds to tiny errors (deadband prevents over-correction)
 4. **Reference point updates** - Reference point changes slightly each frame
 
 **What's normal:**
@@ -39,7 +39,7 @@ control:
     lateral_weight: 0.4  # Weight for lateral error
     error_clip: 1.57     # Maximum error in radians (π/2 = 90 degrees)
     integral_limit: 0.10 # Maximum integral term (prevents windup)
-    control_mode: pid    # Lateral controller: pid|stanley (pid default)
+    control_mode: pure_pursuit  # Lateral controller: pure_pursuit (default) | pid | stanley
     stanley_k: 1.5  # Stanley cross-track gain
     stanley_soft_speed: 2.0  # Soft speed term to avoid high gain at low speed
     stanley_heading_weight: 1.0  # Heading error weight in Stanley mode
@@ -63,14 +63,31 @@ control:
     feedback_gain_max: 1.4  # Feedback gain on gentle curves
     feedback_gain_curvature_min: 0.003  # Full boost below this curvature (1/m)
     feedback_gain_curvature_max: 0.03  # No boost above this curvature (1/m)
+    # Pure Pursuit params (active when control_mode=pure_pursuit)
+    pp_feedback_gain: 0.10       # Steady-state drift correction
+    pp_max_steering_rate: 0.4    # Per-frame steering rate limit
+    pp_max_steering_jerk: 30.0   # Per s² jerk limit
+    pp_min_lookahead: 0.5        # Min effective lookahead (m)
+    pp_ref_jump_clamp: 0.5       # Max ref_x change per frame (m)
+    pp_stale_decay: 0.98         # Steering decay when perception stale
 ```
 
-**Tuning Guide:**
+**Lateral control modes:**
+- **pure_pursuit (default):** Geometric steering to reference point; simpler, less oscillation on straights.
+- **pid:** Traditional PID with feedforward; use for finer gain tuning.
+- **stanley:** Stanley controller; alternative to PID.
+
+**Tuning Guide (PID/Stanley):**
 - **kp too high**: Oscillation, overcorrection
 - **kp too low**: Slow response, drifts
 - **deadband too high**: Car drifts before correcting
 - **deadband too low**: Constant tiny corrections (wasteful)
 - **lateral_weight**: Higher = more responsive to lateral offset
+
+**Tuning Guide (Pure Pursuit):**
+- **pp_feedback_gain**: Higher = more correction for steady-state drift (0.10 typical).
+- **pp_max_steering_rate**: Lower = smoother but slower response; higher = more aggressive.
+- **pp_max_steering_jerk**: Limits steering acceleration for comfort.
 
 #### Longitudinal (Speed) Control
 

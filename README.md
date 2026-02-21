@@ -9,7 +9,7 @@ A complete autonomous vehicle stack implementing perception, trajectory planning
 - **Perception**: Segmentation-based lane detection (default) with CV fallback (color masks, edge detection, Hough lines) and polynomial fitting
 - **Trained Segmentation Model**: Supports running a trained checkpoint via `--segmentation-checkpoint`
 - **Trajectory Planning**: Rule-based path planning with reference point smoothing and bias correction
-- **Control**: PID controller with feedforward (path curvature) + feedback (error correction) architecture
+- **Control**: Pure Pursuit (default) with PID/Stanley alternatives; feedforward (path curvature) + feedback (error correction)
 - **Speed Planning**: Jerk-limited speed planner for smooth curve and limit transitions
 - **Ground Truth Following**: Direct velocity control mode for precise ground truth path following
 - **Data Recording**: Automatic HDF5 recording of all frames, vehicle state (including Unity time/frame count), control commands, and ground truth data
@@ -29,7 +29,7 @@ Perception (Segmentation default, CV fallback) → Lane Detection
     ↓ (lane line coefficients, positions)
 Trajectory Planner (Rule-based) → Path Planning
     ↓ (reference point: x, y, heading)
-Control Stack (PID + Feedforward) → Steering/Throttle/Brake
+Control Stack (Pure Pursuit default + Feedforward) → Steering/Throttle/Brake
     ↓ (control commands)
 Unity Simulator (C#) → Vehicle Control
     ↑
@@ -40,7 +40,7 @@ Data Recorder (HDF5) ← All sensor data + commands + ground truth
 
 - **Perception**: `perception/inference.py` - Segmentation default with CV fallback and temporal filtering
 - **Trajectory**: `trajectory/inference.py` - Rule-based planner with reference point smoothing
-- **Control**: `control/pid_controller.py` - Feedforward + feedback PID controller
+- **Control**: `control/pid_controller.py` - Pure Pursuit (default), PID/Stanley alternatives; feedforward + feedback
 - **Bridge**: `bridge/server.py` - FastAPI server for Unity-Python communication
 - **Data**: `data/recorder.py` - HDF5 recording with ground truth support
 - **Main Stack**: `av_stack.py` - Integration of all components
@@ -50,7 +50,7 @@ Data Recorder (HDF5) ← All sensor data + commands + ground truth
 ### 1. Architecture
 
 See `docs/ARCHITECTURE.md` for the overall system design, layer responsibilities,
-and interface definitions.
+methods at each layer (perception, trajectory, control), and interface definitions.
 For a canonical script map (what to run for each intent), see `docs/SCRIPT_RUNBOOK.md`.
 
 ### 2. Setup Python Environment
@@ -214,17 +214,17 @@ cd tools/debug_visualizer
 python server.py
 ```
 
-The server runs on `http://localhost:5001`.
+The server runs on `http://localhost:5001` and serves both the API and the HTML.
 
 **Open the visualizer:**
 ```bash
-# Option 1: Use Python's built-in server
-cd tools/debug_visualizer
-python -m http.server 8000
-# Then open http://localhost:8000/index.html in your browser
+# Recommended: Use the Flask server (serves HTML + API from port 5001)
+open http://localhost:5001/
 
-# Option 2: Open directly (may have CORS issues)
-open tools/debug_visualizer/index.html
+# Alternative: Separate static server (set port 8000, then open index.html)
+# The visualizer will use API_BASE to reach port 5001 for API calls
+cd tools/debug_visualizer && python -m http.server 8000
+# Then open http://localhost:8000/index.html
 ```
 
 **Features:**
@@ -289,7 +289,7 @@ av/
 │   ├── inference.py                # Trajectory planning inference
 │   └── models/                     # Trajectory planning models
 ├── control/                        # Control stack
-│   ├── pid_controller.py           # PID + feedforward controller
+│   ├── pid_controller.py           # Pure Pursuit (default) / PID / Stanley
 │   └── vehicle_model.py           # Bicycle model
 ├── bridge/                         # Unity-Python communication
 │   ├── server.py                   # FastAPI server
@@ -458,23 +458,11 @@ See `requirements.txt` for complete list.
 
 ## Roadmap
 
-- [x] Basic Unity setup
-- [x] Unity-Python bridge
-- [x] Data recorder
-- [x] CV-based lane detection
-- [x] Trajectory planner
-- [x] PID controller with feedforward
-- [x] Ground truth following
-- [x] Analysis tools
-- [x] Debug visualizer
-- [x] Comprehensive test suite
-- [ ] ML-based perception models
-- [ ] Multi-camera support
-- [ ] Lidar integration
-- [ ] Radar integration
-- [ ] Sensor fusion
-- [ ] Advanced trajectory planning (MPC)
-- [ ] Reinforcement learning
+See **[docs/ROADMAP.md](docs/ROADMAP.md)** for current stages, phases, and promotion gates (single source of truth).
+
+**Completed:** Unity setup, bridge, recorder, lane detection (segmentation + CV), trajectory planner, control (Pure Pursuit/PID), ground truth following, analysis tools, PhilViz, test suite.
+
+**Future:** Multi-camera, lidar, radar, sensor fusion, MPC trajectory planning, reinforcement learning.
 
 ## License
 

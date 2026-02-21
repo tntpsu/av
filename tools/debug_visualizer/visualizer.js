@@ -1833,7 +1833,20 @@ class Visualizer {
             return;
         }
         const baseline = this.currentRecording || recordings[0].filename;
-        const selected = recordings.slice(0, 10).map((r) => r.filename);
+        const selected = recordings.slice(0, 5).map((r) => r.filename);
+        const shortName = (s) => String(s || '').replace(/^recording_/, '');
+        // Format recording for column header: date on line 1, time/code on line 2
+        const formatHeaderName = (name) => {
+            const n = shortName(name);
+            const m = n.match(/^(\d{8})_(\d{6})(?:\.|$)/);
+            if (m) {
+                const y = m[1].slice(0, 4), mo = m[1].slice(4, 6), d = m[1].slice(6, 8);
+                const h = m[2].slice(0, 2), mi = m[2].slice(2, 4), sec = m[2].slice(4, 6);
+                return `${y}-${mo}-${d}<br/><span class="compare-rec-time">${h}:${mi}:${sec}</span>`;
+            }
+            const safe = this.escapeHtml(n.length > 12 ? n.slice(0, 10) + '…' : n);
+            return safe;
+        };
         compareContent.innerHTML = '<p style="color: #888; text-align: center; padding: 2rem;">Loading compare data...</p>';
         try {
             const analyzeToFailure = document.getElementById('analyze-to-failure')?.checked || false;
@@ -1842,7 +1855,8 @@ class Visualizer {
                 baseline,
                 analyze_to_failure: analyzeToFailure ? 'true' : 'false',
             });
-            const response = await fetch(`/api/compare?${params.toString()}`);
+            const apiBase = (typeof window !== 'undefined' && window.PHILVIZ_API_BASE) || '';
+            const response = await fetch(`${apiBase}/compare?${params.toString()}`);
             if (!response.ok) {
                 throw new Error(`HTTP ${response.status}: ${response.statusText}`);
             }
@@ -1851,46 +1865,123 @@ class Visualizer {
                 throw new Error(data.error);
             }
             const rows = Array.isArray(data.rows) ? data.rows : [];
-            let html = '<div style="padding: 1rem;">';
-            html += '<h3 style="margin-top:0; color:#4a90e2;">Compare (MVP)</h3>';
-            html += `<div style="margin-bottom:0.6rem; color:#9fb3c8;">Baseline: <strong>${this.escapeHtml(data.baseline || baseline)}</strong> | Showing top ${rows.length} recordings</div>`;
-            html += '<div style="overflow-x:auto;"><table style="width:100%; border-collapse:collapse; font-size:0.85rem;">';
-            html += '<tr style="color:#9bdcff; border-bottom:1px solid #444;">';
-            html += '<th style="text-align:left; padding:0.4rem;">Recording</th>';
-            html += '<th style="text-align:right; padding:0.4rem;">Overall</th><th style="text-align:right; padding:0.4rem;">Gate</th>';
-            html += '<th style="text-align:right; padding:0.4rem;">Stale Hard % Δ</th><th style="text-align:right; padding:0.4rem;">Authority Gap Δ</th><th style="text-align:right; padding:0.4rem;">Transfer Ratio Δ</th>';
-            html += '<th style="text-align:right; padding:0.4rem;">Accel P95 g Δ</th><th style="text-align:right; padding:0.4rem;">Jerk P95 g/s Δ</th>';
-            html += '<th style="text-align:right; padding:0.4rem;">Sig Delay Δ</th><th style="text-align:right; padding:0.4rem;">HZ Frames Δ</th><th style="text-align:right; padding:0.4rem;">Rate Lim Δ</th>';
-            html += '<th style="text-align:right; padding:0.4rem;">Speed@Entry Δ</th><th style="text-align:right; padding:0.4rem;">v_max@Entry Δ</th><th style="text-align:right; padding:0.4rem;">Decel Lead Δ</th>';
-            html += '<th style="text-align:right; padding:0.4rem;">Replay</th><th style="text-align:right; padding:0.4rem;">Version</th></tr>';
-            rows.forEach((row) => {
+            const baselineName = data.baseline || baseline;
+            const fmt = (v) => Number.isFinite(Number(v)) ? Number(v).toFixed(2) : '-';
+            const fmtInt = (v) => (v != null && Number.isFinite(Number(v))) ? String(Math.round(Number(v))) : '-';
+            const fmtDelta = (v) => {
+                if (!Number.isFinite(Number(v))) return '-';
+                const n = Number(v);
+                return n >= 0 ? `+${n.toFixed(2)}` : n.toFixed(2);
+            };
+            const fmtDeltaInt = (v) => {
+                if (v == null || !Number.isFinite(Number(v))) return '-';
+                const n = Math.round(Number(v));
+                return n >= 0 ? `+${n}` : String(n);
+            };
+            // Metric groups: [groupLabel, [[displayLabel, key, format, rawForBaseline?]]]
+            const groups = [
+                ['Summary', [
+                    ['Overall Score', 'overall_score', 'raw', true],
+                    ['Gate', 'gate_pass', 'gate', true],
+                ]],
+                ['Safety', [
+                    ['Out-of-Lane Events', 'safety_out_of_lane_events', 'deltaInt', false],
+                    ['Out-of-Lane Time (s)', 'safety_out_of_lane_time', 'delta', false],
+                    ['First Centerline Cross (frame)', 'centerline_cross_start_frame', 'frameOrDelta', false],
+                    ['First Outer Lane Cross (frame)', 'road_departure_start_frame', 'frameOrDelta', false],
+                ]],
+                ['Perception', [
+                    ['Stale Hard %', 'stale_hard_rate', 'delta', false],
+                ]],
+                ['Trajectory', [
+                    ['Authority Gap (lane RMSE)', 'authority_gap_mean', 'delta', false],
+                    ['Sig Delay (frames)', 'signal_delay_frames', 'deltaInt', false],
+                ]],
+                ['Path Tracking', [
+                    ['Lane Centering RMSE (m)', 'lateral_error_rmse', 'delta', false],
+                ]],
+                ['Control', [
+                    ['Transfer Ratio', 'transfer_ratio_mean', 'delta', false],
+                    ['HZ Frames', 'heading_zero_frames', 'deltaInt', false],
+                    ['Rate Lim Frames', 'rate_limit_active_frames', 'deltaInt', false],
+                ]],
+                ['Longitudinal', [
+                    ['Speed Error RMSE (m/s)', 'speed_error_rmse', 'delta', false],
+                    ['Accel P95 (g)', 'accel_p95_g', 'delta', false],
+                    ['Jerk P95 (g/s)', 'jerk_p95_gps', 'delta', false],
+                    ['Speed@Entry (m/s)', 'speed_at_curve_entry_mps', 'delta', false],
+                    ['v_max@Entry (m/s)', 'v_max_feasible_at_entry', 'delta', false],
+                    ['Decel Lead (frames)', 'decel_lead_time_frames', 'deltaInt', false],
+                ]],
+                ['Meta', [
+                    ['Replay', 'replay_type', 'provenance', false],
+                    ['Version', 'software_version', 'provenance', false],
+                ]],
+            ];
+            const getVal = (row, key, isBaseline) => {
+                if (key === 'replay_type' || key === 'software_version') {
+                    return (row.recording_provenance || {})[key] || 'unknown';
+                }
+                if (key === 'gate_pass') return row.gate_pass; // always raw
+                if (key === 'centerline_cross_start_frame' || key === 'road_departure_start_frame') {
+                    if (isBaseline) return row[key];
+                    return (row.delta_vs_baseline || {})[key];
+                }
+                const raw = row[key];
+                if (isBaseline) return raw;
                 const d = row.delta_vs_baseline || {};
-                const prov = row.recording_provenance || {};
-                const score = Number(row.overall_score || 0);
-                const scoreColor = score >= 80 ? '#4caf50' : (score >= 60 ? '#ffa500' : '#ff6b6b');
-                const gateColor = row.gate_pass ? '#4caf50' : '#ff6b6b';
-                const fmt = (v) => Number.isFinite(Number(v)) ? Number(v).toFixed(2) : '-';
-                const fmtInt = (v) => (v != null && Number.isFinite(Number(v))) ? String(Math.round(Number(v))) : '-';
-                html += '<tr style="border-bottom:1px solid #333;">';
-                html += `<td style="padding:0.35rem;">${this.escapeHtml(row.recording || '-')}</td>`;
-                html += `<td style="text-align:right; color:${scoreColor}; padding:0.35rem;">${fmt(score)}</td>`;
-                html += `<td style="text-align:right; color:${gateColor}; padding:0.35rem;">${row.gate_pass ? 'PASS' : 'FAIL'}</td>`;
-                html += `<td style="text-align:right; padding:0.35rem;">${fmt(d.stale_hard_rate)}</td>`;
-                html += `<td style="text-align:right; padding:0.35rem;">${fmt(d.authority_gap_mean)}</td>`;
-                html += `<td style="text-align:right; padding:0.35rem;">${fmt(d.transfer_ratio_mean)}</td>`;
-                html += `<td style="text-align:right; padding:0.35rem;">${fmt(d.accel_p95_g)}</td>`;
-                html += `<td style="text-align:right; padding:0.35rem;">${fmt(d.jerk_p95_gps)}</td>`;
-                html += `<td style="text-align:right; padding:0.35rem;">${fmtInt(d.signal_delay_frames)}</td>`;
-                html += `<td style="text-align:right; padding:0.35rem;">${fmtInt(d.heading_zero_frames)}</td>`;
-                html += `<td style="text-align:right; padding:0.35rem;">${fmtInt(d.rate_limit_active_frames)}</td>`;
-                html += `<td style="text-align:right; padding:0.35rem;">${fmt(d.speed_at_curve_entry_mps)}</td>`;
-                html += `<td style="text-align:right; padding:0.35rem;">${fmt(d.v_max_feasible_at_entry)}</td>`;
-                html += `<td style="text-align:right; padding:0.35rem;">${fmtInt(d.decel_lead_time_frames)}</td>`;
-                html += `<td style="text-align:right; padding:0.35rem;">${this.escapeHtml(prov.replay_type || 'unknown')}</td>`;
-                html += `<td style="text-align:right; padding:0.35rem;">${this.escapeHtml(prov.software_version || 'unknown')}</td>`;
-                html += '</tr>';
+                return d[key];
+            };
+            const formatVal = (val, fmtType, isBaseline) => {
+                if (fmtType === 'gate') return val ? 'PASS' : 'FAIL';
+                if (fmtType === 'provenance') return this.escapeHtml(String(val || 'unknown'));
+                if (fmtType === 'frameOrDelta') {
+                    if (val == null || !Number.isFinite(Number(val))) return '—';
+                    return isBaseline ? String(Math.round(Number(val))) : fmtDeltaInt(val);
+                }
+                if (isBaseline || fmtType === 'raw' || fmtType === 'int') {
+                    if (fmtType === 'int' || fmtType === 'deltaInt') return fmtInt(val);
+                    return fmt(val);
+                }
+                if (fmtType === 'delta') return fmtDelta(val);
+                if (fmtType === 'deltaInt') return fmtDeltaInt(val);
+                return fmt(val);
+            };
+            let html = '<div style="padding: 1rem;">';
+            html += '<h3 style="margin-top:0; color:#4a90e2;">Compare</h3>';
+            html += `<div style="margin-bottom:0.6rem; color:#9fb3c8;">Baseline: <strong>${this.escapeHtml(shortName(baselineName))}</strong> · Top 5 recordings · <em>All Δ values are vs the baseline (highlighted column)</em></div>`;
+            html += '<div class="compare-table-wrap"><table class="compare-table">';
+            html += '<thead><tr><th class="compare-param-col">Parameter</th>';
+            rows.forEach((row) => {
+                const formatted = formatHeaderName(row.recording);
+                const isBase = row.recording === baselineName;
+                const baselineLabel = isBase ? ' <span class="compare-baseline-tag">(baseline)</span>' : '';
+                html += `<th class="compare-rec-col${isBase ? ' compare-baseline-col' : ''}"><span class="compare-rec-header">${formatted}${baselineLabel}</span></th>`;
             });
-            html += '</table></div></div>';
+            html += '</tr></thead><tbody>';
+            groups.forEach(([groupLabel, metrics]) => {
+                html += `<tr class="compare-group-row"><td class="compare-param-col compare-group-label" colspan="${rows.length + 1}">${this.escapeHtml(groupLabel)}</td></tr>`;
+                metrics.forEach(([display, key, fmtType]) => {
+                    html += '<tr>';
+                    html += `<td class="compare-param-col compare-metric-label">${this.escapeHtml(display)}</td>`;
+                    rows.forEach((row) => {
+                        const isBase = row.recording === baselineName;
+                        const val = getVal(row, key, isBase);
+                        const fmtVal = formatVal(val, fmtType, isBase);
+                        let color = '';
+                        if (key === 'overall_score') {
+                            const s = Number(val);
+                            color = s >= 80 ? '#4caf50' : (s >= 60 ? '#ffa500' : '#ff6b6b');
+                        } else if (key === 'gate_pass') {
+                            color = val ? '#4caf50' : '#ff6b6b';
+                        }
+                        const style = color ? ` style="color:${color}"` : '';
+                        html += `<td class="compare-rec-col compare-cell"${style}>${fmtVal}</td>`;
+                    });
+                    html += '</tr>';
+                });
+            });
+            html += '</tbody></table></div></div>';
             compareContent.innerHTML = html;
         } catch (error) {
             compareContent.innerHTML = `<p style="color: #ff6b6b; text-align: center; padding: 2rem;">Compare load failed: ${this.escapeHtml(error.message)}</p>`;
@@ -4350,10 +4441,13 @@ class Visualizer {
         const trajDiag = this.currentFrameData?.trajectory || {};
         const dynamicHorizonApplied = Number(trajDiag?.diag_dynamic_effective_horizon_applied) > 0.5;
         const dynamicHorizonMeters = Number(trajDiag?.diag_dynamic_effective_horizon_m);
-        const trajectoryTopdownDisplaySource = (
-            dynamicHorizonApplied && Number.isFinite(dynamicHorizonMeters)
-        )
-            ? this.trimPathToForwardHorizon(trajectory, dynamicHorizonMeters)
+        // Fallback: use PP lookahead from control when trajectory diag not available (e.g. old recordings)
+        const ppLookaheadM = Number(this.currentFrameData?.control?.pp_lookahead_distance);
+        const horizonM = (dynamicHorizonApplied && Number.isFinite(dynamicHorizonMeters))
+            ? dynamicHorizonMeters
+            : (Number.isFinite(ppLookaheadM) ? ppLookaheadM : null);
+        const trajectoryTopdownDisplaySource = horizonM != null && horizonM > 0
+            ? this.trimPathToForwardHorizon(trajectory, horizonM)
             : this.toForwardMonotonicPath(trajectory);
         const oracleTrajectory = this.currentFrameData.trajectory?.oracle_points || [];
         if (!trajectoryTopdownDisplaySource.length && !oracleTrajectory.length && !showDistanceScale) return;
@@ -6857,20 +6951,19 @@ class Visualizer {
                 const trajDiag = this.currentFrameData?.trajectory || {};
                 const dynamicHorizonApplied = Number(trajDiag?.diag_dynamic_effective_horizon_applied) > 0.5;
                 const dynamicHorizonMeters = Number(trajDiag?.diag_dynamic_effective_horizon_m);
-                const mainRenderTrajDisplaySource = (
-                    dynamicHorizonApplied && Number.isFinite(dynamicHorizonMeters)
-                )
-                    ? this.trimPathToForwardHorizon(mainRenderTraj, dynamicHorizonMeters)
+                // Fallback: use PP lookahead from control when trajectory diag not available
+                const ppLookaheadM = Number(this.currentFrameData?.control?.pp_lookahead_distance);
+                const mainHorizonM = (dynamicHorizonApplied && Number.isFinite(dynamicHorizonMeters))
+                    ? dynamicHorizonMeters
+                    : (Number.isFinite(ppLookaheadM) ? ppLookaheadM : null);
+                const mainRenderTrajDisplaySource = mainHorizonM != null && mainHorizonM > 0
+                    ? this.trimPathToForwardHorizon(mainRenderTraj, mainHorizonM)
                     : mainRenderTraj;
                 const mainRenderTrajDisplay = forceMainViewEgoAnchoring
                     ? this.alignPathStartToAnchor(mainRenderTrajDisplaySource, mainViewAnchorPoint)
                     : mainRenderTrajDisplaySource;
-                this.projectionDiagnostics.traj_display_trimmed_dynamic_horizon = (
-                    dynamicHorizonApplied && Number.isFinite(dynamicHorizonMeters)
-                );
-                this.projectionDiagnostics.traj_display_trimmed_dynamic_horizon_m = (
-                    Number.isFinite(dynamicHorizonMeters) ? Number(dynamicHorizonMeters) : null
-                );
+                this.projectionDiagnostics.traj_display_trimmed_dynamic_horizon = mainHorizonM != null && mainHorizonM > 0;
+                this.projectionDiagnostics.traj_display_trimmed_dynamic_horizon_m = mainHorizonM;
                 this.projectionDiagnostics.traj_display_trimmed_points_raw = Number(mainRenderTraj.length);
                 this.projectionDiagnostics.traj_display_trimmed_points_kept = Number(mainRenderTrajDisplaySource.length);
                 plannerPathForMetrics = mainRenderTraj;

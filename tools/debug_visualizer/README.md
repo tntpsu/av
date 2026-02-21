@@ -53,7 +53,7 @@ cd tools/debug_visualizer
 python server.py
 ```
 
-The server will start on `http://localhost:5001`.
+The server will start on `http://localhost:5001`. **Open http://localhost:5001/** in your browser to use the visualizer (the server serves both HTML and API). If you use a separate static server (e.g. `python -m http.server 8000`), the visualizer will use `PHILVIZ_API_BASE` to reach the API on port 5001.
 
 ### Opening the Visualizer
 

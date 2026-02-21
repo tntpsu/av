@@ -4,6 +4,7 @@
  */
 
 const API_BASE = 'http://localhost:5001/api';
+window.PHILVIZ_API_BASE = API_BASE;  // For visualizer.js when page served from different origin (e.g. http.server 8000)
 
 class DataLoader {
     constructor() {

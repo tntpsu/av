@@ -1,5 +1,7 @@
 # TODO: Near-Term (Phase 1 Completion)
 
+**Note:** For stage/phase status and promotion gates, see [ROADMAP.md](ROADMAP.md) (single source of truth). This file tracks near-term checklists and Stack Isolation TODOs.
+
 ## Pure Pursuit Control (S1-M33) — Completed
 
 - [x] Implement `pure_pursuit` control mode in `LateralController`
@@ -235,44 +237,20 @@ Acceptance tests:
   accel_p95 <= 25 m/s^2, jerk_p95 <= 400 m/s^3, lat_jerk_p95 <= 5.0,
   emergency_stop_frame == 0.
 
-## ✅ Recent Accomplishments (2026-02-10)
+## Recent Accomplishments (Historical)
 
-### Perception Stability Improvements
-- **Fixed RANSAC bug**: Corrected xs/ys coordinate swap in polynomial fitting
-- **Tuned RANSAC parameters**: threshold 10.0px, min_inliers 8 for robust outlier rejection
-- **Increased perception smoothing**: lane_center_ema_alpha 0.15 to reduce drift impact
-- **Tightened perception gating**: lane_center_gate_m 0.3m to catch smaller jumps
-- **Added lane line change clamp**: 0.25m to prevent sudden lane position jumps
+Perception/control stability improvements (RANSAC fix, smoothing, deadband) and Pure Pursuit migration (S1-M33, S1-M35, S1-M36–M39) are complete. See ROADMAP.md for current status.
 
-### Control Stability Improvements
-- **Added lateral deadband (0.05m)**: Prevents steering when car is centered but perception drifts
-- **Lowered feedforward threshold**: curve_feedforward_curvature_min 0.001 to activate with low curvature
-- **Improved trajectory smoothing**: lane_position_smoothing_alpha 0.75 for smoother ref_x
+## Current Focus (align with docs/ROADMAP.md Stage 1)
 
-### Results
-- ✅ **Stable straight-line driving**: No oscillation on straights
-- ✅ **Successfully reaches curves**: No overcorrection before curve entry
-- ⚠️ **Remaining issue**: Curve following needs improvement (understeering in curves)
+S-Loop turn clearance (S1-M32) items completed. See ROADMAP.md for current micro-steps (e.g. S1-M4, S1-M5) and promotion gates.
 
-## Current Focus: S-Loop Turn Clearance (S1-M32)
-
-### Completed (2026-02-20)
-- [x] **A1:** Curvature guard on heading zeroing (trajectory_planner.py) — prevents false straight-road classification on curve approach
-- [x] **A2:** Heading from lane-center history when lane_coeffs unavailable
-- [x] **A3:** Curvature-aware smoothing alpha reduction + rate-limit relaxation
-- [x] **A4:** Curvature preview at 1.5× lookahead for feedforward priming
-- [x] **B1:** Curvature-based speed cap enabled (8.0 m/s default)
-- [x] **B2:** Curvature preview → early deceleration (0.25g comfort limit)
-- [x] **C1:** Control curvature_smoothing_alpha 0.7 → 0.5
-- [x] **C2:** Curvature preview blended into feedforward (30% blend)
-- [x] **C3:** Straight→curve integral decay (5-frame flush)
-- [x] **V1–V5:** PhilViz auto-triage package (signal chain, suppression, speed-curvature, compare, scoring)
-- [x] **D1:** Baseline signal chain diagnostic script
-
-### Pending (Requires Live Unity)
-- [ ] **D2:** A/B validation (3 repeats, canonical start, Mann-Whitney p<0.10)
-- [ ] **D3:** Control fine-tuning if comfort/oscillation issues after D2
-- [ ] **D4:** Full s-loop multi-turn validation + Stage 1 promotion gate
+### S1-M32 Completed (2026-02)
+- [x] **A1–A4:** Curvature guard, heading fallback, smoothing, curvature preview
+- [x] **B1–B2:** Speed cap, early deceleration
+- [x] **C1–C3:** Curvature smoothing, feedforward blend, integral decay
+- [x] **V1–V5:** PhilViz signal chain, suppression, speed-curvature, compare, scoring
+- [x] **D1:** Baseline signal chain diagnostic
 
 ## Current Tuning Targets (Iterations)
 - **Comfort caps:** accel_p95 <= 3.0 m/s^2, jerk_p95 <= 6.0 m/s^3.

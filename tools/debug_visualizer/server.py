@@ -2425,6 +2425,22 @@ def get_compare_summary():
                 signal_chain = analyze_signal_chain(f, failure_frame=None)
                 speed_curvature = analyze_speed_curvature(f, failure_frame=None)
 
+            # Safety: first centerline cross and first outer lane cross (from issue detector)
+            centerline_cross_frame = None
+            road_departure_frame = None
+            try:
+                issues_data = detect_issues(filepath, analyze_to_failure=analyze_to_failure)
+                if issues_data and not issues_data.get("error"):
+                    issue_summary = issues_data.get("summary") or {}
+                    centerline_cross_frame = issue_summary.get("centerline_cross_start_frame")
+                    road_departure_frame = issue_summary.get("road_departure_start_frame")
+                    if centerline_cross_frame is not None:
+                        centerline_cross_frame = int(centerline_cross_frame)
+                    if road_departure_frame is not None:
+                        road_departure_frame = int(road_departure_frame)
+            except Exception as ie:
+                app.logger.warning(f"Compare: issue detection failed for {filename}: {ie}")
+
             row = {
                 "recording": filename,
                 "overall_score": float(summary.get("executive_summary", {}).get("overall_score", 0.0)),
@@ -2434,6 +2450,8 @@ def get_compare_summary():
                 ),
                 "safety_out_of_lane_events": int(summary.get("safety", {}).get("out_of_lane_events", 0)),
                 "safety_out_of_lane_time": float(summary.get("safety", {}).get("out_of_lane_time", 0.0)),
+                "centerline_cross_start_frame": centerline_cross_frame,
+                "road_departure_start_frame": road_departure_frame,
                 "stale_hard_rate": float(summary.get("perception_quality", {}).get("stale_hard_rate", 0.0)),
                 "authority_gap_mean": float(
                     (summary.get("turn_bias") or {}).get("road_frame_lane_center_error_rmse", 0.0)
@@ -2443,6 +2461,12 @@ def get_compare_summary():
                 ),
                 "accel_p95_g": float(summary.get("comfort", {}).get("acceleration_p95_g", 0.0)),
                 "jerk_p95_gps": float(summary.get("comfort", {}).get("jerk_p95_gps", 0.0)),
+                "lateral_error_rmse": float(
+                    (summary.get("path_tracking") or {}).get("lateral_error_rmse", 0.0)
+                ),
+                "speed_error_rmse": float(
+                    (summary.get("speed_control") or {}).get("speed_error_rmse", 0.0)
+                ),
                 "recording_provenance": provenance,
                 # V4: Signal chain metrics
                 "signal_delay_frames": (
@@ -2482,7 +2506,12 @@ def get_compare_summary():
         err_msg = "No comparable recordings found."
         if first_failure_reason:
             err_msg += f" First failure: {first_failure_reason}"
-        return jsonify({"error": err_msg}), 404
+        return jsonify({
+            "error": err_msg,
+            "baseline": baseline_name or (filenames[0] if filenames else ""),
+            "rows": [],
+            "analyze_to_failure": analyze_to_failure,
+        }), 200
 
     baseline_row = None
     if baseline_name:
@@ -2494,11 +2523,15 @@ def get_compare_summary():
         "overall_score": baseline_row["overall_score"],
         "safety_out_of_lane_events": baseline_row["safety_out_of_lane_events"],
         "safety_out_of_lane_time": baseline_row["safety_out_of_lane_time"],
+        "centerline_cross_start_frame": baseline_row.get("centerline_cross_start_frame"),
+        "road_departure_start_frame": baseline_row.get("road_departure_start_frame"),
         "stale_hard_rate": baseline_row["stale_hard_rate"],
         "authority_gap_mean": baseline_row["authority_gap_mean"],
         "transfer_ratio_mean": baseline_row["transfer_ratio_mean"],
         "accel_p95_g": baseline_row["accel_p95_g"],
         "jerk_p95_gps": baseline_row["jerk_p95_gps"],
+        "lateral_error_rmse": baseline_row.get("lateral_error_rmse"),
+        "speed_error_rmse": baseline_row.get("speed_error_rmse"),
         "signal_delay_frames": baseline_row.get("signal_delay_frames"),
         "heading_zero_frames": baseline_row.get("heading_zero_frames", 0),
         "rate_limit_active_frames": baseline_row.get("rate_limit_active_frames", 0),

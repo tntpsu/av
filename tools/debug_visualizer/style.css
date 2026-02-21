@@ -682,3 +682,85 @@ body {
     background: #5a5a5a;
 }
 
+/* Compare tab: transposed table, params down side, recordings across top */
+.compare-table-wrap {
+    overflow-x: auto;
+    overflow-y: visible;
+}
+
+.compare-table {
+    width: auto;
+    border-collapse: collapse;
+    font-size: 0.85rem;
+}
+
+.compare-table th,
+.compare-table td {
+    padding: 0.3rem 0.5rem;
+    vertical-align: middle;
+    border-bottom: 1px solid #333;
+}
+
+.compare-param-col {
+    text-align: left;
+    min-width: 10rem;
+    max-width: 14rem;
+    background: #242424;
+    position: sticky;
+    left: 0;
+    z-index: 1;
+}
+
+.compare-rec-col {
+    text-align: right;
+    min-width: 4rem;
+    max-width: 5.5rem;
+}
+
+.compare-table thead .compare-rec-col {
+    min-height: 3.5rem;
+    vertical-align: bottom;
+    padding-bottom: 0.2rem;
+}
+
+.compare-rec-col.compare-baseline-col {
+    background: rgba(74, 144, 226, 0.12);
+}
+
+.compare-rec-header {
+    display: inline-block;
+    white-space: normal;
+    line-height: 1.15;
+    font-weight: 600;
+    color: #9bdcff;
+    font-size: 0.75rem;
+}
+
+.compare-rec-time {
+    color: #7ab8e6;
+    font-weight: 500;
+}
+
+.compare-baseline-tag {
+    display: block;
+    font-size: 0.65rem;
+    color: #4a90e2;
+    font-weight: 600;
+}
+
+.compare-group-row .compare-group-label {
+    font-weight: 700;
+    color: #7ab8ff;
+    padding-top: 0.5rem;
+    padding-bottom: 0.2rem;
+}
+
+.compare-metric-label {
+    padding-left: 1rem;
+    color: #cfcfcf;
+}
+
+.compare-cell {
+    font-variant-numeric: tabular-nums;
+}
+

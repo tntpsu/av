@@ -74,6 +74,11 @@ sequenceDiagram
 - Apply control commands to the car.
 - Provide ground truth path/lane geometry when available.
 
+**Methods**
+- **Physics mode:** CarController applies steering/throttle/brake via wheel colliders.
+- **GT mode:** GroundTruthReporter drives path-following directly; bypasses physics.
+- **Camera:** CameraCapture readback and frame delivery to bridge.
+
 **Key components**
 - `CameraCapture.cs`: camera readback and frame delivery to bridge.
 - `AVBridge.cs`: Unity-side bridge client and in-game overlay.
@@ -87,6 +92,9 @@ sequenceDiagram
 - Return control commands to Unity.
 - Report liveness/health.
 
+**Methods**
+- **Endpoints:** `POST /api/camera_frame`, `POST /api/vehicle_state`, `POST /api/control_command`; Python polls latest via internal client.
+
 **Key components**
 - `bridge/server.py`: FastAPI endpoints and shared state.
 - `bridge/client.py`: Unity-facing HTTP client used by Python scripts.
@@ -96,6 +104,12 @@ sequenceDiagram
 - Detect lane boundaries from camera images.
 - Provide lane center estimates and confidence.
 - Fall back to CV-based detection when segmentation is unavailable.
+
+**Methods**
+- **Segmentation (default):** Trained model for lane mask prediction; supports `--segmentation-checkpoint`.
+- **CV fallback:** Color masks, edge detection, Hough lines, polynomial fitting (RANSAC).
+- **Temporal filtering:** EMA smoothing, jump detection, lane-side change clamp.
+- **Low-visibility fallback:** Configurable blend/decay when lanes are stale or low confidence.
 
 **Key components**
 - `perception/inference.py`: segmentation + CV fallback.
@@ -107,14 +121,20 @@ sequenceDiagram
 - Smooth reference points over time.
 - Provide target speed and lookahead reference.
 
+**Methods**
+- **Rule-based planner:** Lane center midpoint (pointwise or coeff-average), polynomial path.
+- **Reference point smoothing:** EMA on ref_x/ref_y; curvature-aware alpha; rate limiting (scales with curvature).
+- **Dynamic lookahead:** Scales by speed, curvature, and perception confidence (`reference_lookahead_scale_min`, etc.).
+- **Heading zero gate:** Forces 0° heading on straights; curvature guard prevents false classification.
+- **Speed planner:** Jerk-limited target speed; curve preview anticipatory decel.
+- **Speed cap:** Curvature-based `v_max = sqrt(a_lat / |κ|)` before planner.
+- **Vehicle-frame lookahead:** Optional Unity offset overrides `ref_x` for turn alignment.
+
 **Key components**
 - `trajectory/inference.py`: rule-based planner.
+- `trajectory/models/trajectory_planner.py`: path computation.
 - `trajectory/speed_planner.py`: jerk-limited speed planner.
-
-**Notes**
-- Dynamic reference lookahead scales by speed/curvature.
-- Optional vehicle-frame lookahead offset from Unity can override `ref_x` for turn alignment.
-- Curvature-based speed caps are applied before the speed planner.
+- `control/speed_governor.py`: curvature caps and curve preview.
 
 ### Control (Python)
 **Responsibilities**
@@ -122,18 +142,24 @@ sequenceDiagram
 - Translate target speed into throttle/brake.
 - Apply smoothing, rate limits, and safety bounds.
 
-**Key components**
-- `control/pid_controller.py`: lateral + longitudinal control.
+**Methods**
+- **Lateral (default: Pure Pursuit):** Geometric steering to reference point; `pp_feedback_gain` for steady-state drift; `pp_max_steering_rate`, `pp_max_steering_jerk` for smooth actuation. Bypasses PID-era jerk/smoothing/sign-flip when PP active.
+- **Lateral alternatives:** `control_mode: pid` or `stanley`; PID uses curve feedforward, rate limiting, speed-aware gain.
+- **Curve feedforward:** Curvature-based steering; curvature preview blend at 1.5× lookahead.
+- **Longitudinal:** Jerk-limited speed tracking; accel/jerk caps (S1-M39); throttle/brake rate limits and slew.
 
-**Notes**
-- Lateral control uses PID with curve feedforward scheduling, steering rate limiting,
-  and optional speed-aware gain.
-- Longitudinal control enforces throttle/brake rate limits and ramp/slew logic.
+**Key components**
+- `control/pid_controller.py`: LateralController (Pure Pursuit/PID/Stanley) + longitudinal.
+- `control/vehicle_model.py`: bicycle model.
 
 ### Recording and Analysis (Python)
 **Responsibilities**
 - Persist all signals to HDF5.
 - Provide analysis summaries and debug visualizations.
+
+**Methods**
+- **Recording:** Time-aligned write of camera, perception, trajectory, control, ground truth.
+- **Analysis:** Summary analyzer, signal chain diagnostics, curve entry feasibility, PhilViz playback.
 
 **Key components**
 - `data/recorder.py`: HDF5 recording.
