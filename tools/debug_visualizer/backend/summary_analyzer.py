@@ -174,8 +174,20 @@ def analyze_recording_summary(recording_path: Path, analyze_to_failure: bool = F
                 data['speed_limit'] = (
                     np.array(f['vehicle/speed_limit'][:]) if 'vehicle/speed_limit' in f else None
                 )
-            else:
+            elif 'control/timestamps' in f:
+                data['timestamps'] = np.array(f['control/timestamps'][:])
+                data['speed'] = np.array(f['vehicle/speed'][:]) if 'vehicle/speed' in f else None
+                data['speed_limit'] = (
+                    np.array(f['vehicle/speed_limit'][:]) if 'vehicle/speed_limit' in f else None
+                )
+            elif 'control/timestamp' in f:
                 data['timestamps'] = np.array(f['control/timestamp'][:])
+                data['speed'] = np.array(f['vehicle/speed'][:]) if 'vehicle/speed' in f else None
+                data['speed_limit'] = (
+                    np.array(f['vehicle/speed_limit'][:]) if 'vehicle/speed_limit' in f else None
+                )
+            else:
+                raise KeyError("No timestamp source found (tried vehicle_state/timestamp, vehicle/timestamps, control/timestamps, control/timestamp)")
                 data['speed'] = np.array(f['vehicle/speed'][:]) if 'vehicle/speed' in f else None
                 data['speed_limit'] = (
                     np.array(f['vehicle/speed_limit'][:]) if 'vehicle/speed_limit' in f else None
@@ -1254,11 +1266,14 @@ def analyze_recording_summary(recording_path: Path, analyze_to_failure: bool = F
         min(12, straight_sign_mismatch_rate * 0.2) if straight_sign_mismatch_rate > 5.0 else 0.0
     )
 
+    # S1-M39: Gates 3.0 m/s², 6.0 m/s³ (0.31g, 0.61 g/s)
+    accel_gate_g = 3.0 / G_MPS2
+    jerk_gate_gps = 6.0 / G_MPS2
     longitudinal_accel_penalty = safe_float(
-        min(20, max(0.0, (acceleration_p95 / G_MPS2) - 0.25) * 120.0)
+        min(20, max(0.0, (acceleration_p95 / G_MPS2) - accel_gate_g) * 120.0)
     )
     longitudinal_jerk_penalty = safe_float(
-        min(20, max(0.0, (jerk_p95 / G_MPS2) - 0.51) * 50.0)
+        min(20, max(0.0, (jerk_p95 / G_MPS2) - jerk_gate_gps) * 50.0)
     )
 
     safety_out_of_lane_penalty = safe_float(min(35, out_of_lane_time * 0.35))
@@ -1416,12 +1431,12 @@ def analyze_recording_summary(recording_path: Path, analyze_to_failure: bool = F
                 {
                     "name": "Acceleration P95",
                     "value": longitudinal_accel_penalty,
-                    "limit": "<=0.25g",
+                    "limit": "<=0.31g (3.0 m/s²)",
                 },
                 {
                     "name": "Jerk P95",
                     "value": longitudinal_jerk_penalty,
-                    "limit": "<=0.51g/s",
+                    "limit": "<=0.61 g/s (6.0 m/s³)",
                 },
             ],
         },
@@ -1664,12 +1679,12 @@ def analyze_recording_summary(recording_path: Path, analyze_to_failure: bool = F
             "lateral_accel_p95_g": safe_float(lateral_accel_p95 / G_MPS2),
             "lateral_jerk_p95_gps": safe_float(lateral_jerk_p95 / G_MPS2),
             "comfort_gate_thresholds_g": {
-                "longitudinal_accel_p95_g": 0.25,
-                "longitudinal_jerk_p95_gps": 0.51
+                "longitudinal_accel_p95_g": safe_float(3.0 / G_MPS2),
+                "longitudinal_jerk_p95_gps": safe_float(6.0 / G_MPS2)
             },
             "comfort_gate_thresholds_si": {
-                "longitudinal_accel_p95_mps2": safe_float(0.25 * G_MPS2),
-                "longitudinal_jerk_p95_mps3": safe_float(0.51 * G_MPS2)
+                "longitudinal_accel_p95_mps2": 3.0,
+                "longitudinal_jerk_p95_mps3": 6.0
             }
         },
         "control_stability": {

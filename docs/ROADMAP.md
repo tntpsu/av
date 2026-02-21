@@ -1,6 +1,6 @@
 # Robust Full-Stack Roadmap (Unified, Layered, and Gated)
 
-**Last Updated:** 2026-02-20  
+**Last Updated:** 2026-02-21  
 **Current Focus:** Layer 2, Stage 1 (First-Turn Entry Reliability) signal-chain clearance + curvature-based speed + control refinement  
 **Change-Control Rule:** If scope, stage, phase status, or promotion gates change, update this roadmap in the same PR/commit before considering work complete.
 
@@ -253,6 +253,13 @@ This is the practical de-risk sequence for implementation and testing.
   - **Telemetry:** New HDF5 fields `control/pp_steering_jerk_limited` (flag) and `control/pp_effective_steering_rate` (rate tracking).
   - **Tests:** 126 tests passing (2 new: jerk bounded, rate ramp convergence). All existing PP tests pass.
   - **E2E validation (3x s-loop, canonical start):** All 3 runs: 100% in lane, 0 out-of-lane events. Jerk (proper dt): max 47.0-64.6/s² (from 93-123), P95 21.0-24.8/s² (target <30), events >30: 10-15 (from 31-33). Lateral RMSE: 0.338-0.348m (no regression). Speed: mean 6.0-6.2, max 9.6-9.9 m/s.
+
+- `S1-M39` (in progress): Longitudinal comfort tuning:
+  - **Problem:** accel_p95 and jerk_p95 exceed Phase 1 gates (accel_p95 ≤ 3.0 m/s², jerk_p95 ≤ 6.0 m/s³). Baseline: accel_p95 3.24 m/s², jerk_p95 89.43 m/s³ (post S1-M38).
+  - **Fix (config alignment + slew):** (1) Align speed planner limits with longitudinal controller (max_accel, max_jerk, max_decel). (2) Curve transition: curve_preview_max_decel 1.8→1.2, slew rates down. (3) Startup/low-speed: startup_accel_limit 0.7→0.5, low_speed_accel_limit 0.8→0.6. (4) Rate limits: throttle_rate_limit, brake_rate_limit, throttle_smoothing_alpha tightened.
+  - **PhilViz v69:** Comfort gates aligned to 3.0 m/s² / 6.0 m/s³; LongitudinalComfort limit labels updated; Accel Cap Active / Jerk Cap Active rows in Control section.
+  - **Tests:** Config alignment tests in `tests/test_config_alignment.py` (planner ≤ longitudinal limits).
+  - **E2E validation:** Pending 3x s-loop to confirm comfort metrics within gates.
 
 **Gate to pass Stage 1**
 - No centerline cross in first-turn window.

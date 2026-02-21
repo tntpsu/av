@@ -1127,6 +1127,10 @@ def get_frame_data(filename, frame_index):
                         frame_data['control']['launch_throttle_cap'] = float(f['control/launch_throttle_cap'][control_idx])
                     if 'control/launch_throttle_cap_active' in f and control_idx < len(f['control/launch_throttle_cap_active']):
                         frame_data['control']['launch_throttle_cap_active'] = int(f['control/launch_throttle_cap_active'][control_idx]) == 1
+                    if 'control/longitudinal_accel_capped' in f and control_idx < len(f['control/longitudinal_accel_capped']):
+                        frame_data['control']['longitudinal_accel_capped'] = int(f['control/longitudinal_accel_capped'][control_idx]) == 1
+                    if 'control/longitudinal_jerk_capped' in f and control_idx < len(f['control/longitudinal_jerk_capped']):
+                        frame_data['control']['longitudinal_jerk_capped'] = int(f['control/longitudinal_jerk_capped'][control_idx]) == 1
                     if 'control/is_straight' in f and control_idx < len(f['control/is_straight']):
                         frame_data['control']['is_straight'] = int(f['control/is_straight'][control_idx]) == 1
                     if 'control/is_control_straight_proxy' in f and control_idx < len(
@@ -2394,13 +2398,22 @@ def get_compare_summary():
         return jsonify({"error": "No recordings specified"}), 400
 
     rows = []
+    first_failure_reason = None
     for filename in filenames:
         filepath = RECORDINGS_DIR / filename
         if not filepath.exists():
+            reason = f"File not found: {filename}"
+            if first_failure_reason is None:
+                first_failure_reason = reason
+            app.logger.warning(f"Compare: {reason}")
             continue
         try:
             summary = analyze_recording_summary(filepath, analyze_to_failure=analyze_to_failure)
             if not isinstance(summary, dict) or summary.get("error"):
+                reason = f"Summary invalid or error for {filename}: {summary.get('error', 'invalid')}"
+                if first_failure_reason is None:
+                    first_failure_reason = reason
+                app.logger.warning(f"Compare: skip - {reason}")
                 continue
             with h5py.File(filepath, "r") as f:
                 metadata = _read_recording_metadata_dict(f)
@@ -2422,11 +2435,11 @@ def get_compare_summary():
                 "safety_out_of_lane_events": int(summary.get("safety", {}).get("out_of_lane_events", 0)),
                 "safety_out_of_lane_time": float(summary.get("safety", {}).get("out_of_lane_time", 0.0)),
                 "stale_hard_rate": float(summary.get("perception_quality", {}).get("stale_hard_rate", 0.0)),
-                "authority_gap_mean": float(summary.get("turn_bias", {}).get("road_frame_lane_center_error_rmse", 0.0)),
+                "authority_gap_mean": float(
+                    (summary.get("turn_bias") or {}).get("road_frame_lane_center_error_rmse", 0.0)
+                ),
                 "transfer_ratio_mean": float(
-                    summary.get("diagnostic_summary", {}).get("transfer_ratio_mean", 0.0)
-                    if isinstance(summary.get("diagnostic_summary"), dict)
-                    else 0.0
+                    (summary.get("diagnostic_summary") or {}).get("transfer_ratio_mean", 0.0)
                 ),
                 "accel_p95_g": float(summary.get("comfort", {}).get("acceleration_p95_g", 0.0)),
                 "jerk_p95_gps": float(summary.get("comfort", {}).get("jerk_p95_gps", 0.0)),
@@ -2457,11 +2470,19 @@ def get_compare_summary():
                 ),
             }
             rows.append(row)
-        except Exception:
+        except Exception as e:
+            import traceback
+            reason = f"{filename}: {type(e).__name__}: {e}"
+            if first_failure_reason is None:
+                first_failure_reason = reason
+            app.logger.warning(f"Compare: skip - {reason}\n{traceback.format_exc()}")
             continue
 
     if not rows:
-        return jsonify({"error": "No comparable recordings found"}), 404
+        err_msg = "No comparable recordings found."
+        if first_failure_reason:
+            err_msg += f" First failure: {first_failure_reason}"
+        return jsonify({"error": err_msg}), 404
 
     baseline_row = None
     if baseline_name:

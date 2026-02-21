@@ -153,6 +153,18 @@ python tools/analyze/replay_control_locked.py data/recordings/input.h5 --lock-re
 
 ---
 
+#### Longitudinal Comfort Workflow (S1-M39)
+
+**Purpose:** Bring accel_p95 and jerk_p95 within Phase 1 gates (≤3.0 m/s², ≤6.0 m/s³).
+
+1. **Baseline:** `python tools/analyze/analyze_drive_overall.py --latest` — capture regression matrix.
+2. **Layer attribution (optional):** `replay_control_locked.py` — re-run control with current config; if output accel/jerk within caps but vehicle still spikes → actuator/physics; if output exceeds caps → planner or controller.
+3. **Tune:** Adjust `config/av_stack_config.yaml` (planner/controller alignment, curve slew, rate limits). See `CONFIG_GUIDE.md` Longitudinal Comfort section.
+4. **Validate:** Re-run analyzer; check PhilViz comfort section and `longitudinal_accel_capped` / `longitudinal_jerk_capped` overlay.
+5. **Compare:** PhilViz Compare tab or analyzer diff for baseline vs treatment.
+
+---
+
 #### `compare_controllock_sensitivity.py` ⭐ **CONTROL-LOCK COMPARATOR**
 **Purpose:** Summarize control-lock matrix results into a single sensitivity call.
 

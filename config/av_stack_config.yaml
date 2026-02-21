@@ -162,15 +162,15 @@ control:
     max_accel: 1.2
     max_decel: 2.4
     max_jerk: 0.7
-    max_jerk_min: 1.5
-    max_jerk_max: 6.0
+    max_jerk_min: 1.0   # S1-M39: tighter for comfort
+    max_jerk_max: 4.0
     jerk_error_min: 0.5
     jerk_error_max: 3.0
     accel_feedforward_gain: 1.0
     decel_feedforward_gain: 1.0
     speed_for_jerk_alpha: 0.8
-    jerk_cooldown_frames: 5
-    jerk_cooldown_scale: 0.5
+    jerk_cooldown_frames: 8   # S1-M39: longer cooldown after jerk cap
+    jerk_cooldown_scale: 0.4
     speed_error_to_accel_gain: 0.1
     speed_error_deadband: 0.05
     speed_error_gain_under: 0.12
@@ -202,11 +202,11 @@ control:
     continuous_accel_control: true
     continuous_accel_deadband: 0.05
     startup_ramp_seconds: 2.5
-    startup_accel_limit: 0.7
+    startup_accel_limit: 0.5   # S1-M39: softer launch
     startup_speed_threshold: 2.0
     startup_throttle_cap: 0.15
     startup_disable_accel_feedforward: true
-    low_speed_accel_limit: 0.8
+    low_speed_accel_limit: 0.6   # S1-M39
     low_speed_speed_threshold: 2.0
     target_speed: 12.0
     max_speed: 12.0
@@ -215,20 +215,20 @@ control:
     throttle_limit_threshold: 0.9
     throttle_reduction_factor: 0.15
     brake_aggression: 2.0
-    throttle_rate_limit: 0.06
-    brake_rate_limit: 0.07
-    throttle_smoothing_alpha: 0.75
+    throttle_rate_limit: 0.04   # S1-M39: smoother throttle changes
+    brake_rate_limit: 0.05
+    throttle_smoothing_alpha: 0.7   # S1-M39: more smoothing
     min_throttle_when_accel: 0.1
     min_throttle_hold: 0.16
     min_throttle_hold_speed: 4.0
     target_speed_slew_rate_up: 1.5
-    target_speed_slew_rate_down: 2.5
+    target_speed_slew_rate_down: 1.8   # S1-M39: slower decel slew
     target_speed_slew_error_min: 0.5
     target_speed_slew_error_max: 3.0
     target_speed_slew_rate_up_min: 0.6
     target_speed_slew_rate_up_max: 2.0
     target_speed_slew_rate_down_min: 1.0
-    target_speed_slew_rate_down_max: 3.0
+    target_speed_slew_rate_down_max: 2.0   # S1-M39
     target_speed_stop_threshold: 0.5
     target_speed_restart_ramp_seconds: 2.5
     launch_throttle_stop_threshold: 2.0
@@ -307,11 +307,11 @@ trajectory:
   min_speed_curvature_max: 0.02
   speed_planner:
     enabled: true
-    max_accel: 2.0
-    max_decel: 2.5
-    max_jerk: 1.2
-    max_jerk_min: 0.6
-    max_jerk_max: 1.2
+    max_accel: 1.2   # S1-M39: align with longitudinal for comfort
+    max_decel: 2.4
+    max_jerk: 0.8
+    max_jerk_min: 0.5
+    max_jerk_max: 1.0
     jerk_error_min: 0.3
     jerk_error_max: 2.0
     use_speed_dependent_limits: true
@@ -409,7 +409,7 @@ trajectory:
     curvature_history_frames: 5
     curve_preview_enabled: true
     curve_preview_lookahead_scale: 1.6
-    curve_preview_max_decel_mps2: 1.8
+    curve_preview_max_decel_mps2: 1.2   # S1-M39: gentler curve decel
     curve_preview_min_curvature: 0.002
   lane_position_smoothing_alpha: 0.20
   ref_point_jump_clamp_x: 0.15

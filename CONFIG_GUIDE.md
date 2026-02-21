@@ -109,6 +109,23 @@ control:
     brake_aggression: 2.0 # Brake PID gain multiplier
 ```
 
+#### Longitudinal Comfort (S1-M39)
+
+Phase 1 gates: **accel_p95 ≤ 3.0 m/s²**, **jerk_p95 ≤ 6.0 m/s³**. Key levers:
+
+| Parameter | Purpose | Typical range |
+|-----------|---------|---------------|
+| `max_accel` / `max_decel` | Longitudinal controller caps; planner must not exceed these | 1.2 / 2.4 m/s² |
+| `max_jerk`, `max_jerk_min`, `max_jerk_max` | Dynamic jerk cap (higher when far from target) | 0.7, 1.0–4.0 m/s³ |
+| `jerk_cooldown_frames`, `jerk_cooldown_scale` | Damp command after jerk cap triggers | 8, 0.4 |
+| `curve_preview_max_decel_mps2` (speed_governor) | Curve preview anticipatory decel limit | 1.2 m/s² |
+| `target_speed_slew_rate_down`, `target_speed_slew_rate_down_max` | How fast target speed can drop | 1.8, 2.0 m/s² |
+| `startup_accel_limit`, `low_speed_accel_limit` | Startup and low-speed smoothing | 0.5, 0.6 m/s² |
+| `throttle_rate_limit`, `brake_rate_limit` | Throttle/brake rate limiting | 0.04, 0.05 per frame |
+| `throttle_smoothing_alpha` | Low-pass filter on throttle | 0.7 |
+
+**Alignment rule:** `trajectory.speed_planner.max_accel ≤ control.longitudinal.max_accel` and `speed_planner.max_jerk ≤ longitudinal.max_jerk_max` so the planner never requests more than the controller can deliver.
+
 ### Trajectory Planning
 
 ```yaml

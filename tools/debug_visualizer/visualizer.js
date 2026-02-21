@@ -784,10 +784,18 @@ class Visualizer {
                 const option = document.createElement('option');
                 option.value = rec.filename;
                 const prov = rec.recording_provenance || {};
-                const version = prov.software_version || rec.software_version || 'unknown';
-                const sha = prov.git_sha_short || rec.git_sha_short || 'unknown';
-                const replayType = prov.replay_type || rec.replay_type || 'unknown';
-                option.textContent = `${rec.filename} | ${version} | ${sha} | ${replayType}`;
+                const orEmpty = (v) => {
+                    const s = String(v || '').trim();
+                    return (s === 'unknown' || s === '') ? '' : s;
+                };
+                const version = orEmpty(prov.software_version || rec.software_version);
+                const sha = orEmpty(prov.git_sha_short || rec.git_sha_short);
+                const replayType = orEmpty(prov.replay_type || rec.replay_type);
+                const parts = [rec.filename];
+                if (version || sha || replayType) {
+                    parts.push(version || '-', sha || '-', replayType || '-');
+                }
+                option.textContent = parts.join(' | ');
                 select.appendChild(option);
             });
 
@@ -1559,8 +1567,8 @@ class Visualizer {
                 const jerkP95FiltGps = comfort.jerk_p95_filtered_gps ?? (jerkP95FiltSI !== null ? jerkP95FiltSI / G_MPS2 : null);
                 const latAccelP95G = comfort.lateral_accel_p95_g ?? (latAccelP95SI !== null ? latAccelP95SI / G_MPS2 : null);
                 const latJerkP95Gps = comfort.lateral_jerk_p95_gps ?? (latJerkP95SI !== null ? latJerkP95SI / G_MPS2 : null);
-                const accelGateG = comfort.comfort_gate_thresholds_g?.longitudinal_accel_p95_g ?? 0.25;
-                const jerkGateGps = comfort.comfort_gate_thresholds_g?.longitudinal_jerk_p95_gps ?? 0.51;
+                const accelGateG = comfort.comfort_gate_thresholds_g?.longitudinal_accel_p95_g ?? (3.0 / 9.80665);
+                const jerkGateGps = comfort.comfort_gate_thresholds_g?.longitudinal_jerk_p95_gps ?? (6.0 / 9.80665);
                 const accelColor = accelP95G !== null ? getColorForValue(accelP95G, { good: accelGateG, acceptable: accelGateG * 1.5 }) : '#888';
                 const jerkColor = jerkP95Gps !== null ? getColorForValue(jerkP95Gps, { good: jerkGateGps, acceptable: jerkGateGps * 1.5 }) : '#888';
 
@@ -1612,10 +1620,12 @@ class Visualizer {
             if (comfort) {
                 const ctrlAccelG = comfort.acceleration_p95_g ?? null;
                 const ctrlJerkGps = comfort.jerk_p95_gps ?? null;
-                const ctrlAccelColor = ctrlAccelG === null ? '#888' : getColorForValue(ctrlAccelG, { good: 0.25, acceptable: 0.38 });
-                const ctrlJerkColor = ctrlJerkGps === null ? '#888' : getColorForValue(ctrlJerkGps, { good: 0.51, acceptable: 0.77 });
-                html += `<tr><td>Longitudinal Accel P95 (Outcome):</td><td style="text-align: right; color: ${ctrlAccelColor};">${withLimitHint(ctrlAccelG !== null ? ctrlAccelG.toFixed(2) + ' g' : '-', ctrlAccelColor, '<=0.25 g')}</td></tr>`;
-                html += `<tr><td>Longitudinal Jerk P95 (Outcome):</td><td style="text-align: right; color: ${ctrlJerkColor};">${withLimitHint(ctrlJerkGps !== null ? ctrlJerkGps.toFixed(2) + ' g/s' : '-', ctrlJerkColor, '<=0.51 g/s')}</td></tr>`;
+                const accelGateG = comfort.comfort_gate_thresholds_g?.longitudinal_accel_p95_g ?? (3.0 / 9.80665);
+                const jerkGateGps = comfort.comfort_gate_thresholds_g?.longitudinal_jerk_p95_gps ?? (6.0 / 9.80665);
+                const ctrlAccelColor = ctrlAccelG === null ? '#888' : getColorForValue(ctrlAccelG, { good: accelGateG, acceptable: accelGateG * 1.5 });
+                const ctrlJerkColor = ctrlJerkGps === null ? '#888' : getColorForValue(ctrlJerkGps, { good: jerkGateGps, acceptable: jerkGateGps * 1.5 });
+                html += `<tr><td>Longitudinal Accel P95 (Outcome):</td><td style="text-align: right; color: ${ctrlAccelColor};">${withLimitHint(ctrlAccelG !== null ? ctrlAccelG.toFixed(2) + ' g' : '-', ctrlAccelColor, `<=${accelGateG.toFixed(2)} g`)}</td></tr>`;
+                html += `<tr><td>Longitudinal Jerk P95 (Outcome):</td><td style="text-align: right; color: ${ctrlJerkColor};">${withLimitHint(ctrlJerkGps !== null ? ctrlJerkGps.toFixed(2) + ' g/s' : '-', ctrlJerkColor, `<=${jerkGateGps.toFixed(2)} g/s`)}</td></tr>`;
             }
             html += '</table></div>';
 
@@ -5720,6 +5730,14 @@ class Visualizer {
         updateField(
             'control-launch-throttle-cap-active',
             c.launch_throttle_cap_active !== undefined ? (c.launch_throttle_cap_active ? 'YES' : 'NO') : '-'
+        );
+        updateField(
+            'control-longitudinal-accel-cap-active',
+            c.longitudinal_accel_capped !== undefined ? (c.longitudinal_accel_capped ? 'YES' : 'NO') : '-'
+        );
+        updateField(
+            'control-longitudinal-jerk-cap-active',
+            c.longitudinal_jerk_capped !== undefined ? (c.longitudinal_jerk_capped ? 'YES' : 'NO') : '-'
         );
         updateField(
             'control-is-control-straight-proxy',

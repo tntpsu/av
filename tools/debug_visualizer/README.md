@@ -53,7 +53,7 @@ cd tools/debug_visualizer
 python server.py
 ```
 
-The server will start on `http://localhost:5000`.
+The server will start on `http://localhost:5001`.
 
 ### Opening the Visualizer
 
@@ -169,7 +169,7 @@ tools/debug_visualizer/
 
 ### Server Connection Issues
 
-- Ensure the server is running on port 5000
+- Ensure the server is running on port 5001
 - Check browser console for CORS errors
 - Verify the API_BASE URL in `data_loader.js` matches your server
 

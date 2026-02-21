@@ -214,7 +214,7 @@ cd tools/debug_visualizer
 python server.py
 ```
 
-The server runs on `http://localhost:5000`.
+The server runs on `http://localhost:5001`.
 
 **Open the visualizer:**
 ```bash
@@ -320,7 +320,7 @@ av/
 ├── start_av_stack.sh              # Primary startup script
 ├── launch_unity.sh                 # Unity launcher script
 ├── av_stack.py                     # Main AV stack integration
-└── config.yaml                     # Configuration file
+└── config/av_stack_config.yaml    # Configuration file
 ```
 
 ## Data Collection
@@ -394,13 +394,13 @@ See [tests/README.md](tests/README.md) for comprehensive test documentation.
 
 ## Configuration
 
-Configuration is managed through `config.yaml`. Key sections:
+Configuration is managed through `config/av_stack_config.yaml`. Key sections:
 
-- `control/`: PID gains, steering limits, rate limiting
-- `trajectory/`: Lookahead distance, smoothing parameters, bias correction
+- `control/`: PID gains, steering limits, rate limiting, longitudinal comfort (accel/jerk caps)
+- `trajectory/`: Lookahead distance, smoothing parameters, bias correction, speed planner
 - `safety/`: Emergency stop thresholds, bounds checking
 
-See [CONFIG_GUIDE.md](CONFIG_GUIDE.md) for detailed configuration options.
+See [CONFIG_GUIDE.md](CONFIG_GUIDE.md) for detailed configuration options (including Longitudinal Comfort S1-M39).
 
 ## Development
 

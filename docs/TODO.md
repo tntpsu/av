@@ -45,8 +45,18 @@
 - [x] 9 new unit tests (calibration scale, curvature history, per-radius speed), 124 total passing
 - [x] 3x E2E validation: All 100% in lane, lat RMSE 0.32m (target <0.40m achieved)
 - [x] **Next:** Steering jerk reduction — achieved via S1-M38 (max 93-123 → 47-65, P95 21-25)
-- [ ] **Next:** Comfort tuning (longitudinal accel/jerk P95)
+- [x] **Next:** Comfort tuning (longitudinal accel/jerk P95) — S1-M39 in progress
 - [ ] **Next:** Rate limit sweep: `pp_max_steering_rate` at 0.25, 0.35, 0.45
+
+## Longitudinal Comfort Tuning (S1-M39) — In Progress
+
+- [x] Phase 0: Baseline establishment (analyze_drive_overall --latest)
+- [x] Phases 1–4: Config changes (speed planner/controller alignment, curve slew, startup, rate limits)
+- [x] PhilViz updates: gate alignment (3.0 m/s², 6.0 m/s³), Accel/Jerk Cap Active overlay, v69
+- [x] Config alignment unit tests (`tests/test_config_alignment.py`)
+- [ ] E2E validation: 3x s-loop (or 1x if Unity limited)
+- [x] Documentation (CONFIG_GUIDE, tools/analyze README)
+- [ ] Test cleanup and CI fix (as needed)
 
 ## PP Steering Jerk Reduction (S1-M38) — Completed
 

@@ -850,6 +850,8 @@ class GroundTruthFollower:
                 output_dir = str(self.av_stack.recorder.output_dir)
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
                 full_name = f"{recording_name}_{timestamp}"
+                # Preserve provenance (git_sha, version, etc.) before closing original
+                provenance = dict(self.av_stack.recorder.metadata.get("recording_provenance") or {})
                 # Close the original recorder (created at AVStack init)
                 self.av_stack.recorder.close()
                 self.av_stack.recorder = DataRecorder(
@@ -859,6 +861,7 @@ class GroundTruthFollower:
                 )
                 self.av_stack.recorder.metadata["recording_type"] = "gt_drive"
                 self.av_stack.recorder.metadata["stream_sync_policy"] = self.stream_sync_policy
+                self.av_stack.recorder.metadata["recording_provenance"] = provenance
                 logger.info(f"Using recording name: {full_name}")
             except Exception as e:
                 logger.error(f"Failed to reset recorder name: {e}", exc_info=True)
