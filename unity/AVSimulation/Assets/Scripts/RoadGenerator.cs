@@ -78,6 +78,7 @@ public class RoadGenerator : MonoBehaviour
     private List<GameObject> generatedObjects = new List<GameObject>();
     private bool hasGenerated = false;
     private TrackPath trackPath = null;
+    public TrackPath TrackPath => trackPath;
     private TrackConfig activeTrackConfig = null;
     
     void OnEnable()
@@ -708,43 +709,52 @@ public class RoadGenerator : MonoBehaviour
 
     GameObject CreateDashedLaneLineFromPath(string name, float offsetFromCenter, Material material)
     {
-        GameObject dashedLineParent = new GameObject(name);
-        dashedLineParent.transform.SetParent(transform);
-
         List<Vector3> pathPoints = SampleOffsetPoints(trackPath, offsetFromCenter, 0.5f);
-        List<float> cumulativeDistances = new List<float>();
-        cumulativeDistances.Add(0f);
-        for (int i = 1; i < pathPoints.Count; i++)
+        if (pathPoints.Count < 2)
         {
-            float dist = Vector3.Distance(pathPoints[i - 1], pathPoints[i]);
-            cumulativeDistances.Add(cumulativeDistances[i - 1] + dist);
+            GameObject empty = new GameObject(name);
+            empty.transform.SetParent(transform);
+            return empty;
         }
 
-        float totalLength = cumulativeDistances[cumulativeDistances.Count - 1];
+        // Build cumulative distances once (O(N))
+        float[] cumDist = new float[pathPoints.Count];
+        cumDist[0] = 0f;
+        for (int i = 1; i < pathPoints.Count; i++)
+            cumDist[i] = cumDist[i - 1] + Vector3.Distance(pathPoints[i - 1], pathPoints[i]);
+
+        float totalLength = cumDist[pathPoints.Count - 1];
+
+        // Collect all dash meshes, then combine into one GameObject.
+        // Previously each dash was its own GameObject (~1870 for highway_65), causing a
+        // multi-second Unity hitch on Start(). A single combined mesh avoids that.
+        List<CombineInstance> combineInstances = new List<CombineInstance>();
+
         float currentDistance = 0f;
         bool isDash = true;
+        int ptr = 0; // walking pointer — O(N) total, not O(N) per dash
 
         while (currentDistance < totalLength)
         {
             float segmentDistance = isDash ? dashLength : gapLength;
-            float endDistance = currentDistance + segmentDistance;
+            float endDistance = Mathf.Min(currentDistance + segmentDistance, totalLength);
+
+            // Advance ptr to first point at or past currentDistance
+            while (ptr < pathPoints.Count - 1 && cumDist[ptr + 1] < currentDistance)
+                ptr++;
 
             if (isDash)
             {
                 List<Vector3> dashPoints = new List<Vector3>();
-                for (int i = 0; i < pathPoints.Count; i++)
-                {
-                    if (cumulativeDistances[i] >= currentDistance && cumulativeDistances[i] <= endDistance)
-                    {
-                        dashPoints.Add(pathPoints[i]);
-                    }
-                }
+                for (int i = ptr; i < pathPoints.Count && cumDist[i] <= endDistance; i++)
+                    dashPoints.Add(pathPoints[i]);
 
                 if (dashPoints.Count >= 2)
                 {
-                    GameObject dash = CreateLineObject($"{name}_dash", dashPoints, material);
-                    dash.transform.SetParent(dashedLineParent.transform);
-                    generatedObjects.Add(dash);
+                    CombineInstance ci = new CombineInstance();
+                    ci.mesh = CreateLineMesh(dashPoints, laneLineWidth);
+                    ci.transform = Matrix4x4.identity;
+                    combineInstances.Add(ci);
                 }
             }
 
@@ -752,7 +762,30 @@ public class RoadGenerator : MonoBehaviour
             isDash = !isDash;
         }
 
-        return dashedLineParent;
+        // Build single combined mesh
+        Mesh combinedMesh = new Mesh();
+        combinedMesh.name = $"{name}Mesh";
+        combinedMesh.indexFormat = UnityEngine.Rendering.IndexFormat.UInt32; // safe for large tracks
+        if (combineInstances.Count > 0)
+            combinedMesh.CombineMeshes(combineInstances.ToArray(), true, true);
+
+        GameObject dashedLine = new GameObject(name);
+        dashedLine.transform.SetParent(transform);
+        MeshFilter meshFilter = dashedLine.AddComponent<MeshFilter>();
+        MeshRenderer meshRenderer = dashedLine.AddComponent<MeshRenderer>();
+        meshFilter.mesh = combinedMesh;
+
+        if (material != null)
+            meshRenderer.material = material;
+        else
+        {
+            Material defaultMaterial = new Material(Shader.Find("Universal Render Pipeline/Lit"));
+            defaultMaterial.color = Color.white;
+            meshRenderer.material = defaultMaterial;
+        }
+
+        generatedObjects.Add(dashedLine);
+        return dashedLine;
     }
 
     GameObject CreateLineObject(string name, List<Vector3> points, Material material)

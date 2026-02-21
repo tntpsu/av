@@ -585,22 +585,24 @@ public class GroundTruthReporter : MonoBehaviour
     float FindTFromDistance(float targetDistance)
     {
         if (roadGenerator == null) return 0f;
-        
+
+        // Fast path: for YAML tracks t maps linearly to arc distance, so inversion is O(1).
+        TrackPath tp = roadGenerator.TrackPath;
+        if (tp != null && tp.TotalLength > 0f)
+            return Mathf.Clamp01(targetDistance / tp.TotalLength);
+
         // Handle edge cases
         if (targetDistance < 0f)
         {
-            // Negative distance is invalid - clamp to 0
             targetDistance = 0f;
         }
-        
+
         // Special case: distance = 0 means t = 0 (start of path)
-        if (targetDistance <= 0.001f) // Use small epsilon to handle floating point precision
+        if (targetDistance <= 0.001f)
         {
             return 0f;
         }
-        
-        // Use ovalPathLength directly (now that GetDistanceAlongPath uses matching sampling)
-        // Both CalculateOvalPathLength() and GetDistanceAlongPath(0f, 1f) should now match
+
         float actualPathLength = ovalPathLength;
         
         // Handle case when targetDistance is very close to or exceeds actual path length
@@ -668,18 +670,18 @@ public class GroundTruthReporter : MonoBehaviour
     float GetDistanceAlongPath(float t0, float t1)
     {
         if (roadGenerator == null) return 0f;
-        
-        // CRITICAL FIX: Always use FIXED 1000 samples for consistency
-        // This ensures GetDistanceAlongPath(0f, t) always uses the same precision
-        // regardless of t value, which is critical for binary search convergence.
-        // Variable sampling causes inconsistent distance calculations that break
-        // binary search (e.g., GetDistanceAlongPath(0f, 0.5) uses 500 samples but
-        // GetDistanceAlongPath(0f, 0.25) uses 250 samples = inconsistent precision).
-        const int SAMPLES = 1000;  // Always use 1000 samples, matching CalculateOvalPathLength()
-        
+
+        // Fast path: for YAML tracks the TrackPath parameter t maps linearly to arc distance
+        // (t * TotalLength = arc distance), so the length of arc [t0, t1] is trivially O(1).
+        TrackPath tp = roadGenerator.TrackPath;
+        if (tp != null && tp.TotalLength > 0f)
+            return Mathf.Abs(t1 - t0) * tp.TotalLength;
+
+        // Fallback: 1000-sample numerical integration for the built-in oval shape,
+        // where t does NOT map linearly to arc distance.
+        const int SAMPLES = 1000;
         float distance = 0f;
         Vector3 prevPoint = roadGenerator.GetOvalCenterPoint(t0);
-        
         for (int i = 1; i <= SAMPLES; i++)
         {
             float t = Mathf.Lerp(t0, t1, (float)i / SAMPLES);
@@ -687,7 +689,6 @@ public class GroundTruthReporter : MonoBehaviour
             distance += Vector3.Distance(prevPoint, currentPoint);
             prevPoint = currentPoint;
         }
-        
         return distance;
     }
     
@@ -698,26 +699,42 @@ public class GroundTruthReporter : MonoBehaviour
     float FindClosestPointOnOval(Vector3 carPosition)
     {
         if (roadGenerator == null) return 0f;
-        
-        // Sample points around the oval to find closest
+
+        // Fast path: for YAML tracks, iterate directly over pre-sampled TrackPath.Points
+        // (already in memory) using sqrMagnitude comparisons. This is O(N) with a trivially
+        // small constant — no GetOvalCenterPoint calls, no secondary linear scans.
+        TrackPath tp = roadGenerator.TrackPath;
+        if (tp != null && tp.Points != null && tp.Points.Count > 0 && tp.TotalLength > 0f)
+        {
+            float bestSqDist = float.MaxValue;
+            int bestIdx = 0;
+            for (int i = 0; i < tp.Points.Count; i++)
+            {
+                float sqd = (carPosition - tp.Points[i]).sqrMagnitude;
+                if (sqd < bestSqDist)
+                {
+                    bestSqDist = sqd;
+                    bestIdx = i;
+                }
+            }
+            return tp.Distances[bestIdx] / tp.TotalLength;
+        }
+
+        // Fallback: sample-based search for the built-in oval (no TrackPath).
         float bestT = 0f;
         float bestDistance = float.MaxValue;
-        
-        // Sample at higher resolution for accuracy
-        int samples = 200;
+        int samples = Mathf.Max(200, Mathf.CeilToInt(ovalPathLength / 2.0f));
         for (int i = 0; i < samples; i++)
         {
             float t = (float)i / samples;
             Vector3 point = roadGenerator.GetOvalCenterPoint(t);
             float distance = Vector3.Distance(carPosition, point);
-            
             if (distance < bestDistance)
             {
                 bestDistance = distance;
                 bestT = t;
             }
         }
-        
         return bestT;
     }
     

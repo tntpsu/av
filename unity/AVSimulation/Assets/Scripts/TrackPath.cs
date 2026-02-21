@@ -93,14 +93,18 @@ public class TrackPath
 
     private int FindSegmentIndex(float distance)
     {
-        for (int i = 1; i < Distances.Count; i++)
+        // Binary search on sorted Distances — O(log N) vs the previous O(N) linear scan.
+        // Critical for large tracks (e.g. highway_65 with 7012 points).
+        int lo = 1, hi = Distances.Count - 1;
+        while (lo < hi)
         {
-            if (Distances[i] >= distance)
-            {
-                return i;
-            }
+            int mid = (lo + hi) >> 1;
+            if (Distances[mid] < distance)
+                lo = mid + 1;
+            else
+                hi = mid;
         }
-        return Distances.Count - 1;
+        return lo;
     }
 
 }
