@@ -4,6 +4,104 @@ import math
 from typing import Iterable, Mapping, Sequence, Tuple
 
 
+def _parse_reference_lookahead_speed_table(
+    config: Mapping[str, object],
+) -> list[tuple[float, float]]:
+    """Parse optional speed-indexed lookahead table from config."""
+    table_raw = config.get("reference_lookahead_speed_table")
+    if not isinstance(table_raw, Sequence) or isinstance(table_raw, (str, bytes)):
+        return []
+
+    parsed: list[tuple[float, float]] = []
+    for item in table_raw:
+        if not isinstance(item, Mapping):
+            continue
+        lookahead_raw = item.get("lookahead_m")
+        if lookahead_raw is None:
+            continue
+        speed_raw = item.get("speed_mps")
+        if speed_raw is None and "speed_mph" in item:
+            try:
+                speed_raw = float(item.get("speed_mph")) * 0.44704
+            except (TypeError, ValueError):
+                speed_raw = None
+        if speed_raw is None:
+            continue
+        try:
+            speed = float(speed_raw)
+            lookahead = float(lookahead_raw)
+        except (TypeError, ValueError):
+            continue
+        if not math.isfinite(speed) or not math.isfinite(lookahead):
+            continue
+        parsed.append((max(0.0, speed), max(0.1, lookahead)))
+
+    if not parsed:
+        return []
+
+    parsed.sort(key=lambda entry: entry[0])
+    deduped: list[tuple[float, float]] = []
+    for speed, lookahead in parsed:
+        if deduped and abs(speed - deduped[-1][0]) < 1e-6:
+            deduped[-1] = (speed, lookahead)
+        else:
+            deduped.append((speed, lookahead))
+    return deduped
+
+
+def _interpolate_reference_lookahead_for_speed(
+    speed_mps: float,
+    speed_table: Sequence[tuple[float, float]],
+) -> float:
+    """Linearly interpolate lookahead from a sorted speed table."""
+    speed = max(0.0, float(speed_mps))
+    if speed <= speed_table[0][0]:
+        return speed_table[0][1]
+    if speed >= speed_table[-1][0]:
+        return speed_table[-1][1]
+    for idx in range(1, len(speed_table)):
+        left_speed, left_lookahead = speed_table[idx - 1]
+        right_speed, right_lookahead = speed_table[idx]
+        if speed <= right_speed:
+            denom = max(1e-6, right_speed - left_speed)
+            ratio = (speed - left_speed) / denom
+            return left_lookahead + ratio * (right_lookahead - left_lookahead)
+    return speed_table[-1][1]
+
+
+def _compute_tight_curve_scale(abs_curvature: float, config: Mapping[str, object]) -> float:
+    """
+    Compute tight-curve lookahead scale with optional smooth blending near threshold.
+
+    When reference_lookahead_tight_blend_band > 0, the tight-curve scale is blended
+    with a smoothstep transition around reference_lookahead_tight_curvature_threshold.
+    """
+    threshold = float(config.get("reference_lookahead_tight_curvature_threshold", 0.0))
+    if threshold <= 0.0:
+        return 1.0
+
+    tight_scale = float(config.get("reference_lookahead_tight_scale", 1.0))
+    tight_scale = max(0.1, min(1.0, tight_scale))
+    blend_band = max(0.0, float(config.get("reference_lookahead_tight_blend_band", 0.0)))
+
+    abs_curv = abs(float(abs_curvature))
+    if blend_band <= 1e-6:
+        return tight_scale if abs_curv >= threshold else 1.0
+
+    half_band = 0.5 * blend_band
+    lower = max(0.0, threshold - half_band)
+    upper = threshold + half_band
+    if abs_curv <= lower:
+        return 1.0
+    if abs_curv >= upper:
+        return tight_scale
+
+    ratio = (abs_curv - lower) / max(1e-6, upper - lower)
+    # Smoothstep keeps slope continuous at band edges.
+    blend = ratio * ratio * (3.0 - 2.0 * ratio)
+    return 1.0 + (tight_scale - 1.0) * blend
+
+
 def compute_reference_lookahead(
     base_lookahead: float,
     current_speed: float,
@@ -13,11 +111,20 @@ def compute_reference_lookahead(
     """
     Compute a dynamic reference lookahead based on speed and curvature.
 
-    Shorter lookahead increases responsiveness on gentle curves at higher speeds,
-    while preserving the base lookahead on sharper curves and low speeds.
+    If a speed table is configured, it becomes the source of truth for speed-vs-lookahead.
+    Otherwise, legacy scale-based dynamic lookahead is used.
     """
     if not config.get("dynamic_reference_lookahead", False):
         return base_lookahead
+
+    min_lookahead = float(config.get("reference_lookahead_min", 4.0))
+    min_lookahead = max(0.1, min_lookahead)
+
+    speed_table = _parse_reference_lookahead_speed_table(config)
+    if speed_table:
+        lookahead = _interpolate_reference_lookahead_for_speed(current_speed, speed_table)
+        lookahead *= _compute_tight_curve_scale(abs(path_curvature), config)
+        return max(min_lookahead, lookahead)
 
     scale_min = float(config.get("reference_lookahead_scale_min", 0.7))
     scale_min = max(0.1, min(1.0, scale_min))
@@ -48,14 +155,8 @@ def compute_reference_lookahead(
             curv_scale = scale_min + ratio * (1.0 - scale_min)
         scale = min(scale, curv_scale)
 
-    tight_curv_threshold = float(config.get("reference_lookahead_tight_curvature_threshold", 0.0))
-    tight_scale = float(config.get("reference_lookahead_tight_scale", 1.0))
-    if tight_curv_threshold > 0.0 and abs_curv >= tight_curv_threshold:
-        tight_scale = max(0.1, min(1.0, tight_scale))
-        scale = min(scale, tight_scale)
+    scale = min(scale, _compute_tight_curve_scale(abs_curv, config))
 
-    min_lookahead = float(config.get("reference_lookahead_min", 4.0))
-    min_lookahead = max(0.1, min_lookahead)
     return max(min_lookahead, base_lookahead * scale)
 
 

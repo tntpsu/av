@@ -244,6 +244,21 @@ trajectory:
   target_speed: 12.0
   reference_lookahead: 9.0
   dynamic_reference_lookahead: true
+  # Speed-indexed source of truth for lookahead (interpolated in m/s).
+  # When provided, this table overrides legacy scale-based speed lookahead tuning.
+  reference_lookahead_speed_table:
+  - speed_mps: 0.0
+    lookahead_m: 7.0
+  - speed_mps: 4.47
+    lookahead_m: 9.0
+  - speed_mps: 6.71
+    lookahead_m: 12.0
+  - speed_mps: 8.94
+    lookahead_m: 15.0
+  - speed_mps: 11.18
+    lookahead_m: 18.0
+  - speed_mps: 13.41
+    lookahead_m: 22.0
   reference_lookahead_min: 2.5
   reference_lookahead_scale_min: 0.80
   reference_lookahead_speed_min: 4.0
@@ -251,7 +266,8 @@ trajectory:
   reference_lookahead_curvature_min: 0.002
   reference_lookahead_curvature_max: 0.015
   reference_lookahead_tight_curvature_threshold: 0.01
-  reference_lookahead_tight_scale: 0.55
+  reference_lookahead_tight_scale: 0.35
+  reference_lookahead_tight_blend_band: 0.006
   use_vehicle_frame_lookahead_ref: false
   vehicle_frame_lookahead_scale: 1.0
   vehicle_frame_lookahead_scale_left: 1.0

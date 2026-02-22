@@ -63,6 +63,111 @@ def test_reference_lookahead_tight_curve_scale() -> None:
     assert lookahead == pytest.approx(8.0, rel=1e-3)
 
 
+def test_reference_lookahead_speed_table_interpolates() -> None:
+    config = {
+        "dynamic_reference_lookahead": True,
+        "reference_lookahead_min": 2.5,
+        "reference_lookahead_speed_table": [
+            {"speed_mps": 0.0, "lookahead_m": 7.0},
+            {"speed_mps": 5.0, "lookahead_m": 10.0},
+            {"speed_mps": 10.0, "lookahead_m": 16.0},
+        ],
+    }
+
+    lookahead = compute_reference_lookahead(
+        base_lookahead=9.0,
+        current_speed=7.5,
+        path_curvature=0.001,
+        config=config,
+    )
+
+    assert lookahead == pytest.approx(13.0, rel=1e-3)
+
+
+def test_reference_lookahead_speed_table_uses_tight_curve_scale() -> None:
+    config = {
+        "dynamic_reference_lookahead": True,
+        "reference_lookahead_min": 2.5,
+        "reference_lookahead_speed_table": [
+            {"speed_mps": 0.0, "lookahead_m": 7.0},
+            {"speed_mps": 10.0, "lookahead_m": 16.0},
+        ],
+        "reference_lookahead_tight_curvature_threshold": 0.02,
+        "reference_lookahead_tight_scale": 0.75,
+    }
+
+    lookahead = compute_reference_lookahead(
+        base_lookahead=9.0,
+        current_speed=10.0,
+        path_curvature=0.03,
+        config=config,
+    )
+
+    assert lookahead == pytest.approx(12.0, rel=1e-3)
+
+
+def test_reference_lookahead_speed_table_overrides_legacy_scaling() -> None:
+    config = {
+        "dynamic_reference_lookahead": True,
+        "reference_lookahead_min": 2.5,
+        "reference_lookahead_scale_min": 0.2,
+        "reference_lookahead_speed_min": 0.0,
+        "reference_lookahead_speed_max": 10.0,
+        "reference_lookahead_curvature_min": 0.0,
+        "reference_lookahead_curvature_max": 0.01,
+        "reference_lookahead_speed_table": [
+            {"speed_mps": 0.0, "lookahead_m": 7.0},
+            {"speed_mps": 10.0, "lookahead_m": 16.0},
+        ],
+    }
+
+    lookahead = compute_reference_lookahead(
+        base_lookahead=9.0,
+        current_speed=10.0,
+        path_curvature=0.0,
+        config=config,
+    )
+
+    assert lookahead == pytest.approx(16.0, rel=1e-3)
+
+
+def test_reference_lookahead_tight_curve_blend_band_smooths_transition() -> None:
+    config = {
+        "dynamic_reference_lookahead": True,
+        "reference_lookahead_min": 2.5,
+        "reference_lookahead_speed_table": [
+            {"speed_mps": 10.0, "lookahead_m": 16.0},
+        ],
+        "reference_lookahead_tight_curvature_threshold": 0.02,
+        "reference_lookahead_tight_scale": 0.5,
+        "reference_lookahead_tight_blend_band": 0.01,
+    }
+
+    lookahead_below = compute_reference_lookahead(
+        base_lookahead=9.0,
+        current_speed=10.0,
+        path_curvature=0.014,
+        config=config,
+    )
+    lookahead_mid = compute_reference_lookahead(
+        base_lookahead=9.0,
+        current_speed=10.0,
+        path_curvature=0.020,
+        config=config,
+    )
+    lookahead_above = compute_reference_lookahead(
+        base_lookahead=9.0,
+        current_speed=10.0,
+        path_curvature=0.026,
+        config=config,
+    )
+
+    assert lookahead_below == pytest.approx(16.0, rel=1e-3)
+    assert lookahead_mid == pytest.approx(12.0, rel=1e-3)
+    assert lookahead_above == pytest.approx(8.0, rel=1e-3)
+    assert lookahead_below > lookahead_mid > lookahead_above
+
+
 def test_stanley_mode_uses_heading_and_crosstrack() -> None:
     controller = LateralController(
         control_mode="stanley",
