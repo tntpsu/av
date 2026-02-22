@@ -26,10 +26,13 @@ from perception.inference import LaneDetectionInference
 from trajectory.inference import TrajectoryPlanningInference
 from trajectory.speed_planner import SpeedPlanner, SpeedPlannerConfig
 from trajectory.utils import (
+    compute_curve_phase_scheduler,
     compute_reference_lookahead,
+    compute_curve_anticipation_score,
     compute_dynamic_effective_horizon,
     apply_speed_horizon_guardrail,
     curvature_smoothing_alpha,
+    resolve_curve_scheduler_mode,
     select_curvature_bin_limits,
 )
 from control.pid_controller import VehicleController
@@ -519,7 +522,8 @@ class AVStack:
                  recording_dir: str = "data/recordings",
                  config_path: Optional[str] = None,
                  use_segmentation: bool = False,
-                 segmentation_model_path: Optional[str] = None):
+                 segmentation_model_path: Optional[str] = None,
+                 track_yaml_path: Optional[str] = None):
         """
         Initialize AV stack.
         
@@ -672,6 +676,9 @@ class AVStack:
             ),
             heading_zero_curvature_guard=trajectory_cfg.get(
                 'heading_zero_curvature_guard', 0.002
+            ),
+            direct_reference_curvature_gain=trajectory_cfg.get(
+                'direct_reference_curvature_gain', 1.2
             ),
             smoothing_alpha_curve_reduction=trajectory_cfg.get(
                 'smoothing_alpha_curve_reduction', 0.15
@@ -843,8 +850,26 @@ class AVStack:
                 lateral_cfg.get('curve_phase_use_distance_track', False)
             ),
             curve_phase_track_name=lateral_cfg.get('curve_phase_track_name'),
+            curve_phase_use_preview_curvature=bool(
+                lateral_cfg.get('curve_phase_use_preview_curvature', True)
+            ),
+            curve_phase_preview_enter_threshold=lateral_cfg.get(
+                'curve_phase_preview_enter_threshold'
+            ),
+            curve_phase_preview_exit_threshold=lateral_cfg.get(
+                'curve_phase_preview_exit_threshold'
+            ),
+            curve_phase_preview_on_frames=int(
+                lateral_cfg.get('curve_phase_preview_on_frames', 1)
+            ),
+            curve_phase_preview_off_frames=int(
+                lateral_cfg.get('curve_phase_preview_off_frames', 2)
+            ),
             curve_at_car_distance_min_m=float(
                 lateral_cfg.get('curve_at_car_distance_min_m', 0.0)
+            ),
+            curve_intent_single_owner_mode=bool(
+                lateral_cfg.get('curve_intent_single_owner_mode', True)
             ),
             road_curve_enter_threshold=lateral_cfg.get('road_curve_enter_threshold'),
             road_curve_exit_threshold=lateral_cfg.get('road_curve_exit_threshold'),
@@ -1383,6 +1408,435 @@ class AVStack:
         )
         self.smoothed_path_curvature: Optional[float] = None
         self.last_curvature_time: Optional[float] = None
+        self._last_reference_lookahead: Optional[float] = None
+        self._last_reference_lookahead_diag: dict = {}
+        self._curve_scheduler_mode = resolve_curve_scheduler_mode(
+            config=trajectory_cfg,
+        )
+        self._curve_phase_scheduler_state: dict[str, object] = {
+            "curve_phase": 0.0,
+            "curve_phase_state": "STRAIGHT",
+            "curve_phase_entry_frames": 0,
+            "curve_phase_rearm_hold_frames": 0,
+        }
+        self._last_curve_phase_preview_curvature_abs = 0.0
+
+        # Entry preview source for dynamic reference lookahead.
+        self._reference_entry_source = str(
+            trajectory_cfg.get('reference_lookahead_entry_source', 'map_free')
+        ).strip().lower()
+        if self._reference_entry_source not in {'map_free', 'track', 'auto'}:
+            self._reference_entry_source = 'map_free'
+        self._reference_entry_preview_scale = float(
+            trajectory_cfg.get('reference_lookahead_entry_preview_scale', 1.5)
+        )
+        # Optional track profile remains available for explicit/auto modes.
+        self._reference_entry_track_name = str(
+            trajectory_cfg.get(
+                'reference_lookahead_entry_track_name',
+                lateral_cfg.get('curve_phase_track_name', ''),
+            )
+        ).strip()
+        self._reference_entry_track_total_length_m: Optional[float] = None
+        self._reference_entry_track_curves: list[dict] = []
+        # Runtime --track-yaml overrides the config track name so every run
+        # automatically picks up the correct geometry without config edits.
+        if track_yaml_path:
+            self._reference_entry_track_name = Path(track_yaml_path).stem
+        self._load_reference_entry_track_profile(self._reference_entry_track_name)
+
+        # Canonical map-free curve anticipation (trajectory-owned signal).
+        self.curve_anticipation_enabled = bool(
+            trajectory_cfg.get('curve_anticipation_enabled', False)
+        )
+        self.curve_anticipation_shadow_only = bool(
+            trajectory_cfg.get('curve_anticipation_shadow_only', True)
+        )
+        self.curve_anticipation_single_owner_mode = bool(
+            trajectory_cfg.get('curve_anticipation_single_owner_mode', False)
+        )
+        self._curve_anticipation_score_filtered = 0.0
+        self._curve_anticipation_active = False
+        self._curve_anticipation_on_counter = 0
+        self._curve_anticipation_off_counter = 0
+        self._curve_anticipation_prev_far_metric = None
+
+    def _load_reference_entry_track_profile(self, track_name: str) -> None:
+        """Load curve windows (with curvature) for lookahead entry preview."""
+        self._reference_entry_track_total_length_m = None
+        self._reference_entry_track_curves = []
+        if not track_name:
+            return
+
+        track_path = Path(__file__).resolve().parent / "tracks" / f"{track_name}.yml"
+        if not track_path.exists():
+            logger.warning(
+                "[LOOKAHEAD_ENTRY] Track YAML not found for '%s': %s",
+                track_name,
+                track_path,
+            )
+            return
+
+        try:
+            with open(track_path, "r") as f:
+                cfg = yaml.safe_load(f) or {}
+
+            distance_cursor = 0.0
+            curves: list[dict] = []
+            for segment in cfg.get("segments", []) or []:
+                seg = segment or {}
+                seg_type = str(seg.get("type", "straight")).strip().lower()
+                if seg_type == "arc":
+                    radius_m = float(seg.get("radius", 0.0) or 0.0)
+                    angle_deg = float(seg.get("angle_deg", seg.get("angle", 0.0)) or 0.0)
+                    seg_len = max(0.0, abs(radius_m) * math.radians(abs(angle_deg)))
+                    curvature_abs = (1.0 / abs(radius_m)) if abs(radius_m) > 1e-6 else 0.0
+                    curves.append(
+                        {
+                            "start_m": float(distance_cursor),
+                            "end_m": float(distance_cursor + seg_len),
+                            "curvature_abs": float(curvature_abs),
+                        }
+                    )
+                else:
+                    seg_len = max(0.0, float(seg.get("length", 0.0) or 0.0))
+                distance_cursor += seg_len
+
+            if distance_cursor > 1e-3 and curves:
+                self._reference_entry_track_total_length_m = float(distance_cursor)
+                self._reference_entry_track_curves = curves
+                logger.info(
+                    "[LOOKAHEAD_ENTRY] Loaded track profile '%s' curves=%d total=%.2fm",
+                    track_name,
+                    len(curves),
+                    self._reference_entry_track_total_length_m,
+                )
+        except Exception as exc:
+            logger.warning("[LOOKAHEAD_ENTRY] Failed to load track profile '%s': %s", track_name, exc)
+            self._reference_entry_track_total_length_m = None
+            self._reference_entry_track_curves = []
+
+    def _compute_reference_entry_preview(
+        self,
+        vehicle_state_dict: dict,
+        lane_coeffs: object,
+        base_lookahead_m: float,
+        path_curvature: float,
+        current_speed_mps: float,
+    ) -> dict:
+        """
+        Compute upcoming-curve preview for reference-lookahead scheduling.
+
+        Default mode is map-free (lane preview + current curvature). Optional
+        track mode can supply distance-to-curve when explicitly configured.
+        """
+        preview_curvature_abs = abs(float(path_curvature))
+        path_curvature_abs = abs(float(path_curvature))
+        preview_source = "path_curvature"
+        distance_to_curve_start_m = None
+        time_to_curve_s = None
+        preview_confidence = np.nan
+
+        try:
+            if lane_coeffs is not None:
+                curve_context = self.trajectory_planner.get_curve_context(
+                    lane_coeffs,
+                    base_lookahead=float(base_lookahead_m),
+                    horizon_m=float(
+                        self.trajectory_config.get(
+                            "curve_context_preview_horizon_m",
+                            max(25.0, float(base_lookahead_m) * 2.5),
+                        )
+                    ),
+                    step_m=float(
+                        self.trajectory_config.get("curve_context_preview_step_m", 1.0)
+                    ),
+                    curve_start_curvature=float(
+                        self.trajectory_config.get(
+                            "curve_context_curve_start_curvature",
+                            self.trajectory_config.get(
+                                "reference_lookahead_entry_preview_curvature_min",
+                                0.006,
+                            ),
+                        )
+                    ),
+                    curvature_gain=float(
+                        self.trajectory_config.get("curve_context_curvature_gain", 6.0)
+                    ),
+                    current_speed_mps=float(current_speed_mps),
+                )
+                if isinstance(curve_context, dict) and bool(curve_context.get("valid", False)):
+                    preview_curvature_abs = float(
+                        curve_context.get("preview_curvature_abs", preview_curvature_abs)
+                    )
+                    path_curvature_abs = float(
+                        curve_context.get("path_curvature_abs", path_curvature_abs)
+                    )
+                    distance_to_curve_start_m = curve_context.get("distance_to_curve_start_m")
+                    time_to_curve_s = curve_context.get("time_to_curve_s")
+                    preview_confidence = float(curve_context.get("confidence", np.nan))
+                    preview_source = str(curve_context.get("source", "horizon_profile"))
+        except Exception:
+            pass
+
+        try:
+            if lane_coeffs is not None:
+                preview_lookahead = max(
+                    0.5,
+                    float(base_lookahead_m) * max(1.0, float(self._reference_entry_preview_scale)),
+                )
+                lane_preview = self.trajectory_planner.get_curvature_at_lookahead(
+                    lane_coeffs,
+                    preview_lookahead,
+                )
+                if lane_preview is not None and math.isfinite(float(lane_preview)):
+                    lane_preview_abs = abs(float(lane_preview))
+                    if lane_preview_abs > preview_curvature_abs:
+                        preview_curvature_abs = lane_preview_abs
+                        preview_source = "lane_preview"
+        except Exception:
+            pass
+
+        in_curve_threshold = float(
+            self.trajectory_config.get(
+                "reference_lookahead_entry_hysteresis_on",
+                self.trajectory_config.get("reference_lookahead_entry_preview_curvature_min", 0.0),
+            )
+        )
+        result = {
+            "distance_to_curve_start_m": (
+                float(distance_to_curve_start_m)
+                if isinstance(distance_to_curve_start_m, (int, float))
+                and math.isfinite(float(distance_to_curve_start_m))
+                else None
+            ),
+            "preview_curvature_abs": float(preview_curvature_abs),
+            "path_curvature_abs": float(path_curvature_abs),
+            "time_to_curve_s": (
+                float(time_to_curve_s)
+                if isinstance(time_to_curve_s, (int, float)) and math.isfinite(float(time_to_curve_s))
+                else None
+            ),
+            "confidence": (
+                float(preview_confidence)
+                if isinstance(preview_confidence, (int, float))
+                and math.isfinite(float(preview_confidence))
+                else np.nan
+            ),
+            "in_curve": bool(
+                in_curve_threshold > 0.0 and abs(float(path_curvature)) >= in_curve_threshold
+            ),
+            "source": preview_source,
+        }
+        if self._reference_entry_source == "map_free":
+            return result
+
+        total = self._reference_entry_track_total_length_m
+        curves = self._reference_entry_track_curves
+        if total is None or not curves:
+            return result
+
+        road_t_raw = vehicle_state_dict.get("roadCenterReferenceT")
+        if road_t_raw is None:
+            road_t_raw = vehicle_state_dict.get("road_center_reference_t")
+        if not isinstance(road_t_raw, (int, float)):
+            return result
+        road_t = float(road_t_raw)
+        if not math.isfinite(road_t):
+            return result
+
+        if road_t > 1.5:
+            distance_m = road_t % float(total)
+        else:
+            distance_m = (road_t % 1.0) * float(total)
+
+        current_curve = None
+        for curve in curves:
+            if float(curve["start_m"]) <= distance_m < float(curve["end_m"]):
+                current_curve = curve
+                break
+
+        if current_curve is not None:
+            track_curvature_abs = float(current_curve["curvature_abs"])
+            if self._reference_entry_source == "track":
+                result["preview_curvature_abs"] = track_curvature_abs
+                result["source"] = "track"
+            else:
+                result["preview_curvature_abs"] = max(
+                    float(result["preview_curvature_abs"]),
+                    track_curvature_abs,
+                )
+                result["source"] = f"{preview_source}+track"
+            result["distance_to_curve_start_m"] = 0.0
+            result["in_curve"] = True
+            result["track_distance_m"] = float(distance_m)
+            return result
+
+        next_curve = None
+        next_delta = None
+        for curve in curves:
+            delta = float(curve["start_m"]) - float(distance_m)
+            if delta < 0.0:
+                delta += float(total)
+            if next_delta is None or delta < next_delta:
+                next_delta = delta
+                next_curve = curve
+
+        if next_curve is None or next_delta is None:
+            return result
+
+        track_curvature_abs = float(next_curve["curvature_abs"])
+        if self._reference_entry_source == "track":
+            result["preview_curvature_abs"] = track_curvature_abs
+            result["source"] = "track"
+        else:
+            result["preview_curvature_abs"] = max(
+                float(result["preview_curvature_abs"]),
+                track_curvature_abs,
+            )
+            result["source"] = f"{preview_source}+track"
+        result["distance_to_curve_start_m"] = float(next_delta)
+        result["in_curve"] = False
+        result["track_distance_m"] = float(distance_m)
+        return result
+
+    def _update_curve_anticipation_state(self, score_raw: float) -> tuple[float, bool]:
+        """Apply EMA + hysteresis persistence to the anticipation score."""
+        if not self.curve_anticipation_enabled:
+            self._curve_anticipation_score_filtered = 0.0
+            self._curve_anticipation_active = False
+            self._curve_anticipation_on_counter = 0
+            self._curve_anticipation_off_counter = 0
+            return 0.0, False
+
+        alpha = float(
+            self.trajectory_config.get('curve_anticipation_score_ema_alpha', 0.35)
+        )
+        alpha = max(0.0, min(1.0, alpha))
+        score_filtered = (
+            alpha * float(score_raw)
+            + (1.0 - alpha) * float(self._curve_anticipation_score_filtered)
+        )
+        score_filtered = max(0.0, min(1.0, score_filtered))
+        self._curve_anticipation_score_filtered = score_filtered
+
+        score_on = float(
+            self.trajectory_config.get('curve_anticipation_score_on', 0.55)
+        )
+        score_off = float(
+            self.trajectory_config.get('curve_anticipation_score_off', 0.40)
+        )
+        if score_off > score_on:
+            score_off = score_on
+        on_frames = max(
+            1,
+            int(self.trajectory_config.get('curve_anticipation_on_frames', 2)),
+        )
+        off_frames = max(
+            1,
+            int(self.trajectory_config.get('curve_anticipation_off_frames', 2)),
+        )
+
+        if self._curve_anticipation_active:
+            if score_filtered <= score_off:
+                self._curve_anticipation_off_counter += 1
+            else:
+                self._curve_anticipation_off_counter = 0
+            if self._curve_anticipation_off_counter >= off_frames:
+                self._curve_anticipation_active = False
+                self._curve_anticipation_off_counter = 0
+                self._curve_anticipation_on_counter = 0
+        else:
+            if score_filtered >= score_on:
+                self._curve_anticipation_on_counter += 1
+            else:
+                self._curve_anticipation_on_counter = 0
+            if self._curve_anticipation_on_counter >= on_frames:
+                self._curve_anticipation_active = True
+                self._curve_anticipation_on_counter = 0
+                self._curve_anticipation_off_counter = 0
+        return float(score_filtered), bool(self._curve_anticipation_active)
+
+    def _compute_curve_anticipation_signal(
+        self,
+        reference_point: dict,
+        *,
+        path_curvature: float,
+        preview_curvature_abs: float,
+    ) -> dict:
+        """Compute trajectory-owned curve anticipation signal (shadow-safe)."""
+        if not self.curve_anticipation_enabled:
+            return {
+                "score": 0.0,
+                "score_raw": 0.0,
+                "active": False,
+                "term_curvature": 0.0,
+                "term_heading": 0.0,
+                "term_far_rise": 0.0,
+                "heading_delta_abs": 0.0,
+                "far_metric_abs": 0.0,
+                "far_metric_rise_abs": 0.0,
+                "source": "disabled",
+            }
+
+        heading_base = reference_point.get('diag_multi_lookahead_heading_base')
+        heading_far = reference_point.get('diag_multi_lookahead_heading_far')
+        heading_delta_abs = 0.0
+        try:
+            if heading_base is not None and heading_far is not None:
+                heading_delta_abs = abs(float(heading_far) - float(heading_base))
+        except (TypeError, ValueError):
+            heading_delta_abs = 0.0
+        if not math.isfinite(heading_delta_abs):
+            heading_delta_abs = 0.0
+
+        far_metric_abs = 0.0
+        for key in (
+            'diag_postclip_abs_mean_12_20m',
+            'diag_preclip_abs_mean_12_20m',
+            'diag_far_band_contribution_scale_mean_12_20m',
+        ):
+            raw_value = reference_point.get(key)
+            if raw_value is None:
+                continue
+            try:
+                candidate = abs(float(raw_value))
+            except (TypeError, ValueError):
+                continue
+            if math.isfinite(candidate):
+                far_metric_abs = candidate
+                break
+
+        far_metric_rise_abs = 0.0
+        if self._curve_anticipation_prev_far_metric is not None:
+            far_metric_rise_abs = max(
+                0.0,
+                float(far_metric_abs) - float(self._curve_anticipation_prev_far_metric),
+            )
+        self._curve_anticipation_prev_far_metric = float(far_metric_abs)
+
+        score_terms = compute_curve_anticipation_score(
+            path_curvature_abs=abs(float(path_curvature)),
+            preview_curvature_abs=abs(float(preview_curvature_abs)),
+            heading_delta_abs=float(heading_delta_abs),
+            far_geometry_rise_abs=float(far_metric_rise_abs),
+            config=self.trajectory_config,
+        )
+        score_raw = float(score_terms.get('score_raw', 0.0))
+        score, active = self._update_curve_anticipation_state(score_raw)
+        source = "trajectory_shadow" if self.curve_anticipation_shadow_only else "trajectory"
+        return {
+            "score": float(score),
+            "score_raw": float(score_raw),
+            "active": bool(active),
+            "term_curvature": float(score_terms.get('term_curvature', 0.0)),
+            "term_heading": float(score_terms.get('term_heading', 0.0)),
+            "term_far_rise": float(score_terms.get('term_far_rise', 0.0)),
+            "heading_delta_abs": float(heading_delta_abs),
+            "far_metric_abs": float(far_metric_abs),
+            "far_metric_rise_abs": float(far_metric_rise_abs),
+            "source": source,
+        }
     
     def run(self, max_frames: Optional[int] = None, duration: Optional[float] = None):
         """
@@ -1875,16 +2329,105 @@ class AVStack:
         instability_center_shift = None
         
         current_speed = vehicle_state_dict.get('speed', 0.0)
-        reference_lookahead = self.trajectory_config.get('reference_lookahead', 8.0)
-        reference_lookahead = compute_reference_lookahead(
-            base_lookahead=float(reference_lookahead),
-            current_speed=float(current_speed),
-            path_curvature=float(
-                vehicle_state_dict.get('groundTruthPathCurvature', 0.0)
-                or vehicle_state_dict.get('ground_truth_path_curvature', 0.0)
+        current_path_curvature = float(
+            vehicle_state_dict.get('groundTruthPathCurvature', 0.0)
+            or vehicle_state_dict.get('ground_truth_path_curvature', 0.0)
+        )
+        base_reference_lookahead = float(
+            self.trajectory_config.get('reference_lookahead', 8.0)
+        )
+        entry_preview = self._compute_reference_entry_preview(
+            vehicle_state_dict=vehicle_state_dict,
+            lane_coeffs=lane_coeffs,
+            base_lookahead_m=base_reference_lookahead,
+            path_curvature=float(current_path_curvature),
+            current_speed_mps=float(current_speed),
+        )
+        preview_curvature_abs = float(
+            entry_preview.get('preview_curvature_abs', abs(current_path_curvature))
+        )
+        path_curvature_for_phase = float(
+            entry_preview.get('path_curvature_abs', abs(current_path_curvature))
+        )
+        preview_entry_source = str(entry_preview.get('source', 'map_free'))
+        distance_to_curve_start_m = entry_preview.get('distance_to_curve_start_m')
+        time_to_curve_s = entry_preview.get('time_to_curve_s')
+        preview_confidence = entry_preview.get('confidence')
+        preview_curvature_prev = float(self._last_curve_phase_preview_curvature_abs)
+        curvature_rise_abs = max(0.0, float(preview_curvature_abs) - preview_curvature_prev)
+        self._last_curve_phase_preview_curvature_abs = float(preview_curvature_abs)
+
+        curve_phase_diag = compute_curve_phase_scheduler(
+            preview_curvature_abs=float(preview_curvature_abs),
+            path_curvature_abs=abs(float(path_curvature_for_phase)),
+            curvature_rise_abs=float(curvature_rise_abs),
+            time_to_curve_s=(
+                float(time_to_curve_s)
+                if isinstance(time_to_curve_s, (int, float))
+                and math.isfinite(float(time_to_curve_s))
+                else None
+            ),
+            preview_confidence=(
+                float(preview_confidence)
+                if isinstance(preview_confidence, (int, float))
+                and math.isfinite(float(preview_confidence))
+                else None
+            ),
+            previous_phase=float(self._curve_phase_scheduler_state.get("curve_phase", 0.0) or 0.0),
+            previous_state=str(self._curve_phase_scheduler_state.get("curve_phase_state", "STRAIGHT") or "STRAIGHT"),
+            previous_entry_frames=int(self._curve_phase_scheduler_state.get("curve_phase_entry_frames", 0) or 0),
+            previous_rearm_hold_frames=int(
+                self._curve_phase_scheduler_state.get("curve_phase_rearm_hold_frames", 0) or 0
             ),
             config=self.trajectory_config,
         )
+        curve_intent = float(curve_phase_diag.get("curve_phase", 0.0) or 0.0)
+        curve_intent_raw = float(curve_phase_diag.get("curve_phase_raw", curve_intent) or curve_intent)
+        curve_intent_state = str(curve_phase_diag.get("curve_phase_state", "STRAIGHT") or "STRAIGHT")
+        curve_intent_term_preview = float(curve_phase_diag.get("curve_phase_term_preview", 0.0) or 0.0)
+        curve_intent_term_path = float(curve_phase_diag.get("curve_phase_term_path", 0.0) or 0.0)
+        curve_intent_term_rise = float(curve_phase_diag.get("curve_phase_term_rise", 0.0) or 0.0)
+        self._curve_phase_scheduler_state = {
+            "curve_phase": float(curve_phase_diag.get("curve_phase", 0.0) or 0.0),
+            "curve_phase_state": str(curve_phase_diag.get("curve_phase_state", "STRAIGHT") or "STRAIGHT"),
+            "curve_phase_entry_frames": int(curve_phase_diag.get("curve_phase_entry_frames", 0) or 0),
+            "curve_phase_rearm_hold_frames": int(
+                curve_phase_diag.get("curve_phase_rearm_hold_frames", 0) or 0
+            ),
+        }
+
+        reference_lookahead_result = compute_reference_lookahead(
+            base_lookahead=float(base_reference_lookahead),
+            current_speed=float(current_speed),
+            path_curvature=float(current_path_curvature),
+            config=self.trajectory_config,
+            path_curvature_preview=preview_curvature_abs,
+            distance_to_curve_start_m=(
+                float(distance_to_curve_start_m)
+                if isinstance(distance_to_curve_start_m, (int, float))
+                else None
+            ),
+            previous_lookahead=self._last_reference_lookahead,
+            anticipation_score=float(self._curve_anticipation_score_filtered),
+            anticipation_active=bool(self._curve_anticipation_active),
+            curve_scheduler_mode=self._curve_scheduler_mode,
+            curve_phase=float(curve_phase_diag.get("curve_phase", 0.0) or 0.0),
+            return_diagnostics=True,
+        )
+        if isinstance(reference_lookahead_result, dict):
+            reference_lookahead_diag = reference_lookahead_result
+            reference_lookahead = float(reference_lookahead_result.get("lookahead", base_reference_lookahead))
+        else:
+            reference_lookahead_diag = {
+                "lookahead": float(reference_lookahead_result),
+                "lookahead_target": float(reference_lookahead_result),
+                "lookahead_after_slew": float(reference_lookahead_result),
+                "curve_scheduler_mode": str(self._curve_scheduler_mode),
+                "curve_phase": float(curve_phase_diag.get("curve_phase", 0.0) or 0.0),
+            }
+            reference_lookahead = float(reference_lookahead_result)
+        self._last_reference_lookahead_diag = dict(reference_lookahead_diag)
+        self._last_reference_lookahead = float(reference_lookahead)
         
         # Extract camera_8m_screen_y early so we can use it for lane evaluation
         camera_8m_screen_y = vehicle_state_dict.get('camera8mScreenY')
@@ -2281,6 +2824,18 @@ class AVStack:
                 if enforce_lane_sign and \
                    self.previous_left_lane_x is not None and self.previous_right_lane_x is not None:
                     skip_sign_enforce = False
+                    skip_sign_on_curve_phase = bool(
+                        perception_cfg.get("lane_side_sign_skip_curve_phase", True)
+                    )
+                    curve_phase_curvature_min = float(
+                        perception_cfg.get("lane_side_sign_curve_curvature_min", 0.006)
+                    )
+                    preview_curve_curvature_min = float(
+                        perception_cfg.get(
+                            "lane_side_sign_preview_curvature_min",
+                            curve_phase_curvature_min,
+                        )
+                    )
                     road_offset = vehicle_state_dict.get('roadFrameLaneCenterOffset')
                     if road_offset is not None:
                         lane_width_est = float(self.safety_config.get('lane_width', 7.2))
@@ -2288,6 +2843,16 @@ class AVStack:
                         if abs(float(road_offset)) > lane_edge_threshold:
                             skip_sign_enforce = True
                             clamp_events.append("lane_side_sign_skip_out_of_bounds")
+                    if (
+                        not skip_sign_enforce
+                        and skip_sign_on_curve_phase
+                        and (
+                            abs(float(current_path_curvature)) >= curve_phase_curvature_min
+                            or abs(float(preview_curvature_abs)) >= preview_curve_curvature_min
+                        )
+                    ):
+                        skip_sign_enforce = True
+                        clamp_events.append("lane_side_sign_skip_curve_phase")
                     if not skip_sign_enforce and (left_x_vehicle > -sign_min_abs or right_x_vehicle < sign_min_abs):
                         clamp_events.append("lane_side_sign_violation")
                         actual_detected_left_lane_x = left_x_vehicle
@@ -3321,6 +3886,35 @@ class AVStack:
         planned_accel = gov_output.planned_accel
         target_speed_ramp_active = False
         target_speed_slew_active = False
+        curve_intent_speed_guardrail_active = False
+        curve_intent_speed_guardrail_cap_mps = float(
+            self.trajectory_config.get("curve_intent_speed_guardrail_cap_mps", 7.0)
+        )
+        curve_intent_speed_guardrail_intent_min = float(
+            self.trajectory_config.get("curve_intent_speed_guardrail_intent_min", 0.55)
+        )
+        curve_intent_speed_guardrail_confidence_max = float(
+            self.trajectory_config.get("curve_intent_speed_guardrail_confidence_max", 0.55)
+        )
+        curve_intent_speed_guardrail_confidence = (
+            float(confidence) if isinstance(confidence, (int, float)) else float("nan")
+        )
+        if bool(self.trajectory_config.get("curve_intent_speed_guardrail_enabled", True)):
+            confidence_low = (
+                not np.isfinite(curve_intent_speed_guardrail_confidence)
+                or curve_intent_speed_guardrail_confidence < curve_intent_speed_guardrail_confidence_max
+            )
+            if (
+                curve_intent >= curve_intent_speed_guardrail_intent_min
+                and confidence_low
+                and curve_intent_speed_guardrail_cap_mps > 0.0
+            ):
+                adjusted_target_speed = min(
+                    float(adjusted_target_speed),
+                    float(curve_intent_speed_guardrail_cap_mps),
+                )
+                curve_intent_speed_guardrail_active = True
+                target_speed_final = adjusted_target_speed
 
         # Telemetry compatibility: legacy variables for HDF5 recording
         curve_speed_limit = gov_output.comfort_speed if gov_output.comfort_speed < 1e6 else None
@@ -3450,6 +4044,64 @@ class AVStack:
             confidence=confidence,
             dynamic_horizon_diag=dynamic_horizon_diag,
         )
+        if reference_point is not None:
+            reference_point['lookahead_entry_preview_source'] = preview_entry_source
+            reference_point['curvature_preview'] = float(preview_curvature_abs)
+            reference_point['distance_to_curve_start_m'] = (
+                float(distance_to_curve_start_m)
+                if isinstance(distance_to_curve_start_m, (int, float))
+                else None
+            )
+            reference_point['curve_scheduler_mode'] = str(
+                reference_lookahead_diag.get("curve_scheduler_mode", self._curve_scheduler_mode)
+            )
+            reference_point['curve_phase'] = float(curve_phase_diag.get("curve_phase", 0.0) or 0.0)
+            reference_point['curve_phase_raw'] = float(curve_phase_diag.get("curve_phase_raw", 0.0) or 0.0)
+            reference_point['curve_phase_state'] = str(curve_phase_diag.get("curve_phase_state", "STRAIGHT") or "STRAIGHT")
+            reference_point['curve_phase_rearm_event'] = bool(
+                curve_phase_diag.get("curve_phase_rearm_event", False)
+            )
+            reference_point['curve_phase_entry_frames'] = int(
+                curve_phase_diag.get("curve_phase_entry_frames", 0) or 0
+            )
+            reference_point['curve_phase_rearm_hold_frames'] = int(
+                curve_phase_diag.get("curve_phase_rearm_hold_frames", 0) or 0
+            )
+            reference_point['curve_phase_term_preview'] = float(
+                curve_phase_diag.get("curve_phase_term_preview", 0.0) or 0.0
+            )
+            reference_point['curve_phase_term_path'] = float(
+                curve_phase_diag.get("curve_phase_term_path", 0.0) or 0.0
+            )
+            reference_point['curve_phase_term_rise'] = float(
+                curve_phase_diag.get("curve_phase_term_rise", 0.0) or 0.0
+            )
+            reference_point['curve_phase_curvature_rise_abs'] = float(curvature_rise_abs)
+            reference_point['curve_intent'] = float(curve_intent)
+            reference_point['curve_intent_raw'] = float(curve_intent_raw)
+            reference_point['curve_intent_state'] = str(curve_intent_state)
+            reference_point['curve_intent_term_preview'] = float(curve_intent_term_preview)
+            reference_point['curve_intent_term_path'] = float(curve_intent_term_path)
+            reference_point['curve_intent_term_rise'] = float(curve_intent_term_rise)
+            reference_point['curve_intent_confidence'] = (
+                float(curve_intent_speed_guardrail_confidence)
+                if np.isfinite(curve_intent_speed_guardrail_confidence)
+                else None
+            )
+            reference_point['curve_intent_speed_guardrail_active'] = bool(
+                curve_intent_speed_guardrail_active
+            )
+            reference_point['curve_intent_speed_guardrail_cap_mps'] = float(
+                curve_intent_speed_guardrail_cap_mps
+            )
+            reference_point['reference_lookahead_base'] = float(base_reference_lookahead)
+            reference_point['reference_lookahead_target'] = float(
+                reference_lookahead_diag.get("lookahead_target", reference_lookahead)
+            )
+            reference_point['reference_lookahead_after_slew'] = float(
+                reference_lookahead_diag.get("lookahead_after_slew", reference_lookahead)
+            )
+            reference_point['reference_lookahead_active'] = float(reference_lookahead)
 
         if trajectory_source_active == 'oracle':
             oracle_ref = self._build_oracle_reference_point(
@@ -3536,6 +4188,22 @@ class AVStack:
                 if gov_min_speed > 0:
                     reference_point['min_speed_floor'] = float(gov_min_speed)
 
+                anticipation_signal = self._compute_curve_anticipation_signal(
+                    reference_point,
+                    path_curvature=float(current_path_curvature),
+                    preview_curvature_abs=float(preview_curvature_abs),
+                )
+                reference_point['curve_anticipation_score'] = anticipation_signal['score']
+                reference_point['curve_anticipation_score_raw'] = anticipation_signal['score_raw']
+                reference_point['curve_anticipation_active'] = anticipation_signal['active']
+                reference_point['curve_anticipation_term_curvature'] = anticipation_signal['term_curvature']
+                reference_point['curve_anticipation_term_heading'] = anticipation_signal['term_heading']
+                reference_point['curve_anticipation_term_far_rise'] = anticipation_signal['term_far_rise']
+                reference_point['curve_anticipation_heading_delta_abs'] = anticipation_signal['heading_delta_abs']
+                reference_point['curve_anticipation_far_metric_abs'] = anticipation_signal['far_metric_abs']
+                reference_point['curve_anticipation_far_metric_rise_abs'] = anticipation_signal['far_metric_rise_abs']
+                reference_point['curve_anticipation_source'] = anticipation_signal['source']
+
                 
                 # 3. Control: Compute control commands
                 current_state = {
@@ -3567,6 +4235,17 @@ class AVStack:
                 control_command['speed_governor_comfort_speed'] = gov_output.comfort_speed if gov_output.comfort_speed < 1e6 else -1.0
                 control_command['speed_governor_preview_speed'] = gov_output.preview_speed if gov_output.preview_speed is not None else -1.0
                 control_command['speed_governor_horizon_speed'] = gov_output.horizon_speed if gov_output.horizon_speed is not None else -1.0
+                control_command['curve_intent_speed_guardrail_active'] = bool(
+                    curve_intent_speed_guardrail_active
+                )
+                control_command['curve_intent_speed_guardrail_cap_mps'] = float(
+                    curve_intent_speed_guardrail_cap_mps
+                )
+                control_command['curve_intent_speed_guardrail_confidence'] = (
+                    float(curve_intent_speed_guardrail_confidence)
+                    if np.isfinite(curve_intent_speed_guardrail_confidence)
+                    else float("nan")
+                )
                 
                 # If emergency braking was triggered, override throttle/brake but keep steering
                 if brake_override > 0:
@@ -4895,6 +5574,89 @@ class AVStack:
             curve_at_car_distance_remaining_m=control_command.get(
                 'curve_at_car_distance_remaining_m'
             ),
+            curve_phase_source=control_command.get('curve_phase_source'),
+            curve_phase_use_preview_curvature=control_command.get(
+                'curve_phase_use_preview_curvature'
+            ),
+            curve_phase_preview_curvature_abs=control_command.get(
+                'curve_phase_preview_curvature_abs'
+            ),
+            curve_phase_preview_curvature_valid=control_command.get(
+                'curve_phase_preview_curvature_valid'
+            ),
+            curve_phase_preview_upcoming=control_command.get(
+                'curve_phase_preview_upcoming'
+            ),
+            curve_phase_preview_enter_threshold=control_command.get(
+                'curve_phase_preview_enter_threshold'
+            ),
+            curve_phase_preview_exit_threshold=control_command.get(
+                'curve_phase_preview_exit_threshold'
+            ),
+            curve_scheduler_mode=control_command.get('curve_scheduler_mode'),
+            curve_phase=control_command.get('curve_phase'),
+            curve_phase_raw=control_command.get('curve_phase_raw'),
+            curve_phase_state=control_command.get('curve_phase_state'),
+            curve_phase_rearm_event=control_command.get('curve_phase_rearm_event'),
+            curve_phase_entry_frames=control_command.get('curve_phase_entry_frames'),
+            curve_phase_rearm_hold_frames=control_command.get(
+                'curve_phase_rearm_hold_frames'
+            ),
+            curve_phase_term_preview=control_command.get('curve_phase_term_preview'),
+            curve_phase_term_path=control_command.get('curve_phase_term_path'),
+            curve_phase_term_rise=control_command.get('curve_phase_term_rise'),
+            curve_phase_curvature_rise_abs=control_command.get(
+                'curve_phase_curvature_rise_abs'
+            ),
+            curve_intent=control_command.get('curve_intent'),
+            curve_intent_raw=control_command.get('curve_intent_raw'),
+            curve_intent_state=control_command.get('curve_intent_state'),
+            curve_intent_term_preview=control_command.get('curve_intent_term_preview'),
+            curve_intent_term_path=control_command.get('curve_intent_term_path'),
+            curve_intent_term_rise=control_command.get('curve_intent_term_rise'),
+            curve_intent_confidence=control_command.get('curve_intent_confidence'),
+            curve_intent_speed_guardrail_active=control_command.get(
+                'curve_intent_speed_guardrail_active'
+            ),
+            curve_intent_speed_guardrail_cap_mps=control_command.get(
+                'curve_intent_speed_guardrail_cap_mps'
+            ),
+            curve_intent_speed_guardrail_confidence=control_command.get(
+                'curve_intent_speed_guardrail_confidence'
+            ),
+            curve_anticipation_score=control_command.get(
+                'curve_anticipation_score'
+            ),
+            curve_anticipation_score_raw=control_command.get(
+                'curve_anticipation_score_raw'
+            ),
+            curve_anticipation_active=control_command.get(
+                'curve_anticipation_active'
+            ),
+            curve_anticipation_source=control_command.get(
+                'curve_anticipation_source'
+            ),
+            curve_anticipation_term_curvature=control_command.get(
+                'curve_anticipation_term_curvature'
+            ),
+            curve_anticipation_term_heading=control_command.get(
+                'curve_anticipation_term_heading'
+            ),
+            curve_anticipation_term_far_rise=control_command.get(
+                'curve_anticipation_term_far_rise'
+            ),
+            reference_lookahead_target=control_command.get(
+                'reference_lookahead_target'
+            ),
+            reference_lookahead_after_slew=control_command.get(
+                'reference_lookahead_after_slew'
+            ),
+            reference_lookahead_active=control_command.get(
+                'reference_lookahead_active'
+            ),
+            distance_to_next_curve_start_m=control_command.get(
+                'distance_to_next_curve_start_m'
+            ),
             is_road_straight=control_command.get('is_road_straight'),
             road_curvature_valid=control_command.get('road_curvature_valid'),
             road_curvature_abs=control_command.get('road_curvature_abs'),
@@ -5391,9 +6153,12 @@ def main():
                        help='Maximum duration in seconds (similar to ground_truth_follower.py)')
     parser.add_argument('--config', type=str, default=None,
                        help='Path to configuration YAML file (default: config/av_stack_config.yaml)')
-    
+    parser.add_argument('--track-yaml', type=str, default=None,
+                       help='Track YAML path — sets map-based lookahead profile at runtime '
+                            '(forwarded automatically from start_av_stack.sh)')
+
     args = parser.parse_args()
-    
+
     use_segmentation = not args.use_cv
     if use_segmentation and not Path(args.segmentation_checkpoint).exists():
         parser.error(
@@ -5410,6 +6175,7 @@ def main():
         recording_dir=args.recording_dir,
         use_segmentation=use_segmentation,
         segmentation_model_path=args.segmentation_checkpoint,
+        track_yaml_path=args.track_yaml,
     )
     
     av_stack.run(max_frames=args.max_frames, duration=args.duration)
@@ -5417,4 +6183,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

@@ -184,3 +184,64 @@ class TestA4CurvaturePreview:
         assert ref is not None
         preview = ref.get("curvature_preview", 0.0)
         assert isinstance(preview, (int, float))
+
+
+class TestCurveContextEstimator:
+    def test_curve_context_estimates_distance_to_curve_start_from_horizon_profile(self):
+        planner = _make_planner()
+
+        def _fake_ref(_lane_coeffs, lookahead):
+            lookahead = float(lookahead)
+            heading = 0.0 if lookahead < 10.0 else 0.02 * (lookahead - 10.0)
+            return {
+                "x": 0.0,
+                "y": lookahead,
+                "heading": heading,
+                "velocity": 8.0,
+                "curvature": 0.0005,
+            }
+
+        with patch.object(planner, "_compute_target_ref_from_coeffs", side_effect=_fake_ref):
+            ctx = planner.get_curve_context(
+                [np.array([0.0, 0.0, 0.0]), np.array([0.0, 0.0, 0.0])],
+                base_lookahead=6.0,
+                horizon_m=20.0,
+                step_m=1.0,
+                curve_start_curvature=0.006,
+                curvature_gain=1.0,
+                current_speed_mps=8.0,
+            )
+
+        assert isinstance(ctx, dict)
+        assert ctx.get("valid") is True
+        assert 8.0 <= float(ctx.get("distance_to_curve_start_m")) <= 12.0
+        assert float(ctx.get("preview_curvature_abs")) > 0.006
+        assert float(ctx.get("time_to_curve_s")) > 0.9
+
+    def test_curve_context_applies_curvature_gain_to_preview_peak(self):
+        planner = _make_planner()
+
+        def _fake_ref(_lane_coeffs, lookahead):
+            return {
+                "x": 0.0,
+                "y": float(lookahead),
+                "heading": 0.0,
+                "velocity": 8.0,
+                "curvature": 0.001,
+            }
+
+        with patch.object(planner, "_compute_target_ref_from_coeffs", side_effect=_fake_ref):
+            ctx = planner.get_curve_context(
+                [np.array([0.0, 0.0, 0.0]), np.array([0.0, 0.0, 0.0])],
+                base_lookahead=6.0,
+                horizon_m=16.0,
+                step_m=1.0,
+                curve_start_curvature=0.005,
+                curvature_gain=6.0,
+                current_speed_mps=8.0,
+            )
+
+        assert isinstance(ctx, dict)
+        assert ctx.get("valid") is True
+        assert float(ctx.get("preview_curvature_abs")) == pytest.approx(0.006, rel=1e-6)
+        assert float(ctx.get("path_curvature_abs")) == pytest.approx(0.006, rel=1e-6)

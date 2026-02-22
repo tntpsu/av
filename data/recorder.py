@@ -1915,6 +1915,240 @@ class DataRecorder:
             dtype=np.float32
         )
         self.h5_file.create_dataset(
+            "control/curve_phase_source",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=h5py.string_dtype(encoding='utf-8', length=64)
+        )
+        self.h5_file.create_dataset(
+            "control/curve_phase_use_preview_curvature",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int8
+        )
+        self.h5_file.create_dataset(
+            "control/curve_phase_preview_curvature_abs",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/curve_phase_preview_curvature_valid",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int8
+        )
+        self.h5_file.create_dataset(
+            "control/curve_phase_preview_upcoming",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int8
+        )
+        self.h5_file.create_dataset(
+            "control/curve_phase_preview_enter_threshold",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/curve_phase_preview_exit_threshold",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/curve_scheduler_mode",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=h5py.string_dtype(encoding='utf-8', length=32)
+        )
+        self.h5_file.create_dataset(
+            "control/curve_phase",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/curve_phase_raw",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/curve_phase_state",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=h5py.string_dtype(encoding='utf-8', length=16)
+        )
+        self.h5_file.create_dataset(
+            "control/curve_phase_rearm_event",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int8
+        )
+        self.h5_file.create_dataset(
+            "control/curve_phase_entry_frames",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int32
+        )
+        self.h5_file.create_dataset(
+            "control/curve_phase_rearm_hold_frames",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int32
+        )
+        self.h5_file.create_dataset(
+            "control/curve_phase_term_preview",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/curve_phase_term_path",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/curve_phase_term_rise",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/curve_phase_curvature_rise_abs",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/curve_intent",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/curve_intent_raw",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/curve_intent_state",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=h5py.string_dtype(encoding='utf-8', length=16)
+        )
+        self.h5_file.create_dataset(
+            "control/curve_intent_term_preview",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/curve_intent_term_path",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/curve_intent_term_rise",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/curve_intent_confidence",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/curve_intent_speed_guardrail_active",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int8
+        )
+        self.h5_file.create_dataset(
+            "control/curve_intent_speed_guardrail_cap_mps",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/curve_intent_speed_guardrail_confidence",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/curve_anticipation_score",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/curve_anticipation_score_raw",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/curve_anticipation_active",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int8
+        )
+        self.h5_file.create_dataset(
+            "control/curve_anticipation_source",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=h5py.string_dtype(encoding='utf-8', length=64)
+        )
+        self.h5_file.create_dataset(
+            "control/curve_anticipation_term_curvature",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/curve_anticipation_term_heading",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/curve_anticipation_term_far_rise",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/reference_lookahead_target",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/reference_lookahead_after_slew",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/reference_lookahead_active",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/distance_to_next_curve_start_m",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
             "control/is_road_straight",
             shape=(0,),
             maxshape=max_shape,
@@ -3430,6 +3664,45 @@ class DataRecorder:
         curve_upcoming_list = []
         curve_at_car_list = []
         curve_at_car_distance_remaining_m_list = []
+        curve_phase_source_list = []
+        curve_phase_use_preview_curvature_list = []
+        curve_phase_preview_curvature_abs_list = []
+        curve_phase_preview_curvature_valid_list = []
+        curve_phase_preview_upcoming_list = []
+        curve_phase_preview_enter_threshold_list = []
+        curve_phase_preview_exit_threshold_list = []
+        curve_scheduler_mode_list = []
+        curve_phase_list = []
+        curve_phase_raw_list = []
+        curve_phase_state_list = []
+        curve_phase_rearm_event_list = []
+        curve_phase_entry_frames_list = []
+        curve_phase_rearm_hold_frames_list = []
+        curve_phase_term_preview_list = []
+        curve_phase_term_path_list = []
+        curve_phase_term_rise_list = []
+        curve_phase_curvature_rise_abs_list = []
+        curve_intent_list = []
+        curve_intent_raw_list = []
+        curve_intent_state_list = []
+        curve_intent_term_preview_list = []
+        curve_intent_term_path_list = []
+        curve_intent_term_rise_list = []
+        curve_intent_confidence_list = []
+        curve_intent_speed_guardrail_active_list = []
+        curve_intent_speed_guardrail_cap_mps_list = []
+        curve_intent_speed_guardrail_confidence_list = []
+        curve_anticipation_score_list = []
+        curve_anticipation_score_raw_list = []
+        curve_anticipation_active_list = []
+        curve_anticipation_source_list = []
+        curve_anticipation_term_curvature_list = []
+        curve_anticipation_term_heading_list = []
+        curve_anticipation_term_far_rise_list = []
+        reference_lookahead_target_list = []
+        reference_lookahead_after_slew_list = []
+        reference_lookahead_active_list = []
+        distance_to_next_curve_start_m_list = []
         is_road_straight_list = []
         road_curvature_valid_list = []
         road_curvature_abs_list = []
@@ -3600,6 +3873,128 @@ class DataRecorder:
             curve_at_car_list.append(1 if getattr(cc, 'curve_at_car', False) else 0)
             curve_at_car_distance_remaining_m_list.append(
                 getattr(cc, 'curve_at_car_distance_remaining_m', np.nan)
+            )
+            curve_phase_source_list.append(
+                str(getattr(cc, 'curve_phase_source', '') or '')
+            )
+            curve_phase_use_preview_curvature_list.append(
+                1 if getattr(cc, 'curve_phase_use_preview_curvature', False) else 0
+            )
+            curve_phase_preview_curvature_abs_list.append(
+                float(getattr(cc, 'curve_phase_preview_curvature_abs', 0.0) or 0.0)
+            )
+            curve_phase_preview_curvature_valid_list.append(
+                1 if getattr(cc, 'curve_phase_preview_curvature_valid', False) else 0
+            )
+            curve_phase_preview_upcoming_list.append(
+                1 if getattr(cc, 'curve_phase_preview_upcoming', False) else 0
+            )
+            curve_phase_preview_enter_threshold_list.append(
+                float(getattr(cc, 'curve_phase_preview_enter_threshold', 0.0) or 0.0)
+            )
+            curve_phase_preview_exit_threshold_list.append(
+                float(getattr(cc, 'curve_phase_preview_exit_threshold', 0.0) or 0.0)
+            )
+            curve_scheduler_mode_list.append(
+                str(getattr(cc, 'curve_scheduler_mode', '') or '')
+            )
+            curve_phase_list.append(
+                float(getattr(cc, 'curve_phase', 0.0) or 0.0)
+            )
+            curve_phase_raw_list.append(
+                float(getattr(cc, 'curve_phase_raw', 0.0) or 0.0)
+            )
+            curve_phase_state_list.append(
+                str(getattr(cc, 'curve_phase_state', '') or '')
+            )
+            curve_phase_rearm_event_list.append(
+                1 if getattr(cc, 'curve_phase_rearm_event', False) else 0
+            )
+            curve_phase_entry_frames_list.append(
+                int(getattr(cc, 'curve_phase_entry_frames', 0) or 0)
+            )
+            curve_phase_rearm_hold_frames_list.append(
+                int(getattr(cc, 'curve_phase_rearm_hold_frames', 0) or 0)
+            )
+            curve_phase_term_preview_list.append(
+                float(getattr(cc, 'curve_phase_term_preview', 0.0) or 0.0)
+            )
+            curve_phase_term_path_list.append(
+                float(getattr(cc, 'curve_phase_term_path', 0.0) or 0.0)
+            )
+            curve_phase_term_rise_list.append(
+                float(getattr(cc, 'curve_phase_term_rise', 0.0) or 0.0)
+            )
+            curve_phase_curvature_rise_abs_list.append(
+                float(getattr(cc, 'curve_phase_curvature_rise_abs', 0.0) or 0.0)
+            )
+            curve_intent_list.append(
+                float(getattr(cc, 'curve_intent', 0.0) or 0.0)
+            )
+            curve_intent_raw_list.append(
+                float(getattr(cc, 'curve_intent_raw', 0.0) or 0.0)
+            )
+            curve_intent_state_list.append(
+                str(getattr(cc, 'curve_intent_state', '') or '')
+            )
+            curve_intent_term_preview_list.append(
+                float(getattr(cc, 'curve_intent_term_preview', 0.0) or 0.0)
+            )
+            curve_intent_term_path_list.append(
+                float(getattr(cc, 'curve_intent_term_path', 0.0) or 0.0)
+            )
+            curve_intent_term_rise_list.append(
+                float(getattr(cc, 'curve_intent_term_rise', 0.0) or 0.0)
+            )
+            _curve_intent_confidence = getattr(cc, 'curve_intent_confidence', np.nan)
+            curve_intent_confidence_list.append(
+                float(_curve_intent_confidence) if _curve_intent_confidence is not None else np.nan
+            )
+            curve_intent_speed_guardrail_active_list.append(
+                1 if getattr(cc, 'curve_intent_speed_guardrail_active', False) else 0
+            )
+            curve_intent_speed_guardrail_cap_mps_list.append(
+                float(getattr(cc, 'curve_intent_speed_guardrail_cap_mps', 0.0) or 0.0)
+            )
+            _curve_intent_guard_conf = getattr(cc, 'curve_intent_speed_guardrail_confidence', np.nan)
+            curve_intent_speed_guardrail_confidence_list.append(
+                float(_curve_intent_guard_conf) if _curve_intent_guard_conf is not None else np.nan
+            )
+            curve_anticipation_score_list.append(
+                float(getattr(cc, 'curve_anticipation_score', 0.0) or 0.0)
+            )
+            curve_anticipation_score_raw_list.append(
+                float(getattr(cc, 'curve_anticipation_score_raw', 0.0) or 0.0)
+            )
+            curve_anticipation_active_list.append(
+                1 if getattr(cc, 'curve_anticipation_active', False) else 0
+            )
+            curve_anticipation_source_list.append(
+                str(getattr(cc, 'curve_anticipation_source', '') or '')
+            )
+            curve_anticipation_term_curvature_list.append(
+                float(getattr(cc, 'curve_anticipation_term_curvature', 0.0) or 0.0)
+            )
+            curve_anticipation_term_heading_list.append(
+                float(getattr(cc, 'curve_anticipation_term_heading', 0.0) or 0.0)
+            )
+            curve_anticipation_term_far_rise_list.append(
+                float(getattr(cc, 'curve_anticipation_term_far_rise', 0.0) or 0.0)
+            )
+            reference_lookahead_target_list.append(
+                float(getattr(cc, 'reference_lookahead_target', 0.0) or 0.0)
+            )
+            reference_lookahead_after_slew_list.append(
+                float(getattr(cc, 'reference_lookahead_after_slew', 0.0) or 0.0)
+            )
+            reference_lookahead_active_list.append(
+                float(getattr(cc, 'reference_lookahead_active', 0.0) or 0.0)
+            )
+            distance_to_next_curve_start = getattr(cc, 'distance_to_next_curve_start_m', np.nan)
+            distance_to_next_curve_start_m_list.append(
+                float(distance_to_next_curve_start)
+                if distance_to_next_curve_start is not None
+                else np.nan
             )
             is_road_straight_list.append(
                 1 if getattr(cc, 'is_road_straight', False) else 0
@@ -3854,6 +4249,44 @@ class DataRecorder:
                        "lateral_correction", "path_curvature_input",
                        "is_straight", "is_control_straight_proxy", "curve_upcoming",
                        "curve_at_car", "curve_at_car_distance_remaining_m", "is_road_straight",
+                       "curve_phase_source", "curve_phase_use_preview_curvature",
+                       "curve_phase_preview_curvature_abs",
+                       "curve_phase_preview_curvature_valid",
+                       "curve_phase_preview_upcoming",
+                       "curve_phase_preview_enter_threshold",
+                       "curve_phase_preview_exit_threshold",
+                       "curve_scheduler_mode",
+                       "curve_phase",
+                       "curve_phase_raw",
+                       "curve_phase_state",
+                       "curve_phase_rearm_event",
+                       "curve_phase_entry_frames",
+                       "curve_phase_rearm_hold_frames",
+                       "curve_phase_term_preview",
+                       "curve_phase_term_path",
+                       "curve_phase_term_rise",
+                       "curve_phase_curvature_rise_abs",
+                       "curve_intent",
+                       "curve_intent_raw",
+                       "curve_intent_state",
+                       "curve_intent_term_preview",
+                       "curve_intent_term_path",
+                       "curve_intent_term_rise",
+                       "curve_intent_confidence",
+                       "curve_intent_speed_guardrail_active",
+                       "curve_intent_speed_guardrail_cap_mps",
+                       "curve_intent_speed_guardrail_confidence",
+                       "curve_anticipation_score",
+                       "curve_anticipation_score_raw",
+                       "curve_anticipation_active",
+                       "curve_anticipation_source",
+                       "curve_anticipation_term_curvature",
+                       "curve_anticipation_term_heading",
+                       "curve_anticipation_term_far_rise",
+                       "reference_lookahead_target",
+                       "reference_lookahead_after_slew",
+                       "reference_lookahead_active",
+                       "distance_to_next_curve_start_m",
                        "road_curvature_valid", "road_curvature_abs", "straight_oscillation_rate",
                        "road_curvature_source", "tuned_deadband", "tuned_error_smoothing_alpha",
                        "using_stale_perception", "stale_perception_reason",
@@ -3972,6 +4405,131 @@ class DataRecorder:
             )
             self.h5_file["control/curve_at_car_distance_remaining_m"][current_size:] = (
                 curve_at_car_distance_remaining_m_list
+            )
+            curve_phase_source_array = np.array(
+                curve_phase_source_list,
+                dtype=h5py.string_dtype(encoding='utf-8', length=64),
+            )
+            self.h5_file["control/curve_phase_source"][current_size:] = (
+                curve_phase_source_array
+            )
+            self.h5_file["control/curve_phase_use_preview_curvature"][current_size:] = np.array(
+                curve_phase_use_preview_curvature_list, dtype=np.int8
+            )
+            self.h5_file["control/curve_phase_preview_curvature_abs"][current_size:] = (
+                curve_phase_preview_curvature_abs_list
+            )
+            self.h5_file["control/curve_phase_preview_curvature_valid"][current_size:] = np.array(
+                curve_phase_preview_curvature_valid_list, dtype=np.int8
+            )
+            self.h5_file["control/curve_phase_preview_upcoming"][current_size:] = np.array(
+                curve_phase_preview_upcoming_list, dtype=np.int8
+            )
+            self.h5_file["control/curve_phase_preview_enter_threshold"][current_size:] = (
+                curve_phase_preview_enter_threshold_list
+            )
+            self.h5_file["control/curve_phase_preview_exit_threshold"][current_size:] = (
+                curve_phase_preview_exit_threshold_list
+            )
+            curve_scheduler_mode_array = np.array(
+                curve_scheduler_mode_list,
+                dtype=h5py.string_dtype(encoding='utf-8', length=32),
+            )
+            self.h5_file["control/curve_scheduler_mode"][current_size:] = (
+                curve_scheduler_mode_array
+            )
+            self.h5_file["control/curve_phase"][current_size:] = curve_phase_list
+            self.h5_file["control/curve_phase_raw"][current_size:] = curve_phase_raw_list
+            curve_phase_state_array = np.array(
+                curve_phase_state_list,
+                dtype=h5py.string_dtype(encoding='utf-8', length=16),
+            )
+            self.h5_file["control/curve_phase_state"][current_size:] = curve_phase_state_array
+            self.h5_file["control/curve_phase_rearm_event"][current_size:] = np.array(
+                curve_phase_rearm_event_list, dtype=np.int8
+            )
+            self.h5_file["control/curve_phase_entry_frames"][current_size:] = np.array(
+                curve_phase_entry_frames_list, dtype=np.int32
+            )
+            self.h5_file["control/curve_phase_rearm_hold_frames"][current_size:] = np.array(
+                curve_phase_rearm_hold_frames_list, dtype=np.int32
+            )
+            self.h5_file["control/curve_phase_term_preview"][current_size:] = (
+                curve_phase_term_preview_list
+            )
+            self.h5_file["control/curve_phase_term_path"][current_size:] = (
+                curve_phase_term_path_list
+            )
+            self.h5_file["control/curve_phase_term_rise"][current_size:] = (
+                curve_phase_term_rise_list
+            )
+            self.h5_file["control/curve_phase_curvature_rise_abs"][current_size:] = (
+                curve_phase_curvature_rise_abs_list
+            )
+            self.h5_file["control/curve_intent"][current_size:] = curve_intent_list
+            self.h5_file["control/curve_intent_raw"][current_size:] = curve_intent_raw_list
+            curve_intent_state_array = np.array(
+                curve_intent_state_list,
+                dtype=h5py.string_dtype(encoding='utf-8', length=16),
+            )
+            self.h5_file["control/curve_intent_state"][current_size:] = curve_intent_state_array
+            self.h5_file["control/curve_intent_term_preview"][current_size:] = (
+                curve_intent_term_preview_list
+            )
+            self.h5_file["control/curve_intent_term_path"][current_size:] = (
+                curve_intent_term_path_list
+            )
+            self.h5_file["control/curve_intent_term_rise"][current_size:] = (
+                curve_intent_term_rise_list
+            )
+            self.h5_file["control/curve_intent_confidence"][current_size:] = (
+                curve_intent_confidence_list
+            )
+            self.h5_file["control/curve_intent_speed_guardrail_active"][current_size:] = np.array(
+                curve_intent_speed_guardrail_active_list, dtype=np.int8
+            )
+            self.h5_file["control/curve_intent_speed_guardrail_cap_mps"][current_size:] = (
+                curve_intent_speed_guardrail_cap_mps_list
+            )
+            self.h5_file["control/curve_intent_speed_guardrail_confidence"][current_size:] = (
+                curve_intent_speed_guardrail_confidence_list
+            )
+            self.h5_file["control/curve_anticipation_score"][current_size:] = (
+                curve_anticipation_score_list
+            )
+            self.h5_file["control/curve_anticipation_score_raw"][current_size:] = (
+                curve_anticipation_score_raw_list
+            )
+            self.h5_file["control/curve_anticipation_active"][current_size:] = np.array(
+                curve_anticipation_active_list, dtype=np.int8
+            )
+            curve_anticipation_source_array = np.array(
+                curve_anticipation_source_list,
+                dtype=h5py.string_dtype(encoding='utf-8', length=64),
+            )
+            self.h5_file["control/curve_anticipation_source"][current_size:] = (
+                curve_anticipation_source_array
+            )
+            self.h5_file["control/curve_anticipation_term_curvature"][current_size:] = (
+                curve_anticipation_term_curvature_list
+            )
+            self.h5_file["control/curve_anticipation_term_heading"][current_size:] = (
+                curve_anticipation_term_heading_list
+            )
+            self.h5_file["control/curve_anticipation_term_far_rise"][current_size:] = (
+                curve_anticipation_term_far_rise_list
+            )
+            self.h5_file["control/reference_lookahead_target"][current_size:] = (
+                reference_lookahead_target_list
+            )
+            self.h5_file["control/reference_lookahead_after_slew"][current_size:] = (
+                reference_lookahead_after_slew_list
+            )
+            self.h5_file["control/reference_lookahead_active"][current_size:] = (
+                reference_lookahead_active_list
+            )
+            self.h5_file["control/distance_to_next_curve_start_m"][current_size:] = (
+                distance_to_next_curve_start_m_list
             )
             self.h5_file["control/is_road_straight"][current_size:] = np.array(
                 is_road_straight_list, dtype=np.int8
@@ -5241,4 +5799,3 @@ class DataRecorder:
     
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.close()
-

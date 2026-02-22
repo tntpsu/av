@@ -208,6 +208,18 @@ def analyze_recording_summary(recording_path: Path, analyze_to_failure: bool = F
                 np.array(f['control/path_curvature_input'][:])
                 if 'control/path_curvature_input' in f else None
             )
+            data['curve_intent'] = (
+                np.array(f['control/curve_intent'][:])
+                if 'control/curve_intent' in f
+                else None
+            )
+            data['curve_intent_state'] = None
+            if 'control/curve_intent_state' in f:
+                _cis = f['control/curve_intent_state'][:]
+                data['curve_intent_state'] = [
+                    s.decode('utf-8') if isinstance(s, (bytes, bytearray)) else str(s)
+                    for s in _cis
+                ]
             data['is_straight'] = np.array(f['control/is_straight'][:]) if 'control/is_straight' in f else None
             data['straight_oscillation_rate'] = (
                 np.array(f['control/straight_oscillation_rate'][:])
@@ -1473,6 +1485,127 @@ def analyze_recording_summary(recording_path: Path, analyze_to_failure: bool = F
                 min(15.0, (capped - 5) * 0.6)
             )
 
+    # 9. CURVE INTENT DIAGNOSTICS
+    curve_intent_diag = {
+        "available": False,
+        "arm_signal_available": False,
+        "curve_event_count": 0,
+        "armed_curve_event_count": 0,
+        "arm_early_enough_count": 0,
+        "arm_early_enough_rate": 0.0,
+        "arm_late_or_missing_count": 0,
+        "arm_lead_frames_min": 0.0,
+        "arm_lead_frames_p50": 0.0,
+        "arm_lead_frames_p95": 0.0,
+        "arm_lead_seconds_p50": 0.0,
+        "undercall_frame_rate": 0.0,
+        "curvature_ratio_p50": 0.0,
+        "curvature_ratio_p95": 0.0,
+        "undercall_detected": False,
+        "first_curve_start_frame": None,
+        "first_arm_frame": None,
+        "thresholds": {
+            "curve_start_abs_curvature": 0.010,
+            "arm_intent_min": 0.45,
+            "arm_min_lead_frames": 6,
+            "undercall_ratio_threshold": 0.70,
+        },
+    }
+    gt_curv_series = data.get("gt_path_curvature")
+    ctrl_curv_series = data.get("path_curvature_input")
+    curve_intent_series = data.get("curve_intent")
+    curve_intent_state_series = data.get("curve_intent_state")
+    if gt_curv_series is not None and ctrl_curv_series is not None:
+        n_curve_diag = min(n_frames, len(gt_curv_series), len(ctrl_curv_series))
+        if curve_intent_series is not None:
+            n_curve_diag = min(n_curve_diag, len(curve_intent_series))
+        if curve_intent_state_series is not None:
+            n_curve_diag = min(n_curve_diag, len(curve_intent_state_series))
+        if n_curve_diag > 0:
+            gt_abs = np.abs(np.asarray(gt_curv_series[:n_curve_diag], dtype=np.float64))
+            ctrl_abs = np.abs(np.asarray(ctrl_curv_series[:n_curve_diag], dtype=np.float64))
+            gt_abs = np.where(np.isfinite(gt_abs), gt_abs, 0.0)
+            ctrl_abs = np.where(np.isfinite(ctrl_abs), ctrl_abs, 0.0)
+
+            threshold_cfg = curve_intent_diag["thresholds"]
+            curve_start_abs_curvature = float(threshold_cfg["curve_start_abs_curvature"])
+            arm_intent_min = float(threshold_cfg["arm_intent_min"])
+            arm_min_lead_frames = int(threshold_cfg["arm_min_lead_frames"])
+            undercall_ratio_threshold = float(threshold_cfg["undercall_ratio_threshold"])
+
+            curve_mask = gt_abs >= curve_start_abs_curvature
+            prev_curve_mask = np.r_[False, curve_mask[:-1]]
+            curve_start_frames = np.where(curve_mask & (~prev_curve_mask))[0]
+
+            if curve_intent_state_series is not None and len(curve_intent_state_series) >= n_curve_diag:
+                state_flags = np.array([
+                    str(s or "").strip().upper() in {"ENTRY", "COMMIT"}
+                    for s in curve_intent_state_series[:n_curve_diag]
+                ], dtype=bool)
+                arm_signal_available = True
+            elif curve_intent_series is not None and len(curve_intent_series) >= n_curve_diag:
+                ci = np.asarray(curve_intent_series[:n_curve_diag], dtype=np.float64)
+                ci = np.where(np.isfinite(ci), ci, 0.0)
+                state_flags = ci >= arm_intent_min
+                arm_signal_available = True
+            else:
+                state_flags = np.zeros(n_curve_diag, dtype=bool)
+                arm_signal_available = False
+            prev_state_flags = np.r_[False, state_flags[:-1]]
+            arm_start_frames = np.where(state_flags & (~prev_state_flags))[0]
+
+            lead_frames: list[int] = []
+            armed_count = 0
+            early_count = 0
+            for start in curve_start_frames:
+                prior_arms = arm_start_frames[arm_start_frames <= start]
+                if prior_arms.size == 0:
+                    continue
+                armed_count += 1
+                lead = int(start - int(prior_arms[-1]))
+                lead_frames.append(lead)
+                if lead >= arm_min_lead_frames:
+                    early_count += 1
+
+            curve_intent_diag["available"] = True
+            curve_intent_diag["arm_signal_available"] = bool(arm_signal_available)
+            curve_intent_diag["curve_event_count"] = int(curve_start_frames.size)
+            curve_intent_diag["armed_curve_event_count"] = int(armed_count)
+            curve_intent_diag["arm_early_enough_count"] = int(early_count)
+            curve_intent_diag["arm_late_or_missing_count"] = int(
+                max(0, int(curve_start_frames.size) - int(early_count))
+            )
+            if curve_start_frames.size > 0:
+                curve_intent_diag["arm_early_enough_rate"] = safe_float(
+                    (float(early_count) / float(curve_start_frames.size)) * 100.0
+                )
+                curve_intent_diag["first_curve_start_frame"] = int(curve_start_frames[0])
+            if arm_start_frames.size > 0:
+                curve_intent_diag["first_arm_frame"] = int(arm_start_frames[0])
+            if lead_frames:
+                lead_arr = np.asarray(lead_frames, dtype=np.float64)
+                curve_intent_diag["arm_lead_frames_min"] = safe_float(np.min(lead_arr))
+                curve_intent_diag["arm_lead_frames_p50"] = safe_float(np.percentile(lead_arr, 50))
+                curve_intent_diag["arm_lead_frames_p95"] = safe_float(np.percentile(lead_arr, 95))
+                curve_intent_diag["arm_lead_seconds_p50"] = safe_float(
+                    np.percentile(lead_arr, 50) * dt
+                )
+
+            ratio_mask = gt_abs >= curve_start_abs_curvature
+            ratio = np.array([], dtype=np.float64)
+            if np.any(ratio_mask):
+                ratio = np.divide(
+                    ctrl_abs[ratio_mask],
+                    np.maximum(gt_abs[ratio_mask], 1e-6),
+                )
+                ratio = np.where(np.isfinite(ratio), ratio, 0.0)
+            if ratio.size > 0:
+                undercall_rate = float(np.mean(ratio < undercall_ratio_threshold) * 100.0)
+                curve_intent_diag["undercall_frame_rate"] = safe_float(undercall_rate)
+                curve_intent_diag["curvature_ratio_p50"] = safe_float(np.percentile(ratio, 50))
+                curve_intent_diag["curvature_ratio_p95"] = safe_float(np.percentile(ratio, 95))
+                curve_intent_diag["undercall_detected"] = bool(undercall_rate > 25.0)
+
     layer_breakdowns = {
         "Perception": {
             "base_score": 100.0,
@@ -1652,6 +1785,15 @@ def analyze_recording_summary(recording_path: Path, analyze_to_failure: bool = F
         recommendations.append("Reduce oscillation - increase damping or reduce proportional gain")
     if oscillation_amplitude_runaway:
         recommendations.append("Oscillation amplitude is growing - increase high-speed lookahead and reduce high-speed steering aggressiveness")
+    if curve_intent_diag.get("available"):
+        if float(curve_intent_diag.get("arm_early_enough_rate", 0.0)) < 80.0:
+            recommendations.append(
+                "Curve intent arms too late/misses entries - strengthen entry trigger and rearm timing."
+            )
+        if bool(curve_intent_diag.get("undercall_detected", False)):
+            recommendations.append(
+                "Controller is undercalling curvature in curves - improve curvature estimation fidelity."
+            )
     if lane_detection_rate < 90:
         recommendations.append("Improve lane detection - check perception model or CV fallback")
     if lane_line_jitter_p95 > 0.6 or reference_jitter_p95 > 0.25:
@@ -1701,6 +1843,15 @@ def analyze_recording_summary(recording_path: Path, analyze_to_failure: bool = F
         key_issues.append("High steering jerk")
     if oscillation_amplitude_runaway:
         key_issues.append("Oscillation amplitude growth detected")
+    if curve_intent_diag.get("available"):
+        if float(curve_intent_diag.get("arm_early_enough_rate", 0.0)) < 80.0:
+            key_issues.append(
+                f"Curve intent late arm ({curve_intent_diag.get('arm_early_enough_rate', 0.0):.1f}% early)"
+            )
+        if bool(curve_intent_diag.get("undercall_detected", False)):
+            key_issues.append(
+                f"Curvature undercall ({curve_intent_diag.get('undercall_frame_rate', 0.0):.1f}% frames)"
+            )
     if straight_oscillation_mean > 0.2:
         key_issues.append("Straight-line oscillation detected")
     if straight_sign_mismatch_events > 0:
@@ -1769,6 +1920,7 @@ def analyze_recording_summary(recording_path: Path, analyze_to_failure: bool = F
             "oscillation_rms_windows_count": int(oscillation_rms_windows_count),
             "oscillation_amplitude_runaway": bool(oscillation_amplitude_runaway),
         },
+        "curve_intent_diagnostics": curve_intent_diag,
         "speed_control": {
             "speed_error_rmse": safe_float(speed_error_rmse),
             "speed_error_mean": safe_float(speed_error_mean),

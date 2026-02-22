@@ -2,7 +2,7 @@
 Trajectory planning inference pipeline.
 """
 
-from typing import List, Optional, Dict
+from typing import List, Optional, Dict, Any
 import numpy as np
 import logging
 
@@ -89,6 +89,10 @@ class TrajectoryPlanningInference:
             'traj_heading_zero_gate_heading_off_abs_rad',
             np.radians(3.5),
         )
+        direct_reference_curvature_gain = kwargs.pop(
+            'direct_reference_curvature_gain',
+            1.0,
+        )
 
         # A3: Curvature-aware smoothing parameters
         smoothing_alpha_curve_reduction = kwargs.pop('smoothing_alpha_curve_reduction', 0.15)
@@ -108,6 +112,7 @@ class TrajectoryPlanningInference:
             # Extract distance scaling factor if provided
             distance_scaling_factor = kwargs.pop('distance_scaling_factor', 0.875)
             kwargs['distance_scaling_factor'] = distance_scaling_factor
+            kwargs['direct_reference_curvature_gain'] = direct_reference_curvature_gain
             self.planner = RuleBasedTrajectoryPlanner(**kwargs)
         elif planner_type == "ml":
             self.planner = MLTrajectoryPlanner(**kwargs)
@@ -334,6 +339,112 @@ class TrajectoryPlanningInference:
         if ref is None:
             return None
         return float(ref.get("curvature", 0.0))
+
+    def get_curve_context(
+        self,
+        lane_coeffs: Optional[List[Optional[np.ndarray]]],
+        *,
+        base_lookahead: float,
+        horizon_m: float = 25.0,
+        step_m: float = 1.0,
+        curve_start_curvature: float = 0.006,
+        curvature_gain: float = 1.0,
+        current_speed_mps: Optional[float] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Estimate map-free upcoming curve context from a sampled lane-curvature horizon.
+
+        Returns a compact contract used by higher-level curve-intent scheduling:
+        - path_curvature_abs: near-field curvature estimate at base lookahead
+        - preview_curvature_abs: horizon peak curvature estimate
+        - distance_to_curve_start_m: first distance where curvature exceeds threshold
+        - time_to_curve_s: distance_to_curve_start / speed when speed is valid
+        - confidence: sample coverage score (0..1)
+        """
+        if lane_coeffs is None:
+            return None
+
+        step = max(0.25, float(step_m))
+        start_m = max(0.5, float(base_lookahead))
+        end_m = max(start_m + step, float(horizon_m))
+        gain = max(0.1, float(curvature_gain))
+        start_threshold = max(1e-4, float(curve_start_curvature))
+
+        lookaheads = np.arange(start_m, end_m + (0.5 * step), step, dtype=np.float64)
+        refs: list[Dict[str, float]] = []
+        valid_lookaheads: list[float] = []
+        for lookahead in lookaheads:
+            ref = self._compute_target_ref_from_coeffs(lane_coeffs, float(lookahead))
+            if ref is None:
+                continue
+            refs.append(ref)
+            valid_lookaheads.append(float(lookahead))
+
+        if len(refs) < 3:
+            return {
+                "valid": False,
+                "source": "horizon_profile",
+                "sample_count": int(len(refs)),
+                "sample_coverage": float(len(refs) / max(len(lookaheads), 1)),
+            }
+
+        ds = np.asarray(valid_lookaheads, dtype=np.float64)
+        headings = np.asarray([float(r.get("heading", 0.0)) for r in refs], dtype=np.float64)
+        curvature_raw = np.abs(
+            np.asarray([float(r.get("curvature", 0.0)) for r in refs], dtype=np.float64)
+        )
+
+        # Heading-gradient curvature proxy in vehicle-distance coordinates.
+        heading_unwrapped = np.unwrap(np.where(np.isfinite(headings), headings, 0.0))
+        curvature_heading = np.zeros_like(ds)
+        for i in range(len(ds)):
+            if i == 0:
+                j0, j1 = 0, 1
+            elif i == len(ds) - 1:
+                j0, j1 = len(ds) - 2, len(ds) - 1
+            else:
+                j0, j1 = i - 1, i + 1
+            delta_s = max(1e-3, float(ds[j1] - ds[j0]))
+            curvature_heading[i] = abs(float(heading_unwrapped[j1] - heading_unwrapped[j0])) / delta_s
+
+        curvature_combined = gain * np.maximum(curvature_raw, curvature_heading)
+        curvature_combined = np.where(np.isfinite(curvature_combined), curvature_combined, 0.0)
+
+        path_curvature_abs = float(curvature_combined[0])
+        preview_curvature_abs = float(np.max(curvature_combined))
+
+        curve_mask = curvature_combined >= start_threshold
+        if np.any(curve_mask):
+            distance_to_curve_start_m: Optional[float] = float(ds[np.argmax(curve_mask)])
+        else:
+            distance_to_curve_start_m = None
+
+        time_to_curve_s: Optional[float] = None
+        if (
+            distance_to_curve_start_m is not None
+            and isinstance(current_speed_mps, (int, float))
+            and np.isfinite(float(current_speed_mps))
+            and float(current_speed_mps) > 0.3
+        ):
+            time_to_curve_s = float(distance_to_curve_start_m / float(current_speed_mps))
+
+        sample_coverage = float(len(refs) / max(len(lookaheads), 1))
+        confidence = max(0.0, min(1.0, sample_coverage))
+
+        return {
+            "valid": True,
+            "source": "horizon_profile",
+            "path_curvature_abs": float(path_curvature_abs),
+            "preview_curvature_abs": float(preview_curvature_abs),
+            "distance_to_curve_start_m": distance_to_curve_start_m,
+            "time_to_curve_s": time_to_curve_s,
+            "confidence": float(confidence),
+            "sample_count": int(len(refs)),
+            "sample_coverage": float(sample_coverage),
+            "horizon_start_m": float(start_m),
+            "horizon_end_m": float(ds[-1]),
+            "horizon_step_m": float(step),
+        }
     
     def plan(self, lane_coeffs: List[Optional[np.ndarray]], 
              vehicle_state: Optional[Dict] = None) -> Trajectory:

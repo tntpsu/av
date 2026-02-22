@@ -20,6 +20,7 @@ LAUNCH_UNITY=false
 UNITY_AUTO_PLAY=false
 KEEP_UNITY_OPEN=true
 NO_PROMPT=false
+TRACK_YAML_PATH=""
 PASSTHROUGH_ARGS=()
 
 usage() {
@@ -27,6 +28,7 @@ usage() {
     echo ""
     echo "Options:"
     echo "  --duration <sec>               Duration for each run (default: 20)"
+    echo "  --track-yaml <path>            Track YAML (forwarded to both runs)"
     echo "  --launch-unity                 Launch Unity automatically"
     echo "  --unity-auto-play              Launch Unity and auto-enter Play mode"
     echo "  --segmentation-checkpoint <p>  Segmentation checkpoint path"
@@ -56,6 +58,10 @@ while [[ $# -gt 0 ]]; do
             UNITY_AUTO_PLAY=true
             shift
             ;;
+        --track-yaml)
+            TRACK_YAML_PATH="$2"
+            shift 2
+            ;;
         --segmentation-checkpoint)
             SEG_CHECKPOINT="$2"
             shift 2
@@ -78,6 +84,9 @@ if [ "$NO_PROMPT" = true ]; then
 fi
 
 COMMON_ARGS=("--duration" "$DURATION")
+if [ -n "$TRACK_YAML_PATH" ]; then
+    COMMON_ARGS+=("--track-yaml" "$TRACK_YAML_PATH")
+fi
 if [ "$KEEP_UNITY_OPEN" = true ]; then
     COMMON_ARGS+=("--keep-unity-open")
 fi

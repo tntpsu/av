@@ -1,0 +1,70 @@
+{
+  "schema_version": "v1",
+  "generated_at_utc": "2026-02-22T06:09:20Z",
+  "git_sha": "cbed5e1a7870354f591db3ff5b0e4f222d41b4ce",
+  "config_hash": "b45d3e55dffd4a63a14e41ce317db3e0a22c494ef5e95baf6e194c4173686414",
+  "matrix_hash": "e56477413fad5c98eef5b79083cee8b1d77868bad81e8bcb9e79adfc277a741c",
+  "recording_ids": [
+    "recording_20260222_005337.h5",
+    "recording_20260222_005458.h5",
+    "recording_20260222_005653.h5",
+    "recording_20260222_005833.h5"
+  ],
+  "pass_fail": false,
+  "regression_budget": {
+    "config": {
+      "highway_lateral_p95_max_delta_m": 0.02,
+      "sloop_first_300_p99_min_improvement_m": 0.03,
+      "sloop_lateral_p95_max_delta_m": 0.0
+    },
+    "checks": {
+      "hard_safety_pass": true,
+      "run_count_gate_pass": true,
+      "highway_non_regression": true,
+      "sloop_first_300_improvement": false,
+      "sloop_lateral_p95_non_regression": true
+    },
+    "track_metrics": {
+      "highway_65": {
+        "lateral_p95_median": 0.08596498519182205,
+        "first_300_lateral_p99_median": 0.04949267586693167,
+        "last_300_lateral_p99_median": 0.2849393871426582,
+        "steering_jerk_max_median": 20.762832033877057
+      },
+      "s_loop": {
+        "lateral_p95_median": 0.5416098833084106,
+        "first_300_lateral_p99_median": 0.69426567196846,
+        "last_300_lateral_p99_median": 0.4035855884850025,
+        "steering_jerk_max_median": 64.31962446102912
+      }
+    },
+    "baseline_track_metrics": {
+      "highway_65": {
+        "lateral_p95_median": 0.07718602567911148,
+        "first_300_lateral_p99_median": 0.0487485996633768,
+        "last_300_lateral_p99_median": 0.2890663614869118,
+        "steering_jerk_max_median": 24.047728239525018
+      },
+      "s_loop": {
+        "lateral_p95_median": 0.5658827424049377,
+        "first_300_lateral_p99_median": 0.6466029897332191,
+        "last_300_lateral_p99_median": 0.5629280331730843,
+        "steering_jerk_max_median": 45.15185388187976
+      }
+    }
+  },
+  "decision": "reject",
+  "rationale": {
+    "hard_safety_pass": true,
+    "run_count_gate_pass": true,
+    "highway_non_regression": true,
+    "sloop_first_300_improvement": false,
+    "sloop_lateral_p95_non_regression": true
+  },
+  "next_actions": [
+    "Improve trajectory/reference quality first (curve-entry continuity and authority).",
+    "Run one isolated A/B pair and apply the strongest single attribution lever."
+  ],
+  "triage_packet_count": 2,
+  "counterfactual": null
+}

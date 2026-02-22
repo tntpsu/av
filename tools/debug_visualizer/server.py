@@ -17,7 +17,6 @@ import logging
 import subprocess
 import re
 import yaml
-import yaml
 import math
 
 # Add backend modules to path
@@ -40,6 +39,7 @@ app.logger.setLevel(logging.ERROR)
 RECORDINGS_DIR = Path(__file__).parent.parent.parent / "data" / "recordings"
 DEBUG_VIS_DIR = Path(__file__).parent.parent.parent / "tmp" / "debug_visualizations"
 REPO_ROOT = Path(__file__).parent.parent.parent
+GATES_REPORTS_DIR = REPO_ROOT / "data" / "reports" / "gates"
 
 
 def _load_lateral_control_config() -> dict:
@@ -217,15 +217,45 @@ def _read_recording_metadata_dict(h5_file: h5py.File) -> dict:
         return {}
 
 
+def _safe_bundle_dir(bundle_id: str) -> Path:
+    base = GATES_REPORTS_DIR.resolve()
+    candidate = (GATES_REPORTS_DIR / bundle_id).resolve()
+    if candidate == base:
+        return candidate
+    if base not in candidate.parents:
+        raise ValueError("Invalid bundle id")
+    return candidate
+
+
+def _read_json_file(path: Path) -> dict:
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text())
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
 @app.route('/api/recordings')
 def list_recordings():
     """List all available HDF5 recordings."""
     recordings = []
     if RECORDINGS_DIR.exists():
-        for file in sorted(RECORDINGS_DIR.glob("*.h5"), reverse=True):
+        # Recursively include recordings in subfolders (e.g., phase_sloop/*).
+        files = sorted(
+            RECORDINGS_DIR.rglob("*.h5"),
+            key=lambda p: p.stat().st_mtime,
+            reverse=True,
+        )
+        for file in files:
+            rel_from_recordings = str(file.relative_to(RECORDINGS_DIR))
             rec = {
-                "filename": file.name,
-                "path": str(file.relative_to(RECORDINGS_DIR.parent.parent)),
+                # Frontend/API contract uses "filename" for selection and endpoint access.
+                # Keep it as path relative to data/recordings so nested files work.
+                "filename": rel_from_recordings,
+                "display_name": file.name,
+                "path": str(file.relative_to(REPO_ROOT)),
             }
             try:
                 with h5py.File(file, "r") as f:
@@ -248,6 +278,65 @@ def list_recordings():
                 pass
             recordings.append(rec)
     return jsonify(recordings)
+
+
+@app.route('/api/gates')
+def list_gate_bundles():
+    """List available gate/triage report bundles."""
+    bundles = []
+    if not GATES_REPORTS_DIR.exists():
+        return jsonify(bundles)
+
+    for bundle_dir in sorted(GATES_REPORTS_DIR.iterdir(), reverse=True):
+        if not bundle_dir.is_dir():
+            continue
+        gate_report = _read_json_file(bundle_dir / "gate_report.json")
+        decision = _read_json_file(bundle_dir / "decision.json")
+        bundles.append(
+            {
+                "bundle_id": bundle_dir.name,
+                "path": str(bundle_dir),
+                "pass_fail": gate_report.get("pass_fail"),
+                "decision": decision.get("decision"),
+                "recording_count": len(gate_report.get("recording_ids", []))
+                if isinstance(gate_report.get("recording_ids"), list)
+                else 0,
+                "generated_at_utc": gate_report.get("generated_at_utc") or decision.get("generated_at_utc"),
+                "label": gate_report.get("label"),
+            }
+        )
+    return jsonify(bundles)
+
+
+@app.route('/api/gates/<path:bundle_id>')
+def get_gate_bundle(bundle_id):
+    """Load one gate/triage report bundle for PhilViz inspection."""
+    try:
+        bundle_dir = _safe_bundle_dir(bundle_id)
+    except ValueError:
+        return jsonify({"error": "Invalid bundle id"}), 400
+    if not bundle_dir.exists():
+        return jsonify({"error": f"Bundle not found: {bundle_id}"}), 404
+
+    gate_report = _read_json_file(bundle_dir / "gate_report.json")
+    decision = _read_json_file(bundle_dir / "decision.json")
+    triage_packets = []
+    triage_dir = bundle_dir / "triage_packets"
+    if triage_dir.exists():
+        for packet_path in sorted(triage_dir.glob("*.json")):
+            packet = _read_json_file(packet_path)
+            if packet:
+                packet["file"] = packet_path.name
+                triage_packets.append(packet)
+
+    response = {
+        "bundle_id": bundle_dir.name,
+        "bundle_path": str(bundle_dir),
+        "gate_report": gate_report,
+        "decision": decision,
+        "triage_packets": triage_packets,
+    }
+    return jsonify(sanitize_non_finite_for_json(numpy_to_list(response)))
 
 
 @app.route('/api/recording/<path:filename>/frames')
@@ -1161,6 +1250,85 @@ def get_frame_data(filename, frame_index):
                     ):
                         frame_data['control']['curve_at_car_distance_remaining_m'] = float(
                             f['control/curve_at_car_distance_remaining_m'][control_idx]
+                        )
+                    if 'control/curve_scheduler_mode' in f and control_idx < len(
+                        f['control/curve_scheduler_mode']
+                    ):
+                        mode_val = f['control/curve_scheduler_mode'][control_idx]
+                        if isinstance(mode_val, bytes):
+                            mode_val = mode_val.decode('utf-8', 'ignore')
+                        frame_data['control']['curve_scheduler_mode'] = (
+                            str(mode_val) if mode_val is not None else ''
+                        )
+                    if 'control/curve_phase_state' in f and control_idx < len(
+                        f['control/curve_phase_state']
+                    ):
+                        state_val = f['control/curve_phase_state'][control_idx]
+                        if isinstance(state_val, bytes):
+                            state_val = state_val.decode('utf-8', 'ignore')
+                        frame_data['control']['curve_phase_state'] = (
+                            str(state_val) if state_val is not None else ''
+                        )
+                    if 'control/curve_intent_state' in f and control_idx < len(
+                        f['control/curve_intent_state']
+                    ):
+                        intent_state_val = f['control/curve_intent_state'][control_idx]
+                        if isinstance(intent_state_val, bytes):
+                            intent_state_val = intent_state_val.decode('utf-8', 'ignore')
+                        frame_data['control']['curve_intent_state'] = (
+                            str(intent_state_val) if intent_state_val is not None else ''
+                        )
+                    for key in (
+                        'curve_phase',
+                        'curve_phase_raw',
+                        'curve_phase_term_preview',
+                        'curve_phase_term_path',
+                        'curve_phase_term_rise',
+                        'curve_phase_curvature_rise_abs',
+                        'curve_intent',
+                        'curve_intent_raw',
+                        'curve_intent_term_preview',
+                        'curve_intent_term_path',
+                        'curve_intent_term_rise',
+                        'curve_intent_confidence',
+                        'curve_intent_speed_guardrail_cap_mps',
+                        'curve_intent_speed_guardrail_confidence',
+                        'reference_lookahead_target',
+                        'reference_lookahead_after_slew',
+                        'reference_lookahead_active',
+                        'curve_anticipation_score',
+                        'curve_anticipation_score_raw',
+                        'curve_anticipation_term_curvature',
+                        'curve_anticipation_term_heading',
+                        'curve_anticipation_term_far_rise',
+                        'distance_to_next_curve_start_m',
+                    ):
+                        ds_name = f'control/{key}'
+                        if ds_name in f and control_idx < len(f[ds_name]):
+                            frame_data['control'][key] = float(f[ds_name][control_idx])
+                    for key in (
+                        'curve_phase_rearm_event',
+                        'curve_anticipation_active',
+                        'curve_intent_speed_guardrail_active',
+                    ):
+                        ds_name = f'control/{key}'
+                        if ds_name in f and control_idx < len(f[ds_name]):
+                            frame_data['control'][key] = int(f[ds_name][control_idx]) == 1
+                    for key in (
+                        'curve_phase_entry_frames',
+                        'curve_phase_rearm_hold_frames',
+                    ):
+                        ds_name = f'control/{key}'
+                        if ds_name in f and control_idx < len(f[ds_name]):
+                            frame_data['control'][key] = int(f[ds_name][control_idx])
+                    if 'control/curve_anticipation_source' in f and control_idx < len(
+                        f['control/curve_anticipation_source']
+                    ):
+                        source_val = f['control/curve_anticipation_source'][control_idx]
+                        if isinstance(source_val, bytes):
+                            source_val = source_val.decode('utf-8', 'ignore')
+                        frame_data['control']['curve_anticipation_source'] = (
+                            str(source_val) if source_val is not None else ''
                         )
                     if 'control/is_road_straight' in f and control_idx < len(f['control/is_road_straight']):
                         frame_data['control']['is_road_straight'] = int(

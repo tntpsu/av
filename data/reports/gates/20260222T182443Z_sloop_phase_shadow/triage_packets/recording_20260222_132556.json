@@ -1,0 +1,77 @@
+{
+  "schema_version": "v1",
+  "generated_at_utc": "2026-02-22T18:27:04Z",
+  "git_sha": "cbed5e1a7870354f591db3ff5b0e4f222d41b4ce",
+  "config_hash": "b2c7e3b2a2e0b65bc47e898ef6f8a6ee406c61cd5025b2945a434ee37cba1094",
+  "matrix_hash": "4310438d6021acafa3adfe66a34d9feb8b57b236e605997414c589383456593d",
+  "recording_ids": [
+    "recording_20260222_132556.h5"
+  ],
+  "pass_fail": false,
+  "regression_budget": {
+    "config": {
+      "highway_lateral_p95_max_delta_m": 0.02,
+      "sloop_first_300_p99_min_improvement_m": 0.03,
+      "sloop_lateral_p95_max_delta_m": 0.0
+    },
+    "checks": {
+      "run_validity_pass": true,
+      "hard_safety_pass": false,
+      "run_count_gate_pass": false,
+      "highway_non_regression": null,
+      "sloop_first_300_improvement": null,
+      "sloop_lateral_p95_non_regression": null
+    },
+    "track_metrics": {
+      "s_loop": null
+    },
+    "baseline_track_metrics": {
+      "s_loop": null
+    }
+  },
+  "recording_id": "recording_20260222_132556.h5",
+  "recording_path": "/Users/philiptullai/Documents/Coding/av/data/recordings/recording_20260222_132556.h5",
+  "track_id": "unknown",
+  "trigger_reasons": [
+    "oscillation_runaway"
+  ],
+  "what_failed_first": {
+    "phase": "control",
+    "frame": 177,
+    "type": "steering_limiter_dominant",
+    "severity": "medium",
+    "description": "Steering limiter root cause: rate_limit dominates (100.0% of limited frames).",
+    "issue_id": "steering_limiter_dominant:177:0"
+  },
+  "downstream_consequence": null,
+  "single_next_lever": "Improve trajectory/reference quality first (curve-entry continuity and authority).",
+  "diagnostics_mode_used": "to_failure",
+  "diagnostics_fallback_used": false,
+  "failure_packet_artifact": {
+    "command": "/Users/philiptullai/Documents/Coding/av/venv/bin/python /Users/philiptullai/Documents/Coding/av/tools/analyze/build_failure_packet.py /Users/philiptullai/Documents/Coding/av/data/recordings/recording_20260222_132556.h5 --out-dir /Users/philiptullai/Documents/Coding/av/data/reports/gates/20260222T182443Z_sloop_phase_shadow/failure_packets/recording_20260222_132556",
+    "return_code": 0,
+    "stdout_tail": "Wrote failure packet to: /Users/philiptullai/Documents/Coding/av/data/reports/gates/20260222T182443Z_sloop_phase_shadow/failure_packets/recording_20260222_132556\n",
+    "stderr_tail": "",
+    "packet_dir": "/Users/philiptullai/Documents/Coding/av/data/reports/gates/20260222T182443Z_sloop_phase_shadow/failure_packets/recording_20260222_132556"
+  },
+  "metrics": {
+    "lateral_p95": 1.0680729150772095,
+    "lateral_p99": 1.664014661312104,
+    "lateral_max": 1.7900091409683228,
+    "first_300_lateral_p99": 1.1559715616703032,
+    "last_300_lateral_p99": 1.7794826531410217,
+    "oscillation_runaway": true,
+    "out_of_lane_events": 0,
+    "out_of_lane_events_full_run": 0,
+    "emergency_stop_count": 0,
+    "steering_jerk_max": 127.6925409589043,
+    "failure_detected": false,
+    "failure_frame": null,
+    "control_frame_count": 1131,
+    "control_duration_s": 59.83314944,
+    "control_fps": 18.902565059426696,
+    "unity_time_gap_max": 0.13333511352539062,
+    "run_validity_pass": true,
+    "run_validity_reasons": []
+  }
+}

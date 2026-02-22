@@ -129,6 +129,24 @@ class DataLoader {
     }
 
     /**
+     * List available gate/triage bundles.
+     */
+    async loadGateBundles() {
+        const response = await fetch(`${API_BASE}/gates`, { cache: 'no-store' });
+        if (!response.ok) throw new Error('Failed to load gate bundles');
+        return response.json();
+    }
+
+    /**
+     * Load one gate/triage bundle.
+     */
+    async loadGateBundle(bundleId) {
+        const response = await fetch(`${API_BASE}/gates/${bundleId}`, { cache: 'no-store' });
+        if (!response.ok) throw new Error(`Failed to load gate bundle: ${bundleId}`);
+        return response.json();
+    }
+
+    /**
      * Load frame data for a specific frame index.
      */
     async loadFrameData(frameIndex) {
@@ -291,4 +309,3 @@ class DataLoader {
 if (typeof module !== 'undefined' && module.exports) {
     module.exports = DataLoader;
 }
-

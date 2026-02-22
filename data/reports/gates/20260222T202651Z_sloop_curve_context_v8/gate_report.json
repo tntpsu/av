@@ -1,0 +1,159 @@
+{
+  "schema_version": "v1",
+  "generated_at_utc": "2026-02-22T20:29:12Z",
+  "bundle_dir": "/Users/philiptullai/Documents/Coding/av/data/reports/gates/20260222T202651Z_sloop_curve_context_v8",
+  "label": "sloop_curve_context_v8",
+  "mode": "quick",
+  "git_sha": "cbed5e1a7870354f591db3ff5b0e4f222d41b4ce",
+  "config_hash": "adb985a64d1d665db35d8a1f0072ce6fa5804953de0e2a9ab39a3afba2f3db39",
+  "matrix_hash": "f256be86472b4bba17138afe4562fbe8e6126dc885e07cfda0257cc2541772ef",
+  "recording_ids": [
+    "recording_20260222_152653.h5",
+    "recording_20260222_152803.h5"
+  ],
+  "pass_fail": false,
+  "regression_budget": {
+    "config": {
+      "highway_lateral_p95_max_delta_m": 0.02,
+      "sloop_first_300_p99_min_improvement_m": 0.03,
+      "sloop_lateral_p95_max_delta_m": 0.0
+    },
+    "checks": {
+      "run_validity_pass": true,
+      "hard_safety_pass": false,
+      "run_count_gate_pass": true,
+      "highway_non_regression": null,
+      "sloop_first_300_improvement": null,
+      "sloop_lateral_p95_non_regression": null
+    },
+    "track_metrics": {
+      "s_loop": {
+        "lateral_p95_median": 0.8981997668743134,
+        "first_300_lateral_p99_median": 1.1519434100389478,
+        "last_300_lateral_p99_median": 1.3348833805322646,
+        "steering_jerk_max_median": 120.67713582512619
+      }
+    },
+    "baseline_track_metrics": {
+      "s_loop": null
+    }
+  },
+  "run_counts": {
+    "s_loop": 2
+  },
+  "required_track_ids": [
+    "s_loop"
+  ],
+  "expected_runs_per_track": 2,
+  "analyze_to_failure_default": true,
+  "runs": [
+    {
+      "recording_id": "recording_20260222_152653.h5",
+      "recording_path": "/Users/philiptullai/Documents/Coding/av/data/recordings/recording_20260222_152653.h5",
+      "track_id": "s_loop",
+      "metrics": {
+        "lateral_p95": 0.8262333869934082,
+        "lateral_p99": 1.1258055067062378,
+        "lateral_max": 1.1883201599121094,
+        "first_300_lateral_p99": 1.1623771429061889,
+        "last_300_lateral_p99": 1.1281776869297027,
+        "oscillation_runaway": false,
+        "out_of_lane_events": 0,
+        "out_of_lane_events_full_run": 0,
+        "emergency_stop_count": 0,
+        "steering_jerk_max": 80.97643332118191,
+        "failure_detected": false,
+        "failure_frame": null,
+        "control_frame_count": 1149,
+        "control_duration_s": 59.91667639,
+        "control_fps": 19.176631102184537,
+        "unity_time_gap_max": 0.14999771118164062,
+        "run_validity_pass": true,
+        "run_validity_reasons": [],
+        "curve_intent_available": true,
+        "curve_intent_arm_signal_available": true,
+        "curve_intent_arm_early_enough_rate": 100.0,
+        "curve_intent_undercall_frame_rate": 2.857142857142857,
+        "curve_intent_curvature_ratio_p50": 1.0696295024150153,
+        "curve_intent_curvature_ratio_p95": 1.341310595691359,
+        "curve_intent_arm_early_enough": true,
+        "curve_intent_undercall_detected": false
+      },
+      "stage6": {
+        "what_failed_first": {
+          "phase": "control",
+          "frame": 86,
+          "type": "speed_exceeded_feasible",
+          "severity": "warning",
+          "description": "Speed exceeded feasible limit for curvature (max ratio 3.08x, 0.25g).",
+          "issue_id": "speed_exceeded_feasible",
+          "end_frame": 1142,
+          "duration": 1057,
+          "transition_first_frame": 86
+        },
+        "downstream_consequence": null,
+        "single_next_lever": "Improve trajectory/reference quality first (curve-entry continuity and authority).",
+        "diagnostics_mode_used": "to_failure",
+        "diagnostics_fallback_used": false,
+        "diagnostics_error": null,
+        "answered_all_stage6_questions": false
+      },
+      "trigger_reasons": []
+    },
+    {
+      "recording_id": "recording_20260222_152803.h5",
+      "recording_path": "/Users/philiptullai/Documents/Coding/av/data/recordings/recording_20260222_152803.h5",
+      "track_id": "s_loop",
+      "metrics": {
+        "lateral_p95": 0.9701661467552185,
+        "lateral_p99": 1.3977494263648984,
+        "lateral_max": 1.5516934394836426,
+        "first_300_lateral_p99": 1.141509677171707,
+        "last_300_lateral_p99": 1.5415890741348266,
+        "oscillation_runaway": true,
+        "out_of_lane_events": 0,
+        "out_of_lane_events_full_run": 0,
+        "emergency_stop_count": 0,
+        "steering_jerk_max": 160.37783832907044,
+        "failure_detected": false,
+        "failure_frame": null,
+        "control_frame_count": 1147,
+        "control_duration_s": 59.96635196,
+        "control_fps": 19.12739332159301,
+        "unity_time_gap_max": 0.1333770751953125,
+        "run_validity_pass": true,
+        "run_validity_reasons": [],
+        "curve_intent_available": true,
+        "curve_intent_arm_signal_available": true,
+        "curve_intent_arm_early_enough_rate": 100.0,
+        "curve_intent_undercall_frame_rate": 2.7348394768133173,
+        "curve_intent_curvature_ratio_p50": 1.069606700495883,
+        "curve_intent_curvature_ratio_p95": 1.3412881436217967,
+        "curve_intent_arm_early_enough": true,
+        "curve_intent_undercall_detected": false
+      },
+      "stage6": {
+        "what_failed_first": {
+          "phase": "control",
+          "frame": 91,
+          "type": "speed_exceeded_feasible",
+          "severity": "warning",
+          "description": "Speed exceeded feasible limit for curvature (max ratio 3.27x, 0.25g).",
+          "issue_id": "speed_exceeded_feasible",
+          "end_frame": 1133,
+          "duration": 1043,
+          "transition_first_frame": 91
+        },
+        "downstream_consequence": null,
+        "single_next_lever": "Improve trajectory/reference quality first (curve-entry continuity and authority).",
+        "diagnostics_mode_used": "to_failure",
+        "diagnostics_fallback_used": false,
+        "diagnostics_error": null,
+        "answered_all_stage6_questions": false
+      },
+      "trigger_reasons": [
+        "oscillation_runaway"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,21 @@
+{
+  "recording": "/Users/philiptullai/Documents/Coding/av/data/recordings/recording_20260222_132934.h5",
+  "failure_frame": 814,
+  "failure_reason": "offroad_emergency_stop",
+  "failure_time_s": 46.44705,
+  "first_limiter_hit_frame": 124,
+  "first_limiter_hit_time_s": 9.897256,
+  "window_start": 784,
+  "window_end_exclusive": 845,
+  "speed_feasibility": {
+    "source": "turn_feasibility_telemetry",
+    "telemetry_active_pct": 6.557377049180328,
+    "telemetry_infeasible_pct": 0.0,
+    "telemetry_margin_g_mean": 0.1665756106376648,
+    "telemetry_margin_g_min": 0.1626025140285492,
+    "telemetry_speed_delta_mps_mean": 0.0,
+    "telemetry_speed_delta_mps_max": 0.0,
+    "legacy_speed_limited_pct_v2kappa": 0.0,
+    "is_speed_limited": false
+  }
+}

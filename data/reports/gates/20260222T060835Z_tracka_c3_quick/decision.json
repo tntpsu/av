@@ -1,0 +1,49 @@
+{
+  "schema_version": "v1",
+  "generated_at_utc": "2026-02-22T06:08:36Z",
+  "git_sha": "cbed5e1a7870354f591db3ff5b0e4f222d41b4ce",
+  "config_hash": "b45d3e55dffd4a63a14e41ce317db3e0a22c494ef5e95baf6e194c4173686414",
+  "matrix_hash": "e56477413fad5c98eef5b79083cee8b1d77868bad81e8bcb9e79adfc277a741c",
+  "recording_ids": [
+    "recording_20260222_005337.h5",
+    "recording_20260222_005458.h5",
+    "recording_20260222_005653.h5",
+    "recording_20260222_005833.h5"
+  ],
+  "pass_fail": false,
+  "regression_budget": {
+    "config": {
+      "highway_lateral_p95_max_delta_m": 0.02,
+      "sloop_first_300_p99_min_improvement_m": 0.03,
+      "sloop_lateral_p95_max_delta_m": 0.0
+    },
+    "checks": {
+      "hard_safety_pass": true,
+      "run_count_gate_pass": false,
+      "highway_non_regression": null,
+      "sloop_first_300_improvement": null,
+      "sloop_lateral_p95_non_regression": null
+    },
+    "track_metrics": {
+      "highway_65": null,
+      "s_loop": null
+    },
+    "baseline_track_metrics": {
+      "highway_65": null,
+      "s_loop": null
+    }
+  },
+  "decision": "reject",
+  "rationale": {
+    "hard_safety_pass": true,
+    "run_count_gate_pass": false,
+    "highway_non_regression": null,
+    "sloop_first_300_improvement": null,
+    "sloop_lateral_p95_non_regression": null
+  },
+  "next_actions": [
+    "Fill missing track/run coverage to satisfy gate protocol."
+  ],
+  "triage_packet_count": 0,
+  "counterfactual": null
+}

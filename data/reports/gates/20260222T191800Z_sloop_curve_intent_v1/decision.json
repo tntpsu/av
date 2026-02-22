@@ -1,0 +1,53 @@
+{
+  "schema_version": "v1",
+  "generated_at_utc": "2026-02-22T19:20:21Z",
+  "git_sha": "cbed5e1a7870354f591db3ff5b0e4f222d41b4ce",
+  "config_hash": "10fa1d6b0b0fe087f671a6694df584e77601730b9c9784b016969ae1bb7cbaf3",
+  "matrix_hash": "9e0e91fcb5cdfe7156f9093a46b75618412ffb9a80950c110b83d3b5037e15a9",
+  "recording_ids": [
+    "recording_20260222_141802.h5",
+    "recording_20260222_141913.h5"
+  ],
+  "pass_fail": false,
+  "regression_budget": {
+    "config": {
+      "highway_lateral_p95_max_delta_m": 0.02,
+      "sloop_first_300_p99_min_improvement_m": 0.03,
+      "sloop_lateral_p95_max_delta_m": 0.0
+    },
+    "checks": {
+      "run_validity_pass": true,
+      "hard_safety_pass": false,
+      "run_count_gate_pass": true,
+      "highway_non_regression": null,
+      "sloop_first_300_improvement": null,
+      "sloop_lateral_p95_non_regression": null
+    },
+    "track_metrics": {
+      "s_loop": {
+        "lateral_p95_median": 0.9544618129730225,
+        "first_300_lateral_p99_median": 1.2771379619836807,
+        "last_300_lateral_p99_median": 1.573595396876335,
+        "steering_jerk_max_median": 103.9411740800235
+      }
+    },
+    "baseline_track_metrics": {
+      "s_loop": null
+    }
+  },
+  "decision": "reject",
+  "rationale": {
+    "run_validity_pass": true,
+    "hard_safety_pass": false,
+    "run_count_gate_pass": true,
+    "highway_non_regression": null,
+    "sloop_first_300_improvement": null,
+    "sloop_lateral_p95_non_regression": null
+  },
+  "next_actions": [
+    "Improve trajectory/reference quality first (curve-entry continuity and authority).",
+    "Improve trajectory/reference quality first (curve-entry continuity and authority)."
+  ],
+  "triage_packet_count": 2,
+  "counterfactual": null
+}

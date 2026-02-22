@@ -1,0 +1,206 @@
+{
+  "schema_version": "v1",
+  "generated_at_utc": "2026-02-22T06:09:20Z",
+  "bundle_dir": "/Users/philiptullai/Documents/Coding/av/data/reports/gates/20260222T060920Z_tracka_c3_quick_mapped",
+  "label": "tracka_c3_quick_mapped",
+  "mode": "quick",
+  "git_sha": "cbed5e1a7870354f591db3ff5b0e4f222d41b4ce",
+  "config_hash": "b45d3e55dffd4a63a14e41ce317db3e0a22c494ef5e95baf6e194c4173686414",
+  "matrix_hash": "e56477413fad5c98eef5b79083cee8b1d77868bad81e8bcb9e79adfc277a741c",
+  "recording_ids": [
+    "recording_20260222_005337.h5",
+    "recording_20260222_005458.h5",
+    "recording_20260222_005653.h5",
+    "recording_20260222_005833.h5"
+  ],
+  "pass_fail": false,
+  "regression_budget": {
+    "config": {
+      "highway_lateral_p95_max_delta_m": 0.02,
+      "sloop_first_300_p99_min_improvement_m": 0.03,
+      "sloop_lateral_p95_max_delta_m": 0.0
+    },
+    "checks": {
+      "hard_safety_pass": true,
+      "run_count_gate_pass": true,
+      "highway_non_regression": true,
+      "sloop_first_300_improvement": false,
+      "sloop_lateral_p95_non_regression": true
+    },
+    "track_metrics": {
+      "highway_65": {
+        "lateral_p95_median": 0.08596498519182205,
+        "first_300_lateral_p99_median": 0.04949267586693167,
+        "last_300_lateral_p99_median": 0.2849393871426582,
+        "steering_jerk_max_median": 20.762832033877057
+      },
+      "s_loop": {
+        "lateral_p95_median": 0.5416098833084106,
+        "first_300_lateral_p99_median": 0.69426567196846,
+        "last_300_lateral_p99_median": 0.4035855884850025,
+        "steering_jerk_max_median": 64.31962446102912
+      }
+    },
+    "baseline_track_metrics": {
+      "highway_65": {
+        "lateral_p95_median": 0.07718602567911148,
+        "first_300_lateral_p99_median": 0.0487485996633768,
+        "last_300_lateral_p99_median": 0.2890663614869118,
+        "steering_jerk_max_median": 24.047728239525018
+      },
+      "s_loop": {
+        "lateral_p95_median": 0.5658827424049377,
+        "first_300_lateral_p99_median": 0.6466029897332191,
+        "last_300_lateral_p99_median": 0.5629280331730843,
+        "steering_jerk_max_median": 45.15185388187976
+      }
+    }
+  },
+  "run_counts": {
+    "highway_65": 2,
+    "s_loop": 2
+  },
+  "required_track_ids": [
+    "highway_65",
+    "s_loop"
+  ],
+  "expected_runs_per_track": 2,
+  "analyze_to_failure_default": true,
+  "runs": [
+    {
+      "recording_id": "recording_20260222_005337.h5",
+      "recording_path": "/Users/philiptullai/Documents/Coding/av/data/recordings/recording_20260222_005337.h5",
+      "track_id": "highway_65",
+      "metrics": {
+        "lateral_p95": 0.08882380276918411,
+        "lateral_p99": 0.2642922878265381,
+        "lateral_max": 0.28373366594314575,
+        "first_300_lateral_p99": 0.04979462474584579,
+        "last_300_lateral_p99": 0.2767536559700966,
+        "oscillation_runaway": false,
+        "out_of_lane_events": 0,
+        "out_of_lane_events_full_run": 0,
+        "emergency_stop_count": 0,
+        "steering_jerk_max": 20.59736050000839,
+        "failure_detected": false,
+        "failure_frame": null
+      },
+      "stage6": {
+        "what_failed_first": null,
+        "downstream_consequence": null,
+        "single_next_lever": "Improve trajectory/reference quality first (curve-entry continuity and authority).",
+        "diagnostics_mode_used": "to_failure",
+        "diagnostics_fallback_used": false,
+        "diagnostics_error": null,
+        "answered_all_stage6_questions": false
+      },
+      "trigger_reasons": []
+    },
+    {
+      "recording_id": "recording_20260222_005458.h5",
+      "recording_path": "/Users/philiptullai/Documents/Coding/av/data/recordings/recording_20260222_005458.h5",
+      "track_id": "highway_65",
+      "metrics": {
+        "lateral_p95": 0.08310616761445999,
+        "lateral_p99": 0.27847897350788114,
+        "lateral_max": 0.29888612031936646,
+        "first_300_lateral_p99": 0.049190726988017554,
+        "last_300_lateral_p99": 0.29312511831521987,
+        "oscillation_runaway": false,
+        "out_of_lane_events": 0,
+        "out_of_lane_events_full_run": 0,
+        "emergency_stop_count": 0,
+        "steering_jerk_max": 20.928303567745726,
+        "failure_detected": false,
+        "failure_frame": null
+      },
+      "stage6": {
+        "what_failed_first": null,
+        "downstream_consequence": null,
+        "single_next_lever": "Improve trajectory/reference quality first (curve-entry continuity and authority).",
+        "diagnostics_mode_used": "to_failure",
+        "diagnostics_fallback_used": false,
+        "diagnostics_error": null,
+        "answered_all_stage6_questions": false
+      },
+      "trigger_reasons": []
+    },
+    {
+      "recording_id": "recording_20260222_005653.h5",
+      "recording_path": "/Users/philiptullai/Documents/Coding/av/data/recordings/recording_20260222_005653.h5",
+      "track_id": "s_loop",
+      "metrics": {
+        "lateral_p95": 0.5831939578056335,
+        "lateral_p99": 0.7684779787063594,
+        "lateral_max": 0.865856409072876,
+        "first_300_lateral_p99": 0.7637708145380019,
+        "last_300_lateral_p99": 0.40605040192604064,
+        "oscillation_runaway": false,
+        "out_of_lane_events": 0,
+        "out_of_lane_events_full_run": 0,
+        "emergency_stop_count": 0,
+        "steering_jerk_max": 65.78077319273103,
+        "failure_detected": false,
+        "failure_frame": null
+      },
+      "stage6": {
+        "what_failed_first": {
+          "phase": "control",
+          "frame": 132,
+          "type": "steering_limiter_dominant",
+          "severity": "medium",
+          "description": "Steering limiter root cause: rate_limit dominates (100.0% of limited frames).",
+          "issue_id": "steering_limiter_dominant:132:0"
+        },
+        "downstream_consequence": null,
+        "single_next_lever": "Improve trajectory/reference quality first (curve-entry continuity and authority).",
+        "diagnostics_mode_used": "to_failure",
+        "diagnostics_fallback_used": false,
+        "diagnostics_error": null,
+        "answered_all_stage6_questions": false
+      },
+      "trigger_reasons": [
+        "sloop_first_300_no_improvement",
+        "sloop_lateral_p95_regression"
+      ]
+    },
+    {
+      "recording_id": "recording_20260222_005833.h5",
+      "recording_path": "/Users/philiptullai/Documents/Coding/av/data/recordings/recording_20260222_005833.h5",
+      "track_id": "s_loop",
+      "metrics": {
+        "lateral_p95": 0.5000258088111877,
+        "lateral_p99": 0.6709844601154328,
+        "lateral_max": 0.7271955609321594,
+        "first_300_lateral_p99": 0.6247605293989181,
+        "last_300_lateral_p99": 0.4011207750439644,
+        "oscillation_runaway": false,
+        "out_of_lane_events": 0,
+        "out_of_lane_events_full_run": 0,
+        "emergency_stop_count": 0,
+        "steering_jerk_max": 62.85847572932721,
+        "failure_detected": false,
+        "failure_frame": null
+      },
+      "stage6": {
+        "what_failed_first": {
+          "phase": "control",
+          "frame": 1076,
+          "type": "steering_limiter_dominant",
+          "severity": "medium",
+          "description": "Steering limiter root cause: rate_limit dominates (100.0% of limited frames).",
+          "issue_id": "steering_limiter_dominant:1076:0"
+        },
+        "downstream_consequence": null,
+        "single_next_lever": "Run one isolated A/B pair and apply the strongest single attribution lever.",
+        "diagnostics_mode_used": "to_failure",
+        "diagnostics_fallback_used": false,
+        "diagnostics_error": null,
+        "answered_all_stage6_questions": false
+      },
+      "trigger_reasons": [
+        "sloop_first_300_no_improvement"
+      ]
+    }
+  ]
+}

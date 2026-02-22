@@ -1,0 +1,153 @@
+# AV Stack — Claude Code Instructions
+
+## Project Overview
+
+Autonomous vehicle pipeline running inside a **Unity 2021.3 LTS** simulation.
+Handles perception, trajectory planning, and vehicle control for lane-keeping.
+Research/development system — not production safety-critical.
+
+**Stage:** Stage 1 — Lane-Keeping (active)
+**Current milestone:** S1-M39 — Longitudinal comfort tuning (validating)
+
+---
+
+## Agent Protocol
+
+Before starting any work session, read the agent docs:
+1. `docs/agent/README.md` — project overview
+2. `docs/agent/current_state.md` — active work and known issues
+3. `docs/agent/tasks.md` — task list and priorities
+4. `docs/agent/architecture.md` — component details (read before touching any layer)
+
+After completing work, update the relevant `docs/agent/*.md` files.
+
+---
+
+## Critical Files — Handle With Care
+
+| File | Lines | Notes |
+|---|---|---|
+| `av_stack.py` | 5,420 | Main orchestrator — DO NOT edit without reading relevant sections first. Lane gating logic has wide blast radius. |
+| `config/av_stack_config.yaml` | ~17 KB | 100+ tuning params. All changes require A/B batch testing (≥5 runs). |
+| `control/pid_controller.py` | 3,901 | Active controller. Pure Pursuit is the active lateral mode. |
+| `trajectory/inference.py` | 1,143 | Rule-based planner. EMA smoothing and speed planning are curvature-sensitive. |
+| `perception/inference.py` | 489 | Lane detection. CV fallback is de facto active path. |
+| `bridge/server.py` | — | FastAPI Unity↔Python bridge. |
+| `data/recorder.py` | — | Async HDF5 recording. |
+
+---
+
+## Active Control Configuration
+
+- **Lateral mode:** Pure Pursuit (not PID, not Stanley, not MPC)
+- **PID pipeline:** Bypassed in PP mode (S1-M35)
+- **Target speed:** 12.0 m/s
+- **Perception:** CV fallback active (segmentation model likely untrained)
+
+---
+
+## Key Constraints
+
+1. **Always use A/B batch testing (≥5 runs)** to validate config changes — use `run_ab_batch.py`
+2. **Read before editing** — never modify source code without reading the relevant file first
+3. **Do not modify `av_stack.py`** without understanding the lane gating logic in context
+4. **Do not commit** unless explicitly asked
+5. **Config changes only** — prefer YAML tuning over code changes when possible
+
+---
+
+## Workflow Commands
+
+```bash
+# Run AV stack (60s on s_loop track)
+./start_av_stack.sh --launch-unity --unity-auto-play --duration 60
+
+# Ground truth baseline
+./start_ground_truth.sh --track-yaml tracks/s_loop.yml --duration 60
+
+# Analyze latest recording (primary summary)
+python tools/analyze/analyze_drive_overall.py --latest
+
+# Frame inspector / PhilViz (port 5001)
+python tools/debug_visualizer/server.py
+
+# A/B config comparison (minimum 5 runs each)
+python tools/analyze/run_ab_batch.py --config-a A.yaml --config-b B.yaml --runs 5
+
+# Full test suite
+pytest tests/ -v
+```
+
+---
+
+## Diagnostic Cycle
+
+```
+1. Run: ./start_av_stack.sh --launch-unity --unity-auto-play --duration 60
+2. Analyze: python tools/analyze/analyze_drive_overall.py --latest
+3. Inspect frames: python tools/debug_visualizer/server.py
+4. Layer isolation: python tools/analyze/counterfactual_layer_swap.py
+5. A/B test config change: python tools/analyze/run_ab_batch.py --runs 5
+6. Update config, repeat
+```
+
+---
+
+## Architecture Summary
+
+```
+Unity (C#)
+  Camera frame (30 FPS) ──► FastAPI Bridge (bridge/server.py)
+  Vehicle state ──────────►        │ HTTP
+                                    ▼
+                            av_stack.py (orchestrator)
+                                    │
+             ┌──────────────────────┼────────────────────┐
+             ▼                      ▼                     ▼
+        Perception            Trajectory              Control
+    perception/               trajectory/           control/
+    inference.py              inference.py       pid_controller.py
+                                    │
+                            HDF5 Recorder (async)
+                            data/recorder.py → data/recordings/*.h5
+```
+
+Per-frame data flow: Unity → bridge → perception → EMA gating (av_stack.py) → trajectory → Pure Pursuit → rate/jerk limit → safety clip → control command back to Unity → async HDF5 write.
+
+---
+
+## Comfort Gates (S1-M39)
+
+| Metric | Target |
+|---|---|
+| Accel P95 | ≤ 3.0 m/s² |
+| Jerk P95 | ≤ 6.0 m/s³ |
+| Lateral RMSE | ≤ 0.40 m |
+| Centered frames | ≥ 70% |
+| Emergency stops | 0 |
+
+---
+
+## Fragile Areas
+
+- **`av_stack.py` lane gating** — `clamp_lane_center_and_width()`, `apply_lane_ema_gating()`, `blend_lane_pair_with_previous()` are deeply interdependent
+- **Curvature measurement** — errors cascade to speed planning AND steering
+- **Perception stale fallback** — multi-condition blending logic; can fail silently
+- **Temporal sync** — camera frames and vehicle state have different timestamps
+- **Parameter surface** — 100+ config params; untested combos can produce unstable behavior
+
+---
+
+## Tech Stack
+
+| Layer | Tools |
+|---|---|
+| Simulation | Unity 2021.3 LTS (C#) |
+| Core stack | Python 3 |
+| ML / Vision | PyTorch ≥ 2.0, OpenCV ≥ 4.8, scikit-learn |
+| API bridge | FastAPI + uvicorn (async) |
+| Data storage | HDF5 via h5py |
+| Numerics | NumPy, SciPy, Pandas |
+| Testing | pytest (98 test files, 126+ passing) |
+| Visualization | PhilViz (Flask, port 5001), Matplotlib |
+| Config | YAML (`config/av_stack_config.yaml`) |

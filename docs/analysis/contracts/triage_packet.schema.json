@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://av.local/schemas/triage_packet.schema.json",
+  "title": "Triage Packet",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "git_sha",
+    "config_hash",
+    "matrix_hash",
+    "recording_ids",
+    "pass_fail",
+    "regression_budget"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "string"
+    },
+    "git_sha": {
+      "type": "string"
+    },
+    "config_hash": {
+      "type": "string"
+    },
+    "matrix_hash": {
+      "type": "string"
+    },
+    "recording_ids": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "pass_fail": {
+      "type": "boolean"
+    },
+    "regression_budget": {
+      "type": "object"
+    }
+  },
+  "additionalProperties": true
+}

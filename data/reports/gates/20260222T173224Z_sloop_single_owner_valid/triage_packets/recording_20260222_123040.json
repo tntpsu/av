@@ -1,0 +1,98 @@
+{
+  "schema_version": "v1",
+  "generated_at_utc": "2026-02-22T17:32:24Z",
+  "git_sha": "cbed5e1a7870354f591db3ff5b0e4f222d41b4ce",
+  "config_hash": "7207d8faca9be48d2c00366e1bc07183e57b43893ac4b46e1b9ec77e691eeb6f",
+  "matrix_hash": "28a31bd0676e47f51a79fd9c0bff0f7eb93ac26265c7fe59c457985c4daaf0cd",
+  "recording_ids": [
+    "recording_20260222_123040.h5"
+  ],
+  "pass_fail": false,
+  "regression_budget": {
+    "config": {
+      "highway_lateral_p95_max_delta_m": 0.02,
+      "sloop_first_300_p99_min_improvement_m": 0.03,
+      "sloop_lateral_p95_max_delta_m": 0.0
+    },
+    "checks": {
+      "run_validity_pass": true,
+      "hard_safety_pass": false,
+      "run_count_gate_pass": true,
+      "highway_non_regression": null,
+      "sloop_first_300_improvement": false,
+      "sloop_lateral_p95_non_regression": false
+    },
+    "track_metrics": {
+      "s_loop": {
+        "lateral_p95_median": 1.0682536959648132,
+        "first_300_lateral_p99_median": 1.5084360939264296,
+        "last_300_lateral_p99_median": 2.033815715312958,
+        "steering_jerk_max_median": 88.77976724127836
+      }
+    },
+    "baseline_track_metrics": {
+      "s_loop": {
+        "lateral_p95_median": 1.0612313747406006,
+        "first_300_lateral_p99_median": 1.470637885928154,
+        "last_300_lateral_p99_median": 2.2098145735263826,
+        "steering_jerk_max_median": 121.41465819062587
+      }
+    }
+  },
+  "recording_id": "recording_20260222_123040.h5",
+  "recording_path": "/Users/philiptullai/Documents/Coding/av/data/recordings/recording_20260222_123040.h5",
+  "track_id": "s_loop",
+  "trigger_reasons": [
+    "emergency_stop",
+    "out_of_lane"
+  ],
+  "what_failed_first": {
+    "phase": "control",
+    "frame": 168,
+    "type": "steering_limiter_dominant",
+    "severity": "medium",
+    "description": "Steering limiter root cause: rate_limit dominates (100.0% of limited frames).",
+    "issue_id": "steering_limiter_dominant:168:0"
+  },
+  "downstream_consequence": {
+    "phase": "downstream",
+    "frame": 831,
+    "type": "emergency_stop",
+    "severity": "critical",
+    "description": "Emergency stop transitioned ON at frame 831",
+    "issue_id": "emergency_stop:831:2",
+    "end_frame": 1162,
+    "duration": 332,
+    "transition_first_frame": 831
+  },
+  "single_next_lever": "Improve trajectory/reference quality first (curve-entry continuity and authority).",
+  "diagnostics_mode_used": "to_failure",
+  "diagnostics_fallback_used": false,
+  "failure_packet_artifact": {
+    "command": "/Users/philiptullai/Documents/Coding/av/venv/bin/python /Users/philiptullai/Documents/Coding/av/tools/analyze/build_failure_packet.py /Users/philiptullai/Documents/Coding/av/data/recordings/recording_20260222_123040.h5 --out-dir /Users/philiptullai/Documents/Coding/av/data/reports/gates/20260222T173224Z_sloop_single_owner_valid/failure_packets/recording_20260222_123040",
+    "return_code": 0,
+    "stdout_tail": "Wrote failure packet to: /Users/philiptullai/Documents/Coding/av/data/reports/gates/20260222T173224Z_sloop_single_owner_valid/failure_packets/recording_20260222_123040\n",
+    "stderr_tail": "",
+    "packet_dir": "/Users/philiptullai/Documents/Coding/av/data/reports/gates/20260222T173224Z_sloop_single_owner_valid/failure_packets/recording_20260222_123040"
+  },
+  "metrics": {
+    "lateral_p95": 1.0258302688598633,
+    "lateral_p99": 2.0408568716049182,
+    "lateral_max": 2.0995917320251465,
+    "first_300_lateral_p99": 1.3991966700553893,
+    "last_300_lateral_p99": 1.9368696212768555,
+    "oscillation_runaway": false,
+    "out_of_lane_events": 1,
+    "out_of_lane_events_full_run": 1,
+    "emergency_stop_count": 1,
+    "steering_jerk_max": 73.50757521302664,
+    "failure_detected": true,
+    "failure_frame": 830,
+    "control_frame_count": 1163,
+    "control_duration_s": 59.89873079,
+    "control_fps": 19.41610422560341,
+    "unity_time_gap_max": 0.1333332061767578,
+    "run_validity_pass": true,
+    "run_validity_reasons": []
+  }
+}

@@ -1,0 +1,104 @@
+{
+  "schema_version": "v1",
+  "generated_at_utc": "2026-02-22T20:32:07Z",
+  "git_sha": "cbed5e1a7870354f591db3ff5b0e4f222d41b4ce",
+  "config_hash": "6d3604e3d054998348be68da23f8e105c3ce811723e6ba76977b5119fe7f8335",
+  "matrix_hash": "2b2826b70457c01ee3e52506bda7740383253852d08d6ed4a322101b5366e7c8",
+  "recording_ids": [
+    "recording_20260222_153058.h5"
+  ],
+  "pass_fail": false,
+  "regression_budget": {
+    "config": {
+      "highway_lateral_p95_max_delta_m": 0.02,
+      "sloop_first_300_p99_min_improvement_m": 0.03,
+      "sloop_lateral_p95_max_delta_m": 0.0
+    },
+    "checks": {
+      "run_validity_pass": true,
+      "hard_safety_pass": false,
+      "run_count_gate_pass": true,
+      "highway_non_regression": null,
+      "sloop_first_300_improvement": null,
+      "sloop_lateral_p95_non_regression": null
+    },
+    "track_metrics": {
+      "s_loop": {
+        "lateral_p95_median": 0.9577904641628265,
+        "first_300_lateral_p99_median": 1.1706254714727402,
+        "last_300_lateral_p99_median": 1.7529641377925873,
+        "steering_jerk_max_median": 130.3946074372421
+      }
+    },
+    "baseline_track_metrics": {
+      "s_loop": null
+    }
+  },
+  "recording_id": "recording_20260222_153058.h5",
+  "recording_path": "/Users/philiptullai/Documents/Coding/av/data/recordings/recording_20260222_153058.h5",
+  "track_id": "s_loop",
+  "trigger_reasons": [
+    "emergency_stop",
+    "out_of_lane"
+  ],
+  "what_failed_first": {
+    "phase": "trajectory",
+    "frame": 0,
+    "type": "trajectory_suppressed_curve_entry",
+    "severity": "critical",
+    "description": "Heading-zero gate active during curve (curvature>0.003) in 30 frames before failure.",
+    "issue_id": "trajectory_suppressed_curve_entry",
+    "end_frame": 964,
+    "duration": 965,
+    "transition_first_frame": 0
+  },
+  "downstream_consequence": {
+    "phase": "downstream",
+    "frame": 981,
+    "type": "emergency_stop",
+    "severity": "critical",
+    "description": "Emergency stop transitioned ON at frame 981",
+    "issue_id": "emergency_stop:981:3",
+    "end_frame": 1160,
+    "duration": 180,
+    "transition_first_frame": 981
+  },
+  "single_next_lever": "Improve trajectory/reference quality first (curve-entry continuity and authority).",
+  "diagnostics_mode_used": "to_failure",
+  "diagnostics_fallback_used": false,
+  "failure_packet_artifact": {
+    "command": "/Users/philiptullai/Documents/Coding/av/venv/bin/python /Users/philiptullai/Documents/Coding/av/tools/analyze/build_failure_packet.py /Users/philiptullai/Documents/Coding/av/data/recordings/recording_20260222_153058.h5 --out-dir /Users/philiptullai/Documents/Coding/av/data/reports/gates/20260222T202946Z_sloop_curve_context_v9/failure_packets/recording_20260222_153058",
+    "return_code": 0,
+    "stdout_tail": "Wrote failure packet to: /Users/philiptullai/Documents/Coding/av/data/reports/gates/20260222T202946Z_sloop_curve_context_v9/failure_packets/recording_20260222_153058\n",
+    "stderr_tail": "",
+    "packet_dir": "/Users/philiptullai/Documents/Coding/av/data/reports/gates/20260222T202946Z_sloop_curve_context_v9/failure_packets/recording_20260222_153058"
+  },
+  "metrics": {
+    "lateral_p95": 0.9957568049430847,
+    "lateral_p99": 2.009503126144409,
+    "lateral_max": 2.0102274417877197,
+    "first_300_lateral_p99": 1.1663263022899628,
+    "last_300_lateral_p99": 2.0095090818405152,
+    "oscillation_runaway": false,
+    "out_of_lane_events": 1,
+    "out_of_lane_events_full_run": 1,
+    "emergency_stop_count": 1,
+    "steering_jerk_max": 140.65981731189675,
+    "failure_detected": true,
+    "failure_frame": 980,
+    "control_frame_count": 1161,
+    "control_duration_s": 59.95053624,
+    "control_fps": 19.365965224267025,
+    "unity_time_gap_max": 0.14999961853027344,
+    "run_validity_pass": true,
+    "run_validity_reasons": [],
+    "curve_intent_available": true,
+    "curve_intent_arm_signal_available": true,
+    "curve_intent_arm_early_enough_rate": 100.0,
+    "curve_intent_undercall_frame_rate": 2.086438152011923,
+    "curve_intent_curvature_ratio_p50": 1.3409734748737743,
+    "curve_intent_curvature_ratio_p95": 1.341310595691359,
+    "curve_intent_arm_early_enough": true,
+    "curve_intent_undercall_detected": false
+  }
+}

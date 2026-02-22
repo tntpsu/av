@@ -1,0 +1,174 @@
+{
+  "schema_version": "v1",
+  "generated_at_utc": "2026-02-22T20:16:42Z",
+  "bundle_dir": "/Users/philiptullai/Documents/Coding/av/data/reports/gates/20260222T201422Z_sloop_curve_context_v4",
+  "label": "sloop_curve_context_v4",
+  "mode": "quick",
+  "git_sha": "cbed5e1a7870354f591db3ff5b0e4f222d41b4ce",
+  "config_hash": "69d7209a5ecb7e2cf849564d1895bb33f7dbedcaa9376e8cae9a5fbcc874127f",
+  "matrix_hash": "1fbd6959b8c353954c9df3b9b37afb7f4fbbd665f6a92ee454ade9ab4d0e8c67",
+  "recording_ids": [
+    "recording_20260222_151423.h5",
+    "recording_20260222_151534.h5"
+  ],
+  "pass_fail": false,
+  "regression_budget": {
+    "config": {
+      "highway_lateral_p95_max_delta_m": 0.02,
+      "sloop_first_300_p99_min_improvement_m": 0.03,
+      "sloop_lateral_p95_max_delta_m": 0.0
+    },
+    "checks": {
+      "run_validity_pass": true,
+      "hard_safety_pass": false,
+      "run_count_gate_pass": true,
+      "highway_non_regression": null,
+      "sloop_first_300_improvement": null,
+      "sloop_lateral_p95_non_regression": null
+    },
+    "track_metrics": {
+      "s_loop": {
+        "lateral_p95_median": 0.9763519465923309,
+        "first_300_lateral_p99_median": 1.1954966098070143,
+        "last_300_lateral_p99_median": 1.7430625182390211,
+        "steering_jerk_max_median": 111.02062697204057
+      }
+    },
+    "baseline_track_metrics": {
+      "s_loop": null
+    }
+  },
+  "run_counts": {
+    "s_loop": 2
+  },
+  "required_track_ids": [
+    "s_loop"
+  ],
+  "expected_runs_per_track": 2,
+  "analyze_to_failure_default": true,
+  "runs": [
+    {
+      "recording_id": "recording_20260222_151423.h5",
+      "recording_path": "/Users/philiptullai/Documents/Coding/av/data/recordings/recording_20260222_151423.h5",
+      "track_id": "s_loop",
+      "metrics": {
+        "lateral_p95": 1.03218412399292,
+        "lateral_p99": 1.9519539976119995,
+        "lateral_max": 1.952243447303772,
+        "first_300_lateral_p99": 1.3271384906768797,
+        "last_300_lateral_p99": 1.9522396337985992,
+        "oscillation_runaway": false,
+        "out_of_lane_events": 1,
+        "out_of_lane_events_full_run": 1,
+        "emergency_stop_count": 1,
+        "steering_jerk_max": 118.37743202686389,
+        "failure_detected": true,
+        "failure_frame": 956,
+        "control_frame_count": 1143,
+        "control_duration_s": 59.89977766,
+        "control_fps": 19.081873834120675,
+        "unity_time_gap_max": 0.15001773834228516,
+        "run_validity_pass": true,
+        "run_validity_reasons": [],
+        "curve_intent_available": true,
+        "curve_intent_arm_signal_available": true,
+        "curve_intent_arm_early_enough_rate": 100.0,
+        "curve_intent_undercall_frame_rate": 44.53004622496148,
+        "curve_intent_curvature_ratio_p50": 0.8381084530180813,
+        "curve_intent_curvature_ratio_p95": 0.838319153536921,
+        "curve_intent_arm_early_enough": true,
+        "curve_intent_undercall_detected": true
+      },
+      "stage6": {
+        "what_failed_first": {
+          "phase": "trajectory",
+          "frame": 0,
+          "type": "trajectory_suppressed_curve_entry",
+          "severity": "critical",
+          "description": "Heading-zero gate active during curve (curvature>0.003) in 30 frames before failure.",
+          "issue_id": "trajectory_suppressed_curve_entry",
+          "end_frame": 936,
+          "duration": 937,
+          "transition_first_frame": 0
+        },
+        "downstream_consequence": {
+          "phase": "downstream",
+          "frame": 958,
+          "type": "emergency_stop",
+          "severity": "critical",
+          "description": "Emergency stop transitioned ON at frame 958",
+          "issue_id": "emergency_stop:958:3",
+          "end_frame": 1142,
+          "duration": 185,
+          "transition_first_frame": 958
+        },
+        "single_next_lever": "Improve trajectory/reference quality first (curve-entry continuity and authority).",
+        "diagnostics_mode_used": "to_failure",
+        "diagnostics_fallback_used": false,
+        "diagnostics_error": null,
+        "answered_all_stage6_questions": true
+      },
+      "trigger_reasons": [
+        "emergency_stop",
+        "out_of_lane",
+        "curve_intent_undercall"
+      ]
+    },
+    {
+      "recording_id": "recording_20260222_151534.h5",
+      "recording_path": "/Users/philiptullai/Documents/Coding/av/data/recordings/recording_20260222_151534.h5",
+      "track_id": "s_loop",
+      "metrics": {
+        "lateral_p95": 0.9205197691917419,
+        "lateral_p99": 1.4321132409572612,
+        "lateral_max": 1.5424761772155762,
+        "first_300_lateral_p99": 1.063854728937149,
+        "last_300_lateral_p99": 1.5338854026794433,
+        "oscillation_runaway": true,
+        "out_of_lane_events": 0,
+        "out_of_lane_events_full_run": 0,
+        "emergency_stop_count": 0,
+        "steering_jerk_max": 103.66382191721726,
+        "failure_detected": false,
+        "failure_frame": null,
+        "control_frame_count": 1154,
+        "control_duration_s": 59.882593639999996,
+        "control_fps": 19.271042382325245,
+        "unity_time_gap_max": 0.15003204345703125,
+        "run_validity_pass": true,
+        "run_validity_reasons": [],
+        "curve_intent_available": true,
+        "curve_intent_arm_signal_available": true,
+        "curve_intent_arm_early_enough_rate": 100.0,
+        "curve_intent_undercall_frame_rate": 56.455399061032864,
+        "curve_intent_curvature_ratio_p50": 0.668504212713649,
+        "curve_intent_curvature_ratio_p95": 0.8383051209929219,
+        "curve_intent_arm_early_enough": true,
+        "curve_intent_undercall_detected": true
+      },
+      "stage6": {
+        "what_failed_first": {
+          "phase": "control",
+          "frame": 98,
+          "type": "speed_exceeded_feasible",
+          "severity": "warning",
+          "description": "Speed exceeded feasible limit for curvature (max ratio 2.43x, 0.25g).",
+          "issue_id": "speed_exceeded_feasible",
+          "end_frame": 959,
+          "duration": 862,
+          "transition_first_frame": 98
+        },
+        "downstream_consequence": null,
+        "single_next_lever": "Improve trajectory/reference quality first (curve-entry continuity and authority).",
+        "diagnostics_mode_used": "to_failure",
+        "diagnostics_fallback_used": false,
+        "diagnostics_error": null,
+        "answered_all_stage6_questions": false
+      },
+      "trigger_reasons": [
+        "oscillation_runaway",
+        "curve_intent_undercall"
+      ]
+    }
+  ]
+}

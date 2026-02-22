@@ -1,0 +1,21 @@
+{
+  "recording": "/Users/philiptullai/Documents/Coding/av/data/recordings/recording_20260222_150211.h5",
+  "failure_frame": null,
+  "failure_reason": "none",
+  "failure_time_s": null,
+  "first_limiter_hit_frame": 123,
+  "first_limiter_hit_time_s": 9.574063,
+  "window_start": 1090,
+  "window_end_exclusive": 1121,
+  "speed_feasibility": {
+    "source": "turn_feasibility_telemetry",
+    "telemetry_active_pct": 100.0,
+    "telemetry_infeasible_pct": 0.0,
+    "telemetry_margin_g_mean": 0.1901021296939542,
+    "telemetry_margin_g_min": 0.18197506666183472,
+    "telemetry_speed_delta_mps_mean": 0.0,
+    "telemetry_speed_delta_mps_max": 0.0,
+    "legacy_speed_limited_pct_v2kappa": 0.0,
+    "is_speed_limited": false
+  }
+}

@@ -56,7 +56,8 @@ class RuleBasedTrajectoryPlanner:
                  far_band_contribution_cap_start_m: float = 12.0,
                  far_band_contribution_cap_gain: float = 0.35,
                  heading_zero_quad_threshold: float = 0.005,
-                 heading_zero_curvature_guard: float = 0.002):
+                 heading_zero_curvature_guard: float = 0.002,
+                 direct_reference_curvature_gain: float = 1.0):
         """
         Initialize trajectory planner.
         
@@ -119,6 +120,9 @@ class RuleBasedTrajectoryPlanner:
         self.far_band_contribution_cap_gain = float(np.clip(far_band_contribution_cap_gain, 0.0, 1.0))
         self.heading_zero_quad_threshold = float(max(0.0, heading_zero_quad_threshold))
         self.heading_zero_curvature_guard = float(max(0.0, heading_zero_curvature_guard))
+        self.direct_reference_curvature_gain = float(
+            np.clip(direct_reference_curvature_gain, 0.5, 3.0)
+        )
         
         # For reference point smoothing
         self.last_reference_x = None
@@ -1495,7 +1499,47 @@ class RuleBasedTrajectoryPlanner:
                 heading = 0.0
         
         center_coeffs = (np.asarray(left_coeffs) + np.asarray(right_coeffs)) / 2.0
-        curvature = self._compute_curvature(center_coeffs, y_image)
+
+        # Prefer vehicle-space curvature from local geometry around the reference point.
+        # This avoids persistent under-scaling from image-space curvature math.
+        def _center_xy_at(distance_m: float) -> Optional[Tuple[float, float]]:
+            d = max(0.5, float(distance_m))
+            yi = self.image_height - (d / self.pixel_to_meter_y)
+            yi = max(0, min(self.image_height - 1, yi))
+            lx = float(np.polyval(left_coeffs, yi))
+            rx = float(np.polyval(right_coeffs, yi))
+            cx = 0.5 * (lx + rx)
+            try:
+                xv, yv = self._convert_image_to_vehicle_coords(cx, yi, lookahead_distance=d)
+            except Exception:
+                return None
+            if not (np.isfinite(xv) and np.isfinite(yv)):
+                return None
+            return float(xv), float(yv)
+
+        curvature = 0.0
+        prev_pt = _center_xy_at(max(0.5, float(lookahead) - 1.0))
+        curr_pt = _center_xy_at(float(lookahead))
+        next_pt = _center_xy_at(float(lookahead) + 1.0)
+        if prev_pt is not None and curr_pt is not None and next_pt is not None:
+            x0, y0 = prev_pt
+            x1, y1 = curr_pt
+            x2, y2 = next_pt
+            d1 = np.hypot(x1 - x0, y1 - y0)
+            d2 = np.hypot(x2 - x1, y2 - y1)
+            if d1 > 1e-3 and d2 > 1e-3:
+                theta1 = np.arctan2(x1 - x0, y1 - y0)
+                theta2 = np.arctan2(x2 - x1, y2 - y1)
+                dtheta = theta2 - theta1
+                while dtheta > np.pi:
+                    dtheta -= 2 * np.pi
+                while dtheta < -np.pi:
+                    dtheta += 2 * np.pi
+                curvature = abs(float(dtheta)) / max(1e-3, float(0.5 * (d1 + d2)))
+
+        if not np.isfinite(curvature) or curvature <= 0.0:
+            curvature = self._compute_curvature(center_coeffs, y_image)
+        curvature = float(curvature) * self.direct_reference_curvature_gain
         
         return {
             'x': center_x_vehicle,
@@ -1576,4 +1620,3 @@ class MLTrajectoryPlanner:
         # For now, fallback to rule-based
         planner = RuleBasedTrajectoryPlanner()
         return planner.plan(lane_coeffs, vehicle_state)
-

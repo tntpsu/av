@@ -111,7 +111,13 @@ class LateralController:
                  curve_upcoming_off_frames: int = 2,
                  curve_phase_use_distance_track: bool = False,
                  curve_phase_track_name: Optional[str] = None,
+                 curve_phase_use_preview_curvature: bool = True,
+                 curve_phase_preview_enter_threshold: Optional[float] = None,
+                 curve_phase_preview_exit_threshold: Optional[float] = None,
+                 curve_phase_preview_on_frames: int = 1,
+                 curve_phase_preview_off_frames: int = 2,
                  curve_at_car_distance_min_m: float = 0.0,
+                 curve_intent_single_owner_mode: bool = True,
                  road_curve_enter_threshold: Optional[float] = None,
                  road_curve_exit_threshold: Optional[float] = None,
                  road_straight_hold_invalid_frames: int = 6,
@@ -491,11 +497,34 @@ class LateralController:
         self.curve_upcoming_off_frames = max(1, int(curve_upcoming_off_frames))
         self.curve_phase_use_distance_track = bool(curve_phase_use_distance_track)
         self.curve_phase_track_name = str(curve_phase_track_name or "").strip()
+        self.curve_phase_use_preview_curvature = bool(curve_phase_use_preview_curvature)
+        preview_enter_threshold = (
+            self.curve_upcoming_enter_threshold
+            if curve_phase_preview_enter_threshold is None
+            else float(curve_phase_preview_enter_threshold)
+        )
+        preview_exit_threshold = (
+            self.curve_upcoming_exit_threshold
+            if curve_phase_preview_exit_threshold is None
+            else float(curve_phase_preview_exit_threshold)
+        )
+        preview_enter_threshold = max(0.0, float(preview_enter_threshold))
+        preview_exit_threshold = max(0.0, float(preview_exit_threshold))
+        if preview_exit_threshold > preview_enter_threshold:
+            preview_exit_threshold = preview_enter_threshold
+        self.curve_phase_preview_enter_threshold = float(preview_enter_threshold)
+        self.curve_phase_preview_exit_threshold = float(preview_exit_threshold)
+        self.curve_phase_preview_on_frames = max(1, int(curve_phase_preview_on_frames))
+        self.curve_phase_preview_off_frames = max(1, int(curve_phase_preview_off_frames))
         self.curve_at_car_distance_min_m = max(0.0, float(curve_at_car_distance_min_m))
+        self.curve_intent_single_owner_mode = bool(curve_intent_single_owner_mode)
         self._track_curve_windows: list[tuple[float, float]] = []
         self._track_total_length_m: Optional[float] = None
         if self.curve_phase_use_distance_track and self.curve_phase_track_name:
             self._load_track_curve_windows(self.curve_phase_track_name)
+        self._curve_preview_upcoming_state = False
+        self._curve_preview_on_counter = 0
+        self._curve_preview_off_counter = 0
         self._curve_upcoming_state = False
         self._curve_upcoming_on_counter = 0
         self._curve_upcoming_off_counter = 0
@@ -1269,75 +1298,319 @@ class LateralController:
         is_straight = curve_metric_abs < self.straight_curvature_threshold
         is_control_straight_proxy = is_straight
         curve_phase_source = "metric_proxy"
+        preview_curvature_raw = reference_point.get("curvature_preview")
+        preview_curvature_valid = False
+        preview_curvature_abs = 0.0
+        try:
+            if preview_curvature_raw is not None:
+                preview_curvature_abs = float(abs(float(preview_curvature_raw)))
+                preview_curvature_valid = bool(np.isfinite(preview_curvature_abs))
+                if not preview_curvature_valid:
+                    preview_curvature_abs = 0.0
+        except (TypeError, ValueError):
+            preview_curvature_valid = False
+            preview_curvature_abs = 0.0
+        curve_anticipation_score = 0.0
+        curve_anticipation_score_raw = 0.0
+        curve_anticipation_active = False
+        curve_anticipation_source = ""
+        curve_anticipation_term_curvature = 0.0
+        curve_anticipation_term_heading = 0.0
+        curve_anticipation_term_far_rise = 0.0
+        curve_scheduler_mode = str(reference_point.get("curve_scheduler_mode", "") or "")
+        curve_phase = 0.0
+        curve_phase_raw = 0.0
+        curve_phase_state = "STRAIGHT"
+        curve_phase_rearm_event = False
+        curve_phase_entry_frames = 0
+        curve_phase_rearm_hold_frames = 0
+        curve_phase_term_preview = 0.0
+        curve_phase_term_path = 0.0
+        curve_phase_term_rise = 0.0
+        curve_phase_curvature_rise_abs = 0.0
+        curve_intent = 0.0
+        curve_intent_raw = 0.0
+        curve_intent_state = "STRAIGHT"
+        curve_intent_term_preview = 0.0
+        curve_intent_term_path = 0.0
+        curve_intent_term_rise = 0.0
+        curve_intent_confidence = 0.0
+        curve_intent_speed_guardrail_active = False
+        curve_intent_speed_guardrail_cap_mps = 0.0
+        curve_intent_speed_guardrail_confidence = 0.0
+        reference_lookahead_target = 0.0
+        reference_lookahead_after_slew = 0.0
+        reference_lookahead_active = 0.0
+        try:
+            curve_anticipation_score = float(
+                reference_point.get("curve_anticipation_score", 0.0) or 0.0
+            )
+            if not np.isfinite(curve_anticipation_score):
+                curve_anticipation_score = 0.0
+        except (TypeError, ValueError):
+            curve_anticipation_score = 0.0
+        try:
+            curve_anticipation_score_raw = float(
+                reference_point.get("curve_anticipation_score_raw", 0.0) or 0.0
+            )
+            if not np.isfinite(curve_anticipation_score_raw):
+                curve_anticipation_score_raw = 0.0
+        except (TypeError, ValueError):
+            curve_anticipation_score_raw = 0.0
+        curve_anticipation_active = bool(reference_point.get("curve_anticipation_active", False))
+        curve_anticipation_source = str(reference_point.get("curve_anticipation_source", "") or "")
+        try:
+            curve_anticipation_term_curvature = float(
+                reference_point.get("curve_anticipation_term_curvature", 0.0) or 0.0
+            )
+        except (TypeError, ValueError):
+            curve_anticipation_term_curvature = 0.0
+        try:
+            curve_anticipation_term_heading = float(
+                reference_point.get("curve_anticipation_term_heading", 0.0) or 0.0
+            )
+        except (TypeError, ValueError):
+            curve_anticipation_term_heading = 0.0
+        try:
+            curve_anticipation_term_far_rise = float(
+                reference_point.get("curve_anticipation_term_far_rise", 0.0) or 0.0
+            )
+        except (TypeError, ValueError):
+            curve_anticipation_term_far_rise = 0.0
+        try:
+            curve_phase = float(reference_point.get("curve_phase", 0.0) or 0.0)
+            if not np.isfinite(curve_phase):
+                curve_phase = 0.0
+        except (TypeError, ValueError):
+            curve_phase = 0.0
+        try:
+            curve_phase_raw = float(reference_point.get("curve_phase_raw", curve_phase) or curve_phase)
+            if not np.isfinite(curve_phase_raw):
+                curve_phase_raw = curve_phase
+        except (TypeError, ValueError):
+            curve_phase_raw = curve_phase
+        curve_phase_state = str(reference_point.get("curve_phase_state", "STRAIGHT") or "STRAIGHT")
+        curve_phase_rearm_event = bool(reference_point.get("curve_phase_rearm_event", False))
+        try:
+            curve_phase_entry_frames = int(reference_point.get("curve_phase_entry_frames", 0) or 0)
+        except (TypeError, ValueError):
+            curve_phase_entry_frames = 0
+        try:
+            curve_phase_rearm_hold_frames = int(
+                reference_point.get("curve_phase_rearm_hold_frames", 0) or 0
+            )
+        except (TypeError, ValueError):
+            curve_phase_rearm_hold_frames = 0
+        try:
+            curve_phase_term_preview = float(
+                reference_point.get("curve_phase_term_preview", 0.0) or 0.0
+            )
+        except (TypeError, ValueError):
+            curve_phase_term_preview = 0.0
+        try:
+            curve_phase_term_path = float(
+                reference_point.get("curve_phase_term_path", 0.0) or 0.0
+            )
+        except (TypeError, ValueError):
+            curve_phase_term_path = 0.0
+        try:
+            curve_phase_term_rise = float(
+                reference_point.get("curve_phase_term_rise", 0.0) or 0.0
+            )
+        except (TypeError, ValueError):
+            curve_phase_term_rise = 0.0
+        try:
+            curve_phase_curvature_rise_abs = float(
+                reference_point.get("curve_phase_curvature_rise_abs", 0.0) or 0.0
+            )
+        except (TypeError, ValueError):
+            curve_phase_curvature_rise_abs = 0.0
+        curve_intent_available = (
+            "curve_intent" in reference_point
+            or "curve_phase" in reference_point
+        )
+        try:
+            curve_intent = float(reference_point.get("curve_intent", curve_phase) or curve_phase)
+            if not np.isfinite(curve_intent):
+                curve_intent = curve_phase
+        except (TypeError, ValueError):
+            curve_intent = curve_phase
+        try:
+            curve_intent_raw = float(
+                reference_point.get("curve_intent_raw", curve_phase_raw) or curve_phase_raw
+            )
+            if not np.isfinite(curve_intent_raw):
+                curve_intent_raw = curve_intent
+        except (TypeError, ValueError):
+            curve_intent_raw = curve_intent
+        curve_intent_state = str(
+            reference_point.get("curve_intent_state", curve_phase_state) or curve_phase_state
+        )
+        try:
+            curve_intent_term_preview = float(
+                reference_point.get("curve_intent_term_preview", curve_phase_term_preview) or curve_phase_term_preview
+            )
+        except (TypeError, ValueError):
+            curve_intent_term_preview = curve_phase_term_preview
+        try:
+            curve_intent_term_path = float(
+                reference_point.get("curve_intent_term_path", curve_phase_term_path) or curve_phase_term_path
+            )
+        except (TypeError, ValueError):
+            curve_intent_term_path = curve_phase_term_path
+        try:
+            curve_intent_term_rise = float(
+                reference_point.get("curve_intent_term_rise", curve_phase_term_rise) or curve_phase_term_rise
+            )
+        except (TypeError, ValueError):
+            curve_intent_term_rise = curve_phase_term_rise
+        try:
+            curve_intent_confidence = float(reference_point.get("curve_intent_confidence", 0.0) or 0.0)
+            if not np.isfinite(curve_intent_confidence):
+                curve_intent_confidence = 0.0
+        except (TypeError, ValueError):
+            curve_intent_confidence = 0.0
+        curve_intent_speed_guardrail_active = bool(
+            reference_point.get("curve_intent_speed_guardrail_active", False)
+        )
+        try:
+            curve_intent_speed_guardrail_cap_mps = float(
+                reference_point.get("curve_intent_speed_guardrail_cap_mps", 0.0) or 0.0
+            )
+        except (TypeError, ValueError):
+            curve_intent_speed_guardrail_cap_mps = 0.0
+        try:
+            curve_intent_speed_guardrail_confidence = float(
+                reference_point.get("curve_intent_speed_guardrail_confidence", curve_intent_confidence)
+                or curve_intent_confidence
+            )
+            if not np.isfinite(curve_intent_speed_guardrail_confidence):
+                curve_intent_speed_guardrail_confidence = curve_intent_confidence
+        except (TypeError, ValueError):
+            curve_intent_speed_guardrail_confidence = curve_intent_confidence
+        try:
+            reference_lookahead_target = float(
+                reference_point.get("reference_lookahead_target", 0.0) or 0.0
+            )
+        except (TypeError, ValueError):
+            reference_lookahead_target = 0.0
+        try:
+            reference_lookahead_after_slew = float(
+                reference_point.get("reference_lookahead_after_slew", 0.0) or 0.0
+            )
+        except (TypeError, ValueError):
+            reference_lookahead_after_slew = 0.0
+        try:
+            reference_lookahead_active = float(
+                reference_point.get("reference_lookahead_active", 0.0) or 0.0
+            )
+        except (TypeError, ValueError):
+            reference_lookahead_active = 0.0
+        preview_curve_upcoming = self._update_preview_curve_upcoming_state(
+            preview_curvature_abs if preview_curvature_valid else None
+        )
         distance_to_next_curve_start_m = None
         current_curve_progress_ratio = None
         current_curve_index = None
-        distance_curve_state = self._compute_distance_curve_state(
-            road_center_reference_t=road_center_reference_t,
-            lookahead_m=max(0.0, float(ref_y)),
-        )
-        if distance_curve_state is not None:
-            curve_phase_source = "distance_track"
-            curve_upcoming = bool(distance_curve_state["curve_upcoming"])
-            curve_at_car = bool(distance_curve_state["curve_at_car"])
-            distance_to_next_curve_start_m = float(distance_curve_state["distance_to_next_curve_start_m"])
-            if distance_curve_state.get("current_curve_progress_ratio") is not None:
-                current_curve_progress_ratio = float(
-                    distance_curve_state["current_curve_progress_ratio"]
-                )
-            if distance_curve_state.get("current_curve_index") is not None:
-                current_curve_index = int(distance_curve_state["current_curve_index"])
-            self._curve_upcoming_state = curve_upcoming
-            self._curve_at_car_state = curve_at_car
-            self._curve_at_car_distance_remaining = distance_to_next_curve_start_m
-        else:
-            if self._curve_upcoming_state:
-                if curve_metric_abs <= self.curve_upcoming_exit_threshold:
-                    self._curve_upcoming_off_counter += 1
-                else:
-                    self._curve_upcoming_off_counter = 0
-                if self._curve_upcoming_off_counter >= self.curve_upcoming_off_frames:
-                    self._curve_upcoming_state = False
-                    self._curve_upcoming_off_counter = 0
-                    self._curve_upcoming_on_counter = 0
-            else:
-                if curve_metric_abs >= self.curve_upcoming_enter_threshold:
-                    self._curve_upcoming_on_counter += 1
-                else:
-                    self._curve_upcoming_on_counter = 0
-                if self._curve_upcoming_on_counter >= self.curve_upcoming_on_frames:
-                    self._curve_upcoming_state = True
-                    self._curve_upcoming_on_counter = 0
-                    self._curve_upcoming_off_counter = 0
-            curve_upcoming = bool(self._curve_upcoming_state)
-            if curve_upcoming and not self._prev_curve_upcoming:
-                ref_distance_ahead = max(0.0, float(ref_y))
-                self._curve_at_car_distance_remaining = max(
-                    self.curve_at_car_distance_min_m,
-                    ref_distance_ahead,
-                )
-            if not curve_upcoming:
-                self._curve_at_car_state = False
-                self._curve_at_car_distance_remaining = None
-            elif self._curve_at_car_distance_remaining is not None:
-                speed_for_distance = (
-                    float(current_speed)
-                    if current_speed is not None and np.isfinite(float(current_speed))
-                    else float(reference_point.get('velocity', 0.0) or 0.0)
-                )
-                distance_step = max(0.0, speed_for_distance) * dt
-                self._curve_at_car_distance_remaining = max(
-                    0.0,
-                    float(self._curve_at_car_distance_remaining) - float(distance_step),
-                )
-                if self._curve_at_car_distance_remaining <= 1e-3:
-                    self._curve_at_car_state = True
-            curve_at_car = bool(self._curve_at_car_state)
-            distance_to_next_curve_start_m = (
-                float(self._curve_at_car_distance_remaining)
-                if self._curve_at_car_distance_remaining is not None
-                else None
+        if self.curve_intent_single_owner_mode and curve_intent_available:
+            state_norm = str(curve_intent_state or "STRAIGHT").strip().upper()
+            if state_norm not in {"STRAIGHT", "ENTRY", "COMMIT", "REARM"}:
+                state_norm = "STRAIGHT"
+            curve_phase_source = "curve_intent_single_owner"
+            curve_upcoming = bool(state_norm in {"ENTRY", "COMMIT"})
+            curve_at_car = bool(state_norm == "COMMIT")
+            if not curve_upcoming and curve_intent >= 0.45:
+                curve_upcoming = True
+            if curve_upcoming and not curve_at_car and curve_intent >= 0.70:
+                curve_at_car = True
+            try:
+                distance_to_next_curve_start_m = reference_point.get("distance_to_curve_start_m")
+                if distance_to_next_curve_start_m is not None:
+                    distance_to_next_curve_start_m = float(distance_to_next_curve_start_m)
+            except (TypeError, ValueError):
+                distance_to_next_curve_start_m = None
+            if curve_at_car:
+                distance_to_next_curve_start_m = 0.0
+            self._curve_upcoming_state = bool(curve_upcoming)
+            self._curve_at_car_state = bool(curve_at_car)
+            self._curve_at_car_distance_remaining = (
+                None if distance_to_next_curve_start_m is None else float(distance_to_next_curve_start_m)
             )
+        else:
+            distance_curve_state = self._compute_distance_curve_state(
+                road_center_reference_t=road_center_reference_t,
+                lookahead_m=max(0.0, float(ref_y)),
+            )
+            if distance_curve_state is not None:
+                curve_phase_source = "distance_track"
+                curve_upcoming = bool(distance_curve_state["curve_upcoming"])
+                curve_at_car = bool(distance_curve_state["curve_at_car"])
+                distance_to_next_curve_start_m = float(distance_curve_state["distance_to_next_curve_start_m"])
+                if distance_curve_state.get("current_curve_progress_ratio") is not None:
+                    current_curve_progress_ratio = float(
+                        distance_curve_state["current_curve_progress_ratio"]
+                    )
+                if distance_curve_state.get("current_curve_index") is not None:
+                    current_curve_index = int(distance_curve_state["current_curve_index"])
+                self._curve_upcoming_state = curve_upcoming
+                self._curve_at_car_state = curve_at_car
+                self._curve_at_car_distance_remaining = distance_to_next_curve_start_m
+            else:
+                phase_metric_abs = float(curve_metric_abs)
+                if self.curve_phase_use_preview_curvature:
+                    phase_metric_abs = max(
+                        phase_metric_abs,
+                        preview_curvature_abs if preview_curve_upcoming else 0.0,
+                    )
+                    if preview_curve_upcoming and preview_curvature_abs > curve_metric_abs + 1e-6:
+                        curve_phase_source = "preview_metric"
+                if self._curve_upcoming_state:
+                    if phase_metric_abs <= self.curve_upcoming_exit_threshold:
+                        self._curve_upcoming_off_counter += 1
+                    else:
+                        self._curve_upcoming_off_counter = 0
+                    if self._curve_upcoming_off_counter >= self.curve_upcoming_off_frames:
+                        self._curve_upcoming_state = False
+                        self._curve_upcoming_off_counter = 0
+                        self._curve_upcoming_on_counter = 0
+                else:
+                    if phase_metric_abs >= self.curve_upcoming_enter_threshold:
+                        self._curve_upcoming_on_counter += 1
+                    else:
+                        self._curve_upcoming_on_counter = 0
+                    if self._curve_upcoming_on_counter >= self.curve_upcoming_on_frames:
+                        self._curve_upcoming_state = True
+                        self._curve_upcoming_on_counter = 0
+                        self._curve_upcoming_off_counter = 0
+                curve_upcoming = bool(self._curve_upcoming_state)
+                if curve_upcoming and not self._prev_curve_upcoming:
+                    ref_distance_ahead = max(0.0, float(ref_y))
+                    self._curve_at_car_distance_remaining = max(
+                        self.curve_at_car_distance_min_m,
+                        ref_distance_ahead,
+                    )
+                if not curve_upcoming:
+                    self._curve_at_car_state = False
+                    self._curve_at_car_distance_remaining = None
+                elif self._curve_at_car_distance_remaining is not None:
+                    speed_for_distance = (
+                        float(current_speed)
+                        if current_speed is not None and np.isfinite(float(current_speed))
+                        else float(reference_point.get('velocity', 0.0) or 0.0)
+                    )
+                    distance_step = max(0.0, speed_for_distance) * dt
+                    self._curve_at_car_distance_remaining = max(
+                        0.0,
+                        float(self._curve_at_car_distance_remaining) - float(distance_step),
+                    )
+                    if self._curve_at_car_distance_remaining <= 1e-3:
+                        self._curve_at_car_state = True
+                curve_at_car = bool(self._curve_at_car_state)
+                distance_to_next_curve_start_m = (
+                    float(self._curve_at_car_distance_remaining)
+                    if self._curve_at_car_distance_remaining is not None
+                    else None
+                )
         road_curvature_abs = float(abs(path_curvature)) if road_curvature_valid else None
         if road_curvature_abs is not None:
             if road_curvature_abs >= self.road_curve_enter_threshold:
@@ -2517,6 +2790,44 @@ class LateralController:
                 'curve_at_car_distance_remaining_m': distance_to_next_curve_start_m,
                 'curve_at_car_distance_min_m': self.curve_at_car_distance_min_m,
                 'curve_phase_source': curve_phase_source,
+                'curve_phase_use_preview_curvature': self.curve_phase_use_preview_curvature,
+                'curve_phase_preview_curvature_abs': preview_curvature_abs,
+                'curve_phase_preview_curvature_valid': preview_curvature_valid,
+                'curve_phase_preview_upcoming': preview_curve_upcoming,
+                'curve_phase_preview_enter_threshold': self.curve_phase_preview_enter_threshold,
+                'curve_phase_preview_exit_threshold': self.curve_phase_preview_exit_threshold,
+                'curve_anticipation_score': curve_anticipation_score,
+                'curve_anticipation_score_raw': curve_anticipation_score_raw,
+                'curve_anticipation_active': curve_anticipation_active,
+                'curve_anticipation_source': curve_anticipation_source,
+                'curve_anticipation_term_curvature': curve_anticipation_term_curvature,
+                'curve_anticipation_term_heading': curve_anticipation_term_heading,
+                'curve_anticipation_term_far_rise': curve_anticipation_term_far_rise,
+                'curve_scheduler_mode': curve_scheduler_mode,
+                'curve_phase': curve_phase,
+                'curve_phase_raw': curve_phase_raw,
+                'curve_phase_state': curve_phase_state,
+                'curve_phase_rearm_event': curve_phase_rearm_event,
+                'curve_phase_entry_frames': curve_phase_entry_frames,
+                'curve_phase_rearm_hold_frames': curve_phase_rearm_hold_frames,
+                'curve_phase_term_preview': curve_phase_term_preview,
+                'curve_phase_term_path': curve_phase_term_path,
+                'curve_phase_term_rise': curve_phase_term_rise,
+                'curve_phase_curvature_rise_abs': curve_phase_curvature_rise_abs,
+                'curve_intent': curve_intent,
+                'curve_intent_raw': curve_intent_raw,
+                'curve_intent_state': curve_intent_state,
+                'curve_intent_term_preview': curve_intent_term_preview,
+                'curve_intent_term_path': curve_intent_term_path,
+                'curve_intent_term_rise': curve_intent_term_rise,
+                'curve_intent_confidence': curve_intent_confidence,
+                'curve_intent_speed_guardrail_active': curve_intent_speed_guardrail_active,
+                'curve_intent_speed_guardrail_cap_mps': curve_intent_speed_guardrail_cap_mps,
+                'curve_intent_speed_guardrail_confidence': curve_intent_speed_guardrail_confidence,
+                'curve_intent_single_owner_mode': self.curve_intent_single_owner_mode,
+                'reference_lookahead_target': reference_lookahead_target,
+                'reference_lookahead_after_slew': reference_lookahead_after_slew,
+                'reference_lookahead_active': reference_lookahead_active,
                 'distance_to_next_curve_start_m': distance_to_next_curve_start_m,
                 'current_curve_progress_ratio': current_curve_progress_ratio,
                 'curve_upcoming_enter_threshold': self.curve_upcoming_enter_threshold,
@@ -2571,6 +2882,9 @@ class LateralController:
         self._curve_upcoming_state = False
         self._curve_upcoming_on_counter = 0
         self._curve_upcoming_off_counter = 0
+        self._curve_preview_upcoming_state = False
+        self._curve_preview_on_counter = 0
+        self._curve_preview_off_counter = 0
         self._curve_at_car_state = False
         self._curve_at_car_distance_remaining = None
         self._road_straight_state = True
@@ -2580,6 +2894,47 @@ class LateralController:
         if hasattr(self, 'last_steering_rate'):
             self.last_steering_rate = 0.0
         self.smoothed_steering = None
+
+    def _update_preview_curve_upcoming_state(
+        self,
+        preview_curvature_abs: Optional[float],
+    ) -> bool:
+        """Update upcoming-curve state from map-free preview curvature."""
+        if not self.curve_phase_use_preview_curvature:
+            self._curve_preview_upcoming_state = False
+            self._curve_preview_on_counter = 0
+            self._curve_preview_off_counter = 0
+            return False
+
+        valid_preview = (
+            preview_curvature_abs is not None
+            and np.isfinite(float(preview_curvature_abs))
+        )
+        if valid_preview:
+            preview_abs = abs(float(preview_curvature_abs))
+        else:
+            preview_abs = 0.0
+
+        if self._curve_preview_upcoming_state:
+            if preview_abs <= self.curve_phase_preview_exit_threshold:
+                self._curve_preview_off_counter += 1
+            else:
+                self._curve_preview_off_counter = 0
+            if self._curve_preview_off_counter >= self.curve_phase_preview_off_frames:
+                self._curve_preview_upcoming_state = False
+                self._curve_preview_off_counter = 0
+                self._curve_preview_on_counter = 0
+        else:
+            if preview_abs >= self.curve_phase_preview_enter_threshold:
+                self._curve_preview_on_counter += 1
+            else:
+                self._curve_preview_on_counter = 0
+            if self._curve_preview_on_counter >= self.curve_phase_preview_on_frames:
+                self._curve_preview_upcoming_state = True
+                self._curve_preview_on_counter = 0
+                self._curve_preview_off_counter = 0
+
+        return bool(self._curve_preview_upcoming_state)
 
     def _load_track_curve_windows(self, track_name: str) -> None:
         """Load curve windows from tracks/<track_name>.yml."""
@@ -3444,7 +3799,13 @@ class VehicleController:
                  curve_upcoming_off_frames: int = 2,
                  curve_phase_use_distance_track: bool = False,
                  curve_phase_track_name: Optional[str] = None,
+                 curve_phase_use_preview_curvature: bool = True,
+                 curve_phase_preview_enter_threshold: Optional[float] = None,
+                 curve_phase_preview_exit_threshold: Optional[float] = None,
+                 curve_phase_preview_on_frames: int = 1,
+                 curve_phase_preview_off_frames: int = 2,
                  curve_at_car_distance_min_m: float = 0.0,
+                 curve_intent_single_owner_mode: bool = True,
                  road_curve_enter_threshold: Optional[float] = None,
                  road_curve_exit_threshold: Optional[float] = None,
                  road_straight_hold_invalid_frames: int = 6,
@@ -3609,7 +3970,13 @@ class VehicleController:
             curve_upcoming_off_frames=curve_upcoming_off_frames,
             curve_phase_use_distance_track=curve_phase_use_distance_track,
             curve_phase_track_name=curve_phase_track_name,
+            curve_phase_use_preview_curvature=curve_phase_use_preview_curvature,
+            curve_phase_preview_enter_threshold=curve_phase_preview_enter_threshold,
+            curve_phase_preview_exit_threshold=curve_phase_preview_exit_threshold,
+            curve_phase_preview_on_frames=curve_phase_preview_on_frames,
+            curve_phase_preview_off_frames=curve_phase_preview_off_frames,
             curve_at_car_distance_min_m=curve_at_car_distance_min_m,
+            curve_intent_single_owner_mode=curve_intent_single_owner_mode,
             road_curve_enter_threshold=road_curve_enter_threshold,
             road_curve_exit_threshold=road_curve_exit_threshold,
             road_straight_hold_invalid_frames=road_straight_hold_invalid_frames,
@@ -3898,4 +4265,3 @@ class VehicleController:
         """Reset all controllers."""
         self.lateral_controller.reset()
         self.longitudinal_controller.reset()
-

@@ -1,0 +1,94 @@
+{
+  "schema_version": "v1",
+  "generated_at_utc": "2026-02-22T20:16:42Z",
+  "git_sha": "cbed5e1a7870354f591db3ff5b0e4f222d41b4ce",
+  "config_hash": "69d7209a5ecb7e2cf849564d1895bb33f7dbedcaa9376e8cae9a5fbcc874127f",
+  "matrix_hash": "1fbd6959b8c353954c9df3b9b37afb7f4fbbd665f6a92ee454ade9ab4d0e8c67",
+  "recording_ids": [
+    "recording_20260222_151534.h5"
+  ],
+  "pass_fail": false,
+  "regression_budget": {
+    "config": {
+      "highway_lateral_p95_max_delta_m": 0.02,
+      "sloop_first_300_p99_min_improvement_m": 0.03,
+      "sloop_lateral_p95_max_delta_m": 0.0
+    },
+    "checks": {
+      "run_validity_pass": true,
+      "hard_safety_pass": false,
+      "run_count_gate_pass": true,
+      "highway_non_regression": null,
+      "sloop_first_300_improvement": null,
+      "sloop_lateral_p95_non_regression": null
+    },
+    "track_metrics": {
+      "s_loop": {
+        "lateral_p95_median": 0.9763519465923309,
+        "first_300_lateral_p99_median": 1.1954966098070143,
+        "last_300_lateral_p99_median": 1.7430625182390211,
+        "steering_jerk_max_median": 111.02062697204057
+      }
+    },
+    "baseline_track_metrics": {
+      "s_loop": null
+    }
+  },
+  "recording_id": "recording_20260222_151534.h5",
+  "recording_path": "/Users/philiptullai/Documents/Coding/av/data/recordings/recording_20260222_151534.h5",
+  "track_id": "s_loop",
+  "trigger_reasons": [
+    "oscillation_runaway",
+    "curve_intent_undercall"
+  ],
+  "what_failed_first": {
+    "phase": "control",
+    "frame": 98,
+    "type": "speed_exceeded_feasible",
+    "severity": "warning",
+    "description": "Speed exceeded feasible limit for curvature (max ratio 2.43x, 0.25g).",
+    "issue_id": "speed_exceeded_feasible",
+    "end_frame": 959,
+    "duration": 862,
+    "transition_first_frame": 98
+  },
+  "downstream_consequence": null,
+  "single_next_lever": "Improve trajectory/reference quality first (curve-entry continuity and authority).",
+  "diagnostics_mode_used": "to_failure",
+  "diagnostics_fallback_used": false,
+  "failure_packet_artifact": {
+    "command": "/Users/philiptullai/Documents/Coding/av/venv/bin/python /Users/philiptullai/Documents/Coding/av/tools/analyze/build_failure_packet.py /Users/philiptullai/Documents/Coding/av/data/recordings/recording_20260222_151534.h5 --out-dir /Users/philiptullai/Documents/Coding/av/data/reports/gates/20260222T201422Z_sloop_curve_context_v4/failure_packets/recording_20260222_151534",
+    "return_code": 0,
+    "stdout_tail": "Wrote failure packet to: /Users/philiptullai/Documents/Coding/av/data/reports/gates/20260222T201422Z_sloop_curve_context_v4/failure_packets/recording_20260222_151534\n",
+    "stderr_tail": "",
+    "packet_dir": "/Users/philiptullai/Documents/Coding/av/data/reports/gates/20260222T201422Z_sloop_curve_context_v4/failure_packets/recording_20260222_151534"
+  },
+  "metrics": {
+    "lateral_p95": 0.9205197691917419,
+    "lateral_p99": 1.4321132409572612,
+    "lateral_max": 1.5424761772155762,
+    "first_300_lateral_p99": 1.063854728937149,
+    "last_300_lateral_p99": 1.5338854026794433,
+    "oscillation_runaway": true,
+    "out_of_lane_events": 0,
+    "out_of_lane_events_full_run": 0,
+    "emergency_stop_count": 0,
+    "steering_jerk_max": 103.66382191721726,
+    "failure_detected": false,
+    "failure_frame": null,
+    "control_frame_count": 1154,
+    "control_duration_s": 59.882593639999996,
+    "control_fps": 19.271042382325245,
+    "unity_time_gap_max": 0.15003204345703125,
+    "run_validity_pass": true,
+    "run_validity_reasons": [],
+    "curve_intent_available": true,
+    "curve_intent_arm_signal_available": true,
+    "curve_intent_arm_early_enough_rate": 100.0,
+    "curve_intent_undercall_frame_rate": 56.455399061032864,
+    "curve_intent_curvature_ratio_p50": 0.668504212713649,
+    "curve_intent_curvature_ratio_p95": 0.8383051209929219,
+    "curve_intent_arm_early_enough": true,
+    "curve_intent_undercall_detected": true
+  }
+}

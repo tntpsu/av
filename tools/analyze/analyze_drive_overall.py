@@ -1129,6 +1129,7 @@ def _print_summary_report(recording_path: Path, summary: Dict, analyze_to_failur
     trajectory_quality = summary.get("trajectory_quality", {})
     system_health = summary.get("system_health", {})
     safety = summary.get("safety", {})
+    curve_intent_diag = summary.get("curve_intent_diagnostics", {})
     recommendations = summary.get("recommendations", [])
 
     print("=" * 80)
@@ -1191,6 +1192,20 @@ def _print_summary_report(recording_path: Path, summary: Dict, analyze_to_failur
         "   Oscillation Amplitude Runaway: "
         f"{'YES' if control_smoothness.get('oscillation_amplitude_runaway') else 'NO'}"
     )
+    if curve_intent_diag.get("available"):
+        print(
+            "   Curve Intent Arm Early Rate: "
+            f"{curve_intent_diag.get('arm_early_enough_rate', 0.0):.1f}%"
+        )
+        print(
+            "   Curve Intent Undercall Rate: "
+            f"{curve_intent_diag.get('undercall_frame_rate', 0.0):.1f}%"
+        )
+        print(
+            "   Curve Intent Curvature Ratio P50/P95: "
+            f"{curve_intent_diag.get('curvature_ratio_p50', 0.0):.2f} / "
+            f"{curve_intent_diag.get('curvature_ratio_p95', 0.0):.2f}"
+        )
     print()
 
     print("4. SPEED CONTROL")

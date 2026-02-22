@@ -1022,6 +1022,258 @@ def test_distance_track_curve_phase_arms_upcoming_before_curve_start():
     assert m1['curve_entry_schedule_triggered'] is True
 
 
+def test_preview_curve_phase_arms_upcoming_without_track_distance():
+    """Preview curvature should arm upcoming in map-free mode."""
+    controller = LateralController(
+        kp=1.0,
+        kd=0.2,
+        curve_phase_use_distance_track=False,
+        curve_phase_use_preview_curvature=True,
+        curve_phase_preview_enter_threshold=0.01,
+        curve_phase_preview_exit_threshold=0.008,
+        curve_phase_preview_on_frames=1,
+        curve_phase_preview_off_frames=1,
+        curve_upcoming_enter_threshold=0.012,
+        curve_upcoming_exit_threshold=0.009,
+        curve_upcoming_on_frames=1,
+        curve_upcoming_off_frames=1,
+    )
+    ref = {
+        'x': 0.0,
+        'y': 4.7,
+        'heading': 0.0,
+        'velocity': 8.0,
+        'curvature': 0.0,
+        'curvature_preview': 0.02,
+    }
+    m = controller.compute_steering(
+        current_heading=0.0,
+        reference_point=ref,
+        current_speed=8.0,
+        dt=0.033,
+        return_metadata=True,
+    )
+    assert m['curve_upcoming'] is True
+    assert m['curve_at_car'] is False
+    assert m['curve_phase_source'] == 'preview_metric'
+    assert m['curve_phase_preview_upcoming'] is True
+
+
+def test_preview_curve_phase_releases_when_preview_clears():
+    """Preview-based upcoming state should release with hysteresis when preview drops."""
+    controller = LateralController(
+        kp=1.0,
+        kd=0.2,
+        curve_phase_use_distance_track=False,
+        curve_phase_use_preview_curvature=True,
+        curve_phase_preview_enter_threshold=0.01,
+        curve_phase_preview_exit_threshold=0.008,
+        curve_phase_preview_on_frames=1,
+        curve_phase_preview_off_frames=1,
+        curve_upcoming_enter_threshold=0.012,
+        curve_upcoming_exit_threshold=0.009,
+        curve_upcoming_on_frames=1,
+        curve_upcoming_off_frames=1,
+    )
+    armed_ref = {
+        'x': 0.0,
+        'y': 4.7,
+        'heading': 0.0,
+        'velocity': 8.0,
+        'curvature': 0.0,
+        'curvature_preview': 0.02,
+    }
+    cleared_ref = {
+        'x': 0.0,
+        'y': 4.7,
+        'heading': 0.0,
+        'velocity': 8.0,
+        'curvature': 0.0,
+        'curvature_preview': 0.0,
+    }
+    controller.compute_steering(
+        current_heading=0.0,
+        reference_point=armed_ref,
+        current_speed=8.0,
+        dt=0.033,
+        return_metadata=True,
+    )
+    m = controller.compute_steering(
+        current_heading=0.0,
+        reference_point=cleared_ref,
+        current_speed=8.0,
+        dt=0.033,
+        return_metadata=True,
+    )
+    assert m['curve_phase_preview_upcoming'] is False
+    assert m['curve_upcoming'] is False
+
+
+def test_curve_anticipation_telemetry_passthrough_from_reference_point():
+    """Curve anticipation fields should pass through controller metadata unchanged."""
+    controller = LateralController(
+        kp=1.0,
+        kd=0.2,
+        curve_phase_use_distance_track=False,
+        curve_phase_use_preview_curvature=True,
+    )
+    ref = {
+        'x': 0.0,
+        'y': 4.7,
+        'heading': 0.0,
+        'velocity': 8.0,
+        'curvature': 0.0,
+        'curvature_preview': 0.0,
+        'curve_anticipation_score': 0.62,
+        'curve_anticipation_score_raw': 0.71,
+        'curve_anticipation_active': True,
+        'curve_anticipation_source': 'trajectory_shadow',
+        'curve_anticipation_term_curvature': 0.12,
+        'curve_anticipation_term_heading': 0.54,
+        'curve_anticipation_term_far_rise': 0.31,
+    }
+    m = controller.compute_steering(
+        current_heading=0.0,
+        reference_point=ref,
+        current_speed=8.0,
+        dt=0.033,
+        return_metadata=True,
+    )
+    assert m['curve_anticipation_score'] == pytest.approx(0.62, rel=1e-6)
+    assert m['curve_anticipation_score_raw'] == pytest.approx(0.71, rel=1e-6)
+    assert m['curve_anticipation_active'] is True
+    assert m['curve_anticipation_source'] == 'trajectory_shadow'
+    assert m['curve_anticipation_term_curvature'] == pytest.approx(0.12, rel=1e-6)
+    assert m['curve_anticipation_term_heading'] == pytest.approx(0.54, rel=1e-6)
+    assert m['curve_anticipation_term_far_rise'] == pytest.approx(0.31, rel=1e-6)
+
+
+def test_curve_phase_scheduler_telemetry_passthrough_from_reference_point():
+    """Curve phase scheduler telemetry should pass through controller metadata."""
+    controller = LateralController(
+        kp=1.0,
+        kd=0.2,
+        curve_phase_use_distance_track=False,
+        curve_phase_use_preview_curvature=True,
+    )
+    ref = {
+        'x': 0.0,
+        'y': 4.7,
+        'heading': 0.0,
+        'velocity': 8.0,
+        'curvature': 0.0,
+        'curvature_preview': 0.015,
+        'curve_scheduler_mode': 'phase_active',
+        'curve_phase': 0.58,
+        'curve_phase_raw': 0.73,
+        'curve_phase_state': 'COMMIT',
+        'curve_phase_rearm_event': False,
+        'curve_phase_entry_frames': 6,
+        'curve_phase_rearm_hold_frames': 0,
+        'curve_phase_term_preview': 0.91,
+        'curve_phase_term_path': 0.42,
+        'curve_phase_term_rise': 0.37,
+        'curve_phase_curvature_rise_abs': 0.0019,
+        'reference_lookahead_target': 10.4,
+        'reference_lookahead_after_slew': 9.9,
+        'reference_lookahead_active': 9.9,
+    }
+    m = controller.compute_steering(
+        current_heading=0.0,
+        reference_point=ref,
+        current_speed=8.0,
+        dt=0.033,
+        return_metadata=True,
+    )
+    assert m['curve_scheduler_mode'] == 'phase_active'
+    assert m['curve_phase'] == pytest.approx(0.58, rel=1e-6)
+    assert m['curve_phase_raw'] == pytest.approx(0.73, rel=1e-6)
+    assert m['curve_phase_state'] == 'COMMIT'
+    assert m['curve_phase_rearm_event'] is False
+    assert int(m['curve_phase_entry_frames']) == 6
+    assert int(m['curve_phase_rearm_hold_frames']) == 0
+    assert m['curve_phase_term_preview'] == pytest.approx(0.91, rel=1e-6)
+    assert m['curve_phase_term_path'] == pytest.approx(0.42, rel=1e-6)
+    assert m['curve_phase_term_rise'] == pytest.approx(0.37, rel=1e-6)
+    assert m['curve_phase_curvature_rise_abs'] == pytest.approx(0.0019, rel=1e-6)
+    assert m['reference_lookahead_target'] == pytest.approx(10.4, rel=1e-6)
+    assert m['reference_lookahead_after_slew'] == pytest.approx(9.9, rel=1e-6)
+    assert m['reference_lookahead_active'] == pytest.approx(9.9, rel=1e-6)
+
+
+def test_curve_intent_single_owner_state_drives_curve_flags():
+    """When enabled, curve_intent state should be the single owner for curve flags."""
+    controller = LateralController(
+        kp=1.0,
+        kd=0.2,
+        curve_intent_single_owner_mode=True,
+        curve_phase_use_distance_track=False,
+        curve_phase_use_preview_curvature=False,
+    )
+    base_ref = {
+        'x': 0.0,
+        'y': 6.0,
+        'heading': 0.0,
+        'velocity': 8.0,
+        'curvature': 0.0,
+    }
+
+    m_entry = controller.compute_steering(
+        current_heading=0.0,
+        reference_point={**base_ref, 'curve_intent': 0.62, 'curve_intent_state': 'ENTRY'},
+        current_speed=8.0,
+        dt=0.033,
+        return_metadata=True,
+    )
+    assert m_entry['curve_phase_source'] == 'curve_intent_single_owner'
+    assert m_entry['curve_upcoming'] is True
+    assert m_entry['curve_at_car'] is False
+
+    m_commit = controller.compute_steering(
+        current_heading=0.0,
+        reference_point={**base_ref, 'curve_intent': 0.82, 'curve_intent_state': 'COMMIT'},
+        current_speed=8.0,
+        dt=0.033,
+        return_metadata=True,
+    )
+    assert m_commit['curve_upcoming'] is True
+    assert m_commit['curve_at_car'] is True
+
+
+def test_curve_intent_single_owner_can_be_disabled():
+    """Disabling single-owner mode should keep legacy curve detection behavior."""
+    controller = LateralController(
+        kp=1.0,
+        kd=0.2,
+        curve_intent_single_owner_mode=False,
+        curve_phase_use_distance_track=False,
+        curve_phase_use_preview_curvature=False,
+        curve_upcoming_enter_threshold=0.02,
+        curve_upcoming_exit_threshold=0.015,
+        curve_upcoming_on_frames=1,
+        curve_upcoming_off_frames=1,
+    )
+
+    m = controller.compute_steering(
+        current_heading=0.0,
+        reference_point={
+            'x': 0.0,
+            'y': 6.0,
+            'heading': 0.0,
+            'velocity': 8.0,
+            'curvature': 0.0,
+            'curve_intent': 0.8,
+            'curve_intent_state': 'COMMIT',
+        },
+        current_speed=8.0,
+        dt=0.033,
+        return_metadata=True,
+    )
+    assert m['curve_phase_source'] != 'curve_intent_single_owner'
+    assert m['curve_upcoming'] is False
+    assert m['curve_at_car'] is False
+
+
 def test_lateral_controller_road_straight_hysteresis_and_invalid_hold():
     """Road-straight should use enter/exit hysteresis and hold state on invalid gaps."""
     controller = LateralController(
@@ -2315,4 +2567,3 @@ def test_pp_rate_ramp_converges():
         f"Jerk-limited steering {meta['steering']:.4f} didn't converge to "
         f"target {meta_nj['steering']:.4f} after 30 frames"
     )
-

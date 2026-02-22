@@ -528,7 +528,8 @@ trap cleanup SIGINT SIGTERM
 # Enable recording by default for comprehensive logging
 # Redirect output to log file for monitoring
 # Pass through any additional arguments (e.g., --duration 60, --max_frames 1000)
-python "$SCRIPT_DIR/av_stack.py" --bridge_url "$BRIDGE_URL" --record "${PASSTHROUGH_ARGS[@]}" 2>&1 | tee "$AV_STACK_LOG"
+python "$SCRIPT_DIR/av_stack.py" --bridge_url "$BRIDGE_URL" --record \
+  ${TRACK_YAML_PATH:+--track-yaml "$TRACK_YAML_PATH"} "${PASSTHROUGH_ARGS[@]}" 2>&1 | tee "$AV_STACK_LOG"
 EXIT_CODE=${PIPESTATUS[0]}  # Capture exit code of Python script (not tee)
 
 # CRITICAL: Call cleanup when script ends normally (not just on signals)

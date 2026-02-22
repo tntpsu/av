@@ -14,6 +14,7 @@ class Visualizer {
         this.currentRecording = null;  // Track current recording filename
         this.currentRecordingMeta = null;
         this.availableRecordings = [];
+        this.selectedGateBundleId = null;
         this.pendingDiagnosticsFocus = null;
         this.isPlaying = false;
         this.playSpeed = 1.0;
@@ -1640,6 +1641,16 @@ class Visualizer {
                 const runawayColor = runaway ? '#ff6b6b' : '#4caf50';
                 html += `<tr><td>Oscillation Amplitude Runaway:</td><td style="text-align: right; color: ${runawayColor};">${withLimitHint(runaway ? 'YES' : 'NO', runawayColor, 'NO')}</td></tr>`;
             }
+            const curveIntentDiag = summary.curve_intent_diagnostics || null;
+            if (curveIntentDiag && curveIntentDiag.available) {
+                const armRate = Number(curveIntentDiag.arm_early_enough_rate ?? 0);
+                const undercallRate = Number(curveIntentDiag.undercall_frame_rate ?? 0);
+                const armColor = armRate >= 80 ? '#4caf50' : armRate >= 60 ? '#ffa500' : '#ff6b6b';
+                const undercallColor = undercallRate <= 25 ? '#4caf50' : undercallRate <= 40 ? '#ffa500' : '#ff6b6b';
+                html += `<tr><td>Curve Intent Arm-Early Rate:</td><td style="text-align: right; color: ${armColor};">${withLimitHint(armRate.toFixed(1) + '%', armColor, '>=80%')}</td></tr>`;
+                html += `<tr><td>Curve Curvature Undercall Rate:</td><td style="text-align: right; color: ${undercallColor};">${withLimitHint(undercallRate.toFixed(1) + '%', undercallColor, '<=25%')}</td></tr>`;
+                html += `<tr><td>Curve Curvature Ratio (P50/P95):</td><td style="text-align: right;">${Number(curveIntentDiag.curvature_ratio_p50 ?? 0).toFixed(2)} / ${Number(curveIntentDiag.curvature_ratio_p95 ?? 0).toFixed(2)}</td></tr>`;
+            }
             if (comfort) {
                 const ctrlAccelG = comfort.acceleration_p95_g ?? null;
                 const ctrlJerkGps = comfort.jerk_p95_gps ?? null;
@@ -2023,6 +2034,93 @@ class Visualizer {
             compareContent.innerHTML = html;
         } catch (error) {
             compareContent.innerHTML = `<p style="color: #ff6b6b; text-align: center; padding: 2rem;">Compare load failed: ${this.escapeHtml(error.message)}</p>`;
+        }
+    }
+
+    async loadGates() {
+        const gatesContent = document.getElementById('gates-content');
+        if (!gatesContent) return;
+        gatesContent.innerHTML = '<p style="color: #888; text-align: center; padding: 2rem;">Loading gate bundles...</p>';
+        try {
+            const bundles = await this.dataLoader.loadGateBundles();
+            if (!Array.isArray(bundles) || bundles.length === 0) {
+                gatesContent.innerHTML = '<p style="color: #888; text-align: center; padding: 2rem;">No gate bundles found.</p>';
+                return;
+            }
+
+            const selected = this.selectedGateBundleId && bundles.some((b) => b.bundle_id === this.selectedGateBundleId)
+                ? this.selectedGateBundleId
+                : bundles[0].bundle_id;
+            this.selectedGateBundleId = selected;
+            const bundle = await this.dataLoader.loadGateBundle(selected);
+            const report = bundle?.gate_report || {};
+            const decision = bundle?.decision || {};
+            const triagePackets = Array.isArray(bundle?.triage_packets) ? bundle.triage_packets : [];
+
+            const options = bundles
+                .map((b) => {
+                    const label = this.escapeHtml(
+                        `${b.bundle_id}${b.pass_fail === true ? ' (PASS)' : b.pass_fail === false ? ' (FAIL)' : ''}`
+                    );
+                    const selectedAttr = b.bundle_id === selected ? ' selected' : '';
+                    return `<option value="${this.escapeHtml(b.bundle_id)}"${selectedAttr}>${label}</option>`;
+                })
+                .join('');
+
+            let html = '<div style="padding: 1rem;">';
+            html += '<h3 style="margin-top:0; color:#4a90e2;">Gate Bundles</h3>';
+            html += '<div style="margin-bottom: 1rem; display: flex; gap: 0.5rem; align-items: center;">';
+            html += '<label for="gate-bundle-select" style="color:#9fb3c8;">Bundle:</label>';
+            html += `<select id="gate-bundle-select" class="recording-select">${options}</select>`;
+            html += '</div>';
+            html += '<div style="background:#2a2a2a; border-radius:8px; padding:0.9rem; margin-bottom:0.9rem;">';
+            html += `<div><strong>Decision:</strong> <span style="color:${decision.pass_fail ? '#4caf50' : '#ff6b6b'}">${this.escapeHtml(decision.decision || 'unknown')}</span></div>`;
+            html += `<div><strong>Pass/Fail:</strong> ${this.escapeHtml(String(report.pass_fail))}</div>`;
+            html += `<div><strong>Recordings:</strong> ${Array.isArray(report.recording_ids) ? report.recording_ids.length : 0}</div>`;
+            html += `<div><strong>Generated:</strong> ${this.escapeHtml(report.generated_at_utc || decision.generated_at_utc || '-')}</div>`;
+            html += '</div>';
+
+            const checks = report?.regression_budget?.checks || {};
+            html += '<h4 style="color:#9bdcff; margin: 0.75rem 0 0.5rem;">Gate Checks</h4>';
+            html += '<table class="data-table">';
+            Object.entries(checks).forEach(([k, v]) => {
+                const color = v === true ? '#4caf50' : v === false ? '#ff6b6b' : '#bdbdbd';
+                html += `<tr><td>${this.escapeHtml(k)}</td><td style="color:${color}; text-align:right;">${this.escapeHtml(String(v))}</td></tr>`;
+            });
+            if (Object.keys(checks).length === 0) {
+                html += '<tr><td colspan="2" style="text-align:center; color:#888;">No checks found in bundle.</td></tr>';
+            }
+            html += '</table>';
+
+            html += '<h4 style="color:#9bdcff; margin: 0.9rem 0 0.5rem;">Triage Packets</h4>';
+            if (triagePackets.length === 0) {
+                html += '<p style="color:#888;">No triage packets in this bundle.</p>';
+            } else {
+                html += '<table class="data-table">';
+                html += '<thead><tr><th>Recording</th><th>Trigger</th><th>Next Lever</th></tr></thead><tbody>';
+                triagePackets.forEach((p) => {
+                    const trigger = Array.isArray(p.trigger_reasons) ? p.trigger_reasons.join(', ') : '-';
+                    html += '<tr>';
+                    html += `<td>${this.escapeHtml(p.recording_id || p.file || '-')}</td>`;
+                    html += `<td>${this.escapeHtml(trigger || '-')}</td>`;
+                    html += `<td>${this.escapeHtml(p.single_next_lever || '-')}</td>`;
+                    html += '</tr>';
+                });
+                html += '</tbody></table>';
+            }
+
+            html += '</div>';
+            gatesContent.innerHTML = html;
+
+            const select = document.getElementById('gate-bundle-select');
+            if (select) {
+                select.addEventListener('change', () => {
+                    this.selectedGateBundleId = select.value;
+                    this.loadGates();
+                });
+            }
+        } catch (error) {
+            gatesContent.innerHTML = `<p style="color:#ff6b6b; text-align:center; padding: 2rem;">Gate load failed: ${this.escapeHtml(error.message)}</p>`;
         }
     }
 
@@ -5921,6 +6019,15 @@ class Visualizer {
             ? (c.curve_at_car ? 'YES' : 'NO')
             : 'missing';
         const curveAtCarRemLabel = schedFmtFloat(c.curve_at_car_distance_remaining_m, 2);
+        const curveSchedulerModeLabel = c.curve_scheduler_mode ? String(c.curve_scheduler_mode) : 'missing';
+        const curveIntentStateLabel = c.curve_intent_state
+            ? String(c.curve_intent_state)
+            : (c.curve_phase_state ? String(c.curve_phase_state) : 'missing');
+        const curveIntentValue = (
+            c.curve_intent !== undefined && c.curve_intent !== null
+                ? c.curve_intent
+                : c.curve_phase
+        );
         const dynActiveLabel = c.dynamic_curve_authority_active !== undefined && c.dynamic_curve_authority_active !== null
             ? (c.dynamic_curve_authority_active ? 'YES' : 'NO')
             : 'missing';
@@ -5945,7 +6052,7 @@ class Visualizer {
         );
         updateField(
             'control-steering-curve-entry-schedule-context',
-            `proxy=${proxyStraightLabel}, upcoming=${curveUpcomingLabel}, atCar=${curveAtCarLabel}, remM=${curveAtCarRemLabel}, prog=${schedFmtFloat(c.current_curve_progress_ratio, 3)}, road=${roadStraightLabel}, valid=${roadValidLabel}, source=${roadSourceLabel}, kRoad=${schedFmtFloat(c.road_curvature_abs, 4)}, holdRem=${holdRemLabel}`
+            `proxy=${proxyStraightLabel}, upcoming=${curveUpcomingLabel}, atCar=${curveAtCarLabel}, remM=${curveAtCarRemLabel}, sched=${curveSchedulerModeLabel}, intent=${schedFmtFloat(curveIntentValue, 2)}(${curveIntentStateLabel}), iRaw=${schedFmtFloat(c.curve_intent_raw ?? c.curve_phase_raw, 2)}, iPrev=${schedFmtFloat(c.curve_intent_term_preview ?? c.curve_phase_term_preview, 2)}, iPath=${schedFmtFloat(c.curve_intent_term_path ?? c.curve_phase_term_path, 2)}, iRise=${schedFmtFloat(c.curve_intent_term_rise ?? c.curve_phase_term_rise, 2)}, iConf=${schedFmtFloat(c.curve_intent_confidence, 2)}, iGuard=${schedFmtYesNo(c.curve_intent_speed_guardrail_active)}, iCap=${schedFmtFloat(c.curve_intent_speed_guardrail_cap_mps, 2)}, lookT=${schedFmtFloat(c.reference_lookahead_target, 2)}, lookA=${schedFmtFloat(c.reference_lookahead_active, 2)}, prog=${schedFmtFloat(c.current_curve_progress_ratio, 3)}, road=${roadStraightLabel}, valid=${roadValidLabel}, source=${roadSourceLabel}, kRoad=${schedFmtFloat(c.road_curvature_abs, 4)}, holdRem=${holdRemLabel}`
         );
         updateField(
             'control-steering-curve-entry-schedule-params',
@@ -7454,11 +7561,15 @@ class Visualizer {
                 this.loadSummary();
             } else if (tabName === 'compare') {
                 this.loadCompare();
+            } else if (tabName === 'gates') {
+                this.loadGates();
             } else if (tabName === 'issues') {
                 this.loadIssues();
             } else if (tabName === 'diagnostics') {
                 this.loadDiagnostics();
             }
+        } else if (tabName === 'gates') {
+            this.loadGates();
         }
     }
 
