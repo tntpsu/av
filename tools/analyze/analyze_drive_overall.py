@@ -1217,8 +1217,12 @@ def _print_summary_report(recording_path: Path, summary: Dict, analyze_to_failur
 
     print("5. COMFORT")
     print("-" * 80)
-    print(f"   Accel P95: {comfort.get('acceleration_p95', 0.0):.3f} m/s²")
-    print(f"   Jerk P95:  {comfort.get('jerk_p95', 0.0):.3f} m/s³")
+    print(f"   Accel P95: {comfort.get('acceleration_p95_filtered', 0.0):.3f} m/s²"
+          f"  (raw: {comfort.get('acceleration_p95', 0.0):.1f})")
+    print(f"   Jerk P95 (filtered):   {comfort.get('jerk_p95_filtered', 0.0):.3f} m/s³"
+          f"  (raw: {comfort.get('jerk_p95', 0.0):.1f})")
+    print(f"   Jerk P95 (commanded):  {comfort.get('commanded_jerk_p95', 0.0):.3f} m/s³"
+          f"  (target ≤6.0 — gate metric)")
     print(f"   Lateral Accel P95: {comfort.get('lateral_accel_p95', 0.0):.3f} m/s²")
     print(f"   Lateral Jerk P95:  {comfort.get('lateral_jerk_p95', 0.0):.3f} m/s³")
     print()
