@@ -1216,33 +1216,6 @@ class Visualizer {
                 html += '</div>';
             }
             
-            // Score Breakdown
-            if (summary.executive_summary.score_breakdown) {
-                const breakdown = summary.executive_summary.score_breakdown;
-                html += '<div style="margin-top: 1rem; padding: 0.75rem; background: #1a1a1a; border-radius: 4px; font-size: 0.85rem;">';
-                html += '<strong style="color: #4a90e2;">Score Breakdown:</strong><br/>';
-                html += `<span style="color: #888;">Base: 100.0</span><br/>`;
-                
-                const penalties = [
-                    { name: 'Lateral Error RMSE', value: breakdown.lateral_error_penalty, max: 30 },
-                    { name: 'Steering Jerk', value: breakdown.steering_jerk_penalty, max: 20 },
-                    { name: 'Lane Detection', value: breakdown.lane_detection_penalty, max: 20 },
-                    { name: 'Stale Hard Data', value: breakdown.stale_data_penalty, max: 15 },
-                    { name: 'Perception Instability', value: breakdown.perception_instability_penalty || 0, max: 20 },
-                    { name: 'Out-of-Lane', value: breakdown.out_of_lane_penalty, max: 15 }
-                ];
-                
-                penalties.forEach(penalty => {
-                    if (penalty.value > 0.01) {
-                        const color = penalty.value > penalty.max * 0.7 ? '#ff6b6b' : '#ffa500';
-                        html += `<span style="color: ${color};">  -${penalty.value.toFixed(1)}</span> <span style="color: #888;">${penalty.name} (max ${penalty.max})</span><br/>`;
-                    }
-                });
-                html += '<div style="margin-top: 0.4rem; color: #9fb3c8;">Stale penalty uses hard stale only (managed low-visibility fallback excluded).</div>';
-                html += '<div style="margin-top: 0.25rem; color: #9fb3c8;">Overall score uses only the penalties listed here; some cards (e.g., top-down overlay trust) are informational diagnostics.</div>';
-                html += '</div>';
-            }
-
             if (summary.layer_scores && summary.layer_score_breakdown) {
                 html += '<div style="margin-top: 0.8rem; display: grid; grid-template-columns: repeat(auto-fit,minmax(220px,1fr)); gap: 0.5rem;">';
                 const layerOrder = ['Safety', 'Trajectory', 'Control', 'Perception', 'LongitudinalComfort'];
