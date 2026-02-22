@@ -1617,6 +1617,29 @@ class Visualizer {
             html += `<tr><td>Steering Smoothness:</td><td style="text-align: right; color: ${smoothnessColor};">${withLimitHint(summary.control_smoothness.steering_smoothness.toFixed(2), smoothnessColor, '>=2.0')}</td></tr>`;
             const oscColor = getColorForValue(summary.control_smoothness.oscillation_frequency, { good: 1.0, acceptable: 2.0 });
             html += `<tr><td>Oscillation Frequency:</td><td style="text-align: right; color: ${oscColor};">${withLimitHint(summary.control_smoothness.oscillation_frequency.toFixed(2) + 'Hz', oscColor, '<=1.0Hz')}</td></tr>`;
+            if (summary.control_smoothness.oscillation_zero_crossing_rate_hz !== undefined) {
+                const zcr = summary.control_smoothness.oscillation_zero_crossing_rate_hz;
+                const zcrColor = getColorForValue(zcr, { good: 0.3, acceptable: 0.6 });
+                html += `<tr><td>Oscillation Zero-Crossing Rate:</td><td style="text-align: right; color: ${zcrColor};">${withLimitHint(zcr.toFixed(2) + 'Hz', zcrColor, '<=0.30Hz')}</td></tr>`;
+            }
+            if (summary.control_smoothness.oscillation_rms_growth_slope_mps !== undefined) {
+                const slope = summary.control_smoothness.oscillation_rms_growth_slope_mps;
+                const slopeColor = slope <= 0 ? '#4caf50' : slope <= 0.01 ? '#ffa500' : '#ff6b6b';
+                html += `<tr><td>Oscillation RMS Growth Slope:</td><td style="text-align: right; color: ${slopeColor};">${withLimitHint(slope.toFixed(4) + ' m/s', slopeColor, '<=0.0000 m/s')}</td></tr>`;
+            }
+            if (
+                summary.control_smoothness.oscillation_rms_window_start_m !== undefined
+                && summary.control_smoothness.oscillation_rms_window_end_m !== undefined
+            ) {
+                const rmsStart = summary.control_smoothness.oscillation_rms_window_start_m;
+                const rmsEnd = summary.control_smoothness.oscillation_rms_window_end_m;
+                html += `<tr><td>Oscillation RMS (Start → End):</td><td style="text-align: right;">${rmsStart.toFixed(3)}m → ${rmsEnd.toFixed(3)}m</td></tr>`;
+            }
+            if (summary.control_smoothness.oscillation_amplitude_runaway !== undefined) {
+                const runaway = Boolean(summary.control_smoothness.oscillation_amplitude_runaway);
+                const runawayColor = runaway ? '#ff6b6b' : '#4caf50';
+                html += `<tr><td>Oscillation Amplitude Runaway:</td><td style="text-align: right; color: ${runawayColor};">${withLimitHint(runaway ? 'YES' : 'NO', runawayColor, 'NO')}</td></tr>`;
+            }
             if (comfort) {
                 const ctrlAccelG = comfort.acceleration_p95_g ?? null;
                 const ctrlJerkGps = comfort.jerk_p95_gps ?? null;
@@ -1701,6 +1724,21 @@ class Visualizer {
             const outTimeColor = summary.safety.out_of_lane_time < 5 ? '#4caf50' : summary.safety.out_of_lane_time < 10 ? '#ffa500' : '#ff6b6b';
             html += `<tr><td>Out-of-Lane Events:</td><td style="text-align: right; color: ${outEventsColor};">${withLimitHint(String(summary.safety.out_of_lane_events), outEventsColor, '0')}</td></tr>`;
             html += `<tr><td>Out-of-Lane Time:</td><td style="text-align: right; color: ${outTimeColor};">${withLimitHint(summary.safety.out_of_lane_time.toFixed(1) + '%', outTimeColor, '<5%')}</td></tr>`;
+            if (summary.safety.out_of_lane_events_full_run !== undefined) {
+                const fullEvents = Number(summary.safety.out_of_lane_events_full_run);
+                const fullEventColor = fullEvents === 0 ? '#4caf50' : '#ff6b6b';
+                html += `<tr><td>Out-of-Lane Events (Full Run):</td><td style="text-align: right; color: ${fullEventColor};">${withLimitHint(String(fullEvents), fullEventColor, '0')}</td></tr>`;
+            }
+            if (summary.safety.out_of_lane_time_full_run !== undefined) {
+                const fullTime = Number(summary.safety.out_of_lane_time_full_run);
+                const fullTimeColor = fullTime < 5 ? '#4caf50' : fullTime < 10 ? '#ffa500' : '#ff6b6b';
+                html += `<tr><td>Out-of-Lane Time (Full Run):</td><td style="text-align: right; color: ${fullTimeColor};">${withLimitHint(fullTime.toFixed(1) + '%', fullTimeColor, '<5%')}</td></tr>`;
+            }
+            if (summary.safety.out_of_lane_event_at_failure_boundary !== undefined) {
+                const atBoundary = Boolean(summary.safety.out_of_lane_event_at_failure_boundary);
+                const boundaryColor = atBoundary ? '#ff6b6b' : '#4caf50';
+                html += `<tr><td>Out-of-Lane At Failure Boundary:</td><td style="text-align: right; color: ${boundaryColor};">${withLimitHint(atBoundary ? 'YES' : 'NO', boundaryColor, 'NO')}</td></tr>`;
+            }
             html += '</table>';
             
             // Out-of-Lane Events List
@@ -8703,4 +8741,3 @@ document.addEventListener('DOMContentLoaded', () => {
     visualizer = new Visualizer();
     window.visualizer = visualizer;  // Make accessible globally for onclick handlers
 });
-

@@ -36,6 +36,7 @@ project_root = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(project_root))
 
 from trajectory.utils import smooth_curvature_distance
+from tools.drive_summary_core import analyze_recording_summary
 
 
 @dataclass
@@ -240,6 +241,108 @@ class DriveAnalyzer:
     
     def calculate_metrics(self) -> DriveMetrics:
         """Calculate all metrics."""
+        summary = analyze_recording_summary(
+            self.recording_path,
+            analyze_to_failure=bool(self.stop_on_emergency),
+        )
+        if isinstance(summary, dict) and not summary.get("error"):
+            executive = summary.get("executive_summary", {})
+            path_tracking = summary.get("path_tracking", {})
+            control_smoothness = summary.get("control_smoothness", {})
+            control_stability = summary.get("control_stability", {})
+            perception_quality = summary.get("perception_quality", {})
+            trajectory_quality = summary.get("trajectory_quality", {})
+            system_health = summary.get("system_health", {})
+            speed_control = summary.get("speed_control", {})
+            comfort = summary.get("comfort", {})
+            safety = summary.get("safety", {})
+
+            def _f(section: Dict, key: str, default: float = 0.0) -> float:
+                value = section.get(key, default)
+                return float(value) if value is not None else float(default)
+
+            def _i(section: Dict, key: str, default: int = 0) -> int:
+                value = section.get(key, default)
+                return int(value) if value is not None else int(default)
+
+            if executive.get("failure_detected") and executive.get("failure_detection_source") == "emergency_stop":
+                failure_frame = executive.get("failure_frame")
+                self.emergency_stop_frame = int(failure_frame) if failure_frame is not None else None
+
+            return DriveMetrics(
+                drive_duration=_f(executive, "drive_duration"),
+                total_frames=_i(executive, "total_frames"),
+                success_rate=_f(executive, "success_rate"),
+                lateral_error_rmse=_f(path_tracking, "lateral_error_rmse"),
+                lateral_error_mean=_f(path_tracking, "lateral_error_mean"),
+                lateral_error_max=_f(path_tracking, "lateral_error_max"),
+                lateral_error_std=0.0,
+                lateral_error_p50=0.0,
+                lateral_error_p95=_f(path_tracking, "lateral_error_p95"),
+                heading_error_rmse=_f(path_tracking, "heading_error_rmse"),
+                heading_error_mean=0.0,
+                heading_error_max=_f(path_tracking, "heading_error_max"),
+                time_in_lane=_f(path_tracking, "time_in_lane"),
+                time_in_lane_centered=_f(path_tracking, "time_in_lane_centered"),
+                steering_jerk_mean=0.0,
+                steering_jerk_max=_f(control_smoothness, "steering_jerk_max"),
+                steering_rate_mean=0.0,
+                steering_rate_max=_f(control_smoothness, "steering_rate_max"),
+                steering_smoothness=_f(control_smoothness, "steering_smoothness"),
+                oscillation_frequency=_f(control_smoothness, "oscillation_frequency"),
+                control_effort=0.0,
+                straight_frames=0,
+                straight_oscillation_rate=_f(control_stability, "straight_oscillation_mean"),
+                straight_stability_score=0.0,
+                lane_detection_rate=_f(perception_quality, "lane_detection_rate"),
+                perception_confidence_mean=_f(perception_quality, "perception_confidence_mean"),
+                perception_confidence_std=0.0,
+                perception_jumps_detected=_i(perception_quality, "perception_jumps_detected"),
+                stale_perception_rate=_f(perception_quality, "stale_perception_rate"),
+                perception_freeze_events=0,
+                trajectory_availability=_f(trajectory_quality, "trajectory_availability"),
+                ref_point_accuracy_rmse=_f(trajectory_quality, "ref_point_accuracy_rmse"),
+                trajectory_smoothness=0.0,
+                path_curvature_consistency=0.0,
+                pid_integral_max=_f(system_health, "pid_integral_max"),
+                pid_reset_frequency=0.0,
+                error_conflict_rate=0.0,
+                stale_command_rate=0.0,
+                speed_error_rmse=_f(speed_control, "speed_error_rmse"),
+                speed_error_mean=_f(speed_control, "speed_error_mean"),
+                speed_error_max=_f(speed_control, "speed_error_max"),
+                speed_overspeed_rate=_f(speed_control, "speed_overspeed_rate"),
+                planned_speed_error_rmse=0.0,
+                planned_speed_error_mean=0.0,
+                planned_speed_error_max=0.0,
+                planned_overspeed_rate=0.0,
+                acceleration_mean=_f(speed_control, "acceleration_mean"),
+                acceleration_max=_f(speed_control, "acceleration_max"),
+                acceleration_p95=_f(speed_control, "acceleration_p95"),
+                jerk_mean=_f(speed_control, "jerk_mean"),
+                jerk_max=_f(speed_control, "jerk_max"),
+                jerk_p95=_f(speed_control, "jerk_p95"),
+                lateral_accel_p95=_f(comfort, "lateral_accel_p95"),
+                lateral_jerk_p95=_f(comfort, "lateral_jerk_p95"),
+                lateral_jerk_max=_f(speed_control, "lateral_jerk_max"),
+                speed_limit_zero_rate=_f(speed_control, "speed_limit_zero_rate"),
+                speed_surge_count=_i(speed_control, "speed_surge_count"),
+                speed_surge_avg_drop=_f(speed_control, "speed_surge_avg_drop"),
+                speed_surge_p95_drop=_f(speed_control, "speed_surge_p95_drop"),
+                speed_surge_transition_count=0,
+                speed_surge_transition_avg_drop=0.0,
+                speed_surge_transition_p95_drop=0.0,
+                speed_surge_oscillation_count=0,
+                speed_governor_comfort_active_rate=0.0,
+                speed_governor_horizon_active_rate=0.0,
+                speed_governor_mean_comfort_speed=0.0,
+                speed_governor_mean_speed=0.0,
+                speed_surge_oscillation_avg_drop=0.0,
+                speed_surge_oscillation_p95_drop=0.0,
+                out_of_lane_events=_i(safety, "out_of_lane_events"),
+                out_of_lane_time=_f(safety, "out_of_lane_time"),
+            )
+
         if self.stop_on_emergency and self.data.get('emergency_stop') is not None:
             emergency_indices = np.where(self.data['emergency_stop'] > 0)[0]
             if emergency_indices.size > 0:
@@ -1011,6 +1114,151 @@ def list_recordings():
     print()
 
 
+def _print_summary_report(recording_path: Path, summary: Dict, analyze_to_failure: bool) -> None:
+    """Render a CLI report from the canonical summary contract."""
+    if not isinstance(summary, dict) or summary.get("error"):
+        print(f"Failed to analyze recording: {summary.get('error', 'unknown error')}")
+        return
+
+    executive = summary.get("executive_summary", {})
+    path_tracking = summary.get("path_tracking", {})
+    control_smoothness = summary.get("control_smoothness", {})
+    speed_control = summary.get("speed_control", {})
+    comfort = summary.get("comfort", {})
+    perception = summary.get("perception_quality", {})
+    trajectory_quality = summary.get("trajectory_quality", {})
+    system_health = summary.get("system_health", {})
+    safety = summary.get("safety", {})
+    recommendations = summary.get("recommendations", [])
+
+    print("=" * 80)
+    print("OVERALL DRIVE ANALYSIS REPORT")
+    print("=" * 80)
+    print(f"Recording: {recording_path.name}")
+    print()
+
+    print("1. EXECUTIVE SUMMARY")
+    print("-" * 80)
+    print(f"   Drive Duration: {executive.get('drive_duration', 0.0):.2f} seconds")
+    print(f"   Total Frames: {int(executive.get('total_frames', 0))}")
+    print(f"   Success Rate: {executive.get('success_rate', 0.0):.1f}% (time in lane)")
+    print(f"   Overall Score: {executive.get('overall_score', 0.0):.1f}/100")
+    if executive.get("failure_detected"):
+        failure_frame = executive.get("failure_frame")
+        if failure_frame is not None:
+            mode = "truncated" if analyze_to_failure else "detected"
+            print(f"   Failure Frame: {int(failure_frame)} ({mode})")
+    print()
+
+    key_issues = executive.get("key_issues") or []
+    if key_issues:
+        print("   Key Issues:")
+        for idx, issue in enumerate(key_issues[:5], 1):
+            print(f"     {idx}. {issue}")
+    else:
+        print("   ✓ No major issues detected")
+    print()
+
+    print("2. PATH TRACKING PERFORMANCE")
+    print("-" * 80)
+    print(f"   Lateral Error RMSE: {path_tracking.get('lateral_error_rmse', 0.0):.4f} m")
+    print(f"   Lateral Error P95:  {path_tracking.get('lateral_error_p95', 0.0):.4f} m")
+    print(f"   Heading Error RMSE: {path_tracking.get('heading_error_rmse', 0.0):.4f} rad")
+    print(f"   Time in Lane:       {path_tracking.get('time_in_lane', 0.0):.1f}%")
+    print(f"   Centeredness:       {path_tracking.get('time_in_lane_centered', 0.0):.1f}%")
+    print()
+
+    print("3. CONTROL SMOOTHNESS")
+    print("-" * 80)
+    print(f"   Steering Jerk Max: {control_smoothness.get('steering_jerk_max', 0.0):.4f}")
+    print(f"   Steering Rate Max: {control_smoothness.get('steering_rate_max', 0.0):.4f}")
+    print(f"   Steering Smoothness: {control_smoothness.get('steering_smoothness', 0.0):.2f}")
+    print(f"   Oscillation Frequency: {control_smoothness.get('oscillation_frequency', 0.0):.2f} Hz")
+    print(
+        "   Oscillation Zero-Crossing Rate: "
+        f"{control_smoothness.get('oscillation_zero_crossing_rate_hz', 0.0):.2f} Hz"
+    )
+    print(
+        "   Oscillation RMS Growth Slope: "
+        f"{control_smoothness.get('oscillation_rms_growth_slope_mps', 0.0):.4f} m/s"
+    )
+    print(
+        "   Oscillation RMS (start -> end): "
+        f"{control_smoothness.get('oscillation_rms_window_start_m', 0.0):.3f} m -> "
+        f"{control_smoothness.get('oscillation_rms_window_end_m', 0.0):.3f} m"
+    )
+    print(
+        "   Oscillation Amplitude Runaway: "
+        f"{'YES' if control_smoothness.get('oscillation_amplitude_runaway') else 'NO'}"
+    )
+    print()
+
+    print("4. SPEED CONTROL")
+    print("-" * 80)
+    print(f"   Speed Error RMSE: {speed_control.get('speed_error_rmse', 0.0):.3f} m/s")
+    print(f"   Speed Overspeed Rate: {speed_control.get('speed_overspeed_rate', 0.0):.1f}%")
+    print(f"   Speed Limit Missing: {speed_control.get('speed_limit_zero_rate', 0.0):.1f}%")
+    print()
+
+    print("5. COMFORT")
+    print("-" * 80)
+    print(f"   Accel P95: {comfort.get('acceleration_p95', 0.0):.3f} m/s²")
+    print(f"   Jerk P95:  {comfort.get('jerk_p95', 0.0):.3f} m/s³")
+    print(f"   Lateral Accel P95: {comfort.get('lateral_accel_p95', 0.0):.3f} m/s²")
+    print(f"   Lateral Jerk P95:  {comfort.get('lateral_jerk_p95', 0.0):.3f} m/s³")
+    print()
+
+    print("6. PERCEPTION QUALITY")
+    print("-" * 80)
+    print(f"   Lane Detection Rate: {perception.get('lane_detection_rate', 0.0):.1f}%")
+    print(f"   Stale Hard Rate:     {perception.get('stale_hard_rate', 0.0):.1f}%")
+    print(f"   Lane Jitter P95:     {perception.get('lane_line_jitter_p95', 0.0):.3f}")
+    print()
+
+    print("7. TRAJECTORY QUALITY")
+    print("-" * 80)
+    print(f"   Trajectory Availability: {trajectory_quality.get('trajectory_availability', 0.0):.1f}%")
+    print(f"   Ref Point Accuracy RMSE: {trajectory_quality.get('ref_point_accuracy_rmse', 0.0):.4f} m")
+    print()
+
+    print("8. SYSTEM HEALTH")
+    print("-" * 80)
+    print(f"   PID Integral Max: {system_health.get('pid_integral_max', 0.0):.4f}")
+    print(f"   Unity Time Gap Max: {system_health.get('unity_time_gap_max', 0.0):.3f} s")
+    print()
+
+    print("9. SAFETY METRICS")
+    print("-" * 80)
+    print(f"   Out-of-Lane Events: {int(safety.get('out_of_lane_events', 0))}")
+    print(f"   Out-of-Lane Time: {safety.get('out_of_lane_time', 0.0):.1f}%")
+    if safety.get("out_of_lane_events_full_run") is not None:
+        print(
+            "   Out-of-Lane Events (Full Run): "
+            f"{int(safety.get('out_of_lane_events_full_run', 0))}"
+        )
+    if safety.get("out_of_lane_time_full_run") is not None:
+        print(
+            "   Out-of-Lane Time (Full Run): "
+            f"{float(safety.get('out_of_lane_time_full_run', 0.0)):.1f}%"
+        )
+    if safety.get("out_of_lane_event_at_failure_boundary") is not None:
+        print(
+            "   Out-of-Lane At Failure Boundary: "
+            f"{'YES' if safety.get('out_of_lane_event_at_failure_boundary') else 'NO'}"
+        )
+    print()
+
+    print("10. RECOMMENDATIONS")
+    print("-" * 80)
+    if recommendations:
+        for idx, recommendation in enumerate(recommendations, 1):
+            print(f"   {idx}. {recommendation}")
+    else:
+        print("   ✓ No recommendations")
+    print()
+    print("=" * 80)
+
+
 def main():
     parser = argparse.ArgumentParser(description="Comprehensive overall drive analysis")
     parser.add_argument("recording", nargs="?", help="Path to recording file")
@@ -1019,6 +1267,11 @@ def main():
     stop_group = parser.add_mutually_exclusive_group()
     stop_group.add_argument("--stop-on-emergency", action="store_true", help="Stop analysis at emergency stop")
     stop_group.add_argument("--no-stop-on-emergency", action="store_true", help="Analyze full run even after emergency stop")
+    parser.add_argument(
+        "--analyze-to-failure",
+        action="store_true",
+        help="Truncate analysis at first sustained failure (canonical summary mode)",
+    )
     
     args = parser.parse_args()
     
@@ -1047,15 +1300,16 @@ def main():
         print(f"Error: Recording file not found: {recording_path}")
         return
     
-    stop_on_emergency = True
+    # Default to failure-truncated analysis unless explicitly disabled.
+    analyze_to_failure = True
+    if args.analyze_to_failure or args.stop_on_emergency:
+        analyze_to_failure = True
     if args.no_stop_on_emergency:
-        stop_on_emergency = False
-    elif args.stop_on_emergency:
-        stop_on_emergency = True
-    analyzer = DriveAnalyzer(recording_path, stop_on_emergency=stop_on_emergency)
-    analyzer.print_report()
+        analyze_to_failure = False
+
+    summary = analyze_recording_summary(recording_path, analyze_to_failure=analyze_to_failure)
+    _print_summary_report(recording_path, summary, analyze_to_failure=analyze_to_failure)
 
 
 if __name__ == "__main__":
     main()
-

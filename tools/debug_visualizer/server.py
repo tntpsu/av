@@ -2370,7 +2370,7 @@ def get_recording_summary(filename):
         return jsonify({"error": f"Recording not found: {filename}"}), 404
     
     # Get query parameter for analyze_to_failure
-    analyze_to_failure = request.args.get('analyze_to_failure', 'false').lower() == 'true'
+    analyze_to_failure = request.args.get('analyze_to_failure', 'true').lower() == 'true'
     
     try:
         summary = analyze_recording_summary(filepath, analyze_to_failure=analyze_to_failure)
@@ -3505,4 +3505,3 @@ if __name__ == '__main__':
     print(f"Debug visualizations directory: {DEBUG_VIS_DIR}")
     print(f"Server running at http://localhost:5001")
     app.run(host='0.0.0.0', port=5001, debug=False)
-

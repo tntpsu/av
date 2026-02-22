@@ -165,6 +165,8 @@ sequenceDiagram
 - `data/recorder.py`: HDF5 recording.
 - `tools/analyze/*`: analysis and metrics.
 - `tools/debug_visualizer/*`: web-based playback.
+- `tools/drive_summary_core.py`: canonical recording-summary metric engine used by both CLI and PhilViz adapters.
+- `docs/analysis/DRIVE_SUMMARY_CONTRACT.md`: summary schema contract and adapter rules.
 
 ## Interfaces
 

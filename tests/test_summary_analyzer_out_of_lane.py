@@ -133,3 +133,35 @@ def test_alignment_summary_handles_empty_arrays(tmp_path: Path) -> None:
     summary = analyze_recording_summary(recording_path)
     alignment_summary = summary.get("alignment_summary") or {}
     assert alignment_summary.get("perception_vs_gt_p95_abs", 0.0) == 0.0
+
+
+def test_failure_boundary_out_of_lane_context_preserved_in_truncated_mode(tmp_path: Path) -> None:
+    recording_path = tmp_path / "summary_failure_boundary_context.h5"
+    n_frames = 30
+    timestamps = np.linspace(0.0, 2.9, n_frames)
+
+    gt_left = np.full(n_frames, -3.5, dtype=np.float32)
+    gt_right = np.full(n_frames, 3.5, dtype=np.float32)
+    # Sustained off-lane event starts at frame 20 and continues.
+    gt_right[20:] = -0.2
+
+    with h5py.File(recording_path, "w") as f:
+        f.create_dataset("vehicle/timestamps", data=timestamps)
+        f.create_dataset("vehicle/speed", data=np.zeros(n_frames, dtype=np.float32))
+        f.create_dataset("control/steering", data=np.zeros(n_frames, dtype=np.float32))
+        f.create_dataset("control/lateral_error", data=np.zeros(n_frames, dtype=np.float32))
+        f.create_dataset("control/heading_error", data=np.zeros(n_frames, dtype=np.float32))
+        f.create_dataset("control/total_error", data=np.zeros(n_frames, dtype=np.float32))
+        f.create_dataset("control/pid_integral", data=np.zeros(n_frames, dtype=np.float32))
+        f.create_dataset("control/emergency_stop", data=np.zeros(n_frames, dtype=np.int8))
+        f.create_dataset("ground_truth/left_lane_line_x", data=gt_left)
+        f.create_dataset("ground_truth/right_lane_line_x", data=gt_right)
+
+    summary = analyze_recording_summary(recording_path, analyze_to_failure=True)
+    safety = summary["safety"]
+    executive = summary["executive_summary"]
+
+    assert executive["failure_frame"] == 20
+    assert safety["out_of_lane_event_at_failure_boundary"] is True
+    assert safety["out_of_lane_events_full_run"] == 1
+    assert safety["out_of_lane_events"] == 1
