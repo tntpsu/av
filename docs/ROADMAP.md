@@ -1,7 +1,7 @@
 # Robust Full-Stack Roadmap (Unified, Layered, and Gated)
 
-**Last Updated:** 2026-02-21  
-**Current Focus:** Layer 2, Stage 1 (First-Turn Entry Reliability) signal-chain clearance + curvature-based speed + control refinement  
+**Last Updated:** 2026-02-23
+**Current Focus:** Layer 2, Stage 2 (Robustness & Speed Expansion) — stack hardening before capability expansion
 **Change-Control Rule:** If scope, stage, phase status, or promotion gates change, update this roadmap in the same PR/commit before considering work complete.
 
 ## Scope
@@ -15,9 +15,12 @@ This combines:
 - ~~Phase 0: Dynamic-horizon readiness instrumentation and baseline gates~~
 - ~~Phase 1: Dynamic effective horizon diagnostics-only policy~~
 - ~~Phase 1b: Telemetry/triage tuning pass~~
-- Phase 2: Curvature conditioning + comfort stabilization + trajectory integration (**in progress**)
-- **Post-Phase-2 checkpoint:** architecture escalation decision (**pending hard stop**)
-- Phase 3+: behavior/actors/multi-lane/urban/robustness (**pending**)
+- ~~Phase 2: Curvature conditioning + comfort stabilization + trajectory integration~~ **(done via S1-M32–S1-M39)**
+- ~~Post-Phase-2 checkpoint: architecture escalation~~ **(done — Pure Pursuit, S1-M33)**
+- ~~Layer 2 Stage 1: First-Turn Entry Reliability~~ **(done — S1-M39, scores 95–96/100)**
+- ~~Layer 2 Stage 1 tooling: Stack Isolation~~ **(done — S1-M40)**
+- **Layer 2 Stage 2: Robustness, Infrastructure & Speed Expansion** ← **current**
+- Phase 3+: behavior/actors/multi-lane/urban/robustness (**pending Stage 2 completion**)
 
 ## Global Promotion Gates (Apply at Every Stage)
 - **Safety:** no uncontained failures (track safety envelope and emergency-stop reason).
@@ -254,42 +257,102 @@ This is the practical de-risk sequence for implementation and testing.
   - **Tests:** 126 tests passing (2 new: jerk bounded, rate ramp convergence). All existing PP tests pass.
   - **E2E validation (3x s-loop, canonical start):** All 3 runs: 100% in lane, 0 out-of-lane events. Jerk (proper dt): max 47.0-64.6/s² (from 93-123), P95 21.0-24.8/s² (target <30), events >30: 10-15 (from 31-33). Lateral RMSE: 0.338-0.348m (no regression). Speed: mean 6.0-6.2, max 9.6-9.9 m/s.
 
-- `S1-M39` (in progress): Longitudinal comfort tuning:
+- `S1-M39` (done): Longitudinal comfort tuning:
   - **Problem:** accel_p95 and jerk_p95 exceed Phase 1 gates (accel_p95 ≤ 3.0 m/s², jerk_p95 ≤ 6.0 m/s³). Baseline: accel_p95 3.24 m/s², jerk_p95 89.43 m/s³ (post S1-M38).
   - **Fix (config alignment + slew):** (1) Align speed planner limits with longitudinal controller (max_accel, max_jerk, max_decel). (2) Curve transition: curve_preview_max_decel 1.8→1.2, slew rates down. (3) Startup/low-speed: startup_accel_limit 0.7→0.5, low_speed_accel_limit 0.8→0.6. (4) Rate limits: throttle_rate_limit, brake_rate_limit, throttle_smoothing_alpha tightened.
   - **PhilViz v69:** Comfort gates aligned to 3.0 m/s² / 6.0 m/s³; LongitudinalComfort limit labels updated; Accel Cap Active / Jerk Cap Active rows in Control section.
-  - **Tests:** Config alignment tests in `tests/test_config_alignment.py` (planner ≤ longitudinal limits).
-  - **E2E validation:** Pending 3x s-loop to confirm comfort metrics within gates.
+  - **Metric fix:** Gap-filtered `steering_jerk_max` (1.5× median dt two-sided filter) eliminates Unity frame-drop artifacts. Raw preserved as `steering_jerk_max_raw`. Score recalibrated: jerk penalty zero at/below cap (18.0).
+  - **Tests:** 126 passing (config alignment + signal chain).
+  - **E2E validation (2026-02-22):** All comfort gates pass on both tracks.
+    - s_loop (60s): score 95.6/100, lateral RMSE 0.203m, accel P95 1.32 m/s², cmd jerk P95 1.44 m/s³, steer jerk 18.4 (at cap), 0 e-stops.
+    - highway_65 (60s): score 96.2/100, lateral RMSE 0.044m, accel P95 1.08 m/s², cmd jerk P95 1.44 m/s³, steer jerk 18.0 (at cap), 0 e-stops.
 
-**Gate to pass Stage 1**
-- No centerline cross in first-turn window.
-- No out-of-bounds in first-turn window.
-- Comfort metrics remain within envelope.
+- `S1-M40` (done): Stack isolation tooling:
+  - **Goal:** Per-layer replay enabling isolated regression testing (attribution of errors to perception, trajectory, or control).
+  - **Stage 1 (T-020):** `replay_perception_locked.py` — monkeypatches `perception.detect` to return locked 4-tuple from HDF5; trajectory + control run live. Reconstruction of `lane_coeffs` from vlen float32 HDF5 using degree-2 polynomial + `num_lanes_detected` + `left/right_lane_line_x` disambiguation. Falls back to live perception if lock data missing.
+  - **Stage 2 (pre-existing):** `replay_trajectory_locked.py` — locks trajectory reference point output.
+  - **Stage 3 (pre-existing):** `replay_control_locked.py` — locks control commands.
+  - **Stage 4 (pre-existing):** Deterministic latency injection via `--lock-latency-ms` in trajectory-locked harness.
+  - **Stage 5 (pre-existing + extended):** `counterfactual_layer_swap.py` — now includes 4-run perception self/cross matrix and 3-layer scorecard (`upstream-perception-dominant`, `upstream-trajectory-dominant`, `downstream-control-dominant`, etc.).
+  - **Stage 6 (T-025):** PhilViz Chain tab — per-frame causal chain view (Perception → Trajectory → Control) with stale-propagation banner, replay-mode locked-layer context, and `perception_lock_source_recording` badge key.
 
-### Stage 2: Turn Exit Stability
-**Goal:** maintain centering and comfort while unwinding out of turn.
+**Gate to pass Stage 1** ✓ *Passed via S1-M39 validation (2026-02-22)*
+- No centerline cross in first-turn window. ✓
+- No out-of-bounds in first-turn window. ✓
+- Comfort metrics remain within envelope. ✓
 
-### Stage 3: Turn-to-Turn Handoff
-**Goal:** stable transition across entry -> exit -> next entry without oscillatory handoff.
+### Stage 2: Robustness, Infrastructure & Speed Expansion ← **CURRENT STAGE**
+**Goal:** before any capability expansion (actors, multi-lane), harden the stack's testability,
+document its parameter surface, and validate it at higher speeds and across more track geometries.
+Stages 2–4 as originally scoped (turn exit, turn-to-turn handoff, longer-horizon stability) were
+implicitly achieved through S1-M36–S1-M39: the stack now runs 60s full-course passes on two
+tracks at 95+ score with zero lane violations. The meaningful next barrier is not turn-shape
+coverage — it is the ability to iterate safely and quickly as the system grows in scope.
 
-### Stage 4: Longer-Horizon Stability
-**Goal:** no drift accumulation over longer runtime.
+**Current micro-steps**
+- `S2-M1` (next): Automated comfort-gate regression — HDF5-replay-based pytest that checks all
+  S1-M39 gates without Unity running. Foundation for safe iteration on all future milestones.
+  - Entry criterion: ≥1 recorded run per track on disk; gate checks accel P95, jerk P95,
+    lateral RMSE, e-stops using the existing replay isolation harnesses.
+  - Promotion gate: comfort gates pass on replay without live Unity in CI.
+- `S2-M2` (next): Config parameter documentation — `CONFIG_GUIDE.md` covering all 100+ YAML
+  parameters with ranges, defaults, and tuning effects. Derived from M37–M39 tuning history.
+  - Entry criterion: S2-M1 done (document params once we can verify effects via replay).
+  - Promotion gate: every param in `av_stack_config.yaml` has a documented range and effect.
+- `S2-M3` (next): `av_stack.py` module decomposition — extract lane gating logic
+  (`clamp_lane_center_and_width`, `apply_lane_ema_gating`, `blend_lane_pair_with_previous`)
+  into its own `perception/lane_gating.py` module. 5,420-line orchestrator is the primary
+  source of cascading-bug risk for all future milestones.
+  - Entry criterion: S2-M1 done (automated gate confirms no regression after refactor).
+  - Promotion gate: all 126+ tests pass; live run scores within 2 points of S1-M39 baseline.
+- `S2-M4` (future): Higher-speed validation — push target speed from 12 m/s → 15 m/s on
+  highway_65. Validate comfort governor scaling, PP lookahead adaptation, accel/jerk gates.
+  - Entry criterion: S2-M1 + S2-M2 done (need automated gates + documented params before
+    pushing speed, to make regressions observable).
+  - Promotion gate: all S1-M39 comfort gates pass at 15 m/s on highway_65 (3× runs).
+- `S2-M5` (future): Track coverage expansion — validate on ≥1 additional track beyond
+  s_loop/highway_65. Priority: tighter-radius track (r < 15m) to stress the comfort governor.
+  - Entry criterion: S2-M4 done (speed must be validated before exploring new geometry).
+  - Promotion gate: lateral RMSE ≤ 0.40m, 0 e-stops, all comfort gates on new track (3× runs).
+
+**Gate to pass Stage 2**
+- Automated comfort-gate CI passing without Unity (S2-M1).
+- All 100+ config params documented (S2-M2).
+- `av_stack.py` decomposed into ≥3 modules with no score regression (S2-M3).
+- Stack validated at 15 m/s on highway_65 (S2-M4).
+- ≥1 additional track validated beyond s_loop/highway_65 (S2-M5).
+
+### Stage 3: Turn-to-Turn Handoff *(Implicitly achieved via S1-M36–S1-M39)*
+**Original goal:** stable transition across entry → exit → next entry without oscillatory handoff.
+**Status:** Validated on 60s full-course s_loop runs (multiple S-turn sequences, 95+ score, 0
+violations). No explicit milestone needed; promoted as a gate to Stage 2 was satisfied during
+Stage 1 progression.
+
+### Stage 4: Longer-Horizon Stability *(Implicitly achieved via S1-M36–S1-M39)*
+**Original goal:** no drift accumulation over longer runtime.
+**Status:** 60s runs on both tracks stable with monotonically low lateral RMSE and 0 e-stops.
+Oscillation slope confirmed negative (stable) on both tracks. Promoted as satisfied.
 
 ### Stage 5: Turn-Radius Coverage Expansion
 **Goal:** robust lane-keeping across wider turn-radius set.
+**Progress:** highway_65 (large-radius, high-speed) validated at 96.2/100. Tight-radius stress
+test (r < 15m dedicated track) is mapped as S2-M5 above.
 
 ### Stage 6: Grade and Banking Expansion
 **Goal:** add elevation effects after flat-turn robustness is achieved.
 - 6a: straight grades.
 - 6b: banked turns.
+**Entry criterion:** Stage 2 complete.
 
-### Stage 7: Actor/Lead-Vehicle Introduction (After Lane-Keeping Robustness)
+### Stage 7: Actor/Lead-Vehicle Introduction
 **Goal:** introduce forward-following behavior only after lane-keeping matrix is stable.
 
 **Entry criteria for Stage 7**
-- Lane-keeping pass rate meets target across scenario matrix (for example, >90% repeated runs).
+- Lane-keeping pass rate meets target across scenario matrix (>90% repeated runs).
 - No comfort regression vs baseline gates.
 - Failure modes are rare and attributable.
+- Automated regression CI active (S2-M1) — required to safely coexist lateral + longitudinal
+  control loops during ACC/car-following development.
 
 ## Layer 3: Capability Expansion Phases
 These are the long-term product capabilities layered on top of the ladder above.

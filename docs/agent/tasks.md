@@ -1,6 +1,6 @@
 # AV Stack — Agent Memory: Tasks
 
-**Last updated:** 2026-02-22
+**Last updated:** 2026-02-23
 
 ---
 
@@ -8,9 +8,7 @@
 
 | ID | Task | Priority | Status |
 |---|---|---|---|
-| T-020 | Implement perception layer stack isolation (replay with locked perception output) | P0 | Next |
 | T-012 | Consolidate PhilViz per CONSOLIDATION_PLAN.md | P1 | Pending |
-| T-011 | Tag S1-M39 completion in ROADMAP.md | P1 | Pending |
 
 ---
 
@@ -108,3 +106,9 @@ Listed in recommended order of execution:
 | — | Longitudinal comfort tuning | S1-M39 | 2026-02-22 |
 | — | Gap-filtered steering_jerk_max metric + score recalibration | S1-M39 | 2026-02-22 |
 | — | A/B batch: metric extraction fix + new columns | S1-M39 | 2026-02-22 |
+| T-020 | Implement perception layer stack isolation (`replay_perception_locked.py` + counterfactual_layer_swap integration) | S1-M40 | 2026-02-23 |
+| T-025 | PhilViz causal Chain tab + replay badge awareness (`perc lock` key) | S1-M40 | 2026-02-23 |
+| T-011 | Tag S1-M39 done + define Stage 2 milestones in ROADMAP.md | S1-M40 | 2026-02-23 |
+| T-040 | Stage 2 milestone definition (S2-M1 through S2-M5) in ROADMAP.md | S1-M40 | 2026-02-23 |
+| S2-M1 | Automated comfort-gate regression (tests/test_comfort_gate_replay.py — 19 tests, 2-tier, golden recordings) | S2-M1 | 2026-02-23 |
+| S2-M2 | Config parameter documentation (docs/CONFIG_GUIDE.md — 328 params, 3-tier, 17 inline YAML comments) | S2-M2 | 2026-02-23 |

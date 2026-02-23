@@ -1,17 +1,16 @@
 # AV Stack — Agent Memory: Current State
 
-**Last updated:** 2026-02-22
-**Current milestone:** S1-M40 (Stack Isolation Tooling — planned)
+**Last updated:** 2026-02-23
+**Current milestone:** S2-M2 (Config parameter documentation — complete)
 
 ---
 
 ## Active Development Focus
 
-S1-M39 is complete. Next milestone is **S1-M40 — Stack Isolation Tooling** (T-020–T-025).
-
-Goal: enable per-layer replay so tracking errors can be attributed to perception,
-trajectory, or control in isolation. The existing `counterfactual_layer_swap.py`
-is a partial start; a full harness is needed.
+S2-M2 is complete. `docs/CONFIG_GUIDE.md` documents all 328 config parameters in three tiers
+(primary levers / subsystem tuning / inactive legacy). Inline YAML comments added for 17
+Tier 1 parameters. Reduces per-session tuning friction.
+Next: S2-M3 (av_stack.py module decomposition) or T-012 (PhilViz CONSOLIDATION_PLAN).
 
 ---
 
@@ -49,16 +48,29 @@ All M39 comfort gates pass. Oscillation slope negative (stable) on both tracks.
 
 ## Incomplete / In-Progress Items
 
-### Stack Isolation (S1-M40 — next milestone)
+### Stack Isolation (S1-M40 — in progress)
 
 | Stage | Description | Status |
 |---|---|---|
-| Stage 1 | Stack isolation for perception layer replay | Planned |
-| Stage 2 | Trajectory-locked replay harness | Planned |
-| Stage 3 | Control-locked sensitivity analysis | Planned |
-| Stage 4 | Deterministic latency injection profiles | Planned |
-| Stage 5 | Cross-layer counterfactual analysis | Planned |
-| Stage 6 | PhilViz upstream/downstream clarity improvements | Planned |
+| Stage 1 | Perception-locked replay (`replay_perception_locked.py`) | ✓ Done (2026-02-23) |
+| Stage 2 | Trajectory-locked replay (`replay_trajectory_locked.py`) | ✓ Done (pre-existing) |
+| Stage 3 | Control-locked sensitivity analysis (`replay_control_locked.py`) | ✓ Done (pre-existing) |
+| Stage 4 | Deterministic latency injection | ✓ Done (built into trajectory-locked via `--lock-latency-ms`) |
+| Stage 5 | Cross-layer counterfactual analysis (`counterfactual_layer_swap.py`) | ✓ Done (pre-existing, now includes Stage 1 matrix) |
+| Stage 6 | PhilViz upstream/downstream clarity improvements | ✓ Done (2026-02-23) |
+
+All three replay harnesses are now integrated into `counterfactual_layer_swap.py`.
+The Stage-5 scorecard now attributes errors to perception, trajectory, or control.
+PhilViz now has a **Chain** tab showing the per-frame causal chain (Perception → Trajectory → Control)
+with stale-propagation banners and replay-mode locked-layer context.
+
+### Perception-locked replay: key design notes
+
+- Monkeypatches `self.perception.detect` to return locked 4-tuple `(lane_coeffs, confidence, detection_method, num_lanes_detected)`
+- `lane_coeffs` reconstructed from `perception/lane_line_coefficients` vlen float32 HDF5 dataset (flattened degree-2 poly coeffs, 3 per lane)
+- Single-lane cases disambiguated using `perception/left_lane_line_x` / `perception/right_lane_line_x` scalars
+- EMA gating in av_stack still runs live — locks only the raw detection input
+- Falls back to live perception if lock data unavailable for a frame
 
 ### Known Incomplete Items
 

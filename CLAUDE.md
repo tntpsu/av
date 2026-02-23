@@ -6,8 +6,8 @@ Autonomous vehicle pipeline running inside a **Unity 2021.3 LTS** simulation.
 Handles perception, trajectory planning, and vehicle control for lane-keeping.
 Research/development system — not production safety-critical.
 
-**Stage:** Stage 1 — Lane-Keeping (active)
-**Current milestone:** S1-M39 — Longitudinal comfort tuning (validating)
+**Stage:** Stage 2 — Robustness, Infrastructure & Speed Expansion (active)
+**Current milestone:** S2-M1 complete — automated comfort-gate CI
 
 ---
 
@@ -53,6 +53,7 @@ After completing work, update the relevant `docs/agent/*.md` files.
 3. **Do not modify `av_stack.py`** without understanding the lane gating logic in context
 4. **Do not commit** unless explicitly asked
 5. **Config changes only** — prefer YAML tuning over code changes when possible
+6. **Run comfort gate tests** when touching the analysis pipeline — see Testing Protocol below
 
 ---
 
@@ -125,6 +126,35 @@ Per-frame data flow: Unity → bridge → perception → EMA gating (av_stack.py
 | Lateral RMSE | ≤ 0.40 m |
 | Centered frames | ≥ 70% |
 | Emergency stops | 0 |
+
+---
+
+## Testing Protocol — Comfort Gate Regression
+
+`tests/test_comfort_gate_replay.py` — 19 tests, two tiers, no Unity required.
+
+**Run Tier 1 (synthetic, ~0.3 s) when you touch:**
+- `tools/drive_summary_core.py` — metric computation
+- `tools/analyze/run_gate_and_triage.py` — gate evaluation / validity logic
+- `data/recorder.py` — HDF5 field names or schema
+
+```bash
+pytest tests/test_comfort_gate_replay.py -v -k "Synthetic or Boundary"
+```
+
+**Run the full suite (includes golden recording regression, ~0.5 s) when:**
+- Merging any branch that touches the analysis pipeline
+- Promoting a config change to a new milestone
+- Registering new golden recordings after live validation runs
+
+```bash
+pytest tests/test_comfort_gate_replay.py -v
+```
+
+**To register new golden recordings** after a milestone validation:
+1. Update `tests/fixtures/golden_recordings.json` with the new filenames and scores
+2. Update `BASELINE_SCORES` in `tests/conftest.py`
+3. Re-run the full suite to confirm green
 
 ---
 

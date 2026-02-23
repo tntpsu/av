@@ -15,8 +15,8 @@ control:
     stanley_soft_speed: 2.0
     stanley_heading_weight: 1.0
     # Pure Pursuit params (active when control_mode=pure_pursuit)
-    pp_feedback_gain: 0.10
-    pp_max_steering_jerk: 18.0
+    pp_feedback_gain: 0.10  # PP lateral error gain (rad/m); higher = more aggressive response; range [0.05, 0.20]
+    pp_max_steering_jerk: 18.0  # comfort gate: steering_jerk_max ≤ 20.0; at 18.0 vehicle is near the cap
     pp_min_lookahead: 0.5  # min effective lookahead distance (m), prevents singularity
     pp_ref_jump_clamp: 0.5  # max ref_x change per frame (m), second safety net
     pp_stale_decay: 0.98  # per-frame steering decay when perception is stale
@@ -165,8 +165,8 @@ control:
     kp: 0.25
     ki: 0.02
     kd: 0.01
-    max_accel: 1.2
-    max_decel: 2.4
+    max_accel: 1.2  # accel ceiling (m/s²); comfort gate: accel_p95_filtered ≤ 3.0; range [0.8, 2.0]
+    max_decel: 2.4  # braking limit (m/s²); range [1.5, 3.5]
     max_jerk: 0.7
     max_jerk_min: 1.0   # S1-M39: tighter for comfort
     max_jerk_max: 4.0
@@ -176,7 +176,7 @@ control:
     decel_feedforward_gain: 1.0
     speed_for_jerk_alpha: 0.8
     jerk_cooldown_frames: 8   # S1-M39: longer cooldown after jerk cap
-    jerk_cooldown_scale: 0.4
+    jerk_cooldown_scale: 0.4  # multiplier on max_jerk_min during cooldown; lower = smoother recovery
     speed_error_to_accel_gain: 0.1
     speed_error_deadband: 0.05
     speed_error_gain_under: 0.12
@@ -214,8 +214,8 @@ control:
     startup_disable_accel_feedforward: true
     low_speed_accel_limit: 0.6   # S1-M39
     low_speed_speed_threshold: 2.0
-    target_speed: 12.0
-    max_speed: 12.0
+    target_speed: 12.0  # cruise target (m/s); keep in sync with safety.max_speed and trajectory.target_speed
+    max_speed: 12.0  # hard speed ceiling (m/s); keep in sync with target_speed
     speed_smoothing: 0.3
     speed_deadband: 0.03
     throttle_limit_threshold: 0.9
@@ -247,8 +247,8 @@ trajectory:
   trajectory_source: planner
   lookahead_distance: 20.0
   point_spacing: 1.0
-  target_speed: 12.0
-  reference_lookahead: 9.0
+  target_speed: 12.0  # keep in sync with control.longitudinal.target_speed and safety.max_speed
+  reference_lookahead: 9.0  # baseline PP lookahead (m); overridden by speed table when dynamic_reference_lookahead=true
   dynamic_reference_lookahead: true
   # Unified trajectory scheduler mode for lookahead entry behavior.
   # `binary`: existing upcoming/not-upcoming behavior
@@ -452,8 +452,8 @@ trajectory:
   camera_offset_x: 0.0
   distance_scaling_factor: 0.875
   bias_correction_threshold: 10.0
-  reference_smoothing: 0.75
-  lane_smoothing_alpha: 0.8
+  reference_smoothing: 0.75  # EMA on reference point (0=raw, 1=held); higher = smoother but lagging; affects lateral_error_p95
+  lane_smoothing_alpha: 0.8  # EMA on lane polynomial coefficients; range [0.50, 0.90]
   center_spline_enabled: true
   center_spline_degree: 2
   center_spline_samples: 30
@@ -471,7 +471,7 @@ trajectory:
   target_lane: right
   target_lane_width_m: 3.6
   ref_sign_flip_threshold: 0.12
-  ref_x_rate_limit: 0.22
+  ref_x_rate_limit: 0.22  # max lateral movement of reference point per frame (m/frame); prevents jitter
   ref_x_rate_limit_turn_heading_min_abs_rad: 0.04
   ref_x_rate_limit_turn_scale_max: 4.0
   ref_sign_flip_disable_on_turn: true
@@ -532,9 +532,9 @@ safety:
   speed_prevention_threshold: 0.9
   speed_prevention_brake_threshold: 0.95
   speed_prevention_brake_amount: 0.2
-  max_lateral_error: 2.0
-  recovery_lateral_error: 1.0
-  emergency_stop_error: 4.0
+  max_lateral_error: 2.0  # soft OOL threshold (m); triggers recovery mode before emergency stop
+  recovery_lateral_error: 1.0  # hysteresis: below this, recovery mode deactivates
+  emergency_stop_error: 4.0  # hard OOL threshold (m); crossing triggers emergency stop flag
   emergency_stop_release_speed: 0.2
   emergency_stop_end_run_after_seconds: 3.0
   emergency_stop_use_gt_lane_boundaries: true
@@ -570,9 +570,9 @@ perception:
   lane_side_sign_skip_curve_phase: true
   lane_side_sign_curve_curvature_min: 0.006
   lane_side_sign_preview_curvature_min: 0.006
-  lane_center_ema_alpha: 0.15
+  lane_center_ema_alpha: 0.15  # EMA smoothing of lane center estimate; low = aggressive gating; range [0.05, 0.30]
   lane_width_ema_alpha: 0.2
-  lane_center_gate_m: 0.3
+  lane_center_gate_m: 0.3  # suppression gate: center updates > this value per frame are rejected (m)
   lane_width_gate_m: 0.6
   lane_center_ab_beta: 0.12
   lane_width_ab_beta: 0.08

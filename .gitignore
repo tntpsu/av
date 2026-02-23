@@ -89,6 +89,9 @@ tmp/
 # Cursor IDE
 .cursor/
 
+# Claude Code local settings
+.claude/
+
 # Testing
 .pytest_cache/
 .coverage
