@@ -116,6 +116,10 @@ class TrialMetrics:
     jerk_p95: Optional[float]
     lateral_jerk_p95: Optional[float]
     lateral_accel_p95: Optional[float]
+    steering_jerk_max: Optional[float]
+    oscillation_rms_growth_slope: Optional[float]
+    lateral_error_rmse: Optional[float]
+    commanded_jerk_p95: Optional[float]
 
 
 def _analyze_recording(
@@ -151,10 +155,16 @@ def _analyze_recording(
     entry_start_frame = feas.get("entry_start_frame")
     entry_end_frame = feas.get("entry_end_frame")
     summary = analyze_recording_summary(str(recording_path))
-    comfort = ((summary.get("metrics") or {}).get("comfort") or {})
+    comfort = (summary.get("comfort") or {})
+    control_smoothness = (summary.get("control_smoothness") or {})
+    path_tracking = (summary.get("path_tracking") or {})
     jerk_p95 = comfort.get("jerk_p95")
     lateral_jerk_p95 = comfort.get("lateral_jerk_p95")
     lateral_accel_p95 = comfort.get("lateral_accel_p95")
+    steering_jerk_max = comfort.get("steering_jerk_max")
+    commanded_jerk_p95 = comfort.get("commanded_jerk_p95")
+    oscillation_rms_growth_slope = control_smoothness.get("oscillation_rms_growth_slope_mps")
+    lateral_error_rmse = path_tracking.get("lateral_error_rmse")
     stale_reasons: Dict[str, int] = {}
     if entry_start_frame is not None and entry_end_frame is not None:
         with h5py.File(recording_path, "r") as f:
@@ -183,6 +193,10 @@ def _analyze_recording(
         jerk_p95=jerk_p95,
         lateral_jerk_p95=lateral_jerk_p95,
         lateral_accel_p95=lateral_accel_p95,
+        steering_jerk_max=steering_jerk_max,
+        oscillation_rms_growth_slope=oscillation_rms_growth_slope,
+        lateral_error_rmse=lateral_error_rmse,
+        commanded_jerk_p95=commanded_jerk_p95,
     )
 
 
@@ -208,7 +222,10 @@ def _summarize(label: str, trials: List[TrialMetrics]) -> None:
         "transfer_ratio_mean",
         "stale_pct",
         "speed_limited_pct",
-        "jerk_p95",
+        "lateral_error_rmse",
+        "steering_jerk_max",
+        "oscillation_rms_growth_slope",
+        "commanded_jerk_p95",
         "lateral_jerk_p95",
         "lateral_accel_p95",
     ]:
@@ -351,12 +368,16 @@ def main() -> int:
                     entry_window_distance_m=args.entry_window_distance_m,
                 )
                 store.append(metrics)
+                def _fmt(v, spec):
+                    return format(v, spec) if v is not None else "N/A"
                 print(
                     f"[{label}] recording={metrics.recording} cross={metrics.centerline_cross_frame} "
-                    f"fail={metrics.first_failure_frame} ttf={metrics.time_to_failure_s} "
-                    f"class={metrics.feasibility_classification} gap={metrics.authority_gap_mean} "
-                    f"transfer={metrics.transfer_ratio_mean} stale={metrics.stale_pct} "
-                    f"jerk_p95={metrics.jerk_p95} lat_jerk_p95={metrics.lateral_jerk_p95}"
+                    f"fail={metrics.first_failure_frame} ttf={_fmt(metrics.time_to_failure_s, '.1f')}s "
+                    f"rmse={_fmt(metrics.lateral_error_rmse, '.3f')}m "
+                    f"osc_slope={_fmt(metrics.oscillation_rms_growth_slope, '.4f')} "
+                    f"steer_jerk_max={_fmt(metrics.steering_jerk_max, '.2f')} "
+                    f"cmd_jerk_p95={_fmt(metrics.commanded_jerk_p95, '.3f')} "
+                    f"class={metrics.feasibility_classification}"
                 )
     finally:
         CONFIG_PATH.write_text(original_text)

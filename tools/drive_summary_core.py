@@ -533,7 +533,26 @@ def analyze_recording_summary(recording_path: Path, analyze_to_failure: bool = F
     # 2. CONTROL SMOOTHNESS
     steering_rate = np.diff(data['steering']) / np.diff(data['time']) if len(data['steering']) > 1 and len(data['time']) > 1 else np.array([0.0])
     steering_jerk = np.diff(steering_rate) / np.diff(data['time'][1:]) if len(steering_rate) > 1 and len(data['time']) > 2 else np.array([0.0])
-    steering_jerk_max = safe_float(np.max(np.abs(steering_jerk)) if len(steering_jerk) > 0 else 0.0)
+    steering_jerk_max_raw = safe_float(np.max(np.abs(steering_jerk)) if len(steering_jerk) > 0 else 0.0)
+    # Filter gap-induced jerk artifacts.  jerk[i] = (rate[i+1] - rate[i]) / dt[i+1]
+    # where rate[i] uses dt[i] and rate[i+1] uses dt[i+1].  Any frame where EITHER
+    # neighbouring dt exceeds 1.5x the median creates a phantom spike because
+    # the two rates are averaged over different time windows:
+    #   - dt[i] >> normal  → rate[i] is a long-window average (artificially small)
+    #   - dt[i+1] >> normal → rate[i+1] numerator is large AND divisor is large,
+    #     and the jerk divisor is also that inflated dt
+    # Threshold: 1.5× median filters double-ticks (2× normal period) and larger.
+    if len(steering_jerk) > 0:
+        dt_arr = np.diff(data['time'])
+        median_dt = float(np.median(dt_arr)) if len(dt_arr) > 0 else 1.0
+        gap_threshold = 1.5 * max(median_dt, 1e-6)
+        dt_before_jerk = dt_arr[:len(steering_jerk)]      # dt[i]   → used for rate[i]
+        dt_at_jerk = dt_arr[1:len(steering_jerk) + 1]     # dt[i+1] → used for rate[i+1] and jerk divisor
+        valid_jerk_mask = (dt_before_jerk <= gap_threshold) & (dt_at_jerk <= gap_threshold)
+        valid_jerk = steering_jerk[valid_jerk_mask]
+        steering_jerk_max = safe_float(np.max(np.abs(valid_jerk)) if len(valid_jerk) > 0 else 0.0)
+    else:
+        steering_jerk_max = 0.0
     steering_rate_max = safe_float(np.max(np.abs(steering_rate)) if len(steering_rate) > 0 else 0.0)
     
     steering_std = safe_float(np.std(data['steering']) if len(data['steering']) > 0 else 0.0)
@@ -1413,7 +1432,9 @@ def analyze_recording_summary(recording_path: Path, analyze_to_failure: bool = F
     trajectory_lateral_p95_penalty = safe_float(min(20, max(0.0, lateral_error_p95 - 0.40) * 35.0))
     trajectory_heading_penalty = safe_float(min(20, max(0.0, np.degrees(heading_error_rmse) - 10.0) * 2.5))
 
-    control_steering_jerk_penalty = safe_float(min(20, steering_jerk_max * 10))
+    # Penalty only above the pp_max_steering_jerk cap (18.0 normalized/s²).
+    # Operating at-cap is in-spec; exceeding it signals a limiter failure.
+    control_steering_jerk_penalty = safe_float(min(20, max(0.0, (steering_jerk_max - 18.0) * 2.0)))
     control_oscillation_penalty = safe_float(
         min(15, max(0.0, oscillation_frequency - 1.0) * 7.0)
     )
@@ -1689,7 +1710,7 @@ def analyze_recording_summary(recording_path: Path, analyze_to_failure: bool = F
                 {
                     "name": "Steering Jerk",
                     "value": control_steering_jerk_penalty,
-                    "limit": "<=0.50/s^2",
+                    "limit": "<=18.0/s^2 (cap)",
                 },
                 {
                     "name": "Oscillation Frequency",
@@ -1805,8 +1826,8 @@ def analyze_recording_summary(recording_path: Path, analyze_to_failure: bool = F
     recommendations = []
     if lateral_error_rmse > 0.3:
         recommendations.append("Reduce lateral error - check PID gains or trajectory planning")
-    if steering_jerk_max > 1.0:
-        recommendations.append("Reduce steering jerk - increase rate limiting or reduce PID gains")
+    if steering_jerk_max > 20.0:
+        recommendations.append("Steering jerk exceeds cap - check pp_max_steering_jerk limiter or gap filter")
     if oscillation_frequency > 2.0:
         recommendations.append("Reduce oscillation - increase damping or reduce proportional gain")
     if oscillation_amplitude_runaway:
@@ -1865,8 +1886,8 @@ def analyze_recording_summary(recording_path: Path, analyze_to_failure: bool = F
         key_issues.append(f"Speed limit missing ({speed_limit_zero_rate:.1f}%)")
     if emergency_stop_frame is not None:
         key_issues.append(f"Emergency stop at frame {emergency_stop_frame}")
-    if steering_jerk_max > 2.0:
-        key_issues.append("High steering jerk")
+    if steering_jerk_max > 22.0:
+        key_issues.append("Steering jerk above cap")
     if oscillation_amplitude_runaway:
         key_issues.append("Oscillation amplitude growth detected")
     if curve_intent_diag.get("available"):
@@ -1935,6 +1956,7 @@ def analyze_recording_summary(recording_path: Path, analyze_to_failure: bool = F
         "pp_ref_jump_clamped_count": _pp_jump_count(data),
         "control_smoothness": {
             "steering_jerk_max": safe_float(steering_jerk_max),
+            "steering_jerk_max_raw": safe_float(steering_jerk_max_raw),
             "steering_rate_max": safe_float(steering_rate_max),
             "steering_smoothness": safe_float(steering_smoothness),
             "oscillation_frequency": safe_float(oscillation_frequency),
@@ -1974,6 +1996,7 @@ def analyze_recording_summary(recording_path: Path, analyze_to_failure: bool = F
         },
         "comfort": {
             "steering_jerk_max": safe_float(steering_jerk_max),
+            "steering_jerk_max_raw": safe_float(steering_jerk_max_raw),
             "acceleration_p95": safe_float(acceleration_p95),
             "jerk_p95": safe_float(jerk_p95),
             "acceleration_p95_filtered": safe_float(acceleration_p95_filtered),

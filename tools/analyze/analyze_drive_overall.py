@@ -1171,7 +1171,8 @@ def _print_summary_report(recording_path: Path, summary: Dict, analyze_to_failur
 
     print("3. CONTROL SMOOTHNESS")
     print("-" * 80)
-    print(f"   Steering Jerk Max: {control_smoothness.get('steering_jerk_max', 0.0):.4f}")
+    print(f"   Steering Jerk Max: {control_smoothness.get('steering_jerk_max', 0.0):.4f}"
+          f"  (raw: {control_smoothness.get('steering_jerk_max_raw', 0.0):.4f})")
     print(f"   Steering Rate Max: {control_smoothness.get('steering_rate_max', 0.0):.4f}")
     print(f"   Steering Smoothness: {control_smoothness.get('steering_smoothness', 0.0):.2f}")
     print(f"   Oscillation Frequency: {control_smoothness.get('oscillation_frequency', 0.0):.2f} Hz")
