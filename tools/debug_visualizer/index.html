@@ -167,6 +167,7 @@
                     <button class="tab-btn" data-tab="issues">Issues</button>
                     <button class="tab-btn" data-tab="diagnostics">Diagnostics</button>
                     <button class="tab-btn active" data-tab="all-data">All Data</button>
+                    <button class="tab-btn" data-tab="chain">Chain</button>
                     <button class="tab-btn" data-tab="perception">Perception</button>
                     <button class="tab-btn" data-tab="trajectory">Trajectory</button>
                     <button class="tab-btn" data-tab="projection">Projection</button>
@@ -379,6 +380,56 @@
                             <tr><td>Lane Width Error<br/><small style="color: #888;">(perception vs GT)</small></td><td id="all-gt-width-error">-</td></tr>
                             <tr><td>Center Offset Error<br/><small style="color: #888;">(perception vs GT)</small></td><td id="all-gt-center-error">-</td></tr>
                         </table>
+                    </div>
+
+                    <!-- Chain Tab -->
+                    <div id="chain-tab" class="tab-pane">
+                        <h3>Causal Chain — Current Frame</h3>
+                        <div id="chain-flow" style="display:flex; gap:1rem; align-items:flex-start; flex-wrap:wrap; margin-top:0.5rem;">
+                            <!-- Perception block -->
+                            <div id="chain-perception-block" style="flex:1; min-width:180px; border:1px solid #4caf50; border-radius:6px; padding:0.6rem;">
+                                <div style="color:#4caf50; font-weight:bold; font-size:0.85rem; margin-bottom:0.4rem; text-transform:uppercase; letter-spacing:0.05em;">Perception</div>
+                                <table class="data-table">
+                                    <tr><td>Method</td><td id="chain-perc-method">-</td></tr>
+                                    <tr><td>Confidence</td><td id="chain-perc-confidence">-</td></tr>
+                                    <tr><td>Lanes</td><td id="chain-perc-lanes">-</td></tr>
+                                    <tr><td>Center X</td><td id="chain-perc-center">-</td></tr>
+                                    <tr><td>Stale</td><td id="chain-perc-stale">-</td></tr>
+                                    <tr><td>Stale Reason</td><td id="chain-perc-stale-reason">-</td></tr>
+                                </table>
+                            </div>
+                            <!-- Arrow -->
+                            <div style="display:flex; align-items:center; font-size:1.6rem; color:#555; padding-top:2.8rem;">&#8594;</div>
+                            <!-- Trajectory block -->
+                            <div id="chain-trajectory-block" style="flex:1; min-width:180px; border:1px solid #2196f3; border-radius:6px; padding:0.6rem;">
+                                <div style="color:#2196f3; font-weight:bold; font-size:0.85rem; margin-bottom:0.4rem; text-transform:uppercase; letter-spacing:0.05em;">Trajectory</div>
+                                <table class="data-table">
+                                    <tr><td>Method</td><td id="chain-traj-method">-</td></tr>
+                                    <tr><td>Ref X</td><td id="chain-traj-ref-x">-</td></tr>
+                                    <tr><td>Ref Speed</td><td id="chain-traj-ref-speed">-</td></tr>
+                                    <tr><td>Perc Center In</td><td id="chain-traj-perc-center">-</td></tr>
+                                    <tr><td>Traj vs Perc</td><td id="chain-traj-vs-perc">-</td></tr>
+                                </table>
+                            </div>
+                            <!-- Arrow -->
+                            <div style="display:flex; align-items:center; font-size:1.6rem; color:#555; padding-top:2.8rem;">&#8594;</div>
+                            <!-- Control block -->
+                            <div id="chain-control-block" style="flex:1; min-width:180px; border:1px solid #ff9800; border-radius:6px; padding:0.6rem;">
+                                <div style="color:#ff9800; font-weight:bold; font-size:0.85rem; margin-bottom:0.4rem; text-transform:uppercase; letter-spacing:0.05em;">Control</div>
+                                <table class="data-table">
+                                    <tr><td>Mode</td><td id="chain-ctrl-mode">-</td></tr>
+                                    <tr><td>Steering</td><td id="chain-ctrl-steering">-</td></tr>
+                                    <tr><td>Throttle</td><td id="chain-ctrl-throttle">-</td></tr>
+                                    <tr><td>Brake</td><td id="chain-ctrl-brake">-</td></tr>
+                                    <tr><td>Lateral Error</td><td id="chain-ctrl-lateral-err">-</td></tr>
+                                    <tr><td>PP Stale Hold</td><td id="chain-ctrl-pp-stale-hold">-</td></tr>
+                                </table>
+                            </div>
+                        </div>
+                        <!-- Stale-perception propagation banner -->
+                        <div id="chain-stale-banner" style="display:none; margin-top:0.8rem; padding:0.5rem 0.8rem; background:#332200; border:1px solid #ffa500; border-radius:4px; color:#ffa500; font-size:0.82rem;"></div>
+                        <!-- Replay-mode locked-layer banner -->
+                        <div id="chain-replay-banner" style="display:none; margin-top:0.5rem; padding:0.5rem 0.8rem; background:#1a2a3a; border:1px solid #2196f3; border-radius:4px; color:#90caf9; font-size:0.82rem;"></div>
                     </div>
 
                     <!-- Perception Tab -->

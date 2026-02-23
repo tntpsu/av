@@ -875,6 +875,7 @@ class Visualizer {
         if (typeBadge) {
             const parts = [`type: ${this.humanizeRecordingType(meta.recording_type || 'unknown')}`];
             if (meta.source_recording) parts.push(`src: ${meta.source_recording}`);
+            if (meta.perception_lock_source_recording) parts.push(`perc lock: ${meta.perception_lock_source_recording}`);
             if (meta.lock_source_recording) parts.push(`lock: ${meta.lock_source_recording}`);
             if (meta.control_lock_source_recording) parts.push(`ctrl lock: ${meta.control_lock_source_recording}`);
             typeBadge.textContent = parts.join(' | ');
@@ -3328,6 +3329,7 @@ class Visualizer {
 
         // Update all tabs (including "All Data" tab).
         safeUpdate('perception', () => this.updatePerceptionData());
+        safeUpdate('chain', () => this.updateChainData());
         safeUpdate('trajectory', () => this.updateTrajectoryData());
         safeUpdate('projection', () => this.updateProjectionData());
         safeUpdate('control', () => this.updateControlData());
@@ -5122,6 +5124,97 @@ class Visualizer {
         updateField('all-perception-clamp-events', clampEvents);
         updateField('perception-timestamp-frozen', timestampFrozen);
         updateField('all-perception-timestamp-frozen', timestampFrozen);
+    }
+
+    updateChainData() {
+        if (!this.currentFrameData) return;
+        const p = this.currentFrameData.perception || {};
+        const t = this.currentFrameData.trajectory || {};
+        const c = this.currentFrameData.control || {};
+        const rp = t.reference_point || {};
+        const meta = this.currentRecordingMeta || {};
+
+        const set = (id, val) => {
+            const el = document.getElementById(id);
+            if (el) el.textContent = val;
+        };
+        const setColor = (id, color) => {
+            const el = document.getElementById(id);
+            if (el) el.style.color = color;
+        };
+
+        // --- Perception block ---
+        set('chain-perc-method', p.detection_method || '-');
+        set('chain-perc-confidence', p.confidence !== undefined ? p.confidence.toFixed(3) : '-');
+        set('chain-perc-lanes', p.num_lanes_detected !== undefined ? p.num_lanes_detected : '-');
+
+        const leftX = p.left_lane_line_x !== undefined ? p.left_lane_line_x : p.left_lane_x;
+        const rightX = p.right_lane_line_x !== undefined ? p.right_lane_line_x : p.right_lane_x;
+        const percCenter = (leftX !== undefined && rightX !== undefined)
+            ? `${((leftX + rightX) / 2).toFixed(3)}m`
+            : '-';
+        set('chain-perc-center', percCenter);
+
+        const usingStale = Boolean(p.using_stale_data);
+        set('chain-perc-stale', usingStale ? 'YES ⚠' : 'no');
+        setColor('chain-perc-stale', usingStale ? '#ffa500' : '#4caf50');
+        set('chain-perc-stale-reason', p.stale_data_reason || (usingStale ? '-' : 'none'));
+
+        const percBlock = document.getElementById('chain-perception-block');
+        if (percBlock) percBlock.style.borderColor = usingStale ? '#ffa500' : '#4caf50';
+
+        // --- Trajectory block ---
+        set('chain-traj-method', t.reference_point_method || rp.method || '-');
+        set('chain-traj-ref-x', rp.x !== undefined ? `${rp.x.toFixed(3)}m` : '-');
+        set('chain-traj-ref-speed', rp.velocity !== undefined ? `${rp.velocity.toFixed(2)} m/s` : '-');
+
+        const trajPercCenter = t.perception_center_x !== undefined ? t.perception_center_x
+            : rp.perception_center_x;
+        set('chain-traj-perc-center', trajPercCenter !== undefined ? `${trajPercCenter.toFixed(3)}m` : '-');
+        if (trajPercCenter !== undefined && rp.x !== undefined) {
+            const diff = rp.x - trajPercCenter;
+            set('chain-traj-vs-perc', `${diff.toFixed(3)}m ${diff > 0 ? '(right)' : '(left)'}`);
+        } else {
+            set('chain-traj-vs-perc', '-');
+        }
+
+        // --- Control block ---
+        set('chain-ctrl-mode', c.control_mode || '-');
+        set('chain-ctrl-steering', c.steering !== undefined ? c.steering.toFixed(4) : '-');
+        set('chain-ctrl-throttle', c.throttle !== undefined ? c.throttle.toFixed(4) : '-');
+        set('chain-ctrl-brake', c.brake !== undefined ? c.brake.toFixed(4) : '-');
+        set('chain-ctrl-lateral-err', c.lateral_error !== undefined ? `${c.lateral_error.toFixed(3)}m` : '-');
+        const ppStaleHold = c.pp_stale_hold_active > 0.5;
+        set('chain-ctrl-pp-stale-hold', ppStaleHold ? 'YES ⚠' : 'no');
+        setColor('chain-ctrl-pp-stale-hold', ppStaleHold ? '#ffa500' : '');
+
+        // --- Stale-propagation banner ---
+        const staleBanner = document.getElementById('chain-stale-banner');
+        if (staleBanner) {
+            if (usingStale) {
+                staleBanner.style.display = '';
+                staleBanner.textContent = `⚠ Stale perception propagating downstream — reason: ${p.stale_data_reason || 'unknown'}`;
+            } else {
+                staleBanner.style.display = 'none';
+            }
+        }
+
+        // --- Replay-mode locked-layer banner ---
+        const replayBanner = document.getElementById('chain-replay-banner');
+        if (replayBanner) {
+            const recType = meta.recording_type || '';
+            const isReplay = recType.includes('locked') || recType.includes('replay');
+            if (isReplay) {
+                const lockParts = [];
+                if (meta.perception_lock_source_recording) lockParts.push(`perception locked from: ${meta.perception_lock_source_recording}`);
+                if (meta.lock_source_recording) lockParts.push(`trajectory locked from: ${meta.lock_source_recording}`);
+                if (meta.control_lock_source_recording) lockParts.push(`control locked from: ${meta.control_lock_source_recording}`);
+                replayBanner.style.display = '';
+                replayBanner.textContent = `Replay mode — ${lockParts.join('; ') || recType}`;
+            } else {
+                replayBanner.style.display = 'none';
+            }
+        }
     }
 
     updateTrajectoryData() {

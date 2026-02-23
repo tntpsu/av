@@ -14,7 +14,7 @@ import importlib.util
 import json
 import sys
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
@@ -41,6 +41,10 @@ replay_trajectory_locked = _load_module_func(
 replay_control_locked = _load_module_func(
     "tools/analyze/replay_control_locked.py",
     "replay_control_locked",
+)
+replay_perception_locked = _load_module_func(
+    "tools/analyze/replay_perception_locked.py",
+    "replay_perception_locked",
 )
 
 DEFAULT_SEGMENTATION_CHECKPOINT = (
@@ -94,6 +98,67 @@ def _trajectory_sensitivity(
         cls = "moderate-trajectory-sensitivity"
     else:
         cls = "low-trajectory-sensitivity"
+
+    return {
+        "classification": cls,
+        "amplification": {
+            "a_mean_ratio": amp_a_mean,
+            "b_mean_ratio": amp_b_mean,
+            "mean_ratio_avg": amp_mean_avg,
+            "a_p95_ratio": amp_a_p95,
+            "b_p95_ratio": amp_b_p95,
+            "p95_ratio_avg": amp_p95_avg,
+        },
+        "thresholds": {
+            "strong": float(strong_threshold),
+            "moderate": float(moderate_threshold),
+        },
+    }
+
+
+def _perception_sensitivity(
+    self_a: Dict[str, Any],
+    self_b: Dict[str, Any],
+    cross_ab: Dict[str, Any],
+    cross_ba: Dict[str, Any],
+    strong_threshold: float,
+    moderate_threshold: float,
+) -> Dict[str, Any]:
+    """Mirror of _trajectory_sensitivity for the Stage-1 perception-locked matrix.
+
+    Uses the same steering_abs_diff_mean/p95_vs_source keys produced by
+    replay_perception_locked, so the amplification logic is identical.
+    """
+    self_a_mean = _f(self_a.get("steering_abs_diff_mean_vs_source"))
+    self_b_mean = _f(self_b.get("steering_abs_diff_mean_vs_source"))
+    self_a_p95 = _f(self_a.get("steering_abs_diff_p95_vs_source"))
+    self_b_p95 = _f(self_b.get("steering_abs_diff_p95_vs_source"))
+    cross_ab_mean = _f(cross_ab.get("steering_abs_diff_mean_vs_source"))
+    cross_ba_mean = _f(cross_ba.get("steering_abs_diff_mean_vs_source"))
+    cross_ab_p95 = _f(cross_ab.get("steering_abs_diff_p95_vs_source"))
+    cross_ba_p95 = _f(cross_ba.get("steering_abs_diff_p95_vs_source"))
+
+    amp_a_mean = _safe_ratio(cross_ab_mean, self_a_mean)
+    amp_b_mean = _safe_ratio(cross_ba_mean, self_b_mean)
+    amp_a_p95 = _safe_ratio(cross_ab_p95, self_a_p95)
+    amp_b_p95 = _safe_ratio(cross_ba_p95, self_b_p95)
+    amp_mean_avg = (amp_a_mean + amp_b_mean) / 2.0
+    amp_p95_avg = (amp_a_p95 + amp_b_p95) / 2.0
+
+    if (
+        amp_a_mean >= strong_threshold
+        and amp_b_mean >= strong_threshold
+        and amp_a_p95 >= strong_threshold
+        and amp_b_p95 >= strong_threshold
+    ):
+        cls = "strong-perception-sensitivity"
+    elif (
+        amp_a_mean >= moderate_threshold
+        and amp_b_mean >= moderate_threshold
+    ) or (amp_a_p95 >= strong_threshold or amp_b_p95 >= strong_threshold):
+        cls = "moderate-perception-sensitivity"
+    else:
+        cls = "low-perception-sensitivity"
 
     return {
         "classification": cls,
@@ -184,27 +249,40 @@ def _scorecard(
     trajectory_cmp: Dict[str, Any],
     control_cmp: Dict[str, Any],
     counterfactuals: Dict[str, Any],
+    perception_cmp: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     traj_cls = trajectory_cmp["classification"]
     ctrl_cls = control_cmp["classification"]
+    perc_cls = perception_cmp["classification"] if perception_cmp else "low-perception-sensitivity"
     traj_strength = float(trajectory_cmp["amplification"]["mean_ratio_avg"])
     ctrl_strength = float(control_cmp["cross_shift"]["steering_mean_vs_input_source_avg"])
+    perc_strength = float(perception_cmp["amplification"]["mean_ratio_avg"]) if perception_cmp else 0.0
     ctrl_fidelity_ok = bool(control_cmp["fidelity_ok"])
 
-    if (traj_cls.startswith("strong") or traj_cls.startswith("moderate")) and ctrl_cls.startswith("low"):
+    upstream_signal = (traj_cls.startswith("strong") or traj_cls.startswith("moderate")) or (
+        perc_cls.startswith("strong") or perc_cls.startswith("moderate")
+    )
+    downstream_signal = ctrl_cls.startswith("strong") or ctrl_cls.startswith("moderate")
+    traj_signal = traj_cls.startswith("strong") or traj_cls.startswith("moderate")
+    perc_signal = perc_cls.startswith("strong") or perc_cls.startswith("moderate")
+
+    if perc_signal and traj_signal and not downstream_signal:
+        primary = "upstream-perception-and-trajectory-dominant"
+    elif perc_signal and not traj_signal and not downstream_signal:
+        primary = "upstream-perception-dominant"
+    elif traj_signal and not perc_signal and not downstream_signal:
         primary = "upstream-trajectory-dominant"
-    elif (ctrl_cls.startswith("strong") or ctrl_cls.startswith("moderate")) and traj_cls.startswith("low"):
+    elif downstream_signal and not upstream_signal:
         primary = "downstream-control-dominant"
-    elif ("strong" in traj_cls or "moderate" in traj_cls) and (
-        "strong" in ctrl_cls or "moderate" in ctrl_cls
-    ):
+    elif upstream_signal and downstream_signal:
         primary = "mixed-cross-layer-coupling"
     else:
         primary = "low-isolation-signal"
 
     confidence = "low"
     if ctrl_fidelity_ok and primary != "low-isolation-signal":
-        if abs(traj_strength - ctrl_strength) > 0.35:
+        max_upstream = max(traj_strength, perc_strength)
+        if abs(max_upstream - ctrl_strength) > 0.35:
             confidence = "high"
         else:
             confidence = "medium"
@@ -214,7 +292,15 @@ def _scorecard(
         recommendations.append(
             "Fix control-lock fidelity first; safety overrides are masking attribution."
         )
-    if primary == "upstream-trajectory-dominant":
+    if primary == "upstream-perception-dominant":
+        recommendations.append(
+            "Prioritize perception quality (lane detection accuracy, stale-frame rate) before downstream retuning."
+        )
+    elif primary == "upstream-perception-and-trajectory-dominant":
+        recommendations.append(
+            "Both perception and trajectory are sensitive; fix perception first, then re-evaluate trajectory."
+        )
+    elif primary == "upstream-trajectory-dominant":
         recommendations.append(
             "Prioritize trajectory generation and reference stability before control retuning."
         )
@@ -235,7 +321,7 @@ def _scorecard(
         "Gate promotion with repeated A/B significance and rollback criteria."
     )
 
-    return {
+    scorecard: Dict[str, Any] = {
         "primary_call": primary,
         "confidence": confidence,
         "trajectory_sensitivity": traj_cls,
@@ -243,6 +329,9 @@ def _scorecard(
         "counterfactual_markers": counterfactuals,
         "recommendations": recommendations,
     }
+    if perception_cmp is not None:
+        scorecard["perception_sensitivity"] = perc_cls
+    return scorecard
 
 
 def _run_counterfactuals(
@@ -317,6 +406,36 @@ def _run_counterfactuals(
         segmentation_checkpoint=segmentation_checkpoint,
     )
 
+    # Stage-1 matrix (perception-locked)
+    perc_self_a = replay_perception_locked(
+        input_recording=baseline,
+        lock_recording=baseline,
+        output_name=f"{output_prefix}_perc_self_a",
+        use_segmentation=bool(use_segmentation),
+        segmentation_checkpoint=segmentation_checkpoint,
+    )
+    perc_self_b = replay_perception_locked(
+        input_recording=treatment,
+        lock_recording=treatment,
+        output_name=f"{output_prefix}_perc_self_b",
+        use_segmentation=bool(use_segmentation),
+        segmentation_checkpoint=segmentation_checkpoint,
+    )
+    perc_cross_ab = replay_perception_locked(
+        input_recording=baseline,
+        lock_recording=treatment,
+        output_name=f"{output_prefix}_perc_cross_a_lock_b",
+        use_segmentation=bool(use_segmentation),
+        segmentation_checkpoint=segmentation_checkpoint,
+    )
+    perc_cross_ba = replay_perception_locked(
+        input_recording=treatment,
+        lock_recording=baseline,
+        output_name=f"{output_prefix}_perc_cross_b_lock_a",
+        use_segmentation=bool(use_segmentation),
+        segmentation_checkpoint=segmentation_checkpoint,
+    )
+
     # Stage-5 explicit swaps
     swap_base_perc_treat_ctrl = ctrl_cross_ab
     swap_treat_perc_base_ctrl = ctrl_cross_ba
@@ -329,6 +448,12 @@ def _run_counterfactuals(
     )
 
     return {
+        "perception": {
+            "self_a": perc_self_a,
+            "self_b": perc_self_b,
+            "cross_a_lock_b": perc_cross_ab,
+            "cross_b_lock_a": perc_cross_ba,
+        },
         "trajectory": {
             "self_a": tr_self_a,
             "self_b": tr_self_b,
@@ -398,6 +523,14 @@ def main() -> int:
         segmentation_checkpoint=args.segmentation_checkpoint,
     )
 
+    perception_cmp = _perception_sensitivity(
+        self_a=runs["perception"]["self_a"],
+        self_b=runs["perception"]["self_b"],
+        cross_ab=runs["perception"]["cross_a_lock_b"],
+        cross_ba=runs["perception"]["cross_b_lock_a"],
+        strong_threshold=float(args.trajectory_strong_threshold),
+        moderate_threshold=float(args.trajectory_moderate_threshold),
+    )
     trajectory_cmp = _trajectory_sensitivity(
         self_a=runs["trajectory"]["self_a"],
         self_b=runs["trajectory"]["self_b"],
@@ -437,16 +570,19 @@ def main() -> int:
         trajectory_cmp=trajectory_cmp,
         control_cmp=control_cmp,
         counterfactuals=counterfactual_markers,
+        perception_cmp=perception_cmp,
     )
 
     out = {
         "baseline_recording": str(baseline),
         "treatment_recording": str(treatment),
+        "perception_sensitivity": perception_cmp,
         "trajectory_sensitivity": trajectory_cmp,
         "control_sensitivity": control_cmp,
         "upstream_downstream_attribution_scorecard": scorecard,
         "counterfactual_swaps": runs["counterfactual_swaps"],
         "matrix_runs": {
+            "perception": runs["perception"],
             "trajectory": runs["trajectory"],
             "control": runs["control"],
         },
