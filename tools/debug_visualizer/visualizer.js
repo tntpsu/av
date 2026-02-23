@@ -1370,6 +1370,13 @@ class Visualizer {
                 const dtUnity = topdownDiagnostics.dt_topdown_unity || {};
                 const syncQuality = topdownDiagnostics.sync_quality || 'unknown';
                 const qualityColor = syncQuality === 'good' ? '#4caf50' : (syncQuality === 'warn' ? '#ffa500' : '#ff6b6b');
+                const dtTrajP95Ms = Number.isFinite(dtTraj.p95_ms) ? dtTraj.p95_ms : null;
+                const dtTrajP95GoodLimitMs = 33.5;
+                const dtTrajP95Failed = dtTrajP95Ms !== null && dtTrajP95Ms > dtTrajP95GoodLimitMs;
+                const dtTrajP95Color = dtTrajP95Ms === null ? '#e0e0e0' : (dtTrajP95Failed ? '#ff6b6b' : '#4caf50');
+                const dtTrajP95Text = dtTrajP95Ms !== null
+                    ? `${dtTrajP95Ms.toFixed(1)} ms${dtTrajP95Failed ? ` (<=${dtTrajP95GoodLimitMs.toFixed(1)} ms)` : ''}`
+                    : '-';
                 const missingTopdownProj = Array.isArray(topdownDiagnostics.topdown_projection_fields_missing)
                     ? topdownDiagnostics.topdown_projection_fields_missing.length
                     : 0;
@@ -1400,7 +1407,7 @@ class Visualizer {
                 html += '<h3 style="margin-top: 0; color: #4a90e2;">Top-Down Overlay Trust (Instrumentation)</h3>';
                 html += '<table style="width: 100%; color: #e0e0e0;">';
                 html += `<tr><td>Top-Down Sync Quality:</td><td style="text-align: right; color: ${qualityColor};">${withLimitHint(syncQuality.toUpperCase(), qualityColor, 'GOOD')}</td></tr>`;
-                html += `<tr><td>Top-Down ↔ Trajectory Δt (P95):</td><td style="text-align: right;">${dtTraj.p95_ms !== null && dtTraj.p95_ms !== undefined ? dtTraj.p95_ms.toFixed(1) + ' ms' : '-'}</td></tr>`;
+                html += `<tr><td>Top-Down ↔ Trajectory Δt (P95):</td><td style="text-align: right; color: ${dtTrajP95Color};">${dtTrajP95Text}</td></tr>`;
                 html += `<tr><td>Top-Down ↔ Trajectory Δt (Max):</td><td style="text-align: right;">${dtTraj.max_ms !== null && dtTraj.max_ms !== undefined ? dtTraj.max_ms.toFixed(1) + ' ms' : '-'}</td></tr>`;
                 html += `<tr><td>Top-Down ↔ Unity Δt (P95):</td><td style="text-align: right;">${dtUnity.p95_ms !== null && dtUnity.p95_ms !== undefined ? dtUnity.p95_ms.toFixed(1) + ' ms' : '-'}</td></tr>`;
                 html += `<tr><td>Top-Down ↔ Unity Δt (Max):</td><td style="text-align: right;">${dtUnity.max_ms !== null && dtUnity.max_ms !== undefined ? dtUnity.max_ms.toFixed(1) + ' ms' : '-'}</td></tr>`;

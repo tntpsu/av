@@ -1,30 +1,17 @@
 # AV Stack — Agent Memory: Current State
 
-**Last updated:** 2026-02-21
-**Current milestone:** S1-M39 (Longitudinal comfort tuning — in validation)
+**Last updated:** 2026-02-22
+**Current milestone:** S1-M40 (Stack Isolation Tooling — planned)
 
 ---
 
 ## Active Development Focus
 
-### Milestone S1-M39 — Longitudinal Comfort Tuning
+S1-M39 is complete. Next milestone is **S1-M40 — Stack Isolation Tooling** (T-020–T-025).
 
-**Goal:** Meet comfort gates for a 60-second s_loop run:
-- Accel P95 ≤ 3.0 m/s²
-- Jerk P95 ≤ 6.0 m/s³
-- Max steering jerk reduced from 93–123 → 47–65 (achieved in M38)
-- Emergency stops: 0 frames
-- Lateral RMSE: ≤ 0.40m (currently ~0.32m ✓)
-- Centered frames: ≥ 70% ✓
-
-**Recent changes in M39:**
-- Jerk cooldown: 8 frames post-jerk cap event
-- Throttle rate limit: 0.04/frame; brake rate limit: 0.05/frame
-- Jerk cap range: 1.0–4.0 m/s³ (variable, distance-to-target based)
-- Speed planner: max_accel=2.5, max_decel=3.0, max_jerk=2.0
-- Config test alignment: `test_config_alignment.py`
-
-**Validation method:** 3× s_loop runs + `analyze_drive_overall.py --latest`
+Goal: enable per-layer replay so tracking errors can be attributed to perception,
+trajectory, or control in isolation. The existing `counterfactual_layer_swap.py`
+is a partial start; a full harness is needed.
 
 ---
 
@@ -37,15 +24,32 @@
 | S1-M36 | Trajectory ref tracking + speed tuning | ✓ Done |
 | S1-M37 | Dynamic per-radius speed control | ✓ Done |
 | S1-M38 | Steering jerk reduction (PP mode) | ✓ Done |
-| S1-M39 | Longitudinal comfort tuning | ⚡ Validating |
+| S1-M39 | Longitudinal comfort tuning | ✓ Done (2026-02-22) |
+
+### S1-M39 Final Validation Results (2026-02-22)
+
+| Track | Score | Lateral RMSE | Accel P95 | Cmd Jerk P95 | Steer Jerk | E-stops |
+|---|---|---|---|---|---|---|
+| s_loop (60s) | 95.6/100 | 0.203m ✓ | 1.32 m/s² ✓ | 1.44 m/s³ ✓ | 18.4 (at cap) ✓ | 0 ✓ |
+| highway_65 (60s) | 96.2/100 | 0.044m ✓ | 1.08 m/s² ✓ | 1.44 m/s³ ✓ | 18.0 (at cap) ✓ | 0 ✓ |
+
+All M39 comfort gates pass. Oscillation slope negative (stable) on both tracks.
+
+### Key M39 Metric Fixes (committed 2026-02-22, `255dd3b`)
+
+- **Gap-filtered `steering_jerk_max`**: Unity frame-drop artifacts (40–104 phantom
+  values) eliminated via 1.5× median dt two-sided filter. Raw preserved as
+  `steering_jerk_max_raw`.
+- **Score recalibration**: jerk penalty zero at/below cap (18.0), thresholds
+  raised to 20/22 so they only fire on genuine limiter failures.
+- **`run_ab_batch` fixes**: correct flat summary dict lookup; added RMSE,
+  osc_slope, steer_jerk_max, cmd_jerk_p95 columns; None-safe formatting.
 
 ---
 
 ## Incomplete / In-Progress Items
 
-### From `docs/TODO.md` — Stack Isolation
-
-These are the planned next major work items after S1-M39:
+### Stack Isolation (S1-M40 — next milestone)
 
 | Stage | Description | Status |
 |---|---|---|
@@ -58,11 +62,10 @@ These are the planned next major work items after S1-M39:
 
 ### Known Incomplete Items
 
-1. **PhilViz (debug_visualizer):** Recent fixes in M39, but `CONSOLIDATION_PLAN.md` exists — suggests planned refactor
-2. **`highway_65.yml` track:** New file (untracked in git) — likely a new test scenario not yet integrated
-3. **`docs/README_ANALYSIS.md`:** New untracked file — new documentation, purpose unclear
-4. **MPC controller (`control/mpc_controller.py`):** Implemented but not active; alternative to PP/PID/Stanley
-5. **Segmentation model:** Training pipeline exists but model may not be trained (CV fallback is the de facto path)
+1. **PhilViz (debug_visualizer):** `CONSOLIDATION_PLAN.md` exists — planned refactor (T-012)
+2. **MPC controller (`control/mpc_controller.py`):** Implemented but not active; alternative to PP
+3. **Segmentation model:** CV fallback is de facto perception path; model untrained
+4. **Speed error RMSE on highway:** 1.19 m/s — structural (vehicle accelerates ~15s to reach 12 m/s target); not a control bug
 
 ---
 
@@ -70,13 +73,13 @@ These are the planned next major work items after S1-M39:
 
 Primary config: `config/av_stack_config.yaml`
 
-Key active values (S1-M39):
+Key active values (post S1-M39):
 ```yaml
 control:
   lateral:
     control_mode: pure_pursuit
     pp_max_steering_rate: 0.4
-    pp_max_steering_jerk: 30.0
+    pp_max_steering_jerk: 18.0     # confirmed working via gap-filtered metric
     pp_feedback_gain: 0.10
     stale_decay: 0.98
   longitudinal:
@@ -96,27 +99,6 @@ safety:
 
 ---
 
-## Git Status (at session start)
-
-**Modified (staged/unstaged):**
-- `CONFIG_GUIDE.md`
-- `README.md`
-- `docs/ARCHITECTURE.md`
-- `docs/TODO.md`
-- `tools/debug_visualizer/README.md`
-- `tools/debug_visualizer/data_loader.js`
-- `tools/debug_visualizer/server.py`
-- `tools/debug_visualizer/style.css`
-- `tools/debug_visualizer/visualizer.js`
-
-**Untracked (new files):**
-- `docs/README_ANALYSIS.md`
-- `tracks/highway_65.yml`
-
-→ These changes likely belong to an in-progress commit for S1-M39.
-
----
-
 ## Known Risks / Fragile Areas
 
 1. **`av_stack.py` complexity** — 5,420 lines with deeply layered lane gating logic. Changes here have wide blast radius.
@@ -125,6 +107,7 @@ safety:
 4. **Temporal sync** — Camera frames and vehicle state can arrive with different timestamps; sync logic is critical.
 5. **Parameter surface** — 100+ config params. Untested combinations can produce unstable behavior.
 6. **Test suite vs. live behavior** — Tests are offline unit/integration tests; real Unity runs can surface issues not caught in tests.
+7. **Unity frame timing jitter** — dt std≈0.046s vs mean≈0.053s; double-ticks (0.067s) and long gaps (0.3s) occur regularly. Any metric using double-differentiation must filter gap frames.
 
 ---
 

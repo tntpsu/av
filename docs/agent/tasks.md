@@ -1,6 +1,6 @@
 # AV Stack — Agent Memory: Tasks
 
-**Last updated:** 2026-02-21
+**Last updated:** 2026-02-22
 
 ---
 
@@ -8,24 +8,15 @@
 
 | ID | Task | Priority | Status |
 |---|---|---|---|
-| T-001 | Validate S1-M39 comfort gates (3× s_loop runs) | P0 | In progress |
-| T-002 | Commit in-progress M39 changes (debug_visualizer, README, etc.) | P0 | Pending |
-| T-003 | Integrate `tracks/highway_65.yml` into test workflow | P1 | Pending |
-| T-004 | Document `docs/README_ANALYSIS.md` (what is it for?) | P2 | Pending |
+| T-020 | Implement perception layer stack isolation (replay with locked perception output) | P0 | Next |
+| T-012 | Consolidate PhilViz per CONSOLIDATION_PLAN.md | P1 | Pending |
+| T-011 | Tag S1-M39 completion in ROADMAP.md | P1 | Pending |
 
 ---
 
-## Suggested Next Tasks (Post S1-M39)
+## Suggested Next Tasks (S1-M40 — Stack Isolation)
 
 Listed in recommended order of execution:
-
-### S1 Completion
-
-| ID | Task | Rationale |
-|---|---|---|
-| T-010 | Run 3× s_loop baseline with current config, confirm all comfort gates pass | Required to close S1-M39 |
-| T-011 | Tag and document S1-M39 completion in ROADMAP.md | Milestone hygiene |
-| T-012 | Consolidate PhilViz per CONSOLIDATION_PLAN.md | Reduce debug tool complexity |
 
 ### Stack Isolation (TODO Stage 1–6)
 
@@ -53,7 +44,7 @@ Listed in recommended order of execution:
 | ID | Task | Rationale |
 |---|---|---|
 | T-040 | Define Stage 2 milestones in ROADMAP.md (multi-lane, lane change) | Required before starting Stage 2 work |
-| T-041 | Evaluate highway_65.yml track for Stage 2 testing | New track may be intended for higher-speed / highway scenarios |
+| T-041 | Evaluate highway_65.yml track for Stage 2 testing | Track now integrated; assess suitability for higher-speed scenarios |
 
 ---
 
@@ -61,30 +52,30 @@ Listed in recommended order of execution:
 
 ### High Impact
 
-1. **Decompose `av_stack.py`**
+1. **Stack isolation tooling (T-020–T-025)**
+   - Current: Counterfactual replay exists but stack isolation is incomplete
+   - Target: Full per-layer replay enabling isolated regression testing
+   - Impact: Reduces debugging time; makes cross-layer attribution accurate
+
+2. **Decompose `av_stack.py`**
    - Current: 5,420-line monolith orchestrating everything
    - Target: Extract lane gating module, perception coordinator, timing manager
    - Impact: Dramatically reduces bug surface and review complexity
 
-2. **Automate comfort gate validation**
+3. **Automate comfort gate validation**
    - Current: Manual 3× run + analyze script
    - Target: `pytest`-integrated CI check using recorded HDF5 replay
    - Impact: Every config change gets instant regression feedback
 
-3. **Train segmentation model**
+4. **Train segmentation model**
    - Current: CV fallback is de facto perception path
    - Target: Trained CNN on s_loop data with GT lane labels
    - Impact: Better curve lane detection, reduced EMA gating dependency
 
-4. **Config parameter documentation**
+5. **Config parameter documentation**
    - Current: 100+ YAML params with minimal inline documentation
    - Target: `CONFIG_GUIDE.md` updated with ranges, defaults, effects for every parameter
    - Impact: Reduces time-to-tune for each milestone by 30–50%
-
-5. **Stack isolation tooling (T-020–T-025)**
-   - Current: Counterfactual replay exists but stack isolation is incomplete
-   - Target: Full per-layer replay enabling isolated regression testing
-   - Impact: Reduces debugging time; makes cross-layer attribution accurate
 
 ---
 
@@ -98,7 +89,6 @@ Listed in recommended order of execution:
 | Perception stale-frame fallback breaks silently | Medium | Add explicit logging + metric for stale-frame rate in analyzer |
 | Temporal sync issues under CPU load | Medium | T-023: latency injection testing |
 | CV fallback accuracy degrades on curves | Medium | T-032: train segmentation model |
-| highway_65.yml unintegrated — risk of drift | Low | T-003: integrate into test workflow |
 
 ---
 
@@ -111,4 +101,10 @@ Listed in recommended order of execution:
 | — | Trajectory ref tracking + speed tuning | S1-M36 | Pre-2026 |
 | — | Dynamic per-radius speed control | S1-M37 | Feb 2026 |
 | — | Steering jerk reduction (PP mode) | S1-M38 | Feb 2026 |
-| — | Longitudinal comfort tuning | S1-M39 | Feb 2026 (validating) |
+| T-001 | Validate S1-M39 comfort gates | S1-M39 | 2026-02-22 |
+| T-002 | Commit M39 changes (debug_visualizer, metric fixes) | S1-M39 | 2026-02-22 |
+| T-003 | Integrate highway_65 track into test workflow | S1-M39 | 2026-02-22 |
+| T-010 | 3× s_loop baseline — all comfort gates pass | S1-M39 | 2026-02-22 |
+| — | Longitudinal comfort tuning | S1-M39 | 2026-02-22 |
+| — | Gap-filtered steering_jerk_max metric + score recalibration | S1-M39 | 2026-02-22 |
+| — | A/B batch: metric extraction fix + new columns | S1-M39 | 2026-02-22 |
