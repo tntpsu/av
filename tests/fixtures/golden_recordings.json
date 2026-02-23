@@ -1,0 +1,32 @@
+{
+    "schema_version": "1",
+    "milestone": "S1-M39",
+    "recorded_at": "2026-02-22",
+    "notes": "S1-M39 final validation recordings. Update this manifest after each milestone whose validation recordings supersede the previous ones. Update BASELINE_SCORES in tests/conftest.py to match.",
+    "tracks": {
+        "s_loop":     "data/recordings/recording_20260222_202957.h5",
+        "highway_65": "data/recordings/recording_20260222_214028.h5"
+    },
+    "documented_scores": {
+        "s_loop":     95.6,
+        "highway_65": 96.2
+    },
+    "documented_metrics": {
+        "s_loop": {
+            "lateral_rmse_m":          0.203,
+            "accel_p95_filtered_mps2": 1.315,
+            "commanded_jerk_p95_mps3": 1.440,
+            "out_of_lane_events":      0,
+            "emergency_stops":         0,
+            "duration_s":              59.8
+        },
+        "highway_65": {
+            "lateral_rmse_m":          0.044,
+            "accel_p95_filtered_mps2": 1.084,
+            "commanded_jerk_p95_mps3": 1.440,
+            "out_of_lane_events":      0,
+            "emergency_stops":         0,
+            "duration_s":              59.9
+        }
+    }
+}
