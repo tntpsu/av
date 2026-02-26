@@ -705,6 +705,14 @@ def analyze_recording_summary(recording_path: Path, analyze_to_failure: bool = F
     speed_surge_count = 0
     speed_surge_avg_drop = 0.0
     speed_surge_p95_drop = 0.0
+    speed_min_mps = None
+    speed_max_mps = None
+    if data.get('speed') is not None and len(data['speed']) > 0:
+        _s = np.asarray(data['speed'], dtype=np.float64)
+        _s = _s[np.isfinite(_s)]
+        if len(_s) > 0:
+            speed_min_mps = safe_float(np.min(_s))
+            speed_max_mps = safe_float(np.max(_s))
     if data.get('speed') is not None and data.get('ref_velocity') is not None:
         n_speed = min(len(data['speed']), len(data['ref_velocity']))
         if n_speed > 0:
@@ -1970,6 +1978,8 @@ def analyze_recording_summary(recording_path: Path, analyze_to_failure: bool = F
         },
         "curve_intent_diagnostics": curve_intent_diag,
         "speed_control": {
+            "speed_min_mps": speed_min_mps,
+            "speed_max_mps": speed_max_mps,
             "speed_error_rmse": safe_float(speed_error_rmse),
             "speed_error_mean": safe_float(speed_error_mean),
             "speed_error_max": safe_float(speed_error_max),
