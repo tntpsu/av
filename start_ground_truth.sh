@@ -326,6 +326,22 @@ UNITY_PID=$!
 sleep 2
 
 cd "$SCRIPT_DIR"
+
+# Auto-fill recording provenance labels from launch args unless caller overrides explicitly.
+if [ -z "${AV_TRACK_ID:-}" ] && [ -n "$TRACK_YAML_PATH" ]; then
+    _track_name="$(basename "$TRACK_YAML_PATH")"
+    AV_TRACK_ID="${_track_name%.*}"
+    export AV_TRACK_ID
+fi
+if [ -z "${AV_POLICY_PROFILE:-}" ]; then
+    if [ "$USE_CV" = true ]; then
+        AV_POLICY_PROFILE="cv_default"
+    else
+        AV_POLICY_PROFILE="seg_default"
+    fi
+    export AV_POLICY_PROFILE
+fi
+
 GT_ARGS=(--duration "$DURATION" --speed "$SPEED")
 if [ "$RANDOM_START" = true ]; then
     GT_ARGS+=(--random-start)

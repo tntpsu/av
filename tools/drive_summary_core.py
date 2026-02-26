@@ -105,6 +105,174 @@ def safe_float(value, default=0.0):
     return float(value)
 
 
+def _finite_stats(values: Optional[np.ndarray]) -> Dict:
+    """Return finite-value summary stats with nullable percentiles."""
+    if values is None:
+        return {
+            "count": 0,
+            "mean": None,
+            "p50": None,
+            "p95": None,
+            "p99": None,
+            "max": None,
+        }
+
+    arr = np.asarray(values, dtype=float).reshape(-1)
+    if arr.size == 0:
+        return {
+            "count": 0,
+            "mean": None,
+            "p50": None,
+            "p95": None,
+            "p99": None,
+            "max": None,
+        }
+
+    arr = arr[np.isfinite(arr)]
+    if arr.size == 0:
+        return {
+            "count": 0,
+            "mean": None,
+            "p50": None,
+            "p95": None,
+            "p99": None,
+            "max": None,
+        }
+
+    return {
+        "count": int(arr.size),
+        "mean": safe_float(np.mean(arr), default=None),
+        "p50": safe_float(np.percentile(arr, 50), default=None),
+        "p95": safe_float(np.percentile(arr, 95), default=None),
+        "p99": safe_float(np.percentile(arr, 99), default=None),
+        "max": safe_float(np.max(arr), default=None),
+    }
+
+
+def _nearest_abs_deltas_ms(source_ts: Optional[np.ndarray], target_ts: Optional[np.ndarray]) -> np.ndarray:
+    """Compute nearest-neighbor absolute timestamp deltas (milliseconds)."""
+    if source_ts is None or target_ts is None:
+        return np.array([], dtype=float)
+
+    source = np.asarray(source_ts, dtype=float).reshape(-1)
+    target = np.asarray(target_ts, dtype=float).reshape(-1)
+    source = source[np.isfinite(source)]
+    target = target[np.isfinite(target)]
+    if source.size == 0 or target.size == 0:
+        return np.array([], dtype=float)
+
+    target_sorted = np.sort(target)
+    idx = np.searchsorted(target_sorted, source)
+    left = np.clip(idx - 1, 0, target_sorted.size - 1)
+    right = np.clip(idx, 0, target_sorted.size - 1)
+    d_left = np.abs(source - target_sorted[left])
+    d_right = np.abs(source - target_sorted[right])
+    return np.minimum(d_left, d_right) * 1000.0
+
+
+def _build_latency_sync_summary(data: Dict) -> Dict:
+    """Build canonical latency/sync summary block."""
+    alignment_window_ms = 20.0
+    misaligned_rate_limit = 0.02
+    e2e_p95_limit_ms = 100.0
+
+    e2e_mode = "input_ready_to_command_sent"
+    raw_modes = data.get("e2e_latency_mode")
+    if raw_modes is None:
+        raw_modes = []
+    for raw_mode in raw_modes:
+        mode_str = raw_mode.decode("utf-8", errors="ignore") if isinstance(raw_mode, (bytes, bytearray)) else str(raw_mode)
+        mode_str = mode_str.strip()
+        if mode_str:
+            e2e_mode = mode_str
+            break
+
+    e2e_stats = _finite_stats(data.get("e2e_latency_ms"))
+    e2e_available = e2e_stats["count"] > 0
+    e2e_pass = None
+    if e2e_available and e2e_stats["p95"] is not None:
+        e2e_pass = bool(e2e_stats["p95"] <= e2e_p95_limit_ms)
+
+    dt_cam_traj_ms = _nearest_abs_deltas_ms(
+        data.get("camera_timestamps"), data.get("trajectory_timestamps")
+    )
+    dt_cam_control_ms = _nearest_abs_deltas_ms(
+        data.get("camera_timestamps"), data.get("control_timestamps")
+    )
+    dt_cam_traj_stats = _finite_stats(dt_cam_traj_ms)
+    dt_cam_control_stats = _finite_stats(dt_cam_control_ms)
+
+    sync_available = (
+        dt_cam_traj_stats["count"] > 0 and dt_cam_control_stats["count"] > 0
+    )
+    contract_misaligned_rate = None
+    sync_pass = None
+    if sync_available:
+        n = min(dt_cam_traj_ms.size, dt_cam_control_ms.size)
+        if n > 0:
+            misaligned = (
+                (dt_cam_traj_ms[:n] > alignment_window_ms)
+                | (dt_cam_control_ms[:n] > alignment_window_ms)
+            )
+            contract_misaligned_rate = safe_float(np.mean(misaligned))
+            sync_pass = bool(
+                (dt_cam_traj_stats["p95"] is not None and dt_cam_traj_stats["p95"] <= alignment_window_ms)
+                and (dt_cam_control_stats["p95"] is not None and dt_cam_control_stats["p95"] <= alignment_window_ms)
+                and (contract_misaligned_rate <= misaligned_rate_limit)
+            )
+
+    issues = []
+    if e2e_pass is False:
+        issues.append(f"e2e_p95_ms={e2e_stats['p95']:.1f} (limit <= {e2e_p95_limit_ms:.1f})")
+    if sync_pass is False:
+        if dt_cam_traj_stats["p95"] is not None and dt_cam_traj_stats["p95"] > alignment_window_ms:
+            issues.append(
+                f"dt_cam_traj_p95_ms={dt_cam_traj_stats['p95']:.1f} (limit <= {alignment_window_ms:.1f})"
+            )
+        if dt_cam_control_stats["p95"] is not None and dt_cam_control_stats["p95"] > alignment_window_ms:
+            issues.append(
+                f"dt_cam_control_p95_ms={dt_cam_control_stats['p95']:.1f} (limit <= {alignment_window_ms:.1f})"
+            )
+        if contract_misaligned_rate is not None and contract_misaligned_rate > misaligned_rate_limit:
+            issues.append(
+                f"contract_misaligned_rate={contract_misaligned_rate:.3f} (limit <= {misaligned_rate_limit:.3f})"
+            )
+
+    if issues:
+        overall_status = "poor"
+    elif e2e_available and sync_available:
+        overall_status = "good"
+    elif e2e_available or sync_available:
+        overall_status = "warn"
+    else:
+        overall_status = "unknown"
+
+    return {
+        "schema_version": "v1",
+        "e2e": {
+            "mode": e2e_mode,
+            "availability": "available" if e2e_available else "unavailable",
+            "units": "ms",
+            "stats_ms": e2e_stats,
+            "limit_p95_ms": e2e_p95_limit_ms,
+            "pass": e2e_pass,
+        },
+        "sync_alignment": {
+            "availability": "available" if sync_available else "unavailable",
+            "alignment_window_ms": alignment_window_ms,
+            "dt_cam_traj_ms": dt_cam_traj_stats,
+            "dt_cam_control_ms": dt_cam_control_stats,
+            "contract_misaligned_rate": contract_misaligned_rate,
+            "contract_misaligned_rate_limit": misaligned_rate_limit,
+            "pass": sync_pass,
+        },
+        "overall": {
+            "status": overall_status,
+            "issues": issues,
+        },
+    }
+
+
 def _load_config() -> dict:
     config_path = REPO_ROOT / "config" / "av_stack_config.yaml"
     if not config_path.exists():
@@ -286,6 +454,29 @@ def analyze_recording_summary(recording_path: Path, analyze_to_failure: bool = F
             )
             data['brake'] = (
                 np.array(f['control/brake'][:]) if 'control/brake' in f else None
+            )
+            data['control_timestamps'] = (
+                np.array(f['control/timestamps'][:])
+                if 'control/timestamps' in f
+                else (
+                    np.array(f['control/timestamp'][:])
+                    if 'control/timestamp' in f
+                    else None
+                )
+            )
+            data['camera_timestamps'] = (
+                np.array(f['camera/timestamps'][:]) if 'camera/timestamps' in f else None
+            )
+            data['trajectory_timestamps'] = (
+                np.array(f['trajectory/timestamps'][:]) if 'trajectory/timestamps' in f else None
+            )
+            data['e2e_latency_ms'] = (
+                np.array(f['control/e2e_latency_ms'][:])
+                if 'control/e2e_latency_ms' in f
+                else None
+            )
+            data['e2e_latency_mode'] = (
+                f['control/e2e_latency_mode'][:] if 'control/e2e_latency_mode' in f else []
             )
 
             # Trajectory data
@@ -1873,6 +2064,8 @@ def analyze_recording_summary(recording_path: Path, analyze_to_failure: bool = F
         recommendations.append("Reduce longitudinal acceleration spikes - tune throttle/brake gains")
     if commanded_jerk_p95 > 5.0:
         recommendations.append("Reduce longitudinal jerk - add rate limiting on throttle/brake")
+
+    latency_sync = _build_latency_sync_summary(data)
     
     # Key issues
     key_issues = []
@@ -1915,6 +2108,14 @@ def analyze_recording_summary(recording_path: Path, analyze_to_failure: bool = F
         key_issues.append("High longitudinal acceleration")
     if commanded_jerk_p95 > 5.0:
         key_issues.append("High longitudinal jerk")
+    if latency_sync.get("e2e", {}).get("pass") is False:
+        e2e_p95 = latency_sync.get("e2e", {}).get("stats_ms", {}).get("p95")
+        if e2e_p95 is not None:
+            key_issues.append(f"High E2E latency (p95={float(e2e_p95):.1f}ms)")
+    if latency_sync.get("sync_alignment", {}).get("pass") is False:
+        misaligned_rate = latency_sync.get("sync_alignment", {}).get("contract_misaligned_rate")
+        if misaligned_rate is not None:
+            key_issues.append(f"High sync misalignment (rate={float(misaligned_rate) * 100.0:.1f}%)")
     
     return {
         "summary_schema_version": "v1",
@@ -2071,6 +2272,7 @@ def analyze_recording_summary(recording_path: Path, analyze_to_failure: bool = F
         },
         "turn_bias": turn_bias,
         "alignment_summary": alignment_summary,
+        "latency_sync": latency_sync,
         "system_health": {
             "pid_integral_max": safe_float(pid_integral_max),
             "unity_time_gap_max": safe_float(unity_time_gap_max),

@@ -1129,6 +1129,7 @@ def _print_summary_report(recording_path: Path, summary: Dict, analyze_to_failur
     trajectory_quality = summary.get("trajectory_quality", {})
     system_health = summary.get("system_health", {})
     safety = summary.get("safety", {})
+    latency_sync = summary.get("latency_sync", {})
     curve_intent_diag = summary.get("curve_intent_diagnostics", {})
     recommendations = summary.get("recommendations", [])
 
@@ -1247,7 +1248,51 @@ def _print_summary_report(recording_path: Path, summary: Dict, analyze_to_failur
     print(f"   Unity Time Gap Max: {system_health.get('unity_time_gap_max', 0.0):.3f} s")
     print()
 
-    print("9. SAFETY METRICS")
+    print("9. LATENCY & SYNC")
+    print("-" * 80)
+    e2e = latency_sync.get("e2e", {})
+    e2e_stats = e2e.get("stats_ms", {}) if isinstance(e2e, dict) else {}
+    e2e_p95 = e2e_stats.get("p95")
+    e2e_limit = e2e.get("limit_p95_ms")
+    if e2e.get("availability") == "available" and e2e_p95 is not None:
+        e2e_status = "PASS" if e2e.get("pass") else "FAIL"
+        e2e_limit_text = f"{float(e2e_limit):.1f} ms" if e2e_limit is not None else "n/a"
+        print(
+            f"   E2E Control Latency (P95): {float(e2e_p95):.1f} ms "
+            f"(limit <= {e2e_limit_text}) [{e2e_status}]"
+        )
+    else:
+        print("   E2E Control Latency (P95): N/A")
+
+    sync_alignment = latency_sync.get("sync_alignment", {})
+    dt_cam_traj_p95 = (sync_alignment.get("dt_cam_traj_ms") or {}).get("p95")
+    dt_cam_control_p95 = (sync_alignment.get("dt_cam_control_ms") or {}).get("p95")
+    misaligned_rate = sync_alignment.get("contract_misaligned_rate")
+    window = sync_alignment.get("alignment_window_ms")
+    rate_limit = sync_alignment.get("contract_misaligned_rate_limit")
+    if sync_alignment.get("availability") == "available":
+        sync_status = "PASS" if sync_alignment.get("pass") else "FAIL"
+        traj_text = f"{float(dt_cam_traj_p95):.1f} ms" if dt_cam_traj_p95 is not None else "n/a"
+        ctrl_text = (
+            f"{float(dt_cam_control_p95):.1f} ms" if dt_cam_control_p95 is not None else "n/a"
+        )
+        rate_text = (
+            f"{float(misaligned_rate) * 100.0:.2f}%"
+            if misaligned_rate is not None
+            else "n/a"
+        )
+        print(
+            "   Sync/Alignment Health: "
+            f"dt_cam_traj_p95={traj_text}, dt_cam_control_p95={ctrl_text}, "
+            f"misaligned_rate={rate_text} "
+            f"(limits: p95 <= {float(window):.1f} ms, rate <= {float(rate_limit) * 100.0:.2f}%) "
+            f"[{sync_status}]"
+        )
+    else:
+        print("   Sync/Alignment Health: N/A")
+    print()
+
+    print("10. SAFETY METRICS")
     print("-" * 80)
     print(f"   Out-of-Lane Events: {int(safety.get('out_of_lane_events', 0))}")
     print(f"   Out-of-Lane Time: {safety.get('out_of_lane_time', 0.0):.1f}%")
@@ -1268,7 +1313,7 @@ def _print_summary_report(recording_path: Path, summary: Dict, analyze_to_failur
         )
     print()
 
-    print("10. RECOMMENDATIONS")
+    print("11. RECOMMENDATIONS")
     print("-" * 80)
     if recommendations:
         for idx, recommendation in enumerate(recommendations, 1):

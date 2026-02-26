@@ -43,6 +43,7 @@ def test_drive_summary_contract_keys(tmp_path: Path) -> None:
         "trajectory_quality",
         "turn_bias",
         "alignment_summary",
+        "latency_sync",
         "system_health",
         "safety",
         "recommendations",
@@ -52,3 +53,5 @@ def test_drive_summary_contract_keys(tmp_path: Path) -> None:
 
     assert expected_top_level_keys.issubset(summary.keys())
     assert summary["summary_schema_version"] == "v1"
+    latency_sync = summary.get("latency_sync", {})
+    assert {"schema_version", "e2e", "sync_alignment", "overall"}.issubset(latency_sync.keys())

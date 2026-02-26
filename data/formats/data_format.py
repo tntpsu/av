@@ -237,6 +237,13 @@ class ControlCommand:
     tuned_deadband: Optional[float] = None
     tuned_error_smoothing_alpha: Optional[float] = None
     emergency_stop: bool = False
+    # Pipeline timing diagnostics (input-ready -> command-sent, monotonic clock domain)
+    e2e_front_ready_mono_s: Optional[float] = None
+    e2e_vehicle_ready_mono_s: Optional[float] = None
+    e2e_inputs_ready_mono_s: Optional[float] = None
+    e2e_control_sent_mono_s: Optional[float] = None
+    e2e_latency_ms: Optional[float] = None
+    e2e_latency_mode: Optional[str] = None
     # Target speed diagnostics
     target_speed_raw: Optional[float] = None
     target_speed_post_limits: Optional[float] = None

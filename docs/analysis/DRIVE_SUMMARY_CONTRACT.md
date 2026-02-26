@@ -30,6 +30,7 @@ Both adapters must call the canonical module and must not implement independent 
 - `trajectory_quality`
 - `turn_bias`
 - `alignment_summary`
+- `latency_sync`
 - `system_health`
 - `safety`
 - `recommendations`
@@ -56,6 +57,9 @@ Both adapters must call the canonical module and must not implement independent 
 - `safety.out_of_lane_events_full_run`
 - `safety.out_of_lane_time_full_run`
 - `safety.out_of_lane_event_at_failure_boundary`
+- `latency_sync.e2e`
+- `latency_sync.sync_alignment`
+- `latency_sync.overall`
 
 ## Adapter Responsibilities
 

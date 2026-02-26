@@ -41,8 +41,10 @@ ENV/
 *.pt
 
 # Data
-data/recordings/*.h5
-data/recordings/*.hdf5
+*.h5
+*.hdf5
+!tests/**/*.h5
+!tests/**/*.hdf5
 captures/
 data/segmentation_dataset/
 tracks/generated/

@@ -894,6 +894,42 @@ class DataRecorder:
             dtype=np.int8
         )
         self.h5_file.create_dataset(
+            "control/e2e_front_ready_mono_s",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float64
+        )
+        self.h5_file.create_dataset(
+            "control/e2e_vehicle_ready_mono_s",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float64
+        )
+        self.h5_file.create_dataset(
+            "control/e2e_inputs_ready_mono_s",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float64
+        )
+        self.h5_file.create_dataset(
+            "control/e2e_control_sent_mono_s",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float64
+        )
+        self.h5_file.create_dataset(
+            "control/e2e_latency_ms",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/e2e_latency_mode",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=h5py.string_dtype(encoding='utf-8', length=64)
+        )
+        self.h5_file.create_dataset(
             "control/target_speed_raw",
             shape=(0,),
             maxshape=max_shape,
@@ -3714,6 +3750,12 @@ class DataRecorder:
         using_stale_perception_list = []
         stale_perception_reason_list = []
         emergency_stop_list = []
+        e2e_front_ready_mono_s_list = []
+        e2e_vehicle_ready_mono_s_list = []
+        e2e_inputs_ready_mono_s_list = []
+        e2e_control_sent_mono_s_list = []
+        e2e_latency_ms_list = []
+        e2e_latency_mode_list = []
         target_speed_raw_list = []
         target_speed_post_limits_list = []
         target_speed_planned_list = []
@@ -4015,6 +4057,34 @@ class DataRecorder:
             using_stale_perception_list.append(cc.using_stale_perception if hasattr(cc, 'using_stale_perception') else False)
             stale_perception_reason_list.append(cc.stale_perception_reason if hasattr(cc, 'stale_perception_reason') and cc.stale_perception_reason else "")
             emergency_stop_list.append(1 if getattr(cc, 'emergency_stop', False) else 0)
+            e2e_front_ready_mono_s_list.append(
+                float(getattr(cc, 'e2e_front_ready_mono_s', np.nan))
+                if getattr(cc, 'e2e_front_ready_mono_s', None) is not None
+                else np.nan
+            )
+            e2e_vehicle_ready_mono_s_list.append(
+                float(getattr(cc, 'e2e_vehicle_ready_mono_s', np.nan))
+                if getattr(cc, 'e2e_vehicle_ready_mono_s', None) is not None
+                else np.nan
+            )
+            e2e_inputs_ready_mono_s_list.append(
+                float(getattr(cc, 'e2e_inputs_ready_mono_s', np.nan))
+                if getattr(cc, 'e2e_inputs_ready_mono_s', None) is not None
+                else np.nan
+            )
+            e2e_control_sent_mono_s_list.append(
+                float(getattr(cc, 'e2e_control_sent_mono_s', np.nan))
+                if getattr(cc, 'e2e_control_sent_mono_s', None) is not None
+                else np.nan
+            )
+            e2e_latency_ms_list.append(
+                float(getattr(cc, 'e2e_latency_ms', np.nan))
+                if getattr(cc, 'e2e_latency_ms', None) is not None
+                else np.nan
+            )
+            e2e_latency_mode_list.append(
+                str(getattr(cc, 'e2e_latency_mode', '') or '')
+            )
             target_speed_raw_list.append(getattr(cc, 'target_speed_raw', 0.0) or 0.0)
             target_speed_post_limits_list.append(getattr(cc, 'target_speed_post_limits', 0.0) or 0.0)
             target_speed_planned_list.append(getattr(cc, 'target_speed_planned', 0.0) or 0.0)
@@ -4290,7 +4360,11 @@ class DataRecorder:
                        "road_curvature_valid", "road_curvature_abs", "straight_oscillation_rate",
                        "road_curvature_source", "tuned_deadband", "tuned_error_smoothing_alpha",
                        "using_stale_perception", "stale_perception_reason",
-                       "emergency_stop", "target_speed_raw",
+                       "emergency_stop",
+                       "e2e_front_ready_mono_s", "e2e_vehicle_ready_mono_s",
+                       "e2e_inputs_ready_mono_s", "e2e_control_sent_mono_s",
+                       "e2e_latency_ms", "e2e_latency_mode",
+                       "target_speed_raw",
                        "target_speed_post_limits", "target_speed_planned", "target_speed_final",
                        "target_speed_slew_active", "target_speed_ramp_active",
                        "speed_governor_comfort_speed", "speed_governor_preview_speed",
@@ -4552,6 +4626,25 @@ class DataRecorder:
             stale_perception_reason_array = np.array(stale_perception_reason_list, dtype=h5py.string_dtype(encoding='utf-8', length=50))
             self.h5_file["control/stale_perception_reason"][current_size:] = stale_perception_reason_array
             self.h5_file["control/emergency_stop"][current_size:] = emergency_stop_list
+            self.h5_file["control/e2e_front_ready_mono_s"][current_size:] = np.array(
+                e2e_front_ready_mono_s_list, dtype=np.float64
+            )
+            self.h5_file["control/e2e_vehicle_ready_mono_s"][current_size:] = np.array(
+                e2e_vehicle_ready_mono_s_list, dtype=np.float64
+            )
+            self.h5_file["control/e2e_inputs_ready_mono_s"][current_size:] = np.array(
+                e2e_inputs_ready_mono_s_list, dtype=np.float64
+            )
+            self.h5_file["control/e2e_control_sent_mono_s"][current_size:] = np.array(
+                e2e_control_sent_mono_s_list, dtype=np.float64
+            )
+            self.h5_file["control/e2e_latency_ms"][current_size:] = np.array(
+                e2e_latency_ms_list, dtype=np.float32
+            )
+            self.h5_file["control/e2e_latency_mode"][current_size:] = np.array(
+                e2e_latency_mode_list,
+                dtype=h5py.string_dtype(encoding='utf-8', length=64),
+            )
             self.h5_file["control/target_speed_raw"][current_size:] = target_speed_raw_list
             self.h5_file["control/target_speed_post_limits"][current_size:] = target_speed_post_limits_list
             self.h5_file["control/target_speed_planned"][current_size:] = target_speed_planned_list

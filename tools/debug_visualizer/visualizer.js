@@ -1293,6 +1293,7 @@ class Visualizer {
                 ['ControllerDiag', 'summary-section-controller-diagnostics'],
                 ['Longitudinal', 'summary-section-longitudinal'],
                 ['Safety', 'summary-section-safety'],
+                ['Timing', 'summary-section-latency-sync'],
                 ['Diagnostics', 'summary-section-diagnostics'],
             ];
             navTargets.forEach(([label, target]) => {
@@ -1370,6 +1371,93 @@ class Visualizer {
                 if (!isNonGreen || !limitText) return text;
                 return `${text} <span style="color:#a0a0a0;">(limit: ${limitText})</span>`;
             };
+
+            const latencySync = summary.latency_sync || null;
+            if (latencySync && typeof latencySync === 'object') {
+                const e2e = latencySync.e2e || {};
+                const e2eStats = e2e.stats_ms || {};
+                const e2eP95 = Number(e2eStats.p95);
+                const e2eLimit = Number(e2e.limit_p95_ms);
+                const e2eAvailable = String(e2e.availability || '').toLowerCase() === 'available'
+                    && Number.isFinite(e2eP95);
+                const e2ePass = e2e.pass === true;
+                let e2eColor = '#888';
+                let e2eText = 'N/A';
+                if (e2eAvailable) {
+                    e2eColor = e2ePass ? '#4caf50' : '#ff6b6b';
+                    e2eText = `${e2eP95.toFixed(1)} ms`;
+                    if (!e2ePass && Number.isFinite(e2eLimit)) {
+                        e2eText += ` (limit: <=${e2eLimit.toFixed(1)} ms)`;
+                    }
+                }
+
+                const sync = latencySync.sync_alignment || {};
+                const syncWindow = Number(sync.alignment_window_ms);
+                const syncRateLimit = Number(sync.contract_misaligned_rate_limit);
+                const trajP95 = Number(sync?.dt_cam_traj_ms?.p95);
+                const ctrlP95 = Number(sync?.dt_cam_control_ms?.p95);
+                const misalignedRate = Number(sync.contract_misaligned_rate);
+                const syncAvailability = String(sync.availability || '').toLowerCase();
+                const syncAvailable = syncAvailability === 'available';
+                const syncPass = sync.pass === true;
+                const syncOverallStatus = String(latencySync?.overall?.status || '').toLowerCase();
+                let syncColor = '#888';
+                let syncText = 'N/A';
+                let syncDetailsText = 'N/A';
+                if (syncAvailable) {
+                    const syncParts = [];
+                    if (Number.isFinite(trajP95)) syncParts.push(`traj p95 ${trajP95.toFixed(1)} ms`);
+                    if (Number.isFinite(ctrlP95)) syncParts.push(`control p95 ${ctrlP95.toFixed(1)} ms`);
+                    if (Number.isFinite(misalignedRate)) syncParts.push(`misaligned ${(misalignedRate * 100).toFixed(2)}%`);
+                    if (Number.isFinite(syncWindow)) syncParts.push(`limit p95 <=${syncWindow.toFixed(1)} ms`);
+                    if (Number.isFinite(syncRateLimit)) syncParts.push(`limit rate <=${(syncRateLimit * 100).toFixed(2)}%`);
+                    if (syncParts.length > 0) {
+                        syncDetailsText = syncParts.join(' | ');
+                    }
+                    if (syncPass) {
+                        syncColor = '#4caf50';
+                        syncText = 'GOOD';
+                    } else {
+                        syncColor = '#ff6b6b';
+                        const failed = [];
+                        if (Number.isFinite(trajP95) && Number.isFinite(syncWindow) && trajP95 > syncWindow) {
+                            failed.push(`dt_cam_traj_p95 ${trajP95.toFixed(1)} ms (limit: <=${syncWindow.toFixed(1)} ms)`);
+                        }
+                        if (Number.isFinite(ctrlP95) && Number.isFinite(syncWindow) && ctrlP95 > syncWindow) {
+                            failed.push(`dt_cam_control_p95 ${ctrlP95.toFixed(1)} ms (limit: <=${syncWindow.toFixed(1)} ms)`);
+                        }
+                        if (
+                            Number.isFinite(misalignedRate)
+                            && Number.isFinite(syncRateLimit)
+                            && misalignedRate > syncRateLimit
+                        ) {
+                            failed.push(
+                                `misaligned_rate ${(misalignedRate * 100).toFixed(2)}% (limit: <=${(syncRateLimit * 100).toFixed(2)}%)`
+                            );
+                        }
+                        if (failed.length > 0) {
+                            syncText = `POOR - ${failed[0]}`;
+                        } else if (syncOverallStatus === 'warn') {
+                            syncColor = '#ffa500';
+                            syncText = 'WARN';
+                        } else {
+                            syncText = 'POOR';
+                        }
+                    }
+                } else if (syncOverallStatus === 'warn') {
+                    syncColor = '#ffa500';
+                    syncText = 'WARN';
+                }
+
+                html += '<div id="summary-section-latency-sync" style="background: #2a2a2a; padding: 1rem; border-radius: 8px; margin-bottom: 1.5rem; border-left: 4px solid #4a90e2;">';
+                html += '<h3 style="margin-top: 0; color: #4a90e2;">Latency & Sync</h3>';
+                html += '<table style="width: 100%; color: #e0e0e0;">';
+                html += `<tr><td>E2E Control Latency (P95):</td><td style="text-align: right; color: ${e2eColor};">${e2eText}</td></tr>`;
+                html += `<tr><td>Sync/Alignment Health:</td><td style="text-align: right; color: ${syncColor};">${syncText}</td></tr>`;
+                html += `<tr><td style="color:#a0a0a0;">Sync Metrics:</td><td style="text-align: right; color: #a0a0a0;">${syncDetailsText}</td></tr>`;
+                html += '</table>';
+                html += '</div>';
+            }
 
             // Top-down timing/projection diagnostics (instrumentation-only)
             if (topdownDiagnostics && !topdownDiagnostics.error) {

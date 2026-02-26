@@ -1,0 +1,47 @@
+{
+  "schema_version": "v1",
+  "generated_at_utc": "2026-02-24T18:02:26Z",
+  "label": "pytest_comfort_gates",
+  "source": "pytest",
+  "git_sha": "ae791a33e837ac40ea96eee91d33fd972feca1c7",
+  "config_hash": "d47f2059566423c6ea7fb9bba5300735c894447b8edc8fdc5542fb99d4b54b6c",
+  "matrix_hash": "1d1b62c921367a54ff0617fad725166e328725989ab6d1c2adc152f9b23dfcd3",
+  "recording_ids": [
+    "data/recordings/recording_20260222_202957.h5",
+    "data/recordings/recording_20260222_214028.h5"
+  ],
+  "pass_fail": true,
+  "regression_budget": {
+    "config": {
+      "source": "pytest_comfort_gate_replay",
+      "milestone": "S1-M39"
+    },
+    "checks": {
+      "emergency_stop_flag_is_detected_by_extract_run_metrics": true,
+      "gate_thresholds_in_sync_with_drive_summary_core": true,
+      "nominal_recording_has_valid_fps": true,
+      "highway_65_all_comfort_gates_pass": true,
+      "highway_65_score_within_baseline_tolerance": true,
+      "no_failure_detected_on_golden_recording[highway_65]": true,
+      "no_failure_detected_on_golden_recording[s_loop]": true,
+      "s_loop_all_comfort_gates_pass": true,
+      "s_loop_score_within_baseline_tolerance": true,
+      "accel_p95_filtered_exceeds_gate": true,
+      "commanded_jerk_p95_exceeds_gate": true,
+      "lateral_error_p95_exceeds_gate": true,
+      "out_of_lane_event_detected": true,
+      "accel_p95_filtered_within_gate": true,
+      "all_gates_pass_combined": true,
+      "centered_frames_above_gate": true,
+      "commanded_jerk_p95_within_gate": true,
+      "lateral_error_p95_within_gate": true,
+      "zero_out_of_lane_events": true
+    },
+    "track_metrics": null,
+    "baseline_track_metrics": null
+  },
+  "run_counts": {
+    "s_loop": 1,
+    "highway_65": 1
+  }
+}

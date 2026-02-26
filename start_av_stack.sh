@@ -48,14 +48,14 @@ TMP_TRACK_PATH=""
 GT_CENTERLINE_AS_LEFT_LANE=""
 
 usage() {
-    echo "Usage: ./start_av_stack.sh [options] [av_stack.py args]"
+    echo "Usage: ./start_av_stack.sh [options] [AV stack args]"
     echo ""
     echo "Script options:"
     echo "  --force, -f            Auto-kill existing process on port 8000"
     echo "  --launch-unity, -u     Launch Unity automatically"
     echo "  --unity-auto-play, -p  Launch Unity and auto-enter Play mode"
     echo "  --build-unity-player   Build Unity player executable (macOS)"
-    echo "  --run-unity-player     Run Unity player executable (macOS)"
+    echo "  --run-unity-player     Run Unity player executable (macOS, default behavior)"
     echo "  --unity-build-path     Output path for Unity player (default: unity/AVSimulation/mybuild.app)"
     echo "  --unity-path           Path to Unity executable for CLI builds"
     echo "  --skip-unity-build-if-clean  Skip Unity build when no changes are detected"
@@ -68,8 +68,19 @@ usage() {
     echo "  --gt-centerline-as-left-lane BOOL  Use center line as left lane"
     echo "  --help, -h             Show this help message"
     echo ""
-    echo "av_stack.py args are passed through, e.g.:"
+    echo "AV stack args are passed through, e.g.:"
     echo "  --duration 60 --max_frames 300 --recording_dir data/recordings"
+}
+
+has_passthrough_arg() {
+    local needle="$1"
+    shift || true
+    for arg in "$@"; do
+        if [ "$arg" = "$needle" ]; then
+            return 0
+        fi
+    done
+    return 1
 }
 
 # Cleanup temp track on exit if we created one.
@@ -82,7 +93,7 @@ cleanup() {
 trap cleanup EXIT
 
 # Parse command line arguments
-# Keep non-script args to pass through to av_stack.py
+# Keep non-script args to pass through to AV stack entrypoint
 PASSTHROUGH_ARGS=()
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -158,6 +169,13 @@ while [[ $# -gt 0 ]]; do
             ;;
     esac
 done
+
+# Default to launching compiled Unity player.
+RUN_UNITY_PLAYER=true
+# If user asked to launch Unity Editor, prefer that over player launch.
+if [ "$LAUNCH_UNITY" = true ]; then
+    RUN_UNITY_PLAYER=false
+fi
 
 echo -e "${BLUE}╔══════════════════════════════════════════════════════════╗${NC}"
 echo -e "${BLUE}║          AV Stack Startup Script                        ║${NC}"
@@ -350,6 +368,9 @@ launch_unity_player() {
     local app_path="$1"
     if [ ! -d "$app_path" ]; then
         echo -e "${RED}✗ Unity player not found at: $app_path${NC}"
+        echo -e "${YELLOW}  Build it first by rerunning with:${NC}"
+        echo -e "${YELLOW}  ./start_av_stack.sh --build-unity-player --run-unity-player [your args]${NC}"
+        echo -e "${YELLOW}  (optional) add --skip-unity-build-if-clean for faster relaunches.${NC}"
         return 1
     fi
 
@@ -385,6 +406,21 @@ if [ "$RUN_UNITY_PLAYER" = true ]; then
     UNITY_AUTO_PLAY=false
     launch_unity_player "$UNITY_BUILD_PATH"
     echo ""
+fi
+
+# Auto-fill recording provenance labels from launch args unless caller overrides explicitly.
+if [ -z "${AV_TRACK_ID:-}" ] && [ -n "$TRACK_YAML_PATH" ]; then
+    _track_name="$(basename "$TRACK_YAML_PATH")"
+    AV_TRACK_ID="${_track_name%.*}"
+    export AV_TRACK_ID
+fi
+if [ -z "${AV_POLICY_PROFILE:-}" ]; then
+    if has_passthrough_arg "--use-cv" "${PASSTHROUGH_ARGS[@]}"; then
+        AV_POLICY_PROFILE="cv_default"
+    else
+        AV_POLICY_PROFILE="seg_default"
+    fi
+    export AV_POLICY_PROFILE
 fi
 
 if [ "$LAUNCH_UNITY" = true ]; then
@@ -528,7 +564,7 @@ trap cleanup SIGINT SIGTERM
 # Enable recording by default for comprehensive logging
 # Redirect output to log file for monitoring
 # Pass through any additional arguments (e.g., --duration 60, --max_frames 1000)
-python "$SCRIPT_DIR/av_stack.py" --bridge_url "$BRIDGE_URL" --record \
+python "$SCRIPT_DIR/av_stack/orchestrator.py" --bridge_url "$BRIDGE_URL" --record \
   ${TRACK_YAML_PATH:+--track-yaml "$TRACK_YAML_PATH"} "${PASSTHROUGH_ARGS[@]}" 2>&1 | tee "$AV_STACK_LOG"
 EXIT_CODE=${PIPESTATUS[0]}  # Capture exit code of Python script (not tee)
 
@@ -546,5 +582,3 @@ else
     # Non-zero exit code (error) - still cleanup
     cleanup
 fi
-
-

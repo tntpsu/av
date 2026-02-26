@@ -1510,12 +1510,20 @@ class AVStack:
                             )
                         continue
                     self.last_camera_frame_id = camera_frame_id
+                front_ready_mono_s = time.monotonic()
                 
                 # Get vehicle state
                 vehicle_state_dict = self.bridge.get_latest_vehicle_state()
                 if vehicle_state_dict is None:
                     time.sleep(self.frame_interval)
                     continue
+                vehicle_ready_mono_s = time.monotonic()
+                input_timing = {
+                    "front_ready_mono_s": float(front_ready_mono_s),
+                    "vehicle_ready_mono_s": float(vehicle_ready_mono_s),
+                    "inputs_ready_mono_s": float(max(front_ready_mono_s, vehicle_ready_mono_s)),
+                    "e2e_latency_mode": "input_ready_to_command_sent",
+                }
                 
                 # Process frame
                 self._process_frame(
@@ -1524,6 +1532,7 @@ class AVStack:
                     vehicle_state_dict,
                     camera_frame_id=camera_frame_id,
                     camera_frame_meta=camera_frame_meta,
+                    input_timing=input_timing,
                 )
                 
                 self.frame_count += 1
@@ -1576,6 +1585,7 @@ class AVStack:
         camera_frame_id=None,
         camera_frame_meta=None,
         topdown_frame_data=None,
+        input_timing: Optional[dict] = None,
     ) -> None:
         """Process a single frame through the AV stack (slim dispatcher)."""
         fv = self._pf_validate_frame(timestamp, vehicle_state_dict)
@@ -1591,10 +1601,16 @@ class AVStack:
         traj     = self._pf_plan_trajectory(pr, gated, gov, vehicle_state_dict, timestamp)
         cmd      = self._pf_compute_steering(traj, gov, gated, vehicle_state_dict, fv, timestamp)
         cmd      = self._pf_apply_safety(cmd, traj, gated, gov, vehicle_state_dict, fv, timestamp)
-        self._pf_send_control(cmd, traj, gated)
+        latency_ctx = self._pf_send_control(
+            cmd,
+            traj,
+            gated,
+            input_timing=input_timing,
+        )
         self._pf_record(image, timestamp, vehicle_state_dict,
                         perc_out, traj, cmd, gated, gov, fv,
-                        camera_frame_id, camera_frame_meta, topdown_frame_data)
+                        camera_frame_id, camera_frame_meta, topdown_frame_data,
+                        latency_ctx=latency_ctx)
         self._pf_update_frame_state(fv, gated, pr, cmd, timestamp,
                                     vehicle_state_dict=vehicle_state_dict, traj=traj)
 
@@ -4384,7 +4400,13 @@ class AVStack:
 
         return control_command
 
-    def _pf_send_control(self, cmd: dict, traj: dict, gated: dict) -> None:
+    def _pf_send_control(
+        self,
+        cmd: dict,
+        traj: dict,
+        gated: dict,
+        input_timing: Optional[dict] = None,
+    ) -> dict:
         """Send control command to Unity and trajectory visualization."""
         control_command = cmd
         reference_point = traj['reference_point']
@@ -4392,6 +4414,25 @@ class AVStack:
         reference_lookahead = traj['reference_lookahead']
         left_lane_line_x = gated['left_lane_line_x']
         right_lane_line_x = gated['right_lane_line_x']
+        latency_ctx = {
+            "front_ready_mono_s": float("nan"),
+            "vehicle_ready_mono_s": float("nan"),
+            "inputs_ready_mono_s": float("nan"),
+            "control_sent_mono_s": float("nan"),
+            "e2e_latency_ms": float("nan"),
+            "e2e_latency_mode": "input_ready_to_command_sent",
+        }
+        if isinstance(input_timing, dict):
+            for key in ("front_ready_mono_s", "vehicle_ready_mono_s", "inputs_ready_mono_s"):
+                value = input_timing.get(key)
+                if value is not None:
+                    try:
+                        latency_ctx[key] = float(value)
+                    except (TypeError, ValueError):
+                        pass
+            mode_value = input_timing.get("e2e_latency_mode")
+            if isinstance(mode_value, str) and mode_value:
+                latency_ctx["e2e_latency_mode"] = mode_value
 
         # 4. Send control command to Unity
         # CRITICAL: Don't send control if ground truth follower is active
@@ -4403,6 +4444,11 @@ class AVStack:
                 throttle=control_command['throttle'],
                 brake=control_command['brake']
             )
+            t_send_end = time.monotonic()
+            latency_ctx["control_sent_mono_s"] = float(t_send_end)
+            inputs_ready = latency_ctx.get("inputs_ready_mono_s")
+            if isinstance(inputs_ready, float) and np.isfinite(inputs_ready):
+                latency_ctx["e2e_latency_ms"] = max(0.0, (t_send_end - inputs_ready) * 1000.0)
         else:
             # Ground truth mode active - ground truth follower will send control
             logger.debug("Skipping AV stack control send (ground truth mode active)")
@@ -4457,8 +4503,24 @@ class AVStack:
                 perception_lookahead_m=reference_lookahead,
                 perception_valid=perception_valid,
             )
+        return latency_ctx
 
-    def _pf_record(self, image, timestamp, vehicle_state_dict, perc_out, traj, cmd, gated, gov, fv, camera_frame_id, camera_frame_meta, topdown_frame_data) -> None:
+    def _pf_record(
+        self,
+        image,
+        timestamp,
+        vehicle_state_dict,
+        perc_out,
+        traj,
+        cmd,
+        gated,
+        gov,
+        fv,
+        camera_frame_id,
+        camera_frame_meta,
+        topdown_frame_data,
+        latency_ctx: Optional[dict] = None,
+    ) -> None:
         """Record frame data if recorder is enabled."""
         control_command = cmd
         trajectory = traj['trajectory']
@@ -4499,6 +4561,7 @@ class AVStack:
                 topdown_frame_data=topdown_frame_data,
                 topdown_frame_meta=topdown_frame_meta,
                 speed_horizon_guardrail_diag=speed_horizon_guardrail_diag,
+                latency_ctx=latency_ctx,
             )
 
     def _pf_update_frame_state(self, fv: dict, gated: dict, pr: dict, cmd: dict, timestamp: float,
@@ -4879,6 +4942,7 @@ class AVStack:
         topdown_frame_data: tuple[np.ndarray, float, int | None] | None = None,
         topdown_frame_meta: dict | None = None,
         speed_horizon_guardrail_diag: Optional[dict] = None,
+        latency_ctx: Optional[dict] = None,
     ):
         """Record frame data."""
         # Create camera frame
@@ -5400,6 +5464,23 @@ class AVStack:
             ),
         )
         
+        def _latency_float(key: str) -> float:
+            if not isinstance(latency_ctx, dict):
+                return float("nan")
+            value = latency_ctx.get(key)
+            if value is None:
+                return float("nan")
+            try:
+                return float(value)
+            except (TypeError, ValueError):
+                return float("nan")
+
+        e2e_latency_mode = ""
+        if isinstance(latency_ctx, dict):
+            mode_value = latency_ctx.get("e2e_latency_mode")
+            if isinstance(mode_value, str):
+                e2e_latency_mode = mode_value
+
         # Create control command with metadata
         control_cmd = ControlCommand(
             timestamp=timestamp,
@@ -5536,6 +5617,12 @@ class AVStack:
             using_stale_perception=perception_output.using_stale_data if perception_output else False,
             stale_perception_reason=perception_output.stale_data_reason if perception_output else None,
             emergency_stop=bool(control_command.get('emergency_stop', False)),
+            e2e_front_ready_mono_s=_latency_float("front_ready_mono_s"),
+            e2e_vehicle_ready_mono_s=_latency_float("vehicle_ready_mono_s"),
+            e2e_inputs_ready_mono_s=_latency_float("inputs_ready_mono_s"),
+            e2e_control_sent_mono_s=_latency_float("control_sent_mono_s"),
+            e2e_latency_ms=_latency_float("e2e_latency_ms"),
+            e2e_latency_mode=e2e_latency_mode,
             target_speed_raw=control_command.get('target_speed_raw'),
             target_speed_post_limits=control_command.get('target_speed_post_limits'),
             target_speed_planned=control_command.get('target_speed_planned'),
