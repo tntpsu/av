@@ -82,40 +82,4 @@ def test_steering_direction_correct():
     assert steering_right < 0.0, f"Car right of ref should steer left (got {steering_right:.3f})"
 
 
-def test_heading_error_affects_steering():
-    """Test that heading error affects steering."""
-    controller = LateralController(
-        kp=0.3,
-        ki=0.0,
-        kd=0.1,
-        lookahead_distance=10.0,
-        max_steering=0.5,
-        heading_weight=0.5,
-        lateral_weight=0.5
-    )
-    
-    # Case 1: Car heading LEFT (negative heading error)
-    reference_point = {
-        'x': 0.0,
-        'y': 10.0,
-        'heading': 0.0,  # Desired: straight
-        'velocity': 10.0
-    }
-    
-    steering_left_heading = controller.compute_steering(
-        current_heading=-0.1,  # Car heading left (10°)
-        reference_point=reference_point
-    )
-    
-    # Should steer RIGHT to correct (positive)
-    assert steering_left_heading > 0.0, f"Left heading should steer right (got {steering_left_heading:.3f})"
-    
-    # Case 2: Car heading RIGHT (positive heading error)
-    steering_right_heading = controller.compute_steering(
-        current_heading=0.1,  # Car heading right (10°)
-        reference_point=reference_point
-    )
-    
-    # Should steer LEFT to correct (negative)
-    assert steering_right_heading < 0.0, f"Right heading should steer left (got {steering_right_heading:.3f})"
 

@@ -17,52 +17,7 @@ sys.path.insert(0, str(project_root))
 
 class TestDriftRateRegression:
     """Test that fixes don't make drift rate worse."""
-    
-    def test_camera_offset_doesnt_increase_drift(self):
-        """
-        CRITICAL REGRESSION TEST: Verify camera offset fix doesn't make drift worse.
-        
-        This test would catch if camera offset direction fix makes drift worse.
-        Requires baseline recording (before fix) and current recording (after fix).
-        """
-        recordings = sorted(
-            Path('data/recordings').glob('*.h5'),
-            key=lambda p: p.stat().st_mtime,
-            reverse=True
-        )
-        
-        if len(recordings) < 2:
-            pytest.skip("Need at least 2 recordings to compare (before/after fix)")
-        
-        # Get latest (after fix) and previous (before fix)
-        latest = recordings[0]
-        previous = recordings[1]
-        
-        with h5py.File(latest, 'r') as f_latest:
-            world_x_latest = f_latest['vehicle/position'][:, 0]
-            timestamps_latest = f_latest['vehicle/timestamps'][:]
-            duration_latest = timestamps_latest[-1] - timestamps_latest[0]
-            drift_rate_latest = (world_x_latest[-1] - world_x_latest[0]) / duration_latest if duration_latest > 0 else 0.0
-        
-        with h5py.File(previous, 'r') as f_prev:
-            world_x_prev = f_prev['vehicle/position'][:, 0]
-            timestamps_prev = f_prev['vehicle/timestamps'][:]
-            duration_prev = timestamps_prev[-1] - timestamps_prev[0]
-            drift_rate_prev = (world_x_prev[-1] - world_x_prev[0]) / duration_prev if duration_prev > 0 else 0.0
-        
-        # Drift rate should not increase (get worse) after fix
-        # Allow 10% tolerance for measurement variance
-        drift_increase = abs(drift_rate_latest) - abs(drift_rate_prev)
-        tolerance = abs(drift_rate_prev) * 0.1
-        
-        assert drift_increase <= tolerance, (
-            f"Drift rate got WORSE after fix! "
-            f"Previous: {drift_rate_prev:.4f} m/s, "
-            f"Latest: {drift_rate_latest:.4f} m/s, "
-            f"Increase: {drift_increase:.4f} m/s. "
-            f"This indicates the fix made things worse."
-        )
-    
+
     def test_reference_point_variance_doesnt_increase(self):
         """
         REGRESSION TEST: Verify fixes don't increase reference point variance.

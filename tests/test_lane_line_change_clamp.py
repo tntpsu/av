@@ -9,7 +9,7 @@ def test_clamp_lane_line_deltas_no_clamp() -> None:
         previous_right=1.1,
         max_delta=0.5,
     )
-    assert clamped is False
+    assert not clamped
     assert left == -1.2
     assert right == 1.2
 
@@ -22,7 +22,7 @@ def test_clamp_lane_line_deltas_clamps_both_sides() -> None:
         previous_right=1.0,
         max_delta=0.3,
     )
-    assert clamped is True
+    assert clamped
     assert left == -1.3
     assert right == 1.3
 

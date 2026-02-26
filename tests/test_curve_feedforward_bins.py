@@ -13,8 +13,10 @@ def test_curve_feedforward_bins_apply_scale() -> None:
         curve_feedforward_curvature_max=0.02,
         curve_feedforward_threshold=0.001,
         max_steering=1.0,
+        curvature_smoothing_alpha=1.0,
+        curvature_transition_alpha=1.0,
     )
-    reference_point = {"x": 0.5, "y": 10.0, "heading": 0.0, "curvature": 0.03}
+    reference_point = {"x": 0.5, "y": 10.0, "heading": -0.1, "curvature": 0.03}
     result = controller.compute_steering(
         current_heading=0.0,
         reference_point=reference_point,

@@ -2,516 +2,55 @@
 Main AV stack integration script.
 Connects all components: perception, trajectory planning, and control.
 """
-
-import time
-import math
+import time, math, sys, os, json, hashlib, subprocess
 import numpy as np
 from typing import Optional, Tuple
-import sys
-import os
-import json
-import hashlib
-import subprocess
 from pathlib import Path
-import logging
-import yaml
+import logging, yaml, cv2
 from dataclasses import dataclass
-import cv2
 
-# Add paths
-sys.path.insert(0, str(Path(__file__).parent))
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from bridge.client import UnityBridgeClient
 from perception.inference import LaneDetectionInference
 from trajectory.inference import TrajectoryPlanningInference
 from trajectory.speed_planner import SpeedPlanner, SpeedPlannerConfig
 from trajectory.utils import (
-    compute_curve_phase_scheduler,
-    compute_reference_lookahead,
-    compute_curve_anticipation_score,
-    compute_dynamic_effective_horizon,
-    apply_speed_horizon_guardrail,
-    curvature_smoothing_alpha,
-    resolve_curve_scheduler_mode,
-    select_curvature_bin_limits,
+    compute_curve_phase_scheduler, compute_reference_lookahead,
+    compute_curve_anticipation_score, compute_dynamic_effective_horizon,
+    apply_speed_horizon_guardrail, curvature_smoothing_alpha,
+    resolve_curve_scheduler_mode, select_curvature_bin_limits,
 )
 from control.pid_controller import VehicleController
 from control.speed_governor import build_speed_governor, SpeedGovernorOutput
 from data.recorder import DataRecorder
-from data.formats.data_format import CameraFrame, VehicleState, ControlCommand, PerceptionOutput, TrajectoryOutput, RecordingFrame
+from data.formats.data_format import (
+    CameraFrame, VehicleState, ControlCommand,
+    PerceptionOutput, TrajectoryOutput, RecordingFrame,
+)
 
-# Configure logging
-# Ensure tmp/logs directory exists
-log_dir = Path(__file__).parent / 'tmp' / 'logs'
+from av_stack.lane_gating import (
+    clamp_lane_center_and_width, clamp_lane_line_deltas,
+    apply_lane_ema_gating, apply_lane_alpha_beta_gating,
+    finalize_reject_reason, is_lane_low_visibility,
+    is_lane_low_visibility_at_lookahead, estimate_single_lane_pair,
+    blend_lane_pair_with_previous,
+)
+from av_stack.config import ControlConfig, TrajectoryConfig, SafetyConfig, load_config
+from av_stack.speed_helpers import (
+    _slew_limit_value, _apply_speed_limit_preview, _apply_curve_speed_preview,
+    _preview_min_distance_allows_release, _apply_target_speed_slew,
+    _apply_restart_ramp, _apply_steering_speed_guard, _is_teleport_jump,
+)
+
+log_dir = Path(__file__).parent.parent / 'tmp' / 'logs'
 log_dir.mkdir(parents=True, exist_ok=True)
-log_file = log_dir / 'av_stack.log'
-
 logging.basicConfig(
-    level=logging.ERROR,  # Changed from INFO to ERROR to reduce expensive print operations
+    level=logging.ERROR,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.StreamHandler(),
-        logging.FileHandler(str(log_file))
-    ]
+    handlers=[logging.StreamHandler(), logging.FileHandler(str(log_dir / 'av_stack.log'))]
 )
 logger = logging.getLogger(__name__)
-
-
-def clamp_lane_center_and_width(
-    current_center: float,
-    current_width: float,
-    previous_center: float,
-    previous_width: float,
-    max_center_delta: float,
-    max_width_delta: float,
-) -> Tuple[float, float, bool]:
-    """Clamp sudden lane center/width changes to avoid reference point jumps."""
-    clamped_center = current_center
-    clamped_width = current_width
-
-    if max_center_delta > 0.0:
-        center_delta = current_center - previous_center
-        if abs(center_delta) > max_center_delta:
-            clamped_center = previous_center + np.sign(center_delta) * max_center_delta
-
-    if max_width_delta > 0.0:
-        width_delta = current_width - previous_width
-        if abs(width_delta) > max_width_delta:
-            clamped_width = previous_width + np.sign(width_delta) * max_width_delta
-
-    was_clamped = (clamped_center != current_center) or (clamped_width != current_width)
-    return clamped_center, clamped_width, was_clamped
-
-
-def clamp_lane_line_deltas(
-    current_left: float,
-    current_right: float,
-    previous_left: float,
-    previous_right: float,
-    max_delta: float,
-) -> Tuple[float, float, bool]:
-    """Clamp sudden per-lane x changes to reduce perception jitter."""
-    if max_delta <= 0.0:
-        return current_left, current_right, False
-    clamped_left = previous_left + np.clip(current_left - previous_left, -max_delta, max_delta)
-    clamped_right = previous_right + np.clip(current_right - previous_right, -max_delta, max_delta)
-    was_clamped = (clamped_left != current_left) or (clamped_right != current_right)
-    return clamped_left, clamped_right, was_clamped
-
-
-def apply_lane_ema_gating(
-    lane_center: float,
-    lane_width: float,
-    lane_center_ema: float | None,
-    lane_width_ema: float | None,
-    center_gate_m: float,
-    width_gate_m: float,
-    center_alpha: float,
-    width_alpha: float,
-) -> Tuple[float, float, float, float, list, bool]:
-    """Apply EMA smoothing with measurement gating for lane center/width."""
-    gate_events: list = []
-    gated = False
-    center_alpha = min(max(center_alpha, 0.0), 1.0)
-    width_alpha = min(max(width_alpha, 0.0), 1.0)
-
-    if lane_center_ema is None or lane_width_ema is None:
-        return lane_center, lane_width, lane_center, lane_width, gate_events, gated
-
-    center_delta = abs(lane_center - lane_center_ema)
-    width_delta = abs(lane_width - lane_width_ema)
-    if center_gate_m > 0.0 and center_delta > center_gate_m:
-        gate_events.append("lane_center_gate_reject")
-        gated = True
-    if width_gate_m > 0.0 and width_delta > width_gate_m:
-        gate_events.append("lane_width_gate_reject")
-        gated = True
-    if gated:
-        return lane_center_ema, lane_width_ema, lane_center_ema, lane_width_ema, gate_events, gated
-
-    lane_center_ema = (center_alpha * lane_center) + ((1.0 - center_alpha) * lane_center_ema)
-    lane_width_ema = (width_alpha * lane_width) + ((1.0 - width_alpha) * lane_width_ema)
-    return lane_center_ema, lane_width_ema, lane_center_ema, lane_width_ema, gate_events, gated
-
-
-def apply_lane_alpha_beta_gating(
-    lane_center: float,
-    lane_width: float,
-    state_center: float | None,
-    state_center_vel: float | None,
-    state_width: float | None,
-    state_width_vel: float | None,
-    center_gate_m: float,
-    width_gate_m: float,
-    center_alpha: float,
-    center_beta: float,
-    width_alpha: float,
-    width_beta: float,
-    dt: float,
-) -> Tuple[float, float, float, float, float, float, list, bool]:
-    """Apply alpha-beta filter with measurement gating for lane center/width."""
-    gate_events: list = []
-    gated = False
-    center_alpha = min(max(center_alpha, 0.0), 1.0)
-    width_alpha = min(max(width_alpha, 0.0), 1.0)
-    center_beta = max(center_beta, 0.0)
-    width_beta = max(width_beta, 0.0)
-    dt = max(dt, 1e-3)
-
-    if state_center is None or state_center_vel is None:
-        state_center = lane_center
-        state_center_vel = 0.0
-    if state_width is None or state_width_vel is None:
-        state_width = lane_width
-        state_width_vel = 0.0
-
-    # Predict
-    pred_center = state_center + state_center_vel * dt
-    pred_width = state_width + state_width_vel * dt
-
-    center_residual = lane_center - pred_center
-    width_residual = lane_width - pred_width
-
-    if center_gate_m > 0.0 and abs(center_residual) > center_gate_m:
-        gate_events.append("lane_center_gate_reject")
-        gated = True
-    if width_gate_m > 0.0 and abs(width_residual) > width_gate_m:
-        gate_events.append("lane_width_gate_reject")
-        gated = True
-
-    if gated:
-        return (
-            pred_center,
-            pred_width,
-            pred_center,
-            state_center_vel,
-            pred_width,
-            state_width_vel,
-            gate_events,
-            gated,
-        )
-
-    # Update
-    updated_center = pred_center + center_alpha * center_residual
-    updated_center_vel = state_center_vel + (center_beta * center_residual / dt)
-    updated_width = pred_width + width_alpha * width_residual
-    updated_width_vel = state_width_vel + (width_beta * width_residual / dt)
-
-    return (
-        updated_center,
-        updated_width,
-        updated_center,
-        updated_center_vel,
-        updated_width,
-        updated_width_vel,
-        gate_events,
-        gated,
-    )
-
-
-def finalize_reject_reason(
-    reject_reason: Optional[str],
-    stale_data_reason: Optional[str],
-    clamp_events: Optional[list],
-) -> Optional[str]:
-    """Pick a human-readable rejection reason for diagnostics."""
-    if reject_reason:
-        return reject_reason
-    if stale_data_reason:
-        return stale_data_reason
-    if clamp_events:
-        return clamp_events[0]
-    return None
-
-
-def is_lane_low_visibility(
-    points: Optional[list],
-    image_width: float,
-    side: str,
-    min_points: int = 6,
-    edge_margin: int = 12,
-) -> bool:
-    """Return True when lane points are too few or hugging the image edge."""
-    if not points or len(points) < min_points:
-        return True
-    xs = [p[0] for p in points if isinstance(p, (list, tuple)) and len(p) >= 2]
-    if not xs:
-        return True
-    if side == "left":
-        return min(xs) < edge_margin
-    return max(xs) > (image_width - edge_margin)
-
-
-def is_lane_low_visibility_at_lookahead(
-    points: Optional[list],
-    image_width: float,
-    side: str,
-    y_lookahead: float,
-    min_points_in_band: int = 4,
-    y_band_half_height: float = 18.0,
-    edge_margin: int = 12,
-) -> bool:
-    """
-    Return True when lane support is weak specifically around the lookahead row.
-
-    This catches dashed-line gaps at lookahead that global fit-point counts can miss.
-    """
-    if points is None:
-        return True
-    valid = [p for p in points if isinstance(p, (list, tuple)) and len(p) >= 2]
-    if not valid:
-        return True
-    band_points = [p for p in valid if abs(float(p[1]) - float(y_lookahead)) <= y_band_half_height]
-    if len(band_points) < min_points_in_band:
-        return True
-    xs = [float(p[0]) for p in band_points]
-    if side == "left":
-        return min(xs) < edge_margin
-    return max(xs) > (image_width - edge_margin)
-
-
-def estimate_single_lane_pair(
-    single_x_vehicle: float,
-    is_left_lane: bool,
-    last_width: Optional[float],
-    default_width: float,
-    width_min: float,
-    width_max: float,
-) -> Tuple[float, float]:
-    """Estimate missing lane boundary using last known width when available."""
-    width = default_width
-    if last_width is not None and width_min <= last_width <= width_max:
-        width = last_width
-    if is_left_lane:
-        left_lane_line_x = float(single_x_vehicle)
-        right_lane_line_x = float(single_x_vehicle + width)
-    else:
-        left_lane_line_x = float(single_x_vehicle - width)
-        right_lane_line_x = float(single_x_vehicle)
-    return left_lane_line_x, right_lane_line_x
-
-
-def blend_lane_pair_with_previous(
-    estimated_left_lane_x: float,
-    estimated_right_lane_x: float,
-    previous_left_lane_x: float,
-    previous_right_lane_x: float,
-    blend_alpha: float,
-    center_shift_cap_m: float,
-) -> Tuple[float, float]:
-    """
-    Blend fallback-estimated lanes with previous lanes and cap center shift.
-
-    This keeps fallback bounded when dashed-line gaps are transient so
-    synthetic lane reconstruction does not cause large centerline jumps.
-    """
-    alpha = float(np.clip(blend_alpha, 0.0, 1.0))
-    left_lane_x = (1.0 - alpha) * float(previous_left_lane_x) + alpha * float(
-        estimated_left_lane_x
-    )
-    right_lane_x = (1.0 - alpha) * float(previous_right_lane_x) + alpha * float(
-        estimated_right_lane_x
-    )
-    prev_center = 0.5 * (float(previous_left_lane_x) + float(previous_right_lane_x))
-    center = 0.5 * (left_lane_x + right_lane_x)
-    center_shift = center - prev_center
-    cap = max(0.0, float(center_shift_cap_m))
-    if cap > 0.0 and abs(center_shift) > cap:
-        correction = np.sign(center_shift) * (abs(center_shift) - cap)
-        left_lane_x -= correction
-        right_lane_x -= correction
-    return float(left_lane_x), float(right_lane_x)
-
-
-@dataclass
-class ControlConfig:
-    """Control configuration parameters."""
-    lateral_kp: float = 0.3
-    lateral_ki: float = 0.0
-    lateral_kd: float = 0.1
-    lateral_max_steering: float = 0.5
-    lateral_deadband: float = 0.02
-    lateral_heading_weight: float = 0.5
-    lateral_lateral_weight: float = 0.5
-    lateral_error_clip: float = np.pi / 4
-    lateral_integral_limit: float = 0.3
-    
-    longitudinal_kp: float = 0.3
-    longitudinal_ki: float = 0.05
-    longitudinal_kd: float = 0.02
-    longitudinal_target_speed: float = 8.0
-    longitudinal_max_speed: float = 10.0
-    longitudinal_speed_smoothing: float = 0.7
-    longitudinal_speed_deadband: float = 0.1
-    longitudinal_throttle_limit_threshold: float = 0.8
-    longitudinal_throttle_reduction_factor: float = 0.3
-    longitudinal_brake_aggression: float = 3.0
-
-
-@dataclass
-class TrajectoryConfig:
-    """Trajectory planning configuration parameters."""
-    lookahead_distance: float = 20.0
-    point_spacing: float = 1.0
-    target_speed: float = 8.0
-    reference_lookahead: float = 8.0
-    image_width: float = 640.0
-    image_height: float = 480.0
-    camera_fov: float = 75.0
-    camera_height: float = 1.2
-    bias_correction_threshold: float = 10.0
-
-
-@dataclass
-class SafetyConfig:
-    """Safety configuration parameters."""
-    max_speed: float = 10.0
-    emergency_brake_threshold: float = 2.0
-    speed_prevention_threshold: float = 0.85
-    speed_prevention_brake_threshold: float = 0.9
-    speed_prevention_brake_amount: float = 0.2
-    lane_width: float = 7.0  # Lane width in meters
-    car_width: float = 1.85  # Car width in meters
-    allowed_outside_lane: float = 1.0  # Allowed distance outside lane before emergency stop (meters)
-
-
-def load_config(config_path: Optional[str] = None) -> dict:
-    """Load configuration from YAML file or use defaults."""
-    if config_path is None:
-        config_path = Path(__file__).parent / "config" / "av_stack_config.yaml"
-    else:
-        config_path = Path(config_path)
-    
-    if config_path.exists():
-        with open(config_path, 'r') as f:
-            config = yaml.safe_load(f)
-        logger.info(f"Loaded configuration from {config_path}")
-        return config
-    else:
-        logger.warning(f"Config file not found at {config_path}, using defaults")
-        return {}
-
-
-def _slew_limit_value(previous: float, target: float, max_rate: float, dt: float) -> float:
-    """Slew-limit a value by max_rate per second."""
-    if max_rate <= 0.0 or dt <= 0.0:
-        return float(target)
-    max_delta = max_rate * dt
-    return float(previous + np.clip(target - previous, -max_delta, max_delta))
-
-
-def _apply_speed_limit_preview(
-    base_speed: float,
-    preview_limit: float,
-    preview_distance: float,
-    max_decel: float,
-) -> float:
-    """Return the preview-based cap (independent of current speed)."""
-    if preview_limit <= 0.0 or preview_distance <= 0.0 or max_decel <= 0.0:
-        return float(base_speed)
-    max_allowed = math.sqrt(max((preview_limit ** 2) + (2.0 * max_decel * preview_distance), 0.0))
-    return float(min(base_speed, max_allowed))
-
-
-def _apply_curve_speed_preview(
-    base_speed: float,
-    curvature: float,
-    max_lateral_accel: float,
-    min_curve_speed: float,
-    preview_distance: float,
-    max_decel: float,
-) -> Tuple[float, Optional[float]]:
-    """Preview-based cap using curvature lookahead (reduces speed before the curve)."""
-    if (
-        not isinstance(curvature, (int, float))
-        or abs(curvature) <= 1e-6
-        or max_lateral_accel <= 0.0
-        or preview_distance <= 0.0
-        or max_decel <= 0.0
-    ):
-        return float(base_speed), None
-    curve_speed = (float(max_lateral_accel) / abs(curvature)) ** 0.5
-    if min_curve_speed > 0.0:
-        curve_speed = max(curve_speed, float(min_curve_speed))
-    capped = _apply_speed_limit_preview(
-        float(base_speed),
-        float(curve_speed),
-        float(preview_distance),
-        float(max_decel),
-    )
-    return float(capped), float(curve_speed)
-
-
-def _preview_min_distance_allows_release(
-    preview_distance: float | None,
-    preview_min_distance: float | None,
-    margin: float,
-) -> bool:
-    """Return True if the preview min-distance suggests we can release the clamp."""
-    if not isinstance(preview_distance, (int, float)) or preview_distance <= 0.0:
-        return True
-    if not isinstance(preview_min_distance, (int, float)) or preview_min_distance <= 0.0:
-        return True
-    return float(preview_min_distance) <= float(margin)
-
-
-def _apply_target_speed_slew(previous: float, target: float, rate_up: float,
-                             rate_down: float, dt: float) -> float:
-    """Slew-limit target speed with asymmetric up/down rates."""
-    if dt <= 0.0:
-        return float(target)
-    adjusted = float(target)
-    if rate_up > 0.0 and adjusted > previous:
-        adjusted = min(adjusted, previous + (rate_up * dt))
-    if rate_down > 0.0 and adjusted < previous:
-        adjusted = max(adjusted, previous - (rate_down * dt))
-    return float(adjusted)
-
-
-def _apply_restart_ramp(desired_speed: float, current_speed: float,
-                        ramp_start_time: Optional[float], timestamp: float,
-                        ramp_seconds: float, stop_threshold: float) -> Tuple[float, Optional[float], bool]:
-    """Ramp target speed up after coming to a stop."""
-    if ramp_seconds <= 0.0:
-        return float(desired_speed), None, False
-    if current_speed <= stop_threshold and desired_speed > 0.0:
-        if ramp_start_time is None:
-            ramp_start_time = float(timestamp)
-        elapsed = max(0.0, float(timestamp) - float(ramp_start_time))
-        ramp_limit = float(desired_speed) * min(1.0, elapsed / ramp_seconds)
-        return float(min(desired_speed, ramp_limit)), ramp_start_time, True
-    return float(desired_speed), None, False
-
-
-def _apply_steering_speed_guard(
-    desired_speed: float,
-    last_steering: Optional[float],
-    threshold: float,
-    scale: float,
-    min_speed: float,
-) -> Tuple[float, bool]:
-    """Reduce target speed when steering is saturated to prevent overshoot."""
-    if last_steering is None or threshold <= 0.0 or scale <= 0.0:
-        return float(desired_speed), False
-    if abs(float(last_steering)) < threshold:
-        return float(desired_speed), False
-    capped = max(float(min_speed), float(desired_speed) * float(scale))
-    if capped >= desired_speed:
-        return float(desired_speed), False
-    return float(capped), True
-
-
-def _is_teleport_jump(
-    previous_position: Optional[np.ndarray],
-    current_position: Optional[np.ndarray],
-    distance_threshold: float,
-) -> Tuple[bool, float]:
-    """Detect sudden position jumps that indicate Unity teleport/discontinuity."""
-    if previous_position is None or current_position is None:
-        return False, 0.0
-    distance = float(np.linalg.norm(current_position - previous_position))
-    return distance > distance_threshold, distance
-
 
 class AVStack:
     """Main AV stack integrating all components."""
@@ -1468,7 +1007,7 @@ class AVStack:
         if not track_name:
             return
 
-        track_path = Path(__file__).resolve().parent / "tracks" / f"{track_name}.yml"
+        track_path = Path(__file__).resolve().parent.parent / "tracks" / f"{track_name}.yml"
         if not track_path.exists():
             logger.warning(
                 "[LOOKAHEAD_ENTRY] Track YAML not found for '%s': %s",
@@ -2034,18 +1573,37 @@ class AVStack:
         image: np.ndarray,
         timestamp: float,
         vehicle_state_dict: dict,
-        camera_frame_id: int | None = None,
-        camera_frame_meta: dict | None = None,
-        topdown_frame_data: tuple[np.ndarray, float, int | None] | None = None,
-    ):
-        """
-        Process a single frame through the AV stack.
-        
-        Args:
-            image: Camera image
-            timestamp: Frame timestamp
-            vehicle_state_dict: Vehicle state dictionary
-        """
+        camera_frame_id=None,
+        camera_frame_meta=None,
+        topdown_frame_data=None,
+    ) -> None:
+        """Process a single frame through the AV stack (slim dispatcher)."""
+        fv = self._pf_validate_frame(timestamp, vehicle_state_dict)
+        if fv is None:
+            return  # duplicate frame
+
+        pr       = self._pf_run_perception(image, vehicle_state_dict, fv)
+        geo      = self._pf_compute_lane_geometry(pr, vehicle_state_dict, fv)
+        gated    = self._pf_apply_lane_gating(pr, geo, vehicle_state_dict, fv, timestamp)
+        health   = self._pf_score_perception_health(pr, gated, fv)
+        perc_out = self._pf_build_perception_output(pr, gated, health, timestamp)
+        gov      = self._pf_run_speed_governor(pr, gated, vehicle_state_dict, timestamp)
+        traj     = self._pf_plan_trajectory(pr, gated, gov, vehicle_state_dict, timestamp)
+        cmd      = self._pf_compute_steering(traj, gov, gated, vehicle_state_dict, fv, timestamp)
+        cmd      = self._pf_apply_safety(cmd, traj, gated, gov, vehicle_state_dict, fv, timestamp)
+        self._pf_send_control(cmd, traj, gated)
+        self._pf_record(image, timestamp, vehicle_state_dict,
+                        perc_out, traj, cmd, gated, gov, fv,
+                        camera_frame_id, camera_frame_meta, topdown_frame_data)
+        self._pf_update_frame_state(fv, gated, pr, cmd, timestamp,
+                                    vehicle_state_dict=vehicle_state_dict, traj=traj)
+
+    # ------------------------------------------------------------------
+    # _pf_* sub-methods — extracted from _process_frame
+    # ------------------------------------------------------------------
+
+    def _pf_validate_frame(self, timestamp: float, vehicle_state_dict: dict) -> Optional[dict]:
+        """Validate incoming frame, detect duplicates and teleports. Returns fv dict or None."""
         process_start = time.time()
         unity_frame_count = vehicle_state_dict.get(
             "unityFrameCount", vehicle_state_dict.get("unity_frame_count")
@@ -2112,7 +1670,18 @@ class AVStack:
                 "Resetting controllers and skipping emergency stop for this frame."
             )
         teleport_guard_active = self.teleport_guard_frames_remaining > 0
-        
+        return {
+            'process_start': process_start,
+            'unity_frame_count': unity_frame_count,
+            'prev_timestamp': prev_timestamp,
+            'control_dt': control_dt,
+            'current_position': current_position,
+            'teleport_detected': teleport_detected,
+            'teleport_guard_active': teleport_guard_active,
+        }
+
+    def _pf_run_perception(self, image: np.ndarray, vehicle_state_dict: dict, fv: dict) -> dict:
+        """Run lane detection and debug visualization. Returns pr dict."""
         # 1. Perception: Detect lanes
         # detect() now returns: (lane_coeffs, confidence, detection_method, num_lanes_detected)
         perception_start = time.time()
@@ -2310,24 +1879,21 @@ class AVStack:
                         )
                         self._segmentation_mask_logged = True
         
-        # Calculate lane line positions at lookahead distance (for trajectory centering verification)
-        left_lane_line_x = None
-        right_lane_line_x = None
-        
-        # Initialize diagnostic tracking variables (available for all code paths)
-        using_stale_data = False
-        stale_data_reason = None
-        left_jump_magnitude = None
-        right_jump_magnitude = None
-        jump_threshold_used = None
-        # NEW: Diagnostic fields for perception instability (initialized to None, set only when instability detected)
-        actual_detected_left_lane_x = None
-        actual_detected_right_lane_x = None
-        reject_reason = None
-        clamp_events = []
-        instability_width_change = None
-        instability_center_shift = None
-        
+        return {
+            'lane_coeffs': lane_coeffs,
+            'confidence': confidence,
+            'detection_method': detection_method,
+            'num_lanes_detected': num_lanes_detected,
+            'fit_points_left': fit_points_left,
+            'fit_points_right': fit_points_right,
+            'perception_duration': perception_duration,
+            'segmentation_mask_png': segmentation_mask_png,
+        }
+
+    def _pf_compute_lane_geometry(self, pr: dict, vehicle_state_dict: dict, fv: dict) -> dict:
+        """Compute lane geometry: lookahead, curvature, speed limits. Returns geo dict."""
+        lane_coeffs = pr['lane_coeffs']
+        confidence = pr['confidence']
         current_speed = vehicle_state_dict.get('speed', 0.0)
         current_path_curvature = float(
             vehicle_state_dict.get('groundTruthPathCurvature', 0.0)
@@ -2526,7 +2092,84 @@ class AVStack:
         if self.frame_count < 3:
             logger.info(f"[COORD DEBUG] Frame {self.frame_count}: Extracted camera_8m_screen_y={camera_8m_screen_y} "
                        f"(from dict keys: {list(vehicle_state_dict.keys())[:10]}...)")
-        
+
+        # Get image dimensions for gating
+        try:
+            planner_for_geo = self.trajectory_planner.planner if hasattr(self.trajectory_planner, 'planner') else self.trajectory_planner
+            image_height_geo = planner_for_geo.image_height if hasattr(planner_for_geo, 'image_height') else 480.0
+            image_width_geo = planner_for_geo.image_width if hasattr(planner_for_geo, 'image_width') else 640.0
+        except Exception:
+            image_height_geo = 480.0
+            image_width_geo = 640.0
+
+        return {
+            'current_speed': current_speed,
+            'current_path_curvature': current_path_curvature,
+            'base_reference_lookahead': base_reference_lookahead,
+            'reference_lookahead': reference_lookahead,
+            'reference_lookahead_diag': reference_lookahead_diag,
+            'dynamic_horizon_diag': dynamic_horizon_diag,
+            'camera_8m_screen_y': camera_8m_screen_y,
+            'camera_lookahead_screen_y': camera_lookahead_screen_y,
+            'gt_lookahead_distance': gt_lookahead_distance,
+            'speed_limit': speed_limit,
+            'speed_limit_preview': speed_limit_preview,
+            'speed_limit_preview_distance': speed_limit_preview_distance,
+            'speed_limit_preview_min_distance': speed_limit_preview_min_distance,
+            'speed_limit_preview_mid': speed_limit_preview_mid,
+            'speed_limit_preview_mid_distance': speed_limit_preview_mid_distance,
+            'speed_limit_preview_mid_min_distance': speed_limit_preview_mid_min_distance,
+            'speed_limit_preview_long': speed_limit_preview_long,
+            'speed_limit_preview_long_distance': speed_limit_preview_long_distance,
+            'speed_limit_preview_long_min_distance': speed_limit_preview_long_min_distance,
+            'preview_curvature_abs': preview_curvature_abs,
+            'preview_entry_source': preview_entry_source,
+            'distance_to_curve_start_m': distance_to_curve_start_m,
+            'curve_phase_diag': curve_phase_diag,
+            'curve_intent': curve_intent,
+            'curve_intent_raw': curve_intent_raw,
+            'curve_intent_state': curve_intent_state,
+            'curve_intent_term_preview': curve_intent_term_preview,
+            'curve_intent_term_path': curve_intent_term_path,
+            'curve_intent_term_rise': curve_intent_term_rise,
+            'curvature_rise_abs': curvature_rise_abs,
+            'image_height': image_height_geo,
+            'image_width': image_width_geo,
+        }
+
+    def _pf_apply_lane_gating(self, pr: dict, geo: dict, vehicle_state_dict: dict, fv: dict, timestamp: float) -> dict:
+        """Apply lane position gating/validation. Returns gated dict."""
+        lane_coeffs = pr['lane_coeffs']
+        confidence = pr['confidence']
+        detection_method = pr['detection_method']
+        num_lanes_detected = pr['num_lanes_detected']
+        fit_points_left = pr['fit_points_left']
+        fit_points_right = pr['fit_points_right']
+        current_speed = geo['current_speed']
+        current_path_curvature = geo['current_path_curvature']
+        reference_lookahead = geo['reference_lookahead']
+        camera_8m_screen_y = geo['camera_8m_screen_y']
+        camera_lookahead_screen_y = geo['camera_lookahead_screen_y']
+        gt_lookahead_distance = geo['gt_lookahead_distance']
+        preview_curvature_abs = geo['preview_curvature_abs']
+        prev_timestamp = fv['prev_timestamp']
+
+        # Initialize diagnostic tracking variables (available for all code paths)
+        left_lane_line_x = None
+        right_lane_line_x = None
+        using_stale_data = False
+        stale_data_reason = None
+        left_jump_magnitude = None
+        right_jump_magnitude = None
+        jump_threshold_used = None
+        # NEW: Diagnostic fields for perception instability (initialized to None, set only when instability detected)
+        actual_detected_left_lane_x = None
+        actual_detected_right_lane_x = None
+        reject_reason = None
+        clamp_events = []
+        instability_width_change = None
+        instability_center_shift = None
+
         # DEBUG: Log lane_coeffs format for debugging
         if self.frame_count == 0:
             logger.debug(f"[Frame {self.frame_count}] [DEBUG] lane_coeffs type={type(lane_coeffs)}, len={len(lane_coeffs) if hasattr(lane_coeffs, '__len__') else 'N/A'}")
@@ -2535,7 +2178,7 @@ class AVStack:
             if hasattr(lane_coeffs, '__len__') and len(lane_coeffs) > 1:
                 logger.debug(f"[Frame {self.frame_count}] [DEBUG] lane_coeffs[1] type={type(lane_coeffs[1])}, value={lane_coeffs[1] if lane_coeffs[1] is not None else 'None'}")
             logger.debug(f"[Frame {self.frame_count}] [DEBUG] Condition check: len >= 2: {len(lane_coeffs) >= 2 if hasattr(lane_coeffs, '__len__') else False}, [0] not None: {lane_coeffs[0] is not None if hasattr(lane_coeffs, '__len__') and len(lane_coeffs) > 0 else False}, [1] not None: {lane_coeffs[1] is not None if hasattr(lane_coeffs, '__len__') and len(lane_coeffs) > 1 else False}")
-        
+
         if len(lane_coeffs) >= 2 and lane_coeffs[0] is not None and lane_coeffs[1] is not None:
             try:
                 # Get trajectory planner's conversion parameters
@@ -3632,7 +3275,60 @@ class AVStack:
                 logger.warning("[PERCEPTION] Perception failed (both lanes = 0.0) - setting to None to prevent movement")
                 left_lane_line_x = None
                 right_lane_line_x = None
-        
+
+        return {
+            'left_lane_line_x': left_lane_line_x,
+            'right_lane_line_x': right_lane_line_x,
+            'using_stale_data': using_stale_data,
+            'stale_data_reason': stale_data_reason,
+            'reject_reason': reject_reason,
+            'clamp_events': clamp_events,
+            'left_jump_magnitude': left_jump_magnitude,
+            'right_jump_magnitude': right_jump_magnitude,
+            'jump_threshold_used': jump_threshold_used,
+            'actual_detected_left_lane_x': actual_detected_left_lane_x,
+            'actual_detected_right_lane_x': actual_detected_right_lane_x,
+            'instability_width_change': instability_width_change,
+            'instability_center_shift': instability_center_shift,
+            # Pass through geometry fields needed by downstream
+            'current_speed': geo['current_speed'],
+            'current_path_curvature': geo['current_path_curvature'],
+            'preview_curvature_abs': geo['preview_curvature_abs'],
+            'preview_entry_source': geo['preview_entry_source'],
+            'distance_to_curve_start_m': geo['distance_to_curve_start_m'],
+            'curve_phase_diag': geo['curve_phase_diag'],
+            'curve_intent': geo['curve_intent'],
+            'curve_intent_raw': geo['curve_intent_raw'],
+            'curve_intent_state': geo['curve_intent_state'],
+            'curve_intent_term_preview': geo['curve_intent_term_preview'],
+            'curve_intent_term_path': geo['curve_intent_term_path'],
+            'curve_intent_term_rise': geo['curve_intent_term_rise'],
+            'curvature_rise_abs': geo['curvature_rise_abs'],
+            'base_reference_lookahead': geo['base_reference_lookahead'],
+            'reference_lookahead': geo['reference_lookahead'],
+            'reference_lookahead_diag': geo['reference_lookahead_diag'],
+            'dynamic_horizon_diag': geo['dynamic_horizon_diag'],
+            'speed_limit': geo['speed_limit'],
+            'speed_limit_preview': geo['speed_limit_preview'],
+            'speed_limit_preview_distance': geo['speed_limit_preview_distance'],
+            'speed_limit_preview_min_distance': geo['speed_limit_preview_min_distance'],
+            'speed_limit_preview_mid': geo['speed_limit_preview_mid'],
+            'speed_limit_preview_mid_distance': geo['speed_limit_preview_mid_distance'],
+            'speed_limit_preview_mid_min_distance': geo['speed_limit_preview_mid_min_distance'],
+            'speed_limit_preview_long': geo['speed_limit_preview_long'],
+            'speed_limit_preview_long_distance': geo['speed_limit_preview_long_distance'],
+            'speed_limit_preview_long_min_distance': geo['speed_limit_preview_long_min_distance'],
+        }
+
+    def _pf_score_perception_health(self, pr: dict, gated: dict, fv: dict) -> dict:
+        """Score perception health and update state. Returns health dict."""
+        lane_coeffs = pr['lane_coeffs']
+        num_lanes_detected = pr['num_lanes_detected']
+        using_stale_data = gated['using_stale_data']
+        stale_data_reason = gated['stale_data_reason']
+        clamp_events = gated['clamp_events']
+        camera_8m_screen_y = None  # re-read from self state (not available here directly)
+
         # Record perception output with diagnostic fields
         # NEW: Perception health monitoring
         # Track detection quality (good = 2+ lanes detected)
@@ -3765,12 +3461,14 @@ class AVStack:
         if self.consecutive_bad_detection_frames >= 10 and self.consecutive_bad_detection_frames % 10 == 0:
             logger.warning(f"[Frame {self.frame_count}] ⚠️  Perception health degraded: {self.consecutive_bad_detection_frames} consecutive bad frames, "
                          f"health score: {self.perception_health_score:.2f} ({self.perception_health_status})")
-        
-        # CRITICAL: Update last_timestamp at the END of processing (after all timestamp comparisons)
-        self.last_timestamp = timestamp
 
         # Fallback: if lane positions are missing but we have previous values, use stale data
         # This prevents left/right/width from collapsing to 0.0 when validation rejects positions.
+        left_lane_line_x = gated['left_lane_line_x']
+        right_lane_line_x = gated['right_lane_line_x']
+        using_stale_data = gated['using_stale_data']
+        stale_data_reason = gated['stale_data_reason']
+        reject_reason = gated['reject_reason']
         if (left_lane_line_x is None or right_lane_line_x is None) and \
            hasattr(self, 'previous_left_lane_x') and hasattr(self, 'previous_right_lane_x') and \
            self.previous_left_lane_x is not None and self.previous_right_lane_x is not None:
@@ -3784,7 +3482,53 @@ class AVStack:
                 f"[Frame {self.frame_count}] Using STALE perception data (reason: {stale_data_reason}) - "
                 "lane positions missing after validation"
             )
-        
+
+        return {
+            'bad_events': bad_events,
+            'managed_events': managed_events,
+            'is_truly_good': is_truly_good,
+            'recent_bad_events': recent_bad_events,
+            'timestamp_frozen': timestamp_frozen,
+            # Potentially updated lane positions (from fallback stale logic)
+            'left_lane_line_x': left_lane_line_x,
+            'right_lane_line_x': right_lane_line_x,
+            'using_stale_data': using_stale_data,
+            'stale_data_reason': stale_data_reason,
+            'reject_reason': reject_reason,
+            'clamp_events': clamp_events,
+        }
+
+    def _pf_build_perception_output(self, pr: dict, gated: dict, health: dict, timestamp: float) -> PerceptionOutput:
+        """Construct PerceptionOutput dataclass. Returns PerceptionOutput."""
+        lane_coeffs = pr['lane_coeffs']
+        confidence = pr['confidence']
+        detection_method = pr['detection_method']
+        num_lanes_detected = pr['num_lanes_detected']
+        fit_points_left = pr['fit_points_left']
+        fit_points_right = pr['fit_points_right']
+        segmentation_mask_png = pr['segmentation_mask_png']
+        # Use health's (potentially updated) lane positions
+        left_lane_line_x = health['left_lane_line_x']
+        right_lane_line_x = health['right_lane_line_x']
+        using_stale_data = health['using_stale_data']
+        stale_data_reason = health['stale_data_reason']
+        reject_reason = health['reject_reason']
+        clamp_events = health['clamp_events']
+        bad_events = health['bad_events']
+        recent_bad_events = health['recent_bad_events']
+        timestamp_frozen = health['timestamp_frozen']
+        # These only come from gated (not updated by health)
+        left_jump_magnitude = gated['left_jump_magnitude']
+        right_jump_magnitude = gated['right_jump_magnitude']
+        jump_threshold_used = gated['jump_threshold_used']
+        actual_detected_left_lane_x = gated['actual_detected_left_lane_x']
+        actual_detected_right_lane_x = gated['actual_detected_right_lane_x']
+        instability_width_change = gated['instability_width_change']
+        instability_center_shift = gated['instability_center_shift']
+
+        # CRITICAL: Update last_timestamp at the END of processing (after all timestamp comparisons)
+        self.last_timestamp = timestamp
+
         perception_output = PerceptionOutput(
             timestamp=timestamp,
             lane_line_coefficients=np.array([c for c in lane_coeffs if c is not None]) if any(c is not None for c in lane_coeffs) else None,
@@ -3818,7 +3562,20 @@ class AVStack:
             fit_points_right=fit_points_right,
             segmentation_mask_png=segmentation_mask_png
         )
-        
+        return perception_output
+
+    def _pf_run_speed_governor(self, pr: dict, gated: dict, vehicle_state_dict: dict, timestamp: float) -> dict:
+        """Run speed governor and compute target speed. Returns gov dict."""
+        lane_coeffs = pr['lane_coeffs']
+        confidence = pr['confidence']
+        current_speed = gated['current_speed']
+        reference_lookahead = gated['reference_lookahead']
+        using_stale_data = gated['using_stale_data']
+        # These come from geo (passed through gated passthrough fields)
+        curve_intent = gated.get('curve_intent', 0.0)
+        speed_limit = gated.get('speed_limit', 0.0)
+        dynamic_horizon_diag = gated.get('dynamic_horizon_diag', {})
+
         # --- Input preparation (stays in av_stack) ---
         path_curvature_raw = vehicle_state_dict.get('groundTruthPathCurvature')
         if path_curvature_raw is None:
@@ -3979,48 +3736,56 @@ class AVStack:
         vehicle_state_dict["dynamic_effective_horizon_m"] = gov_horizon_m
         vehicle_state_dict["dynamicEffectiveHorizonApplied"] = gov_horizon_applied
         vehicle_state_dict["dynamic_effective_horizon_applied"] = gov_horizon_applied
-        
+
+        return {
+            'gov_output': gov_output,
+            'adjusted_target_speed': adjusted_target_speed,
+            'target_speed_final': target_speed_final,
+            'planned_accel': planned_accel,
+            'curve_speed_limit': curve_speed_limit,
+            'stale_speed_hold_active': stale_speed_hold_active,
+            'path_curvature': path_curvature,
+            'speed_horizon_guardrail_diag': speed_horizon_guardrail_diag,
+            'curve_intent_speed_guardrail_active': curve_intent_speed_guardrail_active,
+            'curve_intent_speed_guardrail_cap_mps': curve_intent_speed_guardrail_cap_mps,
+            'curve_intent_speed_guardrail_confidence': curve_intent_speed_guardrail_confidence,
+        }
+
+    def _pf_plan_trajectory(self, pr: dict, gated: dict, gov: dict, vehicle_state_dict: dict, timestamp: float) -> dict:
+        """Plan trajectory and compute reference point. Returns traj dict."""
+        lane_coeffs = pr['lane_coeffs']
+        confidence = pr['confidence']
+        left_lane_line_x = gated['left_lane_line_x']
+        right_lane_line_x = gated['right_lane_line_x']
+        reference_lookahead = gated['reference_lookahead']
+        dynamic_horizon_diag = gated.get('dynamic_horizon_diag', {})
+        preview_curvature_abs = gated['preview_curvature_abs']
+        preview_entry_source = gated.get('preview_entry_source', 'map_free')
+        distance_to_curve_start_m = gated.get('distance_to_curve_start_m')
+        curve_phase_diag = gated['curve_phase_diag']
+        curve_intent = gated.get('curve_intent', 0.0)
+        curve_intent_raw = gated.get('curve_intent_raw', curve_intent)
+        curve_intent_state = gated.get('curve_intent_state', 'STRAIGHT')
+        curve_intent_term_preview = gated.get('curve_intent_term_preview', 0.0)
+        curve_intent_term_path = gated.get('curve_intent_term_path', 0.0)
+        curve_intent_term_rise = gated.get('curve_intent_term_rise', 0.0)
+        curvature_rise_abs = gated.get('curvature_rise_abs', 0.0)
+        reference_lookahead_diag = gated.get('reference_lookahead_diag', {})
+        base_reference_lookahead = gated.get('base_reference_lookahead', reference_lookahead)
+        adjusted_target_speed = gov['adjusted_target_speed']
+        curve_intent_speed_guardrail_active = gov['curve_intent_speed_guardrail_active']
+        curve_intent_speed_guardrail_cap_mps = gov['curve_intent_speed_guardrail_cap_mps']
+        curve_intent_speed_guardrail_confidence = gov['curve_intent_speed_guardrail_confidence']
+        current_speed = gated['current_speed']
+        current_path_curvature = gated['current_path_curvature']
+        planned_accel = gov['planned_accel']
+        using_stale_data = gated['using_stale_data']
+        dynamic_horizon_diag = gated.get('dynamic_horizon_diag', {})
+
         # 2. Trajectory Planning: Plan path
         trajectory = self.trajectory_planner.plan(lane_coeffs, vehicle_state_dict)
         oracle_points_xy = self._extract_oracle_points_xy(vehicle_state_dict)
         trajectory_source_active = self.trajectory_source if self.trajectory_source in ("planner", "oracle") else "planner"
-        
-        # Get current speed for safety checks (check BEFORE computing control)
-        max_speed = self.safety_config.get('max_speed', 10.0)
-        emergency_threshold = self.safety_config.get('emergency_brake_threshold', 2.0)
-        prevention_threshold = self.safety_config.get('speed_prevention_threshold', 0.85)
-        prevention_brake_threshold = self.safety_config.get('speed_prevention_brake_threshold', 0.9)
-        prevention_brake_amount = self.safety_config.get('speed_prevention_brake_amount', 0.2)
-        
-        # NEW: Safety bounds for lateral error (hard limits)
-        # Critical: 89.4% steering direction errors and 8.95m max error indicate need for safety bounds
-        max_lateral_error = self.safety_config.get('max_lateral_error', 2.0)  # Hard limit: 2.0m
-        recovery_lateral_error = self.safety_config.get('recovery_lateral_error', 1.0)  # Recovery trigger: 1.0m
-        emergency_stop_error = self.safety_config.get('emergency_stop_error', 3.0)  # Emergency stop: 3.0m
-        
-        # Initialize reference_point for logging
-        reference_point = None
-        
-        # Speed prevention: Check speed BEFORE computing control to prevent acceleration
-        # Emergency brake if speed is dangerously high
-        # FIXED: Still compute steering during braking for safety (steer while braking)
-        # CRITICAL FIX: Make emergency brake more gradual to prevent stop-start cycle
-        emergency_brake = False
-        brake_override = 0.0
-        if current_speed > max_speed * emergency_threshold:
-            # Emergency brake: Speed is dangerously high (> 1.5x max = 15 m/s)
-            # Use proportional braking instead of full brake to prevent sudden stops
-            speed_excess = current_speed - (max_speed * emergency_threshold)
-            # Proportional brake: 0.6 base + up to 0.4 more for extreme overspeed
-            brake_override = min(1.0, 0.6 + (speed_excess / 5.0))
-            emergency_brake = True
-            logger.warning(f"Emergency brake! Speed: {current_speed:.2f} m/s, Brake: {brake_override:.2f}")
-        elif current_speed > max_speed:
-            # Over speed limit - proportional braking (not full brake)
-            speed_excess = current_speed - max_speed
-            # Gradual braking: 0.4 base + proportional to excess (max 0.8 total)
-            brake_override = min(0.8, 0.4 + (speed_excess / 2.0))
-            logger.warning(f"Speed limit exceeded! Speed: {current_speed:.2f} m/s, Brake: {brake_override:.2f}")
         
         # Always compute steering (even during braking) for safety
         # Get reference point - use configurable lookahead
@@ -4156,7 +3921,56 @@ class AVStack:
                     reference_point['method'] = 'vehicle_frame_lookahead'
                 except (TypeError, ValueError):
                     pass
-        
+
+        return {
+            'trajectory': trajectory,
+            'oracle_points_xy': oracle_points_xy,
+            'trajectory_source_active': trajectory_source_active,
+            'reference_point': reference_point,
+            'reference_lookahead': reference_lookahead,
+        }
+
+    def _pf_compute_steering(self, traj: dict, gov: dict, gated: dict, vehicle_state_dict: dict, fv: dict, timestamp: float) -> dict:
+        """Compute steering/throttle/brake control command. Returns cmd dict."""
+        reference_point = traj['reference_point']
+        trajectory = traj['trajectory']
+        reference_lookahead = traj['reference_lookahead']
+        current_speed = gated['current_speed']
+        using_stale_data = gated['using_stale_data']
+        current_path_curvature = gated['current_path_curvature']
+        preview_curvature_abs = gated['preview_curvature_abs']
+        control_dt = fv['control_dt']
+        adjusted_target_speed = gov['adjusted_target_speed']
+        target_speed_final = gov['target_speed_final']
+        planned_accel = gov['planned_accel']
+        gov_output = gov['gov_output']
+        curve_intent_speed_guardrail_active = gov['curve_intent_speed_guardrail_active']
+        curve_intent_speed_guardrail_cap_mps = gov['curve_intent_speed_guardrail_cap_mps']
+        curve_intent_speed_guardrail_confidence = gov['curve_intent_speed_guardrail_confidence']
+        teleport_guard_active = fv['teleport_guard_active']
+        base_speed = float(self.original_target_speed)
+        target_speed_planned = gov_output.planned_speed
+        target_speed_ramp_active = False
+        target_speed_slew_active = False
+        # Safety config reads
+        max_speed = self.safety_config.get('max_speed', 10.0)
+        emergency_threshold = self.safety_config.get('emergency_brake_threshold', 2.0)
+        prevention_threshold = self.safety_config.get('speed_prevention_threshold', 0.85)
+        prevention_brake_threshold = self.safety_config.get('speed_prevention_brake_threshold', 0.9)
+        prevention_brake_amount = self.safety_config.get('speed_prevention_brake_amount', 0.2)
+        # Speed prevention: Check speed BEFORE computing control to prevent acceleration
+        emergency_brake = False
+        brake_override = 0.0
+        if current_speed > max_speed * emergency_threshold:
+            speed_excess = current_speed - (max_speed * emergency_threshold)
+            brake_override = min(1.0, 0.6 + (speed_excess / 5.0))
+            emergency_brake = True
+            logger.warning(f"Emergency brake! Speed: {current_speed:.2f} m/s, Brake: {brake_override:.2f}")
+        elif current_speed > max_speed:
+            speed_excess = current_speed - max_speed
+            brake_override = min(0.8, 0.4 + (speed_excess / 2.0))
+            logger.warning(f"Speed limit exceeded! Speed: {current_speed:.2f} m/s, Brake: {brake_override:.2f}")
+
         if reference_point is None:
             # No valid trajectory - stop vehicle safely
             # FIXED: Still compute steering from last known reference or use zero
@@ -4333,221 +4147,252 @@ class AVStack:
                     if brake_override == 0.0:
                         speed_excess = current_speed - max_speed
                         control_command['brake'] = max(control_command.get('brake', 0.0), min(0.8, 0.4 + (speed_excess / 2.0)))
-                
-                # NEW: Safety bounds check for lateral error
-                # Critical: Prevent divergence and enable recovery
-                # 89.4% steering direction errors and 8.95m max error indicate need for safety bounds
-                # FIXED: lateral_error is now always in control_command (from vehicle_controller.py)
-                lateral_error_abs = abs(control_command.get('lateral_error', 0.0))
-                
-                # CRITICAL: Emergency stop when car goes out of bounds
-                # When perception fails and we keep using stale data, the car can drive off the road
-                # Calculate threshold accounting for car width and allowed outside distance
-                # Formula: threshold = (lane_width/2 - car_width/2 + allowed_outside_lane)
-                # This means: car center can be this far from lane center before emergency stop
-                # For 7m lane, 1.85m car, 1.0m allowed: threshold = 3.5 - 0.925 + 1.0 = 3.575m
-                lane_width = (
-                    self.last_gt_lane_width
-                    if self.last_gt_lane_width is not None
-                    else self.safety_config.get('lane_width', 7.0)
-                )
-                car_width = self.safety_config.get('car_width', 1.85)
-                allowed_outside_lane = self.safety_config.get('allowed_outside_lane', 1.0)
-                out_of_bounds_threshold = (lane_width / 2.0) - (car_width / 2.0) + allowed_outside_lane
-                use_gt_lane_boundary_stop = bool(
-                    self.safety_config.get('emergency_stop_use_gt_lane_boundaries', False)
-                )
-                gt_lane_boundary_margin = float(
-                    self.safety_config.get('emergency_stop_gt_lane_boundary_margin', 0.05)
-                )
-                def _first_present(keys):
-                    for key in keys:
-                        if key in vehicle_state_dict and vehicle_state_dict.get(key) is not None:
-                            return vehicle_state_dict.get(key)
-                    return None
 
-                gt_left_lane_line_x = _first_present(
-                    [
-                        'groundTruthLeftLaneLineX',
-                        'ground_truth_left_lane_line_x',
-                        'groundTruthLeftLaneX',
-                        'ground_truth_left_lane_x',
-                    ]
-                )
-                gt_right_lane_line_x = _first_present(
-                    [
-                        'groundTruthRightLaneLineX',
-                        'ground_truth_right_lane_line_x',
-                        'groundTruthRightLaneX',
-                        'ground_truth_right_lane_x',
-                    ]
-                )
-                gt_boundary_offroad_left = False
-                gt_boundary_offroad_right = False
-                gt_boundary_offroad = False
-                if use_gt_lane_boundary_stop:
-                    try:
-                        if gt_left_lane_line_x is not None and gt_right_lane_line_x is not None:
-                            gt_left_lane_line_x = float(gt_left_lane_line_x)
-                            gt_right_lane_line_x = float(gt_right_lane_line_x)
-                            gt_bounds_available = (
-                                abs(gt_left_lane_line_x) > 1e-6
-                                or abs(gt_right_lane_line_x) > 1e-6
-                            )
-                            if gt_bounds_available:
-                                gt_boundary_offroad_left = (
-                                    gt_left_lane_line_x > gt_lane_boundary_margin
-                                )
-                                gt_boundary_offroad_right = (
-                                    gt_right_lane_line_x < -gt_lane_boundary_margin
-                                )
-                                gt_boundary_offroad = (
-                                    gt_boundary_offroad_left or gt_boundary_offroad_right
-                                )
-                    except (TypeError, ValueError):
-                        gt_boundary_offroad = False
-                
-                # Also check if perception is frozen (stopped updating)
-                # Distinguish between Unity pause (time gap) vs perception failure (no time gap)
-                perception_frozen = hasattr(self, 'perception_frozen_frames') and self.perception_frozen_frames > 5
-                perception_failed = False
-                
-                if perception_frozen:
-                    # Check if it's a Unity pause (time gap) or perception failure (no time gap)
-                    if hasattr(self, 'last_timestamp') and hasattr(self, 'last_timestamp_before_freeze'):
-                        if self.last_timestamp_before_freeze is not None:
-                            dt_since_freeze = timestamp - self.last_timestamp_before_freeze
-                            # If time gap is small (<0.1s per frame), Unity is still running but perception died
-                            # If time gap is large (>0.5s per frame), Unity paused
-                            avg_dt_per_frame = dt_since_freeze / self.perception_frozen_frames if self.perception_frozen_frames > 0 else 0
-                            if avg_dt_per_frame < 0.1:
-                                perception_failed = True  # Perception died (Unity still sending frames)
-                
-                # CRITICAL: Track if emergency stop was triggered to prevent overwriting
-                emergency_stop_triggered = False
-                emergency_stop_release_speed = float(
-                    self.safety_config.get('emergency_stop_release_speed', 0.2)
-                )
-                
-                # Check if emergency condition exists
-                is_emergency_condition = (lateral_error_abs > emergency_stop_error or 
-                                        lateral_error_abs > out_of_bounds_threshold or 
-                                        perception_failed or
-                                        gt_boundary_offroad)
+        control_command['brake_override'] = brake_override
+        return control_command
 
-                # Teleport/jump guard: skip emergency stop briefly after a position jump
-                if (
-                    not self.emergency_stop_latched
-                    and (teleport_guard_active or self.post_jump_cooldown_frames > 0)
-                    and is_emergency_condition
-                ):
-                    logger.warning(
-                        f"[Frame {self.frame_count}] [TELEPORT GUARD] Emergency stop suppressed during "
-                        f"post-jump cooldown (jump={self.last_teleport_distance:.2f}m, "
-                        f"dt={self.last_teleport_dt if self.last_teleport_dt is not None else 'N/A'}s, "
-                        f"cooldown_frames={self.post_jump_cooldown_frames})."
-                    )
-                    is_emergency_condition = False
+    def _pf_apply_safety(self, cmd: dict, traj: dict, gated: dict, gov: dict, vehicle_state_dict: dict, fv: dict, timestamp: float) -> dict:
+        """Apply emergency stop, lateral error bounds, out-of-bounds detection. Returns updated cmd dict."""
+        import copy as _copy
+        control_command = dict(cmd)  # copy so we can mutate
+        reference_point = traj['reference_point']
+        current_speed = gated['current_speed']
+        using_stale_data = gated['using_stale_data']
+        teleport_guard_active = fv['teleport_guard_active']
+        brake_override = cmd.get('brake_override', 0.0)
+        max_speed = self.safety_config.get('max_speed', 10.0)
+        max_lateral_error = self.safety_config.get('max_lateral_error', 2.0)
+        recovery_lateral_error = self.safety_config.get('recovery_lateral_error', 1.0)
+        emergency_stop_error = self.safety_config.get('emergency_stop_error', 3.0)
 
-                if self.emergency_stop_latched and current_speed <= emergency_stop_release_speed:
-                    logger.info(
-                        f"[Frame {self.frame_count}] Emergency stop latch released at "
-                        f"{current_speed:.3f} m/s (threshold {emergency_stop_release_speed:.3f} m/s)"
-                    )
-                    self.emergency_stop_latched = False
-                    self.emergency_stop_latched_since_wall_time = None
-                
-                # Reset logged flag if emergency condition cleared
-                if not is_emergency_condition and not self.emergency_stop_latched:
-                    if self.emergency_stop_logged:
-                        logger.info(f"Emergency stop condition cleared. Lateral error: {lateral_error_abs:.3f}m")
-                    self.emergency_stop_logged = False
-                    self.emergency_stop_type = None
+        if reference_point is None:
+            return control_command
 
-                if self.emergency_stop_latched and current_speed > emergency_stop_release_speed:
-                    control_command = {
-                        'steering': 0.0,
-                        'throttle': 0.0,
-                        'brake': 1.0,
-                        'lateral_error': control_command.get('lateral_error', 0.0),
-                        'emergency_stop': True,
-                    }
-                    emergency_stop_triggered = True
-                elif lateral_error_abs > emergency_stop_error:
-                    # Emergency stop: Error exceeds 3.0m - stop immediately
-                    if not self.emergency_stop_logged or self.emergency_stop_type != 'lateral_error_exceeded':
-                        logger.error(f"[Frame {self.frame_count}] EMERGENCY STOP: Lateral error {lateral_error_abs:.3f}m exceeds {emergency_stop_error}m threshold!")
-                        self.emergency_stop_logged = True
-                        self.emergency_stop_type = 'lateral_error_exceeded'
-                    self.emergency_stop_latched = True
-                    if self.emergency_stop_latched_since_wall_time is None:
-                        self.emergency_stop_latched_since_wall_time = time.time()
-                    control_command = {'steering': 0.0, 'throttle': 0.0, 'brake': 1.0, 'lateral_error': control_command.get('lateral_error', 0.0), 'emergency_stop': True}
-                    emergency_stop_triggered = True
-                    # Reset PID to prevent further divergence
-                    self.controller.lateral_controller.reset()
-                elif lateral_error_abs > out_of_bounds_threshold or perception_failed or gt_boundary_offroad:
-                    # Out of bounds or perception failed - emergency stop
-                    gt_offroad_type = None
-                    if gt_boundary_offroad_left and gt_boundary_offroad_right:
-                        gt_offroad_type = 'gt_both_offroad'
-                    elif gt_boundary_offroad_left:
-                        gt_offroad_type = 'gt_left_offroad'
-                    elif gt_boundary_offroad_right:
-                        gt_offroad_type = 'gt_right_offroad'
-                    emergency_type = (
-                        'perception_failed'
-                        if perception_failed
-                        else (gt_offroad_type if gt_offroad_type is not None else 'out_of_bounds')
-                    )
-                    if not self.emergency_stop_logged or self.emergency_stop_type != emergency_type:
-                        if perception_failed:
-                            logger.error(f"[Frame {self.frame_count}] EMERGENCY STOP: Perception FAILED! Frozen for {self.perception_frozen_frames} frames "
-                                       f"(Unity still running, perception processing stopped)")
-                            self.emergency_stop_type = 'perception_failed'
-                        elif gt_offroad_type is not None:
-                            logger.error(
-                                f"[Frame {self.frame_count}] EMERGENCY STOP: GT lane-boundary offroad "
-                                f"(left_x={gt_left_lane_line_x:.3f}m, right_x={gt_right_lane_line_x:.3f}m, "
-                                f"margin={gt_lane_boundary_margin:.3f}m, type={gt_offroad_type})"
-                            )
-                            self.emergency_stop_type = gt_offroad_type
-                        else:
-                            logger.error(f"[Frame {self.frame_count}] EMERGENCY STOP: Car out of bounds! Lateral error {lateral_error_abs:.3f}m exceeds {out_of_bounds_threshold}m threshold!")
-                            self.emergency_stop_type = 'out_of_bounds'
-                        logger.error(f"[Frame {self.frame_count}]   Stopping vehicle to prevent further off-road driving")
-                        self.emergency_stop_logged = True
-                    self.emergency_stop_latched = True
-                    if self.emergency_stop_latched_since_wall_time is None:
-                        self.emergency_stop_latched_since_wall_time = time.time()
-                    control_command = {'steering': 0.0, 'throttle': 0.0, 'brake': 1.0, 'lateral_error': control_command.get('lateral_error', 0.0), 'emergency_stop': True}
-                    emergency_stop_triggered = True
-                    # Reset PID to prevent further divergence
-                    self.controller.lateral_controller.reset()
-                
-                # CRITICAL: If emergency stop was triggered, skip all other control modifications
-                if not emergency_stop_triggered:
-                    if lateral_error_abs > max_lateral_error:
-                        # Hard limit: Error exceeds 2.0m - aggressive correction
-                        logger.warning(f"[Frame {self.frame_count}] HARD LIMIT: Lateral error {lateral_error_abs:.3f}m exceeds {max_lateral_error}m - aggressive correction")
-                        # Increase steering gain temporarily for recovery
-                        # CRITICAL FIX: Use config max_steering instead of hardcoded 0.5
-                        max_steering = self.controller.lateral_controller.max_steering
-                        steering_original = control_command.get('steering', 0.0)
-                        control_command['steering'] = np.clip(steering_original * 1.5, -max_steering, max_steering)  # 50% more aggressive
-                        # Reduce throttle to slow down during recovery
-                        control_command['throttle'] = control_command.get('throttle', 0.0) * 0.5
-                    elif lateral_error_abs > recovery_lateral_error:
-                        # Recovery mode: Error exceeds 1.0m - initiate recovery
-                        logger.info(f"RECOVERY MODE: Lateral error {lateral_error_abs:.3f}m exceeds {recovery_lateral_error}m - initiating recovery")
-                        # Slightly increase steering for recovery
-                        # CRITICAL FIX: Use config max_steering instead of hardcoded 0.5
-                        max_steering = self.controller.lateral_controller.max_steering
-                        steering_original = control_command.get('steering', 0.0)
-                        control_command['steering'] = np.clip(steering_original * 1.2, -max_steering, max_steering)  # 20% more aggressive
-                        # Reduce throttle slightly
-                        control_command['throttle'] = control_command.get('throttle', 0.0) * 0.8
+        # NEW: Safety bounds check for lateral error
+        # Critical: Prevent divergence and enable recovery
+        # 89.4% steering direction errors and 8.95m max error indicate need for safety bounds
+        # FIXED: lateral_error is now always in control_command (from vehicle_controller.py)
+        lateral_error_abs = abs(control_command.get('lateral_error', 0.0))
         
+        # CRITICAL: Emergency stop when car goes out of bounds
+        # When perception fails and we keep using stale data, the car can drive off the road
+        # Calculate threshold accounting for car width and allowed outside distance
+        # Formula: threshold = (lane_width/2 - car_width/2 + allowed_outside_lane)
+        # This means: car center can be this far from lane center before emergency stop
+        # For 7m lane, 1.85m car, 1.0m allowed: threshold = 3.5 - 0.925 + 1.0 = 3.575m
+        lane_width = (
+            self.last_gt_lane_width
+            if self.last_gt_lane_width is not None
+            else self.safety_config.get('lane_width', 7.0)
+        )
+        car_width = self.safety_config.get('car_width', 1.85)
+        allowed_outside_lane = self.safety_config.get('allowed_outside_lane', 1.0)
+        out_of_bounds_threshold = (lane_width / 2.0) - (car_width / 2.0) + allowed_outside_lane
+        use_gt_lane_boundary_stop = bool(
+            self.safety_config.get('emergency_stop_use_gt_lane_boundaries', False)
+        )
+        gt_lane_boundary_margin = float(
+            self.safety_config.get('emergency_stop_gt_lane_boundary_margin', 0.05)
+        )
+        def _first_present(keys):
+            for key in keys:
+                if key in vehicle_state_dict and vehicle_state_dict.get(key) is not None:
+                    return vehicle_state_dict.get(key)
+            return None
+
+        gt_left_lane_line_x = _first_present(
+            [
+                'groundTruthLeftLaneLineX',
+                'ground_truth_left_lane_line_x',
+                'groundTruthLeftLaneX',
+                'ground_truth_left_lane_x',
+            ]
+        )
+        gt_right_lane_line_x = _first_present(
+            [
+                'groundTruthRightLaneLineX',
+                'ground_truth_right_lane_line_x',
+                'groundTruthRightLaneX',
+                'ground_truth_right_lane_x',
+            ]
+        )
+        gt_boundary_offroad_left = False
+        gt_boundary_offroad_right = False
+        gt_boundary_offroad = False
+        if use_gt_lane_boundary_stop:
+            try:
+                if gt_left_lane_line_x is not None and gt_right_lane_line_x is not None:
+                    gt_left_lane_line_x = float(gt_left_lane_line_x)
+                    gt_right_lane_line_x = float(gt_right_lane_line_x)
+                    gt_bounds_available = (
+                        abs(gt_left_lane_line_x) > 1e-6
+                        or abs(gt_right_lane_line_x) > 1e-6
+                    )
+                    if gt_bounds_available:
+                        gt_boundary_offroad_left = (
+                            gt_left_lane_line_x > gt_lane_boundary_margin
+                        )
+                        gt_boundary_offroad_right = (
+                            gt_right_lane_line_x < -gt_lane_boundary_margin
+                        )
+                        gt_boundary_offroad = (
+                            gt_boundary_offroad_left or gt_boundary_offroad_right
+                        )
+            except (TypeError, ValueError):
+                gt_boundary_offroad = False
+        
+        # Also check if perception is frozen (stopped updating)
+        # Distinguish between Unity pause (time gap) vs perception failure (no time gap)
+        perception_frozen = hasattr(self, 'perception_frozen_frames') and self.perception_frozen_frames > 5
+        perception_failed = False
+        
+        if perception_frozen:
+            # Check if it's a Unity pause (time gap) or perception failure (no time gap)
+            if hasattr(self, 'last_timestamp') and hasattr(self, 'last_timestamp_before_freeze'):
+                if self.last_timestamp_before_freeze is not None:
+                    dt_since_freeze = timestamp - self.last_timestamp_before_freeze
+                    # If time gap is small (<0.1s per frame), Unity is still running but perception died
+                    # If time gap is large (>0.5s per frame), Unity paused
+                    avg_dt_per_frame = dt_since_freeze / self.perception_frozen_frames if self.perception_frozen_frames > 0 else 0
+                    if avg_dt_per_frame < 0.1:
+                        perception_failed = True  # Perception died (Unity still sending frames)
+        
+        # CRITICAL: Track if emergency stop was triggered to prevent overwriting
+        emergency_stop_triggered = False
+        emergency_stop_release_speed = float(
+            self.safety_config.get('emergency_stop_release_speed', 0.2)
+        )
+        
+        # Check if emergency condition exists
+        is_emergency_condition = (lateral_error_abs > emergency_stop_error or 
+                                lateral_error_abs > out_of_bounds_threshold or 
+                                perception_failed or
+                                gt_boundary_offroad)
+
+        # Teleport/jump guard: skip emergency stop briefly after a position jump
+        if (
+            not self.emergency_stop_latched
+            and (teleport_guard_active or self.post_jump_cooldown_frames > 0)
+            and is_emergency_condition
+        ):
+            logger.warning(
+                f"[Frame {self.frame_count}] [TELEPORT GUARD] Emergency stop suppressed during "
+                f"post-jump cooldown (jump={self.last_teleport_distance:.2f}m, "
+                f"dt={self.last_teleport_dt if self.last_teleport_dt is not None else 'N/A'}s, "
+                f"cooldown_frames={self.post_jump_cooldown_frames})."
+            )
+            is_emergency_condition = False
+
+        if self.emergency_stop_latched and current_speed <= emergency_stop_release_speed:
+            logger.info(
+                f"[Frame {self.frame_count}] Emergency stop latch released at "
+                f"{current_speed:.3f} m/s (threshold {emergency_stop_release_speed:.3f} m/s)"
+            )
+            self.emergency_stop_latched = False
+            self.emergency_stop_latched_since_wall_time = None
+        
+        # Reset logged flag if emergency condition cleared
+        if not is_emergency_condition and not self.emergency_stop_latched:
+            if self.emergency_stop_logged:
+                logger.info(f"Emergency stop condition cleared. Lateral error: {lateral_error_abs:.3f}m")
+            self.emergency_stop_logged = False
+            self.emergency_stop_type = None
+
+        if self.emergency_stop_latched and current_speed > emergency_stop_release_speed:
+            control_command = {
+                'steering': 0.0,
+                'throttle': 0.0,
+                'brake': 1.0,
+                'lateral_error': control_command.get('lateral_error', 0.0),
+                'emergency_stop': True,
+            }
+            emergency_stop_triggered = True
+        elif lateral_error_abs > emergency_stop_error:
+            # Emergency stop: Error exceeds 3.0m - stop immediately
+            if not self.emergency_stop_logged or self.emergency_stop_type != 'lateral_error_exceeded':
+                logger.error(f"[Frame {self.frame_count}] EMERGENCY STOP: Lateral error {lateral_error_abs:.3f}m exceeds {emergency_stop_error}m threshold!")
+                self.emergency_stop_logged = True
+                self.emergency_stop_type = 'lateral_error_exceeded'
+            self.emergency_stop_latched = True
+            if self.emergency_stop_latched_since_wall_time is None:
+                self.emergency_stop_latched_since_wall_time = time.time()
+            control_command = {'steering': 0.0, 'throttle': 0.0, 'brake': 1.0, 'lateral_error': control_command.get('lateral_error', 0.0), 'emergency_stop': True}
+            emergency_stop_triggered = True
+            # Reset PID to prevent further divergence
+            self.controller.lateral_controller.reset()
+        elif lateral_error_abs > out_of_bounds_threshold or perception_failed or gt_boundary_offroad:
+            # Out of bounds or perception failed - emergency stop
+            gt_offroad_type = None
+            if gt_boundary_offroad_left and gt_boundary_offroad_right:
+                gt_offroad_type = 'gt_both_offroad'
+            elif gt_boundary_offroad_left:
+                gt_offroad_type = 'gt_left_offroad'
+            elif gt_boundary_offroad_right:
+                gt_offroad_type = 'gt_right_offroad'
+            emergency_type = (
+                'perception_failed'
+                if perception_failed
+                else (gt_offroad_type if gt_offroad_type is not None else 'out_of_bounds')
+            )
+            if not self.emergency_stop_logged or self.emergency_stop_type != emergency_type:
+                if perception_failed:
+                    logger.error(f"[Frame {self.frame_count}] EMERGENCY STOP: Perception FAILED! Frozen for {self.perception_frozen_frames} frames "
+                               f"(Unity still running, perception processing stopped)")
+                    self.emergency_stop_type = 'perception_failed'
+                elif gt_offroad_type is not None:
+                    logger.error(
+                        f"[Frame {self.frame_count}] EMERGENCY STOP: GT lane-boundary offroad "
+                        f"(left_x={gt_left_lane_line_x:.3f}m, right_x={gt_right_lane_line_x:.3f}m, "
+                        f"margin={gt_lane_boundary_margin:.3f}m, type={gt_offroad_type})"
+                    )
+                    self.emergency_stop_type = gt_offroad_type
+                else:
+                    logger.error(f"[Frame {self.frame_count}] EMERGENCY STOP: Car out of bounds! Lateral error {lateral_error_abs:.3f}m exceeds {out_of_bounds_threshold}m threshold!")
+                    self.emergency_stop_type = 'out_of_bounds'
+                logger.error(f"[Frame {self.frame_count}]   Stopping vehicle to prevent further off-road driving")
+                self.emergency_stop_logged = True
+            self.emergency_stop_latched = True
+            if self.emergency_stop_latched_since_wall_time is None:
+                self.emergency_stop_latched_since_wall_time = time.time()
+            control_command = {'steering': 0.0, 'throttle': 0.0, 'brake': 1.0, 'lateral_error': control_command.get('lateral_error', 0.0), 'emergency_stop': True}
+            emergency_stop_triggered = True
+            # Reset PID to prevent further divergence
+            self.controller.lateral_controller.reset()
+        
+        # CRITICAL: If emergency stop was triggered, skip all other control modifications
+        if not emergency_stop_triggered:
+            if lateral_error_abs > max_lateral_error:
+                # Hard limit: Error exceeds 2.0m - aggressive correction
+                logger.warning(f"[Frame {self.frame_count}] HARD LIMIT: Lateral error {lateral_error_abs:.3f}m exceeds {max_lateral_error}m - aggressive correction")
+                # Increase steering gain temporarily for recovery
+                # CRITICAL FIX: Use config max_steering instead of hardcoded 0.5
+                max_steering = self.controller.lateral_controller.max_steering
+                steering_original = control_command.get('steering', 0.0)
+                control_command['steering'] = np.clip(steering_original * 1.5, -max_steering, max_steering)  # 50% more aggressive
+                # Reduce throttle to slow down during recovery
+                control_command['throttle'] = control_command.get('throttle', 0.0) * 0.5
+            elif lateral_error_abs > recovery_lateral_error:
+                # Recovery mode: Error exceeds 1.0m - initiate recovery
+                logger.info(f"RECOVERY MODE: Lateral error {lateral_error_abs:.3f}m exceeds {recovery_lateral_error}m - initiating recovery")
+                # Slightly increase steering for recovery
+                # CRITICAL FIX: Use config max_steering instead of hardcoded 0.5
+                max_steering = self.controller.lateral_controller.max_steering
+                steering_original = control_command.get('steering', 0.0)
+                control_command['steering'] = np.clip(steering_original * 1.2, -max_steering, max_steering)  # 20% more aggressive
+                # Reduce throttle slightly
+                control_command['throttle'] = control_command.get('throttle', 0.0) * 0.8
+
+        return control_command
+
+    def _pf_send_control(self, cmd: dict, traj: dict, gated: dict) -> None:
+        """Send control command to Unity and trajectory visualization."""
+        control_command = cmd
+        reference_point = traj['reference_point']
+        trajectory = traj['trajectory']
+        reference_lookahead = traj['reference_lookahead']
+        left_lane_line_x = gated['left_lane_line_x']
+        right_lane_line_x = gated['right_lane_line_x']
+
         # 4. Send control command to Unity
         # CRITICAL: Don't send control if ground truth follower is active
         # Ground truth follower will send its own control command
@@ -4612,7 +4457,17 @@ class AVStack:
                 perception_lookahead_m=reference_lookahead,
                 perception_valid=perception_valid,
             )
-        
+
+    def _pf_record(self, image, timestamp, vehicle_state_dict, perc_out, traj, cmd, gated, gov, fv, camera_frame_id, camera_frame_meta, topdown_frame_data) -> None:
+        """Record frame data if recorder is enabled."""
+        control_command = cmd
+        trajectory = traj['trajectory']
+        reference_point = traj['reference_point']
+        trajectory_source_active = traj['trajectory_source_active']
+        speed_limit = gated.get('speed_limit', 0.0)
+        speed_horizon_guardrail_diag = gov.get('speed_horizon_guardrail_diag', {})
+        perception_output = perc_out
+
         # 5. Record data if enabled
         if self.recorder:
             topdown_frame_meta: dict | None = None
@@ -4645,6 +4500,19 @@ class AVStack:
                 topdown_frame_meta=topdown_frame_meta,
                 speed_horizon_guardrail_diag=speed_horizon_guardrail_diag,
             )
+
+    def _pf_update_frame_state(self, fv: dict, gated: dict, pr: dict, cmd: dict, timestamp: float,
+                               vehicle_state_dict: Optional[dict] = None, traj: Optional[dict] = None) -> None:
+        """Update per-frame state: teleport countdown, vehicle position, periodic logging."""
+        current_position = fv['current_position']
+        process_start = fv['process_start']
+        lane_coeffs = pr['lane_coeffs']
+        confidence = pr['confidence']
+        perception_duration = pr['perception_duration']
+        control_command = cmd
+        reference_point = traj['reference_point'] if traj is not None else None
+        if vehicle_state_dict is None:
+            vehicle_state_dict = {}
 
         # Update teleport guard countdown and vehicle position tracking
         if self.teleport_guard_frames_remaining > 0:

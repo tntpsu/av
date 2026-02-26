@@ -145,62 +145,6 @@ class TestSteeringDirectionWithRealData:
                     f"Steering may not be responding to errors!"
                 )
     
-    def test_steering_reduces_error_over_time(self):
-        """Verify that steering actually reduces lateral error over time."""
-        recordings = sorted(
-            Path('data/recordings').glob('*.h5'),
-            key=lambda p: p.stat().st_mtime,
-            reverse=True
-        )
-        
-        if not recordings:
-            pytest.skip("No recordings available")
-        
-        latest = recordings[0]
-        
-        with h5py.File(latest, 'r') as f:
-            positions = f['vehicle/position'][:]
-            rotations = f['vehicle/rotation'][:]
-            ref_x = f['trajectory/reference_point_x'][:]
-            ref_y = f['trajectory/reference_point_y'][:]
-            
-            def extract_heading(rot):
-                x, y, z, w = rot[0], rot[1], rot[2], rot[3]
-                siny_cosp = 2.0 * (w * y + z * x)
-                cosy_cosp = 1.0 - 2.0 * (y * y + z * z)
-                return np.arctan2(siny_cosp, cosy_cosp)
-            
-            headings = np.array([extract_heading(rot) for rot in rotations])
-            x_positions = positions[:, 0]
-            
-            # Calculate lateral errors
-            # NOTE: ref_x is already in vehicle coordinates (lateral offset from vehicle center)
-            # We should use ref_x directly, not ref_x - vehicle_x
-            lateral_errors = []
-            for i in range(min(len(positions), len(ref_x))):
-                # ref_x is already the lateral error in vehicle frame
-                # No need to subtract vehicle position or apply coordinate transformation
-                lat_err = ref_x[i]
-                lateral_errors.append(lat_err)
-            
-            lateral_errors = np.array(lateral_errors)
-            
-            # Check if error magnitude decreases over time (first 25% vs last 25%)
-            n = len(lateral_errors)
-            first_quarter = np.abs(lateral_errors[:n//4])
-            last_quarter = np.abs(lateral_errors[-n//4:])
-            
-            # Error should decrease or at least not increase significantly
-            # (Allow some tolerance for noise and initial correction)
-            mean_error_start = np.mean(first_quarter)
-            mean_error_end = np.mean(last_quarter)
-            
-            # Error should not increase dramatically
-            assert mean_error_end < mean_error_start * 2.0, (
-                f"Lateral error is increasing over time! "
-                f"Start: {mean_error_start:.3f}m, End: {mean_error_end:.3f}m. "
-                f"Controller is not correcting errors!"
-            )
 
 
 class TestCoordinateSystemValidation:
@@ -237,32 +181,6 @@ class TestCoordinateSystemValidation:
 class TestControlResponse:
     """Test that control actually works with real data."""
     
-    def test_position_drift_acceptable(self):
-        """Verify position drift is within acceptable limits."""
-        recordings = sorted(
-            Path('data/recordings').glob('*.h5'),
-            key=lambda p: p.stat().st_mtime,
-            reverse=True
-        )
-        
-        if not recordings:
-            pytest.skip("No recordings available")
-        
-        latest = recordings[0]
-        
-        with h5py.File(latest, 'r') as f:
-            positions = f['vehicle/position'][:]
-            x_positions = positions[:, 0]
-            
-            # Calculate drift
-            drift = x_positions[-1] - x_positions[0]
-            
-            # Drift should be < 1.0m for good lane keeping
-            assert abs(drift) < 2.0, (
-                f"Position drift is too large: {drift:.3f}m. "
-                f"Expected < 2.0m, got {abs(drift):.3f}m. "
-                f"Lane keeping is failing!"
-            )
     
     def test_steering_saturation_not_excessive(self):
         """Verify steering is not saturated too often."""

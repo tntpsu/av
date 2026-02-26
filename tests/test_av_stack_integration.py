@@ -204,6 +204,7 @@ class TestReferencePointStability:
                     point.y = 8.0
                     point.heading = 0.0
                     point.velocity = 8.0
+                    point.curvature = 0.0
                     self.points.append(point)
         
         trajectory = MockTrajectory()

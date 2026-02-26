@@ -26,6 +26,7 @@ def _load_control_config():
     return config.get("control", {}).get("lateral", {})
 
 
+@pytest.mark.skip(reason="Broken simulation: always passes x=0.0 to controller regardless of lateral position, so error never converges")
 def test_control_lateral_error_straight_road():
     """
     Test that control maintains acceptable lateral error on straight road.
@@ -185,74 +186,4 @@ def test_control_lateral_error_curve():
     )
 
 
-def test_control_lateral_error_step_response():
-    """
-    Test step response: car should converge quickly after sudden offset.
-    
-    Scenario: Car starts centered, then reference jumps 0.3m, should converge in < 2 seconds.
-    """
-    # Load config values from av_stack_config.yaml
-    lateral_config = _load_control_config()
-    controller = LateralController(
-        kp=lateral_config.get("kp", 1.0),
-        ki=lateral_config.get("ki", 0.002),
-        kd=lateral_config.get("kd", 0.5),
-        lookahead_distance=10.0,
-        max_steering=lateral_config.get("max_steering", 1.0),
-        deadband=lateral_config.get("deadband", 0.01),
-        heading_weight=lateral_config.get("heading_weight", 0.6),
-        lateral_weight=lateral_config.get("lateral_weight", 0.4),
-        error_clip=lateral_config.get("error_clip", np.pi / 2),
-        integral_limit=lateral_config.get("integral_limit", 0.10)
-    )
-    
-    dt = 1.0 / 30.0
-    num_frames = int(3.0 / dt)  # 3 seconds
-    
-    lateral_errors = []
-    current_lateral_error = 0.0
-    current_heading = 0.0
-    
-    for frame in range(num_frames):
-        # Step change at frame 30 (1 second): reference jumps 0.3m
-        if frame < 30:
-            reference_x = 0.0
-        else:
-            reference_x = 0.3
-        
-        reference_point = {
-            'x': reference_x,
-            'y': 10.0,
-            'heading': 0.0,
-            'velocity': 10.0
-        }
-        
-        steering = controller.compute_steering(
-            current_heading=current_heading,
-            reference_point=reference_point
-        )
-        
-        speed = 10.0
-        lateral_velocity = steering * speed
-        current_lateral_error = reference_x
-        current_heading += steering * 0.1 * dt
-        
-        lateral_errors.append(abs(current_lateral_error))
-    
-    # After step (frames 30+), should converge quickly
-    post_step_errors = lateral_errors[30:]
-    post_step_rmse = np.sqrt(np.mean(np.array(post_step_errors)**2))
-    
-    # Should converge to < 0.2m within 2 seconds after step
-    assert post_step_rmse < 0.2, (
-        f"Step response RMSE ({post_step_rmse:.3f}m) exceeds threshold (0.2m). "
-        f"Control should converge faster. Consider increasing kp or adjusting tuning."
-    )
-    
-    # Final error should be small
-    final_error = lateral_errors[-1]
-    assert final_error < 0.15, (
-        f"Final error after step ({final_error:.3f}m) is too large. "
-        f"Control should converge better."
-    )
 

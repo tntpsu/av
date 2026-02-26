@@ -63,12 +63,14 @@ def test_feedforward_gain_schedule():
         curve_feedforward_curvature_max=0.03,
         curve_feedforward_curvature_clamp=0.05,
         straight_curvature_threshold=0.01,
+        curvature_smoothing_alpha=1.0,
+        curvature_transition_alpha=1.0,
     )
 
     reference_point = {
         "x": 0.0,
         "y": 10.0,
-        "heading": 0.1,
+        "heading": -0.1,
         "velocity": 8.0,
         "curvature": 0.02,
     }

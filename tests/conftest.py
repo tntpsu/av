@@ -11,7 +11,10 @@ To import COMFORT_GATES or helpers from a test file:
 """
 from __future__ import annotations
 
+import hashlib
 import json
+import subprocess
+from datetime import datetime, timezone
 from pathlib import Path
 
 import h5py
@@ -226,3 +229,147 @@ def golden_highway_65():
             "see tests/fixtures/golden_recordings.json"
         )
     return path
+
+
+# ── Auto gate-bundle writer ───────────────────────────────────────────────────
+# When the full comfort-gate suite passes (including at least one golden
+# recording test), a gate bundle is written automatically to
+# data/reports/gates/<timestamp>_pytest_comfort_gates/.
+# This populates the Gates tab in PhilViz with zero manual steps.
+
+_GATES_REPORTS_DIR = REPO_ROOT / "data" / "reports" / "gates"
+_CONFIG_PATH       = REPO_ROOT / "config" / "av_stack_config.yaml"
+_BUNDLE_SCHEMA_V   = "v1"
+
+# Accumulates test outcomes across the session; filtered to comfort-gate file only.
+_comfort_gate_results: dict[str, str] = {}
+
+
+def pytest_runtest_logreport(report) -> None:  # noqa: D103
+    """Collect per-test call outcomes for the gate bundle writer."""
+    if report.when == "call" and "test_comfort_gate_replay" in report.nodeid:
+        _comfort_gate_results[report.nodeid] = report.outcome  # "passed"|"failed"|"skipped"
+
+
+def pytest_sessionfinish(session, exitstatus) -> None:  # noqa: D103
+    """Write a gate bundle after a fully green comfort-gate run with golden recordings."""
+    if int(exitstatus) != 0 or not _comfort_gate_results:
+        return
+    # Only write when at least one golden recording test actually ran (not just synthetics).
+    golden_ran = any(
+        "Golden" in nid and outcome in ("passed", "failed")
+        for nid, outcome in _comfort_gate_results.items()
+    )
+    if not golden_ran:
+        return
+    try:
+        _write_comfort_gate_bundle(_comfort_gate_results)
+    except Exception:
+        pass  # Never let bundle writes block or corrupt pytest output
+
+
+def _git_sha() -> str:
+    try:
+        return subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=REPO_ROOT, text=True
+        ).strip()
+    except Exception:
+        return "unknown"
+
+
+def _sha256_file(p: Path) -> str:
+    return hashlib.sha256(p.read_bytes()).hexdigest() if p.exists() else "missing"
+
+
+def _write_comfort_gate_bundle(results: dict[str, str]) -> None:
+    """
+    Build and write a PhilViz-compatible gate bundle from pytest comfort-gate results.
+
+    Bundle layout:
+        data/reports/gates/<ts>_pytest_comfort_gates/
+            gate_report.json   — pass/fail verdict + per-test checks
+            decision.json      — promote/reject decision with git/config provenance
+    """
+    manifest = load_golden_manifest()
+    tracks   = manifest.get("tracks", {})
+    # recording_ids: relative paths as stored in the manifest (e.g. "data/recordings/foo.h5")
+    recording_ids = [v for v in tracks.values() if v]
+
+    # Build checks dict: test_method_name (without "test_" prefix) → bool|None
+    checks: dict[str, bool | None] = {}
+    for nid, outcome in sorted(results.items()):
+        # nodeid format: "tests/test_comfort_gate_replay.py::ClassName::test_name[param]"
+        parts = nid.split("::")
+        raw_name = parts[-1]  # e.g. "test_s_loop_all_comfort_gates_pass" or "[s_loop]" variant
+        check_key = raw_name.removeprefix("test_")
+        if outcome == "passed":
+            checks[check_key] = True
+        elif outcome == "failed":
+            checks[check_key] = False
+        else:
+            checks[check_key] = None  # skipped — shown in grey in the Gates tab
+
+    # pass_fail: True only if no check explicitly failed AND at least one golden check passed
+    any_failed   = any(v is False for v in checks.values())
+    golden_keys  = {"s_loop_all_comfort_gates_pass", "highway_65_all_comfort_gates_pass"}
+    golden_pass  = any(checks.get(k) is True for k in golden_keys)
+    pass_fail    = (not any_failed) and golden_pass
+
+    ts         = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    label      = "pytest_comfort_gates"
+    bundle_dir = _GATES_REPORTS_DIR / f"{ts}_{label}"
+    bundle_dir.mkdir(parents=True, exist_ok=True)
+
+    git_sha_val  = _git_sha()
+    config_hash  = _sha256_file(_CONFIG_PATH)
+    matrix_hash  = hashlib.sha256(
+        json.dumps(checks, sort_keys=True).encode()
+    ).hexdigest()
+    generated_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    gate_report = {
+        "schema_version": _BUNDLE_SCHEMA_V,
+        "generated_at_utc": generated_at,
+        "label": label,
+        "source": "pytest",
+        "git_sha": git_sha_val,
+        "config_hash": config_hash,
+        "matrix_hash": matrix_hash,
+        "recording_ids": recording_ids,
+        "pass_fail": pass_fail,
+        "regression_budget": {
+            "config": {
+                "source": "pytest_comfort_gate_replay",
+                "milestone": manifest.get("milestone", "unknown"),
+            },
+            "checks": checks,
+            "track_metrics": None,
+            "baseline_track_metrics": None,
+        },
+        "run_counts": {track_id: 1 for track_id in tracks},
+    }
+
+    decision     = "promote" if pass_fail else "reject"
+    next_actions = (
+        ["All comfort-gate tests passed — safe to promote this config."]
+        if pass_fail
+        else ["Fix failing comfort-gate tests before promoting."]
+    )
+    decision_payload = {
+        "schema_version": _BUNDLE_SCHEMA_V,
+        "generated_at_utc": generated_at,
+        "git_sha": git_sha_val,
+        "config_hash": config_hash,
+        "matrix_hash": matrix_hash,
+        "recording_ids": recording_ids,
+        "pass_fail": pass_fail,
+        "regression_budget": gate_report["regression_budget"],
+        "decision": decision,
+        "rationale": checks,
+        "next_actions": next_actions,
+        "triage_packet_count": 0,
+        "counterfactual": None,
+    }
+
+    (bundle_dir / "gate_report.json").write_text(json.dumps(gate_report, indent=2))
+    (bundle_dir / "decision.json").write_text(json.dumps(decision_payload, indent=2))

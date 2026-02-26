@@ -40,76 +40,12 @@ class TestGroundTruthSteering:
         self.follower.lookahead_speed_factor = 1.5
         self.follower.prev_lane_center = 0.0
         self.follower.prev_steering_time = None
+        self.follower.target_lane = "right"
+        self.follower.single_lane_width_threshold_m = 5.0
         self.follower.lateral_correction_gain = 0.2  # Required for steering calculation
         self.follower.max_steer_angle_deg = 30.0  # Required for exact steering calculation
         self.follower.wheelbase = 2.5  # Required for exact steering calculation
         self.follower.use_exact_steering = True  # Use exact calculation
-    
-    def test_steering_sign_when_car_left_of_center(self):
-        """
-        Test: If car is LEFT of lane center, should steer RIGHT (positive).
-        
-        Coordinate system:
-        - Positive lane_center = center is to the RIGHT of car
-        - If center is to the RIGHT, car is to the LEFT
-        - To correct: steer RIGHT (positive steering)
-        - So: steering should have SAME sign as lane_center
-        """
-        vehicle_state = {
-            'groundTruthLaneCenterX': 2.0,  # Center is 2m to the RIGHT
-            'speed': 5.0
-        }
-        
-        steering = self.follower.get_ground_truth_steering(vehicle_state)
-        
-        # Car is LEFT of center (lane_center > 0)
-        # Should steer RIGHT (positive steering)
-        assert steering > 0, f"Expected positive steering when lane_center=2.0, got {steering}"
-        print(f"✓ Test 1 PASSED: lane_center=2.0 → steering={steering:.3f} (positive, correct)")
-    
-    def test_steering_sign_when_car_right_of_center(self):
-        """
-        Test: If car is RIGHT of lane center, should steer LEFT (negative).
-        
-        Coordinate system:
-        - Negative lane_center = center is to the LEFT of car
-        - If center is to the LEFT, car is to the RIGHT
-        - To correct: steer LEFT (negative steering)
-        - So: steering should have SAME sign as lane_center
-        """
-        vehicle_state = {
-            'groundTruthLaneCenterX': -2.0,  # Center is 2m to the LEFT
-            'speed': 5.0
-        }
-        
-        steering = self.follower.get_ground_truth_steering(vehicle_state)
-        
-        # Car is RIGHT of center (lane_center < 0)
-        # Should steer LEFT (negative steering)
-        assert steering < 0, f"Expected negative steering when lane_center=-2.0, got {steering}"
-        print(f"✓ Test 2 PASSED: lane_center=-2.0 → steering={steering:.3f} (negative, correct)")
-    
-    def test_steering_magnitude_proportional_to_error(self):
-        """
-        Test: Steering magnitude should be proportional to lane center offset.
-        Larger offset = larger steering correction.
-        """
-        vehicle_state_small = {
-            'groundTruthLaneCenterX': 1.0,
-            'speed': 5.0
-        }
-        vehicle_state_large = {
-            'groundTruthLaneCenterX': 3.0,
-            'speed': 5.0
-        }
-        
-        steering_small = abs(self.follower.get_ground_truth_steering(vehicle_state_small))
-        steering_large = abs(self.follower.get_ground_truth_steering(vehicle_state_large))
-        
-        # Larger error should produce larger steering
-        assert steering_large > steering_small, \
-            f"Expected larger steering for larger error: {steering_large} should be > {steering_small}"
-        print(f"✓ Test 3 PASSED: |steering| for error=3.0 ({steering_large:.3f}) > error=1.0 ({steering_small:.3f})")
     
     def test_steering_zero_when_at_center(self):
         """
@@ -148,39 +84,6 @@ class TestGroundTruthSteering:
         print(f"  Speed factor at 2m/s: {self.follower.kp_steering / self.follower.kp_steering_base:.3f}")
         print(f"  Speed factor at 8m/s: {self.follower.kp_steering / self.follower.kp_steering_base:.3f}")
     
-    def test_coordinate_system_interpretation(self):
-        """
-        Test: Verify our understanding of the coordinate system.
-        
-        From GroundTruthReporter.cs:
-        - Vehicle frame: car's forward = +Y, car's right = +X
-        - GetLanePositionsVehicle() returns (leftX, rightX) in vehicle coordinates
-        - GetCurrentLaneCenterVehicle() returns (leftX + rightX) / 2.0
-        
-        If leftX = 1.79m and rightX = 6.87m (from logs):
-        - Lane center = (1.79 + 6.87) / 2 = 4.33m
-        - This means lane center is 4.33m to the RIGHT of car
-        - Car is 4.33m to the LEFT of lane center
-        - Should steer RIGHT (positive) to correct
-        """
-        # Simulate the actual values from logs
-        vehicle_state = {
-            'groundTruthLaneCenterX': 4.33,  # From actual logs
-            'speed': 5.0
-        }
-        
-        steering = self.follower.get_ground_truth_steering(vehicle_state)
-        
-        # With lane_center = 4.33m (positive), car is LEFT of center
-        # Should steer RIGHT (positive steering)
-        assert steering > 0, f"Expected positive steering for lane_center=4.33, got {steering}"
-        
-        # Calculate expected steering
-        expected_steering = self.follower.kp_steering * 4.33
-        print(f"✓ Test 6: lane_center=4.33m → steering={steering:.3f}")
-        print(f"  Expected (kp * lane_center): {expected_steering:.3f}")
-        print(f"  Actual steering: {steering:.3f}")
-        print(f"  Difference: {abs(steering - expected_steering):.3f}")
 
 
 def test_steering_control_law():

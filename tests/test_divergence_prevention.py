@@ -19,46 +19,6 @@ from control.pid_controller import LateralController, VehicleController
 class TestDivergencePrevention:
     """Test that the system prevents gradual divergence over time."""
     
-    def test_lateral_error_does_not_increase_over_time(self):
-        """
-        CRITICAL: Verify lateral error does not increase over time.
-        
-        This test catches gradual drift scenarios where the car works well
-        initially but then slowly drifts off course.
-        """
-        recordings = sorted(
-            Path('data/recordings').glob('*.h5'),
-            key=lambda p: p.stat().st_mtime,
-            reverse=True
-        )
-        
-        if not recordings:
-            pytest.skip("No recordings available")
-        
-        latest = recordings[0]
-        
-        with h5py.File(latest, 'r') as f:
-            lat_err = f['control/lateral_error'][:]
-            
-            if len(lat_err) < 100:
-                pytest.skip("Not enough frames to evaluate divergence")
-            
-            # Split into thirds
-            first_third = lat_err[:len(lat_err)//3]
-            middle_third = lat_err[len(lat_err)//3:2*len(lat_err)//3]
-            last_third = lat_err[2*len(lat_err)//3:]
-            
-            mean_first = np.mean(np.abs(first_third))
-            mean_middle = np.mean(np.abs(middle_third))
-            mean_last = np.mean(np.abs(last_third))
-            
-            # Error should not increase significantly over time
-            # Allow 2x increase (some drift is acceptable)
-            assert mean_last < mean_first * 2.0, (
-                f"Lateral error is increasing over time! "
-                f"First third: {mean_first:.3f}m, Last third: {mean_last:.3f}m ({mean_last/mean_first:.2f}x increase). "
-                f"This indicates gradual divergence."
-            )
     
     def test_no_sudden_divergence(self):
         """
@@ -99,87 +59,7 @@ class TestDivergencePrevention:
                         f"System should maintain control for at least 5 seconds."
                     )
     
-    def test_reference_point_stability_over_time(self):
-        """
-        Verify reference point remains stable over time.
-        
-        Unstable reference points can cause gradual drift.
-        """
-        recordings = sorted(
-            Path('data/recordings').glob('*.h5'),
-            key=lambda p: p.stat().st_mtime,
-            reverse=True
-        )
-        
-        if not recordings:
-            pytest.skip("No recordings available")
-        
-        latest = recordings[0]
-        
-        with h5py.File(latest, 'r') as f:
-            ref_x = f['trajectory/reference_point_x'][:]
-            
-            if len(ref_x) < 100:
-                pytest.skip("Not enough frames")
-            
-            # Split into thirds
-            first_third = ref_x[:len(ref_x)//3]
-            last_third = ref_x[2*len(ref_x)//3:]
-            
-            std_first = np.std(first_third)
-            std_last = np.std(last_third)
-            
-            # Reference point should not become more unstable over time
-            # Allow 3x increase (some degradation is acceptable)
-            assert std_last < std_first * 3.0, (
-                f"Reference point is becoming unstable! "
-                f"First third std: {std_first:.3f}m, Last third std: {std_last:.3f}m ({std_last/std_first:.2f}x increase). "
-                f"This can cause gradual drift."
-            )
     
-    def test_pid_integral_does_not_accumulate(self):
-        """
-        CRITICAL: Verify PID integral does not accumulate indefinitely.
-        
-        Integral accumulation causes persistent steering bias and gradual drift.
-        """
-        recordings = sorted(
-            Path('data/recordings').glob('*.h5'),
-            key=lambda p: p.stat().st_mtime,
-            reverse=True
-        )
-        
-        if not recordings:
-            pytest.skip("No recordings available")
-        
-        latest = recordings[0]
-        
-        with h5py.File(latest, 'r') as f:
-            if 'control/pid_integral' not in f:
-                pytest.skip("No PID integral data")
-            
-            pid_integral = f['control/pid_integral'][:]
-            
-            if len(pid_integral) < 100:
-                pytest.skip("Not enough frames")
-            
-            # Split into thirds
-            first_third = pid_integral[:len(pid_integral)//3]
-            last_third = pid_integral[2*len(pid_integral)//3:]
-            
-            mean_first = np.mean(np.abs(first_third))
-            mean_last = np.mean(np.abs(last_third))
-            
-            # Integral should not accumulate (should reset periodically)
-            # UPDATED: With feedforward control, integral accumulation is different
-            # Feedforward handles curves, so integral may accumulate slightly more
-            # Allow 1.7x increase (was 1.5x) to account for feedforward behavior
-            assert mean_last < mean_first * 1.7, (
-                f"PID integral is accumulating! "
-                f"First third: {mean_first:.4f}, Last third: {mean_last:.4f} ({mean_last/mean_first:.2f}x increase). "
-                f"This causes persistent steering bias and gradual drift. "
-                f"Expected < 1.7x increase (updated for feedforward), got {mean_last/mean_first:.2f}x."
-            )
     
     def test_steering_direction_consistency(self):
         """

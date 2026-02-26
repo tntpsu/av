@@ -1,5 +1,6 @@
 import importlib.util
 from pathlib import Path
+from unittest.mock import Mock
 
 import numpy as np
 
@@ -13,7 +14,7 @@ def _load_module(module_name: str, path: Path):
 
 def test_record_frame_accepts_speed_limit():
     project_root = Path(__file__).resolve().parents[1]
-    av_module = _load_module("av_stack", project_root / "av_stack.py")
+    av_module = _load_module("av_stack", project_root / "av_stack" / "orchestrator.py")
 
     class DummyRecorder:
         def __init__(self):
@@ -26,6 +27,9 @@ def test_record_frame_accepts_speed_limit():
     av_stack.frame_count = 0
     av_stack.recorder = DummyRecorder()
     av_stack.bridge = None
+    mock_planner = Mock()
+    mock_planner.get_last_generation_diagnostics.return_value = {}
+    av_stack.trajectory_planner = mock_planner
 
     image = np.zeros((2, 2, 3), dtype=np.uint8)
     control_command = {"steering": 0.0, "throttle": 0.0, "brake": 0.0}

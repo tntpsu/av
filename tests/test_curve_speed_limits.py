@@ -13,7 +13,7 @@ def _load_module(module_name: str, path: Path):
 
 def test_apply_speed_limits_with_curve_limit():
     project_root = Path(__file__).resolve().parents[1]
-    av_module = _load_module("av_stack", project_root / "av_stack.py")
+    av_module = _load_module("av_stack", project_root / "av_stack" / "orchestrator.py")
 
     speed = av_module.AVStack._apply_speed_limits(
         base_speed=8.0,
@@ -27,7 +27,7 @@ def test_apply_speed_limits_with_curve_limit():
 
 def test_apply_speed_limits_with_map_limit():
     project_root = Path(__file__).resolve().parents[1]
-    av_module = _load_module("av_stack", project_root / "av_stack.py")
+    av_module = _load_module("av_stack", project_root / "av_stack" / "orchestrator.py")
 
     speed = av_module.AVStack._apply_speed_limits(
         base_speed=12.0,
@@ -41,7 +41,7 @@ def test_apply_speed_limits_with_map_limit():
 
 def test_apply_speed_limits_min_curve_speed():
     project_root = Path(__file__).resolve().parents[1]
-    av_module = _load_module("av_stack", project_root / "av_stack.py")
+    av_module = _load_module("av_stack", project_root / "av_stack" / "orchestrator.py")
 
     speed = av_module.AVStack._apply_speed_limits(
         base_speed=8.0,
@@ -55,7 +55,7 @@ def test_apply_speed_limits_min_curve_speed():
 
 def test_apply_speed_limits_ignores_small_curvature():
     project_root = Path(__file__).resolve().parents[1]
-    av_module = _load_module("av_stack", project_root / "av_stack.py")
+    av_module = _load_module("av_stack", project_root / "av_stack" / "orchestrator.py")
 
     speed = av_module.AVStack._apply_speed_limits(
         base_speed=12.0,
