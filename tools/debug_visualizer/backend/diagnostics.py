@@ -89,7 +89,9 @@ def analyze_trajectory_vs_steering(
             steering_smoothing_delta = None
             steering_authority_gap = None
             steering_first_limiter_stage_code = None
-            
+            ctrl_jerk_arr = None
+            ctrl_accel_arr = None
+
             if has_control:
                 steering = np.array(f["control/steering"][:])
                 if "control/lateral_error" in f:
@@ -136,7 +138,12 @@ def analyze_trajectory_vs_steering(
                     steering_first_limiter_stage_code = np.array(
                         f["control/steering_first_limiter_stage_code"][:]
                     )
-            
+                # Longitudinal comfort metrics (for Diagnostics comfort panel)
+                if "control/longitudinal_jerk_capped" in f:
+                    ctrl_jerk_arr = np.array(f["control/longitudinal_jerk_capped"][:])
+                if "control/longitudinal_accel_capped" in f:
+                    ctrl_accel_arr = np.array(f["control/longitudinal_accel_capped"][:])
+
             # Load ground truth for comparison
             gt_center = None
             if has_ground_truth:
@@ -411,18 +418,15 @@ def analyze_trajectory_vs_steering(
             trajectory_issues = []
             trajectory_warnings = []
             
-            if mean_ref_x < 0.1 and max_ref_x < 0.2:
-                trajectory_issues.append("Reference point very close to center (not planning ahead on curves)")
+            # Variation-based scoring uses std_ref_x (overall variance across the run) rather
+            # than frame-to-frame rate of change.  Rate-of-change is near zero on any smooth
+            # straight road even with a perfectly-working planner; std captures whether the
+            # output ever moves at all, which is the real sign of a stuck/blind planner.
+            if std_ref_x < 0.02:
+                trajectory_issues.append("Reference point is essentially static (planner not responding to road)")
                 trajectory_quality_score -= 30
-            elif mean_ref_x < 0.2:
-                trajectory_warnings.append("Reference point somewhat close to center")
-                trajectory_quality_score -= 10
-            
-            if mean_change < 0.01:
-                trajectory_issues.append("Reference point barely changes (not adapting to curves)")
-                trajectory_quality_score -= 25
-            elif mean_change < 0.05:
-                trajectory_warnings.append("Reference point changes slowly")
+            elif std_ref_x < 0.05:
+                trajectory_warnings.append("Reference point varies very little (check planner configuration)")
                 trajectory_quality_score -= 10
             
             trajectory_quality_score = max(0, trajectory_quality_score)
@@ -626,8 +630,8 @@ def analyze_trajectory_vs_steering(
                     steering_warnings.append("Steering is somewhat small")
                     control_quality_score -= 10
                 
-                if mean_steering_change < 0.01:
-                    steering_warnings.append("Steering barely changes (not responding to curves)")
+                if std_steering < 0.02:
+                    steering_warnings.append("Steering has essentially no variance (controller may be frozen)")
                     control_quality_score -= 15
                 
                 # Check steering vs reference point correlation (prefer straight, low-curvature segments)
@@ -1435,6 +1439,20 @@ def analyze_trajectory_vs_steering(
                         "Curve-entry feasibility indicates stale perception during entry; improve continuity or fallback hold behavior"
                     )
             
+            from backend.layer_health import CTRL_JERK_GATE, CTRL_JERK_ALERT
+            comfort_data = {}
+            if ctrl_jerk_arr is not None and len(ctrl_jerk_arr) > 0:
+                jerk_p95 = float(np.percentile(np.abs(ctrl_jerk_arr), 95))
+                comfort_data["commanded_jerk_p95"] = round(jerk_p95, 3)
+                comfort_data["jerk_gate_mps3"]     = CTRL_JERK_GATE
+                comfort_data["jerk_alert_mps3"]    = CTRL_JERK_ALERT
+                comfort_data["jerk_gate_status"]   = "ok" if jerk_p95 <= CTRL_JERK_GATE else "warn"
+            if ctrl_accel_arr is not None and len(ctrl_accel_arr) > 0:
+                accel_p95 = float(np.percentile(np.abs(ctrl_accel_arr), 95))
+                comfort_data["accel_p95_mps2"]   = round(accel_p95, 3)
+                comfort_data["accel_gate_mps2"]  = 3.0
+                comfort_data["accel_gate_status"] = "ok" if accel_p95 <= 3.0 else "warn"
+
             return {
                 "data_availability": {
                     "trajectory": True,
@@ -1486,7 +1504,8 @@ def analyze_trajectory_vs_steering(
                     "trajectory_score": safe_float(trajectory_quality_score),
                     "control_score": safe_float(control_quality_score),
                     "recommendations": recommendations
-                }
+                },
+                "comfort": comfort_data,
             }
             
     except Exception as e:

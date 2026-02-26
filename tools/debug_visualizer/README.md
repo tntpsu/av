@@ -197,11 +197,22 @@ tools/debug_visualizer/
 - Issues Detection & Navigation ✅
 - Trajectory vs Steering Diagnostic ✅
 
-### 📋 Phase 3: Advanced Tools (Planned)
-- Perception Replay
-- Calibration Assistant
+### 📋 Phase 3: Layer Attribution Engine (Planned)
+- `backend/layer_health.py` — per-frame Perception / Trajectory / Control health scores (0–1)
+- New "Layers" tab — 3-row color-coded health timeline, clickable to navigate frames
+- `/api/layer_health` endpoint
 
-See [CONSOLIDATION_PLAN.md](CONSOLIDATION_PLAN.md) for full details.
+### 📋 Phase 4: Root Cause Tracer (Planned)
+- `backend/blame_tracer.py` — backward blame trace from metric spike to originating layer
+- Stale propagation timeline — visualize how a stale perception event cascades downstream
+- Chain tab enhancements: "Trace Blame" button + propagation arrow diagram
+
+### 📋 Phase 5: Triage Report + Code Pointers (Planned)
+- `backend/triage_engine.py` — 12-pattern library mapping failure signatures → code locations
+- New "Triage" tab — attribution pie chart, pattern table with code pointers, action checklist
+- `/api/triage_report` endpoint
+
+See [CONSOLIDATION_PLAN.md](CONSOLIDATION_PLAN.md) for full design details, API schemas, and data structures.
 
 ## Related Tools
 

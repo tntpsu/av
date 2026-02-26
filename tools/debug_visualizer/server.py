@@ -853,6 +853,7 @@ def get_frame_data(filename, frame_index):
                         stale_reason = f['perception/stale_reason'][perception_idx]
                         if isinstance(stale_reason, bytes):
                             stale_reason = stale_reason.decode('utf-8')
+                        stale_reason = stale_reason.strip('\x00').strip()
                         frame_data['perception']['stale_data_reason'] = stale_reason if stale_reason else None
                     if 'perception/reject_reason' in f and perception_idx < len(f['perception/reject_reason']):
                         reject_reason = f['perception/reject_reason'][perception_idx]
@@ -2312,7 +2313,7 @@ def get_polynomial_analysis(filename, frame_index):
                         reason = f['perception/stale_reason'][perception_idx]
                         if isinstance(reason, bytes):
                             reason = reason.decode('utf-8')
-                        recorded_data["stale_data_reason"] = reason
+                        recorded_data["stale_data_reason"] = reason.strip('\x00').strip()
                     if 'perception/reject_reason' in f and perception_idx < len(f['perception/reject_reason']):
                         reason = f['perception/reject_reason'][perception_idx]
                         if isinstance(reason, bytes):
@@ -2792,6 +2793,93 @@ def get_recording_diagnostics(filename):
             curve_entry_window_distance_m=curve_entry_window_distance_m,
         )
         return jsonify(numpy_to_list(diagnostics))
+    except Exception as e:
+        import traceback
+        return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500
+
+
+@app.route('/api/recording/<path:filename>/layer-health')
+def get_layer_health(filename):
+    """Compute per-frame Perception / Trajectory / Control health scores (Phase 3)."""
+    from urllib.parse import unquote
+    filename = unquote(filename)
+    filepath = RECORDINGS_DIR / filename
+    if not filepath.exists():
+        return jsonify({"error": f"Recording not found: {filename}"}), 404
+    try:
+        from backend.layer_health import LayerHealthAnalyzer
+        result = LayerHealthAnalyzer(filepath).compute()
+        return jsonify(numpy_to_list(result))
+    except Exception as e:
+        import traceback
+        return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500
+
+
+@app.route('/api/recording/<path:filename>/blame-trace')
+def get_blame_trace(filename):
+    """Backward blame trace from target_frame to originating layer (Phase 4)."""
+    from urllib.parse import unquote
+    filename = unquote(filename)
+    filepath = RECORDINGS_DIR / filename
+    if not filepath.exists():
+        return jsonify({"error": f"Recording not found: {filename}"}), 404
+    try:
+        target_frame = int(request.args.get('frame', 0))
+        metric = request.args.get('metric', 'lateral_error')
+        from backend.blame_tracer import BlameTracer
+        result = BlameTracer(filepath).trace_blame(target_frame, metric)
+        return jsonify(numpy_to_list(result))
+    except Exception as e:
+        import traceback
+        return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500
+
+
+@app.route('/api/recording/<path:filename>/stale-propagation')
+def get_stale_propagation(filename):
+    """Find stale perception events and their downstream cascade (Phase 4)."""
+    from urllib.parse import unquote
+    filename = unquote(filename)
+    filepath = RECORDINGS_DIR / filename
+    if not filepath.exists():
+        return jsonify({"error": f"Recording not found: {filename}"}), 404
+    try:
+        from backend.blame_tracer import BlameTracer
+        result = BlameTracer(filepath).find_stale_propagation()
+        return jsonify(numpy_to_list(result))
+    except Exception as e:
+        import traceback
+        return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500
+
+
+@app.route('/api/recording/<path:filename>/trajectory-degradation')
+def get_trajectory_degradation(filename):
+    """Find trajectory degradation events and their downstream control impact (Chain tab)."""
+    from urllib.parse import unquote
+    filename = unquote(filename)
+    filepath = RECORDINGS_DIR / filename
+    if not filepath.exists():
+        return jsonify({"error": f"Recording not found: {filename}"}), 404
+    try:
+        from backend.blame_tracer import BlameTracer
+        result = BlameTracer(filepath).find_trajectory_degradation()
+        return jsonify(numpy_to_list(result))
+    except Exception as e:
+        import traceback
+        return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500
+
+
+@app.route('/api/recording/<path:filename>/triage-report')
+def get_triage_report(filename):
+    """Generate session-level triage report with pattern attribution and checklist (Phase 5)."""
+    from urllib.parse import unquote
+    filename = unquote(filename)
+    filepath = RECORDINGS_DIR / filename
+    if not filepath.exists():
+        return jsonify({"error": f"Recording not found: {filename}"}), 404
+    try:
+        from backend.triage_engine import TriageEngine
+        result = TriageEngine(filepath).generate_triage()
+        return jsonify(numpy_to_list(result))
     except Exception as e:
         import traceback
         return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500

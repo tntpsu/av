@@ -601,6 +601,20 @@ body {
     font-weight: 400;
 }
 
+/* Chain tab: compact tables to prevent text overflow between flex blocks */
+#chain-flow .data-table {
+    margin-bottom: 0;
+}
+#chain-flow .data-table td {
+    padding: 0.28rem 0.35rem;
+    font-size: 0.78rem;
+}
+#chain-flow .data-table td:last-child {
+    overflow-wrap: anywhere;
+    word-break: break-word;
+    white-space: normal;
+}
+
 .data-table tr.compact-subrow td:last-child {
     text-align: left;
     color: #cfcfcf;
@@ -763,4 +777,54 @@ body {
 .compare-cell {
     font-variant-numeric: tabular-nums;
 }
+
+/* ── Phase 3: Layer Attribution ──────────────────────────────────────────── */
+.layers-container { padding: 1rem; }
+.layer-row { display: flex; align-items: center; margin-bottom: 6px; }
+.layer-label { width: 100px; font-size: 0.85em; color: #ccc; flex-shrink: 0; }
+.layer-canvas { flex: 1; height: 40px; cursor: pointer; border: 1px solid #333; display: block; image-rendering: pixelated; }
+.layer-timeline { position: relative; }
+.layer-axis { display: flex; justify-content: space-between; font-size: 0.75em; color: #666; margin-top: 4px; padding-left: 100px; }
+.layer-hover-info { position: fixed; background: #222; color: #eee; padding: 4px 10px; border-radius: 4px; font-size: 0.8em; pointer-events: none; white-space: nowrap; z-index: 9999; border: 1px solid #444; }
+.layers-summary-table { width: 100%; border-collapse: collapse; margin-bottom: 1rem; font-size: 0.9em; }
+.layers-summary-table th, .layers-summary-table td { padding: 6px 10px; border: 1px solid #333; text-align: center; }
+.layers-summary-table th { background: #222; color: #ccc; }
+
+/* ── Phase 4: Blame Tracer ───────────────────────────────────────────────── */
+.blame-panel { background: #1a1a1a; border: 1px solid #444; padding: 0.8rem; border-radius: 4px; }
+.blame-summary { margin-bottom: 0.6rem; font-size: 0.92em; }
+.blame-chain-arrows { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.blame-link { display: flex; gap: 6px; align-items: center; background: #222; padding: 4px 8px; border-radius: 4px; font-size: 0.80em; }
+.blame-link.blame-target { background: #2a1414; border: 1px solid #f44336; }
+.blame-frame { color: #888; }
+.blame-layer { color: #7ecfff; font-weight: bold; }
+.blame-signal { color: #eee; }
+.blame-delta { color: #ff9800; }
+.blame-arrow { color: #555; font-size: 1.1em; }
+.btn-tiny { font-size: 0.72em; padding: 2px 7px; background: #2a2a2a; border: 1px solid #444; color: #ccc; cursor: pointer; border-radius: 3px; }
+.btn-tiny:hover { background: #3a3a3a; color: #fff; }
+.stale-events-panel { }
+.stale-events-table { width: 100%; border-collapse: collapse; font-size: 0.83em; }
+.stale-events-table th, .stale-events-table td { padding: 5px 8px; border: 1px solid #333; text-align: center; }
+.stale-events-table th { background: #222; color: #aaa; }
+
+/* ── Phase 5: Triage Report ─────────────────────────────────────────────── */
+.triage-container { padding: 1rem; }
+.triage-header { display: flex; align-items: center; gap: 1rem; margin-bottom: 1rem; flex-wrap: wrap; }
+.triage-top-row { display: flex; gap: 2rem; margin-bottom: 1.5rem; flex-wrap: wrap; }
+.triage-attribution { text-align: center; }
+.attribution-legend { display: flex; flex-direction: column; gap: 4px; font-size: 0.82em; margin-top: 0.5rem; }
+.triage-health { flex: 1; min-width: 200px; display: flex; flex-direction: column; justify-content: center; }
+.health-meter { background: #333; border-radius: 4px; height: 22px; width: 100%; overflow: hidden; }
+.health-bar { height: 100%; border-radius: 4px; transition: width 0.4s; }
+.health-value { font-size: 1.5em; font-weight: bold; margin-top: 0.4rem; display: block; }
+.triage-pattern-table { width: 100%; border-collapse: collapse; font-size: 0.82em; margin-bottom: 1.5rem; }
+.triage-pattern-table th, .triage-pattern-table td { padding: 6px 8px; border: 1px solid #333; vertical-align: top; }
+.triage-pattern-table th { background: #222; color: #aaa; }
+.code-pointer { font-family: monospace; font-size: 0.80em; color: #a8e6a3; word-break: break-all; }
+.config-lever { font-family: monospace; font-size: 0.80em; color: #7ecfff; word-break: break-all; }
+.sev-badge { font-weight: bold; font-size: 0.85em; text-transform: uppercase; letter-spacing: 0.04em; }
+.triage-checklist { list-style: none; padding: 0; margin: 0; }
+.triage-checklist li { padding: 6px 0; border-bottom: 1px solid #222; font-size: 0.87em; }
+.triage-checklist label { cursor: pointer; display: flex; gap: 8px; align-items: flex-start; line-height: 1.4; }
 

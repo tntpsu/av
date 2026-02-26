@@ -3,6 +3,11 @@
  * Orchestrates frame loading, display, and user interactions.
  */
 
+// Stale reasons that are expected/designed behaviour and should not trigger warnings.
+// left_lane_low_visibility: normal when passing a centre-lane dash (backup hold keeps trajectory stable).
+// Keep in sync with BENIGN_STALE_REASONS in backend/layer_health.py
+const BENIGN_STALE_REASONS = new Set(['left_lane_low_visibility']);
+
 class Visualizer {
     constructor() {
         this.dataLoader = new DataLoader();
@@ -16,6 +21,7 @@ class Visualizer {
         this.availableRecordings = [];
         this.selectedGateBundleId = null;
         this.pendingDiagnosticsFocus = null;
+        this.comparePinnedRecording = localStorage.getItem('philviz_pinned_compare_recording') || null;
         this.isPlaying = false;
         this.playSpeed = 1.0;
         this.playInterval = null;
@@ -1693,6 +1699,12 @@ class Visualizer {
                     html += '<div style="background: #2a2a2a; padding: 1rem; border-radius: 8px; margin-bottom: 1rem;">';
                     html += '<h3 style="margin-top: 0; color: #4a90e2;">Speed Control</h3>';
                     html += '<table style="width: 100%; color: #e0e0e0;">';
+                    const MPS_TO_MPH = 2.23694;
+                    const speedMinMps = speedControl.speed_min_mps ?? null;
+                    const speedMaxMps = speedControl.speed_max_mps ?? null;
+                    if (speedMinMps !== null && speedMaxMps !== null) {
+                        html += `<tr><td>Speed Range:</td><td style="text-align: right; color: #a0a0a0;">${(speedMinMps * MPS_TO_MPH).toFixed(1)} – ${(speedMaxMps * MPS_TO_MPH).toFixed(1)} mph &nbsp;<span style="color:#666;">(${speedMinMps.toFixed(1)} – ${speedMaxMps.toFixed(1)} m/s)</span></td></tr>`;
+                    }
                     html += `<tr><td>Speed Error (RMSE):</td><td style="text-align: right; color: ${speedColor};">${withLimitHint(speedRmse.toFixed(2) + ' m/s', speedColor, '<=2.0 m/s')}</td></tr>`;
                     html += `<tr><td>Speed Error (Mean):</td><td style="text-align: right;">${speedMean !== null ? speedMean.toFixed(2) : '-'}</td></tr>`;
                     html += `<tr><td>Speed Error (Max):</td><td style="text-align: right;">${speedMax !== null ? speedMax.toFixed(2) : '-'}</td></tr>`;
@@ -1863,9 +1875,17 @@ class Visualizer {
             return;
         }
         const baseline = this.currentRecording || recordings[0].filename;
-        const selected = recordings.slice(0, 5).map((r) => r.filename);
+        const top5 = recordings.slice(0, 5).map((r) => r.filename);
+
+        // Determine pinned comparison recording (default: the one after baseline in the sorted list)
+        const allFilenames = recordings.map((r) => r.filename);
+        const baselineIdx = allFilenames.indexOf(baseline);
+        const defaultPinned = allFilenames[baselineIdx + 1] || allFilenames[baselineIdx - 1] || null;
+        // Use saved pin only if the recording still exists; otherwise fall back to default
+        const pinnedExists = this.comparePinnedRecording && allFilenames.includes(this.comparePinnedRecording);
+        const pinned = pinnedExists ? this.comparePinnedRecording : defaultPinned;
+
         const shortName = (s) => String(s || '').replace(/^recording_/, '');
-        // Format recording for column header: date on line 1, time/code on line 2
         const formatHeaderName = (name) => {
             const n = shortName(name);
             const m = n.match(/^(\d{8})_(\d{6})(?:\.|$)/);
@@ -1874,28 +1894,47 @@ class Visualizer {
                 const h = m[2].slice(0, 2), mi = m[2].slice(2, 4), sec = m[2].slice(4, 6);
                 return `${y}-${mo}-${d}<br/><span class="compare-rec-time">${h}:${mi}:${sec}</span>`;
             }
-            const safe = this.escapeHtml(n.length > 12 ? n.slice(0, 10) + '…' : n);
-            return safe;
+            return this.escapeHtml(n.length > 12 ? n.slice(0, 10) + '…' : n);
         };
+
         compareContent.innerHTML = '<p style="color: #888; text-align: center; padding: 2rem;">Loading compare data...</p>';
         try {
             const analyzeToFailure = document.getElementById('analyze-to-failure')?.checked || false;
-            const params = new URLSearchParams({
-                recordings: selected.join(','),
+            const apiBase = (typeof window !== 'undefined' && window.PHILVIZ_API_BASE) || '';
+
+            // Fire top-5 and 1v1 fetches in parallel
+            const top5Params = new URLSearchParams({
+                recordings: top5.join(','),
                 baseline,
                 analyze_to_failure: analyzeToFailure ? 'true' : 'false',
             });
-            const apiBase = (typeof window !== 'undefined' && window.PHILVIZ_API_BASE) || '';
-            const response = await fetch(`${apiBase}/compare?${params.toString()}`);
-            if (!response.ok) {
-                throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+            const top5Fetch = fetch(`${apiBase}/compare?${top5Params.toString()}`);
+
+            let oneVsOneFetch = null;
+            if (pinned && pinned !== baseline) {
+                const ovoParams = new URLSearchParams({
+                    recordings: [baseline, pinned].join(','),
+                    baseline,
+                    analyze_to_failure: analyzeToFailure ? 'true' : 'false',
+                });
+                oneVsOneFetch = fetch(`${apiBase}/compare?${ovoParams.toString()}`);
             }
-            const data = await response.json();
-            if (data.error) {
-                throw new Error(data.error);
+
+            const [top5Resp, ovoResp] = await Promise.all([top5Fetch, oneVsOneFetch || Promise.resolve(null)]);
+
+            if (!top5Resp.ok) throw new Error(`HTTP ${top5Resp.status}: ${top5Resp.statusText}`);
+            const data = await top5Resp.json();
+            if (data.error) throw new Error(data.error);
+
+            let ovoData = null;
+            if (ovoResp && ovoResp.ok) {
+                ovoData = await ovoResp.json();
+                if (ovoData.error) ovoData = null;
             }
+
             const rows = Array.isArray(data.rows) ? data.rows : [];
             const baselineName = data.baseline || baseline;
+
             const fmt = (v) => Number.isFinite(Number(v)) ? Number(v).toFixed(2) : '-';
             const fmtInt = (v) => (v != null && Number.isFinite(Number(v))) ? String(Math.round(Number(v))) : '-';
             const fmtDelta = (v) => {
@@ -1908,7 +1947,8 @@ class Visualizer {
                 const n = Math.round(Number(v));
                 return n >= 0 ? `+${n}` : String(n);
             };
-            // Metric groups: [groupLabel, [[displayLabel, key, format, rawForBaseline?]]]
+
+            // Shared metric groups definition
             const groups = [
                 ['Summary', [
                     ['Overall Score', 'overall_score', 'raw', true],
@@ -1948,19 +1988,19 @@ class Visualizer {
                     ['Version', 'software_version', 'provenance', false],
                 ]],
             ];
+
             const getVal = (row, key, isBaseline) => {
                 if (key === 'replay_type' || key === 'software_version') {
                     return (row.recording_provenance || {})[key] || 'unknown';
                 }
-                if (key === 'gate_pass') return row.gate_pass; // always raw
+                if (key === 'gate_pass') return row.gate_pass;
                 if (key === 'centerline_cross_start_frame' || key === 'road_departure_start_frame') {
                     if (isBaseline) return row[key];
                     return (row.delta_vs_baseline || {})[key];
                 }
                 const raw = row[key];
                 if (isBaseline) return raw;
-                const d = row.delta_vs_baseline || {};
-                return d[key];
+                return (row.delta_vs_baseline || {})[key];
             };
             const formatVal = (val, fmtType, isBaseline) => {
                 if (fmtType === 'gate') return val ? 'PASS' : 'FAIL';
@@ -1977,42 +2017,103 @@ class Visualizer {
                 if (fmtType === 'deltaInt') return fmtDeltaInt(val);
                 return fmt(val);
             };
-            let html = '<div style="padding: 1rem;">';
-            html += '<h3 style="margin-top:0; color:#4a90e2;">Compare</h3>';
-            html += `<div style="margin-bottom:0.6rem; color:#9fb3c8;">Baseline: <strong>${this.escapeHtml(shortName(baselineName))}</strong> · Top 5 recordings · <em>All Δ values are vs the baseline (highlighted column)</em></div>`;
-            html += '<div class="compare-table-wrap"><table class="compare-table">';
-            html += '<thead><tr><th class="compare-param-col">Parameter</th>';
-            rows.forEach((row) => {
-                const formatted = formatHeaderName(row.recording);
-                const isBase = row.recording === baselineName;
-                const baselineLabel = isBase ? ' <span class="compare-baseline-tag">(baseline)</span>' : '';
-                html += `<th class="compare-rec-col${isBase ? ' compare-baseline-col' : ''}"><span class="compare-rec-header">${formatted}${baselineLabel}</span></th>`;
-            });
-            html += '</tr></thead><tbody>';
-            groups.forEach(([groupLabel, metrics]) => {
-                html += `<tr class="compare-group-row"><td class="compare-param-col compare-group-label" colspan="${rows.length + 1}">${this.escapeHtml(groupLabel)}</td></tr>`;
-                metrics.forEach(([display, key, fmtType]) => {
-                    html += '<tr>';
-                    html += `<td class="compare-param-col compare-metric-label">${this.escapeHtml(display)}</td>`;
-                    rows.forEach((row) => {
-                        const isBase = row.recording === baselineName;
-                        const val = getVal(row, key, isBase);
-                        const fmtVal = formatVal(val, fmtType, isBase);
-                        let color = '';
-                        if (key === 'overall_score') {
-                            const s = Number(val);
-                            color = s >= 80 ? '#4caf50' : (s >= 60 ? '#ffa500' : '#ff6b6b');
-                        } else if (key === 'gate_pass') {
-                            color = val ? '#4caf50' : '#ff6b6b';
-                        }
-                        const style = color ? ` style="color:${color}"` : '';
-                        html += `<td class="compare-rec-col compare-cell"${style}>${fmtVal}</td>`;
-                    });
-                    html += '</tr>';
+
+            // Helper to render a compare table from a rows array
+            const renderTable = (tableRows, tablBaselineName) => {
+                let t = '<div class="compare-table-wrap"><table class="compare-table">';
+                t += '<thead><tr><th class="compare-param-col">Parameter</th>';
+                tableRows.forEach((row) => {
+                    const formatted = formatHeaderName(row.recording);
+                    const isBase = row.recording === tablBaselineName;
+                    const tag = isBase ? ' <span class="compare-baseline-tag">(baseline)</span>' : '';
+                    t += `<th class="compare-rec-col${isBase ? ' compare-baseline-col' : ''}"><span class="compare-rec-header">${formatted}${tag}</span></th>`;
                 });
+                t += '</tr></thead><tbody>';
+                groups.forEach(([groupLabel, metrics]) => {
+                    t += `<tr class="compare-group-row"><td class="compare-param-col compare-group-label" colspan="${tableRows.length + 1}">${this.escapeHtml(groupLabel)}</td></tr>`;
+                    metrics.forEach(([display, key, fmtType]) => {
+                        t += '<tr>';
+                        t += `<td class="compare-param-col compare-metric-label">${this.escapeHtml(display)}</td>`;
+                        tableRows.forEach((row) => {
+                            const isBase = row.recording === tablBaselineName;
+                            const val = getVal(row, key, isBase);
+                            const fmtVal = formatVal(val, fmtType, isBase);
+                            let color = '';
+                            if (key === 'overall_score') {
+                                const s = Number(val);
+                                color = s >= 80 ? '#4caf50' : (s >= 60 ? '#ffa500' : '#ff6b6b');
+                            } else if (key === 'gate_pass') {
+                                color = val ? '#4caf50' : '#ff6b6b';
+                            }
+                            const style = color ? ` style="color:${color}"` : '';
+                            t += `<td class="compare-rec-col compare-cell"${style}>${fmtVal}</td>`;
+                        });
+                        t += '</tr>';
+                    });
+                });
+                t += '</tbody></table></div>';
+                return t;
+            };
+
+            // ── Build HTML ──────────────────────────────────────────────────
+            let html = '<div style="padding: 1rem;">';
+
+            // Section 1: Top 5
+            html += '<h3 style="margin-top:0; color:#4a90e2;">Compare — Top 5</h3>';
+            html += `<div style="margin-bottom:0.6rem; color:#9fb3c8;">Baseline: <strong>${this.escapeHtml(shortName(baselineName))}</strong> · Top 5 recordings · <em>All Δ values are vs the baseline (highlighted column)</em></div>`;
+            html += renderTable(rows, baselineName);
+
+            // Section 2: 1-vs-1 pinned comparison
+            html += '<div style="margin-top: 2rem;">';
+            html += '<h3 style="margin-top:0; color:#4a90e2;">Compare — Current vs. Pinned</h3>';
+            html += '<div style="display:flex; align-items:center; gap:0.5rem; margin-bottom:0.6rem; flex-wrap:wrap;">';
+            html += '<span style="color:#9fb3c8;">Compare to:</span>';
+            // Dropdown populated with all recordings except baseline
+            html += '<select id="compare-pinned-select" class="recording-select" style="max-width:260px;">';
+            allFilenames.forEach((fn) => {
+                if (fn === baseline) return; // skip self
+                const sel = fn === pinned ? ' selected' : '';
+                html += `<option value="${this.escapeHtml(fn)}"${sel}>${this.escapeHtml(shortName(fn))}</option>`;
             });
-            html += '</tbody></table></div></div>';
+            html += '</select>';
+            // "vs. Previous" shortcut button
+            if (defaultPinned && defaultPinned !== baseline) {
+                html += `<button id="compare-use-previous-btn" class="btn-small" style="padding:0.2rem 0.6rem; font-size:0.82rem; background:#1e3a5f; border:1px solid #2e5a8f; color:#9fb3c8; border-radius:4px; cursor:pointer;">vs. Previous</button>`;
+            }
+            html += '</div>';
+
+            if (ovoData && Array.isArray(ovoData.rows) && ovoData.rows.length >= 2) {
+                html += `<div style="margin-bottom:0.5rem; color:#9fb3c8; font-size:0.85rem;">Pinned: <strong>${this.escapeHtml(shortName(pinned))}</strong> · <em>All Δ values are vs baseline</em></div>`;
+                html += renderTable(ovoData.rows, ovoData.baseline || baselineName);
+            } else if (!pinned || pinned === baseline) {
+                html += '<p style="color:#888;">Only one recording available — nothing to compare against.</p>';
+            } else {
+                html += '<p style="color:#888;">No data for pinned recording.</p>';
+            }
+            html += '</div>';
+
+            html += '</div>';
             compareContent.innerHTML = html;
+
+            // Wire up pinned-recording dropdown
+            const pinnedSelect = document.getElementById('compare-pinned-select');
+            if (pinnedSelect) {
+                pinnedSelect.addEventListener('change', () => {
+                    this.comparePinnedRecording = pinnedSelect.value;
+                    localStorage.setItem('philviz_pinned_compare_recording', this.comparePinnedRecording);
+                    this.loadCompare();
+                });
+            }
+            // "vs. Previous" button
+            const prevBtn = document.getElementById('compare-use-previous-btn');
+            if (prevBtn && defaultPinned) {
+                prevBtn.addEventListener('click', () => {
+                    this.comparePinnedRecording = defaultPinned;
+                    localStorage.setItem('philviz_pinned_compare_recording', this.comparePinnedRecording);
+                    this.loadCompare();
+                });
+            }
+
         } catch (error) {
             compareContent.innerHTML = `<p style="color: #ff6b6b; text-align: center; padding: 2rem;">Compare load failed: ${this.escapeHtml(error.message)}</p>`;
         }
@@ -2392,7 +2493,14 @@ class Visualizer {
             }
             
             const diagnostics = await response.json();
-            
+
+            // Fetch summary layer scores to cross-reference (non-blocking, best-effort)
+            let summaryScores = null;
+            try {
+                const sr = await fetch(`/api/recording/${this.currentRecording}/summary`);
+                if (sr.ok) { const sd = await sr.json(); summaryScores = sd.layer_scores; }
+            } catch (_) {}
+
             if (diagnostics.error) {
                 diagnosticsContent.innerHTML = `<p style="color: #ff6b6b; text-align: center; padding: 2rem;">Error: ${diagnostics.error}</p>`;
                 return;
@@ -2412,6 +2520,22 @@ class Visualizer {
             
             // Build diagnostics HTML
             let html = '<div style="padding: 1rem;">';
+
+            // Summary layer-score cross-reference bar
+            if (summaryScores) {
+                const fmtScore = (key) => {
+                    const v = summaryScores[key];
+                    return (v !== null && v !== undefined) ? Number(v).toFixed(1) : '–';
+                };
+                html += `<div style="background:#1e2a1e; border:1px solid #2e4a2e; border-radius:4px;
+                             padding:0.4rem 0.7rem; margin-bottom:0.8rem; font-size:0.8rem; color:#aaa;">
+                    Summary layer scores →
+                    Perception: <b style="color:#e0e0e0;">${fmtScore('Perception')}</b>
+                    &nbsp;Trajectory: <b style="color:#e0e0e0;">${fmtScore('Trajectory')}</b>
+                    &nbsp;Control: <b style="color:#e0e0e0;">${fmtScore('Control')}</b>
+                    <span style="color:#666; margin-left:0.5em;">(different formula — see Summary tab for details)</span>
+                </div>`;
+            }
 
             if (diagnosticsFocus) {
                 const focusLabel = diagnosticsFocus.issueType
@@ -2607,6 +2731,28 @@ class Visualizer {
                     }
                 }
                 html += '</table>';
+
+                // Longitudinal Comfort sub-panel (jerk/accel gates from diagnostics.comfort)
+                if (diagnostics.comfort && Object.keys(diagnostics.comfort).length > 0) {
+                    const c = diagnostics.comfort;
+                    const jerkColor = c.jerk_gate_status === 'ok' ? '#4caf50' : '#ff9800';
+                    const accelColor = c.accel_gate_status === 'ok' ? '#4caf50' : '#ff9800';
+                    html += '<div style="background: #1a1a1a; border-left: 3px solid #42a5f5; padding: 0.6rem 0.75rem; border-radius: 4px; margin-top: 0.75rem; margin-bottom: 0.5rem;">';
+                    html += '<div style="color: #42a5f5; font-weight: bold; margin-bottom: 0.35rem;">Longitudinal Comfort</div>';
+                    html += '<table style="width: 100%; color: #e0e0e0;">';
+                    if (c.commanded_jerk_p95 !== undefined) {
+                        html += `<tr><td>Jerk P95</td>
+                            <td style="text-align:right; color:${jerkColor};">${c.commanded_jerk_p95} m/s³
+                            <small style="color:#888;"> (alert ≥${c.jerk_alert_mps3}, gate ≥${c.jerk_gate_mps3})</small></td></tr>`;
+                    }
+                    if (c.accel_p95_mps2 !== undefined) {
+                        html += `<tr><td>Accel P95</td>
+                            <td style="text-align:right; color:${accelColor};">${c.accel_p95_mps2} m/s²
+                            <small style="color:#888;"> (gate ≥${c.accel_gate_mps2})</small></td></tr>`;
+                    }
+                    html += '</table>';
+                    html += '</div>';
+                }
 
                 if (ctrl.steering_limiter_analysis && ctrl.steering_limiter_analysis.available) {
                     const limiter = ctrl.steering_limiter_analysis;
@@ -3238,6 +3384,446 @@ class Visualizer {
         } catch (error) {
             console.error('Error loading frame:', error);
         }
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // Phase 3 — Layer Attribution Engine
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    async loadLayers() {
+        if (!this.currentRecording) return;
+        const content = document.getElementById('layers-content');
+        if (!content) return;
+        content.innerHTML = '<p style="color:#888;text-align:center;padding:2rem;">Computing layer health…</p>';
+        try {
+            const response = await fetch(`/api/recording/${this.currentRecording}/layer-health`);
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
+            const data = await response.json();
+            if (data.error) {
+                content.innerHTML = `<p style="color:#ff6b6b;padding:1rem;">Error: ${this.escapeHtml(data.error)}</p>`;
+                return;
+            }
+            content.innerHTML = this.renderLayersHtml(data);
+            this._initLayersCanvases(data);
+        } catch (e) {
+            content.innerHTML = `<p style="color:#ff6b6b;">Error: ${this.escapeHtml(e.message)}</p>`;
+        }
+    }
+
+    renderLayersHtml(data) {
+        const { summary, frame_count } = data;
+        const layers = [
+            { key: 'perception', label: 'Perception', color: '#7ecfff' },
+            { key: 'trajectory', label: 'Trajectory', color: '#a8e6a3' },
+            { key: 'control',    label: 'Control',    color: '#f0b27a' },
+        ];
+
+        let summaryHtml = '<table class="layers-summary-table"><thead><tr>' +
+            '<th>Layer</th><th>Mean Score</th><th>🟢 Green</th><th>🟡 Yellow</th><th>🔴 Red</th>' +
+            '</tr></thead><tbody>';
+        for (const { key, label } of layers) {
+            const s = summary[key] || {};
+            summaryHtml += `<tr>
+                <td>${label}</td>
+                <td>${((s.mean_score || 0) * 100).toFixed(1)}%</td>
+                <td>${((s.pct_green || 0) * 100).toFixed(1)}%</td>
+                <td>${((s.pct_yellow || 0) * 100).toFixed(1)}%</td>
+                <td>${((s.pct_red || 0) * 100).toFixed(1)}%</td>
+            </tr>`;
+        }
+        summaryHtml += '</tbody></table>';
+
+        let canvasHtml = '';
+        for (const { key, label } of layers) {
+            canvasHtml += `
+                <div class="layer-row">
+                    <div class="layer-label">${label}</div>
+                    <canvas id="layer-canvas-${key}" class="layer-canvas"
+                            width="${frame_count}" height="40"
+                            data-layer="${key}" title="Click to navigate to frame"></canvas>
+                </div>`;
+        }
+
+        return `
+            <div class="layers-container">
+                <h3>Layer Health Timeline <span style="color:#888;font-size:0.85em;">(${frame_count} frames)</span></h3>
+                ${summaryHtml}
+                <div class="layer-timeline" id="layer-timeline">
+                    ${canvasHtml}
+                    <div class="layer-axis">
+                        <span>Frame 0</span>
+                        <span>Frame ${Math.floor(frame_count / 2)}</span>
+                        <span>Frame ${frame_count - 1}</span>
+                    </div>
+                </div>
+                <div id="layer-hover-info" class="layer-hover-info" style="display:none;"></div>
+            </div>`;
+    }
+
+    _initLayersCanvases(data) {
+        const { frames } = data;
+        const layers = ['perception', 'trajectory', 'control'];
+        const GREEN = '#4caf50', YELLOW = '#ff9800', RED = '#f44336';
+
+        for (const layer of layers) {
+            const canvas = document.getElementById(`layer-canvas-${layer}`);
+            if (!canvas) continue;
+            const ctx = canvas.getContext('2d');
+            const w = canvas.width, h = canvas.height;
+            ctx.clearRect(0, 0, w, h);
+
+            frames.forEach((fr, i) => {
+                const score = fr[`${layer}_score`];
+                ctx.fillStyle = score >= 0.8 ? GREEN : score >= 0.5 ? YELLOW : RED;
+                ctx.fillRect(i, 0, 1, h);
+            });
+
+            // Click → navigate to frame in Replay tab
+            canvas.addEventListener('click', (e) => {
+                const rect = canvas.getBoundingClientRect();
+                const x = e.clientX - rect.left;
+                const frameIdx = Math.round((x / rect.width) * (frames.length - 1));
+                if (frameIdx >= 0 && frameIdx < frames.length) {
+                    this.goToFrame(frameIdx);
+                    this.switchTab('all-data');
+                }
+            });
+
+            // Hover → show score + flags
+            canvas.addEventListener('mousemove', (e) => {
+                const rect = canvas.getBoundingClientRect();
+                const x = e.clientX - rect.left;
+                const frameIdx = Math.round((x / rect.width) * (frames.length - 1));
+                const fr = frames[frameIdx];
+                if (!fr) return;
+                const score = fr[`${layer}_score`];
+                const flags = fr[`${layer}_flags`].join(', ') || '—';
+                const info = document.getElementById('layer-hover-info');
+                if (info) {
+                    info.textContent = `Frame ${frameIdx} | ${layer}: ${(score * 100).toFixed(1)}% | ${flags}`;
+                    info.style.display = 'block';
+                    info.style.left = `${e.clientX - canvas.getBoundingClientRect().left + 12}px`;
+                }
+            });
+
+            canvas.addEventListener('mouseleave', () => {
+                const info = document.getElementById('layer-hover-info');
+                if (info) info.style.display = 'none';
+            });
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // Phase 4 — Root Cause Tracer
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    async showBlamePanel(frameIdx, metric = 'lateral_error') {
+        const panel = document.getElementById('chain-blame-panel');
+        const display = document.getElementById('blame-chain-display');
+        if (!panel || !display) return;
+        panel.style.display = 'block';
+        display.innerHTML = '<em style="color:#888;">Tracing blame…</em>';
+        try {
+            const params = new URLSearchParams({ frame: frameIdx, metric });
+            const resp = await fetch(
+                `/api/recording/${this.currentRecording}/blame-trace?${params}`
+            );
+            if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+            const data = await resp.json();
+            if (data.error) {
+                display.innerHTML = `<span style="color:#ff6b6b;">${this.escapeHtml(data.error)}</span>`;
+                return;
+            }
+
+            const blameColors = {
+                perception: '#7ecfff', trajectory: '#a8e6a3',
+                control: '#f0b27a', unknown: '#888'
+            };
+            const bColor = blameColors[data.primary_blame] || '#888';
+
+            let html = `<div class="blame-summary">
+                Primary blame: <span style="color:${bColor};font-weight:bold;">${data.primary_blame}</span>
+                &nbsp;(${(data.confidence * 100).toFixed(0)}% confidence, ${data.lag_frames} frame lag)
+            </div>`;
+
+            html += '<div class="blame-chain-arrows">';
+            for (const lnk of data.chain) {
+                html += `<div class="blame-link">
+                    <span class="blame-frame">Frame ${lnk.frame_idx}</span>
+                    <span class="blame-layer">[${lnk.layer}]</span>
+                    <span class="blame-signal">${this.escapeHtml(lnk.signal)}</span>
+                    <span class="blame-delta">Δ${lnk.delta.toFixed(3)}</span>
+                    <span class="blame-arrow">→</span>
+                </div>`;
+            }
+            html += `<div class="blame-link blame-target">
+                <span class="blame-frame">Frame ${data.target_frame}</span>
+                <span class="blame-layer">[${data.target_metric}]</span>
+                <span class="blame-signal">spike detected</span>
+            </div></div>`;
+
+            display.innerHTML = html;
+
+            const jumpBtn = document.getElementById('blame-jump-source-btn');
+            if (jumpBtn && data.chain.length > 0) {
+                jumpBtn.style.display = 'inline-block';
+                jumpBtn.onclick = () => {
+                    this.goToFrame(data.chain[0].frame_idx);
+                    this.switchTab('all-data');
+                };
+            }
+        } catch (e) {
+            display.innerHTML = `<span style="color:#ff6b6b;">${this.escapeHtml(e.message)}</span>`;
+        }
+    }
+
+    async loadStaleEvents() {
+        if (!this.currentRecording) return;
+        const container = document.getElementById('stale-events-table');
+        const panel = document.getElementById('chain-stale-events');
+        if (!container || !panel) return;
+        panel.style.display = 'block';
+        container.innerHTML = '<em style="color:#888;">Loading stale events…</em>';
+        try {
+            const resp = await fetch(
+                `/api/recording/${this.currentRecording}/stale-propagation`
+            );
+            if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+            const data = await resp.json();
+            // Filter out stale events caused by known-benign reasons (e.g. left_lane_low_visibility).
+            const events = (data.events || []).filter(
+                ev => !BENIGN_STALE_REASONS.has(ev.stale_reason || '')
+            );
+            if (events.length === 0) {
+                container.innerHTML = '<em style="color:#888;">No stale propagation events detected.</em>';
+                return;
+            }
+            let html = '<table class="stale-events-table"><thead><tr>' +
+                '<th>Start Frame</th><th>Duration</th><th>Traj Lag</th>' +
+                '<th>Ctrl Lag</th><th>Max Traj Δ</th><th>Max Ctrl Δ</th><th></th>' +
+                '</tr></thead><tbody>';
+            for (const ev of events) {
+                html += `<tr>
+                    <td>${ev.stale_start_frame}</td>
+                    <td>${ev.stale_duration}f</td>
+                    <td>${ev.trajectory_lag_frames}f</td>
+                    <td>${ev.control_lag_frames}f</td>
+                    <td>${ev.max_trajectory_delta.toFixed(3)}</td>
+                    <td>${ev.max_control_delta.toFixed(3)}</td>
+                    <td><button class="btn-tiny" onclick="visualizer.goToFrame(${ev.stale_start_frame})">→</button></td>
+                </tr>`;
+            }
+            html += '</tbody></table>';
+            container.innerHTML = html;
+        } catch (e) {
+            container.innerHTML = `<span style="color:#ff6b6b;">${this.escapeHtml(e.message)}</span>`;
+        }
+    }
+
+    async loadTrajectoryDegradationEvents() {
+        if (!this.currentRecording) return;
+        const container = document.getElementById('traj-events-table');
+        const panel = document.getElementById('chain-traj-events');
+        if (!container || !panel) return;
+        panel.style.display = 'block';
+        container.innerHTML = '<em style="color:#888;">Loading trajectory events…</em>';
+        const FLAG_LABELS = {
+            ref_rate_clamped:    'Rate clamped',
+            ref_error_high:      'Ref error high',
+            lookahead_out_of_range: 'Lookahead OOR',
+            unknown:             '—',
+        };
+        try {
+            const resp = await fetch(
+                `/api/recording/${this.currentRecording}/trajectory-degradation`
+            );
+            if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+            const data = await resp.json();
+            if (!data.events || data.events.length === 0) {
+                container.innerHTML = '<em style="color:#888;">No trajectory degradation events detected.</em>';
+                return;
+            }
+            let html = '<table class="stale-events-table"><thead><tr>' +
+                '<th>Start Frame</th><th>Duration</th><th>Flag</th>' +
+                '<th>Traj Lag</th><th>Ctrl Lag</th><th>Max Traj Δ</th><th>Max Ctrl Δ</th><th></th>' +
+                '</tr></thead><tbody>';
+            for (const ev of data.events) {
+                const flagLabel = FLAG_LABELS[ev.primary_flag] || this.escapeHtml(ev.primary_flag);
+                html += `<tr>
+                    <td>${ev.traj_start_frame}</td>
+                    <td>${ev.traj_duration}f</td>
+                    <td style="color:#90caf9;">${flagLabel}</td>
+                    <td>${ev.traj_lag_frames}f</td>
+                    <td>${ev.control_lag_frames}f</td>
+                    <td>${ev.max_traj_delta.toFixed(3)}</td>
+                    <td>${ev.max_control_delta.toFixed(3)}</td>
+                    <td><button class="btn-tiny" onclick="visualizer.goToFrame(${ev.traj_start_frame})">→</button></td>
+                </tr>`;
+            }
+            html += '</tbody></table>';
+            container.innerHTML = html;
+        } catch (e) {
+            container.innerHTML = `<span style="color:#ff6b6b;">${this.escapeHtml(e.message)}</span>`;
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // Phase 5 — Triage Report
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    async loadTriage() {
+        if (!this.currentRecording) return;
+        const content = document.getElementById('triage-content');
+        if (!content) return;
+        content.innerHTML = '<p style="color:#888;text-align:center;padding:2rem;">Generating triage report…</p>';
+        try {
+            const response = await fetch(`/api/recording/${this.currentRecording}/triage-report`);
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
+            const data = await response.json();
+            if (data.error) {
+                content.innerHTML = `<p style="color:#ff6b6b;padding:1rem;">${this.escapeHtml(data.error)}</p>`;
+                return;
+            }
+            content.innerHTML = this.renderTriageHtml(data);
+            this._drawAttributionPie(data.attribution);
+            this._wireTriageExport(data);
+        } catch (e) {
+            content.innerHTML = `<p style="color:#ff6b6b;">Error: ${this.escapeHtml(e.message)}</p>`;
+        }
+    }
+
+    renderTriageHtml(data) {
+        const { attribution, overall_health, matched_patterns, action_checklist,
+                recording_id, total_frames, stale_event_count } = data;
+        const healthPct = (overall_health * 100).toFixed(1);
+        const healthColor = overall_health > 0.8 ? '#4caf50' : overall_health > 0.6 ? '#ff9800' : '#f44336';
+        const sevColor = { safety: '#f44336', instability: '#ff9800', comfort: '#4caf50' };
+
+        // Tab suggestions per pattern — ordered by most useful first.
+        const PATTERN_TABS = {
+            safety_ool_event:         [['chain', 'Chain'], ['layers', 'Layers']],
+            perc_stale_cascade:       [['chain', 'Chain'], ['perception', 'Perception']],
+            perc_low_confidence:      [['perception', 'Perception'], ['layers', 'Layers']],
+            perc_single_lane_only:    [['perception', 'Perception'], ['chain', 'Chain']],
+            traj_ref_rate_clamped:    [['chain', 'Chain'], ['trajectory', 'Trajectory']],
+            traj_overcorrection:      [['chain', 'Chain'], ['trajectory', 'Trajectory']],
+            traj_short_lookahead:     [['trajectory', 'Trajectory'], ['diagnostics', 'Diagnostics']],
+            ctrl_jerk_spike:          [['control', 'Control'], ['diagnostics', 'Diagnostics']],
+            ctrl_throttle_surge:      [['control', 'Control']],
+            ctrl_steering_jerk:       [['control', 'Control']],
+            ctrl_lateral_oscillation: [['control', 'Control'], ['chain', 'Chain']],
+            traj_curvature_error:     [['trajectory', 'Trajectory'], ['perception', 'Perception']],
+        };
+
+        let patternsHtml = '';
+        if (!matched_patterns || !matched_patterns.length) {
+            patternsHtml = '<p style="color:#4caf50;padding:0.5rem;">✓ No significant failure patterns detected.</p>';
+        } else {
+            patternsHtml = '<table class="triage-pattern-table"><thead><tr>' +
+                '<th>Pattern</th><th>Severity</th><th>Frames</th>' +
+                '<th>Code Pointer</th><th>Config Lever</th><th>Diagnose in</th><th></th>' +
+                '</tr></thead><tbody>';
+            for (const pat of matched_patterns) {
+                const tabLinks = (PATTERN_TABS[pat.pattern_id] || [])
+                    .map(([tab, label]) =>
+                        `<button class="btn-tiny" style="margin:1px 2px;" ` +
+                        `onclick="window.visualizer.switchTab('${tab}')" ` +
+                        `title="Go to ${label} tab">${label}</button>`)
+                    .join('');
+                patternsHtml += `<tr title="${this.escapeHtml(pat.fix_hint)}">
+                    <td>${this.escapeHtml(pat.name)}</td>
+                    <td><span class="sev-badge" style="color:${sevColor[pat.severity]||'#ccc'};">${pat.severity}</span></td>
+                    <td>${pat.occurrences} (${(pat.pct_of_recording * 100).toFixed(1)}%)</td>
+                    <td class="code-pointer">${this.escapeHtml(pat.code_pointer)}</td>
+                    <td class="config-lever">${this.escapeHtml(pat.config_lever)}</td>
+                    <td style="white-space:nowrap;">${tabLinks}</td>
+                    <td>${pat.example_frames && pat.example_frames.length ?
+                        `<button class="btn-tiny" onclick="visualizer.goToFrame(${pat.example_frames[0]})">→</button>` :
+                        ''}</td>
+                </tr>`;
+            }
+            patternsHtml += '</tbody></table>';
+        }
+
+        const checklistHtml = (action_checklist || []).map(item =>
+            `<li><label><input type="checkbox"> ${this.escapeHtml(item)}</label></li>`
+        ).join('');
+
+        const staleNote = stale_event_count > 0
+            ? `<span style="color:#ff9800;font-size:0.85em;"> · ${stale_event_count} stale propagation event(s) — see Chain tab</span>`
+            : '';
+
+        return `
+            <div class="triage-container">
+                <div class="triage-header">
+                    <h3 style="margin:0;">Triage — ${this.escapeHtml(recording_id)}</h3>
+                    <span style="color:#888;font-size:0.85em;">${total_frames} frames${staleNote}</span>
+                    <button id="triage-export-btn" class="btn btn-secondary" style="margin-left:auto;font-size:0.82em;">Export JSON</button>
+                </div>
+
+                <div class="triage-top-row">
+                    <div class="triage-attribution">
+                        <h4 style="margin:0 0 0.5rem 0;">Error Attribution</h4>
+                        <canvas id="attribution-pie" width="180" height="180"></canvas>
+                        <div class="attribution-legend">
+                            <span style="color:#7ecfff;">■ Perception ${((attribution.perception||0) * 100).toFixed(0)}%</span>
+                            <span style="color:#a8e6a3;">■ Trajectory ${((attribution.trajectory||0) * 100).toFixed(0)}%</span>
+                            <span style="color:#f0b27a;">■ Control ${((attribution.control||0) * 100).toFixed(0)}%</span>
+                        </div>
+                    </div>
+                    <div class="triage-health">
+                        <h4 style="margin:0 0 0.5rem 0;">Overall Health</h4>
+                        <div class="health-meter">
+                            <div class="health-bar" style="width:${healthPct}%;background:${healthColor};"></div>
+                        </div>
+                        <span class="health-value" style="color:${healthColor};">${healthPct}%</span>
+                    </div>
+                </div>
+
+                <h4>Detected Patterns (${(matched_patterns||[]).length})</h4>
+                ${patternsHtml}
+
+                <h4 style="margin-top:1rem;">Recommended Actions</h4>
+                <ul class="triage-checklist">${checklistHtml || '<li style="color:#888;">No actions required.</li>'}</ul>
+            </div>`;
+    }
+
+    _drawAttributionPie(attribution) {
+        const canvas = document.getElementById('attribution-pie');
+        if (!canvas) return;
+        const ctx = canvas.getContext('2d');
+        const cx = 90, cy = 90, r = 75;
+        const colors = { perception: '#7ecfff', trajectory: '#a8e6a3', control: '#f0b27a' };
+        let startAngle = -Math.PI / 2;
+        ctx.clearRect(0, 0, 180, 180);
+        for (const [layer, fraction] of Object.entries(attribution)) {
+            if (!fraction) continue;
+            const sliceAngle = fraction * 2 * Math.PI;
+            ctx.beginPath();
+            ctx.moveTo(cx, cy);
+            ctx.arc(cx, cy, r, startAngle, startAngle + sliceAngle);
+            ctx.closePath();
+            ctx.fillStyle = colors[layer] || '#888';
+            ctx.fill();
+            ctx.strokeStyle = '#111';
+            ctx.lineWidth = 1;
+            ctx.stroke();
+            startAngle += sliceAngle;
+        }
+    }
+
+    _wireTriageExport(data) {
+        const btn = document.getElementById('triage-export-btn');
+        if (!btn) return;
+        btn.onclick = () => {
+            const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `triage_${data.recording_id}.json`;
+            a.click();
+            URL.revokeObjectURL(url);
+        };
     }
 
     async loadImage(imageDataUrl, canvasId = 'camera-canvas', requestId = null, requestRecording = null) {
@@ -5156,12 +5742,14 @@ class Visualizer {
         set('chain-perc-center', percCenter);
 
         const usingStale = Boolean(p.using_stale_data);
-        set('chain-perc-stale', usingStale ? 'YES ⚠' : 'no');
-        setColor('chain-perc-stale', usingStale ? '#ffa500' : '#4caf50');
-        set('chain-perc-stale-reason', p.stale_data_reason || (usingStale ? '-' : 'none'));
+        const staleReason = (p.stale_data_reason || '').replace(/\0/g, '').trim();
+        const isBenignStale = usingStale && BENIGN_STALE_REASONS.has(staleReason);
+        set('chain-perc-stale', usingStale ? (isBenignStale ? 'YES' : 'YES ⚠') : 'no');
+        setColor('chain-perc-stale', isBenignStale ? '#888' : (usingStale ? '#ffa500' : '#4caf50'));
+        set('chain-perc-stale-reason', staleReason || (usingStale ? '-' : 'none'));
 
         const percBlock = document.getElementById('chain-perception-block');
-        if (percBlock) percBlock.style.borderColor = usingStale ? '#ffa500' : '#4caf50';
+        if (percBlock) percBlock.style.borderColor = (usingStale && !isBenignStale) ? '#ffa500' : '#4caf50';
 
         // --- Trajectory block ---
         set('chain-traj-method', t.reference_point_method || rp.method || '-');
@@ -5178,6 +5766,12 @@ class Visualizer {
             set('chain-traj-vs-perc', '-');
         }
 
+        const rateClamped = (t.diag_ref_x_rate_limit_active || 0) > 0.5;
+        set('chain-traj-rate-clamped', rateClamped ? 'YES ⚠' : 'no');
+        setColor('chain-traj-rate-clamped', rateClamped ? '#ffa500' : '#4caf50');
+        const trajBlock = document.getElementById('chain-trajectory-block');
+        if (trajBlock) trajBlock.style.borderColor = rateClamped ? '#ffa500' : '#2196f3';
+
         // --- Control block ---
         set('chain-ctrl-mode', c.control_mode || '-');
         set('chain-ctrl-steering', c.steering !== undefined ? c.steering.toFixed(4) : '-');
@@ -5185,15 +5779,15 @@ class Visualizer {
         set('chain-ctrl-brake', c.brake !== undefined ? c.brake.toFixed(4) : '-');
         set('chain-ctrl-lateral-err', c.lateral_error !== undefined ? `${c.lateral_error.toFixed(3)}m` : '-');
         const ppStaleHold = c.pp_stale_hold_active > 0.5;
-        set('chain-ctrl-pp-stale-hold', ppStaleHold ? 'YES ⚠' : 'no');
-        setColor('chain-ctrl-pp-stale-hold', ppStaleHold ? '#ffa500' : '');
+        set('chain-ctrl-pp-stale-hold', ppStaleHold ? (isBenignStale ? 'YES' : 'YES ⚠') : 'no');
+        setColor('chain-ctrl-pp-stale-hold', (ppStaleHold && !isBenignStale) ? '#ffa500' : (ppStaleHold ? '#888' : ''));
 
-        // --- Stale-propagation banner ---
+        // --- Stale-propagation banner (suppressed for benign/designed stale reasons) ---
         const staleBanner = document.getElementById('chain-stale-banner');
         if (staleBanner) {
-            if (usingStale) {
+            if (usingStale && !isBenignStale) {
                 staleBanner.style.display = '';
-                staleBanner.textContent = `⚠ Stale perception propagating downstream — reason: ${p.stale_data_reason || 'unknown'}`;
+                staleBanner.textContent = `⚠ Stale perception propagating downstream — reason: ${staleReason || 'unknown'}`;
             } else {
                 staleBanner.style.display = 'none';
             }
@@ -7640,6 +8234,13 @@ class Visualizer {
                 this.loadIssues();
             } else if (tabName === 'diagnostics') {
                 this.loadDiagnostics();
+            } else if (tabName === 'layers') {
+                this.loadLayers();
+            } else if (tabName === 'triage') {
+                this.loadTriage();
+            } else if (tabName === 'chain') {
+                this.loadStaleEvents();
+                this.loadTrajectoryDegradationEvents();
             }
         } else if (tabName === 'gates') {
             this.loadGates();

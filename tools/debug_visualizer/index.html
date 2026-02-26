@@ -166,6 +166,8 @@
                     <button class="tab-btn" data-tab="gates">Gates</button>
                     <button class="tab-btn" data-tab="issues">Issues</button>
                     <button class="tab-btn" data-tab="diagnostics">Diagnostics</button>
+                    <button class="tab-btn" data-tab="layers">Layers</button>
+                    <button class="tab-btn" data-tab="triage">Triage</button>
                     <button class="tab-btn active" data-tab="all-data">All Data</button>
                     <button class="tab-btn" data-tab="chain">Chain</button>
                     <button class="tab-btn" data-tab="perception">Perception</button>
@@ -219,6 +221,24 @@
                         <div id="diagnostics-content" style="max-height: 70vh; overflow-y: auto; padding-right: 10px;">
                             <p style="color: #888; text-align: center; padding: 2rem;">
                                 Load a recording to see trajectory vs steering diagnostics
+                            </p>
+                        </div>
+                    </div>
+
+                    <!-- Layers Tab (Phase 3) -->
+                    <div id="layers-tab" class="tab-pane">
+                        <div id="layers-content">
+                            <p style="color: #888; text-align: center; padding: 2rem;">
+                                Load a recording to see layer health timeline
+                            </p>
+                        </div>
+                    </div>
+
+                    <!-- Triage Tab (Phase 5) -->
+                    <div id="triage-tab" class="tab-pane">
+                        <div id="triage-content">
+                            <p style="color: #888; text-align: center; padding: 2rem;">
+                                Load a recording to generate a triage report
                             </p>
                         </div>
                     </div>
@@ -409,6 +429,7 @@
                                     <tr><td>Ref Speed</td><td id="chain-traj-ref-speed">-</td></tr>
                                     <tr><td>Perc Center In</td><td id="chain-traj-perc-center">-</td></tr>
                                     <tr><td>Traj vs Perc</td><td id="chain-traj-vs-perc">-</td></tr>
+                                    <tr><td>Rate Clamped</td><td id="chain-traj-rate-clamped">-</td></tr>
                                 </table>
                             </div>
                             <!-- Arrow -->
@@ -430,6 +451,27 @@
                         <div id="chain-stale-banner" style="display:none; margin-top:0.8rem; padding:0.5rem 0.8rem; background:#332200; border:1px solid #ffa500; border-radius:4px; color:#ffa500; font-size:0.82rem;"></div>
                         <!-- Replay-mode locked-layer banner -->
                         <div id="chain-replay-banner" style="display:none; margin-top:0.5rem; padding:0.5rem 0.8rem; background:#1a2a3a; border:1px solid #2196f3; border-radius:4px; color:#90caf9; font-size:0.82rem;"></div>
+
+                        <!-- Phase 4: Blame Panel -->
+                        <div id="chain-blame-panel" class="blame-panel" style="display:none; margin-top:1rem;">
+                            <h4 style="margin:0 0 0.5rem 0; color:#ccc;">Blame Trace</h4>
+                            <div id="blame-chain-display"></div>
+                            <button id="blame-jump-source-btn" class="btn btn-secondary" style="display:none; margin-top:0.5rem; font-size:0.82em;">
+                                ↑ Jump to Source Frame
+                            </button>
+                        </div>
+
+                        <!-- Phase 4: Stale Events Panel -->
+                        <div id="chain-stale-events" class="stale-events-panel" style="display:none; margin-top:1rem;">
+                            <h4 style="margin:0 0 0.5rem 0; color:#ccc;">Stale Propagation Events</h4>
+                            <div id="stale-events-table"></div>
+                        </div>
+
+                        <!-- Trajectory Degradation Events Panel -->
+                        <div id="chain-traj-events" class="stale-events-panel" style="display:none; margin-top:1rem;">
+                            <h4 style="margin:0 0 0.5rem 0; color:#ccc;">Trajectory Degradation Events</h4>
+                            <div id="traj-events-table"></div>
+                        </div>
                     </div>
 
                     <!-- Perception Tab -->
