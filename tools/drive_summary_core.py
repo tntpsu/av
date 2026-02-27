@@ -273,6 +273,212 @@ def _build_latency_sync_summary(data: Dict) -> Dict:
     }
 
 
+def _build_chassis_ground_summary(data: Dict, n_frames: int) -> Dict:
+    """Build chassis-ground health summary from recorded telemetry."""
+    transient_ignore_s = 1.0
+    good_contact_rate_pct_max = 0.0
+    good_penetration_m_max = 0.0
+    warn_contact_rate_pct_max = 0.5
+    warn_penetration_m_max = 0.01
+    fallback_warn_rate_pct_max = 0.0
+
+    time_axis = np.asarray(data.get("time"), dtype=float) if data.get("time") is not None else None
+    if time_axis is None or time_axis.size == 0:
+        keep_mask = np.ones(int(max(n_frames, 0)), dtype=bool)
+    else:
+        keep_mask = time_axis[:n_frames] >= transient_ignore_s
+        if keep_mask.size < n_frames:
+            keep_mask = np.pad(keep_mask, (0, n_frames - keep_mask.size), constant_values=False)
+
+    analyzed_frame_count = int(np.sum(keep_mask)) if keep_mask.size > 0 else 0
+    if analyzed_frame_count <= 0:
+        return {
+            "schema_version": "v1",
+            "availability": "unavailable",
+            "health": "UNKNOWN",
+            "configured_min_clearance_m": None,
+            "effective_min_clearance_m": None,
+            "clearance_p05_m": None,
+            "clearance_min_m": None,
+            "penetration_max_m": None,
+            "contact_frames": 0,
+            "contact_rate_pct": None,
+            "wheel_grounded_rate_mean": None,
+            "force_fallback_rate_pct": None,
+            "wheel_colliders_ready_rate_pct": None,
+            "analyzed_frame_count": 0,
+            "metric_sample_count": 0,
+            "skipped_transient_frames": int(max(n_frames, 0)),
+            "limits": {
+                "transient_ignore_s": transient_ignore_s,
+                "good_contact_rate_pct_max": good_contact_rate_pct_max,
+                "good_penetration_m_max": good_penetration_m_max,
+                "warn_contact_rate_pct_max": warn_contact_rate_pct_max,
+                "warn_penetration_m_max": warn_penetration_m_max,
+                "fallback_warn_rate_pct_max": fallback_warn_rate_pct_max,
+            },
+        }
+
+    def _slice(values):
+        if values is None:
+            return None
+        arr = np.asarray(values).reshape(-1)
+        if arr.size == 0:
+            return None
+        limit = min(int(n_frames), int(keep_mask.size), int(arr.size))
+        if limit <= 0:
+            return None
+        return arr[:limit][keep_mask[:limit]]
+
+    clearance = _slice(data.get("chassis_ground_clearance_m"))
+    penetration = _slice(data.get("chassis_ground_penetration_m"))
+    contact_raw = _slice(data.get("chassis_ground_contact"))
+    wheel_grounded = _slice(data.get("wheel_grounded_count"))
+    wheel_ready = _slice(data.get("wheel_colliders_ready"))
+    force_fallback = _slice(data.get("force_fallback_active"))
+    configured_min = _slice(data.get("chassis_ground_min_clearance_m"))
+    effective_min = _slice(data.get("chassis_ground_effective_min_clearance_m"))
+
+    availability = "available" if any(
+        values is not None for values in (clearance, penetration, contact_raw, wheel_grounded, force_fallback)
+    ) else "unavailable"
+
+    if availability != "available":
+        return {
+            "schema_version": "v1",
+            "availability": "unavailable",
+            "health": "UNKNOWN",
+            "configured_min_clearance_m": None,
+            "effective_min_clearance_m": None,
+            "clearance_p05_m": None,
+            "clearance_min_m": None,
+            "penetration_max_m": None,
+            "contact_frames": 0,
+            "contact_rate_pct": None,
+            "wheel_grounded_rate_mean": None,
+            "force_fallback_rate_pct": None,
+            "wheel_colliders_ready_rate_pct": None,
+            "analyzed_frame_count": analyzed_frame_count,
+            "metric_sample_count": 0,
+            "skipped_transient_frames": int(n_frames - analyzed_frame_count),
+            "limits": {
+                "transient_ignore_s": transient_ignore_s,
+                "good_contact_rate_pct_max": good_contact_rate_pct_max,
+                "good_penetration_m_max": good_penetration_m_max,
+                "warn_contact_rate_pct_max": warn_contact_rate_pct_max,
+                "warn_penetration_m_max": warn_penetration_m_max,
+                "fallback_warn_rate_pct_max": fallback_warn_rate_pct_max,
+            },
+        }
+
+    clearance_finite = None
+    if clearance is not None:
+        clearance = np.asarray(clearance, dtype=float)
+        clearance_finite = clearance[np.isfinite(clearance)]
+    penetration_finite = None
+    if penetration is not None:
+        penetration = np.asarray(penetration, dtype=float)
+        penetration_finite = penetration[np.isfinite(penetration)]
+
+    contact_bool = None
+    if contact_raw is not None:
+        contact_bool = np.asarray(contact_raw, dtype=float) > 0.5
+    elif penetration_finite is not None and penetration_finite.size > 0:
+        # If contact flags are absent, infer from penetration > 0.
+        contact_bool = np.asarray(penetration, dtype=float) > 1e-6
+    elif clearance_finite is not None and clearance_finite.size > 0:
+        contact_bool = np.asarray(clearance, dtype=float) <= 0.0
+
+    contact_samples = int(contact_bool.size) if contact_bool is not None else 0
+    contact_frames = int(np.sum(contact_bool)) if contact_bool is not None else 0
+    contact_rate_pct = (
+        safe_float(contact_frames / contact_samples * 100.0)
+        if contact_samples > 0
+        else None
+    )
+    penetration_max_m = (
+        safe_float(np.max(penetration_finite), default=None)
+        if penetration_finite is not None and penetration_finite.size > 0
+        else None
+    )
+    clearance_p05_m = (
+        safe_float(np.percentile(clearance_finite, 5), default=None)
+        if clearance_finite is not None and clearance_finite.size > 0
+        else None
+    )
+    clearance_min_m = (
+        safe_float(np.min(clearance_finite), default=None)
+        if clearance_finite is not None and clearance_finite.size > 0
+        else None
+    )
+    configured_min_clearance_m = (
+        safe_float(np.nanmedian(np.asarray(configured_min, dtype=float)), default=None)
+        if configured_min is not None and np.isfinite(np.asarray(configured_min, dtype=float)).any()
+        else None
+    )
+    effective_min_clearance_m = (
+        safe_float(np.nanmedian(np.asarray(effective_min, dtype=float)), default=None)
+        if effective_min is not None and np.isfinite(np.asarray(effective_min, dtype=float)).any()
+        else None
+    )
+    wheel_grounded_rate_mean = (
+        safe_float(np.nanmean(np.clip(np.asarray(wheel_grounded, dtype=float), 0.0, 4.0) / 4.0), default=None)
+        if wheel_grounded is not None and np.isfinite(np.asarray(wheel_grounded, dtype=float)).any()
+        else None
+    )
+    force_fallback_rate_pct = (
+        safe_float(np.nanmean(np.asarray(force_fallback, dtype=float) > 0.5) * 100.0, default=None)
+        if force_fallback is not None and np.asarray(force_fallback).size > 0
+        else None
+    )
+    wheel_colliders_ready_rate_pct = (
+        safe_float(np.nanmean(np.asarray(wheel_ready, dtype=float) > 0.5) * 100.0, default=None)
+        if wheel_ready is not None and np.asarray(wheel_ready).size > 0
+        else None
+    )
+
+    health = "GOOD"
+    if (
+        penetration_max_m is not None and penetration_max_m > warn_penetration_m_max
+    ) or (
+        contact_rate_pct is not None and contact_rate_pct > warn_contact_rate_pct_max
+    ):
+        health = "POOR"
+    elif (
+        (force_fallback_rate_pct is not None and force_fallback_rate_pct > fallback_warn_rate_pct_max)
+        or (penetration_max_m is not None and penetration_max_m > good_penetration_m_max)
+        or (contact_rate_pct is not None and contact_rate_pct > good_contact_rate_pct_max)
+    ):
+        health = "WARN"
+
+    return {
+        "schema_version": "v1",
+        "availability": availability,
+        "health": health,
+        "configured_min_clearance_m": configured_min_clearance_m,
+        "effective_min_clearance_m": effective_min_clearance_m,
+        "clearance_p05_m": clearance_p05_m,
+        "clearance_min_m": clearance_min_m,
+        "penetration_max_m": penetration_max_m,
+        "contact_frames": contact_frames,
+        "contact_rate_pct": contact_rate_pct,
+        "wheel_grounded_rate_mean": wheel_grounded_rate_mean,
+        "force_fallback_rate_pct": force_fallback_rate_pct,
+        "wheel_colliders_ready_rate_pct": wheel_colliders_ready_rate_pct,
+        "analyzed_frame_count": analyzed_frame_count,
+        "metric_sample_count": contact_samples,
+        "skipped_transient_frames": int(n_frames - analyzed_frame_count),
+        "limits": {
+            "transient_ignore_s": transient_ignore_s,
+            "good_contact_rate_pct_max": good_contact_rate_pct_max,
+            "good_penetration_m_max": good_penetration_m_max,
+            "warn_contact_rate_pct_max": warn_contact_rate_pct_max,
+            "warn_penetration_m_max": warn_penetration_m_max,
+            "fallback_warn_rate_pct_max": fallback_warn_rate_pct_max,
+        },
+    }
+
+
 def _load_config() -> dict:
     config_path = REPO_ROOT / "config" / "av_stack_config.yaml"
     if not config_path.exists():
@@ -282,6 +488,221 @@ def _load_config() -> dict:
             return yaml.safe_load(f) or {}
     except Exception:
         return {}
+
+
+def _build_longitudinal_hotspot_attribution(data: Dict, config: Dict, n_frames: int) -> Dict:
+    """Build top longitudinal hotspot entries with simple root-cause attribution."""
+    time = data.get("time")
+    speed = data.get("speed")
+    if time is None or speed is None:
+        return {
+            "schema_version": "v1",
+            "availability": "unavailable",
+            "dt_nominal_ms": None,
+            "dt_gap_threshold_ms": None,
+            "entries": [],
+        }
+
+    time_arr = np.asarray(time, dtype=float).reshape(-1)
+    speed_arr = np.asarray(speed, dtype=float).reshape(-1)
+    n = min(int(n_frames), int(time_arr.size), int(speed_arr.size))
+    if n < 3:
+        return {
+            "schema_version": "v1",
+            "availability": "unavailable",
+            "dt_nominal_ms": None,
+            "dt_gap_threshold_ms": None,
+            "entries": [],
+        }
+
+    time_arr = time_arr[:n]
+    speed_arr = speed_arr[:n]
+    dt_arr = np.diff(time_arr)
+    finite_positive_dt = dt_arr[np.isfinite(dt_arr) & (dt_arr > 1e-6)]
+    nominal_dt = float(np.median(finite_positive_dt)) if finite_positive_dt.size > 0 else 0.033
+    if nominal_dt <= 0.0:
+        nominal_dt = 0.033
+    dt_arr = np.where(dt_arr > 1e-6, dt_arr, nominal_dt)
+    nominal_dt_ms = nominal_dt * 1000.0
+    dt_gap_threshold_ms = max(120.0, nominal_dt_ms * 3.0)
+
+    accel = np.zeros(n, dtype=float)
+    accel[1:] = np.divide(
+        np.diff(speed_arr),
+        dt_arr,
+        out=np.zeros_like(dt_arr, dtype=float),
+        where=dt_arr > 1e-6,
+    )
+    jerk = np.zeros(n, dtype=float)
+    if n > 2:
+        jerk_dt = dt_arr[1:]
+        jerk[2:] = np.divide(
+            np.diff(accel[1:]),
+            jerk_dt,
+            out=np.zeros_like(jerk_dt, dtype=float),
+            where=jerk_dt > 1e-6,
+        )
+
+    throttle = (
+        np.asarray(data.get("throttle"), dtype=float).reshape(-1)[:n]
+        if data.get("throttle") is not None
+        else None
+    )
+    brake = (
+        np.asarray(data.get("brake"), dtype=float).reshape(-1)[:n]
+        if data.get("brake") is not None
+        else None
+    )
+    target_speed = (
+        np.asarray(data.get("target_speed_final"), dtype=float).reshape(-1)[:n]
+        if data.get("target_speed_final") is not None
+        else None
+    )
+    accel_capped = (
+        np.asarray(data.get("longitudinal_accel_capped"), dtype=float).reshape(-1)[:n]
+        if data.get("longitudinal_accel_capped") is not None
+        else None
+    )
+    jerk_capped = (
+        np.asarray(data.get("longitudinal_jerk_capped"), dtype=float).reshape(-1)[:n]
+        if data.get("longitudinal_jerk_capped") is not None
+        else None
+    )
+    contact = (
+        np.asarray(data.get("chassis_ground_contact"), dtype=float).reshape(-1)[:n]
+        if data.get("chassis_ground_contact") is not None
+        else None
+    )
+    penetration = (
+        np.asarray(data.get("chassis_ground_penetration_m"), dtype=float).reshape(-1)[:n]
+        if data.get("chassis_ground_penetration_m") is not None
+        else None
+    )
+    clearance = (
+        np.asarray(data.get("chassis_ground_clearance_m"), dtype=float).reshape(-1)[:n]
+        if data.get("chassis_ground_clearance_m") is not None
+        else None
+    )
+
+    ctrl_cfg = config.get("control", {}).get("longitudinal", {})
+    max_accel_cfg = float(ctrl_cfg.get("max_accel", 2.5))
+    max_decel_cfg = float(ctrl_cfg.get("max_decel", 3.0))
+    command_accel = None
+    if throttle is not None and brake is not None:
+        command_accel = (throttle * max_accel_cfg) - (brake * max_decel_cfg)
+
+    def _build_hotspots(values: np.ndarray, metric: str, max_items: int = 8, min_separation: int = 15) -> list[dict]:
+        rows = []
+        sorted_idx = np.argsort(np.abs(values))[::-1]
+        for idx in sorted_idx:
+            idx = int(idx)
+            if len(rows) >= max_items:
+                break
+            if not np.isfinite(values[idx]) or abs(values[idx]) <= 0.0:
+                continue
+            if any(abs(idx - row["frame"]) < min_separation for row in rows):
+                continue
+            rows.append({
+                "frame": idx,
+                "metric": metric,
+                "metric_value": float(values[idx]),
+                "metric_abs": float(abs(values[idx])),
+            })
+        return rows
+
+    rows = _build_hotspots(accel, "accel") + _build_hotspots(jerk, "jerk")
+    rows = sorted(rows, key=lambda row: row["metric_abs"], reverse=True)[:8]
+
+    def _float_at(arr: Optional[np.ndarray], idx: int):
+        if arr is None or idx < 0 or idx >= len(arr):
+            return None
+        value = arr[idx]
+        return safe_float(value, default=None) if np.isfinite(value) else None
+
+    entries = []
+    for row in rows:
+        idx = int(row["frame"])
+        dt_prev_ms = safe_float(dt_arr[idx - 1] * 1000.0, default=None) if idx >= 1 else None
+        dt_prev2_ms = safe_float(dt_arr[idx - 2] * 1000.0, default=None) if idx >= 2 else None
+        dt_recent_max_ms = None
+        if dt_prev_ms is not None and dt_prev2_ms is not None:
+            dt_recent_max_ms = max(dt_prev_ms, dt_prev2_ms)
+        elif dt_prev_ms is not None:
+            dt_recent_max_ms = dt_prev_ms
+        elif dt_prev2_ms is not None:
+            dt_recent_max_ms = dt_prev2_ms
+
+        throttle_i = _float_at(throttle, idx)
+        brake_i = _float_at(brake, idx)
+        target_speed_i = _float_at(target_speed, idx)
+        accel_cap_i = _float_at(accel_capped, idx)
+        jerk_cap_i = _float_at(jerk_capped, idx)
+        contact_i = _float_at(contact, idx)
+        penetration_i = _float_at(penetration, idx)
+        clearance_i = _float_at(clearance, idx)
+        cmd_accel_i = _float_at(command_accel, idx)
+        cmd_accel_prev = _float_at(command_accel, idx - 1) if idx >= 1 else None
+        cmd_jerk_i = None
+        if cmd_accel_i is not None and cmd_accel_prev is not None and dt_prev_ms is not None and dt_prev_ms > 1e-6:
+            cmd_jerk_i = safe_float((cmd_accel_i - cmd_accel_prev) / (dt_prev_ms / 1000.0), default=None)
+
+        attribution = "unknown"
+        confidence = "low"
+        if (contact_i is not None and contact_i > 0.5) or (penetration_i is not None and penetration_i > 1e-4):
+            attribution = "ground_contact_or_penetration"
+            confidence = "high"
+        elif dt_recent_max_ms is not None and dt_recent_max_ms >= dt_gap_threshold_ms:
+            attribution = "timestamp_gap_derivative_artifact"
+            confidence = "high"
+        elif (accel_cap_i is not None and accel_cap_i > 0.5) or (jerk_cap_i is not None and jerk_cap_i > 0.5):
+            attribution = "longitudinal_limiter_active"
+            confidence = "medium"
+        elif cmd_jerk_i is not None and abs(cmd_jerk_i) >= 6.0 and abs(_float_at(jerk, idx) or 0.0) >= 6.0:
+            attribution = "commanded_longitudinal_step"
+            confidence = "medium"
+        elif brake_i is not None and brake_i >= 0.15 and (_float_at(accel, idx) or 0.0) <= -2.0:
+            attribution = "brake_command_decel"
+            confidence = "medium"
+        elif throttle_i is not None and throttle_i >= 0.15 and (_float_at(accel, idx) or 0.0) >= 2.0:
+            attribution = "throttle_command_accel"
+            confidence = "medium"
+        elif cmd_accel_i is not None and abs((_float_at(accel, idx) or 0.0) - cmd_accel_i) >= max(3.0, abs(cmd_accel_i) * 2.5):
+            attribution = "physics_or_speed_estimation_spike"
+            confidence = "low"
+
+        entries.append({
+            "frame": idx,
+            "time_s": _float_at(time_arr, idx),
+            "metric": row["metric"],
+            "metric_value": safe_float(row["metric_value"]),
+            "metric_abs": safe_float(row["metric_abs"]),
+            "accel_mps2": _float_at(accel, idx),
+            "jerk_mps3": _float_at(jerk, idx),
+            "speed_mps": _float_at(speed_arr, idx),
+            "target_speed_mps": target_speed_i,
+            "throttle": throttle_i,
+            "brake": brake_i,
+            "dt_prev_ms": dt_prev_ms,
+            "dt_prev2_ms": dt_prev2_ms,
+            "dt_recent_max_ms": dt_recent_max_ms,
+            "longitudinal_accel_capped": bool(accel_cap_i > 0.5) if accel_cap_i is not None else None,
+            "longitudinal_jerk_capped": bool(jerk_cap_i > 0.5) if jerk_cap_i is not None else None,
+            "chassis_ground_contact": bool(contact_i > 0.5) if contact_i is not None else None,
+            "chassis_ground_penetration_m": penetration_i,
+            "chassis_ground_clearance_m": clearance_i,
+            "command_accel_proxy_mps2": cmd_accel_i,
+            "command_jerk_proxy_mps3": cmd_jerk_i,
+            "attribution": attribution,
+            "confidence": confidence,
+        })
+
+    return {
+        "schema_version": "v1",
+        "availability": "available" if entries else "unavailable",
+        "dt_nominal_ms": safe_float(nominal_dt_ms, default=None),
+        "dt_gap_threshold_ms": safe_float(dt_gap_threshold_ms, default=None),
+        "entries": entries,
+    }
 
 
 def _detect_control_mode(data):
@@ -455,6 +876,21 @@ def analyze_recording_summary(recording_path: Path, analyze_to_failure: bool = F
             data['brake'] = (
                 np.array(f['control/brake'][:]) if 'control/brake' in f else None
             )
+            data['target_speed_final'] = (
+                np.array(f['control/target_speed_final'][:])
+                if 'control/target_speed_final' in f
+                else None
+            )
+            data['longitudinal_accel_capped'] = (
+                np.array(f['control/longitudinal_accel_capped'][:])
+                if 'control/longitudinal_accel_capped' in f
+                else None
+            )
+            data['longitudinal_jerk_capped'] = (
+                np.array(f['control/longitudinal_jerk_capped'][:])
+                if 'control/longitudinal_jerk_capped' in f
+                else None
+            )
             data['control_timestamps'] = (
                 np.array(f['control/timestamps'][:])
                 if 'control/timestamps' in f
@@ -477,6 +913,78 @@ def analyze_recording_summary(recording_path: Path, analyze_to_failure: bool = F
             )
             data['e2e_latency_mode'] = (
                 f['control/e2e_latency_mode'][:] if 'control/e2e_latency_mode' in f else []
+            )
+            data['chassis_ground_min_clearance_m'] = (
+                np.array(f['vehicle/chassis_ground_min_clearance_m'][:])
+                if 'vehicle/chassis_ground_min_clearance_m' in f
+                else (
+                    np.array(f['unity_feedback/chassis_ground_min_clearance_m'][:])
+                    if 'unity_feedback/chassis_ground_min_clearance_m' in f
+                    else None
+                )
+            )
+            data['chassis_ground_effective_min_clearance_m'] = (
+                np.array(f['vehicle/chassis_ground_effective_min_clearance_m'][:])
+                if 'vehicle/chassis_ground_effective_min_clearance_m' in f
+                else (
+                    np.array(f['unity_feedback/chassis_ground_effective_min_clearance_m'][:])
+                    if 'unity_feedback/chassis_ground_effective_min_clearance_m' in f
+                    else None
+                )
+            )
+            data['chassis_ground_clearance_m'] = (
+                np.array(f['vehicle/chassis_ground_clearance_m'][:])
+                if 'vehicle/chassis_ground_clearance_m' in f
+                else (
+                    np.array(f['unity_feedback/chassis_ground_clearance_m'][:])
+                    if 'unity_feedback/chassis_ground_clearance_m' in f
+                    else None
+                )
+            )
+            data['chassis_ground_penetration_m'] = (
+                np.array(f['vehicle/chassis_ground_penetration_m'][:])
+                if 'vehicle/chassis_ground_penetration_m' in f
+                else (
+                    np.array(f['unity_feedback/chassis_ground_penetration_m'][:])
+                    if 'unity_feedback/chassis_ground_penetration_m' in f
+                    else None
+                )
+            )
+            data['chassis_ground_contact'] = (
+                np.array(f['vehicle/chassis_ground_contact'][:])
+                if 'vehicle/chassis_ground_contact' in f
+                else (
+                    np.array(f['unity_feedback/chassis_ground_contact'][:])
+                    if 'unity_feedback/chassis_ground_contact' in f
+                    else None
+                )
+            )
+            data['wheel_grounded_count'] = (
+                np.array(f['vehicle/wheel_grounded_count'][:])
+                if 'vehicle/wheel_grounded_count' in f
+                else (
+                    np.array(f['unity_feedback/wheel_grounded_count'][:])
+                    if 'unity_feedback/wheel_grounded_count' in f
+                    else None
+                )
+            )
+            data['wheel_colliders_ready'] = (
+                np.array(f['vehicle/wheel_colliders_ready'][:])
+                if 'vehicle/wheel_colliders_ready' in f
+                else (
+                    np.array(f['unity_feedback/wheel_colliders_ready'][:])
+                    if 'unity_feedback/wheel_colliders_ready' in f
+                    else None
+                )
+            )
+            data['force_fallback_active'] = (
+                np.array(f['vehicle/force_fallback_active'][:])
+                if 'vehicle/force_fallback_active' in f
+                else (
+                    np.array(f['unity_feedback/force_fallback_active'][:])
+                    if 'unity_feedback/force_fallback_active' in f
+                    else None
+                )
             )
 
             # Trajectory data
@@ -936,6 +1444,13 @@ def analyze_recording_summary(recording_path: Path, analyze_to_failure: bool = F
     lateral_accel_p95 = 0.0
     lateral_jerk_p95 = 0.0
     lateral_jerk_max = 0.0
+    hotspot_attribution = {
+        "schema_version": "v1",
+        "availability": "unavailable",
+        "dt_nominal_ms": None,
+        "dt_gap_threshold_ms": None,
+        "entries": [],
+    }
     config = _load_config()
     traj_cfg = config.get('trajectory', {})
     perception_cfg = config.get('perception', {})
@@ -1071,6 +1586,11 @@ def analyze_recording_summary(recording_path: Path, analyze_to_failure: bool = F
                     abs_lat_jerk = np.abs(lat_jerk)
                     lateral_jerk_p95 = safe_float(np.percentile(abs_lat_jerk, 95))
                     lateral_jerk_max = safe_float(np.max(abs_lat_jerk))
+        hotspot_attribution = _build_longitudinal_hotspot_attribution(
+            data=data,
+            config=config,
+            n_frames=n_frames,
+        )
     
     # 3. PERCEPTION QUALITY
     lane_detection_rate = safe_float(np.sum(data['num_lanes_detected'] >= 2) / n_frames * 100 if data['num_lanes_detected'] is not None and n_frames > 0 else 0.0)
@@ -2066,6 +2586,15 @@ def analyze_recording_summary(recording_path: Path, analyze_to_failure: bool = F
         recommendations.append("Reduce longitudinal jerk - add rate limiting on throttle/brake")
 
     latency_sync = _build_latency_sync_summary(data)
+    chassis_ground = _build_chassis_ground_summary(data, n_frames=n_frames)
+    if chassis_ground.get("health") == "POOR":
+        recommendations.append(
+            "Chassis-ground health is POOR - fix ride height/collider setup and remove fallback dynamics."
+        )
+    elif chassis_ground.get("health") == "WARN":
+        recommendations.append(
+            "Chassis-ground health is WARN - reduce chassis contact risk and eliminate fallback activations."
+        )
     
     # Key issues
     key_issues = []
@@ -2116,6 +2645,16 @@ def analyze_recording_summary(recording_path: Path, analyze_to_failure: bool = F
         misaligned_rate = latency_sync.get("sync_alignment", {}).get("contract_misaligned_rate")
         if misaligned_rate is not None:
             key_issues.append(f"High sync misalignment (rate={float(misaligned_rate) * 100.0:.1f}%)")
+    if chassis_ground.get("health") in {"WARN", "POOR"}:
+        contact_rate = chassis_ground.get("contact_rate_pct")
+        penetration_max = chassis_ground.get("penetration_max_m")
+        if contact_rate is not None and penetration_max is not None:
+            key_issues.append(
+                "Chassis-ground contact/penetration detected "
+                f"(contact={float(contact_rate):.2f}%, penetration_max={float(penetration_max):.3f}m)"
+            )
+        else:
+            key_issues.append("Chassis-ground contact/penetration detected")
     
     return {
         "summary_schema_version": "v1",
@@ -2229,7 +2768,8 @@ def analyze_recording_summary(recording_path: Path, analyze_to_failure: bool = F
             "comfort_gate_thresholds_si": {
                 "longitudinal_accel_p95_mps2": 3.0,
                 "longitudinal_jerk_p95_mps3": 6.0
-            }
+            },
+            "hotspot_attribution": hotspot_attribution,
         },
         "control_stability": {
             "straight_fraction": safe_float(straight_fraction),
@@ -2273,6 +2813,7 @@ def analyze_recording_summary(recording_path: Path, analyze_to_failure: bool = F
         "turn_bias": turn_bias,
         "alignment_summary": alignment_summary,
         "latency_sync": latency_sync,
+        "chassis_ground": chassis_ground,
         "system_health": {
             "pid_integral_max": safe_float(pid_integral_max),
             "unity_time_gap_max": safe_float(unity_time_gap_max),

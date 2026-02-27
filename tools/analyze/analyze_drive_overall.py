@@ -1130,6 +1130,7 @@ def _print_summary_report(recording_path: Path, summary: Dict, analyze_to_failur
     system_health = summary.get("system_health", {})
     safety = summary.get("safety", {})
     latency_sync = summary.get("latency_sync", {})
+    chassis_ground = summary.get("chassis_ground", {})
     curve_intent_diag = summary.get("curve_intent_diagnostics", {})
     recommendations = summary.get("recommendations", [])
 
@@ -1227,6 +1228,37 @@ def _print_summary_report(recording_path: Path, summary: Dict, analyze_to_failur
           f"  (target ≤6.0 — gate metric)")
     print(f"   Lateral Accel P95: {comfort.get('lateral_accel_p95', 0.0):.3f} m/s²")
     print(f"   Lateral Jerk P95:  {comfort.get('lateral_jerk_p95', 0.0):.3f} m/s³")
+    hotspot_attr = comfort.get("hotspot_attribution", {})
+    hotspot_entries = hotspot_attr.get("entries") if isinstance(hotspot_attr, dict) else None
+    if hotspot_attr.get("availability") == "available" and hotspot_entries:
+        nominal_dt = hotspot_attr.get("dt_nominal_ms")
+        gap_limit = hotspot_attr.get("dt_gap_threshold_ms")
+        nominal_text = f"{float(nominal_dt):.1f} ms" if nominal_dt is not None else "n/a"
+        gap_text = f"{float(gap_limit):.1f} ms" if gap_limit is not None else "n/a"
+        print(
+            "   Longitudinal Hotspot Attribution "
+            f"(dt_nominal={nominal_text}, gap>= {gap_text}):"
+        )
+        print("     Frame Kind    |Metric|  Accel    Jerk   dt_prev  Contact  Attribution")
+        for entry in hotspot_entries[:8]:
+            frame = int(entry.get("frame", -1))
+            metric = str(entry.get("metric", "n/a"))
+            metric_abs = float(entry.get("metric_abs", 0.0))
+            accel_val = entry.get("accel_mps2")
+            jerk_val = entry.get("jerk_mps3")
+            dt_prev = entry.get("dt_prev_ms")
+            contact = entry.get("chassis_ground_contact")
+            attribution = str(entry.get("attribution", "unknown"))
+            accel_text = f"{float(accel_val):+6.2f}" if accel_val is not None else "  n/a "
+            jerk_text = f"{float(jerk_val):+7.2f}" if jerk_val is not None else "   n/a "
+            dt_text = f"{float(dt_prev):6.1f}" if dt_prev is not None else "   n/a"
+            contact_text = "YES" if contact else "NO"
+            print(
+                f"     {frame:5d} {metric:>5s} {metric_abs:9.2f} {accel_text} {jerk_text}"
+                f" {dt_text} ms {contact_text:>7s}  {attribution}"
+            )
+    else:
+        print("   Longitudinal Hotspot Attribution: N/A")
     print()
 
     print("6. PERCEPTION QUALITY")
@@ -1292,7 +1324,54 @@ def _print_summary_report(recording_path: Path, summary: Dict, analyze_to_failur
         print("   Sync/Alignment Health: N/A")
     print()
 
-    print("10. SAFETY METRICS")
+    print("10. CHASSIS-GROUND HEALTH")
+    print("-" * 80)
+    chassis_availability = str(chassis_ground.get("availability", "unavailable")).lower()
+    if chassis_availability == "available":
+        health = str(chassis_ground.get("health", "UNKNOWN")).upper()
+        limits = chassis_ground.get("limits", {})
+        contact_rate = chassis_ground.get("contact_rate_pct")
+        contact_limit = limits.get("warn_contact_rate_pct_max")
+        penetration_max = chassis_ground.get("penetration_max_m")
+        penetration_limit = limits.get("warn_penetration_m_max")
+        configured_min = chassis_ground.get("configured_min_clearance_m")
+        effective_min = chassis_ground.get("effective_min_clearance_m")
+        clearance_p05 = chassis_ground.get("clearance_p05_m")
+        fallback_rate = chassis_ground.get("force_fallback_rate_pct")
+        fallback_limit = limits.get("fallback_warn_rate_pct_max")
+        print(f"   Health: {health}")
+        if configured_min is not None:
+            print(f"   Configured Min Clearance: {float(configured_min):.3f} m")
+        if effective_min is not None:
+            print(f"   Effective Min Clearance:  {float(effective_min):.3f} m")
+        if penetration_max is not None:
+            fail_suffix = (
+                f" (<= {float(penetration_limit):.3f} m)"
+                if penetration_limit is not None and float(penetration_max) > float(penetration_limit)
+                else ""
+            )
+            print(f"   Penetration Max: {float(penetration_max):.3f} m{fail_suffix}")
+        if contact_rate is not None:
+            fail_suffix = (
+                f" (<= {float(contact_limit):.2f}%)"
+                if contact_limit is not None and float(contact_rate) > float(contact_limit)
+                else ""
+            )
+            print(f"   Contact Rate: {float(contact_rate):.2f}%{fail_suffix}")
+        if clearance_p05 is not None:
+            print(f"   Clearance P05: {float(clearance_p05):.3f} m")
+        if fallback_rate is not None:
+            fail_suffix = (
+                f" (<= {float(fallback_limit):.2f}%)"
+                if fallback_limit is not None and float(fallback_rate) > float(fallback_limit)
+                else ""
+            )
+            print(f"   Force Fallback Rate: {float(fallback_rate):.2f}%{fail_suffix}")
+    else:
+        print("   Chassis-Ground Health: N/A")
+    print()
+
+    print("11. SAFETY METRICS")
     print("-" * 80)
     print(f"   Out-of-Lane Events: {int(safety.get('out_of_lane_events', 0))}")
     print(f"   Out-of-Lane Time: {safety.get('out_of_lane_time', 0.0):.1f}%")
@@ -1313,7 +1392,7 @@ def _print_summary_report(recording_path: Path, summary: Dict, analyze_to_failur
         )
     print()
 
-    print("11. RECOMMENDATIONS")
+    print("12. RECOMMENDATIONS")
     print("-" * 80)
     if recommendations:
         for idx, recommendation in enumerate(recommendations, 1):
