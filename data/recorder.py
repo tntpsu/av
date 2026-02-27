@@ -265,6 +265,54 @@ class DataRecorder:
             dtype=np.float32
         )
         self.h5_file.create_dataset(
+            "vehicle/chassis_ground_min_clearance_m",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "vehicle/chassis_ground_effective_min_clearance_m",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "vehicle/chassis_ground_clearance_m",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "vehicle/chassis_ground_penetration_m",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "vehicle/chassis_ground_contact",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int8
+        )
+        self.h5_file.create_dataset(
+            "vehicle/wheel_grounded_count",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int8
+        )
+        self.h5_file.create_dataset(
+            "vehicle/wheel_colliders_ready",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int8
+        )
+        self.h5_file.create_dataset(
+            "vehicle/force_fallback_active",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int8
+        )
+        self.h5_file.create_dataset(
             "vehicle/steering_angle",
             shape=(0,),
             maxshape=max_shape,
@@ -2506,6 +2554,54 @@ class DataRecorder:
             maxshape=max_shape,
             dtype=np.int32
         )
+        self.h5_file.create_dataset(
+            "unity_feedback/chassis_ground_min_clearance_m",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "unity_feedback/chassis_ground_effective_min_clearance_m",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "unity_feedback/chassis_ground_clearance_m",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "unity_feedback/chassis_ground_penetration_m",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "unity_feedback/chassis_ground_contact",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int8
+        )
+        self.h5_file.create_dataset(
+            "unity_feedback/wheel_grounded_count",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int8
+        )
+        self.h5_file.create_dataset(
+            "unity_feedback/wheel_colliders_ready",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int8
+        )
+        self.h5_file.create_dataset(
+            "unity_feedback/force_fallback_active",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int8
+        )
     
     def record_frame(self, frame: RecordingFrame):
         """
@@ -2903,6 +2999,14 @@ class DataRecorder:
         speed_limit_preview_long = []
         speed_limit_preview_long_distances = []
         speed_limit_preview_long_min_distances = []
+        chassis_ground_min_clearance_m = []
+        chassis_ground_effective_min_clearance_m = []
+        chassis_ground_clearance_m = []
+        chassis_ground_penetration_m = []
+        chassis_ground_contact = []
+        wheel_grounded_count = []
+        wheel_colliders_ready = []
+        force_fallback_active = []
         steering_angles = []
         steering_angles_actual = []
         steering_inputs = []
@@ -3053,6 +3157,30 @@ class DataRecorder:
             )
             speed_limit_preview_long_min_distances.append(
                 getattr(vs, 'speed_limit_preview_long_min_distance', 0.0)
+            )
+            chassis_ground_min_clearance_m.append(
+                getattr(vs, 'chassis_ground_min_clearance_m', np.nan)
+            )
+            chassis_ground_effective_min_clearance_m.append(
+                getattr(vs, 'chassis_ground_effective_min_clearance_m', np.nan)
+            )
+            chassis_ground_clearance_m.append(
+                getattr(vs, 'chassis_ground_clearance_m', np.nan)
+            )
+            chassis_ground_penetration_m.append(
+                getattr(vs, 'chassis_ground_penetration_m', np.nan)
+            )
+            chassis_ground_contact.append(
+                1 if getattr(vs, 'chassis_ground_contact', False) else 0
+            )
+            wheel_grounded_count.append(
+                int(getattr(vs, 'wheel_grounded_count', 0) or 0)
+            )
+            wheel_colliders_ready.append(
+                1 if getattr(vs, 'wheel_colliders_ready', False) else 0
+            )
+            force_fallback_active.append(
+                1 if getattr(vs, 'force_fallback_active', False) else 0
             )
             steering_angles.append(vs.steering_angle)
             steering_angles_actual.append(
@@ -3300,6 +3428,14 @@ class DataRecorder:
                        "speed_limit_preview_mid_min_distance", "speed_limit_preview_long",
                        "speed_limit_preview_long_distance",
                        "speed_limit_preview_long_min_distance",
+                       "chassis_ground_min_clearance_m",
+                       "chassis_ground_effective_min_clearance_m",
+                       "chassis_ground_clearance_m",
+                       "chassis_ground_penetration_m",
+                       "chassis_ground_contact",
+                       "wheel_grounded_count",
+                       "wheel_colliders_ready",
+                       "force_fallback_active",
                       "steering_angle", "steering_angle_actual",
                       "steering_input", "desired_steer_angle",
                        "motor_torque", "brake_torque", "camera_8m_screen_y",
@@ -3315,6 +3451,14 @@ class DataRecorder:
                                                 "speed_limit_preview_mid_min_distance", "speed_limit_preview_long",
                                                 "speed_limit_preview_long_distance",
                                                 "speed_limit_preview_long_min_distance",
+                                                "chassis_ground_min_clearance_m",
+                                                "chassis_ground_effective_min_clearance_m",
+                                                "chassis_ground_clearance_m",
+                                                "chassis_ground_penetration_m",
+                                                "chassis_ground_contact",
+                                                "wheel_grounded_count",
+                                                "wheel_colliders_ready",
+                                                "force_fallback_active",
                                                 "steering_angle", "steering_angle_actual",
                                                 "steering_input", "desired_steer_angle",
                                                  "motor_torque", "brake_torque", "camera_8m_screen_y",
@@ -3357,6 +3501,30 @@ class DataRecorder:
             )
             self.h5_file["vehicle/speed_limit_preview_long_min_distance"][current_size:] = (
                 speed_limit_preview_long_min_distances
+            )
+            self.h5_file["vehicle/chassis_ground_min_clearance_m"][current_size:] = np.array(
+                chassis_ground_min_clearance_m, dtype=np.float32
+            )
+            self.h5_file["vehicle/chassis_ground_effective_min_clearance_m"][current_size:] = np.array(
+                chassis_ground_effective_min_clearance_m, dtype=np.float32
+            )
+            self.h5_file["vehicle/chassis_ground_clearance_m"][current_size:] = np.array(
+                chassis_ground_clearance_m, dtype=np.float32
+            )
+            self.h5_file["vehicle/chassis_ground_penetration_m"][current_size:] = np.array(
+                chassis_ground_penetration_m, dtype=np.float32
+            )
+            self.h5_file["vehicle/chassis_ground_contact"][current_size:] = np.array(
+                chassis_ground_contact, dtype=np.int8
+            )
+            self.h5_file["vehicle/wheel_grounded_count"][current_size:] = np.array(
+                wheel_grounded_count, dtype=np.int8
+            )
+            self.h5_file["vehicle/wheel_colliders_ready"][current_size:] = np.array(
+                wheel_colliders_ready, dtype=np.int8
+            )
+            self.h5_file["vehicle/force_fallback_active"][current_size:] = np.array(
+                force_fallback_active, dtype=np.int8
             )
             self.h5_file["vehicle/steering_angle"][current_size:] = steering_angles
             self.h5_file["vehicle/steering_angle_actual"][current_size:] = steering_angles_actual
@@ -5806,6 +5974,14 @@ class DataRecorder:
         actual_steerings = []
         actual_throttles = []
         actual_brakes = []
+        chassis_ground_min_clearance_m = []
+        chassis_ground_effective_min_clearance_m = []
+        chassis_ground_clearance_m = []
+        chassis_ground_penetration_m = []
+        chassis_ground_contact = []
+        wheel_grounded_count = []
+        wheel_colliders_ready = []
+        force_fallback_active = []
         gt_data_available = []
         gt_reporter_enabled = []
         path_curvature_calc = []
@@ -5823,6 +5999,26 @@ class DataRecorder:
             actual_steerings.append(uf.actual_steering_applied if uf.actual_steering_applied is not None else 0.0)
             actual_throttles.append(uf.actual_throttle_applied if uf.actual_throttle_applied is not None else 0.0)
             actual_brakes.append(uf.actual_brake_applied if uf.actual_brake_applied is not None else 0.0)
+            chassis_ground_min_clearance_m.append(
+                uf.chassis_ground_min_clearance_m if uf.chassis_ground_min_clearance_m is not None else np.nan
+            )
+            chassis_ground_effective_min_clearance_m.append(
+                uf.chassis_ground_effective_min_clearance_m
+                if uf.chassis_ground_effective_min_clearance_m is not None
+                else np.nan
+            )
+            chassis_ground_clearance_m.append(
+                uf.chassis_ground_clearance_m if uf.chassis_ground_clearance_m is not None else np.nan
+            )
+            chassis_ground_penetration_m.append(
+                uf.chassis_ground_penetration_m if uf.chassis_ground_penetration_m is not None else np.nan
+            )
+            chassis_ground_contact.append(1 if uf.chassis_ground_contact else 0)
+            wheel_grounded_count.append(
+                int(uf.wheel_grounded_count if uf.wheel_grounded_count is not None else 0)
+            )
+            wheel_colliders_ready.append(1 if uf.wheel_colliders_ready else 0)
+            force_fallback_active.append(1 if uf.force_fallback_active else 0)
             gt_data_available.append(uf.ground_truth_data_available)
             gt_reporter_enabled.append(uf.ground_truth_reporter_enabled)
             path_curvature_calc.append(uf.path_curvature_calculated)
@@ -5837,6 +6033,14 @@ class DataRecorder:
             # Resize all datasets
             for key in ["timestamps", "ground_truth_mode_active", "control_command_received",
                        "actual_steering_applied", "actual_throttle_applied", "actual_brake_applied",
+                       "chassis_ground_min_clearance_m",
+                       "chassis_ground_effective_min_clearance_m",
+                       "chassis_ground_clearance_m",
+                       "chassis_ground_penetration_m",
+                       "chassis_ground_contact",
+                       "wheel_grounded_count",
+                       "wheel_colliders_ready",
+                       "force_fallback_active",
                        "ground_truth_data_available", "ground_truth_reporter_enabled",
                        "path_curvature_calculated", "car_controller_mode", "av_control_enabled",
                        "unity_frame_count"]:
@@ -5849,6 +6053,30 @@ class DataRecorder:
             self.h5_file["unity_feedback/actual_steering_applied"][current_size:] = actual_steerings
             self.h5_file["unity_feedback/actual_throttle_applied"][current_size:] = actual_throttles
             self.h5_file["unity_feedback/actual_brake_applied"][current_size:] = actual_brakes
+            self.h5_file["unity_feedback/chassis_ground_min_clearance_m"][current_size:] = (
+                np.array(chassis_ground_min_clearance_m, dtype=np.float32)
+            )
+            self.h5_file["unity_feedback/chassis_ground_effective_min_clearance_m"][current_size:] = (
+                np.array(chassis_ground_effective_min_clearance_m, dtype=np.float32)
+            )
+            self.h5_file["unity_feedback/chassis_ground_clearance_m"][current_size:] = (
+                np.array(chassis_ground_clearance_m, dtype=np.float32)
+            )
+            self.h5_file["unity_feedback/chassis_ground_penetration_m"][current_size:] = (
+                np.array(chassis_ground_penetration_m, dtype=np.float32)
+            )
+            self.h5_file["unity_feedback/chassis_ground_contact"][current_size:] = np.array(
+                chassis_ground_contact, dtype=np.int8
+            )
+            self.h5_file["unity_feedback/wheel_grounded_count"][current_size:] = np.array(
+                wheel_grounded_count, dtype=np.int8
+            )
+            self.h5_file["unity_feedback/wheel_colliders_ready"][current_size:] = np.array(
+                wheel_colliders_ready, dtype=np.int8
+            )
+            self.h5_file["unity_feedback/force_fallback_active"][current_size:] = np.array(
+                force_fallback_active, dtype=np.int8
+            )
             self.h5_file["unity_feedback/ground_truth_data_available"][current_size:] = gt_data_available
             self.h5_file["unity_feedback/ground_truth_reporter_enabled"][current_size:] = gt_reporter_enabled
             self.h5_file["unity_feedback/path_curvature_calculated"][current_size:] = path_curvature_calc

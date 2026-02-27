@@ -5462,6 +5462,47 @@ class AVStack:
                 'speedLimitPreviewLongMinDistance',
                 vehicle_state_dict.get('speed_limit_preview_long_min_distance', 0.0),
             ),
+            chassis_ground_min_clearance_m=vehicle_state_dict.get(
+                'chassisGroundMinClearanceM',
+                vehicle_state_dict.get('chassis_ground_min_clearance_m', float("nan")),
+            ),
+            chassis_ground_effective_min_clearance_m=vehicle_state_dict.get(
+                'chassisGroundEffectiveMinClearanceM',
+                vehicle_state_dict.get('chassis_ground_effective_min_clearance_m', float("nan")),
+            ),
+            chassis_ground_clearance_m=vehicle_state_dict.get(
+                'chassisGroundClearanceM',
+                vehicle_state_dict.get('chassis_ground_clearance_m', float("nan")),
+            ),
+            chassis_ground_penetration_m=vehicle_state_dict.get(
+                'chassisGroundPenetrationM',
+                vehicle_state_dict.get('chassis_ground_penetration_m', float("nan")),
+            ),
+            chassis_ground_contact=bool(
+                vehicle_state_dict.get(
+                    'chassisGroundContact',
+                    vehicle_state_dict.get('chassis_ground_contact', False),
+                )
+            ),
+            wheel_grounded_count=int(
+                vehicle_state_dict.get(
+                    'wheelGroundedCount',
+                    vehicle_state_dict.get('wheel_grounded_count', 0),
+                )
+                or 0
+            ),
+            wheel_colliders_ready=bool(
+                vehicle_state_dict.get(
+                    'wheelCollidersReady',
+                    vehicle_state_dict.get('wheel_colliders_ready', False),
+                )
+            ),
+            force_fallback_active=bool(
+                vehicle_state_dict.get(
+                    'forceFallbackActive',
+                    vehicle_state_dict.get('force_fallback_active', False),
+                )
+            ),
         )
         
         def _latency_float(key: str) -> float:
@@ -6032,6 +6073,16 @@ class AVStack:
                         actual_steering_applied=feedback_dict.get('actual_steering_applied'),
                         actual_throttle_applied=feedback_dict.get('actual_throttle_applied'),
                         actual_brake_applied=feedback_dict.get('actual_brake_applied'),
+                        chassis_ground_min_clearance_m=feedback_dict.get('chassis_ground_min_clearance_m'),
+                        chassis_ground_effective_min_clearance_m=feedback_dict.get(
+                            'chassis_ground_effective_min_clearance_m'
+                        ),
+                        chassis_ground_clearance_m=feedback_dict.get('chassis_ground_clearance_m'),
+                        chassis_ground_penetration_m=feedback_dict.get('chassis_ground_penetration_m'),
+                        chassis_ground_contact=feedback_dict.get('chassis_ground_contact', False),
+                        wheel_grounded_count=feedback_dict.get('wheel_grounded_count'),
+                        wheel_colliders_ready=feedback_dict.get('wheel_colliders_ready', False),
+                        force_fallback_active=feedback_dict.get('force_fallback_active', False),
                         ground_truth_data_available=feedback_dict.get('ground_truth_data_available', False),
                         ground_truth_reporter_enabled=feedback_dict.get('ground_truth_reporter_enabled', False),
                         path_curvature_calculated=feedback_dict.get('path_curvature_calculated', False),

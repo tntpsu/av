@@ -8,9 +8,10 @@ import base64
 import io
 import time
 import logging
+import math
 from collections import deque
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Any
 from datetime import datetime
 
 import numpy as np
@@ -84,6 +85,48 @@ last_unity_send_realtime: Optional[float] = None
 last_unity_time: Optional[float] = None
 last_control_arrival_time: Optional[float] = None
 speed_limit_zero_streak: int = 0
+vehicle_state_sanitize_events: int = 0
+vehicle_state_sanitize_values: int = 0
+
+
+def _sanitize_json_compatible(value: Any) -> tuple[Any, int]:
+    """Convert non-finite numeric payload values to JSON-safe nulls."""
+    replacements = 0
+
+    def _walk(obj: Any) -> Any:
+        nonlocal replacements
+        if isinstance(obj, dict):
+            return {k: _walk(v) for k, v in obj.items()}
+        if isinstance(obj, list):
+            return [_walk(v) for v in obj]
+        if isinstance(obj, tuple):
+            return [_walk(v) for v in obj]
+        if isinstance(obj, (float, np.floating)):
+            fval = float(obj)
+            if not math.isfinite(fval):
+                replacements += 1
+                return None
+            return fval
+        if isinstance(obj, np.integer):
+            return int(obj)
+        return obj
+
+    return _walk(value), replacements
+
+
+def _record_vehicle_state_sanitization(replacements: int, context: str) -> None:
+    global vehicle_state_sanitize_events, vehicle_state_sanitize_values
+    if replacements <= 0:
+        return
+    vehicle_state_sanitize_events += 1
+    vehicle_state_sanitize_values += replacements
+    logger.warning(
+        "[SANITIZE] context=%s replacements=%d total_events=%d total_values=%d",
+        context,
+        replacements,
+        vehicle_state_sanitize_events,
+        vehicle_state_sanitize_values,
+    )
 
 
 def _normalize_camera_id(camera_id: Optional[str]) -> str:
@@ -246,6 +289,14 @@ class VehicleState(BaseModel):
     speedLimitPreviewLong: float = 0.0  # Speed limit at long preview distance (m/s)
     speedLimitPreviewLongDistance: float = 0.0  # Long preview distance (m)
     speedLimitPreviewLongMinDistance: float = 0.0  # Distance to min limit in long window (m)
+    chassisGroundMinClearanceM: Optional[float] = None
+    chassisGroundEffectiveMinClearanceM: Optional[float] = None
+    chassisGroundClearanceM: Optional[float] = None
+    chassisGroundPenetrationM: Optional[float] = None
+    chassisGroundContact: bool = False
+    wheelGroundedCount: Optional[int] = None
+    wheelCollidersReady: bool = False
+    forceFallbackActive: bool = False
 
 
 class ControlCommand(BaseModel):
@@ -276,6 +327,14 @@ class UnityFeedback(BaseModel):
     actual_steering_applied: Optional[float] = None
     actual_throttle_applied: Optional[float] = None
     actual_brake_applied: Optional[float] = None
+    chassis_ground_min_clearance_m: Optional[float] = None
+    chassis_ground_effective_min_clearance_m: Optional[float] = None
+    chassis_ground_clearance_m: Optional[float] = None
+    chassis_ground_penetration_m: Optional[float] = None
+    chassis_ground_contact: bool = False
+    wheel_grounded_count: Optional[int] = None
+    wheel_colliders_ready: bool = False
+    force_fallback_active: bool = False
     # Ground truth data status
     ground_truth_data_available: bool = False
     ground_truth_reporter_enabled: bool = False
@@ -454,7 +513,9 @@ async def receive_vehicle_state(state: VehicleState):
     global latest_vehicle_state, vehicle_state_queue
     start_time = time.time()
 
-    latest_vehicle_state = state.model_dump()
+    raw_state = state.model_dump()
+    latest_vehicle_state, replacements = _sanitize_json_compatible(raw_state)
+    _record_vehicle_state_sanitization(replacements, context="receive_vehicle_state")
     vehicle_state_queue.append(latest_vehicle_state)
 
     global last_state_arrival_time, last_unity_send_realtime, last_unity_time, speed_limit_zero_streak
@@ -763,8 +824,10 @@ async def get_latest_vehicle_state():
     
     if latest_vehicle_state is None:
         raise HTTPException(status_code=404, detail="No vehicle state available")
-    
-    return latest_vehicle_state
+
+    sanitized_state, replacements = _sanitize_json_compatible(latest_vehicle_state)
+    _record_vehicle_state_sanitization(replacements, context="get_latest_vehicle_state")
+    return sanitized_state
 
 
 @app.get("/api/vehicle/state/next")
@@ -772,7 +835,10 @@ async def get_next_vehicle_state():
     """Get next queued vehicle state in FIFO order."""
     if len(vehicle_state_queue) == 0:
         raise HTTPException(status_code=404, detail="No queued vehicle state available")
-    return vehicle_state_queue.popleft()
+    state = vehicle_state_queue.popleft()
+    sanitized_state, replacements = _sanitize_json_compatible(state)
+    _record_vehicle_state_sanitization(replacements, context="get_next_vehicle_state")
+    return sanitized_state
 
 
 @app.get("/api/health")
@@ -782,7 +848,9 @@ async def health_check():
         "status": "healthy",
         "timestamp": time.time(),
         "has_camera_frame": latest_camera_frames.get("front_center") is not None or latest_camera_frame is not None,
-        "has_vehicle_state": latest_vehicle_state is not None
+        "has_vehicle_state": latest_vehicle_state is not None,
+        "vehicle_state_sanitize_events": vehicle_state_sanitize_events,
+        "vehicle_state_sanitize_values": vehicle_state_sanitize_values,
     }
 
 
@@ -970,4 +1038,3 @@ def run_server(host: str = "0.0.0.0", port: int = 8000):
 
 if __name__ == "__main__":
     run_server()
-

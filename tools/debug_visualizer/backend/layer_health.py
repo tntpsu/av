@@ -12,6 +12,7 @@ from __future__ import annotations
 from pathlib import Path
 import numpy as np
 import h5py
+import yaml
 
 
 # ── Thresholds ────────────────────────────────────────────────────────────────
@@ -32,6 +33,7 @@ BENIGN_STALE_REASONS = frozenset({'left_lane_low_visibility'})  # Designed backu
 class LayerHealthAnalyzer:
     def __init__(self, recording_path: Path) -> None:
         self.path = recording_path
+        self.longitudinal_max_accel, self.longitudinal_max_decel = self._load_longitudinal_limits()
 
     def compute(self) -> dict:
         """
@@ -147,12 +149,16 @@ class LayerHealthAnalyzer:
         if lat_err > 0.4:
             flags.append("lateral_error_high")
 
-        # Longitudinal jerk (weight 0.30) — recorded as control/longitudinal_jerk_capped
-        jerk = abs(self._scalar(f, "control/longitudinal_jerk_capped", i, default=0.0))
+        # Longitudinal jerk (weight 0.30) from command-domain acceleration derivative.
+        jerk = self._commanded_jerk_at(f, i)
         jerk_norm = max(0.0, min(1.0, jerk / CTRL_JERK_GATE))
         score -= 0.30 * jerk_norm
-        if jerk > CTRL_JERK_GATE * 0.75:
+        if jerk > CTRL_JERK_ALERT:
             flags.append("jerk_spike")
+
+        jerk_cap_active = bool(self._scalar(f, "control/longitudinal_jerk_capped", i, default=0.0) > 0.5)
+        if jerk_cap_active:
+            flags.append("jerk_cap_active")
 
         # Steering jerk limiter active (weight 0.10)
         steer_jerk_active = bool(self._scalar(f, "control/steering_jerk_limited_active",
@@ -161,9 +167,9 @@ class LayerHealthAnalyzer:
             score -= 0.10
             flags.append("steer_jerk_limited")
 
-        # Longitudinal accel — flag only (control/longitudinal_accel_capped)
-        accel = abs(self._scalar(f, "control/longitudinal_accel_capped", i, default=0.0))
-        if accel > 3.0:
+        # Longitudinal accel cap — flag only.
+        accel_cap_active = bool(self._scalar(f, "control/longitudinal_accel_capped", i, default=0.0) > 0.5)
+        if accel_cap_active:
             flags.append("accel_high")
 
         return {"score": max(0.0, min(1.0, score)), "flags": flags}
@@ -181,6 +187,50 @@ class LayerHealthAnalyzer:
             return val
         except (IndexError, ValueError):
             return default
+
+    def _load_longitudinal_limits(self) -> tuple[float, float]:
+        config_path = Path(__file__).resolve().parents[3] / "config" / "av_stack_config.yaml"
+        max_accel = 2.5
+        max_decel = 3.0
+        if not config_path.exists():
+            return max_accel, max_decel
+        try:
+            with config_path.open("r") as f:
+                cfg = yaml.safe_load(f) or {}
+            long_cfg = ((cfg.get("control") or {}).get("longitudinal") or {})
+            max_accel = float(long_cfg.get("max_accel", max_accel))
+            max_decel = float(long_cfg.get("max_decel", max_decel))
+        except Exception:
+            pass
+        return max_accel, max_decel
+
+    def _commanded_jerk_at(self, f: h5py.File, i: int) -> float:
+        if i <= 0:
+            return 0.0
+        throttle_now = self._scalar(f, "control/throttle", i, default=0.0)
+        throttle_prev = self._scalar(f, "control/throttle", i - 1, default=0.0)
+        brake_now = self._scalar(f, "control/brake", i, default=0.0)
+        brake_prev = self._scalar(f, "control/brake", i - 1, default=0.0)
+        accel_now = (throttle_now * self.longitudinal_max_accel) - (brake_now * self.longitudinal_max_decel)
+        accel_prev = (throttle_prev * self.longitudinal_max_accel) - (brake_prev * self.longitudinal_max_decel)
+
+        dt = None
+        if "control/timestamps" in f:
+            try:
+                dt = float(f["control/timestamps"][i]) - float(f["control/timestamps"][i - 1])
+            except (IndexError, ValueError, TypeError):
+                dt = None
+        elif "control/timestamp" in f:
+            try:
+                dt = float(f["control/timestamp"][i]) - float(f["control/timestamp"][i - 1])
+            except (IndexError, ValueError, TypeError):
+                dt = None
+        if dt is None or not np.isfinite(dt) or dt <= 1e-6:
+            dt = 1.0 / 30.0
+        jerk = (accel_now - accel_prev) / dt
+        if not np.isfinite(jerk):
+            return 0.0
+        return abs(float(jerk))
 
     def _frame_count(self, f: h5py.File) -> int:
         """Infer frame count from the first available dataset."""

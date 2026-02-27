@@ -60,6 +60,16 @@ Both adapters must call the canonical module and must not implement independent 
 - `latency_sync.e2e`
 - `latency_sync.sync_alignment`
 - `latency_sync.overall`
+- `comfort.metric_roles`
+- `comfort.hotspot_attribution`
+
+## Comfort Metric Semantics
+
+- `comfort.commanded_jerk_p95`: command-domain gate metric derived from throttle/brake command derivatives.
+- `comfort.acceleration_p95_filtered`: gate metric for longitudinal acceleration comfort.
+- `comfort.jerk_p95_filtered`: measured outcome-domain diagnostic (filtered speed derivative).
+- `comfort.jerk_p95`: measured outcome-domain raw diagnostic (unfiltered speed derivative).
+- `comfort.hotspot_attribution`: top-N longitudinal hotspots with root-cause attribution labels.
 
 ## Adapter Responsibilities
 

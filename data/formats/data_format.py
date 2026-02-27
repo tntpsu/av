@@ -144,6 +144,15 @@ class VehicleState:
     speed_limit_preview_long: float = 0.0  # Speed limit at long preview distance (m/s)
     speed_limit_preview_long_distance: float = 0.0  # Long preview distance (m)
     speed_limit_preview_long_min_distance: float = 0.0  # Distance to min limit in long window (m)
+    # Chassis-ground telemetry (high-rate vehicle-state path)
+    chassis_ground_min_clearance_m: float = np.nan
+    chassis_ground_effective_min_clearance_m: float = np.nan
+    chassis_ground_clearance_m: float = np.nan
+    chassis_ground_penetration_m: float = np.nan
+    chassis_ground_contact: bool = False
+    wheel_grounded_count: int = 0
+    wheel_colliders_ready: bool = False
+    force_fallback_active: bool = False
 
 
 @dataclass
@@ -517,6 +526,14 @@ class UnityFeedback:
     actual_steering_applied: Optional[float] = None  # Actual steering Unity applied (degrees)
     actual_throttle_applied: Optional[float] = None  # Actual throttle Unity applied
     actual_brake_applied: Optional[float] = None  # Actual brake Unity applied
+    chassis_ground_min_clearance_m: Optional[float] = None
+    chassis_ground_effective_min_clearance_m: Optional[float] = None
+    chassis_ground_clearance_m: Optional[float] = None
+    chassis_ground_penetration_m: Optional[float] = None
+    chassis_ground_contact: bool = False
+    wheel_grounded_count: Optional[int] = None
+    wheel_colliders_ready: bool = False
+    force_fallback_active: bool = False
     # Ground truth data status
     ground_truth_data_available: bool = False  # Is ground truth data being calculated?
     ground_truth_reporter_enabled: bool = False  # Is GroundTruthReporter enabled?

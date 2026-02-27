@@ -1459,6 +1459,91 @@ class Visualizer {
                 html += '</div>';
             }
 
+            const chassisGround = summary.chassis_ground || null;
+            if (chassisGround && typeof chassisGround === 'object') {
+                const availability = String(chassisGround.availability || '').toLowerCase();
+                const limits = chassisGround.limits || {};
+                const health = String(chassisGround.health || 'UNKNOWN').toUpperCase();
+                const configuredMin = Number(chassisGround.configured_min_clearance_m);
+                const effectiveMin = Number(chassisGround.effective_min_clearance_m);
+                const penetrationMax = Number(chassisGround.penetration_max_m);
+                const contactRate = Number(chassisGround.contact_rate_pct);
+                const clearanceP05 = Number(chassisGround.clearance_p05_m);
+                const fallbackRate = Number(chassisGround.force_fallback_rate_pct);
+                const wheelReadyRate = Number(chassisGround.wheel_colliders_ready_rate_pct);
+
+                const contactLimit = Number(limits.warn_contact_rate_pct_max);
+                const penetrationLimit = Number(limits.warn_penetration_m_max);
+                const fallbackLimit = Number(limits.fallback_warn_rate_pct_max);
+
+                let healthColor = '#888';
+                if (health === 'GOOD') healthColor = '#4caf50';
+                else if (health === 'WARN') healthColor = '#ffa500';
+                else if (health === 'POOR') healthColor = '#ff6b6b';
+
+                const withFailLimit = (valueText, failed, limitText) => {
+                    if (!failed || !limitText) return valueText;
+                    return `${valueText} <span style="color:#a0a0a0;">(${limitText})</span>`;
+                };
+
+                let penetrationText = 'N/A';
+                let contactText = 'N/A';
+                let fallbackText = 'N/A';
+                let clearanceText = 'N/A';
+                let wheelReadyText = 'N/A';
+                let configuredText = 'N/A';
+                let effectiveText = 'N/A';
+                let penetrationColor = '#888';
+                let contactColor = '#888';
+                let fallbackColor = '#888';
+
+                if (availability === 'available') {
+                    if (Number.isFinite(configuredMin)) configuredText = `${configuredMin.toFixed(3)} m`;
+                    if (Number.isFinite(effectiveMin)) effectiveText = `${effectiveMin.toFixed(3)} m`;
+                    if (Number.isFinite(clearanceP05)) clearanceText = `${clearanceP05.toFixed(3)} m`;
+                    if (Number.isFinite(wheelReadyRate)) wheelReadyText = `${wheelReadyRate.toFixed(2)}%`;
+
+                    if (Number.isFinite(penetrationMax)) {
+                        const failed = Number.isFinite(penetrationLimit) && penetrationMax > penetrationLimit;
+                        penetrationColor = failed ? '#ff6b6b' : '#4caf50';
+                        const base = `${penetrationMax.toFixed(3)} m`;
+                        const limit = Number.isFinite(penetrationLimit) ? `<=${penetrationLimit.toFixed(3)} m` : '';
+                        penetrationText = withFailLimit(base, failed, limit);
+                    }
+                    if (Number.isFinite(contactRate)) {
+                        const failed = Number.isFinite(contactLimit) && contactRate > contactLimit;
+                        contactColor = failed ? '#ff6b6b' : '#4caf50';
+                        const base = `${contactRate.toFixed(2)}%`;
+                        const limit = Number.isFinite(contactLimit) ? `<=${contactLimit.toFixed(2)}%` : '';
+                        contactText = withFailLimit(base, failed, limit);
+                    }
+                    if (Number.isFinite(fallbackRate)) {
+                        const failed = Number.isFinite(fallbackLimit) && fallbackRate > fallbackLimit;
+                        fallbackColor = failed ? '#ff6b6b' : '#4caf50';
+                        const base = `${fallbackRate.toFixed(2)}%`;
+                        const limit = Number.isFinite(fallbackLimit) ? `<=${fallbackLimit.toFixed(2)}%` : '';
+                        fallbackText = withFailLimit(base, failed, limit);
+                    }
+                }
+
+                html += '<div id="summary-section-chassis-ground" style="background: #2a2a2a; padding: 1rem; border-radius: 8px; margin-bottom: 1.5rem; border-left: 4px solid #4a90e2;">';
+                html += '<h3 style="margin-top: 0; color: #4a90e2;">Chassis-Ground Health</h3>';
+                html += '<table style="width: 100%; color: #e0e0e0;">';
+                html += `<tr><td>Health:</td><td style="text-align: right; color: ${healthColor};">${withLimitHint(health, healthColor, 'GOOD')}</td></tr>`;
+                html += `<tr><td>Configured Min Clearance:</td><td style="text-align: right;">${configuredText}</td></tr>`;
+                html += `<tr><td>Effective Min Clearance:</td><td style="text-align: right;">${effectiveText}</td></tr>`;
+                html += `<tr><td>Penetration Max:</td><td style="text-align: right; color: ${penetrationColor};">${penetrationText}</td></tr>`;
+                html += `<tr><td>Contact Rate:</td><td style="text-align: right; color: ${contactColor};">${contactText}</td></tr>`;
+                html += `<tr><td>Clearance P05:</td><td style="text-align: right;">${clearanceText}</td></tr>`;
+                html += `<tr><td>Force Fallback Rate:</td><td style="text-align: right; color: ${fallbackColor};">${fallbackText}</td></tr>`;
+                html += `<tr><td>Wheel-Colliders Ready Rate:</td><td style="text-align: right;">${wheelReadyText}</td></tr>`;
+                html += '</table>';
+                if (availability !== 'available') {
+                    html += '<div style="margin-top: 0.5rem; color: #a0a0a0;">N/A (instrumentation missing)</div>';
+                }
+                html += '</div>';
+            }
+
             // Top-down timing/projection diagnostics (instrumentation-only)
             if (topdownDiagnostics && !topdownDiagnostics.error) {
                 const dtTraj = topdownDiagnostics.dt_topdown_traj || {};
@@ -1807,6 +1892,69 @@ class Visualizer {
                 }
             }
             // Comfort metrics are shown in Passenger Comfort (Gs) card above.
+
+            const hotspotAttribution = comfort?.hotspot_attribution || null;
+            const hotspotEntries = Array.isArray(hotspotAttribution?.entries)
+                ? hotspotAttribution.entries
+                : [];
+            if (String(hotspotAttribution?.availability || '').toLowerCase() === 'available' && hotspotEntries.length > 0) {
+                const dtNominal = Number(hotspotAttribution.dt_nominal_ms);
+                const dtGapThreshold = Number(hotspotAttribution.dt_gap_threshold_ms);
+                const dtInfo = [
+                    Number.isFinite(dtNominal) ? `dt nominal ${dtNominal.toFixed(1)} ms` : null,
+                    Number.isFinite(dtGapThreshold) ? `gap >= ${dtGapThreshold.toFixed(1)} ms` : null,
+                ].filter(Boolean).join(' | ');
+                html += '<div style="background: #2a2a2a; padding: 1rem; border-radius: 8px; margin-bottom: 1rem;">';
+                html += '<h3 style="margin-top: 0; color: #4a90e2;">Longitudinal Hotspot Attribution</h3>';
+                if (dtInfo) {
+                    html += `<div style="color:#a0a0a0; font-size:0.85rem; margin-bottom:0.6rem;">${dtInfo}</div>`;
+                }
+                html += '<table style="width: 100%; color: #e0e0e0; font-size:0.85rem;">';
+                html += '<thead><tr style="color:#9fb3c8;">';
+                html += '<th style="text-align:left;">Frame</th>';
+                html += '<th style="text-align:left;">Kind</th>';
+                html += '<th style="text-align:right;">|Metric|</th>';
+                html += '<th style="text-align:right;">Accel</th>';
+                html += '<th style="text-align:right;">Jerk</th>';
+                html += '<th style="text-align:right;">dt_prev</th>';
+                html += '<th style="text-align:right;">Contact</th>';
+                html += '<th style="text-align:left;">Attribution</th>';
+                html += '<th style="text-align:left;">Action</th>';
+                html += '</tr></thead><tbody>';
+                hotspotEntries.slice(0, 8).forEach((entry) => {
+                    const frame = Number(entry.frame ?? -1);
+                    const metric = String(entry.metric || 'n/a');
+                    const metricAbs = Number(entry.metric_abs);
+                    const accelVal = Number(entry.accel_mps2);
+                    const jerkVal = Number(entry.jerk_mps3);
+                    const dtPrev = Number(entry.dt_prev_ms);
+                    const contact = Boolean(entry.chassis_ground_contact);
+                    const attribution = String(entry.attribution || 'unknown');
+                    const confidence = String(entry.confidence || 'low');
+                    let attrColor = '#e0e0e0';
+                    if (attribution === 'ground_contact_or_penetration' || attribution === 'timestamp_gap_derivative_artifact') {
+                        attrColor = '#ff6b6b';
+                    } else if (attribution === 'longitudinal_limiter_active') {
+                        attrColor = '#ffa500';
+                    }
+                    html += '<tr style="border-top:1px solid #3a3a3a;">';
+                    html += `<td>${Number.isFinite(frame) ? frame : '-'}</td>`;
+                    html += `<td>${this.escapeHtml(metric)}</td>`;
+                    html += `<td style="text-align:right;">${Number.isFinite(metricAbs) ? metricAbs.toFixed(2) : '-'}</td>`;
+                    html += `<td style="text-align:right;">${Number.isFinite(accelVal) ? accelVal.toFixed(2) : '-'}</td>`;
+                    html += `<td style="text-align:right;">${Number.isFinite(jerkVal) ? jerkVal.toFixed(2) : '-'}</td>`;
+                    html += `<td style="text-align:right;">${Number.isFinite(dtPrev) ? dtPrev.toFixed(1) + ' ms' : '-'}</td>`;
+                    html += `<td style="text-align:right; color:${contact ? '#ff6b6b' : '#4caf50'};">${contact ? 'YES' : 'NO'}</td>`;
+                    html += `<td style="color:${attrColor};">${this.escapeHtml(attribution)} <span style="color:#7f8c98;">(${this.escapeHtml(confidence)})</span></td>`;
+                    if (Number.isFinite(frame) && frame >= 0) {
+                        html += `<td><button style="padding:0.2rem 0.55rem; background:#4a90e2; color:white; border:none; border-radius:4px; cursor:pointer;" onclick="window.visualizer.jumpToFrame(${frame})">Jump</button></td>`;
+                    } else {
+                        html += '<td>-</td>';
+                    }
+                    html += '</tr>';
+                });
+                html += '</tbody></table></div>';
+            }
 
             // Safety
             html += '<div style="background: #2a2a2a; padding: 1rem; border-radius: 8px; margin-bottom: 1rem;">';
@@ -2584,9 +2732,13 @@ class Visualizer {
 
             // Fetch summary layer scores to cross-reference (non-blocking, best-effort)
             let summaryScores = null;
+            let summaryPayload = null;
             try {
                 const sr = await fetch(`/api/recording/${this.currentRecording}/summary`);
-                if (sr.ok) { const sd = await sr.json(); summaryScores = sd.layer_scores; }
+                if (sr.ok) {
+                    summaryPayload = await sr.json();
+                    summaryScores = summaryPayload.layer_scores;
+                }
             } catch (_) {}
 
             if (diagnostics.error) {
@@ -8463,6 +8615,30 @@ class Visualizer {
                     }
                 }
                 html += `</div>`;
+            }
+
+            const canonicalHotspot = summaryPayload?.comfort?.hotspot_attribution || null;
+            const canonicalEntries = Array.isArray(canonicalHotspot?.entries) ? canonicalHotspot.entries : [];
+            if (String(canonicalHotspot?.availability || '').toLowerCase() === 'available' && canonicalEntries.length > 0) {
+                html += '<div id="diag-focus-control-hotspots-canonical" style="background: #1a1a1a; padding: 0.75rem; border-radius: 4px; border-left: 3px solid #4a90e2; margin-top: 1rem;">';
+                html += `<strong style="color: #4a90e2;">Canonical Longitudinal Hotspot Attribution</strong>${focusChip('diag-focus-control-hotspots-canonical')}<br/>`;
+                html += '<div style="color: #888; font-size: 0.85rem; margin-bottom: 0.5rem;">From summary contract (same source as CLI analyzer).</div>';
+                html += '<div style="display: flex; flex-direction: column; gap: 0.5rem;">';
+                canonicalEntries.slice(0, 8).forEach((spot) => {
+                    const attr = String(spot.attribution || 'unknown');
+                    const conf = String(spot.confidence || 'low');
+                    let attrColor = '#e0e0e0';
+                    if (attr === 'ground_contact_or_penetration' || attr === 'timestamp_gap_derivative_artifact') attrColor = '#ff6b6b';
+                    else if (attr === 'longitudinal_limiter_active') attrColor = '#ffa500';
+                    html += '<div style="display: flex; justify-content: space-between; align-items: center; padding: 0.5rem; background: #2a2a2a; border-radius: 6px;">';
+                    html += '<div style="color: #e0e0e0; font-size: 0.9rem;">';
+                    html += `<strong>Frame ${spot.frame}</strong> · kind=${this.escapeHtml(String(spot.metric || '-'))} · |metric|=${Number(spot.metric_abs || 0).toFixed(2)} · accel=${fmtOpt(spot.accel_mps2, 2)} · jerk=${fmtOpt(spot.jerk_mps3, 2)}<br/>`;
+                    html += `dt_prev=${fmtOpt(spot.dt_prev_ms, 1)} ms · contact=${spot.chassis_ground_contact ? 'YES' : 'NO'} · <span style="color:${attrColor};">${this.escapeHtml(attr)}</span> <span style="color:#7f8c98;">(${this.escapeHtml(conf)})</span>`;
+                    html += '</div>';
+                    html += `<button style="padding: 0.25rem 0.75rem; background: #4a90e2; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 0.85rem;" onclick="window.visualizer.jumpToFrame(${spot.frame})">Jump →</button>`;
+                    html += '</div>';
+                });
+                html += '</div></div>';
             }
             
             html += `<div style="margin-bottom: 1rem; padding: 0.75rem; background: #2a2a2a; border-radius: 4px; border-left: 3px solid #ffa500;">`;

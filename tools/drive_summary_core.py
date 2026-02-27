@@ -2769,6 +2769,12 @@ def analyze_recording_summary(recording_path: Path, analyze_to_failure: bool = F
                 "longitudinal_accel_p95_mps2": 3.0,
                 "longitudinal_jerk_p95_mps3": 6.0
             },
+            "metric_roles": {
+                "commanded_jerk_p95": "gate",
+                "acceleration_p95_filtered": "gate",
+                "jerk_p95_filtered": "diagnostic",
+                "jerk_p95": "diagnostic_raw",
+            },
             "hotspot_attribution": hotspot_attribution,
         },
         "control_stability": {

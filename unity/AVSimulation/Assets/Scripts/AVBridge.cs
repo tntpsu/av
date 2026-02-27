@@ -1830,6 +1830,14 @@ private float? lastCarT = null;
             feedback.actual_steering_applied = carController.steerInput * carController.maxSteerAngle;
             feedback.actual_throttle_applied = carController.throttleInput;
             feedback.actual_brake_applied = carController.brakeInput;
+            feedback.chassis_ground_min_clearance_m = carController.GetChassisGroundMinClearanceM();
+            feedback.chassis_ground_effective_min_clearance_m = carController.GetChassisGroundMinClearanceM();
+            feedback.chassis_ground_clearance_m = carController.GetChassisGroundClearanceM();
+            feedback.chassis_ground_penetration_m = carController.GetChassisGroundPenetrationM();
+            feedback.chassis_ground_contact = carController.GetChassisGroundContact();
+            feedback.wheel_grounded_count = carController.GetWheelGroundedCount();
+            feedback.wheel_colliders_ready = carController.GetWheelCollidersReady();
+            feedback.force_fallback_active = carController.GetForceFallbackActive();
             
             // Ground truth data status
             if (groundTruthReporter != null)
@@ -1974,6 +1982,14 @@ public class UnityFeedback
     public float actual_steering_applied;
     public float actual_throttle_applied;
     public float actual_brake_applied;
+    public float chassis_ground_min_clearance_m;
+    public float chassis_ground_effective_min_clearance_m;
+    public float chassis_ground_clearance_m;
+    public float chassis_ground_penetration_m;
+    public bool chassis_ground_contact;
+    public int wheel_grounded_count;
+    public bool wheel_colliders_ready;
+    public bool force_fallback_active;
     // Ground truth data status
     public bool ground_truth_data_available;
     public bool ground_truth_reporter_enabled;
@@ -1988,4 +2004,3 @@ public class UnityFeedback
     public int unity_frame_count;
     public float unity_time;
 }
-

@@ -114,8 +114,29 @@ public class CarController : MonoBehaviour
     public float wheelPlacementWidthScale = 0.9f;
     public float wheelPlacementLengthScale = 0.9f;
     public bool logWheelColliderDebug = true;
+    [Header("Chassis Ground Health")]
+    [Tooltip("Minimum desired chassis (body collider bottom) clearance above ground in meters.")]
+    public float chassisGroundMinClearanceM = 0.08f;
+    [Tooltip("Warning threshold for low chassis clearance in meters.")]
+    public float chassisGroundWarnClearanceM = 0.03f;
+    [Tooltip("Vertical probe distance for chassis-ground sampling (meters).")]
+    public float chassisGroundProbeCastDistanceM = 1.5f;
+    [Tooltip("Half extents for ground overlap probes around chassis footprint.")]
+    public Vector3 chassisGroundProbeHalfExtents = new Vector3(0.45f, 0.05f, 0.9f);
+    [Tooltip("Ground layer mask used for chassis-ground queries.")]
+    public LayerMask chassisGroundLayerMask = ~0;
+    [Tooltip("Auto-lift chassis at startup to satisfy min clearance.")]
+    public bool autoLiftChassisAtStartup = true;
+    [Tooltip("Maximum startup lift applied when correcting chassis clearance (meters).")]
+    public float maxStartupLiftM = 0.20f;
+    [Tooltip("Retry window for startup chassis-ground alignment after scene initialization (seconds).")]
+    public float startupAlignmentRetryWindowSeconds = 2.0f;
+    [Tooltip("Retry interval for startup chassis-ground alignment (seconds).")]
+    public float startupAlignmentRetryIntervalSeconds = 0.10f;
+    [Tooltip("Allow fallback force-based physics when wheel colliders are unavailable.")]
+    public bool allowForceFallbackIfWheelCollidersUnavailable = false;
     [Header("Debug")]
-    public bool forceFreezeYForDebug = true;
+    public bool forceFreezeYForDebug = false;
     [Header("Steering Actuator")]
     [Tooltip("Max steer angle at low speed (deg)")]
     public float maxSteerAngleLowSpeed = 30f;
@@ -144,6 +165,18 @@ public class CarController : MonoBehaviour
     private WheelCollider rearRightWheel;
     private bool wheelCollidersReady = false;
     private bool wheelOrientationLogged = false;
+    private Collider bodyCollider;
+    private float effectiveChassisGroundMinClearanceM = 0.08f;
+    private float chassisGroundClearanceM = float.NaN;
+    private float chassisGroundPenetrationM = 0.0f;
+    private bool chassisGroundContact = false;
+    private int wheelGroundedCount = 0;
+    private bool forceFallbackActive = false;
+    private readonly Collider[] chassisGroundOverlapBuffer = new Collider[32];
+    private readonly RaycastHit[] chassisGroundRaycastBuffer = new RaycastHit[16];
+    private bool pendingStartupChassisAlignmentRetry = false;
+    private float startupAlignmentRetryUntilTime = 0.0f;
+    private float nextStartupAlignmentRetryTime = 0.0f;
     
     // Ground truth cache (updated in Update, applied in FixedUpdate)
     private Vector3 gtCachedReferencePosition = Vector3.zero;
@@ -166,20 +199,23 @@ public class CarController : MonoBehaviour
         useWheelColliders = true;
         logWheelColliderDebug = true;
         rb = GetComponent<Rigidbody>();
+        bodyCollider = GetComponent<Collider>();
+        effectiveChassisGroundMinClearanceM = Mathf.Max(0.0f, chassisGroundMinClearanceM);
         
         // FIX: Prevent car from sinking into ground due to physics settling
         // Freeze Y position to keep car at correct height (prevents 0.5m → 0.2m drop)
         if (rb != null)
         {
-            if (forceFreezeYForDebug)
+            if (useWheelColliders)
             {
-                rb.constraints = RigidbodyConstraints.FreezePositionY
-                    | RigidbodyConstraints.FreezeRotationX
-                    | RigidbodyConstraints.FreezeRotationZ;
-            }
-            else if (useWheelColliders)
-            {
-                // Freeze rotation to keep car upright. Allow Y movement for wheel colliders.
+                // Wheel-collider physics must keep Y free; debug Y-freeze is ignored in this mode.
+                if (forceFreezeYForDebug)
+                {
+                    Debug.LogWarning(
+                        "CarController: forceFreezeYForDebug requested with wheel colliders active; " +
+                        "ignoring freeze-Y to avoid masking chassis ride-height issues."
+                    );
+                }
                 rb.constraints = RigidbodyConstraints.FreezeRotationX | RigidbodyConstraints.FreezeRotationZ;
             }
             else
@@ -236,6 +272,19 @@ public class CarController : MonoBehaviour
         {
             SetupWheelColliders();
         }
+        if (useWheelColliders && autoLiftChassisAtStartup)
+        {
+            bool alignedAtStartup = AlignChassisClearanceAtStartup(logIfGroundUnavailable: true);
+            if (!alignedAtStartup)
+            {
+                float retryWindow = Mathf.Max(0.0f, startupAlignmentRetryWindowSeconds);
+                float retryInterval = Mathf.Max(0.01f, startupAlignmentRetryIntervalSeconds);
+                pendingStartupChassisAlignmentRetry = retryWindow > 0.0f;
+                startupAlignmentRetryUntilTime = Time.time + retryWindow;
+                nextStartupAlignmentRetryTime = Time.time + retryInterval;
+            }
+        }
+        UpdateChassisGroundTelemetry();
     }
 
     private void SetupWheelColliders()
@@ -268,6 +317,241 @@ public class CarController : MonoBehaviour
             $"WheelColliders: ready={wheelCollidersReady} boundsCenter={bounds.center} " +
             $"halfWidth={halfWidth:F2} halfLength={halfLength:F2} wheelRadius={wheelRadius:F2}"
         );
+    }
+
+    private bool IsOwnCollider(Collider col)
+    {
+        return col != null && col.transform.IsChildOf(transform);
+    }
+
+    private bool TryGetGroundHeightFromFootprint(out float groundY)
+    {
+        groundY = 0.0f;
+        if (bodyCollider == null)
+        {
+            return false;
+        }
+
+        Bounds bounds = bodyCollider.bounds;
+        float castDistance = Mathf.Max(0.25f, chassisGroundProbeCastDistanceM);
+        float rayStartY = bounds.max.y + castDistance;
+        float sampleHalfX = Mathf.Min(bounds.extents.x * 0.95f, Mathf.Max(0.01f, chassisGroundProbeHalfExtents.x));
+        float sampleHalfZ = Mathf.Min(bounds.extents.z * 0.95f, Mathf.Max(0.01f, chassisGroundProbeHalfExtents.z));
+        Vector3[] samples = new[]
+        {
+            new Vector3(bounds.center.x, rayStartY, bounds.center.z),
+            new Vector3(bounds.center.x + sampleHalfX, rayStartY, bounds.center.z + sampleHalfZ),
+            new Vector3(bounds.center.x + sampleHalfX, rayStartY, bounds.center.z - sampleHalfZ),
+            new Vector3(bounds.center.x - sampleHalfX, rayStartY, bounds.center.z + sampleHalfZ),
+            new Vector3(bounds.center.x - sampleHalfX, rayStartY, bounds.center.z - sampleHalfZ),
+        };
+
+        bool found = false;
+        float bestY = float.NegativeInfinity;
+        float maxRayDistance = castDistance * 2.5f;
+        foreach (Vector3 origin in samples)
+        {
+            int hitCount = Physics.RaycastNonAlloc(
+                origin,
+                Vector3.down,
+                chassisGroundRaycastBuffer,
+                maxRayDistance,
+                chassisGroundLayerMask,
+                QueryTriggerInteraction.Ignore
+            );
+            if (hitCount <= 0)
+            {
+                continue;
+            }
+
+            int bestHitIndex = -1;
+            float bestHitDistance = float.PositiveInfinity;
+            for (int i = 0; i < hitCount; i++)
+            {
+                RaycastHit hit = chassisGroundRaycastBuffer[i];
+                Collider hitCollider = hit.collider;
+                if (hitCollider == null || IsOwnCollider(hitCollider))
+                {
+                    continue;
+                }
+                if (hit.distance < bestHitDistance)
+                {
+                    bestHitDistance = hit.distance;
+                    bestHitIndex = i;
+                }
+            }
+            if (bestHitIndex < 0)
+            {
+                continue;
+            }
+            RaycastHit selectedHit = chassisGroundRaycastBuffer[bestHitIndex];
+            found = true;
+            if (selectedHit.point.y > bestY)
+            {
+                bestY = selectedHit.point.y;
+            }
+        }
+
+        if (!found)
+        {
+            return false;
+        }
+        groundY = bestY;
+        return true;
+    }
+
+    private float ComputeGroundPenetrationMeters()
+    {
+        if (bodyCollider == null)
+        {
+            return 0.0f;
+        }
+
+        Bounds bounds = bodyCollider.bounds;
+        int hitCount = Physics.OverlapBoxNonAlloc(
+            bounds.center,
+            bounds.extents * 0.99f,
+            chassisGroundOverlapBuffer,
+            transform.rotation,
+            chassisGroundLayerMask,
+            QueryTriggerInteraction.Ignore
+        );
+        float maxPenetration = 0.0f;
+        for (int i = 0; i < hitCount; i++)
+        {
+            Collider hit = chassisGroundOverlapBuffer[i];
+            if (hit == null || IsOwnCollider(hit))
+            {
+                continue;
+            }
+            if (Physics.ComputePenetration(
+                bodyCollider,
+                bodyCollider.transform.position,
+                bodyCollider.transform.rotation,
+                hit,
+                hit.transform.position,
+                hit.transform.rotation,
+                out _,
+                out float distance
+            ))
+            {
+                if (distance > maxPenetration)
+                {
+                    maxPenetration = distance;
+                }
+            }
+        }
+        return maxPenetration;
+    }
+
+    private int CountGroundedWheels()
+    {
+        if (!wheelCollidersReady)
+        {
+            return 0;
+        }
+        int count = 0;
+        if (frontLeftWheel != null && frontLeftWheel.isGrounded) count++;
+        if (frontRightWheel != null && frontRightWheel.isGrounded) count++;
+        if (rearLeftWheel != null && rearLeftWheel.isGrounded) count++;
+        if (rearRightWheel != null && rearRightWheel.isGrounded) count++;
+        return count;
+    }
+
+    private void UpdateChassisGroundTelemetry()
+    {
+        effectiveChassisGroundMinClearanceM = Mathf.Max(0.0f, chassisGroundMinClearanceM);
+        wheelGroundedCount = CountGroundedWheels();
+
+        float penetrationM = ComputeGroundPenetrationMeters();
+        chassisGroundPenetrationM = Mathf.Max(0.0f, penetrationM);
+
+        bool hasGround = TryGetGroundHeightFromFootprint(out float groundY);
+        if (hasGround && bodyCollider != null)
+        {
+            float clearanceM = bodyCollider.bounds.min.y - groundY;
+            chassisGroundClearanceM = clearanceM;
+            chassisGroundContact = (chassisGroundPenetrationM > 1e-4f) || (clearanceM <= 0.001f);
+        }
+        else
+        {
+            chassisGroundClearanceM = float.NaN;
+            chassisGroundContact = chassisGroundPenetrationM > 1e-4f;
+        }
+    }
+
+    private bool AlignChassisClearanceAtStartup(bool logIfGroundUnavailable)
+    {
+        if (rb == null || bodyCollider == null)
+        {
+            return false;
+        }
+        if (!TryGetGroundHeightFromFootprint(out float groundY))
+        {
+            if (logIfGroundUnavailable)
+            {
+                Debug.LogWarning("CarController: Could not sample ground height for startup chassis alignment.");
+            }
+            return false;
+        }
+
+        float currentBottomY = bodyCollider.bounds.min.y;
+        float requiredBottomY = groundY + effectiveChassisGroundMinClearanceM;
+        float liftNeeded = requiredBottomY - currentBottomY;
+        if (liftNeeded <= 0.001f)
+        {
+            return true;
+        }
+
+        float liftApplied = Mathf.Min(liftNeeded, Mathf.Max(0.0f, maxStartupLiftM));
+        if (liftApplied <= 0.0f)
+        {
+            return false;
+        }
+
+        Vector3 pos = rb.position;
+        pos.y += liftApplied;
+        rb.position = pos;
+        Physics.SyncTransforms();
+        UpdateChassisGroundTelemetry();
+        if (chassisGroundContact || chassisGroundPenetrationM > 0.0f)
+        {
+            Debug.LogWarning(
+                $"CarController: Startup chassis alignment incomplete (clearance={chassisGroundClearanceM:F3}m, " +
+                $"penetration={chassisGroundPenetrationM:F4}m)."
+            );
+        }
+        return !float.IsNaN(chassisGroundClearanceM);
+    }
+
+    private void HandleStartupChassisAlignmentRetry()
+    {
+        if (!pendingStartupChassisAlignmentRetry || !useWheelColliders || !autoLiftChassisAtStartup)
+        {
+            return;
+        }
+
+        float now = Time.time;
+        if (now > startupAlignmentRetryUntilTime)
+        {
+            pendingStartupChassisAlignmentRetry = false;
+            return;
+        }
+        if (now < nextStartupAlignmentRetryTime)
+        {
+            return;
+        }
+
+        nextStartupAlignmentRetryTime = now + Mathf.Max(0.01f, startupAlignmentRetryIntervalSeconds);
+        bool aligned = AlignChassisClearanceAtStartup(logIfGroundUnavailable: false);
+        if (aligned)
+        {
+            pendingStartupChassisAlignmentRetry = false;
+            Debug.Log(
+                $"CarController: Startup chassis alignment recovered after initialization " +
+                $"(clearance={chassisGroundClearanceM:F3}m)."
+            );
+        }
     }
 
     private void LogWheelOrientation(string label, WheelCollider wheel)
@@ -470,6 +754,8 @@ public class CarController : MonoBehaviour
 
     private void Update()
     {
+        HandleStartupChassisAlignmentRetry();
+
         // Read manual input
         Vector2 moveInput = Vector2.zero;
         
@@ -624,6 +910,7 @@ public class CarController : MonoBehaviour
         }
         
         ApplyControls();
+        UpdateChassisGroundTelemetry();
     }
 
     private void UpdateGroundTruthCache()
@@ -659,6 +946,8 @@ public class CarController : MonoBehaviour
 
     private void ApplyControls()
     {
+        forceFallbackActive = false;
+
         // CRITICAL DEBUG: Log which mode we're using (every 60 frames = ~2 seconds)
         if (Time.frameCount % 60 == 0)
         {
@@ -944,6 +1233,26 @@ public class CarController : MonoBehaviour
         // Reduce steering proportionally to allow forward movement
         Vector3 currentVelocity = rb.linearVelocity;
         float currentSpeed = currentVelocity.magnitude;
+        bool wheelPathReady = useWheelColliders && wheelCollidersReady;
+        bool wheelPathUnavailable = useWheelColliders && !wheelCollidersReady;
+        forceFallbackActive = wheelPathUnavailable && allowForceFallbackIfWheelCollidersUnavailable;
+        if (wheelPathUnavailable && !allowForceFallbackIfWheelCollidersUnavailable)
+        {
+            if (Time.frameCount % 30 == 0)
+            {
+                Debug.LogError(
+                    "CarController: Wheel colliders unavailable in physics mode; entering fail-safe stop " +
+                    "(force fallback disabled)."
+                );
+            }
+            // Fail-safe behavior: hold steering neutral, no throttle, strong damping.
+            desiredSteerAngle = 0.0f;
+            steeringAngleActual = 0.0f;
+            lastThrottleApplied = 0.0f;
+            rb.linearDamping = 8.0f;
+            rb.linearVelocity = Vector3.Lerp(rb.linearVelocity, Vector3.zero, 0.35f);
+            return;
+        }
         
         float adjustedSteerInput = steerInput;
         if (currentSpeed < 0.1f && Mathf.Abs(steerInput) > 0.3f)
@@ -984,7 +1293,7 @@ public class CarController : MonoBehaviour
             steeringAngleActual = Mathf.MoveTowards(steeringAngleActual, filteredSteerAngle, maxSteerDelta);
             steerAngle = steeringAngleActual;
         }
-        if (!useWheelColliders || !wheelCollidersReady)
+        if (!wheelPathReady)
         {
             // Steering - rotate around Y axis only (horizontal steering)
             Quaternion rotation = Quaternion.Euler(0, steerAngle * Time.fixedDeltaTime, 0);
@@ -1043,7 +1352,7 @@ public class CarController : MonoBehaviour
             Debug.Log($"CarController: throttleInput={throttleInput:F3}, brakeInput={brakeInput:F3}, currentSpeed={currentSpeed:F3} m/s, effectiveThrottle={effectiveThrottle:F3}, smoothedThrottle={smoothedThrottle:F3}, motorForce={motorForce:F1}");
         }
         
-        if (useWheelColliders && wheelCollidersReady)
+        if (wheelPathReady)
         {
             float motorTorque = smoothedThrottle * maxMotorTorque;
             float brakeTorque = brakeInput * maxBrakeTorque;
@@ -1109,7 +1418,7 @@ public class CarController : MonoBehaviour
             rb.WakeUp();
         }
         
-        if (!useWheelColliders || !wheelCollidersReady)
+        if (!wheelPathReady)
         {
             if (brakeInput > 0)
             {
@@ -1275,6 +1584,14 @@ public class CarController : MonoBehaviour
     /// <summary>
     /// Get current vehicle state (for AV stack)
     /// </summary>
+    public float GetChassisGroundMinClearanceM() => effectiveChassisGroundMinClearanceM;
+    public float GetChassisGroundClearanceM() => chassisGroundClearanceM;
+    public float GetChassisGroundPenetrationM() => chassisGroundPenetrationM;
+    public bool GetChassisGroundContact() => chassisGroundContact;
+    public int GetWheelGroundedCount() => wheelGroundedCount;
+    public bool GetWheelCollidersReady() => wheelCollidersReady;
+    public bool GetForceFallbackActive() => forceFallbackActive;
+
     public VehicleState GetVehicleState()
     {
         float actualSteeringAngle = steeringAngleActual;
@@ -1312,7 +1629,15 @@ public class CarController : MonoBehaviour
             gtRotationRoadFrameHeadingDeg = gtRotationRoadFrameHeadingDeg,
             gtRotationInputHeadingDeg = gtRotationInputHeadingDeg,
             gtRotationRoadVsRefDeltaDeg = gtRotationRoadVsRefDeltaDeg,
-            gtRotationAppliedDeltaDeg = gtRotationAppliedDeltaDeg
+            gtRotationAppliedDeltaDeg = gtRotationAppliedDeltaDeg,
+            chassisGroundMinClearanceM = effectiveChassisGroundMinClearanceM,
+            chassisGroundEffectiveMinClearanceM = effectiveChassisGroundMinClearanceM,
+            chassisGroundClearanceM = chassisGroundClearanceM,
+            chassisGroundPenetrationM = chassisGroundPenetrationM,
+            chassisGroundContact = chassisGroundContact,
+            wheelGroundedCount = wheelGroundedCount,
+            wheelCollidersReady = wheelCollidersReady,
+            forceFallbackActive = forceFallbackActive
         };
     }
 
@@ -1474,4 +1799,13 @@ public class VehicleState
     public float speedLimitPreviewLong = 0.0f;  // Speed limit at long preview distance (m/s)
     public float speedLimitPreviewLongDistance = 0.0f;  // Long preview distance (m)
     public float speedLimitPreviewLongMinDistance = 0.0f;  // Distance to min limit in long window (m)
+    // Chassis-ground health diagnostics (high-rate telemetry)
+    public float chassisGroundMinClearanceM = 0.08f;
+    public float chassisGroundEffectiveMinClearanceM = 0.08f;
+    public float chassisGroundClearanceM = 0.0f;
+    public float chassisGroundPenetrationM = 0.0f;
+    public bool chassisGroundContact = false;
+    public int wheelGroundedCount = 0;
+    public bool wheelCollidersReady = false;
+    public bool forceFallbackActive = false;
 }

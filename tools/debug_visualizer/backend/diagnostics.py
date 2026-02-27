@@ -9,6 +9,7 @@ import h5py
 from pathlib import Path
 from typing import Dict, List, Optional
 import math
+import yaml
 
 
 def safe_float(value, default=0.0):
@@ -21,6 +22,68 @@ def safe_float(value, default=0.0):
         if math.isnan(value) or math.isinf(value):
             return default
     return float(value)
+
+
+def _load_longitudinal_limits() -> tuple[float, float]:
+    """Load longitudinal accel/decel limits from config with safe fallbacks."""
+    config_path = Path(__file__).resolve().parents[3] / "config" / "av_stack_config.yaml"
+    max_accel = 2.5
+    max_decel = 3.0
+    if not config_path.exists():
+        return max_accel, max_decel
+    try:
+        with config_path.open("r") as f:
+            cfg = yaml.safe_load(f) or {}
+        long_cfg = ((cfg.get("control") or {}).get("longitudinal") or {})
+        max_accel = float(long_cfg.get("max_accel", max_accel))
+        max_decel = float(long_cfg.get("max_decel", max_decel))
+    except Exception:
+        pass
+    return max_accel, max_decel
+
+
+def _compute_command_profiles(
+    throttle: Optional[np.ndarray],
+    brake: Optional[np.ndarray],
+    timestamps: Optional[np.ndarray],
+    max_accel: float,
+    max_decel: float,
+) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Compute commanded acceleration and commanded jerk series.
+
+    Returns:
+        (net_accel_cmd, commanded_jerk) with matching length `n`.
+    """
+    if throttle is None or brake is None:
+        return np.array([], dtype=np.float32), np.array([], dtype=np.float32)
+
+    t_arr = np.asarray(throttle, dtype=np.float64).reshape(-1)
+    b_arr = np.asarray(brake, dtype=np.float64).reshape(-1)
+    n = min(t_arr.size, b_arr.size)
+    if n <= 0:
+        return np.array([], dtype=np.float32), np.array([], dtype=np.float32)
+    t_arr = t_arr[:n]
+    b_arr = b_arr[:n]
+    net_accel_cmd = (t_arr * float(max_accel)) - (b_arr * float(max_decel))
+
+    jerk = np.zeros(n, dtype=np.float32)
+    if n > 1:
+        if timestamps is not None:
+            ts_arr = np.asarray(timestamps, dtype=np.float64).reshape(-1)[:n]
+        else:
+            ts_arr = np.arange(n, dtype=np.float64) * (1.0 / 30.0)
+        dt = np.diff(ts_arr)
+        finite_positive = dt[np.isfinite(dt) & (dt > 1e-6)]
+        fallback_dt = float(np.median(finite_positive)) if finite_positive.size > 0 else (1.0 / 30.0)
+        dt = np.where(dt > 1e-6, dt, fallback_dt)
+        jerk[1:] = np.divide(
+            np.diff(net_accel_cmd),
+            dt,
+            out=np.zeros_like(dt, dtype=np.float32),
+            where=dt > 1e-6,
+        )
+    return net_accel_cmd.astype(np.float32), jerk
 
 
 def analyze_trajectory_vs_steering(
@@ -89,8 +152,8 @@ def analyze_trajectory_vs_steering(
             steering_smoothing_delta = None
             steering_authority_gap = None
             steering_first_limiter_stage_code = None
-            ctrl_jerk_arr = None
-            ctrl_accel_arr = None
+            ctrl_jerk_cap_arr = None
+            ctrl_accel_cap_arr = None
 
             if has_control:
                 steering = np.array(f["control/steering"][:])
@@ -140,9 +203,9 @@ def analyze_trajectory_vs_steering(
                     )
                 # Longitudinal comfort metrics (for Diagnostics comfort panel)
                 if "control/longitudinal_jerk_capped" in f:
-                    ctrl_jerk_arr = np.array(f["control/longitudinal_jerk_capped"][:])
+                    ctrl_jerk_cap_arr = np.array(f["control/longitudinal_jerk_capped"][:])
                 if "control/longitudinal_accel_capped" in f:
-                    ctrl_accel_arr = np.array(f["control/longitudinal_accel_capped"][:])
+                    ctrl_accel_cap_arr = np.array(f["control/longitudinal_accel_capped"][:])
 
             # Load ground truth for comparison
             gt_center = None
@@ -466,6 +529,14 @@ def analyze_trajectory_vs_steering(
                 time_axis = control_timestamps - control_timestamps[0]
             else:
                 time_axis = np.arange(min_len, dtype=np.float32) * 0.033
+            max_accel_cfg, max_decel_cfg = _load_longitudinal_limits()
+            commanded_accel, commanded_jerk = _compute_command_profiles(
+                throttle=throttle,
+                brake=brake,
+                timestamps=time_axis,
+                max_accel=max_accel_cfg,
+                max_decel=max_decel_cfg,
+            )
             if (
                 perception_center is not None
                 and len(perception_center) == len(ref_x)
@@ -1441,17 +1512,40 @@ def analyze_trajectory_vs_steering(
             
             from backend.layer_health import CTRL_JERK_GATE, CTRL_JERK_ALERT
             comfort_data = {}
-            if ctrl_jerk_arr is not None and len(ctrl_jerk_arr) > 0:
-                jerk_p95 = float(np.percentile(np.abs(ctrl_jerk_arr), 95))
+            if commanded_jerk is not None and len(commanded_jerk) > 0:
+                jerk_p95 = float(np.percentile(np.abs(commanded_jerk), 95))
                 comfort_data["commanded_jerk_p95"] = round(jerk_p95, 3)
                 comfort_data["jerk_gate_mps3"]     = CTRL_JERK_GATE
                 comfort_data["jerk_alert_mps3"]    = CTRL_JERK_ALERT
                 comfort_data["jerk_gate_status"]   = "ok" if jerk_p95 <= CTRL_JERK_GATE else "warn"
-            if ctrl_accel_arr is not None and len(ctrl_accel_arr) > 0:
-                accel_p95 = float(np.percentile(np.abs(ctrl_accel_arr), 95))
+            if commanded_accel is not None and len(commanded_accel) > 0:
+                accel_p95 = float(np.percentile(np.abs(commanded_accel), 95))
                 comfort_data["accel_p95_mps2"]   = round(accel_p95, 3)
                 comfort_data["accel_gate_mps2"]  = 3.0
                 comfort_data["accel_gate_status"] = "ok" if accel_p95 <= 3.0 else "warn"
+            if ctrl_jerk_cap_arr is not None and len(ctrl_jerk_cap_arr) > 0:
+                comfort_data["jerk_cap_rate_pct"] = round(
+                    float(np.mean(ctrl_jerk_cap_arr > 0.5) * 100.0),
+                    2,
+                )
+            if ctrl_accel_cap_arr is not None and len(ctrl_accel_cap_arr) > 0:
+                comfort_data["accel_cap_rate_pct"] = round(
+                    float(np.mean(ctrl_accel_cap_arr > 0.5) * 100.0),
+                    2,
+                )
+
+            canonical_hotspot_attribution = None
+            try:
+                from backend.summary_analyzer import analyze_recording_summary
+                summary = analyze_recording_summary(
+                    recording_path,
+                    analyze_to_failure=analyze_to_failure,
+                )
+                canonical_hotspot_attribution = (
+                    (summary or {}).get("comfort", {}).get("hotspot_attribution")
+                )
+            except Exception:
+                canonical_hotspot_attribution = None
 
             return {
                 "data_availability": {
@@ -1495,6 +1589,7 @@ def analyze_trajectory_vs_steering(
                     "gt_perception_hotspots": gt_perception_hotspots,
                     "accel_hotspots": accel_hotspots,
                     "jerk_hotspots": jerk_hotspots,
+                    "canonical_hotspot_attribution": canonical_hotspot_attribution,
                     "steering_limiter_analysis": steering_limiter_analysis,
                     "steering_limiter_hotspots": steering_limiter_hotspots,
                     "curve_entry_feasibility": curve_entry_feasibility,
@@ -1815,4 +1910,3 @@ def analyze_speed_curvature(f: h5py.File, failure_frame: Optional[int] = None) -
         "v_max_feasible_at_entry": v_max_feasible_at_entry,
         "decel_lead_time_frames": decel_lead_time_frames,
     }
-

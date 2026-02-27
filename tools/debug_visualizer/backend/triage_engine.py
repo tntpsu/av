@@ -12,11 +12,69 @@ from dataclasses import dataclass
 from pathlib import Path
 import numpy as np
 import h5py
+import yaml
 
 from backend.layer_health import (
     CTRL_JERK_GATE, CTRL_JERK_ALERT,
     LOOKAHEAD_CONCERN_M, BENIGN_STALE_REASONS,
 )
+
+
+def _load_longitudinal_limits() -> tuple[float, float]:
+    """Load longitudinal limits from config for command-domain jerk computation."""
+    config_path = Path(__file__).resolve().parents[3] / "config" / "av_stack_config.yaml"
+    max_accel = 2.5
+    max_decel = 3.0
+    if not config_path.exists():
+        return max_accel, max_decel
+    try:
+        with config_path.open("r") as f:
+            cfg = yaml.safe_load(f) or {}
+        long_cfg = ((cfg.get("control") or {}).get("longitudinal") or {})
+        max_accel = float(long_cfg.get("max_accel", max_accel))
+        max_decel = float(long_cfg.get("max_decel", max_decel))
+    except Exception:
+        pass
+    return max_accel, max_decel
+
+
+def _compute_commanded_jerk_p95(
+    throttle: np.ndarray | None,
+    brake: np.ndarray | None,
+    timestamps: np.ndarray | None,
+    max_accel: float,
+    max_decel: float,
+) -> float:
+    if throttle is None or brake is None:
+        return 0.0
+    t_arr = np.asarray(throttle, dtype=float).reshape(-1)
+    b_arr = np.asarray(brake, dtype=float).reshape(-1)
+    n = min(t_arr.size, b_arr.size)
+    if timestamps is not None:
+        ts_arr = np.asarray(timestamps, dtype=float).reshape(-1)
+        n = min(n, ts_arr.size)
+    if n <= 1:
+        return 0.0
+    t_arr = t_arr[:n]
+    b_arr = b_arr[:n]
+    if timestamps is not None:
+        ts_arr = np.asarray(timestamps, dtype=float).reshape(-1)[:n]
+    else:
+        ts_arr = np.arange(n, dtype=float) * (1.0 / 30.0)
+    dt = np.diff(ts_arr)
+    finite_positive = dt[np.isfinite(dt) & (dt > 1e-6)]
+    fallback_dt = float(np.median(finite_positive)) if finite_positive.size > 0 else (1.0 / 30.0)
+    dt = np.where(dt > 1e-6, dt, fallback_dt)
+    net_accel = (t_arr * float(max_accel)) - (b_arr * float(max_decel))
+    cmd_jerk = np.divide(
+        np.diff(net_accel),
+        dt,
+        out=np.zeros_like(dt, dtype=float),
+        where=dt > 1e-6,
+    )
+    if cmd_jerk.size == 0:
+        return 0.0
+    return float(np.percentile(np.abs(cmd_jerk), 95))
 
 
 # ── Pattern Library ───────────────────────────────────────────────────────────
@@ -221,7 +279,13 @@ class TriageEngine:
 
             # Control
             lat_err = arr("control/lateral_error")
-            jerk = arr("control/longitudinal_jerk_capped")   # actual field name
+            throttle = arr("control/throttle")
+            brake = arr("control/brake")
+            control_ts = arr("control/timestamps")
+            if control_ts is None:
+                control_ts = arr("control/timestamp")
+            jerk_cap = arr("control/longitudinal_jerk_capped")
+            accel_cap = arr("control/longitudinal_accel_capped")
             steer_jerk_delta = arr("control/steering_jerk_limited_delta")
             estop = arr("control/emergency_stop")
             if lat_err is not None:
@@ -229,8 +293,18 @@ class TriageEngine:
                 m["lateral_p95"] = float(np.percentile(abs_err, 95))
                 x = np.arange(len(abs_err))
                 m["osc_slope"] = float(np.polyfit(x, abs_err, 1)[0])
-            if jerk is not None:
-                m["commanded_jerk_p95"] = float(np.percentile(np.abs(jerk), 95))
+            max_accel, max_decel = _load_longitudinal_limits()
+            m["commanded_jerk_p95"] = _compute_commanded_jerk_p95(
+                throttle=throttle,
+                brake=brake,
+                timestamps=control_ts,
+                max_accel=max_accel,
+                max_decel=max_decel,
+            )
+            if jerk_cap is not None:
+                m["longitudinal_jerk_cap_rate"] = float(np.mean(np.abs(jerk_cap) > 0.5))
+            if accel_cap is not None:
+                m["longitudinal_accel_cap_rate"] = float(np.mean(np.abs(accel_cap) > 0.5))
             if steer_jerk_delta is not None:
                 # steering jerk max = largest single-frame steering change applied by limiter
                 m["steering_jerk_max"] = float(np.max(np.abs(steer_jerk_delta)))
