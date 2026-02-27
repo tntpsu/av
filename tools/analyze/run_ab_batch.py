@@ -299,13 +299,18 @@ def main() -> int:
         "--seed",
         type=int,
         default=20260217,
-        help="Seed for deterministic per-pair start-t sampling",
+        help="Seed for deterministic per-pair start-t sampling when --randomize-start-t is enabled",
+    )
+    parser.add_argument(
+        "--randomize-start-t",
+        action="store_true",
+        help="Enable random per-pair start_t sampling (disabled by default).",
     )
     parser.add_argument(
         "--fixed-start-t",
         type=float,
-        default=None,
-        help="If set, use this exact start_t for every pair (overrides seeded sampling)",
+        default=0.0,
+        help="Use this exact start_t for every pair (default: 0.0, start of track).",
     )
     parser.add_argument(
         "--emergency-stop-end-run-after-seconds",
@@ -330,13 +335,12 @@ def main() -> int:
 
     try:
         for i in range(args.repeats):
-            pair_start_t = (
-                float(args.fixed_start_t)
-                if args.fixed_start_t is not None
-                else float(rng.uniform(0.0, 1.0))
-            )
+            if args.randomize_start_t:
+                pair_start_t = float(rng.uniform(0.0, 1.0))
+            else:
+                pair_start_t = float(args.fixed_start_t)
             print(f"\n--- Pair {i+1}/{args.repeats}: A then B ---")
-            if args.fixed_start_t is None:
+            if args.randomize_start_t:
                 print(f"[pair] start_t={pair_start_t:.6f} (seed={args.seed})")
             else:
                 print(f"[pair] start_t={pair_start_t:.6f} (fixed)")

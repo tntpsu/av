@@ -1867,8 +1867,16 @@ class Visualizer {
                 const surgeCount = speedControl.speed_surge_count ?? null;
                 const surgeAvgDrop = speedControl.speed_surge_avg_drop ?? null;
                 const surgeP95Drop = speedControl.speed_surge_p95_drop ?? null;
+                const curveCapActiveRate = speedControl.curve_cap_active_rate ?? null;
+                const preTurnLeadP50 = speedControl.pre_turn_arm_lead_frames_p50 ?? null;
+                const preTurnLeadP95 = speedControl.pre_turn_arm_lead_frames_p95 ?? null;
+                const overspeedIntoCurveRate = speedControl.overspeed_into_curve_rate ?? null;
+                const infeasibleWhileCapRate = speedControl.turn_infeasible_rate_when_curve_cap_active ?? null;
                 if (speedRmse !== null) {
                     const speedColor = speedRmse > 2.0 ? '#ff6b6b' : '#4caf50';
+                    const overspeedCurveColor = overspeedIntoCurveRate !== null && overspeedIntoCurveRate > 10.0 ? '#ff6b6b' : '#4caf50';
+                    const infeasibleCapColor = infeasibleWhileCapRate !== null && infeasibleWhileCapRate > 5.0 ? '#ff6b6b' : '#4caf50';
+                    const preTurnLeadColor = preTurnLeadP50 !== null && preTurnLeadP50 < 6.0 ? '#ffa500' : '#4caf50';
                     html += '<div style="background: #2a2a2a; padding: 1rem; border-radius: 8px; margin-bottom: 1rem;">';
                     html += '<h3 style="margin-top: 0; color: #4a90e2;">Speed Control</h3>';
                     html += '<table style="width: 100%; color: #e0e0e0;">';
@@ -1882,6 +1890,10 @@ class Visualizer {
                     html += `<tr><td>Speed Error (Mean):</td><td style="text-align: right;">${speedMean !== null ? speedMean.toFixed(2) : '-'}</td></tr>`;
                     html += `<tr><td>Speed Error (Max):</td><td style="text-align: right;">${speedMax !== null ? speedMax.toFixed(2) : '-'}</td></tr>`;
                     html += `<tr><td>Overspeed Rate (>0.5 m/s):</td><td style="text-align: right;">${overspeedRate !== null ? overspeedRate.toFixed(1) : '-'}%</td></tr>`;
+                    html += `<tr><td>Overspeed Into Curve:</td><td style="text-align: right; color: ${overspeedCurveColor};">${withLimitHint(overspeedIntoCurveRate !== null ? overspeedIntoCurveRate.toFixed(1) + '%' : '-', overspeedCurveColor, '<=10%')}</td></tr>`;
+                    html += `<tr><td>Curve-Cap Active Rate:</td><td style="text-align: right;">${curveCapActiveRate !== null ? curveCapActiveRate.toFixed(1) : '-'}%</td></tr>`;
+                    html += `<tr><td>Turn Infeasible While Curve-Cap Active:</td><td style="text-align: right; color: ${infeasibleCapColor};">${withLimitHint(infeasibleWhileCapRate !== null ? infeasibleWhileCapRate.toFixed(1) + '%' : '-', infeasibleCapColor, '<=5%')}</td></tr>`;
+                    html += `<tr><td>Pre-turn Arm Lead (P50/P95):</td><td style="text-align: right; color: ${preTurnLeadColor};">${withLimitHint(preTurnLeadP50 !== null && preTurnLeadP95 !== null ? `${preTurnLeadP50.toFixed(1)} / ${preTurnLeadP95.toFixed(1)} frames` : '-', preTurnLeadColor, 'P50>=6 frames')}</td></tr>`;
                     html += `<tr><td>Speed Limit Missing:</td><td style="text-align: right;">${speedLimitZeroRate !== null ? speedLimitZeroRate.toFixed(1) : '-'}%</td></tr>`;
                     if (surgeCount !== null) {
                         html += `<tr><td>Straight Surge Drops (>=1.0 m/s):</td><td style="text-align: right;">${surgeCount}</td></tr>`;

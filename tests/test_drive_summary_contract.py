@@ -60,3 +60,11 @@ def test_drive_summary_contract_keys(tmp_path: Path) -> None:
     assert {"schema_version", "availability", "health", "limits"}.issubset(chassis_ground.keys())
     comfort = summary.get("comfort", {})
     assert {"metric_roles", "hotspot_attribution"}.issubset(comfort.keys())
+    speed_control = summary.get("speed_control", {})
+    assert {
+        "curve_cap_active_rate",
+        "pre_turn_arm_lead_frames_p50",
+        "pre_turn_arm_lead_frames_p95",
+        "overspeed_into_curve_rate",
+        "turn_infeasible_rate_when_curve_cap_active",
+    }.issubset(speed_control.keys())

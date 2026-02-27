@@ -31,6 +31,7 @@ Both adapters must call the canonical module and must not implement independent 
 - `turn_bias`
 - `alignment_summary`
 - `latency_sync`
+- `chassis_ground`
 - `system_health`
 - `safety`
 - `recommendations`
@@ -62,6 +63,11 @@ Both adapters must call the canonical module and must not implement independent 
 - `latency_sync.overall`
 - `comfort.metric_roles`
 - `comfort.hotspot_attribution`
+- `speed_control.curve_cap_active_rate`
+- `speed_control.pre_turn_arm_lead_frames_p50`
+- `speed_control.pre_turn_arm_lead_frames_p95`
+- `speed_control.overspeed_into_curve_rate`
+- `speed_control.turn_infeasible_rate_when_curve_cap_active`
 
 ## Comfort Metric Semantics
 
@@ -70,6 +76,13 @@ Both adapters must call the canonical module and must not implement independent 
 - `comfort.jerk_p95_filtered`: measured outcome-domain diagnostic (filtered speed derivative).
 - `comfort.jerk_p95`: measured outcome-domain raw diagnostic (unfiltered speed derivative).
 - `comfort.hotspot_attribution`: top-N longitudinal hotspots with root-cause attribution labels.
+
+## Curve-Cap Metric Semantics
+
+- `speed_control.curve_cap_active_rate`: share of analyzed frames where curve-cap limiter was active.
+- `speed_control.pre_turn_arm_lead_frames_p50/p95`: arm lead distribution carried from canonical curve-intent diagnostics.
+- `speed_control.overspeed_into_curve_rate`: share of valid curve-feasibility frames with speed above feasibility cap by >0.2 m/s.
+- `speed_control.turn_infeasible_rate_when_curve_cap_active`: share of curve-cap-active frames still marked infeasible by turn-feasibility telemetry.
 
 ## Adapter Responsibilities
 

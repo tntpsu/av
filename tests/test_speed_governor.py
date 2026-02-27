@@ -49,6 +49,20 @@ def _make_governor(
         dynamic_effective_horizon_enabled=horizon_enabled,
         speed_planner_enabled=planner_enabled,
         speed_planner_speed_limit_bias=0.0,
+        curve_cap_enabled=bool(overrides.get("curve_cap_enabled", False)),
+        curve_cap_shadow_mode=bool(overrides.get("curve_cap_shadow_mode", True)),
+        curve_cap_estimator_enabled=bool(overrides.get("curve_cap_estimator_enabled", True)),
+        curve_cap_hysteresis_enabled=bool(overrides.get("curve_cap_hysteresis_enabled", True)),
+        curve_cap_entry_intent_min=float(overrides.get("curve_cap_entry_intent_min", 0.35)),
+        curve_cap_commit_intent_min=float(overrides.get("curve_cap_commit_intent_min", 0.55)),
+        curve_cap_max_decel_mps2=float(overrides.get("curve_cap_max_decel_mps2", 1.6)),
+        curve_cap_hysteresis_mps=float(overrides.get("curve_cap_hysteresis_mps", 0.35)),
+        curve_cap_min_speed_mps=float(overrides.get("curve_cap_min_speed_mps", 3.0)),
+        curve_cap_margin_mps=float(overrides.get("curve_cap_margin_mps", 0.4)),
+        curve_cap_curvature_min=float(overrides.get("curve_cap_curvature_min", 0.002)),
+        curve_cap_rise_min=float(overrides.get("curve_cap_rise_min", 0.0005)),
+        curve_cap_peak_lat_accel_g=float(overrides.get("curve_cap_peak_lat_accel_g", 0.26)),
+        curve_cap_use_preview_curvature=bool(overrides.get("curve_cap_use_preview_curvature", True)),
     )
     planner_cfg = SpeedPlannerConfig(
         max_accel=2.0, max_decel=2.5, max_jerk=1.2, default_dt=1.0 / 30.0,
@@ -457,3 +471,91 @@ class TestDifferentRadiiSpeeds:
         expected = math.sqrt(0.20 * G / (0.010 * 2.5))
         assert abs(out.comfort_speed - expected) < 0.1
         assert 8.0 < out.comfort_speed < 10.0, f"Expected ~8.9, got {out.comfort_speed}"
+
+
+class TestCurveCapAuthority:
+    def test_curve_cap_shadow_mode_has_no_actuation_change(self):
+        gov = _make_governor(
+            max_lat_accel_g=0.8,
+            planner_enabled=False,
+            horizon_enabled=False,
+            preview_enabled=False,
+            curve_cap_enabled=True,
+            curve_cap_shadow_mode=True,
+        )
+        out = gov.compute_target_speed(
+            track_speed_limit=12.0,
+            curvature=0.0,
+            preview_curvature=0.03,
+            perception_horizon_m=20.0,
+            current_speed=10.0,
+            timestamp=0.0,
+            curve_intent=0.9,
+            curve_intent_state="COMMIT",
+            curve_rise=0.001,
+        )
+        assert out.curve_cap_active is True
+        assert out.curve_cap_speed is not None
+        assert abs(out.target_speed - 12.0) < 1e-6
+
+    def test_curve_cap_active_limits_target_speed(self):
+        gov = _make_governor(
+            max_lat_accel_g=0.8,
+            planner_enabled=False,
+            horizon_enabled=False,
+            preview_enabled=False,
+            curve_cap_enabled=True,
+            curve_cap_shadow_mode=False,
+        )
+        out = gov.compute_target_speed(
+            track_speed_limit=12.0,
+            curvature=0.0,
+            preview_curvature=0.03,
+            perception_horizon_m=20.0,
+            current_speed=10.0,
+            timestamp=0.0,
+            curve_intent=0.9,
+            curve_intent_state="COMMIT",
+            curve_rise=0.001,
+        )
+        assert out.curve_cap_active is True
+        assert out.curve_cap_speed is not None
+        assert out.target_speed <= out.curve_cap_speed + 1e-6
+        assert out.target_speed < 12.0
+
+    def test_curve_cap_hysteresis_limits_release(self):
+        gov = _make_governor(
+            max_lat_accel_g=0.8,
+            planner_enabled=False,
+            horizon_enabled=False,
+            preview_enabled=False,
+            curve_cap_enabled=True,
+            curve_cap_shadow_mode=False,
+            curve_cap_hysteresis_enabled=True,
+            curve_cap_hysteresis_mps=0.2,
+        )
+        first = gov.compute_target_speed(
+            track_speed_limit=12.0,
+            curvature=0.0,
+            preview_curvature=0.03,
+            perception_horizon_m=20.0,
+            current_speed=10.0,
+            timestamp=0.0,
+            curve_intent=0.9,
+            curve_intent_state="COMMIT",
+            curve_rise=0.001,
+        )
+        second = gov.compute_target_speed(
+            track_speed_limit=12.0,
+            curvature=0.0,
+            preview_curvature=0.012,
+            perception_horizon_m=20.0,
+            current_speed=10.0,
+            timestamp=0.033,
+            curve_intent=0.9,
+            curve_intent_state="COMMIT",
+            curve_rise=0.001,
+        )
+        assert first.curve_cap_speed is not None
+        assert second.curve_cap_speed is not None
+        assert second.curve_cap_speed <= first.curve_cap_speed + 0.21

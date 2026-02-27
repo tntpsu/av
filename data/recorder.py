@@ -1033,6 +1033,36 @@ class DataRecorder:
             dtype=np.float32
         )
         self.h5_file.create_dataset(
+            "control/speed_governor_curve_cap_speed",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/speed_governor_curve_cap_active",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int8
+        )
+        self.h5_file.create_dataset(
+            "control/speed_governor_curve_cap_reason",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=h5py.string_dtype(encoding='utf-8', length=32)
+        )
+        self.h5_file.create_dataset(
+            "control/speed_governor_curve_cap_margin_mps",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/speed_governor_curve_cap_shadow_mode",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int8
+        )
+        self.h5_file.create_dataset(
             "control/launch_throttle_cap",
             shape=(0,),
             maxshape=max_shape,
@@ -3934,6 +3964,11 @@ class DataRecorder:
         speed_governor_comfort_speed_list = []
         speed_governor_preview_speed_list = []
         speed_governor_horizon_speed_list = []
+        speed_governor_curve_cap_speed_list = []
+        speed_governor_curve_cap_active_list = []
+        speed_governor_curve_cap_reason_list = []
+        speed_governor_curve_cap_margin_mps_list = []
+        speed_governor_curve_cap_shadow_mode_list = []
         launch_throttle_cap_list = []
         launch_throttle_cap_active_list = []
         steering_pre_rate_limit_list = []
@@ -4269,6 +4304,21 @@ class DataRecorder:
             speed_governor_horizon_speed_list.append(
                 getattr(cc, 'speed_governor_horizon_speed', -1.0) or -1.0
             )
+            speed_governor_curve_cap_speed_list.append(
+                getattr(cc, 'speed_governor_curve_cap_speed', -1.0) or -1.0
+            )
+            speed_governor_curve_cap_active_list.append(
+                1 if getattr(cc, 'speed_governor_curve_cap_active', False) else 0
+            )
+            speed_governor_curve_cap_reason_list.append(
+                str(getattr(cc, 'speed_governor_curve_cap_reason', '') or '')
+            )
+            speed_governor_curve_cap_margin_mps_list.append(
+                float(getattr(cc, 'speed_governor_curve_cap_margin_mps', 0.0) or 0.0)
+            )
+            speed_governor_curve_cap_shadow_mode_list.append(
+                1 if getattr(cc, 'speed_governor_curve_cap_shadow_mode', False) else 0
+            )
             launch_throttle_cap_list.append(getattr(cc, 'launch_throttle_cap', 0.0) or 0.0)
             launch_throttle_cap_active_list.append(1 if getattr(cc, 'launch_throttle_cap_active', False) else 0)
             steering_pre_rate_limit_list.append(getattr(cc, 'steering_pre_rate_limit', 0.0) or 0.0)
@@ -4537,6 +4587,11 @@ class DataRecorder:
                        "target_speed_slew_active", "target_speed_ramp_active",
                        "speed_governor_comfort_speed", "speed_governor_preview_speed",
                        "speed_governor_horizon_speed",
+                       "speed_governor_curve_cap_speed",
+                       "speed_governor_curve_cap_active",
+                       "speed_governor_curve_cap_reason",
+                       "speed_governor_curve_cap_margin_mps",
+                       "speed_governor_curve_cap_shadow_mode",
                        "launch_throttle_cap", "launch_throttle_cap_active",
                        "steering_pre_rate_limit", "steering_post_rate_limit",
                        "steering_post_jerk_limit", "steering_post_sign_flip",
@@ -4823,6 +4878,22 @@ class DataRecorder:
             self.h5_file["control/speed_governor_comfort_speed"][current_size:] = speed_governor_comfort_speed_list
             self.h5_file["control/speed_governor_preview_speed"][current_size:] = speed_governor_preview_speed_list
             self.h5_file["control/speed_governor_horizon_speed"][current_size:] = speed_governor_horizon_speed_list
+            self.h5_file["control/speed_governor_curve_cap_speed"][current_size:] = (
+                speed_governor_curve_cap_speed_list
+            )
+            self.h5_file["control/speed_governor_curve_cap_active"][current_size:] = np.array(
+                speed_governor_curve_cap_active_list, dtype=np.int8
+            )
+            self.h5_file["control/speed_governor_curve_cap_reason"][current_size:] = np.array(
+                speed_governor_curve_cap_reason_list,
+                dtype=h5py.string_dtype(encoding='utf-8', length=32),
+            )
+            self.h5_file["control/speed_governor_curve_cap_margin_mps"][current_size:] = (
+                speed_governor_curve_cap_margin_mps_list
+            )
+            self.h5_file["control/speed_governor_curve_cap_shadow_mode"][current_size:] = np.array(
+                speed_governor_curve_cap_shadow_mode_list, dtype=np.int8
+            )
             self.h5_file["control/launch_throttle_cap"][current_size:] = launch_throttle_cap_list
             self.h5_file["control/launch_throttle_cap_active"][current_size:] = np.array(launch_throttle_cap_active_list, dtype=np.int8)
             self.h5_file["control/steering_pre_rate_limit"][current_size:] = steering_pre_rate_limit_list

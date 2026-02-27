@@ -3,6 +3,8 @@ road_width: 7.2
 lane_line_width: 0.2
 sample_spacing: 1.0
 loop: true
+# Default spawn offset to avoid starting with chassis/wheels straddling edge geometry.
+start_distance: 3.0
 speed_limit_mph: 25.0
 segments:
   - type: straight

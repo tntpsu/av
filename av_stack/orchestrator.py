@@ -3650,6 +3650,9 @@ class AVStack:
             current_speed=float(current_speed),
             timestamp=float(timestamp) if timestamp is not None else 0.0,
             confidence=float(confidence) if isinstance(confidence, (int, float)) else None,
+            curve_intent=float(curve_intent),
+            curve_intent_state=str(gated.get('curve_intent_state', 'STRAIGHT') or 'STRAIGHT'),
+            curve_rise=float(gated.get('curvature_rise_abs', 0.0) or 0.0),
         )
 
         adjusted_target_speed = gov_output.target_speed
@@ -3672,7 +3675,14 @@ class AVStack:
         curve_intent_speed_guardrail_confidence = (
             float(confidence) if isinstance(confidence, (int, float)) else float("nan")
         )
-        if bool(self.trajectory_config.get("curve_intent_speed_guardrail_enabled", True)):
+        curve_cap_authority_active = bool(
+            self.speed_governor.config.curve_cap_enabled
+            and not self.speed_governor.config.curve_cap_shadow_mode
+        )
+        if (
+            bool(self.trajectory_config.get("curve_intent_speed_guardrail_enabled", True))
+            and not curve_cap_authority_active
+        ):
             confidence_low = (
                 not np.isfinite(curve_intent_speed_guardrail_confidence)
                 or curve_intent_speed_guardrail_confidence < curve_intent_speed_guardrail_confidence_max
@@ -3765,6 +3775,11 @@ class AVStack:
             'curve_intent_speed_guardrail_active': curve_intent_speed_guardrail_active,
             'curve_intent_speed_guardrail_cap_mps': curve_intent_speed_guardrail_cap_mps,
             'curve_intent_speed_guardrail_confidence': curve_intent_speed_guardrail_confidence,
+            'curve_cap_speed': gov_output.curve_cap_speed,
+            'curve_cap_active': gov_output.curve_cap_active,
+            'curve_cap_reason': gov_output.curve_cap_reason,
+            'curve_cap_margin_mps': gov_output.curve_cap_margin_mps,
+            'curve_cap_shadow_mode': bool(self.speed_governor.config.curve_cap_shadow_mode),
         }
 
     def _pf_plan_trajectory(self, pr: dict, gated: dict, gov: dict, vehicle_state_dict: dict, timestamp: float) -> dict:
@@ -3963,6 +3978,11 @@ class AVStack:
         curve_intent_speed_guardrail_active = gov['curve_intent_speed_guardrail_active']
         curve_intent_speed_guardrail_cap_mps = gov['curve_intent_speed_guardrail_cap_mps']
         curve_intent_speed_guardrail_confidence = gov['curve_intent_speed_guardrail_confidence']
+        curve_cap_speed = gov.get('curve_cap_speed')
+        curve_cap_active = bool(gov.get('curve_cap_active', False))
+        curve_cap_reason = str(gov.get('curve_cap_reason', 'inactive') or 'inactive')
+        curve_cap_margin_mps = float(gov.get('curve_cap_margin_mps', 0.0) or 0.0)
+        curve_cap_shadow_mode = bool(gov.get('curve_cap_shadow_mode', True))
         teleport_guard_active = fv['teleport_guard_active']
         base_speed = float(self.original_target_speed)
         target_speed_planned = gov_output.planned_speed
@@ -4065,6 +4085,13 @@ class AVStack:
                 control_command['speed_governor_comfort_speed'] = gov_output.comfort_speed if gov_output.comfort_speed < 1e6 else -1.0
                 control_command['speed_governor_preview_speed'] = gov_output.preview_speed if gov_output.preview_speed is not None else -1.0
                 control_command['speed_governor_horizon_speed'] = gov_output.horizon_speed if gov_output.horizon_speed is not None else -1.0
+                control_command['speed_governor_curve_cap_speed'] = (
+                    float(curve_cap_speed) if curve_cap_speed is not None else -1.0
+                )
+                control_command['speed_governor_curve_cap_active'] = bool(curve_cap_active)
+                control_command['speed_governor_curve_cap_reason'] = str(curve_cap_reason)
+                control_command['speed_governor_curve_cap_margin_mps'] = float(curve_cap_margin_mps)
+                control_command['speed_governor_curve_cap_shadow_mode'] = bool(curve_cap_shadow_mode)
                 control_command['curve_intent_speed_guardrail_active'] = bool(
                     curve_intent_speed_guardrail_active
                 )
@@ -5674,6 +5701,21 @@ class AVStack:
             speed_governor_comfort_speed=control_command.get('speed_governor_comfort_speed'),
             speed_governor_preview_speed=control_command.get('speed_governor_preview_speed'),
             speed_governor_horizon_speed=control_command.get('speed_governor_horizon_speed'),
+            speed_governor_curve_cap_speed=control_command.get(
+                'speed_governor_curve_cap_speed'
+            ),
+            speed_governor_curve_cap_active=control_command.get(
+                'speed_governor_curve_cap_active'
+            ),
+            speed_governor_curve_cap_reason=control_command.get(
+                'speed_governor_curve_cap_reason'
+            ),
+            speed_governor_curve_cap_margin_mps=control_command.get(
+                'speed_governor_curve_cap_margin_mps'
+            ),
+            speed_governor_curve_cap_shadow_mode=control_command.get(
+                'speed_governor_curve_cap_shadow_mode'
+            ),
             launch_throttle_cap=control_command.get('launch_throttle_cap'),
             launch_throttle_cap_active=bool(control_command.get('launch_throttle_cap_active', False)),
             steering_pre_rate_limit=control_command.get('steering_pre_rate_limit'),

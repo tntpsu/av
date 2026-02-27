@@ -1215,6 +1215,23 @@ def _print_summary_report(recording_path: Path, summary: Dict, analyze_to_failur
     print("-" * 80)
     print(f"   Speed Error RMSE: {speed_control.get('speed_error_rmse', 0.0):.3f} m/s")
     print(f"   Speed Overspeed Rate: {speed_control.get('speed_overspeed_rate', 0.0):.1f}%")
+    print(
+        "   Overspeed Into Curve Rate: "
+        f"{speed_control.get('overspeed_into_curve_rate', 0.0):.1f}%"
+    )
+    print(
+        "   Curve-Cap Active Rate: "
+        f"{speed_control.get('curve_cap_active_rate', 0.0):.1f}%"
+    )
+    print(
+        "   Turn Infeasible While Curve-Cap Active: "
+        f"{speed_control.get('turn_infeasible_rate_when_curve_cap_active', 0.0):.1f}%"
+    )
+    print(
+        "   Pre-turn Arm Lead (P50/P95): "
+        f"{speed_control.get('pre_turn_arm_lead_frames_p50', 0.0):.1f} / "
+        f"{speed_control.get('pre_turn_arm_lead_frames_p95', 0.0):.1f} frames"
+    )
     print(f"   Speed Limit Missing: {speed_control.get('speed_limit_zero_rate', 0.0):.1f}%")
     print()
 

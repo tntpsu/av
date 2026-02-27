@@ -881,6 +881,36 @@ def analyze_recording_summary(recording_path: Path, analyze_to_failure: bool = F
                 if 'control/target_speed_final' in f
                 else None
             )
+            data['speed_governor_curve_cap_active'] = (
+                np.array(f['control/speed_governor_curve_cap_active'][:])
+                if 'control/speed_governor_curve_cap_active' in f
+                else None
+            )
+            data['speed_governor_curve_cap_speed'] = (
+                np.array(f['control/speed_governor_curve_cap_speed'][:])
+                if 'control/speed_governor_curve_cap_speed' in f
+                else None
+            )
+            data['speed_governor_curve_cap_margin_mps'] = (
+                np.array(f['control/speed_governor_curve_cap_margin_mps'][:])
+                if 'control/speed_governor_curve_cap_margin_mps' in f
+                else None
+            )
+            data['turn_feasibility_active'] = (
+                np.array(f['control/turn_feasibility_active'][:])
+                if 'control/turn_feasibility_active' in f
+                else None
+            )
+            data['turn_feasibility_infeasible'] = (
+                np.array(f['control/turn_feasibility_infeasible'][:])
+                if 'control/turn_feasibility_infeasible' in f
+                else None
+            )
+            data['turn_feasibility_speed_limit_mps'] = (
+                np.array(f['control/turn_feasibility_speed_limit_mps'][:])
+                if 'control/turn_feasibility_speed_limit_mps' in f
+                else None
+            )
             data['longitudinal_accel_capped'] = (
                 np.array(f['control/longitudinal_accel_capped'][:])
                 if 'control/longitudinal_accel_capped' in f
@@ -1404,6 +1434,11 @@ def analyze_recording_summary(recording_path: Path, analyze_to_failure: bool = F
     speed_surge_count = 0
     speed_surge_avg_drop = 0.0
     speed_surge_p95_drop = 0.0
+    curve_cap_active_rate = 0.0
+    curve_cap_pre_turn_lead_frames_p50 = 0.0
+    curve_cap_pre_turn_lead_frames_p95 = 0.0
+    turn_infeasible_rate_when_curve_cap_active = 0.0
+    overspeed_into_curve_rate = 0.0
     speed_min_mps = None
     speed_max_mps = None
     if data.get('speed') is not None and len(data['speed']) > 0:
@@ -2372,6 +2407,47 @@ def analyze_recording_summary(recording_path: Path, analyze_to_failure: bool = F
                 curve_intent_diag["curvature_ratio_p95"] = safe_float(np.percentile(ratio, 95))
                 curve_intent_diag["undercall_detected"] = bool(undercall_rate > 25.0)
 
+    # Curve-cap longitudinal diagnostics
+    curve_cap_active_series = data.get("speed_governor_curve_cap_active")
+    if curve_cap_active_series is not None and n_frames > 0:
+        n_cap = min(n_frames, len(curve_cap_active_series))
+        if n_cap > 0:
+            cap_mask = np.asarray(curve_cap_active_series[:n_cap], dtype=np.float64) > 0.5
+            curve_cap_active_rate = safe_float(np.mean(cap_mask) * 100.0)
+            feas_infeasible_series = data.get("turn_feasibility_infeasible")
+            if feas_infeasible_series is not None and len(feas_infeasible_series) >= n_cap:
+                infeasible_mask = np.asarray(feas_infeasible_series[:n_cap], dtype=np.float64) > 0.5
+                if np.any(cap_mask):
+                    turn_infeasible_rate_when_curve_cap_active = safe_float(
+                        np.mean(infeasible_mask[cap_mask]) * 100.0
+                    )
+
+    if curve_intent_diag.get("available"):
+        curve_cap_pre_turn_lead_frames_p50 = safe_float(
+            curve_intent_diag.get("arm_lead_frames_p50", 0.0)
+        )
+        curve_cap_pre_turn_lead_frames_p95 = safe_float(
+            curve_intent_diag.get("arm_lead_frames_p95", 0.0)
+        )
+
+    if (
+        data.get("speed") is not None
+        and data.get("turn_feasibility_speed_limit_mps") is not None
+    ):
+        n_over = min(
+            n_frames,
+            len(data["speed"]),
+            len(data["turn_feasibility_speed_limit_mps"]),
+        )
+        if n_over > 0:
+            speed_arr = np.asarray(data["speed"][:n_over], dtype=np.float64)
+            cap_arr = np.asarray(data["turn_feasibility_speed_limit_mps"][:n_over], dtype=np.float64)
+            valid = np.isfinite(speed_arr) & np.isfinite(cap_arr) & (cap_arr > 0.1)
+            if np.any(valid):
+                overspeed_into_curve_rate = safe_float(
+                    np.mean(speed_arr[valid] > (cap_arr[valid] + 0.2)) * 100.0
+                )
+
     layer_breakdowns = {
         "Perception": {
             "base_score": 100.0,
@@ -2560,6 +2636,14 @@ def analyze_recording_summary(recording_path: Path, analyze_to_failure: bool = F
             recommendations.append(
                 "Controller is undercalling curvature in curves - improve curvature estimation fidelity."
             )
+    if overspeed_into_curve_rate > 10.0:
+        recommendations.append(
+            "Overspeed into curve events detected - tune curve-cap decel and intent thresholds."
+        )
+    if turn_infeasible_rate_when_curve_cap_active > 5.0:
+        recommendations.append(
+            "Curve-cap active while turn remains infeasible - strengthen capability estimator or peak limits."
+        )
     if lane_detection_rate < 90:
         recommendations.append("Improve lane detection - check perception model or CV fallback")
     if lane_line_jitter_p95 > 0.6 or reference_jitter_p95 > 0.25:
@@ -2629,6 +2713,8 @@ def analyze_recording_summary(recording_path: Path, analyze_to_failure: bool = F
             key_issues.append(
                 f"Curvature undercall ({curve_intent_diag.get('undercall_frame_rate', 0.0):.1f}% frames)"
             )
+    if overspeed_into_curve_rate > 10.0:
+        key_issues.append(f"Overspeed into curve ({overspeed_into_curve_rate:.1f}% frames)")
     if straight_oscillation_mean > 0.2:
         key_issues.append("Straight-line oscillation detected")
     if straight_sign_mismatch_events > 0:
@@ -2728,6 +2814,13 @@ def analyze_recording_summary(recording_path: Path, analyze_to_failure: bool = F
             "speed_surge_count": int(speed_surge_count),
             "speed_surge_avg_drop": safe_float(speed_surge_avg_drop),
             "speed_surge_p95_drop": safe_float(speed_surge_p95_drop),
+            "curve_cap_active_rate": safe_float(curve_cap_active_rate),
+            "pre_turn_arm_lead_frames_p50": safe_float(curve_cap_pre_turn_lead_frames_p50),
+            "pre_turn_arm_lead_frames_p95": safe_float(curve_cap_pre_turn_lead_frames_p95),
+            "overspeed_into_curve_rate": safe_float(overspeed_into_curve_rate),
+            "turn_infeasible_rate_when_curve_cap_active": safe_float(
+                turn_infeasible_rate_when_curve_cap_active
+            ),
             "acceleration_mean": safe_float(acceleration_mean),
             "acceleration_p95": safe_float(acceleration_p95),
             "acceleration_max": safe_float(acceleration_max),

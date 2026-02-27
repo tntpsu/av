@@ -7,6 +7,8 @@ road_width: 7.2
 lane_line_width: 0.2
 sample_spacing: 1.0
 loop: true
+# Default spawn offset to avoid edge-straddle at loop start.
+start_distance: 3.0
 speed_limit_mph: 65.0
 segments:
   # Straight: accelerate to 65 mph + cruise

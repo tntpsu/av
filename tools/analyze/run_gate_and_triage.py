@@ -151,6 +151,7 @@ def _extract_run_metrics(
     safety = summary.get("safety", {})
     executive = summary.get("executive_summary", {})
     system_health = summary.get("system_health", {})
+    speed_control = summary.get("speed_control", {})
     curve_intent_diag = summary.get("curve_intent_diagnostics", {})
     curve_intent_available = bool(curve_intent_diag.get("available", False))
     curve_intent_arm_signal_available = bool(curve_intent_diag.get("arm_signal_available", False))
@@ -217,6 +218,19 @@ def _extract_run_metrics(
         ),
         "curve_intent_undercall_detected": bool(
             curve_intent_available and curve_intent_diag.get("undercall_detected", False)
+        ),
+        "curve_cap_active_rate": float(speed_control.get("curve_cap_active_rate", 0.0)),
+        "curve_cap_pre_turn_arm_lead_frames_p50": float(
+            speed_control.get("pre_turn_arm_lead_frames_p50", 0.0)
+        ),
+        "curve_cap_pre_turn_arm_lead_frames_p95": float(
+            speed_control.get("pre_turn_arm_lead_frames_p95", 0.0)
+        ),
+        "curve_cap_overspeed_into_curve_rate": float(
+            speed_control.get("overspeed_into_curve_rate", 0.0)
+        ),
+        "curve_cap_turn_infeasible_rate_when_active": float(
+            speed_control.get("turn_infeasible_rate_when_curve_cap_active", 0.0)
         ),
     }
     return summary, metrics

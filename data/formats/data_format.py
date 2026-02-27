@@ -265,6 +265,11 @@ class ControlCommand:
     speed_governor_comfort_speed: Optional[float] = None
     speed_governor_preview_speed: Optional[float] = None
     speed_governor_horizon_speed: Optional[float] = None
+    speed_governor_curve_cap_speed: Optional[float] = None
+    speed_governor_curve_cap_active: Optional[bool] = None
+    speed_governor_curve_cap_reason: Optional[str] = None
+    speed_governor_curve_cap_margin_mps: Optional[float] = None
+    speed_governor_curve_cap_shadow_mode: Optional[bool] = None
     # Launch throttle ramp diagnostics
     launch_throttle_cap: Optional[float] = None
     launch_throttle_cap_active: bool = False

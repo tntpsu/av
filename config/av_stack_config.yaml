@@ -10,17 +10,16 @@ control:
     error_clip: 1.57
     integral_limit: 0.1
     steering_smoothing_alpha: 0.9
-    control_mode: pure_pursuit  # pid | stanley | pure_pursuit
+    control_mode: pure_pursuit
     stanley_k: 1.5
     stanley_soft_speed: 2.0
     stanley_heading_weight: 1.0
-    # Pure Pursuit params (active when control_mode=pure_pursuit)
-    pp_feedback_gain: 0.10  # PP lateral error gain (rad/m); higher = more aggressive response; range [0.05, 0.20]
-    pp_max_steering_jerk: 18.0  # comfort gate: steering_jerk_max ≤ 20.0; at 18.0 vehicle is near the cap
-    pp_min_lookahead: 0.5  # min effective lookahead distance (m), prevents singularity
-    pp_ref_jump_clamp: 0.5  # max ref_x change per frame (m), second safety net
-    pp_stale_decay: 0.98  # per-frame steering decay when perception is stale
-    pp_max_steering_rate: 0.4  # simple rate limit for PP mode (per-frame delta); PID-era adaptive rate/jerk/smoothing bypassed
+    pp_feedback_gain: 0.1
+    pp_max_steering_jerk: 18.0
+    pp_min_lookahead: 0.5
+    pp_ref_jump_clamp: 0.5
+    pp_stale_decay: 0.98
+    pp_max_steering_rate: 0.4
     feedback_gain_min: 1.1
     feedback_gain_max: 1.4
     feedback_gain_curvature_min: 0.003
@@ -41,7 +40,7 @@ control:
     curvature_scale_threshold: 0.0005
     curvature_stale_hold_seconds: 0.3
     curvature_stale_hold_min_abs: 0.0005
-    curvature_smoothing_alpha: 0.5        # C1: reduced from 0.7 (trajectory now provides smoother curvature)
+    curvature_smoothing_alpha: 0.5
     curvature_transition_threshold: 0.01
     curvature_transition_alpha: 0.3
     curve_feedforward_bins:
@@ -123,9 +122,9 @@ control:
     dynamic_curve_single_owner_min_jerk: 0.6
     dynamic_curve_comfort_lat_accel_comfort_max_g: 0.18
     dynamic_curve_comfort_lat_accel_peak_max_g: 0.25
-    dynamic_curve_comfort_lat_jerk_comfort_max_gps: 0.30
+    dynamic_curve_comfort_lat_jerk_comfort_max_gps: 0.3
     dynamic_curve_lat_jerk_smoothing_alpha: 0.25
-    dynamic_curve_lat_jerk_soft_start_ratio: 0.60
+    dynamic_curve_lat_jerk_soft_start_ratio: 0.6
     dynamic_curve_lat_jerk_soft_floor_scale: 0.35
     dynamic_curve_speed_low_mps: 4.0
     dynamic_curve_speed_high_mps: 10.0
@@ -152,8 +151,8 @@ control:
     curve_commit_mode_dynamic_deficit_frames: 8
     curve_commit_mode_dynamic_deficit_min: 0.03
     curve_commit_mode_retrigger_cooldown_frames: 12
-    curve_mode_speed_cap_enabled: true       # B1: Enable curvature-based speed cap
-    curve_mode_speed_cap_mps: 7.5            # Reduced for S-turn transitions (was 8.0)
+    curve_mode_speed_cap_enabled: true
+    curve_mode_speed_cap_mps: 7.5
     curve_mode_speed_cap_min_ratio: 0.55
     speed_gain_min_speed: 4.0
     speed_gain_max_speed: 10.0
@@ -165,18 +164,18 @@ control:
     kp: 0.25
     ki: 0.02
     kd: 0.01
-    max_accel: 1.2  # accel ceiling (m/s²); comfort gate: accel_p95_filtered ≤ 3.0; range [0.8, 2.0]
-    max_decel: 2.4  # braking limit (m/s²); range [1.5, 3.5]
+    max_accel: 1.2
+    max_decel: 2.4
     max_jerk: 0.7
-    max_jerk_min: 1.0   # S1-M39: tighter for comfort
+    max_jerk_min: 1.0
     max_jerk_max: 4.0
     jerk_error_min: 0.5
     jerk_error_max: 3.0
     accel_feedforward_gain: 1.0
     decel_feedforward_gain: 1.0
     speed_for_jerk_alpha: 0.8
-    jerk_cooldown_frames: 8   # S1-M39: longer cooldown after jerk cap
-    jerk_cooldown_scale: 0.4  # multiplier on max_jerk_min during cooldown; lower = smoother recovery
+    jerk_cooldown_frames: 8
+    jerk_cooldown_scale: 0.4
     speed_error_to_accel_gain: 0.1
     speed_error_deadband: 0.05
     speed_error_gain_under: 0.12
@@ -208,33 +207,33 @@ control:
     continuous_accel_control: true
     continuous_accel_deadband: 0.05
     startup_ramp_seconds: 2.5
-    startup_accel_limit: 0.5   # S1-M39: softer launch
+    startup_accel_limit: 0.5
     startup_speed_threshold: 2.0
     startup_throttle_cap: 0.15
     startup_disable_accel_feedforward: true
-    low_speed_accel_limit: 0.6   # S1-M39
+    low_speed_accel_limit: 0.6
     low_speed_speed_threshold: 2.0
-    target_speed: 12.0  # cruise target (m/s); keep in sync with safety.max_speed and trajectory.target_speed
-    max_speed: 12.0  # hard speed ceiling (m/s); keep in sync with target_speed
+    target_speed: 12.0
+    max_speed: 12.0
     speed_smoothing: 0.3
     speed_deadband: 0.03
     throttle_limit_threshold: 0.9
     throttle_reduction_factor: 0.15
     brake_aggression: 2.0
-    throttle_rate_limit: 0.04   # S1-M39: smoother throttle changes
+    throttle_rate_limit: 0.04
     brake_rate_limit: 0.05
-    throttle_smoothing_alpha: 0.7   # S1-M39: more smoothing
+    throttle_smoothing_alpha: 0.7
     min_throttle_when_accel: 0.1
     min_throttle_hold: 0.16
     min_throttle_hold_speed: 4.0
     target_speed_slew_rate_up: 1.5
-    target_speed_slew_rate_down: 1.8   # S1-M39: slower decel slew
+    target_speed_slew_rate_down: 1.8
     target_speed_slew_error_min: 0.5
     target_speed_slew_error_max: 3.0
     target_speed_slew_rate_up_min: 0.6
     target_speed_slew_rate_up_max: 2.0
     target_speed_slew_rate_down_min: 1.0
-    target_speed_slew_rate_down_max: 2.0   # S1-M39
+    target_speed_slew_rate_down_max: 2.0
     target_speed_stop_threshold: 0.5
     target_speed_restart_ramp_seconds: 2.5
     launch_throttle_stop_threshold: 2.0
@@ -247,16 +246,10 @@ trajectory:
   trajectory_source: planner
   lookahead_distance: 20.0
   point_spacing: 1.0
-  target_speed: 12.0  # keep in sync with control.longitudinal.target_speed and safety.max_speed
-  reference_lookahead: 9.0  # baseline PP lookahead (m); overridden by speed table when dynamic_reference_lookahead=true
+  target_speed: 12.0
+  reference_lookahead: 9.0
   dynamic_reference_lookahead: true
-  # Unified trajectory scheduler mode for lookahead entry behavior.
-  # `binary`: existing upcoming/not-upcoming behavior
-  # `phase_shadow`: compute phase telemetry only, keep binary behavior
-  # `phase_active`: phase drives entry lookahead blending (single-owner)
   curve_scheduler_mode: phase_shadow
-  # Speed-indexed source of truth for lookahead (interpolated in m/s).
-  # When provided, this table overrides legacy scale-based speed lookahead tuning.
   reference_lookahead_speed_table:
   - speed_mps: 0.0
     lookahead_m: 7.0
@@ -270,9 +263,6 @@ trajectory:
     lookahead_m: 14.0
   - speed_mps: 13.41
     lookahead_m: 15.0
-  # Entry-phase table: shorter lookahead during curve approach.
-  # Active when track geometry is available (source: track).
-  # Values cap near the pre-speed-table original (~9m) to protect turn entries.
   reference_lookahead_speed_table_entry:
   - speed_mps: 0.0
     lookahead_m: 6.0
@@ -284,19 +274,16 @@ trajectory:
     lookahead_m: 9.0
   - speed_mps: 13.41
     lookahead_m: 9.0
-  # Use track YAML geometry for proactive curve scheduling.
-  # Track name is set at runtime via --track-yaml (start_av_stack.sh).
   reference_lookahead_entry_source: track
   reference_lookahead_entry_preview_scale: 1.5
-  reference_lookahead_entry_track_name: ""
+  reference_lookahead_entry_track_name: ''
   reference_lookahead_entry_preview_only_fallback: true
   reference_lookahead_entry_preview_curvature_min: 0.003
   reference_lookahead_entry_preview_curvature_max: 0.015
-  reference_lookahead_entry_hysteresis_on: 0.010
+  reference_lookahead_entry_hysteresis_on: 0.01
   reference_lookahead_entry_hysteresis_off: 0.008
   reference_lookahead_entry_distance_start_m: 20.0
   reference_lookahead_entry_distance_end_m: 6.0
-  # Phase scheduler tuning for upcoming-curve anticipation.
   curve_phase_preview_curvature_min: 0.003
   curve_phase_preview_curvature_max: 0.015
   curve_phase_path_curvature_min: 0.003
@@ -306,15 +293,15 @@ trajectory:
   curve_phase_time_to_curve_min_s: 0.8
   curve_phase_time_to_curve_max_s: 3.0
   curve_phase_confidence_min: 0.35
-  curve_phase_confidence_max: 0.80
+  curve_phase_confidence_max: 0.8
   curve_phase_confidence_floor_scale: 0.6
   curve_phase_ema_alpha: 0.45
   curve_phase_on: 0.45
-  curve_phase_off: 0.30
+  curve_phase_off: 0.3
   curve_phase_commit_on: 0.55
   curve_phase_commit_min_frames: 4
   curve_phase_entry_floor: 0.15
-  curve_phase_commit_floor: 0.30
+  curve_phase_commit_floor: 0.3
   curve_phase_rearm_hold_frames: 4
   curve_context_preview_horizon_m: 25.0
   curve_context_preview_step_m: 1.0
@@ -322,14 +309,13 @@ trajectory:
   curve_context_curvature_gain: 6.0
   reference_lookahead_slew_rate_m_per_frame: 0.25
   reference_lookahead_slew_rate_shorten_m_per_frame: 0.35
-  reference_lookahead_slew_rate_lengthen_m_per_frame: 0.20
-  # Dual-regime lookahead tables are optional. Empty arrays preserve legacy single-table behavior.
+  reference_lookahead_slew_rate_lengthen_m_per_frame: 0.2
   reference_lookahead_speed_table_straight: []
   reference_lookahead_speed_table_curve: []
   reference_lookahead_curve_blend_curvature_min: 0.006
   reference_lookahead_curve_blend_curvature_max: 0.015
   reference_lookahead_min: 2.5
-  reference_lookahead_scale_min: 0.80
+  reference_lookahead_scale_min: 0.8
   reference_lookahead_speed_min: 4.0
   reference_lookahead_speed_max: 10.0
   reference_lookahead_curvature_min: 0.002
@@ -341,24 +327,22 @@ trajectory:
   curve_intent_speed_guardrail_intent_min: 0.55
   curve_intent_speed_guardrail_confidence_max: 0.55
   curve_intent_speed_guardrail_cap_mps: 7.0
-  # Canonical map-free curve anticipation signal (trajectory-owned).
-  # Enable single-owner behavior binding (non-shadow) after shadow validation.
   curve_anticipation_enabled: true
   curve_anticipation_shadow_only: true
   curve_anticipation_single_owner_mode: false
   curve_anticipation_score_ema_alpha: 0.35
   curve_anticipation_score_on: 0.65
-  curve_anticipation_score_off: 0.50
+  curve_anticipation_score_off: 0.5
   curve_anticipation_on_frames: 2
   curve_anticipation_off_frames: 2
   curve_anticipation_curvature_min: 0.0025
   curve_anticipation_curvature_max: 0.015
   curve_anticipation_heading_delta_min_rad: 0.14
-  curve_anticipation_heading_delta_max_rad: 0.40
-  curve_anticipation_far_rise_min: 0.30
-  curve_anticipation_far_rise_max: 1.00
+  curve_anticipation_heading_delta_max_rad: 0.4
+  curve_anticipation_far_rise_min: 0.3
+  curve_anticipation_far_rise_max: 1.0
   curve_anticipation_entry_weight_on: 0.65
-  curve_anticipation_entry_weight_full: 0.90
+  curve_anticipation_entry_weight_full: 0.9
   curve_anticipation_entry_weight_min_active: 0.35
   curve_anticipation_entry_weight_max: 1.0
   curve_anticipation_entry_weight_merge_with_preview: true
@@ -417,7 +401,7 @@ trajectory:
   min_speed_curvature_max: 0.02
   speed_planner:
     enabled: true
-    max_accel: 1.2   # S1-M39: align with longitudinal for comfort
+    max_accel: 1.2
     max_decel: 2.4
     max_jerk: 0.8
     max_jerk_min: 0.5
@@ -452,8 +436,8 @@ trajectory:
   camera_offset_x: 0.0
   distance_scaling_factor: 0.875
   bias_correction_threshold: 10.0
-  reference_smoothing: 0.75  # EMA on reference point (0=raw, 1=held); higher = smoother but lagging; affects lateral_error_p95
-  lane_smoothing_alpha: 0.8  # EMA on lane polynomial coefficients; range [0.50, 0.90]
+  reference_smoothing: 0.75
+  lane_smoothing_alpha: 0.8
   center_spline_enabled: true
   center_spline_degree: 2
   center_spline_samples: 30
@@ -471,7 +455,7 @@ trajectory:
   target_lane: right
   target_lane_width_m: 3.6
   ref_sign_flip_threshold: 0.12
-  ref_x_rate_limit: 0.22  # max lateral movement of reference point per frame (m/frame); prevents jitter
+  ref_x_rate_limit: 0.22
   ref_x_rate_limit_turn_heading_min_abs_rad: 0.04
   ref_x_rate_limit_turn_scale_max: 4.0
   ref_sign_flip_disable_on_turn: true
@@ -485,13 +469,11 @@ trajectory:
   multi_lookahead_curvature_threshold: 0.01
   multi_lookahead_curve_heading_smoothing_alpha: 0.75
   multi_lookahead_curve_heading_min_abs_rad: 0.05
-  # A1: Planner heading-zero gate thresholds (image-space)
-  heading_zero_quad_threshold: 0.005      # tighter than old 0.01; image-space quadratic coeff
-  heading_zero_curvature_guard: 0.001     # lowered from 0.002: recordings show heading zeroed at curvature 0.0005-0.0015
-  # A3: Curvature-aware smoothing / rate-limit relaxation
-  smoothing_alpha_curve_reduction: 0.15   # alpha reduction when curvature increasing (3+ frames)
-  ref_x_rate_limit_curvature_min: 0.001   # curvature threshold for rate limit relaxation (lowered for S-turn transitions)
-  ref_x_rate_limit_curvature_scale_max: 5.0  # max rate limit multiplier from curvature
+  heading_zero_quad_threshold: 0.005
+  heading_zero_curvature_guard: 0.001
+  smoothing_alpha_curve_reduction: 0.15
+  ref_x_rate_limit_curvature_min: 0.001
+  ref_x_rate_limit_curvature_scale_max: 5.0
   traj_heading_zero_gate_center_a_on_abs_max: 0.004
   traj_heading_zero_gate_center_a_off_abs_max: 0.008
   traj_heading_zero_gate_heading_on_abs_rad: 0.035
@@ -514,15 +496,29 @@ trajectory:
   speed_horizon_guardrail_gain: 1.0
   speed_governor:
     enabled: true
-    comfort_governor_max_lat_accel_g: 0.20
+    comfort_governor_max_lat_accel_g: 0.2
     comfort_governor_min_speed: 3.0
     curvature_calibration_scale: 2.5
     curvature_history_frames: 5
     curve_preview_enabled: true
     curve_preview_lookahead_scale: 1.6
-    curve_preview_max_decel_mps2: 1.2   # S1-M39: gentler curve decel
+    curve_preview_max_decel_mps2: 1.2
     curve_preview_min_curvature: 0.002
-  lane_position_smoothing_alpha: 0.20
+    curve_cap_enabled: true
+    curve_cap_shadow_mode: false
+    curve_cap_estimator_enabled: true
+    curve_cap_hysteresis_enabled: true
+    curve_cap_entry_intent_min: 0.35
+    curve_cap_commit_intent_min: 0.55
+    curve_cap_max_decel_mps2: 1.6
+    curve_cap_hysteresis_mps: 0.35
+    curve_cap_min_speed_mps: 3.0
+    curve_cap_margin_mps: 0.4
+    curve_cap_curvature_min: 0.002
+    curve_cap_rise_min: 0.0005
+    curve_cap_peak_lat_accel_g: 0.26
+    curve_cap_use_preview_curvature: true
+  lane_position_smoothing_alpha: 0.2
   ref_point_jump_clamp_x: 0.15
   ref_point_jump_clamp_heading: 0.08
   reference_x_max_abs: 3.2
@@ -532,9 +528,9 @@ safety:
   speed_prevention_threshold: 0.9
   speed_prevention_brake_threshold: 0.95
   speed_prevention_brake_amount: 0.2
-  max_lateral_error: 2.0  # soft OOL threshold (m); triggers recovery mode before emergency stop
-  recovery_lateral_error: 1.0  # hysteresis: below this, recovery mode deactivates
-  emergency_stop_error: 4.0  # hard OOL threshold (m); crossing triggers emergency stop flag
+  max_lateral_error: 2.0
+  recovery_lateral_error: 1.0
+  emergency_stop_error: 4.0
   emergency_stop_release_speed: 0.2
   emergency_stop_end_run_after_seconds: 3.0
   emergency_stop_use_gt_lane_boundaries: true
@@ -570,9 +566,9 @@ perception:
   lane_side_sign_skip_curve_phase: true
   lane_side_sign_curve_curvature_min: 0.006
   lane_side_sign_preview_curvature_min: 0.006
-  lane_center_ema_alpha: 0.15  # EMA smoothing of lane center estimate; low = aggressive gating; range [0.05, 0.30]
+  lane_center_ema_alpha: 0.15
   lane_width_ema_alpha: 0.2
-  lane_center_gate_m: 0.3  # suppression gate: center updates > this value per frame are rejected (m)
+  lane_center_gate_m: 0.3
   lane_width_gate_m: 0.6
   lane_center_ab_beta: 0.12
   lane_width_ab_beta: 0.08

@@ -9,6 +9,8 @@ from pathlib import Path
 import math
 import yaml
 
+from control.curve_capability import compute_turn_feasibility
+
 
 class PIDController:
     """
@@ -1646,38 +1648,26 @@ class LateralController:
             speed_for_comfort = max(0.0, speed_for_comfort)
             turn_feasibility_curvature_abs = float(curve_metric_abs)
             turn_feasibility_speed_mps = float(speed_for_comfort)
-            dynamic_curve_lateral_accel_est_g = float(
-                (speed_for_comfort * speed_for_comfort * float(curve_metric_abs)) / 9.81
+            feasibility = compute_turn_feasibility(
+                speed_mps=speed_for_comfort,
+                curvature_abs=turn_feasibility_curvature_abs,
+                comfort_limit_g=self.dynamic_curve_comfort_lat_accel_comfort_max_g,
+                peak_limit_g=self.dynamic_curve_comfort_lat_accel_peak_max_g,
+                use_peak_bound=self.turn_feasibility_use_peak_bound,
+                guardband_g=self.turn_feasibility_guardband_g,
+                curvature_min=self.turn_feasibility_curvature_min,
+                active_when=bool(self.turn_feasibility_governor_enabled and not is_straight),
             )
-            turn_feasibility_required_lat_accel_g = float(dynamic_curve_lateral_accel_est_g)
-            turn_feasibility_comfort_limit_g = float(self.dynamic_curve_comfort_lat_accel_comfort_max_g)
-            turn_feasibility_peak_limit_g = float(self.dynamic_curve_comfort_lat_accel_peak_max_g)
-            turn_feasibility_selected_limit_g = float(
-                self.dynamic_curve_comfort_lat_accel_peak_max_g
-                if self.turn_feasibility_use_peak_bound
-                else self.dynamic_curve_comfort_lat_accel_comfort_max_g
-            )
-            turn_feasibility_active = bool(
-                self.turn_feasibility_governor_enabled
-                and turn_feasibility_curvature_abs >= self.turn_feasibility_curvature_min
-                and not is_straight
-            )
-            if turn_feasibility_active:
-                effective_limit_g = max(
-                    0.0,
-                    turn_feasibility_selected_limit_g - self.turn_feasibility_guardband_g,
-                )
-                turn_feasibility_margin_g = float(effective_limit_g - turn_feasibility_required_lat_accel_g)
-                if turn_feasibility_curvature_abs > 1e-9 and effective_limit_g > 0.0:
-                    turn_feasibility_speed_limit_mps = float(
-                        np.sqrt((effective_limit_g * 9.81) / turn_feasibility_curvature_abs)
-                    )
-                else:
-                    turn_feasibility_speed_limit_mps = 0.0
-                turn_feasibility_speed_delta_mps = float(
-                    max(0.0, turn_feasibility_speed_mps - turn_feasibility_speed_limit_mps)
-                )
-                turn_feasibility_infeasible = bool(turn_feasibility_margin_g < 0.0)
+            dynamic_curve_lateral_accel_est_g = float(feasibility.required_lat_accel_g)
+            turn_feasibility_required_lat_accel_g = float(feasibility.required_lat_accel_g)
+            turn_feasibility_comfort_limit_g = float(feasibility.comfort_limit_g)
+            turn_feasibility_peak_limit_g = float(feasibility.peak_limit_g)
+            turn_feasibility_selected_limit_g = float(feasibility.selected_limit_g)
+            turn_feasibility_active = bool(feasibility.active)
+            turn_feasibility_margin_g = float(feasibility.margin_g)
+            turn_feasibility_speed_limit_mps = float(feasibility.speed_limit_mps)
+            turn_feasibility_speed_delta_mps = float(feasibility.speed_delta_mps)
+            turn_feasibility_infeasible = bool(feasibility.infeasible)
 
             if dt > 0.0 and self._last_lateral_accel_est_initialized:
                 dynamic_curve_lateral_jerk_est_gps = float(
@@ -1988,38 +1978,29 @@ class LateralController:
         speed_for_comfort = max(0.0, speed_for_comfort)
         turn_feasibility_curvature_abs = float(curve_metric_abs)
         turn_feasibility_speed_mps = float(speed_for_comfort)
-        dynamic_curve_lateral_accel_est_g = float(
-            (speed_for_comfort * speed_for_comfort * float(curve_metric_abs)) / 9.81
+        feasibility = compute_turn_feasibility(
+            speed_mps=speed_for_comfort,
+            curvature_abs=turn_feasibility_curvature_abs,
+            comfort_limit_g=self.dynamic_curve_comfort_lat_accel_comfort_max_g,
+            peak_limit_g=self.dynamic_curve_comfort_lat_accel_peak_max_g,
+            use_peak_bound=self.turn_feasibility_use_peak_bound,
+            guardband_g=self.turn_feasibility_guardband_g,
+            curvature_min=self.turn_feasibility_curvature_min,
+            active_when=bool(
+                self.turn_feasibility_governor_enabled
+                and (curve_upcoming or curve_at_car or not is_straight)
+            ),
         )
-        turn_feasibility_required_lat_accel_g = float(dynamic_curve_lateral_accel_est_g)
-        turn_feasibility_comfort_limit_g = float(self.dynamic_curve_comfort_lat_accel_comfort_max_g)
-        turn_feasibility_peak_limit_g = float(self.dynamic_curve_comfort_lat_accel_peak_max_g)
-        turn_feasibility_selected_limit_g = float(
-            self.dynamic_curve_comfort_lat_accel_peak_max_g
-            if self.turn_feasibility_use_peak_bound
-            else self.dynamic_curve_comfort_lat_accel_comfort_max_g
-        )
-        turn_feasibility_active = bool(
-            self.turn_feasibility_governor_enabled
-            and turn_feasibility_curvature_abs >= self.turn_feasibility_curvature_min
-            and (curve_upcoming or curve_at_car or not is_straight)
-        )
-        if turn_feasibility_active:
-            effective_limit_g = max(
-                0.0,
-                turn_feasibility_selected_limit_g - self.turn_feasibility_guardband_g,
-            )
-            turn_feasibility_margin_g = float(effective_limit_g - turn_feasibility_required_lat_accel_g)
-            if turn_feasibility_curvature_abs > 1e-9 and effective_limit_g > 0.0:
-                turn_feasibility_speed_limit_mps = float(
-                    np.sqrt((effective_limit_g * 9.81) / turn_feasibility_curvature_abs)
-                )
-            else:
-                turn_feasibility_speed_limit_mps = 0.0
-            turn_feasibility_speed_delta_mps = float(
-                max(0.0, turn_feasibility_speed_mps - turn_feasibility_speed_limit_mps)
-            )
-            turn_feasibility_infeasible = bool(turn_feasibility_margin_g < 0.0)
+        dynamic_curve_lateral_accel_est_g = float(feasibility.required_lat_accel_g)
+        turn_feasibility_required_lat_accel_g = float(feasibility.required_lat_accel_g)
+        turn_feasibility_comfort_limit_g = float(feasibility.comfort_limit_g)
+        turn_feasibility_peak_limit_g = float(feasibility.peak_limit_g)
+        turn_feasibility_selected_limit_g = float(feasibility.selected_limit_g)
+        turn_feasibility_active = bool(feasibility.active)
+        turn_feasibility_margin_g = float(feasibility.margin_g)
+        turn_feasibility_speed_limit_mps = float(feasibility.speed_limit_mps)
+        turn_feasibility_speed_delta_mps = float(feasibility.speed_delta_mps)
+        turn_feasibility_infeasible = bool(feasibility.infeasible)
         if dt > 0.0 and self._last_lateral_accel_est_initialized:
             dynamic_curve_lateral_jerk_est_gps = float(
                 abs(dynamic_curve_lateral_accel_est_g - self._last_lateral_accel_est_g) / dt

@@ -18,6 +18,7 @@ import math
 from dataclasses import dataclass, field
 from typing import Optional
 
+from control.curve_capability import compute_turn_feasibility, curve_intent_state_weight
 from trajectory.speed_planner import SpeedPlanner, SpeedPlannerConfig
 from trajectory.utils import apply_speed_horizon_guardrail, compute_dynamic_effective_horizon
 
@@ -65,6 +66,22 @@ class SpeedGovernorConfig:
     speed_planner_enabled: bool = True
     speed_planner_speed_limit_bias: float = -0.2
 
+    # Curve capability cap (single-owner longitudinal curve authority)
+    curve_cap_enabled: bool = False
+    curve_cap_shadow_mode: bool = True
+    curve_cap_estimator_enabled: bool = True
+    curve_cap_hysteresis_enabled: bool = True
+    curve_cap_entry_intent_min: float = 0.35
+    curve_cap_commit_intent_min: float = 0.55
+    curve_cap_max_decel_mps2: float = 1.6
+    curve_cap_hysteresis_mps: float = 0.35
+    curve_cap_min_speed_mps: float = 3.0
+    curve_cap_margin_mps: float = 0.4
+    curve_cap_curvature_min: float = 0.002
+    curve_cap_rise_min: float = 0.0005
+    curve_cap_peak_lat_accel_g: float = 0.26
+    curve_cap_use_preview_curvature: bool = True
+
 
 @dataclass
 class SpeedGovernorOutput:
@@ -85,6 +102,10 @@ class SpeedGovernorOutput:
     horizon_guardrail_margin_m: float = 0.0
     effective_horizon_m: float = 0.0
     horizon_diag: dict = field(default_factory=dict)
+    curve_cap_speed: Optional[float] = None
+    curve_cap_active: bool = False
+    curve_cap_reason: str = "inactive"
+    curve_cap_margin_mps: float = 0.0
 
 
 class SpeedGovernor:
@@ -103,12 +124,14 @@ class SpeedGovernor:
         if config.speed_planner_enabled:
             self.speed_planner = SpeedPlanner(planner_config)
         self._curvature_history: list[float] = []
+        self._curve_cap_last_speed: Optional[float] = None
 
     def reset(self) -> None:
         """Reset internal state (speed planner)."""
         if self.speed_planner is not None:
             self.speed_planner.reset()
         self._curvature_history.clear()
+        self._curve_cap_last_speed = None
 
     def compute_target_speed(
         self,
@@ -119,6 +142,9 @@ class SpeedGovernor:
         current_speed: float,
         timestamp: float,
         confidence: Optional[float] = None,
+        curve_intent: float = 0.0,
+        curve_intent_state: Optional[str] = None,
+        curve_rise: float = 0.0,
     ) -> SpeedGovernorOutput:
         """Compute the target speed for the longitudinal controller.
 
@@ -130,6 +156,9 @@ class SpeedGovernor:
             current_speed: Actual vehicle speed (m/s).
             timestamp: Current time (seconds).
             confidence: Perception confidence (0-1), or None.
+            curve_intent: Canonical curve-intent score (0..1).
+            curve_intent_state: Canonical curve-intent scheduler state.
+            curve_rise: Local curvature rise proxy from phase scheduler.
 
         Returns:
             SpeedGovernorOutput with target speed and diagnostics.
@@ -160,6 +189,21 @@ class SpeedGovernor:
         if horizon_speed is not None:
             target = min(target, horizon_speed)
 
+        # --- 3b. Curve capability cap ---
+        curve_cap_speed, curve_cap_active, curve_cap_reason, curve_cap_margin_mps = (
+            self._compute_curve_cap_speed(
+                current_target=target,
+                current_speed=current_speed,
+                curvature=curvature,
+                preview_curvature=preview_curvature,
+                curve_intent=curve_intent,
+                curve_intent_state=curve_intent_state,
+                curve_rise=curve_rise,
+            )
+        )
+        if curve_cap_speed is not None and not self.config.curve_cap_shadow_mode:
+            target = min(target, curve_cap_speed)
+
         # Determine active limiter before planner smoothing
         active_limiter = "none"
         if target < track_speed_limit - 0.01:
@@ -169,6 +213,9 @@ class SpeedGovernor:
                 active_limiter = "preview"
             elif horizon_speed is not None and horizon_speed <= target + 0.01:
                 active_limiter = "horizon"
+            elif curve_cap_speed is not None and not self.config.curve_cap_shadow_mode:
+                if curve_cap_speed <= target + 0.01:
+                    active_limiter = "curve_cap"
 
         # --- 4. Speed planner (jerk-limited) ---
         planned_speed = None
@@ -203,6 +250,10 @@ class SpeedGovernor:
             horizon_guardrail_margin_m=horizon_margin,
             effective_horizon_m=eff_horizon,
             horizon_diag=horizon_diag,
+            curve_cap_speed=curve_cap_speed,
+            curve_cap_active=curve_cap_active,
+            curve_cap_reason=curve_cap_reason,
+            curve_cap_margin_mps=curve_cap_margin_mps,
         )
 
     def _compute_comfort_speed(self, curvature: float) -> float:
@@ -244,6 +295,82 @@ class SpeedGovernor:
         v_entry_sq = curve_speed ** 2 + 2.0 * max_decel * preview_distance
         v_entry = math.sqrt(max(0.0, v_entry_sq))
         return min(current_target, v_entry)
+
+    def _compute_curve_cap_speed(
+        self,
+        *,
+        current_target: float,
+        current_speed: float,
+        curvature: float,
+        preview_curvature: Optional[float],
+        curve_intent: float,
+        curve_intent_state: Optional[str],
+        curve_rise: float,
+    ) -> tuple[Optional[float], bool, str, float]:
+        """Compute optional curve capability cap speed and diagnostics."""
+        if not self.config.curve_cap_enabled:
+            self._curve_cap_last_speed = None
+            return None, False, "disabled", 0.0
+
+        k_now = abs(float(curvature)) if isinstance(curvature, (int, float)) else 0.0
+        k_preview = (
+            abs(float(preview_curvature))
+            if isinstance(preview_curvature, (int, float))
+            else 0.0
+        )
+        k_cap = max(k_now, k_preview)
+        if k_cap < self.config.curve_cap_curvature_min:
+            self._curve_cap_last_speed = None
+            return None, False, "low_curvature", 0.0
+
+        state_weight = curve_intent_state_weight(curve_intent_state)
+        intent_value = max(float(curve_intent), float(state_weight))
+        entry_active = intent_value >= self.config.curve_cap_entry_intent_min
+        commit_active = intent_value >= self.config.curve_cap_commit_intent_min
+        rise_active = float(curve_rise) >= self.config.curve_cap_rise_min
+        if not (entry_active or commit_active or rise_active):
+            self._curve_cap_last_speed = None
+            return None, False, "intent_low", 0.0
+
+        k_used = k_cap
+        if not self.config.curve_cap_use_preview_curvature:
+            k_used = max(k_now, self.config.curve_cap_curvature_min)
+
+        if self.config.curve_cap_estimator_enabled:
+            feasibility = compute_turn_feasibility(
+                speed_mps=max(float(current_target), float(current_speed)),
+                curvature_abs=k_used,
+                comfort_limit_g=self.config.comfort_governor_max_lat_accel_g,
+                peak_limit_g=max(
+                    self.config.comfort_governor_max_lat_accel_g,
+                    self.config.curve_cap_peak_lat_accel_g,
+                ),
+                use_peak_bound=True,
+                guardband_g=0.015,
+                curvature_min=self.config.curve_cap_curvature_min,
+                active_when=True,
+            )
+            curve_speed = float(feasibility.speed_limit_mps)
+        else:
+            curve_speed = self._compute_comfort_speed(k_used)
+
+        if not math.isfinite(curve_speed) or curve_speed <= 0.0:
+            self._curve_cap_last_speed = None
+            return None, False, "invalid_speed", 0.0
+
+        preview_distance = max(1.0, float(current_target) * self.config.curve_preview_lookahead_scale)
+        v_entry_sq = curve_speed ** 2 + 2.0 * self.config.curve_cap_max_decel_mps2 * preview_distance
+        cap_speed = min(float(current_target), math.sqrt(max(0.0, v_entry_sq)))
+        cap_speed = max(self.config.curve_cap_min_speed_mps, cap_speed - self.config.curve_cap_margin_mps)
+
+        if self.config.curve_cap_hysteresis_enabled and self._curve_cap_last_speed is not None:
+            release_ceiling = self._curve_cap_last_speed + self.config.curve_cap_hysteresis_mps
+            cap_speed = min(cap_speed, release_ceiling)
+        self._curve_cap_last_speed = cap_speed
+
+        reason = "commit" if commit_active else ("entry" if entry_active else "rise")
+        margin_mps = max(0.0, float(current_target) - float(cap_speed))
+        return float(cap_speed), True, reason, float(margin_mps)
 
     def _apply_horizon_guardrail(
         self,
@@ -403,6 +530,87 @@ def build_speed_governor(trajectory_cfg: dict, speed_planner_cfg: dict) -> Speed
         speed_planner_enabled=bool(speed_planner_cfg.get("enabled", False)),
         speed_planner_speed_limit_bias=float(
             speed_planner_cfg.get("speed_limit_bias", 0.0)
+        ),
+        curve_cap_enabled=bool(
+            gov_cfg_section.get("curve_cap_enabled", trajectory_cfg.get("curve_cap_enabled", False))
+        ),
+        curve_cap_shadow_mode=bool(
+            gov_cfg_section.get(
+                "curve_cap_shadow_mode",
+                trajectory_cfg.get("curve_cap_shadow_mode", True),
+            )
+        ),
+        curve_cap_estimator_enabled=bool(
+            gov_cfg_section.get(
+                "curve_cap_estimator_enabled",
+                trajectory_cfg.get("curve_cap_estimator_enabled", True),
+            )
+        ),
+        curve_cap_hysteresis_enabled=bool(
+            gov_cfg_section.get(
+                "curve_cap_hysteresis_enabled",
+                trajectory_cfg.get("curve_cap_hysteresis_enabled", True),
+            )
+        ),
+        curve_cap_entry_intent_min=float(
+            gov_cfg_section.get(
+                "curve_cap_entry_intent_min",
+                trajectory_cfg.get("curve_cap_entry_intent_min", 0.35),
+            )
+        ),
+        curve_cap_commit_intent_min=float(
+            gov_cfg_section.get(
+                "curve_cap_commit_intent_min",
+                trajectory_cfg.get("curve_cap_commit_intent_min", 0.55),
+            )
+        ),
+        curve_cap_max_decel_mps2=float(
+            gov_cfg_section.get(
+                "curve_cap_max_decel_mps2",
+                trajectory_cfg.get("curve_cap_max_decel_mps2", 1.6),
+            )
+        ),
+        curve_cap_hysteresis_mps=float(
+            gov_cfg_section.get(
+                "curve_cap_hysteresis_mps",
+                trajectory_cfg.get("curve_cap_hysteresis_mps", 0.35),
+            )
+        ),
+        curve_cap_min_speed_mps=float(
+            gov_cfg_section.get(
+                "curve_cap_min_speed_mps",
+                trajectory_cfg.get("curve_cap_min_speed_mps", 3.0),
+            )
+        ),
+        curve_cap_margin_mps=float(
+            gov_cfg_section.get(
+                "curve_cap_margin_mps",
+                trajectory_cfg.get("curve_cap_margin_mps", 0.4),
+            )
+        ),
+        curve_cap_curvature_min=float(
+            gov_cfg_section.get(
+                "curve_cap_curvature_min",
+                trajectory_cfg.get("curve_cap_curvature_min", 0.002),
+            )
+        ),
+        curve_cap_rise_min=float(
+            gov_cfg_section.get(
+                "curve_cap_rise_min",
+                trajectory_cfg.get("curve_cap_rise_min", 0.0005),
+            )
+        ),
+        curve_cap_peak_lat_accel_g=float(
+            gov_cfg_section.get(
+                "curve_cap_peak_lat_accel_g",
+                trajectory_cfg.get("curve_cap_peak_lat_accel_g", 0.26),
+            )
+        ),
+        curve_cap_use_preview_curvature=bool(
+            gov_cfg_section.get(
+                "curve_cap_use_preview_curvature",
+                trajectory_cfg.get("curve_cap_use_preview_curvature", True),
+            )
         ),
     )
 
