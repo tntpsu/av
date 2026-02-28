@@ -1,3 +1,23 @@
+# S2-M4 — Highway 15 m/s validation config
+#
+# Base: config/av_stack_config.yaml
+# Track: highway_65
+# Changes from base (7 values only):
+#   control.longitudinal.target_speed:            12.0 → 15.0
+#   control.longitudinal.max_speed:               12.0 → 15.0
+#   trajectory.target_speed:                      12.0 → 15.0
+#   trajectory.speed_planner.accel_speed_max:     12.0 → 15.0
+#   trajectory.speed_planner.decel_speed_max:     12.0 → 15.0
+#   trajectory.reference_lookahead_speed_table:   added 15.0 m/s → 17.0 m entry
+#   safety.max_speed:                             12.0 → 15.0
+#
+# Usage:
+#   ./start_av_stack.sh --config config/highway_15mps.yaml \
+#       --launch-unity --unity-auto-play --duration 60
+#
+# Do NOT change comfort gate thresholds here — let the A/B gate report
+# which metrics fail first. Tune only after seeing gate output.
+
 control:
   lateral:
     kp: 1.1
@@ -220,8 +240,8 @@ control:
     limiter_transition_hold_frames: 3
     limiter_transition_smoothing_alpha: 0.25
     limiter_transition_hysteresis: 0.05
-    target_speed: 12.0
-    max_speed: 12.0
+    target_speed: 15.0          # CHANGED: 12.0 → 15.0
+    max_speed: 15.0             # CHANGED: 12.0 → 15.0
     speed_smoothing: 0.3
     speed_deadband: 0.03
     throttle_limit_threshold: 0.9
@@ -253,7 +273,7 @@ trajectory:
   trajectory_source: planner
   lookahead_distance: 20.0
   point_spacing: 1.0
-  target_speed: 12.0
+  target_speed: 15.0            # CHANGED: 12.0 → 15.0
   reference_lookahead: 9.0
   dynamic_reference_lookahead: true
   curve_scheduler_mode: phase_shadow
@@ -270,6 +290,8 @@ trajectory:
     lookahead_m: 14.0
   - speed_mps: 13.41
     lookahead_m: 15.0
+  - speed_mps: 15.0             # ADDED: proportional extension (k≈1.13 consistent with 13.41→15.0)
+    lookahead_m: 17.0
   reference_lookahead_speed_table_entry:
   - speed_mps: 0.0
     lookahead_m: 6.0
@@ -417,11 +439,11 @@ trajectory:
     jerk_error_max: 2.0
     use_speed_dependent_limits: true
     accel_speed_min: 0.0
-    accel_speed_max: 12.0
+    accel_speed_max: 15.0       # CHANGED: 12.0 → 15.0 (extend interpolation range)
     max_accel_at_speed_min: 1.2
     max_accel_at_speed_max: 1.2
     decel_speed_min: 0.0
-    decel_speed_max: 12.0
+    decel_speed_max: 15.0       # CHANGED: 12.0 → 15.0 (extend interpolation range)
     max_decel_at_speed_min: 2.5
     max_decel_at_speed_max: 2.5
     enforce_desired_speed_slew: false
@@ -539,7 +561,7 @@ trajectory:
   ref_point_jump_clamp_heading: 0.08
   reference_x_max_abs: 3.2
 safety:
-  max_speed: 12.0
+  max_speed: 15.0               # CHANGED: 12.0 → 15.0
   emergency_brake_threshold: 1.5
   speed_prevention_threshold: 0.9
   speed_prevention_brake_threshold: 0.95

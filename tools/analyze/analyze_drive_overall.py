@@ -1232,6 +1232,26 @@ def _print_summary_report(recording_path: Path, summary: Dict, analyze_to_failur
         f"{speed_control.get('pre_turn_arm_lead_frames_p50', 0.0):.1f} / "
         f"{speed_control.get('pre_turn_arm_lead_frames_p95', 0.0):.1f} frames"
     )
+    print(
+        "   Cap Tracking Error (P50/P95/Max): "
+        f"{speed_control.get('cap_tracking_error_p50_mps', 0.0):.3f} / "
+        f"{speed_control.get('cap_tracking_error_p95_mps', 0.0):.3f} / "
+        f"{speed_control.get('cap_tracking_error_max_mps', 0.0):.3f} m/s"
+    )
+    print(
+        "   Frames Above Cap (>0.3 / >1.0 m/s): "
+        f"{speed_control.get('frames_above_cap_0p3mps_rate', 0.0):.1f}% / "
+        f"{speed_control.get('frames_above_cap_1p0mps_rate', 0.0):.1f}%"
+    )
+    print(
+        "   Cap Recovery Frames (P50/P95): "
+        f"{speed_control.get('cap_recovery_frames_p50', 0.0):.1f} / "
+        f"{speed_control.get('cap_recovery_frames_p95', 0.0):.1f}"
+    )
+    print(
+        "   Hard Ceiling Applied Rate: "
+        f"{speed_control.get('hard_ceiling_applied_rate', 0.0):.2f}%"
+    )
     print(f"   Speed Limit Missing: {speed_control.get('speed_limit_zero_rate', 0.0):.1f}%")
     print()
 
@@ -1256,23 +1276,47 @@ def _print_summary_report(recording_path: Path, summary: Dict, analyze_to_failur
             "   Longitudinal Hotspot Attribution "
             f"(dt_nominal={nominal_text}, gap>= {gap_text}):"
         )
-        print("     Frame Kind    |Metric|  Accel    Jerk   dt_prev  Contact  Attribution")
+        counts = hotspot_attr.get("counts_by_attribution") or {}
+        high_conf = hotspot_attr.get("high_confidence_rate")
+        mismatch = hotspot_attr.get("commanded_vs_measured_mismatch_rate")
+        if counts:
+            counts_text = ", ".join(f"{k}={v}" for k, v in sorted(counts.items()))
+            print(f"     Attribution Rollup: {counts_text}")
+        if high_conf is not None:
+            print(f"     High-confidence rate: {float(high_conf) * 100.0:.1f}%")
+        if mismatch is not None:
+            print(f"     Command-vs-measured mismatch rate: {float(mismatch) * 100.0:.1f}%")
+        print(
+            "     Frame Kind    |Metric|  Jerk(raw/filt/cmd)  dt_prev  "
+            "CapX LimX DtIrreg  Attribution"
+        )
         for entry in hotspot_entries[:8]:
             frame = int(entry.get("frame", -1))
             metric = str(entry.get("metric", "n/a"))
             metric_abs = float(entry.get("metric_abs", 0.0))
-            accel_val = entry.get("accel_mps2")
-            jerk_val = entry.get("jerk_mps3")
+            jerk_raw_val = entry.get("jerk_raw_mps3", entry.get("jerk_mps3"))
+            jerk_filt_val = entry.get("jerk_filtered_mps3")
+            jerk_cmd_val = entry.get("command_jerk_proxy_mps3")
             dt_prev = entry.get("dt_prev_ms")
-            contact = entry.get("chassis_ground_contact")
+            limiter_active = bool(entry.get("limiter_active"))
+            limiter_transition = bool(entry.get("limiter_transition"))
+            dt_irregular = bool(entry.get("timestamp_irregular_nearby"))
             attribution = str(entry.get("attribution", "unknown"))
-            accel_text = f"{float(accel_val):+6.2f}" if accel_val is not None else "  n/a "
-            jerk_text = f"{float(jerk_val):+7.2f}" if jerk_val is not None else "   n/a "
+            jerk_raw_text = (
+                f"{float(jerk_raw_val):+7.2f}" if jerk_raw_val is not None else "   n/a "
+            )
+            jerk_filt_text = (
+                f"{float(jerk_filt_val):+7.2f}" if jerk_filt_val is not None else "   n/a "
+            )
+            jerk_cmd_text = (
+                f"{float(jerk_cmd_val):+7.2f}" if jerk_cmd_val is not None else "   n/a "
+            )
             dt_text = f"{float(dt_prev):6.1f}" if dt_prev is not None else "   n/a"
-            contact_text = "YES" if contact else "NO"
             print(
-                f"     {frame:5d} {metric:>5s} {metric_abs:9.2f} {accel_text} {jerk_text}"
-                f" {dt_text} ms {contact_text:>7s}  {attribution}"
+                f"     {frame:5d} {metric:>5s} {metric_abs:9.2f} "
+                f"{jerk_raw_text}/{jerk_filt_text}/{jerk_cmd_text} "
+                f"{dt_text} ms  {str(limiter_active)[0]}/{str(limiter_transition)[0]}   "
+                f"{'Y' if dt_irregular else 'N'}      {attribution}"
             )
     else:
         print("   Longitudinal Hotspot Attribution: N/A")
@@ -1339,6 +1383,28 @@ def _print_summary_report(recording_path: Path, summary: Dict, analyze_to_failur
         )
     else:
         print("   Sync/Alignment Health: N/A")
+    cadence = latency_sync.get("cadence", {})
+    cadence_stats = cadence.get("stats_ms", {}) if isinstance(cadence, dict) else {}
+    cadence_p95 = cadence_stats.get("p95")
+    cadence_max = cadence_stats.get("max")
+    cadence_irregular_rate = cadence.get("irregular_rate")
+    cadence_severe_rate = cadence.get("severe_irregular_rate")
+    cadence_limits = cadence.get("limits", {}) if isinstance(cadence, dict) else {}
+    cadence_irregular_limit = cadence_limits.get("irregular_rate_max")
+    cadence_severe_limit = cadence_limits.get("severe_irregular_rate_max")
+    if cadence.get("availability") == "available":
+        cadence_status = "PASS" if cadence.get("pass") else "FAIL"
+        print(
+            "   Cadence Health: "
+            f"dt_p95={float(cadence_p95):.1f} ms, dt_max={float(cadence_max):.1f} ms, "
+            f"irregular_rate={float(cadence_irregular_rate) * 100.0:.2f}%, "
+            f"severe_rate={float(cadence_severe_rate) * 100.0:.2f}% "
+            f"(limits: irregular <= {float(cadence_irregular_limit) * 100.0:.2f}%, "
+            f"severe <= {float(cadence_severe_limit) * 100.0:.2f}%) "
+            f"[{cadence_status}]"
+        )
+    else:
+        print("   Cadence Health: N/A")
     print()
 
     print("10. CHASSIS-GROUND HEALTH")

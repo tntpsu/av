@@ -126,6 +126,9 @@ class LateralController:
                  steering_rate_curvature_min: float = 0.005,
                  steering_rate_curvature_max: float = 0.03,
                  steering_rate_scale_min: float = 0.5,
+                 steering_rate_limit_transition_enabled: bool = False,
+                 steering_rate_limit_transition_alpha: float = 0.25,
+                 steering_rate_limit_transition_hysteresis: float = 0.005,
                  curve_rate_floor_moderate_error: float = 0.20,
                  curve_rate_floor_large_error: float = 0.24,
                  straight_sign_flip_error_threshold: float = 0.02,
@@ -268,6 +271,15 @@ class LateralController:
         self.steering_rate_curvature_min = steering_rate_curvature_min
         self.steering_rate_curvature_max = steering_rate_curvature_max
         self.steering_rate_scale_min = steering_rate_scale_min
+        self.steering_rate_limit_transition_enabled = bool(
+            steering_rate_limit_transition_enabled
+        )
+        self.steering_rate_limit_transition_alpha = float(
+            np.clip(steering_rate_limit_transition_alpha, 0.0, 1.0)
+        )
+        self.steering_rate_limit_transition_hysteresis = max(
+            0.0, float(steering_rate_limit_transition_hysteresis)
+        )
         self.curve_rate_floor_moderate_error = max(0.0, float(curve_rate_floor_moderate_error))
         self.curve_rate_floor_large_error = max(0.0, float(curve_rate_floor_large_error))
         self.straight_sign_flip_error_threshold = straight_sign_flip_error_threshold
@@ -588,7 +600,30 @@ class LateralController:
         self._prev_curve_upcoming = False
         self._prev_curve_at_car = False
         self._last_error_magnitude = 0.0
+        self._steering_rate_limit_effective_smoothed: Optional[float] = None
     
+    def _apply_steering_rate_limit_transition(
+        self,
+        rate_limit: float,
+    ) -> tuple[float, float, bool]:
+        """Optionally smooth effective steering-rate limit near regime transitions."""
+        raw = max(0.0, float(rate_limit))
+        if not self.steering_rate_limit_transition_enabled:
+            self._steering_rate_limit_effective_smoothed = raw
+            return raw, raw, False
+
+        prev = self._steering_rate_limit_effective_smoothed
+        if prev is None or not np.isfinite(float(prev)):
+            smoothed = raw
+        else:
+            alpha = self.steering_rate_limit_transition_alpha
+            smoothed = (alpha * float(prev)) + ((1.0 - alpha) * raw)
+        if abs(smoothed - raw) <= self.steering_rate_limit_transition_hysteresis:
+            smoothed = raw
+        self._steering_rate_limit_effective_smoothed = float(smoothed)
+        transition_active = bool(abs(smoothed - raw) > 1e-6)
+        return raw, float(smoothed), transition_active
+
     def compute_steering(self, current_heading: float, reference_point: dict,
                         vehicle_position: Optional[np.ndarray] = None,
                         current_speed: Optional[float] = None,
@@ -1220,6 +1255,9 @@ class LateralController:
         steering_rate_limit_after_curve = 0.0
         steering_rate_limit_after_floor = 0.0
         steering_rate_limit_effective = 0.0
+        steering_rate_limit_effective_raw = 0.0
+        steering_rate_limit_effective_smoothed = 0.0
+        steering_rate_limit_transition_active = False
         steering_rate_limit_requested_delta = 0.0
         steering_rate_limit_margin = 0.0
         steering_rate_limit_unlock_delta_needed = 0.0
@@ -1684,7 +1722,12 @@ class LateralController:
             )
             self._smoothed_lateral_jerk_est_gps = dynamic_curve_lateral_jerk_est_smoothed_gps
 
-            steering_rate_limit_effective = float(max_steering_rate)
+            (
+                steering_rate_limit_effective_raw,
+                steering_rate_limit_effective,
+                steering_rate_limit_transition_active,
+            ) = self._apply_steering_rate_limit_transition(max_steering_rate)
+            steering_rate_limit_effective_smoothed = steering_rate_limit_effective
             pp_steering_jerk_limited = False
 
             rate_in = steering_before_limits
@@ -1707,7 +1750,11 @@ class LateralController:
             else:
                 effective_rate = desired_rate
 
-            effective_rate = np.clip(effective_rate, -max_steering_rate, max_steering_rate)
+            effective_rate = np.clip(
+                effective_rate,
+                -steering_rate_limit_effective,
+                steering_rate_limit_effective,
+            )
             max_rate_to_ceil = self.max_steering - self.last_steering
             min_rate_to_floor = -self.max_steering - self.last_steering
             effective_rate = np.clip(effective_rate, min_rate_to_floor, max_rate_to_ceil)
@@ -2229,7 +2276,12 @@ class LateralController:
             max_steering_rate = max(max_steering_rate, self.straight_sign_flip_rate)
             self._sign_flip_override_frames -= 1
         sign_flip_frames_remaining = int(self._sign_flip_override_frames)
-        steering_rate_limit_effective = float(max_steering_rate)
+        (
+            steering_rate_limit_effective_raw,
+            steering_rate_limit_effective,
+            steering_rate_limit_transition_active,
+        ) = self._apply_steering_rate_limit_transition(max_steering_rate)
+        steering_rate_limit_effective_smoothed = steering_rate_limit_effective
 
         # PID/Stanley rate clip, jerk limit, smoothing -- skipped when PP bypass is active
         if pp_pipeline_bypass_active:
@@ -2238,7 +2290,11 @@ class LateralController:
             rate_in = steering_before_limits
             steering_change = steering_before_limits - self.last_steering
             steering_rate_limit_requested_delta = abs(steering_change)
-            steering_change = np.clip(steering_change, -max_steering_rate, max_steering_rate)
+            steering_change = np.clip(
+                steering_change,
+                -steering_rate_limit_effective,
+                steering_rate_limit_effective,
+            )
             steering_before_limits = self.last_steering + steering_change
             steering_rate_limited_delta = abs(steering_before_limits - rate_in)
             steering_rate_limited_active = steering_rate_limited_delta > 1e-6
@@ -2246,6 +2302,10 @@ class LateralController:
             # First frame - allow larger initial steering (up to 0.5) to respond to initial state
             # This is critical when starting on a curve where we need immediate steering
             max_initial_steering_rate = 0.25
+            max_initial_steering_rate = min(
+                max_initial_steering_rate,
+                steering_rate_limit_effective,
+            )
             rate_in = steering_before_limits
             steering_change = steering_before_limits - self.last_steering
             steering_rate_limit_requested_delta = abs(steering_change)
@@ -2580,6 +2640,9 @@ class LateralController:
                 'steering_rate_limit_after_curve': steering_rate_limit_after_curve,
                 'steering_rate_limit_after_floor': steering_rate_limit_after_floor,
                 'steering_rate_limit_effective': steering_rate_limit_effective,
+                'steering_rate_limit_effective_raw': steering_rate_limit_effective_raw,
+                'steering_rate_limit_effective_smoothed': steering_rate_limit_effective_smoothed,
+                'steering_rate_limit_transition_active': steering_rate_limit_transition_active,
                 'steering_rate_limit_requested_delta': steering_rate_limit_requested_delta,
                 'steering_rate_limit_margin': steering_rate_limit_margin,
                 'steering_rate_limit_unlock_delta_needed': steering_rate_limit_unlock_delta_needed,
@@ -3062,7 +3125,11 @@ class LongitudinalController:
                  startup_throttle_cap: float = 0.0,
                  startup_disable_accel_feedforward: bool = True,
                  low_speed_accel_limit: float = 0.0,
-                 low_speed_speed_threshold: float = 0.0):
+                 low_speed_speed_threshold: float = 0.0,
+                 limiter_transition_enabled: bool = False,
+                 limiter_transition_hold_frames: int = 3,
+                 limiter_transition_smoothing_alpha: float = 0.25,
+                 limiter_transition_hysteresis: float = 0.05):
         """
         Initialize longitudinal controller.
         
@@ -3154,6 +3221,12 @@ class LongitudinalController:
         self.startup_disable_accel_feedforward = startup_disable_accel_feedforward
         self.low_speed_accel_limit = low_speed_accel_limit
         self.low_speed_speed_threshold = low_speed_speed_threshold
+        self.limiter_transition_enabled = bool(limiter_transition_enabled)
+        self.limiter_transition_hold_frames = max(0, int(limiter_transition_hold_frames))
+        self.limiter_transition_smoothing_alpha = float(
+            np.clip(limiter_transition_smoothing_alpha, 0.0, 1.0)
+        )
+        self.limiter_transition_hysteresis = max(0.0, float(limiter_transition_hysteresis))
         self.startup_elapsed = 0.0
         self.last_throttle = 0.0
         self.last_brake = 0.0
@@ -3168,6 +3241,12 @@ class LongitudinalController:
         self.last_accel_capped = False
         self.last_jerk_capped = False
         self.last_accel_cmd = 0.0
+        self.last_accel_cmd_raw = 0.0
+        self.last_accel_cmd_smoothed = 0.0
+        self.last_limiter_transition_active = False
+        self.last_limiter_state_code = 0.0
+        self._limiter_state_active = False
+        self._limiter_state_hold_remaining = 0
         self.jerk_cooldown_remaining = 0
         self.longitudinal_mode = "coast"
         self.mode_time = self.mode_switch_min_time
@@ -3622,6 +3701,50 @@ class LongitudinalController:
             brake = max(brake, float(brake_target))
             throttle = 0.0
 
+        accel_cmd_raw = (throttle * self.max_accel) - (brake * self.max_decel)
+        accel_cmd_smoothed = accel_cmd_raw
+        limiter_transition_active = False
+        limiter_state_code = 1.0 if (accel_capped or jerk_capped) else 0.0
+        if self.limiter_transition_enabled:
+            prev_state_active = bool(self._limiter_state_active)
+            limiter_signal = bool(accel_capped or jerk_capped)
+            if limiter_signal:
+                self._limiter_state_active = True
+                self._limiter_state_hold_remaining = self.limiter_transition_hold_frames
+            elif self._limiter_state_hold_remaining > 0:
+                self._limiter_state_hold_remaining -= 1
+                self._limiter_state_active = True
+            else:
+                self._limiter_state_active = False
+
+            if self._limiter_state_active:
+                alpha = self.limiter_transition_smoothing_alpha
+                accel_cmd_smoothed = (
+                    alpha * self.last_accel_cmd_smoothed
+                    + (1.0 - alpha) * accel_cmd_raw
+                )
+                if abs(accel_cmd_smoothed - accel_cmd_raw) <= self.limiter_transition_hysteresis:
+                    accel_cmd_smoothed = accel_cmd_raw
+            limiter_transition_active = bool(self._limiter_state_active != prev_state_active)
+            if self._limiter_state_active and limiter_transition_active:
+                limiter_state_code = 2.0
+            elif self._limiter_state_active:
+                limiter_state_code = 1.0
+            else:
+                limiter_state_code = 0.0
+
+            if accel_cmd_smoothed >= 0.0:
+                throttle = min(1.0, accel_cmd_smoothed / self.max_accel) if self.max_accel > 0.0 else 0.0
+                brake = 0.0
+            else:
+                throttle = 0.0
+                brake = min(1.0, abs(accel_cmd_smoothed) / self.max_decel) if self.max_decel > 0.0 else 0.0
+
+        self.last_accel_cmd_raw = float(accel_cmd_raw)
+        self.last_accel_cmd_smoothed = float(accel_cmd_smoothed)
+        self.last_limiter_transition_active = bool(limiter_transition_active)
+        self.last_limiter_state_code = float(limiter_state_code)
+
         self.last_throttle_before_limits = throttle
         self.last_brake_before_limits = brake
 
@@ -3686,6 +3809,12 @@ class LongitudinalController:
         self.last_brake = 0.0
         self.last_throttle_before_limits = 0.0
         self.last_brake_before_limits = 0.0
+        self.last_accel_cmd_raw = 0.0
+        self.last_accel_cmd_smoothed = 0.0
+        self.last_limiter_transition_active = False
+        self.last_limiter_state_code = 0.0
+        self._limiter_state_active = False
+        self._limiter_state_hold_remaining = 0
         self.longitudinal_mode = "coast"
         self.mode_time = self.mode_switch_min_time
         self.coast_hold_remaining = 0.0
@@ -3757,6 +3886,10 @@ class VehicleController:
                  longitudinal_startup_disable_accel_feedforward: bool = True,
                  longitudinal_low_speed_accel_limit: float = 0.0,
                  longitudinal_low_speed_speed_threshold: float = 0.0,
+                 longitudinal_limiter_transition_enabled: bool = False,
+                 longitudinal_limiter_transition_hold_frames: int = 3,
+                 longitudinal_limiter_transition_smoothing_alpha: float = 0.25,
+                 longitudinal_limiter_transition_hysteresis: float = 0.05,
                  steering_smoothing_alpha: float = 0.7,
                  base_error_smoothing_alpha: float = 0.7,
                  heading_error_smoothing_alpha: float = 0.45,
@@ -3793,6 +3926,9 @@ class VehicleController:
                  steering_rate_curvature_min: float = 0.005,
                  steering_rate_curvature_max: float = 0.03,
                  steering_rate_scale_min: float = 0.5,
+                 steering_rate_limit_transition_enabled: bool = False,
+                 steering_rate_limit_transition_alpha: float = 0.25,
+                 steering_rate_limit_transition_hysteresis: float = 0.005,
                  curve_rate_floor_moderate_error: float = 0.20,
                  curve_rate_floor_large_error: float = 0.24,
                  straight_sign_flip_error_threshold: float = 0.02,
@@ -3964,6 +4100,9 @@ class VehicleController:
             steering_rate_curvature_min=steering_rate_curvature_min,
             steering_rate_curvature_max=steering_rate_curvature_max,
             steering_rate_scale_min=steering_rate_scale_min,
+            steering_rate_limit_transition_enabled=steering_rate_limit_transition_enabled,
+            steering_rate_limit_transition_alpha=steering_rate_limit_transition_alpha,
+            steering_rate_limit_transition_hysteresis=steering_rate_limit_transition_hysteresis,
             curve_rate_floor_moderate_error=curve_rate_floor_moderate_error,
             curve_rate_floor_large_error=curve_rate_floor_large_error,
             straight_sign_flip_error_threshold=straight_sign_flip_error_threshold,
@@ -4164,7 +4303,11 @@ class VehicleController:
             startup_throttle_cap=longitudinal_startup_throttle_cap,
             startup_disable_accel_feedforward=longitudinal_startup_disable_accel_feedforward,
             low_speed_accel_limit=longitudinal_low_speed_accel_limit,
-            low_speed_speed_threshold=longitudinal_low_speed_speed_threshold
+            low_speed_speed_threshold=longitudinal_low_speed_speed_threshold,
+            limiter_transition_enabled=longitudinal_limiter_transition_enabled,
+            limiter_transition_hold_frames=longitudinal_limiter_transition_hold_frames,
+            limiter_transition_smoothing_alpha=longitudinal_limiter_transition_smoothing_alpha,
+            limiter_transition_hysteresis=longitudinal_limiter_transition_hysteresis,
         )
     
     def compute_control(
@@ -4239,7 +4382,17 @@ class VehicleController:
             result['brake_feedforward'] = self.longitudinal_controller.last_brake_feedforward
             result['longitudinal_accel_capped'] = self.longitudinal_controller.last_accel_capped
             result['longitudinal_jerk_capped'] = self.longitudinal_controller.last_jerk_capped
-        
+            result['longitudinal_limiter_transition_active'] = (
+                self.longitudinal_controller.last_limiter_transition_active
+            )
+            result['longitudinal_limiter_state_code'] = (
+                self.longitudinal_controller.last_limiter_state_code
+            )
+            result['longitudinal_accel_cmd_raw'] = self.longitudinal_controller.last_accel_cmd_raw
+            result['longitudinal_accel_cmd_smoothed'] = (
+                self.longitudinal_controller.last_accel_cmd_smoothed
+            )
+
         return result
     
     def reset(self):

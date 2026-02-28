@@ -16,6 +16,7 @@ from control.speed_governor import (
     SpeedGovernor,
     SpeedGovernorConfig,
     SpeedGovernorOutput,
+    active_limiter_code,
     build_speed_governor,
     G,
 )
@@ -358,6 +359,86 @@ class TestCurvatureCalibrationScale:
         ratio = out_unscaled.comfort_speed / out_scaled.comfort_speed
         expected_ratio = math.sqrt(2.5)
         assert abs(ratio - expected_ratio) < 0.01
+
+
+class TestCapTrackingIntegration:
+    def test_curve_cap_tracking_sets_limiter_and_telemetry(self):
+        gov_cfg = SpeedGovernorConfig(
+            comfort_governor_max_lat_accel_g=0.25,
+            comfort_governor_min_speed=3.0,
+            curve_preview_enabled=True,
+            horizon_guardrail_enabled=False,
+            speed_planner_enabled=True,
+            speed_planner_speed_limit_bias=0.0,
+            curve_cap_enabled=True,
+            curve_cap_shadow_mode=False,
+            curve_cap_estimator_enabled=False,
+            curve_cap_use_preview_curvature=True,
+        )
+        planner_cfg = SpeedPlannerConfig(
+            max_accel=1.2,
+            max_decel=2.5,
+            max_jerk=1.0,
+            default_dt=1.0 / 30.0,
+            cap_tracking_enabled=True,
+            cap_tracking_error_on_mps=0.25,
+            cap_tracking_error_off_mps=0.08,
+            cap_tracking_hold_frames=3,
+        )
+        gov = SpeedGovernor(gov_cfg, planner_cfg)
+        out = gov.compute_target_speed(
+            track_speed_limit=14.0,
+            curvature=0.02,
+            preview_curvature=0.12,
+            perception_horizon_m=30.0,
+            current_speed=12.0,
+            timestamp=0.0,
+            curve_intent=0.8,
+            curve_intent_state="ENTRY",
+            curve_rise=0.002,
+        )
+        assert out.curve_cap_active is True
+        assert out.cap_tracking_active is True
+        assert out.active_limiter == "curve_cap_tracking"
+        assert out.active_limiter_code == active_limiter_code("curve_cap_tracking")
+        assert out.cap_tracking_mode in {"catch_up", "hold"}
+
+    def test_hard_ceiling_fallback_is_telemetry_visible(self):
+        gov_cfg = SpeedGovernorConfig(
+            comfort_governor_max_lat_accel_g=0.25,
+            comfort_governor_min_speed=3.0,
+            curve_preview_enabled=True,
+            horizon_guardrail_enabled=False,
+            speed_planner_enabled=True,
+            speed_planner_speed_limit_bias=0.5,
+            curve_cap_enabled=True,
+            curve_cap_shadow_mode=False,
+            curve_cap_estimator_enabled=False,
+            curve_cap_use_preview_curvature=True,
+        )
+        planner_cfg = SpeedPlannerConfig(
+            max_accel=1.2,
+            max_decel=2.5,
+            max_jerk=1.0,
+            default_dt=1.0 / 30.0,
+            cap_tracking_enabled=False,
+            cap_tracking_hard_ceiling_epsilon_mps=0.02,
+        )
+        gov = SpeedGovernor(gov_cfg, planner_cfg)
+        out = gov.compute_target_speed(
+            track_speed_limit=12.0,
+            curvature=0.005,
+            preview_curvature=0.03,
+            perception_horizon_m=30.0,
+            current_speed=10.0,
+            timestamp=0.0,
+            curve_intent=0.9,
+            curve_intent_state="COMMIT",
+            curve_rise=0.003,
+        )
+        assert out.curve_cap_active is True
+        assert out.target_speed <= (out.curve_cap_speed + planner_cfg.cap_tracking_hard_ceiling_epsilon_mps)
+        assert isinstance(out.cap_tracking_hard_ceiling_applied, bool)
 
     def test_calibration_scale_applies_to_preview(self):
         """Preview governor should also use calibration scale."""

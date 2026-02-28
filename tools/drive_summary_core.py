@@ -175,6 +175,8 @@ def _build_latency_sync_summary(data: Dict) -> Dict:
     alignment_window_ms = 20.0
     misaligned_rate_limit = 0.02
     e2e_p95_limit_ms = 100.0
+    cadence_irregular_rate_limit = 0.08
+    cadence_severe_rate_limit = 0.01
 
     e2e_mode = "input_ready_to_command_sent"
     raw_modes = data.get("e2e_latency_mode")
@@ -221,6 +223,49 @@ def _build_latency_sync_summary(data: Dict) -> Dict:
                 and (contract_misaligned_rate <= misaligned_rate_limit)
             )
 
+    cadence_source_ts = None
+    for key in ("control_timestamps", "timestamps", "camera_timestamps"):
+        arr = data.get(key)
+        if arr is None:
+            continue
+        arr_np = np.asarray(arr, dtype=float).reshape(-1)
+        if arr_np.size >= 2:
+            cadence_source_ts = arr_np
+            break
+
+    cadence_dt_ms = np.array([], dtype=float)
+    cadence_stats = _finite_stats(cadence_dt_ms)
+    cadence_irregular_rate = None
+    cadence_severe_rate = None
+    cadence_nominal_ms = None
+    cadence_irregular_threshold_ms = None
+    cadence_severe_threshold_ms = None
+    cadence_available = False
+    cadence_pass = None
+    if cadence_source_ts is not None:
+        cadence_dt_s = np.diff(cadence_source_ts)
+        cadence_dt_s = cadence_dt_s[np.isfinite(cadence_dt_s) & (cadence_dt_s > 1e-6)]
+        cadence_dt_ms = cadence_dt_s * 1000.0
+        cadence_stats = _finite_stats(cadence_dt_ms)
+        cadence_available = cadence_stats["count"] > 0
+    if cadence_available:
+        cadence_nominal_ms = safe_float(np.median(cadence_dt_ms), default=None)
+        cadence_irregular_threshold_ms = max(100.0, 2.5 * cadence_nominal_ms)
+        cadence_severe_threshold_ms = max(180.0, 4.0 * cadence_nominal_ms)
+        cadence_irregular_rate = safe_float(
+            np.mean(cadence_dt_ms > cadence_irregular_threshold_ms), default=None
+        )
+        cadence_severe_rate = safe_float(
+            np.mean(cadence_dt_ms > cadence_severe_threshold_ms), default=None
+        )
+        cadence_pass = bool(
+            cadence_irregular_rate <= cadence_irregular_rate_limit
+            and cadence_severe_rate <= cadence_severe_rate_limit
+        )
+    cadence_status = "unknown"
+    if cadence_available:
+        cadence_status = "good" if cadence_pass else "poor"
+
     issues = []
     if e2e_pass is False:
         issues.append(f"e2e_p95_ms={e2e_stats['p95']:.1f} (limit <= {e2e_p95_limit_ms:.1f})")
@@ -237,12 +282,21 @@ def _build_latency_sync_summary(data: Dict) -> Dict:
             issues.append(
                 f"contract_misaligned_rate={contract_misaligned_rate:.3f} (limit <= {misaligned_rate_limit:.3f})"
             )
+    if cadence_pass is False:
+        if cadence_irregular_rate is not None and cadence_irregular_rate > cadence_irregular_rate_limit:
+            issues.append(
+                f"cadence_irregular_rate={cadence_irregular_rate:.3f} (limit <= {cadence_irregular_rate_limit:.3f})"
+            )
+        if cadence_severe_rate is not None and cadence_severe_rate > cadence_severe_rate_limit:
+            issues.append(
+                f"cadence_severe_rate={cadence_severe_rate:.3f} (limit <= {cadence_severe_rate_limit:.3f})"
+            )
 
     if issues:
         overall_status = "poor"
-    elif e2e_available and sync_available:
+    elif e2e_available and sync_available and cadence_available:
         overall_status = "good"
-    elif e2e_available or sync_available:
+    elif e2e_available or sync_available or cadence_available:
         overall_status = "warn"
     else:
         overall_status = "unknown"
@@ -265,6 +319,21 @@ def _build_latency_sync_summary(data: Dict) -> Dict:
             "contract_misaligned_rate": contract_misaligned_rate,
             "contract_misaligned_rate_limit": misaligned_rate_limit,
             "pass": sync_pass,
+        },
+        "cadence": {
+            "availability": "available" if cadence_available else "unavailable",
+            "status": cadence_status,
+            "stats_ms": cadence_stats,
+            "nominal_dt_ms": cadence_nominal_ms,
+            "irregular_dt_threshold_ms": cadence_irregular_threshold_ms,
+            "severe_dt_threshold_ms": cadence_severe_threshold_ms,
+            "irregular_rate": cadence_irregular_rate,
+            "severe_irregular_rate": cadence_severe_rate,
+            "limits": {
+                "irregular_rate_max": cadence_irregular_rate_limit,
+                "severe_irregular_rate_max": cadence_severe_rate_limit,
+            },
+            "pass": cadence_pass,
         },
         "overall": {
             "status": overall_status,
@@ -491,29 +560,28 @@ def _load_config() -> dict:
 
 
 def _build_longitudinal_hotspot_attribution(data: Dict, config: Dict, n_frames: int) -> Dict:
-    """Build top longitudinal hotspot entries with simple root-cause attribution."""
+    """Build top longitudinal hotspot entries with deterministic root-cause attribution."""
+    unavailable = {
+        "schema_version": "v1",
+        "availability": "unavailable",
+        "dt_nominal_ms": None,
+        "dt_gap_threshold_ms": None,
+        "entries": [],
+        "counts_by_attribution": {},
+        "high_confidence_rate": None,
+        "commanded_vs_measured_mismatch_rate": None,
+    }
+
     time = data.get("time")
     speed = data.get("speed")
     if time is None or speed is None:
-        return {
-            "schema_version": "v1",
-            "availability": "unavailable",
-            "dt_nominal_ms": None,
-            "dt_gap_threshold_ms": None,
-            "entries": [],
-        }
+        return unavailable
 
     time_arr = np.asarray(time, dtype=float).reshape(-1)
     speed_arr = np.asarray(speed, dtype=float).reshape(-1)
     n = min(int(n_frames), int(time_arr.size), int(speed_arr.size))
     if n < 3:
-        return {
-            "schema_version": "v1",
-            "availability": "unavailable",
-            "dt_nominal_ms": None,
-            "dt_gap_threshold_ms": None,
-            "entries": [],
-        }
+        return unavailable
 
     time_arr = time_arr[:n]
     speed_arr = speed_arr[:n]
@@ -524,20 +592,51 @@ def _build_longitudinal_hotspot_attribution(data: Dict, config: Dict, n_frames: 
         nominal_dt = 0.033
     dt_arr = np.where(dt_arr > 1e-6, dt_arr, nominal_dt)
     nominal_dt_ms = nominal_dt * 1000.0
-    dt_gap_threshold_ms = max(120.0, nominal_dt_ms * 3.0)
+    dt_gap_threshold_ms = max(100.0, nominal_dt_ms * 2.5)
 
-    accel = np.zeros(n, dtype=float)
-    accel[1:] = np.divide(
+    dt_arr_ms = dt_arr * 1000.0
+    dt_gap_edges = np.isfinite(dt_arr_ms) & (dt_arr_ms >= dt_gap_threshold_ms)
+    timestamp_irregular_nearby = np.zeros(n, dtype=bool)
+    for edge_idx in np.flatnonzero(dt_gap_edges):
+        lo = max(0, int(edge_idx) - 1)
+        hi = min(n, int(edge_idx) + 3)
+        timestamp_irregular_nearby[lo:hi] = True
+
+    accel_raw = np.zeros(n, dtype=float)
+    accel_raw[1:] = np.divide(
         np.diff(speed_arr),
         dt_arr,
         out=np.zeros_like(dt_arr, dtype=float),
         where=dt_arr > 1e-6,
     )
-    jerk = np.zeros(n, dtype=float)
+    jerk_raw = np.zeros(n, dtype=float)
     if n > 2:
         jerk_dt = dt_arr[1:]
-        jerk[2:] = np.divide(
-            np.diff(accel[1:]),
+        jerk_raw[2:] = np.divide(
+            np.diff(accel_raw[1:]),
+            jerk_dt,
+            out=np.zeros_like(jerk_dt, dtype=float),
+            where=jerk_dt > 1e-6,
+        )
+
+    alpha = 0.95
+    speed_filtered = np.empty_like(speed_arr)
+    speed_filtered[0] = speed_arr[0]
+    for i in range(1, n):
+        speed_filtered[i] = alpha * speed_filtered[i - 1] + (1.0 - alpha) * speed_arr[i]
+
+    accel_filtered = np.zeros(n, dtype=float)
+    accel_filtered[1:] = np.divide(
+        np.diff(speed_filtered),
+        dt_arr,
+        out=np.zeros_like(dt_arr, dtype=float),
+        where=dt_arr > 1e-6,
+    )
+    jerk_filtered = np.zeros(n, dtype=float)
+    if n > 2:
+        jerk_dt = dt_arr[1:]
+        jerk_filtered[2:] = np.divide(
+            np.diff(accel_filtered[1:]),
             jerk_dt,
             out=np.zeros_like(jerk_dt, dtype=float),
             where=jerk_dt > 1e-6,
@@ -568,6 +667,11 @@ def _build_longitudinal_hotspot_attribution(data: Dict, config: Dict, n_frames: 
         if data.get("longitudinal_jerk_capped") is not None
         else None
     )
+    limiter_transition_recorded = (
+        np.asarray(data.get("longitudinal_limiter_transition_active"), dtype=float).reshape(-1)[:n]
+        if data.get("longitudinal_limiter_transition_active") is not None
+        else None
+    )
     contact = (
         np.asarray(data.get("chassis_ground_contact"), dtype=float).reshape(-1)[:n]
         if data.get("chassis_ground_contact") is not None
@@ -590,6 +694,28 @@ def _build_longitudinal_hotspot_attribution(data: Dict, config: Dict, n_frames: 
     command_accel = None
     if throttle is not None and brake is not None:
         command_accel = (throttle * max_accel_cfg) - (brake * max_decel_cfg)
+    command_jerk = None
+    if command_accel is not None:
+        command_jerk = np.full(n, np.nan, dtype=float)
+        command_jerk[1:] = np.divide(
+            np.diff(command_accel),
+            dt_arr,
+            out=np.zeros_like(dt_arr, dtype=float),
+            where=dt_arr > 1e-6,
+        )
+
+    limiter_active = np.zeros(n, dtype=bool)
+    if accel_capped is not None:
+        limiter_active |= accel_capped > 0.5
+    if jerk_capped is not None:
+        limiter_active |= jerk_capped > 0.5
+    limiter_transition = np.zeros(n, dtype=bool)
+    if n > 1:
+        transitions = limiter_active[1:] != limiter_active[:-1]
+        limiter_transition[1:] |= transitions
+        limiter_transition[:-1] |= transitions
+    if limiter_transition_recorded is not None:
+        limiter_transition |= limiter_transition_recorded > 0.5
 
     def _build_hotspots(values: np.ndarray, metric: str, max_items: int = 8, min_separation: int = 15) -> list[dict]:
         rows = []
@@ -610,7 +736,7 @@ def _build_longitudinal_hotspot_attribution(data: Dict, config: Dict, n_frames: 
             })
         return rows
 
-    rows = _build_hotspots(accel, "accel") + _build_hotspots(jerk, "jerk")
+    rows = _build_hotspots(accel_raw, "accel") + _build_hotspots(jerk_raw, "jerk")
     rows = sorted(rows, key=lambda row: row["metric_abs"], reverse=True)[:8]
 
     def _float_at(arr: Optional[np.ndarray], idx: int):
@@ -641,32 +767,54 @@ def _build_longitudinal_hotspot_attribution(data: Dict, config: Dict, n_frames: 
         penetration_i = _float_at(penetration, idx)
         clearance_i = _float_at(clearance, idx)
         cmd_accel_i = _float_at(command_accel, idx)
-        cmd_accel_prev = _float_at(command_accel, idx - 1) if idx >= 1 else None
-        cmd_jerk_i = None
-        if cmd_accel_i is not None and cmd_accel_prev is not None and dt_prev_ms is not None and dt_prev_ms > 1e-6:
-            cmd_jerk_i = safe_float((cmd_accel_i - cmd_accel_prev) / (dt_prev_ms / 1000.0), default=None)
+        cmd_jerk_i = _float_at(command_jerk, idx)
+        limiter_active_i = bool(limiter_active[idx])
+        limiter_transition_i = bool(limiter_transition[idx])
+        timestamp_irregular_i = bool(timestamp_irregular_nearby[idx])
+        accel_raw_i = _float_at(accel_raw, idx)
+        accel_filtered_i = _float_at(accel_filtered, idx)
+        jerk_raw_i = _float_at(jerk_raw, idx)
+        jerk_filtered_i = _float_at(jerk_filtered, idx)
 
         attribution = "unknown"
         confidence = "low"
         if (contact_i is not None and contact_i > 0.5) or (penetration_i is not None and penetration_i > 1e-4):
             attribution = "ground_contact_or_penetration"
             confidence = "high"
-        elif dt_recent_max_ms is not None and dt_recent_max_ms >= dt_gap_threshold_ms:
+        elif timestamp_irregular_i:
             attribution = "timestamp_gap_derivative_artifact"
             confidence = "high"
-        elif (accel_cap_i is not None and accel_cap_i > 0.5) or (jerk_cap_i is not None and jerk_cap_i > 0.5):
-            attribution = "longitudinal_limiter_active"
-            confidence = "medium"
-        elif cmd_jerk_i is not None and abs(cmd_jerk_i) >= 6.0 and abs(_float_at(jerk, idx) or 0.0) >= 6.0:
+        elif (
+            cmd_jerk_i is not None
+            and jerk_filtered_i is not None
+            and abs(cmd_jerk_i) >= 6.0
+            and abs(jerk_filtered_i) >= 6.0
+        ):
             attribution = "commanded_longitudinal_step"
+            confidence = "high"
+        elif limiter_transition_i:
+            attribution = "longitudinal_limiter_transition"
             confidence = "medium"
-        elif brake_i is not None and brake_i >= 0.15 and (_float_at(accel, idx) or 0.0) <= -2.0:
-            attribution = "brake_command_decel"
-            confidence = "medium"
-        elif throttle_i is not None and throttle_i >= 0.15 and (_float_at(accel, idx) or 0.0) >= 2.0:
-            attribution = "throttle_command_accel"
-            confidence = "medium"
-        elif cmd_accel_i is not None and abs((_float_at(accel, idx) or 0.0) - cmd_accel_i) >= max(3.0, abs(cmd_accel_i) * 2.5):
+        elif (
+            jerk_raw_i is not None
+            and (
+                (
+                    jerk_filtered_i is not None
+                    and abs(jerk_raw_i) >= 6.0
+                    and abs(jerk_filtered_i) <= max(2.0, abs(jerk_raw_i) * 0.45)
+                )
+                or (
+                    cmd_jerk_i is not None
+                    and abs(jerk_raw_i) >= 6.0
+                    and abs(cmd_jerk_i) <= max(2.0, abs(jerk_raw_i) * 0.45)
+                )
+                or (
+                    accel_raw_i is not None
+                    and accel_filtered_i is not None
+                    and abs(accel_raw_i - accel_filtered_i) >= 2.5
+                )
+            )
+        ):
             attribution = "physics_or_speed_estimation_spike"
             confidence = "low"
 
@@ -676,8 +824,12 @@ def _build_longitudinal_hotspot_attribution(data: Dict, config: Dict, n_frames: 
             "metric": row["metric"],
             "metric_value": safe_float(row["metric_value"]),
             "metric_abs": safe_float(row["metric_abs"]),
-            "accel_mps2": _float_at(accel, idx),
-            "jerk_mps3": _float_at(jerk, idx),
+            "accel_mps2": accel_raw_i,
+            "jerk_mps3": jerk_raw_i,
+            "accel_raw_mps2": accel_raw_i,
+            "jerk_raw_mps3": jerk_raw_i,
+            "accel_filtered_mps2": accel_filtered_i,
+            "jerk_filtered_mps3": jerk_filtered_i,
             "speed_mps": _float_at(speed_arr, idx),
             "target_speed_mps": target_speed_i,
             "throttle": throttle_i,
@@ -685,8 +837,11 @@ def _build_longitudinal_hotspot_attribution(data: Dict, config: Dict, n_frames: 
             "dt_prev_ms": dt_prev_ms,
             "dt_prev2_ms": dt_prev2_ms,
             "dt_recent_max_ms": dt_recent_max_ms,
+            "timestamp_irregular_nearby": timestamp_irregular_i,
             "longitudinal_accel_capped": bool(accel_cap_i > 0.5) if accel_cap_i is not None else None,
             "longitudinal_jerk_capped": bool(jerk_cap_i > 0.5) if jerk_cap_i is not None else None,
+            "limiter_active": limiter_active_i,
+            "limiter_transition": limiter_transition_i,
             "chassis_ground_contact": bool(contact_i > 0.5) if contact_i is not None else None,
             "chassis_ground_penetration_m": penetration_i,
             "chassis_ground_clearance_m": clearance_i,
@@ -696,12 +851,42 @@ def _build_longitudinal_hotspot_attribution(data: Dict, config: Dict, n_frames: 
             "confidence": confidence,
         })
 
+    counts_by_attribution: Dict[str, int] = {}
+    high_confidence_count = 0
+    mismatch_count = 0
+    mismatch_samples = 0
+    for entry in entries:
+        attr = str(entry.get("attribution", "unknown"))
+        counts_by_attribution[attr] = int(counts_by_attribution.get(attr, 0) + 1)
+        if str(entry.get("confidence", "")).lower() == "high":
+            high_confidence_count += 1
+        cmd_jerk_i = entry.get("command_jerk_proxy_mps3")
+        measured_jerk_i = entry.get("jerk_filtered_mps3")
+        if cmd_jerk_i is None or measured_jerk_i is None:
+            continue
+        cmd_abs = abs(float(cmd_jerk_i))
+        measured_abs = abs(float(measured_jerk_i))
+        mismatch_samples += 1
+        if abs(cmd_abs - measured_abs) > max(2.0, max(cmd_abs, measured_abs) * 0.8):
+            mismatch_count += 1
+
     return {
         "schema_version": "v1",
         "availability": "available" if entries else "unavailable",
         "dt_nominal_ms": safe_float(nominal_dt_ms, default=None),
         "dt_gap_threshold_ms": safe_float(dt_gap_threshold_ms, default=None),
         "entries": entries,
+        "counts_by_attribution": counts_by_attribution,
+        "high_confidence_rate": (
+            safe_float(high_confidence_count / len(entries), default=None)
+            if entries
+            else None
+        ),
+        "commanded_vs_measured_mismatch_rate": (
+            safe_float(mismatch_count / mismatch_samples, default=None)
+            if mismatch_samples > 0
+            else None
+        ),
     }
 
 
@@ -881,6 +1066,18 @@ def analyze_recording_summary(recording_path: Path, analyze_to_failure: bool = F
                 if 'control/target_speed_final' in f
                 else None
             )
+            data['speed_governor_active_limiter_code'] = (
+                np.array(f['control/speed_governor_active_limiter_code'][:])
+                if 'control/speed_governor_active_limiter_code' in f
+                else None
+            )
+            data['speed_governor_active_limiter'] = None
+            if 'control/speed_governor_active_limiter' in f:
+                _sgl = f['control/speed_governor_active_limiter'][:]
+                data['speed_governor_active_limiter'] = [
+                    s.decode('utf-8') if isinstance(s, (bytes, bytearray)) else str(s)
+                    for s in _sgl
+                ]
             data['speed_governor_curve_cap_active'] = (
                 np.array(f['control/speed_governor_curve_cap_active'][:])
                 if 'control/speed_governor_curve_cap_active' in f
@@ -894,6 +1091,38 @@ def analyze_recording_summary(recording_path: Path, analyze_to_failure: bool = F
             data['speed_governor_curve_cap_margin_mps'] = (
                 np.array(f['control/speed_governor_curve_cap_margin_mps'][:])
                 if 'control/speed_governor_curve_cap_margin_mps' in f
+                else None
+            )
+            data['speed_governor_cap_tracking_active'] = (
+                np.array(f['control/speed_governor_cap_tracking_active'][:])
+                if 'control/speed_governor_cap_tracking_active' in f
+                else None
+            )
+            data['speed_governor_cap_tracking_error_mps'] = (
+                np.array(f['control/speed_governor_cap_tracking_error_mps'][:])
+                if 'control/speed_governor_cap_tracking_error_mps' in f
+                else None
+            )
+            data['speed_governor_cap_tracking_mode_code'] = (
+                np.array(f['control/speed_governor_cap_tracking_mode_code'][:])
+                if 'control/speed_governor_cap_tracking_mode_code' in f
+                else None
+            )
+            data['speed_governor_cap_tracking_mode'] = None
+            if 'control/speed_governor_cap_tracking_mode' in f:
+                _sgcm = f['control/speed_governor_cap_tracking_mode'][:]
+                data['speed_governor_cap_tracking_mode'] = [
+                    s.decode('utf-8') if isinstance(s, (bytes, bytearray)) else str(s)
+                    for s in _sgcm
+                ]
+            data['speed_governor_cap_tracking_recovery_frames'] = (
+                np.array(f['control/speed_governor_cap_tracking_recovery_frames'][:])
+                if 'control/speed_governor_cap_tracking_recovery_frames' in f
+                else None
+            )
+            data['speed_governor_cap_tracking_hard_ceiling_applied'] = (
+                np.array(f['control/speed_governor_cap_tracking_hard_ceiling_applied'][:])
+                if 'control/speed_governor_cap_tracking_hard_ceiling_applied' in f
                 else None
             )
             data['turn_feasibility_active'] = (
@@ -919,6 +1148,11 @@ def analyze_recording_summary(recording_path: Path, analyze_to_failure: bool = F
             data['longitudinal_jerk_capped'] = (
                 np.array(f['control/longitudinal_jerk_capped'][:])
                 if 'control/longitudinal_jerk_capped' in f
+                else None
+            )
+            data['longitudinal_limiter_transition_active'] = (
+                np.array(f['control/longitudinal_limiter_transition_active'][:])
+                if 'control/longitudinal_limiter_transition_active' in f
                 else None
             )
             data['control_timestamps'] = (
@@ -1439,6 +1673,14 @@ def analyze_recording_summary(recording_path: Path, analyze_to_failure: bool = F
     curve_cap_pre_turn_lead_frames_p95 = 0.0
     turn_infeasible_rate_when_curve_cap_active = 0.0
     overspeed_into_curve_rate = 0.0
+    cap_tracking_error_p50_mps = 0.0
+    cap_tracking_error_p95_mps = 0.0
+    cap_tracking_error_max_mps = 0.0
+    frames_above_cap_0p3mps_rate = 0.0
+    frames_above_cap_1p0mps_rate = 0.0
+    cap_recovery_frames_p50 = 0.0
+    cap_recovery_frames_p95 = 0.0
+    hard_ceiling_applied_rate = 0.0
     speed_min_mps = None
     speed_max_mps = None
     if data.get('speed') is not None and len(data['speed']) > 0:
@@ -2448,6 +2690,79 @@ def analyze_recording_summary(recording_path: Path, analyze_to_failure: bool = F
                     np.mean(speed_arr[valid] > (cap_arr[valid] + 0.2)) * 100.0
                 )
 
+    cap_active_series = data.get("speed_governor_curve_cap_active")
+    cap_speed_series = data.get("speed_governor_curve_cap_speed")
+    target_speed_final_series = data.get("target_speed_final")
+    if (
+        cap_active_series is not None
+        and cap_speed_series is not None
+        and target_speed_final_series is not None
+    ):
+        n_cap_track = min(
+            n_frames,
+            len(cap_active_series),
+            len(cap_speed_series),
+            len(target_speed_final_series),
+        )
+        if n_cap_track > 0:
+            cap_active_arr = np.asarray(cap_active_series[:n_cap_track], dtype=np.float64) > 0.5
+            cap_speed_arr = np.asarray(cap_speed_series[:n_cap_track], dtype=np.float64)
+            target_final_arr = np.asarray(target_speed_final_series[:n_cap_track], dtype=np.float64)
+            valid_cap_mask = (
+                cap_active_arr
+                & np.isfinite(cap_speed_arr)
+                & np.isfinite(target_final_arr)
+                & (cap_speed_arr > 0.01)
+            )
+            if np.any(valid_cap_mask):
+                cap_tracking_error_series = data.get("speed_governor_cap_tracking_error_mps")
+                if (
+                    cap_tracking_error_series is not None
+                    and len(cap_tracking_error_series) >= n_cap_track
+                ):
+                    cap_err_arr = np.asarray(
+                        cap_tracking_error_series[:n_cap_track], dtype=np.float64
+                    )
+                    cap_err_arr = np.where(np.isfinite(cap_err_arr), np.maximum(cap_err_arr, 0.0), 0.0)
+                else:
+                    cap_err_arr = np.maximum(0.0, target_final_arr - cap_speed_arr)
+
+                cap_err_valid = cap_err_arr[valid_cap_mask]
+                if cap_err_valid.size > 0:
+                    cap_tracking_error_p50_mps = safe_float(np.percentile(cap_err_valid, 50))
+                    cap_tracking_error_p95_mps = safe_float(np.percentile(cap_err_valid, 95))
+                    cap_tracking_error_max_mps = safe_float(np.max(cap_err_valid))
+                    frames_above_cap_0p3mps_rate = safe_float(
+                        np.mean(cap_err_valid > 0.3) * 100.0
+                    )
+                    frames_above_cap_1p0mps_rate = safe_float(
+                        np.mean(cap_err_valid > 1.0) * 100.0
+                    )
+
+                cap_recovery_frames_series = data.get("speed_governor_cap_tracking_recovery_frames")
+                if (
+                    cap_recovery_frames_series is not None
+                    and len(cap_recovery_frames_series) >= n_cap_track
+                ):
+                    recovery_arr = np.asarray(
+                        cap_recovery_frames_series[:n_cap_track], dtype=np.float64
+                    )
+                    recovery_arr = np.where(np.isfinite(recovery_arr), recovery_arr, np.nan)
+                    recovery_valid = recovery_arr[valid_cap_mask]
+                    recovery_valid = recovery_valid[np.isfinite(recovery_valid) & (recovery_valid >= 0.0)]
+                    if recovery_valid.size > 0:
+                        cap_recovery_frames_p50 = safe_float(np.percentile(recovery_valid, 50))
+                        cap_recovery_frames_p95 = safe_float(np.percentile(recovery_valid, 95))
+
+                hard_ceiling_series = data.get("speed_governor_cap_tracking_hard_ceiling_applied")
+                if hard_ceiling_series is not None and len(hard_ceiling_series) >= n_cap_track:
+                    hard_ceiling_arr = np.asarray(
+                        hard_ceiling_series[:n_cap_track], dtype=np.float64
+                    ) > 0.5
+                    hard_ceiling_applied_rate = safe_float(
+                        np.mean(hard_ceiling_arr[valid_cap_mask]) * 100.0
+                    )
+
     layer_breakdowns = {
         "Perception": {
             "base_score": 100.0,
@@ -2644,6 +2959,18 @@ def analyze_recording_summary(recording_path: Path, analyze_to_failure: bool = F
         recommendations.append(
             "Curve-cap active while turn remains infeasible - strengthen capability estimator or peak limits."
         )
+    if frames_above_cap_1p0mps_rate > 2.0:
+        recommendations.append(
+            "Cap-tracking lag is high in active curve-cap frames - increase planner cap-tracking catch-up authority."
+        )
+    if cap_tracking_error_p95_mps > 0.5:
+        recommendations.append(
+            "Cap-tracking P95 error is above target - tighten cap-tracking hysteresis and recovery behavior."
+        )
+    if hard_ceiling_applied_rate > 0.5:
+        recommendations.append(
+            "Safety hard ceiling is being used too often - planner should converge to cap without fallback clamps."
+        )
     if lane_detection_rate < 90:
         recommendations.append("Improve lane detection - check perception model or CV fallback")
     if lane_line_jitter_p95 > 0.6 or reference_jitter_p95 > 0.25:
@@ -2715,6 +3042,10 @@ def analyze_recording_summary(recording_path: Path, analyze_to_failure: bool = F
             )
     if overspeed_into_curve_rate > 10.0:
         key_issues.append(f"Overspeed into curve ({overspeed_into_curve_rate:.1f}% frames)")
+    if frames_above_cap_1p0mps_rate > 2.0:
+        key_issues.append(f"Cap tracking >1.0 m/s above cap ({frames_above_cap_1p0mps_rate:.1f}% frames)")
+    if hard_ceiling_applied_rate > 0.5:
+        key_issues.append(f"Hard cap ceiling fallback active ({hard_ceiling_applied_rate:.1f}% frames)")
     if straight_oscillation_mean > 0.2:
         key_issues.append("Straight-line oscillation detected")
     if straight_sign_mismatch_events > 0:
@@ -2821,6 +3152,14 @@ def analyze_recording_summary(recording_path: Path, analyze_to_failure: bool = F
             "turn_infeasible_rate_when_curve_cap_active": safe_float(
                 turn_infeasible_rate_when_curve_cap_active
             ),
+            "cap_tracking_error_p50_mps": safe_float(cap_tracking_error_p50_mps),
+            "cap_tracking_error_p95_mps": safe_float(cap_tracking_error_p95_mps),
+            "cap_tracking_error_max_mps": safe_float(cap_tracking_error_max_mps),
+            "frames_above_cap_0p3mps_rate": safe_float(frames_above_cap_0p3mps_rate),
+            "frames_above_cap_1p0mps_rate": safe_float(frames_above_cap_1p0mps_rate),
+            "cap_recovery_frames_p50": safe_float(cap_recovery_frames_p50),
+            "cap_recovery_frames_p95": safe_float(cap_recovery_frames_p95),
+            "hard_ceiling_applied_rate": safe_float(hard_ceiling_applied_rate),
             "acceleration_mean": safe_float(acceleration_mean),
             "acceleration_p95": safe_float(acceleration_p95),
             "acceleration_max": safe_float(acceleration_max),

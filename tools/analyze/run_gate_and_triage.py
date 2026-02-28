@@ -11,6 +11,8 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
+import os
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -26,8 +28,15 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from tools.drive_summary_core import analyze_recording_summary
-from tools.debug_visualizer.backend.issue_detector import detect_issues
-from tools.debug_visualizer.backend.diagnostics import analyze_trajectory_vs_steering
+
+DIAGNOSTICS_IMPORT_ERROR: str | None = None
+try:
+    from tools.debug_visualizer.backend.issue_detector import detect_issues
+    from tools.debug_visualizer.backend.diagnostics import analyze_trajectory_vs_steering
+except Exception as exc:  # pragma: no cover - import failure path is environment-specific
+    detect_issues = None
+    analyze_trajectory_vs_steering = None
+    DIAGNOSTICS_IMPORT_ERROR = str(exc)
 
 SCHEMA_VERSION = "v1"
 REPORTS_DIR = REPO_ROOT / "data" / "reports" / "gates"
@@ -82,6 +91,25 @@ def _git_sha() -> str:
         return "unknown"
 
 
+def _diagnostics_preflight(enabled: bool = True) -> dict[str, Any]:
+    preflight = {
+        "enabled": bool(enabled),
+        "available": False,
+        "error": None,
+        "status": "disabled",
+    }
+    if not enabled:
+        preflight["available"] = True
+        return preflight
+    if DIAGNOSTICS_IMPORT_ERROR:
+        preflight["status"] = "degraded"
+        preflight["error"] = DIAGNOSTICS_IMPORT_ERROR
+        return preflight
+    preflight["available"] = True
+    preflight["status"] = "ok"
+    return preflight
+
+
 def _read_recording_metadata(path: Path) -> dict[str, Any]:
     try:
         with h5py.File(path, "r") as f:
@@ -108,6 +136,41 @@ def _infer_track_id(path: Path) -> str:
     if "s_loop" in name or "sloop" in name:
         return "s_loop"
     return "unknown"
+
+
+def _recording_provenance(path: Path) -> dict[str, Any]:
+    metadata = _read_recording_metadata(path)
+    provenance = metadata.get("recording_provenance")
+    return provenance if isinstance(provenance, dict) else {}
+
+
+def _validate_generated_recording_provenance(
+    recording_path: Path,
+    *,
+    expected_track_id: str,
+    expected_start_t: float,
+) -> None:
+    provenance = _recording_provenance(recording_path)
+    observed_track_id = str(provenance.get("track_id", "") or "").strip()
+    if observed_track_id != expected_track_id:
+        raise RuntimeError(
+            f"Generated recording provenance track mismatch for {recording_path.name}: "
+            f"expected '{expected_track_id}', observed '{observed_track_id or 'missing'}'"
+        )
+    observed_start_t = provenance.get("start_t")
+    try:
+        observed_start_t = float(observed_start_t)
+    except (TypeError, ValueError):
+        observed_start_t = None
+    if observed_start_t is None or not math.isfinite(observed_start_t):
+        raise RuntimeError(
+            f"Generated recording provenance start_t missing/invalid for {recording_path.name}"
+        )
+    if abs(observed_start_t - float(expected_start_t)) > 1e-6:
+        raise RuntimeError(
+            f"Generated recording provenance start_t mismatch for {recording_path.name}: "
+            f"expected {float(expected_start_t):.6f}, observed {observed_start_t:.6f}"
+        )
 
 
 def _extract_run_metrics(
@@ -232,6 +295,18 @@ def _extract_run_metrics(
         "curve_cap_turn_infeasible_rate_when_active": float(
             speed_control.get("turn_infeasible_rate_when_curve_cap_active", 0.0)
         ),
+        "cap_tracking_error_p95_mps": float(
+            speed_control.get("cap_tracking_error_p95_mps", 0.0)
+        ),
+        "frames_above_cap_1p0mps_rate": float(
+            speed_control.get("frames_above_cap_1p0mps_rate", 0.0)
+        ),
+        "cap_recovery_frames_p95": float(
+            speed_control.get("cap_recovery_frames_p95", 0.0)
+        ),
+        "hard_ceiling_applied_rate": float(
+            speed_control.get("hard_ceiling_applied_rate", 0.0)
+        ),
     }
     return summary, metrics
 
@@ -301,13 +376,28 @@ def _build_stage6_fields(
     curve_entry_start_distance_m: float,
     curve_entry_window_distance_m: float,
     failure_frame: int | None,
+    diagnostics_preflight: dict[str, Any],
 ) -> dict[str, Any]:
+    if not bool(diagnostics_preflight.get("available", False)):
+        diagnostics_error = str(diagnostics_preflight.get("error") or "diagnostics unavailable")
+        return {
+            "what_failed_first": None,
+            "downstream_consequence": None,
+            "single_next_lever": "Restore diagnostics backend imports before using Stage-6 triage decisions.",
+            "diagnostics_mode_used": "preflight_unavailable",
+            "diagnostics_fallback_used": False,
+            "diagnostics_error": diagnostics_error,
+            "answered_all_stage6_questions": False,
+        }
+
     try:
-        issues = detect_issues(recording_path, analyze_to_failure=analyze_to_failure)
+        issues = detect_issues(recording_path, analyze_to_failure=analyze_to_failure) if detect_issues else {}
     except Exception as exc:
         issues = {"error": str(exc), "issues": [], "causal_timeline": []}
 
     try:
+        if analyze_trajectory_vs_steering is None:
+            raise RuntimeError("diagnostics backend unavailable")
         diagnostics = analyze_trajectory_vs_steering(
             recording_path,
             analyze_to_failure=analyze_to_failure,
@@ -320,6 +410,8 @@ def _build_stage6_fields(
     diagnostics_fallback_used = False
     if diagnostics.get("error") or diagnostics.get("diagnosis") is None:
         try:
+            if analyze_trajectory_vs_steering is None:
+                raise RuntimeError("diagnostics backend unavailable")
             diagnostics = analyze_trajectory_vs_steering(
                 recording_path,
                 analyze_to_failure=False,
@@ -361,6 +453,10 @@ def _track_medians(rows: list[RunArtifacts], track_id: str) -> dict[str, float] 
         "first_300_lateral_p99_median": _median("first_300_lateral_p99"),
         "last_300_lateral_p99_median": _median("last_300_lateral_p99"),
         "steering_jerk_max_median": _median("steering_jerk_max"),
+        "cap_tracking_error_p95_median_mps": _median("cap_tracking_error_p95_mps"),
+        "frames_above_cap_1p0mps_rate_median": _median("frames_above_cap_1p0mps_rate"),
+        "cap_recovery_frames_p95_median": _median("cap_recovery_frames_p95"),
+        "hard_ceiling_applied_rate_median": _median("hard_ceiling_applied_rate"),
     }
 
 
@@ -369,6 +465,14 @@ def _build_regression_budget(args: argparse.Namespace) -> dict[str, Any]:
         "highway_lateral_p95_max_delta_m": float(args.highway_p95_budget_m),
         "sloop_first_300_p99_min_improvement_m": float(args.sloop_first300_improvement_m),
         "sloop_lateral_p95_max_delta_m": float(args.sloop_p95_regression_budget_m),
+        "cap_tracking_frames_above_cap_1p0mps_rate_max_pct": float(
+            args.cap_tracking_frames_above_cap_1p0mps_rate_max_pct
+        ),
+        "cap_tracking_error_p95_max_mps": float(args.cap_tracking_error_p95_max_mps),
+        "cap_tracking_recovery_frames_p95_max": float(args.cap_tracking_recovery_frames_p95_max),
+        "cap_tracking_hard_ceiling_applied_rate_max_pct": float(
+            args.cap_tracking_hard_ceiling_applied_rate_max_pct
+        ),
     }
 
 
@@ -378,6 +482,8 @@ def _evaluate_gate(
     required_track_ids: list[str],
     expected_runs_per_track: int,
     regression_budget: dict[str, Any],
+    diagnostics_preflight: dict[str, Any],
+    mode: str,
 ) -> dict[str, Any]:
     run_validity_pass = all(bool(r.metrics.get("run_validity_pass", True)) for r in rows)
     hard_safety_pass = all(
@@ -399,6 +505,9 @@ def _evaluate_gate(
         "run_validity_pass": run_validity_pass,
         "hard_safety_pass": hard_safety_pass,
         "run_count_gate_pass": run_count_gate_pass,
+        "diagnostics_preflight_pass": bool(
+            diagnostics_preflight.get("available", False) or str(mode) != "promotion"
+        ),
     }
 
     highway_id = next((t for t in required_track_ids if "highway" in t), "highway_65")
@@ -434,6 +543,26 @@ def _evaluate_gate(
     else:
         checks["sloop_first_300_improvement"] = None
         checks["sloop_lateral_p95_non_regression"] = None
+
+    cap_tracking_rows = [
+        r
+        for r in rows
+        if float(r.metrics.get("curve_cap_active_rate", 0.0)) > 0.1
+    ]
+    if cap_tracking_rows:
+        checks["cap_tracking_effectiveness"] = all(
+            float(r.metrics.get("frames_above_cap_1p0mps_rate", 0.0))
+            <= float(regression_budget["cap_tracking_frames_above_cap_1p0mps_rate_max_pct"])
+            and float(r.metrics.get("cap_tracking_error_p95_mps", 0.0))
+            <= float(regression_budget["cap_tracking_error_p95_max_mps"])
+            and float(r.metrics.get("cap_recovery_frames_p95", 0.0))
+            <= float(regression_budget["cap_tracking_recovery_frames_p95_max"])
+            and float(r.metrics.get("hard_ceiling_applied_rate", 0.0))
+            <= float(regression_budget["cap_tracking_hard_ceiling_applied_rate_max_pct"])
+            for r in cap_tracking_rows
+        )
+    else:
+        checks["cap_tracking_effectiveness"] = True
 
     pass_fail = True
     for value in checks.values():
@@ -476,6 +605,8 @@ def _execute_gate_runs(
     tracks: list[Path],
     runs_per_track: int,
     duration_s: int,
+    *,
+    av_start_t: float,
 ) -> list[tuple[Path, str]]:
     generated: list[tuple[Path, str]] = []
     for track in tracks:
@@ -494,6 +625,7 @@ def _execute_gate_runs(
             completed = subprocess.run(
                 cmd,
                 cwd=REPO_ROOT,
+                env={**os.environ, "AV_START_T": str(float(av_start_t))},
                 capture_output=True,
                 text=True,
                 check=False,
@@ -506,6 +638,11 @@ def _execute_gate_runs(
             after = _latest_recording()
             if after is None or (before is not None and after == before):
                 raise RuntimeError(f"Gate execution produced no new recording for {track}")
+            _validate_generated_recording_provenance(
+                after,
+                expected_track_id=track_id,
+                expected_start_t=float(av_start_t),
+            )
             generated.append((after, track_id))
     return generated
 
@@ -590,6 +727,7 @@ def _load_input_recordings(args: argparse.Namespace) -> list[Path]:
             tracks=tracks,
             runs_per_track=runs_per_track,
             duration_s=args.duration,
+            av_start_t=float(args.av_start_t),
         )
         args.recording_track_ids = [track_id for _, track_id in generated]
         return [path for path, _ in generated]
@@ -632,6 +770,11 @@ def _decision_markdown(
         f"- pass_fail: `{decision_payload.get('pass_fail')}`",
         f"- generated_at_utc: `{decision_payload.get('generated_at_utc')}`",
         "",
+        "## Diagnostics Preflight",
+        f"- status: `{(decision_payload.get('diagnostics_preflight') or {}).get('status', 'unknown')}`",
+        f"- available: `{(decision_payload.get('diagnostics_preflight') or {}).get('available', False)}`",
+        f"- error: `{(decision_payload.get('diagnostics_preflight') or {}).get('error')}`",
+        "",
         "## Gate Checks",
     ]
     for key, value in checks.items():
@@ -656,10 +799,12 @@ def main() -> int:
     parser.add_argument("--tracks", nargs="*", default=["tracks/highway_65.yml", "tracks/s_loop.yml"])
     parser.add_argument("--runs-per-track", type=int, default=None)
     parser.add_argument("--duration", type=int, default=60)
+    parser.add_argument("--av-start-t", type=float, default=0.0)
     parser.add_argument("--recordings", nargs="*", default=[])
     parser.add_argument("--recording-track-ids", nargs="*", default=[])
     parser.add_argument("--baseline-recordings", nargs="*", default=[])
     parser.add_argument("--baseline-track-ids", nargs="*", default=[])
+    parser.add_argument("--baseline-bundle-path", default="")
     parser.add_argument("--analyze-to-failure", action="store_true", default=True)
     parser.add_argument("--full-run-analysis", action="store_true")
     parser.add_argument("--curve-entry-start-distance-m", type=float, default=34.0)
@@ -667,6 +812,10 @@ def main() -> int:
     parser.add_argument("--highway-p95-budget-m", type=float, default=0.02)
     parser.add_argument("--sloop-first300-improvement-m", type=float, default=0.03)
     parser.add_argument("--sloop-p95-regression-budget-m", type=float, default=0.0)
+    parser.add_argument("--cap-tracking-frames-above-cap-1p0mps-rate-max-pct", type=float, default=2.0)
+    parser.add_argument("--cap-tracking-error-p95-max-mps", type=float, default=0.5)
+    parser.add_argument("--cap-tracking-recovery-frames-p95-max", type=float, default=30.0)
+    parser.add_argument("--cap-tracking-hard-ceiling-applied-rate-max-pct", type=float, default=0.5)
     parser.add_argument("--min-control-fps", type=float, default=15.0)
     parser.add_argument("--max-unity-time-gap-s", type=float, default=0.25)
     parser.add_argument("--enable-counterfactual-on-failure", action="store_true")
@@ -712,15 +861,18 @@ def main() -> int:
         "required_track_ids": required_track_ids,
         "expected_runs_per_track": int(expected_runs_per_track),
         "duration_s": int(args.duration),
+        "av_start_t": float(args.av_start_t),
         "min_control_fps": float(args.min_control_fps),
         "max_unity_time_gap_s": float(args.max_unity_time_gap_s),
         "recording_ids": [p.name for p in recording_paths],
         "baseline_recording_ids": [p.name for p in baseline_paths],
+        "baseline_bundle_path": str(args.baseline_bundle_path or ""),
         "analyze_to_failure": analyze_to_failure,
     }
     matrix_hash = compute_matrix_hash(matrix_payload)
     config_hash = _sha256_file(CONFIG_PATH)
     git_sha = _git_sha()
+    diagnostics_preflight = _diagnostics_preflight(enabled=True)
 
     run_artifacts: list[RunArtifacts] = []
     for recording_path in recording_paths:
@@ -736,6 +888,7 @@ def main() -> int:
             curve_entry_start_distance_m=float(args.curve_entry_start_distance_m),
             curve_entry_window_distance_m=float(args.curve_entry_window_distance_m),
             failure_frame=metrics.get("failure_frame"),
+            diagnostics_preflight=diagnostics_preflight,
         )
         run_artifacts.append(
             RunArtifacts(
@@ -769,12 +922,40 @@ def main() -> int:
             )
         )
 
+    if baseline_artifacts:
+        baseline_payload = {
+            "schema_version": SCHEMA_VERSION,
+            "generated_at_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "git_sha": git_sha,
+            "config_hash": config_hash,
+            "matrix_hash": matrix_hash,
+            "recording_ids": [row.recording_id for row in baseline_artifacts],
+            "pass_fail": True,
+            "regression_budget": regression_budget,
+            "diagnostics_preflight": diagnostics_preflight,
+            "baseline_bundle_path": str(args.baseline_bundle_path or ""),
+            "runs": [
+                {
+                    "recording_id": row.recording_id,
+                    "recording_path": str(row.recording_path),
+                    "track_id": row.track_id,
+                    "provenance": _recording_provenance(row.recording_path),
+                    "metrics": row.metrics,
+                }
+                for row in baseline_artifacts
+            ],
+        }
+        validate_contract_required_fields(baseline_payload)
+        _write_json(bundle_dir / "baseline" / "baseline_report.json", baseline_payload)
+
     gate_eval = _evaluate_gate(
         rows=run_artifacts,
         baseline_rows=baseline_artifacts,
         required_track_ids=required_track_ids,
         expected_runs_per_track=int(expected_runs_per_track),
         regression_budget=regression_budget,
+        diagnostics_preflight=diagnostics_preflight,
+        mode=args.mode,
     )
 
     highway_id = next((t for t in required_track_ids if "highway" in t), "highway_65")
@@ -786,6 +967,8 @@ def main() -> int:
 
     for row in run_artifacts:
         reasons: list[str] = []
+        if args.mode == "promotion" and not bool(diagnostics_preflight.get("available", False)):
+            reasons.append("diagnostics_preflight_degraded")
         if int(row.metrics.get("emergency_stop_count", 0)) > 0:
             reasons.append("emergency_stop")
         if int(row.metrics.get("out_of_lane_events_full_run", 0)) > 0:
@@ -798,6 +981,22 @@ def main() -> int:
             reasons.append("curve_intent_late_arm")
         if bool(row.metrics.get("curve_intent_undercall_detected", False)):
             reasons.append("curve_intent_undercall")
+        if float(row.metrics.get("frames_above_cap_1p0mps_rate", 0.0)) > float(
+            regression_budget["cap_tracking_frames_above_cap_1p0mps_rate_max_pct"]
+        ):
+            reasons.append("cap_tracking_above_cap_rate")
+        if float(row.metrics.get("cap_tracking_error_p95_mps", 0.0)) > float(
+            regression_budget["cap_tracking_error_p95_max_mps"]
+        ):
+            reasons.append("cap_tracking_error_p95")
+        if float(row.metrics.get("cap_recovery_frames_p95", 0.0)) > float(
+            regression_budget["cap_tracking_recovery_frames_p95_max"]
+        ):
+            reasons.append("cap_tracking_recovery_lag")
+        if float(row.metrics.get("hard_ceiling_applied_rate", 0.0)) > float(
+            regression_budget["cap_tracking_hard_ceiling_applied_rate_max_pct"]
+        ):
+            reasons.append("cap_tracking_hard_ceiling_rate")
         if baseline_highway_p95 is not None and "highway" in row.track_id:
             if float(row.metrics.get("lateral_p95", 0.0)) > (
                 float(baseline_highway_p95) + float(regression_budget["highway_lateral_p95_max_delta_m"])
@@ -831,6 +1030,8 @@ def main() -> int:
         "required_track_ids": required_track_ids,
         "expected_runs_per_track": int(expected_runs_per_track),
         "analyze_to_failure_default": bool(analyze_to_failure),
+        "diagnostics_preflight": diagnostics_preflight,
+        "baseline_bundle_path": str(args.baseline_bundle_path or ""),
         "runs": [
             {
                 "recording_id": row.recording_id,
@@ -903,6 +1104,8 @@ def main() -> int:
         "next_actions": next_actions,
         "triage_packet_count": len(triage_packets),
         "counterfactual": counterfactual,
+        "diagnostics_preflight": diagnostics_preflight,
+        "baseline_bundle_path": str(args.baseline_bundle_path or ""),
     }
     validate_contract_required_fields(decision_payload)
     _write_json(bundle_dir / "decision.json", decision_payload)

@@ -936,6 +936,30 @@ class DataRecorder:
             dtype=np.int8
         )
         self.h5_file.create_dataset(
+            "control/longitudinal_limiter_transition_active",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int8
+        )
+        self.h5_file.create_dataset(
+            "control/longitudinal_limiter_state_code",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/longitudinal_accel_cmd_raw",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/longitudinal_accel_cmd_smoothed",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
             "control/emergency_stop",
             shape=(0,),
             maxshape=max_shape,
@@ -1013,7 +1037,19 @@ class DataRecorder:
             maxshape=max_shape,
             dtype=np.int8
         )
-        
+        self.h5_file.create_dataset(
+            "control/speed_governor_active_limiter_code",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/speed_governor_active_limiter",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=h5py.string_dtype(encoding='utf-8', length=32)
+        )
+
         self.h5_file.create_dataset(
             "control/speed_governor_comfort_speed",
             shape=(0,),
@@ -1058,6 +1094,42 @@ class DataRecorder:
         )
         self.h5_file.create_dataset(
             "control/speed_governor_curve_cap_shadow_mode",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int8
+        )
+        self.h5_file.create_dataset(
+            "control/speed_governor_cap_tracking_active",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int8
+        )
+        self.h5_file.create_dataset(
+            "control/speed_governor_cap_tracking_error_mps",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/speed_governor_cap_tracking_mode_code",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/speed_governor_cap_tracking_mode",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=h5py.string_dtype(encoding='utf-8', length=24)
+        )
+        self.h5_file.create_dataset(
+            "control/speed_governor_cap_tracking_recovery_frames",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int16
+        )
+        self.h5_file.create_dataset(
+            "control/speed_governor_cap_tracking_hard_ceiling_applied",
             shape=(0,),
             maxshape=max_shape,
             dtype=np.int8
@@ -1223,6 +1295,24 @@ class DataRecorder:
             shape=(0,),
             maxshape=max_shape,
             dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/steering_rate_limit_effective_raw",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/steering_rate_limit_effective_smoothed",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/steering_rate_limit_transition_active",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int8
         )
         self.h5_file.create_dataset(
             "control/steering_rate_limit_requested_delta",
@@ -3960,7 +4050,8 @@ class DataRecorder:
         target_speed_final_list = []
         target_speed_slew_active_list = []
         target_speed_ramp_active_list = []
-        
+        speed_governor_active_limiter_code_list = []
+        speed_governor_active_limiter_list = []
         speed_governor_comfort_speed_list = []
         speed_governor_preview_speed_list = []
         speed_governor_horizon_speed_list = []
@@ -3969,6 +4060,12 @@ class DataRecorder:
         speed_governor_curve_cap_reason_list = []
         speed_governor_curve_cap_margin_mps_list = []
         speed_governor_curve_cap_shadow_mode_list = []
+        speed_governor_cap_tracking_active_list = []
+        speed_governor_cap_tracking_error_mps_list = []
+        speed_governor_cap_tracking_mode_code_list = []
+        speed_governor_cap_tracking_mode_list = []
+        speed_governor_cap_tracking_recovery_frames_list = []
+        speed_governor_cap_tracking_hard_ceiling_applied_list = []
         launch_throttle_cap_list = []
         launch_throttle_cap_active_list = []
         steering_pre_rate_limit_list = []
@@ -3996,6 +4093,9 @@ class DataRecorder:
         steering_rate_limit_after_curve_list = []
         steering_rate_limit_after_floor_list = []
         steering_rate_limit_effective_list = []
+        steering_rate_limit_effective_raw_list = []
+        steering_rate_limit_effective_smoothed_list = []
+        steering_rate_limit_transition_active_list = []
         steering_rate_limit_requested_delta_list = []
         steering_rate_limit_margin_list = []
         steering_rate_limit_unlock_delta_needed_list = []
@@ -4071,6 +4171,10 @@ class DataRecorder:
         brake_feedforward_list = []
         accel_capped_list = []
         jerk_capped_list = []
+        longitudinal_limiter_transition_active_list = []
+        longitudinal_limiter_state_code_list = []
+        longitudinal_accel_cmd_raw_list = []
+        longitudinal_accel_cmd_smoothed_list = []
         
         for frame in frames:
             cc = frame.control_command
@@ -4087,6 +4191,18 @@ class DataRecorder:
             brake_feedforward_list.append(getattr(cc, 'brake_feedforward', 0.0) or 0.0)
             accel_capped_list.append(1 if getattr(cc, 'longitudinal_accel_capped', False) else 0)
             jerk_capped_list.append(1 if getattr(cc, 'longitudinal_jerk_capped', False) else 0)
+            longitudinal_limiter_transition_active_list.append(
+                1 if getattr(cc, 'longitudinal_limiter_transition_active', False) else 0
+            )
+            longitudinal_limiter_state_code_list.append(
+                float(getattr(cc, 'longitudinal_limiter_state_code', 0.0) or 0.0)
+            )
+            longitudinal_accel_cmd_raw_list.append(
+                float(getattr(cc, 'longitudinal_accel_cmd_raw', 0.0) or 0.0)
+            )
+            longitudinal_accel_cmd_smoothed_list.append(
+                float(getattr(cc, 'longitudinal_accel_cmd_smoothed', 0.0) or 0.0)
+            )
             pid_integrals.append(cc.pid_integral if cc.pid_integral is not None else 0.0)
             pid_derivatives.append(cc.pid_derivative if cc.pid_derivative is not None else 0.0)
             pid_errors.append(cc.pid_error if cc.pid_error is not None else 0.0)
@@ -4294,7 +4410,12 @@ class DataRecorder:
             target_speed_final_list.append(getattr(cc, 'target_speed_final', 0.0) or 0.0)
             target_speed_slew_active_list.append(1 if getattr(cc, 'target_speed_slew_active', False) else 0)
             target_speed_ramp_active_list.append(1 if getattr(cc, 'target_speed_ramp_active', False) else 0)
-            
+            speed_governor_active_limiter_code_list.append(
+                float(getattr(cc, 'speed_governor_active_limiter_code', 0.0) or 0.0)
+            )
+            speed_governor_active_limiter_list.append(
+                str(getattr(cc, 'speed_governor_active_limiter', 'none') or 'none')
+            )
             speed_governor_comfort_speed_list.append(
                 getattr(cc, 'speed_governor_comfort_speed', -1.0) or -1.0
             )
@@ -4318,6 +4439,25 @@ class DataRecorder:
             )
             speed_governor_curve_cap_shadow_mode_list.append(
                 1 if getattr(cc, 'speed_governor_curve_cap_shadow_mode', False) else 0
+            )
+            speed_governor_cap_tracking_active_list.append(
+                1 if getattr(cc, 'speed_governor_cap_tracking_active', False) else 0
+            )
+            _cap_tracking_error = getattr(cc, 'speed_governor_cap_tracking_error_mps', np.nan)
+            speed_governor_cap_tracking_error_mps_list.append(
+                float(_cap_tracking_error) if _cap_tracking_error is not None else np.nan
+            )
+            speed_governor_cap_tracking_mode_code_list.append(
+                float(getattr(cc, 'speed_governor_cap_tracking_mode_code', 0.0) or 0.0)
+            )
+            speed_governor_cap_tracking_mode_list.append(
+                str(getattr(cc, 'speed_governor_cap_tracking_mode', 'inactive') or 'inactive')
+            )
+            speed_governor_cap_tracking_recovery_frames_list.append(
+                int(getattr(cc, 'speed_governor_cap_tracking_recovery_frames', 0) or 0)
+            )
+            speed_governor_cap_tracking_hard_ceiling_applied_list.append(
+                1 if getattr(cc, 'speed_governor_cap_tracking_hard_ceiling_applied', False) else 0
             )
             launch_throttle_cap_list.append(getattr(cc, 'launch_throttle_cap', 0.0) or 0.0)
             launch_throttle_cap_active_list.append(1 if getattr(cc, 'launch_throttle_cap_active', False) else 0)
@@ -4348,6 +4488,15 @@ class DataRecorder:
             steering_rate_limit_after_curve_list.append(getattr(cc, 'steering_rate_limit_after_curve', 0.0) or 0.0)
             steering_rate_limit_after_floor_list.append(getattr(cc, 'steering_rate_limit_after_floor', 0.0) or 0.0)
             steering_rate_limit_effective_list.append(getattr(cc, 'steering_rate_limit_effective', 0.0) or 0.0)
+            steering_rate_limit_effective_raw_list.append(
+                getattr(cc, 'steering_rate_limit_effective_raw', 0.0) or 0.0
+            )
+            steering_rate_limit_effective_smoothed_list.append(
+                getattr(cc, 'steering_rate_limit_effective_smoothed', 0.0) or 0.0
+            )
+            steering_rate_limit_transition_active_list.append(
+                1 if getattr(cc, 'steering_rate_limit_transition_active', False) else 0
+            )
             steering_rate_limit_requested_delta_list.append(getattr(cc, 'steering_rate_limit_requested_delta', 0.0) or 0.0)
             steering_rate_limit_margin_list.append(getattr(cc, 'steering_rate_limit_margin', 0.0) or 0.0)
             steering_rate_limit_unlock_delta_needed_list.append(getattr(cc, 'steering_rate_limit_unlock_delta_needed', 0.0) or 0.0)
@@ -4526,6 +4675,10 @@ class DataRecorder:
             for key in ["timestamps", "steering", "throttle", "brake",
                        "accel_feedforward", "brake_feedforward",
                        "longitudinal_accel_capped", "longitudinal_jerk_capped",
+                       "longitudinal_limiter_transition_active",
+                       "longitudinal_limiter_state_code",
+                       "longitudinal_accel_cmd_raw",
+                       "longitudinal_accel_cmd_smoothed",
                        "steering_before_limits", "throttle_before_limits", "brake_before_limits",
                        "feedforward_steering", "feedback_steering",
                        "pid_integral", "pid_derivative", "pid_error",
@@ -4585,6 +4738,8 @@ class DataRecorder:
                        "target_speed_raw",
                        "target_speed_post_limits", "target_speed_planned", "target_speed_final",
                        "target_speed_slew_active", "target_speed_ramp_active",
+                       "speed_governor_active_limiter_code",
+                       "speed_governor_active_limiter",
                        "speed_governor_comfort_speed", "speed_governor_preview_speed",
                        "speed_governor_horizon_speed",
                        "speed_governor_curve_cap_speed",
@@ -4592,6 +4747,12 @@ class DataRecorder:
                        "speed_governor_curve_cap_reason",
                        "speed_governor_curve_cap_margin_mps",
                        "speed_governor_curve_cap_shadow_mode",
+                       "speed_governor_cap_tracking_active",
+                       "speed_governor_cap_tracking_error_mps",
+                       "speed_governor_cap_tracking_mode_code",
+                       "speed_governor_cap_tracking_mode",
+                       "speed_governor_cap_tracking_recovery_frames",
+                       "speed_governor_cap_tracking_hard_ceiling_applied",
                        "launch_throttle_cap", "launch_throttle_cap_active",
                        "steering_pre_rate_limit", "steering_post_rate_limit",
                        "steering_post_jerk_limit", "steering_post_sign_flip",
@@ -4606,7 +4767,10 @@ class DataRecorder:
                        "steering_rate_limit_curve_max", "steering_rate_limit_scale_min",
                        "steering_rate_limit_curve_regime_code",
                        "steering_rate_limit_after_curve", "steering_rate_limit_after_floor",
-                       "steering_rate_limit_effective", "steering_rate_limit_requested_delta",
+                       "steering_rate_limit_effective", "steering_rate_limit_effective_raw",
+                       "steering_rate_limit_effective_smoothed",
+                       "steering_rate_limit_transition_active",
+                       "steering_rate_limit_requested_delta",
                        "steering_rate_limit_margin", "steering_rate_limit_unlock_delta_needed",
                        "curve_entry_assist_active", "curve_entry_assist_triggered",
                        "curve_entry_assist_rearm_frames_remaining",
@@ -4662,6 +4826,18 @@ class DataRecorder:
             self.h5_file["control/brake_feedforward"][current_size:] = brake_feedforward_list
             self.h5_file["control/longitudinal_accel_capped"][current_size:] = np.array(accel_capped_list, dtype=np.int8)
             self.h5_file["control/longitudinal_jerk_capped"][current_size:] = np.array(jerk_capped_list, dtype=np.int8)
+            self.h5_file["control/longitudinal_limiter_transition_active"][current_size:] = np.array(
+                longitudinal_limiter_transition_active_list, dtype=np.int8
+            )
+            self.h5_file["control/longitudinal_limiter_state_code"][current_size:] = (
+                longitudinal_limiter_state_code_list
+            )
+            self.h5_file["control/longitudinal_accel_cmd_raw"][current_size:] = (
+                longitudinal_accel_cmd_raw_list
+            )
+            self.h5_file["control/longitudinal_accel_cmd_smoothed"][current_size:] = (
+                longitudinal_accel_cmd_smoothed_list
+            )
             self.h5_file["control/steering_before_limits"][current_size:] = steering_before
             self.h5_file["control/throttle_before_limits"][current_size:] = throttle_before
             self.h5_file["control/brake_before_limits"][current_size:] = brake_before
@@ -4874,7 +5050,13 @@ class DataRecorder:
             self.h5_file["control/target_speed_final"][current_size:] = target_speed_final_list
             self.h5_file["control/target_speed_slew_active"][current_size:] = np.array(target_speed_slew_active_list, dtype=np.int8)
             self.h5_file["control/target_speed_ramp_active"][current_size:] = np.array(target_speed_ramp_active_list, dtype=np.int8)
-            
+            self.h5_file["control/speed_governor_active_limiter_code"][current_size:] = (
+                speed_governor_active_limiter_code_list
+            )
+            self.h5_file["control/speed_governor_active_limiter"][current_size:] = np.array(
+                speed_governor_active_limiter_list,
+                dtype=h5py.string_dtype(encoding='utf-8', length=32),
+            )
             self.h5_file["control/speed_governor_comfort_speed"][current_size:] = speed_governor_comfort_speed_list
             self.h5_file["control/speed_governor_preview_speed"][current_size:] = speed_governor_preview_speed_list
             self.h5_file["control/speed_governor_horizon_speed"][current_size:] = speed_governor_horizon_speed_list
@@ -4893,6 +5075,25 @@ class DataRecorder:
             )
             self.h5_file["control/speed_governor_curve_cap_shadow_mode"][current_size:] = np.array(
                 speed_governor_curve_cap_shadow_mode_list, dtype=np.int8
+            )
+            self.h5_file["control/speed_governor_cap_tracking_active"][current_size:] = np.array(
+                speed_governor_cap_tracking_active_list, dtype=np.int8
+            )
+            self.h5_file["control/speed_governor_cap_tracking_error_mps"][current_size:] = np.array(
+                speed_governor_cap_tracking_error_mps_list, dtype=np.float32
+            )
+            self.h5_file["control/speed_governor_cap_tracking_mode_code"][current_size:] = (
+                speed_governor_cap_tracking_mode_code_list
+            )
+            self.h5_file["control/speed_governor_cap_tracking_mode"][current_size:] = np.array(
+                speed_governor_cap_tracking_mode_list,
+                dtype=h5py.string_dtype(encoding='utf-8', length=24),
+            )
+            self.h5_file["control/speed_governor_cap_tracking_recovery_frames"][current_size:] = np.array(
+                speed_governor_cap_tracking_recovery_frames_list, dtype=np.int16
+            )
+            self.h5_file["control/speed_governor_cap_tracking_hard_ceiling_applied"][current_size:] = np.array(
+                speed_governor_cap_tracking_hard_ceiling_applied_list, dtype=np.int8
             )
             self.h5_file["control/launch_throttle_cap"][current_size:] = launch_throttle_cap_list
             self.h5_file["control/launch_throttle_cap_active"][current_size:] = np.array(launch_throttle_cap_active_list, dtype=np.int8)
@@ -4924,6 +5125,15 @@ class DataRecorder:
             self.h5_file["control/steering_rate_limit_after_curve"][current_size:] = steering_rate_limit_after_curve_list
             self.h5_file["control/steering_rate_limit_after_floor"][current_size:] = steering_rate_limit_after_floor_list
             self.h5_file["control/steering_rate_limit_effective"][current_size:] = steering_rate_limit_effective_list
+            self.h5_file["control/steering_rate_limit_effective_raw"][current_size:] = (
+                steering_rate_limit_effective_raw_list
+            )
+            self.h5_file["control/steering_rate_limit_effective_smoothed"][current_size:] = (
+                steering_rate_limit_effective_smoothed_list
+            )
+            self.h5_file["control/steering_rate_limit_transition_active"][current_size:] = np.array(
+                steering_rate_limit_transition_active_list, dtype=np.int8
+            )
             self.h5_file["control/steering_rate_limit_requested_delta"][current_size:] = steering_rate_limit_requested_delta_list
             self.h5_file["control/steering_rate_limit_margin"][current_size:] = steering_rate_limit_margin_list
             self.h5_file["control/steering_rate_limit_unlock_delta_needed"][current_size:] = steering_rate_limit_unlock_delta_needed_list

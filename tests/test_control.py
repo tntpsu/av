@@ -289,6 +289,7 @@ def test_curve_commit_mode_exit_requires_consecutive_handoff_frames():
         curve_entry_schedule_enabled=False,
         curve_commit_mode_enabled=True,
         curve_commit_mode_max_frames=10,
+        curve_commit_mode_transfer_ratio_target=0.0,
         curve_commit_mode_exit_consecutive_frames=3,
     )
     controller._curve_commit_mode_frames_remaining = 6

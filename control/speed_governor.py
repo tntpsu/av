@@ -25,6 +25,30 @@ from trajectory.utils import apply_speed_horizon_guardrail, compute_dynamic_effe
 
 G = 9.81  # m/s^2
 
+ACTIVE_LIMITER_CODE_MAP = {
+    "none": 0,
+    "comfort": 1,
+    "preview": 2,
+    "horizon": 3,
+    "curve_cap": 4,
+    "planner": 5,
+    "curve_cap_tracking": 6,
+}
+
+CAP_TRACKING_MODE_CODE_MAP = {
+    "inactive": 0,
+    "catch_up": 1,
+    "hold": 2,
+}
+
+
+def active_limiter_code(active_limiter: str) -> int:
+    return int(ACTIVE_LIMITER_CODE_MAP.get(str(active_limiter or "none").strip().lower(), 0))
+
+
+def cap_tracking_mode_code(mode: str) -> int:
+    return int(CAP_TRACKING_MODE_CODE_MAP.get(str(mode or "inactive").strip().lower(), 0))
+
 
 @dataclass
 class SpeedGovernorConfig:
@@ -95,7 +119,8 @@ class SpeedGovernorOutput:
     planned_accel: Optional[float]
     planned_jerk: Optional[float]
     planner_active: bool
-    active_limiter: str  # "none", "comfort", "preview", "horizon", "planner"
+    active_limiter: str  # "none", "comfort", "preview", "horizon", "curve_cap", "planner", "curve_cap_tracking"
+    active_limiter_code: int = 0
 
     # Diagnostics for HDF5 / PhilViz
     horizon_guardrail_active: bool = False
@@ -106,6 +131,12 @@ class SpeedGovernorOutput:
     curve_cap_active: bool = False
     curve_cap_reason: str = "inactive"
     curve_cap_margin_mps: float = 0.0
+    cap_tracking_active: bool = False
+    cap_tracking_error_mps: float = 0.0
+    cap_tracking_mode: str = "inactive"
+    cap_tracking_mode_code: int = 0
+    cap_tracking_recovery_frames: int = 0
+    cap_tracking_hard_ceiling_applied: bool = False
 
 
 class SpeedGovernor:
@@ -222,19 +253,63 @@ class SpeedGovernor:
         planned_accel = None
         planned_jerk = None
         planner_active = False
+        cap_tracking_active = False
+        cap_tracking_error_mps = 0.0
+        cap_tracking_mode = "inactive"
+        cap_tracking_recovery_frames = 0
+        cap_tracking_hard_ceiling_applied = False
+        cap_tracking_context_active = bool(
+            curve_cap_active and curve_cap_speed is not None and not self.config.curve_cap_shadow_mode
+        )
         if self.speed_planner is not None:
             planner_target = target + self.config.speed_planner_speed_limit_bias
             planner_target = max(0.0, planner_target)
             ps, pa, pj, pa_flag = self.speed_planner.step(
-                planner_target, current_speed=current_speed, timestamp=timestamp
+                planner_target,
+                current_speed=current_speed,
+                timestamp=timestamp,
+                hard_upper_speed=(float(curve_cap_speed) if cap_tracking_context_active else None),
+                cap_active=cap_tracking_context_active,
+                cap_reason=curve_cap_reason,
             )
             planned_speed = ps
             planned_accel = pa
             planned_jerk = pj
             planner_active = pa_flag
+            cap_tracking_active = bool(
+                getattr(self.speed_planner, "last_cap_tracking_active", False)
+            )
+            cap_tracking_error_mps = float(
+                getattr(self.speed_planner, "last_cap_tracking_error_mps", 0.0) or 0.0
+            )
+            cap_tracking_mode = str(
+                getattr(self.speed_planner, "last_cap_tracking_mode", "inactive") or "inactive"
+            )
+            cap_tracking_recovery_frames = int(
+                getattr(self.speed_planner, "last_cap_tracking_recovery_frames", 0) or 0
+            )
             if ps < target - 0.01:
                 active_limiter = "planner"
+            if cap_tracking_active:
+                active_limiter = "curve_cap_tracking"
             target = ps
+            if cap_tracking_context_active and curve_cap_speed is not None:
+                ceiling_eps = max(
+                    0.0,
+                    float(self.speed_planner.config.cap_tracking_hard_ceiling_epsilon_mps),
+                )
+                hard_ceiling = float(curve_cap_speed) + ceiling_eps
+                if target > hard_ceiling + 1e-6:
+                    target = hard_ceiling
+                    planned_speed = hard_ceiling
+                    cap_tracking_hard_ceiling_applied = True
+                if planned_speed is not None and planned_speed > hard_ceiling + 1e-6:
+                    planned_speed = hard_ceiling
+                    target = hard_ceiling
+                    cap_tracking_hard_ceiling_applied = True
+                cap_tracking_error_mps = max(0.0, target - float(curve_cap_speed))
+                if cap_tracking_hard_ceiling_applied:
+                    cap_tracking_mode = "catch_up" if cap_tracking_active else cap_tracking_mode
 
         return SpeedGovernorOutput(
             target_speed=target,
@@ -246,6 +321,7 @@ class SpeedGovernor:
             planned_jerk=planned_jerk,
             planner_active=planner_active,
             active_limiter=active_limiter,
+            active_limiter_code=active_limiter_code(active_limiter),
             horizon_guardrail_active=horizon_active,
             horizon_guardrail_margin_m=horizon_margin,
             effective_horizon_m=eff_horizon,
@@ -254,6 +330,12 @@ class SpeedGovernor:
             curve_cap_active=curve_cap_active,
             curve_cap_reason=curve_cap_reason,
             curve_cap_margin_mps=curve_cap_margin_mps,
+            cap_tracking_active=cap_tracking_active,
+            cap_tracking_error_mps=float(cap_tracking_error_mps),
+            cap_tracking_mode=cap_tracking_mode,
+            cap_tracking_mode_code=cap_tracking_mode_code(cap_tracking_mode),
+            cap_tracking_recovery_frames=int(cap_tracking_recovery_frames),
+            cap_tracking_hard_ceiling_applied=bool(cap_tracking_hard_ceiling_applied),
         )
 
     def _compute_comfort_speed(self, curvature: float) -> float:
@@ -643,6 +725,17 @@ def build_speed_governor(trajectory_cfg: dict, speed_planner_cfg: dict) -> Speed
         max_decel_at_speed_min=float(speed_planner_cfg.get("max_decel_at_speed_min", 0.0)),
         max_decel_at_speed_max=float(speed_planner_cfg.get("max_decel_at_speed_max", 0.0)),
         enforce_desired_speed_slew=bool(speed_planner_cfg.get("enforce_desired_speed_slew", False)),
+        cap_tracking_enabled=bool(speed_planner_cfg.get("cap_tracking_enabled", False)),
+        cap_tracking_error_on_mps=float(speed_planner_cfg.get("cap_tracking_error_on_mps", 0.35)),
+        cap_tracking_error_off_mps=float(speed_planner_cfg.get("cap_tracking_error_off_mps", 0.12)),
+        cap_tracking_hold_frames=int(speed_planner_cfg.get("cap_tracking_hold_frames", 4)),
+        cap_tracking_decel_gain=float(speed_planner_cfg.get("cap_tracking_decel_gain", 2.0)),
+        cap_tracking_jerk_gain=float(speed_planner_cfg.get("cap_tracking_jerk_gain", 1.2)),
+        cap_tracking_max_decel_mps2=float(speed_planner_cfg.get("cap_tracking_max_decel_mps2", 3.4)),
+        cap_tracking_max_jerk_mps3=float(speed_planner_cfg.get("cap_tracking_max_jerk_mps3", 2.8)),
+        cap_tracking_hard_ceiling_epsilon_mps=float(
+            speed_planner_cfg.get("cap_tracking_hard_ceiling_epsilon_mps", 0.05)
+        ),
     )
 
     return SpeedGovernor(gov_config, planner_config)

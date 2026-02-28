@@ -1449,12 +1449,68 @@ class Visualizer {
                     syncText = 'WARN';
                 }
 
+                const cadence = latencySync.cadence || {};
+                const cadenceStats = cadence.stats_ms || {};
+                const cadenceLimits = cadence.limits || {};
+                const cadenceP95 = Number(cadenceStats.p95);
+                const cadenceMax = Number(cadenceStats.max);
+                const cadenceIrregularRate = Number(cadence.irregular_rate);
+                const cadenceSevereRate = Number(cadence.severe_irregular_rate);
+                const cadenceIrregularLimit = Number(cadenceLimits.irregular_rate_max);
+                const cadenceSevereLimit = Number(cadenceLimits.severe_irregular_rate_max);
+                const cadenceAvailability = String(cadence.availability || '').toLowerCase();
+                const cadenceAvailable = cadenceAvailability === 'available';
+                const cadencePass = cadence.pass === true;
+                let cadenceColor = '#888';
+                let cadenceText = 'N/A';
+                let cadenceDetailsText = 'N/A';
+                if (cadenceAvailable) {
+                    const cadenceParts = [];
+                    if (Number.isFinite(cadenceP95)) cadenceParts.push(`dt p95 ${cadenceP95.toFixed(1)} ms`);
+                    if (Number.isFinite(cadenceMax)) cadenceParts.push(`dt max ${cadenceMax.toFixed(1)} ms`);
+                    if (Number.isFinite(cadenceIrregularRate)) cadenceParts.push(`irregular ${(cadenceIrregularRate * 100).toFixed(2)}%`);
+                    if (Number.isFinite(cadenceSevereRate)) cadenceParts.push(`severe ${(cadenceSevereRate * 100).toFixed(2)}%`);
+                    if (Number.isFinite(cadenceIrregularLimit)) cadenceParts.push(`limit irregular <=${(cadenceIrregularLimit * 100).toFixed(2)}%`);
+                    if (Number.isFinite(cadenceSevereLimit)) cadenceParts.push(`limit severe <=${(cadenceSevereLimit * 100).toFixed(2)}%`);
+                    if (cadenceParts.length > 0) {
+                        cadenceDetailsText = cadenceParts.join(' | ');
+                    }
+                    if (cadencePass) {
+                        cadenceColor = '#4caf50';
+                        cadenceText = 'GOOD';
+                    } else {
+                        cadenceColor = '#ff6b6b';
+                        const failed = [];
+                        if (
+                            Number.isFinite(cadenceIrregularRate)
+                            && Number.isFinite(cadenceIrregularLimit)
+                            && cadenceIrregularRate > cadenceIrregularLimit
+                        ) {
+                            failed.push(
+                                `irregular ${(cadenceIrregularRate * 100).toFixed(2)}% (limit: <=${(cadenceIrregularLimit * 100).toFixed(2)}%)`
+                            );
+                        }
+                        if (
+                            Number.isFinite(cadenceSevereRate)
+                            && Number.isFinite(cadenceSevereLimit)
+                            && cadenceSevereRate > cadenceSevereLimit
+                        ) {
+                            failed.push(
+                                `severe ${(cadenceSevereRate * 100).toFixed(2)}% (limit: <=${(cadenceSevereLimit * 100).toFixed(2)}%)`
+                            );
+                        }
+                        cadenceText = failed.length > 0 ? `POOR - ${failed[0]}` : 'POOR';
+                    }
+                }
+
                 html += '<div id="summary-section-latency-sync" style="background: #2a2a2a; padding: 1rem; border-radius: 8px; margin-bottom: 1.5rem; border-left: 4px solid #4a90e2;">';
                 html += '<h3 style="margin-top: 0; color: #4a90e2;">Latency & Sync</h3>';
                 html += '<table style="width: 100%; color: #e0e0e0;">';
                 html += `<tr><td>E2E Control Latency (P95):</td><td style="text-align: right; color: ${e2eColor};">${e2eText}</td></tr>`;
                 html += `<tr><td>Sync/Alignment Health:</td><td style="text-align: right; color: ${syncColor};">${syncText}</td></tr>`;
                 html += `<tr><td style="color:#a0a0a0;">Sync Metrics:</td><td style="text-align: right; color: #a0a0a0;">${syncDetailsText}</td></tr>`;
+                html += `<tr><td>Cadence Health:</td><td style="text-align: right; color: ${cadenceColor};">${cadenceText}</td></tr>`;
+                html += `<tr><td style="color:#a0a0a0;">Cadence Metrics:</td><td style="text-align: right; color: #a0a0a0;">${cadenceDetailsText}</td></tr>`;
                 html += '</table>';
                 html += '</div>';
             }
@@ -1872,11 +1928,21 @@ class Visualizer {
                 const preTurnLeadP95 = speedControl.pre_turn_arm_lead_frames_p95 ?? null;
                 const overspeedIntoCurveRate = speedControl.overspeed_into_curve_rate ?? null;
                 const infeasibleWhileCapRate = speedControl.turn_infeasible_rate_when_curve_cap_active ?? null;
+                const capTrackingErrorP95 = speedControl.cap_tracking_error_p95_mps ?? null;
+                const capTrackingErrorMax = speedControl.cap_tracking_error_max_mps ?? null;
+                const capAbove03Rate = speedControl.frames_above_cap_0p3mps_rate ?? null;
+                const capAbove10Rate = speedControl.frames_above_cap_1p0mps_rate ?? null;
+                const capRecoveryP95 = speedControl.cap_recovery_frames_p95 ?? null;
+                const capHardCeilingRate = speedControl.hard_ceiling_applied_rate ?? null;
                 if (speedRmse !== null) {
                     const speedColor = speedRmse > 2.0 ? '#ff6b6b' : '#4caf50';
                     const overspeedCurveColor = overspeedIntoCurveRate !== null && overspeedIntoCurveRate > 10.0 ? '#ff6b6b' : '#4caf50';
                     const infeasibleCapColor = infeasibleWhileCapRate !== null && infeasibleWhileCapRate > 5.0 ? '#ff6b6b' : '#4caf50';
                     const preTurnLeadColor = preTurnLeadP50 !== null && preTurnLeadP50 < 6.0 ? '#ffa500' : '#4caf50';
+                    const capTrackingErrorColor = capTrackingErrorP95 !== null && capTrackingErrorP95 > 0.5 ? '#ff6b6b' : '#4caf50';
+                    const capAbove10Color = capAbove10Rate !== null && capAbove10Rate > 2.0 ? '#ff6b6b' : '#4caf50';
+                    const capRecoveryColor = capRecoveryP95 !== null && capRecoveryP95 > 30.0 ? '#ff6b6b' : '#4caf50';
+                    const capHardCeilingColor = capHardCeilingRate !== null && capHardCeilingRate > 0.5 ? '#ff6b6b' : '#4caf50';
                     html += '<div style="background: #2a2a2a; padding: 1rem; border-radius: 8px; margin-bottom: 1rem;">';
                     html += '<h3 style="margin-top: 0; color: #4a90e2;">Speed Control</h3>';
                     html += '<table style="width: 100%; color: #e0e0e0;">';
@@ -1894,6 +1960,12 @@ class Visualizer {
                     html += `<tr><td>Curve-Cap Active Rate:</td><td style="text-align: right;">${curveCapActiveRate !== null ? curveCapActiveRate.toFixed(1) : '-'}%</td></tr>`;
                     html += `<tr><td>Turn Infeasible While Curve-Cap Active:</td><td style="text-align: right; color: ${infeasibleCapColor};">${withLimitHint(infeasibleWhileCapRate !== null ? infeasibleWhileCapRate.toFixed(1) + '%' : '-', infeasibleCapColor, '<=5%')}</td></tr>`;
                     html += `<tr><td>Pre-turn Arm Lead (P50/P95):</td><td style="text-align: right; color: ${preTurnLeadColor};">${withLimitHint(preTurnLeadP50 !== null && preTurnLeadP95 !== null ? `${preTurnLeadP50.toFixed(1)} / ${preTurnLeadP95.toFixed(1)} frames` : '-', preTurnLeadColor, 'P50>=6 frames')}</td></tr>`;
+                    html += '<tr><td colspan="2" style="padding-top:0.6rem; color:#9fb3c8;">Cap Tracking Health</td></tr>';
+                    html += `<tr><td>Cap Tracking Error P95:</td><td style="text-align: right; color: ${capTrackingErrorColor};">${withLimitHint(capTrackingErrorP95 !== null ? capTrackingErrorP95.toFixed(3) + ' m/s' : '-', capTrackingErrorColor, '<=0.50 m/s')}</td></tr>`;
+                    html += `<tr><td>Cap Tracking Error Max:</td><td style="text-align: right;">${capTrackingErrorMax !== null ? capTrackingErrorMax.toFixed(3) + ' m/s' : '-'}</td></tr>`;
+                    html += `<tr><td>Frames Above Cap (>0.3 / >1.0):</td><td style="text-align: right; color: ${capAbove10Color};">${withLimitHint(capAbove03Rate !== null && capAbove10Rate !== null ? `${capAbove03Rate.toFixed(1)}% / ${capAbove10Rate.toFixed(1)}%` : '-', capAbove10Color, '>1.0 <=2.0%')}</td></tr>`;
+                    html += `<tr><td>Cap Recovery Frames P95:</td><td style="text-align: right; color: ${capRecoveryColor};">${withLimitHint(capRecoveryP95 !== null ? capRecoveryP95.toFixed(1) : '-', capRecoveryColor, '<=30')}</td></tr>`;
+                    html += `<tr><td>Hard Ceiling Applied:</td><td style="text-align: right; color: ${capHardCeilingColor};">${withLimitHint(capHardCeilingRate !== null ? capHardCeilingRate.toFixed(2) + '%' : '-', capHardCeilingColor, '<=0.50%')}</td></tr>`;
                     html += `<tr><td>Speed Limit Missing:</td><td style="text-align: right;">${speedLimitZeroRate !== null ? speedLimitZeroRate.toFixed(1) : '-'}%</td></tr>`;
                     if (surgeCount !== null) {
                         html += `<tr><td>Straight Surge Drops (>=1.0 m/s):</td><td style="text-align: right;">${surgeCount}</td></tr>`;
@@ -1912,6 +1984,9 @@ class Visualizer {
             if (String(hotspotAttribution?.availability || '').toLowerCase() === 'available' && hotspotEntries.length > 0) {
                 const dtNominal = Number(hotspotAttribution.dt_nominal_ms);
                 const dtGapThreshold = Number(hotspotAttribution.dt_gap_threshold_ms);
+                const countsByAttribution = hotspotAttribution.counts_by_attribution || {};
+                const highConfidenceRate = Number(hotspotAttribution.high_confidence_rate);
+                const mismatchRate = Number(hotspotAttribution.commanded_vs_measured_mismatch_rate);
                 const dtInfo = [
                     Number.isFinite(dtNominal) ? `dt nominal ${dtNominal.toFixed(1)} ms` : null,
                     Number.isFinite(dtGapThreshold) ? `gap >= ${dtGapThreshold.toFixed(1)} ms` : null,
@@ -1921,15 +1996,33 @@ class Visualizer {
                 if (dtInfo) {
                     html += `<div style="color:#a0a0a0; font-size:0.85rem; margin-bottom:0.6rem;">${dtInfo}</div>`;
                 }
+                const rollups = [];
+                const countKeys = Object.keys(countsByAttribution).sort();
+                if (countKeys.length > 0) {
+                    rollups.push(countKeys.map((k) => `${k}=${countsByAttribution[k]}`).join(', '));
+                }
+                if (Number.isFinite(highConfidenceRate)) {
+                    rollups.push(`high-confidence ${(highConfidenceRate * 100).toFixed(1)}%`);
+                }
+                if (Number.isFinite(mismatchRate)) {
+                    rollups.push(`cmd-vs-measured mismatch ${(mismatchRate * 100).toFixed(1)}%`);
+                }
+                if (rollups.length > 0) {
+                    html += `<div style="color:#9fb3c8; font-size:0.82rem; margin-bottom:0.4rem;">${this.escapeHtml(rollups.join(' | '))}</div>`;
+                }
+                html += '<div style="color:#a0a0a0; font-size:0.8rem; margin-bottom:0.5rem;">Legend: '
+                    + '<span style="color:#64b5f6;">controller-caused</span> = commanded_longitudinal_step, longitudinal_limiter_transition | '
+                    + '<span style="color:#ff6b6b;">measurement/physics</span> = ground_contact_or_penetration, timestamp_gap_derivative_artifact, physics_or_speed_estimation_spike'
+                    + '</div>';
                 html += '<table style="width: 100%; color: #e0e0e0; font-size:0.85rem;">';
                 html += '<thead><tr style="color:#9fb3c8;">';
                 html += '<th style="text-align:left;">Frame</th>';
                 html += '<th style="text-align:left;">Kind</th>';
                 html += '<th style="text-align:right;">|Metric|</th>';
-                html += '<th style="text-align:right;">Accel</th>';
-                html += '<th style="text-align:right;">Jerk</th>';
+                html += '<th style="text-align:right;">Jerk raw/filt/cmd</th>';
                 html += '<th style="text-align:right;">dt_prev</th>';
-                html += '<th style="text-align:right;">Contact</th>';
+                html += '<th style="text-align:right;">Limiter</th>';
+                html += '<th style="text-align:right;">dt irregular</th>';
                 html += '<th style="text-align:left;">Attribution</th>';
                 html += '<th style="text-align:left;">Action</th>';
                 html += '</tr></thead><tbody>';
@@ -1937,26 +2030,41 @@ class Visualizer {
                     const frame = Number(entry.frame ?? -1);
                     const metric = String(entry.metric || 'n/a');
                     const metricAbs = Number(entry.metric_abs);
-                    const accelVal = Number(entry.accel_mps2);
-                    const jerkVal = Number(entry.jerk_mps3);
+                    const jerkRawVal = Number(entry.jerk_raw_mps3 ?? entry.jerk_mps3);
+                    const jerkFiltVal = Number(entry.jerk_filtered_mps3);
+                    const jerkCmdVal = Number(entry.command_jerk_proxy_mps3);
                     const dtPrev = Number(entry.dt_prev_ms);
-                    const contact = Boolean(entry.chassis_ground_contact);
+                    const limiterActive = Boolean(entry.limiter_active);
+                    const limiterTransition = Boolean(entry.limiter_transition);
+                    const dtIrregular = Boolean(entry.timestamp_irregular_nearby);
                     const attribution = String(entry.attribution || 'unknown');
                     const confidence = String(entry.confidence || 'low');
                     let attrColor = '#e0e0e0';
                     if (attribution === 'ground_contact_or_penetration' || attribution === 'timestamp_gap_derivative_artifact') {
                         attrColor = '#ff6b6b';
+                    } else if (attribution === 'physics_or_speed_estimation_spike') {
+                        attrColor = '#ff6b6b';
+                    } else if (attribution === 'longitudinal_limiter_transition') {
+                        attrColor = '#ffa500';
+                    } else if (attribution === 'commanded_longitudinal_step') {
+                        attrColor = '#64b5f6';
                     } else if (attribution === 'longitudinal_limiter_active') {
                         attrColor = '#ffa500';
                     }
+                    const jerkTriplet = [
+                        Number.isFinite(jerkRawVal) ? jerkRawVal.toFixed(2) : '-',
+                        Number.isFinite(jerkFiltVal) ? jerkFiltVal.toFixed(2) : '-',
+                        Number.isFinite(jerkCmdVal) ? jerkCmdVal.toFixed(2) : '-',
+                    ].join(' / ');
+                    const limiterText = `${limiterActive ? 'Y' : 'N'} / ${limiterTransition ? 'Y' : 'N'}`;
                     html += '<tr style="border-top:1px solid #3a3a3a;">';
                     html += `<td>${Number.isFinite(frame) ? frame : '-'}</td>`;
                     html += `<td>${this.escapeHtml(metric)}</td>`;
                     html += `<td style="text-align:right;">${Number.isFinite(metricAbs) ? metricAbs.toFixed(2) : '-'}</td>`;
-                    html += `<td style="text-align:right;">${Number.isFinite(accelVal) ? accelVal.toFixed(2) : '-'}</td>`;
-                    html += `<td style="text-align:right;">${Number.isFinite(jerkVal) ? jerkVal.toFixed(2) : '-'}</td>`;
+                    html += `<td style="text-align:right;">${jerkTriplet}</td>`;
                     html += `<td style="text-align:right;">${Number.isFinite(dtPrev) ? dtPrev.toFixed(1) + ' ms' : '-'}</td>`;
-                    html += `<td style="text-align:right; color:${contact ? '#ff6b6b' : '#4caf50'};">${contact ? 'YES' : 'NO'}</td>`;
+                    html += `<td style="text-align:right; color:${limiterTransition ? '#ffa500' : (limiterActive ? '#4caf50' : '#a0a0a0')};">${limiterText}</td>`;
+                    html += `<td style="text-align:right; color:${dtIrregular ? '#ff6b6b' : '#4caf50'};">${dtIrregular ? 'YES' : 'NO'}</td>`;
                     html += `<td style="color:${attrColor};">${this.escapeHtml(attribution)} <span style="color:#7f8c98;">(${this.escapeHtml(confidence)})</span></td>`;
                     if (Number.isFinite(frame) && frame >= 0) {
                         html += `<td><button style="padding:0.2rem 0.55rem; background:#4a90e2; color:white; border:none; border-radius:4px; cursor:pointer;" onclick="window.visualizer.jumpToFrame(${frame})">Jump</button></td>`;
@@ -3298,6 +3406,59 @@ class Visualizer {
                     html += '<strong style="color: #4a90e2;">Longitudinal Jerk Hotspots</strong><br/>';
                     html += '<div style="color: #4caf50; font-size: 0.9rem;">No significant hotspots detected.</div>';
                     html += '</div>';
+                }
+
+                const canonicalHotspot = summaryPayload?.comfort?.hotspot_attribution || null;
+                const canonicalEntries = Array.isArray(canonicalHotspot?.entries) ? canonicalHotspot.entries : [];
+                if (String(canonicalHotspot?.availability || '').toLowerCase() === 'available' && canonicalEntries.length > 0) {
+                    const rollups = [];
+                    const countsByAttribution = canonicalHotspot.counts_by_attribution || {};
+                    const countKeys = Object.keys(countsByAttribution).sort();
+                    if (countKeys.length > 0) {
+                        rollups.push(countKeys.map((k) => `${k}=${countsByAttribution[k]}`).join(', '));
+                    }
+                    const highConf = Number(canonicalHotspot.high_confidence_rate);
+                    if (Number.isFinite(highConf)) {
+                        rollups.push(`high-confidence ${(highConf * 100).toFixed(1)}%`);
+                    }
+                    html += '<div id="diag-focus-control-hotspots-canonical" style="background: #1a1a1a; padding: 0.75rem; border-radius: 4px; border-left: 3px solid #4a90e2; margin-top: 1rem;">';
+                    html += `<strong style="color: #4a90e2;">Canonical Longitudinal Hotspot Attribution</strong>${focusChip('diag-focus-control-hotspots-canonical')}<br/>`;
+                    html += '<div style="color: #888; font-size: 0.85rem; margin-bottom: 0.45rem;">From summary contract (same source as CLI analyzer).</div>';
+                    if (rollups.length > 0) {
+                        html += `<div style="color:#9fb3c8; font-size:0.82rem; margin-bottom:0.45rem;">${this.escapeHtml(rollups.join(' | '))}</div>`;
+                    }
+                    html += '<div style="color:#a0a0a0; font-size:0.8rem; margin-bottom:0.45rem;">Legend: '
+                        + '<span style="color:#64b5f6;">controller-caused</span> = commanded_longitudinal_step, longitudinal_limiter_transition | '
+                        + '<span style="color:#ff6b6b;">measurement/physics</span> = ground_contact_or_penetration, timestamp_gap_derivative_artifact, physics_or_speed_estimation_spike'
+                        + '</div>';
+                    html += '<div style="display: flex; flex-direction: column; gap: 0.5rem;">';
+                    canonicalEntries.slice(0, 8).forEach((spot) => {
+                        const attr = String(spot.attribution || 'unknown');
+                        const conf = String(spot.confidence || 'low');
+                        const rawJerk = fmtOpt(spot.jerk_raw_mps3 ?? spot.jerk_mps3, 2);
+                        const filtJerk = fmtOpt(spot.jerk_filtered_mps3, 2);
+                        const cmdJerk = fmtOpt(spot.command_jerk_proxy_mps3, 2);
+                        const limActive = Boolean(spot.limiter_active);
+                        const limTransition = Boolean(spot.limiter_transition);
+                        const dtIrregular = Boolean(spot.timestamp_irregular_nearby);
+                        let attrColor = '#e0e0e0';
+                        if (attr === 'ground_contact_or_penetration' || attr === 'timestamp_gap_derivative_artifact' || attr === 'physics_or_speed_estimation_spike') {
+                            attrColor = '#ff6b6b';
+                        } else if (attr === 'longitudinal_limiter_transition') {
+                            attrColor = '#ffa500';
+                        } else if (attr === 'commanded_longitudinal_step') {
+                            attrColor = '#64b5f6';
+                        }
+                        html += '<div style="display: flex; justify-content: space-between; align-items: center; padding: 0.5rem; background: #2a2a2a; border-radius: 6px;">';
+                        html += '<div style="color: #e0e0e0; font-size: 0.9rem;">';
+                        html += `<strong>Frame ${spot.frame}</strong> · kind=${this.escapeHtml(String(spot.metric || '-'))} · |metric|=${Number(spot.metric_abs || 0).toFixed(2)}<br/>`;
+                        html += `jerk raw/filt/cmd=${rawJerk}/${filtJerk}/${cmdJerk} · dt_prev=${fmtOpt(spot.dt_prev_ms, 1)} ms · limiter=${limActive ? 'Y' : 'N'}/${limTransition ? 'Y' : 'N'} · dt_irregular=${dtIrregular ? 'Y' : 'N'}<br/>`;
+                        html += `<span style="color:${attrColor};">${this.escapeHtml(attr)}</span> <span style="color:#7f8c98;">(${this.escapeHtml(conf)})</span>`;
+                        html += '</div>';
+                        html += `<button style="padding: 0.25rem 0.75rem; background: #4a90e2; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 0.85rem;" onclick="window.visualizer.jumpToFrame(${spot.frame})">Jump →</button>`;
+                        html += '</div>';
+                    });
+                    html += '</div></div>';
                 }
 
                 if (ctrl.steering_limiter_hotspots && ctrl.steering_limiter_hotspots.length > 0) {
@@ -8629,30 +8790,6 @@ class Visualizer {
                 html += `</div>`;
             }
 
-            const canonicalHotspot = summaryPayload?.comfort?.hotspot_attribution || null;
-            const canonicalEntries = Array.isArray(canonicalHotspot?.entries) ? canonicalHotspot.entries : [];
-            if (String(canonicalHotspot?.availability || '').toLowerCase() === 'available' && canonicalEntries.length > 0) {
-                html += '<div id="diag-focus-control-hotspots-canonical" style="background: #1a1a1a; padding: 0.75rem; border-radius: 4px; border-left: 3px solid #4a90e2; margin-top: 1rem;">';
-                html += `<strong style="color: #4a90e2;">Canonical Longitudinal Hotspot Attribution</strong>${focusChip('diag-focus-control-hotspots-canonical')}<br/>`;
-                html += '<div style="color: #888; font-size: 0.85rem; margin-bottom: 0.5rem;">From summary contract (same source as CLI analyzer).</div>';
-                html += '<div style="display: flex; flex-direction: column; gap: 0.5rem;">';
-                canonicalEntries.slice(0, 8).forEach((spot) => {
-                    const attr = String(spot.attribution || 'unknown');
-                    const conf = String(spot.confidence || 'low');
-                    let attrColor = '#e0e0e0';
-                    if (attr === 'ground_contact_or_penetration' || attr === 'timestamp_gap_derivative_artifact') attrColor = '#ff6b6b';
-                    else if (attr === 'longitudinal_limiter_active') attrColor = '#ffa500';
-                    html += '<div style="display: flex; justify-content: space-between; align-items: center; padding: 0.5rem; background: #2a2a2a; border-radius: 6px;">';
-                    html += '<div style="color: #e0e0e0; font-size: 0.9rem;">';
-                    html += `<strong>Frame ${spot.frame}</strong> · kind=${this.escapeHtml(String(spot.metric || '-'))} · |metric|=${Number(spot.metric_abs || 0).toFixed(2)} · accel=${fmtOpt(spot.accel_mps2, 2)} · jerk=${fmtOpt(spot.jerk_mps3, 2)}<br/>`;
-                    html += `dt_prev=${fmtOpt(spot.dt_prev_ms, 1)} ms · contact=${spot.chassis_ground_contact ? 'YES' : 'NO'} · <span style="color:${attrColor};">${this.escapeHtml(attr)}</span> <span style="color:#7f8c98;">(${this.escapeHtml(conf)})</span>`;
-                    html += '</div>';
-                    html += `<button style="padding: 0.25rem 0.75rem; background: #4a90e2; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 0.85rem;" onclick="window.visualizer.jumpToFrame(${spot.frame})">Jump →</button>`;
-                    html += '</div>';
-                });
-                html += '</div></div>';
-            }
-            
             html += `<div style="margin-bottom: 1rem; padding: 0.75rem; background: #2a2a2a; border-radius: 4px; border-left: 3px solid #ffa500;">`;
             html += `<strong style="color: #ffa500;">🔄 RE-RUN (Current Code):</strong><br/>`;
             html += `<span style="font-size: 0.9rem;">Lanes Detected: <strong>${analysis.num_lanes_detected || 0}</strong></span>`;

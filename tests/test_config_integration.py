@@ -44,7 +44,10 @@ class TestConfigParameterFlow:
                         'straight_curvature_threshold': 0.012,
                         'steering_rate_curvature_min': 0.006,
                         'steering_rate_curvature_max': 0.02,
-                        'steering_rate_scale_min': 0.55
+                        'steering_rate_scale_min': 0.55,
+                        'steering_rate_limit_transition_enabled': True,
+                        'steering_rate_limit_transition_alpha': 0.35,
+                        'steering_rate_limit_transition_hysteresis': 0.01,
                     }
                 }
             }
@@ -80,6 +83,9 @@ class TestConfigParameterFlow:
             assert lateral_ctrl.steering_rate_curvature_min == 0.006
             assert lateral_ctrl.steering_rate_curvature_max == 0.02
             assert lateral_ctrl.steering_rate_scale_min == 0.55
+            assert lateral_ctrl.steering_rate_limit_transition_enabled is True
+            assert lateral_ctrl.steering_rate_limit_transition_alpha == 0.35
+            assert lateral_ctrl.steering_rate_limit_transition_hysteresis == 0.01
         finally:
             Path(config_path).unlink()
     
@@ -96,7 +102,11 @@ class TestConfigParameterFlow:
                         'max_speed': 12.0,
                         'throttle_rate_limit': 0.06,
                         'brake_rate_limit': 0.12,
-                        'throttle_smoothing_alpha': 0.55
+                        'throttle_smoothing_alpha': 0.55,
+                        'limiter_transition_enabled': True,
+                        'limiter_transition_hold_frames': 5,
+                        'limiter_transition_smoothing_alpha': 0.4,
+                        'limiter_transition_hysteresis': 0.08,
                     }
                 }
             }
@@ -116,6 +126,10 @@ class TestConfigParameterFlow:
             assert long_ctrl.throttle_rate_limit == 0.06
             assert long_ctrl.brake_rate_limit == 0.12
             assert long_ctrl.throttle_smoothing_alpha == 0.55
+            assert long_ctrl.limiter_transition_enabled is True
+            assert long_ctrl.limiter_transition_hold_frames == 5
+            assert long_ctrl.limiter_transition_smoothing_alpha == 0.4
+            assert long_ctrl.limiter_transition_hysteresis == 0.08
             # Note: max_speed is set in VehicleController, not LongitudinalController
             # The safety config max_speed is used in _process_frame, not in controller
             assert long_ctrl.pid_throttle.kp == 0.4
@@ -158,6 +172,51 @@ class TestConfigParameterFlow:
             assert planner.camera_fov == 70.0
             assert planner.camera_height == 0.6
             assert planner.bias_correction_threshold == 15.0
+        finally:
+            Path(config_path).unlink()
+
+    def test_speed_planner_cap_tracking_params_flow(self):
+        """Cap-tracking planner params should flow from config into speed planner config."""
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
+            config_data = {
+                'trajectory': {
+                    'speed_governor': {
+                        'curve_cap_enabled': True,
+                        'curve_cap_shadow_mode': False,
+                    },
+                    'speed_planner': {
+                        'enabled': True,
+                        'cap_tracking_enabled': True,
+                        'cap_tracking_error_on_mps': 0.42,
+                        'cap_tracking_error_off_mps': 0.11,
+                        'cap_tracking_hold_frames': 6,
+                        'cap_tracking_decel_gain': 2.4,
+                        'cap_tracking_jerk_gain': 1.6,
+                        'cap_tracking_max_decel_mps2': 3.8,
+                        'cap_tracking_max_jerk_mps3': 3.2,
+                        'cap_tracking_hard_ceiling_epsilon_mps': 0.07,
+                    },
+                }
+            }
+            yaml.dump(config_data, f)
+            config_path = f.name
+
+        try:
+            av_stack = AVStack(
+                bridge_url="http://localhost:8000",
+                record_data=False,
+                config_path=config_path
+            )
+            planner_cfg = av_stack.speed_governor.speed_planner.config
+            assert planner_cfg.cap_tracking_enabled is True
+            assert planner_cfg.cap_tracking_error_on_mps == pytest.approx(0.42, rel=1e-6)
+            assert planner_cfg.cap_tracking_error_off_mps == pytest.approx(0.11, rel=1e-6)
+            assert planner_cfg.cap_tracking_hold_frames == 6
+            assert planner_cfg.cap_tracking_decel_gain == pytest.approx(2.4, rel=1e-6)
+            assert planner_cfg.cap_tracking_jerk_gain == pytest.approx(1.6, rel=1e-6)
+            assert planner_cfg.cap_tracking_max_decel_mps2 == pytest.approx(3.8, rel=1e-6)
+            assert planner_cfg.cap_tracking_max_jerk_mps3 == pytest.approx(3.2, rel=1e-6)
+            assert planner_cfg.cap_tracking_hard_ceiling_epsilon_mps == pytest.approx(0.07, rel=1e-6)
         finally:
             Path(config_path).unlink()
     
@@ -246,4 +305,3 @@ class TestConfigDefaults:
 
 if __name__ == '__main__':
     pytest.main([__file__, '-v'])
-

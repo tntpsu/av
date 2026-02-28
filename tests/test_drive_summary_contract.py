@@ -55,11 +55,19 @@ def test_drive_summary_contract_keys(tmp_path: Path) -> None:
     assert expected_top_level_keys.issubset(summary.keys())
     assert summary["summary_schema_version"] == "v1"
     latency_sync = summary.get("latency_sync", {})
-    assert {"schema_version", "e2e", "sync_alignment", "overall"}.issubset(latency_sync.keys())
+    assert {"schema_version", "e2e", "sync_alignment", "cadence", "overall"}.issubset(latency_sync.keys())
+    cadence = latency_sync.get("cadence", {})
+    assert {"availability", "status", "stats_ms", "limits", "pass"}.issubset(cadence.keys())
     chassis_ground = summary.get("chassis_ground", {})
     assert {"schema_version", "availability", "health", "limits"}.issubset(chassis_ground.keys())
     comfort = summary.get("comfort", {})
     assert {"metric_roles", "hotspot_attribution"}.issubset(comfort.keys())
+    hotspot = comfort.get("hotspot_attribution", {})
+    assert {
+        "counts_by_attribution",
+        "high_confidence_rate",
+        "commanded_vs_measured_mismatch_rate",
+    }.issubset(hotspot.keys())
     speed_control = summary.get("speed_control", {})
     assert {
         "curve_cap_active_rate",
@@ -67,4 +75,8 @@ def test_drive_summary_contract_keys(tmp_path: Path) -> None:
         "pre_turn_arm_lead_frames_p95",
         "overspeed_into_curve_rate",
         "turn_infeasible_rate_when_curve_cap_active",
+        "cap_tracking_error_p95_mps",
+        "frames_above_cap_1p0mps_rate",
+        "cap_recovery_frames_p95",
+        "hard_ceiling_applied_rate",
     }.issubset(speed_control.keys())

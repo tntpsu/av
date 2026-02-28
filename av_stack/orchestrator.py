@@ -356,6 +356,18 @@ class AVStack:
             longitudinal_low_speed_speed_threshold=float(
                 longitudinal_cfg.get('low_speed_speed_threshold', 0.0)
             ),
+            longitudinal_limiter_transition_enabled=bool(
+                longitudinal_cfg.get('limiter_transition_enabled', False)
+            ),
+            longitudinal_limiter_transition_hold_frames=int(
+                longitudinal_cfg.get('limiter_transition_hold_frames', 3)
+            ),
+            longitudinal_limiter_transition_smoothing_alpha=float(
+                longitudinal_cfg.get('limiter_transition_smoothing_alpha', 0.25)
+            ),
+            longitudinal_limiter_transition_hysteresis=float(
+                longitudinal_cfg.get('limiter_transition_hysteresis', 0.05)
+            ),
             max_steering=lateral_cfg.get('max_steering', 0.5),
             lateral_deadband=lateral_cfg.get('deadband', 0.02),
             lateral_heading_weight=lateral_cfg.get('heading_weight', 0.5),
@@ -418,6 +430,15 @@ class AVStack:
             steering_rate_curvature_min=lateral_cfg.get('steering_rate_curvature_min', 0.005),
             steering_rate_curvature_max=lateral_cfg.get('steering_rate_curvature_max', 0.03),
             steering_rate_scale_min=lateral_cfg.get('steering_rate_scale_min', 0.5),
+            steering_rate_limit_transition_enabled=bool(
+                lateral_cfg.get('steering_rate_limit_transition_enabled', False)
+            ),
+            steering_rate_limit_transition_alpha=float(
+                lateral_cfg.get('steering_rate_limit_transition_alpha', 0.25)
+            ),
+            steering_rate_limit_transition_hysteresis=float(
+                lateral_cfg.get('steering_rate_limit_transition_hysteresis', 0.005)
+            ),
             curve_rate_floor_moderate_error=lateral_cfg.get('curve_rate_floor_moderate_error', 0.20),
             curve_rate_floor_large_error=lateral_cfg.get('curve_rate_floor_large_error', 0.24),
             straight_sign_flip_error_threshold=lateral_cfg.get('straight_sign_flip_error_threshold', 0.02),
@@ -3780,6 +3801,13 @@ class AVStack:
             'curve_cap_reason': gov_output.curve_cap_reason,
             'curve_cap_margin_mps': gov_output.curve_cap_margin_mps,
             'curve_cap_shadow_mode': bool(self.speed_governor.config.curve_cap_shadow_mode),
+            'speed_governor_active_limiter_code': gov_output.active_limiter_code,
+            'speed_governor_cap_tracking_active': gov_output.cap_tracking_active,
+            'speed_governor_cap_tracking_error_mps': gov_output.cap_tracking_error_mps,
+            'speed_governor_cap_tracking_mode': gov_output.cap_tracking_mode,
+            'speed_governor_cap_tracking_mode_code': gov_output.cap_tracking_mode_code,
+            'speed_governor_cap_tracking_recovery_frames': gov_output.cap_tracking_recovery_frames,
+            'speed_governor_cap_tracking_hard_ceiling_applied': gov_output.cap_tracking_hard_ceiling_applied,
         }
 
     def _pf_plan_trajectory(self, pr: dict, gated: dict, gov: dict, vehicle_state_dict: dict, timestamp: float) -> dict:
@@ -3983,6 +4011,27 @@ class AVStack:
         curve_cap_reason = str(gov.get('curve_cap_reason', 'inactive') or 'inactive')
         curve_cap_margin_mps = float(gov.get('curve_cap_margin_mps', 0.0) or 0.0)
         curve_cap_shadow_mode = bool(gov.get('curve_cap_shadow_mode', True))
+        speed_governor_active_limiter_code = int(
+            gov.get('speed_governor_active_limiter_code', 0) or 0
+        )
+        speed_governor_cap_tracking_active = bool(
+            gov.get('speed_governor_cap_tracking_active', False)
+        )
+        speed_governor_cap_tracking_error_mps = float(
+            gov.get('speed_governor_cap_tracking_error_mps', 0.0) or 0.0
+        )
+        speed_governor_cap_tracking_mode = str(
+            gov.get('speed_governor_cap_tracking_mode', 'inactive') or 'inactive'
+        )
+        speed_governor_cap_tracking_mode_code = int(
+            gov.get('speed_governor_cap_tracking_mode_code', 0) or 0
+        )
+        speed_governor_cap_tracking_recovery_frames = int(
+            gov.get('speed_governor_cap_tracking_recovery_frames', 0) or 0
+        )
+        speed_governor_cap_tracking_hard_ceiling_applied = bool(
+            gov.get('speed_governor_cap_tracking_hard_ceiling_applied', False)
+        )
         teleport_guard_active = fv['teleport_guard_active']
         base_speed = float(self.original_target_speed)
         target_speed_planned = gov_output.planned_speed
@@ -4082,6 +4131,9 @@ class AVStack:
                 control_command['target_speed_slew_active'] = target_speed_slew_active
                 control_command['target_speed_ramp_active'] = target_speed_ramp_active
                 control_command['speed_governor_active_limiter'] = gov_output.active_limiter
+                control_command['speed_governor_active_limiter_code'] = (
+                    speed_governor_active_limiter_code
+                )
                 control_command['speed_governor_comfort_speed'] = gov_output.comfort_speed if gov_output.comfort_speed < 1e6 else -1.0
                 control_command['speed_governor_preview_speed'] = gov_output.preview_speed if gov_output.preview_speed is not None else -1.0
                 control_command['speed_governor_horizon_speed'] = gov_output.horizon_speed if gov_output.horizon_speed is not None else -1.0
@@ -4092,6 +4144,24 @@ class AVStack:
                 control_command['speed_governor_curve_cap_reason'] = str(curve_cap_reason)
                 control_command['speed_governor_curve_cap_margin_mps'] = float(curve_cap_margin_mps)
                 control_command['speed_governor_curve_cap_shadow_mode'] = bool(curve_cap_shadow_mode)
+                control_command['speed_governor_cap_tracking_active'] = bool(
+                    speed_governor_cap_tracking_active
+                )
+                control_command['speed_governor_cap_tracking_error_mps'] = float(
+                    speed_governor_cap_tracking_error_mps
+                )
+                control_command['speed_governor_cap_tracking_mode'] = str(
+                    speed_governor_cap_tracking_mode
+                )
+                control_command['speed_governor_cap_tracking_mode_code'] = int(
+                    speed_governor_cap_tracking_mode_code
+                )
+                control_command['speed_governor_cap_tracking_recovery_frames'] = int(
+                    speed_governor_cap_tracking_recovery_frames
+                )
+                control_command['speed_governor_cap_tracking_hard_ceiling_applied'] = bool(
+                    speed_governor_cap_tracking_hard_ceiling_applied
+                )
                 control_command['curve_intent_speed_guardrail_active'] = bool(
                     curve_intent_speed_guardrail_active
                 )
@@ -5562,6 +5632,14 @@ class AVStack:
             brake_feedforward=control_command.get('brake_feedforward'),
             longitudinal_accel_capped=bool(control_command.get('longitudinal_accel_capped', False)),
             longitudinal_jerk_capped=bool(control_command.get('longitudinal_jerk_capped', False)),
+            longitudinal_limiter_transition_active=bool(
+                control_command.get('longitudinal_limiter_transition_active', False)
+            ),
+            longitudinal_limiter_state_code=control_command.get('longitudinal_limiter_state_code'),
+            longitudinal_accel_cmd_raw=control_command.get('longitudinal_accel_cmd_raw'),
+            longitudinal_accel_cmd_smoothed=control_command.get(
+                'longitudinal_accel_cmd_smoothed'
+            ),
             pid_integral=control_command.get('pid_integral'),
             pid_derivative=control_command.get('pid_derivative'),
             pid_error=control_command.get('total_error'),  # Total error before PID
@@ -5698,6 +5776,9 @@ class AVStack:
             target_speed_slew_active=bool(control_command.get('target_speed_slew_active', False)),
             target_speed_ramp_active=bool(control_command.get('target_speed_ramp_active', False)),
             speed_governor_active_limiter=control_command.get('speed_governor_active_limiter', 'none'),
+            speed_governor_active_limiter_code=control_command.get(
+                'speed_governor_active_limiter_code', 0
+            ),
             speed_governor_comfort_speed=control_command.get('speed_governor_comfort_speed'),
             speed_governor_preview_speed=control_command.get('speed_governor_preview_speed'),
             speed_governor_horizon_speed=control_command.get('speed_governor_horizon_speed'),
@@ -5715,6 +5796,24 @@ class AVStack:
             ),
             speed_governor_curve_cap_shadow_mode=control_command.get(
                 'speed_governor_curve_cap_shadow_mode'
+            ),
+            speed_governor_cap_tracking_active=bool(
+                control_command.get('speed_governor_cap_tracking_active', False)
+            ),
+            speed_governor_cap_tracking_error_mps=control_command.get(
+                'speed_governor_cap_tracking_error_mps'
+            ),
+            speed_governor_cap_tracking_mode=control_command.get(
+                'speed_governor_cap_tracking_mode', 'inactive'
+            ),
+            speed_governor_cap_tracking_mode_code=control_command.get(
+                'speed_governor_cap_tracking_mode_code', 0
+            ),
+            speed_governor_cap_tracking_recovery_frames=control_command.get(
+                'speed_governor_cap_tracking_recovery_frames', 0
+            ),
+            speed_governor_cap_tracking_hard_ceiling_applied=bool(
+                control_command.get('speed_governor_cap_tracking_hard_ceiling_applied', False)
             ),
             launch_throttle_cap=control_command.get('launch_throttle_cap'),
             launch_throttle_cap_active=bool(control_command.get('launch_throttle_cap_active', False)),
@@ -5743,6 +5842,15 @@ class AVStack:
             steering_rate_limit_after_curve=control_command.get('steering_rate_limit_after_curve'),
             steering_rate_limit_after_floor=control_command.get('steering_rate_limit_after_floor'),
             steering_rate_limit_effective=control_command.get('steering_rate_limit_effective'),
+            steering_rate_limit_effective_raw=control_command.get(
+                'steering_rate_limit_effective_raw'
+            ),
+            steering_rate_limit_effective_smoothed=control_command.get(
+                'steering_rate_limit_effective_smoothed'
+            ),
+            steering_rate_limit_transition_active=bool(
+                control_command.get('steering_rate_limit_transition_active', False)
+            ),
             steering_rate_limit_requested_delta=control_command.get('steering_rate_limit_requested_delta'),
             steering_rate_limit_margin=control_command.get('steering_rate_limit_margin'),
             steering_rate_limit_unlock_delta_needed=control_command.get('steering_rate_limit_unlock_delta_needed'),

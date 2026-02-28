@@ -12,9 +12,14 @@ def _write_latency_recording(
     include_e2e: bool,
     traj_offset_s: float,
     control_offset_s: float,
+    irregular_indices: tuple[int, ...] = (),
+    irregular_gap_s: float = 0.22,
 ) -> None:
     n = 40
     t = np.linspace(0.0, 3.9, n, dtype=np.float64)
+    for idx in irregular_indices:
+        if 0 < idx < n:
+            t[idx:] += float(irregular_gap_s)
     zeros = np.zeros(n, dtype=np.float32)
 
     with h5py.File(path, "w") as f:
@@ -56,6 +61,9 @@ def test_latency_sync_available_and_passing(tmp_path: Path) -> None:
     assert latency_sync["e2e"]["pass"] is True
     assert latency_sync["sync_alignment"]["availability"] == "available"
     assert latency_sync["sync_alignment"]["pass"] is True
+    assert latency_sync["cadence"]["availability"] == "available"
+    assert latency_sync["cadence"]["pass"] is True
+    assert latency_sync["cadence"]["status"] == "good"
     assert latency_sync["overall"]["status"] == "good"
 
 
@@ -73,6 +81,7 @@ def test_latency_sync_legacy_e2e_unavailable(tmp_path: Path) -> None:
     assert latency_sync["e2e"]["availability"] == "unavailable"
     assert latency_sync["e2e"]["pass"] is None
     assert latency_sync["sync_alignment"]["availability"] == "available"
+    assert latency_sync["cadence"]["availability"] == "available"
 
 
 def test_latency_sync_detects_alignment_failure(tmp_path: Path) -> None:
@@ -89,3 +98,25 @@ def test_latency_sync_detects_alignment_failure(tmp_path: Path) -> None:
     assert latency_sync["sync_alignment"]["pass"] is False
     assert latency_sync["overall"]["status"] == "poor"
     assert latency_sync["overall"]["issues"]
+
+
+def test_latency_sync_detects_cadence_failure(tmp_path: Path) -> None:
+    recording = tmp_path / "latency_sync_cadence_fail.h5"
+    _write_latency_recording(
+        recording,
+        include_e2e=True,
+        traj_offset_s=0.004,
+        control_offset_s=0.004,
+        irregular_indices=(6, 12, 18, 24, 30),
+        irregular_gap_s=0.22,
+    )
+
+    summary = analyze_recording_summary(recording)
+    latency_sync = summary["latency_sync"]
+    cadence = latency_sync["cadence"]
+    assert cadence["availability"] == "available"
+    assert cadence["pass"] is False
+    assert cadence["status"] == "poor"
+    assert "irregular_rate_max" in cadence["limits"]
+    assert "severe_irregular_rate_max" in cadence["limits"]
+    assert latency_sync["overall"]["status"] == "poor"

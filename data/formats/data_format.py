@@ -170,6 +170,10 @@ class ControlCommand:
     brake_feedforward: Optional[float] = None
     longitudinal_accel_capped: bool = False
     longitudinal_jerk_capped: bool = False
+    longitudinal_limiter_transition_active: bool = False
+    longitudinal_limiter_state_code: Optional[float] = None
+    longitudinal_accel_cmd_raw: Optional[float] = None
+    longitudinal_accel_cmd_smoothed: Optional[float] = None
     # PID internal state
     pid_integral: Optional[float] = None  # Lateral PID integral term
     pid_derivative: Optional[float] = None  # Lateral PID derivative term
@@ -262,6 +266,7 @@ class ControlCommand:
     target_speed_ramp_active: bool = False
     # Speed governor diagnostics
     speed_governor_active_limiter: str = "none"
+    speed_governor_active_limiter_code: int = 0
     speed_governor_comfort_speed: Optional[float] = None
     speed_governor_preview_speed: Optional[float] = None
     speed_governor_horizon_speed: Optional[float] = None
@@ -270,6 +275,12 @@ class ControlCommand:
     speed_governor_curve_cap_reason: Optional[str] = None
     speed_governor_curve_cap_margin_mps: Optional[float] = None
     speed_governor_curve_cap_shadow_mode: Optional[bool] = None
+    speed_governor_cap_tracking_active: bool = False
+    speed_governor_cap_tracking_error_mps: Optional[float] = None
+    speed_governor_cap_tracking_mode: str = "inactive"
+    speed_governor_cap_tracking_mode_code: int = 0
+    speed_governor_cap_tracking_recovery_frames: int = 0
+    speed_governor_cap_tracking_hard_ceiling_applied: bool = False
     # Launch throttle ramp diagnostics
     launch_throttle_cap: Optional[float] = None
     launch_throttle_cap_active: bool = False
@@ -299,6 +310,9 @@ class ControlCommand:
     steering_rate_limit_after_curve: Optional[float] = None
     steering_rate_limit_after_floor: Optional[float] = None
     steering_rate_limit_effective: Optional[float] = None
+    steering_rate_limit_effective_raw: Optional[float] = None
+    steering_rate_limit_effective_smoothed: Optional[float] = None
+    steering_rate_limit_transition_active: bool = False
     steering_rate_limit_requested_delta: Optional[float] = None
     steering_rate_limit_margin: Optional[float] = None
     steering_rate_limit_unlock_delta_needed: Optional[float] = None

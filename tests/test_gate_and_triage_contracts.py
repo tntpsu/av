@@ -42,6 +42,15 @@ def _write_minimal_recording(path: Path, emergency_stop: bool = False, out_of_la
         f.create_dataset("control/emergency_stop", data=e_stop)
         f.create_dataset("ground_truth/left_lane_line_x", data=left)
         f.create_dataset("ground_truth/right_lane_line_x", data=right)
+        metadata = {
+            "recording_provenance": {
+                "track_id": "s_loop",
+                "start_t": 0.0,
+                "git_sha_short": "unit",
+                "policy_profile": "seg_default",
+            }
+        }
+        f.attrs["metadata"] = json.dumps(metadata)
 
 
 def test_extract_run_metrics_flags_low_fps_as_invalid(tmp_path: Path) -> None:
@@ -112,7 +121,13 @@ def test_evaluate_gate_fails_when_any_run_invalid_sampling() -> None:
             "highway_lateral_p95_max_delta_m": 0.02,
             "sloop_first_300_p99_min_improvement_m": 0.03,
             "sloop_lateral_p95_max_delta_m": 0.0,
+            "cap_tracking_frames_above_cap_1p0mps_rate_max_pct": 2.0,
+            "cap_tracking_error_p95_max_mps": 0.5,
+            "cap_tracking_recovery_frames_p95_max": 30.0,
+            "cap_tracking_hard_ceiling_applied_rate_max_pct": 0.5,
         },
+        diagnostics_preflight={"available": True},
+        mode="quick",
     )
     assert result["checks"]["run_validity_pass"] is False
     assert result["pass_fail"] is False
@@ -123,6 +138,73 @@ def test_matrix_hash_is_deterministic() -> None:
     h1 = gate_triage.compute_matrix_hash(payload)
     h2 = gate_triage.compute_matrix_hash(payload)
     assert h1 == h2
+
+
+def test_matrix_hash_changes_when_av_start_t_changes() -> None:
+    p0 = {"mode": "quick", "recording_ids": ["a.h5"], "av_start_t": 0.0}
+    p1 = {"mode": "quick", "recording_ids": ["a.h5"], "av_start_t": 1.0}
+    assert gate_triage.compute_matrix_hash(p0) != gate_triage.compute_matrix_hash(p1)
+
+
+def test_validate_generated_recording_provenance_rejects_mismatch(tmp_path: Path) -> None:
+    rec = tmp_path / "bad_provenance.h5"
+    _write_minimal_recording(rec)
+    with h5py.File(rec, "a") as f:
+        meta = json.loads(f.attrs["metadata"])
+        meta["recording_provenance"]["track_id"] = "wrong_track"
+        f.attrs["metadata"] = json.dumps(meta)
+    try:
+        gate_triage._validate_generated_recording_provenance(
+            rec,
+            expected_track_id="s_loop",
+            expected_start_t=0.0,
+        )
+    except RuntimeError as exc:
+        assert "track mismatch" in str(exc)
+    else:
+        raise AssertionError("expected provenance validation failure")
+
+
+def test_execute_gate_runs_sets_av_start_t_env(monkeypatch, tmp_path: Path) -> None:
+    track = tmp_path / "s_loop.yml"
+    track.write_text("name: s_loop\n")
+    rec = tmp_path / "recording.h5"
+    _write_minimal_recording(rec)
+    calls = {"subprocess": None, "validated": False}
+    latest_seq = [None, rec]
+
+    def fake_latest():
+        if latest_seq:
+            return latest_seq.pop(0)
+        return rec
+
+    def fake_run(cmd, cwd, env, capture_output, text, check):
+        calls["subprocess"] = {"cmd": cmd, "cwd": cwd, "env": env}
+        class R:
+            returncode = 0
+            stderr = ""
+        return R()
+
+    def fake_validate(recording_path, *, expected_track_id, expected_start_t):
+        calls["validated"] = True
+        assert recording_path == rec
+        assert expected_track_id == "s_loop"
+        assert abs(expected_start_t - 1.25) < 1e-9
+
+    monkeypatch.setattr(gate_triage, "_latest_recording", fake_latest)
+    monkeypatch.setattr(gate_triage.subprocess, "run", fake_run)
+    monkeypatch.setattr(gate_triage, "_validate_generated_recording_provenance", fake_validate)
+
+    out = gate_triage._execute_gate_runs(
+        tracks=[track],
+        runs_per_track=1,
+        duration_s=5,
+        av_start_t=1.25,
+    )
+    assert out == [(rec, "s_loop")]
+    assert calls["subprocess"] is not None
+    assert calls["subprocess"]["env"]["AV_START_T"] == "1.25"
+    assert calls["validated"] is True
 
 
 def test_validate_contract_required_fields_enforced() -> None:
@@ -145,12 +227,17 @@ def test_run_gate_and_triage_generates_contract_artifacts(tmp_path: Path, monkey
     reports_dir = tmp_path / "reports" / "gates"
     monkeypatch.setattr(gate_triage, "REPORTS_DIR", reports_dir)
 
+    base = tmp_path / "baseline.h5"
+    _write_minimal_recording(base, emergency_stop=False, out_of_lane=False)
+
     argv = [
         "run_gate_and_triage.py",
         "--label",
         "unit",
         "--recordings",
         str(rec),
+        "--baseline-recordings",
+        str(base),
     ]
     monkeypatch.setattr(sys, "argv", argv)
     rc = gate_triage.main()
@@ -184,3 +271,7 @@ def test_run_gate_and_triage_generates_contract_artifacts(tmp_path: Path, monkey
 
     assert gate_report["recording_ids"] == [rec.name]
     assert decision["pass_fail"] is False
+    baseline_report = json.loads((bundle / "baseline" / "baseline_report.json").read_text())
+    gate_triage.validate_contract_required_fields(baseline_report)
+    assert baseline_report["recording_ids"] == [base.name]
+    assert "provenance" in baseline_report["runs"][0]

@@ -1,7 +1,7 @@
 # AV Stack — Agent Memory: Current State
 
-**Last updated:** 2026-02-24
-**Current milestone:** S2-M3 complete + test suite cleaned (0 failures). Next: S2-M4 (15 m/s validation on highway_65).
+**Last updated:** 2026-02-28
+**Current milestone:** cap-tracking promoted to baseline. Next: S2-M4 (15 m/s validation on highway_65).
 
 ---
 
@@ -70,7 +70,38 @@ Resolved all 29 pre-existing failures → **0 failed, 506 passed, 9 skipped**:
 - **Category C (recording-dependent fragility):** removed 5 methods that fail on loop-track recordings (`test_position_drift_acceptable`, `test_steering_reduces_error_over_time`, 3× divergence-prevention methods); covered by `test_comfort_gate_replay.py` instead
 - **Category D (trivial fixes):** numpy bool identity (`is False/True` → `not clamped`), `trajectory_planner = Mock()` in speed-limit test, `target_lane`/`single_lane_width_threshold_m` in GTF test, feedforward curvature smoothing (`curvature_transition_alpha=1.0`), `point.curvature = 0.0` on Mock trajectory points
 
-Next: **S2-M4** — higher-speed validation (12 m/s → 15 m/s on `highway_65`). Entry criteria met (S2-M1 + S2-M2 + S2-M3 all done).
+### Cap-Tracking Promotion (2026-02-28) ✓
+
+**captrk2 matrix validated cap-tracking.** C2_moderate passed both runs cleanly on s_loop.
+
+- `cap_tracking_enabled: true` promoted to `av_stack_config.yaml` and `highway_15mps.yaml`
+- Gain defaults (decel_gain=2.0, jerk_gain=1.2, max_decel=3.4, max_jerk=2.8) remain as-is — proven to achieve `cap_tracking_error_p95 = 0` in both C1 and C2 matrix candidates
+- Accel-clamp-on-exit fix implemented in `trajectory/speed_planner.py` (prevents `_last_accel` leakage when cap_tracking transitions catch_up→inactive)
+- 49 tests pass (cap_tracking + config_integration + governor + limiter_transitions)
+
+**Dip frame fixes implemented and validated (2026-02-28) ✓:**
+
+Two independent accel-memory contamination bugs fixed in `trajectory/speed_planner.py`:
+
+1. **Fix 1 — Sub-threshold cap exit clamp** (`prev_cap_active → not cap_active` transition):
+   - Sub-threshold events (vehicle error < 0.35 threshold) never enter catch_up, but governor's
+     `min(target, cap_speed)` still drives `_last_accel ≈ -2.2 m/s²`
+   - Fix: track `_last_cap_active`; clamp `_last_accel = max(0, _last_accel)` on `cap_active: True→False`
+     when desired > current speed
+
+2. **Fix 2 — Hard ceiling accel clamp** (cap_ceiling block in `step()`):
+   - When catch_up fires and hard ceiling clips planned_speed, `(cap_ceiling - _last_speed) / dt` can
+     produce -9+ m/s² stored in `_last_accel`, requiring 80+ frames to recover
+   - Fix: `planned_accel = max(-cap_tracking_max_decel_mps2, planned_accel)` after ceiling clip
+
+Validated on s_loop (recording_20260228_115637.h5):
+- Dip frames: 55 → **22** (−60%), Speed P5: 1.10 → **1.63 m/s**, Score: 95.9/100
+- Cap tracking error P95 = 0.000 m/s, Overspeed into curve = 0.0%, 9 tests pass
+
+**s_loop speed note:** Median speed ~8.3 mph (3.7 m/s) is CORRECT — s_loop is a tight circuit
+where the curve cap governs ~94% of frames. The planner is working as intended.
+
+Next: **S2-M4** — higher-speed validation (12 m/s → 15 m/s on `highway_65`). Entry criteria met (S2-M1 + S2-M2 + S2-M3 all done). Use `config/highway_15mps.yaml`.
 
 ---
 
