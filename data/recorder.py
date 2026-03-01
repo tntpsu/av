@@ -1099,6 +1099,18 @@ class DataRecorder:
             dtype=np.int8
         )
         self.h5_file.create_dataset(
+            "control/speed_governor_feasibility_backstop_active",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int8
+        )
+        self.h5_file.create_dataset(
+            "control/speed_governor_feasibility_backstop_speed",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
             "control/speed_governor_cap_tracking_active",
             shape=(0,),
             maxshape=max_shape,
@@ -2087,6 +2099,138 @@ class DataRecorder:
             shape=(0,),
             maxshape=max_shape,
             dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/path_curvature_source_used",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=h5py.string_dtype(encoding='utf-8', length=32)
+        )
+        self.h5_file.create_dataset(
+            "control/path_curvature_primary_abs",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/path_curvature_lane_abs",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/curvature_primary_abs",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/curvature_primary_source",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=h5py.string_dtype(encoding='utf-8', length=32)
+        )
+        self.h5_file.create_dataset(
+            "control/curvature_map_abs",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/curvature_lane_context_abs",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/curvature_preview_abs",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/curvature_source_diverged",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int8
+        )
+        self.h5_file.create_dataset(
+            "control/curvature_map_authority_lost",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int8
+        )
+        self.h5_file.create_dataset(
+            "control/curvature_source_divergence_abs",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/curvature_selection_reason",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=h5py.string_dtype(encoding='utf-8', length=64)
+        )
+        self.h5_file.create_dataset(
+            "control/map_health_ok",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int8
+        )
+        self.h5_file.create_dataset(
+            "control/track_match_ok",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int8
+        )
+        self.h5_file.create_dataset(
+            "control/map_segment_lookup_success_rate",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/map_teleport_skip_count",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int32
+        )
+        self.h5_file.create_dataset(
+            "control/map_odometer_jump_rate",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/curvature_contract_consistent_controller",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int8
+        )
+        self.h5_file.create_dataset(
+            "control/curvature_contract_consistent_governor",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int8
+        )
+        self.h5_file.create_dataset(
+            "control/curvature_contract_consistent_intent",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int8
+        )
+        self.h5_file.create_dataset(
+            "control/curvature_contract_consistent_all",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int8
+        )
+        self.h5_file.create_dataset(
+            "control/curvature_contract_mismatch_reason",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=h5py.string_dtype(encoding='utf-8', length=64)
         )
         self.h5_file.create_dataset(
             "control/is_straight",
@@ -3979,6 +4123,28 @@ class DataRecorder:
         raw_steerings = []
         lateral_corrections = []
         path_curvature_inputs = []
+        path_curvature_source_used_list = []
+        path_curvature_primary_abs_list = []
+        path_curvature_lane_abs_list = []
+        curvature_primary_abs_list = []
+        curvature_primary_source_list = []
+        curvature_map_abs_list = []
+        curvature_lane_context_abs_list = []
+        curvature_preview_abs_list = []
+        curvature_source_diverged_list = []
+        curvature_map_authority_lost_list = []
+        curvature_source_divergence_abs_list = []
+        curvature_selection_reason_list = []
+        map_health_ok_list = []
+        track_match_ok_list = []
+        map_segment_lookup_success_rate_list = []
+        map_teleport_skip_count_list = []
+        map_odometer_jump_rate_list = []
+        curvature_contract_consistent_controller_list = []
+        curvature_contract_consistent_governor_list = []
+        curvature_contract_consistent_intent_list = []
+        curvature_contract_consistent_all_list = []
+        curvature_contract_mismatch_reason_list = []
         straight_sign_flip_override_list = []
         straight_sign_flip_triggered_list = []
         straight_sign_flip_trigger_error_list = []
@@ -4060,6 +4226,8 @@ class DataRecorder:
         speed_governor_curve_cap_reason_list = []
         speed_governor_curve_cap_margin_mps_list = []
         speed_governor_curve_cap_shadow_mode_list = []
+        speed_governor_feasibility_backstop_active_list = []
+        speed_governor_feasibility_backstop_speed_list = []
         speed_governor_cap_tracking_active_list = []
         speed_governor_cap_tracking_error_mps_list = []
         speed_governor_cap_tracking_mode_code_list = []
@@ -4214,6 +4382,108 @@ class DataRecorder:
             raw_steerings.append(cc.raw_steering if cc.raw_steering is not None else 0.0)
             lateral_corrections.append(cc.lateral_correction if cc.lateral_correction is not None else 0.0)
             path_curvature_inputs.append(cc.path_curvature_input if cc.path_curvature_input is not None else 0.0)
+            path_curvature_source_used_list.append(
+                str(getattr(cc, 'path_curvature_source_used', '') or '')
+            )
+            _path_primary_abs = getattr(cc, 'path_curvature_primary_abs', np.nan)
+            path_curvature_primary_abs_list.append(
+                float(_path_primary_abs) if _path_primary_abs is not None else np.nan
+            )
+            _path_lane_abs = getattr(cc, 'path_curvature_lane_abs', np.nan)
+            path_curvature_lane_abs_list.append(
+                float(_path_lane_abs) if _path_lane_abs is not None else np.nan
+            )
+            _curvature_primary_abs = getattr(cc, 'curvature_primary_abs', np.nan)
+            curvature_primary_abs_list.append(
+                float(_curvature_primary_abs) if _curvature_primary_abs is not None else np.nan
+            )
+            curvature_primary_source_list.append(
+                str(getattr(cc, 'curvature_primary_source', '') or '')
+            )
+            _curvature_map_abs = getattr(cc, 'curvature_map_abs', np.nan)
+            curvature_map_abs_list.append(
+                float(_curvature_map_abs) if _curvature_map_abs is not None else np.nan
+            )
+            _curvature_lane_context_abs = getattr(cc, 'curvature_lane_context_abs', np.nan)
+            curvature_lane_context_abs_list.append(
+                float(_curvature_lane_context_abs)
+                if _curvature_lane_context_abs is not None
+                else np.nan
+            )
+            _curvature_preview_abs = getattr(cc, 'curvature_preview_abs', np.nan)
+            curvature_preview_abs_list.append(
+                float(_curvature_preview_abs) if _curvature_preview_abs is not None else np.nan
+            )
+            _curvature_source_diverged = getattr(cc, 'curvature_source_diverged', None)
+            curvature_source_diverged_list.append(
+                -1 if _curvature_source_diverged is None else (1 if bool(_curvature_source_diverged) else 0)
+            )
+            _curvature_map_authority_lost = getattr(
+                cc, 'curvature_map_authority_lost', None
+            )
+            curvature_map_authority_lost_list.append(
+                -1
+                if _curvature_map_authority_lost is None
+                else (1 if bool(_curvature_map_authority_lost) else 0)
+            )
+            _curvature_source_divergence_abs = getattr(cc, 'curvature_source_divergence_abs', np.nan)
+            curvature_source_divergence_abs_list.append(
+                float(_curvature_source_divergence_abs)
+                if _curvature_source_divergence_abs is not None
+                else np.nan
+            )
+            curvature_selection_reason_list.append(
+                str(getattr(cc, 'curvature_selection_reason', '') or '')
+            )
+            _map_health_ok = getattr(cc, 'map_health_ok', None)
+            map_health_ok_list.append(-1 if _map_health_ok is None else (1 if bool(_map_health_ok) else 0))
+            _track_match_ok = getattr(cc, 'track_match_ok', None)
+            track_match_ok_list.append(-1 if _track_match_ok is None else (1 if bool(_track_match_ok) else 0))
+            _map_lookup_success_rate = getattr(cc, 'map_segment_lookup_success_rate', np.nan)
+            map_segment_lookup_success_rate_list.append(
+                float(_map_lookup_success_rate) if _map_lookup_success_rate is not None else np.nan
+            )
+            _map_teleport_skip_count = getattr(cc, 'map_teleport_skip_count', -1)
+            map_teleport_skip_count_list.append(
+                int(_map_teleport_skip_count) if _map_teleport_skip_count is not None else -1
+            )
+            _map_odometer_jump_rate = getattr(cc, 'map_odometer_jump_rate', np.nan)
+            map_odometer_jump_rate_list.append(
+                float(_map_odometer_jump_rate) if _map_odometer_jump_rate is not None else np.nan
+            )
+            _contract_consistent_controller = getattr(
+                cc, 'curvature_contract_consistent_controller', None
+            )
+            curvature_contract_consistent_controller_list.append(
+                -1
+                if _contract_consistent_controller is None
+                else (1 if bool(_contract_consistent_controller) else 0)
+            )
+            _contract_consistent_governor = getattr(
+                cc, 'curvature_contract_consistent_governor', None
+            )
+            curvature_contract_consistent_governor_list.append(
+                -1
+                if _contract_consistent_governor is None
+                else (1 if bool(_contract_consistent_governor) else 0)
+            )
+            _contract_consistent_intent = getattr(
+                cc, 'curvature_contract_consistent_intent', None
+            )
+            curvature_contract_consistent_intent_list.append(
+                -1
+                if _contract_consistent_intent is None
+                else (1 if bool(_contract_consistent_intent) else 0)
+            )
+            _contract_consistent_all = getattr(cc, 'curvature_contract_consistent_all', None)
+            curvature_contract_consistent_all_list.append(
+                -1
+                if _contract_consistent_all is None
+                else (1 if bool(_contract_consistent_all) else 0)
+            )
+            curvature_contract_mismatch_reason_list.append(
+                str(getattr(cc, 'curvature_contract_mismatch_reason', '') or '')
+            )
             straight_sign_flip_override_list.append(
                 1 if getattr(cc, 'straight_sign_flip_override_active', False) else 0
             )
@@ -4439,6 +4709,14 @@ class DataRecorder:
             )
             speed_governor_curve_cap_shadow_mode_list.append(
                 1 if getattr(cc, 'speed_governor_curve_cap_shadow_mode', False) else 0
+            )
+            _backstop_active = getattr(cc, 'speed_governor_feasibility_backstop_active', None)
+            speed_governor_feasibility_backstop_active_list.append(
+                -1 if _backstop_active is None else (1 if bool(_backstop_active) else 0)
+            )
+            _backstop_speed = getattr(cc, 'speed_governor_feasibility_backstop_speed', np.nan)
+            speed_governor_feasibility_backstop_speed_list.append(
+                float(_backstop_speed) if _backstop_speed is not None else np.nan
             )
             speed_governor_cap_tracking_active_list.append(
                 1 if getattr(cc, 'speed_governor_cap_tracking_active', False) else 0
@@ -4688,6 +4966,21 @@ class DataRecorder:
                        "straight_sign_flip_frames_remaining",
                        "calculated_steering_angle_deg", "raw_steering", 
                        "lateral_correction", "path_curvature_input",
+                       "path_curvature_source_used", "path_curvature_primary_abs",
+                       "path_curvature_lane_abs",
+                       "curvature_primary_abs", "curvature_primary_source",
+                       "curvature_map_abs", "curvature_lane_context_abs",
+                       "curvature_preview_abs", "curvature_source_diverged",
+                       "curvature_map_authority_lost",
+                       "curvature_source_divergence_abs", "curvature_selection_reason",
+                       "map_health_ok", "track_match_ok",
+                       "map_segment_lookup_success_rate", "map_teleport_skip_count",
+                       "map_odometer_jump_rate",
+                       "curvature_contract_consistent_controller",
+                       "curvature_contract_consistent_governor",
+                       "curvature_contract_consistent_intent",
+                       "curvature_contract_consistent_all",
+                       "curvature_contract_mismatch_reason",
                        "is_straight", "is_control_straight_proxy", "curve_upcoming",
                        "curve_at_car", "curve_at_car_distance_remaining_m", "is_road_straight",
                        "curve_phase_source", "curve_phase_use_preview_curvature",
@@ -4747,6 +5040,8 @@ class DataRecorder:
                        "speed_governor_curve_cap_reason",
                        "speed_governor_curve_cap_margin_mps",
                        "speed_governor_curve_cap_shadow_mode",
+                       "speed_governor_feasibility_backstop_active",
+                       "speed_governor_feasibility_backstop_speed",
                        "speed_governor_cap_tracking_active",
                        "speed_governor_cap_tracking_error_mps",
                        "speed_governor_cap_tracking_mode_code",
@@ -4866,6 +5161,76 @@ class DataRecorder:
             self.h5_file["control/raw_steering"][current_size:] = raw_steerings
             self.h5_file["control/lateral_correction"][current_size:] = lateral_corrections
             self.h5_file["control/path_curvature_input"][current_size:] = path_curvature_inputs
+            self.h5_file["control/path_curvature_source_used"][current_size:] = np.array(
+                path_curvature_source_used_list,
+                dtype=h5py.string_dtype(encoding='utf-8', length=32),
+            )
+            self.h5_file["control/path_curvature_primary_abs"][current_size:] = np.array(
+                path_curvature_primary_abs_list, dtype=np.float32
+            )
+            self.h5_file["control/path_curvature_lane_abs"][current_size:] = np.array(
+                path_curvature_lane_abs_list, dtype=np.float32
+            )
+            self.h5_file["control/curvature_primary_abs"][current_size:] = np.array(
+                curvature_primary_abs_list, dtype=np.float32
+            )
+            self.h5_file["control/curvature_primary_source"][current_size:] = np.array(
+                curvature_primary_source_list,
+                dtype=h5py.string_dtype(encoding='utf-8', length=32),
+            )
+            self.h5_file["control/curvature_map_abs"][current_size:] = np.array(
+                curvature_map_abs_list, dtype=np.float32
+            )
+            self.h5_file["control/curvature_lane_context_abs"][current_size:] = np.array(
+                curvature_lane_context_abs_list, dtype=np.float32
+            )
+            self.h5_file["control/curvature_preview_abs"][current_size:] = np.array(
+                curvature_preview_abs_list, dtype=np.float32
+            )
+            self.h5_file["control/curvature_source_diverged"][current_size:] = np.array(
+                curvature_source_diverged_list, dtype=np.int8
+            )
+            self.h5_file["control/curvature_map_authority_lost"][current_size:] = np.array(
+                curvature_map_authority_lost_list, dtype=np.int8
+            )
+            self.h5_file["control/curvature_source_divergence_abs"][current_size:] = np.array(
+                curvature_source_divergence_abs_list, dtype=np.float32
+            )
+            self.h5_file["control/curvature_selection_reason"][current_size:] = np.array(
+                curvature_selection_reason_list,
+                dtype=h5py.string_dtype(encoding='utf-8', length=64),
+            )
+            self.h5_file["control/map_health_ok"][current_size:] = np.array(
+                map_health_ok_list, dtype=np.int8
+            )
+            self.h5_file["control/track_match_ok"][current_size:] = np.array(
+                track_match_ok_list, dtype=np.int8
+            )
+            self.h5_file["control/map_segment_lookup_success_rate"][current_size:] = np.array(
+                map_segment_lookup_success_rate_list, dtype=np.float32
+            )
+            self.h5_file["control/map_teleport_skip_count"][current_size:] = np.array(
+                map_teleport_skip_count_list, dtype=np.int32
+            )
+            self.h5_file["control/map_odometer_jump_rate"][current_size:] = np.array(
+                map_odometer_jump_rate_list, dtype=np.float32
+            )
+            self.h5_file["control/curvature_contract_consistent_controller"][current_size:] = np.array(
+                curvature_contract_consistent_controller_list, dtype=np.int8
+            )
+            self.h5_file["control/curvature_contract_consistent_governor"][current_size:] = np.array(
+                curvature_contract_consistent_governor_list, dtype=np.int8
+            )
+            self.h5_file["control/curvature_contract_consistent_intent"][current_size:] = np.array(
+                curvature_contract_consistent_intent_list, dtype=np.int8
+            )
+            self.h5_file["control/curvature_contract_consistent_all"][current_size:] = np.array(
+                curvature_contract_consistent_all_list, dtype=np.int8
+            )
+            self.h5_file["control/curvature_contract_mismatch_reason"][current_size:] = np.array(
+                curvature_contract_mismatch_reason_list,
+                dtype=h5py.string_dtype(encoding='utf-8', length=64),
+            )
             self.h5_file["control/is_straight"][current_size:] = np.array(is_straight_list, dtype=np.int8)
             self.h5_file["control/is_control_straight_proxy"][current_size:] = np.array(
                 is_control_straight_proxy_list, dtype=np.int8
@@ -5075,6 +5440,12 @@ class DataRecorder:
             )
             self.h5_file["control/speed_governor_curve_cap_shadow_mode"][current_size:] = np.array(
                 speed_governor_curve_cap_shadow_mode_list, dtype=np.int8
+            )
+            self.h5_file["control/speed_governor_feasibility_backstop_active"][current_size:] = np.array(
+                speed_governor_feasibility_backstop_active_list, dtype=np.int8
+            )
+            self.h5_file["control/speed_governor_feasibility_backstop_speed"][current_size:] = np.array(
+                speed_governor_feasibility_backstop_speed_list, dtype=np.float32
             )
             self.h5_file["control/speed_governor_cap_tracking_active"][current_size:] = np.array(
                 speed_governor_cap_tracking_active_list, dtype=np.int8

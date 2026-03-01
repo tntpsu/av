@@ -64,6 +64,11 @@ def _make_governor(
         curve_cap_rise_min=float(overrides.get("curve_cap_rise_min", 0.0005)),
         curve_cap_peak_lat_accel_g=float(overrides.get("curve_cap_peak_lat_accel_g", 0.26)),
         curve_cap_use_preview_curvature=bool(overrides.get("curve_cap_use_preview_curvature", True)),
+        feasibility_backstop_enabled=bool(overrides.get("feasibility_backstop_enabled", True)),
+        feasibility_backstop_on_frames=int(overrides.get("feasibility_backstop_on_frames", 3)),
+        feasibility_backstop_overspeed_margin_mps=float(
+            overrides.get("feasibility_backstop_overspeed_margin_mps", 0.2)
+        ),
     )
     planner_cfg = SpeedPlannerConfig(
         max_accel=2.0, max_decel=2.5, max_jerk=1.2, default_dt=1.0 / 30.0,
@@ -640,3 +645,60 @@ class TestCurveCapAuthority:
         assert first.curve_cap_speed is not None
         assert second.curve_cap_speed is not None
         assert second.curve_cap_speed <= first.curve_cap_speed + 0.21
+
+
+class TestFeasibilityBackstop:
+    def test_backstop_activates_after_persistent_infeasible_overspeed(self):
+        gov = _make_governor(
+            planner_enabled=False,
+            horizon_enabled=False,
+            preview_enabled=False,
+            feasibility_backstop_enabled=True,
+            feasibility_backstop_on_frames=2,
+            feasibility_backstop_overspeed_margin_mps=0.2,
+        )
+        out0 = gov.compute_target_speed(
+            track_speed_limit=20.0,
+            curvature=0.0,
+            preview_curvature=None,
+            perception_horizon_m=30.0,
+            current_speed=10.0,
+            timestamp=0.0,
+            turn_feasibility_speed_limit_mps=6.0,
+            turn_feasibility_infeasible=True,
+        )
+        assert out0.feasibility_backstop_active is False
+        out1 = gov.compute_target_speed(
+            track_speed_limit=20.0,
+            curvature=0.0,
+            preview_curvature=None,
+            perception_horizon_m=30.0,
+            current_speed=10.0,
+            timestamp=0.033,
+            turn_feasibility_speed_limit_mps=6.0,
+            turn_feasibility_infeasible=True,
+        )
+        assert out1.feasibility_backstop_active is True
+        assert out1.feasibility_backstop_speed == 6.0
+        assert out1.target_speed <= 6.0 + 1e-6
+
+    def test_backstop_does_not_activate_when_feasible(self):
+        gov = _make_governor(
+            planner_enabled=False,
+            horizon_enabled=False,
+            preview_enabled=False,
+            feasibility_backstop_enabled=True,
+            feasibility_backstop_on_frames=1,
+        )
+        out = gov.compute_target_speed(
+            track_speed_limit=20.0,
+            curvature=0.0,
+            preview_curvature=None,
+            perception_horizon_m=30.0,
+            current_speed=10.0,
+            timestamp=0.0,
+            turn_feasibility_speed_limit_mps=6.0,
+            turn_feasibility_infeasible=False,
+        )
+        assert out.feasibility_backstop_active is False
+        assert out.active_limiter != "feasibility_backstop"

@@ -38,6 +38,19 @@ def _read_bool(f: h5py.File, key: str) -> Optional[np.ndarray]:
     return np.asarray(f[key][:]).astype(bool)
 
 
+def _read_strings(f: h5py.File, key: str) -> Optional[list[str]]:
+    if key not in f:
+        return None
+    raw = f[key][:]
+    out = []
+    for item in raw:
+        if isinstance(item, (bytes, bytearray)):
+            out.append(item.decode("utf-8", "ignore"))
+        else:
+            out.append(str(item))
+    return out
+
+
 def _first_idx(mask: np.ndarray) -> Optional[int]:
     idx = np.where(mask)[0]
     return int(idx[0]) if len(idx) else None
@@ -121,6 +134,11 @@ def main() -> int:
         turn_feasibility_speed_delta_mps = _read_float(
             f, "control/turn_feasibility_speed_delta_mps"
         )
+        turn_feasibility_speed_limit_mps = _read_float(
+            f, "control/turn_feasibility_speed_limit_mps"
+        )
+        curvature_source_diverged = _read_float(f, "control/curvature_source_diverged")
+        curvature_primary_source = _read_strings(f, "control/curvature_primary_source")
 
     if any(x is None for x in [rate_delta, jerk_delta, clip_delta, smooth_delta]):
         raise KeyError("Missing limiter delta datasets in recording.")
@@ -181,6 +199,42 @@ def main() -> int:
             if ay.size:
                 legacy_speed_limited_pct = float(np.mean(ay > 1.3) * 100.0)
 
+    first_divergence_frame = None
+    if curvature_source_diverged is not None:
+        div = np.asarray(curvature_source_diverged, dtype=float)
+        n_div = min(len(div), len(ts))
+        if n_div > 0:
+            valid = np.isfinite(div[:n_div]) & (div[:n_div] >= 0.0)
+            mask = (div[:n_div] > 0.5) & valid
+            first_divergence_frame = _first_idx(mask)
+
+    first_infeasible_frame = None
+    if turn_feasibility_infeasible is not None:
+        infeas = np.asarray(turn_feasibility_infeasible, dtype=bool)
+        first_infeasible_frame = _first_idx(infeas)
+
+    first_speed_above_feasibility_frame = None
+    if speed is not None and turn_feasibility_speed_limit_mps is not None:
+        v = np.asarray(speed, dtype=float)
+        cap = np.asarray(turn_feasibility_speed_limit_mps, dtype=float)
+        n_cap = min(len(v), len(cap), len(ts))
+        if n_cap > 0:
+            valid = np.isfinite(v[:n_cap]) & np.isfinite(cap[:n_cap]) & (cap[:n_cap] > 0.1)
+            above = (v[:n_cap] > (cap[:n_cap] + 0.2)) & valid
+            first_speed_above_feasibility_frame = _first_idx(above)
+
+    source_at_failure = "unknown"
+    if curvature_primary_source is not None and failure_frame is not None and 0 <= failure_frame < len(curvature_primary_source):
+        candidate = str(curvature_primary_source[failure_frame]).strip()
+        if candidate:
+            source_at_failure = candidate
+
+    root_cause_bucket = "controller_authority_failure"
+    if first_divergence_frame is not None:
+        root_cause_bucket = "curvature_contract_failure"
+    elif first_speed_above_feasibility_frame is not None:
+        root_cause_bucket = "longitudinal_overspeed"
+
     packet: Dict[str, object] = {
         "recording": str(args.recording),
         "failure_frame": failure.frame,
@@ -205,6 +259,11 @@ def main() -> int:
                 else (legacy_speed_limited_pct is not None and legacy_speed_limited_pct >= 30.0)
             ),
         },
+        "root_cause_bucket": root_cause_bucket,
+        "first_divergence_frame": first_divergence_frame,
+        "first_infeasible_frame": first_infeasible_frame,
+        "first_speed_above_feasibility_frame": first_speed_above_feasibility_frame,
+        "source_at_failure": source_at_failure,
     }
     (out_dir / "packet.json").write_text(json.dumps(packet, indent=2))
 

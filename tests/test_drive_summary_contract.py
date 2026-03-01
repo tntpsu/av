@@ -45,6 +45,8 @@ def test_drive_summary_contract_keys(tmp_path: Path) -> None:
         "alignment_summary",
         "latency_sync",
         "chassis_ground",
+        "curvature_contract_health",
+        "first_fault_chain",
         "system_health",
         "safety",
         "recommendations",
@@ -57,7 +59,9 @@ def test_drive_summary_contract_keys(tmp_path: Path) -> None:
     latency_sync = summary.get("latency_sync", {})
     assert {"schema_version", "e2e", "sync_alignment", "cadence", "overall"}.issubset(latency_sync.keys())
     cadence = latency_sync.get("cadence", {})
-    assert {"availability", "status", "stats_ms", "limits", "pass"}.issubset(cadence.keys())
+    assert {"availability", "status", "stats_ms", "limits", "pass", "tuning_valid"}.issubset(
+        cadence.keys()
+    )
     chassis_ground = summary.get("chassis_ground", {})
     assert {"schema_version", "availability", "health", "limits"}.issubset(chassis_ground.keys())
     comfort = summary.get("comfort", {})
@@ -80,3 +84,26 @@ def test_drive_summary_contract_keys(tmp_path: Path) -> None:
         "cap_recovery_frames_p95",
         "hard_ceiling_applied_rate",
     }.issubset(speed_control.keys())
+    contract_health = summary.get("curvature_contract_health", {})
+    assert {
+        "availability",
+        "curvature_source_divergence_p95",
+        "curvature_source_diverged_rate",
+        "curvature_map_authority_lost_rate",
+        "curve_intent_commit_streak_max_frames",
+        "feasibility_violation_rate",
+        "feasibility_backstop_active_rate",
+        "map_health_untrusted_rate",
+        "track_mismatch_rate",
+        "curvature_contract_consistency_rate",
+        "telemetry_completeness_rate_curvature_contract",
+        "telemetry_completeness_rate_feasibility",
+        "limits",
+    }.issubset(contract_health.keys())
+    first_fault_chain = summary.get("first_fault_chain", {})
+    assert {
+        "first_divergence_frame",
+        "first_infeasible_frame",
+        "first_speed_above_feasibility_frame",
+        "first_boundary_breach_frame",
+    }.issubset(first_fault_chain.keys())

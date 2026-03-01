@@ -1275,6 +1275,232 @@ def test_curve_intent_single_owner_can_be_disabled():
     assert m['curve_at_car'] is False
 
 
+def test_curve_intent_single_owner_does_not_force_distance_to_zero_without_at_car_window():
+    controller = LateralController(
+        kp=1.0,
+        kd=0.2,
+        curve_intent_single_owner_mode=True,
+        curve_phase_use_distance_track=False,
+        curve_phase_use_preview_curvature=False,
+        curve_at_car_distance_min_m=2.0,
+    )
+    m = controller.compute_steering(
+        current_heading=0.0,
+        reference_point={
+            'x': 0.0,
+            'y': 6.0,
+            'heading': 0.0,
+            'velocity': 8.0,
+            'curvature': 0.0,
+            'curvature_primary_abs': 0.02,
+            'curve_intent': 0.9,
+            'curve_intent_state': 'COMMIT',
+            'distance_to_curve_start_m': 12.0,
+        },
+        current_speed=8.0,
+        dt=0.033,
+        return_metadata=True,
+    )
+    assert m['curve_at_car'] is True
+    assert float(m['distance_to_next_curve_start_m']) == pytest.approx(12.0, rel=1e-6)
+
+
+def test_curve_intent_commit_watchdog_rearms_when_commit_stuck_on_low_curvature():
+    controller = LateralController(
+        kp=1.0,
+        kd=0.2,
+        curve_intent_single_owner_mode=True,
+        curve_phase_use_distance_track=False,
+        curve_phase_use_preview_curvature=False,
+        curve_intent_commit_watchdog_frames=3,
+        curve_intent_commit_watchdog_exit_curvature=0.005,
+    )
+    ref = {
+        'x': 0.0,
+        'y': 6.0,
+        'heading': 0.0,
+        'velocity': 8.0,
+        'curvature': 0.0,
+        'curvature_primary_abs': 0.001,
+        'curve_intent': 0.9,
+        'curve_intent_state': 'COMMIT',
+        'distance_to_curve_start_m': 10.0,
+    }
+    m = None
+    for i in range(3):
+        m = controller.compute_steering(
+            current_heading=0.0,
+            reference_point=ref,
+            current_speed=8.0,
+            dt=0.033 * (i + 1),
+            return_metadata=True,
+        )
+    assert m is not None
+    assert m['curve_intent_watchdog_triggered'] is True
+    assert str(m['curve_intent_state']).upper() == 'REARM'
+    assert m['curve_upcoming'] is False
+    assert m['curve_at_car'] is False
+
+
+def test_curve_intent_startup_lockout_blocks_false_commit():
+    controller = LateralController(
+        kp=1.0,
+        kd=0.2,
+        curve_intent_single_owner_mode=True,
+        curve_phase_use_distance_track=False,
+        curve_phase_use_preview_curvature=False,
+        curve_intent_startup_ignore_frames=3,
+        curve_intent_arm_preview_min=0.01,
+    )
+    ref = {
+        'x': 0.0,
+        'y': 6.0,
+        'heading': 0.0,
+        'velocity': 8.0,
+        'curvature': 0.02,
+        'curvature_primary_abs': 0.02,
+        'curve_intent': 0.9,
+        'curve_intent_state': 'COMMIT',
+        'curve_intent_term_preview': 0.8,
+        'curve_intent_term_rise': 0.01,
+        'distance_to_curve_start_m': 8.0,
+    }
+
+    locked = []
+    for _ in range(3):
+        locked.append(
+            controller.compute_steering(
+                current_heading=0.0,
+                reference_point=ref,
+                current_speed=8.0,
+                dt=0.033,
+                return_metadata=True,
+            )
+        )
+
+    assert all(m['curve_intent_startup_lockout_active'] is True for m in locked)
+    assert all(m['curve_upcoming'] is False for m in locked)
+    assert all(str(m['curve_intent_state']).upper() == 'STRAIGHT' for m in locked)
+
+    unlocked = controller.compute_steering(
+        current_heading=0.0,
+        reference_point=ref,
+        current_speed=8.0,
+        dt=0.033,
+        return_metadata=True,
+    )
+    assert unlocked['curve_intent_startup_lockout_active'] is False
+    assert unlocked['curve_upcoming'] is True
+
+
+def test_curve_intent_distance_gate_rearms_far_commit():
+    controller = LateralController(
+        kp=1.0,
+        kd=0.2,
+        curve_intent_single_owner_mode=True,
+        curve_phase_use_distance_track=False,
+        curve_phase_use_preview_curvature=False,
+        curve_intent_arm_preview_min=0.005,
+        curve_intent_arm_distance_time_headway_s=1.0,
+        curve_intent_arm_distance_min_m=5.0,
+        curve_intent_arm_distance_max_m=20.0,
+        curve_intent_rearm_min_frames=2,
+    )
+    m = controller.compute_steering(
+        current_heading=0.0,
+        reference_point={
+            'x': 0.0,
+            'y': 6.0,
+            'heading': 0.0,
+            'velocity': 8.0,
+            'curvature': 0.02,
+            'curvature_primary_abs': 0.02,
+            'curve_intent': 0.9,
+            'curve_intent_state': 'COMMIT',
+            'curve_intent_term_preview': 0.8,
+            'curve_intent_term_rise': 0.01,
+            'distance_to_curve_start_m': 120.0,
+        },
+        current_speed=8.0,
+        dt=0.033,
+        return_metadata=True,
+    )
+    assert m['curve_intent_distance_ready'] is False
+    assert str(m['curve_intent_state']).upper() == 'REARM'
+    assert m['curve_upcoming'] is False
+    assert m['curve_intent_rearm_cooldown_active'] is True
+
+
+def test_curve_intent_force_straight_decay_holds_state():
+    controller = LateralController(
+        kp=1.0,
+        kd=0.2,
+        curve_intent_single_owner_mode=True,
+        curve_phase_use_distance_track=False,
+        curve_phase_use_preview_curvature=False,
+        curve_intent_arm_preview_min=0.02,
+        curve_intent_arm_rise_min=0.01,
+        curve_intent_force_straight_hold_frames=2,
+    )
+    ref = {
+        'x': 0.0,
+        'y': 6.0,
+        'heading': 0.0,
+        'velocity': 8.0,
+        'curvature': 0.0,
+        'curvature_primary_abs': 0.0,
+        'curve_intent': 0.7,
+        'curve_intent_state': 'ENTRY',
+        'curve_intent_term_preview': 0.0,
+        'curve_intent_term_rise': 0.0,
+        'distance_to_curve_start_m': 20.0,
+    }
+    m1 = controller.compute_steering(
+        current_heading=0.0,
+        reference_point=ref,
+        current_speed=8.0,
+        dt=0.033,
+        return_metadata=True,
+    )
+    m2 = controller.compute_steering(
+        current_heading=0.0,
+        reference_point=ref,
+        current_speed=8.0,
+        dt=0.033,
+        return_metadata=True,
+    )
+    assert m1['curve_intent_force_straight_active'] is True
+    assert str(m1['curve_intent_state']).upper() == 'STRAIGHT'
+    assert m2['curve_intent_force_straight_active'] is True
+    assert str(m2['curve_intent_state']).upper() == 'STRAIGHT'
+
+
+def test_turn_feasibility_prefers_curvature_primary_abs():
+    controller = LateralController(
+        kp=1.0,
+        kd=0.2,
+        turn_feasibility_governor_enabled=True,
+        turn_feasibility_curvature_min=0.002,
+    )
+    m = controller.compute_steering(
+        current_heading=0.0,
+        reference_point={
+            'x': 0.0,
+            'y': 8.0,
+            'heading': 0.0,
+            'velocity': 10.0,
+            'curvature': 0.003,
+            'curvature_primary_abs': 0.02,
+        },
+        current_speed=10.0,
+        dt=0.033,
+        return_metadata=True,
+    )
+    assert str(m['path_curvature_source_used']) == 'curvature_primary_abs'
+    assert float(m['path_curvature_primary_abs']) == pytest.approx(0.02, rel=1e-6)
+    assert float(m['turn_feasibility_curvature_abs']) == pytest.approx(0.02, rel=1e-6)
+
+
 def test_lateral_controller_road_straight_hysteresis_and_invalid_hold():
     """Road-straight should use enter/exit hysteresis and hold state on invalid gaps."""
     controller = LateralController(

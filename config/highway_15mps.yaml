@@ -2,14 +2,34 @@
 #
 # Base: config/av_stack_config.yaml
 # Track: highway_65
-# Changes from base (7 values only):
-#   control.longitudinal.target_speed:            12.0 → 15.0
-#   control.longitudinal.max_speed:               12.0 → 15.0
-#   trajectory.target_speed:                      12.0 → 15.0
-#   trajectory.speed_planner.accel_speed_max:     12.0 → 15.0
-#   trajectory.speed_planner.decel_speed_max:     12.0 → 15.0
-#   trajectory.reference_lookahead_speed_table:   added 15.0 m/s → 17.0 m entry
-#   safety.max_speed:                             12.0 → 15.0
+# Changes from base (13 values):
+#   control.longitudinal.target_speed:                  12.0 → 15.0
+#   control.longitudinal.max_speed:                     12.0 → 18.0  (headroom; actual limit = safety.max_speed)
+#   trajectory.target_speed:                            12.0 → 15.0
+#   trajectory.speed_planner.accel_speed_max:           12.0 → 15.0
+#   trajectory.speed_planner.decel_speed_max:           12.0 → 15.0
+#   trajectory.reference_lookahead_speed_table:         added 15.0 m/s → 17.0 m entry
+#   safety.max_speed:                                   12.0 → 15.0
+#   trajectory.speed_governor.curve_cap_shadow_mode:    false → true
+#     Reason: highway_65 is a completely straight road (GT curvature = 0.000).
+#     Perception polynomial on a straight road produces noise that hits the
+#     curve_feedforward_curvature_clamp (0.04), saturating curve_intent=1.0 and
+#     preview_curvature=0.04 for 100% of frames. This creates a spurious ~5.7 m/s
+#     commit cap via curvature_calibration_scale=2.5. Shadow mode makes the cap
+#     advisory-only so it doesn't enforce speed.
+#   trajectory.speed_governor.curve_preview_enabled:    true → false
+#     Reason: the preview governor uses the same perception-derived preview_curvature,
+#     which is also ~0.04 noise on highway_65. With curve_preview_min_curvature=0.002,
+#     the preview fires on almost every frame and pre-brakes to ~7 m/s periodically
+#     (visible spikes at t≈14.7 s and t≈36 s in shadow-mode run). On a straight
+#     highway the preview should never fire; disabling it prevents spurious braking.
+#   control.longitudinal.max_speed:                     15.0 → 18.0
+#     Reason: pid_controller progressive throttle reduction fires at 0.80 × max_speed.
+#     With max_speed=15, reduction starts at 12.0 m/s (80%), leaving the car at only
+#     20% throttle from 12→15 m/s. With max_speed=18, the 80% threshold shifts to
+#     14.4 m/s, giving 40% throttle all through 12.0–14.4 m/s so the car can
+#     actually push through to 15 m/s. The real ceiling is safety.max_speed=15.0
+#     (+ overspeed brake at target+0.4); raising this field adds headroom only.
 #
 # Usage:
 #   ./start_av_stack.sh --config config/highway_15mps.yaml \
@@ -29,14 +49,23 @@ control:
     lateral_weight: 0.5
     error_clip: 1.57
     integral_limit: 0.1
-    steering_smoothing_alpha: 0.9
+    steering_smoothing_alpha: 0.3   # CHANGED: 0.9 → 0.3 (α=0.9 gives τ=0.31s → 10.5° phase lag at 0.09 Hz oscillation; combined with PP transport delay this pushes total lag past 45°; α=0.3 gives τ=0.028s → <1° lag, lets PP reverse direction immediately)
     control_mode: pure_pursuit
     stanley_k: 1.5
     stanley_soft_speed: 2.0
     stanley_heading_weight: 1.0
-    pp_feedback_gain: 0.1
+    pp_feedback_gain: 0.0           # CHANGED: 0.1 → 0.0 (PID integral winds up during geometric PP oscillation, providing growing correction that amplifies amplitude; pure geometric PP for highway straight-line test)
+    curve_feedforward_gain: 0.0     # CHANGED: 1.0 → 0.0 (curve feedforward on straight highway amplifies oscillation: noise curvature 0.04 × sign(heading_error) creates positive feedback that grows heading weave at 14 m/s; disable entirely on straight track)
     pp_max_steering_jerk: 18.0
     pp_min_lookahead: 0.5
+    pp_speed_norm_enabled: true
+    pp_speed_norm_reference_mps: 12.0
+    pp_speed_norm_min_scale: 0.60   # CHANGED: 0.75 → 0.60 (quadratic formula: floor at v=12/√0.60=15.5 m/s; at 15 m/s scale=(12/15)²=0.64 → true gain normalization)
+    pp_map_ff_enabled: true
+    pp_map_ff_gain: 1.0
+    pp_map_ff_wheelbase_m: 2.5
+    pp_map_ff_curvature_min: 0.001
+    pp_map_ff_curvature_max_clip: 0.08
     pp_ref_jump_clamp: 0.5
     pp_stale_decay: 0.98
     pp_max_steering_rate: 0.4
@@ -49,8 +78,8 @@ control:
     straight_window_frames: 60
     straight_oscillation_high: 0.2
     straight_oscillation_low: 0.05
-    curve_feedforward_gain: 1.0
-    curve_feedforward_threshold: 0.012
+    # NOTE: curve_feedforward_gain: 1.0 was here as a duplicate — removed (YAML last-key-wins would override the 0.0 at line 58)
+    curve_feedforward_threshold: 0.0    # CHANGED: 0.012 → 0.0 (gain gate must be 0 so gain=0.0 zeroes ALL curvature ranges; sub-threshold 0.001-0.012 bypasses gain otherwise)
     curve_feedforward_gain_min: 1.0
     curve_feedforward_gain_max: 1.15
     curve_feedforward_curvature_min: 0.001
@@ -84,6 +113,18 @@ control:
     curve_phase_preview_off_frames: 2
     curve_at_car_distance_min_m: 0.0
     curve_intent_single_owner_mode: true
+    curve_intent_commit_watchdog_frames: 45
+    curve_intent_commit_watchdog_exit_curvature: 0.009
+    curve_intent_startup_ignore_frames: 45
+    curve_intent_arm_preview_min: 0.002
+    curve_intent_arm_rise_min: 0.0002
+    curve_intent_arm_distance_time_headway_s: 1.2
+    curve_intent_arm_distance_min_m: 6.0
+    curve_intent_arm_distance_max_m: 45.0
+    curve_intent_rearm_exit_hysteresis: 2.0
+    curve_intent_rearm_min_frames: 12
+    curve_intent_max_commit_frames: 80
+    curve_intent_force_straight_hold_frames: 24
     road_curve_enter_threshold: 0.011
     road_curve_exit_threshold: 0.009
     road_straight_hold_invalid_frames: 6
@@ -152,7 +193,7 @@ control:
     dynamic_curve_speed_low_mps: 4.0
     dynamic_curve_speed_high_mps: 10.0
     dynamic_curve_speed_boost_max_scale: 1.4
-    turn_feasibility_governor_enabled: true
+    turn_feasibility_governor_enabled: true   # RE-ENABLED: map curvature now feeds governor; on straight=0.0 (no limit), on 500m arc=0.002 → required_lat_accel=0.046g << 0.2g comfort → no speed restriction; noise-driven 9.1 m/s limit is gone
     turn_feasibility_curvature_min: 0.002
     turn_feasibility_guardband_g: 0.015
     turn_feasibility_use_peak_bound: true
@@ -225,8 +266,8 @@ control:
     accel_pid_kd: 0.02
     throttle_curve_gamma: 1.4
     throttle_curve_min: 0.0
-    speed_drag_gain: 0.035
-    accel_target_smoothing_alpha: 0.86
+    speed_drag_gain: 0.012          # CHANGED: 0.035 → 0.012 (at 13.5 m/s: 0.035×13.5=0.47 m/s² drag subtracted from desired_accel; jerk-limited ramp-up is 0.026 m/s²/frame so drag dominates for 18 frames → net decel → car stuck at 13.5 m/s; 0.012×15=0.18 m/s² manageable at target speed)
+    accel_target_smoothing_alpha: 0.60  # CHANGED: 0.86 → 0.60 (0.86 gives τ≈0.24s; combined with continuous_accel_deadband=0.05 this starves throttle to 0.007 at cruise; 0.60 gives τ≈0.08s so desired_accel propagates fast enough to exceed deadband)
     continuous_accel_control: true
     continuous_accel_deadband: 0.05
     startup_ramp_seconds: 2.5
@@ -241,7 +282,7 @@ control:
     limiter_transition_smoothing_alpha: 0.25
     limiter_transition_hysteresis: 0.05
     target_speed: 15.0          # CHANGED: 12.0 → 15.0
-    max_speed: 15.0             # CHANGED: 12.0 → 15.0
+    max_speed: 18.0             # CHANGED: 12.0 → 18.0 (headroom; real limit = safety.max_speed=15; shifts 80% throttle reduction from 12.0→14.4 m/s)
     speed_smoothing: 0.3
     speed_deadband: 0.03
     throttle_limit_threshold: 0.9
@@ -287,11 +328,11 @@ trajectory:
   - speed_mps: 8.94
     lookahead_m: 11.0
   - speed_mps: 11.18
-    lookahead_m: 14.0
+    lookahead_m: 14.0           # REVERTED: longer lookahead (20m) added transport delay τ=1.54s vs 1.15s; extra 12.6° phase lag at 0.09Hz made oscillation slightly worse (τ_growth: 19s→16s); PP gain reduction doesn't help when smoothing delays dominate
   - speed_mps: 13.41
-    lookahead_m: 15.0
-  - speed_mps: 15.0             # ADDED: proportional extension (k≈1.13 consistent with 13.41→15.0)
-    lookahead_m: 17.0
+    lookahead_m: 15.0           # REVERTED: 20.0 → 15.0 (shorter transport delay is better when phase lag is the stability constraint)
+  - speed_mps: 15.0
+    lookahead_m: 17.0           # REVERTED: 22.0 → 17.0
   reference_lookahead_speed_table_entry:
   - speed_mps: 0.0
     lookahead_m: 6.0
@@ -307,34 +348,34 @@ trajectory:
   reference_lookahead_entry_preview_scale: 1.5
   reference_lookahead_entry_track_name: ''
   reference_lookahead_entry_preview_only_fallback: true
-  reference_lookahead_entry_preview_curvature_min: 0.003
-  reference_lookahead_entry_preview_curvature_max: 0.015
-  reference_lookahead_entry_hysteresis_on: 0.01
-  reference_lookahead_entry_hysteresis_off: 0.008
+  reference_lookahead_entry_preview_curvature_min: 0.0015
+  reference_lookahead_entry_preview_curvature_max: 0.008
+  reference_lookahead_entry_hysteresis_on: 0.0025
+  reference_lookahead_entry_hysteresis_off: 0.0018
   reference_lookahead_entry_distance_start_m: 20.0
   reference_lookahead_entry_distance_end_m: 6.0
-  curve_phase_preview_curvature_min: 0.003
-  curve_phase_preview_curvature_max: 0.015
-  curve_phase_path_curvature_min: 0.003
-  curve_phase_path_curvature_max: 0.015
-  curve_phase_rise_min: 0.0005
-  curve_phase_rise_max: 0.006
+  curve_phase_preview_curvature_min: 0.0015
+  curve_phase_preview_curvature_max: 0.008
+  curve_phase_path_curvature_min: 0.0015
+  curve_phase_path_curvature_max: 0.008
+  curve_phase_rise_min: 0.0002
+  curve_phase_rise_max: 0.003
   curve_phase_time_to_curve_min_s: 0.8
   curve_phase_time_to_curve_max_s: 3.0
   curve_phase_confidence_min: 0.35
   curve_phase_confidence_max: 0.8
   curve_phase_confidence_floor_scale: 0.6
   curve_phase_ema_alpha: 0.45
-  curve_phase_on: 0.45
-  curve_phase_off: 0.3
-  curve_phase_commit_on: 0.55
-  curve_phase_commit_min_frames: 4
+  curve_phase_on: 0.35
+  curve_phase_off: 0.22
+  curve_phase_commit_on: 0.45
+  curve_phase_commit_min_frames: 3
   curve_phase_entry_floor: 0.15
   curve_phase_commit_floor: 0.3
   curve_phase_rearm_hold_frames: 4
   curve_context_preview_horizon_m: 25.0
   curve_context_preview_step_m: 1.0
-  curve_context_curve_start_curvature: 0.006
+  curve_context_curve_start_curvature: 0.0015
   curve_context_curvature_gain: 6.0
   reference_lookahead_slew_rate_m_per_frame: 0.25
   reference_lookahead_slew_rate_shorten_m_per_frame: 0.35
@@ -516,7 +557,7 @@ trajectory:
   traj_heading_zero_gate_center_a_off_abs_max: 0.008
   traj_heading_zero_gate_heading_on_abs_rad: 0.035
   traj_heading_zero_gate_heading_off_abs_rad: 0.061
-  dynamic_effective_horizon_enabled: true
+  dynamic_effective_horizon_enabled: true   # RE-ENABLED: current_path_curvature now from map YAML (0.0 on straight, 0.002 on arc); noise-driven shortening is gone; on 500m arc the shortening is minimal (curvature_scale 0.002×0.15=0.0003)
   dynamic_effective_horizon_min_m: 3.0
   dynamic_effective_horizon_max_m: 20.0
   dynamic_effective_horizon_speed_scale: 0.35
@@ -538,12 +579,12 @@ trajectory:
     comfort_governor_min_speed: 3.0
     curvature_calibration_scale: 2.5
     curvature_history_frames: 5
-    curve_preview_enabled: true
+    curve_preview_enabled: false        # CHANGED: true → false (perception noise fires spurious preview braking)
     curve_preview_lookahead_scale: 1.6
     curve_preview_max_decel_mps2: 1.2
     curve_preview_min_curvature: 0.002
     curve_cap_enabled: true
-    curve_cap_shadow_mode: false
+    curve_cap_shadow_mode: false          # RE-ENABLED: map curvature = 0.002 on 500m arc → safe speed = sqrt(1.962/0.002)=31 m/s >> 15 m/s target; cap won't restrict normal driving; straight = 0.0 → cap inactive
     curve_cap_estimator_enabled: true
     curve_cap_hysteresis_enabled: true
     curve_cap_entry_intent_min: 0.35
@@ -555,7 +596,7 @@ trajectory:
     curve_cap_curvature_min: 0.002
     curve_cap_rise_min: 0.0005
     curve_cap_peak_lat_accel_g: 0.26
-    curve_cap_use_preview_curvature: true
+    curve_cap_use_preview_curvature: false  # CHANGED: true → false (map fix: main curvature is now map-backed=0.0 on straight, 0.002 on arc; preview_curvature is still perception-derived=0.04 noise; using preview gives max(0.0,0.04)=0.04 → 10-12 m/s cap on straight; false routes cap to map curvature → cap inactive on straight, ~31 m/s safe speed on arc >> 15 m/s target)
   lane_position_smoothing_alpha: 0.2
   ref_point_jump_clamp_x: 0.15
   ref_point_jump_clamp_heading: 0.08
@@ -613,6 +654,6 @@ perception:
 lateral_control:
   heading_weight: 0.5
   lateral_weight: 0.5
-  steering_smoothing_alpha: 0.7
+  steering_smoothing_alpha: 0.3   # CHANGED: 0.7 → 0.3 (matches control.lateral change; reduces phase lag in secondary smoothing path)
   steering_rate_scale_min: 0.8
   steering_jerk_limit: 0.0

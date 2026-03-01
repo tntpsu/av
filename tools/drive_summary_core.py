@@ -177,6 +177,8 @@ def _build_latency_sync_summary(data: Dict) -> Dict:
     e2e_p95_limit_ms = 100.0
     cadence_irregular_rate_limit = 0.08
     cadence_severe_rate_limit = 0.01
+    tuning_dt_p95_limit_ms = 80.0
+    tuning_dt_max_limit_ms = 500.0
 
     e2e_mode = "input_ready_to_command_sent"
     raw_modes = data.get("e2e_latency_mode")
@@ -262,6 +264,18 @@ def _build_latency_sync_summary(data: Dict) -> Dict:
             cadence_irregular_rate <= cadence_irregular_rate_limit
             and cadence_severe_rate <= cadence_severe_rate_limit
         )
+    tuning_valid = False
+    if cadence_available:
+        cadence_p95 = cadence_stats.get("p95")
+        cadence_max = cadence_stats.get("max")
+        tuning_valid = bool(
+            cadence_severe_rate is not None
+            and cadence_severe_rate <= cadence_severe_rate_limit
+            and cadence_p95 is not None
+            and cadence_p95 <= tuning_dt_p95_limit_ms
+            and cadence_max is not None
+            and cadence_max <= tuning_dt_max_limit_ms
+        )
     cadence_status = "unknown"
     if cadence_available:
         cadence_status = "good" if cadence_pass else "poor"
@@ -332,12 +346,16 @@ def _build_latency_sync_summary(data: Dict) -> Dict:
             "limits": {
                 "irregular_rate_max": cadence_irregular_rate_limit,
                 "severe_irregular_rate_max": cadence_severe_rate_limit,
+                "dt_p95_ms_max": tuning_dt_p95_limit_ms,
+                "dt_max_ms_max": tuning_dt_max_limit_ms,
             },
             "pass": cadence_pass,
+            "tuning_valid": tuning_valid,
         },
         "overall": {
             "status": overall_status,
             "issues": issues,
+            "tuning_valid": tuning_valid,
         },
     }
 
@@ -982,6 +1000,106 @@ def analyze_recording_summary(recording_path: Path, analyze_to_failure: bool = F
                 np.array(f['control/path_curvature_input'][:])
                 if 'control/path_curvature_input' in f else None
             )
+            data['path_curvature_primary_abs'] = (
+                np.array(f['control/path_curvature_primary_abs'][:])
+                if 'control/path_curvature_primary_abs' in f else None
+            )
+            data['path_curvature_lane_abs'] = (
+                np.array(f['control/path_curvature_lane_abs'][:])
+                if 'control/path_curvature_lane_abs' in f else None
+            )
+            data['path_curvature_source_used'] = None
+            if 'control/path_curvature_source_used' in f:
+                _pcsu = f['control/path_curvature_source_used'][:]
+                data['path_curvature_source_used'] = [
+                    s.decode('utf-8') if isinstance(s, (bytes, bytearray)) else str(s)
+                    for s in _pcsu
+                ]
+            data['curvature_primary_abs'] = (
+                np.array(f['control/curvature_primary_abs'][:])
+                if 'control/curvature_primary_abs' in f else None
+            )
+            data['curvature_primary_source'] = None
+            if 'control/curvature_primary_source' in f:
+                _cps = f['control/curvature_primary_source'][:]
+                data['curvature_primary_source'] = [
+                    s.decode('utf-8') if isinstance(s, (bytes, bytearray)) else str(s)
+                    for s in _cps
+                ]
+            data['curvature_map_abs'] = (
+                np.array(f['control/curvature_map_abs'][:])
+                if 'control/curvature_map_abs' in f else None
+            )
+            data['curvature_lane_context_abs'] = (
+                np.array(f['control/curvature_lane_context_abs'][:])
+                if 'control/curvature_lane_context_abs' in f else None
+            )
+            data['curvature_preview_abs'] = (
+                np.array(f['control/curvature_preview_abs'][:])
+                if 'control/curvature_preview_abs' in f else None
+            )
+            data['curvature_source_diverged'] = (
+                np.array(f['control/curvature_source_diverged'][:])
+                if 'control/curvature_source_diverged' in f else None
+            )
+            data['curvature_map_authority_lost'] = (
+                np.array(f['control/curvature_map_authority_lost'][:], dtype=bool)
+                if 'control/curvature_map_authority_lost' in f else None
+            )
+            data['curvature_source_divergence_abs'] = (
+                np.array(f['control/curvature_source_divergence_abs'][:])
+                if 'control/curvature_source_divergence_abs' in f else None
+            )
+            data['curvature_selection_reason'] = None
+            if 'control/curvature_selection_reason' in f:
+                _csr = f['control/curvature_selection_reason'][:]
+                data['curvature_selection_reason'] = [
+                    s.decode('utf-8') if isinstance(s, (bytes, bytearray)) else str(s)
+                    for s in _csr
+                ]
+            data['map_health_ok'] = (
+                np.array(f['control/map_health_ok'][:])
+                if 'control/map_health_ok' in f else None
+            )
+            data['track_match_ok'] = (
+                np.array(f['control/track_match_ok'][:])
+                if 'control/track_match_ok' in f else None
+            )
+            data['map_segment_lookup_success_rate'] = (
+                np.array(f['control/map_segment_lookup_success_rate'][:])
+                if 'control/map_segment_lookup_success_rate' in f else None
+            )
+            data['map_teleport_skip_count'] = (
+                np.array(f['control/map_teleport_skip_count'][:])
+                if 'control/map_teleport_skip_count' in f else None
+            )
+            data['map_odometer_jump_rate'] = (
+                np.array(f['control/map_odometer_jump_rate'][:])
+                if 'control/map_odometer_jump_rate' in f else None
+            )
+            data['curvature_contract_consistent_controller'] = (
+                np.array(f['control/curvature_contract_consistent_controller'][:])
+                if 'control/curvature_contract_consistent_controller' in f else None
+            )
+            data['curvature_contract_consistent_governor'] = (
+                np.array(f['control/curvature_contract_consistent_governor'][:])
+                if 'control/curvature_contract_consistent_governor' in f else None
+            )
+            data['curvature_contract_consistent_intent'] = (
+                np.array(f['control/curvature_contract_consistent_intent'][:])
+                if 'control/curvature_contract_consistent_intent' in f else None
+            )
+            data['curvature_contract_consistent_all'] = (
+                np.array(f['control/curvature_contract_consistent_all'][:])
+                if 'control/curvature_contract_consistent_all' in f else None
+            )
+            data['curvature_contract_mismatch_reason'] = None
+            if 'control/curvature_contract_mismatch_reason' in f:
+                _ccmr = f['control/curvature_contract_mismatch_reason'][:]
+                data['curvature_contract_mismatch_reason'] = [
+                    s.decode('utf-8') if isinstance(s, (bytes, bytearray)) else str(s)
+                    for s in _ccmr
+                ]
             data['curve_intent'] = (
                 np.array(f['control/curve_intent'][:])
                 if 'control/curve_intent' in f
@@ -1123,6 +1241,16 @@ def analyze_recording_summary(recording_path: Path, analyze_to_failure: bool = F
             data['speed_governor_cap_tracking_hard_ceiling_applied'] = (
                 np.array(f['control/speed_governor_cap_tracking_hard_ceiling_applied'][:])
                 if 'control/speed_governor_cap_tracking_hard_ceiling_applied' in f
+                else None
+            )
+            data['speed_governor_feasibility_backstop_active'] = (
+                np.array(f['control/speed_governor_feasibility_backstop_active'][:])
+                if 'control/speed_governor_feasibility_backstop_active' in f
+                else None
+            )
+            data['speed_governor_feasibility_backstop_speed'] = (
+                np.array(f['control/speed_governor_feasibility_backstop_speed'][:])
+                if 'control/speed_governor_feasibility_backstop_speed' in f
                 else None
             )
             data['turn_feasibility_active'] = (
@@ -1681,6 +1809,21 @@ def analyze_recording_summary(recording_path: Path, analyze_to_failure: bool = F
     cap_recovery_frames_p50 = 0.0
     cap_recovery_frames_p95 = 0.0
     hard_ceiling_applied_rate = 0.0
+    curvature_source_divergence_p95 = 0.0
+    curvature_source_diverged_rate = 0.0
+    curvature_map_authority_lost_rate = 0.0
+    curve_intent_commit_streak_max_frames = 0
+    feasibility_violation_rate = 0.0
+    feasibility_backstop_active_rate = 0.0
+    map_health_untrusted_rate = 0.0
+    track_mismatch_rate = 0.0
+    curvature_contract_consistency_rate = 0.0
+    telemetry_completeness_rate_curvature_contract = 0.0
+    telemetry_completeness_rate_feasibility = 0.0
+    first_divergence_frame = None
+    first_infeasible_frame = None
+    first_speed_above_feasibility_frame = None
+    first_boundary_breach_frame = None
     speed_min_mps = None
     speed_max_mps = None
     if data.get('speed') is not None and len(data['speed']) > 0:
@@ -2763,6 +2906,191 @@ def analyze_recording_summary(recording_path: Path, analyze_to_failure: bool = F
                         np.mean(hard_ceiling_arr[valid_cap_mask]) * 100.0
                     )
 
+    # 10. Curvature contract/coherency diagnostics
+    def _bool_series_with_valid(series):
+        if series is None:
+            return None, None
+        arr = np.asarray(series, dtype=np.float64)
+        n_local = min(int(n_frames), int(arr.size))
+        if n_local <= 0:
+            return np.array([], dtype=bool), np.array([], dtype=bool)
+        arr = arr[:n_local]
+        valid = np.isfinite(arr)
+        # Recorder writes -1 for unknown bool telemetry.
+        valid &= arr >= 0.0
+        return arr > 0.5, valid
+
+    def _field_completeness_percent(field_name: str, kind: str = "numeric") -> float:
+        series = data.get(field_name)
+        if series is None:
+            return 0.0
+        if kind == "string":
+            n_local = min(int(n_frames), len(series))
+            if n_local <= 0:
+                return 0.0
+            values = [str(series[i] if series[i] is not None else "").strip() for i in range(n_local)]
+            valid = np.array([len(v) > 0 for v in values], dtype=bool)
+            return safe_float(np.mean(valid) * 100.0)
+        arr = np.asarray(series, dtype=np.float64)
+        n_local = min(int(n_frames), int(arr.size))
+        if n_local <= 0:
+            return 0.0
+        arr = arr[:n_local]
+        valid = np.isfinite(arr)
+        if kind == "bool":
+            valid &= arr >= 0.0
+        return safe_float(np.mean(valid) * 100.0)
+
+    divergence_mask, divergence_valid = _bool_series_with_valid(
+        data.get("curvature_source_diverged")
+    )
+    if divergence_mask is not None and divergence_mask.size > 0 and np.any(divergence_valid):
+        curvature_source_diverged_rate = safe_float(
+            np.mean(divergence_mask[divergence_valid]) * 100.0
+        )
+        divergence_indices = np.where(divergence_mask & divergence_valid)[0]
+        if divergence_indices.size > 0:
+            first_divergence_frame = int(divergence_indices[0])
+
+    map_authority_series = data.get("curvature_map_authority_lost")
+    if map_authority_series is not None:
+        map_authority_arr = np.asarray(map_authority_series, dtype=bool)
+        if map_authority_arr.size > 0:
+            curvature_map_authority_lost_rate = safe_float(
+                np.mean(map_authority_arr) * 100.0
+            )
+
+    divergence_abs_series = data.get("curvature_source_divergence_abs")
+    if divergence_abs_series is not None:
+        divergence_abs_arr = np.asarray(divergence_abs_series, dtype=np.float64)
+        n_div_abs = min(int(n_frames), int(divergence_abs_arr.size))
+        if n_div_abs > 0:
+            divergence_abs_arr = divergence_abs_arr[:n_div_abs]
+            divergence_abs_arr = divergence_abs_arr[np.isfinite(divergence_abs_arr)]
+            if divergence_abs_arr.size > 0:
+                curvature_source_divergence_p95 = safe_float(
+                    np.percentile(divergence_abs_arr, 95)
+                )
+
+    curve_intent_state_series = data.get("curve_intent_state")
+    if curve_intent_state_series is not None:
+        n_state = min(int(n_frames), len(curve_intent_state_series))
+        current_commit = 0
+        max_commit = 0
+        for i in range(n_state):
+            state = str(curve_intent_state_series[i] or "").strip().upper()
+            if state == "COMMIT":
+                current_commit += 1
+                if current_commit > max_commit:
+                    max_commit = current_commit
+            else:
+                current_commit = 0
+        curve_intent_commit_streak_max_frames = int(max_commit)
+
+    if (
+        data.get("speed") is not None
+        and data.get("turn_feasibility_speed_limit_mps") is not None
+    ):
+        speed_arr = np.asarray(data["speed"], dtype=np.float64)
+        feas_cap_arr = np.asarray(data["turn_feasibility_speed_limit_mps"], dtype=np.float64)
+        n_feas = min(int(n_frames), int(speed_arr.size), int(feas_cap_arr.size))
+        if n_feas > 0:
+            speed_arr = speed_arr[:n_feas]
+            feas_cap_arr = feas_cap_arr[:n_feas]
+            valid_feas = np.isfinite(speed_arr) & np.isfinite(feas_cap_arr) & (feas_cap_arr > 0.1)
+            if np.any(valid_feas):
+                overspeed_mask = speed_arr > (feas_cap_arr + 0.2)
+                feasibility_violation_rate = safe_float(
+                    np.mean(overspeed_mask[valid_feas]) * 100.0
+                )
+                overspeed_indices = np.where(overspeed_mask & valid_feas)[0]
+                if overspeed_indices.size > 0:
+                    first_speed_above_feasibility_frame = int(overspeed_indices[0])
+
+    infeasible_mask, infeasible_valid = _bool_series_with_valid(
+        data.get("turn_feasibility_infeasible")
+    )
+    if infeasible_mask is not None and infeasible_mask.size > 0 and np.any(infeasible_valid):
+        infeasible_indices = np.where(infeasible_mask & infeasible_valid)[0]
+        if infeasible_indices.size > 0:
+            first_infeasible_frame = int(infeasible_indices[0])
+
+    backstop_mask, backstop_valid = _bool_series_with_valid(
+        data.get("speed_governor_feasibility_backstop_active")
+    )
+    if backstop_mask is not None and backstop_mask.size > 0 and np.any(backstop_valid):
+        feasibility_backstop_active_rate = safe_float(
+            np.mean(backstop_mask[backstop_valid]) * 100.0
+        )
+
+    map_health_mask, map_health_valid = _bool_series_with_valid(data.get("map_health_ok"))
+    if map_health_mask is not None and map_health_mask.size > 0 and np.any(map_health_valid):
+        map_health_untrusted_rate = safe_float(
+            np.mean((~map_health_mask)[map_health_valid]) * 100.0
+        )
+
+    track_match_mask, track_match_valid = _bool_series_with_valid(data.get("track_match_ok"))
+    if track_match_mask is not None and track_match_mask.size > 0 and np.any(track_match_valid):
+        track_mismatch_rate = safe_float(
+            np.mean((~track_match_mask)[track_match_valid]) * 100.0
+        )
+
+    consistent_all_mask, consistent_all_valid = _bool_series_with_valid(
+        data.get("curvature_contract_consistent_all")
+    )
+    if (
+        consistent_all_mask is not None
+        and consistent_all_mask.size > 0
+        and np.any(consistent_all_valid)
+    ):
+        curvature_contract_consistency_rate = safe_float(
+            np.mean(consistent_all_mask[consistent_all_valid]) * 100.0
+        )
+
+    contract_completeness_fields = [
+        ("curvature_primary_abs", "numeric"),
+        ("curvature_primary_source", "string"),
+        ("curvature_map_authority_lost", "bool"),
+        ("curvature_source_diverged", "bool"),
+        ("curvature_source_divergence_abs", "numeric"),
+        ("curvature_contract_consistent_all", "bool"),
+        ("map_health_ok", "bool"),
+        ("track_match_ok", "bool"),
+    ]
+    contract_completeness_values = [
+        _field_completeness_percent(name, kind) for name, kind in contract_completeness_fields
+    ]
+    if contract_completeness_values:
+        telemetry_completeness_rate_curvature_contract = safe_float(
+            np.mean(np.asarray(contract_completeness_values, dtype=np.float64))
+        )
+
+    feasibility_completeness_fields = [
+        ("turn_feasibility_speed_limit_mps", "numeric"),
+        ("turn_feasibility_infeasible", "bool"),
+        ("speed_governor_feasibility_backstop_active", "bool"),
+        ("speed_governor_feasibility_backstop_speed", "numeric"),
+    ]
+    feasibility_completeness_values = [
+        _field_completeness_percent(name, kind) for name, kind in feasibility_completeness_fields
+    ]
+    if feasibility_completeness_values:
+        telemetry_completeness_rate_feasibility = safe_float(
+            np.mean(np.asarray(feasibility_completeness_values, dtype=np.float64))
+        )
+
+    _boundary_candidates = []
+    if out_of_lane_events_list:
+        _start = out_of_lane_events_list[0].get("start_frame")
+        if _start is not None:
+            _boundary_candidates.append(int(_start))
+    if emergency_stop_frame is not None:
+        _boundary_candidates.append(int(emergency_stop_frame))
+    if failure_frame is not None:
+        _boundary_candidates.append(int(failure_frame))
+    if _boundary_candidates:
+        first_boundary_breach_frame = int(min(_boundary_candidates))
+
     layer_breakdowns = {
         "Perception": {
             "base_score": 100.0,
@@ -2971,6 +3299,34 @@ def analyze_recording_summary(recording_path: Path, analyze_to_failure: bool = F
         recommendations.append(
             "Safety hard ceiling is being used too often - planner should converge to cap without fallback clamps."
         )
+    if curvature_map_authority_lost_rate > 5.0:
+        recommendations.append(
+            f"Map curvature authority lost on {curvature_map_authority_lost_rate:.1f}% of frames"
+        )
+    if curve_intent_commit_streak_max_frames > max(60, int(0.4 * n_frames)):
+        recommendations.append(
+            "Curve intent COMMIT streak is too long - enforce rearm/exit progression to avoid stuck state."
+        )
+    if feasibility_violation_rate > 5.0:
+        recommendations.append(
+            "Frequent feasibility overspeed - tighten speed feasibility coupling to curvature contract."
+        )
+    if curvature_contract_consistency_rate < 99.0:
+        recommendations.append(
+            "Curvature contract consistency below target - ensure controller/governor/intent use one primary curvature."
+        )
+    if telemetry_completeness_rate_curvature_contract < 99.0:
+        recommendations.append(
+            "Curvature contract telemetry completeness below target - verify recorder writes all contract fields."
+        )
+    if telemetry_completeness_rate_feasibility < 99.0:
+        recommendations.append(
+            "Feasibility telemetry completeness below target - ensure backstop/feasibility channels are fully recorded."
+        )
+    if map_health_untrusted_rate > 1.0 or track_mismatch_rate > 0.0:
+        recommendations.append(
+            "Map health/track match instability detected - verify track profile, odometer continuity, and fallback gating."
+        )
     if lane_detection_rate < 90:
         recommendations.append("Improve lane detection - check perception model or CV fallback")
     if lane_line_jitter_p95 > 0.6 or reference_jitter_p95 > 0.25:
@@ -2997,6 +3353,10 @@ def analyze_recording_summary(recording_path: Path, analyze_to_failure: bool = F
         recommendations.append("Reduce longitudinal jerk - add rate limiting on throttle/brake")
 
     latency_sync = _build_latency_sync_summary(data)
+    if not bool((latency_sync.get("cadence") or {}).get("tuning_valid", False)):
+        recommendations.append(
+            "Cadence quality is not tuning-valid - do not use this run for parameter decisions."
+        )
     chassis_ground = _build_chassis_ground_summary(data, n_frames=n_frames)
     if chassis_ground.get("health") == "POOR":
         recommendations.append(
@@ -3046,6 +3406,28 @@ def analyze_recording_summary(recording_path: Path, analyze_to_failure: bool = F
         key_issues.append(f"Cap tracking >1.0 m/s above cap ({frames_above_cap_1p0mps_rate:.1f}% frames)")
     if hard_ceiling_applied_rate > 0.5:
         key_issues.append(f"Hard cap ceiling fallback active ({hard_ceiling_applied_rate:.1f}% frames)")
+    if not bool((latency_sync.get("cadence") or {}).get("tuning_valid", False)):
+        key_issues.append("Run excluded from tuning (cadence invalid)")
+    if curvature_map_authority_lost_rate > 5.0:
+        key_issues.append(
+            f"Map curvature authority lost ({curvature_map_authority_lost_rate:.1f}% frames)"
+        )
+    if curvature_contract_consistency_rate < 99.0:
+        key_issues.append(
+            f"Curvature contract consistency low ({curvature_contract_consistency_rate:.1f}%)"
+        )
+    if feasibility_violation_rate > 5.0:
+        key_issues.append(
+            f"Feasibility overspeed high ({feasibility_violation_rate:.1f}% frames)"
+        )
+    if map_health_untrusted_rate > 1.0:
+        key_issues.append(
+            f"Map health untrusted ({map_health_untrusted_rate:.1f}% frames)"
+        )
+    if track_mismatch_rate > 0.0:
+        key_issues.append(
+            f"Track mismatch present ({track_mismatch_rate:.1f}% frames)"
+        )
     if straight_oscillation_mean > 0.2:
         key_issues.append("Straight-line oscillation detected")
     if straight_sign_mismatch_events > 0:
@@ -3252,6 +3634,117 @@ def analyze_recording_summary(recording_path: Path, analyze_to_failure: bool = F
         "alignment_summary": alignment_summary,
         "latency_sync": latency_sync,
         "chassis_ground": chassis_ground,
+        "curvature_contract_health": {
+            "schema_version": "v1",
+            "availability": (
+                "available"
+                if (
+                    data.get("curvature_primary_abs") is not None
+                    or data.get("curvature_source_diverged") is not None
+                    or data.get("curvature_map_authority_lost") is not None
+                    or data.get("curvature_contract_consistent_all") is not None
+                )
+                else "unavailable"
+            ),
+            "primary_source_mode": (
+                max(
+                    (
+                        (src, cnt)
+                        for src, cnt in {
+                            str(s).strip(): int(
+                                sum(
+                                    1
+                                    for x in (data.get("curvature_primary_source") or [])
+                                    if str(x).strip() == str(s).strip()
+                                )
+                            )
+                            for s in set(data.get("curvature_primary_source") or [])
+                            if str(s).strip()
+                        }.items()
+                    ),
+                    key=lambda kv: kv[1],
+                )[0]
+                if data.get("curvature_primary_source")
+                else "unknown"
+            ),
+            "curvature_source_divergence_p95": safe_float(curvature_source_divergence_p95),
+            "curvature_source_diverged_rate": safe_float(curvature_source_diverged_rate),
+            "curvature_map_authority_lost_rate": safe_float(
+                curvature_map_authority_lost_rate
+            ),
+            "curve_intent_commit_streak_max_frames": int(curve_intent_commit_streak_max_frames),
+            "feasibility_violation_rate": safe_float(feasibility_violation_rate),
+            "feasibility_backstop_active_rate": safe_float(feasibility_backstop_active_rate),
+            "map_health_untrusted_rate": safe_float(map_health_untrusted_rate),
+            "track_mismatch_rate": safe_float(track_mismatch_rate),
+            "curvature_contract_consistency_rate": safe_float(curvature_contract_consistency_rate),
+            "telemetry_completeness_rate_curvature_contract": safe_float(
+                telemetry_completeness_rate_curvature_contract
+            ),
+            "telemetry_completeness_rate_feasibility": safe_float(
+                telemetry_completeness_rate_feasibility
+            ),
+            "map_segment_lookup_success_rate_p50": safe_float(
+                np.percentile(
+                    np.asarray(data.get("map_segment_lookup_success_rate"), dtype=float)[
+                        np.isfinite(np.asarray(data.get("map_segment_lookup_success_rate"), dtype=float))
+                    ],
+                    50,
+                )
+                if data.get("map_segment_lookup_success_rate") is not None
+                and np.isfinite(np.asarray(data.get("map_segment_lookup_success_rate"), dtype=float)).any()
+                else None,
+                default=None,
+            ),
+            "map_teleport_skip_count_max": safe_float(
+                np.max(
+                    np.asarray(data.get("map_teleport_skip_count"), dtype=float)[
+                        np.isfinite(np.asarray(data.get("map_teleport_skip_count"), dtype=float))
+                    ]
+                )
+                if data.get("map_teleport_skip_count") is not None
+                and np.isfinite(np.asarray(data.get("map_teleport_skip_count"), dtype=float)).any()
+                else None,
+                default=None,
+            ),
+            "map_odometer_jump_rate_p95": safe_float(
+                np.percentile(
+                    np.asarray(data.get("map_odometer_jump_rate"), dtype=float)[
+                        np.isfinite(np.asarray(data.get("map_odometer_jump_rate"), dtype=float))
+                    ],
+                    95,
+                )
+                if data.get("map_odometer_jump_rate") is not None
+                and np.isfinite(np.asarray(data.get("map_odometer_jump_rate"), dtype=float)).any()
+                else None,
+                default=None,
+            ),
+            "limits": {
+                "curvature_map_authority_lost_rate_max_pct": 5.0,
+                "curvature_source_diverged_rate_max_pct": 100.0,
+                "feasibility_violation_rate_max_pct": 5.0,
+                "map_health_untrusted_rate_max_pct": 1.0,
+                "track_mismatch_rate_max_pct": 0.0,
+                "curvature_contract_consistency_rate_min_pct": 99.0,
+                "telemetry_completeness_rate_min_pct": 99.0,
+            },
+        },
+        "first_fault_chain": {
+            "first_divergence_frame": (
+                int(first_divergence_frame) if first_divergence_frame is not None else None
+            ),
+            "first_infeasible_frame": (
+                int(first_infeasible_frame) if first_infeasible_frame is not None else None
+            ),
+            "first_speed_above_feasibility_frame": (
+                int(first_speed_above_feasibility_frame)
+                if first_speed_above_feasibility_frame is not None
+                else None
+            ),
+            "first_boundary_breach_frame": (
+                int(first_boundary_breach_frame) if first_boundary_breach_frame is not None else None
+            ),
+        },
         "system_health": {
             "pid_integral_max": safe_float(pid_integral_max),
             "unity_time_gap_max": safe_float(unity_time_gap_max),

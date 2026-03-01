@@ -52,6 +52,32 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+
+@dataclass
+class CurvatureContract:
+    """Single-owner curvature selection contract for one frame."""
+
+    primary_abs: float
+    primary_source: str
+    map_abs: Optional[float]
+    gt_abs: Optional[float]
+    lane_context_abs: Optional[float]
+    preview_abs: Optional[float]
+    map_health_ok: bool
+    track_match_ok: bool
+    diverged: bool
+    map_authority_lost: bool
+    divergence_abs: float
+    selection_reason: str
+
+
+def _curvature_map_authority_lost(
+    map_curvature_abs: Optional[float], curvature_primary_source: str
+) -> bool:
+    """Map authority is lost only when map curvature exists but map is not primary."""
+    return bool(map_curvature_abs is not None and str(curvature_primary_source) != "map_track")
+
+
 class AVStack:
     """Main AV stack integrating all components."""
     
@@ -422,6 +448,42 @@ class AVStack:
             curve_intent_single_owner_mode=bool(
                 lateral_cfg.get('curve_intent_single_owner_mode', True)
             ),
+            curve_intent_commit_watchdog_frames=int(
+                lateral_cfg.get('curve_intent_commit_watchdog_frames', 45)
+            ),
+            curve_intent_commit_watchdog_exit_curvature=lateral_cfg.get(
+                'curve_intent_commit_watchdog_exit_curvature'
+            ),
+            curve_intent_startup_ignore_frames=int(
+                lateral_cfg.get('curve_intent_startup_ignore_frames', 0)
+            ),
+            curve_intent_arm_preview_min=float(
+                lateral_cfg.get('curve_intent_arm_preview_min', 0.0)
+            ),
+            curve_intent_arm_rise_min=float(
+                lateral_cfg.get('curve_intent_arm_rise_min', 0.0)
+            ),
+            curve_intent_arm_distance_time_headway_s=float(
+                lateral_cfg.get('curve_intent_arm_distance_time_headway_s', 999.0)
+            ),
+            curve_intent_arm_distance_min_m=float(
+                lateral_cfg.get('curve_intent_arm_distance_min_m', 0.0)
+            ),
+            curve_intent_arm_distance_max_m=float(
+                lateral_cfg.get('curve_intent_arm_distance_max_m', 1000000.0)
+            ),
+            curve_intent_rearm_exit_hysteresis=float(
+                lateral_cfg.get('curve_intent_rearm_exit_hysteresis', 0.0)
+            ),
+            curve_intent_rearm_min_frames=int(
+                lateral_cfg.get('curve_intent_rearm_min_frames', 0)
+            ),
+            curve_intent_max_commit_frames=int(
+                lateral_cfg.get('curve_intent_max_commit_frames', 0)
+            ),
+            curve_intent_force_straight_hold_frames=int(
+                lateral_cfg.get('curve_intent_force_straight_hold_frames', 0)
+            ),
             road_curve_enter_threshold=lateral_cfg.get('road_curve_enter_threshold'),
             road_curve_exit_threshold=lateral_cfg.get('road_curve_exit_threshold'),
             road_straight_hold_invalid_frames=int(
@@ -664,6 +726,30 @@ class AVStack:
             stanley_heading_weight=lateral_cfg.get('stanley_heading_weight', 1.0),
             pp_feedback_gain=lateral_cfg.get('pp_feedback_gain', 0.15),
             pp_min_lookahead=lateral_cfg.get('pp_min_lookahead', 0.5),
+            pp_speed_norm_enabled=bool(
+                lateral_cfg.get('pp_speed_norm_enabled', False)
+            ),
+            pp_speed_norm_reference_mps=float(
+                lateral_cfg.get('pp_speed_norm_reference_mps', 12.0)
+            ),
+            pp_speed_norm_min_scale=float(
+                lateral_cfg.get('pp_speed_norm_min_scale', 0.70)
+            ),
+            pp_map_ff_enabled=bool(
+                lateral_cfg.get('pp_map_ff_enabled', False)
+            ),
+            pp_map_ff_gain=float(
+                lateral_cfg.get('pp_map_ff_gain', 1.0)
+            ),
+            pp_map_ff_wheelbase_m=float(
+                lateral_cfg.get('pp_map_ff_wheelbase_m', 2.5)
+            ),
+            pp_map_ff_curvature_min=float(
+                lateral_cfg.get('pp_map_ff_curvature_min', 0.005)
+            ),
+            pp_map_ff_curvature_max_clip=float(
+                lateral_cfg.get('pp_map_ff_curvature_max_clip', 0.08)
+            ),
             pp_ref_jump_clamp=lateral_cfg.get('pp_ref_jump_clamp', 0.5),
             pp_stale_decay=lateral_cfg.get('pp_stale_decay', 0.98),
             pp_max_steering_rate=lateral_cfg.get('pp_max_steering_rate', 0.4),
@@ -999,10 +1085,39 @@ class AVStack:
         ).strip()
         self._reference_entry_track_total_length_m: Optional[float] = None
         self._reference_entry_track_curves: list[dict] = []
+        # Odometry-based track position: accumulate driven distance each frame
+        # so the YAML segment lookup works without Unity sending roadCenterReferenceT.
+        self._track_odometer_m: float = 0.0
+        self._track_odometer_last_pos: Optional[np.ndarray] = None
+        self._track_map_curvature: float = 0.0  # curvature at current odometer position
+        self._track_profile_loaded: bool = False
+        self._runtime_track_id: str = ""
+        self._map_segment_lookup_count: int = 0
+        self._map_segment_lookup_success_count: int = 0
+        self._map_odometer_update_count: int = 0
+        self._map_odometer_teleport_skip_count: int = 0
+        self._curvature_source_active: str = "lane_context"
+        self._curvature_source_candidate: Optional[str] = None
+        self._curvature_source_candidate_frames: int = 0
+        self._curvature_source_switch_on_frames = max(
+            1, int(trajectory_cfg.get("curvature_source_switch_on_frames", 3))
+        )
+        self._curvature_divergence_threshold = max(
+            0.0, float(trajectory_cfg.get("curvature_source_divergence_threshold", 0.01))
+        )
+        self._map_odometer_jump_rate_max = max(
+            0.0, float(trajectory_cfg.get("map_odometer_jump_rate_max", 0.10))
+        )
+        self._last_turn_feasibility_speed_limit_mps: Optional[float] = None
+        self._last_turn_feasibility_infeasible: bool = False
+        self._last_turn_feasibility_active: bool = False
         # Runtime --track-yaml overrides the config track name so every run
         # automatically picks up the correct geometry without config edits.
         if track_yaml_path:
             self._reference_entry_track_name = Path(track_yaml_path).stem
+        self._runtime_track_id = str(
+            os.getenv("AV_TRACK_ID", self._reference_entry_track_name or "")
+        ).strip()
         self._load_reference_entry_track_profile(self._reference_entry_track_name)
 
         # Canonical map-free curve anticipation (trajectory-owned signal).
@@ -1025,6 +1140,7 @@ class AVStack:
         """Load curve windows (with curvature) for lookahead entry preview."""
         self._reference_entry_track_total_length_m = None
         self._reference_entry_track_curves = []
+        self._track_profile_loaded = False
         if not track_name:
             return
 
@@ -1065,16 +1181,165 @@ class AVStack:
             if distance_cursor > 1e-3 and curves:
                 self._reference_entry_track_total_length_m = float(distance_cursor)
                 self._reference_entry_track_curves = curves
+                self._track_profile_loaded = True
+                # Seed odometer at the track's spawn offset so segment lookups
+                # are correct from frame 0 without needing Unity to send
+                # roadCenterReferenceT.
+                start_dist = float(cfg.get('start_distance', 0.0) or 0.0)
+                self._track_odometer_m = start_dist
+                self._track_odometer_last_pos = None
                 logger.info(
-                    "[LOOKAHEAD_ENTRY] Loaded track profile '%s' curves=%d total=%.2fm",
+                    "[LOOKAHEAD_ENTRY] Loaded track profile '%s' curves=%d total=%.2fm start_dist=%.1fm",
                     track_name,
                     len(curves),
                     self._reference_entry_track_total_length_m,
+                    start_dist,
                 )
         except Exception as exc:
             logger.warning("[LOOKAHEAD_ENTRY] Failed to load track profile '%s': %s", track_name, exc)
             self._reference_entry_track_total_length_m = None
             self._reference_entry_track_curves = []
+            self._track_profile_loaded = False
+
+    def _update_track_odometer(self, vehicle_state_dict: dict) -> float:
+        """Accumulate driven distance from vehicle position for map-based lookups.
+
+        Replaces the unused roadCenterReferenceT Unity signal with dead-reckoning
+        odometry.  Position deltas > 5 m in a single frame are treated as teleports
+        and skipped so the odometer isn't corrupted by resets or editor jumps.
+        """
+        if self._reference_entry_track_total_length_m is None:
+            return self._track_odometer_m
+        pos = self._extract_position(vehicle_state_dict)
+        if self._track_odometer_last_pos is not None:
+            self._map_odometer_update_count += 1
+            delta = float(np.linalg.norm(pos - self._track_odometer_last_pos))
+            if 0.0 < delta < 5.0:  # guard against teleports
+                self._track_odometer_m += delta
+                total = float(self._reference_entry_track_total_length_m)
+                if total > 0.0:
+                    self._track_odometer_m = self._track_odometer_m % total
+            elif delta >= 5.0:
+                self._map_odometer_teleport_skip_count += 1
+        self._track_odometer_last_pos = pos
+        return self._track_odometer_m
+
+    def _map_curvature_at_distance(self, distance_m: float) -> float:
+        """Return the map curvature (1/m) at a given arc-length position on the track.
+
+        Returns 0.0 when the position falls on a straight segment or no map is loaded.
+        """
+        total = self._reference_entry_track_total_length_m
+        curves = self._reference_entry_track_curves
+        if total is None or not curves:
+            return 0.0
+        self._map_segment_lookup_count += 1
+        d = float(distance_m) % float(total)
+        self._map_segment_lookup_success_count += 1
+        for curve in curves:
+            if float(curve["start_m"]) <= d < float(curve["end_m"]):
+                return float(curve["curvature_abs"])
+        return 0.0
+
+    @staticmethod
+    def _abs_curvature_or_none(value: object) -> Optional[float]:
+        """Return finite absolute curvature or None."""
+        if not isinstance(value, (int, float)):
+            return None
+        curv = float(value)
+        if not math.isfinite(curv):
+            return None
+        return abs(curv)
+
+    def _map_health_snapshot(self) -> tuple[bool, bool, float, int, float]:
+        """Return map-health tuple for telemetry and source selection."""
+        configured_track = str(self._runtime_track_id or "").strip().lower()
+        loaded_track = str(self._reference_entry_track_name or "").strip().lower()
+        track_match_ok = (
+            not configured_track
+            or configured_track == "unknown"
+            or not loaded_track
+            or configured_track == loaded_track
+        )
+        lookup_rate = 0.0
+        if self._map_segment_lookup_count > 0:
+            lookup_rate = float(
+                self._map_segment_lookup_success_count / self._map_segment_lookup_count
+            )
+        odometer_jump_rate = 0.0
+        if self._map_odometer_update_count > 0:
+            odometer_jump_rate = float(
+                self._map_odometer_teleport_skip_count / self._map_odometer_update_count
+            )
+        map_health_ok = bool(
+            self._track_profile_loaded
+            and track_match_ok
+            and lookup_rate >= 0.99
+            and odometer_jump_rate <= self._map_odometer_jump_rate_max
+        )
+        return (
+            map_health_ok,
+            track_match_ok,
+            lookup_rate,
+            int(self._map_odometer_teleport_skip_count),
+            odometer_jump_rate,
+        )
+
+    def _select_primary_curvature(
+        self,
+        *,
+        map_abs: Optional[float],
+        gt_abs: Optional[float],
+        lane_context_abs: Optional[float],
+        map_health_ok: bool,
+    ) -> tuple[float, str, str]:
+        """Select single-owner primary curvature with source-switch hysteresis."""
+
+        valid = {
+            "map_track": map_abs if map_health_ok and map_abs is not None else None,
+            "ground_truth": gt_abs,
+            "lane_context": lane_context_abs,
+        }
+        desired_source = "lane_context"
+        selection_reason = "gt_unavailable_switch_to_lane"
+        if valid["map_track"] is not None:
+            desired_source = "map_track"
+            selection_reason = "map_ok"
+        elif valid["ground_truth"] is not None:
+            desired_source = "ground_truth"
+            selection_reason = (
+                "map_untrusted_switch_to_gt" if map_abs is not None else "map_unavailable"
+            )
+
+        if desired_source != self._curvature_source_active:
+            if self._curvature_source_candidate == desired_source:
+                self._curvature_source_candidate_frames += 1
+            else:
+                self._curvature_source_candidate = desired_source
+                self._curvature_source_candidate_frames = 1
+            if self._curvature_source_candidate_frames >= self._curvature_source_switch_on_frames:
+                self._curvature_source_active = desired_source
+                self._curvature_source_candidate = None
+                self._curvature_source_candidate_frames = 0
+            else:
+                selection_reason = "hysteresis_hold"
+        else:
+            self._curvature_source_candidate = None
+            self._curvature_source_candidate_frames = 0
+
+        active_source = self._curvature_source_active
+        active_value = valid.get(active_source)
+        if active_value is None:
+            for source in ("map_track", "ground_truth", "lane_context"):
+                candidate = valid.get(source)
+                if candidate is not None:
+                    active_source = source
+                    active_value = candidate
+                    break
+        if active_value is None:
+            active_value = 0.0
+            active_source = "lane_context"
+        return float(active_value), str(active_source), str(selection_reason)
 
     def _compute_reference_entry_preview(
         self,
@@ -1129,8 +1394,19 @@ class AVStack:
                     preview_curvature_abs = float(
                         curve_context.get("preview_curvature_abs", preview_curvature_abs)
                     )
-                    path_curvature_abs = float(
-                        curve_context.get("path_curvature_abs", path_curvature_abs)
+                    # path_curvature_abs from get_curve_context has curvature_gain already
+                    # applied (e.g. ×6) for intent sensitivity. Normalise back to physical
+                    # 1/m units so lane_context_curvature_abs stays comparable to the map
+                    # value and the contract divergence check is not inflated by the gain.
+                    _curve_context_gain = max(
+                        1.0,
+                        float(
+                            self.trajectory_config.get("curve_context_curvature_gain", 1.0)
+                        ),
+                    )
+                    path_curvature_abs = (
+                        float(curve_context.get("path_curvature_abs", path_curvature_abs))
+                        / _curve_context_gain
                     )
                     distance_to_curve_start_m = curve_context.get("distance_to_curve_start_m")
                     time_to_curve_s = curve_context.get("time_to_curve_s")
@@ -1199,16 +1475,16 @@ class AVStack:
         road_t_raw = vehicle_state_dict.get("roadCenterReferenceT")
         if road_t_raw is None:
             road_t_raw = vehicle_state_dict.get("road_center_reference_t")
-        if not isinstance(road_t_raw, (int, float)):
-            return result
-        road_t = float(road_t_raw)
-        if not math.isfinite(road_t):
-            return result
-
-        if road_t > 1.5:
-            distance_m = road_t % float(total)
+        if isinstance(road_t_raw, (int, float)) and math.isfinite(float(road_t_raw)):
+            road_t = float(road_t_raw)
+            if road_t > 1.5:
+                distance_m = road_t % float(total)
+            else:
+                distance_m = (road_t % 1.0) * float(total)
         else:
-            distance_m = (road_t % 1.0) * float(total)
+            # Unity is not sending roadCenterReferenceT — fall back to the
+            # dead-reckoning odometer updated each frame in _update_track_odometer.
+            distance_m = self._track_odometer_m % float(total)
 
         current_curve = None
         for curve in curves:
@@ -1932,10 +2208,27 @@ class AVStack:
         lane_coeffs = pr['lane_coeffs']
         confidence = pr['confidence']
         current_speed = vehicle_state_dict.get('speed', 0.0)
-        current_path_curvature = float(
-            vehicle_state_dict.get('groundTruthPathCurvature', 0.0)
-            or vehicle_state_dict.get('ground_truth_path_curvature', 0.0)
+        # Update dead-reckoning odometer before any curvature lookups this frame.
+        self._update_track_odometer(vehicle_state_dict)
+
+        gt_curv_raw = vehicle_state_dict.get('groundTruthPathCurvature')
+        if gt_curv_raw is None:
+            gt_curv_raw = vehicle_state_dict.get('ground_truth_path_curvature')
+        map_curvature_signed = self._map_curvature_at_distance(self._track_odometer_m)
+        gt_curvature_signed = (
+            float(gt_curv_raw)
+            if isinstance(gt_curv_raw, (int, float)) and math.isfinite(float(gt_curv_raw))
+            else None
         )
+        if gt_curvature_signed is not None and abs(gt_curvature_signed) > 1e-9:
+            # Unity is sending real ground-truth curvature — use it directly.
+            current_path_curvature = float(gt_curvature_signed)
+        else:
+            # Unity is not sending ground-truth curvature. Fall back to map-based
+            # curvature at current odometer.
+            current_path_curvature = float(map_curvature_signed)
+        self._track_map_curvature = float(map_curvature_signed)
+
         base_reference_lookahead = float(
             self.trajectory_config.get('reference_lookahead', 8.0)
         )
@@ -1949,9 +2242,44 @@ class AVStack:
         preview_curvature_abs = float(
             entry_preview.get('preview_curvature_abs', abs(current_path_curvature))
         )
-        path_curvature_for_phase = float(
+        lane_context_curvature_abs = float(
             entry_preview.get('path_curvature_abs', abs(current_path_curvature))
         )
+        map_curvature_abs = self._abs_curvature_or_none(map_curvature_signed)
+        gt_curvature_abs = self._abs_curvature_or_none(gt_curvature_signed)
+        map_health_ok, track_match_ok, map_lookup_success_rate, map_teleport_skip_count, map_odometer_jump_rate = (
+            self._map_health_snapshot()
+        )
+        curvature_primary_abs, curvature_primary_source, curvature_selection_reason = (
+            self._select_primary_curvature(
+                map_abs=map_curvature_abs,
+                gt_abs=gt_curvature_abs,
+                lane_context_abs=lane_context_curvature_abs,
+                map_health_ok=map_health_ok,
+            )
+        )
+        curvature_source_divergence_abs = abs(
+            float(curvature_primary_abs) - float(lane_context_curvature_abs)
+        )
+        # Operational divergence means map authority is lost while map curvature is available.
+        curvature_source_diverged = _curvature_map_authority_lost(
+            map_curvature_abs, str(curvature_primary_source)
+        )
+        curvature_contract = CurvatureContract(
+            primary_abs=float(curvature_primary_abs),
+            primary_source=str(curvature_primary_source),
+            map_abs=map_curvature_abs,
+            gt_abs=gt_curvature_abs,
+            lane_context_abs=float(lane_context_curvature_abs),
+            preview_abs=float(preview_curvature_abs),
+            map_health_ok=bool(map_health_ok),
+            track_match_ok=bool(track_match_ok),
+            diverged=bool(curvature_source_diverged),
+            map_authority_lost=bool(curvature_source_diverged),
+            divergence_abs=float(curvature_source_divergence_abs),
+            selection_reason=str(curvature_selection_reason),
+        )
+        path_curvature_for_phase = float(curvature_contract.primary_abs)
         preview_entry_source = str(entry_preview.get('source', 'map_free'))
         distance_to_curve_start_m = entry_preview.get('distance_to_curve_start_m')
         time_to_curve_s = entry_preview.get('time_to_curve_s')
@@ -1990,6 +2318,25 @@ class AVStack:
         curve_intent_term_preview = float(curve_phase_diag.get("curve_phase_term_preview", 0.0) or 0.0)
         curve_intent_term_path = float(curve_phase_diag.get("curve_phase_term_path", 0.0) or 0.0)
         curve_intent_term_rise = float(curve_phase_diag.get("curve_phase_term_rise", 0.0) or 0.0)
+        # P2 fix: prevent startup curvature transients from latching _curve_phase_scheduler_state.
+        # The controller has its own startup lockout (curve_intent_startup_ignore_frames), but it
+        # reads curve_intent_state from reference_point every frame. If _curve_phase_scheduler_state
+        # already holds "COMMIT" from a transient spike, the scheduler is fed previous_state="COMMIT"
+        # on every subsequent frame, reinstating the latch after the controller's lockout expires.
+        # Solution: keep _curve_phase_scheduler_state at STRAIGHT during the startup window so the
+        # scheduler's own feedback memory never latches from initialization transients.
+        _startup_ignore_n = int(
+            self.control_config.get("lateral", {}).get("curve_intent_startup_ignore_frames", 0)
+        )
+        if self.frame_count <= _startup_ignore_n:
+            curve_intent = 0.0
+            curve_intent_raw = 0.0
+            curve_intent_state = "STRAIGHT"
+            curve_phase_diag = {
+                **curve_phase_diag,
+                "curve_phase": 0.0,
+                "curve_phase_state": "STRAIGHT",
+            }
         self._curve_phase_scheduler_state = {
             "curve_phase": float(curve_phase_diag.get("curve_phase", 0.0) or 0.0),
             "curve_phase_state": str(curve_phase_diag.get("curve_phase_state", "STRAIGHT") or "STRAIGHT"),
@@ -2117,10 +2464,7 @@ class AVStack:
         dynamic_horizon_diag = compute_dynamic_effective_horizon(
             base_horizon_m=float(reference_lookahead),
             current_speed_mps=float(current_speed),
-            path_curvature=float(
-                vehicle_state_dict.get('groundTruthPathCurvature', 0.0)
-                or vehicle_state_dict.get('ground_truth_path_curvature', 0.0)
-            ),
+            path_curvature=float(current_path_curvature),  # map-backed, not raw Unity field
             confidence=float(confidence) if isinstance(confidence, (int, float)) else None,
             config=self.trajectory_config,
         )
@@ -2170,6 +2514,37 @@ class AVStack:
             'curve_intent_term_path': curve_intent_term_path,
             'curve_intent_term_rise': curve_intent_term_rise,
             'curvature_rise_abs': curvature_rise_abs,
+            'curvature_primary_abs': float(curvature_contract.primary_abs),
+            'curvature_primary_source': str(curvature_contract.primary_source),
+            'curvature_map_abs': (
+                float(curvature_contract.map_abs)
+                if curvature_contract.map_abs is not None
+                else 0.0
+            ),
+            'curvature_gt_abs': (
+                float(curvature_contract.gt_abs)
+                if curvature_contract.gt_abs is not None
+                else 0.0
+            ),
+            'curvature_lane_context_abs': (
+                float(curvature_contract.lane_context_abs)
+                if curvature_contract.lane_context_abs is not None
+                else 0.0
+            ),
+            'curvature_preview_abs': (
+                float(curvature_contract.preview_abs)
+                if curvature_contract.preview_abs is not None
+                else 0.0
+            ),
+            'curvature_source_diverged': bool(curvature_contract.diverged),
+            'curvature_map_authority_lost': bool(curvature_contract.map_authority_lost),
+            'curvature_source_divergence_abs': float(curvature_contract.divergence_abs),
+            'curvature_selection_reason': str(curvature_contract.selection_reason),
+            'map_health_ok': bool(curvature_contract.map_health_ok),
+            'track_match_ok': bool(curvature_contract.track_match_ok),
+            'map_segment_lookup_success_rate': float(map_lookup_success_rate),
+            'map_teleport_skip_count': int(map_teleport_skip_count),
+            'map_odometer_jump_rate': float(map_odometer_jump_rate),
             'image_height': image_height_geo,
             'image_width': image_width_geo,
         }
@@ -3355,6 +3730,21 @@ class AVStack:
             'speed_limit_preview_long': geo['speed_limit_preview_long'],
             'speed_limit_preview_long_distance': geo['speed_limit_preview_long_distance'],
             'speed_limit_preview_long_min_distance': geo['speed_limit_preview_long_min_distance'],
+            'curvature_primary_abs': geo['curvature_primary_abs'],
+            'curvature_primary_source': geo['curvature_primary_source'],
+            'curvature_map_abs': geo['curvature_map_abs'],
+            'curvature_gt_abs': geo['curvature_gt_abs'],
+            'curvature_lane_context_abs': geo['curvature_lane_context_abs'],
+            'curvature_preview_abs': geo['curvature_preview_abs'],
+            'curvature_source_diverged': geo['curvature_source_diverged'],
+            'curvature_map_authority_lost': geo['curvature_map_authority_lost'],
+            'curvature_source_divergence_abs': geo['curvature_source_divergence_abs'],
+            'curvature_selection_reason': geo['curvature_selection_reason'],
+            'map_health_ok': geo['map_health_ok'],
+            'track_match_ok': geo['track_match_ok'],
+            'map_segment_lookup_success_rate': geo['map_segment_lookup_success_rate'],
+            'map_teleport_skip_count': geo['map_teleport_skip_count'],
+            'map_odometer_jump_rate': geo['map_odometer_jump_rate'],
         }
 
     def _pf_score_perception_health(self, pr: dict, gated: dict, fv: dict) -> dict:
@@ -3613,12 +4003,11 @@ class AVStack:
         speed_limit = gated.get('speed_limit', 0.0)
         dynamic_horizon_diag = gated.get('dynamic_horizon_diag', {})
 
-        # --- Input preparation (stays in av_stack) ---
-        path_curvature_raw = vehicle_state_dict.get('groundTruthPathCurvature')
-        if path_curvature_raw is None:
-            path_curvature_raw = vehicle_state_dict.get('ground_truth_path_curvature', 0.0)
+        # --- Input preparation (single-owner curvature contract) ---
+        path_curvature_raw = float(gated.get('curvature_primary_abs', 0.0) or 0.0)
+        path_curvature_source = str(gated.get('curvature_primary_source', 'lane_context') or 'lane_context')
         path_curvature_smoothed = self._smooth_path_curvature(
-            float(path_curvature_raw) if isinstance(path_curvature_raw, (int, float)) else 0.0,
+            float(path_curvature_raw),
             current_speed,
             timestamp,
         )
@@ -3638,13 +4027,12 @@ class AVStack:
                 min_curve_speed,
             )
 
-        # Get preview curvature for anticipatory deceleration
-        preview_curvature = None
-        if lane_coeffs is not None:
-            preview_lookahead = reference_lookahead * self.speed_governor.config.curve_preview_lookahead_scale
-            preview_curvature = self.trajectory_planner.get_curvature_at_lookahead(
-                lane_coeffs, preview_lookahead
-            )
+        # Preview curvature stays secondary/anticipatory.
+        preview_curvature = float(
+            gated.get('curvature_preview_abs', gated.get('preview_curvature_abs', 0.0)) or 0.0
+        )
+        if preview_curvature <= 0.0:
+            preview_curvature = None
 
         # Use perception horizon (lookahead_distance from config) for guardrail,
         # not the control reference_lookahead
@@ -3674,6 +4062,8 @@ class AVStack:
             curve_intent=float(curve_intent),
             curve_intent_state=str(gated.get('curve_intent_state', 'STRAIGHT') or 'STRAIGHT'),
             curve_rise=float(gated.get('curvature_rise_abs', 0.0) or 0.0),
+            turn_feasibility_speed_limit_mps=self._last_turn_feasibility_speed_limit_mps,
+            turn_feasibility_infeasible=bool(self._last_turn_feasibility_infeasible),
         )
 
         adjusted_target_speed = gov_output.target_speed
@@ -3696,6 +4086,45 @@ class AVStack:
         curve_intent_speed_guardrail_confidence = (
             float(confidence) if isinstance(confidence, (int, float)) else float("nan")
         )
+        lateral_cfg = self.control_config.get("lateral", {})
+        curve_intent_startup_ignore_frames = int(
+            lateral_cfg.get("curve_intent_startup_ignore_frames", 0)
+        )
+        curve_intent_distance_headway_s = float(
+            lateral_cfg.get("curve_intent_arm_distance_time_headway_s", 999.0)
+        )
+        curve_intent_distance_min_m = float(
+            lateral_cfg.get("curve_intent_arm_distance_min_m", 0.0)
+        )
+        curve_intent_distance_max_m = float(
+            lateral_cfg.get("curve_intent_arm_distance_max_m", 1000000.0)
+        )
+        curve_intent_rearm_hysteresis = float(
+            lateral_cfg.get("curve_intent_rearm_exit_hysteresis", 0.0)
+        )
+        distance_to_curve_start_m = gated.get("distance_to_curve_start_m")
+        if isinstance(distance_to_curve_start_m, (int, float)) and np.isfinite(
+            float(distance_to_curve_start_m)
+        ):
+            curve_intent_distance_horizon_m = float(
+                np.clip(
+                    max(0.0, float(current_speed)) * max(0.0, curve_intent_distance_headway_s),
+                    max(0.0, curve_intent_distance_min_m),
+                    max(max(0.0, curve_intent_distance_min_m), curve_intent_distance_max_m),
+                )
+            )
+            curve_intent_distance_ready = bool(
+                float(distance_to_curve_start_m)
+                <= (curve_intent_distance_horizon_m + max(0.0, curve_intent_rearm_hysteresis))
+            )
+        else:
+            curve_intent_distance_horizon_m = -1.0
+            curve_intent_distance_ready = True
+        curve_intent_state_norm = str(gated.get("curve_intent_state", "STRAIGHT") or "STRAIGHT").strip().upper()
+        curve_intent_state_active = bool(curve_intent_state_norm in {"ENTRY", "COMMIT"})
+        curve_intent_startup_lockout = bool(
+            int(self.frame_count) <= max(0, int(curve_intent_startup_ignore_frames))
+        )
         curve_cap_authority_active = bool(
             self.speed_governor.config.curve_cap_enabled
             and not self.speed_governor.config.curve_cap_shadow_mode
@@ -3710,6 +4139,9 @@ class AVStack:
             )
             if (
                 curve_intent >= curve_intent_speed_guardrail_intent_min
+                and curve_intent_state_active
+                and curve_intent_distance_ready
+                and not curve_intent_startup_lockout
                 and confidence_low
                 and curve_intent_speed_guardrail_cap_mps > 0.0
             ):
@@ -3792,10 +4224,18 @@ class AVStack:
             'curve_speed_limit': curve_speed_limit,
             'stale_speed_hold_active': stale_speed_hold_active,
             'path_curvature': path_curvature,
+            # Raw (pre-smoothing) curvature fed to the governor — used by the
+            # contract consistency check so smoothing lag doesn't cause false mismatches.
+            'path_curvature_raw': path_curvature_raw,
+            'path_curvature_source': path_curvature_source,
             'speed_horizon_guardrail_diag': speed_horizon_guardrail_diag,
             'curve_intent_speed_guardrail_active': curve_intent_speed_guardrail_active,
             'curve_intent_speed_guardrail_cap_mps': curve_intent_speed_guardrail_cap_mps,
             'curve_intent_speed_guardrail_confidence': curve_intent_speed_guardrail_confidence,
+            'curve_intent_speed_guardrail_state_active': curve_intent_state_active,
+            'curve_intent_speed_guardrail_distance_ready': curve_intent_distance_ready,
+            'curve_intent_speed_guardrail_distance_horizon_m': curve_intent_distance_horizon_m,
+            'curve_intent_speed_guardrail_startup_lockout': curve_intent_startup_lockout,
             'curve_cap_speed': gov_output.curve_cap_speed,
             'curve_cap_active': gov_output.curve_cap_active,
             'curve_cap_reason': gov_output.curve_cap_reason,
@@ -3808,6 +4248,14 @@ class AVStack:
             'speed_governor_cap_tracking_mode_code': gov_output.cap_tracking_mode_code,
             'speed_governor_cap_tracking_recovery_frames': gov_output.cap_tracking_recovery_frames,
             'speed_governor_cap_tracking_hard_ceiling_applied': gov_output.cap_tracking_hard_ceiling_applied,
+            'speed_governor_feasibility_backstop_active': bool(
+                gov_output.feasibility_backstop_active
+            ),
+            'speed_governor_feasibility_backstop_speed': (
+                float(gov_output.feasibility_backstop_speed)
+                if gov_output.feasibility_backstop_speed is not None
+                else -1.0
+            ),
         }
 
     def _pf_plan_trajectory(self, pr: dict, gated: dict, gov: dict, vehicle_state_dict: dict, timestamp: float) -> dict:
@@ -3837,6 +4285,27 @@ class AVStack:
         curve_intent_speed_guardrail_confidence = gov['curve_intent_speed_guardrail_confidence']
         current_speed = gated['current_speed']
         current_path_curvature = gated['current_path_curvature']
+        curvature_primary_abs = float(gated.get('curvature_primary_abs', abs(current_path_curvature)) or 0.0)
+        curvature_primary_source = str(gated.get('curvature_primary_source', 'lane_context') or 'lane_context')
+        curvature_map_abs = float(gated.get('curvature_map_abs', 0.0) or 0.0)
+        curvature_gt_abs = float(gated.get('curvature_gt_abs', 0.0) or 0.0)
+        curvature_lane_context_abs = float(gated.get('curvature_lane_context_abs', 0.0) or 0.0)
+        curvature_preview_abs = float(gated.get('curvature_preview_abs', preview_curvature_abs) or 0.0)
+        curvature_source_diverged = bool(gated.get('curvature_source_diverged', False))
+        curvature_map_authority_lost = bool(
+            gated.get('curvature_map_authority_lost', curvature_source_diverged)
+        )
+        curvature_source_divergence_abs = float(
+            gated.get('curvature_source_divergence_abs', 0.0) or 0.0
+        )
+        curvature_selection_reason = str(gated.get('curvature_selection_reason', 'map_unavailable') or 'map_unavailable')
+        map_health_ok = bool(gated.get('map_health_ok', False))
+        track_match_ok = bool(gated.get('track_match_ok', False))
+        map_segment_lookup_success_rate = float(
+            gated.get('map_segment_lookup_success_rate', 0.0) or 0.0
+        )
+        map_teleport_skip_count = int(gated.get('map_teleport_skip_count', 0) or 0)
+        map_odometer_jump_rate = float(gated.get('map_odometer_jump_rate', 0.0) or 0.0)
         planned_accel = gov['planned_accel']
         using_stale_data = gated['using_stale_data']
         dynamic_horizon_diag = gated.get('dynamic_horizon_diag', {})
@@ -3871,6 +4340,43 @@ class AVStack:
         if reference_point is not None:
             reference_point['lookahead_entry_preview_source'] = preview_entry_source
             reference_point['curvature_preview'] = float(preview_curvature_abs)
+            reference_point['curvature_primary_abs'] = float(curvature_primary_abs)
+            reference_point['curvature_primary_source'] = str(curvature_primary_source)
+            reference_point['curvature_map_abs'] = float(curvature_map_abs)
+            reference_point['curvature_gt_abs'] = float(curvature_gt_abs)
+            reference_point['curvature_lane_context_abs'] = float(curvature_lane_context_abs)
+            reference_point['curvature_preview_abs'] = float(curvature_preview_abs)
+            reference_point['curvature_source_diverged'] = bool(curvature_source_diverged)
+            reference_point['curvature_map_authority_lost'] = bool(curvature_map_authority_lost)
+            reference_point['curvature_source_divergence_abs'] = float(
+                curvature_source_divergence_abs
+            )
+            reference_point['curvature_selection_reason'] = str(curvature_selection_reason)
+            reference_point['map_health_ok'] = bool(map_health_ok)
+            reference_point['track_match_ok'] = bool(track_match_ok)
+            reference_point['map_segment_lookup_success_rate'] = float(
+                map_segment_lookup_success_rate
+            )
+            reference_point['map_teleport_skip_count'] = int(map_teleport_skip_count)
+            reference_point['map_odometer_jump_rate'] = float(map_odometer_jump_rate)
+            signed_curvature = reference_point.get('curvature')
+            curvature_sign = (
+                np.sign(float(signed_curvature))
+                if isinstance(signed_curvature, (int, float))
+                and math.isfinite(float(signed_curvature))
+                and abs(float(signed_curvature)) > 1e-9
+                else 0.0
+            )
+            if curvature_sign == 0.0:
+                heading_for_sign = reference_point.get('heading')
+                if isinstance(heading_for_sign, (int, float)) and math.isfinite(float(heading_for_sign)):
+                    curvature_sign = np.sign(float(heading_for_sign))
+            if curvature_sign == 0.0 and isinstance(current_path_curvature, (int, float)):
+                curvature_sign = np.sign(float(current_path_curvature))
+            if curvature_sign == 0.0:
+                curvature_sign = 1.0
+            reference_point['curvature'] = float(curvature_primary_abs) * float(curvature_sign)
+            reference_point['curvature_source'] = 'primary_contract'
             reference_point['distance_to_curve_start_m'] = (
                 float(distance_to_curve_start_m)
                 if isinstance(distance_to_curve_start_m, (int, float))
@@ -4006,11 +4512,29 @@ class AVStack:
         curve_intent_speed_guardrail_active = gov['curve_intent_speed_guardrail_active']
         curve_intent_speed_guardrail_cap_mps = gov['curve_intent_speed_guardrail_cap_mps']
         curve_intent_speed_guardrail_confidence = gov['curve_intent_speed_guardrail_confidence']
+        curve_intent_speed_guardrail_state_active = bool(
+            gov.get('curve_intent_speed_guardrail_state_active', False)
+        )
+        curve_intent_speed_guardrail_distance_ready = bool(
+            gov.get('curve_intent_speed_guardrail_distance_ready', True)
+        )
+        curve_intent_speed_guardrail_distance_horizon_m = float(
+            gov.get('curve_intent_speed_guardrail_distance_horizon_m', -1.0) or -1.0
+        )
+        curve_intent_speed_guardrail_startup_lockout = bool(
+            gov.get('curve_intent_speed_guardrail_startup_lockout', False)
+        )
         curve_cap_speed = gov.get('curve_cap_speed')
         curve_cap_active = bool(gov.get('curve_cap_active', False))
         curve_cap_reason = str(gov.get('curve_cap_reason', 'inactive') or 'inactive')
         curve_cap_margin_mps = float(gov.get('curve_cap_margin_mps', 0.0) or 0.0)
         curve_cap_shadow_mode = bool(gov.get('curve_cap_shadow_mode', True))
+        speed_governor_feasibility_backstop_active = bool(
+            gov.get('speed_governor_feasibility_backstop_active', False)
+        )
+        speed_governor_feasibility_backstop_speed = float(
+            gov.get('speed_governor_feasibility_backstop_speed', -1.0) or -1.0
+        )
         speed_governor_active_limiter_code = int(
             gov.get('speed_governor_active_limiter_code', 0) or 0
         )
@@ -4032,6 +4556,28 @@ class AVStack:
         speed_governor_cap_tracking_hard_ceiling_applied = bool(
             gov.get('speed_governor_cap_tracking_hard_ceiling_applied', False)
         )
+        curvature_primary_abs = float(gated.get('curvature_primary_abs', abs(current_path_curvature)) or 0.0)
+        curvature_primary_source = str(gated.get('curvature_primary_source', 'lane_context') or 'lane_context')
+        curvature_map_abs = float(gated.get('curvature_map_abs', 0.0) or 0.0)
+        curvature_lane_context_abs = float(gated.get('curvature_lane_context_abs', 0.0) or 0.0)
+        curvature_preview_abs = float(gated.get('curvature_preview_abs', preview_curvature_abs) or 0.0)
+        curvature_source_diverged = bool(gated.get('curvature_source_diverged', False))
+        curvature_map_authority_lost = bool(
+            gated.get('curvature_map_authority_lost', curvature_source_diverged)
+        )
+        curvature_source_divergence_abs = float(
+            gated.get('curvature_source_divergence_abs', 0.0) or 0.0
+        )
+        curvature_selection_reason = str(
+            gated.get('curvature_selection_reason', 'map_unavailable') or 'map_unavailable'
+        )
+        map_health_ok = bool(gated.get('map_health_ok', False))
+        track_match_ok = bool(gated.get('track_match_ok', False))
+        map_segment_lookup_success_rate = float(
+            gated.get('map_segment_lookup_success_rate', 0.0) or 0.0
+        )
+        map_teleport_skip_count = int(gated.get('map_teleport_skip_count', 0) or 0)
+        map_odometer_jump_rate = float(gated.get('map_odometer_jump_rate', 0.0) or 0.0)
         teleport_guard_active = fv['teleport_guard_active']
         base_speed = float(self.original_target_speed)
         target_speed_planned = gov_output.planned_speed
@@ -4173,6 +4719,107 @@ class AVStack:
                     if np.isfinite(curve_intent_speed_guardrail_confidence)
                     else float("nan")
                 )
+                control_command['curve_intent_speed_guardrail_state_active'] = bool(
+                    curve_intent_speed_guardrail_state_active
+                )
+                control_command['curve_intent_speed_guardrail_distance_ready'] = bool(
+                    curve_intent_speed_guardrail_distance_ready
+                )
+                control_command['curve_intent_speed_guardrail_distance_horizon_m'] = float(
+                    curve_intent_speed_guardrail_distance_horizon_m
+                )
+                control_command['curve_intent_speed_guardrail_startup_lockout'] = bool(
+                    curve_intent_speed_guardrail_startup_lockout
+                )
+                control_command['speed_governor_feasibility_backstop_active'] = bool(
+                    speed_governor_feasibility_backstop_active
+                )
+                control_command['speed_governor_feasibility_backstop_speed'] = float(
+                    speed_governor_feasibility_backstop_speed
+                )
+                control_command['curvature_primary_abs'] = float(curvature_primary_abs)
+                control_command['curvature_primary_source'] = str(curvature_primary_source)
+                control_command['curvature_map_abs'] = float(curvature_map_abs)
+                control_command['curvature_lane_context_abs'] = float(curvature_lane_context_abs)
+                control_command['curvature_preview_abs'] = float(curvature_preview_abs)
+                control_command['curvature_source_diverged'] = bool(curvature_source_diverged)
+                control_command['curvature_map_authority_lost'] = bool(
+                    curvature_map_authority_lost
+                )
+                control_command['curvature_source_divergence_abs'] = float(
+                    curvature_source_divergence_abs
+                )
+                control_command['curvature_selection_reason'] = str(curvature_selection_reason)
+                control_command['map_health_ok'] = bool(map_health_ok)
+                control_command['track_match_ok'] = bool(track_match_ok)
+                control_command['map_segment_lookup_success_rate'] = float(
+                    map_segment_lookup_success_rate
+                )
+                control_command['map_teleport_skip_count'] = int(map_teleport_skip_count)
+                control_command['map_odometer_jump_rate'] = float(map_odometer_jump_rate)
+
+                consistency_tol = max(1e-3, float(self._curvature_divergence_threshold))
+                controller_path = control_command.get('path_curvature_input')
+                controller_path_abs = (
+                    abs(float(controller_path))
+                    if isinstance(controller_path, (int, float))
+                    and np.isfinite(float(controller_path))
+                    else None
+                )
+                # Use the raw (pre-smoothing) curvature the governor received as input,
+                # not the smoothed value it uses internally — smoothing lag would cause
+                # false governor_curvature_mismatch flags after rapid source switches.
+                governor_path = gov.get('path_curvature_raw', gov.get('path_curvature'))
+                governor_path_abs = (
+                    abs(float(governor_path))
+                    if isinstance(governor_path, (int, float))
+                    and np.isfinite(float(governor_path))
+                    else None
+                )
+                intent_path = control_command.get('curve_intent_term_path')
+                intent_path_abs = (
+                    abs(float(intent_path))
+                    if isinstance(intent_path, (int, float))
+                    and np.isfinite(float(intent_path))
+                    else None
+                )
+                consistent_controller = bool(
+                    controller_path_abs is not None
+                    and abs(float(controller_path_abs) - float(curvature_primary_abs)) <= consistency_tol
+                )
+                consistent_governor = bool(
+                    governor_path_abs is not None
+                    and abs(float(governor_path_abs) - float(curvature_primary_abs)) <= consistency_tol
+                )
+                consistent_intent = bool(
+                    intent_path_abs is not None
+                    and abs(float(intent_path_abs) - float(curvature_primary_abs)) <= consistency_tol
+                )
+                mismatch_reasons = []
+                if not consistent_controller:
+                    mismatch_reasons.append("controller_curvature_mismatch")
+                if not consistent_governor:
+                    mismatch_reasons.append("governor_curvature_mismatch")
+                if not consistent_intent:
+                    mismatch_reasons.append("intent_path_mismatch")
+                # curve_intent_term_path is a dimensionless [0,1] confidence score,
+                # not a curvature in 1/m — comparing it to curvature_primary_abs with
+                # the same tolerance is a unit mismatch. Keep consistent_intent as a
+                # diagnostic field but exclude it from the core consistent_all gate.
+                consistent_all = bool(consistent_controller and consistent_governor)
+                control_command['curvature_contract_consistent_controller'] = bool(
+                    consistent_controller
+                )
+                control_command['curvature_contract_consistent_governor'] = bool(
+                    consistent_governor
+                )
+                control_command['curvature_contract_consistent_intent'] = bool(
+                    consistent_intent
+                )
+                control_command['curvature_contract_consistent_all'] = bool(consistent_all)
+                control_command['curvature_contract_mismatch_reason'] = (
+                    ",".join(mismatch_reasons) if mismatch_reasons else "none"
+                )
                 
                 # If emergency braking was triggered, override throttle/brake but keep steering
                 if brake_override > 0:
@@ -4260,6 +4907,45 @@ class AVStack:
                     if brake_override == 0.0:
                         speed_excess = current_speed - max_speed
                         control_command['brake'] = max(control_command.get('brake', 0.0), min(0.8, 0.4 + (speed_excess / 2.0)))
+
+        control_command.setdefault('speed_governor_feasibility_backstop_active', bool(speed_governor_feasibility_backstop_active))
+        control_command.setdefault('speed_governor_feasibility_backstop_speed', float(speed_governor_feasibility_backstop_speed))
+        control_command.setdefault('curvature_primary_abs', float(curvature_primary_abs))
+        control_command.setdefault('curvature_primary_source', str(curvature_primary_source))
+        control_command.setdefault('curvature_map_abs', float(curvature_map_abs))
+        control_command.setdefault('curvature_lane_context_abs', float(curvature_lane_context_abs))
+        control_command.setdefault('curvature_preview_abs', float(curvature_preview_abs))
+        control_command.setdefault('curvature_source_diverged', bool(curvature_source_diverged))
+        control_command.setdefault(
+            'curvature_map_authority_lost', bool(curvature_map_authority_lost)
+        )
+        control_command.setdefault('curvature_source_divergence_abs', float(curvature_source_divergence_abs))
+        control_command.setdefault('curvature_selection_reason', str(curvature_selection_reason))
+        control_command.setdefault('map_health_ok', bool(map_health_ok))
+        control_command.setdefault('track_match_ok', bool(track_match_ok))
+        control_command.setdefault('map_segment_lookup_success_rate', float(map_segment_lookup_success_rate))
+        control_command.setdefault('map_teleport_skip_count', int(map_teleport_skip_count))
+        control_command.setdefault('map_odometer_jump_rate', float(map_odometer_jump_rate))
+        control_command.setdefault('curvature_contract_consistent_controller', False)
+        control_command.setdefault('curvature_contract_consistent_governor', False)
+        control_command.setdefault('curvature_contract_consistent_intent', False)
+        control_command.setdefault('curvature_contract_consistent_all', False)
+        control_command.setdefault('curvature_contract_mismatch_reason', 'missing_reference')
+        control_command.setdefault('path_curvature_source_used', 'missing_reference')
+        control_command.setdefault('path_curvature_primary_abs', float(curvature_primary_abs))
+        control_command.setdefault('path_curvature_lane_abs', float(curvature_lane_context_abs))
+
+        self._last_turn_feasibility_active = bool(control_command.get('turn_feasibility_active', False))
+        self._last_turn_feasibility_infeasible = bool(control_command.get('turn_feasibility_infeasible', False))
+        try:
+            tf_limit = control_command.get('turn_feasibility_speed_limit_mps', None)
+            self._last_turn_feasibility_speed_limit_mps = (
+                float(tf_limit)
+                if isinstance(tf_limit, (int, float)) and np.isfinite(float(tf_limit))
+                else None
+            )
+        except (TypeError, ValueError):
+            self._last_turn_feasibility_speed_limit_mps = None
 
         control_command['brake_override'] = brake_override
         return control_command
@@ -5648,6 +6334,9 @@ class AVStack:
             total_error=control_command.get('total_error'),
             total_error_scaled=control_command.get('total_error_scaled'),
             path_curvature_input=control_command.get('path_curvature_input'),
+            path_curvature_source_used=control_command.get('path_curvature_source_used'),
+            path_curvature_primary_abs=control_command.get('path_curvature_primary_abs'),
+            path_curvature_lane_abs=control_command.get('path_curvature_lane_abs'),
             feedforward_steering=control_command.get('feedforward_steering'),
             feedback_steering=control_command.get('feedback_steering'),
             straight_sign_flip_override_active=control_command.get(
@@ -5796,6 +6485,12 @@ class AVStack:
             ),
             speed_governor_curve_cap_shadow_mode=control_command.get(
                 'speed_governor_curve_cap_shadow_mode'
+            ),
+            speed_governor_feasibility_backstop_active=control_command.get(
+                'speed_governor_feasibility_backstop_active'
+            ),
+            speed_governor_feasibility_backstop_speed=control_command.get(
+                'speed_governor_feasibility_backstop_speed'
             ),
             speed_governor_cap_tracking_active=bool(
                 control_command.get('speed_governor_cap_tracking_active', False)
@@ -5961,6 +6656,41 @@ class AVStack:
             turn_feasibility_use_peak_bound=bool(
                 control_command.get('turn_feasibility_use_peak_bound', True)
             ),
+            curvature_primary_abs=control_command.get('curvature_primary_abs'),
+            curvature_primary_source=control_command.get('curvature_primary_source'),
+            curvature_map_abs=control_command.get('curvature_map_abs'),
+            curvature_lane_context_abs=control_command.get('curvature_lane_context_abs'),
+            curvature_preview_abs=control_command.get('curvature_preview_abs'),
+            curvature_source_diverged=control_command.get('curvature_source_diverged'),
+            curvature_map_authority_lost=control_command.get(
+                'curvature_map_authority_lost'
+            ),
+            curvature_source_divergence_abs=control_command.get(
+                'curvature_source_divergence_abs'
+            ),
+            curvature_selection_reason=control_command.get('curvature_selection_reason'),
+            map_health_ok=control_command.get('map_health_ok'),
+            track_match_ok=control_command.get('track_match_ok'),
+            map_segment_lookup_success_rate=control_command.get(
+                'map_segment_lookup_success_rate'
+            ),
+            map_teleport_skip_count=control_command.get('map_teleport_skip_count'),
+            map_odometer_jump_rate=control_command.get('map_odometer_jump_rate'),
+            curvature_contract_consistent_controller=control_command.get(
+                'curvature_contract_consistent_controller'
+            ),
+            curvature_contract_consistent_governor=control_command.get(
+                'curvature_contract_consistent_governor'
+            ),
+            curvature_contract_consistent_intent=control_command.get(
+                'curvature_contract_consistent_intent'
+            ),
+            curvature_contract_consistent_all=control_command.get(
+                'curvature_contract_consistent_all'
+            ),
+            curvature_contract_mismatch_reason=control_command.get(
+                'curvature_contract_mismatch_reason'
+            ),
             pp_alpha=control_command.get('pp_alpha'),
             pp_lookahead_distance=control_command.get('pp_lookahead_distance'),
             pp_geometric_steering=control_command.get('pp_geometric_steering'),
@@ -5970,8 +6700,10 @@ class AVStack:
             pp_steering_jerk_limited=bool(control_command.get('pp_steering_jerk_limited', 0) > 0.5),
             pp_effective_steering_rate=float(control_command.get('pp_effective_steering_rate', 0.0)),
             pp_pipeline_bypass_active=bool(control_command.get('pp_pipeline_bypass_active', 0) > 0.5),
+            pp_speed_norm_scale=float(control_command.get('pp_speed_norm_scale', 1.0)),
+            pp_map_ff_applied=float(control_command.get('pp_map_ff_applied', 0.0)),
         )
-        
+
         # Create trajectory output
         # Include reference point as first point for analysis
         trajectory_points = None

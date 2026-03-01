@@ -33,6 +33,7 @@ ACTIVE_LIMITER_CODE_MAP = {
     "curve_cap": 4,
     "planner": 5,
     "curve_cap_tracking": 6,
+    "feasibility_backstop": 7,
 }
 
 CAP_TRACKING_MODE_CODE_MAP = {
@@ -105,6 +106,9 @@ class SpeedGovernorConfig:
     curve_cap_rise_min: float = 0.0005
     curve_cap_peak_lat_accel_g: float = 0.26
     curve_cap_use_preview_curvature: bool = True
+    feasibility_backstop_enabled: bool = True
+    feasibility_backstop_on_frames: int = 3
+    feasibility_backstop_overspeed_margin_mps: float = 0.2
 
 
 @dataclass
@@ -137,6 +141,8 @@ class SpeedGovernorOutput:
     cap_tracking_mode_code: int = 0
     cap_tracking_recovery_frames: int = 0
     cap_tracking_hard_ceiling_applied: bool = False
+    feasibility_backstop_active: bool = False
+    feasibility_backstop_speed: Optional[float] = None
 
 
 class SpeedGovernor:
@@ -156,6 +162,7 @@ class SpeedGovernor:
             self.speed_planner = SpeedPlanner(planner_config)
         self._curvature_history: list[float] = []
         self._curve_cap_last_speed: Optional[float] = None
+        self._feasibility_backstop_counter: int = 0
 
     def reset(self) -> None:
         """Reset internal state (speed planner)."""
@@ -163,6 +170,7 @@ class SpeedGovernor:
             self.speed_planner.reset()
         self._curvature_history.clear()
         self._curve_cap_last_speed = None
+        self._feasibility_backstop_counter = 0
 
     def compute_target_speed(
         self,
@@ -176,6 +184,8 @@ class SpeedGovernor:
         curve_intent: float = 0.0,
         curve_intent_state: Optional[str] = None,
         curve_rise: float = 0.0,
+        turn_feasibility_speed_limit_mps: Optional[float] = None,
+        turn_feasibility_infeasible: bool = False,
     ) -> SpeedGovernorOutput:
         """Compute the target speed for the longitudinal controller.
 
@@ -190,6 +200,8 @@ class SpeedGovernor:
             curve_intent: Canonical curve-intent score (0..1).
             curve_intent_state: Canonical curve-intent scheduler state.
             curve_rise: Local curvature rise proxy from phase scheduler.
+            turn_feasibility_speed_limit_mps: Feasibility-based speed ceiling from controller.
+            turn_feasibility_infeasible: Whether turn feasibility is currently infeasible.
 
         Returns:
             SpeedGovernorOutput with target speed and diagnostics.
@@ -235,6 +247,28 @@ class SpeedGovernor:
         if curve_cap_speed is not None and not self.config.curve_cap_shadow_mode:
             target = min(target, curve_cap_speed)
 
+        # --- 3c. Feasibility mismatch backstop ---
+        feasibility_backstop_active = False
+        feasibility_backstop_speed = None
+        feasibility_limit_valid = (
+            isinstance(turn_feasibility_speed_limit_mps, (int, float))
+            and math.isfinite(float(turn_feasibility_speed_limit_mps))
+            and float(turn_feasibility_speed_limit_mps) > 0.0
+        )
+        if self.config.feasibility_backstop_enabled and feasibility_limit_valid:
+            feasibility_limit = float(turn_feasibility_speed_limit_mps)
+            overspeed_margin = max(0.0, float(self.config.feasibility_backstop_overspeed_margin_mps))
+            if bool(turn_feasibility_infeasible) and float(current_speed) > (feasibility_limit + overspeed_margin):
+                self._feasibility_backstop_counter += 1
+            else:
+                self._feasibility_backstop_counter = max(0, self._feasibility_backstop_counter - 1)
+            if self._feasibility_backstop_counter >= max(1, int(self.config.feasibility_backstop_on_frames)):
+                feasibility_backstop_active = True
+                feasibility_backstop_speed = feasibility_limit
+                target = min(target, feasibility_limit)
+        else:
+            self._feasibility_backstop_counter = 0
+
         # Determine active limiter before planner smoothing
         active_limiter = "none"
         if target < track_speed_limit - 0.01:
@@ -247,6 +281,9 @@ class SpeedGovernor:
             elif curve_cap_speed is not None and not self.config.curve_cap_shadow_mode:
                 if curve_cap_speed <= target + 0.01:
                     active_limiter = "curve_cap"
+            elif feasibility_backstop_active and feasibility_backstop_speed is not None:
+                if feasibility_backstop_speed <= target + 0.01:
+                    active_limiter = "feasibility_backstop"
 
         # --- 4. Speed planner (jerk-limited) ---
         planned_speed = None
@@ -336,6 +373,12 @@ class SpeedGovernor:
             cap_tracking_mode_code=cap_tracking_mode_code(cap_tracking_mode),
             cap_tracking_recovery_frames=int(cap_tracking_recovery_frames),
             cap_tracking_hard_ceiling_applied=bool(cap_tracking_hard_ceiling_applied),
+            feasibility_backstop_active=bool(feasibility_backstop_active),
+            feasibility_backstop_speed=(
+                float(feasibility_backstop_speed)
+                if feasibility_backstop_speed is not None
+                else None
+            ),
         )
 
     def _compute_comfort_speed(self, curvature: float) -> float:
@@ -692,6 +735,24 @@ def build_speed_governor(trajectory_cfg: dict, speed_planner_cfg: dict) -> Speed
             gov_cfg_section.get(
                 "curve_cap_use_preview_curvature",
                 trajectory_cfg.get("curve_cap_use_preview_curvature", True),
+            )
+        ),
+        feasibility_backstop_enabled=bool(
+            gov_cfg_section.get(
+                "feasibility_backstop_enabled",
+                trajectory_cfg.get("feasibility_backstop_enabled", True),
+            )
+        ),
+        feasibility_backstop_on_frames=int(
+            gov_cfg_section.get(
+                "feasibility_backstop_on_frames",
+                trajectory_cfg.get("feasibility_backstop_on_frames", 3),
+            )
+        ),
+        feasibility_backstop_overspeed_margin_mps=float(
+            gov_cfg_section.get(
+                "feasibility_backstop_overspeed_margin_mps",
+                trajectory_cfg.get("feasibility_backstop_overspeed_margin_mps", 0.2),
             )
         ),
     )

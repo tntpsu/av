@@ -1458,12 +1458,17 @@ class Visualizer {
                 const cadenceSevereRate = Number(cadence.severe_irregular_rate);
                 const cadenceIrregularLimit = Number(cadenceLimits.irregular_rate_max);
                 const cadenceSevereLimit = Number(cadenceLimits.severe_irregular_rate_max);
+                const cadenceTuningDtP95Limit = Number(cadenceLimits.dt_p95_ms_max);
+                const cadenceTuningDtMaxLimit = Number(cadenceLimits.dt_max_ms_max);
+                const cadenceTuningValid = cadence.tuning_valid === true;
                 const cadenceAvailability = String(cadence.availability || '').toLowerCase();
                 const cadenceAvailable = cadenceAvailability === 'available';
                 const cadencePass = cadence.pass === true;
                 let cadenceColor = '#888';
                 let cadenceText = 'N/A';
                 let cadenceDetailsText = 'N/A';
+                let tuningColor = '#888';
+                let tuningText = 'N/A';
                 if (cadenceAvailable) {
                     const cadenceParts = [];
                     if (Number.isFinite(cadenceP95)) cadenceParts.push(`dt p95 ${cadenceP95.toFixed(1)} ms`);
@@ -1501,6 +1506,12 @@ class Visualizer {
                         }
                         cadenceText = failed.length > 0 ? `POOR - ${failed[0]}` : 'POOR';
                     }
+                    tuningColor = cadenceTuningValid ? '#4caf50' : '#ff6b6b';
+                    if (Number.isFinite(cadenceTuningDtP95Limit) && Number.isFinite(cadenceTuningDtMaxLimit)) {
+                        tuningText = `${cadenceTuningValid ? 'VALID' : 'INVALID'} (dt_p95<=${cadenceTuningDtP95Limit.toFixed(1)} ms, dt_max<=${cadenceTuningDtMaxLimit.toFixed(1)} ms, severe<=${(cadenceSevereLimit * 100).toFixed(2)}%)`;
+                    } else {
+                        tuningText = cadenceTuningValid ? 'VALID' : 'INVALID';
+                    }
                 }
 
                 html += '<div id="summary-section-latency-sync" style="background: #2a2a2a; padding: 1rem; border-radius: 8px; margin-bottom: 1.5rem; border-left: 4px solid #4a90e2;">';
@@ -1511,7 +1522,132 @@ class Visualizer {
                 html += `<tr><td style="color:#a0a0a0;">Sync Metrics:</td><td style="text-align: right; color: #a0a0a0;">${syncDetailsText}</td></tr>`;
                 html += `<tr><td>Cadence Health:</td><td style="text-align: right; color: ${cadenceColor};">${cadenceText}</td></tr>`;
                 html += `<tr><td style="color:#a0a0a0;">Cadence Metrics:</td><td style="text-align: right; color: #a0a0a0;">${cadenceDetailsText}</td></tr>`;
+                html += `<tr><td>Tuning Valid:</td><td style="text-align: right; color: ${tuningColor};">${tuningText}</td></tr>`;
                 html += '</table>';
+                html += '</div>';
+            }
+
+            const contractHealth = summary.curvature_contract_health || null;
+            const firstFaultChain = summary.first_fault_chain || null;
+            if (contractHealth && typeof contractHealth === 'object') {
+                const availability = String(contractHealth.availability || 'unavailable').toLowerCase();
+                const limits = contractHealth.limits || {};
+                const withFailedLimit = (valueText, failed, limitText) => {
+                    if (!failed || !limitText) return valueText;
+                    return `${valueText} <span style="color:#a0a0a0;">(${limitText})</span>`;
+                };
+                const finiteOrNull = (v) => {
+                    const n = Number(v);
+                    return Number.isFinite(n) ? n : null;
+                };
+                const sourceMode = String(contractHealth.primary_source_mode || 'unknown');
+                const divergedRate = finiteOrNull(contractHealth.curvature_source_diverged_rate);
+                const divergenceP95 = finiteOrNull(contractHealth.curvature_source_divergence_p95);
+                const commitStreak = Number.isFinite(Number(contractHealth.curve_intent_commit_streak_max_frames))
+                    ? Number(contractHealth.curve_intent_commit_streak_max_frames)
+                    : null;
+                const feasViolationRate = finiteOrNull(contractHealth.feasibility_violation_rate);
+                const backstopRate = finiteOrNull(contractHealth.feasibility_backstop_active_rate);
+                const consistencyRate = finiteOrNull(contractHealth.curvature_contract_consistency_rate);
+                const mapUntrustedRate = finiteOrNull(contractHealth.map_health_untrusted_rate);
+                const trackMismatchRate = finiteOrNull(contractHealth.track_mismatch_rate);
+                const completeContract = finiteOrNull(contractHealth.telemetry_completeness_rate_curvature_contract);
+                const completeFeas = finiteOrNull(contractHealth.telemetry_completeness_rate_feasibility);
+                const lookupP50 = finiteOrNull(contractHealth.map_segment_lookup_success_rate_p50);
+                const teleportMax = finiteOrNull(contractHealth.map_teleport_skip_count_max);
+                const odometerJumpP95 = finiteOrNull(contractHealth.map_odometer_jump_rate_p95);
+
+                const divergedRateLimit = finiteOrNull(limits.curvature_source_diverged_rate_max_pct) ?? 5.0;
+                const feasViolationLimit = finiteOrNull(limits.feasibility_violation_rate_max_pct) ?? 5.0;
+                const mapUntrustedLimit = finiteOrNull(limits.map_health_untrusted_rate_max_pct) ?? 1.0;
+                const trackMismatchLimit = finiteOrNull(limits.track_mismatch_rate_max_pct) ?? 0.0;
+                const consistencyMin = finiteOrNull(limits.curvature_contract_consistency_rate_min_pct) ?? 99.0;
+                const completenessMin = finiteOrNull(limits.telemetry_completeness_rate_min_pct) ?? 99.0;
+
+                const divergedRateFailed = divergedRate !== null && divergedRate > divergedRateLimit;
+                const feasViolationFailed = feasViolationRate !== null && feasViolationRate > feasViolationLimit;
+                const consistencyFailed = consistencyRate !== null && consistencyRate < consistencyMin;
+                const mapUntrustedFailed = mapUntrustedRate !== null && mapUntrustedRate > mapUntrustedLimit;
+                const trackMismatchFailed = trackMismatchRate !== null && trackMismatchRate > trackMismatchLimit;
+                const completeContractFailed = completeContract !== null && completeContract < completenessMin;
+                const completeFeasFailed = completeFeas !== null && completeFeas < completenessMin;
+
+                html += '<div id="summary-section-curvature-contract" style="background: #2a2a2a; padding: 1rem; border-radius: 8px; margin-bottom: 1.5rem; border-left: 4px solid #4a90e2;">';
+                html += '<h3 style="margin-top: 0; color: #4a90e2;">Curvature Contract Health</h3>';
+                html += '<table style="width: 100%; color: #e0e0e0;">';
+                html += `<tr><td>Primary Source:</td><td style="text-align: right;">${this.escapeHtml(sourceMode)}</td></tr>`;
+                html += `<tr><td>Source Divergence P95:</td><td style="text-align: right;">${divergenceP95 !== null ? divergenceP95.toFixed(5) : 'N/A'}</td></tr>`;
+                html += `<tr><td>Source Diverged Rate:</td><td style="text-align: right; color: ${divergedRateFailed ? '#ff6b6b' : '#4caf50'};">${
+                    divergedRate !== null
+                        ? withFailedLimit(`${divergedRate.toFixed(2)}%`, divergedRateFailed, `<=${divergedRateLimit.toFixed(2)}%`)
+                        : 'N/A'
+                }</td></tr>`;
+                html += `<tr><td>Contract Consistency Rate:</td><td style="text-align: right; color: ${consistencyFailed ? '#ff6b6b' : '#4caf50'};">${
+                    consistencyRate !== null
+                        ? withFailedLimit(`${consistencyRate.toFixed(2)}%`, consistencyFailed, `>=${consistencyMin.toFixed(2)}%`)
+                        : 'N/A'
+                }</td></tr>`;
+                html += `<tr><td>COMMIT Streak (Max):</td><td style="text-align: right;">${commitStreak !== null ? `${commitStreak} frames` : 'N/A'}</td></tr>`;
+                html += '</table>';
+                if (availability !== 'available') {
+                    html += '<div style="margin-top: 0.5rem; color: #a0a0a0;">N/A (instrumentation missing)</div>';
+                }
+                html += '</div>';
+
+                html += '<div id="summary-section-feasibility-coherency" style="background: #2a2a2a; padding: 1rem; border-radius: 8px; margin-bottom: 1.5rem; border-left: 4px solid #4a90e2;">';
+                html += '<h3 style="margin-top: 0; color: #4a90e2;">Feasibility Coherency</h3>';
+                html += '<table style="width: 100%; color: #e0e0e0;">';
+                html += `<tr><td>Feasibility Violation Rate:</td><td style="text-align: right; color: ${feasViolationFailed ? '#ff6b6b' : '#4caf50'};">${
+                    feasViolationRate !== null
+                        ? withFailedLimit(`${feasViolationRate.toFixed(2)}%`, feasViolationFailed, `<=${feasViolationLimit.toFixed(2)}%`)
+                        : 'N/A'
+                }</td></tr>`;
+                html += `<tr><td>Backstop Active Rate:</td><td style="text-align: right;">${backstopRate !== null ? `${backstopRate.toFixed(2)}%` : 'N/A'}</td></tr>`;
+                html += `<tr><td>Telemetry Completeness (Contract):</td><td style="text-align: right; color: ${completeContractFailed ? '#ff6b6b' : '#4caf50'};">${
+                    completeContract !== null
+                        ? withFailedLimit(`${completeContract.toFixed(2)}%`, completeContractFailed, `>=${completenessMin.toFixed(2)}%`)
+                        : 'N/A'
+                }</td></tr>`;
+                html += `<tr><td>Telemetry Completeness (Feasibility):</td><td style="text-align: right; color: ${completeFeasFailed ? '#ff6b6b' : '#4caf50'};">${
+                    completeFeas !== null
+                        ? withFailedLimit(`${completeFeas.toFixed(2)}%`, completeFeasFailed, `>=${completenessMin.toFixed(2)}%`)
+                        : 'N/A'
+                }</td></tr>`;
+                html += '</table></div>';
+
+                html += '<div id="summary-section-map-health" style="background: #2a2a2a; padding: 1rem; border-radius: 8px; margin-bottom: 1.5rem; border-left: 4px solid #4a90e2;">';
+                html += '<h3 style="margin-top: 0; color: #4a90e2;">Map Health</h3>';
+                html += '<table style="width: 100%; color: #e0e0e0;">';
+                html += `<tr><td>Map Health Untrusted Rate:</td><td style="text-align: right; color: ${mapUntrustedFailed ? '#ff6b6b' : '#4caf50'};">${
+                    mapUntrustedRate !== null
+                        ? withFailedLimit(`${mapUntrustedRate.toFixed(2)}%`, mapUntrustedFailed, `<=${mapUntrustedLimit.toFixed(2)}%`)
+                        : 'N/A'
+                }</td></tr>`;
+                html += `<tr><td>Track Mismatch Rate:</td><td style="text-align: right; color: ${trackMismatchFailed ? '#ff6b6b' : '#4caf50'};">${
+                    trackMismatchRate !== null
+                        ? withFailedLimit(`${trackMismatchRate.toFixed(2)}%`, trackMismatchFailed, `<=${trackMismatchLimit.toFixed(2)}%`)
+                        : 'N/A'
+                }</td></tr>`;
+                html += `<tr><td>Map Lookup Success (P50):</td><td style="text-align: right;">${lookupP50 !== null ? `${lookupP50.toFixed(2)}%` : 'N/A'}</td></tr>`;
+                html += `<tr><td>Map Teleport Skip Count (Max):</td><td style="text-align: right;">${teleportMax !== null ? teleportMax.toFixed(0) : 'N/A'}</td></tr>`;
+                html += `<tr><td>Map Odometer Jump Rate (P95):</td><td style="text-align: right;">${odometerJumpP95 !== null ? `${odometerJumpP95.toFixed(4)}` : 'N/A'}</td></tr>`;
+                html += '</table></div>';
+            }
+
+            if (firstFaultChain && typeof firstFaultChain === 'object') {
+                const d = firstFaultChain.first_divergence_frame;
+                const i = firstFaultChain.first_infeasible_frame;
+                const s = firstFaultChain.first_speed_above_feasibility_frame;
+                const b = firstFaultChain.first_boundary_breach_frame;
+                const chainText = [
+                    `diverge=${d ?? 'N/A'}`,
+                    `infeasible=${i ?? 'N/A'}`,
+                    `overspeed=${s ?? 'N/A'}`,
+                    `boundary=${b ?? 'N/A'}`,
+                ].join(' → ');
+                html += '<div id="summary-section-first-fault-chain" style="background: #2a2a2a; padding: 1rem; border-radius: 8px; margin-bottom: 1.5rem; border-left: 4px solid #4a90e2;">';
+                html += '<h3 style="margin-top: 0; color: #4a90e2;">First Fault Chain</h3>';
+                html += `<div style="color: #e0e0e0;">${this.escapeHtml(chainText)}</div>`;
                 html += '</div>';
             }
 

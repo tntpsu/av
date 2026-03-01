@@ -120,6 +120,18 @@ class LateralController:
                  curve_phase_preview_off_frames: int = 2,
                  curve_at_car_distance_min_m: float = 0.0,
                  curve_intent_single_owner_mode: bool = True,
+                 curve_intent_commit_watchdog_frames: int = 45,
+                 curve_intent_commit_watchdog_exit_curvature: Optional[float] = None,
+                 curve_intent_startup_ignore_frames: int = 0,
+                 curve_intent_arm_preview_min: float = 0.0,
+                 curve_intent_arm_rise_min: float = 0.0,
+                 curve_intent_arm_distance_time_headway_s: float = 999.0,
+                 curve_intent_arm_distance_min_m: float = 0.0,
+                 curve_intent_arm_distance_max_m: float = 1000000.0,
+                 curve_intent_rearm_exit_hysteresis: float = 0.0,
+                 curve_intent_rearm_min_frames: int = 0,
+                 curve_intent_max_commit_frames: int = 0,
+                 curve_intent_force_straight_hold_frames: int = 0,
                  road_curve_enter_threshold: Optional[float] = None,
                  road_curve_exit_threshold: Optional[float] = None,
                  road_straight_hold_invalid_frames: int = 6,
@@ -222,6 +234,14 @@ class LateralController:
                  stanley_heading_weight: float = 1.0,
                  pp_feedback_gain: float = 0.15,
                  pp_min_lookahead: float = 0.5,
+                 pp_speed_norm_enabled: bool = False,
+                 pp_speed_norm_reference_mps: float = 12.0,
+                 pp_speed_norm_min_scale: float = 0.70,
+                 pp_map_ff_enabled: bool = False,
+                 pp_map_ff_gain: float = 1.0,
+                 pp_map_ff_wheelbase_m: float = 2.5,
+                 pp_map_ff_curvature_min: float = 0.005,
+                 pp_map_ff_curvature_max_clip: float = 0.08,
                  pp_ref_jump_clamp: float = 0.5,
                  pp_stale_decay: float = 0.98,
                  pp_max_steering_rate: float = 0.4,
@@ -457,6 +477,14 @@ class LateralController:
         self.stanley_heading_weight = stanley_heading_weight
         self.pp_feedback_gain = max(0.0, float(pp_feedback_gain))
         self.pp_min_lookahead = max(0.1, float(pp_min_lookahead))
+        self.pp_speed_norm_enabled = bool(pp_speed_norm_enabled)
+        self.pp_speed_norm_reference_mps = max(1.0, float(pp_speed_norm_reference_mps))
+        self.pp_speed_norm_min_scale = float(np.clip(pp_speed_norm_min_scale, 0.3, 1.0))
+        self.pp_map_ff_enabled = bool(pp_map_ff_enabled)
+        self.pp_map_ff_gain = float(np.clip(pp_map_ff_gain, 0.0, 5.0))
+        self.pp_map_ff_wheelbase_m = max(0.5, float(pp_map_ff_wheelbase_m))
+        self.pp_map_ff_curvature_min = max(0.0, float(pp_map_ff_curvature_min))
+        self.pp_map_ff_curvature_max_clip = max(0.001, float(pp_map_ff_curvature_max_clip))
         self.pp_ref_jump_clamp = max(0.1, float(pp_ref_jump_clamp))
         self.pp_stale_decay = float(np.clip(pp_stale_decay, 0.5, 1.0))
         self.pp_max_steering_rate = max(0.05, float(pp_max_steering_rate))
@@ -532,6 +560,30 @@ class LateralController:
         self.curve_phase_preview_off_frames = max(1, int(curve_phase_preview_off_frames))
         self.curve_at_car_distance_min_m = max(0.0, float(curve_at_car_distance_min_m))
         self.curve_intent_single_owner_mode = bool(curve_intent_single_owner_mode)
+        self.curve_intent_commit_watchdog_frames = max(
+            1, int(curve_intent_commit_watchdog_frames)
+        )
+        self.curve_intent_startup_ignore_frames = max(
+            0, int(curve_intent_startup_ignore_frames)
+        )
+        self.curve_intent_arm_preview_min = max(0.0, float(curve_intent_arm_preview_min))
+        self.curve_intent_arm_rise_min = max(0.0, float(curve_intent_arm_rise_min))
+        self.curve_intent_arm_distance_time_headway_s = max(
+            0.0, float(curve_intent_arm_distance_time_headway_s)
+        )
+        self.curve_intent_arm_distance_min_m = max(0.0, float(curve_intent_arm_distance_min_m))
+        self.curve_intent_arm_distance_max_m = max(
+            self.curve_intent_arm_distance_min_m,
+            float(curve_intent_arm_distance_max_m),
+        )
+        self.curve_intent_rearm_exit_hysteresis = max(
+            0.0, float(curve_intent_rearm_exit_hysteresis)
+        )
+        self.curve_intent_rearm_min_frames = max(0, int(curve_intent_rearm_min_frames))
+        self.curve_intent_max_commit_frames = max(0, int(curve_intent_max_commit_frames))
+        self.curve_intent_force_straight_hold_frames = max(
+            0, int(curve_intent_force_straight_hold_frames)
+        )
         self._track_curve_windows: list[tuple[float, float]] = []
         self._track_total_length_m: Optional[float] = None
         if self.curve_phase_use_distance_track and self.curve_phase_track_name:
@@ -560,6 +612,11 @@ class LateralController:
             road_exit_threshold = road_enter_threshold
         self.road_curve_enter_threshold = road_enter_threshold
         self.road_curve_exit_threshold = road_exit_threshold
+        self.curve_intent_commit_watchdog_exit_curvature = (
+            float(road_exit_threshold)
+            if curve_intent_commit_watchdog_exit_curvature is None
+            else max(0.0, float(curve_intent_commit_watchdog_exit_curvature))
+        )
         self.road_straight_hold_invalid_frames = max(0, int(road_straight_hold_invalid_frames))
         self._road_straight_state = True
         self._road_straight_invalid_frames_remaining = 0
@@ -595,6 +652,11 @@ class LateralController:
         self._curve_commit_retrigger_cooldown_remaining = 0
         self._curve_commit_handoff_streak = 0
         self._curve_unwind_frames_remaining = 0
+        self._curve_intent_commit_watchdog_counter = 0
+        self._curve_intent_frames_since_reset = 0
+        self._curve_intent_rearm_frames_remaining = 0
+        self._curve_intent_force_straight_frames_remaining = 0
+        self._curve_intent_commit_streak_frames = 0
         self._prev_is_straight = True
         self._prev_entry_phase_active = False
         self._prev_curve_upcoming = False
@@ -669,6 +731,20 @@ class LateralController:
         # But blend with ref_heading for smooth curves
         raw_ref_curvature_value = reference_point.get('curvature')
         raw_ref_curvature_source = str(reference_point.get('curvature_source', '') or '')
+        primary_curvature_abs_value = reference_point.get('curvature_primary_abs')
+        lane_curvature_abs_value = reference_point.get('curvature_lane_context_abs')
+        primary_curvature_abs = (
+            float(primary_curvature_abs_value)
+            if isinstance(primary_curvature_abs_value, (int, float))
+            and np.isfinite(float(primary_curvature_abs_value))
+            else None
+        )
+        lane_curvature_abs = (
+            float(lane_curvature_abs_value)
+            if isinstance(lane_curvature_abs_value, (int, float))
+            and np.isfinite(float(lane_curvature_abs_value))
+            else None
+        )
         road_curvature_valid = bool(
             raw_ref_curvature_value is not None
             and np.isfinite(float(raw_ref_curvature_value))
@@ -676,17 +752,35 @@ class LateralController:
         )
         raw_ref_curvature = float(raw_ref_curvature_value) if road_curvature_valid else 0.0
         path_curvature = raw_ref_curvature
+        path_curvature_source_used = "reference_point_curvature"
+        if primary_curvature_abs is not None:
+            curvature_sign = np.sign(raw_ref_curvature) if raw_ref_curvature != 0.0 else 0.0
+            if curvature_sign == 0.0:
+                curvature_sign = np.sign(desired_heading)
+            if curvature_sign == 0.0:
+                curvature_sign = 1.0
+            path_curvature = float(primary_curvature_abs) * float(curvature_sign)
+            path_curvature_source_used = "curvature_primary_abs"
+            if not road_curvature_valid:
+                road_curvature_valid = True
+                raw_ref_curvature_source = str(
+                    reference_point.get("curvature_primary_source", "primary_contract")
+                    or "primary_contract"
+                )
         if path_curvature != 0.0:
             heading_sign = np.sign(desired_heading)
             if heading_sign == 0.0:
                 heading_sign = 1.0
             path_curvature = abs(path_curvature) * heading_sign
+            path_curvature_for_map_ff = float(path_curvature)
             if self.curve_feedforward_curvature_clamp and self.curve_feedforward_curvature_clamp > 0.0:
                 path_curvature = np.clip(
                     path_curvature,
                     -self.curve_feedforward_curvature_clamp,
                     self.curve_feedforward_curvature_clamp
                 )
+        else:
+            path_curvature_for_map_ff = 0.0
         dt = float(dt) if dt is not None and np.isfinite(float(dt)) else 0.033
         dt = float(np.clip(dt, 1e-3, 0.25))
         hold_frames = int(round(self.curvature_stale_hold_seconds / dt)) if dt > 0.0 else 0
@@ -1552,31 +1646,171 @@ class LateralController:
         distance_to_next_curve_start_m = None
         current_curve_progress_ratio = None
         current_curve_index = None
+        curve_intent_watchdog_triggered = False
+        curve_intent_startup_lockout_active = False
+        curve_intent_arm_signal_active = False
+        curve_intent_distance_ready = True
+        curve_intent_distance_horizon_m = None
+        curve_intent_rearm_cooldown_active = False
+        curve_intent_force_straight_active = False
+        curve_intent_max_commit_triggered = False
+        self._curve_intent_frames_since_reset += 1
         if self.curve_intent_single_owner_mode and curve_intent_available:
             state_norm = str(curve_intent_state or "STRAIGHT").strip().upper()
             if state_norm not in {"STRAIGHT", "ENTRY", "COMMIT", "REARM"}:
                 state_norm = "STRAIGHT"
             curve_phase_source = "curve_intent_single_owner"
-            curve_upcoming = bool(state_norm in {"ENTRY", "COMMIT"})
-            curve_at_car = bool(state_norm == "COMMIT")
-            if not curve_upcoming and curve_intent >= 0.45:
-                curve_upcoming = True
-            if curve_upcoming and not curve_at_car and curve_intent >= 0.70:
-                curve_at_car = True
             try:
                 distance_to_next_curve_start_m = reference_point.get("distance_to_curve_start_m")
                 if distance_to_next_curve_start_m is not None:
                     distance_to_next_curve_start_m = float(distance_to_next_curve_start_m)
             except (TypeError, ValueError):
                 distance_to_next_curve_start_m = None
-            if curve_at_car:
+            speed_for_curve_intent = (
+                float(current_speed)
+                if current_speed is not None and np.isfinite(float(current_speed))
+                else float(reference_point.get("velocity", 0.0) or 0.0)
+            )
+            speed_for_curve_intent = max(0.0, float(speed_for_curve_intent))
+            curve_intent_distance_horizon_m = float(
+                np.clip(
+                    speed_for_curve_intent * float(self.curve_intent_arm_distance_time_headway_s),
+                    float(self.curve_intent_arm_distance_min_m),
+                    float(self.curve_intent_arm_distance_max_m),
+                )
+            )
+            curve_intent_distance_ready = bool(
+                distance_to_next_curve_start_m is None
+                or float(distance_to_next_curve_start_m)
+                <= (curve_intent_distance_horizon_m + float(self.curve_intent_rearm_exit_hysteresis))
+            )
+            curve_intent_arm_signal_active = bool(
+                float(curve_intent_term_preview) >= float(self.curve_intent_arm_preview_min)
+                or float(abs(path_curvature)) >= float(self.curve_intent_arm_preview_min)
+                or float(curve_intent_term_rise) >= float(self.curve_intent_arm_rise_min)
+            )
+            curve_intent_startup_lockout_active = bool(
+                self._curve_intent_frames_since_reset
+                <= int(self.curve_intent_startup_ignore_frames)
+            )
+            if curve_intent_startup_lockout_active:
+                state_norm = "STRAIGHT"
+                self._curve_intent_rearm_frames_remaining = 0
+                self._curve_intent_commit_streak_frames = 0
+                self._curve_intent_commit_watchdog_counter = 0
+                if self.curve_intent_force_straight_hold_frames > 0:
+                    self._curve_intent_force_straight_frames_remaining = max(
+                        self._curve_intent_force_straight_frames_remaining,
+                        int(self.curve_intent_force_straight_hold_frames),
+                    )
+            arm_allowed = bool(
+                (not curve_intent_startup_lockout_active)
+                and curve_intent_distance_ready
+                and curve_intent_arm_signal_active
+            )
+            if (
+                state_norm in {"ENTRY", "COMMIT"}
+                and not arm_allowed
+            ):
+                state_norm = "REARM"
+                self._curve_intent_rearm_frames_remaining = max(
+                    self._curve_intent_rearm_frames_remaining,
+                    int(self.curve_intent_rearm_min_frames),
+                )
+            if self._curve_intent_rearm_frames_remaining > 0:
+                curve_intent_rearm_cooldown_active = True
+                state_norm = "REARM"
+                self._curve_intent_rearm_frames_remaining -= 1
+            if (
+                int(self.curve_intent_force_straight_hold_frames) > 0
+                and state_norm in {"ENTRY", "COMMIT", "REARM"}
+                and not curve_intent_arm_signal_active
+                and (
+                    distance_to_next_curve_start_m is None
+                    or float(distance_to_next_curve_start_m) > float(self.curve_at_car_distance_min_m)
+                )
+            ):
+                self._curve_intent_force_straight_frames_remaining = max(
+                    self._curve_intent_force_straight_frames_remaining,
+                    int(self.curve_intent_force_straight_hold_frames),
+                )
+            if self._curve_intent_force_straight_frames_remaining > 0:
+                curve_intent_force_straight_active = True
+                state_norm = "STRAIGHT"
+                self._curve_intent_force_straight_frames_remaining -= 1
+            curve_upcoming = bool(state_norm in {"ENTRY", "COMMIT"})
+            if not curve_upcoming and curve_intent >= 0.45 and arm_allowed:
+                curve_upcoming = True
+            in_at_car_window = bool(
+                distance_to_next_curve_start_m is not None
+                and float(distance_to_next_curve_start_m) <= float(self.curve_at_car_distance_min_m)
+            )
+            curve_at_car = bool(state_norm == "COMMIT" and in_at_car_window)
+            if (
+                state_norm == "COMMIT"
+                and not curve_at_car
+                and distance_to_next_curve_start_m is None
+                and curve_intent >= 0.85
+            ):
+                # Legacy compatibility fallback when distance telemetry is absent.
+                curve_at_car = True
+            if curve_upcoming and not curve_at_car and curve_intent >= 0.70 and arm_allowed:
+                curve_at_car = True
+            if curve_at_car and in_at_car_window:
                 distance_to_next_curve_start_m = 0.0
+
+            if state_norm == "COMMIT":
+                self._curve_intent_commit_streak_frames += 1
+                if (
+                    int(self.curve_intent_max_commit_frames) > 0
+                    and self._curve_intent_commit_streak_frames >= int(self.curve_intent_max_commit_frames)
+                    and not in_at_car_window
+                ):
+                    curve_intent_max_commit_triggered = True
+                    state_norm = "REARM"
+                    curve_upcoming = False
+                    curve_at_car = False
+                    self._curve_intent_commit_streak_frames = 0
+                    self._curve_intent_rearm_frames_remaining = max(
+                        self._curve_intent_rearm_frames_remaining,
+                        int(self.curve_intent_rearm_min_frames),
+                    )
+            else:
+                self._curve_intent_commit_streak_frames = 0
+
+            if (
+                state_norm == "COMMIT"
+                and float(abs(path_curvature)) <= float(self.curve_intent_commit_watchdog_exit_curvature)
+            ):
+                self._curve_intent_commit_watchdog_counter += 1
+            elif state_norm != "COMMIT":
+                self._curve_intent_commit_watchdog_counter = 0
+
+            if self._curve_intent_commit_watchdog_counter >= self.curve_intent_commit_watchdog_frames:
+                curve_intent_watchdog_triggered = True
+                curve_phase_source = "curve_intent_watchdog_rearm"
+                curve_upcoming = False
+                curve_at_car = False
+                state_norm = "REARM"
+                curve_intent_state = "REARM"
+                self._curve_intent_commit_watchdog_counter = 0
+                self._curve_intent_rearm_frames_remaining = max(
+                    self._curve_intent_rearm_frames_remaining,
+                    int(self.curve_intent_rearm_min_frames),
+                )
+
+            curve_intent_state = state_norm
+
             self._curve_upcoming_state = bool(curve_upcoming)
             self._curve_at_car_state = bool(curve_at_car)
             self._curve_at_car_distance_remaining = (
                 None if distance_to_next_curve_start_m is None else float(distance_to_next_curve_start_m)
             )
         else:
+            self._curve_intent_commit_watchdog_counter = 0
+            self._curve_intent_commit_streak_frames = 0
+            self._curve_intent_rearm_frames_remaining = 0
+            self._curve_intent_force_straight_frames_remaining = 0
             distance_curve_state = self._compute_distance_curve_state(
                 road_center_reference_t=road_center_reference_t,
                 lookahead_m=max(0.0, float(ref_y)),
@@ -1670,6 +1904,8 @@ class LateralController:
         # entry scheduling, dynamic authority, and comfort scaling are PID
         # compensating mechanisms that introduce phase lag on PP output.
         pp_pipeline_bypass_active = (self.control_mode == "pure_pursuit")
+        _pp_speed_norm_scale = 1.0
+        _pp_map_ff_applied = 0.0
 
         if pp_pipeline_bypass_active:
             max_steering_rate = self.pp_max_steering_rate
@@ -1684,7 +1920,11 @@ class LateralController:
                 else float(reference_point.get('velocity', 0.0) or 0.0)
             )
             speed_for_comfort = max(0.0, speed_for_comfort)
-            turn_feasibility_curvature_abs = float(curve_metric_abs)
+            # Use actual path curvature (from the primary contract — map-backed when
+            # available), NOT curve_metric_abs which falls back to abs(desired_heading)
+            # when path_curvature=0. Heading error is a control artefact, not road
+            # geometry, and must not trigger feasibility limits on a straight road.
+            turn_feasibility_curvature_abs = abs(float(path_curvature))
             turn_feasibility_speed_mps = float(speed_for_comfort)
             feasibility = compute_turn_feasibility(
                 speed_mps=speed_for_comfort,
@@ -1729,6 +1969,44 @@ class LateralController:
             ) = self._apply_steering_rate_limit_transition(max_steering_rate)
             steering_rate_limit_effective_smoothed = steering_rate_limit_effective
             pp_steering_jerk_limited = False
+
+            if (
+                self.pp_speed_norm_enabled
+                and current_speed is not None
+                and np.isfinite(float(current_speed))
+                and float(current_speed) > self.pp_speed_norm_reference_mps
+            ):
+                _pp_speed_norm_scale = float(
+                    np.clip(
+                        (self.pp_speed_norm_reference_mps / float(current_speed)) ** 2,
+                        self.pp_speed_norm_min_scale,
+                        1.0,
+                    )
+                )
+                steering_before_limits = float(steering_before_limits) * _pp_speed_norm_scale
+
+            if (
+                self.pp_map_ff_enabled
+                and str(path_curvature_source_used) == "curvature_primary_abs"
+                and abs(float(path_curvature_for_map_ff)) >= self.pp_map_ff_curvature_min
+            ):
+                _raw_curv = float(
+                    np.clip(
+                        path_curvature_for_map_ff,
+                        -self.pp_map_ff_curvature_max_clip,
+                        self.pp_map_ff_curvature_max_clip,
+                    )
+                )
+                _ff_rad = self.pp_map_ff_wheelbase_m * _raw_curv * self.pp_map_ff_gain
+                _max_steer_rad = float(np.radians(30.0))
+                _pp_map_ff_applied = float(
+                    np.clip(
+                        _ff_rad / _max_steer_rad * self.max_steering,
+                        -self.max_steering,
+                        self.max_steering,
+                    )
+                )
+                steering_before_limits = float(steering_before_limits) + _pp_map_ff_applied
 
             rate_in = steering_before_limits
             desired_rate = steering_before_limits - self.last_steering
@@ -2023,7 +2301,11 @@ class LateralController:
             else float(reference_point.get('velocity', 0.0) or 0.0)
         )
         speed_for_comfort = max(0.0, speed_for_comfort)
-        turn_feasibility_curvature_abs = float(curve_metric_abs)
+        # Use actual path curvature (from the primary contract — map-backed when
+        # available), NOT curve_metric_abs which falls back to abs(desired_heading)
+        # when path_curvature=0. Heading error is a control artefact, not road
+        # geometry, and must not trigger feasibility limits on a straight road.
+        turn_feasibility_curvature_abs = abs(float(path_curvature))
         turn_feasibility_speed_mps = float(speed_for_comfort)
         feasibility = compute_turn_feasibility(
             speed_mps=speed_for_comfort,
@@ -2610,6 +2892,9 @@ class LateralController:
                 'pid_derivative': pid_derivative,
                 'path_curvature_input': path_curvature,
                 'path_curvature_raw': raw_ref_curvature,
+                'path_curvature_source_used': path_curvature_source_used,
+                'path_curvature_primary_abs': primary_curvature_abs,
+                'path_curvature_lane_abs': lane_curvature_abs,
                 'curve_feedforward_gain_scheduled': curve_gain_scheduled,
                 'curve_feedforward_scale': curve_feedforward_scale,
                 'curve_feedforward_curvature_used': self.smoothed_path_curvature,
@@ -2822,6 +3107,8 @@ class LateralController:
                 'pp_feedback_steering': pp_feedback_steering_val,
                 'pp_ref_jump_clamped': float(pp_ref_jump_clamped),
                 'pp_stale_hold_active': float(pp_stale_hold_active),
+                'pp_speed_norm_scale': float(_pp_speed_norm_scale),
+                'pp_map_ff_applied': float(_pp_map_ff_applied),
                 'pp_steering_jerk_limited': float(pp_steering_jerk_limited) if pp_pipeline_bypass_active else 0.0,
                 'pp_effective_steering_rate': float(self._pp_last_steering_rate) if pp_pipeline_bypass_active else 0.0,
                 'pp_pipeline_bypass_active': float(pp_pipeline_bypass_active),
@@ -2865,6 +3152,33 @@ class LateralController:
                 'curve_intent_term_path': curve_intent_term_path,
                 'curve_intent_term_rise': curve_intent_term_rise,
                 'curve_intent_confidence': curve_intent_confidence,
+                'curve_intent_watchdog_triggered': curve_intent_watchdog_triggered,
+                'curve_intent_startup_lockout_active': curve_intent_startup_lockout_active,
+                'curve_intent_arm_signal_active': curve_intent_arm_signal_active,
+                'curve_intent_distance_ready': curve_intent_distance_ready,
+                'curve_intent_distance_horizon_m': (
+                    float(curve_intent_distance_horizon_m)
+                    if curve_intent_distance_horizon_m is not None
+                    else -1.0
+                ),
+                'curve_intent_rearm_cooldown_active': curve_intent_rearm_cooldown_active,
+                'curve_intent_force_straight_active': curve_intent_force_straight_active,
+                'curve_intent_max_commit_triggered': curve_intent_max_commit_triggered,
+                'curve_intent_commit_streak_frames': int(self._curve_intent_commit_streak_frames),
+                'curve_intent_startup_ignore_frames': int(self.curve_intent_startup_ignore_frames),
+                'curve_intent_arm_preview_min': float(self.curve_intent_arm_preview_min),
+                'curve_intent_arm_rise_min': float(self.curve_intent_arm_rise_min),
+                'curve_intent_arm_distance_time_headway_s': (
+                    float(self.curve_intent_arm_distance_time_headway_s)
+                ),
+                'curve_intent_arm_distance_min_m': float(self.curve_intent_arm_distance_min_m),
+                'curve_intent_arm_distance_max_m': float(self.curve_intent_arm_distance_max_m),
+                'curve_intent_rearm_exit_hysteresis': float(self.curve_intent_rearm_exit_hysteresis),
+                'curve_intent_rearm_min_frames': int(self.curve_intent_rearm_min_frames),
+                'curve_intent_max_commit_frames': int(self.curve_intent_max_commit_frames),
+                'curve_intent_force_straight_hold_frames': (
+                    int(self.curve_intent_force_straight_hold_frames)
+                ),
                 'curve_intent_speed_guardrail_active': curve_intent_speed_guardrail_active,
                 'curve_intent_speed_guardrail_cap_mps': curve_intent_speed_guardrail_cap_mps,
                 'curve_intent_speed_guardrail_confidence': curve_intent_speed_guardrail_confidence,
@@ -2918,6 +3232,11 @@ class LateralController:
         self._curve_commit_retrigger_cooldown_remaining = 0
         self._curve_commit_handoff_streak = 0
         self._curve_unwind_frames_remaining = 0
+        self._curve_intent_commit_watchdog_counter = 0
+        self._curve_intent_frames_since_reset = 0
+        self._curve_intent_rearm_frames_remaining = 0
+        self._curve_intent_force_straight_frames_remaining = 0
+        self._curve_intent_commit_streak_frames = 0
         self._prev_is_straight = True
         self._prev_entry_phase_active = False
         self._prev_curve_upcoming = False
@@ -3920,6 +4239,18 @@ class VehicleController:
                  curve_phase_preview_off_frames: int = 2,
                  curve_at_car_distance_min_m: float = 0.0,
                  curve_intent_single_owner_mode: bool = True,
+                 curve_intent_commit_watchdog_frames: int = 45,
+                 curve_intent_commit_watchdog_exit_curvature: Optional[float] = None,
+                 curve_intent_startup_ignore_frames: int = 0,
+                 curve_intent_arm_preview_min: float = 0.0,
+                 curve_intent_arm_rise_min: float = 0.0,
+                 curve_intent_arm_distance_time_headway_s: float = 999.0,
+                 curve_intent_arm_distance_min_m: float = 0.0,
+                 curve_intent_arm_distance_max_m: float = 1000000.0,
+                 curve_intent_rearm_exit_hysteresis: float = 0.0,
+                 curve_intent_rearm_min_frames: int = 0,
+                 curve_intent_max_commit_frames: int = 0,
+                 curve_intent_force_straight_hold_frames: int = 0,
                  road_curve_enter_threshold: Optional[float] = None,
                  road_curve_exit_threshold: Optional[float] = None,
                  road_straight_hold_invalid_frames: int = 6,
@@ -4022,6 +4353,14 @@ class VehicleController:
                  stanley_heading_weight: float = 1.0,
                  pp_feedback_gain: float = 0.15,
                  pp_min_lookahead: float = 0.5,
+                 pp_speed_norm_enabled: bool = False,
+                 pp_speed_norm_reference_mps: float = 12.0,
+                 pp_speed_norm_min_scale: float = 0.70,
+                 pp_map_ff_enabled: bool = False,
+                 pp_map_ff_gain: float = 1.0,
+                 pp_map_ff_wheelbase_m: float = 2.5,
+                 pp_map_ff_curvature_min: float = 0.005,
+                 pp_map_ff_curvature_max_clip: float = 0.08,
                  pp_ref_jump_clamp: float = 0.5,
                  pp_stale_decay: float = 0.98,
                  pp_max_steering_rate: float = 0.4,
@@ -4094,6 +4433,24 @@ class VehicleController:
             curve_phase_preview_off_frames=curve_phase_preview_off_frames,
             curve_at_car_distance_min_m=curve_at_car_distance_min_m,
             curve_intent_single_owner_mode=curve_intent_single_owner_mode,
+            curve_intent_commit_watchdog_frames=curve_intent_commit_watchdog_frames,
+            curve_intent_commit_watchdog_exit_curvature=(
+                curve_intent_commit_watchdog_exit_curvature
+            ),
+            curve_intent_startup_ignore_frames=curve_intent_startup_ignore_frames,
+            curve_intent_arm_preview_min=curve_intent_arm_preview_min,
+            curve_intent_arm_rise_min=curve_intent_arm_rise_min,
+            curve_intent_arm_distance_time_headway_s=(
+                curve_intent_arm_distance_time_headway_s
+            ),
+            curve_intent_arm_distance_min_m=curve_intent_arm_distance_min_m,
+            curve_intent_arm_distance_max_m=curve_intent_arm_distance_max_m,
+            curve_intent_rearm_exit_hysteresis=curve_intent_rearm_exit_hysteresis,
+            curve_intent_rearm_min_frames=curve_intent_rearm_min_frames,
+            curve_intent_max_commit_frames=curve_intent_max_commit_frames,
+            curve_intent_force_straight_hold_frames=(
+                curve_intent_force_straight_hold_frames
+            ),
             road_curve_enter_threshold=road_curve_enter_threshold,
             road_curve_exit_threshold=road_curve_exit_threshold,
             road_straight_hold_invalid_frames=road_straight_hold_invalid_frames,
@@ -4230,6 +4587,14 @@ class VehicleController:
             stanley_heading_weight=stanley_heading_weight,
             pp_feedback_gain=pp_feedback_gain,
             pp_min_lookahead=pp_min_lookahead,
+            pp_speed_norm_enabled=pp_speed_norm_enabled,
+            pp_speed_norm_reference_mps=pp_speed_norm_reference_mps,
+            pp_speed_norm_min_scale=pp_speed_norm_min_scale,
+            pp_map_ff_enabled=pp_map_ff_enabled,
+            pp_map_ff_gain=pp_map_ff_gain,
+            pp_map_ff_wheelbase_m=pp_map_ff_wheelbase_m,
+            pp_map_ff_curvature_min=pp_map_ff_curvature_min,
+            pp_map_ff_curvature_max_clip=pp_map_ff_curvature_max_clip,
             pp_ref_jump_clamp=pp_ref_jump_clamp,
             pp_stale_decay=pp_stale_decay,
             pp_max_steering_rate=pp_max_steering_rate,

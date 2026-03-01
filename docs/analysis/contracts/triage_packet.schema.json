@@ -10,7 +10,13 @@
     "matrix_hash",
     "recording_ids",
     "pass_fail",
-    "regression_budget"
+    "regression_budget",
+    "root_cause_bucket",
+    "first_divergence_frame",
+    "first_infeasible_frame",
+    "first_speed_above_feasibility_frame",
+    "source_at_failure",
+    "telemetry_completeness"
   ],
   "properties": {
     "schema_version": {
@@ -36,6 +42,57 @@
     },
     "regression_budget": {
       "type": "object"
+    },
+    "root_cause_bucket": {
+      "type": "string",
+      "enum": [
+        "curvature_contract_failure",
+        "controller_authority_failure",
+        "longitudinal_overspeed",
+        "sampling_invalid"
+      ]
+    },
+    "first_divergence_frame": {
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "first_infeasible_frame": {
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "first_speed_above_feasibility_frame": {
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "source_at_failure": {
+      "type": "string"
+    },
+    "telemetry_completeness": {
+      "type": "object",
+      "required": [
+        "curvature_contract",
+        "feasibility"
+      ],
+      "properties": {
+        "curvature_contract": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "feasibility": {
+          "type": [
+            "number",
+            "null"
+          ]
+        }
+      }
     }
   },
   "additionalProperties": true

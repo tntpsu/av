@@ -266,3 +266,76 @@ def test_recorder_writes_transition_telemetry_fields(tmp_path: Path) -> None:
         )
         assert int(h5_file["control/speed_governor_cap_tracking_recovery_frames"][0]) == 7
         assert int(h5_file["control/speed_governor_cap_tracking_hard_ceiling_applied"][0]) == 0
+
+
+def test_recorder_writes_curvature_contract_and_backstop_fields(tmp_path: Path) -> None:
+    recorder = DataRecorder(str(tmp_path), recording_name="control_command_curvature_contract_test")
+    try:
+        frame = RecordingFrame(
+            timestamp=0.0,
+            frame_id=0,
+            camera_frame=CameraFrame(
+                image=np.zeros((1, 1, 3), dtype=np.uint8),
+                timestamp=0.0,
+                frame_id=0,
+            ),
+            vehicle_state=None,
+            control_command=ControlCommand(
+                timestamp=0.0,
+                steering=0.0,
+                throttle=0.0,
+                brake=0.0,
+                path_curvature_source_used="curvature_primary_abs",
+                path_curvature_primary_abs=0.011,
+                path_curvature_lane_abs=0.010,
+                speed_governor_feasibility_backstop_active=True,
+                speed_governor_feasibility_backstop_speed=7.4,
+                curvature_primary_abs=0.011,
+                curvature_primary_source="map_track",
+                curvature_map_abs=0.011,
+                curvature_lane_context_abs=0.010,
+                curvature_preview_abs=0.012,
+                curvature_source_diverged=False,
+                curvature_map_authority_lost=False,
+                curvature_source_divergence_abs=0.001,
+                curvature_selection_reason="map_ok",
+                map_health_ok=True,
+                track_match_ok=True,
+                map_segment_lookup_success_rate=99.5,
+                map_teleport_skip_count=0,
+                map_odometer_jump_rate=0.001,
+                curvature_contract_consistent_controller=True,
+                curvature_contract_consistent_governor=True,
+                curvature_contract_consistent_intent=True,
+                curvature_contract_consistent_all=True,
+                curvature_contract_mismatch_reason="none",
+            ),
+            perception_output=None,
+            trajectory_output=None,
+            unity_feedback=None,
+        )
+        recorder._write_control_commands([frame])
+        recorder.h5_file.flush()
+    finally:
+        recorder.close()
+
+    with h5py.File(tmp_path / "control_command_curvature_contract_test.h5", "r") as h5_file:
+        src = h5_file["control/path_curvature_source_used"][0]
+        if isinstance(src, bytes):
+            src = src.decode("utf-8")
+        assert str(src) == "curvature_primary_abs"
+        assert float(h5_file["control/path_curvature_primary_abs"][0]) == pytest.approx(0.011, rel=1e-6)
+        assert float(h5_file["control/path_curvature_lane_abs"][0]) == pytest.approx(0.010, rel=1e-6)
+        assert int(h5_file["control/speed_governor_feasibility_backstop_active"][0]) == 1
+        assert float(h5_file["control/speed_governor_feasibility_backstop_speed"][0]) == pytest.approx(7.4, rel=1e-6)
+        psrc = h5_file["control/curvature_primary_source"][0]
+        if isinstance(psrc, bytes):
+            psrc = psrc.decode("utf-8")
+        assert str(psrc) == "map_track"
+        assert float(h5_file["control/curvature_source_divergence_abs"][0]) == pytest.approx(0.001, rel=1e-6)
+        assert int(h5_file["control/curvature_map_authority_lost"][0]) == 0
+        assert int(h5_file["control/map_health_ok"][0]) == 1
+        assert int(h5_file["control/track_match_ok"][0]) == 1
+        assert float(h5_file["control/map_segment_lookup_success_rate"][0]) == pytest.approx(99.5, rel=1e-6)
+        assert int(h5_file["control/map_teleport_skip_count"][0]) == 0
+        assert int(h5_file["control/curvature_contract_consistent_all"][0]) == 1

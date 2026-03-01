@@ -1392,6 +1392,9 @@ def _print_summary_report(recording_path: Path, summary: Dict, analyze_to_failur
     cadence_limits = cadence.get("limits", {}) if isinstance(cadence, dict) else {}
     cadence_irregular_limit = cadence_limits.get("irregular_rate_max")
     cadence_severe_limit = cadence_limits.get("severe_irregular_rate_max")
+    cadence_tuning_valid = cadence.get("tuning_valid")
+    cadence_tuning_dt_p95_limit = cadence_limits.get("dt_p95_ms_max")
+    cadence_tuning_dt_max_limit = cadence_limits.get("dt_max_ms_max")
     if cadence.get("availability") == "available":
         cadence_status = "PASS" if cadence.get("pass") else "FAIL"
         print(
@@ -1403,6 +1406,18 @@ def _print_summary_report(recording_path: Path, summary: Dict, analyze_to_failur
             f"severe <= {float(cadence_severe_limit) * 100.0:.2f}%) "
             f"[{cadence_status}]"
         )
+        tuning_status = "PASS" if bool(cadence_tuning_valid) else "FAIL"
+        if cadence_tuning_dt_p95_limit is not None and cadence_tuning_dt_max_limit is not None:
+            print(
+                "   Tuning Valid: "
+                f"{bool(cadence_tuning_valid)} "
+                f"(limits: dt_p95 <= {float(cadence_tuning_dt_p95_limit):.1f} ms, "
+                f"dt_max <= {float(cadence_tuning_dt_max_limit):.1f} ms, "
+                f"severe <= {float(cadence_severe_limit) * 100.0:.2f}%) "
+                f"[{tuning_status}]"
+            )
+        else:
+            print(f"   Tuning Valid: {bool(cadence_tuning_valid)} [{tuning_status}]")
     else:
         print("   Cadence Health: N/A")
     print()
@@ -1454,7 +1469,85 @@ def _print_summary_report(recording_path: Path, summary: Dict, analyze_to_failur
         print("   Chassis-Ground Health: N/A")
     print()
 
-    print("11. SAFETY METRICS")
+    contract_health = summary.get("curvature_contract_health", {})
+    first_fault_chain = summary.get("first_fault_chain", {})
+    print("11. CURVATURE CONTRACT HEALTH")
+    print("-" * 80)
+    if str(contract_health.get("availability", "unavailable")).lower() == "available":
+        limits = contract_health.get("limits", {})
+        diverged_rate = contract_health.get("curvature_source_diverged_rate")
+        map_authority_lost_rate = contract_health.get("curvature_map_authority_lost_rate")
+        divergence_p95 = contract_health.get("curvature_source_divergence_p95")
+        commit_streak = contract_health.get("curve_intent_commit_streak_max_frames")
+        feas_violation = contract_health.get("feasibility_violation_rate")
+        backstop_rate = contract_health.get("feasibility_backstop_active_rate")
+        consistency = contract_health.get("curvature_contract_consistency_rate")
+        map_untrusted = contract_health.get("map_health_untrusted_rate")
+        track_mismatch = contract_health.get("track_mismatch_rate")
+        complete_contract = contract_health.get("telemetry_completeness_rate_curvature_contract")
+        complete_feas = contract_health.get("telemetry_completeness_rate_feasibility")
+        source_mode = contract_health.get("primary_source_mode", "unknown")
+        print(f"   Primary Source Mode: {source_mode}")
+        if map_authority_lost_rate is not None:
+            print(
+                f"   Map Authority Lost Rate: {float(map_authority_lost_rate):.2f}% "
+                f"(<= {float(limits.get('curvature_map_authority_lost_rate_max_pct', 5.0)):.2f}%)"
+            )
+        if diverged_rate is not None:
+            print(
+                f"   Curvature Source Diverged Rate: {float(diverged_rate):.2f}% "
+                f"(<= {float(limits.get('curvature_source_diverged_rate_max_pct', 100.0)):.2f}%)"
+            )
+        if divergence_p95 is not None:
+            print(f"   Curvature Source Divergence P95: {float(divergence_p95):.5f}")
+        if commit_streak is not None:
+            print(f"   Curve Intent COMMIT Streak (max): {int(commit_streak)} frames")
+        if feas_violation is not None:
+            print(
+                f"   Feasibility Violation Rate: {float(feas_violation):.2f}% "
+                f"(<= {float(limits.get('feasibility_violation_rate_max_pct', 5.0)):.2f}%)"
+            )
+        if backstop_rate is not None:
+            print(f"   Feasibility Backstop Active Rate: {float(backstop_rate):.2f}%")
+        if consistency is not None:
+            print(
+                f"   Contract Consistency Rate: {float(consistency):.2f}% "
+                f"(>= {float(limits.get('curvature_contract_consistency_rate_min_pct', 99.0)):.2f}%)"
+            )
+        if map_untrusted is not None:
+            print(
+                f"   Map Health Untrusted Rate: {float(map_untrusted):.2f}% "
+                f"(<= {float(limits.get('map_health_untrusted_rate_max_pct', 1.0)):.2f}%)"
+            )
+        if track_mismatch is not None:
+            print(
+                f"   Track Mismatch Rate: {float(track_mismatch):.2f}% "
+                f"(<= {float(limits.get('track_mismatch_rate_max_pct', 0.0)):.2f}%)"
+            )
+        if complete_contract is not None:
+            print(
+                f"   Telemetry Completeness (contract): {float(complete_contract):.2f}% "
+                f"(>= {float(limits.get('telemetry_completeness_rate_min_pct', 99.0)):.2f}%)"
+            )
+        if complete_feas is not None:
+            print(
+                f"   Telemetry Completeness (feasibility): {float(complete_feas):.2f}% "
+                f"(>= {float(limits.get('telemetry_completeness_rate_min_pct', 99.0)):.2f}%)"
+            )
+    else:
+        print("   Curvature Contract Health: N/A")
+    if isinstance(first_fault_chain, dict):
+        print("   First Fault Chain:")
+        print(f"     first_divergence_frame: {first_fault_chain.get('first_divergence_frame')}")
+        print(f"     first_infeasible_frame: {first_fault_chain.get('first_infeasible_frame')}")
+        print(
+            "     first_speed_above_feasibility_frame: "
+            f"{first_fault_chain.get('first_speed_above_feasibility_frame')}"
+        )
+        print(f"     first_boundary_breach_frame: {first_fault_chain.get('first_boundary_breach_frame')}")
+    print()
+
+    print("12. SAFETY METRICS")
     print("-" * 80)
     print(f"   Out-of-Lane Events: {int(safety.get('out_of_lane_events', 0))}")
     print(f"   Out-of-Lane Time: {safety.get('out_of_lane_time', 0.0):.1f}%")
@@ -1475,7 +1568,7 @@ def _print_summary_report(recording_path: Path, summary: Dict, analyze_to_failur
         )
     print()
 
-    print("12. RECOMMENDATIONS")
+    print("13. RECOMMENDATIONS")
     print("-" * 80)
     if recommendations:
         for idx, recommendation in enumerate(recommendations, 1):

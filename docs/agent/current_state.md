@@ -1,7 +1,7 @@
 # AV Stack — Agent Memory: Current State
 
-**Last updated:** 2026-02-28
-**Current milestone:** cap-tracking promoted to baseline. Next: S2-M4 (15 m/s validation on highway_65).
+**Last updated:** 2026-03-01
+**Current milestone:** S2-M4 in progress — highway oscillation fixes implemented, awaiting live validation.
 
 ---
 
@@ -102,6 +102,29 @@ Validated on s_loop (recording_20260228_115637.h5):
 where the curve cap governs ~94% of frames. The planner is working as intended.
 
 Next: **S2-M4** — higher-speed validation (12 m/s → 15 m/s on `highway_65`). Entry criteria met (S2-M1 + S2-M2 + S2-M3 all done). Use `config/highway_15mps.yaml`.
+
+### S2-M4 Highway Oscillation Investigation (2026-03-01)
+
+**Codex ran 12 highway recordings (WS0/WS1 work) — all failed** (e-stop + oscillation runaway).
+**Claude root-cause analysis + 3 fixes implemented.**
+
+**Root causes found:**
+1. `pp_speed_norm_scale`/`pp_map_ff_applied` not in HDF5 — telemetry wiring bug in `ControlCommandData` + orchestrator. Speed norm WAS active, just invisible.
+2. WS1 startup latch lives in orchestrator `_curve_phase_scheduler_state` — controller's lockout is self-defeating because the orchestrator scheduler feeds back "COMMIT" every frame after the lockout expires.
+3. Speed-norm formula was linear (`v_ref/v`) but PP loop gain scales with `v²` — needed quadratic `(v_ref/v)²` with `min_scale=0.60` for true gain normalization at 15 m/s.
+
+**Fixes applied (not yet live-validated):**
+- P1: `data/formats/data_format.py` + `orchestrator.py` — wire `pp_speed_norm_scale`, `pp_map_ff_applied` to HDF5
+- P2: `av_stack/orchestrator.py` `_pf_compute_lane_geometry` — suppress `_curve_phase_scheduler_state` during startup window (frame_count ≤ curve_intent_startup_ignore_frames)
+- P3: `control/pid_controller.py` — quadratic formula `(v_ref/v)²`; `highway_15mps.yaml` — `pp_speed_norm_min_scale: 0.75 → 0.60`
+
+**Test suite:** 577 passed, 9 skipped, 3 failed (all 3 pre-existing — 2 from stale coord-system tests, 1 from Codex WS1 PID-path regression in `test_heading_lateral_conflicts.py`).
+
+**Decision gate after 3 live highway runs:**
+- `curve_intent` stays STRAIGHT on pre-arc straight → P2 working
+- `pp_speed_norm_scale ≈ 0.64` at 15 m/s → P3 working
+- If oscillation stops → proceed WS2 + WS3 → promote S2-M4
+- If oscillation persists unchanged → proceed to Phase 2 MPC (see `plan.md`)
 
 ---
 

@@ -187,6 +187,9 @@ class ControlCommand:
     raw_steering: Optional[float] = None  # Steering before smoothing
     lateral_correction: Optional[float] = None  # Lateral correction term (k * lane_center)
     path_curvature_input: Optional[float] = None  # Path curvature used in calculation (1/meters)
+    path_curvature_source_used: Optional[str] = None
+    path_curvature_primary_abs: Optional[float] = None
+    path_curvature_lane_abs: Optional[float] = None
     feedforward_steering: Optional[float] = None  # Feedforward steering command
     feedback_steering: Optional[float] = None  # Feedback steering command from PID/Stanley
     total_error_scaled: Optional[float] = None  # Total error after scaling/deadband
@@ -275,6 +278,8 @@ class ControlCommand:
     speed_governor_curve_cap_reason: Optional[str] = None
     speed_governor_curve_cap_margin_mps: Optional[float] = None
     speed_governor_curve_cap_shadow_mode: Optional[bool] = None
+    speed_governor_feasibility_backstop_active: Optional[bool] = None
+    speed_governor_feasibility_backstop_speed: Optional[float] = None
     speed_governor_cap_tracking_active: bool = False
     speed_governor_cap_tracking_error_mps: Optional[float] = None
     speed_governor_cap_tracking_mode: str = "inactive"
@@ -378,6 +383,25 @@ class ControlCommand:
     turn_feasibility_speed_limit_mps: Optional[float] = None
     turn_feasibility_speed_delta_mps: Optional[float] = None
     turn_feasibility_use_peak_bound: Optional[bool] = None
+    curvature_primary_abs: Optional[float] = None
+    curvature_primary_source: Optional[str] = None
+    curvature_map_abs: Optional[float] = None
+    curvature_lane_context_abs: Optional[float] = None
+    curvature_preview_abs: Optional[float] = None
+    curvature_source_diverged: Optional[bool] = None
+    curvature_map_authority_lost: Optional[bool] = None
+    curvature_source_divergence_abs: Optional[float] = None
+    curvature_selection_reason: Optional[str] = None
+    map_health_ok: Optional[bool] = None
+    track_match_ok: Optional[bool] = None
+    map_segment_lookup_success_rate: Optional[float] = None
+    map_teleport_skip_count: Optional[int] = None
+    map_odometer_jump_rate: Optional[float] = None
+    curvature_contract_consistent_controller: Optional[bool] = None
+    curvature_contract_consistent_governor: Optional[bool] = None
+    curvature_contract_consistent_intent: Optional[bool] = None
+    curvature_contract_consistent_all: Optional[bool] = None
+    curvature_contract_mismatch_reason: Optional[str] = None
     # Pure Pursuit telemetry
     pp_alpha: Optional[float] = None
     pp_lookahead_distance: Optional[float] = None
@@ -388,6 +412,8 @@ class ControlCommand:
     pp_steering_jerk_limited: bool = False
     pp_effective_steering_rate: float = 0.0
     pp_pipeline_bypass_active: bool = False
+    pp_speed_norm_scale: float = 1.0
+    pp_map_ff_applied: float = 0.0
 
 
 @dataclass

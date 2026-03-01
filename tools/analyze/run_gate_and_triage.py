@@ -215,7 +215,13 @@ def _extract_run_metrics(
     executive = summary.get("executive_summary", {})
     system_health = summary.get("system_health", {})
     speed_control = summary.get("speed_control", {})
+    contract_health = summary.get("curvature_contract_health", {})
+    first_fault_chain = summary.get("first_fault_chain", {})
     curve_intent_diag = summary.get("curve_intent_diagnostics", {})
+    latency_sync = summary.get("latency_sync", {})
+    cadence = latency_sync.get("cadence", {}) if isinstance(latency_sync, dict) else {}
+    cadence_stats = cadence.get("stats_ms", {}) if isinstance(cadence, dict) else {}
+    cadence_limits = cadence.get("limits", {}) if isinstance(cadence, dict) else {}
     curve_intent_available = bool(curve_intent_diag.get("available", False))
     curve_intent_arm_signal_available = bool(curve_intent_diag.get("arm_signal_available", False))
 
@@ -261,6 +267,19 @@ def _extract_run_metrics(
         "unity_time_gap_max": float(unity_time_gap_max),
         "run_validity_pass": bool(run_validity_pass),
         "run_validity_reasons": run_validity_reasons,
+        "tuning_valid": bool(cadence.get("tuning_valid", False)),
+        "cadence_dt_p95_ms": float(cadence_stats.get("p95", 0.0) or 0.0),
+        "cadence_dt_max_ms": float(cadence_stats.get("max", 0.0) or 0.0),
+        "cadence_severe_irregular_rate": float(cadence.get("severe_irregular_rate", 0.0) or 0.0),
+        "cadence_tuning_dt_p95_ms_max": float(
+            cadence_limits.get("dt_p95_ms_max", 80.0) or 80.0
+        ),
+        "cadence_tuning_dt_max_ms_max": float(
+            cadence_limits.get("dt_max_ms_max", 500.0) or 500.0
+        ),
+        "cadence_tuning_severe_rate_max": float(
+            cadence_limits.get("severe_irregular_rate_max", 0.01) or 0.01
+        ),
         "curve_intent_available": bool(curve_intent_available),
         "curve_intent_arm_signal_available": bool(curve_intent_arm_signal_available),
         "curve_intent_arm_early_enough_rate": float(
@@ -307,8 +326,65 @@ def _extract_run_metrics(
         "hard_ceiling_applied_rate": float(
             speed_control.get("hard_ceiling_applied_rate", 0.0)
         ),
+        "curvature_source_divergence_p95": float(
+            contract_health.get("curvature_source_divergence_p95", 0.0) or 0.0
+        ),
+        "curvature_source_diverged_rate": float(
+            contract_health.get("curvature_source_diverged_rate", 0.0) or 0.0
+        ),
+        "curvature_map_authority_lost_rate": float(
+            contract_health.get("curvature_map_authority_lost_rate", 0.0) or 0.0
+        ),
+        "curve_intent_commit_streak_max_frames": int(
+            contract_health.get("curve_intent_commit_streak_max_frames", 0) or 0
+        ),
+        "feasibility_violation_rate": float(
+            contract_health.get("feasibility_violation_rate", 0.0) or 0.0
+        ),
+        "feasibility_backstop_active_rate": float(
+            contract_health.get("feasibility_backstop_active_rate", 0.0) or 0.0
+        ),
+        "map_health_untrusted_rate": float(
+            contract_health.get("map_health_untrusted_rate", 0.0) or 0.0
+        ),
+        "track_mismatch_rate": float(
+            contract_health.get("track_mismatch_rate", 0.0) or 0.0
+        ),
+        "curvature_contract_consistency_rate": float(
+            contract_health.get("curvature_contract_consistency_rate", 0.0) or 0.0
+        ),
+        "telemetry_completeness_rate_curvature_contract": float(
+            contract_health.get("telemetry_completeness_rate_curvature_contract", 0.0) or 0.0
+        ),
+        "telemetry_completeness_rate_feasibility": float(
+            contract_health.get("telemetry_completeness_rate_feasibility", 0.0) or 0.0
+        ),
+        "first_divergence_frame": first_fault_chain.get("first_divergence_frame"),
+        "first_infeasible_frame": first_fault_chain.get("first_infeasible_frame"),
+        "first_speed_above_feasibility_frame": first_fault_chain.get(
+            "first_speed_above_feasibility_frame"
+        ),
+        "first_boundary_breach_frame": first_fault_chain.get("first_boundary_breach_frame"),
+        "source_at_failure": str(contract_health.get("primary_source_mode", "unknown") or "unknown"),
     }
     return summary, metrics
+
+
+def _classify_root_cause_bucket(metrics: dict[str, Any]) -> str:
+    if not bool(metrics.get("run_validity_pass", True)):
+        return "sampling_invalid"
+    if not bool(metrics.get("tuning_valid", True)):
+        return "sampling_invalid"
+    if (
+        float(metrics.get("curvature_contract_consistency_rate", 100.0)) < 99.0
+        or float(metrics.get("telemetry_completeness_rate_curvature_contract", 100.0)) < 99.0
+        or float(metrics.get("telemetry_completeness_rate_feasibility", 100.0)) < 99.0
+        or float(metrics.get("curvature_map_authority_lost_rate", 0.0)) > 5.0
+    ):
+        return "curvature_contract_failure"
+    if float(metrics.get("feasibility_violation_rate", 0.0)) > 5.0:
+        return "longitudinal_overspeed"
+    return "controller_authority_failure"
 
 
 def _pick_first_failure(issues_data: dict[str, Any]) -> dict[str, Any] | None:
@@ -444,6 +520,9 @@ def _track_medians(rows: list[RunArtifacts], track_id: str) -> dict[str, float] 
     track_rows = [r for r in rows if r.track_id == track_id]
     if not track_rows:
         return None
+    track_rows = [r for r in track_rows if bool(r.metrics.get("tuning_valid", True))]
+    if not track_rows:
+        return None
 
     def _median(key: str) -> float:
         return float(np.median([float(r.metrics.get(key, 0.0)) for r in track_rows]))
@@ -486,6 +565,8 @@ def _evaluate_gate(
     mode: str,
 ) -> dict[str, Any]:
     run_validity_pass = all(bool(r.metrics.get("run_validity_pass", True)) for r in rows)
+    tuning_valid_pass = all(bool(r.metrics.get("tuning_valid", True)) for r in rows)
+    eligible_rows = [r for r in rows if bool(r.metrics.get("tuning_valid", True))]
     hard_safety_pass = all(
         int(r.metrics.get("emergency_stop_count", 0)) == 0
         and int(r.metrics.get("out_of_lane_events_full_run", 0)) == 0
@@ -494,19 +575,42 @@ def _evaluate_gate(
     )
 
     run_counts: dict[str, int] = {}
-    for r in rows:
+    for r in eligible_rows:
         run_counts[r.track_id] = run_counts.get(r.track_id, 0) + 1
     run_count_gate_pass = all(run_counts.get(track_id, 0) >= expected_runs_per_track for track_id in required_track_ids)
 
-    track_metrics = {track_id: _track_medians(rows, track_id) for track_id in required_track_ids}
+    track_metrics = {track_id: _track_medians(eligible_rows, track_id) for track_id in required_track_ids}
     baseline_metrics = {track_id: _track_medians(baseline_rows, track_id) for track_id in required_track_ids}
 
     checks = {
         "run_validity_pass": run_validity_pass,
+        "tuning_valid_pass": tuning_valid_pass,
         "hard_safety_pass": hard_safety_pass,
         "run_count_gate_pass": run_count_gate_pass,
         "diagnostics_preflight_pass": bool(
             diagnostics_preflight.get("available", False) or str(mode) != "promotion"
+        ),
+        "curvature_contract_consistency_pass": all(
+            float(r.metrics.get("curvature_contract_consistency_rate", 0.0)) >= 99.0
+            for r in eligible_rows
+        ),
+        "curvature_source_divergence_pass": all(
+            float(r.metrics.get("curvature_map_authority_lost_rate", 100.0)) <= 5.0
+            for r in eligible_rows
+        ),
+        "feasibility_coherency_pass": all(
+            float(r.metrics.get("feasibility_violation_rate", 100.0)) <= 5.0
+            for r in eligible_rows
+        ),
+        "map_health_pass": all(
+            float(r.metrics.get("map_health_untrusted_rate", 100.0)) <= 1.0
+            and float(r.metrics.get("track_mismatch_rate", 100.0)) <= 0.0
+            for r in eligible_rows
+        ),
+        "telemetry_completeness_pass": all(
+            float(r.metrics.get("telemetry_completeness_rate_curvature_contract", 0.0)) >= 99.0
+            and float(r.metrics.get("telemetry_completeness_rate_feasibility", 0.0)) >= 99.0
+            for r in eligible_rows
         ),
     }
 
@@ -977,6 +1081,8 @@ def main() -> int:
             reasons.append("oscillation_runaway")
         if not bool(row.metrics.get("run_validity_pass", True)):
             reasons.append("run_invalid_sampling")
+        if not bool(row.metrics.get("tuning_valid", True)):
+            reasons.append("tuning_invalid")
         if not bool(row.metrics.get("curve_intent_arm_early_enough", True)):
             reasons.append("curve_intent_late_arm")
         if bool(row.metrics.get("curve_intent_undercall_detected", False)):
@@ -1052,6 +1158,7 @@ def main() -> int:
     for row in failing_rows:
         packet_dir = failure_packets_dir / row.recording_id.replace(".h5", "")
         failure_packet = _run_failure_packet(row.recording_path, packet_dir)
+        root_cause_bucket = _classify_root_cause_bucket(row.metrics)
         packet = {
             "schema_version": SCHEMA_VERSION,
             "generated_at_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
@@ -1072,6 +1179,19 @@ def main() -> int:
             "diagnostics_fallback_used": bool(row.stage6.get("diagnostics_fallback_used", False)),
             "failure_packet_artifact": failure_packet,
             "metrics": row.metrics,
+            "root_cause_bucket": root_cause_bucket,
+            "first_divergence_frame": row.metrics.get("first_divergence_frame"),
+            "first_infeasible_frame": row.metrics.get("first_infeasible_frame"),
+            "first_speed_above_feasibility_frame": row.metrics.get(
+                "first_speed_above_feasibility_frame"
+            ),
+            "source_at_failure": row.metrics.get("source_at_failure"),
+            "telemetry_completeness": {
+                "curvature_contract": row.metrics.get(
+                    "telemetry_completeness_rate_curvature_contract"
+                ),
+                "feasibility": row.metrics.get("telemetry_completeness_rate_feasibility"),
+            },
         }
         validate_contract_required_fields(packet)
         out_path = triage_dir / f"{row.recording_id.replace('.h5', '')}.json"

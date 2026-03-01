@@ -17,6 +17,14 @@ control:
     pp_feedback_gain: 0.1
     pp_max_steering_jerk: 18.0
     pp_min_lookahead: 0.5
+    pp_speed_norm_enabled: false
+    pp_speed_norm_reference_mps: 12.0
+    pp_speed_norm_min_scale: 0.70
+    pp_map_ff_enabled: false
+    pp_map_ff_gain: 1.0
+    pp_map_ff_wheelbase_m: 2.5
+    pp_map_ff_curvature_min: 0.005
+    pp_map_ff_curvature_max_clip: 0.08
     pp_ref_jump_clamp: 0.5
     pp_stale_decay: 0.98
     pp_max_steering_rate: 0.4
@@ -64,6 +72,18 @@ control:
     curve_phase_preview_off_frames: 2
     curve_at_car_distance_min_m: 0.0
     curve_intent_single_owner_mode: true
+    curve_intent_commit_watchdog_frames: 45
+    curve_intent_commit_watchdog_exit_curvature: 0.009
+    curve_intent_startup_ignore_frames: 0
+    curve_intent_arm_preview_min: 0.0
+    curve_intent_arm_rise_min: 0.0
+    curve_intent_arm_distance_time_headway_s: 999.0
+    curve_intent_arm_distance_min_m: 0.0
+    curve_intent_arm_distance_max_m: 1000000.0
+    curve_intent_rearm_exit_hysteresis: 0.0
+    curve_intent_rearm_min_frames: 0
+    curve_intent_max_commit_frames: 0
+    curve_intent_force_straight_hold_frames: 0
     road_curve_enter_threshold: 0.011
     road_curve_exit_threshold: 0.009
     road_straight_hold_invalid_frames: 6
