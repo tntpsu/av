@@ -1752,7 +1752,19 @@ class DataRecorder:
             maxshape=max_shape,
             dtype=np.float32
         )
-        
+        self.h5_file.create_dataset(
+            "control/pp_speed_norm_scale",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/pp_map_ff_applied",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+
         # Perception outputs (optional)
         self.h5_file.create_dataset(
             "perception/timestamps",
@@ -4335,6 +4347,8 @@ class DataRecorder:
         pp_steering_jerk_limited_list = []
         pp_effective_steering_rate_list = []
         pp_pipeline_bypass_active_list = []
+        pp_speed_norm_scale_list = []
+        pp_map_ff_applied_list = []
         accel_feedforward_list = []
         brake_feedforward_list = []
         accel_capped_list = []
@@ -4944,7 +4958,9 @@ class DataRecorder:
             pp_steering_jerk_limited_list.append(float(getattr(cc, 'pp_steering_jerk_limited', False)))
             pp_effective_steering_rate_list.append(float(getattr(cc, 'pp_effective_steering_rate', 0.0)))
             pp_pipeline_bypass_active_list.append(float(getattr(cc, 'pp_pipeline_bypass_active', False)))
-        
+            pp_speed_norm_scale_list.append(float(getattr(cc, 'pp_speed_norm_scale', 1.0)))
+            pp_map_ff_applied_list.append(float(getattr(cc, 'pp_map_ff_applied', 0.0)))
+
         if timestamps:
             current_size = self.h5_file["control/timestamps"].shape[0]
             new_size = current_size + len(timestamps)
@@ -5109,7 +5125,8 @@ class DataRecorder:
                        "pp_geometric_steering", "pp_feedback_steering",
                        "pp_ref_jump_clamped", "pp_stale_hold_active",
                        "pp_steering_jerk_limited", "pp_effective_steering_rate",
-                       "pp_pipeline_bypass_active"]:
+                       "pp_pipeline_bypass_active",
+                       "pp_speed_norm_scale", "pp_map_ff_applied"]:
                 self.h5_file[f"control/{key}"].resize((new_size,))
             
             # Write data
@@ -5676,7 +5693,9 @@ class DataRecorder:
             self.h5_file["control/pp_steering_jerk_limited"][current_size:] = pp_steering_jerk_limited_list
             self.h5_file["control/pp_effective_steering_rate"][current_size:] = pp_effective_steering_rate_list
             self.h5_file["control/pp_pipeline_bypass_active"][current_size:] = pp_pipeline_bypass_active_list
-    
+            self.h5_file["control/pp_speed_norm_scale"][current_size:] = pp_speed_norm_scale_list
+            self.h5_file["control/pp_map_ff_applied"][current_size:] = pp_map_ff_applied_list
+
     def _write_perception_outputs(self, frames: List[RecordingFrame]):
         """Write perception outputs to HDF5."""
         timestamps = []

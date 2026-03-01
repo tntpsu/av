@@ -1,7 +1,7 @@
 # AV Stack — Agent Memory: Current State
 
 **Last updated:** 2026-03-01
-**Current milestone:** S2-M4 in progress — highway oscillation fixes implemented, awaiting live validation.
+**Current milestone:** S2-M4 via PP exhausted — 15 highway runs, all failed. Proceeding to Phase 2 MPC.
 
 ---
 
@@ -120,11 +120,22 @@ Next: **S2-M4** — higher-speed validation (12 m/s → 15 m/s on `highway_65`).
 
 **Test suite:** 577 passed, 9 skipped, 3 failed (all 3 pre-existing — 2 from stale coord-system tests, 1 from Codex WS1 PID-path regression in `test_heading_lateral_conflicts.py`).
 
-**Decision gate after 3 live highway runs:**
-- `curve_intent` stays STRAIGHT on pre-arc straight → P2 working
-- `pp_speed_norm_scale ≈ 0.64` at 15 m/s → P3 working
-- If oscillation stops → proceed WS2 + WS3 → promote S2-M4
-- If oscillation persists unchanged → proceed to Phase 2 MPC (see `plan.md`)
+**3 live highway runs completed — VERDICT: Proceed to MPC (2026-03-01)**
+
+| Run | Recording | E-stop frame | Error onset |
+|---|---|---|---|
+| 1 | recording_20260301_162153.h5 | ~974 | frame 855 (49%) |
+| 2 | recording_20260301_163806.h5 | ~988 | frame 826 (48%) |
+| 3 | recording_20260301_163958.h5 | ~960 | frame 793 (45%) |
+
+**Post-run findings:**
+- P2 WORKS: `curve_intent[0:45]=0.000` confirmed in all runs
+- P3 COULD NOT BE VERIFIED: recorder.py was missing `pp_speed_norm_scale` + `pp_map_ff_applied` from the **resize loop** — dataset created but always (0,). Fixed in recorder.py (5th required location for new HDF5 fields).
+- `pp_feedback_gain: 0.0` in highway_15mps.yaml (Codex WS1 disabled it). Vehicle runs pure geometric PP — no damping/lateral error correction.
+- Oscillation pattern: error sign flips every ~60-90 frames with growing amplitude (underdamped 2nd-order). PP is a proportional controller; at 15 m/s the v² loop gain is too high for stable operation without explicit damping.
+- 15 total highway runs failed (12 Codex WS0/WS1 + 3 validation). Consistent failure pattern.
+
+**DECISION: S2-M4 via Pure Pursuit is not achievable. Proceed to Phase 2 MPC (see `plan.md`).**
 
 ---
 
