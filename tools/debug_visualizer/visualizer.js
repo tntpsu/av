@@ -1912,18 +1912,21 @@ class Visualizer {
                 const accelP95FiltSI = comfort.acceleration_p95_filtered ?? null;
                 const jerkP95SI = comfort.jerk_p95 ?? null;
                 const jerkP95FiltSI = comfort.jerk_p95_filtered ?? null;
+                const cmdJerkP95SI = comfort.commanded_jerk_p95 ?? null;
                 const latAccelP95SI = comfort.lateral_accel_p95 ?? null;
                 const latJerkP95SI = comfort.lateral_jerk_p95 ?? null;
                 const accelP95G = comfort.acceleration_p95_g ?? (accelP95SI !== null ? accelP95SI / G_MPS2 : null);
                 const accelP95FiltG = comfort.acceleration_p95_filtered_g ?? (accelP95FiltSI !== null ? accelP95FiltSI / G_MPS2 : null);
                 const jerkP95Gps = comfort.jerk_p95_gps ?? (jerkP95SI !== null ? jerkP95SI / G_MPS2 : null);
                 const jerkP95FiltGps = comfort.jerk_p95_filtered_gps ?? (jerkP95FiltSI !== null ? jerkP95FiltSI / G_MPS2 : null);
+                const cmdJerkP95Gps = cmdJerkP95SI !== null ? cmdJerkP95SI / G_MPS2 : null;
                 const latAccelP95G = comfort.lateral_accel_p95_g ?? (latAccelP95SI !== null ? latAccelP95SI / G_MPS2 : null);
                 const latJerkP95Gps = comfort.lateral_jerk_p95_gps ?? (latJerkP95SI !== null ? latJerkP95SI / G_MPS2 : null);
                 const accelGateG = comfort.comfort_gate_thresholds_g?.longitudinal_accel_p95_g ?? (3.0 / 9.80665);
                 const jerkGateGps = comfort.comfort_gate_thresholds_g?.longitudinal_jerk_p95_gps ?? (6.0 / 9.80665);
                 const accelColor = accelP95G !== null ? getColorForValue(accelP95G, { good: accelGateG, acceptable: accelGateG * 1.5 }) : '#888';
-                const jerkColor = jerkP95Gps !== null ? getColorForValue(jerkP95Gps, { good: jerkGateGps, acceptable: jerkGateGps * 1.5 }) : '#888';
+                const cmdJerkColor = cmdJerkP95Gps !== null ? getColorForValue(cmdJerkP95Gps, { good: jerkGateGps, acceptable: jerkGateGps * 1.5 }) : '#888';
+                const jerkColor = cmdJerkColor;  // Gate metric = commanded jerk
 
                 html += '<div style="background: #2a2a2a; padding: 1rem; border-radius: 8px; margin-bottom: 1rem;">';
                 html += '<h3 id="summary-section-passenger-comfort" style="margin-top: 0; color: #4a90e2;">Passenger Comfort (Gs)</h3>';
@@ -1931,8 +1934,9 @@ class Visualizer {
                 html += '<table style="width: 100%; color: #e0e0e0;">';
                 html += `<tr><td>Accel P95:</td><td style="text-align: right; color: ${accelColor};">${withLimitHint(`${accelP95G !== null ? accelP95G.toFixed(2) : '-'} g (${accelP95SI !== null ? accelP95SI.toFixed(2) : '-'} m/s²)`, accelColor, `<=${accelGateG.toFixed(2)} g`)}</td></tr>`;
                 html += `<tr><td>Accel P95 (Filt):</td><td style="text-align: right;">${accelP95FiltG !== null ? accelP95FiltG.toFixed(2) : '-'} g (${accelP95FiltSI !== null ? accelP95FiltSI.toFixed(2) : '-'} m/s²)</td></tr>`;
-                html += `<tr><td>Jerk P95:</td><td style="text-align: right; color: ${jerkColor};">${withLimitHint(`${jerkP95Gps !== null ? jerkP95Gps.toFixed(2) : '-'} g/s (${jerkP95SI !== null ? jerkP95SI.toFixed(2) : '-'} m/s³)`, jerkColor, `<=${jerkGateGps.toFixed(2)} g/s`)}</td></tr>`;
-                html += `<tr><td>Jerk P95 (Filt):</td><td style="text-align: right;">${jerkP95FiltGps !== null ? jerkP95FiltGps.toFixed(2) : '-'} g/s (${jerkP95FiltSI !== null ? jerkP95FiltSI.toFixed(2) : '-'} m/s³)</td></tr>`;
+                html += `<tr><td>Jerk P95 (Cmd):</td><td style="text-align: right; color: ${cmdJerkColor};">${withLimitHint(`${cmdJerkP95Gps !== null ? cmdJerkP95Gps.toFixed(2) : '-'} g/s (${cmdJerkP95SI !== null ? cmdJerkP95SI.toFixed(2) : '-'} m/s³)`, cmdJerkColor, `<=${jerkGateGps.toFixed(2)} g/s`)}</td></tr>`;
+                html += `<tr><td>Jerk P95 (Measured):</td><td style="text-align: right; color: #888;">${jerkP95Gps !== null ? jerkP95Gps.toFixed(2) : '-'} g/s (${jerkP95SI !== null ? jerkP95SI.toFixed(2) : '-'} m/s³) <small style="color:#666;">diagnostic</small></td></tr>`;
+                html += `<tr><td>Jerk P95 (Filt):</td><td style="text-align: right; color: #888;">${jerkP95FiltGps !== null ? jerkP95FiltGps.toFixed(2) : '-'} g/s (${jerkP95FiltSI !== null ? jerkP95FiltSI.toFixed(2) : '-'} m/s³) <small style="color:#666;">diagnostic</small></td></tr>`;
                 html += `<tr><td>Lat Accel P95:</td><td style="text-align: right;">${latAccelP95G !== null ? latAccelP95G.toFixed(3) : '-'} g (${latAccelP95SI !== null ? latAccelP95SI.toFixed(2) : '-'} m/s²)</td></tr>`;
                 html += `<tr><td>Lat Jerk P95:</td><td style="text-align: right;">${latJerkP95Gps !== null ? latJerkP95Gps.toFixed(3) : '-'} g/s (${latJerkP95SI !== null ? latJerkP95SI.toFixed(2) : '-'} m/s³)</td></tr>`;
                 html += `<tr><td>Comfort Gates:</td><td style="text-align: right;">Accel ≤ ${accelGateG.toFixed(2)} g, Jerk ≤ ${jerkGateGps.toFixed(2)} g/s</td></tr>`;
@@ -1941,13 +1945,34 @@ class Visualizer {
 
             // Control mode indicator
             const controlMode = summary.control_mode || 'pid';
-            const modeLabel = controlMode === 'pure_pursuit' ? 'Pure Pursuit' : controlMode === 'stanley' ? 'Stanley' : 'PID';
-            const modeColor = controlMode === 'pure_pursuit' ? '#4caf50' : '#4a90e2';
+            const modeLabels = {
+                'pure_pursuit': 'Pure Pursuit',
+                'mpc': 'MPC (Linear)',
+                'hybrid_pp_mpc': 'Hybrid PP + MPC',
+                'stanley': 'Stanley',
+                'pid': 'PID',
+            };
+            const modeColors = {
+                'pure_pursuit': '#4caf50',
+                'mpc': '#4caf50',
+                'hybrid_pp_mpc': '#4caf50',
+                'stanley': '#4a90e2',
+                'pid': '#4a90e2',
+            };
+            const modeLabel = modeLabels[controlMode] || controlMode;
+            const modeColor = modeColors[controlMode] || '#4a90e2';
             html += '<div style="background: #2a2a2a; padding: 1rem; border-radius: 8px; margin-bottom: 1rem;">';
             html += '<h3 id="summary-section-control-mode" style="margin-top: 0; color: #4a90e2;">Control Mode</h3>';
             html += '<table style="width: 100%; color: #e0e0e0;">';
             html += `<tr><td>Active Mode:</td><td style="text-align: right; color: ${modeColor}; font-weight: bold;">${modeLabel}</td></tr>`;
-            if (controlMode === 'pure_pursuit') {
+            if (summary.regime_summary) {
+                const rs = summary.regime_summary;
+                html += `<tr><td>PP Frames / MPC Frames:</td><td style="text-align: right;">${rs.pp_frames} / ${rs.mpc_frames} (${(rs.mpc_fraction * 100).toFixed(1)}% MPC)</td></tr>`;
+                if (rs.blend_frames > 0) {
+                    html += `<tr><td>Blend Transition Frames:</td><td style="text-align: right;">${rs.blend_frames}</td></tr>`;
+                }
+            }
+            if (controlMode === 'pure_pursuit' || controlMode === 'hybrid_pp_mpc') {
                 const ppFbGain = summary.pp_feedback_gain ?? '-';
                 const ppMeanLd = summary.pp_mean_lookahead_distance ?? '-';
                 const ppJumpCount = summary.pp_ref_jump_clamped_count ?? 0;
@@ -1955,7 +1980,33 @@ class Visualizer {
                 html += `<tr><td>Mean Lookahead Distance:</td><td style="text-align: right;">${typeof ppMeanLd === 'number' ? ppMeanLd.toFixed(2) + 'm' : ppMeanLd}</td></tr>`;
                 html += `<tr><td>Ref Jump Clamp Events:</td><td style="text-align: right;">${ppJumpCount}</td></tr>`;
             }
-            html += '</table></div>';
+            html += '</table>';
+
+            // MPC Health Card — inline below control mode when MPC is active
+            if (summary.mpc_health && summary.mpc_health.mpc_frames > 0) {
+                const mh = summary.mpc_health;
+                const gateIcon = (pass) => pass === true ? '<span style="color:#4caf50;">&#10003;</span>' : (pass === false ? '<span style="color:#ff6b6b;">&#10007;</span>' : '');
+                const gateColor = (pass) => pass === true ? '#4caf50' : (pass === false ? '#ff6b6b' : '#e0e0e0');
+                html += '<div style="margin-top: 0.75rem; padding-top: 0.75rem; border-top: 1px solid #444;">';
+                html += '<strong style="color: #4caf50;">MPC Health</strong>';
+                html += '<table style="width: 100%; color: #e0e0e0; margin-top: 0.4rem;">';
+                if (mh.feasibility_rate != null) {
+                    html += `<tr><td>Feasibility Rate:</td><td style="text-align: right; color: ${gateColor(mh.feasibility_gate_pass)};">${(mh.feasibility_rate * 100).toFixed(2)}% ${gateIcon(mh.feasibility_gate_pass)} <span style="color:#888;font-size:0.8em;">(&ge;99.5%)</span></td></tr>`;
+                }
+                if (mh.solve_time_p95_ms != null) {
+                    html += `<tr><td>Solve Time P50 / P95 / Max:</td><td style="text-align: right; color: ${gateColor(mh.solve_time_gate_pass)};">${mh.solve_time_p50_ms.toFixed(2)} / ${mh.solve_time_p95_ms.toFixed(2)} / ${mh.solve_time_max_ms.toFixed(2)} ms ${gateIcon(mh.solve_time_gate_pass)} <span style="color:#888;font-size:0.8em;">(&le;5ms)</span></td></tr>`;
+                }
+                if (mh.fallback_rate != null) {
+                    const fbColor = mh.fallback_rate < 0.005 ? '#4caf50' : '#ff6b6b';
+                    html += `<tr><td>Fallback Rate:</td><td style="text-align: right; color: ${fbColor};">${(mh.fallback_rate * 100).toFixed(2)}%</td></tr>`;
+                }
+                if (mh.max_consecutive_failures != null) {
+                    html += `<tr><td>Max Consecutive Failures:</td><td style="text-align: right;">${mh.max_consecutive_failures}</td></tr>`;
+                }
+                html += '</table></div>';
+            }
+
+            html += '</div>';
 
             // Controller diagnostics (secondary, steering-domain)
             html += '<div style="background: #2a2a2a; padding: 1rem; border-radius: 8px; margin-bottom: 1rem;">';
@@ -1996,12 +2047,19 @@ class Visualizer {
             const curveIntentDiag = summary.curve_intent_diagnostics || null;
             if (curveIntentDiag && curveIntentDiag.available) {
                 const armRate = Number(curveIntentDiag.arm_early_enough_rate ?? 0);
-                const undercallRate = Number(curveIntentDiag.undercall_frame_rate ?? 0);
+                const undercallSkipped = curveIntentDiag.undercall_skipped_reason != null;
+                const undercallRate = undercallSkipped ? null : Number(curveIntentDiag.undercall_frame_rate ?? 0);
                 const armColor = armRate >= 80 ? '#4caf50' : armRate >= 60 ? '#ffa500' : '#ff6b6b';
-                const undercallColor = undercallRate <= 25 ? '#4caf50' : undercallRate <= 40 ? '#ffa500' : '#ff6b6b';
                 html += `<tr><td>Curve Intent Arm-Early Rate:</td><td style="text-align: right; color: ${armColor};">${withLimitHint(armRate.toFixed(1) + '%', armColor, '>=80%')}</td></tr>`;
-                html += `<tr><td>Curve Curvature Undercall Rate:</td><td style="text-align: right; color: ${undercallColor};">${withLimitHint(undercallRate.toFixed(1) + '%', undercallColor, '<=25%')}</td></tr>`;
-                html += `<tr><td>Curve Curvature Ratio (P50/P95):</td><td style="text-align: right;">${Number(curveIntentDiag.curvature_ratio_p50 ?? 0).toFixed(2)} / ${Number(curveIntentDiag.curvature_ratio_p95 ?? 0).toFixed(2)}</td></tr>`;
+                if (undercallSkipped) {
+                    const gtMax = Number(curveIntentDiag.gt_max_curvature ?? 0).toFixed(4);
+                    const floor = Number(curveIntentDiag.gt_curvature_floor ?? 0.005).toFixed(3);
+                    html += `<tr><td>Curve Curvature Undercall Rate:</td><td style="text-align: right; color: #888;">N/A <small style="color:#666;">(GT max κ=${gtMax} < ${floor} floor)</small></td></tr>`;
+                } else {
+                    const undercallColor = undercallRate <= 25 ? '#4caf50' : undercallRate <= 40 ? '#ffa500' : '#ff6b6b';
+                    html += `<tr><td>Curve Curvature Undercall Rate:</td><td style="text-align: right; color: ${undercallColor};">${withLimitHint(undercallRate.toFixed(1) + '%', undercallColor, '<=25%')}</td></tr>`;
+                    html += `<tr><td>Curve Curvature Ratio (P50/P95):</td><td style="text-align: right;">${Number(curveIntentDiag.curvature_ratio_p50 ?? 0).toFixed(2)} / ${Number(curveIntentDiag.curvature_ratio_p95 ?? 0).toFixed(2)}</td></tr>`;
+                }
             }
             if (comfort) {
                 const ctrlAccelG = comfort.acceleration_p95_g ?? null;
@@ -2474,6 +2532,12 @@ class Visualizer {
                     ['Speed@Entry (m/s)', 'speed_at_curve_entry_mps', 'delta', false],
                     ['v_max@Entry (m/s)', 'v_max_feasible_at_entry', 'delta', false],
                     ['Decel Lead (frames)', 'decel_lead_time_frames', 'deltaInt', false],
+                ]],
+                ['MPC', [
+                    ['MPC Active Rate', 'mpc_active_rate', 'delta', false],
+                    ['Feasibility Rate', 'mpc_feasibility_rate', 'delta', false],
+                    ['Solve P95 (ms)', 'mpc_solve_p95_ms', 'delta', false],
+                    ['Fallback Rate', 'mpc_fallback_rate', 'delta', false],
                 ]],
                 ['Meta', [
                     ['Replay', 'replay_type', 'provenance', false],
@@ -3687,6 +3751,37 @@ class Visualizer {
                 html += '</div>';
             }
             
+            // MPC Analysis Panel
+            if (diagnostics.mpc_analysis) {
+                const mpc = diagnostics.mpc_analysis;
+                html += '<div style="background: #2a2a2a; padding: 1rem; border-radius: 8px; margin-bottom: 1rem;">';
+                html += '<h3 id="diag-section-mpc" style="margin-top: 0; color: #4caf50;">MPC Analysis</h3>';
+                html += '<table style="width: 100%; color: #e0e0e0;">';
+                if (mpc.regime_breakdown) {
+                    const rb = mpc.regime_breakdown;
+                    html += `<tr><td>MPC Frames:</td><td style="text-align: right;">${rb.mpc_frames || 0} (${((rb.mpc_fraction || 0) * 100).toFixed(1)}%)</td></tr>`;
+                    html += `<tr><td>Blend Frames:</td><td style="text-align: right;">${rb.blend_frames || 0}</td></tr>`;
+                }
+                if (mpc.mpc_lateral_error) {
+                    const le = mpc.mpc_lateral_error;
+                    html += `<tr><td>MPC e_lat RMSE:</td><td style="text-align: right;">${le.rmse != null ? le.rmse.toFixed(4) + ' m' : '-'}</td></tr>`;
+                    html += `<tr><td>MPC e_lat Max:</td><td style="text-align: right;">${le.max_abs != null ? le.max_abs.toFixed(4) + ' m' : '-'}</td></tr>`;
+                }
+                if (mpc.mpc_heading_error) {
+                    const he = mpc.mpc_heading_error;
+                    html += `<tr><td>MPC e_heading RMSE:</td><td style="text-align: right;">${he.rmse != null ? (he.rmse * 180 / Math.PI).toFixed(2) + '°' : '-'}</td></tr>`;
+                }
+                if (mpc.feasibility != null) {
+                    const feasColor = mpc.feasibility >= 0.995 ? '#4caf50' : '#ff6b6b';
+                    html += `<tr><td>Feasibility Rate:</td><td style="text-align: right; color: ${feasColor};">${(mpc.feasibility * 100).toFixed(2)}%</td></tr>`;
+                }
+                if (mpc.fallback_rate != null) {
+                    const fbColor = mpc.fallback_rate < 0.005 ? '#4caf50' : '#ff6b6b';
+                    html += `<tr><td>Fallback Rate:</td><td style="text-align: right; color: ${fbColor};">${(mpc.fallback_rate * 100).toFixed(2)}%</td></tr>`;
+                }
+                html += '</table></div>';
+            }
+
             // V1: Signal Chain Waterfall Panel
             html += '<div id="diag-section-signal-chain" style="background: #2a2a2a; padding: 1rem; border-radius: 8px; margin-bottom: 1rem;">';
             html += '<h3 style="margin-top: 0; color: #4a90e2;">Signal Chain Analysis</h3>';
@@ -9302,7 +9397,11 @@ class Visualizer {
         }
         try {
             const data = await this.dataLoader.loadTimeSeries(signals, xAxisKey);
-            await this.loadCurvatureSeries(xAxisKey, data.time?.length || data.signals[signals[0]].length);
+            const expectedLen = data.time?.length || data.signals[signals[0]].length;
+            await Promise.all([
+                this.loadCurvatureSeries(xAxisKey, expectedLen),
+                this.loadRegimeSeries(xAxisKey, expectedLen),
+            ]);
             this.renderChart(data);
         } catch (error) {
             console.error('Error plotting signals:', error);
@@ -9444,6 +9543,53 @@ class Visualizer {
                 ctx2.restore();
             },
         };
+        const regimeShadePlugin = {
+            id: 'regimeShade',
+            beforeDatasetsDraw: (chart) => {
+                if (!this.chartRegimeData || !this.isRegimeShadingEnabled()) {
+                    return;
+                }
+                const xScale = chart.scales.x;
+                const ctx2 = chart.ctx;
+                const timeSeries = this.chartTimeSeries;
+                const series = this.chartRegimeData;
+                const isTime = this.chartUsesTime;
+
+                const colors = {
+                    0: 'rgba(74,144,226,0.08)',   // PP — faint blue
+                    1: 'rgba(76,175,80,0.08)',     // LMPC — faint green
+                    2: 'rgba(255,152,0,0.08)',     // NMPC — faint orange
+                };
+
+                let current = null;
+                const ranges = [];
+                for (let i = 0; i < series.length; i++) {
+                    const level = Math.round(series[i]);
+                    const xVal = isTime && timeSeries ? timeSeries[i] : i;
+                    if (!current || current.level !== level) {
+                        if (current) {
+                            current.end = xVal;
+                            ranges.push(current);
+                        }
+                        current = { start: xVal, end: xVal, level };
+                    } else {
+                        current.end = xVal;
+                    }
+                }
+                if (current) ranges.push(current);
+
+                ctx2.save();
+                for (const range of ranges) {
+                    const color = colors[range.level];
+                    if (!color) continue;
+                    const xStart = xScale.getPixelForValue(range.start);
+                    const xEnd = xScale.getPixelForValue(range.end);
+                    ctx2.fillStyle = color;
+                    ctx2.fillRect(xStart, chart.chartArea.top, xEnd - xStart, chart.chartArea.bottom - chart.chartArea.top);
+                }
+                ctx2.restore();
+            },
+        };
         this.chart = new Chart(ctx, {
             type: 'line',
             data: { labels, datasets },
@@ -9462,7 +9608,7 @@ class Visualizer {
                     y: { ticks: { color: '#cfcfcf' }, grid: { color: '#333' } },
                 },
             },
-            plugins: [curveShadePlugin, cursorPlugin],
+            plugins: [curveShadePlugin, regimeShadePlugin, cursorPlugin],
         });
         this.updateChartCursor();
         this.updateQuickChartValuesTable();
@@ -9488,6 +9634,24 @@ class Visualizer {
 
     isCurveShadingEnabled() {
         return !!document.getElementById('chart-shade-curves')?.checked;
+    }
+
+    async loadRegimeSeries(xAxisKey, expectedLength) {
+        this.chartRegimeData = null;
+        if (!this.isRegimeShadingEnabled()) {
+            return;
+        }
+        try {
+            const data = await this.dataLoader.loadTimeSeries(['control/regime'], xAxisKey);
+            const series = data.signals['control/regime'] || [];
+            this.chartRegimeData = series.slice(0, expectedLength);
+        } catch (error) {
+            // Silently ignore — PP-only recordings have no regime field
+        }
+    }
+
+    isRegimeShadingEnabled() {
+        return !!document.getElementById('chart-shade-regime')?.checked;
     }
 
     getCurvatureSignalKey() {

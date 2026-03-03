@@ -1594,6 +1594,7 @@ def analyze_trajectory_vs_steering(
                     "steering_limiter_hotspots": steering_limiter_hotspots,
                     "curve_entry_feasibility": curve_entry_feasibility,
                 },
+                "mpc_analysis": _build_mpc_analysis(f, min_len),
                 "diagnosis": {
                     "primary_issue": primary_issue,
                     "trajectory_score": safe_float(trajectory_quality_score),
@@ -1606,6 +1607,65 @@ def analyze_trajectory_vs_steering(
     except Exception as e:
         import traceback
         return {"error": str(e), "traceback": traceback.format_exc()}
+
+
+def _build_mpc_analysis(f: h5py.File, n_frames: int) -> Optional[Dict]:
+    """Build MPC diagnostics sub-section. Returns None for PP-only recordings."""
+    if 'control/regime' not in f:
+        return None
+
+    regime = np.asarray(f['control/regime'][:n_frames], dtype=float)
+    mpc_active_mask = regime > 0.5  # 1=LMPC, 2=NMPC
+    pp_count = int(np.sum(~mpc_active_mask))
+    mpc_count = int(np.sum(mpc_active_mask))
+
+    blend_weight = (
+        np.asarray(f['control/regime_blend_weight'][:n_frames], dtype=float)
+        if 'control/regime_blend_weight' in f else None
+    )
+    blend_count = 0
+    if blend_weight is not None:
+        blend_count = int(np.sum((blend_weight > 0.01) & (blend_weight < 0.99)))
+
+    result: Dict = {
+        "pp_frames": pp_count,
+        "mpc_frames": mpc_count,
+        "blend_frames": blend_count,
+        "mpc_fraction": safe_float(mpc_count / max(1, n_frames)),
+    }
+
+    # MPC error state time-series (for chart overlay in PhilViz)
+    if 'control/mpc_e_lat' in f:
+        mpc_e_lat = np.asarray(f['control/mpc_e_lat'][:n_frames], dtype=float)
+        result["mpc_e_lat"] = mpc_e_lat.tolist()
+        if mpc_count > 0:
+            active_e = mpc_e_lat[mpc_active_mask]
+            result["mpc_e_lat_rmse"] = safe_float(float(np.sqrt(np.mean(active_e ** 2))))
+            result["mpc_e_lat_max"] = safe_float(float(np.max(np.abs(active_e))))
+
+    if 'control/mpc_e_heading' in f:
+        mpc_e_heading = np.asarray(f['control/mpc_e_heading'][:n_frames], dtype=float)
+        result["mpc_e_heading"] = mpc_e_heading.tolist()
+
+    if blend_weight is not None:
+        result["regime_blend_weight"] = blend_weight.tolist()
+
+    # Feasibility and fallback rates
+    if 'control/mpc_feasible' in f and mpc_count > 0:
+        feasible = np.asarray(f['control/mpc_feasible'][:n_frames], dtype=float)
+        feasible_active = feasible[mpc_active_mask]
+        result["mpc_feasibility_rate"] = safe_float(
+            float(np.mean(feasible_active > 0.5) * 100.0)
+        )
+
+    if 'control/mpc_fallback_active' in f and mpc_count > 0:
+        fallback = np.asarray(f['control/mpc_fallback_active'][:n_frames], dtype=float)
+        fallback_active = fallback[mpc_active_mask]
+        result["mpc_fallback_rate"] = safe_float(
+            float(np.mean(fallback_active > 0.5) * 100.0)
+        )
+
+    return result
 
 
 def _safe_read_array(f: h5py.File, key: str) -> np.ndarray:

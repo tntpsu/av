@@ -172,6 +172,24 @@ class LayerHealthAnalyzer:
         if accel_cap_active:
             flags.append("accel_high")
 
+        # MPC penalties (only when regime field exists)
+        if "control/regime" in f:
+            regime_val = self._scalar(f, "control/regime", i, default=0.0)
+            if regime_val >= 1:  # MPC active
+                if self._scalar(f, "control/mpc_feasible", i, default=1.0) < 0.5:
+                    score -= 0.40
+                    flags.append("mpc_infeasible")
+                solve_ms = self._scalar(f, "control/mpc_solve_time_ms", i, default=0.0)
+                if solve_ms > 8.0:
+                    score -= 0.30
+                    flags.append("mpc_solve_slow")
+                elif solve_ms > 5.0:
+                    score -= 0.15
+                    flags.append("mpc_solve_marginal")
+                if self._scalar(f, "control/mpc_fallback_active", i, default=0.0) > 0.5:
+                    score -= 0.50
+                    flags.append("mpc_fallback")
+
         return {"score": max(0.0, min(1.0, score)), "flags": flags}
 
     # ── Helpers ───────────────────────────────────────────────────────────────

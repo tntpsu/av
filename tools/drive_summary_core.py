@@ -56,8 +56,19 @@ def _build_sign_mismatch_event(data: Dict, start_frame: int, end_frame: int) -> 
         stale_rate = max(stale_rate, safe_float(float((stale_perc_slice > 0).mean()) * 100.0))
     lanes_min = int(lanes_slice.min()) if lanes_slice is not None and lanes_slice.size > 0 else None
 
+    # Check if event overlaps with a PP↔MPC blend transition
+    blend_weight = data.get('regime_blend_weight')
+    blend_slice = blend_weight[start_frame:end_frame + 1] if blend_weight is not None else None
+    in_blend = (
+        blend_slice is not None
+        and blend_slice.size > 0
+        and float(np.mean((blend_slice > 0.01) & (blend_slice < 0.99))) > 0.3
+    )
+
     root_cause = "unknown"
-    if stale_rate > 0.0 or (lanes_min is not None and lanes_min < 2):
+    if in_blend:
+        root_cause = "regime_blend"
+    elif stale_rate > 0.0 or (lanes_min is not None and lanes_min < 2):
         root_cause = "perception_stale_or_missing"
     elif (
         err_slice is not None and fb_slice is not None and before_slice is not None
@@ -577,6 +588,73 @@ def _load_config() -> dict:
         return {}
 
 
+def _build_mpc_health_summary(data: Dict, n_frames: int) -> Optional[Dict]:
+    """Build MPC health summary. Returns None for PP-only recordings."""
+    regime = data.get('regime')
+    if regime is None:
+        return None
+    regime_arr = np.asarray(regime[:n_frames], dtype=float)
+    total = len(regime_arr)
+    if total == 0:
+        return None
+    mpc_mask = regime_arr >= 1
+    pp_frames = int(np.sum(~mpc_mask))
+    mpc_frames = int(np.sum(mpc_mask))
+    if mpc_frames == 0:
+        return {
+            "total_frames": total,
+            "pp_frames": pp_frames,
+            "pp_rate": 1.0,
+            "mpc_frames": 0,
+            "mpc_rate": 0.0,
+            "feasibility_rate": None,
+            "feasibility_gate_pass": None,
+            "solve_time_p50_ms": None,
+            "solve_time_p95_ms": None,
+            "solve_time_max_ms": None,
+            "solve_time_gate_pass": None,
+            "fallback_rate": None,
+            "max_consecutive_failures": None,
+        }
+
+    feasible = data.get('mpc_feasible')
+    feasibility_rate = float(np.mean(feasible[:n_frames][mpc_mask])) if feasible is not None else None
+    feasibility_gate = feasibility_rate >= 0.995 if feasibility_rate is not None else None
+
+    solve = data.get('mpc_solve_time_ms')
+    if solve is not None:
+        mpc_solve = solve[:n_frames][mpc_mask]
+        p50 = float(np.percentile(mpc_solve, 50))
+        p95 = float(np.percentile(mpc_solve, 95))
+        mx = float(np.max(mpc_solve))
+        solve_gate = p95 <= 5.0
+    else:
+        p50 = p95 = mx = None
+        solve_gate = None
+
+    fallback = data.get('mpc_fallback_active')
+    fallback_rate = float(np.mean(fallback[:n_frames][mpc_mask])) if fallback is not None else None
+
+    failures = data.get('mpc_consecutive_failures')
+    max_consec = int(np.max(failures[:n_frames])) if failures is not None else None
+
+    return {
+        "total_frames": total,
+        "pp_frames": pp_frames,
+        "pp_rate": round(pp_frames / total, 4),
+        "mpc_frames": mpc_frames,
+        "mpc_rate": round(mpc_frames / total, 4),
+        "feasibility_rate": round(feasibility_rate, 5) if feasibility_rate is not None else None,
+        "feasibility_gate_pass": feasibility_gate,
+        "solve_time_p50_ms": round(p50, 3) if p50 is not None else None,
+        "solve_time_p95_ms": round(p95, 3) if p95 is not None else None,
+        "solve_time_max_ms": round(mx, 3) if mx is not None else None,
+        "solve_time_gate_pass": solve_gate,
+        "fallback_rate": round(fallback_rate, 5) if fallback_rate is not None else None,
+        "max_consecutive_failures": max_consec,
+    }
+
+
 def _build_longitudinal_hotspot_attribution(data: Dict, config: Dict, n_frames: int) -> Dict:
     """Build top longitudinal hotspot entries with deterministic root-cause attribution."""
     unavailable = {
@@ -909,6 +987,14 @@ def _build_longitudinal_hotspot_attribution(data: Dict, config: Dict, n_frames: 
 
 
 def _detect_control_mode(data):
+    regime = data.get('regime')
+    if regime is not None:
+        regime_arr = np.asarray(regime, dtype=float)
+        mpc_rate = float(np.mean(regime_arr >= 1))
+        if mpc_rate > 0.5:
+            return 'mpc'
+        elif mpc_rate > 0.0:
+            return 'hybrid_pp_mpc'
     pp_geo = data.get('pp_geometric_steering')
     if pp_geo is not None and np.any(np.abs(pp_geo) > 1e-6):
         return 'pure_pursuit'
@@ -1172,6 +1258,43 @@ def analyze_recording_summary(recording_path: Path, analyze_to_failure: bool = F
             data['pp_pipeline_bypass_active'] = (
                 np.array(f['control/pp_pipeline_bypass_active'][:])
                 if 'control/pp_pipeline_bypass_active' in f else None
+            )
+            # MPC regime and error state
+            data['regime'] = (
+                np.array(f['control/regime'][:])
+                if 'control/regime' in f else None
+            )
+            data['regime_blend_weight'] = (
+                np.array(f['control/regime_blend_weight'][:])
+                if 'control/regime_blend_weight' in f else None
+            )
+            data['mpc_e_lat'] = (
+                np.array(f['control/mpc_e_lat'][:])
+                if 'control/mpc_e_lat' in f else None
+            )
+            data['mpc_e_heading'] = (
+                np.array(f['control/mpc_e_heading'][:])
+                if 'control/mpc_e_heading' in f else None
+            )
+            data['mpc_using_ground_truth'] = (
+                np.array(f['control/mpc_using_ground_truth'][:])
+                if 'control/mpc_using_ground_truth' in f else None
+            )
+            data['mpc_feasible'] = (
+                np.array(f['control/mpc_feasible'][:])
+                if 'control/mpc_feasible' in f else None
+            )
+            data['mpc_solve_time_ms'] = (
+                np.array(f['control/mpc_solve_time_ms'][:])
+                if 'control/mpc_solve_time_ms' in f else None
+            )
+            data['mpc_fallback_active'] = (
+                np.array(f['control/mpc_fallback_active'][:])
+                if 'control/mpc_fallback_active' in f else None
+            )
+            data['mpc_consecutive_failures'] = (
+                np.array(f['control/mpc_consecutive_failures'][:])
+                if 'control/mpc_consecutive_failures' in f else None
             )
             data['throttle'] = (
                 np.array(f['control/throttle'][:]) if 'control/throttle' in f else None
@@ -1682,7 +1805,18 @@ def analyze_recording_summary(recording_path: Path, analyze_to_failure: bool = F
         if error_series is not None and len(error_series) > 0:
             error_series = error_series[:n_frames]
             steering_series = data['steering'][:n_frames]
-            valid_mask = straight_mask & (np.abs(error_series) >= 0.02) & (np.abs(steering_series) >= 0.02)
+            # Exclude MPC-active and blend-transition frames from sign-mismatch.
+            # During MPC, steering is driven by mpc_e_lat (true cross-track), not
+            # the PP total_error_scaled signal — comparing them is meaningless.
+            # During blend transitions, opposite-sign steering is expected.
+            mpc_exclude = np.zeros(n_frames, dtype=bool)
+            if data.get('regime') is not None:
+                regime_arr = np.asarray(data['regime'][:n_frames], dtype=float)
+                mpc_exclude = regime_arr > 0.5  # MPC-active frames
+            if data.get('regime_blend_weight') is not None:
+                rbw = np.asarray(data['regime_blend_weight'][:n_frames], dtype=float)
+                mpc_exclude = mpc_exclude | ((rbw > 0.01) & (rbw < 0.99))
+            valid_mask = straight_mask & (np.abs(error_series) >= 0.02) & (np.abs(steering_series) >= 0.02) & ~mpc_exclude
             mismatch_mask = valid_mask & (np.sign(error_series) != np.sign(steering_series))
             straight_sign_mismatch_frames = int(np.sum(mismatch_mask))
             denom = int(np.sum(valid_mask))
@@ -1745,7 +1879,15 @@ def analyze_recording_summary(recording_path: Path, analyze_to_failure: bool = F
     oscillation_rms_windows_count = 0
     oscillation_amplitude_runaway = False
     if data.get('lateral_error') is not None and data.get('time') is not None:
-        e_series = np.asarray(data['lateral_error'][:n_frames], dtype=float)
+        # Build regime-aware lateral error for oscillation analysis:
+        # use mpc_e_lat (true cross-track) where MPC is active, PP lateral_error elsewhere
+        e_series_raw = np.asarray(data['lateral_error'][:n_frames], dtype=float)
+        if data.get('mpc_e_lat') is not None and data.get('mpc_using_ground_truth') is not None:
+            mpc_e = np.asarray(data['mpc_e_lat'][:n_frames], dtype=float)
+            mpc_active = np.asarray(data['mpc_using_ground_truth'][:n_frames], dtype=float) > 0.5
+            e_series = np.where(mpc_active, mpc_e, e_series_raw)
+        else:
+            e_series = e_series_raw
         t_series = np.asarray(data['time'][:n_frames], dtype=float)
         finite_mask = np.isfinite(e_series) & np.isfinite(t_series)
         if np.any(finite_mask):
@@ -2691,7 +2833,7 @@ def analyze_recording_summary(recording_path: Path, analyze_to_failure: bool = F
         "first_curve_start_frame": None,
         "first_arm_frame": None,
         "thresholds": {
-            "curve_start_abs_curvature": 0.010,
+            "curve_start_abs_curvature": 0.003,
             "arm_intent_min": 0.45,
             "arm_min_lead_frames": 6,
             "undercall_ratio_threshold": 0.70,
@@ -2777,20 +2919,33 @@ def analyze_recording_summary(recording_path: Path, analyze_to_failure: bool = F
                     np.percentile(lead_arr, 50) * dt
                 )
 
-            ratio_mask = gt_abs >= curve_start_abs_curvature
-            ratio = np.array([], dtype=np.float64)
-            if np.any(ratio_mask):
-                ratio = np.divide(
-                    ctrl_abs[ratio_mask],
-                    np.maximum(gt_abs[ratio_mask], 1e-6),
-                )
-                ratio = np.where(np.isfinite(ratio), ratio, 0.0)
-            if ratio.size > 0:
-                undercall_rate = float(np.mean(ratio < undercall_ratio_threshold) * 100.0)
-                curve_intent_diag["undercall_frame_rate"] = safe_float(undercall_rate)
-                curve_intent_diag["curvature_ratio_p50"] = safe_float(np.percentile(ratio, 50))
-                curve_intent_diag["curvature_ratio_p95"] = safe_float(np.percentile(ratio, 95))
-                curve_intent_diag["undercall_detected"] = bool(undercall_rate > 25.0)
+            # GT curvature floor: skip undercall metric when road is effectively
+            # straight (max GT curvature < 0.005 rad/m). The ratio is meaningless
+            # when both map and GT curvature are near-zero quantization noise.
+            gt_curvature_floor = 0.005
+            gt_max_curvature = float(np.max(gt_abs)) if gt_abs.size > 0 else 0.0
+            curve_intent_diag["gt_max_curvature"] = safe_float(gt_max_curvature)
+            curve_intent_diag["gt_curvature_floor"] = gt_curvature_floor
+
+            if gt_max_curvature < gt_curvature_floor:
+                curve_intent_diag["undercall_frame_rate"] = None
+                curve_intent_diag["undercall_detected"] = False
+                curve_intent_diag["undercall_skipped_reason"] = "gt_curvature_below_floor"
+            else:
+                ratio_mask = gt_abs >= curve_start_abs_curvature
+                ratio = np.array([], dtype=np.float64)
+                if np.any(ratio_mask):
+                    ratio = np.divide(
+                        ctrl_abs[ratio_mask],
+                        np.maximum(gt_abs[ratio_mask], 1e-6),
+                    )
+                    ratio = np.where(np.isfinite(ratio), ratio, 0.0)
+                if ratio.size > 0:
+                    undercall_rate = float(np.mean(ratio < undercall_ratio_threshold) * 100.0)
+                    curve_intent_diag["undercall_frame_rate"] = safe_float(undercall_rate)
+                    curve_intent_diag["curvature_ratio_p50"] = safe_float(np.percentile(ratio, 50))
+                    curve_intent_diag["curvature_ratio_p95"] = safe_float(np.percentile(ratio, 95))
+                    curve_intent_diag["undercall_detected"] = bool(undercall_rate > 25.0)
 
     # Curve-cap longitudinal diagnostics
     curve_cap_active_series = data.get("speed_governor_curve_cap_active")
@@ -3758,6 +3913,23 @@ def analyze_recording_summary(recording_path: Path, analyze_to_failure: bool = F
             "out_of_lane_time_full_run": safe_float(out_of_lane_time_full_run),
             "out_of_lane_event_at_failure_boundary": bool(out_of_lane_event_at_failure_boundary),
         },
+        "regime_summary": (
+            {
+                "pp_frames": int(np.sum(np.asarray(data['regime'][:n_frames], dtype=float) < 0.5)),
+                "mpc_frames": int(np.sum(np.asarray(data['regime'][:n_frames], dtype=float) > 0.5)),
+                "blend_frames": int(np.sum(
+                    (np.asarray(data['regime_blend_weight'][:n_frames], dtype=float) > 0.01)
+                    & (np.asarray(data['regime_blend_weight'][:n_frames], dtype=float) < 0.99)
+                )) if data.get('regime_blend_weight') is not None else 0,
+                "mpc_fraction": safe_float(
+                    float(np.sum(np.asarray(data['regime'][:n_frames], dtype=float) > 0.5))
+                    / max(1, n_frames)
+                ),
+            }
+            if data.get('regime') is not None
+            else None
+        ),
+        "mpc_health": _build_mpc_health_summary(data, n_frames),
         "recommendations": recommendations,
         "config": config_summary,
         "time_series": {

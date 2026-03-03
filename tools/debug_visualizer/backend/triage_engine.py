@@ -188,6 +188,61 @@ PATTERNS = [
         "fix_hint": "High curvature outlier rate suggests noisy perception input. Check lane polynomial quality.",
         "check": lambda m: m.get("curvature_outlier_rate", 0) > 0.02,
     },
+    # MPC patterns
+    {
+        "id": "mpc_infeasible_burst",
+        "name": "MPC infeasible QP bursts (>0.5% frames)",
+        "severity": "instability",
+        "code_pointer": "control/mpc_controller.py:MPCSolver.solve()",
+        "config_lever": "mpc_q_lat / mpc_r_steer_rate",
+        "fix_hint": "MPC QP solver returning infeasible. Check constraint bounds or reduce q_lat to widen feasible region.",
+        "check": lambda m: m.get("mpc_available", False) and m.get("mpc_infeasible_rate", 0) > 0.005,
+    },
+    {
+        "id": "mpc_solve_time_budget",
+        "name": "MPC solve time exceeds budget (P95 > 5ms)",
+        "severity": "instability",
+        "code_pointer": "control/mpc_controller.py:MPCSolver.solve()",
+        "config_lever": "mpc_horizon / mpc_max_iter",
+        "fix_hint": "MPC P95 solve time > 5ms. Reduce horizon or max_iter to stay within real-time budget.",
+        "check": lambda m: m.get("mpc_available", False) and m.get("mpc_solve_p95_ms", 0) > 5.0,
+    },
+    {
+        "id": "mpc_fallback_cascade",
+        "name": "MPC fallback to PP active (>0.5% frames)",
+        "severity": "safety",
+        "code_pointer": "control/mpc_controller.py:MPCController.compute()",
+        "config_lever": "mpc_max_consecutive_failures",
+        "fix_hint": "MPC falling back to PP. Check infeasibility source — may need constraint relaxation.",
+        "check": lambda m: m.get("mpc_available", False) and m.get("mpc_fallback_rate", 0) > 0.005,
+    },
+    {
+        "id": "mpc_regime_chatter",
+        "name": "Regime chatter (>6 switches/min)",
+        "severity": "comfort",
+        "code_pointer": "control/regime_selector.py:RegimeSelector.update()",
+        "config_lever": "regime.hysteresis_speed_mps",
+        "fix_hint": "Frequent PP↔MPC switches. Widen hysteresis band or increase blend ramp duration.",
+        "check": lambda m: m.get("mpc_available", False) and m.get("mpc_regime_changes_per_min", 0) > 6.0,
+    },
+    {
+        "id": "mpc_heading_error_exceeds_model",
+        "name": "MPC heading error P95 > 0.25 rad",
+        "severity": "instability",
+        "code_pointer": "control/mpc_controller.py:MPCSolver._build_dynamics()",
+        "config_lever": "mpc_q_heading",
+        "fix_hint": "MPC heading error exceeds kinematic model validity. Check ground-truth sign convention or increase q_heading.",
+        "check": lambda m: m.get("mpc_available", False) and m.get("mpc_heading_error_p95", 0) > 0.25,
+    },
+    {
+        "id": "mpc_kappa_ref_mismatch",
+        "name": "MPC kappa vs trajectory curvature mismatch (P95 > 0.01)",
+        "severity": "instability",
+        "code_pointer": "control/mpc_controller.py:MPCController._get_kappa_ref()",
+        "config_lever": "mpc_kappa_source",
+        "fix_hint": "MPC curvature reference diverges from trajectory path curvature. Check kappa feedforward pipeline.",
+        "check": lambda m: m.get("mpc_available", False) and m.get("mpc_kappa_divergence_p95", 0) > 0.01,
+    },
 ]
 
 SEVERITY_ORDER = {"safety": 0, "instability": 1, "comfort": 2}
@@ -313,6 +368,65 @@ class TriageEngine:
                 diff = np.diff(estop.astype(int))
                 m["out_of_lane_events"] = int(np.sum(diff > 0))
 
+            # MPC metrics
+            regime = arr("control/regime")
+            if regime is not None:
+                mpc_mask = regime >= 1
+                m["mpc_available"] = True
+                m["mpc_active_rate"] = float(np.mean(mpc_mask)) if len(mpc_mask) > 0 else 0.0
+
+                mpc_feasible = arr("control/mpc_feasible")
+                m["mpc_infeasible_rate"] = (
+                    float(1.0 - np.mean(mpc_feasible[mpc_mask]))
+                    if mpc_feasible is not None and np.any(mpc_mask) else 0.0
+                )
+
+                mpc_solve = arr("control/mpc_solve_time_ms")
+                m["mpc_solve_p95_ms"] = (
+                    float(np.percentile(mpc_solve[mpc_mask], 95))
+                    if mpc_solve is not None and np.any(mpc_mask) else 0.0
+                )
+
+                mpc_fallback = arr("control/mpc_fallback_active")
+                m["mpc_fallback_rate"] = (
+                    float(np.mean(mpc_fallback[mpc_mask]))
+                    if mpc_fallback is not None and np.any(mpc_mask) else 0.0
+                )
+
+                mpc_failures = arr("control/mpc_consecutive_failures")
+                m["mpc_max_consecutive_failures"] = (
+                    int(np.max(mpc_failures)) if mpc_failures is not None else 0
+                )
+
+                # Regime chatter
+                regime_changes = int(np.sum(np.diff(regime) != 0)) if len(regime) > 1 else 0
+                duration_s = len(regime) * 0.033
+                m["mpc_regime_changes_per_min"] = float(
+                    regime_changes / max(duration_s / 60.0, 0.001)
+                )
+
+                # Heading error P95
+                mpc_e_heading = arr("control/mpc_e_heading")
+                m["mpc_heading_error_p95"] = (
+                    float(np.percentile(np.abs(mpc_e_heading[mpc_mask]), 95))
+                    if mpc_e_heading is not None and np.any(mpc_mask) else 0.0
+                )
+
+                # Kappa divergence
+                mpc_kappa = arr("control/mpc_kappa_ref")
+                path_kappa = arr("trajectory/path_curvature")
+                if mpc_kappa is not None and path_kappa is not None and np.any(mpc_mask):
+                    ml = min(len(mpc_kappa), len(path_kappa))
+                    m["mpc_kappa_divergence_p95"] = float(
+                        np.percentile(
+                            np.abs(mpc_kappa[:ml] - path_kappa[:ml])[mpc_mask[:ml]], 95
+                        )
+                    )
+                else:
+                    m["mpc_kappa_divergence_p95"] = 0.0
+            else:
+                m["mpc_available"] = False
+
         return m
 
     def _match_patterns(self, metrics: dict) -> list:
@@ -325,6 +439,12 @@ class TriageEngine:
             "perc_single_lane_only": "single_lane_rate",
             "traj_ref_rate_clamped": "ref_rate_clamp_rate",
             "traj_short_lookahead":  "short_lookahead_rate",
+            "mpc_infeasible_burst":  "mpc_infeasible_rate",
+            "mpc_solve_time_budget": "mpc_solve_p95_ms",
+            "mpc_fallback_cascade":  "mpc_fallback_rate",
+            "mpc_regime_chatter":    "mpc_regime_changes_per_min",
+            "mpc_heading_error_exceeds_model": "mpc_heading_error_p95",
+            "mpc_kappa_ref_mismatch": "mpc_kappa_divergence_p95",
         }
         for pat in PATTERNS:
             try:

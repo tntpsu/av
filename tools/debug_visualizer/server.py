@@ -2662,6 +2662,12 @@ def get_compare_summary():
                     else None
                 ),
             }
+            mpc_health = summary.get("mpc_health")
+            if mpc_health and mpc_health.get("mpc_frames", 0) > 0:
+                row["mpc_active_rate"] = mpc_health.get("mpc_rate")
+                row["mpc_feasibility_rate"] = mpc_health.get("feasibility_rate")
+                row["mpc_solve_p95_ms"] = mpc_health.get("solve_time_p95_ms")
+                row["mpc_fallback_rate"] = mpc_health.get("fallback_rate")
             rows.append(row)
         except Exception as e:
             import traceback

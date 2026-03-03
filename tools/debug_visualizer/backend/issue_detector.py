@@ -64,6 +64,9 @@ def build_causal_timeline(issues: List[Dict], failure_frame: Optional[int] = Non
         "straight_sign_mismatch": "control",
         "trajectory_suppressed_curve_entry": "trajectory",
         "speed_exceeded_feasible": "control",
+        "mpc_infeasible": "control",
+        "mpc_solve_slow": "control",
+        "mpc_fallback": "control",
         "high_lateral_error": "downstream",
         "out_of_lane": "downstream",
         "emergency_stop": "downstream",
@@ -1454,6 +1457,59 @@ def detect_issues(recording_path: Path, analyze_to_failure: bool = False) -> Dic
                                 "jump_magnitude": float(heading_diff)
                             })
             
+            # 8. DETECT MPC ISSUES
+            if 'control/regime' in f:
+                regime = np.array(f['control/regime'][:num_frames])
+                mpc_mask = regime >= 1
+
+                if 'control/mpc_feasible' in f:
+                    feasible = np.array(f['control/mpc_feasible'][:num_frames])
+                    infeas_frames = np.where(mpc_mask & (feasible < 0.5))[0]
+                    if len(infeas_frames) > 0:
+                        issues.append({
+                            "frame": int(infeas_frames[0]),
+                            "type": "mpc_infeasible",
+                            "severity": "warning",
+                            "description": (
+                                f"MPC QP infeasible on {len(infeas_frames)} frame(s). "
+                                f"First at frame {int(infeas_frames[0])}."
+                            ),
+                            "frames": [int(x) for x in infeas_frames[:20]],
+                            "first_frame": int(infeas_frames[0]),
+                        })
+
+                if 'control/mpc_solve_time_ms' in f:
+                    solve = np.array(f['control/mpc_solve_time_ms'][:num_frames])
+                    slow_frames = np.where(mpc_mask & (solve > 5.0))[0]
+                    if len(slow_frames) > 0:
+                        issues.append({
+                            "frame": int(slow_frames[0]),
+                            "type": "mpc_solve_slow",
+                            "severity": "info",
+                            "description": (
+                                f"MPC solve time > 5ms on {len(slow_frames)} frame(s). "
+                                f"Max: {float(np.max(solve[slow_frames])):.1f}ms."
+                            ),
+                            "frames": [int(x) for x in slow_frames[:20]],
+                            "first_frame": int(slow_frames[0]),
+                        })
+
+                if 'control/mpc_fallback_active' in f:
+                    fallback = np.array(f['control/mpc_fallback_active'][:num_frames])
+                    fallback_frames = np.where(fallback > 0.5)[0]
+                    if len(fallback_frames) > 0:
+                        issues.append({
+                            "frame": int(fallback_frames[0]),
+                            "type": "mpc_fallback",
+                            "severity": "high",
+                            "description": (
+                                f"MPC fallback to PP active on {len(fallback_frames)} frame(s). "
+                                f"First at frame {int(fallback_frames[0])}."
+                            ),
+                            "frames": [int(x) for x in fallback_frames[:20]],
+                            "first_frame": int(fallback_frames[0]),
+                        })
+
             # Sort issues by frame number
             issues.sort(key=lambda x: x["frame"])
             for idx, issue in enumerate(issues):
