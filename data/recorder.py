@@ -1764,6 +1764,18 @@ class DataRecorder:
             maxshape=max_shape,
             dtype=np.float32
         )
+        self.h5_file.create_dataset("control/mpc_feasible", shape=(0,), maxshape=max_shape, dtype=np.int8)
+        self.h5_file.create_dataset("control/mpc_solve_time_ms", shape=(0,), maxshape=max_shape, dtype=np.float32)
+        self.h5_file.create_dataset("control/mpc_e_lat", shape=(0,), maxshape=max_shape, dtype=np.float32)
+        self.h5_file.create_dataset("control/mpc_e_heading", shape=(0,), maxshape=max_shape, dtype=np.float32)
+        self.h5_file.create_dataset("control/mpc_kappa_ref", shape=(0,), maxshape=max_shape, dtype=np.float32)
+        self.h5_file.create_dataset("control/mpc_fallback_active", shape=(0,), maxshape=max_shape, dtype=np.int8)
+        self.h5_file.create_dataset("control/mpc_consecutive_failures", shape=(0,), maxshape=max_shape, dtype=np.int16)
+        self.h5_file.create_dataset("control/mpc_gt_cross_track_m", shape=(0,), maxshape=max_shape, dtype=np.float32)
+        self.h5_file.create_dataset("control/mpc_gt_heading_error_rad", shape=(0,), maxshape=max_shape, dtype=np.float32)
+        self.h5_file.create_dataset("control/mpc_using_ground_truth", shape=(0,), maxshape=max_shape, dtype=np.float32)
+        self.h5_file.create_dataset("control/regime", shape=(0,), maxshape=max_shape, dtype=np.int8)
+        self.h5_file.create_dataset("control/regime_blend_weight", shape=(0,), maxshape=max_shape, dtype=np.float32)
 
         # Perception outputs (optional)
         self.h5_file.create_dataset(
@@ -4349,6 +4361,18 @@ class DataRecorder:
         pp_pipeline_bypass_active_list = []
         pp_speed_norm_scale_list = []
         pp_map_ff_applied_list = []
+        mpc_feasible_list = []
+        mpc_solve_time_ms_list = []
+        mpc_e_lat_list = []
+        mpc_e_heading_list = []
+        mpc_kappa_ref_list = []
+        mpc_fallback_active_list = []
+        mpc_consecutive_failures_list = []
+        mpc_gt_cross_track_m_list = []
+        mpc_gt_heading_error_rad_list = []
+        mpc_using_ground_truth_list = []
+        regime_list = []
+        regime_blend_weight_list = []
         accel_feedforward_list = []
         brake_feedforward_list = []
         accel_capped_list = []
@@ -4960,6 +4984,18 @@ class DataRecorder:
             pp_pipeline_bypass_active_list.append(float(getattr(cc, 'pp_pipeline_bypass_active', False)))
             pp_speed_norm_scale_list.append(float(getattr(cc, 'pp_speed_norm_scale', 1.0)))
             pp_map_ff_applied_list.append(float(getattr(cc, 'pp_map_ff_applied', 0.0)))
+            mpc_feasible_list.append(int(getattr(cc, 'mpc_feasible', False)))
+            mpc_solve_time_ms_list.append(float(getattr(cc, 'mpc_solve_time_ms', 0.0)))
+            mpc_e_lat_list.append(float(getattr(cc, 'mpc_e_lat', 0.0)))
+            mpc_e_heading_list.append(float(getattr(cc, 'mpc_e_heading', 0.0)))
+            mpc_kappa_ref_list.append(float(getattr(cc, 'mpc_kappa_ref', 0.0)))
+            mpc_fallback_active_list.append(int(getattr(cc, 'mpc_fallback_active', False)))
+            mpc_consecutive_failures_list.append(int(getattr(cc, 'mpc_consecutive_failures', 0)))
+            mpc_gt_cross_track_m_list.append(float(getattr(cc, 'mpc_gt_cross_track_m', 0.0)))
+            mpc_gt_heading_error_rad_list.append(float(getattr(cc, 'mpc_gt_heading_error_rad', 0.0)))
+            mpc_using_ground_truth_list.append(float(getattr(cc, 'mpc_using_ground_truth', 0.0)))
+            regime_list.append(int(getattr(cc, 'regime', 0)))
+            regime_blend_weight_list.append(float(getattr(cc, 'regime_blend_weight', 1.0)))
 
         if timestamps:
             current_size = self.h5_file["control/timestamps"].shape[0]
@@ -5126,7 +5162,13 @@ class DataRecorder:
                        "pp_ref_jump_clamped", "pp_stale_hold_active",
                        "pp_steering_jerk_limited", "pp_effective_steering_rate",
                        "pp_pipeline_bypass_active",
-                       "pp_speed_norm_scale", "pp_map_ff_applied"]:
+                       "pp_speed_norm_scale", "pp_map_ff_applied",
+                       "mpc_feasible", "mpc_solve_time_ms",
+                       "mpc_e_lat", "mpc_e_heading", "mpc_kappa_ref",
+                       "mpc_fallback_active", "mpc_consecutive_failures",
+                       "mpc_gt_cross_track_m", "mpc_gt_heading_error_rad",
+                       "mpc_using_ground_truth",
+                       "regime", "regime_blend_weight"]:
                 self.h5_file[f"control/{key}"].resize((new_size,))
             
             # Write data
@@ -5695,6 +5737,18 @@ class DataRecorder:
             self.h5_file["control/pp_pipeline_bypass_active"][current_size:] = pp_pipeline_bypass_active_list
             self.h5_file["control/pp_speed_norm_scale"][current_size:] = pp_speed_norm_scale_list
             self.h5_file["control/pp_map_ff_applied"][current_size:] = pp_map_ff_applied_list
+            self.h5_file["control/mpc_feasible"][current_size:] = mpc_feasible_list
+            self.h5_file["control/mpc_solve_time_ms"][current_size:] = mpc_solve_time_ms_list
+            self.h5_file["control/mpc_e_lat"][current_size:] = mpc_e_lat_list
+            self.h5_file["control/mpc_e_heading"][current_size:] = mpc_e_heading_list
+            self.h5_file["control/mpc_kappa_ref"][current_size:] = mpc_kappa_ref_list
+            self.h5_file["control/mpc_fallback_active"][current_size:] = mpc_fallback_active_list
+            self.h5_file["control/mpc_consecutive_failures"][current_size:] = mpc_consecutive_failures_list
+            self.h5_file["control/mpc_gt_cross_track_m"][current_size:] = mpc_gt_cross_track_m_list
+            self.h5_file["control/mpc_gt_heading_error_rad"][current_size:] = mpc_gt_heading_error_rad_list
+            self.h5_file["control/mpc_using_ground_truth"][current_size:] = mpc_using_ground_truth_list
+            self.h5_file["control/regime"][current_size:] = regime_list
+            self.h5_file["control/regime_blend_weight"][current_size:] = regime_blend_weight_list
 
     def _write_perception_outputs(self, frames: List[RecordingFrame]):
         """Write perception outputs to HDF5."""

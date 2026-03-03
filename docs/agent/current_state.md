@@ -1,11 +1,32 @@
 # AV Stack — Agent Memory: Current State
 
-**Last updated:** 2026-03-01
-**Current milestone:** S2-M4 via PP exhausted — 15 highway runs, all failed. Proceeding to Phase 2 MPC.
+**Last updated:** 2026-03-02
+**Current milestone:** Phase 2 MPC — Layered Control Architecture. Phase 2.7 COMPLETE — highway MPC runs full 60s (score 93.3, 0 e-stops). S-loop PP also stable (score 97.1).
 
 ---
 
 ## Active Development Focus
+
+### Phase 2 — Layered Control Architecture (2026-03-01, active)
+
+**Goal:** Replace Pure Pursuit with hierarchical MPC system for highway speeds.
+**Plan:** See `plan.md` for full implementation plan (8 sub-phases).
+
+| Sub-phase | Status | Notes |
+|---|---|---|
+| 2.1 Linear MPC solver | ✅ Complete | `control/mpc_controller.py` — OSQP QP, 14/14 tests |
+| 2.2 Regime selector | ✅ Complete | `control/regime_selector.py` — 11/11 tests |
+| 2.3 Integration + recorder | ✅ Complete | VehicleController wiring, 9 HDF5 fields, 16/16 tests |
+| 2.4 Test & compare scripts | ✅ Complete | `compare_lateral.py`, 4 comfort gate tests, 20/20 tests |
+| 2.5 s_loop validation | ✅ Complete | Gate: no regression (score 97.1/100, 0 e-stops). MPC doesn't activate on s_loop (by design — speed 4–7 m/s < 10 m/s threshold). MPC activation tested in Phase 2.6. |
+| 2.6 Highway validation | ⚠️ BLOCKED | 9 runs with PP-derived measurements. Oscillation growth ~1.9× invariant to ALL weights → PP reference frame coupling (see plan.md §2.6). Superseded by 2.7. |
+| 2.7 True-state MPC | ✅ Complete | **Key fix:** replaced `roadFrameLaneCenterOffset` (lane-vs-road offset, ~0.04m constant) with `groundTruthLaneCenterX` (vehicle-vs-lane center, tracks real drift). Sign: cross-track negated, heading not negated. Highway: 60s, score 93.3, 0 e-stops. MPC e_lat converges to ±0.005m. S-loop PP: 60s, score 97.1, 0 e-stops. MPC tuning explored: q_lat=0.5 r_rate=2.0 is optimal (higher r_rate → steady-state offset; higher q_lat → active hunting). |
+
+**Key files created:**
+- `control/mpc_controller.py` — 3 classes: `MPCParams`, `MPCSolver`, `MPCController`
+- `tests/test_mpc_controller.py` — 14 tests covering correctness, constraints, performance, fallback
+
+---
 
 PhilViz "best in class" analyze + triage tool — **T-012 complete (2026-02-23)**.
 **PhilViz cross-tab consistency + UX enhancements — complete (2026-02-24).**

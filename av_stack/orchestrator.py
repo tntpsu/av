@@ -765,8 +765,9 @@ class AVStack:
             straight_window_frames=int(lateral_cfg.get('straight_window_frames', 60)),
             straight_oscillation_high=lateral_cfg.get('straight_oscillation_high', 0.20),
             straight_oscillation_low=lateral_cfg.get('straight_oscillation_low', 0.05),
+            full_config=config,
         )
-        
+
         # Store config for use in _process_frame
         self.config = config
         self.control_config = control_cfg
@@ -4649,7 +4650,23 @@ class AVStack:
                 reference_point['curve_anticipation_far_metric_rise_abs'] = anticipation_signal['far_metric_rise_abs']
                 reference_point['curve_anticipation_source'] = anticipation_signal['source']
 
-                
+                # Ground-truth state for MPC (independent of PP lookahead geometry)
+                # Cross-track: use Unity groundTruthLaneCenterX (camera-frame x of
+                # lane center — positive = center RIGHT of car = car LEFT of center).
+                # Fall back to gated perception center if GT not available.
+                gt_lane_center_x = vehicle_state_dict.get('groundTruthLaneCenterX') or vehicle_state_dict.get('ground_truth_lane_center_x', 0.0)
+                if gt_lane_center_x != 0.0:
+                    reference_point['gt_cross_track_m'] = float(gt_lane_center_x)
+                else:
+                    # Gated perception lane center: same convention (+right)
+                    gated_left = gated.get('left_lane_line_x')
+                    gated_right = gated.get('right_lane_line_x')
+                    if gated_left is not None and gated_right is not None:
+                        reference_point['gt_cross_track_m'] = float(gated_left + gated_right) / 2.0
+                    else:
+                        reference_point['gt_cross_track_m'] = None
+                reference_point['gt_heading_error_rad'] = float(vehicle_state_dict.get('headingDeltaDeg', 0.0)) * (np.pi / 180.0)
+
                 # 3. Control: Compute control commands
                 current_state = {
                     'heading': self._extract_heading(vehicle_state_dict),
@@ -6702,6 +6719,18 @@ class AVStack:
             pp_pipeline_bypass_active=bool(control_command.get('pp_pipeline_bypass_active', 0) > 0.5),
             pp_speed_norm_scale=float(control_command.get('pp_speed_norm_scale', 1.0)),
             pp_map_ff_applied=float(control_command.get('pp_map_ff_applied', 0.0)),
+            mpc_feasible=bool(control_command.get('mpc_feasible', False)),
+            mpc_solve_time_ms=float(control_command.get('mpc_solve_time_ms', 0.0)),
+            mpc_e_lat=float(control_command.get('mpc_e_lat', 0.0)),
+            mpc_e_heading=float(control_command.get('mpc_e_heading', 0.0)),
+            mpc_kappa_ref=float(control_command.get('mpc_kappa_ref', 0.0)),
+            mpc_fallback_active=bool(control_command.get('mpc_fallback_active', False)),
+            mpc_consecutive_failures=int(control_command.get('mpc_consecutive_failures', 0)),
+            mpc_gt_cross_track_m=float(control_command.get('mpc_gt_cross_track_m', 0.0)),
+            mpc_gt_heading_error_rad=float(control_command.get('mpc_gt_heading_error_rad', 0.0)),
+            mpc_using_ground_truth=float(control_command.get('mpc_using_ground_truth', 0.0)),
+            regime=int(control_command.get('regime', 0)),
+            regime_blend_weight=float(control_command.get('regime_blend_weight', 1.0)),
         )
 
         # Create trajectory output

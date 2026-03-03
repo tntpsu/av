@@ -1,3 +1,24 @@
+# S2-M5 — MPC regime enabled (s_loop regression guard)
+#
+# Base: config/av_stack_config.yaml
+# Track: s_loop
+# Changes from base:
+#   control.regime.enabled:           false → true   (activate MPC regime selector)
+#   trajectory.mpc.mpc_q_lat:         10.0  → 12.0   (stronger lateral error cost for curved track)
+#   trajectory.mpc.mpc_r_steer_rate:  1.0   → 1.5    (smoother steering transitions on s_loop)
+#
+# NOTE: MPC does NOT activate on s_loop with pp_max_speed_mps=10.0.
+#   s_loop cap-tracked speeds are 4-7 m/s, below the upshift threshold (11 m/s).
+#   This config validates that enabling the regime selector causes no regression
+#   when MPC never fires. MPC activation is tested on highway_65 (Phase 2.6).
+#   Do NOT lower pp_max_speed_mps to force MPC on s_loop — MPC is designed for
+#   10-20 m/s; at low speed it loses ~8x steering authority and becomes unstable.
+#
+# Usage:
+#   ./start_av_stack.sh --config config/mpc_sloop.yaml --duration 60
+#
+# Do NOT promote until pytest tests/test_mpc_integration.py passes + gate report green.
+
 control:
   lateral:
     kp: 1.1
@@ -20,8 +41,8 @@ control:
     pp_speed_norm_enabled: false
     pp_speed_norm_reference_mps: 12.0
     pp_speed_norm_min_scale: 0.70
-    pp_map_ff_enabled: true
-    pp_map_ff_gain: 0.8
+    pp_map_ff_enabled: false
+    pp_map_ff_gain: 1.0
     pp_map_ff_wheelbase_m: 2.5
     pp_map_ff_curvature_min: 0.005
     pp_map_ff_curvature_max_clip: 0.08
@@ -270,7 +291,7 @@ control:
     launch_throttle_rearm_hysteresis: 0.5
     launch_throttle_stop_hold_seconds: 0.5
   regime:
-    enabled: false
+    enabled: true
     pp_max_speed_mps: 10.0
     upshift_hysteresis_mps: 1.0
     downshift_hysteresis_mps: 1.0
@@ -342,7 +363,7 @@ trajectory:
   curve_context_curve_start_curvature: 0.006
   curve_context_curvature_gain: 6.0
   reference_lookahead_slew_rate_m_per_frame: 0.25
-  reference_lookahead_slew_rate_shorten_m_per_frame: 0.15
+  reference_lookahead_slew_rate_shorten_m_per_frame: 0.35
   reference_lookahead_slew_rate_lengthen_m_per_frame: 0.2
   reference_lookahead_speed_table_straight: []
   reference_lookahead_speed_table_curve: []
@@ -571,12 +592,12 @@ trajectory:
     mpc_dt: 0.1                     # prediction step (2s horizon at 20 steps)
     mpc_wheelbase_m: 2.5
     mpc_max_steer_rad: 0.5236       # 30° physical max steering angle
-    mpc_q_lat: 10.0
+    mpc_q_lat: 12.0                 # TUNED: 10.0 → 12.0 (tighter tracking on s_loop curves)
     mpc_q_heading: 5.0
     mpc_q_speed: 2.0
     mpc_r_steer: 0.5
     mpc_r_accel: 0.2
-    mpc_r_steer_rate: 1.0
+    mpc_r_steer_rate: 1.5           # TUNED: 1.0 → 1.5 (smoother transitions on s_loop)
     mpc_delta_rate_max: 0.15        # max Δδ_norm per step
     mpc_max_accel: 3.0
     mpc_max_decel: 4.0

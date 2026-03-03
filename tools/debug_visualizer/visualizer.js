@@ -9659,6 +9659,95 @@ class Visualizer {
                     'control/steering'
                 ],
                 timeKey: 'vehicle/timestamps'
+            },
+            {
+                name: 'MPC State vs PP State',
+                signals: [
+                    'control/mpc_e_lat',
+                    'control/mpc_e_heading',
+                    'control/lateral_error',
+                    'control/heading_error',
+                    'control/mpc_gt_cross_track_m',
+                    'control/mpc_gt_heading_error_rad'
+                ],
+                timeKey: 'vehicle/timestamps'
+            },
+            {
+                name: 'MPC Regime + Feasibility',
+                signals: [
+                    'control/regime',
+                    'control/regime_blend_weight',
+                    'control/mpc_feasible',
+                    'control/mpc_fallback_active',
+                    'control/mpc_solve_time_ms',
+                    'control/mpc_using_ground_truth',
+                    'control/steering'
+                ],
+                timeKey: 'vehicle/timestamps'
+            },
+            {
+                name: 'Speed + Curve Cap Tracking',
+                signals: [
+                    'vehicle/speed',
+                    'control/target_speed_final',
+                    'control/curve_cap_speed',
+                    'control/curve_cap_active',
+                    'ground_truth/path_curvature',
+                    'control/throttle',
+                    'control/brake'
+                ],
+                timeKey: 'vehicle/timestamps'
+            },
+            {
+                name: 'PP Lookahead + Gain Dynamics',
+                signals: [
+                    'control/pp_lookahead_distance',
+                    'control/pp_alpha',
+                    'control/pp_geometric_steering',
+                    'control/pp_feedback_steering',
+                    'control/lateral_error',
+                    'ground_truth/path_curvature'
+                ],
+                timeKey: 'vehicle/timestamps'
+            },
+            {
+                name: 'Curve Entry Transient Debug',
+                signals: [
+                    'control/lateral_error',
+                    'control/heading_error',
+                    'control/steering',
+                    'control/steering_rate_limited_delta',
+                    'control/pp_lookahead_distance',
+                    'ground_truth/path_curvature',
+                    'vehicle/speed'
+                ],
+                timeKey: 'vehicle/timestamps'
+            },
+            {
+                name: 'MPC Sign Convention Debug',
+                signals: [
+                    'control/mpc_gt_cross_track_m',
+                    'control/mpc_e_lat',
+                    'control/lateral_error',
+                    'control/mpc_gt_heading_error_rad',
+                    'control/mpc_e_heading',
+                    'control/heading_error',
+                    'control/steering',
+                    'control/regime'
+                ],
+                timeKey: 'vehicle/timestamps'
+            },
+            {
+                name: 'PP vs MPC Steering Comparison',
+                signals: [
+                    'control/steering',
+                    'control/pp_geometric_steering',
+                    'control/regime',
+                    'control/regime_blend_weight',
+                    'control/lateral_error',
+                    'vehicle/speed'
+                ],
+                timeKey: 'vehicle/timestamps'
             }
         ];
     }

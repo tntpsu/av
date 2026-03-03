@@ -10,6 +10,8 @@ import math
 import yaml
 
 from control.curve_capability import compute_turn_feasibility
+from control.mpc_controller import MPCController
+from control.regime_selector import ControlRegime, RegimeConfig, RegimeSelector
 
 
 class PIDController:
@@ -4370,7 +4372,8 @@ class VehicleController:
                  feedback_gain_curvature_min: float = 0.002,
                  feedback_gain_curvature_max: float = 0.015,
                  curvature_stale_hold_seconds: float = 0.30,
-                 curvature_stale_hold_min_abs: float = 0.0005):
+                 curvature_stale_hold_min_abs: float = 0.0005,
+                 full_config: dict = None):
         """
         Initialize vehicle controller.
         
@@ -4674,7 +4677,24 @@ class VehicleController:
             limiter_transition_smoothing_alpha=longitudinal_limiter_transition_smoothing_alpha,
             limiter_transition_hysteresis=longitudinal_limiter_transition_hysteresis,
         )
-    
+
+        # --- Regime selector + MPC (wired here, OFF by default via enabled=False) ---
+        import logging as _logging
+        self._full_config = full_config or {}
+        self._regime_config = RegimeConfig.from_config(self._full_config)
+        self._regime_selector = RegimeSelector(self._regime_config)
+
+        self._mpc_controller = None
+        if self._regime_config.enabled:
+            try:
+                self._mpc_controller = MPCController(self._full_config)
+            except Exception as _e:
+                _logging.getLogger(__name__).error(
+                    "MPC init failed: %s — falling back to PP only", _e
+                )
+
+        self._last_steering_norm = 0.0
+
     def compute_control(
         self,
         current_state: dict,
@@ -4697,7 +4717,8 @@ class VehicleController:
             If return_metadata=True, also includes: steering_before_limits, 
             lateral_error, heading_error, total_error, pid_integral, pid_derivative
         """
-        # Lateral control
+        # Lateral control — always get full metadata so MPC can read lateral/heading error
+        _need_metadata = return_metadata or (self._mpc_controller is not None)
         steering_result = self.lateral_controller.compute_steering(
             current_state.get('heading', 0.0),
             reference_point,
@@ -4705,17 +4726,108 @@ class VehicleController:
             current_state.get('speed', 0.0),
             road_center_reference_t=current_state.get('road_center_reference_t'),
             dt=dt,
-            return_metadata=return_metadata,
+            return_metadata=_need_metadata,
             using_stale_perception=using_stale_perception
         )
-        
-        if return_metadata:
+
+        if _need_metadata:
             assert isinstance(steering_result, dict)
             steering = steering_result['steering']
             lateral_metadata = steering_result
         else:
             steering = steering_result
             lateral_metadata = {}
+
+        # --- Regime dispatch ---
+        mpc_fallback = (
+            self._mpc_controller._fallback_active
+            if self._mpc_controller is not None else False
+        )
+        regime, blend_weight = self._regime_selector.update(
+            speed=float(current_state.get('speed', 0.0)),
+            mpc_fallback_active=mpc_fallback,
+        )
+
+        if regime == ControlRegime.LINEAR_MPC and self._mpc_controller is not None:
+            # Use ground-truth cross-track and heading when available,
+            # falling back to PP-derived if not.
+            gt_cross_track = reference_point.get('gt_cross_track_m')
+            gt_heading = reference_point.get('gt_heading_error_rad')
+
+            if gt_cross_track is not None and gt_heading is not None:
+                # Cross-track: groundTruthLaneCenterX (camera-frame, +right).
+                # Positive = lane center RIGHT of car = car LEFT of center.
+                # MPC: e_lat>0 = car RIGHT. Negate.
+                raw_e_lat = -float(gt_cross_track)
+                # Heading: headingDeltaDeg positive = car pointed RIGHT.
+                # MPC: e_heading>0 = car pointed RIGHT (so e_lat increases via
+                # e_lat += v*e_heading*dt when car drifts rightward). Same sign.
+                raw_e_heading = float(gt_heading)
+            else:
+                # Fallback: PP lateral_error = ref_x (positive = ref RIGHT of car
+                # = car LEFT). MPC e_lat>0 = car RIGHT. Negate.
+                raw_e_lat = -float(lateral_metadata.get('lateral_error', 0.0))
+                # PP heading_error sign convention: use as-is (best effort,
+                # ground-truth path is preferred when available).
+                raw_e_heading = float(lateral_metadata.get('heading_error', 0.0))
+
+            # One-frame delay compensation: predict where the vehicle will be
+            # next frame so the MPC plans for the state when the correction
+            # actually takes effect (computational delay = 1 frame ≈ 33 ms).
+            frame_dt = dt or 0.033
+            v_now = float(current_state.get('speed', 0.0))
+            predicted_e_lat = raw_e_lat + v_now * raw_e_heading * frame_dt
+
+            mpc_result = self._mpc_controller.compute_steering(
+                e_lat=predicted_e_lat,
+                e_heading=raw_e_heading,
+                current_speed=float(current_state.get('speed', 0.0)),
+                last_delta_norm=self._last_steering_norm,
+                kappa_ref=float(reference_point.get('curvature', 0.0) or 0.0),
+                v_target=float(reference_point.get('velocity') or self.longitudinal_controller.target_speed),
+                v_max=float(self.longitudinal_controller.max_speed),
+                dt=dt or 0.033,
+            )
+
+            if mpc_result.get('mpc_fallback_active'):
+                # Solver failed — keep PP steering unchanged
+                pass
+            elif blend_weight < 1.0:
+                # Smooth blend: (1-w)*PP + w*MPC
+                mpc_steer = float(mpc_result['steering_normalized']) * self.lateral_controller.max_steering
+                steering = (1.0 - blend_weight) * steering + blend_weight * mpc_steer
+            else:
+                # Full MPC
+                steering = float(mpc_result['steering_normalized']) * self.lateral_controller.max_steering
+
+            lateral_metadata['mpc_feasible'] = mpc_result.get('mpc_feasible', False)
+            lateral_metadata['mpc_solve_time_ms'] = mpc_result.get('solve_time_ms', 0.0)
+            lateral_metadata['mpc_e_lat'] = mpc_result.get('e_lat_input', 0.0)
+            lateral_metadata['mpc_e_heading'] = mpc_result.get('e_heading_input', 0.0)
+            lateral_metadata['mpc_kappa_ref'] = mpc_result.get('kappa_ref_used', 0.0)
+            lateral_metadata['mpc_fallback_active'] = mpc_result.get('mpc_fallback_active', False)
+            lateral_metadata['mpc_consecutive_failures'] = mpc_result.get('mpc_consecutive_failures', 0)
+            lateral_metadata['mpc_gt_cross_track_m'] = float(gt_cross_track) if gt_cross_track is not None else float('nan')
+            lateral_metadata['mpc_gt_heading_error_rad'] = float(gt_heading) if gt_heading is not None else float('nan')
+            lateral_metadata['mpc_using_ground_truth'] = 1.0 if (gt_cross_track is not None and gt_heading is not None) else 0.0
+            self._last_steering_norm = steering / max(1e-6, self.lateral_controller.max_steering)
+        else:
+            # PP mode — zero-fill MPC fields
+            lateral_metadata['mpc_feasible'] = False
+            lateral_metadata['mpc_solve_time_ms'] = 0.0
+            lateral_metadata['mpc_e_lat'] = 0.0
+            lateral_metadata['mpc_e_heading'] = 0.0
+            lateral_metadata['mpc_kappa_ref'] = 0.0
+            lateral_metadata['mpc_fallback_active'] = False
+            lateral_metadata['mpc_consecutive_failures'] = 0
+            lateral_metadata['mpc_gt_cross_track_m'] = 0.0
+            lateral_metadata['mpc_gt_heading_error_rad'] = 0.0
+            lateral_metadata['mpc_using_ground_truth'] = 0.0
+
+        lateral_metadata['regime'] = int(regime)
+        lateral_metadata['regime_blend_weight'] = float(blend_weight)
+        # Keep steering in lateral_metadata for consistency
+        lateral_metadata['steering'] = steering
         
         # Longitudinal control
         throttle, brake = self.longitudinal_controller.compute_control(
@@ -4764,3 +4876,7 @@ class VehicleController:
         """Reset all controllers."""
         self.lateral_controller.reset()
         self.longitudinal_controller.reset()
+        self._regime_selector.reset()
+        if self._mpc_controller is not None:
+            self._mpc_controller.reset()
+        self._last_steering_norm = 0.0

@@ -414,6 +414,19 @@ class ControlCommand:
     pp_pipeline_bypass_active: bool = False
     pp_speed_norm_scale: float = 1.0
     pp_map_ff_applied: float = 0.0
+    # MPC telemetry (zero-filled when MPC is inactive)
+    mpc_feasible: bool = False
+    mpc_solve_time_ms: float = 0.0
+    mpc_e_lat: float = 0.0
+    mpc_e_heading: float = 0.0
+    mpc_kappa_ref: float = 0.0
+    mpc_fallback_active: bool = False
+    mpc_consecutive_failures: int = 0
+    mpc_gt_cross_track_m: float = 0.0
+    mpc_gt_heading_error_rad: float = 0.0
+    mpc_using_ground_truth: float = 0.0
+    regime: int = 0                    # 0=PP, 1=LMPC, 2=NMPC
+    regime_blend_weight: float = 1.0
 
 
 @dataclass
