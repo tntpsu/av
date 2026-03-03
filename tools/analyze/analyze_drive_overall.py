@@ -1200,14 +1200,23 @@ def _print_summary_report(recording_path: Path, summary: Dict, analyze_to_failur
             "   Curve Intent Arm Early Rate: "
             f"{curve_intent_diag.get('arm_early_enough_rate', 0.0):.1f}%"
         )
-        print(
-            "   Curve Intent Undercall Rate: "
-            f"{curve_intent_diag.get('undercall_frame_rate', 0.0):.1f}%"
-        )
+        undercall_rate = curve_intent_diag.get('undercall_frame_rate')
+        if undercall_rate is None:
+            skip_reason = curve_intent_diag.get('undercall_skipped_reason', 'unknown')
+            gt_max = curve_intent_diag.get('gt_max_curvature', 0.0)
+            print(
+                f"   Curve Intent Undercall Rate: N/A "
+                f"({skip_reason}, GT max κ={gt_max:.4f})"
+            )
+        else:
+            print(
+                "   Curve Intent Undercall Rate: "
+                f"{undercall_rate:.1f}%"
+            )
         print(
             "   Curve Intent Curvature Ratio P50/P95: "
-            f"{curve_intent_diag.get('curvature_ratio_p50', 0.0):.2f} / "
-            f"{curve_intent_diag.get('curvature_ratio_p95', 0.0):.2f}"
+            f"{curve_intent_diag.get('curvature_ratio_p50') or 0.0:.2f} / "
+            f"{curve_intent_diag.get('curvature_ratio_p95') or 0.0:.2f}"
         )
     print()
 
