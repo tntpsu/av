@@ -393,6 +393,12 @@ class TrajectoryPlanningInference:
         curvature_raw = np.abs(
             np.asarray([float(r.get("curvature", 0.0)) for r in refs], dtype=np.float64)
         )
+        # Signed curvature from lane coefficients (preserves left/right turn direction).
+        # Used by MPC curvature preview — heading-gradient fallback is unsigned, so we
+        # use the direct reference curvature which retains sign convention.
+        curvature_raw_signed = np.asarray(
+            [float(r.get("curvature", 0.0)) for r in refs], dtype=np.float64
+        )
 
         # Heading-gradient curvature proxy in vehicle-distance coordinates.
         heading_unwrapped = np.unwrap(np.where(np.isfinite(headings), headings, 0.0))
@@ -444,6 +450,10 @@ class TrajectoryPlanningInference:
             "horizon_start_m": float(start_m),
             "horizon_end_m": float(ds[-1]),
             "horizon_step_m": float(step),
+            # Raw horizon arrays for MPC curvature preview
+            "curvature_horizon": curvature_combined.tolist(),
+            "distance_horizon_m": ds.tolist(),
+            "curvature_horizon_signed": curvature_raw_signed.tolist(),
         }
     
     def plan(self, lane_coeffs: List[Optional[np.ndarray]], 

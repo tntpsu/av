@@ -613,6 +613,9 @@ trajectory:
     mpc_bias_max_correction: 0.002      # max |Δκ| (rad/m) — HARD LIMIT, do not exceed
     mpc_bias_min_speed: 5.0             # only active above 5 m/s
     mpc_speed_adaptive_horizon: false
+    # Curvature preview horizon — feedforward from trajectory planner (Phase 2.7b)
+    mpc_curvature_preview_enabled: true
+    mpc_curvature_preview_gain: 1.0    # 1.0 = raw signed curvature, <1 attenuates noise
 safety:
   max_speed: 15.0               # CHANGED: 12.0 → 15.0
   emergency_brake_threshold: 1.5

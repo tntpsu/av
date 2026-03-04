@@ -67,12 +67,21 @@ class MPCParams:
     max_solve_time_ms: float = 8.0
     max_consecutive_failures: int = 3
 
+    # Startup warmup: relax constraints for first N frames after activation
+    warmup_frames: int = 5
+    warmup_max_iter: int = 500
+    warmup_rate_relax: float = 1.0    # delta_rate_max during warmup (full range)
+
     # Lateral bias estimator (integral-like correction for steady-state curve offset)
     bias_enabled: bool = True
     bias_alpha: float = 0.005           # EMA smoothing (τ ≈ 1/α ≈ 200 frames ≈ 6.7s)
     bias_kappa_gain: float = 0.015      # curvature correction per meter of bias
     bias_max_correction: float = 0.002  # max curvature adjustment (rad/m) — never exceed 4x road κ
     bias_min_speed: float = 5.0         # only active above this speed (m/s)
+
+    # Curvature preview horizon (feedforward from trajectory planner)
+    curvature_preview_enabled: bool = False   # Default OFF — safe for existing configs
+    curvature_preview_gain: float = 1.0       # Scale factor for preview curvature
 
     @classmethod
     def from_config(cls, cfg: dict) -> "MPCParams":
@@ -539,6 +548,7 @@ class MPCController:
         self._consecutive_failures = 0
         self._fallback_active = False
         self._last_steering = 0.0
+        self._frames_since_reset = 0
         # Lateral bias estimator: slow EMA of e_lat → curvature correction
         self._bias_ema = 0.0
         self._bias_correction = 0.0
@@ -546,7 +556,8 @@ class MPCController:
     def compute_steering(self, e_lat: float, e_heading: float,
                          current_speed: float, last_delta_norm: float,
                          kappa_ref: float, v_target: float,
-                         v_max: float, dt: float) -> dict:
+                         v_max: float, dt: float,
+                         kappa_horizon=None) -> dict:
         """
         Compute MPC steering. Called by VehicleController each frame.
 
@@ -559,6 +570,10 @@ class MPCController:
             v_target: desired speed (m/s)
             v_max: speed limit (m/s)
             dt: timestep (s)
+            kappa_horizon: optional N-element array of signed curvature at
+                each MPC prediction step (1/m). When provided and
+                curvature_preview_enabled=True, replaces the constant-fill
+                κ_ref with a spatially-varying feedforward horizon.
 
         Returns:
             dict with: steering_normalized, accel, mpc_feasible, solve_time_ms,
@@ -594,8 +609,36 @@ class MPCController:
             ))
 
         # Build κ_ref horizon with bias correction applied
-        kappa_corrected = kappa_ref + self._bias_correction
-        kappa_horizon = np.full(self.solver._N, kappa_corrected)
+        _preview_used = (
+            self.params.curvature_preview_enabled
+            and kappa_horizon is not None
+            and len(kappa_horizon) > 0
+        )
+        if _preview_used:
+            kappa_base = np.array(kappa_horizon, dtype=float) * self.params.curvature_preview_gain
+            kappa_corrected_horizon = kappa_base + self._bias_correction
+        else:
+            # Fallback: constant curvature (current behavior)
+            kappa_corrected = kappa_ref + self._bias_correction
+            kappa_corrected_horizon = np.full(self.solver._N, kappa_corrected)
+        kappa_horizon = kappa_corrected_horizon
+
+        # --- Startup warmup ---
+        # During the first few frames after activation (no warm-start), relax
+        # the rate constraint and give OSQP more iterations.  This prevents
+        # infeasibility when the solver cold-starts with an unfavourable initial
+        # state inherited from Pure Pursuit.
+        _in_warmup = self._frames_since_reset < self.params.warmup_frames
+        if _in_warmup:
+            # Temporarily increase OSQP max_iter for cold-start convergence
+            try:
+                self.solver._prob.update_settings(max_iter=self.params.warmup_max_iter)
+            except Exception:
+                pass
+            # Relax first-step rate constraint: don't restrict δ based on PP's
+            # last steering — use the full range so the solver can find a feasible
+            # starting point.
+            last_delta_norm = 0.0
 
         # Use the configured MPC prediction step (params.dt), NOT the frame dt.
         # The solver plans N steps of params.dt each (e.g. 20×0.1=2.0 s horizon).
@@ -605,6 +648,15 @@ class MPCController:
             e_lat, e_heading, current_speed, last_delta_norm,
             kappa_horizon, v_target, v_max, self.params.dt
         )
+
+        # Restore default max_iter after warmup solve
+        if _in_warmup:
+            try:
+                self.solver._prob.update_settings(max_iter=200)
+            except Exception:
+                pass
+
+        self._frames_since_reset += 1
 
         if not result['feasible'] or result['solve_time_ms'] > self.params.max_solve_time_ms:
             self._consecutive_failures += 1
@@ -632,6 +684,8 @@ class MPCController:
             'kappa_ref_used': kappa_ref + self._bias_correction,
             'kappa_bias_correction': self._bias_correction,
             'kappa_bias_ema': self._bias_ema,
+            'kappa_preview_used': bool(_preview_used),
+            'kappa_preview_range': float(np.ptp(kappa_corrected_horizon)) if _preview_used else 0.0,
         }
 
     def reset(self):
@@ -641,5 +695,6 @@ class MPCController:
         self._consecutive_failures = 0
         self._fallback_active = False
         self._last_steering = 0.0
+        self._frames_since_reset = 0
         self._bias_ema = 0.0
         self._bias_correction = 0.0

@@ -4778,6 +4778,20 @@ class VehicleController:
             v_now = float(current_state.get('speed', 0.0))
             predicted_e_lat = raw_e_lat + v_now * raw_e_heading * frame_dt
 
+            # Build MPC curvature preview horizon: interpolate distance-sampled
+            # curvature from the trajectory planner to MPC time steps.
+            kappa_horizon_for_mpc = None
+            _ch_signed = reference_point.get('curvature_horizon_signed')
+            _ch_distances = reference_point.get('curvature_horizon_distances')
+            if _ch_signed is not None and _ch_distances is not None and len(_ch_signed) > 0:
+                horizon_d = np.array(_ch_distances)
+                horizon_k = np.array(_ch_signed)
+                v_interp = max(v_now, 0.5)  # floor to avoid zero-distance horizon
+                mpc_dt = self._mpc_controller.params.dt
+                mpc_N = self._mpc_controller.solver._N
+                mpc_distances = np.arange(1, mpc_N + 1) * v_interp * mpc_dt
+                kappa_horizon_for_mpc = np.interp(mpc_distances, horizon_d, horizon_k)
+
             mpc_result = self._mpc_controller.compute_steering(
                 e_lat=predicted_e_lat,
                 e_heading=raw_e_heading,
@@ -4787,6 +4801,7 @@ class VehicleController:
                 v_target=float(reference_point.get('velocity') or self.longitudinal_controller.target_speed),
                 v_max=float(self.longitudinal_controller.max_speed),
                 dt=dt or 0.033,
+                kappa_horizon=kappa_horizon_for_mpc,
             )
 
             if mpc_result.get('mpc_fallback_active'):
@@ -4810,6 +4825,8 @@ class VehicleController:
             lateral_metadata['mpc_gt_cross_track_m'] = float(gt_cross_track) if gt_cross_track is not None else float('nan')
             lateral_metadata['mpc_gt_heading_error_rad'] = float(gt_heading) if gt_heading is not None else float('nan')
             lateral_metadata['mpc_using_ground_truth'] = 1.0 if (gt_cross_track is not None and gt_heading is not None) else 0.0
+            lateral_metadata['mpc_kappa_preview_used'] = mpc_result.get('kappa_preview_used', False)
+            lateral_metadata['mpc_kappa_preview_range'] = mpc_result.get('kappa_preview_range', 0.0)
             self._last_steering_norm = steering / max(1e-6, self.lateral_controller.max_steering)
         else:
             # PP mode — zero-fill MPC fields
@@ -4823,6 +4840,8 @@ class VehicleController:
             lateral_metadata['mpc_gt_cross_track_m'] = 0.0
             lateral_metadata['mpc_gt_heading_error_rad'] = 0.0
             lateral_metadata['mpc_using_ground_truth'] = 0.0
+            lateral_metadata['mpc_kappa_preview_used'] = False
+            lateral_metadata['mpc_kappa_preview_range'] = 0.0
 
         lateral_metadata['regime'] = int(regime)
         lateral_metadata['regime_blend_weight'] = float(blend_weight)

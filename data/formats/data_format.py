@@ -425,6 +425,8 @@ class ControlCommand:
     mpc_gt_cross_track_m: float = 0.0
     mpc_gt_heading_error_rad: float = 0.0
     mpc_using_ground_truth: float = 0.0
+    mpc_kappa_preview_used: bool = False
+    mpc_kappa_preview_range: float = 0.0
     regime: int = 0                    # 0=PP, 1=LMPC, 2=NMPC
     regime_blend_weight: float = 1.0
 

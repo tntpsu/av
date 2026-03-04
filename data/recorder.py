@@ -1774,6 +1774,8 @@ class DataRecorder:
         self.h5_file.create_dataset("control/mpc_gt_cross_track_m", shape=(0,), maxshape=max_shape, dtype=np.float32)
         self.h5_file.create_dataset("control/mpc_gt_heading_error_rad", shape=(0,), maxshape=max_shape, dtype=np.float32)
         self.h5_file.create_dataset("control/mpc_using_ground_truth", shape=(0,), maxshape=max_shape, dtype=np.float32)
+        self.h5_file.create_dataset("control/mpc_kappa_preview_used", shape=(0,), maxshape=max_shape, dtype=np.int8)
+        self.h5_file.create_dataset("control/mpc_kappa_preview_range", shape=(0,), maxshape=max_shape, dtype=np.float32)
         self.h5_file.create_dataset("control/regime", shape=(0,), maxshape=max_shape, dtype=np.int8)
         self.h5_file.create_dataset("control/regime_blend_weight", shape=(0,), maxshape=max_shape, dtype=np.float32)
 
@@ -4371,6 +4373,8 @@ class DataRecorder:
         mpc_gt_cross_track_m_list = []
         mpc_gt_heading_error_rad_list = []
         mpc_using_ground_truth_list = []
+        mpc_kappa_preview_used_list = []
+        mpc_kappa_preview_range_list = []
         regime_list = []
         regime_blend_weight_list = []
         accel_feedforward_list = []
@@ -4994,6 +4998,8 @@ class DataRecorder:
             mpc_gt_cross_track_m_list.append(float(getattr(cc, 'mpc_gt_cross_track_m', 0.0)))
             mpc_gt_heading_error_rad_list.append(float(getattr(cc, 'mpc_gt_heading_error_rad', 0.0)))
             mpc_using_ground_truth_list.append(float(getattr(cc, 'mpc_using_ground_truth', 0.0)))
+            mpc_kappa_preview_used_list.append(int(getattr(cc, 'mpc_kappa_preview_used', False)))
+            mpc_kappa_preview_range_list.append(float(getattr(cc, 'mpc_kappa_preview_range', 0.0)))
             regime_list.append(int(getattr(cc, 'regime', 0)))
             regime_blend_weight_list.append(float(getattr(cc, 'regime_blend_weight', 1.0)))
 
@@ -5168,6 +5174,7 @@ class DataRecorder:
                        "mpc_fallback_active", "mpc_consecutive_failures",
                        "mpc_gt_cross_track_m", "mpc_gt_heading_error_rad",
                        "mpc_using_ground_truth",
+                       "mpc_kappa_preview_used", "mpc_kappa_preview_range",
                        "regime", "regime_blend_weight"]:
                 self.h5_file[f"control/{key}"].resize((new_size,))
             
@@ -5747,6 +5754,8 @@ class DataRecorder:
             self.h5_file["control/mpc_gt_cross_track_m"][current_size:] = mpc_gt_cross_track_m_list
             self.h5_file["control/mpc_gt_heading_error_rad"][current_size:] = mpc_gt_heading_error_rad_list
             self.h5_file["control/mpc_using_ground_truth"][current_size:] = mpc_using_ground_truth_list
+            self.h5_file["control/mpc_kappa_preview_used"][current_size:] = mpc_kappa_preview_used_list
+            self.h5_file["control/mpc_kappa_preview_range"][current_size:] = mpc_kappa_preview_range_list
             self.h5_file["control/regime"][current_size:] = regime_list
             self.h5_file["control/regime_blend_weight"][current_size:] = regime_blend_weight_list
 

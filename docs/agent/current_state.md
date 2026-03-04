@@ -1,7 +1,7 @@
 # AV Stack — Agent Memory: Current State
 
-**Last updated:** 2026-03-02
-**Current milestone:** Phase 2 MPC — Layered Control Architecture. Phase 2.7 COMPLETE — highway MPC runs full 60s (score 93.3, 0 e-stops). S-loop PP also stable (score 97.1).
+**Last updated:** 2026-03-04
+**Current milestone:** Phase 2 MPC — Layered Control Architecture. Phase 2.7b VALIDATED — map-based curvature preview + MPC startup warmup. Highway: median 98.1 (3 runs: 98.3/94.7/98.1), s-loop: no regression (37/37 tests pass).
 
 ---
 
@@ -21,6 +21,7 @@
 | 2.5 s_loop validation | ✅ Complete | Gate: no regression (score 97.1/100, 0 e-stops). MPC doesn't activate on s_loop (by design — speed 4–7 m/s < 10 m/s threshold). MPC activation tested in Phase 2.6. |
 | 2.6 Highway validation | ⚠️ BLOCKED | 9 runs with PP-derived measurements. Oscillation growth ~1.9× invariant to ALL weights → PP reference frame coupling (see plan.md §2.6). Superseded by 2.7. |
 | 2.7 True-state MPC | ✅ Complete | **Key fix:** replaced `roadFrameLaneCenterOffset` (lane-vs-road offset, ~0.04m constant) with `groundTruthLaneCenterX` (vehicle-vs-lane center, tracks real drift). Sign: cross-track negated, heading not negated. Highway: 60s, score 93.3, 0 e-stops. MPC e_lat converges to ±0.005m. S-loop PP: 60s, score 97.1, 0 e-stops. MPC tuning explored: q_lat=0.5 r_rate=2.0 is optimal (higher r_rate → steady-state offset; higher q_lat → active hunting). |
+| 2.7b Curvature preview | ✅ Validated | Map-based curvature preview: samples signed curvature from track profile at 1m intervals (30m ahead), interpolates to MPC time steps. Replaced noisy perception lane polynomials. MPC startup warmup: relaxed constraints + 500 OSQP iterations for first 5 frames after activation. Highway A/B: preview ON median 98.1 (98.3/94.7/98.1) vs OFF median 95.2 (95.2/95.2/95.3). 37/37 tests pass, 0 e-stops. |
 
 **Key files created:**
 - `control/mpc_controller.py` — 3 classes: `MPCParams`, `MPCSolver`, `MPCController`

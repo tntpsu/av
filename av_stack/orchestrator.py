@@ -1091,6 +1091,8 @@ class AVStack:
         self._track_odometer_m: float = 0.0
         self._track_odometer_last_pos: Optional[np.ndarray] = None
         self._track_map_curvature: float = 0.0  # curvature at current odometer position
+        self._map_curvature_preview_horizon_signed: Optional[list] = None
+        self._map_curvature_preview_horizon_distances: Optional[list] = None
         self._track_profile_loaded: bool = False
         self._runtime_track_id: str = ""
         self._map_segment_lookup_count: int = 0
@@ -1168,11 +1170,14 @@ class AVStack:
                     angle_deg = float(seg.get("angle_deg", seg.get("angle", 0.0)) or 0.0)
                     seg_len = max(0.0, abs(radius_m) * math.radians(abs(angle_deg)))
                     curvature_abs = (1.0 / abs(radius_m)) if abs(radius_m) > 1e-6 else 0.0
+                    direction = str(seg.get("direction", "left")).strip().lower()
+                    direction_sign = -1.0 if direction == "right" else 1.0
                     curves.append(
                         {
                             "start_m": float(distance_cursor),
                             "end_m": float(distance_cursor + seg_len),
                             "curvature_abs": float(curvature_abs),
+                            "direction_sign": direction_sign,
                         }
                     )
                 else:
@@ -1226,8 +1231,9 @@ class AVStack:
         return self._track_odometer_m
 
     def _map_curvature_at_distance(self, distance_m: float) -> float:
-        """Return the map curvature (1/m) at a given arc-length position on the track.
+        """Return the signed map curvature (1/m) at a given arc-length position.
 
+        Sign convention: positive = left turn, negative = right turn.
         Returns 0.0 when the position falls on a straight segment or no map is loaded.
         """
         total = self._reference_entry_track_total_length_m
@@ -1239,8 +1245,33 @@ class AVStack:
         self._map_segment_lookup_success_count += 1
         for curve in curves:
             if float(curve["start_m"]) <= d < float(curve["end_m"]):
-                return float(curve["curvature_abs"])
+                sign = float(curve.get("direction_sign", 1.0))
+                return float(curve["curvature_abs"]) * sign
         return 0.0
+
+    def _map_curvature_horizon_signed(self, distances: list) -> list:
+        """Return signed map curvature at each arc-length distance in *distances*.
+
+        Uses the same track profile as _map_curvature_at_distance but avoids
+        per-call overhead by iterating segments once.  Returned list has the
+        same length as *distances*.
+        """
+        total = self._reference_entry_track_total_length_m
+        curves = self._reference_entry_track_curves
+        if total is None or not curves:
+            return [0.0] * len(distances)
+        result = []
+        total_f = float(total)
+        for d_raw in distances:
+            d = float(d_raw) % total_f
+            kappa = 0.0
+            for curve in curves:
+                if float(curve["start_m"]) <= d < float(curve["end_m"]):
+                    sign = float(curve.get("direction_sign", 1.0))
+                    kappa = float(curve["curvature_abs"]) * sign
+                    break
+            result.append(kappa)
+        return result
 
     @staticmethod
     def _abs_curvature_or_none(value: object) -> Optional[float]:
@@ -1362,6 +1393,8 @@ class AVStack:
         distance_to_curve_start_m = None
         time_to_curve_s = None
         preview_confidence = np.nan
+        curvature_horizon_signed = None
+        curvature_horizon_distances = None
 
         try:
             if lane_coeffs is not None:
@@ -1413,6 +1446,9 @@ class AVStack:
                     time_to_curve_s = curve_context.get("time_to_curve_s")
                     preview_confidence = float(curve_context.get("confidence", np.nan))
                     preview_source = str(curve_context.get("source", "horizon_profile"))
+                    # MPC curvature preview: signed horizon + distance arrays
+                    curvature_horizon_signed = curve_context.get("curvature_horizon_signed")
+                    curvature_horizon_distances = curve_context.get("distance_horizon_m")
         except Exception:
             pass
 
@@ -1464,6 +1500,8 @@ class AVStack:
                 in_curve_threshold > 0.0 and abs(float(path_curvature)) >= in_curve_threshold
             ),
             "source": preview_source,
+            "curvature_horizon_signed": curvature_horizon_signed,
+            "curvature_horizon_distances": curvature_horizon_distances,
         }
         if self._reference_entry_source == "map_free":
             return result
@@ -2212,6 +2250,22 @@ class AVStack:
         # Update dead-reckoning odometer before any curvature lookups this frame.
         self._update_track_odometer(vehicle_state_dict)
 
+        # Build map-based curvature preview horizon for MPC feedforward.
+        # Sample signed curvature at 1m intervals ahead from the current position.
+        _horizon_max_m = 30.0  # enough for 2s at 15 m/s
+        _horizon_step_m = 1.0
+        _n_horizon = int(_horizon_max_m / _horizon_step_m)
+        _horizon_distances = [
+            self._track_odometer_m + (i + 1) * _horizon_step_m
+            for i in range(_n_horizon)
+        ]
+        self._map_curvature_preview_horizon_signed = (
+            self._map_curvature_horizon_signed(_horizon_distances)
+        )
+        self._map_curvature_preview_horizon_distances = [
+            (i + 1) * _horizon_step_m for i in range(_n_horizon)
+        ]
+
         gt_curv_raw = vehicle_state_dict.get('groundTruthPathCurvature')
         if gt_curv_raw is None:
             gt_curv_raw = vehicle_state_dict.get('ground_truth_path_curvature')
@@ -2507,6 +2561,8 @@ class AVStack:
             'preview_curvature_abs': preview_curvature_abs,
             'preview_entry_source': preview_entry_source,
             'distance_to_curve_start_m': distance_to_curve_start_m,
+            'curvature_horizon_signed': self._map_curvature_preview_horizon_signed,
+            'curvature_horizon_distances': self._map_curvature_preview_horizon_distances,
             'curve_phase_diag': curve_phase_diag,
             'curve_intent': curve_intent,
             'curve_intent_raw': curve_intent_raw,
@@ -3709,6 +3765,8 @@ class AVStack:
             'preview_curvature_abs': geo['preview_curvature_abs'],
             'preview_entry_source': geo['preview_entry_source'],
             'distance_to_curve_start_m': geo['distance_to_curve_start_m'],
+            'curvature_horizon_signed': geo.get('curvature_horizon_signed'),
+            'curvature_horizon_distances': geo.get('curvature_horizon_distances'),
             'curve_phase_diag': geo['curve_phase_diag'],
             'curve_intent': geo['curve_intent'],
             'curve_intent_raw': geo['curve_intent_raw'],
@@ -4425,6 +4483,9 @@ class AVStack:
             reference_point['curve_intent_speed_guardrail_cap_mps'] = float(
                 curve_intent_speed_guardrail_cap_mps
             )
+            # MPC curvature preview horizon (signed κ + distance arrays)
+            reference_point['curvature_horizon_signed'] = gated.get('curvature_horizon_signed')
+            reference_point['curvature_horizon_distances'] = gated.get('curvature_horizon_distances')
             reference_point['reference_lookahead_base'] = float(base_reference_lookahead)
             reference_point['reference_lookahead_target'] = float(
                 reference_lookahead_diag.get("lookahead_target", reference_lookahead)
@@ -6729,6 +6790,8 @@ class AVStack:
             mpc_gt_cross_track_m=float(control_command.get('mpc_gt_cross_track_m', 0.0)),
             mpc_gt_heading_error_rad=float(control_command.get('mpc_gt_heading_error_rad', 0.0)),
             mpc_using_ground_truth=float(control_command.get('mpc_using_ground_truth', 0.0)),
+            mpc_kappa_preview_used=bool(control_command.get('mpc_kappa_preview_used', False)),
+            mpc_kappa_preview_range=float(control_command.get('mpc_kappa_preview_range', 0.0)),
             regime=int(control_command.get('regime', 0)),
             regime_blend_weight=float(control_command.get('regime_blend_weight', 1.0)),
         )

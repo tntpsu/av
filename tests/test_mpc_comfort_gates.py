@@ -158,7 +158,7 @@ class TestMPCLateralAccelGate:
         # Disable bias estimator: this is an open-loop test with constant e_lat
         # that never decreases (no plant feedback), so bias would integrate
         # indefinitely and corrupt the steering signal.
-        cfg = _make_cfg(mpc_bias_enabled=False)
+        cfg = _make_cfg(mpc_bias_enabled=False, mpc_curvature_preview_enabled=False)
         R = 40.0
         v = 12.0
         kappa = 1.0 / R  # 0.025 1/m
@@ -278,4 +278,160 @@ class TestMPCRegimeTransitionSmooth:
         assert max_jump <= _MAX_JUMP, (
             f"Steering jump at transition: {max_jump:.4f} > {_MAX_JUMP}"
             " — blend ramp not smoothing transition"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Gate 5–7: MPC curvature preview horizon tests (Phase 2.7b)
+# ---------------------------------------------------------------------------
+
+class TestMPCCurvaturePreview:
+    """
+    Verify curvature preview horizon integration:
+    - Constant horizon matches scalar kappa_ref
+    - Preview causes earlier steering into an upcoming curve
+    - None horizon falls back gracefully to constant-fill
+    """
+
+    def test_constant_horizon_matches_scalar(self):
+        """A constant preview horizon should produce identical output to scalar kappa_ref."""
+        kappa = 0.02
+        N = 20
+        cfg = _make_cfg(mpc_curvature_preview_enabled=True, mpc_bias_enabled=False)
+        n = 60
+        speed = 12.0
+        e_lat, e_hdg = 0.05, 0.01
+
+        # Run with scalar kappa_ref (preview disabled)
+        cfg_no_preview = _make_cfg(mpc_curvature_preview_enabled=False, mpc_bias_enabled=False)
+        ctrl_scalar = MPCController(cfg_no_preview)
+        last_delta = 0.0
+        steerings_scalar = []
+        for _ in range(n):
+            r = ctrl_scalar.compute_steering(
+                e_lat=e_lat, e_heading=e_hdg, current_speed=speed,
+                last_delta_norm=last_delta, kappa_ref=kappa,
+                v_target=speed, v_max=speed + 2.0, dt=_DT,
+                kappa_horizon=None,
+            )
+            s = float(r['steering_normalized'])
+            steerings_scalar.append(s)
+            last_delta = s
+
+        # Run with constant horizon = kappa at every step (preview enabled)
+        ctrl_preview = MPCController(cfg)
+        last_delta = 0.0
+        steerings_preview = []
+        constant_horizon = np.full(N, kappa)
+        for _ in range(n):
+            r = ctrl_preview.compute_steering(
+                e_lat=e_lat, e_heading=e_hdg, current_speed=speed,
+                last_delta_norm=last_delta, kappa_ref=kappa,
+                v_target=speed, v_max=speed + 2.0, dt=_DT,
+                kappa_horizon=constant_horizon,
+            )
+            s = float(r['steering_normalized'])
+            steerings_preview.append(s)
+            last_delta = s
+            assert r['kappa_preview_used'] is True
+
+        max_diff = float(np.max(np.abs(np.array(steerings_scalar) - np.array(steerings_preview))))
+        assert max_diff < 1e-6, (
+            f"Constant horizon diverged from scalar: max diff = {max_diff:.8f}"
+        )
+
+    def test_preview_reduces_curve_entry_error(self):
+        """Preview horizon transitioning straight→curve should steer earlier than constant κ=0."""
+        N = 20
+        n = 40
+        speed = 12.0
+        kappa_curve = 0.025  # R=40m
+
+        # Horizon: first 10 steps straight, last 10 steps in curve
+        horizon_with_preview = np.zeros(N)
+        horizon_with_preview[10:] = kappa_curve
+
+        # Run WITH preview: MPC sees the curve coming
+        cfg_on = _make_cfg(mpc_curvature_preview_enabled=True, mpc_bias_enabled=False)
+        ctrl_on = MPCController(cfg_on)
+        last_delta = 0.0
+        steerings_preview = []
+        for _ in range(n):
+            r = ctrl_on.compute_steering(
+                e_lat=0.0, e_heading=0.0, current_speed=speed,
+                last_delta_norm=last_delta, kappa_ref=0.0,
+                v_target=speed, v_max=speed + 2.0, dt=_DT,
+                kappa_horizon=horizon_with_preview,
+            )
+            s = float(r['steering_normalized'])
+            steerings_preview.append(s)
+            last_delta = s
+
+        # Run WITHOUT preview: MPC thinks road is straight (kappa_ref=0)
+        cfg_off = _make_cfg(mpc_curvature_preview_enabled=False, mpc_bias_enabled=False)
+        ctrl_off = MPCController(cfg_off)
+        last_delta = 0.0
+        steerings_no_preview = []
+        for _ in range(n):
+            r = ctrl_off.compute_steering(
+                e_lat=0.0, e_heading=0.0, current_speed=speed,
+                last_delta_norm=last_delta, kappa_ref=0.0,
+                v_target=speed, v_max=speed + 2.0, dt=_DT,
+                kappa_horizon=None,
+            )
+            s = float(r['steering_normalized'])
+            steerings_no_preview.append(s)
+            last_delta = s
+
+        # The preview run should have larger early steering (anticipating the curve)
+        early_steer_preview = np.mean(np.abs(steerings_preview[:10]))
+        early_steer_no_preview = np.mean(np.abs(steerings_no_preview[:10]))
+        assert early_steer_preview > early_steer_no_preview, (
+            f"Preview steering ({early_steer_preview:.6f}) should exceed no-preview "
+            f"({early_steer_no_preview:.6f}) in first 10 frames — MPC not anticipating curve"
+        )
+
+    def test_fallback_when_horizon_none(self):
+        """kappa_horizon=None with preview enabled should behave identically to preview disabled."""
+        kappa = 0.015
+        cfg_on = _make_cfg(mpc_curvature_preview_enabled=True, mpc_bias_enabled=False)
+        cfg_off = _make_cfg(mpc_curvature_preview_enabled=False, mpc_bias_enabled=False)
+        n = 40
+        speed = 12.0
+        e_lat, e_hdg = 0.1, 0.02
+
+        # Preview enabled but horizon=None → should fallback
+        ctrl_on = MPCController(cfg_on)
+        last_delta = 0.0
+        steerings_on = []
+        for _ in range(n):
+            r = ctrl_on.compute_steering(
+                e_lat=e_lat, e_heading=e_hdg, current_speed=speed,
+                last_delta_norm=last_delta, kappa_ref=kappa,
+                v_target=speed, v_max=speed + 2.0, dt=_DT,
+                kappa_horizon=None,
+            )
+            s = float(r['steering_normalized'])
+            steerings_on.append(s)
+            last_delta = s
+            assert r['kappa_preview_used'] is False
+
+        # Preview disabled
+        ctrl_off = MPCController(cfg_off)
+        last_delta = 0.0
+        steerings_off = []
+        for _ in range(n):
+            r = ctrl_off.compute_steering(
+                e_lat=e_lat, e_heading=e_hdg, current_speed=speed,
+                last_delta_norm=last_delta, kappa_ref=kappa,
+                v_target=speed, v_max=speed + 2.0, dt=_DT,
+                kappa_horizon=None,
+            )
+            s = float(r['steering_normalized'])
+            steerings_off.append(s)
+            last_delta = s
+
+        max_diff = float(np.max(np.abs(np.array(steerings_on) - np.array(steerings_off))))
+        assert max_diff < 1e-6, (
+            f"Fallback diverged from disabled: max diff = {max_diff:.8f}"
         )
