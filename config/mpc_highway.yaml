@@ -587,7 +587,7 @@ trajectory:
     mpc_dt: 0.1                     # prediction step (2s horizon at 20 steps)
     mpc_wheelbase_m: 2.5
     mpc_max_steer_rad: 0.5236       # 30° physical max steering angle
-    mpc_q_lat: 0.5                  # q_lat=0.5 + r_rate=2.0 scored 93.3; higher q_lat causes active oscillation
+    mpc_q_lat: 0.5                  # q_lat=0.5 + r_rate=2.0 scored 93.3; q_lat=4.0 caused 0.7Hz oscillation at highway speed (see recording_20260303_114540)
     mpc_q_lat_terminal_scale: 1.0   # TUNED: 3.0→1.0 (minimize terminal dominance)
     mpc_q_heading: 5.0
     mpc_q_speed: 2.0
@@ -601,6 +601,17 @@ trajectory:
     mpc_v_max: 20.0                 # headroom for 15 m/s target
     mpc_max_consecutive_failures: 5
     mpc_max_solve_time_ms: 8.0
+    # Lateral bias estimator: slow integral correction for steady-state curve offset.
+    # Sign: −gain × bias_ema → REDUCES kappa when e_lat > 0, forcing MPC to steer more.
+    # Stability boundary: max_correction > 0.002 destabilizes MPC on near-straight
+    # sections (correction dominates road κ by >4x → fictitious curvature → 0.7Hz osc).
+    # gain=0.01 scored 94.7/0.17m RMSE; gain=0.015 provides 50% more authority
+    # while staying well below the instability threshold (effective gain 6.8 vs 13.5).
+    mpc_bias_enabled: true
+    mpc_bias_alpha: 0.005               # EMA time constant ~6.7s (200 frames)
+    mpc_bias_kappa_gain: 0.015          # curvature correction per meter of lateral bias
+    mpc_bias_max_correction: 0.002      # max |Δκ| (rad/m) — HARD LIMIT, do not exceed
+    mpc_bias_min_speed: 5.0             # only active above 5 m/s
     mpc_speed_adaptive_horizon: false
 safety:
   max_speed: 15.0               # CHANGED: 12.0 → 15.0

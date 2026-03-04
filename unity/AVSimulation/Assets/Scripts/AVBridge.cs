@@ -102,6 +102,7 @@ public float speedLimitPreviewMaxTDelta = 0.15f;
     private float lastFeedbackSendTime;
     private VehicleState lastVehicleState;
     private ControlCommand lastControlCommand;
+    private float driveStartTime = -1f;
     private int lastRandomizeRequestId = -1;
     private bool randomStartHandled = false;
     private int updateSequence = 0;
@@ -1776,6 +1777,8 @@ private float? lastCarT = null;
                     );
                     
                     lastControlCommand = command;
+                    if (driveStartTime < 0f)
+                        driveStartTime = Time.time;
                 }
                 catch (Exception e)
                 {
@@ -1913,8 +1916,18 @@ private float? lastCarT = null;
             int xOffset = 10;
             int lineHeight = 20;
             int boxWidth = 320;
-            int boxHeight = 6 * lineHeight + 10;
+            int boxHeight = 7 * lineHeight + 10;
             GUI.Box(new Rect(xOffset - 6, yOffset - 6, boxWidth, boxHeight), GUIContent.none);
+            // Elapsed drive time (from first control command)
+            if (driveStartTime >= 0f)
+            {
+                float elapsed = Time.time - driveStartTime;
+                int mins = (int)(elapsed / 60f);
+                float secs = elapsed - mins * 60f;
+                GUI.Label(new Rect(xOffset, yOffset, 300, lineHeight),
+                    $"Drive Time: {mins}:{secs:00.0}s", labelStyle);
+                yOffset += lineHeight;
+            }
             GUI.Label(new Rect(xOffset, yOffset, 300, lineHeight),
                 $"AV Control: {(enableAVControl ? "ON" : "OFF")}", labelStyle);
             yOffset += lineHeight;

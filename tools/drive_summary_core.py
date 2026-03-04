@@ -1924,10 +1924,35 @@ def analyze_recording_summary(recording_path: Path, analyze_to_failure: bool = F
                         oscillation_rms_growth_slope_mps = safe_float(slope)
 
                 # Runaway heuristic: oscillating sign changes + growing RMS envelope.
-                oscillation_amplitude_runaway = bool(
-                    oscillation_zero_crossing_rate_hz >= 0.2
-                    and oscillation_rms_growth_slope_mps > 0.002
-                )
+                # Gate on curvature: sustained curves produce monotonic RMS growth
+                # from tracking bias, not oscillation.  If >30% of frames are in
+                # curves (|κ| > 0.002 rad/m), require a higher zero-crossing rate
+                # to distinguish real oscillation from steady-state curve tracking error.
+                oscillation_curve_suppressed = False
+                curve_fraction = 0.0
+                gt_curv_osc = data.get('gt_path_curvature')
+                if gt_curv_osc is not None:
+                    gt_curv_arr = np.asarray(gt_curv_osc[:n_frames], dtype=float)
+                    gt_curv_finite = gt_curv_arr[np.isfinite(gt_curv_arr)]
+                    if gt_curv_finite.size > 0:
+                        curve_fraction = float(np.mean(np.abs(gt_curv_finite) > 0.002))
+
+                if curve_fraction > 0.30:
+                    # On curved tracks, require stronger evidence of oscillation:
+                    # higher zero-crossing rate (true oscillation crosses zero frequently)
+                    oscillation_amplitude_runaway = bool(
+                        oscillation_zero_crossing_rate_hz >= 0.5
+                        and oscillation_rms_growth_slope_mps > 0.002
+                    )
+                    if (oscillation_zero_crossing_rate_hz >= 0.2
+                            and oscillation_rms_growth_slope_mps > 0.002
+                            and not oscillation_amplitude_runaway):
+                        oscillation_curve_suppressed = True
+                else:
+                    oscillation_amplitude_runaway = bool(
+                        oscillation_zero_crossing_rate_hz >= 0.2
+                        and oscillation_rms_growth_slope_mps > 0.002
+                    )
 
     # 2.5 SPEED CONTROL + COMFORT
     speed_error_rmse = 0.0
@@ -3669,6 +3694,8 @@ def analyze_recording_summary(recording_path: Path, analyze_to_failure: bool = F
             "oscillation_rms_window_p95_m": safe_float(oscillation_rms_window_p95_m),
             "oscillation_rms_windows_count": int(oscillation_rms_windows_count),
             "oscillation_amplitude_runaway": bool(oscillation_amplitude_runaway),
+            "oscillation_curve_suppressed": bool(oscillation_curve_suppressed),
+            "oscillation_curve_fraction": safe_float(curve_fraction),
         },
         "curve_intent_diagnostics": curve_intent_diag,
         "speed_control": {

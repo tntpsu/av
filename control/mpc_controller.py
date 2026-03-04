@@ -67,6 +67,13 @@ class MPCParams:
     max_solve_time_ms: float = 8.0
     max_consecutive_failures: int = 3
 
+    # Lateral bias estimator (integral-like correction for steady-state curve offset)
+    bias_enabled: bool = True
+    bias_alpha: float = 0.005           # EMA smoothing (τ ≈ 1/α ≈ 200 frames ≈ 6.7s)
+    bias_kappa_gain: float = 0.015      # curvature correction per meter of bias
+    bias_max_correction: float = 0.002  # max curvature adjustment (rad/m) — never exceed 4x road κ
+    bias_min_speed: float = 5.0         # only active above this speed (m/s)
+
     @classmethod
     def from_config(cls, cfg: dict) -> "MPCParams":
         """Load from nested config dict: cfg['trajectory']['mpc']['mpc_<field>']."""
@@ -532,6 +539,9 @@ class MPCController:
         self._consecutive_failures = 0
         self._fallback_active = False
         self._last_steering = 0.0
+        # Lateral bias estimator: slow EMA of e_lat → curvature correction
+        self._bias_ema = 0.0
+        self._bias_correction = 0.0
 
     def compute_steering(self, e_lat: float, e_heading: float,
                          current_speed: float, last_delta_norm: float,
@@ -561,8 +571,31 @@ class MPCController:
                 e_heading
             )
 
-        # Build κ_ref horizon (constant for now; map profile extension later)
-        kappa_horizon = np.full(self.solver._N, kappa_ref)
+        # --- Lateral bias estimator ---
+        # Slowly accumulate persistent lateral error into a curvature correction.
+        # This acts like integral control: it eliminates steady-state offset in
+        # sustained curves without increasing the proportional gain (q_lat) that
+        # causes oscillation at highway speeds.
+        #
+        # Sign logic: the MPC dynamics predict e_lat[k+1] = ... − κ·v²·dt.
+        # Increasing κ makes the model think the curve will self-correct the
+        # error, so the MPC steers LESS.  We need the opposite: when e_lat > 0
+        # persistently (car off-center), DECREASE κ so the MPC thinks the curve
+        # is weaker and steers MORE aggressively.  Hence: Δκ = −gain × bias.
+        self._bias_correction = 0.0
+        if self.params.bias_enabled and current_speed >= self.params.bias_min_speed:
+            alpha = self.params.bias_alpha
+            self._bias_ema = (1.0 - alpha) * self._bias_ema + alpha * e_lat
+            raw_correction = -self.params.bias_kappa_gain * self._bias_ema
+            self._bias_correction = float(np.clip(
+                raw_correction,
+                -self.params.bias_max_correction,
+                self.params.bias_max_correction,
+            ))
+
+        # Build κ_ref horizon with bias correction applied
+        kappa_corrected = kappa_ref + self._bias_correction
+        kappa_horizon = np.full(self.solver._N, kappa_corrected)
 
         # Use the configured MPC prediction step (params.dt), NOT the frame dt.
         # The solver plans N steps of params.dt each (e.g. 20×0.1=2.0 s horizon).
@@ -596,7 +629,9 @@ class MPCController:
             'mpc_consecutive_failures': self._consecutive_failures,
             'e_lat_input': e_lat,
             'e_heading_input': e_heading,
-            'kappa_ref_used': kappa_ref,
+            'kappa_ref_used': kappa_ref + self._bias_correction,
+            'kappa_bias_correction': self._bias_correction,
+            'kappa_bias_ema': self._bias_ema,
         }
 
     def reset(self):
@@ -606,3 +641,5 @@ class MPCController:
         self._consecutive_failures = 0
         self._fallback_active = False
         self._last_steering = 0.0
+        self._bias_ema = 0.0
+        self._bias_correction = 0.0

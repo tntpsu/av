@@ -155,7 +155,10 @@ class TestMPCLateralAccelGate:
     """
 
     def test_mpc_lateral_accel_gate(self):
-        cfg = _make_cfg()
+        # Disable bias estimator: this is an open-loop test with constant e_lat
+        # that never decreases (no plant feedback), so bias would integrate
+        # indefinitely and corrupt the steering signal.
+        cfg = _make_cfg(mpc_bias_enabled=False)
         R = 40.0
         v = 12.0
         kappa = 1.0 / R  # 0.025 1/m

@@ -2041,8 +2041,15 @@ class Visualizer {
             }
             if (summary.control_smoothness.oscillation_amplitude_runaway !== undefined) {
                 const runaway = Boolean(summary.control_smoothness.oscillation_amplitude_runaway);
-                const runawayColor = runaway ? '#ff6b6b' : '#4caf50';
-                html += `<tr><td>Oscillation Amplitude Runaway:</td><td style="text-align: right; color: ${runawayColor};">${withLimitHint(runaway ? 'YES' : 'NO', runawayColor, 'NO')}</td></tr>`;
+                const curveSuppressed = Boolean(summary.control_smoothness.oscillation_curve_suppressed);
+                const curveFrac = summary.control_smoothness.oscillation_curve_fraction;
+                if (curveSuppressed) {
+                    const pct = curveFrac !== undefined ? (curveFrac * 100).toFixed(0) : '?';
+                    html += `<tr><td>Oscillation Amplitude Runaway:</td><td style="text-align: right; color: #888;">N/A <small style="color:#666;">(curved track ${pct}% — RMS growth is tracking bias)</small></td></tr>`;
+                } else {
+                    const runawayColor = runaway ? '#ff6b6b' : '#4caf50';
+                    html += `<tr><td>Oscillation Amplitude Runaway:</td><td style="text-align: right; color: ${runawayColor};">${withLimitHint(runaway ? 'YES' : 'NO', runawayColor, 'NO')}</td></tr>`;
+                }
             }
             const curveIntentDiag = summary.curve_intent_diagnostics || null;
             if (curveIntentDiag && curveIntentDiag.available) {

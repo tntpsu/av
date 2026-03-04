@@ -1191,10 +1191,17 @@ def _print_summary_report(recording_path: Path, summary: Dict, analyze_to_failur
         f"{control_smoothness.get('oscillation_rms_window_start_m', 0.0):.3f} m -> "
         f"{control_smoothness.get('oscillation_rms_window_end_m', 0.0):.3f} m"
     )
-    print(
-        "   Oscillation Amplitude Runaway: "
-        f"{'YES' if control_smoothness.get('oscillation_amplitude_runaway') else 'NO'}"
-    )
+    if control_smoothness.get('oscillation_curve_suppressed'):
+        curve_frac = control_smoothness.get('oscillation_curve_fraction', 0.0)
+        print(
+            f"   Oscillation Amplitude Runaway: N/A (curved track {curve_frac*100:.0f}%"
+            f" — RMS growth is tracking bias)"
+        )
+    else:
+        print(
+            "   Oscillation Amplitude Runaway: "
+            f"{'YES' if control_smoothness.get('oscillation_amplitude_runaway') else 'NO'}"
+        )
     if curve_intent_diag.get("available"):
         print(
             "   Curve Intent Arm Early Rate: "
