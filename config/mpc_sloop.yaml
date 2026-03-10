@@ -386,7 +386,7 @@ trajectory:
   local_curve_reference_max_abs_curvature: 0.020
   reference_lookahead_entry_source: track
   reference_lookahead_entry_preview_scale: 1.5
-  reference_lookahead_entry_track_name: ''
+  reference_lookahead_entry_track_name: s_loop
   reference_lookahead_entry_preview_only_fallback: true
   reference_lookahead_entry_preview_curvature_min: 0.003
   reference_lookahead_entry_preview_curvature_max: 0.015
@@ -413,8 +413,8 @@ trajectory:
   curve_local_phase_distance_start_m: 10.0
   curve_local_phase_distance_start_tight_m: 10.0
   curve_local_phase_distance_end_m: 1.5
-  curve_local_phase_time_start_s: 1.2
-  curve_local_phase_time_start_tight_s: 1.2
+  curve_local_phase_time_start_s: 0.0
+  curve_local_phase_time_start_tight_s: 0.0
   curve_local_phase_time_end_s: 0.25
   curve_local_in_curve_distance_eps_m: 0.25
   curve_local_in_curve_time_eps_s: 0.05
