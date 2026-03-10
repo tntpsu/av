@@ -69,8 +69,8 @@ control:
       lookahead_m: 5.2
     - speed_mps: 12.0
       lookahead_m: 5.6
-    pp_curve_local_shorten_slew_m_per_frame: 0.08
-    pp_curve_local_floor_state_min: ENTRY
+    pp_curve_local_shorten_slew_m_per_frame: 0.15
+    pp_curve_local_floor_state_min: COMMIT
     pp_min_lookahead: 0.5
     pp_speed_norm_enabled: true
     pp_speed_norm_reference_mps: 12.0
@@ -387,8 +387,8 @@ trajectory:
   curve_local_phase_distance_start_m: 8.0
   curve_local_phase_distance_start_tight_m: 10.0
   curve_local_phase_distance_end_m: 1.5
-  curve_local_phase_time_start_s: 1.2
-  curve_local_phase_time_start_tight_s: 1.6
+  curve_local_phase_time_start_s: 0.0
+  curve_local_phase_time_start_tight_s: 0.0
   curve_local_phase_time_end_s: 0.25
   curve_local_in_curve_distance_eps_m: 0.25
   curve_local_in_curve_time_eps_s: 0.05

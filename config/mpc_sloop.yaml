@@ -49,8 +49,6 @@ control:
       lookahead_m: 5.2
     - speed_mps: 12.0
       lookahead_m: 5.6
-    pp_curve_local_shorten_slew_m_per_frame: 0.15
-    pp_curve_local_floor_state_min: COMMIT
     pp_min_lookahead: 0.5
     pp_speed_norm_enabled: false
     pp_speed_norm_reference_mps: 12.0
@@ -319,11 +317,6 @@ trajectory:
   reference_lookahead: 9.0
   dynamic_reference_lookahead: true
   curve_scheduler_mode: phase_active
-  reference_lookahead_phase_active_entry_scale_min: 0.90
-  reference_lookahead_phase_active_entry_scale_severity_on: 0.35
-  reference_lookahead_phase_active_entry_scale_severity_full: 0.85
-  reference_lookahead_phase_active_commit_phase_on: 0.75
-  reference_lookahead_phase_active_commit_phase_full: 0.95
   reference_lookahead_speed_table:
   - speed_mps: 0.0
     lookahead_m: 7.0
@@ -348,42 +341,6 @@ trajectory:
     lookahead_m: 10.0
   - speed_mps: 13.41
     lookahead_m: 10.0
-  reference_lookahead_speed_table_commit:
-  - speed_mps: 0.0
-    lookahead_m: 4.0
-  - speed_mps: 4.47
-    lookahead_m: 4.6
-  - speed_mps: 6.71
-    lookahead_m: 4.9
-  - speed_mps: 8.94
-    lookahead_m: 5.4
-  - speed_mps: 11.18
-    lookahead_m: 5.8
-  local_curve_reference_mode: shadow
-  local_curve_reference_delta_cap_m: 1.5
-  local_curve_reference_max_blend: 0.35
-  local_curve_reference_bounded_unwind_start: 0.05
-  local_curve_reference_bounded_unwind_end: 0.60
-  local_curve_reference_enable_map_track: true
-  local_curve_reference_entry_phase_on: 0.25
-  local_curve_reference_entry_phase_full: 0.65
-  local_curve_reference_commit_phase_on: 0.65
-  local_curve_reference_commit_phase_full: 0.90
-  local_curve_reference_unwind_progress_start: 0.35
-  local_curve_reference_unwind_progress_end: 0.70
-  local_curve_reference_target_distance_table:
-  - speed_mps: 0.0
-    target_distance_m: 4.4
-  - speed_mps: 4.47
-    target_distance_m: 5.0
-  - speed_mps: 6.71
-    target_distance_m: 5.3
-  - speed_mps: 8.94
-    target_distance_m: 5.7
-  local_curve_reference_tight_distance_scale_min: 0.82
-  local_curve_reference_curvature_min: 0.003
-  local_curve_reference_curvature_max: 0.015
-  local_curve_reference_max_abs_curvature: 0.020
   reference_lookahead_entry_source: track
   reference_lookahead_entry_preview_scale: 1.5
   reference_lookahead_entry_track_name: s_loop
@@ -439,7 +396,6 @@ trajectory:
   curve_context_curve_start_curvature: 0.006
   curve_context_curvature_gain: 6.0
   reference_lookahead_slew_rate_m_per_frame: 0.25
-  reference_lookahead_slew_rate_shorten_m_per_frame: 0.35
   reference_lookahead_slew_rate_lengthen_m_per_frame: 0.2
   reference_lookahead_entry_shorten_slew_m_per_frame: 0.20
   reference_lookahead_entry_shorten_state_min: ENTRY
@@ -688,8 +644,6 @@ trajectory:
     mpc_max_consecutive_failures: 5
     mpc_max_solve_time_ms: 8.0
     mpc_speed_adaptive_horizon: false
-    mpc_curvature_preview_enabled: true
-    mpc_curvature_preview_gain: 1.0
 safety:
   max_speed: 12.0
   emergency_brake_threshold: 1.5

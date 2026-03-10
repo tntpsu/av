@@ -42,8 +42,8 @@ control:
       lookahead_m: 5.2
     - speed_mps: 12.0
       lookahead_m: 5.6
-    pp_curve_local_shorten_slew_m_per_frame: 0.08
-    pp_curve_local_floor_state_min: ENTRY
+    pp_curve_local_shorten_slew_m_per_frame: 0.15
+    pp_curve_local_floor_state_min: COMMIT
     pp_min_lookahead: 0.5
     pp_speed_norm_enabled: true
     pp_speed_norm_reference_mps: 12.0
@@ -311,7 +311,6 @@ trajectory:
   target_speed: 15.0            # CHANGED: 12.0 → 15.0
   reference_lookahead: 9.0
   dynamic_reference_lookahead: true
-  curve_scheduler_mode: phase_shadow
   reference_lookahead_speed_table:
   - speed_mps: 0.0
     lookahead_m: 7.0
@@ -393,7 +392,6 @@ trajectory:
   curve_context_curve_start_curvature: 0.0015
   curve_context_curvature_gain: 6.0
   reference_lookahead_slew_rate_m_per_frame: 0.25
-  reference_lookahead_slew_rate_shorten_m_per_frame: 0.35
   reference_lookahead_slew_rate_lengthen_m_per_frame: 0.2
   reference_lookahead_entry_shorten_slew_m_per_frame: 0.20
   reference_lookahead_entry_shorten_state_min: ENTRY
@@ -655,8 +653,6 @@ trajectory:
     mpc_bias_min_speed: 5.0             # only active above 5 m/s
     mpc_speed_adaptive_horizon: false
     # Curvature preview horizon — feedforward from trajectory planner (Phase 2.7b)
-    mpc_curvature_preview_enabled: true
-    mpc_curvature_preview_gain: 1.0    # 1.0 = raw signed curvature, <1 attenuates noise
 safety:
   max_speed: 15.0               # CHANGED: 12.0 → 15.0
   emergency_brake_threshold: 1.5
