@@ -311,32 +311,6 @@ trajectory:
   target_speed: 15.0            # CHANGED: 12.0 → 15.0
   reference_lookahead: 9.0
   dynamic_reference_lookahead: true
-  reference_lookahead_speed_table:
-  - speed_mps: 0.0
-    lookahead_m: 7.0
-  - speed_mps: 4.47
-    lookahead_m: 9.0
-  - speed_mps: 6.71
-    lookahead_m: 10.0
-  - speed_mps: 8.94
-    lookahead_m: 11.0
-  - speed_mps: 11.18
-    lookahead_m: 14.0           # REVERTED: longer lookahead (20m) added transport delay τ=1.54s vs 1.15s; extra 12.6° phase lag at 0.09Hz made oscillation slightly worse (τ_growth: 19s→16s); PP gain reduction doesn't help when smoothing delays dominate
-  - speed_mps: 13.41
-    lookahead_m: 15.0           # REVERTED: 20.0 → 15.0 (shorter transport delay is better when phase lag is the stability constraint)
-  - speed_mps: 15.0
-    lookahead_m: 17.0           # REVERTED: 22.0 → 17.0
-  reference_lookahead_speed_table_entry:
-  - speed_mps: 0.0
-    lookahead_m: 6.0
-  - speed_mps: 4.47
-    lookahead_m: 7.0
-  - speed_mps: 8.94
-    lookahead_m: 8.5
-  - speed_mps: 11.18
-    lookahead_m: 9.0
-  - speed_mps: 13.41
-    lookahead_m: 9.0
   reference_lookahead_entry_source: track
   reference_lookahead_entry_preview_scale: 1.5
   reference_lookahead_entry_track_name: ''

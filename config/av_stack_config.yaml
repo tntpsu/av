@@ -316,6 +316,10 @@ trajectory:
     lookahead_m: 14.0
   - speed_mps: 13.41
     lookahead_m: 15.0
+  - speed_mps: 15.0
+    lookahead_m: 17.0
+  - speed_mps: 17.0
+    lookahead_m: 19.0
   reference_lookahead_speed_table_entry:
   - speed_mps: 0.0
     lookahead_m: 6.0
@@ -327,6 +331,10 @@ trajectory:
     lookahead_m: 9.0
   - speed_mps: 13.41
     lookahead_m: 9.0
+  - speed_mps: 15.0
+    lookahead_m: 9.5
+  - speed_mps: 17.0
+    lookahead_m: 10.0
   reference_lookahead_speed_table_commit:
   - speed_mps: 0.0
     lookahead_m: 4.0
@@ -338,6 +346,12 @@ trajectory:
     lookahead_m: 5.4
   - speed_mps: 11.18
     lookahead_m: 5.8
+  - speed_mps: 13.41
+    lookahead_m: 6.3
+  - speed_mps: 15.0
+    lookahead_m: 7.0
+  - speed_mps: 17.0
+    lookahead_m: 7.5
   local_curve_reference_mode: shadow
   local_curve_reference_delta_cap_m: 1.5
   local_curve_reference_max_blend: 0.35
@@ -359,6 +373,14 @@ trajectory:
     target_distance_m: 5.3
   - speed_mps: 8.94
     target_distance_m: 5.7
+  - speed_mps: 11.18
+    target_distance_m: 6.2
+  - speed_mps: 13.41
+    target_distance_m: 6.7
+  - speed_mps: 15.0
+    target_distance_m: 7.2
+  - speed_mps: 17.0
+    target_distance_m: 7.7
   local_curve_reference_tight_distance_scale_min: 0.82
   local_curve_reference_curvature_min: 0.003
   local_curve_reference_curvature_max: 0.015

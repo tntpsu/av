@@ -317,19 +317,6 @@ trajectory:
   reference_lookahead: 9.0
   dynamic_reference_lookahead: true
   curve_scheduler_mode: phase_active
-  reference_lookahead_speed_table:
-  - speed_mps: 0.0
-    lookahead_m: 7.0
-  - speed_mps: 4.47
-    lookahead_m: 9.0
-  - speed_mps: 6.71
-    lookahead_m: 10.0
-  - speed_mps: 8.94
-    lookahead_m: 11.0
-  - speed_mps: 11.18
-    lookahead_m: 14.0
-  - speed_mps: 13.41
-    lookahead_m: 15.0
   reference_lookahead_speed_table_entry:
   - speed_mps: 0.0
     lookahead_m: 7.0
