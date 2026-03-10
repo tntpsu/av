@@ -256,21 +256,21 @@ class TestConfigDefaults:
     """Test that default values are used when config is missing."""
     
     def test_missing_config_uses_defaults(self):
-        """Test that missing config file uses hardcoded defaults."""
+        """Test that missing config overlay uses base YAML values."""
         av_stack = AVStack(
             bridge_url="http://localhost:8000",
             record_data=False,
             config_path='/nonexistent/config.yaml'
         )
-        
+
         # Should still initialize with defaults
         assert av_stack is not None
         assert av_stack.controller is not None
-        
-        # Check some default values
+
+        # Check values come from base YAML (av_stack_config.yaml), not hardcoded code defaults
         lateral_ctrl = av_stack.controller.lateral_controller
-        assert lateral_ctrl.pid.kp == 0.3  # Default
-        assert lateral_ctrl.max_steering == 0.5  # Default
+        assert lateral_ctrl.pid.kp == 1.1  # Base YAML default
+        assert lateral_ctrl.max_steering == 0.7  # Base YAML default
     
     def test_partial_config_uses_defaults_for_missing(self):
         """Test that partial config uses defaults for missing parameters."""
@@ -296,9 +296,9 @@ class TestConfigDefaults:
             # kp should be from config
             assert av_stack.controller.lateral_controller.pid.kp == 0.5
             
-            # Other params should use defaults
-            assert av_stack.controller.lateral_controller.pid.ki == 0.0  # Default
-            assert av_stack.controller.lateral_controller.max_steering == 0.5  # Default
+            # Other params come from base YAML (not hardcoded code defaults)
+            assert av_stack.controller.lateral_controller.pid.ki == pytest.approx(0.004)  # Base YAML
+            assert av_stack.controller.lateral_controller.max_steering == 0.7  # Base YAML
         finally:
             Path(config_path).unlink()
 

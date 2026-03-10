@@ -55,10 +55,10 @@ class TestConfigLoading:
             Path(config_path).unlink()
     
     def test_load_nonexistent_config(self):
-        """Test that loading nonexistent config returns empty dict."""
+        """Test that loading a nonexistent overlay still returns the base config."""
         config = load_config('/nonexistent/path/config.yaml')
         assert isinstance(config, dict)
-        assert len(config) == 0
+        assert len(config) > 0  # base config is always loaded
 
 
 class TestAVStackInitialization:

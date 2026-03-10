@@ -60,18 +60,53 @@ class SafetyConfig:
     allowed_outside_lane: float = 1.0  # Allowed distance outside lane before emergency stop (meters)
 
 
-def load_config(config_path: Optional[str] = None) -> dict:
-    """Load configuration from YAML file or use defaults."""
-    if config_path is None:
-        config_path = Path(__file__).parent.parent / "config" / "av_stack_config.yaml"
-    else:
-        config_path = Path(config_path)
+def _deep_merge(base: dict, overlay: dict) -> dict:
+    """Recursively merge overlay into base.
 
-    if config_path.exists():
-        with open(config_path, 'r') as f:
-            config = yaml.safe_load(f)
-        logger.info(f"Loaded configuration from {config_path}")
-        return config
+    Dicts are merged recursively so that nested keys in base that are absent
+    from overlay are preserved.  Lists and all other types are replaced in
+    full by the overlay value — speed tables and similar sequences must
+    replace the base list, not extend it.
+    """
+    result = dict(base)
+    for key, val in overlay.items():
+        if key in result and isinstance(result[key], dict) and isinstance(val, dict):
+            result[key] = _deep_merge(result[key], val)
+        else:
+            result[key] = val
+    return result
+
+
+def load_config(config_path: Optional[str] = None) -> dict:
+    """Load configuration, deep-merging an optional overlay over the base config.
+
+    Always loads av_stack_config.yaml as the base so that every parameter has
+    a canonical default.  If *config_path* is provided and differs from the
+    base, its values are merged on top (overlay wins on any key it specifies,
+    base fills in everything else).
+    """
+    base_path = Path(__file__).parent.parent / "config" / "av_stack_config.yaml"
+
+    config: dict = {}
+    if base_path.exists():
+        with open(base_path, "r") as f:
+            config = yaml.safe_load(f) or {}
+        logger.info("Loaded base config from %s", base_path)
     else:
-        logger.warning(f"Config file not found at {config_path}, using defaults")
-        return {}
+        logger.warning("Base config not found at %s", base_path)
+
+    if config_path is None:
+        return config
+
+    overlay_path = Path(config_path)
+    if overlay_path.resolve() == base_path.resolve():
+        return config  # overlay IS the base — nothing to merge
+
+    if not overlay_path.exists():
+        logger.warning("Config overlay not found at %s — using base only", overlay_path)
+        return config
+
+    with open(overlay_path, "r") as f:
+        overlay = yaml.safe_load(f) or {}
+    logger.info("Merged config overlay from %s", overlay_path)
+    return _deep_merge(config, overlay)
