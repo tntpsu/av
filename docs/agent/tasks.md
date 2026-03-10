@@ -1,25 +1,47 @@
 # AV Stack — Agent Memory: Tasks
 
-**Last updated:** 2026-02-24
+**Last updated:** 2026-03-04
 
 ---
 
 ## Current Focus
 
-**S2-M4 — Higher-speed validation (12 → 15 m/s on `highway_65`)**
-Entry criteria met (S2-M1 + S2-M2 + S2-M3 all done). See `docs/ROADMAP.md §Stage 2` for full entry/promotion gates.
+**Phase 2.7b validated.** PP (<10 m/s) + LMPC (10-20 m/s) with map-based curvature preview.
+Highway median 98.1, s-loop 97.1, 0 e-stops.
 
-First step: A/B batch at 12 vs 15 m/s to identify which comfort gates break first.
+**Phase 2.8 planned** — MPC pipeline integration for mixed-speed routes. See `plan.md §2.8`.
+MPC low-speed experiment failed (RMSE 0.63m vs PP 0.21m). Root causes: orchestrator recovery mode interference, missing rate limiter, under-compensated delay. `mpc_sloop.yaml` reverted to `pp_max_speed_mps: 10.0`.
+
+**Workstream C1 COMPLETE (2026-03-09):** Straight latch 36.7% → 15.6%. Root cause was `curve_local_phase_time_start_tight_s: 2.5` (too wide for s_loop lane-poly geometry). Fixed to 1.2s. S2 latch 10.8-11.2%, C1/C3 peaks 0.572-0.612m / 0.566-0.578m. Highway non-regression 98.4/100. All C1 acceptance gates pass.
+
+**Remaining open:** Workstream C2 (PP floor rescue ~1.7m structural) and Phase 2.8 planning.
 
 ---
 
-## Backlog (non-milestone robustness work)
+## Backlog (immediate)
 
 | ID | Task | Rationale |
 |---|---|---|
-| T-031 | Activate and test MPC controller | `control/mpc_controller.py` exists but is unused; potential performance gain over PP |
-| T-032 | Train and validate segmentation model on s_loop data | CV fallback is de facto perception; ML would improve curve accuracy |
-| T-033 | Automated A/B regression in CI | Prevent parameter regressions on every config change |
+| T-031 | ~~Activate and test MPC controller~~ | ✅ Done — Phase 2 MPC (2.1-2.7b) |
+| T-033 | Automated A/B regression in CI | Prevent parameter regressions on every config change (Roadmap Step 2) |
+
+## Forward Roadmap (see `docs/ROADMAP.md §Capability Roadmap`)
+
+| Step | Capability | Status |
+|---|---|---|
+| — | PP turn-entry C1 fix (time_start 2.5→1.2s) | **✅ Done (2026-03-09)** |
+| — | PP turn-entry C2 (floor rescue ~1.7m structural) | Next |
+| — | Phase 2.8 MPC pipeline integration (plan.md §2.8) | Planned |
+| 1 | Track coverage expansion (S2-M5) | Next |
+| 2 | Automated A/B CI regression (T-033) | Pending |
+| 3 | Grade and banking | Pending |
+| 4 | NMPC + full hierarchical hybrid (plan.md §2.7-2.8) | Pending |
+| 5 | Lead vehicle following / ACC | Pending |
+| 6 | Multi-lane perception + map | Pending |
+| 7 | Lane change planning + execution | Pending |
+| 8 | Prediction (other vehicle trajectories) | Pending |
+| 9 | Intersection handling | Pending |
+| 10 | End-to-end robustness + regression | Pending |
 
 ---
 

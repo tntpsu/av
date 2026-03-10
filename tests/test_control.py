@@ -1176,8 +1176,14 @@ def test_curve_phase_scheduler_telemetry_passthrough_from_reference_point():
         'curve_phase_term_rise': 0.37,
         'curve_phase_curvature_rise_abs': 0.0019,
         'reference_lookahead_target': 10.4,
+        'reference_lookahead_target_pre_entry_guard': 10.1,
         'reference_lookahead_after_slew': 9.9,
         'reference_lookahead_active': 9.9,
+        'reference_lookahead_owner_mode': 'phase_active',
+        'reference_lookahead_entry_weight_source': 'curve_local_phase',
+        'reference_lookahead_fallback_active': False,
+        'reference_lookahead_entry_shorten_guard_active': True,
+        'reference_lookahead_entry_shorten_guard_delta_m': 0.35,
     }
     m = controller.compute_steering(
         current_heading=0.0,
@@ -1198,8 +1204,14 @@ def test_curve_phase_scheduler_telemetry_passthrough_from_reference_point():
     assert m['curve_phase_term_rise'] == pytest.approx(0.37, rel=1e-6)
     assert m['curve_phase_curvature_rise_abs'] == pytest.approx(0.0019, rel=1e-6)
     assert m['reference_lookahead_target'] == pytest.approx(10.4, rel=1e-6)
+    assert m['reference_lookahead_target_pre_entry_guard'] == pytest.approx(10.1, rel=1e-6)
     assert m['reference_lookahead_after_slew'] == pytest.approx(9.9, rel=1e-6)
     assert m['reference_lookahead_active'] == pytest.approx(9.9, rel=1e-6)
+    assert m['reference_lookahead_owner_mode'] == 'phase_active'
+    assert m['reference_lookahead_entry_weight_source'] == 'curve_local_phase'
+    assert m['reference_lookahead_fallback_active'] is False
+    assert m['reference_lookahead_entry_shorten_guard_active'] is True
+    assert m['reference_lookahead_entry_shorten_guard_delta_m'] == pytest.approx(0.35, rel=1e-6)
 
 
 def test_curve_intent_single_owner_state_drives_curve_flags():
@@ -1429,6 +1441,121 @@ def test_curve_intent_distance_gate_rearms_far_commit():
     assert str(m['curve_intent_state']).upper() == 'REARM'
     assert m['curve_upcoming'] is False
     assert m['curve_intent_rearm_cooldown_active'] is True
+
+
+def test_curve_local_state_drives_single_owner_without_zero_threshold_self_arm():
+    controller = LateralController(
+        kp=1.0,
+        kd=0.2,
+        curve_intent_single_owner_mode=True,
+        curve_intent_arm_preview_min=0.0,
+        curve_intent_arm_rise_min=0.0,
+        curve_phase_use_distance_track=False,
+        curve_phase_use_preview_curvature=False,
+    )
+    meta = controller.compute_steering(
+        current_heading=0.0,
+        reference_point={
+            'x': 0.0,
+            'y': 6.0,
+            'heading': 0.0,
+            'velocity': 6.0,
+            'curvature': 0.0,
+            'curve_intent': 0.0,
+            'curve_intent_state': 'STRAIGHT',
+            'curve_local_phase': 0.0,
+            'curve_local_state': 'STRAIGHT',
+            'curve_preview_far_upcoming': True,
+            'distance_to_curve_start_m': 20.0,
+            'reference_lookahead_local_gate_weight': 0.0,
+        },
+        current_speed=6.0,
+        dt=0.033,
+        return_metadata=True,
+    )
+    assert meta['curve_upcoming'] is False
+    assert str(meta['curve_local_state']).upper() == 'STRAIGHT'
+    assert meta['curve_local_distance_ready'] is False
+
+
+def test_curve_local_state_passthrough_fields_present():
+    controller = LateralController(
+        kp=1.0,
+        kd=0.2,
+        curve_intent_single_owner_mode=True,
+        curve_phase_use_distance_track=False,
+        curve_phase_use_preview_curvature=False,
+    )
+    meta = controller.compute_steering(
+        current_heading=0.0,
+        reference_point={
+            'x': 0.0,
+            'y': 6.0,
+            'heading': 0.0,
+            'velocity': 6.0,
+            'curvature': 0.02,
+            'curve_intent': 0.8,
+            'curve_intent_state': 'COMMIT',
+            'curve_local_phase': 0.8,
+            'curve_local_phase_raw': 0.9,
+            'curve_local_state': 'COMMIT',
+            'curve_local_phase_source': 'local_preview',
+            'curve_local_entry_driver': 'distance',
+            'curve_local_entry_severity': 0.83,
+            'curve_local_entry_on_effective': 0.40,
+            'curve_local_phase_distance_start_effective_m': 10.0,
+            'curve_local_phase_time_start_effective_s': 1.6,
+            'curve_local_arm_ready': True,
+            'curve_local_time_ready': False,
+            'curve_local_in_curve_now': False,
+            'curve_local_commit_ready': True,
+            'curve_local_commit_driver': 'distance',
+            'curve_local_arm_phase_raw': 0.42,
+            'curve_local_sustain_phase_raw': 0.86,
+            'curve_local_path_sustain_active': True,
+            'curve_preview_far_upcoming': True,
+            'curve_preview_far_phase': 0.88,
+            'curve_phase_term_time': 0.77,
+            'distance_to_curve_start_m': 1.0,
+            'time_to_next_curve_start_s': 0.42,
+            'reference_lookahead_local_gate_weight': 1.0,
+            'reference_lookahead_owner_mode': 'phase_active',
+            'reference_lookahead_entry_weight_source': 'curve_local_phase',
+            'reference_lookahead_fallback_active': False,
+            'curve_local_reentry_ready': True,
+            'curve_local_time_horizon_s': 1.6,
+        },
+        current_speed=6.0,
+        dt=0.033,
+        return_metadata=True,
+    )
+    assert meta['curve_preview_far_upcoming'] is True
+    assert float(meta['curve_preview_far_phase']) == pytest.approx(0.88, rel=1e-6)
+    assert float(meta['curve_phase_term_time']) == pytest.approx(0.77, rel=1e-6)
+    assert float(meta['curve_local_phase']) == pytest.approx(0.8, rel=1e-6)
+    assert str(meta['curve_local_state']).upper() == 'COMMIT'
+    assert str(meta['curve_local_phase_source']) == 'local_preview'
+    assert str(meta['curve_local_entry_driver']) == 'distance'
+    assert float(meta['curve_local_entry_severity']) == pytest.approx(0.83, rel=1e-6)
+    assert float(meta['curve_local_entry_on_effective']) == pytest.approx(0.40, rel=1e-6)
+    assert float(meta['curve_local_phase_distance_start_effective_m']) == pytest.approx(10.0, rel=1e-6)
+    assert float(meta['curve_local_phase_time_start_effective_s']) == pytest.approx(1.6, rel=1e-6)
+    assert meta['curve_local_arm_ready'] is True
+    assert meta['curve_local_time_ready'] is False
+    assert meta['curve_local_in_curve_now'] is False
+    assert meta['curve_local_commit_ready'] is True
+    assert str(meta['curve_local_commit_driver']) == 'distance'
+    assert float(meta['curve_local_arm_phase_raw']) == pytest.approx(0.42, rel=1e-6)
+    assert float(meta['curve_local_sustain_phase_raw']) == pytest.approx(0.86, rel=1e-6)
+    assert meta['curve_local_path_sustain_active'] is True
+    assert meta['curve_local_reentry_ready'] is True
+    assert meta['curve_local_distance_ready'] is True
+    assert 'curve_local_commit_streak_frames' in meta
+    assert float(meta['curve_local_time_horizon_s']) == pytest.approx(1.6, rel=1e-6)
+    assert float(meta['time_to_next_curve_start_s']) == pytest.approx(0.42, rel=1e-6)
+    assert meta['reference_lookahead_owner_mode'] == 'phase_active'
+    assert meta['reference_lookahead_entry_weight_source'] == 'curve_local_phase'
+    assert meta['reference_lookahead_fallback_active'] is False
 
 
 def test_curve_intent_force_straight_decay_holds_state():
@@ -2699,6 +2826,65 @@ def test_pure_pursuit_metadata_fields():
         assert field in meta, f"Missing PP telemetry field: {field}"
     assert meta['control_mode'] == 'pure_pursuit'
     assert meta['pp_pipeline_bypass_active'] > 0.5
+
+
+def test_pure_pursuit_curve_local_floor_prevents_lookahead_collapse():
+    ctrl = _make_pp_controller(
+        pp_curve_local_lookahead_floor_enabled=True,
+        pp_curve_local_lookahead_floor_speed_table=[
+            {'speed_mps': 0.0, 'lookahead_m': 4.5},
+            {'speed_mps': 8.0, 'lookahead_m': 4.5},
+        ],
+        pp_curve_local_shorten_slew_m_per_frame=0.25,
+        pp_curve_local_floor_state_min='ENTRY',
+    )
+    meta = ctrl.compute_steering(
+        0.0,
+        {
+            **_pp_ref(0.2, 3.0),
+            'curve_local_state': 'ENTRY',
+            'curve_local_phase': 0.6,
+            'curve_preview_far_upcoming': True,
+            'distance_to_curve_start_m': 2.0,
+        },
+        current_speed=6.0,
+        dt=0.033,
+        return_metadata=True,
+    )
+    assert meta['pp_curve_local_floor_active'] > 0.5
+    assert meta['pp_curve_local_floor_m'] == pytest.approx(4.5, rel=1e-6)
+    assert meta['pp_curve_local_lookahead_pre_floor'] < meta['pp_curve_local_lookahead_post_floor']
+    assert meta['pp_lookahead_distance'] == pytest.approx(meta['pp_curve_local_lookahead_post_floor'], rel=1e-6)
+
+
+def test_pure_pursuit_curve_local_floor_commit_only_skips_entry_state() -> None:
+    ctrl = _make_pp_controller(
+        pp_curve_local_lookahead_floor_enabled=True,
+        pp_curve_local_lookahead_floor_speed_table=[
+            {'speed_mps': 0.0, 'lookahead_m': 4.5},
+            {'speed_mps': 8.0, 'lookahead_m': 4.5},
+        ],
+        pp_curve_local_shorten_slew_m_per_frame=0.25,
+        pp_curve_local_floor_state_min='COMMIT',
+    )
+    meta = ctrl.compute_steering(
+        0.0,
+        {
+            **_pp_ref(0.2, 3.0),
+            'curve_local_state': 'ENTRY',
+            'curve_local_phase': 0.6,
+            'curve_preview_far_upcoming': True,
+            'distance_to_curve_start_m': 2.0,
+        },
+        current_speed=6.0,
+        dt=0.033,
+        return_metadata=True,
+    )
+    assert meta['pp_curve_local_floor_active'] < 0.5
+    assert meta['pp_curve_local_floor_m'] == pytest.approx(0.0, rel=1e-6)
+    assert meta['pp_curve_local_lookahead_post_floor'] == pytest.approx(
+        meta['pp_curve_local_lookahead_pre_floor'], rel=1e-6
+    )
 
 
 def test_pure_pursuit_pipeline_no_phase_lag():

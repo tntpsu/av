@@ -1,7 +1,7 @@
 # Robust Full-Stack Roadmap (Unified, Layered, and Gated)
 
-**Last Updated:** 2026-02-23
-**Current Focus:** Layer 2, Stage 2 (Robustness & Speed Expansion) — stack hardening before capability expansion
+**Last Updated:** 2026-03-04
+**Current Focus:** Layer 2, Stage 2 (Robustness & Speed Expansion) — Phase 2.7b validated (MPC + curvature preview)
 **Change-Control Rule:** If scope, stage, phase status, or promotion gates change, update this roadmap in the same PR/commit before considering work complete.
 
 ## Scope
@@ -20,7 +20,9 @@ This combines:
 - ~~Layer 2 Stage 1: First-Turn Entry Reliability~~ **(done — S1-M39, scores 95–96/100)**
 - ~~Layer 2 Stage 1 tooling: Stack Isolation~~ **(done — S1-M40)**
 - **Layer 2 Stage 2: Robustness, Infrastructure & Speed Expansion** ← **current**
-- Phase 3+: behavior/actors/multi-lane/urban/robustness (**pending Stage 2 completion**)
+  - S2-M1 ✓, S2-M2 ✓, S2-M3 ✓, S2-M4 → Phase 2 MPC (2.1-2.7b all ✓)
+  - Phase 2 MPC: PP (<10 m/s) + LMPC (10-20 m/s) with curvature preview, highway median 98.1
+- Phase 3+: behavior/actors/multi-lane/urban/robustness (**see Capability Roadmap below**)
 
 ## Global Promotion Gates (Apply at Every Stage)
 - **Safety:** no uncontained failures (track safety envelope and emergency-stop reason).
@@ -49,14 +51,16 @@ This combines:
 ## Layer 2: Lane-Keeping Execution Ladder (Current Working Order)
 This is the practical de-risk sequence for implementation and testing.
 
-### Stage 1: First-Turn Entry Reliability (Current Focus)
+### Stage 1: First-Turn Entry Reliability (Historical Complete Stage)
 **Goal:** clear first turn without centerline crossing, out-of-bounds, or comfort breach.
+
+This stage is complete and retained for traceability. The active program focus is the Stage 2 / `S2-M5` work called out at the top of this document.
 
 **Canonical validation policy (active)**
 - Stage 1 promotion/tuning gates use canonical start only: `start_t=0.0`.
 - Non-canonical starts are exploratory and are not used for Stage 1 promotion decisions unless explicitly requested.
 
-**Current micro-steps (tracked and gated)**
+**Historical micro-steps (tracked and gated)**
 - `S1-M1` (done): add bounded low-visibility fallback controls in perception path:
   - `perception.low_visibility_fallback_blend_alpha`
   - `perception.low_visibility_fallback_max_consecutive_frames`
@@ -437,6 +441,166 @@ These are the long-term product capabilities layered on top of the ladder above.
 - Stress: noise + latency + grade.
 - <=10% degradation in core metrics.
 - No new failure modes.
+
+---
+
+## Capability Roadmap — Next 10 Steps (2026-03-04)
+
+Ordered sequence of major capability additions. Each step builds on the previous.
+Steps 1-4 harden the existing foundation. Steps 5-7 add core driving capabilities.
+Steps 8-10 add intelligence and robustness.
+
+**Current state:** PP (s-loop, <10 m/s) + Linear MPC (highway, 10-20 m/s) with
+map-based curvature preview. Two tracks validated. No actors. Single lane.
+GT lane center serves as our HD map signal (same role as pre-built HD maps in real AV stacks).
+
+### Step 1 — Track Coverage Expansion (S2-M5)
+
+**Goal:** Prove the control architecture generalizes beyond s_loop and highway_65.
+
+**What to build:**
+- 2-3 new track profiles: tight hairpin (r < 15m), mixed-radius course, long sweeping highway
+- Validate all comfort gates on each track (3x runs)
+- May require comfort governor tuning for extreme curvatures
+
+**Entry:** Phase 2.7b validated (done)
+**Gate:** Lateral RMSE ≤ 0.40m, 0 e-stops, all comfort gates on every new track (3x runs)
+**Unlocks:** Confidence that control works on diverse geometry, not just tuned tracks
+
+### Step 2 — Automated A/B CI Regression (T-033)
+
+**Goal:** Prevent parameter regressions automatically on every config or code change.
+
+**What to build:**
+- CI pipeline that runs comfort gate tests on committed recordings
+- Automated A/B comparison: any config change must not regress scores by > 2 points
+- Gate report as CI artifact (pass/fail + metric deltas)
+
+**Entry:** Step 1 done (need multiple track recordings in the gate set)
+**Gate:** CI runs green on all track recordings; blocks merge on regression
+**Unlocks:** Safe iteration speed for all future steps — every change is automatically validated
+
+### Step 3 — Grade and Banking
+
+**Goal:** Add elevation effects to the dynamics model and simulation.
+
+**What to build:**
+- Pitch/roll in Unity vehicle state output
+- Gravity component in MPC dynamics (longitudinal: `a_eff = a - g·sin(pitch)`)
+- Lateral load transfer on banked turns (effective gravity changes)
+- Banked and graded track profiles
+- Validate comfort gates hold on graded tracks
+
+**Entry:** Step 2 done (CI catches regressions from dynamics changes)
+**Gate:** All comfort gates pass on graded + banked tracks (3x runs each)
+**Unlocks:** More realistic simulation, validates MPC dynamics model is extensible
+
+### Step 4 — NMPC + Full Hierarchical Hybrid (plan.md §2.7-2.8)
+
+**Goal:** Extend control to >20 m/s and mixed-speed routes (highway ramp → highway → off-ramp).
+
+**What to build:**
+- `control/nmpc_controller.py` — CasADi + IPOPT nonlinear MPC
+  - Full nonlinear bicycle dynamics (no small-angle approximation)
+  - `sin()`/`tan()` in dynamics, automatic Jacobian/Hessian via CasADi
+  - Handles `|e_heading| > 0.25 rad` where LMPC linearization breaks
+- Extend `RegimeSelector` for 3-regime operation (PP → LMPC → NMPC)
+- Mid-curve transition suppression
+- Warm-start handoff between LMPC and NMPC
+- Speed regime: PP (<10 m/s) → blend → LMPC (10-20 m/s) → blend → NMPC (>20 m/s)
+
+**Entry:** LMPC passes on all tracks from Steps 1+3 (prove linear MPC is insufficient before adding complexity)
+**Gate:** Mixed-speed route (ramp + highway + local) completes with 0 e-stops, score ≥ 90
+**Unlocks:** Full speed envelope coverage, enables highway on/off-ramp scenarios
+
+### Step 5 — Lead Vehicle Following / ACC
+
+**Goal:** First actor interaction — react to a vehicle ahead in the same lane.
+
+**What to build:**
+- IDM (Intelligent Driver Model) or time-gap ACC for desired speed computation
+- Lead vehicle detection (start with GT position from Unity, extend to perception later)
+- Speed planner consumes lead-vehicle desired speed as additional constraint
+- Scenarios: constant lead speed, lead deceleration, stop-and-go
+
+**Entry:** Step 2 done (CI prevents lateral regressions while adding longitudinal behavior)
+**Gate:** No collision, min time-gap ≥ 1.5s, jerk P95 ≤ 6.0 m/s³, speed RMSE ≤ 2.0 m/s vs desired
+**Unlocks:** Longitudinal planning that reacts to the world, not just the road
+
+### Step 6 — Multi-Lane Perception + Map
+
+**Goal:** See and represent multiple lanes (still stay in ego lane).
+
+**What to build:**
+- Extend segmentation model to detect lane boundaries (not just center)
+- Lane-level map representation (lane count, lane ID, adjacency graph)
+- Per-frame output: ego lane geometry + neighbor lane geometry
+- Adjacent lane occupancy awareness (which lanes have vehicles)
+
+**Entry:** Step 5 done (actor awareness infrastructure exists)
+**Gate:** Lane detection accuracy ≥ 95% on multi-lane tracks, no regression on single-lane tracks
+**Unlocks:** Foundation for lane change decisions
+
+### Step 7 — Lane Change Planning + Execution
+
+**Goal:** First lateral decision-making — change lanes to pass or merge.
+
+**What to build:**
+- Gap acceptance logic (is there safe space in the target lane?)
+- Lateral trajectory generation (quintic polynomial or spline path)
+- MPC tracks lane-change trajectory (this is where MPC excels over PP)
+- Safety validation: collision-free trajectory check before committing
+- Scenarios: free lane change, merge with traffic, abort on closing gap
+
+**Entry:** Steps 5 + 6 done (need actor awareness + multi-lane perception)
+**Gate:** Lane change success ≥ 95%, no collision, lateral jerk P95 ≤ 6.0, time-in-target-lane ≥ 95%
+**Unlocks:** Highway driving that isn't stuck behind slow vehicles
+
+### Step 8 — Prediction (Other Vehicle Trajectories)
+
+**Goal:** Anticipate what other vehicles will do over the next 2-5 seconds.
+
+**What to build:**
+- Constant-velocity prediction baseline (trivial but useful)
+- Lane-following prediction (vehicles follow their detected lane)
+- Interaction-aware prediction (vehicles react to ego behavior)
+- Eventually: learned prediction models if sufficient data collected
+
+**Entry:** Step 7 done (lane changes need prediction for safe gap acceptance)
+**Gate:** Prediction horizon ≥ 3s, ADE ≤ 1.0m at 2s, lane change safety improves with prediction
+**Unlocks:** Proactive rather than reactive behavior, safer multi-agent interactions
+
+### Step 9 — Intersection Handling
+
+**Goal:** Navigate stop lines, traffic signals, and turn policies.
+
+**What to build:**
+- Traffic signal state ingestion from Unity
+- Stop-line detection and smooth braking approach
+- Protected turns first (green arrow = go)
+- Unprotected turns (yield to oncoming traffic)
+- Turn trajectory planning through intersections
+
+**Entry:** Steps 5 + 8 done (need actor awareness + prediction for yield decisions)
+**Gate:** Stop-line compliance ≥ 98%, red-light violations = 0, jerk P95 ≤ 6.0 m/s³
+**Unlocks:** Urban driving capability — stack goes from "highway lane-keeper" to "city navigator"
+
+### Step 10 — End-to-End Robustness + Regression
+
+**Goal:** Prove everything works together under stress and perturbation.
+
+**What to build:**
+- Noise injection on perception (Gaussian blur, dropout, latency spikes)
+- Wind/grade perturbation on dynamics
+- Combined scenario matrices (lane change during lead-vehicle braking on a banked curve)
+- Full regression suite covering all prior scenarios
+- Performance budgets per component (perception < 5ms, control < 2ms, etc.)
+
+**Entry:** Steps 1-9 done
+**Gate:** ≤ 10% degradation in core metrics under stress, no new failure modes, full suite green
+**Unlocks:** Confidence the system is robust, not just demo-able
+
+---
 
 ## Artifacts and Ownership (Rolling)
 - Phase reports and gate results stored under `tmp/analysis/`.

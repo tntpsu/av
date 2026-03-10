@@ -20,6 +20,8 @@ from trajectory.utils import (
     compute_curve_anticipation_score, compute_dynamic_effective_horizon,
     apply_speed_horizon_guardrail, curvature_smoothing_alpha,
     resolve_curve_scheduler_mode, select_curvature_bin_limits,
+    build_local_curve_reference, LOCAL_CURVE_REFERENCE_MODE_ACTIVE,
+    LOCAL_CURVE_REFERENCE_MODE_BOUNDED,
 )
 from control.pid_controller import VehicleController
 from control.speed_governor import build_speed_governor, SpeedGovernorOutput
@@ -754,6 +756,18 @@ class AVStack:
             pp_stale_decay=lateral_cfg.get('pp_stale_decay', 0.98),
             pp_max_steering_rate=lateral_cfg.get('pp_max_steering_rate', 0.4),
             pp_max_steering_jerk=lateral_cfg.get('pp_max_steering_jerk', 30.0),
+            pp_curve_local_lookahead_floor_enabled=bool(
+                lateral_cfg.get('pp_curve_local_lookahead_floor_enabled', False)
+            ),
+            pp_curve_local_lookahead_floor_speed_table=lateral_cfg.get(
+                'pp_curve_local_lookahead_floor_speed_table', []
+            ),
+            pp_curve_local_shorten_slew_m_per_frame=float(
+                lateral_cfg.get('pp_curve_local_shorten_slew_m_per_frame', 0.0)
+            ),
+            pp_curve_local_floor_state_min=lateral_cfg.get(
+                'pp_curve_local_floor_state_min', 'ENTRY'
+            ),
             feedback_gain_min=lateral_cfg.get('feedback_gain_min', 1.0),
             feedback_gain_max=lateral_cfg.get('feedback_gain_max', 1.2),
             feedback_gain_curvature_min=lateral_cfg.get('feedback_gain_curvature_min', 0.002),
@@ -1388,10 +1402,12 @@ class AVStack:
         track mode can supply distance-to-curve when explicitly configured.
         """
         preview_curvature_abs = abs(float(path_curvature))
+        preview_curvature_signed = float(path_curvature)
         path_curvature_abs = abs(float(path_curvature))
         preview_source = "path_curvature"
         distance_to_curve_start_m = None
         time_to_curve_s = None
+        current_curve_progress_ratio = None
         preview_confidence = np.nan
         curvature_horizon_signed = None
         curvature_horizon_distances = None
@@ -1466,6 +1482,7 @@ class AVStack:
                     lane_preview_abs = abs(float(lane_preview))
                     if lane_preview_abs > preview_curvature_abs:
                         preview_curvature_abs = lane_preview_abs
+                        preview_curvature_signed = float(lane_preview)
                         preview_source = "lane_preview"
         except Exception:
             pass
@@ -1484,6 +1501,7 @@ class AVStack:
                 else None
             ),
             "preview_curvature_abs": float(preview_curvature_abs),
+            "preview_curvature_signed": float(preview_curvature_signed),
             "path_curvature_abs": float(path_curvature_abs),
             "time_to_curve_s": (
                 float(time_to_curve_s)
@@ -1499,6 +1517,7 @@ class AVStack:
             "in_curve": bool(
                 in_curve_threshold > 0.0 and abs(float(path_curvature)) >= in_curve_threshold
             ),
+            "current_curve_progress_ratio": None,
             "source": preview_source,
             "curvature_horizon_signed": curvature_horizon_signed,
             "curvature_horizon_distances": curvature_horizon_distances,
@@ -1533,18 +1552,32 @@ class AVStack:
 
         if current_curve is not None:
             track_curvature_abs = float(current_curve["curvature_abs"])
+            track_curvature_signed = track_curvature_abs * float(
+                current_curve.get("direction_sign", 1.0) or 1.0
+            )
             if self._reference_entry_source == "track":
                 result["preview_curvature_abs"] = track_curvature_abs
+                result["preview_curvature_signed"] = track_curvature_signed
                 result["source"] = "track"
             else:
                 result["preview_curvature_abs"] = max(
                     float(result["preview_curvature_abs"]),
                     track_curvature_abs,
                 )
+                result["preview_curvature_signed"] = track_curvature_signed
                 result["source"] = f"{preview_source}+track"
             result["distance_to_curve_start_m"] = 0.0
             result["in_curve"] = True
             result["track_distance_m"] = float(distance_m)
+            curve_len_m = max(1e-6, float(current_curve["end_m"]) - float(current_curve["start_m"]))
+            current_curve_progress_ratio = float(
+                np.clip(
+                    (float(distance_m) - float(current_curve["start_m"])) / curve_len_m,
+                    0.0,
+                    1.0,
+                )
+            )
+            result["current_curve_progress_ratio"] = current_curve_progress_ratio
             return result
 
         next_curve = None
@@ -1561,18 +1594,24 @@ class AVStack:
             return result
 
         track_curvature_abs = float(next_curve["curvature_abs"])
+        track_curvature_signed = track_curvature_abs * float(
+            next_curve.get("direction_sign", 1.0) or 1.0
+        )
         if self._reference_entry_source == "track":
             result["preview_curvature_abs"] = track_curvature_abs
+            result["preview_curvature_signed"] = track_curvature_signed
             result["source"] = "track"
         else:
             result["preview_curvature_abs"] = max(
                 float(result["preview_curvature_abs"]),
                 track_curvature_abs,
             )
+            result["preview_curvature_signed"] = track_curvature_signed
             result["source"] = f"{preview_source}+track"
         result["distance_to_curve_start_m"] = float(next_delta)
         result["in_curve"] = False
         result["track_distance_m"] = float(distance_m)
+        result["current_curve_progress_ratio"] = None
         return result
 
     def _update_curve_anticipation_state(self, score_raw: float) -> tuple[float, bool]:
@@ -2347,6 +2386,12 @@ class AVStack:
             preview_curvature_abs=float(preview_curvature_abs),
             path_curvature_abs=abs(float(path_curvature_for_phase)),
             curvature_rise_abs=float(curvature_rise_abs),
+            distance_to_curve_start_m=(
+                float(distance_to_curve_start_m)
+                if isinstance(distance_to_curve_start_m, (int, float))
+                and math.isfinite(float(distance_to_curve_start_m))
+                else None
+            ),
             time_to_curve_s=(
                 float(time_to_curve_s)
                 if isinstance(time_to_curve_s, (int, float))
@@ -2390,7 +2435,22 @@ class AVStack:
             curve_phase_diag = {
                 **curve_phase_diag,
                 "curve_phase": 0.0,
+                "curve_phase_raw": 0.0,
+                "curve_local_phase": 0.0,
+                "curve_local_phase_raw": 0.0,
                 "curve_phase_state": "STRAIGHT",
+                "curve_local_state": "STRAIGHT",
+                "curve_local_gate_weight": 0.0,
+                "curve_local_arm_ready": False,
+                "curve_local_time_ready": False,
+                "curve_local_in_curve_now": False,
+                "curve_local_commit_ready": False,
+                "curve_local_commit_driver": "none",
+                "curve_local_arm_phase_raw": 0.0,
+                "curve_local_sustain_phase_raw": 0.0,
+                "curve_local_path_sustain_active": False,
+                "curve_local_distance_ready": False,
+                "curve_local_reentry_ready": False,
             }
         self._curve_phase_scheduler_state = {
             "curve_phase": float(curve_phase_diag.get("curve_phase", 0.0) or 0.0),
@@ -2416,7 +2476,21 @@ class AVStack:
             anticipation_score=float(self._curve_anticipation_score_filtered),
             anticipation_active=bool(self._curve_anticipation_active),
             curve_scheduler_mode=self._curve_scheduler_mode,
-            curve_phase=float(curve_phase_diag.get("curve_phase", 0.0) or 0.0),
+            curve_phase=float(curve_phase_diag.get("curve_local_phase", curve_phase_diag.get("curve_phase", 0.0)) or 0.0),
+            curve_local_state=str(
+                curve_phase_diag.get("curve_local_state", curve_phase_diag.get("curve_phase_state", "STRAIGHT"))
+                or "STRAIGHT"
+            ),
+            current_curve_progress_ratio=(
+                float(entry_preview.get("current_curve_progress_ratio"))
+                if isinstance(entry_preview.get("current_curve_progress_ratio"), (int, float))
+                and math.isfinite(float(entry_preview.get("current_curve_progress_ratio")))
+                else None
+            ),
+            curve_local_entry_severity=float(
+                curve_phase_diag.get("curve_local_entry_severity", 0.0) or 0.0
+            ),
+            local_gate_weight=float(curve_phase_diag.get("curve_local_gate_weight", 0.0) or 0.0),
             return_diagnostics=True,
         )
         if isinstance(reference_lookahead_result, dict):
@@ -2429,6 +2503,9 @@ class AVStack:
                 "lookahead_after_slew": float(reference_lookahead_result),
                 "curve_scheduler_mode": str(self._curve_scheduler_mode),
                 "curve_phase": float(curve_phase_diag.get("curve_phase", 0.0) or 0.0),
+                "reference_lookahead_owner_mode": str(self._curve_scheduler_mode),
+                "reference_lookahead_entry_weight_source": "unknown",
+                "reference_lookahead_fallback_active": False,
             }
             reference_lookahead = float(reference_lookahead_result)
         self._last_reference_lookahead_diag = dict(reference_lookahead_diag)
@@ -2559,8 +2636,13 @@ class AVStack:
             'speed_limit_preview_long_distance': speed_limit_preview_long_distance,
             'speed_limit_preview_long_min_distance': speed_limit_preview_long_min_distance,
             'preview_curvature_abs': preview_curvature_abs,
+            'preview_curvature_signed': float(
+                entry_preview.get('preview_curvature_signed', current_path_curvature)
+            ),
             'preview_entry_source': preview_entry_source,
             'distance_to_curve_start_m': distance_to_curve_start_m,
+            'time_to_curve_s': time_to_curve_s,
+            'current_curve_progress_ratio': entry_preview.get('current_curve_progress_ratio'),
             'curvature_horizon_signed': self._map_curvature_preview_horizon_signed,
             'curvature_horizon_distances': self._map_curvature_preview_horizon_distances,
             'curve_phase_diag': curve_phase_diag,
@@ -3763,8 +3845,11 @@ class AVStack:
             'current_speed': geo['current_speed'],
             'current_path_curvature': geo['current_path_curvature'],
             'preview_curvature_abs': geo['preview_curvature_abs'],
+            'preview_curvature_signed': geo.get('preview_curvature_signed'),
             'preview_entry_source': geo['preview_entry_source'],
             'distance_to_curve_start_m': geo['distance_to_curve_start_m'],
+            'time_to_curve_s': geo.get('time_to_curve_s'),
+            'current_curve_progress_ratio': geo.get('current_curve_progress_ratio'),
             'curvature_horizon_signed': geo.get('curvature_horizon_signed'),
             'curvature_horizon_distances': geo.get('curvature_horizon_distances'),
             'curve_phase_diag': geo['curve_phase_diag'],
@@ -4326,8 +4411,11 @@ class AVStack:
         reference_lookahead = gated['reference_lookahead']
         dynamic_horizon_diag = gated.get('dynamic_horizon_diag', {})
         preview_curvature_abs = gated['preview_curvature_abs']
+        preview_curvature_signed = gated.get('preview_curvature_signed', preview_curvature_abs)
         preview_entry_source = gated.get('preview_entry_source', 'map_free')
         distance_to_curve_start_m = gated.get('distance_to_curve_start_m')
+        time_to_curve_s = gated.get('time_to_curve_s')
+        current_curve_progress_ratio = gated.get('current_curve_progress_ratio')
         curve_phase_diag = gated['curve_phase_diag']
         curve_intent = gated.get('curve_intent', 0.0)
         curve_intent_raw = gated.get('curve_intent_raw', curve_intent)
@@ -4441,6 +4529,12 @@ class AVStack:
                 if isinstance(distance_to_curve_start_m, (int, float))
                 else None
             )
+            reference_point['current_curve_progress_ratio'] = (
+                float(current_curve_progress_ratio)
+                if isinstance(current_curve_progress_ratio, (int, float))
+                and math.isfinite(float(current_curve_progress_ratio))
+                else None
+            )
             reference_point['curve_scheduler_mode'] = str(
                 reference_lookahead_diag.get("curve_scheduler_mode", self._curve_scheduler_mode)
             )
@@ -4465,7 +4559,79 @@ class AVStack:
             reference_point['curve_phase_term_rise'] = float(
                 curve_phase_diag.get("curve_phase_term_rise", 0.0) or 0.0
             )
+            reference_point['curve_phase_term_time'] = float(
+                curve_phase_diag.get("curve_phase_term_time", 0.0) or 0.0
+            )
             reference_point['curve_phase_curvature_rise_abs'] = float(curvature_rise_abs)
+            reference_point['curve_preview_far_upcoming'] = bool(
+                curve_phase_diag.get("curve_preview_far_upcoming", False)
+            )
+            reference_point['curve_preview_far_phase'] = float(
+                curve_phase_diag.get("curve_preview_far_phase", 0.0) or 0.0
+            )
+            reference_point['curve_local_phase'] = float(
+                curve_phase_diag.get("curve_local_phase", curve_phase_diag.get("curve_phase", 0.0)) or 0.0
+            )
+            reference_point['curve_local_phase_raw'] = float(
+                curve_phase_diag.get("curve_local_phase_raw", curve_phase_diag.get("curve_phase_raw", 0.0)) or 0.0
+            )
+            reference_point['curve_local_state'] = str(
+                curve_phase_diag.get("curve_local_state", curve_phase_diag.get("curve_phase_state", "STRAIGHT")) or "STRAIGHT"
+            )
+            reference_point['curve_local_phase_source'] = str(
+                curve_phase_diag.get("curve_local_phase_source", "distance_time_path_gate") or "distance_time_path_gate"
+            )
+            reference_point['curve_local_entry_driver'] = str(
+                curve_phase_diag.get("curve_local_entry_driver", "none") or "none"
+            )
+            reference_point['curve_local_entry_severity'] = float(
+                curve_phase_diag.get("curve_local_entry_severity", 0.0) or 0.0
+            )
+            reference_point['curve_local_entry_on_effective'] = float(
+                curve_phase_diag.get("curve_local_entry_on_effective", 0.0) or 0.0
+            )
+            reference_point['curve_local_phase_distance_start_effective_m'] = float(
+                curve_phase_diag.get("curve_local_phase_distance_start_effective_m", 0.0) or 0.0
+            )
+            reference_point['curve_local_phase_time_start_effective_s'] = float(
+                curve_phase_diag.get("curve_local_phase_time_start_effective_s", 0.0) or 0.0
+            )
+            reference_point['curve_local_arm_ready'] = bool(
+                curve_phase_diag.get("curve_local_arm_ready", False)
+            )
+            reference_point['curve_local_time_ready'] = bool(
+                curve_phase_diag.get("curve_local_time_ready", False)
+            )
+            reference_point['curve_local_in_curve_now'] = bool(
+                curve_phase_diag.get("curve_local_in_curve_now", False)
+            )
+            reference_point['curve_local_commit_ready'] = bool(
+                curve_phase_diag.get("curve_local_commit_ready", False)
+            )
+            reference_point['curve_local_commit_driver'] = str(
+                curve_phase_diag.get("curve_local_commit_driver", "none") or "none"
+            )
+            reference_point['curve_local_arm_phase_raw'] = float(
+                curve_phase_diag.get("curve_local_arm_phase_raw", 0.0) or 0.0
+            )
+            reference_point['curve_local_sustain_phase_raw'] = float(
+                curve_phase_diag.get("curve_local_sustain_phase_raw", 0.0) or 0.0
+            )
+            reference_point['curve_local_path_sustain_active'] = bool(
+                curve_phase_diag.get("curve_local_path_sustain_active", False)
+            )
+            reference_point['curve_local_distance_ready'] = bool(
+                curve_phase_diag.get("curve_local_distance_ready", False)
+            )
+            reference_point['curve_local_distance_horizon_m'] = float(
+                curve_phase_diag.get("curve_local_distance_horizon_m", 0.0) or 0.0
+            )
+            reference_point['curve_local_time_horizon_s'] = float(
+                curve_phase_diag.get("curve_local_time_horizon_s", 0.0) or 0.0
+            )
+            reference_point['curve_local_reentry_ready'] = bool(
+                curve_phase_diag.get("curve_local_reentry_ready", False)
+            )
             reference_point['curve_intent'] = float(curve_intent)
             reference_point['curve_intent_raw'] = float(curve_intent_raw)
             reference_point['curve_intent_state'] = str(curve_intent_state)
@@ -4490,10 +4656,101 @@ class AVStack:
             reference_point['reference_lookahead_target'] = float(
                 reference_lookahead_diag.get("lookahead_target", reference_lookahead)
             )
+            reference_point['reference_lookahead_target_pre_entry_guard'] = float(
+                reference_lookahead_diag.get(
+                    "reference_lookahead_target_pre_entry_guard",
+                    reference_lookahead_diag.get("lookahead_after_slew", reference_lookahead),
+                )
+                or 0.0
+            )
             reference_point['reference_lookahead_after_slew'] = float(
                 reference_lookahead_diag.get("lookahead_after_slew", reference_lookahead)
             )
             reference_point['reference_lookahead_active'] = float(reference_lookahead)
+            reference_point['reference_lookahead_owner_nominal_target'] = float(
+                reference_lookahead_diag.get(
+                    "reference_lookahead_owner_nominal_target",
+                    reference_lookahead_diag.get("lookahead_target", reference_lookahead),
+                )
+                or 0.0
+            )
+            reference_point['reference_lookahead_owner_commit_band_target'] = float(
+                reference_lookahead_diag.get("reference_lookahead_owner_commit_band_target", 0.0)
+                or 0.0
+            )
+            reference_point['reference_lookahead_owner_entry_progress'] = float(
+                reference_lookahead_diag.get("reference_lookahead_owner_entry_progress", 0.0)
+                or 0.0
+            )
+            reference_point['reference_lookahead_owner_commit_distance_progress'] = float(
+                reference_lookahead_diag.get(
+                    "reference_lookahead_owner_commit_distance_progress",
+                    0.0,
+                )
+                or 0.0
+            )
+            reference_point['reference_lookahead_owner_commit_phase_progress'] = float(
+                reference_lookahead_diag.get(
+                    "reference_lookahead_owner_commit_phase_progress",
+                    0.0,
+                )
+                or 0.0
+            )
+            reference_point['reference_lookahead_owner_commit_progress'] = float(
+                reference_lookahead_diag.get("reference_lookahead_owner_commit_progress", 0.0)
+                or 0.0
+            )
+            reference_point['reference_lookahead_owner_commit_distance_start_effective_m'] = float(
+                reference_lookahead_diag.get(
+                    "reference_lookahead_owner_commit_distance_start_effective_m",
+                    0.0,
+                )
+                or 0.0
+            )
+            reference_point['reference_lookahead_owner_commit_band_clamp_active'] = bool(
+                reference_lookahead_diag.get(
+                    "reference_lookahead_owner_commit_band_clamp_active",
+                    False,
+                )
+            )
+            reference_point['reference_lookahead_owner_commit_band_clamp_delta_m'] = float(
+                reference_lookahead_diag.get(
+                    "reference_lookahead_owner_commit_band_clamp_delta_m",
+                    0.0,
+                )
+                or 0.0
+            )
+            reference_point['reference_lookahead_local_gate_weight'] = float(
+                reference_lookahead_diag.get(
+                    "reference_lookahead_local_gate_weight",
+                    curve_phase_diag.get("curve_local_gate_weight", 0.0),
+                )
+                or 0.0
+            )
+            reference_point['reference_lookahead_owner_mode'] = str(
+                reference_lookahead_diag.get("reference_lookahead_owner_mode", self._curve_scheduler_mode)
+                or self._curve_scheduler_mode
+            )
+            reference_point['reference_lookahead_entry_weight_source'] = str(
+                reference_lookahead_diag.get("reference_lookahead_entry_weight_source", "unknown")
+                or "unknown"
+            )
+            reference_point['reference_lookahead_fallback_active'] = bool(
+                reference_lookahead_diag.get("reference_lookahead_fallback_active", False)
+            )
+            reference_point['reference_lookahead_entry_shorten_guard_active'] = bool(
+                reference_lookahead_diag.get("reference_lookahead_entry_shorten_guard_active", False)
+            )
+            reference_point['reference_lookahead_entry_shorten_guard_delta_m'] = float(
+                reference_lookahead_diag.get("reference_lookahead_entry_shorten_guard_delta_m", 0.0)
+                or 0.0
+            )
+            reference_point['time_to_next_curve_start_s'] = (
+                float(time_to_curve_s)
+                if isinstance(time_to_curve_s, (int, float))
+                and math.isfinite(float(time_to_curve_s))
+                else None
+            )
 
         if trajectory_source_active == 'oracle':
             oracle_ref = self._build_oracle_reference_point(
@@ -4548,6 +4805,123 @@ class AVStack:
                     reference_point['method'] = 'vehicle_frame_lookahead'
                 except (TypeError, ValueError):
                     pass
+
+        if reference_point is not None:
+            local_curve_progress_ratio = reference_point.get("current_curve_progress_ratio")
+            if not (
+                isinstance(local_curve_progress_ratio, (int, float))
+                and math.isfinite(float(local_curve_progress_ratio))
+            ):
+                local_curve_progress_ratio = None
+            local_curve_reference = build_local_curve_reference(
+                current_speed_mps=(
+                    float(current_speed)
+                    if isinstance(current_speed, (int, float)) and math.isfinite(float(current_speed))
+                    else float(reference_point.get("velocity", 0.0) or 0.0)
+                ),
+                curve_local_state=str(
+                    reference_point.get(
+                        "curve_local_state",
+                        curve_phase_diag.get("curve_local_state", "STRAIGHT"),
+                    )
+                    or "STRAIGHT"
+                ),
+                curve_local_phase=float(
+                    reference_point.get(
+                        "curve_local_phase",
+                        curve_phase_diag.get("curve_local_phase", 0.0),
+                    )
+                    or 0.0
+                ),
+                curve_local_entry_severity=float(
+                    reference_point.get(
+                        "curve_local_entry_severity",
+                        curve_phase_diag.get("curve_local_entry_severity", 0.0),
+                    )
+                    or 0.0
+                ),
+                distance_to_curve_start_m=(
+                    float(distance_to_curve_start_m)
+                    if isinstance(distance_to_curve_start_m, (int, float))
+                    and math.isfinite(float(distance_to_curve_start_m))
+                    else None
+                ),
+                current_curve_progress_ratio=local_curve_progress_ratio,
+                road_curvature_abs=(
+                    float(curvature_primary_abs)
+                    if isinstance(curvature_primary_abs, (int, float))
+                    and math.isfinite(float(curvature_primary_abs))
+                    else None
+                ),
+                road_curvature_signed=(
+                    float(current_path_curvature)
+                    if isinstance(current_path_curvature, (int, float))
+                    and math.isfinite(float(current_path_curvature))
+                    else None
+                ),
+                preview_curvature_abs=(
+                    float(preview_curvature_abs)
+                    if isinstance(preview_curvature_abs, (int, float))
+                    and math.isfinite(float(preview_curvature_abs))
+                    else None
+                ),
+                preview_curvature_signed=(
+                    float(preview_curvature_signed)
+                    if isinstance(preview_curvature_signed, (int, float))
+                    and math.isfinite(float(preview_curvature_signed))
+                    else None
+                ),
+                base_reference_point=reference_point,
+                config=self.trajectory_config,
+            )
+            for key, value in local_curve_reference.items():
+                reference_point[key] = value
+            lcr_mode_effective = str(
+                local_curve_reference.get("local_curve_reference_mode", "off") or "off"
+            )
+            if (
+                lcr_mode_effective
+                in {LOCAL_CURVE_REFERENCE_MODE_ACTIVE, LOCAL_CURVE_REFERENCE_MODE_BOUNDED}
+                and bool(local_curve_reference.get("local_curve_reference_valid", False))
+                and bool(local_curve_reference.get("local_curve_reference_active", False))
+                and not bool(local_curve_reference.get("local_curve_reference_fallback_active", False))
+            ):
+                reference_point["local_curve_reference_base_x"] = float(reference_point.get("x", 0.0) or 0.0)
+                reference_point["local_curve_reference_base_y"] = float(reference_point.get("y", 0.0) or 0.0)
+                reference_point["local_curve_reference_base_heading"] = float(
+                    reference_point.get("heading", 0.0) or 0.0
+                )
+                reference_point["x"] = float(
+                    local_curve_reference.get("local_curve_reference_target_x", reference_point["x"])
+                    or reference_point["x"]
+                )
+                reference_point["y"] = float(
+                    local_curve_reference.get("local_curve_reference_target_y", reference_point["y"])
+                    or reference_point["y"]
+                )
+                reference_point["heading"] = float(
+                    local_curve_reference.get(
+                        "local_curve_reference_target_heading",
+                        reference_point["heading"],
+                    )
+                    or reference_point["heading"]
+                )
+                blend_weight = float(
+                    local_curve_reference.get("local_curve_reference_blend_weight", 0.0) or 0.0
+                )
+                if lcr_mode_effective == LOCAL_CURVE_REFERENCE_MODE_BOUNDED:
+                    reference_point["local_curve_reference_control_source"] = (
+                        "bounded_local_arc"
+                    )
+                else:
+                    reference_point["local_curve_reference_control_source"] = (
+                        "local_arc"
+                        if blend_weight >= 0.999
+                        else "blended_local_arc"
+                    )
+                reference_point["method"] = "local_curve_reference"
+            else:
+                reference_point["local_curve_reference_control_source"] = "planner"
 
         return {
             'trajectory': trajectory,
@@ -6467,8 +6841,51 @@ class AVStack:
             curve_phase_term_preview=control_command.get('curve_phase_term_preview'),
             curve_phase_term_path=control_command.get('curve_phase_term_path'),
             curve_phase_term_rise=control_command.get('curve_phase_term_rise'),
+            curve_phase_term_time=control_command.get('curve_phase_term_time'),
             curve_phase_curvature_rise_abs=control_command.get(
                 'curve_phase_curvature_rise_abs'
+            ),
+            curve_preview_far_upcoming=control_command.get('curve_preview_far_upcoming'),
+            curve_preview_far_phase=control_command.get('curve_preview_far_phase'),
+            curve_local_phase=control_command.get('curve_local_phase'),
+            curve_local_phase_raw=control_command.get('curve_local_phase_raw'),
+            curve_local_state=control_command.get('curve_local_state'),
+            curve_local_phase_source=control_command.get('curve_local_phase_source'),
+            curve_local_entry_driver=control_command.get('curve_local_entry_driver'),
+            curve_local_entry_severity=control_command.get('curve_local_entry_severity'),
+            curve_local_entry_on_effective=control_command.get('curve_local_entry_on_effective'),
+            curve_local_phase_distance_start_effective_m=control_command.get(
+                'curve_local_phase_distance_start_effective_m'
+            ),
+            curve_local_phase_time_start_effective_s=control_command.get(
+                'curve_local_phase_time_start_effective_s'
+            ),
+            curve_local_arm_ready=control_command.get('curve_local_arm_ready'),
+            curve_local_time_ready=control_command.get('curve_local_time_ready'),
+            curve_local_in_curve_now=control_command.get('curve_local_in_curve_now'),
+            curve_local_commit_ready=control_command.get('curve_local_commit_ready'),
+            curve_local_commit_driver=control_command.get('curve_local_commit_driver'),
+            curve_local_arm_phase_raw=control_command.get('curve_local_arm_phase_raw'),
+            curve_local_sustain_phase_raw=control_command.get(
+                'curve_local_sustain_phase_raw'
+            ),
+            curve_local_path_sustain_active=control_command.get(
+                'curve_local_path_sustain_active'
+            ),
+            curve_local_distance_ready=control_command.get('curve_local_distance_ready'),
+            curve_local_distance_horizon_m=control_command.get(
+                'curve_local_distance_horizon_m'
+            ),
+            curve_local_time_horizon_s=control_command.get('curve_local_time_horizon_s'),
+            curve_local_reentry_ready=control_command.get('curve_local_reentry_ready'),
+            curve_local_rearm_cooldown_active=control_command.get(
+                'curve_local_rearm_cooldown_active'
+            ),
+            curve_local_force_straight_active=control_command.get(
+                'curve_local_force_straight_active'
+            ),
+            curve_local_commit_streak_frames=control_command.get(
+                'curve_local_commit_streak_frames'
             ),
             curve_intent=control_command.get('curve_intent'),
             curve_intent_raw=control_command.get('curve_intent_raw'),
@@ -6477,6 +6894,9 @@ class AVStack:
             curve_intent_term_path=control_command.get('curve_intent_term_path'),
             curve_intent_term_rise=control_command.get('curve_intent_term_rise'),
             curve_intent_confidence=control_command.get('curve_intent_confidence'),
+            curve_intent_watchdog_triggered=control_command.get(
+                'curve_intent_watchdog_triggered'
+            ),
             curve_intent_speed_guardrail_active=control_command.get(
                 'curve_intent_speed_guardrail_active'
             ),
@@ -6510,14 +6930,144 @@ class AVStack:
             reference_lookahead_target=control_command.get(
                 'reference_lookahead_target'
             ),
+            reference_lookahead_target_pre_entry_guard=control_command.get(
+                'reference_lookahead_target_pre_entry_guard'
+            ),
             reference_lookahead_after_slew=control_command.get(
                 'reference_lookahead_after_slew'
             ),
             reference_lookahead_active=control_command.get(
                 'reference_lookahead_active'
             ),
+            reference_lookahead_owner_nominal_target=control_command.get(
+                'reference_lookahead_owner_nominal_target'
+            ),
+            reference_lookahead_owner_commit_band_target=control_command.get(
+                'reference_lookahead_owner_commit_band_target'
+            ),
+            reference_lookahead_owner_entry_progress=control_command.get(
+                'reference_lookahead_owner_entry_progress'
+            ),
+            reference_lookahead_owner_commit_distance_progress=control_command.get(
+                'reference_lookahead_owner_commit_distance_progress'
+            ),
+            reference_lookahead_owner_commit_phase_progress=control_command.get(
+                'reference_lookahead_owner_commit_phase_progress'
+            ),
+            reference_lookahead_owner_commit_progress=control_command.get(
+                'reference_lookahead_owner_commit_progress'
+            ),
+            reference_lookahead_owner_commit_distance_start_effective_m=control_command.get(
+                'reference_lookahead_owner_commit_distance_start_effective_m'
+            ),
+            reference_lookahead_owner_commit_band_clamp_active=control_command.get(
+                'reference_lookahead_owner_commit_band_clamp_active'
+            ),
+            reference_lookahead_owner_commit_band_clamp_delta_m=control_command.get(
+                'reference_lookahead_owner_commit_band_clamp_delta_m'
+            ),
+            reference_lookahead_local_gate_weight=control_command.get(
+                'reference_lookahead_local_gate_weight'
+            ),
+            reference_lookahead_owner_mode=control_command.get(
+                'reference_lookahead_owner_mode'
+            ),
+            reference_lookahead_entry_weight_source=control_command.get(
+                'reference_lookahead_entry_weight_source'
+            ),
+            reference_lookahead_fallback_active=control_command.get(
+                'reference_lookahead_fallback_active'
+            ),
+            reference_lookahead_entry_shorten_guard_active=control_command.get(
+                'reference_lookahead_entry_shorten_guard_active'
+            ),
+            reference_lookahead_entry_shorten_guard_delta_m=control_command.get(
+                'reference_lookahead_entry_shorten_guard_delta_m'
+            ),
+            local_curve_reference_mode=control_command.get(
+                'local_curve_reference_mode'
+            ),
+            local_curve_reference_active=control_command.get(
+                'local_curve_reference_active'
+            ),
+            local_curve_reference_shadow_only=control_command.get(
+                'local_curve_reference_shadow_only'
+            ),
+            local_curve_reference_valid=control_command.get(
+                'local_curve_reference_valid'
+            ),
+            local_curve_reference_source=control_command.get(
+                'local_curve_reference_source'
+            ),
+            local_curve_reference_fallback_active=control_command.get(
+                'local_curve_reference_fallback_active'
+            ),
+            local_curve_reference_fallback_reason=control_command.get(
+                'local_curve_reference_fallback_reason'
+            ),
+            local_curve_reference_blend_weight=control_command.get(
+                'local_curve_reference_blend_weight'
+            ),
+            local_curve_reference_progress_weight=control_command.get(
+                'local_curve_reference_progress_weight'
+            ),
+            local_curve_reference_arc_curvature_abs=control_command.get(
+                'local_curve_reference_arc_curvature_abs'
+            ),
+            local_curve_reference_target_x=control_command.get(
+                'local_curve_reference_target_x'
+            ),
+            local_curve_reference_target_y=control_command.get(
+                'local_curve_reference_target_y'
+            ),
+            local_curve_reference_target_heading=control_command.get(
+                'local_curve_reference_target_heading'
+            ),
+            local_curve_reference_target_distance_m=control_command.get(
+                'local_curve_reference_target_distance_m'
+            ),
+            local_curve_reference_vs_planner_delta_m=control_command.get(
+                'local_curve_reference_vs_planner_delta_m'
+            ),
+            local_curve_reference_raw_delta_m=control_command.get(
+                'local_curve_reference_raw_delta_m'
+            ),
+            local_curve_reference_capped_delta_m=control_command.get(
+                'local_curve_reference_capped_delta_m'
+            ),
+            local_curve_reference_cap_active=control_command.get(
+                'local_curve_reference_cap_active'
+            ),
+            local_curve_reference_curve_direction_sign=control_command.get(
+                'local_curve_reference_curve_direction_sign'
+            ),
+            local_curve_reference_curve_progress_ratio=control_command.get(
+                'local_curve_reference_curve_progress_ratio'
+            ),
+            local_curve_reference_distance_to_curve_start_m=control_command.get(
+                'local_curve_reference_distance_to_curve_start_m'
+            ),
+            pp_curve_local_floor_active=control_command.get(
+                'pp_curve_local_floor_active'
+            ),
+            pp_curve_local_floor_m=control_command.get('pp_curve_local_floor_m'),
+            pp_curve_local_lookahead_pre_floor=control_command.get(
+                'pp_curve_local_lookahead_pre_floor'
+            ),
+            pp_curve_local_lookahead_post_floor=control_command.get(
+                'pp_curve_local_lookahead_post_floor'
+            ),
+            pp_curve_local_shorten_slew_active=control_command.get(
+                'pp_curve_local_shorten_slew_active'
+            ),
+            pp_curve_local_shorten_delta_m=control_command.get(
+                'pp_curve_local_shorten_delta_m'
+            ),
             distance_to_next_curve_start_m=control_command.get(
                 'distance_to_next_curve_start_m'
+            ),
+            time_to_next_curve_start_s=control_command.get(
+                'time_to_next_curve_start_s'
             ),
             is_road_straight=control_command.get('is_road_straight'),
             road_curvature_valid=control_command.get('road_curvature_valid'),

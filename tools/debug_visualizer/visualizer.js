@@ -2068,6 +2068,54 @@ class Visualizer {
                     html += `<tr><td>Curve Curvature Ratio (P50/P95):</td><td style="text-align: right;">${Number(curveIntentDiag.curvature_ratio_p50 ?? 0).toFixed(2)} / ${Number(curveIntentDiag.curvature_ratio_p95 ?? 0).toFixed(2)}</td></tr>`;
                 }
             }
+            const curveLocalContract = summary.curve_local_contract || null;
+            const localArcSummary = summary.local_curve_reference || null;
+            const turnInOwner = summary.turn_in_owner || null;
+            if (curveLocalContract && curveLocalContract.curve_local_contract_available) {
+                const localStraightRate = Number(curveLocalContract.curve_local_active_straight_rate ?? 0);
+                const farStraightRate = Number(curveLocalContract.curve_preview_far_active_straight_rate ?? 0);
+                const earlyCommitCount = Number(curveLocalContract.curve_local_commit_without_distance_ready_count ?? 0);
+                const reentryWithoutGateCount = Number(curveLocalContract.curve_local_reentry_without_gate_count ?? 0);
+                const pingpongCount = Number(curveLocalContract.curve_local_watchdog_pingpong_count ?? 0);
+                const localCommitStreak = Number(curveLocalContract.curve_local_commit_streak_max_frames ?? 0);
+                const floorBreachCount = Number(curveLocalContract.pp_curve_local_floor_breach_count ?? 0);
+                const collapseCount = Number(curveLocalContract.curve_lookahead_collapse_violation_count ?? 0);
+                const localStraightColor = localStraightRate <= 5.0 ? '#4caf50' : localStraightRate <= 10.0 ? '#ffa500' : '#ff6b6b';
+                const earlyCommitColor = earlyCommitCount === 0 ? '#4caf50' : '#ff6b6b';
+                const reentryColor = reentryWithoutGateCount === 0 ? '#4caf50' : '#ff6b6b';
+                const pingpongColor = pingpongCount === 0 ? '#4caf50' : '#ff6b6b';
+                const floorBreachColor = floorBreachCount === 0 ? '#4caf50' : '#ff6b6b';
+                const collapseColor = collapseCount === 0 ? '#4caf50' : '#ff6b6b';
+                html += `<tr><td>Curve Preview Active On Straights:</td><td style="text-align: right;">${farStraightRate.toFixed(1)}%</td></tr>`;
+                html += `<tr><td>Curve Local Active On Straights:</td><td style="text-align: right; color: ${localStraightColor};">${withLimitHint(localStraightRate.toFixed(1) + '%', localStraightColor, '<=5.0%')}</td></tr>`;
+                html += `<tr><td>Curve Local COMMIT Streak (Max):</td><td style="text-align: right;">${localCommitStreak} frames</td></tr>`;
+                html += `<tr><td>Curve Re-entry Without Gate:</td><td style="text-align: right; color: ${reentryColor};">${withLimitHint(String(reentryWithoutGateCount), reentryColor, '=0')}</td></tr>`;
+                html += `<tr><td>Curve Watchdog Ping-Pong:</td><td style="text-align: right; color: ${pingpongColor};">${withLimitHint(String(pingpongCount), pingpongColor, '=0')}</td></tr>`;
+                html += `<tr><td>Curve COMMIT Before Distance-Ready:</td><td style="text-align: right; color: ${earlyCommitColor};">${withLimitHint(String(earlyCommitCount), earlyCommitColor, '=0')}</td></tr>`;
+                html += `<tr><td>PP Local Floor Breaches:</td><td style="text-align: right; color: ${floorBreachColor};">${withLimitHint(String(floorBreachCount), floorBreachColor, '=0')}</td></tr>`;
+                html += `<tr><td>Lookahead Collapse Violations:</td><td style="text-align: right; color: ${collapseColor};">${withLimitHint(String(collapseCount), collapseColor, '=0')}</td></tr>`;
+            }
+            if (turnInOwner && turnInOwner.availability === 'available') {
+                const fallbackRate = Number(turnInOwner.fallback_active_rate ?? 0);
+                const fallbackColor = fallbackRate <= 0.0 ? '#4caf50' : '#ff6b6b';
+                const onsetP50 = Number(turnInOwner.steering_onset_minus_curve_start_frames_p50);
+                const onsetColor = Number.isFinite(onsetP50) && onsetP50 < 0 ? '#4caf50' : '#ff6b6b';
+                html += `<tr><td>Turn-In Owner:</td><td style="text-align: right;">${this.escapeHtml(String(turnInOwner.owner_mode || 'N/A'))}</td></tr>`;
+                html += `<tr><td>Turn-In Source:</td><td style="text-align: right;">${this.escapeHtml(String(turnInOwner.entry_weight_source || 'N/A'))}</td></tr>`;
+                html += `<tr><td>Turn-In Fallback Rate:</td><td style="text-align: right; color: ${fallbackColor};">${withLimitHint(fallbackRate.toFixed(1) + '%', fallbackColor, '=0%')}</td></tr>`;
+                html += `<tr><td>Median Onset vs Curve Start:</td><td style="text-align: right; color: ${onsetColor};">${Number.isFinite(onsetP50) ? withLimitHint(`${onsetP50.toFixed(1)} fr`, onsetColor, '<0 fr') : '-'}</td></tr>`;
+            }
+            if (localArcSummary && localArcSummary.availability === 'available') {
+                const fallbackRate = Number(localArcSummary.fallback_active_rate);
+                const activeRate = Number(localArcSummary.active_rate);
+                const plannerDeltaP50 = Number(localArcSummary.planner_delta_p50_m);
+                const plannerDeltaP95 = Number(localArcSummary.planner_delta_p95_m);
+                const fallbackColor = Number.isFinite(fallbackRate) && fallbackRate <= 5.0 ? '#4caf50' : '#ff6b6b';
+                html += `<tr><td>Local Arc Mode:</td><td style="text-align: right;">${this.escapeHtml(String(localArcSummary.mode || 'N/A'))}</td></tr>`;
+                html += `<tr><td>Local Arc Active Rate:</td><td style="text-align: right;">${Number.isFinite(activeRate) ? activeRate.toFixed(1) + '%' : '-'}</td></tr>`;
+                html += `<tr><td>Local Arc Fallback Rate:</td><td style="text-align: right; color: ${fallbackColor};">${Number.isFinite(fallbackRate) ? withLimitHint(fallbackRate.toFixed(1) + '%', fallbackColor, '<=5.0%') : '-'}</td></tr>`;
+                html += `<tr><td>Local Arc Planner Δ (P50/P95):</td><td style="text-align: right;">${Number.isFinite(plannerDeltaP50) && Number.isFinite(plannerDeltaP95) ? `${plannerDeltaP50.toFixed(2)} / ${plannerDeltaP95.toFixed(2)} m` : '-'}</td></tr>`;
+            }
             if (comfort) {
                 const ctrlAccelG = comfort.acceleration_p95_g ?? null;
                 const ctrlJerkGps = comfort.jerk_p95_gps ?? null;
@@ -2079,6 +2127,185 @@ class Visualizer {
                 html += `<tr><td>Longitudinal Jerk P95 (Outcome):</td><td style="text-align: right; color: ${ctrlJerkColor};">${withLimitHint(ctrlJerkGps !== null ? ctrlJerkGps.toFixed(2) + ' g/s' : '-', ctrlJerkColor, `<=${jerkGateGps.toFixed(2)} g/s`)}</td></tr>`;
             }
             html += '</table></div>';
+
+            if (turnInOwner && turnInOwner.availability === 'available') {
+                const fallbackRate = Number(turnInOwner.fallback_active_rate ?? 0);
+                const fallbackColor = fallbackRate <= 0.0 ? '#4caf50' : '#ff6b6b';
+                const onsetP50 = Number(turnInOwner.steering_onset_minus_curve_start_frames_p50);
+                const onsetColor = Number.isFinite(onsetP50) && onsetP50 < 0 ? '#4caf50' : '#ff6b6b';
+                const commitClampRate = Number(turnInOwner.owner_commit_band_clamp_active_rate);
+                const commitProgressP50 = Number(turnInOwner.owner_commit_progress_p50);
+                html += '<div style="background: #2a2a2a; padding: 1rem; border-radius: 8px; margin-bottom: 1rem;">';
+                html += '<h3 style="margin-top: 0; color: #4a90e2;">Turn-In Owner</h3>';
+                html += '<table style="width:100%; color:#e0e0e0; border-collapse:collapse;">';
+                html += `<tr><td>Owner Mode:</td><td style="text-align:right;">${this.escapeHtml(String(turnInOwner.owner_mode || 'N/A'))}</td></tr>`;
+                html += `<tr><td>Entry-Weight Source:</td><td style="text-align:right;">${this.escapeHtml(String(turnInOwner.entry_weight_source || 'N/A'))}</td></tr>`;
+                html += `<tr><td>Fallback Active Rate:</td><td style="text-align:right; color:${fallbackColor};">${withLimitHint(fallbackRate.toFixed(1) + '%', fallbackColor, '=0%')}</td></tr>`;
+                html += `<tr><td>Arm Without Ready:</td><td style="text-align:right;">${Number(turnInOwner.curve_local_arm_without_ready_count ?? 0)}</td></tr>`;
+                html += `<tr><td>Commit Without Ready:</td><td style="text-align:right;">${Number(turnInOwner.curve_local_commit_without_ready_count ?? 0)}</td></tr>`;
+                html += `<tr><td>Commit Progress (P50):</td><td style="text-align:right;">${Number.isFinite(commitProgressP50) ? commitProgressP50.toFixed(2) : '-'}</td></tr>`;
+                html += `<tr><td>Commit-Band Clamp Rate:</td><td style="text-align:right;">${Number.isFinite(commitClampRate) ? commitClampRate.toFixed(1) + '%' : '-'}</td></tr>`;
+                html += `<tr><td>Median Onset vs Curve Start:</td><td style="text-align:right; color:${onsetColor};">${Number.isFinite(onsetP50) ? withLimitHint(`${onsetP50.toFixed(1)} fr`, onsetColor, '<0 fr') : '-'}</td></tr>`;
+                html += '</table></div>';
+            }
+
+            if (curveLocalContract && curveLocalContract.curve_local_contract_available) {
+                const gateP50 = curveLocalContract.curve_local_gate_weight_straight_p50;
+                const rawP50 = curveLocalContract.curve_local_phase_raw_straight_p50;
+                const farPhaseP50 = curveLocalContract.curve_preview_far_phase_straight_p50;
+                const timeP50 = curveLocalContract.curve_phase_term_time_straight_p50;
+                const reentryReadyRate = curveLocalContract.curve_local_reentry_ready_straight_rate;
+                const reentryLimit = Number(curveLocalContract.limits?.curve_local_reentry_gate_min ?? 0.10);
+                const straightSummarySource = curveLocalContract.straight_summary_source ?? 'proxy';
+                const straightSummaryDelta = curveLocalContract.straight_summary_vs_segment_rate_delta_pct;
+                const gateBad = Number(gateP50 ?? 0) < reentryLimit;
+                const armReadyRate = Number(curveLocalContract.curve_local_arm_ready_straight_rate ?? 0);
+                const commitReadyRate = Number(curveLocalContract.curve_local_commit_ready_straight_rate ?? 0);
+                const pathSustainRate = Number(curveLocalContract.curve_local_path_sustain_active_straight_rate ?? 0);
+                html += '<div style="background: #2a2a2a; padding: 1rem; border-radius: 8px; margin-bottom: 1rem;">';
+                html += '<h3 style="margin-top: 0; color: #4a90e2;">Curve State Root Cause</h3>';
+                html += '<table style="width:100%; color:#e0e0e0; border-collapse:collapse;">';
+                html += `<tr><td>Straight Summary Source:</td><td style="text-align:right;">${this.escapeHtml(String(straightSummarySource))}${Number.isFinite(Number(straightSummaryDelta)) ? ` <span style="color:#888;">(Δ ${Number(straightSummaryDelta).toFixed(2)}%)</span>` : ''}</td></tr>`;
+                html += `<tr><td>Straight Gate Weight (P50):</td><td style="text-align:right; color:${gateBad ? '#ff6b6b' : '#4caf50'};">${withLimitHint(Number.isFinite(Number(gateP50)) ? Number(gateP50).toFixed(2) : '-', gateBad ? '#ff6b6b' : '#4caf50', `>=${reentryLimit.toFixed(2)} to re-enter`)}</td></tr>`;
+                html += `<tr><td>Straight Local Phase Raw (P50):</td><td style="text-align:right;">${Number.isFinite(Number(rawP50)) ? Number(rawP50).toFixed(2) : '-'}</td></tr>`;
+                html += `<tr><td>Straight Arm-Ready Rate:</td><td style="text-align:right;">${Number.isFinite(armReadyRate) ? armReadyRate.toFixed(1) + '%' : '-'}</td></tr>`;
+                html += `<tr><td>Straight Commit-Ready Rate:</td><td style="text-align:right;">${Number.isFinite(commitReadyRate) ? commitReadyRate.toFixed(1) + '%' : '-'}</td></tr>`;
+                html += `<tr><td>Straight Path Sustain Rate:</td><td style="text-align:right;">${Number.isFinite(pathSustainRate) ? pathSustainRate.toFixed(1) + '%' : '-'}</td></tr>`;
+                html += `<tr><td>Straight Far Preview Phase (P50):</td><td style="text-align:right;">${Number.isFinite(Number(farPhaseP50)) ? Number(farPhaseP50).toFixed(2) : '-'}</td></tr>`;
+                html += `<tr><td>Straight Time Term (P50):</td><td style="text-align:right;">${Number.isFinite(Number(timeP50)) ? Number(timeP50).toFixed(2) : '-'}</td></tr>`;
+                html += `<tr><td>Straight Re-entry Ready Rate:</td><td style="text-align:right;">${Number.isFinite(Number(reentryReadyRate)) ? Number(reentryReadyRate).toFixed(1) + '%' : '-'}</td></tr>`;
+                html += `<tr><td>Arm Without Ready:</td><td style="text-align:right; color:${Number(curveLocalContract.curve_local_arm_without_ready_count ?? 0) === 0 ? '#4caf50' : '#ff6b6b'};">${withLimitHint(String(Number(curveLocalContract.curve_local_arm_without_ready_count ?? 0)), Number(curveLocalContract.curve_local_arm_without_ready_count ?? 0) === 0 ? '#4caf50' : '#ff6b6b', '=0')}</td></tr>`;
+                html += `<tr><td>Commit Without Ready:</td><td style="text-align:right; color:${Number(curveLocalContract.curve_local_commit_without_ready_count ?? 0) === 0 ? '#4caf50' : '#ff6b6b'};">${withLimitHint(String(Number(curveLocalContract.curve_local_commit_without_ready_count ?? 0)), Number(curveLocalContract.curve_local_commit_without_ready_count ?? 0) === 0 ? '#4caf50' : '#ff6b6b', '=0')}</td></tr>`;
+                html += `<tr><td>Re-entry Without Gate:</td><td style="text-align:right; color:${Number(curveLocalContract.curve_local_reentry_without_gate_count ?? 0) === 0 ? '#4caf50' : '#ff6b6b'};">${withLimitHint(String(Number(curveLocalContract.curve_local_reentry_without_gate_count ?? 0)), Number(curveLocalContract.curve_local_reentry_without_gate_count ?? 0) === 0 ? '#4caf50' : '#ff6b6b', '=0')}</td></tr>`;
+                html += `<tr><td>Watchdog Ping-Pong:</td><td style="text-align:right; color:${Number(curveLocalContract.curve_local_watchdog_pingpong_count ?? 0) === 0 ? '#4caf50' : '#ff6b6b'};">${withLimitHint(String(Number(curveLocalContract.curve_local_watchdog_pingpong_count ?? 0)), Number(curveLocalContract.curve_local_watchdog_pingpong_count ?? 0) === 0 ? '#4caf50' : '#ff6b6b', '=0')}</td></tr>`;
+                html += '</table></div>';
+            }
+
+            if (localArcSummary && localArcSummary.availability === 'available') {
+                const fallbackRate = Number(localArcSummary.fallback_active_rate);
+                const fallbackLimit = Number(localArcSummary.limits?.fallback_active_rate_max_pct ?? 5.0);
+                const fallbackColor = Number.isFinite(fallbackRate) && fallbackRate <= fallbackLimit ? '#4caf50' : '#ff6b6b';
+                html += '<div style="background: #2a2a2a; padding: 1rem; border-radius: 8px; margin-bottom: 1rem;">';
+                html += '<h3 style="margin-top: 0; color: #4a90e2;">Local Arc Reference</h3>';
+                html += '<table style="width:100%; color:#e0e0e0; border-collapse:collapse;">';
+                html += `<tr><td>Mode:</td><td style="text-align:right;">${this.escapeHtml(String(localArcSummary.mode || 'N/A'))}</td></tr>`;
+                html += `<tr><td>Source Mode:</td><td style="text-align:right;">${this.escapeHtml(String(localArcSummary.source_mode || 'N/A'))}</td></tr>`;
+                html += `<tr><td>Fallback Reason Mode:</td><td style="text-align:right;">${this.escapeHtml(String(localArcSummary.fallback_reason_mode || 'N/A'))}</td></tr>`;
+                html += `<tr><td>Active Rate:</td><td style="text-align:right;">${Number.isFinite(Number(localArcSummary.active_rate)) ? Number(localArcSummary.active_rate).toFixed(1) + '%' : '-'}</td></tr>`;
+                html += `<tr><td>Shadow-Only Rate:</td><td style="text-align:right;">${Number.isFinite(Number(localArcSummary.shadow_only_rate)) ? Number(localArcSummary.shadow_only_rate).toFixed(1) + '%' : '-'}</td></tr>`;
+                html += `<tr><td>Valid Rate:</td><td style="text-align:right;">${Number.isFinite(Number(localArcSummary.valid_rate)) ? Number(localArcSummary.valid_rate).toFixed(1) + '%' : '-'}</td></tr>`;
+                html += `<tr><td>Fallback Active Rate:</td><td style="text-align:right; color:${fallbackColor};">${Number.isFinite(fallbackRate) ? withLimitHint(fallbackRate.toFixed(1) + '%', fallbackColor, `<=${fallbackLimit.toFixed(1)}%`) : '-'}</td></tr>`;
+                html += `<tr><td>Blend Weight (P50):</td><td style="text-align:right;">${Number.isFinite(Number(localArcSummary.blend_weight_p50)) ? Number(localArcSummary.blend_weight_p50).toFixed(2) : '-'}</td></tr>`;
+                html += `<tr><td>Progress Weight (P50):</td><td style="text-align:right;">${Number.isFinite(Number(localArcSummary.progress_weight_p50)) ? Number(localArcSummary.progress_weight_p50).toFixed(2) : '-'}</td></tr>`;
+                html += `<tr><td>Planner Δ (P50/P95):</td><td style="text-align:right;">${Number.isFinite(Number(localArcSummary.planner_delta_p50_m)) && Number.isFinite(Number(localArcSummary.planner_delta_p95_m)) ? `${Number(localArcSummary.planner_delta_p50_m).toFixed(2)} / ${Number(localArcSummary.planner_delta_p95_m).toFixed(2)} m` : '-'}</td></tr>`;
+                html += `<tr><td>Target Distance (P50):</td><td style="text-align:right;">${Number.isFinite(Number(localArcSummary.target_distance_p50_m)) ? Number(localArcSummary.target_distance_p50_m).toFixed(2) + ' m' : '-'}</td></tr>`;
+                html += `<tr><td>Arc Curvature (P50):</td><td style="text-align:right;">${Number.isFinite(Number(localArcSummary.arc_curvature_p50)) ? Number(localArcSummary.arc_curvature_p50).toFixed(4) : '-'}</td></tr>`;
+                html += `<tr><td>Turn Events:</td><td style="text-align:right;">${Number(localArcSummary.turn_event_count ?? 0)}</td></tr>`;
+                html += '</table></div>';
+            }
+
+            const curveTurnEvents = Array.isArray(summary.curve_turn_events) ? summary.curve_turn_events : [];
+            if (curveTurnEvents.length > 0) {
+                html += '<div style="background: #2a2a2a; padding: 1rem; border-radius: 8px; margin-bottom: 1rem;">';
+                html += '<h3 style="margin-top: 0; color: #4a90e2;">Curve Turn Events</h3>';
+                html += '<table style="width:100%; color:#e0e0e0; border-collapse:collapse;">';
+                html += '<tr><th style="text-align:left; padding:0.3rem 0.4rem;">Curve</th><th style="text-align:right; padding:0.3rem 0.4rem;">Entry</th><th style="text-align:right; padding:0.3rem 0.4rem;">Curve Start</th><th style="text-align:right; padding:0.3rem 0.4rem;">Local Entry</th><th style="text-align:right; padding:0.3rem 0.4rem;">Commit</th><th style="text-align:right; padding:0.3rem 0.4rem;">Steer Onset</th><th style="text-align:right; padding:0.3rem 0.4rem;">Onset Dist/TTC</th><th style="text-align:right; padding:0.3rem 0.4rem;">Onset vs Start</th><th style="text-align:right; padding:0.3rem 0.4rem;">Entry Sev</th><th style="text-align:right; padding:0.3rem 0.4rem;">Entry On</th><th style="text-align:right; padding:0.3rem 0.4rem;">Entry Horizon</th><th style="text-align:right; padding:0.3rem 0.4rem;">Entry Driver</th><th style="text-align:right; padding:0.3rem 0.4rem;">Commit Ready</th><th style="text-align:right; padding:0.3rem 0.4rem;">Commit Driver</th><th style="text-align:right; padding:0.3rem 0.4rem;">Owner</th><th style="text-align:right; padding:0.3rem 0.4rem;">Fallback</th><th style="text-align:right; padding:0.3rem 0.4rem;">Local Arc</th><th style="text-align:right; padding:0.3rem 0.4rem;">Local Arc Blend/Δ</th><th style="text-align:right; padding:0.3rem 0.4rem;">Owner Nom/Commit</th><th style="text-align:right; padding:0.3rem 0.4rem;">Commit Prog</th><th style="text-align:right; padding:0.3rem 0.4rem;">Band-Floor</th><th style="text-align:right; padding:0.3rem 0.4rem;">Band Clamp</th><th style="text-align:right; padding:0.3rem 0.4rem;">Peak |Lat|</th><th style="text-align:right; padding:0.3rem 0.4rem;">Peak |Hdg|</th><th style="text-align:right; padding:0.3rem 0.4rem;">Pre-Ld Step Min</th><th style="text-align:right; padding:0.3rem 0.4rem;">Floor Rescue Max/Mean</th><th style="text-align:right; padding:0.3rem 0.4rem;">Late Turn-In</th><th style="text-align:right; padding:0.3rem 0.4rem;">PP Ld Min</th></tr>';
+                curveTurnEvents.forEach((event) => {
+                    const onsetDist = Number(event.steering_onset_distance_m);
+                    const onsetTtc = Number(event.steering_onset_ttc_s);
+                    const onsetVsStart = Number(event.steering_onset_minus_curve_start_frames);
+                    const lateTurnIn = Boolean(event.late_turn_in);
+                    const lateColor = lateTurnIn ? '#ff6b6b' : '#4caf50';
+                    const preLdStepMin = Number(event.pp_pre_floor_shorten_step_min_m_per_frame);
+                    const floorRescueMax = Number(event.pp_floor_rescue_delta_max_m);
+                    const floorRescueMean = Number(event.pp_floor_rescue_delta_mean_m);
+                    const entrySeverityP50 = Number(event.curve_local_entry_severity_p50);
+                    const entryOnP50 = Number(event.curve_local_entry_on_effective_p50);
+                    const entryDistStartP50 = Number(event.curve_local_phase_distance_start_effective_p50_m);
+                    const entryTimeStartP50 = Number(event.curve_local_phase_time_start_effective_p50_s);
+                    const entryDriverMode = event.curve_local_entry_driver_mode;
+                    const commitReadyAtEntry = Number(event.curve_local_commit_ready_at_entry);
+                    const commitDriverMode = event.curve_local_commit_driver_mode;
+                    const ownerMode = event.reference_lookahead_owner_mode || event.reference_lookahead_owner_mode_at_entry;
+                    const fallbackRate = Number(event.reference_lookahead_fallback_active_rate);
+                    const ownerNominalP50 = Number(event.reference_lookahead_owner_nominal_target_p50_m);
+                    const ownerCommitBandP50 = Number(event.reference_lookahead_owner_commit_band_target_p50_m);
+                    const ownerCommitProgressP50 = Number(event.reference_lookahead_owner_commit_progress_p50);
+                    const ownerBandMinusFloorP50 = Number(event.reference_lookahead_owner_commit_band_minus_floor_p50_m);
+                    const ownerClampRate = Number(event.reference_lookahead_owner_commit_band_clamp_active_rate);
+                    const ownerClampDeltaMax = Number(event.reference_lookahead_owner_commit_band_clamp_delta_max_m);
+                    const localArcMode = event.local_curve_reference_mode || '-';
+                    const localArcSource = event.local_curve_reference_source_mode || '-';
+                    const localArcActiveRate = Number(event.local_curve_reference_active_rate);
+                    const localArcFallbackRate = Number(event.local_curve_reference_fallback_rate);
+                    const localArcBlendP50 = Number(event.local_curve_reference_blend_weight_p50);
+                    const localArcPlannerDeltaP50 = Number(event.local_curve_reference_vs_planner_delta_p50_m);
+                    const rescueColor = Number.isFinite(floorRescueMax) && floorRescueMax > 1.0 ? '#ff6b6b' : '#e0e0e0';
+                    const fallbackColor = Number.isFinite(fallbackRate) && fallbackRate > 0.0 ? '#ff6b6b' : '#4caf50';
+                    const clampColor = Number.isFinite(ownerClampRate) && ownerClampRate > 25.0 ? '#ff6b6b' : '#e0e0e0';
+                    html += `<tr>
+                        <td style="padding:0.3rem 0.4rem;">${this.escapeHtml(String(event.curve_index ?? '-'))}</td>
+                        <td style="text-align:right; padding:0.3rem 0.4rem;">${Number.isFinite(Number(event.entry_frame)) ? Number(event.entry_frame) : '-'}</td>
+                        <td style="text-align:right; padding:0.3rem 0.4rem;">${Number.isFinite(Number(event.curve_start_frame)) ? Number(event.curve_start_frame) : '-'}</td>
+                        <td style="text-align:right; padding:0.3rem 0.4rem;">${Number.isFinite(Number(event.curve_local_entry_frame)) ? Number(event.curve_local_entry_frame) : '-'}</td>
+                        <td style="text-align:right; padding:0.3rem 0.4rem;">${Number.isFinite(Number(event.curve_local_commit_frame)) ? Number(event.curve_local_commit_frame) : '-'}</td>
+                        <td style="text-align:right; padding:0.3rem 0.4rem;">${Number.isFinite(Number(event.steering_onset_frame)) ? Number(event.steering_onset_frame) : '-'}</td>
+                        <td style="text-align:right; padding:0.3rem 0.4rem;">${Number.isFinite(onsetDist) && Number.isFinite(onsetTtc) ? `${onsetDist.toFixed(2)} m / ${onsetTtc.toFixed(2)} s` : '-'}</td>
+                        <td style="text-align:right; padding:0.3rem 0.4rem;">${Number.isFinite(onsetVsStart) ? `${onsetVsStart > 0 ? '+' : ''}${Math.trunc(onsetVsStart)} fr` : '-'}</td>
+                        <td style="text-align:right; padding:0.3rem 0.4rem;">${Number.isFinite(entrySeverityP50) ? entrySeverityP50.toFixed(2) : '-'}</td>
+                        <td style="text-align:right; padding:0.3rem 0.4rem;">${Number.isFinite(entryOnP50) ? entryOnP50.toFixed(2) : '-'}</td>
+                        <td style="text-align:right; padding:0.3rem 0.4rem;">${Number.isFinite(entryDistStartP50) || Number.isFinite(entryTimeStartP50) ? `${Number.isFinite(entryDistStartP50) ? entryDistStartP50.toFixed(2) : '-'} m / ${Number.isFinite(entryTimeStartP50) ? entryTimeStartP50.toFixed(2) : '-'} s` : '-'}</td>
+                        <td style="text-align:right; padding:0.3rem 0.4rem;">${entryDriverMode ? this.escapeHtml(String(entryDriverMode)) : '-'}</td>
+                        <td style="text-align:right; padding:0.3rem 0.4rem;">${Number.isFinite(commitReadyAtEntry) ? (commitReadyAtEntry > 0.5 ? 'YES' : 'NO') : '-'}</td>
+                        <td style="text-align:right; padding:0.3rem 0.4rem;">${commitDriverMode ? this.escapeHtml(String(commitDriverMode)) : '-'}</td>
+                        <td style="text-align:right; padding:0.3rem 0.4rem;">${ownerMode ? this.escapeHtml(String(ownerMode)) : '-'}</td>
+                        <td style="text-align:right; padding:0.3rem 0.4rem; color:${fallbackColor};">${Number.isFinite(fallbackRate) ? withLimitHint(fallbackRate.toFixed(1) + '%', fallbackColor, '=0%') : '-'}</td>
+                        <td style="text-align:right; padding:0.3rem 0.4rem;">${this.escapeHtml(String(localArcMode))}<br><span style="color:#888;">${this.escapeHtml(String(localArcSource))}</span><br>${Number.isFinite(localArcActiveRate) ? localArcActiveRate.toFixed(1) : '-'}% / ${Number.isFinite(localArcFallbackRate) ? localArcFallbackRate.toFixed(1) : '-'}%</td>
+                        <td style="text-align:right; padding:0.3rem 0.4rem;">${Number.isFinite(localArcBlendP50) || Number.isFinite(localArcPlannerDeltaP50) ? `${Number.isFinite(localArcBlendP50) ? localArcBlendP50.toFixed(2) : '-'} / ${Number.isFinite(localArcPlannerDeltaP50) ? localArcPlannerDeltaP50.toFixed(2) : '-'} m` : '-'}</td>
+                        <td style="text-align:right; padding:0.3rem 0.4rem;">${Number.isFinite(ownerNominalP50) || Number.isFinite(ownerCommitBandP50) ? `${Number.isFinite(ownerNominalP50) ? ownerNominalP50.toFixed(2) : '-'} / ${Number.isFinite(ownerCommitBandP50) ? ownerCommitBandP50.toFixed(2) : '-'} m` : '-'}</td>
+                        <td style="text-align:right; padding:0.3rem 0.4rem;">${Number.isFinite(ownerCommitProgressP50) ? ownerCommitProgressP50.toFixed(2) : '-'}</td>
+                        <td style="text-align:right; padding:0.3rem 0.4rem;">${Number.isFinite(ownerBandMinusFloorP50) ? ownerBandMinusFloorP50.toFixed(2) + ' m' : '-'}</td>
+                        <td style="text-align:right; padding:0.3rem 0.4rem; color:${clampColor};">${Number.isFinite(ownerClampRate) || Number.isFinite(ownerClampDeltaMax) ? `${Number.isFinite(ownerClampRate) ? ownerClampRate.toFixed(1) : '-'}% / ${Number.isFinite(ownerClampDeltaMax) ? ownerClampDeltaMax.toFixed(2) : '-'} m` : '-'}</td>
+                        <td style="text-align:right; padding:0.3rem 0.4rem;">${Number.isFinite(Number(event.peak_lateral_error_m)) ? Number(event.peak_lateral_error_m).toFixed(3) + ' m' : '-'}</td>
+                        <td style="text-align:right; padding:0.3rem 0.4rem;">${Number.isFinite(Number(event.peak_heading_error_rad)) ? Number(event.peak_heading_error_rad).toFixed(3) + ' rad' : '-'}</td>
+                        <td style="text-align:right; padding:0.3rem 0.4rem;">${Number.isFinite(preLdStepMin) ? preLdStepMin.toFixed(3) + ' m/fr' : '-'}</td>
+                        <td style="text-align:right; padding:0.3rem 0.4rem; color:${rescueColor};">${Number.isFinite(floorRescueMax) ? `${floorRescueMax.toFixed(2)} / ${Number.isFinite(floorRescueMean) ? floorRescueMean.toFixed(2) : '-'} m` : '-'}</td>
+                        <td style="text-align:right; padding:0.3rem 0.4rem; color:${lateColor};">${withLimitHint(lateTurnIn ? 'YES' : 'NO', lateColor, 'NO')}</td>
+                        <td style="text-align:right; padding:0.3rem 0.4rem;">${Number.isFinite(Number(event.pp_lookahead_min_m)) ? Number(event.pp_lookahead_min_m).toFixed(2) + ' m' : '-'}</td>
+                    </tr>`;
+                });
+                html += '</table></div>';
+            }
+
+            const curveStraightSegments = Array.isArray(summary.curve_straight_segments) ? summary.curve_straight_segments : [];
+            if (curveStraightSegments.length > 0) {
+                html += '<div style="background: #2a2a2a; padding: 1rem; border-radius: 8px; margin-bottom: 1rem;">';
+                html += '<h3 style="margin-top: 0; color: #4a90e2;">Straight Segment Latch Inspector</h3>';
+                html += '<table style="width:100%; color:#e0e0e0; border-collapse:collapse;">';
+                html += '<tr><th style="text-align:left; padding:0.3rem 0.4rem;">Straight</th><th style="text-align:right; padding:0.3rem 0.4rem;">Frames</th><th style="text-align:right; padding:0.3rem 0.4rem;">Far Active</th><th style="text-align:right; padding:0.3rem 0.4rem;">Local Active</th><th style="text-align:right; padding:0.3rem 0.4rem;">Arm Ready</th><th style="text-align:right; padding:0.3rem 0.4rem;">Commit Ready</th><th style="text-align:right; padding:0.3rem 0.4rem;">Path Sustain</th><th style="text-align:right; padding:0.3rem 0.4rem;">Ping-Pong</th><th style="text-align:right; padding:0.3rem 0.4rem;">Gate P50</th><th style="text-align:right; padding:0.3rem 0.4rem;">Raw P50</th></tr>';
+                curveStraightSegments.forEach((segment) => {
+                    const localRate = Number(segment.local_active_rate ?? 0);
+                    const localColor = localRate <= 5.0 ? '#4caf50' : localRate <= 10.0 ? '#ffa500' : '#ff6b6b';
+                    const armReady = Number(segment.arm_ready_rate ?? 0);
+                    const commitReady = Number(segment.commit_ready_rate ?? 0);
+                    const pathSustain = Number(segment.path_sustain_active_rate ?? 0);
+                    const pingpong = Number(segment.watchdog_pingpong_count ?? 0);
+                    const pingpongColor = pingpong === 0 ? '#4caf50' : '#ff6b6b';
+                    html += `<tr>
+                        <td style="padding:0.3rem 0.4rem;">S${this.escapeHtml(String(segment.straight_index ?? '-'))}</td>
+                        <td style="text-align:right; padding:0.3rem 0.4rem;">${Number.isFinite(Number(segment.start_frame)) && Number.isFinite(Number(segment.end_frame)) ? `${Number(segment.start_frame)}-${Number(segment.end_frame)}` : '-'}</td>
+                        <td style="text-align:right; padding:0.3rem 0.4rem;">${Number.isFinite(Number(segment.far_preview_active_rate)) ? Number(segment.far_preview_active_rate).toFixed(1) + '%' : '-'}</td>
+                        <td style="text-align:right; padding:0.3rem 0.4rem; color:${localColor};">${withLimitHint(Number.isFinite(localRate) ? localRate.toFixed(1) + '%' : '-', localColor, '<=5.0%')}</td>
+                        <td style="text-align:right; padding:0.3rem 0.4rem;">${Number.isFinite(armReady) ? armReady.toFixed(1) + '%' : '-'}</td>
+                        <td style="text-align:right; padding:0.3rem 0.4rem;">${Number.isFinite(commitReady) ? commitReady.toFixed(1) + '%' : '-'}</td>
+                        <td style="text-align:right; padding:0.3rem 0.4rem;">${Number.isFinite(pathSustain) ? pathSustain.toFixed(1) + '%' : '-'}</td>
+                        <td style="text-align:right; padding:0.3rem 0.4rem; color:${pingpongColor};">${withLimitHint(String(pingpong), pingpongColor, '=0')}</td>
+                        <td style="text-align:right; padding:0.3rem 0.4rem;">${Number.isFinite(Number(segment.gate_weight_p50)) ? Number(segment.gate_weight_p50).toFixed(2) : '-'}</td>
+                        <td style="text-align:right; padding:0.3rem 0.4rem;">${Number.isFinite(Number(segment.local_phase_raw_p50)) ? Number(segment.local_phase_raw_p50).toFixed(2) : '-'}</td>
+                    </tr>`;
+                });
+                html += '</table></div>';
+            }
 
             // Control stability (straight-line oscillation + adaptive deadband)
             const controlStability = summary.control_stability || null;
@@ -7346,6 +7573,15 @@ class Visualizer {
                 ? c.curve_intent
                 : c.curve_phase
         );
+        const curveLocalStateLabel = c.curve_local_state
+            ? String(c.curve_local_state)
+            : 'missing';
+        const curvePreviewFarLabel = c.curve_preview_far_upcoming !== undefined && c.curve_preview_far_upcoming !== null
+            ? (c.curve_preview_far_upcoming ? 'YES' : 'NO')
+            : 'missing';
+        const localWhyActiveLabel = c.curve_local_phase_source
+            ? String(c.curve_local_phase_source)
+            : 'missing';
         const dynActiveLabel = c.dynamic_curve_authority_active !== undefined && c.dynamic_curve_authority_active !== null
             ? (c.dynamic_curve_authority_active ? 'YES' : 'NO')
             : 'missing';
@@ -7370,7 +7606,7 @@ class Visualizer {
         );
         updateField(
             'control-steering-curve-entry-schedule-context',
-            `proxy=${proxyStraightLabel}, upcoming=${curveUpcomingLabel}, atCar=${curveAtCarLabel}, remM=${curveAtCarRemLabel}, sched=${curveSchedulerModeLabel}, intent=${schedFmtFloat(curveIntentValue, 2)}(${curveIntentStateLabel}), iRaw=${schedFmtFloat(c.curve_intent_raw ?? c.curve_phase_raw, 2)}, iPrev=${schedFmtFloat(c.curve_intent_term_preview ?? c.curve_phase_term_preview, 2)}, iPath=${schedFmtFloat(c.curve_intent_term_path ?? c.curve_phase_term_path, 2)}, iRise=${schedFmtFloat(c.curve_intent_term_rise ?? c.curve_phase_term_rise, 2)}, iConf=${schedFmtFloat(c.curve_intent_confidence, 2)}, iGuard=${schedFmtYesNo(c.curve_intent_speed_guardrail_active)}, iCap=${schedFmtFloat(c.curve_intent_speed_guardrail_cap_mps, 2)}, lookT=${schedFmtFloat(c.reference_lookahead_target, 2)}, lookA=${schedFmtFloat(c.reference_lookahead_active, 2)}, prog=${schedFmtFloat(c.current_curve_progress_ratio, 3)}, road=${roadStraightLabel}, valid=${roadValidLabel}, source=${roadSourceLabel}, kRoad=${schedFmtFloat(c.road_curvature_abs, 4)}, holdRem=${holdRemLabel}`
+            `proxy=${proxyStraightLabel}, upcoming=${curveUpcomingLabel}, atCar=${curveAtCarLabel}, remM=${curveAtCarRemLabel}, remT=${schedFmtFloat(c.time_to_next_curve_start_s, 2)}, sched=${curveSchedulerModeLabel}, intent=${schedFmtFloat(curveIntentValue, 2)}(${curveIntentStateLabel}), local=${schedFmtFloat(c.curve_local_phase, 2)}(${curveLocalStateLabel}), why=${localWhyActiveLabel}, far=${curvePreviewFarLabel}@${schedFmtFloat(c.curve_preview_far_phase, 2)}, lReady=${schedFmtYesNo(c.curve_local_distance_ready)}, lArm=${schedFmtYesNo(c.curve_local_arm_ready)}, lCommit=${schedFmtYesNo(c.curve_local_commit_ready)}, lTimeReady=${schedFmtYesNo(c.curve_local_time_ready)}, lNow=${schedFmtYesNo(c.curve_local_in_curve_now)}, lRearm=${schedFmtYesNo(c.curve_local_reentry_ready)}, lH=${schedFmtFloat(c.curve_local_distance_horizon_m, 2)}, lTH=${schedFmtFloat(c.curve_local_time_horizon_s, 2)}, lSev=${schedFmtFloat(c.curve_local_entry_severity, 2)}, lOn=${schedFmtFloat(c.curve_local_entry_on_effective, 2)}, lDrv=${c.curve_local_entry_driver ? String(c.curve_local_entry_driver) : '-'}, lCommitDrv=${c.curve_local_commit_driver ? String(c.curve_local_commit_driver) : '-'}, lDistEff=${schedFmtFloat(c.curve_local_phase_distance_start_effective_m, 2)}, lTimeEff=${schedFmtFloat(c.curve_local_phase_time_start_effective_s, 2)}, lArmRaw=${schedFmtFloat(c.curve_local_arm_phase_raw, 2)}, lSusRaw=${schedFmtFloat(c.curve_local_sustain_phase_raw, 2)}, lPathSus=${schedFmtYesNo(c.curve_local_path_sustain_active)}, lGate=${schedFmtFloat(c.reference_lookahead_local_gate_weight, 2)}, lookOwner=${c.reference_lookahead_owner_mode ? String(c.reference_lookahead_owner_mode) : '-'}, lookSrc=${c.reference_lookahead_entry_weight_source ? String(c.reference_lookahead_entry_weight_source) : '-'}, lookFb=${schedFmtYesNo(c.reference_lookahead_fallback_active)}, lookNom=${schedFmtFloat(c.reference_lookahead_owner_nominal_target, 2)}, lookBand=${schedFmtFloat(c.reference_lookahead_owner_commit_band_target, 2)}, lookEP=${schedFmtFloat(c.reference_lookahead_owner_entry_progress, 2)}, lookCDP=${schedFmtFloat(c.reference_lookahead_owner_commit_distance_progress, 2)}, lookCPP=${schedFmtFloat(c.reference_lookahead_owner_commit_phase_progress, 2)}, lookCP=${schedFmtFloat(c.reference_lookahead_owner_commit_progress, 2)}, lookCDist=${schedFmtFloat(c.reference_lookahead_owner_commit_distance_start_effective_m, 2)}, lookClamp=${schedFmtYesNo(c.reference_lookahead_owner_commit_band_clamp_active)}@${schedFmtFloat(c.reference_lookahead_owner_commit_band_clamp_delta_m, 2)}, arcMode=${c.local_curve_reference_mode ? String(c.local_curve_reference_mode) : '-'}, arcOn=${schedFmtYesNo(c.local_curve_reference_active)}, arcShadow=${schedFmtYesNo(c.local_curve_reference_shadow_only)}, arcValid=${schedFmtYesNo(c.local_curve_reference_valid)}, arcSrc=${c.local_curve_reference_source ? String(c.local_curve_reference_source) : '-'}, arcFb=${schedFmtYesNo(c.local_curve_reference_fallback_active)}:${c.local_curve_reference_fallback_reason ? String(c.local_curve_reference_fallback_reason) : '-'}, arcBlend=${schedFmtFloat(c.local_curve_reference_blend_weight, 2)}, arcProg=${schedFmtFloat(c.local_curve_reference_progress_weight, 2)}, arcK=${schedFmtFloat(c.local_curve_reference_arc_curvature_abs, 4)}, arcDist=${schedFmtFloat(c.local_curve_reference_target_distance_m, 2)}, arcDelta=${schedFmtFloat(c.local_curve_reference_vs_planner_delta_m, 2)}, arcXY=${schedFmtFloat(c.local_curve_reference_target_x, 2)}/${schedFmtFloat(c.local_curve_reference_target_y, 2)}, iRaw=${schedFmtFloat(c.curve_intent_raw ?? c.curve_phase_raw, 2)}, iPrev=${schedFmtFloat(c.curve_intent_term_preview ?? c.curve_phase_term_preview, 2)}, iPath=${schedFmtFloat(c.curve_intent_term_path ?? c.curve_phase_term_path, 2)}, iRise=${schedFmtFloat(c.curve_intent_term_rise ?? c.curve_phase_term_rise, 2)}, iTime=${schedFmtFloat(c.curve_phase_term_time, 2)}, iConf=${schedFmtFloat(c.curve_intent_confidence, 2)}, iWatch=${schedFmtYesNo(c.curve_intent_watchdog_triggered)}, iGuard=${schedFmtYesNo(c.curve_intent_speed_guardrail_active)}, iCap=${schedFmtFloat(c.curve_intent_speed_guardrail_cap_mps, 2)}, lookT=${schedFmtFloat(c.reference_lookahead_target, 2)}, lookPreG=${schedFmtFloat(c.reference_lookahead_target_pre_entry_guard, 2)}, lookA=${schedFmtFloat(c.reference_lookahead_active, 2)}, lookGuard=${schedFmtYesNo(c.reference_lookahead_entry_shorten_guard_active)}, lookGuardD=${schedFmtFloat(c.reference_lookahead_entry_shorten_guard_delta_m, 2)}, ppPre=${schedFmtFloat(c.pp_curve_local_lookahead_pre_floor, 2)}, ppPost=${schedFmtFloat(c.pp_curve_local_lookahead_post_floor, 2)}, ppFloor=${schedFmtFloat(c.pp_curve_local_floor_m, 2)}, ppFloorOn=${schedFmtYesNo(c.pp_curve_local_floor_active)}, prog=${schedFmtFloat(c.current_curve_progress_ratio, 3)}, road=${roadStraightLabel}, valid=${roadValidLabel}, source=${roadSourceLabel}, kRoad=${schedFmtFloat(c.road_curvature_abs, 4)}, holdRem=${holdRemLabel}`
         );
         updateField(
             'control-steering-curve-entry-schedule-params',

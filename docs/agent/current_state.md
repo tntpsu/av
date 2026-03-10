@@ -1,11 +1,32 @@
 # AV Stack — Agent Memory: Current State
 
-**Last updated:** 2026-03-04
-**Current milestone:** Phase 2 MPC — Layered Control Architecture. Phase 2.7b VALIDATED — map-based curvature preview + MPC startup warmup. Highway: median 98.1 (3 runs: 98.3/94.7/98.1), s-loop: no regression (37/37 tests pass).
+**Last updated:** 2026-03-09
+**Current milestone:** Phase 2.7b VALIDATED. PP turn-entry Workstream C1 COMPLETE — straight latch 36.7% → 15.6% on s_loop. C1 peak 0.612m / C3 peak 0.566m (materially below Phase B 0.674m/0.681m). Highway non-regression: 98.4/100.
 
 ---
 
 ## Active Development Focus
+
+### PP Turn-Entry Fix — Workstream C1 COMPLETE (2026-03-09)
+
+**Root cause identified and fixed:** `curve_local_phase_time_start_s: 2.0` and `_tight_s: 2.5` caused the time gate to open throughout all of S2 (the lane polynomial sees curves within 9m everywhere on s_loop, so `time_to_curve` ≈ 2.0s ≪ 2.5s threshold). Reverted to `1.2/1.2` (code default).
+
+**Result (2 s_loop runs):**
+- Score: 95.4 / 95.3
+- C1 peak: 0.572m / 0.612m (≤ 0.67m gate ✓)
+- C3 peak: 0.578m / 0.566m (≤ 0.65m gate ✓)
+- S2 latch: 10.8% / 11.2% (from 45.6%) ✓
+- Overall latch: 16.7% / 15.6% (from 36.7%) ✓
+- No e-stops, no out-of-lane ✓
+- Floor rescue C1: ~1.74m, C3: ~1.79m (≈ Phase B levels) ✓
+- Highway non-regression: 98.4/100 (baseline 98.1) ✓
+
+**Remaining open issues (structural, accepted):**
+- `curve_local_active_on_straights` still 15-17% (> 5% target) — the last ~30 frames before each curve are correctly in ENTRY/COMMIT state within the distance gate range; reducing below 5% would require further work
+- PP floor rescue (~1.7m) is structural (arc-chord discrepancy at R≈1.5m) — improved vs pre-Phase-B 2.3m
+- `lateTurnIn=YES` on C1/C3 (+17-20fr) — onset after curve start; Workstream C2 target
+
+**Next:** Phase 2.8 or PP floor rescue reduction (Workstream C2).
 
 ### Phase 2 — Layered Control Architecture (2026-03-01, active)
 

@@ -30,6 +30,20 @@ control:
     pp_feedback_gain: 0.0           # CHANGED: 0.1 → 0.0 (PID integral winds up during geometric PP oscillation, providing growing correction that amplifies amplitude; pure geometric PP for highway straight-line test)
     curve_feedforward_gain: 0.0     # CHANGED: 1.0 → 0.0 (curve feedforward on straight highway amplifies oscillation: noise curvature 0.04 × sign(heading_error) creates positive feedback that grows heading weave at 14 m/s; disable entirely on straight track)
     pp_max_steering_jerk: 18.0
+    pp_curve_local_lookahead_floor_enabled: true
+    pp_curve_local_lookahead_floor_speed_table:
+    - speed_mps: 0.0
+      lookahead_m: 4.0
+    - speed_mps: 4.5
+      lookahead_m: 4.4
+    - speed_mps: 6.5
+      lookahead_m: 4.8
+    - speed_mps: 8.0
+      lookahead_m: 5.2
+    - speed_mps: 12.0
+      lookahead_m: 5.6
+    pp_curve_local_shorten_slew_m_per_frame: 0.08
+    pp_curve_local_floor_state_min: ENTRY
     pp_min_lookahead: 0.5
     pp_speed_norm_enabled: true
     pp_speed_norm_reference_mps: 12.0
@@ -345,8 +359,29 @@ trajectory:
   curve_phase_confidence_min: 0.35
   curve_phase_confidence_max: 0.8
   curve_phase_confidence_floor_scale: 0.6
+  curve_preview_far_on: 0.1
+  curve_local_phase_path_curvature_min: 0.003
+  curve_local_phase_path_curvature_max: 0.015
+  curve_local_entry_severity_curvature_min: 0.0015
+  curve_local_entry_severity_curvature_max: 0.008
+  curve_local_phase_distance_start_m: 8.0
+  curve_local_phase_distance_start_tight_m: 10.0
+  curve_local_phase_distance_end_m: 1.5
+  curve_local_phase_time_start_s: 1.2
+  curve_local_phase_time_start_tight_s: 1.6
+  curve_local_phase_time_end_s: 0.25
+  curve_local_in_curve_distance_eps_m: 0.25
+  curve_local_in_curve_time_eps_s: 0.05
+  curve_local_in_curve_path_min: 0.7
+  curve_local_commit_distance_ready_m: 3.0
+  curve_local_commit_time_ready_s: 0.60
+  curve_local_phase_use_time_term: false
+  curve_local_phase_reentry_gate_min: 0.10
+  curve_local_phase_reentry_path_min: 0.15
   curve_phase_ema_alpha: 0.45
   curve_phase_on: 0.35
+  curve_local_entry_on_base: 0.35
+  curve_local_entry_on_tight: 0.32
   curve_phase_off: 0.22
   curve_phase_commit_on: 0.45
   curve_phase_commit_min_frames: 3
@@ -360,6 +395,12 @@ trajectory:
   reference_lookahead_slew_rate_m_per_frame: 0.25
   reference_lookahead_slew_rate_shorten_m_per_frame: 0.35
   reference_lookahead_slew_rate_lengthen_m_per_frame: 0.2
+  reference_lookahead_entry_shorten_slew_m_per_frame: 0.20
+  reference_lookahead_entry_shorten_state_min: ENTRY
+  reference_lookahead_entry_shorten_state_max: ENTRY
+  reference_lookahead_entry_shorten_gate_min: 0.20
+  reference_lookahead_entry_shorten_distance_min_m: 0.01
+  reference_lookahead_entry_shorten_distance_max_m: 8.0
   reference_lookahead_speed_table_straight: []
   reference_lookahead_speed_table_curve: []
   reference_lookahead_curve_blend_curvature_min: 0.006

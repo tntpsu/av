@@ -37,6 +37,20 @@ control:
     stanley_heading_weight: 1.0
     pp_feedback_gain: 0.1
     pp_max_steering_jerk: 18.0
+    pp_curve_local_lookahead_floor_enabled: true
+    pp_curve_local_lookahead_floor_speed_table:
+    - speed_mps: 0.0
+      lookahead_m: 4.0
+    - speed_mps: 4.5
+      lookahead_m: 4.4
+    - speed_mps: 6.5
+      lookahead_m: 4.8
+    - speed_mps: 8.0
+      lookahead_m: 5.2
+    - speed_mps: 12.0
+      lookahead_m: 5.6
+    pp_curve_local_shorten_slew_m_per_frame: 0.15
+    pp_curve_local_floor_state_min: COMMIT
     pp_min_lookahead: 0.5
     pp_speed_norm_enabled: false
     pp_speed_norm_reference_mps: 12.0
@@ -304,7 +318,12 @@ trajectory:
   target_speed: 12.0
   reference_lookahead: 9.0
   dynamic_reference_lookahead: true
-  curve_scheduler_mode: phase_shadow
+  curve_scheduler_mode: phase_active
+  reference_lookahead_phase_active_entry_scale_min: 0.90
+  reference_lookahead_phase_active_entry_scale_severity_on: 0.35
+  reference_lookahead_phase_active_entry_scale_severity_full: 0.85
+  reference_lookahead_phase_active_commit_phase_on: 0.75
+  reference_lookahead_phase_active_commit_phase_full: 0.95
   reference_lookahead_speed_table:
   - speed_mps: 0.0
     lookahead_m: 7.0
@@ -320,15 +339,51 @@ trajectory:
     lookahead_m: 15.0
   reference_lookahead_speed_table_entry:
   - speed_mps: 0.0
-    lookahead_m: 6.0
-  - speed_mps: 4.47
     lookahead_m: 7.0
+  - speed_mps: 4.47
+    lookahead_m: 8.0
   - speed_mps: 8.94
-    lookahead_m: 8.5
+    lookahead_m: 9.0
   - speed_mps: 11.18
-    lookahead_m: 9.0
+    lookahead_m: 10.0
   - speed_mps: 13.41
-    lookahead_m: 9.0
+    lookahead_m: 10.0
+  reference_lookahead_speed_table_commit:
+  - speed_mps: 0.0
+    lookahead_m: 4.0
+  - speed_mps: 4.47
+    lookahead_m: 4.6
+  - speed_mps: 6.71
+    lookahead_m: 4.9
+  - speed_mps: 8.94
+    lookahead_m: 5.4
+  - speed_mps: 11.18
+    lookahead_m: 5.8
+  local_curve_reference_mode: shadow
+  local_curve_reference_delta_cap_m: 1.5
+  local_curve_reference_max_blend: 0.35
+  local_curve_reference_bounded_unwind_start: 0.05
+  local_curve_reference_bounded_unwind_end: 0.60
+  local_curve_reference_enable_map_track: true
+  local_curve_reference_entry_phase_on: 0.25
+  local_curve_reference_entry_phase_full: 0.65
+  local_curve_reference_commit_phase_on: 0.65
+  local_curve_reference_commit_phase_full: 0.90
+  local_curve_reference_unwind_progress_start: 0.35
+  local_curve_reference_unwind_progress_end: 0.70
+  local_curve_reference_target_distance_table:
+  - speed_mps: 0.0
+    target_distance_m: 4.4
+  - speed_mps: 4.47
+    target_distance_m: 5.0
+  - speed_mps: 6.71
+    target_distance_m: 5.3
+  - speed_mps: 8.94
+    target_distance_m: 5.7
+  local_curve_reference_tight_distance_scale_min: 0.82
+  local_curve_reference_curvature_min: 0.003
+  local_curve_reference_curvature_max: 0.015
+  local_curve_reference_max_abs_curvature: 0.020
   reference_lookahead_entry_source: track
   reference_lookahead_entry_preview_scale: 1.5
   reference_lookahead_entry_track_name: ''
@@ -350,8 +405,29 @@ trajectory:
   curve_phase_confidence_min: 0.35
   curve_phase_confidence_max: 0.8
   curve_phase_confidence_floor_scale: 0.6
+  curve_preview_far_on: 0.1
+  curve_local_phase_path_curvature_min: 0.003
+  curve_local_phase_path_curvature_max: 0.015
+  curve_local_entry_severity_curvature_min: 0.003
+  curve_local_entry_severity_curvature_max: 0.012
+  curve_local_phase_distance_start_m: 10.0
+  curve_local_phase_distance_start_tight_m: 10.0
+  curve_local_phase_distance_end_m: 1.5
+  curve_local_phase_time_start_s: 1.2
+  curve_local_phase_time_start_tight_s: 1.2
+  curve_local_phase_time_end_s: 0.25
+  curve_local_in_curve_distance_eps_m: 0.25
+  curve_local_in_curve_time_eps_s: 0.05
+  curve_local_in_curve_path_min: 0.7
+  curve_local_commit_distance_ready_m: 8.0
+  curve_local_commit_time_ready_s: 0.60
+  curve_local_phase_use_time_term: false
+  curve_local_phase_reentry_gate_min: 0.10
+  curve_local_phase_reentry_path_min: 0.15
   curve_phase_ema_alpha: 0.45
   curve_phase_on: 0.45
+  curve_local_entry_on_base: 0.45
+  curve_local_entry_on_tight: 0.40
   curve_phase_off: 0.3
   curve_phase_commit_on: 0.55
   curve_phase_commit_min_frames: 4
@@ -365,6 +441,12 @@ trajectory:
   reference_lookahead_slew_rate_m_per_frame: 0.25
   reference_lookahead_slew_rate_shorten_m_per_frame: 0.35
   reference_lookahead_slew_rate_lengthen_m_per_frame: 0.2
+  reference_lookahead_entry_shorten_slew_m_per_frame: 0.20
+  reference_lookahead_entry_shorten_state_min: ENTRY
+  reference_lookahead_entry_shorten_state_max: ENTRY
+  reference_lookahead_entry_shorten_gate_min: 0.20
+  reference_lookahead_entry_shorten_distance_min_m: 0.01
+  reference_lookahead_entry_shorten_distance_max_m: 8.0
   reference_lookahead_speed_table_straight: []
   reference_lookahead_speed_table_curve: []
   reference_lookahead_curve_blend_curvature_min: 0.006
@@ -588,17 +670,17 @@ trajectory:
   reference_x_max_abs: 3.2
   mpc:
     # Keys must match MPCParams field names prefixed with mpc_
-    mpc_horizon: 20
-    mpc_dt: 0.1                     # prediction step (2s horizon at 20 steps)
+    mpc_horizon: 30
+    mpc_dt: 0.1                     # prediction step (3s horizon at 30 steps = 15m at 5 m/s)
     mpc_wheelbase_m: 2.5
     mpc_max_steer_rad: 0.5236       # 30° physical max steering angle
-    mpc_q_lat: 12.0                 # TUNED: 10.0 → 12.0 (tighter tracking on s_loop curves)
-    mpc_q_heading: 5.0
+    mpc_q_lat: 12.0                 # Phase 2.5 validated — moderate-strong lateral tracking
+    mpc_q_heading: 8.0              # heading alignment for curve transitions
     mpc_q_speed: 2.0
-    mpc_r_steer: 0.5
+    mpc_r_steer: 0.25               # moderate steering penalty
     mpc_r_accel: 0.2
-    mpc_r_steer_rate: 1.5           # TUNED: 1.0 → 1.5 (smoother transitions on s_loop)
-    mpc_delta_rate_max: 0.15        # max Δδ_norm per step
+    mpc_r_steer_rate: 0.8           # balanced rate damping
+    mpc_delta_rate_max: 0.25        # moderate rate authority
     mpc_max_accel: 3.0
     mpc_max_decel: 4.0
     mpc_v_min: 1.0
@@ -606,6 +688,8 @@ trajectory:
     mpc_max_consecutive_failures: 5
     mpc_max_solve_time_ms: 8.0
     mpc_speed_adaptive_horizon: false
+    mpc_curvature_preview_enabled: true
+    mpc_curvature_preview_gain: 1.0
 safety:
   max_speed: 12.0
   emergency_brake_threshold: 1.5

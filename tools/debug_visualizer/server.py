@@ -1213,6 +1213,27 @@ def get_frame_data(filename, frame_index):
                         ds_name = f'control/{pp_key}'
                         if ds_name in f and control_idx < len(f[ds_name]):
                             frame_data['control'][pp_key] = float(f[ds_name][control_idx])
+                    # Regime selector + MPC telemetry
+                    if 'control/regime' in f and control_idx < len(f['control/regime']):
+                        regime_val = int(f['control/regime'][control_idx])
+                        frame_data['control']['regime'] = regime_val
+                        _MODE_NAMES = {0: 'pure_pursuit', 1: 'linear_mpc', 2: 'blending'}
+                        frame_data['control']['control_mode'] = _MODE_NAMES.get(regime_val, f'regime_{regime_val}')
+                    else:
+                        frame_data['control']['control_mode'] = 'pure_pursuit'
+                    if 'control/regime_blend_weight' in f and control_idx < len(f['control/regime_blend_weight']):
+                        frame_data['control']['regime_blend_weight'] = float(f['control/regime_blend_weight'][control_idx])
+                    for mpc_key in ['mpc_feasible', 'mpc_fallback_active', 'mpc_kappa_preview_used']:
+                        ds_name = f'control/{mpc_key}'
+                        if ds_name in f and control_idx < len(f[ds_name]):
+                            frame_data['control'][mpc_key] = int(f[ds_name][control_idx]) == 1
+                    for mpc_key in ['mpc_solve_time_ms', 'mpc_e_lat', 'mpc_e_heading',
+                                    'mpc_kappa_ref', 'mpc_consecutive_failures',
+                                    'mpc_gt_cross_track_m', 'mpc_gt_heading_error_rad',
+                                    'mpc_using_ground_truth', 'mpc_kappa_preview_range']:
+                        ds_name = f'control/{mpc_key}'
+                        if ds_name in f and control_idx < len(f[ds_name]):
+                            frame_data['control'][mpc_key] = float(f[ds_name][control_idx])
                     if 'control/launch_throttle_cap' in f and control_idx < len(f['control/launch_throttle_cap']):
                         frame_data['control']['launch_throttle_cap'] = float(f['control/launch_throttle_cap'][control_idx])
                     if 'control/launch_throttle_cap_active' in f and control_idx < len(f['control/launch_throttle_cap_active']):
@@ -1279,13 +1300,92 @@ def get_frame_data(filename, frame_index):
                         frame_data['control']['curve_intent_state'] = (
                             str(intent_state_val) if intent_state_val is not None else ''
                         )
+                    if 'control/curve_local_state' in f and control_idx < len(
+                        f['control/curve_local_state']
+                    ):
+                        local_state_val = f['control/curve_local_state'][control_idx]
+                        if isinstance(local_state_val, bytes):
+                            local_state_val = local_state_val.decode('utf-8', 'ignore')
+                        frame_data['control']['curve_local_state'] = (
+                            str(local_state_val) if local_state_val is not None else ''
+                        )
+                    if 'control/curve_phase_source' in f and control_idx < len(
+                        f['control/curve_phase_source']
+                    ):
+                        curve_phase_source_val = f['control/curve_phase_source'][control_idx]
+                        if isinstance(curve_phase_source_val, bytes):
+                            curve_phase_source_val = curve_phase_source_val.decode('utf-8', 'ignore')
+                        frame_data['control']['curve_phase_source'] = (
+                            str(curve_phase_source_val) if curve_phase_source_val is not None else ''
+                        )
+                    if 'control/curve_local_phase_source' in f and control_idx < len(
+                        f['control/curve_local_phase_source']
+                    ):
+                        curve_local_source_val = f['control/curve_local_phase_source'][control_idx]
+                        if isinstance(curve_local_source_val, bytes):
+                            curve_local_source_val = curve_local_source_val.decode('utf-8', 'ignore')
+                        frame_data['control']['curve_local_phase_source'] = (
+                            str(curve_local_source_val) if curve_local_source_val is not None else ''
+                        )
+                    if 'control/curve_local_entry_driver' in f and control_idx < len(
+                        f['control/curve_local_entry_driver']
+                    ):
+                        curve_local_entry_driver_val = f['control/curve_local_entry_driver'][control_idx]
+                        if isinstance(curve_local_entry_driver_val, bytes):
+                            curve_local_entry_driver_val = curve_local_entry_driver_val.decode('utf-8', 'ignore')
+                        frame_data['control']['curve_local_entry_driver'] = (
+                            str(curve_local_entry_driver_val)
+                            if curve_local_entry_driver_val is not None
+                            else ''
+                        )
+                    if 'control/curve_local_commit_driver' in f and control_idx < len(
+                        f['control/curve_local_commit_driver']
+                    ):
+                        curve_local_commit_driver_val = f['control/curve_local_commit_driver'][control_idx]
+                        if isinstance(curve_local_commit_driver_val, bytes):
+                            curve_local_commit_driver_val = curve_local_commit_driver_val.decode('utf-8', 'ignore')
+                        frame_data['control']['curve_local_commit_driver'] = (
+                            str(curve_local_commit_driver_val)
+                            if curve_local_commit_driver_val is not None
+                            else ''
+                        )
+                    if 'control/reference_lookahead_owner_mode' in f and control_idx < len(
+                        f['control/reference_lookahead_owner_mode']
+                    ):
+                        owner_mode_val = f['control/reference_lookahead_owner_mode'][control_idx]
+                        if isinstance(owner_mode_val, bytes):
+                            owner_mode_val = owner_mode_val.decode('utf-8', 'ignore')
+                        frame_data['control']['reference_lookahead_owner_mode'] = (
+                            str(owner_mode_val) if owner_mode_val is not None else ''
+                        )
+                    if 'control/reference_lookahead_entry_weight_source' in f and control_idx < len(
+                        f['control/reference_lookahead_entry_weight_source']
+                    ):
+                        entry_source_val = f['control/reference_lookahead_entry_weight_source'][control_idx]
+                        if isinstance(entry_source_val, bytes):
+                            entry_source_val = entry_source_val.decode('utf-8', 'ignore')
+                        frame_data['control']['reference_lookahead_entry_weight_source'] = (
+                            str(entry_source_val) if entry_source_val is not None else ''
+                        )
                     for key in (
                         'curve_phase',
                         'curve_phase_raw',
                         'curve_phase_term_preview',
                         'curve_phase_term_path',
                         'curve_phase_term_rise',
+                        'curve_phase_term_time',
                         'curve_phase_curvature_rise_abs',
+                        'curve_preview_far_phase',
+                        'curve_local_phase',
+                        'curve_local_phase_raw',
+                        'curve_local_entry_severity',
+                        'curve_local_entry_on_effective',
+                        'curve_local_phase_distance_start_effective_m',
+                        'curve_local_phase_time_start_effective_s',
+                        'curve_local_arm_phase_raw',
+                        'curve_local_sustain_phase_raw',
+                        'curve_local_distance_horizon_m',
+                        'curve_local_time_horizon_s',
                         'curve_intent',
                         'curve_intent_raw',
                         'curve_intent_term_preview',
@@ -1295,22 +1395,69 @@ def get_frame_data(filename, frame_index):
                         'curve_intent_speed_guardrail_cap_mps',
                         'curve_intent_speed_guardrail_confidence',
                         'reference_lookahead_target',
+                        'reference_lookahead_target_pre_entry_guard',
                         'reference_lookahead_after_slew',
                         'reference_lookahead_active',
+                        'reference_lookahead_owner_nominal_target',
+                        'reference_lookahead_owner_commit_band_target',
+                        'reference_lookahead_owner_entry_progress',
+                        'reference_lookahead_owner_commit_distance_progress',
+                        'reference_lookahead_owner_commit_phase_progress',
+                        'reference_lookahead_owner_commit_progress',
+                        'reference_lookahead_owner_commit_distance_start_effective_m',
+                        'reference_lookahead_owner_commit_band_clamp_delta_m',
+                        'reference_lookahead_local_gate_weight',
+                        'reference_lookahead_entry_shorten_guard_delta_m',
+                        'local_curve_reference_blend_weight',
+                        'local_curve_reference_progress_weight',
+                        'local_curve_reference_arc_curvature_abs',
+                        'local_curve_reference_target_x',
+                        'local_curve_reference_target_y',
+                        'local_curve_reference_target_heading',
+                        'local_curve_reference_target_distance_m',
+                        'local_curve_reference_vs_planner_delta_m',
+                        'local_curve_reference_curve_direction_sign',
+                        'local_curve_reference_curve_progress_ratio',
+                        'local_curve_reference_distance_to_curve_start_m',
                         'curve_anticipation_score',
                         'curve_anticipation_score_raw',
                         'curve_anticipation_term_curvature',
                         'curve_anticipation_term_heading',
                         'curve_anticipation_term_far_rise',
                         'distance_to_next_curve_start_m',
+                        'time_to_next_curve_start_s',
+                        'pp_curve_local_floor_m',
+                        'pp_curve_local_lookahead_pre_floor',
+                        'pp_curve_local_lookahead_post_floor',
+                        'pp_curve_local_shorten_delta_m',
                     ):
                         ds_name = f'control/{key}'
                         if ds_name in f and control_idx < len(f[ds_name]):
                             frame_data['control'][key] = float(f[ds_name][control_idx])
                     for key in (
                         'curve_phase_rearm_event',
+                        'curve_preview_far_upcoming',
+                        'curve_local_arm_ready',
+                        'curve_local_time_ready',
+                        'curve_local_in_curve_now',
+                        'curve_local_commit_ready',
+                        'curve_local_path_sustain_active',
+                        'curve_local_distance_ready',
+                        'curve_local_reentry_ready',
+                        'curve_local_rearm_cooldown_active',
+                        'curve_local_force_straight_active',
                         'curve_anticipation_active',
+                        'curve_intent_watchdog_triggered',
                         'curve_intent_speed_guardrail_active',
+                        'reference_lookahead_fallback_active',
+                        'reference_lookahead_owner_commit_band_clamp_active',
+                        'reference_lookahead_entry_shorten_guard_active',
+                        'local_curve_reference_active',
+                        'local_curve_reference_shadow_only',
+                        'local_curve_reference_valid',
+                        'local_curve_reference_fallback_active',
+                        'pp_curve_local_floor_active',
+                        'pp_curve_local_shorten_slew_active',
                     ):
                         ds_name = f'control/{key}'
                         if ds_name in f and control_idx < len(f[ds_name]):
@@ -1318,6 +1465,7 @@ def get_frame_data(filename, frame_index):
                     for key in (
                         'curve_phase_entry_frames',
                         'curve_phase_rearm_hold_frames',
+                        'curve_local_commit_streak_frames',
                     ):
                         ds_name = f'control/{key}'
                         if ds_name in f and control_idx < len(f[ds_name]):
@@ -1329,6 +1477,33 @@ def get_frame_data(filename, frame_index):
                         if isinstance(source_val, bytes):
                             source_val = source_val.decode('utf-8', 'ignore')
                         frame_data['control']['curve_anticipation_source'] = (
+                            str(source_val) if source_val is not None else ''
+                        )
+                    if 'control/local_curve_reference_mode' in f and control_idx < len(
+                        f['control/local_curve_reference_mode']
+                    ):
+                        source_val = f['control/local_curve_reference_mode'][control_idx]
+                        if isinstance(source_val, bytes):
+                            source_val = source_val.decode('utf-8', 'ignore')
+                        frame_data['control']['local_curve_reference_mode'] = (
+                            str(source_val) if source_val is not None else ''
+                        )
+                    if 'control/local_curve_reference_source' in f and control_idx < len(
+                        f['control/local_curve_reference_source']
+                    ):
+                        source_val = f['control/local_curve_reference_source'][control_idx]
+                        if isinstance(source_val, bytes):
+                            source_val = source_val.decode('utf-8', 'ignore')
+                        frame_data['control']['local_curve_reference_source'] = (
+                            str(source_val) if source_val is not None else ''
+                        )
+                    if 'control/local_curve_reference_fallback_reason' in f and control_idx < len(
+                        f['control/local_curve_reference_fallback_reason']
+                    ):
+                        source_val = f['control/local_curve_reference_fallback_reason'][control_idx]
+                        if isinstance(source_val, bytes):
+                            source_val = source_val.decode('utf-8', 'ignore')
+                        frame_data['control']['local_curve_reference_fallback_reason'] = (
                             str(source_val) if source_val is not None else ''
                         )
                     if 'control/is_road_straight' in f and control_idx < len(f['control/is_road_straight']):

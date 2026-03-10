@@ -248,6 +248,10 @@ class LateralController:
                  pp_stale_decay: float = 0.98,
                  pp_max_steering_rate: float = 0.4,
                  pp_max_steering_jerk: float = 30.0,
+                 pp_curve_local_lookahead_floor_enabled: bool = False,
+                 pp_curve_local_lookahead_floor_speed_table: Optional[list] = None,
+                 pp_curve_local_shorten_slew_m_per_frame: float = 0.0,
+                 pp_curve_local_floor_state_min: str = "ENTRY",
                  feedback_gain_min: float = 1.0,
                  feedback_gain_max: float = 1.2,
                  feedback_gain_curvature_min: float = 0.002,
@@ -491,10 +495,43 @@ class LateralController:
         self.pp_stale_decay = float(np.clip(pp_stale_decay, 0.5, 1.0))
         self.pp_max_steering_rate = max(0.05, float(pp_max_steering_rate))
         self.pp_max_steering_jerk = max(0.0, float(pp_max_steering_jerk))
+        self.pp_curve_local_lookahead_floor_enabled = bool(
+            pp_curve_local_lookahead_floor_enabled
+        )
+        self.pp_curve_local_shorten_slew_m_per_frame = max(
+            0.0, float(pp_curve_local_shorten_slew_m_per_frame)
+        )
+        self.pp_curve_local_floor_state_min = str(
+            pp_curve_local_floor_state_min or "ENTRY"
+        ).strip().upper()
+        if self.pp_curve_local_floor_state_min not in {"ENTRY", "COMMIT"}:
+            self.pp_curve_local_floor_state_min = "ENTRY"
+        self.pp_curve_local_lookahead_floor_speed_table = []
+        for row in pp_curve_local_lookahead_floor_speed_table or []:
+            if not isinstance(row, dict):
+                continue
+            speed_raw = row.get("speed_mps")
+            if speed_raw is None and "speed_mph" in row:
+                speed_raw = float(row.get("speed_mph")) * 0.44704
+            lookahead_raw = row.get("lookahead_m")
+            if speed_raw is None or lookahead_raw is None:
+                continue
+            try:
+                speed = float(speed_raw)
+                lookahead = float(lookahead_raw)
+            except (TypeError, ValueError):
+                continue
+            if not np.isfinite(speed) or not np.isfinite(lookahead):
+                continue
+            self.pp_curve_local_lookahead_floor_speed_table.append(
+                (max(0.0, speed), max(self.pp_min_lookahead, lookahead))
+            )
+        self.pp_curve_local_lookahead_floor_speed_table.sort(key=lambda item: item[0])
         self._pp_last_ref_x = 0.0
         self._pp_last_valid_steering = 0.0
         self._pp_stale_frames = 0
         self._pp_last_steering_rate = 0.0
+        self._pp_last_local_lookahead = None
         self.smoothed_path_curvature = 0.0
         self.feedback_gain_min = feedback_gain_min
         self.feedback_gain_max = feedback_gain_max
@@ -687,6 +724,33 @@ class LateralController:
         self._steering_rate_limit_effective_smoothed = float(smoothed)
         transition_active = bool(abs(smoothed - raw) > 1e-6)
         return raw, float(smoothed), transition_active
+
+    @staticmethod
+    def _curve_state_rank(state: str) -> int:
+        state_norm = str(state or "STRAIGHT").strip().upper()
+        return {
+            "STRAIGHT": 0,
+            "ENTRY": 1,
+            "COMMIT": 2,
+            "REARM": 0,
+        }.get(state_norm, 0)
+
+    def _lookup_pp_curve_local_floor(self, speed_mps: float) -> float:
+        table = self.pp_curve_local_lookahead_floor_speed_table
+        if not table:
+            return float(self.pp_min_lookahead)
+        speed = max(0.0, float(speed_mps))
+        if speed <= table[0][0]:
+            return float(table[0][1])
+        if speed >= table[-1][0]:
+            return float(table[-1][1])
+        for idx in range(1, len(table)):
+            left_speed, left_floor = table[idx - 1]
+            right_speed, right_floor = table[idx]
+            if speed <= right_speed:
+                ratio = (speed - left_speed) / max(1e-6, right_speed - left_speed)
+                return float(left_floor + ratio * (right_floor - left_floor))
+        return float(table[-1][1])
 
     def compute_steering(self, current_heading: float, reference_point: dict,
                         vehicle_position: Optional[np.ndarray] = None,
@@ -1131,10 +1195,28 @@ class LateralController:
         pp_ref_jump_clamped = False
         pp_stale_hold_active = False
         pp_steering_jerk_limited = False
+        pp_curve_local_floor_active = False
+        pp_curve_local_floor_m = 0.0
+        pp_curve_local_lookahead_pre_floor = 0.0
+        pp_curve_local_lookahead_post_floor = 0.0
+        pp_curve_local_shorten_slew_active = False
+        pp_curve_local_shorten_delta_m = 0.0
         stanley_heading_term = 0.0
         stanley_crosstrack_term = 0.0
         stanley_speed = current_speed if current_speed is not None else 0.0
         total_error_scaled = total_error
+        pp_curve_local_state = str(
+            reference_point.get(
+                "curve_local_state",
+                reference_point.get(
+                    "curve_intent_state",
+                    reference_point.get("curve_phase_state", "STRAIGHT"),
+                ),
+            )
+            or "STRAIGHT"
+        ).strip().upper()
+        if pp_curve_local_state not in {"STRAIGHT", "ENTRY", "COMMIT", "REARM"}:
+            pp_curve_local_state = "STRAIGHT"
 
         if self.control_mode == "pure_pursuit":
             # Pure Pursuit: compute steering from geometry, not error correction
@@ -1159,6 +1241,37 @@ class LateralController:
                 self._pp_stale_frames = 0
                 ld = np.sqrt(pp_ref_x**2 + pp_ref_y**2)
                 ld = max(ld, self.pp_min_lookahead)
+                pp_curve_local_lookahead_pre_floor = float(ld)
+                if (
+                    self.pp_curve_local_lookahead_floor_enabled
+                    and self._curve_state_rank(pp_curve_local_state)
+                    >= self._curve_state_rank(self.pp_curve_local_floor_state_min)
+                ):
+                    speed_for_floor = (
+                        float(current_speed)
+                        if current_speed is not None and np.isfinite(float(current_speed))
+                        else float(reference_point.get("velocity", 0.0) or 0.0)
+                    )
+                    pp_curve_local_floor_m = float(
+                        self._lookup_pp_curve_local_floor(speed_for_floor)
+                    )
+                    if ld < pp_curve_local_floor_m - 1e-6:
+                        pp_curve_local_floor_active = True
+                    ld = max(ld, pp_curve_local_floor_m)
+                    if (
+                        self.pp_curve_local_shorten_slew_m_per_frame > 0.0
+                        and self._pp_last_local_lookahead is not None
+                        and np.isfinite(float(self._pp_last_local_lookahead))
+                    ):
+                        min_allowed = float(self._pp_last_local_lookahead) - float(
+                            self.pp_curve_local_shorten_slew_m_per_frame
+                        )
+                        if ld < min_allowed:
+                            pp_curve_local_shorten_slew_active = True
+                            pp_curve_local_shorten_delta_m = float(min_allowed - ld)
+                            ld = min_allowed
+                pp_curve_local_lookahead_post_floor = float(ld)
+                self._pp_last_local_lookahead = float(ld)
                 alpha = np.arctan2(pp_ref_x, pp_ref_y)
 
                 wheelbase = 2.5
@@ -1475,8 +1588,27 @@ class LateralController:
         curve_intent_speed_guardrail_cap_mps = 0.0
         curve_intent_speed_guardrail_confidence = 0.0
         reference_lookahead_target = 0.0
+        reference_lookahead_target_pre_entry_guard = 0.0
         reference_lookahead_after_slew = 0.0
         reference_lookahead_active = 0.0
+        reference_lookahead_owner_mode = "unknown"
+        reference_lookahead_entry_weight_source = "unknown"
+        reference_lookahead_fallback_active = False
+        reference_lookahead_entry_shorten_guard_active = False
+        reference_lookahead_entry_shorten_guard_delta_m = 0.0
+        curve_local_entry_severity = 0.0
+        curve_local_entry_on_effective = 0.0
+        curve_local_phase_distance_start_effective_m = 0.0
+        curve_local_phase_time_start_effective_s = 0.0
+        curve_local_entry_driver = "none"
+        curve_local_arm_ready = False
+        curve_local_time_ready = False
+        curve_local_in_curve_now = False
+        curve_local_commit_ready = False
+        curve_local_commit_driver = "none"
+        curve_local_arm_phase_raw = 0.0
+        curve_local_sustain_phase_raw = 0.0
+        curve_local_path_sustain_active = False
         try:
             curve_anticipation_score = float(
                 reference_point.get("curve_anticipation_score", 0.0) or 0.0
@@ -1556,11 +1688,82 @@ class LateralController:
         except (TypeError, ValueError):
             curve_phase_term_rise = 0.0
         try:
+            curve_phase_term_time = float(
+                reference_point.get("curve_phase_term_time", 0.0) or 0.0
+            )
+        except (TypeError, ValueError):
+            curve_phase_term_time = 0.0
+        try:
             curve_phase_curvature_rise_abs = float(
                 reference_point.get("curve_phase_curvature_rise_abs", 0.0) or 0.0
             )
         except (TypeError, ValueError):
             curve_phase_curvature_rise_abs = 0.0
+        curve_preview_far_upcoming = bool(
+            reference_point.get(
+                "curve_preview_far_upcoming",
+                reference_point.get("curve_phase_preview_upcoming", False),
+            )
+        )
+        try:
+            curve_preview_far_phase = float(
+                reference_point.get("curve_preview_far_phase", 0.0) or 0.0
+            )
+            if not np.isfinite(curve_preview_far_phase):
+                curve_preview_far_phase = 0.0
+        except (TypeError, ValueError):
+            curve_preview_far_phase = 0.0
+        try:
+            curve_local_phase = float(
+                reference_point.get("curve_local_phase", curve_phase) or curve_phase
+            )
+            if not np.isfinite(curve_local_phase):
+                curve_local_phase = curve_phase
+        except (TypeError, ValueError):
+            curve_local_phase = curve_phase
+        try:
+            curve_local_phase_raw = float(
+                reference_point.get("curve_local_phase_raw", curve_phase_raw) or curve_phase_raw
+            )
+            if not np.isfinite(curve_local_phase_raw):
+                curve_local_phase_raw = curve_local_phase
+        except (TypeError, ValueError):
+            curve_local_phase_raw = curve_local_phase
+        curve_local_state = str(
+            reference_point.get("curve_local_state", curve_phase_state) or curve_phase_state
+        )
+        curve_local_phase_source = str(
+            reference_point.get("curve_local_phase_source", curve_phase_source) or curve_phase_source
+        )
+        curve_local_reentry_ready = bool(
+            reference_point.get("curve_local_reentry_ready", False)
+        )
+        scheduler_curve_local_phase = float(curve_local_phase)
+        scheduler_curve_local_phase_raw = float(curve_local_phase_raw)
+        scheduler_curve_local_state = str(curve_local_state or "STRAIGHT")
+        scheduler_curve_local_phase_source = str(curve_local_phase_source or "")
+        scheduler_curve_local_reentry_ready = bool(curve_local_reentry_ready)
+        try:
+            reference_lookahead_local_gate_weight = float(
+                reference_point.get("reference_lookahead_local_gate_weight", 0.0) or 0.0
+            )
+            if not np.isfinite(reference_lookahead_local_gate_weight):
+                reference_lookahead_local_gate_weight = 0.0
+        except (TypeError, ValueError):
+            reference_lookahead_local_gate_weight = 0.0
+        try:
+            time_to_next_curve_start_s = float(
+                reference_point.get("time_to_next_curve_start_s", np.nan)
+            )
+            if not np.isfinite(time_to_next_curve_start_s):
+                time_to_next_curve_start_s = None
+        except (TypeError, ValueError):
+            time_to_next_curve_start_s = None
+        curve_local_available = (
+            "curve_local_phase" in reference_point
+            or "curve_local_state" in reference_point
+            or "curve_preview_far_upcoming" in reference_point
+        )
         curve_intent_available = (
             "curve_intent" in reference_point
             or "curve_phase" in reference_point
@@ -1631,6 +1834,16 @@ class LateralController:
         except (TypeError, ValueError):
             reference_lookahead_target = 0.0
         try:
+            reference_lookahead_target_pre_entry_guard = float(
+                reference_point.get(
+                    "reference_lookahead_target_pre_entry_guard",
+                    reference_lookahead_target,
+                )
+                or reference_lookahead_target
+            )
+        except (TypeError, ValueError):
+            reference_lookahead_target_pre_entry_guard = reference_lookahead_target
+        try:
             reference_lookahead_after_slew = float(
                 reference_point.get("reference_lookahead_after_slew", 0.0) or 0.0
             )
@@ -1642,6 +1855,73 @@ class LateralController:
             )
         except (TypeError, ValueError):
             reference_lookahead_active = 0.0
+        reference_lookahead_owner_mode = str(
+            reference_point.get("reference_lookahead_owner_mode", "unknown") or "unknown"
+        )
+        reference_lookahead_entry_weight_source = str(
+            reference_point.get("reference_lookahead_entry_weight_source", "unknown") or "unknown"
+        )
+        reference_lookahead_fallback_active = bool(
+            reference_point.get("reference_lookahead_fallback_active", False)
+        )
+        reference_lookahead_entry_shorten_guard_active = bool(
+            reference_point.get("reference_lookahead_entry_shorten_guard_active", False)
+        )
+        try:
+            reference_lookahead_entry_shorten_guard_delta_m = float(
+                reference_point.get("reference_lookahead_entry_shorten_guard_delta_m", 0.0) or 0.0
+            )
+        except (TypeError, ValueError):
+            reference_lookahead_entry_shorten_guard_delta_m = 0.0
+        try:
+            curve_local_entry_severity = float(
+                reference_point.get("curve_local_entry_severity", 0.0) or 0.0
+            )
+        except (TypeError, ValueError):
+            curve_local_entry_severity = 0.0
+        try:
+            curve_local_entry_on_effective = float(
+                reference_point.get("curve_local_entry_on_effective", 0.0) or 0.0
+            )
+        except (TypeError, ValueError):
+            curve_local_entry_on_effective = 0.0
+        try:
+            curve_local_phase_distance_start_effective_m = float(
+                reference_point.get("curve_local_phase_distance_start_effective_m", 0.0) or 0.0
+            )
+        except (TypeError, ValueError):
+            curve_local_phase_distance_start_effective_m = 0.0
+        try:
+            curve_local_phase_time_start_effective_s = float(
+                reference_point.get("curve_local_phase_time_start_effective_s", 0.0) or 0.0
+            )
+        except (TypeError, ValueError):
+            curve_local_phase_time_start_effective_s = 0.0
+        curve_local_entry_driver = str(
+            reference_point.get("curve_local_entry_driver", "none") or "none"
+        )
+        curve_local_arm_ready = bool(reference_point.get("curve_local_arm_ready", False))
+        curve_local_time_ready = bool(reference_point.get("curve_local_time_ready", False))
+        curve_local_in_curve_now = bool(reference_point.get("curve_local_in_curve_now", False))
+        curve_local_commit_ready = bool(reference_point.get("curve_local_commit_ready", False))
+        curve_local_commit_driver = str(
+            reference_point.get("curve_local_commit_driver", "none") or "none"
+        )
+        try:
+            curve_local_arm_phase_raw = float(
+                reference_point.get("curve_local_arm_phase_raw", 0.0) or 0.0
+            )
+        except (TypeError, ValueError):
+            curve_local_arm_phase_raw = 0.0
+        try:
+            curve_local_sustain_phase_raw = float(
+                reference_point.get("curve_local_sustain_phase_raw", 0.0) or 0.0
+            )
+        except (TypeError, ValueError):
+            curve_local_sustain_phase_raw = 0.0
+        curve_local_path_sustain_active = bool(
+            reference_point.get("curve_local_path_sustain_active", False)
+        )
         preview_curve_upcoming = self._update_preview_curve_upcoming_state(
             preview_curvature_abs if preview_curvature_valid else None
         )
@@ -1658,10 +1938,16 @@ class LateralController:
         curve_intent_max_commit_triggered = False
         self._curve_intent_frames_since_reset += 1
         if self.curve_intent_single_owner_mode and curve_intent_available:
-            state_norm = str(curve_intent_state or "STRAIGHT").strip().upper()
+            state_norm = str(
+                curve_local_state if curve_local_available else curve_intent_state or "STRAIGHT"
+            ).strip().upper()
             if state_norm not in {"STRAIGHT", "ENTRY", "COMMIT", "REARM"}:
                 state_norm = "STRAIGHT"
-            curve_phase_source = "curve_intent_single_owner"
+            curve_phase_source = (
+                "curve_local_single_owner"
+                if curve_local_available
+                else "curve_intent_single_owner"
+            )
             try:
                 distance_to_next_curve_start_m = reference_point.get("distance_to_curve_start_m")
                 if distance_to_next_curve_start_m is not None:
@@ -1681,16 +1967,48 @@ class LateralController:
                     float(self.curve_intent_arm_distance_max_m),
                 )
             )
-            curve_intent_distance_ready = bool(
-                distance_to_next_curve_start_m is None
-                or float(distance_to_next_curve_start_m)
-                <= (curve_intent_distance_horizon_m + float(self.curve_intent_rearm_exit_hysteresis))
-            )
-            curve_intent_arm_signal_active = bool(
-                float(curve_intent_term_preview) >= float(self.curve_intent_arm_preview_min)
-                or float(abs(path_curvature)) >= float(self.curve_intent_arm_preview_min)
-                or float(curve_intent_term_rise) >= float(self.curve_intent_arm_rise_min)
-            )
+            if curve_local_available:
+                curve_intent_distance_horizon_m = reference_point.get(
+                    "curve_local_distance_horizon_m",
+                    curve_intent_distance_horizon_m,
+                )
+                explicit_local_distance_ready = reference_point.get(
+                    "curve_local_arm_ready",
+                    reference_point.get("curve_local_distance_ready"),
+                )
+                if explicit_local_distance_ready is not None:
+                    curve_intent_distance_ready = bool(explicit_local_distance_ready)
+                else:
+                    curve_intent_distance_ready = bool(
+                        state_norm in {"ENTRY", "COMMIT"}
+                        or reference_lookahead_local_gate_weight > 1e-3
+                    )
+                curve_intent_arm_signal_active = bool(
+                    state_norm in {"ENTRY", "COMMIT"}
+                    or (
+                        curve_preview_far_upcoming
+                        and curve_intent_distance_ready
+                        and reference_lookahead_local_gate_weight > 1e-3
+                    )
+                )
+            else:
+                curve_intent_distance_ready = bool(
+                    distance_to_next_curve_start_m is None
+                    or float(distance_to_next_curve_start_m)
+                    <= (curve_intent_distance_horizon_m + float(self.curve_intent_rearm_exit_hysteresis))
+                )
+                legacy_state_counts_as_arm = (
+                    int(self.curve_intent_force_straight_hold_frames) <= 0
+                )
+                curve_intent_arm_signal_active = bool(
+                    (
+                        legacy_state_counts_as_arm
+                        and state_norm in {"ENTRY", "COMMIT"}
+                    )
+                    or float(curve_intent_term_preview) > float(self.curve_intent_arm_preview_min)
+                    or float(abs(path_curvature)) > float(self.curve_intent_arm_preview_min)
+                    or float(curve_intent_term_rise) > float(self.curve_intent_arm_rise_min)
+                )
             curve_intent_startup_lockout_active = bool(
                 self._curve_intent_frames_since_reset
                 <= int(self.curve_intent_startup_ignore_frames)
@@ -1741,22 +2059,35 @@ class LateralController:
                 state_norm = "STRAIGHT"
                 self._curve_intent_force_straight_frames_remaining -= 1
             curve_upcoming = bool(state_norm in {"ENTRY", "COMMIT"})
-            if not curve_upcoming and curve_intent >= 0.45 and arm_allowed:
+            if not curve_upcoming and not curve_local_available and curve_intent >= 0.45 and arm_allowed:
                 curve_upcoming = True
             in_at_car_window = bool(
                 distance_to_next_curve_start_m is not None
                 and float(distance_to_next_curve_start_m) <= float(self.curve_at_car_distance_min_m)
             )
-            curve_at_car = bool(state_norm == "COMMIT" and in_at_car_window)
+            curve_at_car = bool(
+                state_norm == "COMMIT"
+                and (
+                    in_at_car_window
+                    or float(abs(path_curvature)) > float(self.road_curve_enter_threshold)
+                )
+            )
             if (
                 state_norm == "COMMIT"
                 and not curve_at_car
                 and distance_to_next_curve_start_m is None
+                and not curve_local_available
                 and curve_intent >= 0.85
             ):
                 # Legacy compatibility fallback when distance telemetry is absent.
                 curve_at_car = True
-            if curve_upcoming and not curve_at_car and curve_intent >= 0.70 and arm_allowed:
+            if (
+                curve_upcoming
+                and not curve_at_car
+                and not curve_local_available
+                and curve_intent >= 0.70
+                and arm_allowed
+            ):
                 curve_at_car = True
             if curve_at_car and in_at_car_window:
                 distance_to_next_curve_start_m = 0.0
@@ -1887,6 +2218,18 @@ class LateralController:
                     if self._curve_at_car_distance_remaining is not None
                     else None
                 )
+        curve_local_phase = float(scheduler_curve_local_phase)
+        curve_local_phase_raw = float(scheduler_curve_local_phase_raw)
+        curve_local_state = str(scheduler_curve_local_state or "STRAIGHT")
+        curve_local_phase_source = str(scheduler_curve_local_phase_source or "none")
+        curve_local_reentry_ready = bool(scheduler_curve_local_reentry_ready)
+        curve_local_distance_ready = bool(
+            reference_point.get("curve_local_distance_ready", curve_intent_distance_ready)
+        )
+        curve_local_distance_horizon_m = curve_intent_distance_horizon_m
+        curve_local_rearm_cooldown_active = bool(curve_intent_rearm_cooldown_active)
+        curve_local_force_straight_active = bool(curve_intent_force_straight_active)
+        curve_local_commit_streak_frames = int(self._curve_intent_commit_streak_frames)
         road_curvature_abs = float(abs(path_curvature)) if road_curvature_valid else None
         if road_curvature_abs is not None:
             if road_curvature_abs >= self.road_curve_enter_threshold:
@@ -3107,6 +3450,12 @@ class LateralController:
                 'pp_lookahead_distance': pp_lookahead_distance,
                 'pp_geometric_steering': pp_geometric_steering,
                 'pp_feedback_steering': pp_feedback_steering_val,
+                'pp_curve_local_floor_active': float(pp_curve_local_floor_active),
+                'pp_curve_local_floor_m': float(pp_curve_local_floor_m),
+                'pp_curve_local_lookahead_pre_floor': float(pp_curve_local_lookahead_pre_floor),
+                'pp_curve_local_lookahead_post_floor': float(pp_curve_local_lookahead_post_floor),
+                'pp_curve_local_shorten_slew_active': float(pp_curve_local_shorten_slew_active),
+                'pp_curve_local_shorten_delta_m': float(pp_curve_local_shorten_delta_m),
                 'pp_ref_jump_clamped': float(pp_ref_jump_clamped),
                 'pp_stale_hold_active': float(pp_stale_hold_active),
                 'pp_speed_norm_scale': float(_pp_speed_norm_scale),
@@ -3146,7 +3495,46 @@ class LateralController:
                 'curve_phase_term_preview': curve_phase_term_preview,
                 'curve_phase_term_path': curve_phase_term_path,
                 'curve_phase_term_rise': curve_phase_term_rise,
+                'curve_phase_term_time': curve_phase_term_time,
                 'curve_phase_curvature_rise_abs': curve_phase_curvature_rise_abs,
+                'curve_preview_far_upcoming': curve_preview_far_upcoming,
+                'curve_preview_far_phase': curve_preview_far_phase,
+                'curve_local_phase': curve_local_phase,
+                'curve_local_phase_raw': curve_local_phase_raw,
+                'curve_local_state': curve_local_state,
+                'curve_local_phase_source': curve_local_phase_source,
+                'curve_local_entry_driver': curve_local_entry_driver,
+                'curve_local_entry_severity': curve_local_entry_severity,
+                'curve_local_entry_on_effective': curve_local_entry_on_effective,
+                'curve_local_phase_distance_start_effective_m': (
+                    curve_local_phase_distance_start_effective_m
+                ),
+                'curve_local_phase_time_start_effective_s': (
+                    curve_local_phase_time_start_effective_s
+                ),
+                'curve_local_arm_ready': curve_local_arm_ready,
+                'curve_local_time_ready': curve_local_time_ready,
+                'curve_local_in_curve_now': curve_local_in_curve_now,
+                'curve_local_commit_ready': curve_local_commit_ready,
+                'curve_local_commit_driver': curve_local_commit_driver,
+                'curve_local_arm_phase_raw': curve_local_arm_phase_raw,
+                'curve_local_sustain_phase_raw': curve_local_sustain_phase_raw,
+                'curve_local_path_sustain_active': curve_local_path_sustain_active,
+                'curve_local_distance_ready': curve_local_distance_ready,
+                'curve_local_distance_horizon_m': (
+                    float(curve_local_distance_horizon_m)
+                    if curve_local_distance_horizon_m is not None
+                    else -1.0
+                ),
+                'curve_local_time_horizon_s': (
+                    float(curve_local_phase_time_start_effective_s)
+                    if np.isfinite(float(curve_local_phase_time_start_effective_s))
+                    else -1.0
+                ),
+                'curve_local_reentry_ready': curve_local_reentry_ready,
+                'curve_local_rearm_cooldown_active': curve_local_rearm_cooldown_active,
+                'curve_local_force_straight_active': curve_local_force_straight_active,
+                'curve_local_commit_streak_frames': int(curve_local_commit_streak_frames),
                 'curve_intent': curve_intent,
                 'curve_intent_raw': curve_intent_raw,
                 'curve_intent_state': curve_intent_state,
@@ -3186,9 +3574,150 @@ class LateralController:
                 'curve_intent_speed_guardrail_confidence': curve_intent_speed_guardrail_confidence,
                 'curve_intent_single_owner_mode': self.curve_intent_single_owner_mode,
                 'reference_lookahead_target': reference_lookahead_target,
+                'reference_lookahead_target_pre_entry_guard': reference_lookahead_target_pre_entry_guard,
                 'reference_lookahead_after_slew': reference_lookahead_after_slew,
                 'reference_lookahead_active': reference_lookahead_active,
+                'reference_lookahead_owner_nominal_target': float(
+                    reference_point.get(
+                        'reference_lookahead_owner_nominal_target',
+                        reference_lookahead_target,
+                    )
+                    or 0.0
+                ),
+                'reference_lookahead_owner_commit_band_target': float(
+                    reference_point.get(
+                        'reference_lookahead_owner_commit_band_target',
+                        0.0,
+                    )
+                    or 0.0
+                ),
+                'reference_lookahead_owner_entry_progress': float(
+                    reference_point.get(
+                        'reference_lookahead_owner_entry_progress',
+                        0.0,
+                    )
+                    or 0.0
+                ),
+                'reference_lookahead_owner_commit_distance_progress': float(
+                    reference_point.get(
+                        'reference_lookahead_owner_commit_distance_progress',
+                        0.0,
+                    )
+                    or 0.0
+                ),
+                'reference_lookahead_owner_commit_phase_progress': float(
+                    reference_point.get(
+                        'reference_lookahead_owner_commit_phase_progress',
+                        0.0,
+                    )
+                    or 0.0
+                ),
+                'reference_lookahead_owner_commit_progress': float(
+                    reference_point.get(
+                        'reference_lookahead_owner_commit_progress',
+                        0.0,
+                    )
+                    or 0.0
+                ),
+                'reference_lookahead_owner_commit_distance_start_effective_m': float(
+                    reference_point.get(
+                        'reference_lookahead_owner_commit_distance_start_effective_m',
+                        0.0,
+                    )
+                    or 0.0
+                ),
+                'reference_lookahead_owner_commit_band_clamp_active': bool(
+                    reference_point.get(
+                        'reference_lookahead_owner_commit_band_clamp_active',
+                        False,
+                    )
+                ),
+                'reference_lookahead_owner_commit_band_clamp_delta_m': float(
+                    reference_point.get(
+                        'reference_lookahead_owner_commit_band_clamp_delta_m',
+                        0.0,
+                    )
+                    or 0.0
+                ),
+                'reference_lookahead_local_gate_weight': reference_lookahead_local_gate_weight,
+                'reference_lookahead_owner_mode': reference_lookahead_owner_mode,
+                'reference_lookahead_entry_weight_source': reference_lookahead_entry_weight_source,
+                'reference_lookahead_fallback_active': reference_lookahead_fallback_active,
+                'reference_lookahead_entry_shorten_guard_active': reference_lookahead_entry_shorten_guard_active,
+                'reference_lookahead_entry_shorten_guard_delta_m': reference_lookahead_entry_shorten_guard_delta_m,
+                'local_curve_reference_mode': str(
+                    reference_point.get('local_curve_reference_mode', 'off') or 'off'
+                ),
+                'local_curve_reference_active': bool(
+                    reference_point.get('local_curve_reference_active', False)
+                ),
+                'local_curve_reference_shadow_only': bool(
+                    reference_point.get('local_curve_reference_shadow_only', False)
+                ),
+                'local_curve_reference_valid': bool(
+                    reference_point.get('local_curve_reference_valid', False)
+                ),
+                'local_curve_reference_source': str(
+                    reference_point.get('local_curve_reference_source', 'inactive') or 'inactive'
+                ),
+                'local_curve_reference_fallback_active': bool(
+                    reference_point.get('local_curve_reference_fallback_active', False)
+                ),
+                'local_curve_reference_fallback_reason': str(
+                    reference_point.get('local_curve_reference_fallback_reason', '') or ''
+                ),
+                'local_curve_reference_blend_weight': float(
+                    reference_point.get('local_curve_reference_blend_weight', 0.0) or 0.0
+                ),
+                'local_curve_reference_progress_weight': float(
+                    reference_point.get('local_curve_reference_progress_weight', 0.0) or 0.0
+                ),
+                'local_curve_reference_arc_curvature_abs': float(
+                    reference_point.get('local_curve_reference_arc_curvature_abs', 0.0) or 0.0
+                ),
+                'local_curve_reference_target_x': float(
+                    reference_point.get('local_curve_reference_target_x', reference_point.get('x', 0.0)) or 0.0
+                ),
+                'local_curve_reference_target_y': float(
+                    reference_point.get('local_curve_reference_target_y', reference_point.get('y', 0.0)) or 0.0
+                ),
+                'local_curve_reference_target_heading': float(
+                    reference_point.get(
+                        'local_curve_reference_target_heading',
+                        reference_point.get('heading', 0.0),
+                    )
+                    or 0.0
+                ),
+                'local_curve_reference_target_distance_m': float(
+                    reference_point.get('local_curve_reference_target_distance_m', 0.0) or 0.0
+                ),
+                'local_curve_reference_vs_planner_delta_m': float(
+                    reference_point.get('local_curve_reference_vs_planner_delta_m', 0.0) or 0.0
+                ),
+                'local_curve_reference_raw_delta_m': float(
+                    reference_point.get('local_curve_reference_raw_delta_m', 0.0) or 0.0
+                ),
+                'local_curve_reference_capped_delta_m': float(
+                    reference_point.get('local_curve_reference_capped_delta_m', 0.0) or 0.0
+                ),
+                'local_curve_reference_cap_active': bool(
+                    reference_point.get('local_curve_reference_cap_active', False)
+                ),
+                'local_curve_reference_curve_direction_sign': float(
+                    reference_point.get('local_curve_reference_curve_direction_sign', 0.0) or 0.0
+                ),
+                'local_curve_reference_curve_progress_ratio': (
+                    float(reference_point.get('local_curve_reference_curve_progress_ratio'))
+                    if reference_point.get('local_curve_reference_curve_progress_ratio') is not None
+                    else -1.0
+                ),
+                'local_curve_reference_distance_to_curve_start_m': (
+                    float(reference_point.get('local_curve_reference_distance_to_curve_start_m'))
+                    if reference_point.get('local_curve_reference_distance_to_curve_start_m') is not None
+                    else -1.0
+                ),
                 'distance_to_next_curve_start_m': distance_to_next_curve_start_m,
+                'time_to_next_curve_start_s': time_to_next_curve_start_s,
                 'current_curve_progress_ratio': current_curve_progress_ratio,
                 'curve_upcoming_enter_threshold': self.curve_upcoming_enter_threshold,
                 'curve_upcoming_exit_threshold': self.curve_upcoming_exit_threshold,
@@ -3253,6 +3782,7 @@ class LateralController:
         self._curve_at_car_state = False
         self._curve_at_car_distance_remaining = None
         self._road_straight_state = True
+        self._pp_last_local_lookahead = None
         self._road_straight_invalid_frames_remaining = 0
         if hasattr(self, 'last_steering'):
             self.last_steering = 0.0
@@ -4367,6 +4897,10 @@ class VehicleController:
                  pp_stale_decay: float = 0.98,
                  pp_max_steering_rate: float = 0.4,
                  pp_max_steering_jerk: float = 30.0,
+                 pp_curve_local_lookahead_floor_enabled: bool = False,
+                 pp_curve_local_lookahead_floor_speed_table: Optional[list] = None,
+                 pp_curve_local_shorten_slew_m_per_frame: float = 0.0,
+                 pp_curve_local_floor_state_min: str = "ENTRY",
                  feedback_gain_min: float = 1.0,
                  feedback_gain_max: float = 1.2,
                  feedback_gain_curvature_min: float = 0.002,
@@ -4602,6 +5136,10 @@ class VehicleController:
             pp_stale_decay=pp_stale_decay,
             pp_max_steering_rate=pp_max_steering_rate,
             pp_max_steering_jerk=pp_max_steering_jerk,
+            pp_curve_local_lookahead_floor_enabled=pp_curve_local_lookahead_floor_enabled,
+            pp_curve_local_lookahead_floor_speed_table=pp_curve_local_lookahead_floor_speed_table,
+            pp_curve_local_shorten_slew_m_per_frame=pp_curve_local_shorten_slew_m_per_frame,
+            pp_curve_local_floor_state_min=pp_curve_local_floor_state_min,
             feedback_gain_min=feedback_gain_min,
             feedback_gain_max=feedback_gain_max,
             feedback_gain_curvature_min=feedback_gain_curvature_min,
@@ -4771,12 +5309,21 @@ class VehicleController:
                 # ground-truth path is preferred when available).
                 raw_e_heading = float(lateral_metadata.get('heading_error', 0.0))
 
-            # One-frame delay compensation: predict where the vehicle will be
-            # next frame so the MPC plans for the state when the correction
-            # actually takes effect (computational delay = 1 frame ≈ 33 ms).
+            # Multi-frame delay compensation: predict where the vehicle will
+            # be when the steering correction actually takes effect.
+            # Measured system delay is ~4-6 frames (130-200 ms) including:
+            #   - control computation + network (~20 ms)
+            #   - Unity physics integration (~33-66 ms)
+            #   - camera pipeline + GT report (~50-100 ms)
+            # We predict forward by delay_frames * frame_dt using the
+            # kinematic model: e_lat += v * e_heading * dt (per step).
             frame_dt = dt or 0.033
             v_now = float(current_state.get('speed', 0.0))
-            predicted_e_lat = raw_e_lat + v_now * raw_e_heading * frame_dt
+            delay_frames = 2  # measured: ~2-3 frame effective loop delay
+            total_delay_dt = delay_frames * frame_dt
+            # Predict e_lat and e_heading forward through the delay
+            predicted_e_heading = raw_e_heading  # heading changes slowly
+            predicted_e_lat = raw_e_lat + v_now * raw_e_heading * total_delay_dt
 
             # Build MPC curvature preview horizon: interpolate distance-sampled
             # curvature from the trajectory planner to MPC time steps.

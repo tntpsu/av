@@ -1699,7 +1699,7 @@ public class GroundTruthReporter : MonoBehaviour
         // Use direction-based curvature for polyline tracks to avoid underestimation.
         // curvature ≈ (heading change) / (arc length).
         float pathLength = Mathf.Max(0.01f, roadGenerator.GetPathLength());
-        float sampleDistance = 1.0f; // meters along path for curvature estimate
+        float sampleDistance = 1.5f; // meters along path for curvature estimate (must not equal sample_spacing to avoid chord aliasing)
         float dt = sampleDistance / pathLength;
         float tPrev = Mathf.Repeat(t - dt, 1f);
         float tNext = Mathf.Repeat(t + dt, 1f);

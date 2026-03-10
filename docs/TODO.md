@@ -1,6 +1,16 @@
-# TODO: Near-Term (Phase 1 Completion)
+# TODO: Near-Term (S2-M5 Track Coverage Expansion)
 
-**Note:** For stage/phase status and promotion gates, see [ROADMAP.md](ROADMAP.md) (single source of truth). This file tracks near-term checklists and Stack Isolation TODOs.
+**Source of truth:** For stage/phase status and promotion gates, see [ROADMAP.md](ROADMAP.md). This file tracks the active near-term checklist plus historical execution notes kept for traceability.
+
+## Active Near-Term Work
+
+- [ ] Execute `S2-M5` track coverage expansion on at least one additional track beyond `tracks/s_loop.yml` and `tracks/highway_65.yml`.
+- [ ] Run `3x` gated validation per added track with the current promoted hybrid control stack.
+- [ ] Require analyzer output to report regime usage (`pp_frames`, `mpc_frames`) for every promotion candidate.
+- [ ] Use only `tuning_valid=true` runs for parameter decisions and promotion evidence.
+- [ ] Investigate low-speed PP curve-intent latch on short-straight tracks (`recording_20260306_191155.h5`: `curve_phase_preview_upcoming=100%`, `curve_intent_state≈COMMIT` for nearly the full run).
+
+**Historical note:** The PP/Stage-1 sections below are retained as archive material. They are not the current execution backlog.
 
 ## Pure Pursuit Control (S1-M33) — Completed
 
@@ -241,9 +251,9 @@ Acceptance tests:
 
 Perception/control stability improvements (RANSAC fix, smoothing, deadband) and Pure Pursuit migration (S1-M33, S1-M35, S1-M36–M39) are complete. See ROADMAP.md for current status.
 
-## Current Focus (align with docs/ROADMAP.md Stage 1)
+## Historical Focus Snapshot (Superseded)
 
-S-Loop turn clearance (S1-M32) items completed. See ROADMAP.md for current micro-steps (e.g. S1-M4, S1-M5) and promotion gates.
+S-loop turn clearance (`S1-M32`) items completed. See [ROADMAP.md](ROADMAP.md) for the current active roadmap and promotion gates.
 
 ### S1-M32 Completed (2026-02)
 - [x] **A1–A4:** Curvature guard, heading fallback, smoothing, curvature preview

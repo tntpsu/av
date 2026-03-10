@@ -1225,6 +1225,100 @@ def _print_summary_report(recording_path: Path, summary: Dict, analyze_to_failur
             f"{curve_intent_diag.get('curvature_ratio_p50') or 0.0:.2f} / "
             f"{curve_intent_diag.get('curvature_ratio_p95') or 0.0:.2f}"
         )
+    curve_local_contract = summary.get("curve_local_contract", {})
+    if curve_local_contract.get("curve_local_contract_available"):
+        limits = curve_local_contract.get("limits", {})
+        print(
+            "   Curve Preview Active On Straights: "
+            f"{float(curve_local_contract.get('curve_preview_far_active_straight_rate', 0.0)):.1f}%"
+        )
+        print(
+            "   Curve Local Active On Straights: "
+            f"{float(curve_local_contract.get('curve_local_active_straight_rate', 0.0)):.1f}% "
+            f"(<= {float(limits.get('curve_local_active_straight_rate_max_pct', 5.0)):.1f}%)"
+        )
+        if "curve_local_arm_ready_straight_rate" in curve_local_contract:
+            print(
+                "   Curve Local Arm-Ready On Straights: "
+                f"{float(curve_local_contract.get('curve_local_arm_ready_straight_rate', 0.0)):.1f}%"
+            )
+        if "curve_local_commit_ready_straight_rate" in curve_local_contract:
+            print(
+                "   Curve Local Commit-Ready On Straights: "
+                f"{float(curve_local_contract.get('curve_local_commit_ready_straight_rate', 0.0)):.1f}%"
+            )
+        if "curve_local_path_sustain_active_straight_rate" in curve_local_contract:
+            print(
+                "   Curve Local Path-Sustain On Straights: "
+                f"{float(curve_local_contract.get('curve_local_path_sustain_active_straight_rate', 0.0)):.1f}%"
+            )
+        if "curve_local_arm_without_ready_count" in curve_local_contract:
+            print(
+                "   Curve Local Arm Without Ready: "
+                f"{int(curve_local_contract.get('curve_local_arm_without_ready_count', 0))}"
+            )
+        if "curve_local_commit_without_ready_count" in curve_local_contract:
+            print(
+                "   Curve Local Commit Without Ready: "
+                f"{int(curve_local_contract.get('curve_local_commit_without_ready_count', 0))}"
+            )
+        print(
+            "   Curve Local Re-entry Without Gate: "
+            f"{int(curve_local_contract.get('curve_local_reentry_without_gate_count', 0))}"
+        )
+        print(
+            "   Curve Watchdog Ping-Pong: "
+            f"{int(curve_local_contract.get('curve_local_watchdog_pingpong_count', 0))}"
+        )
+        print(
+            "   Curve COMMIT Before Distance-Ready: "
+            f"{int(curve_local_contract.get('curve_local_commit_without_distance_ready_count', 0))}"
+        )
+        print(
+            "   Lookahead Collapse Violations: "
+            f"{int(curve_local_contract.get('curve_lookahead_collapse_violation_count', 0))}"
+        )
+        print(
+            "   Straight Root-Cause P50s (gate/raw/far/time): "
+            f"{(curve_local_contract.get('curve_local_gate_weight_straight_p50') if curve_local_contract.get('curve_local_gate_weight_straight_p50') is not None else float('nan')):.2f} / "
+            f"{(curve_local_contract.get('curve_local_phase_raw_straight_p50') if curve_local_contract.get('curve_local_phase_raw_straight_p50') is not None else float('nan')):.2f} / "
+            f"{(curve_local_contract.get('curve_preview_far_phase_straight_p50') if curve_local_contract.get('curve_preview_far_phase_straight_p50') is not None else float('nan')):.2f} / "
+            f"{(curve_local_contract.get('curve_phase_term_time_straight_p50') if curve_local_contract.get('curve_phase_term_time_straight_p50') is not None else float('nan')):.2f}"
+        )
+        straight_source = curve_local_contract.get("straight_summary_source")
+        straight_delta = curve_local_contract.get("straight_summary_vs_segment_rate_delta_pct")
+        if straight_source or straight_delta is not None:
+            print(
+                "   Straight Summary Source: "
+                f"{straight_source or 'unknown'}"
+                + (
+                    f" (delta vs segment aggregate: {float(straight_delta):.2f}%)"
+                    if straight_delta is not None
+                    else ""
+                )
+            )
+    turn_in_owner = summary.get("turn_in_owner", {})
+    if turn_in_owner.get("availability") == "available":
+        print(
+            "   Turn-In Owner: "
+            f"mode={turn_in_owner.get('owner_mode') or 'N/A'}, "
+            f"source={turn_in_owner.get('entry_weight_source') or 'N/A'}, "
+            f"fallbackRate={(float(turn_in_owner.get('fallback_active_rate')) if turn_in_owner.get('fallback_active_rate') is not None else float('nan')):.1f}%, "
+            f"armWithoutReady={int(turn_in_owner.get('curve_local_arm_without_ready_count', 0))}, "
+            f"commitWithoutReady={int(turn_in_owner.get('curve_local_commit_without_ready_count', 0))}, "
+            f"onsetVsStartP50={(float(turn_in_owner.get('steering_onset_minus_curve_start_frames_p50')) if turn_in_owner.get('steering_onset_minus_curve_start_frames_p50') is not None else float('nan')):.1f} fr"
+        )
+    local_curve_reference = summary.get("local_curve_reference", {})
+    if local_curve_reference.get("availability") == "available":
+        print(
+            "   Local Arc Reference: "
+            f"mode={local_curve_reference.get('mode') or 'N/A'}, "
+            f"source={local_curve_reference.get('source_mode') or 'N/A'}, "
+            f"fallbackReason={local_curve_reference.get('fallback_reason_mode') or 'N/A'}, "
+            f"activeRate={(float(local_curve_reference.get('active_rate')) if local_curve_reference.get('active_rate') is not None else float('nan')):.1f}%, "
+            f"fallbackRate={(float(local_curve_reference.get('fallback_active_rate')) if local_curve_reference.get('fallback_active_rate') is not None else float('nan')):.1f}%, "
+            f"plannerDeltaP50={(float(local_curve_reference.get('planner_delta_p50_m')) if local_curve_reference.get('planner_delta_p50_m') is not None else float('nan')):.2f} m"
+        )
     print()
 
     print("4. SPEED CONTROL")
@@ -1561,6 +1655,63 @@ def _print_summary_report(recording_path: Path, summary: Dict, analyze_to_failur
             f"{first_fault_chain.get('first_speed_above_feasibility_frame')}"
         )
         print(f"     first_boundary_breach_frame: {first_fault_chain.get('first_boundary_breach_frame')}")
+    curve_turn_events = summary.get("curve_turn_events", [])
+    if curve_turn_events:
+        print("   Curve Turn Events:")
+        for event in curve_turn_events:
+            pp_min = event.get('pp_lookahead_min_m')
+            pp_text = f"{float(pp_min):.2f} m" if pp_min is not None else "N/A"
+            curve_start_frame = event.get("curve_start_frame")
+            onset_distance = event.get("steering_onset_distance_m")
+            onset_ttc = event.get("steering_onset_ttc_s")
+            onset_text = (
+                f"{float(onset_distance):.2f} m / {float(onset_ttc):.2f} s"
+                if onset_distance is not None and onset_ttc is not None
+                else "N/A"
+            )
+            onset_delta_frames = event.get("steering_onset_minus_curve_start_frames")
+            onset_delta_text = (
+                f"{int(onset_delta_frames):+d} fr"
+                if onset_delta_frames is not None
+                else "N/A"
+            )
+            shorten_step_min = event.get("pp_pre_floor_shorten_step_min_m_per_frame")
+            rescue_delta_max = event.get("pp_floor_rescue_delta_max_m")
+            rescue_delta_mean = event.get("pp_floor_rescue_delta_mean_m")
+            entry_severity_p50 = event.get("curve_local_entry_severity_p50")
+            entry_on_p50 = event.get("curve_local_entry_on_effective_p50")
+            entry_dist_start_p50 = event.get("curve_local_phase_distance_start_effective_p50_m")
+            entry_driver_mode = event.get("curve_local_entry_driver_mode")
+            owner_mode = event.get("reference_lookahead_owner_mode")
+            owner_source = event.get("reference_lookahead_entry_weight_source")
+            fallback_rate = event.get("reference_lookahead_fallback_active_rate")
+            print(
+                f"     C{event.get('curve_index', '?')}: entry={event.get('entry_frame')}, "
+                f"exit={event.get('exit_frame')}, peak|lat|={float(event.get('peak_lateral_error_m', 0.0)):.3f} m, "
+                f"curveStart={curve_start_frame}, ppLdMin={pp_text}, onset={onset_text}, onsetVsStart={onset_delta_text}, "
+                f"entrySevP50={(float(entry_severity_p50) if entry_severity_p50 is not None else float('nan')):.2f}, "
+                f"entryOnP50={(float(entry_on_p50) if entry_on_p50 is not None else float('nan')):.2f}, "
+                f"entryDistStartP50={(float(entry_dist_start_p50) if entry_dist_start_p50 is not None else float('nan')):.2f} m, "
+                f"entryDriver={entry_driver_mode or 'N/A'}, "
+                f"owner={owner_mode or 'N/A'}, source={owner_source or 'N/A'}, "
+                f"fallbackRate={(float(fallback_rate) if fallback_rate is not None else float('nan')):.1f}%, "
+                f"preLdStepMin={(float(shorten_step_min) if shorten_step_min is not None else float('nan')):.3f} m/fr, "
+                f"floorRescueMax={(float(rescue_delta_max) if rescue_delta_max is not None else float('nan')):.3f} m, "
+                f"floorRescueMean={(float(rescue_delta_mean) if rescue_delta_mean is not None else float('nan')):.3f} m, "
+                f"lateTurnIn={'YES' if event.get('late_turn_in') else 'NO'}"
+            )
+    curve_straight_segments = summary.get("curve_straight_segments", [])
+    if curve_straight_segments:
+        print("   Straight Segment Latch Inspector:")
+        for segment in curve_straight_segments:
+            print(
+                f"     S{segment.get('straight_index', '?')}: frames={segment.get('start_frame')}-{segment.get('end_frame')}, "
+                f"far={float(segment.get('far_preview_active_rate', 0.0) or 0.0):.1f}%, "
+                f"local={float(segment.get('local_active_rate', 0.0) or 0.0):.1f}%, "
+                f"pingpong={int(segment.get('watchdog_pingpong_count', 0) or 0)}, "
+                f"gateP50={(segment.get('gate_weight_p50') if segment.get('gate_weight_p50') is not None else float('nan')):.2f}, "
+                f"rawP50={(segment.get('local_phase_raw_p50') if segment.get('local_phase_raw_p50') is not None else float('nan')):.2f}"
+            )
     print()
 
     print("12. SAFETY METRICS")

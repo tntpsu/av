@@ -8,8 +8,8 @@ gain causes underdamped oscillation.
 State:  x = [e_lat, e_heading, v]
 Input:  u = [δ_norm, a]
 
-Dynamics (discrete, small-angle linearization):
-  e_lat[k+1]     = e_lat[k] + v[k]·e_heading[k]·dt − κ_ref[k]·v[k]²·dt
+Dynamics (discrete, Frenet error model, small-angle linearization):
+  e_lat[k+1]     = e_lat[k] + v[k]·e_heading[k]·dt
   e_heading[k+1] = e_heading[k] + (v[k]/L)·δ_norm[k]·δ_max·dt − κ_ref[k]·v[k]·dt
   v[k+1]         = v[k] + a[k]·dt
 """
@@ -377,7 +377,7 @@ class MPCSolver:
             kk = kappa[k]
 
             # A_k matrix (state transition)
-            # e_lat: e_lat + v*e_heading*dt - κ*v²*dt
+            # e_lat: e_lat + v*e_heading*dt  (Frenet: no κ term)
             A_new[dyn_row + 0, x_col + 0] = 1.0
             A_new[dyn_row + 0, x_col + 1] = v_safe * dt        # ∂e_lat/∂e_heading
             A_new[dyn_row + 0, x_col + 2] = 0.0                # linearized: ignore ∂/∂v for now
@@ -406,8 +406,13 @@ class MPCSolver:
             A_new[dyn_row + 1, x_next_col + 1] = -1.0
             A_new[dyn_row + 2, x_next_col + 2] = -1.0
 
-            # Affine term c_k (curvature feedforward + nonlinear terms)
-            c_lat = -kk * v_safe * v_safe * dt     # −κ·v²·dt
+            # Affine term c_k (curvature feedforward)
+            # NOTE: c_lat must be 0.  In Frenet error coordinates, curvature
+            # affects only heading (ė_ψ = v·κ_car − v·κ_road).  The lateral
+            # equation is ė_y = v·sin(e_ψ) ≈ v·e_ψ — no κ term.  A nonzero
+            # c_lat creates phantom lateral drift that causes limit-cycle
+            # oscillation on curved roads (see Phase 2.8 root-cause analysis).
+            c_lat = 0.0
             c_head = -kk * v_safe * dt              # −κ·v·dt
             c_v = 0.0
             c_vec.append(np.array([c_lat, c_head, c_v]))

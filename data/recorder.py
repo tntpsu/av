@@ -1723,6 +1723,42 @@ class DataRecorder:
             dtype=np.float32
         )
         self.h5_file.create_dataset(
+            "control/pp_curve_local_floor_active",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/pp_curve_local_floor_m",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/pp_curve_local_lookahead_pre_floor",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/pp_curve_local_lookahead_post_floor",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/pp_curve_local_shorten_slew_active",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/pp_curve_local_shorten_delta_m",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
             "control/pp_ref_jump_clamped",
             shape=(0,),
             maxshape=max_shape,
@@ -2391,10 +2427,172 @@ class DataRecorder:
             dtype=np.float32
         )
         self.h5_file.create_dataset(
+            "control/curve_phase_term_time",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
             "control/curve_phase_curvature_rise_abs",
             shape=(0,),
             maxshape=max_shape,
             dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/curve_preview_far_upcoming",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int8
+        )
+        self.h5_file.create_dataset(
+            "control/curve_preview_far_phase",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/curve_local_phase",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/curve_local_phase_raw",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/curve_local_state",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=h5py.string_dtype(encoding='utf-8', length=16)
+        )
+        self.h5_file.create_dataset(
+            "control/curve_local_phase_source",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=h5py.string_dtype(encoding='utf-8', length=64)
+        )
+        self.h5_file.create_dataset(
+            "control/curve_local_entry_driver",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=h5py.string_dtype(encoding='utf-8', length=32)
+        )
+        self.h5_file.create_dataset(
+            "control/curve_local_entry_severity",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/curve_local_entry_on_effective",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/curve_local_phase_distance_start_effective_m",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/curve_local_phase_time_start_effective_s",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/curve_local_arm_ready",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int8
+        )
+        self.h5_file.create_dataset(
+            "control/curve_local_time_ready",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int8
+        )
+        self.h5_file.create_dataset(
+            "control/curve_local_in_curve_now",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int8
+        )
+        self.h5_file.create_dataset(
+            "control/curve_local_commit_ready",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int8
+        )
+        self.h5_file.create_dataset(
+            "control/curve_local_commit_driver",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=h5py.string_dtype(encoding='utf-8', length=16)
+        )
+        self.h5_file.create_dataset(
+            "control/curve_local_arm_phase_raw",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/curve_local_sustain_phase_raw",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/curve_local_path_sustain_active",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int8
+        )
+        self.h5_file.create_dataset(
+            "control/curve_local_distance_ready",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int8
+        )
+        self.h5_file.create_dataset(
+            "control/curve_local_distance_horizon_m",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/curve_local_time_horizon_s",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/curve_local_reentry_ready",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int8
+        )
+        self.h5_file.create_dataset(
+            "control/curve_local_rearm_cooldown_active",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int8
+        )
+        self.h5_file.create_dataset(
+            "control/curve_local_force_straight_active",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int8
+        )
+        self.h5_file.create_dataset(
+            "control/curve_local_commit_streak_frames",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int32
         )
         self.h5_file.create_dataset(
             "control/curve_intent",
@@ -2437,6 +2635,12 @@ class DataRecorder:
             shape=(0,),
             maxshape=max_shape,
             dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/curve_intent_watchdog_triggered",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int8
         )
         self.h5_file.create_dataset(
             "control/curve_intent_speed_guardrail_active",
@@ -2505,6 +2709,12 @@ class DataRecorder:
             dtype=np.float32
         )
         self.h5_file.create_dataset(
+            "control/reference_lookahead_target_pre_entry_guard",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
             "control/reference_lookahead_after_slew",
             shape=(0,),
             maxshape=max_shape,
@@ -2517,7 +2727,229 @@ class DataRecorder:
             dtype=np.float32
         )
         self.h5_file.create_dataset(
+            "control/reference_lookahead_owner_nominal_target",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/reference_lookahead_owner_commit_band_target",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/reference_lookahead_owner_entry_progress",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/reference_lookahead_owner_commit_distance_progress",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/reference_lookahead_owner_commit_phase_progress",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/reference_lookahead_owner_commit_progress",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/reference_lookahead_owner_commit_distance_start_effective_m",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/reference_lookahead_owner_commit_band_clamp_active",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int8
+        )
+        self.h5_file.create_dataset(
+            "control/reference_lookahead_owner_commit_band_clamp_delta_m",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/reference_lookahead_local_gate_weight",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/reference_lookahead_owner_mode",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=h5py.string_dtype(encoding='utf-8', length=32)
+        )
+        self.h5_file.create_dataset(
+            "control/reference_lookahead_entry_weight_source",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=h5py.string_dtype(encoding='utf-8', length=64)
+        )
+        self.h5_file.create_dataset(
+            "control/reference_lookahead_fallback_active",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int8
+        )
+        self.h5_file.create_dataset(
+            "control/reference_lookahead_entry_shorten_guard_active",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int8
+        )
+        self.h5_file.create_dataset(
+            "control/reference_lookahead_entry_shorten_guard_delta_m",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/local_curve_reference_mode",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=h5py.string_dtype(encoding='utf-8', length=16)
+        )
+        self.h5_file.create_dataset(
+            "control/local_curve_reference_active",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int8
+        )
+        self.h5_file.create_dataset(
+            "control/local_curve_reference_shadow_only",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int8
+        )
+        self.h5_file.create_dataset(
+            "control/local_curve_reference_valid",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int8
+        )
+        self.h5_file.create_dataset(
+            "control/local_curve_reference_source",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=h5py.string_dtype(encoding='utf-8', length=32)
+        )
+        self.h5_file.create_dataset(
+            "control/local_curve_reference_fallback_active",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int8
+        )
+        self.h5_file.create_dataset(
+            "control/local_curve_reference_fallback_reason",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=h5py.string_dtype(encoding='utf-8', length=32)
+        )
+        self.h5_file.create_dataset(
+            "control/local_curve_reference_blend_weight",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/local_curve_reference_progress_weight",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/local_curve_reference_arc_curvature_abs",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/local_curve_reference_target_x",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/local_curve_reference_target_y",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/local_curve_reference_target_heading",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/local_curve_reference_target_distance_m",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/local_curve_reference_vs_planner_delta_m",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/local_curve_reference_curve_direction_sign",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/local_curve_reference_curve_progress_ratio",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/local_curve_reference_distance_to_curve_start_m",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/local_curve_reference_raw_delta_m",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/local_curve_reference_capped_delta_m",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/local_curve_reference_cap_active",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int8
+        )
+        self.h5_file.create_dataset(
             "control/distance_to_next_curve_start_m",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/time_to_next_curve_start_s",
             shape=(0,),
             maxshape=max_shape,
             dtype=np.float32
@@ -4197,7 +4629,34 @@ class DataRecorder:
         curve_phase_term_preview_list = []
         curve_phase_term_path_list = []
         curve_phase_term_rise_list = []
+        curve_phase_term_time_list = []
         curve_phase_curvature_rise_abs_list = []
+        curve_preview_far_upcoming_list = []
+        curve_preview_far_phase_list = []
+        curve_local_phase_list = []
+        curve_local_phase_raw_list = []
+        curve_local_state_list = []
+        curve_local_phase_source_list = []
+        curve_local_entry_driver_list = []
+        curve_local_entry_severity_list = []
+        curve_local_entry_on_effective_list = []
+        curve_local_phase_distance_start_effective_m_list = []
+        curve_local_phase_time_start_effective_s_list = []
+        curve_local_arm_ready_list = []
+        curve_local_time_ready_list = []
+        curve_local_in_curve_now_list = []
+        curve_local_commit_ready_list = []
+        curve_local_commit_driver_list = []
+        curve_local_arm_phase_raw_list = []
+        curve_local_sustain_phase_raw_list = []
+        curve_local_path_sustain_active_list = []
+        curve_local_distance_ready_list = []
+        curve_local_distance_horizon_m_list = []
+        curve_local_time_horizon_s_list = []
+        curve_local_reentry_ready_list = []
+        curve_local_rearm_cooldown_active_list = []
+        curve_local_force_straight_active_list = []
+        curve_local_commit_streak_frames_list = []
         curve_intent_list = []
         curve_intent_raw_list = []
         curve_intent_state_list = []
@@ -4205,6 +4664,7 @@ class DataRecorder:
         curve_intent_term_path_list = []
         curve_intent_term_rise_list = []
         curve_intent_confidence_list = []
+        curve_intent_watchdog_triggered_list = []
         curve_intent_speed_guardrail_active_list = []
         curve_intent_speed_guardrail_cap_mps_list = []
         curve_intent_speed_guardrail_confidence_list = []
@@ -4216,9 +4676,47 @@ class DataRecorder:
         curve_anticipation_term_heading_list = []
         curve_anticipation_term_far_rise_list = []
         reference_lookahead_target_list = []
+        reference_lookahead_target_pre_entry_guard_list = []
         reference_lookahead_after_slew_list = []
         reference_lookahead_active_list = []
+        reference_lookahead_owner_nominal_target_list = []
+        reference_lookahead_owner_commit_band_target_list = []
+        reference_lookahead_owner_entry_progress_list = []
+        reference_lookahead_owner_commit_distance_progress_list = []
+        reference_lookahead_owner_commit_phase_progress_list = []
+        reference_lookahead_owner_commit_progress_list = []
+        reference_lookahead_owner_commit_distance_start_effective_m_list = []
+        reference_lookahead_owner_commit_band_clamp_active_list = []
+        reference_lookahead_owner_commit_band_clamp_delta_m_list = []
+        reference_lookahead_local_gate_weight_list = []
+        reference_lookahead_owner_mode_list = []
+        reference_lookahead_entry_weight_source_list = []
+        reference_lookahead_fallback_active_list = []
+        reference_lookahead_entry_shorten_guard_active_list = []
+        reference_lookahead_entry_shorten_guard_delta_m_list = []
+        local_curve_reference_mode_list = []
+        local_curve_reference_active_list = []
+        local_curve_reference_shadow_only_list = []
+        local_curve_reference_valid_list = []
+        local_curve_reference_source_list = []
+        local_curve_reference_fallback_active_list = []
+        local_curve_reference_fallback_reason_list = []
+        local_curve_reference_blend_weight_list = []
+        local_curve_reference_progress_weight_list = []
+        local_curve_reference_arc_curvature_abs_list = []
+        local_curve_reference_target_x_list = []
+        local_curve_reference_target_y_list = []
+        local_curve_reference_target_heading_list = []
+        local_curve_reference_target_distance_m_list = []
+        local_curve_reference_vs_planner_delta_m_list = []
+        local_curve_reference_curve_direction_sign_list = []
+        local_curve_reference_curve_progress_ratio_list = []
+        local_curve_reference_distance_to_curve_start_m_list = []
+        local_curve_reference_raw_delta_m_list = []
+        local_curve_reference_capped_delta_m_list = []
+        local_curve_reference_cap_active_list = []
         distance_to_next_curve_start_m_list = []
+        time_to_next_curve_start_s_list = []
         is_road_straight_list = []
         road_curvature_valid_list = []
         road_curvature_abs_list = []
@@ -4356,6 +4854,12 @@ class DataRecorder:
         pp_lookahead_distance_list = []
         pp_geometric_steering_list = []
         pp_feedback_steering_list = []
+        pp_curve_local_floor_active_list = []
+        pp_curve_local_floor_m_list = []
+        pp_curve_local_lookahead_pre_floor_list = []
+        pp_curve_local_lookahead_post_floor_list = []
+        pp_curve_local_shorten_slew_active_list = []
+        pp_curve_local_shorten_delta_m_list = []
         pp_ref_jump_clamped_list = []
         pp_stale_hold_active_list = []
         pp_steering_jerk_limited_list = []
@@ -4598,8 +5102,104 @@ class DataRecorder:
             curve_phase_term_rise_list.append(
                 float(getattr(cc, 'curve_phase_term_rise', 0.0) or 0.0)
             )
+            curve_phase_term_time_list.append(
+                float(getattr(cc, 'curve_phase_term_time', 0.0) or 0.0)
+            )
             curve_phase_curvature_rise_abs_list.append(
                 float(getattr(cc, 'curve_phase_curvature_rise_abs', 0.0) or 0.0)
+            )
+            curve_preview_far_upcoming_list.append(
+                1 if getattr(cc, 'curve_preview_far_upcoming', False) else 0
+            )
+            curve_preview_far_phase_list.append(
+                float(getattr(cc, 'curve_preview_far_phase', 0.0) or 0.0)
+            )
+            curve_local_phase_list.append(
+                float(getattr(cc, 'curve_local_phase', 0.0) or 0.0)
+            )
+            curve_local_phase_raw_list.append(
+                float(getattr(cc, 'curve_local_phase_raw', 0.0) or 0.0)
+            )
+            curve_local_state_list.append(
+                str(getattr(cc, 'curve_local_state', '') or '')
+            )
+            curve_local_phase_source_list.append(
+                str(getattr(cc, 'curve_local_phase_source', '') or '')
+            )
+            curve_local_entry_driver_list.append(
+                str(getattr(cc, 'curve_local_entry_driver', '') or '')
+            )
+            curve_local_entry_severity_list.append(
+                float(getattr(cc, 'curve_local_entry_severity', 0.0) or 0.0)
+            )
+            curve_local_entry_on_effective_list.append(
+                float(getattr(cc, 'curve_local_entry_on_effective', 0.0) or 0.0)
+            )
+            curve_local_phase_distance_start_effective_m_list.append(
+                float(getattr(cc, 'curve_local_phase_distance_start_effective_m', 0.0) or 0.0)
+            )
+            curve_local_phase_time_start_effective_s_list.append(
+                float(getattr(cc, 'curve_local_phase_time_start_effective_s', 0.0) or 0.0)
+            )
+            _curve_local_arm_ready = getattr(cc, 'curve_local_arm_ready', None)
+            curve_local_arm_ready_list.append(
+                -1 if _curve_local_arm_ready is None else (1 if bool(_curve_local_arm_ready) else 0)
+            )
+            _curve_local_time_ready = getattr(cc, 'curve_local_time_ready', None)
+            curve_local_time_ready_list.append(
+                -1 if _curve_local_time_ready is None else (1 if bool(_curve_local_time_ready) else 0)
+            )
+            _curve_local_in_curve_now = getattr(cc, 'curve_local_in_curve_now', None)
+            curve_local_in_curve_now_list.append(
+                -1 if _curve_local_in_curve_now is None else (1 if bool(_curve_local_in_curve_now) else 0)
+            )
+            _curve_local_commit_ready = getattr(cc, 'curve_local_commit_ready', None)
+            curve_local_commit_ready_list.append(
+                -1 if _curve_local_commit_ready is None else (1 if bool(_curve_local_commit_ready) else 0)
+            )
+            curve_local_commit_driver_list.append(
+                str(getattr(cc, 'curve_local_commit_driver', '') or '')
+            )
+            curve_local_arm_phase_raw_list.append(
+                float(getattr(cc, 'curve_local_arm_phase_raw', 0.0) or 0.0)
+            )
+            curve_local_sustain_phase_raw_list.append(
+                float(getattr(cc, 'curve_local_sustain_phase_raw', 0.0) or 0.0)
+            )
+            _curve_local_path_sustain_active = getattr(cc, 'curve_local_path_sustain_active', None)
+            curve_local_path_sustain_active_list.append(
+                -1 if _curve_local_path_sustain_active is None else (1 if bool(_curve_local_path_sustain_active) else 0)
+            )
+            _curve_local_distance_ready = getattr(cc, 'curve_local_distance_ready', None)
+            curve_local_distance_ready_list.append(
+                -1 if _curve_local_distance_ready is None else (1 if bool(_curve_local_distance_ready) else 0)
+            )
+            _curve_local_distance_horizon_m = getattr(cc, 'curve_local_distance_horizon_m', np.nan)
+            curve_local_distance_horizon_m_list.append(
+                float(_curve_local_distance_horizon_m)
+                if _curve_local_distance_horizon_m is not None
+                else np.nan
+            )
+            _curve_local_time_horizon_s = getattr(cc, 'curve_local_time_horizon_s', np.nan)
+            curve_local_time_horizon_s_list.append(
+                float(_curve_local_time_horizon_s)
+                if _curve_local_time_horizon_s is not None
+                else np.nan
+            )
+            _curve_local_reentry_ready = getattr(cc, 'curve_local_reentry_ready', None)
+            curve_local_reentry_ready_list.append(
+                -1 if _curve_local_reentry_ready is None else (1 if bool(_curve_local_reentry_ready) else 0)
+            )
+            _curve_local_rearm = getattr(cc, 'curve_local_rearm_cooldown_active', None)
+            curve_local_rearm_cooldown_active_list.append(
+                -1 if _curve_local_rearm is None else (1 if bool(_curve_local_rearm) else 0)
+            )
+            _curve_local_force = getattr(cc, 'curve_local_force_straight_active', None)
+            curve_local_force_straight_active_list.append(
+                -1 if _curve_local_force is None else (1 if bool(_curve_local_force) else 0)
+            )
+            curve_local_commit_streak_frames_list.append(
+                int(getattr(cc, 'curve_local_commit_streak_frames', 0) or 0)
             )
             curve_intent_list.append(
                 float(getattr(cc, 'curve_intent', 0.0) or 0.0)
@@ -4622,6 +5222,12 @@ class DataRecorder:
             _curve_intent_confidence = getattr(cc, 'curve_intent_confidence', np.nan)
             curve_intent_confidence_list.append(
                 float(_curve_intent_confidence) if _curve_intent_confidence is not None else np.nan
+            )
+            _curve_intent_watchdog_triggered = getattr(cc, 'curve_intent_watchdog_triggered', None)
+            curve_intent_watchdog_triggered_list.append(
+                -1
+                if _curve_intent_watchdog_triggered is None
+                else (1 if bool(_curve_intent_watchdog_triggered) else 0)
             )
             curve_intent_speed_guardrail_active_list.append(
                 1 if getattr(cc, 'curve_intent_speed_guardrail_active', False) else 0
@@ -4657,16 +5263,162 @@ class DataRecorder:
             reference_lookahead_target_list.append(
                 float(getattr(cc, 'reference_lookahead_target', 0.0) or 0.0)
             )
+            reference_lookahead_target_pre_entry_guard_list.append(
+                float(getattr(cc, 'reference_lookahead_target_pre_entry_guard', 0.0) or 0.0)
+            )
             reference_lookahead_after_slew_list.append(
                 float(getattr(cc, 'reference_lookahead_after_slew', 0.0) or 0.0)
             )
             reference_lookahead_active_list.append(
                 float(getattr(cc, 'reference_lookahead_active', 0.0) or 0.0)
             )
+            reference_lookahead_owner_nominal_target_list.append(
+                float(getattr(cc, 'reference_lookahead_owner_nominal_target', 0.0) or 0.0)
+            )
+            reference_lookahead_owner_commit_band_target_list.append(
+                float(getattr(cc, 'reference_lookahead_owner_commit_band_target', 0.0) or 0.0)
+            )
+            reference_lookahead_owner_entry_progress_list.append(
+                float(getattr(cc, 'reference_lookahead_owner_entry_progress', 0.0) or 0.0)
+            )
+            reference_lookahead_owner_commit_distance_progress_list.append(
+                float(getattr(cc, 'reference_lookahead_owner_commit_distance_progress', 0.0) or 0.0)
+            )
+            reference_lookahead_owner_commit_phase_progress_list.append(
+                float(getattr(cc, 'reference_lookahead_owner_commit_phase_progress', 0.0) or 0.0)
+            )
+            reference_lookahead_owner_commit_progress_list.append(
+                float(getattr(cc, 'reference_lookahead_owner_commit_progress', 0.0) or 0.0)
+            )
+            reference_lookahead_owner_commit_distance_start_effective_m_list.append(
+                float(
+                    getattr(
+                        cc,
+                        'reference_lookahead_owner_commit_distance_start_effective_m',
+                        0.0,
+                    )
+                    or 0.0
+                )
+            )
+            _reference_lookahead_owner_commit_band_clamp_active = getattr(
+                cc, 'reference_lookahead_owner_commit_band_clamp_active', None
+            )
+            reference_lookahead_owner_commit_band_clamp_active_list.append(
+                -1
+                if _reference_lookahead_owner_commit_band_clamp_active is None
+                else (1 if bool(_reference_lookahead_owner_commit_band_clamp_active) else 0)
+            )
+            reference_lookahead_owner_commit_band_clamp_delta_m_list.append(
+                float(
+                    getattr(cc, 'reference_lookahead_owner_commit_band_clamp_delta_m', 0.0)
+                    or 0.0
+                )
+            )
+            reference_lookahead_local_gate_weight_list.append(
+                float(getattr(cc, 'reference_lookahead_local_gate_weight', 0.0) or 0.0)
+            )
+            reference_lookahead_owner_mode_list.append(
+                str(getattr(cc, 'reference_lookahead_owner_mode', '') or '')
+            )
+            reference_lookahead_entry_weight_source_list.append(
+                str(getattr(cc, 'reference_lookahead_entry_weight_source', '') or '')
+            )
+            _reference_lookahead_fallback_active = getattr(
+                cc, 'reference_lookahead_fallback_active', None
+            )
+            reference_lookahead_fallback_active_list.append(
+                -1
+                if _reference_lookahead_fallback_active is None
+                else (1 if bool(_reference_lookahead_fallback_active) else 0)
+            )
+            _entry_shorten_guard_active = getattr(
+                cc, 'reference_lookahead_entry_shorten_guard_active', None
+            )
+            reference_lookahead_entry_shorten_guard_active_list.append(
+                -1 if _entry_shorten_guard_active is None else (1 if bool(_entry_shorten_guard_active) else 0)
+            )
+            reference_lookahead_entry_shorten_guard_delta_m_list.append(
+                float(getattr(cc, 'reference_lookahead_entry_shorten_guard_delta_m', 0.0) or 0.0)
+            )
+            local_curve_reference_mode_list.append(
+                str(getattr(cc, 'local_curve_reference_mode', '') or '')
+            )
+            _local_curve_reference_active = getattr(cc, 'local_curve_reference_active', None)
+            local_curve_reference_active_list.append(
+                -1 if _local_curve_reference_active is None else (1 if bool(_local_curve_reference_active) else 0)
+            )
+            _local_curve_reference_shadow_only = getattr(cc, 'local_curve_reference_shadow_only', None)
+            local_curve_reference_shadow_only_list.append(
+                -1 if _local_curve_reference_shadow_only is None else (1 if bool(_local_curve_reference_shadow_only) else 0)
+            )
+            _local_curve_reference_valid = getattr(cc, 'local_curve_reference_valid', None)
+            local_curve_reference_valid_list.append(
+                -1 if _local_curve_reference_valid is None else (1 if bool(_local_curve_reference_valid) else 0)
+            )
+            local_curve_reference_source_list.append(
+                str(getattr(cc, 'local_curve_reference_source', '') or '')
+            )
+            _local_curve_reference_fallback_active = getattr(
+                cc, 'local_curve_reference_fallback_active', None
+            )
+            local_curve_reference_fallback_active_list.append(
+                -1 if _local_curve_reference_fallback_active is None else (1 if bool(_local_curve_reference_fallback_active) else 0)
+            )
+            local_curve_reference_fallback_reason_list.append(
+                str(getattr(cc, 'local_curve_reference_fallback_reason', '') or '')
+            )
+            local_curve_reference_blend_weight_list.append(
+                float(getattr(cc, 'local_curve_reference_blend_weight', 0.0) or 0.0)
+            )
+            local_curve_reference_progress_weight_list.append(
+                float(getattr(cc, 'local_curve_reference_progress_weight', 0.0) or 0.0)
+            )
+            local_curve_reference_arc_curvature_abs_list.append(
+                float(getattr(cc, 'local_curve_reference_arc_curvature_abs', 0.0) or 0.0)
+            )
+            local_curve_reference_target_x_list.append(
+                float(getattr(cc, 'local_curve_reference_target_x', 0.0) or 0.0)
+            )
+            local_curve_reference_target_y_list.append(
+                float(getattr(cc, 'local_curve_reference_target_y', 0.0) or 0.0)
+            )
+            local_curve_reference_target_heading_list.append(
+                float(getattr(cc, 'local_curve_reference_target_heading', 0.0) or 0.0)
+            )
+            local_curve_reference_target_distance_m_list.append(
+                float(getattr(cc, 'local_curve_reference_target_distance_m', 0.0) or 0.0)
+            )
+            local_curve_reference_vs_planner_delta_m_list.append(
+                float(getattr(cc, 'local_curve_reference_vs_planner_delta_m', 0.0) or 0.0)
+            )
+            local_curve_reference_curve_direction_sign_list.append(
+                float(getattr(cc, 'local_curve_reference_curve_direction_sign', 0.0) or 0.0)
+            )
+            local_curve_reference_curve_progress_ratio_list.append(
+                float(getattr(cc, 'local_curve_reference_curve_progress_ratio', -1.0) or -1.0)
+            )
+            local_curve_reference_distance_to_curve_start_m_list.append(
+                float(getattr(cc, 'local_curve_reference_distance_to_curve_start_m', -1.0) or -1.0)
+            )
+            local_curve_reference_raw_delta_m_list.append(
+                float(getattr(cc, 'local_curve_reference_raw_delta_m', 0.0) or 0.0)
+            )
+            local_curve_reference_capped_delta_m_list.append(
+                float(getattr(cc, 'local_curve_reference_capped_delta_m', 0.0) or 0.0)
+            )
+            local_curve_reference_cap_active_list.append(
+                int(bool(getattr(cc, 'local_curve_reference_cap_active', False)))
+            )
             distance_to_next_curve_start = getattr(cc, 'distance_to_next_curve_start_m', np.nan)
             distance_to_next_curve_start_m_list.append(
                 float(distance_to_next_curve_start)
                 if distance_to_next_curve_start is not None
+                else np.nan
+            )
+            time_to_next_curve_start = getattr(cc, 'time_to_next_curve_start_s', np.nan)
+            time_to_next_curve_start_s_list.append(
+                float(time_to_next_curve_start)
+                if time_to_next_curve_start is not None
                 else np.nan
             )
             is_road_straight_list.append(
@@ -4981,6 +5733,12 @@ class DataRecorder:
             pp_lookahead_distance_list.append(getattr(cc, 'pp_lookahead_distance', 0.0) or 0.0)
             pp_geometric_steering_list.append(getattr(cc, 'pp_geometric_steering', 0.0) or 0.0)
             pp_feedback_steering_list.append(getattr(cc, 'pp_feedback_steering', 0.0) or 0.0)
+            pp_curve_local_floor_active_list.append(float(getattr(cc, 'pp_curve_local_floor_active', 0.0) or 0.0))
+            pp_curve_local_floor_m_list.append(float(getattr(cc, 'pp_curve_local_floor_m', 0.0) or 0.0))
+            pp_curve_local_lookahead_pre_floor_list.append(float(getattr(cc, 'pp_curve_local_lookahead_pre_floor', 0.0) or 0.0))
+            pp_curve_local_lookahead_post_floor_list.append(float(getattr(cc, 'pp_curve_local_lookahead_post_floor', 0.0) or 0.0))
+            pp_curve_local_shorten_slew_active_list.append(float(getattr(cc, 'pp_curve_local_shorten_slew_active', 0.0) or 0.0))
+            pp_curve_local_shorten_delta_m_list.append(float(getattr(cc, 'pp_curve_local_shorten_delta_m', 0.0) or 0.0))
             pp_ref_jump_clamped_list.append(float(getattr(cc, 'pp_ref_jump_clamped', False)))
             pp_stale_hold_active_list.append(float(getattr(cc, 'pp_stale_hold_active', False)))
             pp_steering_jerk_limited_list.append(float(getattr(cc, 'pp_steering_jerk_limited', False)))
@@ -5057,7 +5815,34 @@ class DataRecorder:
                        "curve_phase_term_preview",
                        "curve_phase_term_path",
                        "curve_phase_term_rise",
+                       "curve_phase_term_time",
                        "curve_phase_curvature_rise_abs",
+                       "curve_preview_far_upcoming",
+                       "curve_preview_far_phase",
+                       "curve_local_phase",
+                       "curve_local_phase_raw",
+                       "curve_local_state",
+                       "curve_local_phase_source",
+                       "curve_local_entry_driver",
+                       "curve_local_entry_severity",
+                       "curve_local_entry_on_effective",
+                       "curve_local_phase_distance_start_effective_m",
+                       "curve_local_phase_time_start_effective_s",
+                       "curve_local_arm_ready",
+                       "curve_local_time_ready",
+                       "curve_local_in_curve_now",
+                       "curve_local_commit_ready",
+                       "curve_local_commit_driver",
+                       "curve_local_arm_phase_raw",
+                       "curve_local_sustain_phase_raw",
+                       "curve_local_path_sustain_active",
+                       "curve_local_distance_ready",
+                       "curve_local_distance_horizon_m",
+                       "curve_local_time_horizon_s",
+                       "curve_local_reentry_ready",
+                       "curve_local_rearm_cooldown_active",
+                       "curve_local_force_straight_active",
+                       "curve_local_commit_streak_frames",
                        "curve_intent",
                        "curve_intent_raw",
                        "curve_intent_state",
@@ -5065,6 +5850,7 @@ class DataRecorder:
                        "curve_intent_term_path",
                        "curve_intent_term_rise",
                        "curve_intent_confidence",
+                       "curve_intent_watchdog_triggered",
                        "curve_intent_speed_guardrail_active",
                        "curve_intent_speed_guardrail_cap_mps",
                        "curve_intent_speed_guardrail_confidence",
@@ -5076,9 +5862,47 @@ class DataRecorder:
                        "curve_anticipation_term_heading",
                        "curve_anticipation_term_far_rise",
                        "reference_lookahead_target",
+                       "reference_lookahead_target_pre_entry_guard",
                        "reference_lookahead_after_slew",
                        "reference_lookahead_active",
+                       "reference_lookahead_owner_nominal_target",
+                       "reference_lookahead_owner_commit_band_target",
+                       "reference_lookahead_owner_entry_progress",
+                       "reference_lookahead_owner_commit_distance_progress",
+                       "reference_lookahead_owner_commit_phase_progress",
+                       "reference_lookahead_owner_commit_progress",
+                       "reference_lookahead_owner_commit_distance_start_effective_m",
+                       "reference_lookahead_owner_commit_band_clamp_active",
+                       "reference_lookahead_owner_commit_band_clamp_delta_m",
+                       "reference_lookahead_local_gate_weight",
+                       "reference_lookahead_owner_mode",
+                       "reference_lookahead_entry_weight_source",
+                       "reference_lookahead_fallback_active",
+                       "reference_lookahead_entry_shorten_guard_active",
+                       "reference_lookahead_entry_shorten_guard_delta_m",
+                       "local_curve_reference_mode",
+                       "local_curve_reference_active",
+                       "local_curve_reference_shadow_only",
+                       "local_curve_reference_valid",
+                       "local_curve_reference_source",
+                       "local_curve_reference_fallback_active",
+                       "local_curve_reference_fallback_reason",
+                       "local_curve_reference_blend_weight",
+                       "local_curve_reference_progress_weight",
+                       "local_curve_reference_arc_curvature_abs",
+                       "local_curve_reference_target_x",
+                       "local_curve_reference_target_y",
+                       "local_curve_reference_target_heading",
+                       "local_curve_reference_target_distance_m",
+                       "local_curve_reference_vs_planner_delta_m",
+                       "local_curve_reference_curve_direction_sign",
+                       "local_curve_reference_curve_progress_ratio",
+                       "local_curve_reference_distance_to_curve_start_m",
+                       "local_curve_reference_raw_delta_m",
+                       "local_curve_reference_capped_delta_m",
+                       "local_curve_reference_cap_active",
                        "distance_to_next_curve_start_m",
+                       "time_to_next_curve_start_s",
                        "road_curvature_valid", "road_curvature_abs", "straight_oscillation_rate",
                        "road_curvature_source", "tuned_deadband", "tuned_error_smoothing_alpha",
                        "using_stale_perception", "stale_perception_reason",
@@ -5165,6 +5989,9 @@ class DataRecorder:
                        "steering_first_limiter_stage_code",
                        "pp_alpha", "pp_lookahead_distance",
                        "pp_geometric_steering", "pp_feedback_steering",
+                       "pp_curve_local_floor_active", "pp_curve_local_floor_m",
+                       "pp_curve_local_lookahead_pre_floor", "pp_curve_local_lookahead_post_floor",
+                       "pp_curve_local_shorten_slew_active", "pp_curve_local_shorten_delta_m",
                        "pp_ref_jump_clamped", "pp_stale_hold_active",
                        "pp_steering_jerk_limited", "pp_effective_steering_rate",
                        "pp_pipeline_bypass_active",
@@ -5367,8 +6194,99 @@ class DataRecorder:
             self.h5_file["control/curve_phase_term_rise"][current_size:] = (
                 curve_phase_term_rise_list
             )
+            self.h5_file["control/curve_phase_term_time"][current_size:] = (
+                curve_phase_term_time_list
+            )
             self.h5_file["control/curve_phase_curvature_rise_abs"][current_size:] = (
                 curve_phase_curvature_rise_abs_list
+            )
+            self.h5_file["control/curve_preview_far_upcoming"][current_size:] = np.array(
+                curve_preview_far_upcoming_list, dtype=np.int8
+            )
+            self.h5_file["control/curve_preview_far_phase"][current_size:] = (
+                curve_preview_far_phase_list
+            )
+            self.h5_file["control/curve_local_phase"][current_size:] = curve_local_phase_list
+            self.h5_file["control/curve_local_phase_raw"][current_size:] = curve_local_phase_raw_list
+            curve_local_state_array = np.array(
+                curve_local_state_list,
+                dtype=h5py.string_dtype(encoding='utf-8', length=16),
+            )
+            self.h5_file["control/curve_local_state"][current_size:] = curve_local_state_array
+            curve_local_phase_source_array = np.array(
+                curve_local_phase_source_list,
+                dtype=h5py.string_dtype(encoding='utf-8', length=64),
+            )
+            self.h5_file["control/curve_local_phase_source"][current_size:] = (
+                curve_local_phase_source_array
+            )
+            curve_local_entry_driver_array = np.array(
+                curve_local_entry_driver_list,
+                dtype=h5py.string_dtype(encoding='utf-8', length=32),
+            )
+            self.h5_file["control/curve_local_entry_driver"][current_size:] = (
+                curve_local_entry_driver_array
+            )
+            self.h5_file["control/curve_local_entry_severity"][current_size:] = (
+                curve_local_entry_severity_list
+            )
+            self.h5_file["control/curve_local_entry_on_effective"][current_size:] = (
+                curve_local_entry_on_effective_list
+            )
+            self.h5_file["control/curve_local_phase_distance_start_effective_m"][current_size:] = (
+                curve_local_phase_distance_start_effective_m_list
+            )
+            self.h5_file["control/curve_local_phase_time_start_effective_s"][current_size:] = (
+                curve_local_phase_time_start_effective_s_list
+            )
+            self.h5_file["control/curve_local_arm_ready"][current_size:] = np.array(
+                curve_local_arm_ready_list, dtype=np.int8
+            )
+            self.h5_file["control/curve_local_time_ready"][current_size:] = np.array(
+                curve_local_time_ready_list, dtype=np.int8
+            )
+            self.h5_file["control/curve_local_in_curve_now"][current_size:] = np.array(
+                curve_local_in_curve_now_list, dtype=np.int8
+            )
+            self.h5_file["control/curve_local_commit_ready"][current_size:] = np.array(
+                curve_local_commit_ready_list, dtype=np.int8
+            )
+            curve_local_commit_driver_array = np.array(
+                curve_local_commit_driver_list,
+                dtype=h5py.string_dtype(encoding="utf-8", length=16),
+            )
+            self.h5_file["control/curve_local_commit_driver"][current_size:] = (
+                curve_local_commit_driver_array
+            )
+            self.h5_file["control/curve_local_arm_phase_raw"][current_size:] = (
+                curve_local_arm_phase_raw_list
+            )
+            self.h5_file["control/curve_local_sustain_phase_raw"][current_size:] = (
+                curve_local_sustain_phase_raw_list
+            )
+            self.h5_file["control/curve_local_path_sustain_active"][current_size:] = np.array(
+                curve_local_path_sustain_active_list, dtype=np.int8
+            )
+            self.h5_file["control/curve_local_distance_ready"][current_size:] = np.array(
+                curve_local_distance_ready_list, dtype=np.int8
+            )
+            self.h5_file["control/curve_local_distance_horizon_m"][current_size:] = (
+                curve_local_distance_horizon_m_list
+            )
+            self.h5_file["control/curve_local_time_horizon_s"][current_size:] = (
+                curve_local_time_horizon_s_list
+            )
+            self.h5_file["control/curve_local_reentry_ready"][current_size:] = np.array(
+                curve_local_reentry_ready_list, dtype=np.int8
+            )
+            self.h5_file["control/curve_local_rearm_cooldown_active"][current_size:] = np.array(
+                curve_local_rearm_cooldown_active_list, dtype=np.int8
+            )
+            self.h5_file["control/curve_local_force_straight_active"][current_size:] = np.array(
+                curve_local_force_straight_active_list, dtype=np.int8
+            )
+            self.h5_file["control/curve_local_commit_streak_frames"][current_size:] = np.array(
+                curve_local_commit_streak_frames_list, dtype=np.int32
             )
             self.h5_file["control/curve_intent"][current_size:] = curve_intent_list
             self.h5_file["control/curve_intent_raw"][current_size:] = curve_intent_raw_list
@@ -5388,6 +6306,9 @@ class DataRecorder:
             )
             self.h5_file["control/curve_intent_confidence"][current_size:] = (
                 curve_intent_confidence_list
+            )
+            self.h5_file["control/curve_intent_watchdog_triggered"][current_size:] = np.array(
+                curve_intent_watchdog_triggered_list, dtype=np.int8
             )
             self.h5_file["control/curve_intent_speed_guardrail_active"][current_size:] = np.array(
                 curve_intent_speed_guardrail_active_list, dtype=np.int8
@@ -5426,14 +6347,148 @@ class DataRecorder:
             self.h5_file["control/reference_lookahead_target"][current_size:] = (
                 reference_lookahead_target_list
             )
+            self.h5_file["control/reference_lookahead_target_pre_entry_guard"][current_size:] = (
+                reference_lookahead_target_pre_entry_guard_list
+            )
             self.h5_file["control/reference_lookahead_after_slew"][current_size:] = (
                 reference_lookahead_after_slew_list
             )
             self.h5_file["control/reference_lookahead_active"][current_size:] = (
                 reference_lookahead_active_list
             )
+            self.h5_file["control/reference_lookahead_owner_nominal_target"][current_size:] = (
+                reference_lookahead_owner_nominal_target_list
+            )
+            self.h5_file["control/reference_lookahead_owner_commit_band_target"][current_size:] = (
+                reference_lookahead_owner_commit_band_target_list
+            )
+            self.h5_file["control/reference_lookahead_owner_entry_progress"][current_size:] = (
+                reference_lookahead_owner_entry_progress_list
+            )
+            self.h5_file["control/reference_lookahead_owner_commit_distance_progress"][current_size:] = (
+                reference_lookahead_owner_commit_distance_progress_list
+            )
+            self.h5_file["control/reference_lookahead_owner_commit_phase_progress"][current_size:] = (
+                reference_lookahead_owner_commit_phase_progress_list
+            )
+            self.h5_file["control/reference_lookahead_owner_commit_progress"][current_size:] = (
+                reference_lookahead_owner_commit_progress_list
+            )
+            self.h5_file["control/reference_lookahead_owner_commit_distance_start_effective_m"][current_size:] = (
+                reference_lookahead_owner_commit_distance_start_effective_m_list
+            )
+            self.h5_file["control/reference_lookahead_owner_commit_band_clamp_active"][current_size:] = np.array(
+                reference_lookahead_owner_commit_band_clamp_active_list, dtype=np.int8
+            )
+            self.h5_file["control/reference_lookahead_owner_commit_band_clamp_delta_m"][current_size:] = (
+                reference_lookahead_owner_commit_band_clamp_delta_m_list
+            )
+            self.h5_file["control/reference_lookahead_local_gate_weight"][current_size:] = (
+                reference_lookahead_local_gate_weight_list
+            )
+            reference_lookahead_owner_mode_array = np.array(
+                reference_lookahead_owner_mode_list,
+                dtype=h5py.string_dtype(encoding='utf-8', length=32),
+            )
+            self.h5_file["control/reference_lookahead_owner_mode"][current_size:] = (
+                reference_lookahead_owner_mode_array
+            )
+            reference_lookahead_entry_weight_source_array = np.array(
+                reference_lookahead_entry_weight_source_list,
+                dtype=h5py.string_dtype(encoding='utf-8', length=64),
+            )
+            self.h5_file["control/reference_lookahead_entry_weight_source"][current_size:] = (
+                reference_lookahead_entry_weight_source_array
+            )
+            self.h5_file["control/reference_lookahead_fallback_active"][current_size:] = np.array(
+                reference_lookahead_fallback_active_list, dtype=np.int8
+            )
+            self.h5_file["control/reference_lookahead_entry_shorten_guard_active"][current_size:] = np.array(
+                reference_lookahead_entry_shorten_guard_active_list, dtype=np.int8
+            )
+            self.h5_file["control/reference_lookahead_entry_shorten_guard_delta_m"][current_size:] = (
+                reference_lookahead_entry_shorten_guard_delta_m_list
+            )
+            local_curve_reference_mode_array = np.array(
+                local_curve_reference_mode_list,
+                dtype=h5py.string_dtype(encoding='utf-8', length=16),
+            )
+            self.h5_file["control/local_curve_reference_mode"][current_size:] = (
+                local_curve_reference_mode_array
+            )
+            self.h5_file["control/local_curve_reference_active"][current_size:] = np.array(
+                local_curve_reference_active_list, dtype=np.int8
+            )
+            self.h5_file["control/local_curve_reference_shadow_only"][current_size:] = np.array(
+                local_curve_reference_shadow_only_list, dtype=np.int8
+            )
+            self.h5_file["control/local_curve_reference_valid"][current_size:] = np.array(
+                local_curve_reference_valid_list, dtype=np.int8
+            )
+            local_curve_reference_source_array = np.array(
+                local_curve_reference_source_list,
+                dtype=h5py.string_dtype(encoding='utf-8', length=32),
+            )
+            self.h5_file["control/local_curve_reference_source"][current_size:] = (
+                local_curve_reference_source_array
+            )
+            self.h5_file["control/local_curve_reference_fallback_active"][current_size:] = np.array(
+                local_curve_reference_fallback_active_list, dtype=np.int8
+            )
+            local_curve_reference_fallback_reason_array = np.array(
+                local_curve_reference_fallback_reason_list,
+                dtype=h5py.string_dtype(encoding='utf-8', length=32),
+            )
+            self.h5_file["control/local_curve_reference_fallback_reason"][current_size:] = (
+                local_curve_reference_fallback_reason_array
+            )
+            self.h5_file["control/local_curve_reference_blend_weight"][current_size:] = (
+                local_curve_reference_blend_weight_list
+            )
+            self.h5_file["control/local_curve_reference_progress_weight"][current_size:] = (
+                local_curve_reference_progress_weight_list
+            )
+            self.h5_file["control/local_curve_reference_arc_curvature_abs"][current_size:] = (
+                local_curve_reference_arc_curvature_abs_list
+            )
+            self.h5_file["control/local_curve_reference_target_x"][current_size:] = (
+                local_curve_reference_target_x_list
+            )
+            self.h5_file["control/local_curve_reference_target_y"][current_size:] = (
+                local_curve_reference_target_y_list
+            )
+            self.h5_file["control/local_curve_reference_target_heading"][current_size:] = (
+                local_curve_reference_target_heading_list
+            )
+            self.h5_file["control/local_curve_reference_target_distance_m"][current_size:] = (
+                local_curve_reference_target_distance_m_list
+            )
+            self.h5_file["control/local_curve_reference_vs_planner_delta_m"][current_size:] = (
+                local_curve_reference_vs_planner_delta_m_list
+            )
+            self.h5_file["control/local_curve_reference_curve_direction_sign"][current_size:] = (
+                local_curve_reference_curve_direction_sign_list
+            )
+            self.h5_file["control/local_curve_reference_curve_progress_ratio"][current_size:] = (
+                local_curve_reference_curve_progress_ratio_list
+            )
+            self.h5_file["control/local_curve_reference_distance_to_curve_start_m"][current_size:] = (
+                local_curve_reference_distance_to_curve_start_m_list
+            )
+            self.h5_file["control/local_curve_reference_raw_delta_m"][current_size:] = (
+                local_curve_reference_raw_delta_m_list
+            )
+            self.h5_file["control/local_curve_reference_capped_delta_m"][current_size:] = (
+                local_curve_reference_capped_delta_m_list
+            )
+            self.h5_file["control/local_curve_reference_cap_active"][current_size:] = np.array(
+                local_curve_reference_cap_active_list, dtype=np.int8
+            )
             self.h5_file["control/distance_to_next_curve_start_m"][current_size:] = (
                 distance_to_next_curve_start_m_list
+            )
+            self.h5_file["control/time_to_next_curve_start_s"][current_size:] = (
+                time_to_next_curve_start_s_list
             )
             self.h5_file["control/is_road_straight"][current_size:] = np.array(
                 is_road_straight_list, dtype=np.int8
@@ -5737,6 +6792,24 @@ class DataRecorder:
             self.h5_file["control/pp_lookahead_distance"][current_size:] = pp_lookahead_distance_list
             self.h5_file["control/pp_geometric_steering"][current_size:] = pp_geometric_steering_list
             self.h5_file["control/pp_feedback_steering"][current_size:] = pp_feedback_steering_list
+            self.h5_file["control/pp_curve_local_floor_active"][current_size:] = (
+                pp_curve_local_floor_active_list
+            )
+            self.h5_file["control/pp_curve_local_floor_m"][current_size:] = (
+                pp_curve_local_floor_m_list
+            )
+            self.h5_file["control/pp_curve_local_lookahead_pre_floor"][current_size:] = (
+                pp_curve_local_lookahead_pre_floor_list
+            )
+            self.h5_file["control/pp_curve_local_lookahead_post_floor"][current_size:] = (
+                pp_curve_local_lookahead_post_floor_list
+            )
+            self.h5_file["control/pp_curve_local_shorten_slew_active"][current_size:] = (
+                pp_curve_local_shorten_slew_active_list
+            )
+            self.h5_file["control/pp_curve_local_shorten_delta_m"][current_size:] = (
+                pp_curve_local_shorten_delta_m_list
+            )
             self.h5_file["control/pp_ref_jump_clamped"][current_size:] = pp_ref_jump_clamped_list
             self.h5_file["control/pp_stale_hold_active"][current_size:] = pp_stale_hold_active_list
             self.h5_file["control/pp_steering_jerk_limited"][current_size:] = pp_steering_jerk_limited_list

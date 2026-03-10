@@ -36,6 +36,12 @@ def test_drive_summary_contract_keys(tmp_path: Path) -> None:
         "layer_score_breakdown",
         "control_mode",
         "control_smoothness",
+        "curve_intent_diagnostics",
+        "curve_local_contract",
+        "local_curve_reference",
+        "turn_in_owner",
+        "curve_turn_events",
+        "curve_straight_segments",
         "speed_control",
         "comfort",
         "control_stability",
@@ -107,3 +113,62 @@ def test_drive_summary_contract_keys(tmp_path: Path) -> None:
         "first_speed_above_feasibility_frame",
         "first_boundary_breach_frame",
     }.issubset(first_fault_chain.keys())
+    curve_local_contract = summary.get("curve_local_contract", {})
+    assert {
+        "availability",
+        "curve_local_contract_available",
+        "curve_preview_far_active_straight_rate",
+        "curve_local_active_straight_rate",
+        "curve_local_arm_ready_straight_rate",
+        "curve_local_commit_ready_straight_rate",
+        "curve_local_path_sustain_active_straight_rate",
+        "straight_summary_source",
+        "straight_summary_vs_segment_rate_delta_pct",
+        "curve_local_commit_streak_max_frames",
+        "curve_local_arm_without_ready_count",
+        "curve_local_commit_without_ready_count",
+        "curve_local_commit_without_distance_ready_count",
+        "curve_local_reentry_without_gate_count",
+        "curve_local_watchdog_pingpong_count",
+        "curve_local_latched_straight_count",
+        "pp_curve_local_floor_breach_count",
+        "curve_lookahead_collapse_violation_count",
+        "limits",
+    }.issubset(curve_local_contract.keys())
+    turn_in_owner = summary.get("turn_in_owner", {})
+    assert {
+        "availability",
+        "owner_mode",
+        "entry_weight_source",
+        "fallback_active_rate",
+        "owner_commit_band_clamp_active_rate",
+        "owner_commit_progress_p50",
+        "curve_local_commit_without_ready_count",
+        "curve_local_arm_without_ready_count",
+        "steering_onset_minus_curve_start_frames_p50",
+    }.issubset(turn_in_owner.keys())
+    assert {
+        "reference_lookahead_entry_shorten_slew_m_per_frame",
+        "pp_floor_rescue_delta_max_m",
+    }.issubset(curve_local_contract.get("limits", {}).keys())
+    local_curve_reference = summary.get("local_curve_reference", {})
+    assert {
+        "availability",
+        "mode",
+        "active_rate",
+        "shadow_only_rate",
+        "valid_rate",
+        "fallback_active_rate",
+        "source_mode",
+        "fallback_reason_mode",
+        "blend_weight_p50",
+        "progress_weight_p50",
+        "planner_delta_p50_m",
+        "planner_delta_p95_m",
+        "target_distance_p50_m",
+        "arc_curvature_p50",
+        "turn_event_count",
+        "limits",
+    }.issubset(local_curve_reference.keys())
+    assert isinstance(summary.get("curve_turn_events", []), list)
+    assert isinstance(summary.get("curve_straight_segments", []), list)

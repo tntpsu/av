@@ -17,7 +17,11 @@ from scipy.fft import fft, fftfreq
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 
-from trajectory.utils import smooth_curvature_distance
+from trajectory.utils import (
+    CURVE_SCHEDULER_MODE_BINARY,
+    CURVE_SCHEDULER_MODE_PHASE_ACTIVE,
+    smooth_curvature_distance,
+)
 
 G_MPS2 = 9.80665
 LOW_VISIBILITY_STALE_REASONS = {"left_lane_low_visibility", "right_lane_low_visibility"}
@@ -157,6 +161,68 @@ def _finite_stats(values: Optional[np.ndarray]) -> Dict:
         "p95": safe_float(np.percentile(arr, 95), default=None),
         "p99": safe_float(np.percentile(arr, 99), default=None),
         "max": safe_float(np.max(arr), default=None),
+    }
+
+
+def _read_recording_metadata_dict(h5_file: h5py.File) -> dict:
+    meta_raw = h5_file.attrs.get("metadata")
+    if meta_raw is None:
+        return {}
+    try:
+        meta_str = (
+            meta_raw.decode("utf-8", "ignore")
+            if isinstance(meta_raw, (bytes, bytearray))
+            else str(meta_raw)
+        )
+        parsed = json.loads(meta_str)
+        return parsed if isinstance(parsed, dict) else {}
+    except Exception:
+        return {}
+
+
+def _load_track_curve_windows(track_name: str) -> dict:
+    safe_name = "".join(ch for ch in str(track_name or "").strip() if ch.isalnum() or ch in {"_", "-"})
+    if not safe_name:
+        return {}
+    track_path = REPO_ROOT / "tracks" / f"{safe_name}.yml"
+    if not track_path.exists():
+        return {}
+
+    with open(track_path, "r") as track_file:
+        cfg = yaml.safe_load(track_file) or {}
+
+    segments = cfg.get("segments", []) or []
+    s = 0.0
+    curve_windows = []
+    curve_idx = 0
+    for segment in segments:
+        seg = segment or {}
+        seg_type = str(seg.get("type", "straight")).strip().lower()
+        start_m = s
+        if seg_type == "arc":
+            radius = float(seg.get("radius", 0.0) or 0.0)
+            angle_deg = float(seg.get("angle_deg", seg.get("angle", 0.0)) or 0.0)
+            length_m = max(0.0, radius * math.radians(abs(angle_deg)))
+            curve_idx += 1
+            curve_windows.append(
+                {
+                    "curve_index": int(curve_idx),
+                    "start_m": float(start_m),
+                    "end_m": float(start_m + length_m),
+                    "radius_m": float(radius),
+                    "angle_deg": float(angle_deg),
+                    "direction": str(seg.get("direction", "left")).strip().lower(),
+                }
+            )
+        else:
+            length_m = max(0.0, float(seg.get("length", 0.0) or 0.0))
+        s += length_m
+
+    return {
+        "track_name": str(cfg.get("name", safe_name) or safe_name),
+        "track_key": safe_name,
+        "curve_windows": curve_windows,
+        "total_length_m": float(s),
     }
 
 
@@ -1039,6 +1105,12 @@ def analyze_recording_summary(recording_path: Path, analyze_to_failure: bool = F
     
     try:
         with h5py.File(recording_path, 'r') as f:
+            metadata = _read_recording_metadata_dict(f)
+            provenance = metadata.get("recording_provenance", {})
+            if not isinstance(provenance, dict):
+                provenance = {}
+            data["recording_metadata"] = metadata
+            data["recording_provenance"] = provenance
             # Load timestamps
             if 'vehicle_state/timestamp' in f:
                 data['timestamps'] = np.array(f['vehicle_state/timestamp'][:])
@@ -1198,6 +1270,137 @@ def analyze_recording_summary(recording_path: Path, analyze_to_failure: bool = F
                     s.decode('utf-8') if isinstance(s, (bytes, bytearray)) else str(s)
                     for s in _cis
                 ]
+            data['curve_intent_watchdog_triggered'] = (
+                np.array(f['control/curve_intent_watchdog_triggered'][:])
+                if 'control/curve_intent_watchdog_triggered' in f
+                else None
+            )
+            data['curve_preview_far_upcoming'] = (
+                np.array(f['control/curve_preview_far_upcoming'][:])
+                if 'control/curve_preview_far_upcoming' in f
+                else None
+            )
+            data['curve_preview_far_phase'] = (
+                np.array(f['control/curve_preview_far_phase'][:])
+                if 'control/curve_preview_far_phase' in f
+                else None
+            )
+            data['curve_local_phase'] = (
+                np.array(f['control/curve_local_phase'][:])
+                if 'control/curve_local_phase' in f
+                else None
+            )
+            data['curve_local_phase_raw'] = (
+                np.array(f['control/curve_local_phase_raw'][:])
+                if 'control/curve_local_phase_raw' in f
+                else None
+            )
+            data['curve_phase_term_time'] = (
+                np.array(f['control/curve_phase_term_time'][:])
+                if 'control/curve_phase_term_time' in f
+                else None
+            )
+            data['curve_local_state'] = None
+            if 'control/curve_local_state' in f:
+                _cls = f['control/curve_local_state'][:]
+                data['curve_local_state'] = [
+                    s.decode('utf-8') if isinstance(s, (bytes, bytearray)) else str(s)
+                    for s in _cls
+                ]
+            data['curve_local_entry_driver'] = None
+            if 'control/curve_local_entry_driver' in f:
+                _cled = f['control/curve_local_entry_driver'][:]
+                data['curve_local_entry_driver'] = [
+                    s.decode('utf-8') if isinstance(s, (bytes, bytearray)) else str(s)
+                    for s in _cled
+                ]
+            data['curve_local_entry_severity'] = (
+                np.array(f['control/curve_local_entry_severity'][:])
+                if 'control/curve_local_entry_severity' in f
+                else None
+            )
+            data['curve_local_entry_on_effective'] = (
+                np.array(f['control/curve_local_entry_on_effective'][:])
+                if 'control/curve_local_entry_on_effective' in f
+                else None
+            )
+            data['curve_local_phase_distance_start_effective_m'] = (
+                np.array(f['control/curve_local_phase_distance_start_effective_m'][:])
+                if 'control/curve_local_phase_distance_start_effective_m' in f
+                else None
+            )
+            data['curve_local_phase_time_start_effective_s'] = (
+                np.array(f['control/curve_local_phase_time_start_effective_s'][:])
+                if 'control/curve_local_phase_time_start_effective_s' in f
+                else None
+            )
+            data['curve_local_arm_ready'] = (
+                np.array(f['control/curve_local_arm_ready'][:])
+                if 'control/curve_local_arm_ready' in f
+                else None
+            )
+            data['curve_local_time_ready'] = (
+                np.array(f['control/curve_local_time_ready'][:])
+                if 'control/curve_local_time_ready' in f
+                else None
+            )
+            data['curve_local_in_curve_now'] = (
+                np.array(f['control/curve_local_in_curve_now'][:])
+                if 'control/curve_local_in_curve_now' in f
+                else None
+            )
+            data['curve_local_commit_ready'] = (
+                np.array(f['control/curve_local_commit_ready'][:])
+                if 'control/curve_local_commit_ready' in f
+                else None
+            )
+            data['curve_local_commit_driver'] = None
+            if 'control/curve_local_commit_driver' in f:
+                _clcd = f['control/curve_local_commit_driver'][:]
+                data['curve_local_commit_driver'] = [
+                    s.decode('utf-8') if isinstance(s, (bytes, bytearray)) else str(s)
+                    for s in _clcd
+                ]
+            data['curve_local_arm_phase_raw'] = (
+                np.array(f['control/curve_local_arm_phase_raw'][:])
+                if 'control/curve_local_arm_phase_raw' in f
+                else None
+            )
+            data['curve_local_sustain_phase_raw'] = (
+                np.array(f['control/curve_local_sustain_phase_raw'][:])
+                if 'control/curve_local_sustain_phase_raw' in f
+                else None
+            )
+            data['curve_local_path_sustain_active'] = (
+                np.array(f['control/curve_local_path_sustain_active'][:])
+                if 'control/curve_local_path_sustain_active' in f
+                else None
+            )
+            data['curve_local_distance_ready'] = (
+                np.array(f['control/curve_local_distance_ready'][:])
+                if 'control/curve_local_distance_ready' in f
+                else None
+            )
+            data['curve_local_distance_horizon_m'] = (
+                np.array(f['control/curve_local_distance_horizon_m'][:])
+                if 'control/curve_local_distance_horizon_m' in f
+                else None
+            )
+            data['curve_local_time_horizon_s'] = (
+                np.array(f['control/curve_local_time_horizon_s'][:])
+                if 'control/curve_local_time_horizon_s' in f
+                else None
+            )
+            data['curve_local_reentry_ready'] = (
+                np.array(f['control/curve_local_reentry_ready'][:])
+                if 'control/curve_local_reentry_ready' in f
+                else None
+            )
+            data['curve_local_commit_streak_frames'] = (
+                np.array(f['control/curve_local_commit_streak_frames'][:])
+                if 'control/curve_local_commit_streak_frames' in f
+                else None
+            )
             data['is_straight'] = np.array(f['control/is_straight'][:]) if 'control/is_straight' in f else None
             data['straight_oscillation_rate'] = (
                 np.array(f['control/straight_oscillation_rate'][:])
@@ -1247,6 +1450,30 @@ def analyze_recording_summary(recording_path: Path, analyze_to_failure: bool = F
                 np.array(f['control/pp_feedback_steering'][:])
                 if 'control/pp_feedback_steering' in f else None
             )
+            data['pp_curve_local_floor_active'] = (
+                np.array(f['control/pp_curve_local_floor_active'][:])
+                if 'control/pp_curve_local_floor_active' in f else None
+            )
+            data['pp_curve_local_floor_m'] = (
+                np.array(f['control/pp_curve_local_floor_m'][:])
+                if 'control/pp_curve_local_floor_m' in f else None
+            )
+            data['pp_curve_local_lookahead_pre_floor'] = (
+                np.array(f['control/pp_curve_local_lookahead_pre_floor'][:])
+                if 'control/pp_curve_local_lookahead_pre_floor' in f else None
+            )
+            data['pp_curve_local_lookahead_post_floor'] = (
+                np.array(f['control/pp_curve_local_lookahead_post_floor'][:])
+                if 'control/pp_curve_local_lookahead_post_floor' in f else None
+            )
+            data['pp_curve_local_shorten_slew_active'] = (
+                np.array(f['control/pp_curve_local_shorten_slew_active'][:])
+                if 'control/pp_curve_local_shorten_slew_active' in f else None
+            )
+            data['pp_curve_local_shorten_delta_m'] = (
+                np.array(f['control/pp_curve_local_shorten_delta_m'][:])
+                if 'control/pp_curve_local_shorten_delta_m' in f else None
+            )
             data['pp_ref_jump_clamped'] = (
                 np.array(f['control/pp_ref_jump_clamped'][:])
                 if 'control/pp_ref_jump_clamped' in f else None
@@ -1258,6 +1485,150 @@ def analyze_recording_summary(recording_path: Path, analyze_to_failure: bool = F
             data['pp_pipeline_bypass_active'] = (
                 np.array(f['control/pp_pipeline_bypass_active'][:])
                 if 'control/pp_pipeline_bypass_active' in f else None
+            )
+            data['reference_lookahead_local_gate_weight'] = (
+                np.array(f['control/reference_lookahead_local_gate_weight'][:])
+                if 'control/reference_lookahead_local_gate_weight' in f else None
+            )
+            data['reference_lookahead_owner_mode'] = (
+                np.array(f['control/reference_lookahead_owner_mode'][:])
+                if 'control/reference_lookahead_owner_mode' in f else None
+            )
+            data['reference_lookahead_entry_weight_source'] = (
+                np.array(f['control/reference_lookahead_entry_weight_source'][:])
+                if 'control/reference_lookahead_entry_weight_source' in f else None
+            )
+            data['reference_lookahead_fallback_active'] = (
+                np.array(f['control/reference_lookahead_fallback_active'][:])
+                if 'control/reference_lookahead_fallback_active' in f else None
+            )
+            data['reference_lookahead_target_pre_entry_guard'] = (
+                np.array(f['control/reference_lookahead_target_pre_entry_guard'][:])
+                if 'control/reference_lookahead_target_pre_entry_guard' in f else None
+            )
+            data['reference_lookahead_owner_nominal_target'] = (
+                np.array(f['control/reference_lookahead_owner_nominal_target'][:])
+                if 'control/reference_lookahead_owner_nominal_target' in f else None
+            )
+            data['reference_lookahead_owner_commit_band_target'] = (
+                np.array(f['control/reference_lookahead_owner_commit_band_target'][:])
+                if 'control/reference_lookahead_owner_commit_band_target' in f else None
+            )
+            data['reference_lookahead_owner_entry_progress'] = (
+                np.array(f['control/reference_lookahead_owner_entry_progress'][:])
+                if 'control/reference_lookahead_owner_entry_progress' in f else None
+            )
+            data['reference_lookahead_owner_commit_distance_progress'] = (
+                np.array(f['control/reference_lookahead_owner_commit_distance_progress'][:])
+                if 'control/reference_lookahead_owner_commit_distance_progress' in f else None
+            )
+            data['reference_lookahead_owner_commit_phase_progress'] = (
+                np.array(f['control/reference_lookahead_owner_commit_phase_progress'][:])
+                if 'control/reference_lookahead_owner_commit_phase_progress' in f else None
+            )
+            data['reference_lookahead_owner_commit_progress'] = (
+                np.array(f['control/reference_lookahead_owner_commit_progress'][:])
+                if 'control/reference_lookahead_owner_commit_progress' in f else None
+            )
+            data['reference_lookahead_owner_commit_distance_start_effective_m'] = (
+                np.array(f['control/reference_lookahead_owner_commit_distance_start_effective_m'][:])
+                if 'control/reference_lookahead_owner_commit_distance_start_effective_m' in f else None
+            )
+            data['reference_lookahead_owner_commit_band_clamp_active'] = (
+                np.array(f['control/reference_lookahead_owner_commit_band_clamp_active'][:])
+                if 'control/reference_lookahead_owner_commit_band_clamp_active' in f else None
+            )
+            data['reference_lookahead_owner_commit_band_clamp_delta_m'] = (
+                np.array(f['control/reference_lookahead_owner_commit_band_clamp_delta_m'][:])
+                if 'control/reference_lookahead_owner_commit_band_clamp_delta_m' in f else None
+            )
+            data['reference_lookahead_entry_shorten_guard_active'] = (
+                np.array(f['control/reference_lookahead_entry_shorten_guard_active'][:])
+                if 'control/reference_lookahead_entry_shorten_guard_active' in f else None
+            )
+            data['reference_lookahead_entry_shorten_guard_delta_m'] = (
+                np.array(f['control/reference_lookahead_entry_shorten_guard_delta_m'][:])
+                if 'control/reference_lookahead_entry_shorten_guard_delta_m' in f else None
+            )
+            data['local_curve_reference_mode'] = (
+                np.array(f['control/local_curve_reference_mode'][:])
+                if 'control/local_curve_reference_mode' in f else None
+            )
+            data['local_curve_reference_active'] = (
+                np.array(f['control/local_curve_reference_active'][:])
+                if 'control/local_curve_reference_active' in f else None
+            )
+            data['local_curve_reference_shadow_only'] = (
+                np.array(f['control/local_curve_reference_shadow_only'][:])
+                if 'control/local_curve_reference_shadow_only' in f else None
+            )
+            data['local_curve_reference_valid'] = (
+                np.array(f['control/local_curve_reference_valid'][:])
+                if 'control/local_curve_reference_valid' in f else None
+            )
+            data['local_curve_reference_source'] = (
+                np.array(f['control/local_curve_reference_source'][:])
+                if 'control/local_curve_reference_source' in f else None
+            )
+            data['local_curve_reference_fallback_active'] = (
+                np.array(f['control/local_curve_reference_fallback_active'][:])
+                if 'control/local_curve_reference_fallback_active' in f else None
+            )
+            data['local_curve_reference_fallback_reason'] = (
+                np.array(f['control/local_curve_reference_fallback_reason'][:])
+                if 'control/local_curve_reference_fallback_reason' in f else None
+            )
+            data['local_curve_reference_blend_weight'] = (
+                np.array(f['control/local_curve_reference_blend_weight'][:])
+                if 'control/local_curve_reference_blend_weight' in f else None
+            )
+            data['local_curve_reference_progress_weight'] = (
+                np.array(f['control/local_curve_reference_progress_weight'][:])
+                if 'control/local_curve_reference_progress_weight' in f else None
+            )
+            data['local_curve_reference_arc_curvature_abs'] = (
+                np.array(f['control/local_curve_reference_arc_curvature_abs'][:])
+                if 'control/local_curve_reference_arc_curvature_abs' in f else None
+            )
+            data['local_curve_reference_target_x'] = (
+                np.array(f['control/local_curve_reference_target_x'][:])
+                if 'control/local_curve_reference_target_x' in f else None
+            )
+            data['local_curve_reference_target_y'] = (
+                np.array(f['control/local_curve_reference_target_y'][:])
+                if 'control/local_curve_reference_target_y' in f else None
+            )
+            data['local_curve_reference_target_heading'] = (
+                np.array(f['control/local_curve_reference_target_heading'][:])
+                if 'control/local_curve_reference_target_heading' in f else None
+            )
+            data['local_curve_reference_target_distance_m'] = (
+                np.array(f['control/local_curve_reference_target_distance_m'][:])
+                if 'control/local_curve_reference_target_distance_m' in f else None
+            )
+            data['local_curve_reference_vs_planner_delta_m'] = (
+                np.array(f['control/local_curve_reference_vs_planner_delta_m'][:])
+                if 'control/local_curve_reference_vs_planner_delta_m' in f else None
+            )
+            data['local_curve_reference_curve_direction_sign'] = (
+                np.array(f['control/local_curve_reference_curve_direction_sign'][:])
+                if 'control/local_curve_reference_curve_direction_sign' in f else None
+            )
+            data['local_curve_reference_curve_progress_ratio'] = (
+                np.array(f['control/local_curve_reference_curve_progress_ratio'][:])
+                if 'control/local_curve_reference_curve_progress_ratio' in f else None
+            )
+            data['local_curve_reference_distance_to_curve_start_m'] = (
+                np.array(f['control/local_curve_reference_distance_to_curve_start_m'][:])
+                if 'control/local_curve_reference_distance_to_curve_start_m' in f else None
+            )
+            data['distance_to_next_curve_start_m'] = (
+                np.array(f['control/distance_to_next_curve_start_m'][:])
+                if 'control/distance_to_next_curve_start_m' in f else None
+            )
+            data['time_to_next_curve_start_s'] = (
+                np.array(f['control/time_to_next_curve_start_s'][:])
+                if 'control/time_to_next_curve_start_s' in f else None
             )
             # MPC regime and error state
             data['regime'] = (
@@ -1878,6 +2249,8 @@ def analyze_recording_summary(recording_path: Path, analyze_to_failure: bool = F
     oscillation_rms_window_p95_m = 0.0
     oscillation_rms_windows_count = 0
     oscillation_amplitude_runaway = False
+    oscillation_curve_suppressed = False
+    curve_fraction = 0.0
     if data.get('lateral_error') is not None and data.get('time') is not None:
         # Build regime-aware lateral error for oscillation analysis:
         # use mpc_e_lat (true cross-track) where MPC is active, PP lateral_error elsewhere
@@ -2041,6 +2414,8 @@ def analyze_recording_summary(recording_path: Path, analyze_to_failure: bool = F
     config = _load_config()
     traj_cfg = config.get('trajectory', {})
     perception_cfg = config.get('perception', {})
+    control_cfg = config.get('control', {})
+    lateral_cfg = control_cfg.get('lateral', {}) if isinstance(control_cfg, dict) else {}
     config_summary = {
         "camera_fov": safe_float(traj_cfg.get("camera_fov", 0.0)),
         "camera_height": safe_float(traj_cfg.get("camera_height", 0.0)),
@@ -2972,6 +3347,1136 @@ def analyze_recording_summary(recording_path: Path, analyze_to_failure: bool = F
                     curve_intent_diag["curvature_ratio_p95"] = safe_float(np.percentile(ratio, 95))
                     curve_intent_diag["undercall_detected"] = bool(undercall_rate > 25.0)
 
+    curve_phase_on = float(traj_cfg.get("curve_phase_on", 0.45))
+    curve_local_reentry_gate_min = float(traj_cfg.get("curve_local_phase_reentry_gate_min", 0.10))
+    curve_local_entry_min_ttc_s = float(
+        traj_cfg.get("curve_local_phase_time_end_s", traj_cfg.get("curve_phase_time_to_curve_min_s", 0.25))
+    )
+    curve_local_watchdog_pingpong_window_frames = max(
+        2, int(traj_cfg.get("curve_local_watchdog_pingpong_window_frames", 6))
+    )
+    steering_onset_abs_threshold = float(
+        lateral_cfg.get("curve_turn_event_steering_onset_abs_min", 0.12)
+    )
+    entry_shorten_guard_limit = max(
+        0.0,
+        float(
+            traj_cfg.get("reference_lookahead_entry_shorten_slew_m_per_frame", 0.0) or 0.0
+        ),
+    )
+
+    curve_local_contract = {
+        "availability": "unavailable",
+        "curve_local_contract_available": False,
+        "curve_preview_far_active_straight_rate": 0.0,
+        "curve_local_active_straight_rate": 0.0,
+        "curve_local_arm_ready_straight_rate": 0.0,
+        "curve_local_commit_ready_straight_rate": 0.0,
+        "curve_local_path_sustain_active_straight_rate": 0.0,
+        "curve_local_commit_streak_max_frames": 0,
+        "curve_local_arm_without_ready_count": 0,
+        "curve_local_arm_without_ready_rate": 0.0,
+        "curve_local_commit_without_ready_count": 0,
+        "curve_local_commit_without_ready_rate": 0.0,
+        "curve_local_commit_without_distance_ready_count": 0,
+        "curve_local_commit_without_distance_ready_rate": 0.0,
+        "curve_local_latched_straight_count": 0,
+        "curve_local_latched_straight_rate": 0.0,
+        "curve_local_reentry_without_gate_count": 0,
+        "curve_local_reentry_without_gate_rate": 0.0,
+        "curve_local_watchdog_pingpong_count": 0,
+        "curve_local_gate_weight_straight_p50": None,
+        "curve_local_phase_raw_straight_p50": None,
+        "curve_preview_far_phase_straight_p50": None,
+        "curve_phase_term_time_straight_p50": None,
+        "curve_local_reentry_ready_straight_rate": None,
+        "pp_curve_local_floor_breach_count": 0,
+        "pp_curve_local_floor_breach_rate": 0.0,
+        "curve_lookahead_collapse_violation_count": 0,
+        "curve_lookahead_collapse_violation_rate": 0.0,
+        "pp_entry_lookahead_min_m": None,
+        "pp_entry_lookahead_shorten_rate_min_m_per_frame": None,
+        "straight_summary_source": "proxy",
+        "straight_summary_vs_segment_rate_delta_pct": None,
+        "limits": {
+            "curve_local_active_straight_rate_max_pct": 5.0,
+            "curve_local_arm_without_ready_count_max": 0,
+            "curve_local_commit_without_ready_count_max": 0,
+            "curve_local_commit_without_distance_ready_count_max": 0,
+            "curve_local_reentry_without_gate_count_max": 0,
+            "curve_local_watchdog_pingpong_count_max": 0,
+            "pp_curve_local_floor_breach_count_max": 0,
+            "curve_lookahead_collapse_violation_count_max": 0,
+            "curve_local_reentry_gate_min": curve_local_reentry_gate_min,
+            "curve_local_entry_min_ttc_s": curve_local_entry_min_ttc_s,
+            "steering_onset_distance_min_m": 0.0,
+            "steering_onset_abs_threshold": steering_onset_abs_threshold,
+            "reference_lookahead_entry_shorten_slew_m_per_frame": entry_shorten_guard_limit,
+            "pp_floor_rescue_delta_max_m": 1.0,
+        },
+    }
+    curve_turn_events = []
+    curve_straight_segments = []
+    curve_preview_far_series = data.get("curve_preview_far_upcoming")
+    if curve_preview_far_series is None:
+        curve_preview_far_series = data.get("curve_phase_preview_upcoming")
+    curve_preview_far_phase_series = data.get("curve_preview_far_phase")
+    local_arm_ready_series = data.get("curve_local_arm_ready")
+    local_time_ready_series = data.get("curve_local_time_ready")
+    local_in_curve_now_series = data.get("curve_local_in_curve_now")
+    local_commit_ready_series = data.get("curve_local_commit_ready")
+    local_arm_phase_raw_series = data.get("curve_local_arm_phase_raw")
+    local_sustain_phase_raw_series = data.get("curve_local_sustain_phase_raw")
+    local_path_sustain_active_series = data.get("curve_local_path_sustain_active")
+    curve_phase_term_time_series = data.get("curve_phase_term_time")
+    local_state_series = data.get("curve_local_state")
+    local_phase_series = data.get("curve_local_phase")
+    local_phase_raw_series = data.get("curve_local_phase_raw")
+    local_reentry_ready_series = data.get("curve_local_reentry_ready")
+    local_distance_ready_series = data.get("curve_local_distance_ready")
+    local_commit_driver_series = data.get("curve_local_commit_driver")
+    local_gate_weight_series = data.get("reference_lookahead_local_gate_weight")
+    owner_mode_series = data.get("reference_lookahead_owner_mode")
+    entry_weight_source_series = data.get("reference_lookahead_entry_weight_source")
+    fallback_active_series = data.get("reference_lookahead_fallback_active")
+    local_arc_mode_series = data.get("local_curve_reference_mode")
+    local_arc_active_series = data.get("local_curve_reference_active")
+    local_arc_shadow_only_series = data.get("local_curve_reference_shadow_only")
+    local_arc_valid_series = data.get("local_curve_reference_valid")
+    local_arc_source_series = data.get("local_curve_reference_source")
+    local_arc_fallback_active_series = data.get("local_curve_reference_fallback_active")
+    local_arc_fallback_reason_series = data.get("local_curve_reference_fallback_reason")
+    local_arc_blend_weight_series = data.get("local_curve_reference_blend_weight")
+    local_arc_progress_weight_series = data.get("local_curve_reference_progress_weight")
+    local_arc_curvature_series = data.get("local_curve_reference_arc_curvature_abs")
+    local_arc_target_distance_series = data.get("local_curve_reference_target_distance_m")
+    local_arc_vs_planner_delta_series = data.get("local_curve_reference_vs_planner_delta_m")
+    time_to_curve_series = data.get("time_to_next_curve_start_s")
+    intent_state_series = data.get("curve_intent_state")
+    intent_watchdog_series = data.get("curve_intent_watchdog_triggered")
+    straight_series = data.get("is_control_straight_proxy")
+    if straight_series is None:
+        straight_series = data.get("is_straight")
+    pp_floor_active_series = data.get("pp_curve_local_floor_active")
+    pp_floor_m_series = data.get("pp_curve_local_floor_m")
+    pp_post_floor_series = data.get("pp_curve_local_lookahead_post_floor")
+    pp_pre_floor_series = data.get("pp_curve_local_lookahead_pre_floor")
+    reference_ld_series = data.get("reference_lookahead_active")
+    pp_ld_series = data.get("pp_lookahead_distance")
+    steering_series = data.get("steering")
+
+    def _normalize_str_value(value: object) -> str:
+        if isinstance(value, bytes):
+            try:
+                value = value.decode("utf-8", "ignore")
+            except Exception:
+                value = ""
+        text = str(value or "").strip()
+        return text
+
+    def _masked_mode_string(arr: Optional[np.ndarray], mask_indices: np.ndarray) -> Optional[str]:
+        if arr is None or mask_indices.size == 0:
+            return None
+        values = []
+        for idx in mask_indices:
+            if 0 <= idx < len(arr):
+                text = _normalize_str_value(arr[int(idx)])
+                if text:
+                    values.append(text)
+        if not values:
+            return None
+        return max(sorted(set(values)), key=values.count)
+
+    def _string_at(arr: Optional[np.ndarray], frame_idx: Optional[int]) -> Optional[str]:
+        if arr is None or frame_idx is None or frame_idx < 0 or frame_idx >= len(arr):
+            return None
+        text = _normalize_str_value(arr[int(frame_idx)])
+        return text if text else None
+
+    def _masked_percentile(arr: Optional[np.ndarray], mask: Optional[np.ndarray], pct: float) -> Optional[float]:
+        if arr is None or mask is None or not np.any(mask):
+            return None
+        vals = np.asarray(arr[:n_frames], dtype=np.float64)[mask]
+        vals = vals[np.isfinite(vals)]
+        if vals.size == 0:
+            return None
+        return safe_float(np.percentile(vals, pct), default=None)
+
+    def _split_contiguous(indices: np.ndarray) -> list[np.ndarray]:
+        if indices.size == 0:
+            return []
+        return [run for run in np.split(indices, np.where(np.diff(indices) > 1)[0] + 1) if run.size > 0]
+
+    def _max_true_run(mask: np.ndarray) -> int:
+        run = 0
+        best = 0
+        for active in mask:
+            if active:
+                run += 1
+                best = max(best, run)
+            else:
+                run = 0
+        return int(best)
+
+    local_states = None
+    local_active_mask = None
+    commit_mask = None
+    if local_state_series is not None:
+        local_states = np.array(
+            [str(state or "").strip().upper() for state in local_state_series[:n_frames]],
+            dtype=object,
+        )
+        local_active_mask = np.array([state in {"ENTRY", "COMMIT"} for state in local_states], dtype=bool)
+        commit_mask = np.array([state == "COMMIT" for state in local_states], dtype=bool)
+        curve_local_contract["curve_local_commit_streak_max_frames"] = _max_true_run(commit_mask)
+    elif local_phase_series is not None:
+        local_phase_arr = np.asarray(local_phase_series[:n_frames], dtype=np.float64)
+        local_phase_arr = np.where(np.isfinite(local_phase_arr), local_phase_arr, 0.0)
+        local_active_mask = local_phase_arr >= curve_phase_on
+        commit_mask = np.array(local_active_mask, copy=True)
+        curve_local_contract["curve_local_commit_streak_max_frames"] = _max_true_run(local_active_mask)
+
+    straight_mask = None
+    if straight_series is not None:
+        straight_arr = np.asarray(straight_series[:n_frames], dtype=np.float64)
+        straight_mask = straight_arr > 0.5
+        if local_in_curve_now_series is not None:
+            local_in_curve_arr = np.asarray(local_in_curve_now_series[:n_frames], dtype=np.float64)
+            straight_mask = straight_mask & ~(local_in_curve_arr > 0.5)
+
+    if local_active_mask is not None:
+        curve_local_contract["curve_local_contract_available"] = True
+        curve_local_contract["availability"] = "available"
+        if straight_mask is not None and np.any(straight_mask):
+            curve_local_contract["curve_local_active_straight_rate"] = safe_float(
+                np.mean(local_active_mask[straight_mask]) * 100.0
+            )
+            curve_local_contract["curve_local_latched_straight_count"] = int(
+                np.sum(local_active_mask & straight_mask)
+            )
+            curve_local_contract["curve_local_latched_straight_rate"] = safe_float(
+                np.mean(local_active_mask & straight_mask) * 100.0
+            )
+            curve_local_contract["curve_local_gate_weight_straight_p50"] = _masked_percentile(
+                local_gate_weight_series, straight_mask, 50
+            )
+            curve_local_contract["curve_local_phase_raw_straight_p50"] = _masked_percentile(
+                local_phase_raw_series, straight_mask, 50
+            )
+            curve_local_contract["curve_preview_far_phase_straight_p50"] = _masked_percentile(
+                curve_preview_far_phase_series, straight_mask, 50
+            )
+            curve_local_contract["curve_phase_term_time_straight_p50"] = _masked_percentile(
+                curve_phase_term_time_series, straight_mask, 50
+            )
+            if local_arm_ready_series is not None:
+                local_arm_ready_arr = np.asarray(local_arm_ready_series[:n_frames], dtype=np.float64)
+                valid_arm_ready_mask = straight_mask & (local_arm_ready_arr >= 0.0)
+                if np.any(valid_arm_ready_mask):
+                    curve_local_contract["curve_local_arm_ready_straight_rate"] = safe_float(
+                        np.mean(local_arm_ready_arr[valid_arm_ready_mask] > 0.5) * 100.0
+                    )
+            if local_commit_ready_series is not None:
+                local_commit_ready_arr = np.asarray(local_commit_ready_series[:n_frames], dtype=np.float64)
+                valid_commit_ready_mask = straight_mask & (local_commit_ready_arr >= 0.0)
+                if np.any(valid_commit_ready_mask):
+                    curve_local_contract["curve_local_commit_ready_straight_rate"] = safe_float(
+                        np.mean(local_commit_ready_arr[valid_commit_ready_mask] > 0.5) * 100.0
+                    )
+            if local_path_sustain_active_series is not None:
+                local_path_sustain_arr = np.asarray(
+                    local_path_sustain_active_series[:n_frames], dtype=np.float64
+                )
+                valid_path_sustain_mask = straight_mask & (local_path_sustain_arr >= 0.0)
+                if np.any(valid_path_sustain_mask):
+                    curve_local_contract["curve_local_path_sustain_active_straight_rate"] = safe_float(
+                        np.mean(local_path_sustain_arr[valid_path_sustain_mask] > 0.5) * 100.0
+                    )
+            if local_reentry_ready_series is not None:
+                local_reentry_arr = np.asarray(local_reentry_ready_series[:n_frames], dtype=np.float64)
+                valid_reentry_mask = straight_mask & (local_reentry_arr >= 0.0)
+                if np.any(valid_reentry_mask):
+                    curve_local_contract["curve_local_reentry_ready_straight_rate"] = safe_float(
+                        np.mean(local_reentry_arr[valid_reentry_mask] > 0.5) * 100.0
+                    )
+        if curve_preview_far_series is not None and straight_mask is not None and np.any(straight_mask):
+            preview_far_arr = np.asarray(curve_preview_far_series[:n_frames], dtype=np.float64) > 0.5
+            curve_local_contract["curve_preview_far_active_straight_rate"] = safe_float(
+                np.mean(preview_far_arr[straight_mask]) * 100.0
+            )
+
+        if local_gate_weight_series is not None:
+            gate_arr = np.asarray(local_gate_weight_series[:n_frames], dtype=np.float64)
+            gate_arr = np.where(np.isfinite(gate_arr), gate_arr, 0.0)
+            prev_active = np.concatenate(([False], local_active_mask[:-1]))
+            active_entry_mask = local_active_mask & (~prev_active)
+            reentry_without_gate_mask = active_entry_mask & (gate_arr < curve_local_reentry_gate_min)
+            curve_local_contract["curve_local_reentry_without_gate_count"] = int(
+                np.sum(reentry_without_gate_mask)
+            )
+            if np.any(active_entry_mask):
+                curve_local_contract["curve_local_reentry_without_gate_rate"] = safe_float(
+                    np.mean(reentry_without_gate_mask[active_entry_mask]) * 100.0
+                )
+            if local_arm_ready_series is not None:
+                local_arm_ready_arr = np.asarray(local_arm_ready_series[:n_frames], dtype=np.float64)
+                valid_arm_ready_mask = local_arm_ready_arr >= 0.0
+                arm_ready_mask = local_arm_ready_arr > 0.5
+                arm_without_ready_mask = active_entry_mask & valid_arm_ready_mask & (~arm_ready_mask)
+                curve_local_contract["curve_local_arm_without_ready_count"] = int(
+                    np.sum(arm_without_ready_mask)
+                )
+                if np.any(active_entry_mask & valid_arm_ready_mask):
+                    curve_local_contract["curve_local_arm_without_ready_rate"] = safe_float(
+                        np.mean(
+                            arm_without_ready_mask[active_entry_mask & valid_arm_ready_mask]
+                        ) * 100.0
+                    )
+            if local_commit_ready_series is not None:
+                local_commit_ready_arr = np.asarray(local_commit_ready_series[:n_frames], dtype=np.float64)
+                valid_commit_ready_mask = local_commit_ready_arr >= 0.0
+                commit_ready_mask = local_commit_ready_arr > 0.5
+                early_commit_ready_mask = (
+                    commit_mask & valid_commit_ready_mask & (~commit_ready_mask)
+                    if commit_mask is not None
+                    else local_active_mask & valid_commit_ready_mask & (~commit_ready_mask)
+                )
+                curve_local_contract["curve_local_commit_without_ready_count"] = int(
+                    np.sum(early_commit_ready_mask)
+                )
+                if np.any((commit_mask if commit_mask is not None else local_active_mask) & valid_commit_ready_mask):
+                    source_mask = (commit_mask if commit_mask is not None else local_active_mask) & valid_commit_ready_mask
+                    curve_local_contract["curve_local_commit_without_ready_rate"] = safe_float(
+                        np.mean(early_commit_ready_mask[source_mask]) * 100.0
+                    )
+
+        if local_distance_ready_series is not None:
+            local_distance_arr = np.asarray(local_distance_ready_series[:n_frames], dtype=np.float64)
+            valid_distance_mask = local_distance_arr >= 0.0
+            distance_ready_mask = local_distance_arr > 0.5
+            early_commit_mask = commit_mask & valid_distance_mask & (~distance_ready_mask) if commit_mask is not None else (
+                local_active_mask & valid_distance_mask & (~distance_ready_mask)
+            )
+            curve_local_contract["curve_local_commit_without_distance_ready_count"] = int(
+                np.sum(early_commit_mask)
+            )
+            if np.any(valid_distance_mask):
+                curve_local_contract["curve_local_commit_without_distance_ready_rate"] = safe_float(
+                    np.mean(early_commit_mask[valid_distance_mask]) * 100.0
+                )
+            if reference_ld_series is not None and len(reference_ld_series) >= n_frames:
+                reference_ld_arr = np.asarray(reference_ld_series[:n_frames], dtype=np.float64)
+                delta_ld = np.diff(reference_ld_arr)
+                collapse_limit = float(
+                    lateral_cfg.get("pp_curve_local_shorten_slew_m_per_frame", 0.0) or 0.0
+                )
+                if collapse_limit > 0.0 and delta_ld.size > 0:
+                    early_collapse = (
+                        delta_ld < -(collapse_limit + 1e-6)
+                    ) & (~distance_ready_mask[:-1])
+                    curve_local_contract["curve_lookahead_collapse_violation_count"] = int(
+                        np.sum(early_collapse)
+                    )
+                    curve_local_contract["curve_lookahead_collapse_violation_rate"] = safe_float(
+                        np.mean(early_collapse) * 100.0
+                    )
+
+        if (
+            pp_floor_active_series is not None
+            and pp_floor_m_series is not None
+            and pp_post_floor_series is not None
+        ):
+            pp_floor_active_arr = np.asarray(pp_floor_active_series[:n_frames], dtype=np.float64) > 0.5
+            pp_floor_arr = np.asarray(pp_floor_m_series[:n_frames], dtype=np.float64)
+            pp_post_floor_arr = np.asarray(pp_post_floor_series[:n_frames], dtype=np.float64)
+            valid_floor_mask = (
+                pp_floor_active_arr
+                & np.isfinite(pp_floor_arr)
+                & np.isfinite(pp_post_floor_arr)
+            )
+            floor_breach_mask = valid_floor_mask & (pp_post_floor_arr < (pp_floor_arr - 1e-4))
+            curve_local_contract["pp_curve_local_floor_breach_count"] = int(np.sum(floor_breach_mask))
+            if np.any(valid_floor_mask):
+                curve_local_contract["pp_curve_local_floor_breach_rate"] = safe_float(
+                    np.mean(floor_breach_mask[valid_floor_mask]) * 100.0
+                )
+        if pp_pre_floor_series is not None and np.size(pp_pre_floor_series) > 0:
+            pp_pre_floor_arr = np.asarray(pp_pre_floor_series[:n_frames], dtype=np.float64)
+            pp_pre_floor_arr = pp_pre_floor_arr[np.isfinite(pp_pre_floor_arr) & (pp_pre_floor_arr > 0.0)]
+            if pp_pre_floor_arr.size > 0:
+                curve_local_contract["pp_entry_lookahead_min_m"] = safe_float(
+                    np.min(pp_pre_floor_arr), default=None
+                )
+        if pp_post_floor_series is not None and len(pp_post_floor_series) >= 2:
+            pp_post_floor_arr = np.asarray(pp_post_floor_series[:n_frames], dtype=np.float64)
+            delta_pp_floor = np.diff(pp_post_floor_arr)
+            valid_delta = delta_pp_floor[np.isfinite(delta_pp_floor)]
+            if valid_delta.size > 0:
+                curve_local_contract["pp_entry_lookahead_shorten_rate_min_m_per_frame"] = safe_float(
+                    np.min(valid_delta), default=None
+                )
+
+        pingpong_states = None
+        if intent_state_series is not None:
+            pingpong_states = np.array(
+                [str(state or "").strip().upper() for state in intent_state_series[:n_frames]],
+                dtype=object,
+            )
+        elif local_states is not None:
+            pingpong_states = local_states
+        watchdog_arr = None
+        if intent_watchdog_series is not None:
+            watchdog_arr = np.asarray(intent_watchdog_series[:n_frames], dtype=np.float64) > 0.5
+        gate_arr = None
+        if local_gate_weight_series is not None:
+            gate_arr = np.asarray(local_gate_weight_series[:n_frames], dtype=np.float64)
+            gate_arr = np.where(np.isfinite(gate_arr), gate_arr, 0.0)
+        if pingpong_states is not None:
+            pingpong_count = 0
+            idx = 1
+            while idx < len(pingpong_states) - 1:
+                is_rearm = pingpong_states[idx] == "REARM"
+                anchor_ok = pingpong_states[idx - 1] == "COMMIT"
+                if watchdog_arr is not None:
+                    anchor_ok = anchor_ok and bool(watchdog_arr[idx] or watchdog_arr[idx - 1])
+                if straight_mask is not None:
+                    anchor_ok = anchor_ok and bool(straight_mask[idx])
+                if gate_arr is not None:
+                    anchor_ok = anchor_ok and float(gate_arr[idx]) < curve_local_reentry_gate_min
+                if not (is_rearm and anchor_ok):
+                    idx += 1
+                    continue
+                reentered = False
+                for jdx in range(idx + 1, min(len(pingpong_states), idx + curve_local_watchdog_pingpong_window_frames + 1)):
+                    if pingpong_states[jdx] == "STRAIGHT":
+                        break
+                    if pingpong_states[jdx] in {"ENTRY", "COMMIT"}:
+                        if gate_arr is None or float(gate_arr[jdx]) < curve_local_reentry_gate_min:
+                            reentered = True
+                            idx = jdx
+                            break
+                if reentered:
+                    pingpong_count += 1
+                idx += 1
+            curve_local_contract["curve_local_watchdog_pingpong_count"] = int(pingpong_count)
+
+    provenance = data.get("recording_provenance") or {}
+    track_id = ""
+    if isinstance(provenance, dict):
+        track_id = str(provenance.get("track_id", "") or "").strip()
+    track_windows = _load_track_curve_windows(track_id)
+    if (
+        track_windows
+        and data.get("speed") is not None
+        and data.get("timestamps") is not None
+        and data.get("lateral_error") is not None
+    ):
+        time_arr = np.asarray(data["timestamps"][:n_frames], dtype=np.float64)
+        speed_arr = np.asarray(data["speed"][:n_frames], dtype=np.float64)
+        lat_err_arr = np.asarray(data["lateral_error"][:n_frames], dtype=np.float64)
+        if time_arr.size > 1 and speed_arr.size == time_arr.size and lat_err_arr.size == time_arr.size:
+            dt_arr = np.diff(time_arr, prepend=time_arr[0])
+            dt_arr[0] = 0.0
+            dt_arr = np.where(np.isfinite(dt_arr) & (dt_arr > 0.0), dt_arr, 0.0)
+            distance_trace = np.cumsum(np.maximum(speed_arr, 0.0) * dt_arr)
+            total_length_m = float(track_windows.get("total_length_m", 0.0) or 0.0)
+            if total_length_m > 0.0:
+                track_progress = np.mod(distance_trace, total_length_m)
+                pp_track = None
+                if pp_ld_series is not None and len(pp_ld_series) >= n_frames:
+                    pp_track = np.asarray(pp_ld_series[:n_frames], dtype=np.float64)
+                pp_pre_track = None
+                if pp_pre_floor_series is not None and len(pp_pre_floor_series) >= n_frames:
+                    pp_pre_track = np.asarray(pp_pre_floor_series[:n_frames], dtype=np.float64)
+                pp_post_track = None
+                if pp_post_floor_series is not None and len(pp_post_floor_series) >= n_frames:
+                    pp_post_track = np.asarray(pp_post_floor_series[:n_frames], dtype=np.float64)
+                ref_track = None
+                if reference_ld_series is not None and len(reference_ld_series) >= n_frames:
+                    ref_track = np.asarray(reference_ld_series[:n_frames], dtype=np.float64)
+                owner_nominal_track = None
+                if data.get("reference_lookahead_owner_nominal_target") is not None:
+                    owner_nominal_track = np.asarray(
+                        data["reference_lookahead_owner_nominal_target"][:n_frames],
+                        dtype=np.float64,
+                    )
+                owner_commit_band_track = None
+                if data.get("reference_lookahead_owner_commit_band_target") is not None:
+                    owner_commit_band_track = np.asarray(
+                        data["reference_lookahead_owner_commit_band_target"][:n_frames],
+                        dtype=np.float64,
+                    )
+                owner_commit_progress_track = None
+                if data.get("reference_lookahead_owner_commit_progress") is not None:
+                    owner_commit_progress_track = np.asarray(
+                        data["reference_lookahead_owner_commit_progress"][:n_frames],
+                        dtype=np.float64,
+                    )
+                owner_commit_clamp_active_track = None
+                if data.get("reference_lookahead_owner_commit_band_clamp_active") is not None:
+                    owner_commit_clamp_active_track = np.asarray(
+                        data["reference_lookahead_owner_commit_band_clamp_active"][:n_frames],
+                        dtype=np.float64,
+                    )
+                owner_commit_clamp_delta_track = None
+                if data.get("reference_lookahead_owner_commit_band_clamp_delta_m") is not None:
+                    owner_commit_clamp_delta_track = np.asarray(
+                        data["reference_lookahead_owner_commit_band_clamp_delta_m"][:n_frames],
+                        dtype=np.float64,
+                    )
+                distance_to_curve_arr = None
+                if data.get("distance_to_next_curve_start_m") is not None:
+                    distance_to_curve_arr = np.asarray(data["distance_to_next_curve_start_m"][:n_frames], dtype=np.float64)
+                time_to_curve_arr = None
+                if time_to_curve_series is not None:
+                    time_to_curve_arr = np.asarray(time_to_curve_series[:n_frames], dtype=np.float64)
+                steering_arr = None
+                if steering_series is not None:
+                    steering_arr = np.asarray(steering_series[:n_frames], dtype=np.float64)
+                heading_err_arr = None
+                if data.get("heading_error") is not None:
+                    heading_err_arr = np.asarray(data["heading_error"][:n_frames], dtype=np.float64)
+                local_entry_severity_arr = None
+                if data.get("curve_local_entry_severity") is not None:
+                    local_entry_severity_arr = np.asarray(
+                        data["curve_local_entry_severity"][:n_frames], dtype=np.float64
+                    )
+                local_entry_on_arr = None
+                if data.get("curve_local_entry_on_effective") is not None:
+                    local_entry_on_arr = np.asarray(
+                        data["curve_local_entry_on_effective"][:n_frames], dtype=np.float64
+                    )
+                local_distance_start_arr = None
+                if data.get("curve_local_phase_distance_start_effective_m") is not None:
+                    local_distance_start_arr = np.asarray(
+                        data["curve_local_phase_distance_start_effective_m"][:n_frames], dtype=np.float64
+                    )
+                local_time_start_arr = None
+                if data.get("curve_local_phase_time_start_effective_s") is not None:
+                    local_time_start_arr = np.asarray(
+                        data["curve_local_phase_time_start_effective_s"][:n_frames], dtype=np.float64
+                    )
+                local_arm_ready_arr = None
+                if data.get("curve_local_arm_ready") is not None:
+                    local_arm_ready_arr = np.asarray(
+                        data["curve_local_arm_ready"][:n_frames], dtype=np.float64
+                    )
+                local_commit_ready_arr = None
+                if data.get("curve_local_commit_ready") is not None:
+                    local_commit_ready_arr = np.asarray(
+                        data["curve_local_commit_ready"][:n_frames], dtype=np.float64
+                    )
+                local_in_curve_now_arr = None
+                if data.get("curve_local_in_curve_now") is not None:
+                    local_in_curve_now_arr = np.asarray(
+                        data["curve_local_in_curve_now"][:n_frames], dtype=np.float64
+                    )
+                local_arm_phase_arr = None
+                if data.get("curve_local_arm_phase_raw") is not None:
+                    local_arm_phase_arr = np.asarray(
+                        data["curve_local_arm_phase_raw"][:n_frames], dtype=np.float64
+                    )
+                local_sustain_phase_arr = None
+                if data.get("curve_local_sustain_phase_raw") is not None:
+                    local_sustain_phase_arr = np.asarray(
+                        data["curve_local_sustain_phase_raw"][:n_frames], dtype=np.float64
+                    )
+                local_path_sustain_arr = None
+                if data.get("curve_local_path_sustain_active") is not None:
+                    local_path_sustain_arr = np.asarray(
+                        data["curve_local_path_sustain_active"][:n_frames], dtype=np.float64
+                    )
+                local_commit_driver_series = data.get("curve_local_commit_driver")
+                local_entry_driver_series = data.get("curve_local_entry_driver")
+                curve_windows = track_windows.get("curve_windows", [])
+
+                straight_windows = []
+                prev_end_m = 0.0
+                for curve_window in curve_windows:
+                    start_m = float(curve_window.get("start_m", 0.0) or 0.0)
+                    end_m = float(curve_window.get("end_m", start_m) or start_m)
+                    if start_m > prev_end_m + 1e-6:
+                        straight_windows.append(
+                            {
+                                "straight_index": int(len(straight_windows) + 1),
+                                "start_m": float(prev_end_m),
+                                "end_m": float(start_m),
+                                "before_curve_index": int(curve_window.get("curve_index", len(straight_windows) + 1)),
+                            }
+                        )
+                    prev_end_m = max(prev_end_m, end_m)
+                if total_length_m > prev_end_m + 1e-6:
+                    straight_windows.append(
+                        {
+                            "straight_index": int(len(straight_windows) + 1),
+                            "start_m": float(prev_end_m),
+                            "end_m": float(total_length_m),
+                            "before_curve_index": None,
+                        }
+                    )
+
+                for straight_window in straight_windows:
+                    straight_indices = np.where(
+                        (track_progress >= float(straight_window["start_m"]))
+                        & (track_progress < float(straight_window["end_m"]))
+                    )[0]
+                    if straight_indices.size == 0:
+                        continue
+                    straight_mask_window = np.zeros(n_frames, dtype=bool)
+                    straight_mask_window[straight_indices] = True
+                    if local_in_curve_now_series is not None:
+                        local_in_curve_arr = np.asarray(
+                            local_in_curve_now_series[:n_frames], dtype=np.float64
+                        )
+                        straight_mask_window = straight_mask_window & ~(local_in_curve_arr > 0.5)
+                        straight_indices = np.where(straight_mask_window)[0]
+                        if straight_indices.size == 0:
+                            continue
+                    local_window_rate = (
+                        safe_float(np.mean(local_active_mask[straight_mask_window]) * 100.0)
+                        if local_active_mask is not None
+                        else None
+                    )
+                    far_window_rate = (
+                        safe_float(
+                            np.mean(
+                                (np.asarray(curve_preview_far_series[:n_frames], dtype=np.float64) > 0.5)[straight_mask_window]
+                            ) * 100.0
+                        )
+                        if curve_preview_far_series is not None
+                        else None
+                    )
+                    local_window_gate = _masked_percentile(local_gate_weight_series, straight_mask_window, 50)
+                    local_window_phase_raw = _masked_percentile(local_phase_raw_series, straight_mask_window, 50)
+                    local_window_arm_phase_raw = _masked_percentile(
+                        local_arm_phase_raw_series, straight_mask_window, 50
+                    )
+                    local_window_sustain_phase_raw = _masked_percentile(
+                        local_sustain_phase_raw_series, straight_mask_window, 50
+                    )
+                    local_window_far_phase = _masked_percentile(curve_preview_far_phase_series, straight_mask_window, 50)
+                    local_window_term_time = _masked_percentile(curve_phase_term_time_series, straight_mask_window, 50)
+                    local_window_arm_ready_rate = None
+                    if local_arm_ready_series is not None:
+                        local_arm_ready_arr = np.asarray(local_arm_ready_series[:n_frames], dtype=np.float64)
+                        valid_arm_ready_mask = straight_mask_window & (local_arm_ready_arr >= 0.0)
+                        if np.any(valid_arm_ready_mask):
+                            local_window_arm_ready_rate = safe_float(
+                                np.mean(local_arm_ready_arr[valid_arm_ready_mask] > 0.5) * 100.0
+                            )
+                    local_window_commit_ready_rate = None
+                    if local_commit_ready_series is not None:
+                        local_commit_ready_arr = np.asarray(local_commit_ready_series[:n_frames], dtype=np.float64)
+                        valid_commit_ready_mask = straight_mask_window & (local_commit_ready_arr >= 0.0)
+                        if np.any(valid_commit_ready_mask):
+                            local_window_commit_ready_rate = safe_float(
+                                np.mean(local_commit_ready_arr[valid_commit_ready_mask] > 0.5) * 100.0
+                            )
+                    local_window_path_sustain_rate = None
+                    if local_path_sustain_active_series is not None:
+                        local_path_sustain_arr = np.asarray(
+                            local_path_sustain_active_series[:n_frames], dtype=np.float64
+                        )
+                        valid_path_sustain_mask = (
+                            straight_mask_window & (local_path_sustain_arr >= 0.0)
+                        )
+                        if np.any(valid_path_sustain_mask):
+                            local_window_path_sustain_rate = safe_float(
+                                np.mean(local_path_sustain_arr[valid_path_sustain_mask] > 0.5) * 100.0
+                            )
+                    local_window_commit_streak = (
+                        _max_true_run(local_active_mask[straight_indices]) if local_active_mask is not None else 0
+                    )
+                    local_window_pingpong = 0
+                    if intent_state_series is not None:
+                        intent_states_window = np.array(
+                            [str(state or "").strip().upper() for state in intent_state_series[:n_frames]],
+                            dtype=object,
+                        )
+                        idx = 1
+                        while idx < len(straight_indices) - 1:
+                            frame_idx = int(straight_indices[idx])
+                            prev_idx = int(straight_indices[idx - 1])
+                            if not (
+                                intent_states_window[frame_idx] == "REARM"
+                                and intent_states_window[prev_idx] == "COMMIT"
+                            ):
+                                idx += 1
+                                continue
+                            reentered = False
+                            for jdx in range(idx + 1, min(len(straight_indices), idx + curve_local_watchdog_pingpong_window_frames + 1)):
+                                next_frame_idx = int(straight_indices[jdx])
+                                if intent_states_window[next_frame_idx] in {"ENTRY", "COMMIT"}:
+                                    reentered = True
+                                    idx = jdx
+                                    break
+                            if reentered:
+                                local_window_pingpong += 1
+                            idx += 1
+                    curve_straight_segments.append(
+                        {
+                            "straight_index": int(straight_window["straight_index"]),
+                            "before_curve_index": straight_window.get("before_curve_index"),
+                            "start_frame": int(straight_indices[0]),
+                            "end_frame": int(straight_indices[-1]),
+                            "far_preview_active_rate": far_window_rate,
+                            "local_active_rate": local_window_rate,
+                            "watchdog_pingpong_count": int(local_window_pingpong),
+                            "gate_weight_p50": local_window_gate,
+                            "local_phase_raw_p50": local_window_phase_raw,
+                            "arm_phase_raw_p50": local_window_arm_phase_raw,
+                            "sustain_phase_raw_p50": local_window_sustain_phase_raw,
+                            "far_preview_phase_p50": local_window_far_phase,
+                            "term_time_p50": local_window_term_time,
+                            "arm_ready_rate": local_window_arm_ready_rate,
+                            "commit_ready_rate": local_window_commit_ready_rate,
+                            "path_sustain_active_rate": local_window_path_sustain_rate,
+                            "max_commit_streak_frames": int(local_window_commit_streak),
+                        }
+                    )
+
+                if curve_straight_segments:
+                    segment_lengths = np.array(
+                        [
+                            max(
+                                0,
+                                int(segment.get("end_frame", -1)) - int(segment.get("start_frame", 0)) + 1,
+                            )
+                            for segment in curve_straight_segments
+                        ],
+                        dtype=np.float64,
+                    )
+                    local_rates = np.array(
+                        [
+                            float(segment.get("local_active_rate", 0.0) or 0.0)
+                            for segment in curve_straight_segments
+                        ],
+                        dtype=np.float64,
+                    )
+                    far_rates = np.array(
+                        [
+                            float(segment.get("far_preview_active_rate", 0.0) or 0.0)
+                            for segment in curve_straight_segments
+                        ],
+                        dtype=np.float64,
+                    )
+                    valid_segment_mask = segment_lengths > 0.0
+                    if np.any(valid_segment_mask):
+                        weighted_local = safe_float(
+                            np.average(local_rates[valid_segment_mask], weights=segment_lengths[valid_segment_mask])
+                        )
+                        weighted_far = safe_float(
+                            np.average(far_rates[valid_segment_mask], weights=segment_lengths[valid_segment_mask])
+                        )
+                        curve_local_contract["straight_summary_source"] = "track_windows"
+                        curve_local_contract["curve_local_active_straight_rate"] = weighted_local
+                        curve_local_contract["curve_local_latched_straight_rate"] = weighted_local
+                        curve_local_contract["curve_preview_far_active_straight_rate"] = weighted_far
+                        curve_local_contract["straight_summary_vs_segment_rate_delta_pct"] = 0.0
+                        curve_local_contract["curve_local_latched_straight_count"] = int(
+                            round(float(weighted_local) / 100.0 * float(np.sum(segment_lengths[valid_segment_mask])))
+                        )
+
+                prev_end_m = 0.0
+                for curve_window in curve_windows:
+                    start_m = float(curve_window.get("start_m", 0.0) or 0.0)
+                    end_m = float(curve_window.get("end_m", start_m) or start_m)
+                    curve_indices_all = np.where(
+                        (track_progress >= start_m) & (track_progress <= end_m)
+                    )[0]
+                    if curve_indices_all.size == 0:
+                        prev_end_m = end_m
+                        continue
+                    curve_runs = _split_contiguous(curve_indices_all)
+                    selected_curve_run = max(
+                        curve_runs,
+                        key=lambda run: float(np.max(np.abs(lat_err_arr[run]))),
+                    )
+                    approach_indices_all = np.where(
+                        (track_progress >= prev_end_m) & (track_progress < start_m)
+                    )[0]
+                    approach_runs = _split_contiguous(approach_indices_all)
+                    selected_approach_run = None
+                    for run in reversed(approach_runs):
+                        if int(run[-1]) < int(selected_curve_run[0]):
+                            selected_approach_run = run
+                            break
+                    if selected_approach_run is None and approach_runs:
+                        selected_approach_run = min(
+                            approach_runs,
+                            key=lambda run: abs(int(run[-1]) - int(selected_curve_run[0])),
+                        )
+                    search_indices = (
+                        np.concatenate([selected_approach_run, selected_curve_run])
+                        if selected_approach_run is not None and selected_approach_run.size > 0
+                        else selected_curve_run
+                    )
+                    search_indices = np.unique(search_indices.astype(int))
+                    lat_slice = np.abs(lat_err_arr[selected_curve_run])
+                    peak_idx_local = int(np.argmax(lat_slice))
+                    peak_frame = int(selected_curve_run[peak_idx_local])
+
+                    def _first_state_transition(target_states: set[str], fallback_states: set[str] | None = None) -> Optional[int]:
+                        if local_states is None or search_indices.size == 0:
+                            return None
+                        for frame_idx in search_indices:
+                            frame_idx = int(frame_idx)
+                            current_state = str(local_states[frame_idx])
+                            prev_state = str(local_states[frame_idx - 1]) if frame_idx > 0 else "STRAIGHT"
+                            if current_state in target_states and prev_state not in target_states:
+                                return frame_idx
+                        if fallback_states:
+                            for frame_idx in search_indices:
+                                frame_idx = int(frame_idx)
+                                if str(local_states[frame_idx]) in fallback_states:
+                                    return frame_idx
+                        return None
+
+                    curve_local_entry_frame = _first_state_transition(
+                        {"ENTRY"},
+                        fallback_states={"ENTRY", "COMMIT"},
+                    )
+                    curve_local_commit_frame = _first_state_transition({"COMMIT"})
+
+                    steering_onset_frame = None
+                    if steering_arr is not None and search_indices.size > 0:
+                        for frame_idx in search_indices:
+                            frame_idx = int(frame_idx)
+                            current_abs = abs(float(steering_arr[frame_idx]))
+                            prev_abs = abs(float(steering_arr[frame_idx - 1])) if frame_idx > 0 else 0.0
+                            if current_abs >= steering_onset_abs_threshold and prev_abs < steering_onset_abs_threshold:
+                                steering_onset_frame = frame_idx
+                                break
+                        if steering_onset_frame is None:
+                            for frame_idx in search_indices:
+                                frame_idx = int(frame_idx)
+                                if abs(float(steering_arr[frame_idx])) >= steering_onset_abs_threshold:
+                                    steering_onset_frame = frame_idx
+                                    break
+
+                    curve_start_frame = None
+                    if distance_to_curve_arr is not None and search_indices.size > 0:
+                        for frame_idx in search_indices:
+                            frame_idx = int(frame_idx)
+                            value = float(distance_to_curve_arr[frame_idx])
+                            if math.isfinite(value) and value <= 0.25:
+                                curve_start_frame = frame_idx
+                                break
+                    if curve_start_frame is None and selected_curve_run.size > 0:
+                        curve_start_frame = int(selected_curve_run[0])
+
+                    def _metric_at(arr: Optional[np.ndarray], frame_idx: Optional[int]) -> Optional[float]:
+                        if arr is None or frame_idx is None or frame_idx < 0 or frame_idx >= len(arr):
+                            return None
+                        value = float(arr[frame_idx])
+                        return safe_float(value, default=None) if math.isfinite(value) else None
+
+                    pp_pre_floor_shorten_step_min = None
+                    if pp_pre_track is not None and search_indices.size >= 2:
+                        pp_pre_vals = np.asarray(pp_pre_track[search_indices], dtype=np.float64)
+                        valid_pairs = (
+                            np.isfinite(pp_pre_vals[:-1])
+                            & np.isfinite(pp_pre_vals[1:])
+                            & (pp_pre_vals[:-1] > 1e-6)
+                            & (pp_pre_vals[1:] > 1e-6)
+                        )
+                        if np.any(valid_pairs):
+                            pp_pre_floor_shorten_step_min = safe_float(
+                                np.min(np.diff(pp_pre_vals)[valid_pairs]), default=None
+                            )
+
+                    pp_floor_rescue_delta_max = None
+                    pp_floor_rescue_delta_mean = None
+                    if pp_pre_track is not None and pp_post_track is not None and search_indices.size > 0:
+                        pp_pre_vals = np.asarray(pp_pre_track[search_indices], dtype=np.float64)
+                        pp_post_vals = np.asarray(pp_post_track[search_indices], dtype=np.float64)
+                        valid_rescue_mask = (
+                            np.isfinite(pp_pre_vals)
+                            & np.isfinite(pp_post_vals)
+                            & (pp_pre_vals > 1e-6)
+                            & (pp_post_vals > 1e-6)
+                        )
+                        if np.any(valid_rescue_mask):
+                            rescue_delta = np.maximum(
+                                pp_post_vals[valid_rescue_mask] - pp_pre_vals[valid_rescue_mask],
+                                0.0,
+                            )
+                            if rescue_delta.size > 0:
+                                pp_floor_rescue_delta_max = safe_float(np.max(rescue_delta), default=None)
+                                pp_floor_rescue_delta_mean = safe_float(np.mean(rescue_delta), default=None)
+
+                    def _masked_p50(arr: Optional[np.ndarray]) -> Optional[float]:
+                        if arr is None or search_indices.size == 0:
+                            return None
+                        vals = np.asarray(arr[search_indices], dtype=np.float64)
+                        vals = vals[np.isfinite(vals)]
+                        if vals.size == 0:
+                            return None
+                        return safe_float(np.percentile(vals, 50), default=None)
+
+                    def _masked_max(arr: Optional[np.ndarray]) -> Optional[float]:
+                        if arr is None or search_indices.size == 0:
+                            return None
+                        vals = np.asarray(arr[search_indices], dtype=np.float64)
+                        vals = vals[np.isfinite(vals)]
+                        if vals.size == 0:
+                            return None
+                        return safe_float(np.max(vals), default=None)
+
+                    local_entry_driver_mode = None
+                    if local_entry_driver_series is not None and search_indices.size > 0:
+                        driver_vals = [
+                            str(local_entry_driver_series[idx] or "").strip()
+                            for idx in search_indices
+                            if 0 <= idx < len(local_entry_driver_series)
+                        ]
+                        driver_vals = [value for value in driver_vals if value]
+                        if driver_vals:
+                            local_entry_driver_mode = max(
+                                sorted(set(driver_vals)),
+                                key=driver_vals.count,
+                            )
+
+                    local_commit_driver_mode = None
+                    if local_commit_driver_series is not None and search_indices.size > 0:
+                        driver_vals = [
+                            str(local_commit_driver_series[idx] or "").strip()
+                            for idx in search_indices
+                            if 0 <= idx < len(local_commit_driver_series)
+                        ]
+                        driver_vals = [value for value in driver_vals if value]
+                        if driver_vals:
+                            local_commit_driver_mode = max(
+                                sorted(set(driver_vals)),
+                                key=driver_vals.count,
+                            )
+
+                    owner_mode = _masked_mode_string(owner_mode_series, search_indices)
+                    entry_weight_source_mode = _masked_mode_string(
+                        entry_weight_source_series, search_indices
+                    )
+                    fallback_active_rate = None
+                    if fallback_active_series is not None and search_indices.size > 0:
+                        fallback_vals = np.asarray(
+                            fallback_active_series[search_indices], dtype=np.float64
+                        )
+                        fallback_vals = fallback_vals[np.isfinite(fallback_vals) & (fallback_vals >= 0.0)]
+                        if fallback_vals.size > 0:
+                            fallback_active_rate = safe_float(
+                                np.mean(fallback_vals > 0.5) * 100.0, default=None
+                            )
+                    owner_nominal_p50 = _masked_p50(owner_nominal_track)
+                    owner_commit_band_p50 = _masked_p50(owner_commit_band_track)
+                    owner_commit_progress_p50 = _masked_p50(owner_commit_progress_track)
+                    owner_commit_clamp_active_rate = None
+                    if owner_commit_clamp_active_track is not None and search_indices.size > 0:
+                        owner_commit_clamp_vals = np.asarray(
+                            owner_commit_clamp_active_track[search_indices], dtype=np.float64
+                        )
+                        owner_commit_clamp_vals = owner_commit_clamp_vals[
+                            np.isfinite(owner_commit_clamp_vals)
+                            & (owner_commit_clamp_vals >= 0.0)
+                        ]
+                        if owner_commit_clamp_vals.size > 0:
+                            owner_commit_clamp_active_rate = safe_float(
+                                np.mean(owner_commit_clamp_vals > 0.5) * 100.0,
+                                default=None,
+                            )
+                    owner_commit_clamp_delta_max = _masked_max(owner_commit_clamp_delta_track)
+                    owner_band_minus_floor_p50 = None
+                    if (
+                        owner_commit_band_track is not None
+                        and pp_floor_m_series is not None
+                        and search_indices.size > 0
+                    ):
+                        owner_band_vals = np.asarray(
+                            owner_commit_band_track[search_indices], dtype=np.float64
+                        )
+                        pp_floor_vals = np.asarray(
+                            pp_floor_m_series[search_indices], dtype=np.float64
+                        )
+                        valid_band_mask = np.isfinite(owner_band_vals) & np.isfinite(pp_floor_vals)
+                        if np.any(valid_band_mask):
+                            owner_band_minus_floor_p50 = safe_float(
+                                np.percentile(
+                                    owner_band_vals[valid_band_mask]
+                                    - pp_floor_vals[valid_band_mask],
+                                    50,
+                                ),
+                                default=None,
+                            )
+                    local_arc_mode = _masked_mode_string(local_arc_mode_series, search_indices)
+                    local_arc_source_mode = _masked_mode_string(
+                        local_arc_source_series, search_indices
+                    )
+                    local_arc_fallback_reason_mode = _masked_mode_string(
+                        local_arc_fallback_reason_series, search_indices
+                    )
+                    local_arc_active_rate = None
+                    if local_arc_active_series is not None and search_indices.size > 0:
+                        local_arc_active_vals = np.asarray(
+                            local_arc_active_series[search_indices], dtype=np.float64
+                        )
+                        local_arc_active_vals = local_arc_active_vals[
+                            np.isfinite(local_arc_active_vals) & (local_arc_active_vals >= 0.0)
+                        ]
+                        if local_arc_active_vals.size > 0:
+                            local_arc_active_rate = safe_float(
+                                np.mean(local_arc_active_vals > 0.5) * 100.0,
+                                default=None,
+                            )
+                    local_arc_fallback_rate = None
+                    if local_arc_fallback_active_series is not None and search_indices.size > 0:
+                        local_arc_fallback_vals = np.asarray(
+                            local_arc_fallback_active_series[search_indices], dtype=np.float64
+                        )
+                        local_arc_fallback_vals = local_arc_fallback_vals[
+                            np.isfinite(local_arc_fallback_vals) & (local_arc_fallback_vals >= 0.0)
+                        ]
+                        if local_arc_fallback_vals.size > 0:
+                            local_arc_fallback_rate = safe_float(
+                                np.mean(local_arc_fallback_vals > 0.5) * 100.0,
+                                default=None,
+                            )
+                    local_arc_blend_weight_p50 = _masked_p50(local_arc_blend_weight_series)
+                    local_arc_progress_weight_p50 = _masked_p50(local_arc_progress_weight_series)
+                    local_arc_planner_delta_p50 = _masked_p50(local_arc_vs_planner_delta_series)
+                    local_arc_target_distance_p50 = _masked_p50(local_arc_target_distance_series)
+                    local_arc_arc_curvature_p50 = _masked_p50(local_arc_curvature_series)
+
+                    event = {
+                        "curve_index": int(curve_window.get("curve_index", len(curve_turn_events) + 1)),
+                        "entry_frame": int(selected_curve_run[0]),
+                        "exit_frame": int(selected_curve_run[-1]),
+                        "peak_lateral_error_m": safe_float(np.max(lat_slice)),
+                        "peak_lateral_error_frame": peak_frame,
+                        "curve_start_frame": int(curve_start_frame) if curve_start_frame is not None else None,
+                        "curve_local_entry_frame": (
+                            int(curve_local_entry_frame) if curve_local_entry_frame is not None else None
+                        ),
+                        "curve_local_commit_frame": (
+                            int(curve_local_commit_frame) if curve_local_commit_frame is not None else None
+                        ),
+                        "steering_onset_frame": (
+                            int(steering_onset_frame) if steering_onset_frame is not None else None
+                        ),
+                        "curve_local_entry_distance_m": _metric_at(distance_to_curve_arr, curve_local_entry_frame),
+                        "curve_local_commit_distance_m": _metric_at(distance_to_curve_arr, curve_local_commit_frame),
+                        "steering_onset_distance_m": _metric_at(distance_to_curve_arr, steering_onset_frame),
+                        "curve_local_entry_ttc_s": _metric_at(time_to_curve_arr, curve_local_entry_frame),
+                        "curve_local_commit_ttc_s": _metric_at(time_to_curve_arr, curve_local_commit_frame),
+                        "steering_onset_ttc_s": _metric_at(time_to_curve_arr, steering_onset_frame),
+                        "curve_local_arm_ready_at_entry": _metric_at(local_arm_ready_arr, curve_local_entry_frame),
+                        "curve_local_commit_ready_at_entry": _metric_at(local_commit_ready_arr, curve_local_entry_frame),
+                        "curve_local_in_curve_now_at_entry": _metric_at(local_in_curve_now_arr, curve_local_entry_frame),
+                        "curve_local_entry_severity_p50": _masked_p50(local_entry_severity_arr),
+                        "curve_local_entry_severity_max": _masked_max(local_entry_severity_arr),
+                        "curve_local_entry_on_effective_p50": _masked_p50(local_entry_on_arr),
+                        "curve_local_phase_distance_start_effective_p50_m": _masked_p50(local_distance_start_arr),
+                        "curve_local_phase_time_start_effective_p50_s": _masked_p50(local_time_start_arr),
+                        "curve_local_arm_phase_raw_p50": _masked_p50(local_arm_phase_arr),
+                        "curve_local_sustain_phase_raw_p50": _masked_p50(local_sustain_phase_arr),
+                        "curve_local_path_sustain_active_rate": (
+                            safe_float(
+                                np.mean(local_path_sustain_arr[search_indices] > 0.5) * 100.0
+                            )
+                            if local_path_sustain_arr is not None and search_indices.size > 0
+                            else None
+                        ),
+                        "curve_local_entry_driver_mode": local_entry_driver_mode,
+                        "curve_local_commit_driver_mode": local_commit_driver_mode,
+                        "reference_lookahead_owner_mode": owner_mode,
+                        "reference_lookahead_owner_mode_at_entry": _string_at(
+                            owner_mode_series, curve_local_entry_frame
+                        ),
+                        "reference_lookahead_entry_weight_source": entry_weight_source_mode,
+                        "reference_lookahead_entry_weight_source_at_entry": _string_at(
+                            entry_weight_source_series, curve_local_entry_frame
+                        ),
+                        "reference_lookahead_fallback_active_rate": fallback_active_rate,
+                        "reference_lookahead_fallback_active_at_entry": _metric_at(
+                            fallback_active_series, curve_local_entry_frame
+                        ),
+                        "reference_lookahead_owner_nominal_target_p50_m": owner_nominal_p50,
+                        "reference_lookahead_owner_commit_band_target_p50_m": owner_commit_band_p50,
+                        "reference_lookahead_owner_commit_progress_p50": owner_commit_progress_p50,
+                        "reference_lookahead_owner_commit_band_clamp_active_rate": (
+                            owner_commit_clamp_active_rate
+                        ),
+                        "reference_lookahead_owner_commit_band_clamp_delta_max_m": (
+                            owner_commit_clamp_delta_max
+                        ),
+                        "reference_lookahead_owner_commit_band_minus_floor_p50_m": (
+                            owner_band_minus_floor_p50
+                        ),
+                        "local_curve_reference_mode": local_arc_mode,
+                        "local_curve_reference_source_mode": local_arc_source_mode,
+                        "local_curve_reference_fallback_reason_mode": (
+                            local_arc_fallback_reason_mode
+                        ),
+                        "local_curve_reference_active_rate": local_arc_active_rate,
+                        "local_curve_reference_fallback_rate": local_arc_fallback_rate,
+                        "local_curve_reference_blend_weight_p50": local_arc_blend_weight_p50,
+                        "local_curve_reference_progress_weight_p50": local_arc_progress_weight_p50,
+                        "local_curve_reference_vs_planner_delta_p50_m": (
+                            local_arc_planner_delta_p50
+                        ),
+                        "local_curve_reference_target_distance_p50_m": (
+                            local_arc_target_distance_p50
+                        ),
+                        "local_curve_reference_arc_curvature_p50": (
+                            local_arc_arc_curvature_p50
+                        ),
+                        "steering_onset_lateral_error_m": _metric_at(lat_err_arr, steering_onset_frame),
+                        "steering_onset_heading_error_rad": _metric_at(heading_err_arr, steering_onset_frame),
+                        "peak_heading_error_rad": _metric_at(heading_err_arr, peak_frame),
+                        "steering_onset_minus_curve_start_frames": (
+                            int(steering_onset_frame - curve_start_frame)
+                            if steering_onset_frame is not None and curve_start_frame is not None
+                            else None
+                        ),
+                        "pp_pre_floor_shorten_step_min_m_per_frame": pp_pre_floor_shorten_step_min,
+                        "pp_floor_rescue_delta_max_m": pp_floor_rescue_delta_max,
+                        "pp_floor_rescue_delta_mean_m": pp_floor_rescue_delta_mean,
+                    }
+                    entry_ttc = event.get("curve_local_entry_ttc_s")
+                    onset_distance = event.get("steering_onset_distance_m")
+                    event["state_armed_early_enough"] = bool(
+                        entry_ttc is not None and float(entry_ttc) > curve_local_entry_min_ttc_s
+                    )
+                    event["steering_started_early_enough"] = bool(
+                        (
+                            onset_distance is not None and float(onset_distance) > 0.0
+                        )
+                        or (
+                            onset_distance is None
+                            and steering_onset_frame is not None
+                            and curve_start_frame is not None
+                            and int(steering_onset_frame) < int(curve_start_frame)
+                        )
+                    )
+                    event["late_turn_in"] = bool(
+                        (onset_distance is not None and float(onset_distance) <= 0.0)
+                        or (
+                            onset_distance is None
+                            and steering_onset_frame is not None
+                            and curve_start_frame is not None
+                            and int(steering_onset_frame) >= int(curve_start_frame)
+                        )
+                    )
+                    if pp_track is not None:
+                        pp_slice = pp_track[selected_curve_run]
+                        pp_slice = pp_slice[np.isfinite(pp_slice) & (pp_slice > 0.0)]
+                        if pp_slice.size > 0:
+                            event["pp_lookahead_min_m"] = safe_float(np.min(pp_slice))
+                    if ref_track is not None:
+                        ref_slice = ref_track[selected_curve_run]
+                        ref_slice = ref_slice[np.isfinite(ref_slice) & (ref_slice > 0.0)]
+                        if ref_slice.size > 0:
+                            event["reference_lookahead_min_m"] = safe_float(np.min(ref_slice))
+                    curve_turn_events.append(event)
+                    prev_end_m = end_m
+
     # Curve-cap longitudinal diagnostics
     curve_cap_active_series = data.get("speed_governor_curve_cap_active")
     if curve_cap_active_series is not None and n_frames > 0:
@@ -3439,7 +4944,158 @@ def analyze_recording_summary(recording_path: Path, analyze_to_failure: bool = F
         cap_reason = "critical_yellow_layer"
 
     score = safe_float(min(overall_base, critical_cap))
-    
+
+    turn_in_owner = {
+        "availability": "unavailable",
+        "owner_mode": None,
+        "entry_weight_source": None,
+        "fallback_active_rate": None,
+        "phase_active_rate": None,
+        "binary_owner_rate": None,
+        "curve_local_commit_without_ready_count": int(
+            curve_local_contract.get("curve_local_commit_without_ready_count", 0)
+        ),
+        "curve_local_arm_without_ready_count": int(
+            curve_local_contract.get("curve_local_arm_without_ready_count", 0)
+        ),
+        "owner_commit_band_clamp_active_rate": None,
+        "owner_commit_progress_p50": None,
+        "steering_onset_minus_curve_start_frames_p50": None,
+    }
+    if n_frames > 0 and (
+        owner_mode_series is not None
+        or entry_weight_source_series is not None
+        or fallback_active_series is not None
+    ):
+        all_indices = np.arange(n_frames, dtype=int)
+        turn_in_owner["availability"] = "available"
+        turn_in_owner["owner_mode"] = _masked_mode_string(owner_mode_series, all_indices)
+        turn_in_owner["entry_weight_source"] = _masked_mode_string(
+            entry_weight_source_series, all_indices
+        )
+        if owner_mode_series is not None:
+            owner_text = np.array(
+                [_normalize_str_value(value) for value in owner_mode_series[:n_frames]],
+                dtype=object,
+            )
+            valid_mask = owner_text != ""
+            if np.any(valid_mask):
+                turn_in_owner["phase_active_rate"] = safe_float(
+                    np.mean(owner_text[valid_mask] == CURVE_SCHEDULER_MODE_PHASE_ACTIVE) * 100.0
+                )
+                turn_in_owner["binary_owner_rate"] = safe_float(
+                    np.mean(owner_text[valid_mask] == CURVE_SCHEDULER_MODE_BINARY) * 100.0
+                )
+        if fallback_active_series is not None:
+            fallback_vals = np.asarray(fallback_active_series[:n_frames], dtype=np.float64)
+            valid_fb = np.isfinite(fallback_vals) & (fallback_vals >= 0.0)
+            if np.any(valid_fb):
+                turn_in_owner["fallback_active_rate"] = safe_float(
+                    np.mean(fallback_vals[valid_fb] > 0.5) * 100.0
+                )
+        onset_offsets = [
+            float(event.get("steering_onset_minus_curve_start_frames"))
+            for event in curve_turn_events
+            if event.get("steering_onset_minus_curve_start_frames") is not None
+        ]
+        if onset_offsets:
+            turn_in_owner["steering_onset_minus_curve_start_frames_p50"] = safe_float(
+                np.percentile(np.asarray(onset_offsets, dtype=np.float64), 50)
+            )
+        clamp_rates = [
+            float(event.get("reference_lookahead_owner_commit_band_clamp_active_rate"))
+            for event in curve_turn_events
+            if event.get("reference_lookahead_owner_commit_band_clamp_active_rate") is not None
+        ]
+        if clamp_rates:
+            turn_in_owner["owner_commit_band_clamp_active_rate"] = safe_float(
+                np.percentile(np.asarray(clamp_rates, dtype=np.float64), 50)
+            )
+        commit_progress_vals = [
+            float(event.get("reference_lookahead_owner_commit_progress_p50"))
+            for event in curve_turn_events
+            if event.get("reference_lookahead_owner_commit_progress_p50") is not None
+        ]
+        if commit_progress_vals:
+            turn_in_owner["owner_commit_progress_p50"] = safe_float(
+                np.percentile(np.asarray(commit_progress_vals, dtype=np.float64), 50)
+            )
+
+    local_curve_reference = {
+        "availability": "unavailable",
+        "mode": None,
+        "active_rate": None,
+        "shadow_only_rate": None,
+        "valid_rate": None,
+        "fallback_active_rate": None,
+        "source_mode": None,
+        "fallback_reason_mode": None,
+        "blend_weight_p50": None,
+        "progress_weight_p50": None,
+        "planner_delta_p50_m": None,
+        "planner_delta_p95_m": None,
+        "target_distance_p50_m": None,
+        "arc_curvature_p50": None,
+        "turn_event_count": int(len(curve_turn_events)),
+        "limits": {
+            "fallback_active_rate_max_pct": 5.0,
+        },
+    }
+    if n_frames > 0 and (
+        local_arc_mode_series is not None
+        or local_arc_active_series is not None
+        or local_arc_valid_series is not None
+    ):
+        all_indices = np.arange(n_frames, dtype=int)
+        local_curve_reference["availability"] = "available"
+        local_curve_reference["mode"] = _masked_mode_string(local_arc_mode_series, all_indices)
+        local_curve_reference["source_mode"] = _masked_mode_string(local_arc_source_series, all_indices)
+        local_curve_reference["fallback_reason_mode"] = _masked_mode_string(
+            local_arc_fallback_reason_series, all_indices
+        )
+        if local_arc_active_series is not None:
+            active_vals = np.asarray(local_arc_active_series[:n_frames], dtype=np.float64)
+            valid_mask = np.isfinite(active_vals) & (active_vals >= 0.0)
+            if np.any(valid_mask):
+                local_curve_reference["active_rate"] = safe_float(
+                    np.mean(active_vals[valid_mask] > 0.5) * 100.0
+                )
+        if local_arc_shadow_only_series is not None:
+            shadow_vals = np.asarray(local_arc_shadow_only_series[:n_frames], dtype=np.float64)
+            valid_mask = np.isfinite(shadow_vals) & (shadow_vals >= 0.0)
+            if np.any(valid_mask):
+                local_curve_reference["shadow_only_rate"] = safe_float(
+                    np.mean(shadow_vals[valid_mask] > 0.5) * 100.0
+                )
+        if local_arc_valid_series is not None:
+            valid_vals = np.asarray(local_arc_valid_series[:n_frames], dtype=np.float64)
+            valid_mask = np.isfinite(valid_vals) & (valid_vals >= 0.0)
+            if np.any(valid_mask):
+                local_curve_reference["valid_rate"] = safe_float(
+                    np.mean(valid_vals[valid_mask] > 0.5) * 100.0
+                )
+        if local_arc_fallback_active_series is not None:
+            fallback_vals = np.asarray(local_arc_fallback_active_series[:n_frames], dtype=np.float64)
+            valid_mask = np.isfinite(fallback_vals) & (fallback_vals >= 0.0)
+            if np.any(valid_mask):
+                local_curve_reference["fallback_active_rate"] = safe_float(
+                    np.mean(fallback_vals[valid_mask] > 0.5) * 100.0
+                )
+        for key, arr, pct in (
+            ("blend_weight_p50", local_arc_blend_weight_series, 50),
+            ("progress_weight_p50", local_arc_progress_weight_series, 50),
+            ("planner_delta_p50_m", local_arc_vs_planner_delta_series, 50),
+            ("planner_delta_p95_m", local_arc_vs_planner_delta_series, 95),
+            ("target_distance_p50_m", local_arc_target_distance_series, 50),
+            ("arc_curvature_p50", local_arc_curvature_series, 50),
+        ):
+            if arr is None:
+                continue
+            vals = np.asarray(arr[:n_frames], dtype=np.float64)
+            vals = vals[np.isfinite(vals)]
+            if vals.size > 0:
+                local_curve_reference[key] = safe_float(np.percentile(vals, pct))
+
     # Generate recommendations
     recommendations = []
     if lateral_error_rmse > 0.3:
@@ -3458,6 +5114,62 @@ def analyze_recording_summary(recording_path: Path, analyze_to_failure: bool = F
         if bool(curve_intent_diag.get("undercall_detected", False)):
             recommendations.append(
                 "Controller is undercalling curvature in curves - improve curvature estimation fidelity."
+            )
+    if curve_local_contract.get("curve_local_contract_available"):
+        if float(curve_local_contract.get("curve_local_active_straight_rate", 0.0)) > 5.0:
+            recommendations.append(
+                "Local curve state stays active on straights - separate far preview from local steering activation."
+            )
+        if int(curve_local_contract.get("curve_local_arm_without_ready_count", 0)) > 0:
+            recommendations.append(
+                "Local curve is arming without readiness - block path-only pre-entry arming before changing lookahead ownership."
+            )
+        if int(curve_local_contract.get("curve_local_reentry_without_gate_count", 0)) > 0:
+            recommendations.append(
+                "Local curve state re-enters without gate - block REARM/STRAIGHT re-entry unless local evidence is present."
+            )
+        if int(curve_local_contract.get("curve_local_watchdog_pingpong_count", 0)) > 0:
+            recommendations.append(
+                "Curve watchdog is ping-ponging on straights - remove non-local state latch before further PP retuning."
+            )
+        if int(curve_local_contract.get("curve_local_commit_without_distance_ready_count", 0)) > 0:
+            recommendations.append(
+                "Local curve COMMIT is arming before distance-ready - tighten local relevance gating."
+            )
+        if int(curve_local_contract.get("curve_local_commit_without_ready_count", 0)) > 0:
+            recommendations.append(
+                "Local curve COMMIT is arming without commit-ready evidence - tighten COMMIT qualification before changing lookahead ownership."
+            )
+        if int(curve_local_contract.get("curve_lookahead_collapse_violation_count", 0)) > 0:
+            recommendations.append(
+                "Reference lookahead is collapsing too quickly before local entry - slow PP shorten slew or raise local floor."
+            )
+        straight_summary_delta = curve_local_contract.get("straight_summary_vs_segment_rate_delta_pct")
+        if straight_summary_delta is not None and float(straight_summary_delta) > 0.5:
+            recommendations.append(
+                "Curve-state summary disagrees with straight-segment inspector - fix analyzer straight-mask source before tuning."
+            )
+    if turn_in_owner.get("availability") == "available":
+        fallback_rate = turn_in_owner.get("fallback_active_rate")
+        if fallback_rate is not None and float(fallback_rate) > 0.0:
+            recommendations.append(
+                "Reference lookahead owner is falling back off the nominal path - fix scheduler/reference ownership before tuning turn-in."
+            )
+    for event in curve_turn_events:
+        rescue_delta_max = event.get("pp_floor_rescue_delta_max_m")
+        shorten_step_min = event.get("pp_pre_floor_shorten_step_min_m_per_frame")
+        curve_idx = event.get("curve_index", "?")
+        if rescue_delta_max is not None and float(rescue_delta_max) > 1.0:
+            recommendations.append(
+                f"PP floor is rescuing too much on C{curve_idx} entry - smooth planner-side lookahead contraction before the floor."
+            )
+        if (
+            entry_shorten_guard_limit > 0.0
+            and shorten_step_min is not None
+            and float(shorten_step_min) < -(entry_shorten_guard_limit + 1e-6)
+        ):
+            recommendations.append(
+                f"Planner lookahead still shortens too abruptly on C{curve_idx} - tighten entry-shorten guard before retuning PP gains."
             )
     if overspeed_into_curve_rate > 10.0:
         recommendations.append(
@@ -3580,6 +5292,65 @@ def analyze_recording_summary(recording_path: Path, analyze_to_failure: bool = F
             key_issues.append(
                 f"Curvature undercall ({curve_intent_diag.get('undercall_frame_rate', 0.0):.1f}% frames)"
             )
+    if curve_local_contract.get("curve_local_contract_available"):
+        local_active_straight_rate = float(
+            curve_local_contract.get("curve_local_active_straight_rate", 0.0)
+        )
+        if local_active_straight_rate > 5.0:
+            key_issues.append(
+                f"Local curve state latched on straights ({local_active_straight_rate:.1f}% frames)"
+            )
+        arm_without_ready_count = int(
+            curve_local_contract.get("curve_local_arm_without_ready_count", 0)
+        )
+        if arm_without_ready_count > 0:
+            key_issues.append(
+                f"Local curve armed without readiness ({arm_without_ready_count} events)"
+            )
+        reentry_without_gate_count = int(
+            curve_local_contract.get("curve_local_reentry_without_gate_count", 0)
+        )
+        if reentry_without_gate_count > 0:
+            key_issues.append(
+                f"Local re-entry without gate ({reentry_without_gate_count} events)"
+            )
+        pingpong_count = int(
+            curve_local_contract.get("curve_local_watchdog_pingpong_count", 0)
+        )
+        if pingpong_count > 0:
+            key_issues.append(
+                f"Curve watchdog ping-pong on straights ({pingpong_count} events)"
+            )
+        early_commit_count = int(
+            curve_local_contract.get("curve_local_commit_without_distance_ready_count", 0)
+        )
+        if early_commit_count > 0:
+            key_issues.append(
+                f"Local curve COMMIT before distance-ready ({early_commit_count} frames)"
+            )
+        early_commit_without_ready_count = int(
+            curve_local_contract.get("curve_local_commit_without_ready_count", 0)
+        )
+        if early_commit_without_ready_count > 0:
+            key_issues.append(
+                f"Local curve COMMIT without commit-ready ({early_commit_without_ready_count} frames)"
+            )
+    if turn_in_owner.get("availability") == "available":
+        fallback_rate = turn_in_owner.get("fallback_active_rate")
+        if fallback_rate is not None and float(fallback_rate) > 0.0:
+            key_issues.append(
+                f"Reference lookahead fallback active ({float(fallback_rate):.1f}% frames)"
+            )
+    for event in curve_turn_events:
+        if bool(event.get("late_turn_in", False)):
+            curve_idx = event.get("curve_index", "?")
+            key_issues.append(f"Late turn-in on C{curve_idx}")
+        rescue_delta_max = event.get("pp_floor_rescue_delta_max_m")
+        if rescue_delta_max is not None and float(rescue_delta_max) > 1.0:
+            curve_idx = event.get("curve_index", "?")
+            key_issues.append(
+                f"Large PP floor rescue on C{curve_idx} ({float(rescue_delta_max):.2f} m)"
+            )
     if overspeed_into_curve_rate > 10.0:
         key_issues.append(f"Overspeed into curve ({overspeed_into_curve_rate:.1f}% frames)")
     if frames_above_cap_1p0mps_rate > 2.0:
@@ -3698,6 +5469,11 @@ def analyze_recording_summary(recording_path: Path, analyze_to_failure: bool = F
             "oscillation_curve_fraction": safe_float(curve_fraction),
         },
         "curve_intent_diagnostics": curve_intent_diag,
+        "curve_local_contract": curve_local_contract,
+        "local_curve_reference": local_curve_reference,
+        "turn_in_owner": turn_in_owner,
+        "curve_turn_events": curve_turn_events,
+        "curve_straight_segments": curve_straight_segments,
         "speed_control": {
             "speed_min_mps": speed_min_mps,
             "speed_max_mps": speed_max_mps,
