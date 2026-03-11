@@ -570,9 +570,10 @@ GT lane center serves as our HD map signal (same role as pre-built HD maps in re
 **Gate:** Prediction horizon ≥ 3s, ADE ≤ 1.0m at 2s, lane change safety improves with prediction
 **Unlocks:** Proactive rather than reactive behavior, safer multi-agent interactions
 
-### Step 9 — Intersection Handling
+### Step 9 — Intersection Handling + Global Route Planning
 
-**Goal:** Navigate stop lines, traffic signals, and turn policies.
+**Goal:** Navigate stop lines, traffic signals, and turn policies. Introduce a global planner
+that decides *which* path to take at junctions — the first step toward cross-country navigation.
 
 **What to build:**
 - Traffic signal state ingestion from Unity
@@ -580,9 +581,25 @@ GT lane center serves as our HD map signal (same role as pre-built HD maps in re
 - Protected turns first (green arrow = go)
 - Unprotected turns (yield to oncoming traffic)
 - Turn trajectory planning through intersections
+- **Global planner:** road network graph (nodes = intersections, edges = road segments);
+  A* or Dijkstra to compute a route from A to B
+- **Route profile handoff:** global planner emits an ordered polyline of road segments
+  (curvature, speed limits, junction type at each meter) that replaces the current static
+  track YAML. The local planner (PP/MPC) follows whatever profile it receives — it does not
+  need to know "left or right", only the geometry ahead.
+
+**Architectural note (2026-03-10):**
+The current system treats a track YAML as a fixed closed loop. Phase 3 config work
+(auto-derive thresholds from geometry) builds the right abstraction — but the *input*
+is still a static file. In a map-based world, the route profile is dynamically assembled
+by the global planner from an HD map graph on each trip. The local planner code changes
+minimally; the intelligence of which road segment to follow lives entirely in the global
+planner layer. Intersection left/right decisions are navigation decisions, not control
+decisions.
 
 **Entry:** Steps 5 + 8 done (need actor awareness + prediction for yield decisions)
-**Gate:** Stop-line compliance ≥ 98%, red-light violations = 0, jerk P95 ≤ 6.0 m/s³
+**Gate:** Stop-line compliance ≥ 98%, red-light violations = 0, jerk P95 ≤ 6.0 m/s³,
+route followed correctly through ≥ 3 junction types
 **Unlocks:** Urban driving capability — stack goes from "highway lane-keeper" to "city navigator"
 
 ### Step 10 — End-to-End Robustness + Regression
