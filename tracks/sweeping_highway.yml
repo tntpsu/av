@@ -1,0 +1,65 @@
+name: sweeping_highway
+road_width: 7.2
+lane_line_width: 0.2
+sample_spacing: 1.0
+loop: true
+start_distance: 3.0
+speed_limit_mph: 65.0
+
+# Sweeping high-speed circuit (heading sum = +360°, counter-clockwise).
+# All four corners are R300 (κ=0.0033) — tighter than highway_65 (κ=0.002)
+# but still firmly in MPC territory at 15 m/s.
+#
+# Layout: rectangular CCW circuit, all left turns
+#   N side (250m) → R300 corner → E side (150m) →
+#   R300 corner   → S side (250m) → R300 corner →
+#   W side (150m) → R300 corner   → back to N
+#
+# Heading closure: +90 +90 +90 +90 = +360° ✓
+# Position closure: all equal radii + opposite sides equal (L1=L3=250, L2=L4=150) ✓
+#
+# Key test scenarios:
+#   250m straights (at 15 m/s = 16.7s): tests oscillation growth on long straights
+#   R300 arcs (471m, 31s at 15 m/s): tests MPC curvature preview + bias estimator
+#   Total lap ~2685m → 179s at 15 m/s; 60s run covers ~34% (1 full arc + approach)
+segments:
+  # North straight — acceleration zone from standing start
+  - type: straight
+    length: 250
+    speed_limit_mph: 65.0
+  # NE corner — first sweeping left (R300, κ=0.0033)
+  - type: arc
+    radius: 300
+    angle_deg: 90
+    direction: left
+    speed_limit_mph: 60.0
+  # East straight — cruise at full speed
+  - type: straight
+    length: 150
+    speed_limit_mph: 65.0
+  # SE corner
+  - type: arc
+    radius: 300
+    angle_deg: 90
+    direction: left
+    speed_limit_mph: 60.0
+  # South straight
+  - type: straight
+    length: 250
+    speed_limit_mph: 65.0
+  # SW corner
+  - type: arc
+    radius: 300
+    angle_deg: 90
+    direction: left
+    speed_limit_mph: 60.0
+  # West straight
+  - type: straight
+    length: 150
+    speed_limit_mph: 65.0
+  # NW corner — closes the loop
+  - type: arc
+    radius: 300
+    angle_deg: 90
+    direction: left
+    speed_limit_mph: 60.0

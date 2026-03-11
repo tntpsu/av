@@ -1174,6 +1174,19 @@ class AVStack:
             with open(track_path, "r") as f:
                 cfg = yaml.safe_load(f) or {}
 
+            # ── Geometry validation: detect self-intersecting tracks ──────────
+            from av_stack.track_geometry import validate_track_geometry
+            geo_errors = validate_track_geometry(cfg)
+            for err in geo_errors:
+                logger.warning("[TRACK GEOMETRY] %s", err)
+            if geo_errors:
+                logger.warning(
+                    "[TRACK GEOMETRY] Track '%s' has %d geometry error(s) — "
+                    "the road may cross itself in Unity causing false out-of-lane events.",
+                    track_name,
+                    len(geo_errors),
+                )
+
             distance_cursor = 0.0
             curves: list[dict] = []
             for segment in cfg.get("segments", []) or []:

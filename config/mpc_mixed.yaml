@@ -1,0 +1,44 @@
+# Mixed-radius track overlay — merges on top of config/av_stack_config.yaml at runtime.
+#
+# Only parameters that differ from base are listed here.
+# Base provides all other defaults (speed tables, curvature thresholds, MPC structure).
+#
+# Track: mixed_radius (R40–R200 circuit, κ range 0.005–0.025)
+# Speed range: 5–12 m/s (cap-tracked on tight corners, MPC on fast straights)
+# Usage:
+#   ./start_av_stack.sh --config config/mpc_mixed.yaml \
+#       --track-yaml tracks/mixed_radius.yml --duration 60
+#
+# NOTE: This track exercises the full PP↔MPC regime transition range.
+#   R40 corner: speed ~5 m/s → PP only
+#   R150 corner: speed ~10 m/s → regime handoff boundary
+#   R200 corner + straights: speed ~12 m/s → MPC active
+#   MPC threshold (pp_max_speed_mps: 10.0) is intentionally NOT lowered — the handoff
+#   at R150 is the key scenario under test.
+
+control:
+  longitudinal:
+    target_speed: 12.0          # moderate — not full highway speed
+    max_speed: 14.0
+  regime:
+    enabled: true
+
+trajectory:
+  target_speed: 12.0
+  # Use phase_active scheduler for the tight corners (R40, R60) — same as s_loop.
+  # Without this, tight corners default to binary mode which doesn't contract lookahead
+  # aggressively enough at high lateral error, causing overshoot on R40.
+  curve_scheduler_mode: phase_active
+  reference_lookahead_entry_track_name: mixed_radius
+  # Lookahead table: s_loop values (1m longer entry lookahead for tight curves)
+  reference_lookahead_speed_table_entry:
+  - {speed_mps: 0.0,   lookahead_m: 7.0}
+  - {speed_mps: 4.47,  lookahead_m: 8.0}
+  - {speed_mps: 8.94,  lookahead_m: 9.0}
+  - {speed_mps: 11.18, lookahead_m: 10.0}
+  - {speed_mps: 13.41, lookahead_m: 10.0}
+  curve_local_phase_distance_start_m: 10.0   # arm 10m before curve (same as s_loop)
+  curve_local_commit_distance_ready_m: 8.0   # commit at 8m (same as s_loop)
+  speed_governor:
+    curve_preview_enabled: false  # use map κ for cap (avoids noise)
+    curve_cap_use_preview_curvature: false

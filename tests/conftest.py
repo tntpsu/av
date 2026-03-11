@@ -51,8 +51,16 @@ COMFORT_GATES: dict[str, float] = {
 BASELINE_SCORES: dict[str, float] = {
     "s_loop":     95.6,
     "highway_65": 96.2,
+    "hairpin_15": 79.0,   # PP ceiling on R15/R20 geometry — gate is ±4pts (see SCORE_TOLERANCES)
 }
-SCORE_TOLERANCE = 2.0  # Points. Fail if |actual − baseline| > this.
+
+# Per-track score tolerances (default 2.0). Wider for tracks with structural variance.
+SCORE_TOLERANCES: dict[str, float] = {
+    "s_loop":     2.0,
+    "highway_65": 2.0,
+    "hairpin_15": 4.0,   # bimodal variance (59 or 79) from consecutive arcs
+}
+SCORE_TOLERANCE = 2.0  # Default — used when track not in SCORE_TOLERANCES.
 
 # ── Golden recording helpers ──────────────────────────────────────────────────
 

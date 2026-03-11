@@ -1,15 +1,17 @@
 {
     "schema_version": "1",
-    "milestone": "S1-M39",
-    "recorded_at": "2026-02-22",
-    "notes": "S1-M39 final validation recordings. Update this manifest after each milestone whose validation recordings supersede the previous ones. Update BASELINE_SCORES in tests/conftest.py to match.",
+    "milestone": "S2-M5 (Step 1 in progress)",
+    "recorded_at": "2026-03-11",
+    "notes": "S1-M39 baselines retained. hairpin_15 added (Step 1 Phase 1D). mixed_radius and sweeping_highway pending live validation. Update BASELINE_SCORES in tests/conftest.py to match after each new track is added.",
     "tracks": {
         "s_loop":     "data/recordings/recording_20260222_202957.h5",
-        "highway_65": "data/recordings/recording_20260222_214028.h5"
+        "highway_65": "data/recordings/recording_20260222_214028.h5",
+        "hairpin_15": "data/recordings/recording_20260310_235914.h5"
     },
     "documented_scores": {
         "s_loop":     95.6,
-        "highway_65": 96.2
+        "highway_65": 96.2,
+        "hairpin_15": 79.0
     },
     "documented_metrics": {
         "s_loop": {
@@ -27,6 +29,15 @@
             "out_of_lane_events":      0,
             "emergency_stops":         0,
             "duration_s":              59.9
+        },
+        "hairpin_15": {
+            "lateral_rmse_m":          0.435,
+            "accel_p95_filtered_mps2": 1.167,
+            "commanded_jerk_p95_mps3": 1.440,
+            "out_of_lane_events":      0,
+            "emergency_stops":         0,
+            "duration_s":              59.9,
+            "notes": "Empirical PP ceiling on R15/R20 geometry. Bimodal variance (59 or 79) due to consecutive arcs with no inter-arc straight — C1 exit error compounds directly into C2. Score gate set at 75 (not 85) for this track. Controller: PP only (speed 2-4 m/s, below MPC threshold)."
         }
     }
 }

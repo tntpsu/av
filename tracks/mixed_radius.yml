@@ -1,0 +1,72 @@
+name: mixed_radius
+road_width: 7.2
+lane_line_width: 0.2
+sample_spacing: 1.0
+loop: true
+start_distance: 3.0
+speed_limit_mph: 40.0
+
+# Mixed-geometry clockwise circuit (heading sum = -360°).
+# Four corners with different radii test PP↔MPC regime transitions.
+#
+# Layout: rectangular circuit, all right turns (clockwise)
+#   N side (200m) → R200 corner (gentle) → E side (80m) →
+#   R60 corner (tight) → S side (450m) → R40 corner (tightest) →
+#   W side (150m) → R150 corner (medium) → back to N
+#
+# Heading closure: -90 -90 -90 -90 = -360° ✓
+# Position closure (heading starts north, all right turns):
+#   Closure requires L1 + R1 - R2 - L3 - R3 + R4 = 0
+#     → 200 + 200 - 60 - 450 - 40 + 150 = 0 ✓
+#   And: R1 + L2 + R2 - R3 - L4 - R4 = 0
+#     → 200 + 80 + 60 - 40 - 150 - 150 = 0 ✓
+#
+# Speed regime:
+#   R200 corner + N/E straights → ~12 m/s → MPC active
+#   R60 corner  → speed cap drops vehicle to ~8 m/s → PP takes over
+#   R40 corner  → speed cap ~5 m/s → PP
+#   R150 corner → speed cap ~10 m/s → regime transition zone
+#
+# The R60/R40 sequence is the key test: cap-tracking decelerates the vehicle
+# from MPC speed into PP range, then it re-accelerates through R150 back into MPC.
+segments:
+  # North side — approach, vehicle reaches MPC speed (~12 m/s)
+  - type: straight
+    length: 200
+    speed_limit_mph: 40.0
+  # NE corner — gentle entry (R200, κ=0.005) — MPC handles this
+  - type: arc
+    radius: 200
+    angle_deg: 90
+    direction: right
+    speed_limit_mph: 35.0
+  # East side — short connector
+  - type: straight
+    length: 80
+    speed_limit_mph: 35.0
+  # SE corner — tight (R60, κ=0.017) — speed cap forces PP range
+  - type: arc
+    radius: 60
+    angle_deg: 90
+    direction: right
+    speed_limit_mph: 20.0
+  # South side — long straight, vehicle partially recovers speed
+  - type: straight
+    length: 450
+    speed_limit_mph: 30.0
+  # SW corner — tightest (R40, κ=0.025 — same as s_loop) — deep PP territory
+  - type: arc
+    radius: 40
+    angle_deg: 90
+    direction: right
+    speed_limit_mph: 18.0
+  # West side — vehicle re-accelerates toward MPC threshold
+  - type: straight
+    length: 150
+    speed_limit_mph: 35.0
+  # NW corner — medium (R150, κ=0.0067) — regime transition zone
+  - type: arc
+    radius: 150
+    angle_deg: 90
+    direction: right
+    speed_limit_mph: 28.0
