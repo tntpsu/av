@@ -1140,6 +1140,7 @@ class AVStack:
             os.getenv("AV_TRACK_ID", self._reference_entry_track_name or "")
         ).strip()
         self._load_reference_entry_track_profile(self._reference_entry_track_name)
+        self._derive_curvature_thresholds()
 
         # Canonical map-free curve anticipation (trajectory-owned signal).
         self.curve_anticipation_enabled = bool(
@@ -1237,6 +1238,90 @@ class AVStack:
             self._reference_entry_track_total_length_m = None
             self._reference_entry_track_curves = []
             self._track_profile_loaded = False
+
+    # ── Phase 3: auto-derive curvature thresholds from track geometry ────────
+
+    # Base values for 4th-root scaling (calibrated for s_loop, κ_max=0.025).
+    # Each entry: (config_section, key) → base_value.
+    _DERIVABLE_CURVATURE_PARAMS: dict[tuple[str, str], float] = {
+        # trajectory section — phase scheduler curvature thresholds
+        ("trajectory", "curve_phase_preview_curvature_min"): 0.003,
+        ("trajectory", "curve_phase_preview_curvature_max"): 0.015,
+        ("trajectory", "curve_phase_path_curvature_min"): 0.003,
+        ("trajectory", "curve_phase_path_curvature_max"): 0.015,
+        ("trajectory", "curve_phase_rise_min"): 0.0005,
+        ("trajectory", "curve_phase_rise_max"): 0.006,
+        ("trajectory", "curve_local_entry_severity_curvature_min"): 0.003,
+        ("trajectory", "curve_local_entry_severity_curvature_max"): 0.012,
+        ("trajectory", "curve_context_curve_start_curvature"): 0.006,
+        ("trajectory", "reference_lookahead_entry_preview_curvature_min"): 0.003,
+        ("trajectory", "reference_lookahead_entry_preview_curvature_max"): 0.015,
+        ("trajectory", "reference_lookahead_entry_hysteresis_on"): 0.01,
+        ("trajectory", "reference_lookahead_entry_hysteresis_off"): 0.008,
+        # trajectory section — curve anticipation & local curve reference
+        ("trajectory", "curve_anticipation_curvature_min"): 0.0025,
+        ("trajectory", "curve_anticipation_curvature_max"): 0.015,
+        ("trajectory", "local_curve_reference_curvature_min"): 0.003,
+        ("trajectory", "local_curve_reference_curvature_max"): 0.015,
+        ("trajectory", "curve_local_phase_path_curvature_min"): 0.003,
+        ("trajectory", "curve_local_phase_path_curvature_max"): 0.015,
+        # control.lateral section — feedforward & map FF curvature gates
+        ("control.lateral", "curve_feedforward_curvature_min"): 0.001,
+        ("control.lateral", "curve_feedforward_curvature_max"): 0.015,
+        ("control.lateral", "pp_map_ff_curvature_min"): 0.005,
+    }
+
+    def _derive_curvature_thresholds(self) -> None:
+        """Auto-derive curvature thresholds from track geometry using 4th-root scaling.
+
+        Formula: derived = base_value × (track_κ_max / reference_κ_max) ^ 0.25
+
+        Only sets keys not explicitly present in the overlay config, so manual
+        overrides always win.  Disabled when ``curve_auto_derive`` is false or
+        no track geometry is loaded.
+        """
+        trajectory_cfg = self.config.get("trajectory", {})
+        if not trajectory_cfg.get("curve_auto_derive", False):
+            return
+        if not self._reference_entry_track_curves:
+            return
+
+        kappa_max = max(c["curvature_abs"] for c in self._reference_entry_track_curves)
+        if kappa_max < 1e-6:
+            return  # degenerate track (all straights)
+
+        ref_kappa = float(trajectory_cfg.get(
+            "curve_auto_derive_reference_kappa_max", 0.025
+        ))
+        scale = (kappa_max / ref_kappa) ** 0.25
+
+        raw_overlay = self.config.get("_raw_overlay", {})
+
+        derived_count = 0
+        for (section_path, key), base_value in self._DERIVABLE_CURVATURE_PARAMS.items():
+            # Resolve config section (supports dotted paths like "control.lateral")
+            parts = section_path.split(".")
+            cfg_section = self.config
+            overlay_section = raw_overlay
+            for part in parts:
+                cfg_section = cfg_section.setdefault(part, {})
+                overlay_section = overlay_section.get(part, {}) if isinstance(overlay_section, dict) else {}
+
+            # Only set if NOT explicitly overridden in the overlay
+            if isinstance(overlay_section, dict) and key in overlay_section:
+                continue
+
+            derived_value = round(base_value * scale, 6)
+            cfg_section[key] = derived_value
+            derived_count += 1
+
+        if derived_count > 0:
+            logger.info(
+                "[CURVE_AUTO_DERIVE] track κ_max=%.4f, scale=%.3f, "
+                "derived %d/%d curvature thresholds",
+                kappa_max, scale, derived_count,
+                len(self._DERIVABLE_CURVATURE_PARAMS),
+            )
 
     def _update_track_odometer(self, vehicle_state_dict: dict) -> float:
         """Accumulate driven distance from vehicle position for map-based lookups.

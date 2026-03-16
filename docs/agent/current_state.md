@@ -1,7 +1,7 @@
 # AV Stack — Agent Memory: Current State
 
 **Last updated:** 2026-03-16
-**Current milestone:** T-033 Automated A/B CI Regression — COMPLETE. Scoring regression tests (25 tests across 5 tracks), config change detector, CI workflow integration, PhilViz Gates tab regression delta table. 774 tests passing, 9 skipped.
+**Current milestone:** T-076 Config Phase 3 — COMPLETE. Auto-derive curvature thresholds from track geometry using 4th-root scaling. 22 derivable params, highway overlay reduced 90→65 lines. 811 tests passing, 9 skipped.
 
 ---
 

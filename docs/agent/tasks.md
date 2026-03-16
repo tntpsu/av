@@ -37,7 +37,7 @@
 | T-073 | PhilViz diagnostic consistency pass | `docs/plans/camera-optimization-plan.md §Phases 3–4`. Align triage, layer_health, issues, compare tabs so they all draw from the same `scoring_registry.py` (centralised metric definitions). Extract `scoring_registry.py` first, then rewire each tab. |
 | T-074 | Unity shader pre-warming integration | `docs/plans/camera-optimization-plan.md §Phase 1`. `unity/AVSimulation/Assets/Scripts/ShaderPrewarmer.cs` exists but may not be wired to any scene. Wire to startup, verify warmup completes before first frame is sent. |
 | T-075 | Arc-distance curve phase scheduler | `docs/plans/local-arc-reference-plan.md`. Replace empirical `curve_local_phase_time_start_s` threshold with map arc distance. Config-only: set `reference_lookahead_entry_track_name: <track>` + `curve_local_phase_time_start_s: 0.0`. Makes turn-entry trigger geometry-exact, removes speed-dependence of the time gate. |
-| T-076 | Config Phase 3: auto-derive curvature thresholds | `docs/plans/plan-config-unification.md §Phase 3`. Auto-compute `curve_cap_peak_lat_accel_g` threshold from track κ_max so tight-curve cap is exact, not hand-tuned per overlay. |
+| T-076 | ~~Config Phase 3: auto-derive curvature thresholds~~ | ✅ Done (2026-03-16) — 4th-root scaling from track κ_max, 22 derivable params, highway overlay 90→65 lines, 37 new tests, 811 total passing |
 | T-077 | Cadence investigation — mixed_radius severe_rate | `docs/plans/cadence-performance-plan.md`. `severe_rate=4.23%` (gate: 1.0%) is pinning mixed_radius at 79/100. Instrument frame timing, find CPU spike source (regime transitions? cap-tracking events? Unity geometry load?). Highway runs don't have this issue. |
 
 ## Forward Roadmap (see `docs/ROADMAP.md §Capability Roadmap`)
@@ -53,6 +53,7 @@
 | — | Curvature-adjusted scoring + unified gates | **✅ Done (2026-03-15)** |
 | — | Track coverage expansion (S2-M5) — 5 tracks validated | **✅ Done (2026-03-15)** |
 | 1 | Automated A/B CI regression (T-033) | **✅ Done (2026-03-16)** |
+| 2 | Config Phase 3: auto-derive curvature (T-076) | **✅ Done (2026-03-16)** |
 | 3 | Grade and banking | Pending |
 | 4 | NMPC + full hierarchical hybrid (plan.md §2.7-2.8) | Pending |
 | 5 | Lead vehicle following / ACC | Pending |

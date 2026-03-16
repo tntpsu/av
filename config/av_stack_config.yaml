@@ -301,6 +301,8 @@ control:
     stanley_min_hold_frames: 15        # 0.5s hold before switching
 trajectory:
   trajectory_source: planner
+  curve_auto_derive: true                # Phase 3: auto-derive curvature thresholds from track geometry
+  curve_auto_derive_reference_kappa_max: 0.025  # base config calibrated for s_loop (κ_max=0.025)
   lookahead_distance: 20.0
   point_spacing: 1.0
   target_speed: 12.0

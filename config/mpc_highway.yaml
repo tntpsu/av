@@ -2,15 +2,12 @@
 #
 # Only parameters that differ from base are listed here.
 # Base provides all other defaults (speed tables, safety gates, MPC structure).
+# Curvature thresholds are auto-derived from track geometry (Phase 3).
 #
 # Track: highway_65 (500m arc radii — 10x gentler than s_loop's 40-50m arcs)
 # Usage:
 #   ./start_av_stack.sh --config config/mpc_highway.yaml \
 #       --track-yaml tracks/highway_65.yml --duration 60
-#
-# NOTE: Curvature thresholds (curvature_min/max) are set ~5x lower than s_loop base
-#   because highway arcs are κ=0.002 vs s_loop κ=0.02-0.025. Phase 3 will auto-derive
-#   these from track geometry so they no longer need to be specified here.
 
 control:
   lateral:
@@ -21,7 +18,6 @@ control:
     pp_speed_norm_enabled: true     # normalize PP gain by speed (disabled in base)
     pp_speed_norm_min_scale: 0.60   # quadratic floor: at 15 m/s scale=(12/15)²=0.64 (base: 0.7)
     pp_map_ff_gain: 1.0             # stronger map feedforward (base: 0.8)
-    pp_map_ff_curvature_min: 0.001  # detect gentle highway arcs (base: 0.005)
     # Curve intent — calibrated for gentle highway geometry and higher speed
     curve_intent_startup_ignore_frames: 45
     curve_intent_arm_preview_min: 0.002
@@ -43,29 +39,15 @@ control:
 
 trajectory:
   target_speed: 15.0
-  # Curvature thresholds — scaled for highway geometry (κ=0.002 vs s_loop κ=0.02-0.025)
-  # TODO Phase 3: auto-derive from track arc radii; remove these overrides
-  reference_lookahead_entry_preview_curvature_min: 0.0015   # base: 0.003
-  reference_lookahead_entry_preview_curvature_max: 0.008    # base: 0.015
-  reference_lookahead_entry_hysteresis_on: 0.0025
-  reference_lookahead_entry_hysteresis_off: 0.0018
-  curve_phase_preview_curvature_min: 0.0015   # base: 0.003
-  curve_phase_preview_curvature_max: 0.008    # base: 0.015
-  curve_phase_path_curvature_min: 0.0015      # base: 0.003
-  curve_phase_path_curvature_max: 0.008       # base: 0.015
-  curve_phase_rise_min: 0.0002
-  curve_phase_rise_max: 0.003
+  # Phase transition thresholds — highway needs lower thresholds for gentler curves
   curve_phase_on: 0.35        # base: 0.45
   curve_phase_off: 0.22       # base: 0.30
   curve_phase_commit_on: 0.45 # base: 0.55
   curve_phase_commit_min_frames: 3
-  curve_local_entry_severity_curvature_min: 0.0015   # base: 0.003
-  curve_local_entry_severity_curvature_max: 0.008    # base: 0.012
   curve_local_entry_on_base: 0.35
   curve_local_entry_on_tight: 0.32
   curve_local_phase_time_start_s: 1.2
   curve_local_phase_time_start_tight_s: 1.6
-  curve_context_curve_start_curvature: 0.0015   # base: 0.006
   speed_planner:
     accel_speed_max: 15.0
     decel_speed_max: 15.0

@@ -1,7 +1,7 @@
 # Plan: Config Unification — Track-Agnostic Base Config
 
 **Date:** 2026-03-09
-**Status:** Ready to plan
+**Status:** ALL PHASES COMPLETE (2026-03-16). Phase 3 (T-076) auto-derives curvature thresholds from track κ_max using 4th-root scaling. 22 derivable params, highway overlay 90→65 lines. 811 tests passing.
 **Problem:** Per-track config overlays contain dozens of manually tuned parameters.
 Adding a new track requires re-tuning all of them. The system is not robust.
 
@@ -95,7 +95,7 @@ automatically from track geometry and operating speed.
 
 ## Implementation Plan
 
-### Phase 1 — Promote architecture flags to base (config-only, low risk)
+### Phase 1 — Promote architecture flags to base (config-only, low risk) ✅ COMPLETE (`e433458`)
 
 **What:** Move all Category C flags into `av_stack_config.yaml`.
 
@@ -118,7 +118,7 @@ overlays that don't set them start inheriting the correct value.
 
 ---
 
-### Phase 2 — Unified speed tables in base (config-only, medium risk)
+### Phase 2 — Unified speed tables in base (config-only, medium risk) ✅ COMPLETE (`de30ad2`)
 
 **What:** Merge s_loop and highway speed tables into single coherent 0–20 m/s tables in base.
 Remove per-track speed table overrides.
@@ -151,7 +151,7 @@ tuning iterations.
 
 ---
 
-### Phase 3 — Auto-derive curvature thresholds from track geometry (code + config)
+### Phase 3 — Auto-derive curvature thresholds from track geometry (code + config) — NOT DONE (T-076)
 
 **What:** Compute curvature thresholds at startup from the loaded track YAML, rather than
 specifying them as magic numbers in the config.
@@ -218,10 +218,20 @@ explicit config keys are absent, so rollback = add the explicit keys back.
 
 ---
 
-### Phase 4 — Slim down per-track overlays (cleanup)
+### Phase 4 — Slim down per-track overlays (cleanup) ✅ PARTIAL (`a62a414`)
 
-After Phase 1–3, remove every parameter from per-track configs that is now correctly handled
-by the base + auto-derivation. Each overlay should shrink to ~20 lines.
+Removed Category A (speed tables) and Category C (architecture flags) from overlays.
+Category B (curvature thresholds) still present — blocked by Phase 3 not being done.
+
+**Actual results:**
+- `mpc_sloop.yaml`: 689 → 35 lines (mostly MPC weights — Category D, legitimately per-track)
+- `mpc_highway.yaml`: 685 → 90 lines (~50 lines of Category B curvature thresholds remain)
+- `mpc_mixed.yaml`: 54 lines (speed governor + MPC weights + commit_distance)
+- `mpc_hairpin.yaml`: 46 lines (Stanley params + speed governor)
+
+**Remaining work (after Phase 3):** Highway drops to ~15 lines, mixed/hairpin to ~10 each.
+
+Previously planned cleanup state (still the target after Phase 3):
 
 **`mpc_sloop.yaml` after cleanup:**
 ```yaml
@@ -262,16 +272,15 @@ control:
 ## Sequencing and Dependencies
 
 ```
-Phase 1 (flags)       → safe to do now, independent
-     ↓
-Phase 2 (tables)      → depends on Phase 1 being stable
-     ↓
-Phase 3 (auto-derive) → depends on Phase 2; requires code changes
-     ↓
-Phase 4 (cleanup)     → depends on Phase 3 validated
+Phase 0 (overlay merging)  ✅ 3599e5a (2026-03-15)
+Phase 1 (flags)            ✅ e433458 (2026-03-15)
+Phase 2 (tables)           ✅ de30ad2 (2026-03-15)
+Phase 3 (auto-derive)      ❌ NOT DONE — tracked as T-076
+Phase 4 (cleanup)          ✅ a62a414 (2026-03-15) — partial, blocked by Phase 3
 ```
 
-Each phase is independently committable and independently reversible.
+**Next step:** Phase 3 (T-076) — auto-derive curvature thresholds from track geometry.
+After that, Phase 4 can be completed (remove Category B params from highway/mixed/hairpin overlays).
 
 ---
 

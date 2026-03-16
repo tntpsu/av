@@ -109,4 +109,8 @@ def load_config(config_path: Optional[str] = None) -> dict:
     with open(overlay_path, "r") as f:
         overlay = yaml.safe_load(f) or {}
     logger.info("Merged config overlay from %s", overlay_path)
-    return _deep_merge(config, overlay)
+    merged = _deep_merge(config, overlay)
+    # Stash raw overlay so downstream code (e.g. _derive_curvature_thresholds)
+    # can distinguish explicit overlay keys from base defaults.
+    merged["_raw_overlay"] = overlay
+    return merged
