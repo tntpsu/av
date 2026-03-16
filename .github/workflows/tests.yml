@@ -39,11 +39,23 @@ jobs:
       run: |
         pytest tests/ -v --tb=short
     
+    - name: Scoring regression check
+      run: |
+        pytest tests/test_scoring_regression.py -v --tb=short
+      # Golden recording tests skip gracefully if HDF5 files not on disk.
+      # Synthetic tier always runs. Fails the build if scoring regresses.
+
+    - name: Config change report
+      if: github.event_name == 'pull_request'
+      run: |
+        python tools/ci/check_config_regression.py --base origin/${{ github.base_ref }}
+      continue-on-error: true  # informational, not blocking
+
     - name: Check test coverage
       run: |
         pytest tests/ --cov=perception --cov=trajectory --cov=control --cov-report=term-missing --cov-report=xml
       continue-on-error: true
-    
+
     - name: Upload coverage to Codecov
       uses: codecov/codecov-action@v3
       with:

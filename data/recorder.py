@@ -1814,6 +1814,17 @@ class DataRecorder:
         self.h5_file.create_dataset("control/mpc_kappa_preview_range", shape=(0,), maxshape=max_shape, dtype=np.float32)
         self.h5_file.create_dataset("control/regime", shape=(0,), maxshape=max_shape, dtype=np.int8)
         self.h5_file.create_dataset("control/regime_blend_weight", shape=(0,), maxshape=max_shape, dtype=np.float32)
+        self.h5_file.create_dataset("control/stanley_active", shape=(0,), maxshape=max_shape, dtype=np.float32)
+        self.h5_file.create_dataset("control/stanley_heading_term", shape=(0,), maxshape=max_shape, dtype=np.float32)
+        self.h5_file.create_dataset("control/stanley_crosstrack_term", shape=(0,), maxshape=max_shape, dtype=np.float32)
+        self.h5_file.create_dataset("control/mpc_recovery_mode_suppressed", shape=(0,), maxshape=max_shape, dtype=np.int8)
+        self.h5_file.create_dataset("control/mpc_last_steering_pre_modify", shape=(0,), maxshape=max_shape, dtype=np.float32)
+        self.h5_file.create_dataset("control/mpc_last_steering_actual", shape=(0,), maxshape=max_shape, dtype=np.float32)
+        self.h5_file.create_dataset("control/mpc_rate_limiter_active", shape=(0,), maxshape=max_shape, dtype=np.int8)
+        self.h5_file.create_dataset("control/mpc_smith_raw_e_lat", shape=(0,), maxshape=max_shape, dtype=np.float32)
+        self.h5_file.create_dataset("control/mpc_smith_e_lat_predicted", shape=(0,), maxshape=max_shape, dtype=np.float32)
+        self.h5_file.create_dataset("control/mpc_smith_e_heading_predicted", shape=(0,), maxshape=max_shape, dtype=np.float32)
+        self.h5_file.create_dataset("control/mpc_delay_frames_used", shape=(0,), maxshape=max_shape, dtype=np.int8)
 
         # Perception outputs (optional)
         self.h5_file.create_dataset(
@@ -4881,6 +4892,17 @@ class DataRecorder:
         mpc_kappa_preview_range_list = []
         regime_list = []
         regime_blend_weight_list = []
+        stanley_active_list = []
+        stanley_heading_term_list = []
+        stanley_crosstrack_term_list = []
+        mpc_recovery_mode_suppressed_list = []
+        mpc_last_steering_pre_modify_list = []
+        mpc_last_steering_actual_list = []
+        mpc_rate_limiter_active_list = []
+        mpc_smith_raw_e_lat_list = []
+        mpc_smith_e_lat_predicted_list = []
+        mpc_smith_e_heading_predicted_list = []
+        mpc_delay_frames_used_list = []
         accel_feedforward_list = []
         brake_feedforward_list = []
         accel_capped_list = []
@@ -5760,6 +5782,17 @@ class DataRecorder:
             mpc_kappa_preview_range_list.append(float(getattr(cc, 'mpc_kappa_preview_range', 0.0)))
             regime_list.append(int(getattr(cc, 'regime', 0)))
             regime_blend_weight_list.append(float(getattr(cc, 'regime_blend_weight', 1.0)))
+            stanley_active_list.append(float(getattr(cc, 'stanley_active', 0.0)))
+            stanley_heading_term_list.append(float(getattr(cc, 'stanley_heading_term', 0.0)))
+            stanley_crosstrack_term_list.append(float(getattr(cc, 'stanley_crosstrack_term', 0.0)))
+            mpc_recovery_mode_suppressed_list.append(int(getattr(cc, 'mpc_recovery_mode_suppressed', False)))
+            mpc_last_steering_pre_modify_list.append(float(getattr(cc, 'mpc_last_steering_pre_modify', 0.0)))
+            mpc_last_steering_actual_list.append(float(getattr(cc, 'mpc_last_steering_actual', 0.0)))
+            mpc_rate_limiter_active_list.append(int(getattr(cc, 'mpc_rate_limiter_active', False)))
+            mpc_smith_raw_e_lat_list.append(float(getattr(cc, 'mpc_smith_raw_e_lat', 0.0)))
+            mpc_smith_e_lat_predicted_list.append(float(getattr(cc, 'mpc_smith_e_lat_predicted', 0.0)))
+            mpc_smith_e_heading_predicted_list.append(float(getattr(cc, 'mpc_smith_e_heading_predicted', 0.0)))
+            mpc_delay_frames_used_list.append(int(getattr(cc, 'mpc_delay_frames_used', 0)))
 
         if timestamps:
             current_size = self.h5_file["control/timestamps"].shape[0]
@@ -6002,7 +6035,13 @@ class DataRecorder:
                        "mpc_gt_cross_track_m", "mpc_gt_heading_error_rad",
                        "mpc_using_ground_truth",
                        "mpc_kappa_preview_used", "mpc_kappa_preview_range",
-                       "regime", "regime_blend_weight"]:
+                       "regime", "regime_blend_weight",
+                       "stanley_active", "stanley_heading_term", "stanley_crosstrack_term",
+                       "mpc_recovery_mode_suppressed",
+                       "mpc_last_steering_pre_modify", "mpc_last_steering_actual",
+                       "mpc_rate_limiter_active",
+                       "mpc_smith_raw_e_lat", "mpc_smith_e_lat_predicted",
+                       "mpc_smith_e_heading_predicted", "mpc_delay_frames_used"]:
                 self.h5_file[f"control/{key}"].resize((new_size,))
             
             # Write data
@@ -6831,6 +6870,17 @@ class DataRecorder:
             self.h5_file["control/mpc_kappa_preview_range"][current_size:] = mpc_kappa_preview_range_list
             self.h5_file["control/regime"][current_size:] = regime_list
             self.h5_file["control/regime_blend_weight"][current_size:] = regime_blend_weight_list
+            self.h5_file["control/stanley_active"][current_size:] = stanley_active_list
+            self.h5_file["control/stanley_heading_term"][current_size:] = stanley_heading_term_list
+            self.h5_file["control/stanley_crosstrack_term"][current_size:] = stanley_crosstrack_term_list
+            self.h5_file["control/mpc_recovery_mode_suppressed"][current_size:] = mpc_recovery_mode_suppressed_list
+            self.h5_file["control/mpc_last_steering_pre_modify"][current_size:] = mpc_last_steering_pre_modify_list
+            self.h5_file["control/mpc_last_steering_actual"][current_size:] = mpc_last_steering_actual_list
+            self.h5_file["control/mpc_rate_limiter_active"][current_size:] = mpc_rate_limiter_active_list
+            self.h5_file["control/mpc_smith_raw_e_lat"][current_size:] = mpc_smith_raw_e_lat_list
+            self.h5_file["control/mpc_smith_e_lat_predicted"][current_size:] = mpc_smith_e_lat_predicted_list
+            self.h5_file["control/mpc_smith_e_heading_predicted"][current_size:] = mpc_smith_e_heading_predicted_list
+            self.h5_file["control/mpc_delay_frames_used"][current_size:] = mpc_delay_frames_used_list
 
     def _write_perception_outputs(self, frames: List[RecordingFrame]):
         """Write perception outputs to HDF5."""

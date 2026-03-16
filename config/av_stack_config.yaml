@@ -11,9 +11,11 @@ control:
     integral_limit: 0.1
     steering_smoothing_alpha: 0.9
     control_mode: pure_pursuit
-    stanley_k: 1.5
+    stanley_k: 1.5                 # base default; hairpin overlay sets 3.0 (validated 59→79)
     stanley_soft_speed: 2.0
     stanley_heading_weight: 1.0
+    stanley_curvature_ff_enabled: false  # A/B tested on hairpin: no RMSE gain, 2× steer_jerk. Dead end for reactive control.
+    stanley_ff_slew_rate_rad: 0.05       # Slew limiter for FF (rad/frame). Works mechanically, but FF itself is ineffective.
     pp_feedback_gain: 0.1
     pp_max_steering_jerk: 18.0
     pp_curve_local_lookahead_floor_enabled: true
@@ -290,6 +292,13 @@ control:
     downshift_hysteresis_mps: 1.0
     blend_frames: 15
     min_hold_frames: 30
+    # Stanley low-speed regime (Phase 2.9)
+    stanley_enabled: true              # Activates when regime.enabled=true
+    stanley_max_speed_mps: 5.0         # Below this speed → Stanley (m/s)
+    stanley_upshift_hysteresis_mps: 0.5   # Must exceed 5.5 m/s to leave Stanley
+    stanley_downshift_hysteresis_mps: 0.5 # Must drop below 4.5 m/s to enter Stanley
+    stanley_blend_frames: 10           # 0.33s blend at 30 Hz
+    stanley_min_hold_frames: 15        # 0.5s hold before switching
 trajectory:
   trajectory_source: planner
   lookahead_distance: 20.0
@@ -297,7 +306,7 @@ trajectory:
   target_speed: 12.0
   reference_lookahead: 9.0
   dynamic_reference_lookahead: true
-  curve_scheduler_mode: phase_shadow
+  curve_scheduler_mode: phase_active   # validated on s_loop + mixed_radius; highway unaffected (no curves)
   reference_lookahead_phase_active_entry_scale_min: 0.90
   reference_lookahead_phase_active_entry_scale_severity_on: 0.35
   reference_lookahead_phase_active_entry_scale_severity_full: 0.85
@@ -320,19 +329,19 @@ trajectory:
     lookahead_m: 17.0
   - speed_mps: 17.0
     lookahead_m: 19.0
-  reference_lookahead_speed_table_entry:
+  reference_lookahead_speed_table_entry:  # promoted from s_loop+mixed_radius overlays (both had identical values)
   - speed_mps: 0.0
-    lookahead_m: 6.0
-  - speed_mps: 4.47
     lookahead_m: 7.0
+  - speed_mps: 4.47
+    lookahead_m: 8.0
   - speed_mps: 8.94
-    lookahead_m: 8.5
+    lookahead_m: 9.0
   - speed_mps: 11.18
-    lookahead_m: 9.0
+    lookahead_m: 10.0
   - speed_mps: 13.41
-    lookahead_m: 9.0
+    lookahead_m: 10.0
   - speed_mps: 15.0
-    lookahead_m: 9.5
+    lookahead_m: 10.0
   - speed_mps: 17.0
     lookahead_m: 10.0
   reference_lookahead_speed_table_commit:
@@ -411,8 +420,8 @@ trajectory:
   curve_local_phase_path_curvature_max: 0.015
   curve_local_entry_severity_curvature_min: 0.003
   curve_local_entry_severity_curvature_max: 0.012
-  curve_local_phase_distance_start_m: 8.0
-  curve_local_phase_distance_start_tight_m: 10.0
+  curve_local_phase_distance_start_m: 10.0  # promoted from overlays (base was 8.0)
+  curve_local_phase_distance_start_tight_m: 10.0  # unchanged from original base
   curve_local_phase_distance_end_m: 1.5
   curve_local_phase_time_start_s: 0.0
   curve_local_phase_time_start_tight_s: 0.0
@@ -420,7 +429,7 @@ trajectory:
   curve_local_in_curve_distance_eps_m: 0.25
   curve_local_in_curve_time_eps_s: 0.05
   curve_local_in_curve_path_min: 0.7
-  curve_local_commit_distance_ready_m: 3.0
+  curve_local_commit_distance_ready_m: 3.0  # track-specific; 8.0 works on s_loop/mixed_radius (long approaches) but causes straight-latch on hairpin (short straights + back-to-back arcs)
   curve_local_commit_time_ready_s: 0.60
   curve_local_phase_use_time_term: false
   curve_local_phase_reentry_gate_min: 0.10
@@ -691,6 +700,8 @@ trajectory:
     mpc_speed_adaptive_horizon: false
     mpc_curvature_preview_enabled: true
     mpc_curvature_preview_gain: 1.0
+    mpc_max_steering_rate_per_frame: 0.15  # safety net rate limiter (rad/frame) — much looser than PP
+    mpc_delay_frames: 2                    # Smith predictor delay buffer length (frames; ~66ms at 30fps)
 safety:
   max_speed: 12.0
   emergency_brake_threshold: 1.5

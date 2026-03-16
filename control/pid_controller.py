@@ -234,6 +234,9 @@ class LateralController:
                  stanley_k: float = 1.0,
                  stanley_soft_speed: float = 2.0,
                  stanley_heading_weight: float = 1.0,
+                 stanley_curvature_ff_enabled: bool = False,
+                 stanley_wheelbase_m: float = 2.7,
+                 stanley_ff_slew_rate_rad: float = 0.05,
                  pp_feedback_gain: float = 0.15,
                  pp_min_lookahead: float = 0.5,
                  pp_speed_norm_enabled: bool = False,
@@ -481,6 +484,10 @@ class LateralController:
         self.stanley_k = stanley_k
         self.stanley_soft_speed = stanley_soft_speed
         self.stanley_heading_weight = stanley_heading_weight
+        self.stanley_curvature_ff_enabled = bool(stanley_curvature_ff_enabled)
+        self.stanley_wheelbase_m = float(stanley_wheelbase_m)
+        self.stanley_ff_slew_rate_rad = max(0.001, float(stanley_ff_slew_rate_rad))
+        self._prev_stanley_ff_term: float = 0.0
         self.pp_feedback_gain = max(0.0, float(pp_feedback_gain))
         self.pp_min_lookahead = max(0.1, float(pp_min_lookahead))
         self.pp_speed_norm_enabled = bool(pp_speed_norm_enabled)
@@ -3790,6 +3797,57 @@ class LateralController:
             self.last_steering_rate = 0.0
         self.smoothed_steering = None
 
+    def compute_stanley_from_errors(
+        self,
+        lateral_error: float,
+        heading_error: float,
+        speed: float,
+        curvature: Optional[float] = None,
+    ) -> dict:
+        """
+        Compute Stanley controller steering from pre-computed errors.
+
+        Called from VehicleController.compute_control() when the regime selector
+        activates STANLEY, in the same pattern as MPC: PP always runs first,
+        then Stanley overrides and blends.
+
+        Sign convention: lateral_error > 0 → target is RIGHT of vehicle → steer right.
+        This matches the sign of ref_x used internally by compute_steering().
+
+        curvature: signed path curvature at nearest path point (rad/m).
+            Positive = left turn, negative = right turn (from curvature_sign convention).
+            Used for geometric feedforward: ff = -arctan(wheelbase * kappa).
+            For left turn (kappa>0): ff<0 → steer left → pre-steers into arc.
+            For right turn (kappa<0): ff>0 → steer right → pre-steers into arc.
+
+        Returns dict with:
+          steering_normalized: [-1, 1] normalized steering command
+          stanley_heading_term: heading error component (rad)
+          stanley_crosstrack_term: cross-track arctan component (rad)
+          stanley_curvature_ff_term: curvature feedforward component (rad)
+        """
+        heading_term = self.stanley_heading_weight * heading_error
+        denom = max(self.stanley_soft_speed, float(speed))
+        crosstrack_term = np.arctan2(self.stanley_k * lateral_error, denom)
+        ff_term = 0.0
+        if self.stanley_curvature_ff_enabled and curvature is not None and np.isfinite(float(curvature)):
+            # Geometric feedforward: delta = -arctan(L * kappa).
+            # Negative sign: left curve (kappa>0) needs left steer (negative delta).
+            ff_raw = float(-np.arctan(self.stanley_wheelbase_m * float(curvature)))
+            # Slew-rate limit: cap change per frame to prevent C1→C2 sign-flip spike.
+            delta = float(np.clip(ff_raw - self._prev_stanley_ff_term,
+                                  -self.stanley_ff_slew_rate_rad,
+                                  self.stanley_ff_slew_rate_rad))
+            ff_term = self._prev_stanley_ff_term + delta
+        self._prev_stanley_ff_term = ff_term
+        steering_norm = np.clip(heading_term + crosstrack_term + ff_term, -1.0, 1.0)
+        return {
+            'steering_normalized': float(steering_norm),
+            'stanley_heading_term': float(heading_term),
+            'stanley_crosstrack_term': float(crosstrack_term),
+            'stanley_curvature_ff_term': float(ff_term),
+        }
+
     def _update_preview_curve_upcoming_state(
         self,
         preview_curvature_abs: Optional[float],
@@ -4883,6 +4941,9 @@ class VehicleController:
                  stanley_k: float = 1.0,
                  stanley_soft_speed: float = 2.0,
                  stanley_heading_weight: float = 1.0,
+                 stanley_curvature_ff_enabled: bool = False,
+                 stanley_wheelbase_m: float = 2.7,
+                 stanley_ff_slew_rate_rad: float = 0.05,
                  pp_feedback_gain: float = 0.15,
                  pp_min_lookahead: float = 0.5,
                  pp_speed_norm_enabled: bool = False,
@@ -5122,6 +5183,9 @@ class VehicleController:
             stanley_k=stanley_k,
             stanley_soft_speed=stanley_soft_speed,
             stanley_heading_weight=stanley_heading_weight,
+            stanley_curvature_ff_enabled=stanley_curvature_ff_enabled,
+            stanley_wheelbase_m=stanley_wheelbase_m,
+            stanley_ff_slew_rate_rad=stanley_ff_slew_rate_rad,
             pp_feedback_gain=pp_feedback_gain,
             pp_min_lookahead=pp_min_lookahead,
             pp_speed_norm_enabled=pp_speed_norm_enabled,
@@ -5232,6 +5296,10 @@ class VehicleController:
                 )
 
         self._last_steering_norm = 0.0
+        self._last_mpc_steering = 0.0  # for MPC-aware rate limiter (2.8.3)
+        _mpc_cfg = self._full_config.get('trajectory', {}).get('mpc', {})
+        _delay_frames = int(_mpc_cfg.get('mpc_delay_frames', 2))
+        self._steering_ring_buffer = [0.0] * _delay_frames  # delay buffer for 2.8.4
 
     def compute_control(
         self,
@@ -5309,19 +5377,20 @@ class VehicleController:
                 # ground-truth path is preferred when available).
                 raw_e_heading = float(lateral_metadata.get('heading_error', 0.0))
 
-            # Multi-frame delay compensation: predict where the vehicle will
-            # be when the steering correction actually takes effect.
-            # Measured system delay is ~4-6 frames (130-200 ms) including:
-            #   - control computation + network (~20 ms)
-            #   - Unity physics integration (~33-66 ms)
-            #   - camera pipeline + GT report (~50-100 ms)
-            # We predict forward by delay_frames * frame_dt using the
-            # kinematic model: e_lat += v * e_heading * dt (per step).
+            # 2.8.4: Configurable multi-frame delay compensation.
+            # Predict where the vehicle will be when the current command takes
+            # effect. Uses the linear kinematic model; heading is assumed to
+            # change slowly so e_heading is held constant (this avoids amplifying
+            # ring-buffer transients from PP→MPC transitions).
+            #
+            # Model: e_lat[k+delay] ≈ e_lat[k] + v*e_heading[k]*delay_dt
+            #
+            # mpc_delay_frames is configurable: start with 2 (matches measured
+            # ~2-frame effective loop delay) and tune up cautiously with data.
             frame_dt = dt or 0.033
             v_now = float(current_state.get('speed', 0.0))
-            delay_frames = 2  # measured: ~2-3 frame effective loop delay
+            delay_frames = len(self._steering_ring_buffer)
             total_delay_dt = delay_frames * frame_dt
-            # Predict e_lat and e_heading forward through the delay
             predicted_e_heading = raw_e_heading  # heading changes slowly
             predicted_e_lat = raw_e_lat + v_now * raw_e_heading * total_delay_dt
 
@@ -5362,6 +5431,20 @@ class VehicleController:
                 # Full MPC
                 steering = float(mpc_result['steering_normalized']) * self.lateral_controller.max_steering
 
+            # 2.8.3: MPC-aware frame-to-frame rate limiter.
+            # Much looser than PP's limiter — MPC's QP already penalizes rate via
+            # r_steer_rate.  This is a safety net for physically-impossible jumps.
+            _mpc_cfg_rt = self._full_config.get('trajectory', {}).get('mpc', {})
+            mpc_max_rate = float(_mpc_cfg_rt.get('mpc_max_steering_rate_per_frame', 0.15))
+            mpc_rate_limiter_active = False
+            if not mpc_result.get('mpc_fallback_active', False):
+                delta = steering - self._last_mpc_steering
+                if abs(delta) > mpc_max_rate:
+                    steering = self._last_mpc_steering + float(np.sign(delta)) * mpc_max_rate
+                    mpc_rate_limiter_active = True
+            self._last_mpc_steering = steering
+            lateral_metadata['mpc_rate_limiter_active'] = mpc_rate_limiter_active
+
             lateral_metadata['mpc_feasible'] = mpc_result.get('mpc_feasible', False)
             lateral_metadata['mpc_solve_time_ms'] = mpc_result.get('solve_time_ms', 0.0)
             lateral_metadata['mpc_e_lat'] = mpc_result.get('e_lat_input', 0.0)
@@ -5374,9 +5457,63 @@ class VehicleController:
             lateral_metadata['mpc_using_ground_truth'] = 1.0 if (gt_cross_track is not None and gt_heading is not None) else 0.0
             lateral_metadata['mpc_kappa_preview_used'] = mpc_result.get('kappa_preview_used', False)
             lateral_metadata['mpc_kappa_preview_range'] = mpc_result.get('kappa_preview_range', 0.0)
+            lateral_metadata['mpc_last_steering_pre_modify'] = steering  # value before orchestrator post-hoc mods
+            lateral_metadata['mpc_smith_raw_e_lat'] = raw_e_lat
+            lateral_metadata['mpc_smith_e_lat_predicted'] = predicted_e_lat
+            lateral_metadata['mpc_smith_e_heading_predicted'] = predicted_e_heading
+            lateral_metadata['mpc_delay_frames_used'] = delay_frames
             self._last_steering_norm = steering / max(1e-6, self.lateral_controller.max_steering)
-        else:
-            # PP mode — zero-fill MPC fields
+            lateral_metadata['stanley_active'] = 0.0
+
+        elif regime == ControlRegime.STANLEY:
+            # --- Stanley low-speed regime (Phase 2.9) ---
+            # PP always ran above and set `steering`. Stanley overrides it.
+            #
+            # CRITICAL: Stanley needs the cross-track error to the NEAREST PATH POINT,
+            # NOT the lateral offset to the PP lookahead reference point (ref_x).
+            # ref_x is at the lookahead-distance point (floored to ≥4m at low speed) —
+            # using it defeats the purpose of Stanley (solving the chord-error problem).
+            #
+            # Prefer groundTruthLaneCenterX (same source as MPC gt_cross_track):
+            #   groundTruthLaneCenterX > 0 → lane center RIGHT of car → car LEFT → steer right.
+            #   MPC negates it because its e_lat>0 = car RIGHT. Stanley uses same sign as ref_x:
+            #   lat_error>0 → steer right. So we negate groundTruthLaneCenterX (same as MPC).
+            # Fall back to ref_x if GT not available.
+            gt_cross_track = reference_point.get('gt_cross_track_m')
+            if gt_cross_track is not None:
+                # groundTruthLaneCenterX > 0 → lane center RIGHT of car → car is LEFT → steer right.
+                # Stanley: lat_error > 0 → arctan2(k*lat_error, v) > 0 → steer right.
+                # Sign: use +gt_cross_track directly (NO negation — opposite of MPC convention).
+                # MPC negates because its e_lat>0 means car-is-RIGHT; Stanley's lat_error>0 means steer-right.
+                lat_err = float(gt_cross_track)
+            else:
+                lat_err = float(lateral_metadata.get('lateral_error', 0.0))
+            # Always use PP-derived heading_error for heading term (same as internal Stanley formula).
+            hdg_err = float(lateral_metadata.get('heading_error', 0.0))
+            speed_for_stanley = float(current_state.get('speed', 0.0))
+            # Curvature feedforward: signed path curvature at nearest map point.
+            # reference_point['curvature'] = curvature_primary_abs * curvature_sign (+1=left, -1=right).
+            stanley_curvature = reference_point.get('curvature')
+            stanley_result = self.lateral_controller.compute_stanley_from_errors(
+                lateral_error=lat_err,
+                heading_error=hdg_err,
+                speed=speed_for_stanley,
+                curvature=stanley_curvature,
+            )
+            stanley_steer = (
+                float(stanley_result['steering_normalized'])
+                * self.lateral_controller.max_steering
+            )
+            if blend_weight < 1.0:
+                # Smooth blend: (1-w)*PP + w*Stanley
+                steering = (1.0 - blend_weight) * steering + blend_weight * stanley_steer
+            else:
+                steering = stanley_steer
+            lateral_metadata['stanley_active'] = 1.0
+            lateral_metadata['stanley_heading_term'] = stanley_result['stanley_heading_term']
+            lateral_metadata['stanley_crosstrack_term'] = stanley_result['stanley_crosstrack_term']
+            lateral_metadata['stanley_curvature_ff_term'] = stanley_result.get('stanley_curvature_ff_term', 0.0)
+            # Zero-fill MPC fields (Stanley never activates MPC)
             lateral_metadata['mpc_feasible'] = False
             lateral_metadata['mpc_solve_time_ms'] = 0.0
             lateral_metadata['mpc_e_lat'] = 0.0
@@ -5389,6 +5526,35 @@ class VehicleController:
             lateral_metadata['mpc_using_ground_truth'] = 0.0
             lateral_metadata['mpc_kappa_preview_used'] = False
             lateral_metadata['mpc_kappa_preview_range'] = 0.0
+            lateral_metadata['mpc_last_steering_pre_modify'] = 0.0
+            lateral_metadata['mpc_rate_limiter_active'] = False
+            lateral_metadata['mpc_smith_raw_e_lat'] = 0.0
+            lateral_metadata['mpc_smith_e_lat_predicted'] = 0.0
+            lateral_metadata['mpc_smith_e_heading_predicted'] = 0.0
+            lateral_metadata['mpc_delay_frames_used'] = 0
+            self._last_mpc_steering = 0.0
+        else:
+            # PP mode — zero-fill MPC fields
+            lateral_metadata['stanley_active'] = 0.0
+            lateral_metadata['mpc_feasible'] = False
+            lateral_metadata['mpc_solve_time_ms'] = 0.0
+            lateral_metadata['mpc_e_lat'] = 0.0
+            lateral_metadata['mpc_e_heading'] = 0.0
+            lateral_metadata['mpc_kappa_ref'] = 0.0
+            lateral_metadata['mpc_fallback_active'] = False
+            lateral_metadata['mpc_consecutive_failures'] = 0
+            lateral_metadata['mpc_gt_cross_track_m'] = 0.0
+            lateral_metadata['mpc_gt_heading_error_rad'] = 0.0
+            lateral_metadata['mpc_using_ground_truth'] = 0.0
+            lateral_metadata['mpc_kappa_preview_used'] = False
+            lateral_metadata['mpc_kappa_preview_range'] = 0.0
+            lateral_metadata['mpc_last_steering_pre_modify'] = 0.0
+            lateral_metadata['mpc_rate_limiter_active'] = False
+            lateral_metadata['mpc_smith_raw_e_lat'] = 0.0
+            lateral_metadata['mpc_smith_e_lat_predicted'] = 0.0
+            lateral_metadata['mpc_smith_e_heading_predicted'] = 0.0
+            lateral_metadata['mpc_delay_frames_used'] = 0
+            self._last_mpc_steering = 0.0  # reset when PP is active
 
         lateral_metadata['regime'] = int(regime)
         lateral_metadata['regime_blend_weight'] = float(blend_weight)
@@ -5438,6 +5604,24 @@ class VehicleController:
 
         return result
     
+    def update_last_steering_norm(self, actual_steering: float) -> None:
+        """Update _last_steering_norm and Smith predictor ring buffer with actual sent steering.
+
+        Called by the orchestrator after all post-hoc modifications (safety clips,
+        recovery mode) so that MPC's warm-start and delay compensation use the
+        true sent value, not the pre-modification value.
+        Only updates MPC state when MPC is the active regime.
+        Ring buffer is always updated so it accurately tracks what was sent.
+        """
+        from control.regime_selector import ControlRegime
+        regime = self._regime_selector.active_regime
+        if regime == ControlRegime.LINEAR_MPC:
+            self._last_steering_norm = actual_steering / max(1e-6, self.lateral_controller.max_steering)
+        # Always push actual steering into ring buffer for Smith predictor (pop oldest, append newest)
+        if self._steering_ring_buffer:
+            self._steering_ring_buffer.pop(0)
+            self._steering_ring_buffer.append(actual_steering)
+
     def reset(self):
         """Reset all controllers."""
         self.lateral_controller.reset()
@@ -5446,3 +5630,7 @@ class VehicleController:
         if self._mpc_controller is not None:
             self._mpc_controller.reset()
         self._last_steering_norm = 0.0
+        self._last_mpc_steering = 0.0
+        _mpc_cfg = self._full_config.get('trajectory', {}).get('mpc', {})
+        _delay_frames = int(_mpc_cfg.get('mpc_delay_frames', 2))
+        self._steering_ring_buffer = [0.0] * _delay_frames

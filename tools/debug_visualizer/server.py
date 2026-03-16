@@ -329,12 +329,18 @@ def get_gate_bundle(bundle_id):
                 packet["file"] = packet_path.name
                 triage_packets.append(packet)
 
+    # Load scoring regression report if available
+    scoring_regression = _read_json_file(
+        GATES_REPORTS_DIR / "latest_scoring_regression.json"
+    )
+
     response = {
         "bundle_id": bundle_dir.name,
         "bundle_path": str(bundle_dir),
         "gate_report": gate_report,
         "decision": decision,
         "triage_packets": triage_packets,
+        "scoring_regression": scoring_regression,
     }
     return jsonify(sanitize_non_finite_for_json(numpy_to_list(response)))
 
@@ -3060,6 +3066,25 @@ def get_triage_report(filename):
     try:
         from backend.triage_engine import TriageEngine
         result = TriageEngine(filepath).generate_triage()
+        return jsonify(numpy_to_list(result))
+    except Exception as e:
+        import traceback
+        return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500
+
+
+@app.route('/api/recording/<path:filename>/mpc-pipeline')
+def get_mpc_pipeline(filename):
+    """Phase 2.8 MPC pipeline diagnostic — 4-card report."""
+    from urllib.parse import unquote
+    filename = unquote(filename)
+    filepath = RECORDINGS_DIR / filename
+    if not filepath.exists():
+        return jsonify({"error": f"Recording not found: {filename}"}), 404
+    try:
+        from backend.mpc_pipeline import analyze_mpc_pipeline
+        result = analyze_mpc_pipeline(filepath)
+        if result is None:
+            return jsonify({"has_mpc": False, "message": "PP-only recording — no MPC telemetry"})
         return jsonify(numpy_to_list(result))
     except Exception as e:
         import traceback

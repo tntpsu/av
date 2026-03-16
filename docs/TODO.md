@@ -2,13 +2,22 @@
 
 **Source of truth:** For stage/phase status and promotion gates, see [ROADMAP.md](ROADMAP.md). This file tracks the active near-term checklist plus historical execution notes kept for traceability.
 
+## S2-M5 — COMPLETE (2026-03-15)
+
+- [x] Execute `S2-M5` track coverage expansion — 3 additional tracks: mixed_radius, sweeping_highway, hairpin_15.
+- [x] Run `3x` gated validation per added track with the current promoted hybrid control stack.
+- [x] Require analyzer output to report regime usage (`pp_frames`, `mpc_frames`) — mpc_pipeline_analysis.py.
+- [x] Use only `tuning_valid=true` runs for parameter decisions and promotion evidence.
+- [x] Investigate low-speed PP curve-intent latch — resolved via Stanley regime (Phase 2.9). Stanley bypasses PP curve scheduler at low speed.
+- [x] Curvature-adjusted scoring (floor=3×|κ|) — unified formula, no per-track gate overrides.
+- [x] Hairpin golden replaced with Stanley k=3.0 recording (91.6/100, was PP 79.0).
+
 ## Active Near-Term Work
 
-- [ ] Execute `S2-M5` track coverage expansion on at least one additional track beyond `tracks/s_loop.yml` and `tracks/highway_65.yml`.
-- [ ] Run `3x` gated validation per added track with the current promoted hybrid control stack.
-- [ ] Require analyzer output to report regime usage (`pp_frames`, `mpc_frames`) for every promotion candidate.
-- [ ] Use only `tuning_valid=true` runs for parameter decisions and promotion evidence.
-- [ ] Investigate low-speed PP curve-intent latch on short-straight tracks (`recording_20260306_191155.h5`: `curve_phase_preview_upcoming=100%`, `curve_intent_state≈COMMIT` for nearly the full run).
+- [ ] Step 2 — Automated A/B CI regression (T-033)
+- [ ] Step 3 — Grade and banking (pitch/roll in dynamics model)
+- [ ] Test cleanup — T-070 (delete 4 permanently-skipped), T-071 (pin 3 recording-dependent skips), T-072 (2 test logic issues)
+- [ ] T-073 — PhilViz diagnostic consistency pass + scoring_registry.py
 
 **Historical note:** The PP/Stage-1 sections below are retained as archive material. They are not the current execution backlog.
 

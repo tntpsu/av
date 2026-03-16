@@ -20,16 +20,12 @@ control:
     enabled: true
 
 trajectory:
-  curve_scheduler_mode: phase_active
-  reference_lookahead_entry_track_name: s_loop
-  reference_lookahead_speed_table_entry:   # s_loop needs ~1m higher entry lookahead (tighter curves)
-  - {speed_mps: 0.0,   lookahead_m: 7.0}
-  - {speed_mps: 4.47,  lookahead_m: 8.0}
-  - {speed_mps: 8.94,  lookahead_m: 9.0}
-  - {speed_mps: 11.18, lookahead_m: 10.0}
-  - {speed_mps: 13.41, lookahead_m: 10.0}
-  curve_local_phase_distance_start_m: 10.0   # arm window: 10m before curve (base: 8.0)
-  curve_local_commit_distance_ready_m: 8.0   # commit fires at 8m to curve (base: 3.0)
+  # curve_scheduler_mode, phase_distance_start_m, and reference_lookahead_speed_table_entry
+  # promoted to base config (2026-03-13).
+  # commit_distance_ready_m stays track-specific: 8.0 works on long-approach tracks
+  # (s_loop, mixed_radius) but causes straight-latch on hairpin (short straights, back-to-back arcs).
+  reference_lookahead_entry_track_name: s_loop  # auto-derived from --track-yaml; explicit for clarity
+  curve_local_commit_distance_ready_m: 8.0  # track-specific (base: 3.0); long s_loop approaches support early COMMIT
   mpc:
     mpc_horizon: 30           # longer horizon for curved track (base: 20)
     mpc_q_lat: 12.0           # stronger lateral error cost for tight s_loop curves (base: 10.0)

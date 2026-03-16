@@ -1056,9 +1056,16 @@ def _detect_control_mode(data):
     regime = data.get('regime')
     if regime is not None:
         regime_arr = np.asarray(regime, dtype=float)
-        mpc_rate = float(np.mean(regime_arr >= 1))
-        if mpc_rate > 0.5:
+        stanley_rate = float(np.mean(regime_arr < -0.5))
+        mpc_rate = float(np.mean(regime_arr >= 0.5))
+        if stanley_rate > 0.5:
+            return 'stanley'
+        elif mpc_rate > 0.5:
             return 'mpc'
+        elif stanley_rate > 0.0 and mpc_rate > 0.0:
+            return 'hybrid_stanley_pp_mpc'
+        elif stanley_rate > 0.0:
+            return 'hybrid_stanley_pp'
         elif mpc_rate > 0.0:
             return 'hybrid_pp_mpc'
     pp_geo = data.get('pp_geometric_steering')
@@ -2096,6 +2103,27 @@ def analyze_recording_summary(recording_path: Path, analyze_to_failure: bool = F
     lateral_error_mean = safe_float(np.mean(np.abs(data['lateral_error'])) if data['lateral_error'] is not None and len(data['lateral_error']) > 0 else 0.0)
     lateral_error_max = safe_float(np.max(np.abs(data['lateral_error'])) if data['lateral_error'] is not None and len(data['lateral_error']) > 0 else 0.0)
     lateral_error_p95 = safe_float(np.percentile(np.abs(data['lateral_error']), 95) if data['lateral_error'] is not None and len(data['lateral_error']) > 0 else 0.0)
+
+    # Curvature-adjusted lateral error: subtract a geometry-dependent floor per frame.
+    # floor = CURVATURE_FLOOR_COEFF * |kappa|  — accounts for arc-chord tracking error
+    # that is physically unavoidable for reactive controllers on tight curves.
+    # Coefficient 3.0 validated: <0.01m effect on highway/sweeping, ~0.06m on s_loop R40,
+    # ~0.20m on hairpin R15.  Raw metrics preserved for diagnostics.
+    CURVATURE_FLOOR_COEFF = 3.0
+    _curv_for_floor = data.get('gt_path_curvature')
+    if _curv_for_floor is None:
+        _curv_for_floor = data.get('path_curvature_input')
+    if (data['lateral_error'] is not None and len(data['lateral_error']) > 0
+            and _curv_for_floor is not None and len(_curv_for_floor) > 0):
+        _n_adj = min(len(data['lateral_error']), len(_curv_for_floor))
+        _abs_err = np.abs(data['lateral_error'][:_n_adj])
+        _floor = CURVATURE_FLOOR_COEFF * np.abs(np.asarray(_curv_for_floor[:_n_adj], dtype=float))
+        _adj_err = np.maximum(0.0, _abs_err - _floor)
+        lateral_error_adj_rmse = safe_float(np.sqrt(np.mean(_adj_err ** 2)))
+        lateral_error_adj_p95 = safe_float(np.percentile(_adj_err, 95))
+    else:
+        lateral_error_adj_rmse = lateral_error_rmse
+        lateral_error_adj_p95 = lateral_error_p95
     
     heading_error_rmse = safe_float(np.sqrt(np.mean(data['heading_error']**2)) if data['heading_error'] is not None and len(data['heading_error']) > 0 else 0.0)
     heading_error_max = safe_float(np.max(np.abs(data['heading_error'])) if data['heading_error'] is not None and len(data['heading_error']) > 0 else 0.0)
@@ -3109,8 +3137,8 @@ def analyze_recording_summary(recording_path: Path, analyze_to_failure: bool = F
     lane_jitter_penalty = safe_float(min(10, max(0.0, lane_line_jitter_p95 - 0.30) * 30.0))
     reference_jitter_penalty = safe_float(min(10, max(0.0, reference_jitter_p95 - 0.15) * 40.0))
 
-    trajectory_lateral_rmse_penalty = safe_float(min(30, lateral_error_rmse * 50))
-    trajectory_lateral_p95_penalty = safe_float(min(20, max(0.0, lateral_error_p95 - 0.40) * 35.0))
+    trajectory_lateral_rmse_penalty = safe_float(min(30, lateral_error_adj_rmse * 50))
+    trajectory_lateral_p95_penalty = safe_float(min(20, max(0.0, lateral_error_adj_p95 - 0.40) * 35.0))
     trajectory_heading_penalty = safe_float(min(20, max(0.0, np.degrees(heading_error_rmse) - 10.0) * 2.5))
 
     # Penalty only above the pp_max_steering_jerk cap (18.0 normalized/s²).
@@ -4811,12 +4839,12 @@ def analyze_recording_summary(recording_path: Path, analyze_to_failure: bool = F
             "base_score": 100.0,
             "deductions": [
                 {
-                    "name": "Lateral Error RMSE",
+                    "name": "Lateral Error RMSE (curv-adj)",
                     "value": trajectory_lateral_rmse_penalty,
                     "limit": "<=0.20m",
                 },
                 {
-                    "name": "Lateral Error P95",
+                    "name": "Lateral Error P95 (curv-adj)",
                     "value": trajectory_lateral_p95_penalty,
                     "limit": "<=0.40m",
                 },
@@ -5441,6 +5469,8 @@ def analyze_recording_summary(recording_path: Path, analyze_to_failure: bool = F
             "lateral_error_mean": safe_float(lateral_error_mean),
             "lateral_error_max": safe_float(lateral_error_max),
             "lateral_error_p95": safe_float(lateral_error_p95),
+            "lateral_error_adj_rmse": safe_float(lateral_error_adj_rmse),
+            "lateral_error_adj_p95": safe_float(lateral_error_adj_p95),
             "heading_error_rmse": safe_float(heading_error_rmse),
             "heading_error_max": safe_float(heading_error_max),
             "time_in_lane": safe_float(time_in_lane),
@@ -5718,14 +5748,23 @@ def analyze_recording_summary(recording_path: Path, analyze_to_failure: bool = F
         },
         "regime_summary": (
             {
-                "pp_frames": int(np.sum(np.asarray(data['regime'][:n_frames], dtype=float) < 0.5)),
+                "stanley_frames": int(np.sum(np.asarray(data['regime'][:n_frames], dtype=float) < -0.5)),
+                "pp_frames": int(np.sum(
+                    (np.asarray(data['regime'][:n_frames], dtype=float) >= -0.5)
+                    & (np.asarray(data['regime'][:n_frames], dtype=float) < 0.5)
+                )),
                 "mpc_frames": int(np.sum(np.asarray(data['regime'][:n_frames], dtype=float) > 0.5)),
+                "total_frames": n_frames,
                 "blend_frames": int(np.sum(
                     (np.asarray(data['regime_blend_weight'][:n_frames], dtype=float) > 0.01)
                     & (np.asarray(data['regime_blend_weight'][:n_frames], dtype=float) < 0.99)
                 )) if data.get('regime_blend_weight') is not None else 0,
                 "mpc_fraction": safe_float(
                     float(np.sum(np.asarray(data['regime'][:n_frames], dtype=float) > 0.5))
+                    / max(1, n_frames)
+                ),
+                "stanley_fraction": safe_float(
+                    float(np.sum(np.asarray(data['regime'][:n_frames], dtype=float) < -0.5))
                     / max(1, n_frames)
                 ),
             }

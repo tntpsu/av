@@ -1,11 +1,11 @@
 """
-Unit tests for RegimeSelector (Phase 2.2).
+Unit tests for RegimeSelector (Phase 2.2 + Phase 2.9 Stanley regime).
 
 Tests cover: disabled passthrough, low/high speed routing, hysteresis,
-hold timer, blend weight ramp, and MPC fallback override.
+hold timer, blend weight ramp, MPC fallback override, and Stanley low-speed regime.
 
 Run:  pytest tests/test_regime_selector.py -v
-Gate: 8/8 pass
+Gate: 17/17 pass
 """
 
 import pytest
@@ -229,3 +229,165 @@ def test_reset_clears_state():
     sel.reset()
     assert sel.active_regime == ControlRegime.PURE_PURSUIT
     assert sel.blend_progress == 1.0
+
+
+# ---------------------------------------------------------------------------
+# Stanley low-speed regime (Phase 2.9)
+# ---------------------------------------------------------------------------
+
+def _make_stanley_selector(
+    stanley_max_speed_mps=5.0,
+    stanley_up_hyst=0.5,
+    stanley_down_hyst=0.5,
+    stanley_blend_frames=10,
+    stanley_min_hold_frames=15,
+    pp_max_speed_mps=10.0,
+) -> RegimeSelector:
+    cfg = RegimeConfig(
+        enabled=True,
+        stanley_enabled=True,
+        stanley_max_speed_mps=stanley_max_speed_mps,
+        stanley_upshift_hysteresis_mps=stanley_up_hyst,
+        stanley_downshift_hysteresis_mps=stanley_down_hyst,
+        stanley_blend_frames=stanley_blend_frames,
+        stanley_min_hold_frames=stanley_min_hold_frames,
+        pp_max_speed_mps=pp_max_speed_mps,
+        min_hold_frames=30,
+    )
+    return RegimeSelector(cfg)
+
+
+def test_stanley_enum_value():
+    """ControlRegime.STANLEY must be -1 for HDF5 backward compatibility."""
+    assert int(ControlRegime.STANLEY) == -1
+
+
+def test_stanley_downshift_on_low_speed():
+    """Sustained low speed → Stanley after hold frames."""
+    sel = _make_stanley_selector(stanley_max_speed_mps=5.0, stanley_down_hyst=0.5)
+    # 4.4 m/s < 5.0 - 0.5 = 4.5 → should trigger downshift
+    regime, blend = _run_n(sel, speed=4.4, n=50)
+    assert regime == ControlRegime.STANLEY, \
+        f"Expected STANLEY at v=4.4, got {regime}"
+    assert blend == 1.0, "Blend should be fully settled after 50 frames"
+
+
+def test_stanley_stays_pp_above_downshift_threshold():
+    """Speed above lower threshold → stays PP (no Stanley)."""
+    sel = _make_stanley_selector(stanley_max_speed_mps=5.0, stanley_down_hyst=0.5)
+    # 4.6 m/s > 4.5 lower threshold → should stay PP
+    regime, blend = _run_n(sel, speed=4.6, n=50)
+    assert regime == ControlRegime.PURE_PURSUIT, \
+        f"Expected PP at v=4.6 (above lower threshold), got {regime}"
+
+
+def test_stanley_upshift_to_pp():
+    """After Stanley: speed rises above upper threshold → upshift to PP."""
+    sel = _make_stanley_selector(stanley_max_speed_mps=5.0, stanley_up_hyst=0.5)
+    # Settle into Stanley
+    _run_n(sel, speed=3.0, n=50)
+    assert sel.active_regime == ControlRegime.STANLEY
+
+    # Speed rises above 5.0 + 0.5 = 5.5 m/s
+    regime, blend = _run_n(sel, speed=6.0, n=50)
+    assert regime == ControlRegime.PURE_PURSUIT, \
+        f"Expected upshift to PP at v=6.0, got {regime}"
+    assert blend == 1.0
+
+
+def test_stanley_hysteresis_no_chatter():
+    """Speed oscillates around stanley_max → no more than 2 switches total."""
+    sel = _make_stanley_selector(
+        stanley_max_speed_mps=5.0,
+        stanley_down_hyst=0.5,
+        stanley_up_hyst=0.5,
+        stanley_min_hold_frames=5,
+    )
+    switches = 0
+    last_regime = ControlRegime.PURE_PURSUIT
+    # Oscillate within the hysteresis band [4.5, 5.5] — no clean threshold crossing
+    for i in range(120):
+        speed = 4.6 if i % 2 == 0 else 5.4
+        regime, _ = sel.update(speed=speed)
+        if regime != last_regime:
+            switches += 1
+            last_regime = regime
+    assert switches <= 2, f"Expected ≤2 switches in hysteresis band, got {switches}"
+
+
+def test_stanley_full_speed_sweep():
+    """Speed sweep 2→7→14 m/s exercises Stanley, PP, and LMPC regimes."""
+    sel = _make_stanley_selector(
+        stanley_max_speed_mps=5.0, pp_max_speed_mps=10.0,
+        stanley_min_hold_frames=5,
+    )
+    # Override PP->LMPC hold to keep the test fast
+    sel.config.min_hold_frames = 5
+    regimes_seen = set()
+    for speed in [2.0] * 20 + [7.0] * 20 + [14.0] * 20:
+        regime, _ = sel.update(speed=speed)
+        regimes_seen.add(regime)
+    assert ControlRegime.STANLEY in regimes_seen, "Expected STANLEY in sweep"
+    assert ControlRegime.PURE_PURSUIT in regimes_seen, "Expected PP in sweep"
+    assert ControlRegime.LINEAR_MPC in regimes_seen, "Expected LMPC in sweep"
+
+
+def test_stanley_disabled_when_stanley_enabled_false():
+    """stanley_enabled=False → Stanley never activates even at low speed."""
+    cfg = RegimeConfig(
+        enabled=True,
+        stanley_enabled=False,
+        stanley_max_speed_mps=5.0,
+    )
+    sel = RegimeSelector(cfg)
+    regime, _ = _run_n(sel, speed=2.0, n=50)
+    assert regime == ControlRegime.PURE_PURSUIT, \
+        f"Expected PP when stanley_enabled=False, got {regime}"
+
+
+def test_stanley_disabled_when_regime_disabled():
+    """enabled=False → always PP, never Stanley."""
+    cfg = RegimeConfig(enabled=False, stanley_enabled=True, stanley_max_speed_mps=5.0)
+    sel = RegimeSelector(cfg)
+    regime, blend = sel.update(speed=1.0)
+    assert regime == ControlRegime.PURE_PURSUIT
+    assert blend == 1.0
+
+
+def test_stanley_blend_frames_shorter_than_pp():
+    """Stanley blend is 10 frames; PP↔LMPC blend is 15 — verify Stanley uses shorter."""
+    sel = _make_stanley_selector(
+        stanley_blend_frames=10,
+        stanley_min_hold_frames=5,
+    )
+    sel.config.blend_frames = 15  # PP↔LMPC uses 15
+    # Trigger Stanley
+    _run_n(sel, speed=3.0, n=6)  # hold=5 → switches on frame 6
+    assert sel.active_regime == ControlRegime.STANLEY
+    # Collect blend after first switch
+    blends = [sel.blend_progress]
+    for _ in range(10):
+        _, w = sel.update(speed=3.0)
+        blends.append(w)
+    assert blends[-1] == 1.0, "Stanley blend should reach 1.0 in 10 frames"
+
+
+def test_stanley_from_config_loaded():
+    """RegimeConfig.from_config loads stanley_* fields correctly."""
+    cfg_dict = {
+        "control": {
+            "regime": {
+                "enabled": True,
+                "stanley_enabled": True,
+                "stanley_max_speed_mps": 6.0,
+                "stanley_upshift_hysteresis_mps": 0.3,
+                "stanley_blend_frames": 8,
+            }
+        }
+    }
+    rc = RegimeConfig.from_config(cfg_dict)
+    assert rc.stanley_enabled is True
+    assert rc.stanley_max_speed_mps == 6.0
+    assert rc.stanley_upshift_hysteresis_mps == 0.3
+    assert rc.stanley_blend_frames == 8
+    assert rc.stanley_min_hold_frames == 15  # default

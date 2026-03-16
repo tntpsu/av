@@ -1,7 +1,7 @@
 # AV Stack — Agent Memory: Current State
 
-**Last updated:** 2026-03-09
-**Current milestone:** Phase 2.7b VALIDATED. PP turn-entry Workstream C1 COMPLETE — straight latch 36.7% → 15.6% on s_loop. C1 peak 0.612m / C3 peak 0.566m (materially below Phase B 0.674m/0.681m). Highway non-regression: 98.4/100.
+**Last updated:** 2026-03-16
+**Current milestone:** T-033 Automated A/B CI Regression — COMPLETE. Scoring regression tests (25 tests across 5 tracks), config change detector, CI workflow integration, PhilViz Gates tab regression delta table. 774 tests passing, 9 skipped.
 
 ---
 
@@ -23,10 +23,22 @@
 
 **Remaining open issues (structural, accepted):**
 - `curve_local_active_on_straights` still 15-17% (> 5% target) — the last ~30 frames before each curve are correctly in ENTRY/COMMIT state within the distance gate range; reducing below 5% would require further work
-- PP floor rescue (~1.7m) is structural (arc-chord discrepancy at R≈1.5m) — improved vs pre-Phase-B 2.3m
-- `lateTurnIn=YES` on C1/C3 (+17-20fr) — onset after curve start; Workstream C2 target
+- PP floor rescue (~1.7m) is structural (arc-chord geometry at R40) — improved vs pre-Phase-B 2.3m
+- `lateTurnIn=YES` on C1/C3 (+17-20fr) — onset after curve start; **Workstream C2 DEFERRED (see below)**
 
-**Next:** Phase 2.8 or PP floor rescue reduction (Workstream C2).
+**Workstream C2 (PP floor rescue) — DEFERRED, not blocking:**
+Root cause traced: `compute_curve_phase_scheduler` keeps COMMIT alive via `term_preview` (always ~1.0 on s_loop since next curve is always visible). COMMIT floor 0.30 prevents exit. `compute_reference_lookahead` uses `entry_weight = curve_local_phase` so lookahead partially contracts on straights → steep drop at curve entry → floor rescue 1.7m. Fix is documented in `pp-turn-fix-impl.md` Fix 1.
+
+**Decision: Do NOT pursue C2 for s_loop.** s_loop already scores 97.1/100, lateral RMSE 0.21m (2× margin vs 0.40m gate), all comfort gates passing. Peak lateral error 0.57-0.61m on C1/C3 is momentary arc-chord geometry, not a tracking failure. The fix has robustness risk on compound S-curves (though C1→C2 geometry mitigates this). Low ROI, high complexity. Revisit ONLY if mixed_radius/sweeping_highway C2-style floor rescue causes actual gate failures.
+
+**Phase 2.8.6 — mixed_radius VALIDATED (2026-03-13) ✅:**
+- 4 MPC-active runs: 93.9/93.8/93.9/93.8, median **93.85/100**, 0 e-stops
+- **Root cause of prior 79/100:** Base `mpc_q_lat=10.0` caused MPC hunting on moderate curves (R150/R200, κ=0.007). Trajectory yellow cap (P95 0.97m → penalty 34pts → score 66 → `critical_cap=79.0` fires). **Not cadence** — cadence has zero weight in scoring.
+- **Fix:** `mpc_q_lat: 0.5 + mpc_r_steer_rate: 2.0` in `config/mpc_mixed.yaml` (matches highway-validated settings). e_lat P95: 0.97m → 0.43m. Trajectory green.
+- **R40 strategy:** `curve_cap_peak_lat_accel_g: 0.20` (lowered from 0.26) → R40 cap 8.85 m/s < 9.5 m/s downshift threshold → R40 stays in PP. MPC only active on R150/R200/straights.
+- **PP-only runs:** ~2/6 runs are PP-only when circuit starts near tight corners (never reaches 11 m/s upshift). Not a config issue — track geometry.
+- **Golden recording registered:** `recording_20260313_122635.h5`. 32/32 comfort gate tests passing.
+- **Score gate:** 90 for MPC-active runs (set in conftest.py SCORE_TOLERANCES + LATERAL_P95_GATES).
 
 ### Phase 2 — Layered Control Architecture (2026-03-01, active)
 
@@ -43,6 +55,10 @@
 | 2.6 Highway validation | ⚠️ BLOCKED | 9 runs with PP-derived measurements. Oscillation growth ~1.9× invariant to ALL weights → PP reference frame coupling (see plan.md §2.6). Superseded by 2.7. |
 | 2.7 True-state MPC | ✅ Complete | **Key fix:** replaced `roadFrameLaneCenterOffset` (lane-vs-road offset, ~0.04m constant) with `groundTruthLaneCenterX` (vehicle-vs-lane center, tracks real drift). Sign: cross-track negated, heading not negated. Highway: 60s, score 93.3, 0 e-stops. MPC e_lat converges to ±0.005m. S-loop PP: 60s, score 97.1, 0 e-stops. MPC tuning explored: q_lat=0.5 r_rate=2.0 is optimal (higher r_rate → steady-state offset; higher q_lat → active hunting). |
 | 2.7b Curvature preview | ✅ Validated | Map-based curvature preview: samples signed curvature from track profile at 1m intervals (30m ahead), interpolates to MPC time steps. Replaced noisy perception lane polynomials. MPC startup warmup: relaxed constraints + 500 OSQP iterations for first 5 frames after activation. Highway A/B: preview ON median 98.1 (98.3/94.7/98.1) vs OFF median 95.2 (95.2/95.2/95.3). 37/37 tests pass, 0 e-stops. |
+| 2.8 MPC pipeline fixes | ✅ Validated (highway + mixed_radius) | 4 sub-phases: (1) recovery mode suppression, (2) steering feedback fix, (3) rate limiter, (4) delay compensation. 10 new HDF5 diagnostic fields. Highway median 97.4/100. Mixed_radius median 93.85/100 (2026-03-13). |
+| 2.8.x mpc_pipeline_analysis.py | ✅ Complete | CLI: `python tools/analyze/mpc_pipeline_analysis.py --latest`. 4 sections: regime distribution, 2.8.1-2.8.4 fix status, MPC state quality, top-10 worst frames. |
+| 2.8.x PhilViz MPC Pipeline tab | ✅ Complete | `backend/mpc_pipeline.py` + `/api/recording/<f>/mpc-pipeline` route + tab in index.html + `loadMpcPipeline()` / `renderMpcPipelineHtml()` in visualizer.js. PP-only recordings return `has_mpc: false` gracefully. |
+| 2.9 Stanley low-speed regime | ✅ Complete | Sub-phases 2.9.1–2.9.10. Stanley k=3.0 validated on hairpin_15: 91.6/100 (was PP 79). Curvature FF tested and rejected (no RMSE gain, 2× steer_jerk). Curvature-adjusted scoring implemented: `adjusted_error = max(0, |e_lat| - 3*|kappa|)`. Per-track LATERAL_P95_GATES removed. New hairpin golden registered. 749 tests pass. |
 
 **Key files created:**
 - `control/mpc_controller.py` — 3 classes: `MPCParams`, `MPCSolver`, `MPCController`
@@ -242,9 +258,9 @@ with stale-propagation banners and replay-mode locked-layer context.
 
 ### Known Incomplete Items
 
-1. **PhilViz (debug_visualizer):** `CONSOLIDATION_PLAN.md` exists — planned refactor (T-012)
-2. **MPC controller (`control/mpc_controller.py`):** Implemented but not active; alternative to PP
-3. **Segmentation model:** CV fallback is de facto perception path; model untrained
+1. **PhilViz (debug_visualizer):** T-073 — diagnostic consistency pass (scoring_registry.py). See `docs/plans/camera-optimization-plan.md §Phases 3-4`.
+2. **MPC controller (`control/mpc_controller.py`):** Active via `mpc_sloop.yaml` / `mpc_highway.yaml` / `mpc_mixed.yaml`. PP is default when no MPC overlay loaded.
+3. **Segmentation model:** IS active (`detection_method = "segmentation"` 100% of frames). CLAUDE.md "CV fallback active" note is outdated.
 4. **Speed error RMSE on highway:** 1.19 m/s — structural (vehicle accelerates ~15s to reach 12 m/s target); not a control bug
 
 ---
@@ -281,7 +297,7 @@ safety:
 
 ## Known Risks / Fragile Areas
 
-1. **`av_stack.py` complexity** — 5,420 lines with deeply layered lane gating logic. Changes here have wide blast radius.
+1. **`av_stack/orchestrator.py` complexity** — ~5,724 lines, `_pf_*` sub-methods, deeply layered lane gating. Changes have wide blast radius. (`av_stack.py` is gone — replaced by `av_stack/` package).
 2. **Curvature measurement quality** — Speed planning and steering are both curvature-sensitive. Errors cascade.
 3. **Perception stale fallback** — Complex multi-condition blending when lane detection fails multiple consecutive frames.
 4. **Temporal sync** — Camera frames and vehicle state can arrive with different timestamps; sync logic is critical.

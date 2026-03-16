@@ -151,30 +151,34 @@ class TestCoordinateSystemValidation:
     """Validate coordinate system transformations."""
     
     def test_vehicle_position_reasonable(self):
-        """Verify vehicle positions are in reasonable range."""
+        """Verify coordinate system is correct by checking lane-relative reference point.
+
+        vehicle/position stores Unity world coordinates (hundreds of meters) and cannot
+        distinguish pixels from world positions. Instead, check trajectory/reference_point_x
+        which is lane-relative (should always be < 5m from lane center).
+        If values are 300-500, coordinate conversion is broken.
+        """
         recordings = sorted(
             Path('data/recordings').glob('*.h5'),
             key=lambda p: p.stat().st_mtime,
             reverse=True
         )
-        
+
         if not recordings:
             pytest.skip("No recordings available")
-        
+
         latest = recordings[0]
-        
+
         with h5py.File(latest, 'r') as f:
-            positions = f['vehicle/position'][:]
-            x_positions = positions[:, 0]  # Lateral
-            
-            # Vehicle should stay roughly in lane (within ±5m of center)
-            # If positions are 300-500, they're in pixels!
-            max_abs_x = np.max(np.abs(x_positions))
-            
-            assert max_abs_x < 10.0, (
-                f"Vehicle positions look like pixels ({max_abs_x:.1f}), not meters! "
-                f"Expected < 10m, got {max_abs_x:.1f}. "
-                f"Coordinate system may be wrong!"
+            if 'trajectory/reference_point_x' not in f:
+                pytest.skip("No reference_point_x in recording")
+            ref_x = f['trajectory/reference_point_x'][:]
+            max_abs_ref_x = np.max(np.abs(ref_x))
+
+            assert max_abs_ref_x < 5.0, (
+                f"reference_point_x looks wrong ({max_abs_ref_x:.2f}m). "
+                f"Expected lane-relative value < 5m. "
+                f"If value is 300-500, coordinate conversion is not being applied!"
             )
 
 

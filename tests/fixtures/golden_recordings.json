@@ -1,21 +1,26 @@
 {
     "schema_version": "1",
-    "milestone": "S2-M5 (Step 1 in progress)",
-    "recorded_at": "2026-03-11",
-    "notes": "S1-M39 baselines retained. hairpin_15 added (Step 1 Phase 1D). mixed_radius and sweeping_highway pending live validation. Update BASELINE_SCORES in tests/conftest.py to match after each new track is added.",
+    "milestone": "Phase 2.9 — Unified curvature-adjusted scoring + Stanley hairpin golden",
+    "recorded_at": "2026-03-15",
+    "notes": "Scoring formula updated: lateral RMSE/P95 penalties now use curvature-adjusted values (floor=3*|kappa| per frame). Per-track LATERAL_P95_GATES removed. hairpin_15 golden replaced with Stanley k=3.0 recording (PP recording scored 79 with old scoring, still 79 with adjusted — Trajectory layer still yellow at 73.8). Stanley scores 91.6 with Trajectory green at 83.4.",
     "tracks": {
-        "s_loop":     "data/recordings/recording_20260222_202957.h5",
-        "highway_65": "data/recordings/recording_20260222_214028.h5",
-        "hairpin_15": "data/recordings/recording_20260310_235914.h5"
+        "s_loop":            "data/recordings/recording_20260222_202957.h5",
+        "highway_65":        "data/recordings/recording_20260222_214028.h5",
+        "hairpin_15":        "data/recordings/recording_20260315_190131.h5",
+        "sweeping_highway":  "data/recordings/recording_20260312_100209.h5",
+        "mixed_radius":      "data/recordings/recording_20260313_122635.h5"
     },
     "documented_scores": {
-        "s_loop":     95.6,
-        "highway_65": 96.2,
-        "hairpin_15": 79.0
+        "s_loop":            96.7,
+        "highway_65":        96.2,
+        "hairpin_15":        91.6,
+        "sweeping_highway":  93.6,
+        "mixed_radius":      94.1
     },
     "documented_metrics": {
         "s_loop": {
             "lateral_rmse_m":          0.203,
+            "lateral_rmse_adj_m":      0.128,
             "accel_p95_filtered_mps2": 1.315,
             "commanded_jerk_p95_mps3": 1.440,
             "out_of_lane_events":      0,
@@ -24,6 +29,7 @@
         },
         "highway_65": {
             "lateral_rmse_m":          0.044,
+            "lateral_rmse_adj_m":      0.042,
             "accel_p95_filtered_mps2": 1.084,
             "commanded_jerk_p95_mps3": 1.440,
             "out_of_lane_events":      0,
@@ -31,13 +37,37 @@
             "duration_s":              59.9
         },
         "hairpin_15": {
-            "lateral_rmse_m":          0.435,
+            "lateral_rmse_m":          0.312,
+            "lateral_rmse_adj_m":      0.220,
             "accel_p95_filtered_mps2": 1.167,
             "commanded_jerk_p95_mps3": 1.440,
             "out_of_lane_events":      0,
             "emergency_stops":         0,
             "duration_s":              59.9,
-            "notes": "Empirical PP ceiling on R15/R20 geometry. Bimodal variance (59 or 79) due to consecutive arcs with no inter-arc straight — C1 exit error compounds directly into C2. Score gate set at 75 (not 85) for this track. Controller: PP only (speed 2-4 m/s, below MPC threshold)."
+            "notes": "Stanley k=3.0 regime (speed 2-4 m/s, below MPC threshold). Replaced PP golden (79/100) which had Trajectory yellow even with curvature adjustment. Stanley Trajectory layer 83.4 (green) due to lower RMSE (0.31 vs 0.44m). Curvature feedforward tested and rejected (no RMSE gain, 2× steer_jerk)."
+        },
+        "sweeping_highway": {
+            "lateral_rmse_m":          0.254,
+            "lateral_rmse_adj_m":      0.247,
+            "accel_p95_filtered_mps2": 1.363,
+            "commanded_jerk_p95_mps3": 1.440,
+            "out_of_lane_events":      0,
+            "emergency_stops":         0,
+            "duration_s":              60.0,
+            "mpc_active_rate":         0.773,
+            "notes": "55% arc coverage (R300 corners). MPC active ~75-77%."
+        },
+        "mixed_radius": {
+            "lateral_rmse_m":          0.231,
+            "lateral_rmse_adj_m":      0.214,
+            "lateral_p95_m":           0.322,
+            "accel_p95_filtered_mps2": 1.254,
+            "commanded_jerk_p95_mps3": 1.440,
+            "out_of_lane_events":      0,
+            "emergency_stops":         0,
+            "duration_s":              59.8,
+            "mpc_active_rate":         0.723,
+            "notes": "PP/MPC hybrid track (R40-R200). Key config: curve_cap_peak_lat_accel_g=0.20 (R40 in PP), mpc_q_lat=0.5, mpc_r_steer_rate=2.0."
         }
     }
 }

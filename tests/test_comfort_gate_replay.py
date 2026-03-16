@@ -36,6 +36,7 @@ from conftest import (
     COMFORT_GATES,
     BASELINE_SCORES,
     SCORE_TOLERANCE,
+    SCORE_TOLERANCES,
     REPO_ROOT,
     golden_recording_path,
     make_nominal_recording,
@@ -332,7 +333,7 @@ class TestGoldenRecordings:
             f"by more than ±{SCORE_TOLERANCE:.1f} points"
         )
 
-    @pytest.mark.parametrize("track_id", ["s_loop", "highway_65"])
+    @pytest.mark.parametrize("track_id", list(BASELINE_SCORES.keys()))
     def test_no_failure_detected_on_golden_recording(self, track_id: str) -> None:
         """Golden recordings must be clean full runs (no failure_detected flag)."""
         path = golden_recording_path(track_id)
@@ -343,4 +344,56 @@ class TestGoldenRecordings:
         assert not failure, (
             f"{track_id} golden recording has failure_detected=True — "
             "the file may not be a clean full run. Re-register a different recording."
+        )
+
+    @pytest.mark.parametrize("track_id", list(BASELINE_SCORES.keys()))
+    def test_score_within_baseline_tolerance(self, track_id: str) -> None:
+        """Score must stay within per-track tolerance of its documented baseline."""
+        path = golden_recording_path(track_id)
+        if path is None:
+            pytest.skip(f"{track_id} golden recording not on disk")
+        summary = analyze_recording_summary(path)
+        score = float(summary["executive_summary"]["overall_score"])
+        base = BASELINE_SCORES[track_id]
+        tol = SCORE_TOLERANCES.get(track_id, SCORE_TOLERANCE)
+        assert abs(score - base) <= tol, (
+            f"{track_id} score {score:.1f} differs from baseline {base:.1f} "
+            f"by more than ±{tol:.1f} points — "
+            "analysis pipeline may have changed how metrics are scored"
+        )
+
+    @pytest.mark.parametrize("track_id", list(BASELINE_SCORES.keys()))
+    def test_all_comfort_gates_pass_on_golden_recording(self, track_id: str) -> None:
+        """Comfort gates must pass on every registered golden recording.
+
+        Uses per-track lateral P95 gate overrides for tracks whose geometry
+        structurally exceeds the standard 0.40m gate (e.g. hairpin R15,
+        sweeping highway 55% arc coverage).  All other gates (jerk, accel,
+        e-stops) use the universal standard values.
+        """
+        path = golden_recording_path(track_id)
+        if path is None:
+            pytest.skip(f"{track_id} golden recording not on disk")
+        summary = analyze_recording_summary(path)
+        # Unified scoring: Trajectory layer uses curvature-adjusted RMSE/P95.
+        # Gate check: Trajectory layer must be green (≥80). Same rule for all tracks.
+        es  = summary["executive_summary"]
+        sp  = summary.get("comfort", {})
+        layer_scores = summary.get("layer_scores", {})
+        traj_score = float(layer_scores.get("Trajectory", 100.0))
+        jerk = float(sp.get("commanded_jerk_p95", 0.0))
+        accel = float(sp.get("acceleration_p95_filtered", 0.0))
+        e_stops = es.get("emergency_stops", 0)
+        assert traj_score >= 80.0, (
+            f"[{track_id}_golden] Trajectory layer {traj_score:.1f}/100 < 80 (yellow). "
+            f"Curvature-adjusted RMSE/P95 penalties too high."
+        )
+        assert jerk <= COMFORT_GATES["commanded_jerk_p95_max"], (
+            f"[{track_id}_golden] commanded jerk P95 {jerk:.3f} > {COMFORT_GATES['commanded_jerk_p95_max']}"
+        )
+        assert accel <= COMFORT_GATES["accel_p95_filtered_max"], (
+            f"[{track_id}_golden] accel P95 {accel:.3f} > {COMFORT_GATES['accel_p95_filtered_max']}"
+        )
+        assert e_stops == 0, (
+            f"[{track_id}_golden] {e_stops} emergency stop(s) — golden recording must have 0"
         )

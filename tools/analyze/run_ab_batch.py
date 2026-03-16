@@ -251,7 +251,12 @@ def _summarize(label: str, trials: List[TrialMetrics]) -> None:
         print(f"top_stale_reasons: {top}")
 
 
-def _run_once(track_yaml: str, duration_s: int, start_t: Optional[float] = None) -> Path:
+def _run_once(
+    track_yaml: str,
+    duration_s: int,
+    start_t: Optional[float] = None,
+    overlay_config: Optional[str] = None,
+) -> Path:
     before = set(RECORDINGS_DIR.glob("*.h5"))
     cmd = [
         str(START_SCRIPT),
@@ -262,6 +267,8 @@ def _run_once(track_yaml: str, duration_s: int, start_t: Optional[float] = None)
         str(Path(track_yaml).resolve()),
         "--force",
     ]
+    if overlay_config is not None:
+        cmd.extend(["--config", str(Path(overlay_config).resolve())])
     if start_t is not None:
         cmd.extend(["--start-t", f"{float(start_t):.6f}"])
     subprocess.run(
@@ -291,6 +298,7 @@ def main() -> int:
     )
     parser.add_argument("--repeats", type=int, default=5, help="Number of A/B pairs")
     parser.add_argument("--track-yaml", default=str(REPO_ROOT / "tracks" / "s_loop.yml"))
+    parser.add_argument("--config", default=None, help="Overlay config YAML to pass to start_av_stack.sh (e.g. config/mpc_hairpin.yaml)")
     parser.add_argument("--duration", type=int, default=40)
     parser.add_argument("--curve-start-frame", type=int, default=174)
     parser.add_argument("--entry-start-distance-m", type=float, default=25.0)
@@ -364,6 +372,7 @@ def main() -> int:
                     track_yaml=args.track_yaml,
                     duration_s=args.duration,
                     start_t=pair_start_t,
+                    overlay_config=args.config,
                 )
                 metrics = _analyze_recording(
                     rec,

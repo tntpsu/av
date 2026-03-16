@@ -1,7 +1,7 @@
 # Robust Full-Stack Roadmap (Unified, Layered, and Gated)
 
-**Last Updated:** 2026-03-04
-**Current Focus:** Layer 2, Stage 2 (Robustness & Speed Expansion) — Phase 2.7b validated (MPC + curvature preview)
+**Last Updated:** 2026-03-16
+**Current Focus:** Layer 2, Stage 2 (Robustness & Speed Expansion) — Step 2 (T-033 CI regression) complete, Step 3 next
 **Change-Control Rule:** If scope, stage, phase status, or promotion gates change, update this roadmap in the same PR/commit before considering work complete.
 
 ## Scope
@@ -314,10 +314,10 @@ coverage — it is the ability to iterate safely and quickly as the system grows
   - Entry criterion: S2-M1 + S2-M2 done (need automated gates + documented params before
     pushing speed, to make regressions observable).
   - Promotion gate: all S1-M39 comfort gates pass at 15 m/s on highway_65 (3× runs).
-- `S2-M5` (future): Track coverage expansion — validate on ≥1 additional track beyond
-  s_loop/highway_65. Priority: tighter-radius track (r < 15m) to stress the comfort governor.
-  - Entry criterion: S2-M4 done (speed must be validated before exploring new geometry).
-  - Promotion gate: lateral RMSE ≤ 0.40m, 0 e-stops, all comfort gates on new track (3× runs).
+- `S2-M5` ✅ **COMPLETE (2026-03-15)**: Track coverage expansion — 3 additional tracks validated:
+  mixed_radius (94.1), sweeping_highway (93.6), hairpin_15 (91.6 with Stanley k=3.0).
+  All meet promotion gate: RMSE ≤ 0.40m, 0 e-stops, all comfort gates pass (3× runs each).
+  Curvature-adjusted scoring deployed (floor=3×|κ|). Per-track gate overrides removed.
 
 **Gate to pass Stage 2**
 - Automated comfort-gate CI passing without Unity (S2-M1).
@@ -450,21 +450,26 @@ Ordered sequence of major capability additions. Each step builds on the previous
 Steps 1-4 harden the existing foundation. Steps 5-7 add core driving capabilities.
 Steps 8-10 add intelligence and robustness.
 
-**Current state:** PP (s-loop, <10 m/s) + Linear MPC (highway, 10-20 m/s) with
-map-based curvature preview. Two tracks validated. No actors. Single lane.
+**Current state:** PP (s-loop, <10 m/s) + Stanley (hairpin, <6 m/s) + Linear MPC (highway, 10-20 m/s)
+with map-based curvature preview. Five tracks validated. No actors. Single lane.
 GT lane center serves as our HD map signal (same role as pre-built HD maps in real AV stacks).
+Curvature-adjusted scoring active (floor=3×|κ| per frame). 749 tests, 32/32 comfort gates green.
 
-### Step 1 — Track Coverage Expansion (S2-M5)
+### Step 1 — Track Coverage Expansion (S2-M5) ✅ COMPLETE (2026-03-15)
 
 **Goal:** Prove the control architecture generalizes beyond s_loop and highway_65.
 
-**What to build:**
-- 2-3 new track profiles: tight hairpin (r < 15m), mixed-radius course, long sweeping highway
-- Validate all comfort gates on each track (3x runs)
-- May require comfort governor tuning for extreme curvatures
+**Validated tracks (all pass promotion gate: RMSE ≤ 0.40m, 0 e-stops, 3× runs):**
+- mixed_radius: 94.1/100 (PP↔MPC hybrid, R40-R200)
+- sweeping_highway: 93.6/100 (MPC-dominant, R300 corners)
+- hairpin_15: 91.6/100 (Stanley k=3.0, R15/R20 back-to-back arcs)
 
-**Entry:** Phase 2.7b validated (done)
-**Gate:** Lateral RMSE ≤ 0.40m, 0 e-stops, all comfort gates on every new track (3x runs)
+**Key outcomes:**
+- Curvature-adjusted scoring deployed — unified formula, no per-track gate overrides
+- Stanley low-speed regime (Phase 2.9) — reactive controller for tight turns below MPC threshold
+- Curvature feedforward tested and rejected (no RMSE gain on consecutive tight arcs)
+
+**Gate:** Met — all 5 tracks validated with comfort gates green
 **Unlocks:** Confidence that control works on diverse geometry, not just tuned tracks
 
 ### Step 2 — Automated A/B CI Regression (T-033)
@@ -480,6 +485,20 @@ GT lane center serves as our HD map signal (same role as pre-built HD maps in re
 **Gate:** CI runs green on all track recordings; blocks merge on regression
 **Unlocks:** Safe iteration speed for all future steps — every change is automatically validated
 
+### Step 2 — Automated A/B CI Regression (T-033) ✅ COMPLETE (2026-03-16)
+
+**Goal:** Automatically detect and block scoring regressions on every push/PR.
+
+**What was built:**
+- `tests/test_scoring_regression.py` — 25 tests: re-scores 5 golden recordings against frozen baselines
+- `tests/fixtures/scoring_baselines.json` — frozen per-track metrics (score, adj_rmse, accel, jerk)
+- `tools/ci/check_config_regression.py` — config diff detector (scoring-critical param classification)
+- CI workflow: scoring regression step (blocking) + config change report (informational, PR-only)
+- Gate bundle regression deltas (conftest.py) → PhilViz Gates tab color-coded delta table
+
+**Gate:** CI runs green on all track recordings; blocks merge on regression — ✅
+**Unlocks:** Safe iteration speed for all future steps — every change is automatically validated
+
 ### Step 3 — Grade and Banking
 
 **Goal:** Add elevation effects to the dynamics model and simulation.
@@ -491,7 +510,7 @@ GT lane center serves as our HD map signal (same role as pre-built HD maps in re
 - Banked and graded track profiles
 - Validate comfort gates hold on graded tracks
 
-**Entry:** Step 2 done (CI catches regressions from dynamics changes)
+**Entry:** Step 2 done ✅ (CI catches regressions from dynamics changes)
 **Gate:** All comfort gates pass on graded + banked tracks (3x runs each)
 **Unlocks:** More realistic simulation, validates MPC dynamics model is extensible
 

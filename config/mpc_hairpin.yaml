@@ -1,0 +1,46 @@
+# Hairpin track overlay — merges on top of config/av_stack_config.yaml at runtime.
+#
+# Only parameters that differ from base are listed here.
+# Base provides all other defaults (speed tables, curvature thresholds, safety, MPC params).
+#
+# Track: hairpin_15 (R15 turn, κ≈0.067, peak speed ~4.0 m/s under 0.20g cap)
+# Usage:
+#   ./start_av_stack.sh --build-unity-player --skip-unity-build-if-clean \
+#       --config config/mpc_hairpin.yaml --track-yaml tracks/hairpin_15.yml --duration 60
+#
+# NOTE: MPC does NOT activate on hairpin_15 (cap-tracked speed 2-4 m/s, below 10 m/s threshold).
+#   Stanley IS expected to activate (speed drops below 4.5 m/s at turn entry).
+#   Objective: break through the 79/100 scoring cap caused by PP chord-approximation error
+#   at R15. Stanley tracks the nearest path point (no lookahead, no floor) → lower lateral RMSE.
+#
+# Phase 2.9 Results (2026-03-15):
+#   stanley_k=1.5 (base): RMSE 0.46m, score 59/100, PP crashes 67% of runs
+#   stanley_k=3.0:        RMSE 0.30m, score 79/100, 0 crashes — consistent
+#   The 79 cap is the Trajectory yellow layer (P95=0.73m > 0.40m limit).
+#   Root cause: C1→C2 consecutive arcs with no straight → C1 overshoot (-0.43m at exit)
+#   directly poisons C2 entry. Stanley equilibrium drift during arc = ~0.85m peak.
+#
+# Phase 2.9.10 — Curvature feedforward A/B result (2026-03-15):
+#   Raw FF: C1→C2 sign flip → steer_jerk_max 66→470. Slew-rate limiter (0.05 rad/frame) → 129.
+#   But RMSE unchanged (0.314 vs 0.315). FF ramps too slowly to lead the arc, arrives mid-turn
+#   when crosstrack term is already doing the same job. Dead end for reactive control.
+#   Breaking 79 requires preview-based trajectory planning (MPC through entire C1→C2 sequence).
+
+control:
+  regime:
+    enabled: true
+    stanley_max_speed_mps: 6.0         # Higher threshold on hairpin: cap speed ~4.0 m/s → always Stanley in turn
+    stanley_upshift_hysteresis_mps: 0.5
+    stanley_downshift_hysteresis_mps: 0.5
+  lateral:
+    stanley_k: 3.0                     # Validated: 1.5→3.0 cuts RMSE 0.46→0.30m (34% improvement, score 59→79)
+    stanley_curvature_ff_enabled: false  # A/B showed no RMSE improvement + steer_jerk_max 2× — not worth it
+    # stanley_ff_slew_rate_rad: 0.05   # Slew limiter works but FF itself doesn't help on this geometry
+
+trajectory:
+  reference_lookahead_entry_track_name: hairpin_15  # auto-derived from --track-yaml; explicit for clarity
+  # commit_distance_ready_m kept at base default (3.0m):
+  #   hairpin short straights (80-120m) + back-to-back arcs cause straight-latch with 8.0m
+  #   (regression: 79→59 with e-stop at frame 540, 57.1% straight latch)
+  speed_governor:
+    curve_cap_peak_lat_accel_g: 0.20   # keep R15 under 4.4 m/s (was 0.26 → 5.5 m/s → too fast for Stanley)

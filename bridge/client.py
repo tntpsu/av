@@ -3,6 +3,9 @@ Python client helper for Unity bridge communication.
 Provides convenient methods for AV stack components to interact with Unity.
 """
 
+import queue as _queue
+import threading
+
 import requests
 import numpy as np
 from PIL import Image
@@ -18,12 +21,26 @@ class UnityBridgeClient:
     def __init__(self, base_url: str = "http://localhost:8000"):
         """
         Initialize Unity bridge client.
-        
+
         Args:
             base_url: Base URL of the bridge server
         """
         self.base_url = base_url.rstrip("/")
         self.session = requests.Session()
+
+        # Fire-and-forget control sender.
+        # set_control_command() enqueues and returns immediately (latest-wins,
+        # maxsize=1).  A daemon thread drains the queue and does the actual
+        # HTTP POST so the orchestrator is never blocked waiting for Unity.
+        self._control_queue: _queue.Queue = _queue.Queue(maxsize=1)
+        self._control_dropped: int = 0   # commands superseded before being sent
+        self._control_errors: int = 0    # HTTP errors from the sender thread
+        self._control_thread = threading.Thread(
+            target=self._control_sender_loop,
+            daemon=True,
+            name="control-sender",
+        )
+        self._control_thread.start()
     
     def get_latest_camera_frame(
         self,
@@ -205,6 +222,36 @@ class UnityBridgeClient:
             command["randomize_seed"] = int(randomize_seed)
         return command
 
+    # ── Background control sender ─────────────────────────────────────────────
+
+    def _control_sender_loop(self) -> None:
+        """Daemon thread: POSTs control commands from _control_queue to Unity.
+
+        Runs until a None sentinel is enqueued (via close()).
+        """
+        while True:
+            try:
+                command = self._control_queue.get(timeout=1.0)
+            except _queue.Empty:
+                continue
+            if command is None:   # shutdown sentinel
+                break
+            try:
+                self.session.post(
+                    f"{self.base_url}/api/vehicle/control",
+                    json=command,
+                    timeout=0.5,
+                )
+            except requests.RequestException:
+                self._control_errors += 1
+
+    def close(self) -> None:
+        """Shut down the background control-sender thread gracefully."""
+        try:
+            self._control_queue.put_nowait(None)
+        except _queue.Full:
+            pass
+
     def set_control_command(
         self,
         steering: float,
@@ -216,40 +263,40 @@ class UnityBridgeClient:
         randomize_request_id: int = 0,
         randomize_seed: int | None = None,
     ) -> bool:
-        """
-        Set control command for Unity vehicle.
-        
+        """Enqueue a control command for fire-and-forget delivery to Unity.
+
+        Returns immediately without blocking on the HTTP round-trip.
+        The background sender thread delivers the command; latest-wins if
+        a previous command has not yet been sent.
+
         Args:
             steering: Steering angle (-1.0 to 1.0)
             throttle: Throttle (-1.0 to 1.0, negative = reverse)
             brake: Brake (0.0 to 1.0)
-            ground_truth_mode: Enable direct velocity control for precise path following
+            ground_truth_mode: Enable direct velocity control
             ground_truth_speed: Speed for ground truth mode (m/s)
-        
+
         Returns:
-            True if successful, False otherwise
+            True always (enqueue cannot fail; HTTP errors are logged silently).
         """
+        command = self._build_control_command(
+            steering=steering,
+            throttle=throttle,
+            brake=brake,
+            ground_truth_mode=ground_truth_mode,
+            ground_truth_speed=ground_truth_speed,
+            randomize_start=randomize_start,
+            randomize_request_id=randomize_request_id,
+            randomize_seed=randomize_seed,
+        )
+        # Latest-wins: drain any unsent command, then enqueue the new one.
         try:
-            command = self._build_control_command(
-                steering=steering,
-                throttle=throttle,
-                brake=brake,
-                ground_truth_mode=ground_truth_mode,
-                ground_truth_speed=ground_truth_speed,
-                randomize_start=randomize_start,
-                randomize_request_id=randomize_request_id,
-                randomize_seed=randomize_seed,
-            )
-            
-            response = self.session.post(
-                f"{self.base_url}/api/vehicle/control",
-                json=command
-            )
-            response.raise_for_status()
-            return True
-        except requests.RequestException as e:
-            print(f"Error setting control command: {e}")
-            return False
+            self._control_queue.get_nowait()
+            self._control_dropped += 1
+        except _queue.Empty:
+            pass
+        self._control_queue.put_nowait(command)
+        return True
     
     def request_unity_play(self) -> bool:
         """

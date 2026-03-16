@@ -25,6 +25,7 @@ from trajectory.utils import (
 )
 from control.pid_controller import VehicleController
 from control.speed_governor import build_speed_governor, SpeedGovernorOutput
+from control.regime_selector import ControlRegime
 from data.recorder import DataRecorder
 from data.formats.data_format import (
     CameraFrame, VehicleState, ControlCommand,
@@ -726,6 +727,9 @@ class AVStack:
             stanley_k=lateral_cfg.get('stanley_k', 1.0),
             stanley_soft_speed=lateral_cfg.get('stanley_soft_speed', 2.0),
             stanley_heading_weight=lateral_cfg.get('stanley_heading_weight', 1.0),
+            stanley_curvature_ff_enabled=lateral_cfg.get('stanley_curvature_ff_enabled', False),
+            stanley_wheelbase_m=lateral_cfg.get('stanley_wheelbase_m', 2.7),
+            stanley_ff_slew_rate_rad=lateral_cfg.get('stanley_ff_slew_rate_rad', 0.05),
             pp_feedback_gain=lateral_cfg.get('pp_feedback_gain', 0.15),
             pp_min_lookahead=lateral_cfg.get('pp_min_lookahead', 0.5),
             pp_speed_norm_enabled=bool(
@@ -1989,6 +1993,10 @@ class AVStack:
         traj     = self._pf_plan_trajectory(pr, gated, gov, vehicle_state_dict, timestamp)
         cmd      = self._pf_compute_steering(traj, gov, gated, vehicle_state_dict, fv, timestamp)
         cmd      = self._pf_apply_safety(cmd, traj, gated, gov, vehicle_state_dict, fv, timestamp)
+        # 2.8.2: feed actual sent steering back to MPC warm-start
+        actual_steering = float(cmd.get('steering', 0.0))
+        self.controller.update_last_steering_norm(actual_steering)
+        cmd['mpc_last_steering_actual'] = actual_steering
         latency_ctx = self._pf_send_control(
             cmd,
             traj,
@@ -5624,28 +5632,35 @@ class AVStack:
             self.controller.lateral_controller.reset()
         
         # CRITICAL: If emergency stop was triggered, skip all other control modifications
+        mpc_recovery_mode_suppressed = False
         if not emergency_stop_triggered:
+            mpc_active = int(control_command.get('regime', 0)) == int(ControlRegime.LINEAR_MPC)
             if lateral_error_abs > max_lateral_error:
                 # Hard limit: Error exceeds 2.0m - aggressive correction
-                logger.warning(f"[Frame {self.frame_count}] HARD LIMIT: Lateral error {lateral_error_abs:.3f}m exceeds {max_lateral_error}m - aggressive correction")
-                # Increase steering gain temporarily for recovery
-                # CRITICAL FIX: Use config max_steering instead of hardcoded 0.5
-                max_steering = self.controller.lateral_controller.max_steering
-                steering_original = control_command.get('steering', 0.0)
-                control_command['steering'] = np.clip(steering_original * 1.5, -max_steering, max_steering)  # 50% more aggressive
-                # Reduce throttle to slow down during recovery
-                control_command['throttle'] = control_command.get('throttle', 0.0) * 0.5
+                # Skip for MPC: multiplying output corrupts MPC's last_delta_norm state feedback
+                if mpc_active:
+                    logger.info(f"[Frame {self.frame_count}] HARD LIMIT suppressed (MPC active): lateral_error={lateral_error_abs:.3f}m")
+                    mpc_recovery_mode_suppressed = True
+                else:
+                    logger.warning(f"[Frame {self.frame_count}] HARD LIMIT: Lateral error {lateral_error_abs:.3f}m exceeds {max_lateral_error}m - aggressive correction")
+                    max_steering = self.controller.lateral_controller.max_steering
+                    steering_original = control_command.get('steering', 0.0)
+                    control_command['steering'] = np.clip(steering_original * 1.5, -max_steering, max_steering)  # 50% more aggressive
+                    control_command['throttle'] = control_command.get('throttle', 0.0) * 0.5
             elif lateral_error_abs > recovery_lateral_error:
                 # Recovery mode: Error exceeds 1.0m - initiate recovery
-                logger.info(f"RECOVERY MODE: Lateral error {lateral_error_abs:.3f}m exceeds {recovery_lateral_error}m - initiating recovery")
-                # Slightly increase steering for recovery
-                # CRITICAL FIX: Use config max_steering instead of hardcoded 0.5
-                max_steering = self.controller.lateral_controller.max_steering
-                steering_original = control_command.get('steering', 0.0)
-                control_command['steering'] = np.clip(steering_original * 1.2, -max_steering, max_steering)  # 20% more aggressive
-                # Reduce throttle slightly
-                control_command['throttle'] = control_command.get('throttle', 0.0) * 0.8
+                # Skip for MPC: multiplying output corrupts MPC's last_delta_norm state feedback
+                if mpc_active:
+                    logger.info(f"[Frame {self.frame_count}] RECOVERY MODE suppressed (MPC active): lateral_error={lateral_error_abs:.3f}m")
+                    mpc_recovery_mode_suppressed = True
+                else:
+                    logger.info(f"RECOVERY MODE: Lateral error {lateral_error_abs:.3f}m exceeds {recovery_lateral_error}m - initiating recovery")
+                    max_steering = self.controller.lateral_controller.max_steering
+                    steering_original = control_command.get('steering', 0.0)
+                    control_command['steering'] = np.clip(steering_original * 1.2, -max_steering, max_steering)  # 20% more aggressive
+                    control_command['throttle'] = control_command.get('throttle', 0.0) * 0.8
 
+        control_command['mpc_recovery_mode_suppressed'] = mpc_recovery_mode_suppressed
         return control_command
 
     def _pf_send_control(
@@ -7357,6 +7372,17 @@ class AVStack:
             mpc_kappa_preview_range=float(control_command.get('mpc_kappa_preview_range', 0.0)),
             regime=int(control_command.get('regime', 0)),
             regime_blend_weight=float(control_command.get('regime_blend_weight', 1.0)),
+            stanley_active=float(control_command.get('stanley_active', 0.0)),
+            stanley_heading_term=float(control_command.get('stanley_heading_term', 0.0)),
+            stanley_crosstrack_term=float(control_command.get('stanley_crosstrack_term', 0.0)),
+            mpc_recovery_mode_suppressed=bool(control_command.get('mpc_recovery_mode_suppressed', False)),
+            mpc_last_steering_pre_modify=float(control_command.get('mpc_last_steering_pre_modify', 0.0)),
+            mpc_last_steering_actual=float(control_command.get('mpc_last_steering_actual', 0.0)),
+            mpc_rate_limiter_active=bool(control_command.get('mpc_rate_limiter_active', False)),
+            mpc_smith_raw_e_lat=float(control_command.get('mpc_smith_raw_e_lat', 0.0)),
+            mpc_smith_e_lat_predicted=float(control_command.get('mpc_smith_e_lat_predicted', 0.0)),
+            mpc_smith_e_heading_predicted=float(control_command.get('mpc_smith_e_heading_predicted', 0.0)),
+            mpc_delay_frames_used=int(control_command.get('mpc_delay_frames_used', 0)),
         )
 
         # Create trajectory output

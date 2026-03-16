@@ -131,7 +131,7 @@ Per-frame data flow: Unity → bridge → perception → EMA gating (av_stack.py
 
 ## Testing Protocol — Comfort Gate Regression
 
-`tests/test_comfort_gate_replay.py` — 19 tests, two tiers, no Unity required.
+`tests/test_comfort_gate_replay.py` — 32 tests, two tiers, no Unity required.
 
 **Run Tier 1 (synthetic, ~0.3 s) when you touch:**
 - `tools/drive_summary_core.py` — metric computation
@@ -154,7 +154,48 @@ pytest tests/test_comfort_gate_replay.py -v
 **To register new golden recordings** after a milestone validation:
 1. Update `tests/fixtures/golden_recordings.json` with the new filenames and scores
 2. Update `BASELINE_SCORES` in `tests/conftest.py`
-3. Re-run the full suite to confirm green
+3. Update `tests/fixtures/scoring_baselines.json` with new metric values
+4. Re-run the full suite to confirm green
+
+---
+
+## Testing Protocol — Scoring Regression (T-033)
+
+`tests/test_scoring_regression.py` — 25 tests (5 per track), no Unity required.
+Catches silent scoring drift from changes to the scoring pipeline or config.
+
+**Run when you touch:**
+- `tools/drive_summary_core.py` — scoring formula, layer weights, penalty computation
+- `config/av_stack_config.yaml` or any `config/mpc_*.yaml` — tuning parameters
+- `control/pid_controller.py` or `trajectory/inference.py` — control/trajectory logic
+- `tests/conftest.py` — baseline scores or tolerances
+
+```bash
+pytest tests/test_scoring_regression.py -v
+```
+
+**What it checks (per golden recording):**
+1. Overall score within `±SCORE_TOLERANCES[track]` of frozen baseline
+2. Every layer score (Perception, Trajectory, Control) ≥ 60 (not red)
+3. Trajectory layer ≥ 80 (not yellow — prevents cap regressions)
+4. Comfort gates: accel P95 ≤ 3.0, jerk P95 ≤ 6.0, e-stops = 0
+5. Key metric deltas within frozen tolerances (adj RMSE ±0.03, accel ±0.5, jerk ±1.0)
+
+**Baselines file:** `tests/fixtures/scoring_baselines.json` — frozen per-track metrics.
+**Report artifact:** `data/reports/gates/latest_scoring_regression.json` — written after test run.
+
+**To update baselines** after a scoring formula change:
+1. Run `pytest tests/test_scoring_regression.py -v` — note actual values in output
+2. Update `tests/fixtures/scoring_baselines.json` with new metric values
+3. Update `BASELINE_SCORES` in `tests/conftest.py` if overall scores changed
+4. Re-run to confirm green
+
+**Config change detector** (informational, runs in CI on PRs):
+```bash
+python tools/ci/check_config_regression.py --base origin/main
+python tools/ci/check_config_regression.py --base HEAD~1  # local check
+python tools/ci/check_config_regression.py --critical-only  # scoring-critical params only
+```
 
 ---
 

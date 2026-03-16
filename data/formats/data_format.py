@@ -499,8 +499,19 @@ class ControlCommand:
     mpc_using_ground_truth: float = 0.0
     mpc_kappa_preview_used: bool = False
     mpc_kappa_preview_range: float = 0.0
-    regime: int = 0                    # 0=PP, 1=LMPC, 2=NMPC
+    regime: int = 0                    # -1=Stanley, 0=PP, 1=LMPC, 2=NMPC
     regime_blend_weight: float = 1.0
+    stanley_active: float = 0.0        # 1.0 when Stanley formula applied this frame
+    stanley_heading_term: float = 0.0  # Heading error component of Stanley steering (rad)
+    stanley_crosstrack_term: float = 0.0  # Cross-track arctan component of Stanley steering (rad)
+    mpc_recovery_mode_suppressed: bool = False  # True when recovery ×1.2/×1.5 was skipped because MPC is active
+    mpc_last_steering_pre_modify: float = 0.0   # Steering before orchestrator post-hoc modifications
+    mpc_last_steering_actual: float = 0.0       # Actual steering sent (after all modifications)
+    mpc_rate_limiter_active: bool = False       # True when MPC rate limiter clipped a frame-to-frame jump
+    mpc_smith_raw_e_lat: float = 0.0           # Measured lateral error before Smith predictor
+    mpc_smith_e_lat_predicted: float = 0.0     # Smith-predicted e_lat fed to MPC
+    mpc_smith_e_heading_predicted: float = 0.0 # Smith-predicted e_heading fed to MPC
+    mpc_delay_frames_used: int = 0             # Number of delay frames used in Smith predictor
 
 
 @dataclass

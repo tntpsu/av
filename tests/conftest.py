@@ -47,20 +47,30 @@ COMFORT_GATES: dict[str, float] = {
     "steering_jerk_max_max":   20.0,  # norm/s²    — gap-filtered steering jerk max
 }
 
-# S1-M39 documented baseline scores — used in golden recording regression tests
+# Baseline scores — curvature-adjusted scoring (2026-03-15).
+# hairpin_15 replaced with Stanley k=3.0 golden (was PP 79.0).
 BASELINE_SCORES: dict[str, float] = {
-    "s_loop":     95.6,
-    "highway_65": 96.2,
-    "hairpin_15": 79.0,   # PP ceiling on R15/R20 geometry — gate is ±4pts (see SCORE_TOLERANCES)
+    "s_loop":           96.7,   # +1.1 from curvature adjustment on R40 turns
+    "highway_65":       96.2,   # unchanged — no curves
+    "hairpin_15":       91.6,   # Stanley k=3.0 (was PP 79.0). Trajectory green (83.4) with curv-adj.
+    "sweeping_highway": 93.6,   # +0.1 from curvature adjustment
+    "mixed_radius":     94.1,   # +0.2 from curvature adjustment
 }
 
 # Per-track score tolerances (default 2.0). Wider for tracks with structural variance.
 SCORE_TOLERANCES: dict[str, float] = {
-    "s_loop":     2.0,
-    "highway_65": 2.0,
-    "hairpin_15": 4.0,   # bimodal variance (59 or 79) from consecutive arcs
+    "s_loop":           2.0,
+    "highway_65":       2.0,
+    "hairpin_15":       3.0,   # Stanley k=3.0 is consistent (91.5-91.6 across 3 runs)
+    "sweeping_highway": 3.0,   # modest variance from bias estimator convergence timing
+    "mixed_radius":     3.0,   # PP↔MPC hybrid; MPC-active runs within 0.3pts
 }
 SCORE_TOLERANCE = 2.0  # Default — used when track not in SCORE_TOLERANCES.
+
+# Per-track lateral P95 overrides REMOVED (2026-03-15).
+# Replaced by curvature-adjusted scoring in drive_summary_core.py:
+#   adjusted_error = max(0, |e_lat| - 3.0*|kappa|)
+# Single 0.40m gate now applies universally to all tracks.
 
 # ── Golden recording helpers ──────────────────────────────────────────────────
 
@@ -239,6 +249,30 @@ def golden_highway_65():
     return path
 
 
+@pytest.fixture
+def golden_hairpin_15():
+    """Path to the hairpin_15 validation recording, or skip if absent."""
+    path = golden_recording_path("hairpin_15")
+    if path is None:
+        pytest.skip(
+            "hairpin_15 golden recording not registered or not on disk — "
+            "see tests/fixtures/golden_recordings.json"
+        )
+    return path
+
+
+@pytest.fixture
+def golden_sweeping_highway():
+    """Path to the sweeping_highway validation recording, or skip if absent."""
+    path = golden_recording_path("sweeping_highway")
+    if path is None:
+        pytest.skip(
+            "sweeping_highway golden recording not registered or not on disk — "
+            "see tests/fixtures/golden_recordings.json"
+        )
+    return path
+
+
 # ── Auto gate-bundle writer ───────────────────────────────────────────────────
 # When the full comfort-gate suite passes (including at least one golden
 # recording test), a gate bundle is written automatically to
@@ -289,6 +323,36 @@ def _sha256_file(p: Path) -> str:
     return hashlib.sha256(p.read_bytes()).hexdigest() if p.exists() else "missing"
 
 
+def _load_scoring_regression_report() -> dict | None:
+    """Load the latest scoring regression report if it exists."""
+    report_path = _GATES_REPORTS_DIR / "latest_scoring_regression.json"
+    if not report_path.exists():
+        return None
+    try:
+        return json.loads(report_path.read_text())
+    except Exception:
+        return None
+
+
+def _build_regression_deltas(regression_report: dict) -> dict:
+    """Build a regression_deltas section from the scoring regression report."""
+    if not regression_report:
+        return {}
+    deltas = {}
+    for track_id, data in regression_report.get("tracks", {}).items():
+        deltas[track_id] = {
+            "overall_score": data.get("overall_score"),
+            "trajectory_score": data.get("trajectory_score"),
+            "lateral_error_adj_rmse": data.get("lateral_error_adj_rmse"),
+            "accel_p95_filtered": data.get("accel_p95_filtered"),
+            "commanded_jerk_p95": data.get("commanded_jerk_p95"),
+            "deltas": data.get("deltas", {}),
+            "statuses": data.get("statuses", {}),
+            "worst_status": data.get("worst_status", "info"),
+        }
+    return deltas
+
+
 def _write_comfort_gate_bundle(results: dict[str, str]) -> None:
     """
     Build and write a PhilViz-compatible gate bundle from pytest comfort-gate results.
@@ -335,6 +399,10 @@ def _write_comfort_gate_bundle(results: dict[str, str]) -> None:
     ).hexdigest()
     generated_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
+    # Load scoring regression report for delta inclusion
+    regression_report = _load_scoring_regression_report()
+    regression_deltas = _build_regression_deltas(regression_report)
+
     gate_report = {
         "schema_version": _BUNDLE_SCHEMA_V,
         "generated_at_utc": generated_at,
@@ -354,6 +422,7 @@ def _write_comfort_gate_bundle(results: dict[str, str]) -> None:
             "track_metrics": None,
             "baseline_track_metrics": None,
         },
+        "regression_deltas": regression_deltas if regression_deltas else None,
         "run_counts": {track_id: 1 for track_id in tracks},
     }
 
@@ -372,6 +441,7 @@ def _write_comfort_gate_bundle(results: dict[str, str]) -> None:
         "recording_ids": recording_ids,
         "pass_fail": pass_fail,
         "regression_budget": gate_report["regression_budget"],
+        "regression_deltas": regression_deltas if regression_deltas else None,
         "decision": decision,
         "rationale": checks,
         "next_actions": next_actions,

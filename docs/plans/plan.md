@@ -2121,7 +2121,7 @@ When tuning MPC weights, change ONE at a time and run 5x A/B batch.
 # PHASE 2.8 — MPC Pipeline Integration for Mixed-Speed Routes
 
 **Status:** Plan only. Not started.
-**Entry criteria:** Phase 2.7b validated (highway MPC works), PP turn-entry fixes landed (fixturn.md / turnin-owner-plan.md workstreams C1/C2 complete).
+**Entry criteria:** Phase 2.7b validated (highway MPC works), PP turn-entry Workstream C1 complete. Workstream C2 (PP floor rescue) is DEFERRED — s_loop scores 97.1/100 and all comfort gates pass; C2 will only be revisited if mixed_radius/sweeping_highway exhibit actual gate failures. C2 is NOT a blocker for Phase 2.8.
 **Goal:** Make MPC a first-class citizen in the steering pipeline so it can eventually operate at ALL speeds, enabling a single controller on mixed-speed routes (highway → exit ramp → local road → back to highway).
 
 ---
@@ -2389,3 +2389,259 @@ Do NOT lower `pp_max_speed_mps` below 10.0 until ALL of the following are true:
 5. A mixed-speed route exists for transition testing
 
 Until then, PP owns low speed (< 10 m/s) and MPC owns highway (≥ 10 m/s).
+
+---
+
+## Phase 2.8 New HDF5 Fields
+
+All new fields follow the **6-location registration rule**: (1) `create_dataset` in `recorder.py`, (2) list init, (3) per-frame append, (4) resize loop, (5) write, (6) `ControlCommandData` construction in `orchestrator.py`.
+
+### Fields added in 2.8.1 (recovery mode suppression)
+
+| HDF5 field | Type | Source | Meaning |
+|---|---|---|---|
+| `mpc_recovery_mode_suppressed` | float (0/1) | `_pf_apply_safety` | 1 when recovery mode was skipped because regime=MPC |
+| `mpc_regime_active` | float (0/1) | `_pf_apply_safety` | 1 when `regime >= LINEAR_MPC` at safety-apply time |
+
+### Fields added in 2.8.2 (steering feedback fix)
+
+| HDF5 field | Type | Source | Meaning |
+|---|---|---|---|
+| `mpc_last_steering_pre_modify` | float | pid_controller, before orchestrator modifications | `_last_steering_norm` as MPC saw it (pre-fix baseline) |
+| `mpc_last_steering_actual` | float | orchestrator `_pf_send_control`, post all modifications | Actual steering sent to Unity — what MPC should use as previous-frame value |
+| `mpc_steering_feedback_error` | float | derived | `mpc_last_steering_actual - mpc_last_steering_pre_modify` — should be near zero after 2.8.2 is applied |
+
+### Fields added in 2.8.3 (rate limiter)
+
+| HDF5 field | Type | Source | Meaning |
+|---|---|---|---|
+| `mpc_rate_limiter_active` | float (0/1) | pid_controller, MPC output section | 1 when the new MPC rate limiter clamped the output |
+| `mpc_rate_limiter_delta_clipped` | float | pid_controller | Magnitude of clipping applied (0 when inactive) |
+
+### Fields added in 2.8.4 (Smith predictor)
+
+| HDF5 field | Type | Source | Meaning |
+|---|---|---|---|
+| `mpc_smith_e_lat_predicted` | float | mpc_controller, Smith predictor | Predicted lateral error after forward simulation through delay buffer |
+| `mpc_smith_e_heading_predicted` | float | mpc_controller | Predicted heading error after delay compensation |
+| `mpc_smith_raw_e_lat` | float | mpc_controller | Uncompensated lateral error (for A/B comparison) |
+| `mpc_delay_frames_used` | float | mpc_controller | Actual delay buffer depth used this frame |
+
+---
+
+## Phase 2.8 A/B Batch Specifications
+
+Each sub-phase must be validated with `run_ab_batch.py` before proceeding.
+
+### 2.8.5 — c_lat validation (no code change, highway only)
+
+```bash
+# A = current mpc_highway.yaml  (c_lat=0.0 already in codebase)
+# B = mpc_highway.yaml with c_lat restored to old formula (for comparison)
+python tools/analyze/run_ab_batch.py \
+  --config-a config/mpc_highway.yaml \
+  --config-b config/mpc_highway_clat_baseline.yaml \
+  --track-yaml tracks/highway_65.yml \
+  --runs 3
+```
+Gate: A score ≥ 97.0, no e-stops, RMSE ≤ 0.10m.
+
+### 2.8.1 — Recovery mode suppression (highway)
+
+```bash
+# A = mpc_highway.yaml (with recovery mode skipped for MPC)
+# B = mpc_highway.yaml with recovery mode re-enabled for MPC (temporary override)
+python tools/analyze/run_ab_batch.py \
+  --config-a config/mpc_highway.yaml \
+  --config-b config/mpc_highway_recovery_on.yaml \
+  --track-yaml tracks/highway_65.yml \
+  --runs 5
+```
+Gate: A score ≥ 97.0, `mpc_recovery_mode_suppressed` rate near 0 on A (few high-error frames), non-regression vs 2.7b baseline 98.1.
+
+### 2.8.2 + 2.8.3 — Steering feedback + rate limiter (highway)
+
+```bash
+python tools/analyze/run_ab_batch.py \
+  --config-a config/mpc_highway.yaml \
+  --config-b config/mpc_highway.yaml \  # same config, compare before/after code change
+  --track-yaml tracks/highway_65.yml \
+  --runs 5
+```
+Gate: `mpc_steering_feedback_error` P95 < 0.01 (near zero after fix), `mpc_rate_limiter_active` rate < 5% (limiter is a safety net, not routine), no e-stops.
+
+### 2.8.4 — Smith predictor (highway first, then s_loop at pp_max_speed_mps=2.0)
+
+```bash
+# Highway: 3 runs with Smith predictor ON vs 3 runs with mpc_delay_frames=0 (off)
+python tools/analyze/run_ab_batch.py \
+  --config-a config/mpc_highway.yaml \          # Smith on, mpc_delay_frames=4
+  --config-b config/mpc_highway_nodelay.yaml \  # mpc_delay_frames=0
+  --track-yaml tracks/highway_65.yml \
+  --runs 3
+```
+Gate: A RMSE ≤ B RMSE (predictor must not regress), no e-stops, score ≥ 97.0.
+
+### 2.8.6 — Mixed-speed validation
+
+```bash
+python tools/analyze/run_ab_batch.py \
+  --config-a config/mpc_mixed.yaml \
+  --track-yaml tracks/mixed_radius.yml \
+  --runs 5
+```
+Gate: No e-stops, no regime-transition steering discontinuities (|Δsteering at transition| < 0.05), RMSE ≤ 0.30m throughout, score ≥ 90.0.
+
+---
+
+## Phase 2.8 Analysis Scripts
+
+### `tools/analyze/mpc_pipeline_analysis.py` (new, to be written in 2.8.1)
+
+Loads any HDF5 recording and outputs a per-regime breakdown of pipeline health:
+
+```
+MPC PIPELINE ANALYSIS — <recording_name>
+==========================================
+Regime distribution:
+  PP  frames: 142/180 (78.9%)
+  MPC frames:  38/180 (21.1%)
+
+2.8.1 — Recovery mode:
+  MPC frames with recovery suppressed:  2 / 38 (5.3%)
+  MPC frames with recovery triggered:   0 / 38 (0.0%)  ← would have fired without fix
+  PP frames with recovery triggered:    3 / 142 (2.1%)
+
+2.8.2 — Steering feedback error:
+  mpc_steering_feedback_error P50: 0.001   P95: 0.003   MAX: 0.011
+  [PASS — near zero]
+
+2.8.3 — Rate limiter:
+  MPC rate limiter activations: 1 / 38 (2.6%)
+  Max delta clipped: 0.04 norm
+
+2.8.4 — Smith predictor:
+  Predicted vs raw e_lat delta P50: 0.003m   P95: 0.012m
+  mpc_delay_frames_used P50: 4   (expected: 4)
+
+Regime transitions: 3 PP→MPC, 3 MPC→PP
+  Max |Δsteering| at transition: 0.023 norm  [PASS < 0.05]
+  `_last_steering_norm` continuity error P50: 0.002  [PASS]
+```
+
+Run after any Phase 2.8 live validation run:
+```bash
+python tools/analyze/mpc_pipeline_analysis.py --latest
+python tools/analyze/mpc_pipeline_analysis.py --file data/recordings/<name>.h5
+```
+
+---
+
+## Phase 2.8 PhilViz Changes
+
+### New panel: "MPC Pipeline" tab
+
+**File:** `tools/debug_visualizer/backend/mpc_pipeline.py`
+**Route:** `/api/analysis/mpc-pipeline`
+
+#### Card 1 — Regime Health
+
+```
+Regime distribution:  PP 78.9%  |  MPC 21.1%  |  BLEND 0.0%
+MPC activation speed: 10.2 m/s median  (threshold: 10.0 m/s)
+Regime transitions:   3 PP→MPC   3 MPC→PP   [color: red if >10/min]
+Max |Δsteering| at transition: 0.023  [green < 0.05, red ≥ 0.05]
+```
+
+#### Card 2 — Pipeline Fix Status (per-frame rates for each 2.8.x fix)
+
+```
+                        Rate    Status
+Recovery suppressed:    5.3%   [green — MPC handled its own correction]
+Recovery would-fire:    0.0%   [green — no frames where recovery would have fired]
+Steering feedback err:  ≤0.003  [green < 0.01, red ≥ 0.01]
+Rate limiter active:    2.6%   [green < 5%, yellow 5-15%, red ≥ 15%]
+Smith delay used:       4 fr   [green if matches mpc_delay_frames config]
+```
+
+#### Card 3 — MPC State Quality
+
+```
+                   P50      P95     MAX
+mpc_e_lat          0.005m   0.018m  0.042m
+mpc_e_heading      0.002r   0.007r  0.015r
+mpc_solve_time     1.2ms    2.1ms   4.8ms
+smith_pred_delta   0.003m   0.012m  0.031m   ← Smith predictor correction magnitude
+```
+
+#### Card 4 — Severe MPC Frame Inspector
+
+Table of top-10 MPC frames by |mpc_e_lat|, showing: frame #, e_lat, e_heading, regime, recovery_suppressed, rate_limiter_active, smith_delta. Enables rapid triage of when/why MPC loses tracking.
+
+#### PhilViz integration checklist for 2.8
+
+- [ ] `backend/mpc_pipeline.py` — 4-card structure
+- [ ] `server.py` — register `/api/analysis/mpc-pipeline` route
+- [ ] `index.html` — add "MPC Pipeline" tab to nav bar
+- [ ] `visualizer.js` — fetch + render MPC pipeline panel
+- [ ] Restart PhilViz after changes
+
+---
+
+## Phase 2.8 Triage Guide
+
+Use this when a 2.8.x step produces unexpected results.
+
+### Triage: 2.8.1 (recovery mode suppression)
+
+| Symptom | What to look for | Likely cause |
+|---|---|---|
+| MPC RMSE worse after fix | `mpc_e_lat` P95 rising despite suppression | MPC q_lat too low — needs re-tuning without recovery mode as crutch |
+| E-stop on MPC section | `mpc_e_lat` > 2.0m before e-stop, recovery not firing | MPC diverged without safety net — may need to keep PP recovery mode for large errors only (|lat_err| > 2.0m threshold) |
+| Recovery still firing in MPC frames | `mpc_recovery_mode_suppressed` = 0 on MPC frames | Code change not applied correctly — check regime detection in `_pf_apply_safety` |
+
+### Triage: 2.8.2 (steering feedback)
+
+| Symptom | What to look for | Likely cause |
+|---|---|---|
+| `mpc_steering_feedback_error` still large | P95 > 0.05 after fix | `update_last_steering` not being called from correct location in `_pf_send_control` — call must be AFTER all post-hoc modifications |
+| Oscillation appears after fix | `mpc_e_lat` oscillating ~3-5 frame period | MPC is now reacting to its own accurate history — may expose a model gain issue requiring q_lat re-tuning |
+
+### Triage: 2.8.3 (rate limiter)
+
+| Symptom | What to look for | Likely cause |
+|---|---|---|
+| Rate limiter active > 15% | `mpc_rate_limiter_active` rate high | Limiter too tight — increase `mpc_max_steering_rate_per_frame`; should be a safety net not a shaping filter |
+| Steering overshoot unchanged | Limiter activations = 0 | Limiter threshold too loose — reduce `mpc_max_steering_rate_per_frame` |
+
+### Triage: 2.8.4 (Smith predictor)
+
+| Symptom | What to look for | Likely cause |
+|---|---|---|
+| RMSE worse with Smith ON | `mpc_smith_e_lat_predicted` diverging from true e_lat | Delay estimate wrong — try `mpc_delay_frames: 2` (reduce) |
+| E-stop at 50-60s | Oscillation building slowly over run | Over-compensation — delay estimate too large. Reduce `mpc_delay_frames` |
+| Smith correction always near 0 | `smith_pred_delta` P95 < 0.001 | Bicycle model doesn't match actual dynamics well enough for forward sim to matter — may be OK to skip 2.8.4 if 2.8.1-2.8.3 already hit targets |
+
+### Triage: 2.8.6 (regime transitions)
+
+| Symptom | What to look for | Likely cause |
+|---|---|---|
+| Steering jerk at PP→MPC | Large `mpc_steering_feedback_error` at transition frame | `_last_steering_norm` not seeded from PP's last sent value on MPC activation — add initialization in regime selector |
+| MPC can't re-acquire after PP section | `mpc_e_lat` grows monotonically after PP→MPC | Smith predictor using stale delay buffer from before PP section — flush buffer on regime transition |
+| Score much lower on mixed track than highway | Per-section score breakdown in PhilViz | Check if PP sections regress (MPC changes affecting PP path) vs MPC sections regress |
+
+---
+
+## Phase 2.8 Scoring / Comfort Gate Impact
+
+No new comfort gate thresholds are required. Phase 2.8 is a pipeline robustness fix, not a performance target change. The existing gates apply:
+
+| Gate | s_loop target | highway target |
+|---|---|---|
+| Lateral RMSE | ≤ 0.40m (PP sections only) | ≤ 0.15m (MPC sections) |
+| Accel P95 | ≤ 3.0 m/s² | ≤ 3.0 m/s² |
+| Jerk P95 | ≤ 6.0 m/s³ | ≤ 6.0 m/s³ |
+| Centered frames | ≥ 70% | ≥ 70% |
+| Emergency stops | 0 | 0 |
+
+**New derived metric (not a gate, diagnostic only):** `regime_transition_steering_discontinuity_max` — log this per run; target < 0.05 norm. If it exceeds 0.05, investigate before promoting config.

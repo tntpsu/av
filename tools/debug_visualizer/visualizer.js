@@ -1950,13 +1950,17 @@ class Visualizer {
                 'mpc': 'MPC (Linear)',
                 'hybrid_pp_mpc': 'Hybrid PP + MPC',
                 'stanley': 'Stanley',
+                'hybrid_stanley_pp': 'Hybrid Stanley + PP',
+                'hybrid_stanley_pp_mpc': 'Hybrid Stanley + PP + MPC',
                 'pid': 'PID',
             };
             const modeColors = {
-                'pure_pursuit': '#4caf50',
-                'mpc': '#4caf50',
-                'hybrid_pp_mpc': '#4caf50',
-                'stanley': '#4a90e2',
+                'pure_pursuit': '#4a90e2',
+                'mpc': '#9c27b0',
+                'hybrid_pp_mpc': '#9c27b0',
+                'stanley': '#4caf50',
+                'hybrid_stanley_pp': '#4caf50',
+                'hybrid_stanley_pp_mpc': '#9c27b0',
                 'pid': '#4a90e2',
             };
             const modeLabel = modeLabels[controlMode] || controlMode;
@@ -1967,6 +1971,10 @@ class Visualizer {
             html += `<tr><td>Active Mode:</td><td style="text-align: right; color: ${modeColor}; font-weight: bold;">${modeLabel}</td></tr>`;
             if (summary.regime_summary) {
                 const rs = summary.regime_summary;
+                const stanleyFrames = rs.stanley_frames || 0;
+                if (stanleyFrames > 0) {
+                    html += `<tr><td style="color:#4caf50;">Stanley Frames:</td><td style="text-align: right; color:#4caf50;">${stanleyFrames} (${((stanleyFrames / (rs.total_frames || 1)) * 100).toFixed(1)}%)</td></tr>`;
+                }
                 html += `<tr><td>PP Frames / MPC Frames:</td><td style="text-align: right;">${rs.pp_frames} / ${rs.mpc_frames} (${(rs.mpc_fraction * 100).toFixed(1)}% MPC)</td></tr>`;
                 if (rs.blend_frames > 0) {
                     html += `<tr><td>Blend Transition Frames:</td><td style="text-align: right;">${rs.blend_frames}</td></tr>`;
@@ -2963,6 +2971,54 @@ class Visualizer {
                 html += '<tr><td colspan="2" style="text-align:center; color:#888;">No checks found in bundle.</td></tr>';
             }
             html += '</table>';
+
+            // ── Scoring Regression Deltas ──────────────────────────────────
+            const regressionDeltas = report?.regression_deltas || bundle?.scoring_regression?.tracks || null;
+            if (regressionDeltas && Object.keys(regressionDeltas).length > 0) {
+                html += '<h4 style="color:#9bdcff; margin: 0.9rem 0 0.5rem;">Scoring Regression</h4>';
+                html += '<div style="overflow-x: auto;">';
+                html += '<table class="data-table">';
+                html += '<thead><tr><th>Track</th><th>Score</th><th style="width:60px;">&#916;</th><th>Traj</th><th style="width:60px;">&#916;</th><th>Adj RMSE</th><th style="width:60px;">&#916;</th><th>Status</th></tr></thead><tbody>';
+                const statusColor = (s) => s === 'green' ? '#4caf50' : s === 'yellow' ? '#ffc107' : s === 'red' ? '#ff6b6b' : '#bdbdbd';
+                const fmtDelta = (v) => v == null ? '-' : (v >= 0 ? '+' : '') + v.toFixed(2);
+                Object.entries(regressionDeltas).forEach(([track, data]) => {
+                    const d = data.deltas || {};
+                    const worst = data.worst_status || 'info';
+                    html += '<tr>';
+                    html += `<td>${this.escapeHtml(track)}</td>`;
+                    html += `<td>${data.overall_score != null ? data.overall_score.toFixed(1) : '-'}</td>`;
+                    html += `<td style="color:${statusColor(data.statuses?.overall_score || 'info')}">${fmtDelta(d.overall_score)}</td>`;
+                    html += `<td>${data.trajectory_score != null ? data.trajectory_score.toFixed(1) : '-'}</td>`;
+                    html += `<td style="color:${statusColor(data.statuses?.lateral_error_adj_rmse || 'info')}">${fmtDelta(d.lateral_error_adj_rmse)}</td>`;
+                    html += `<td>${data.lateral_error_adj_rmse != null ? data.lateral_error_adj_rmse.toFixed(3) : '-'}</td>`;
+                    html += `<td style="color:${statusColor(data.statuses?.lateral_error_adj_rmse || 'info')}">${fmtDelta(d.lateral_error_adj_rmse)}</td>`;
+                    html += `<td style="color:${statusColor(worst)}; font-weight:bold;">${this.escapeHtml(worst.toUpperCase())}</td>`;
+                    html += '</tr>';
+                });
+                html += '</tbody></table>';
+                html += '</div>';
+                // Show regression report timestamp if available
+                const regReport = bundle?.scoring_regression;
+                if (regReport?.generated_at_utc) {
+                    html += `<div style="color:#666; font-size:0.85em; margin-top:0.3rem;">Regression report: ${this.escapeHtml(regReport.generated_at_utc)}</div>`;
+                }
+            }
+
+            // ── Score Trend Sparkline ─────────────────────────────────────
+            if (bundles.length > 1) {
+                const recentBundles = bundles.slice(0, Math.min(10, bundles.length));
+                const hasTrend = recentBundles.some(b => b.pass_fail != null);
+                if (hasTrend) {
+                    html += '<h4 style="color:#9bdcff; margin: 0.9rem 0 0.5rem;">Recent Bundle Trend</h4>';
+                    html += '<div style="display:flex; gap:4px; align-items:center; flex-wrap:wrap;">';
+                    recentBundles.reverse().forEach((b) => {
+                        const color = b.pass_fail === true ? '#4caf50' : b.pass_fail === false ? '#ff6b6b' : '#555';
+                        const ts = (b.generated_at_utc || b.bundle_id || '').slice(0, 15);
+                        html += `<div title="${this.escapeHtml(b.bundle_id)}" style="width:18px;height:18px;border-radius:3px;background:${color};cursor:default;" data-tooltip="${this.escapeHtml(ts)}"></div>`;
+                    });
+                    html += '</div>';
+                }
+            }
 
             html += '<h4 style="color:#9bdcff; margin: 0.9rem 0 0.5rem;">Triage Packets</h4>';
             if (triagePackets.length === 0) {
@@ -4568,6 +4624,145 @@ class Visualizer {
         } catch (e) {
             content.innerHTML = `<p style="color:#ff6b6b;">Error: ${this.escapeHtml(e.message)}</p>`;
         }
+    }
+
+    // ── MPC Pipeline Tab ────────────────────────────────────────────────────
+
+    async loadMpcPipeline() {
+        if (!this.currentRecording) return;
+        const content = document.getElementById('mpc-pipeline-content');
+        if (!content) return;
+        content.innerHTML = '<p style="color:#888;text-align:center;padding:2rem;">Loading MPC pipeline diagnostics…</p>';
+        try {
+            const response = await fetch(`/api/recording/${this.currentRecording}/mpc-pipeline`);
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
+            const data = await response.json();
+            if (data.error) {
+                content.innerHTML = `<p style="color:#ff6b6b;padding:1rem;">${this.escapeHtml(data.error)}</p>`;
+                return;
+            }
+            if (!data.has_mpc) {
+                content.innerHTML = '<p style="color:#888;text-align:center;padding:2rem;">PP-only recording — MPC was not active. Switch to an MPC-enabled recording (highway or mixed_radius).</p>';
+                return;
+            }
+            content.innerHTML = this.renderMpcPipelineHtml(data);
+        } catch (e) {
+            content.innerHTML = `<p style="color:#ff6b6b;">Error: ${this.escapeHtml(e.message)}</p>`;
+        }
+    }
+
+    renderMpcPipelineHtml(data) {
+        const { card1, card2, card3, card4 } = data;
+        const pct = v => (v == null ? 'N/A' : (v * 100).toFixed(1) + '%');
+        const fmt = (v, d = 3) => (v == null ? 'N/A' : v.toFixed(d));
+        const gate = (pass, yes = 'PASS', no = 'FAIL') => pass == null ? ''
+            : `<span style="color:${pass ? '#4caf50' : '#f44336'};font-weight:bold;margin-left:0.4rem;">[${pass ? yes : no}]</span>`;
+
+        // Card 1 — Regime Health
+        const c1 = card1;
+        const deltaColor = c1.transition_delta_gate_pass ? '#4caf50' : '#f44336';
+        let transTable = '';
+        if (c1.transitions && c1.transitions.length) {
+            transTable = `<table class="data-table" style="margin-top:0.5rem;font-size:0.8rem;">
+                <tr><th>Frame</th><th>Direction</th><th>|ΔSteering|</th><th>Blend Weight</th></tr>
+                ${c1.transitions.slice(0, 10).map(t =>
+                    `<tr><td>${t.frame}</td><td>${this.escapeHtml(t.direction)}</td>
+                     <td style="color:${t.delta_steering > 0.05 ? '#f44336' : '#4caf50'}">${fmt(t.delta_steering, 4)}</td>
+                     <td>${fmt(t.blend_weight, 3)}</td></tr>`).join('')}
+                </table>`;
+        }
+
+        const card1Html = `
+            <div style="background:#2a2a2a;border-radius:8px;padding:1rem;margin-bottom:1rem;">
+                <h4 style="margin:0 0 0.75rem;color:#e0e0e0;">Card 1 — Regime Health</h4>
+                <table class="data-table">
+                    <tr><td>PP frames</td><td>${c1.pp_frames} / ${c1.total_frames} (${pct(c1.pp_rate)})</td></tr>
+                    <tr><td>MPC frames</td><td>${c1.mpc_frames} / ${c1.total_frames} (${pct(c1.mpc_rate)})
+                        ${c1.blend_frames ? `<small style="color:#888"> [${c1.blend_frames} ramping]</small>` : ''}</td></tr>
+                    <tr><td>PP→MPC transitions</td><td>${c1.pp_to_mpc_count}</td></tr>
+                    <tr><td>MPC→PP transitions</td><td>${c1.mpc_to_pp_count}</td></tr>
+                    <tr><td>Max |ΔSteering| at transition</td>
+                        <td style="color:${deltaColor}">${fmt(c1.max_steering_delta_at_transition, 4)}
+                        ${gate(c1.transition_delta_gate_pass)}</td></tr>
+                    <tr><td>MPC activation speed (P50 / P95)</td>
+                        <td>${fmt(c1.mpc_activation_speed_median, 1)} m/s / ${fmt(c1.mpc_activation_speed_p95, 1)} m/s</td></tr>
+                </table>
+                ${transTable}
+            </div>`;
+
+        // Card 2 — Pipeline Fix Status
+        const c2 = card2 || {};
+        const rlColor = c2.rate_limiter_gate === 'green' ? '#4caf50' : c2.rate_limiter_gate === 'yellow' ? '#ff9800' : '#f44336';
+        const card2Html = `
+            <div style="background:#2a2a2a;border-radius:8px;padding:1rem;margin-bottom:1rem;">
+                <h4 style="margin:0 0 0.75rem;color:#e0e0e0;">Card 2 — Pipeline Fix Status (Phase 2.8)</h4>
+                <table class="data-table">
+                    <tr><td><b>2.8.1</b> Recovery suppressed on MPC frames</td>
+                        <td>${c2.recovery_suppressed_n != null ? c2.recovery_suppressed_n : 'N/A'} frames (${pct(c2.recovery_suppressed_rate)})</td></tr>
+                    <tr><td><b>2.8.2</b> Steering feedback error P50 / P95 / MAX</td>
+                        <td>${fmt(c2.feedback_error_p50)} / ${fmt(c2.feedback_error_p95)} / ${fmt(c2.feedback_error_max)}
+                        ${gate(c2.feedback_error_gate_pass)}</td></tr>
+                    <tr><td><b>2.8.3</b> Rate limiter activations</td>
+                        <td style="color:${rlColor}">
+                            ${c2.rate_limiter_activations != null ? c2.rate_limiter_activations : 'N/A'} frames (${pct(c2.rate_limiter_rate)})
+                            [${c2.rate_limiter_gate || 'N/A'}]</td></tr>
+                    <tr><td><b>2.8.4</b> Smith correction |pred−raw| P50 / P95</td>
+                        <td>${fmt(c2.smith_delta_p50)}m / ${fmt(c2.smith_delta_p95)}m</td></tr>
+                    <tr><td><b>2.8.4</b> Delay frames used P50</td>
+                        <td>${c2.smith_delay_frames_p50 != null ? c2.smith_delay_frames_p50 + ' fr' : 'N/A'}</td></tr>
+                </table>
+            </div>`;
+
+        // Card 3 — MPC State Quality
+        const c3 = card3 || {};
+        const card3Html = `
+            <div style="background:#2a2a2a;border-radius:8px;padding:1rem;margin-bottom:1rem;">
+                <h4 style="margin:0 0 0.75rem;color:#e0e0e0;">Card 3 — MPC State Quality</h4>
+                <table class="data-table">
+                    <tr><th></th><th>P50</th><th>P95</th><th>MAX</th></tr>
+                    <tr><td>mpc_e_lat (m)</td>
+                        <td>${fmt(c3.e_lat_p50)}</td><td>${fmt(c3.e_lat_p95)}</td><td>${fmt(c3.e_lat_max)}</td></tr>
+                    <tr><td>mpc_e_heading (rad)</td>
+                        <td>${fmt(c3.e_heading_p50)}</td><td>${fmt(c3.e_heading_p95)}</td><td>${fmt(c3.e_heading_max)}</td></tr>
+                    <tr><td>solve_time (ms)</td>
+                        <td>${fmt(c3.solve_time_p50, 2)}</td>
+                        <td>${fmt(c3.solve_time_p95, 2)}</td>
+                        <td>${fmt(c3.solve_time_max, 2)} ${gate(c3.solve_time_gate_pass)}</td></tr>
+                    <tr><td>Fallback rate</td><td colspan="3">${pct(c3.fallback_rate)}</td></tr>
+                </table>
+            </div>`;
+
+        // Card 4 — Severe Frame Inspector
+        const c4 = card4 || {};
+        let sfRows = '';
+        if (c4.severe_frames && c4.severe_frames.length) {
+            sfRows = c4.severe_frames.map(sf => {
+                const elColor = Math.abs(sf.e_lat) > 1.0 ? '#f44336' : Math.abs(sf.e_lat) > 0.5 ? '#ff9800' : '#e0e0e0';
+                return `<tr>
+                    <td><a href="#" onclick="window.visualizer.jumpToFrame(${sf.frame});return false;" style="color:#64b5f6;">${sf.frame}</a></td>
+                    <td style="color:${elColor}">${sf.e_lat.toFixed(3)}</td>
+                    <td>${sf.e_heading.toFixed(3)}</td>
+                    <td>${sf.speed.toFixed(1)}</td>
+                    <td>${sf.kappa.toFixed(4)}</td>
+                    <td>${sf.recovery_suppressed == null ? '?' : sf.recovery_suppressed ? '<span style="color:#ff9800">Y</span>' : 'N'}</td>
+                    <td>${sf.rate_limiter_active == null ? '?' : sf.rate_limiter_active ? '<span style="color:#ff9800">Y</span>' : 'N'}</td>
+                    <td>${fmt(sf.smith_delta, 4)}</td>
+                </tr>`;
+            }).join('');
+        } else {
+            sfRows = '<tr><td colspan="8" style="color:#888;text-align:center;">No MPC frames</td></tr>';
+        }
+        const card4Html = `
+            <div style="background:#2a2a2a;border-radius:8px;padding:1rem;margin-bottom:1rem;">
+                <h4 style="margin:0 0 0.75rem;color:#e0e0e0;">Card 4 — Top-10 Worst MPC Frames by |mpc_e_lat|</h4>
+                <p style="font-size:0.8rem;color:#888;margin:0 0 0.5rem;">Click frame number to jump to it in the viewer.</p>
+                <table class="data-table" style="font-size:0.8rem;">
+                    <tr><th>Frame</th><th>e_lat (m)</th><th>e_hdg (r)</th><th>spd (m/s)</th><th>kappa</th><th>RecSup</th><th>RtLim</th><th>SmithΔ</th></tr>
+                    ${sfRows}
+                </table>
+            </div>`;
+
+        return `<div style="padding:1rem;">${card1Html}${card2Html}${card3Html}${card4Html}</div>`;
     }
 
     renderTriageHtml(data) {
@@ -9128,6 +9323,8 @@ class Visualizer {
             } else if (tabName === 'chain') {
                 this.loadStaleEvents();
                 this.loadTrajectoryDegradationEvents();
+            } else if (tabName === 'mpc-pipeline') {
+                this.loadMpcPipeline();
             }
         } else if (tabName === 'gates') {
             this.loadGates();
@@ -9799,9 +9996,10 @@ class Visualizer {
                 const isTime = this.chartUsesTime;
 
                 const colors = {
-                    0: 'rgba(74,144,226,0.08)',   // PP — faint blue
-                    1: 'rgba(76,175,80,0.08)',     // LMPC — faint green
-                    2: 'rgba(255,152,0,0.08)',     // NMPC — faint orange
+                    '-1': 'rgba(76,175,80,0.12)',  // Stanley — faint green (precise)
+                    0:    'rgba(74,144,226,0.08)', // PP — faint blue
+                    1:    'rgba(156,39,176,0.08)', // LMPC — faint purple
+                    2:    'rgba(255,152,0,0.08)',  // NMPC — faint orange
                 };
 
                 let current = null;
