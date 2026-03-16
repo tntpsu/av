@@ -919,6 +919,12 @@ class TestIntegrationStability:
         std_middle = np.std(middle_third) if len(middle_third) > 1 else 0.0
         std_last = np.std(last_third) if len(last_third) > 1 else 0.0
         
+        # If the signal is effectively zero throughout, treat it as perfectly stable
+        # rather than manufacturing an infinite/huge ratio from numerical noise.
+        max_std = max(abs(std_first), abs(std_middle), abs(std_last))
+        if max_std < 1e-6:
+            return
+        
         # Stability should not degrade significantly
         if std_first > 0:
             stability_ratio = std_last / std_first
