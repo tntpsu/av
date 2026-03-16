@@ -1,6 +1,6 @@
 # AV Stack — Agent Memory: Tasks
 
-**Last updated:** 2026-03-16
+**Last updated:** 2026-03-16 (T-073, T-074)
 
 ---
 
@@ -31,14 +31,14 @@
 |---|---|---|
 | T-031 | ~~Activate and test MPC controller~~ | ✅ Done — Phase 2 MPC (2.1-2.7b) |
 | T-033 | ~~Automated A/B regression in CI~~ | ✅ Done (2026-03-16) — `test_scoring_regression.py` (25 tests), `check_config_regression.py`, CI workflow, PhilViz regression deltas |
-| T-070 | Delete 4 permanently-skipped obsolete tests | Tests are explicitly marked skip-forever: PID integral tests (PP is active mode, not PID), broken straight-road simulation (always passes x=0.0), simplified Unity heading simulation. Files: `test_constant_steering_on_curves` (×2), `test_control_lateral_error_performance::test_control_lateral_error_straight_road`, `test_heading_effect::test_heading_does_not_accumulate`. |
-| T-071 | Fix 3 recording-dependent skips → pin to golden recordings | Currently skip when latest recording lacks dual-lane frames or camera-height data. Pin to `golden_s_loop` fixture (has both lanes + full geometry). Files: `test_coordinate_conversion_assumptions::test_camera_height_assumption`, `test_coordinate_conversion_assumptions::test_actual_lane_width_from_recorded_data`, `test_trajectory_heading_fix_with_real_data::test_heading_fix_with_real_unity_data`. |
-| T-072 | Fix 2 test logic issues | (1) `test_integration::TestDataFormats::test_reference_point_format` skips because "Trajectory doesn't expose reference point" — likely stale API from before av_stack/ package split; investigate and fix or delete. (2) `test_system_stability::test_pre_deployment_30_seconds` skips on SUCCESS ("PRE-DEPLOYMENT PASS") — inverted logic; should pass not skip when all metrics are within bounds. |
-| T-073 | PhilViz diagnostic consistency pass | `docs/plans/camera-optimization-plan.md §Phases 3–4`. Align triage, layer_health, issues, compare tabs so they all draw from the same `scoring_registry.py` (centralised metric definitions). Extract `scoring_registry.py` first, then rewire each tab. |
-| T-074 | Unity shader pre-warming integration | `docs/plans/camera-optimization-plan.md §Phase 1`. `unity/AVSimulation/Assets/Scripts/ShaderPrewarmer.cs` exists but may not be wired to any scene. Wire to startup, verify warmup completes before first frame is sent. |
-| T-075 | Arc-distance curve phase scheduler | `docs/plans/local-arc-reference-plan.md`. Replace empirical `curve_local_phase_time_start_s` threshold with map arc distance. Config-only: set `reference_lookahead_entry_track_name: <track>` + `curve_local_phase_time_start_s: 0.0`. Makes turn-entry trigger geometry-exact, removes speed-dependence of the time gate. |
+| T-070 | ~~Delete 2 remaining permanently-skipped obsolete tests~~ | ✅ Done (2026-03-16) — deleted `test_control_lateral_error_straight_road` and `TestHeadingAccumulation` stub |
+| T-071 | ~~Fix 3 recording-dependent skips → pin to golden recordings~~ | ✅ Done (2026-03-16) — `test_camera_height_assumption` → xfail, `test_actual_lane_width_from_recorded_data` → golden fixture (3-5m range), `test_heading_fix_with_real_unity_data` → golden fixture |
+| T-072 | ~~Fix 2 test logic issues~~ | ✅ Done (2026-03-16) — `test_reference_point_format` uses `get_reference_point()`, `test_pre_deployment_30_seconds` inverted skip removed |
+| T-073 | ~~Centralized scoring registry~~ | ✅ Done (2026-03-16) — `tools/scoring_registry.py` (single source of truth for 25+ thresholds). Consumers: conftest.py, drive_summary_core.py, layer_health.py, issue_detector.py. 27 guard tests. 842 tests passing. |
+| T-074 | ~~Unity shader pre-warming~~ | ✅ Already functional — `ShaderPrewarmer.cs` uses `@RuntimeInitializeOnLoadMethod(BeforeSceneLoad)` which auto-runs without scene attachment. CameraCapture has startup grace period. |
+| T-075 | ~~Arc-distance curve phase scheduler — highway config~~ | ✅ Config done (2026-03-16) — highway overlay uses `reference_lookahead_entry_track_name: highway_65`, legacy time gates removed. Scoring regression passes (10/10). Live Unity A/B deferred. |
 | T-076 | ~~Config Phase 3: auto-derive curvature thresholds~~ | ✅ Done (2026-03-16) — 4th-root scaling from track κ_max, 22 derivable params, highway overlay 90→65 lines, 37 new tests, 811 total passing |
-| T-077 | Cadence investigation — mixed_radius severe_rate | `docs/plans/cadence-performance-plan.md`. `severe_rate=4.23%` (gate: 1.0%) is pinning mixed_radius at 79/100. Instrument frame timing, find CPU spike source (regime transitions? cap-tracking events? Unity geometry load?). Highway runs don't have this issue. |
+| T-077 | ~~Cadence investigation — mixed_radius severe_rate~~ | ✅ Resolved differently (2026-03-13). Root cause was NOT cadence — it was MPC hunting (`q_lat=10.0` on R150/R200). Fix: `q_lat=0.5 + r_steer_rate=2.0`. Score 79→94. Cadence has zero weight in scoring. Instrumentation plan (`cadence-performance-plan.md`) deferred as nice-to-have diagnostics. |
 
 ## Forward Roadmap (see `docs/ROADMAP.md §Capability Roadmap`)
 

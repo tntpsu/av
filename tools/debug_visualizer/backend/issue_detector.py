@@ -12,10 +12,19 @@ Automatically detects problematic frames in recordings:
 import numpy as np
 import h5py
 import json
+import sys
 import time
 from pathlib import Path
 from typing import Dict, List, Optional
 import math
+
+# Add tools/ to path for scoring_registry imports
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from scoring_registry import (  # noqa: E402
+    OUT_OF_LANE_THRESHOLD_M,
+    CATASTROPHIC_ERROR_M,
+    MPC_SOLVE_TIME_BUDGET_MS,
+)
 
 
 def safe_float(value, default=0.0):
@@ -281,8 +290,8 @@ def detect_issues(recording_path: Path, analyze_to_failure: bool = False) -> Dic
                     error_data = None
                 
                 if error_data is not None:
-                    out_of_lane_threshold = 0.5
-                    catastrophic_threshold = 2.0
+                    out_of_lane_threshold = OUT_OF_LANE_THRESHOLD_M
+                    catastrophic_threshold = CATASTROPHIC_ERROR_M
                     min_consecutive_out = 10
                     
                     error_abs = np.abs(error_data)
@@ -1480,14 +1489,14 @@ def detect_issues(recording_path: Path, analyze_to_failure: bool = False) -> Dic
 
                 if 'control/mpc_solve_time_ms' in f:
                     solve = np.array(f['control/mpc_solve_time_ms'][:num_frames])
-                    slow_frames = np.where(mpc_mask & (solve > 5.0))[0]
+                    slow_frames = np.where(mpc_mask & (solve > MPC_SOLVE_TIME_BUDGET_MS))[0]
                     if len(slow_frames) > 0:
                         issues.append({
                             "frame": int(slow_frames[0]),
                             "type": "mpc_solve_slow",
                             "severity": "info",
                             "description": (
-                                f"MPC solve time > 5ms on {len(slow_frames)} frame(s). "
+                                f"MPC solve time > {MPC_SOLVE_TIME_BUDGET_MS:.0f}ms on {len(slow_frames)} frame(s). "
                                 f"Max: {float(np.max(solve[slow_frames])):.1f}ms."
                             ),
                             "frames": [int(x) for x in slow_frames[:20]],

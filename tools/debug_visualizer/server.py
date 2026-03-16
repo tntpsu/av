@@ -19,6 +19,9 @@ import re
 import yaml
 import math
 
+# Add project root to path (for tools.scoring_registry imports)
+project_root = Path(__file__).parent.parent.parent
+sys.path.insert(0, str(project_root / "tools"))
 # Add backend modules to path
 backend_path = Path(__file__).parent / "backend"
 sys.path.insert(0, str(backend_path))

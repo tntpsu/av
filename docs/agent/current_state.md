@@ -1,7 +1,7 @@
 # AV Stack — Agent Memory: Current State
 
 **Last updated:** 2026-03-16
-**Current milestone:** T-076 Config Phase 3 — COMPLETE. Auto-derive curvature thresholds from track geometry using 4th-root scaling. 22 derivable params, highway overlay reduced 90→65 lines. 811 tests passing, 9 skipped.
+**Current milestone:** T-073 centralized scoring registry COMPLETE. T-074 shader prewarmer marked done (already functional). Test suite: 842 passing, 2 skipped, 1 xfail.
 
 ---
 

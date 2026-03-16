@@ -39,6 +39,7 @@ control:
 
 trajectory:
   target_speed: 15.0
+  reference_lookahead_entry_track_name: highway_65  # arc-distance scheduler (T-075)
   # Phase transition thresholds — highway needs lower thresholds for gentler curves
   curve_phase_on: 0.35        # base: 0.45
   curve_phase_off: 0.22       # base: 0.30
@@ -46,8 +47,6 @@ trajectory:
   curve_phase_commit_min_frames: 3
   curve_local_entry_on_base: 0.35
   curve_local_entry_on_tight: 0.32
-  curve_local_phase_time_start_s: 1.2
-  curve_local_phase_time_start_tight_s: 1.6
   speed_planner:
     accel_speed_max: 15.0
     decel_speed_max: 15.0

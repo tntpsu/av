@@ -23,6 +23,19 @@ from trajectory.utils import (
     smooth_curvature_distance,
 )
 
+from scoring_registry import (
+    ACCEL_P95_GATE_MPS2,
+    JERK_P95_GATE_MPS3,
+    LATERAL_P95_GATE_M,
+    CENTERED_BAND_M,
+    OUT_OF_LANE_THRESHOLD_M,
+    CATASTROPHIC_ERROR_M,
+    MIN_CONSECUTIVE_OOL,
+    CURVATURE_FLOOR_COEFF as _CURVATURE_FLOOR_COEFF,
+    STEERING_JERK_PENALTY_CAP,
+    HEADING_PENALTY_FLOOR_DEG,
+)
+
 G_MPS2 = 9.80665
 LOW_VISIBILITY_STALE_REASONS = {"left_lane_low_visibility", "right_lane_low_visibility"}
 
@@ -2002,11 +2015,11 @@ def analyze_recording_summary(recording_path: Path, analyze_to_failure: bool = F
         gt_lateral_error = -data['gt_center']
         error_data = gt_lateral_error
         error_source = "ground_truth"
-        out_of_lane_mask = np.abs(error_data) > 0.5
+        out_of_lane_mask = np.abs(error_data) > OUT_OF_LANE_THRESHOLD_M
     elif data['lateral_error'] is not None:
         error_data = data['lateral_error']
         error_source = "perception"
-        out_of_lane_mask = np.abs(error_data) > 0.5
+        out_of_lane_mask = np.abs(error_data) > OUT_OF_LANE_THRESHOLD_M
     else:
         error_data = None
         out_of_lane_mask = None
@@ -2019,9 +2032,9 @@ def analyze_recording_summary(recording_path: Path, analyze_to_failure: bool = F
         full_out_of_lane_mask = np.array(out_of_lane_mask, dtype=bool)
         full_error_data = np.array(error_data, dtype=float)
         # Define thresholds
-        out_of_lane_threshold = 0.5  # meters (half a meter is a reasonable "out of lane" threshold)
-        catastrophic_threshold = 2.0  # meters (catastrophic failure - car is way out)
-        min_consecutive_out = 10  # frames (must stay out for this long to be considered "stayed out")
+        out_of_lane_threshold = OUT_OF_LANE_THRESHOLD_M
+        catastrophic_threshold = CATASTROPHIC_ERROR_M
+        min_consecutive_out = MIN_CONSECUTIVE_OOL
         
         # Strategy: Find the last recovery before a catastrophic failure, then find when error
         # first exceeded threshold after that recovery. This identifies the "start of final failure sequence"
@@ -2107,9 +2120,9 @@ def analyze_recording_summary(recording_path: Path, analyze_to_failure: bool = F
     # Curvature-adjusted lateral error: subtract a geometry-dependent floor per frame.
     # floor = CURVATURE_FLOOR_COEFF * |kappa|  — accounts for arc-chord tracking error
     # that is physically unavoidable for reactive controllers on tight curves.
-    # Coefficient 3.0 validated: <0.01m effect on highway/sweeping, ~0.06m on s_loop R40,
+    # Coefficient validated: <0.01m effect on highway/sweeping, ~0.06m on s_loop R40,
     # ~0.20m on hairpin R15.  Raw metrics preserved for diagnostics.
-    CURVATURE_FLOOR_COEFF = 3.0
+    CURVATURE_FLOOR_COEFF = _CURVATURE_FLOOR_COEFF
     _curv_for_floor = data.get('gt_path_curvature')
     if _curv_for_floor is None:
         _curv_for_floor = data.get('path_curvature_input')
@@ -2130,9 +2143,9 @@ def analyze_recording_summary(recording_path: Path, analyze_to_failure: bool = F
     
     # Time in Lane:
     # Primary: Use ground truth boundaries if available (car at x=0 is in lane if left <= 0 <= right)
-    # Secondary: Centeredness within ±0.5m (for tuning)
+    # Secondary: Centeredness within ±CENTERED_BAND_M (for tuning)
     time_in_lane_centered = safe_float(
-        np.sum(np.abs(data['lateral_error']) < 0.5) / n_frames * 100
+        np.sum(np.abs(data['lateral_error']) < CENTERED_BAND_M) / n_frames * 100
         if data['lateral_error'] is not None and n_frames > 0 else 0.0
     )
     if data['gt_left'] is not None and data['gt_right'] is not None:
@@ -2775,7 +2788,7 @@ def analyze_recording_summary(recording_path: Path, analyze_to_failure: bool = F
         # This means: car is OUT if (left > 0) OR (right < 0)
         out_of_lane_mask = ~((gt_left <= 0) & (0 <= gt_right))
         # Use sustained out-of-lane mask to avoid single-frame noise
-        min_consecutive_out = 10
+        min_consecutive_out = MIN_CONSECUTIVE_OOL
         sustained_mask = np.zeros_like(out_of_lane_mask, dtype=bool)
         run_start = None
         run_len = 0
@@ -2829,7 +2842,7 @@ def analyze_recording_summary(recording_path: Path, analyze_to_failure: bool = F
         
         out_of_lane_mask = np.abs(error_data) > threshold
         # Use sustained out-of-lane mask to avoid single-frame noise
-        min_consecutive_out = 10
+        min_consecutive_out = MIN_CONSECUTIVE_OOL
         sustained_mask = np.zeros_like(out_of_lane_mask, dtype=bool)
         run_start = None
         run_len = 0
@@ -3138,12 +3151,12 @@ def analyze_recording_summary(recording_path: Path, analyze_to_failure: bool = F
     reference_jitter_penalty = safe_float(min(10, max(0.0, reference_jitter_p95 - 0.15) * 40.0))
 
     trajectory_lateral_rmse_penalty = safe_float(min(30, lateral_error_adj_rmse * 50))
-    trajectory_lateral_p95_penalty = safe_float(min(20, max(0.0, lateral_error_adj_p95 - 0.40) * 35.0))
-    trajectory_heading_penalty = safe_float(min(20, max(0.0, np.degrees(heading_error_rmse) - 10.0) * 2.5))
+    trajectory_lateral_p95_penalty = safe_float(min(20, max(0.0, lateral_error_adj_p95 - LATERAL_P95_GATE_M) * 35.0))
+    trajectory_heading_penalty = safe_float(min(20, max(0.0, np.degrees(heading_error_rmse) - HEADING_PENALTY_FLOOR_DEG) * 2.5))
 
-    # Penalty only above the pp_max_steering_jerk cap (18.0 normalized/s²).
+    # Penalty only above the pp_max_steering_jerk cap (STEERING_JERK_PENALTY_CAP normalized/s²).
     # Operating at-cap is in-spec; exceeding it signals a limiter failure.
-    control_steering_jerk_penalty = safe_float(min(20, max(0.0, (steering_jerk_max - 18.0) * 2.0)))
+    control_steering_jerk_penalty = safe_float(min(20, max(0.0, (steering_jerk_max - STEERING_JERK_PENALTY_CAP) * 2.0)))
     control_oscillation_penalty = safe_float(
         min(15, max(0.0, oscillation_frequency - 1.0) * 7.0)
     )
@@ -3154,8 +3167,8 @@ def analyze_recording_summary(recording_path: Path, analyze_to_failure: bool = F
     # S1-M39: Gates 3.0 m/s², 6.0 m/s³ (0.31g, 0.61 g/s)
     # Scoring uses filtered values to avoid penalising velocity quantisation noise.
     # Raw values are retained in the output dict for diagnostic reference.
-    accel_gate_g = 3.0 / G_MPS2
-    jerk_gate_gps = 6.0 / G_MPS2
+    accel_gate_g = ACCEL_P95_GATE_MPS2 / G_MPS2
+    jerk_gate_gps = JERK_P95_GATE_MPS3 / G_MPS2
     longitudinal_accel_penalty = safe_float(
         min(20, max(0.0, (acceleration_p95_filtered / G_MPS2) - accel_gate_g) * 120.0)
     )
@@ -4846,12 +4859,12 @@ def analyze_recording_summary(recording_path: Path, analyze_to_failure: bool = F
                 {
                     "name": "Lateral Error P95 (curv-adj)",
                     "value": trajectory_lateral_p95_penalty,
-                    "limit": "<=0.40m",
+                    "limit": f"<={LATERAL_P95_GATE_M}m",
                 },
                 {
                     "name": "Heading Error RMSE",
                     "value": trajectory_heading_penalty,
-                    "limit": "<=10deg",
+                    "limit": f"<={HEADING_PENALTY_FLOOR_DEG:.0f}deg",
                 },
             ],
         },
@@ -5564,12 +5577,12 @@ def analyze_recording_summary(recording_path: Path, analyze_to_failure: bool = F
             "lateral_accel_p95_g": safe_float(lateral_accel_p95 / G_MPS2),
             "lateral_jerk_p95_gps": safe_float(lateral_jerk_p95 / G_MPS2),
             "comfort_gate_thresholds_g": {
-                "longitudinal_accel_p95_g": safe_float(3.0 / G_MPS2),
-                "longitudinal_jerk_p95_gps": safe_float(6.0 / G_MPS2)
+                "longitudinal_accel_p95_g": safe_float(ACCEL_P95_GATE_MPS2 / G_MPS2),
+                "longitudinal_jerk_p95_gps": safe_float(JERK_P95_GATE_MPS3 / G_MPS2)
             },
             "comfort_gate_thresholds_si": {
-                "longitudinal_accel_p95_mps2": 3.0,
-                "longitudinal_jerk_p95_mps3": 6.0
+                "longitudinal_accel_p95_mps2": ACCEL_P95_GATE_MPS2,
+                "longitudinal_jerk_p95_mps3": JERK_P95_GATE_MPS3
             },
             "metric_roles": {
                 "commanded_jerk_p95": "gate",

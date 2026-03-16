@@ -317,8 +317,5 @@ class TestPreDeploymentStability:
             f"PRE-DEPLOYMENT FAIL: Mean error {mean_error:.4f}m exceeds 0.5m threshold"
         )
         
-        # All checks passed
-        # Note: This test uses simplified simulation, so thresholds are more lenient
-        # Real system should perform better than these thresholds
-        pytest.skip("PRE-DEPLOYMENT PASS: All metrics within acceptable bounds (simulation tolerance)")
+        # All checks passed — simplified simulation, lenient thresholds
 

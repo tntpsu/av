@@ -157,20 +157,6 @@ class TestHeadingEffectBounds:
         )
 
 
-class TestHeadingAccumulation:
-    """Test that heading doesn't accumulate over time."""
-    
-    @pytest.mark.skip(reason="Test uses simplified simulation that doesn't match Unity. Heading correction behavior should be tested in integration tests with actual Unity dynamics.")
-    def test_heading_does_not_accumulate(self):
-        """Test that heading doesn't accumulate over extended period.
-        
-        SKIPPED: This test uses simplified simulation (heading_new = heading_old - steering * 0.1)
-        that doesn't match Unity's actual vehicle dynamics. Heading correction behavior should
-        be tested in integration tests with actual Unity dynamics.
-        """
-        pass
-
-
 class TestPositiveFeedbackLoop:
     """Test that positive feedback loops don't occur."""
     

@@ -12,9 +12,19 @@ Key assumptions to validate:
 5. Lane width calculation (should be ~3.5m for standard lane)
 """
 
+import sys
+from pathlib import Path
+
 import pytest
 import numpy as np
 from trajectory.models.trajectory_planner import RuleBasedTrajectoryPlanner
+
+# Make conftest importable for golden_recording_path
+_TESTS_DIR = Path(__file__).resolve().parent
+if str(_TESTS_DIR) not in sys.path:
+    sys.path.insert(0, str(_TESTS_DIR))
+
+from conftest import golden_recording_path
 
 
 class TestCoordinateConversionAssumptions:
@@ -30,39 +40,23 @@ class TestCoordinateConversionAssumptions:
         assert config_fov == expected_fov, \
             f"Config FOV ({config_fov}°) doesn't match Unity FOV ({expected_fov}°)"
     
+    @pytest.mark.xfail(reason="Known config mismatch: config camera_height=0.5m but Unity camera is ~1.9m above ground. Not blocking — perception uses segmentation, not pinhole projection.")
     def test_camera_height_assumption(self):
         """Test that camera height assumption (0.5m) is reasonable.
-        
+
         NOTE: Unity camera is at y=1.2m relative to car, but we need absolute height above ground.
         If car is ~0.7m tall, then camera height = 1.2m + 0.7m = 1.9m (not 0.5m!)
         This could be a major source of error!
         """
-        # Config says camera_height: 0.5m
-        # Unity camera position: {x: 0, y: 1.2, z: 1.0} relative to car
-        # If car center is at ground level, camera is 1.2m above car center
-        # If car has height ~0.7m, camera is ~1.9m above ground
         config_height = 0.5  # meters
-        
-        # Unity camera y position relative to car
         unity_camera_y_relative = 1.2  # meters
-        
-        # Estimated car height (typical car center to ground)
         estimated_car_height = 0.7  # meters (rough estimate)
-        
-        # Actual camera height above ground
         actual_camera_height = unity_camera_y_relative + estimated_car_height
-        
-        print(f"\nCamera height analysis:")
-        print(f"  Config assumption: {config_height}m")
-        print(f"  Unity camera y (relative to car): {unity_camera_y_relative}m")
-        print(f"  Estimated car height: {estimated_car_height}m")
-        print(f"  Actual camera height: {actual_camera_height}m")
-        print(f"  Error: {abs(actual_camera_height - config_height):.2f}m ({abs(actual_camera_height - config_height)/config_height*100:.1f}%)")
-        
-        # This is a WARNING, not a failure - we need to verify actual car height
-        if abs(actual_camera_height - config_height) > 0.3:
-            pytest.skip(f"Camera height mismatch: config={config_height}m, estimated={actual_camera_height}m. "
-                       f"Need to verify actual car height in Unity.")
+
+        assert abs(actual_camera_height - config_height) <= 0.3, (
+            f"Camera height mismatch: config={config_height}m, "
+            f"estimated={actual_camera_height}m"
+        )
     
     def test_coordinate_conversion_consistency(self):
         """Test that coordinate conversion is consistent across different distances.
@@ -148,71 +142,50 @@ class TestCoordinateConversionAssumptions:
             print(f"  This suggests camera height is critical for accurate conversion.")
     
     def test_actual_lane_width_from_recorded_data(self):
-        """Test lane width calculation using actual recorded data.
-        
-        This test loads recorded data and checks if calculated lane widths are reasonable.
-        Expected: ~7.0m for single-lane road (total road width).
-        Note: Current Unity setup has a single 7m-wide lane with no center line.
+        """Test lane width calculation using golden recording data.
+
+        Loads s_loop golden recording and checks if calculated lane widths are
+        reasonable. Lane line positions measure visible marking separation,
+        typically ~3.5-4.0m for a standard lane.
         """
         import h5py
-        from pathlib import Path
-        
-        # Find latest recording
-        recordings_dir = Path('data/recordings')
-        if not recordings_dir.exists():
-            pytest.skip("No recordings directory found")
-        
-        recordings = sorted(recordings_dir.glob('*.h5'), key=lambda p: p.stat().st_mtime, reverse=True)
-        if not recordings:
-            pytest.skip("No recordings found")
-        
-        recording_file = recordings[0]
-        
-        print(f"\nTesting with actual recorded data: {recording_file.name}")
-        
+
+        recording_file = golden_recording_path("s_loop")
+        if recording_file is None:
+            pytest.skip("s_loop golden recording not registered or not on disk")
+
         with h5py.File(recording_file, 'r') as f:
-            if 'perception/left_lane_x' not in f or 'perception/right_lane_x' not in f:
+            # Support both old (left_lane_x) and current (left_lane_line_x) field names
+            left_key = ('perception/left_lane_line_x' if 'perception/left_lane_line_x' in f
+                        else 'perception/left_lane_x')
+            right_key = ('perception/right_lane_line_x' if 'perception/right_lane_line_x' in f
+                         else 'perception/right_lane_x')
+            if left_key not in f or right_key not in f:
                 pytest.skip("Recording doesn't have lane position data")
-            
-            left_lane_x = np.array(f['perception/left_lane_x'])
-            right_lane_x = np.array(f['perception/right_lane_x'])
+
+            left_lane_x = np.array(f[left_key])
+            right_lane_x = np.array(f[right_key])
             num_lanes = np.array(f['perception/num_lanes_detected'])
-            
-            # Calculate lane widths for frames with both lanes
+
             lane_widths = []
             for i in range(len(num_lanes)):
                 if num_lanes[i] == 2 and not np.isnan(left_lane_x[i]) and not np.isnan(right_lane_x[i]):
                     width = abs(right_lane_x[i] - left_lane_x[i])
                     lane_widths.append(width)
-            
-            if not lane_widths:
-                pytest.skip("No dual-lane detections in recording")
-            
+
+            assert len(lane_widths) > 0, "No dual-lane detections in golden recording"
+
             lane_widths = np.array(lane_widths)
             mean_width = np.mean(lane_widths)
             std_width = np.std(lane_widths)
-            
-            print(f"  Frames with dual lanes: {len(lane_widths)}")
-            print(f"  Mean lane width: {mean_width:.3f}m")
-            print(f"  Std lane width: {std_width:.3f}m")
-            print(f"  Expected: ~7.0m (single-lane road, total road width)")
-            print(f"  Error: {abs(mean_width - 7.0):.3f}m ({abs(mean_width - 7.0)/7.0*100:.1f}%)")
-            
-            # Check if mean is reasonable (6.0m to 8.0m for single-lane road)
-            if mean_width < 6.0 or mean_width > 8.0:
-                pytest.fail(
-                    f"Lane width calculation is wrong! "
-                    f"Mean width = {mean_width:.3f}m (expected ~7.0m for single-lane road). "
-                    f"This suggests coordinate conversion is incorrect."
-                )
-            
-            # Check if variance is reasonable (std < 1.0m)
-            if std_width > 1.0:
-                pytest.fail(
-                    f"Lane width calculation is inconsistent! "
-                    f"Std = {std_width:.3f}m (should be < 1.0m). "
-                    f"This suggests coordinate conversion is unstable."
-                )
+
+            assert 3.0 <= mean_width <= 5.0, (
+                f"Lane width calculation wrong: mean={mean_width:.3f}m "
+                f"(expected ~3.5-4.0m for lane marking separation)"
+            )
+            assert std_width < 1.0, (
+                f"Lane width inconsistent: std={std_width:.3f}m (should be < 1.0m)"
+            )
 
 
 if __name__ == '__main__':

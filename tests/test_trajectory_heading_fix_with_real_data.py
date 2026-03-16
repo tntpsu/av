@@ -3,12 +3,21 @@ Test trajectory heading fix using real Unity lane detections.
 This tests trajectory planning in isolation, not the full integrated system.
 """
 
+import sys
+
 import pytest
 import numpy as np
 import h5py
 from pathlib import Path
 from trajectory.models.trajectory_planner import RuleBasedTrajectoryPlanner
 from trajectory.inference import TrajectoryPlanningInference
+
+# Make conftest importable for golden_recording_path
+_TESTS_DIR = Path(__file__).resolve().parent
+if str(_TESTS_DIR) not in sys.path:
+    sys.path.insert(0, str(_TESTS_DIR))
+
+from conftest import golden_recording_path
 
 
 def load_unity_lane_coefficients(recording_path: Path, frame_idx: int = 0):
@@ -83,38 +92,27 @@ def test_heading_fix_with_non_parallel_lanes():
 
 
 def test_heading_fix_with_real_unity_data():
+    """Test heading fix using golden recording to verify perception fields exist,
+    then test trajectory planning with Unity-like synthetic coefficients.
     """
-    Test heading fix using actual Unity recording data.
-    Loads lane detections from recording and tests trajectory planning.
-    """
-    recordings_dir = Path('data/recordings')
-    recordings = sorted(recordings_dir.glob('*.h5'), key=lambda p: p.stat().st_mtime, reverse=True)
-    
-    if not recordings:
-        pytest.skip("No recordings found")
-    
-    recording = recordings[0]
-    
-    # Load actual lane coefficients from recording
-    # Note: We need to reconstruct from detection data
+    recording = golden_recording_path("s_loop")
+    if recording is None:
+        pytest.skip("s_loop golden recording not registered or not on disk")
+
+    # Verify golden recording has perception data with dual-lane frames
     with h5py.File(recording, 'r') as f:
-        if 'perception/left_lane_x' not in f:
-            pytest.skip("No perception data in recording")
-        
-        # Get a frame where both lanes are detected
+        has_perception = ('perception/left_lane_x' in f
+                          or 'perception/left_lane_line_x' in f)
+        assert has_perception, "No perception data in golden recording"
         num_lanes = np.array(f['perception/num_lanes_detected'])
         dual_lane_frames = np.where(num_lanes == 2)[0]
-        
-        if len(dual_lane_frames) == 0:
-            pytest.skip("No dual-lane frames in recording")
-        
-        frame_idx = dual_lane_frames[0]
-        
-        # For this test, we'll use synthetic coefficients that match Unity behavior
-        # (non-parallel in image space, but straight road)
-        left_lane = np.array([0.001, -7.0, 200.0])   # Matches Unity: linear = -7.37
-        right_lane = np.array([0.001, 13.0, 440.0])  # Matches Unity: linear = 13.85
-    
+        assert len(dual_lane_frames) > 0, "No dual-lane frames in golden recording"
+
+    # Use synthetic coefficients that match Unity behavior
+    # (non-parallel in image space, but straight road)
+    left_lane = np.array([0.001, -7.0, 200.0])
+    right_lane = np.array([0.001, 13.0, 440.0])
+
     planner = TrajectoryPlanningInference(
         planner_type="rule_based",
         image_width=640,
@@ -122,21 +120,17 @@ def test_heading_fix_with_real_unity_data():
         camera_fov=60.0,
         camera_height=1.0
     )
-    
-    # Plan trajectory
+
     trajectory = planner.plan([left_lane, right_lane])
     ref_point = planner.get_reference_point(trajectory, lookahead=10.0)
-    
+
     assert ref_point is not None
     assert 'heading' in ref_point
-    
-    # Reference heading should be near 0° for straight road
-    # Even though lanes appear non-parallel in image space
+
     heading = ref_point['heading']
     assert abs(heading) < np.radians(2.0), (
-        f"Reference heading should be near 0° for straight road "
-        f"(got {np.degrees(heading):.1f}°). "
-        f"Fix should work with Unity-like non-parallel lanes."
+        f"Reference heading should be near 0 for straight road "
+        f"(got {np.degrees(heading):.1f} deg)"
     )
 
 

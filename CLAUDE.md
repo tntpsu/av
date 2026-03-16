@@ -34,6 +34,7 @@ After completing work, update the relevant `docs/agent/*.md` files.
 | `perception/inference.py` | 489 | Lane detection. CV fallback is de facto active path. |
 | `bridge/server.py` | — | FastAPI Unity↔Python bridge. |
 | `data/recorder.py` | — | Async HDF5 recording. |
+| `tools/scoring_registry.py` | ~60 | Single source of truth for 25+ scoring thresholds. Update here, not in consumers. |
 
 ---
 

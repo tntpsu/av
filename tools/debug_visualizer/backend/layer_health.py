@@ -10,24 +10,28 @@ normalized signals, clamped to [0, 1]. No ML required.
 
 from __future__ import annotations
 from pathlib import Path
+import sys
 import numpy as np
 import h5py
 import yaml
 
+# Add tools/ to path for scoring_registry imports
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 # ── Thresholds ────────────────────────────────────────────────────────────────
-# Tune these before tuning weights. They define "bad" for each signal.
-PERCEPTION_CONF_FLOOR   = 0.1    # confidence below this → hard fallback territory
-TRAJ_REF_ERROR_MAX_M    = 2.0    # lateral ref error > this → full penalty
-CTRL_LATERAL_ERROR_MAX  = 2.0    # lateral error > this → full penalty (= safety.max_lateral_error)
-CTRL_JERK_GATE          = 6.0    # commanded_jerk_p95 comfort gate (m/s³)
-LOOKAHEAD_MIN_M         = 5.0    # lookahead below this is suspiciously short
-LOOKAHEAD_MAX_M         = 25.0   # lookahead above this is unusually long
-
-# Shared alert thresholds imported by triage_engine and blame_tracer
-CTRL_JERK_ALERT      = CTRL_JERK_GATE * 0.75   # 4.5 m/s³ — 75% of comfort gate; triggers flag + triage pattern
-LOOKAHEAD_CONCERN_M  = 8.0                      # Lookahead "short at speed" alert; distinct from LOOKAHEAD_MIN_M (absolute floor)
-BENIGN_STALE_REASONS = frozenset({'left_lane_low_visibility'})  # Designed backup-hold states; suppress warnings
+# Imported from scoring_registry — single source of truth.
+# Re-exported here so triage_engine.py and blame_tracer.py need zero changes.
+from scoring_registry import (  # noqa: E402
+    PERCEPTION_CONF_FLOOR,
+    TRAJ_REF_ERROR_MAX_M,
+    CTRL_LATERAL_ERROR_MAX,
+    CTRL_JERK_GATE,
+    LOOKAHEAD_MIN_M,
+    LOOKAHEAD_MAX_M,
+    CTRL_JERK_ALERT,
+    LOOKAHEAD_CONCERN_M,
+    BENIGN_STALE_REASONS,
+)
 
 
 class LayerHealthAnalyzer:

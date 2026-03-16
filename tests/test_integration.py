@@ -306,21 +306,14 @@ class TestDataFormats:
     def test_reference_point_format(self):
         """Test that reference points have correct format."""
         trajectory_planner = TrajectoryPlanningInference(planner_type="rule_based")
-        
+
         left_lane = np.array([0.001, 0.0, 100.0])
         right_lane = np.array([0.001, 0.0, 300.0])
         lane_coeffs = [left_lane, right_lane]
-        
+
         trajectory = trajectory_planner.plan(lane_coeffs)
-        
-        # Try to get reference point
-        if hasattr(trajectory, 'reference_point'):
-            ref_point = trajectory.reference_point
-        elif hasattr(trajectory, 'get_reference_point'):
-            ref_point = trajectory.get_reference_point()
-        else:
-            pytest.skip("Trajectory doesn't expose reference point")
-        
+        ref_point = trajectory_planner.get_reference_point(trajectory, lookahead=10.0)
+
         # Verify format
         assert isinstance(ref_point, dict)
         required_keys = ['x', 'y', 'heading', 'velocity']

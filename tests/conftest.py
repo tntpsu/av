@@ -21,15 +21,18 @@ import h5py
 import numpy as np
 import pytest
 
+# Centralised scoring thresholds — single source of truth
+import sys as _sys
+_sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
+from scoring_registry import COMFORT_GATES as _REGISTRY_COMFORT_GATES
+
 # ── Paths ────────────────────────────────────────────────────────────────────
 REPO_ROOT    = Path(__file__).resolve().parents[1]
 FIXTURES_DIR = Path(__file__).resolve().parent / "fixtures"
 GOLDEN_MANIFEST_PATH = FIXTURES_DIR / "golden_recordings.json"
 
 # ── Comfort gate thresholds (S1-M39) ─────────────────────────────────────────
-# Mirror the values hardcoded in tools/drive_summary_core.py.
-# If thresholds change there, update here and document in ROADMAP.md.
-#
+# Imported from tools/scoring_registry.py — single source of truth.
 # Key name → summary dict path:
 #   accel_p95_filtered_max  → summary["comfort"]["acceleration_p95_filtered"]
 #   commanded_jerk_p95_max  → summary["comfort"]["commanded_jerk_p95"]
@@ -37,15 +40,7 @@ GOLDEN_MANIFEST_PATH = FIXTURES_DIR / "golden_recordings.json"
 #   centered_pct_min        → summary["path_tracking"]["time_in_lane_centered"]
 #   out_of_lane_events_max  → summary["safety"]["out_of_lane_events_full_run"]
 #   steering_jerk_max_max   → summary["comfort"]["steering_jerk_max"]
-COMFORT_GATES: dict[str, float] = {
-    "accel_p95_filtered_max":  3.0,   # m/s²       — EMA-filtered accel P95
-    "commanded_jerk_p95_max":  6.0,   # m/s³       — throttle/brake cmd derivative
-    "lateral_p95_max":         0.40,  # m          — lateral error P95
-    "centered_pct_min":        70.0,  # %          — % frames within ±0.5m of centre
-    "out_of_lane_events_max":  0,     # count      — sustained OOL events (≥10 frames)
-    "emergency_stops_max":     0,     # count      — rising edges in emergency_stop flag
-    "steering_jerk_max_max":   20.0,  # norm/s²    — gap-filtered steering jerk max
-}
+COMFORT_GATES: dict[str, float] = _REGISTRY_COMFORT_GATES
 
 # Baseline scores — curvature-adjusted scoring (2026-03-15).
 # hairpin_15 replaced with Stanley k=3.0 golden (was PP 79.0).
