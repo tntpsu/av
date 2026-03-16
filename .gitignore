@@ -47,6 +47,7 @@ ENV/
 !tests/**/*.hdf5
 captures/
 data/segmentation_dataset/
+data/reports/gates/
 tracks/generated/
 
 # Logs
