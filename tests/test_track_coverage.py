@@ -410,6 +410,19 @@ class TestGradeElevation:
             "expected at least 3% grade for a graded track"
         )
 
+    def test_hill_highway_reachable_in_90s(self):
+        """hill_highway total length must be < 1080m (12 m/s × 90s)."""
+        track = load_track("hill_highway")
+        total_length = sum(segment_arc_length(s) for s in track["segments"])
+        assert total_length < 1080.0, (
+            f"hill_highway total length {total_length:.0f}m exceeds 1080m "
+            "(12 m/s × 90s). Car cannot complete full loop in 90s."
+        )
+        assert total_length > 500.0, (
+            f"hill_highway total length {total_length:.0f}m is too short "
+            "to meaningfully exercise grade compensation"
+        )
+
     def test_flat_tracks_have_zero_grade(self):
         """All non-hill tracks should have grade=0 (or no grade field)."""
         flat_tracks = [t for t in ALL_TRACKS if "hill" not in t]

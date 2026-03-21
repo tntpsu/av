@@ -1,7 +1,116 @@
 # AV Stack — Agent Memory: Current State
 
-**Last updated:** 2026-03-16
-**Current milestone:** T-073 centralized scoring registry COMPLETE. T-074 shader prewarmer marked done (already functional). Test suite: 842 passing, 2 skipped, 1 xfail.
+**Last updated:** 2026-02-17
+**Current milestone:** Step 3.5 — True root cause of curve lateral offset identified and fixed. 2DOF (Part B rate-bias) is still active and correct. Test suite: 25/25 MPC tests passing.
+
+### Step 3.5: Curve Lateral Offset — TRUE ROOT CAUSE FOUND AND FIXED (2026-02-17)
+
+**Goal:** Eliminate systematic outside-curve bias (~0.4m) in MPC on R100 curves.
+
+**Root cause (data-proven from recording forensics):**
+
+Two issues compounding:
+
+1. **`mpc_r_steer: 0.5` in `config/av_stack_config.yaml` was overriding the Python dataclass default of `1e-4`.** The `MPCParams.from_config()` method reads `mpc_r_steer` from YAML and overrides the Python field. With `q_lat = 0.5` and `r_steer = 0.5` (1:1 ratio), MPC heavily penalizes steering corrections, making it reluctant to close lateral error on curves.
+
+2. **The `_bias_correction` EMA estimator was hitting its ceiling.** When `e_lat > 0` persists, `_bias_correction` reduces `kappa_ref_used` (intentionally, so MPC "steers more"). But with `bias_max_correction = 0.002`, the kappa reduction hits a floor at `mpc_kappa_ref = 0.008` (from `road_kappa = 0.01`). This created a stable ~0.4m equilibrium because the bias correction alone couldn't overcome the high `r_steer` penalty.
+
+**Evidence from frame-by-frame C2 analysis:**
+```
+t=62s: mpc_kappa=0.01007  e_lat=-0.22m   (correct kappa, early curve)
+t=64s: mpc_kappa=0.00926  e_lat=-0.27m   (bias_correction accumulating)
+t=68s: mpc_kappa=0.00800  e_lat=-0.41m   (ceiling hit, stable)
+t=71s: mpc_kappa=0.00800  e_lat=-0.41m   (stays locked at ceiling/error)
+```
+`mpc_kappa` decays from 0.010 → 0.008 over ~4-6s (matches bias_alpha τ = 200 frames = 6.7s). Error follows kappa decay and stabilizes at same time.
+
+**Fix applied:**
+- Changed `mpc_r_steer: 0.5` → `mpc_r_steer: 0.0001` in `config/av_stack_config.yaml`
+- The Python dataclass default `r_steer: float = 1e-4` was already correct but was being overridden by the config
+
+**Why previous "robust fix" didn't work:** The Python dataclass change (`r_steer = 1e-4`) was never actually applied at runtime because `from_config()` always loads from YAML first.
+
+**2DOF status:** Part B (rate-bias in q-vector for curve transitions) is still valid and active. Part A (magnitude bias) was already removed in previous session — correct decision.
+
+**Pending validation:**
+1. `pytest tests/test_mpc_controller.py -v` — 25/25 ✅
+2. Live Unity hill_highway run (target: curve e_lat P50 ≤ 0.15m, was 0.41m)
+
+**Commands:**
+```bash
+# Non-regression baseline (highway_65)
+./start_av_stack.sh --skip-unity-build-if-clean \
+    --track-yaml tracks/highway_65.yml --duration 60 --log-level error
+python tools/analyze/analyze_drive_overall.py --latest
+
+# Primary validation (hill_highway)
+./start_av_stack.sh --skip-unity-build-if-clean \
+    --track-yaml tracks/hill_highway.yml --duration 120 --log-level error
+python tools/analyze/analyze_drive_overall.py --latest
+```
+
+---
+
+### Step 4: MPC as Primary Lateral Controller — COMPLETE (2026-03-17)
+
+**Goal:** Promote MPC from speed-gated secondary to primary lateral controller across the full speed/curvature envelope using a curvature-based guard.
+
+**Architecture:**
+```
+Stanley:  v < 4.5 m/s (parking/hairpin)
+MPC:      v > 4.0 m/s AND κ < 0.020 (primary, R50+)
+PP:       κ ≥ 0.020 OR MPC solver failure (fallback)
+```
+
+**Implemented (7 phases):**
+1. **Regime selector curvature guard** — `mpc_max_curvature=0.020` (R50 boundary), `mpc_curvature_hysteresis=0.003`, `mpc_min_speed_mps=3.0` base
+2. **pid_controller.py** — wires `curvature_primary_abs` from `lateral_metadata` to `regime_selector.update()`
+3. **Base config** — `mpc_min_speed_mps: 3.0`, `mpc_max_curvature: 0.020`, `mpc_curvature_hysteresis: 0.003` added to `control.regime`
+4. **Per-track overlays** — s_loop/hairpin: `mpc_min_speed_mps: 10.0`; mixed_radius: `mpc_min_speed_mps: 9.0` (above R40 cap speed of 8.85 m/s)
+5. **Regime mask fixes** — `>= 1` → `>= 0.5` in 4 files (drive_summary_core, triage_engine, issue_detector, layer_health)
+6. **Scoring registry** — 9 new MPC threshold constants (`MPC_SOLVE_TIME_P95_MS_GATE`, `MPC_MIN_SPEED_DEFAULT_MPS`, `MPC_MAX_CURVATURE_DEFAULT`, etc.)
+7. **Tests** — 8 new curvature guard tests in test_regime_selector.py, 9 new registry guard tests in test_scoring_registry.py
+
+### MPC q_lat Auto-Derive — COMPLETE (2026-03-17)
+
+**Problem:** `mpc_q_lat=0.5` (tuned for highway, κ=0.002) causes systematic outside-curve bias on hill_highway R100 curves (κ=0.010). e_lat P50=0.405m exceeded 0.40m Trajectory gate → score hard-capped at 79.0.
+
+**Root cause:** `q_lat` must scale with curve tightness to maintain consistent lateral tracking quality. The existing T-076 4th-root system was designed for threshold parameters (conservative 0.25 exponent). Cost weights need steeper scaling (~0.75 exponent).
+
+**Solution — `_derive_mpc_weights()` in orchestrator.py:**
+- Formula: `q_lat = max(base, min(max, base × (κ_mpc_active / κ_ref)^0.75))`
+- `κ_mpc_active = min(track_κ_max, mpc_max_curvature)` — tightest curvature MPC actually faces
+- Calibration: `base=0.5, κ_ref=0.002, exponent=0.75, max=4.0`
+- hill_highway (κ=0.010): q_lat = `0.5 × 5^0.75 = 1.67`
+- highway (κ=0.002 = ref): q_lat = `0.5` (no change)
+- mixed_radius (κ_mpc=0.020): q_lat = `2.81` (safe — MPC only runs R150/R200)
+- Explicit overlay wins (same mechanism as T-076)
+
+**E2E result — hill_highway:** **89.6/100** (was 79.0, +10.6 points)
+- Trajectory yellow cap CLEARED (was blocking at 79.0)
+- MPC active 94.2% of frames (1620/1719)
+- 1 regime transition total (PP→MPC at startup, frame 99)
+- Zero fallbacks, solve time P95=0.77ms
+- Recording: `recording_20260317_230254.h5`
+
+**Remaining open issue (not blocking):** Late turn-in on all 3 R100 curves (+23 frames = ~0.77s). Car arrives at curve entry already displaced → peak e_lat 0.64m (momentary). This is a trajectory planning / curve intent timing issue, separate from MPC lateral tracking. Score would improve further if turn-in onset were earlier.
+
+**Tests:** 8 new tests in TestMPCWeightDerivation class in test_auto_derive_curvature.py. Total: 936 passing.
+
+### Step 3D: Grade Lateral Stability — COMPLETE (2026-03-17)
+
+**Summary:** E2E hill_highway scoring 89.6/100 with 0 e-stops. Trajectory gate cleared. Grade compensation pipeline validated end-to-end.
+
+**Key findings across Step 3:**
+1. **MPC hunting fix** — Base `mpc_q_lat=10.0` → `0.5` prevents oscillation on moderate curves
+2. **GT boundary sanity filter** — rejects corrupt GT boundary values > 50m (mesh seams)
+3. **q_lat auto-derive** — eliminates per-track manual tuning; highway: 0.5, hill_highway: 1.67
+4. **Grade compensation hardware** — per-wheel telemetry, angular velocity, MPC grade FF gain=1.8
+
+**Track profile confirmed:**
+- 943m oval, 4× R100 arcs (ALL flat, grade=0.0)
+- Grades on straights only: +5% uphill (95m), -5% downhill (55m), -4% gentle (45m)
+- No pitched turns — that's a future track
 
 ---
 
@@ -256,12 +365,44 @@ with stale-propagation banners and replay-mode locked-layer context.
 - EMA gating in av_stack still runs live — locks only the raw detection input
 - Falls back to live perception if lock data unavailable for a frame
 
+### Step 3: Grade & Banking — E2E VALIDATION IN PROGRESS (2026-03-17)
+
+**Goal:** Full-stack grade compensation — pitch/roll/road_grade from Unity through Python pipeline, longitudinal compensation in MPC and PP, speed governor adjustment, graded track validation, scoring/metrics, and PhilViz diagnostics.
+
+**9 phases implemented (Step 3C plan), plus config overlay cleanup:**
+
+| Phase | Description | Status |
+|---|---|---|
+| 1 — Grade-aware effective max_accel | `effective_max_accel = base + abs(gravity_accel)` in PID + MPC QP bounds | ✅ |
+| 2 — Preview distance fix | `distance_to_curve` threaded to speed governor, 1.5× heuristic fallback | ✅ |
+| 3 — TrackBuilder mesh smoothing | Cosine-blend `SmoothGradeTransitions()` at grade boundaries | ✅ |
+| 4 — Grade-proportional jerk relaxation | `dynamic_max_jerk += abs(gravity_accel) * 2.0` | ✅ |
+| 5 — Grade-proportional steering damping | Alpha reduced proportional to grade at 3 smoothing locations | ✅ |
+| 6 — Config cleanup | All overlays cleaned — 16 redundant keys deleted, remaining mapped to future auto-derive | ✅ |
+| 7 — Triage tooling | 5 new triage patterns, 3 new issue types, 4 new aggregate metrics | ✅ |
+| 8 — Scoring registry + tests | 5 new grade constants, 5 guard tests, 10 new grade compensation tests | ✅ |
+| 9 — Base config updates | grade_ff_gain: 1.8, jerk_relaxation, steering damping promoted to base | ✅ |
+
+**E2E validation (hill_highway):**
+
+| Run | Fix applied | Max speed | E-stop frame | Root cause |
+|---|---|---|---|---|
+| 1 | None (Step 3C as designed) | 9.04 m/s | 379 | Jerk cooldown starving throttle (accel_cmd × 0.4 permanently) |
+| 2 | Jerk cooldown bypass on grade | 11.67 m/s | 302 | PP lateral instability at 11.5 m/s on graded surface |
+
+**Design failure documented:** `docs/agent/step3c_design_lessons.md` — 5 lessons on control subsystem interactions, telemetry observability, two-stage failures, grade-zero no-op limitations, and config overlay vs base system boundary.
+
+**Jerk cooldown root cause:** `jerk_cooldown_frames: 8, scale: 0.4` permanently attenuates accel_cmd when grade FF causes sustained jerk_capped=True (cooldown resets every frame, never expires). Fixed by bypassing cooldown when `|gravity_accel| > 0.1`.
+
+**Lateral instability root cause (in progress):** At 11.5 m/s on 5% grade, PP controller oscillates with growing amplitude. WheelCollider physics create ±0.3 m/s speed oscillation on grade. PP gain doesn't reduce with speed (base `pp_speed_norm_enabled: false`). Grade steering damping (alpha 0.9→0.65) insufficient at this speed.
+
+**Test count:** 905 passing (125 key tests clean), flat-track regression: 0 regressions
+
 ### Known Incomplete Items
 
-1. **PhilViz (debug_visualizer):** T-073 — diagnostic consistency pass (scoring_registry.py). See `docs/plans/camera-optimization-plan.md §Phases 3-4`.
-2. **MPC controller (`control/mpc_controller.py`):** Active via `mpc_sloop.yaml` / `mpc_highway.yaml` / `mpc_mixed.yaml`. PP is default when no MPC overlay loaded.
-3. **Segmentation model:** IS active (`detection_method = "segmentation"` 100% of frames). CLAUDE.md "CV fallback active" note is outdated.
-4. **Speed error RMSE on highway:** 1.19 m/s — structural (vehicle accelerates ~15s to reach 12 m/s target); not a control bug
+1. **MPC controller (`control/mpc_controller.py`):** Active via `mpc_sloop.yaml` / `mpc_highway.yaml` / `mpc_mixed.yaml` / `mpc_hill_highway.yaml`. PP is default when no MPC overlay loaded.
+2. **Segmentation model:** IS active (`detection_method = "segmentation"` 100% of frames). CLAUDE.md "CV fallback active" note is outdated.
+3. **Speed error RMSE on highway:** 1.19 m/s — structural (vehicle accelerates ~15s to reach 12 m/s target); not a control bug
 
 ---
 

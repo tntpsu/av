@@ -9,6 +9,7 @@ public static class TrackBuilder
         List<Vector3> points = new List<Vector3>();
         List<float> distances = new List<float>();
         List<float> speedLimits = new List<float>();
+        List<float> grades = new List<float>();
         float defaultSpeedLimit = Mathf.Max(0f, config.speedLimit);
 
         if (config.template == "oval" && config.straightLength > 0f && config.turnRadius > 0f)
@@ -26,18 +27,23 @@ public static class TrackBuilder
             ? GetSegmentSpeedLimit(config.segments[0], defaultSpeedLimit)
             : defaultSpeedLimit;
         speedLimits.Add(firstSpeed);
+        float firstGrade = config.segments.Count > 0 ? config.segments[0].grade : 0f;
+        grades.Add(firstGrade);
 
         foreach (TrackSegment segment in config.segments)
         {
             if (segment.type == "straight")
             {
-                AppendStraight(points, distances, speedLimits, ref position, ref elevation, ref heading, segment, spacing, offset, defaultSpeedLimit);
+                AppendStraight(points, distances, speedLimits, grades, ref position, ref elevation, ref heading, segment, spacing, offset, defaultSpeedLimit);
             }
             else if (segment.type == "arc")
             {
-                AppendArc(points, distances, speedLimits, ref position, ref elevation, ref heading, segment, spacing, offset, defaultSpeedLimit);
+                AppendArc(points, distances, speedLimits, grades, ref position, ref elevation, ref heading, segment, spacing, offset, defaultSpeedLimit);
             }
         }
+
+        // Post-process: smooth grade transition boundaries to avoid mesh creases.
+        SmoothGradeTransitions(points, grades, spacing);
 
         if (config.loop && points.Count > 1)
         {
@@ -46,7 +52,7 @@ public static class TrackBuilder
             {
                 if (config.loopConnector)
                 {
-                    AddLoopConnector(points, distances, speedLimits, spacing);
+                    AddLoopConnector(points, distances, speedLimits, grades, spacing);
                 }
                 else
                 {
@@ -79,7 +85,7 @@ public static class TrackBuilder
             Debug.Log($"TrackBuilder: Speed limits min={minSpeed:F2} max={maxSpeed:F2} (m/s)");
         }
 
-        return new TrackPath(points, distances, speedLimits);
+        return new TrackPath(points, distances, speedLimits, grades);
     }
 
     private static TrackPath BuildOval(TrackConfig config, Vector3 offset, float spacing)
@@ -87,6 +93,7 @@ public static class TrackBuilder
         List<Vector3> points = new List<Vector3>();
         List<float> distances = new List<float>();
         List<float> speedLimits = new List<float>();
+        List<float> grades = new List<float>();
         float defaultSpeedLimit = Mathf.Max(0f, config.speedLimit);
         float totalLength = (config.straightLength * 2f) + (Mathf.PI * config.turnRadius * 2f);
         int steps = Mathf.Max(8, Mathf.CeilToInt(totalLength / spacing));
@@ -94,12 +101,13 @@ public static class TrackBuilder
         points.Add(GetOvalPoint(config, 0f) + offset);
         distances.Add(0f);
         speedLimits.Add(defaultSpeedLimit);
+        grades.Add(0f);  // Ovals are flat
 
         for (int i = 1; i <= steps; i++)
         {
             float t = (float)i / steps;
             Vector3 p = GetOvalPoint(config, t) + offset;
-            AddPoint(points, distances, speedLimits, p, defaultSpeedLimit);
+            AddPoint(points, distances, speedLimits, grades, p, defaultSpeedLimit, 0f);
         }
 
         if (points.Count > 1)
@@ -125,7 +133,7 @@ public static class TrackBuilder
             Debug.Log($"TrackBuilder: Speed limits min={minSpeed:F2} max={maxSpeed:F2} (m/s)");
         }
 
-        return new TrackPath(points, distances, speedLimits);
+        return new TrackPath(points, distances, speedLimits, grades);
     }
 
     private static Vector3 GetOvalPoint(TrackConfig config, float t)
@@ -166,7 +174,7 @@ public static class TrackBuilder
         return new Vector3(x2, 0f, z2);
     }
 
-    private static void AppendStraight(List<Vector3> points, List<float> distances, List<float> speedLimits, ref Vector3 position,
+    private static void AppendStraight(List<Vector3> points, List<float> distances, List<float> speedLimits, List<float> grades, ref Vector3 position,
         ref float elevation, ref float heading, TrackSegment segment, float spacing, Vector3 offset, float defaultSpeedLimit)
     {
         float length = Mathf.Max(0f, segment.length);
@@ -182,14 +190,14 @@ public static class TrackBuilder
             float y = startY + (segment.grade * d);
             Vector3 p = position + forward * d;
             p.y = y;
-            AddPoint(points, distances, speedLimits, p + offset, segmentSpeedLimit);
+            AddPoint(points, distances, speedLimits, grades, p + offset, segmentSpeedLimit, segment.grade);
         }
 
         elevation = startY + (segment.grade * length);
         position += forward * length;
     }
 
-    private static void AppendArc(List<Vector3> points, List<float> distances, List<float> speedLimits, ref Vector3 position,
+    private static void AppendArc(List<Vector3> points, List<float> distances, List<float> speedLimits, List<float> grades, ref Vector3 position,
         ref float elevation, ref float heading, TrackSegment segment, float spacing, Vector3 offset, float defaultSpeedLimit)
     {
         float radius = Mathf.Max(0.1f, segment.radius);
@@ -217,7 +225,7 @@ public static class TrackBuilder
                 y,
                 center.z + Mathf.Sin(angle) * radius
             );
-            AddPoint(points, distances, speedLimits, p + offset, segmentSpeedLimit);
+            AddPoint(points, distances, speedLimits, grades, p + offset, segmentSpeedLimit, segment.grade);
         }
 
         elevation = startY + (segment.grade * arcLength);
@@ -225,14 +233,61 @@ public static class TrackBuilder
         position = points[points.Count - 1] - offset;
     }
 
-    private static void AddPoint(List<Vector3> points, List<float> distances, List<float> speedLimits,
-        Vector3 point, float speedLimit)
+    /// <summary>
+    /// Post-process: cosine-blend elevation at grade-change boundaries to avoid
+    /// abrupt mesh creases that cause WheelCollider lateral impulses.
+    /// Grade-zero proof: flat tracks have all grades == 0 → abs(0-0) < 0.005 → no-op.
+    /// </summary>
+    private static void SmoothGradeTransitions(
+        List<Vector3> points, List<float> grades, float spacing, float blendRadius = 3.0f)
+    {
+        if (points.Count < 3 || grades.Count < 3) return;
+        int blendPoints = Mathf.Max(1, Mathf.CeilToInt(blendRadius / Mathf.Max(spacing, 0.01f)));
+
+        // Collect boundary indices where grade changes
+        List<int> boundaries = new List<int>();
+        for (int i = 1; i < grades.Count; i++)
+        {
+            if (Mathf.Abs(grades[i] - grades[i - 1]) > 0.005f)
+                boundaries.Add(i);
+        }
+
+        foreach (int bnd in boundaries)
+        {
+            int start = Mathf.Max(1, bnd - blendPoints);
+            int end = Mathf.Min(grades.Count - 1, bnd + blendPoints);
+            if (end <= start) continue;
+
+            float gradeA = grades[Mathf.Max(0, start - 1)];
+            float gradeB = grades[Mathf.Min(grades.Count - 1, end)];
+
+            for (int j = start; j <= end; j++)
+            {
+                float t = (float)(j - start) / (end - start);
+                float blend = 0.5f * (1.0f - Mathf.Cos(t * Mathf.PI)); // cosine ease
+                float blendedGrade = Mathf.Lerp(gradeA, gradeB, blend);
+
+                // Recompute elevation from previous point
+                float dx = Vector3.Distance(
+                    new Vector3(points[j].x, 0f, points[j].z),
+                    new Vector3(points[j - 1].x, 0f, points[j - 1].z));
+                Vector3 p = points[j];
+                p.y = points[j - 1].y + blendedGrade * dx;
+                points[j] = p;
+                grades[j] = blendedGrade;
+            }
+        }
+    }
+
+    private static void AddPoint(List<Vector3> points, List<float> distances, List<float> speedLimits, List<float> grades,
+        Vector3 point, float speedLimit, float grade = 0f)
     {
         if (points.Count == 0)
         {
             points.Add(point);
             distances.Add(0f);
             speedLimits.Add(speedLimit);
+            grades.Add(grade);
             return;
         }
 
@@ -246,6 +301,7 @@ public static class TrackBuilder
         distances.Add(lastDistance + d);
         points.Add(point);
         speedLimits.Add(speedLimit);
+        grades.Add(grade);
     }
 
     private static float GetSegmentSpeedLimit(TrackSegment segment, float defaultSpeedLimit)
@@ -257,7 +313,7 @@ public static class TrackBuilder
         return segment.speedLimit > 0f ? segment.speedLimit : defaultSpeedLimit;
     }
 
-    private static void AddLoopConnector(List<Vector3> points, List<float> distances, List<float> speedLimits, float spacing)
+    private static void AddLoopConnector(List<Vector3> points, List<float> distances, List<float> speedLimits, List<float> grades, float spacing)
     {
         Vector3 start = points[0];
         Vector3 end = points[points.Count - 1];
@@ -268,11 +324,13 @@ public static class TrackBuilder
         }
         int steps = Mathf.Max(1, Mathf.CeilToInt(gap / spacing));
         float connectorSpeed = speedLimits.Count > 0 ? speedLimits[speedLimits.Count - 1] : 0f;
+        // Connector grade: compute from elevation delta to close the loop
+        float connectorGrade = gap > 0.01f ? (start.y - end.y) / gap : 0f;
         for (int i = 1; i <= steps; i++)
         {
             float t = (float)i / steps;
             Vector3 p = Vector3.Lerp(end, start, t);
-            AddPoint(points, distances, speedLimits, p, connectorSpeed);
+            AddPoint(points, distances, speedLimits, grades, p, connectorSpeed, connectorGrade);
         }
         Debug.Log($"TrackBuilder: Added loop connector (gap={gap:F2}m, steps={steps})");
     }

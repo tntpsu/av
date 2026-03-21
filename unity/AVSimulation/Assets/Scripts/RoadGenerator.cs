@@ -826,7 +826,13 @@ public class RoadGenerator : MonoBehaviour
         {
             Vector3 center = path.GetPointAtDistance(d);
             Vector3 direction = path.GetDirectionAtDistance(d);
-            Vector3 right = Vector3.Cross(Vector3.up, direction).normalized;
+            // Project onto XZ plane so lane offsets are horizontal on grades
+            Vector3 dirFlat = new Vector3(direction.x, 0f, direction.z);
+            if (dirFlat.sqrMagnitude < 0.001f)
+                dirFlat = Vector3.forward;
+            else
+                dirFlat.Normalize();
+            Vector3 right = Vector3.Cross(Vector3.up, dirFlat).normalized;
             Vector3 lanePoint = center + right * offsetFromCenter;
             lanePoint.y += 0.05f;
             points.Add(lanePoint);
@@ -870,9 +876,18 @@ public class RoadGenerator : MonoBehaviour
                 direction = ((points[i + 1] - point) + (point - points[i - 1])).normalized;
             }
             
-            Vector3 right = Vector3.Cross(Vector3.up, direction).normalized;
+            // Project direction onto XZ plane so the road width offset is
+            // always horizontal.  Without this, grades tilt the offset vector,
+            // twisting the mesh and producing wildly incorrect normals that
+            // cause WheelCollider contact-force collapse on graded sections.
+            Vector3 dirFlat = new Vector3(direction.x, 0f, direction.z);
+            if (dirFlat.sqrMagnitude < 0.001f)
+                dirFlat = Vector3.forward;
+            else
+                dirFlat.Normalize();
+            Vector3 right = Vector3.Cross(Vector3.up, dirFlat).normalized;
             Vector3 offset = right * (width * 0.5f);
-            
+
             vertices.Add(point - offset);
             vertices.Add(point + offset);
             
@@ -1104,6 +1119,30 @@ public class RoadGenerator : MonoBehaviour
         if (activeTrackConfig != null && activeTrackConfig.speedLimit > 0f)
         {
             return activeTrackConfig.speedLimit;
+        }
+        return 0f;
+    }
+
+    /// <summary>
+    /// Get road grade at parameter t (0 to 1). Returns 0 if not set.
+    /// </summary>
+    public float GetGradeAtT(float t)
+    {
+        if (trackPath != null)
+        {
+            return trackPath.GetGradeAtT(t);
+        }
+        return 0f;
+    }
+
+    /// <summary>
+    /// Get road grade at distance along path. Returns 0 if not set.
+    /// </summary>
+    public float GetGradeAtDistance(float distance)
+    {
+        if (trackPath != null)
+        {
+            return trackPath.GetGradeAtDistance(distance);
         }
         return 0f;
     }

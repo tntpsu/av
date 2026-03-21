@@ -9,6 +9,7 @@ from typing import List, Optional, Tuple
 from pathlib import Path
 import logging
 
+from .device_utils import resolve_torch_device
 from .models.lane_detection import LaneDetectionModel, SimpleLaneDetector, load_pretrained_model
 from .models.segmentation_model import load_segmentation_model
 
@@ -18,7 +19,8 @@ logger = logging.getLogger(__name__)
 class LaneDetectionInference:
     """Lane detection inference pipeline."""
     
-    def __init__(self, model_path: Optional[str] = None, use_gpu: bool = True, 
+    def __init__(self, model_path: Optional[str] = None, use_gpu: bool = True,
+                 prefer_mps: bool = True,
                  fallback_to_cv: bool = True,
                  segmentation_model_path: Optional[str] = None,
                  segmentation_mode: bool = False,
@@ -36,10 +38,11 @@ class LaneDetectionInference:
         
         Args:
             model_path: Path to trained model checkpoint
-            use_gpu: Whether to use GPU if available
+            use_gpu: Whether to use GPU if available (CUDA or MPS)
+            prefer_mps: On Mac, try Apple MPS before falling back to CPU
             fallback_to_cv: Fallback to traditional CV if model fails
         """
-        self.device = torch.device("cuda" if use_gpu and torch.cuda.is_available() else "cpu")
+        self.device = resolve_torch_device(use_gpu=bool(use_gpu), prefer_mps=bool(prefer_mps))
         self.fallback_to_cv = fallback_to_cv
         self.segmentation_mode = segmentation_mode
         self.segmentation_input_size = segmentation_input_size

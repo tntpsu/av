@@ -186,6 +186,7 @@ class SpeedGovernor:
         curve_rise: float = 0.0,
         turn_feasibility_speed_limit_mps: Optional[float] = None,
         turn_feasibility_infeasible: bool = False,
+        distance_to_curve: Optional[float] = None,
     ) -> SpeedGovernorOutput:
         """Compute the target speed for the longitudinal controller.
 
@@ -219,7 +220,7 @@ class SpeedGovernor:
         target = min(target, comfort_speed)
 
         # --- 2. Curve preview ---
-        preview_speed = self._compute_preview_speed(target, preview_curvature)
+        preview_speed = self._compute_preview_speed(target, preview_curvature, distance_to_curve)
         if preview_speed is not None:
             target = min(target, preview_speed)
 
@@ -392,7 +393,8 @@ class SpeedGovernor:
         return max(v_comfort, self.config.comfort_governor_min_speed)
 
     def _compute_preview_speed(
-        self, current_target: float, preview_curvature: Optional[float]
+        self, current_target: float, preview_curvature: Optional[float],
+        distance_to_curve: Optional[float] = None,
     ) -> Optional[float]:
         """Anticipatory deceleration based on preview curvature ahead."""
         if not self.config.curve_preview_enabled:
@@ -415,7 +417,10 @@ class SpeedGovernor:
 
         # v_entry^2 = v_curve^2 + 2 * decel * distance
         # For now use a fixed preview distance based on current speed
-        preview_distance = max(1.0, current_target * 0.8)
+        if distance_to_curve is not None and distance_to_curve > 1.0:
+            preview_distance = distance_to_curve
+        else:
+            preview_distance = max(1.0, current_target * 1.5)  # 1.5× speed ≈ 1.5s preview
         max_decel = self.config.curve_preview_max_decel_mps2
         v_entry_sq = curve_speed ** 2 + 2.0 * max_decel * preview_distance
         v_entry = math.sqrt(max(0.0, v_entry_sq))

@@ -243,6 +243,136 @@ PATTERNS = [
         "fix_hint": "MPC curvature reference diverges from trajectory path curvature. Check kappa feedforward pipeline.",
         "check": lambda m: m.get("mpc_available", False) and m.get("mpc_kappa_divergence_p95", 0) > 0.01,
     },
+    # Grade compensation patterns
+    {
+        "id": "grade_overspeed_downhill",
+        "name": "Downhill overspeed (>5% of downhill frames)",
+        "severity": "safety",
+        "code_pointer": "av_stack/orchestrator.py:_pf_run_speed_governor()",
+        "config_lever": "control.grade_ema_alpha / trajectory.mpc.mpc_grade_clamp_rad",
+        "fix_hint": "Increase brake authority on downhill. Check grade_ema_alpha smoothing or grade_clamp_rad limit.",
+        "check": lambda m: m.get("grade_available", False) and m.get("downhill_overspeed_rate", 0) > 0.05,
+    },
+    {
+        "id": "grade_compensation_missing",
+        "name": "Grade compensation inactive on graded terrain",
+        "severity": "instability",
+        "code_pointer": "av_stack/orchestrator.py:_pf_validate_frame()",
+        "config_lever": "control.grade_ema_alpha",
+        "fix_hint": "Grade > 2% but compensation active < 50%. Verify grade_rad is passed to controller.",
+        "check": lambda m: m.get("grade_available", False) and m.get("grade_max_pct", 0) > 2.0 and m.get("grade_comp_active_rate", 1.0) < 0.50,
+    },
+    {
+        "id": "grade_mpc_infeasible",
+        "name": "MPC infeasible on graded terrain",
+        "severity": "instability",
+        "code_pointer": "control/mpc_controller.py:MPCSolver.solve()",
+        "config_lever": "trajectory.mpc.mpc_grade_clamp_rad",
+        "fix_hint": "Grade > 2% and MPC infeasibility > 5%. Increase grade_clamp_rad or MPC accel budget.",
+        "check": lambda m: (m.get("grade_available", False) and m.get("grade_max_pct", 0) > 2.0
+                            and m.get("mpc_available", False) and m.get("mpc_infeasible_rate", 0) > 0.05),
+    },
+    # Grade E2E diagnostic patterns (Step 3B)
+    {
+        "id": "grade_pitch_signal_dead",
+        "name": "Pitch telemetry dead while road grade has signal",
+        "severity": "instability",
+        "code_pointer": "unity/AVSimulation/Assets/Scripts/AVBridge.cs:pitchRad",
+        "config_lever": "N/A — Unity WheelCollider suspension keeps chassis level",
+        "fix_hint": "pitch_rad variance ~0 while road_grade has signal. Using roadGrade as authoritative source.",
+        "check": lambda m: m.get("grade_available", False) and m.get("pitch_signal_dead", False),
+    },
+    {
+        "id": "grade_speed_below_target",
+        "name": "Speed >2 m/s below target for >30% of frames",
+        "severity": "comfort",
+        "code_pointer": "control/pid_controller.py:LongitudinalController",
+        "config_lever": "control.longitudinal.grade_ff_gain",
+        "fix_hint": "Speed consistently below target. Check grade compensation or throttle authority. Increase grade_ff_gain.",
+        "check": lambda m: m.get("speed_below_target_rate", 0) > 0.30,
+    },
+    {
+        "id": "grade_throttle_budget_starved",
+        "name": "Throttle budget starved on grade",
+        "severity": "instability",
+        "category": "Control",
+        "config_lever": "control.longitudinal.max_accel / control.longitudinal.grade_ff_gain",
+        "fix_hint": "Grade gravity consuming >50% of max_accel budget. Check effective_max_accel computation.",
+        "check": lambda m: m.get("grade_available", False) and m.get("grade_throttle_budget_min", 1.0) < 0.5,
+    },
+    {
+        "id": "grade_planner_false_cap",
+        "name": "Speed planner false cap on straight",
+        "severity": "instability",
+        "category": "Trajectory",
+        "config_lever": "trajectory.curve_speed_preview_min_curvature",
+        "fix_hint": "Speed planner capping on straight segments. Check curve preview distance-to-curve threading.",
+        "check": lambda m: m.get("planner_false_cap_rate", 0) > 0.10,
+    },
+    {
+        "id": "grade_lateral_osc_growth",
+        "name": "Lateral oscillation growth on grade",
+        "severity": "instability",
+        "category": "Control",
+        "config_lever": "control.lateral.grade_steering_damping_gain",
+        "fix_hint": "Lateral error variance growing 2x+ on graded segments. Check grade-proportional steering damping.",
+        "check": lambda m: m.get("grade_available", False) and m.get("grade_osc_growth", 0) > 2.0,
+    },
+    {
+        "id": "grade_perception_dropout",
+        "name": "Perception confidence drop on grade",
+        "severity": "instability",
+        "category": "Perception",
+        "config_lever": "perception (training data)",
+        "fix_hint": "Perception confidence 50%+ lower on graded vs flat. Segmentation model may need grade-diverse training data.",
+        "check": lambda m: m.get("grade_available", False) and m.get("grade_perception_conf_ratio", 1.0) < 0.5,
+    },
+    {
+        "id": "grade_throttle_saturated",
+        "name": "Throttle saturated on grade",
+        "severity": "comfort",
+        "category": "Control",
+        "config_lever": "control.longitudinal.max_accel",
+        "fix_hint": "Throttle at >95% for >10% of graded frames. Motor authority insufficient for grade + acceleration.",
+        "check": lambda m: m.get("grade_available", False) and m.get("grade_throttle_sat_rate", 0) > 0.10,
+    },
+    # MPC hunting / oscillation (Step 3D)
+    {
+        "id": "mpc_steering_oscillation",
+        "name": "MPC steering oscillation (hunting)",
+        "severity": "instability",
+        "category": "Control",
+        "code_pointer": "control/mpc_controller.py:MPCSolver.solve()",
+        "config_lever": "trajectory.mpc.mpc_q_lat / trajectory.mpc.mpc_r_steer_rate",
+        "fix_hint": "MPC steering sign-changes >30% of MPC frames. Lower q_lat or raise r_steer_rate to reduce aggressiveness.",
+        "check": lambda m: m.get("mpc_available", False) and m.get("mpc_steering_osc_rate", 0) > 0.30,
+    },
+    # GT boundary corruption (Step 3D)
+    {
+        "id": "gt_boundary_corrupt",
+        "name": "GT boundary values corrupt (>50m)",
+        "severity": "safety",
+        "category": "Perception",
+        "code_pointer": "unity/AVSimulation/Assets/Scripts/GroundTruthReporter.cs",
+        "config_lever": "N/A — Unity GT reporter bug at track boundary",
+        "fix_hint": "GT boundary values >50m detected. Add sanity clamp in GroundTruthReporter or filter in Python e-stop logic.",
+        "check": lambda m: m.get("gt_boundary_corrupt_frames", 0) > 0,
+    },
+    # Curve late turn-in / lookahead floor rescue (Step 4)
+    {
+        "id": "traj_curve_late_turn_in",
+        "name": "Curve late turn-in (lookahead floor rescue)",
+        "severity": "comfort",
+        "category": "Trajectory",
+        "code_pointer": "trajectory/inference.py:_compute_lookahead()",
+        "config_lever": "trajectory.curve_local_commit_distance_ready_m (auto-derived from speed)",
+        "fix_hint": (
+            "Lookahead drops abruptly at curve onset — COMMIT phase firing late. "
+            "Auto-derive raises curve_local_commit_distance_ready_m with target speed. "
+            "If still present: check curve_auto_derive=true and target_speed in config."
+        ),
+        "check": lambda m: m.get("floor_rescue_rate", 0.0) > 0.05,
+    },
 ]
 
 SEVERITY_ORDER = {"safety": 0, "instability": 1, "comfort": 2}
@@ -371,7 +501,7 @@ class TriageEngine:
             # MPC metrics
             regime = arr("control/regime")
             if regime is not None:
-                mpc_mask = regime >= 1
+                mpc_mask = regime >= 0.5
                 m["mpc_available"] = True
                 m["mpc_active_rate"] = float(np.mean(mpc_mask)) if len(mpc_mask) > 0 else 0.0
 
@@ -427,6 +557,146 @@ class TriageEngine:
             else:
                 m["mpc_available"] = False
 
+            # Grade metrics
+            road_grade = arr("vehicle/road_grade")
+            if road_grade is not None:
+                m["grade_available"] = True
+                m["grade_max_pct"] = float(np.max(np.abs(road_grade))) * 100.0
+                downhill_mask = road_grade < -0.02
+                speed = arr("vehicle/speed")
+                speed_limit = arr("vehicle/speed_limit")
+                if np.any(downhill_mask) and speed is not None and speed_limit is not None:
+                    dh_speed = speed[downhill_mask]
+                    dh_limit = speed_limit[downhill_mask]
+                    m["downhill_overspeed_rate"] = float(np.mean(dh_speed > dh_limit + 1.0))
+                else:
+                    m["downhill_overspeed_rate"] = 0.0
+                grade_comp = arr("control/grade_compensation_active")
+                graded_mask = np.abs(road_grade) > 0.001
+                graded_count = int(np.sum(graded_mask))
+                if graded_count > 0 and grade_comp is not None:
+                    m["grade_comp_active_rate"] = float(np.mean(grade_comp[graded_mask] > 0.5))
+                else:
+                    m["grade_comp_active_rate"] = 1.0
+                # Throttle budget on grade (Step 3C)
+                eff_max_accel = arr("control/effective_max_accel")
+                grade_throttle = arr("control/throttle")
+                graded = np.abs(road_grade) > 0.02
+                if np.any(graded):
+                    if eff_max_accel is not None and grade_throttle is not None:
+                        gravity_load = 9.81 * np.abs(np.sin(road_grade[graded]))
+                        budget = (eff_max_accel[graded] - gravity_load) / max(float(m.get("max_accel", 1.2)), 0.1)
+                        m["grade_throttle_budget_min"] = float(np.min(budget))
+                        m["grade_throttle_sat_rate"] = float(np.mean(grade_throttle[graded] > 0.95))
+
+                # Speed planner false cap on straight
+                limiter = arr("control/speed_governor_active_limiter_code")
+                curv_preview = arr("control/curvature_preview_abs")
+                grade_speed = arr("vehicle/speed")
+                if limiter is not None and curv_preview is not None and grade_speed is not None:
+                    planner_on_straight = (limiter == 5) & (curv_preview < 0.003) & (grade_speed < 10.0)
+                    m["planner_false_cap_rate"] = float(np.mean(planner_on_straight))
+
+                # Windowed lateral oscillation on grade
+                grade_lat_err = arr("control/lateral_error")
+                if grade_lat_err is not None and np.any(graded) and np.sum(graded) > 60:
+                    graded_err = np.abs(grade_lat_err[graded])
+                    win = 20
+                    if len(graded_err) > 2 * win:
+                        vars_early = float(np.var(graded_err[:win]))
+                        vars_late = float(np.var(graded_err[-win:]))
+                        m["grade_osc_growth"] = float(vars_late / max(vars_early, 1e-6))
+
+                # Per-wheel diagnostics (Step 3D)
+                wheel_force = arr("vehicle/wheel_contact_force")
+                sideways_slip = arr("vehicle/wheel_sideways_slip")
+                contact_normal_y = arr("vehicle/wheel_contact_normal_y")
+                if wheel_force is not None and wheel_force.ndim == 2 and wheel_force.shape[1] == 4:
+                    front_force = (wheel_force[:, 0] + wheel_force[:, 1]) / 2
+                    rear_force = (wheel_force[:, 2] + wheel_force[:, 3]) / 2
+                    m["wheel_force_front_rear_ratio"] = float(
+                        np.mean(front_force / np.maximum(rear_force, 1.0)))
+                if contact_normal_y is not None and contact_normal_y.ndim == 2 and np.any(graded):
+                    graded_normals = contact_normal_y[graded]
+                    m["grade_contact_normal_y_mean"] = float(np.mean(graded_normals))
+                if sideways_slip is not None and sideways_slip.ndim == 2:
+                    left_slip = (sideways_slip[:, 0] + sideways_slip[:, 2]) / 2
+                    right_slip = (sideways_slip[:, 1] + sideways_slip[:, 3]) / 2
+                    m["lateral_slip_asymmetry_p95"] = float(
+                        np.percentile(np.abs(left_slip - right_slip), 95))
+
+                # MPC steering oscillation on grade (Step 3D)
+                regime = arr("control/regime")
+                ctrl_steer = arr("control/steering")
+                if regime is not None and ctrl_steer is not None:
+                    mpc_mask = regime >= 0.5
+                    if np.sum(mpc_mask) > 10:
+                        mpc_steer = ctrl_steer[mpc_mask]
+                        sign_changes = np.sum(np.diff(np.sign(mpc_steer)) != 0)
+                        m["mpc_steering_osc_rate"] = float(sign_changes / len(mpc_steer))
+
+                # Perception on grade vs flat
+                grade_conf = arr("perception/confidence")
+                flat = np.abs(road_grade) <= 0.02
+                if grade_conf is not None and np.any(graded) and np.any(flat):
+                    m["grade_perception_conf_ratio"] = float(
+                        np.mean(grade_conf[graded]) / max(float(np.mean(grade_conf[flat])), 0.01))
+
+            else:
+                m["grade_available"] = False
+
+            # GT boundary sanity check (Step 3D)
+            for gt_key in ("vehicle/gt_left_boundary", "vehicle/gt_right_boundary",
+                           "vehicle/groundTruthLeftBoundary", "vehicle/groundTruthRightBoundary"):
+                gt_vals = arr(gt_key)
+                if gt_vals is not None:
+                    corrupt_count = int(np.sum(np.abs(gt_vals) > 50.0))
+                    m["gt_boundary_corrupt_frames"] = m.get("gt_boundary_corrupt_frames", 0) + corrupt_count
+
+            # MPC steering oscillation (non-grade context — Step 3D)
+            if "mpc_steering_osc_rate" not in m:
+                regime = arr("control/regime")
+                ctrl_steer = arr("control/steering")
+                if regime is not None and ctrl_steer is not None:
+                    mpc_mask = regime >= 0.5
+                    if np.sum(mpc_mask) > 10:
+                        mpc_steer = ctrl_steer[mpc_mask]
+                        sign_changes = np.sum(np.diff(np.sign(mpc_steer)) != 0)
+                        m["mpc_steering_osc_rate"] = float(sign_changes / len(mpc_steer))
+
+            # Pitch signal health
+            pitch = arr("vehicle/pitch_rad")
+            if pitch is not None and road_grade is not None:
+                m["pitch_signal_dead"] = bool(
+                    np.var(pitch) < 1e-6 and np.var(road_grade) > 1e-4
+                )
+
+            # Curve late turn-in / lookahead floor rescue (Step 4)
+            _lookahead = arr("control/pp_lookahead_distance")
+            _curvature = arr("control/curvature_primary_abs")
+            if _lookahead is not None and _curvature is not None:
+                min_len = min(len(_lookahead), len(_curvature))
+                la = _lookahead[:min_len]
+                kappa = _curvature[:min_len]
+                in_curve_mask = kappa > 0.005  # any meaningful curvature
+                if np.any(in_curve_mask):
+                    # Floor rescue: abrupt lookahead drops (>2m in one frame) while in curve
+                    la_diff = np.diff(la)
+                    diff_in_curve = la_diff[in_curve_mask[1:]]
+                    floor_rescue_mask = diff_in_curve < -2.0
+                    m["floor_rescue_rate"] = float(np.mean(floor_rescue_mask)) if len(diff_in_curve) > 0 else 0.0
+                    m["floor_rescue_count"] = int(np.sum(floor_rescue_mask))
+                else:
+                    m["floor_rescue_rate"] = 0.0
+                    m["floor_rescue_count"] = 0
+
+            # Speed below target rate
+            _speed = arr("vehicle/speed")
+            if _speed is not None:
+                m["speed_below_target_rate"] = float(
+                    np.mean(_speed < 10.0)
+                )
+
         return m
 
     def _match_patterns(self, metrics: dict) -> list:
@@ -445,6 +715,16 @@ class TriageEngine:
             "mpc_regime_chatter":    "mpc_regime_changes_per_min",
             "mpc_heading_error_exceeds_model": "mpc_heading_error_p95",
             "mpc_kappa_ref_mismatch": "mpc_kappa_divergence_p95",
+            "grade_overspeed_downhill": "downhill_overspeed_rate",
+            "grade_compensation_missing": "grade_comp_active_rate",
+            "grade_mpc_infeasible": "mpc_infeasible_rate",
+            "grade_throttle_budget_starved": "grade_throttle_budget_min",
+            "grade_planner_false_cap": "planner_false_cap_rate",
+            "grade_lateral_osc_growth": "grade_osc_growth",
+            "grade_perception_dropout": "grade_perception_conf_ratio",
+            "grade_throttle_saturated": "grade_throttle_sat_rate",
+            "mpc_steering_oscillation": "mpc_steering_osc_rate",
+            "gt_boundary_corrupt": "gt_boundary_corrupt_frames",
         }
         for pat in PATTERNS:
             try:

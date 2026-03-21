@@ -105,8 +105,8 @@ public class CarController : MonoBehaviour
     [Header("Wheel Colliders (Option B)")]
     public bool useWheelColliders = true;
     public float wheelRadius = 0.35f;
-    public float wheelSuspensionDistance = 0.2f;
-    public float wheelSpring = 30000f;
+        public float wheelSuspensionDistance = 0.35f;
+        public float wheelSpring = 45000f;
     public float wheelDamper = 6000f;
     public float wheelMass = 20f;
     public float maxMotorTorque = 1500f;
@@ -137,6 +137,9 @@ public class CarController : MonoBehaviour
     public bool allowForceFallbackIfWheelCollidersUnavailable = false;
     [Header("Debug")]
     public bool forceFreezeYForDebug = false;
+    [Tooltip("Allow pitch (rotation-X) freedom so weight distributes correctly on graded roads. " +
+             "When false, FreezeRotationX keeps the chassis level but causes rear-wheel unloading on hills.")]
+    public bool allowPitchOnGrade = true;
     [Header("Steering Actuator")]
     [Tooltip("Max steer angle at low speed (deg)")]
     public float maxSteerAngleLowSpeed = 30f;
@@ -216,7 +219,19 @@ public class CarController : MonoBehaviour
                         "ignoring freeze-Y to avoid masking chassis ride-height issues."
                     );
                 }
-                rb.constraints = RigidbodyConstraints.FreezeRotationX | RigidbodyConstraints.FreezeRotationZ;
+                // When allowPitchOnGrade is true, only freeze roll (Z), leaving
+                // pitch (X) free so the chassis can tilt on graded roads.  With
+                // FreezeRotationX on a grade the chassis stays level while the road
+                // tilts underneath, causing the rear wheels to unload and lose
+                // lateral grip — leading to yaw divergence at speed.
+                if (allowPitchOnGrade)
+                {
+                    rb.constraints = RigidbodyConstraints.FreezeRotationZ;
+                }
+                else
+                {
+                    rb.constraints = RigidbodyConstraints.FreezeRotationX | RigidbodyConstraints.FreezeRotationZ;
+                }
             }
             else
             {
@@ -585,7 +600,9 @@ public class CarController : MonoBehaviour
         JointSpring spring = wheel.suspensionSpring;
         spring.spring = wheelSpring;
         spring.damper = wheelDamper;
-        spring.targetPosition = 0.5f;
+        // Rest at 15% compression (vs 50% default) so the body sits ~0.12 m higher,
+        // giving enough clearance to avoid chassis-ground contact on 5% grades.
+        spring.targetPosition = 0.15f;
         wheel.suspensionSpring = spring;
 
         WheelFrictionCurve forward = wheel.forwardFriction;
@@ -1600,6 +1617,32 @@ public class CarController : MonoBehaviour
             actualSteeringAngle = -(frontLeftWheel.steerAngle + frontRightWheel.steerAngle) * 0.5f;
         }
 
+        // Per-wheel diagnostics
+        WheelCollider[] wheels = { frontLeftWheel, frontRightWheel, rearLeftWheel, rearRightWheel };
+        float[] _wheelSidewaysSlip = new float[4];
+        float[] _wheelForwardSlip = new float[4];
+        float[] _wheelContactForce = new float[4];
+        float[] _wheelRpm = new float[4];
+        float[] _wheelSprungMass = new float[4];
+        float[] _wheelContactNormalY = new float[4];
+        for (int i = 0; i < 4; i++)
+        {
+            WheelHit hit;
+            if (wheels[i] != null && wheels[i].GetGroundHit(out hit))
+            {
+                _wheelSidewaysSlip[i] = hit.sidewaysSlip;
+                _wheelForwardSlip[i] = hit.forwardSlip;
+                _wheelContactForce[i] = hit.force;
+                _wheelContactNormalY[i] = hit.normal.y;
+            }
+            if (wheels[i] != null)
+            {
+                _wheelRpm[i] = wheels[i].rpm;
+                _wheelSprungMass[i] = wheels[i].sprungMass;
+            }
+        }
+        float _wheelSteerAngleActual = -(frontLeftWheel.steerAngle + frontRightWheel.steerAngle) * 0.5f;
+
         return new VehicleState
         {
             position = transform.position,
@@ -1637,6 +1680,13 @@ public class CarController : MonoBehaviour
             chassisGroundContact = chassisGroundContact,
             wheelGroundedCount = wheelGroundedCount,
             wheelCollidersReady = wheelCollidersReady,
+            wheelSidewaysSlip = _wheelSidewaysSlip,
+            wheelForwardSlip = _wheelForwardSlip,
+            wheelContactForce = _wheelContactForce,
+            wheelRpm = _wheelRpm,
+            wheelSprungMass = _wheelSprungMass,
+            wheelContactNormalY = _wheelContactNormalY,
+            wheelSteerAngleActual = _wheelSteerAngleActual,
             forceFallbackActive = forceFallbackActive
         };
     }
@@ -1799,6 +1849,10 @@ public class VehicleState
     public float speedLimitPreviewLong = 0.0f;  // Speed limit at long preview distance (m/s)
     public float speedLimitPreviewLongDistance = 0.0f;  // Long preview distance (m)
     public float speedLimitPreviewLongMinDistance = 0.0f;  // Distance to min limit in long window (m)
+    // Grade/pitch/roll telemetry (Step 3 — grade compensation)
+    public float pitchRad = 0.0f;     // Vehicle pitch (positive = nose up)
+    public float rollRad = 0.0f;      // Vehicle roll (positive = right lean)
+    public float roadGrade = 0.0f;    // Local road grade (rise/run) from track profile
     // Chassis-ground health diagnostics (high-rate telemetry)
     public float chassisGroundMinClearanceM = 0.08f;
     public float chassisGroundEffectiveMinClearanceM = 0.08f;
@@ -1808,4 +1862,13 @@ public class VehicleState
     public int wheelGroundedCount = 0;
     public bool wheelCollidersReady = false;
     public bool forceFallbackActive = false;
+
+    // Per-wheel diagnostics (4 wheels: FL, FR, RL, RR)
+    public float[] wheelSidewaysSlip = new float[4];    // lateral slip per wheel
+    public float[] wheelForwardSlip = new float[4];      // longitudinal slip per wheel
+    public float[] wheelContactForce = new float[4];     // normal force magnitude per wheel
+    public float[] wheelRpm = new float[4];               // wheel rotation speed
+    public float[] wheelSprungMass = new float[4];        // mass supported by each wheel
+    public float[] wheelContactNormalY = new float[4];    // contact surface normal Y component
+    public float wheelSteerAngleActual;                    // actual WheelCollider steer angle (after actuator)
 }

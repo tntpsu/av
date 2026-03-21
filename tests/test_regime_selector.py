@@ -5,7 +5,7 @@ Tests cover: disabled passthrough, low/high speed routing, hysteresis,
 hold timer, blend weight ramp, MPC fallback override, and Stanley low-speed regime.
 
 Run:  pytest tests/test_regime_selector.py -v
-Gate: 17/17 pass
+Gate: 32/32 pass
 """
 
 import pytest
@@ -23,10 +23,16 @@ def _make_selector(
     downshift_hysteresis_mps=1.0,
     blend_frames=15,
     min_hold_frames=30,
+    mpc_min_speed_mps=None,
+    mpc_max_curvature=0.020,
+    mpc_curvature_hysteresis=0.003,
 ) -> RegimeSelector:
     cfg = RegimeConfig(
         enabled=enabled,
         pp_max_speed_mps=pp_max_speed_mps,
+        mpc_min_speed_mps=mpc_min_speed_mps if mpc_min_speed_mps is not None else pp_max_speed_mps,
+        mpc_max_curvature=mpc_max_curvature,
+        mpc_curvature_hysteresis=mpc_curvature_hysteresis,
         upshift_hysteresis_mps=upshift_hysteresis_mps,
         downshift_hysteresis_mps=downshift_hysteresis_mps,
         blend_frames=blend_frames,
@@ -35,11 +41,11 @@ def _make_selector(
     return RegimeSelector(cfg)
 
 
-def _run_n(selector, speed, n=35) -> tuple:
+def _run_n(selector, speed, n=35, curvature_abs=0.0) -> tuple:
     """Run selector for n frames at constant speed. Returns last result."""
     result = None
     for _ in range(n):
-        result = selector.update(speed=speed)
+        result = selector.update(speed=speed, curvature_abs=curvature_abs)
     return result
 
 
@@ -252,6 +258,7 @@ def _make_stanley_selector(
         stanley_blend_frames=stanley_blend_frames,
         stanley_min_hold_frames=stanley_min_hold_frames,
         pp_max_speed_mps=pp_max_speed_mps,
+        mpc_min_speed_mps=pp_max_speed_mps,  # preserve old speed logic for Stanley tests
         min_hold_frames=30,
     )
     return RegimeSelector(cfg)
@@ -372,6 +379,88 @@ def test_stanley_blend_frames_shorter_than_pp():
     assert blends[-1] == 1.0, "Stanley blend should reach 1.0 in 10 frames"
 
 
+def test_stanley_inhibit_curvature_blocks_downshift_from_mpc():
+    """On highway curve (κ>threshold), brake below Stanley speed → stay LINEAR_MPC."""
+    cfg = RegimeConfig(
+        enabled=True,
+        stanley_enabled=True,
+        stanley_max_speed_mps=5.0,
+        stanley_upshift_hysteresis_mps=0.5,
+        stanley_downshift_hysteresis_mps=0.5,
+        stanley_blend_frames=5,
+        stanley_min_hold_frames=5,
+        stanley_inhibit_curvature_abs=0.005,
+        mpc_min_speed_mps=3.0,
+        mpc_max_curvature=0.020,
+        mpc_curvature_hysteresis=0.003,
+        upshift_hysteresis_mps=1.0,
+        downshift_hysteresis_mps=1.0,
+        pp_max_speed_mps=10.0,
+        min_hold_frames=5,
+        blend_frames=10,
+    )
+    sel = RegimeSelector(cfg)
+    _run_n(sel, speed=12.0, n=25, curvature_abs=0.01)
+    assert sel.active_regime == ControlRegime.LINEAR_MPC
+    regime, _ = _run_n(sel, speed=4.4, n=25, curvature_abs=0.01)
+    assert regime == ControlRegime.LINEAR_MPC, (
+        f"Expected LINEAR_MPC (Stanley inhibited on curve), got {regime}"
+    )
+
+
+def test_stanley_exits_when_curvature_spikes_while_slow():
+    """If already in Stanley, entering a sharp curve forces exit from Stanley."""
+    cfg = RegimeConfig(
+        enabled=True,
+        stanley_enabled=True,
+        stanley_max_speed_mps=5.0,
+        stanley_upshift_hysteresis_mps=0.5,
+        stanley_downshift_hysteresis_mps=0.5,
+        stanley_blend_frames=5,
+        stanley_min_hold_frames=5,
+        stanley_inhibit_curvature_abs=0.005,
+        mpc_min_speed_mps=3.0,
+        mpc_max_curvature=0.020,
+        mpc_curvature_hysteresis=0.003,
+        upshift_hysteresis_mps=1.0,
+        downshift_hysteresis_mps=1.0,
+        pp_max_speed_mps=10.0,
+        min_hold_frames=5,
+        blend_frames=10,
+    )
+    sel = RegimeSelector(cfg)
+    _run_n(sel, speed=3.0, n=30, curvature_abs=0.0001)
+    assert sel.active_regime == ControlRegime.STANLEY
+    regime, _ = _run_n(sel, speed=3.0, n=30, curvature_abs=0.015)
+    assert regime != ControlRegime.STANLEY
+
+
+def test_stanley_inhibit_disabled_zero_threshold_legacy():
+    """stanley_inhibit_curvature_abs=0 restores downshift on curve (legacy)."""
+    cfg = RegimeConfig(
+        enabled=True,
+        stanley_enabled=True,
+        stanley_max_speed_mps=5.0,
+        stanley_upshift_hysteresis_mps=0.5,
+        stanley_downshift_hysteresis_mps=0.5,
+        stanley_blend_frames=5,
+        stanley_min_hold_frames=5,
+        stanley_inhibit_curvature_abs=0.0,
+        mpc_min_speed_mps=3.0,
+        mpc_max_curvature=0.020,
+        mpc_curvature_hysteresis=0.003,
+        upshift_hysteresis_mps=1.0,
+        downshift_hysteresis_mps=1.0,
+        pp_max_speed_mps=10.0,
+        min_hold_frames=5,
+        blend_frames=10,
+    )
+    sel = RegimeSelector(cfg)
+    _run_n(sel, speed=12.0, n=25, curvature_abs=0.01)
+    regime, _ = _run_n(sel, speed=4.4, n=25, curvature_abs=0.01)
+    assert regime == ControlRegime.STANLEY
+
+
 def test_stanley_from_config_loaded():
     """RegimeConfig.from_config loads stanley_* fields correctly."""
     cfg_dict = {
@@ -382,6 +471,7 @@ def test_stanley_from_config_loaded():
                 "stanley_max_speed_mps": 6.0,
                 "stanley_upshift_hysteresis_mps": 0.3,
                 "stanley_blend_frames": 8,
+                "stanley_inhibit_curvature_abs": 0.006,
             }
         }
     }
@@ -391,3 +481,125 @@ def test_stanley_from_config_loaded():
     assert rc.stanley_upshift_hysteresis_mps == 0.3
     assert rc.stanley_blend_frames == 8
     assert rc.stanley_min_hold_frames == 15  # default
+    assert rc.stanley_inhibit_curvature_abs == 0.006
+
+
+# ---------------------------------------------------------------------------
+# Step 4: Curvature guard tests
+# ---------------------------------------------------------------------------
+
+def test_curvature_guard_forces_pp_on_tight_curve():
+    """MPC active at 8 m/s, κ=0.025 (R40) → curvature guard forces PP."""
+    sel = _make_selector(mpc_min_speed_mps=3.0, min_hold_frames=5)
+    # Settle into MPC at 8 m/s with gentle curvature
+    _run_n(sel, speed=8.0, n=10, curvature_abs=0.005)
+    assert sel.active_regime == ControlRegime.LINEAR_MPC
+
+    # Curvature rises above 0.020 → should force PP
+    regime, _ = _run_n(sel, speed=8.0, n=10, curvature_abs=0.025)
+    assert regime == ControlRegime.PURE_PURSUIT, \
+        f"Expected PP at κ=0.025 (tight curve), got {regime}"
+
+
+def test_curvature_guard_allows_mpc_on_gentle_curve():
+    """κ=0.010 (R100) at 8 m/s → MPC stays active."""
+    sel = _make_selector(mpc_min_speed_mps=3.0, min_hold_frames=5)
+    # Settle into MPC
+    _run_n(sel, speed=8.0, n=10, curvature_abs=0.005)
+    assert sel.active_regime == ControlRegime.LINEAR_MPC
+
+    # κ=0.010 < 0.020 → MPC should stay
+    regime, _ = _run_n(sel, speed=8.0, n=10, curvature_abs=0.010)
+    assert regime == ControlRegime.LINEAR_MPC, \
+        f"Expected MPC at κ=0.010 (gentle curve), got {regime}"
+
+
+def test_curvature_guard_hysteresis():
+    """Oscillate κ between 0.018 and 0.021 → no chatter (≤1 switch)."""
+    sel = _make_selector(mpc_min_speed_mps=3.0, min_hold_frames=5)
+    # Start in MPC
+    _run_n(sel, speed=8.0, n=10, curvature_abs=0.005)
+    assert sel.active_regime == ControlRegime.LINEAR_MPC
+
+    switches = 0
+    last_regime = sel.active_regime
+    for i in range(120):
+        kappa = 0.018 if i % 2 == 0 else 0.021
+        regime, _ = sel.update(speed=8.0, curvature_abs=kappa)
+        if regime != last_regime:
+            switches += 1
+            last_regime = regime
+
+    # At most 1 transition: MPC→PP when κ=0.021 exceeds threshold.
+    # Hysteresis (0.017) prevents re-engaging MPC at κ=0.018.
+    assert switches <= 1, f"Expected ≤1 curvature switch, got {switches}"
+
+
+def test_mpc_activates_at_low_speed():
+    """v=5.5 m/s with low κ → MPC (was PP at old 10.0 threshold)."""
+    sel = _make_selector(mpc_min_speed_mps=3.0, min_hold_frames=5)
+    # 5.5 > 3.0 + 1.0 = 4.0 → should upshift to MPC
+    regime, _ = _run_n(sel, speed=5.5, n=10, curvature_abs=0.005)
+    assert regime == ControlRegime.LINEAR_MPC, \
+        f"Expected MPC at v=5.5 with mpc_min=3.0, got {regime}"
+
+
+def test_mpc_blocked_below_min_speed():
+    """v=1.5 m/s → should stay PP (or Stanley), never MPC."""
+    sel = _make_selector(mpc_min_speed_mps=3.0, min_hold_frames=5, pp_max_speed_mps=10.0)
+    sel.config.stanley_enabled = False  # isolate speed logic
+    regime, _ = _run_n(sel, speed=1.5, n=20, curvature_abs=0.005)
+    assert regime == ControlRegime.PURE_PURSUIT, \
+        f"Expected PP at v=1.5 (below mpc_min), got {regime}"
+
+
+def test_curvature_zero_does_not_affect_speed_logic():
+    """κ=0.0 (no data) → curvature guard inactive, pure speed logic."""
+    sel = _make_selector(mpc_min_speed_mps=3.0, min_hold_frames=5)
+    # With κ=0.0, speed logic should work normally
+    regime, _ = _run_n(sel, speed=5.5, n=10, curvature_abs=0.0)
+    assert regime == ControlRegime.LINEAR_MPC, \
+        f"Expected MPC at v=5.5 with κ=0.0, got {regime}"
+
+
+def test_full_sweep_speed_and_curvature():
+    """Sweep v and κ → verify correct regimes across the envelope."""
+    sel = _make_selector(
+        mpc_min_speed_mps=3.0, min_hold_frames=3,
+        mpc_max_curvature=0.020, mpc_curvature_hysteresis=0.003,
+    )
+    sel.config.stanley_enabled = False  # isolate PP/MPC logic
+
+    # Low speed → PP
+    _run_n(sel, speed=1.5, n=10, curvature_abs=0.005)
+    assert sel.active_regime == ControlRegime.PURE_PURSUIT
+
+    # Medium speed, low κ → MPC
+    _run_n(sel, speed=8.0, n=10, curvature_abs=0.005)
+    assert sel.active_regime == ControlRegime.LINEAR_MPC
+
+    # Medium speed, high κ → PP (curvature guard)
+    _run_n(sel, speed=8.0, n=10, curvature_abs=0.025)
+    assert sel.active_regime == ControlRegime.PURE_PURSUIT
+
+    # Back to low κ — must clear hysteresis (κ < 0.017) to re-engage MPC
+    _run_n(sel, speed=8.0, n=10, curvature_abs=0.010)
+    assert sel.active_regime == ControlRegime.LINEAR_MPC
+
+
+def test_from_config_loads_curvature_fields():
+    """RegimeConfig.from_config loads mpc_min_speed_mps and curvature fields."""
+    cfg_dict = {
+        "control": {
+            "regime": {
+                "enabled": True,
+                "mpc_min_speed_mps": 5.0,
+                "mpc_max_curvature": 0.015,
+                "mpc_curvature_hysteresis": 0.002,
+            }
+        }
+    }
+    rc = RegimeConfig.from_config(cfg_dict)
+    assert rc.mpc_min_speed_mps == 5.0
+    assert rc.mpc_max_curvature == 0.015
+    assert rc.mpc_curvature_hysteresis == 0.002

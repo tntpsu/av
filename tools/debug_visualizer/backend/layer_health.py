@@ -31,6 +31,8 @@ from scoring_registry import (  # noqa: E402
     CTRL_JERK_ALERT,
     LOOKAHEAD_CONCERN_M,
     BENIGN_STALE_REASONS,
+    MPC_SOLVE_TIME_BUDGET_MS,
+    MPC_SOLVE_TIME_ALERT_MS,
 )
 
 
@@ -179,20 +181,27 @@ class LayerHealthAnalyzer:
         # MPC penalties (only when regime field exists)
         if "control/regime" in f:
             regime_val = self._scalar(f, "control/regime", i, default=0.0)
-            if regime_val >= 1:  # MPC active
+            if regime_val >= 0.5:  # MPC active
                 if self._scalar(f, "control/mpc_feasible", i, default=1.0) < 0.5:
                     score -= 0.40
                     flags.append("mpc_infeasible")
                 solve_ms = self._scalar(f, "control/mpc_solve_time_ms", i, default=0.0)
-                if solve_ms > 8.0:
+                if solve_ms > MPC_SOLVE_TIME_ALERT_MS:
                     score -= 0.30
                     flags.append("mpc_solve_slow")
-                elif solve_ms > 5.0:
+                elif solve_ms > MPC_SOLVE_TIME_BUDGET_MS:
                     score -= 0.15
                     flags.append("mpc_solve_marginal")
                 if self._scalar(f, "control/mpc_fallback_active", i, default=0.0) > 0.5:
                     score -= 0.50
                     flags.append("mpc_fallback")
+
+        # Grade compensation flag (informational — no score penalty)
+        if "vehicle/road_grade" in f:
+            road_grade_val = abs(self._scalar(f, "vehicle/road_grade", i, default=0.0))
+            grade_comp_val = self._scalar(f, "control/grade_compensation_active", i, default=0.0)
+            if road_grade_val > 0.02 and grade_comp_val < 0.5:
+                flags.append("grade_compensation_missing")
 
         return {"score": max(0.0, min(1.0, score)), "flags": flags}
 

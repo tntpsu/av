@@ -70,7 +70,7 @@ control:
     - speed_mps: 12.0
       lookahead_m: 5.6
     pp_curve_local_shorten_slew_m_per_frame: 0.15
-    pp_curve_local_floor_state_min: COMMIT
+    pp_curve_local_floor_state_min: ENTRY
     pp_min_lookahead: 0.5
     pp_speed_norm_enabled: true
     pp_speed_norm_reference_mps: 12.0
@@ -552,7 +552,7 @@ trajectory:
   image_width: 640
   image_height: 480
   camera_fov: 66.0
-  camera_height: 1.4
+  camera_height: 1.2
   camera_offset_x: 0.0
   distance_scaling_factor: 0.875
   bias_correction_threshold: 10.0

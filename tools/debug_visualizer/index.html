@@ -166,6 +166,7 @@
                     <button class="tab-btn" data-tab="gates">Gates</button>
                     <button class="tab-btn" data-tab="issues">Issues</button>
                     <button class="tab-btn" data-tab="diagnostics">Diagnostics</button>
+                    <button class="tab-btn" data-tab="cadence">Cadence</button>
                     <button class="tab-btn" data-tab="layers">Layers</button>
                     <button class="tab-btn" data-tab="triage">Triage</button>
                     <button class="tab-btn active" data-tab="all-data">All Data</button>
@@ -222,6 +223,15 @@
                         <div id="diagnostics-content" style="max-height: 70vh; overflow-y: auto; padding-right: 10px;">
                             <p style="color: #888; text-align: center; padding: 2rem;">
                                 Load a recording to see trajectory vs steering diagnostics
+                            </p>
+                        </div>
+                    </div>
+
+                    <!-- Cadence Tab — wait_input vs pipeline / queue / recommendations -->
+                    <div id="cadence-tab" class="tab-pane">
+                        <div id="cadence-content" style="max-height: 70vh; overflow-y: auto; padding-right: 10px;">
+                            <p style="color: #888; text-align: center; padding: 2rem;">
+                                Load a recording for cadence breakdown (tools/analyze/cadence_breakdown.py)
                             </p>
                         </div>
                     </div>

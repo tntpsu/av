@@ -1469,7 +1469,7 @@ def detect_issues(recording_path: Path, analyze_to_failure: bool = False) -> Dic
             # 8. DETECT MPC ISSUES
             if 'control/regime' in f:
                 regime = np.array(f['control/regime'][:num_frames])
-                mpc_mask = regime >= 1
+                mpc_mask = regime >= 0.5
 
                 if 'control/mpc_feasible' in f:
                     feasible = np.array(f['control/mpc_feasible'][:num_frames])
@@ -1518,6 +1518,249 @@ def detect_issues(recording_path: Path, analyze_to_failure: bool = False) -> Dic
                             "frames": [int(x) for x in fallback_frames[:20]],
                             "first_frame": int(fallback_frames[0]),
                         })
+
+            # Grade issues (guarded on field existence)
+            if 'vehicle/road_grade' in f:
+                road_grade = np.array(f['vehicle/road_grade'][:num_frames])
+                speed = np.array(f['vehicle/speed'][:num_frames]) if 'vehicle/speed' in f else None
+                speed_limit = np.array(f['vehicle/speed_limit'][:num_frames]) if 'vehicle/speed_limit' in f else None
+                pitch_rad = np.array(f['vehicle/pitch_rad'][:num_frames]) if 'vehicle/pitch_rad' in f else None
+                grade_comp = (
+                    np.array(f['control/grade_compensation_active'][:num_frames])
+                    if 'control/grade_compensation_active' in f else None
+                )
+
+                # Grade overspeed: speed > target + margin on downhill
+                if speed is not None and speed_limit is not None:
+                    downhill_overspeed = np.where(
+                        (road_grade < -0.02) & (speed > speed_limit + 1.0)
+                    )[0]
+                    if len(downhill_overspeed) > 0:
+                        issues.append({
+                            "frame": int(downhill_overspeed[0]),
+                            "type": "grade_overspeed",
+                            "severity": "high",
+                            "description": (
+                                f"Downhill overspeed on {len(downhill_overspeed)} frame(s). "
+                                f"First at frame {int(downhill_overspeed[0])}."
+                            ),
+                            "frames": [int(x) for x in downhill_overspeed[:20]],
+                            "first_frame": int(downhill_overspeed[0]),
+                        })
+
+                # Grade compensation inactive on graded terrain
+                if grade_comp is not None:
+                    comp_missing = np.where(
+                        (np.abs(road_grade) > 0.02) & (grade_comp < 0.5)
+                    )[0]
+                    if len(comp_missing) > 0:
+                        issues.append({
+                            "frame": int(comp_missing[0]),
+                            "type": "grade_compensation_inactive",
+                            "severity": "medium",
+                            "description": (
+                                f"Grade compensation inactive on {len(comp_missing)} graded frame(s). "
+                                f"First at frame {int(comp_missing[0])}."
+                            ),
+                            "frames": [int(x) for x in comp_missing[:20]],
+                            "first_frame": int(comp_missing[0]),
+                        })
+
+                # Pitch discontinuity (upstream issue)
+                if pitch_rad is not None and len(pitch_rad) > 1:
+                    pitch_diff = np.abs(np.diff(pitch_rad))
+                    pitch_jumps = np.where(pitch_diff > 0.02)[0]
+                    if len(pitch_jumps) > 0:
+                        issues.append({
+                            "frame": int(pitch_jumps[0]),
+                            "type": "grade_pitch_discontinuity",
+                            "severity": "info",
+                            "description": (
+                                f"Pitch discontinuity (>0.02 rad) on {len(pitch_jumps)} frame(s). "
+                                f"Max jump: {float(np.max(pitch_diff)):.4f} rad."
+                            ),
+                            "frames": [int(x) for x in pitch_jumps[:20]],
+                            "first_frame": int(pitch_jumps[0]),
+                        })
+
+                # Pitch signal dead (Step 3B): pitch_rad ~0 while road_grade has signal
+                if pitch_rad is not None and len(road_grade) > 10:
+                    pitch_var = float(np.var(pitch_rad))
+                    grade_var = float(np.var(road_grade))
+                    if pitch_var < 1e-6 and grade_var > 1e-4:
+                        issues.append({
+                            "frame": 0,
+                            "type": "grade_pitch_signal_dead",
+                            "severity": "info",
+                            "description": (
+                                f"Pitch telemetry dead (var={pitch_var:.2e}) while road_grade "
+                                f"has signal (var={grade_var:.2e}). roadGrade is authoritative."
+                            ),
+                            "frames": [0],
+                            "first_frame": 0,
+                        })
+
+                # Grade throttle saturated (Step 3C)
+                if 'control/throttle' in f:
+                    ctrl_throttle = np.array(f['control/throttle'][:num_frames])
+                    sat_frames = np.where(
+                        (ctrl_throttle >= 0.95) & (np.abs(road_grade) > 0.02)
+                    )[0]
+                    for fr in sat_frames[:20]:  # cap to 20 issues
+                        issues.append({
+                            "frame": int(fr),
+                            "type": "grade_throttle_saturated",
+                            "severity": "medium",
+                            "message": f"Throttle saturated ({ctrl_throttle[fr]:.2f}) on {abs(road_grade[fr])*100:.1f}% grade",
+                        })
+
+                # Grade accel budget starved (Step 3C)
+                if 'control/effective_max_accel' in f:
+                    eff_accel = np.array(f['control/effective_max_accel'][:num_frames])
+                    gravity_load = 9.81 * np.abs(np.sin(road_grade))
+                    base_max_accel = 1.2  # default from config
+                    budget_ratio = (eff_accel - gravity_load) / max(base_max_accel, 0.1)
+                    starved_frames = np.where(
+                        (budget_ratio < 0.5) & (np.abs(road_grade) > 0.02)
+                    )[0]
+                    for fr in starved_frames[:20]:
+                        issues.append({
+                            "frame": int(fr),
+                            "type": "grade_accel_budget_starved",
+                            "severity": "medium",
+                            "message": f"Accel budget ratio {budget_ratio[fr]:.2f} on {abs(road_grade[fr])*100:.1f}% grade",
+                        })
+
+                # Grade planner false cap (Step 3C)
+                if 'control/speed_governor_active_limiter_code' in f and 'control/curvature_preview_abs' in f:
+                    lim_code = np.array(f['control/speed_governor_active_limiter_code'][:num_frames])
+                    curv_prev = np.array(f['control/curvature_preview_abs'][:num_frames])
+                    false_cap_frames = np.where(
+                        (lim_code == 5) & (curv_prev < 0.003) & (speed < speed_limit - 1.0)
+                    )[0]
+                    for fr in false_cap_frames[:20]:
+                        issues.append({
+                            "frame": int(fr),
+                            "type": "grade_planner_false_cap",
+                            "severity": "medium",
+                            "message": f"Speed planner cap active (code=5) on straight (κ={curv_prev[fr]:.4f})",
+                        })
+
+            # 8. WHEEL SLIP DIVERGENCE (Step 3D)
+            if "vehicle/wheel_sideways_slip" in f:
+                ws_slip = np.array(f["vehicle/wheel_sideways_slip"][:num_frames])
+                if ws_slip.ndim == 2 and ws_slip.shape[1] == 4:
+                    # Flag frames where any wheel has sideways slip > 0.1 on a straight
+                    max_slip = np.max(np.abs(ws_slip), axis=1)
+                    is_straight_for_slip = True  # default
+                    if "control/curvature_primary_abs" in f:
+                        curv_abs = np.array(f["control/curvature_primary_abs"][:num_frames])
+                        curv_abs = curv_abs[:len(max_slip)]
+                        is_straight_for_slip = curv_abs < 0.005
+                    slip_divergence = np.where(
+                        (max_slip > 0.1) & (is_straight_for_slip if isinstance(is_straight_for_slip, np.ndarray) else True)
+                    )[0]
+                    for fr in slip_divergence[:30]:
+                        issues.append({
+                            "frame": int(fr),
+                            "type": "wheel_slip_divergence",
+                            "severity": "high",
+                            "message": (
+                                f"Wheel sideways slip {max_slip[fr]:.3f} on straight "
+                                f"(FL={ws_slip[fr,0]:.3f} FR={ws_slip[fr,1]:.3f} "
+                                f"RL={ws_slip[fr,2]:.3f} RR={ws_slip[fr,3]:.3f})"
+                            ),
+                        })
+
+            # 9. MPC STEERING DIVERGENCE (Step 3D)
+            # When MPC is active (regime >= 0.5), flag frames where MPC steering
+            # diverges significantly from PP steering — indicates MPC hunting.
+            if "control/regime" in f and "control/steering" in f:
+                regime = np.array(f["control/regime"][:num_frames])
+                final_steer = np.array(f["control/steering"][:num_frames])
+                pp_steer = None
+                if "control/steering_post_hard_clip" in f:
+                    pp_steer = np.array(f["control/steering_post_hard_clip"][:num_frames])
+                if pp_steer is not None:
+                    mpc_active = regime >= 0.5
+                    steer_div = np.abs(final_steer - pp_steer)
+                    # Flag when MPC diverges > 0.05 rad from PP on MPC-active frames
+                    mpc_divergent = np.where(mpc_active & (steer_div > 0.05))[0]
+                    for fr in mpc_divergent[:30]:
+                        issues.append({
+                            "frame": int(fr),
+                            "type": "mpc_steering_divergence",
+                            "severity": "medium",
+                            "message": (
+                                f"MPC steering diverges from PP by {steer_div[fr]:.3f} rad "
+                                f"(MPC={final_steer[fr]:.3f}, PP={pp_steer[fr]:.3f})"
+                            ),
+                        })
+                    # Also detect MPC oscillation: sign changes in MPC steering
+                    if np.sum(mpc_active) > 10:
+                        mpc_frames = np.where(mpc_active)[0]
+                        mpc_steer_vals = final_steer[mpc_frames]
+                        sign_changes = np.sum(np.diff(np.sign(mpc_steer_vals)) != 0)
+                        osc_rate = sign_changes / len(mpc_frames) if len(mpc_frames) > 0 else 0
+                        if osc_rate > 0.3:  # > 30% of frames have sign change = hunting
+                            issues.append({
+                                "frame": int(mpc_frames[0]),
+                                "type": "mpc_oscillation",
+                                "severity": "high",
+                                "message": (
+                                    f"MPC steering oscillation detected: {sign_changes} sign changes "
+                                    f"in {len(mpc_frames)} MPC frames ({osc_rate:.1%} rate)"
+                                ),
+                            })
+
+            # 10. GT BOUNDARY SANITY (Step 3D)
+            # Unity GroundTruthReporter can produce corrupt boundary values (5000+ m).
+            # Flag frames where GT boundaries are implausible.
+            for gt_key in ("vehicle/gt_left_boundary", "vehicle/gt_right_boundary",
+                           "vehicle/groundTruthLeftBoundary", "vehicle/groundTruthRightBoundary"):
+                if gt_key in f:
+                    gt_vals = np.array(f[gt_key][:num_frames])
+                    corrupt = np.where(np.abs(gt_vals) > 50.0)[0]
+                    for fr in corrupt[:10]:
+                        issues.append({
+                            "frame": int(fr),
+                            "type": "gt_boundary_corrupt",
+                            "severity": "critical",
+                            "message": (
+                                f"GT boundary '{gt_key.split('/')[-1]}' = {gt_vals[fr]:.1f}m "
+                                f"(|value| > 50m — likely corrupt)"
+                            ),
+                        })
+
+            # ── Section 11: CURVE LATE TURN-IN / LOOKAHEAD FLOOR RESCUE (Step 4) ──
+            la_arr = np.array(f["control/pp_lookahead_distance"][:num_frames]) \
+                if "control/pp_lookahead_distance" in f else None
+            kappa_arr = np.array(f["control/curvature_primary_abs"][:num_frames]) \
+                if "control/curvature_primary_abs" in f else None
+            if la_arr is not None and kappa_arr is not None:
+                min_len = min(len(la_arr), len(kappa_arr), num_frames)
+                la_arr = la_arr[:min_len]
+                kappa_arr = kappa_arr[:min_len]
+                in_curve = kappa_arr > 0.005
+                if len(la_arr) > 1:
+                    la_diff = np.diff(la_arr)
+                    # Floor rescue: lookahead drops >2m in one frame while in a curve
+                    rescue_frames = np.where((la_diff < -2.0) & in_curve[1:])[0]
+                    if len(rescue_frames) >= 2:
+                        for fr in rescue_frames[:20]:
+                            issues.append({
+                                "frame": int(fr),
+                                "type": "curve_late_turn_in",
+                                "severity": "medium",
+                                "message": (
+                                    f"Lookahead floor rescue at curve onset: "
+                                    f"Δlookahead={la_diff[fr]:.1f}m, "
+                                    f"κ={kappa_arr[fr+1]:.4f}. "
+                                    f"COMMIT phase firing late — raise "
+                                    f"curve_local_commit_distance_ready_m or "
+                                    f"enable curve_auto_derive."
+                                ),
+                            })
 
             # Sort issues by frame number
             issues.sort(key=lambda x: x["frame"])

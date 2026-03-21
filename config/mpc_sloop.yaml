@@ -1,35 +1,23 @@
 # S-loop track overlay — merges on top of config/av_stack_config.yaml at runtime.
 #
 # Only parameters that differ from base are listed here.
-# Base provides all other defaults (speed tables, curvature thresholds, safety, MPC params).
-#
 # Track: s_loop
 # Usage:
 #   ./start_av_stack.sh --config config/mpc_sloop.yaml \
 #       --track-yaml tracks/s_loop.yml --duration 60
 #
-# NOTE: MPC does NOT activate on s_loop (cap-tracked speed 4-7 m/s, below 10 m/s threshold).
-#   This config validates that enabling the regime selector causes no regression when MPC
-#   never fires. Do NOT lower pp_max_speed_mps to force MPC at low speed — unstable.
+# NOTE: MPC does NOT activate on s_loop (cap-tracked speed 4-7 m/s, curvature guard blocks at κ>0.020).
+# Explicit mpc_min_speed_mps override prevents brief MPC engagement on short straights.
+
+# ── Remaining overlay keys (future task: auto-derive from track geometry) ──
+# pp_map_ff_enabled: tight curves don't benefit from map FF; could auto-disable when κ_max > threshold
+# commit_distance_ready_m: approach-length dependent; could derive from min straight segment length
 
 control:
   lateral:
     pp_map_ff_enabled: false    # map feedforward off on s_loop; tight curves handled by PP geometry
-    pp_map_ff_gain: 1.0         # (inactive while pp_map_ff_enabled=false; set for future reference)
   regime:
-    enabled: true
+    mpc_min_speed_mps: 10.0     # Step 4: disable MPC on s_loop (speeds 4-7 m/s, tight curves)
 
 trajectory:
-  # curve_scheduler_mode, phase_distance_start_m, and reference_lookahead_speed_table_entry
-  # promoted to base config (2026-03-13).
-  # commit_distance_ready_m stays track-specific: 8.0 works on long-approach tracks
-  # (s_loop, mixed_radius) but causes straight-latch on hairpin (short straights, back-to-back arcs).
-  reference_lookahead_entry_track_name: s_loop  # auto-derived from --track-yaml; explicit for clarity
   curve_local_commit_distance_ready_m: 8.0  # track-specific (base: 3.0); long s_loop approaches support early COMMIT
-  mpc:
-    mpc_horizon: 30           # longer horizon for curved track (base: 20)
-    mpc_q_lat: 12.0           # stronger lateral error cost for tight s_loop curves (base: 10.0)
-    mpc_q_heading: 8.0        # stronger heading cost (base: 5.0)
-    mpc_r_steer: 0.25         # less steer penalty for tighter curves (base: 0.5)
-    mpc_r_steer_rate: 0.8     # smoother transitions on curved track (base: 1.0)
-    mpc_delta_rate_max: 0.25  # allow faster steering rate on tight curves (base: 0.15)

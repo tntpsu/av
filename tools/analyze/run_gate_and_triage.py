@@ -1153,6 +1153,44 @@ def main() -> int:
     validate_contract_required_fields(gate_report)
     _write_json(bundle_dir / "gate_report.json", gate_report)
 
+    cadence_dir = bundle_dir / "cadence_breakdown"
+    cadence_dir.mkdir(exist_ok=True)
+    cadence_index: list[dict[str, Any]] = []
+    try:
+        _analyze_dir = str(REPO_ROOT / "tools" / "analyze")
+        if _analyze_dir not in sys.path:
+            sys.path.insert(0, _analyze_dir)
+        from cadence_breakdown import analyze_cadence
+
+        for row in run_artifacts:
+            safe_name = row.recording_id.replace("/", "_").replace("\\", "_")
+            out_path = cadence_dir / f"{safe_name}.json"
+            try:
+                cadence_payload = analyze_cadence(row.recording_path)
+                _write_json(out_path, cadence_payload)
+                cadence_index.append(
+                    {
+                        "recording_id": row.recording_id,
+                        "relative_path": f"cadence_breakdown/{safe_name}.json",
+                    }
+                )
+            except Exception as exc:
+                cadence_index.append(
+                    {
+                        "recording_id": row.recording_id,
+                        "error": str(exc),
+                    }
+                )
+        _write_json(
+            cadence_dir / "index.json",
+            {"schema_version": SCHEMA_VERSION, "runs": cadence_index},
+        )
+    except Exception as exc:
+        _write_json(
+            cadence_dir / "index.json",
+            {"schema_version": SCHEMA_VERSION, "error": str(exc), "runs": []},
+        )
+
     failing_rows = [r for r in run_artifacts if r.trigger_reasons]
     triage_packets: list[dict[str, Any]] = []
     for row in failing_rows:

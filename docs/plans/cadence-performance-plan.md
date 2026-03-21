@@ -45,13 +45,17 @@ wait_input       = inputs_ready[t] - control_sent[t-1]        (inter-frame idle)
 total_processing = control_sent - inputs_ready                (end-to-end Python work)
 ```
 
-**Immediate action**: Add a `tools/analyze/cadence_breakdown.py` script that:
-1. Loads any HDF5 recording
-2. Computes the four phases above
-3. Stratifies by normal / severe (control_dt > 200 ms)
-4. Prints P50/P95/max per phase + scatter plot of wait_input vs control_dt
+**Implementation plan:** See **`docs/plans/cadence_breakdown_tool_plan.md`**. **Shipped:** `tools/analyze/cadence_breakdown.py`, PhilViz **Cadence** tab + `/api/recording/.../cadence-breakdown`, gate run `cadence_breakdown/*.json`.
 
-This script requires no code changes and can run TODAY.
+**Note:** The formulas below used a shorthand `phase_perception = e2e_front_ready - e2e_inputs_ready`; with `inputs_ready = max(front, vehicle)` that difference is ≤ 0. The tool plan uses **`input_sync_skew_ms = |front − vehicle|`**, **`wait_input_ms`**, and **`pipeline_ms = control_sent − inputs_ready`** instead.
+
+**Original sketch** for `tools/analyze/cadence_breakdown.py`:
+1. Loads any HDF5 recording
+2. Computes wait/pipeline/skew series (see tool plan)
+3. Stratifies by normal / severe (wall loop period > 200 ms by default)
+4. Prints P50/P95/P99/max per series + optional plots
+
+Phase-1 version requires **no new HDF5 fields**; optional `perf_*` fields extend it later.
 
 ### 2.2 Queue depth and timestamp lag (already in HDF5)
 

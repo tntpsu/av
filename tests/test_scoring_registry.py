@@ -34,8 +34,28 @@ from scoring_registry import (
     LOOKAHEAD_CONCERN_M,
     MPC_SOLVE_TIME_BUDGET_MS,
     MPC_SOLVE_TIME_ALERT_MS,
+    MPC_SOLVE_TIME_P95_MS_GATE,
+    MPC_SOLVE_TIME_MARGINAL_MS,
+    MPC_INFEASIBILITY_RATE_GATE,
+    MPC_FALLBACK_RATE_GATE,
+    MPC_REGIME_CHATTER_PER_MIN,
+    MPC_STEERING_OSC_RATE_GATE,
+    MPC_HEADING_ERROR_P95_RAD,
+    MPC_MIN_SPEED_DEFAULT_MPS,
+    MPC_MAX_CURVATURE_DEFAULT,
     BENIGN_STALE_REASONS,
     COMFORT_GATES,
+    GRADE_MAX_SAFE_PCT,
+    GRADE_EMA_ALPHA,
+    GRADE_CLAMP_RAD,
+    DOWNHILL_SPEED_MARGIN_MPS,
+    GRADE_FF_GAIN_DEFAULT,
+    GRADE_FF_GAIN_UNITY,
+    GRADE_THROTTLE_BUDGET_MIN_RATIO,
+    GRADE_THROTTLE_SATURATION_RATE,
+    GRADE_JERK_RELAXATION_GAIN,
+    GRADE_STEERING_DAMPING_GAIN,
+    GRADE_TRANSITION_BLEND_M,
 )
 
 
@@ -121,6 +141,33 @@ class TestMPCConstants:
     def test_solve_time_alert(self):
         assert MPC_SOLVE_TIME_ALERT_MS == 8.0
 
+    def test_solve_time_p95_gate(self):
+        assert MPC_SOLVE_TIME_P95_MS_GATE == 5.0
+
+    def test_solve_time_marginal(self):
+        assert MPC_SOLVE_TIME_MARGINAL_MS == 3.0
+
+    def test_infeasibility_rate_gate(self):
+        assert MPC_INFEASIBILITY_RATE_GATE == 0.005
+
+    def test_fallback_rate_gate(self):
+        assert MPC_FALLBACK_RATE_GATE == 0.005
+
+    def test_regime_chatter_per_min(self):
+        assert MPC_REGIME_CHATTER_PER_MIN == 6.0
+
+    def test_steering_osc_rate_gate(self):
+        assert MPC_STEERING_OSC_RATE_GATE == 0.30
+
+    def test_heading_error_p95_rad(self):
+        assert MPC_HEADING_ERROR_P95_RAD == 0.25
+
+    def test_min_speed_default(self):
+        assert MPC_MIN_SPEED_DEFAULT_MPS == 3.0
+
+    def test_max_curvature_default(self):
+        assert MPC_MAX_CURVATURE_DEFAULT == 0.020
+
 
 class TestBenignStaleReasons:
     def test_is_frozenset(self):
@@ -151,3 +198,43 @@ class TestComfortGatesDict:
         assert COMFORT_GATES["out_of_lane_events_max"] == 0
         assert COMFORT_GATES["emergency_stops_max"] == 0
         assert COMFORT_GATES["steering_jerk_max_max"] == STEERING_JERK_GATE
+
+
+class TestGradeConstants:
+    def test_grade_max_safe_pct(self):
+        assert GRADE_MAX_SAFE_PCT == 10.0
+
+    def test_grade_ema_alpha(self):
+        assert GRADE_EMA_ALPHA == 0.3
+
+    def test_grade_clamp_rad(self):
+        assert GRADE_CLAMP_RAD == 0.15
+
+    def test_downhill_speed_margin(self):
+        assert DOWNHILL_SPEED_MARGIN_MPS == 1.0
+
+    def test_grade_ff_gain_default(self):
+        assert GRADE_FF_GAIN_DEFAULT == 1.8
+
+    def test_grade_ff_gain_unity(self):
+        assert GRADE_FF_GAIN_UNITY == 1.8
+
+    def test_grade_throttle_budget_min_ratio(self):
+        from scoring_registry import GRADE_THROTTLE_BUDGET_MIN_RATIO
+        assert GRADE_THROTTLE_BUDGET_MIN_RATIO == 0.5
+
+    def test_grade_throttle_saturation_rate(self):
+        from scoring_registry import GRADE_THROTTLE_SATURATION_RATE
+        assert GRADE_THROTTLE_SATURATION_RATE == 0.10
+
+    def test_grade_jerk_relaxation_gain(self):
+        from scoring_registry import GRADE_JERK_RELAXATION_GAIN
+        assert GRADE_JERK_RELAXATION_GAIN == 2.0
+
+    def test_grade_steering_damping_gain(self):
+        from scoring_registry import GRADE_STEERING_DAMPING_GAIN
+        assert GRADE_STEERING_DAMPING_GAIN == 5.0
+
+    def test_grade_transition_blend_m(self):
+        from scoring_registry import GRADE_TRANSITION_BLEND_M
+        assert GRADE_TRANSITION_BLEND_M == 3.0

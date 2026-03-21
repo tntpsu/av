@@ -47,6 +47,28 @@ LOOKAHEAD_CONCERN_M: float = 8.0        # "short at speed" alert threshold
 # ── MPC thresholds ───────────────────────────────────────────────────────────
 MPC_SOLVE_TIME_BUDGET_MS: float = 5.0   # ms — solve time budget
 MPC_SOLVE_TIME_ALERT_MS: float = 8.0    # ms — slow solve alert
+MPC_SOLVE_TIME_P95_MS_GATE: float = 5.0       # ms — P95 solve time gate
+MPC_SOLVE_TIME_MARGINAL_MS: float = 3.0       # ms — marginal solve time threshold
+MPC_INFEASIBILITY_RATE_GATE: float = 0.005    # — max infeasibility rate
+MPC_FALLBACK_RATE_GATE: float = 0.005         # — max fallback rate
+MPC_REGIME_CHATTER_PER_MIN: float = 6.0       # transitions/min — chatter threshold
+MPC_STEERING_OSC_RATE_GATE: float = 0.30      # — steering sign-change rate gate
+MPC_HEADING_ERROR_P95_RAD: float = 0.25       # rad — heading error P95 gate
+MPC_MIN_SPEED_DEFAULT_MPS: float = 3.0        # m/s — default MPC min speed (Step 4)
+MPC_MAX_CURVATURE_DEFAULT: float = 0.020      # 1/m — default curvature guard (R50, Step 4)
+
+# ── Grade compensation ──────────────────────────────────────────────────────
+GRADE_MAX_SAFE_PCT: float = 10.0           # %     — max safe road grade
+GRADE_EMA_ALPHA: float = 0.3              # —     — EMA smoothing for grade signal
+GRADE_CLAMP_RAD: float = 0.15             # rad   — max grade input to MPC (~8.5°)
+DOWNHILL_SPEED_MARGIN_MPS: float = 1.0    # m/s   — allowable overspeed margin on downhill
+GRADE_FF_GAIN_DEFAULT: float = 1.8       # —     — calibrated for Unity WheelCollider physics (promoted to base)
+GRADE_FF_GAIN_UNITY: float = 1.8         # —     — calibrated for Unity WheelCollider physics
+GRADE_THROTTLE_BUDGET_MIN_RATIO: float = 0.5   # — — min acceptable (effective_max_accel - gravity) / max_accel
+GRADE_THROTTLE_SATURATION_RATE: float = 0.10   # — — max acceptable fraction of graded frames at throttle > 0.95
+GRADE_JERK_RELAXATION_GAIN: float = 2.0        # — — jerk limit bonus per unit gravity_accel
+GRADE_STEERING_DAMPING_GAIN: float = 5.0       # — — steering alpha reduction per rad of grade
+GRADE_TRANSITION_BLEND_M: float = 3.0          # m — cosine blend radius at grade transitions (TrackBuilder)
 
 # ── Benign stale reasons ─────────────────────────────────────────────────────
 BENIGN_STALE_REASONS: frozenset[str] = frozenset({"left_lane_low_visibility"})

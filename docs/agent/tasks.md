@@ -1,10 +1,15 @@
 # AV Stack — Agent Memory: Tasks
 
-**Last updated:** 2026-03-16 (T-073, T-074)
+**Last updated:** 2026-02-17 (Step 3.5 — 2DOF FF alignment implemented, pending live validation)
 
 ---
 
 ## Current Focus
+
+**Step 3.5 — 2DOF Feedforward Alignment: IMPLEMENTED (2026-02-17)**
+- `MPCSolver._feedforward_delta_norm` helper + `ff_alignment_enabled` param + per-solve q correction
+- 4 new tests in `TestFFAlignment` (all pass). Full suite: 954 passing, 0 regressions.
+- Awaiting live Unity runs: highway_65 (non-regression, target ≥ 97) + hill_highway (e_lat adj_p50 ≤ 0.25m on R100, was 0.405m)
 
 **Phase 2.8 VALIDATED on highway (2026-03-12).** MPC pipeline fixes (2.8.1–2.8.4) complete:
 - 2.8.1: Recovery mode suppression (skip ×1.2/×1.5 when MPC active)
@@ -54,8 +59,10 @@
 | — | Track coverage expansion (S2-M5) — 5 tracks validated | **✅ Done (2026-03-15)** |
 | 1 | Automated A/B CI regression (T-033) | **✅ Done (2026-03-16)** |
 | 2 | Config Phase 3: auto-derive curvature (T-076) | **✅ Done (2026-03-16)** |
-| 3 | Grade and banking | Pending |
-| 4 | NMPC + full hierarchical hybrid (plan.md §2.7-2.8) | Pending |
+| 3 | Grade and banking | **✅ Done (2026-03-17)** — hill_highway 89.6/100 E2E validated |
+| 4 | MPC as primary lateral controller + q_lat auto-derive | **✅ Done (2026-03-17)** — curvature guard, 954 tests |
+| 3.5 | 2DOF FF alignment (`ff_alignment_enabled`) | **⏳ Pending live validation (2026-02-17)** — code + 4 tests complete, Unity runs pending |
+| 5 | NMPC + full hierarchical hybrid (plan.md §2.7-2.8) | Pending (entry: Step 3.5 validated) |
 | 5 | Lead vehicle following / ACC | Pending |
 | 6 | Multi-lane perception + map | Pending |
 | 7 | Lane change planning + execution | Pending |
@@ -105,3 +112,12 @@
 | T-060 | Test suite cleanup: 29 pre-existing failures → 0 failed, 506 passed, 9 skipped | Post-S2-M3 | 2026-02-24 |
 | — | Phase 2.1–2.7b MPC (solver, regime selector, highway true-state, curvature preview) | Phase 2 | 2026-03-09 |
 | — | Phase 2.8 MPC pipeline fixes (recovery suppression, steering feedback, rate limiter, delay compensation) | Phase 2.8 | 2026-03-12 |
+| — | Phase 2.9 Stanley low-speed regime + curvature-adjusted scoring | Phase 2.9 | 2026-03-15 |
+| — | S2-M5 Track coverage expansion (5 tracks validated, unified scoring) | S2-M5 | 2026-03-15 |
+| T-033 | Automated A/B CI regression (scoring_regression.py, check_config_regression.py) | Step 1 | 2026-03-16 |
+| T-076 | Config Phase 3: auto-derive curvature thresholds (4th-root scaling, 22 params) | Step 2 | 2026-03-16 |
+| T-073 | Centralized scoring registry (scoring_registry.py, 25+ thresholds, 27 guard tests) | Step 2 | 2026-03-16 |
+| — | Step 3: Grade & Banking — full-stack grade compensation (Unity C# → Python → MPC/PP → scoring → PhilViz), hill_highway track, 40 new tests | Step 3 | 2026-03-16 |
+| — | Step 3D E2E: hill_highway 89.6/100 (Trajectory gate cleared via q_lat auto-derive) | Step 3D | 2026-03-17 |
+| — | Step 4: MPC as primary — curvature guard (κ>0.020→PP), mpc_min_speed base=3.0, per-track overlays, regime mask fixes, 9 registry constants, 17 new tests | Step 4 | 2026-03-17 |
+| — | MPC q_lat auto-derive: `_derive_mpc_weights()` with 0.75-power formula, κ_mpc_active clamping, 8 new tests | Step 4 | 2026-03-17 |

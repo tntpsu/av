@@ -1,0 +1,10 @@
+# Hill highway track overlay
+#
+# Run with:
+#   ./start_av_stack.sh --track-yaml tracks/hill_highway.yml --duration 120
+#
+# No active overrides vs base config (tight_scale=0.70 was reverted after E2E validation
+# showed it worsened curve lateral centering: C1 +9%, C2 +17% mean e_lat vs tight_scale=0.50).
+# The PP rescue mechanism is driven by pp_floor, not tight_scale — wrong lever.
+
+trajectory: {}

@@ -1,0 +1,120 @@
+# Hill highway track — oval with hills, ~943m, R100 arcs
+# Designed for Step 3 grade compensation validation.
+# Reachable in 90s at 12 m/s (90s × 12 m/s = 1,080m > 943m).
+#
+# Grade transitions use 5m ramp segments at half-grade to avoid
+# road mesh discontinuities that cause lateral oscillation.
+#
+# Elevation budget:
+#   Uphill:         0.025×5 + 0.05×95 + 0.025×5 = +5.0m
+#   Downhill:      -0.025×5 + -0.05×55 + -0.025×5 = -3.0m
+#   Gentle down:   -0.02×5  + -0.04×45 + -0.02×5  = -2.0m
+#   Net: +5.0 - 3.0 - 2.0 = 0.0m  ✓
+#
+# Heading closure: 4 × 90° = 360°  ✓
+#
+name: hill_highway
+road_width: 7.2
+lane_line_width: 0.2
+sample_spacing: 1.0
+loop: true
+start_distance: 3.0
+speed_limit_mph: 30.0
+segments:
+  # 1. Flat start — accelerate
+  - type: straight
+    length: 50
+    grade: 0.0
+    speed_limit_mph: 30.0
+
+  # 2. Ramp into uphill (transition)
+  - type: straight
+    length: 5
+    grade: 0.025
+    speed_limit_mph: 30.0
+
+  # 3. Uphill straight — 5% grade
+  - type: straight
+    length: 95
+    grade: 0.05
+    speed_limit_mph: 30.0
+
+  # 4. Ramp out of uphill (transition)
+  - type: straight
+    length: 5
+    grade: 0.025
+    speed_limit_mph: 30.0
+
+  # 5. Hilltop arc — flat
+  - type: arc
+    radius: 100
+    angle_deg: 90
+    direction: left
+    grade: 0.0
+    speed_limit_mph: 25.0
+
+  # 6. Ramp into downhill (transition)
+  - type: straight
+    length: 5
+    grade: -0.025
+    speed_limit_mph: 30.0
+
+  # 7. Downhill straight — -5% grade
+  - type: straight
+    length: 55
+    grade: -0.05
+    speed_limit_mph: 30.0
+
+  # 8. Ramp out of downhill (transition)
+  - type: straight
+    length: 5
+    grade: -0.025
+    speed_limit_mph: 30.0
+
+  # 9. Valley arc — flat
+  - type: arc
+    radius: 100
+    angle_deg: 90
+    direction: left
+    grade: 0.0
+    speed_limit_mph: 25.0
+
+  # 10. Ramp into gentle downhill (transition)
+  - type: straight
+    length: 5
+    grade: -0.02
+    speed_limit_mph: 30.0
+
+  # 11. Gentle downhill — closes remaining elevation
+  - type: straight
+    length: 45
+    grade: -0.04
+    speed_limit_mph: 30.0
+
+  # 12. Ramp out of gentle downhill (transition)
+  - type: straight
+    length: 5
+    grade: -0.02
+    speed_limit_mph: 30.0
+
+  # 13. Turn — flat
+  - type: arc
+    radius: 100
+    angle_deg: 90
+    direction: left
+    grade: 0.0
+    speed_limit_mph: 25.0
+
+  # 14. Flat return straight
+  - type: straight
+    length: 40
+    grade: 0.0
+    speed_limit_mph: 30.0
+
+  # 15. Closing turn — completes 360°
+  - type: arc
+    radius: 100
+    angle_deg: 90
+    direction: left
+    grade: 0.0
+    speed_limit_mph: 25.0

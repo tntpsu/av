@@ -147,6 +147,27 @@ class DataLoader {
     }
 
     /**
+     * Cadence breakdown (wait_input vs pipeline, queue depth, recommendations).
+     */
+    async loadCadenceBreakdown(filename = null, options = {}) {
+        const target = filename || this.currentRecording;
+        if (!target) {
+            throw new Error('No recording specified');
+        }
+        const params = new URLSearchParams();
+        if (options.preFailureOnly) params.set('pre_failure_only', 'true');
+        if (Number.isFinite(Number(options.severeMs))) params.set('severe_ms', String(options.severeMs));
+        if (Number.isFinite(Number(options.targetHz))) params.set('target_hz', String(options.targetHz));
+        const suffix = params.toString() ? `?${params.toString()}` : '';
+        const response = await fetch(
+            `${API_BASE}/recording/${target}/cadence-breakdown${suffix}`,
+            { cache: 'no-store' }
+        );
+        if (!response.ok) throw new Error('Failed to load cadence breakdown');
+        return response.json();
+    }
+
+    /**
      * Load frame data for a specific frame index.
      */
     async loadFrameData(frameIndex) {

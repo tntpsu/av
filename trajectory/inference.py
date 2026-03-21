@@ -89,6 +89,10 @@ class TrajectoryPlanningInference:
             'traj_heading_zero_gate_heading_off_abs_rad',
             np.radians(3.5),
         )
+        traj_heading_zero_gate_curvature_preview_off_threshold = kwargs.pop(
+            'traj_heading_zero_gate_curvature_preview_off_threshold',
+            0.002,
+        )
         direct_reference_curvature_gain = kwargs.pop(
             'direct_reference_curvature_gain',
             1.0,
@@ -184,6 +188,13 @@ class TrajectoryPlanningInference:
                 1.2,
             )
         )
+        self.traj_heading_zero_gate_curvature_preview_off_threshold = float(
+            np.clip(traj_heading_zero_gate_curvature_preview_off_threshold, 0.0, 0.1)
+        )
+        # Map-based preview curvature passed from orchestrator each frame; used to release
+        # the heading-zero gate early when a curve is imminent even before the lane
+        # polynomial or vehicle heading has reached the hysteretic off-threshold.
+        self._map_preview_curvature_abs: float = 0.0
         
         # NEW: Solution 5 - Reference Point Smoothing with Bias Compensation
         # Track smoothed reference point bias for compensation
@@ -240,6 +251,10 @@ class TrajectoryPlanningInference:
             if (
                 (np.isfinite(center_a_abs) and center_a_abs > self.traj_heading_zero_gate_center_a_off_abs_max)
                 or (np.isfinite(heading_abs) and heading_abs > self.traj_heading_zero_gate_heading_off_abs_rad)
+                # Proactively release the gate when the map sees an upcoming curve.  This
+                # prevents the gate from staying latched into curve entry just because the
+                # heading hasn't reached the hysteretic off-threshold yet.
+                or (self._map_preview_curvature_abs > self.traj_heading_zero_gate_curvature_preview_off_threshold)
             ):
                 active = False
         else:
@@ -481,14 +496,15 @@ class TrajectoryPlanningInference:
         """Expose latest reference-point diagnostics."""
         return dict(self.last_reference_diagnostics)
     
-    def get_reference_point(self, trajectory: Trajectory, 
+    def get_reference_point(self, trajectory: Trajectory,
                            lookahead: float = 10.0,
                            lane_coeffs: Optional[List[Optional[np.ndarray]]] = None,
                            lane_positions: Optional[Dict[str, float]] = None,
                            use_direct: bool = True,
                            timestamp: Optional[float] = None,
                            confidence: Optional[float] = None,
-                           dynamic_horizon_diag: Optional[Dict[str, float]] = None) -> Optional[Dict]:
+                           dynamic_horizon_diag: Optional[Dict[str, float]] = None,
+                           preview_curvature_abs: float = 0.0) -> Optional[Dict]:
         """
         Get reference point at specified lookahead distance.
         Can use direct midpoint computation (simpler, more accurate) or trajectory-based.
@@ -505,6 +521,10 @@ class TrajectoryPlanningInference:
             Reference point with x, y, heading, velocity, curvature
             Also includes raw (unsmoothed) values for analysis
         """
+        # Expose map-based preview curvature to the heading-zero gate so it can release
+        # proactively when a curve is imminent, rather than waiting for heading to build.
+        self._map_preview_curvature_abs = float(preview_curvature_abs)
+
         dynamic_diag_defaults = {
             'diag_dynamic_effective_horizon_m': np.nan,
             'diag_dynamic_effective_horizon_base_m': np.nan,

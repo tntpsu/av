@@ -863,6 +863,49 @@ class DriveAnalyzer:
             out_of_lane_time=out_of_lane_time
         )
     
+    def _print_estop_root_cause(self):
+        """Print root cause attribution for emergency stop (Step 3D)."""
+        if self.emergency_stop_frame is None:
+            return
+        fr = self.emergency_stop_frame
+        try:
+            import h5py
+            with h5py.File(self.recording_path, "r") as f:
+                # Gather signals at the e-stop frame
+                lat_err = float(np.array(f["control/lateral_error"][fr])) if "control/lateral_error" in f and fr < len(f["control/lateral_error"]) else None
+                speed = float(np.array(f["vehicle/speed"][fr])) if "vehicle/speed" in f and fr < len(f["vehicle/speed"]) else None
+                regime = float(np.array(f["control/regime"][fr])) if "control/regime" in f and fr < len(f["control/regime"]) else None
+
+                # Check GT boundary values for corruption
+                gt_corrupt = False
+                gt_details = []
+                for gt_key in ("vehicle/gt_left_boundary", "vehicle/gt_right_boundary",
+                               "vehicle/groundTruthLeftBoundary", "vehicle/groundTruthRightBoundary"):
+                    if gt_key in f and fr < len(f[gt_key]):
+                        val = float(np.array(f[gt_key][fr]))
+                        if abs(val) > 50.0:
+                            gt_corrupt = True
+                            gt_details.append(f"{gt_key.split('/')[-1]}={val:.1f}m")
+
+                # Determine root cause
+                print("   E-Stop Root Cause Attribution:")
+                if gt_corrupt:
+                    print(f"     → GT BOUNDARY CORRUPT: {', '.join(gt_details)}")
+                    print(f"       (values >50m indicate Unity GroundTruthReporter glitch)")
+                    if lat_err is not None:
+                        print(f"       Actual lat_err at e-stop: {lat_err:.3f}m")
+                if lat_err is not None and abs(lat_err) > 1.5:
+                    print(f"     → LATERAL DIVERGENCE: lat_err={lat_err:.3f}m (threshold ~1.5m)")
+                if regime is not None and regime >= 0.5:
+                    regime_name = "LINEAR_MPC" if regime < 1.5 else "NONLINEAR_MPC"
+                    print(f"     → REGIME: {regime_name} was active at e-stop frame")
+                if speed is not None:
+                    print(f"     Speed at e-stop: {speed:.1f} m/s")
+                if not gt_corrupt and (lat_err is None or abs(lat_err) <= 1.5):
+                    print(f"     → UNKNOWN: lat_err={lat_err}, no GT corruption detected — check recording manually")
+        except Exception as e:
+            print(f"   E-Stop Root Cause: error reading HDF5 — {e}")
+
     def print_report(self):
         """Print comprehensive analysis report."""
         if not self.load_data():
@@ -886,6 +929,8 @@ class DriveAnalyzer:
         if self.emergency_stop_frame is not None:
             suffix = " (analysis truncated)" if self.stop_on_emergency else ""
             print(f"   Emergency Stop Frame: {self.emergency_stop_frame}{suffix}")
+            # E-stop root cause attribution (Step 3D)
+            self._print_estop_root_cause()
         print()
         
         # Overall score (weighted combination)
@@ -1151,6 +1196,35 @@ def _print_summary_report(recording_path: Path, summary: Dict, analyze_to_failur
         if failure_frame is not None:
             mode = "truncated" if analyze_to_failure else "detected"
             print(f"   Failure Frame: {int(failure_frame)} ({mode})")
+    print()
+
+    # Score breakdown — why is the overall score what it is?
+    _layer_order = ["Safety", "Trajectory", "Control", "Perception", "LongitudinalComfort", "SignalIntegrity"]
+    _layer_scores = summary.get("layer_scores") or {}
+    _layer_bd = summary.get("layer_score_breakdown") or {}
+    _score_bd = executive.get("score_breakdown") or {}
+    _weights = _score_bd.get("layer_weights") or {}
+    _contribs = _score_bd.get("layer_weighted_contributions") or {}
+    if _layer_scores and _weights:
+        print(f"   {'Layer':<22} {'Wt':>5}  {'Score':>6}  {'Contrib':>7}  Deductions")
+        print(f"   {'-'*22} {'-'*5}  {'-'*6}  {'-'*7}  {'-'*38}")
+        for _layer in _layer_order:
+            if _layer not in _layer_scores:
+                continue
+            _sc = float(_layer_scores[_layer])
+            _wt = float(_weights.get(_layer, 0.0)) * 100
+            _ct = float(_contribs.get(_layer, 0.0))
+            _ded = _layer_bd.get(_layer, {})
+            _active = [d for d in (_ded.get("deductions") or []) if float(d.get("value", 0)) > 0.01]
+            _ded_str = f"{_active[0]['name']}: -{_active[0]['value']:.1f}" if _active else "(none)"
+            _sc_color = ""
+            print(f"   {_layer:<22} {_wt:>4.1f}%  {_sc:>6.1f}  {_ct:>7.2f}  {_ded_str}")
+        _base = float(_score_bd.get("overall_base_score") or executive.get("overall_score") or 0.0)
+        _cap = _score_bd.get("cap_reason", "none")
+        _final = float(executive.get("overall_score") or 0.0)
+        _cap_note = f" → capped: {_cap}" if _cap and _cap != "none" else ""
+        print(f"   {'─'*22} {'─'*5}  {'─'*6}  {'─'*7}")
+        print(f"   {'Weighted total':<22}        {'':>6}  {_base:>7.2f}{_cap_note}  → {_final:.1f}/100")
     print()
 
     key_issues = executive.get("key_issues") or []
@@ -1755,6 +1829,31 @@ def _print_summary_report(recording_path: Path, summary: Dict, analyze_to_failur
             print(f"   Fallback Rate: {mpc_health['fallback_rate'] * 100:.2f}%")
         if mpc_health.get("max_consecutive_failures") is not None:
             print(f"   Max Consecutive Failures: {mpc_health['max_consecutive_failures']}")
+        # Regime transition events (Step 3D)
+        try:
+            import h5py
+            with h5py.File(recording_path, "r") as f:
+                if "control/regime" in f:
+                    regime = np.array(f["control/regime"][:])
+                    transitions = []
+                    for i in range(1, len(regime)):
+                        prev_mpc = regime[i - 1] >= 0.5
+                        curr_mpc = regime[i] >= 0.5
+                        if prev_mpc != curr_mpc:
+                            direction = "PP→MPC" if curr_mpc else "MPC→PP"
+                            spd = None
+                            if "vehicle/speed" in f and i < len(f["vehicle/speed"]):
+                                spd = float(np.array(f["vehicle/speed"][i]))
+                            transitions.append((i, direction, spd))
+                    if transitions:
+                        print(f"   Regime Transitions: {len(transitions)}")
+                        for fr, direction, spd in transitions[:10]:
+                            spd_str = f" @ {spd:.1f} m/s" if spd is not None else ""
+                            print(f"     Frame {fr}: {direction}{spd_str}")
+                        if len(transitions) > 10:
+                            print(f"     ... and {len(transitions) - 10} more")
+        except Exception:
+            pass
         print()
 
     print("14. RECOMMENDATIONS")
@@ -1765,6 +1864,20 @@ def _print_summary_report(recording_path: Path, summary: Dict, analyze_to_failur
     else:
         print("   ✓ No recommendations")
     print()
+
+    # Section 15: Grade Impact (only for graded recordings)
+    grade_metrics = summary.get("grade_metrics")
+    if grade_metrics is not None:
+        print("15. GRADE IMPACT")
+        print("-" * 80)
+        print(f"   Max Grade: {grade_metrics['grade_max_pct']:.1f}%"
+              f"    Pitch P95: {grade_metrics['pitch_p95_deg']:.1f}\u00b0")
+        print(f"   Downhill Speed P95: {grade_metrics['speed_on_downhill_p95']:.1f} m/s"
+              f"    Downhill Overspeed: {grade_metrics['overspeed_on_downhill_rate']:.1f}%")
+        print(f"   Grade Compensation Active: {grade_metrics['grade_compensation_active_rate']:.1f}%"
+              f"    Graded Frames: {grade_metrics['graded_frames']}")
+        print()
+
     print("=" * 80)
 
 

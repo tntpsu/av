@@ -1,0 +1,22 @@
+{
+  "_comment": "Score floors — minimum acceptable scores per track. Update after each validated improvement run using: python tools/update_score_floor.py --track <track> --score <score>. Do not lower floors without team review.",
+  "_last_updated": "2026-03-21",
+  "floors": {
+    "sloop": {
+      "overall": 88.0,
+      "Safety": 85.0,
+      "Trajectory": 80.0,
+      "Control": 70.0,
+      "Perception": 75.0,
+      "notes": "Baseline after target_lane=center fix (+38% lat RMSE improvement)"
+    },
+    "hill_highway": {
+      "overall": 92.0,
+      "Safety": 85.0,
+      "Trajectory": 80.0,
+      "Control": 65.0,
+      "Perception": 75.0,
+      "notes": "Floor raised to 92.0 after EMA regression detected (2026-03-21). Best validated score: 92.3 (2026-03-20). Floor at 92.0 gives 0.3pt headroom while catching regressions like the 91.7 EMA run."
+    }
+  }
+}

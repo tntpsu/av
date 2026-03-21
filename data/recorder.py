@@ -89,6 +89,9 @@ class DataRecorder:
         self.flush_thread.start()
         
         # Metadata
+        # Written once at init via write_runtime_config_snapshot() from orchestrator
+        self._runtime_config_written: bool = False
+
         self.metadata = {
             "recording_start_time": datetime.now().isoformat(),
             "recording_name": recording_name,
@@ -111,6 +114,58 @@ class DataRecorder:
                 "candidate_label": "unknown",
             },
         }
+
+    def write_runtime_config_snapshot(
+        self, config: dict, config_path: Optional[str] = None
+    ) -> None:
+        """Persist merged runtime config + resolved MPCParams once per HDF5 file.
+
+        Stored at ``meta/runtime_config_json`` (UTF-8 JSON).  Use this to verify
+        which ``mpc_*`` and overlay values were actually active for a recording
+        without logging every frame.
+        """
+        if self._runtime_config_written or self.h5_file is None:
+            return
+        from dataclasses import fields
+
+        cfg_public = {k: v for k, v in config.items() if not str(k).startswith("_")}
+        snap: Dict[str, Any] = {
+            "config_overlay_path": (
+                str(Path(config_path).resolve()) if config_path else None
+            ),
+            "trajectory": {
+                "target_speed": cfg_public.get("trajectory", {}).get("target_speed"),
+                "mpc": dict(cfg_public.get("trajectory", {}).get("mpc", {})),
+            },
+            "perception": {
+                "lane_width_min_m": cfg_public.get("perception", {}).get(
+                    "lane_width_min_m"
+                ),
+                "lane_width_max_m": cfg_public.get("perception", {}).get(
+                    "lane_width_max_m"
+                ),
+            },
+            "safety": {"max_speed": cfg_public.get("safety", {}).get("max_speed")},
+        }
+        try:
+            from control.mpc_controller import MPCParams
+
+            p = MPCParams.from_config(config)
+            snap["resolved_mpc_params"] = {
+                f.name: getattr(p, f.name) for f in fields(MPCParams)
+            }
+        except Exception as exc:
+            snap["resolved_mpc_params_error"] = str(exc)
+
+        json_str = json.dumps(snap, indent=2, sort_keys=True, default=str)
+        meta = self.h5_file.require_group("meta")
+        str_dt = h5py.special_dtype(vlen=str)
+        if "runtime_config_json" in meta:
+            del meta["runtime_config_json"]
+        ds = meta.create_dataset("runtime_config_json", (1,), dtype=str_dt)
+        ds[0] = json_str
+        self._runtime_config_written = True
+        logger.info("Wrote meta/runtime_config_json (%d bytes)", len(json_str))
 
     def _debug_print(self, message: str):
         if self.debug_timing:
@@ -260,6 +315,68 @@ class DataRecorder:
         )
         self.h5_file.create_dataset(
             "vehicle/speed_limit_preview_long_min_distance",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        # Grade/pitch/roll telemetry (Step 3)
+        self.h5_file.create_dataset(
+            "vehicle/pitch_rad",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "vehicle/roll_rad",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "vehicle/road_grade",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        # Per-wheel diagnostics (Step 3D — 4 wheels: FL, FR, RL, RR)
+        self.h5_file.create_dataset(
+            "vehicle/wheel_sideways_slip",
+            shape=(0, 4),
+            maxshape=(None, 4),
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "vehicle/wheel_forward_slip",
+            shape=(0, 4),
+            maxshape=(None, 4),
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "vehicle/wheel_contact_force",
+            shape=(0, 4),
+            maxshape=(None, 4),
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "vehicle/wheel_rpm",
+            shape=(0, 4),
+            maxshape=(None, 4),
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "vehicle/wheel_sprung_mass",
+            shape=(0, 4),
+            maxshape=(None, 4),
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "vehicle/wheel_contact_normal_y",
+            shape=(0, 4),
+            maxshape=(None, 4),
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "vehicle/wheel_steer_angle_actual",
             shape=(0,),
             maxshape=max_shape,
             dtype=np.float32
@@ -1825,6 +1942,20 @@ class DataRecorder:
         self.h5_file.create_dataset("control/mpc_smith_e_lat_predicted", shape=(0,), maxshape=max_shape, dtype=np.float32)
         self.h5_file.create_dataset("control/mpc_smith_e_heading_predicted", shape=(0,), maxshape=max_shape, dtype=np.float32)
         self.h5_file.create_dataset("control/mpc_delay_frames_used", shape=(0,), maxshape=max_shape, dtype=np.int8)
+        self.h5_file.create_dataset("control/grade_compensation_active", shape=(0,), maxshape=max_shape, dtype=np.float32)
+        self.h5_file.create_dataset("control/effective_max_accel", shape=(0,), maxshape=max_shape, dtype=np.float32)
+        self.h5_file.create_dataset(
+            "control/diag_silent_elat_dropout_active",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int8,
+        )
+        self.h5_file.create_dataset(
+            "control/mpc_elat_ramp_active",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int8,
+        )
 
         # Perception outputs (optional)
         self.h5_file.create_dataset(
@@ -3732,6 +3863,16 @@ class DataRecorder:
         speed_limit_preview_long = []
         speed_limit_preview_long_distances = []
         speed_limit_preview_long_min_distances = []
+        pitch_rad_list = []
+        roll_rad_list = []
+        road_grade_list = []
+        wheel_sideways_slip_list = []
+        wheel_forward_slip_list = []
+        wheel_contact_force_list = []
+        wheel_rpm_list = []
+        wheel_sprung_mass_list = []
+        wheel_contact_normal_y_list = []
+        wheel_steer_angle_actual_list = []
         chassis_ground_min_clearance_m = []
         chassis_ground_effective_min_clearance_m = []
         chassis_ground_clearance_m = []
@@ -3890,6 +4031,42 @@ class DataRecorder:
             )
             speed_limit_preview_long_min_distances.append(
                 getattr(vs, 'speed_limit_preview_long_min_distance', 0.0)
+            )
+            pitch_rad_list.append(
+                getattr(vs, 'pitch_rad', 0.0)
+            )
+            roll_rad_list.append(
+                getattr(vs, 'roll_rad', 0.0)
+            )
+            road_grade_list.append(
+                getattr(vs, 'road_grade', 0.0)
+            )
+            _ws_slip = getattr(vs, 'wheel_sideways_slip', None)
+            wheel_sideways_slip_list.append(
+                np.array(_ws_slip, dtype=np.float32) if _ws_slip is not None else np.zeros(4, dtype=np.float32)
+            )
+            _wf_slip = getattr(vs, 'wheel_forward_slip', None)
+            wheel_forward_slip_list.append(
+                np.array(_wf_slip, dtype=np.float32) if _wf_slip is not None else np.zeros(4, dtype=np.float32)
+            )
+            _wc_force = getattr(vs, 'wheel_contact_force', None)
+            wheel_contact_force_list.append(
+                np.array(_wc_force, dtype=np.float32) if _wc_force is not None else np.zeros(4, dtype=np.float32)
+            )
+            _w_rpm = getattr(vs, 'wheel_rpm', None)
+            wheel_rpm_list.append(
+                np.array(_w_rpm, dtype=np.float32) if _w_rpm is not None else np.zeros(4, dtype=np.float32)
+            )
+            _w_smass = getattr(vs, 'wheel_sprung_mass', None)
+            wheel_sprung_mass_list.append(
+                np.array(_w_smass, dtype=np.float32) if _w_smass is not None else np.zeros(4, dtype=np.float32)
+            )
+            _wcn_y = getattr(vs, 'wheel_contact_normal_y', None)
+            wheel_contact_normal_y_list.append(
+                np.array(_wcn_y, dtype=np.float32) if _wcn_y is not None else np.zeros(4, dtype=np.float32)
+            )
+            wheel_steer_angle_actual_list.append(
+                getattr(vs, 'wheel_steer_angle_actual', 0.0)
             )
             chassis_ground_min_clearance_m.append(
                 getattr(vs, 'chassis_ground_min_clearance_m', np.nan)
@@ -4154,6 +4331,10 @@ class DataRecorder:
             new_size = current_size + len(positions)
             
             # Resize all vehicle datasets
+            _WHEEL_4_KEYS = {
+                "wheel_sideways_slip", "wheel_forward_slip", "wheel_contact_force",
+                "wheel_rpm", "wheel_sprung_mass", "wheel_contact_normal_y",
+            }
             for key in ["timestamps", "position", "rotation", "velocity",
                        "angular_velocity", "speed", "speed_limit", "speed_limit_preview",
                        "speed_limit_preview_distance", "speed_limit_preview_min_distance",
@@ -4161,6 +4342,10 @@ class DataRecorder:
                        "speed_limit_preview_mid_min_distance", "speed_limit_preview_long",
                        "speed_limit_preview_long_distance",
                        "speed_limit_preview_long_min_distance",
+                       "pitch_rad", "roll_rad", "road_grade",
+                       "wheel_sideways_slip", "wheel_forward_slip", "wheel_contact_force",
+                       "wheel_rpm", "wheel_sprung_mass", "wheel_contact_normal_y",
+                       "wheel_steer_angle_actual",
                        "chassis_ground_min_clearance_m",
                        "chassis_ground_effective_min_clearance_m",
                        "chassis_ground_clearance_m",
@@ -4178,35 +4363,14 @@ class DataRecorder:
                        "unity_time", "unity_frame_count", "unity_delta_time",
                        "unity_smooth_delta_time", "unity_unscaled_delta_time",
                        "unity_time_scale"]:
-                if key == "timestamps" or key in ["speed", "speed_limit", "speed_limit_preview",
-                                                "speed_limit_preview_distance", "speed_limit_preview_min_distance",
-                                                "speed_limit_preview_mid", "speed_limit_preview_mid_distance",
-                                                "speed_limit_preview_mid_min_distance", "speed_limit_preview_long",
-                                                "speed_limit_preview_long_distance",
-                                                "speed_limit_preview_long_min_distance",
-                                                "chassis_ground_min_clearance_m",
-                                                "chassis_ground_effective_min_clearance_m",
-                                                "chassis_ground_clearance_m",
-                                                "chassis_ground_penetration_m",
-                                                "chassis_ground_contact",
-                                                "wheel_grounded_count",
-                                                "wheel_colliders_ready",
-                                                "force_fallback_active",
-                                                "steering_angle", "steering_angle_actual",
-                                                "steering_input", "desired_steer_angle",
-                                                 "motor_torque", "brake_torque", "camera_8m_screen_y",
-                                                 "camera_lookahead_screen_y", "ground_truth_lookahead_distance",
-                                                 "right_lane_fiducials_point_count",
-                                                 "right_lane_fiducials_horizon_meters",
-                                                 "right_lane_fiducials_spacing_meters",
-                                                 "right_lane_fiducials_enabled",
-                                                 "unity_time", "unity_frame_count", "unity_delta_time",
-                                                 "unity_smooth_delta_time", "unity_unscaled_delta_time",
-                                                 "unity_time_scale"]:
-                    self.h5_file[f"vehicle/{key}"].resize((new_size,))
+                if key in _WHEEL_4_KEYS:
+                    self.h5_file[f"vehicle/{key}"].resize((new_size, 4))
+                elif key in ("position", "velocity", "angular_velocity"):
+                    self.h5_file[f"vehicle/{key}"].resize((new_size, 3))
+                elif key == "rotation":
+                    self.h5_file[f"vehicle/{key}"].resize((new_size, 4))
                 else:
-                    dim = 3 if key != "rotation" else 4
-                    self.h5_file[f"vehicle/{key}"].resize((new_size, dim))
+                    self.h5_file[f"vehicle/{key}"].resize((new_size,))
             
             # Write data
             self.h5_file["vehicle/timestamps"][current_size:] = timestamps
@@ -4234,6 +4398,36 @@ class DataRecorder:
             )
             self.h5_file["vehicle/speed_limit_preview_long_min_distance"][current_size:] = (
                 speed_limit_preview_long_min_distances
+            )
+            self.h5_file["vehicle/pitch_rad"][current_size:] = np.array(
+                pitch_rad_list, dtype=np.float32
+            )
+            self.h5_file["vehicle/roll_rad"][current_size:] = np.array(
+                roll_rad_list, dtype=np.float32
+            )
+            self.h5_file["vehicle/road_grade"][current_size:] = np.array(
+                road_grade_list, dtype=np.float32
+            )
+            self.h5_file["vehicle/wheel_sideways_slip"][current_size:] = np.array(
+                wheel_sideways_slip_list, dtype=np.float32
+            )
+            self.h5_file["vehicle/wheel_forward_slip"][current_size:] = np.array(
+                wheel_forward_slip_list, dtype=np.float32
+            )
+            self.h5_file["vehicle/wheel_contact_force"][current_size:] = np.array(
+                wheel_contact_force_list, dtype=np.float32
+            )
+            self.h5_file["vehicle/wheel_rpm"][current_size:] = np.array(
+                wheel_rpm_list, dtype=np.float32
+            )
+            self.h5_file["vehicle/wheel_sprung_mass"][current_size:] = np.array(
+                wheel_sprung_mass_list, dtype=np.float32
+            )
+            self.h5_file["vehicle/wheel_contact_normal_y"][current_size:] = np.array(
+                wheel_contact_normal_y_list, dtype=np.float32
+            )
+            self.h5_file["vehicle/wheel_steer_angle_actual"][current_size:] = np.array(
+                wheel_steer_angle_actual_list, dtype=np.float32
             )
             self.h5_file["vehicle/chassis_ground_min_clearance_m"][current_size:] = np.array(
                 chassis_ground_min_clearance_m, dtype=np.float32
@@ -4903,6 +5097,10 @@ class DataRecorder:
         mpc_smith_e_lat_predicted_list = []
         mpc_smith_e_heading_predicted_list = []
         mpc_delay_frames_used_list = []
+        grade_compensation_active_list = []
+        effective_max_accel_list = []
+        diag_silent_elat_dropout_active_list = []
+        mpc_elat_ramp_active_list = []
         accel_feedforward_list = []
         brake_feedforward_list = []
         accel_capped_list = []
@@ -5793,6 +5991,14 @@ class DataRecorder:
             mpc_smith_e_lat_predicted_list.append(float(getattr(cc, 'mpc_smith_e_lat_predicted', 0.0)))
             mpc_smith_e_heading_predicted_list.append(float(getattr(cc, 'mpc_smith_e_heading_predicted', 0.0)))
             mpc_delay_frames_used_list.append(int(getattr(cc, 'mpc_delay_frames_used', 0)))
+            grade_compensation_active_list.append(float(getattr(cc, 'grade_compensation_active', 0.0)))
+            effective_max_accel_list.append(float(getattr(cc, 'effective_max_accel', 0.0)))
+            diag_silent_elat_dropout_active_list.append(
+                int(getattr(cc, "diag_silent_elat_dropout_active", False))
+            )
+            mpc_elat_ramp_active_list.append(
+                int(getattr(cc, "mpc_elat_ramp_active", False))
+            )
 
         if timestamps:
             current_size = self.h5_file["control/timestamps"].shape[0]
@@ -6041,7 +6247,11 @@ class DataRecorder:
                        "mpc_last_steering_pre_modify", "mpc_last_steering_actual",
                        "mpc_rate_limiter_active",
                        "mpc_smith_raw_e_lat", "mpc_smith_e_lat_predicted",
-                       "mpc_smith_e_heading_predicted", "mpc_delay_frames_used"]:
+                       "mpc_smith_e_heading_predicted", "mpc_delay_frames_used",
+                       "grade_compensation_active",
+                       "diag_silent_elat_dropout_active",
+                       "mpc_elat_ramp_active",
+                       "effective_max_accel"]:
                 self.h5_file[f"control/{key}"].resize((new_size,))
             
             # Write data
@@ -6881,6 +7091,14 @@ class DataRecorder:
             self.h5_file["control/mpc_smith_e_lat_predicted"][current_size:] = mpc_smith_e_lat_predicted_list
             self.h5_file["control/mpc_smith_e_heading_predicted"][current_size:] = mpc_smith_e_heading_predicted_list
             self.h5_file["control/mpc_delay_frames_used"][current_size:] = mpc_delay_frames_used_list
+            self.h5_file["control/grade_compensation_active"][current_size:] = np.array(grade_compensation_active_list, dtype=np.float32)
+            self.h5_file["control/effective_max_accel"][current_size:] = np.array(effective_max_accel_list, dtype=np.float32)
+            self.h5_file["control/diag_silent_elat_dropout_active"][current_size:] = np.array(
+                diag_silent_elat_dropout_active_list, dtype=np.int8
+            )
+            self.h5_file["control/mpc_elat_ramp_active"][current_size:] = np.array(
+                mpc_elat_ramp_active_list, dtype=np.int8
+            )
 
     def _write_perception_outputs(self, frames: List[RecordingFrame]):
         """Write perception outputs to HDF5."""

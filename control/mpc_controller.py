@@ -15,6 +15,7 @@ Dynamics (discrete, Frenet error model, small-angle linearization):
 """
 
 import logging
+import math
 import time
 from dataclasses import dataclass, fields
 from typing import Dict, Optional
@@ -47,7 +48,11 @@ class MPCParams:
     q_heading_terminal_scale: float = 3.0
 
     # Input cost weights
-    r_steer: float = 0.1                    # steering magnitude
+    # r_steer is kept near-zero intentionally. A non-trivial value biases the QP toward
+    # δ=0 on every step, causing the solver to systematically understeer on curves.
+    # Steering direction is governed by q_lat (lateral error) and r_steer_rate (rate
+    # limiting). 1e-4 retains a tiny diagonal entry for QP numerical stability.
+    r_steer: float = 1e-4                   # steering magnitude (near-zero — see above)
     r_accel: float = 0.05                   # accel magnitude
     r_steer_rate: float = 1.0              # steering rate — PRIMARY COMFORT KNOB
 
@@ -57,6 +62,13 @@ class MPCParams:
     max_decel: float = 2.4                  # m/s²
     v_min: float = 1.0                      # m/s
     v_max: float = 15.0                     # m/s
+
+    # Arc-entry kappa-transition warmup
+    # When kappa_ref jumps by > threshold in one frame (straight→curve boundary),
+    # reset the warmup counter so the rate constraint is relaxed for that burst.
+    # This lets the feedforward step apply immediately instead of ramping over 6 frames.
+    kappa_transition_warmup_enabled: bool = True
+    kappa_transition_threshold: float = 0.005  # ~half of R100 kappa (0.010)
 
     # Speed-adaptive horizon
     speed_adaptive_horizon: bool = True
@@ -82,6 +94,40 @@ class MPCParams:
     # Curvature preview horizon (feedforward from trajectory planner)
     curvature_preview_enabled: bool = False   # Default OFF — safe for existing configs
     curvature_preview_gain: float = 1.0       # Scale factor for preview curvature
+
+    # Grade compensation (Step 3)
+    grade_clamp_rad: float = 0.15             # Max grade input (~15%, 8.5°)
+    grade_ff_gain: float = 1.0                # Feedforward gain (1.8 for Unity physics)
+
+    # 2DOF feedforward alignment: penalize Δ(δ − δ_ff)² instead of Δδ²
+    # This eliminates the rate-penalty bias against holding a sustained curve steer.
+    # On straight roads (κ=0) the correction is exactly zero — no behavior change.
+    ff_alignment_enabled: bool = True
+
+    # First-step quadratic rate cost: adds r_steer_rate*(delta[0] - last_delta_norm)^2
+    # to the QP.  The within-horizon rate loop only penalises pairs (k, k+1) for
+    # k=0..N-2; the jump from the *previously applied* steering to delta[0] is only
+    # enforced as a hard box constraint [last±delta_rate_max], giving zero quadratic
+    # cost.  This means r_steer_rate has no effect on first-step sign flips, which
+    # is the structural root of noise-driven steering jerk.
+    # Enabling this makes r_steer_rate symmetric: the same cost applies to each step.
+    first_step_rate_enabled: bool = True
+
+    # Lateral-error EMA pre-filter: smooth the e_lat signal before passing to the QP.
+    # Perception noise (σ≈0.05 m) creates alternating-sign e_lat measurements that
+    # force the MPC to flip steering every frame — the root of steering jerk.
+    # An EMA with alpha < 1 attenuates high-frequency noise; the deadband suppresses
+    # the residual oscillation when the filtered error is small.
+    # alpha=1.0 and deadband=0.0 reproduce the unfiltered behaviour exactly.
+    elat_ema_alpha: float = 1.0      # blend ratio new-to-old (1.0 = no smoothing)
+    elat_deadband_m: float = 0.0     # suppress steering when |filtered e_lat| < this (m)
+
+    # Dropout-recovery rate limiter: caps the per-frame step in the e_lat signal
+    # fed to the QP.  Specifically defends against "silent dropouts" — periods where
+    # perception returns e_lat≈0 (no stale flag) while the car drifts off-centre,
+    # followed by a sudden large step when perception recovers (e.g. 0 → 0.25 m in
+    # one frame → 131 deg/s steering jerk).  0.0 = disabled (no clamping).
+    elat_ramp_rate_m_per_frame: float = 0.0
 
     @classmethod
     def from_config(cls, cfg: dict) -> "MPCParams":
@@ -128,6 +174,16 @@ class MPCSolver:
         if self.p.speed_adaptive_horizon and speed >= self.p.speed_adaptive_threshold_mps:
             return self.p.speed_adaptive_n_high
         return self.p.horizon
+
+    @staticmethod
+    def _feedforward_delta_norm(kappa: float, wheelbase_m: float, max_steer_rad: float) -> float:
+        """Bicycle-model kinematic feedforward steering for curvature κ, normalized to [-1, 1].
+
+        Derived from the steady-state bicycle equation δ = arctan(L · κ), then divided
+        by δ_max to bring it into the same normalized space as the QP decision variable.
+        Returns 0.0 for κ=0 (straight road), ensuring zero q-correction on straights.
+        """
+        return math.atan(wheelbase_m * kappa) / max_steer_rad
 
     # ----- QP construction -----
 
@@ -187,6 +243,21 @@ class MPCSolver:
             rows.append(i_lo)
             cols.append(i_hi)
             vals.append(-r_sr)
+
+        # First-step rate cost: 0.5 * r_sr * (delta[0] - last_delta_norm)^2
+        # The within-horizon loop already puts r_sr on P[d0, d0] from the k=0 pair,
+        # giving 0.5*r_sr*d0^2.  Adding another r_sr here raises the diagonal to
+        # 2*r_sr, so the OSQP cost is 0.5*2*r_sr*d0^2 = r_sr*d0^2.  Combined with
+        # the linear term q[d0] += -r_sr*last added each solve call, the net cost is:
+        #   r_sr*d0^2 - r_sr*last*d0 = 0.5*r_sr*(d0 - last)^2 + 0.5*r_sr*(d0^2-last^2)
+        # which equals 0.5*r_sr*(d0-last)^2 up to a constant the solver ignores.
+        # This makes r_steer_rate penalise the first-step jump identically to every
+        # within-horizon step, closing the structural gap that caused sign-flip jitter.
+        if self.p.first_step_rate_enabled:
+            idx_d0 = nx  # delta[0] sits at position nx in the decision vector
+            rows.append(idx_d0)
+            cols.append(idx_d0)
+            vals.append(self.p.r_steer_rate)
 
         P = sparse.csc_matrix((vals, (rows, cols)), shape=(nz, nz))
         # OSQP requires upper-triangular P
@@ -317,7 +388,8 @@ class MPCSolver:
 
     def solve(self, e_lat: float, e_heading: float, v: float,
               last_delta_norm: float, kappa_ref_horizon: np.ndarray,
-              v_target: float, v_max: float, dt: float) -> dict:
+              v_target: float, v_max: float, dt: float,
+              grade_rad: float = 0.0) -> dict:
         """
         Solve QP for one frame.
 
@@ -330,6 +402,7 @@ class MPCSolver:
             v_target: desired speed (m/s)
             v_max: speed limit (m/s)
             dt: timestep (s)
+            grade_rad: road grade in radians (positive = uphill), default 0.0
 
         Returns:
             dict with: steering_normalized, accel, feasible, solve_time_ms,
@@ -360,6 +433,11 @@ class MPCSolver:
 
         # Clamp speed for numerical stability
         v_safe = max(v, 0.5)
+
+        # Grade compensation: clamp and compute gravity offset (Step 3)
+        grade_clamped = max(-self.p.grade_clamp_rad,
+                            min(self.p.grade_clamp_rad, grade_rad))
+        gravity_accel_offset = -9.81 * math.sin(grade_clamped) * self.p.grade_ff_gain  # m/s²
 
         # --- Update dynamics in A matrix and c vector ---
         # For each step k, linearize around operating point.
@@ -414,7 +492,7 @@ class MPCSolver:
             # oscillation on curved roads (see Phase 2.8 root-cause analysis).
             c_lat = 0.0
             c_head = -kk * v_safe * dt              # −κ·v·dt
-            c_v = 0.0
+            c_v = gravity_accel_offset * dt          # −g·sin(θ)·dt (grade compensation)
             c_vec.append(np.array([c_lat, c_head, c_v]))
 
         A_csc = A_new.tocsc()
@@ -435,8 +513,15 @@ class MPCSolver:
             l_new[row_start:row_start + nx] = -c_k
             u_new[row_start:row_start + nx] = -c_k
 
-        # 3. Input bounds (already set in template, but update v_max)
-        # Input bounds are static — no update needed
+        # 3. Input bounds: grade-aware accel authority expansion.
+        # Grade-zero proof: gravity_accel_offset=0 → bounds unchanged.
+        abs_gravity = abs(gravity_accel_offset)
+        input_start = self._input_row_start
+        nu = 2  # (delta, accel)
+        for k in range(N):
+            idx = input_start + k * nu
+            l_new[idx + 1] = -(self.p.max_decel + abs_gravity)   # accel lower bound
+            u_new[idx + 1] = self.p.max_accel + abs_gravity       # accel upper bound
 
         # 4. State bounds (speed): update v_max
         state_start = self._state_row_start
@@ -465,6 +550,47 @@ class MPCSolver:
         # Terminal speed tracking
         term_base = N * (nx + nu)
         q_new[term_base + 2] = -self.p.q_speed * v_target
+
+        # --- 2DOF feedforward alignment (rate bias only) ---
+        # Recenters the steering-RATE cost at Δδ_ff rather than 0, so MPC does not
+        # pay a penalty for matching the kinematic feedforward rate at curve entries.
+        #
+        # Math: cost changes from 0.5·r_sr·(Δδ)² to 0.5·r_sr·(Δδ − Δff)².
+        # Expanding: quadratic term (P) is unchanged; the linear correction to q is:
+        #   q[idx_k]  += r_sr · Δff_k     (δ[k]   position)
+        #   q[idx_k1] -= r_sr · Δff_k     (δ[k+1] position)
+        # where Δff_k = δ_ff[k+1] − δ_ff[k].
+        #
+        # This only fires when κ is CHANGING (curve entry/exit). On constant-κ arcs
+        # and on straights, Δff_k = 0 everywhere → correction is zero.
+        # It does NOT bias toward any absolute δ value, so it never fights lateral
+        # error corrections needed to re-center the car after a disturbance.
+        #
+        # NOTE: Part A (magnitude bias toward δ_ff) was intentionally removed.
+        # With r_steer reduced to near-zero, the original δ=0 bias that Part A
+        # compensated for is gone. Part A's overcorrection when the car has lateral
+        # offset was causing persistent centeredness regression on curves.
+        if self.p.ff_alignment_enabled:
+            delta_ff = np.array([
+                self._feedforward_delta_norm(kappa[k], self.p.wheelbase_m, self.p.max_steer_rad)
+                for k in range(N)
+            ], dtype=float)
+
+            r_sr = self.p.r_steer_rate
+            for k in range(N - 1):
+                dff = delta_ff[k + 1] - delta_ff[k]
+                if dff == 0.0:
+                    continue
+                idx_k = k * (nx + nu) + nx
+                idx_k1 = (k + 1) * (nx + nu) + nx
+                q_new[idx_k] += r_sr * dff
+                q_new[idx_k1] -= r_sr * dff
+
+        # First-step rate linear correction: -r_sr * last_delta_norm added to q[d0].
+        # Combined with the extra r_sr diagonal in P (added in _build_qp), this
+        # implements the full 0.5*r_sr*(delta[0] - last_delta_norm)^2 cost.
+        if self.p.first_step_rate_enabled:
+            q_new[nx] += -self.p.r_steer_rate * last_delta_norm
 
         # --- Solve ---
         try:
@@ -557,12 +683,21 @@ class MPCController:
         # Lateral bias estimator: slow EMA of e_lat → curvature correction
         self._bias_ema = 0.0
         self._bias_correction = 0.0
+        # Arc-entry kappa-transition warmup
+        self._last_kappa_ref: float = 0.0
+        # Lateral-error EMA pre-filter state
+        self._elat_ema: float = 0.0
+        # Dropout-recovery rate-limiter state: tracks the previous QP e_lat input
+        # so we can cap frame-to-frame steps when perception snaps back from a
+        # silent dropout (e_lat was ≈0, now suddenly large).
+        self._prev_elat_ramp: float = 0.0
 
     def compute_steering(self, e_lat: float, e_heading: float,
                          current_speed: float, last_delta_norm: float,
                          kappa_ref: float, v_target: float,
                          v_max: float, dt: float,
-                         kappa_horizon=None) -> dict:
+                         kappa_horizon=None,
+                         grade_rad: float = 0.0) -> dict:
         """
         Compute MPC steering. Called by VehicleController each frame.
 
@@ -579,6 +714,7 @@ class MPCController:
                 each MPC prediction step (1/m). When provided and
                 curvature_preview_enabled=True, replaces the constant-fill
                 κ_ref with a spatially-varying feedforward horizon.
+            grade_rad: road grade in radians (positive = uphill), default 0.0
 
         Returns:
             dict with: steering_normalized, accel, mpc_feasible, solve_time_ms,
@@ -628,6 +764,18 @@ class MPCController:
             kappa_corrected_horizon = np.full(self.solver._N, kappa_corrected)
         kappa_horizon = kappa_corrected_horizon
 
+        # --- Arc-entry kappa-transition warmup ---
+        # When kappa_ref jumps by > threshold in one frame (car crosses from
+        # straight into arc), reset the warmup counter.  The subsequent
+        # warmup burst relaxes delta_rate_max to 1.0, letting the solver apply
+        # the curvature feedforward in one step rather than ramping over ~6 frames
+        # (0.2 s) while the car drifts outside.  Triggers on kappa INCREASE only
+        # (straight→curve); curve exit is gradual and doesn't need this.
+        if self.params.kappa_transition_warmup_enabled:
+            if kappa_ref - self._last_kappa_ref > self.params.kappa_transition_threshold:
+                self._frames_since_reset = 0   # trigger warmup burst
+        self._last_kappa_ref = kappa_ref
+
         # --- Startup warmup ---
         # During the first few frames after activation (no warm-start), relax
         # the rate constraint and give OSQP more iterations.  This prevents
@@ -645,13 +793,42 @@ class MPCController:
             # starting point.
             last_delta_norm = 0.0
 
+        # --- Lateral-error EMA pre-filter ---
+        # Attenuates high-frequency perception noise before it reaches the QP.
+        # Without this, σ≈0.05 m noise creates alternating-sign errors that force
+        # the MPC to flip steering every frame — the primary driver of steering jerk.
+        # alpha=1.0 / deadband=0.0 reproduce the unfiltered behaviour exactly.
+        alpha_elat = float(self.params.elat_ema_alpha)
+        deadband_m = float(self.params.elat_deadband_m)
+        if alpha_elat < 1.0 or deadband_m > 0.0:
+            self._elat_ema = alpha_elat * e_lat + (1.0 - alpha_elat) * self._elat_ema
+            e_lat_qp = self._elat_ema if abs(self._elat_ema) > deadband_m else 0.0
+        else:
+            e_lat_qp = e_lat
+
+        # --- Dropout-recovery rate limiter ---
+        # After a silent perception dropout (e_lat≈0 for N frames), perception
+        # can snap back with a large step (e.g. 0 → 0.25 m) that the QP sees as
+        # an instantaneous error and responds to with a large steering jerk.
+        # The rate limiter caps how much e_lat_qp can change per frame.
+        # Only active when elat_ramp_rate_m_per_frame > 0 (disabled by default).
+        elat_ramp_active = False
+        ramp_rate = float(self.params.elat_ramp_rate_m_per_frame)
+        if ramp_rate > 0.0:
+            delta = e_lat_qp - self._prev_elat_ramp
+            if abs(delta) > ramp_rate:
+                e_lat_qp = self._prev_elat_ramp + float(np.sign(delta)) * ramp_rate
+                elat_ramp_active = True
+        self._prev_elat_ramp = e_lat_qp
+
         # Use the configured MPC prediction step (params.dt), NOT the frame dt.
         # The solver plans N steps of params.dt each (e.g. 20×0.1=2.0 s horizon).
         # Passing the frame dt (0.033 s) shrinks the horizon to 0.66 s, making
         # the terminal cost dominate and causing aggressive overcorrection.
         result = self.solver.solve(
-            e_lat, e_heading, current_speed, last_delta_norm,
-            kappa_horizon, v_target, v_max, self.params.dt
+            e_lat_qp, e_heading, current_speed, last_delta_norm,
+            kappa_horizon, v_target, v_max, self.params.dt,
+            grade_rad=grade_rad
         )
 
         # Restore default max_iter after warmup solve
@@ -684,7 +861,10 @@ class MPCController:
             'solve_time_ms': result.get('solve_time_ms', 0.0),
             'mpc_fallback_active': self._fallback_active,
             'mpc_consecutive_failures': self._consecutive_failures,
-            'e_lat_input': e_lat,
+            'e_lat_raw': e_lat,            # raw (unfiltered) lateral error
+            'e_lat_input': e_lat_qp,       # filtered value passed to QP
+            'e_lat_ema': self._elat_ema,   # EMA state (for diagnostics)
+            'elat_ramp_active': elat_ramp_active,  # True when rate limiter clamped step
             'e_heading_input': e_heading,
             'kappa_ref_used': kappa_ref + self._bias_correction,
             'kappa_bias_correction': self._bias_correction,
@@ -703,3 +883,6 @@ class MPCController:
         self._frames_since_reset = 0
         self._bias_ema = 0.0
         self._bias_correction = 0.0
+        self._last_kappa_ref = 0.0
+        self._elat_ema = 0.0
+        self._prev_elat_ramp = 0.0

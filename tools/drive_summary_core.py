@@ -133,6 +133,167 @@ def safe_float(value, default=0.0):
     return float(value)
 
 
+# ---------------------------------------------------------------------------
+# Jerk event classifier
+# ---------------------------------------------------------------------------
+
+_JERK_CAUSE_LABELS = {
+    "dropout_start":      "Silent perception dropout began (e_lat→0, stale=0)",
+    "dropout_recovery":   "Silent perception dropout recovery (e_lat snapped back)",
+    "stale_recovery":     "Stale perception hold ended (PP stale flag cleared)",
+    "curve_oscillation":  "Curve body oscillation (persistent large e_lat, gate active)",
+    "straight_noise":     "Straight-road noise chasing (small e_lat, sign flips)",
+    "unknown":            "Unclassified jerk event",
+}
+
+
+def classify_jerk_events(
+    data: dict,
+    steering_jerk_threshold_deg_per_s2: float = 18.0,
+    window_frames: int = 3,
+) -> list:
+    """Classify each steering jerk event above *threshold* into a root cause.
+
+    Parameters
+    ----------
+    data:
+        Signal dict produced by the HDF5 loader in ``drive_summary_core``.
+        Required keys: ``time``, ``steering``.
+        Optional (enrich classification): ``mpc_e_lat``, ``pp_stale_hold_active``,
+        ``diag_heading_zero_gate_active``, ``diag_silent_elat_dropout_active``,
+        ``curvature_map_abs``.
+    steering_jerk_threshold_deg_per_s2:
+        Events whose |steering jerk| exceeds this value (deg/s²) are classified.
+    window_frames:
+        Number of frames before/after the event to examine for context signals.
+
+    Returns
+    -------
+    List of dicts, one per event, sorted by time.  Each dict has keys:
+        ``frame``      – 0-based index into the signal arrays,
+        ``time``       – timestamp (s),
+        ``jerk_deg_s2``– signed jerk magnitude (deg/s²) at this frame,
+        ``cause``      – one of the keys in ``_JERK_CAUSE_LABELS``,
+        ``description``– human-readable explanation.
+    """
+    time_arr = np.asarray(data.get("time", []), dtype=float)
+    steering_arr = np.asarray(data.get("steering", []), dtype=float)
+    n = min(len(time_arr), len(steering_arr))
+    if n < 3:
+        return []
+
+    dt_arr = np.diff(time_arr[:n])
+    median_dt = float(np.median(dt_arr)) if len(dt_arr) > 0 else 1.0
+    gap_threshold = 1.5 * max(median_dt, 1e-6)
+
+    # Compute steering rate (deg/s) and jerk (deg/s²).
+    # Steering is already in normalised (−1…1) units; convert to degrees for
+    # the threshold (×45 deg per normalised unit is a common mapping, but we
+    # just use normalised and note the threshold is also in normalised/s²).
+    # The drive_summary_core threshold is in normalised/s² (18.0 normalised/s²).
+    rate = np.zeros(n, dtype=float)
+    rate[1:] = np.divide(
+        np.diff(steering_arr[:n]),
+        dt_arr,
+        out=np.zeros(n - 1, dtype=float),
+        where=dt_arr > 1e-6,
+    )
+    jerk = np.zeros(n, dtype=float)
+    jerk[2:] = np.divide(
+        np.diff(rate[1:]),
+        dt_arr[1:],
+        out=np.zeros(n - 2, dtype=float),
+        where=dt_arr[1:] > 1e-6,
+    )
+
+    # Helper: get a scalar signal value at a frame index, with bounds checking.
+    def _sig(key: str, idx: int, default=0.0):
+        arr = data.get(key)
+        if arr is None:
+            return default
+        arr = np.asarray(arr)
+        if idx < 0 or idx >= len(arr):
+            return default
+        v = arr[idx]
+        return float(v) if not (math.isnan(float(v)) or math.isinf(float(v))) else default
+
+    # Helper: look at a window around *idx* and return max |value|.
+    def _window_max(key: str, idx: int, default=0.0):
+        arr = data.get(key)
+        if arr is None:
+            return default
+        arr = np.asarray(arr, dtype=float)
+        lo = max(0, idx - window_frames)
+        hi = min(len(arr), idx + window_frames + 1)
+        if hi <= lo:
+            return default
+        v = np.nanmax(np.abs(arr[lo:hi]))
+        return float(v) if not math.isinf(v) else default
+
+    events = []
+    for i in range(2, n):
+        if abs(jerk[i]) < steering_jerk_threshold_deg_per_s2:
+            continue
+        # Skip if adjacent dt is anomalous (gap artifact).
+        if dt_arr[i - 2] > gap_threshold or dt_arr[i - 1] > gap_threshold:
+            continue
+
+        # Context signals at event frame (and neighbours).
+        e_lat_now     = _sig("mpc_e_lat", i)
+        e_lat_prev    = _sig("mpc_e_lat", i - 1)
+        stale_now     = _sig("pp_stale_hold_active", i)
+        stale_prev    = _sig("pp_stale_hold_active", i - 1)
+        silent_now    = _sig("diag_silent_elat_dropout_active", i)
+        silent_prev   = _sig("diag_silent_elat_dropout_active", i - 1)
+        gate_active   = _sig("diag_heading_zero_gate_active", i)
+        kappa         = _window_max("curvature_map_abs", i)
+
+        # --- Classification rules (ordered by specificity) ---
+        # Rule 1: Stale hold flag dropped → stale recovery jerk.
+        if stale_prev > 0.5 and stale_now < 0.5:
+            cause = "stale_recovery"
+
+        # Rule 2: Silent dropout started (e_lat was non-zero, now ≈ 0).
+        elif silent_now > 0.5 and silent_prev < 0.5 and abs(e_lat_now) < 0.05:
+            cause = "dropout_start"
+
+        # Rule 3: Silent dropout ended (e_lat snapped back from 0).
+        elif silent_prev > 0.5 and silent_now < 0.5 and abs(e_lat_now - e_lat_prev) > 0.08:
+            cause = "dropout_recovery"
+
+        # Rule 4: Large e_lat on a curve with heading gate latched → oscillation.
+        elif kappa > 0.003 and abs(e_lat_now) > 0.15 and gate_active > 0.5:
+            cause = "curve_oscillation"
+
+        # Rule 5: Curve, no gate, large e_lat (oscillation without gate info).
+        elif kappa > 0.003 and abs(e_lat_now) > 0.10:
+            cause = "curve_oscillation"
+
+        # Rule 6: Straight with small e_lat — noise chasing.
+        elif kappa < 0.003 and abs(e_lat_now) < 0.15:
+            cause = "straight_noise"
+
+        else:
+            cause = "unknown"
+
+        events.append({
+            "frame":       i,
+            "time":        float(time_arr[i]),
+            "jerk_deg_s2": float(jerk[i]),
+            "cause":       cause,
+            "description": _JERK_CAUSE_LABELS[cause],
+            # Extra context for debugging.
+            "e_lat":       round(e_lat_now, 4),
+            "e_lat_prev":  round(e_lat_prev, 4),
+            "kappa":       round(kappa, 5),
+            "stale":       bool(stale_now > 0.5),
+            "silent":      bool(silent_now > 0.5),
+            "gate":        bool(gate_active > 0.5),
+        })
+
+    return events
+
+
 def _finite_stats(values: Optional[np.ndarray]) -> Dict:
     """Return finite-value summary stats with nullable percentiles."""
     if values is None:
@@ -676,7 +837,7 @@ def _build_mpc_health_summary(data: Dict, n_frames: int) -> Optional[Dict]:
     total = len(regime_arr)
     if total == 0:
         return None
-    mpc_mask = regime_arr >= 1
+    mpc_mask = regime_arr >= 0.5
     pp_frames = int(np.sum(~mpc_mask))
     mpc_frames = int(np.sum(mpc_mask))
     if mpc_frames == 0:

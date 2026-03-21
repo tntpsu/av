@@ -527,6 +527,11 @@ class ControlCommand:
     mpc_delay_frames_used: int = 0             # Number of delay frames used in Smith predictor
     grade_compensation_active: float = 0.0     # 1.0 when grade compensation is active (|grade| > 0.001)
     effective_max_accel: float = 0.0          # Grade-adjusted max acceleration (m/s²)
+    # Silent e_lat dropout detection: e_lat≈0 but perception NOT flagged stale.
+    # This catches cases where the perception layer returns lane center ≈ 0 without
+    # triggering the stale hold flag — causing silent drift that isn't rate-limited.
+    diag_silent_elat_dropout_active: bool = False  # True when |e_lat|<threshold, stale=0, on curve
+    mpc_elat_ramp_active: bool = False             # True when dropout recovery rate-limiter clamped e_lat step
 
 
 @dataclass

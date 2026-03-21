@@ -1,13 +1,23 @@
 # Highway track overlay — merges on top of config/av_stack_config.yaml at runtime.
 #
 # Only parameters that differ from base are listed here.
-# Base provides all other defaults (speed tables, safety gates, MPC structure).
-# Curvature thresholds are auto-derived from track geometry (Phase 3).
-#
+# Curvature thresholds are auto-derived from track geometry (T-076).
 # Track: highway_65 (500m arc radii — 10x gentler than s_loop's 40-50m arcs)
 # Usage:
 #   ./start_av_stack.sh --config config/mpc_highway.yaml \
 #       --track-yaml tracks/highway_65.yml --duration 60
+
+# ── Remaining overlay keys (future task: auto-derive from track geometry) ──
+# Speed settings (target_speed, max_speed): could derive from track speed_limit_mph
+# steering_smoothing_alpha: could auto-scale with speed (higher speed → more smoothing)
+# pp_feedback_gain/curve_feedforward: could auto-disable at high speed
+# pp_speed_norm: could auto-enable when target_speed > threshold
+# pp_map_ff_gain: could auto-scale with curvature range
+# Curve intent params: could auto-derive from arc geometry (radius, spacing)
+# speed_drag_gain, accel_target_smoothing_alpha: could auto-scale with speed
+# curve_phase thresholds: could auto-derive from κ_max
+# speed_governor settings: could auto-set when map curvature available
+# MPC weights/bias: could auto-derive from κ_max (low κ → soft q_lat + bias enabled)
 
 control:
   lateral:
@@ -34,12 +44,9 @@ control:
     max_speed: 18.0
     speed_drag_gain: 0.012          # lighter drag at highway speed (base: 0.035)
     accel_target_smoothing_alpha: 0.6   # more responsive (base: 0.86)
-  regime:
-    enabled: true
 
 trajectory:
   target_speed: 15.0
-  reference_lookahead_entry_track_name: highway_65  # arc-distance scheduler (T-075)
   # Phase transition thresholds — highway needs lower thresholds for gentler curves
   curve_phase_on: 0.35        # base: 0.45
   curve_phase_off: 0.22       # base: 0.30
@@ -54,9 +61,7 @@ trajectory:
     curve_preview_enabled: false
     curve_cap_use_preview_curvature: false   # use map κ not perception preview (avoids noise capping)
   mpc:
-    mpc_q_lat: 0.5             # softer lateral cost for gentle highway curves (base: 10.0)
     mpc_q_lat_terminal_scale: 1.0
-    mpc_r_steer_rate: 2.0      # stricter rate penalty on straight highway (base: 1.0)
     mpc_v_max: 20.0
     mpc_bias_enabled: true
     mpc_bias_alpha: 0.005

@@ -6,8 +6,9 @@ and error magnitude. Provides hysteresis and smooth blending during transitions.
 
 Regime thresholds (defaults, all configurable via YAML control.regime.*):
   v < stanley_max_speed_mps (5.0 m/s) − hysteresis → STANLEY (low-speed precise)
-  v < pp_max_speed_mps (10 m/s)                     → PURE_PURSUIT
-  v > pp_max_speed_mps + hysteresis                 → LINEAR_MPC
+  κ > mpc_max_curvature (0.020, R50)               → PURE_PURSUIT (curvature guard)
+  v > mpc_min_speed_mps (3.0) + hysteresis          → LINEAR_MPC (primary controller)
+  v < mpc_min_speed_mps − hysteresis                → PURE_PURSUIT (low-speed fallback)
   v > lmpc_max_speed_mps (20 m/s)                   → NONLINEAR_MPC (future — Phase 2.7)
 
 Hysteresis prevents chatter near threshold.
@@ -42,6 +43,10 @@ class RegimeConfig:
     downshift_hysteresis_mps: float = 1.0          # LMPC→PP: must drop below threshold − this
     blend_frames: int = 15                         # Frames to linearly blend PP↔LMPC transition
     min_hold_frames: int = 30                      # Frames desired must be stable before switch
+    # MPC curvature guard (Step 4: MPC primary controller)
+    mpc_min_speed_mps: float = 3.0                 # MPC activates above this + upshift_hysteresis
+    mpc_max_curvature: float = 0.020               # Force PP above this κ (R50 boundary)
+    mpc_curvature_hysteresis: float = 0.003        # Re-engage MPC at κ < 0.017
     # Stanley low-speed regime (Phase 2.9)
     stanley_enabled: bool = True                   # Independent switch; requires enabled=True
     stanley_max_speed_mps: float = 5.0             # PP→Stanley: downshift below this − hysteresis
@@ -49,6 +54,11 @@ class RegimeConfig:
     stanley_downshift_hysteresis_mps: float = 0.5  # PP→Stanley: must drop below max − this
     stanley_blend_frames: int = 10                 # Shorter blend (low speed = less risk)
     stanley_min_hold_frames: int = 15              # Shorter hold (low speed = faster transitions)
+    # Curvature inhibit: do not use Stanley when |κ| exceeds this (1/m).
+    # Prevents MPC→Stanley handoff during curve braking (e.g. v dips to ~4.5 m/s on
+    # C2 while κ≈0.01), which combined with perception dropout caused large steering
+    # jerk.  0.0 = disabled (legacy behaviour).  ~0.004–0.005 blocks R≤250 m curves.
+    stanley_inhibit_curvature_abs: float = 0.004
 
     @classmethod
     def from_config(cls, cfg: dict) -> "RegimeConfig":
@@ -59,9 +69,11 @@ class RegimeConfig:
             "enabled", "pp_max_speed_mps", "lmpc_max_speed_mps",
             "lmpc_max_heading_error_rad", "upshift_hysteresis_mps",
             "downshift_hysteresis_mps", "blend_frames", "min_hold_frames",
+            "mpc_min_speed_mps", "mpc_max_curvature", "mpc_curvature_hysteresis",
             "stanley_enabled", "stanley_max_speed_mps",
             "stanley_upshift_hysteresis_mps", "stanley_downshift_hysteresis_mps",
             "stanley_blend_frames", "stanley_min_hold_frames",
+            "stanley_inhibit_curvature_abs",
         ]:
             if key in rc:
                 kwargs[key] = rc[key]
@@ -127,7 +139,7 @@ class RegimeSelector:
         if mpc_fallback_active:
             desired = ControlRegime.PURE_PURSUIT
         else:
-            desired = self._compute_desired(speed, heading_error)
+            desired = self._compute_desired(speed, heading_error, curvature_abs=curvature_abs)
 
         # Hysteresis hold: desired must be stable for min_hold_frames before switching
         if desired != self._target_regime:
@@ -174,11 +186,21 @@ class RegimeSelector:
         self._blend_progress = 1.0
         self._hold_counter = 0
 
-    def _compute_desired(self, speed: float, heading_error: float) -> ControlRegime:
-        """Compute desired regime based on current speed and heading error."""
-        pp_thresh = self.config.pp_max_speed_mps
+    def _compute_desired(self, speed: float, heading_error: float,
+                         curvature_abs: float = 0.0) -> ControlRegime:
+        """Compute desired regime based on speed, heading error, and curvature.
+
+        Step 4 architecture:
+          Stanley: v < 4.5 m/s (parking/hairpin)
+          MPC:     v > mpc_min_speed + hysteresis AND κ < mpc_max_curvature (primary)
+          PP:      κ >= mpc_max_curvature (tight curves) OR MPC solver failure (fallback)
+        """
+        mpc_min = self.config.mpc_min_speed_mps
         up_hyst = self.config.upshift_hysteresis_mps
         down_hyst = self.config.downshift_hysteresis_mps
+
+        thr_inhibit = float(self.config.stanley_inhibit_curvature_abs)
+        inhibit_stanley_on_curve = thr_inhibit > 0.0 and curvature_abs > thr_inhibit
 
         # --- Stanley low-speed regime (Phase 2.9) ---
         if self.config.stanley_enabled:
@@ -190,23 +212,40 @@ class RegimeSelector:
             )
             if self._active_regime == ControlRegime.STANLEY:
                 # Stay in Stanley unless speed rises above upper threshold
-                if speed <= stanley_up:
+                if (
+                    not inhibit_stanley_on_curve
+                    and speed <= stanley_up
+                ):
                     return ControlRegime.STANLEY
-                # Fall through to PP / higher regime logic below
+                # High curvature or speed above band: fall through to PP / LMPC ladder
             else:
                 # Downshift to Stanley if speed drops below lower threshold
-                if speed < stanley_down:
+                if (
+                    not inhibit_stanley_on_curve
+                    and speed < stanley_down
+                ):
                     return ControlRegime.STANLEY
 
-        # --- PP ↔ LMPC ---
+        # --- Curvature guard: force PP on tight curves (Step 4) ---
+        if curvature_abs > 0:
+            if self._active_regime == ControlRegime.LINEAR_MPC:
+                # MPC active: force PP if curvature exceeds threshold
+                if curvature_abs > self.config.mpc_max_curvature:
+                    return ControlRegime.PURE_PURSUIT
+            elif self._active_regime == ControlRegime.PURE_PURSUIT:
+                # PP active: block upshift until curvature clears hysteresis band
+                if curvature_abs > (self.config.mpc_max_curvature - self.config.mpc_curvature_hysteresis):
+                    return ControlRegime.PURE_PURSUIT
+
+        # --- PP ↔ LMPC (Step 4: use mpc_min_speed_mps) ---
         if self._active_regime == ControlRegime.PURE_PURSUIT:
-            # Upshift to LMPC: must exceed pp_max + hysteresis
-            if speed > pp_thresh + up_hyst:
+            # Upshift to LMPC: must exceed mpc_min + hysteresis
+            if speed > mpc_min + up_hyst:
                 return ControlRegime.LINEAR_MPC
             return ControlRegime.PURE_PURSUIT
         else:
-            # Downshift to PP: must drop below pp_max - hysteresis
-            if speed < pp_thresh - down_hyst:
+            # Downshift to PP: must drop below mpc_min - hysteresis
+            if speed < mpc_min - down_hyst:
                 return ControlRegime.PURE_PURSUIT
             # Upshift to NMPC (future): above lmpc_max or large heading error
             if (

@@ -75,6 +75,7 @@ def _base_cfg(regime_enabled: bool = False, **mpc_overrides) -> dict:
             "regime": {
                 "enabled": regime_enabled,
                 "pp_max_speed_mps": 10.0,
+                "mpc_min_speed_mps": 10.0,  # preserve old speed threshold for these tests
                 "upshift_hysteresis_mps": 1.0,
                 "downshift_hysteresis_mps": 1.0,
                 "blend_frames": 15,
@@ -295,7 +296,7 @@ class TestRecorderMPCDatasets:
 
 
 class TestConfigFiles:
-    """Verify mpc_sloop.yaml and mpc_highway.yaml are valid and MPC-enabled."""
+    """Verify overlay configs are valid and base config has MPC regime enabled."""
 
     def _load(self, name: str) -> dict:
         path = _PROJECT_ROOT / "config" / name
@@ -303,18 +304,16 @@ class TestConfigFiles:
         with open(path) as f:
             return yaml.safe_load(f)
 
-    def test_mpc_sloop_regime_enabled(self):
-        cfg = self._load("mpc_sloop.yaml")
+    def test_base_config_regime_enabled(self):
+        """Regime enabled in base config — overlays inherit it."""
+        cfg = self._load("av_stack_config.yaml")
         assert cfg["control"]["regime"]["enabled"] is True
 
-    def test_mpc_sloop_q_lat_tuned(self):
+    def test_mpc_sloop_exists_and_valid(self):
+        """s_loop overlay loads without error (MPC never fires — no MPC keys needed)."""
         cfg = self._load("mpc_sloop.yaml")
-        assert cfg["trajectory"]["mpc"]["mpc_q_lat"] == pytest.approx(12.0)
+        assert cfg is not None
 
-    def test_mpc_highway_regime_enabled(self):
+    def test_mpc_highway_v_max_tuned(self):
         cfg = self._load("mpc_highway.yaml")
-        assert cfg["control"]["regime"]["enabled"] is True
-
-    def test_mpc_highway_r_steer_rate_tuned(self):
-        cfg = self._load("mpc_highway.yaml")
-        assert cfg["trajectory"]["mpc"]["mpc_r_steer_rate"] == pytest.approx(2.0)
+        assert cfg["trajectory"]["mpc"]["mpc_v_max"] == pytest.approx(20.0)

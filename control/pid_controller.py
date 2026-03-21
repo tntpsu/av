@@ -263,6 +263,7 @@ class LateralController:
                  curvature_stale_hold_min_abs: float = 0.0005,
                  base_error_smoothing_alpha: float = 0.7,
                  heading_error_smoothing_alpha: float = 0.45,
+                 grade_steering_damping_gain: float = 5.0,
                  straight_window_frames: int = 60,
                  straight_oscillation_high: float = 0.20,
                  straight_oscillation_low: float = 0.05):
@@ -574,6 +575,8 @@ class LateralController:
         self.heading_error_smoothing_alpha = float(
             np.clip(heading_error_smoothing_alpha, 0.0, 1.0)
         )
+        self.grade_steering_damping_gain = grade_steering_damping_gain
+        self._current_grade_rad = 0.0
 
         # Straight-away adaptive tuning (deadband + smoothing)
         self.straight_curvature_threshold = straight_curvature_threshold
@@ -905,6 +908,10 @@ class LateralController:
             self.smoothed_heading_error = heading_error
         else:
             heading_alpha = self.heading_error_smoothing_alpha
+            # Grade-proportional damping: reduce alpha (more smoothing) on steeper grades
+            if abs(self._current_grade_rad) > 0.01:
+                grade_damping = min(0.3, abs(self._current_grade_rad) * self.grade_steering_damping_gain)
+                heading_alpha = max(0.15, heading_alpha - grade_damping)
             if abs(curve_metric) < self.straight_curvature_threshold:
                 heading_alpha = min(0.9, heading_alpha + 0.2)
             self.smoothed_heading_error = (
@@ -961,8 +968,13 @@ class LateralController:
             self.smoothed_lateral_error = lateral_error
         else:
             # Exponential smoothing: blend new error with previous smoothed error
-            self.smoothed_lateral_error = (self.error_smoothing_alpha * lateral_error + 
-                                         (1.0 - self.error_smoothing_alpha) * self.smoothed_lateral_error)
+            _lat_alpha = self.error_smoothing_alpha
+            # Grade-proportional damping: reduce alpha (more smoothing) on steeper grades
+            if abs(self._current_grade_rad) > 0.01:
+                grade_damping = min(0.3, abs(self._current_grade_rad) * self.grade_steering_damping_gain)
+                _lat_alpha = max(0.15, _lat_alpha - grade_damping)
+            self.smoothed_lateral_error = (_lat_alpha * lateral_error +
+                                         (1.0 - _lat_alpha) * self.smoothed_lateral_error)
         
         # Use smoothed error for control (but store original for recording/analysis)
         # Steering sign convention: positive ref_x means target is to the RIGHT, so steering should be positive.
@@ -1237,6 +1249,18 @@ class LateralController:
                 pp_ref_jump_clamped = True
             self._pp_last_ref_x = pp_ref_x
 
+            # Reset the slew anchor on every STRAIGHT frame — stale or not.
+            # The floor block (below) only runs in ENTRY/COMMIT state, so
+            # _pp_last_local_lookahead is never decremented during STRAIGHT frames.
+            # If a brief early-ENTRY anticipation window set it to a high value
+            # (e.g. 7.2m from the straight reference distance), that stale value
+            # carries forward — even through stale-perception frames — and inflates
+            # pp_post on the next real ENTRY, creating a >2m rescue step → jerk.
+            # Resetting here (before both stale and non-stale branches) ensures
+            # each curve entry always starts from scratch.
+            if pp_curve_local_state == "STRAIGHT":
+                self._pp_last_local_lookahead = None
+
             if using_stale_perception:
                 self._pp_stale_frames += 1
                 pp_stale_hold_active = True
@@ -1278,7 +1302,13 @@ class LateralController:
                             pp_curve_local_shorten_delta_m = float(min_allowed - ld)
                             ld = min_allowed
                 pp_curve_local_lookahead_post_floor = float(ld)
-                self._pp_last_local_lookahead = float(ld)
+                # Only anchor the slew to values where the floor is actually
+                # binding (pp_pre < floor).  When pp_pre naturally exceeds the
+                # floor (e.g. during the straight approach before curve entry),
+                # the anchor stays at None so the slew does not carry over the
+                # inflated straight reference into the first real ENTRY frame.
+                if pp_curve_local_floor_active:
+                    self._pp_last_local_lookahead = float(ld)
                 alpha = np.arctan2(pp_ref_x, pp_ref_y)
 
                 wheelbase = 2.5
@@ -2418,7 +2448,7 @@ class LateralController:
             self._pp_last_steering_rate = float(steering - self.last_steering)
             self.last_steering = steering
 
-            # Skip EMA smoothing -- PP output doesn't need it
+            # PP grade smoothing: no EMA (adds phase lag), just track smoothed_steering
             self.smoothed_steering = steering
             steering_post_smoothing = steering
 
@@ -3143,6 +3173,10 @@ class LateralController:
                         self.smoothed_steering = steering
                     else:
                         alpha = np.clip(self.steering_smoothing_alpha, 0.0, 1.0)
+                        # Grade-proportional damping: reduce alpha (more smoothing) on steeper grades
+                        if abs(self._current_grade_rad) > 0.01:
+                            grade_damping = min(0.3, abs(self._current_grade_rad) * self.grade_steering_damping_gain)
+                            alpha = max(0.15, alpha - grade_damping)
                         self.smoothed_steering = (alpha * steering) + ((1.0 - alpha) * self.smoothed_steering)
                 steering = self.smoothed_steering
                 steering_smoothing_delta = abs(steering - smoothing_in)
@@ -3998,6 +4032,8 @@ class LongitudinalController:
                  jerk_error_min: float = 0.5, jerk_error_max: float = 3.0,
                  max_jerk_min: float = 1.5, max_jerk_max: float = 6.0,
                  jerk_cooldown_frames: int = 0, jerk_cooldown_scale: float = 0.6,
+                 grade_ff_gain: float = 1.0,
+                 grade_jerk_relaxation_gain: float = 2.0,
                  speed_error_to_accel_gain: float = 0.5,
                  speed_error_deadband: float = 0.0,
                  speed_error_gain_under: Optional[float] = None,
@@ -4072,6 +4108,10 @@ class LongitudinalController:
         self.speed_for_jerk_alpha = speed_for_jerk_alpha
         self.jerk_cooldown_frames = jerk_cooldown_frames
         self.jerk_cooldown_scale = jerk_cooldown_scale
+        self.grade_ff_gain = grade_ff_gain
+        self.grade_jerk_relaxation_gain = grade_jerk_relaxation_gain
+        self._effective_max_accel = max_accel
+        self._effective_max_decel = max_decel
         self.speed_error_to_accel_gain = speed_error_to_accel_gain
         self.speed_error_deadband = speed_error_deadband
         self.speed_error_gain_under = (
@@ -4183,7 +4223,8 @@ class LongitudinalController:
         dt: Optional[float] = None,
         reference_accel: Optional[float] = None,
         current_curvature: Optional[float] = None,
-        min_speed_floor: Optional[float] = None
+        min_speed_floor: Optional[float] = None,
+        grade_rad: float = 0.0
     ) -> Tuple[float, float]:
         """
         Compute throttle and brake commands with speed smoothing and limiting.
@@ -4275,13 +4316,21 @@ class LongitudinalController:
             desired_accel += self.speed_error_gain_under * speed_error_effective
         else:
             desired_accel += self.speed_error_gain_over * speed_error_effective
-        if self.max_accel > 0.0:
-            desired_accel = min(desired_accel, self.max_accel)
-        if self.max_decel > 0.0:
-            desired_accel = max(desired_accel, -self.max_decel)
         if reference_velocity is not None and current_speed < reference_velocity - 0.5:
             # Prevent decel commands when we're clearly under target speed.
             desired_accel = max(desired_accel, 0.0)
+        # Grade compensation feedforward (Step 3): add gravity offset.
+        # Uphill (grade_rad>0) → gravity_accel>0 → more throttle needed.
+        # Downhill (grade_rad<0) → gravity_accel<0 → more braking needed.
+        gravity_accel = 9.81 * math.sin(grade_rad) * self.grade_ff_gain
+        desired_accel += gravity_accel
+        # Post-grade clamp with effective limits: expand authority by gravity load.
+        # Grade-zero proof: gravity_accel=0 → effective limits = base limits.
+        effective_max_accel = self.max_accel + abs(gravity_accel)
+        effective_max_decel = self.max_decel + abs(gravity_accel)
+        desired_accel = np.clip(desired_accel, -effective_max_decel, effective_max_accel)
+        self._effective_max_accel = effective_max_accel
+        self._effective_max_decel = effective_max_decel
         if self.accel_target_smoothing_alpha is not None:
             accel_alpha = np.clip(self.accel_target_smoothing_alpha, 0.0, 1.0)
             self.smoothed_desired_accel = (
@@ -4344,12 +4393,20 @@ class LongitudinalController:
                 dynamic_max_jerk = self.max_jerk_min + jerk_ratio * (
                     self.max_jerk_max - self.max_jerk_min
                 )
+                # Grade-proportional jerk relaxation: allow faster accel response on grade.
+                # Grade-zero proof: gravity_accel=0 → grade_jerk_bonus=0. No change.
+                grade_jerk_bonus = abs(gravity_accel) * self.grade_jerk_relaxation_gain
+                dynamic_max_jerk += grade_jerk_bonus
                 accel_cmd = np.clip(
                     accel_cmd,
                     self.last_accel_cmd - (dynamic_max_jerk * dt),
                     self.last_accel_cmd + (dynamic_max_jerk * dt),
                 )
-                if self.jerk_cooldown_remaining > 0:
+                # Bypass jerk cooldown when grade compensation is active:
+                # sustained grade FF offset causes jerk limiter to fire continuously,
+                # which permanently resets cooldown and starves throttle authority.
+                # Grade-zero proof: gravity_accel=0 → cooldown behaves as before.
+                if self.jerk_cooldown_remaining > 0 and abs(gravity_accel) < 0.1:
                     accel_cmd *= float(self.jerk_cooldown_scale)
                     self.jerk_cooldown_remaining -= 1
                 self.last_accel_cmd = accel_cmd
@@ -4357,7 +4414,7 @@ class LongitudinalController:
                 self.last_accel_cmd = accel_cmd
 
             if accel_cmd >= 0.0:
-                throttle = (accel_cmd / self.max_accel) if self.max_accel > 0.0 else 0.0
+                throttle = (accel_cmd / self._effective_max_accel) if self._effective_max_accel > 0.0 else 0.0
                 if self.throttle_curve_gamma != 1.0:
                     throttle = np.clip(throttle, 0.0, 1.0)
                     throttle = throttle ** float(self.throttle_curve_gamma)
@@ -4390,7 +4447,7 @@ class LongitudinalController:
                 self.longitudinal_mode = "accel" if throttle > 0.0 else "coast"
             else:
                 throttle = 0.0
-                brake = (abs(accel_cmd) / self.max_decel) if self.max_decel > 0.0 else 0.0
+                brake = (abs(accel_cmd) / self._effective_max_decel) if self._effective_max_decel > 0.0 else 0.0
                 if brake_feedforward > 0.0:
                     brake = np.clip(brake + brake_feedforward, 0.0, 1.0)
                 self.longitudinal_mode = "brake" if brake > 0.0 else "coast"
@@ -4582,7 +4639,7 @@ class LongitudinalController:
                 self.last_accel_cmd - (dynamic_max_jerk * dt),
                 self.last_accel_cmd + (dynamic_max_jerk * dt),
             )
-            if self.jerk_cooldown_remaining > 0:
+            if self.jerk_cooldown_remaining > 0 and abs(gravity_accel) < 0.1:
                 accel_cmd_limited *= float(self.jerk_cooldown_scale)
                 self.jerk_cooldown_remaining -= 1
             if accel_cmd_limited >= 0.0:
@@ -4756,6 +4813,8 @@ class VehicleController:
                  longitudinal_max_jerk_max: float = 6.0,
                  longitudinal_jerk_cooldown_frames: int = 0,
                  longitudinal_jerk_cooldown_scale: float = 0.6,
+                 longitudinal_grade_ff_gain: float = 1.0,
+                 longitudinal_grade_jerk_relaxation_gain: float = 2.0,
                  longitudinal_min_throttle_hold: float = 0.12,
                  longitudinal_min_throttle_hold_speed: float = 4.0,
                  longitudinal_speed_error_to_accel_gain: float = 0.5,
@@ -4802,6 +4861,7 @@ class VehicleController:
                  steering_smoothing_alpha: float = 0.7,
                  base_error_smoothing_alpha: float = 0.7,
                  heading_error_smoothing_alpha: float = 0.45,
+                 grade_steering_damping_gain: float = 5.0,
                  straight_window_frames: int = 60,
                  straight_oscillation_high: float = 0.20,
                  straight_oscillation_low: float = 0.05,
@@ -5209,7 +5269,8 @@ class VehicleController:
             feedback_gain_curvature_min=feedback_gain_curvature_min,
             feedback_gain_curvature_max=feedback_gain_curvature_max,
             curvature_stale_hold_seconds=curvature_stale_hold_seconds,
-            curvature_stale_hold_min_abs=curvature_stale_hold_min_abs
+            curvature_stale_hold_min_abs=curvature_stale_hold_min_abs,
+            grade_steering_damping_gain=grade_steering_damping_gain
         )
         self.longitudinal_controller = LongitudinalController(
             kp=longitudinal_kp,
@@ -5235,6 +5296,8 @@ class VehicleController:
             max_jerk_max=longitudinal_max_jerk_max,
             jerk_cooldown_frames=longitudinal_jerk_cooldown_frames,
             jerk_cooldown_scale=longitudinal_jerk_cooldown_scale,
+            grade_ff_gain=longitudinal_grade_ff_gain,
+            grade_jerk_relaxation_gain=longitudinal_grade_jerk_relaxation_gain,
             min_throttle_hold=longitudinal_min_throttle_hold,
             min_throttle_hold_speed=longitudinal_min_throttle_hold_speed,
             speed_error_to_accel_gain=longitudinal_speed_error_to_accel_gain,
@@ -5308,7 +5371,8 @@ class VehicleController:
         return_metadata: bool = False,
         dt: Optional[float] = None,
         reference_accel: Optional[float] = None,
-        using_stale_perception: bool = False
+        using_stale_perception: bool = False,
+        grade_rad: float = 0.0
     ) -> dict:
         """
         Compute control commands.
@@ -5323,6 +5387,8 @@ class VehicleController:
             If return_metadata=True, also includes: steering_before_limits, 
             lateral_error, heading_error, total_error, pid_integral, pid_derivative
         """
+        # Store grade for lateral damping (Phase 5 — grade-proportional steering damping).
+        self.lateral_controller._current_grade_rad = grade_rad
         # Lateral control — always get full metadata so MPC can read lateral/heading error
         _need_metadata = return_metadata or (self._mpc_controller is not None)
         steering_result = self.lateral_controller.compute_steering(
@@ -5349,8 +5415,12 @@ class VehicleController:
             self._mpc_controller._fallback_active
             if self._mpc_controller is not None else False
         )
+        _regime_curvature = abs(float(
+            lateral_metadata.get('curvature_primary_abs', 0.0) or 0.0
+        ))
         regime, blend_weight = self._regime_selector.update(
             speed=float(current_state.get('speed', 0.0)),
+            curvature_abs=_regime_curvature,
             mpc_fallback_active=mpc_fallback,
         )
 
@@ -5418,6 +5488,7 @@ class VehicleController:
                 v_max=float(self.longitudinal_controller.max_speed),
                 dt=dt or 0.033,
                 kappa_horizon=kappa_horizon_for_mpc,
+                grade_rad=grade_rad,
             )
 
             if mpc_result.get('mpc_fallback_active'):
@@ -5448,6 +5519,10 @@ class VehicleController:
             lateral_metadata['mpc_feasible'] = mpc_result.get('mpc_feasible', False)
             lateral_metadata['mpc_solve_time_ms'] = mpc_result.get('solve_time_ms', 0.0)
             lateral_metadata['mpc_e_lat'] = mpc_result.get('e_lat_input', 0.0)
+            # True when MPC e_lat ramp limiter clamped a frame-to-frame step (HDF5 diagnostic).
+            lateral_metadata['mpc_elat_ramp_active'] = bool(
+                mpc_result.get('elat_ramp_active', False)
+            )
             lateral_metadata['mpc_e_heading'] = mpc_result.get('e_heading_input', 0.0)
             lateral_metadata['mpc_kappa_ref'] = mpc_result.get('kappa_ref_used', 0.0)
             lateral_metadata['mpc_fallback_active'] = mpc_result.get('mpc_fallback_active', False)
@@ -5517,6 +5592,7 @@ class VehicleController:
             lateral_metadata['mpc_feasible'] = False
             lateral_metadata['mpc_solve_time_ms'] = 0.0
             lateral_metadata['mpc_e_lat'] = 0.0
+            lateral_metadata['mpc_elat_ramp_active'] = False
             lateral_metadata['mpc_e_heading'] = 0.0
             lateral_metadata['mpc_kappa_ref'] = 0.0
             lateral_metadata['mpc_fallback_active'] = False
@@ -5539,6 +5615,7 @@ class VehicleController:
             lateral_metadata['mpc_feasible'] = False
             lateral_metadata['mpc_solve_time_ms'] = 0.0
             lateral_metadata['mpc_e_lat'] = 0.0
+            lateral_metadata['mpc_elat_ramp_active'] = False
             lateral_metadata['mpc_e_heading'] = 0.0
             lateral_metadata['mpc_kappa_ref'] = 0.0
             lateral_metadata['mpc_fallback_active'] = False
@@ -5568,7 +5645,8 @@ class VehicleController:
             dt=dt,
             reference_accel=reference_accel,
             current_curvature=reference_point.get('curvature'),
-            min_speed_floor=reference_point.get('min_speed_floor')
+            min_speed_floor=reference_point.get('min_speed_floor'),
+            grade_rad=grade_rad
         )
         
         result = {

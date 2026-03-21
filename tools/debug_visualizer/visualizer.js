@@ -795,10 +795,12 @@ class Visualizer {
                     const s = String(v || '').trim();
                     return (s === 'unknown' || s === '') ? '' : s;
                 };
+                const trackId = orEmpty(prov.track_id || rec.track_id);
                 const version = orEmpty(prov.software_version || rec.software_version);
                 const sha = orEmpty(prov.git_sha_short || rec.git_sha_short);
                 const replayType = orEmpty(prov.replay_type || rec.replay_type);
                 const parts = [rec.filename];
+                if (trackId) parts.push(trackId);
                 if (version || sha || replayType) {
                     parts.push(version || '-', sha || '-', replayType || '-');
                 }
@@ -1224,29 +1226,50 @@ class Visualizer {
             }
             
             if (summary.layer_scores && summary.layer_score_breakdown) {
+                const scoreBD = summary.executive_summary?.score_breakdown ?? {};
+                const layerWeights = scoreBD.layer_weights ?? {};
+                const layerContribs = scoreBD.layer_weighted_contributions ?? {};
+                const overallBase = Number(scoreBD.overall_base_score ?? summary.executive_summary?.overall_score ?? 0);
+                const capReason = scoreBD.cap_reason ?? null;
+                const finalScore = Number(summary.executive_summary?.overall_score ?? 0);
+
                 html += '<div style="margin-top: 0.8rem; display: grid; grid-template-columns: repeat(auto-fit,minmax(220px,1fr)); gap: 0.5rem;">';
-                const layerOrder = ['Safety', 'Trajectory', 'Control', 'Perception', 'LongitudinalComfort'];
+                const layerOrder = ['Safety', 'Trajectory', 'Control', 'Perception', 'LongitudinalComfort', 'SignalIntegrity'];
                 layerOrder.forEach((layer) => {
                     const score = Number(summary.layer_scores[layer]);
                     if (!Number.isFinite(score)) return;
                     const color = score >= 80 ? '#4caf50' : (score >= 60 ? '#ffa500' : '#ff6b6b');
                     const breakdown = summary.layer_score_breakdown[layer];
                     const totalDeduction = Number(breakdown?.total_deduction ?? (100 - score));
+                    const wt = Number(layerWeights[layer] ?? 0) * 100;
+                    const contrib = Number(layerContribs[layer] ?? 0);
                     html += '<div style="background:#1a1a1a; border-radius:4px; padding:0.5rem 0.6rem;">';
                     html += `<div style="display:flex; justify-content:space-between;"><strong style="color:#9bdcff;">${this.escapeHtml(layer)}</strong><span style="color:${color};">${score.toFixed(1)}</span></div>`;
-                    html += `<div style="font-size:0.8rem; color:#9fb3c8;">Base 100 - ${Number.isFinite(totalDeduction) ? totalDeduction.toFixed(1) : '-'} = ${score.toFixed(1)}</div>`;
+                    html += `<div style="font-size:0.8rem; color:#9fb3c8;">Base 100 − ${Number.isFinite(totalDeduction) ? totalDeduction.toFixed(1) : '–'} = ${score.toFixed(1)}</div>`;
+                    if (wt > 0) {
+                        html += `<div style="font-size:0.78rem; color:#7f8c98;">Wt ${wt.toFixed(1)}% → contributes <span style="color:#c8d8e8;">${contrib.toFixed(2)} pts</span></div>`;
+                    }
                     const deductions = Array.isArray(breakdown?.deductions) ? breakdown.deductions : [];
                     const activeDeductions = deductions.filter((d) => Number(d?.value || 0) > 0.01).slice(0, 3);
                     if (activeDeductions.length > 0) {
                         html += '<div style="margin-top:0.25rem; font-size:0.78rem; color:#a8b4c0;">';
                         activeDeductions.forEach((d) => {
-                            html += `<div>- ${this.escapeHtml(String(d.name || 'Deduction'))}: ${Number(d.value).toFixed(1)} <span style="color:#7f8c98;">(${this.escapeHtml(String(d.limit || 'n/a'))})</span></div>`;
+                            html += `<div>− ${this.escapeHtml(String(d.name || 'Deduction'))}: ${Number(d.value).toFixed(1)} <span style="color:#7f8c98;">(${this.escapeHtml(String(d.limit || 'n/a'))})</span></div>`;
                         });
                         html += '</div>';
                     }
                     html += '</div>';
                 });
                 html += '</div>';
+
+                // Weighted-total footer
+                const capNote = (capReason && capReason !== 'none')
+                    ? ` <span style="color:#ffa500;">→ capped: ${this.escapeHtml(String(capReason))}</span>`
+                    : '';
+                html += `<div style="margin-top:0.4rem; padding:0.35rem 0.6rem; background:#111; border-radius:4px; font-size:0.82rem; color:#9fb3c8;">`;
+                html += `Weighted total: <strong style="color:#c8d8e8;">${overallBase.toFixed(2)}</strong>${capNote}`;
+                html += ` → <strong style="color:${finalScore >= 80 ? '#4caf50' : (finalScore >= 60 ? '#ffa500' : '#ff6b6b')};">${finalScore.toFixed(1)} / 100</strong>`;
+                html += `</div>`;
             }
             
             // Show analysis scope indicator
@@ -4602,6 +4625,93 @@ class Visualizer {
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
+    // Cadence breakdown (wait_input vs pipeline, queue, recommendations)
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    renderCadenceBreakdownHtml(data) {
+        const fmt = (v, d = 2) => (v == null || !Number.isFinite(Number(v)) ? 'N/A' : Number(v).toFixed(d));
+        const sev = data.severe || {};
+        const rates = data.rates_hz || {};
+        const avail = data.availability || {};
+        let warnHtml = '';
+        if (Array.isArray(data.warnings) && data.warnings.length) {
+            warnHtml = `<div style="background:#3e2723;padding:0.75rem;border-radius:8px;margin-bottom:1rem;border-left:4px solid #ff9800;">
+                <strong>Warnings</strong><ul style="margin:0.5rem 0 0 1rem;">${data.warnings.map(w => `<li>${this.escapeHtml(w)}</li>`).join('')}</ul></div>`;
+        }
+        let availRows = Object.entries(avail).map(([k, v]) =>
+            `<tr><td>${this.escapeHtml(k)}</td><td style="color:${v ? '#4caf50' : '#888'}">${v ? 'yes' : 'no'}</td></tr>`).join('');
+        let statsRows = '';
+        const statsAll = data.stats_all || {};
+        for (const [name, st] of Object.entries(statsAll)) {
+            if (!st || !st.count) continue;
+            statsRows += `<tr><td>${this.escapeHtml(name)}</td><td>${st.count}</td><td>${fmt(st.p50)}</td><td>${fmt(st.p95)}</td><td>${fmt(st.max)}</td></tr>`;
+        }
+        const recs = data.recommendations || [];
+        const recHtml = recs.length
+            ? `<ul style="margin:0.5rem 0 0 1rem;">${recs.map(r => {
+                const col = r.severity === 'alert' ? '#ff6b6b' : r.severity === 'warn' ? '#ff9800' : '#9e9e9e';
+                return `<li style="color:${col};margin-bottom:0.35rem;"><strong>${this.escapeHtml(r.code)}</strong> — ${this.escapeHtml(r.detail)}</li>`;
+            }).join('')}</ul>`
+            : '<p style="color:#888;">No recommendations.</p>';
+        const corr = data.correlation_hints || {};
+        let corrTxt = '';
+        if (corr.pearson_wait_vs_wall_severe != null) {
+            corrTxt = `<tr><td>Pearson(wait, wall | severe)</td><td>${fmt(corr.pearson_wait_vs_wall_severe, 4)}</td></tr>`;
+        }
+        return `
+            ${warnHtml}
+            <div style="background:#2a2a2a;padding:1rem;border-radius:8px;margin-bottom:1rem;border-left:4px solid #4a90e2;">
+                <h3 style="margin:0 0 0.75rem;color:#e0e0e0;">Cadence health</h3>
+                <table class="data-table">
+                    <tr><td>Frames</td><td>${data.frame_count ?? '—'}</td></tr>
+                    <tr><td>Sync policy</td><td>${this.escapeHtml(String(data.sync_policy || '—'))}</td></tr>
+                    <tr><td>Mean control rate</td><td>${rates.control_mean != null ? fmt(rates.control_mean, 2) + ' Hz' : 'N/A'} (target ${fmt(data.target_hz, 1)} Hz)</td></tr>
+                    <tr><td>Loop period p50 / p95 (ms)</td><td>${fmt(rates.control_p50_ms)} / ${fmt(rates.control_p95_ms)}</td></tr>
+                    <tr><td>Severe (&gt; ${fmt(data.severe_ms_threshold, 0)} ms)</td><td>${fmt((sev.rate || 0) * 100, 2)}% (${sev.count ?? '—'} / ${sev.denom ?? '—'})</td></tr>
+                    ${corrTxt}
+                </table>
+                ${data.headroom_hint ? `<p style="color:#9ccc65;margin-top:0.75rem;">${this.escapeHtml(data.headroom_hint)}</p>` : ''}
+            </div>
+            <div style="background:#2a2a2a;padding:1rem;border-radius:8px;margin-bottom:1rem;">
+                <h4 style="margin:0 0 0.5rem;color:#bdbdbd;">Dataset availability</h4>
+                <table class="data-table"><tbody>${availRows}</tbody></table>
+            </div>
+            <div style="background:#2a2a2a;padding:1rem;border-radius:8px;margin-bottom:1rem;">
+                <h4 style="margin:0 0 0.5rem;color:#bdbdbd;">Stats (all frames)</h4>
+                <table class="data-table"><thead><tr><th>Metric</th><th>n</th><th>p50</th><th>p95</th><th>max</th></tr></thead><tbody>${statsRows}</tbody></table>
+                <p style="color:#888;font-size:0.8rem;margin:0.5rem 0 0;">stream_front_unity_dt_ms = camera timestamp minus Unity time (lag), not frame Δt. Use unity_render_frame_dt_ms for render cadence.</p>
+            </div>
+            <div style="background:#2a2a2a;padding:1rem;border-radius:8px;">
+                <h4 style="margin:0 0 0.5rem;color:#bdbdbd;">Recommendations</h4>
+                ${recHtml}
+            </div>`;
+    }
+
+    async loadCadenceBreakdown() {
+        if (!this.currentRecording) return;
+        const content = document.getElementById('cadence-content');
+        if (!content) return;
+        const analyzeToFailure = document.getElementById('analyze-to-failure')?.checked;
+        content.innerHTML = '<p style="color:#888;text-align:center;padding:2rem;">Loading cadence breakdown…</p>';
+        try {
+            const params = new URLSearchParams();
+            if (analyzeToFailure) params.set('pre_failure_only', 'true');
+            const q = params.toString();
+            const url = `/api/recording/${this.currentRecording}/cadence-breakdown${q ? `?${q}` : ''}`;
+            const response = await fetch(url);
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
+            const data = await response.json();
+            if (data.error) {
+                content.innerHTML = `<p style="color:#ff6b6b;padding:1rem;">${this.escapeHtml(data.error)}</p>`;
+                return;
+            }
+            content.innerHTML = this.renderCadenceBreakdownHtml(data);
+        } catch (e) {
+            content.innerHTML = `<p style="color:#ff6b6b;">Error: ${this.escapeHtml(e.message)}</p>`;
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
     // Phase 5 — Triage Report
     // ═══════════════════════════════════════════════════════════════════════════
 
@@ -5028,9 +5138,12 @@ class Visualizer {
         if (!Array.isArray(q) || q.length < 4) {
             return null;
         }
+        // camera_pos_y is vehicle-relative height (~1.4m above car body), not world Y.
+        // Add road_center_at_car_y (world elevation of road at vehicle) to get true world Y.
+        // Backward-compatible: on flat tracks road_center_at_car_y ≈ 0.
         const camPosWorld = {
             x: vehicle.camera_pos_x,
-            y: vehicle.camera_pos_y,
+            y: (vehicle.camera_pos_y || 0) + (vehicle.road_center_at_car_y || 0),
             z: vehicle.camera_pos_z
         };
         const vehPosWorld = {
@@ -5224,9 +5337,11 @@ class Visualizer {
         if (!vehicle.position || vehicle.camera_pos_x === null || vehicle.camera_forward_x === null) {
             return null;
         }
+        // camera_pos_y is vehicle-relative height (~1.4m above car body), not world Y.
+        // Add road_center_at_car_y (world elevation of road at vehicle) to get true world Y.
         const camPosWorld = {
             x: vehicle.camera_pos_x,
-            y: vehicle.camera_pos_y,
+            y: (vehicle.camera_pos_y || 0) + (vehicle.road_center_at_car_y || 0),
             z: vehicle.camera_pos_z
         };
         const camForwardWorld = {
@@ -9316,6 +9431,8 @@ class Visualizer {
                 this.loadIssues();
             } else if (tabName === 'diagnostics') {
                 this.loadDiagnostics();
+            } else if (tabName === 'cadence') {
+                this.loadCadenceBreakdown();
             } else if (tabName === 'layers') {
                 this.loadLayers();
             } else if (tabName === 'triage') {

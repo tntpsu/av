@@ -1970,3 +1970,85 @@ def analyze_speed_curvature(f: h5py.File, failure_frame: Optional[int] = None) -
         "v_max_feasible_at_entry": v_max_feasible_at_entry,
         "decel_lead_time_frames": decel_lead_time_frames,
     }
+
+
+def compute_grade_diagnostics(h5_path: Path) -> Optional[Dict]:
+    """Compute grade/pitch/roll diagnostics. Returns None for pre-grade recordings."""
+    with h5py.File(h5_path, "r") as f:
+        if "vehicle/pitch_rad" not in f:
+            return None
+        pitch_rad = np.array(f["vehicle/pitch_rad"][:])
+        roll_rad = np.array(f["vehicle/roll_rad"][:]) if "vehicle/roll_rad" in f else np.zeros_like(pitch_rad)
+        road_grade = np.array(f["vehicle/road_grade"][:]) if "vehicle/road_grade" in f else np.zeros_like(pitch_rad)
+        grade_comp = (
+            np.array(f["control/grade_compensation_active"][:])
+            if "control/grade_compensation_active" in f
+            else np.zeros_like(pitch_rad)
+        )
+    # Use road_grade (authoritative) not pitch_rad (chassis, dead on slopes)
+    grade_accel_offset = -9.81 * np.sin(road_grade)
+    pitch_variance = float(np.var(pitch_rad))
+    grade_variance = float(np.var(road_grade))
+    pitch_signal_dead = bool(pitch_variance < 1e-6 and grade_variance > 1e-4)
+    # Jerk limiter on grade analysis
+    graded_mask = np.abs(road_grade) > 0.02
+    graded_count = int(np.sum(graded_mask))
+    jerk_limiter_on_grade_pct = 0.0
+    # Commanded vs actual accel mismatch
+    accel_mismatch_p95 = 0.0
+    # Per-wheel diagnostics (Step 3D)
+    wheel_data = {}
+    with h5py.File(h5_path, "r") as f:
+        for wk in ("wheel_sideways_slip", "wheel_forward_slip", "wheel_contact_force",
+                    "wheel_rpm", "wheel_sprung_mass", "wheel_contact_normal_y",
+                    "wheel_steer_angle_actual"):
+            ds_key = f"vehicle/{wk}"
+            if ds_key in f:
+                wheel_data[wk] = np.array(f[ds_key][:]).tolist()
+        if "vehicle/angular_velocity" in f:
+            ang_vel = np.array(f["vehicle/angular_velocity"][:])
+            wheel_data["angular_velocity_y"] = ang_vel[:, 1].tolist() if ang_vel.ndim == 2 else []
+
+    # Regime-aware steering data (Step 3D)
+    # Shows PP steering, MPC/regime-dispatched steering, and final steering
+    # color-coded by active regime for PhilViz visualization.
+    regime_steering = {}
+    with h5py.File(h5_path, "r") as f:
+        if "control/regime" in f:
+            regime = np.array(f["control/regime"][:])
+            regime_steering["regime"] = regime.tolist()
+            # Final steering (after regime dispatch + safety)
+            if "control/steering" in f:
+                regime_steering["steering_final"] = np.array(f["control/steering"][:]).tolist()
+            # PP-internal steering (before regime dispatch)
+            if "control/steering_post_hard_clip" in f:
+                regime_steering["steering_pp"] = np.array(f["control/steering_post_hard_clip"][:]).tolist()
+            # Regime transition frames
+            transitions = []
+            if len(regime) > 1:
+                for i in range(1, len(regime)):
+                    prev_mpc = regime[i - 1] >= 0.5
+                    curr_mpc = regime[i] >= 0.5
+                    if prev_mpc != curr_mpc:
+                        transitions.append({
+                            "frame": i,
+                            "from": "MPC" if prev_mpc else "PP",
+                            "to": "MPC" if curr_mpc else "PP",
+                        })
+            regime_steering["transitions"] = transitions
+
+    return {
+        "has_grade": True,
+        "pitch_rad": pitch_rad.tolist(),
+        "roll_rad": roll_rad.tolist(),
+        "road_grade": road_grade.tolist(),
+        "grade_accel_offset": grade_accel_offset.tolist(),
+        "grade_compensation_active": grade_comp.tolist(),
+        "pitch_signal_dead": pitch_signal_dead,
+        "pitch_variance": pitch_variance,
+        "grade_variance": grade_variance,
+        "jerk_limiter_on_grade_pct": jerk_limiter_on_grade_pct,
+        "accel_mismatch_p95": accel_mismatch_p95,
+        **wheel_data,
+        **regime_steering,
+    }

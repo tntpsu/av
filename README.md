@@ -18,6 +18,9 @@ A complete autonomous vehicle stack implementing perception, trajectory planning
 - **Testing**: Extensive test suite covering control, trajectory, perception, and integration scenarios
 - **Standalone Unity Player Workflow**: Build and run the Unity player directly from scripts for automated testing
 
+### Operational Design Domain
+See [docs/ODD.md](docs/ODD.md) for the system's operational design domain — track constraints, sensor assumptions, control modes, and known limitations.
+
 ### 🔧 Current Architecture
 
 ```
