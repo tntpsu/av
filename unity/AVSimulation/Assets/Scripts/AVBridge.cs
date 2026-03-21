@@ -1088,7 +1088,20 @@ private float? lastCarT = null;
             {
                 carController.speedLimit = currentState.speedLimit;
             }
-            
+
+            // Grade and pitch/roll telemetry (Step 3)
+            // NOTE: pitchRad reflects chassis orientation, not road surface.
+            // WheelCollider suspension keeps chassis level on slopes.
+            // roadGrade (from GroundTruthReporter) is the authoritative grade source.
+            if (carController != null)
+            {
+                Vector3 euler = carController.transform.eulerAngles;
+                // Unity euler.x: positive = nose DOWN. Negate for nose-up-positive convention.
+                currentState.pitchRad = -Mathf.DeltaAngle(0f, euler.x) * Mathf.Deg2Rad;
+                currentState.rollRad = Mathf.DeltaAngle(0f, euler.z) * Mathf.Deg2Rad;
+            }
+            currentState.roadGrade = groundTruthReporter.GetGradeAtT(carT);
+
             // Debug: Log ground truth values
             if (showDebugInfo && Time.frameCount % 30 == 0)
             {
@@ -1912,12 +1925,36 @@ private float? lastCarT = null;
                 fontSize = 14,
                 normal = { textColor = Color.white }
             };
-            int yOffset = 10;
-            int xOffset = 10;
             int lineHeight = 20;
+            int xOffset = 10;
+            int yOffset = 10;
+
+            // ── Left panel: drive telemetry ──────────────────────────────────
             int boxWidth = 320;
-            int boxHeight = 7 * lineHeight + 10;
+            int leftLineCount = 1; // AV Control
+            if (driveStartTime >= 0f)
+            {
+                leftLineCount++;
+            }
+
+            if (lastControlCommand != null)
+            {
+                leftLineCount += 2;
+            }
+
+            if (lastVehicleState != null)
+            {
+                leftLineCount += 1; // speed (limit shown top-center)
+            }
+
+            if (groundTruthReporter != null)
+            {
+                leftLineCount += 1; // road curvature
+            }
+
+            int boxHeight = leftLineCount * lineHeight + 14;
             GUI.Box(new Rect(xOffset - 6, yOffset - 6, boxWidth, boxHeight), GUIContent.none);
+
             // Elapsed drive time (from first control command)
             if (driveStartTime >= 0f)
             {
@@ -1931,7 +1968,7 @@ private float? lastCarT = null;
             GUI.Label(new Rect(xOffset, yOffset, 300, lineHeight),
                 $"AV Control: {(enableAVControl ? "ON" : "OFF")}", labelStyle);
             yOffset += lineHeight;
-            
+
             if (lastControlCommand != null)
             {
                 GUI.Label(new Rect(xOffset, yOffset, 300, lineHeight),
@@ -1940,27 +1977,83 @@ private float? lastCarT = null;
                 GUI.Label(new Rect(xOffset, yOffset, 300, lineHeight),
                     $"Throttle: {lastControlCommand.throttle:F3}", labelStyle);
                 yOffset += lineHeight;
-                GUI.Label(new Rect(xOffset, yOffset, 300, lineHeight),
-                    $"Brake Cmd: {lastControlCommand.brake:F3}", labelStyle);
-                yOffset += lineHeight;
-                if (carController != null)
-                {
-                    GUI.Label(new Rect(xOffset, yOffset, 300, lineHeight),
-                        $"Brake Applied: {carController.brakeInput:F3}", labelStyle);
-                    yOffset += lineHeight;
-                }
             }
             if (lastVehicleState != null)
             {
                 float speedMps = lastVehicleState.speed;
                 float speedMph = speedMps * 2.236936f;
-                float limitMps = lastVehicleState.speedLimit;
-                string limitText = limitMps > 0.0f ? $"{(limitMps * 2.236936f):F1} mph" : "-";
                 GUI.Label(new Rect(xOffset, yOffset, 300, lineHeight),
                     $"Speed: {speedMph:F1} mph ({speedMps:F1} m/s)", labelStyle);
                 yOffset += lineHeight;
-                GUI.Label(new Rect(xOffset, yOffset, 300, lineHeight),
-                    $"Speed Limit: {limitText}", labelStyle);
+            }
+            if (groundTruthReporter != null)
+            {
+                float kappa = groundTruthReporter.GetPathCurvature();
+                string curvLine;
+                float ak = Mathf.Abs(kappa);
+                if (ak < 1e-5f)
+                {
+                    curvLine = "Road κ: ~0 1/m (straight)";
+                }
+                else
+                {
+                    float radius = 1f / ak;
+                    string turn = kappa > 0f ? "left" : "right";
+                    curvLine = $"Road κ: {kappa:F4} 1/m  R≈{radius:F0} m ({turn})";
+                }
+                GUI.Label(new Rect(xOffset, yOffset, boxWidth - 8, lineHeight), curvLine, labelStyle);
+            }
+
+            // ── Right panel: road grade / pitch ──────────────────────────────
+            if (lastVehicleState != null)
+            {
+                int rightBoxWidth = 240;
+                int rightBoxHeight = 3 * lineHeight + 10;
+                int rightX = Screen.width - rightBoxWidth - 4;
+                int rightY = 10;
+
+                // roadGrade is the slope as a fraction (e.g. 0.05 = 5 % uphill).
+                // pitchRad is the chassis pitch: positive = nose up.
+                float grade        = lastVehicleState.roadGrade;
+                float gradePercent = grade * 100f;
+                float gradeDeg     = Mathf.Atan(grade) * Mathf.Rad2Deg;
+                float pitchDeg     = lastVehicleState.pitchRad * Mathf.Rad2Deg;
+
+                string upDown      = grade > 0.002f ? "▲" : (grade < -0.002f ? "▼" : "—");
+
+                GUI.Box(new Rect(rightX - 6, rightY - 6, rightBoxWidth, rightBoxHeight), GUIContent.none);
+                GUI.Label(new Rect(rightX, rightY, rightBoxWidth - 4, lineHeight),
+                    $"Road Slope: {upDown} {gradePercent:+0.0;-0.0;0.0} %", labelStyle);
+                rightY += lineHeight;
+                GUI.Label(new Rect(rightX, rightY, rightBoxWidth - 4, lineHeight),
+                    $"Road Grade: {gradeDeg:+0.0;-0.0;0.0}°", labelStyle);
+                rightY += lineHeight;
+                GUI.Label(new Rect(rightX, rightY, rightBoxWidth - 4, lineHeight),
+                    $"Vehicle Pitch: {pitchDeg:+0.0;-0.0;0.0}°", labelStyle);
+            }
+
+            // ── Top-center: speed limit (large; drawn last so it stays readable) ─
+            if (lastVehicleState != null)
+            {
+                float limitMps = lastVehicleState.speedLimit;
+                if (limitMps > 0.01f)
+                {
+                    float limitMph = limitMps * 2.236936f;
+                    float bannerW = Mathf.Min(420f, Screen.width * 0.85f);
+                    float bannerH = 46f;
+                    float bx = (Screen.width - bannerW) * 0.5f;
+                    float by = 6f;
+                    GUI.Box(new Rect(bx, by, bannerW, bannerH), GUIContent.none);
+                    GUIStyle limitBannerStyle = new GUIStyle(GUI.skin.label)
+                    {
+                        fontSize = 26,
+                        fontStyle = FontStyle.Bold,
+                        alignment = TextAnchor.MiddleCenter,
+                        normal = { textColor = Color.white }
+                    };
+                    GUI.Label(new Rect(bx, by + 4, bannerW, bannerH - 8),
+                        $"Speed limit  {limitMph:F0} mph", limitBannerStyle);
+                }
             }
         }
     }
