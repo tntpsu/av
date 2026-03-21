@@ -6,12 +6,13 @@ Handles camera frames, vehicle state, and control commands.
 import asyncio
 import base64
 import io
+import os
 import time
 import logging
 import math
 from collections import deque
 from pathlib import Path
-from typing import Optional, Any
+from typing import Any, Optional
 from datetime import datetime
 
 import numpy as np
@@ -20,6 +21,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import uvicorn
 from PIL import Image
+from starlette.responses import Response
 
 app = FastAPI(title="AV Stack Bridge Server")
 
@@ -65,7 +67,18 @@ latest_camera_frames: dict[str, np.ndarray] = {}
 latest_frame_timestamps_by_id: dict[str, float] = {}
 latest_frame_ids_by_id: dict[str, str] = {}
 camera_frame_queues: dict[str, deque] = {}
-MAX_CAMERA_QUEUE_SIZE = 120
+
+
+def _read_max_camera_queue_size() -> int:
+    """Cap Unity→bridge frame buffer depth (smaller = fresher frames, more deque drops)."""
+    raw = os.environ.get("AV_BRIDGE_MAX_CAMERA_QUEUE", "").strip()
+    if raw.isdigit():
+        v = int(raw)
+        return max(4, min(v, 500))
+    return 120
+
+
+MAX_CAMERA_QUEUE_SIZE = _read_max_camera_queue_size()
 vehicle_state_queue: deque = deque(maxlen=600)
 latest_vehicle_state: Optional[dict] = None
 latest_control_command: Optional[dict] = None
@@ -133,6 +146,55 @@ def _normalize_camera_id(camera_id: Optional[str]) -> str:
     return camera_id or "front_center"
 
 
+def _hdr_str(value: Optional[Any]) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, float) and not math.isfinite(value):
+        return ""
+    return str(value)
+
+
+def _raw_camera_response(
+    frame: np.ndarray,
+    *,
+    camera_key: str,
+    timestamp_value: Optional[float],
+    frame_id_value: Optional[int],
+    queue_depth: int,
+    queue_capacity: int,
+    drop_count: int,
+    decode_in_flight: bool,
+    latest_age_ms: Optional[float],
+    last_arrival_time: Optional[float],
+    last_realtime: Optional[float],
+    last_unscaled: Optional[float],
+    queue_remaining: Optional[int] = None,
+) -> Response:
+    """Single RGB uint8 payload; metadata only in headers (for Python client)."""
+    arr = np.ascontiguousarray(frame, dtype=np.uint8)
+    if arr.ndim != 3 or arr.shape[2] != 3:
+        raise HTTPException(status_code=500, detail="Camera frame must be HxWx3 uint8 RGB")
+    body = arr.tobytes()
+    h, w, c = arr.shape
+    headers: dict[str, str] = {
+        "X-AV-Shape": f"{h},{w},{c}",
+        "X-AV-Camera-Id": camera_key,
+        "X-AV-Timestamp": _hdr_str(timestamp_value),
+        "X-AV-Frame-Id": _hdr_str(frame_id_value),
+        "X-AV-Queue-Depth": str(int(queue_depth)),
+        "X-AV-Queue-Capacity": str(int(queue_capacity)),
+        "X-AV-Drop-Count": str(int(drop_count)),
+        "X-AV-Decode-In-Flight": "1" if decode_in_flight else "0",
+        "X-AV-Latest-Age-Ms": _hdr_str(latest_age_ms),
+        "X-AV-Last-Arrival-Time": _hdr_str(last_arrival_time),
+        "X-AV-Last-Realtime": _hdr_str(last_realtime),
+        "X-AV-Last-Unscaled": _hdr_str(last_unscaled),
+    }
+    if queue_remaining is not None:
+        headers["X-AV-Queue-Remaining"] = str(int(queue_remaining))
+    return Response(content=body, media_type="application/octet-stream", headers=headers)
+
+
 async def _decode_and_store_camera_frame(
     image_data: bytes,
     timestamp: str,
@@ -141,7 +203,7 @@ async def _decode_and_store_camera_frame(
 ) -> None:
     global latest_camera_frame, latest_frame_timestamp, latest_frame_id
     global latest_camera_frames, latest_frame_timestamps_by_id, latest_frame_ids_by_id
-    global camera_decode_in_flight
+    global camera_decode_in_flight, camera_drop_count
 
     start_time = time.time()
     try:
@@ -154,6 +216,10 @@ async def _decode_and_store_camera_frame(
         if queue is None:
             queue = deque(maxlen=MAX_CAMERA_QUEUE_SIZE)
             camera_frame_queues[camera_id] = queue
+        else:
+            # deque(maxlen=N) drops oldest on overflow; count for HDF5 / PhilViz diagnostics.
+            if queue.maxlen is not None and len(queue) >= queue.maxlen:
+                camera_drop_count[camera_id] = camera_drop_count.get(camera_id, 0) + 1
         queue.append(
             {
                 "image": img_array,
@@ -289,6 +355,10 @@ class VehicleState(BaseModel):
     speedLimitPreviewLong: float = 0.0  # Speed limit at long preview distance (m/s)
     speedLimitPreviewLongDistance: float = 0.0  # Long preview distance (m)
     speedLimitPreviewLongMinDistance: float = 0.0  # Distance to min limit in long window (m)
+    # Grade/pitch/roll telemetry (Step 3)
+    pitchRad: float = 0.0       # Vehicle pitch (positive = nose up)
+    rollRad: float = 0.0        # Vehicle roll (positive = right lean)
+    roadGrade: float = 0.0      # Local road grade (rise/run) from track profile
     chassisGroundMinClearanceM: Optional[float] = None
     chassisGroundEffectiveMinClearanceM: Optional[float] = None
     chassisGroundClearanceM: Optional[float] = None
@@ -297,6 +367,15 @@ class VehicleState(BaseModel):
     wheelGroundedCount: Optional[int] = None
     wheelCollidersReady: bool = False
     forceFallbackActive: bool = False
+
+    # Per-wheel diagnostics (4 wheels: FL, FR, RL, RR)
+    wheelSidewaysSlip: list[float] = [0.0, 0.0, 0.0, 0.0]
+    wheelForwardSlip: list[float] = [0.0, 0.0, 0.0, 0.0]
+    wheelContactForce: list[float] = [0.0, 0.0, 0.0, 0.0]
+    wheelRpm: list[float] = [0.0, 0.0, 0.0, 0.0]
+    wheelSprungMass: list[float] = [0.0, 0.0, 0.0, 0.0]
+    wheelContactNormalY: list[float] = [0.0, 0.0, 0.0, 0.0]
+    wheelSteerAngleActual: float = 0.0
 
 
 class ControlCommand(BaseModel):
@@ -779,6 +858,58 @@ async def get_latest_camera_frame(camera_id: str = "front_center"):
     }
 
 
+@app.get("/api/camera/latest/raw")
+async def get_latest_camera_frame_raw(camera_id: str = "front_center"):
+    """
+    Latest frame as raw RGB uint8 (HxWx3) octet-stream.
+    Metadata in X-AV-* headers — avoids JPEG re-encode for the Python AV stack client.
+    """
+    global latest_camera_frame, latest_camera_frames
+    camera_key = _normalize_camera_id(camera_id)
+    frame = latest_camera_frames.get(camera_key)
+    if frame is None and camera_key == "front_center":
+        frame = latest_camera_frame
+    if frame is None:
+        raise HTTPException(status_code=404, detail="No camera frame available")
+
+    frame_id_value = None
+    try:
+        raw_frame_id = latest_frame_ids_by_id.get(camera_key)
+        if raw_frame_id is None and camera_key == "front_center":
+            raw_frame_id = latest_frame_id
+        frame_id_value = int(raw_frame_id) if raw_frame_id is not None else None
+    except (TypeError, ValueError):
+        frame_id_value = None
+    timestamp_value = latest_frame_timestamps_by_id.get(camera_key)
+    if timestamp_value is None and camera_key == "front_center":
+        timestamp_value = latest_frame_timestamp
+    queue_obj = camera_frame_queues.get(camera_key)
+    queue_depth = len(queue_obj) if queue_obj is not None else 0
+    queue_capacity = int(queue_obj.maxlen) if queue_obj is not None and queue_obj.maxlen is not None else MAX_CAMERA_QUEUE_SIZE
+    drop_count = int(camera_drop_count.get(camera_key, 0))
+    decode_in_flight = bool(camera_decode_in_flight.get(camera_key, False))
+    arrival_time = last_camera_arrival_time.get(camera_key)
+    now = time.time()
+    age_ms = (now - arrival_time) * 1000.0 if arrival_time is not None else None
+    last_realtime = last_camera_realtime.get(camera_key)
+    last_unscaled = last_camera_unscaled.get(camera_key)
+
+    return _raw_camera_response(
+        frame,
+        camera_key=camera_key,
+        timestamp_value=timestamp_value,
+        frame_id_value=frame_id_value,
+        queue_depth=queue_depth,
+        queue_capacity=queue_capacity,
+        drop_count=drop_count,
+        decode_in_flight=decode_in_flight,
+        latest_age_ms=age_ms,
+        last_arrival_time=arrival_time,
+        last_realtime=last_realtime,
+        last_unscaled=last_unscaled,
+    )
+
+
 @app.get("/api/camera/next")
 async def get_next_camera_frame(camera_id: str = "front_center"):
     """Get next queued camera frame in FIFO order."""
@@ -810,6 +941,62 @@ async def get_next_camera_frame(camera_id: str = "front_center"):
         "shape": list(frame.shape),
         "queue_remaining": len(queue),
     }
+
+
+@app.post("/api/camera/drain_queue")
+async def drain_camera_queue(camera_id: str = "front_center"):
+    """Clear queued frames for a camera (latest_* snapshots unchanged). Reduces backlog latency."""
+    camera_key = _normalize_camera_id(camera_id)
+    q = camera_frame_queues.get(camera_key)
+    n = len(q) if q is not None else 0
+    if q is not None:
+        q.clear()
+    return {"drained": n, "camera_id": camera_key}
+
+
+@app.get("/api/camera/next/raw")
+async def get_next_camera_frame_raw(camera_id: str = "front_center"):
+    """FIFO camera frame as raw RGB uint8 (see /api/camera/latest/raw)."""
+    camera_key = _normalize_camera_id(camera_id)
+    queue = camera_frame_queues.get(camera_key)
+    if queue is None or len(queue) == 0:
+        raise HTTPException(status_code=404, detail="No queued camera frame available")
+
+    item = queue.popleft()
+    frame = item["image"]
+    remaining = len(queue)
+    queue_obj = camera_frame_queues.get(camera_key)
+    queue_depth = len(queue_obj) if queue_obj is not None else 0
+    queue_capacity = int(queue_obj.maxlen) if queue_obj is not None and queue_obj.maxlen is not None else MAX_CAMERA_QUEUE_SIZE
+    drop_count = int(camera_drop_count.get(camera_key, 0))
+    decode_in_flight = bool(camera_decode_in_flight.get(camera_key, False))
+    arrival_time = last_camera_arrival_time.get(camera_key)
+    now = time.time()
+    age_ms = (now - arrival_time) * 1000.0 if arrival_time is not None else None
+    last_realtime = last_camera_realtime.get(camera_key)
+    last_unscaled = last_camera_unscaled.get(camera_key)
+
+    frame_id_value = None
+    try:
+        frame_id_value = int(item.get("frame_id")) if item.get("frame_id") is not None else None
+    except (TypeError, ValueError):
+        frame_id_value = None
+
+    return _raw_camera_response(
+        frame,
+        camera_key=camera_key,
+        timestamp_value=float(item.get("timestamp")) if item.get("timestamp") is not None else None,
+        frame_id_value=frame_id_value,
+        queue_depth=queue_depth,
+        queue_capacity=queue_capacity,
+        drop_count=drop_count,
+        decode_in_flight=decode_in_flight,
+        latest_age_ms=age_ms,
+        last_arrival_time=arrival_time,
+        last_realtime=last_realtime,
+        last_unscaled=last_unscaled,
+        queue_remaining=remaining,
+    )
 
 
 @app.get("/api/vehicle/state/latest")
@@ -851,6 +1038,7 @@ async def health_check():
         "has_vehicle_state": latest_vehicle_state is not None,
         "vehicle_state_sanitize_events": vehicle_state_sanitize_events,
         "vehicle_state_sanitize_values": vehicle_state_sanitize_values,
+        "max_camera_queue_size": MAX_CAMERA_QUEUE_SIZE,
     }
 
 
@@ -1024,12 +1212,16 @@ async def get_latest_unity_feedback():
 def run_server(host: str = "0.0.0.0", port: int = 8000):
     """Run the bridge server."""
     print(f"Starting AV Stack Bridge Server on {host}:{port}")
+    print(f"Camera queue maxlen per stream: {MAX_CAMERA_QUEUE_SIZE} (AV_BRIDGE_MAX_CAMERA_QUEUE)")
     print("Endpoints:")
     print("  POST /api/camera - Receive camera frame from Unity")
     print("  POST /api/vehicle/state - Receive vehicle state from Unity")
     print("  GET  /api/vehicle/control - Get control command for Unity")
     print("  POST /api/vehicle/control - Set control command")
     print("  GET  /api/camera/latest - Get latest camera frame")
+    print("  GET  /api/camera/latest/raw - Latest frame raw RGB (octet-stream, X-AV-* headers)")
+    print("  GET  /api/camera/next/raw - Next queued frame raw RGB")
+    print("  POST /api/camera/drain_queue - Clear FIFO queue (latest snapshot unchanged)")
     print("  GET  /api/vehicle/state/latest - Get latest vehicle state")
     print("  GET  /api/health - Health check")
     

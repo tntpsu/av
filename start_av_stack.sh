@@ -293,6 +293,21 @@ if [ -z "$UNITY_BUILD_PATH" ]; then
     UNITY_BUILD_PATH="$SCRIPT_DIR/unity/AVSimulation/mybuild.app"
 fi
 
+# Bridge camera FIFO depth (lower = fresher frames; see stack.bridge_max_camera_queue in YAML).
+if [[ -z "${AV_BRIDGE_MAX_CAMERA_QUEUE:-}" ]] && [[ -f "$SCRIPT_DIR/config/av_stack_config.yaml" ]]; then
+  AV_BRIDGE_MAX_CAMERA_QUEUE="$(cd "$SCRIPT_DIR" && python3 -c "
+import yaml
+from pathlib import Path
+p = Path('config/av_stack_config.yaml')
+if p.is_file():
+    d = yaml.safe_load(p.read_text(encoding='utf-8')) or {}
+    v = (d.get('stack') or {}).get('bridge_max_camera_queue')
+    if v is not None:
+        print(int(v))
+" 2>/dev/null || true)"
+fi
+export AV_BRIDGE_MAX_CAMERA_QUEUE="${AV_BRIDGE_MAX_CAMERA_QUEUE:-48}"
+
 # Start bridge server in background
 echo -e "${BLUE}Starting bridge server on port $BRIDGE_PORT...${NC}"
 cd "$SCRIPT_DIR"

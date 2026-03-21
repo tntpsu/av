@@ -784,6 +784,12 @@ stack:
   target_loop_hz: 20.0
   # Use GET /api/camera/latest/raw (no JPEG round-trip). Set false for legacy bridge only.
   use_raw_camera_transport: true
+  # Bridge FIFO depth per camera (freshness vs buffering). start_av_stack.sh exports AV_BRIDGE_MAX_CAMERA_QUEUE from this.
+  bridge_max_camera_queue: 48
+  # POST /api/camera/drain_queue once at stack start to shed backlog (latest snapshot unchanged).
+  clear_bridge_camera_queue_on_start: true
+  # Background thread GETs latest front camera while the stack runs perception/control (overlap I/O).
+  camera_prefetch: true
   # Top-down for HDF5: 1=every frame, N=every Nth recorded frame, 0=never fetch.
   topdown_recording_interval_frames: 1
 perception:

@@ -3,30 +3,37 @@ Python client helper for Unity bridge communication.
 Provides convenient methods for AV stack components to interact with Unity.
 """
 
-import queue as _queue
-import threading
-
-import requests
-import numpy as np
-from PIL import Image
 import base64
 import io
-from typing import Optional, Dict, Tuple
+import os
+import queue as _queue
+import threading
 import time
+from typing import Dict, Optional, Tuple
+
+import numpy as np
+import requests
+from PIL import Image
 
 
 class UnityBridgeClient:
     """Client for communicating with Unity bridge server."""
     
-    def __init__(self, base_url: str = "http://localhost:8000"):
+    def __init__(self, base_url: str = "http://localhost:8000", use_raw_camera: Optional[bool] = None):
         """
         Initialize Unity bridge client.
 
         Args:
             base_url: Base URL of the bridge server
+            use_raw_camera: If True, use GET /api/camera/.../raw (no JPEG round-trip).
+                If None, default from env AV_STACK_RAW_CAMERA (1/true = raw, 0/false = JPEG only).
         """
         self.base_url = base_url.rstrip("/")
         self.session = requests.Session()
+        if use_raw_camera is None:
+            v = os.environ.get("AV_STACK_RAW_CAMERA", "1").strip().lower()
+            use_raw_camera = v not in ("0", "false", "no", "off")
+        self.use_raw_camera = bool(use_raw_camera)
 
         # Fire-and-forget control sender.
         # set_control_command() enqueues and returns immediately (latest-wins,
@@ -41,30 +48,146 @@ class UnityBridgeClient:
             name="control-sender",
         )
         self._control_thread.start()
-    
-    def get_latest_camera_frame(
-        self,
-        camera_id: str = "front_center"
-    ) -> Optional[Tuple[np.ndarray, float, Optional[int]]]:
-        """
-        Get latest camera frame from Unity.
-        
-        Returns:
-            Tuple of (image_array, timestamp) or None if not available
-        """
-        frame = self.get_latest_camera_frame_with_metadata(camera_id=camera_id)
-        if frame is None:
-            return None
-        image, timestamp, frame_id, _meta = frame
-        return image, timestamp, frame_id
 
-    def get_latest_camera_frame_with_metadata(
-        self,
-        camera_id: str = "front_center"
-    ) -> Optional[Tuple[np.ndarray, float, Optional[int], Dict]]:
-        """Get latest camera frame plus bridge freshness metadata."""
+        # Optional background fetch of latest front camera (dedicated Session — not thread-safe with self.session).
+        self._prefetch_camera_id = "front_center"
+        self._cam_lock = threading.Lock()
+        self._cam_slot: Optional[Tuple[np.ndarray, float, Optional[int], Dict]] = None
+        self._cam_stop = threading.Event()
+        self._cam_thread: Optional[threading.Thread] = None
+
+    @staticmethod
+    def _parse_raw_camera_response(response: requests.Response) -> Tuple[np.ndarray, float, Optional[int], Dict]:
+        """Decode octet-stream body + X-AV-* headers from /api/camera/*/raw."""
+        shape_s = (response.headers.get("X-AV-Shape") or "").strip()
+        if not shape_s:
+            raise ValueError("raw camera response missing X-AV-Shape")
+        parts = [int(x.strip()) for x in shape_s.split(",")]
+        if len(parts) != 3:
+            raise ValueError(f"invalid X-AV-Shape: {shape_s!r}")
+        h, w, c = parts
+        buf = response.content
+        expected = h * w * c
+        if len(buf) != expected:
+            raise ValueError(f"raw camera size mismatch: got {len(buf)} expected {expected}")
+        arr = np.frombuffer(memoryview(buf), dtype=np.uint8).reshape((h, w, c)).copy()
+
+        ts_s = (response.headers.get("X-AV-Timestamp") or "").strip()
+        timestamp = float(ts_s) if ts_s else time.time()
+
+        fid_s = (response.headers.get("X-AV-Frame-Id") or "").strip()
+        frame_id: Optional[int] = int(fid_s) if fid_s else None
+
+        def _int_hdr(name: str) -> Optional[int]:
+            s = (response.headers.get(name) or "").strip()
+            if not s:
+                return None
+            try:
+                return int(s)
+            except ValueError:
+                return None
+
+        def _float_hdr(name: str) -> Optional[float]:
+            s = (response.headers.get(name) or "").strip()
+            if not s:
+                return None
+            try:
+                return float(s)
+            except ValueError:
+                return None
+
+        meta: Dict = {
+            "queue_depth": _int_hdr("X-AV-Queue-Depth"),
+            "queue_capacity": _int_hdr("X-AV-Queue-Capacity"),
+            "drop_count": _int_hdr("X-AV-Drop-Count"),
+            "decode_in_flight": (response.headers.get("X-AV-Decode-In-Flight") or "").strip() == "1",
+            "latest_age_ms": _float_hdr("X-AV-Latest-Age-Ms"),
+            "last_arrival_time": _float_hdr("X-AV-Last-Arrival-Time"),
+            "last_realtime_since_startup": _float_hdr("X-AV-Last-Realtime"),
+            "last_unscaled_time": _float_hdr("X-AV-Last-Unscaled"),
+            "queue_remaining": _int_hdr("X-AV-Queue-Remaining"),
+        }
+        return arr, timestamp, frame_id, meta
+
+    def start_camera_prefetch(self, camera_id: str = "front_center") -> None:
+        """Start a daemon thread that continuously GETs /api/camera/latest(/raw) for ``camera_id``.
+
+        The main loop then takes the freshest completed fetch from a slot (latest-wins), overlapping
+        HTTP+decode with perception/control work. Uses a **separate** ``requests.Session`` in the worker.
+        """
+        self._prefetch_camera_id = camera_id
+        if self._cam_thread is not None and self._cam_thread.is_alive():
+            return
+        self._cam_stop.clear()
+        self._cam_thread = threading.Thread(
+            target=self._camera_prefetch_loop,
+            daemon=True,
+            name="camera-prefetch",
+        )
+        self._cam_thread.start()
+
+    def stop_camera_prefetch(self) -> None:
+        """Stop the prefetch worker and clear the slot."""
+        self._cam_stop.set()
+        t = self._cam_thread
+        if t is not None and t.is_alive():
+            t.join(timeout=2.0)
+        self._cam_thread = None
+        with self._cam_lock:
+            self._cam_slot = None
+
+    def _camera_prefetch_loop(self) -> None:
+        worker_session = requests.Session()
+        cam = self._prefetch_camera_id
+        while not self._cam_stop.is_set():
+            try:
+                data = self._sync_get_latest_camera_frame_with_metadata(cam, session=worker_session)
+                if data is not None:
+                    with self._cam_lock:
+                        self._cam_slot = data
+                else:
+                    time.sleep(0.005)
+            except Exception:
+                time.sleep(0.02)
+
+    def drain_camera_queue(self, camera_id: str = "front_center") -> Optional[int]:
+        """POST /api/camera/drain_queue — clear FIFO backlog; ``latest`` snapshot unchanged."""
         try:
-            response = self.session.get(
+            response = self.session.post(
+                f"{self.base_url}/api/camera/drain_queue",
+                params={"camera_id": camera_id},
+                timeout=2.0,
+            )
+            if response.status_code == 200:
+                body = response.json()
+                return int(body.get("drained", 0))
+        except requests.RequestException:
+            pass
+        return None
+
+    def _sync_get_latest_camera_frame_with_metadata(
+        self,
+        camera_id: str,
+        *,
+        session: requests.Session,
+    ) -> Optional[Tuple[np.ndarray, float, Optional[int], Dict]]:
+        """Synchronous HTTP fetch (used by main thread and prefetch worker)."""
+        try:
+            if self.use_raw_camera:
+                raw_resp = session.get(
+                    f"{self.base_url}/api/camera/latest/raw",
+                    params={"camera_id": camera_id},
+                    timeout=0.5,
+                )
+                if raw_resp.status_code == 200:
+                    try:
+                        return self._parse_raw_camera_response(raw_resp)
+                    except ValueError:
+                        pass
+                elif raw_resp.status_code != 404:
+                    raw_resp.raise_for_status()
+
+            response = session.get(
                 f"{self.base_url}/api/camera/latest",
                 params={"camera_id": camera_id},
                 timeout=0.5,
@@ -94,11 +217,49 @@ class UnityBridgeClient:
         except requests.exceptions.Timeout:
             return None
         except requests.exceptions.HTTPError as e:
-            if e.response.status_code == 404:
+            if e.response is not None and e.response.status_code == 404:
                 return None
             return None
         except requests.RequestException:
             return None
+
+    def get_latest_camera_frame(
+        self,
+        camera_id: str = "front_center"
+    ) -> Optional[Tuple[np.ndarray, float, Optional[int]]]:
+        """
+        Get latest camera frame from Unity.
+        
+        Returns:
+            Tuple of (image_array, timestamp) or None if not available
+        """
+        frame = self.get_latest_camera_frame_with_metadata(camera_id=camera_id)
+        if frame is None:
+            return None
+        image, timestamp, frame_id, _meta = frame
+        return image, timestamp, frame_id
+
+    def get_latest_camera_frame_with_metadata(
+        self,
+        camera_id: str = "front_center"
+    ) -> Optional[Tuple[np.ndarray, float, Optional[int], Dict]]:
+        """Get latest camera frame plus bridge freshness metadata.
+
+        When :meth:`start_camera_prefetch` is running for this ``camera_id``, returns the freshest
+        prefetched frame (non-blocking aside from a short lock); otherwise performs a sync GET.
+        """
+        if (
+            self._cam_thread is not None
+            and self._cam_thread.is_alive()
+            and camera_id == self._prefetch_camera_id
+        ):
+            with self._cam_lock:
+                slot = self._cam_slot
+                self._cam_slot = None
+            if slot is not None:
+                return slot
+
+        return self._sync_get_latest_camera_frame_with_metadata(camera_id, session=self.session)
 
     def get_next_camera_frame(
         self,
@@ -111,6 +272,21 @@ class UnityBridgeClient:
             Tuple of (image_array, timestamp, frame_id) or None if unavailable
         """
         try:
+            if self.use_raw_camera:
+                raw_resp = self.session.get(
+                    f"{self.base_url}/api/camera/next/raw",
+                    params={"camera_id": camera_id},
+                    timeout=0.5,
+                )
+                if raw_resp.status_code == 200:
+                    try:
+                        arr, ts, fid, _meta = self._parse_raw_camera_response(raw_resp)
+                        return arr, ts, fid
+                    except ValueError:
+                        pass
+                elif raw_resp.status_code != 404:
+                    raw_resp.raise_for_status()
+
             response = self.session.get(
                 f"{self.base_url}/api/camera/next",
                 params={"camera_id": camera_id},
@@ -246,7 +422,8 @@ class UnityBridgeClient:
                 self._control_errors += 1
 
     def close(self) -> None:
-        """Shut down the background control-sender thread gracefully."""
+        """Shut down background workers (camera prefetch, control sender)."""
+        self.stop_camera_prefetch()
         try:
             self._control_queue.put_nowait(None)
         except _queue.Full:

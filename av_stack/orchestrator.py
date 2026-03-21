@@ -103,18 +103,39 @@ class AVStack:
         """
         # Load configuration
         config = load_config(config_path)
+        self._config_path = config_path
         control_cfg = config.get('control', {})
         trajectory_cfg = config.get('trajectory', {})
         safety_cfg = config.get('safety', {})
         perception_cfg = config.get("perception", {}) if isinstance(config, dict) else {}
+        stack_cfg = config.get("stack", {}) if isinstance(config, dict) else {}
         
         # Bridge client
-        self.bridge = UnityBridgeClient(bridge_url)
+        self.bridge = UnityBridgeClient(
+            bridge_url,
+            use_raw_camera=bool(stack_cfg.get("use_raw_camera_transport", True)),
+        )
         self.last_processed_unity_frame_count = None
+
+        # Consumer-side ingest: drain stale FIFO once, then overlap camera HTTP with the stack loop.
+        if bool(stack_cfg.get("clear_bridge_camera_queue_on_start", True)):
+            try:
+                drained = self.bridge.drain_camera_queue("front_center")
+                if drained is not None and drained > 0:
+                    logger.info(
+                        "[BRIDGE] Drained %d queued front camera frame(s) on stack start",
+                        drained,
+                    )
+            except Exception as exc:
+                logger.debug("drain_camera_queue skipped: %s", exc)
+        if bool(stack_cfg.get("camera_prefetch", True)):
+            self.bridge.start_camera_prefetch("front_center")
         
         # Perception
         self.perception = LaneDetectionInference(
             model_path=model_path,
+            use_gpu=bool(perception_cfg.get("use_gpu", True)),
+            prefer_mps=bool(perception_cfg.get("prefer_mps", True)),
             segmentation_model_path=segmentation_model_path,
             segmentation_mode=use_segmentation,
             segmentation_fit_min_row_ratio=float(
@@ -213,6 +234,9 @@ class AVStack:
             ),
             traj_heading_zero_gate_heading_off_abs_rad=trajectory_cfg.get(
                 'traj_heading_zero_gate_heading_off_abs_rad', 0.061
+            ),
+            traj_heading_zero_gate_curvature_preview_off_threshold=trajectory_cfg.get(
+                'traj_heading_zero_gate_curvature_preview_off_threshold', 0.002
             ),
             center_spline_enabled=trajectory_cfg.get('center_spline_enabled', False),
             center_spline_degree=trajectory_cfg.get('center_spline_degree', 2),
@@ -861,6 +885,7 @@ class AVStack:
         if record_data:
             self.recorder = DataRecorder(recording_dir)
             logger.info(f"Data recording enabled: {self.recorder.output_file}")
+            self.recorder.write_runtime_config_snapshot(config, self._config_path)
             self.recorder.metadata["segmentation_enabled"] = bool(use_segmentation)
             if segmentation_model_path:
                 self.recorder.metadata["segmentation_checkpoint"] = str(
@@ -924,8 +949,12 @@ class AVStack:
         # State
         self.running = False
         self.frame_count = 0
-        self.target_fps = 30.0  # Match Unity's frame rate
-        self.frame_interval = 1.0 / self.target_fps
+        self.target_fps = float(stack_cfg.get("target_loop_hz", 30.0))
+        self.frame_interval = 1.0 / max(self.target_fps, 1e-3)
+        self.topdown_recording_interval_frames = int(
+            stack_cfg.get("topdown_recording_interval_frames", 1)
+        )
+        self._topdown_record_tick = 0
 
         # Grade EMA smoothing (Step 3)
         grade_ema_alpha = float(control_cfg.get('grade_ema_alpha', 0.3))
@@ -959,7 +988,15 @@ class AVStack:
         self.last_teleport_distance = None
         self.last_teleport_dt = None
         self.post_jump_cooldown_frames = 0
-        
+        # Silent e_lat dropout tracker: counts consecutive frames where |e_lat|≈0
+        # but the stale flag is NOT set.  Used to emit diag_silent_elat_dropout_active.
+        self._silent_elat_dropout_frames: int = 0
+        # Threshold below which e_lat is considered "silent" (perception returns ≈ zero)
+        self._silent_elat_threshold_m: float = float(
+            self.config.get('diag_silent_elat_threshold_m', 0.02)
+            if isinstance(self.config, dict) else 0.02
+        )
+
         # NEW: Perception health monitoring
         self.consecutive_bad_detection_frames = 0  # Track consecutive frames with <2 lanes
         self.perception_health_history = []  # Recent detection quality (True/False for good/bad)
@@ -4830,6 +4867,7 @@ class AVStack:
             timestamp=timestamp,  # Pass timestamp for time gap detection
             confidence=confidence,
             dynamic_horizon_diag=dynamic_horizon_diag,
+            preview_curvature_abs=preview_curvature_abs,
         )
         if reference_point is not None:
             reference_point['lookahead_entry_preview_source'] = preview_entry_source
@@ -5470,6 +5508,25 @@ class AVStack:
                     using_stale_perception=using_stale_data,
                     grade_rad=fv.get('smoothed_grade', 0.0)
                 )
+                # Silent e_lat dropout detection.
+                # A "silent dropout" is when the perception layer returns e_lat≈0
+                # (lane centre appears centred) without triggering the stale hold
+                # flag — causing the car to drift undetected.  We track consecutive
+                # silent frames and annotate each one for post-hoc analysis.
+                _mpc_e_lat_now = float(control_command.get('mpc_e_lat', 0.0))
+                _on_curve = abs(float(current_path_curvature)) > 0.003 or abs(float(preview_curvature_abs)) > 0.003
+                _is_silent = (
+                    abs(_mpc_e_lat_now) < self._silent_elat_threshold_m
+                    and not using_stale_data
+                    and _on_curve
+                )
+                if _is_silent:
+                    self._silent_elat_dropout_frames += 1
+                else:
+                    self._silent_elat_dropout_frames = 0
+                control_command['diag_silent_elat_dropout_active'] = _is_silent
+                # mpc_elat_ramp_active is set in VehicleController from mpc_result['elat_ramp_active'].
+
                 control_command['target_speed_raw'] = base_speed
                 control_command['target_speed_post_limits'] = adjusted_target_speed
                 control_command['target_speed_planned'] = target_speed_planned
@@ -6136,18 +6193,27 @@ class AVStack:
         if self.recorder:
             topdown_frame_meta: dict | None = None
             if topdown_frame_data is None:
-                try:
-                    td_data = self.bridge.get_latest_camera_frame_with_metadata(
-                        camera_id="top_down"
-                    )
-                    if td_data is not None:
-                        td_image, td_ts, td_id, td_meta = td_data
-                        topdown_frame_data = (td_image, td_ts, td_id)
-                        topdown_frame_meta = td_meta
-                    else:
+                interval = int(getattr(self, "topdown_recording_interval_frames", 1))
+                should_fetch_td = False
+                if interval <= 0:
+                    should_fetch_td = False
+                else:
+                    self._topdown_record_tick += 1
+                    if (self._topdown_record_tick % interval) == 0:
+                        should_fetch_td = True
+                if should_fetch_td:
+                    try:
+                        td_data = self.bridge.get_latest_camera_frame_with_metadata(
+                            camera_id="top_down"
+                        )
+                        if td_data is not None:
+                            td_image, td_ts, td_id, td_meta = td_data
+                            topdown_frame_data = (td_image, td_ts, td_id)
+                            topdown_frame_meta = td_meta
+                        else:
+                            topdown_frame_data = None
+                    except Exception:
                         topdown_frame_data = None
-                except Exception:
-                    topdown_frame_data = None
             self._record_frame(
                 image,
                 timestamp,
@@ -7767,6 +7833,8 @@ class AVStack:
             mpc_smith_e_heading_predicted=float(control_command.get('mpc_smith_e_heading_predicted', 0.0)),
             mpc_delay_frames_used=int(control_command.get('mpc_delay_frames_used', 0)),
             grade_compensation_active=1.0 if abs(getattr(self, '_smoothed_grade', 0.0)) > 0.001 else 0.0,
+            diag_silent_elat_dropout_active=bool(control_command.get('diag_silent_elat_dropout_active', False)),
+            mpc_elat_ramp_active=bool(control_command.get('mpc_elat_ramp_active', False)),
             effective_max_accel=float(getattr(
                 getattr(getattr(self, 'controller', None), 'longitudinal_controller', None),
                 '_effective_max_accel', 0.0)),
@@ -7825,6 +7893,7 @@ class AVStack:
                     use_direct=True,  # Use direct midpoint computation
                     timestamp=timestamp,
                     confidence=confidence,
+                    preview_curvature_abs=preview_curvature_abs,
                 )
             
             # Build trajectory points array with reference point first

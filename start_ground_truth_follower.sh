@@ -88,6 +88,20 @@ fi
 mkdir -p "$SCRIPT_DIR/tmp/logs"
 BRIDGE_LOG="$SCRIPT_DIR/tmp/logs/av_bridge.log"
 
+if [[ -z "${AV_BRIDGE_MAX_CAMERA_QUEUE:-}" ]] && [[ -f "$SCRIPT_DIR/config/av_stack_config.yaml" ]]; then
+  AV_BRIDGE_MAX_CAMERA_QUEUE="$(cd "$SCRIPT_DIR" && python3 -c "
+import yaml
+from pathlib import Path
+p = Path('config/av_stack_config.yaml')
+if p.is_file():
+    d = yaml.safe_load(p.read_text(encoding='utf-8')) or {}
+    v = (d.get('stack') or {}).get('bridge_max_camera_queue')
+    if v is not None:
+        print(int(v))
+" 2>/dev/null || true)"
+fi
+export AV_BRIDGE_MAX_CAMERA_QUEUE="${AV_BRIDGE_MAX_CAMERA_QUEUE:-48}"
+
 echo "Starting bridge server on port $BRIDGE_PORT..."
 cd "$SCRIPT_DIR"
 python -m bridge.server > "$BRIDGE_LOG" 2>&1 &
