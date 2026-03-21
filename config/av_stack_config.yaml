@@ -32,7 +32,7 @@ control:
     - speed_mps: 12.0
       lookahead_m: 5.6
     pp_curve_local_shorten_slew_m_per_frame: 0.15
-    pp_curve_local_floor_state_min: COMMIT
+    pp_curve_local_floor_state_min: ENTRY
     pp_min_lookahead: 0.5
     pp_speed_norm_enabled: false
     pp_speed_norm_reference_mps: 12.0
@@ -306,6 +306,10 @@ control:
     stanley_downshift_hysteresis_mps: 0.5 # Must drop below 4.5 m/s to enter Stanley
     stanley_blend_frames: 10           # 0.33s blend at 30 Hz
     stanley_min_hold_frames: 15        # 0.5s hold before switching
+    # Do not hand off to Stanley when path curvature is clearly “on a curve”
+    # (brief speed dip during C-braking was tripping Stanley at v<4.5 m/s with κ≈0.01,
+    # causing MPC→Stanley + perception dropout jerk).  0.0 disables this guard.
+    stanley_inhibit_curvature_abs: 0.004
 trajectory:
   trajectory_source: planner
   # Lane midpoint coordinate conversion uses the full PP lookahead distance to evaluate
@@ -488,7 +492,7 @@ trajectory:
   reference_lookahead_curvature_min: 0.002
   reference_lookahead_curvature_max: 0.015
   reference_lookahead_tight_curvature_threshold: 0.01
-  reference_lookahead_tight_scale: 0.35
+  reference_lookahead_tight_scale: 0.50            # CHANGED: 0.35 → 0.50 (reduces gap between planned ref_y and PP floor, cutting floor rescue magnitude roughly in half)
   reference_lookahead_tight_blend_band: 0.006
   curve_intent_speed_guardrail_enabled: true
   curve_intent_speed_guardrail_intent_min: 0.55
@@ -654,6 +658,7 @@ trajectory:
   traj_heading_zero_gate_center_a_off_abs_max: 0.008
   traj_heading_zero_gate_heading_on_abs_rad: 0.035
   traj_heading_zero_gate_heading_off_abs_rad: 0.061
+  traj_heading_zero_gate_curvature_preview_off_threshold: 0.001   # CHANGED: 0.0015 → 0.001 (releases heading gate earlier; 0.001 is in the safe range [0.0006, 0.0025])
   dynamic_effective_horizon_enabled: true
   dynamic_effective_horizon_min_m: 3.0
   dynamic_effective_horizon_max_m: 20.0
@@ -713,8 +718,28 @@ trajectory:
     # enough to close ~0.4m curve offsets, stable enough to not oscillate.
     mpc_r_steer: 0.05
     mpc_r_accel: 0.2
-    mpc_r_steer_rate: 2.0
+    mpc_r_steer_rate: 3.5                           # CHANGED: 2.0 → 3.5 (penalises steering-rate changes more heavily; directly damps the ~0.5 Hz oscillation whose period matches the 2 s MPC horizon)
     mpc_delta_rate_max: 0.15        # max Δδ_norm per step
+    # Noise-jitter fixes (2026-02-17):
+    # Fix A — first-step QP rate cost: adds 0.5*r_steer_rate*(delta[0]-last)^2 to the
+    #   objective so r_steer_rate is symmetric across ALL steps, not just within-horizon.
+    #   Kept: reduced max jerk 0.150→0.052 with no lateral RMSE regression.
+    mpc_first_step_rate_enabled: true
+    # Fix B — EMA pre-filter + deadband on e_lat: DISABLED after run analysis (2026-03-21).
+    #   In simulation, α=0.3 reduced sign-flip jitter 67%. In Unity, sign flips were already
+    #   only 3.7% (perception noise is slow/correlated, not white noise). The EMA added ~7
+    #   frames of lag to curve-entry corrections, increasing curve e_lat RMSE by +81%
+    #   (0.22m→0.40m) and dropping score 92.3→91.7. Alpha=1.0 = no filtering (unfiltered).
+    mpc_elat_ema_alpha: 1.0
+    mpc_elat_deadband_m: 0.0
+    # Fix C — dropout recovery rate limiter (2026-03-21).
+    #   Silent perception dropouts return e_lat=0 for 1-2s (stale flag NOT set), then
+    #   snap back to the accumulated error in one frame (e.g. 0→0.25m = 49.5/s² jerk).
+    #   This rate limiter caps how much e_lat fed to the QP can change per frame.
+    #   0.05 m/frame @ 30fps = 1.5 m/s ramp rate — fast enough to track real curve drift
+    #   (which grows ~0.01-0.03 m/frame) but slow enough to absorb dropout recoveries.
+    #   0.0 = disabled; set to 0.0 to revert if curve tracking regresses.
+    mpc_elat_ramp_rate_m_per_frame: 0.05
     mpc_max_accel: 3.0
     mpc_max_decel: 4.0
     mpc_v_min: 1.0
@@ -753,7 +778,18 @@ logging:
   frame_log_interval: 30
   log_lateral_error: true
   log_reference_point: true
+# Python main loop + bridge transport (see docs/plans/perf_pareto_plan_a_bridge_gpu_topdown.md)
+stack:
+  # Match Unity CameraCapture.targetFPS (CarPrefab CameraCapture.targetFPS) for steady cadence.
+  target_loop_hz: 20.0
+  # Use GET /api/camera/latest/raw (no JPEG round-trip). Set false for legacy bridge only.
+  use_raw_camera_transport: true
+  # Top-down for HDF5: 1=every frame, N=every Nth recorded frame, 0=never fetch.
+  topdown_recording_interval_frames: 1
 perception:
+  use_gpu: true
+  # Apple Silicon: use MPS when CUDA is unavailable (requires PyTorch with MPS build).
+  prefer_mps: true
   record_segmentation_mask: false
   low_visibility_fallback_enabled: true
   low_visibility_fallback_blend_alpha: 0.35

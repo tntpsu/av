@@ -22,7 +22,7 @@ public class CameraCapture : MonoBehaviour
     public Camera targetCamera;
     public int captureWidth = 640;
     public int captureHeight = 480;
-    public int targetFPS = 30;
+    public int targetFPS = 20;
     
     [Header("API Settings")]
     public string apiUrl = "http://localhost:8000";
@@ -225,7 +225,7 @@ public class CameraCapture : MonoBehaviour
         Debug.Log($"CameraCapture: Camera position: {targetCamera.transform.position}");
         Debug.Log($"CameraCapture: Camera parent: {(targetCamera.transform.parent != null ? targetCamera.transform.parent.name : "None (static)")}");
         Debug.Log($"CameraCapture: Camera moves with car: {(targetCamera.transform.parent != null ? "YES ✅" : "NO ⚠️ (static camera)")}");
-        
+
         // Apply consistency settings before capture setup
         ApplyRuntimeConsistency();
 
