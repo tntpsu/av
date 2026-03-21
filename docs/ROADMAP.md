@@ -1,7 +1,7 @@
 # Robust Full-Stack Roadmap (Unified, Layered, and Gated)
 
-**Last Updated:** 2026-03-16
-**Current Focus:** Layer 2, Stage 2 (Robustness & Speed Expansion) — Step 2 (T-033 CI regression) complete, Step 3 next
+**Last Updated:** 2026-03-20
+**Current Focus:** Layer 2, Stage 2 (Robustness & Speed Expansion) — Step 3.5 (2DOF FF + curve-contamination clamp) implemented, pending live E2E validation
 **Change-Control Rule:** If scope, stage, phase status, or promotion gates change, update this roadmap in the same PR/commit before considering work complete.
 
 ## Scope
@@ -514,6 +514,41 @@ Curvature-adjusted scoring active (floor=3×|κ| per frame). 749 tests, 32/32 co
 **Gate:** All comfort gates pass on graded + banked tracks (3x runs each)
 **Unlocks:** More realistic simulation, validates MPC dynamics model is extensible
 
+### Step 3.5 — 2DOF Feedforward Alignment (LMPC steady-state fix)
+
+**Goal:** Eliminate systematic outside-curve bias in the linear MPC without per-track tuning.
+
+**Root cause:** The existing `r_steer_rate * (δ[k+1] − δ[k])²` penalty fights holding a
+constant-curvature steering angle, causing late turn-in and e_lat P50 = 0.405m on R100 curves.
+
+**What was built:**
+- `MPCSolver._feedforward_delta_norm(κ, L, δ_max)` — bicycle-model FF angle, normalized
+- `ff_alignment_enabled` param in `MPCParams` (default: `True`)
+- Per-solve linear `q` correction: `q[δ_k] += r_sr·Δff_k`, `q[δ_{k+1}] -= r_sr·Δff_k`
+  — shifts rate cost to penalize Δ(δ − δ_ff)² instead of Δδ²; P matrix unchanged
+- 4 new tests in `TestFFAlignment` (formula, straight no-op, disabled regression, convergence)
+
+**Key property:** On straight roads (κ=0) the correction is exactly zero — no behavior change
+on highway_65. On constant-κ segments the correction eliminates the rate penalty for holding
+curve steer so the QP converges to δ_ff without fighting itself.
+
+**Additional fix — Dynamic Lane-Midpoint Curve-Contamination Clamp (2026-03-20):**
+Root-cause triage (trajectory layer isolation) identified that `coord_conversion_distance` in
+`orchestrator.py` was using the full PP lookahead even when it extended past upcoming curve starts.
+On sloop (short straights, κ ≈ 0.01), this biased `center_x` by ~14 cm before the turn began,
+explaining persistent lateral offset independent of control/perception tuning.
+
+- **Formula:** max_d_into_curve = √(2 · threshold / κ); clamp only fires on straight approach
+- **New function:** `compute_lane_midpoint_clamp()` in `av_stack/lane_gating.py` (pure, tested)
+- **Config params:** `lane_midpoint_max_curve_contamination_m: 0.05` (default),
+  `lane_midpoint_clamp_min_distance_m: 3.0` in `config/av_stack_config.yaml`
+- **Diagnostics:** `lane_midpoint_clamp_active`, `_dist_m`, `_kappa_preview` recorded per frame
+- **Tests:** 9 tests in `tests/test_lane_midpoint_clamp.py` — all pass; full suite 962/962
+
+**Entry:** Step 3 done ✅ (grade compensation validated on hill_highway)
+**Gate:** sloop/oval adj_rmse ≤ 0.25m; `diag_raw_ref_x` straight-segment mean within ±0.03m of zero. **Pending live E2E validation.**
+**Unlocks:** Reduces steady-state curve error before deciding whether NMPC is required
+
 ### Step 4 — NMPC + Full Hierarchical Hybrid (plan.md §2.7-2.8)
 
 **Goal:** Extend control to >20 m/s and mixed-speed routes (highway ramp → highway → off-ramp).
@@ -528,7 +563,8 @@ Curvature-adjusted scoring active (floor=3×|κ| per frame). 749 tests, 32/32 co
 - Warm-start handoff between LMPC and NMPC
 - Speed regime: PP (<10 m/s) → blend → LMPC (10-20 m/s) → blend → NMPC (>20 m/s)
 
-**Entry:** LMPC passes on all tracks from Steps 1+3 (prove linear MPC is insufficient before adding complexity)
+**Entry:** Step 3.5 done (2DOF FF alignment validated — prove LMPC steady-state error is resolved
+before adding NMPC complexity; if e_lat still exceeds gate after FF alignment, re-evaluate.)
 **Gate:** Mixed-speed route (ramp + highway + local) completes with 0 e-stops, score ≥ 90
 **Unlocks:** Full speed envelope coverage, enables highway on/off-ramp scenarios
 
