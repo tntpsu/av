@@ -404,7 +404,7 @@ MonoBehaviour:
   targetCamera: {fileID: 9000000000000000003}
   captureWidth: 640
   captureHeight: 480
-  targetFPS: 20
+  targetFPS: 15
   apiUrl: http://localhost:8000
   cameraEndpoint: /api/camera
   cameraId: front_center

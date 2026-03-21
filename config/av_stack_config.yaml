@@ -780,8 +780,10 @@ logging:
   log_reference_point: true
 # Python main loop + bridge transport (see docs/plans/perf_pareto_plan_a_bridge_gpu_topdown.md)
 stack:
-  # Match Unity CameraCapture.targetFPS (CarPrefab CameraCapture.targetFPS) for steady cadence.
-  target_loop_hz: 20.0
+  # Match Unity CameraCapture.targetFPS (CarPrefab + CameraCapture.cs default).
+  # Cadence on recording_20260321_170636: mean loop ~17.9 Hz with queue pinned → set below
+  # nominal 20 until stack work per iteration drops (or raise Hz after profiling).
+  target_loop_hz: 15.0
   # Use GET /api/camera/latest/raw (no JPEG round-trip). Set false for legacy bridge only.
   use_raw_camera_transport: true
   # Bridge FIFO depth per camera (freshness vs buffering). start_av_stack.sh exports AV_BRIDGE_MAX_CAMERA_QUEUE from this.
@@ -791,7 +793,8 @@ stack:
   # Background thread GETs latest front camera while the stack runs perception/control (overlap I/O).
   camera_prefetch: true
   # Top-down for HDF5: 1=every frame, N=every Nth recorded frame, 0=never fetch.
-  topdown_recording_interval_frames: 1
+  # Extra bridge GET+decode each tick; increase if chasing higher control Hz.
+  topdown_recording_interval_frames: 3
 perception:
   use_gpu: true
   # Apple Silicon: use MPS when CUDA is unavailable (requires PyTorch with MPS build).
