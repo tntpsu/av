@@ -29,7 +29,7 @@ sys.path.insert(0, str(backend_path))
 analysis_path = Path(__file__).parent.parent / "analyze"
 sys.path.insert(0, str(analysis_path))
 from summary_analyzer import analyze_recording_summary
-from diagnostics import analyze_trajectory_vs_steering, analyze_signal_chain, analyze_speed_curvature
+from diagnostics import analyze_trajectory_vs_steering, analyze_signal_chain, analyze_speed_curvature, compute_grade_diagnostics
 from issue_detector import detect_issues
 from analyze_trajectory_layer_localization import analyze_trajectory_layer_localization
 
@@ -1226,7 +1226,7 @@ def get_frame_data(filename, frame_index):
                     if 'control/regime' in f and control_idx < len(f['control/regime']):
                         regime_val = int(f['control/regime'][control_idx])
                         frame_data['control']['regime'] = regime_val
-                        _MODE_NAMES = {0: 'pure_pursuit', 1: 'linear_mpc', 2: 'blending'}
+                        _MODE_NAMES = {-1: 'stanley', 0: 'pure_pursuit', 1: 'linear_mpc', 2: 'nonlinear_mpc'}
                         frame_data['control']['control_mode'] = _MODE_NAMES.get(regime_val, f'regime_{regime_val}')
                     else:
                         frame_data['control']['control_mode'] = 'pure_pursuit'
@@ -3094,6 +3094,34 @@ def get_mpc_pipeline(filename):
         return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500
 
 
+@app.route('/api/recording/<path:filename>/cadence-breakdown')
+def get_cadence_breakdown(filename):
+    """Wall-loop / wait_input / pipeline attribution + recommendations (cadence_breakdown_v1)."""
+    from urllib.parse import unquote
+
+    filename = unquote(filename)
+    filepath = RECORDINGS_DIR / filename
+    if not filepath.exists():
+        return jsonify({"error": f"Recording not found: {filename}"}), 404
+    try:
+        from cadence_breakdown import analyze_cadence
+
+        severe_ms = float(request.args.get("severe_ms", 200))
+        target_hz_raw = request.args.get("target_hz")
+        target_hz_opt = float(target_hz_raw) if target_hz_raw not in (None, "") else None
+        pre_failure_only = request.args.get("pre_failure_only", "false").lower() == "true"
+        result = analyze_cadence(
+            filepath,
+            severe_ms=severe_ms,
+            target_hz=target_hz_opt,
+            pre_failure_only=pre_failure_only,
+        )
+        return jsonify(sanitize_non_finite_for_json(result))
+    except Exception as e:
+        import traceback
+        return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500
+
+
 @app.route('/api/signal-chain/<path:recording>')
 def get_signal_chain(recording):
     """Get signal chain diagnostic analysis for a recording."""
@@ -3898,6 +3926,24 @@ def get_topdown_diagnostics(filename):
                     "trajectory_source_isolation": trajectory_source_isolation,
                 }
             )
+    except Exception as e:
+        import traceback
+        return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500
+
+
+@app.route('/api/recording/<path:filename>/grade-diagnostics')
+def get_grade_diagnostics(filename):
+    """Return grade/pitch/roll diagnostics. Returns {has_grade: false} for pre-grade recordings."""
+    from urllib.parse import unquote
+    filename = unquote(filename)
+    filepath = RECORDINGS_DIR / filename
+    if not filepath.exists():
+        return jsonify({"error": f"Recording not found: {filename}"}), 404
+    try:
+        result = compute_grade_diagnostics(filepath)
+        if result is None:
+            return jsonify({"has_grade": False})
+        return jsonify(result)
     except Exception as e:
         import traceback
         return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500

@@ -14,6 +14,14 @@ python tools/analyze/analyze_drive_overall.py --latest
 python tools/analyze/analyze_recording_comprehensive.py --latest
 ```
 
+**For cadence / pipeline timing attribution (wait_input vs processing, queue depth):**
+```bash
+python tools/analyze/cadence_breakdown.py --latest
+python tools/analyze/cadence_breakdown.py data/recordings/your_run.h5 --output-json /tmp/cadence.json
+# Optional: --target-hz 30  (default = stack.target_loop_hz from config/av_stack_config.yaml, or --stack-config PATH)
+```
+PhilViz: open the **Cadence** tab after loading a recording. See `docs/plans/cadence_breakdown_tool_plan.md`.
+
 ## Analysis Scripts
 
 ### Primary Analysis Tools
