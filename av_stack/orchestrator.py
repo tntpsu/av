@@ -943,6 +943,22 @@ class AVStack:
                 "notes": "",
                 "candidate_label": candidate_label,
             }
+            # Cadence / bridge — verify after run via tools/analyze/verify_recording_run.py
+            self.recorder.metadata["stack_transport"] = {
+                "target_loop_hz": float(stack_cfg.get("target_loop_hz", 30.0)),
+                "topdown_recording_interval_frames": int(
+                    stack_cfg.get("topdown_recording_interval_frames", 1)
+                ),
+                "use_raw_camera_transport": bool(
+                    stack_cfg.get("use_raw_camera_transport", True)
+                ),
+                "camera_prefetch": bool(stack_cfg.get("camera_prefetch", True)),
+                "clear_bridge_camera_queue_on_start": bool(
+                    stack_cfg.get("clear_bridge_camera_queue_on_start", True)
+                ),
+                "bridge_max_camera_queue_yaml": stack_cfg.get("bridge_max_camera_queue"),
+                "AV_BRIDGE_MAX_CAMERA_QUEUE": os.environ.get("AV_BRIDGE_MAX_CAMERA_QUEUE"),
+            }
         else:
             logger.info("Data recording disabled")
         

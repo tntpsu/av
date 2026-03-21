@@ -146,6 +146,17 @@ class DataRecorder:
                 ),
             },
             "safety": {"max_speed": cfg_public.get("safety", {}).get("max_speed")},
+            "stack": {
+                k: (cfg_public.get("stack") or {}).get(k)
+                for k in (
+                    "target_loop_hz",
+                    "use_raw_camera_transport",
+                    "bridge_max_camera_queue",
+                    "camera_prefetch",
+                    "clear_bridge_camera_queue_on_start",
+                    "topdown_recording_interval_frames",
+                )
+            },
         }
         try:
             from control.mpc_controller import MPCParams

@@ -22,6 +22,12 @@ python tools/analyze/cadence_breakdown.py data/recordings/your_run.h5 --output-j
 ```
 PhilViz: open the **Cadence** tab after loading a recording. See `docs/plans/cadence_breakdown_tool_plan.md`.
 
+**Verify embedded stack/bridge params vs observed cadence (recordings from AVStack with new metadata):**
+```bash
+python tools/analyze/verify_recording_run.py data/recordings/your_run.h5
+python tools/analyze/verify_recording_run.py --latest
+```
+
 ## Analysis Scripts
 
 ### Primary Analysis Tools
