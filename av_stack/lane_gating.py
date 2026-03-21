@@ -1,3 +1,4 @@
+import math
 import numpy as np
 from typing import Optional, Tuple
 
@@ -266,3 +267,59 @@ def blend_lane_pair_with_previous(
         left_lane_x -= correction
         right_lane_x -= correction
     return float(left_lane_x), float(right_lane_x)
+
+
+def compute_lane_midpoint_clamp(
+    lookahead_m: float,
+    kappa_preview: float,
+    dist_to_curve_m: Optional[float],
+    in_curve: bool,
+    threshold_m: float = 0.05,
+    min_distance_m: float = 3.0,
+) -> Tuple[float, bool]:
+    """Compute the (possibly clamped) coord_conversion_distance for lane midpoint evaluation.
+
+    When the lookahead distance reaches into an upcoming curve the lane-centre
+    pixel evaluated at that distance is contaminated by curve-induced lateral
+    offset.  The bias grows as κ · Δd² / 2, where Δd is the distance *past*
+    the curve start.  This function caps the evaluation distance so that the
+    maximum contamination stays below ``threshold_m``.
+
+    The clamp is only active when the vehicle is currently on a straight
+    (``in_curve=False``), a significant upcoming curve is detected
+    (``kappa_preview > 1e-4``), and the distance to the curve is known.
+
+    Args:
+        lookahead_m: Raw coord_conversion_distance before clamping (metres).
+        kappa_preview: Absolute curvature of the upcoming curve segment (1/m).
+        dist_to_curve_m: Distance from the current position to the start of
+            the curve (metres).  ``None`` if unknown.
+        in_curve: True if the vehicle is currently inside a curve; the clamp
+            is skipped when already cornering.
+        threshold_m: Maximum tolerable lateral contamination in metres.
+            Default 0.05 m.  Set to 0 to disable.
+        min_distance_m: Hard minimum for the returned distance (metres).
+            Ensures the evaluation point never collapses to zero even for
+            very tight curves directly ahead.
+
+    Returns:
+        A (clamped_distance, was_clamped) tuple where ``clamped_distance`` is
+        the safe evaluation distance and ``was_clamped`` is True when the
+        original ``lookahead_m`` was reduced.
+    """
+    if threshold_m <= 0.0:
+        return lookahead_m, False
+    if in_curve:
+        return lookahead_m, False
+    if kappa_preview <= 1e-4:
+        return lookahead_m, False
+    if dist_to_curve_m is None or not math.isfinite(dist_to_curve_m) or dist_to_curve_m < 0.0:
+        return lookahead_m, False
+
+    # Maximum distance the evaluation point may extend past the curve start
+    delta_d_max = math.sqrt(2.0 * threshold_m / kappa_preview)
+    max_safe_dist = max(dist_to_curve_m + delta_d_max, min_distance_m)
+
+    if lookahead_m > max_safe_dist:
+        return max_safe_dist, True
+    return lookahead_m, False

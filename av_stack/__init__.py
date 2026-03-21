@@ -10,6 +10,7 @@ from av_stack.lane_gating import (
     is_lane_low_visibility_at_lookahead,
     estimate_single_lane_pair,
     blend_lane_pair_with_previous,
+    compute_lane_midpoint_clamp,
 )
 from av_stack.config import (
     ControlConfig,
@@ -34,7 +35,7 @@ __all__ = [
     "apply_lane_ema_gating", "apply_lane_alpha_beta_gating",
     "finalize_reject_reason", "is_lane_low_visibility",
     "is_lane_low_visibility_at_lookahead", "estimate_single_lane_pair",
-    "blend_lane_pair_with_previous",
+    "blend_lane_pair_with_previous", "compute_lane_midpoint_clamp",
     "ControlConfig", "TrajectoryConfig", "SafetyConfig", "load_config",
     "_slew_limit_value", "_apply_speed_limit_preview",
     "_apply_curve_speed_preview", "_preview_min_distance_allows_release",

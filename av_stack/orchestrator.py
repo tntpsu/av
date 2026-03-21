@@ -37,7 +37,7 @@ from av_stack.lane_gating import (
     apply_lane_ema_gating, apply_lane_alpha_beta_gating,
     finalize_reject_reason, is_lane_low_visibility,
     is_lane_low_visibility_at_lookahead, estimate_single_lane_pair,
-    blend_lane_pair_with_previous,
+    blend_lane_pair_with_previous, compute_lane_midpoint_clamp,
 )
 from av_stack.config import ControlConfig, TrajectoryConfig, SafetyConfig, load_config
 from av_stack.speed_helpers import (
@@ -304,6 +304,7 @@ class AVStack:
             longitudinal_max_jerk_max=longitudinal_cfg.get('max_jerk_max', max(longitudinal_max_jerk, 6.0)),
             longitudinal_jerk_cooldown_frames=int(longitudinal_cfg.get('jerk_cooldown_frames', 0)),
             longitudinal_jerk_cooldown_scale=float(longitudinal_cfg.get('jerk_cooldown_scale', 0.6)),
+            longitudinal_grade_ff_gain=float(longitudinal_cfg.get('grade_ff_gain', 1.0)),
             longitudinal_min_throttle_hold=float(longitudinal_cfg.get('min_throttle_hold', 0.12)),
             longitudinal_min_throttle_hold_speed=float(
                 longitudinal_cfg.get('min_throttle_hold_speed', 4.0)
@@ -926,6 +927,12 @@ class AVStack:
         self.target_fps = 30.0  # Match Unity's frame rate
         self.frame_interval = 1.0 / self.target_fps
 
+        # Grade EMA smoothing (Step 3)
+        grade_ema_alpha = float(control_cfg.get('grade_ema_alpha', 0.3))
+        self._grade_ema_alpha = grade_ema_alpha
+        self._smoothed_grade = 0.0
+        self._grade_ff_gain = float(longitudinal_cfg.get('grade_ff_gain', 1.0))
+
         # Initialize previous lane history for stale-data fallback paths
         self.previous_left_lane_x = None
         self.previous_right_lane_x = None
@@ -1141,6 +1148,8 @@ class AVStack:
         ).strip()
         self._load_reference_entry_track_profile(self._reference_entry_track_name)
         self._derive_curvature_thresholds()
+        self._derive_mpc_weights()
+        self._derive_speed_params()
 
         # Canonical map-free curve anticipation (trajectory-owned signal).
         self.curve_anticipation_enabled = bool(
@@ -1271,6 +1280,37 @@ class AVStack:
         ("control.lateral", "pp_map_ff_curvature_min"): 0.005,
     }
 
+    # ── MPC cost weight auto-derive parameters ────────────────────────────────
+    # Each entry: (section_path, key) → (base_value, ref_kappa, exponent, max_value)
+    # Formula: derived = clamp(base × (v²×κ_mpc_active / v_ref²×ref_kappa)^exponent, base, max)
+    # Ratio is centripetal acceleration demand vs. reference operating point.
+    # κ_mpc_active = min(track_κ_max, mpc_max_curvature) — tightest curve MPC faces.
+    # v_target = trajectory.target_speed (configured cruise speed for this track).
+    # Calibration: q_lat=0.5 at highway (v=15, κ=0.002 → a_lat=0.45 m/s²);
+    #   hill_highway (v=12, κ=0.010 → a_lat=1.44 m/s²) → ratio=3.2 → q_lat=1.60.
+    # Tuple: (base, v_ref, ref_kappa, exponent, max_val)
+    _MPC_WEIGHT_AUTO_DERIVE_PARAMS: dict[
+        tuple[str, str], tuple[float, float, float, float, float]
+    ] = {
+        ("trajectory.mpc", "mpc_q_lat"): (0.5, 15.0, 0.002, 1.0, 4.0),
+    }
+
+    # ── Speed-dependent parameter auto-derive ────────────────────────────────
+    # Each entry: (section_path, key) → (base, tc_gentle, tc_tight, max_value)
+    # Formula: derived = clamp(max(base, target_speed × time_const), base, max)
+    # tc_gentle: used when κ_max ≤ mpc_max_curvature (R50+, MPC governs curves)
+    # tc_tight:  used when κ_max > mpc_max_curvature (R<50, PP/Stanley governs)
+    #   → conservative to prevent straight-latch on short straights between arcs
+    # Explicit overlay always wins.
+    _SPEED_DEPENDENT_PARAMS: dict[
+        tuple[str, str], tuple[float, float, float, float]
+    ] = {
+        # commit_distance_ready: how far before curve start COMMIT mode activates.
+        # Short (3m) works for slow/tight tracks; faster tracks need more headway
+        # to begin lookahead contraction smoothly and avoid floor rescue events.
+        ("trajectory", "curve_local_commit_distance_ready_m"): (3.0, 0.75, 0.40, 10.0),
+    }
+
     def _derive_curvature_thresholds(self) -> None:
         """Auto-derive curvature thresholds from track geometry using 4th-root scaling.
 
@@ -1321,6 +1361,143 @@ class AVStack:
                 "derived %d/%d curvature thresholds",
                 kappa_max, scale, derived_count,
                 len(self._DERIVABLE_CURVATURE_PARAMS),
+            )
+
+    def _derive_mpc_weights(self) -> None:
+        """Auto-derive MPC cost function weights from track geometry and speed.
+
+        Formula: derived = clamp(base × (a_lat_active / a_lat_ref)^exponent, base, max)
+        where:
+          a_lat_active = v_target² × κ_mpc_active  (centripetal demand on this track)
+          a_lat_ref    = v_ref²   × ref_kappa       (demand at the calibration point)
+          κ_mpc_active = min(track_κ_max, mpc_max_curvature)
+
+        Using centripetal acceleration (v²×κ) as the scaling signal means the derived
+        weight correctly accounts for vehicle speed — a low-speed tight curve has lower
+        lateral demand than a high-speed gentle curve with the same κ.
+
+        Only applies when curve_auto_derive is enabled and a track profile is loaded.
+        Explicit overlay keys always win.
+        """
+        trajectory_cfg = self.config.get("trajectory", {})
+        if not trajectory_cfg.get("curve_auto_derive", False):
+            return
+        if not self._reference_entry_track_curves:
+            return
+
+        kappa_max = max(c["curvature_abs"] for c in self._reference_entry_track_curves)
+        if kappa_max < 1e-6:
+            return
+
+        # Clamp to MPC operating range — curvature guard blocks MPC above this threshold
+        mpc_max_kappa = float(
+            self.config.get("control", {})
+            .get("regime", {})
+            .get("mpc_max_curvature", 0.020)
+        )
+        kappa_mpc_active = min(kappa_max, mpc_max_kappa)
+
+        target_speed = float(trajectory_cfg.get("target_speed", 12.0))
+        a_lat_active = (target_speed ** 2) * kappa_mpc_active
+
+        raw_overlay = self.config.get("_raw_overlay", {})
+
+        derived_count = 0
+        for (section_path, key), (base_val, v_ref, ref_kappa, exponent, max_val) in \
+                self._MPC_WEIGHT_AUTO_DERIVE_PARAMS.items():
+            parts = section_path.split(".")
+            cfg_section = self.config
+            overlay_section = raw_overlay
+            for part in parts:
+                cfg_section = cfg_section.setdefault(part, {})
+                overlay_section = (
+                    overlay_section.get(part, {})
+                    if isinstance(overlay_section, dict) else {}
+                )
+
+            # Explicit overlay wins
+            if isinstance(overlay_section, dict) and key in overlay_section:
+                continue
+
+            a_lat_ref = (v_ref ** 2) * ref_kappa
+            ratio = a_lat_active / a_lat_ref
+            derived = round(
+                min(max_val, max(base_val, base_val * (ratio ** exponent))), 6
+            )
+            cfg_section[key] = derived
+            derived_count += 1
+
+        if derived_count > 0:
+            logger.info(
+                "[MPC_WEIGHT_DERIVE] track κ_max=%.4f, κ_mpc_active=%.4f, "
+                "v_target=%.1f m/s, a_lat_active=%.3f m/s², derived %d MPC weight(s)",
+                kappa_max, kappa_mpc_active, target_speed, a_lat_active, derived_count,
+            )
+
+    def _derive_speed_params(self) -> None:
+        """Auto-derive speed-dependent trajectory parameters from target_speed.
+
+        Formula: derived = clamp(max(base, target_speed × time_const), base, max)
+
+        Uses a tighter time constant (tc_tight) for tracks where κ_max exceeds
+        mpc_max_curvature (tight curves, short straights between arcs) to avoid
+        the curve-local state latching on straights between back-to-back turns.
+
+        Key parameter: curve_local_commit_distance_ready_m
+          At 12 m/s (hill_highway) with 0.75s constant → 9.0m
+          At 15 m/s (highway)     with 0.75s constant → 11.25m
+          At 12 m/s (s_loop/hairpin, tight κ) with 0.40s → 4.8m
+          s_loop/mixed_radius explicit overlay (8.0m) always wins.
+
+        Only applies when curve_auto_derive is enabled. Explicit overlay keys win.
+        """
+        trajectory_cfg = self.config.get("trajectory", {})
+        if not trajectory_cfg.get("curve_auto_derive", False):
+            return
+        if not self._reference_entry_track_curves:
+            return
+
+        kappa_max = max(c["curvature_abs"] for c in self._reference_entry_track_curves)
+        if kappa_max < 1e-6:
+            return
+
+        mpc_max_kappa = float(
+            self.config.get("control", {})
+            .get("regime", {})
+            .get("mpc_max_curvature", 0.020)
+        )
+        is_tight_track = kappa_max > mpc_max_kappa
+        target_speed = float(trajectory_cfg.get("target_speed", 12.0))
+
+        raw_overlay = self.config.get("_raw_overlay", {})
+
+        derived_count = 0
+        for (section_path, key), (base_val, tc_gentle, tc_tight, max_val) in \
+                self._SPEED_DEPENDENT_PARAMS.items():
+            parts = section_path.split(".")
+            cfg_section = self.config
+            overlay_section = raw_overlay
+            for part in parts:
+                cfg_section = cfg_section.setdefault(part, {})
+                overlay_section = (
+                    overlay_section.get(part, {})
+                    if isinstance(overlay_section, dict) else {}
+                )
+
+            # Explicit overlay wins
+            if isinstance(overlay_section, dict) and key in overlay_section:
+                continue
+
+            time_const = tc_tight if is_tight_track else tc_gentle
+            derived = round(min(max_val, max(base_val, target_speed * time_const)), 6)
+            cfg_section[key] = derived
+            derived_count += 1
+
+        if derived_count > 0:
+            logger.info(
+                "[SPEED_PARAM_DERIVE] target_speed=%.1f m/s, κ_max=%.4f, "
+                "tight_track=%s, derived %d speed-dependent param(s)",
+                target_speed, kappa_max, is_tight_track, derived_count,
             )
 
     def _update_track_odometer(self, vehicle_state_dict: dict) -> float:
@@ -2167,6 +2344,13 @@ class AVStack:
                 "Resetting controllers and skipping emergency stop for this frame."
             )
         teleport_guard_active = self.teleport_guard_frames_remaining > 0
+
+        # Grade EMA smoothing (Step 3)
+        raw_grade = float(vehicle_state_dict.get('roadGrade',
+                          vehicle_state_dict.get('road_grade', 0.0)))
+        alpha = self._grade_ema_alpha
+        self._smoothed_grade = alpha * raw_grade + (1.0 - alpha) * self._smoothed_grade
+
         return {
             'process_start': process_start,
             'unity_frame_count': unity_frame_count,
@@ -2175,6 +2359,7 @@ class AVStack:
             'current_position': current_position,
             'teleport_detected': teleport_detected,
             'teleport_guard_active': teleport_guard_active,
+            'smoothed_grade': self._smoothed_grade,
         }
 
     def _pf_run_perception(self, image: np.ndarray, vehicle_state_dict: dict, fv: dict) -> dict:
@@ -2855,7 +3040,49 @@ class AVStack:
                 # DEBUG: Log what we're checking
                 logger.debug(f"[COORD DEBUG] Checking camera_8m_screen_y: value={camera_8m_screen_y}, type={type(camera_8m_screen_y)}, >0={camera_8m_screen_y > 0 if camera_8m_screen_y is not None else 'None'}")
                 coord_conversion_distance = gt_lookahead_distance if gt_lookahead_distance is not None else reference_lookahead
-                if camera_lookahead_screen_y is not None and camera_lookahead_screen_y > 0:
+                coord_distance_was_clamped = False
+
+                # ── Dynamic curve-contamination clamp ────────────────────────────────
+                # Prevents the lane-midpoint evaluation point from reaching into an
+                # upcoming curve, which biases center_x by κ·Δd²/2.  Logic lives in
+                # compute_lane_midpoint_clamp() for testability.
+                _lm_threshold = float(
+                    self.trajectory_config.get(
+                        'lane_midpoint_max_curve_contamination_m', 0.05
+                    ) or 0.05
+                )
+                _lm_min_dist = float(
+                    self.trajectory_config.get(
+                        'lane_midpoint_clamp_min_distance_m', 3.0
+                    ) or 3.0
+                )
+                _kappa_preview = abs(float(geo.get('preview_curvature_abs', 0.0) or 0.0))
+                _dist_to_curve = geo.get('distance_to_curve_start_m')
+                _in_curve_now = abs(float(geo.get('curvature_map_abs', 0.0) or 0.0)) > 0.003
+                coord_conversion_distance, coord_distance_was_clamped = compute_lane_midpoint_clamp(
+                    lookahead_m=coord_conversion_distance,
+                    kappa_preview=_kappa_preview,
+                    dist_to_curve_m=(
+                        float(_dist_to_curve)
+                        if _dist_to_curve is not None else None
+                    ),
+                    in_curve=_in_curve_now,
+                    threshold_m=_lm_threshold,
+                    min_distance_m=_lm_min_dist,
+                )
+                if coord_distance_was_clamped:
+                    logger.debug(
+                        f"[LANE_MIDPOINT_CLAMP] fr={self.frame_count} "
+                        f"clamped to {coord_conversion_distance:.2f}m "
+                        f"(dist_to_curve={_dist_to_curve} kappa={_kappa_preview:.4f})"
+                    )
+                # ── End curve-contamination clamp ────────────────────────────────────
+                # Store for diagnostic recording (picked up by _record_frame via self)
+                self._lane_midpoint_clamp_active = 1.0 if coord_distance_was_clamped else 0.0
+                self._lane_midpoint_clamp_dist_m = coord_conversion_distance if coord_distance_was_clamped else None
+                self._lane_midpoint_clamp_kappa_preview = _kappa_preview if coord_distance_was_clamped else None
+
+                if camera_lookahead_screen_y is not None and camera_lookahead_screen_y > 0 and not coord_distance_was_clamped:
                     y_image_at_lookahead = camera_lookahead_screen_y
                     logger.info(
                         f"[COORD DEBUG] ✅ Using Unity's camera_lookahead_screen_y={camera_lookahead_screen_y:.1f}px "
@@ -4314,6 +4541,12 @@ class AVStack:
             curve_rise=float(gated.get('curvature_rise_abs', 0.0) or 0.0),
             turn_feasibility_speed_limit_mps=self._last_turn_feasibility_speed_limit_mps,
             turn_feasibility_infeasible=bool(self._last_turn_feasibility_infeasible),
+            distance_to_curve=(
+                float(gated.get("distance_to_curve_start_m"))
+                if isinstance(gated.get("distance_to_curve_start_m"), (int, float))
+                and np.isfinite(float(gated.get("distance_to_curve_start_m")))
+                else None
+            ),
         )
 
         adjusted_target_speed = gov_output.target_speed
@@ -4321,6 +4554,14 @@ class AVStack:
         base_speed = float(self.original_target_speed)
         target_speed_planned = gov_output.planned_speed
         planned_accel = gov_output.planned_accel
+        # Grade compensation for speed planning (Step 3):
+        # Adjust planned accel to account for gravity.
+        # On downhill (grade<0), gravity assists → effective decel is weaker,
+        # so we subtract gravity offset to command more braking.
+        _grade = self._smoothed_grade
+        if abs(_grade) > 0.001 and planned_accel is not None:
+            grade_decel_offset = 9.81 * math.sin(_grade) * self._grade_ff_gain
+            planned_accel = planned_accel + grade_decel_offset
         target_speed_ramp_active = False
         target_speed_slew_active = False
         curve_intent_speed_guardrail_active = False
@@ -5226,7 +5467,8 @@ class AVStack:
                     return_metadata=True,
                     dt=control_dt,
                     reference_accel=planned_accel,
-                    using_stale_perception=using_stale_data
+                    using_stale_perception=using_stale_data,
+                    grade_rad=fv.get('smoothed_grade', 0.0)
                 )
                 control_command['target_speed_raw'] = base_speed
                 control_command['target_speed_post_limits'] = adjusted_target_speed
@@ -5581,9 +5823,21 @@ class AVStack:
                 if gt_left_lane_line_x is not None and gt_right_lane_line_x is not None:
                     gt_left_lane_line_x = float(gt_left_lane_line_x)
                     gt_right_lane_line_x = float(gt_right_lane_line_x)
+                    # Step 3D: Sanity filter — reject corrupt GT boundaries (>50m)
+                    # GroundTruthReporter can produce 5000+ m values at track mesh seams
+                    gt_sanity_limit = 50.0
+                    if abs(gt_left_lane_line_x) > gt_sanity_limit or abs(gt_right_lane_line_x) > gt_sanity_limit:
+                        logger.warning(
+                            f"[Frame {self.frame_count}] GT boundary corrupt: "
+                            f"left={gt_left_lane_line_x:.1f}m, right={gt_right_lane_line_x:.1f}m — skipping GT e-stop"
+                        )
+                        gt_left_lane_line_x = None
+                        gt_right_lane_line_x = None
                     gt_bounds_available = (
-                        abs(gt_left_lane_line_x) > 1e-6
-                        or abs(gt_right_lane_line_x) > 1e-6
+                        gt_left_lane_line_x is not None
+                        and gt_right_lane_line_x is not None
+                        and (abs(gt_left_lane_line_x) > 1e-6
+                             or abs(gt_right_lane_line_x) > 1e-6)
                     )
                     if gt_bounds_available:
                         gt_boundary_offroad_left = (
@@ -6550,7 +6804,11 @@ class AVStack:
             position=np.array([position[0], vehicle_state_dict.get('position', {}).get('y', 0.0), position[1]]),
             rotation=rotation,  # Proper quaternion extraction
             velocity=np.array([0, 0, vehicle_state_dict.get('speed', 0.0)]),
-            angular_velocity=np.array([0, 0, 0]),
+            angular_velocity=np.array([
+                float(vehicle_state_dict.get('angularVelocity', {}).get('x', 0.0)),
+                float(vehicle_state_dict.get('angularVelocity', {}).get('y', 0.0)),
+                float(vehicle_state_dict.get('angularVelocity', {}).get('z', 0.0)),
+            ]),
             speed=vehicle_state_dict.get('speed', 0.0),
             steering_angle=vehicle_state_dict.get('steeringAngle', 0.0),
             steering_angle_actual=vehicle_state_dict.get(
@@ -6810,6 +7068,18 @@ class AVStack:
                 'speedLimitPreviewLongMinDistance',
                 vehicle_state_dict.get('speed_limit_preview_long_min_distance', 0.0),
             ),
+            pitch_rad=float(vehicle_state_dict.get(
+                'pitchRad',
+                vehicle_state_dict.get('pitch_rad', 0.0),
+            )),
+            roll_rad=float(vehicle_state_dict.get(
+                'rollRad',
+                vehicle_state_dict.get('roll_rad', 0.0),
+            )),
+            road_grade=float(vehicle_state_dict.get(
+                'roadGrade',
+                vehicle_state_dict.get('road_grade', 0.0),
+            )),
             chassis_ground_min_clearance_m=vehicle_state_dict.get(
                 'chassisGroundMinClearanceM',
                 vehicle_state_dict.get('chassis_ground_min_clearance_m', float("nan")),
@@ -6850,6 +7120,34 @@ class AVStack:
                     'forceFallbackActive',
                     vehicle_state_dict.get('force_fallback_active', False),
                 )
+            ),
+            # Per-wheel diagnostics (Step 3D)
+            wheel_sideways_slip=np.array(
+                vehicle_state_dict.get('wheelSidewaysSlip', [0.0, 0.0, 0.0, 0.0]),
+                dtype=np.float32,
+            ),
+            wheel_forward_slip=np.array(
+                vehicle_state_dict.get('wheelForwardSlip', [0.0, 0.0, 0.0, 0.0]),
+                dtype=np.float32,
+            ),
+            wheel_contact_force=np.array(
+                vehicle_state_dict.get('wheelContactForce', [0.0, 0.0, 0.0, 0.0]),
+                dtype=np.float32,
+            ),
+            wheel_rpm=np.array(
+                vehicle_state_dict.get('wheelRpm', [0.0, 0.0, 0.0, 0.0]),
+                dtype=np.float32,
+            ),
+            wheel_sprung_mass=np.array(
+                vehicle_state_dict.get('wheelSprungMass', [0.0, 0.0, 0.0, 0.0]),
+                dtype=np.float32,
+            ),
+            wheel_contact_normal_y=np.array(
+                vehicle_state_dict.get('wheelContactNormalY', [0.0, 0.0, 0.0, 0.0]),
+                dtype=np.float32,
+            ),
+            wheel_steer_angle_actual=float(
+                vehicle_state_dict.get('wheelSteerAngleActual', 0.0)
             ),
         )
         
@@ -7468,6 +7766,10 @@ class AVStack:
             mpc_smith_e_lat_predicted=float(control_command.get('mpc_smith_e_lat_predicted', 0.0)),
             mpc_smith_e_heading_predicted=float(control_command.get('mpc_smith_e_heading_predicted', 0.0)),
             mpc_delay_frames_used=int(control_command.get('mpc_delay_frames_used', 0)),
+            grade_compensation_active=1.0 if abs(getattr(self, '_smoothed_grade', 0.0)) > 0.001 else 0.0,
+            effective_max_accel=float(getattr(
+                getattr(getattr(self, 'controller', None), 'longitudinal_controller', None),
+                '_effective_max_accel', 0.0)),
         )
 
         # Create trajectory output
@@ -7701,6 +8003,9 @@ class AVStack:
             diag_far_band_contribution_limit_gain=traj_diag.get('diag_far_band_contribution_limit_gain'),
             diag_far_band_contribution_scale_mean_12_20m=traj_diag.get('diag_far_band_contribution_scale_mean_12_20m'),
             diag_far_band_contribution_limited_frac_12_20m=traj_diag.get('diag_far_band_contribution_limited_frac_12_20m'),
+            lane_midpoint_clamp_active=getattr(self, '_lane_midpoint_clamp_active', None),
+            lane_midpoint_clamp_dist_m=getattr(self, '_lane_midpoint_clamp_dist_m', None),
+            lane_midpoint_clamp_kappa_preview=getattr(self, '_lane_midpoint_clamp_kappa_preview', None),
         )
         
         # Allow ground truth follower to override control command for recording

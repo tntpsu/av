@@ -144,6 +144,10 @@ class VehicleState:
     speed_limit_preview_long: float = 0.0  # Speed limit at long preview distance (m/s)
     speed_limit_preview_long_distance: float = 0.0  # Long preview distance (m)
     speed_limit_preview_long_min_distance: float = 0.0  # Distance to min limit in long window (m)
+    # Grade/pitch/roll telemetry (Step 3)
+    pitch_rad: float = 0.0       # Vehicle pitch (positive = nose up)
+    roll_rad: float = 0.0        # Vehicle roll (positive = right lean)
+    road_grade: float = 0.0      # Local road grade (rise/run) from track profile
     # Chassis-ground telemetry (high-rate vehicle-state path)
     chassis_ground_min_clearance_m: float = np.nan
     chassis_ground_effective_min_clearance_m: float = np.nan
@@ -153,6 +157,15 @@ class VehicleState:
     wheel_grounded_count: int = 0
     wheel_colliders_ready: bool = False
     force_fallback_active: bool = False
+
+    # Per-wheel diagnostics (4 wheels: FL, FR, RL, RR) — Step 3D
+    wheel_sideways_slip: Optional[np.ndarray] = None  # shape (4,)
+    wheel_forward_slip: Optional[np.ndarray] = None   # shape (4,)
+    wheel_contact_force: Optional[np.ndarray] = None   # shape (4,)
+    wheel_rpm: Optional[np.ndarray] = None             # shape (4,)
+    wheel_sprung_mass: Optional[np.ndarray] = None     # shape (4,)
+    wheel_contact_normal_y: Optional[np.ndarray] = None # shape (4,)
+    wheel_steer_angle_actual: float = 0.0
 
 
 @dataclass
@@ -512,6 +525,8 @@ class ControlCommand:
     mpc_smith_e_lat_predicted: float = 0.0     # Smith-predicted e_lat fed to MPC
     mpc_smith_e_heading_predicted: float = 0.0 # Smith-predicted e_heading fed to MPC
     mpc_delay_frames_used: int = 0             # Number of delay frames used in Smith predictor
+    grade_compensation_active: float = 0.0     # 1.0 when grade compensation is active (|grade| > 0.001)
+    effective_max_accel: float = 0.0          # Grade-adjusted max acceleration (m/s²)
 
 
 @dataclass
@@ -657,6 +672,10 @@ class TrajectoryOutput:
     diag_far_band_contribution_limit_gain: Optional[float] = None
     diag_far_band_contribution_scale_mean_12_20m: Optional[float] = None
     diag_far_band_contribution_limited_frac_12_20m: Optional[float] = None
+    # Lane-midpoint curve-contamination clamp diagnostics
+    lane_midpoint_clamp_active: Optional[float] = None       # 1.0 when clamp fired this frame
+    lane_midpoint_clamp_dist_m: Optional[float] = None       # clamped coord_conversion_distance (m)
+    lane_midpoint_clamp_kappa_preview: Optional[float] = None  # preview curvature used for clamp
 
 
 @dataclass
