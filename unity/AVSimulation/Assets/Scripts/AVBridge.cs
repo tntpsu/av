@@ -1947,11 +1947,6 @@ private float? lastCarT = null;
                 leftLineCount += 1; // speed (limit shown top-center)
             }
 
-            if (groundTruthReporter != null)
-            {
-                leftLineCount += 1; // road curvature
-            }
-
             int boxHeight = leftLineCount * lineHeight + 14;
             GUI.Box(new Rect(xOffset - 6, yOffset - 6, boxWidth, boxHeight), GUIContent.none);
 
@@ -1986,29 +1981,17 @@ private float? lastCarT = null;
                     $"Speed: {speedMph:F1} mph ({speedMps:F1} m/s)", labelStyle);
                 yOffset += lineHeight;
             }
-            if (groundTruthReporter != null)
-            {
-                float kappa = groundTruthReporter.GetPathCurvature();
-                string curvLine;
-                float ak = Mathf.Abs(kappa);
-                if (ak < 1e-5f)
-                {
-                    curvLine = "Road κ: ~0 1/m (straight)";
-                }
-                else
-                {
-                    float radius = 1f / ak;
-                    string turn = kappa > 0f ? "left" : "right";
-                    curvLine = $"Road κ: {kappa:F4} 1/m  R≈{radius:F0} m ({turn})";
-                }
-                GUI.Label(new Rect(xOffset, yOffset, boxWidth - 8, lineHeight), curvLine, labelStyle);
-            }
 
-            // ── Right panel: road grade / pitch ──────────────────────────────
+            // ── Right panel: road grade / pitch / curvature ──────────────────
             if (lastVehicleState != null)
             {
                 int rightBoxWidth = 240;
-                int rightBoxHeight = 3 * lineHeight + 10;
+                int rightLines = 3;
+                if (groundTruthReporter != null)
+                {
+                    rightLines += 2; // κ line + turn label (compact)
+                }
+                int rightBoxHeight = rightLines * lineHeight + 12;
                 int rightX = Screen.width - rightBoxWidth - 4;
                 int rightY = 10;
 
@@ -2030,6 +2013,31 @@ private float? lastCarT = null;
                 rightY += lineHeight;
                 GUI.Label(new Rect(rightX, rightY, rightBoxWidth - 4, lineHeight),
                     $"Vehicle Pitch: {pitchDeg:+0.0;-0.0;0.0}°", labelStyle);
+                rightY += lineHeight;
+
+                if (groundTruthReporter != null)
+                {
+                    float kappa = groundTruthReporter.GetPathCurvature();
+                    float ak = Mathf.Abs(kappa);
+                    if (ak < 1e-5f)
+                    {
+                        GUI.Label(new Rect(rightX, rightY, rightBoxWidth - 4, lineHeight),
+                            "Road κ: ~0 1/m", labelStyle);
+                        rightY += lineHeight;
+                        GUI.Label(new Rect(rightX, rightY, rightBoxWidth - 4, lineHeight),
+                            "(straight)", labelStyle);
+                    }
+                    else
+                    {
+                        float radius = 1f / ak;
+                        GUI.Label(new Rect(rightX, rightY, rightBoxWidth - 4, lineHeight),
+                            $"κ {kappa:F4} 1/m  R≈{radius:F0} m", labelStyle);
+                        rightY += lineHeight;
+                        string turn = kappa > 0f ? "left" : "right";
+                        GUI.Label(new Rect(rightX, rightY, rightBoxWidth - 4, lineHeight),
+                            $"({turn} bend)", labelStyle);
+                    }
+                }
             }
 
             // ── Top-center: speed limit (large; drawn last so it stays readable) ─
@@ -2039,20 +2047,27 @@ private float? lastCarT = null;
                 if (limitMps > 0.01f)
                 {
                     float limitMph = limitMps * 2.236936f;
-                    float bannerW = Mathf.Min(420f, Screen.width * 0.85f);
-                    float bannerH = 46f;
+                    float bannerW = Mathf.Min(220f, Screen.width * 0.5f);
+                    float bannerH = 52f;
                     float bx = (Screen.width - bannerW) * 0.5f;
                     float by = 6f;
                     GUI.Box(new Rect(bx, by, bannerW, bannerH), GUIContent.none);
-                    GUIStyle limitBannerStyle = new GUIStyle(GUI.skin.label)
+                    GUIStyle limitCaptionStyle = new GUIStyle(GUI.skin.label)
                     {
-                        fontSize = 26,
+                        fontSize = 13,
+                        alignment = TextAnchor.MiddleCenter,
+                        normal = { textColor = Color.white }
+                    };
+                    GUIStyle limitValueStyle = new GUIStyle(GUI.skin.label)
+                    {
+                        fontSize = 28,
                         fontStyle = FontStyle.Bold,
                         alignment = TextAnchor.MiddleCenter,
                         normal = { textColor = Color.white }
                     };
-                    GUI.Label(new Rect(bx, by + 4, bannerW, bannerH - 8),
-                        $"Speed limit  {limitMph:F0} mph", limitBannerStyle);
+                    GUI.Label(new Rect(bx, by + 4, bannerW, 18f), "Speed limit", limitCaptionStyle);
+                    GUI.Label(new Rect(bx, by + 20, bannerW, 30f),
+                        $"{limitMph:F0} mph", limitValueStyle);
                 }
             }
         }

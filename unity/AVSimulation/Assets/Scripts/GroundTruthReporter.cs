@@ -1680,6 +1680,18 @@ public class GroundTruthReporter : MonoBehaviour
         }
         return roadGenerator.GetDefaultSpeedLimit();
     }
+
+    /// <summary>
+    /// Get road grade at a reference t (0 to 1). Returns 0 if not set.
+    /// </summary>
+    public float GetGradeAtT(float t)
+    {
+        if (roadGenerator == null)
+        {
+            return 0f;
+        }
+        return roadGenerator.GetGradeAtT(t);
+    }
     
     /// <summary>
     /// Get path curvature at current position (for anticipatory steering).
@@ -1711,9 +1723,15 @@ public class GroundTruthReporter : MonoBehaviour
             return 0f;
         }
 
-        // Signed angle between directions around +Y (left turn = positive).
-        float headingDeltaDeg = Vector3.SignedAngle(dirPrev, dirNext, Vector3.up);
-        float headingDeltaRad = headingDeltaDeg * Mathf.Deg2Rad;
+        // Signed heading change in the ground plane (XY with world +Z up per project frame).
+        // Unity's Vector3.up is world +Y — wrong axis here; use world +Z = Vector3.forward.
+        Vector3 cross = Vector3.Cross(dirPrev, dirNext);
+        float sign = 0f;
+        if (cross.sqrMagnitude > 1e-12f)
+        {
+            sign = Mathf.Sign(Vector3.Dot(cross, Vector3.forward));
+        }
+        float headingDeltaRad = Vector3.Angle(dirPrev, dirNext) * Mathf.Deg2Rad * sign;
         float arcLength = Mathf.Max(1e-4f, sampleDistance * 2f);
         return headingDeltaRad / arcLength;
     }
