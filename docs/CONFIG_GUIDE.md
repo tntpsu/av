@@ -1051,7 +1051,7 @@ Tier key: `1` = primary lever, `2` = subsystem tuning, `3` = advanced/inactive
 | `trajectory.reference_lookahead_entry_hysteresis_off` | 0.008 | — | 2 |
 | `trajectory.reference_lookahead_entry_distance_start_m` | 20.0 | m | 2 |
 | `trajectory.reference_lookahead_entry_distance_end_m` | 6.0 | m | 2 |
-| `trajectory.curve_phase_preview_curvature_min` | 0.003 | — | 2 |
+| `trajectory.curve_phase_preview_curvature_min` | 0.0025 | — | 2 |
 | `trajectory.curve_phase_preview_curvature_max` | 0.015 | — | 2 |
 | `trajectory.curve_phase_path_curvature_min` | 0.003 | — | 2 |
 | `trajectory.curve_phase_path_curvature_max` | 0.015 | — | 2 |

@@ -1382,7 +1382,7 @@ class AVStack:
     # Each entry: (config_section, key) → base_value.
     _DERIVABLE_CURVATURE_PARAMS: dict[tuple[str, str], float] = {
         # trajectory section — phase scheduler curvature thresholds
-        ("trajectory", "curve_phase_preview_curvature_min"): 0.003,
+        ("trajectory", "curve_phase_preview_curvature_min"): 0.0025,
         ("trajectory", "curve_phase_preview_curvature_max"): 0.015,
         ("trajectory", "curve_phase_path_curvature_min"): 0.003,
         ("trajectory", "curve_phase_path_curvature_max"): 0.015,

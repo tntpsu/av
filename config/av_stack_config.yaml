@@ -21,6 +21,7 @@ control:
     stanley_curvature_ff_enabled: false  # A/B tested on hairpin: no RMSE gain, 2× steer_jerk. Dead end for reactive control.
     stanley_ff_slew_rate_rad: 0.05       # Slew limiter for FF (rad/frame). Works mechanically, but FF itself is ineffective.
     # PP residual PID (hill_highway oscillation mitigation): slightly lower feedback vs error loop.
+    # 2026-03-22: 0.070 A/B vs 0.075 failed promotion (see GRADE_LATERAL_TUNING.md); keep 0.075 until a gated win.
     pp_feedback_gain: 0.075
     pp_max_steering_jerk: 18.0
     pp_curve_local_lookahead_floor_enabled: true
