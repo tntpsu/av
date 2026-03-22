@@ -322,6 +322,9 @@ control:
     # (brief speed dip during C-braking was tripping Stanley at v<4.5 m/s with κ≈0.01,
     # causing MPC→Stanley + perception dropout jerk).  0.0 disables this guard.
     stanley_inhibit_curvature_abs: 0.004
+    # LMPC → NMPC upshift thresholds (Step 5)
+    lmpc_max_speed_mps: 20.0           # above this + upshift_hysteresis → NONLINEAR_MPC
+    lmpc_max_heading_error_rad: 0.25   # large heading error → NONLINEAR_MPC (LMPC linearisation breaks)
 trajectory:
   trajectory_source: planner
   # Lane midpoint coordinate conversion uses the full PP lookahead distance to evaluate
@@ -776,6 +779,33 @@ trajectory:
     mpc_delay_frames: 2                    # Smith predictor delay buffer length (frames; ~66ms at 30fps)
     mpc_grade_clamp_rad: 0.15             # Max grade input to MPC (~8.5°)
     mpc_grade_ff_gain: 1.8                # Unity WheelCollider physics calibration
+  # ── NMPC (Step 5) ────────────────────────────────────────────────────────────
+  # Nonlinear MPC using full bicycle kinematics (sin/tan, no small-angle approximation).
+  # Activates when regime == NONLINEAR_MPC (speed > lmpc_max_speed_mps or
+  # |heading_error| > lmpc_max_heading_error_rad). Solved via scipy SLSQP;
+  # warm-started from previous solution for sub-10ms typical solve time.
+  # All keys use nmpc_ prefix to distinguish from LMPC (mpc_) params.
+  nmpc:
+    nmpc_enabled: false             # opt-in — enable via per-track overlay (e.g. mpc_autobahn.yaml)
+    nmpc_horizon: 20                # N prediction steps
+    nmpc_dt: 0.1                   # prediction step duration (s) — matches LMPC dt
+    nmpc_q_lat: 2.0                # lateral error weight (higher than LMPC base; nonlinear model is exact)
+    nmpc_q_heading: 5.0            # heading error weight
+    nmpc_r_steer: 1.0e-4           # steering magnitude cost (near-zero — same philosophy as LMPC)
+    nmpc_r_steer_rate: 1.5         # steering rate cost — PRIMARY comfort knob for NMPC
+    nmpc_q_lat_terminal_scale: 3.0 # terminal state lateral weight multiplier
+    nmpc_q_heading_terminal_scale: 3.0
+    nmpc_delta_rate_max: 0.5       # max normalised steering change per step
+    nmpc_max_accel: 3.0            # m/s²
+    nmpc_max_decel: 4.0            # m/s²
+    nmpc_v_min: 1.0                # m/s
+    nmpc_v_max: 35.0               # m/s (covers full NMPC speed envelope)
+    nmpc_max_solve_ms: 20.0        # solver time budget; fallback to LMPC if exceeded
+    nmpc_max_iter: 50              # SLSQP max iterations per frame
+    nmpc_ftol: 1.0e-4              # SLSQP function value tolerance
+    nmpc_fallback_lmpc: true       # true=fall back to LMPC on failure; false=fall back to PP
+    nmpc_warmup_frames: 5          # frames to relax rate constraint after activation
+    nmpc_grade_ff_gain: 1.8        # grade feedforward gain (matches LMPC)
 safety:
   max_speed: 14.0                     # Safety ceiling (headroom above target_speed=12.0)
   emergency_brake_threshold: 1.5

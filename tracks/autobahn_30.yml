@@ -1,0 +1,51 @@
+# Autobahn-30 track — high-speed oval for NMPC validation (Step 5)
+#
+# Design speed: 25 m/s (90 km/h) on straights — crosses the LMPC→NMPC boundary at 20 m/s.
+# Corner radius: R=600m (κ=0.00167) → lateral accel at 25 m/s = 25²×0.00167 = 1.04 m/s² (0.11g)
+#
+# Layout: simple oval — two 600m straights + two 180° R=600m semicircles.
+# Heading closure: 180° + 180° = 360° ✓
+# Total length: 2×600 + 2×π×600 ≈ 4,971m
+# At 25 m/s: ~199s/lap. 120s run covers ~60% (one full corner + both straights).
+#
+# Key test scenarios:
+#   600m straights: car reaches 25 m/s, sustains NMPC for ~20s; tests NMPC solve-time stability
+#   R600 semicircles: gentle MPC-territory arc at 21-25 m/s; tests LMPC→NMPC blend at speed
+#   Speed plateau test: constant 25 m/s in straight → NMPC regime maintained across 600 frames
+#
+# Usage:
+#   ./start_av_stack.sh --config config/mpc_autobahn.yaml \
+#       --track-yaml tracks/autobahn_30.yml --duration 120
+
+name: autobahn_30
+road_width: 8.0          # wider lane for high-speed operation
+lane_line_width: 0.2
+sample_spacing: 1.0
+loop: true
+start_distance: 5.0      # avoid edge-straddle at loop start
+speed_limit_mph: 90.0    # 40 m/s design speed — NMPC territory
+
+segments:
+  # Back straight — primary acceleration zone; car crosses 21 m/s LMPC→NMPC upshift here
+  - type: straight
+    length: 600
+    speed_limit_mph: 90.0
+
+  # East semicircle — R=600m, 180° left turn (κ=0.00167, very gentle)
+  - type: arc
+    radius: 600
+    angle_deg: 180
+    direction: left
+    speed_limit_mph: 75.0   # 33.5 m/s cap through corner (0.11g at 25 m/s — comfortable)
+
+  # Front straight — cruise at full 25 m/s; NMPC sustained
+  - type: straight
+    length: 600
+    speed_limit_mph: 90.0
+
+  # West semicircle — closes the oval
+  - type: arc
+    radius: 600
+    angle_deg: 180
+    direction: left
+    speed_limit_mph: 75.0

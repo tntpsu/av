@@ -1,0 +1,87 @@
+# Autobahn-30 track overlay — merges on top of config/av_stack_config.yaml at runtime.
+#
+# Purpose: NMPC validation (Step 5). Target speed 25 m/s crosses the 20 m/s LMPC→NMPC
+# boundary and activates the nonlinear MPC controller for the first time.
+#
+# Track: autobahn_30 (R600 corners, 600m straights, κ_max=0.00167)
+# Speed regime:
+#   0–4.5 m/s  → Stanley
+#   4.5–20 m/s → LMPC (primary, as on all other tracks)
+#   >21 m/s    → NMPC (above lmpc_max_speed_mps=20 + upshift_hysteresis=1)
+#
+# Usage:
+#   ./start_av_stack.sh --config config/mpc_autobahn.yaml \
+#       --track-yaml tracks/autobahn_30.yml --duration 120
+
+control:
+  lateral:
+    # High-speed PP settings (active only during Stanley/PP phases at <5 m/s)
+    steering_smoothing_alpha: 0.2     # fast response (highway: 0.3; faster at 25 m/s)
+    pp_feedback_gain: 0.0             # pure geometric PP — PID integral unstable at high speed
+    curve_feedforward_gain: 0.0       # noise curvature creates positive feedback at speed
+    curve_feedforward_threshold: 0.0
+    pp_speed_norm_enabled: true       # normalise PP gain by speed (base: disabled)
+    pp_speed_norm_min_scale: 0.50     # quadratic floor at 25 m/s: scale=(12/25)²=0.23 clamped to 0.5
+    pp_map_ff_gain: 1.0
+    # Curve intent — tuned for gentle R600 geometry and 25 m/s approach speed
+    curve_intent_arm_preview_min: 0.001     # fires at κ≥0.001 (base: 0.003; needed for R600 at κ=0.00167)
+    curve_intent_arm_rise_min: 0.0001
+    curve_intent_arm_distance_time_headway_s: 1.5  # longer preview at 25 m/s
+    curve_intent_arm_distance_min_m: 10.0
+    curve_intent_arm_distance_max_m: 60.0
+    curve_intent_startup_ignore_frames: 60
+  longitudinal:
+    target_speed: 25.0      # m/s — crosses LMPC→NMPC boundary (20+1=21 m/s upshift)
+    max_speed: 28.0         # headroom above target
+    speed_drag_gain: 0.008  # very light drag at 25 m/s (highway: 0.012, base: 0.035)
+    accel_target_smoothing_alpha: 0.5   # responsive (base: 0.86)
+  regime:
+    # NMPC upshift: speed > lmpc_max_speed_mps + upshift_hysteresis = 21 m/s
+    lmpc_max_speed_mps: 20.0           # threshold already in RegimeConfig default; explicit here for clarity
+    lmpc_max_heading_error_rad: 0.25   # also upshift to NMPC on large heading error
+    upshift_hysteresis_mps: 1.0
+    downshift_hysteresis_mps: 1.0
+    min_hold_frames: 20                # slightly shorter hold (25 m/s → regime changes are fast)
+
+trajectory:
+  target_speed: 25.0        # mirror of control.longitudinal.target_speed (dual registration)
+  # Curve phase thresholds — gentler for R600 (κ=0.00167) geometry
+  curve_phase_on: 0.30
+  curve_phase_off: 0.18
+  curve_phase_commit_on: 0.38
+  curve_phase_commit_min_frames: 3
+  curve_local_entry_on_base: 0.30
+  curve_local_entry_on_tight: 0.25
+  speed_planner:
+    accel_speed_max: 25.0
+    decel_speed_max: 25.0
+  speed_governor:
+    curve_preview_enabled: false          # map κ for speed cap (avoids perception noise)
+    curve_cap_use_preview_curvature: false
+  mpc:
+    mpc_v_max: 25.0             # LMPC handles 0–21 m/s; expand its upper bound
+    mpc_q_lat_terminal_scale: 1.0
+    mpc_bias_enabled: true      # gentle curvature → bias helps maintain centreline
+    mpc_bias_alpha: 0.005
+    mpc_bias_kappa_gain: 0.015
+    mpc_bias_max_correction: 0.002
+    mpc_bias_min_speed: 5.0
+    mpc_r_steer_rate: 1.5       # slightly looser rate penalty at high speed (base: 2.0)
+    mpc_horizon: 25             # extend horizon: 25×0.1s = 2.5s = 62.5m at 25 m/s
+  nmpc:
+    nmpc_enabled: true          # activate NMPC for this track
+    nmpc_horizon: 20
+    nmpc_dt: 0.1
+    nmpc_q_lat: 2.0
+    nmpc_q_heading: 5.0
+    nmpc_r_steer_rate: 1.5
+    nmpc_delta_rate_max: 0.5
+    nmpc_max_solve_ms: 20.0
+    nmpc_max_iter: 50
+    nmpc_fallback_lmpc: true    # fall back to LMPC (not PP) on solver failure
+
+safety:
+  max_speed: 28.0             # safety ceiling above target (base: 14.0; raised for autobahn)
+
+lateral_control:
+  steering_smoothing_alpha: 0.2   # mirror of control.lateral above

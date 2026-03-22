@@ -57,6 +57,15 @@ MPC_HEADING_ERROR_P95_RAD: float = 0.25       # rad — heading error P95 gate
 MPC_MIN_SPEED_DEFAULT_MPS: float = 3.0        # m/s — default MPC min speed (Step 4)
 MPC_MAX_CURVATURE_DEFAULT: float = 0.020      # 1/m — default curvature guard (R50, Step 4)
 
+# ── NMPC thresholds (Step 5) ─────────────────────────────────────────────────
+NMPC_SOLVE_TIME_BUDGET_MS: float = 20.0       # ms — hard solve budget (scipy SLSQP warm-started)
+NMPC_SOLVE_TIME_ALERT_MS: float = 15.0        # ms — soft alert threshold (approaching budget)
+NMPC_SOLVE_TIME_P95_MS_GATE: float = 20.0     # ms — P95 gate for analysis report pass/fail
+NMPC_FALLBACK_RATE_GATE: float = 0.01         # — max acceptable NMPC→LMPC fallback rate (1%)
+NMPC_INFEASIBILITY_RATE_GATE: float = 0.01    # — max acceptable infeasibility rate
+NMPC_REGIME_CHATTER_PER_MIN: float = 6.0      # LMPC↔NMPC transitions/min — chatter threshold
+NMPC_MIN_SPEED_MPS: float = 20.0              # m/s — LMPC→NMPC upshift threshold (lmpc_max_speed_mps)
+
 # ── Grade compensation ──────────────────────────────────────────────────────
 GRADE_MAX_SAFE_PCT: float = 10.0           # %     — max safe road grade
 GRADE_EMA_ALPHA: float = 0.3              # —     — EMA smoothing for grade signal
