@@ -2538,6 +2538,7 @@ class AVStack:
             'control_dt': control_dt,
             'current_position': current_position,
             'teleport_detected': teleport_detected,
+            'teleport_jump_m': float(teleport_distance),
             'teleport_guard_active': teleport_guard_active,
             'smoothed_grade': self._smoothed_grade,
         }
@@ -5937,6 +5938,8 @@ class AVStack:
         control_command.setdefault('map_segment_lookup_success_rate', float(map_segment_lookup_success_rate))
         control_command.setdefault('map_teleport_skip_count', int(map_teleport_skip_count))
         control_command.setdefault('map_odometer_jump_rate', float(map_odometer_jump_rate))
+        control_command.setdefault('teleport_detected', bool(fv.get('teleport_detected', False)))
+        control_command.setdefault('teleport_jump_m', float(fv.get('teleport_jump_m', 0.0)))
         control_command.setdefault('curvature_contract_consistent_controller', False)
         control_command.setdefault('curvature_contract_consistent_governor', False)
         control_command.setdefault('curvature_contract_consistent_intent', False)

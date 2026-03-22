@@ -34,7 +34,7 @@ public class AVBridge : MonoBehaviour
     public float topDownViewportWidth = 0.3f;
     public int topDownCaptureWidth = 640;
     public int topDownCaptureHeight = 480;
-    public int topDownTargetFps = 13;
+    public int topDownTargetFps = 15;
 
     [Header("Oracle Trajectory Telemetry")]
     [Tooltip("Send Unity centerline samples (oracle) in vehicle frame.")]

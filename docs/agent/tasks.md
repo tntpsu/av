@@ -1,15 +1,17 @@
 # AV Stack — Agent Memory: Tasks
 
-**Last updated:** 2026-02-17 (Step 3.5 — 2DOF FF alignment implemented, pending live validation)
+**Last updated:** 2026-03-22
 
 ---
 
 ## Current Focus
 
-**Step 3.5 — 2DOF Feedforward Alignment: IMPLEMENTED (2026-02-17)**
-- `MPCSolver._feedforward_delta_norm` helper + `ff_alignment_enabled` param + per-solve q correction
-- 4 new tests in `TestFFAlignment` (all pass). Full suite: 954 passing, 0 regressions.
-- Awaiting live Unity runs: highway_65 (non-regression, target ≥ 97) + hill_highway (e_lat adj_p50 ≤ 0.25m on R100, was 0.405m)
+**T-078 — Lookahead Contraction Smoothing (Workstream C2 revisited)**
+- **Goal:** Eliminate PP floor rescue at curve entry (-13.8 Trajectory pts, largest remaining issue)
+- **Root cause:** `compute_reference_lookahead` shortens lookahead too aggressively in COMMIT phase via `entry_weight = curve_local_phase`. Floor rescue mask (0.30 floor) compensates by snapping lookahead back, causing ±2m oscillation at peak entry.
+- **hill_highway C1/C2/C3 floor rescue:** peak 2.06/1.87/1.86m, mean 0.87/1.03/0.76m
+- **Related:** MPC→PP transitions at curve entry (frames 149/539) drop MPC exactly when floor rescue is active — fixing the contraction should reduce peak κ seen by curvature guard
+- **Status:** IN PROGRESS (2026-03-22)
 
 **Phase 2.8 VALIDATED on highway (2026-03-12).** MPC pipeline fixes (2.8.1–2.8.4) complete:
 - 2.8.1: Recovery mode suppression (skip ×1.2/×1.5 when MPC active)
@@ -27,6 +29,18 @@
 **Workstream C1 COMPLETE (2026-03-09):** Straight latch 36.7% → 15.6%. Fixed to 1.2s. C1/C3 peaks 0.572-0.612m. Highway non-regression 98.4/100.
 
 **Workstream C2 DEFERRED:** PP floor rescue (~1.7m) is structural arc-chord geometry on R40. Low ROI. Only revisit if mixed_radius/sweeping_highway exhibit actual gate failures.
+
+---
+
+## Completed Since Last Update
+
+| ID | Task | Date |
+|---|---|---|
+| — | Bridge regression fix: CameraCapture/AVBridge targetFPS 13→15; bridge/client.py persistent executor | 2026-03-22 |
+| — | Teleport observability: `control/teleport_detected` + `control/teleport_jump_m` in HDF5 (5 locations) | 2026-03-22 |
+| — | Tool updates: forced_pp_transition_count metric, priority-0 "STOP PP GAIN TUNING" recommendation, flat_oscillation_not_grade + forced_pp_regime_reset triage patterns | 2026-03-22 |
+| — | Clean baseline established: hill_highway 94.9/100, forced_pp_transition_count=0 (recording_20260322_165640.h5) | 2026-03-22 |
+| — | Codex A/B results invalidated: grade_steering_damping_gain/pp_feedback_gain/pp_max_steering_rate A/B tests all ran against artifact-corrupted baseline (2-4 false teleports each) — all revert to prior defaults | 2026-03-22 |
 
 ---
 
@@ -61,6 +75,7 @@
 | 2 | Config Phase 3: auto-derive curvature (T-076) | **✅ Done (2026-03-16)** |
 | 3 | Grade and banking | **✅ Done (2026-03-17)** — hill_highway 89.6/100 E2E validated |
 | 4 | MPC as primary lateral controller + q_lat auto-derive | **✅ Done (2026-03-17)** — curvature guard, 954 tests |
+| T-078 | Lookahead contraction smoothing at curve entry (PP floor rescue) | **IN PROGRESS (2026-03-22)** — #1 remaining issue, -13.8 Trajectory pts |
 | 3.5 | 2DOF FF alignment (`ff_alignment_enabled`) | **⏳ Pending live validation (2026-02-17)** — code + 4 tests complete, Unity runs pending |
 | 5 | NMPC + full hierarchical hybrid (plan.md §2.7-2.8) | Pending (entry: Step 3.5 validated) |
 | 5 | Lead vehicle following / ACC | Pending |

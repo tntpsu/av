@@ -2425,6 +2425,18 @@ class DataRecorder:
             dtype=np.int32
         )
         self.h5_file.create_dataset(
+            "control/teleport_detected",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int8
+        )
+        self.h5_file.create_dataset(
+            "control/teleport_jump_m",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
             "control/map_odometer_jump_rate",
             shape=(0,),
             maxshape=max_shape,
@@ -4838,6 +4850,8 @@ class DataRecorder:
         track_match_ok_list = []
         map_segment_lookup_success_rate_list = []
         map_teleport_skip_count_list = []
+        teleport_detected_list = []
+        teleport_jump_m_list = []
         map_odometer_jump_rate_list = []
         curvature_contract_consistent_controller_list = []
         curvature_contract_consistent_governor_list = []
@@ -5255,6 +5269,12 @@ class DataRecorder:
             _map_teleport_skip_count = getattr(cc, 'map_teleport_skip_count', -1)
             map_teleport_skip_count_list.append(
                 int(_map_teleport_skip_count) if _map_teleport_skip_count is not None else -1
+            )
+            _teleport_detected = getattr(cc, 'teleport_detected', False)
+            teleport_detected_list.append(1 if bool(_teleport_detected) else 0)
+            _teleport_jump_m = getattr(cc, 'teleport_jump_m', 0.0)
+            teleport_jump_m_list.append(
+                float(_teleport_jump_m) if _teleport_jump_m is not None else 0.0
             )
             _map_odometer_jump_rate = getattr(cc, 'map_odometer_jump_rate', np.nan)
             map_odometer_jump_rate_list.append(
@@ -6104,6 +6124,7 @@ class DataRecorder:
                        "curvature_source_divergence_abs", "curvature_selection_reason",
                        "map_health_ok", "track_match_ok",
                        "map_segment_lookup_success_rate", "map_teleport_skip_count",
+                       "teleport_detected", "teleport_jump_m",
                        "map_odometer_jump_rate",
                        "curvature_contract_consistent_controller",
                        "curvature_contract_consistent_governor",
@@ -6433,6 +6454,12 @@ class DataRecorder:
             )
             self.h5_file["control/map_teleport_skip_count"][current_size:] = np.array(
                 map_teleport_skip_count_list, dtype=np.int32
+            )
+            self.h5_file["control/teleport_detected"][current_size:] = np.array(
+                teleport_detected_list, dtype=np.int8
+            )
+            self.h5_file["control/teleport_jump_m"][current_size:] = np.array(
+                teleport_jump_m_list, dtype=np.float32
             )
             self.h5_file["control/map_odometer_jump_rate"][current_size:] = np.array(
                 map_odometer_jump_rate_list, dtype=np.float32

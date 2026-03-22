@@ -319,6 +319,40 @@ PATTERNS = [
         "check": lambda m: m.get("grade_available", False) and m.get("grade_osc_growth", 0) > 2.0,
     },
     {
+        "id": "flat_oscillation_not_grade",
+        "name": "Oscillation in flat/straight segments — grade damping is wrong lever",
+        "severity": "instability",
+        "category": "Control",
+        "config_lever": "control.lateral.pp_feedback_gain / MPC regime stability",
+        "fix_hint": (
+            "Flat-section lateral P95 is 50%+ higher than grade sections — oscillation is "
+            "NOT grade-driven. Grade damping changes will regress flat performance. "
+            "Investigate: (1) high-speed PP instability on straights, "
+            "(2) forced MPC→PP regime resets (see forced_pp_transition_count), "
+            "(3) PP feedback gain / lookahead at target speed."
+        ),
+        "check": lambda m: (
+            m.get("grade_available", False)
+            and m.get("flat_worse_than_grade_ratio", 0.0) > 1.5
+            and m.get("grade_lat_p95_m", 1.0) < 0.30  # grade is actually OK
+        ),
+    },
+    {
+        "id": "forced_pp_regime_reset",
+        "name": "Forced MPC→PP reset at high speed (false teleport guard)",
+        "severity": "instability",
+        "category": "Control",
+        "config_lever": "safety.teleport_distance_threshold / bridge cadence",
+        "fix_hint": (
+            "Regime selector was reset to PP at high speed by the teleport guard firing on "
+            "a frame-drop position jump. PP at >10 m/s is unstable. "
+            "Fix: (1) check bridge/Unity camera FPS for frame drops at high speed, "
+            "(2) raise safety.teleport_distance_threshold (default 2.0 m is too low at 12 m/s), "
+            "(3) do NOT tune PP gains until cadence is clean."
+        ),
+        "check": lambda m: m.get("forced_pp_transition_count", 0) > 0,
+    },
+    {
         "id": "grade_perception_dropout",
         "name": "Perception confidence drop on grade",
         "severity": "instability",
@@ -597,8 +631,9 @@ class TriageEngine:
                     planner_on_straight = (limiter == 5) & (curv_preview < 0.003) & (grade_speed < 10.0)
                     m["planner_false_cap_rate"] = float(np.mean(planner_on_straight))
 
-                # Windowed lateral oscillation on grade
+                # Windowed lateral oscillation on grade vs flat
                 grade_lat_err = arr("control/lateral_error")
+                flat_mask = np.abs(road_grade) <= 0.02
                 if grade_lat_err is not None and np.any(graded) and np.sum(graded) > 60:
                     graded_err = np.abs(grade_lat_err[graded])
                     win = 20
@@ -606,6 +641,15 @@ class TriageEngine:
                         vars_early = float(np.var(graded_err[:win]))
                         vars_late = float(np.var(graded_err[-win:]))
                         m["grade_osc_growth"] = float(vars_late / max(vars_early, 1e-6))
+                    # Compare grade vs flat P95 error — if flat >> grade, damping is wrong lever
+                    if np.any(flat_mask) and np.sum(flat_mask) > 30:
+                        flat_err = np.abs(grade_lat_err[flat_mask])
+                        grade_p95 = float(np.percentile(graded_err, 95))
+                        flat_p95 = float(np.percentile(flat_err, 95))
+                        m["flat_lat_p95_m"] = flat_p95
+                        m["grade_lat_p95_m"] = grade_p95
+                        # ratio > 1.5 means flat is 50%+ worse than grade → grade damping is not the fix
+                        m["flat_worse_than_grade_ratio"] = float(flat_p95 / max(grade_p95, 0.01))
 
                 # Per-wheel diagnostics (Step 3D)
                 wheel_force = arr("vehicle/wheel_contact_force")
@@ -663,6 +707,26 @@ class TriageEngine:
                         mpc_steer = ctrl_steer[mpc_mask]
                         sign_changes = np.sum(np.diff(np.sign(mpc_steer)) != 0)
                         m["mpc_steering_osc_rate"] = float(sign_changes / len(mpc_steer))
+
+            # Forced MPC→PP transition detection: regime resets at high speed due to
+            # teleport guard false-firing on frame drops. PP at >10 m/s is unstable.
+            if regime is None:
+                regime = arr("control/regime")
+            _tp_detected = arr("control/teleport_detected")
+            _spd = arr("vehicle/speed")
+            if regime is not None and len(regime) > 1:
+                forced_pp = 0
+                for _i in range(1, len(regime)):
+                    was_mpc = float(regime[_i - 1]) >= 0.5
+                    now_pp = float(regime[_i]) < 0.5
+                    if was_mpc and now_pp:
+                        _s = float(_spd[_i]) if _spd is not None and _i < len(_spd) else 0.0
+                        if _tp_detected is not None:
+                            if _i < len(_tp_detected) and float(_tp_detected[_i]) > 0.5:
+                                forced_pp += 1
+                        elif _s > 6.0:
+                            forced_pp += 1
+                m["forced_pp_transition_count"] = forced_pp
 
             # Pitch signal health
             pitch = arr("vehicle/pitch_rad")

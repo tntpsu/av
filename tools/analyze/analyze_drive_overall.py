@@ -1835,21 +1835,38 @@ def _print_summary_report(recording_path: Path, summary: Dict, analyze_to_failur
             with h5py.File(recording_path, "r") as f:
                 if "control/regime" in f:
                     regime = np.array(f["control/regime"][:])
+                    speed_arr = np.array(f["vehicle/speed"][:]) if "vehicle/speed" in f else None
+                    teleport_arr = (
+                        np.array(f["control/teleport_detected"][:]) > 0
+                        if "control/teleport_detected" in f else None
+                    )
                     transitions = []
+                    forced_resets = 0
                     for i in range(1, len(regime)):
                         prev_mpc = regime[i - 1] >= 0.5
                         curr_mpc = regime[i] >= 0.5
                         if prev_mpc != curr_mpc:
                             direction = "PP→MPC" if curr_mpc else "MPC→PP"
-                            spd = None
-                            if "vehicle/speed" in f and i < len(f["vehicle/speed"]):
-                                spd = float(np.array(f["vehicle/speed"][i]))
-                            transitions.append((i, direction, spd))
+                            spd = float(speed_arr[i]) if speed_arr is not None and i < len(speed_arr) else None
+                            # Classify MPC→PP: forced reset (teleport guard) or natural downshift
+                            cause = ""
+                            if not curr_mpc:  # MPC→PP
+                                if teleport_arr is not None and i < len(teleport_arr) and teleport_arr[i]:
+                                    cause = " (forced reset — teleport guard)"
+                                    forced_resets += 1
+                                elif teleport_arr is None and spd is not None and spd > 6.0:
+                                    # Legacy recording: no teleport field — flag anomalous high-speed drop
+                                    cause = " (anomalous — investigate cadence)"
+                                    forced_resets += 1
+                            transitions.append((i, direction, spd, cause))
                     if transitions:
                         print(f"   Regime Transitions: {len(transitions)}")
-                        for fr, direction, spd in transitions[:10]:
+                        if forced_resets > 0:
+                            print(f"   *** {forced_resets} forced reset(s) detected — "
+                                  f"PP ran at high speed due to false teleport guard trigger ***")
+                        for fr, direction, spd, cause in transitions[:10]:
                             spd_str = f" @ {spd:.1f} m/s" if spd is not None else ""
-                            print(f"     Frame {fr}: {direction}{spd_str}")
+                            print(f"     Frame {fr}: {direction}{spd_str}{cause}")
                         if len(transitions) > 10:
                             print(f"     ... and {len(transitions) - 10} more")
         except Exception:

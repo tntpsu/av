@@ -1,7 +1,62 @@
 # AV Stack — Agent Memory: Current State
 
-**Last updated:** 2026-02-17
-**Current milestone:** Step 3.5 — True root cause of curve lateral offset identified and fixed. 2DOF (Part B rate-bias) is still active and correct. Test suite: 25/25 MPC tests passing.
+**Last updated:** 2026-03-22
+**Current milestone:** Bridge regression fixed + clean baseline established. hill_highway 94.9/100. Next: lookahead contraction smoothing at curve entry (PP floor rescue, -13.8 Trajectory pts).
+
+---
+
+## Current Active Work (2026-03-22)
+
+### Bridge Frame-Drop Regression — ROOT CAUSE FIXED (2026-03-22)
+
+**Problem:** All hill_highway recordings from 2026-03-21 onwards had 2–4 false teleport-guard fires per run, forcing MPC→PP reset at high speed and causing artifact-driven lateral oscillation. Codex ran 3 A/B tests (grade_steering_damping_gain, pp_feedback_gain, pp_max_steering_rate) — all measured artifact-driven behavior, not real oscillation. **All three A/B results are invalid.**
+
+**Root causes (two compounding bugs introduced in commit 08eda7f):**
+1. **`CameraCapture.cs` / `AVBridge.cs`: `targetFPS: 15 → 13`.** 13fps doesn't divide cleanly into Unity's 60Hz physics tick (15fps gives 4 ticks/frame; 13fps is irregular). Produces occasional 2-frame gaps → position jump = 12 m/s × 154ms = 1.85m, approaching the 2.0m teleport threshold.
+2. **`bridge/client.py`: per-frame `ThreadPoolExecutor` context manager.** `with ThreadPoolExecutor(max_workers=1) as ex:` creates + joins a new thread pool every call, adding 20–80ms variable latency on macOS. Combined with 13fps irregularity → total gap exceeds 2.0m threshold → false teleport fire.
+
+**Fix (3 files):**
+- `unity/AVSimulation/Assets/Scripts/CameraCapture.cs` — `targetFPS: 13 → 15`
+- `unity/AVSimulation/Assets/Scripts/AVBridge.cs` — `topDownTargetFps: 13 → 15`
+- `bridge/client.py` — replaced per-frame context manager with persistent `_parallel_executor` (ThreadPoolExecutor created in `__init__`, reused every frame, shut down in `close()`)
+
+**New observability (2 files, 5 HDF5 locations):**
+- `av_stack/orchestrator.py` — `teleport_jump_m` added to fv dict and control_command setdefaults
+- `data/recorder.py` — `control/teleport_detected` (int8) and `control/teleport_jump_m` (float32) recorded in HDF5
+
+**Tool updates (3 files):**
+- `tools/analyze/analyze_drive_overall.py` — MPC transitions now classified as `(forced reset — teleport guard)` vs normal; warning printed when forced_resets > 0
+- `tools/oscillation_attribution.py` — `forced_pp_transition_count` metric; priority-0 "STOP PP GAIN TUNING" recommendation fires when > 0
+- `tools/debug_visualizer/backend/triage_engine.py` — `flat_oscillation_not_grade` pattern (flat >> grade → grade damping is wrong lever); `forced_pp_regime_reset` pattern (teleport guard false-fired)
+
+**Verification (recording_20260322_165640.h5):**
+- `forced_pp_transition_count: 0` ✅ — zero false teleport fires
+- Score: **94.9/100** (was 89.6 on clean 2026-03-17 baseline; the Step 4 q_lat auto-derive improvement now visible without artifact noise)
+- MPC active: 75.4% (811/1075 frames)
+- 5 regime transitions (2 are MPC→PP at curve entry, addressed next)
+- Tests: 13/13 comfort gate Tier 1, 124/124 scoring + auto-derive + registry ✅
+
+**Note: Unity rebuild required** for `targetFPS: 15` to take effect. Rebuild triggered with this run. Future runs with `--skip-unity-build-if-clean` will use the fixed player.
+
+---
+
+### Remaining Open Issue: Lookahead Contraction + PP Floor Rescue at Curve Entry
+
+**Score impact:** -13.8 pts Trajectory (lat RMSE 0.297m, P95 0.477m). This is the #1 remaining issue.
+
+**Signature from current run (recording_20260322_165640.h5):**
+- C1: `floorRescueMax=2.06m`, `floorRescueMean=0.87m`, `lateTurnIn=YES`, `onsetVsStart=+15fr`
+- C2: `floorRescueMax=1.87m`, `floorRescueMean=1.03m`
+- C3: `floorRescueMax=1.86m`, `floorRescueMean=0.76m`, `lateTurnIn=YES`, `onsetVsStart=+13fr`
+
+**Also:** 2 MPC→PP transitions at curve entry (frame 149 @ 11.7 m/s, frame 539 @ 11.0 m/s). These are NOT teleport-driven — the curvature guard fires transiently at curve entry when instantaneous κ spikes momentarily. MPC drops out exactly when PP floor rescue is most critical.
+
+**Root cause (same as s_loop Workstream C2 — now blocking on hill_highway):**
+`compute_reference_lookahead` shortens lookahead aggressively during COMMIT phase (`entry_weight = curve_local_phase`). This steepens the floor drop → larger floor rescue. On hill_highway R100 curves (vs s_loop R40), the absolute error is larger because the entry geometry is less forgiving.
+
+**Next workstream: Lookahead Contraction Smoothing (Workstream C2 revisited)**
+
+---
 
 ### Step 3.5: Curve Lateral Offset — TRUE ROOT CAUSE FOUND AND FIXED (2026-02-17)
 
@@ -86,14 +141,19 @@ PP:       κ ≥ 0.020 OR MPC solver failure (fallback)
 - mixed_radius (κ_mpc=0.020): q_lat = `2.81` (safe — MPC only runs R150/R200)
 - Explicit overlay wins (same mechanism as T-076)
 
-**E2E result — hill_highway:** **89.6/100** (was 79.0, +10.6 points)
+**E2E result — hill_highway (Step 4 clean baseline, 2026-03-17):** **89.6/100** (was 79.0, +10.6 points)
 - Trajectory yellow cap CLEARED (was blocking at 79.0)
 - MPC active 94.2% of frames (1620/1719)
 - 1 regime transition total (PP→MPC at startup, frame 99)
 - Zero fallbacks, solve time P95=0.77ms
 - Recording: `recording_20260317_230254.h5`
 
-**Remaining open issue (not blocking):** Late turn-in on all 3 R100 curves (+23 frames = ~0.77s). Car arrives at curve entry already displaced → peak e_lat 0.64m (momentary). This is a trajectory planning / curve intent timing issue, separate from MPC lateral tracking. Score would improve further if turn-in onset were earlier.
+**E2E result — hill_highway (post bridge-fix clean run, 2026-03-22):** **94.9/100** (+5.3 pts vs Mar 17 — bridge artifact removal reveals true gain)
+- MPC active 75.4% (811 frames); 5 transitions, 0 forced resets
+- Lat RMSE 0.297m, P95 0.477m — PP floor rescue at curve entry now the #1 issue
+- Recording: `recording_20260322_165640.h5`
+
+**Remaining open issue (BLOCKING -13.8 pts):** PP floor rescue at all 3 R100 curve entries (peak 2.06m/1.87m/1.86m). Lookahead contraction is too abrupt during COMMIT phase. Late turn-in on C1/C3 (+13-15 frames). MPC→PP transitions at curve entry (frames 149, 539) compound the issue.
 
 **Tests:** 8 new tests in TestMPCWeightDerivation class in test_auto_derive_curvature.py. Total: 936 passing.
 

@@ -446,6 +446,9 @@ def analyze_oscillation_attribution(
         else:
             ts = ts - ts[0]
 
+        regime_raw = _read_1d(f, "control/regime", n_ctrl)
+        speed_raw = _read_1d(f, "vehicle/speed", n_ctrl)
+        teleport_raw = _read_1d(f, "control/teleport_detected", n_ctrl)
         mpc_e = _read_1d(f, "control/mpc_e_lat", n_ctrl)
         mpc_on = _read_1d(f, "control/mpc_using_ground_truth", n_ctrl)
         if mpc_e is not None and mpc_on is not None and lat is not None:
@@ -495,6 +498,12 @@ def analyze_oscillation_attribution(
         blend = blend[:n]
     if gt_curv is not None:
         gt_curv = gt_curv[:n]
+    if regime_raw is not None:
+        regime_raw = regime_raw[:n]
+    if speed_raw is not None:
+        speed_raw = speed_raw[:n]
+    if teleport_raw is not None:
+        teleport_raw = teleport_raw[:n]
 
     end = n
     if pre_failure_only and failure_frame is not None:
@@ -534,6 +543,27 @@ def analyze_oscillation_attribution(
     blend_in_transition_rate = 0.0
     if blend_w is not None and len(blend_w) > 0:
         blend_in_transition_rate = float(np.mean((blend_w > 0.01) & (blend_w < 0.99)))
+
+    # Detect forced MPC→PP transitions: MPC drops to PP at speed well above activation threshold.
+    # Caused by teleport guard false-firing on frame drops at high speed — forces PP into its
+    # known high-speed instability regime. Threshold: speed > 6 m/s (3× mpc_min + hysteresis).
+    forced_pp_transition_count = 0
+    regime_w = regime_raw[sl] if regime_raw is not None else None
+    speed_w = speed_raw[sl] if speed_raw is not None else None
+    tp_w = teleport_raw[sl] if teleport_raw is not None else None
+    if regime_w is not None and len(regime_w) > 1:
+        for i in range(1, len(regime_w)):
+            was_mpc = float(regime_w[i - 1]) >= 0.5
+            now_pp = float(regime_w[i]) < 0.5
+            if was_mpc and now_pp:
+                spd = float(speed_w[i]) if speed_w is not None and i < len(speed_w) else 0.0
+                if tp_w is not None:
+                    # New recordings: use explicit teleport flag
+                    if i < len(tp_w) and float(tp_w[i]) > 0.5:
+                        forced_pp_transition_count += 1
+                elif spd > 6.0:
+                    # Legacy recordings: high-speed MPC→PP is anomalous
+                    forced_pp_transition_count += 1
 
     subtype = _classify_subtype(
         limiter_active_rate=limiter_active_rate,
@@ -579,6 +609,19 @@ def analyze_oscillation_attribution(
         runaway=runaway,
         include_hill_co_tuning=include_hill,
     )
+    if forced_pp_transition_count > 0:
+        recs.insert(0, {
+            "priority": "0",
+            "area": "bridge/cadence",
+            "action": (
+                f"STOP PP GAIN TUNING: {forced_pp_transition_count} forced MPC→PP reset(s) detected "
+                f"(teleport guard false-fired on frame drop at high speed). "
+                f"PP oscillation is an artifact of forced regime switch, not a gain issue. "
+                f"Fix: (1) check bridge cadence for frame drops at >10 m/s, "
+                f"(2) raise safety.teleport_distance_threshold above 2.0 m or make it speed-adaptive, "
+                f"(3) investigate bridge/Unity camera FPS vs frame drop rate."
+            ),
+        })
 
     return {
         "schema_version": SCHEMA_VERSION,
@@ -608,6 +651,7 @@ def analyze_oscillation_attribution(
             "regime_blend_transition_rate": round(blend_in_transition_rate, 4),
             "band_energy_ratio_steering_0p2_2hz": round(e_band_steering, 4),
             "band_energy_ratio_error_0p2_2hz": round(e_band_err, 4),
+            "forced_pp_transition_count": forced_pp_transition_count,
         },
         "lead_lag_frames": {
             "perception_to_reference": lag_perc_ref,

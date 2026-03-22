@@ -11,6 +11,8 @@ import threading
 import time
 from typing import Any, Dict, Optional, Tuple
 
+import concurrent.futures
+
 import numpy as np
 import requests
 from PIL import Image
@@ -46,6 +48,11 @@ class UnityBridgeClient:
         self.session = self._new_bridge_session()
         # Second session for parallel vehicle GET (Session is not thread-safe across threads).
         self._vehicle_parallel_session = self._new_bridge_session()
+        # Persistent executor for parallel vehicle fetch — reused every frame to avoid
+        # per-call thread creation/join overhead (~20-80 ms on macOS per call).
+        self._parallel_executor = concurrent.futures.ThreadPoolExecutor(
+            max_workers=1, thread_name_prefix="vehicle-parallel"
+        )
         if use_raw_camera is None:
             v = os.environ.get("AV_STACK_RAW_CAMERA", "1").strip().lower()
             use_raw_camera = v not in ("0", "false", "no", "off")
@@ -396,17 +403,14 @@ class UnityBridgeClient:
         Returns:
             (frame_data, vehicle_state_dict, front_ready_mono_s, vehicle_ready_mono_s)
         """
-        from concurrent.futures import ThreadPoolExecutor
-
         def _vehicle_worker() -> Tuple[Optional[Dict], float]:
             d = self._sync_get_latest_vehicle_state(self._vehicle_parallel_session)
             return d, time.monotonic()
 
-        with ThreadPoolExecutor(max_workers=1) as ex:
-            fut = ex.submit(_vehicle_worker)
-            frame_data = self.get_latest_camera_frame_with_metadata(camera_id=camera_id)
-            front_ready_mono_s = time.monotonic()
-            vehicle_state_dict, vehicle_ready_mono_s = fut.result()
+        fut = self._parallel_executor.submit(_vehicle_worker)
+        frame_data = self.get_latest_camera_frame_with_metadata(camera_id=camera_id)
+        front_ready_mono_s = time.monotonic()
+        vehicle_state_dict, vehicle_ready_mono_s = fut.result()
         return frame_data, vehicle_state_dict, front_ready_mono_s, vehicle_ready_mono_s
 
     def get_next_vehicle_state(self) -> Optional[Dict]:
@@ -553,6 +557,10 @@ class UnityBridgeClient:
             pass
         try:
             self._vehicle_parallel_session.close()
+        except Exception:
+            pass
+        try:
+            self._parallel_executor.shutdown(wait=False)
         except Exception:
             pass
 
