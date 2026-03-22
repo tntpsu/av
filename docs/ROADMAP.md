@@ -1,7 +1,7 @@
 # Robust Full-Stack Roadmap (Unified, Layered, and Gated)
 
 **Last Updated:** 2026-03-20
-**Current Focus:** Layer 2, Stage 2 (Robustness & Speed Expansion) — Step 3.5 (2DOF FF + curve-contamination clamp) implemented, pending live E2E validation
+**Current Focus:** Layer 2, Stage 2 (Robustness & Speed Expansion) — oscillation attribution (S2-M6) + Step 3.5 (2DOF FF + curve-contamination clamp) implemented, pending live E2E validation
 **Change-Control Rule:** If scope, stage, phase status, or promotion gates change, update this roadmap in the same PR/commit before considering work complete.
 
 ## Scope
@@ -279,7 +279,7 @@ This stage is complete and retained for traceability. The active program focus i
   - **Stage 4 (pre-existing):** Deterministic latency injection via `--lock-latency-ms` in trajectory-locked harness.
   - **Stage 5 (pre-existing + extended):** `counterfactual_layer_swap.py` — now includes 4-run perception self/cross matrix and 3-layer scorecard (`upstream-perception-dominant`, `upstream-trajectory-dominant`, `downstream-control-dominant`, etc.).
   - **Stage 6 (T-025):** PhilViz Chain tab — per-frame causal chain view (Perception → Trajectory → Control) with stale-propagation banner, replay-mode locked-layer context, and `perception_lock_source_recording` badge key.
-  - **Cadence triage:** `tools/analyze/cadence_breakdown.py` (CLI + JSON), PhilViz **Cadence** tab (`/api/recording/.../cadence-breakdown`), gate bundle `cadence_breakdown/*.json`. Attributes wait_input vs pipeline, queue depth, frame-id skips; `UNITY_DT_SPIKE` uses `vehicle/unity_delta_time` (not `stream_front_unity_dt_ms`, which is stream lag). CLI/API default **`target_hz`** matches **`stack.target_loop_hz`** in `config/av_stack_config.yaml` when not overridden.
+  - **Cadence triage:** `tools/analyze/cadence_breakdown.py` (CLI + JSON), PhilViz **Cadence** tab (`/api/recording/.../cadence-breakdown`), gate bundle `cadence_breakdown/*.json`. Attributes wait_input vs pipeline, queue depth, frame-id skips; `UNITY_DT_SPIKE` uses `vehicle/unity_delta_time` (not `stream_front_unity_dt_ms`, which is stream lag). Recordings also embed **`control/perf_*_ms`** layer timings (perception / planning / control / recorder ingest / wait_input); see `docs/plans/perf_layer_timings_impl.md`. CLI/API default **`target_hz`** matches **`stack.target_loop_hz`** in `config/av_stack_config.yaml` when not overridden.
   - **Perf sequencing:** While **`QUEUE_BACKLOG`** is present (front queue pinned), prioritize **consumer / ingest** (bridge loop, async ingest, Unity/Python FPS alignment, Plan A transport) over **Plan B** mask/recorder micro-opts; see `docs/plans/perf_pareto_plan_b_postprocess_recorder_arch.md` (Priority note). **Shipped:** `stack.camera_prefetch`, `stack.clear_bridge_camera_queue_on_start`, `stack.bridge_max_camera_queue` → `AV_BRIDGE_MAX_CAMERA_QUEUE`, bridge **drop counter** + **drain_queue** (see `docs/plans/perf_pareto_plan_a_bridge_gpu_topdown.md`).
 
 **Gate to pass Stage 1** ✓ *Passed via S1-M39 validation (2026-02-22)*
@@ -294,6 +294,8 @@ Stages 2–4 as originally scoped (turn exit, turn-to-turn handoff, longer-horiz
 implicitly achieved through S1-M36–S1-M39: the stack now runs 60s full-course passes on two
 tracks at 95+ score with zero lane violations. The meaningful next barrier is not turn-shape
 coverage — it is the ability to iterate safely and quickly as the system grows in scope.
+
+- **Trajectory / signal integrity (2026-03-21):** Heading-zero gate releases when the **curve scheduler** reports far-preview phase, **ENTRY/COMMIT**, or **time-to-curve** inside a configurable window (not only `preview_curvature_abs`); YAML tweaks for **earlier** curve anticipation (`curve_phase_preview_curvature_min`, `curve_preview_far_on`, `curve_local_phase_reentry_gate_min`). Validates with `tests/test_steering_jerk_and_heading_gate_fixes.py`.
 
 **Current micro-steps**
 - `S2-M1` (next): Automated comfort-gate regression — HDF5-replay-based pytest that checks all
@@ -320,6 +322,8 @@ coverage — it is the ability to iterate safely and quickly as the system grows
   mixed_radius (94.1), sweeping_highway (93.6), hairpin_15 (91.6 with Stanley k=3.0).
   All meet promotion gate: RMSE ≤ 0.40m, 0 e-stops, all comfort gates pass (3× runs each).
   Curvature-adjusted scoring deployed (floor=3×|κ|). Per-track gate overrides removed.
+- `S2-M6` ✅ **COMPLETE (2026-03-20)**: Oscillation attribution — shared library `tools/oscillation_attribution.py` (lead–lag on perception→ref→error→steer, subtype, `recommended_fixes` incl. hill-highway co-tuning guidance). **Auto-tag:** `attrs['metadata']` (`recording_provenance.track_id`, `recording_name`, notes) + filename match `hill_highway` (see `tracks/hill_highway.yml`). **PhilViz:** `GET .../oscillation-attribution` + Chain tab (default auto). **CLI:** `python tools/oscillation_attribution.py <recording.h5>`; overrides `--force-hill-highway` / `--no-hill-highway`. **Tests:** `tests/test_oscillation_attribution.py`. Complements `BlameTracer`; pre-failure window aligns with `drive_summary` `failure_frame`.
+  - **Tuning (2026-03-21):** `av_stack_config.yaml` `control.lateral` — PP oscillation mitigation (`pp_feedback_gain` 0.075, feedback_gain 1.05–1.25, `base_error_smoothing_alpha` 0.78, `steering_smoothing_alpha` 0.92, `grade_steering_damping_gain` 6.5, `curve_mode_speed_cap_mps` 7.0). **Regression:** `tests/test_oscillation_regression_metrics.py`; optional env `AV_HILL_HIGHWAY_OSCILLATION_REGRESSION_H5` for post-fix HDF5.
 
 **Gate to pass Stage 2**
 - Automated comfort-gate CI passing without Unity (S2-M1).

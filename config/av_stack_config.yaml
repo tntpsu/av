@@ -9,15 +9,17 @@ control:
     lateral_weight: 0.5
     error_clip: 1.57
     integral_limit: 0.1
-    steering_smoothing_alpha: 0.9
-    grade_steering_damping_gain: 5.0    # Steering smoothing alpha reduction per rad of grade
+    steering_smoothing_alpha: 0.92
+    # Hill / grade: stronger smoothing reduction under grade (reduces lateral chatter on hill_highway).
+    grade_steering_damping_gain: 6.5    # Steering smoothing alpha reduction per rad of grade
     control_mode: pure_pursuit
     stanley_k: 1.5                 # base default; hairpin overlay sets 3.0 (validated 59→79)
     stanley_soft_speed: 2.0
     stanley_heading_weight: 1.0
     stanley_curvature_ff_enabled: false  # A/B tested on hairpin: no RMSE gain, 2× steer_jerk. Dead end for reactive control.
     stanley_ff_slew_rate_rad: 0.05       # Slew limiter for FF (rad/frame). Works mechanically, but FF itself is ineffective.
-    pp_feedback_gain: 0.1
+    # PP residual PID (hill_highway oscillation mitigation): slightly lower feedback vs error loop.
+    pp_feedback_gain: 0.075
     pp_max_steering_jerk: 18.0
     pp_curve_local_lookahead_floor_enabled: true
     pp_curve_local_lookahead_floor_speed_table:
@@ -45,11 +47,11 @@ control:
     pp_ref_jump_clamp: 0.5
     pp_stale_decay: 0.98
     pp_max_steering_rate: 0.4
-    feedback_gain_min: 1.1
-    feedback_gain_max: 1.4
+    feedback_gain_min: 1.05
+    feedback_gain_max: 1.25
     feedback_gain_curvature_min: 0.003
     feedback_gain_curvature_max: 0.03
-    base_error_smoothing_alpha: 0.7
+    base_error_smoothing_alpha: 0.78
     heading_error_smoothing_alpha: 0.45
     straight_window_frames: 60
     straight_oscillation_high: 0.2
@@ -192,7 +194,8 @@ control:
     curve_commit_mode_dynamic_deficit_min: 0.03
     curve_commit_mode_retrigger_cooldown_frames: 12
     curve_mode_speed_cap_enabled: true
-    curve_mode_speed_cap_mps: 7.5
+    # Slightly lower cap on graded curves to ease lateral demand / oscillation coupling.
+    curve_mode_speed_cap_mps: 7.0
     curve_mode_speed_cap_min_ratio: 0.55
     speed_gain_min_speed: 4.0
     speed_gain_max_speed: 10.0
@@ -428,7 +431,8 @@ trajectory:
   reference_lookahead_entry_hysteresis_off: 0.008
   reference_lookahead_entry_distance_start_m: 20.0
   reference_lookahead_entry_distance_end_m: 6.0
-  curve_phase_preview_curvature_min: 0.003
+  # Slightly lower min so map-preview κ builds anticipation earlier (late turn-in / heading gate).
+  curve_phase_preview_curvature_min: 0.0025
   curve_phase_preview_curvature_max: 0.015
   curve_phase_path_curvature_min: 0.003
   curve_phase_path_curvature_max: 0.015
@@ -439,7 +443,7 @@ trajectory:
   curve_phase_confidence_min: 0.35
   curve_phase_confidence_max: 0.8
   curve_phase_confidence_floor_scale: 0.6
-  curve_preview_far_on: 0.1
+  curve_preview_far_on: 0.08
   curve_local_phase_path_curvature_min: 0.003
   curve_local_phase_path_curvature_max: 0.015
   curve_local_entry_severity_curvature_min: 0.003
@@ -456,7 +460,7 @@ trajectory:
   curve_local_commit_distance_ready_m: 3.0  # track-specific; 8.0 works on s_loop/mixed_radius (long approaches) but causes straight-latch on hairpin (short straights + back-to-back arcs)
   curve_local_commit_time_ready_s: 0.60
   curve_local_phase_use_time_term: false
-  curve_local_phase_reentry_gate_min: 0.10
+  curve_local_phase_reentry_gate_min: 0.08
   curve_local_phase_reentry_path_min: 0.15
   curve_phase_ema_alpha: 0.45
   curve_phase_on: 0.45
@@ -659,6 +663,11 @@ trajectory:
   traj_heading_zero_gate_heading_on_abs_rad: 0.035
   traj_heading_zero_gate_heading_off_abs_rad: 0.061
   traj_heading_zero_gate_curvature_preview_off_threshold: 0.001   # CHANGED: 0.0015 → 0.001 (releases heading gate earlier; 0.001 is in the safe range [0.0006, 0.0025])
+  # Release heading-zero suppression when curve scheduler sees upcoming geometry (not only |κ_preview|).
+  traj_heading_zero_gate_release_far_preview_enabled: true
+  traj_heading_zero_gate_far_preview_phase_min: 0.06
+  traj_heading_zero_gate_release_on_scheduler_entry_commit: true
+  traj_heading_zero_gate_time_to_curve_release_s: 1.35
   dynamic_effective_horizon_enabled: true
   dynamic_effective_horizon_min_m: 3.0
   dynamic_effective_horizon_max_m: 20.0
@@ -781,9 +790,8 @@ logging:
 # Python main loop + bridge transport (see docs/plans/perf_pareto_plan_a_bridge_gpu_topdown.md)
 stack:
   # Match Unity CameraCapture.targetFPS (CarPrefab + CameraCapture.cs default).
-  # Cadence on recording_20260321_170636: mean loop ~17.9 Hz with queue pinned → set below
-  # nominal 20 until stack work per iteration drops (or raise Hz after profiling).
-  target_loop_hz: 15.0
+  # 13 Hz: aligned with sustained consumer throughput (queue was pinned at 15 Hz target).
+  target_loop_hz: 13.0
   # Use GET /api/camera/latest/raw (no JPEG round-trip). Set false for legacy bridge only.
   use_raw_camera_transport: true
   # Bridge FIFO depth per camera (freshness vs buffering). start_av_stack.sh exports AV_BRIDGE_MAX_CAMERA_QUEUE from this.
@@ -792,6 +800,13 @@ stack:
   clear_bridge_camera_queue_on_start: true
   # Background thread GETs latest front camera while the stack runs perception/control (overlap I/O).
   camera_prefetch: true
+  # POST /api/trajectory from a background thread (latest-wins) so the main loop is not blocked.
+  async_trajectory_transport: true
+  # Overlap GET vehicle/state with camera fetch (separate requests.Session on worker thread).
+  parallel_vehicle_state_fetch: true
+  # If true, requests uses OS/env proxy settings for the Unity bridge (rare). Default false
+  # skips macOS System Configuration proxy resolution on every localhost call (faster).
+  bridge_trust_proxy_env: false
   # Top-down for HDF5: 1=every frame, N=every Nth recorded frame, 0=never fetch.
   # Extra bridge GET+decode each tick; increase if chasing higher control Hz.
   topdown_recording_interval_frames: 3
@@ -799,6 +814,9 @@ perception:
   use_gpu: true
   # Apple Silicon: use MPS when CUDA is unavailable (requires PyTorch with MPS build).
   prefer_mps: true
+  # Segmentation U-Net resize target [height, width] before inference. Default was [320, 640].
+  # [256, 512] is a conservative downscale (512×256) for cadence; validate on oval/s_loop.
+  segmentation_input_size: [256, 512]
   record_segmentation_mask: false
   low_visibility_fallback_enabled: true
   low_visibility_fallback_blend_alpha: 0.35

@@ -195,7 +195,7 @@ Boosts steering rate/jerk limits during curves when vehicle is falling behind th
 
 | Parameter | Default | Range | Effect |
 |---|---|---|---|
-| `curve_mode_speed_cap_mps` | 7.5 m/s | [6.0, 10.0] | Speed cap in active curve mode; reduced from 8.0 at S-turn transitions |
+| `curve_mode_speed_cap_mps` | 7.0 m/s | [6.0, 10.0] | Speed cap in active curve mode; reduced from 8.0 at S-turn transitions |
 | `speed_gain_min/max` | 1.0–1.5 | — | Curvature-dependent steering gain range |
 
 **Curve unwind policy** (`curve_unwind_policy_enabled = true`) — softens steering limits after peak:
@@ -785,22 +785,22 @@ Tier key: `1` = primary lever, `2` = subsystem tuning, `3` = advanced/inactive
 | `control.lateral.lateral_weight` | 0.5 | — | 3 (PID, inactive) |
 | `control.lateral.error_clip` | 1.57 | rad | 3 (PID, inactive) |
 | `control.lateral.integral_limit` | 0.1 | — | 3 (PID, inactive) |
-| `control.lateral.steering_smoothing_alpha` | 0.9 | — | 2 |
+| `control.lateral.steering_smoothing_alpha` | 0.92 | — | 2 |
 | `control.lateral.control_mode` | pure_pursuit | — | 1 |
 | `control.lateral.stanley_k` | 1.5 | — | 3 (Stanley, inactive) |
 | `control.lateral.stanley_soft_speed` | 2.0 | m/s | 3 (Stanley, inactive) |
 | `control.lateral.stanley_heading_weight` | 1.0 | — | 3 (Stanley, inactive) |
-| `control.lateral.pp_feedback_gain` | 0.10 | rad/m | 1 |
+| `control.lateral.pp_feedback_gain` | 0.075 | rad/m | 1 |
 | `control.lateral.pp_max_steering_jerk` | 18.0 | norm/s² | 1 |
 | `control.lateral.pp_min_lookahead` | 0.5 | m | 1 |
 | `control.lateral.pp_ref_jump_clamp` | 0.5 | m | 1 |
 | `control.lateral.pp_stale_decay` | 0.98 | /frame | 1 |
 | `control.lateral.pp_max_steering_rate` | 0.4 | rad/frame | 1 |
-| `control.lateral.feedback_gain_min` | 1.1 | — | 3 (PID, inactive) |
-| `control.lateral.feedback_gain_max` | 1.4 | — | 3 (PID, inactive) |
+| `control.lateral.feedback_gain_min` | 1.05 | — | 3 (PID, inactive) |
+| `control.lateral.feedback_gain_max` | 1.25 | — | 3 (PID, inactive) |
 | `control.lateral.feedback_gain_curvature_min` | 0.003 | — | 3 (PID, inactive) |
 | `control.lateral.feedback_gain_curvature_max` | 0.03 | — | 3 (PID, inactive) |
-| `control.lateral.base_error_smoothing_alpha` | 0.7 | — | 3 (PID, inactive) |
+| `control.lateral.base_error_smoothing_alpha` | 0.78 | — | 3 (PID, inactive) |
 | `control.lateral.heading_error_smoothing_alpha` | 0.45 | — | 3 (PID, inactive) |
 | `control.lateral.straight_window_frames` | 60 | frames | 3 |
 | `control.lateral.straight_oscillation_high` | 0.2 | — | 3 |
@@ -923,7 +923,7 @@ Tier key: `1` = primary lever, `2` = subsystem tuning, `3` = advanced/inactive
 | `control.lateral.curve_commit_mode_dynamic_deficit_min` | 0.03 | — | 3 (disabled) |
 | `control.lateral.curve_commit_mode_retrigger_cooldown_frames` | 12 | frames | 3 (disabled) |
 | `control.lateral.curve_mode_speed_cap_enabled` | true | — | 2 |
-| `control.lateral.curve_mode_speed_cap_mps` | 7.5 | m/s | 2 |
+| `control.lateral.curve_mode_speed_cap_mps` | 7.0 | m/s | 2 |
 | `control.lateral.curve_mode_speed_cap_min_ratio` | 0.55 | — | 2 |
 | `control.lateral.speed_gain_min_speed` | 4.0 | m/s | 2 |
 | `control.lateral.speed_gain_max_speed` | 10.0 | m/s | 2 |

@@ -4534,6 +4534,46 @@ class Visualizer {
         }
     }
 
+    async loadOscillationAttribution() {
+        if (!this.currentRecording) return;
+        const display = document.getElementById('oscillation-attribution-display');
+        if (!display) return;
+        display.innerHTML = '<em style="color:#888;">Computing oscillation attribution…</em>';
+        try {
+            const q = new URLSearchParams({ pre_failure_only: 'true' });
+            const resp = await fetch(
+                `/api/recording/${encodeURIComponent(this.currentRecording)}/oscillation-attribution?${q}`
+            );
+            if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+            const data = await resp.json();
+            if (data.error) {
+                display.innerHTML = `<span style="color:#ff6b6b;">${this.escapeHtml(data.error)}</span>`;
+                return;
+            }
+            const st = data.subtype || '—';
+            const pl = data.primary_layer || '—';
+            const fixes = data.recommended_fixes || [];
+            const hh = data.hill_highway || {};
+            const hhSrc = hh.source ? ` · co-tuning: ${hh.source}` : '';
+            let html = `<div style="margin-bottom:0.6rem;"><strong>Subtype</strong>: ${this.escapeHtml(st)} &nbsp;|&nbsp; <strong>Primary layer</strong>: <span style="color:#7ecfff;">${this.escapeHtml(pl)}</span><span style="color:#666;font-size:0.78rem;">${this.escapeHtml(hhSrc)}</span></div>`;
+            html += `<div style="color:#888;font-size:0.8rem;margin-bottom:0.4rem;">${this.escapeHtml(data.lag_rationale || '')}</div>`;
+            html += '<div style="margin-top:0.5rem;"><strong>What to fix (prioritized)</strong><ol style="margin:0.4rem 0 0 1.1rem;padding:0;">';
+            for (const r of fixes) {
+                const a = r.action || '';
+                html += `<li style="margin-bottom:0.35rem;"><span style="color:#9aa0a6;">[${this.escapeHtml(r.area || '')}]</span> ${this.escapeHtml(a)}</li>`;
+            }
+            html += '</ol></div>';
+            const m = data.metrics || {};
+            const lr = (m.limiter_active_rate != null) ? (Number(m.limiter_active_rate) * 100).toFixed(1) : 'n/a';
+            const rj = m.reference_jump_p95_m != null ? m.reference_jump_p95_m : 'n/a';
+            const pr = m.perception_reference_rms_m != null ? m.perception_reference_rms_m : 'n/a';
+            html += `<div style="margin-top:0.6rem;color:#666;font-size:0.78rem;">Limiter rate ${lr}% · ref jump p95 ${rj}m · perc–ref RMS ${pr}m</div>`;
+            display.innerHTML = html;
+        } catch (e) {
+            display.innerHTML = `<span style="color:#ff6b6b;">${this.escapeHtml(e.message)}</span>`;
+        }
+    }
+
     async loadStaleEvents() {
         if (!this.currentRecording) return;
         const container = document.getElementById('stale-events-table');
@@ -9440,6 +9480,7 @@ class Visualizer {
             } else if (tabName === 'chain') {
                 this.loadStaleEvents();
                 this.loadTrajectoryDegradationEvents();
+                this.loadOscillationAttribution();
             } else if (tabName === 'mpc-pipeline') {
                 this.loadMpcPipeline();
             }

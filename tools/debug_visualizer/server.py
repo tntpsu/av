@@ -3122,6 +3122,37 @@ def get_cadence_breakdown(filename):
         return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500
 
 
+@app.route('/api/recording/<path:filename>/oscillation-attribution')
+def get_oscillation_attribution(filename):
+    """Lead–lag oscillation subtype + prioritized fix recommendations (PhilViz + CLI parity)."""
+    from urllib.parse import unquote
+
+    filename = unquote(filename)
+    filepath = RECORDINGS_DIR / filename
+    if not filepath.exists():
+        return jsonify({"error": f"Recording not found: {filename}"}), 404
+    try:
+        from oscillation_attribution import analyze_oscillation_attribution
+
+        pre_failure_only = request.args.get("pre_failure_only", "true").lower() == "true"
+        raw_hh = request.args.get("hill_highway", None)
+        if raw_hh is None or str(raw_hh).strip().lower() in ("", "auto"):
+            hill_override = None
+        elif str(raw_hh).strip().lower() in ("true", "1", "yes", "on"):
+            hill_override = True
+        else:
+            hill_override = False
+        result = analyze_oscillation_attribution(
+            filepath,
+            pre_failure_only=pre_failure_only,
+            hill_highway_override=hill_override,
+        )
+        return jsonify(numpy_to_list(result))
+    except Exception as e:
+        import traceback
+        return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500
+
+
 @app.route('/api/signal-chain/<path:recording>')
 def get_signal_chain(recording):
     """Get signal chain diagnostic analysis for a recording."""

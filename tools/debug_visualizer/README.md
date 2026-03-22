@@ -22,6 +22,7 @@ Interactive web-based debug visualizer for analyzing AV stack recordings. Displa
 - **Recording Summary Tab**: Overall metrics and health graphs ✅
 - **Issues Detection & Navigation**: Auto-detect problematic frames and jump to them ✅
 - **Trajectory vs Steering Diagnostic**: Identify which component is failing ✅
+- **Oscillation Attribution (Chain tab)**: Lead–lag + subtype + prioritized fix list (API: `/api/recording/<file>/oscillation-attribution`; CLI: `tools/oscillation_attribution.py`) ✅
 - **Projection Tab Diagnostics**:
   - First-visible trajectory source distance, turn-sign checks
   - Planner-vs-oracle lateral error at 5m/10m/15m

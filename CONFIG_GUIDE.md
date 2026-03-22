@@ -59,12 +59,12 @@ control:
     speed_gain_max: 1.6  # Gain at/above max speed
     speed_gain_curvature_min: 0.002  # Full speed gain below this curvature (1/m)
     speed_gain_curvature_max: 0.008  # Fade speed gain out by this curvature (1/m)
-    feedback_gain_min: 1.1  # Feedback gain on higher curvature
-    feedback_gain_max: 1.4  # Feedback gain on gentle curves
+    feedback_gain_min: 1.05  # Feedback gain on higher curvature
+    feedback_gain_max: 1.25  # Feedback gain on gentle curves
     feedback_gain_curvature_min: 0.003  # Full boost below this curvature (1/m)
     feedback_gain_curvature_max: 0.03  # No boost above this curvature (1/m)
     # Pure Pursuit params (active when control_mode=pure_pursuit)
-    pp_feedback_gain: 0.10       # Steady-state drift correction
+    pp_feedback_gain: 0.075       # Steady-state drift correction (hill_highway oscillation mitigation)
     pp_max_steering_rate: 0.4    # Per-frame steering rate limit
     pp_max_steering_jerk: 30.0   # Per s² jerk limit
     pp_min_lookahead: 0.5        # Min effective lookahead (m)
@@ -85,7 +85,7 @@ control:
 - **lateral_weight**: Higher = more responsive to lateral offset
 
 **Tuning Guide (Pure Pursuit):**
-- **pp_feedback_gain**: Higher = more correction for steady-state drift (0.10 typical).
+- **pp_feedback_gain**: Higher = more correction for steady-state drift (~0.075 default after hill_highway tuning).
 - **pp_max_steering_rate**: Lower = smoother but slower response; higher = more aggressive.
 - **pp_max_steering_jerk**: Limits steering acceleration for comfort.
 
