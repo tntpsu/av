@@ -15,6 +15,8 @@
 
 Pre-failure analysis uses the same **`failure_frame`** as `drive_summary_core` (`executive_summary.failure_frame`).
 
+**Related:** grade vs lateral bin metrics (`grade_lateral_v1`) — `docs/GRADE_LATERAL.md`, `tools/analyze_grade_lateral.py`, PhilViz `/grade-lateral`.
+
 ## CLI
 
 ```bash

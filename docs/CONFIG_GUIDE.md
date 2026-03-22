@@ -77,6 +77,16 @@ Active steering algorithm selector. Changing this requires re-tuning the corresp
 `pure_pursuit` is the only validated mode as of S1-M39. `pid` and `stanley` are preserved
 but untested at current speeds.
 
+### Road grade & lateral damping (telemetry)
+
+**Sign / units (aligned with PhilViz triage):**
+
+- **`vehicle/road_grade`** in recordings: **rise/run** (dimensionless slope). **Downhill is negative** when the track loses elevation in the drive direction; uphill is positive.
+- **`control/lateral_grade_damping`**: fraction subtracted from the lateral error smoothing blend weight when `|grade|` (smoothed road grade, **rise/run**, same units as `vehicle/road_grade`) is above the internal small threshold (~0.01). Range **0 … 0.3** after the `min(0.3, …)` cap.
+- **`control/lateral_error_smoothing_alpha_effective`**: **blend weight α** actually used for exponential lateral-error smoothing that frame (higher α = trust new error more). Reduced when grade damping applies.
+
+See also: `docs/GRADE_LATERAL.md`, `docs/plans/GRADE_LATERAL_PLAN.md`.
+
 ---
 
 #### `control.lateral.pp_feedback_gain`

@@ -23,6 +23,7 @@ Interactive web-based debug visualizer for analyzing AV stack recordings. Displa
 - **Issues Detection & Navigation**: Auto-detect problematic frames and jump to them ✅
 - **Trajectory vs Steering Diagnostic**: Identify which component is failing ✅
 - **Oscillation Attribution (Chain tab)**: Lead–lag + subtype + prioritized fix list (API: `/api/recording/<file>/oscillation-attribution`; CLI: `tools/oscillation_attribution.py`) ✅
+- **Grade–Lateral Breakdown (Chain tab)**: Bin table + `road_grade` sparkline (API: `/api/recording/<file>/grade-lateral`; CLI: `tools/analyze_grade_lateral.py`) ✅
 - **Projection Tab Diagnostics**:
   - First-visible trajectory source distance, turn-sign checks
   - Planner-vs-oracle lateral error at 5m/10m/15m
@@ -124,6 +125,23 @@ Then open `http://localhost:8000/index.html` in your browser.
 - `→` (Right Arrow): Next frame
 - `Space`: Play/Pause
 
+## Verify APIs (CI / local)
+
+Automated smoke tests (no browser; uses `tests/fixtures/hill_highway_trim_400f_no_camera.h5`):
+
+```bash
+pytest tests/test_philviz_recording_api_smoke.py -v
+```
+
+Manual curl (recording must exist under `data/recordings/`):
+
+```bash
+REC=your_recording.h5
+curl -s "http://localhost:5001/api/recording/$REC/cadence-breakdown" | head -c 200
+curl -s "http://localhost:5001/api/recording/$REC/oscillation-attribution?pre_failure_only=true" | head -c 200
+curl -s "http://localhost:5001/api/recording/$REC/grade-lateral?pre_failure_only=true" | head -c 200
+```
+
 ## API Endpoints
 
 The server provides the following REST API endpoints:
@@ -143,6 +161,7 @@ The server provides the following REST API endpoints:
 - `GET /api/recording/<filename>/issues?analyze_to_failure=<true|false>` - Get detected issues
 - `GET /api/recording/<filename>/diagnostics?analyze_to_failure=<true|false>` - Get trajectory vs steering diagnostics
 - `GET /api/recording/<filename>/topdown-diagnostics` - Timing/projection trust diagnostics for top-down trajectory overlay
+- `GET /api/recording/<filename>/grade-lateral?pre_failure_only=true&grade_threshold=0.02` - Grade vs lateral bin metrics (`grade_lateral_v1` JSON)
 - `POST /api/recording/<filename>/run-perception-questions` - Run `tools/analyze/analyze_perception_questions.py` and return Q1-Q8 output (used by Summary tab "Run Q Script" button)
 
 ### Debug Images (Legacy)

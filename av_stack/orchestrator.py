@@ -56,6 +56,41 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+def _segmentation_input_size_from_cfg(perception_cfg: dict) -> Tuple[int, int]:
+    """Parse ``perception.segmentation_input_size`` as [height, width] for the seg net."""
+    default: Tuple[int, int] = (320, 640)
+    if not isinstance(perception_cfg, dict):
+        return default
+    raw = perception_cfg.get("segmentation_input_size")
+    if raw is None:
+        return default
+    try:
+        if isinstance(raw, (list, tuple)) and len(raw) == 2:
+            h = int(raw[0])
+            w = int(raw[1])
+        else:
+            logger.warning(
+                "perception.segmentation_input_size must be [height, width]; got %r — using %s",
+                raw,
+                default,
+            )
+            return default
+    except (TypeError, ValueError):
+        logger.warning(
+            "Invalid perception.segmentation_input_size %r — using %s", raw, default
+        )
+        return default
+    if not (32 <= h <= 2048 and 32 <= w <= 2048):
+        logger.warning(
+            "perception.segmentation_input_size [%s, %s] out of range [32..2048]; using %s",
+            h,
+            w,
+            default,
+        )
+        return default
+    return (h, w)
+
+
 @dataclass
 class CurvatureContract:
     """Single-owner curvature selection contract for one frame."""
@@ -109,11 +144,27 @@ class AVStack:
         safety_cfg = config.get('safety', {})
         perception_cfg = config.get("perception", {}) if isinstance(config, dict) else {}
         stack_cfg = config.get("stack", {}) if isinstance(config, dict) else {}
-        
+
+        _trust_proxy_env = bool(stack_cfg.get("bridge_trust_proxy_env", False))
+        if os.environ.get("AV_BRIDGE_TRUST_PROXY_ENV", "").strip().lower() in (
+            "1",
+            "true",
+            "yes",
+            "on",
+        ):
+            _trust_proxy_env = True
+
         # Bridge client
         self.bridge = UnityBridgeClient(
             bridge_url,
             use_raw_camera=bool(stack_cfg.get("use_raw_camera_transport", True)),
+            async_trajectory_transport=bool(
+                stack_cfg.get("async_trajectory_transport", True)
+            ),
+            trust_proxy_env=_trust_proxy_env,
+        )
+        self._parallel_vehicle_state_fetch = bool(
+            stack_cfg.get("parallel_vehicle_state_fetch", True)
         )
         self.last_processed_unity_frame_count = None
 
@@ -132,12 +183,14 @@ class AVStack:
             self.bridge.start_camera_prefetch("front_center")
         
         # Perception
+        seg_input_hw = _segmentation_input_size_from_cfg(perception_cfg)
         self.perception = LaneDetectionInference(
             model_path=model_path,
             use_gpu=bool(perception_cfg.get("use_gpu", True)),
             prefer_mps=bool(perception_cfg.get("prefer_mps", True)),
             segmentation_model_path=segmentation_model_path,
             segmentation_mode=use_segmentation,
+            segmentation_input_size=seg_input_hw,
             segmentation_fit_min_row_ratio=float(
                 perception_cfg.get("segmentation_fit_min_row_ratio", 0.45)
             ),
@@ -237,6 +290,18 @@ class AVStack:
             ),
             traj_heading_zero_gate_curvature_preview_off_threshold=trajectory_cfg.get(
                 'traj_heading_zero_gate_curvature_preview_off_threshold', 0.002
+            ),
+            traj_heading_zero_gate_release_far_preview_enabled=bool(
+                trajectory_cfg.get('traj_heading_zero_gate_release_far_preview_enabled', True)
+            ),
+            traj_heading_zero_gate_far_preview_phase_min=float(
+                trajectory_cfg.get('traj_heading_zero_gate_far_preview_phase_min', 0.06)
+            ),
+            traj_heading_zero_gate_release_on_scheduler_entry_commit=bool(
+                trajectory_cfg.get('traj_heading_zero_gate_release_on_scheduler_entry_commit', True)
+            ),
+            traj_heading_zero_gate_time_to_curve_release_s=float(
+                trajectory_cfg.get('traj_heading_zero_gate_time_to_curve_release_s', 1.35)
             ),
             center_spline_enabled=trajectory_cfg.get('center_spline_enabled', False),
             center_spline_degree=trajectory_cfg.get('center_spline_degree', 2),
@@ -958,6 +1023,14 @@ class AVStack:
                 ),
                 "bridge_max_camera_queue_yaml": stack_cfg.get("bridge_max_camera_queue"),
                 "AV_BRIDGE_MAX_CAMERA_QUEUE": os.environ.get("AV_BRIDGE_MAX_CAMERA_QUEUE"),
+                "async_trajectory_transport": bool(
+                    stack_cfg.get("async_trajectory_transport", True)
+                ),
+                "parallel_vehicle_state_fetch": bool(
+                    stack_cfg.get("parallel_vehicle_state_fetch", True)
+                ),
+                "bridge_trust_proxy_env": bool(_trust_proxy_env),
+                "AV_BRIDGE_TRUST_PROXY_ENV": os.environ.get("AV_BRIDGE_TRUST_PROXY_ENV"),
             }
         else:
             logger.info("Data recording disabled")
@@ -971,6 +1044,8 @@ class AVStack:
             stack_cfg.get("topdown_recording_interval_frames", 1)
         )
         self._topdown_record_tick = 0
+        # perf_wait_input_ms: gap from previous control_sent_mono_s to this inputs_ready_mono_s
+        self._prev_frame_control_sent_mono_s: Optional[float] = None
 
         # Grade EMA smoothing (Step 3)
         grade_ema_alpha = float(control_cfg.get('grade_ema_alpha', 0.3))
@@ -2158,9 +2233,20 @@ class AVStack:
                 
                 last_frame_time = time.time()
                 
-                # Get latest camera frame
+                # Get latest camera frame (optionally overlap vehicle GET on another Session)
                 camera_fetch_start = time.time()
-                frame_data = self.bridge.get_latest_camera_frame_with_metadata()
+                if self._parallel_vehicle_state_fetch:
+                    (
+                        frame_data,
+                        vehicle_state_dict,
+                        front_ready_mono_s,
+                        vehicle_ready_mono_s,
+                    ) = self.bridge.get_latest_camera_and_vehicle_parallel()
+                else:
+                    frame_data = self.bridge.get_latest_camera_frame_with_metadata()
+                    vehicle_state_dict = None
+                    front_ready_mono_s = 0.0
+                    vehicle_ready_mono_s = 0.0
                 camera_fetch_duration = time.time() - camera_fetch_start
                 if camera_fetch_duration > 0.1:
                     logger.warning(
@@ -2217,14 +2303,17 @@ class AVStack:
                             )
                         continue
                     self.last_camera_frame_id = camera_frame_id
-                front_ready_mono_s = time.monotonic()
-                
-                # Get vehicle state
-                vehicle_state_dict = self.bridge.get_latest_vehicle_state()
-                if vehicle_state_dict is None:
-                    time.sleep(self.frame_interval)
-                    continue
-                vehicle_ready_mono_s = time.monotonic()
+                if not self._parallel_vehicle_state_fetch:
+                    front_ready_mono_s = time.monotonic()
+                    vehicle_state_dict = self.bridge.get_latest_vehicle_state()
+                    if vehicle_state_dict is None:
+                        time.sleep(self.frame_interval)
+                        continue
+                    vehicle_ready_mono_s = time.monotonic()
+                else:
+                    if vehicle_state_dict is None:
+                        time.sleep(self.frame_interval)
+                        continue
                 input_timing = {
                     "front_ready_mono_s": float(front_ready_mono_s),
                     "vehicle_ready_mono_s": float(vehicle_ready_mono_s),
@@ -2299,15 +2388,38 @@ class AVStack:
         if fv is None:
             return  # duplicate frame
 
-        pr       = self._pf_run_perception(image, vehicle_state_dict, fv)
-        geo      = self._pf_compute_lane_geometry(pr, vehicle_state_dict, fv)
-        gated    = self._pf_apply_lane_gating(pr, geo, vehicle_state_dict, fv, timestamp)
-        health   = self._pf_score_perception_health(pr, gated, fv)
+        perf_wait_input_ms = float("nan")
+        if isinstance(input_timing, dict):
+            ir = input_timing.get("inputs_ready_mono_s")
+            prev_sent = self._prev_frame_control_sent_mono_s
+            if (
+                prev_sent is not None
+                and ir is not None
+                and isinstance(ir, (int, float))
+                and np.isfinite(float(ir))
+                and np.isfinite(float(prev_sent))
+            ):
+                perf_wait_input_ms = max(
+                    0.0, (float(ir) - float(prev_sent)) * 1000.0
+                )
+
+        t_perc0 = time.perf_counter()
+        pr = self._pf_run_perception(image, vehicle_state_dict, fv)
+        perf_perception_ms = (time.perf_counter() - t_perc0) * 1000.0
+
+        geo = self._pf_compute_lane_geometry(pr, vehicle_state_dict, fv)
+        gated = self._pf_apply_lane_gating(pr, geo, vehicle_state_dict, fv, timestamp)
+        health = self._pf_score_perception_health(pr, gated, fv)
         perc_out = self._pf_build_perception_output(pr, gated, health, timestamp)
-        gov      = self._pf_run_speed_governor(pr, gated, vehicle_state_dict, timestamp)
-        traj     = self._pf_plan_trajectory(pr, gated, gov, vehicle_state_dict, timestamp)
-        cmd      = self._pf_compute_steering(traj, gov, gated, vehicle_state_dict, fv, timestamp)
-        cmd      = self._pf_apply_safety(cmd, traj, gated, gov, vehicle_state_dict, fv, timestamp)
+
+        t_plan0 = time.perf_counter()
+        gov = self._pf_run_speed_governor(pr, gated, vehicle_state_dict, timestamp)
+        traj = self._pf_plan_trajectory(pr, gated, gov, vehicle_state_dict, timestamp)
+        perf_planning_ms = (time.perf_counter() - t_plan0) * 1000.0
+
+        t_ctrl0 = time.perf_counter()
+        cmd = self._pf_compute_steering(traj, gov, gated, vehicle_state_dict, fv, timestamp)
+        cmd = self._pf_apply_safety(cmd, traj, gated, gov, vehicle_state_dict, fv, timestamp)
         # 2.8.2: feed actual sent steering back to MPC warm-start
         actual_steering = float(cmd.get('steering', 0.0))
         self.controller.update_last_steering_norm(actual_steering)
@@ -2318,6 +2430,21 @@ class AVStack:
             gated,
             input_timing=input_timing,
         )
+        perf_control_ms = (time.perf_counter() - t_ctrl0) * 1000.0
+
+        if isinstance(latency_ctx, dict):
+            latency_ctx["perf_perception_ms"] = float(perf_perception_ms)
+            latency_ctx["perf_planning_ms"] = float(perf_planning_ms)
+            latency_ctx["perf_control_ms"] = float(perf_control_ms)
+            latency_ctx["perf_wait_input_ms"] = float(perf_wait_input_ms)
+
+        sent_mono = latency_ctx.get("control_sent_mono_s") if isinstance(latency_ctx, dict) else None
+        if (
+            isinstance(sent_mono, (int, float))
+            and np.isfinite(float(sent_mono))
+        ):
+            self._prev_frame_control_sent_mono_s = float(sent_mono)
+
         self._pf_record(image, timestamp, vehicle_state_dict,
                         perc_out, traj, cmd, gated, gov, fv,
                         camera_frame_id, camera_frame_meta, topdown_frame_data,
@@ -4874,6 +5001,11 @@ class AVStack:
                 dynamic_horizon_diag.get("diag_dynamic_effective_horizon_m", reference_lookahead)
             )
         # Pass timestamp for jump detection (handles Unity pauses)
+        _ttc_kw = (
+            float(time_to_curve_s)
+            if isinstance(time_to_curve_s, (int, float)) and math.isfinite(float(time_to_curve_s))
+            else None
+        )
         reference_point = self.trajectory_planner.get_reference_point(
             trajectory, 
             lookahead=reference_lookahead,
@@ -4884,6 +5016,12 @@ class AVStack:
             confidence=confidence,
             dynamic_horizon_diag=dynamic_horizon_diag,
             preview_curvature_abs=preview_curvature_abs,
+            curve_preview_far_upcoming=bool(
+                curve_phase_diag.get("curve_preview_far_upcoming", False)
+            ),
+            curve_preview_far_phase=float(curve_phase_diag.get("curve_preview_far_phase", 0.0) or 0.0),
+            curve_phase_state=str(curve_phase_diag.get("curve_phase_state", "STRAIGHT") or "STRAIGHT"),
+            time_to_curve_s=_ttc_kw,
         )
         if reference_point is not None:
             reference_point['lookahead_entry_preview_source'] = preview_entry_source
@@ -7569,6 +7707,10 @@ class AVStack:
             straight_oscillation_rate=control_command.get('straight_oscillation_rate'),
             tuned_deadband=control_command.get('tuned_deadband'),
             tuned_error_smoothing_alpha=control_command.get('tuned_error_smoothing_alpha'),
+            lateral_grade_damping=control_command.get('lateral_grade_damping'),
+            lateral_error_smoothing_alpha_effective=control_command.get(
+                'lateral_error_smoothing_alpha_effective'
+            ),
             # Diagnostic fields for tracking stale perception usage
             using_stale_perception=perception_output.using_stale_data if perception_output else False,
             stale_perception_reason=perception_output.stale_data_reason if perception_output else None,
@@ -7579,6 +7721,11 @@ class AVStack:
             e2e_control_sent_mono_s=_latency_float("control_sent_mono_s"),
             e2e_latency_ms=_latency_float("e2e_latency_ms"),
             e2e_latency_mode=e2e_latency_mode,
+            perf_perception_ms=_latency_float("perf_perception_ms"),
+            perf_planning_ms=_latency_float("perf_planning_ms"),
+            perf_control_ms=_latency_float("perf_control_ms"),
+            perf_wait_input_ms=_latency_float("perf_wait_input_ms"),
+            perf_hdf5_write_ms=float("nan"),
             target_speed_raw=control_command.get('target_speed_raw'),
             target_speed_post_limits=control_command.get('target_speed_post_limits'),
             target_speed_planned=control_command.get('target_speed_planned'),
@@ -7861,6 +8008,16 @@ class AVStack:
         trajectory_points = None
         velocities = None
         ref_point = None  # Initialize ref_point
+        preview_curvature_abs = float(
+            control_command.get("curvature_preview_abs")
+            or control_command.get("preview_curvature_abs")
+            or 0.0
+        )
+        _rec_ttc = control_command.get("time_to_next_curve_start_s")
+        if not isinstance(_rec_ttc, (int, float)) or not math.isfinite(float(_rec_ttc)):
+            _rec_ttc = None
+        else:
+            _rec_ttc = float(_rec_ttc)
         # FIXED: Check if trajectory exists AND has points (not just truthy check)
         if trajectory is not None and hasattr(trajectory, 'points') and len(trajectory.points) > 0:
             confidence = perception_output.confidence if perception_output else None
@@ -7910,6 +8067,16 @@ class AVStack:
                     timestamp=timestamp,
                     confidence=confidence,
                     preview_curvature_abs=preview_curvature_abs,
+                    curve_preview_far_upcoming=bool(
+                        control_command.get("curve_preview_far_upcoming", False)
+                    ),
+                    curve_preview_far_phase=float(
+                        control_command.get("curve_preview_far_phase", 0.0) or 0.0
+                    ),
+                    curve_phase_state=str(
+                        control_command.get("curve_phase_state", "STRAIGHT") or "STRAIGHT"
+                    ),
+                    time_to_curve_s=_rec_ttc,
                 )
             
             # Build trajectory points array with reference point first
@@ -8146,7 +8313,12 @@ class AVStack:
             unity_feedback=unity_feedback
         )
         
+        t_rec0 = time.perf_counter()
         self.recorder.record_frame(frame)
+        rec_ms = (time.perf_counter() - t_rec0) * 1000.0
+        control_cmd.perf_hdf5_write_ms = rec_ms
+        if isinstance(latency_ctx, dict):
+            latency_ctx["perf_hdf5_write_ms"] = float(rec_ms)
     
     def stop(self):
         """Stop AV stack."""
@@ -8200,6 +8372,19 @@ def main():
     parser.add_argument('--track-yaml', type=str, default=None,
                        help='Track YAML path — sets map-based lookahead profile at runtime '
                             '(forwarded automatically from start_av_stack.sh)')
+    parser.add_argument(
+        '--profile-cprofile',
+        nargs='?',
+        const='',
+        default=None,
+        metavar='OUT.prof',
+        help=(
+            'Run stack under cProfile and write binary stats to OUT.prof. '
+            'If flag is given without a path, uses '
+            'RECORDING_DIR/av_stack_cprofile_<UTC_ts>.prof. '
+            'Inspect: python -m pstats OUT.prof  then  sort cumulative  /  stats 40'
+        ),
+    )
 
     args = parser.parse_args()
 
@@ -8221,8 +8406,33 @@ def main():
         segmentation_model_path=args.segmentation_checkpoint,
         track_yaml_path=args.track_yaml,
     )
-    
-    av_stack.run(max_frames=args.max_frames, duration=args.duration)
+
+    prof_out = getattr(args, 'profile_cprofile', None)
+    if prof_out is not None:
+        from datetime import datetime, timezone
+
+        out_path = (prof_out or '').strip()
+        if not out_path:
+            ts = datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')
+            out_path = str(Path(args.recording_dir) / f'av_stack_cprofile_{ts}.prof')
+        out_p = Path(out_path)
+        out_p.parent.mkdir(parents=True, exist_ok=True)
+        import cProfile
+
+        pr = cProfile.Profile()
+        pr.enable()
+        try:
+            av_stack.run(max_frames=args.max_frames, duration=args.duration)
+        finally:
+            pr.disable()
+            pr.dump_stats(str(out_p))
+        logger.info(
+            'cProfile stats written to %s — inspect: python -m pstats %s',
+            out_p,
+            out_p,
+        )
+    else:
+        av_stack.run(max_frames=args.max_frames, duration=args.duration)
 
 
 if __name__ == "__main__":

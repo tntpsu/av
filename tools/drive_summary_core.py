@@ -16,6 +16,8 @@ from scipy.fft import fft, fftfreq
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
+# scoring_registry lives under tools/; tests add this via conftest — CLI entrypoints need it too.
+sys.path.insert(0, str(REPO_ROOT / "tools"))
 
 from trajectory.utils import (
     CURVE_SCHEDULER_MODE_BINARY,
@@ -1365,13 +1367,20 @@ def _compute_grade_metrics(data: Dict, n_frames: int) -> Optional[Dict]:
     }
 
 
-def analyze_recording_summary(recording_path: Path, analyze_to_failure: bool = False, h5_file=None) -> Dict:
+def analyze_recording_summary(
+    recording_path: Path,
+    analyze_to_failure: bool = False,
+    h5_file=None,
+    *,
+    include_grade_lateral: bool = False,
+) -> Dict:
     """
     Analyze a recording and return summary metrics.
     
     Args:
         recording_path: Path to HDF5 recording file
         analyze_to_failure: If True, only analyze up to the point where car went out of lane and stayed out
+        include_grade_lateral: If True, attach ``grade_lateral`` (``grade_lateral_v1``) — extra HDF5 read + summary call inside analyzer unless failure_frame injected later.
         
     Returns:
         Dictionary with summary metrics and recommendations
@@ -5720,7 +5729,7 @@ def analyze_recording_summary(recording_path: Path, analyze_to_failure: bool = F
         else:
             key_issues.append("Chassis-ground contact/penetration detected")
     
-    return {
+    summary_result = {
         "summary_schema_version": "v1",
         "executive_summary": {
             "overall_score": safe_float(score),
@@ -6069,3 +6078,14 @@ def analyze_recording_summary(recording_path: Path, analyze_to_failure: bool = F
             "perception_health_score": None  # Will be added if available
         }
     }
+    if include_grade_lateral:
+        from grade_lateral_analysis import analyze_grade_lateral
+
+        es_ff = summary_result.get("executive_summary") or {}
+        ff = es_ff.get("failure_frame")
+        summary_result["grade_lateral"] = analyze_grade_lateral(
+            recording_path,
+            pre_failure_only=True,
+            failure_frame=int(ff) if ff is not None else None,
+        )
+    return summary_result

@@ -1,7 +1,7 @@
 # Robust Full-Stack Roadmap (Unified, Layered, and Gated)
 
-**Last Updated:** 2026-03-20
-**Current Focus:** Layer 2, Stage 2 (Robustness & Speed Expansion) — oscillation attribution (S2-M6) + Step 3.5 (2DOF FF + curve-contamination clamp) implemented, pending live E2E validation
+**Last Updated:** 2026-03-22
+**Current Focus:** Layer 2, Stage 2 (Robustness & Speed Expansion) — oscillation attribution (S2-M6) + Step 3.5 (2DOF FF + curve-contamination clamp) implemented, pending live E2E validation. **Stage 6 prep:** grade-aware lateral observability plan — `docs/plans/GRADE_LATERAL_PLAN.md` (G6-L0–L4).
 **Change-Control Rule:** If scope, stage, phase status, or promotion gates change, update this roadmap in the same PR/commit before considering work complete.
 
 ## Scope
@@ -353,6 +353,19 @@ test (r < 15m dedicated track) is mapped as S2-M5 above.
 - 6a: straight grades.
 - 6b: banked turns.
 **Entry criterion:** Stage 2 complete.
+
+**Grade-aware lateral — observability track (active planning)**  
+Detailed plan: **`docs/plans/GRADE_LATERAL_PLAN.md`** (telemetry → analytics module → CLI/`drive_summary` → PhilViz → policy tuning **after** metrics exist).
+
+| Milestone | Deliverable |
+|-----------|-------------|
+| **G6-L0** | ✅ HDF5/recorder: `vehicle/road_grade`, `control/lateral_grade_damping`, `control/lateral_error_smoothing_alpha_effective`; tests |
+| **G6-L1** | ✅ `tools/grade_lateral_analysis.py` → `grade_lateral_v1` JSON, bin metrics, synthetic tests |
+| **G6-L2** | ✅ `tools/analyze_grade_lateral.py` + optional `analyze_recording_summary(..., include_grade_lateral=True)` |
+| **G6-L3** | ✅ PhilViz `GET /api/recording/<file>/grade-lateral` + Chain tab panel |
+| **G6-L4** | 🔶 A/B protocol + YAML guidance (`docs/GRADE_LATERAL_TUNING.md`); **no default change** until before/after `grade_lateral_v1` proves improvement |
+
+**Done policy:** L0–L3 before material lateral policy changes solely for grade; L4 ties A/B to pre-failure bin metrics.
 
 ### Stage 7: Actor/Lead-Vehicle Introduction
 **Goal:** introduce forward-following behavior only after lane-keeping matrix is stable.

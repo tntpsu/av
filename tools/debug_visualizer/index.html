@@ -491,6 +491,15 @@
                                 <em style="color:#888;">Load a recording and open this tab…</em>
                             </div>
                         </div>
+
+                        <!-- Grade vs lateral (G6-L3; CLI parity) -->
+                        <div id="chain-grade-lateral-panel" class="blame-panel" style="display:block; margin-top:1rem;">
+                            <h4 style="margin:0 0 0.5rem 0; color:#ccc;">Grade–Lateral Breakdown</h4>
+                            <div id="grade-lateral-display" style="font-size:0.85rem; color:#bbb;">
+                                <em style="color:#888;">Load a recording and open Chain tab…</em>
+                            </div>
+                            <canvas id="grade-lateral-sparkline" height="72" style="width:100%; max-height:96px; margin-top:0.5rem; background:#1a1a1a; border-radius:4px;"></canvas>
+                        </div>
                     </div>
 
                     <!-- Perception Tab -->
@@ -1012,6 +1021,6 @@
 
     <script src="data_loader.js?v=20260218_track_curve_windows_v44"></script>
     <script src="overlay_renderer.js?v=20260213_issues_filters"></script>
-    <script src="visualizer.js?v=20260219_curve_attribution_template_v61"></script>
+    <script src="visualizer.js?v=20260217_philviz_api_url_cadence_chain"></script>
 </body>
 </html>

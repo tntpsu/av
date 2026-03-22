@@ -331,6 +331,10 @@ class ControlCommand:
     straight_oscillation_rate: Optional[float] = None
     tuned_deadband: Optional[float] = None
     tuned_error_smoothing_alpha: Optional[float] = None
+    # Grade-aware lateral smoothing (LateralController): alpha reduction from road grade (0..0.3)
+    lateral_grade_damping: Optional[float] = None
+    # Blend weight used for lateral error smoothing after grade damping
+    lateral_error_smoothing_alpha_effective: Optional[float] = None
     emergency_stop: bool = False
     # Pipeline timing diagnostics (input-ready -> command-sent, monotonic clock domain)
     e2e_front_ready_mono_s: Optional[float] = None
@@ -339,6 +343,12 @@ class ControlCommand:
     e2e_control_sent_mono_s: Optional[float] = None
     e2e_latency_ms: Optional[float] = None
     e2e_latency_mode: Optional[str] = None
+    # Per-layer wall time (ms, perf_counter) — see docs/plans/perf_layer_timings_impl.md
+    perf_perception_ms: Optional[float] = None
+    perf_planning_ms: Optional[float] = None
+    perf_control_ms: Optional[float] = None
+    perf_hdf5_write_ms: Optional[float] = None
+    perf_wait_input_ms: Optional[float] = None
     # Target speed diagnostics
     target_speed_raw: Optional[float] = None
     target_speed_post_limits: Optional[float] = None

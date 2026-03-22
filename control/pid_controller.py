@@ -577,6 +577,11 @@ class LateralController:
         )
         self.grade_steering_damping_gain = grade_steering_damping_gain
         self._current_grade_rad = 0.0
+        # Telemetry: grade effect on lateral error exponential smoothing (see compute_steering)
+        self._last_lateral_grade_damping = 0.0
+        self._last_lateral_error_smoothing_alpha_effective = float(
+            self.base_error_smoothing_alpha
+        )
 
         # Straight-away adaptive tuning (deadband + smoothing)
         self.straight_curvature_threshold = straight_curvature_threshold
@@ -966,13 +971,23 @@ class LateralController:
         # Smoothing the error prevents control oscillations from perception noise
         if self.smoothed_lateral_error is None:
             self.smoothed_lateral_error = lateral_error
+            self._last_lateral_grade_damping = 0.0
+            self._last_lateral_error_smoothing_alpha_effective = float(
+                self.error_smoothing_alpha
+            )
         else:
             # Exponential smoothing: blend new error with previous smoothed error
             _lat_alpha = self.error_smoothing_alpha
+            grade_damping_lat = 0.0
             # Grade-proportional damping: reduce alpha (more smoothing) on steeper grades
             if abs(self._current_grade_rad) > 0.01:
-                grade_damping = min(0.3, abs(self._current_grade_rad) * self.grade_steering_damping_gain)
-                _lat_alpha = max(0.15, _lat_alpha - grade_damping)
+                grade_damping_lat = min(
+                    0.3,
+                    abs(self._current_grade_rad) * self.grade_steering_damping_gain,
+                )
+                _lat_alpha = max(0.15, _lat_alpha - grade_damping_lat)
+            self._last_lateral_grade_damping = float(grade_damping_lat)
+            self._last_lateral_error_smoothing_alpha_effective = float(_lat_alpha)
             self.smoothed_lateral_error = (_lat_alpha * lateral_error +
                                          (1.0 - _lat_alpha) * self.smoothed_lateral_error)
         
@@ -3779,7 +3794,11 @@ class LateralController:
                 'straight_sign_flip_frames_remaining': sign_flip_frames_remaining,
                 'straight_oscillation_rate': self.straight_oscillation_rate,
                 'tuned_deadband': self.deadband,
-                'tuned_error_smoothing_alpha': self.error_smoothing_alpha
+                'tuned_error_smoothing_alpha': self.error_smoothing_alpha,
+                'lateral_grade_damping': float(self._last_lateral_grade_damping),
+                'lateral_error_smoothing_alpha_effective': float(
+                    self._last_lateral_error_smoothing_alpha_effective
+                ),
             }
         return steering
     
@@ -3830,6 +3849,10 @@ class LateralController:
         if hasattr(self, 'last_steering_rate'):
             self.last_steering_rate = 0.0
         self.smoothed_steering = None
+        self._last_lateral_grade_damping = 0.0
+        self._last_lateral_error_smoothing_alpha_effective = float(
+            self.base_error_smoothing_alpha
+        )
 
     def compute_stanley_from_errors(
         self,

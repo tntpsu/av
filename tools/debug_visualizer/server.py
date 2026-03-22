@@ -19,8 +19,9 @@ import re
 import yaml
 import math
 
-# Add project root to path (for tools.scoring_registry imports)
+# Add project root to path (for tools.* package imports and tools.scoring_registry)
 project_root = Path(__file__).parent.parent.parent
+sys.path.insert(0, str(project_root))
 sys.path.insert(0, str(project_root / "tools"))
 # Add backend modules to path
 backend_path = Path(__file__).parent / "backend"
@@ -3148,6 +3149,35 @@ def get_oscillation_attribution(filename):
             hill_highway_override=hill_override,
         )
         return jsonify(numpy_to_list(result))
+    except Exception as e:
+        import traceback
+        return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500
+
+
+@app.route('/api/recording/<path:filename>/grade-lateral')
+def get_grade_lateral(filename):
+    """Grade vs lateral bins (CLI parity with ``tools/analyze_grade_lateral.py``)."""
+    from urllib.parse import unquote
+
+    filename = unquote(filename)
+    filepath = RECORDINGS_DIR / filename
+    if not filepath.exists():
+        return jsonify({"error": f"Recording not found: {filename}"}), 404
+    try:
+        from grade_lateral_analysis import analyze_grade_lateral
+
+        pre_failure_only = request.args.get("pre_failure_only", "true").lower() == "true"
+        gt_raw = request.args.get("grade_threshold", "0.02")
+        try:
+            grade_threshold = float(gt_raw)
+        except (TypeError, ValueError):
+            grade_threshold = 0.02
+        result = analyze_grade_lateral(
+            filepath,
+            pre_failure_only=pre_failure_only,
+            grade_threshold=grade_threshold,
+        )
+        return jsonify(sanitize_non_finite_for_json(result))
     except Exception as e:
         import traceback
         return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500

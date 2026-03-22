@@ -8,6 +8,18 @@
 // Keep in sync with BENIGN_STALE_REASONS in backend/layer_health.py
 const BENIGN_STALE_REASONS = new Set(['left_lane_low_visibility']);
 
+/**
+ * Recording API URL. Uses window.PHILVIZ_API_BASE (e.g. http://localhost:5001/api)
+ * from data_loader.js when the UI is served from another origin; otherwise same-origin /api.
+ * @param {string} pathAndQuery - path starting with /recording/... including optional ?query
+ */
+function philvizRecordingApiUrl(pathAndQuery) {
+    const base = (typeof window !== 'undefined' && window.PHILVIZ_API_BASE) || '';
+    const prefix = (base || '/api').replace(/\/$/, '');
+    const p = pathAndQuery.startsWith('/') ? pathAndQuery : `/${pathAndQuery}`;
+    return `${prefix}${p}`;
+}
+
 class Visualizer {
     constructor() {
         this.dataLoader = new DataLoader();
@@ -4534,6 +4546,100 @@ class Visualizer {
         }
     }
 
+    async loadGradeLateral() {
+        if (!this.currentRecording) return;
+        const display = document.getElementById('grade-lateral-display');
+        const canvas = document.getElementById('grade-lateral-sparkline');
+        if (!display) return;
+        display.innerHTML = '<em style="color:#888;">Loading grade–lateral…</em>';
+        try {
+            const q = new URLSearchParams({ pre_failure_only: 'true', grade_threshold: '0.02' });
+            const resp = await fetch(
+                philvizRecordingApiUrl(
+                    `/recording/${encodeURIComponent(this.currentRecording)}/grade-lateral?${q}`
+                )
+            );
+            if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+            const data = await resp.json();
+            if (data.error) {
+                display.innerHTML = `<span style="color:#ff6b6b;">${this.escapeHtml(data.error)}</span>`;
+                return;
+            }
+            const bins = data.bins || {};
+            const rows = ['down', 'flat', 'up']
+                .filter((k) => bins[k])
+                .map((k) => {
+                    const b = bins[k];
+                    return `<tr><td>${k}</td><td>${b.frame_count}</td><td>${(100 * (b.time_fraction || 0)).toFixed(1)}%</td>` +
+                        `<td>${b.lateral_error_abs_mean_m}</td><td>${b.steering_zero_crossing_rate_hz_detrended}</td></tr>`;
+                })
+                .join('');
+            const corr = (data.correlation_summary || {}).downhill_vs_flat_steering_chatter_ratio;
+            const corrHtml = corr != null
+                ? `<div style="margin-top:0.5rem;color:#888;font-size:0.78rem;">Down–flat chatter ratio: ${corr}</div>`
+                : '';
+            display.innerHTML =
+                '<table class="data-table" style="font-size:0.82rem;"><thead><tr>' +
+                '<th>Bin</th><th>Frames</th><th>% time</th><th>|lat| mean (m)</th><th>Steer ZC Hz</th></tr></thead><tbody>' +
+                rows +
+                '</tbody></table>' + corrHtml;
+
+            if (canvas && canvas.getContext) {
+                const tsResp = await fetch(
+                    philvizRecordingApiUrl(
+                        `/recording/${encodeURIComponent(this.currentRecording)}/timeseries?signals=vehicle/road_grade`
+                    )
+                );
+                if (tsResp.ok) {
+                    const tsData = await tsResp.json();
+                    const vals = (tsData.signals && tsData.signals['vehicle/road_grade']) || [];
+                    this._drawSparkline(canvas, vals);
+                }
+            }
+        } catch (e) {
+            display.innerHTML = `<span style="color:#ff6b6b;">${this.escapeHtml(e.message)}</span>`;
+        }
+    }
+
+    _drawSparkline(canvas, values) {
+        const ctx = canvas.getContext('2d');
+        if (!ctx || !values || values.length < 2) return;
+        const dpr = window.devicePixelRatio || 1;
+        const cw = Math.max(120, canvas.clientWidth || 300);
+        const ch = 72;
+        canvas.width = Math.floor(cw * dpr);
+        canvas.height = Math.floor(ch * dpr);
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        ctx.clearRect(0, 0, cw, ch);
+        ctx.fillStyle = '#1a1a1a';
+        ctx.fillRect(0, 0, cw, ch);
+        ctx.fillStyle = 'rgba(80,120,200,0.15)';
+        ctx.fillRect(0, 0, cw * 0.33, ch);
+        ctx.fillStyle = 'rgba(120,120,120,0.12)';
+        ctx.fillRect(cw * 0.33, 0, cw * 0.34, ch);
+        ctx.fillStyle = 'rgba(200,140,80,0.15)';
+        ctx.fillRect(cw * 0.67, 0, cw * 0.33, ch);
+        let vmin = values[0];
+        let vmax = values[0];
+        for (let i = 0; i < values.length; i++) {
+            const v = values[i];
+            if (v < vmin) vmin = v;
+            if (v > vmax) vmax = v;
+        }
+        const span = (vmax - vmin) || 1e-6;
+        ctx.beginPath();
+        ctx.strokeStyle = '#7ecfff';
+        ctx.lineWidth = 1.5;
+        values.forEach((v, i) => {
+            const x = (i / (values.length - 1)) * (cw - 4) + 2;
+            const y = ch - 4 - ((v - vmin) / span) * (ch - 8);
+            if (i === 0) ctx.moveTo(x, y);
+            else ctx.lineTo(x, y);
+        });
+        ctx.stroke();
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
+    }
+
     async loadOscillationAttribution() {
         if (!this.currentRecording) return;
         const display = document.getElementById('oscillation-attribution-display');
@@ -4542,7 +4648,9 @@ class Visualizer {
         try {
             const q = new URLSearchParams({ pre_failure_only: 'true' });
             const resp = await fetch(
-                `/api/recording/${encodeURIComponent(this.currentRecording)}/oscillation-attribution?${q}`
+                philvizRecordingApiUrl(
+                    `/recording/${encodeURIComponent(this.currentRecording)}/oscillation-attribution?${q}`
+                )
             );
             if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
             const data = await resp.json();
@@ -4737,7 +4845,9 @@ class Visualizer {
             const params = new URLSearchParams();
             if (analyzeToFailure) params.set('pre_failure_only', 'true');
             const q = params.toString();
-            const url = `/api/recording/${this.currentRecording}/cadence-breakdown${q ? `?${q}` : ''}`;
+            const url = philvizRecordingApiUrl(
+                `/recording/${encodeURIComponent(this.currentRecording)}/cadence-breakdown${q ? `?${q}` : ''}`
+            );
             const response = await fetch(url);
             if (!response.ok) throw new Error(`HTTP ${response.status}`);
             const data = await response.json();
@@ -9481,6 +9591,7 @@ class Visualizer {
                 this.loadStaleEvents();
                 this.loadTrajectoryDegradationEvents();
                 this.loadOscillationAttribution();
+                this.loadGradeLateral();
             } else if (tabName === 'mpc-pipeline') {
                 this.loadMpcPipeline();
             }

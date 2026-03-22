@@ -1129,6 +1129,19 @@ class DataRecorder:
             maxshape=max_shape,
             dtype=h5py.string_dtype(encoding='utf-8', length=64)
         )
+        for _perf_name in (
+            "perf_perception_ms",
+            "perf_planning_ms",
+            "perf_control_ms",
+            "perf_hdf5_write_ms",
+            "perf_wait_input_ms",
+        ):
+            self.h5_file.create_dataset(
+                f"control/{_perf_name}",
+                shape=(0,),
+                maxshape=max_shape,
+                dtype=np.float32,
+            )
         self.h5_file.create_dataset(
             "control/target_speed_raw",
             shape=(0,),
@@ -3149,6 +3162,18 @@ class DataRecorder:
             maxshape=max_shape,
             dtype=np.float32
         )
+        self.h5_file.create_dataset(
+            "control/lateral_grade_damping",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/lateral_error_smoothing_alpha_effective",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
         # NEW: Control stale data tracking
         self.h5_file.create_dataset(
             "control/using_stale_perception",
@@ -4940,6 +4965,8 @@ class DataRecorder:
         straight_oscillation_rate_list = []
         tuned_deadband_list = []
         tuned_error_smoothing_alpha_list = []
+        lateral_grade_damping_list = []
+        lateral_error_smoothing_alpha_effective_list = []
         # NEW: Control stale data tracking
         using_stale_perception_list = []
         stale_perception_reason_list = []
@@ -4950,6 +4977,11 @@ class DataRecorder:
         e2e_control_sent_mono_s_list = []
         e2e_latency_ms_list = []
         e2e_latency_mode_list = []
+        perf_perception_ms_list = []
+        perf_planning_ms_list = []
+        perf_control_ms_list = []
+        perf_hdf5_write_ms_list = []
+        perf_wait_input_ms_list = []
         target_speed_raw_list = []
         target_speed_post_limits_list = []
         target_speed_planned_list = []
@@ -5667,6 +5699,12 @@ class DataRecorder:
             straight_oscillation_rate_list.append(getattr(cc, 'straight_oscillation_rate', 0.0) or 0.0)
             tuned_deadband_list.append(getattr(cc, 'tuned_deadband', 0.0) or 0.0)
             tuned_error_smoothing_alpha_list.append(getattr(cc, 'tuned_error_smoothing_alpha', 0.0) or 0.0)
+            lateral_grade_damping_list.append(
+                float(getattr(cc, 'lateral_grade_damping', 0.0) or 0.0)
+            )
+            lateral_error_smoothing_alpha_effective_list.append(
+                float(getattr(cc, 'lateral_error_smoothing_alpha_effective', 0.0) or 0.0)
+            )
             # NEW: Control stale data tracking
             using_stale_perception_list.append(cc.using_stale_perception if hasattr(cc, 'using_stale_perception') else False)
             stale_perception_reason_list.append(cc.stale_perception_reason if hasattr(cc, 'stale_perception_reason') and cc.stale_perception_reason else "")
@@ -5698,6 +5736,31 @@ class DataRecorder:
             )
             e2e_latency_mode_list.append(
                 str(getattr(cc, 'e2e_latency_mode', '') or '')
+            )
+            perf_perception_ms_list.append(
+                float(getattr(cc, "perf_perception_ms", np.nan))
+                if getattr(cc, "perf_perception_ms", None) is not None
+                else np.nan
+            )
+            perf_planning_ms_list.append(
+                float(getattr(cc, "perf_planning_ms", np.nan))
+                if getattr(cc, "perf_planning_ms", None) is not None
+                else np.nan
+            )
+            perf_control_ms_list.append(
+                float(getattr(cc, "perf_control_ms", np.nan))
+                if getattr(cc, "perf_control_ms", None) is not None
+                else np.nan
+            )
+            perf_hdf5_write_ms_list.append(
+                float(getattr(cc, "perf_hdf5_write_ms", np.nan))
+                if getattr(cc, "perf_hdf5_write_ms", None) is not None
+                else np.nan
+            )
+            perf_wait_input_ms_list.append(
+                float(getattr(cc, "perf_wait_input_ms", np.nan))
+                if getattr(cc, "perf_wait_input_ms", None) is not None
+                else np.nan
             )
             target_speed_raw_list.append(getattr(cc, 'target_speed_raw', 0.0) or 0.0)
             target_speed_post_limits_list.append(getattr(cc, 'target_speed_post_limits', 0.0) or 0.0)
@@ -6155,11 +6218,17 @@ class DataRecorder:
                        "time_to_next_curve_start_s",
                        "road_curvature_valid", "road_curvature_abs", "straight_oscillation_rate",
                        "road_curvature_source", "tuned_deadband", "tuned_error_smoothing_alpha",
+                       "lateral_grade_damping", "lateral_error_smoothing_alpha_effective",
                        "using_stale_perception", "stale_perception_reason",
                        "emergency_stop",
                        "e2e_front_ready_mono_s", "e2e_vehicle_ready_mono_s",
                        "e2e_inputs_ready_mono_s", "e2e_control_sent_mono_s",
                        "e2e_latency_ms", "e2e_latency_mode",
+                       "perf_perception_ms",
+                       "perf_planning_ms",
+                       "perf_control_ms",
+                       "perf_hdf5_write_ms",
+                       "perf_wait_input_ms",
                        "target_speed_raw",
                        "target_speed_post_limits", "target_speed_planned", "target_speed_final",
                        "target_speed_slew_active", "target_speed_ramp_active",
@@ -6766,6 +6835,10 @@ class DataRecorder:
             self.h5_file["control/straight_oscillation_rate"][current_size:] = straight_oscillation_rate_list
             self.h5_file["control/tuned_deadband"][current_size:] = tuned_deadband_list
             self.h5_file["control/tuned_error_smoothing_alpha"][current_size:] = tuned_error_smoothing_alpha_list
+            self.h5_file["control/lateral_grade_damping"][current_size:] = lateral_grade_damping_list
+            self.h5_file["control/lateral_error_smoothing_alpha_effective"][current_size:] = (
+                lateral_error_smoothing_alpha_effective_list
+            )
             # NEW: Write control stale data
             self.h5_file["control/using_stale_perception"][current_size:] = using_stale_perception_list
             stale_perception_reason_array = np.array(stale_perception_reason_list, dtype=h5py.string_dtype(encoding='utf-8', length=50))
@@ -6789,6 +6862,21 @@ class DataRecorder:
             self.h5_file["control/e2e_latency_mode"][current_size:] = np.array(
                 e2e_latency_mode_list,
                 dtype=h5py.string_dtype(encoding='utf-8', length=64),
+            )
+            self.h5_file["control/perf_perception_ms"][current_size:] = np.array(
+                perf_perception_ms_list, dtype=np.float32
+            )
+            self.h5_file["control/perf_planning_ms"][current_size:] = np.array(
+                perf_planning_ms_list, dtype=np.float32
+            )
+            self.h5_file["control/perf_control_ms"][current_size:] = np.array(
+                perf_control_ms_list, dtype=np.float32
+            )
+            self.h5_file["control/perf_hdf5_write_ms"][current_size:] = np.array(
+                perf_hdf5_write_ms_list, dtype=np.float32
+            )
+            self.h5_file["control/perf_wait_input_ms"][current_size:] = np.array(
+                perf_wait_input_ms_list, dtype=np.float32
             )
             self.h5_file["control/target_speed_raw"][current_size:] = target_speed_raw_list
             self.h5_file["control/target_speed_post_limits"][current_size:] = target_speed_post_limits_list

@@ -298,6 +298,11 @@ def analyze_cadence(
         front = _read_dataset(f, "control/e2e_front_ready_mono_s")
         vehicle_mono = _read_dataset(f, "control/e2e_vehicle_ready_mono_s")
         e2e_lat = _read_dataset(f, "control/e2e_latency_ms")
+        perf_perception_ms = _read_dataset(f, "control/perf_perception_ms")
+        perf_planning_ms = _read_dataset(f, "control/perf_planning_ms")
+        perf_control_ms = _read_dataset(f, "control/perf_control_ms")
+        perf_hdf5_write_ms = _read_dataset(f, "control/perf_hdf5_write_ms")
+        perf_wait_input_ms_ds = _read_dataset(f, "control/perf_wait_input_ms")
 
         qd = _read_dataset(f, "vehicle/stream_front_queue_depth")
         fid_delta = _read_dataset(f, "vehicle/stream_front_frame_id_delta")
@@ -337,6 +342,11 @@ def analyze_cadence(
         front = trim(front)
         vehicle_mono = trim(vehicle_mono)
         e2e_lat = trim(e2e_lat)
+        perf_perception_ms = trim(perf_perception_ms)
+        perf_planning_ms = trim(perf_planning_ms)
+        perf_control_ms = trim(perf_control_ms)
+        perf_hdf5_write_ms = trim(perf_hdf5_write_ms)
+        perf_wait_input_ms_ds = trim(perf_wait_input_ms_ds)
         qd = trim(qd)
         fid_delta = trim(fid_delta)
         unity_dt = trim(unity_dt)
@@ -346,7 +356,7 @@ def analyze_cadence(
         end_slice = n
         if pre_failure_only:
             try:
-                from tools.drive_summary_core import analyze_recording_summary
+                from drive_summary_core import analyze_recording_summary
 
                 summ = analyze_recording_summary(path, analyze_to_failure=True)
                 ff = (summ.get("executive_summary") or {}).get("failure_frame")
@@ -366,6 +376,11 @@ def analyze_cadence(
         front = slice_n(front)
         vehicle_mono = slice_n(vehicle_mono)
         e2e_lat = slice_n(e2e_lat)
+        perf_perception_ms = slice_n(perf_perception_ms)
+        perf_planning_ms = slice_n(perf_planning_ms)
+        perf_control_ms = slice_n(perf_control_ms)
+        perf_hdf5_write_ms = slice_n(perf_hdf5_write_ms)
+        perf_wait_input_ms_ds = slice_n(perf_wait_input_ms_ds)
         qd = slice_n(qd)
         fid_delta = slice_n(fid_delta)
         unity_dt = slice_n(unity_dt)
@@ -383,6 +398,7 @@ def analyze_cadence(
         "unity_delta_time": unity_delta_s is not None,
         "timestamp_minus_realtime": ts_rt is not None,
         "front_vehicle_mono": front is not None and vehicle_mono is not None,
+        "perf_perception_ms": perf_perception_ms is not None,
     }
 
     wall_loop_period_ms = np.full(n, np.nan, dtype=np.float64)
@@ -448,6 +464,17 @@ def analyze_cadence(
         m = np.isfinite(unity_delta_s) & (unity_delta_s > 0) & (unity_delta_s < 1.0)
         unity_render_dt_ms[m] = unity_delta_s[m] * 1000.0
         series_map["unity_render_frame_dt_ms"] = unity_render_dt_ms
+
+    if perf_perception_ms is not None:
+        series_map["perf_perception_ms"] = perf_perception_ms
+    if perf_planning_ms is not None:
+        series_map["perf_planning_ms"] = perf_planning_ms
+    if perf_control_ms is not None:
+        series_map["perf_control_ms"] = perf_control_ms
+    if perf_hdf5_write_ms is not None:
+        series_map["perf_hdf5_write_ms"] = perf_hdf5_write_ms
+    if perf_wait_input_ms_ds is not None:
+        series_map["perf_wait_input_ms"] = perf_wait_input_ms_ds
 
     stats_all = {name: finite_stats(arr) for name, arr in series_map.items()}
     stats_severe = {name: stats_for(severe_mask, arr) for name, arr in series_map.items()}
