@@ -20,9 +20,37 @@ G6-L0–L3 deliver **observability** (HDF5 telemetry, `grade_lateral_v1`, PhilVi
   Increases grade-proportional reduction of lateral error smoothing α (more smoothing on steeper grade).  
   **Increase** if downhill chatter is high; **decrease** if the car feels sluggish / under-reactive on grade.
 
-**Log:** 2026-03-22 — baseline nudged **6.5 → 7.5** pending next E2E `grade_lateral_v1` + gate comparison (G6-L4).
+**A/B log (hill_highway E2E):**
+
+| Change | `recording_*.h5` | Result |
+|--------|-------------------|--------|
+| **6.5 → 7.5** | `20260322_123744` (before) vs `20260322_125614` (after) | **Fail promotion:** overall score ↓ (~95.2 → ~94.4), lateral p95 ↑, oscillation ZC ↑, steer jerk at cap; downhill \|lat\| improved slightly but **flat** lateral and oscillation **worsened**. **Reverted to 6.5.** |
 
 Related: **`base_error_smoothing_alpha`** — global lateral blend; changing it affects all road grades, not only grade bins.
+
+---
+
+## How to robustly resolve (after failed grade-only bump)
+
+**Observation:** Worst **flat** spans had **tiny** `|trajectory_ref_x − perception_lane_center|` — the problem is **not** “planner disagrees with lane center” in the recording. Oscillation attribution points to **control-loop** character with **perception** as the labeled primary layer (lead–lag + subtype). **Grade damping alone** is the wrong lever if regressions show up on **flat** and in **global oscillation**.
+
+**Recommended sequence (one knob per A/B, same track + duration):**
+
+1. **Flat / PP lateral (primary for this symptom)**  
+   - Small **`pp_feedback_gain`** reduction (e.g. 0.075 → 0.070) or **`pp_max_steering_rate`** tweak — **re-run** `grade_lateral_v1` + `inspect_flat_focus_layers.py` + `executive_summary`.  
+   - Goal: lower **flat-bin** \|lat\| p95 and **oscillation_zero_crossing_rate_hz** without new failures.
+
+2. **Perception stability (if ref−perc stays small but error is large)**  
+   - Temporal / jump logic on **`perception/inference`** (or lane smoothing) — **only** with evidence: high jump rate, or PhilViz frame review at **flat_focus** ranges.
+
+3. **Regime / blend**  
+   - If MPC or blend is active, add **regime-stratified** metrics (v2) or inspect **`regime_blend_weight`** / limiter activity at bad frames — avoid tuning grade damping until blend is clean.
+
+4. **Grade damping (retry later)**  
+   - Only after (1) stabilizes **flat** and overall score; try **small** steps (e.g. 6.5 → 6.8), **not** 6.5 → 7.5, and **gate** on **all** bins + score.
+
+5. **Always**  
+   - Pre-failure windows only for attribution; keep **PhilViz** flat-focus + `inspect_flat_focus_layers` **pair** for each candidate.
 
 ## A/B protocol (minimal)
 
