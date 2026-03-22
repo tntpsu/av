@@ -8001,6 +8001,13 @@ class AVStack:
             grade_compensation_active=1.0 if abs(getattr(self, '_smoothed_grade', 0.0)) > 0.001 else 0.0,
             diag_silent_elat_dropout_active=bool(control_command.get('diag_silent_elat_dropout_active', False)),
             mpc_elat_ramp_active=bool(control_command.get('mpc_elat_ramp_active', False)),
+            nmpc_used=float(control_command.get('nmpc_used', 0.0)),
+            nmpc_feasible=bool(control_command.get('nmpc_feasible', False)),
+            nmpc_solve_time_ms=float(control_command.get('nmpc_solve_time_ms', 0.0)),
+            nmpc_cost=float(control_command.get('nmpc_cost', 0.0)),
+            nmpc_iterations=int(control_command.get('nmpc_iterations', 0)),
+            nmpc_fallback_active=bool(control_command.get('nmpc_fallback_active', False)),
+            nmpc_consecutive_failures=int(control_command.get('nmpc_consecutive_failures', 0)),
             effective_max_accel=float(getattr(
                 getattr(getattr(self, 'controller', None), 'longitudinal_controller', None),
                 '_effective_max_accel', 0.0)),

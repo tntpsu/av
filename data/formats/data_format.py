@@ -542,6 +542,14 @@ class ControlCommand:
     # triggering the stale hold flag — causing silent drift that isn't rate-limited.
     diag_silent_elat_dropout_active: bool = False  # True when |e_lat|<threshold, stale=0, on curve
     mpc_elat_ramp_active: bool = False             # True when dropout recovery rate-limiter clamped e_lat step
+    # NMPC telemetry (zero-filled when NMPC is inactive or regime != NONLINEAR_MPC)
+    nmpc_used: float = 0.0                # 1.0 when NMPC ran this frame, 0.0 when LMPC ran as fallback
+    nmpc_feasible: bool = False           # NMPC solver returned a valid solution
+    nmpc_solve_time_ms: float = 0.0       # SLSQP wall-clock solve time (ms)
+    nmpc_cost: float = 0.0               # Optimal NLP cost (for solver health monitoring)
+    nmpc_iterations: int = 0             # SLSQP iterations used (spike → near constraint boundary)
+    nmpc_fallback_active: bool = False    # True when NMPC failed → LMPC fallback active
+    nmpc_consecutive_failures: int = 0   # Consecutive NMPC solver failures
 
 
 @dataclass

@@ -1968,6 +1968,13 @@ class DataRecorder:
         self.h5_file.create_dataset("control/mpc_delay_frames_used", shape=(0,), maxshape=max_shape, dtype=np.int8)
         self.h5_file.create_dataset("control/grade_compensation_active", shape=(0,), maxshape=max_shape, dtype=np.float32)
         self.h5_file.create_dataset("control/effective_max_accel", shape=(0,), maxshape=max_shape, dtype=np.float32)
+        self.h5_file.create_dataset("control/nmpc_used", shape=(0,), maxshape=max_shape, dtype=np.float32)
+        self.h5_file.create_dataset("control/nmpc_feasible", shape=(0,), maxshape=max_shape, dtype=np.int8)
+        self.h5_file.create_dataset("control/nmpc_solve_time_ms", shape=(0,), maxshape=max_shape, dtype=np.float32)
+        self.h5_file.create_dataset("control/nmpc_cost", shape=(0,), maxshape=max_shape, dtype=np.float32)
+        self.h5_file.create_dataset("control/nmpc_iterations", shape=(0,), maxshape=max_shape, dtype=np.int16)
+        self.h5_file.create_dataset("control/nmpc_fallback_active", shape=(0,), maxshape=max_shape, dtype=np.int8)
+        self.h5_file.create_dataset("control/nmpc_consecutive_failures", shape=(0,), maxshape=max_shape, dtype=np.int16)
         self.h5_file.create_dataset(
             "control/diag_silent_elat_dropout_active",
             shape=(0,),
@@ -5158,6 +5165,13 @@ class DataRecorder:
         effective_max_accel_list = []
         diag_silent_elat_dropout_active_list = []
         mpc_elat_ramp_active_list = []
+        nmpc_used_list = []
+        nmpc_feasible_list = []
+        nmpc_solve_time_ms_list = []
+        nmpc_cost_list = []
+        nmpc_iterations_list = []
+        nmpc_fallback_active_list = []
+        nmpc_consecutive_failures_list = []
         accel_feedforward_list = []
         brake_feedforward_list = []
         accel_capped_list = []
@@ -6093,6 +6107,13 @@ class DataRecorder:
             mpc_elat_ramp_active_list.append(
                 int(getattr(cc, "mpc_elat_ramp_active", False))
             )
+            nmpc_used_list.append(float(getattr(cc, 'nmpc_used', 0.0)))
+            nmpc_feasible_list.append(int(getattr(cc, 'nmpc_feasible', False)))
+            nmpc_solve_time_ms_list.append(float(getattr(cc, 'nmpc_solve_time_ms', 0.0)))
+            nmpc_cost_list.append(float(getattr(cc, 'nmpc_cost', 0.0)))
+            nmpc_iterations_list.append(int(getattr(cc, 'nmpc_iterations', 0)))
+            nmpc_fallback_active_list.append(int(getattr(cc, 'nmpc_fallback_active', False)))
+            nmpc_consecutive_failures_list.append(int(getattr(cc, 'nmpc_consecutive_failures', 0)))
 
         if timestamps:
             current_size = self.h5_file["control/timestamps"].shape[0]
@@ -6352,7 +6373,10 @@ class DataRecorder:
                        "grade_compensation_active",
                        "diag_silent_elat_dropout_active",
                        "mpc_elat_ramp_active",
-                       "effective_max_accel"]:
+                       "effective_max_accel",
+                       "nmpc_used", "nmpc_feasible", "nmpc_solve_time_ms",
+                       "nmpc_cost", "nmpc_iterations",
+                       "nmpc_fallback_active", "nmpc_consecutive_failures"]:
                 self.h5_file[f"control/{key}"].resize((new_size,))
             
             # Write data
@@ -7225,6 +7249,13 @@ class DataRecorder:
             self.h5_file["control/mpc_elat_ramp_active"][current_size:] = np.array(
                 mpc_elat_ramp_active_list, dtype=np.int8
             )
+            self.h5_file["control/nmpc_used"][current_size:] = np.array(nmpc_used_list, dtype=np.float32)
+            self.h5_file["control/nmpc_feasible"][current_size:] = np.array(nmpc_feasible_list, dtype=np.int8)
+            self.h5_file["control/nmpc_solve_time_ms"][current_size:] = np.array(nmpc_solve_time_ms_list, dtype=np.float32)
+            self.h5_file["control/nmpc_cost"][current_size:] = np.array(nmpc_cost_list, dtype=np.float32)
+            self.h5_file["control/nmpc_iterations"][current_size:] = np.array(nmpc_iterations_list, dtype=np.int16)
+            self.h5_file["control/nmpc_fallback_active"][current_size:] = np.array(nmpc_fallback_active_list, dtype=np.int8)
+            self.h5_file["control/nmpc_consecutive_failures"][current_size:] = np.array(nmpc_consecutive_failures_list, dtype=np.int16)
 
     def _write_perception_outputs(self, frames: List[RecordingFrame]):
         """Write perception outputs to HDF5."""

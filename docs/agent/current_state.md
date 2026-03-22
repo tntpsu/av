@@ -1,7 +1,7 @@
 # AV Stack — Agent Memory: Current State
 
 **Last updated:** 2026-03-22
-**Current milestone:** Step 3.5 ff_alignment validated (2026-03-22). hill_highway 94.9/100 (ff_alignment=True). A/B confirmed: disabling causes steering jerk cap hit (9.2→18.0), +0.012m adj_rmse, oscillation runaway. Next: Step 5 (NMPC) unlocked.
+**Current milestone:** Step 5 NMPC — Phases A-D complete (2026-03-22). control/nmpc_controller.py written (scipy SLSQP + analytical adjoint gradient, 5–16ms). NMPC dispatch wired in pid_controller.py. HDF5 fields registered (7 nmpc_* datasets). 1334 tests passing. Next: Phase E tools updates (analyze_drive_overall, mpc_pipeline, triage_engine, issue_detector, layer_health).
 
 ---
 

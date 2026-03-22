@@ -11,6 +11,7 @@ import yaml
 
 from control.curve_capability import compute_turn_feasibility
 from control.mpc_controller import MPCController
+from control.nmpc_controller import NMPCController
 from control.regime_selector import ControlRegime, RegimeConfig, RegimeSelector
 
 
@@ -5381,6 +5382,18 @@ class VehicleController:
                     "MPC init failed: %s — falling back to PP only", _e
                 )
 
+        # NMPC controller (Step 5): activated when nmpc_enabled=true in config.
+        # Only instantiated when LMPC is also available — NMPC requires LMPC as fallback.
+        self._nmpc_controller = None
+        _nmpc_cfg = self._full_config.get('trajectory', {}).get('nmpc', {})
+        if _nmpc_cfg.get('nmpc_enabled', False) and self._mpc_controller is not None:
+            try:
+                self._nmpc_controller = NMPCController(self._full_config)
+            except Exception as _e:
+                _logging.getLogger(__name__).error(
+                    "NMPC init failed: %s — NONLINEAR_MPC regime will fall back to LMPC", _e
+                )
+
         self._last_steering_norm = 0.0
         self._last_mpc_steering = 0.0  # for MPC-aware rate limiter (2.8.3)
         _mpc_cfg = self._full_config.get('trajectory', {}).get('mpc', {})
@@ -5434,10 +5447,14 @@ class VehicleController:
             lateral_metadata = {}
 
         # --- Regime dispatch ---
+        # Report fallback to regime selector: True when the active MPC/NMPC controller
+        # has failed and is holding last-good steering (signals regime to stay put).
         mpc_fallback = (
             self._mpc_controller._fallback_active
             if self._mpc_controller is not None else False
         )
+        if self._nmpc_controller is not None and self._nmpc_controller._fallback_active:
+            mpc_fallback = True
         _regime_curvature = abs(float(
             lateral_metadata.get('curvature_primary_abs', 0.0) or 0.0
         ))
@@ -5560,6 +5577,145 @@ class VehicleController:
             lateral_metadata['mpc_smith_e_lat_predicted'] = predicted_e_lat
             lateral_metadata['mpc_smith_e_heading_predicted'] = predicted_e_heading
             lateral_metadata['mpc_delay_frames_used'] = delay_frames
+            self._last_steering_norm = steering / max(1e-6, self.lateral_controller.max_steering)
+            lateral_metadata['stanley_active'] = 0.0
+
+        elif regime == ControlRegime.NONLINEAR_MPC and self._mpc_controller is not None:
+            # --- NMPC high-speed regime (Step 5) ---
+            # Activated when speed > lmpc_max_speed_mps (20 m/s) or
+            # |heading_error| > lmpc_max_heading_error_rad (0.25 rad).
+            # Falls back to LMPC when NMPC solver fails or _nmpc_controller is None.
+            #
+            # e_lat / e_heading sign conventions: identical to LINEAR_MPC block above.
+            gt_cross_track = reference_point.get('gt_cross_track_m')
+            gt_heading = reference_point.get('gt_heading_error_rad')
+
+            if gt_cross_track is not None and gt_heading is not None:
+                raw_e_lat = -float(gt_cross_track)
+                raw_e_heading = float(gt_heading)
+            else:
+                raw_e_lat = -float(lateral_metadata.get('lateral_error', 0.0))
+                raw_e_heading = float(lateral_metadata.get('heading_error', 0.0))
+
+            # Delay compensation (same linear model as LMPC)
+            frame_dt = dt or 0.033
+            v_now = float(current_state.get('speed', 0.0))
+            delay_frames = len(self._steering_ring_buffer)
+            total_delay_dt = delay_frames * frame_dt
+            predicted_e_lat = raw_e_lat + v_now * raw_e_heading * total_delay_dt
+
+            # Kappa horizon: interpolate to NMPC time steps.
+            # Use NMPC controller's dt/N when available; fall back to LMPC's.
+            _active_ctrl = self._nmpc_controller if self._nmpc_controller is not None else self._mpc_controller
+            nmpc_horizon_for_controller = None
+            _ch_signed = reference_point.get('curvature_horizon_signed')
+            _ch_distances = reference_point.get('curvature_horizon_distances')
+            if _ch_signed is not None and _ch_distances is not None and len(_ch_signed) > 0:
+                horizon_d = np.array(_ch_distances)
+                horizon_k = np.array(_ch_signed)
+                v_interp = max(v_now, 0.5)
+                ctrl_dt = _active_ctrl.params.dt
+                ctrl_N = (_active_ctrl.solver._N if hasattr(_active_ctrl.solver, '_N')
+                          else _active_ctrl.params.horizon)
+                ctrl_distances = np.arange(1, ctrl_N + 1) * v_interp * ctrl_dt
+                nmpc_horizon_for_controller = np.interp(ctrl_distances, horizon_d, horizon_k)
+
+            kappa_ref = float(reference_point.get('curvature', 0.0) or 0.0)
+            v_target = float(reference_point.get('velocity') or self.longitudinal_controller.target_speed)
+            v_max = float(self.longitudinal_controller.max_speed)
+
+            # Try NMPC first; fall back to LMPC if unavailable or in fallback state
+            nmpc_used = False
+            nmpc_result = None
+            if self._nmpc_controller is not None:
+                nmpc_result = self._nmpc_controller.compute_steering(
+                    e_lat=predicted_e_lat,
+                    e_heading=raw_e_heading,
+                    current_speed=v_now,
+                    last_delta_norm=self._last_steering_norm,
+                    kappa_ref=kappa_ref,
+                    v_target=v_target,
+                    v_max=v_max,
+                    dt=frame_dt,
+                    kappa_horizon=nmpc_horizon_for_controller,
+                    grade_rad=grade_rad,
+                )
+                if not self._nmpc_controller.should_fallback_to_lmpc:
+                    nmpc_used = True
+
+            # LMPC fallback (or LMPC-primary when NMPC unavailable)
+            if not nmpc_used:
+                mpc_result = self._mpc_controller.compute_steering(
+                    e_lat=predicted_e_lat,
+                    e_heading=raw_e_heading,
+                    current_speed=v_now,
+                    last_delta_norm=self._last_steering_norm,
+                    kappa_ref=kappa_ref,
+                    v_target=v_target,
+                    v_max=v_max,
+                    dt=frame_dt,
+                    kappa_horizon=nmpc_horizon_for_controller,
+                    grade_rad=grade_rad,
+                )
+                active_result = mpc_result
+                active_feasible_key = 'mpc_feasible'
+                active_fallback_key = 'mpc_fallback_active'
+            else:
+                active_result = nmpc_result
+                active_feasible_key = 'nmpc_feasible'
+                active_fallback_key = 'nmpc_fallback_active'
+
+            # Blend / apply steering (same logic as LINEAR_MPC)
+            if active_result.get(active_fallback_key):
+                pass  # keep PP steering
+            elif blend_weight < 1.0:
+                ctrl_steer = float(active_result['steering_normalized']) * self.lateral_controller.max_steering
+                steering = (1.0 - blend_weight) * steering + blend_weight * ctrl_steer
+            else:
+                steering = float(active_result['steering_normalized']) * self.lateral_controller.max_steering
+
+            # Safety rate limiter (same as LMPC)
+            _mpc_cfg_rt = self._full_config.get('trajectory', {}).get('mpc', {})
+            mpc_max_rate = float(_mpc_cfg_rt.get('mpc_max_steering_rate_per_frame', 0.15))
+            mpc_rate_limiter_active = False
+            if not active_result.get(active_fallback_key, False):
+                delta_s = steering - self._last_mpc_steering
+                if abs(delta_s) > mpc_max_rate:
+                    steering = self._last_mpc_steering + float(np.sign(delta_s)) * mpc_max_rate
+                    mpc_rate_limiter_active = True
+            self._last_mpc_steering = steering
+            lateral_metadata['mpc_rate_limiter_active'] = mpc_rate_limiter_active
+
+            # Metadata: LMPC fields (keep consistent with analysis tools expecting mpc_* keys)
+            lateral_metadata['mpc_feasible'] = active_result.get('mpc_feasible', active_result.get('nmpc_feasible', False))
+            lateral_metadata['mpc_solve_time_ms'] = active_result.get('solve_time_ms', 0.0)
+            lateral_metadata['mpc_e_lat'] = active_result.get('e_lat_input', 0.0)
+            lateral_metadata['mpc_elat_ramp_active'] = False
+            lateral_metadata['mpc_e_heading'] = active_result.get('e_heading_input', 0.0)
+            lateral_metadata['mpc_kappa_ref'] = active_result.get('kappa_ref_used', 0.0)
+            lateral_metadata['mpc_fallback_active'] = active_result.get(active_fallback_key, False)
+            lateral_metadata['mpc_consecutive_failures'] = active_result.get(
+                'mpc_consecutive_failures', active_result.get('nmpc_consecutive_failures', 0)
+            )
+            lateral_metadata['mpc_gt_cross_track_m'] = float(gt_cross_track) if gt_cross_track is not None else float('nan')
+            lateral_metadata['mpc_gt_heading_error_rad'] = float(gt_heading) if gt_heading is not None else float('nan')
+            lateral_metadata['mpc_using_ground_truth'] = 1.0 if (gt_cross_track is not None and gt_heading is not None) else 0.0
+            lateral_metadata['mpc_kappa_preview_used'] = False
+            lateral_metadata['mpc_kappa_preview_range'] = 0.0
+            lateral_metadata['mpc_last_steering_pre_modify'] = steering
+            lateral_metadata['mpc_smith_raw_e_lat'] = raw_e_lat
+            lateral_metadata['mpc_smith_e_lat_predicted'] = predicted_e_lat
+            lateral_metadata['mpc_smith_e_heading_predicted'] = raw_e_heading
+            lateral_metadata['mpc_delay_frames_used'] = delay_frames
+            # NMPC-specific metadata
+            lateral_metadata['nmpc_used'] = float(nmpc_used)
+            lateral_metadata['nmpc_feasible'] = bool(nmpc_result.get('nmpc_feasible', False)) if nmpc_result else False
+            lateral_metadata['nmpc_solve_time_ms'] = float(nmpc_result.get('solve_time_ms', 0.0)) if nmpc_result else 0.0
+            lateral_metadata['nmpc_cost'] = float(nmpc_result.get('nmpc_cost', float('nan'))) if nmpc_result else float('nan')
+            lateral_metadata['nmpc_iterations'] = int(nmpc_result.get('nmpc_iterations', 0)) if nmpc_result else 0
+            lateral_metadata['nmpc_fallback_active'] = bool(nmpc_result.get('nmpc_fallback_active', False)) if nmpc_result else False
+            lateral_metadata['nmpc_consecutive_failures'] = int(nmpc_result.get('nmpc_consecutive_failures', 0)) if nmpc_result else 0
+
             self._last_steering_norm = steering / max(1e-6, self.lateral_controller.max_steering)
             lateral_metadata['stanley_active'] = 0.0
 
@@ -5716,7 +5872,7 @@ class VehicleController:
         """
         from control.regime_selector import ControlRegime
         regime = self._regime_selector.active_regime
-        if regime == ControlRegime.LINEAR_MPC:
+        if regime in (ControlRegime.LINEAR_MPC, ControlRegime.NONLINEAR_MPC):
             self._last_steering_norm = actual_steering / max(1e-6, self.lateral_controller.max_steering)
         # Always push actual steering into ring buffer for Smith predictor (pop oldest, append newest)
         if self._steering_ring_buffer:
@@ -5730,6 +5886,8 @@ class VehicleController:
         self._regime_selector.reset()
         if self._mpc_controller is not None:
             self._mpc_controller.reset()
+        if self._nmpc_controller is not None:
+            self._nmpc_controller.reset()
         self._last_steering_norm = 0.0
         self._last_mpc_steering = 0.0
         _mpc_cfg = self._full_config.get('trajectory', {}).get('mpc', {})

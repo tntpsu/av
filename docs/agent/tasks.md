@@ -6,10 +6,17 @@
 
 ## Current Focus
 
-**No active task.** T-078 and Step 3.5 both resolved. Candidates for next session:
-- Step 5: NMPC + full hierarchical hybrid (entry: Step 3.5 ✅ now validated)
-- Update ROADMAP adj_rmse gate (0.25m was pre-Step 4; current baseline is 0.297m)
-- Lead vehicle following / ACC (Step 5 parallel track)
+**Active: Step 5 NMPC — in progress.** Phases A-D complete. Next: Phase E tool updates, then Phase G unit tests, Phase C (full dispatch integration test), Phase H live validation on autobahn_30.
+
+**Phase completion status:**
+- ✅ Phase A: `tracks/autobahn_30.yml` + `config/mpc_autobahn.yaml` + scoring_registry NMPC constants
+- ✅ Phase F: `config/av_stack_config.yaml` — `trajectory.nmpc` section, `control.regime.lmpc_max_speed_mps`
+- ✅ Phase B: `control/nmpc_controller.py` — NMPCParams, NMPCSolver (scipy SLSQP + analytical adjoint gradient, 5–16ms), NMPCController
+- ✅ Phase C: `control/pid_controller.py` — NONLINEAR_MPC dispatch block, LMPC fallback path, nmpc_* metadata
+- ✅ Phase D: `data/recorder.py` + `data/formats/data_format.py` + `av_stack/orchestrator.py` — 7 nmpc_* HDF5 fields (all 6 registration locations)
+- 🔲 Phase E1-E6: Tools (analyze_drive_overall, mpc_pipeline, triage_engine, issue_detector, layer_health, oscillation_attribution)
+- 🔲 Phase G1+G2: Unit tests (test_nmpc_controller.py, test_regime_selector_nmpc.py)
+- 🔲 Phase H: Live validation on autobahn_30 track
 
 **Phase 2.8 VALIDATED on highway (2026-03-12).** MPC pipeline fixes (2.8.1–2.8.4) complete:
 - 2.8.1: Recovery mode suppression (skip ×1.2/×1.5 when MPC active)
@@ -41,6 +48,7 @@
 | — | Codex A/B results invalidated: grade_steering_damping_gain/pp_feedback_gain/pp_max_steering_rate A/B tests all ran against artifact-corrupted baseline (2-4 false teleports each) — all revert to prior defaults | 2026-03-22 |
 | T-078 | Late turn-in root cause fully investigated: MPC cost function structural trade-off (q_lat=1.60, r_steer_rate=2.0 → breakeven q_lat=11.5 for full fix). kappa_ref preview fix tried → oscillation runaway → reverted. PP floor rescue BENIGN (floor lowering caused regression). **DEFERRED.** | 2026-03-22 |
 | 3.5 | 2DOF FF alignment live validated: ff_alignment=True vs False A/B on hill_highway. +0.4 pts, jerk cap hit without (9.2→18.0), adj_rmse 0.297→0.309m, oscillation runaway without. Feature confirmed beneficial, stays default=True. ROADMAP adj_rmse gate (0.25m) not met — gate pre-dates Step 4 MPC-as-primary and should be updated. | 2026-03-22 |
+| Step 5 A-D | NMPC Phases A-D: autobahn_30 track, mpc_autobahn.yaml overlay, nmpc_controller.py (SLSQP + adjoint gradient), pid_controller.py dispatch, HDF5 7-field registration. 1334 tests passing. | 2026-03-22 |
 
 ---
 
