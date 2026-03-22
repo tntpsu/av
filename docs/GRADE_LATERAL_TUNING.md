@@ -20,6 +20,8 @@ G6-L0–L3 deliver **observability** (HDF5 telemetry, `grade_lateral_v1`, PhilVi
   Increases grade-proportional reduction of lateral error smoothing α (more smoothing on steeper grade).  
   **Increase** if downhill chatter is high; **decrease** if the car feels sluggish / under-reactive on grade.
 
+**Log:** 2026-03-22 — baseline nudged **6.5 → 7.5** pending next E2E `grade_lateral_v1` + gate comparison (G6-L4).
+
 Related: **`base_error_smoothing_alpha`** — global lateral blend; changing it affects all road grades, not only grade bins.
 
 ## A/B protocol (minimal)

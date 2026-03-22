@@ -12,7 +12,8 @@ control:
     steering_smoothing_alpha: 0.92
     # Hill / grade: stronger smoothing reduction under grade (reduces lateral chatter on hill_highway).
     # G6-L4: tune only with A/B on grade_lateral_v1 + pre-failure metrics — docs/GRADE_LATERAL_TUNING.md
-    grade_steering_damping_gain: 6.5    # Subtracted from lateral error smoothing alpha; scales with |grade| (rise/run)
+    # 2026-03-22: 6.5 → 7.5 (small bump; re-verify flat/down bins + gates on next E2E).
+    grade_steering_damping_gain: 7.5    # Subtracted from lateral error smoothing alpha; scales with |grade| (rise/run)
     control_mode: pure_pursuit
     stanley_k: 1.5                 # base default; hairpin overlay sets 3.0 (validated 59→79)
     stanley_soft_speed: 2.0

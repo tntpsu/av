@@ -29,6 +29,12 @@ print(analyze_recording_summary(Path('data/recordings/your_run.h5'), include_gra
 
 PhilViz **Chain → Grade–Lateral Breakdown** also loads flat-focus (API `GET .../grade-lateral-flat-focus`) and lists ranges with **→** jump to frame.
 
+**Layer triage (perception vs trajectory vs control) on those ranges:**
+
+```bash
+python tools/inspect_flat_focus_layers.py data/recordings/your_run.h5 --out data/reports/flat_focus_layer_slice.md
+```
+
 ## Pre-failure policy
 
 Default analysis clips to `executive_summary.failure_frame` when `pre_failure_only` is true (matches oscillation attribution). Override by passing `failure_frame` into `analyze_grade_lateral` or using `--no-pre-failure-only` on the CLI.

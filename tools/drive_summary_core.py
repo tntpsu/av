@@ -3526,9 +3526,13 @@ def analyze_recording_summary(
             pass  # Speed feasibility uses original curve_mask below
 
         # Speed feasibility: speed > sqrt(2.45/|curvature|) is a violation
+        # Use masked assignment — np.where evaluates both branches and can divide by zero at |κ|≈0.
         curvature_eps = 1e-6
         abs_curv = np.abs(curvature_arr)
-        v_max = np.where(abs_curv > curvature_eps, np.sqrt(2.45 / abs_curv), np.inf)
+        m = abs_curv > curvature_eps
+        v_max = np.full_like(abs_curv, np.inf, dtype=np.float64)
+        if np.any(m):
+            v_max[m] = np.sqrt(2.45 / abs_curv[m])
         speed_feasibility_violation_frames = int(np.sum(speed_arr > v_max))
         if speed_feasibility_violation_frames > 5:
             capped = min(speed_feasibility_violation_frames, 30)
