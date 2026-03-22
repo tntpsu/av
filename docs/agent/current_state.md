@@ -1,7 +1,7 @@
 # AV Stack — Agent Memory: Current State
 
 **Last updated:** 2026-03-22
-**Current milestone:** Bridge regression fixed + clean baseline established. hill_highway 94.9/100. T-078 investigation complete — late turn-in root cause identified as MPC cost function structural trade-off. Deferred (low ROI). Next: Step 3.5 (ff_alignment) or Step 5 (NMPC).
+**Current milestone:** Step 3.5 ff_alignment validated (2026-03-22). hill_highway 94.9/100 (ff_alignment=True). A/B confirmed: disabling causes steering jerk cap hit (9.2→18.0), +0.012m adj_rmse, oscillation runaway. Next: Step 5 (NMPC) unlocked.
 
 ---
 
