@@ -11,7 +11,9 @@
 #   ./start_av_stack.sh --build-unity-player  # Build Unity player (macOS)
 #   ./start_av_stack.sh --skip-unity-build-if-clean  # Skip build if no Unity changes
 #   ./start_av_stack.sh --run-unity-player    # Run Unity player executable (macOS)
-#   ./start_av_stack.sh --build-unity-player --run-unity-player  # Build then run
+#   ./start_av_stack.sh --build-unity-player --run-unity-player  # Build then run (exec path)
+#   ./start_av_stack.sh --build-unity-player --open-built-app       # Build then macOS open(1)
+#   ./start_av_stack.sh --build-unity-player --no-run-unity-player  # Build only; start .app yourself
 #   ./start_av_stack.sh --record            # Start with data recording enabled
 #   ./start_av_stack.sh --duration 60       # Run for 60 seconds (similar to ground_truth_follower.py)
 #   ./start_av_stack.sh --duration 30 --launch-unity  # Run for 30 seconds and launch Unity
@@ -39,6 +41,8 @@ RUN_UNITY_PLAYER=false
 UNITY_BUILD_PATH=""
 UNITY_CLI_PATH=""
 SKIP_UNITY_BUILD_IF_CLEAN=false
+NO_RUN_UNITY_PLAYER=false
+OPEN_BUILT_APP=false
 TRACK_YAML_PATH=""
 START_T=""
 START_DISTANCE=""
@@ -55,7 +59,9 @@ usage() {
     echo "  --launch-unity, -u     Launch Unity automatically"
     echo "  --unity-auto-play, -p  Launch Unity and auto-enter Play mode"
     echo "  --build-unity-player   Build Unity player executable (macOS)"
-    echo "  --run-unity-player     Run Unity player executable (macOS, default behavior)"
+    echo "  --run-unity-player     Run built player via launch_unity_player (macOS, default)"
+    echo "  --no-run-unity-player  Do not auto-launch built player (build + stack only)"
+    echo "  --open-built-app       After build, open the .app with macOS open(1) (not exec path)"
     echo "  --unity-build-path     Output path for Unity player (default: unity/AVSimulation/mybuild.app)"
     echo "  --unity-path           Path to Unity executable for CLI builds"
     echo "  --skip-unity-build-if-clean  Skip Unity build when no changes are detected"
@@ -129,6 +135,14 @@ while [[ $# -gt 0 ]]; do
             RUN_UNITY_PLAYER=true
             shift
             ;;
+        --no-run-unity-player)
+            NO_RUN_UNITY_PLAYER=true
+            shift
+            ;;
+        --open-built-app)
+            OPEN_BUILT_APP=true
+            shift
+            ;;
         --unity-build-path)
             UNITY_BUILD_PATH="$2"
             shift 2
@@ -173,11 +187,15 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-# Default to launching compiled Unity player.
-RUN_UNITY_PLAYER=true
-# If user asked to launch Unity Editor, prefer that over player launch.
+# Default: auto-launch built player (unless Editor, open-built-app, or explicit opt-out).
 if [ "$LAUNCH_UNITY" = true ]; then
     RUN_UNITY_PLAYER=false
+elif [ "$OPEN_BUILT_APP" = true ]; then
+    RUN_UNITY_PLAYER=false
+elif [ "$NO_RUN_UNITY_PLAYER" = true ]; then
+    RUN_UNITY_PLAYER=false
+else
+    RUN_UNITY_PLAYER=true
 fi
 
 echo -e "${BLUE}╔══════════════════════════════════════════════════════════╗${NC}"
@@ -343,23 +361,7 @@ echo -e "  Health: $(curl -s "$BRIDGE_URL/api/health" | python3 -m json.tool 2>/
 echo -e "${GREEN}══════════════════════════════════════════════════════════${NC}"
 echo ""
 
-# Launch Unity if requested
-if [ "$BUILD_UNITY_PLAYER" = true ]; then
-    echo -e "${BLUE}Building Unity player...${NC}"
-    BUILD_ARGS=()
-    if [ -n "$UNITY_CLI_PATH" ]; then
-        BUILD_ARGS+=(--unity-path "$UNITY_CLI_PATH")
-    fi
-    if [ -n "$UNITY_BUILD_PATH" ]; then
-        BUILD_ARGS+=(--build-path "$UNITY_BUILD_PATH")
-    fi
-    if [ "$SKIP_UNITY_BUILD_IF_CLEAN" = true ]; then
-        BUILD_ARGS+=(--skip-if-clean)
-    fi
-    "$SCRIPT_DIR/build_unity_player.sh" "${BUILD_ARGS[@]}"
-    echo ""
-fi
-
+# Unity player CLI args (needed before build when using --open-built-app).
 UNITY_PLAYER_PID=""
 UNITY_PLAYER_ARGS=()
 
@@ -380,6 +382,50 @@ if [ -n "$START_RANDOM" ]; then
 fi
 if [ -n "$GT_CENTERLINE_AS_LEFT_LANE" ]; then
     UNITY_PLAYER_ARGS+=("--gt-centerline-as-left-lane" "$GT_CENTERLINE_AS_LEFT_LANE")
+fi
+
+# Launch Unity if requested
+if [ "$BUILD_UNITY_PLAYER" = true ]; then
+    echo -e "${BLUE}Building Unity player...${NC}"
+    BUILD_ARGS=()
+    if [ -n "$UNITY_CLI_PATH" ]; then
+        BUILD_ARGS+=(--unity-path "$UNITY_CLI_PATH")
+    fi
+    if [ -n "$UNITY_BUILD_PATH" ]; then
+        BUILD_ARGS+=(--build-path "$UNITY_BUILD_PATH")
+    fi
+    if [ "$SKIP_UNITY_BUILD_IF_CLEAN" = true ]; then
+        BUILD_ARGS+=(--skip-if-clean)
+    fi
+    "$SCRIPT_DIR/build_unity_player.sh" "${BUILD_ARGS[@]}"
+    echo ""
+fi
+
+if [ "$OPEN_BUILT_APP" = true ]; then
+    if [ ! -d "$UNITY_BUILD_PATH" ]; then
+        echo -e "${RED}✗ Unity player not found at: $UNITY_BUILD_PATH${NC}"
+        echo -e "${YELLOW}  Build with --build-unity-player or set --unity-build-path.${NC}"
+        kill $BRIDGE_PID 2>/dev/null || true
+        exit 1
+    fi
+    echo -e "${BLUE}Opening built player with ${GREEN}open -n${NC} (macOS)...${NC}"
+    if [ ${#UNITY_PLAYER_ARGS[@]} -gt 0 ]; then
+        open -n "$UNITY_BUILD_PATH" --args "${UNITY_PLAYER_ARGS[@]}" &
+    else
+        open -n "$UNITY_BUILD_PATH" &
+    fi
+    echo -e "${GREEN}✓ open(1) sent for built player${NC}"
+    echo ""
+elif [ "$NO_RUN_UNITY_PLAYER" = true ]; then
+    echo -e "${YELLOW}Built player not auto-launched (--no-run-unity-player).${NC}"
+    echo -e "${BLUE}Start the app while this script runs, e.g.:${NC}"
+    if [ ${#UNITY_PLAYER_ARGS[@]} -gt 0 ]; then
+        echo -e "  ${GREEN}open -n \"$UNITY_BUILD_PATH\" --args ${UNITY_PLAYER_ARGS[*]}${NC}"
+    else
+        echo -e "  ${GREEN}open -n \"$UNITY_BUILD_PATH\"${NC}"
+    fi
+    echo -e "${BLUE}Or re-run with ${GREEN}--open-built-app${BLUE} to open via macOS open(1).${NC}"
+    echo ""
 fi
 
 launch_unity_player() {
@@ -459,28 +505,34 @@ if [ "$LAUNCH_UNITY" = true ]; then
         echo -e "${GREEN}✓ Unity process found (PID: $UNITY_PID)${NC}"
     fi
 else
-    # Instructions for Unity
-    echo -e "${YELLOW}╔══════════════════════════════════════════════════════════╗${NC}"
-    echo -e "${YELLOW}║              NEXT STEPS - UNITY EDITOR                  ║${NC}"
-    echo -e "${YELLOW}╚══════════════════════════════════════════════════════════╝${NC}"
-    echo ""
-    echo -e "${BLUE}1. Open Unity Editor${NC}"
-    echo -e "   Project: $SCRIPT_DIR/unity/AVSimulation"
-    echo ""
-    echo -e "${BLUE}2. Open the scene${NC}"
-    echo -e "   Assets/Scenes/SampleScene.unity"
-    echo ""
-    echo -e "${BLUE}3. In the Inspector, select your Car GameObject:${NC}"
-    echo -e "   • AV Bridge component → Check 'Enable AV Control'"
-    echo -e "   • Make sure Car Controller and Camera Capture are assigned"
-    echo ""
-    echo -e "${BLUE}4. Press ${GREEN}▶ PLAY${BLUE} in Unity${NC}"
-    echo ""
-    echo -e "${YELLOW}Or use: ${GREEN}./start_av_stack.sh --launch-unity${YELLOW} to auto-launch Unity${NC}"
-    echo -e "${YELLOW}Or use: ${GREEN}./start_av_stack.sh --run-unity-player${YELLOW} to run the built player${NC}"
-    echo ""
-    echo -e "${YELLOW}══════════════════════════════════════════════════════════${NC}"
-    echo ""
+    if [ "$RUN_UNITY_PLAYER" = true ] || [ "$OPEN_BUILT_APP" = true ]; then
+        echo -e "${GREEN}Built player in use — ensure it is running and connected to the bridge.${NC}"
+        echo -e "  ${BLUE}$UNITY_BUILD_PATH${NC}"
+        echo ""
+    else
+        # Instructions for Unity Editor (no built player launched by this script)
+        echo -e "${YELLOW}╔══════════════════════════════════════════════════════════╗${NC}"
+        echo -e "${YELLOW}║              NEXT STEPS - UNITY EDITOR                  ║${NC}"
+        echo -e "${YELLOW}╚══════════════════════════════════════════════════════════╝${NC}"
+        echo ""
+        echo -e "${BLUE}1. Open Unity Editor${NC}"
+        echo -e "   Project: $SCRIPT_DIR/unity/AVSimulation"
+        echo ""
+        echo -e "${BLUE}2. Open the scene${NC}"
+        echo -e "   Assets/Scenes/SampleScene.unity"
+        echo ""
+        echo -e "${BLUE}3. In the Inspector, select your Car GameObject:${NC}"
+        echo -e "   • AV Bridge component → Check 'Enable AV Control'"
+        echo -e "   • Make sure Car Controller and Camera Capture are assigned"
+        echo ""
+        echo -e "${BLUE}4. Press ${GREEN}▶ PLAY${BLUE} in Unity${NC}"
+        echo ""
+        echo -e "${YELLOW}Or use: ${GREEN}./start_av_stack.sh --launch-unity${YELLOW} to auto-launch Unity${NC}"
+        echo -e "${YELLOW}Or use: ${GREEN}./start_av_stack.sh --build-unity-player --open-built-app${YELLOW} to build + open the player${NC}"
+        echo ""
+        echo -e "${YELLOW}══════════════════════════════════════════════════════════${NC}"
+        echo ""
+    fi
 fi
 
 # Start AV stack

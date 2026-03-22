@@ -49,6 +49,7 @@ control:
     pp_map_ff_curvature_max_clip: 0.08
     pp_ref_jump_clamp: 0.5
     pp_stale_decay: 0.98
+    # 2026-03-22: 0.38 A/B vs 0.4 did not promote (see GRADE_LATERAL_TUNING.md); keep 0.4 until gated win.
     pp_max_steering_rate: 0.4
     feedback_gain_min: 1.05
     feedback_gain_max: 1.25

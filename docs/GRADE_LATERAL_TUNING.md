@@ -26,6 +26,7 @@ G6-L0–L3 deliver **observability** (HDF5 telemetry, `grade_lateral_v1`, PhilVi
 |--------|-------------------|--------|
 | **6.5 → 7.5** | `20260322_123744` (before) vs `20260322_125614` (after) | **Fail promotion:** overall score ↓ (~95.2 → ~94.4), lateral p95 ↑, oscillation ZC ↑, steer jerk at cap; downhill \|lat\| improved slightly but **flat** lateral and oscillation **worsened**. **Reverted to 6.5.** |
 | **0.075 → 0.070** (`pp_feedback_gain`) | `20260322_123744` (0.075) vs `20260322_131928` (0.070) | **Fail promotion:** overall score ↓ (~95.2 → ~94.4), **flat** `lateral_error_abs_p95_m` ↑ (~0.477 → ~0.511); downhill \|lat\| p95 improved slightly but downhill detrended ZC ↑; **reverted to 0.075.** |
+| **0.4 → 0.38** (`pp_max_steering_rate`) | `20260322_123744` (0.4) vs `20260322_160926` (0.38) | **Fail promotion:** overall ↓ (~95.2 → ~94.7), **flat** \|lat\| p95 ↑ (~0.477 → ~0.521), comfort jerk p95 ↑ (~4.31 → ~5.55); flat detrended ZC ↓ (better), downhill \|lat\| p95 ↓ (better) — **mixed / no gate pass.** **Reverted to 0.4.** |
 
 Related: **`base_error_smoothing_alpha`** — global lateral blend; changing it affects all road grades, not only grade bins.
 
@@ -38,8 +39,8 @@ Related: **`base_error_smoothing_alpha`** — global lateral blend; changing it 
 **Recommended sequence (one knob per A/B, same track + duration):**
 
 1. **Flat / PP lateral (primary for this symptom)**  
-   - **`pp_feedback_gain` 0.070** on `hill_highway` **did not promote** (see A/B table) — do **not** ship that step as default. Prefer next: small **`pp_max_steering_rate`** reduction, or a **micro-step** (e.g. 0.075 → 0.072) with the same gates — **re-run** `grade_lateral_v1` + `inspect_flat_focus_layers.py` + `executive_summary`.  
-   - Goal: lower **flat-bin** \|lat\| p95 and **oscillation_zero_crossing_rate_hz** without new failures.
+   - **`pp_feedback_gain` 0.070** and **`pp_max_steering_rate` 0.38** (vs 0.4) **did not promote** on `hill_highway` (see A/B table). Next candidates: **micro-step** `pp_feedback_gain` **0.072** (not 0.070), or **`pp_max_steering_jerk`** / **`reference_smoothing`** with the same gates — **re-run** `grade_lateral_v1` + `inspect_flat_focus_layers.py` + `executive_summary`.  
+   - Goal: lower **flat-bin** \|lat\| p95 and **oscillation_zero_crossing_rate_hz** without comfort / overall score regressions.
 
 2. **Perception stability (if ref−perc stays small but error is large)**  
    - Temporal / jump logic on **`perception/inference`** (or lane smoothing) — **only** with evidence: high jump rate, or PhilViz frame review at **flat_focus** ranges.
