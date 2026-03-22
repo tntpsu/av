@@ -162,6 +162,7 @@ The server provides the following REST API endpoints:
 - `GET /api/recording/<filename>/diagnostics?analyze_to_failure=<true|false>` - Get trajectory vs steering diagnostics
 - `GET /api/recording/<filename>/topdown-diagnostics` - Timing/projection trust diagnostics for top-down trajectory overlay
 - `GET /api/recording/<filename>/grade-lateral?pre_failure_only=true&grade_threshold=0.02` - Grade vs lateral bin metrics (`grade_lateral_v1` JSON)
+- `GET /api/recording/<filename>/grade-lateral-flat-focus` - Flat grade bin + high |lateral_error| frame ranges (Chain tab **Grade–Lateral**; CLI: `tools/analyze_grade_lateral_flat_focus.py`)
 - `POST /api/recording/<filename>/run-perception-questions` - Run `tools/analyze/analyze_perception_questions.py` and return Q1-Q8 output (used by Summary tab "Run Q Script" button)
 
 ### Debug Images (Legacy)

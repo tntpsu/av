@@ -3183,6 +3183,45 @@ def get_grade_lateral(filename):
         return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500
 
 
+@app.route('/api/recording/<path:filename>/grade-lateral-flat-focus')
+def get_grade_lateral_flat_focus(filename):
+    """Flat grade bin + worst |lateral_error| frame ranges (CLI parity)."""
+    from urllib.parse import unquote
+
+    filename = unquote(filename)
+    filepath = RECORDINGS_DIR / filename
+    if not filepath.exists():
+        return jsonify({"error": f"Recording not found: {filename}"}), 404
+    try:
+        from analyze_grade_lateral_flat_focus import analyze_flat_focus
+
+        gt_raw = request.args.get("grade_threshold", "0.02")
+        try:
+            grade_threshold = float(gt_raw)
+        except (TypeError, ValueError):
+            grade_threshold = 0.02
+        af_raw = request.args.get("abs_focus_m", "0.25")
+        try:
+            abs_focus_m = float(af_raw)
+        except (TypeError, ValueError):
+            abs_focus_m = 0.25
+        top_n_raw = request.args.get("top_n", "25")
+        try:
+            top_n = int(top_n_raw)
+        except (TypeError, ValueError):
+            top_n = 25
+        result = analyze_flat_focus(
+            filepath,
+            grade_threshold=grade_threshold,
+            abs_focus_m=abs_focus_m,
+            top_n=max(1, top_n),
+        )
+        return jsonify(sanitize_non_finite_for_json(result))
+    except Exception as e:
+        import traceback
+        return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500
+
+
 @app.route('/api/signal-chain/<path:recording>')
 def get_signal_chain(recording):
     """Get signal chain diagnostic analysis for a recording."""

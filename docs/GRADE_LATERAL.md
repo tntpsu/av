@@ -19,10 +19,15 @@
 # Terminal (same JSON as API)
 python tools/analyze_grade_lateral.py data/recordings/your_run.h5 --json
 
+# Where |lateral_error| is worst on *flat* grade (frame ranges for PhilViz jump-to-frame)
+python tools/analyze_grade_lateral_flat_focus.py data/recordings/your_run.h5 --out data/reports/flat_focus.json
+
 # Optional block inside full drive summary (extra work: reads HDF5 again)
 python -c "from pathlib import Path; from tools.drive_summary_core import analyze_recording_summary; \
 print(analyze_recording_summary(Path('data/recordings/your_run.h5'), include_grade_lateral=True).get('grade_lateral'))"
 ```
+
+PhilViz **Chain → Grade–Lateral Breakdown** also loads flat-focus (API `GET .../grade-lateral-flat-focus`) and lists ranges with **→** jump to frame.
 
 ## Pre-failure policy
 

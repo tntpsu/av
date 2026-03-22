@@ -4578,11 +4578,41 @@ class Visualizer {
             const corrHtml = corr != null
                 ? `<div style="margin-top:0.5rem;color:#888;font-size:0.78rem;">Down–flat chatter ratio: ${corr}</div>`
                 : '';
-            display.innerHTML =
+            let html =
                 '<table class="data-table" style="font-size:0.82rem;"><thead><tr>' +
                 '<th>Bin</th><th>Frames</th><th>% time</th><th>|lat| mean (m)</th><th>Steer ZC Hz</th></tr></thead><tbody>' +
                 rows +
                 '</tbody></table>' + corrHtml;
+
+            try {
+                const ffResp = await fetch(
+                    philvizRecordingApiUrl(
+                        `/recording/${encodeURIComponent(this.currentRecording)}/grade-lateral-flat-focus`
+                    )
+                );
+                if (ffResp.ok) {
+                    const ff = await ffResp.json();
+                    if (!ff.error && Array.isArray(ff.flat_high_lateral_ranges) && ff.flat_high_lateral_ranges.length) {
+                        const thr = ff.flat_bin && ff.flat_bin.focus_threshold_m != null
+                            ? ff.flat_bin.focus_threshold_m
+                            : '—';
+                        const rangeLines = ff.flat_high_lateral_ranges.slice(0, 14).map((r) => {
+                            const label = `${r.start_frame}–${r.end_frame} (${r.length_frames}f)`;
+                            const go = `onclick="visualizer.goToFrame(${r.start_frame})"`;
+                            return `<li style="margin:0.15rem 0;"><button type="button" class="btn-tiny" ${go}>→</button> ${this.escapeHtml(label)}</li>`;
+                        }).join('');
+                        const more = ff.flat_high_lateral_ranges.length > 14
+                            ? `<li style="color:#888;">… +${ff.flat_high_lateral_ranges.length - 14} more</li>`
+                            : '';
+                        html += `<div style="margin-top:0.75rem;padding-top:0.5rem;border-top:1px solid #444;">
+                            <div style="color:#aaa;font-size:0.78rem;margin-bottom:0.35rem;">Flat bin + high |lat| (≥ ${thr} m)</div>
+                            <ul style="margin:0;padding-left:1.2rem;font-size:0.8rem;max-height:9rem;overflow:auto;">${rangeLines}${more}</ul>
+                        </div>`;
+                    }
+                }
+            } catch (_) { /* optional */ }
+
+            display.innerHTML = html;
 
             if (canvas && canvas.getContext) {
                 const tsResp = await fetch(

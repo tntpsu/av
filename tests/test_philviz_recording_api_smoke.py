@@ -78,3 +78,12 @@ def test_grade_lateral_json(philviz_client) -> None:
     assert data is not None
     assert data.get("schema_version") == "grade_lateral_v1"
     assert "error" not in data
+
+
+def test_grade_lateral_flat_focus_json(philviz_client) -> None:
+    r = philviz_client.get(f"/api/recording/{SMOKE_NAME}/grade-lateral-flat-focus")
+    assert r.status_code == 200, r.get_data(as_text=True)
+    data = r.get_json()
+    assert data is not None
+    assert "error" not in data
+    assert "flat_high_lateral_ranges" in data
