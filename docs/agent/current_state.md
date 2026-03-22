@@ -1,7 +1,7 @@
 # AV Stack — Agent Memory: Current State
 
 **Last updated:** 2026-03-22
-**Current milestone:** Bridge regression fixed + clean baseline established. hill_highway 94.9/100. Next: lookahead contraction smoothing at curve entry (PP floor rescue, -13.8 Trajectory pts).
+**Current milestone:** Bridge regression fixed + clean baseline established. hill_highway 94.9/100. T-078 investigation complete — late turn-in root cause identified as MPC cost function structural trade-off. Deferred (low ROI). Next: Step 3.5 (ff_alignment) or Step 5 (NMPC).
 
 ---
 
@@ -40,21 +40,35 @@
 
 ---
 
-### Remaining Open Issue: Lookahead Contraction + PP Floor Rescue at Curve Entry
+### T-078: Curve Entry Late Turn-In — FULLY INVESTIGATED, DEFERRED (2026-03-22)
 
-**Score impact:** -13.8 pts Trajectory (lat RMSE 0.297m, P95 0.477m). This is the #1 remaining issue.
+**Original hypothesis (incorrect):** PP floor rescue at curve entry was driving the -13.8 Trajectory deduction. Believed `compute_reference_lookahead` was shortening too aggressively → floor rescue → oscillation.
 
-**Signature from current run (recording_20260322_165640.h5):**
+**T-078 investigation findings:**
+
+**Finding 1: PP floor rescue is BENIGN.**
+Experiment: lowered `pp_curve_local_lookahead_floor_speed_table` from [4.0–5.6m] to [2.5–3.0m]. Score regressed 94.9→93.4, C3 peak error 0.465→0.809m (oscillation runaway). The 5.2m floor during R100 curves is the CORRECT operating point — not an artifact. Floor rescue (2.0m) is benign and helps stability.
+
+**Finding 2: True root cause — MPC cost function structural trade-off.**
+- MPC horizon (`kappa_horizon_for_mpc`) correctly shows the upcoming R100 curve κ=0.01 at steps 11–20 of 20 (when 10m from curve start at v=9 m/s)
+- MPC DOES pre-steer: at frame 243–250, steering builds -0.007 to -0.033 normalized
+- But with `q_lat=1.60`, `r_steer_rate=2.0`, pre-steering costs MORE than accepting the entry error:
+  - Pre-steering smooth ramp (0→0.071 over 11 steps): total cost = `2.0 × (0.0059)² × 11 ≈ 0.00084`
+  - Accepting entry error and correcting: cost ≈ `1.60 × 0.00023/step`
+  - Breakeven: q_lat ≈ **11.5** — nearly 7× the current value
+- The MPC is mathematically optimal; the late turn-in (+15 frames onset) IS the optimal policy given current cost weights
+
+**Finding 3: kappa_ref preview fix causes oscillation runaway.**
+Attempted fix: blend `kappa_ref` (MPC step-0 equilibrium) from lane-poly toward horizon peak based on `distance_to_curve_start_m`. Result: score 94.9→94.0, oscillation RMS 0.003→0.441m (runaway). Root cause: kappa_ref ramp creates a time-varying equilibrium shift at each curve approach/exit cycle, exciting sustained oscillation. The `kappa_horizon_for_mpc` (per-step curvature feedforward) is the correct mechanism — `kappa_ref` should stay as lane-poly. **Fix reverted.**
+
+**Signature from baseline (recording_20260322_165640.h5):**
 - C1: `floorRescueMax=2.06m`, `floorRescueMean=0.87m`, `lateTurnIn=YES`, `onsetVsStart=+15fr`
 - C2: `floorRescueMax=1.87m`, `floorRescueMean=1.03m`
 - C3: `floorRescueMax=1.86m`, `floorRescueMean=0.76m`, `lateTurnIn=YES`, `onsetVsStart=+13fr`
 
-**Also:** 2 MPC→PP transitions at curve entry (frame 149 @ 11.7 m/s, frame 539 @ 11.0 m/s). These are NOT teleport-driven — the curvature guard fires transiently at curve entry when instantaneous κ spikes momentarily. MPC drops out exactly when PP floor rescue is most critical.
+**What would actually fix it:** Increase q_lat to ~11.5 (7× current). This is the same magnitude as `q_lat=10.0` that caused hunting on mixed_radius R150/R200. High risk of instability on other tracks.
 
-**Root cause (same as s_loop Workstream C2 — now blocking on hill_highway):**
-`compute_reference_lookahead` shortens lookahead aggressively during COMMIT phase (`entry_weight = curve_local_phase`). This steepens the floor drop → larger floor rescue. On hill_highway R100 curves (vs s_loop R40), the absolute error is larger because the entry geometry is less forgiving.
-
-**Next workstream: Lookahead Contraction Smoothing (Workstream C2 revisited)**
+**Decision: DEFERRED.** Same reasoning as Workstream C2 — structural geometry constraint, low ROI, baseline (94.9/100) is already excellent. Only revisit if a smarter approach is found (e.g., horizon-length increase to N=30, which gives more curve coverage without destabilizing the cost function).
 
 ---
 

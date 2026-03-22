@@ -6,12 +6,10 @@
 
 ## Current Focus
 
-**T-078 — Lookahead Contraction Smoothing (Workstream C2 revisited)**
-- **Goal:** Eliminate PP floor rescue at curve entry (-13.8 Trajectory pts, largest remaining issue)
-- **Root cause:** `compute_reference_lookahead` shortens lookahead too aggressively in COMMIT phase via `entry_weight = curve_local_phase`. Floor rescue mask (0.30 floor) compensates by snapping lookahead back, causing ±2m oscillation at peak entry.
-- **hill_highway C1/C2/C3 floor rescue:** peak 2.06/1.87/1.86m, mean 0.87/1.03/0.76m
-- **Related:** MPC→PP transitions at curve entry (frames 149/539) drop MPC exactly when floor rescue is active — fixing the contraction should reduce peak κ seen by curvature guard
-- **Status:** IN PROGRESS (2026-03-22)
+**No active task.** T-078 investigated and deferred (see below). Candidates for next session:
+- Step 3.5: 2DOF FF alignment (`ff_alignment_enabled`) — code complete, pending live validation
+- Step 5: NMPC + full hierarchical hybrid (entry: Step 3.5 validated)
+- hill_highway q_lat experiment: try N=30 horizon (more curve coverage, low risk) as gentle improvement to onset timing
 
 **Phase 2.8 VALIDATED on highway (2026-03-12).** MPC pipeline fixes (2.8.1–2.8.4) complete:
 - 2.8.1: Recovery mode suppression (skip ×1.2/×1.5 when MPC active)
@@ -41,6 +39,7 @@
 | — | Tool updates: forced_pp_transition_count metric, priority-0 "STOP PP GAIN TUNING" recommendation, flat_oscillation_not_grade + forced_pp_regime_reset triage patterns | 2026-03-22 |
 | — | Clean baseline established: hill_highway 94.9/100, forced_pp_transition_count=0 (recording_20260322_165640.h5) | 2026-03-22 |
 | — | Codex A/B results invalidated: grade_steering_damping_gain/pp_feedback_gain/pp_max_steering_rate A/B tests all ran against artifact-corrupted baseline (2-4 false teleports each) — all revert to prior defaults | 2026-03-22 |
+| T-078 | Late turn-in root cause fully investigated: MPC cost function structural trade-off (q_lat=1.60, r_steer_rate=2.0 → breakeven q_lat=11.5 for full fix). kappa_ref preview fix tried → oscillation runaway → reverted. PP floor rescue BENIGN (floor lowering caused regression). **DEFERRED.** | 2026-03-22 |
 
 ---
 
@@ -75,7 +74,7 @@
 | 2 | Config Phase 3: auto-derive curvature (T-076) | **✅ Done (2026-03-16)** |
 | 3 | Grade and banking | **✅ Done (2026-03-17)** — hill_highway 89.6/100 E2E validated |
 | 4 | MPC as primary lateral controller + q_lat auto-derive | **✅ Done (2026-03-17)** — curvature guard, 954 tests |
-| T-078 | Lookahead contraction smoothing at curve entry (PP floor rescue) | **IN PROGRESS (2026-03-22)** — #1 remaining issue, -13.8 Trajectory pts |
+| T-078 | Lookahead contraction smoothing at curve entry (late turn-in) | **DEFERRED (2026-03-22)** — root cause: MPC cost function trade-off (needs q_lat=11.5 → hunting risk). PP floor rescue is benign. Baseline 94.9/100 accepted. |
 | 3.5 | 2DOF FF alignment (`ff_alignment_enabled`) | **⏳ Pending live validation (2026-02-17)** — code + 4 tests complete, Unity runs pending |
 | 5 | NMPC + full hierarchical hybrid (plan.md §2.7-2.8) | Pending (entry: Step 3.5 validated) |
 | 5 | Lead vehicle following / ACC | Pending |

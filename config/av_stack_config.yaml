@@ -25,6 +25,11 @@ control:
     pp_feedback_gain: 0.075
     pp_max_steering_jerk: 18.0
     pp_curve_local_lookahead_floor_enabled: true
+    # 2026-03-22: Attempted lower floor (to 2.5-3.0m) to eliminate floor rescue — reverted.
+    # Lowering the floor increased adj_rmse 0.297→0.349m and C3 peak error 0.465→0.809m.
+    # The 5.2m floor during curves provides a stable PP operating point; the dynamic horizon
+    # driving to 3.2m without the floor backstop creates oscillation.
+    # Floor rescue is benign; the real issue is late turn-in (+13-15fr on C1/C3).
     pp_curve_local_lookahead_floor_speed_table:
     - speed_mps: 0.0
       lookahead_m: 4.0
