@@ -251,6 +251,21 @@ class TestConfigParameterFlow:
         finally:
             Path(config_path).unlink()
 
+    def test_segmentation_input_size_overlay(self):
+        """perception.segmentation_input_size [H, W] flows to LaneDetectionInference."""
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
+            yaml.dump({"perception": {"segmentation_input_size": [224, 448]}}, f)
+            config_path = f.name
+        try:
+            av_stack = AVStack(
+                bridge_url="http://localhost:8000",
+                record_data=False,
+                config_path=config_path,
+            )
+            assert av_stack.perception.segmentation_input_size == (224, 448)
+        finally:
+            Path(config_path).unlink()
+
 
 class TestConfigDefaults:
     """Test that default values are used when config is missing."""

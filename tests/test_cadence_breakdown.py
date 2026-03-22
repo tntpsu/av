@@ -29,6 +29,7 @@ def _write_synthetic_recording(
     queue_backlog: bool = False,
     frame_skip: bool = False,
     n: int = 6,
+    with_perf_layers: bool = False,
 ) -> None:
     """Minimal HDF5 with e2e + vehicle streams."""
     # Wall periods ~50ms; last step has a large gap for severity testing
@@ -65,11 +66,37 @@ def _write_synthetic_recording(
         g.create_dataset("e2e_front_ready_mono_s", data=front)
         g.create_dataset("e2e_vehicle_ready_mono_s", data=vehicle_m)
         g.create_dataset("e2e_latency_ms", data=e2e_lat.astype(np.float32))
+        if with_perf_layers:
+            g.create_dataset(
+                "perf_perception_ms", data=np.linspace(5.0, 8.0, n).astype(np.float32)
+            )
+            g.create_dataset(
+                "perf_planning_ms", data=np.linspace(0.5, 1.5, n).astype(np.float32)
+            )
+            g.create_dataset(
+                "perf_control_ms", data=np.linspace(2.0, 4.0, n).astype(np.float32)
+            )
+            g.create_dataset(
+                "perf_hdf5_write_ms", data=np.full(n, 0.1, dtype=np.float32)
+            )
+            g.create_dataset(
+                "perf_wait_input_ms", data=np.linspace(40.0, 50.0, n).astype(np.float32)
+            )
         v = f.create_group("vehicle")
         v.create_dataset("stream_front_queue_depth", data=qd.astype(np.float32))
         v.create_dataset("stream_front_frame_id_delta", data=fid.astype(np.float32))
         v.create_dataset("stream_front_unity_dt_ms", data=unity_dt.astype(np.float32))
         v.create_dataset("stream_front_timestamp_minus_realtime_ms", data=ts_rt.astype(np.float32))
+
+
+def test_analyze_cadence_includes_perf_layers(tmp_path: Path) -> None:
+    path = tmp_path / "cadence_perf.h5"
+    _write_synthetic_recording(path, with_perf_layers=True, n=8)
+    out = analyze_cadence(path, target_hz=20.0)
+    assert out["availability"]["perf_perception_ms"] is True
+    pp = out["stats_all"]["perf_perception_ms"]
+    assert pp["count"] == 8
+    assert pp["mean"] is not None
 
 
 def test_analyze_cadence_derived_and_severe(tmp_path: Path) -> None:

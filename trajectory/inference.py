@@ -93,6 +93,22 @@ class TrajectoryPlanningInference:
             'traj_heading_zero_gate_curvature_preview_off_threshold',
             0.002,
         )
+        traj_heading_zero_gate_release_far_preview_enabled = kwargs.pop(
+            'traj_heading_zero_gate_release_far_preview_enabled',
+            True,
+        )
+        traj_heading_zero_gate_far_preview_phase_min = kwargs.pop(
+            'traj_heading_zero_gate_far_preview_phase_min',
+            0.06,
+        )
+        traj_heading_zero_gate_release_on_scheduler_entry_commit = kwargs.pop(
+            'traj_heading_zero_gate_release_on_scheduler_entry_commit',
+            True,
+        )
+        traj_heading_zero_gate_time_to_curve_release_s = kwargs.pop(
+            'traj_heading_zero_gate_time_to_curve_release_s',
+            1.35,
+        )
         direct_reference_curvature_gain = kwargs.pop(
             'direct_reference_curvature_gain',
             1.0,
@@ -191,6 +207,18 @@ class TrajectoryPlanningInference:
         self.traj_heading_zero_gate_curvature_preview_off_threshold = float(
             np.clip(traj_heading_zero_gate_curvature_preview_off_threshold, 0.0, 0.1)
         )
+        self.traj_heading_zero_gate_release_far_preview_enabled = bool(
+            traj_heading_zero_gate_release_far_preview_enabled
+        )
+        self.traj_heading_zero_gate_far_preview_phase_min = float(
+            np.clip(traj_heading_zero_gate_far_preview_phase_min, 0.0, 1.0)
+        )
+        self.traj_heading_zero_gate_release_on_scheduler_entry_commit = bool(
+            traj_heading_zero_gate_release_on_scheduler_entry_commit
+        )
+        self.traj_heading_zero_gate_time_to_curve_release_s = float(
+            max(0.0, traj_heading_zero_gate_time_to_curve_release_s)
+        )
         # Map-based preview curvature passed from orchestrator each frame; used to release
         # the heading-zero gate early when a curve is imminent even before the lane
         # polynomial or vehicle heading has reached the hysteretic off-threshold.
@@ -214,6 +242,11 @@ class TrajectoryPlanningInference:
         self.ref_debug_counter = 0
         self.last_reference_diagnostics: Dict[str, float] = {}
         self.heading_zero_gate_active = False
+        # Per-frame curve context from orchestrator (heading-zero gate release helpers).
+        self._heading_gate_curve_preview_far_upcoming: bool = False
+        self._heading_gate_curve_preview_far_phase: float = 0.0
+        self._heading_gate_curve_phase_state: str = "STRAIGHT"
+        self._heading_gate_time_to_curve_s: Optional[float] = None
 
         # A2: Lane center history for heading estimation when lane_coeffs unavailable
         self._center_x_history: list = []
@@ -248,6 +281,22 @@ class TrajectoryPlanningInference:
         active = bool(self.heading_zero_gate_active)
 
         if active:
+            sched = str(self._heading_gate_curve_phase_state or "STRAIGHT").strip().upper()
+            release_sched = (
+                self.traj_heading_zero_gate_release_on_scheduler_entry_commit
+                and sched in {"ENTRY", "COMMIT"}
+            )
+            release_far = self.traj_heading_zero_gate_release_far_preview_enabled and (
+                self._heading_gate_curve_preview_far_upcoming
+                or self._heading_gate_curve_preview_far_phase
+                >= self.traj_heading_zero_gate_far_preview_phase_min
+            )
+            release_ttc = False
+            ttc_lim = float(self.traj_heading_zero_gate_time_to_curve_release_s)
+            if ttc_lim > 0.0 and self._heading_gate_time_to_curve_s is not None:
+                ttc = float(self._heading_gate_time_to_curve_s)
+                if np.isfinite(ttc) and ttc <= ttc_lim:
+                    release_ttc = True
             if (
                 (np.isfinite(center_a_abs) and center_a_abs > self.traj_heading_zero_gate_center_a_off_abs_max)
                 or (np.isfinite(heading_abs) and heading_abs > self.traj_heading_zero_gate_heading_off_abs_rad)
@@ -255,6 +304,9 @@ class TrajectoryPlanningInference:
                 # prevents the gate from staying latched into curve entry just because the
                 # heading hasn't reached the hysteretic off-threshold yet.
                 or (self._map_preview_curvature_abs > self.traj_heading_zero_gate_curvature_preview_off_threshold)
+                or release_sched
+                or release_far
+                or release_ttc
             ):
                 active = False
         else:
@@ -504,7 +556,11 @@ class TrajectoryPlanningInference:
                            timestamp: Optional[float] = None,
                            confidence: Optional[float] = None,
                            dynamic_horizon_diag: Optional[Dict[str, float]] = None,
-                           preview_curvature_abs: float = 0.0) -> Optional[Dict]:
+                           preview_curvature_abs: float = 0.0,
+                           curve_preview_far_upcoming: bool = False,
+                           curve_preview_far_phase: float = 0.0,
+                           curve_phase_state: str = "STRAIGHT",
+                           time_to_curve_s: Optional[float] = None) -> Optional[Dict]:
         """
         Get reference point at specified lookahead distance.
         Can use direct midpoint computation (simpler, more accurate) or trajectory-based.
@@ -524,6 +580,17 @@ class TrajectoryPlanningInference:
         # Expose map-based preview curvature to the heading-zero gate so it can release
         # proactively when a curve is imminent, rather than waiting for heading to build.
         self._map_preview_curvature_abs = float(preview_curvature_abs)
+        self._heading_gate_curve_preview_far_upcoming = bool(curve_preview_far_upcoming)
+        try:
+            self._heading_gate_curve_preview_far_phase = float(curve_preview_far_phase)
+        except (TypeError, ValueError):
+            self._heading_gate_curve_preview_far_phase = 0.0
+        self._heading_gate_curve_phase_state = str(curve_phase_state or "STRAIGHT").strip().upper()
+        ttc_raw = time_to_curve_s
+        if isinstance(ttc_raw, (int, float)) and np.isfinite(float(ttc_raw)):
+            self._heading_gate_time_to_curve_s = float(ttc_raw)
+        else:
+            self._heading_gate_time_to_curve_s = None
 
         dynamic_diag_defaults = {
             'diag_dynamic_effective_horizon_m': np.nan,

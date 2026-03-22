@@ -9,7 +9,7 @@ import os
 import queue as _queue
 import threading
 import time
-from typing import Dict, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple
 
 import numpy as np
 import requests
@@ -19,7 +19,14 @@ from PIL import Image
 class UnityBridgeClient:
     """Client for communicating with Unity bridge server."""
     
-    def __init__(self, base_url: str = "http://localhost:8000", use_raw_camera: Optional[bool] = None):
+    def __init__(
+        self,
+        base_url: str = "http://localhost:8000",
+        use_raw_camera: Optional[bool] = None,
+        *,
+        async_trajectory_transport: bool = True,
+        trust_proxy_env: bool = False,
+    ):
         """
         Initialize Unity bridge client.
 
@@ -27,9 +34,18 @@ class UnityBridgeClient:
             base_url: Base URL of the bridge server
             use_raw_camera: If True, use GET /api/camera/.../raw (no JPEG round-trip).
                 If None, default from env AV_STACK_RAW_CAMERA (1/true = raw, 0/false = JPEG only).
+            async_trajectory_transport: If True, POST /api/trajectory from a background thread
+                (latest-wins) so the main loop is not blocked on visualization.
+            trust_proxy_env: If False (default), set Session.trust_env=False on all bridge
+                sessions so requests does not resolve OS proxies (macOS System Configuration /
+                _scproxy) on every call to localhost. Set True only if the bridge is reached
+                via HTTP(S)_PROXY.
         """
         self.base_url = base_url.rstrip("/")
-        self.session = requests.Session()
+        self._trust_proxy_env = bool(trust_proxy_env)
+        self.session = self._new_bridge_session()
+        # Second session for parallel vehicle GET (Session is not thread-safe across threads).
+        self._vehicle_parallel_session = self._new_bridge_session()
         if use_raw_camera is None:
             v = os.environ.get("AV_STACK_RAW_CAMERA", "1").strip().lower()
             use_raw_camera = v not in ("0", "false", "no", "off")
@@ -49,12 +65,33 @@ class UnityBridgeClient:
         )
         self._control_thread.start()
 
+        self._async_trajectory = bool(async_trajectory_transport)
+        self._trajectory_queue: Optional[_queue.Queue] = None
+        self._trajectory_dropped: int = 0
+        self._trajectory_errors: int = 0
+        self._trajectory_thread: Optional[threading.Thread] = None
+        if self._async_trajectory:
+            self._trajectory_queue = _queue.Queue(maxsize=1)
+            self._trajectory_thread = threading.Thread(
+                target=self._trajectory_sender_loop,
+                daemon=True,
+                name="trajectory-sender",
+            )
+            self._trajectory_thread.start()
+
         # Optional background fetch of latest front camera (dedicated Session — not thread-safe with self.session).
         self._prefetch_camera_id = "front_center"
         self._cam_lock = threading.Lock()
         self._cam_slot: Optional[Tuple[np.ndarray, float, Optional[int], Dict]] = None
         self._cam_stop = threading.Event()
         self._cam_thread: Optional[threading.Thread] = None
+
+    def _new_bridge_session(self) -> requests.Session:
+        """Session for bridge HTTP; trust_env off by default to avoid per-request proxy lookup."""
+        sess = requests.Session()
+        if not self._trust_proxy_env:
+            sess.trust_env = False
+        return sess
 
     @staticmethod
     def _parse_raw_camera_response(response: requests.Response) -> Tuple[np.ndarray, float, Optional[int], Dict]:
@@ -137,7 +174,7 @@ class UnityBridgeClient:
             self._cam_slot = None
 
     def _camera_prefetch_loop(self) -> None:
-        worker_session = requests.Session()
+        worker_session = self._new_bridge_session()
         cam = self._prefetch_camera_id
         while not self._cam_stop.is_set():
             try:
@@ -313,25 +350,64 @@ class UnityBridgeClient:
         except requests.RequestException:
             return None
     
-    def get_latest_vehicle_state(self) -> Optional[Dict]:
-        """
-        Get latest vehicle state from Unity.
-        
-        Returns:
-            Vehicle state dictionary or None if not available
-        """
+    def _sync_get_latest_vehicle_state(self, session: requests.Session) -> Optional[Dict]:
+        """GET /api/vehicle/state/latest using the given Session (thread-local for parallel fetch)."""
         try:
-            response = self.session.get(f"{self.base_url}/api/vehicle/state/latest", timeout=0.5)
+            response = session.get(
+                f"{self.base_url}/api/vehicle/state/latest",
+                timeout=0.5,
+            )
             response.raise_for_status()
             return response.json()
         except requests.exceptions.Timeout:
             return None
         except requests.exceptions.HTTPError as e:
-            if e.response.status_code == 404:
+            if e.response is not None and e.response.status_code == 404:
                 return None
             return None
         except requests.RequestException:
             return None
+
+    def get_latest_vehicle_state(self) -> Optional[Dict]:
+        """
+        Get latest vehicle state from Unity.
+
+        Returns:
+            Vehicle state dictionary or None if not available
+        """
+        return self._sync_get_latest_vehicle_state(self.session)
+
+    def get_latest_camera_and_vehicle_parallel(
+        self,
+        camera_id: str = "front_center",
+    ) -> Tuple[
+        Optional[Tuple[np.ndarray, float, Optional[int], Dict]],
+        Optional[Dict],
+        float,
+        float,
+    ]:
+        """Overlap vehicle state GET with camera fetch (separate Session for vehicle).
+
+        Submits vehicle fetch on a worker thread, then runs
+        :meth:`get_latest_camera_frame_with_metadata` on the main thread (uses ``self.session``).
+        Returns monotonic completion times for camera and vehicle; vehicle time is recorded
+        in the worker when the HTTP response is received.
+
+        Returns:
+            (frame_data, vehicle_state_dict, front_ready_mono_s, vehicle_ready_mono_s)
+        """
+        from concurrent.futures import ThreadPoolExecutor
+
+        def _vehicle_worker() -> Tuple[Optional[Dict], float]:
+            d = self._sync_get_latest_vehicle_state(self._vehicle_parallel_session)
+            return d, time.monotonic()
+
+        with ThreadPoolExecutor(max_workers=1) as ex:
+            fut = ex.submit(_vehicle_worker)
+            frame_data = self.get_latest_camera_frame_with_metadata(camera_id=camera_id)
+            front_ready_mono_s = time.monotonic()
+            vehicle_state_dict, vehicle_ready_mono_s = fut.result()
+        return frame_data, vehicle_state_dict, front_ready_mono_s, vehicle_ready_mono_s
 
     def get_next_vehicle_state(self) -> Optional[Dict]:
         """
@@ -421,12 +497,63 @@ class UnityBridgeClient:
             except requests.RequestException:
                 self._control_errors += 1
 
+    def _trajectory_sender_loop(self) -> None:
+        """Daemon thread: POSTs trajectory JSON from queue to Unity (latest-wins)."""
+        assert self._trajectory_queue is not None
+        while True:
+            try:
+                item = self._trajectory_queue.get(timeout=1.0)
+            except _queue.Empty:
+                continue
+            if item is None:
+                break
+            try:
+                self._sync_set_trajectory_data(item)
+            except requests.RequestException:
+                self._trajectory_errors += 1
+
+    def _sync_set_trajectory_data(self, trajectory_data: Dict[str, Any]) -> bool:
+        """Synchronous POST /api/trajectory (used by main thread or trajectory sender)."""
+        response = self.session.post(
+            f"{self.base_url}/api/trajectory",
+            json=trajectory_data,
+            timeout=2.0,
+        )
+        response.raise_for_status()
+        return True
+
     def close(self) -> None:
-        """Shut down background workers (camera prefetch, control sender)."""
+        """Shut down background workers and close HTTP sessions."""
         self.stop_camera_prefetch()
         try:
             self._control_queue.put_nowait(None)
         except _queue.Full:
+            pass
+        if self._trajectory_queue is not None:
+            try:
+                try:
+                    self._trajectory_queue.get_nowait()
+                except _queue.Empty:
+                    pass
+                self._trajectory_queue.put_nowait(None)
+            except _queue.Full:
+                pass
+        try:
+            self._control_thread.join(timeout=2.0)
+        except Exception:
+            pass
+        if self._trajectory_thread is not None:
+            try:
+                self._trajectory_thread.join(timeout=2.0)
+            except Exception:
+                pass
+        try:
+            self.session.close()
+        except Exception:
+            pass
+        try:
+            self._vehicle_parallel_session.close()
+        except Exception:
             pass
 
     def set_control_command(
@@ -507,39 +634,52 @@ class UnityBridgeClient:
     ) -> bool:
         """
         Set trajectory data for Unity visualization.
-        
+
+        When async_trajectory_transport is True (default), enqueues for the background
+        sender (latest-wins) and returns immediately.
+
         Args:
             trajectory_points: List of [x, y, heading] points
             reference_point: [x, y, heading, velocity] reference point
             lateral_error: Current lateral error for color coding
-        
+
         Returns:
-            True if successful, False otherwise
+            True if enqueued or sent successfully, False otherwise
         """
+        trajectory_data: Dict[str, Any] = {
+            "trajectory_points": trajectory_points,
+            "reference_point": reference_point,
+            "lateral_error": float(lateral_error),
+            "timestamp": time.time(),
+        }
+        if perception_left_lane_x is not None:
+            trajectory_data["perception_left_lane_x"] = float(perception_left_lane_x)
+        if perception_right_lane_x is not None:
+            trajectory_data["perception_right_lane_x"] = float(perception_right_lane_x)
+        if perception_center_x is not None:
+            trajectory_data["perception_center_x"] = float(perception_center_x)
+        if perception_lookahead_m is not None:
+            trajectory_data["perception_lookahead_m"] = float(perception_lookahead_m)
+        if perception_valid is not None:
+            trajectory_data["perception_valid"] = bool(perception_valid)
+
+        if self._async_trajectory:
+            if self._trajectory_queue is None:
+                return False
+            try:
+                try:
+                    self._trajectory_queue.get_nowait()
+                    self._trajectory_dropped += 1
+                except _queue.Empty:
+                    pass
+                self._trajectory_queue.put_nowait(trajectory_data)
+                return True
+            except _queue.Full:
+                self._trajectory_dropped += 1
+                return False
+
         try:
-            trajectory_data = {
-                "trajectory_points": trajectory_points,
-                "reference_point": reference_point,
-                "lateral_error": float(lateral_error),
-                "timestamp": time.time()
-            }
-            if perception_left_lane_x is not None:
-                trajectory_data["perception_left_lane_x"] = float(perception_left_lane_x)
-            if perception_right_lane_x is not None:
-                trajectory_data["perception_right_lane_x"] = float(perception_right_lane_x)
-            if perception_center_x is not None:
-                trajectory_data["perception_center_x"] = float(perception_center_x)
-            if perception_lookahead_m is not None:
-                trajectory_data["perception_lookahead_m"] = float(perception_lookahead_m)
-            if perception_valid is not None:
-                trajectory_data["perception_valid"] = bool(perception_valid)
-            
-            response = self.session.post(
-                f"{self.base_url}/api/trajectory",
-                json=trajectory_data
-            )
-            response.raise_for_status()
-            return True
+            return self._sync_set_trajectory_data(trajectory_data)
         except requests.RequestException:
             # Don't log errors - trajectory visualization is optional
             return False

@@ -22,7 +22,7 @@ public class CameraCapture : MonoBehaviour
     public Camera targetCamera;
     public int captureWidth = 640;
     public int captureHeight = 480;
-    public int targetFPS = 15;
+    public int targetFPS = 13;
     
     [Header("API Settings")]
     public string apiUrl = "http://localhost:8000";

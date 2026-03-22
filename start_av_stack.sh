@@ -68,6 +68,9 @@ usage() {
     echo "  --gt-centerline-as-left-lane BOOL  Use center line as left lane"
     echo "  --help, -h             Show this help message"
     echo ""
+    echo "Profiling (passed through to av_stack/orchestrator.py):"
+    echo "  --profile-cprofile [FILE.prof]  Run under cProfile; default FILE under recording_dir"
+    echo ""
     echo "AV stack args are passed through, e.g.:"
     echo "  --duration 60 --max_frames 300 --recording_dir data/recordings"
 }

@@ -209,7 +209,7 @@ If slow requests cluster on `/api/camera` but NOT on `/api/vehicle/state`, it's 
 
 ### Phase 2 (new HDF5 fields, ~0.5 day)
 
-- [ ] **T2.1** Add `perf_perception_ms`, `perf_planning_ms`, `perf_control_ms`, `perf_wait_input_ms` to HDF5 (6-location pattern)
+- [x] **T2.1** Add `perf_perception_ms`, `perf_planning_ms`, `perf_control_ms`, `perf_hdf5_write_ms`, `perf_wait_input_ms` to HDF5 (6-location pattern) — see **`docs/plans/perf_layer_timings_impl.md`**
 - [ ] **T2.2** Add `unity_delta_time_ms`, `unity_smooth_delta_time_ms`, `unity_state_send_duration_ms` to vehicle state JSON
 - [ ] **T2.3** Run 1 validation run; confirm new fields populate correctly
 - [ ] **T2.4** `pytest tests/ -v` — confirm no regressions (fields follow 6-location rule)

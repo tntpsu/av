@@ -35,17 +35,23 @@ class LaneDetectionInference:
                  model_fallback_zero_lane_confidence_threshold: float = 0.6):
         """
         Initialize lane detection inference.
-        
+
         Args:
             model_path: Path to trained model checkpoint
             use_gpu: Whether to use GPU if available (CUDA or MPS)
             prefer_mps: On Mac, try Apple MPS before falling back to CPU
             fallback_to_cv: Fallback to traditional CV if model fails
+            segmentation_input_size: (height, width) for segmentation resize (``perception.segmentation_input_size`` in YAML).
         """
         self.device = resolve_torch_device(use_gpu=bool(use_gpu), prefer_mps=bool(prefer_mps))
         self.fallback_to_cv = fallback_to_cv
         self.segmentation_mode = segmentation_mode
         self.segmentation_input_size = segmentation_input_size
+        if self.segmentation_mode:
+            logger.info(
+                "Segmentation resize target (H, W) = %s",
+                self.segmentation_input_size,
+            )
         self.segmentation_fit_min_row_ratio = float(segmentation_fit_min_row_ratio)
         self.segmentation_fit_max_row_ratio = float(segmentation_fit_max_row_ratio)
         self.segmentation_ransac_enabled = bool(segmentation_ransac_enabled)

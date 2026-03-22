@@ -34,7 +34,7 @@ public class AVBridge : MonoBehaviour
     public float topDownViewportWidth = 0.3f;
     public int topDownCaptureWidth = 640;
     public int topDownCaptureHeight = 480;
-    public int topDownTargetFps = 15;
+    public int topDownTargetFps = 13;
 
     [Header("Oracle Trajectory Telemetry")]
     [Tooltip("Send Unity centerline samples (oracle) in vehicle frame.")]
@@ -1986,7 +1986,7 @@ private float? lastCarT = null;
             if (lastVehicleState != null)
             {
                 int rightBoxWidth = 240;
-                int rightLines = 3;
+                int rightLines = 4; // slope, grade, pitch (nose), roll (L/R lean)
                 if (groundTruthReporter != null)
                 {
                     rightLines += 2; // κ line + turn label (compact)
@@ -1996,11 +1996,12 @@ private float? lastCarT = null;
                 int rightY = 10;
 
                 // roadGrade is the slope as a fraction (e.g. 0.05 = 5 % uphill).
-                // pitchRad is the chassis pitch: positive = nose up.
+                // pitchRad: chassis nose up (+) / nose down (−). rollRad: right lean (+) / left lean (−).
                 float grade        = lastVehicleState.roadGrade;
                 float gradePercent = grade * 100f;
                 float gradeDeg     = Mathf.Atan(grade) * Mathf.Rad2Deg;
                 float pitchDeg     = lastVehicleState.pitchRad * Mathf.Rad2Deg;
+                float rollDeg      = lastVehicleState.rollRad * Mathf.Rad2Deg;
 
                 string upDown      = grade > 0.002f ? "▲" : (grade < -0.002f ? "▼" : "—");
 
@@ -2012,7 +2013,10 @@ private float? lastCarT = null;
                     $"Road Grade: {gradeDeg:+0.0;-0.0;0.0}°", labelStyle);
                 rightY += lineHeight;
                 GUI.Label(new Rect(rightX, rightY, rightBoxWidth - 4, lineHeight),
-                    $"Vehicle Pitch: {pitchDeg:+0.0;-0.0;0.0}°", labelStyle);
+                    $"Pitch (nose): {pitchDeg:+0.0;-0.0;0.0}°", labelStyle);
+                rightY += lineHeight;
+                GUI.Label(new Rect(rightX, rightY, rightBoxWidth - 4, lineHeight),
+                    $"Roll (L/R): {rollDeg:+0.0;-0.0;0.0}°  R+/L−", labelStyle);
                 rightY += lineHeight;
 
                 if (groundTruthReporter != null)
@@ -2047,8 +2051,9 @@ private float? lastCarT = null;
                 if (limitMps > 0.01f)
                 {
                     float limitMph = limitMps * 2.236936f;
-                    float bannerW = Mathf.Min(220f, Screen.width * 0.5f);
-                    float bannerH = 52f;
+                    // Narrower + slightly taller than before for cleaner top bar
+                    float bannerW = Mathf.Min(168f, Screen.width * 0.38f);
+                    float bannerH = 60f;
                     float bx = (Screen.width - bannerW) * 0.5f;
                     float by = 6f;
                     GUI.Box(new Rect(bx, by, bannerW, bannerH), GUIContent.none);
@@ -2065,8 +2070,8 @@ private float? lastCarT = null;
                         alignment = TextAnchor.MiddleCenter,
                         normal = { textColor = Color.white }
                     };
-                    GUI.Label(new Rect(bx, by + 4, bannerW, 18f), "Speed limit", limitCaptionStyle);
-                    GUI.Label(new Rect(bx, by + 20, bannerW, 30f),
+                    GUI.Label(new Rect(bx, by + 5, bannerW, 18f), "Speed limit", limitCaptionStyle);
+                    GUI.Label(new Rect(bx, by + 22, bannerW, 34f),
                         $"{limitMph:F0} mph", limitValueStyle);
                 }
             }

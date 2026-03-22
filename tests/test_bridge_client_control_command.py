@@ -32,3 +32,41 @@ def test_build_control_command_omits_seed_when_none():
     )
 
     assert "randomize_seed" not in command
+
+
+def test_async_trajectory_transport_false_skips_background_thread():
+    client = UnityBridgeClient(
+        "http://localhost:8000",
+        async_trajectory_transport=False,
+    )
+    assert client._trajectory_thread is None
+    assert client._trajectory_queue is None
+    client.close()
+
+
+def test_async_trajectory_transport_true_has_trajectory_sender():
+    client = UnityBridgeClient(
+        "http://localhost:8000",
+        async_trajectory_transport=True,
+    )
+    assert client._trajectory_thread is not None
+    assert client._trajectory_queue is not None
+    client.close()
+
+
+def test_bridge_sessions_disable_trust_env_by_default():
+    """Avoid macOS System Configuration / _scproxy on every localhost request."""
+    client = UnityBridgeClient("http://localhost:8000")
+    assert client.session.trust_env is False
+    assert client._vehicle_parallel_session.trust_env is False
+    client.close()
+
+
+def test_bridge_sessions_honor_trust_proxy_env():
+    client = UnityBridgeClient(
+        "http://localhost:8000",
+        trust_proxy_env=True,
+    )
+    assert client.session.trust_env is True
+    assert client._vehicle_parallel_session.trust_env is True
+    client.close()

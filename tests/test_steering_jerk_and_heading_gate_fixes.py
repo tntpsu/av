@@ -361,6 +361,54 @@ class TestHeadingGateCurvaturePreviewRelease:
         )
         assert eng.heading_zero_gate_active is False
 
+    def test_gate_releases_when_far_preview_phase_high(self):
+        """Curve scheduler far_preview_phase can release gate before |κ_preview| threshold."""
+        eng = _make_traj_engine(traj_heading_zero_gate_far_preview_phase_min=0.05)
+        eng.heading_zero_gate_active = True
+        eng._map_preview_curvature_abs = 0.0005  # below traj 0.001 off-threshold
+        eng._heading_gate_curve_preview_far_upcoming = False
+        eng._heading_gate_curve_preview_far_phase = 0.08
+        eng._heading_gate_curve_phase_state = "STRAIGHT"
+        eng._heading_gate_time_to_curve_s = None
+        result = eng._update_heading_zero_gate(
+            lane_coeffs=self._make_coeffs(a=0.001),
+            raw_heading_rad=0.02,
+        )
+        assert result is False
+        assert eng.heading_zero_gate_active is False
+
+    def test_gate_releases_when_scheduler_entry_or_commit(self):
+        """ENTRY/COMMIT from curve phase scheduler forces heading gate off."""
+        eng = _make_traj_engine()
+        eng.heading_zero_gate_active = True
+        eng._map_preview_curvature_abs = 0.0
+        eng._heading_gate_curve_preview_far_upcoming = False
+        eng._heading_gate_curve_preview_far_phase = 0.0
+        eng._heading_gate_curve_phase_state = "ENTRY"
+        eng._heading_gate_time_to_curve_s = None
+        result = eng._update_heading_zero_gate(
+            lane_coeffs=self._make_coeffs(a=0.001),
+            raw_heading_rad=0.02,
+        )
+        assert result is False
+        assert eng.heading_zero_gate_active is False
+
+    def test_gate_releases_when_time_to_curve_within_window(self):
+        """Short time-to-curve releases gate during approach."""
+        eng = _make_traj_engine(traj_heading_zero_gate_time_to_curve_release_s=1.2)
+        eng.heading_zero_gate_active = True
+        eng._map_preview_curvature_abs = 0.0
+        eng._heading_gate_curve_preview_far_upcoming = False
+        eng._heading_gate_curve_preview_far_phase = 0.0
+        eng._heading_gate_curve_phase_state = "STRAIGHT"
+        eng._heading_gate_time_to_curve_s = 0.9
+        result = eng._update_heading_zero_gate(
+            lane_coeffs=self._make_coeffs(a=0.001),
+            raw_heading_rad=0.02,
+        )
+        assert result is False
+        assert eng.heading_zero_gate_active is False
+
     def test_gate_threshold_is_configurable(self):
         """Custom threshold is respected."""
         eng = _make_traj_engine(
