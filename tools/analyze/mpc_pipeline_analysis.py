@@ -79,6 +79,15 @@ def load_recording(path: Path) -> dict:
         data["mpc_smith_e_heading_predicted"] = _get("control/mpc_smith_e_heading_predicted")
         data["mpc_delay_frames_used"]       = _get("control/mpc_delay_frames_used")
 
+        # Step 5 — NMPC telemetry
+        data["nmpc_used"]                   = _get("control/nmpc_used")
+        data["nmpc_feasible"]               = _get("control/nmpc_feasible")
+        data["nmpc_solve_time_ms"]          = _get("control/nmpc_solve_time_ms")
+        data["nmpc_cost"]                   = _get("control/nmpc_cost")
+        data["nmpc_iterations"]             = _get("control/nmpc_iterations")
+        data["nmpc_fallback_active"]        = _get("control/nmpc_fallback_active")
+        data["nmpc_consecutive_failures"]   = _get("control/nmpc_consecutive_failures")
+
         data["n"] = n or 0
     return data
 
@@ -88,27 +97,29 @@ def load_recording(path: Path) -> dict:
 # ──────────────────────────────────────────────────────────────────────────────
 
 def _regime_masks(data):
-    """Return (pp_mask, mpc_mask, blend_mask).
+    """Return (pp_mask, lmpc_mask, nmpc_mask, any_mpc_mask, blend_mask).
 
-    Regime encoding: 0=PURE_PURSUIT, 1=LINEAR_MPC, 2=NONLINEAR_MPC (future).
+    Regime encoding: 0=PURE_PURSUIT, 1=LINEAR_MPC, 2=NONLINEAR_MPC.
     blend_weight is a SEPARATE field — there is no integer "BLEND" regime value.
-    blend_mask here marks frames where MPC is active but blend_weight < 1.0
-    (i.e., within the ramp-up transition window).
+    blend_mask here marks frames where MPC is active but blend_weight < 1.0.
     """
     regime = data.get("regime")
     blend_w = data.get("regime_blend_weight")
     n = data["n"]
+    zeros = np.zeros(n, bool)
     if regime is None or n == 0:
-        return np.zeros(n, bool), np.zeros(n, bool), np.zeros(n, bool)
+        return zeros, zeros, zeros, zeros, zeros
     regime = regime[:n]
-    pp_mask  = regime < 0.5          # regime == 0 (PP)
-    mpc_mask = regime >= 0.5         # regime == 1 or 2 (any MPC)
+    pp_mask      = regime < 0.5                 # regime == 0 (PP)
+    lmpc_mask    = (regime >= 0.5) & (regime < 1.5)   # regime == 1 (LMPC)
+    nmpc_mask    = regime >= 1.5                # regime == 2 (NMPC)
+    any_mpc_mask = regime >= 0.5               # any MPC (LMPC or NMPC)
     if blend_w is not None:
         bw = blend_w[:n]
-        blend_mask = mpc_mask & (bw < 0.99)   # MPC active but still ramping
+        blend_mask = any_mpc_mask & (bw < 0.99)
     else:
-        blend_mask = np.zeros(n, bool)
-    return pp_mask, mpc_mask, blend_mask
+        blend_mask = zeros
+    return pp_mask, lmpc_mask, nmpc_mask, any_mpc_mask, blend_mask
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -155,16 +166,18 @@ def _find_transitions(regime, n):
 # ──────────────────────────────────────────────────────────────────────────────
 
 def _mode_name(v):
-    return {0: "PP", 1: "MPC", 2: "BLEND"}.get(int(round(v)), f"?{v}")
+    return {0: "PP", 1: "LMPC", 2: "NMPC"}.get(int(round(v)), f"?{v}")
 
 
 def print_report(path: Path, data: dict):
     n = data["n"]
-    pp_mask, mpc_mask, blend_mask = _regime_masks(data)
+    pp_mask, lmpc_mask, nmpc_mask, mpc_mask, blend_mask = _regime_masks(data)
 
-    pp_n    = int(np.sum(pp_mask))
-    mpc_n   = int(np.sum(mpc_mask))
-    blend_n = int(np.sum(blend_mask))   # MPC frames still within the blend ramp
+    pp_n      = int(np.sum(pp_mask))
+    lmpc_n    = int(np.sum(lmpc_mask))
+    nmpc_n    = int(np.sum(nmpc_mask))
+    mpc_n     = int(np.sum(mpc_mask))   # LMPC + NMPC
+    blend_n   = int(np.sum(blend_mask))
     settled_n = mpc_n - blend_n
 
     sep = "=" * 60
@@ -178,7 +191,10 @@ def print_report(path: Path, data: dict):
     # ── Regime distribution ──────────────────────────────────────────────────
     print(f"\n{'Regime distribution':}")
     print(f"  PP    frames: {pp_n:4d} / {n}  ({pp_n/n*100:.1f}%)")
-    print(f"  MPC   frames: {mpc_n:4d} / {n}  ({mpc_n/n*100:.1f}%)", end="")
+    print(f"  LMPC  frames: {lmpc_n:4d} / {n}  ({lmpc_n/n*100:.1f}%)")
+    if nmpc_n > 0:
+        print(f"  NMPC  frames: {nmpc_n:4d} / {n}  ({nmpc_n/n*100:.1f}%)")
+    print(f"  MPC (total):  {mpc_n:4d} / {n}  ({mpc_n/n*100:.1f}%)", end="")
     if blend_n > 0:
         print(f"  [of which {blend_n} ramping / {settled_n} settled]")
     else:
@@ -281,10 +297,10 @@ def print_report(path: Path, data: dict):
         eh = np.abs(e_hdg[:n][mpc_mask])
         print(f"  mpc_e_heading P50 / P95 / MAX: "
               f"{_fmt(np.percentile(eh,50))}r / {_fmt(np.percentile(eh,95))}r / {_fmt(np.max(eh))}r")
-    if solve is not None:
-        sv = solve[:n][mpc_mask]
+    if solve is not None and lmpc_n > 0:
+        sv = solve[:n][lmpc_mask]
         gate = "PASS" if float(np.percentile(sv, 95)) <= 5.0 else "FAIL"
-        print(f"  solve_time_ms P50 / P95 / MAX: "
+        print(f"  LMPC solve_time_ms P50 / P95 / MAX: "
               f"{_fmt(np.percentile(sv,50),'0.2f')}ms / "
               f"{_fmt(np.percentile(sv,95),'0.2f')}ms / "
               f"{_fmt(np.max(sv),'0.2f')}ms  [{gate} P95≤5ms]")
@@ -293,6 +309,56 @@ def print_report(path: Path, data: dict):
     if fallback is not None:
         fb = int(np.sum(fallback[:n][mpc_mask] > 0.5))
         print(f"  Fallback activations: {fb} / {mpc_n}  ({fb/mpc_n*100:.1f}%)")
+
+    # ── Step 5 — NMPC section ────────────────────────────────────────────────
+    if nmpc_n > 0:
+        print(f"\n{thin}")
+        print("Step 5 — NMPC solver health")
+        nmpc_solve = data.get("nmpc_solve_time_ms")
+        nmpc_cost  = data.get("nmpc_cost")
+        nmpc_iters = data.get("nmpc_iterations")
+        nmpc_feas  = data.get("nmpc_feasible")
+        nmpc_used  = data.get("nmpc_used")
+        nmpc_fb    = data.get("nmpc_fallback_active")
+
+        if nmpc_solve is not None:
+            sv_n = nmpc_solve[:n][nmpc_mask]
+            gate = "PASS" if float(np.percentile(sv_n, 95)) <= 20.0 else "FAIL"
+            print(f"  NMPC solve_time_ms P50 / P95 / MAX: "
+                  f"{_fmt(np.percentile(sv_n,50),'0.2f')}ms / "
+                  f"{_fmt(np.percentile(sv_n,95),'0.2f')}ms / "
+                  f"{_fmt(np.max(sv_n),'0.2f')}ms  [{gate} P95≤20ms]")
+
+        # NMPC vs LMPC-fallback breakdown within NONLINEAR_MPC regime frames
+        if nmpc_used is not None:
+            nu = nmpc_used[:n][nmpc_mask]
+            nmpc_ran = int(np.sum(nu > 0.5))
+            lmpc_ran = nmpc_n - nmpc_ran
+            print(f"  NMPC ran: {nmpc_ran}/{nmpc_n}  ({nmpc_ran/nmpc_n*100:.1f}%)  "
+                  f"LMPC-fallback: {lmpc_ran}/{nmpc_n}  ({lmpc_ran/nmpc_n*100:.1f}%)")
+
+        if nmpc_feas is not None:
+            infeasible = int(np.sum(nmpc_feas[:n][nmpc_mask] < 0.5))
+            print(f"  Infeasible frames: {infeasible}/{nmpc_n}  ({infeasible/nmpc_n*100:.2f}%)")
+
+        if nmpc_fb is not None:
+            fb_n = int(np.sum(nmpc_fb[:n][nmpc_mask] > 0.5))
+            print(f"  Fallback-active frames: {fb_n}/{nmpc_n}  ({fb_n/nmpc_n*100:.2f}%)")
+
+        if nmpc_iters is not None:
+            it = nmpc_iters[:n][nmpc_mask]
+            print(f"  SLSQP iterations P50 / P95 / MAX: "
+                  f"{_fmt(np.percentile(it,50),'0.0f')} / "
+                  f"{_fmt(np.percentile(it,95),'0.0f')} / "
+                  f"{_fmt(np.max(it),'0.0f')}")
+
+        if nmpc_cost is not None:
+            cs = nmpc_cost[:n][nmpc_mask]
+            # Cost drift check: large spread = solver not warm-starting well
+            cost_spread = float(np.std(cs)) if len(cs) > 1 else 0.0
+            print(f"  NLP cost median: {_fmt(np.median(cs),'.1f')}  "
+                  f"std: {_fmt(cost_spread,'.1f')}  "
+                  f"(high std → warm-start diverging)")
 
     # ── Top-10 worst MPC frames ───────────────────────────────────────────────
     print(f"\n{thin}")

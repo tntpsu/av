@@ -33,6 +33,8 @@ from scoring_registry import (  # noqa: E402
     BENIGN_STALE_REASONS,
     MPC_SOLVE_TIME_BUDGET_MS,
     MPC_SOLVE_TIME_ALERT_MS,
+    NMPC_SOLVE_TIME_BUDGET_MS,
+    NMPC_SOLVE_TIME_ALERT_MS,
 )
 
 
@@ -195,6 +197,21 @@ class LayerHealthAnalyzer:
                 if self._scalar(f, "control/mpc_fallback_active", i, default=0.0) > 0.5:
                     score -= 0.50
                     flags.append("mpc_fallback")
+
+            if regime_val >= 1.5:  # NMPC active
+                if self._scalar(f, "control/nmpc_feasible", i, default=1.0) < 0.5:
+                    score -= 0.40
+                    flags.append("nmpc_infeasible")
+                nmpc_solve_ms = self._scalar(f, "control/nmpc_solve_time_ms", i, default=0.0)
+                if nmpc_solve_ms > NMPC_SOLVE_TIME_ALERT_MS:
+                    score -= 0.30
+                    flags.append("nmpc_solve_slow")
+                elif nmpc_solve_ms > NMPC_SOLVE_TIME_BUDGET_MS:
+                    score -= 0.15
+                    flags.append("nmpc_solve_marginal")
+                if self._scalar(f, "control/nmpc_fallback_active", i, default=0.0) > 0.5:
+                    score -= 0.50
+                    flags.append("nmpc_fallback")
 
         # Grade compensation flag (informational — no score penalty)
         if "vehicle/road_grade" in f:

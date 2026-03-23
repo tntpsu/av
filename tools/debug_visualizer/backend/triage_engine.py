@@ -243,6 +243,51 @@ PATTERNS = [
         "fix_hint": "MPC curvature reference diverges from trajectory path curvature. Check kappa feedforward pipeline.",
         "check": lambda m: m.get("mpc_available", False) and m.get("mpc_kappa_divergence_p95", 0) > 0.01,
     },
+    # NMPC-specific patterns (regime == 2, Step 5)
+    {
+        "id": "nmpc_infeasible_burst",
+        "name": "NMPC SLSQP infeasible (>0.5% of NMPC frames)",
+        "severity": "instability",
+        "code_pointer": "control/nmpc_controller.py:NMPCSolver.solve()",
+        "config_lever": "nmpc_max_iter / nmpc_horizon",
+        "fix_hint": "NMPC SLSQP infeasible. Try reducing nmpc_horizon or loosening constraint bounds (delta_max, rate).",
+        "check": lambda m: m.get("nmpc_available", False) and m.get("nmpc_infeasible_rate", 0) > 0.005,
+    },
+    {
+        "id": "nmpc_solve_time_budget",
+        "name": "NMPC solve time exceeds budget (P95 > 20ms)",
+        "severity": "instability",
+        "code_pointer": "control/nmpc_controller.py:NMPCSolver.solve()",
+        "config_lever": "nmpc_horizon / nmpc_max_iter",
+        "fix_hint": "NMPC P95 solve time > 20ms. Reduce nmpc_horizon or nmpc_max_iter to stay within real-time budget.",
+        "check": lambda m: m.get("nmpc_available", False) and m.get("nmpc_solve_p95_ms", 0) > 20.0,
+    },
+    {
+        "id": "nmpc_fallback_cascade",
+        "name": "NMPC fallback to LMPC active (>0.5% NMPC frames)",
+        "severity": "instability",
+        "code_pointer": "control/nmpc_controller.py:NMPCController.compute_steering()",
+        "config_lever": "nmpc_max_consecutive_failures / nmpc_fallback_lmpc",
+        "fix_hint": "NMPC falling back to LMPC. Check infeasibility source or increase nmpc_max_consecutive_failures.",
+        "check": lambda m: m.get("nmpc_available", False) and m.get("nmpc_fallback_rate", 0) > 0.005,
+    },
+    # Heading gate / SignalIntegrity (Step 5)
+    {
+        "id": "heading_gate_stuck_on_curve",
+        "name": "Heading-zero gate stuck on curve approach (SignalIntegrity penalty)",
+        "severity": "instability",
+        "code_pointer": "trajectory/inference.py:_update_heading_zero_gate()",
+        "config_lever": "trajectory.traj_heading_zero_gate_curvature_preview_off_threshold",
+        "fix_hint": (
+            "Gate suppressing heading on >20% of curve-approach frames (κ>0.0005). "
+            "ON thresholds: center_a<0.004 AND heading<2°. "
+            "OFF conditions: center_a>0.008, heading>3.5°, map_preview_κ>0.001, or time_to_curve<1.35s. "
+            "For gentle curves (autobahn R600, κ=0.00167): all OFF conditions fail until well inside the curve. "
+            "Fix: lower traj_heading_zero_gate_curvature_preview_off_threshold (0.001→0.0005) "
+            "so the map preview fires earlier."
+        ),
+        "check": lambda m: m.get("heading_suppression_rate_on_curves", 0.0) > 0.20,
+    },
     # Grade compensation patterns
     {
         "id": "grade_overspeed_downhill",
@@ -591,6 +636,46 @@ class TriageEngine:
             else:
                 m["mpc_available"] = False
 
+            # NMPC metrics (regime == 2)
+            nmpc_mask = regime >= 1.5 if regime is not None else None
+            if nmpc_mask is not None and np.any(nmpc_mask):
+                m["nmpc_available"] = True
+
+                nmpc_feasible = arr("control/nmpc_feasible")
+                m["nmpc_infeasible_rate"] = (
+                    float(1.0 - np.mean(nmpc_feasible[nmpc_mask]))
+                    if nmpc_feasible is not None else 0.0
+                )
+
+                nmpc_solve = arr("control/nmpc_solve_time_ms")
+                m["nmpc_solve_p95_ms"] = (
+                    float(np.percentile(nmpc_solve[nmpc_mask], 95))
+                    if nmpc_solve is not None else 0.0
+                )
+
+                nmpc_fallback = arr("control/nmpc_fallback_active")
+                m["nmpc_fallback_rate"] = (
+                    float(np.mean(nmpc_fallback[nmpc_mask]))
+                    if nmpc_fallback is not None else 0.0
+                )
+            else:
+                m["nmpc_available"] = False
+
+            # Heading gate suppression on curves (SignalIntegrity, Step 5)
+            # Uses approach_threshold=0.0005 to match drive_summary_core.py scoring.
+            hzg = arr("trajectory/diag_heading_zero_gate_active")
+            traj_curv = arr("trajectory/reference_point_curvature")
+            if hzg is not None and traj_curv is not None:
+                _n = min(len(hzg), len(traj_curv))
+                _gate = (hzg[:_n] > 0.5)
+                _on_curve = np.abs(traj_curv[:_n]) > 0.0005
+                _curve_frames = int(np.sum(_on_curve))
+                m["heading_suppression_rate_on_curves"] = float(
+                    np.sum(_gate & _on_curve) / max(_curve_frames, 1)
+                )
+            else:
+                m["heading_suppression_rate_on_curves"] = 0.0
+
             # Grade metrics
             road_grade = arr("vehicle/road_grade")
             if road_grade is not None:
@@ -779,6 +864,10 @@ class TriageEngine:
             "mpc_regime_chatter":    "mpc_regime_changes_per_min",
             "mpc_heading_error_exceeds_model": "mpc_heading_error_p95",
             "mpc_kappa_ref_mismatch": "mpc_kappa_divergence_p95",
+            "nmpc_infeasible_burst":  "nmpc_infeasible_rate",
+            "nmpc_solve_time_budget": "nmpc_solve_p95_ms",
+            "nmpc_fallback_cascade":  "nmpc_fallback_rate",
+            "heading_gate_stuck_on_curve": "heading_suppression_rate_on_curves",
             "grade_overspeed_downhill": "downhill_overspeed_rate",
             "grade_compensation_missing": "grade_comp_active_rate",
             "grade_mpc_infeasible": "mpc_infeasible_rate",

@@ -59,10 +59,14 @@ def analyze_mpc_pipeline(filepath: Path) -> Optional[Dict]:
             return None
 
         # ── Regime masks ────────────────────────────────────────────────────
-        pp_mask  = regime_raw < 0.5
-        mpc_mask = regime_raw >= 0.5
-        pp_n  = int(np.sum(pp_mask))
-        mpc_n = int(np.sum(mpc_mask))
+        pp_mask   = regime_raw < 0.5
+        lmpc_mask = (regime_raw >= 0.5) & (regime_raw < 1.5)
+        nmpc_mask = regime_raw >= 1.5
+        mpc_mask  = regime_raw >= 0.5  # any MPC (LMPC + NMPC)
+        pp_n   = int(np.sum(pp_mask))
+        lmpc_n = int(np.sum(lmpc_mask))
+        nmpc_n = int(np.sum(nmpc_mask))
+        mpc_n  = int(np.sum(mpc_mask))
 
         blend_weight = _load(f, "control/regime_blend_weight", n)
         blend_n = 0
@@ -110,9 +114,13 @@ def analyze_mpc_pipeline(filepath: Path) -> Optional[Dict]:
         card1 = {
             "total_frames": n,
             "pp_frames": pp_n,
+            "lmpc_frames": lmpc_n,
+            "nmpc_frames": nmpc_n,
             "mpc_frames": mpc_n,
             "blend_frames": blend_n,
             "pp_rate": _safe_float(pp_n / n),
+            "lmpc_rate": _safe_float(lmpc_n / n),
+            "nmpc_rate": _safe_float(nmpc_n / n),
             "mpc_rate": _safe_float(mpc_n / n),
             "pp_to_mpc_count": len(pp_to_mpc),
             "mpc_to_pp_count": len(mpc_to_pp),
@@ -212,7 +220,7 @@ def analyze_mpc_pipeline(filepath: Path) -> Optional[Dict]:
             "solve_time_p50": _safe_float(_pct(sv_mpc, 50)),
             "solve_time_p95": _safe_float(solve_p95),
             "solve_time_max": _safe_float(float(np.max(sv_mpc)) if len(sv_mpc) > 0 else 0.0),
-            "solve_time_gate_pass": bool(solve_p95 <= 5.0) if solve_p95 is not None else None,
+            "solve_time_gate_pass": bool(solve_p95 <= 5.0) if solve_p95 is not None else None,  # LMPC gate
             "fallback_rate": _safe_float(_rate(fallback[mpc_mask]) if fallback is not None else None),
             # Time series for chart overlay
             "e_lat_series": (e_lat.tolist() if e_lat is not None else []),
@@ -250,6 +258,40 @@ def analyze_mpc_pipeline(filepath: Path) -> Optional[Dict]:
 
         card4 = {"severe_frames": severe_frames}
 
+        # ── Card 5: NMPC Solver Health (Step 5) ─────────────────────────────
+        card5 = None
+        if nmpc_n > 0:
+            nmpc_solve    = _load(f, "control/nmpc_solve_time_ms", n)
+            nmpc_feasible = _load(f, "control/nmpc_feasible", n)
+            nmpc_fallback = _load(f, "control/nmpc_fallback_active", n)
+            nmpc_iters    = _load(f, "control/nmpc_iterations", n)
+            nmpc_cost     = _load(f, "control/nmpc_cost", n)
+            nmpc_consec   = _load(f, "control/nmpc_consecutive_failures", n)
+
+            sv_nmpc = nmpc_solve[nmpc_mask] if nmpc_solve is not None else np.array([])
+            nmpc_solve_p95 = _pct(sv_nmpc, 95)
+
+            card5 = {
+                "nmpc_frames": nmpc_n,
+                "nmpc_rate": _safe_float(nmpc_n / n),
+                "solve_time_p50": _safe_float(_pct(sv_nmpc, 50)),
+                "solve_time_p95": _safe_float(nmpc_solve_p95),
+                "solve_time_max": _safe_float(float(np.max(sv_nmpc)) if len(sv_nmpc) > 0 else 0.0),
+                "solve_time_gate_pass": bool(nmpc_solve_p95 <= 20.0) if nmpc_solve_p95 is not None else None,
+                "infeasible_rate": _safe_float(
+                    1.0 - float(np.mean(nmpc_feasible[nmpc_mask] > 0.5))
+                    if nmpc_feasible is not None else None
+                ),
+                "fallback_rate": _safe_float(
+                    _rate(nmpc_fallback[nmpc_mask]) if nmpc_fallback is not None else None
+                ),
+                "iterations_p50": _safe_float(_pct(nmpc_iters[nmpc_mask], 50) if nmpc_iters is not None else None),
+                "iterations_p95": _safe_float(_pct(nmpc_iters[nmpc_mask], 95) if nmpc_iters is not None else None),
+                "cost_p50": _safe_float(_pct(nmpc_cost[nmpc_mask], 50) if nmpc_cost is not None else None),
+                "cost_p95": _safe_float(_pct(nmpc_cost[nmpc_mask], 95) if nmpc_cost is not None else None),
+                "max_consecutive_failures": int(np.max(nmpc_consec)) if nmpc_consec is not None else 0,
+            }
+
         return {
             "has_mpc": True,
             "recording": filepath.name,
@@ -257,4 +299,5 @@ def analyze_mpc_pipeline(filepath: Path) -> Optional[Dict]:
             "card2": card2,
             "card3": card3,
             "card4": card4,
+            "card5": card5,
         }

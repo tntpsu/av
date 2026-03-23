@@ -191,13 +191,15 @@ class NMPCSolver:
         Forward dynamics Jacobians at step k:
           A_k = ∂x_{k+1}/∂x_k  (3×3):
             [1,  v·cos(eₕ)·dt,  sin(eₕ)·dt               ]
-            [0,  1,             (v/L)·tan(δ)·dt − κ·dt    ]
+            [0,  1,             (1/L)·tan(δ)·dt − κ·dt    ]
             [0,  0,             1                           ]
 
           B_k = ∂x_{k+1}/∂u_k  (3×2):
-            [0,   0                                         ]
-            [(v/L)·(δ_max/cos²(δ))·dt,  0                 ]
-            [0,   dt                                        ]
+            [0,   0                                            ]
+            [(v/L)·(δ_max/cos²(δ))·dt,  0                    ]
+            [0,   dt                                           ]
+
+        Note: A_k[1, 2] = ∂e_heading_{k+1}/∂v_k = (1/L)·tan(δ)·dt − κ·dt  (NOT v/L).
 
         Backward adjoint update:
           λ_N    = ∂c_T/∂x_N
@@ -313,11 +315,12 @@ class NMPCSolver:
             # A_k^T:
             #   row 0: [1, 0, 0]
             #   row 1: [v·cos(eₕ)·dt, 1, 0]
-            #   row 2: [sin(eₕ)·dt,   (v/L)·tan(δ)·dt − κ·dt,   1 (0 if clamped)]
+            #   row 2: [sin(eₕ)·dt,   (1/L)·tan(δ)·dt − κ·dt,   1 (0 if clamped)]
+            # Note: A_k[1, 2] = (1/L)·tan(δ)·dt − κ·dt (not v/L — v is not a factor here)
             new_lam_0 = lam[0]
             new_lam_1 = v * cos_eh[k] * dt * lam[0] + lam[1]
             new_lam_2 = (sin_eh[k] * dt * lam[0]
-                         + ((v / L) * tan_d[k] * dt - kk * dt) * lam[1]
+                         + ((1.0 / L) * tan_d[k] * dt - kk * dt) * lam[1]
                          + (0.0 if v_clamped[k] else lam[2]))
             lam = np.array([
                 new_lam_0 + dc_dx[k, 0],

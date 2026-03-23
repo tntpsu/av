@@ -1416,11 +1416,17 @@ class AVStack:
     # v_target = trajectory.target_speed (configured cruise speed for this track).
     # Calibration: q_lat=0.5 at highway (v=15, κ=0.002 → a_lat=0.45 m/s²);
     #   hill_highway (v=12, κ=0.010 → a_lat=1.44 m/s²) → ratio=3.2 → q_lat=1.60.
+    # NMPC nmpc_q_lat: base=0.7 at same reference (15 m/s, κ=0.002).
+    #   NMPC base is higher than LMPC base (0.5) because the nonlinear model provides
+    #   more accurate error prediction, warranting slightly more correction authority.
+    #   At 21 m/s autobahn: ratio=1.96 → nmpc_q_lat=1.37.
+    #   At 12 m/s hill_highway κ=0.010: ratio=3.2 → nmpc_q_lat=2.24.
     # Tuple: (base, v_ref, ref_kappa, exponent, max_val)
     _MPC_WEIGHT_AUTO_DERIVE_PARAMS: dict[
         tuple[str, str], tuple[float, float, float, float, float]
     ] = {
-        ("trajectory.mpc", "mpc_q_lat"): (0.5, 15.0, 0.002, 1.0, 4.0),
+        ("trajectory.mpc",  "mpc_q_lat"):  (0.5, 15.0, 0.002, 1.0, 4.0),
+        ("trajectory.nmpc", "nmpc_q_lat"): (0.7, 15.0, 0.002, 1.0, 5.0),
     }
 
     # ── Speed-dependent parameter auto-derive ────────────────────────────────

@@ -789,7 +789,7 @@ trajectory:
     nmpc_enabled: false             # opt-in — enable via per-track overlay (e.g. mpc_autobahn.yaml)
     nmpc_horizon: 20                # N prediction steps
     nmpc_dt: 0.1                   # prediction step duration (s) — matches LMPC dt
-    nmpc_q_lat: 2.0                # lateral error weight (higher than LMPC base; nonlinear model is exact)
+    nmpc_q_lat: 0.7                # lateral error weight — BASE; auto-derived from v²κ when curve_auto_derive:true (0.7@15m/s/κ0.002 → ~1.94@25m/s)
     nmpc_q_heading: 5.0            # heading error weight
     nmpc_r_steer: 1.0e-4           # steering magnitude cost (near-zero — same philosophy as LMPC)
     nmpc_r_steer_rate: 1.5         # steering rate cost — PRIMARY comfort knob for NMPC

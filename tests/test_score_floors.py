@@ -55,40 +55,75 @@ def _load_floors() -> dict:
         return json.load(f)["floors"]
 
 
+def _recording_track_id(p: Path) -> str | None:
+    """Extract track_id from an HDF5 recording, or None if unidentifiable.
+
+    Checks in order:
+      1. f.attrs["track_name"]  (legacy direct attribute)
+      2. f.attrs["metadata"] JSON blob → recording_provenance.track_id  (current format)
+      3. Top-level group key heuristic
+      4. Filename heuristic
+    Returns None when none of the checks can identify a track (truly untagged recordings).
+    """
+    import json as _json
+    import h5py
+    try:
+        with h5py.File(p, "r") as f:
+            # 1. Legacy direct attribute
+            if "track_name" in f.attrs:
+                return str(f.attrs["track_name"]).lower()
+            # 2. Current JSON metadata blob
+            if "metadata" in f.attrs:
+                try:
+                    meta = _json.loads(str(f.attrs["metadata"]))
+                    tid = (
+                        meta.get("recording_provenance", {}).get("track_id")
+                        or meta.get("track_id")
+                    )
+                    if tid:
+                        return str(tid).lower()
+                except Exception:
+                    pass
+            # 3. Top-level group key heuristic (very old recordings)
+            all_keys = " ".join(f.keys()).lower()
+            for known in ("sloop", "highway", "hairpin", "mixed", "autobahn"):
+                if known in all_keys:
+                    return known
+    except Exception:
+        pass
+    return None  # truly untagged — caller may use as wildcard fallback
+
+
 def _find_latest_recording(track: str) -> Path | None:
     """Return the most recently modified .h5 recording that is likely for *track*."""
     if not _REC_DIR.exists():
         return None
+
+    track_key = track.lower().replace("_", "")
     candidates = []
+    untagged = []
+
     for p in _REC_DIR.glob("recording_*.h5"):
-        # Quick heuristic: check if track name appears in the first 4 KB of
-        # the file's string attributes (without loading the whole file)
-        try:
-            import h5py
-            with h5py.File(p, "r") as f:
-                # Prefer an explicit track_name attribute
-                if "track_name" in f.attrs:
-                    if track.lower() in str(f.attrs["track_name"]).lower():
-                        candidates.append(p)
-                    continue
-                # Fall back: look for track keywords in top-level group names
-                all_keys = " ".join(f.keys()).lower()
-                if track.lower().replace("_", "") in all_keys.replace("_", ""):
-                    candidates.append(p)
-                    continue
-                # Last resort: filename heuristic
-                if track.lower().replace("_", "") in p.name.lower().replace("_", ""):
-                    candidates.append(p)
-        except Exception:
-            continue
+        tid = _recording_track_id(p)
+        if tid is None:
+            # Untagged recording — keep as wildcard fallback
+            untagged.append(p)
+        elif track_key in tid.replace("_", ""):
+            candidates.append(p)
+        # If tid is set but doesn't match this track, skip — don't use as fallback.
 
-    if not candidates:
-        # Accept any recent recording (user runs one track at a time)
-        all_recs = sorted(_REC_DIR.glob("recording_*.h5"),
-                          key=lambda p: p.stat().st_mtime, reverse=True)
-        return all_recs[0] if all_recs else None
+        # Also apply filename heuristic for any recording (belt-and-suspenders)
+        if not candidates or p not in candidates:
+            if track_key in p.name.lower().replace("_", "") and p not in candidates:
+                candidates.append(p)
 
-    return max(candidates, key=lambda p: p.stat().st_mtime)
+    if candidates:
+        return max(candidates, key=lambda p: p.stat().st_mtime)
+
+    # Fallback: accept most recent untagged recording (user runs one track at a time,
+    # older recordings lack metadata). Tagged recordings that didn't match are excluded.
+    all_recs = sorted(untagged, key=lambda p: p.stat().st_mtime, reverse=True)
+    return all_recs[0] if all_recs else None
 
 
 def _run_analysis(recording_path: Path) -> dict:

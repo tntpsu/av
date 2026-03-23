@@ -1,22 +1,50 @@
 # AV Stack — Agent Memory: Tasks
 
-**Last updated:** 2026-03-22
+**Last updated:** 2026-03-23
 
 ---
 
 ## Current Focus
 
-**Active: Step 5 NMPC — in progress.** Phases A-D complete. Next: Phase E tool updates, then Phase G unit tests, Phase C (full dispatch integration test), Phase H live validation on autobahn_30.
+**Step 5 NMPC — Phase H-2 PASSED (2026-03-23). Two open investigations.**
 
 **Phase completion status:**
 - ✅ Phase A: `tracks/autobahn_30.yml` + `config/mpc_autobahn.yaml` + scoring_registry NMPC constants
 - ✅ Phase F: `config/av_stack_config.yaml` — `trajectory.nmpc` section, `control.regime.lmpc_max_speed_mps`
-- ✅ Phase B: `control/nmpc_controller.py` — NMPCParams, NMPCSolver (scipy SLSQP + analytical adjoint gradient, 5–16ms), NMPCController
+- ✅ Phase B: `control/nmpc_controller.py` — NMPCParams, NMPCSolver (scipy SLSQP + analytical adjoint gradient), NMPCController. **Adjoint bug fixed: A_k[1,2] was (v/L)·tan(δ)·dt, corrected to (1/L)·tan(δ)·dt.**
 - ✅ Phase C: `control/pid_controller.py` — NONLINEAR_MPC dispatch block, LMPC fallback path, nmpc_* metadata
 - ✅ Phase D: `data/recorder.py` + `data/formats/data_format.py` + `av_stack/orchestrator.py` — 7 nmpc_* HDF5 fields (all 6 registration locations)
-- 🔲 Phase E1-E6: Tools (analyze_drive_overall, mpc_pipeline, triage_engine, issue_detector, layer_health, oscillation_attribution)
-- 🔲 Phase G1+G2: Unit tests (test_nmpc_controller.py, test_regime_selector_nmpc.py)
-- 🔲 Phase H: Live validation on autobahn_30 track
+- ✅ Phase E1-E5: Tools (analyze_drive_overall, mpc_pipeline backend, triage_engine, issue_detector, layer_health) + drive_summary_core.py NMPC metrics
+- ✅ Phase G1+G2: Unit tests (test_nmpc_controller.py 29 tests, test_regime_selector_nmpc.py 17 tests) — 46/46 passing
+- ✅ nmpc_q_lat speed-adaptive scaling: added ("trajectory.nmpc","nmpc_q_lat") to `_MPC_WEIGHT_AUTO_DERIVE_PARAMS` with base=0.7,v_ref=15.0,κ_ref=0.002. All 145 tests green.
+- ✅ **Phase H-2 PASSED (2026-03-23):** 0 e-stops, 91.2/100 (recording_20260323_095252.h5). NMPC 269/714 frames, 100% feasibility, P95=12.34ms.
+
+**Phase H-3 PASSED (2026-03-23): 97.5/100, 0 e-stops, oscillation NOT runaway.**
+Recording: `recording_20260323_111239.h5`
+
+Changes applied:
+- `control/regime_selector.py`: added `lmpc_nmpc_blend_frames` (default 30) and `lmpc_nmpc_min_hold_frames` (default 40) — independent of PP↔LMPC blend/hold
+- `config/mpc_autobahn_nmpc_test.yaml`: target_speed 15→25 m/s, removed explicit nmpc_q_lat=0.7 (auto-derive now ~1.62 at 25 m/s), lmpc_nmpc_blend_frames=30, lmpc_nmpc_min_hold_frames=40
+- `tests/test_regime_selector_nmpc.py`: added 2 tests for new params (18/18 passing)
+
+Results vs H-2:
+| Metric | H-2 (15 m/s) | H-3 (25 m/s) |
+|---|---|---|
+| Score | 91.2/100 | **97.5/100** |
+| Lateral RMSE | 0.212m | **0.071m** |
+| Lateral P95 | 0.554m | **0.163m** |
+| Oscillation runaway | YES | **NO** |
+| RMS growth | 0.004→0.501m | 0.006→0.095m |
+| Max Δsteer @ transition | 0.172 | **0.078** (55% ↓) |
+| Control score | 80/100 | **100/100** |
+| Centeredness | 92.7% | **100%** |
+
+**Speed finding**: The `target_speed: 15.0` test overlay was the bottleneck — NOT the Unity motor.
+Car now reaches 25 m/s (11.7% overspeed rate at target=25). Speed RMSE 5.3 m/s = car averages ~20 m/s during acceleration; peaks above 25 m/s. `maxMotorTorque=1500f` is sufficient. T-079 CLOSED.
+
+**Open items:**
+- 10 regime transitions still occur (MPC→PP at 12-14 m/s periodically). Not yet identified. Low priority given 97.5 score.
+- SignalIntegrity -18.8 (heading suppression on curves) — only remaining deduction. Pre-existing.
 
 **Phase 2.8 VALIDATED on highway (2026-03-12).** MPC pipeline fixes (2.8.1–2.8.4) complete:
 - 2.8.1: Recovery mode suppression (skip ×1.2/×1.5 when MPC active)
@@ -49,6 +77,11 @@
 | T-078 | Late turn-in root cause fully investigated: MPC cost function structural trade-off (q_lat=1.60, r_steer_rate=2.0 → breakeven q_lat=11.5 for full fix). kappa_ref preview fix tried → oscillation runaway → reverted. PP floor rescue BENIGN (floor lowering caused regression). **DEFERRED.** | 2026-03-22 |
 | 3.5 | 2DOF FF alignment live validated: ff_alignment=True vs False A/B on hill_highway. +0.4 pts, jerk cap hit without (9.2→18.0), adj_rmse 0.297→0.309m, oscillation runaway without. Feature confirmed beneficial, stays default=True. ROADMAP adj_rmse gate (0.25m) not met — gate pre-dates Step 4 MPC-as-primary and should be updated. | 2026-03-22 |
 | Step 5 A-D | NMPC Phases A-D: autobahn_30 track, mpc_autobahn.yaml overlay, nmpc_controller.py (SLSQP + adjoint gradient), pid_controller.py dispatch, HDF5 7-field registration. 1334 tests passing. | 2026-03-22 |
+| Step 5 E+G | NMPC Phases E (tools) + G (unit tests): issue_detector/layer_health/triage_engine/mpc_pipeline/analyze_drive_overall/drive_summary_core NMPC updates; 46 new unit tests (29 controller + 17 regime selector). Adjoint bug fixed: A_k[1,2] corrected from (v/L) to (1/L). | 2026-03-22 |
+| Step 5 H | NMPC Phase H E2E: autobahn_30 PARTIAL PASS. NMPC activated (317/1075 frames, 29.5%), P95=14.66ms, 100% feasibility, 0% LMPC fallback — solver mechanically correct. BUT 2 e-stops from oscillation runaway: nmpc_q_lat=2.0 tuned for 21 m/s, over-aggressive at 12-13 m/s. SmithΔ 0.485m at e-stop frames. Adjoint fix (1/L vs v/L) confirmed by solver correctness. | 2026-03-22 |
+| Step 5 nmpc_q_lat | Speed-adaptive nmpc_q_lat: added to `_MPC_WEIGHT_AUTO_DERIVE_PARAMS` (base=0.7,v_ref=15,κ_ref=0.002). Test YAML: 2.0→0.7. Base config: 2.0→0.7. Auto-derive: at 25m/s autobahn→1.94, hill_highway 12m/s κ=0.010→2.24. All 145 tests green. Phase H-2 re-run needed to confirm 0 e-stops. | 2026-03-22 |
+| Step 5 H-2 | Phase H-2 PASSED: 0 e-stops ✅, 91.2/100 ✅ (target ≥85). NMPC 37.7% frames, 100% feasibility, P95=12.34ms. Residual: oscillation amplitude runaway (RMS 0.004→0.501m), 11 regime transitions (Δsteer=0.172 at handoff), NLP cost std/median=1.3 (warm-start diverging). Root cause: chatter at 9 m/s NMPC threshold. Recording: recording_20260323_095252.h5. | 2026-03-23 |
+| Step 5 H-3 | Phase H-3 PASSED: 97.5/100, 0 e-stops. regime_selector.py: lmpc_nmpc_blend_frames=30/min_hold_frames=40. Test overlay: target_speed 15→25 m/s, nmpc_q_lat auto-derive (~1.62 at 25 m/s). Oscillation NOT runaway (0.006→0.095m). Lateral RMSE 0.212→0.071m. Max Δsteer at transition 0.172→0.078 (55% ↓). Control 80→100/100. Speed ceiling confirmed NOT Unity motor limit — was test overlay target_speed=15. Car reaches 25+ m/s. 18/18 regime selector tests passing. Recording: recording_20260323_111239.h5. | 2026-03-23 |
 
 ---
 

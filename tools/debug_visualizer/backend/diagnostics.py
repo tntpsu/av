@@ -1715,6 +1715,9 @@ def analyze_signal_chain(f: h5py.File, failure_frame: Optional[int] = None) -> D
     ctrl_steering = _safe_read_array(f, "control/steering")
     ctrl_steering_rate_limited = _safe_read_array(f, "control/steering_rate_limited_active")
     ctrl_steering_jerk_limited = _safe_read_array(f, "control/steering_jerk_limited_active")
+    # Map-based preview curvature fed to trajectory's heading gate (same value as
+    # curvature_preview_abs in orchestrator; recorded under control/ group).
+    ctrl_map_preview_curvature = _safe_read_array(f, "control/curvature_preview_abs")
 
     speed = _safe_read_array(f, "vehicle/speed")
     emergency_stop = _safe_read_array(f, "control/emergency_stop")
@@ -1823,8 +1826,28 @@ def analyze_signal_chain(f: h5py.File, failure_frame: Optional[int] = None) -> D
             "ctrl_steering": safe_float(float(ctrl_steering[i]) if i < len(ctrl_steering) else 0.0),
             "ctrl_limiter_code": int(ctrl_limiter_code[i]) if i < len(ctrl_limiter_code) else 0,
             "speed_mps": safe_float(float(speed[i]) if i < len(speed) else 0.0),
+            # Map preview curvature used by heading-gate release condition (κ > 0.001 releases gate).
+            "map_preview_curvature": safe_float(
+                float(ctrl_map_preview_curvature[i])
+                if ctrl_map_preview_curvature is not None and i < len(ctrl_map_preview_curvature)
+                else 0.0
+            ),
         }
         per_frame_data.append(row)
+
+    # Full-run heading suppression rate on curve-approach frames (κ > 0.0005).
+    # Mirrors the SignalIntegrity scoring formula in drive_summary_core.py.
+    _approach_threshold = 0.0005
+    if traj_heading_zero_gate is not None and traj_curvature is not None:
+        _aln = min(len(traj_heading_zero_gate), len(traj_curvature))
+        _gate_all = traj_heading_zero_gate[:_aln] > 0.5
+        _on_curve_all = np.abs(traj_curvature[:_aln]) > _approach_threshold
+        _curve_total = int(np.sum(_on_curve_all))
+        heading_suppression_rate_on_curves = float(
+            np.sum(_gate_all & _on_curve_all) / max(_curve_total, 1)
+        )
+    else:
+        heading_suppression_rate_on_curves = 0.0
 
     suppression_summary = {
         "heading_zero_total_frames": heading_zero_total_frames,
@@ -1833,6 +1856,7 @@ def analyze_signal_chain(f: h5py.File, failure_frame: Optional[int] = None) -> D
         "steering_rate_limit_total_frames": steering_rate_limit_total_frames,
         "traj_heading_onset_frame": traj_heading_onset,
         "ctrl_feedforward_onset_frame": ctrl_ff_onset,
+        "heading_suppression_rate_on_curves": heading_suppression_rate_on_curves,
     }
 
     return {
@@ -1841,6 +1865,7 @@ def analyze_signal_chain(f: h5py.File, failure_frame: Optional[int] = None) -> D
         "rate_limit_total_frames": rate_limit_total_frames,
         "jerk_limit_total_frames": jerk_limit_total_frames,
         "steering_rate_limit_total_frames": steering_rate_limit_total_frames,
+        "heading_suppression_rate_on_curves": heading_suppression_rate_on_curves,
         "failure_frame": failure_frame,
         "total_frames": n,
         "per_frame_data": per_frame_data,

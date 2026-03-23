@@ -1,0 +1,83 @@
+# NMPC activation test overlay — autobahn_30.
+#
+# Phase H-2 result (2026-03-23): 0 e-stops, 91.2/100 at target_speed=15 m/s.
+# This revision (Phase H-3) raises target speed to 25 m/s (design speed) and
+# removes the explicit nmpc_q_lat override — auto-derive computes ~1.62 at
+# 25 m/s (v²×κ centripetal scaling from base=0.7).
+#
+# Key differences from mpc_autobahn.yaml:
+#   - lmpc_max_speed_mps: 8.0   → NMPC fires at 9 m/s (vs 21 m/s production);
+#                                  ensures NMPC is exercised through full run
+#   - lmpc_nmpc_blend_frames: 30 → 2× default; smooths LMPC↔NMPC Δsteer
+#   - lmpc_nmpc_min_hold_frames: 40 → reduces threshold chatter
+
+control:
+  lateral:
+    steering_smoothing_alpha: 0.2
+    pp_feedback_gain: 0.0
+    curve_feedforward_gain: 0.0
+    curve_feedforward_threshold: 0.0
+    pp_speed_norm_enabled: true
+    pp_speed_norm_min_scale: 0.50
+    pp_map_ff_gain: 1.0
+    curve_intent_arm_preview_min: 0.001
+    curve_intent_arm_rise_min: 0.0001
+    curve_intent_arm_distance_time_headway_s: 1.5
+    curve_intent_arm_distance_min_m: 10.0
+    curve_intent_arm_distance_max_m: 60.0
+    curve_intent_startup_ignore_frames: 60
+  longitudinal:
+    target_speed: 25.0      # Design speed — matches mpc_autobahn.yaml production target
+    max_speed: 28.0
+    speed_drag_gain: 0.008
+    accel_target_smoothing_alpha: 0.5
+  regime:
+    lmpc_max_speed_mps: 8.0   # LOWERED for NMPC test: NMPC fires at 9 m/s (vs 21 m/s production)
+    lmpc_max_heading_error_rad: 0.25
+    upshift_hysteresis_mps: 1.0
+    downshift_hysteresis_mps: 1.0
+    min_hold_frames: 20
+    lmpc_nmpc_blend_frames: 30    # 2× default — smooths LMPC↔NMPC steering delta
+    lmpc_nmpc_min_hold_frames: 40 # Longer hold — reduces chatter at 9 m/s NMPC threshold
+
+trajectory:
+  target_speed: 25.0
+  curve_phase_on: 0.30
+  curve_phase_off: 0.18
+  curve_phase_commit_on: 0.38
+  curve_phase_commit_min_frames: 3
+  curve_local_entry_on_base: 0.30
+  curve_local_entry_on_tight: 0.25
+  speed_planner:
+    accel_speed_max: 25.0
+    decel_speed_max: 25.0
+  speed_governor:
+    curve_preview_enabled: false
+    curve_cap_use_preview_curvature: false
+  mpc:
+    mpc_v_max: 25.0
+    mpc_q_lat_terminal_scale: 1.0
+    mpc_bias_enabled: true
+    mpc_bias_alpha: 0.005
+    mpc_bias_kappa_gain: 0.015
+    mpc_bias_max_correction: 0.002
+    mpc_bias_min_speed: 5.0
+    mpc_r_steer_rate: 1.5
+    mpc_horizon: 25
+  nmpc:
+    nmpc_enabled: true
+    nmpc_horizon: 20
+    nmpc_dt: 0.1
+    # nmpc_q_lat: not set — auto-derive computes ~1.62 at 25 m/s (centripetal scaling)
+    nmpc_q_heading: 5.0
+    nmpc_r_steer_rate: 1.5
+    nmpc_delta_rate_max: 0.5
+    nmpc_max_solve_ms: 20.0
+    nmpc_max_iter: 50
+    nmpc_fallback_lmpc: true
+
+safety:
+  max_speed: 18.0
+
+lateral_control:
+  steering_smoothing_alpha: 0.2

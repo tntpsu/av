@@ -1813,22 +1813,33 @@ def _print_summary_report(recording_path: Path, summary: Dict, analyze_to_failur
     if mpc_health and mpc_health.get("mpc_frames", 0) > 0:
         print("13. MPC HEALTH")
         print("-" * 80)
-        print(f"   MPC Active Rate: {mpc_health['mpc_rate'] * 100:.1f}% ({mpc_health['mpc_frames']} frames)")
+        lmpc_n = mpc_health.get('lmpc_frames', mpc_health['mpc_frames'])
+        nmpc_n = mpc_health.get('nmpc_frames', 0)
+        print(f"   MPC Active Rate: {mpc_health['mpc_rate'] * 100:.1f}% ({mpc_health['mpc_frames']} frames — LMPC: {lmpc_n}, NMPC: {nmpc_n})")
         if mpc_health.get("feasibility_rate") is not None:
             gate = "PASS" if mpc_health.get("feasibility_gate_pass") else "FAIL"
-            print(f"   Feasibility Rate: {mpc_health['feasibility_rate'] * 100:.2f}% [{gate}] (gate: >=99.5%)")
+            print(f"   LMPC Feasibility Rate: {mpc_health['feasibility_rate'] * 100:.2f}% [{gate}] (gate: >=99.5%)")
         if mpc_health.get("solve_time_p95_ms") is not None:
             gate = "PASS" if mpc_health.get("solve_time_gate_pass") else "FAIL"
             print(
-                f"   Solve Time P50/P95/Max: "
+                f"   LMPC Solve Time P50/P95/Max: "
                 f"{mpc_health['solve_time_p50_ms']:.2f} / "
                 f"{mpc_health['solve_time_p95_ms']:.2f} / "
                 f"{mpc_health['solve_time_max_ms']:.2f} ms [{gate}] (gate: P95<=5ms)"
             )
         if mpc_health.get("fallback_rate") is not None:
-            print(f"   Fallback Rate: {mpc_health['fallback_rate'] * 100:.2f}%")
+            print(f"   LMPC Fallback Rate: {mpc_health['fallback_rate'] * 100:.2f}%")
         if mpc_health.get("max_consecutive_failures") is not None:
-            print(f"   Max Consecutive Failures: {mpc_health['max_consecutive_failures']}")
+            print(f"   LMPC Max Consecutive Failures: {mpc_health['max_consecutive_failures']}")
+        if nmpc_n > 0:
+            if mpc_health.get("nmpc_feasibility_rate") is not None:
+                gate = "PASS" if mpc_health.get("nmpc_solve_time_gate_pass") else "FAIL"
+                print(f"   NMPC Feasibility Rate: {mpc_health['nmpc_feasibility_rate'] * 100:.2f}%")
+            if mpc_health.get("nmpc_solve_time_p95_ms") is not None:
+                gate = "PASS" if mpc_health.get("nmpc_solve_time_gate_pass") else "FAIL"
+                print(f"   NMPC Solve Time P95: {mpc_health['nmpc_solve_time_p95_ms']:.2f}ms [{gate}] (gate: P95<=20ms)")
+            if mpc_health.get("nmpc_fallback_rate") is not None:
+                print(f"   NMPC Fallback Rate: {mpc_health['nmpc_fallback_rate'] * 100:.2f}%")
         # Regime transition events (Step 3D)
         try:
             import h5py

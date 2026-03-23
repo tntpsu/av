@@ -1,7 +1,59 @@
 # AV Stack — Agent Memory: Current State
 
-**Last updated:** 2026-03-22
-**Current milestone:** Step 5 NMPC — Phases A-D complete (2026-03-22). control/nmpc_controller.py written (scipy SLSQP + analytical adjoint gradient, 5–16ms). NMPC dispatch wired in pid_controller.py. HDF5 fields registered (7 nmpc_* datasets). 1334 tests passing. Next: Phase E tools updates (analyze_drive_overall, mpc_pipeline, triage_engine, issue_detector, layer_health).
+**Last updated:** 2026-03-23
+**Current milestone:** Step 5 NMPC — Phase H-2 PASSED (2026-03-23). 0 e-stops, 91.2/100 (recording_20260323_095252.h5). Residual: oscillation amplitude growth (RMS 0.004→0.501m), root cause = PP↔MPC regime chatter at 9 m/s NMPC threshold during acceleration. Two open investigations: (1) Unity car speed ceiling (~15 m/s, design target 25 m/s), (2) oscillation upstream fix.
+
+---
+
+## Current Active Work (2026-03-23)
+
+### Step 5 NMPC Phase H-2 — PASSED (2026-03-23)
+
+**Recording:** `recording_20260323_095252.h5`
+**Score:** 91.2/100 | **E-stops:** 0 ✅ | **Target was:** score ≥ 85, 0 e-stops ✅
+
+- NMPC: 269/714 frames (37.7%), 100% feasibility, P95=12.34ms ✅
+- LMPC: 266/714 frames (37.3%), 100% feasibility
+- MPC total: 74.9% of frames
+- Deductions: Control -20pts (Steering Jerk), Trajectory -10.6pts (curv-adj RMSE), SignalIntegrity -18.8pts (heading suppression on curves)
+- **Oscillation amplitude runaway** (RMS 0.004→0.501m over 60s, slope 0.0071 m/s). Not causing e-stops but flagged.
+- 11 regime transitions (5 PP→MPC, 5 MPC→PP, +1). Max |Δsteering| at transition: 0.172 (FAIL < 0.05).
+
+**Phase H-3 PASSED (2026-03-23): 97.5/100, 0 e-stops** — recording_20260323_111239.h5.
+Fixes applied: `lmpc_nmpc_blend_frames=30`, `lmpc_nmpc_min_hold_frames=40` in regime_selector.py; target_speed 15→25 m/s; auto-derive nmpc_q_lat (~1.62). Oscillation runaway resolved. Speed ceiling confirmed as Python target_speed only — car reaches 25+ m/s with existing Unity motor.
+
+**Remaining (low priority):** 10 regime transitions (MPC→PP at 12-14 m/s, cause unknown). SignalIntegrity -18.8 (heading suppression on curves, pre-existing).
+
+---
+
+### Step 5 — Oscillation Investigation (2026-03-23)
+
+**Observed:** RMS grows 0.004m → 0.501m over 60s. Freq 0.18 Hz. Zero-crossing 1.50 Hz. Oscillation Amplitude Runaway: YES.
+
+**Most upstream layer: Regime chatter at the 9 m/s LMPC→NMPC boundary.**
+
+Mechanism:
+1. Car accelerates from 0. PP upshifts to LMPC at ~4 m/s, to NMPC at ~9 m/s.
+2. At each PP→NMPC transition, steering delta = 0.172 normalized (5× the 0.05 gate). Each delta injects a lateral impulse.
+3. NMPC with q_lat=0.7 (intentionally gentle) corrects slowly → heading error builds → NMPC→LMPC downshift → heading error resolves → re-upshift → repeat.
+4. Each cycle slightly worse than the previous → amplitude grows.
+
+**Secondary: NMPC warm-start divergence.**
+NLP cost median=43.0, std=55.6 (std/median = 1.3 — extremely noisy). SLSQP iterations P50/P95=24/28. Inconsistent solve quality frame-to-frame means NMPC cannot smoothly damp the injected error.
+
+**Root cause of speed ceiling:**
+Test overlay uses `lmpc_max_speed_mps: 8.0` (NMPC fires at 9 m/s) precisely BECAUSE the Unity car tops at ~15 m/s. Production config has `target_speed: 25.0` but car can't reach it. This is a Unity vehicle model limitation (motor torque / drag), not a Python config issue.
+
+**Implications:**
+- Oscillation is partially a **test-artifact** caused by repeated NMPC threshold crossings during slow acceleration.
+- On a real 25 m/s run, the car would spend most time well above 9 m/s → far fewer transitions → less chatter.
+- But warm-start quality and transition Δsteering need fixing regardless.
+
+**Candidate fixes (not yet implemented):**
+- Raise `blend_frames` for LMPC↔NMPC transition (currently 15 frames → ~1.15s; same as PP↔LMPC)
+- Improve NMPC warm-start: shift previous solution by 1 step instead of re-solving from scratch
+- Increase `min_hold_frames` for NMPC upshift to reduce chatter at threshold
+- Address Unity vehicle speed ceiling (motor torque in C# physics)
 
 ---
 

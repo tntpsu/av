@@ -24,6 +24,7 @@ from scoring_registry import (  # noqa: E402
     OUT_OF_LANE_THRESHOLD_M,
     CATASTROPHIC_ERROR_M,
     MPC_SOLVE_TIME_BUDGET_MS,
+    NMPC_SOLVE_TIME_BUDGET_MS,
 )
 
 
@@ -1281,7 +1282,7 @@ def detect_issues(recording_path: Path, analyze_to_failure: bool = False) -> Dic
                     hzg = heading_zero_gate[:n_align]
                     curv = curvature[:n_align]
                     gate_active = (hzg > 0.5) if np.issubdtype(hzg.dtype, np.floating) else (hzg.astype(bool))
-                    in_curve = np.abs(curv) > 0.003
+                    in_curve = np.abs(curv) > 0.0005  # matches scoring approach_threshold
                     overlap = gate_active & in_curve
                     pre_fail_overlap = overlap[pre_fail_start : pre_fail_end + 1]
                     if np.any(pre_fail_overlap):
@@ -1294,7 +1295,7 @@ def detect_issues(recording_path: Path, analyze_to_failure: bool = False) -> Dic
                             "end_frame": int(end_idx),
                             "severity": "critical",
                             "description": (
-                                "Heading-zero gate active during curve (curvature>0.003) "
+                                "Heading-zero gate active during curve (curvature>0.0005) "
                                 "in 30 frames before failure."
                             ),
                             "deep_link_target": "diag-section-signal-chain",
@@ -1517,6 +1518,57 @@ def detect_issues(recording_path: Path, analyze_to_failure: bool = False) -> Dic
                             ),
                             "frames": [int(x) for x in fallback_frames[:20]],
                             "first_frame": int(fallback_frames[0]),
+                        })
+
+                # NMPC-specific issues (regime == 2)
+                nmpc_mask = regime >= 1.5
+
+                if 'control/nmpc_feasible' in f:
+                    nmpc_feasible = np.array(f['control/nmpc_feasible'][:num_frames])
+                    nmpc_infeas = np.where(nmpc_mask & (nmpc_feasible < 0.5))[0]
+                    if len(nmpc_infeas) > 0:
+                        issues.append({
+                            "frame": int(nmpc_infeas[0]),
+                            "type": "nmpc_infeasible",
+                            "severity": "warning",
+                            "description": (
+                                f"NMPC SLSQP infeasible on {len(nmpc_infeas)} frame(s). "
+                                f"First at frame {int(nmpc_infeas[0])}."
+                            ),
+                            "frames": [int(x) for x in nmpc_infeas[:20]],
+                            "first_frame": int(nmpc_infeas[0]),
+                        })
+
+                if 'control/nmpc_solve_time_ms' in f:
+                    nmpc_solve = np.array(f['control/nmpc_solve_time_ms'][:num_frames])
+                    nmpc_slow = np.where(nmpc_mask & (nmpc_solve > NMPC_SOLVE_TIME_BUDGET_MS))[0]
+                    if len(nmpc_slow) > 0:
+                        issues.append({
+                            "frame": int(nmpc_slow[0]),
+                            "type": "nmpc_solve_slow",
+                            "severity": "info",
+                            "description": (
+                                f"NMPC solve time > {NMPC_SOLVE_TIME_BUDGET_MS:.0f}ms on {len(nmpc_slow)} frame(s). "
+                                f"Max: {float(np.max(nmpc_solve[nmpc_slow])):.1f}ms."
+                            ),
+                            "frames": [int(x) for x in nmpc_slow[:20]],
+                            "first_frame": int(nmpc_slow[0]),
+                        })
+
+                if 'control/nmpc_fallback_active' in f:
+                    nmpc_fallback = np.array(f['control/nmpc_fallback_active'][:num_frames])
+                    nmpc_fb_frames = np.where(nmpc_fallback > 0.5)[0]
+                    if len(nmpc_fb_frames) > 0:
+                        issues.append({
+                            "frame": int(nmpc_fb_frames[0]),
+                            "type": "nmpc_fallback",
+                            "severity": "high",
+                            "description": (
+                                f"NMPC fallback to LMPC active on {len(nmpc_fb_frames)} frame(s). "
+                                f"First at frame {int(nmpc_fb_frames[0])}."
+                            ),
+                            "frames": [int(x) for x in nmpc_fb_frames[:20]],
+                            "first_frame": int(nmpc_fb_frames[0]),
                         })
 
             # Grade issues (guarded on field existence)

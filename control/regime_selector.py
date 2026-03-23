@@ -43,6 +43,11 @@ class RegimeConfig:
     downshift_hysteresis_mps: float = 1.0          # LMPC→PP: must drop below threshold − this
     blend_frames: int = 15                         # Frames to linearly blend PP↔LMPC transition
     min_hold_frames: int = 30                      # Frames desired must be stable before switch
+    # LMPC↔NMPC transition tuning (independent of PP↔LMPC)
+    # Longer hold reduces chatter at the NMPC threshold; longer blend smooths the
+    # steering delta injected at each LMPC→NMPC or NMPC→LMPC handoff.
+    lmpc_nmpc_blend_frames: int = 30               # Blend frames for LMPC↔NMPC (2× default)
+    lmpc_nmpc_min_hold_frames: int = 40            # Hold frames for LMPC↔NMPC (longer = less chatter)
     # MPC curvature guard (Step 4: MPC primary controller)
     mpc_min_speed_mps: float = 3.0                 # MPC activates above this + upshift_hysteresis
     mpc_max_curvature: float = 0.020               # Force PP above this κ (R50 boundary)
@@ -74,6 +79,7 @@ class RegimeConfig:
             "stanley_upshift_hysteresis_mps", "stanley_downshift_hysteresis_mps",
             "stanley_blend_frames", "stanley_min_hold_frames",
             "stanley_inhibit_curvature_abs",
+            "lmpc_nmpc_blend_frames", "lmpc_nmpc_min_hold_frames",
         ]:
             if key in rc:
                 kwargs[key] = rc[key]
@@ -148,19 +154,27 @@ class RegimeSelector:
 
         self._hold_counter += 1
 
-        # Determine hold and blend frame counts (Stanley transitions are faster)
+        # Determine hold and blend frame counts.
+        # Stanley: fastest transitions (low-speed, low-risk).
+        # LMPC↔NMPC: slowest transitions (reduce chatter, smooth high-speed handoff).
+        # PP↔LMPC: default.
         stanley_involved = (
             self._active_regime == ControlRegime.STANLEY
             or self._target_regime == ControlRegime.STANLEY
         )
-        effective_hold_frames = (
-            self.config.stanley_min_hold_frames if stanley_involved
-            else self.config.min_hold_frames
+        nmpc_involved = (
+            self._active_regime == ControlRegime.NONLINEAR_MPC
+            or self._target_regime == ControlRegime.NONLINEAR_MPC
         )
-        effective_blend_frames = (
-            self.config.stanley_blend_frames if stanley_involved
-            else self.config.blend_frames
-        )
+        if stanley_involved:
+            effective_hold_frames = self.config.stanley_min_hold_frames
+            effective_blend_frames = self.config.stanley_blend_frames
+        elif nmpc_involved:
+            effective_hold_frames = self.config.lmpc_nmpc_min_hold_frames
+            effective_blend_frames = self.config.lmpc_nmpc_blend_frames
+        else:
+            effective_hold_frames = self.config.min_hold_frames
+            effective_blend_frames = self.config.blend_frames
 
         # Trigger switch once hold counter reaches threshold
         if (

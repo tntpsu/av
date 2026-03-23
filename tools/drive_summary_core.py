@@ -839,14 +839,20 @@ def _build_mpc_health_summary(data: Dict, n_frames: int) -> Optional[Dict]:
     total = len(regime_arr)
     if total == 0:
         return None
-    mpc_mask = regime_arr >= 0.5
-    pp_frames = int(np.sum(~mpc_mask))
-    mpc_frames = int(np.sum(mpc_mask))
+    mpc_mask  = regime_arr >= 0.5
+    lmpc_mask = (regime_arr >= 0.5) & (regime_arr < 1.5)
+    nmpc_mask = regime_arr >= 1.5
+    pp_frames   = int(np.sum(~mpc_mask))
+    mpc_frames  = int(np.sum(mpc_mask))
+    lmpc_frames = int(np.sum(lmpc_mask))
+    nmpc_frames = int(np.sum(nmpc_mask))
     if mpc_frames == 0:
         return {
             "total_frames": total,
             "pp_frames": pp_frames,
             "pp_rate": 1.0,
+            "lmpc_frames": 0,
+            "nmpc_frames": 0,
             "mpc_frames": 0,
             "mpc_rate": 0.0,
             "feasibility_rate": None,
@@ -857,6 +863,10 @@ def _build_mpc_health_summary(data: Dict, n_frames: int) -> Optional[Dict]:
             "solve_time_gate_pass": None,
             "fallback_rate": None,
             "max_consecutive_failures": None,
+            "nmpc_feasibility_rate": None,
+            "nmpc_solve_time_p95_ms": None,
+            "nmpc_solve_time_gate_pass": None,
+            "nmpc_fallback_rate": None,
         }
 
     feasible = data.get('mpc_feasible')
@@ -880,10 +890,29 @@ def _build_mpc_health_summary(data: Dict, n_frames: int) -> Optional[Dict]:
     failures = data.get('mpc_consecutive_failures')
     max_consec = int(np.max(failures[:n_frames])) if failures is not None else None
 
+    # NMPC-specific metrics
+    nmpc_feasible_arr = data.get('nmpc_feasible')
+    nmpc_feasibility_rate = (
+        float(np.mean(nmpc_feasible_arr[:n_frames][nmpc_mask]))
+        if nmpc_feasible_arr is not None and nmpc_frames > 0 else None
+    )
+    nmpc_solve_arr = data.get('nmpc_solve_time_ms')
+    nmpc_solve_p95 = (
+        float(np.percentile(nmpc_solve_arr[:n_frames][nmpc_mask], 95))
+        if nmpc_solve_arr is not None and nmpc_frames > 0 else None
+    )
+    nmpc_fallback_arr = data.get('nmpc_fallback_active')
+    nmpc_fallback_rate = (
+        float(np.mean(nmpc_fallback_arr[:n_frames][nmpc_mask]))
+        if nmpc_fallback_arr is not None and nmpc_frames > 0 else None
+    )
+
     return {
         "total_frames": total,
         "pp_frames": pp_frames,
         "pp_rate": round(pp_frames / total, 4),
+        "lmpc_frames": lmpc_frames,
+        "nmpc_frames": nmpc_frames,
         "mpc_frames": mpc_frames,
         "mpc_rate": round(mpc_frames / total, 4),
         "feasibility_rate": round(feasibility_rate, 5) if feasibility_rate is not None else None,
@@ -894,6 +923,10 @@ def _build_mpc_health_summary(data: Dict, n_frames: int) -> Optional[Dict]:
         "solve_time_gate_pass": solve_gate,
         "fallback_rate": round(fallback_rate, 5) if fallback_rate is not None else None,
         "max_consecutive_failures": max_consec,
+        "nmpc_feasibility_rate": round(nmpc_feasibility_rate, 5) if nmpc_feasibility_rate is not None else None,
+        "nmpc_solve_time_p95_ms": round(nmpc_solve_p95, 3) if nmpc_solve_p95 is not None else None,
+        "nmpc_solve_time_gate_pass": nmpc_solve_p95 <= 20.0 if nmpc_solve_p95 is not None else None,
+        "nmpc_fallback_rate": round(nmpc_fallback_rate, 5) if nmpc_fallback_rate is not None else None,
     }
 
 
@@ -1950,6 +1983,23 @@ def analyze_recording_summary(
             data['mpc_consecutive_failures'] = (
                 np.array(f['control/mpc_consecutive_failures'][:])
                 if 'control/mpc_consecutive_failures' in f else None
+            )
+            # NMPC fields (Step 5)
+            data['nmpc_feasible'] = (
+                np.array(f['control/nmpc_feasible'][:])
+                if 'control/nmpc_feasible' in f else None
+            )
+            data['nmpc_solve_time_ms'] = (
+                np.array(f['control/nmpc_solve_time_ms'][:])
+                if 'control/nmpc_solve_time_ms' in f else None
+            )
+            data['nmpc_fallback_active'] = (
+                np.array(f['control/nmpc_fallback_active'][:])
+                if 'control/nmpc_fallback_active' in f else None
+            )
+            data['nmpc_consecutive_failures'] = (
+                np.array(f['control/nmpc_consecutive_failures'][:])
+                if 'control/nmpc_consecutive_failures' in f else None
             )
             data['throttle'] = (
                 np.array(f['control/throttle'][:]) if 'control/throttle' in f else None
