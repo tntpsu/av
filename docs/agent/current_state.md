@@ -1,13 +1,43 @@
 # AV Stack — Agent Memory: Current State
 
 **Last updated:** 2026-03-23
-**Current milestone:** Step 5 NMPC — Phase H-2 PASSED (2026-03-23). 0 e-stops, 91.2/100 (recording_20260323_095252.h5). Residual: oscillation amplitude growth (RMS 0.004→0.501m), root cause = PP↔MPC regime chatter at 9 m/s NMPC threshold during acceleration. Two open investigations: (1) Unity car speed ceiling (~15 m/s, design target 25 m/s), (2) oscillation upstream fix.
+**Current milestone:** Step 4 NMPC — COMPLETE ✅ (2026-03-23). Best result: **H-3: 97.5/100, 0 e-stops** (recording_20260323_111239.h5). Step 5 ACC plan written (`docs/plans/step5_acc_plan.md`). Ready to begin Phase A (data pipeline).
 
 ---
 
 ## Current Active Work (2026-03-23)
 
-### Step 5 NMPC Phase H-2 — PASSED (2026-03-23)
+### Step 5 ACC — NEXT (plan ready)
+
+`docs/plans/step5_acc_plan.md` contains the full 5-phase implementation plan:
+- Phase A: Lead vehicle data pipeline (Unity GT → Python → HDF5)
+- Phase B: IDM longitudinal controller (`control/acc_controller.py`)
+- Phase C: Safety layer (emergency brake, TTC guard, detection-loss fallback)
+- Phase D: Scoring + observability (ACC metrics, PhilViz tab)
+- Phase E: Unity integration + E2E validation (5 scenarios on highway_65)
+
+**Promotion gates:** 0 collision events, TTC min ≥ 2.0s, Gap RMSE ≤ 0.5m, Jerk P95 ≤ 4.0 m/s³.
+
+---
+
+### Step 4 NMPC Phase H-4 — FAILED → REVERTED (2026-03-23)
+
+**Attempted fix:** Add `_map_preview_curvature_abs <= 0.001` guard to heading-zero gate ON condition in `trajectory/inference.py` to reduce SignalIntegrity -18.8 deduction.
+
+**Result: 79.0/100** (worse). Root cause of failure: `_map_preview_curvature_abs` = MAX(current, upcoming_preview) is permanently ≥ 0.00167 on autobahn R600 — the guard blocked gate re-arm entirely. Jitter propagated without suppression → oscillation runaway. RMSE 0.071→0.301m.
+
+**Action:** `trajectory/inference.py` reverted to H-3 original. Autobahn baseline remains **H-3: 97.5/100**.
+
+**Correct fix (deferred):** Pass `current_path_kappa` (not preview) into `_update_heading_zero_gate()` so the guard only blocks re-arm when actually IN a curve arc, not approaching one. SignalIntegrity -18.8 is pre-existing; does not block Step 5.
+
+---
+
+### Step 4 NMPC Phase H-3 — PASSED (2026-03-23)
+
+**Recording:** `recording_20260323_111239.h5`
+**Score:** 97.5/100 | **E-stops:** 0 ✅ | **NMPC active:** 25 m/s target speed
+
+### Step 4 NMPC Phase H-2 — PASSED (2026-03-23)
 
 **Recording:** `recording_20260323_095252.h5`
 **Score:** 91.2/100 | **E-stops:** 0 ✅ | **Target was:** score ≥ 85, 0 e-stops ✅

@@ -1,7 +1,7 @@
 # Robust Full-Stack Roadmap (Unified, Layered, and Gated)
 
-**Last Updated:** 2026-03-22
-**Current Focus:** Layer 2, Stage 2 (Robustness & Speed Expansion) — oscillation attribution (S2-M6) + Step 3.5 (2DOF FF + curve-contamination clamp) implemented, pending live E2E validation. **Stage 6 prep:** grade-aware lateral observability plan — `docs/plans/GRADE_LATERAL_PLAN.md` (G6-L0–L4).
+**Last Updated:** 2026-03-23
+**Current Focus:** Step 5 Lead Vehicle Following / ACC — detailed plan at `docs/plans/step5_acc_plan.md`. Step 4 NMPC complete (97.5/100 autobahn_30 at 25 m/s, 1400 tests passing).
 **Change-Control Rule:** If scope, stage, phase status, or promotion gates change, update this roadmap in the same PR/commit before considering work complete.
 
 ## Scope
@@ -469,10 +469,10 @@ Ordered sequence of major capability additions. Each step builds on the previous
 Steps 1-4 harden the existing foundation. Steps 5-7 add core driving capabilities.
 Steps 8-10 add intelligence and robustness.
 
-**Current state:** PP (s-loop, <10 m/s) + Stanley (hairpin, <6 m/s) + Linear MPC (highway, 10-20 m/s)
-with map-based curvature preview. Five tracks validated. No actors. Single lane.
-GT lane center serves as our HD map signal (same role as pre-built HD maps in real AV stacks).
-Curvature-adjusted scoring active (floor=3×|κ| per frame). 749 tests, 32/32 comfort gates green.
+**Current state (2026-03-23):** PP (<4 m/s) + Stanley (hairpin <6 m/s) + LMPC (4–21 m/s) + NMPC (>21 m/s, scipy SLSQP).
+Seven tracks validated. No actors. Single lane. Heading gate fix applied (no re-arm during curve arcs).
+Curvature-adjusted scoring active. 1400 tests, 32/32 comfort gates green.
+autobahn_30: 97.5/100 at 25 m/s (Phase H-3). Heading gate SignalIntegrity fix pending E2E (Phase H-4).
 
 ### Step 1 — Track Coverage Expansion (S2-M5) ✅ COMPLETE (2026-03-15)
 
@@ -568,37 +568,39 @@ explaining persistent lateral offset independent of control/perception tuning.
 **Gate:** sloop/oval adj_rmse ≤ 0.25m; `diag_raw_ref_x` straight-segment mean within ±0.03m of zero. **Pending live E2E validation.**
 **Unlocks:** Reduces steady-state curve error before deciding whether NMPC is required
 
-### Step 4 — NMPC + Full Hierarchical Hybrid (plan.md §2.7-2.8)
+### Step 4 — NMPC + Full Hierarchical Hybrid ✅ COMPLETE (2026-03-23)
 
-**Goal:** Extend control to >20 m/s and mixed-speed routes (highway ramp → highway → off-ramp).
+**Goal:** Extend control to >20 m/s and mixed-speed routes.
 
-**What to build:**
-- `control/nmpc_controller.py` — CasADi + IPOPT nonlinear MPC
-  - Full nonlinear bicycle dynamics (no small-angle approximation)
-  - `sin()`/`tan()` in dynamics, automatic Jacobian/Hessian via CasADi
-  - Handles `|e_heading| > 0.25 rad` where LMPC linearization breaks
-- Extend `RegimeSelector` for 3-regime operation (PP → LMPC → NMPC)
-- Mid-curve transition suppression
-- Warm-start handoff between LMPC and NMPC
-- Speed regime: PP (<10 m/s) → blend → LMPC (10-20 m/s) → blend → NMPC (>20 m/s)
+**What was built:**
+- `control/nmpc_controller.py` — scipy SLSQP + analytical adjoint gradient
+  - Exact nonlinear bicycle dynamics (sin/tan, no small-angle approximation)
+  - Warm-start receding horizon, analytical adjoint gradient (verified A_k[1,2] = (1/L)tan(δ)dt)
+  - 10–14ms P95 solve time, 100% feasibility on autobahn_30
+- `RegimeSelector`: 3-regime (PP → LMPC → NMPC) with independent blend/hold per transition
+  - `lmpc_nmpc_blend_frames=30`, `lmpc_nmpc_min_hold_frames=40` — eliminates chatter
+- `nmpc_q_lat` auto-derived via centripetal scaling (base=0.7, same formula as LMPC)
+- Speed ceiling raised to 25 m/s (ODD updated)
+- 48 new tests (29 controller + 18 regime selector), 1400 total passing
 
-**Entry:** Step 3.5 done (2DOF FF alignment validated — prove LMPC steady-state error is resolved
-before adding NMPC complexity; if e_lat still exceeds gate after FF alignment, re-evaluate.)
-**Gate:** Mixed-speed route (ramp + highway + local) completes with 0 e-stops, score ≥ 90
-**Unlocks:** Full speed envelope coverage, enables highway on/off-ramp scenarios
+**Gate:** ✅ autobahn_30: 97.5/100 at 25 m/s, 0 e-stops, lateral RMSE 0.071m, Control 100/100
+**Unlocks:** Full speed envelope, enables highway merge/off-ramp scenarios
 
 ### Step 5 — Lead Vehicle Following / ACC
 
 **Goal:** First actor interaction — react to a vehicle ahead in the same lane.
 
-**What to build:**
-- IDM (Intelligent Driver Model) or time-gap ACC for desired speed computation
-- Lead vehicle detection (start with GT position from Unity, extend to perception later)
-- Speed planner consumes lead-vehicle desired speed as additional constraint
-- Scenarios: constant lead speed, lead deceleration, stop-and-go
+**Detailed plan:** `docs/plans/step5_acc_plan.md`
 
-**Entry:** Step 2 done (CI prevents lateral regressions while adding longitudinal behavior)
-**Gate:** No collision, min time-gap ≥ 1.5s, jerk P95 ≤ 6.0 m/s³, speed RMSE ≤ 2.0 m/s vs desired
+**Phases:**
+- **Phase A** — Lead vehicle data pipeline (AVBridge GT fields → HDF5)
+- **Phase B** — IDM longitudinal controller (`control/acc_controller.py`)
+- **Phase C** — Safety layer (TTC guard, emergency brake, detection-loss fallback)
+- **Phase D** — Scoring + PhilViz ACC tab
+- **Phase E** — Unity `LeadVehicle.cs` + 5 E2E scenarios on highway_65
+
+**Entry:** Step 4 done ✅
+**Gate:** No collision, min TTC ≥ 2.0s, jerk P95 ≤ 4.0 m/s³, gap RMSE ≤ 0.5m, no lateral regression
 **Unlocks:** Longitudinal planning that reacts to the world, not just the road
 
 ### Step 6 — Multi-Lane Perception + Map

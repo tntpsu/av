@@ -6,7 +6,7 @@
 
 ## Current Focus
 
-**Step 5 NMPC — Phase H-2 PASSED (2026-03-23). Two open investigations.**
+**Step 4 NMPC — COMPLETE ✅ (2026-03-23). Best: H-3 97.5/100, 0 e-stops. Step 5 ACC plan ready.**
 
 **Phase completion status:**
 - ✅ Phase A: `tracks/autobahn_30.yml` + `config/mpc_autobahn.yaml` + scoring_registry NMPC constants
@@ -81,7 +81,10 @@ Car now reaches 25 m/s (11.7% overspeed rate at target=25). Speed RMSE 5.3 m/s =
 | Step 5 H | NMPC Phase H E2E: autobahn_30 PARTIAL PASS. NMPC activated (317/1075 frames, 29.5%), P95=14.66ms, 100% feasibility, 0% LMPC fallback — solver mechanically correct. BUT 2 e-stops from oscillation runaway: nmpc_q_lat=2.0 tuned for 21 m/s, over-aggressive at 12-13 m/s. SmithΔ 0.485m at e-stop frames. Adjoint fix (1/L vs v/L) confirmed by solver correctness. | 2026-03-22 |
 | Step 5 nmpc_q_lat | Speed-adaptive nmpc_q_lat: added to `_MPC_WEIGHT_AUTO_DERIVE_PARAMS` (base=0.7,v_ref=15,κ_ref=0.002). Test YAML: 2.0→0.7. Base config: 2.0→0.7. Auto-derive: at 25m/s autobahn→1.94, hill_highway 12m/s κ=0.010→2.24. All 145 tests green. Phase H-2 re-run needed to confirm 0 e-stops. | 2026-03-22 |
 | Step 5 H-2 | Phase H-2 PASSED: 0 e-stops ✅, 91.2/100 ✅ (target ≥85). NMPC 37.7% frames, 100% feasibility, P95=12.34ms. Residual: oscillation amplitude runaway (RMS 0.004→0.501m), 11 regime transitions (Δsteer=0.172 at handoff), NLP cost std/median=1.3 (warm-start diverging). Root cause: chatter at 9 m/s NMPC threshold. Recording: recording_20260323_095252.h5. | 2026-03-23 |
-| Step 5 H-3 | Phase H-3 PASSED: 97.5/100, 0 e-stops. regime_selector.py: lmpc_nmpc_blend_frames=30/min_hold_frames=40. Test overlay: target_speed 15→25 m/s, nmpc_q_lat auto-derive (~1.62 at 25 m/s). Oscillation NOT runaway (0.006→0.095m). Lateral RMSE 0.212→0.071m. Max Δsteer at transition 0.172→0.078 (55% ↓). Control 80→100/100. Speed ceiling confirmed NOT Unity motor limit — was test overlay target_speed=15. Car reaches 25+ m/s. 18/18 regime selector tests passing. Recording: recording_20260323_111239.h5. | 2026-03-23 |
+| Step 4 H-3 | Phase H-3 PASSED: 97.5/100, 0 e-stops. regime_selector.py: lmpc_nmpc_blend_frames=30/min_hold_frames=40. Test overlay: target_speed 15→25 m/s, nmpc_q_lat auto-derive (~1.62 at 25 m/s). Oscillation NOT runaway (0.006→0.095m). Lateral RMSE 0.212→0.071m. Max Δsteer at transition 0.172→0.078 (55% ↓). Control 80→100/100. Speed ceiling confirmed NOT Unity motor limit — was test overlay target_speed=15. Car reaches 25+ m/s. 18/18 regime selector tests passing. Recording: recording_20260323_111239.h5. | 2026-03-23 |
+| Step 4 H-4 | Phase H-4 FAILED (79.0/100) → inference.py REVERTED. Attempted: add map_preview_κ≤0.001 to heading gate ON guard to fix SignalIntegrity -18.8. Failure mode: `_map_preview_curvature_abs` permanently ≥0.00167 on R600 autobahn → gate never re-arms → jitter propagates → RMSE 0.071→0.301m. Correct fix: pass `current_path_kappa` into gate function (deferred — does not block Step 5). Autobahn baseline H-3 97.5/100 stands. | 2026-03-23 |
+| Step 5 plan | `docs/plans/step5_acc_plan.md` — 5-phase Lead Vehicle Following/ACC plan. IDM longitudinal law, safety layer, PhilViz ACC tab, 5 E2E scenarios. ROADMAP updated. | 2026-03-23 |
+| Debug gaps | 4 tooling gaps fixed: issue_detector κ threshold 0.003→0.0005, triage_engine heading_gate_stuck_on_curve pattern, diagnostics.py heading_suppression_rate + map_preview_curvature per-frame, PhilViz exposes control/curvature_preview_abs. | 2026-03-23 |
 
 ---
 
@@ -118,8 +121,8 @@ Car now reaches 25 m/s (11.7% overspeed rate at target=25). Speed RMSE 5.3 m/s =
 | 4 | MPC as primary lateral controller + q_lat auto-derive | **✅ Done (2026-03-17)** — curvature guard, 954 tests |
 | T-078 | Lookahead contraction smoothing at curve entry (late turn-in) | **DEFERRED (2026-03-22)** — root cause: MPC cost function trade-off (needs q_lat=11.5 → hunting risk). PP floor rescue is benign. Baseline 94.9/100 accepted. |
 | 3.5 | 2DOF FF alignment (`ff_alignment_enabled`) | **✅ Validated (2026-03-22)** — A/B: +0.4 pts, jerk 9.2→18.0 without it (cap hit), adj_rmse 0.297→0.309m without. Stays enabled (default=True). |
-| 5 | NMPC + full hierarchical hybrid (plan.md §2.7-2.8) | Pending (entry: Step 3.5 validated) |
-| 5 | Lead vehicle following / ACC | Pending |
+| 4 | NMPC + full hierarchical hybrid | **✅ COMPLETE (2026-03-23)** — H-3 97.5/100, 0 e-stops, 25 m/s |
+| 5 | Lead vehicle following / ACC | **Plan ready** — `docs/plans/step5_acc_plan.md`. Entry: Step 4 NMPC ✅. Begin Phase A (data pipeline). |
 | 6 | Multi-lane perception + map | Pending |
 | 7 | Lane change planning + execution | Pending |
 | 8 | Prediction (other vehicle trajectories) | Pending |
