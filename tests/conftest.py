@@ -218,6 +218,126 @@ def make_aggressive_recording(path: Path, duration_s: float = 60.0, fps: float =
         f.create_dataset("ground_truth/path_curvature",    data=np.zeros(n, dtype=np.float32))
 
 
+def make_acc_recording(
+    path: Path,
+    duration_s: float = 60.0,
+    fps: float = 30.0,
+    acc_active_start: int = 0,
+    gap_m=30.0,
+    range_rate_mps: float = 0.0,
+    n_near_miss_frames: int = 0,
+    n_ttc_warn_frames: int = 0,
+    collision: bool = False,
+) -> None:
+    """
+    Write a synthetic HDF5 that includes all ACC/radar fields for replay tests.
+
+    Extends make_nominal_recording with 8 new fields under vehicle/:
+      radar_fwd_detected, radar_fwd_distance_m, radar_fwd_range_rate_mps, radar_fwd_snr,
+      acc_active, acc_target_gap_m, acc_gap_error_m, acc_ttc_s
+
+    Parameters
+    ----------
+    acc_active_start   Frame index at which ACC engages (0 = from frame 1)
+    gap_m              Float constant or callable(frame_idx) -> gap in metres
+    range_rate_mps     Constant approach speed (m/s; + = closing)
+    n_near_miss_frames Frames with gap < 2.0m (injected after acc_active_start)
+    n_ttc_warn_frames  Frames with TTC in [1.5, 2.5s] window
+    collision          If True, inject one frame with gap = -0.1m (collision)
+
+    Sentinel values are written for frames before acc_active_start so that
+    drive_summary_core.py sees acc_active=0 and skips ACC scoring for those frames.
+    """
+    n = int(duration_s * fps)
+    rng = np.random.default_rng(42)
+    t = np.linspace(0.0, duration_s, n, dtype=np.float64)
+
+    # ── Base nominal signals (same comfortable profile as make_nominal_recording) ─
+    ramp = int(5.0 * fps)
+    speed = np.concatenate([
+        np.linspace(0.0, 20.0, ramp, dtype=np.float32),
+        np.full(n - ramp, 20.0, dtype=np.float32),
+    ])
+    steering = (0.02 * np.sin(2 * np.pi * t / 10.0)).astype(np.float32)
+    lateral_error = (
+        0.06 * np.sin(2 * np.pi * t / 8.0) + rng.normal(0.0, 0.015, n)
+    ).astype(np.float32)
+    throttle = np.full(n, 0.30, dtype=np.float32)
+    brake = np.zeros(n, dtype=np.float32)
+    left_lane = np.full(n, -3.5, dtype=np.float32)
+    right_lane = np.full(n, 3.5, dtype=np.float32)
+
+    # ── ACC / radar fields ────────────────────────────────────────────────────
+    detected = np.zeros(n, dtype=np.float32)
+    distance = np.zeros(n, dtype=np.float32)
+    rate = np.full(n, range_rate_mps, dtype=np.float32)
+    snr = np.zeros(n, dtype=np.float32)
+    acc_active = np.zeros(n, dtype=np.float32)
+    target_gap = np.zeros(n, dtype=np.float32)
+    gap_error = np.zeros(n, dtype=np.float32)
+    ttc = np.full(n, 999.0, dtype=np.float32)
+
+    # Resolve gap callable or constant
+    _gap_fn = gap_m if callable(gap_m) else (lambda _i: float(gap_m))
+
+    for i in range(acc_active_start, n):
+        g = float(_gap_fn(i))
+        detected[i] = 1.0
+        distance[i] = max(0.0, g)
+        snr[i] = max(0.0, min(1.0, 1.0 / (1.0 + g ** 2 / 900.0)))
+        acc_active[i] = 1.0
+        tg = 2.0 + speed[i] * 1.5   # s0=2.0, T=1.5 (default params)
+        target_gap[i] = tg
+        gap_error[i] = g - tg
+        if rate[i] > 0.0:
+            ttc[i] = g / max(rate[i], 1e-6)
+
+    # Inject near-miss frames (gap < 2.0m) after acc_active_start
+    if n_near_miss_frames > 0 and acc_active_start < n:
+        nm_start = acc_active_start + 10
+        nm_end = min(nm_start + n_near_miss_frames, n)
+        distance[nm_start:nm_end] = 1.5
+        gap_error[nm_start:nm_end] = 1.5 - target_gap[nm_start:nm_end]
+
+    # Inject TTC warning zone frames (TTC in [1.5, 2.5s])
+    if n_ttc_warn_frames > 0 and acc_active_start < n:
+        tw_start = acc_active_start + 10 + n_near_miss_frames + 5
+        tw_end = min(tw_start + n_ttc_warn_frames, n)
+        ttc[tw_start:tw_end] = 2.0    # middle of warning zone
+        distance[tw_start:tw_end] = 2.0 * rate[tw_start:tw_end]  # gap = TTC × rate
+
+    # Inject collision event (gap ≤ 0)
+    if collision and acc_active_start < n:
+        col_frame = acc_active_start + 5
+        distance[col_frame] = -0.1
+        gap_error[col_frame] = -0.1 - target_gap[col_frame]
+
+    with h5py.File(path, "w") as f:
+        f.create_dataset("vehicle/timestamps",                  data=t)
+        f.create_dataset("vehicle/speed",                       data=speed)
+        f.create_dataset("vehicle/unity_time",                  data=t)
+        f.create_dataset("vehicle/radar_fwd_detected",          data=detected)
+        f.create_dataset("vehicle/radar_fwd_distance_m",        data=distance)
+        f.create_dataset("vehicle/radar_fwd_range_rate_mps",    data=rate)
+        f.create_dataset("vehicle/radar_fwd_snr",               data=snr)
+        f.create_dataset("vehicle/acc_active",                  data=acc_active)
+        f.create_dataset("vehicle/acc_target_gap_m",            data=target_gap)
+        f.create_dataset("vehicle/acc_gap_error_m",             data=gap_error)
+        f.create_dataset("vehicle/acc_ttc_s",                   data=ttc)
+        f.create_dataset("control/timestamps",                  data=t)
+        f.create_dataset("control/steering",                    data=steering)
+        f.create_dataset("control/lateral_error",               data=lateral_error)
+        f.create_dataset("control/heading_error",               data=np.zeros(n, dtype=np.float32))
+        f.create_dataset("control/total_error",                 data=lateral_error)
+        f.create_dataset("control/pid_integral",                data=np.zeros(n, dtype=np.float32))
+        f.create_dataset("control/emergency_stop",              data=np.zeros(n, dtype=np.int8))
+        f.create_dataset("control/throttle",                    data=throttle)
+        f.create_dataset("control/brake",                       data=brake)
+        f.create_dataset("ground_truth/left_lane_line_x",       data=left_lane)
+        f.create_dataset("ground_truth/right_lane_line_x",      data=right_lane)
+        f.create_dataset("ground_truth/path_curvature",         data=np.zeros(n, dtype=np.float32))
+
+
 # ── Pytest fixtures for golden recordings ────────────────────────────────────
 
 @pytest.fixture
