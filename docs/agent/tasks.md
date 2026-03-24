@@ -122,7 +122,7 @@ Car now reaches 25 m/s (11.7% overspeed rate at target=25). Speed RMSE 5.3 m/s =
 | T-078 | Lookahead contraction smoothing at curve entry (late turn-in) | **DEFERRED (2026-03-22)** — root cause: MPC cost function trade-off (needs q_lat=11.5 → hunting risk). PP floor rescue is benign. Baseline 94.9/100 accepted. |
 | 3.5 | 2DOF FF alignment (`ff_alignment_enabled`) | **✅ Validated (2026-03-22)** — A/B: +0.4 pts, jerk 9.2→18.0 without it (cap hit), adj_rmse 0.297→0.309m without. Stays enabled (default=True). |
 | 4 | NMPC + full hierarchical hybrid | **✅ COMPLETE (2026-03-23)** — H-3 97.5/100, 0 e-stops, 25 m/s |
-| 5 | Lead vehicle following / ACC | **Plan ready** — `docs/plans/step5_acc_plan.md`. Entry: Step 4 NMPC ✅. Begin Phase A (data pipeline). |
+| 5 | Lead vehicle following / ACC | **Plan updated (2026-03-23)** — `docs/plans/step5_acc_plan.md`. Simulated radar (SphereCast + Doppler), NOT GT. `RadarSensor` ABC → reusable for Step 7 BSM. Full toolset: scoring_registry, issue_detector, triage_engine, layer_health, PhilViz ACC tab, CLI tool. ~52 new tests. Begin Phase A. |
 | 6 | Multi-lane perception + map | Pending |
 | 7 | Lane change planning + execution | Pending |
 | 8 | Prediction (other vehicle trajectories) | Pending |

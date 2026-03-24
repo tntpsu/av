@@ -7,16 +7,21 @@
 
 ## Current Active Work (2026-03-23)
 
-### Step 5 ACC — NEXT (plan ready)
+### Step 5 ACC — NEXT (plan updated 2026-03-23)
 
-`docs/plans/step5_acc_plan.md` contains the full 5-phase implementation plan:
-- Phase A: Lead vehicle data pipeline (Unity GT → Python → HDF5)
-- Phase B: IDM longitudinal controller (`control/acc_controller.py`)
-- Phase C: Safety layer (emergency brake, TTC guard, detection-loss fallback)
-- Phase D: Scoring + observability (ACC metrics, PhilViz tab)
-- Phase E: Unity integration + E2E validation (5 scenarios on highway_65)
+`docs/plans/step5_acc_plan.md` — full 5-phase plan. **Key design decisions:**
 
-**Promotion gates:** 0 collision events, TTC min ≥ 2.0s, Gap RMSE ≤ 0.5m, Jerk P95 ≤ 4.0 m/s³.
+**Sensing:** Simulated radar (NOT Unity GT). Unity `Physics.SphereCast` → range + Gaussian noise (σ=0.15m). Doppler model (velocity difference, σ=0.05 m/s) for range rate — NOT differentiated range (would give σ≈6 m/s). `RadarSensor` ABC in `control/radar_sensor.py` — reusable for Step 7 blind spot radars.
+
+- Phase A: Simulated radar pipeline (`LeadVehicle.cs`, `AVBridge.cs` +4 radar_ fields, `radar_sensor.py`, 8 HDF5 fields)
+- Phase B: IDM longitudinal controller (`control/acc_controller.py`, ACCParams, EMA filter)
+- Phase C: Safety layer (emergency brake, TTC guard 1.5s, detection-loss hysteresis)
+- Phase D: Full toolset — `scoring_registry` (8 constants), `issue_detector` (4 modes), `triage_engine` (3 patterns), `layer_health` (`_score_acc`), `acc_pipeline_analysis.py` CLI, PhilViz ACC tab, `analyze_drive_overall` Section 15
+- Phase E: Unity E2E — 5 scenarios on highway_65, `acc_highway.yaml` overlay
+
+**Promotion gates:** 0 collisions, TTC min ≥ 2.0s, Gap RMSE ≤ 0.5m, Jerk P95 ≤ 4.0 m/s³, radar detection ≥ 95%, lateral regression ≤ 0.5pts.
+**New tests: ~52** (4 new test files).
+**Implementation checklist:** see `docs/plans/step5_acc_plan.md § Implementation Checklist` — A1–A12 → B1–B8 → C1–C4 → D1–D12 → E-H1–G2 → P1–P7.
 
 ---
 
