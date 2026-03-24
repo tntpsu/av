@@ -452,6 +452,68 @@ PATTERNS = [
         ),
         "check": lambda m: m.get("floor_rescue_rate", 0.0) > 0.05,
     },
+    # ── ACC patterns (Step 5 — priority-0 when following_too_close) ──────────
+    {
+        "id": "acc_following_too_close",
+        "name": "ACC following too close (TTC warning or near-miss)",
+        "severity": "safety",
+        "category": "Safety",
+        "code_pointer": "control/acc_controller.py:ACCController._idm()",
+        "config_lever": "acc.time_headway_s (1.5→2.0); verify radar Doppler σ",
+        "fix_hint": (
+            "acc_ttc_warning_pct > 5% or near-miss events > 0. "
+            "time_headway_s too small for track speed, or radar range-rate noise "
+            "causing IDM to underestimate closing speed. "
+            "Increase time_headway_s (1.5→2.0) and verify radar SNR threshold."
+        ),
+        "check": lambda m: m.get("acc_active", False) and (
+            m.get("acc_ttc_warning_pct", 0.0) > 5.0
+            or m.get("acc_near_miss_events", 0) > 0
+        ),
+    },
+    {
+        "id": "acc_gap_tracking_poor",
+        "name": "ACC gap tracking poor (RMSE above gate)",
+        "severity": "comfort",
+        "category": "Control",
+        "code_pointer": "control/acc_controller.py:ACCController._idm()",
+        "config_lever": "acc.time_headway_s ↑; acc.max_accel_mps2 ↓",
+        "fix_hint": (
+            "acc_gap_rmse_m > 0.50m. IDM oscillating around desired gap. "
+            "Increase time_headway_s for a more conservative desired gap, "
+            "or reduce max_accel_mps2 to damp oscillation."
+        ),
+        "check": lambda m: m.get("acc_active", False) and m.get("acc_gap_rmse_m", 0.0) > 0.50,
+    },
+    {
+        "id": "acc_detection_dropout",
+        "name": "ACC radar detection rate below gate",
+        "severity": "instability",
+        "category": "Perception",
+        "code_pointer": "control/radar_sensor.py:ForwardRadarSensor.read_frame()",
+        "config_lever": "acc.detection_range_m ↑; check RADAR_HALF_ANGLE_DEG",
+        "fix_hint": (
+            "acc_detection_rate < 95%. SphereCast FOV too narrow or lead vehicle "
+            "occlusion at curve. Increase detection_range_m or widen the half-angle "
+            "in the Unity RadarSensor component."
+        ),
+        "check": lambda m: m.get("acc_active", False) and m.get("acc_detection_rate", 1.0) < 0.95,
+    },
+    {
+        "id": "acc_idm_hunting",
+        "name": "ACC IDM hunting (gap error sign oscillation)",
+        "severity": "comfort",
+        "category": "Control",
+        "code_pointer": "control/acc_controller.py:ACCController._idm()",
+        "config_lever": "acc.time_headway_s ↑; acc.comfortable_decel_mps2 ↑",
+        "fix_hint": (
+            "Gap error sign reverses > 20 times/min in ACC-active frames. "
+            "IDM is underdamped — asymmetry between comfortable_decel_mps2 and "
+            "max_accel_mps2 is driving oscillation. "
+            "Increase time_headway_s and comfortable_decel_mps2."
+        ),
+        "check": lambda m: m.get("acc_active", False) and m.get("acc_gap_sign_changes_per_min", 0.0) > 20.0,
+    },
 ]
 
 SEVERITY_ORDER = {"safety": 0, "instability": 1, "comfort": 2}
@@ -845,6 +907,57 @@ class TriageEngine:
                 m["speed_below_target_rate"] = float(
                     np.mean(_speed < 10.0)
                 )
+
+            # ACC metrics (Step 5)
+            acc_active_raw = arr("vehicle/acc_active")
+            if acc_active_raw is not None:
+                acc_active_arr = acc_active_raw[:n].astype(float)
+                acc_active_pct = float(np.mean(acc_active_arr > 0.5))
+                m["acc_active"] = acc_active_pct >= 0.10
+                if m["acc_active"]:
+                    acc_mask = acc_active_arr > 0.5
+                    m["acc_active_pct"] = acc_active_pct * 100.0
+
+                    ttc_raw = arr("vehicle/acc_ttc_s")
+                    if ttc_raw is not None:
+                        ttc_arr = ttc_raw[:n].astype(float)
+                        ttc_acc = ttc_arr[acc_mask & np.isfinite(ttc_arr)]
+                        if ttc_acc.size > 0:
+                            m["acc_ttc_warning_pct"] = float(np.mean(ttc_acc < 2.5) * 100.0)
+
+                    dist_raw = arr("vehicle/radar_fwd_distance_m")
+                    if dist_raw is not None:
+                        dist_arr = dist_raw[:n].astype(float)
+                        nm_frames = acc_mask & (dist_arr > 0.0) & (dist_arr < 2.0)
+                        run_nm, nm_count = 0, 0
+                        for f_flag in nm_frames:
+                            if f_flag:
+                                run_nm += 1
+                                if run_nm == 3:
+                                    nm_count += 1
+                            else:
+                                run_nm = 0
+                        m["acc_near_miss_events"] = nm_count
+
+                    gap_err_raw = arr("vehicle/acc_gap_error_m")
+                    if gap_err_raw is not None:
+                        ge_arr = gap_err_raw[:n].astype(float)
+                        ge_acc = ge_arr[acc_mask & np.isfinite(ge_arr)]
+                        if ge_acc.size > 0:
+                            m["acc_gap_rmse_m"] = float(np.sqrt(np.mean(ge_acc ** 2)))
+                            # Sign changes per minute (hunting indicator)
+                            sign_changes = int(np.sum(np.diff(np.sign(ge_acc)) != 0))
+                            duration_min = max(1.0, len(ge_acc) / 30.0 / 60.0)
+                            m["acc_gap_sign_changes_per_min"] = sign_changes / duration_min
+
+                    detected_raw = arr("vehicle/radar_fwd_detected")
+                    if detected_raw is not None:
+                        det_arr = detected_raw[:n].astype(float)
+                        lead_frames = acc_mask
+                        if np.any(lead_frames):
+                            m["acc_detection_rate"] = float(np.mean(det_arr[lead_frames] > 0.5))
+            else:
+                m["acc_active"] = False
 
         return m
 

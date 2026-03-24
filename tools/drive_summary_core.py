@@ -36,6 +36,18 @@ from scoring_registry import (
     CURVATURE_FLOOR_COEFF as _CURVATURE_FLOOR_COEFF,
     STEERING_JERK_PENALTY_CAP,
     HEADING_PENALTY_FLOOR_DEG,
+    ACC_COLLISION_GATE,
+    ACC_TTC_CRITICAL_S,
+    ACC_NEAR_MISS_GAP_M,
+    ACC_TTC_MIN_GATE_S,
+    ACC_TTC_WARNING_S,
+    ACC_TTC_COMFORTABLE_S,
+    ACC_NEAR_MISS_PENALTY_PTS,
+    ACC_TTC_WARNING_PENALTY_PER_PCT,
+    ACC_GAP_RMSE_GATE_M,
+    ACC_JERK_P95_GATE_MPS3,
+    ACC_DETECTION_RATE_GATE,
+    ACC_MIN_ACTIVE_FRAME_RATE,
 )
 
 G_MPS2 = 9.80665
@@ -930,6 +942,156 @@ def _build_mpc_health_summary(data: Dict, n_frames: int) -> Optional[Dict]:
     }
 
 
+def _build_acc_health_summary(data: Dict, n_frames: int, speed: Optional[np.ndarray] = None) -> Optional[Dict]:
+    """
+    Compute ACC longitudinal safety metrics from HDF5 data arrays.
+
+    Returns None when acc_active_pct < ACC_MIN_ACTIVE_FRAME_RATE so that
+    every consumer can safely guard with:
+        if acc_health is not None:  # ACC was active
+    This satisfies the roll-back contract: acc.enabled=false → zero acc_active
+    → None returned → no section rendered, no scoring applied.
+    """
+    acc_active_raw = data.get('acc_active')
+    if acc_active_raw is None:
+        return None
+
+    n = min(n_frames, len(acc_active_raw))
+    if n == 0:
+        return None
+
+    acc_active = np.asarray(acc_active_raw[:n], dtype=float)
+    acc_active_pct = float(np.mean(acc_active > 0.5)) * 100.0
+
+    if acc_active_pct < ACC_MIN_ACTIVE_FRAME_RATE * 100.0:
+        return None
+
+    acc_mask = acc_active > 0.5
+
+    # ── Gap arrays ────────────────────────────────────────────────────────────
+    dist_raw = data.get('radar_fwd_distance_m')
+    detected_raw = data.get('radar_fwd_detected')
+    gap_error_raw = data.get('acc_gap_error_m')
+    ttc_raw = data.get('acc_ttc_s')
+    target_gap_raw = data.get('acc_target_gap_m')
+
+    dist_arr = np.asarray(dist_raw[:n], dtype=float) if dist_raw is not None else np.full(n, np.nan)
+    detected_arr = np.asarray(detected_raw[:n], dtype=float) if detected_raw is not None else np.zeros(n)
+    gap_error_arr = np.asarray(gap_error_raw[:n], dtype=float) if gap_error_raw is not None else np.full(n, np.nan)
+    ttc_arr = np.asarray(ttc_raw[:n], dtype=float) if ttc_raw is not None else np.full(n, 999.0)
+
+    # ── Tier 1 — Hard safety ──────────────────────────────────────────────────
+    acc_collision_events = int(np.sum(dist_arr[acc_mask] < 0.0))
+    acc_ttc_violation_events = int(np.sum(
+        (ttc_arr[acc_mask] < ACC_TTC_CRITICAL_S) & np.isfinite(ttc_arr[acc_mask])
+    ))
+
+    # ── Tier 2 — Graduated safety ─────────────────────────────────────────────
+    # Near-miss: gap < ACC_NEAR_MISS_GAP_M AND gap > 0 (not collision), sustained ≥ 3 frames
+    near_miss_raw = acc_mask & (dist_arr > 0.0) & (dist_arr < ACC_NEAR_MISS_GAP_M)
+    near_miss_events = 0
+    run_len = 0
+    for flag in near_miss_raw:
+        if flag:
+            run_len += 1
+            if run_len == 3:
+                near_miss_events += 1
+        else:
+            run_len = 0
+
+    ttc_active = ttc_arr[acc_mask & np.isfinite(ttc_arr)]
+    acc_ttc_warning_pct = float(
+        np.mean(ttc_active < ACC_TTC_WARNING_S) * 100.0
+    ) if ttc_active.size > 0 else 0.0
+
+    dist_active = dist_arr[acc_mask & (dist_arr > 0.0)]
+    acc_min_gap_m = float(np.min(dist_active)) if dist_active.size > 0 else 0.0
+    acc_ttc_p05_s = float(np.percentile(ttc_active, 5)) if ttc_active.size > 0 else 999.0
+
+    # ── Tier 3 — Comfort + quality ────────────────────────────────────────────
+    gap_error_active = gap_error_arr[acc_mask & np.isfinite(gap_error_arr)]
+    acc_gap_rmse_m = float(np.sqrt(np.mean(gap_error_active ** 2))) if gap_error_active.size > 0 else 0.0
+    acc_ttc_min_s = float(np.min(ttc_active)) if ttc_active.size > 0 else 999.0
+
+    # Jerk in ACC-active frames
+    acc_jerk_p95 = 0.0
+    if speed is not None and len(speed) >= n:
+        spd = np.asarray(speed[:n], dtype=float)
+        if np.any(acc_mask) and np.sum(acc_mask) > 2:
+            jerk_frames = np.where(acc_mask)[0]
+            # Only compute where consecutive acc frames exist
+            if len(jerk_frames) > 1:
+                dt_nominal = 1.0 / 30.0
+                acc_acc = np.diff(spd[jerk_frames]) / dt_nominal
+                jerk_vals = np.abs(np.diff(acc_acc) / dt_nominal)
+                if jerk_vals.size > 0:
+                    acc_jerk_p95 = float(np.percentile(jerk_vals, 95))
+
+    # Detection rate: frames where lead was present (target_gap_m > 0) and we detected
+    acc_detection_rate = 1.0
+    if target_gap_raw is not None:
+        target_gap_arr = np.asarray(target_gap_raw[:n], dtype=float)
+        lead_present_mask = acc_mask & (target_gap_arr > 0.0)
+        if np.any(lead_present_mask):
+            acc_detection_rate = float(np.mean(detected_arr[lead_present_mask] > 0.5))
+
+    # Emergency brake events (transitions into state where gap_error extremely negative)
+    acc_emergency_brake_events = 0
+    if gap_error_raw is not None and np.any(acc_mask):
+        # Proxy: frames with very large negative gap_error (gap much less than desired)
+        extreme_close = acc_mask & (gap_error_arr < -5.0) & np.isfinite(gap_error_arr)
+        transitions = np.diff(extreme_close.astype(int))
+        acc_emergency_brake_events = int(np.sum(transitions > 0))
+
+    # ── Scoring deductions ────────────────────────────────────────────────────
+    collision_penalty = 100.0 * acc_collision_events   # hard zero per event
+    near_miss_penalty = min(30.0, ACC_NEAR_MISS_PENALTY_PTS * near_miss_events)
+    ttc_warning_penalty = ACC_TTC_WARNING_PENALTY_PER_PCT * acc_ttc_warning_pct
+
+    # Gate pass/fail
+    collision_gate_pass = acc_collision_events == 0
+    ttc_violation_gate_pass = acc_ttc_violation_events == 0
+    near_miss_gate_pass = near_miss_events == 0
+    ttc_warning_gate_pass = acc_ttc_warning_pct < 5.0
+    ttc_p05_gate_pass = acc_ttc_p05_s >= ACC_TTC_MIN_GATE_S
+    gap_rmse_gate_pass = acc_gap_rmse_m <= ACC_GAP_RMSE_GATE_M
+    ttc_min_gate_pass = acc_ttc_min_s >= ACC_TTC_MIN_GATE_S
+    jerk_gate_pass = acc_jerk_p95 <= ACC_JERK_P95_GATE_MPS3
+    detection_gate_pass = acc_detection_rate >= ACC_DETECTION_RATE_GATE
+
+    return {
+        "acc_active_pct": round(acc_active_pct, 2),
+        # Tier 1
+        "acc_collision_events": acc_collision_events,
+        "acc_ttc_violation_events": acc_ttc_violation_events,
+        "collision_gate_pass": collision_gate_pass,
+        "ttc_violation_gate_pass": ttc_violation_gate_pass,
+        # Tier 2
+        "acc_near_miss_events": near_miss_events,
+        "acc_ttc_warning_pct": round(acc_ttc_warning_pct, 2),
+        "acc_min_gap_m": round(acc_min_gap_m, 3),
+        "acc_ttc_p05_s": round(acc_ttc_p05_s, 3),
+        "near_miss_gate_pass": near_miss_gate_pass,
+        "ttc_warning_gate_pass": ttc_warning_gate_pass,
+        "ttc_p05_gate_pass": ttc_p05_gate_pass,
+        # Tier 3
+        "acc_gap_rmse_m": round(acc_gap_rmse_m, 3),
+        "acc_ttc_min_s": round(acc_ttc_min_s, 3),
+        "acc_jerk_p95_mps3": round(acc_jerk_p95, 2),
+        "acc_detection_rate": round(acc_detection_rate, 4),
+        "acc_emergency_brake_events": acc_emergency_brake_events,
+        "gap_rmse_gate_pass": gap_rmse_gate_pass,
+        "ttc_min_gate_pass": ttc_min_gate_pass,
+        "jerk_gate_pass": jerk_gate_pass,
+        "detection_gate_pass": detection_gate_pass,
+        # Scoring deductions (fed into Safety and LongitudinalComfort layers)
+        "collision_penalty": round(collision_penalty, 2),
+        "near_miss_penalty": round(near_miss_penalty, 2),
+        "ttc_warning_penalty": round(ttc_warning_penalty, 2),
+        "hard_zero": acc_collision_events > 0,
+    }
+
+
 def _build_longitudinal_hotspot_attribution(data: Dict, config: Dict, n_frames: int) -> Dict:
     """Build top longitudinal hotspot entries with deterministic root-cause attribution."""
     unavailable = {
@@ -1460,6 +1622,35 @@ def analyze_recording_summary(
                     np.array(f['vehicle/speed_limit'][:]) if 'vehicle/speed_limit' in f else None
                 )
             
+            # ACC / radar data (optional — sentinel zeros when ACC not fitted)
+            data['acc_active'] = (
+                np.array(f['vehicle/acc_active'][:]) if 'vehicle/acc_active' in f else None
+            )
+            data['radar_fwd_detected'] = (
+                np.array(f['vehicle/radar_fwd_detected'][:])
+                if 'vehicle/radar_fwd_detected' in f else None
+            )
+            data['radar_fwd_distance_m'] = (
+                np.array(f['vehicle/radar_fwd_distance_m'][:])
+                if 'vehicle/radar_fwd_distance_m' in f else None
+            )
+            data['radar_fwd_range_rate_mps'] = (
+                np.array(f['vehicle/radar_fwd_range_rate_mps'][:])
+                if 'vehicle/radar_fwd_range_rate_mps' in f else None
+            )
+            data['acc_gap_error_m'] = (
+                np.array(f['vehicle/acc_gap_error_m'][:])
+                if 'vehicle/acc_gap_error_m' in f else None
+            )
+            data['acc_ttc_s'] = (
+                np.array(f['vehicle/acc_ttc_s'][:])
+                if 'vehicle/acc_ttc_s' in f else None
+            )
+            data['acc_target_gap_m'] = (
+                np.array(f['vehicle/acc_target_gap_m'][:])
+                if 'vehicle/acc_target_gap_m' in f else None
+            )
+
             # Control data
             data['steering'] = np.array(f['control/steering'][:])
             data['lateral_error'] = np.array(f['control/lateral_error'][:]) if 'control/lateral_error' in f else None
@@ -5153,6 +5344,24 @@ def analyze_recording_summary(
     if _boundary_candidates:
         first_boundary_breach_frame = int(min(_boundary_candidates))
 
+    # ── ACC health summary (optional — None when ACC inactive or not fitted) ────
+    acc_health = _build_acc_health_summary(data, n_frames, speed=data.get('speed'))
+
+    # ACC Safety layer deductions (zero when acc_health is None)
+    acc_collision_penalty = 0.0
+    acc_near_miss_penalty = 0.0
+    acc_ttc_warning_penalty = 0.0
+    acc_jerk_penalty = 0.0
+    acc_hard_zero = False
+    if acc_health is not None:
+        acc_collision_penalty = safe_float(acc_health.get("collision_penalty", 0.0))
+        acc_near_miss_penalty = safe_float(acc_health.get("near_miss_penalty", 0.0))
+        acc_ttc_warning_penalty = safe_float(acc_health.get("ttc_warning_penalty", 0.0))
+        acc_hard_zero = bool(acc_health.get("hard_zero", False))
+        jerk_p95 = acc_health.get("acc_jerk_p95_mps3", 0.0) or 0.0
+        if jerk_p95 > ACC_JERK_P95_GATE_MPS3:
+            acc_jerk_penalty = safe_float(min(15.0, (jerk_p95 - ACC_JERK_P95_GATE_MPS3) * 5.0))
+
     layer_breakdowns = {
         "Perception": {
             "base_score": 100.0,
@@ -5237,6 +5446,11 @@ def analyze_recording_summary(
                     "value": longitudinal_jerk_penalty,
                     "limit": "<=0.61 g/s (6.0 m/s³)",
                 },
+                {
+                    "name": "ACC Following Jerk P95",
+                    "value": acc_jerk_penalty,
+                    "limit": "<=4.0 m/s³",
+                },
             ],
         },
         "Safety": {
@@ -5251,6 +5465,21 @@ def analyze_recording_summary(
                     "name": "Out Of Lane / Emergency Events",
                     "value": safety_event_penalty,
                     "limit": "none",
+                },
+                {
+                    "name": "ACC Collision Events",
+                    "value": acc_collision_penalty,
+                    "limit": "0 events",
+                },
+                {
+                    "name": "ACC Near-Miss Events",
+                    "value": acc_near_miss_penalty,
+                    "limit": "0 events",
+                },
+                {
+                    "name": "ACC TTC Warning Zone",
+                    "value": acc_ttc_warning_penalty,
+                    "limit": "< 5% of ACC frames",
                 },
             ],
         },
@@ -5321,6 +5550,11 @@ def analyze_recording_summary(
         cap_reason = "critical_yellow_layer"
 
     score = safe_float(min(overall_base, critical_cap))
+
+    # Hard zero override: ACC collision → score = 0 (same path as catastrophic OOL)
+    if acc_hard_zero:
+        score = 0.0
+        cap_reason = "acc_collision"
 
     turn_in_owner = {
         "availability": "unavailable",
@@ -6121,6 +6355,7 @@ def analyze_recording_summary(
             else None
         ),
         "mpc_health": _build_mpc_health_summary(data, n_frames),
+        "acc_health": acc_health,
         "grade_metrics": _compute_grade_metrics(data, n_frames),
         "recommendations": recommendations,
         "config": config_summary,

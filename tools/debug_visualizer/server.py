@@ -3095,6 +3095,25 @@ def get_mpc_pipeline(filename):
         return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500
 
 
+@app.route('/api/recording/<path:filename>/acc-pipeline')
+def get_acc_pipeline(filename):
+    """Step 5 ACC pipeline diagnostic — 4-card report."""
+    from urllib.parse import unquote
+    filename = unquote(filename)
+    filepath = RECORDINGS_DIR / filename
+    if not filepath.exists():
+        return jsonify({"error": f"Recording not found: {filename}"}), 404
+    try:
+        from backend.acc_pipeline import get_acc_pipeline_data
+        result = get_acc_pipeline_data(filepath)
+        if result is None:
+            return jsonify({"has_acc": False, "message": "ACC inactive — acc_active_pct below threshold"})
+        return jsonify(numpy_to_list(result))
+    except Exception as e:
+        import traceback
+        return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500
+
+
 @app.route('/api/recording/<path:filename>/cadence-breakdown')
 def get_cadence_breakdown(filename):
     """Wall-loop / wait_input / pipeline attribution + recommendations (cadence_breakdown_v1)."""

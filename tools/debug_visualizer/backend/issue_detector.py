@@ -25,6 +25,11 @@ from scoring_registry import (  # noqa: E402
     CATASTROPHIC_ERROR_M,
     MPC_SOLVE_TIME_BUDGET_MS,
     NMPC_SOLVE_TIME_BUDGET_MS,
+    ACC_TTC_CRITICAL_S,
+    ACC_TTC_WARNING_S,
+    ACC_NEAR_MISS_GAP_M,
+    ACC_JERK_P95_GATE_MPS3,
+    ACC_MIN_ACTIVE_FRAME_RATE,
 )
 
 
@@ -1813,6 +1818,151 @@ def detect_issues(recording_path: Path, analyze_to_failure: bool = False) -> Dic
                                     f"enable curve_auto_derive."
                                 ),
                             })
+
+            # 10. ACC ISSUES (guarded on acc_active field presence and min activity)
+            if 'vehicle/acc_active' in f:
+                acc_active_raw = np.array(f['vehicle/acc_active'][:num_frames], dtype=float)
+                acc_active_pct = float(np.mean(acc_active_raw > 0.5))
+                if acc_active_pct >= ACC_MIN_ACTIVE_FRAME_RATE:
+                    acc_mask = acc_active_raw > 0.5
+
+                    dist_arr_raw = (
+                        np.array(f['vehicle/radar_fwd_distance_m'][:num_frames], dtype=float)
+                        if 'vehicle/radar_fwd_distance_m' in f
+                        else None
+                    )
+                    detected_arr_raw = (
+                        np.array(f['vehicle/radar_fwd_detected'][:num_frames], dtype=float)
+                        if 'vehicle/radar_fwd_detected' in f
+                        else None
+                    )
+                    ttc_arr_raw = (
+                        np.array(f['vehicle/acc_ttc_s'][:num_frames], dtype=float)
+                        if 'vehicle/acc_ttc_s' in f
+                        else None
+                    )
+                    gap_error_arr_raw = (
+                        np.array(f['vehicle/acc_gap_error_m'][:num_frames], dtype=float)
+                        if 'vehicle/acc_gap_error_m' in f
+                        else None
+                    )
+
+                    # acc_collision: distance < 0
+                    if dist_arr_raw is not None:
+                        collision_frames = np.where(dist_arr_raw < 0.0)[0]
+                        for fr in collision_frames[:20]:
+                            issues.append({
+                                "frame": int(fr),
+                                "type": "acc_collision",
+                                "severity": "critical",
+                                "description": (
+                                    f"ACC collision: radar_fwd_distance_m={dist_arr_raw[fr]:.3f}m < 0."
+                                ),
+                                "fields": {"radar_fwd_distance_m": float(dist_arr_raw[fr])},
+                            })
+
+                    # acc_ttc_critical: TTC < 1.5s while ACC active
+                    if ttc_arr_raw is not None:
+                        ttc_critical_frames = np.where(
+                            acc_mask & (ttc_arr_raw < ACC_TTC_CRITICAL_S) & np.isfinite(ttc_arr_raw)
+                        )[0]
+                        for fr in ttc_critical_frames[:20]:
+                            issues.append({
+                                "frame": int(fr),
+                                "type": "acc_ttc_critical",
+                                "severity": "critical",
+                                "description": (
+                                    f"ACC TTC critical: {ttc_arr_raw[fr]:.2f}s < {ACC_TTC_CRITICAL_S}s "
+                                    f"(e-stop threshold). Distance={dist_arr_raw[fr]:.1f}m "
+                                    f"if available."
+                                    if dist_arr_raw is not None else
+                                    f"ACC TTC critical: {ttc_arr_raw[fr]:.2f}s < {ACC_TTC_CRITICAL_S}s."
+                                ),
+                                "fields": {
+                                    "acc_ttc_s": float(ttc_arr_raw[fr]),
+                                    "acc_active": float(acc_active_raw[fr]),
+                                },
+                            })
+
+                    # acc_near_miss: 0 < distance < 2.0m while ACC active
+                    if dist_arr_raw is not None:
+                        near_miss_frames = np.where(
+                            acc_mask & (dist_arr_raw > 0.0) & (dist_arr_raw < ACC_NEAR_MISS_GAP_M)
+                        )[0]
+                        for fr in near_miss_frames[:20]:
+                            issues.append({
+                                "frame": int(fr),
+                                "type": "acc_near_miss",
+                                "severity": "warning",
+                                "description": (
+                                    f"ACC near-miss: gap={dist_arr_raw[fr]:.2f}m < "
+                                    f"{ACC_NEAR_MISS_GAP_M}m (minimum gap)."
+                                ),
+                                "fields": {"radar_fwd_distance_m": float(dist_arr_raw[fr])},
+                            })
+
+                    # acc_ttc_warning_zone: 1.5 <= TTC < 2.5s
+                    if ttc_arr_raw is not None:
+                        ttc_warn_frames = np.where(
+                            acc_mask
+                            & (ttc_arr_raw >= ACC_TTC_CRITICAL_S)
+                            & (ttc_arr_raw < ACC_TTC_WARNING_S)
+                            & np.isfinite(ttc_arr_raw)
+                        )[0]
+                        for fr in ttc_warn_frames[:30]:
+                            issues.append({
+                                "frame": int(fr),
+                                "type": "acc_ttc_warning_zone",
+                                "severity": "warning",
+                                "description": (
+                                    f"ACC TTC warning zone: {ttc_arr_raw[fr]:.2f}s "
+                                    f"(threshold: {ACC_TTC_CRITICAL_S}–{ACC_TTC_WARNING_S}s)."
+                                ),
+                                "fields": {"acc_ttc_s": float(ttc_arr_raw[fr])},
+                            })
+
+                    # acc_detection_loss_sustained: ≥ 10 consecutive no-detect frames
+                    if detected_arr_raw is not None:
+                        no_detect = detected_arr_raw < 0.5
+                        run_len_d = 0
+                        for fi, nd in enumerate(no_detect):
+                            if nd:
+                                run_len_d += 1
+                                if run_len_d == 10:
+                                    issues.append({
+                                        "frame": int(fi - 9),
+                                        "type": "acc_detection_loss_sustained",
+                                        "severity": "warning",
+                                        "description": (
+                                            "ACC sustained detection loss: ≥10 consecutive "
+                                            "no-detect frames starting here."
+                                        ),
+                                        "fields": {"radar_fwd_detected": 0.0},
+                                    })
+                            else:
+                                run_len_d = 0
+
+                    # acc_jerk_spike: |jerk| in ACC-active frame > 2 × gate (8.0 m/s³)
+                    if gap_error_arr_raw is not None and 'vehicle/speed' in f:
+                        spd_arr = np.array(f['vehicle/speed'][:num_frames], dtype=float)
+                        jerk_gate_2x = ACC_JERK_P95_GATE_MPS3 * 2.0
+                        dt_nom = 1.0 / 30.0
+                        if len(spd_arr) > 2:
+                            acc_arr = np.diff(spd_arr) / dt_nom
+                            jerk_arr = np.abs(np.diff(acc_arr) / dt_nom)
+                            jerk_frame_idx = np.arange(2, num_frames)[:len(jerk_arr)]
+                            for ji, fr in enumerate(jerk_frame_idx):
+                                if acc_mask[fr] and ji < len(jerk_arr) and jerk_arr[ji] > jerk_gate_2x:
+                                    issues.append({
+                                        "frame": int(fr),
+                                        "type": "acc_jerk_spike",
+                                        "severity": "warning",
+                                        "description": (
+                                            f"ACC jerk spike: {jerk_arr[ji]:.1f} m/s³ > "
+                                            f"{jerk_gate_2x:.1f} m/s³ (2× gate)."
+                                        ),
+                                        "fields": {"jerk_mps3": float(jerk_arr[ji])},
+                                    })
 
             # Sort issues by frame number
             issues.sort(key=lambda x: x["frame"])

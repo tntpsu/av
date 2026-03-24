@@ -35,6 +35,11 @@ from scoring_registry import (  # noqa: E402
     MPC_SOLVE_TIME_ALERT_MS,
     NMPC_SOLVE_TIME_BUDGET_MS,
     NMPC_SOLVE_TIME_ALERT_MS,
+    ACC_TTC_CRITICAL_S,
+    ACC_TTC_COMFORTABLE_S,
+    ACC_TTC_MIN_GATE_S,
+    ACC_NEAR_MISS_GAP_M,
+    ACC_GAP_RMSE_GATE_M,
 )
 
 
@@ -50,12 +55,13 @@ class LayerHealthAnalyzer:
         """
         with h5py.File(self.path, 'r') as f:
             n_frames = self._frame_count(f)
+            has_acc = "vehicle/acc_active" in f
             frames = []
             for i in range(n_frames):
                 pf = self._score_perception(f, i)
                 tf = self._score_trajectory(f, i)
                 cf = self._score_control(f, i)
-                frames.append({
+                frame_data = {
                     "frame_idx":         i,
                     "timestamp":         self._scalar(f, "vehicle/timestamp", i,
                                                       default=float(i) / 20.0),
@@ -65,12 +71,20 @@ class LayerHealthAnalyzer:
                     "trajectory_flags":  tf["flags"],
                     "control_score":     round(cf["score"], 3),
                     "control_flags":     cf["flags"],
-                })
+                }
+                if has_acc:
+                    af = self._score_acc(f, i)
+                    frame_data["acc_score"] = round(af["score"], 3) if af["score"] is not None else None
+                    frame_data["acc_flags"] = af["flags"]
+                frames.append(frame_data)
 
+        layers = ["perception", "trajectory", "control"]
+        if has_acc:
+            layers.append("acc")
         summary = self._summarize(frames)
         return {
             "frame_count": n_frames,
-            "layers": ["perception", "trajectory", "control"],
+            "layers": layers,
             "frames": frames,
             "summary": summary,
         }
@@ -220,6 +234,58 @@ class LayerHealthAnalyzer:
             if road_grade_val > 0.02 and grade_comp_val < 0.5:
                 flags.append("grade_compensation_missing")
 
+        return {"score": max(0.0, min(1.0, score)), "flags": flags}
+
+    def _score_acc(self, f: h5py.File, i: int) -> dict:
+        """
+        Per-frame ACC health: score ∈ [0.0, 1.0], or None when acc_active=0.
+
+        Weights:
+          TTC margin  50%:  0.0 if TTC < 1.5s (critical), 1.0 if TTC ≥ 4.0s, linear between
+          Gap margin  30%:  0.0 if gap < 2.0m (near-miss), 1.0 if gap ≥ desired_gap, linear
+          Detection   20%:  1.0 if detected, 0.5 if not (dropout ≠ critical)
+
+        Only scored when acc_active > 0.5. Returns score=None otherwise.
+        """
+        acc_active = self._scalar(f, "vehicle/acc_active", i, default=0.0)
+        if acc_active < 0.5:
+            return {"score": None, "flags": []}
+
+        flags = []
+        score = 1.0
+
+        # TTC component (50% weight)
+        ttc = self._scalar(f, "vehicle/acc_ttc_s", i, default=999.0)
+        if ttc < ACC_TTC_CRITICAL_S:
+            ttc_score = 0.0
+            flags.append("acc_ttc_critical")
+        elif ttc >= ACC_TTC_COMFORTABLE_S:
+            ttc_score = 1.0
+        else:
+            # Linear: 1.5→0.0, 4.0→1.0
+            ttc_score = (ttc - ACC_TTC_CRITICAL_S) / (ACC_TTC_COMFORTABLE_S - ACC_TTC_CRITICAL_S)
+
+        # Gap component (30% weight)
+        gap = self._scalar(f, "vehicle/radar_fwd_distance_m", i, default=999.0)
+        target_gap = self._scalar(f, "vehicle/acc_target_gap_m", i, default=5.0)
+        if gap <= 0.0:
+            gap_score = 0.0
+            flags.append("acc_collision")
+        elif gap < ACC_NEAR_MISS_GAP_M:
+            gap_score = 0.0
+            flags.append("acc_near_miss")
+        elif gap >= target_gap:
+            gap_score = 1.0
+        else:
+            # Linear: near_miss_gap→0.0, target_gap→1.0
+            gap_score = (gap - ACC_NEAR_MISS_GAP_M) / max(target_gap - ACC_NEAR_MISS_GAP_M, 0.1)
+            gap_score = max(0.0, min(1.0, gap_score))
+
+        # Detection component (20% weight)
+        detected = self._scalar(f, "vehicle/radar_fwd_detected", i, default=1.0)
+        det_score = 1.0 if detected > 0.5 else 0.5
+
+        score = 0.5 * ttc_score + 0.3 * gap_score + 0.2 * det_score
         return {"score": max(0.0, min(1.0, score)), "flags": flags}
 
     # ── Helpers ───────────────────────────────────────────────────────────────

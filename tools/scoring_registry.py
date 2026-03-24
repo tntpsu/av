@@ -7,8 +7,10 @@ testing, and diagnostic modules. Pure constants — no project imports.
 Consumers:
     tests/conftest.py           — COMFORT_GATES dict
     tools/drive_summary_core.py — penalty thresholds, OOL detection
-    tools/debug_visualizer/backend/layer_health.py   — control/traj thresholds
-    tools/debug_visualizer/backend/issue_detector.py  — OOL, catastrophic, MPC budget
+    tools/debug_visualizer/backend/layer_health.py   — control/traj/ACC thresholds
+    tools/debug_visualizer/backend/issue_detector.py  — OOL, catastrophic, MPC/ACC budget
+    tools/debug_visualizer/backend/acc_pipeline.py    — ACC tab (PhilViz)
+    tools/analyze/acc_pipeline_analysis.py            — ACC pipeline diagnostic CLI
 """
 
 from __future__ import annotations
@@ -78,6 +80,26 @@ GRADE_THROTTLE_SATURATION_RATE: float = 0.10   # — — max acceptable fraction
 GRADE_JERK_RELAXATION_GAIN: float = 2.0        # — — jerk limit bonus per unit gravity_accel
 GRADE_STEERING_DAMPING_GAIN: float = 5.0       # — — steering alpha reduction per rad of grade
 GRADE_TRANSITION_BLEND_M: float = 3.0          # m — cosine blend radius at grade transitions (TrackBuilder)
+
+# ── ACC — Hard safety gates (Tier 1) ─────────────────────────────────────────
+ACC_COLLISION_GATE: int = 0                   # events — zero tolerance; score → 0
+ACC_TTC_CRITICAL_S: float = 1.5              # s  — e-stop trigger (same path as OOL)
+ACC_NEAR_MISS_GAP_M: float = 2.0             # m  — gap < s0; inside minimum gap (orange)
+
+# ── ACC — Graduated safety thresholds (Tier 2) ───────────────────────────────
+ACC_TTC_MIN_GATE_S: float = 2.0              # s  — promotion gate (must stay above)
+ACC_TTC_WARNING_S: float = 2.5              # s  — start of warning zone (2.0–2.5s)
+ACC_TTC_COMFORTABLE_S: float = 4.0          # s  — comfortable headway (green)
+ACC_DESIRED_GAP_FRACTION_WARN: float = 0.5  # —  — < 50% desired gap = IDM struggling
+ACC_NEAR_MISS_PENALTY_PTS: float = 15.0     # pts — per near-miss event (Safety layer)
+ACC_TTC_WARNING_PENALTY_PER_PCT: float = 0.3  # pts — per % of ACC frames in warning zone
+
+# ── ACC — Comfort and quality (Tier 3) ───────────────────────────────────────
+ACC_GAP_RMSE_GATE_M: float = 0.50           # m  — steady-following gap RMSE gate
+ACC_JERK_P95_GATE_MPS3: float = 4.0         # m/s³ — following jerk (tighter than 6.0 free-flow)
+ACC_DETECTION_RATE_GATE: float = 0.95       # —  — min detection rate when lead present
+ACC_EMERGENCY_BRAKE_GAP_FACTOR: float = 1.5  # —  — gap < factor×speed → emergency brake
+ACC_MIN_ACTIVE_FRAME_RATE: float = 0.10     # —  — min fraction for ACC section to activate
 
 # ── Benign stale reasons ─────────────────────────────────────────────────────
 BENIGN_STALE_REASONS: frozenset[str] = frozenset({"left_lane_low_visibility"})

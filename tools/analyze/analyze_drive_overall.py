@@ -1906,6 +1906,52 @@ def _print_summary_report(recording_path: Path, summary: Dict, analyze_to_failur
               f"    Graded Frames: {grade_metrics['graded_frames']}")
         print()
 
+    # Section 16: ACC Performance (only when ACC was active)
+    acc_health = summary.get("acc_health")
+    if acc_health is not None:
+        print("16. ACC PERFORMANCE")
+        print("-" * 80)
+        print(f"   ACC Active: {acc_health['acc_active_pct']:.1f}% of frames")
+        print()
+
+        def _gate(val, pass_val):
+            return "PASS" if pass_val else "FAIL"
+
+        print("   \u2500\u2500 Longitudinal Safety (\u2192 Safety layer score) \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500")
+        coll = acc_health.get("acc_collision_events", 0)
+        ttc_viol = acc_health.get("acc_ttc_violation_events", 0)
+        nm = acc_health.get("acc_near_miss_events", 0)
+        ttc_warn_pct = acc_health.get("acc_ttc_warning_pct", 0.0)
+        ttc_p05 = acc_health.get("acc_ttc_p05_s", 999.0)
+        min_gap = acc_health.get("acc_min_gap_m", 0.0)
+        print(f"   Collision Events:       {coll:<10d} [{_gate(coll, acc_health.get('collision_gate_pass', True))} = 0]"
+              f"               Tier 1")
+        print(f"   TTC Violations:         {ttc_viol:<10d} [{_gate(ttc_viol, acc_health.get('ttc_violation_gate_pass', True))} = 0]"
+              f"               Tier 1")
+        print(f"   Near-Miss Events:       {nm:<10d} [{_gate(nm, acc_health.get('near_miss_gate_pass', True))} = 0]"
+              f"   gap < 2.0m")
+        print(f"   TTC Warning Zone:       {ttc_warn_pct:<9.1f}% [{_gate(ttc_warn_pct, acc_health.get('ttc_warning_gate_pass', True))} < 5%]"
+              f"  1.5\u20132.5s")
+        print(f"   TTC P05:                {ttc_p05:<9.2f}s [{_gate(ttc_p05, acc_health.get('ttc_p05_gate_pass', True))} \u2265 2.0s]")
+        print(f"   Min Gap Observed:       {min_gap:.1f}m          (informational)")
+        print()
+
+        print("   \u2500\u2500 Following Comfort (\u2192 LongitudinalComfort layer) \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500")
+        gap_rmse = acc_health.get("acc_gap_rmse_m", 0.0)
+        ttc_min = acc_health.get("acc_ttc_min_s", 999.0)
+        jerk_p95 = acc_health.get("acc_jerk_p95_mps3", 0.0)
+        emrg = acc_health.get("acc_emergency_brake_events", 0)
+        print(f"   Gap RMSE:               {gap_rmse:<9.2f}m [{_gate(gap_rmse, acc_health.get('gap_rmse_gate_pass', True))} \u2264 0.50m]")
+        print(f"   TTC Minimum:            {ttc_min:<9.2f}s [{_gate(ttc_min, acc_health.get('ttc_min_gate_pass', True))} \u2265 2.00s]")
+        print(f"   Jerk P95 (ACC):         {jerk_p95:<9.1f}m/s\u00b3 [{_gate(jerk_p95, acc_health.get('jerk_gate_pass', True))} \u2264 4.0]")
+        print(f"   Emergency Brake Events: {emrg}          (informational \u2014 IDM quality)")
+        print()
+
+        print("   \u2500\u2500 Sensing \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500")
+        det_rate = acc_health.get("acc_detection_rate", 1.0)
+        print(f"   Detection Rate:         {det_rate * 100.0:<9.1f}% [{_gate(det_rate, acc_health.get('detection_gate_pass', True))} \u2265 95%]")
+        print()
+
     print("=" * 80)
 
 
