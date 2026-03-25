@@ -97,6 +97,12 @@ public class CarController : MonoBehaviour
     public float steerInput; // [-1, 1]
     public float throttleInput; // [0, 1]
     public float brakeInput; // [0, 1]
+    /// <summary>
+    /// Startup parking brake — held true until AVBridge receives the first Python control command.
+    /// Prevents the ~8m backward drift during the PyTorch model loading window (~29s).
+    /// Released by AVBridge when driveStartTime is first set.
+    /// </summary>
+    public bool parkingBrakeHeld = true;
     public float steerSlewRatePerSecond = 6.0f;
     [Header("Friction (Option A)")]
     public float carStaticFriction = 0.5f;
@@ -130,7 +136,7 @@ public class CarController : MonoBehaviour
     [Tooltip("Maximum startup lift applied when correcting chassis clearance (meters).")]
     public float maxStartupLiftM = 0.20f;
     [Tooltip("Retry window for startup chassis-ground alignment after scene initialization (seconds).")]
-    public float startupAlignmentRetryWindowSeconds = 2.0f;
+    public float startupAlignmentRetryWindowSeconds = 30.0f;
     [Tooltip("Retry interval for startup chassis-ground alignment (seconds).")]
     public float startupAlignmentRetryIntervalSeconds = 0.10f;
     [Tooltip("Allow fallback force-based physics when wheel colliders are unavailable.")]
@@ -1244,7 +1250,35 @@ public class CarController : MonoBehaviour
         // This ensures drag is always 0 unless we explicitly set it for braking
         // Unity might have default drag values or drag might persist from previous frames
         rb.linearDamping = 0f;
-        
+
+        // Startup parking brake: hold the car stationary until AVBridge receives the first
+        // Python control command (driveStartTime >= 0).  Without this, the car drifts ~8m
+        // backward during the ~29s PyTorch model-loading window, enlarging the initial gap
+        // and causing a large ACC transient.
+        // NOTE: Only apply wheel brake torque — do NOT zero linearVelocity or set high
+        // linearDamping, which prevents the suspension from settling and leaves only 2
+        // wheels grounded.  The road is flat so brake torque alone holds the car.
+        if (parkingBrakeHeld)
+        {
+            if (wheelCollidersReady)
+            {
+                frontLeftWheel.motorTorque  = 0f;
+                frontRightWheel.motorTorque = 0f;
+                rearLeftWheel.motorTorque   = 0f;
+                rearRightWheel.motorTorque  = 0f;
+                frontLeftWheel.brakeTorque  = maxBrakeTorque;
+                frontRightWheel.brakeTorque = maxBrakeTorque;
+                rearLeftWheel.brakeTorque   = maxBrakeTorque;
+                rearRightWheel.brakeTorque  = maxBrakeTorque;
+            }
+            else
+            {
+                // Force-fallback path: use damping only (no velocity zeroing).
+                rb.linearDamping = 5f;
+            }
+            return;
+        }
+
         // CRITICAL FIX: Reduce steering when speed is very low to prevent spinning in place
         // When speed < 0.1 m/s, high steering causes car to spin instead of move forward
         // Reduce steering proportionally to allow forward movement
@@ -1871,4 +1905,12 @@ public class VehicleState
     public float[] wheelSprungMass = new float[4];        // mass supported by each wheel
     public float[] wheelContactNormalY = new float[4];    // contact surface normal Y component
     public float wheelSteerAngleActual;                    // actual WheelCollider steer angle (after actuator)
+
+    // Forward radar (Step 5 ACC — SphereCast + Doppler model, populated by AVBridge)
+    // Field names intentionally use snake_case so JsonUtility serialises them with the
+    // exact keys that ForwardRadarSensor.read_frame() expects on the Python side.
+    public float radar_fwd_detected     = 0.0f;  // 1.0 = target detected, 0.0 = clear
+    public float radar_fwd_distance_m   = 0.0f;  // noisy range to lead vehicle (m)
+    public float radar_fwd_range_rate_mps = 0.0f; // Doppler range rate (+ = closing, m/s)
+    public float radar_fwd_snr          = 0.0f;  // signal-to-noise proxy [0, 1]
 }

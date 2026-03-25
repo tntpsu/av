@@ -59,6 +59,22 @@ class ACCParams:
     reengage_frames: int = 3             # consecutive detected frames to re-arm from DETECTION_LOSS
     disengage_ramp_mps2: float = 2.0    # ramp rate on disengage, m/s² (matches max_accel_mps2)
 
+    @classmethod
+    def from_config(cls, cfg: dict) -> "ACCParams":
+        """Construct from the `acc:` YAML block. Keys follow YAML naming conventions."""
+        return cls(
+            enabled=bool(cfg.get("enabled", False)),
+            min_gap_m=float(cfg.get("min_gap_s0_m", 2.0)),
+            time_headway_s=float(cfg.get("target_gap_time_headway_s", 1.5)),
+            max_accel_mps2=float(cfg.get("idm_max_accel_mps2", 2.0)),
+            comfortable_decel_mps2=float(cfg.get("idm_comfortable_decel_mps2", 2.5)),
+            detection_range_m=float(cfg.get("detection_range_m", 60.0)),
+            cutout_speed_mps=float(cfg.get("cutout_speed_mps", 5.0)),
+            fallback_frames=int(cfg.get("fallback_frames", 5)),
+            reengage_frames=int(cfg.get("reengage_frames", 3)),
+            disengage_ramp_mps2=float(cfg.get("disengage_ramp_mps2", 2.0)),
+        )
+
 
 @dataclass
 class ACCOutput:

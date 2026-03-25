@@ -83,6 +83,21 @@ public class AVBridge : MonoBehaviour
     public int frameCountJumpThreshold = 1;
     public float unityTimeJumpThresholdSeconds = 0.2f;
 
+    [Header("Forward Radar (Step 5 ACC)")]
+    [Tooltip("Lead vehicle spawned from track YAML lead_vehicle: block. Null = no lead vehicle.")]
+    public LeadVehicle leadVehicle;
+    [Tooltip("SphereCast sphere radius (m). Controls detection cone width at distance.")]
+    public float radarSphereRadius = 0.8f;
+    [Tooltip("Maximum radar detection range (m). Raised to 150m to match acc_highway.yaml detection_range_m; " +
+             "lead vehicle at 12 m/s escapes 60m range before ego reaches ACC cutout speed (5 m/s) at startup.")]
+    public float radarMaxRangeM = 150.0f;
+    [Tooltip("Maximum off-axis angle for detection (degrees). SphereCast result clamped.")]
+    public float radarHalfAngleDeg = 5.0f;
+    [Tooltip("Distance measurement Gaussian noise sigma (m).")]
+    public float radarDistanceNoiseSigma = 0.15f;
+    [Tooltip("Range-rate Doppler noise sigma (m/s).")]
+    public float radarRateNoiseSigma = 0.05f;
+
     [Header("Speed Limit Preview")]
     [Tooltip("Preview distance ahead (m) for upcoming speed limit checks")]
     public float speedLimitPreviewDistance = 12.0f;
@@ -105,6 +120,7 @@ public float speedLimitPreviewMaxTDelta = 0.15f;
     private float driveStartTime = -1f;
     private int lastRandomizeRequestId = -1;
     private bool randomStartHandled = false;
+    private bool leadMovementStarted = false;  // guards the one-shot StartMovement() call
     private int updateSequence = 0;
     private int currentUpdateSequence = 0;
     private float updateStartRealtime = 0f;
@@ -302,7 +318,13 @@ private float? lastCarT = null;
         }
         
         if (showDebugInfo) Debug.Log($"AVBridge: Initialized - Update rate: {updateRate} Hz, AV Control: {enableAVControl}");
-        
+
+        // ── Lead vehicle spawn (Step 5 ACC) ───────────────────────────────────
+        // RoadGenerator owns both the track path and the lead_vehicle: YAML config.
+        // AVBridge finds it at Start() time rather than requiring an Inspector link,
+        // so the same prefab works for all tracks with no manual wiring.
+        SpawnLeadVehicle();
+
         // Start sending Unity feedback periodically
         StartCoroutine(SendUnityFeedback());
         
@@ -534,6 +556,20 @@ private float? lastCarT = null;
             return; // Don't send data when exiting play mode
         }
         #endif
+
+        // Lead vehicle synchronized start: fire the one-shot StartMovement() exactly when
+        // Python sends its first control command (driveStartTime >= 0).  This is more
+        // reliable than the old egoSpeed > 1 m/s trigger, which fired ~1 s after Python
+        // connected and could false-fire on suspension settling impulses.
+        // With the parking brake (CarController.parkingBrakeHeld), ego stays at its spawn
+        // position (Z≈10m) until this same moment — giving a known 20m initial gap.
+        // radarMaxRangeM=150m ensures detection is maintained while IDM closes the gap.
+        if (!leadMovementStarted && leadVehicle != null && driveStartTime >= 0f)
+        {
+            leadMovementStarted = true;
+            leadVehicle.StartMovement();
+            Debug.Log($"AVBridge: Lead vehicle movement started at driveStartTime={driveStartTime:F2} s.");
+        }
 
         // Detect main-thread hitches (Update gaps) even if FixedUpdate doesn't log them.
         float realtimeNow = Time.realtimeSinceStartup;
@@ -1101,6 +1137,9 @@ private float? lastCarT = null;
                 currentState.rollRad = Mathf.DeltaAngle(0f, euler.z) * Mathf.Deg2Rad;
             }
             currentState.roadGrade = groundTruthReporter.GetGradeAtT(carT);
+
+            // Forward radar — Step 5 ACC SphereCast + Doppler model
+            ComputeForwardRadar(currentState);
 
             // Debug: Log ground truth values
             if (showDebugInfo && Time.frameCount % 30 == 0)
@@ -1777,6 +1816,11 @@ private float? lastCarT = null;
                         carController.avControlEnabled = true;
                         carController.avControlPriority = true;
                     }
+
+                    // Lead vehicle StartMovement() is deferred to the first frame where
+                    // the ego car is actually applying non-trivial throttle (throttle > 0.02)
+                    // to avoid the 30–40 s Python startup window where throttle=0 would give
+                    // the lead an uncatchable head start. See Update() below.
                     
                     // Apply control command to vehicle
                     if (showDebugInfo && Time.frameCount % 30 == 0)
@@ -1790,8 +1834,19 @@ private float? lastCarT = null;
                     );
                     
                     lastControlCommand = command;
-                    if (driveStartTime < 0f)
+                    // Require a non-trivial throttle command before releasing the parking brake
+                    // and starting the lead vehicle. The bridge returns cached throttle=0 for the
+                    // ~29s Python model-load window; acting on those zero commands gives the lead
+                    // an uncatchable head start (29s × 12 m/s = 348m > 150m radar range).
+                    if (driveStartTime < 0f && command.throttle > 0.05f)
+                    {
                         driveStartTime = Time.time;
+                        // Release the startup parking brake so ego can move.
+                        // Also triggers the lead vehicle StartMovement() via Update() this frame.
+                        if (carController != null)
+                            carController.parkingBrakeHeld = false;
+                        Debug.Log($"AVBridge: First real Python command (throttle={command.throttle:F3}) at t={driveStartTime:F2}s — parking brake released, lead vehicle starting.");
+                    }
                 }
                 catch (Exception e)
                 {
@@ -2076,6 +2131,143 @@ private float? lastCarT = null;
                 }
             }
         }
+    }
+
+    // ── Step 5 ACC helpers ────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Spawns the lead vehicle if the track YAML has lead_vehicle.enabled = true.
+    /// Called once from Start() after the RoadGenerator has finished building the track.
+    /// </summary>
+    private void SpawnLeadVehicle()
+    {
+        RoadGenerator rg = FindObjectOfType<RoadGenerator>();
+        if (rg == null)
+        {
+            if (showDebugInfo) Debug.Log("AVBridge: No RoadGenerator found — lead vehicle not spawned.");
+            return;
+        }
+
+        TrackConfig trackCfg = rg.ActiveTrackConfig;
+        if (trackCfg == null || !trackCfg.leadVehicle.enabled)
+        {
+            if (showDebugInfo) Debug.Log("AVBridge: lead_vehicle.enabled = false — skipping spawn.");
+            return;
+        }
+
+        // Retrieve the sampled waypoints from the road generator.
+        List<Vector3> waypoints   = rg.TrackPath.Points;
+        List<float>   distances   = rg.TrackPath.Distances;
+        bool          loop        = trackCfg.loop;
+
+        if (waypoints == null || waypoints.Count < 2)
+        {
+            Debug.LogWarning("AVBridge: TrackPath has fewer than 2 waypoints — lead vehicle not spawned.");
+            return;
+        }
+
+        // Create the lead vehicle GameObject with required components.
+        GameObject lvGO = new GameObject("LeadVehicle");
+        // RequireComponent ensures TrackWaypointFollower and SpeedProfiler are added
+        // when LeadVehicle is added.  We add them explicitly here for clarity.
+        lvGO.AddComponent<SpeedProfiler>();
+        lvGO.AddComponent<TrackWaypointFollower>();
+        LeadVehicle lv = lvGO.AddComponent<LeadVehicle>();
+
+        lv.Initialise(trackCfg.leadVehicle, waypoints, distances, loop);
+
+        leadVehicle = lv;
+
+        if (showDebugInfo)
+            Debug.Log($"AVBridge: Lead vehicle spawned — profile={trackCfg.leadVehicle.speedProfileType}, " +
+                      $"speed={trackCfg.leadVehicle.speedMps:F1} m/s, " +
+                      $"start={trackCfg.leadVehicle.startDistanceM:F0} m ahead.");
+    }
+
+    /// <summary>
+    /// Emulates a forward-looking Doppler radar via a SphereCast.
+    /// Populates the four radar_fwd_* fields on <paramref name="state"/>.
+    /// No-lead or out-of-cone → all fields zero (Python treats radar_fwd_detected==0 as no return).
+    /// </summary>
+    private void ComputeForwardRadar(VehicleState state)
+    {
+        // Zero out before every frame so stale data never lingers.
+        state.radar_fwd_detected    = 0.0f;
+        state.radar_fwd_distance_m  = 0.0f;
+        state.radar_fwd_range_rate_mps = 0.0f;
+        state.radar_fwd_snr         = 0.0f;
+
+        if (leadVehicle == null || carController == null)
+            return;
+
+        // Collision override: report 0 m gap at high SNR so Python TTC guard fires immediately.
+        if (leadVehicle.CollisionDetected)
+        {
+            state.radar_fwd_detected       = 1.0f;
+            state.radar_fwd_distance_m     = 0.1f;   // < any TTC threshold → instant ESTOP
+            state.radar_fwd_range_rate_mps = 0.0f;
+            state.radar_fwd_snr            = 9.0f;   // high confidence
+            return;
+        }
+
+        Transform carTx  = carController.transform;
+        Vector3   origin = carTx.position + Vector3.up * 0.5f;  // mid-bumper height
+        Vector3   fwd    = carTx.forward;
+
+        // Compute lead position directly from transform — avoids SphereCast hitting road geometry
+        // first (sphere radius 0.8m sweeps below road surface and is rejected before reaching lead).
+        Vector3 leadCenter = leadVehicle.transform.position + Vector3.up * (leadVehicle.vehicleBoxSize.y * 0.5f);
+        Vector3 toTarget   = leadCenter - origin;
+        float   trueDist   = toTarget.magnitude;
+
+        // Range gate.
+        if (trueDist > radarMaxRangeM)
+            return;
+
+        // Angle check: lead must be within ±radarHalfAngleDeg of bore-sight.
+        Vector3 toHit    = toTarget.normalized;
+        float   dotAngle = Vector3.Dot(fwd, toHit);
+        float   cosLimit = Mathf.Cos(radarHalfAngleDeg * Mathf.Deg2Rad);
+        if (dotAngle < cosLimit)
+            return;  // target outside detection cone (e.g. lead is behind ego)
+
+        // ── Gaussian noise (Box-Muller) ───────────────────────────────────────
+        // u1/u2 ∈ (0,1); clamp away zero to avoid log(0).
+        float u1 = Mathf.Max(1e-6f, UnityEngine.Random.value);
+        float u2 = UnityEngine.Random.value;
+        float gauss = Mathf.Sqrt(-2.0f * Mathf.Log(u1)) * Mathf.Cos(2.0f * Mathf.PI * u2);
+
+        float noisyDist = trueDist + gauss * radarDistanceNoiseSigma;
+        noisyDist = Mathf.Max(0.1f, noisyDist);  // non-negative guard
+
+        // ── Doppler range-rate ────────────────────────────────────────────────
+        // Radial relative velocity along radar bore-sight (positive = closing).
+        // We need ego velocity: approximate from CarController Rigidbody if present.
+        Vector3 egoVel  = Vector3.zero;
+        Rigidbody carRb = carController.GetComponent<Rigidbody>();
+        if (carRb != null) egoVel = carRb.velocity;
+
+        Vector3 leadVel   = leadVehicle.Velocity;
+        Vector3 relVel    = egoVel - leadVel;          // closing if positive along fwd
+        float   radialRate = Vector3.Dot(relVel, fwd); // m/s closing rate
+
+        // Add Doppler noise (second independent Gaussian sample).
+        float u3    = Mathf.Max(1e-6f, UnityEngine.Random.value);
+        float u4    = UnityEngine.Random.value;
+        float gaussB = Mathf.Sqrt(-2.0f * Mathf.Log(u3)) * Mathf.Cos(2.0f * Mathf.PI * u4);
+        float noisyRate = radialRate + gaussB * radarRateNoiseSigma;
+
+        // ── SNR model ─────────────────────────────────────────────────────────
+        // Inverse-square law relative to a 30 m reference distance.
+        // SNR = 1 at 30 m, falls to 0.25 at 60 m, rises to 4 at 15 m.
+        float refDist = 30.0f;
+        float snr     = (refDist * refDist) / Mathf.Max(0.1f, noisyDist * noisyDist);
+
+        // ── Populate state fields ─────────────────────────────────────────────
+        state.radar_fwd_detected       = 1.0f;
+        state.radar_fwd_distance_m     = noisyDist;
+        state.radar_fwd_range_rate_mps = noisyRate;
+        state.radar_fwd_snr            = snr;
     }
 }
 

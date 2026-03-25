@@ -603,6 +603,33 @@ explaining persistent lateral offset independent of control/perception tuning.
 **Gate:** No collision, min TTC ≥ 2.0s, jerk P95 ≤ 4.0 m/s³, gap RMSE ≤ 0.5m, no lateral regression
 **Unlocks:** Longitudinal planning that reacts to the world, not just the road
 
+---
+
+### Simulation Infrastructure — Tiled Road Collision (Backlog)
+
+**Problem:** The road mesh is generated procedurally at runtime as one large `MeshCollider`.
+Unity bakes (cooks) PhysX collision geometry asynchronously, and for a ~7km highway loop
+this takes ~39 seconds before the WheelColliders can grip the road surface.
+**Current workaround:** `Physics.BakeMesh()` called synchronously after mesh creation — fast
+enough for our 14k-triangle meshes (~1 frame), but does not scale to larger or more complex
+tracks.
+
+**Robust solution — streaming tile chunks:**
+- Divide the road into fixed-length tiles (e.g. 100m segments).
+- Each tile is a separate `MeshCollider` (~200 triangles). Baking is instant per tile.
+- Only materialize tiles within a configurable radius ahead/behind the car
+  (e.g. ±300m = 6 active tiles at a time).
+- As the car advances, stream in new tiles ahead and release tiles behind.
+- This mirrors how open-world games (GTA, Forza) handle streaming physics: small tiles baked
+  offline (or synchronously in <1ms), loaded/unloaded as the player moves.
+- Benefit: startup is instantaneous regardless of total track length; memory footprint is
+  constant; works for arbitrarily long routes (Step 9 global planner).
+
+**Entry:** Any step that introduces tracks > 10km or requires sub-second physics readiness.
+**Effort:** Medium — requires RoadGenerator refactor to emit tiles + a TileStreamer component.
+
+---
+
 ### Step 6 — Multi-Lane Perception + Map
 
 **Goal:** See and represent multiple lanes (still stay in ego lane).

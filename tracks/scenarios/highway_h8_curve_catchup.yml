@@ -1,21 +1,21 @@
-# Highway-style track at 65 mph design speed
-# Radius 500m (curvature 0.002 1/m) per AASHTO 65 mph minimum
-# Straight 550m: ~350m to accelerate 0->65 mph at 1.2 m/s² + 200m cruise
-# Layout: rounded rectangle; first two corners form S-curve (L then R), then L,L to close
+# H8 — Curve catch-up (highway_65)
+# Lead at 200m arc-distance, slower 10 m/s. Ego target 15 m/s (5 m/s closing speed).
+# Lead is beyond radar range at start (~197m); ego drives free until ~27s then ACC engages near S-curve.
+# Tests ACC engage + curve speed governor coexistence while both vehicles approach the R500 S-curve.
+# Expected: smooth ACC engage at ~60m gap; no hunting; jerk P95 ≤ 4.0.
+# base: tracks/highway_65.yml
+
 name: highway_65
 road_width: 7.2
 lane_line_width: 0.2
 sample_spacing: 1.0
 loop: true
-# Default spawn offset to avoid edge-straddle at loop start.
 start_distance: 10.0
 speed_limit_mph: 65.0
 segments:
-  # Straight: accelerate to 65 mph + cruise
   - type: straight
     length: 550
     speed_limit_mph: 65.0
-  # S-curve: left then right (first two corners of rectangle)
   - type: arc
     radius: 500
     angle_deg: 90
@@ -26,11 +26,9 @@ segments:
     angle_deg: 90
     direction: right
     speed_limit_mph: 65.0
-  # Short side
   - type: straight
     length: 400
     speed_limit_mph: 65.0
-  # Corners 3, 4, 5, 6 to close (4 more lefts; L+R+4L = 360)
   - type: arc
     radius: 500
     angle_deg: 90
@@ -60,3 +58,11 @@ segments:
     angle_deg: 90
     direction: left
     speed_limit_mph: 65.0
+
+lead_vehicle:
+  enabled: true
+  start_distance_m: 200.0
+  lane_offset_m: 1.8
+  speed_profile:
+    type: constant
+    speed_mps: 10.0

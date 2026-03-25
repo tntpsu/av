@@ -1,0 +1,41 @@
+# A2 — Hard brake at NMPC speed (autobahn_30)
+# Lead at 40m arc-distance, constant 20 m/s then decelerates 20→10 m/s at t=5s.
+# Tests ACC decel while potential LMPC→NMPC regime transition occurs at 20 m/s boundary.
+# A2 prerequisite: NMPC 12–14 m/s transition resolved (see Step 5 plan section A2 detail).
+# Expected: no jerk spike at regime transition; TTC min ≥ 2.0s; Δsteering ≤ 0.10.
+# base: tracks/autobahn_30.yml
+
+name: autobahn_30
+road_width: 8.0
+lane_line_width: 0.2
+sample_spacing: 1.0
+loop: true
+start_distance: 5.0
+speed_limit_mph: 90.0
+segments:
+  - type: straight
+    length: 600
+    speed_limit_mph: 90.0
+  - type: arc
+    radius: 600
+    angle_deg: 180
+    direction: left
+    speed_limit_mph: 75.0
+  - type: straight
+    length: 600
+    speed_limit_mph: 90.0
+  - type: arc
+    radius: 600
+    angle_deg: 180
+    direction: left
+    speed_limit_mph: 75.0
+
+lead_vehicle:
+  enabled: true
+  start_distance_m: 40.0
+  lane_offset_m: 2.0
+  speed_profile:
+    type: hard_brake
+    speed_mps: 20.0
+    brake_at_time_s: 5.0
+    brake_to_speed_mps: 10.0

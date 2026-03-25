@@ -1,0 +1,59 @@
+# ACC hill_highway overlay — Step 5 ACC scenarios G1 and G2.
+#
+# Increased time_headway_s = 2.0 s (vs 1.5 s on flat tracks) to compensate for
+# reduced braking authority on steep uphill grades (grade FF adds propulsive bias
+# that fights deceleration).
+#
+# G2 config gate: comfortable_decel_mps2 (2.5) ≥ 2 × grade_ff_bias (~0.85 at 5% grade).
+# 2.5 > 1.70 ✓ — net deceleration > 0 on any grade in the hill_highway ODD.
+#
+# Usage:
+#   ./start_av_stack.sh --config config/acc_hill_highway.yaml \
+#       --track-yaml tracks/scenarios/hill_g1_grade_following.yml --duration 90
+
+# ── Inherit hill_highway lateral tuning (no MPC overlay — q_lat auto-derived) ─
+control:
+  lateral:
+    steering_smoothing_alpha: 0.6       # gentler than highway (R100 corners, lower speed)
+    pp_feedback_gain: 0.0
+    curve_feedforward_gain: 0.0
+    curve_feedforward_threshold: 0.0
+    pp_speed_norm_enabled: false
+    pp_map_ff_gain: 0.8
+    curve_intent_arm_preview_min: 0.005
+    curve_intent_arm_rise_min: 0.001
+    curve_intent_arm_distance_time_headway_s: 1.0
+    curve_intent_arm_distance_min_m: 4.0
+    curve_intent_arm_distance_max_m: 25.0
+    curve_intent_startup_ignore_frames: 30
+  longitudinal:
+    target_speed: 12.0
+    max_speed: 14.0
+    speed_drag_gain: 0.020
+    accel_target_smoothing_alpha: 0.75
+
+trajectory:
+  target_speed: 12.0
+  speed_planner:
+    accel_speed_max: 12.0
+    decel_speed_max: 12.0
+  speed_governor:
+    curve_preview_enabled: true
+
+safety:
+  max_speed: 14.0
+
+# ── ACC: wider headway for grade interaction ───────────────────────────────────
+acc:
+  enabled: true
+  gap_alpha: 0.30
+  rate_alpha: 0.20
+  target_gap_time_headway_s: 2.0        # increased from 1.5: grade FF fights braking
+  min_gap_s0_m: 2.0
+  idm_max_accel_mps2: 1.5              # conservative acceleration on grade
+  idm_comfortable_decel_mps2: 2.5
+  cutout_speed_mps: 3.0                # lower cutout: hill_highway runs at lower speed
+  fallback_frames: 5
+  reengage_frames: 3
+  disengage_ramp_mps2: 1.5
+  detection_range_m: 60.0

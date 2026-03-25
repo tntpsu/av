@@ -166,6 +166,15 @@ class VehicleState:
     wheel_sprung_mass: Optional[np.ndarray] = None     # shape (4,)
     wheel_contact_normal_y: Optional[np.ndarray] = None # shape (4,)
     wheel_steer_angle_actual: float = 0.0
+    # ACC / forward radar (Step 5 — Phase A data pipeline)
+    radar_fwd_detected: float = 0.0        # 1.0 when target detected, 0.0 otherwise
+    radar_fwd_distance_m: float = 0.0      # EMA-filtered range to lead vehicle (m)
+    radar_fwd_range_rate_mps: float = 0.0  # EMA-filtered range rate (+ = closing)
+    radar_fwd_snr: float = 0.0             # Signal-to-noise proxy [0, 1]
+    acc_active: float = 0.0               # 1.0 when ACC is engaged
+    acc_target_gap_m: float = 0.0         # IDM desired gap (m)
+    acc_gap_error_m: float = 0.0          # actual_gap − target_gap (m)
+    acc_ttc_s: float = 999.0              # Time-to-collision (s); 999 = no target
 
 
 @dataclass

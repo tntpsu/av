@@ -1,0 +1,95 @@
+# ACC highway overlay — merges on top of config/mpc_highway.yaml (which itself overlays av_stack_config.yaml).
+#
+# Enables ACC with standard time-headway for Step 5 E2E scenarios on highway_65.
+# Ego target: 15 m/s (proven stable operating point; avoids PP↔LMPC regime chatter > 14 m/s).
+#
+# Usage:
+#   ./start_av_stack.sh --config config/acc_highway.yaml \
+#       --track-yaml tracks/scenarios/highway_h2_steady.yml --duration 90
+
+# ── Inherit highway lateral/MPC tuning ────────────────────────────────────────
+control:
+  lateral:
+    steering_smoothing_alpha: 0.3
+    pp_feedback_gain: 0.0
+    curve_feedforward_gain: 0.0
+    curve_feedforward_threshold: 0.0
+    pp_speed_norm_enabled: true
+    pp_speed_norm_min_scale: 0.60
+    pp_map_ff_gain: 1.0
+    curve_intent_startup_ignore_frames: 45
+    curve_intent_arm_preview_min: 0.002
+    curve_intent_arm_rise_min: 0.0002
+    curve_intent_arm_distance_time_headway_s: 1.2
+    curve_intent_arm_distance_min_m: 6.0
+    curve_intent_arm_distance_max_m: 45.0
+    curve_intent_rearm_exit_hysteresis: 2.0
+    curve_intent_rearm_min_frames: 12
+    curve_intent_max_commit_frames: 80
+    curve_intent_force_straight_hold_frames: 24
+  longitudinal:
+    target_speed: 15.0
+    max_speed: 17.0
+    speed_drag_gain: 0.010
+    accel_target_smoothing_alpha: 0.6
+    # Disable accel-tracking PID for ACC scenarios.
+    # When ACC overrides target_speed, the speed planner's planned_accel is stale.
+    # With accel_tracking_enabled=True the accel PID fights the ACC speed command,
+    # causing repeated brake episodes (measured: brake=0.18, ~15-frame drops to 6.5 m/s).
+    accel_tracking_enabled: false
+
+trajectory:
+  target_speed: 15.0
+  # Disable distance-based EMA curvature smoothing for highway/ACC scenarios.
+  # The base config enables EMA with a 12m window. At startup (v≈0) the EMA
+  # decays at only 2m/s × 1/30s = 0.067m/frame → time constant ≈ 6s. A lane-
+  # detection spike at frame 0 (κ≈0.3) would freeze the comfort governor at
+  # 3.0 m/s for ~90 frames, blocking ACC engagement. With smoothing off, the
+  # governor's 5-frame max-history clears the spike in 6 frames (0.2s).
+  curvature_smoothing_enabled: false
+  curve_phase_on: 0.35
+  curve_phase_off: 0.22
+  curve_phase_commit_on: 0.45
+  curve_phase_commit_min_frames: 3
+  curve_local_entry_on_base: 0.35
+  curve_local_entry_on_tight: 0.32
+  speed_planner:
+    accel_speed_max: 15.0
+    decel_speed_max: 15.0
+    # Zero the bias so the planner targets exactly 15.0 m/s (= target_speed).
+    # Base config has speed_limit_bias: -0.2 → planner targets 14.6 m/s when
+    # target=14.8; once _last_speed reaches 14.6, planned_accel turns negative and
+    # the accel-tracking PID winds up a brake command. Zeroing eliminates that source.
+    speed_limit_bias: 0.0
+  speed_governor:
+    curve_preview_enabled: false
+    curve_cap_use_preview_curvature: false
+  mpc:
+    mpc_q_lat_terminal_scale: 1.0
+    mpc_v_max: 17.0
+    mpc_bias_enabled: true
+    mpc_bias_alpha: 0.005
+    mpc_bias_kappa_gain: 0.015
+    mpc_bias_max_correction: 0.002
+    mpc_bias_min_speed: 5.0
+
+safety:
+  max_speed: 17.0
+
+lateral_control:
+  steering_smoothing_alpha: 0.3
+
+# ── ACC: enabled for all highway scenarios ────────────────────────────────────
+acc:
+  enabled: true
+  gap_alpha: 0.30
+  rate_alpha: 0.20
+  target_gap_time_headway_s: 1.5
+  min_gap_s0_m: 2.0
+  idm_max_accel_mps2: 2.0
+  idm_comfortable_decel_mps2: 2.5
+  cutout_speed_mps: 5.0
+  fallback_frames: 5
+  reengage_frames: 3
+  disengage_ramp_mps2: 2.0
+  detection_range_m: 150.0

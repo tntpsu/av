@@ -102,7 +102,7 @@ class LaneDetectionInference:
         # Image preprocessing parameters
         self.input_height = 320
         self.input_width = 800
-    
+
     def preprocess(self, image: np.ndarray) -> torch.Tensor:
         """
         Preprocess image for model input.

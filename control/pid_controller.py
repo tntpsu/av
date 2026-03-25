@@ -4437,6 +4437,18 @@ class LongitudinalController:
             else:
                 self.last_accel_cmd = accel_cmd
 
+            # DEBUG: trace brake onset — any negative accel_cmd
+            if accel_cmd < -0.2:
+                import logging as _dbg_log
+                _dbg_log.getLogger(__name__).warning(
+                    f"[LONG_DEBUG] accel_cmd={accel_cmd:.4f} raw_err={raw_speed_error:.3f} "
+                    f"ref_vel={reference_velocity:.2f} speed={current_speed:.2f} "
+                    f"smoothed_desired={self.smoothed_desired_accel:.4f} "
+                    f"desired_accel_pre_ema={desired_accel:.4f} "
+                    f"last_accel_cmd={self.last_accel_cmd:.4f} "
+                    f"ref_accel={reference_accel} drag={self.speed_drag_gain*current_speed:.4f} "
+                    f"continuous={self.continuous_accel_control}"
+                )
             if accel_cmd >= 0.0:
                 throttle = (accel_cmd / self._effective_max_accel) if self._effective_max_accel > 0.0 else 0.0
                 if self.throttle_curve_gamma != 1.0:
@@ -4676,6 +4688,16 @@ class LongitudinalController:
         elif not self.continuous_accel_control:
             self.last_accel_cmd = (throttle * self.max_accel) - (brake * self.max_decel)
         
+        if (
+            reference_velocity is not None
+            and self.overspeed_brake_max > 0.0
+            and raw_speed_error < -self.overspeed_brake_threshold
+        ):
+            import logging as _dbg_log2
+            _dbg_log2.getLogger(__name__).warning(
+                f"[OVERSPEED_BRAKE] ref_vel={reference_velocity:.3f} speed={current_speed:.3f} "
+                f"raw_err={raw_speed_error:.3f} threshold={self.overspeed_brake_threshold:.3f}"
+            )
         if (
             reference_velocity is not None
             and self.overspeed_brake_max > 0.0

@@ -34,6 +34,7 @@ public static class TrackLoader
         TrackSegment currentSegment = null;
         bool inSegments = false;
 
+        bool inLeadVehicle = false;
         string[] lines = yamlText.Split('\n');
         foreach (string rawLine in lines)
         {
@@ -46,10 +47,57 @@ public static class TrackLoader
             if (line.StartsWith("segments:"))
             {
                 inSegments = true;
+                inLeadVehicle = false;
                 continue;
             }
 
-            if (inSegments)
+            if (line.StartsWith("lead_vehicle:"))
+            {
+                inLeadVehicle = true;
+                inSegments = false;
+                currentSegment = null;
+                continue;
+            }
+
+            // Top-level keys exit any nested block.
+            // IMPORTANT: use exact prefixes that cannot match lead_vehicle sub-keys.
+            //   "start_distance_m" (lead_vehicle) vs "start_distance:" (top-level) — use exact match.
+            //   "speed_mps" / "speed_profile" (lead_vehicle) vs "speed_limit_mph:" (top-level) — same.
+            // All lines are Trim()'d so we check content, not indentation.
+            // NOTE: speed_limit_mph is intentionally EXCLUDED here — it is also a valid per-segment
+            //   property (segments list each have speed_limit_mph). Including it caused the parser to
+            //   exit inSegments on the first segment's speed_limit_mph line, silently discarding all
+            //   subsequent segments (arcs, remaining straights). The top-level speed_limit_mph is
+            //   parsed correctly via ParseConfigKeyValue when inSegments=false (before segments: block).
+            if (!line.StartsWith("-"))
+            {
+                if (inLeadVehicle || inSegments)
+                {
+                    // Only exit the block for unambiguous top-level track keys.
+                    bool isUnambiguousTopLevel =
+                        line.StartsWith("name:") ||
+                        line.StartsWith("loop:") ||
+                        line.StartsWith("road_width:") ||
+                        line.StartsWith("lane_line_width:") ||
+                        line.StartsWith("sample_spacing:") ||
+                        line.StartsWith("start_distance:") ||   // top-level (no _m suffix)
+                        line.StartsWith("start_t:") ||
+                        // speed_limit_mph removed: it is also a valid segment property
+                        line.StartsWith("template:") ||
+                        line.StartsWith("offset:");
+                    if (isUnambiguousTopLevel)
+                    {
+                        inLeadVehicle = false;
+                        inSegments = false;
+                    }
+                }
+            }
+
+            if (inLeadVehicle)
+            {
+                ParseLeadVehicleKeyValue(config.leadVehicle, line);
+            }
+            else if (inSegments)
             {
                 if (line.StartsWith("-"))
                 {
@@ -241,6 +289,44 @@ public static class TrackLoader
                 break;
             case "speed_limit_mph":
                 if (TryParseFloat(value, out float speedLimitMph)) config.speedLimit = MphToMps(speedLimitMph);
+                break;
+        }
+    }
+
+    private static void ParseLeadVehicleKeyValue(LeadVehicleConfig lv, string line)
+    {
+        if (!TrySplitKeyValue(line, out string key, out string value))
+            return;
+
+        switch (key)
+        {
+            case "enabled":
+                if (TryParseBool(value, out bool en)) lv.enabled = en;
+                break;
+            case "start_distance_m":
+                if (TryParseFloat(value, out float sd)) lv.startDistanceM = sd;
+                break;
+            case "speed_profile":  // "type: …" nested block — handled on next line
+            case "type":
+                lv.speedProfileType = Unquote(value).ToLowerInvariant();
+                break;
+            case "speed_mps":
+                if (TryParseFloat(value, out float sp)) lv.speedMps = sp;
+                break;
+            case "brake_at_time_s":
+                if (TryParseFloat(value, out float bat)) lv.brakeAtTimeS = bat;
+                break;
+            case "brake_to_speed_mps":
+                if (TryParseFloat(value, out float bts)) lv.brakeToSpeedMps = bts;
+                break;
+            case "stop_go_period_s":
+                if (TryParseFloat(value, out float sgp)) lv.stopGoPeriodS = sgp;
+                break;
+            case "stop_go_top_speed_mps":
+                if (TryParseFloat(value, out float sgts)) lv.stopGoTopSpeedMps = sgts;
+                break;
+            case "lane_offset_m":
+                if (TryParseFloat(value, out float lom)) lv.laneOffsetM = lom;
                 break;
         }
     }

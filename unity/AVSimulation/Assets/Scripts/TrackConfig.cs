@@ -1,6 +1,25 @@
 using System;
 using System.Collections.Generic;
 
+/// <summary>
+/// Lead vehicle configuration parsed from the lead_vehicle: YAML block.
+/// Used by TrackLoader and consumed by LeadVehicle.cs at runtime.
+/// </summary>
+[Serializable]
+public class LeadVehicleConfig
+{
+    public bool enabled = false;
+    public float startDistanceM = 40.0f;     // arc-distance offset ahead of ego spawn
+    public string speedProfileType = "constant"; // constant | hard_brake | accel_away | stop_go | slower
+    public float speedMps = 20.0f;           // base speed for profile
+    public float brakeAtTimeS = 5.0f;        // hard_brake: time after start when lead brakes
+    public float brakeToSpeedMps = 5.0f;     // hard_brake: target speed after braking
+    public float stopGoPeriodS = 10.0f;      // stop_go: period of full stop→go cycle (s)
+    public float stopGoTopSpeedMps = 20.0f;  // stop_go: top speed in cycle
+    public float laneOffsetM = 0.0f;         // lateral offset from centerline (m); positive = right lane
+                                             // Use roadWidth/4 for right lane of a 2-lane road.
+}
+
 [Serializable]
 public class TrackConfig
 {
@@ -25,6 +44,7 @@ public class TrackConfig
     public float straightLength = 0f;
     public float turnRadius = 0f;
     public List<TrackSegment> segments = new List<TrackSegment>();
+    public LeadVehicleConfig leadVehicle = new LeadVehicleConfig();
 }
 
 [Serializable]

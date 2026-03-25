@@ -1,0 +1,93 @@
+# G2 — Lead stops on uphill (hill_highway)
+# Lead at 15m arc-distance (on the 5% uphill straight), decelerates 10→0 m/s at t=10s.
+# Grade FF adds propulsive bias; IDM + grade FF must together produce net deceleration.
+# G2 gate: comfortable_decel_mps2 (2.5) ≥ 2 × grade_ff_bias (~0.85 @ 5%) = 1.70 ✓
+# Expected: ego stops cleanly on grade; no collision; no e-stop (TTC-limited, not free-fall).
+# base: tracks/hill_highway.yml
+
+name: hill_highway
+road_width: 7.2
+lane_line_width: 0.2
+sample_spacing: 1.0
+loop: true
+start_distance: 3.0
+speed_limit_mph: 30.0
+segments:
+  - type: straight
+    length: 50
+    grade: 0.0
+    speed_limit_mph: 30.0
+  - type: straight
+    length: 5
+    grade: 0.025
+    speed_limit_mph: 30.0
+  - type: straight
+    length: 95
+    grade: 0.05
+    speed_limit_mph: 30.0
+  - type: straight
+    length: 5
+    grade: 0.025
+    speed_limit_mph: 30.0
+  - type: arc
+    radius: 100
+    angle_deg: 90
+    direction: left
+    grade: 0.0
+    speed_limit_mph: 25.0
+  - type: straight
+    length: 5
+    grade: -0.025
+    speed_limit_mph: 30.0
+  - type: straight
+    length: 55
+    grade: -0.05
+    speed_limit_mph: 30.0
+  - type: straight
+    length: 5
+    grade: -0.025
+    speed_limit_mph: 30.0
+  - type: arc
+    radius: 100
+    angle_deg: 90
+    direction: left
+    grade: 0.0
+    speed_limit_mph: 25.0
+  - type: straight
+    length: 5
+    grade: -0.02
+    speed_limit_mph: 30.0
+  - type: straight
+    length: 45
+    grade: -0.04
+    speed_limit_mph: 30.0
+  - type: straight
+    length: 5
+    grade: -0.02
+    speed_limit_mph: 30.0
+  - type: arc
+    radius: 100
+    angle_deg: 90
+    direction: left
+    grade: 0.0
+    speed_limit_mph: 25.0
+  - type: straight
+    length: 40
+    grade: 0.0
+    speed_limit_mph: 30.0
+  - type: arc
+    radius: 100
+    angle_deg: 90
+    direction: left
+    grade: 0.0
+    speed_limit_mph: 25.0
+
+lead_vehicle:
+  enabled: true
+  start_distance_m: 15.0
+  lane_offset_m: 1.8
+  speed_profile:
+    type: hard_brake
+    speed_mps: 10.0
+    brake_at_time_s: 10.0
+    brake_to_speed_mps: 0.0

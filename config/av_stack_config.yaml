@@ -891,3 +891,20 @@ lateral_control:
   steering_smoothing_alpha: 0.7
   steering_rate_scale_min: 0.8
   steering_jerk_limit: 0.0
+
+# ── ACC — Adaptive Cruise Control (Step 5) ──────────────────────────────────
+acc:
+  enabled: false            # Phase A: data pipeline only — set true when Unity radar bridge ready
+  gap_alpha: 0.30           # EMA alpha for range filtering (lower = smoother)
+  rate_alpha: 0.20          # EMA alpha for range-rate filtering
+  # IDM parameters
+  target_gap_time_headway_s: 1.5   # Desired time headway T (s)
+  min_gap_s0_m: 2.0                # IDM minimum standstill gap s0 (m)
+  idm_max_accel_mps2: 2.0          # IDM max acceleration a (m/s²)
+  idm_comfortable_decel_mps2: 3.0  # IDM comfortable decel b (m/s²)
+  # State machine parameters
+  cutout_speed_mps: 5.0            # ACC disengages below this ego speed (m/s)
+  fallback_frames: 5               # Consecutive no-detect frames before DETECTION_LOSS
+  reengage_frames: 3               # Consecutive detected frames to re-arm from DETECTION_LOSS
+  disengage_ramp_mps2: 2.0        # Speed ramp rate on disengage (m/s²)
+  detection_range_m: 60.0          # Max radar detection range (m)

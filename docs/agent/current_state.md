@@ -1,23 +1,49 @@
 # AV Stack — Agent Memory: Current State
 
-**Last updated:** 2026-03-23
-**Current milestone:** Step 4 NMPC — COMPLETE ✅ (2026-03-23). Best result: **H-3: 97.5/100, 0 e-stops** (recording_20260323_111239.h5). Step 5 ACC plan written (`docs/plans/step5_acc_plan.md`). Ready to begin Phase A (data pipeline).
+**Last updated:** 2026-03-24
+**Current milestone:** Step 5 ACC — Phases D + A + B + C + E complete (2026-03-24). 1538 tests passing. Phase E (Unity) done. Ready for E2E validation runs (12 scenarios, 3 tracks).
 
 ---
 
 ## Current Active Work (2026-03-23)
 
-### Step 5 ACC — NEXT (plan updated 2026-03-23)
+### Step 5 ACC — IN PROGRESS
 
-`docs/plans/step5_acc_plan.md` — full 5-phase plan. **Key design decisions:**
+`docs/plans/step5_acc_plan.md` — full 5-phase plan.
 
-**Sensing:** Simulated radar (NOT Unity GT). Unity `Physics.SphereCast` → range + Gaussian noise (σ=0.15m). Doppler model (velocity difference, σ=0.05 m/s) for range rate — NOT differentiated range (would give σ≈6 m/s). `RadarSensor` ABC in `control/radar_sensor.py` — reusable for Step 7 blind spot radars.
+**✅ Phase D DONE** — Full toolset: scoring_registry (14 ACC constants), drive_summary_core (`_build_acc_health_summary`, ACC penalties in Safety + LongitudinalComfort layers, hard-zero override), issue_detector (6 ACC issue types), triage_engine (4 ACC patterns), layer_health (`_score_acc`), acc_pipeline_analysis.py CLI, PhilViz ACC tab (acc_pipeline.py backend + server.py route), analyze_drive_overall Section 16. 19 tests in test_acc_scoring.py. Roll-back contract: acc_health=None for all existing recordings. **0 scoring regressions.**
 
-- Phase A: Simulated radar pipeline (`LeadVehicle.cs`, `AVBridge.cs` +4 radar_ fields, `radar_sensor.py`, 8 HDF5 fields)
-- Phase B: IDM longitudinal controller (`control/acc_controller.py`, ACCParams, EMA filter)
-- Phase C: Safety layer (emergency brake, TTC guard 1.5s, detection-loss hysteresis)
-- Phase D: Full toolset — `scoring_registry` (8 constants), `issue_detector` (4 modes), `triage_engine` (3 patterns), `layer_health` (`_score_acc`), `acc_pipeline_analysis.py` CLI, PhilViz ACC tab, `analyze_drive_overall` Section 15
-- Phase E: Unity E2E — 5 scenarios on highway_65, `acc_highway.yaml` overlay
+**✅ Phase A DONE** — Python-side data pipeline: `control/radar_sensor.py` (ForwardRadarSensor + RadarReading ABC), `data/formats/data_format.py` (8 VehicleState fields), `data/recorder.py` (5 HDF5 registration locations × 8 fields), `av_stack/orchestrator.py` (`_pf_run_acc_sensor` stub + init + VehicleState injection + location 6), `config/av_stack_config.yaml` (acc: block, enabled=false). 23 tests in test_lead_vehicle_data_pipeline.py. **0 regressions.**
+
+**✅ Phase B DONE** — IDM longitudinal controller: `control/acc_controller.py` (ACCState enum, ACCParams + `from_config()`, ACCOutput dataclass, ACCController with full 6-state machine + IDM + bumpless transfer). Orchestrator: `ACCController` init, `_pf_run_acc_sensor` stores `RadarReading`, new `_pf_apply_acc_override` (injected between governor and trajectory planner). Config: 5 new acc keys (cutout_speed_mps, fallback_frames, reengage_frames, disengage_ramp_mps2, detection_range_m). 15 tests in test_acc_controller.py. **1525 passing, 0 regressions.**
+
+**✅ Phase C DONE** — Safety layer: `emergency_stop_latched` wired in `_pf_apply_acc_override` when `output.request_estop=True` (same latch mechanism as OOL events). 16 tests in `test_acc_safety.py` (TTC guard boundaries, EMERGENCY_BRAKE conditions, detection-loss hysteresis). **1538 passing, 0 regressions.**
+
+**✅ Phase E DONE** — Unity integration complete:
+- `unity/.../SpeedProfiler.cs` (new): 5 speed profiles (constant, slower, hard_brake, accel_away, stop_go)
+- `unity/.../TrackWaypointFollower.cs` (new): kinematic arc-distance waypoint follower
+- `unity/.../LeadVehicle.cs` (new): white box mesh + BoxCollider trigger + Initialise()
+- `unity/.../TrackConfig.cs` (modified): `LeadVehicleConfig` class
+- `unity/.../TrackLoader.cs` (modified): lead_vehicle: YAML parser + bug fix (exit condition was too aggressive — `start_distance_m`, `speed_mps` now correctly parsed)
+- `unity/.../CarController.cs` (modified): +4 `radar_fwd_*` fields in VehicleState
+- `unity/.../AVBridge.cs` (modified): `SpawnLeadVehicle()` + `ComputeForwardRadar()` (SphereCast + Box-Muller noise + Doppler range-rate + inverse-square SNR)
+- `unity/.../RoadGenerator.cs` (modified): `public TrackConfig ActiveTrackConfig => activeTrackConfig` accessor
+- `config/acc_highway.yaml` + `config/acc_autobahn.yaml` + `config/acc_hill_highway.yaml` (new)
+- `tracks/scenarios/` (new): 11 scenario YAMLs (H2–H8, A1–A2, G1–G2)
+- `av_stack/orchestrator.py` (modified): `_load_reference_entry_track_profile` now searches `tracks/scenarios/` sub-directory
+
+**➡ NEXT: E2E validation** — build Unity player and run 12 scenarios. Key command:
+```bash
+./start_av_stack.sh --build-unity-player --skip-unity-build-if-clean \
+  --config config/acc_highway.yaml \
+  --track-yaml tracks/scenarios/highway_h2_steady.yml --duration 90
+```
+
+- Phase A: ✅ Python-side data pipeline
+- Phase B: ✅ IDM longitudinal controller
+- Phase C: ✅ Safety layer (emergency brake, TTC guard 1.5s, detection-loss hysteresis)
+- Phase D: ✅ Full toolset (scoring_registry, issue_detector, triage_engine, layer_health, PhilViz, CLI, analyze_drive_overall)
+- Phase E: ✅ Unity integration (lead vehicle + SphereCast radar + scenario YAMLs)
 
 **Promotion gates:** 0 collisions, TTC min ≥ 2.0s, Gap RMSE ≤ 0.5m, Jerk P95 ≤ 4.0 m/s³, radar detection ≥ 95%, lateral regression ≤ 0.5pts.
 **New tests: ~52** (4 new test files).

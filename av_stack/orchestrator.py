@@ -24,6 +24,8 @@ from trajectory.utils import (
     LOCAL_CURVE_REFERENCE_MODE_BOUNDED,
 )
 from control.pid_controller import VehicleController
+from control.acc_controller import ACCController, ACCParams
+from control.radar_sensor import ForwardRadarSensor
 from control.speed_governor import build_speed_governor, SpeedGovernorOutput
 from control.regime_selector import ControlRegime
 from data.recorder import DataRecorder
@@ -945,6 +947,17 @@ class AVStack:
             trajectory_cfg.get('speed_governor', {}).get('stale_speed_hold_frames', 3)
         )
 
+        # ACC sensor + controller (Step 5 — Phase A+B)
+        acc_cfg = config.get('acc', {})
+        self._acc_enabled = bool(acc_cfg.get('enabled', False))
+        self.acc_sensor = ForwardRadarSensor(
+            gap_alpha=float(acc_cfg.get('gap_alpha', 0.30)),
+            rate_alpha=float(acc_cfg.get('rate_alpha', 0.20)),
+        )
+        self.acc_controller = ACCController(ACCParams.from_config(acc_cfg))
+        self._acc_frame_state: dict = {}
+        self._acc_radar_reading = None  # set each frame by _pf_run_acc_sensor
+
         # Data recording (enabled by default for comprehensive logging)
         self.recorder = None
         if record_data:
@@ -1303,12 +1316,15 @@ class AVStack:
         if not track_name:
             return
 
-        track_path = Path(__file__).resolve().parent.parent / "tracks" / f"{track_name}.yml"
+        tracks_root = Path(__file__).resolve().parent.parent / "tracks"
+        track_path = tracks_root / f"{track_name}.yml"
+        # Also search the scenarios/ sub-directory (Step 5 ACC scenario YAMLs).
+        if not track_path.exists():
+            track_path = tracks_root / "scenarios" / f"{track_name}.yml"
         if not track_path.exists():
             logger.warning(
-                "[LOOKAHEAD_ENTRY] Track YAML not found for '%s': %s",
+                "[LOOKAHEAD_ENTRY] Track YAML not found for '%s'",
                 track_name,
-                track_path,
             )
             return
 
@@ -2409,6 +2425,11 @@ class AVStack:
                     0.0, (float(ir) - float(prev_sent)) * 1000.0
                 )
 
+        # ACC sensor pipeline (Step 5 Phase A — inject results into vehicle_state_dict
+        # so VehicleState construction and HDF5 recording pick them up automatically)
+        self._acc_frame_state = self._pf_run_acc_sensor(vehicle_state_dict)
+        vehicle_state_dict.update(self._acc_frame_state)
+
         t_perc0 = time.perf_counter()
         pr = self._pf_run_perception(image, vehicle_state_dict, fv)
         perf_perception_ms = (time.perf_counter() - t_perc0) * 1000.0
@@ -2420,6 +2441,7 @@ class AVStack:
 
         t_plan0 = time.perf_counter()
         gov = self._pf_run_speed_governor(pr, gated, vehicle_state_dict, timestamp)
+        gov = self._pf_apply_acc_override(gov, vehicle_state_dict)  # Phase B: IDM override
         traj = self._pf_plan_trajectory(pr, gated, gov, vehicle_state_dict, timestamp)
         perf_planning_ms = (time.perf_counter() - t_plan0) * 1000.0
 
@@ -6327,6 +6349,96 @@ class AVStack:
             )
         return latency_ctx
 
+    def _pf_run_acc_sensor(self, vehicle_state_dict: dict) -> dict:
+        """
+        Phase A+B — forward radar EMA filter.
+
+        Runs the EMA filter and stores the RadarReading for use by
+        _pf_apply_acc_override (Phase B, runs after speed governor).
+        ACC output fields (acc_active, target_gap, etc.) are placeholder zeros
+        here; _pf_apply_acc_override fills them after the IDM step.
+        When acc.enabled=false, returns sentinel zeros.
+        """
+        if not self._acc_enabled:
+            self._acc_radar_reading = None
+            return {
+                'radar_fwd_detected': 0.0,
+                'radar_fwd_distance_m': 0.0,
+                'radar_fwd_range_rate_mps': 0.0,
+                'radar_fwd_snr': 0.0,
+                'acc_active': 0.0,
+                'acc_target_gap_m': 0.0,
+                'acc_gap_error_m': 0.0,
+                'acc_ttc_s': 999.0,
+            }
+
+        reading = self.acc_sensor.read_frame(vehicle_state_dict)
+        self._acc_radar_reading = reading
+        return {
+            'radar_fwd_detected': 1.0 if reading.detected else 0.0,
+            'radar_fwd_distance_m': reading.gap_m,
+            'radar_fwd_range_rate_mps': reading.range_rate_mps,
+            'radar_fwd_snr': reading.snr,
+            # IDM outputs filled by _pf_apply_acc_override after governor
+            'acc_active': 0.0,
+            'acc_target_gap_m': 0.0,
+            'acc_gap_error_m': 0.0,
+            'acc_ttc_s': 999.0,
+        }
+
+    def _pf_apply_acc_override(self, gov: dict, vehicle_state_dict: dict) -> dict:
+        """
+        Phase B — IDM longitudinal override.
+
+        Called after _pf_run_speed_governor and before _pf_plan_trajectory.
+        When ACC is active it caps gov['adjusted_target_speed'] to the IDM output
+        and writes ACC diagnostic fields back into vehicle_state_dict so they
+        reach both VehicleState construction (location 6) and HDF5 recording.
+
+        When TTC_ESTOP fires (Phase B stub), adjusted_target_speed is set to 0.0;
+        the existing safety layer's brake-to-stop logic handles deceleration.
+        """
+        if not self._acc_enabled or self._acc_radar_reading is None:
+            return gov
+
+        ego_speed = float(vehicle_state_dict.get('speed', 0.0))
+        free_flow_target = float(gov.get('adjusted_target_speed', ego_speed))
+        # Use a fixed frame period (governor does not expose per-frame dt)
+        dt = 1.0 / 30.0
+
+        output = self.acc_controller.compute_target_speed(
+            ego_speed=ego_speed,
+            free_flow_target=free_flow_target,
+            reading=self._acc_radar_reading,
+            dt=dt,
+        )
+
+        # Update vehicle_state_dict so VehicleState construction (loc 6) and HDF5 get values
+        vehicle_state_dict['acc_active'] = output.acc_active
+        vehicle_state_dict['acc_target_gap_m'] = output.target_gap_m
+        vehicle_state_dict['acc_gap_error_m'] = output.gap_error_m
+        vehicle_state_dict['acc_ttc_s'] = output.ttc_s
+
+        # Override governor target speed when ACC or TTC guard is active
+        if output.acc_active > 0.5 or output.request_estop:
+            gov = dict(gov)  # shallow copy — do not mutate the original
+            gov['adjusted_target_speed'] = output.target_speed
+            if output.request_estop:
+                # Phase C: latch emergency stop (same mechanism as OOL events in _pf_apply_safety)
+                self.emergency_stop_latched = True
+                if self.emergency_stop_latched_since_wall_time is None:
+                    self.emergency_stop_latched_since_wall_time = time.time()
+                if not self.emergency_stop_logged or self.emergency_stop_type != 'acc_ttc_violation':
+                    logger.error(
+                        f"[Frame {self.frame_count}] ACC TTC_ESTOP: TTC "
+                        f"{output.ttc_s:.2f}s ≤ threshold — emergency brake latched."
+                    )
+                    self.emergency_stop_logged = True
+                    self.emergency_stop_type = 'acc_ttc_violation'
+                gov['adjusted_target_speed'] = 0.0
+
+        return gov
+
     def _pf_record(
         self,
         image,
@@ -7378,6 +7490,15 @@ class AVStack:
             wheel_steer_angle_actual=float(
                 vehicle_state_dict.get('wheelSteerAngleActual', 0.0)
             ),
+            # ACC / forward radar (Step 5 — injected by _pf_run_acc_sensor above)
+            radar_fwd_detected=float(vehicle_state_dict.get('radar_fwd_detected', 0.0)),
+            radar_fwd_distance_m=float(vehicle_state_dict.get('radar_fwd_distance_m', 0.0)),
+            radar_fwd_range_rate_mps=float(vehicle_state_dict.get('radar_fwd_range_rate_mps', 0.0)),
+            radar_fwd_snr=float(vehicle_state_dict.get('radar_fwd_snr', 0.0)),
+            acc_active=float(vehicle_state_dict.get('acc_active', 0.0)),
+            acc_target_gap_m=float(vehicle_state_dict.get('acc_target_gap_m', 0.0)),
+            acc_gap_error_m=float(vehicle_state_dict.get('acc_gap_error_m', 0.0)),
+            acc_ttc_s=float(vehicle_state_dict.get('acc_ttc_s', 999.0)),
         )
         
         def _latency_float(key: str) -> float:

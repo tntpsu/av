@@ -1,5 +1,5 @@
 """
-Phase A — Unit tests for ForwardRadarSensor and RadarReading.
+Phase A — Unit tests for lead-vehicle data pipeline.
 
 Tests cover:
   - RadarReading dataclass fields and types
@@ -13,10 +13,25 @@ Tests cover:
   - Consecutive frames: EMA tracks toward input
   - Out-of-range SNR (>1.0) clamped correctly
   - Negative gap_raw clamped to 0
+  - VehicleState has 8 ACC/radar fields with correct default sentinels
+  - ACC config block present in av_stack_config.yaml with expected keys
+  - DataRecorder registers all 8 vehicle/acc* and vehicle/radar_fwd* HDF5 datasets
+  - acc_health=None when recording has no acc_active field (roll-back contract)
 """
+import sys
+from pathlib import Path
+
+import h5py
+import numpy as np
 import pytest
+import yaml
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from control.radar_sensor import ForwardRadarSensor, RadarReading
+from data.formats.data_format import VehicleState
 
 
 # ─── Fixtures ─────────────────────────────────────────────────────────────────
@@ -175,3 +190,94 @@ class TestReset:
         # After reset, first detection should cold-start at 50m, not 30m
         r = sensor.read_frame(_detected_raw(distance_m=50.0))
         assert r.gap_m == pytest.approx(50.0)
+
+
+# ── VehicleState ACC fields ───────────────────────────────────────────────────
+
+class TestVehicleStateAccFields:
+    def _make_vs(self):
+        return VehicleState(
+            timestamp=0.0,
+            position=np.zeros(3),
+            rotation=np.array([0, 0, 0, 1]),
+            velocity=np.zeros(3),
+            angular_velocity=np.zeros(3),
+            speed=0.0,
+            steering_angle=0.0,
+            motor_torque=0.0,
+            brake_torque=0.0,
+        )
+
+    def test_all_eight_acc_fields_present(self):
+        vs = self._make_vs()
+        for field in ('radar_fwd_detected', 'radar_fwd_distance_m',
+                      'radar_fwd_range_rate_mps', 'radar_fwd_snr',
+                      'acc_active', 'acc_target_gap_m',
+                      'acc_gap_error_m', 'acc_ttc_s'):
+            assert hasattr(vs, field), f"VehicleState missing field: {field}"
+
+    def test_acc_fields_default_to_sentinels(self):
+        vs = self._make_vs()
+        assert vs.radar_fwd_detected == pytest.approx(0.0)
+        assert vs.acc_active == pytest.approx(0.0)
+        assert vs.acc_ttc_s == pytest.approx(999.0)   # sentinel = no target
+
+
+# ── ACC config block ──────────────────────────────────────────────────────────
+
+class TestAccConfig:
+    def _load_cfg(self):
+        path = Path(__file__).resolve().parents[1] / "config" / "av_stack_config.yaml"
+        with open(path) as f:
+            return yaml.safe_load(f)
+
+    def test_acc_block_present(self):
+        assert 'acc' in self._load_cfg(), "acc: block missing from av_stack_config.yaml"
+
+    def test_acc_enabled_false_by_default(self):
+        assert self._load_cfg()['acc']['enabled'] is False
+
+    def test_acc_required_keys(self):
+        acc = self._load_cfg()['acc']
+        for key in ('gap_alpha', 'rate_alpha', 'target_gap_time_headway_s',
+                    'min_gap_s0_m', 'idm_max_accel_mps2', 'idm_comfortable_decel_mps2'):
+            assert key in acc, f"acc.{key} missing from av_stack_config.yaml"
+
+    def test_acc_gap_alpha_range(self):
+        acc = self._load_cfg()['acc']
+        assert 0.0 < acc['gap_alpha'] < 1.0
+
+
+# ── DataRecorder HDF5 path registration ──────────────────────────────────────
+
+class TestRecorderAccHdf5Paths:
+    def test_all_acc_fields_registered_in_hdf5(self, tmp_path):
+        """DataRecorder.__init__ must create all 8 ACC/radar HDF5 datasets."""
+        from data.recorder import DataRecorder
+        rec = DataRecorder(str(tmp_path), recording_name="acc_hdf5_test")
+        expected_paths = [
+            "vehicle/radar_fwd_detected",
+            "vehicle/radar_fwd_distance_m",
+            "vehicle/radar_fwd_range_rate_mps",
+            "vehicle/radar_fwd_snr",
+            "vehicle/acc_active",
+            "vehicle/acc_target_gap_m",
+            "vehicle/acc_gap_error_m",
+            "vehicle/acc_ttc_s",
+        ]
+        with h5py.File(rec.output_file, 'r') as f:
+            for path in expected_paths:
+                assert path in f, f"HDF5 dataset not registered: {path}"
+
+
+# ── acc.enabled=false → roll-back contract ────────────────────────────────────
+
+class TestAccRollback:
+    def test_acc_health_none_for_recording_without_acc_fields(self, tmp_path):
+        """Nominal recording (no acc_active field) → acc_health=None."""
+        from drive_summary_core import analyze_recording_summary
+        from conftest import make_nominal_recording
+        p = tmp_path / "nominal.h5"
+        make_nominal_recording(p)
+        summary = analyze_recording_summary(str(p))
+        assert summary.get("acc_health") is None

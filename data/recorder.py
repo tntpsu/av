@@ -330,6 +330,15 @@ class DataRecorder:
             maxshape=max_shape,
             dtype=np.float32
         )
+        # ACC / forward radar (Step 5 — Phase A data pipeline)
+        self.h5_file.create_dataset("vehicle/radar_fwd_detected",       shape=(0,), maxshape=max_shape, dtype=np.float32)
+        self.h5_file.create_dataset("vehicle/radar_fwd_distance_m",     shape=(0,), maxshape=max_shape, dtype=np.float32)
+        self.h5_file.create_dataset("vehicle/radar_fwd_range_rate_mps", shape=(0,), maxshape=max_shape, dtype=np.float32)
+        self.h5_file.create_dataset("vehicle/radar_fwd_snr",            shape=(0,), maxshape=max_shape, dtype=np.float32)
+        self.h5_file.create_dataset("vehicle/acc_active",               shape=(0,), maxshape=max_shape, dtype=np.float32)
+        self.h5_file.create_dataset("vehicle/acc_target_gap_m",         shape=(0,), maxshape=max_shape, dtype=np.float32)
+        self.h5_file.create_dataset("vehicle/acc_gap_error_m",          shape=(0,), maxshape=max_shape, dtype=np.float32)
+        self.h5_file.create_dataset("vehicle/acc_ttc_s",                shape=(0,), maxshape=max_shape, dtype=np.float32)
         # Grade/pitch/roll telemetry (Step 3)
         self.h5_file.create_dataset(
             "vehicle/pitch_rad",
@@ -3918,6 +3927,14 @@ class DataRecorder:
         speed_limit_preview_long = []
         speed_limit_preview_long_distances = []
         speed_limit_preview_long_min_distances = []
+        radar_fwd_detected_list = []
+        radar_fwd_distance_m_list = []
+        radar_fwd_range_rate_mps_list = []
+        radar_fwd_snr_list = []
+        acc_active_list = []
+        acc_target_gap_m_list = []
+        acc_gap_error_m_list = []
+        acc_ttc_s_list = []
         pitch_rad_list = []
         roll_rad_list = []
         road_grade_list = []
@@ -4087,6 +4104,14 @@ class DataRecorder:
             speed_limit_preview_long_min_distances.append(
                 getattr(vs, 'speed_limit_preview_long_min_distance', 0.0)
             )
+            radar_fwd_detected_list.append(float(getattr(vs, 'radar_fwd_detected', 0.0)))
+            radar_fwd_distance_m_list.append(float(getattr(vs, 'radar_fwd_distance_m', 0.0)))
+            radar_fwd_range_rate_mps_list.append(float(getattr(vs, 'radar_fwd_range_rate_mps', 0.0)))
+            radar_fwd_snr_list.append(float(getattr(vs, 'radar_fwd_snr', 0.0)))
+            acc_active_list.append(float(getattr(vs, 'acc_active', 0.0)))
+            acc_target_gap_m_list.append(float(getattr(vs, 'acc_target_gap_m', 0.0)))
+            acc_gap_error_m_list.append(float(getattr(vs, 'acc_gap_error_m', 0.0)))
+            acc_ttc_s_list.append(float(getattr(vs, 'acc_ttc_s', 999.0)))
             pitch_rad_list.append(
                 getattr(vs, 'pitch_rad', 0.0)
             )
@@ -4397,6 +4422,9 @@ class DataRecorder:
                        "speed_limit_preview_mid_min_distance", "speed_limit_preview_long",
                        "speed_limit_preview_long_distance",
                        "speed_limit_preview_long_min_distance",
+                       "radar_fwd_detected", "radar_fwd_distance_m",
+                       "radar_fwd_range_rate_mps", "radar_fwd_snr",
+                       "acc_active", "acc_target_gap_m", "acc_gap_error_m", "acc_ttc_s",
                        "pitch_rad", "roll_rad", "road_grade",
                        "wheel_sideways_slip", "wheel_forward_slip", "wheel_contact_force",
                        "wheel_rpm", "wheel_sprung_mass", "wheel_contact_normal_y",
@@ -4454,6 +4482,14 @@ class DataRecorder:
             self.h5_file["vehicle/speed_limit_preview_long_min_distance"][current_size:] = (
                 speed_limit_preview_long_min_distances
             )
+            self.h5_file["vehicle/radar_fwd_detected"][current_size:]       = np.array(radar_fwd_detected_list, dtype=np.float32)
+            self.h5_file["vehicle/radar_fwd_distance_m"][current_size:]     = np.array(radar_fwd_distance_m_list, dtype=np.float32)
+            self.h5_file["vehicle/radar_fwd_range_rate_mps"][current_size:] = np.array(radar_fwd_range_rate_mps_list, dtype=np.float32)
+            self.h5_file["vehicle/radar_fwd_snr"][current_size:]            = np.array(radar_fwd_snr_list, dtype=np.float32)
+            self.h5_file["vehicle/acc_active"][current_size:]               = np.array(acc_active_list, dtype=np.float32)
+            self.h5_file["vehicle/acc_target_gap_m"][current_size:]         = np.array(acc_target_gap_m_list, dtype=np.float32)
+            self.h5_file["vehicle/acc_gap_error_m"][current_size:]          = np.array(acc_gap_error_m_list, dtype=np.float32)
+            self.h5_file["vehicle/acc_ttc_s"][current_size:]                = np.array(acc_ttc_s_list, dtype=np.float32)
             self.h5_file["vehicle/pitch_rad"][current_size:] = np.array(
                 pitch_rad_list, dtype=np.float32
             )

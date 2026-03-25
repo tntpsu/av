@@ -80,7 +80,8 @@ public class RoadGenerator : MonoBehaviour
     private TrackPath trackPath = null;
     public TrackPath TrackPath => trackPath;
     private TrackConfig activeTrackConfig = null;
-    
+    public TrackConfig ActiveTrackConfig => activeTrackConfig;
+
     void OnEnable()
     {
         // Generate in edit mode if enabled
@@ -355,10 +356,14 @@ public class RoadGenerator : MonoBehaviour
         roadMesh.RecalculateBounds();
         
         meshFilter.mesh = roadMesh;
-        
+
         // Add mesh collider
         MeshCollider meshCollider = roadMeshObject.AddComponent<MeshCollider>();
         meshCollider.sharedMesh = roadMesh;
+        // Force synchronous PhysX mesh baking so raycasts and WheelColliders work
+        // immediately at scene start. Without this, Unity bakes asynchronously and
+        // the road collider isn't ready for ~39s, causing the car to sit motionless.
+        Physics.BakeMesh(roadMesh.GetInstanceID(), false);
         meshCollider.material = CreateRoadPhysicMaterial();
         
         // Apply material - create default gray material if none provided
@@ -396,6 +401,7 @@ public class RoadGenerator : MonoBehaviour
         roadMesh.name = "TrackRoadMesh";
         meshFilter.mesh = roadMesh;
         meshCollider.sharedMesh = roadMesh;
+        Physics.BakeMesh(roadMesh.GetInstanceID(), false);
         meshCollider.material = CreateRoadPhysicMaterial();
 
         if (roadMaterial != null)

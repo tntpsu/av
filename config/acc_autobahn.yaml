@@ -1,0 +1,85 @@
+# ACC autobahn overlay — Step 5 ACC scenarios A1 and A2.
+#
+# Inherits autobahn-30 NMPC settings plus enables ACC.
+# Key constraint: ACC + NMPC must coexist without regime interference.
+# At 25 m/s the NMPC controller is active; IDM speed commands flow through
+# the standard speed governor → NMPC receives adjusted_target_speed.
+#
+# Usage:
+#   ./start_av_stack.sh --config config/acc_autobahn.yaml \
+#       --track-yaml tracks/scenarios/autobahn_a1_steady.yml --duration 120
+
+# ── Inherit autobahn NMPC tuning (from mpc_autobahn.yaml) ─────────────────────
+control:
+  lateral:
+    steering_smoothing_alpha: 0.2
+    pp_feedback_gain: 0.0
+    curve_feedforward_gain: 0.0
+    curve_feedforward_threshold: 0.0
+    pp_speed_norm_enabled: true
+    pp_speed_norm_min_scale: 0.50
+    pp_map_ff_gain: 1.0
+    curve_intent_arm_preview_min: 0.001
+    curve_intent_arm_rise_min: 0.0001
+    curve_intent_arm_distance_time_headway_s: 1.5
+    curve_intent_arm_distance_min_m: 10.0
+    curve_intent_arm_distance_max_m: 60.0
+    curve_intent_rearm_exit_hysteresis: 3.0
+    curve_intent_rearm_min_frames: 15
+    curve_intent_max_commit_frames: 120
+    curve_intent_force_straight_hold_frames: 30
+    curve_intent_startup_ignore_frames: 60
+  longitudinal:
+    target_speed: 25.0
+    max_speed: 30.0
+    speed_drag_gain: 0.008
+    accel_target_smoothing_alpha: 0.5
+
+trajectory:
+  target_speed: 25.0
+  curve_phase_on: 0.20
+  curve_phase_off: 0.12
+  curve_phase_commit_on: 0.28
+  curve_phase_commit_min_frames: 3
+  speed_planner:
+    accel_speed_max: 25.0
+    decel_speed_max: 25.0
+  speed_governor:
+    curve_preview_enabled: false
+    curve_cap_use_preview_curvature: false
+  nmpc:
+    nmpc_horizon: 20
+    nmpc_dt: 0.10
+    nmpc_max_accel_mps2: 3.0
+    nmpc_max_decel_mps2: 4.0
+    nmpc_max_steer_rate: 0.30
+    nmpc_v_max: 30.0
+  mpc:
+    mpc_q_lat_terminal_scale: 1.0
+    mpc_v_max: 30.0
+    mpc_bias_enabled: true
+    mpc_bias_alpha: 0.003
+    mpc_bias_kappa_gain: 0.010
+    mpc_bias_max_correction: 0.002
+    mpc_bias_min_speed: 8.0
+
+safety:
+  max_speed: 28.0
+
+lateral_control:
+  steering_smoothing_alpha: 0.2
+
+# ── ACC: enabled for autobahn scenarios ───────────────────────────────────────
+acc:
+  enabled: true
+  gap_alpha: 0.30
+  rate_alpha: 0.20
+  target_gap_time_headway_s: 1.5        # standard T headway
+  min_gap_s0_m: 2.0
+  idm_max_accel_mps2: 2.0
+  idm_comfortable_decel_mps2: 2.5
+  cutout_speed_mps: 5.0
+  fallback_frames: 5
+  reengage_frames: 3
+  disengage_ramp_mps2: 2.0
+  detection_range_m: 60.0

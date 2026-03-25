@@ -1,0 +1,38 @@
+# A1 — High-speed steady following (autobahn_30)
+# Lead at 40m arc-distance, constant 20 m/s. Ego target 25 m/s.
+# Tests ACC + NMPC coexistence: NMPC active at 25 m/s; IDM adjusts target speed.
+# Expected: ACC + NMPC active simultaneously; no regime interference; gap RMSE ≤ 0.5m.
+# base: tracks/autobahn_30.yml
+
+name: autobahn_30
+road_width: 8.0
+lane_line_width: 0.2
+sample_spacing: 1.0
+loop: true
+start_distance: 5.0
+speed_limit_mph: 90.0
+segments:
+  - type: straight
+    length: 600
+    speed_limit_mph: 90.0
+  - type: arc
+    radius: 600
+    angle_deg: 180
+    direction: left
+    speed_limit_mph: 75.0
+  - type: straight
+    length: 600
+    speed_limit_mph: 90.0
+  - type: arc
+    radius: 600
+    angle_deg: 180
+    direction: left
+    speed_limit_mph: 75.0
+
+lead_vehicle:
+  enabled: true
+  start_distance_m: 40.0
+  lane_offset_m: 2.0
+  speed_profile:
+    type: constant
+    speed_mps: 20.0

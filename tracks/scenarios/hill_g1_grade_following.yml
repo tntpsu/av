@@ -1,0 +1,91 @@
+# G1 — Grade following (hill_highway)
+# Lead at 25m arc-distance, constant 10 m/s. Ego target 12 m/s.
+# Tests ACC across uphill (5% grade) and downhill (-5% grade) segments.
+# Grade FF should not fight ACC deceleration; net behavior stable on all grades.
+# Expected: ACC active across full lap; grade FF + ACC coexist; gap RMSE ≤ 0.5m.
+# base: tracks/hill_highway.yml
+
+name: hill_highway
+road_width: 7.2
+lane_line_width: 0.2
+sample_spacing: 1.0
+loop: true
+start_distance: 3.0
+speed_limit_mph: 30.0
+segments:
+  - type: straight
+    length: 50
+    grade: 0.0
+    speed_limit_mph: 30.0
+  - type: straight
+    length: 5
+    grade: 0.025
+    speed_limit_mph: 30.0
+  - type: straight
+    length: 95
+    grade: 0.05
+    speed_limit_mph: 30.0
+  - type: straight
+    length: 5
+    grade: 0.025
+    speed_limit_mph: 30.0
+  - type: arc
+    radius: 100
+    angle_deg: 90
+    direction: left
+    grade: 0.0
+    speed_limit_mph: 25.0
+  - type: straight
+    length: 5
+    grade: -0.025
+    speed_limit_mph: 30.0
+  - type: straight
+    length: 55
+    grade: -0.05
+    speed_limit_mph: 30.0
+  - type: straight
+    length: 5
+    grade: -0.025
+    speed_limit_mph: 30.0
+  - type: arc
+    radius: 100
+    angle_deg: 90
+    direction: left
+    grade: 0.0
+    speed_limit_mph: 25.0
+  - type: straight
+    length: 5
+    grade: -0.02
+    speed_limit_mph: 30.0
+  - type: straight
+    length: 45
+    grade: -0.04
+    speed_limit_mph: 30.0
+  - type: straight
+    length: 5
+    grade: -0.02
+    speed_limit_mph: 30.0
+  - type: arc
+    radius: 100
+    angle_deg: 90
+    direction: left
+    grade: 0.0
+    speed_limit_mph: 25.0
+  - type: straight
+    length: 40
+    grade: 0.0
+    speed_limit_mph: 30.0
+  - type: arc
+    radius: 100
+    angle_deg: 90
+    direction: left
+    grade: 0.0
+    speed_limit_mph: 25.0
+
+lead_vehicle:
+  enabled: true
+  start_distance_m: 25.0
+  lane_offset_m: 1.8
+  speed_profile:
+    type: constant
+    speed_mps: 10.0

@@ -1,6 +1,6 @@
 # AV Stack — Agent Memory: Tasks
 
-**Last updated:** 2026-03-23
+**Last updated:** 2026-03-24
 
 ---
 
@@ -85,6 +85,10 @@ Car now reaches 25 m/s (11.7% overspeed rate at target=25). Speed RMSE 5.3 m/s =
 | Step 4 H-4 | Phase H-4 FAILED (79.0/100) → inference.py REVERTED. Attempted: add map_preview_κ≤0.001 to heading gate ON guard to fix SignalIntegrity -18.8. Failure mode: `_map_preview_curvature_abs` permanently ≥0.00167 on R600 autobahn → gate never re-arms → jitter propagates → RMSE 0.071→0.301m. Correct fix: pass `current_path_kappa` into gate function (deferred — does not block Step 5). Autobahn baseline H-3 97.5/100 stands. | 2026-03-23 |
 | Step 5 plan | `docs/plans/step5_acc_plan.md` — 5-phase Lead Vehicle Following/ACC plan. IDM longitudinal law, safety layer, PhilViz ACC tab, 5 E2E scenarios. ROADMAP updated. | 2026-03-23 |
 | Debug gaps | 4 tooling gaps fixed: issue_detector κ threshold 0.003→0.0005, triage_engine heading_gate_stuck_on_curve pattern, diagnostics.py heading_suppression_rate + map_preview_curvature per-frame, PhilViz exposes control/curvature_preview_abs. | 2026-03-23 |
+| ACC Phase D | Full ACC toolset: scoring_registry (14 constants), drive_summary_core (_build_acc_health_summary + ACC penalties), issue_detector (6 issue types), triage_engine (4 patterns), layer_health (_score_acc), acc_pipeline_analysis.py CLI, PhilViz ACC tab (acc_pipeline.py backend), analyze_drive_overall Section 16. 19 tests. 0 scoring regressions. | 2026-03-23 |
+| ACC Phase A | Python data pipeline: VehicleState +8 fields, DataRecorder 5 HDF5 locations × 8 fields (vehicle/radar_fwd_* + vehicle/acc_*), orchestrator _pf_run_acc_sensor + init + VehicleState injection, config acc: block (enabled=false). test_lead_vehicle_data_pipeline.py extended to 23 tests. 0 regressions. 1403 tests total. | 2026-03-23 |
+| ACC Phase B | IDM longitudinal controller: acc_controller.py (ACCState enum, ACCParams + from_config(), ACCOutput, ACCController — 6-state machine + IDM + bumpless transfer). Orchestrator: ACCController init, _pf_run_acc_sensor stores RadarReading, new _pf_apply_acc_override (between governor and trajectory planner). Config: 5 new acc keys. test_acc_controller.py 15 tests all passing. 1525 tests total, 0 regressions. | 2026-03-24 |
+| ACC Phase C | Safety layer wiring: emergency_stop_latched set in _pf_apply_acc_override when TTC_ESTOP fires (reason='acc_ttc_violation', same latch mechanism as OOL events). test_acc_safety.py 16 tests — TTC guard boundaries (< threshold), EMERGENCY_BRAKE conditions (gap factor, range_rate sign, priority), detection-loss hysteresis (5 frames, 3 re-arm). 1538 tests total, 0 regressions. | 2026-03-24 |
 
 ---
 
@@ -180,3 +184,8 @@ Car now reaches 25 m/s (11.7% overspeed rate at target=25). Speed RMSE 5.3 m/s =
 | — | Step 3D E2E: hill_highway 89.6/100 (Trajectory gate cleared via q_lat auto-derive) | Step 3D | 2026-03-17 |
 | — | Step 4: MPC as primary — curvature guard (κ>0.020→PP), mpc_min_speed base=3.0, per-track overlays, regime mask fixes, 9 registry constants, 17 new tests | Step 4 | 2026-03-17 |
 | — | MPC q_lat auto-derive: `_derive_mpc_weights()` with 0.75-power formula, κ_mpc_active clamping, 8 new tests | Step 4 | 2026-03-17 |
+| — | Step 5 Phase D: ACC scoring toolset (scoring_registry 14 constants, issue_detector 6 ACC types, triage 4 patterns, layer_health, PhilViz ACC tab, CLI) | Step 5 | 2026-03-24 |
+| — | Step 5 Phase A: Python data pipeline (RadarSensor ABC, ForwardRadarSensor, VehicleState +8 fields, HDF5 recorder, orchestrator stub, acc: config block) | Step 5 | 2026-03-24 |
+| — | Step 5 Phase B: IDM controller (ACCState, ACCParams.from_config, ACCOutput, ACCController 6-state machine, orchestrator wire-up with bumpless transfer) | Step 5 | 2026-03-24 |
+| — | Step 5 Phase C: Safety layer (emergency_stop_latched wired from _pf_apply_acc_override, TTC strict-< boundary, detection-loss hysteresis) | Step 5 | 2026-03-24 |
+| — | Step 5 Phase E: Unity integration (SpeedProfiler.cs, TrackWaypointFollower.cs, LeadVehicle.cs, TrackConfig.cs LeadVehicleConfig, TrackLoader.cs parser bugfix, CarController.cs +4 radar fields, AVBridge.cs SpawnLeadVehicle + ComputeForwardRadar, RoadGenerator.cs public ActiveTrackConfig, 3 acc_*.yaml overlays, 11 scenario YAMLs in tracks/scenarios/) | Step 5 | 2026-03-24 |

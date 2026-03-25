@@ -377,6 +377,12 @@ class VehicleState(BaseModel):
     wheelContactNormalY: list[float] = [0.0, 0.0, 0.0, 0.0]
     wheelSteerAngleActual: float = 0.0
 
+    # Forward radar — Step 5 ACC (set by Unity AVBridge.ComputeForwardRadar)
+    radar_fwd_detected: float = 0.0       # 1.0 = target in range, 0.0 = clear
+    radar_fwd_distance_m: float = 0.0     # noisy range to lead vehicle (m)
+    radar_fwd_range_rate_mps: float = 0.0 # Doppler range rate (+closing, m/s)
+    radar_fwd_snr: float = 0.0            # signal-to-noise proxy (1.0 at 30m)
+
 
 class ControlCommand(BaseModel):
     """Control command to Unity."""
