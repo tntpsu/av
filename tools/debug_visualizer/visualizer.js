@@ -1688,6 +1688,46 @@ class Visualizer {
                 html += '</div>';
             }
 
+            const highwayMildCurve = summary.highway_mild_curve_contract || null;
+            if (highwayMildCurve && typeof highwayMildCurve === 'object' && String(highwayMildCurve.availability || '').toLowerCase() === 'available') {
+                const issueDetected = Boolean(highwayMildCurve.issue_detected);
+                const limits = highwayMildCurve.limits || {};
+                const issueColor = issueDetected ? '#ff6b6b' : '#4caf50';
+                const highErrCount = Number(highwayMildCurve.high_error_frame_count || 0);
+                const mildRate = Number(highwayMildCurve.mild_curve_present_on_high_error_rate);
+                const recognizerRate = Number(highwayMildCurve.curve_recognition_inactive_on_high_error_rate);
+                const longLookRate = Number(highwayMildCurve.long_lookahead_on_high_error_rate);
+                const mismatchRate = Number(highwayMildCurve.reference_geometry_mismatch_on_high_error_rate);
+                const underactivatedRate = Number(highwayMildCurve.underactivated_tracking_on_high_error_rate);
+                const poorPerceptionRate = Number(highwayMildCurve.poor_perception_overlap_on_high_error_rate);
+                const transportOverlapRate = Number(highwayMildCurve.transport_fallback_overlap_on_high_error_rate);
+                const mpcFeasibleRate = Number(highwayMildCurve.mpc_feasible_on_high_error_rate);
+                const latErr = highwayMildCurve.lateral_error_abs_m || {};
+                const laneOffset = highwayMildCurve.road_frame_lane_center_offset_abs_m || {};
+                const refCurve = highwayMildCurve.reference_point_curvature_abs || {};
+                const mpcKappa = highwayMildCurve.mpc_kappa_ref_abs || {};
+                const ppLook = highwayMildCurve.pp_lookahead_distance_m || {};
+                const refLook = highwayMildCurve.reference_lookahead_target_m || {};
+                const speedStats = highwayMildCurve.speed_mps || {};
+                html += '<div id="summary-section-highway-mild-curve" style="background: #2a2a2a; padding: 1rem; border-radius: 8px; margin-bottom: 1.5rem; border-left: 4px solid #4a90e2;">';
+                html += '<h3 style="margin-top: 0; color: #4a90e2;">Highway Mild-Curve Contract</h3>';
+                html += '<table style="width: 100%; color: #e0e0e0;">';
+                html += `<tr><td>Issue Detected:</td><td style="text-align: right; color: ${issueColor};">${issueDetected ? 'YES' : 'NO'}</td></tr>`;
+                html += `<tr><td>High-Error Frames:</td><td style="text-align: right;">${highErrCount}${Number.isFinite(Number(highwayMildCurve.high_error_frame_rate)) ? ` (${Number(highwayMildCurve.high_error_frame_rate).toFixed(1)}%)` : ''}</td></tr>`;
+                html += `<tr><td>Mild Curve / Recognizer Inactive:</td><td style="text-align: right;">${Number.isFinite(mildRate) ? mildRate.toFixed(1) + '%' : 'N/A'} / ${Number.isFinite(recognizerRate) ? recognizerRate.toFixed(1) + '%' : 'N/A'}</td></tr>`;
+                html += `<tr><td>Long Lookahead / Small Lane Offset:</td><td style="text-align: right;">${Number.isFinite(longLookRate) ? longLookRate.toFixed(1) + '%' : 'N/A'} / ${Number.isFinite(mismatchRate) ? mismatchRate.toFixed(1) + '%' : 'N/A'}</td></tr>`;
+                html += `<tr><td>Underactivated Tracking Rate:</td><td style="text-align: right; color: ${issueColor};">${Number.isFinite(underactivatedRate) ? `${underactivatedRate.toFixed(1)}% <span style="color:#a0a0a0;">(limit: >=${Number(limits.underactivated_on_high_error_min_pct || 50).toFixed(1)}%)</span>` : 'N/A'}</td></tr>`;
+                html += `<tr><td>Poor Perception / Transport Overlap:</td><td style="text-align: right;">${Number.isFinite(poorPerceptionRate) ? poorPerceptionRate.toFixed(1) + '%' : 'N/A'} / ${Number.isFinite(transportOverlapRate) ? transportOverlapRate.toFixed(1) + '%' : 'N/A'}</td></tr>`;
+                html += `<tr><td>MPC Feasible On High Error:</td><td style="text-align: right;">${Number.isFinite(mpcFeasibleRate) ? mpcFeasibleRate.toFixed(1) + '%' : 'N/A'}</td></tr>`;
+                html += `<tr><td>Curve Intent / Local State Mode:</td><td style="text-align: right;">${this.escapeHtml(String(highwayMildCurve.curve_intent_state_mode_on_high_error || 'N/A'))} / ${this.escapeHtml(String(highwayMildCurve.curve_local_state_mode_on_high_error || 'N/A'))}</td></tr>`;
+                html += `<tr><td>Error / Lane Offset (P50-P95):</td><td style="text-align: right;">${Number.isFinite(Number(latErr.p50)) ? Number(latErr.p50).toFixed(3) : 'N/A'}-${Number.isFinite(Number(latErr.p95)) ? Number(latErr.p95).toFixed(3) : 'N/A'} m / ${Number.isFinite(Number(laneOffset.p50)) ? Number(laneOffset.p50).toFixed(3) : 'N/A'}-${Number.isFinite(Number(laneOffset.p95)) ? Number(laneOffset.p95).toFixed(3) : 'N/A'} m</td></tr>`;
+                html += `<tr><td>Ref κ / MPC κ (P50):</td><td style="text-align: right;">${Number.isFinite(Number(refCurve.p50)) ? Number(refCurve.p50).toFixed(4) : 'N/A'} / ${Number.isFinite(Number(mpcKappa.p50)) ? Number(mpcKappa.p50).toFixed(4) : 'N/A'}</td></tr>`;
+                html += `<tr><td>PP Lookahead / Ref Lookahead (P50):</td><td style="text-align: right;">${Number.isFinite(Number(ppLook.p50)) ? Number(ppLook.p50).toFixed(2) + ' m' : 'N/A'} / ${Number.isFinite(Number(refLook.p50)) ? Number(refLook.p50).toFixed(2) + ' m' : 'N/A'}</td></tr>`;
+                html += `<tr><td>Speed (P50):</td><td style="text-align: right;">${Number.isFinite(Number(speedStats.p50)) ? Number(speedStats.p50).toFixed(2) + ' m/s' : 'N/A'}</td></tr>`;
+                html += '</table>';
+                html += '</div>';
+            }
+
             const contractHealth = summary.curvature_contract_health || null;
             const firstFaultChain = summary.first_fault_chain || null;
             if (contractHealth && typeof contractHealth === 'object') {

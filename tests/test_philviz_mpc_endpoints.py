@@ -174,6 +174,43 @@ def test_triage_mpc_patterns_skip_pp(pp_only_recording):
     assert len(mpc_patterns) == 0, f"PP-only recording should have no MPC patterns, got: {mpc_patterns}"
 
 
+def test_triage_detects_highway_mild_curve_underactivation(tmp_path):
+    import sys, os
+    import h5py
+    import numpy as np
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'tools', 'debug_visualizer'))
+    from backend.triage_engine import TriageEngine
+
+    recording = tmp_path / "triage_mild_curve_underactivation.h5"
+    n = 24
+    t = np.linspace(0.0, 2.3, n)
+    lat_err = np.zeros(n, dtype=np.float32)
+    lat_err[8:18] = 0.86
+    ref_curv = np.zeros(n, dtype=np.float32)
+    ref_curv[8:18] = 0.002
+
+    with h5py.File(recording, "w") as f:
+        f.create_dataset("vehicle/timestamps", data=t)
+        f.create_dataset("control/steering", data=np.zeros(n, dtype=np.float32))
+        f.create_dataset("control/lateral_error", data=lat_err)
+        f.create_dataset("control/pp_lookahead_distance", data=np.full(n, 9.4, dtype=np.float32))
+        f.create_dataset("control/reference_lookahead_target", data=np.full(n, 14.3, dtype=np.float32))
+        f.create_dataset("trajectory/reference_point_curvature", data=ref_curv)
+        f.create_dataset("vehicle/road_frame_lane_center_offset", data=np.full(n, 0.04, dtype=np.float32))
+        f.create_dataset("perception/confidence", data=np.ones(n, dtype=np.float32))
+        f.create_dataset("perception/num_lanes_detected", data=np.full(n, 2, dtype=np.int8))
+        f.create_dataset("control/curve_intent_state", data=np.array([b"STRAIGHT"] * n, dtype="S16"))
+        f.create_dataset("control/curve_local_state", data=np.array([b"STRAIGHT"] * n, dtype="S16"))
+        f.create_dataset("control/sync_packet_fallback_active", data=np.zeros(n, dtype=np.int8))
+
+    engine = TriageEngine(recording)
+    result = engine.generate_triage()
+    pattern_ids = [m["pattern_id"] for m in result["matched_patterns"]]
+    assert "highway_mild_curve_underactivation" in pattern_ids, (
+        f"Expected highway_mild_curve_underactivation pattern, got: {pattern_ids}"
+    )
+
+
 # ── Test 5: Layer health MPC flags ──────────────────────────────────────
 
 def test_layer_health_mpc_flags(mpc_fallback_recording):

@@ -78,6 +78,7 @@ def build_causal_timeline(issues: List[Dict], failure_frame: Optional[int] = Non
         "steering_limiter_dominant": "control",
         "straight_sign_mismatch": "control",
         "trajectory_suppressed_curve_entry": "trajectory",
+        "highway_mild_curve_underactivation": "trajectory",
         "speed_exceeded_feasible": "control",
         "mpc_infeasible": "control",
         "mpc_solve_slow": "control",
@@ -858,7 +859,145 @@ def detect_issues(recording_path: Path, analyze_to_failure: bool = False) -> Dic
                                     "description": f"High lateral error: {lateral_error_abs[frame_idx]:.3f}m (perception-based{' - car actually out of lane' if is_actual_out_of_lane else ' - may be perception error'})",
                                     "error_value": float(lateral_error_abs[frame_idx])
                                 })
-            
+
+            # 3.5 DETECT MILD-CURVE UNDER-ACTIVATION (reference-geometry issue)
+            if (
+                "control/lateral_error" in f
+                and "trajectory/reference_point_curvature" in f
+                and "vehicle/road_frame_lane_center_offset" in f
+                and "control/pp_lookahead_distance" in f
+                and "control/curve_intent_state" in f
+                and "control/curve_local_state" in f
+            ):
+                lat_err = np.abs(np.array(f["control/lateral_error"][:num_frames], dtype=np.float64))
+                ref_curv = np.abs(np.array(f["trajectory/reference_point_curvature"][:num_frames], dtype=np.float64))
+                lane_offset = np.abs(np.array(f["vehicle/road_frame_lane_center_offset"][:num_frames], dtype=np.float64))
+                pp_lookahead = np.array(f["control/pp_lookahead_distance"][:num_frames], dtype=np.float64)
+                ref_lookahead = (
+                    np.array(f["control/reference_lookahead_target"][:num_frames], dtype=np.float64)
+                    if "control/reference_lookahead_target" in f
+                    else np.full(num_frames, np.nan, dtype=np.float64)
+                )
+                curve_intent_state = [
+                    s.decode("utf-8", errors="ignore").strip().upper() if isinstance(s, (bytes, bytearray, np.bytes_)) else str(s).strip().upper()
+                    for s in f["control/curve_intent_state"][:num_frames]
+                ]
+                curve_local_state = [
+                    s.decode("utf-8", errors="ignore").strip().upper() if isinstance(s, (bytes, bytearray, np.bytes_)) else str(s).strip().upper()
+                    for s in f["control/curve_local_state"][:num_frames]
+                ]
+                sync_fallback = (
+                    np.array(f["control/sync_packet_fallback_active"][:num_frames], dtype=np.float64)
+                    if "control/sync_packet_fallback_active" in f
+                    else np.zeros(num_frames, dtype=np.float64)
+                )
+                perception_conf = (
+                    np.array(f["perception/confidence"][:num_frames], dtype=np.float64)
+                    if "perception/confidence" in f
+                    else np.full(num_frames, 1.0, dtype=np.float64)
+                )
+                num_lanes = (
+                    np.array(f["perception/num_lanes_detected"][:num_frames], dtype=np.float64)
+                    if "perception/num_lanes_detected" in f
+                    else np.full(num_frames, 2.0, dtype=np.float64)
+                )
+
+                mild_curve = (ref_curv >= 0.0015) & (ref_curv <= 0.0035)
+                high_error = lat_err >= 0.5
+                small_lane_offset = lane_offset <= 0.12
+                recognizer_inactive = np.array(
+                    [
+                        (curve_intent_state[i] not in {"ENTRY", "COMMIT"})
+                        and (curve_local_state[i] not in {"ENTRY", "COMMIT"})
+                        for i in range(num_frames)
+                    ],
+                    dtype=bool,
+                )
+                long_lookahead = (pp_lookahead >= 8.0) | (ref_lookahead >= 12.0)
+                good_perception = (perception_conf >= 0.5) & (num_lanes >= 2.0)
+                clean_transport = sync_fallback <= 0.5
+                underactivated = (
+                    high_error
+                    & mild_curve
+                    & recognizer_inactive
+                    & long_lookahead
+                    & small_lane_offset
+                    & good_perception
+                    & clean_transport
+                )
+
+                min_event_len = 5
+                event_start = None
+                run_len = 0
+                def _finite_percentile(values, pct, default=0.0):
+                    arr = np.asarray(values, dtype=np.float64).reshape(-1)
+                    arr = arr[np.isfinite(arr)]
+                    if arr.size == 0:
+                        return float(default)
+                    return float(np.percentile(arr, pct))
+                for frame_idx, active in enumerate(underactivated):
+                    if active:
+                        if run_len == 0:
+                            event_start = frame_idx
+                        run_len += 1
+                    else:
+                        if run_len >= min_event_len and event_start is not None:
+                            event_end = frame_idx - 1
+                            idx = slice(event_start, frame_idx)
+                            issues.append({
+                                "issue_id": "highway_mild_curve_underactivation",
+                                "frame": int(event_start),
+                                "end_frame": int(event_end),
+                                "type": "highway_mild_curve_underactivation",
+                                "severity": "high" if run_len >= 10 else "medium",
+                                "description": (
+                                    f"Mild curve under-activation for {run_len} frames: "
+                                    f"curve present (|κ| p50={_finite_percentile(ref_curv[idx], 50):.4f}), "
+                                    f"recognizer stayed STRAIGHT, lookahead stayed long "
+                                    f"(PP p50={_finite_percentile(pp_lookahead[idx], 50):.2f}m, "
+                                    f"ref p50={_finite_percentile(ref_lookahead[idx], 50, default=np.nan):.2f}m), "
+                                    f"lane offset stayed small (p95={_finite_percentile(lane_offset[idx], 95):.3f}m)."
+                                ),
+                                "duration": int(run_len),
+                                "deep_link_target": "summary-section-highway-mild-curve",
+                                "focus_id": "diag-focus-highway-mild-curve",
+                                "curve_intent_state_mode": "STRAIGHT",
+                                "curve_local_state_mode": "STRAIGHT",
+                                "reference_point_curvature_p50": _finite_percentile(ref_curv[idx], 50),
+                                "pp_lookahead_distance_p50_m": _finite_percentile(pp_lookahead[idx], 50),
+                                "reference_lookahead_target_p50_m": _finite_percentile(ref_lookahead[idx], 50, default=np.nan),
+                                "lane_center_offset_abs_p95_m": _finite_percentile(lane_offset[idx], 95),
+                            })
+                        event_start = None
+                        run_len = 0
+                if run_len >= min_event_len and event_start is not None:
+                    event_end = int(num_frames - 1)
+                    idx = slice(event_start, num_frames)
+                    issues.append({
+                        "issue_id": "highway_mild_curve_underactivation",
+                        "frame": int(event_start),
+                        "end_frame": event_end,
+                        "type": "highway_mild_curve_underactivation",
+                        "severity": "high" if run_len >= 10 else "medium",
+                        "description": (
+                            f"Mild curve under-activation for {run_len} frames: "
+                            f"curve present (|κ| p50={_finite_percentile(ref_curv[idx], 50):.4f}), "
+                            f"recognizer stayed STRAIGHT, lookahead stayed long "
+                            f"(PP p50={_finite_percentile(pp_lookahead[idx], 50):.2f}m, "
+                            f"ref p50={_finite_percentile(ref_lookahead[idx], 50, default=np.nan):.2f}m), "
+                            f"lane offset stayed small (p95={_finite_percentile(lane_offset[idx], 95):.3f}m)."
+                        ),
+                        "duration": int(run_len),
+                        "deep_link_target": "summary-section-highway-mild-curve",
+                        "focus_id": "diag-focus-highway-mild-curve",
+                        "curve_intent_state_mode": "STRAIGHT",
+                        "curve_local_state_mode": "STRAIGHT",
+                        "reference_point_curvature_p50": _finite_percentile(ref_curv[idx], 50),
+                        "pp_lookahead_distance_p50_m": _finite_percentile(pp_lookahead[idx], 50),
+                        "reference_lookahead_target_p50_m": _finite_percentile(ref_lookahead[idx], 50, default=np.nan),
+                        "lane_center_offset_abs_p95_m": _finite_percentile(lane_offset[idx], 95),
+                    })
+
             # 4. DETECT PERCEPTION FAILURES (<2 lanes detected)
             if has_perception and "perception/num_lanes_detected" in f:
                 num_lanes = np.array(f["perception/num_lanes_detected"][:num_frames])
@@ -2006,4 +2145,3 @@ def detect_issues(recording_path: Path, analyze_to_failure: bool = False) -> Dic
     except Exception as e:
         import traceback
         return {"error": str(e), "traceback": traceback.format_exc()}
-

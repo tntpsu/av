@@ -77,3 +77,43 @@ def test_detects_right_lane_low_visibility(tmp_path: Path) -> None:
     visibility_issues = [i for i in issues if i.get("type") == "right_lane_low_visibility"]
 
     assert len(visibility_issues) == 1
+
+
+def test_detects_highway_mild_curve_underactivation(tmp_path: Path) -> None:
+    recording_path = tmp_path / "issue_mild_curve_underactivation.h5"
+    n_frames = 20
+    timestamps = np.linspace(0.0, 1.9, n_frames)
+    lateral_error = np.zeros(n_frames, dtype=np.float32)
+    lateral_error[6:14] = 0.82
+    ref_curvature = np.zeros(n_frames, dtype=np.float32)
+    ref_curvature[6:14] = 0.002
+
+    with h5py.File(recording_path, "w") as f:
+        f.create_dataset("vehicle/timestamps", data=timestamps)
+        f.create_dataset("control/steering", data=np.zeros(n_frames, dtype=np.float32))
+        f.create_dataset("control/lateral_error", data=lateral_error)
+        f.create_dataset("control/pp_lookahead_distance", data=np.full(n_frames, 9.5, dtype=np.float32))
+        f.create_dataset("control/reference_lookahead_target", data=np.full(n_frames, 14.5, dtype=np.float32))
+        f.create_dataset(
+            "control/curve_intent_state",
+            data=np.array([b"STRAIGHT"] * n_frames, dtype="S16"),
+        )
+        f.create_dataset(
+            "control/curve_local_state",
+            data=np.array([b"STRAIGHT"] * n_frames, dtype="S16"),
+        )
+        f.create_dataset("control/sync_packet_fallback_active", data=np.zeros(n_frames, dtype=np.int8))
+        f.create_dataset("trajectory/reference_point_curvature", data=ref_curvature)
+        f.create_dataset("vehicle/road_frame_lane_center_offset", data=np.full(n_frames, 0.03, dtype=np.float32))
+        f.create_dataset("perception/confidence", data=np.ones(n_frames, dtype=np.float32))
+        f.create_dataset("perception/num_lanes_detected", data=np.full(n_frames, 2, dtype=np.int8))
+        f.create_dataset("perception/left_lane_line_x", data=np.zeros(n_frames, dtype=np.float32))
+
+    issues_data = detect_issues(recording_path)
+    issues = issues_data.get("issues", [])
+    mild_curve_issues = [
+        i for i in issues if i.get("type") == "highway_mild_curve_underactivation"
+    ]
+
+    assert len(mild_curve_issues) == 1
+    assert mild_curve_issues[0]["deep_link_target"] == "summary-section-highway-mild-curve"

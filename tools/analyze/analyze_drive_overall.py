@@ -1178,6 +1178,7 @@ def _print_summary_report(recording_path: Path, summary: Dict, analyze_to_failur
     transport_contract = summary.get("transport_contract", {})
     speed_intent = summary.get("speed_intent", {})
     run_intent = summary.get("run_intent", {})
+    highway_mild_curve_contract = summary.get("highway_mild_curve_contract", {})
     chassis_ground = summary.get("chassis_ground", {})
     curve_intent_diag = summary.get("curve_intent_diagnostics", {})
     recommendations = summary.get("recommendations", [])
@@ -1395,6 +1396,15 @@ def _print_summary_report(recording_path: Path, summary: Dict, analyze_to_failur
             f"activeRate={(float(local_curve_reference.get('active_rate')) if local_curve_reference.get('active_rate') is not None else float('nan')):.1f}%, "
             f"fallbackRate={(float(local_curve_reference.get('fallback_active_rate')) if local_curve_reference.get('fallback_active_rate') is not None else float('nan')):.1f}%, "
             f"plannerDeltaP50={(float(local_curve_reference.get('planner_delta_p50_m')) if local_curve_reference.get('planner_delta_p50_m') is not None else float('nan')):.2f} m"
+        )
+    if highway_mild_curve_contract.get("availability") == "available":
+        print(
+            "   Highway Mild-Curve Contract: "
+            f"issue={'YES' if highway_mild_curve_contract.get('issue_detected') else 'NO'}, "
+            f"mildOnHighErr={(float(highway_mild_curve_contract.get('mild_curve_present_on_high_error_rate')) if highway_mild_curve_contract.get('mild_curve_present_on_high_error_rate') is not None else float('nan')):.1f}%, "
+            f"recognizerInactive={(float(highway_mild_curve_contract.get('curve_recognition_inactive_on_high_error_rate')) if highway_mild_curve_contract.get('curve_recognition_inactive_on_high_error_rate') is not None else float('nan')):.1f}%, "
+            f"longLook={(float(highway_mild_curve_contract.get('long_lookahead_on_high_error_rate')) if highway_mild_curve_contract.get('long_lookahead_on_high_error_rate') is not None else float('nan')):.1f}%, "
+            f"smallOffset={(float(highway_mild_curve_contract.get('reference_geometry_mismatch_on_high_error_rate')) if highway_mild_curve_contract.get('reference_geometry_mismatch_on_high_error_rate') is not None else float('nan')):.1f}%"
         )
     print()
 
@@ -1878,7 +1888,54 @@ def _print_summary_report(recording_path: Path, summary: Dict, analyze_to_failur
         print("   Run Intent: N/A")
     print()
 
-    print("13. CHASSIS-GROUND HEALTH")
+    print("13. HIGHWAY MILD-CURVE CONTRACT")
+    print("-" * 80)
+    if highway_mild_curve_contract.get("availability") == "available":
+        print(
+            "   Issue Detected: "
+            f"{'YES' if highway_mild_curve_contract.get('issue_detected') else 'NO'}"
+        )
+        print(
+            "   High-Error / Mild-Curve / Underactivated: "
+            f"{int(highway_mild_curve_contract.get('high_error_frame_count') or 0)} frames / "
+            f"{float(highway_mild_curve_contract.get('mild_curve_present_on_high_error_rate') or 0.0):.1f}% / "
+            f"{float(highway_mild_curve_contract.get('underactivated_tracking_on_high_error_rate') or 0.0):.1f}%"
+        )
+        print(
+            "   Recognition Inactive / Long Lookahead / Small Offset: "
+            f"{float(highway_mild_curve_contract.get('curve_recognition_inactive_on_high_error_rate') or 0.0):.1f}% / "
+            f"{float(highway_mild_curve_contract.get('long_lookahead_on_high_error_rate') or 0.0):.1f}% / "
+            f"{float(highway_mild_curve_contract.get('reference_geometry_mismatch_on_high_error_rate') or 0.0):.1f}%"
+        )
+        print(
+            "   Perception/Transport/MPC Overlap: "
+            f"{float(highway_mild_curve_contract.get('poor_perception_overlap_on_high_error_rate') or 0.0):.1f}% / "
+            f"{float(highway_mild_curve_contract.get('transport_fallback_overlap_on_high_error_rate') or 0.0):.1f}% / "
+            f"{float(highway_mild_curve_contract.get('mpc_feasible_on_high_error_rate') or 0.0):.1f}% feasible"
+        )
+        lat_stats = highway_mild_curve_contract.get("lateral_error_abs_m") or {}
+        offset_stats = highway_mild_curve_contract.get("road_frame_lane_center_offset_abs_m") or {}
+        ref_curve_stats = highway_mild_curve_contract.get("reference_point_curvature_abs") or {}
+        kappa_stats = highway_mild_curve_contract.get("mpc_kappa_ref_abs") or {}
+        pp_stats = highway_mild_curve_contract.get("pp_lookahead_distance_m") or {}
+        ref_ld_stats = highway_mild_curve_contract.get("reference_lookahead_target_m") or {}
+        print(
+            "   Error / Lane Offset P50-P95: "
+            f"{float(lat_stats.get('p50') or 0.0):.3f}-{float(lat_stats.get('p95') or 0.0):.3f} m / "
+            f"{float(offset_stats.get('p50') or 0.0):.3f}-{float(offset_stats.get('p95') or 0.0):.3f} m"
+        )
+        print(
+            "   Ref κ / MPC κ / PP LD / Ref LD (P50): "
+            f"{float(ref_curve_stats.get('p50') or 0.0):.4f} / "
+            f"{float(kappa_stats.get('p50') or 0.0):.4f} / "
+            f"{float(pp_stats.get('p50') or 0.0):.2f} / "
+            f"{float(ref_ld_stats.get('p50') or 0.0):.2f}"
+        )
+    else:
+        print("   Highway Mild-Curve Contract: N/A")
+    print()
+
+    print("14. CHASSIS-GROUND HEALTH")
     print("-" * 80)
     chassis_availability = str(chassis_ground.get("availability", "unavailable")).lower()
     if chassis_availability == "available":
@@ -1927,7 +1984,7 @@ def _print_summary_report(recording_path: Path, summary: Dict, analyze_to_failur
 
     contract_health = summary.get("curvature_contract_health", {})
     first_fault_chain = summary.get("first_fault_chain", {})
-    print("14. CURVATURE CONTRACT HEALTH")
+    print("15. CURVATURE CONTRACT HEALTH")
     print("-" * 80)
     if str(contract_health.get("availability", "unavailable")).lower() == "available":
         limits = contract_health.get("limits", {})
@@ -2060,7 +2117,7 @@ def _print_summary_report(recording_path: Path, summary: Dict, analyze_to_failur
             )
     print()
 
-    print("15. SAFETY METRICS")
+    print("16. SAFETY METRICS")
     print("-" * 80)
     print(f"   Out-of-Lane Events: {int(safety.get('out_of_lane_events', 0))}")
     print(f"   Out-of-Lane Time: {safety.get('out_of_lane_time', 0.0):.1f}%")
@@ -2083,7 +2140,7 @@ def _print_summary_report(recording_path: Path, summary: Dict, analyze_to_failur
 
     mpc_health = summary.get("mpc_health")
     if mpc_health and mpc_health.get("mpc_frames", 0) > 0:
-        print("16. MPC HEALTH")
+        print("17. MPC HEALTH")
         print("-" * 80)
         lmpc_n = mpc_health.get('lmpc_frames', mpc_health['mpc_frames'])
         nmpc_n = mpc_health.get('nmpc_frames', 0)
@@ -2156,7 +2213,7 @@ def _print_summary_report(recording_path: Path, summary: Dict, analyze_to_failur
             pass
         print()
 
-    print("17. RECOMMENDATIONS")
+    print("18. RECOMMENDATIONS")
     print("-" * 80)
     if recommendations:
         for idx, recommendation in enumerate(recommendations, 1):
@@ -2168,7 +2225,7 @@ def _print_summary_report(recording_path: Path, summary: Dict, analyze_to_failur
     # Section 15: Grade Impact (only for graded recordings)
     grade_metrics = summary.get("grade_metrics")
     if grade_metrics is not None:
-        print("18. GRADE IMPACT")
+        print("19. GRADE IMPACT")
         print("-" * 80)
         print(f"   Max Grade: {grade_metrics['grade_max_pct']:.1f}%"
               f"    Pitch P95: {grade_metrics['pitch_p95_deg']:.1f}\u00b0")
@@ -2181,7 +2238,7 @@ def _print_summary_report(recording_path: Path, summary: Dict, analyze_to_failur
     # Section 16: ACC Performance (only when ACC was active)
     acc_health = summary.get("acc_health")
     if acc_health is not None:
-        print("19. ACC PERFORMANCE")
+        print("20. ACC PERFORMANCE")
         print("-" * 80)
         print(f"   ACC Active: {acc_health['acc_active_pct']:.1f}% of frames")
         print()

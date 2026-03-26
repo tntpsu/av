@@ -53,6 +53,7 @@ def test_drive_summary_contract_keys(tmp_path: Path) -> None:
         "transport_contract",
         "speed_intent",
         "run_intent",
+        "highway_mild_curve_contract",
         "chassis_ground",
         "curvature_contract_health",
         "first_fault_chain",
@@ -163,6 +164,29 @@ def test_drive_summary_contract_keys(tmp_path: Path) -> None:
         "final_longitudinal_owner_mode",
         "lead_collision_override_rate_pct",
     }.issubset(run_intent.keys())
+    highway_mild_curve_contract = summary.get("highway_mild_curve_contract", {})
+    assert {
+        "schema_version",
+        "availability",
+        "issue_detected",
+        "high_error_frame_count",
+        "mild_curve_present_on_high_error_rate",
+        "curve_recognition_inactive_on_high_error_rate",
+        "long_lookahead_on_high_error_rate",
+        "reference_geometry_mismatch_on_high_error_rate",
+        "underactivated_tracking_on_high_error_rate",
+        "poor_perception_overlap_on_high_error_rate",
+        "transport_fallback_overlap_on_high_error_rate",
+        "mpc_feasible_on_high_error_rate",
+        "curve_intent_state_mode_on_high_error",
+        "curve_local_state_mode_on_high_error",
+        "lateral_error_abs_m",
+        "road_frame_lane_center_offset_abs_m",
+        "reference_point_curvature_abs",
+        "pp_lookahead_distance_m",
+        "reference_lookahead_target_m",
+        "limits",
+    }.issubset(highway_mild_curve_contract.keys())
     cadence = latency_sync.get("cadence", {})
     assert {"availability", "status", "stats_ms", "limits", "pass", "tuning_valid"}.issubset(
         cadence.keys()

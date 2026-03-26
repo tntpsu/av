@@ -1162,6 +1162,263 @@ def _build_run_intent_summary(data: Dict) -> Dict:
     }
 
 
+def _build_highway_mild_curve_contract_summary(data: Dict) -> Dict:
+    limits = {
+        "high_lateral_error_min_m": 0.50,
+        "small_lane_center_offset_max_m": 0.12,
+        "mild_curve_curvature_abs_min": 0.0015,
+        "mild_curve_curvature_abs_max": 0.0035,
+        "long_pp_lookahead_min_m": 8.0,
+        "long_reference_lookahead_min_m": 12.0,
+        "poor_perception_confidence_max": 0.50,
+        "poor_perception_num_lanes_max": 1.5,
+        "transport_fallback_overlap_max_pct": 5.0,
+        "underactivated_on_high_error_min_pct": 50.0,
+        "reference_geometry_mismatch_on_high_error_min_pct": 50.0,
+    }
+    base = {
+        "schema_version": "v1",
+        "issue_detected": False,
+        "high_error_frame_count": 0,
+        "high_error_frame_rate": None,
+        "mild_curve_present_frame_rate": None,
+        "mild_curve_present_on_high_error_rate": None,
+        "curve_recognition_inactive_on_high_error_rate": None,
+        "curve_intent_inactive_on_high_error_rate": None,
+        "curve_local_inactive_on_high_error_rate": None,
+        "long_pp_lookahead_on_high_error_rate": None,
+        "long_reference_lookahead_on_high_error_rate": None,
+        "long_lookahead_on_high_error_rate": None,
+        "reference_geometry_mismatch_on_high_error_rate": None,
+        "underactivated_tracking_on_high_error_rate": None,
+        "transport_fallback_overlap_on_high_error_rate": None,
+        "poor_perception_overlap_on_high_error_rate": None,
+        "mpc_feasible_on_high_error_rate": None,
+        "mpc_fallback_overlap_on_high_error_rate": None,
+        "curve_intent_state_mode_on_high_error": None,
+        "curve_local_state_mode_on_high_error": None,
+        "lateral_error_abs_m": _finite_stats(None),
+        "road_frame_lane_center_offset_abs_m": _finite_stats(None),
+        "reference_point_curvature_abs": _finite_stats(None),
+        "mpc_kappa_ref_abs": _finite_stats(None),
+        "pp_lookahead_distance_m": _finite_stats(None),
+        "reference_lookahead_target_m": _finite_stats(None),
+        "speed_mps": _finite_stats(None),
+        "limits": limits,
+    }
+    unavailable = dict(base)
+    unavailable["availability"] = "unavailable"
+
+    lateral_error = data.get("lateral_error")
+    road_center_offset = data.get("road_frame_lane_center_offset")
+    ref_curvature = data.get("reference_point_curvature")
+    pp_lookahead_distance = data.get("pp_lookahead_distance")
+    curve_intent_states = _decode_string_series(data.get("curve_intent_state"))
+    curve_local_states = _decode_string_series(data.get("curve_local_state"))
+    if any(
+        candidate is None
+        for candidate in (
+            lateral_error,
+            road_center_offset,
+            ref_curvature,
+            pp_lookahead_distance,
+        )
+    ) or not curve_intent_states or not curve_local_states:
+        return unavailable
+
+    n = min(
+        len(lateral_error),
+        len(road_center_offset),
+        len(ref_curvature),
+        len(pp_lookahead_distance),
+        len(curve_intent_states),
+        len(curve_local_states),
+    )
+    optional_series = [
+        data.get("reference_lookahead_target"),
+        data.get("speed"),
+        data.get("sync_packet_fallback_active"),
+        data.get("confidence"),
+        data.get("num_lanes_detected"),
+        data.get("mpc_feasible"),
+        data.get("mpc_fallback_active"),
+        data.get("mpc_kappa_ref"),
+    ]
+    for series in optional_series:
+        if series is not None:
+            n = min(n, len(series))
+    if n <= 0:
+        return unavailable
+
+    lateral_error_arr = np.abs(np.asarray(lateral_error[:n], dtype=np.float64))
+    road_center_offset_arr = np.abs(np.asarray(road_center_offset[:n], dtype=np.float64))
+    ref_curvature_arr = np.abs(np.asarray(ref_curvature[:n], dtype=np.float64))
+    pp_lookahead_arr = np.asarray(pp_lookahead_distance[:n], dtype=np.float64)
+    reference_lookahead_target = data.get("reference_lookahead_target")
+    ref_lookahead_arr = (
+        np.asarray(reference_lookahead_target[:n], dtype=np.float64)
+        if reference_lookahead_target is not None
+        else np.full(n, np.nan, dtype=np.float64)
+    )
+    speed = data.get("speed")
+    speed_arr = (
+        np.asarray(speed[:n], dtype=np.float64)
+        if speed is not None
+        else np.full(n, np.nan, dtype=np.float64)
+    )
+    sync_fallback = data.get("sync_packet_fallback_active")
+    sync_fallback_arr = (
+        np.asarray(sync_fallback[:n], dtype=np.float64)
+        if sync_fallback is not None
+        else np.zeros(n, dtype=np.float64)
+    )
+    perception_conf = data.get("confidence")
+    perception_conf_arr = (
+        np.asarray(perception_conf[:n], dtype=np.float64)
+        if perception_conf is not None
+        else np.full(n, 1.0, dtype=np.float64)
+    )
+    num_lanes = data.get("num_lanes_detected")
+    num_lanes_arr = (
+        np.asarray(num_lanes[:n], dtype=np.float64)
+        if num_lanes is not None
+        else np.full(n, 2.0, dtype=np.float64)
+    )
+    mpc_feasible = data.get("mpc_feasible")
+    mpc_feasible_arr = (
+        np.asarray(mpc_feasible[:n], dtype=np.float64)
+        if mpc_feasible is not None
+        else np.full(n, 1.0, dtype=np.float64)
+    )
+    mpc_fallback = data.get("mpc_fallback_active")
+    mpc_fallback_arr = (
+        np.asarray(mpc_fallback[:n], dtype=np.float64)
+        if mpc_fallback is not None
+        else np.zeros(n, dtype=np.float64)
+    )
+    mpc_kappa_ref = data.get("mpc_kappa_ref")
+    mpc_kappa_ref_arr = (
+        np.asarray(mpc_kappa_ref[:n], dtype=np.float64)
+        if mpc_kappa_ref is not None
+        else np.full(n, np.nan, dtype=np.float64)
+    )
+
+    high_error_mask = lateral_error_arr >= limits["high_lateral_error_min_m"]
+    mild_curve_mask = (
+        (ref_curvature_arr >= limits["mild_curve_curvature_abs_min"])
+        & (ref_curvature_arr <= limits["mild_curve_curvature_abs_max"])
+    )
+    curve_intent_inactive_mask = np.array(
+        [str(v or "").strip().upper() not in {"ENTRY", "COMMIT"} for v in curve_intent_states[:n]],
+        dtype=bool,
+    )
+    curve_local_inactive_mask = np.array(
+        [str(v or "").strip().upper() not in {"ENTRY", "COMMIT"} for v in curve_local_states[:n]],
+        dtype=bool,
+    )
+    recognizer_inactive_mask = curve_intent_inactive_mask & curve_local_inactive_mask
+    long_pp_lookahead_mask = pp_lookahead_arr >= limits["long_pp_lookahead_min_m"]
+    long_reference_lookahead_mask = ref_lookahead_arr >= limits["long_reference_lookahead_min_m"]
+    long_lookahead_mask = long_pp_lookahead_mask | long_reference_lookahead_mask
+    small_lane_offset_mask = road_center_offset_arr <= limits["small_lane_center_offset_max_m"]
+    poor_perception_mask = (
+        (perception_conf_arr < limits["poor_perception_confidence_max"])
+        | (num_lanes_arr <= limits["poor_perception_num_lanes_max"])
+    )
+    transport_fallback_mask = sync_fallback_arr > 0.5
+    mpc_feasible_mask = mpc_feasible_arr > 0.5
+    mpc_fallback_mask = mpc_fallback_arr > 0.5
+    underactivated_mask = (
+        high_error_mask
+        & mild_curve_mask
+        & recognizer_inactive_mask
+        & long_lookahead_mask
+        & small_lane_offset_mask
+    )
+
+    high_error_count = int(np.sum(high_error_mask))
+
+    def _pct(mask: np.ndarray) -> Optional[float]:
+        if mask.size == 0:
+            return None
+        return safe_float(np.mean(mask) * 100.0, default=None)
+
+    def _pct_of_high_error(mask: np.ndarray) -> Optional[float]:
+        if high_error_count <= 0:
+            return None
+        return safe_float(
+            np.sum(mask & high_error_mask) / high_error_count * 100.0,
+            default=None,
+        )
+
+    high_error_idx = np.where(high_error_mask)[0]
+    underactivated_on_high_error_rate = _pct_of_high_error(underactivated_mask)
+    mismatch_on_high_error_rate = _pct_of_high_error(small_lane_offset_mask)
+    transport_overlap_rate = _pct_of_high_error(transport_fallback_mask)
+
+    result = {
+        **base,
+        "availability": "available",
+        "issue_detected": bool(
+            high_error_count >= 10
+            and safe_float(underactivated_on_high_error_rate, default=0.0)
+            >= limits["underactivated_on_high_error_min_pct"]
+            and safe_float(mismatch_on_high_error_rate, default=0.0)
+            >= limits["reference_geometry_mismatch_on_high_error_min_pct"]
+            and safe_float(transport_overlap_rate, default=0.0)
+            <= limits["transport_fallback_overlap_max_pct"]
+        ),
+        "high_error_frame_count": high_error_count,
+        "high_error_frame_rate": _pct(high_error_mask),
+        "mild_curve_present_frame_rate": _pct(mild_curve_mask),
+        "mild_curve_present_on_high_error_rate": _pct_of_high_error(mild_curve_mask),
+        "curve_recognition_inactive_on_high_error_rate": _pct_of_high_error(
+            recognizer_inactive_mask
+        ),
+        "curve_intent_inactive_on_high_error_rate": _pct_of_high_error(
+            curve_intent_inactive_mask
+        ),
+        "curve_local_inactive_on_high_error_rate": _pct_of_high_error(
+            curve_local_inactive_mask
+        ),
+        "long_pp_lookahead_on_high_error_rate": _pct_of_high_error(
+            long_pp_lookahead_mask
+        ),
+        "long_reference_lookahead_on_high_error_rate": _pct_of_high_error(
+            long_reference_lookahead_mask
+        ),
+        "long_lookahead_on_high_error_rate": _pct_of_high_error(long_lookahead_mask),
+        "reference_geometry_mismatch_on_high_error_rate": mismatch_on_high_error_rate,
+        "underactivated_tracking_on_high_error_rate": underactivated_on_high_error_rate,
+        "transport_fallback_overlap_on_high_error_rate": transport_overlap_rate,
+        "poor_perception_overlap_on_high_error_rate": _pct_of_high_error(
+            poor_perception_mask
+        ),
+        "mpc_feasible_on_high_error_rate": _pct_of_high_error(mpc_feasible_mask),
+        "mpc_fallback_overlap_on_high_error_rate": _pct_of_high_error(mpc_fallback_mask),
+        "curve_intent_state_mode_on_high_error": _mode_string(
+            [curve_intent_states[i] for i in high_error_idx],
+            ignore={""},
+        ),
+        "curve_local_state_mode_on_high_error": _mode_string(
+            [curve_local_states[i] for i in high_error_idx],
+            ignore={""},
+        ),
+        "lateral_error_abs_m": _finite_stats(lateral_error_arr[high_error_mask]),
+        "road_frame_lane_center_offset_abs_m": _finite_stats(
+            road_center_offset_arr[high_error_mask]
+        ),
+        "reference_point_curvature_abs": _finite_stats(ref_curvature_arr[high_error_mask]),
+        "mpc_kappa_ref_abs": _finite_stats(np.abs(mpc_kappa_ref_arr[high_error_mask])),
+        "pp_lookahead_distance_m": _finite_stats(pp_lookahead_arr[high_error_mask]),
+        "reference_lookahead_target_m": _finite_stats(
+            ref_lookahead_arr[high_error_mask]
+        ),
+        "speed_mps": _finite_stats(speed_arr[high_error_mask]),
+    }
+    return result
+
+
 def _load_track_curve_windows(track_name: str) -> dict:
     safe_name = "".join(ch for ch in str(track_name or "").strip() if ch.isalnum() or ch in {"_", "-"})
     if not safe_name:
@@ -3292,6 +3549,10 @@ def analyze_recording_summary(
                 np.array(f['control/reference_lookahead_target_pre_entry_guard'][:])
                 if 'control/reference_lookahead_target_pre_entry_guard' in f else None
             )
+            data['reference_lookahead_target'] = (
+                np.array(f['control/reference_lookahead_target'][:])
+                if 'control/reference_lookahead_target' in f else None
+            )
             data['reference_lookahead_owner_nominal_target'] = (
                 np.array(f['control/reference_lookahead_owner_nominal_target'][:])
                 if 'control/reference_lookahead_owner_nominal_target' in f else None
@@ -3444,6 +3705,10 @@ def analyze_recording_summary(
             data['mpc_solve_time_ms'] = (
                 np.array(f['control/mpc_solve_time_ms'][:])
                 if 'control/mpc_solve_time_ms' in f else None
+            )
+            data['mpc_kappa_ref'] = (
+                np.array(f['control/mpc_kappa_ref'][:])
+                if 'control/mpc_kappa_ref' in f else None
             )
             data['mpc_fallback_active'] = (
                 np.array(f['control/mpc_fallback_active'][:])
@@ -7242,6 +7507,7 @@ def analyze_recording_summary(
     transport_contract = _build_transport_contract_summary(data)
     speed_intent = _build_speed_intent_summary(data)
     run_intent = _build_run_intent_summary(data)
+    highway_mild_curve_contract = _build_highway_mild_curve_contract_summary(data)
     if not bool((latency_sync.get("cadence") or {}).get("tuning_valid", False)):
         recommendations.append(
             "Cadence quality is not tuning-valid - do not use this run for parameter decisions."
@@ -7269,6 +7535,10 @@ def analyze_recording_summary(
     if run_intent.get("intent_mismatch_warning"):
         recommendations.append(
             "Run intent differs from road-limit expectation - confirm scenario target and lead-follow mode before interpreting speed behavior."
+        )
+    if highway_mild_curve_contract.get("issue_detected"):
+        recommendations.append(
+            "Mild map-backed curve is present but recognition stays STRAIGHT and lookahead stays long - fix dynamic curve activation and lookahead shaping before steering gain tuning."
         )
     chassis_ground = _build_chassis_ground_summary(data, n_frames=n_frames)
     if chassis_ground.get("health") == "POOR":
@@ -7430,6 +7700,10 @@ def analyze_recording_summary(
         )
     if run_intent.get("intent_mismatch_warning"):
         key_issues.append("Run intent differs from road-speed expectation")
+    if highway_mild_curve_contract.get("issue_detected"):
+        key_issues.append(
+            "Highway mild-curve under-activation (reference geometry mismatch on a map-backed arc)"
+        )
     if chassis_ground.get("health") in {"WARN", "POOR"}:
         contact_rate = chassis_ground.get("contact_rate_pct")
         penetration_max = chassis_ground.get("penetration_max_m")
@@ -7631,6 +7905,7 @@ def analyze_recording_summary(
         "transport_contract": transport_contract,
         "speed_intent": speed_intent,
         "run_intent": run_intent,
+        "highway_mild_curve_contract": highway_mild_curve_contract,
         "chassis_ground": chassis_ground,
         "recording_provenance": data.get("recording_provenance") or {},
         "curvature_contract_health": {

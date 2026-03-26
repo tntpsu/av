@@ -452,6 +452,26 @@ PATTERNS = [
         ),
         "check": lambda m: m.get("floor_rescue_rate", 0.0) > 0.05,
     },
+    {
+        "id": "highway_mild_curve_underactivation",
+        "name": "Highway mild-curve under-activation",
+        "severity": "instability",
+        "category": "Trajectory",
+        "code_pointer": "trajectory/utils.py: curve activation and lookahead regime",
+        "config_lever": "dynamic mild-curve activation / dynamic lookahead shaping",
+        "fix_hint": (
+            "Mild map-backed curve is present while curve recognizer stays STRAIGHT, "
+            "lookahead remains long, and actual lane offset stays small. "
+            "This is a reference-geometry problem, not a transport/perception issue. "
+            "Lift the fix into dynamic speed+curvature+distance-to-curve activation and lookahead shaping."
+        ),
+        "check": lambda m: (
+            m.get("highway_mild_curve_underactivation_rate", 0.0) > 0.02
+            and m.get("highway_mild_curve_reference_geometry_mismatch_on_high_error_rate", 0.0) > 0.50
+            and m.get("highway_mild_curve_transport_fallback_overlap_on_high_error_rate", 1.0) < 0.10
+            and m.get("highway_mild_curve_poor_perception_overlap_on_high_error_rate", 1.0) < 0.10
+        ),
+    },
     # ── ACC patterns (Step 5 — priority-0 when following_too_close) ──────────
     {
         "id": "acc_following_too_close",
@@ -901,6 +921,108 @@ class TriageEngine:
                     m["floor_rescue_rate"] = 0.0
                     m["floor_rescue_count"] = 0
 
+            # Mild-curve under-activation: high control error on a mild map-backed arc,
+            # recognizer stayed STRAIGHT, lookahead stayed long, actual lane offset stayed small.
+            road_center_offset = arr("vehicle/road_frame_lane_center_offset")
+            ref_curvature = arr("trajectory/reference_point_curvature")
+            ref_lookahead = arr("control/reference_lookahead_target")
+            if (
+                lat_err is not None
+                and road_center_offset is not None
+                and ref_curvature is not None
+                and lookahead is not None
+                and "control/curve_intent_state" in f
+                and "control/curve_local_state" in f
+            ):
+                curve_intent_state = np.array([
+                    v.decode("utf-8", errors="ignore").strip().upper()
+                    if isinstance(v, (bytes, bytearray, np.bytes_))
+                    else str(v).strip().upper()
+                    for v in f["control/curve_intent_state"][:]
+                ], dtype=object)
+                curve_local_state = np.array([
+                    v.decode("utf-8", errors="ignore").strip().upper()
+                    if isinstance(v, (bytes, bytearray, np.bytes_))
+                    else str(v).strip().upper()
+                    for v in f["control/curve_local_state"][:]
+                ], dtype=object)
+                sync_fallback = arr("control/sync_packet_fallback_active")
+                perception_conf = arr("perception/confidence")
+                num_lanes = arr("perception/num_lanes_detected")
+
+                min_len = min(
+                    len(lat_err),
+                    len(road_center_offset),
+                    len(ref_curvature),
+                    len(lookahead),
+                    len(curve_intent_state),
+                    len(curve_local_state),
+                )
+                if ref_lookahead is not None:
+                    min_len = min(min_len, len(ref_lookahead))
+                if sync_fallback is not None:
+                    min_len = min(min_len, len(sync_fallback))
+                if perception_conf is not None:
+                    min_len = min(min_len, len(perception_conf))
+                if num_lanes is not None:
+                    min_len = min(min_len, len(num_lanes))
+
+                if min_len > 0:
+                    lat_abs = np.abs(np.asarray(lat_err[:min_len], dtype=float))
+                    road_abs = np.abs(np.asarray(road_center_offset[:min_len], dtype=float))
+                    ref_curv_abs = np.abs(np.asarray(ref_curvature[:min_len], dtype=float))
+                    pp_look = np.asarray(lookahead[:min_len], dtype=float)
+                    ref_look = (
+                        np.asarray(ref_lookahead[:min_len], dtype=float)
+                        if ref_lookahead is not None
+                        else np.full(min_len, np.nan, dtype=float)
+                    )
+                    fallback_arr = (
+                        np.asarray(sync_fallback[:min_len], dtype=float)
+                        if sync_fallback is not None
+                        else np.zeros(min_len, dtype=float)
+                    )
+                    conf_arr = (
+                        np.asarray(perception_conf[:min_len], dtype=float)
+                        if perception_conf is not None
+                        else np.full(min_len, 1.0, dtype=float)
+                    )
+                    lanes_arr = (
+                        np.asarray(num_lanes[:min_len], dtype=float)
+                        if num_lanes is not None
+                        else np.full(min_len, 2.0, dtype=float)
+                    )
+                    high_err = lat_abs >= 0.5
+                    mild_curve = (ref_curv_abs >= 0.0015) & (ref_curv_abs <= 0.0035)
+                    small_offset = road_abs <= 0.12
+                    recognizer_inactive = np.array([
+                        (curve_intent_state[i] not in {"ENTRY", "COMMIT"})
+                        and (curve_local_state[i] not in {"ENTRY", "COMMIT"})
+                        for i in range(min_len)
+                    ], dtype=bool)
+                    long_look = (pp_look >= 8.0) | (ref_look >= 12.0)
+                    poor_perception = (conf_arr < 0.5) | (lanes_arr < 2.0)
+                    fallback_mask = fallback_arr > 0.5
+                    underactivated = high_err & mild_curve & recognizer_inactive & long_look & small_offset
+
+                    high_err_count = int(np.sum(high_err))
+                    m["highway_mild_curve_underactivation_rate"] = float(np.mean(underactivated))
+                    m["highway_mild_curve_reference_geometry_mismatch_on_high_error_rate"] = (
+                        float(np.sum(high_err & small_offset) / max(high_err_count, 1))
+                    )
+                    m["highway_mild_curve_transport_fallback_overlap_on_high_error_rate"] = (
+                        float(np.sum(high_err & fallback_mask) / max(high_err_count, 1))
+                    )
+                    m["highway_mild_curve_poor_perception_overlap_on_high_error_rate"] = (
+                        float(np.sum(high_err & poor_perception) / max(high_err_count, 1))
+                    )
+                    m["highway_mild_curve_recognizer_inactive_on_high_error_rate"] = (
+                        float(np.sum(high_err & recognizer_inactive) / max(high_err_count, 1))
+                    )
+                    m["highway_mild_curve_long_lookahead_on_high_error_rate"] = (
+                        float(np.sum(high_err & long_look) / max(high_err_count, 1))
+                    )
+
             # Speed below target rate
             _speed = arr("vehicle/speed")
             if _speed is not None:
@@ -991,6 +1113,7 @@ class TriageEngine:
             "grade_throttle_saturated": "grade_throttle_sat_rate",
             "mpc_steering_oscillation": "mpc_steering_osc_rate",
             "gt_boundary_corrupt": "gt_boundary_corrupt_frames",
+            "highway_mild_curve_underactivation": "highway_mild_curve_underactivation_rate",
         }
         for pat in PATTERNS:
             try:
