@@ -3067,3 +3067,1365 @@ For each, compare against the current Phase 4 baseline:
 - join-window expiry
 
 6. Cumulative timeout churn may remain nonzero, but direct selected-frame fallback attribution must be accurate enough that control-path loss is no longer inferred indirectly.
+
+
+### Phase 3G: Same-tick packet bundling and coherence-gated selection
+
+Phase 3F improved packet-key completeness, but the validation run showed a more serious contract failure: packets were marked `complete` while the front camera and vehicle state were still separated by roughly `0.63-0.75 s` and `37-45` Unity frames. That is not a fallback problem. It is a packet coherence problem.
+
+This phase fixes that by making the source-side packet key represent one bounded update/capture instant, then refusing to use packets for active control when they are key-complete but time-incoherent.
+
+#### Goal
+
+Keep:
+- source-owned packet keys
+- server-side freshness selection
+- direct join-failure attribution from Phase 3F
+
+Add the missing contract:
+- one packet key must represent one same-tick bundle, not a queued future camera frame
+- active selection must require coherence, not just completeness
+
+#### Root cause to fix
+
+The current Unity-side flow is:
+1. `AVBridge` mints a key and stamps vehicle state immediately.
+2. `CameraCapture` queues that key in `pendingSyncPacketContexts`.
+3. A later camera capture dequeues the oldest context and stamps that old key onto a newer frame.
+
+That makes key matching succeed while temporal coherence fails.
+
+Validation evidence from `/Users/philiptullai/Documents/Coding/av/data/recordings/recording_20260326_111746.h5`:
+- `sync_front_vehicle_time_delta_ms p50/p95/max = 627.3 / 716.8 / 750.1`
+- `sync_front_vehicle_frame_delta p50/p95/max = 37 / 43 / 45`
+- `sync_packet_join_wait_ms p50/p95/max = 659.1 / 749.2 / 784.4`
+- packet join source was still `packet_key`
+
+That is the regression this phase must prevent.
+
+#### Stage 3G.1: Make packet keys represent one bounded source tick
+
+Files:
+- `/Users/philiptullai/Documents/Coding/av/unity/AVSimulation/Assets/Scripts/AVBridge.cs`
+- `/Users/philiptullai/Documents/Coding/av/unity/AVSimulation/Assets/Scripts/CameraCapture.cs`
+- `/Users/philiptullai/Documents/Coding/av/unity/AVSimulation/Assets/Scripts/CarController.cs`
+
+Implementation checklist:
+- [ ] Replace the unbounded FIFO `pendingSyncPacketContexts` handoff with a same-tick packet context contract.
+- [ ] `AVBridge.cs` should mint one packet context per update and attach:
+  - `packet_key`
+  - `owner_update_id`
+  - `owner_unity_frame_count`
+  - `owner_unity_time`
+  - `created_realtime`
+- [ ] `CameraCapture.cs` must not consume an arbitrarily old queued context.
+- [ ] Add a bounded context match rule before using a context for a captured frame:
+  - `abs(captureUnityFrameCount - ownerUnityFrameCount) <= camera_context_max_frame_delta`
+  - `abs(captureUnityTime - ownerUnityTime) <= camera_context_max_time_delta_s`
+- [ ] If the oldest queued context violates the budget, drop it as stale and record a source-side stale-context counter.
+- [ ] If no valid context exists for the current capture, either:
+  - skip stamping a key and record `camera_context_missing_for_capture`, or
+  - explicitly mark the capture as unbundled debug-only
+- [ ] Do not allow a packet key to survive across dozens of later camera frames.
+
+Recommended default budgets for the first pass:
+- `camera_context_max_frame_delta = 2`
+- `camera_context_max_time_delta_s = 0.050`
+
+Required new source diagnostics:
+- [ ] `source_packet_context_queue_depth`
+- [ ] `source_packet_context_dropped_stale_count`
+- [ ] `source_packet_context_missing_count`
+- [ ] `source_packet_context_frame_delta`
+- [ ] `source_packet_context_time_delta_ms`
+
+#### Stage 3G.2: Add bridge-side coherence classification
+
+Files:
+- `/Users/philiptullai/Documents/Coding/av/bridge/server.py`
+- `/Users/philiptullai/Documents/Coding/av/sync_contract.py`
+
+Implementation checklist:
+- [ ] Add explicit coherence reason codes separate from join-failure codes:
+  - `coherent`
+  - `front_vehicle_time_delta_budget_exceeded`
+  - `front_vehicle_frame_delta_budget_exceeded`
+  - `join_wait_budget_exceeded`
+  - `component_age_budget_exceeded`
+  - `missing_component_timestamp`
+- [ ] Compute a `packet_coherence_pass` verdict in `_snapshot_sync_packet(...)`.
+- [ ] Add configurable budgets for active control:
+  - `sync_packet_max_front_vehicle_time_delta_ms`
+  - `sync_packet_max_front_vehicle_frame_delta`
+  - `sync_packet_max_join_wait_ms`
+  - optional `sync_packet_max_component_age_ms`
+- [ ] Preserve the raw diagnostics even when coherence fails.
+- [ ] Distinguish:
+  - packet complete and coherent
+  - packet complete but incoherent
+  - packet fallback / missing component
+
+#### Stage 3G.3: Gate active selection on coherence, not completeness alone
+
+Files:
+- `/Users/philiptullai/Documents/Coding/av/bridge/server.py`
+- `/Users/philiptullai/Documents/Coding/av/bridge/client.py`
+- `/Users/philiptullai/Documents/Coding/av/av_stack/orchestrator.py`
+- `/Users/philiptullai/Documents/Coding/av/config/av_stack_config.yaml`
+- `/Users/philiptullai/Documents/Coding/av/config/acc_highway.yaml`
+
+Implementation checklist:
+- [ ] Update `_select_sync_packet_payload(...)` so active control only treats a packet as selectable when it is both:
+  - fresh
+  - coherent
+- [ ] If a packet is fresh but incoherent, return fallback with an explicit coherence reason, not `complete`.
+- [ ] Add a selection result split:
+  - `complete_coherent`
+  - `complete_incoherent`
+  - `fallback`
+  - `legacy`
+- [ ] Do not silently pass through key-complete but incoherent packets to control.
+- [ ] Record whether fallback was due to:
+  - missing component
+  - join failure
+  - coherence failure
+  - age failure
+
+#### Stage 3G.4: Persist coherence diagnostics into HDF5
+
+Files:
+- `/Users/philiptullai/Documents/Coding/av/data/formats/data_format.py`
+- `/Users/philiptullai/Documents/Coding/av/data/recorder.py`
+- `/Users/philiptullai/Documents/Coding/av/av_stack/orchestrator.py`
+
+Implementation checklist:
+- [ ] Add fields for:
+  - `sync_packet_coherence_pass`
+  - `sync_packet_coherence_reason_code`
+  - `sync_packet_complete_but_incoherent`
+  - `sync_packet_front_vehicle_time_delta_budget_exceeded`
+  - `sync_packet_front_vehicle_frame_delta_budget_exceeded`
+  - `sync_packet_join_wait_budget_exceeded`
+  - `sync_packet_front_age_ms`
+  - `sync_packet_vehicle_age_ms`
+  - `sync_packet_component_age_budget_exceeded`
+  - `sync_packet_source_context_frame_delta`
+  - `sync_packet_source_context_time_delta_ms`
+- [ ] Ensure legacy recordings load with these fields as unavailable, not zero.
+
+#### Stage 3G.5: PhilViz and analyzer changes
+
+Files:
+- `/Users/philiptullai/Documents/Coding/av/tools/drive_summary_core.py`
+- `/Users/philiptullai/Documents/Coding/av/tools/analyze/analyze_drive_overall.py`
+- `/Users/philiptullai/Documents/Coding/av/tools/analyze/verify_recording_run.py`
+- `/Users/philiptullai/Documents/Coding/av/tools/debug_visualizer/server.py`
+- `/Users/philiptullai/Documents/Coding/av/tools/debug_visualizer/visualizer.js`
+- `/Users/philiptullai/Documents/Coding/av/tools/debug_visualizer/backend/triage_engine.py`
+
+Implementation checklist:
+- [ ] Add a `Packet Coherence` summary card showing:
+  - coherence pass rate
+  - complete-but-incoherent rate
+  - coherence reason mode
+  - front↔vehicle dt p50/p95/max
+  - frame-delta p50/p95/max
+  - join-wait p50/p95/max
+  - front age p50/p95
+  - vehicle age p50/p95
+- [ ] Add a timeline row for:
+  - `selected packet coherence pass`
+  - `coherence reason`
+  - `complete but incoherent`
+- [ ] Add a `Source Bundle Contract` card showing:
+  - source context queue depth
+  - stale context drop count
+  - context missing count
+  - source context frame/time delta
+- [ ] Update triage wording so it can say:
+  - `selected packet was complete but incoherent`
+  - `camera frame lagged vehicle state by 43 Unity frames`
+  - instead of only reporting high fallback or timeout counts
+- [ ] Update the transport rollup to stop presenting completeness as sufficient for active control.
+
+#### Stage 3G.6: Tests
+
+Add or update:
+- `/Users/philiptullai/Documents/Coding/av/tests/test_bridge_sync_packets.py`
+- `/Users/philiptullai/Documents/Coding/av/tests/test_bridge_client_sync_packets.py`
+- `/Users/philiptullai/Documents/Coding/av/tests/test_orchestrator_sync_policy.py`
+- `/Users/philiptullai/Documents/Coding/av/tests/test_control_command_hdf5.py`
+- `/Users/philiptullai/Documents/Coding/av/tests/test_drive_summary_contract.py`
+- `/Users/philiptullai/Documents/Coding/av/tests/test_visualizer_transport_parity.py`
+
+Exact test checklist:
+- [ ] same-tick camera + vehicle pair passes coherence budgets
+- [ ] packet key match with excessive front/vehicle time delta is labeled `complete_but_incoherent`
+- [ ] packet key match with excessive frame delta is labeled `complete_but_incoherent`
+- [ ] join-wait budget exceedance is labeled correctly
+- [ ] stale queued packet contexts are dropped at the source and counted
+- [ ] active selector refuses incoherent packets and returns explicit fallback attribution
+- [ ] HDF5 persists coherence verdict and reason fields
+- [ ] CLI analyzer and PhilViz agree on coherence pass/failure counts
+- [ ] legacy recordings still load with coherence fields marked unavailable
+
+#### Live validation order for Phase 3G
+
+1. `/Users/philiptullai/Documents/Coding/av/tracks/scenarios/highway_h2_steady.yml`
+2. `/Users/philiptullai/Documents/Coding/av/tracks/scenarios/highway_h8_curve_catchup.yml`
+3. `/Users/philiptullai/Documents/Coding/av/tracks/scenarios/hill_g1_grade_following.yml`
+
+For each run, compare against:
+- clean pre-3F baseline: `/Users/philiptullai/Documents/Coding/av/data/recordings/recording_20260326_094053.h5`
+- failed 3F run: `/Users/philiptullai/Documents/Coding/av/data/recordings/recording_20260326_111746.h5`
+
+#### Acceptance gates for Phase 3G
+
+1. Active selected packets must satisfy coherence budgets at >= `99%` of selected frames.
+2. `complete_but_incoherent` rate must be near zero in steady-state highway runs.
+3. `front_vehicle_time_delta_ms p95` must be back in the original band, roughly `< 100 ms`.
+4. `front_vehicle_frame_delta p95` must be back in the original band, roughly `<= 4`.
+5. `join_wait_ms p95` must be back below `100 ms`.
+6. Startup lateral error on `highway_h2_steady` must not regress relative to `/Users/philiptullai/Documents/Coding/av/data/recordings/recording_20260326_094053.h5`.
+7. The transport summary must explicitly distinguish:
+   - incomplete fallback
+   - complete but incoherent rejection
+   - coherent selected packet
+
+#### Priority order after this plan lands
+
+1. Implement same-tick source bundling first.
+2. Then add bridge-side coherence gating.
+3. Then rerun `highway_h2_steady`.
+4. Only after coherence is fixed should any startup lateral/controller retuning be considered.
+
+### Phase 3H: Source-side completeness hardening for `vehicle_component_late`
+
+Phase 3G fixed the coherence regression, but the next validation run showed that active control is still losing too many packets because the source-side bundle is not completing reliably enough. The dominant selected fallback mode is now `vehicle_component_late`, not incoherence.
+
+Validation evidence from `/Users/philiptullai/Documents/Coding/av/data/recordings/recording_20260326_125008.h5`:
+- `packet_completeness_rate = 75.2%`
+- `fallback_active_rate = 24.8%`
+- `coherence_pass_rate = 75.2%`
+- `complete_but_incoherent_rate = 0.0%`
+- `join_failure_reason_mode = vehicle_component_late`
+- `join_failure_side_mode = vehicle`
+- `source_key_present_camera_rate = 86.1%`
+- `source_key_present_vehicle_rate = 89.1%`
+
+This phase is about restoring completeness without weakening the coherence gate.
+
+#### Goal
+
+Keep:
+- source-owned packet keys
+- same-tick context selection
+- coherence-gated active selection
+- explicit join-failure attribution
+
+Fix the remaining weak point:
+- too many selected frames still fall back because the keyed vehicle-side component arrives too late or does not get keyed/sent in time
+
+#### Priority and relation to swerving
+
+This is the high-priority step before any deep lateral/swerve cleanup.
+
+Reason:
+1. The Phase 3G rerun removed the startup transport-coherence failure.
+2. The current active path still falls back on roughly one quarter of frames.
+3. Late-drive swerving should not be treated as a clean lateral signal until packet completeness is back near promotion quality.
+
+So the execution order should remain:
+1. fix source-side completeness
+2. rerun `highway_h2_steady`
+3. only then decide whether any remaining swerving is truly lateral/control work
+
+#### Working hypothesis to validate
+
+The current data suggests two distinct remaining losses:
+1. source packet keys are not present on both sides often enough
+2. even when a key exists, the vehicle-side keyed component is still the dominant late side
+
+That means the likely failure surface is not the bridge selector anymore. It is upstream:
+- AVBridge packet lifecycle
+- vehicle-state send timing relative to camera send timing
+- source-side supersession and skipped update behavior
+
+The next phase must prove which of those is dominant instead of treating all misses as generic `vehicle_component_late`.
+
+#### Stage 3H.1: Add a first-class source bundle lifecycle in Unity
+
+Files:
+- `/Users/philiptullai/Documents/Coding/av/unity/AVSimulation/Assets/Scripts/AVBridge.cs`
+- `/Users/philiptullai/Documents/Coding/av/unity/AVSimulation/Assets/Scripts/CameraCapture.cs`
+- `/Users/philiptullai/Documents/Coding/av/unity/AVSimulation/Assets/Scripts/CarController.cs`
+
+Implementation checklist:
+- [ ] Create an explicit source bundle record owned by `AVBridge.cs` for each update that is intended to produce a control packet.
+- [ ] The record should contain:
+  - `packet_key`
+  - `packet_owner_update_id`
+  - `packet_owner_unity_frame_count`
+  - `packet_owner_unity_time`
+  - `bundle_created_realtime`
+  - `bundle_deadline_realtime`
+  - `camera_requested`
+  - `camera_captured`
+  - `camera_enqueued`
+  - `camera_sent`
+  - `vehicle_state_built`
+  - `vehicle_state_sent`
+  - `bundle_closed_reason`
+- [ ] Vehicle state must be stamped from this same bundle record, not from any independent “latest” state.
+- [ ] Camera capture should attach to the same bundle record and update it in-place rather than copying partial context into a lossy queue.
+- [ ] Add explicit source-side close reasons:
+  - `complete`
+  - `camera_missing`
+  - `vehicle_missing`
+  - `camera_late`
+  - `vehicle_late`
+  - `superseded_before_send`
+  - `bundle_deadline_expired`
+- [ ] Keep the number of inflight bundle records bounded and observable.
+
+The intent is to replace “camera and vehicle happened to share a key” with “one source bundle either completed or failed for a known reason.”
+
+#### Stage 3H.2: Make vehicle-side send timing directly attributable
+
+Files:
+- `/Users/philiptullai/Documents/Coding/av/unity/AVSimulation/Assets/Scripts/AVBridge.cs`
+- `/Users/philiptullai/Documents/Coding/av/bridge/server.py`
+- `/Users/philiptullai/Documents/Coding/av/sync_contract.py`
+
+Implementation checklist:
+- [ ] Add source-side timestamps/flags that let the bridge distinguish:
+  - vehicle state was never built for key `K`
+  - vehicle state was built but never sent
+  - vehicle state was sent after bundle deadline
+  - vehicle state was superseded by a newer source bundle before send
+- [ ] Record a source-side vehicle lifecycle reason in the vehicle-state payload.
+- [ ] Mirror the equivalent camera lifecycle reason in the camera upload.
+- [ ] On the bridge, map `vehicle_component_late` into a more exact selected-frame cause using source lifecycle metadata:
+  - `vehicle_not_built`
+  - `vehicle_not_sent`
+  - `vehicle_sent_after_deadline`
+  - `vehicle_superseded_before_send`
+- [ ] Do the same for camera-side misses so the attribution is symmetric.
+
+This is the key debugging improvement: selected fallback must answer “what actually happened upstream for this packet key?” not just “vehicle was late.”
+
+#### Stage 3H.3: Add bounded bundle deadline semantics
+
+Files:
+- `/Users/philiptullai/Documents/Coding/av/unity/AVSimulation/Assets/Scripts/AVBridge.cs`
+- `/Users/philiptullai/Documents/Coding/av/unity/AVSimulation/Assets/Scripts/CameraCapture.cs`
+- `/Users/philiptullai/Documents/Coding/av/bridge/server.py`
+
+Implementation checklist:
+- [ ] Define one source-side bundle deadline budget for active control packets.
+- [ ] A bundle that cannot complete within the deadline must be closed explicitly and counted as incomplete.
+- [ ] Do not allow partially completed bundles to drift indefinitely and later be interpreted as normal timeouts.
+- [ ] Pass the source-side deadline status into the bridge so the selected-frame failure reason reflects the actual producer-side outcome.
+
+Recommended first-pass budgets:
+- `source_bundle_deadline_ms = 100`
+- `source_bundle_max_inflight = 4`
+
+The exact values can be adjusted later, but the contract must be explicit now.
+
+#### Stage 3H.4: Differentiate key-missing from key-present-but-late
+
+Files:
+- `/Users/philiptullai/Documents/Coding/av/bridge/server.py`
+- `/Users/philiptullai/Documents/Coding/av/data/formats/data_format.py`
+- `/Users/philiptullai/Documents/Coding/av/data/recorder.py`
+- `/Users/philiptullai/Documents/Coding/av/av_stack/orchestrator.py`
+
+Implementation checklist:
+- [ ] Split the selected-frame attribution into:
+  - `source_key_missing_camera`
+  - `source_key_missing_vehicle`
+  - `key_present_camera_only`
+  - `key_present_vehicle_only`
+  - `key_present_both_vehicle_late`
+  - `key_present_both_camera_late`
+  - `source_bundle_deadline_expired`
+- [ ] Record those as direct per-frame selected-frame fields, not just summary counters.
+- [ ] Keep the current join-failure reason codes, but add the more exact selected-frame contract reason beside them.
+
+This prevents the current ambiguity where `vehicle_component_late` may still include multiple upstream producer failures.
+
+#### Stage 3H.5: Recorder and HDF5 contract additions
+
+Files:
+- `/Users/philiptullai/Documents/Coding/av/data/formats/data_format.py`
+- `/Users/philiptullai/Documents/Coding/av/data/recorder.py`
+
+Add fields for:
+- [ ] `sync_packet_selected_failure_contract_reason`
+- [ ] `sync_packet_selected_failure_source_stage`
+- [ ] `sync_packet_source_bundle_close_reason`
+- [ ] `sync_packet_source_bundle_deadline_ms`
+- [ ] `sync_packet_source_bundle_age_ms`
+- [ ] `sync_packet_source_bundle_inflight_count`
+- [ ] `sync_packet_source_vehicle_state_built`
+- [ ] `sync_packet_source_vehicle_state_sent`
+- [ ] `sync_packet_source_camera_requested`
+- [ ] `sync_packet_source_camera_sent`
+- [ ] `sync_packet_source_superseded_before_send`
+
+Legacy behavior:
+- [ ] Older recordings must load these as unavailable, not zero.
+
+#### Stage 3H.6: PhilViz and analyzer upgrades
+
+Files:
+- `/Users/philiptullai/Documents/Coding/av/tools/drive_summary_core.py`
+- `/Users/philiptullai/Documents/Coding/av/tools/analyze/analyze_drive_overall.py`
+- `/Users/philiptullai/Documents/Coding/av/tools/analyze/verify_recording_run.py`
+- `/Users/philiptullai/Documents/Coding/av/tools/debug_visualizer/server.py`
+- `/Users/philiptullai/Documents/Coding/av/tools/debug_visualizer/visualizer.js`
+- `/Users/philiptullai/Documents/Coding/av/tools/debug_visualizer/backend/triage_engine.py`
+
+Implementation checklist:
+- [ ] Add a `Source Bundle Completeness` summary card showing:
+  - bundle completion rate
+  - bundle close-reason split
+  - source bundle inflight p50/p95/max
+  - bundle deadline exceed rate
+  - key-present rate by side
+  - selected failure contract reason split
+- [ ] Add timeline rows for:
+  - `source bundle close reason`
+  - `selected failure contract reason`
+  - `vehicle state built/sent`
+  - `camera requested/sent`
+- [ ] Update transport triage wording so it can say:
+  - `selected packet fallback because vehicle state was never sent for the keyed source bundle`
+  - `selected packet fallback because source bundle expired before vehicle send`
+  - `camera was keyed and sent, vehicle was keyed but superseded before send`
+- [ ] Keep the existing coherence views, but treat completeness as a separate contract section rather than merging them.
+
+This is the missing direct-attribution layer for the current fallback tail.
+
+#### Stage 3H.7: Tests
+
+Add or update:
+- `/Users/philiptullai/Documents/Coding/av/tests/test_sync_packet_source_completeness.py`
+- `/Users/philiptullai/Documents/Coding/av/tests/test_bridge_sync_packets.py`
+- `/Users/philiptullai/Documents/Coding/av/tests/test_bridge_client_sync_packets.py`
+- `/Users/philiptullai/Documents/Coding/av/tests/test_orchestrator_sync_policy.py`
+- `/Users/philiptullai/Documents/Coding/av/tests/test_control_command_hdf5.py`
+- `/Users/philiptullai/Documents/Coding/av/tests/test_drive_summary_contract.py`
+- `/Users/philiptullai/Documents/Coding/av/tests/test_visualizer_transport_parity.py`
+
+Exact test checklist:
+- [ ] same source bundle emits keyed camera and keyed vehicle state with the same bundle record
+- [ ] vehicle-not-built case is labeled distinctly from vehicle-sent-late
+- [ ] vehicle-superseded-before-send case is labeled distinctly
+- [ ] bundle deadline expiry is recorded and selected-frame attribution reflects it
+- [ ] key present on both sides but vehicle late is preserved as a distinct class
+- [ ] HDF5 writes the new bundle lifecycle and selected failure reason fields
+- [ ] analyzer and PhilViz agree on bundle close-reason and selected failure splits
+- [ ] legacy recordings still load cleanly with unavailable bundle-contract fields
+
+#### Live validation order for Phase 3H
+
+1. `/Users/philiptullai/Documents/Coding/av/tracks/scenarios/highway_h2_steady.yml`
+2. `/Users/philiptullai/Documents/Coding/av/tracks/scenarios/highway_h8_curve_catchup.yml`
+3. `/Users/philiptullai/Documents/Coding/av/tracks/scenarios/hill_g1_grade_following.yml`
+
+Compare against:
+- coherence-fixed run: `/Users/philiptullai/Documents/Coding/av/data/recordings/recording_20260326_125008.h5`
+- clean ACC baseline: `/Users/philiptullai/Documents/Coding/av/data/recordings/recording_20260326_094053.h5`
+
+#### Acceptance gates for Phase 3H
+
+1. `packet_completeness_rate >= 95%` on the first pass, target `>= 99%`.
+2. `fallback_active_rate <= 5%` on the first pass, target `<= 1%`.
+3. `complete_but_incoherent_rate` remains near zero.
+4. `join_failure_reason_mode` is no longer dominated by generic `vehicle_component_late`; the selected failure contract reason must identify a specific source lifecycle cause.
+5. `source_key_present_camera_rate >= 99%`
+6. `source_key_present_vehicle_rate >= 99%`
+7. Startup lateral error on `highway_h2_steady` stays within the current clean band from `/Users/philiptullai/Documents/Coding/av/data/recordings/recording_20260326_125008.h5`.
+8. No new e-stop or out-of-lane regression is introduced while completeness improves.
+
+#### Execution order for Phase 3H
+
+1. Add source bundle lifecycle instrumentation first.
+2. Add exact selected-frame failure attribution second.
+3. Rerun `highway_h2_steady`.
+4. Only if completeness is materially recovered should any remaining swerving be reclassified as a primary lateral issue.
+
+### Phase 3I: Camera request lifecycle hardening for `camera_not_requested`
+
+The next validation run after the bridge-side attribution patch showed that the transport ambiguity is gone, but the dominant remaining fallback cause shifted upstream again. The selected-frame fallback is no longer a generic bridge join failure. It is now mostly a camera lifecycle failure.
+
+Validation evidence from `/Users/philiptullai/Documents/Coding/av/data/recordings/recording_20260326_151116.h5`:
+- `packet_completeness_rate = 74.3%`
+- `fallback_active_rate = 25.7%`
+- `join_failure_reason_mode = vehicle_component_late`
+- `join_failure_side_mode = vehicle`
+- `selected_failure_contract_reason_mode = camera_not_requested`
+- `selected_failure_source_stage_mode = camera_capture`
+- selected fallback frame counts:
+  - `camera_not_requested = 206`
+  - `camera_not_sent = 30`
+- startup remained healthy:
+  - `startup_abs_lateral_p95 = 0.018 m`
+  - no startup boundary breach
+
+This phase is now the highest-priority transport step before any serious attempt to interpret later highway swerving.
+
+#### Goal
+
+Keep:
+- source-owned packet keys
+- same-tick coherence gating
+- bridge-side fallback attribution
+- active-selection freshness budgets
+
+Fix:
+- source bundles that never issue a front-camera request
+- camera-request bundles that do not progress to camera-send
+- ambiguous open bundles that fall back without a producer-side terminal reason
+
+#### Why this is higher priority than swerving
+
+The current data is still transport-contaminated:
+1. startup is fixed, so the old catastrophic transport failure is gone
+2. fallback is still about one quarter of selected frames
+3. the dominant selected failure is now `camera_not_requested`
+
+That means late-drive swerving is still not cleanly attributable as a primary lateral/controller problem. The next clean question is whether the remaining transport miss is due to:
+- AVBridge not requesting capture for a bundle
+- CameraCapture dropping or never accepting a valid request
+- request-to-capture timing drifting outside the bounded source-side budget
+
+Until that is fixed, swerving should remain secondary.
+
+#### Working hypothesis to validate
+
+The current control path appears to create source bundles more often than `CameraCapture` successfully accepts them into the capture lifecycle.
+
+The likely failure surfaces are:
+1. `AVBridge.cs` creates a source bundle and stamps vehicle state, but the corresponding camera request is not issued for that bundle at all
+2. `CameraCapture.cs` receives a request opportunity, but bounded context selection or queue turnover causes the bundle to be treated as never requested
+3. the camera request was issued too late relative to the bundle deadline, so the selected-frame fallback is correctly showing a camera-stage miss
+
+This phase must separate those cases explicitly.
+
+#### Stage 3I.1: Make camera request issuance an explicit source-bundle state transition
+
+Files:
+- `/Users/philiptullai/Documents/Coding/av/unity/AVSimulation/Assets/Scripts/AVBridge.cs`
+- `/Users/philiptullai/Documents/Coding/av/unity/AVSimulation/Assets/Scripts/CameraCapture.cs`
+
+Implementation checklist:
+- [ ] Move camera-request ownership to a single explicit transition in `AVBridge.cs`.
+- [ ] For every source bundle created for an active control update, record one of:
+  - `camera_request_issued`
+  - `camera_request_skipped`
+  - `camera_request_rejected`
+- [ ] Add source-bundle fields for:
+  - `camera_request_attempted`
+  - `camera_request_accepted`
+  - `camera_request_skipped_reason`
+  - `camera_request_attempt_realtime`
+  - `camera_request_accept_realtime`
+- [ ] `CameraCapture.RegisterSyncPacketContext(...)` must return an acceptance result, not just mutate state implicitly.
+- [ ] If the request is not accepted, close or mark the source bundle with a terminal producer-side reason immediately instead of leaving it effectively open.
+
+The intent is to stop inferring “camera not requested” indirectly from missing downstream fields. The producer should state whether it attempted the request and whether the request entered camera capture state.
+
+#### Stage 3I.2: Differentiate `not requested` from `requested but not accepted`
+
+Files:
+- `/Users/philiptullai/Documents/Coding/av/unity/AVSimulation/Assets/Scripts/CameraCapture.cs`
+- `/Users/philiptullai/Documents/Coding/av/bridge/server.py`
+- `/Users/philiptullai/Documents/Coding/av/sync_contract.py`
+
+Implementation checklist:
+- [ ] Add distinct source-stage contract reasons:
+  - `camera_request_not_attempted`
+  - `camera_request_rejected`
+  - `camera_request_expired_before_capture`
+  - `camera_requested_not_sent`
+- [ ] Keep `camera_not_requested` only for the strict case where `AVBridge` never attempted a request for that source bundle.
+- [ ] Map `camera_request_rejected` to a dedicated selected failure source stage:
+  - `camera_capture`
+- [ ] Map `camera_request_expired_before_capture` to:
+  - `source_bundle`
+  - if the deadline expired before any valid capture could be associated
+- [ ] Ensure the bridge can distinguish:
+  - bundle reached `CameraCapture`
+  - bundle never reached `CameraCapture`
+
+This removes the current ambiguity where `camera_not_requested` may still be covering multiple producer-side failure classes.
+
+#### Stage 3I.3: Add camera request deadline and close semantics
+
+Files:
+- `/Users/philiptullai/Documents/Coding/av/unity/AVSimulation/Assets/Scripts/AVBridge.cs`
+- `/Users/philiptullai/Documents/Coding/av/unity/AVSimulation/Assets/Scripts/CameraCapture.cs`
+
+Implementation checklist:
+- [ ] Define a bounded budget from source-bundle creation to camera-request acceptance.
+- [ ] Define a bounded budget from camera-request acceptance to camera-capture enqueue.
+- [ ] If either budget is exceeded, close the source bundle explicitly with:
+  - `camera_request_deadline_expired`
+  - `camera_capture_deadline_expired`
+- [ ] Do not leave these bundles open and let the bridge reinterpret them later as generic timeout-like misses.
+- [ ] Record deadline exceed counters separately for:
+  - request never attempted
+  - request attempted but not accepted
+  - accepted but not captured
+  - captured but not sent
+
+Recommended first-pass budgets:
+- `camera_request_accept_budget_ms = 33`
+- `camera_capture_enqueue_budget_ms = 50`
+
+The exact thresholds can change later, but the producer-side contract must become explicit now.
+
+#### Stage 3I.4: Make `CameraCapture` acceptance observable and bounded
+
+Files:
+- `/Users/philiptullai/Documents/Coding/av/unity/AVSimulation/Assets/Scripts/CameraCapture.cs`
+
+Implementation checklist:
+- [ ] Change `RegisterSyncPacketContext(...)` so it returns a structured result:
+  - accepted
+  - rejected_queue_full
+  - rejected_out_of_budget
+  - rejected_invalid_context
+- [ ] Record queue depth and rejection reason on the source bundle at registration time.
+- [ ] If a request is rejected because a newer context superseded it, mark:
+  - `camera_request_rejected_reason = superseded_before_capture`
+- [ ] If a request is accepted, record:
+  - acceptance frame/time
+  - queue depth at acceptance
+- [ ] Preserve the current same-tick capture matching logic, but stop treating acceptance as implicit success.
+
+This is the critical instrumentation gap right now. The data tells us camera capture is the dominant failure stage, but not whether the bundle ever entered the camera queue successfully.
+
+#### Stage 3I.5: Add per-frame recorder and HDF5 fields for camera request lifecycle
+
+Files:
+- `/Users/philiptullai/Documents/Coding/av/data/formats/data_format.py`
+- `/Users/philiptullai/Documents/Coding/av/data/recorder.py`
+- `/Users/philiptullai/Documents/Coding/av/av_stack/orchestrator.py`
+
+Add fields for:
+- [ ] `sync_packet_source_camera_request_attempted`
+- [ ] `sync_packet_source_camera_request_accepted`
+- [ ] `sync_packet_source_camera_request_rejected_reason`
+- [ ] `sync_packet_source_camera_request_attempt_age_ms`
+- [ ] `sync_packet_source_camera_request_accept_age_ms`
+- [ ] `sync_packet_source_camera_request_queue_depth`
+- [ ] `sync_packet_selected_failure_contract_reason`
+- [ ] `sync_packet_selected_failure_source_stage`
+
+Compatibility rules:
+- [ ] older recordings must show these as unavailable, not `0`
+- [ ] selected-frame transport summaries must remain readable if only a subset of these fields exists
+
+#### Stage 3I.6: PhilViz and analyzer additions
+
+Files:
+- `/Users/philiptullai/Documents/Coding/av/tools/drive_summary_core.py`
+- `/Users/philiptullai/Documents/Coding/av/tools/analyze/analyze_drive_overall.py`
+- `/Users/philiptullai/Documents/Coding/av/tools/analyze/verify_recording_run.py`
+- `/Users/philiptullai/Documents/Coding/av/tools/debug_visualizer/server.py`
+- `/Users/philiptullai/Documents/Coding/av/tools/debug_visualizer/visualizer.js`
+- `/Users/philiptullai/Documents/Coding/av/tools/debug_visualizer/backend/triage_engine.py`
+
+Implementation checklist:
+- [ ] Add a `Camera Request Contract` card showing:
+  - request attempted rate
+  - request accepted rate
+  - request rejected split
+  - request deadline-expired rate
+  - accepted-but-not-sent rate
+  - queue depth at request p50/p95/max
+- [ ] Add timeline rows for:
+  - `camera request attempted`
+  - `camera request accepted`
+  - `camera request rejected reason`
+  - `source bundle close reason`
+  - `selected failure contract reason`
+- [ ] Update transport rollups so the summary can say:
+  - `selected packet fallback because AVBridge never attempted a camera request for the source bundle`
+  - `selected packet fallback because CameraCapture rejected the source bundle request`
+  - `selected packet fallback because camera request was accepted but no capture was enqueued before bundle deadline`
+- [ ] Keep join-failure fields visible, but demote them below the higher-fidelity camera request contract when both are present.
+
+This is the direct-attribution layer required to avoid another round of reverse-engineering from generic fallback counts.
+
+#### Stage 3I.7: Tests
+
+Add or update:
+- `/Users/philiptullai/Documents/Coding/av/tests/test_bridge_sync_packets.py`
+- `/Users/philiptullai/Documents/Coding/av/tests/test_bridge_client_sync_packets.py`
+- `/Users/philiptullai/Documents/Coding/av/tests/test_orchestrator_sync_policy.py`
+- `/Users/philiptullai/Documents/Coding/av/tests/test_control_command_hdf5.py`
+- `/Users/philiptullai/Documents/Coding/av/tests/test_drive_summary_contract.py`
+- `/Users/philiptullai/Documents/Coding/av/tests/test_visualizer_transport_parity.py`
+
+Exact test checklist:
+- [ ] source bundle with no request attempt is labeled `camera_request_not_attempted`
+- [ ] request attempted but rejected by `CameraCapture` is labeled `camera_request_rejected`
+- [ ] request accepted but capture never enqueued before deadline is labeled `camera_capture_deadline_expired`
+- [ ] request accepted and capture sent completes without fallback
+- [ ] HDF5 persists the new camera request lifecycle fields
+- [ ] analyzer and PhilViz report the same camera request failure splits
+- [ ] legacy recordings still load cleanly with unavailable request-lifecycle fields
+
+#### Live validation order for Phase 3I
+
+1. `/Users/philiptullai/Documents/Coding/av/tracks/scenarios/highway_h2_steady.yml`
+2. `/Users/philiptullai/Documents/Coding/av/tracks/scenarios/highway_h8_curve_catchup.yml`
+3. `/Users/philiptullai/Documents/Coding/av/tracks/scenarios/hill_g1_grade_following.yml`
+
+Compare against:
+- current attributed fallback run: `/Users/philiptullai/Documents/Coding/av/data/recordings/recording_20260326_151116.h5`
+- pre-attribution fallback run: `/Users/philiptullai/Documents/Coding/av/data/recordings/recording_20260326_134012.h5`
+- clean ACC baseline: `/Users/philiptullai/Documents/Coding/av/data/recordings/recording_20260326_094053.h5`
+
+#### Acceptance gates for Phase 3I
+
+1. `selected_failure_contract_reason_mode` is no longer dominated by generic camera-stage ambiguity; it must identify one concrete request-lifecycle cause.
+2. `camera_request_attempted_rate >= 99%` for active control bundles.
+3. `camera_request_accepted_rate >= 99%` once attempted.
+4. `camera_request_rejected_rate <= 1%`.
+5. `packet_completeness_rate >= 95%` on the first pass, target `>= 99%`.
+6. `fallback_active_rate <= 5%` on the first pass, target `<= 1%`.
+7. `complete_but_incoherent_rate` remains near zero.
+8. startup lateral performance on `highway_h2_steady` remains in the current clean band from `/Users/philiptullai/Documents/Coding/av/data/recordings/recording_20260326_151116.h5`.
+
+#### Execution order for Phase 3I
+
+1. Add producer-side camera request attempt/accept/reject states first.
+2. Add explicit camera request deadline and close reasons second.
+3. Persist those fields into HDF5 and surface them in CLI + PhilViz.
+4. Rerun `highway_h2_steady`.
+5. Only if fallback is materially reduced should later swerving be treated as a primary lateral issue.
+
+### Phase 3J: Deterministic camera request issuance and bundle abort semantics
+
+Status after implementation and rerun:
+- Implemented in transport/runtime/recorder/debug tooling.
+- Focused validation passed:
+  - `38 passed`
+- Highway validation run:
+  - `/Users/philiptullai/Documents/Coding/av/data/recordings/recording_20260326_172948.h5`
+- Outcome:
+  - not resolved
+  - `packet_completeness_rate = 71.1%`
+  - `fallback_active_rate = 28.9%`
+  - `selected_failure_contract_reason_mode = camera_request_not_attempted`
+  - `join_failure_reason_mode = vehicle_component_late`
+- Important diagnostic conclusion:
+  - the new abort/disposition fields are recorded correctly on successful packets
+  - but the dominant remaining loss is now front-camera packets entering active selection without any source-bundle request metadata at all
+  - that points to camera captures occurring with no matched/requested source bundle, not just missing abort labeling
+  - the next step therefore has to harden the active-camera admission path, not lateral tuning
+
+Phase 3I is now instrumented correctly. The validation rerun proved that the success path carries the new source-bundle camera request fields, so the remaining attribution is trustworthy.
+
+Validation evidence from `/Users/philiptullai/Documents/Coding/av/data/recordings/recording_20260326_161226.h5`:
+- `packet_completeness_rate = 84.8%`
+- `fallback_active_rate = 15.2%`
+- `selected_failure_contract_reason_mode = camera_request_not_attempted`
+- `selected_failure_source_stage_mode = source_bundle`
+- `join_failure_reason_mode = vehicle_component_late`
+- `complete_coherent` frames now show:
+  - `camera_request_attempted = 100%`
+  - `camera_request_accepted = 100%`
+
+That means the remaining transport loss is no longer a tooling blind spot. The dominant residual miss is now: source bundles exist, vehicle-side data is emitted, but no camera request was ever attempted for those fallback bundles.
+
+This is now the highest-priority transport fix before any serious attempt to analyze later swerving as a primary lateral issue.
+
+#### Goal
+
+Keep:
+- source-owned packet keys
+- same-tick coherence gating
+- server-side freshness selection
+- trustworthy camera request attribution from Phase 3I
+
+Fix:
+- active source bundles that never attempt a camera request
+- bundles that are allowed to emit keyed vehicle state even though camera request issuance was skipped
+- ambiguous open-bundle behavior that still falls through into `vehicle_component_late`
+
+#### Why this is still higher priority than swerving
+
+The current transport state is improved but still not clean enough for lateral diagnosis:
+1. startup is healthy
+2. coherence is healthy
+3. the false teleport/reset path is gone
+4. fallback is still `15.2%`
+5. the dominant fallback contract is now a real producer-side miss: `camera_request_not_attempted`
+
+So the remaining swerving cannot yet be treated as clean lateral evidence. The next clean question is whether AVBridge is:
+- intentionally skipping request issuance,
+- failing to reach the request attempt branch,
+- or sending keyed vehicle bundles before request admission is resolved.
+
+Until that is fixed, swerving remains secondary.
+
+#### Core invariant for Phase 3J
+
+For every active source bundle, exactly one of these must be true before vehicle send:
+1. `camera_request_attempted = true`
+2. bundle is explicitly aborted with a terminal producer-side reason and does **not** enter the active keyed vehicle path
+
+The current failure mode violates that invariant by allowing the transport to observe:
+- keyed vehicle-side bundle state
+- no paired front camera
+- `camera_request_not_attempted`
+
+That must become structurally impossible in the steady-state active path.
+
+#### Stage 3J.1: Make camera request issuance synchronous with bundle creation in AVBridge
+
+Files:
+- `/Users/philiptullai/Documents/Coding/av/unity/AVSimulation/Assets/Scripts/AVBridge.cs`
+- `/Users/philiptullai/Documents/Coding/av/unity/AVSimulation/Assets/Scripts/CameraCapture.cs`
+
+Implementation checklist:
+- [ ] Move bundle creation and camera request attempt into one explicit AVBridge-owned transaction.
+- [ ] In the same update where a source bundle is created, AVBridge must immediately do one of:
+  - `request_attempted_and_accepted`
+  - `request_attempted_and_rejected`
+  - `request_skipped_with_reason`
+- [ ] Stop allowing a bundle to remain in an implicit “camera maybe later” state for active transport.
+- [ ] Record explicit skipped reasons at the point of decision, not later by inference.
+
+Recommended skip/reject taxonomy:
+- `camera_request_skipped_camera_unavailable`
+- `camera_request_skipped_sync_disabled`
+- `camera_request_skipped_budget_exceeded`
+- `camera_request_skipped_bundle_superseded`
+- `camera_request_rejected_queue_full`
+- `camera_request_rejected_invalid_context`
+- `camera_request_rejected_out_of_budget`
+
+#### Stage 3J.2: Gate keyed vehicle emission on camera request admission
+
+Files:
+- `/Users/philiptullai/Documents/Coding/av/unity/AVSimulation/Assets/Scripts/AVBridge.cs`
+- `/Users/philiptullai/Documents/Coding/av/unity/AVSimulation/Assets/Scripts/CarController.cs`
+
+Implementation checklist:
+- [ ] Do not send a keyed active vehicle-state bundle into the bridge unless camera request disposition is already resolved.
+- [ ] If request was not attempted or was rejected, mark the source bundle aborted before vehicle send and use a terminal close reason.
+- [ ] Do not allow the active keyed packet contract to be populated by a vehicle-side component for a bundle that never entered camera request state.
+- [ ] If non-active legacy/debug transport still needs the vehicle sample, keep that path separate from the active sync packet contract.
+
+Required explicit close reasons:
+- `bundle_aborted_camera_request_not_attempted`
+- `bundle_aborted_camera_request_rejected`
+- `bundle_aborted_camera_request_budget_exceeded`
+- `bundle_aborted_camera_capture_missing`
+
+The active path should prefer dropping the bundle explicitly over creating a misleading `vehicle_component_late` timeout.
+
+#### Stage 3J.3: Make CameraCapture admission results authoritative
+
+Files:
+- `/Users/philiptullai/Documents/Coding/av/unity/AVSimulation/Assets/Scripts/CameraCapture.cs`
+
+Implementation checklist:
+- [ ] Keep the structured `RegisterSyncPacketContext(...)` result from Phase 3I.
+- [ ] Extend it to carry an explicit disposition enum used by AVBridge:
+  - `accepted`
+  - `rejected_queue_full`
+  - `rejected_out_of_budget`
+  - `rejected_invalid_context`
+  - `rejected_superseded`
+- [ ] Guarantee AVBridge gets that disposition synchronously in the same update it creates the bundle.
+- [ ] Do not rely on later queue inspection to infer whether a request ever entered camera capture state.
+
+#### Stage 3J.4: Separate aborted bundles from timed-out bundles in the bridge
+
+Files:
+- `/Users/philiptullai/Documents/Coding/av/bridge/server.py`
+- `/Users/philiptullai/Documents/Coding/av/sync_contract.py`
+
+Implementation checklist:
+- [ ] Add selected failure contract reasons for explicit producer aborts:
+  - `bundle_aborted_camera_request_not_attempted`
+  - `bundle_aborted_camera_request_rejected`
+  - `bundle_aborted_camera_request_budget_exceeded`
+- [ ] Keep `packet_timeout` for true join/arrival timeout only.
+- [ ] Map source-aborted bundles to a distinct selected failure stage:
+  - `source_bundle`
+- [ ] Ensure bridge-side `vehicle_component_late` is no longer used for cases where the producer already knew the bundle was invalid before camera request admission.
+
+The goal is to prevent producer-aborted bundles from being misread as bridge join failures.
+
+#### Stage 3J.5: Add source-bundle issuance contract metrics to recorder and PhilViz
+
+Files:
+- `/Users/philiptullai/Documents/Coding/av/data/formats/data_format.py`
+- `/Users/philiptullai/Documents/Coding/av/data/recorder.py`
+- `/Users/philiptullai/Documents/Coding/av/av_stack/orchestrator.py`
+- `/Users/philiptullai/Documents/Coding/av/tools/drive_summary_core.py`
+- `/Users/philiptullai/Documents/Coding/av/tools/analyze/analyze_drive_overall.py`
+- `/Users/philiptullai/Documents/Coding/av/tools/debug_visualizer/server.py`
+- `/Users/philiptullai/Documents/Coding/av/tools/debug_visualizer/visualizer.js`
+
+Add first-class fields for:
+- [ ] `sync_packet_source_camera_request_skipped_reason`
+- [ ] `sync_packet_source_bundle_aborted_before_vehicle_send`
+- [ ] `sync_packet_source_bundle_abort_reason`
+- [ ] `sync_packet_source_bundle_vehicle_send_blocked_by_camera_request`
+- [ ] `sync_packet_source_camera_request_disposition_code`
+- [ ] `sync_packet_source_camera_request_attempt_frame`
+- [ ] `sync_packet_source_camera_request_accept_frame`
+
+PhilViz/CLI additions:
+- [ ] `Camera Request Contract` card:
+  - attempted rate
+  - accepted rate
+  - skipped reason mode
+  - rejected reason mode
+  - aborted-before-vehicle-send rate
+- [ ] `Bundle Abort Contract` card:
+  - abort rate
+  - abort reason split
+  - keyed-vehicle-without-request rate
+- [ ] timeline rows:
+  - camera request disposition
+  - bundle abort reason
+  - vehicle send blocked by camera request
+
+#### Stage 3J.6: Add one hard contract assertion to the active path
+
+Files:
+- `/Users/philiptullai/Documents/Coding/av/unity/AVSimulation/Assets/Scripts/AVBridge.cs`
+- `/Users/philiptullai/Documents/Coding/av/bridge/server.py`
+
+Implementation checklist:
+- [ ] Add one explicit debug assertion/metric:
+  - `keyed_vehicle_without_camera_request_attempt`
+- [ ] This should be zero in steady-state active mode.
+- [ ] Persist and surface it in summary tools even if it only increments on failure.
+
+This is the single best guardrail to stop the current failure mode from silently returning.
+
+#### Tests for Phase 3J
+
+Unity-side behavior tests:
+- [ ] source bundle with accepted request proceeds to keyed vehicle send
+- [ ] source bundle with skipped request aborts before keyed vehicle send
+- [ ] source bundle with rejected request aborts before keyed vehicle send
+- [ ] source bundle with camera capture missing uses explicit abort reason
+
+Bridge tests:
+- [ ] producer-aborted bundle is classified as source-bundle abort, not `packet_timeout`
+- [ ] `vehicle_component_late` is reserved for true arrival/join lateness
+- [ ] keyed vehicle without request attempt triggers contract metric/assertion
+
+Recorder/analyzer tests:
+- [ ] new skipped/abort/disposition fields persist to HDF5
+- [ ] analyzer and PhilViz agree on skipped vs rejected vs aborted counts
+- [ ] legacy recordings still load cleanly with unavailable abort fields
+
+#### Live validation order for Phase 3J
+
+1. `/Users/philiptullai/Documents/Coding/av/tracks/scenarios/highway_h2_steady.yml`
+2. `/Users/philiptullai/Documents/Coding/av/tracks/scenarios/highway_h8_curve_catchup.yml`
+3. `/Users/philiptullai/Documents/Coding/av/tracks/scenarios/hill_g1_grade_following.yml`
+
+Compare against:
+- trusted Phase 3I instrumentation run: `/Users/philiptullai/Documents/Coding/av/data/recordings/recording_20260326_161226.h5`
+- earlier attributed run: `/Users/philiptullai/Documents/Coding/av/data/recordings/recording_20260326_151116.h5`
+- clean ACC ownership baseline: `/Users/philiptullai/Documents/Coding/av/data/recordings/recording_20260326_094053.h5`
+
+#### Acceptance gates for Phase 3J
+
+1. `camera_request_not_attempted` is no longer the dominant selected failure contract mode.
+2. `bundle_aborted_before_vehicle_send_rate` is explicit and low enough to explain any remaining misses.
+3. `keyed_vehicle_without_camera_request_attempt_rate = 0`.
+4. `packet_completeness_rate >= 92%` on the first pass, target `>= 97%`.
+5. `fallback_active_rate <= 8%` on the first pass, target `<= 3%`.
+6. `complete_but_incoherent_rate` remains near zero.
+7. startup lateral performance remains in the clean band from `/Users/philiptullai/Documents/Coding/av/data/recordings/recording_20260326_125008.h5`.
+8. Only after those gates pass should late-drive swerving be reclassified as a likely primary lateral issue.
+
+#### Execution order for Phase 3J
+
+1. Add deterministic request issuance + explicit skip/reject taxonomy in Unity.
+2. Gate keyed vehicle emission on request admission.
+3. Add producer-abort classification in the bridge.
+4. Add recorder + PhilViz + CLI contract surfaces.
+5. Rerun `highway_h2_steady`.
+6. If fallback materially drops, then build the dedicated swerving/lateral deep-dive plan from the cleaned transport run.
+
+### Phase 3K: Active-camera admission gating and debug-only unbundled capture semantics
+
+Status entering Phase 3K:
+- `Phase 3J` is implemented and instrumented.
+- Latest validation run:
+  - `/Users/philiptullai/Documents/Coding/av/data/recordings/recording_20260326_172948.h5`
+- Outcome:
+  - `packet_completeness_rate = 71.1%`
+  - `fallback_active_rate = 28.9%`
+  - `selected_failure_contract_reason_mode = camera_request_not_attempted`
+  - `join_failure_reason_mode = vehicle_component_late`
+- Critical observation from HDF5:
+  - `camera_request_not_attempted` frames show:
+    - `sync_packet_source_bundle_camera_requested = 0`
+    - `sync_packet_source_camera_request_attempted = 0`
+    - `sync_packet_source_camera_request_accepted = 0`
+    - `sync_packet_source_bundle_aborted_before_vehicle_send = 0`
+    - skipped/disposition/abort strings empty
+
+That means the dominant remaining loss is not “aborted bundle classification missing.” It is that front-camera captures are still reaching the active transport path with no admitted source bundle at all. This is higher priority than swerving analysis.
+
+#### Goal
+
+Keep:
+- source-owned packet keys
+- coherence gating
+- server-side freshness selection
+- `Phase 3J` request/abort attribution
+
+Fix:
+- camera captures with no admitted source bundle entering the active packet path
+- fallback packet keys from `/Users/philiptullai/Documents/Coding/av/unity/AVSimulation/Assets/Scripts/CameraCapture.cs` being treated as control-relevant active packets
+- ambiguity between active transport data and debug-only/unbundled capture data
+
+#### Why this is still higher priority than swerving
+
+The transport contract is still too lossy for trustworthy lateral diagnosis:
+1. startup is healthy
+2. coherence is healthy
+3. false teleport/reset is gone
+4. fallback is still `28.9%`
+5. the dominant remaining miss is still a producer-side camera admission problem
+
+Until unmatched camera captures are excluded from the active path, later swerving is still contaminated by transport loss and should not be treated as a primary lateral tuning target.
+
+#### Core invariant for Phase 3K
+
+For active transport, every selected front camera must have exactly one of these states:
+1. paired to an admitted source bundle with `camera_request_attempted = true`
+2. explicitly rejected from the active path and labeled `debug_only_unbundled_capture`
+
+What must become impossible:
+1. front camera enters active join path
+2. no source bundle request metadata exists
+3. bridge later reports `camera_request_not_attempted`
+
+#### Stage 3K.1: Split active capture from unbundled debug capture at the source
+
+Files:
+- `/Users/philiptullai/Documents/Coding/av/unity/AVSimulation/Assets/Scripts/CameraCapture.cs`
+- `/Users/philiptullai/Documents/Coding/av/unity/AVSimulation/Assets/Scripts/AVBridge.cs`
+
+Implementation checklist:
+- [ ] Add an explicit capture classification at enqueue time:
+  - `active_bundled_capture`
+  - `debug_unbundled_capture`
+- [ ] If `SelectSyncPacketContextForCapture(...)` does not return a matched admitted context, do not build an active packet key from `BuildFallbackSyncPacketKey(...)` for the active path.
+- [ ] Keep fallback packet keys only for debug/compatibility capture accounting, not active control transport.
+- [ ] Make the capture item carry:
+  - `active_transport_eligible`
+  - `unbundled_debug_only`
+  - `camera_capture_contract_reason`
+
+Required reasons:
+- `no_source_bundle_context`
+- `source_bundle_context_budget_exceeded`
+- `source_bundle_context_superseded`
+- `source_bundle_context_mismatched`
+- `source_bundle_context_missing`
+
+#### Stage 3K.2: Make CameraCapture request admission authoritative for active upload
+
+Files:
+- `/Users/philiptullai/Documents/Coding/av/unity/AVSimulation/Assets/Scripts/CameraCapture.cs`
+
+Implementation checklist:
+- [ ] Only call the active `/api/camera` upload path when `sourceBundleContext != null` and the bundle was admitted.
+- [ ] If no admitted context exists, either:
+  - skip upload entirely for active mode, or
+  - upload with explicit `debug_unbundled_capture` classification that the bridge excludes from active packet assembly.
+- [ ] Do not allow a front-camera frame with no admitted bundle to update active `latestSyncPacket*` state.
+- [ ] Keep debug-only capture telemetry available so diagnostics still show camera throughput independent of active transport.
+
+#### Stage 3K.3: Separate active and debug camera ingestion in the bridge
+
+Files:
+- `/Users/philiptullai/Documents/Coding/av/bridge/server.py`
+- `/Users/philiptullai/Documents/Coding/av/sync_contract.py`
+
+Implementation checklist:
+- [ ] Add active-ingest eligibility fields to the camera component schema:
+  - `source_bundle_active_transport_eligible`
+  - `source_bundle_debug_unbundled_capture`
+  - `camera_capture_contract_reason`
+- [ ] Ensure `_attach_camera_component(...)` only feeds active packet assembly for `active_transport_eligible = true`.
+- [ ] Keep debug-only/unbundled captures available to diagnostics, but outside active join/completeness math.
+- [ ] Add a distinct selected failure / classification family for excluded debug captures:
+  - `debug_unbundled_capture_excluded`
+  - not `packet_timeout`
+  - not `vehicle_component_late`
+
+#### Stage 3K.4: Tighten join accounting so active completeness is measured against eligible captures only
+
+Files:
+- `/Users/philiptullai/Documents/Coding/av/bridge/server.py`
+- `/Users/philiptullai/Documents/Coding/av/tools/drive_summary_core.py`
+- `/Users/philiptullai/Documents/Coding/av/tools/analyze/analyze_drive_overall.py`
+
+Implementation checklist:
+- [ ] Remove debug-only/unbundled camera frames from active completeness denominators.
+- [ ] Add separate metrics:
+  - `active_camera_eligible_rate`
+  - `debug_unbundled_capture_rate`
+  - `active_camera_excluded_reason_mode`
+- [ ] Keep existing active completeness/fallback metrics strictly about active-eligible transport.
+- [ ] Prevent active failures from being attributed to camera request lifecycle when the frame never qualified for active transport in the first place.
+
+#### Stage 3K.5: Recorder, PhilViz, and CLI attribution
+
+Files:
+- `/Users/philiptullai/Documents/Coding/av/data/formats/data_format.py`
+- `/Users/philiptullai/Documents/Coding/av/data/recorder.py`
+- `/Users/philiptullai/Documents/Coding/av/av_stack/orchestrator.py`
+- `/Users/philiptullai/Documents/Coding/av/tools/debug_visualizer/server.py`
+- `/Users/philiptullai/Documents/Coding/av/tools/debug_visualizer/visualizer.js`
+- `/Users/philiptullai/Documents/Coding/av/tools/drive_summary_core.py`
+- `/Users/philiptullai/Documents/Coding/av/tools/analyze/analyze_drive_overall.py`
+
+Add first-class fields:
+- [ ] `sync_packet_source_bundle_active_transport_eligible`
+- [ ] `sync_packet_source_bundle_debug_unbundled_capture`
+- [ ] `sync_packet_camera_capture_contract_reason`
+- [ ] `sync_packet_active_camera_excluded`
+- [ ] `sync_packet_active_camera_excluded_reason`
+
+PhilViz/CLI additions:
+- [ ] `Active Camera Admission` card:
+  - eligible rate
+  - excluded rate
+  - excluded reason mode
+- [ ] `Debug-Unbundled Capture` card:
+  - rate
+  - source context mismatch mode
+  - whether any debug-only frame touched active transport
+- [ ] timeline rows:
+  - `camera_capture_contract_reason`
+  - `active_transport_eligible`
+  - `debug_unbundled_capture`
+
+#### Stage 3K.6: Add one hard contract guardrail
+
+Files:
+- `/Users/philiptullai/Documents/Coding/av/unity/AVSimulation/Assets/Scripts/CameraCapture.cs`
+- `/Users/philiptullai/Documents/Coding/av/bridge/server.py`
+
+Implementation checklist:
+- [ ] Add a counter/guard:
+  - `unbundled_camera_entered_active_path`
+- [ ] This must be zero for active transport.
+- [ ] Persist it and fail the transport summary if nonzero.
+
+This is the single best guardrail for the current failure mode.
+
+#### Tests for Phase 3K
+
+Unity-side behavior tests:
+- [ ] admitted source bundle produces `active_bundled_capture`
+- [ ] missing source bundle produces `debug_unbundled_capture`
+- [ ] mismatched/stale source bundle produces `debug_unbundled_capture`
+- [ ] debug-only capture does not mutate active latest packet state
+
+Bridge tests:
+- [ ] debug-unbundled capture is excluded from active join assembly
+- [ ] active completeness denominator uses eligible captures only
+- [ ] `camera_request_not_attempted` is not emitted for excluded debug captures
+- [ ] `unbundled_camera_entered_active_path` remains zero in normal flow
+
+Recorder/analyzer tests:
+- [ ] new admission/exclusion fields persist to HDF5
+- [ ] PhilViz and CLI agree on eligible/excluded/debug-only counts
+- [ ] legacy recordings still load with `UNAVAILABLE` values
+
+#### Live validation order for Phase 3K
+
+1. `/Users/philiptullai/Documents/Coding/av/tracks/scenarios/highway_h2_steady.yml`
+2. `/Users/philiptullai/Documents/Coding/av/tracks/scenarios/highway_h8_curve_catchup.yml`
+3. `/Users/philiptullai/Documents/Coding/av/tracks/scenarios/hill_g1_grade_following.yml`
+
+Compare against:
+- `/Users/philiptullai/Documents/Coding/av/data/recordings/recording_20260326_172948.h5`
+- `/Users/philiptullai/Documents/Coding/av/data/recordings/recording_20260326_161226.h5`
+- `/Users/philiptullai/Documents/Coding/av/data/recordings/recording_20260326_094053.h5`
+
+#### Acceptance gates for Phase 3K
+
+1. `unbundled_camera_entered_active_path = 0`
+2. `camera_request_not_attempted` is no longer the dominant selected failure contract mode
+3. active completeness recovers to at least the pre-3J band on first pass:
+   - `packet_completeness_rate >= 85%`
+4. fallback drops materially from `/Users/philiptullai/Documents/Coding/av/data/recordings/recording_20260326_172948.h5`:
+   - first-pass target `fallback_active_rate <= 12%`
+5. coherence remains healthy:
+   - `complete_but_incoherent_rate ~= 0`
+6. startup remains healthy:
+   - no early boundary breach
+7. only after these gates pass should later swerving be treated as likely primary lateral behavior
+
+#### Execution order for Phase 3K
+
+1. Split active vs debug-only camera admission in `CameraCapture`.
+2. Prevent unmatched captures from entering the active packet path.
+3. Teach the bridge to exclude debug-unbundled captures from active completeness/join accounting.
+4. Add recorder + PhilViz + CLI admission/exclusion metrics.
+5. Rerun `highway_h2_steady`.
+6. If fallback materially drops, then do the dedicated swerving/lateral deep dive on the cleaned run.
+
+### Phase 3L: Request-driven best-match source context capture
+
+Status entering Phase 3L:
+- `/Users/philiptullai/Documents/Coding/av/data/recordings/recording_20260326_181048.h5`
+- `packet_completeness_rate = 81.8%`
+- `fallback_active_rate = 18.2%`
+- `selected_failure_contract_reason_mode = camera_requested_not_sent`
+- `join_failure_reason_mode = camera_component_late`
+- `active_camera_excluded_reason_mode = no_source_bundle_context`
+- the rebuilt player confirms the Phase 3K exclusion path is live, but admitted source bundles are still being lost when camera capture cadence and AVBridge update cadence drift
+
+#### Why Phase 3L is the next priority
+
+The remaining transport loss is now concentrated in the camera-side source lifecycle:
+- the bridge is excluding unbundled camera frames correctly
+- the dominant miss has shifted from `camera_request_not_attempted` to `camera_requested_not_sent`
+- successful packets still need their source-admission fields preserved end-to-end
+- `CameraCapture` is still draining all pending contexts and selecting only the newest one, which starves older admitted bundles whenever more than one accepted bundle is waiting
+
+Until source-side capture matching is deterministic, later highway swerving is still contaminated by transport loss.
+
+#### Core invariant for Phase 3L
+
+Every accepted source bundle must get one bounded, deterministic chance to produce an active camera capture:
+- accepted bundles cannot be discarded just because a newer bundle arrived first
+- successful active packets must retain `source_bundle_active_transport_eligible = 1`
+- captures that occur with no admissible source bundle remain debug-only and excluded from active transport
+
+#### Stage 3L.1: Preserve successful source-admission fields through bridge payload selection
+
+Files:
+- `/Users/philiptullai/Documents/Coding/av/bridge/server.py`
+- `/Users/philiptullai/Documents/Coding/av/tests/test_bridge_sync_packets.py`
+
+Implementation checklist:
+- [ ] Protect the active-admission success fields in `_sync_packet_payload_response_with_selection(...)`:
+  - `source_bundle_active_transport_eligible`
+  - `source_bundle_debug_unbundled_capture`
+  - `camera_capture_contract_reason`
+  - `active_camera_excluded_event_delta`
+  - `active_camera_excluded_reason_code`
+  - `unbundled_camera_entered_active_path_event_delta`
+- [ ] Add a regression test proving a successful packet keeps `source_bundle_active_transport_eligible = true` when `selection_meta` carries default/empty values.
+- [ ] Re-run the HDF5 success-path spot check after the next highway validation to confirm complete packets can actually carry active-admission truth.
+
+#### Stage 3L.2: Replace newest-only context draining with best-match FIFO selection
+
+Files:
+- `/Users/philiptullai/Documents/Coding/av/unity/AVSimulation/Assets/Scripts/CameraCapture.cs`
+
+Implementation checklist:
+- [ ] Stop clearing `pendingSyncPacketContexts` on every capture.
+- [ ] Scan pending contexts in FIFO order and select the first in-budget bundle instead of the newest bundle.
+- [ ] Retain newer not-yet-admissible bundles in the queue for later capture attempts.
+- [ ] Expire only contexts that are genuinely stale:
+  - deadline exceeded
+  - frame delta beyond budget on the old side
+  - time delta beyond budget on the old side
+- [ ] Distinguish:
+  - `no_source_bundle_context`
+  - `source_bundle_context_pending`
+  - `source_bundle_context_mismatched`
+- [ ] Preserve queue-depth and stale-drop diagnostics so PhilViz/CLI can separate “no admitted bundle” from “admitted bundle dropped”.
+
+#### Stage 3L.3: Add request-driven capture when admitted bundles are waiting
+
+Files:
+- `/Users/philiptullai/Documents/Coding/av/unity/AVSimulation/Assets/Scripts/CameraCapture.cs`
+- `/Users/philiptullai/Documents/Coding/av/unity/AVSimulation/Assets/Scripts/AVBridge.cs`
+
+Implementation checklist:
+- [ ] Add a request-driven capture mode that allows `CameraCapture` to capture earlier than the periodic interval when accepted source bundles are pending.
+- [ ] Bound that mode with a minimum interval so the camera path does not run unconstrained.
+- [ ] Use pending accepted bundle count as the trigger, not generic camera backlog.
+- [ ] Keep the existing periodic capture path for debug observability and non-active use.
+- [ ] Ensure request-driven captures do not mark unmatched/debug-only captures as active.
+
+#### Stage 3L.4: Keep active transport admission explicit in recorder and tools
+
+Files:
+- `/Users/philiptullai/Documents/Coding/av/data/formats/data_format.py`
+- `/Users/philiptullai/Documents/Coding/av/data/recorder.py`
+- `/Users/philiptullai/Documents/Coding/av/av_stack/orchestrator.py`
+- `/Users/philiptullai/Documents/Coding/av/tools/drive_summary_core.py`
+- `/Users/philiptullai/Documents/Coding/av/tools/analyze/analyze_drive_overall.py`
+- `/Users/philiptullai/Documents/Coding/av/tools/debug_visualizer/server.py`
+- `/Users/philiptullai/Documents/Coding/av/tools/debug_visualizer/visualizer.js`
+
+Implementation checklist:
+- [ ] Keep the current Phase 3K admission/exclusion fields.
+- [ ] Add summary metrics for:
+  - active-admission success rate
+  - request-driven capture assist rate
+  - `source_bundle_context_pending` rate
+  - `source_bundle_context_mismatched` rate
+- [ ] Make `camera_requested_not_sent` and `camera_component_late` visible next to the new request-driven metrics so attribution remains direct.
+
+#### Tests for Phase 3L
+
+Python tests:
+- [ ] bridge payload-response regression test for preserved active-admission fields
+- [ ] existing orchestrator/HDF5 tests updated only if new summary fields are added
+
+Unity behavior checks:
+- [ ] pending accepted bundle can survive multiple captures until matched or expired
+- [ ] newer bundle arrival does not automatically supersede an older still-in-budget bundle
+- [ ] request-driven capture path runs when pending admitted bundles exist
+- [ ] unmatched periodic capture remains debug-only
+
+#### Live validation order for Phase 3L
+
+1. `/Users/philiptullai/Documents/Coding/av/tracks/scenarios/highway_h2_steady.yml`
+2. `/Users/philiptullai/Documents/Coding/av/tracks/scenarios/highway_h8_curve_catchup.yml`
+
+Compare against:
+- `/Users/philiptullai/Documents/Coding/av/data/recordings/recording_20260326_181048.h5`
+- `/Users/philiptullai/Documents/Coding/av/data/recordings/recording_20260326_172948.h5`
+
+#### Acceptance gates for Phase 3L
+
+1. successful complete packets can carry `source_bundle_active_transport_eligible = 1`
+2. `active_camera_excluded_reason_mode = no_source_bundle_context` drops materially from `/Users/philiptullai/Documents/Coding/av/data/recordings/recording_20260326_181048.h5`
+3. `selected_failure_contract_reason_mode = camera_requested_not_sent` is no longer dominant
+4. `packet_completeness_rate >= 88%`
+5. `fallback_active_rate <= 12%`
+6. startup remains healthy:
+  - no early boundary breach
+7. only after these gates pass should the later highway swerving be treated as likely primary lateral behavior
+
+#### Execution order for Phase 3L
+
+1. Patch bridge payload selection so successful source-admission fields are not clobbered.
+2. Replace newest-only source context draining with best-match FIFO selection.
+3. Add bounded request-driven capture while admitted bundles are waiting.
+4. Re-run `highway_h2_steady` with a forced Unity rebuild.
+5. Inspect complete-packet HDF5 fields for preserved `active_transport_eligible`.
+6. If fallback clears the target band, then resume the swerving/lateral deep dive.

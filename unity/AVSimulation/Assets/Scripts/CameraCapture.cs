@@ -14,6 +14,99 @@ using UnityEditor;
 /// <summary>
 /// Captures camera frames and sends them to the Python AV stack server
 /// </summary>
+public class SyncPacketSourceBundleContext
+{
+    public string packetKey = "";
+    public int ownerUpdateId = 0;
+    public int ownerUnityFrameCount = 0;
+    public float ownerUnityTime = 0.0f;
+    public float createdRealtime = 0.0f;
+    public float deadlineRealtime = 0.0f;
+    public int inflightCount = 0;
+    public bool cameraRequested = false;
+    public bool cameraRequestAttempted = false;
+    public bool cameraRequestAccepted = false;
+    public string cameraRequestRejectedReason = "";
+    public string cameraRequestSkippedReason = "";
+    public string cameraRequestDispositionCode = "";
+    public float cameraRequestAttemptRealtime = 0.0f;
+    public float cameraRequestAcceptRealtime = 0.0f;
+    public int cameraRequestQueueDepth = 0;
+    public bool cameraCaptured = false;
+    public bool cameraEnqueued = false;
+    public bool cameraSent = false;
+    public bool bundleAbortedBeforeVehicleSend = false;
+    public string bundleAbortReason = "";
+    public bool vehicleSendBlockedByCameraRequest = false;
+    public bool vehicleStateBuilt = false;
+    public bool vehicleStateEnqueued = false;
+    public bool vehicleStateSent = false;
+    public bool supersededBeforeSend = false;
+    public string closeReason = "open";
+    public bool closed = false;
+
+    public float AgeMs(float nowRealtime)
+    {
+        return Mathf.Max(0.0f, (nowRealtime - createdRealtime) * 1000.0f);
+    }
+
+    public float DeadlineMs()
+    {
+        return Mathf.Max(0.0f, (deadlineRealtime - createdRealtime) * 1000.0f);
+    }
+
+    public float CameraRequestAttemptAgeMs(float nowRealtime)
+    {
+        if (cameraRequestAttemptRealtime <= 0.0f)
+        {
+            return 0.0f;
+        }
+        return Mathf.Max(0.0f, (nowRealtime - cameraRequestAttemptRealtime) * 1000.0f);
+    }
+
+    public float CameraRequestAcceptAgeMs(float nowRealtime)
+    {
+        if (cameraRequestAcceptRealtime <= 0.0f)
+        {
+            return 0.0f;
+        }
+        return Mathf.Max(0.0f, (nowRealtime - cameraRequestAcceptRealtime) * 1000.0f);
+    }
+
+    public void Close(string reason)
+    {
+        string normalized = string.IsNullOrEmpty(reason) ? "unknown" : reason;
+        if (!closed)
+        {
+            closed = true;
+            closeReason = normalized;
+            return;
+        }
+        if (string.IsNullOrEmpty(closeReason) || closeReason == "open")
+        {
+            closeReason = normalized;
+        }
+    }
+
+    public void TryMarkComplete()
+    {
+        if (cameraSent && vehicleStateSent)
+        {
+            Close("complete");
+        }
+    }
+}
+
+public struct SyncPacketContextRegistrationResult
+{
+    public bool attempted;
+    public bool accepted;
+    public string rejectedReason;
+    public string dispositionCode;
+    public int queueDepthBefore;
+    public int queueDepthAfter;
+}
+
 public class CameraCapture : MonoBehaviour
 {
     private static bool gtSyncTimeConfigured = false;
@@ -70,6 +163,14 @@ public class CameraCapture : MonoBehaviour
     public bool gtReduceTopDownRate = true;
     [Tooltip("Max queued camera frames before dropping oldest.")]
     public int maxUploadQueueSize = 4;
+    [Tooltip("Maximum Unity frame delta allowed when pairing a camera capture to an AVBridge packet context.")]
+    public int syncPacketContextMaxFrameDelta = 2;
+    [Tooltip("Maximum Unity time delta in seconds allowed when pairing a camera capture to an AVBridge packet context.")]
+    public float syncPacketContextMaxTimeDeltaSeconds = 0.05f;
+    [Tooltip("Allow accepted source bundles to trigger a capture before the periodic interval.")]
+    public bool requestDrivenSyncCapture = true;
+    [Tooltip("Minimum seconds between request-driven captures while accepted source bundles are waiting.")]
+    public float requestDrivenCaptureMinIntervalSeconds = 0.01f;
     
     // Double-buffered render textures: render to buffer[activeBufferIndex] while
     // async readback completes on the other buffer. This overlaps GPU render and
@@ -85,7 +186,19 @@ public class CameraCapture : MonoBehaviour
     private float[] bufferPendingRealtime = new float[2];
     private float[] bufferPendingUnscaledTime = new float[2];
     private float[] bufferPendingTimeScale = new float[2];
+    private SyncPacketSourceBundleContext[] bufferPendingSourceBundleContext = new SyncPacketSourceBundleContext[2];
     private string[] bufferPendingPacketKey = new string[2];
+    private int[] bufferPendingOwnerUpdateId = new int[2];
+    private int[] bufferPendingOwnerUnityFrameCount = new int[2];
+    private float[] bufferPendingOwnerUnityTime = new float[2];
+    private int[] bufferPendingSourceContextQueueDepth = new int[2];
+    private int[] bufferPendingSourceContextDroppedStaleCount = new int[2];
+    private int[] bufferPendingSourceContextMissingCount = new int[2];
+    private int[] bufferPendingSourceContextFrameDelta = new int[2];
+    private float[] bufferPendingSourceContextTimeDeltaMs = new float[2];
+    private bool[] bufferPendingActiveTransportEligible = new bool[2];
+    private bool[] bufferPendingDebugUnbundledCapture = new bool[2];
+    private string[] bufferPendingCameraCaptureContractReason = new string[2];
 
     private Texture2D texture2D;
     private float captureInterval;
@@ -111,6 +224,9 @@ public class CameraCapture : MonoBehaviour
     private int latestSyncPacketFrameId = -1;
     private int latestSyncPacketUnityFrameCount = -1;
     private float latestSyncPacketTimestamp = -1f;
+    private readonly Queue<SyncPacketSourceBundleContext> pendingSyncPacketContexts = new Queue<SyncPacketSourceBundleContext>();
+    private int sourcePacketContextDroppedStaleCount = 0;
+    private int sourcePacketContextMissingCount = 0;
 
     private struct PendingUpload
     {
@@ -123,12 +239,116 @@ public class CameraCapture : MonoBehaviour
         public float captureUnscaledTime;
         public float captureTimeScale;
         public string packetKey;
+        public SyncPacketSourceBundleContext sourceBundleContext;
+        public int sourceContextQueueDepth;
+        public int sourceContextDroppedStaleCount;
+        public int sourceContextMissingCount;
+        public int sourceContextFrameDelta;
+        public float sourceContextTimeDeltaMs;
+        public bool activeTransportEligible;
+        public bool debugUnbundledCapture;
+        public string cameraCaptureContractReason;
+    }
+
+    private struct SyncPacketContextSelection
+    {
+        public SyncPacketSourceBundleContext context;
+        public bool matched;
+        public bool activeTransportEligible;
+        public bool debugUnbundledCapture;
+        public string cameraCaptureContractReason;
+        public int queueDepthBefore;
+        public int staleDropDelta;
+        public int missingDelta;
+        public int contextFrameDelta;
+        public float contextTimeDeltaMs;
     }
 
     public string LatestSyncPacketKey => latestSyncPacketKey;
     public int LatestSyncPacketFrameId => latestSyncPacketFrameId;
     public int LatestSyncPacketUnityFrameCount => latestSyncPacketUnityFrameCount;
     public float LatestSyncPacketTimestamp => latestSyncPacketTimestamp;
+
+    public SyncPacketContextRegistrationResult RegisterSyncPacketContext(
+        SyncPacketSourceBundleContext context
+    )
+    {
+        SyncPacketContextRegistrationResult result = new SyncPacketContextRegistrationResult
+        {
+            attempted = false,
+            accepted = false,
+            rejectedReason = "",
+            dispositionCode = "",
+            queueDepthBefore = pendingSyncPacketContexts.Count,
+            queueDepthAfter = pendingSyncPacketContexts.Count,
+        };
+        if (context == null)
+        {
+            result.rejectedReason = "invalid_context";
+            result.dispositionCode = "rejected_invalid_context";
+            return result;
+        }
+        string normalized = context.packetKey != null ? context.packetKey.Trim() : "";
+        context.cameraRequestAttempted = true;
+        context.cameraRequestAttemptRealtime = Time.realtimeSinceStartup;
+        context.cameraRequestQueueDepth = pendingSyncPacketContexts.Count;
+        context.cameraRequestDispositionCode = "attempted";
+        result.attempted = true;
+        if (string.IsNullOrEmpty(normalized))
+        {
+            context.cameraRequestRejectedReason = "invalid_packet_key";
+            context.cameraRequestDispositionCode = "rejected_invalid_packet_key";
+            result.rejectedReason = context.cameraRequestRejectedReason;
+            result.dispositionCode = context.cameraRequestDispositionCode;
+            return result;
+        }
+        if (targetCamera == null)
+        {
+            context.cameraRequestRejectedReason = "camera_unavailable";
+            context.cameraRequestDispositionCode = "rejected_camera_unavailable";
+            result.rejectedReason = context.cameraRequestRejectedReason;
+            result.dispositionCode = context.cameraRequestDispositionCode;
+            return result;
+        }
+        if (context.closed)
+        {
+            context.cameraRequestRejectedReason = "bundle_closed";
+            context.cameraRequestDispositionCode = "rejected_bundle_closed";
+            result.rejectedReason = context.cameraRequestRejectedReason;
+            result.dispositionCode = context.cameraRequestDispositionCode;
+            return result;
+        }
+        if (context.deadlineRealtime > 0.0f && Time.realtimeSinceStartup > context.deadlineRealtime)
+        {
+            context.cameraRequestRejectedReason = "out_of_budget";
+            context.cameraRequestDispositionCode = "rejected_out_of_budget";
+            result.rejectedReason = context.cameraRequestRejectedReason;
+            result.dispositionCode = context.cameraRequestDispositionCode;
+            return result;
+        }
+        context.packetKey = normalized;
+        context.cameraRequested = true;
+        int maxPendingContexts = Mathf.Max(4, maxUploadQueueSize * 4);
+        if (pendingSyncPacketContexts.Count >= maxPendingContexts)
+        {
+            context.cameraRequestRejectedReason = "queue_full";
+            context.cameraRequestDispositionCode = "rejected_queue_full";
+            result.rejectedReason = context.cameraRequestRejectedReason;
+            result.dispositionCode = context.cameraRequestDispositionCode;
+            return result;
+        }
+        pendingSyncPacketContexts.Enqueue(context);
+        context.cameraRequestAccepted = true;
+        context.cameraRequestAcceptRealtime = Time.realtimeSinceStartup;
+        context.cameraRequestQueueDepth = pendingSyncPacketContexts.Count;
+        context.cameraRequestRejectedReason = "";
+        context.cameraRequestSkippedReason = "";
+        context.cameraRequestDispositionCode = "accepted";
+        result.accepted = true;
+        result.dispositionCode = context.cameraRequestDispositionCode;
+        result.queueDepthAfter = pendingSyncPacketContexts.Count;
+        return result;
+    }
     
     void Start()
     {
@@ -329,11 +549,16 @@ public class CameraCapture : MonoBehaviour
             return;
         }
 
-        // Check if it's time to capture (use Unity time to stay in sync with state updates)
-        if (Time.time - lastCaptureTime >= captureInterval)
+        float nowTime = Time.time;
+        bool scheduledCaptureDue = nowTime - lastCaptureTime >= captureInterval;
+        bool requestDrivenCaptureDue =
+            requestDrivenSyncCapture &&
+            pendingSyncPacketContexts.Count > 0 &&
+            nowTime - lastCaptureTime >= Mathf.Max(0.0f, requestDrivenCaptureMinIntervalSeconds);
+        if (scheduledCaptureDue || requestDrivenCaptureDue)
         {
             CaptureAndSend();
-            lastCaptureTime = Time.time;
+            lastCaptureTime = nowTime;
         }
     }
 
@@ -476,7 +701,16 @@ public class CameraCapture : MonoBehaviour
             float captureRealtime = Time.realtimeSinceStartup;
             float captureUnscaled = Time.unscaledTime;
             float captureTimeScale = Time.timeScale;
-            string packetKey = BuildSyncPacketKey(frameId, captureUnityFrameCount);
+            SyncPacketContextSelection syncSelection = SelectSyncPacketContextForCapture(
+                captureUnityFrameCount,
+                captureUnityTime
+            );
+            SyncPacketSourceBundleContext syncContext = syncSelection.context;
+            string packetKey = syncSelection.activeTransportEligible &&
+                syncContext != null &&
+                !string.IsNullOrEmpty(syncContext.packetKey)
+                ? syncContext.packetKey
+                : "";
             bufferReadbackInFlight[bufIdx] = true;
             bufferPendingFrameId[bufIdx] = frameId;
             bufferPendingTimestamp[bufIdx] = captureTime;
@@ -487,6 +721,18 @@ public class CameraCapture : MonoBehaviour
             bufferPendingUnscaledTime[bufIdx] = captureUnscaled;
             bufferPendingTimeScale[bufIdx] = captureTimeScale;
             bufferPendingPacketKey[bufIdx] = packetKey;
+            bufferPendingSourceBundleContext[bufIdx] = syncContext;
+            bufferPendingOwnerUpdateId[bufIdx] = syncContext != null ? syncContext.ownerUpdateId : 0;
+            bufferPendingOwnerUnityFrameCount[bufIdx] = syncContext != null ? syncContext.ownerUnityFrameCount : 0;
+            bufferPendingOwnerUnityTime[bufIdx] = syncContext != null ? syncContext.ownerUnityTime : 0.0f;
+            bufferPendingSourceContextQueueDepth[bufIdx] = syncSelection.queueDepthBefore;
+            bufferPendingSourceContextDroppedStaleCount[bufIdx] = syncSelection.staleDropDelta;
+            bufferPendingSourceContextMissingCount[bufIdx] = syncSelection.missingDelta;
+            bufferPendingSourceContextFrameDelta[bufIdx] = syncSelection.contextFrameDelta;
+            bufferPendingSourceContextTimeDeltaMs[bufIdx] = syncSelection.contextTimeDeltaMs;
+            bufferPendingActiveTransportEligible[bufIdx] = syncSelection.activeTransportEligible;
+            bufferPendingDebugUnbundledCapture[bufIdx] = syncSelection.debugUnbundledCapture;
+            bufferPendingCameraCaptureContractReason[bufIdx] = syncSelection.cameraCaptureContractReason ?? "";
             AsyncGPUReadback.Request(currentRT, 0, TextureFormat.RGBA32,
                 (AsyncGPUReadbackRequest req) => OnCompleteReadback(req, bufIdx));
             // Swap to the other buffer for the next frame
@@ -521,7 +767,16 @@ public class CameraCapture : MonoBehaviour
             float captureRealtime = Time.realtimeSinceStartup;
             float captureUnscaled = Time.unscaledTime;
             float captureTimeScale = Time.timeScale;
-            string packetKey = BuildSyncPacketKey(frameId, captureUnityFrameCount);
+            SyncPacketContextSelection syncSelection = SelectSyncPacketContextForCapture(
+                captureUnityFrameCount,
+                captureUnityTime
+            );
+            SyncPacketSourceBundleContext syncContext = syncSelection.context;
+            string packetKey = syncSelection.activeTransportEligible &&
+                syncContext != null &&
+                !string.IsNullOrEmpty(syncContext.packetKey)
+                ? syncContext.packetKey
+                : "";
             QueueOrSendImage(
                 imageData,
                 captureTime,
@@ -531,7 +786,16 @@ public class CameraCapture : MonoBehaviour
                 captureRealtime,
                 captureUnscaled,
                 captureTimeScale,
-                packetKey
+                packetKey,
+                syncContext,
+                syncSelection.queueDepthBefore,
+                syncSelection.staleDropDelta,
+                syncSelection.missingDelta,
+                syncSelection.contextFrameDelta,
+                syncSelection.contextTimeDeltaMs,
+                syncSelection.activeTransportEligible,
+                syncSelection.debugUnbundledCapture,
+                syncSelection.cameraCaptureContractReason
             );
             
             frameCount++;
@@ -630,6 +894,15 @@ public class CameraCapture : MonoBehaviour
         float captureUnscaled = bufferPendingUnscaledTime[bufferIndex];
         float captureTimeScale = bufferPendingTimeScale[bufferIndex];
         string packetKey = bufferPendingPacketKey[bufferIndex];
+        SyncPacketSourceBundleContext sourceBundleContext = bufferPendingSourceBundleContext[bufferIndex];
+        int sourceContextQueueDepth = bufferPendingSourceContextQueueDepth[bufferIndex];
+        int sourceContextDroppedStaleCountDelta = bufferPendingSourceContextDroppedStaleCount[bufferIndex];
+        int sourceContextMissingCountDelta = bufferPendingSourceContextMissingCount[bufferIndex];
+        int sourceContextFrameDelta = bufferPendingSourceContextFrameDelta[bufferIndex];
+        float sourceContextTimeDeltaMs = bufferPendingSourceContextTimeDeltaMs[bufferIndex];
+        bool activeTransportEligible = bufferPendingActiveTransportEligible[bufferIndex];
+        bool debugUnbundledCapture = bufferPendingDebugUnbundledCapture[bufferIndex];
+        string cameraCaptureContractReason = bufferPendingCameraCaptureContractReason[bufferIndex];
 
         var data = request.GetData<byte>();
         texture2D.LoadRawTextureData(data);
@@ -667,16 +940,129 @@ public class CameraCapture : MonoBehaviour
             captureRealtime,
             captureUnscaled,
             captureTimeScale,
-            packetKey
+            packetKey,
+            sourceBundleContext,
+            sourceContextQueueDepth,
+            sourceContextDroppedStaleCountDelta,
+            sourceContextMissingCountDelta,
+            sourceContextFrameDelta,
+            sourceContextTimeDeltaMs,
+            activeTransportEligible,
+            debugUnbundledCapture,
+            cameraCaptureContractReason
         );
         LogFrameMarker(fid, ts);
         frameCount++;
     }
 #endif
 
-    private string BuildSyncPacketKey(int frameId, int captureUnityFrameCount)
+    private SyncPacketContextSelection SelectSyncPacketContextForCapture(
+        int captureUnityFrameCount,
+        float captureUnityTime
+    )
     {
-        return $"{cameraId}:{frameId}:{captureUnityFrameCount}";
+        SyncPacketContextSelection selection = new SyncPacketContextSelection
+        {
+            queueDepthBefore = pendingSyncPacketContexts.Count,
+            contextFrameDelta = 0,
+            contextTimeDeltaMs = float.NaN,
+            activeTransportEligible = false,
+            debugUnbundledCapture = true,
+            cameraCaptureContractReason = "no_source_bundle_context",
+        };
+        if (pendingSyncPacketContexts.Count <= 0)
+        {
+            sourcePacketContextMissingCount += 1;
+            selection.missingDelta = 1;
+            return selection;
+        }
+
+        float timeBudgetMs =
+            Mathf.Max(0.0f, syncPacketContextMaxTimeDeltaSeconds) * 1000f;
+        int frameBudget = Mathf.Max(0, syncPacketContextMaxFrameDelta);
+        int originalDepth = pendingSyncPacketContexts.Count;
+        int staleDropDelta = 0;
+        bool retainedPendingContext = false;
+        Queue<SyncPacketSourceBundleContext> retainedContexts =
+            new Queue<SyncPacketSourceBundleContext>(originalDepth);
+
+        while (pendingSyncPacketContexts.Count > 0)
+        {
+            SyncPacketSourceBundleContext context = pendingSyncPacketContexts.Dequeue();
+            if (context == null)
+            {
+                continue;
+            }
+            if (context.closed)
+            {
+                continue;
+            }
+
+            int frameDelta = captureUnityFrameCount - context.ownerUnityFrameCount;
+            float timeDeltaMs = (captureUnityTime - context.ownerUnityTime) * 1000f;
+            bool deadlineExpired =
+                context.deadlineRealtime > 0.0f &&
+                Time.realtimeSinceStartup > context.deadlineRealtime;
+            bool withinFrameBudget = Mathf.Abs(frameDelta) <= frameBudget;
+            bool withinTimeBudget = Mathf.Abs(timeDeltaMs) <= timeBudgetMs;
+            bool matched = !deadlineExpired && withinFrameBudget && withinTimeBudget;
+
+            if (selection.context == null && matched)
+            {
+                selection.context = context;
+                selection.matched = true;
+                selection.contextFrameDelta = frameDelta;
+                selection.contextTimeDeltaMs = timeDeltaMs;
+                context.cameraCaptured = true;
+                selection.activeTransportEligible = true;
+                selection.debugUnbundledCapture = false;
+                selection.cameraCaptureContractReason = "";
+                continue;
+            }
+
+            bool stale =
+                deadlineExpired ||
+                frameDelta > frameBudget ||
+                timeDeltaMs > timeBudgetMs;
+            if (stale)
+            {
+                staleDropDelta += 1;
+                if (!context.closed)
+                {
+                    context.Close(
+                        deadlineExpired
+                            ? "camera_capture_deadline_expired"
+                            : "camera_capture_superseded_before_send"
+                    );
+                }
+                continue;
+            }
+
+            retainedPendingContext = true;
+            retainedContexts.Enqueue(context);
+        }
+
+        pendingSyncPacketContexts.Clear();
+        while (retainedContexts.Count > 0)
+        {
+            pendingSyncPacketContexts.Enqueue(retainedContexts.Dequeue());
+        }
+
+        if (selection.context == null)
+        {
+            sourcePacketContextMissingCount += 1;
+            selection.missingDelta = 1;
+            selection.cameraCaptureContractReason = retainedPendingContext
+                ? "source_bundle_context_pending"
+                : "source_bundle_context_mismatched";
+        }
+        if (staleDropDelta > 0)
+        {
+            sourcePacketContextDroppedStaleCount += staleDropDelta;
+        }
+        selection.queueDepthBefore = originalDepth;
+        selection.staleDropDelta = staleDropDelta;
+        return selection;
     }
 
     private void QueueOrSendImage(
@@ -688,13 +1074,28 @@ public class CameraCapture : MonoBehaviour
         float captureRealtimeSinceStartup,
         float captureUnscaledTime,
         float captureTimeScale,
-        string packetKey
+        string packetKeyOverride,
+        SyncPacketSourceBundleContext sourceBundleContext,
+        int sourceContextQueueDepth,
+        int sourceContextDroppedStaleCountDelta,
+        int sourceContextMissingCountDelta,
+        int sourceContextFrameDelta,
+        float sourceContextTimeDeltaMs,
+        bool activeTransportEligible,
+        bool debugUnbundledCapture,
+        string cameraCaptureContractReason
     )
     {
-        latestSyncPacketKey = packetKey ?? "";
-        latestSyncPacketFrameId = frameId;
-        latestSyncPacketUnityFrameCount = captureUnityFrameCount;
-        latestSyncPacketTimestamp = timestamp;
+        string packetKey = !string.IsNullOrEmpty(packetKeyOverride)
+            ? packetKeyOverride
+            : (sourceBundleContext != null ? sourceBundleContext.packetKey : "");
+        if (activeTransportEligible && sourceBundleContext != null)
+        {
+            latestSyncPacketKey = packetKey ?? "";
+            latestSyncPacketFrameId = frameId;
+            latestSyncPacketUnityFrameCount = captureUnityFrameCount;
+            latestSyncPacketTimestamp = timestamp;
+        }
 
         if (!gtCameraSendAsync)
         {
@@ -708,7 +1109,16 @@ public class CameraCapture : MonoBehaviour
                     captureRealtimeSinceStartup,
                     captureUnscaledTime,
                     captureTimeScale,
-                    packetKey
+                    packetKey,
+                    sourceBundleContext,
+                    sourceContextQueueDepth,
+                    sourceContextDroppedStaleCountDelta,
+                    sourceContextMissingCountDelta,
+                    sourceContextFrameDelta,
+                    sourceContextTimeDeltaMs,
+                    activeTransportEligible,
+                    debugUnbundledCapture,
+                    cameraCaptureContractReason
                 )
             );
             return;
@@ -716,7 +1126,11 @@ public class CameraCapture : MonoBehaviour
 
         if (uploadQueue.Count >= Mathf.Max(1, maxUploadQueueSize))
         {
-            uploadQueue.Dequeue();
+            PendingUpload dropped = uploadQueue.Dequeue();
+            if (dropped.sourceBundleContext != null && !dropped.sourceBundleContext.closed)
+            {
+                dropped.sourceBundleContext.Close("camera_requested_not_sent");
+            }
         }
         uploadQueue.Enqueue(new PendingUpload
         {
@@ -729,7 +1143,20 @@ public class CameraCapture : MonoBehaviour
             captureUnscaledTime = captureUnscaledTime,
             captureTimeScale = captureTimeScale,
             packetKey = packetKey,
+            sourceBundleContext = sourceBundleContext,
+            sourceContextQueueDepth = sourceContextQueueDepth,
+            sourceContextDroppedStaleCount = sourceContextDroppedStaleCountDelta,
+            sourceContextMissingCount = sourceContextMissingCountDelta,
+            sourceContextFrameDelta = sourceContextFrameDelta,
+            sourceContextTimeDeltaMs = sourceContextTimeDeltaMs,
+            activeTransportEligible = activeTransportEligible,
+            debugUnbundledCapture = debugUnbundledCapture,
+            cameraCaptureContractReason = cameraCaptureContractReason ?? "",
         });
+        if (sourceBundleContext != null)
+        {
+            sourceBundleContext.cameraEnqueued = true;
+        }
     }
 
     private IEnumerator UploadWorkerLoop()
@@ -757,7 +1184,16 @@ public class CameraCapture : MonoBehaviour
                     item.captureRealtimeSinceStartup,
                     item.captureUnscaledTime,
                     item.captureTimeScale,
-                    item.packetKey
+                    item.packetKey,
+                    item.sourceBundleContext,
+                    item.sourceContextQueueDepth,
+                    item.sourceContextDroppedStaleCount,
+                    item.sourceContextMissingCount,
+                    item.sourceContextFrameDelta,
+                    item.sourceContextTimeDeltaMs,
+                    item.activeTransportEligible,
+                    item.debugUnbundledCapture,
+                    item.cameraCaptureContractReason
                 )
             );
         }
@@ -792,7 +1228,16 @@ public class CameraCapture : MonoBehaviour
         float captureRealtimeSinceStartup,
         float captureUnscaledTime,
         float captureTimeScale,
-        string packetKey
+        string packetKeyOverride,
+        SyncPacketSourceBundleContext sourceBundleContext,
+        int sourceContextQueueDepth,
+        int sourceContextDroppedStaleCountDelta,
+        int sourceContextMissingCountDelta,
+        int sourceContextFrameDelta,
+        float sourceContextTimeDeltaMs,
+        bool activeTransportEligible,
+        bool debugUnbundledCapture,
+        string cameraCaptureContractReason
     )
     {
         string url = $"{apiUrl}{cameraEndpoint}";
@@ -814,11 +1259,136 @@ public class CameraCapture : MonoBehaviour
         
         // Create form data
         WWWForm form = new WWWForm();
+        string packetKey = !string.IsNullOrEmpty(packetKeyOverride)
+            ? packetKeyOverride
+            : (sourceBundleContext != null ? sourceBundleContext.packetKey : "");
+        int ownerUpdateId = sourceBundleContext != null ? sourceBundleContext.ownerUpdateId : 0;
+        int ownerUnityFrameCount = sourceBundleContext != null ? sourceBundleContext.ownerUnityFrameCount : 0;
+        float ownerUnityTime = sourceBundleContext != null ? sourceBundleContext.ownerUnityTime : 0.0f;
+        float nowRealtime = Time.realtimeSinceStartup;
         form.AddBinaryData("image", imageData, "frame.jpg", "image/jpeg");
         form.AddField("timestamp", sendTimestamp.ToString("R"));
         form.AddField("frame_id", frameId.ToString());
         form.AddField("camera_id", cameraId);
         form.AddField("sync_packet_key", packetKey ?? "");
+        form.AddField(
+            "source_bundle_active_transport_eligible",
+            activeTransportEligible ? "1" : "0"
+        );
+        form.AddField(
+            "source_bundle_debug_unbundled_capture",
+            debugUnbundledCapture ? "1" : "0"
+        );
+        form.AddField(
+            "camera_capture_contract_reason",
+            cameraCaptureContractReason ?? ""
+        );
+        form.AddField("source_packet_owner", "avbridge_update");
+        form.AddField("source_packet_owner_update_id", ownerUpdateId.ToString());
+        form.AddField("source_packet_owner_unity_frame_count", ownerUnityFrameCount.ToString());
+        form.AddField("source_packet_owner_unity_time", ownerUnityTime.ToString("R"));
+        form.AddField(
+            "source_bundle_close_reason",
+            sourceBundleContext != null ? (sourceBundleContext.closeReason ?? "") : ""
+        );
+        form.AddField(
+            "source_bundle_deadline_ms",
+            sourceBundleContext != null ? sourceBundleContext.DeadlineMs().ToString("R") : "0"
+        );
+        form.AddField(
+            "source_bundle_age_ms",
+            sourceBundleContext != null ? sourceBundleContext.AgeMs(nowRealtime).ToString("R") : "0"
+        );
+        form.AddField(
+            "source_bundle_inflight_count",
+            sourceBundleContext != null ? sourceBundleContext.inflightCount.ToString() : "0"
+        );
+        form.AddField(
+            "source_bundle_camera_requested",
+            sourceBundleContext != null && sourceBundleContext.cameraRequested ? "1" : "0"
+        );
+        form.AddField(
+            "source_bundle_camera_request_attempted",
+            sourceBundleContext != null && sourceBundleContext.cameraRequestAttempted ? "1" : "0"
+        );
+        form.AddField(
+            "source_bundle_camera_request_accepted",
+            sourceBundleContext != null && sourceBundleContext.cameraRequestAccepted ? "1" : "0"
+        );
+        form.AddField(
+            "source_bundle_camera_request_rejected_reason",
+            sourceBundleContext != null ? (sourceBundleContext.cameraRequestRejectedReason ?? "") : ""
+        );
+        form.AddField(
+            "source_bundle_camera_request_skipped_reason",
+            sourceBundleContext != null ? (sourceBundleContext.cameraRequestSkippedReason ?? "") : ""
+        );
+        form.AddField(
+            "source_bundle_camera_request_disposition_code",
+            sourceBundleContext != null ? (sourceBundleContext.cameraRequestDispositionCode ?? "") : ""
+        );
+        form.AddField(
+            "source_bundle_camera_request_attempt_age_ms",
+            sourceBundleContext != null
+                ? sourceBundleContext.CameraRequestAttemptAgeMs(nowRealtime).ToString("R")
+                : "0"
+        );
+        form.AddField(
+            "source_bundle_camera_request_accept_age_ms",
+            sourceBundleContext != null
+                ? sourceBundleContext.CameraRequestAcceptAgeMs(nowRealtime).ToString("R")
+                : "0"
+        );
+        form.AddField(
+            "source_bundle_camera_request_queue_depth",
+            sourceBundleContext != null ? sourceBundleContext.cameraRequestQueueDepth.ToString() : "0"
+        );
+        form.AddField(
+            "source_bundle_camera_sent",
+            sourceBundleContext != null && sourceBundleContext.cameraSent ? "1" : "0"
+        );
+        form.AddField(
+            "source_bundle_aborted_before_vehicle_send",
+            sourceBundleContext != null && sourceBundleContext.bundleAbortedBeforeVehicleSend ? "1" : "0"
+        );
+        form.AddField(
+            "source_bundle_abort_reason",
+            sourceBundleContext != null ? (sourceBundleContext.bundleAbortReason ?? "") : ""
+        );
+        form.AddField(
+            "source_bundle_vehicle_send_blocked_by_camera_request",
+            sourceBundleContext != null && sourceBundleContext.vehicleSendBlockedByCameraRequest ? "1" : "0"
+        );
+        form.AddField(
+            "source_bundle_vehicle_state_built",
+            sourceBundleContext != null && sourceBundleContext.vehicleStateBuilt ? "1" : "0"
+        );
+        form.AddField(
+            "source_bundle_vehicle_state_enqueued",
+            sourceBundleContext != null && sourceBundleContext.vehicleStateEnqueued ? "1" : "0"
+        );
+        form.AddField(
+            "source_bundle_vehicle_state_sent",
+            sourceBundleContext != null && sourceBundleContext.vehicleStateSent ? "1" : "0"
+        );
+        form.AddField(
+            "source_bundle_superseded_before_send",
+            sourceBundleContext != null && sourceBundleContext.supersededBeforeSend ? "1" : "0"
+        );
+        form.AddField("source_packet_context_queue_depth", sourceContextQueueDepth.ToString());
+        form.AddField(
+            "source_packet_context_dropped_stale_count",
+            sourceContextDroppedStaleCountDelta.ToString()
+        );
+        form.AddField(
+            "source_packet_context_missing_count",
+            sourceContextMissingCountDelta.ToString()
+        );
+        form.AddField("source_packet_context_frame_delta", sourceContextFrameDelta.ToString());
+        form.AddField(
+            "source_packet_context_time_delta_ms",
+            sourceContextTimeDeltaMs.ToString("R")
+        );
         form.AddField("unity_frame_count", captureUnityFrameCount.ToString());
         form.AddField("unity_time", captureUnityTime.ToString("R"));
         form.AddField("realtime_since_startup", captureRealtimeSinceStartup.ToString("R"));
@@ -829,7 +1399,7 @@ public class CameraCapture : MonoBehaviour
         {
             request.timeout = 1;
             yield return request.SendWebRequest();
-            
+            bool requestSucceeded = request.result == UnityWebRequest.Result.Success;
             if (request.result != UnityWebRequest.Result.Success)
             {
                 if (showDebugInfo)
@@ -840,6 +1410,18 @@ public class CameraCapture : MonoBehaviour
             else if (showDebugInfo && frameId % 30 == 0)
             {
                 Debug.Log($"CameraCapture: Sent frame {frameId}");
+            }
+            if (sourceBundleContext != null && requestSucceeded)
+            {
+                sourceBundleContext.cameraSent = true;
+                sourceBundleContext.TryMarkComplete();
+                if (activeTransportEligible)
+                {
+                    latestSyncPacketKey = sourceBundleContext.packetKey ?? "";
+                    latestSyncPacketFrameId = frameId;
+                    latestSyncPacketUnityFrameCount = captureUnityFrameCount;
+                    latestSyncPacketTimestamp = sendTimestamp;
+                }
             }
         }
     }

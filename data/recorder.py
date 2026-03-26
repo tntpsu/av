@@ -1081,6 +1081,12 @@ class DataRecorder:
             dtype=np.float32
         )
         self.h5_file.create_dataset(
+            "vehicle/sync_packet_selection_result",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=h5py.string_dtype(encoding='utf-8', length=32)
+        )
+        self.h5_file.create_dataset(
             "vehicle/sync_packet_join_source",
             shape=(0,),
             maxshape=max_shape,
@@ -1091,6 +1097,288 @@ class DataRecorder:
             shape=(0,),
             maxshape=max_shape,
             dtype=np.int8
+        )
+        self.h5_file.create_dataset(
+            "vehicle/sync_packet_join_failure_reason_code",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=h5py.string_dtype(encoding='utf-8', length=40)
+        )
+        self.h5_file.create_dataset(
+            "vehicle/sync_packet_join_failure_side_code",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=h5py.string_dtype(encoding='utf-8', length=16)
+        )
+        self.h5_file.create_dataset(
+            "vehicle/sync_packet_selected_failure_contract_reason_code",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=h5py.string_dtype(encoding='utf-8', length=48)
+        )
+        self.h5_file.create_dataset(
+            "vehicle/sync_packet_selected_failure_source_stage_code",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=h5py.string_dtype(encoding='utf-8', length=24)
+        )
+        self.h5_file.create_dataset(
+            "vehicle/sync_packet_source_key_present_camera",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int8
+        )
+        self.h5_file.create_dataset(
+            "vehicle/sync_packet_source_key_present_vehicle",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int8
+        )
+        self.h5_file.create_dataset(
+            "vehicle/sync_packet_selected_packet_key",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=h5py.string_dtype(encoding='utf-8', length=64)
+        )
+        self.h5_file.create_dataset(
+            "vehicle/sync_packet_timeout_event_delta",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int32
+        )
+        self.h5_file.create_dataset(
+            "vehicle/sync_packet_coherence_pass",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int8
+        )
+        self.h5_file.create_dataset(
+            "vehicle/sync_packet_coherence_reason_code",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=h5py.string_dtype(encoding='utf-8', length=48)
+        )
+        self.h5_file.create_dataset(
+            "vehicle/sync_packet_complete_but_incoherent",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int8
+        )
+        self.h5_file.create_dataset(
+            "vehicle/sync_packet_front_vehicle_time_delta_budget_exceeded",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int8
+        )
+        self.h5_file.create_dataset(
+            "vehicle/sync_packet_front_vehicle_frame_delta_budget_exceeded",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int8
+        )
+        self.h5_file.create_dataset(
+            "vehicle/sync_packet_join_wait_budget_exceeded",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int8
+        )
+        self.h5_file.create_dataset(
+            "vehicle/sync_packet_component_age_budget_exceeded",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int8
+        )
+        self.h5_file.create_dataset(
+            "vehicle/sync_packet_source_context_queue_depth",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int32
+        )
+        self.h5_file.create_dataset(
+            "vehicle/sync_packet_source_context_dropped_stale_count",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int32
+        )
+        self.h5_file.create_dataset(
+            "vehicle/sync_packet_source_context_missing_count",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int32
+        )
+        self.h5_file.create_dataset(
+            "vehicle/sync_packet_source_context_frame_delta",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "vehicle/sync_packet_source_context_time_delta_ms",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "vehicle/sync_packet_source_bundle_close_reason",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=h5py.string_dtype(encoding='utf-8', length=48)
+        )
+        self.h5_file.create_dataset(
+            "vehicle/sync_packet_source_bundle_deadline_ms",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "vehicle/sync_packet_source_bundle_age_ms",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "vehicle/sync_packet_source_bundle_inflight_count",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int32
+        )
+        self.h5_file.create_dataset(
+            "vehicle/sync_packet_source_bundle_vehicle_state_built",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int8
+        )
+        self.h5_file.create_dataset(
+            "vehicle/sync_packet_source_bundle_vehicle_state_enqueued",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int8
+        )
+        self.h5_file.create_dataset(
+            "vehicle/sync_packet_source_bundle_vehicle_state_sent",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int8
+        )
+        self.h5_file.create_dataset(
+            "vehicle/sync_packet_source_bundle_camera_requested",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int8
+        )
+        self.h5_file.create_dataset(
+            "vehicle/sync_packet_source_camera_request_attempted",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int8
+        )
+        self.h5_file.create_dataset(
+            "vehicle/sync_packet_source_camera_request_accepted",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int8
+        )
+        self.h5_file.create_dataset(
+            "vehicle/sync_packet_source_camera_request_rejected_reason",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=h5py.string_dtype(encoding='utf-8', length=48)
+        )
+        self.h5_file.create_dataset(
+            "vehicle/sync_packet_source_camera_request_skipped_reason",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=h5py.string_dtype(encoding='utf-8', length=64)
+        )
+        self.h5_file.create_dataset(
+            "vehicle/sync_packet_source_camera_request_disposition_code",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=h5py.string_dtype(encoding='utf-8', length=64)
+        )
+        self.h5_file.create_dataset(
+            "vehicle/sync_packet_source_camera_request_attempt_age_ms",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "vehicle/sync_packet_source_camera_request_accept_age_ms",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "vehicle/sync_packet_source_camera_request_queue_depth",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int32
+        )
+        self.h5_file.create_dataset(
+            "vehicle/sync_packet_source_bundle_active_transport_eligible",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int8
+        )
+        self.h5_file.create_dataset(
+            "vehicle/sync_packet_source_bundle_debug_unbundled_capture",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int8
+        )
+        self.h5_file.create_dataset(
+            "vehicle/sync_packet_camera_capture_contract_reason",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=h5py.string_dtype(encoding='utf-8', length=64)
+        )
+        self.h5_file.create_dataset(
+            "vehicle/sync_packet_source_bundle_camera_sent",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int8
+        )
+        self.h5_file.create_dataset(
+            "vehicle/sync_packet_source_bundle_aborted_before_vehicle_send",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int8
+        )
+        self.h5_file.create_dataset(
+            "vehicle/sync_packet_source_bundle_abort_reason",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=h5py.string_dtype(encoding='utf-8', length=64)
+        )
+        self.h5_file.create_dataset(
+            "vehicle/sync_packet_source_vehicle_send_blocked_by_camera_request",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int8
+        )
+        self.h5_file.create_dataset(
+            "vehicle/sync_packet_source_bundle_superseded_before_send",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int8
+        )
+        self.h5_file.create_dataset(
+            "vehicle/sync_packet_active_camera_excluded_event_delta",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int32
+        )
+        self.h5_file.create_dataset(
+            "vehicle/sync_packet_active_camera_excluded_reason_code",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=h5py.string_dtype(encoding='utf-8', length=64)
+        )
+        self.h5_file.create_dataset(
+            "vehicle/sync_packet_unbundled_camera_entered_active_path_event_delta",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int32
         )
         self.h5_file.create_dataset(
             "vehicle/sync_packet_join_wait_ms",
@@ -4466,8 +4754,56 @@ class DataRecorder:
         sync_packet_payload_selection_fallback_reason_code = []
         sync_packet_payload_server_queue_depth_after_select = []
         sync_packet_payload_server_oldest_age_ms_after_select = []
+        sync_packet_selection_result = []
         sync_packet_join_source = []
         sync_packet_join_key_present = []
+        sync_packet_join_failure_reason_code = []
+        sync_packet_join_failure_side_code = []
+        sync_packet_selected_failure_contract_reason_code = []
+        sync_packet_selected_failure_source_stage_code = []
+        sync_packet_source_key_present_camera = []
+        sync_packet_source_key_present_vehicle = []
+        sync_packet_selected_packet_key = []
+        sync_packet_timeout_event_delta = []
+        sync_packet_coherence_pass = []
+        sync_packet_coherence_reason_code = []
+        sync_packet_complete_but_incoherent = []
+        sync_packet_front_vehicle_time_delta_budget_exceeded = []
+        sync_packet_front_vehicle_frame_delta_budget_exceeded = []
+        sync_packet_join_wait_budget_exceeded = []
+        sync_packet_component_age_budget_exceeded = []
+        sync_packet_source_context_queue_depth = []
+        sync_packet_source_context_dropped_stale_count = []
+        sync_packet_source_context_missing_count = []
+        sync_packet_source_context_frame_delta = []
+        sync_packet_source_context_time_delta_ms = []
+        sync_packet_source_bundle_close_reason = []
+        sync_packet_source_bundle_deadline_ms = []
+        sync_packet_source_bundle_age_ms = []
+        sync_packet_source_bundle_inflight_count = []
+        sync_packet_source_bundle_vehicle_state_built = []
+        sync_packet_source_bundle_vehicle_state_enqueued = []
+        sync_packet_source_bundle_vehicle_state_sent = []
+        sync_packet_source_bundle_camera_requested = []
+        sync_packet_source_camera_request_attempted = []
+        sync_packet_source_camera_request_accepted = []
+        sync_packet_source_camera_request_rejected_reason = []
+        sync_packet_source_camera_request_skipped_reason = []
+        sync_packet_source_camera_request_disposition_code = []
+        sync_packet_source_camera_request_attempt_age_ms = []
+        sync_packet_source_camera_request_accept_age_ms = []
+        sync_packet_source_camera_request_queue_depth = []
+        sync_packet_source_bundle_active_transport_eligible = []
+        sync_packet_source_bundle_debug_unbundled_capture = []
+        sync_packet_camera_capture_contract_reason = []
+        sync_packet_source_bundle_camera_sent = []
+        sync_packet_source_bundle_aborted_before_vehicle_send = []
+        sync_packet_source_bundle_abort_reason = []
+        sync_packet_source_vehicle_send_blocked_by_camera_request = []
+        sync_packet_source_bundle_superseded_before_send = []
+        sync_packet_active_camera_excluded_event_delta = []
+        sync_packet_active_camera_excluded_reason_code = []
+        sync_packet_unbundled_camera_entered_active_path_event_delta = []
         sync_packet_join_wait_ms = []
         sync_packet_key_match_count = []
         sync_packet_unity_fallback_count = []
@@ -4929,12 +5265,297 @@ class DataRecorder:
                     )
                 )
             )
+            sync_packet_selection_result.append(
+                str(getattr(vs, 'sync_packet_selection_result', '') or '')
+            )
             sync_packet_join_source.append(
                 str(getattr(vs, 'sync_packet_join_source', '') or '')
             )
             _sync_join_key_present = getattr(vs, 'sync_packet_join_key_present', None)
             sync_packet_join_key_present.append(
                 -1 if _sync_join_key_present is None else (1 if bool(_sync_join_key_present) else 0)
+            )
+            sync_packet_join_failure_reason_code.append(
+                str(getattr(vs, 'sync_packet_join_failure_reason_code', '') or '')
+            )
+            sync_packet_join_failure_side_code.append(
+                str(getattr(vs, 'sync_packet_join_failure_side_code', '') or '')
+            )
+            sync_packet_selected_failure_contract_reason_code.append(
+                str(
+                    getattr(
+                        vs,
+                        'sync_packet_selected_failure_contract_reason_code',
+                        '',
+                    )
+                    or ''
+                )
+            )
+            sync_packet_selected_failure_source_stage_code.append(
+                str(
+                    getattr(
+                        vs,
+                        'sync_packet_selected_failure_source_stage_code',
+                        '',
+                    )
+                    or ''
+                )
+            )
+            _sync_source_key_present_camera = getattr(vs, 'sync_packet_source_key_present_camera', None)
+            sync_packet_source_key_present_camera.append(
+                -1
+                if _sync_source_key_present_camera is None
+                else (1 if bool(_sync_source_key_present_camera) else 0)
+            )
+            _sync_source_key_present_vehicle = getattr(vs, 'sync_packet_source_key_present_vehicle', None)
+            sync_packet_source_key_present_vehicle.append(
+                -1
+                if _sync_source_key_present_vehicle is None
+                else (1 if bool(_sync_source_key_present_vehicle) else 0)
+            )
+            sync_packet_selected_packet_key.append(
+                str(getattr(vs, 'sync_packet_selected_packet_key', '') or '')
+            )
+            sync_packet_timeout_event_delta.append(
+                int(getattr(vs, 'sync_packet_timeout_event_delta', 0) or 0)
+            )
+            _sync_coherence_pass = getattr(vs, 'sync_packet_coherence_pass', None)
+            sync_packet_coherence_pass.append(
+                -1 if _sync_coherence_pass is None else (1 if bool(_sync_coherence_pass) else 0)
+            )
+            sync_packet_coherence_reason_code.append(
+                str(getattr(vs, 'sync_packet_coherence_reason_code', '') or '')
+            )
+            _sync_complete_but_incoherent = getattr(
+                vs, 'sync_packet_complete_but_incoherent', None
+            )
+            sync_packet_complete_but_incoherent.append(
+                -1
+                if _sync_complete_but_incoherent is None
+                else (1 if bool(_sync_complete_but_incoherent) else 0)
+            )
+            _sync_time_budget_exceeded = getattr(
+                vs, 'sync_packet_front_vehicle_time_delta_budget_exceeded', None
+            )
+            sync_packet_front_vehicle_time_delta_budget_exceeded.append(
+                -1
+                if _sync_time_budget_exceeded is None
+                else (1 if bool(_sync_time_budget_exceeded) else 0)
+            )
+            _sync_frame_budget_exceeded = getattr(
+                vs, 'sync_packet_front_vehicle_frame_delta_budget_exceeded', None
+            )
+            sync_packet_front_vehicle_frame_delta_budget_exceeded.append(
+                -1
+                if _sync_frame_budget_exceeded is None
+                else (1 if bool(_sync_frame_budget_exceeded) else 0)
+            )
+            _sync_join_wait_budget_exceeded = getattr(
+                vs, 'sync_packet_join_wait_budget_exceeded', None
+            )
+            sync_packet_join_wait_budget_exceeded.append(
+                -1
+                if _sync_join_wait_budget_exceeded is None
+                else (1 if bool(_sync_join_wait_budget_exceeded) else 0)
+            )
+            _sync_component_age_budget_exceeded = getattr(
+                vs, 'sync_packet_component_age_budget_exceeded', None
+            )
+            sync_packet_component_age_budget_exceeded.append(
+                -1
+                if _sync_component_age_budget_exceeded is None
+                else (1 if bool(_sync_component_age_budget_exceeded) else 0)
+            )
+            sync_packet_source_context_queue_depth.append(
+                int(getattr(vs, 'sync_packet_source_context_queue_depth', 0) or 0)
+            )
+            sync_packet_source_context_dropped_stale_count.append(
+                int(
+                    getattr(vs, 'sync_packet_source_context_dropped_stale_count', 0) or 0
+                )
+            )
+            sync_packet_source_context_missing_count.append(
+                int(getattr(vs, 'sync_packet_source_context_missing_count', 0) or 0)
+            )
+            sync_packet_source_context_frame_delta.append(
+                float(getattr(vs, 'sync_packet_source_context_frame_delta', np.nan))
+            )
+            sync_packet_source_context_time_delta_ms.append(
+                float(getattr(vs, 'sync_packet_source_context_time_delta_ms', np.nan))
+            )
+            sync_packet_source_bundle_close_reason.append(
+                str(getattr(vs, 'sync_packet_source_bundle_close_reason', '') or '')
+            )
+            sync_packet_source_bundle_deadline_ms.append(
+                float(getattr(vs, 'sync_packet_source_bundle_deadline_ms', np.nan))
+            )
+            sync_packet_source_bundle_age_ms.append(
+                float(getattr(vs, 'sync_packet_source_bundle_age_ms', np.nan))
+            )
+            sync_packet_source_bundle_inflight_count.append(
+                int(getattr(vs, 'sync_packet_source_bundle_inflight_count', 0) or 0)
+            )
+            _sync_source_bundle_vehicle_state_built = getattr(
+                vs, 'sync_packet_source_bundle_vehicle_state_built', None
+            )
+            sync_packet_source_bundle_vehicle_state_built.append(
+                -1
+                if _sync_source_bundle_vehicle_state_built is None
+                else (1 if bool(_sync_source_bundle_vehicle_state_built) else 0)
+            )
+            _sync_source_bundle_vehicle_state_enqueued = getattr(
+                vs, 'sync_packet_source_bundle_vehicle_state_enqueued', None
+            )
+            sync_packet_source_bundle_vehicle_state_enqueued.append(
+                -1
+                if _sync_source_bundle_vehicle_state_enqueued is None
+                else (1 if bool(_sync_source_bundle_vehicle_state_enqueued) else 0)
+            )
+            _sync_source_bundle_vehicle_state_sent = getattr(
+                vs, 'sync_packet_source_bundle_vehicle_state_sent', None
+            )
+            sync_packet_source_bundle_vehicle_state_sent.append(
+                -1
+                if _sync_source_bundle_vehicle_state_sent is None
+                else (1 if bool(_sync_source_bundle_vehicle_state_sent) else 0)
+            )
+            _sync_source_bundle_camera_requested = getattr(
+                vs, 'sync_packet_source_bundle_camera_requested', None
+            )
+            sync_packet_source_bundle_camera_requested.append(
+                -1
+                if _sync_source_bundle_camera_requested is None
+                else (1 if bool(_sync_source_bundle_camera_requested) else 0)
+            )
+            _sync_source_camera_request_attempted = getattr(
+                vs, 'sync_packet_source_camera_request_attempted', None
+            )
+            sync_packet_source_camera_request_attempted.append(
+                -1
+                if _sync_source_camera_request_attempted is None
+                else (1 if bool(_sync_source_camera_request_attempted) else 0)
+            )
+            _sync_source_camera_request_accepted = getattr(
+                vs, 'sync_packet_source_camera_request_accepted', None
+            )
+            sync_packet_source_camera_request_accepted.append(
+                -1
+                if _sync_source_camera_request_accepted is None
+                else (1 if bool(_sync_source_camera_request_accepted) else 0)
+            )
+            sync_packet_source_camera_request_rejected_reason.append(
+                str(
+                    getattr(
+                        vs, 'sync_packet_source_camera_request_rejected_reason', ''
+                    )
+                    or ''
+                )
+            )
+            sync_packet_source_camera_request_skipped_reason.append(
+                str(
+                    getattr(
+                        vs, 'sync_packet_source_camera_request_skipped_reason', ''
+                    )
+                    or ''
+                )
+            )
+            sync_packet_source_camera_request_disposition_code.append(
+                str(
+                    getattr(
+                        vs, 'sync_packet_source_camera_request_disposition_code', ''
+                    )
+                    or ''
+                )
+            )
+            sync_packet_source_camera_request_attempt_age_ms.append(
+                float(
+                    getattr(
+                        vs, 'sync_packet_source_camera_request_attempt_age_ms', np.nan
+                    )
+                )
+            )
+            sync_packet_source_camera_request_accept_age_ms.append(
+                float(
+                    getattr(
+                        vs, 'sync_packet_source_camera_request_accept_age_ms', np.nan
+                    )
+                )
+            )
+            sync_packet_source_camera_request_queue_depth.append(
+                int(
+                    getattr(vs, 'sync_packet_source_camera_request_queue_depth', 0)
+                    or 0
+                )
+            )
+            _sync_source_bundle_active_transport_eligible = getattr(
+                vs, 'sync_packet_source_bundle_active_transport_eligible', None
+            )
+            sync_packet_source_bundle_active_transport_eligible.append(
+                -1
+                if _sync_source_bundle_active_transport_eligible is None
+                else (1 if bool(_sync_source_bundle_active_transport_eligible) else 0)
+            )
+            _sync_source_bundle_debug_unbundled_capture = getattr(
+                vs, 'sync_packet_source_bundle_debug_unbundled_capture', None
+            )
+            sync_packet_source_bundle_debug_unbundled_capture.append(
+                -1
+                if _sync_source_bundle_debug_unbundled_capture is None
+                else (1 if bool(_sync_source_bundle_debug_unbundled_capture) else 0)
+            )
+            sync_packet_camera_capture_contract_reason.append(
+                str(getattr(vs, 'sync_packet_camera_capture_contract_reason', '') or '')
+            )
+            _sync_source_bundle_camera_sent = getattr(
+                vs, 'sync_packet_source_bundle_camera_sent', None
+            )
+            sync_packet_source_bundle_camera_sent.append(
+                -1
+                if _sync_source_bundle_camera_sent is None
+                else (1 if bool(_sync_source_bundle_camera_sent) else 0)
+            )
+            _sync_source_bundle_aborted_before_vehicle_send = getattr(
+                vs, 'sync_packet_source_bundle_aborted_before_vehicle_send', None
+            )
+            sync_packet_source_bundle_aborted_before_vehicle_send.append(
+                -1
+                if _sync_source_bundle_aborted_before_vehicle_send is None
+                else (1 if bool(_sync_source_bundle_aborted_before_vehicle_send) else 0)
+            )
+            sync_packet_source_bundle_abort_reason.append(
+                str(getattr(vs, 'sync_packet_source_bundle_abort_reason', '') or '')
+            )
+            _sync_source_vehicle_send_blocked_by_camera_request = getattr(
+                vs, 'sync_packet_source_vehicle_send_blocked_by_camera_request', None
+            )
+            sync_packet_source_vehicle_send_blocked_by_camera_request.append(
+                -1
+                if _sync_source_vehicle_send_blocked_by_camera_request is None
+                else (1 if bool(_sync_source_vehicle_send_blocked_by_camera_request) else 0)
+            )
+            _sync_source_bundle_superseded_before_send = getattr(
+                vs, 'sync_packet_source_bundle_superseded_before_send', None
+            )
+            sync_packet_source_bundle_superseded_before_send.append(
+                -1
+                if _sync_source_bundle_superseded_before_send is None
+                else (1 if bool(_sync_source_bundle_superseded_before_send) else 0)
+            )
+            sync_packet_active_camera_excluded_event_delta.append(
+                int(getattr(vs, 'sync_packet_active_camera_excluded_event_delta', 0) or 0)
+            )
+            sync_packet_active_camera_excluded_reason_code.append(
+                str(getattr(vs, 'sync_packet_active_camera_excluded_reason_code', '') or '')
+            )
+            sync_packet_unbundled_camera_entered_active_path_event_delta.append(
+                int(
+                    getattr(
+                        vs,
+                        'sync_packet_unbundled_camera_entered_active_path_event_delta',
+                        0,
+                    )
+                    or 0
+                )
             )
             sync_packet_join_wait_ms.append(
                 float(getattr(vs, 'sync_packet_join_wait_ms', np.nan))
@@ -5459,6 +6080,11 @@ class DataRecorder:
                     self.h5_file["vehicle/sync_packet_payload_server_queue_depth_after_select"][current_size:] = np.array(sync_packet_payload_server_queue_depth_after_select, dtype=np.int32)
                     self.h5_file["vehicle/sync_packet_payload_server_oldest_age_ms_after_select"].resize((current_size + len(sync_packet_payload_server_oldest_age_ms_after_select),))
                     self.h5_file["vehicle/sync_packet_payload_server_oldest_age_ms_after_select"][current_size:] = np.array(sync_packet_payload_server_oldest_age_ms_after_select, dtype=np.float32)
+                    self.h5_file["vehicle/sync_packet_selection_result"].resize((current_size + len(sync_packet_selection_result),))
+                    self.h5_file["vehicle/sync_packet_selection_result"][current_size:] = np.array(
+                        sync_packet_selection_result,
+                        dtype=h5py.string_dtype(encoding='utf-8', length=32),
+                    )
                     self.h5_file["vehicle/sync_packet_join_source"].resize((current_size + len(sync_packet_join_source),))
                     self.h5_file["vehicle/sync_packet_join_source"][current_size:] = np.array(
                         sync_packet_join_source,
@@ -5466,6 +6092,207 @@ class DataRecorder:
                     )
                     self.h5_file["vehicle/sync_packet_join_key_present"].resize((current_size + len(sync_packet_join_key_present),))
                     self.h5_file["vehicle/sync_packet_join_key_present"][current_size:] = np.array(sync_packet_join_key_present, dtype=np.int8)
+                    self.h5_file["vehicle/sync_packet_join_failure_reason_code"].resize((current_size + len(sync_packet_join_failure_reason_code),))
+                    self.h5_file["vehicle/sync_packet_join_failure_reason_code"][current_size:] = np.array(
+                        sync_packet_join_failure_reason_code,
+                        dtype=h5py.string_dtype(encoding='utf-8', length=40),
+                    )
+                    self.h5_file["vehicle/sync_packet_join_failure_side_code"].resize((current_size + len(sync_packet_join_failure_side_code),))
+                    self.h5_file["vehicle/sync_packet_join_failure_side_code"][current_size:] = np.array(
+                        sync_packet_join_failure_side_code,
+                        dtype=h5py.string_dtype(encoding='utf-8', length=16),
+                    )
+                    self.h5_file["vehicle/sync_packet_selected_failure_contract_reason_code"].resize((current_size + len(sync_packet_selected_failure_contract_reason_code),))
+                    self.h5_file["vehicle/sync_packet_selected_failure_contract_reason_code"][current_size:] = np.array(
+                        sync_packet_selected_failure_contract_reason_code,
+                        dtype=h5py.string_dtype(encoding='utf-8', length=48),
+                    )
+                    self.h5_file["vehicle/sync_packet_selected_failure_source_stage_code"].resize((current_size + len(sync_packet_selected_failure_source_stage_code),))
+                    self.h5_file["vehicle/sync_packet_selected_failure_source_stage_code"][current_size:] = np.array(
+                        sync_packet_selected_failure_source_stage_code,
+                        dtype=h5py.string_dtype(encoding='utf-8', length=24),
+                    )
+                    self.h5_file["vehicle/sync_packet_source_key_present_camera"].resize((current_size + len(sync_packet_source_key_present_camera),))
+                    self.h5_file["vehicle/sync_packet_source_key_present_camera"][current_size:] = np.array(
+                        sync_packet_source_key_present_camera, dtype=np.int8
+                    )
+                    self.h5_file["vehicle/sync_packet_source_key_present_vehicle"].resize((current_size + len(sync_packet_source_key_present_vehicle),))
+                    self.h5_file["vehicle/sync_packet_source_key_present_vehicle"][current_size:] = np.array(
+                        sync_packet_source_key_present_vehicle, dtype=np.int8
+                    )
+                    self.h5_file["vehicle/sync_packet_selected_packet_key"].resize((current_size + len(sync_packet_selected_packet_key),))
+                    self.h5_file["vehicle/sync_packet_selected_packet_key"][current_size:] = np.array(
+                        sync_packet_selected_packet_key,
+                        dtype=h5py.string_dtype(encoding='utf-8', length=64),
+                    )
+                    self.h5_file["vehicle/sync_packet_timeout_event_delta"].resize((current_size + len(sync_packet_timeout_event_delta),))
+                    self.h5_file["vehicle/sync_packet_timeout_event_delta"][current_size:] = np.array(
+                        sync_packet_timeout_event_delta, dtype=np.int32
+                    )
+                    self.h5_file["vehicle/sync_packet_coherence_pass"].resize((current_size + len(sync_packet_coherence_pass),))
+                    self.h5_file["vehicle/sync_packet_coherence_pass"][current_size:] = np.array(
+                        sync_packet_coherence_pass, dtype=np.int8
+                    )
+                    self.h5_file["vehicle/sync_packet_coherence_reason_code"].resize((current_size + len(sync_packet_coherence_reason_code),))
+                    self.h5_file["vehicle/sync_packet_coherence_reason_code"][current_size:] = np.array(
+                        sync_packet_coherence_reason_code,
+                        dtype=h5py.string_dtype(encoding='utf-8', length=48),
+                    )
+                    self.h5_file["vehicle/sync_packet_complete_but_incoherent"].resize((current_size + len(sync_packet_complete_but_incoherent),))
+                    self.h5_file["vehicle/sync_packet_complete_but_incoherent"][current_size:] = np.array(
+                        sync_packet_complete_but_incoherent, dtype=np.int8
+                    )
+                    self.h5_file["vehicle/sync_packet_front_vehicle_time_delta_budget_exceeded"].resize((current_size + len(sync_packet_front_vehicle_time_delta_budget_exceeded),))
+                    self.h5_file["vehicle/sync_packet_front_vehicle_time_delta_budget_exceeded"][current_size:] = np.array(
+                        sync_packet_front_vehicle_time_delta_budget_exceeded, dtype=np.int8
+                    )
+                    self.h5_file["vehicle/sync_packet_front_vehicle_frame_delta_budget_exceeded"].resize((current_size + len(sync_packet_front_vehicle_frame_delta_budget_exceeded),))
+                    self.h5_file["vehicle/sync_packet_front_vehicle_frame_delta_budget_exceeded"][current_size:] = np.array(
+                        sync_packet_front_vehicle_frame_delta_budget_exceeded, dtype=np.int8
+                    )
+                    self.h5_file["vehicle/sync_packet_join_wait_budget_exceeded"].resize((current_size + len(sync_packet_join_wait_budget_exceeded),))
+                    self.h5_file["vehicle/sync_packet_join_wait_budget_exceeded"][current_size:] = np.array(
+                        sync_packet_join_wait_budget_exceeded, dtype=np.int8
+                    )
+                    self.h5_file["vehicle/sync_packet_component_age_budget_exceeded"].resize((current_size + len(sync_packet_component_age_budget_exceeded),))
+                    self.h5_file["vehicle/sync_packet_component_age_budget_exceeded"][current_size:] = np.array(
+                        sync_packet_component_age_budget_exceeded, dtype=np.int8
+                    )
+                    self.h5_file["vehicle/sync_packet_source_context_queue_depth"].resize((current_size + len(sync_packet_source_context_queue_depth),))
+                    self.h5_file["vehicle/sync_packet_source_context_queue_depth"][current_size:] = np.array(
+                        sync_packet_source_context_queue_depth, dtype=np.int32
+                    )
+                    self.h5_file["vehicle/sync_packet_source_context_dropped_stale_count"].resize((current_size + len(sync_packet_source_context_dropped_stale_count),))
+                    self.h5_file["vehicle/sync_packet_source_context_dropped_stale_count"][current_size:] = np.array(
+                        sync_packet_source_context_dropped_stale_count, dtype=np.int32
+                    )
+                    self.h5_file["vehicle/sync_packet_source_context_missing_count"].resize((current_size + len(sync_packet_source_context_missing_count),))
+                    self.h5_file["vehicle/sync_packet_source_context_missing_count"][current_size:] = np.array(
+                        sync_packet_source_context_missing_count, dtype=np.int32
+                    )
+                    self.h5_file["vehicle/sync_packet_source_context_frame_delta"].resize((current_size + len(sync_packet_source_context_frame_delta),))
+                    self.h5_file["vehicle/sync_packet_source_context_frame_delta"][current_size:] = np.array(
+                        sync_packet_source_context_frame_delta, dtype=np.float32
+                    )
+                    self.h5_file["vehicle/sync_packet_source_context_time_delta_ms"].resize((current_size + len(sync_packet_source_context_time_delta_ms),))
+                    self.h5_file["vehicle/sync_packet_source_context_time_delta_ms"][current_size:] = np.array(
+                        sync_packet_source_context_time_delta_ms, dtype=np.float32
+                    )
+                    self.h5_file["vehicle/sync_packet_source_bundle_close_reason"].resize((current_size + len(sync_packet_source_bundle_close_reason),))
+                    self.h5_file["vehicle/sync_packet_source_bundle_close_reason"][current_size:] = np.array(
+                        sync_packet_source_bundle_close_reason,
+                        dtype=h5py.string_dtype(encoding='utf-8', length=48),
+                    )
+                    self.h5_file["vehicle/sync_packet_source_bundle_deadline_ms"].resize((current_size + len(sync_packet_source_bundle_deadline_ms),))
+                    self.h5_file["vehicle/sync_packet_source_bundle_deadline_ms"][current_size:] = np.array(
+                        sync_packet_source_bundle_deadline_ms, dtype=np.float32
+                    )
+                    self.h5_file["vehicle/sync_packet_source_bundle_age_ms"].resize((current_size + len(sync_packet_source_bundle_age_ms),))
+                    self.h5_file["vehicle/sync_packet_source_bundle_age_ms"][current_size:] = np.array(
+                        sync_packet_source_bundle_age_ms, dtype=np.float32
+                    )
+                    self.h5_file["vehicle/sync_packet_source_bundle_inflight_count"].resize((current_size + len(sync_packet_source_bundle_inflight_count),))
+                    self.h5_file["vehicle/sync_packet_source_bundle_inflight_count"][current_size:] = np.array(
+                        sync_packet_source_bundle_inflight_count, dtype=np.int32
+                    )
+                    self.h5_file["vehicle/sync_packet_source_bundle_vehicle_state_built"].resize((current_size + len(sync_packet_source_bundle_vehicle_state_built),))
+                    self.h5_file["vehicle/sync_packet_source_bundle_vehicle_state_built"][current_size:] = np.array(
+                        sync_packet_source_bundle_vehicle_state_built, dtype=np.int8
+                    )
+                    self.h5_file["vehicle/sync_packet_source_bundle_vehicle_state_enqueued"].resize((current_size + len(sync_packet_source_bundle_vehicle_state_enqueued),))
+                    self.h5_file["vehicle/sync_packet_source_bundle_vehicle_state_enqueued"][current_size:] = np.array(
+                        sync_packet_source_bundle_vehicle_state_enqueued, dtype=np.int8
+                    )
+                    self.h5_file["vehicle/sync_packet_source_bundle_vehicle_state_sent"].resize((current_size + len(sync_packet_source_bundle_vehicle_state_sent),))
+                    self.h5_file["vehicle/sync_packet_source_bundle_vehicle_state_sent"][current_size:] = np.array(
+                        sync_packet_source_bundle_vehicle_state_sent, dtype=np.int8
+                    )
+                    self.h5_file["vehicle/sync_packet_source_bundle_camera_requested"].resize((current_size + len(sync_packet_source_bundle_camera_requested),))
+                    self.h5_file["vehicle/sync_packet_source_bundle_camera_requested"][current_size:] = np.array(
+                        sync_packet_source_bundle_camera_requested, dtype=np.int8
+                    )
+                    self.h5_file["vehicle/sync_packet_source_camera_request_attempted"].resize((current_size + len(sync_packet_source_camera_request_attempted),))
+                    self.h5_file["vehicle/sync_packet_source_camera_request_attempted"][current_size:] = np.array(
+                        sync_packet_source_camera_request_attempted, dtype=np.int8
+                    )
+                    self.h5_file["vehicle/sync_packet_source_camera_request_accepted"].resize((current_size + len(sync_packet_source_camera_request_accepted),))
+                    self.h5_file["vehicle/sync_packet_source_camera_request_accepted"][current_size:] = np.array(
+                        sync_packet_source_camera_request_accepted, dtype=np.int8
+                    )
+                    self.h5_file["vehicle/sync_packet_source_camera_request_rejected_reason"].resize((current_size + len(sync_packet_source_camera_request_rejected_reason),))
+                    self.h5_file["vehicle/sync_packet_source_camera_request_rejected_reason"][current_size:] = np.array(
+                        sync_packet_source_camera_request_rejected_reason,
+                        dtype=h5py.string_dtype(encoding='utf-8', length=48),
+                    )
+                    self.h5_file["vehicle/sync_packet_source_camera_request_skipped_reason"].resize((current_size + len(sync_packet_source_camera_request_skipped_reason),))
+                    self.h5_file["vehicle/sync_packet_source_camera_request_skipped_reason"][current_size:] = np.array(
+                        sync_packet_source_camera_request_skipped_reason,
+                        dtype=h5py.string_dtype(encoding='utf-8', length=64),
+                    )
+                    self.h5_file["vehicle/sync_packet_source_camera_request_disposition_code"].resize((current_size + len(sync_packet_source_camera_request_disposition_code),))
+                    self.h5_file["vehicle/sync_packet_source_camera_request_disposition_code"][current_size:] = np.array(
+                        sync_packet_source_camera_request_disposition_code,
+                        dtype=h5py.string_dtype(encoding='utf-8', length=64),
+                    )
+                    self.h5_file["vehicle/sync_packet_source_camera_request_attempt_age_ms"].resize((current_size + len(sync_packet_source_camera_request_attempt_age_ms),))
+                    self.h5_file["vehicle/sync_packet_source_camera_request_attempt_age_ms"][current_size:] = np.array(
+                        sync_packet_source_camera_request_attempt_age_ms, dtype=np.float32
+                    )
+                    self.h5_file["vehicle/sync_packet_source_camera_request_accept_age_ms"].resize((current_size + len(sync_packet_source_camera_request_accept_age_ms),))
+                    self.h5_file["vehicle/sync_packet_source_camera_request_accept_age_ms"][current_size:] = np.array(
+                        sync_packet_source_camera_request_accept_age_ms, dtype=np.float32
+                    )
+                    self.h5_file["vehicle/sync_packet_source_camera_request_queue_depth"].resize((current_size + len(sync_packet_source_camera_request_queue_depth),))
+                    self.h5_file["vehicle/sync_packet_source_camera_request_queue_depth"][current_size:] = np.array(
+                        sync_packet_source_camera_request_queue_depth, dtype=np.int32
+                    )
+                    self.h5_file["vehicle/sync_packet_source_bundle_active_transport_eligible"].resize((current_size + len(sync_packet_source_bundle_active_transport_eligible),))
+                    self.h5_file["vehicle/sync_packet_source_bundle_active_transport_eligible"][current_size:] = np.array(
+                        sync_packet_source_bundle_active_transport_eligible, dtype=np.int8
+                    )
+                    self.h5_file["vehicle/sync_packet_source_bundle_debug_unbundled_capture"].resize((current_size + len(sync_packet_source_bundle_debug_unbundled_capture),))
+                    self.h5_file["vehicle/sync_packet_source_bundle_debug_unbundled_capture"][current_size:] = np.array(
+                        sync_packet_source_bundle_debug_unbundled_capture, dtype=np.int8
+                    )
+                    self.h5_file["vehicle/sync_packet_camera_capture_contract_reason"].resize((current_size + len(sync_packet_camera_capture_contract_reason),))
+                    self.h5_file["vehicle/sync_packet_camera_capture_contract_reason"][current_size:] = np.array(
+                        sync_packet_camera_capture_contract_reason,
+                        dtype=h5py.string_dtype(encoding='utf-8', length=64),
+                    )
+                    self.h5_file["vehicle/sync_packet_source_bundle_camera_sent"].resize((current_size + len(sync_packet_source_bundle_camera_sent),))
+                    self.h5_file["vehicle/sync_packet_source_bundle_camera_sent"][current_size:] = np.array(
+                        sync_packet_source_bundle_camera_sent, dtype=np.int8
+                    )
+                    self.h5_file["vehicle/sync_packet_source_bundle_aborted_before_vehicle_send"].resize((current_size + len(sync_packet_source_bundle_aborted_before_vehicle_send),))
+                    self.h5_file["vehicle/sync_packet_source_bundle_aborted_before_vehicle_send"][current_size:] = np.array(
+                        sync_packet_source_bundle_aborted_before_vehicle_send, dtype=np.int8
+                    )
+                    self.h5_file["vehicle/sync_packet_source_bundle_abort_reason"].resize((current_size + len(sync_packet_source_bundle_abort_reason),))
+                    self.h5_file["vehicle/sync_packet_source_bundle_abort_reason"][current_size:] = np.array(
+                        sync_packet_source_bundle_abort_reason,
+                        dtype=h5py.string_dtype(encoding='utf-8', length=64),
+                    )
+                    self.h5_file["vehicle/sync_packet_source_vehicle_send_blocked_by_camera_request"].resize((current_size + len(sync_packet_source_vehicle_send_blocked_by_camera_request),))
+                    self.h5_file["vehicle/sync_packet_source_vehicle_send_blocked_by_camera_request"][current_size:] = np.array(
+                        sync_packet_source_vehicle_send_blocked_by_camera_request, dtype=np.int8
+                    )
+                    self.h5_file["vehicle/sync_packet_source_bundle_superseded_before_send"].resize((current_size + len(sync_packet_source_bundle_superseded_before_send),))
+                    self.h5_file["vehicle/sync_packet_source_bundle_superseded_before_send"][current_size:] = np.array(
+                        sync_packet_source_bundle_superseded_before_send, dtype=np.int8
+                    )
+                    self.h5_file["vehicle/sync_packet_active_camera_excluded_event_delta"].resize((current_size + len(sync_packet_active_camera_excluded_event_delta),))
+                    self.h5_file["vehicle/sync_packet_active_camera_excluded_event_delta"][current_size:] = np.array(
+                        sync_packet_active_camera_excluded_event_delta, dtype=np.int32
+                    )
+                    self.h5_file["vehicle/sync_packet_active_camera_excluded_reason_code"].resize((current_size + len(sync_packet_active_camera_excluded_reason_code),))
+                    self.h5_file["vehicle/sync_packet_active_camera_excluded_reason_code"][current_size:] = np.array(
+                        sync_packet_active_camera_excluded_reason_code,
+                        dtype=h5py.string_dtype(encoding='utf-8', length=64),
+                    )
+                    self.h5_file["vehicle/sync_packet_unbundled_camera_entered_active_path_event_delta"].resize((current_size + len(sync_packet_unbundled_camera_entered_active_path_event_delta),))
+                    self.h5_file["vehicle/sync_packet_unbundled_camera_entered_active_path_event_delta"][current_size:] = np.array(
+                        sync_packet_unbundled_camera_entered_active_path_event_delta, dtype=np.int32
+                    )
                     self.h5_file["vehicle/sync_packet_join_wait_ms"].resize((current_size + len(sync_packet_join_wait_ms),))
                     self.h5_file["vehicle/sync_packet_join_wait_ms"][current_size:] = np.array(sync_packet_join_wait_ms, dtype=np.float32)
                     self.h5_file["vehicle/sync_packet_key_match_count"].resize((current_size + len(sync_packet_key_match_count),))

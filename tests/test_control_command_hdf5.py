@@ -622,8 +622,56 @@ def test_recorder_writes_sync_packet_and_post_jump_fields(tmp_path: Path) -> Non
             sync_packet_payload_selection_fallback_reason_code="none",
             sync_packet_payload_server_queue_depth_after_select=0,
             sync_packet_payload_server_oldest_age_ms_after_select=np.nan,
+            sync_packet_selection_result="complete",
             sync_packet_join_source="packet_key",
             sync_packet_join_key_present=True,
+            sync_packet_join_failure_reason_code="none",
+            sync_packet_join_failure_side_code="none",
+            sync_packet_selected_failure_contract_reason_code="none",
+            sync_packet_selected_failure_source_stage_code="none",
+            sync_packet_source_key_present_camera=True,
+            sync_packet_source_key_present_vehicle=True,
+            sync_packet_selected_packet_key="avbridge:7:128",
+            sync_packet_timeout_event_delta=0,
+            sync_packet_coherence_pass=True,
+            sync_packet_coherence_reason_code="coherent",
+            sync_packet_complete_but_incoherent=False,
+            sync_packet_front_vehicle_time_delta_budget_exceeded=False,
+            sync_packet_front_vehicle_frame_delta_budget_exceeded=False,
+            sync_packet_join_wait_budget_exceeded=False,
+            sync_packet_component_age_budget_exceeded=False,
+            sync_packet_source_context_queue_depth=2,
+            sync_packet_source_context_dropped_stale_count=1,
+            sync_packet_source_context_missing_count=0,
+            sync_packet_source_context_frame_delta=0.0,
+            sync_packet_source_context_time_delta_ms=4.0,
+            sync_packet_source_bundle_close_reason="open",
+            sync_packet_source_bundle_deadline_ms=100.0,
+            sync_packet_source_bundle_age_ms=12.0,
+            sync_packet_source_bundle_inflight_count=2,
+            sync_packet_source_bundle_vehicle_state_built=True,
+            sync_packet_source_bundle_vehicle_state_enqueued=True,
+            sync_packet_source_bundle_vehicle_state_sent=True,
+            sync_packet_source_bundle_camera_requested=True,
+            sync_packet_source_camera_request_attempted=True,
+            sync_packet_source_camera_request_accepted=True,
+            sync_packet_source_camera_request_rejected_reason="",
+            sync_packet_source_camera_request_skipped_reason="camera_capture_missing",
+            sync_packet_source_camera_request_disposition_code="skipped_camera_capture_missing",
+            sync_packet_source_camera_request_attempt_age_ms=6.0,
+            sync_packet_source_camera_request_accept_age_ms=4.0,
+            sync_packet_source_camera_request_queue_depth=1,
+            sync_packet_source_bundle_active_transport_eligible=False,
+            sync_packet_source_bundle_debug_unbundled_capture=True,
+            sync_packet_camera_capture_contract_reason="no_source_bundle_context",
+            sync_packet_source_bundle_camera_sent=True,
+            sync_packet_source_bundle_aborted_before_vehicle_send=True,
+            sync_packet_source_bundle_abort_reason="bundle_aborted_camera_request_not_attempted",
+            sync_packet_source_vehicle_send_blocked_by_camera_request=True,
+            sync_packet_source_bundle_superseded_before_send=False,
+            sync_packet_active_camera_excluded_event_delta=2,
+            sync_packet_active_camera_excluded_reason_code="no_source_bundle_context",
+            sync_packet_unbundled_camera_entered_active_path_event_delta=0,
             sync_packet_join_wait_ms=18.0,
             sync_packet_key_match_count=9,
             sync_packet_unity_fallback_count=1,
@@ -738,11 +786,129 @@ def test_recorder_writes_sync_packet_and_post_jump_fields(tmp_path: Path) -> Non
             selection_reason = selection_reason.decode("utf-8")
         assert str(selection_reason) == "none"
         assert int(h5_file["vehicle/sync_packet_payload_server_queue_depth_after_select"][0]) == 0
+        selection_result = h5_file["vehicle/sync_packet_selection_result"][0]
+        if isinstance(selection_result, bytes):
+            selection_result = selection_result.decode("utf-8")
+        assert str(selection_result) == "complete"
         join_source = h5_file["vehicle/sync_packet_join_source"][0]
         if isinstance(join_source, bytes):
             join_source = join_source.decode("utf-8")
         assert str(join_source) == "packet_key"
         assert int(h5_file["vehicle/sync_packet_join_key_present"][0]) == 1
+        join_failure_reason = h5_file["vehicle/sync_packet_join_failure_reason_code"][0]
+        if isinstance(join_failure_reason, bytes):
+            join_failure_reason = join_failure_reason.decode("utf-8")
+        assert str(join_failure_reason) == "none"
+        join_failure_side = h5_file["vehicle/sync_packet_join_failure_side_code"][0]
+        if isinstance(join_failure_side, bytes):
+            join_failure_side = join_failure_side.decode("utf-8")
+        assert str(join_failure_side) == "none"
+        selected_failure_reason = h5_file[
+            "vehicle/sync_packet_selected_failure_contract_reason_code"
+        ][0]
+        if isinstance(selected_failure_reason, bytes):
+            selected_failure_reason = selected_failure_reason.decode("utf-8")
+        assert str(selected_failure_reason) == "none"
+        selected_failure_stage = h5_file[
+            "vehicle/sync_packet_selected_failure_source_stage_code"
+        ][0]
+        if isinstance(selected_failure_stage, bytes):
+            selected_failure_stage = selected_failure_stage.decode("utf-8")
+        assert str(selected_failure_stage) == "none"
+        assert int(h5_file["vehicle/sync_packet_source_key_present_camera"][0]) == 1
+        assert int(h5_file["vehicle/sync_packet_source_key_present_vehicle"][0]) == 1
+        selected_packet_key = h5_file["vehicle/sync_packet_selected_packet_key"][0]
+        if isinstance(selected_packet_key, bytes):
+            selected_packet_key = selected_packet_key.decode("utf-8")
+        assert str(selected_packet_key) == "avbridge:7:128"
+        assert int(h5_file["vehicle/sync_packet_timeout_event_delta"][0]) == 0
+        assert int(h5_file["vehicle/sync_packet_coherence_pass"][0]) == 1
+        coherence_reason = h5_file["vehicle/sync_packet_coherence_reason_code"][0]
+        if isinstance(coherence_reason, bytes):
+            coherence_reason = coherence_reason.decode("utf-8")
+        assert str(coherence_reason) == "coherent"
+        assert int(h5_file["vehicle/sync_packet_complete_but_incoherent"][0]) == 0
+        assert int(
+            h5_file["vehicle/sync_packet_front_vehicle_time_delta_budget_exceeded"][0]
+        ) == 0
+        assert int(
+            h5_file["vehicle/sync_packet_front_vehicle_frame_delta_budget_exceeded"][0]
+        ) == 0
+        assert int(h5_file["vehicle/sync_packet_join_wait_budget_exceeded"][0]) == 0
+        assert int(
+            h5_file["vehicle/sync_packet_component_age_budget_exceeded"][0]
+        ) == 0
+        assert int(h5_file["vehicle/sync_packet_source_context_queue_depth"][0]) == 2
+        assert int(
+            h5_file["vehicle/sync_packet_source_context_dropped_stale_count"][0]
+        ) == 1
+        assert int(h5_file["vehicle/sync_packet_source_context_missing_count"][0]) == 0
+        assert float(h5_file["vehicle/sync_packet_source_context_frame_delta"][0]) == pytest.approx(
+            0.0, rel=1e-6
+        )
+        assert float(
+            h5_file["vehicle/sync_packet_source_context_time_delta_ms"][0]
+        ) == pytest.approx(4.0, rel=1e-6)
+        bundle_close_reason = h5_file["vehicle/sync_packet_source_bundle_close_reason"][0]
+        if isinstance(bundle_close_reason, bytes):
+            bundle_close_reason = bundle_close_reason.decode("utf-8")
+        assert str(bundle_close_reason) == "open"
+        assert float(h5_file["vehicle/sync_packet_source_bundle_deadline_ms"][0]) == pytest.approx(
+            100.0, rel=1e-6
+        )
+        assert float(h5_file["vehicle/sync_packet_source_bundle_age_ms"][0]) == pytest.approx(
+            12.0, rel=1e-6
+        )
+        assert int(h5_file["vehicle/sync_packet_source_bundle_inflight_count"][0]) == 2
+        assert int(h5_file["vehicle/sync_packet_source_bundle_vehicle_state_built"][0]) == 1
+        assert int(h5_file["vehicle/sync_packet_source_bundle_vehicle_state_enqueued"][0]) == 1
+        assert int(h5_file["vehicle/sync_packet_source_bundle_vehicle_state_sent"][0]) == 1
+        assert int(h5_file["vehicle/sync_packet_source_bundle_camera_requested"][0]) == 1
+        assert int(h5_file["vehicle/sync_packet_source_camera_request_attempted"][0]) == 1
+        assert int(h5_file["vehicle/sync_packet_source_camera_request_accepted"][0]) == 1
+        rejected_reason = h5_file["vehicle/sync_packet_source_camera_request_rejected_reason"][0]
+        if isinstance(rejected_reason, bytes):
+            rejected_reason = rejected_reason.decode("utf-8")
+        assert str(rejected_reason) == ""
+        skipped_reason = h5_file["vehicle/sync_packet_source_camera_request_skipped_reason"][0]
+        if isinstance(skipped_reason, bytes):
+            skipped_reason = skipped_reason.decode("utf-8")
+        assert str(skipped_reason) == "camera_capture_missing"
+        disposition = h5_file["vehicle/sync_packet_source_camera_request_disposition_code"][0]
+        if isinstance(disposition, bytes):
+            disposition = disposition.decode("utf-8")
+        assert str(disposition) == "skipped_camera_capture_missing"
+        assert float(h5_file["vehicle/sync_packet_source_camera_request_attempt_age_ms"][0]) == pytest.approx(
+            6.0, rel=1e-6
+        )
+        assert float(h5_file["vehicle/sync_packet_source_camera_request_accept_age_ms"][0]) == pytest.approx(
+            4.0, rel=1e-6
+        )
+        assert int(h5_file["vehicle/sync_packet_source_camera_request_queue_depth"][0]) == 1
+        assert int(h5_file["vehicle/sync_packet_source_bundle_active_transport_eligible"][0]) == 0
+        assert int(h5_file["vehicle/sync_packet_source_bundle_debug_unbundled_capture"][0]) == 1
+        capture_contract_reason = h5_file["vehicle/sync_packet_camera_capture_contract_reason"][0]
+        if isinstance(capture_contract_reason, bytes):
+            capture_contract_reason = capture_contract_reason.decode("utf-8")
+        assert str(capture_contract_reason) == "no_source_bundle_context"
+        assert int(h5_file["vehicle/sync_packet_source_bundle_camera_sent"][0]) == 1
+        assert int(h5_file["vehicle/sync_packet_source_bundle_aborted_before_vehicle_send"][0]) == 1
+        abort_reason = h5_file["vehicle/sync_packet_source_bundle_abort_reason"][0]
+        if isinstance(abort_reason, bytes):
+            abort_reason = abort_reason.decode("utf-8")
+        assert str(abort_reason) == "bundle_aborted_camera_request_not_attempted"
+        assert int(
+            h5_file["vehicle/sync_packet_source_vehicle_send_blocked_by_camera_request"][0]
+        ) == 1
+        assert int(h5_file["vehicle/sync_packet_source_bundle_superseded_before_send"][0]) == 0
+        assert int(h5_file["vehicle/sync_packet_active_camera_excluded_event_delta"][0]) == 2
+        excluded_reason = h5_file["vehicle/sync_packet_active_camera_excluded_reason_code"][0]
+        if isinstance(excluded_reason, bytes):
+            excluded_reason = excluded_reason.decode("utf-8")
+        assert str(excluded_reason) == "no_source_bundle_context"
+        assert int(
+            h5_file["vehicle/sync_packet_unbundled_camera_entered_active_path_event_delta"][0]
+        ) == 0
         assert float(h5_file["vehicle/sync_packet_join_wait_ms"][0]) == pytest.approx(
             18.0, rel=1e-6
         )

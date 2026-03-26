@@ -1806,6 +1806,27 @@ public class VehicleState
     public int syncPacketCameraFrameId = -1;
     public int syncPacketCameraUnityFrameCount = -1;
     public float syncPacketCameraTimestamp = -1.0f;
+    public string syncPacketSourceBundleCloseReason = "";
+    public float syncPacketSourceBundleDeadlineMs = 0.0f;
+    public float syncPacketSourceBundleAgeMs = 0.0f;
+    public int syncPacketSourceBundleInflightCount = 0;
+    public bool syncPacketSourceVehicleStateBuilt = false;
+    public bool syncPacketSourceVehicleStateEnqueued = false;
+    public bool syncPacketSourceVehicleStateSent = false;
+    public bool syncPacketSourceCameraRequested = false;
+    public bool syncPacketSourceCameraRequestAttempted = false;
+    public bool syncPacketSourceCameraRequestAccepted = false;
+    public string syncPacketSourceCameraRequestRejectedReason = "";
+    public string syncPacketSourceCameraRequestSkippedReason = "";
+    public string syncPacketSourceCameraRequestDispositionCode = "";
+    public float syncPacketSourceCameraRequestAttemptAgeMs = 0.0f;
+    public float syncPacketSourceCameraRequestAcceptAgeMs = 0.0f;
+    public int syncPacketSourceCameraRequestQueueDepth = 0;
+    public bool syncPacketSourceCameraSent = false;
+    public bool syncPacketSourceBundleAbortedBeforeVehicleSend = false;
+    public string syncPacketSourceBundleAbortReason = "";
+    public bool syncPacketSourceVehicleSendBlockedByCameraRequest = false;
+    public bool syncPacketSourceSupersededBeforeSend = false;
     
     // Ground truth lane line positions (optional, set by GroundTruthReporter)
     // These represent the painted lane line markings, not the drivable lanes

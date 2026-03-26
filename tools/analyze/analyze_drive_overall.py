@@ -1628,6 +1628,16 @@ def _print_summary_report(recording_path: Path, summary: Dict, analyze_to_failur
             transport_contract.get("payload_server_oldest_age_ms_after_select") or {}
         )
         join_wait_stats = transport_contract.get("join_wait_ms") or {}
+        coherence_pass_rate = float(transport_contract.get("coherence_pass_rate") or 0.0)
+        complete_but_incoherent_rate = float(
+            transport_contract.get("complete_but_incoherent_rate") or 0.0
+        )
+        source_context_queue_stats = (
+            transport_contract.get("source_context_queue_depth") or {}
+        )
+        source_context_time_delta_stats = (
+            transport_contract.get("source_context_time_delta_ms") or {}
+        )
         print(
             "   Packet Mode / Schema: "
             f"{transport_contract.get('packet_mode', 'unknown')} / "
@@ -1649,9 +1659,26 @@ def _print_summary_report(recording_path: Path, summary: Dict, analyze_to_failur
             f"{float(transport_contract.get('join_key_present_rate') or 0.0):.1f}%"
         )
         print(
+            "   Join Failure / Side / Selected Contract: "
+            f"{transport_contract.get('join_failure_reason_mode') or 'none'} / "
+            f"{transport_contract.get('join_failure_side_mode') or 'none'} / "
+            f"{transport_contract.get('selected_failure_contract_reason_mode') or 'none'}"
+        )
+        print(
+            "   Selected Stage / Bundle Close: "
+            f"{transport_contract.get('selected_failure_source_stage_mode') or 'none'} / "
+            f"{transport_contract.get('source_bundle_close_reason_mode') or 'none'}"
+        )
+        print(
             "   Packet Completeness / Fallback: "
             f"{float(transport_contract.get('packet_completeness_rate') or 0.0):.1f}% / "
             f"{float(transport_contract.get('fallback_active_rate') or 0.0):.1f}%"
+        )
+        print(
+            "   Coherence Pass / Complete-but-Incoherent / Reason: "
+            f"{coherence_pass_rate:.1f}% / "
+            f"{complete_but_incoherent_rate:.1f}% / "
+            f"{transport_contract.get('coherence_reason_mode') or 'coherent'}"
         )
         print(
             "   Queue Depth (p50/p95/max): "
@@ -1693,6 +1720,61 @@ def _print_summary_report(recording_path: Path, summary: Dict, analyze_to_failur
             f"{(delta_stats.get('p50') if delta_stats.get('p50') is not None else float('nan')):.1f} / "
             f"{(delta_stats.get('p95') if delta_stats.get('p95') is not None else float('nan')):.1f} / "
             f"{(delta_stats.get('max') if delta_stats.get('max') is not None else float('nan')):.1f}"
+        )
+        print(
+            "   Source Context Queue / Δt ms (p95): "
+            f"{(source_context_queue_stats.get('p95') if source_context_queue_stats.get('p95') is not None else float('nan')):.1f} / "
+            f"{(source_context_time_delta_stats.get('p95') if source_context_time_delta_stats.get('p95') is not None else float('nan')):.1f}"
+        )
+        bundle_deadline_stats = transport_contract.get("source_bundle_deadline_ms") or {}
+        bundle_age_stats = transport_contract.get("source_bundle_age_ms") or {}
+        bundle_inflight_stats = transport_contract.get("source_bundle_inflight_count") or {}
+        print(
+            "   Bundle Deadline / Age / Inflight (p95): "
+            f"{(bundle_deadline_stats.get('p95') if bundle_deadline_stats.get('p95') is not None else float('nan')):.1f} / "
+            f"{(bundle_age_stats.get('p95') if bundle_age_stats.get('p95') is not None else float('nan')):.1f} / "
+            f"{(bundle_inflight_stats.get('p95') if bundle_inflight_stats.get('p95') is not None else float('nan')):.1f}"
+        )
+        print(
+            "   Bundle Vehicle Built / Enqueued / Sent: "
+            f"{float(transport_contract.get('source_bundle_vehicle_state_built_rate') or 0.0):.1f}% / "
+            f"{float(transport_contract.get('source_bundle_vehicle_state_enqueued_rate') or 0.0):.1f}% / "
+            f"{float(transport_contract.get('source_bundle_vehicle_state_sent_rate') or 0.0):.1f}%"
+        )
+        print(
+            "   Bundle Camera Requested / Sent / Superseded: "
+            f"{float(transport_contract.get('source_bundle_camera_requested_rate') or 0.0):.1f}% / "
+            f"{float(transport_contract.get('source_bundle_camera_sent_rate') or 0.0):.1f}% / "
+            f"{float(transport_contract.get('source_bundle_superseded_before_send_rate') or 0.0):.1f}%"
+        )
+        print(
+            "   Camera Request Attempted / Accepted / Rejected: "
+            f"{float(transport_contract.get('source_camera_request_attempted_rate') or 0.0):.1f}% / "
+            f"{float(transport_contract.get('source_camera_request_accepted_rate') or 0.0):.1f}% / "
+            f"{transport_contract.get('source_camera_request_rejected_reason_mode') or 'none'}"
+        )
+        print(
+            "   Camera Request Skipped / Disposition: "
+            f"{transport_contract.get('source_camera_request_skipped_reason_mode') or 'none'} / "
+            f"{transport_contract.get('source_camera_request_disposition_mode') or 'none'}"
+        )
+        print(
+            "   Active Camera Eligible / Debug-Unbundled / Contract: "
+            f"{float(transport_contract.get('active_camera_eligible_rate') or 0.0):.1f}% / "
+            f"{float(transport_contract.get('debug_unbundled_capture_rate') or 0.0):.1f}% / "
+            f"{transport_contract.get('camera_capture_contract_reason_mode') or 'none'}"
+        )
+        print(
+            "   Bundle Abort / Vehicle Send Blocked: "
+            f"{float(transport_contract.get('source_bundle_aborted_before_vehicle_send_rate') or 0.0):.1f}% / "
+            f"{float(transport_contract.get('source_vehicle_send_blocked_by_camera_request_rate') or 0.0):.1f}% / "
+            f"{transport_contract.get('source_bundle_abort_reason_mode') or 'none'}"
+        )
+        print(
+            "   Active Camera Excluded / Reason / UnbundledEntered: "
+            f"{float(transport_contract.get('active_camera_excluded_event_rate') or 0.0):.1f}% / "
+            f"{transport_contract.get('active_camera_excluded_reason_mode') or 'none'} / "
+            f"{float(transport_contract.get('unbundled_camera_entered_active_path_rate') or 0.0):.1f}%"
         )
         print(
             "   Join Counters Max: "

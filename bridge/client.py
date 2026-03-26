@@ -776,6 +776,7 @@ class UnityBridgeClient:
             "consume_policy": str(headers.get("X-AV-Consume-Policy", consume_policy) or consume_policy),
             "freshness_budget_ms": float(max_age_ms),
             "warn_age_ms": float(warn_age_ms),
+            "selection_result": str(headers.get("X-AV-Selection-Result", "") or ""),
             "selection_source": str(headers.get("X-AV-Selection-Source", "") or ""),
             "selected_age_ms": _float_header("X-AV-Selected-Payload-Age-Ms"),
             "selected_fresh": _bool_header("X-AV-Selected-Payload-Fresh"),
@@ -791,6 +792,97 @@ class UnityBridgeClient:
             ),
             "fallback_active": _bool_header("X-AV-Selection-Fallback-Active"),
             "fallback_reason_code": fallback_reason or PACKET_FALLBACK_PACKET_TIMEOUT,
+            "join_failure_reason_code": str(headers.get("X-AV-Join-Failure-Reason", "") or ""),
+            "join_failure_side_code": str(headers.get("X-AV-Join-Failure-Side", "") or ""),
+            "selected_failure_contract_reason_code": str(
+                headers.get("X-AV-Selected-Failure-Contract-Reason", "") or ""
+            ),
+            "selected_failure_source_stage_code": str(
+                headers.get("X-AV-Selected-Failure-Source-Stage", "") or ""
+            ),
+            "source_bundle_close_reason": str(
+                headers.get("X-AV-Source-Bundle-Close-Reason", "") or ""
+            ),
+            "source_bundle_deadline_ms": _float_header(
+                "X-AV-Source-Bundle-Deadline-Ms"
+            ),
+            "source_bundle_age_ms": _float_header("X-AV-Source-Bundle-Age-Ms"),
+            "source_bundle_inflight_count": _int_header(
+                "X-AV-Source-Bundle-Inflight-Count"
+            ),
+            "source_bundle_vehicle_state_built": _bool_header(
+                "X-AV-Source-Bundle-Vehicle-State-Built"
+            ),
+            "source_bundle_vehicle_state_enqueued": _bool_header(
+                "X-AV-Source-Bundle-Vehicle-State-Enqueued"
+            ),
+            "source_bundle_vehicle_state_sent": _bool_header(
+                "X-AV-Source-Bundle-Vehicle-State-Sent"
+            ),
+            "source_bundle_camera_requested": _bool_header(
+                "X-AV-Source-Bundle-Camera-Requested"
+            ),
+            "source_bundle_camera_request_attempted": _bool_header(
+                "X-AV-Source-Bundle-Camera-Request-Attempted"
+            ),
+            "source_bundle_camera_request_accepted": _bool_header(
+                "X-AV-Source-Bundle-Camera-Request-Accepted"
+            ),
+            "source_bundle_camera_request_rejected_reason": str(
+                headers.get("X-AV-Source-Bundle-Camera-Request-Rejected-Reason", "") or ""
+            ),
+            "source_bundle_camera_request_skipped_reason": str(
+                headers.get("X-AV-Source-Bundle-Camera-Request-Skipped-Reason", "") or ""
+            ),
+            "source_bundle_camera_request_disposition_code": str(
+                headers.get("X-AV-Source-Bundle-Camera-Request-Disposition-Code", "") or ""
+            ),
+            "source_bundle_camera_request_attempt_age_ms": _float_header(
+                "X-AV-Source-Bundle-Camera-Request-Attempt-Age-Ms"
+            ),
+            "source_bundle_camera_request_accept_age_ms": _float_header(
+                "X-AV-Source-Bundle-Camera-Request-Accept-Age-Ms"
+            ),
+            "source_bundle_camera_request_queue_depth": _int_header(
+                "X-AV-Source-Bundle-Camera-Request-Queue-Depth"
+            ),
+            "source_bundle_active_transport_eligible": _bool_header(
+                "X-AV-Source-Bundle-Active-Transport-Eligible"
+            ),
+            "source_bundle_debug_unbundled_capture": _bool_header(
+                "X-AV-Source-Bundle-Debug-Unbundled-Capture"
+            ),
+            "camera_capture_contract_reason": str(
+                headers.get("X-AV-Camera-Capture-Contract-Reason", "") or ""
+            ),
+            "source_bundle_camera_sent": _bool_header(
+                "X-AV-Source-Bundle-Camera-Sent"
+            ),
+            "source_bundle_aborted_before_vehicle_send": _bool_header(
+                "X-AV-Source-Bundle-Aborted-Before-Vehicle-Send"
+            ),
+            "source_bundle_abort_reason": str(
+                headers.get("X-AV-Source-Bundle-Abort-Reason", "") or ""
+            ),
+            "source_bundle_vehicle_send_blocked_by_camera_request": _bool_header(
+                "X-AV-Source-Bundle-Vehicle-Send-Blocked-By-Camera-Request"
+            ),
+            "source_bundle_superseded_before_send": _bool_header(
+                "X-AV-Source-Bundle-Superseded-Before-Send"
+            ),
+            "source_key_present_camera": _bool_header("X-AV-Source-Key-Present-Camera"),
+            "source_key_present_vehicle": _bool_header("X-AV-Source-Key-Present-Vehicle"),
+            "timeout_event_delta": _int_header("X-AV-Timeout-Event-Delta"),
+            "join_failure_event_count": _int_header("X-AV-Join-Failure-Event-Count"),
+            "active_camera_excluded_event_delta": _int_header(
+                "X-AV-Active-Camera-Excluded-Event-Delta"
+            ),
+            "active_camera_excluded_reason_code": str(
+                headers.get("X-AV-Active-Camera-Excluded-Reason", "") or ""
+            ),
+            "unbundled_camera_entered_active_path_event_delta": _int_header(
+                "X-AV-Unbundled-Camera-Entered-Active-Path-Event-Delta"
+            ),
         }
 
     def get_next_sync_packet_payload_raw(self) -> Optional[Dict[str, Any]]:
@@ -851,6 +943,7 @@ class UnityBridgeClient:
                 "consume_policy": str(consume_policy),
                 "freshness_budget_ms": float(max_age_ms),
                 "warn_age_ms": float(warn_age_ms),
+                "selection_result": "",
                 "selection_source": "",
                 "selected_age_ms": float("nan"),
                 "selected_fresh": False,
@@ -862,6 +955,41 @@ class UnityBridgeClient:
                 "server_oldest_age_ms_after_select": float("nan"),
                 "fallback_active": True,
                 "fallback_reason_code": PACKET_FALLBACK_PACKET_TIMEOUT,
+                "join_failure_reason_code": "",
+                "join_failure_side_code": "",
+                "selected_failure_contract_reason_code": "",
+                "selected_failure_source_stage_code": "",
+                "source_bundle_close_reason": "",
+                "source_bundle_deadline_ms": float("nan"),
+                "source_bundle_age_ms": float("nan"),
+                "source_bundle_inflight_count": 0,
+                "source_bundle_vehicle_state_built": False,
+                "source_bundle_vehicle_state_enqueued": False,
+                "source_bundle_vehicle_state_sent": False,
+                "source_bundle_camera_requested": False,
+                "source_bundle_camera_request_attempted": False,
+                "source_bundle_camera_request_accepted": False,
+                "source_bundle_camera_request_rejected_reason": "",
+                "source_bundle_camera_request_skipped_reason": "",
+                "source_bundle_camera_request_disposition_code": "",
+                "source_bundle_camera_request_attempt_age_ms": float("nan"),
+                "source_bundle_camera_request_accept_age_ms": float("nan"),
+                "source_bundle_camera_request_queue_depth": 0,
+                "source_bundle_active_transport_eligible": False,
+                "source_bundle_debug_unbundled_capture": False,
+                "camera_capture_contract_reason": "",
+                "source_bundle_camera_sent": False,
+                "source_bundle_aborted_before_vehicle_send": False,
+                "source_bundle_abort_reason": "",
+                "source_bundle_vehicle_send_blocked_by_camera_request": False,
+                "source_bundle_superseded_before_send": False,
+                "source_key_present_camera": False,
+                "source_key_present_vehicle": False,
+                "timeout_event_delta": 0,
+                "join_failure_event_count": 0,
+                "active_camera_excluded_event_delta": 0,
+                "active_camera_excluded_reason_code": "",
+                "unbundled_camera_entered_active_path_event_delta": 0,
             }
         except requests.RequestException:
             return {
@@ -869,6 +997,7 @@ class UnityBridgeClient:
                 "consume_policy": str(consume_policy),
                 "freshness_budget_ms": float(max_age_ms),
                 "warn_age_ms": float(warn_age_ms),
+                "selection_result": "",
                 "selection_source": "",
                 "selected_age_ms": float("nan"),
                 "selected_fresh": False,
@@ -880,6 +1009,41 @@ class UnityBridgeClient:
                 "server_oldest_age_ms_after_select": float("nan"),
                 "fallback_active": True,
                 "fallback_reason_code": PACKET_FALLBACK_PACKET_TIMEOUT,
+                "join_failure_reason_code": "",
+                "join_failure_side_code": "",
+                "selected_failure_contract_reason_code": "",
+                "selected_failure_source_stage_code": "",
+                "source_bundle_close_reason": "",
+                "source_bundle_deadline_ms": float("nan"),
+                "source_bundle_age_ms": float("nan"),
+                "source_bundle_inflight_count": 0,
+                "source_bundle_vehicle_state_built": False,
+                "source_bundle_vehicle_state_enqueued": False,
+                "source_bundle_vehicle_state_sent": False,
+                "source_bundle_camera_requested": False,
+                "source_bundle_camera_request_attempted": False,
+                "source_bundle_camera_request_accepted": False,
+                "source_bundle_camera_request_rejected_reason": "",
+                "source_bundle_camera_request_skipped_reason": "",
+                "source_bundle_camera_request_disposition_code": "",
+                "source_bundle_camera_request_attempt_age_ms": float("nan"),
+                "source_bundle_camera_request_accept_age_ms": float("nan"),
+                "source_bundle_camera_request_queue_depth": 0,
+                "source_bundle_active_transport_eligible": False,
+                "source_bundle_debug_unbundled_capture": False,
+                "camera_capture_contract_reason": "",
+                "source_bundle_camera_sent": False,
+                "source_bundle_aborted_before_vehicle_send": False,
+                "source_bundle_abort_reason": "",
+                "source_bundle_vehicle_send_blocked_by_camera_request": False,
+                "source_bundle_superseded_before_send": False,
+                "source_key_present_camera": False,
+                "source_key_present_vehicle": False,
+                "timeout_event_delta": 0,
+                "join_failure_event_count": 0,
+                "active_camera_excluded_event_delta": 0,
+                "active_camera_excluded_reason_code": "",
+                "unbundled_camera_entered_active_path_event_delta": 0,
             }
 
         if response.status_code == 404:
@@ -903,6 +1067,7 @@ class UnityBridgeClient:
             "consume_policy": str(packet_meta.get("consume_policy") or consume_policy),
             "freshness_budget_ms": float(max_age_ms),
             "warn_age_ms": float(warn_age_ms),
+            "selection_result": str(packet_meta.get("selection_result") or ""),
             "selection_source": str(packet_meta.get("payload_selection_source") or ""),
             "selected_age_ms": float(
                 packet_meta.get(
@@ -932,6 +1097,114 @@ class UnityBridgeClient:
                 packet_meta.get("selection_fallback_active", False)
             ),
             "fallback_reason_code": fallback_reason,
+            "join_failure_reason_code": str(
+                packet_meta.get("join_failure_reason_code") or ""
+            ),
+            "join_failure_side_code": str(
+                packet_meta.get("join_failure_side_code") or ""
+            ),
+            "selected_failure_contract_reason_code": str(
+                packet_meta.get("selected_failure_contract_reason_code") or ""
+            ),
+            "selected_failure_source_stage_code": str(
+                packet_meta.get("selected_failure_source_stage_code") or ""
+            ),
+            "source_bundle_close_reason": str(
+                packet_meta.get("source_bundle_close_reason") or ""
+            ),
+            "source_bundle_deadline_ms": float(
+                packet_meta.get("source_bundle_deadline_ms", float("nan"))
+            ),
+            "source_bundle_age_ms": float(
+                packet_meta.get("source_bundle_age_ms", float("nan"))
+            ),
+            "source_bundle_inflight_count": int(
+                packet_meta.get("source_bundle_inflight_count", 0) or 0
+            ),
+            "source_bundle_vehicle_state_built": packet_meta.get(
+                "source_bundle_vehicle_state_built"
+            ),
+            "source_bundle_vehicle_state_enqueued": packet_meta.get(
+                "source_bundle_vehicle_state_enqueued"
+            ),
+            "source_bundle_vehicle_state_sent": packet_meta.get(
+                "source_bundle_vehicle_state_sent"
+            ),
+            "source_bundle_camera_requested": packet_meta.get(
+                "source_bundle_camera_requested"
+            ),
+            "source_bundle_camera_request_attempted": packet_meta.get(
+                "source_bundle_camera_request_attempted"
+            ),
+            "source_bundle_camera_request_accepted": packet_meta.get(
+                "source_bundle_camera_request_accepted"
+            ),
+            "source_bundle_camera_request_rejected_reason": str(
+                packet_meta.get("source_bundle_camera_request_rejected_reason") or ""
+            ),
+            "source_bundle_camera_request_skipped_reason": str(
+                packet_meta.get("source_bundle_camera_request_skipped_reason") or ""
+            ),
+            "source_bundle_camera_request_disposition_code": str(
+                packet_meta.get("source_bundle_camera_request_disposition_code") or ""
+            ),
+            "source_bundle_camera_request_attempt_age_ms": float(
+                packet_meta.get("source_bundle_camera_request_attempt_age_ms", float("nan"))
+            ),
+            "source_bundle_camera_request_accept_age_ms": float(
+                packet_meta.get("source_bundle_camera_request_accept_age_ms", float("nan"))
+            ),
+            "source_bundle_camera_request_queue_depth": int(
+                packet_meta.get("source_bundle_camera_request_queue_depth", 0) or 0
+            ),
+            "source_bundle_active_transport_eligible": bool(
+                packet_meta.get("source_bundle_active_transport_eligible", False)
+            ),
+            "source_bundle_debug_unbundled_capture": bool(
+                packet_meta.get("source_bundle_debug_unbundled_capture", False)
+            ),
+            "camera_capture_contract_reason": str(
+                packet_meta.get("camera_capture_contract_reason") or ""
+            ),
+            "source_bundle_camera_sent": packet_meta.get(
+                "source_bundle_camera_sent"
+            ),
+            "source_bundle_aborted_before_vehicle_send": packet_meta.get(
+                "source_bundle_aborted_before_vehicle_send"
+            ),
+            "source_bundle_abort_reason": str(
+                packet_meta.get("source_bundle_abort_reason") or ""
+            ),
+            "source_bundle_vehicle_send_blocked_by_camera_request": packet_meta.get(
+                "source_bundle_vehicle_send_blocked_by_camera_request"
+            ),
+            "source_bundle_superseded_before_send": packet_meta.get(
+                "source_bundle_superseded_before_send"
+            ),
+            "source_key_present_camera": bool(
+                packet_meta.get("source_key_present_camera", False)
+            ),
+            "source_key_present_vehicle": bool(
+                packet_meta.get("source_key_present_vehicle", False)
+            ),
+            "timeout_event_delta": int(
+                packet_meta.get("timeout_event_delta", 0) or 0
+            ),
+            "join_failure_event_count": int(
+                packet_meta.get("join_failure_event_count", 0) or 0
+            ),
+            "active_camera_excluded_event_delta": int(
+                packet_meta.get("active_camera_excluded_event_delta", 0) or 0
+            ),
+            "active_camera_excluded_reason_code": str(
+                packet_meta.get("active_camera_excluded_reason_code") or ""
+            ),
+            "unbundled_camera_entered_active_path_event_delta": int(
+                packet_meta.get(
+                    "unbundled_camera_entered_active_path_event_delta", 0
+                )
+                or 0
+            ),
         }
     
     def get_latest_unity_feedback(self) -> Optional[Dict]:

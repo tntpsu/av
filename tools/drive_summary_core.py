@@ -487,8 +487,120 @@ def _build_transport_contract_summary(data: Dict) -> Dict:
     payload_server_oldest_age_ms_after_select = data.get(
         "sync_packet_payload_server_oldest_age_ms_after_select"
     )
+    selection_result = _decode_string_series(data.get("sync_packet_selection_result"))
     join_source = _decode_string_series(data.get("sync_packet_join_source"))
     join_key_present = data.get("sync_packet_join_key_present")
+    join_failure_reason = _decode_string_series(
+        data.get("sync_packet_join_failure_reason_code")
+    )
+    join_failure_side = _decode_string_series(
+        data.get("sync_packet_join_failure_side_code")
+    )
+    selected_failure_contract_reason = _decode_string_series(
+        data.get("sync_packet_selected_failure_contract_reason_code")
+    )
+    selected_failure_source_stage = _decode_string_series(
+        data.get("sync_packet_selected_failure_source_stage_code")
+    )
+    source_key_present_camera = data.get("sync_packet_source_key_present_camera")
+    source_key_present_vehicle = data.get("sync_packet_source_key_present_vehicle")
+    selected_packet_key = _decode_string_series(
+        data.get("sync_packet_selected_packet_key")
+    )
+    timeout_event_delta = data.get("sync_packet_timeout_event_delta")
+    coherence_pass = data.get("sync_packet_coherence_pass")
+    coherence_reason = _decode_string_series(data.get("sync_packet_coherence_reason_code"))
+    complete_but_incoherent = data.get("sync_packet_complete_but_incoherent")
+    time_delta_budget_exceeded = data.get(
+        "sync_packet_front_vehicle_time_delta_budget_exceeded"
+    )
+    frame_delta_budget_exceeded = data.get(
+        "sync_packet_front_vehicle_frame_delta_budget_exceeded"
+    )
+    join_wait_budget_exceeded = data.get("sync_packet_join_wait_budget_exceeded")
+    component_age_budget_exceeded = data.get(
+        "sync_packet_component_age_budget_exceeded"
+    )
+    source_context_queue_depth = data.get("sync_packet_source_context_queue_depth")
+    source_context_dropped_stale_count = data.get(
+        "sync_packet_source_context_dropped_stale_count"
+    )
+    source_context_missing_count = data.get("sync_packet_source_context_missing_count")
+    source_context_frame_delta = data.get("sync_packet_source_context_frame_delta")
+    source_context_time_delta_ms = data.get("sync_packet_source_context_time_delta_ms")
+    source_bundle_close_reason = _decode_string_series(
+        data.get("sync_packet_source_bundle_close_reason")
+    )
+    source_bundle_deadline_ms = data.get("sync_packet_source_bundle_deadline_ms")
+    source_bundle_age_ms = data.get("sync_packet_source_bundle_age_ms")
+    source_bundle_inflight_count = data.get("sync_packet_source_bundle_inflight_count")
+    source_bundle_vehicle_state_built = data.get(
+        "sync_packet_source_bundle_vehicle_state_built"
+    )
+    source_bundle_vehicle_state_enqueued = data.get(
+        "sync_packet_source_bundle_vehicle_state_enqueued"
+    )
+    source_bundle_vehicle_state_sent = data.get(
+        "sync_packet_source_bundle_vehicle_state_sent"
+    )
+    source_bundle_camera_requested = data.get(
+        "sync_packet_source_bundle_camera_requested"
+    )
+    source_camera_request_attempted = data.get(
+        "sync_packet_source_camera_request_attempted"
+    )
+    source_camera_request_accepted = data.get(
+        "sync_packet_source_camera_request_accepted"
+    )
+    source_camera_request_rejected_reason = _decode_string_series(
+        data.get("sync_packet_source_camera_request_rejected_reason")
+    )
+    source_camera_request_skipped_reason = _decode_string_series(
+        data.get("sync_packet_source_camera_request_skipped_reason")
+    )
+    source_camera_request_disposition_code = _decode_string_series(
+        data.get("sync_packet_source_camera_request_disposition_code")
+    )
+    source_camera_request_attempt_age_ms = data.get(
+        "sync_packet_source_camera_request_attempt_age_ms"
+    )
+    source_camera_request_accept_age_ms = data.get(
+        "sync_packet_source_camera_request_accept_age_ms"
+    )
+    source_camera_request_queue_depth = data.get(
+        "sync_packet_source_camera_request_queue_depth"
+    )
+    source_bundle_active_transport_eligible = data.get(
+        "sync_packet_source_bundle_active_transport_eligible"
+    )
+    source_bundle_debug_unbundled_capture = data.get(
+        "sync_packet_source_bundle_debug_unbundled_capture"
+    )
+    camera_capture_contract_reason = _decode_string_series(
+        data.get("sync_packet_camera_capture_contract_reason")
+    )
+    source_bundle_camera_sent = data.get("sync_packet_source_bundle_camera_sent")
+    source_bundle_aborted_before_vehicle_send = data.get(
+        "sync_packet_source_bundle_aborted_before_vehicle_send"
+    )
+    source_bundle_abort_reason = _decode_string_series(
+        data.get("sync_packet_source_bundle_abort_reason")
+    )
+    source_vehicle_send_blocked_by_camera_request = data.get(
+        "sync_packet_source_vehicle_send_blocked_by_camera_request"
+    )
+    source_bundle_superseded_before_send = data.get(
+        "sync_packet_source_bundle_superseded_before_send"
+    )
+    active_camera_excluded_event_delta = data.get(
+        "sync_packet_active_camera_excluded_event_delta"
+    )
+    active_camera_excluded_reason_code = _decode_string_series(
+        data.get("sync_packet_active_camera_excluded_reason_code")
+    )
+    unbundled_camera_entered_active_path_event_delta = data.get(
+        "sync_packet_unbundled_camera_entered_active_path_event_delta"
+    )
     join_wait_ms = data.get("sync_packet_join_wait_ms")
     key_match_count = data.get("sync_packet_key_match_count")
     unity_fallback_count = data.get("sync_packet_unity_fallback_count")
@@ -541,8 +653,54 @@ def _build_transport_contract_summary(data: Dict) -> Dict:
             payload_selection_fallback_reason,
             payload_server_queue_depth_after_select,
             payload_server_oldest_age_ms_after_select,
+            selection_result,
             join_source,
             join_key_present,
+            join_failure_reason,
+            join_failure_side,
+            selected_failure_contract_reason,
+            selected_failure_source_stage,
+            source_key_present_camera,
+            source_key_present_vehicle,
+            selected_packet_key,
+            timeout_event_delta,
+            coherence_pass,
+            coherence_reason,
+            complete_but_incoherent,
+            time_delta_budget_exceeded,
+            frame_delta_budget_exceeded,
+            join_wait_budget_exceeded,
+            component_age_budget_exceeded,
+            source_context_queue_depth,
+            source_context_dropped_stale_count,
+            source_context_missing_count,
+            source_context_frame_delta,
+            source_context_time_delta_ms,
+            source_bundle_close_reason,
+            source_bundle_deadline_ms,
+            source_bundle_age_ms,
+            source_bundle_inflight_count,
+            source_bundle_vehicle_state_built,
+            source_bundle_vehicle_state_enqueued,
+            source_bundle_vehicle_state_sent,
+            source_bundle_camera_requested,
+            source_camera_request_attempted,
+            source_camera_request_accepted,
+            source_camera_request_rejected_reason,
+            source_camera_request_attempt_age_ms,
+            source_camera_request_accept_age_ms,
+            source_camera_request_queue_depth,
+            source_bundle_active_transport_eligible,
+            source_bundle_debug_unbundled_capture,
+            camera_capture_contract_reason,
+            source_bundle_camera_sent,
+            source_bundle_aborted_before_vehicle_send,
+            source_bundle_abort_reason,
+            source_vehicle_send_blocked_by_camera_request,
+            source_bundle_superseded_before_send,
+            active_camera_excluded_event_delta,
+            active_camera_excluded_reason_code,
+            unbundled_camera_entered_active_path_event_delta,
             join_wait_ms,
             key_match_count,
             unity_fallback_count,
@@ -646,6 +804,7 @@ def _build_transport_contract_summary(data: Dict) -> Dict:
         "payload_selection_source_mode": _mode_string(
             payload_selection_source, ignore={""}
         ),
+        "selection_result_mode": _mode_string(selection_result, ignore={""}),
         "payload_selection_fallback_active_rate": _rate_from_boolish(
             payload_selection_fallback_active
         ),
@@ -660,6 +819,130 @@ def _build_transport_contract_summary(data: Dict) -> Dict:
         ),
         "join_source_mode": _mode_string(join_source, ignore={""}),
         "join_key_present_rate": _rate_from_boolish(join_key_present),
+        "join_failure_reason_mode": _mode_string(
+            join_failure_reason, ignore={"", "none"}
+        ),
+        "join_failure_side_mode": _mode_string(
+            join_failure_side, ignore={"", "none"}
+        ),
+        "selected_failure_contract_reason_mode": _mode_string(
+            selected_failure_contract_reason, ignore={"", "none"}
+        ),
+        "selected_failure_source_stage_mode": _mode_string(
+            selected_failure_source_stage, ignore={"", "none"}
+        ),
+        "source_key_present_camera_rate": _rate_from_boolish(
+            source_key_present_camera
+        ),
+        "source_key_present_vehicle_rate": _rate_from_boolish(
+            source_key_present_vehicle
+        ),
+        "selected_packet_key_present_rate": _rate_from_boolish(
+            np.array([1.0 if s else 0.0 for s in selected_packet_key], dtype=float)
+            if selected_packet_key
+            else None
+        ),
+        "timeout_event_delta_rate": _rate_from_boolish(timeout_event_delta),
+        "coherence_pass_rate": _rate_from_boolish(coherence_pass),
+        "coherence_reason_mode": _mode_string(
+            coherence_reason, ignore={"", "coherent"}
+        )
+        or _mode_string(coherence_reason, ignore={""}),
+        "complete_but_incoherent_rate": _rate_from_boolish(complete_but_incoherent),
+        "front_vehicle_time_delta_budget_exceeded_rate": _rate_from_boolish(
+            time_delta_budget_exceeded
+        ),
+        "front_vehicle_frame_delta_budget_exceeded_rate": _rate_from_boolish(
+            frame_delta_budget_exceeded
+        ),
+        "join_wait_budget_exceeded_rate": _rate_from_boolish(
+            join_wait_budget_exceeded
+        ),
+        "component_age_budget_exceeded_rate": _rate_from_boolish(
+            component_age_budget_exceeded
+        ),
+        "source_context_queue_depth": _finite_stats(source_context_queue_depth),
+        "source_context_dropped_stale_count": _finite_stats(
+            source_context_dropped_stale_count
+        ),
+        "source_context_missing_count": _finite_stats(source_context_missing_count),
+        "source_context_frame_delta": _finite_stats(source_context_frame_delta),
+        "source_context_time_delta_ms": _finite_stats(source_context_time_delta_ms),
+        "source_bundle_close_reason_mode": _mode_string(
+            source_bundle_close_reason, ignore={"", "open"}
+        ),
+        "source_bundle_deadline_ms": _finite_stats(source_bundle_deadline_ms),
+        "source_bundle_age_ms": _finite_stats(source_bundle_age_ms),
+        "source_bundle_inflight_count": _finite_stats(source_bundle_inflight_count),
+        "source_bundle_vehicle_state_built_rate": _rate_from_boolish(
+            source_bundle_vehicle_state_built
+        ),
+        "source_bundle_vehicle_state_enqueued_rate": _rate_from_boolish(
+            source_bundle_vehicle_state_enqueued
+        ),
+        "source_bundle_vehicle_state_sent_rate": _rate_from_boolish(
+            source_bundle_vehicle_state_sent
+        ),
+        "source_bundle_camera_requested_rate": _rate_from_boolish(
+            source_bundle_camera_requested
+        ),
+        "source_camera_request_attempted_rate": _rate_from_boolish(
+            source_camera_request_attempted
+        ),
+        "source_camera_request_accepted_rate": _rate_from_boolish(
+            source_camera_request_accepted
+        ),
+        "source_camera_request_rejected_reason_mode": _mode_string(
+            source_camera_request_rejected_reason, ignore={"", "none"}
+        ),
+        "source_camera_request_skipped_reason_mode": _mode_string(
+            source_camera_request_skipped_reason, ignore={"", "none"}
+        ),
+        "source_camera_request_disposition_mode": _mode_string(
+            source_camera_request_disposition_code, ignore={"", "none"}
+        ),
+        "source_camera_request_attempt_age_ms": _finite_stats(
+            source_camera_request_attempt_age_ms
+        ),
+        "source_camera_request_accept_age_ms": _finite_stats(
+            source_camera_request_accept_age_ms
+        ),
+        "source_camera_request_queue_depth": _finite_stats(
+            source_camera_request_queue_depth
+        ),
+        "active_camera_eligible_rate": _rate_from_boolish(
+            source_bundle_active_transport_eligible
+        ),
+        "debug_unbundled_capture_rate": _rate_from_boolish(
+            source_bundle_debug_unbundled_capture
+        ),
+        "camera_capture_contract_reason_mode": _mode_string(
+            camera_capture_contract_reason, ignore={"", "none"}
+        ),
+        "source_bundle_camera_sent_rate": _rate_from_boolish(
+            source_bundle_camera_sent
+        ),
+        "source_bundle_aborted_before_vehicle_send_rate": _rate_from_boolish(
+            source_bundle_aborted_before_vehicle_send
+        ),
+        "source_bundle_abort_reason_mode": _mode_string(
+            source_bundle_abort_reason, ignore={"", "none"}
+        ),
+        "source_vehicle_send_blocked_by_camera_request_rate": _rate_from_boolish(
+            source_vehicle_send_blocked_by_camera_request
+        ),
+        "source_bundle_superseded_before_send_rate": _rate_from_boolish(
+            source_bundle_superseded_before_send
+        ),
+        "active_camera_excluded_event_rate": _rate_from_boolish(
+            active_camera_excluded_event_delta
+        ),
+        "active_camera_excluded_reason_mode": _mode_string(
+            active_camera_excluded_reason_code, ignore={"", "none"}
+        ),
+        "unbundled_camera_entered_active_path_rate": _rate_from_boolish(
+            unbundled_camera_entered_active_path_event_delta
+        ),
         "join_wait_ms": _finite_stats(join_wait_ms),
         "packet_superseded_camera_count": _finite_stats(packet_superseded_camera_count),
         "packet_superseded_vehicle_count": _finite_stats(packet_superseded_vehicle_count),
@@ -2279,6 +2562,11 @@ def analyze_recording_summary(
                 if 'vehicle/sync_packet_payload_server_oldest_age_ms_after_select' in f
                 else None
             )
+            data['sync_packet_selection_result'] = (
+                f['vehicle/sync_packet_selection_result'][:]
+                if 'vehicle/sync_packet_selection_result' in f
+                else None
+            )
             data['sync_packet_join_source'] = (
                 f['vehicle/sync_packet_join_source'][:]
                 if 'vehicle/sync_packet_join_source' in f
@@ -2287,6 +2575,241 @@ def analyze_recording_summary(
             data['sync_packet_join_key_present'] = (
                 np.array(f['vehicle/sync_packet_join_key_present'][:])
                 if 'vehicle/sync_packet_join_key_present' in f
+                else None
+            )
+            data['sync_packet_join_failure_reason_code'] = (
+                f['vehicle/sync_packet_join_failure_reason_code'][:]
+                if 'vehicle/sync_packet_join_failure_reason_code' in f
+                else None
+            )
+            data['sync_packet_join_failure_side_code'] = (
+                f['vehicle/sync_packet_join_failure_side_code'][:]
+                if 'vehicle/sync_packet_join_failure_side_code' in f
+                else None
+            )
+            data['sync_packet_selected_failure_contract_reason_code'] = (
+                f['vehicle/sync_packet_selected_failure_contract_reason_code'][:]
+                if 'vehicle/sync_packet_selected_failure_contract_reason_code' in f
+                else None
+            )
+            data['sync_packet_selected_failure_source_stage_code'] = (
+                f['vehicle/sync_packet_selected_failure_source_stage_code'][:]
+                if 'vehicle/sync_packet_selected_failure_source_stage_code' in f
+                else None
+            )
+            data['sync_packet_source_key_present_camera'] = (
+                np.array(f['vehicle/sync_packet_source_key_present_camera'][:])
+                if 'vehicle/sync_packet_source_key_present_camera' in f
+                else None
+            )
+            data['sync_packet_source_key_present_vehicle'] = (
+                np.array(f['vehicle/sync_packet_source_key_present_vehicle'][:])
+                if 'vehicle/sync_packet_source_key_present_vehicle' in f
+                else None
+            )
+            data['sync_packet_selected_packet_key'] = (
+                f['vehicle/sync_packet_selected_packet_key'][:]
+                if 'vehicle/sync_packet_selected_packet_key' in f
+                else None
+            )
+            data['sync_packet_timeout_event_delta'] = (
+                np.array(f['vehicle/sync_packet_timeout_event_delta'][:])
+                if 'vehicle/sync_packet_timeout_event_delta' in f
+                else None
+            )
+            data['sync_packet_coherence_pass'] = (
+                np.array(f['vehicle/sync_packet_coherence_pass'][:])
+                if 'vehicle/sync_packet_coherence_pass' in f
+                else None
+            )
+            data['sync_packet_coherence_reason_code'] = (
+                f['vehicle/sync_packet_coherence_reason_code'][:]
+                if 'vehicle/sync_packet_coherence_reason_code' in f
+                else None
+            )
+            data['sync_packet_complete_but_incoherent'] = (
+                np.array(f['vehicle/sync_packet_complete_but_incoherent'][:])
+                if 'vehicle/sync_packet_complete_but_incoherent' in f
+                else None
+            )
+            data['sync_packet_front_vehicle_time_delta_budget_exceeded'] = (
+                np.array(f['vehicle/sync_packet_front_vehicle_time_delta_budget_exceeded'][:])
+                if 'vehicle/sync_packet_front_vehicle_time_delta_budget_exceeded' in f
+                else None
+            )
+            data['sync_packet_front_vehicle_frame_delta_budget_exceeded'] = (
+                np.array(f['vehicle/sync_packet_front_vehicle_frame_delta_budget_exceeded'][:])
+                if 'vehicle/sync_packet_front_vehicle_frame_delta_budget_exceeded' in f
+                else None
+            )
+            data['sync_packet_join_wait_budget_exceeded'] = (
+                np.array(f['vehicle/sync_packet_join_wait_budget_exceeded'][:])
+                if 'vehicle/sync_packet_join_wait_budget_exceeded' in f
+                else None
+            )
+            data['sync_packet_component_age_budget_exceeded'] = (
+                np.array(f['vehicle/sync_packet_component_age_budget_exceeded'][:])
+                if 'vehicle/sync_packet_component_age_budget_exceeded' in f
+                else None
+            )
+            data['sync_packet_source_context_queue_depth'] = (
+                np.array(f['vehicle/sync_packet_source_context_queue_depth'][:])
+                if 'vehicle/sync_packet_source_context_queue_depth' in f
+                else None
+            )
+            data['sync_packet_source_context_dropped_stale_count'] = (
+                np.array(f['vehicle/sync_packet_source_context_dropped_stale_count'][:])
+                if 'vehicle/sync_packet_source_context_dropped_stale_count' in f
+                else None
+            )
+            data['sync_packet_source_context_missing_count'] = (
+                np.array(f['vehicle/sync_packet_source_context_missing_count'][:])
+                if 'vehicle/sync_packet_source_context_missing_count' in f
+                else None
+            )
+            data['sync_packet_source_context_frame_delta'] = (
+                np.array(f['vehicle/sync_packet_source_context_frame_delta'][:])
+                if 'vehicle/sync_packet_source_context_frame_delta' in f
+                else None
+            )
+            data['sync_packet_source_context_time_delta_ms'] = (
+                np.array(f['vehicle/sync_packet_source_context_time_delta_ms'][:])
+                if 'vehicle/sync_packet_source_context_time_delta_ms' in f
+                else None
+            )
+            data['sync_packet_source_bundle_close_reason'] = (
+                f['vehicle/sync_packet_source_bundle_close_reason'][:]
+                if 'vehicle/sync_packet_source_bundle_close_reason' in f
+                else None
+            )
+            data['sync_packet_source_bundle_deadline_ms'] = (
+                np.array(f['vehicle/sync_packet_source_bundle_deadline_ms'][:])
+                if 'vehicle/sync_packet_source_bundle_deadline_ms' in f
+                else None
+            )
+            data['sync_packet_source_bundle_age_ms'] = (
+                np.array(f['vehicle/sync_packet_source_bundle_age_ms'][:])
+                if 'vehicle/sync_packet_source_bundle_age_ms' in f
+                else None
+            )
+            data['sync_packet_source_bundle_inflight_count'] = (
+                np.array(f['vehicle/sync_packet_source_bundle_inflight_count'][:])
+                if 'vehicle/sync_packet_source_bundle_inflight_count' in f
+                else None
+            )
+            data['sync_packet_source_bundle_vehicle_state_built'] = (
+                np.array(f['vehicle/sync_packet_source_bundle_vehicle_state_built'][:])
+                if 'vehicle/sync_packet_source_bundle_vehicle_state_built' in f
+                else None
+            )
+            data['sync_packet_source_bundle_vehicle_state_enqueued'] = (
+                np.array(f['vehicle/sync_packet_source_bundle_vehicle_state_enqueued'][:])
+                if 'vehicle/sync_packet_source_bundle_vehicle_state_enqueued' in f
+                else None
+            )
+            data['sync_packet_source_bundle_vehicle_state_sent'] = (
+                np.array(f['vehicle/sync_packet_source_bundle_vehicle_state_sent'][:])
+                if 'vehicle/sync_packet_source_bundle_vehicle_state_sent' in f
+                else None
+            )
+            data['sync_packet_source_bundle_camera_requested'] = (
+                np.array(f['vehicle/sync_packet_source_bundle_camera_requested'][:])
+                if 'vehicle/sync_packet_source_bundle_camera_requested' in f
+                else None
+            )
+            data['sync_packet_source_camera_request_attempted'] = (
+                np.array(f['vehicle/sync_packet_source_camera_request_attempted'][:])
+                if 'vehicle/sync_packet_source_camera_request_attempted' in f
+                else None
+            )
+            data['sync_packet_source_camera_request_accepted'] = (
+                np.array(f['vehicle/sync_packet_source_camera_request_accepted'][:])
+                if 'vehicle/sync_packet_source_camera_request_accepted' in f
+                else None
+            )
+            data['sync_packet_source_camera_request_rejected_reason'] = (
+                f['vehicle/sync_packet_source_camera_request_rejected_reason'][:]
+                if 'vehicle/sync_packet_source_camera_request_rejected_reason' in f
+                else None
+            )
+            data['sync_packet_source_camera_request_skipped_reason'] = (
+                f['vehicle/sync_packet_source_camera_request_skipped_reason'][:]
+                if 'vehicle/sync_packet_source_camera_request_skipped_reason' in f
+                else None
+            )
+            data['sync_packet_source_camera_request_disposition_code'] = (
+                f['vehicle/sync_packet_source_camera_request_disposition_code'][:]
+                if 'vehicle/sync_packet_source_camera_request_disposition_code' in f
+                else None
+            )
+            data['sync_packet_source_camera_request_attempt_age_ms'] = (
+                np.array(f['vehicle/sync_packet_source_camera_request_attempt_age_ms'][:])
+                if 'vehicle/sync_packet_source_camera_request_attempt_age_ms' in f
+                else None
+            )
+            data['sync_packet_source_camera_request_accept_age_ms'] = (
+                np.array(f['vehicle/sync_packet_source_camera_request_accept_age_ms'][:])
+                if 'vehicle/sync_packet_source_camera_request_accept_age_ms' in f
+                else None
+            )
+            data['sync_packet_source_camera_request_queue_depth'] = (
+                np.array(f['vehicle/sync_packet_source_camera_request_queue_depth'][:])
+                if 'vehicle/sync_packet_source_camera_request_queue_depth' in f
+                else None
+            )
+            data['sync_packet_source_bundle_active_transport_eligible'] = (
+                np.array(f['vehicle/sync_packet_source_bundle_active_transport_eligible'][:])
+                if 'vehicle/sync_packet_source_bundle_active_transport_eligible' in f
+                else None
+            )
+            data['sync_packet_source_bundle_debug_unbundled_capture'] = (
+                np.array(f['vehicle/sync_packet_source_bundle_debug_unbundled_capture'][:])
+                if 'vehicle/sync_packet_source_bundle_debug_unbundled_capture' in f
+                else None
+            )
+            data['sync_packet_camera_capture_contract_reason'] = (
+                f['vehicle/sync_packet_camera_capture_contract_reason'][:]
+                if 'vehicle/sync_packet_camera_capture_contract_reason' in f
+                else None
+            )
+            data['sync_packet_source_bundle_camera_sent'] = (
+                np.array(f['vehicle/sync_packet_source_bundle_camera_sent'][:])
+                if 'vehicle/sync_packet_source_bundle_camera_sent' in f
+                else None
+            )
+            data['sync_packet_source_bundle_aborted_before_vehicle_send'] = (
+                np.array(f['vehicle/sync_packet_source_bundle_aborted_before_vehicle_send'][:])
+                if 'vehicle/sync_packet_source_bundle_aborted_before_vehicle_send' in f
+                else None
+            )
+            data['sync_packet_source_bundle_abort_reason'] = (
+                f['vehicle/sync_packet_source_bundle_abort_reason'][:]
+                if 'vehicle/sync_packet_source_bundle_abort_reason' in f
+                else None
+            )
+            data['sync_packet_source_vehicle_send_blocked_by_camera_request'] = (
+                np.array(f['vehicle/sync_packet_source_vehicle_send_blocked_by_camera_request'][:])
+                if 'vehicle/sync_packet_source_vehicle_send_blocked_by_camera_request' in f
+                else None
+            )
+            data['sync_packet_source_bundle_superseded_before_send'] = (
+                np.array(f['vehicle/sync_packet_source_bundle_superseded_before_send'][:])
+                if 'vehicle/sync_packet_source_bundle_superseded_before_send' in f
+                else None
+            )
+            data['sync_packet_active_camera_excluded_event_delta'] = (
+                np.array(f['vehicle/sync_packet_active_camera_excluded_event_delta'][:])
+                if 'vehicle/sync_packet_active_camera_excluded_event_delta' in f
+                else None
+            )
+            data['sync_packet_active_camera_excluded_reason_code'] = (
+                f['vehicle/sync_packet_active_camera_excluded_reason_code'][:]
+                if 'vehicle/sync_packet_active_camera_excluded_reason_code' in f
+                else None
+            )
+            data['sync_packet_unbundled_camera_entered_active_path_event_delta'] = (
+                np.array(f['vehicle/sync_packet_unbundled_camera_entered_active_path_event_delta'][:])
+                if 'vehicle/sync_packet_unbundled_camera_entered_active_path_event_delta' in f
                 else None
             )
             data['sync_packet_join_wait_ms'] = (

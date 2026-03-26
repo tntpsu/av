@@ -135,6 +135,11 @@ public float speedLimitPreviewMaxTDelta = 0.15f;
     private int lastSentUnityFrameCount = -1;
     private bool stateSendInFlight = false;
     private float stateSendStartRealtime = 0f;
+    private readonly Queue<PendingVehicleStateSend> pendingVehicleStateSends = new Queue<PendingVehicleStateSend>();
+    private readonly Dictionary<string, SyncPacketSourceBundleContext> activeSourceBundles =
+        new Dictionary<string, SyncPacketSourceBundleContext>();
+    private int maxPendingVehicleStateSends = 4;
+    private float sourceBundleDeadlineMs = 100.0f;
     private bool controlRequestInFlight = false;
     private float controlRequestStartRealtime = 0f;
     private float lastNonZeroSpeedLimit = 0f;
@@ -143,6 +148,250 @@ private float? lastCarT = null;
 
     private Camera topDownCamera;
     private CameraCapture topDownCapture;
+
+    private string BuildSourceSyncPacketKey(int updateId, int unityFrameCount)
+    {
+        return $"avbridge:{updateId}:{unityFrameCount}";
+    }
+
+    private class PendingVehicleStateSend
+    {
+        public VehicleState state;
+        public int updateId;
+        public SyncPacketSourceBundleContext bundle;
+    }
+
+    private void RefreshSourceBundleInflightCounts()
+    {
+        int inflightCount = activeSourceBundles.Count;
+        foreach (SyncPacketSourceBundleContext bundle in activeSourceBundles.Values)
+        {
+            if (bundle != null)
+            {
+                bundle.inflightCount = inflightCount;
+            }
+        }
+    }
+
+    private void FinalizeSourceBundle(SyncPacketSourceBundleContext bundle, string reason)
+    {
+        if (bundle == null)
+        {
+            return;
+        }
+        bundle.Close(reason);
+        if (!string.IsNullOrEmpty(bundle.packetKey))
+        {
+            activeSourceBundles.Remove(bundle.packetKey);
+        }
+        RefreshSourceBundleInflightCounts();
+    }
+
+    private void AbortSourceBundleBeforeVehicleSend(
+        SyncPacketSourceBundleContext bundle,
+        string abortReason,
+        string dispositionCode,
+        string skippedReason = ""
+    )
+    {
+        if (bundle == null)
+        {
+            return;
+        }
+        bundle.bundleAbortedBeforeVehicleSend = true;
+        bundle.bundleAbortReason = string.IsNullOrEmpty(abortReason) ? "bundle_aborted_unknown" : abortReason;
+        bundle.vehicleSendBlockedByCameraRequest = true;
+        bundle.cameraRequestDispositionCode = string.IsNullOrEmpty(dispositionCode) ? "aborted" : dispositionCode;
+        if (!string.IsNullOrEmpty(skippedReason))
+        {
+            bundle.cameraRequestSkippedReason = skippedReason;
+        }
+        FinalizeSourceBundle(bundle, bundle.bundleAbortReason);
+    }
+
+    private void ExpireSourceBundles()
+    {
+        float nowRealtime = Time.realtimeSinceStartup;
+        List<string> removeKeys = null;
+        foreach (KeyValuePair<string, SyncPacketSourceBundleContext> kvp in activeSourceBundles)
+        {
+            SyncPacketSourceBundleContext bundle = kvp.Value;
+            if (bundle == null)
+            {
+                if (removeKeys == null) removeKeys = new List<string>();
+                removeKeys.Add(kvp.Key);
+                continue;
+            }
+            if (bundle.closed)
+            {
+                if (removeKeys == null) removeKeys = new List<string>();
+                removeKeys.Add(kvp.Key);
+                continue;
+            }
+            if (bundle.deadlineRealtime > 0.0f && nowRealtime > bundle.deadlineRealtime)
+            {
+                string reason = "source_bundle_deadline_expired";
+                if (!bundle.vehicleStateBuilt)
+                {
+                    reason = "vehicle_not_built";
+                }
+                else if (!bundle.vehicleStateEnqueued)
+                {
+                    reason = "vehicle_not_enqueued";
+                }
+                else if (!bundle.vehicleStateSent)
+                {
+                    reason = "vehicle_not_sent";
+                }
+                else if (!bundle.cameraRequestAttempted)
+                {
+                    reason = "camera_request_not_attempted";
+                }
+                else if (!bundle.cameraRequestAccepted)
+                {
+                    reason = !string.IsNullOrEmpty(bundle.cameraRequestRejectedReason)
+                        ? bundle.cameraRequestRejectedReason
+                        : "camera_request_deadline_expired";
+                }
+                else if (!bundle.cameraCaptured || !bundle.cameraEnqueued)
+                {
+                    reason = "camera_capture_deadline_expired";
+                }
+                else if (!bundle.cameraSent)
+                {
+                    reason = "camera_requested_not_sent";
+                }
+                bundle.Close(reason);
+                if (removeKeys == null) removeKeys = new List<string>();
+                removeKeys.Add(kvp.Key);
+            }
+        }
+        if (removeKeys != null)
+        {
+            foreach (string key in removeKeys)
+            {
+                activeSourceBundles.Remove(key);
+            }
+            RefreshSourceBundleInflightCounts();
+        }
+    }
+
+    private SyncPacketSourceBundleContext CreateSourceBundleContext(
+        int updateId,
+        int unityFrameCount,
+        float unityTime
+    )
+    {
+        ExpireSourceBundles();
+        string key = BuildSourceSyncPacketKey(updateId, unityFrameCount);
+        SyncPacketSourceBundleContext bundle = new SyncPacketSourceBundleContext
+        {
+            packetKey = key,
+            ownerUpdateId = updateId,
+            ownerUnityFrameCount = unityFrameCount,
+            ownerUnityTime = unityTime,
+            createdRealtime = Time.realtimeSinceStartup,
+            deadlineRealtime = Time.realtimeSinceStartup + (sourceBundleDeadlineMs / 1000.0f),
+            closeReason = "open",
+            closed = false,
+        };
+        activeSourceBundles[key] = bundle;
+        RefreshSourceBundleInflightCounts();
+        return bundle;
+    }
+
+    private void ApplySourceBundleSnapshot(VehicleState state, SyncPacketSourceBundleContext bundle)
+    {
+        if (state == null)
+        {
+            return;
+        }
+        if (bundle == null)
+        {
+            state.syncPacketSourceBundleCloseReason = "";
+            state.syncPacketSourceBundleDeadlineMs = 0.0f;
+            state.syncPacketSourceBundleAgeMs = 0.0f;
+            state.syncPacketSourceBundleInflightCount = 0;
+            state.syncPacketSourceVehicleStateBuilt = false;
+            state.syncPacketSourceVehicleStateEnqueued = false;
+            state.syncPacketSourceVehicleStateSent = false;
+            state.syncPacketSourceCameraRequested = false;
+            state.syncPacketSourceCameraRequestAttempted = false;
+            state.syncPacketSourceCameraRequestAccepted = false;
+            state.syncPacketSourceCameraRequestRejectedReason = "";
+            state.syncPacketSourceCameraRequestSkippedReason = "";
+            state.syncPacketSourceCameraRequestDispositionCode = "";
+            state.syncPacketSourceCameraRequestAttemptAgeMs = 0.0f;
+            state.syncPacketSourceCameraRequestAcceptAgeMs = 0.0f;
+            state.syncPacketSourceCameraRequestQueueDepth = 0;
+            state.syncPacketSourceCameraSent = false;
+            state.syncPacketSourceBundleAbortedBeforeVehicleSend = false;
+            state.syncPacketSourceBundleAbortReason = "";
+            state.syncPacketSourceVehicleSendBlockedByCameraRequest = false;
+            state.syncPacketSourceSupersededBeforeSend = false;
+            return;
+        }
+        float nowRealtime = Time.realtimeSinceStartup;
+        state.syncPacketSourceBundleCloseReason = bundle.closeReason ?? "";
+        state.syncPacketSourceBundleDeadlineMs = bundle.DeadlineMs();
+        state.syncPacketSourceBundleAgeMs = bundle.AgeMs(nowRealtime);
+        state.syncPacketSourceBundleInflightCount = bundle.inflightCount;
+        state.syncPacketSourceVehicleStateBuilt = bundle.vehicleStateBuilt;
+        state.syncPacketSourceVehicleStateEnqueued = bundle.vehicleStateEnqueued;
+        state.syncPacketSourceVehicleStateSent = bundle.vehicleStateSent;
+        state.syncPacketSourceCameraRequested = bundle.cameraRequested;
+        state.syncPacketSourceCameraRequestAttempted = bundle.cameraRequestAttempted;
+        state.syncPacketSourceCameraRequestAccepted = bundle.cameraRequestAccepted;
+        state.syncPacketSourceCameraRequestRejectedReason = bundle.cameraRequestRejectedReason ?? "";
+        state.syncPacketSourceCameraRequestSkippedReason = bundle.cameraRequestSkippedReason ?? "";
+        state.syncPacketSourceCameraRequestDispositionCode = bundle.cameraRequestDispositionCode ?? "";
+        state.syncPacketSourceCameraRequestAttemptAgeMs = bundle.CameraRequestAttemptAgeMs(nowRealtime);
+        state.syncPacketSourceCameraRequestAcceptAgeMs = bundle.CameraRequestAcceptAgeMs(nowRealtime);
+        state.syncPacketSourceCameraRequestQueueDepth = bundle.cameraRequestQueueDepth;
+        state.syncPacketSourceCameraSent = bundle.cameraSent;
+        state.syncPacketSourceBundleAbortedBeforeVehicleSend = bundle.bundleAbortedBeforeVehicleSend;
+        state.syncPacketSourceBundleAbortReason = bundle.bundleAbortReason ?? "";
+        state.syncPacketSourceVehicleSendBlockedByCameraRequest = bundle.vehicleSendBlockedByCameraRequest;
+        state.syncPacketSourceSupersededBeforeSend = bundle.supersededBeforeSend;
+    }
+
+    private void EnqueueVehicleStateSend(VehicleState state, int updateId, SyncPacketSourceBundleContext bundle)
+    {
+        if (state == null)
+        {
+            return;
+        }
+        if (bundle != null)
+        {
+            bundle.vehicleStateBuilt = true;
+            bundle.vehicleStateEnqueued = true;
+        }
+        ApplySourceBundleSnapshot(state, bundle);
+
+        while (pendingVehicleStateSends.Count >= Mathf.Max(1, maxPendingVehicleStateSends))
+        {
+            PendingVehicleStateSend dropped = pendingVehicleStateSends.Dequeue();
+            if (dropped != null && dropped.bundle != null && !dropped.bundle.vehicleStateSent)
+            {
+                dropped.bundle.supersededBeforeSend = true;
+                FinalizeSourceBundle(dropped.bundle, "vehicle_superseded_before_send");
+            }
+        }
+
+        pendingVehicleStateSends.Enqueue(
+            new PendingVehicleStateSend
+            {
+                state = state,
+                updateId = updateId,
+                bundle = bundle,
+            }
+        );
+        RefreshSourceBundleInflightCounts();
+        if (!stateSendInFlight)
+        {
+            StartCoroutine(VehicleStateSendWorker());
+        }
+    }
     
     // PERFORMANCE: Cache camera8mScreenY calculation - only recalculate when camera moves significantly
     private float cachedCamera8mScreenY = -1.0f;
@@ -808,20 +1057,76 @@ private float? lastCarT = null;
         currentState.requestId = updateId;
         currentState.unitySendRealtime = Time.realtimeSinceStartup;
         currentState.unitySendUtcMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        SyncPacketSourceBundleContext sourceBundle = CreateSourceBundleContext(
+            updateId,
+            currentState.unityFrameCount,
+            currentState.unityTime
+        );
+        sourceBundle.vehicleStateBuilt = true;
+        sourceBundle.cameraRequestDispositionCode = "pending";
+        string sourcePacketKey = sourceBundle.packetKey;
         if (cameraCapture != null)
         {
-            currentState.syncPacketKey = cameraCapture.LatestSyncPacketKey ?? "";
+            SyncPacketContextRegistrationResult registration =
+                cameraCapture.RegisterSyncPacketContext(sourceBundle);
+            sourceBundle.cameraRequestDispositionCode = registration.dispositionCode ?? sourceBundle.cameraRequestDispositionCode;
+            if (registration.attempted && !registration.accepted)
+            {
+                sourceBundle.cameraRequestRejectedReason = registration.rejectedReason ?? "";
+                if (string.IsNullOrEmpty(sourceBundle.cameraRequestRejectedReason))
+                {
+                    sourceBundle.cameraRequestRejectedReason = "camera_request_rejected";
+                }
+                string abortReason = "bundle_aborted_camera_request_rejected";
+                if (
+                    sourceBundle.cameraRequestRejectedReason == "out_of_budget" ||
+                    sourceBundle.cameraRequestRejectedReason == "queue_full"
+                )
+                {
+                    abortReason = "bundle_aborted_camera_request_budget_exceeded";
+                }
+                AbortSourceBundleBeforeVehicleSend(
+                    sourceBundle,
+                    abortReason,
+                    sourceBundle.cameraRequestDispositionCode,
+                    ""
+                );
+            }
+            currentState.syncPacketKey = sourcePacketKey;
             currentState.syncPacketCameraFrameId = cameraCapture.LatestSyncPacketFrameId;
             currentState.syncPacketCameraUnityFrameCount = cameraCapture.LatestSyncPacketUnityFrameCount;
             currentState.syncPacketCameraTimestamp = cameraCapture.LatestSyncPacketTimestamp;
         }
         else
         {
-            currentState.syncPacketKey = "";
+            sourceBundle.cameraRequestAttempted = false;
+            sourceBundle.cameraRequestAccepted = false;
+            sourceBundle.cameraRequestRejectedReason = "camera_capture_missing";
+            sourceBundle.cameraRequestSkippedReason = "camera_capture_missing";
+            sourceBundle.cameraRequestDispositionCode = "skipped_camera_capture_missing";
+            AbortSourceBundleBeforeVehicleSend(
+                sourceBundle,
+                "bundle_aborted_camera_request_not_attempted",
+                sourceBundle.cameraRequestDispositionCode,
+                sourceBundle.cameraRequestSkippedReason
+            );
+            currentState.syncPacketKey = sourcePacketKey;
             currentState.syncPacketCameraFrameId = -1;
             currentState.syncPacketCameraUnityFrameCount = -1;
             currentState.syncPacketCameraTimestamp = -1.0f;
         }
+        if (!sourceBundle.cameraRequestAttempted && !sourceBundle.bundleAbortedBeforeVehicleSend)
+        {
+            sourceBundle.cameraRequestSkippedReason = "request_branch_not_reached";
+            sourceBundle.cameraRequestDispositionCode = "skipped_request_branch_not_reached";
+            AbortSourceBundleBeforeVehicleSend(
+                sourceBundle,
+                "bundle_aborted_camera_request_not_attempted",
+                sourceBundle.cameraRequestDispositionCode,
+                sourceBundle.cameraRequestSkippedReason
+            );
+        }
+        ApplySourceBundleSnapshot(currentState, sourceBundle);
 
         if (logFrameCountJumps && lastSentUnityTime > 0f)
         {
@@ -1447,22 +1752,7 @@ private float? lastCarT = null;
             Debug.LogWarning("AVBridge: GroundTruthReporter not found! Ground truth data will be 0.0");
         }
         
-        // Send state to Python server (fire-and-forget; don't stall control loop).
-        if (!stateSendInFlight)
-        {
-            StartCoroutine(SendVehicleState(currentState, updateId));
-        }
-        else if (logBridgeTimings && showDebugInfo)
-        {
-            float stateInFlightDuration = Time.realtimeSinceStartup - stateSendStartRealtime;
-            if (stateInFlightDuration > bridgeTimingWarnThreshold)
-            {
-                Debug.LogWarning(
-                    $"AVBridge: SendVehicleState still in flight (id={updateId}, " +
-                    $"elapsed={stateInFlightDuration:F3}s, frame={Time.frameCount}, time={Time.time:F3}s)"
-                );
-            }
-        }
+        EnqueueVehicleStateSend(currentState, updateId, sourceBundle);
         
         // Request control commands (only if AV control is enabled)
         if (enableAVControl)
@@ -1499,7 +1789,35 @@ private float? lastCarT = null;
         yield return null;
     }
     
-    IEnumerator SendVehicleState(VehicleState state, int updateId)
+    IEnumerator VehicleStateSendWorker()
+    {
+        if (stateSendInFlight)
+        {
+            yield break;
+        }
+
+        while (pendingVehicleStateSends.Count > 0)
+        {
+            PendingVehicleStateSend pending = pendingVehicleStateSends.Dequeue();
+            if (pending == null || pending.state == null)
+            {
+                continue;
+            }
+            if (
+                pending.bundle != null &&
+                pending.bundle.closed &&
+                !pending.bundle.vehicleStateSent &&
+                pending.bundle.supersededBeforeSend
+            )
+            {
+                continue;
+            }
+            ApplySourceBundleSnapshot(pending.state, pending.bundle);
+            yield return StartCoroutine(SendVehicleState(pending.state, pending.updateId, pending.bundle));
+        }
+    }
+
+    IEnumerator SendVehicleState(VehicleState state, int updateId, SyncPacketSourceBundleContext bundle)
     {
         if (stateSendInFlight)
         {
@@ -1508,6 +1826,7 @@ private float? lastCarT = null;
 
         string url = $"{apiUrl}{stateEndpoint}";
         
+        ApplySourceBundleSnapshot(state, bundle);
         // Create JSON payload
         string json = JsonUtility.ToJson(state);
         byte[] bodyRaw = Encoding.UTF8.GetBytes(json);
@@ -1542,6 +1861,10 @@ private float? lastCarT = null;
                         $"AVBridge: Failed to send state (id={updateId}) - {request.error}"
                     );
                 }
+                if (bundle != null && !bundle.closed && !bundle.vehicleStateSent)
+                {
+                    bundle.Close("vehicle_not_sent");
+                }
             }
             else if (logBridgeTimings && showDebugInfo && duration > bridgeTimingWarnThreshold)
             {
@@ -1551,6 +1874,16 @@ private float? lastCarT = null;
                 );
             }
 
+            if (request.result == UnityWebRequest.Result.Success && bundle != null)
+            {
+                bundle.vehicleStateSent = true;
+                bundle.TryMarkComplete();
+                if (bundle.closed)
+                {
+                    activeSourceBundles.Remove(bundle.packetKey);
+                    RefreshSourceBundleInflightCounts();
+                }
+            }
             lastVehicleState = state;
         }
     }
