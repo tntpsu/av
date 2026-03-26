@@ -808,6 +808,20 @@ private float? lastCarT = null;
         currentState.requestId = updateId;
         currentState.unitySendRealtime = Time.realtimeSinceStartup;
         currentState.unitySendUtcMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        if (cameraCapture != null)
+        {
+            currentState.syncPacketKey = cameraCapture.LatestSyncPacketKey ?? "";
+            currentState.syncPacketCameraFrameId = cameraCapture.LatestSyncPacketFrameId;
+            currentState.syncPacketCameraUnityFrameCount = cameraCapture.LatestSyncPacketUnityFrameCount;
+            currentState.syncPacketCameraTimestamp = cameraCapture.LatestSyncPacketTimestamp;
+        }
+        else
+        {
+            currentState.syncPacketKey = "";
+            currentState.syncPacketCameraFrameId = -1;
+            currentState.syncPacketCameraUnityFrameCount = -1;
+            currentState.syncPacketCameraTimestamp = -1.0f;
+        }
 
         if (logFrameCountJumps && lastSentUnityTime > 0f)
         {
@@ -2196,6 +2210,8 @@ private float? lastCarT = null;
         state.radar_fwd_distance_m  = 0.0f;
         state.radar_fwd_range_rate_mps = 0.0f;
         state.radar_fwd_snr         = 0.0f;
+        state.lead_collision_detected = false;
+        state.lead_collision_override_active = false;
 
         if (leadVehicle == null || carController == null)
             return;
@@ -2203,6 +2219,8 @@ private float? lastCarT = null;
         // Collision override: report 0 m gap at high SNR so Python TTC guard fires immediately.
         if (leadVehicle.CollisionDetected)
         {
+            state.lead_collision_detected   = true;
+            state.lead_collision_override_active = true;
             state.radar_fwd_detected       = 1.0f;
             state.radar_fwd_distance_m     = 0.1f;   // < any TTC threshold → instant ESTOP
             state.radar_fwd_range_rate_mps = 0.0f;

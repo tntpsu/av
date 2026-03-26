@@ -387,13 +387,13 @@ PATTERNS = [
         "name": "Forced MPC→PP reset at high speed (false teleport guard)",
         "severity": "instability",
         "category": "Control",
-        "config_lever": "safety.teleport_distance_threshold / bridge cadence",
+        "config_lever": "transport continuity / teleport discontinuity guard",
         "fix_hint": (
             "Regime selector was reset to PP at high speed by the teleport guard firing on "
             "a frame-drop position jump. PP at >10 m/s is unstable. "
-            "Fix: (1) check bridge/Unity camera FPS for frame drops at high speed, "
-            "(2) raise safety.teleport_distance_threshold (default 2.0 m is too low at 12 m/s), "
-            "(3) do NOT tune PP gains until cadence is clean."
+            "Fix: (1) verify coherent packet continuity and skipped-frame timing, "
+            "(2) ensure the teleport guard only fires on motion inconsistent with expected transport continuity, "
+            "(3) do NOT tune PP gains until forced resets disappear."
         ),
         "check": lambda m: m.get("forced_pp_transition_count", 0) > 0,
     },

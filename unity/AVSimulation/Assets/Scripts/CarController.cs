@@ -1802,6 +1802,10 @@ public class VehicleState
     public int requestId = 0;
     public float unitySendRealtime = 0.0f; // Time.realtimeSinceStartup at send time
     public long unitySendUtcMs = 0; // UTC epoch ms at send time
+    public string syncPacketKey = "";
+    public int syncPacketCameraFrameId = -1;
+    public int syncPacketCameraUnityFrameCount = -1;
+    public float syncPacketCameraTimestamp = -1.0f;
     
     // Ground truth lane line positions (optional, set by GroundTruthReporter)
     // These represent the painted lane line markings, not the drivable lanes
@@ -1913,4 +1917,6 @@ public class VehicleState
     public float radar_fwd_distance_m   = 0.0f;  // noisy range to lead vehicle (m)
     public float radar_fwd_range_rate_mps = 0.0f; // Doppler range rate (+ = closing, m/s)
     public float radar_fwd_snr          = 0.0f;  // signal-to-noise proxy [0, 1]
+    public bool lead_collision_detected = false;
+    public bool lead_collision_override_active = false;
 }

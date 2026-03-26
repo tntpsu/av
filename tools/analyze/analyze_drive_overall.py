@@ -1175,6 +1175,9 @@ def _print_summary_report(recording_path: Path, summary: Dict, analyze_to_failur
     system_health = summary.get("system_health", {})
     safety = summary.get("safety", {})
     latency_sync = summary.get("latency_sync", {})
+    transport_contract = summary.get("transport_contract", {})
+    speed_intent = summary.get("speed_intent", {})
+    run_intent = summary.get("run_intent", {})
     chassis_ground = summary.get("chassis_ground", {})
     curve_intent_diag = summary.get("curve_intent_diagnostics", {})
     recommendations = summary.get("recommendations", [])
@@ -1606,7 +1609,194 @@ def _print_summary_report(recording_path: Path, summary: Dict, analyze_to_failur
         print("   Cadence Health: N/A")
     print()
 
-    print("10. CHASSIS-GROUND HEALTH")
+    print("10. TRANSPORT & CONTRACTS")
+    print("-" * 80)
+    if transport_contract.get("availability") == "available":
+        queue_stats = transport_contract.get("packet_queue_depth") or {}
+        payload_queue_stats = transport_contract.get("payload_queue_depth") or {}
+        skipped_stats = transport_contract.get("skipped_unity_frames") or {}
+        delta_stats = transport_contract.get("front_vehicle_time_delta_ms") or {}
+        payload_age_stats = transport_contract.get("payload_oldest_age_ms") or {}
+        payload_bytes_stats = transport_contract.get("payload_bytes") or {}
+        selected_age_stats = transport_contract.get("payload_selected_age_ms") or {}
+        drained_stats = transport_contract.get("payload_drained_count") or {}
+        max_drained_age_stats = transport_contract.get("payload_max_drained_age_ms") or {}
+        queue_after_select_stats = (
+            transport_contract.get("payload_server_queue_depth_after_select") or {}
+        )
+        oldest_after_select_stats = (
+            transport_contract.get("payload_server_oldest_age_ms_after_select") or {}
+        )
+        join_wait_stats = transport_contract.get("join_wait_ms") or {}
+        print(
+            "   Packet Mode / Schema: "
+            f"{transport_contract.get('packet_mode', 'unknown')} / "
+            f"{transport_contract.get('packet_schema_version', 0)}"
+        )
+        print(
+            "   Consume Policy / Fresh Rate: "
+            f"{transport_contract.get('consume_policy') or 'n/a'} / "
+            f"{float(transport_contract.get('payload_selected_fresh_rate') or 0.0):.1f}%"
+        )
+        print(
+            "   Selection Source / Fallback Mode: "
+            f"{transport_contract.get('payload_selection_source_mode') or 'n/a'} / "
+            f"{transport_contract.get('payload_selection_fallback_reason_mode') or 'none'}"
+        )
+        print(
+            "   Join Source / Key-Present Rate: "
+            f"{transport_contract.get('join_source_mode') or 'unknown'} / "
+            f"{float(transport_contract.get('join_key_present_rate') or 0.0):.1f}%"
+        )
+        print(
+            "   Packet Completeness / Fallback: "
+            f"{float(transport_contract.get('packet_completeness_rate') or 0.0):.1f}% / "
+            f"{float(transport_contract.get('fallback_active_rate') or 0.0):.1f}%"
+        )
+        print(
+            "   Queue Depth (p50/p95/max): "
+            f"{(queue_stats.get('p50') if queue_stats.get('p50') is not None else float('nan')):.1f} / "
+            f"{(queue_stats.get('p95') if queue_stats.get('p95') is not None else float('nan')):.1f} / "
+            f"{(queue_stats.get('max') if queue_stats.get('max') is not None else float('nan')):.1f}"
+        )
+        print(
+            "   Payload Queue / Age / Bytes (p95): "
+            f"{(payload_queue_stats.get('p95') if payload_queue_stats.get('p95') is not None else float('nan')):.1f} / "
+            f"{(payload_age_stats.get('p95') if payload_age_stats.get('p95') is not None else float('nan')):.1f} ms / "
+            f"{(payload_bytes_stats.get('p95') if payload_bytes_stats.get('p95') is not None else float('nan')):.0f}"
+        )
+        print(
+            "   Selected Payload Age / Drained / MaxDrainedAge (p95): "
+            f"{(selected_age_stats.get('p95') if selected_age_stats.get('p95') is not None else float('nan')):.1f} ms / "
+            f"{(drained_stats.get('p95') if drained_stats.get('p95') is not None else float('nan')):.1f} / "
+            f"{(max_drained_age_stats.get('p95') if max_drained_age_stats.get('p95') is not None else float('nan')):.1f} ms"
+        )
+        print(
+            "   Queue After Select / Oldest After (p95): "
+            f"{(queue_after_select_stats.get('p95') if queue_after_select_stats.get('p95') is not None else float('nan')):.1f} / "
+            f"{(oldest_after_select_stats.get('p95') if oldest_after_select_stats.get('p95') is not None else float('nan')):.1f} ms"
+        )
+        print(
+            "   Skipped Unity Frames (p50/p95/max): "
+            f"{(skipped_stats.get('p50') if skipped_stats.get('p50') is not None else float('nan')):.1f} / "
+            f"{(skipped_stats.get('p95') if skipped_stats.get('p95') is not None else float('nan')):.1f} / "
+            f"{(skipped_stats.get('max') if skipped_stats.get('max') is not None else float('nan')):.1f}"
+        )
+        print(
+            "   Join Wait ms (p50/p95/max): "
+            f"{(join_wait_stats.get('p50') if join_wait_stats.get('p50') is not None else float('nan')):.1f} / "
+            f"{(join_wait_stats.get('p95') if join_wait_stats.get('p95') is not None else float('nan')):.1f} / "
+            f"{(join_wait_stats.get('max') if join_wait_stats.get('max') is not None else float('nan')):.1f}"
+        )
+        print(
+            "   Front↔Vehicle Δt ms (p50/p95/max): "
+            f"{(delta_stats.get('p50') if delta_stats.get('p50') is not None else float('nan')):.1f} / "
+            f"{(delta_stats.get('p95') if delta_stats.get('p95') is not None else float('nan')):.1f} / "
+            f"{(delta_stats.get('max') if delta_stats.get('max') is not None else float('nan')):.1f}"
+        )
+        print(
+            "   Join Counters Max: "
+            f"key={int(transport_contract.get('key_match_count_max', 0))} / "
+            f"fallback={int(transport_contract.get('unity_fallback_count_max', 0))} / "
+            f"supCam={int(transport_contract.get('superseded_camera_count_max', 0))} / "
+            f"supVeh={int(transport_contract.get('superseded_vehicle_count_max', 0))}"
+        )
+        print(
+            "   Drop/PayloadDrop/Orphan/Timeout Max: "
+            f"{int(transport_contract.get('drop_count_max', 0))} / "
+            f"{int(transport_contract.get('payload_drop_count_max', 0))} / "
+            f"{int(transport_contract.get('orphan_camera_count_max', 0))}c "
+            f"{int(transport_contract.get('orphan_vehicle_count_max', 0))}v / "
+            f"{int(transport_contract.get('timeout_count_max', 0))}"
+        )
+        print(
+            "   Post-jump Cooldown / False-transport Rate: "
+            f"{float(transport_contract.get('post_jump_cooldown_active_rate') or 0.0):.1f}% / "
+            f"{float(transport_contract.get('false_teleport_cooldown_rate') or 0.0):.1f}%"
+        )
+        print(
+            "   Guard Suppressed / Continuity Suspect / Reason: "
+            f"{float(transport_contract.get('teleport_guard_suppressed_rate') or 0.0):.1f}% / "
+            f"{float(transport_contract.get('teleport_continuity_suspect_rate') or 0.0):.1f}% / "
+            f"{str(transport_contract.get('teleport_guard_reason_mode') or 'none')}"
+        )
+        print(
+            "   Warn-Age / Stale-Drop Max: "
+            f"{float(transport_contract.get('payload_warn_age_exceeded_rate') or 0.0):.1f}% / "
+            f"{int(transport_contract.get('payload_stale_drop_count_max') or 0)}"
+        )
+    else:
+        print("   Transport Contract: N/A")
+    print()
+
+    print("11. SPEED INTENT")
+    print("-" * 80)
+    if speed_intent.get("availability") == "available":
+        desired_p50 = (speed_intent.get("desired_target_speed_mps") or {}).get("p50")
+        post_limits_p50 = (speed_intent.get("post_limits_target_speed_mps") or {}).get("p50")
+        final_p50 = (speed_intent.get("final_target_speed_mps") or {}).get("p50")
+        planner_p50 = (speed_intent.get("planner_reference_speed_mps") or {}).get("p50")
+        effective_p50 = (speed_intent.get("effective_reference_speed_mps") or {}).get("p50")
+        print(
+            "   Desired / Post-Limits / Final / Planner / Effective (P50): "
+            f"{float(desired_p50 or 0.0):.2f} / "
+            f"{float(post_limits_p50 or 0.0):.2f} / "
+            f"{float(final_p50 or 0.0):.2f} / "
+            f"{float(planner_p50 or 0.0):.2f} / "
+            f"{float(effective_p50 or 0.0):.2f} m/s"
+        )
+        print(
+            "   Effective Reason Mode: "
+            f"{speed_intent.get('effective_reason_mode') or 'n/a'}"
+        )
+        print(
+            "   Effective Ref Drops: "
+            f"{int(speed_intent.get('effective_reference_velocity_drop_count') or 0)} "
+            f"({float(speed_intent.get('effective_reference_velocity_drop_rate') or 0.0):.1f}%)"
+        )
+        reason_counts = speed_intent.get("brake_episode_counts_by_reason") or {}
+        if reason_counts:
+            reason_text = ", ".join(f"{k}={v}" for k, v in sorted(reason_counts.items()))
+            print(f"   Brake Episodes By Reason: {reason_text}")
+    else:
+        print("   Speed Intent: N/A")
+    print()
+
+    print("12. RUN INTENT")
+    print("-" * 80)
+    if run_intent.get("availability") == "available":
+        print(
+            "   Mode / Recording / Replay: "
+            f"{run_intent.get('mode') or 'unknown'} / "
+            f"{run_intent.get('recording_type') or 'unknown'} / "
+            f"{run_intent.get('replay_type') or 'unknown'}"
+        )
+        print(
+            "   Track / Policy / Candidate: "
+            f"{run_intent.get('track_id') or 'unknown'} / "
+            f"{run_intent.get('policy_profile') or 'unknown'} / "
+            f"{run_intent.get('candidate_label') or 'unknown'}"
+        )
+        print(
+            "   Road Speed Limit / Configured Target: "
+            f"{float(run_intent.get('road_speed_limit_expected_mps') or 0.0):.2f} / "
+            f"{float(run_intent.get('run_target_speed_mps') or 0.0):.2f} m/s"
+        )
+        print(
+            "   ACC Active / Lead Distance P50: "
+            f"{float(run_intent.get('acc_active_rate_pct') or 0.0):.1f}% / "
+            f"{float(run_intent.get('lead_vehicle_distance_p50_m') or 0.0):.1f} m"
+        )
+        if run_intent.get("intent_mismatch_warning"):
+            print(
+                "   Intent Warning: "
+                f"{run_intent.get('intent_mismatch_warning')}"
+            )
+    else:
+        print("   Run Intent: N/A")
+    print()
+
+    print("13. CHASSIS-GROUND HEALTH")
     print("-" * 80)
     chassis_availability = str(chassis_ground.get("availability", "unavailable")).lower()
     if chassis_availability == "available":
@@ -1655,7 +1845,7 @@ def _print_summary_report(recording_path: Path, summary: Dict, analyze_to_failur
 
     contract_health = summary.get("curvature_contract_health", {})
     first_fault_chain = summary.get("first_fault_chain", {})
-    print("11. CURVATURE CONTRACT HEALTH")
+    print("14. CURVATURE CONTRACT HEALTH")
     print("-" * 80)
     if str(contract_health.get("availability", "unavailable")).lower() == "available":
         limits = contract_health.get("limits", {})
@@ -1788,7 +1978,7 @@ def _print_summary_report(recording_path: Path, summary: Dict, analyze_to_failur
             )
     print()
 
-    print("12. SAFETY METRICS")
+    print("15. SAFETY METRICS")
     print("-" * 80)
     print(f"   Out-of-Lane Events: {int(safety.get('out_of_lane_events', 0))}")
     print(f"   Out-of-Lane Time: {safety.get('out_of_lane_time', 0.0):.1f}%")
@@ -1811,7 +2001,7 @@ def _print_summary_report(recording_path: Path, summary: Dict, analyze_to_failur
 
     mpc_health = summary.get("mpc_health")
     if mpc_health and mpc_health.get("mpc_frames", 0) > 0:
-        print("13. MPC HEALTH")
+        print("16. MPC HEALTH")
         print("-" * 80)
         lmpc_n = mpc_health.get('lmpc_frames', mpc_health['mpc_frames'])
         nmpc_n = mpc_health.get('nmpc_frames', 0)
@@ -1884,7 +2074,7 @@ def _print_summary_report(recording_path: Path, summary: Dict, analyze_to_failur
             pass
         print()
 
-    print("14. RECOMMENDATIONS")
+    print("17. RECOMMENDATIONS")
     print("-" * 80)
     if recommendations:
         for idx, recommendation in enumerate(recommendations, 1):
@@ -1896,7 +2086,7 @@ def _print_summary_report(recording_path: Path, summary: Dict, analyze_to_failur
     # Section 15: Grade Impact (only for graded recordings)
     grade_metrics = summary.get("grade_metrics")
     if grade_metrics is not None:
-        print("15. GRADE IMPACT")
+        print("18. GRADE IMPACT")
         print("-" * 80)
         print(f"   Max Grade: {grade_metrics['grade_max_pct']:.1f}%"
               f"    Pitch P95: {grade_metrics['pitch_p95_deg']:.1f}\u00b0")
@@ -1909,7 +2099,7 @@ def _print_summary_report(recording_path: Path, summary: Dict, analyze_to_failur
     # Section 16: ACC Performance (only when ACC was active)
     acc_health = summary.get("acc_health")
     if acc_health is not None:
-        print("16. ACC PERFORMANCE")
+        print("19. ACC PERFORMANCE")
         print("-" * 80)
         print(f"   ACC Active: {acc_health['acc_active_pct']:.1f}% of frames")
         print()

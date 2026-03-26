@@ -4,7 +4,7 @@ import h5py
 import numpy as np
 import pytest
 
-from data.formats.data_format import CameraFrame, ControlCommand, RecordingFrame
+from data.formats.data_format import CameraFrame, ControlCommand, RecordingFrame, VehicleState
 from data.recorder import DataRecorder
 
 
@@ -576,3 +576,231 @@ def test_recorder_writes_curvature_contract_and_backstop_fields(tmp_path: Path) 
         assert float(h5_file["control/map_segment_lookup_success_rate"][0]) == pytest.approx(99.5, rel=1e-6)
         assert int(h5_file["control/map_teleport_skip_count"][0]) == 0
         assert int(h5_file["control/curvature_contract_consistent_all"][0]) == 1
+
+
+def test_recorder_writes_sync_packet_and_post_jump_fields(tmp_path: Path) -> None:
+    recorder = DataRecorder(str(tmp_path), recording_name="sync_packet_shadow_fields_test")
+    try:
+        vehicle_state = VehicleState(
+            timestamp=0.0,
+            position=np.zeros(3),
+            rotation=np.array([0.0, 0.0, 0.0, 1.0]),
+            velocity=np.zeros(3),
+            angular_velocity=np.zeros(3),
+            speed=5.0,
+            steering_angle=0.0,
+            motor_torque=0.0,
+            brake_torque=0.0,
+            sync_packet_mode="packet_shadow",
+            sync_packet_schema_version=1,
+            sync_packet_id=7,
+            sync_packet_unity_frame_count=222,
+            sync_packet_consume_policy="freshest_within_budget",
+            sync_packet_complete=True,
+            sync_packet_fallback_active=False,
+            sync_packet_fallback_reason_code="none",
+            sync_packet_queue_depth=3,
+            sync_packet_drop_count=1,
+            sync_packet_payload_queue_depth=2,
+            sync_packet_payload_drop_count=4,
+            sync_packet_orphan_camera_count=2,
+            sync_packet_orphan_vehicle_count=4,
+            sync_packet_timeout_count=5,
+            sync_packet_skipped_unity_frames=6,
+            sync_packet_age_ms=11.0,
+            sync_packet_payload_oldest_age_ms=13.5,
+            sync_packet_payload_bytes=921600,
+            sync_packet_payload_fallback_reason_code="none",
+            sync_packet_payload_selected_age_ms=42.0,
+            sync_packet_payload_selected_fresh=True,
+            sync_packet_payload_warn_age_exceeded=False,
+            sync_packet_payload_stale_drop_count=3,
+            sync_packet_payload_drained_count=3,
+            sync_packet_payload_max_drained_age_ms=211.0,
+            sync_packet_payload_selection_source="server_selector",
+            sync_packet_payload_selection_fallback_active=False,
+            sync_packet_payload_selection_fallback_reason_code="none",
+            sync_packet_payload_server_queue_depth_after_select=0,
+            sync_packet_payload_server_oldest_age_ms_after_select=np.nan,
+            sync_packet_join_source="packet_key",
+            sync_packet_join_key_present=True,
+            sync_packet_join_wait_ms=18.0,
+            sync_packet_key_match_count=9,
+            sync_packet_unity_fallback_count=1,
+            sync_packet_superseded_camera_count=2,
+            sync_packet_superseded_vehicle_count=3,
+            sync_packet_packet_superseded_camera_count=0,
+            sync_packet_packet_superseded_vehicle_count=1,
+            sync_front_age_ms=7.0,
+            sync_vehicle_age_ms=9.0,
+            sync_front_vehicle_frame_delta=0.0,
+            sync_front_vehicle_time_delta_ms=4.0,
+            sync_packet_missing_front=False,
+            sync_packet_missing_vehicle=False,
+            lead_collision_detected=True,
+            lead_collision_override_active=True,
+            acc_active=1.0,
+            acc_target_gap_m=22.0,
+            acc_gap_error_m=-21.9,
+            acc_ttc_s=999.0,
+            acc_state_code="COLLAPSED_GAP_STOP",
+            acc_target_speed_mps=0.0,
+            acc_request_estop=True,
+            acc_safety_mode_code="collapsed_gap_stop",
+        )
+        frame = RecordingFrame(
+            timestamp=0.0,
+            frame_id=0,
+            camera_frame=CameraFrame(
+                image=np.zeros((1, 1, 3), dtype=np.uint8),
+                timestamp=0.0,
+                frame_id=0,
+            ),
+            vehicle_state=vehicle_state,
+            control_command=ControlCommand(
+                timestamp=0.0,
+                steering=0.0,
+                throttle=0.0,
+                brake=0.0,
+                teleport_detected=True,
+                teleport_jump_m=2.5,
+                teleport_expected_motion_m=1.2,
+                teleport_motion_ratio=2.08,
+                teleport_guard_suppressed=False,
+                teleport_continuity_suspect=True,
+                teleport_guard_reason_code="true_discontinuity",
+                teleport_dynamic_threshold_m=3.4,
+                teleport_hard_override_threshold_m=8.0,
+                teleport_effective_dt_s=0.15,
+                teleport_unity_dt_s=0.15,
+                post_jump_cooldown_active=True,
+                post_jump_cooldown_frames_remaining=17,
+                post_jump_reason_code="teleport_guard",
+                governor_target_speed_mps=15.0,
+                acc_target_speed_mps=0.0,
+                planner_target_speed_applied_mps=0.0,
+                final_longitudinal_target_mps=0.0,
+                final_longitudinal_owner_code="acc_collapsed_gap_stop",
+                reference_velocity_source_code="post_jump_cooldown",
+                reference_velocity_effective=7.5,
+            ),
+            perception_output=None,
+            trajectory_output=None,
+            unity_feedback=None,
+        )
+
+        recorder._write_vehicle_states([frame])
+        recorder._write_control_commands([frame])
+        recorder.h5_file.flush()
+    finally:
+        recorder.close()
+
+    with h5py.File(tmp_path / "sync_packet_shadow_fields_test.h5", "r") as h5_file:
+        mode = h5_file["vehicle/sync_packet_mode"][0]
+        if isinstance(mode, bytes):
+            mode = mode.decode("utf-8")
+        assert str(mode) == "packet_shadow"
+        assert int(h5_file["vehicle/sync_packet_schema_version"][0]) == 1
+        assert int(h5_file["vehicle/sync_packet_id"][0]) == 7
+        assert int(h5_file["vehicle/sync_packet_complete"][0]) == 1
+        consume_policy = h5_file["vehicle/sync_packet_consume_policy"][0]
+        if isinstance(consume_policy, bytes):
+            consume_policy = consume_policy.decode("utf-8")
+        assert str(consume_policy) == "freshest_within_budget"
+        assert float(h5_file["vehicle/sync_packet_age_ms"][0]) == pytest.approx(11.0, rel=1e-6)
+        assert int(h5_file["vehicle/sync_packet_payload_queue_depth"][0]) == 2
+        assert int(h5_file["vehicle/sync_packet_payload_drop_count"][0]) == 4
+        assert float(h5_file["vehicle/sync_packet_payload_oldest_age_ms"][0]) == pytest.approx(
+            13.5, rel=1e-6
+        )
+        assert int(h5_file["vehicle/sync_packet_payload_bytes"][0]) == 921600
+        payload_reason = h5_file["vehicle/sync_packet_payload_fallback_reason_code"][0]
+        if isinstance(payload_reason, bytes):
+            payload_reason = payload_reason.decode("utf-8")
+        assert str(payload_reason) == "none"
+        assert float(h5_file["vehicle/sync_packet_payload_selected_age_ms"][0]) == pytest.approx(
+            42.0, rel=1e-6
+        )
+        assert int(h5_file["vehicle/sync_packet_payload_selected_fresh"][0]) == 1
+        assert int(h5_file["vehicle/sync_packet_payload_warn_age_exceeded"][0]) == 0
+        assert int(h5_file["vehicle/sync_packet_payload_stale_drop_count"][0]) == 3
+        assert int(h5_file["vehicle/sync_packet_payload_drained_count"][0]) == 3
+        assert float(h5_file["vehicle/sync_packet_payload_max_drained_age_ms"][0]) == pytest.approx(
+            211.0, rel=1e-6
+        )
+        selection_source = h5_file["vehicle/sync_packet_payload_selection_source"][0]
+        if isinstance(selection_source, bytes):
+            selection_source = selection_source.decode("utf-8")
+        assert str(selection_source) == "server_selector"
+        assert int(h5_file["vehicle/sync_packet_payload_selection_fallback_active"][0]) == 0
+        selection_reason = h5_file["vehicle/sync_packet_payload_selection_fallback_reason_code"][0]
+        if isinstance(selection_reason, bytes):
+            selection_reason = selection_reason.decode("utf-8")
+        assert str(selection_reason) == "none"
+        assert int(h5_file["vehicle/sync_packet_payload_server_queue_depth_after_select"][0]) == 0
+        join_source = h5_file["vehicle/sync_packet_join_source"][0]
+        if isinstance(join_source, bytes):
+            join_source = join_source.decode("utf-8")
+        assert str(join_source) == "packet_key"
+        assert int(h5_file["vehicle/sync_packet_join_key_present"][0]) == 1
+        assert float(h5_file["vehicle/sync_packet_join_wait_ms"][0]) == pytest.approx(
+            18.0, rel=1e-6
+        )
+        assert int(h5_file["vehicle/sync_packet_key_match_count"][0]) == 9
+        assert int(h5_file["vehicle/sync_packet_unity_fallback_count"][0]) == 1
+        assert int(h5_file["vehicle/sync_packet_superseded_camera_count"][0]) == 2
+        assert int(h5_file["vehicle/sync_packet_superseded_vehicle_count"][0]) == 3
+        assert int(h5_file["vehicle/sync_packet_packet_superseded_camera_count"][0]) == 0
+        assert int(h5_file["vehicle/sync_packet_packet_superseded_vehicle_count"][0]) == 1
+        assert int(h5_file["vehicle/lead_collision_detected"][0]) == 1
+        assert int(h5_file["vehicle/lead_collision_override_active"][0]) == 1
+        acc_state = h5_file["vehicle/acc_state_code"][0]
+        if isinstance(acc_state, bytes):
+            acc_state = acc_state.decode("utf-8")
+        assert str(acc_state) == "COLLAPSED_GAP_STOP"
+        assert float(h5_file["vehicle/acc_target_speed_mps"][0]) == pytest.approx(0.0, rel=1e-6)
+        assert int(h5_file["vehicle/acc_request_estop"][0]) == 1
+        assert int(h5_file["control/post_jump_cooldown_active"][0]) == 1
+        assert int(h5_file["control/post_jump_cooldown_frames_remaining"][0]) == 17
+        reason = h5_file["control/post_jump_reason_code"][0]
+        if isinstance(reason, bytes):
+            reason = reason.decode("utf-8")
+        assert str(reason) == "teleport_guard"
+        assert float(h5_file["control/reference_velocity_effective"][0]) == pytest.approx(
+            7.5, rel=1e-6
+        )
+        assert float(h5_file["control/teleport_expected_motion_m"][0]) == pytest.approx(
+            1.2, rel=1e-6
+        )
+        assert float(h5_file["control/teleport_motion_ratio"][0]) == pytest.approx(
+            2.08, rel=1e-6
+        )
+        assert int(h5_file["control/teleport_guard_suppressed"][0]) == 0
+        assert int(h5_file["control/teleport_continuity_suspect"][0]) == 1
+        guard_reason = h5_file["control/teleport_guard_reason_code"][0]
+        if isinstance(guard_reason, bytes):
+            guard_reason = guard_reason.decode("utf-8")
+        assert str(guard_reason) == "true_discontinuity"
+        assert float(h5_file["control/governor_target_speed_mps"][0]) == pytest.approx(15.0, rel=1e-6)
+        assert float(h5_file["control/planner_target_speed_applied_mps"][0]) == pytest.approx(0.0, rel=1e-6)
+        assert float(h5_file["control/final_longitudinal_target_mps"][0]) == pytest.approx(0.0, rel=1e-6)
+        owner_code = h5_file["control/final_longitudinal_owner_code"][0]
+        if isinstance(owner_code, bytes):
+            owner_code = owner_code.decode("utf-8")
+        assert str(owner_code) == "acc_collapsed_gap_stop"
+        ref_src = h5_file["control/reference_velocity_source_code"][0]
+        if isinstance(ref_src, bytes):
+            ref_src = ref_src.decode("utf-8")
+        assert str(ref_src) == "post_jump_cooldown"
+        assert float(h5_file["control/teleport_dynamic_threshold_m"][0]) == pytest.approx(
+            3.4, rel=1e-6
+        )
+        assert float(
+            h5_file["control/teleport_hard_override_threshold_m"][0]
+        ) == pytest.approx(8.0, rel=1e-6)
+        assert float(h5_file["control/teleport_effective_dt_s"][0]) == pytest.approx(
+            0.15, rel=1e-6
+        )
+        assert float(h5_file["control/teleport_unity_dt_s"][0]) == pytest.approx(
+            0.15, rel=1e-6
+        )

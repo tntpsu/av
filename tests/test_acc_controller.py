@@ -268,6 +268,21 @@ class TestDetectionLossHysteresis:
         assert out.state == ACCState.ACC_ACTIVE
 
 
+class TestCollapsedGapSafety:
+    def test_collapsed_gap_triggers_estop_even_without_positive_range_rate(self):
+        ctrl = _make_controller()
+        out = ctrl.compute_target_speed(
+            15.0,
+            25.0,
+            _reading(gap_m=0.1, range_rate_mps=0.0),
+            DT,
+        )
+        assert out.state == ACCState.COLLAPSED_GAP_STOP
+        assert out.request_estop is True
+        assert out.target_speed == pytest.approx(0.0)
+        assert out.safety_mode == "collapsed_gap_stop"
+
+
 # ─── Cutout ───────────────────────────────────────────────────────────────────
 
 class TestCutout:

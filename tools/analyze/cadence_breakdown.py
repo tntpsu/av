@@ -137,6 +137,12 @@ def _recommendations(
     e2e_latency_ms: Optional[np.ndarray],
     queue_depth: Optional[np.ndarray],
     frame_id_delta: Optional[np.ndarray],
+    packet_fallback_active: Optional[np.ndarray],
+    skipped_unity_frames: Optional[np.ndarray],
+    front_vehicle_delta_ms: Optional[np.ndarray],
+    post_jump_cooldown_active: Optional[np.ndarray],
+    reference_velocity_effective: Optional[np.ndarray],
+    target_speed_final: Optional[np.ndarray],
     unity_render_dt_ms: Optional[np.ndarray],
     ts_minus_rt_ms: Optional[np.ndarray],
     severe_ms: float,
@@ -193,6 +199,71 @@ def _recommendations(
                         "severity": "warn",
                         "detail": f"stream_front_frame_id_delta mean={float(np.mean(d)):.3f} "
                         f"p95={float(np.percentile(d, 95)):.2f}. Processing cadence below Unity frame steps.",
+                    }
+                )
+
+    if packet_fallback_active is not None:
+        p = packet_fallback_active[np.isfinite(packet_fallback_active)]
+        if p.size > 10:
+            fallback_rate = float(np.mean(p > 0.5))
+            if fallback_rate > 0.01:
+                out.append(
+                    {
+                        "code": "PACKET_FALLBACK",
+                        "severity": "alert",
+                        "detail": f"Sync packet fallback active on {fallback_rate * 100.0:.2f}% of frames. "
+                        "Control is relying on legacy/partial transport instead of complete packets.",
+                    }
+                )
+
+    if skipped_unity_frames is not None:
+        s = skipped_unity_frames[np.isfinite(skipped_unity_frames)]
+        if s.size > 10 and float(np.percentile(s, 95)) >= 2.0:
+            out.append(
+                {
+                    "code": "PACKET_SKIPS",
+                    "severity": "warn",
+                    "detail": f"Sync packet skipped Unity frames p95={float(np.percentile(s, 95)):.1f}. "
+                    "Continuity is breaking before control consumes the data.",
+                }
+            )
+
+    if front_vehicle_delta_ms is not None:
+        d = front_vehicle_delta_ms[np.isfinite(front_vehicle_delta_ms)]
+        if d.size > 10 and float(np.percentile(np.abs(d), 95)) > 20.0:
+            out.append(
+                {
+                    "code": "PACKET_COMPONENT_SKEW",
+                    "severity": "warn",
+                    "detail": f"Front↔vehicle packet Δt p95={float(np.percentile(np.abs(d), 95)):.1f} ms. "
+                    "Packet components are not landing tightly enough in time.",
+                }
+            )
+
+    if (
+        post_jump_cooldown_active is not None
+        and reference_velocity_effective is not None
+        and target_speed_final is not None
+    ):
+        pj = np.asarray(post_jump_cooldown_active, dtype=np.float64)
+        eff = np.asarray(reference_velocity_effective, dtype=np.float64)
+        tgt = np.asarray(target_speed_final, dtype=np.float64)
+        n = min(len(pj), len(eff), len(tgt))
+        if n > 0:
+            mask = (
+                np.isfinite(pj[:n])
+                & np.isfinite(eff[:n])
+                & np.isfinite(tgt[:n])
+                & (pj[:n] > 0.5)
+                & (eff[:n] + 0.25 < tgt[:n])
+            )
+            if np.any(mask):
+                out.append(
+                    {
+                        "code": "POST_JUMP_EFFECTIVE_DROP",
+                        "severity": "alert",
+                        "detail": f"Post-jump cooldown coincides with {int(np.sum(mask))} frames where effective reference "
+                        "velocity is materially below the final target.",
                     }
                 )
 
@@ -306,9 +377,15 @@ def analyze_cadence(
 
         qd = _read_dataset(f, "vehicle/stream_front_queue_depth")
         fid_delta = _read_dataset(f, "vehicle/stream_front_frame_id_delta")
+        packet_fallback_active = _read_dataset(f, "vehicle/sync_packet_fallback_active")
+        skipped_unity_frames = _read_dataset(f, "vehicle/sync_packet_skipped_unity_frames")
+        front_vehicle_delta_ms = _read_dataset(f, "vehicle/sync_front_vehicle_time_delta_ms")
         unity_dt = _read_dataset(f, "vehicle/stream_front_unity_dt_ms")
         unity_delta_s = _read_dataset(f, "vehicle/unity_delta_time")
         ts_rt = _read_dataset(f, "vehicle/stream_front_timestamp_minus_realtime_ms")
+        post_jump_cooldown_active = _read_dataset(f, "control/post_jump_cooldown_active")
+        reference_velocity_effective = _read_dataset(f, "control/reference_velocity_effective")
+        target_speed_final = _read_dataset(f, "control/target_speed_final")
 
         n_candidates = []
         if ctrl_ts is not None:
@@ -319,6 +396,8 @@ def analyze_cadence(
             n_candidates.append(int(inputs.shape[0]))
         if qd is not None:
             n_candidates.append(int(qd.shape[0]))
+        if packet_fallback_active is not None:
+            n_candidates.append(int(packet_fallback_active.shape[0]))
         if not n_candidates:
             raise ValueError("Recording has no control/timestamps or e2e datasets")
 
@@ -349,9 +428,15 @@ def analyze_cadence(
         perf_wait_input_ms_ds = trim(perf_wait_input_ms_ds)
         qd = trim(qd)
         fid_delta = trim(fid_delta)
+        packet_fallback_active = trim(packet_fallback_active)
+        skipped_unity_frames = trim(skipped_unity_frames)
+        front_vehicle_delta_ms = trim(front_vehicle_delta_ms)
         unity_dt = trim(unity_dt)
         unity_delta_s = trim(unity_delta_s)
         ts_rt = trim(ts_rt)
+        post_jump_cooldown_active = trim(post_jump_cooldown_active)
+        reference_velocity_effective = trim(reference_velocity_effective)
+        target_speed_final = trim(target_speed_final)
 
         end_slice = n
         if pre_failure_only:
@@ -383,9 +468,15 @@ def analyze_cadence(
         perf_wait_input_ms_ds = slice_n(perf_wait_input_ms_ds)
         qd = slice_n(qd)
         fid_delta = slice_n(fid_delta)
+        packet_fallback_active = slice_n(packet_fallback_active)
+        skipped_unity_frames = slice_n(skipped_unity_frames)
+        front_vehicle_delta_ms = slice_n(front_vehicle_delta_ms)
         unity_dt = slice_n(unity_dt)
         unity_delta_s = slice_n(unity_delta_s)
         ts_rt = slice_n(ts_rt)
+        post_jump_cooldown_active = slice_n(post_jump_cooldown_active)
+        reference_velocity_effective = slice_n(reference_velocity_effective)
+        target_speed_final = slice_n(target_speed_final)
         n = end_slice
 
     availability = {
@@ -394,11 +485,17 @@ def analyze_cadence(
         "e2e_latency_ms": e2e_lat is not None,
         "queue_depth": qd is not None,
         "frame_id_delta": fid_delta is not None,
+        "packet_fallback_active": packet_fallback_active is not None,
+        "skipped_unity_frames": skipped_unity_frames is not None,
+        "front_vehicle_delta_ms": front_vehicle_delta_ms is not None,
         "unity_dt": unity_dt is not None,
         "unity_delta_time": unity_delta_s is not None,
         "timestamp_minus_realtime": ts_rt is not None,
         "front_vehicle_mono": front is not None and vehicle_mono is not None,
         "perf_perception_ms": perf_perception_ms is not None,
+        "post_jump_cooldown_active": post_jump_cooldown_active is not None,
+        "reference_velocity_effective": reference_velocity_effective is not None,
+        "target_speed_final": target_speed_final is not None,
     }
 
     wall_loop_period_ms = np.full(n, np.nan, dtype=np.float64)
@@ -456,6 +553,12 @@ def analyze_cadence(
         series_map["stream_front_queue_depth"] = qd
     if fid_delta is not None:
         series_map["stream_front_frame_id_delta"] = fid_delta
+    if packet_fallback_active is not None:
+        series_map["sync_packet_fallback_active"] = packet_fallback_active
+    if skipped_unity_frames is not None:
+        series_map["sync_packet_skipped_unity_frames"] = skipped_unity_frames
+    if front_vehicle_delta_ms is not None:
+        series_map["sync_front_vehicle_time_delta_ms"] = front_vehicle_delta_ms
     if unity_dt is not None:
         series_map["stream_front_unity_dt_ms"] = unity_dt
     unity_render_dt_ms: Optional[np.ndarray] = None
@@ -475,6 +578,12 @@ def analyze_cadence(
         series_map["perf_hdf5_write_ms"] = perf_hdf5_write_ms
     if perf_wait_input_ms_ds is not None:
         series_map["perf_wait_input_ms"] = perf_wait_input_ms_ds
+    if post_jump_cooldown_active is not None:
+        series_map["post_jump_cooldown_active"] = post_jump_cooldown_active
+    if reference_velocity_effective is not None:
+        series_map["reference_velocity_effective"] = reference_velocity_effective
+    if target_speed_final is not None:
+        series_map["target_speed_final"] = target_speed_final
 
     stats_all = {name: finite_stats(arr) for name, arr in series_map.items()}
     stats_severe = {name: stats_for(severe_mask, arr) for name, arr in series_map.items()}
@@ -515,6 +624,12 @@ def analyze_cadence(
         e2e_latency_ms=e2e_lat,
         queue_depth=qd,
         frame_id_delta=fid_delta,
+        packet_fallback_active=packet_fallback_active,
+        skipped_unity_frames=skipped_unity_frames,
+        front_vehicle_delta_ms=front_vehicle_delta_ms,
+        post_jump_cooldown_active=post_jump_cooldown_active,
+        reference_velocity_effective=reference_velocity_effective,
+        target_speed_final=target_speed_final,
         unity_render_dt_ms=unity_render_dt_ms,
         ts_minus_rt_ms=ts_rt,
         severe_ms=severe_ms,

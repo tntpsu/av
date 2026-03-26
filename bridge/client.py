@@ -5,6 +5,7 @@ Provides convenient methods for AV stack components to interact with Unity.
 
 import base64
 import io
+import json
 import os
 import queue as _queue
 import threading
@@ -16,6 +17,22 @@ import concurrent.futures
 import numpy as np
 import requests
 from PIL import Image
+
+from sync_contract import (
+    PACKET_CONSUME_POLICY_FIFO_STRICT,
+    PACKET_CONSUME_POLICY_FRESHEST_WITHIN_BUDGET,
+    PACKET_CONSUME_POLICY_LATEST_DEBUG,
+    PACKET_FALLBACK_PAYLOAD_AGE_BUDGET_EXCEEDED,
+    PACKET_FALLBACK_PAYLOAD_DRAIN_CAP,
+    PACKET_FALLBACK_PAYLOAD_STALE_TIMEOUT,
+    PACKET_FALLBACK_MISSING_FRONT_CAMERA,
+    PACKET_FALLBACK_MISSING_VEHICLE_STATE,
+    PACKET_FALLBACK_NONE,
+    PACKET_FALLBACK_PACKET_LEGACY_PATH,
+    PACKET_FALLBACK_PACKET_QUEUE_OVERFLOW,
+    PACKET_FALLBACK_PACKET_TIMEOUT,
+    PACKET_MODE_LATEST_PARALLEL,
+)
 
 
 class UnityBridgeClient:
@@ -57,6 +74,7 @@ class UnityBridgeClient:
             v = os.environ.get("AV_STACK_RAW_CAMERA", "1").strip().lower()
             use_raw_camera = v not in ("0", "false", "no", "off")
         self.use_raw_camera = bool(use_raw_camera)
+        self.sync_packet_mode = PACKET_MODE_LATEST_PARALLEL
 
         # Fire-and-forget control sender.
         # set_control_command() enqueues and returns immediately (latest-wins,
@@ -141,6 +159,8 @@ class UnityBridgeClient:
                 return None
 
         meta: Dict = {
+            "unity_frame_count": _int_hdr("X-AV-Unity-Frame-Count"),
+            "unity_time": _float_hdr("X-AV-Unity-Time"),
             "queue_depth": _int_hdr("X-AV-Queue-Depth"),
             "queue_capacity": _int_hdr("X-AV-Queue-Capacity"),
             "drop_count": _int_hdr("X-AV-Drop-Count"),
@@ -248,6 +268,8 @@ class UnityBridgeClient:
             img_array = np.array(img)
 
             meta = {
+                "unity_frame_count": data.get("unity_frame_count"),
+                "unity_time": data.get("unity_time"),
                 "queue_depth": data.get("queue_depth"),
                 "queue_capacity": data.get("queue_capacity"),
                 "drop_count": data.get("drop_count"),
@@ -356,6 +378,57 @@ class UnityBridgeClient:
             return None
         except requests.RequestException:
             return None
+
+    def get_next_camera_frame_with_metadata(
+        self,
+        camera_id: str = "front_center",
+    ) -> Optional[Tuple[np.ndarray, float, Optional[int], Dict]]:
+        """Get next queued camera frame plus bridge freshness metadata."""
+        try:
+            if self.use_raw_camera:
+                raw_resp = self.session.get(
+                    f"{self.base_url}/api/camera/next/raw",
+                    params={"camera_id": camera_id},
+                    timeout=0.5,
+                )
+                if raw_resp.status_code == 200:
+                    try:
+                        return self._parse_raw_camera_response(raw_resp)
+                    except ValueError:
+                        pass
+                elif raw_resp.status_code != 404:
+                    raw_resp.raise_for_status()
+
+            response = self.session.get(
+                f"{self.base_url}/api/camera/next",
+                params={"camera_id": camera_id},
+                timeout=0.5,
+            )
+            response.raise_for_status()
+
+            data = response.json()
+            img_base64 = data["image"]
+            timestamp = data.get("timestamp", time.time())
+            frame_id = data.get("frame_id")
+
+            img_bytes = base64.b64decode(img_base64)
+            img = Image.open(io.BytesIO(img_bytes))
+            img_array = np.array(img)
+
+            meta = {
+                "unity_frame_count": data.get("unity_frame_count"),
+                "unity_time": data.get("unity_time"),
+                "queue_remaining": data.get("queue_remaining"),
+            }
+            return img_array, timestamp, frame_id, meta
+        except requests.exceptions.Timeout:
+            return None
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 404:
+                return None
+            return None
+        except requests.RequestException:
+            return None
     
     def _sync_get_latest_vehicle_state(self, session: requests.Session) -> Optional[Dict]:
         """GET /api/vehicle/state/latest using the given Session (thread-local for parallel fetch)."""
@@ -383,6 +456,28 @@ class UnityBridgeClient:
             Vehicle state dictionary or None if not available
         """
         return self._sync_get_latest_vehicle_state(self.session)
+
+    def _sync_get_latest_sync_packet(self, session: requests.Session) -> Optional[Dict]:
+        """GET /api/sim/packet/latest using the given Session."""
+        try:
+            response = session.get(
+                f"{self.base_url}/api/sim/packet/latest",
+                timeout=0.5,
+            )
+            response.raise_for_status()
+            return response.json()
+        except requests.exceptions.Timeout:
+            return None
+        except requests.exceptions.HTTPError as e:
+            if e.response is not None and e.response.status_code == 404:
+                return None
+            return None
+        except requests.RequestException:
+            return None
+
+    def get_latest_sync_packet(self) -> Optional[Dict]:
+        """Get latest synchronized bridge packet metadata."""
+        return self._sync_get_latest_sync_packet(self.session)
 
     def get_latest_camera_and_vehicle_parallel(
         self,
@@ -432,6 +527,412 @@ class UnityBridgeClient:
             return None
         except requests.RequestException:
             return None
+
+    def get_next_sync_packet(self) -> Optional[Dict]:
+        """Get next synchronized bridge packet metadata (FIFO order)."""
+        try:
+            response = self.session.get(f"{self.base_url}/api/sim/packet/next", timeout=0.5)
+            response.raise_for_status()
+            return response.json()
+        except requests.exceptions.Timeout:
+            return None
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 404:
+                return None
+            return None
+        except requests.RequestException:
+            return None
+
+    @staticmethod
+    def _extract_unity_frame_count_from_vehicle_state(vehicle_state: Optional[Dict]) -> Optional[int]:
+        if not isinstance(vehicle_state, dict):
+            return None
+        raw = vehicle_state.get("unityFrameCount", vehicle_state.get("unity_frame_count"))
+        try:
+            return int(raw) if raw is not None else None
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _extract_unity_frame_count_from_camera_frame(
+        frame_data: Optional[Tuple[np.ndarray, float, Optional[int], Dict]],
+    ) -> Optional[int]:
+        if frame_data is None or len(frame_data) < 4:
+            return None
+        meta = frame_data[3] or {}
+        raw = meta.get("unity_frame_count")
+        try:
+            return int(raw) if raw is not None else None
+        except (TypeError, ValueError):
+            return None
+
+    def get_next_sync_packet_bundle(
+        self,
+        camera_id: str = "front_center",
+        *,
+        max_resync_discards: int = 8,
+        drain_to_latest: bool = False,
+        max_packet_drains: int = 256,
+    ) -> Optional[Dict[str, Any]]:
+        """Consume the next synchronized packet and align FIFO camera/state components to it."""
+        packet = self.get_next_sync_packet()
+        if packet is None:
+            return None
+        drained_packet_count = 0
+        if drain_to_latest:
+            for _ in range(max(0, int(max_packet_drains))):
+                newer = self.get_next_sync_packet()
+                if newer is None:
+                    break
+                packet = newer
+                drained_packet_count += 1
+
+        expected_unity_frame = packet.get("unity_frame_count")
+        try:
+            expected_unity_frame = int(expected_unity_frame) if expected_unity_frame is not None else None
+        except (TypeError, ValueError):
+            expected_unity_frame = None
+
+        bundle: Dict[str, Any] = {
+            "packet": packet,
+            "frame_data": None,
+            "vehicle_state": None,
+            "front_ready_mono_s": None,
+            "vehicle_ready_mono_s": None,
+            "discarded_camera_frames": 0,
+            "discarded_vehicle_states": 0,
+            "drained_packet_count": drained_packet_count,
+            "fallback_active": False,
+            "fallback_reason_code": PACKET_FALLBACK_NONE,
+        }
+
+        camera_frame = None
+        for _ in range(max(1, int(max_resync_discards) + 1)):
+            camera_frame = self.get_next_camera_frame_with_metadata(camera_id=camera_id)
+            bundle["front_ready_mono_s"] = time.monotonic()
+            if camera_frame is None:
+                bundle["fallback_active"] = True
+                bundle["fallback_reason_code"] = PACKET_FALLBACK_MISSING_FRONT_CAMERA
+                break
+            camera_unity_frame = self._extract_unity_frame_count_from_camera_frame(camera_frame)
+            if expected_unity_frame is None or camera_unity_frame is None or camera_unity_frame == expected_unity_frame:
+                break
+            if camera_unity_frame < expected_unity_frame:
+                bundle["discarded_camera_frames"] += 1
+                camera_frame = None
+                continue
+            bundle["fallback_active"] = True
+            bundle["fallback_reason_code"] = PACKET_FALLBACK_PACKET_QUEUE_OVERFLOW
+            break
+        bundle["frame_data"] = camera_frame
+
+        vehicle_state = None
+        for _ in range(max(1, int(max_resync_discards) + 1)):
+            vehicle_state = self.get_next_vehicle_state()
+            bundle["vehicle_ready_mono_s"] = time.monotonic()
+            if vehicle_state is None:
+                if not bundle["fallback_active"]:
+                    bundle["fallback_active"] = True
+                    bundle["fallback_reason_code"] = PACKET_FALLBACK_MISSING_VEHICLE_STATE
+                break
+            vehicle_unity_frame = self._extract_unity_frame_count_from_vehicle_state(vehicle_state)
+            if expected_unity_frame is None or vehicle_unity_frame is None or vehicle_unity_frame == expected_unity_frame:
+                break
+            if vehicle_unity_frame < expected_unity_frame:
+                bundle["discarded_vehicle_states"] += 1
+                vehicle_state = None
+                continue
+            bundle["fallback_active"] = True
+            bundle["fallback_reason_code"] = PACKET_FALLBACK_PACKET_QUEUE_OVERFLOW
+            break
+        bundle["vehicle_state"] = vehicle_state
+
+        if bundle["frame_data"] is None and not bundle["fallback_active"]:
+            bundle["fallback_active"] = True
+            bundle["fallback_reason_code"] = PACKET_FALLBACK_PACKET_TIMEOUT
+        if bundle["vehicle_state"] is None and not bundle["fallback_active"]:
+            bundle["fallback_active"] = True
+            bundle["fallback_reason_code"] = PACKET_FALLBACK_PACKET_TIMEOUT
+
+        return bundle
+
+    @staticmethod
+    def _parse_multipart_parts(body: bytes, boundary: str) -> list[tuple[dict[str, str], bytes]]:
+        delimiter = f"--{boundary}".encode("utf-8")
+        parts: list[tuple[dict[str, str], bytes]] = []
+        for raw_part in body.split(delimiter):
+            part = raw_part.strip()
+            if not part or part == b"--":
+                continue
+            if part.endswith(b"--"):
+                part = part[:-2].rstrip()
+            if b"\r\n\r\n" not in part:
+                continue
+            header_bytes, payload = part.split(b"\r\n\r\n", 1)
+            headers: dict[str, str] = {}
+            for line in header_bytes.split(b"\r\n"):
+                if b":" not in line:
+                    continue
+                k, v = line.split(b":", 1)
+                headers[k.decode("utf-8", errors="ignore").strip().lower()] = (
+                    v.decode("utf-8", errors="ignore").strip()
+                )
+            parts.append((headers, payload.rstrip(b"\r\n")))
+        return parts
+
+    def _parse_sync_packet_payload_response(self, response: requests.Response) -> Dict[str, Any]:
+        content_type = response.headers.get("Content-Type", "")
+        boundary_token = "boundary="
+        if boundary_token not in content_type:
+            raise ValueError("sync packet payload missing multipart boundary")
+        boundary = content_type.split(boundary_token, 1)[1].strip().strip('"')
+        metadata: Optional[Dict[str, Any]] = None
+        image_bytes: Optional[bytes] = None
+        for headers, payload in self._parse_multipart_parts(response.content, boundary):
+            part_type = headers.get("content-type", "")
+            if part_type.startswith("application/json"):
+                metadata = json.loads(payload.decode("utf-8"))
+            elif part_type.startswith("application/octet-stream"):
+                image_bytes = payload
+        if not isinstance(metadata, dict):
+            raise ValueError("sync packet payload missing metadata part")
+        if image_bytes is None:
+            raise ValueError("sync packet payload missing image bytes part")
+        front = metadata.get("front_camera") or {}
+        shape = front.get("shape")
+        dtype_name = front.get("dtype")
+        if not isinstance(shape, list) or not dtype_name:
+            raise ValueError("sync packet payload missing image shape/dtype")
+        dtype = np.dtype(str(dtype_name))
+        expected = int(np.prod(shape)) * int(dtype.itemsize)
+        if len(image_bytes) != expected:
+            raise ValueError(
+                f"sync packet payload image size mismatch: got {len(image_bytes)} expected {expected}"
+            )
+        image = np.frombuffer(memoryview(image_bytes), dtype=dtype).reshape(tuple(shape)).copy()
+        packet_meta = metadata.get("packet") or {}
+        vehicle_state = metadata.get("vehicle_state") or {}
+        timestamp = front.get("timestamp", time.time())
+        frame_id = front.get("frame_id")
+        camera_meta = {
+            "unity_frame_count": front.get("unity_frame_count"),
+            "unity_time": front.get("unity_time"),
+            "camera_id": front.get("camera_id"),
+        }
+        ready = time.monotonic()
+        return {
+            "image": image,
+            "timestamp": timestamp,
+            "frame_id": frame_id,
+            "camera_meta": camera_meta,
+            "vehicle_state_dict": vehicle_state,
+            "packet_meta": packet_meta,
+            "fallback_active": bool(packet_meta.get("fallback_active", False)),
+            "fallback_reason_code": str(packet_meta.get("fallback_reason_code") or ""),
+            "front_ready_mono_s": ready,
+            "vehicle_ready_mono_s": ready,
+            "inputs_ready_mono_s": ready,
+        }
+
+    @staticmethod
+    def _extract_sync_packet_age_ms(payload: Optional[Dict[str, Any]]) -> float:
+        if not isinstance(payload, dict):
+            return float("nan")
+        packet_meta = payload.get("packet_meta") or {}
+        try:
+            value = float(packet_meta.get("packet_age_ms", float("nan")))
+        except (TypeError, ValueError):
+            return float("nan")
+        return value if np.isfinite(value) else float("nan")
+
+    @staticmethod
+    def _parse_selection_headers(
+        headers: Dict[str, Any],
+        *,
+        consume_policy: str,
+        max_age_ms: float,
+        warn_age_ms: float,
+    ) -> Dict[str, Any]:
+        def _float_header(name: str) -> float:
+            try:
+                value = float(headers.get(name, "nan"))
+            except (TypeError, ValueError):
+                return float("nan")
+            return value if np.isfinite(value) else float("nan")
+
+        def _int_header(name: str) -> int:
+            try:
+                return int(headers.get(name, 0))
+            except (TypeError, ValueError):
+                return 0
+
+        def _bool_header(name: str) -> bool:
+            raw = str(headers.get(name, "")).strip().lower()
+            return raw in {"1", "true", "yes"}
+
+        fallback_reason = str(headers.get("X-AV-Selection-Fallback-Reason", "") or "")
+        return {
+            "payload": None,
+            "consume_policy": str(headers.get("X-AV-Consume-Policy", consume_policy) or consume_policy),
+            "freshness_budget_ms": float(max_age_ms),
+            "warn_age_ms": float(warn_age_ms),
+            "selection_source": str(headers.get("X-AV-Selection-Source", "") or ""),
+            "selected_age_ms": _float_header("X-AV-Selected-Payload-Age-Ms"),
+            "selected_fresh": _bool_header("X-AV-Selected-Payload-Fresh"),
+            "warn_age_exceeded": _bool_header("X-AV-Selected-Payload-Warn-Age-Exceeded"),
+            "stale_drop_count": _int_header("X-AV-Stale-Drop-Count"),
+            "drained_count": _int_header("X-AV-Drained-Count"),
+            "max_drained_age_ms": _float_header("X-AV-Max-Drained-Age-Ms"),
+            "server_queue_depth_after_select": _int_header(
+                "X-AV-Server-Queue-Depth-After-Select"
+            ),
+            "server_oldest_age_ms_after_select": _float_header(
+                "X-AV-Server-Oldest-Age-Ms-After-Select"
+            ),
+            "fallback_active": _bool_header("X-AV-Selection-Fallback-Active"),
+            "fallback_reason_code": fallback_reason or PACKET_FALLBACK_PACKET_TIMEOUT,
+        }
+
+    def get_next_sync_packet_payload_raw(self) -> Optional[Dict[str, Any]]:
+        """Get the next synchronized packet payload (metadata + full vehicle state + raw image)."""
+        try:
+            response = self.session.get(f"{self.base_url}/api/sim/packet/next/raw", timeout=0.8)
+            response.raise_for_status()
+            return self._parse_sync_packet_payload_response(response)
+        except requests.exceptions.Timeout:
+            return None
+        except requests.exceptions.HTTPError as e:
+            if e.response is not None and e.response.status_code == 404:
+                return None
+            return None
+        except (requests.RequestException, ValueError):
+            return None
+
+    def get_latest_sync_packet_payload_raw(self) -> Optional[Dict[str, Any]]:
+        """Get the latest synchronized packet payload without consuming the FIFO queue."""
+        try:
+            response = self.session.get(f"{self.base_url}/api/sim/packet/latest/raw", timeout=0.8)
+            response.raise_for_status()
+            return self._parse_sync_packet_payload_response(response)
+        except requests.exceptions.Timeout:
+            return None
+        except requests.exceptions.HTTPError as e:
+            if e.response is not None and e.response.status_code == 404:
+                return None
+            return None
+        except (requests.RequestException, ValueError):
+            return None
+
+    def get_fresh_sync_packet_payload_raw(
+        self,
+        *,
+        consume_policy: str = PACKET_CONSUME_POLICY_FRESHEST_WITHIN_BUDGET,
+        max_age_ms: float = 250.0,
+        warn_age_ms: float = 125.0,
+        max_drain_count: int = 128,
+        allow_stale_debug: bool = False,
+    ) -> Dict[str, Any]:
+        """Return one server-selected coherent payload with explicit server-side freshness accounting."""
+        try:
+            response = self.session.get(
+                f"{self.base_url}/api/sim/packet/next/raw",
+                params={
+                    "consume_policy": str(consume_policy),
+                    "max_age_ms": float(max_age_ms),
+                    "warn_age_ms": float(warn_age_ms),
+                    "max_drain_count": int(max_drain_count),
+                    "allow_stale_debug": bool(allow_stale_debug),
+                },
+                timeout=0.8,
+            )
+        except requests.exceptions.Timeout:
+            return {
+                "payload": None,
+                "consume_policy": str(consume_policy),
+                "freshness_budget_ms": float(max_age_ms),
+                "warn_age_ms": float(warn_age_ms),
+                "selection_source": "",
+                "selected_age_ms": float("nan"),
+                "selected_fresh": False,
+                "warn_age_exceeded": False,
+                "stale_drop_count": 0,
+                "drained_count": 0,
+                "max_drained_age_ms": float("nan"),
+                "server_queue_depth_after_select": 0,
+                "server_oldest_age_ms_after_select": float("nan"),
+                "fallback_active": True,
+                "fallback_reason_code": PACKET_FALLBACK_PACKET_TIMEOUT,
+            }
+        except requests.RequestException:
+            return {
+                "payload": None,
+                "consume_policy": str(consume_policy),
+                "freshness_budget_ms": float(max_age_ms),
+                "warn_age_ms": float(warn_age_ms),
+                "selection_source": "",
+                "selected_age_ms": float("nan"),
+                "selected_fresh": False,
+                "warn_age_exceeded": False,
+                "stale_drop_count": 0,
+                "drained_count": 0,
+                "max_drained_age_ms": float("nan"),
+                "server_queue_depth_after_select": 0,
+                "server_oldest_age_ms_after_select": float("nan"),
+                "fallback_active": True,
+                "fallback_reason_code": PACKET_FALLBACK_PACKET_TIMEOUT,
+            }
+
+        if response.status_code == 404:
+            return self._parse_selection_headers(
+                response.headers,
+                consume_policy=str(consume_policy),
+                max_age_ms=float(max_age_ms),
+                warn_age_ms=float(warn_age_ms),
+            )
+
+        response.raise_for_status()
+        payload = self._parse_sync_packet_payload_response(response)
+        packet_meta = payload.get("packet_meta") or {}
+        fallback_reason = str(
+            packet_meta.get("selection_fallback_reason_code")
+            or packet_meta.get("fallback_reason_code")
+            or PACKET_FALLBACK_NONE
+        )
+        return {
+            "payload": payload,
+            "consume_policy": str(packet_meta.get("consume_policy") or consume_policy),
+            "freshness_budget_ms": float(max_age_ms),
+            "warn_age_ms": float(warn_age_ms),
+            "selection_source": str(packet_meta.get("payload_selection_source") or ""),
+            "selected_age_ms": float(
+                packet_meta.get(
+                    "payload_selected_age_ms",
+                    self._extract_sync_packet_age_ms(payload),
+                )
+            ),
+            "selected_fresh": bool(packet_meta.get("payload_selected_fresh", True)),
+            "warn_age_exceeded": bool(
+                packet_meta.get("payload_warn_age_exceeded", False)
+            ),
+            "stale_drop_count": int(packet_meta.get("payload_stale_drop_count", 0) or 0),
+            "drained_count": int(packet_meta.get("payload_drained_count", 0) or 0),
+            "max_drained_age_ms": float(
+                packet_meta.get("payload_max_drained_age_ms", float("nan"))
+            ),
+            "server_queue_depth_after_select": int(
+                packet_meta.get("payload_server_queue_depth_after_select", 0) or 0
+            ),
+            "server_oldest_age_ms_after_select": float(
+                packet_meta.get(
+                    "payload_server_oldest_age_ms_after_select",
+                    float("nan"),
+                )
+            ),
+            "fallback_active": bool(
+                packet_meta.get("selection_fallback_active", False)
+            ),
+            "fallback_reason_code": fallback_reason,
+        }
     
     def get_latest_unity_feedback(self) -> Optional[Dict]:
         """
@@ -749,4 +1250,3 @@ if __name__ == "__main__":
         print("Set control command")
     else:
         print("Bridge server is not available")
-

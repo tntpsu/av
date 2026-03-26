@@ -1321,6 +1321,9 @@ class Visualizer {
             html += '<div style="display:flex; flex-wrap:wrap; gap:0.4rem; margin-bottom: 0.4rem;">';
             const navTargets = [
                 ['Executive', 'summary-section-executive'],
+                ['Transport', 'summary-section-transport-contracts'],
+                ['SpeedIntent', 'summary-section-speed-intent'],
+                ['RunIntent', 'summary-section-run-intent'],
                 ['Perception', 'summary-section-perception'],
                 ['Trajectory', 'summary-section-trajectory'],
                 ['PathTracking', 'summary-section-path-tracking'],
@@ -1558,6 +1561,107 @@ class Visualizer {
                 html += `<tr><td>Cadence Health:</td><td style="text-align: right; color: ${cadenceColor};">${cadenceText}</td></tr>`;
                 html += `<tr><td style="color:#a0a0a0;">Cadence Metrics:</td><td style="text-align: right; color: #a0a0a0;">${cadenceDetailsText}</td></tr>`;
                 html += `<tr><td>Tuning Valid:</td><td style="text-align: right; color: ${tuningColor};">${tuningText}</td></tr>`;
+                html += '</table>';
+                html += '</div>';
+            }
+
+            const transportContract = summary.transport_contract || null;
+            if (transportContract && typeof transportContract === 'object' && String(transportContract.availability || '').toLowerCase() === 'available') {
+                const queue = transportContract.packet_queue_depth || {};
+                const payloadQueue = transportContract.payload_queue_depth || {};
+                const skipped = transportContract.skipped_unity_frames || {};
+                const packetAge = transportContract.packet_age_ms || {};
+                const payloadAge = transportContract.payload_oldest_age_ms || {};
+                const payloadBytes = transportContract.payload_bytes || {};
+                const selectedAge = transportContract.payload_selected_age_ms || {};
+                const drained = transportContract.payload_drained_count || {};
+                const maxDrainedAge = transportContract.payload_max_drained_age_ms || {};
+                const queueAfterSelect = transportContract.payload_server_queue_depth_after_select || {};
+                const oldestAfterSelect = transportContract.payload_server_oldest_age_ms_after_select || {};
+                const joinWait = transportContract.join_wait_ms || {};
+                const packetSupersededCamera = transportContract.packet_superseded_camera_count || {};
+                const packetSupersededVehicle = transportContract.packet_superseded_vehicle_count || {};
+                const fvDelta = transportContract.front_vehicle_time_delta_ms || {};
+                const limits = transportContract.limits || {};
+                const completeness = Number(transportContract.packet_completeness_rate);
+                const fallbackRate = Number(transportContract.fallback_active_rate);
+                const falseCooldownRate = Number(transportContract.false_teleport_cooldown_rate);
+                const suppressedRate = Number(transportContract.teleport_guard_suppressed_rate);
+                const continuitySuspectRate = Number(transportContract.teleport_continuity_suspect_rate);
+                const fallbackColor = Number.isFinite(fallbackRate) && fallbackRate > Number(limits.fallback_active_rate_max_pct ?? 1.0) ? '#ff6b6b' : '#4caf50';
+                const completenessColor = Number.isFinite(completeness) && completeness < Number(limits.packet_completeness_rate_min_pct ?? 99.0) ? '#ff6b6b' : '#4caf50';
+                html += '<div id="summary-section-transport-contracts" style="background: #2a2a2a; padding: 1rem; border-radius: 8px; margin-bottom: 1.5rem; border-left: 4px solid #4a90e2;">';
+                html += '<h3 style="margin-top: 0; color: #4a90e2;">Transport & Contracts</h3>';
+                html += '<table style="width: 100%; color: #e0e0e0;">';
+                html += `<tr><td>Packet Mode:</td><td style="text-align: right;">${this.escapeHtml(String(transportContract.packet_mode || 'unknown'))}</td></tr>`;
+                html += `<tr><td>Consume Policy / Fresh Rate:</td><td style="text-align: right;">${this.escapeHtml(String(transportContract.consume_policy || 'n/a'))} / ${Number.isFinite(Number(transportContract.payload_selected_fresh_rate)) ? Number(transportContract.payload_selected_fresh_rate).toFixed(1) + '%' : 'N/A'}</td></tr>`;
+                html += `<tr><td>Selection Source / Fallback:</td><td style="text-align: right;">${this.escapeHtml(String(transportContract.payload_selection_source_mode || 'n/a'))} / ${this.escapeHtml(String(transportContract.payload_selection_fallback_reason_mode || 'none'))}</td></tr>`;
+                html += `<tr><td>Join Source / Key-Present:</td><td style="text-align: right;">${this.escapeHtml(String(transportContract.join_source_mode || 'unknown'))} / ${Number.isFinite(Number(transportContract.join_key_present_rate)) ? Number(transportContract.join_key_present_rate).toFixed(1) + '%' : 'N/A'}</td></tr>`;
+                html += `<tr><td>Packet Completeness:</td><td style="text-align: right; color: ${completenessColor};">${Number.isFinite(completeness) ? completeness.toFixed(1) + '%' : 'N/A'}${Number.isFinite(Number(limits.packet_completeness_rate_min_pct)) ? ` <span style="color:#a0a0a0;">(limit: >=${Number(limits.packet_completeness_rate_min_pct).toFixed(1)}%)</span>` : ''}</td></tr>`;
+                html += `<tr><td>Packet Fallback Active:</td><td style="text-align: right; color: ${fallbackColor};">${Number.isFinite(fallbackRate) ? fallbackRate.toFixed(1) + '%' : 'N/A'}${Number.isFinite(Number(limits.fallback_active_rate_max_pct)) ? ` <span style="color:#a0a0a0;">(limit: <=${Number(limits.fallback_active_rate_max_pct).toFixed(1)}%)</span>` : ''}</td></tr>`;
+                html += `<tr><td>Fallback Reason Mode:</td><td style="text-align: right;">${this.escapeHtml(String(transportContract.fallback_reason_mode || 'none'))}</td></tr>`;
+                html += `<tr><td>Queue Depth (P50/P95/Max):</td><td style="text-align: right;">${Number.isFinite(Number(queue.p50)) ? Number(queue.p50).toFixed(1) : 'N/A'} / ${Number.isFinite(Number(queue.p95)) ? Number(queue.p95).toFixed(1) : 'N/A'} / ${Number.isFinite(Number(queue.max)) ? Number(queue.max).toFixed(1) : 'N/A'}</td></tr>`;
+                html += `<tr><td>Payload Queue / Age / Bytes (P95):</td><td style="text-align: right;">${Number.isFinite(Number(payloadQueue.p95)) ? Number(payloadQueue.p95).toFixed(1) : 'N/A'} / ${Number.isFinite(Number(payloadAge.p95)) ? Number(payloadAge.p95).toFixed(1) + ' ms' : 'N/A'} / ${Number.isFinite(Number(payloadBytes.p95)) ? Number(payloadBytes.p95).toFixed(0) : 'N/A'}</td></tr>`;
+                html += `<tr><td>Selected Age / Drained / MaxDrainedAge (P95):</td><td style="text-align: right;">${Number.isFinite(Number(selectedAge.p95)) ? Number(selectedAge.p95).toFixed(1) + ' ms' : 'N/A'} / ${Number.isFinite(Number(drained.p95)) ? Number(drained.p95).toFixed(1) : 'N/A'} / ${Number.isFinite(Number(maxDrainedAge.p95)) ? Number(maxDrainedAge.p95).toFixed(1) + ' ms' : 'N/A'}</td></tr>`;
+                html += `<tr><td>Queue After Select / Oldest After (P95):</td><td style="text-align: right;">${Number.isFinite(Number(queueAfterSelect.p95)) ? Number(queueAfterSelect.p95).toFixed(1) : 'N/A'} / ${Number.isFinite(Number(oldestAfterSelect.p95)) ? Number(oldestAfterSelect.p95).toFixed(1) + ' ms' : 'N/A'}</td></tr>`;
+                html += `<tr><td>Skipped Unity Frames (P50/P95/Max):</td><td style="text-align: right;">${Number.isFinite(Number(skipped.p50)) ? Number(skipped.p50).toFixed(1) : 'N/A'} / ${Number.isFinite(Number(skipped.p95)) ? Number(skipped.p95).toFixed(1) : 'N/A'} / ${Number.isFinite(Number(skipped.max)) ? Number(skipped.max).toFixed(1) : 'N/A'}</td></tr>`;
+                html += `<tr><td>Packet Age (P50/P95/Max):</td><td style="text-align: right;">${Number.isFinite(Number(packetAge.p50)) ? Number(packetAge.p50).toFixed(1) : 'N/A'} / ${Number.isFinite(Number(packetAge.p95)) ? Number(packetAge.p95).toFixed(1) : 'N/A'} / ${Number.isFinite(Number(packetAge.max)) ? Number(packetAge.max).toFixed(1) : 'N/A'} ms</td></tr>`;
+                html += `<tr><td>Join Wait (P50/P95/Max):</td><td style="text-align: right;">${Number.isFinite(Number(joinWait.p50)) ? Number(joinWait.p50).toFixed(1) : 'N/A'} / ${Number.isFinite(Number(joinWait.p95)) ? Number(joinWait.p95).toFixed(1) : 'N/A'} / ${Number.isFinite(Number(joinWait.max)) ? Number(joinWait.max).toFixed(1) : 'N/A'} ms</td></tr>`;
+                html += `<tr><td>Front ↔ Vehicle Δt (P50/P95/Max):</td><td style="text-align: right;">${Number.isFinite(Number(fvDelta.p50)) ? Number(fvDelta.p50).toFixed(1) : 'N/A'} / ${Number.isFinite(Number(fvDelta.p95)) ? Number(fvDelta.p95).toFixed(1) : 'N/A'} / ${Number.isFinite(Number(fvDelta.max)) ? Number(fvDelta.max).toFixed(1) : 'N/A'} ms</td></tr>`;
+                html += `<tr><td>Drop / PayloadDrop / Orphan / Timeout Max:</td><td style="text-align: right;">${Number(transportContract.drop_count_max || 0)} / ${Number(transportContract.payload_drop_count_max || 0)} / ${Number(transportContract.orphan_camera_count_max || 0)}c ${Number(transportContract.orphan_vehicle_count_max || 0)}v / ${Number(transportContract.timeout_count_max || 0)}</td></tr>`;
+                html += `<tr><td>Join Counters Max:</td><td style="text-align: right;">key=${Number(transportContract.key_match_count_max || 0)} / fallback=${Number(transportContract.unity_fallback_count_max || 0)} / supCam=${Number(transportContract.superseded_camera_count_max || 0)} / supVeh=${Number(transportContract.superseded_vehicle_count_max || 0)}</td></tr>`;
+                html += `<tr><td>Per-Packet Supersedes (P95):</td><td style="text-align: right;">cam=${Number.isFinite(Number(packetSupersededCamera.p95)) ? Number(packetSupersededCamera.p95).toFixed(1) : 'N/A'} / veh=${Number.isFinite(Number(packetSupersededVehicle.p95)) ? Number(packetSupersededVehicle.p95).toFixed(1) : 'N/A'}</td></tr>`;
+                html += `<tr><td>Post-Jump Cooldown Active:</td><td style="text-align: right;">${Number.isFinite(Number(transportContract.post_jump_cooldown_active_rate)) ? Number(transportContract.post_jump_cooldown_active_rate).toFixed(1) + '%' : 'N/A'}</td></tr>`;
+                html += `<tr><td>False Teleport Cooldown:</td><td style="text-align: right; color: ${Number(transportContract.false_teleport_cooldown_count || 0) > 0 ? '#ff6b6b' : '#4caf50'};">${Number(transportContract.false_teleport_cooldown_count || 0)} episodes${Number.isFinite(falseCooldownRate) ? ` (${falseCooldownRate.toFixed(1)}%)` : ''}</td></tr>`;
+                html += `<tr><td>Guard Suppressed / Continuity Suspect:</td><td style="text-align: right;">${Number.isFinite(suppressedRate) ? suppressedRate.toFixed(1) + '%' : 'N/A'} / ${Number.isFinite(continuitySuspectRate) ? continuitySuspectRate.toFixed(1) + '%' : 'N/A'}</td></tr>`;
+                html += `<tr><td>Teleport Guard Reason Mode:</td><td style="text-align: right;">${this.escapeHtml(String(transportContract.teleport_guard_reason_mode || 'none'))}</td></tr>`;
+                html += `<tr><td>Effective Ref Drops:</td><td style="text-align: right;">${Number(transportContract.effective_reference_velocity_drop_count || 0)}${Number.isFinite(Number(transportContract.effective_reference_velocity_drop_rate)) ? ` (${Number(transportContract.effective_reference_velocity_drop_rate).toFixed(1)}%)` : ''}</td></tr>`;
+                html += `<tr><td>Warn-Age / StaleDrop Max:</td><td style="text-align: right;">${Number.isFinite(Number(transportContract.payload_warn_age_exceeded_rate)) ? Number(transportContract.payload_warn_age_exceeded_rate).toFixed(1) + '%' : 'N/A'} / ${Number(transportContract.payload_stale_drop_count_max || 0)}</td></tr>`;
+                html += '</table>';
+                html += '</div>';
+            }
+
+            const speedIntent = summary.speed_intent || null;
+            if (speedIntent && typeof speedIntent === 'object' && String(speedIntent.availability || '').toLowerCase() === 'available') {
+                const desired = speedIntent.desired_target_speed_mps || {};
+                const planned = speedIntent.planned_target_speed_mps || {};
+                const postLimits = speedIntent.post_limits_target_speed_mps || {};
+                const finalTarget = speedIntent.final_target_speed_mps || {};
+                const plannerRef = speedIntent.planner_reference_speed_mps || {};
+                const effectiveRef = speedIntent.effective_reference_speed_mps || {};
+                const brakeReasons = speedIntent.brake_episode_counts_by_reason || {};
+                const brakeReasonText = Object.keys(brakeReasons).length
+                    ? Object.entries(brakeReasons).map(([k, v]) => `${this.escapeHtml(k)}=${Number(v)}`).join(', ')
+                    : 'none';
+                html += '<div id="summary-section-speed-intent" style="background: #2a2a2a; padding: 1rem; border-radius: 8px; margin-bottom: 1.5rem; border-left: 4px solid #4a90e2;">';
+                html += '<h3 style="margin-top: 0; color: #4a90e2;">Speed Intent</h3>';
+                html += '<table style="width: 100%; color: #e0e0e0;">';
+                html += `<tr><td>Desired Target (P50):</td><td style="text-align: right;">${Number.isFinite(Number(desired.p50)) ? Number(desired.p50).toFixed(2) + ' m/s' : 'N/A'}</td></tr>`;
+                html += `<tr><td>Planned / Post-Limits / Final (P50):</td><td style="text-align: right;">${Number.isFinite(Number(planned.p50)) ? Number(planned.p50).toFixed(2) : 'N/A'} / ${Number.isFinite(Number(postLimits.p50)) ? Number(postLimits.p50).toFixed(2) : 'N/A'} / ${Number.isFinite(Number(finalTarget.p50)) ? Number(finalTarget.p50).toFixed(2) : 'N/A'} m/s</td></tr>`;
+                html += `<tr><td>Planner Ref / Effective Ref (P50):</td><td style="text-align: right;">${Number.isFinite(Number(plannerRef.p50)) ? Number(plannerRef.p50).toFixed(2) : 'N/A'} / <span style="color:${Number(speedIntent.effective_reference_velocity_drop_count || 0) > 0 ? '#ff6b6b' : '#4caf50'};">${Number.isFinite(Number(effectiveRef.p50)) ? Number(effectiveRef.p50).toFixed(2) : 'N/A'}</span> m/s</td></tr>`;
+                html += `<tr><td>Effective Reason Mode:</td><td style="text-align: right;">${this.escapeHtml(String(speedIntent.effective_reason_mode || 'unknown'))}</td></tr>`;
+                html += `<tr><td>Effective Ref Drops:</td><td style="text-align: right; color: ${Number(speedIntent.effective_reference_velocity_drop_count || 0) > 0 ? '#ff6b6b' : '#4caf50'};">${Number(speedIntent.effective_reference_velocity_drop_count || 0)}${Number.isFinite(Number(speedIntent.effective_reference_velocity_drop_rate)) ? ` (${Number(speedIntent.effective_reference_velocity_drop_rate).toFixed(1)}%)` : ''}</td></tr>`;
+                html += `<tr><td>Brake Episodes:</td><td style="text-align: right;">${Number(speedIntent.brake_episode_count || 0)}</td></tr>`;
+                html += `<tr><td style="color:#a0a0a0;">Brake Reasons:</td><td style="text-align: right; color:#a0a0a0;">${brakeReasonText}</td></tr>`;
+                html += '</table>';
+                html += '</div>';
+            }
+
+            const runIntent = summary.run_intent || null;
+            if (runIntent && typeof runIntent === 'object' && String(runIntent.availability || '').toLowerCase() === 'available') {
+                const mismatch = runIntent.intent_mismatch_warning || null;
+                html += '<div id="summary-section-run-intent" style="background: #2a2a2a; padding: 1rem; border-radius: 8px; margin-bottom: 1.5rem; border-left: 4px solid #4a90e2;">';
+                html += '<h3 style="margin-top: 0; color: #4a90e2;">Run Intent</h3>';
+                html += '<table style="width: 100%; color: #e0e0e0;">';
+                html += `<tr><td>Mode:</td><td style="text-align: right;">${this.escapeHtml(String(runIntent.mode || 'unknown'))}</td></tr>`;
+                html += `<tr><td>Recording / Replay:</td><td style="text-align: right;">${this.escapeHtml(String(runIntent.recording_type || 'unknown'))} / ${this.escapeHtml(String(runIntent.replay_type || 'unknown'))}</td></tr>`;
+                html += `<tr><td>Track / Policy / Candidate:</td><td style="text-align: right;">${this.escapeHtml(String(runIntent.track_id || 'unknown'))} / ${this.escapeHtml(String(runIntent.policy_profile || 'unknown'))} / ${this.escapeHtml(String(runIntent.candidate_label || 'unknown'))}</td></tr>`;
+                html += `<tr><td>Road Speed Limit:</td><td style="text-align: right;">${Number.isFinite(Number(runIntent.road_speed_limit_expected_mps)) ? Number(runIntent.road_speed_limit_expected_mps).toFixed(2) + ' m/s' : 'N/A'}</td></tr>`;
+                html += `<tr><td>Configured Target Speed:</td><td style="text-align: right;">${Number.isFinite(Number(runIntent.run_target_speed_mps)) ? Number(runIntent.run_target_speed_mps).toFixed(2) + ' m/s' : 'N/A'}</td></tr>`;
+                html += `<tr><td>ACC Active / Lead Distance P50:</td><td style="text-align: right;">${Number.isFinite(Number(runIntent.acc_active_rate_pct)) ? Number(runIntent.acc_active_rate_pct).toFixed(1) + '%' : 'N/A'} / ${Number.isFinite(Number(runIntent.lead_vehicle_distance_p50_m)) ? Number(runIntent.lead_vehicle_distance_p50_m).toFixed(1) + ' m' : 'N/A'}</td></tr>`;
+                if (mismatch) {
+                    html += `<tr><td>Intent Warning:</td><td style="text-align: right; color: #ff6b6b;">${this.escapeHtml(String(mismatch))}</td></tr>`;
+                }
                 html += '</table>';
                 html += '</div>';
             }

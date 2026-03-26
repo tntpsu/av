@@ -338,6 +338,1520 @@ Example levels:
 
 Transport fault handling must not silently masquerade as a teleport.
 
+#### Phase 3A finding: metadata-only active mode is insufficient
+
+The first `packet_fifo_active` attempt proved an important architectural point:
+- consuming packet metadata from `/api/sim/packet/next`
+- while still consuming camera pixels from `/api/camera/next/raw`
+- and vehicle state from `/api/vehicle/state/next`
+
+is not robust enough.
+
+Observed failure modes from live highway validation:
+- packet fallback remained too high even after stale-packet draining
+- active mode still depended on reconstructing one control sample from three independent FIFO streams
+- false post-jump cooldown episodes remained transport-linked
+- the system improved queue pressure but did not eliminate continuity ambiguity
+
+Conclusion:
+- Patch Set F must not stop at metadata FIFO
+- the next required step is a **single coherent packet payload endpoint**
+- active mode should consume one authoritative packet payload per control sample
+
+### Phase 3B: Coherent packet payload endpoint
+
+#### Goal
+
+Replace the current active-mode “packet metadata + separate camera/state FIFOs” design with:
+- one bridge-side queued packet payload
+- one client fetch
+- one authoritative control sample
+
+This is the first active-mode shape that is strong enough to remove transport ambiguity instead of shifting it around.
+
+#### Contract decision
+
+For active closed-loop control, the bridge must expose a payload endpoint that returns:
+1. packet metadata
+2. the full vehicle state snapshot that belongs to that packet
+3. the front camera image bytes for that same packet
+
+The orchestrator must no longer align these from separate endpoints.
+
+#### Endpoint design
+
+Add a new bridge endpoint:
+- `GET /api/sim/packet/next/raw`
+
+Optional companion endpoint for debugging:
+- `GET /api/sim/packet/latest/raw`
+
+Recommended response format:
+- `multipart/mixed`
+
+Parts:
+1. `application/json`
+   - packet metadata
+   - full vehicle state
+   - image metadata:
+     - `camera_id`
+     - `timestamp`
+     - `frame_id`
+     - `unity_frame_count`
+     - `unity_time`
+     - `shape`
+     - `dtype`
+2. `application/octet-stream`
+   - raw RGB image bytes
+
+Reason for `multipart/mixed`:
+- preserves raw image transport
+- avoids base64 inflation
+- keeps full vehicle state and packet metadata together
+- avoids header-size abuse for large JSON
+
+Do not use:
+- three separate FIFO requests
+- a JSON-only payload with base64 image bytes for active mode
+
+JSON+base64 is acceptable only for debug fallback endpoints, not the closed-loop path.
+
+#### Bridge server changes
+
+Files:
+- `/Users/philiptullai/Documents/Coding/av/bridge/server.py`
+
+Implementation:
+- extend the assembled packet queue to store full payload contents, not metadata-only
+- each queued active packet must contain:
+  - packet metadata
+  - full vehicle state snapshot
+  - front image ndarray or raw bytes
+  - image shape/dtype metadata
+- keep the existing metadata-only snapshot helpers for shadow/debug use
+- add a bounded active payload queue distinct from any debug/history queue if needed
+
+Required queue/accounting fields:
+- `sync_packet_payload_queue_depth`
+- `sync_packet_payload_drop_count`
+- `sync_packet_payload_bytes`
+- `sync_packet_payload_oldest_age_ms`
+
+Required policy:
+- oldest payloads may be dropped only with explicit accounting
+- if payload bytes exceed budget, record a distinct payload-drop reason
+- no silent conversion from “payload missing” to “packet complete”
+
+Suggested new fallback reason codes:
+- `payload_timeout`
+- `payload_queue_overflow`
+- `payload_missing_front_bytes`
+- `payload_decode_failed`
+
+If new reason codes are added:
+- update `/Users/philiptullai/Documents/Coding/av/sync_contract.py`
+- update analyzer/PhilViz parity expectations
+
+#### Client changes
+
+Files:
+- `/Users/philiptullai/Documents/Coding/av/bridge/client.py`
+
+Implementation:
+- add `get_next_sync_packet_payload_raw()`
+- parse `multipart/mixed`
+- decode the JSON part
+- decode raw RGB bytes into ndarray using the packet’s shape/dtype metadata
+- return one object:
+  - `image`
+  - `timestamp`
+  - `frame_id`
+  - `camera_meta`
+  - `vehicle_state_dict`
+  - `packet_meta`
+  - `front_ready_mono_s`
+  - `vehicle_ready_mono_s`
+  - `inputs_ready_mono_s`
+
+Active mode must then use this packet payload fetch instead of:
+- `get_next_sync_packet()`
+- `get_next_camera_frame_with_metadata()`
+- `get_next_vehicle_state()`
+
+Keep the current metadata-only packet methods for:
+- shadow mode
+- debugging
+- compatibility
+
+But they must not be the promoted active ingest path after this phase.
+
+#### Orchestrator changes
+
+Files:
+- `/Users/philiptullai/Documents/Coding/av/av_stack/orchestrator.py`
+
+Implementation:
+- replace the current active-mode bundle reconstruction with one payload fetch call
+- active mode path becomes:
+  1. `packet_payload = bridge.get_next_sync_packet_payload_raw()`
+  2. extract `image`, `timestamp`, `vehicle_state_dict`, `packet_meta`
+  3. compute continuity from packet ids / unity frame deltas
+  4. pass packet metadata through recorder/analyzer fields
+
+Remove from active mode:
+- per-tick camera FIFO resync logic
+- per-tick vehicle FIFO resync logic
+- packet metadata drain-to-latest logic
+
+Those may remain in debug utilities, but not in the promoted active path.
+
+Required active-mode behavior:
+- if payload fetch fails:
+  - record explicit fallback reason
+  - either use labeled legacy fallback or hold-safe policy, based on config
+- if payload fetch succeeds:
+  - do not call camera/vehicle FIFO endpoints for that control cycle
+
+#### Recorder/data contract changes
+
+Files:
+- `/Users/philiptullai/Documents/Coding/av/data/formats/data_format.py`
+- `/Users/philiptullai/Documents/Coding/av/data/recorder.py`
+
+Add fields for payload-specific diagnostics:
+- `sync_packet_payload_queue_depth`
+- `sync_packet_payload_drop_count`
+- `sync_packet_payload_oldest_age_ms`
+- `sync_packet_payload_bytes`
+- `sync_packet_payload_fallback_reason_code`
+
+Rules:
+- keep current `sync_packet_*` continuity fields
+- do not overload metadata queue and payload queue into one ambiguous field
+- analyzers must distinguish:
+  - metadata queue depth
+  - payload queue depth
+
+#### PhilViz and analyzer updates required for Phase 3B
+
+Files:
+- `/Users/philiptullai/Documents/Coding/av/tools/drive_summary_core.py`
+- `/Users/philiptullai/Documents/Coding/av/tools/analyze/analyze_drive_overall.py`
+- `/Users/philiptullai/Documents/Coding/av/tools/analyze/verify_recording_run.py`
+- `/Users/philiptullai/Documents/Coding/av/tools/debug_visualizer/server.py`
+- `/Users/philiptullai/Documents/Coding/av/tools/debug_visualizer/visualizer.js`
+
+Add or update:
+- payload queue depth card/row
+- payload drop count/rate
+- payload fallback reason breakdown
+- explicit label for:
+  - `metadata shadow`
+  - `metadata active`
+  - `payload active`
+
+PhilViz must show, for active runs:
+- whether the control sample came from a coherent payload
+- whether active mode fell back to legacy/latest
+- whether packet continuity was inferred from payload ids or degraded fallback
+
+Do not leave operators guessing whether active mode is “real active” or “active with legacy fallback”.
+
+#### Testing plan for Phase 3B
+
+Add or extend tests in:
+- `/Users/philiptullai/Documents/Coding/av/tests/test_bridge_sync_packets.py`
+- `/Users/philiptullai/Documents/Coding/av/tests/test_bridge_client_sync_packets.py`
+- `/Users/philiptullai/Documents/Coding/av/tests/test_orchestrator_sync_policy.py`
+- `/Users/philiptullai/Documents/Coding/av/tests/test_control_command_hdf5.py`
+- `/Users/philiptullai/Documents/Coding/av/tests/test_drive_summary_contract.py`
+- `/Users/philiptullai/Documents/Coding/av/tests/test_drive_summary_parity.py`
+
+Bridge tests:
+- packet payload is published only when image bytes and vehicle state both exist
+- `next/raw` consumes FIFO payloads
+- `latest/raw` returns the newest payload without consuming
+- payload queue overflow increments payload drop counters
+- payload bytes budget enforcement increments the right reason code
+
+Client tests:
+- multipart parser reconstructs ndarray correctly
+- malformed JSON part fails cleanly
+- malformed image byte count fails cleanly
+- payload reason codes propagate into fallback semantics
+
+Orchestrator tests:
+- active payload mode consumes one fetch per control cycle
+- active payload mode does not call camera FIFO or vehicle FIFO endpoints on success
+- continuity bookkeeping uses payload packet ids / unity frames
+- fallback path is explicitly labeled when payload fetch fails
+
+Recorder/analyzer tests:
+- new payload diagnostics are written
+- old recordings still load
+- analyzer and PhilViz agree on payload queue depth, drop rate, and fallback rate
+
+#### Live validation order for Phase 3B
+
+1. Highway ACC scenario:
+   - `/Users/philiptullai/Documents/Coding/av/tracks/scenarios/highway_h2_steady.yml`
+2. Highway curve catch-up:
+   - `/Users/philiptullai/Documents/Coding/av/tracks/scenarios/highway_h8_curve_catchup.yml`
+3. Hill/highway:
+   - `/Users/philiptullai/Documents/Coding/av/tracks/scenarios/hill_g1_grade_following.yml`
+
+Only after those pass:
+- one local-road / curve track
+
+#### Acceptance gates for Phase 3B
+
+Nominal highway ACC run must show:
+- `packet_mode = packet_fifo_active`
+- `packet_completeness_rate >= 99%`
+- `fallback_active_rate <= 5%`
+- `payload_drop_count = 0` on nominal runs
+- materially lower post-jump cooldown rate than shadow baseline
+- materially lower effective reference drop rate than shadow baseline
+- no transport-caused e-stop or boundary failure
+
+Also require:
+- analyzer and PhilViz agree on payload metrics
+- `sync_packet_payload_queue_depth` stays bounded and low
+- any remaining cooldown episode is attributable to true safety logic, not transport ambiguity
+
+#### Risks to call out explicitly
+
+1. Memory pressure
+- active payload queues now hold image bytes, not just metadata
+- bounded queue sizes and byte budgets are mandatory
+
+2. HTTP parsing overhead
+- `multipart/mixed` parsing adds CPU cost
+- this is acceptable only if it removes higher-cost fallback churn and false cooldown behavior
+
+3. Legacy path confusion
+- if legacy fallback remains enabled, tools must show when it was used
+- otherwise operators will misread runs as “true active” when they were not
+
+4. Top-down / extra sensors
+- do not pull top-down into the required active payload in this phase
+- keep the first coherent payload limited to front camera + vehicle state
+- add optional components only after the core contract is stable
+
+### Phase 3C: Freshness-bounded coherent packet consumption
+
+#### Goal
+
+Keep the coherent payload contract from Phase 3B, but stop making control consume stale packets just because they are coherent.
+
+The active consumer must move from:
+- `oldest coherent packet in FIFO order`
+
+to:
+- `newest coherent packet within a freshness budget`
+
+This is the required next step because strict FIFO payload mode can still fail even when:
+- `packet_completeness_rate = 100%`
+- `fallback_active_rate = 0%`
+
+if the consumed packets are several seconds old.
+
+#### Problem statement from live validation
+
+The first coherent-payload active runs showed:
+- coherence improved
+- fallback collapsed toward zero
+- but payload backlog grew large enough that the controller was acting on stale packets
+
+Observed failure pattern:
+- payload queue depth stayed high
+- payload oldest age reached multi-second values
+- skipped Unity frames remained high
+- false post-jump cooldown episodes still appeared
+- highway run still ended in lateral failure / boundary breach
+
+Conclusion:
+- Phase 3B solved **coherence**
+- it did not solve **freshness**
+
+The control ingest contract therefore needs two guarantees:
+1. coherent sample
+2. freshness-bounded sample
+
+#### Contract decision
+
+Closed-loop control must consume:
+- the most recent coherent payload packet whose age is within a configurable freshness budget
+
+If multiple stale packets are queued:
+- drop them explicitly
+- record that they were dropped for staleness
+- do not process them one by one
+
+If no coherent payload is fresh enough:
+- record explicit `payload_stale_timeout`
+- then either:
+  - use labeled legacy fallback, or
+  - hold-safe policy,
+depending on configuration
+
+Do not:
+- silently process stale coherent packets
+- silently drain to latest without accounting
+- silently convert “no fresh packet available” into a normal packet timeout
+
+#### Freshness policy
+
+Introduce an active consume policy with three modes:
+
+1. `fifo_strict`
+- existing behavior for debugging
+- consume oldest payload packet in queue
+- never use as promoted control mode after this phase
+
+2. `freshest_within_budget`
+- target promoted mode
+- drain queued payload packets up to the newest packet whose age is <= budget
+- count all older skipped payload packets explicitly
+
+3. `latest_debug`
+- debug-only
+- return latest payload snapshot without FIFO accounting
+- not for promotion
+
+Recommended default for promoted highway active mode:
+- `freshest_within_budget`
+
+Recommended initial freshness budgets:
+- `payload_consume_max_age_ms = 250`
+- `payload_consume_warn_age_ms = 125`
+- `payload_consume_max_drain_count = 128`
+
+Those values should be config-driven, not hardcoded.
+
+#### Bridge server changes
+
+Files:
+- `/Users/philiptullai/Documents/Coding/av/bridge/server.py`
+- `/Users/philiptullai/Documents/Coding/av/sync_contract.py`
+
+Implementation:
+
+Keep the coherent payload queue from Phase 3B, but add:
+- packet publish wall time as canonical freshness source
+- byte-bounded queue accounting
+- stale-drop accounting support
+
+Add server-side helper(s):
+- `_snapshot_sync_packet_payload_queue_state(...)`
+- optional `_get_latest_fresh_payload(...)` only if freshness filtering is done server-side
+
+Recommended division of responsibility:
+- server continues to own packet assembly and payload FIFO queue
+- client/orchestrator owns the active consume policy and stale-drain accounting
+
+Reason:
+- keeps bridge simple
+- keeps policy visible in Python recorder/analyzer
+- avoids hiding dropped stale payloads inside the bridge
+
+Add new contract constants in `/Users/philiptullai/Documents/Coding/av/sync_contract.py`:
+- `PACKET_CONSUME_POLICY_FIFO_STRICT`
+- `PACKET_CONSUME_POLICY_FRESHEST_WITHIN_BUDGET`
+- `PACKET_CONSUME_POLICY_LATEST_DEBUG`
+
+Add new fallback / drop reason codes:
+- `payload_stale_timeout`
+- `payload_stale_drop`
+- `payload_age_budget_exceeded`
+
+#### Client changes
+
+Files:
+- `/Users/philiptullai/Documents/Coding/av/bridge/client.py`
+
+Implementation:
+
+Keep:
+- `get_next_sync_packet_payload_raw()`
+- `get_latest_sync_packet_payload_raw()`
+
+Add:
+- `get_fresh_sync_packet_payload_raw(...)`
+
+Suggested return shape:
+- `payload`
+- `drained_payload_count`
+- `stale_dropped_count`
+- `max_drained_payload_age_ms`
+- `selected_payload_age_ms`
+- `consume_policy`
+- `freshness_budget_ms`
+- `fallback_active`
+- `fallback_reason_code`
+
+Client algorithm for `freshest_within_budget`:
+1. call `get_next_sync_packet_payload_raw()`
+2. continue draining while payloads remain available and drain count < budget
+3. retain the newest payload seen
+4. compute packet age from payload metadata publish wall time
+5. mark older drained packets as stale-dropped
+6. if newest payload age <= `payload_consume_max_age_ms`, return it
+7. otherwise return no active payload with:
+   - `fallback_active = True`
+   - `fallback_reason_code = payload_stale_timeout`
+
+Important:
+- every drained packet must be accounted for
+- do not drop stale payloads invisibly
+- do not depend on raw queue depth alone; use actual selected packet age
+
+#### Orchestrator changes
+
+Files:
+- `/Users/philiptullai/Documents/Coding/av/av_stack/orchestrator.py`
+- `/Users/philiptullai/Documents/Coding/av/config/av_stack_config.yaml`
+- `/Users/philiptullai/Documents/Coding/av/config/acc_highway.yaml`
+
+Implementation:
+
+Replace the current active payload fetch in `_capture_active_sync_packet_inputs()` with policy-driven fetch:
+- read `sync_packet_consume_policy`
+- read `sync_packet_payload_max_age_ms`
+- read `sync_packet_payload_warn_age_ms`
+- read `sync_packet_payload_max_drain_count`
+
+Active success path:
+1. fetch freshest coherent payload within budget
+2. use only the selected payload for this control cycle
+3. record selected payload age and drained stale counts
+4. compute continuity from the selected payload packet id / Unity frame count
+
+Active degraded path:
+1. if no fresh payload available:
+   - label fallback as `payload_stale_timeout`
+2. if legacy fallback allowed:
+   - fetch legacy latest path
+   - record fallback provenance explicitly
+3. if legacy fallback not allowed:
+   - hold-safe / skip cycle as configured
+
+Add config keys:
+- `sync_packet_consume_policy`
+- `sync_packet_payload_max_age_ms`
+- `sync_packet_payload_warn_age_ms`
+- `sync_packet_payload_max_drain_count`
+- `sync_packet_payload_allow_stale_debug`
+
+Recommended initial config:
+- highway active path only:
+  - `sync_packet_consume_policy: freshest_within_budget`
+  - `sync_packet_payload_max_age_ms: 250`
+  - `sync_packet_payload_warn_age_ms: 125`
+  - `sync_packet_payload_max_drain_count: 128`
+
+Do not promote this globally until highway gates pass.
+
+#### Recorder/data contract changes
+
+Files:
+- `/Users/philiptullai/Documents/Coding/av/data/formats/data_format.py`
+- `/Users/philiptullai/Documents/Coding/av/data/recorder.py`
+
+Add payload freshness fields:
+- `sync_packet_consume_policy`
+- `sync_packet_payload_selected_age_ms`
+- `sync_packet_payload_selected_fresh`
+- `sync_packet_payload_warn_age_exceeded`
+- `sync_packet_payload_stale_drop_count`
+- `sync_packet_payload_drained_count`
+- `sync_packet_payload_max_drained_age_ms`
+
+Keep existing payload queue fields from Phase 3B:
+- `sync_packet_payload_queue_depth`
+- `sync_packet_payload_drop_count`
+- `sync_packet_payload_oldest_age_ms`
+- `sync_packet_payload_bytes`
+- `sync_packet_payload_fallback_reason_code`
+
+Contract rule:
+- queue depth alone is not authoritative for transport health
+- selected payload age is authoritative for active control freshness
+
+#### Analyzer changes
+
+Files:
+- `/Users/philiptullai/Documents/Coding/av/tools/drive_summary_core.py`
+- `/Users/philiptullai/Documents/Coding/av/tools/analyze/analyze_drive_overall.py`
+- `/Users/philiptullai/Documents/Coding/av/tools/analyze/verify_recording_run.py`
+
+Add to `transport_contract` summary:
+- selected payload age p50/p95/max
+- payload selected-fresh rate
+- warn-age exceeded rate
+- stale-drop count max
+- drained count p95/max
+- max drained payload age p95
+- consume policy mode
+
+Add causal attribution:
+- distinguish:
+  - `coherent_and_fresh`
+  - `coherent_but_stale`
+  - `fallback_due_to_missing_payload`
+  - `fallback_due_to_stale_timeout`
+
+Update brake/reference-drop attribution:
+- if post-jump cooldown coincides with stale selected payload age or stale-timeout fallback,
+  classify as transport freshness fault, not only generic teleport guard
+
+#### PhilViz changes
+
+Files:
+- `/Users/philiptullai/Documents/Coding/av/tools/debug_visualizer/server.py`
+- `/Users/philiptullai/Documents/Coding/av/tools/debug_visualizer/visualizer.js`
+
+Add to `Transport & Contracts` card:
+- consume policy
+- selected payload age p50/p95/max
+- selected-fresh rate
+- stale-drop count
+- drained payload count
+- max drained payload age
+- warn-age exceeded rate
+
+Add frame-level sync fields:
+- `sync_packet_consume_policy`
+- `sync_packet_payload_selected_age_ms`
+- `sync_packet_payload_selected_fresh`
+- `sync_packet_payload_warn_age_exceeded`
+- `sync_packet_payload_stale_drop_count`
+- `sync_packet_payload_drained_count`
+- `sync_packet_payload_max_drained_age_ms`
+
+Add a new timeline overlay or diagnostics row:
+- `selected_payload_age_ms`
+- `stale_drop_event`
+- `fallback_reason`
+
+The operator must be able to answer:
+- “did we consume a coherent packet?”
+- “was it fresh enough?”
+- “how many stale packets were skipped to get it?”
+
+#### Testing plan for Phase 3C
+
+Add or extend tests in:
+- `/Users/philiptullai/Documents/Coding/av/tests/test_bridge_client_sync_packets.py`
+- `/Users/philiptullai/Documents/Coding/av/tests/test_orchestrator_sync_policy.py`
+- `/Users/philiptullai/Documents/Coding/av/tests/test_control_command_hdf5.py`
+- `/Users/philiptullai/Documents/Coding/av/tests/test_drive_summary_contract.py`
+- `/Users/philiptullai/Documents/Coding/av/tests/test_drive_summary_latency_sync.py`
+
+Client tests:
+- fresh payload within age budget is selected
+- multiple stale payloads are drained and counted
+- stale timeout produces explicit fallback reason
+- drain count cap is respected
+
+Orchestrator tests:
+- active mode uses `freshest_within_budget` when configured
+- selected payload age fields are written into `vehicle_state_dict`
+- legacy fallback is labeled `payload_stale_timeout` when no fresh payload exists
+- strict FIFO mode remains available only for debug tests
+
+Recorder tests:
+- new selected-age and stale-drop fields are persisted to HDF5
+
+Analyzer tests:
+- transport summary includes freshness fields
+- old recordings still show `UNAVAILABLE` cleanly
+- analyzer/PhilViz parity on freshness metrics
+
+#### Live validation order for Phase 3C
+
+1. Highway ACC nominal:
+   - `/Users/philiptullai/Documents/Coding/av/tracks/scenarios/highway_h2_steady.yml`
+2. Highway catch-up / curve:
+   - `/Users/philiptullai/Documents/Coding/av/tracks/scenarios/highway_h8_curve_catchup.yml`
+3. Hill/highway:
+   - `/Users/philiptullai/Documents/Coding/av/tracks/scenarios/hill_g1_grade_following.yml`
+
+Only after highway passes:
+- rerun one local-road / curve track for regression check
+
+#### Acceptance gates for Phase 3C
+
+Nominal highway active run must show:
+- `packet_mode = packet_fifo_active`
+- `sync_packet_consume_policy = freshest_within_budget`
+- `packet_completeness_rate >= 99%`
+- `fallback_active_rate <= 5%`
+- `payload_selected_fresh_rate >= 95%`
+- `selected_payload_age_ms p95 <= payload_consume_max_age_ms`
+- `stale_drop_count > 0` is acceptable only if selected payload freshness stays in budget
+- materially lower false cooldown rate than strict FIFO payload baseline
+- materially lower effective reference drop rate than strict FIFO payload baseline
+- no transport-caused boundary failure / e-stop
+
+Strict rejection conditions:
+- payload oldest age multi-second backlog persists while selected payload age is also stale
+- fallback collapses to zero but stale packet age remains high
+- active control still processes packets that exceed the configured age budget
+
+#### Risks and tradeoffs
+
+1. This is intentionally closer to “use the newest” than strict FIFO.
+- that is correct
+- but only because the selected item is now a coherent packet, not separate latest snapshots
+
+2. Over-aggressive draining can hide throughput problems if not recorded.
+- stale-drop accounting is mandatory
+
+3. Too-tight age budgets can cause excessive fallback on slower hardware.
+- that is why warn-age and hard-age must both be recorded
+
+4. Payload queue depth may remain high even if selected payload freshness is good.
+- selected payload age is the primary health metric
+- queue depth remains secondary context
+
+5. Command transport remains separate
+- this phase fixes ingest continuity, not command apply/ack continuity
+- command transport contract work still remains a separate patch set
+
+### Phase 3D: Server-side freshness-bounded coherent packet selection
+
+#### Goal
+
+Keep the coherent payload contract from Phase 3B and the freshness semantics from Phase 3C, but move the freshness-selection work out of the client loop and into the bridge.
+
+The active control loop must make:
+- one request per cycle
+- for one coherent packet payload
+- already selected to satisfy the configured freshness policy
+
+This phase exists because Phase 3C proved:
+1. the control contract was correct
+2. the placement was wrong
+
+The client-side drain loop fixed stale-packet behavior, but it collapsed loop throughput by doing repeated payload fetches and repeated multipart parsing inside one control cycle.
+
+#### Problem statement from live validation
+
+The Phase 3C live run showed:
+- false cooldowns dropped to effectively zero
+- effective reference drops collapsed
+- safety recovered
+- but loop rate fell to about `1.62 Hz`
+
+Observed pattern:
+- selected payload age was good
+- stale coherent packets were being dropped correctly
+- but front queue saturation returned
+- packet completeness dropped
+- fallback rose
+- the control loop spent too much wall time draining payloads in Python
+
+Conclusion:
+- the freshness policy must stay
+- the client-side drain implementation must not
+
+#### Contract decision
+
+The bridge must return one authoritative coherent payload response for active control:
+- selected according to the configured consume policy
+- with freshness/drain accounting included in the same response
+
+The active client must no longer:
+- poll multiple payload packets per cycle
+- reconstruct freshness policy in Python
+- do repeated multipart parsing to chase a fresh packet
+
+The client should instead:
+1. issue one request
+2. receive one selected coherent payload
+3. receive the server's freshness-selection accounting
+4. execute control on that one selected payload
+
+#### API design
+
+Files:
+- `/Users/philiptullai/Documents/Coding/av/bridge/server.py`
+- `/Users/philiptullai/Documents/Coding/av/bridge/client.py`
+- `/Users/philiptullai/Documents/Coding/av/sync_contract.py`
+
+Recommended primary endpoint:
+- `GET /api/sim/packet/next/raw`
+
+Recommended behavior change:
+- keep the endpoint path stable
+- add query parameters that define consume policy and freshness budget
+
+Required query parameters:
+- `consume_policy`
+- `max_age_ms`
+- `warn_age_ms`
+- `max_drain_count`
+
+Recommended supported values:
+- `fifo_strict`
+- `freshest_within_budget`
+- `latest_debug`
+
+Alternative acceptable design:
+- add `/api/sim/packet/next/raw/selected`
+
+Use that alternative only if the existing endpoint would become too ambiguous.
+
+#### Bridge server changes
+
+Files:
+- `/Users/philiptullai/Documents/Coding/av/bridge/server.py`
+- `/Users/philiptullai/Documents/Coding/av/sync_contract.py`
+
+Implementation:
+
+Keep the coherent payload queue from Phase 3B.
+
+Move the freshness-selection loop into the server:
+1. read the requested consume policy and age budget
+2. inspect queued coherent payload packets
+3. drain stale packets server-side up to `max_drain_count`
+4. select the newest packet that satisfies the freshness policy
+5. return the selected payload plus selection accounting in one response
+
+Add a dedicated selector helper, for example:
+- `_select_sync_packet_payload(...)`
+
+Server selection responsibilities:
+- compute selected payload age from packet publish wall time
+- count drained payloads
+- count stale-dropped payloads
+- compute max drained payload age
+- classify freshness failure reason
+- distinguish:
+  - queue empty
+  - timeout waiting for coherent payload
+  - coherent payload available but stale
+  - drain cap exceeded
+
+Required response metadata:
+- `consume_policy`
+- `selected_packet_id`
+- `selected_unity_frame_count`
+- `selected_payload_age_ms`
+- `selected_payload_fresh`
+- `selected_payload_warn_age_exceeded`
+- `drained_payload_count`
+- `stale_dropped_count`
+- `max_drained_payload_age_ms`
+- `selection_fallback_active`
+- `selection_fallback_reason_code`
+- `server_queue_depth_after_select`
+- `server_oldest_payload_age_ms_after_select`
+
+The selected payload response must still include:
+- raw front image bytes
+- vehicle state payload
+- coherent packet metadata
+
+The critical architectural rule is:
+- one server request returns both the selected payload and the accounting for how it was selected
+
+#### Client changes
+
+Files:
+- `/Users/philiptullai/Documents/Coding/av/bridge/client.py`
+
+Implementation:
+
+Demote the current client-side `freshest_within_budget` drain helper to:
+- debug-only
+- or remove it after Phase 3D is stable
+
+Add or update a single-shot fetch helper, for example:
+- `get_selected_sync_packet_payload_raw(...)`
+
+Client responsibilities:
+1. issue one request with policy parameters
+2. parse one multipart response
+3. return selected payload and server-supplied accounting unchanged
+4. do no additional drain loop in Python
+
+Client must treat server freshness accounting as source of truth for:
+- selected payload age
+- stale-drop count
+- drained count
+- fallback reason
+
+#### Orchestrator changes
+
+Files:
+- `/Users/philiptullai/Documents/Coding/av/av_stack/orchestrator.py`
+- `/Users/philiptullai/Documents/Coding/av/config/av_stack_config.yaml`
+- `/Users/philiptullai/Documents/Coding/av/config/acc_highway.yaml`
+
+Implementation:
+
+Replace client-side drain-based active fetch in `_capture_active_sync_packet_inputs()` with:
+- one selected coherent payload request per control cycle
+
+Configuration stays the same at the orchestrator level:
+- `sync_packet_consume_policy`
+- `sync_packet_payload_max_age_ms`
+- `sync_packet_payload_warn_age_ms`
+- `sync_packet_payload_max_drain_count`
+
+But those fields are now passed through to the bridge selector rather than applied in the client.
+
+Active success path:
+1. request selected coherent payload
+2. use selected payload for control
+3. record server selection accounting into `vehicle_state_dict`
+4. compute continuity only from the selected payload metadata
+
+Active degraded path:
+1. if server reports `selection_fallback_active`
+   - record the exact reason
+2. if configured, use explicit legacy fallback
+3. otherwise hold-safe / skip cycle
+
+Orchestrator must not:
+- make extra payload requests to chase freshness
+- reinterpret server stale-drop accounting
+- silently downgrade a stale-timeout to generic packet timeout
+
+#### Recorder/data contract changes
+
+Files:
+- `/Users/philiptullai/Documents/Coding/av/data/formats/data_format.py`
+- `/Users/philiptullai/Documents/Coding/av/data/recorder.py`
+
+Keep the Phase 3C freshness fields.
+
+Add or clarify provenance fields so it is explicit these came from server-side selection:
+- `sync_packet_payload_selection_source`
+- `sync_packet_payload_selection_fallback_active`
+- `sync_packet_payload_selection_fallback_reason_code`
+- `sync_packet_payload_server_queue_depth_after_select`
+- `sync_packet_payload_server_oldest_age_ms_after_select`
+
+Contract rule:
+- selected payload age remains the authoritative freshness metric
+- queue depth remains supporting context
+- selection provenance must say whether freshness policy was satisfied by active packet mode or by fallback
+
+#### Analyzer changes
+
+Files:
+- `/Users/philiptullai/Documents/Coding/av/tools/drive_summary_core.py`
+- `/Users/philiptullai/Documents/Coding/av/tools/analyze/analyze_drive_overall.py`
+- `/Users/philiptullai/Documents/Coding/av/tools/analyze/verify_recording_run.py`
+
+Add transport summary fields for Phase 3D:
+- selection source mode
+- selected payload age p50/p95/max
+- selected fresh rate
+- stale-drop count max
+- drained count p95/max
+- queue depth after select p95/max
+- oldest payload age after select p95/max
+- fallback reason breakdown from server-side selection
+
+Add causal attribution:
+- `coherent_and_fresh_selected_server_side`
+- `coherent_but_stale_server_side`
+- `selection_fallback_due_to_stale_timeout`
+- `selection_fallback_due_to_empty_queue`
+- `selection_fallback_due_to_drain_cap`
+
+Add an explicit throughput verdict:
+- if freshness metrics are good but loop rate collapses, classify as control-loop throughput failure
+- if loop rate is good but selected payload age is bad, classify as transport freshness failure
+
+#### PhilViz changes
+
+Files:
+- `/Users/philiptullai/Documents/Coding/av/tools/debug_visualizer/server.py`
+- `/Users/philiptullai/Documents/Coding/av/tools/debug_visualizer/visualizer.js`
+
+Extend the `Transport & Contracts` card with:
+- selection source
+- selected payload age p50/p95/max
+- selected-fresh rate
+- stale-dropped count
+- drained count
+- queue depth after select
+- oldest payload age after select
+- selection fallback reason histogram
+
+Add frame-level fields:
+- `sync_packet_payload_selection_source`
+- `sync_packet_payload_selection_fallback_active`
+- `sync_packet_payload_selection_fallback_reason_code`
+- `sync_packet_payload_server_queue_depth_after_select`
+- `sync_packet_payload_server_oldest_age_ms_after_select`
+
+Add timeline overlays:
+- `selected_payload_age_ms`
+- `stale_drop_event_count`
+- `server_queue_depth_after_select`
+- `selection_fallback_reason`
+
+The operator must be able to answer:
+1. did the bridge return a coherent packet?
+2. was it fresh?
+3. how many packets were dropped server-side to get it?
+4. did the control loop still fall behind anyway?
+
+#### Testing plan for Phase 3D
+
+Add or extend tests in:
+- `/Users/philiptullai/Documents/Coding/av/tests/test_bridge_sync_packets.py`
+- `/Users/philiptullai/Documents/Coding/av/tests/test_bridge_client_sync_packets.py`
+- `/Users/philiptullai/Documents/Coding/av/tests/test_orchestrator_sync_policy.py`
+- `/Users/philiptullai/Documents/Coding/av/tests/test_control_command_hdf5.py`
+- `/Users/philiptullai/Documents/Coding/av/tests/test_drive_summary_contract.py`
+- `/Users/philiptullai/Documents/Coding/av/tests/test_drive_summary_latency_sync.py`
+
+Bridge server tests:
+- selects freshest coherent payload within budget
+- drains stale packets and returns accounting
+- returns explicit stale-timeout reason when only stale payloads exist
+- respects drain-count cap
+- reports queue depth and oldest age after selection correctly
+
+Client tests:
+- parses one selected-payload response correctly
+- does not loop-fetch in active mode
+- preserves server selection accounting unchanged
+
+Orchestrator tests:
+- active mode performs one payload request per cycle
+- selection accounting is written into `vehicle_state_dict`
+- fallback path preserves server reason codes
+
+Recorder/analyzer tests:
+- new selection provenance fields persist to HDF5
+- analyzer summary includes server-side selection metrics
+- legacy recordings still show `UNAVAILABLE` cleanly
+- PhilViz/backend parity holds on selection metrics
+
+#### Live validation order for Phase 3D
+
+1. Highway ACC nominal:
+   - `/Users/philiptullai/Documents/Coding/av/tracks/scenarios/highway_h2_steady.yml`
+2. Highway catch-up / curve:
+   - `/Users/philiptullai/Documents/Coding/av/tracks/scenarios/highway_h8_curve_catchup.yml`
+3. Hill/highway:
+   - `/Users/philiptullai/Documents/Coding/av/tracks/scenarios/hill_g1_grade_following.yml`
+
+Run each in:
+1. shadow packet mode baseline
+2. Phase 3D active selected-payload mode
+
+Do not change teleport guard semantics in this phase.
+Do not change command transport in this phase.
+
+#### Acceptance gates for Phase 3D
+
+Promotable highway active run must show:
+- `packet_mode = packet_fifo_active`
+- `sync_packet_consume_policy = freshest_within_budget`
+- one payload request per control cycle in active mode
+- `packet_completeness_rate >= 95%`
+- `fallback_active_rate <= 5%`
+- `payload_selected_fresh_rate >= 95%`
+- `selected_payload_age_ms p95 <= payload_consume_max_age_ms`
+- materially lower loop-time overhead than the Phase 3C client-drain run
+- control loop frequency materially above the Phase 3C `1.62 Hz` failure
+- no transport-caused false cooldown episodes
+- no transport-caused boundary failure / e-stop
+
+Strict rejection conditions:
+- selected payload age is good but control loop rate still collapses badly
+- server-side selection still requires repeated client fetches
+- queue depth after select remains near full while selected payload age and loop rate are both poor
+
+#### Risks and tradeoffs
+
+1. Server-side freshness selection concentrates more work in the bridge.
+- that is acceptable if it removes repeated client parsing and preserves loop rate
+
+2. If multipart response handling is the dominant cost, server-side selection alone may not be enough.
+- that is the escalation gate for a lower-overhead transport
+
+3. Queue-depth semantics become more nuanced.
+- queue depth after selection is more useful than raw queue depth before selection
+
+4. Legacy fallback can still hide real transport failures if overused.
+- fallback reason reporting remains mandatory
+
+5. If Phase 3D still cannot meet cadence targets with one-request-per-cycle semantics, the next step is not another client/server selection tweak.
+- the next step is a lower-overhead active transport for image payloads, such as shared memory or a binary streaming channel
+
+### Phase 3E: Upstream coherent packet completeness hardening
+
+#### Goal
+
+Keep the Phase 3D server-side freshness selector and target the next real failure:
+- coherent packet freshness is now acceptable
+- loop throughput is back near target
+- but coherent packet completeness is still too low
+- fallback is still too high
+- `packet_timeout` and orphan counts still dominate
+
+This phase exists to raise:
+- `packet_completeness_rate`
+- selected-fresh availability
+- control-path stability
+
+without reintroducing stale payload processing.
+
+#### Problem statement from live validation
+
+The Phase 3D highway run showed:
+- selected payload age p95 stayed in budget
+- server queue after select stayed near zero
+- false cooldown rate dropped materially
+- loop rate recovered from the Phase 3C `1.62 Hz` failure
+
+But it also showed:
+- `packet_completeness_rate ≈ 65%`
+- `fallback_active_rate ≈ 35%`
+- fallback mode still dominated by `packet_timeout`
+- orphan counts were still large
+- skipped Unity frames stayed high
+
+Observed consequence:
+- transport was no longer the primary source of stale control samples
+- but the control loop still spent a large fraction of frames outside the coherent packet path
+- later in the drive, behavior degraded and the run still failed
+
+#### Architectural diagnosis
+
+The remaining problem is upstream contract fragility:
+- front camera upload and vehicle-state upload are still independent HTTP producers
+- the bridge is still assembling coherent packets after the fact by joining on `unity_frame_count`
+- that join is good enough to prove freshness semantics
+- it is not good enough yet to guarantee high completeness under load
+
+Current exact-match join path:
+- `/Users/philiptullai/Documents/Coding/av/unity/AVSimulation/Assets/Scripts/CameraCapture.cs`
+- `/Users/philiptullai/Documents/Coding/av/unity/AVSimulation/Assets/Scripts/AVBridge.cs`
+- `/Users/philiptullai/Documents/Coding/av/bridge/server.py`
+
+This phase therefore targets:
+1. source-side packet coherence
+2. bounded join-window behavior
+3. explicit completion / miss accounting
+
+Not:
+1. another freshness-policy tweak
+2. another fallback heuristic
+3. another teleport-guard change
+
+#### Contract decision
+
+The preferred promoted contract is:
+- Unity publishes packet components with a shared packet key and shared capture intent
+- the bridge assembles complete coherent packets with bounded ambiguity
+- active control still consumes one selected coherent payload per cycle
+
+Minimum acceptable improvement path:
+1. harden the existing split uploads with a better source-side key and bounded join window
+2. expose precise completion / miss accounting
+
+Preferred long-term path:
+1. move toward Unity publishing a true frame bundle contract for front camera + vehicle state
+2. reduce bridge-side orphan/join ambiguity as much as possible
+
+#### Recommended implementation approach
+
+##### Stage 3E.1: Harden the source-side packet key and timing contract
+
+Files:
+- `/Users/philiptullai/Documents/Coding/av/unity/AVSimulation/Assets/Scripts/CameraCapture.cs`
+- `/Users/philiptullai/Documents/Coding/av/unity/AVSimulation/Assets/Scripts/AVBridge.cs`
+- `/Users/philiptullai/Documents/Coding/av/bridge/server.py`
+- `/Users/philiptullai/Documents/Coding/av/sync_contract.py`
+
+Implementation:
+
+Add a source-generated packet key that is stronger than bare `unity_frame_count`.
+
+Recommended fields:
+- `packet_key`
+- `unity_frame_count`
+- `unity_time`
+- `capture_wall_clock_ms` or equivalent source monotonic time
+- `capture_sequence_id`
+
+Requirements:
+1. camera and vehicle state created for the same simulation step must carry the same `packet_key`
+2. the bridge must use `packet_key` as primary join key
+3. `unity_frame_count` remains a diagnostic / continuity field, not the only join key
+
+Why:
+- this removes ambiguity from frame-count reuse / drift
+- this lets the bridge distinguish “late partner for same packet” from “different sample”
+
+##### Stage 3E.2: Add a bounded join window instead of open-ended exact-match waiting
+
+Files:
+- `/Users/philiptullai/Documents/Coding/av/bridge/server.py`
+
+Implementation:
+
+For each partial packet:
+1. start a bounded join window when the first component arrives
+2. wait only within that window for the missing component
+3. classify the outcome explicitly:
+   - complete packet
+   - camera-only miss
+   - vehicle-only miss
+   - timed-out partial packet
+   - superseded by newer packet
+
+Recommended server fields:
+- `join_window_ms`
+- `join_completed`
+- `join_timeout`
+- `join_superseded`
+- `join_missing_component`
+- `join_wait_time_ms`
+
+Contract rule:
+- the bridge must stop treating every missing match as the same generic timeout
+- completion and miss modes must be separable in diagnostics
+
+##### Stage 3E.3: Prefer source-side pairing over bridge-side rescue
+
+Files:
+- `/Users/philiptullai/Documents/Coding/av/unity/AVSimulation/Assets/Scripts/CameraCapture.cs`
+- `/Users/philiptullai/Documents/Coding/av/unity/AVSimulation/Assets/Scripts/AVBridge.cs`
+- `/Users/philiptullai/Documents/Coding/av/bridge/server.py`
+
+Implementation:
+
+Do not yet move full raw-image bundling into the Unity-side vehicle-state post in this phase.
+
+Instead:
+1. ensure both producers stamp the same packet key
+2. ensure both producers publish the same step identity
+3. align producer timing so the bridge sees matching pairs within a bounded window
+
+If Stage 3E.1 + 3E.2 still cannot raise completeness enough, the next escalation is:
+- a true source-side bundled publish endpoint
+
+That escalation should be held until this cheaper contract hardening is measured.
+
+#### Bridge server changes
+
+Files:
+- `/Users/philiptullai/Documents/Coding/av/bridge/server.py`
+
+Implementation details:
+
+1. Replace `pending_packets_by_unity_frame` primary indexing with:
+   - `pending_packets_by_packet_key`
+
+2. Keep secondary indexing for diagnostics:
+   - `unity_frame_count`
+   - `packet_id`
+
+3. Add packet-part arrival metadata:
+   - first-arrival time
+   - component arrival deltas
+   - join wait time
+
+4. Add bounded eviction reasons:
+   - `orphan_camera_timeout`
+   - `orphan_vehicle_timeout`
+   - `partial_superseded`
+   - `join_window_exceeded`
+
+5. Add summary counters:
+   - `sync_packet_complete_count`
+   - `sync_packet_partial_count`
+   - `sync_packet_join_timeout_count`
+   - `sync_packet_superseded_count`
+   - `sync_packet_missing_camera_count`
+   - `sync_packet_missing_vehicle_count`
+
+6. Preserve the Phase 3D selector on top of the improved complete-packet queue.
+
+#### Unity-side producer changes
+
+Files:
+- `/Users/philiptullai/Documents/Coding/av/unity/AVSimulation/Assets/Scripts/CameraCapture.cs`
+- `/Users/philiptullai/Documents/Coding/av/unity/AVSimulation/Assets/Scripts/AVBridge.cs`
+
+Implementation details:
+
+1. Generate one step-level packet identity per simulation/update cycle.
+2. Stamp camera upload and vehicle-state upload with the same identity.
+3. Record source-side queue pressure separately for:
+   - camera upload queue
+   - vehicle-state send cadence
+4. Add source-side counters:
+   - camera packet stamped count
+   - vehicle packet stamped count
+   - source packet key mismatch count
+   - source packet publish lag
+
+Important:
+- do not silently generate independent ids in each producer
+- the identity must come from one shared step contract
+
+#### Client and orchestrator changes
+
+Files:
+- `/Users/philiptullai/Documents/Coding/av/bridge/client.py`
+- `/Users/philiptullai/Documents/Coding/av/av_stack/orchestrator.py`
+
+Implementation details:
+
+Client:
+- no major policy change
+- continue one selected payload request per cycle
+- expose the new completion/miss metadata returned by the bridge
+
+Orchestrator:
+- record the new join/completeness provenance
+- distinguish:
+  - no coherent packet available
+  - coherent packet unavailable because source pair never completed
+  - coherent packet unavailable because join window expired
+
+This distinction matters because it tells us whether to fix:
+- source production timing
+- bridge join semantics
+- or downstream fallback policy
+
+#### Recorder/data contract changes
+
+Files:
+- `/Users/philiptullai/Documents/Coding/av/data/formats/data_format.py`
+- `/Users/philiptullai/Documents/Coding/av/data/recorder.py`
+
+Add fields for:
+- `sync_packet_key`
+- `sync_packet_join_wait_ms`
+- `sync_packet_join_completed`
+- `sync_packet_join_timeout`
+- `sync_packet_join_superseded`
+- `sync_packet_missing_camera_count`
+- `sync_packet_missing_vehicle_count`
+- `sync_packet_complete_count`
+- `sync_packet_partial_count`
+- `sync_packet_join_timeout_count`
+- `sync_packet_superseded_count`
+
+Contract rule:
+- completeness must be diagnosable from explicit join outcomes
+- not inferred only from fallback rate
+
+#### Analyzer changes
+
+Files:
+- `/Users/philiptullai/Documents/Coding/av/tools/drive_summary_core.py`
+- `/Users/philiptullai/Documents/Coding/av/tools/analyze/analyze_drive_overall.py`
+- `/Users/philiptullai/Documents/Coding/av/tools/analyze/verify_recording_run.py`
+
+Add to `transport_contract`:
+- join-completed rate
+- join-timeout rate
+- join-superseded rate
+- missing-camera rate
+- missing-vehicle rate
+- join-wait p50/p95/max
+- completeness source mode
+
+Add causal attribution:
+- `fallback_due_to_incomplete_source_pair`
+- `fallback_due_to_join_timeout`
+- `fallback_due_to_join_supersession`
+
+Add correlation checks:
+- whether lateral/perception degradation spikes coincide with:
+  - completeness collapse
+  - join timeout bursts
+  - fallback bursts
+
+This is where the late-drive swerving should be evaluated after transport hardening:
+- not as a separate guess first
+- but as a correlated symptom against transport completeness and fallback episodes
+
+#### PhilViz changes
+
+Files:
+- `/Users/philiptullai/Documents/Coding/av/tools/debug_visualizer/server.py`
+- `/Users/philiptullai/Documents/Coding/av/tools/debug_visualizer/visualizer.js`
+
+Extend `Transport & Contracts` with:
+- join-completed rate
+- join-timeout rate
+- join-superseded rate
+- missing-camera / missing-vehicle rates
+- join wait p95
+- completeness source mode
+
+Add timeline rows:
+- `join_timeout_event`
+- `join_superseded_event`
+- `missing_camera_event`
+- `missing_vehicle_event`
+- `fallback_reason`
+
+Add one explicit correlation view:
+- transport fallback vs lateral error / stale perception / out-of-lane markers
+
+The operator should be able to answer:
+1. did the packet fail because the source pair never formed?
+2. did fallback bursts line up with swerving?
+3. was the late-drive instability downstream of completeness loss or independent of it?
+
+#### Testing plan for Phase 3E
+
+Add or extend tests in:
+- `/Users/philiptullai/Documents/Coding/av/tests/test_bridge_sync_packets.py`
+- `/Users/philiptullai/Documents/Coding/av/tests/test_bridge_client_sync_packets.py`
+- `/Users/philiptullai/Documents/Coding/av/tests/test_orchestrator_sync_policy.py`
+- `/Users/philiptullai/Documents/Coding/av/tests/test_control_command_hdf5.py`
+- `/Users/philiptullai/Documents/Coding/av/tests/test_drive_summary_contract.py`
+- `/Users/philiptullai/Documents/Coding/av/tests/test_drive_summary_latency_sync.py`
+
+Recommended new focused test:
+- `/Users/philiptullai/Documents/Coding/av/tests/test_sync_packet_source_completeness.py`
+
+Test cases:
+1. matching packet key from camera + vehicle creates complete packet
+2. mismatched packet key does not join
+3. join timeout is recorded explicitly
+4. superseded partial packet is recorded explicitly
+5. server selector still returns one request / one payload
+6. recorder persists new join/completeness provenance
+7. analyzer reports join/completeness metrics correctly
+
+#### Live validation order for Phase 3E
+
+1. Highway ACC nominal:
+   - `/Users/philiptullai/Documents/Coding/av/tracks/scenarios/highway_h2_steady.yml`
+2. Highway catch-up / curve:
+   - `/Users/philiptullai/Documents/Coding/av/tracks/scenarios/highway_h8_curve_catchup.yml`
+3. Hill/highway:
+   - `/Users/philiptullai/Documents/Coding/av/tracks/scenarios/hill_g1_grade_following.yml`
+
+Validation comparisons:
+1. Phase 3D active selected-payload baseline
+2. Phase 3E hardened completeness path
+
+Required comparisons:
+- packet completeness
+- fallback rate
+- join-timeout rate
+- join-superseded rate
+- false cooldown rate
+- effective reference drop rate
+- out-of-lane / failure
+- late-drive swerving correlation
+
+#### Acceptance gates for Phase 3E
+
+Promotable highway active run must show:
+- `packet_completeness_rate >= 90%` in first pass, target `>= 95%`
+- `fallback_active_rate <= 10%` in first pass, target `<= 5%`
+- selected payload age p95 still within budget
+- join-timeout and superseded rates materially below the Phase 3D baseline
+- false cooldown rate materially below the Phase 3D baseline
+- no transport-caused boundary failure / e-stop
+
+Additional correlation gate:
+- if late-drive swerving still appears, it must be shown whether it coincides with transport fallback bursts
+- if it does not, treat swerving as a separate follow-on control/perception issue
+
+Strict rejection conditions:
+- completeness stays in the current ~65% band
+- fallback remains dominated by `packet_timeout`
+- join metrics are unavailable or ambiguous
+- transport fixes mask the swerving question instead of clarifying it
+
+#### Execution status: implemented and measured
+
+Implementation landed across:
+- `/Users/philiptullai/Documents/Coding/av/unity/AVSimulation/Assets/Scripts/CameraCapture.cs`
+- `/Users/philiptullai/Documents/Coding/av/unity/AVSimulation/Assets/Scripts/AVBridge.cs`
+- `/Users/philiptullai/Documents/Coding/av/unity/AVSimulation/Assets/Scripts/CarController.cs`
+- `/Users/philiptullai/Documents/Coding/av/bridge/server.py`
+- `/Users/philiptullai/Documents/Coding/av/av_stack/orchestrator.py`
+- `/Users/philiptullai/Documents/Coding/av/data/formats/data_format.py`
+- `/Users/philiptullai/Documents/Coding/av/data/recorder.py`
+- `/Users/philiptullai/Documents/Coding/av/tools/drive_summary_core.py`
+- `/Users/philiptullai/Documents/Coding/av/tools/analyze/analyze_drive_overall.py`
+- `/Users/philiptullai/Documents/Coding/av/tools/analyze/verify_recording_run.py`
+- `/Users/philiptullai/Documents/Coding/av/tools/debug_visualizer/server.py`
+- `/Users/philiptullai/Documents/Coding/av/tools/debug_visualizer/visualizer.js`
+
+Focused validation passed:
+- `29` targeted tests
+
+Live measurement:
+- previous Phase 3D server-selection baseline:
+  - `/Users/philiptullai/Documents/Coding/av/data/recordings/recording_20260325_225113.h5`
+- Phase 3E result:
+  - `/Users/philiptullai/Documents/Coding/av/data/recordings/recording_20260325_232219.h5`
+
+Measured outcome:
+- `packet_completeness_rate`: `65.2% -> 90.5%`
+- `fallback_active_rate`: `34.8% -> 9.5%`
+- `join_source_mode`: `packet_key`
+- `join_key_present_rate`: `90.5%`
+- selected payload age p95 stayed in budget: `72.8 ms`
+- run stayed in bounds and finished safely with score `97.0`
+
+What is still wrong:
+- false transport-linked cooldown remains high:
+  - `false_teleport_cooldown_rate ≈ 20.9%`
+  - `post_jump_cooldown_active_rate ≈ 23.3%`
+- effective reference drops remain high:
+  - `31.3%`
+- fallback is still dominated by `packet_timeout`
+- late oscillation still appears in the highway run
+
+Conclusion:
+- Phase 3E improved completeness enough to prove the source-side packet identity was the right direction.
+- Phase 3E did not resolve the remaining highway instability.
+- The next bottleneck is no longer packet freshness or packet identity.
+- The next bottleneck is the teleport/post-jump continuity path, with a secondary follow-up on residual packet timeouts.
+
+Correlation note for the late-drive swerving:
+- in `/Users/philiptullai/Documents/Coding/av/data/recordings/recording_20260325_232219.h5`, late high-lateral-error frames overlapped:
+  - fallback on `16.7%` of those frames
+  - post-jump cooldown on `44.4%`
+  - either fallback or cooldown on `55.6%`
+- perception confidence stayed nominal in those frames
+
+Interpretation:
+- the late swerving is only partly explained by residual fallback
+- it aligns more strongly with post-jump cooldown / forced reset behavior than with packet incompleteness itself
+- that means the next phase should focus on teleport guard demotion/redesign before treating the swerving as a purely lateral-controller issue
+
+#### Risks and tradeoffs
+
+1. This phase increases source-side and bridge-side contract complexity.
+- that is justified only because the current split-producer exact-match contract is too fragile
+
+2. If Unity-side packet identity is not truly shared, the bridge diagnostics will look better than the actual contract.
+- source-generated shared packet identity is mandatory
+
+3. If completeness still does not rise after Stage 3E.1 and 3E.2, the next escalation is a true source-side bundled publish path.
+- do not over-invest in join heuristics beyond that point
+
+4. Late-drive swerving may still remain after transport completeness is fixed.
+- that is acceptable
+- but this phase must make it measurable whether swerving is caused by transport fallback or not
+
 ### Phase 4: Teleport guard demotion and redesign
 
 After active packet mode is stable:
@@ -354,6 +1868,40 @@ Required guard inputs:
 New rule shape:
 - a large pose delta with matching skipped-frame/time evidence is not teleport by itself
 - a large pose delta inconsistent with dt, speed, and continuity is teleport
+
+Execution status: implemented and measured
+
+- previous Phase 3E baseline:
+  - `/Users/philiptullai/Documents/Coding/av/data/recordings/recording_20260325_232219.h5`
+- Phase 4 result:
+  - `/Users/philiptullai/Documents/Coding/av/data/recordings/recording_20260326_085015.h5`
+
+Measured outcome:
+- `post_jump_cooldown_active_rate`: `23.3% -> 0.0%`
+- `false_teleport_cooldown_rate`: `20.9% -> 0.0%`
+- `effective_reference_velocity_drop_rate`: `31.3% -> 4.0%`
+- no forced MPC→PP reset remained; MPC stayed active for `94.1%` of frames
+
+What improved:
+- the teleport/post-jump redesign did the intended job
+- the guard is no longer misclassifying normal transport continuity as teleport
+- late high-lateral-error frames no longer overlap cooldown; fallback overlap in the late third dropped to `5.7%`
+
+What is still wrong:
+- the run is not promotable
+- overall score dropped to `79.0`
+- ACC/following behavior became the dominant problem:
+  - near-miss events: `1`
+  - minimum gap observed: `0.1 m`
+  - ACC jerk P95: `53.9 m/s^3`
+- residual packet timeout fallback is still nontrivial:
+  - `packet_completeness_rate`: `89.0%`
+  - `fallback_active_rate`: `11.0%`
+
+Conclusion:
+- Phase 4 resolved the false teleport / forced reset bottleneck.
+- The late swerving seen before should no longer be treated as a transport-cooldown artifact on this path.
+- The next bottleneck is now highway lateral/following behavior under sustained MPC plus the remaining packet-timeout fallback tail.
 
 ### Phase 5: Rollout and promotion
 
@@ -1351,3 +2899,171 @@ Do not do any of the following in this slice:
 - modify PhilViz UI beyond what is required to keep new fields loadable in later slices
 
 Those belong in later patch sets after shadow data proves the transport story.
+
+### Phase 3F: Atomic source packet-key ownership and timeout-tail hardening
+
+Phase 3E materially improved completeness, but the remaining timeout tail shows that the source-side packet identity is still not atomic. The current Unity side still lets vehicle state read the camera's latest packet key rather than emitting one per-update packet identity owned by the same simulation tick.
+
+This phase hardens the remaining timeout tail by moving packet identity ownership to the source update itself and making join failures directly attributable.
+
+#### Goal
+
+Keep the good parts of Phase 3D and Phase 3E:
+
+- coherent selected payload
+- server-side freshness selection
+- explicit transport diagnostics
+
+Replace the remaining weak point:
+
+- vehicle state referencing `LatestSyncPacketKey`
+
+with:
+
+- one source-owned packet id minted once per AVBridge update
+- same id stamped on both vehicle state and camera upload for that update
+
+#### Stage 3F.1: Mint packet key at the update owner
+
+Files:
+- `/Users/philiptullai/Documents/Coding/av/unity/AVSimulation/Assets/Scripts/AVBridge.cs`
+- `/Users/philiptullai/Documents/Coding/av/unity/AVSimulation/Assets/Scripts/CameraCapture.cs`
+- `/Users/philiptullai/Documents/Coding/av/unity/AVSimulation/Assets/Scripts/CarController.cs`
+
+Implementation checklist:
+- [ ] Move packet-key ownership to `AVBridge.cs` at the start of each send/update cycle
+- [ ] Mint one packet id/key per bridge update using:
+  - update sequence
+  - unity frame count
+  - optional monotonic tie-breaker if needed
+- [ ] Pass that exact key into the camera capture/send path
+- [ ] Stamp that same key directly into the vehicle-state payload for the same update
+- [ ] Stop treating `cameraCapture.LatestSyncPacketKey` as the authoritative vehicle-state source
+- [ ] Keep camera-side debug/latest fields if useful, but demote them to observability only
+
+Required source metadata:
+- [ ] `source_packet_key`
+- [ ] `source_packet_owner = avbridge_update`
+- [ ] `source_packet_camera_scheduled`
+- [ ] `source_packet_vehicle_scheduled`
+- [ ] `source_packet_camera_sent`
+- [ ] `source_packet_vehicle_sent`
+
+#### Stage 3F.2: Distinguish packet-key presence from join success
+
+Files:
+- `/Users/philiptullai/Documents/Coding/av/bridge/server.py`
+- `/Users/philiptullai/Documents/Coding/av/sync_contract.py`
+
+Implementation checklist:
+- [ ] Add explicit join-failure reason codes instead of collapsing everything into `packet_timeout`
+- [ ] Distinguish:
+  - `camera_key_missing`
+  - `vehicle_key_missing`
+  - `packet_key_mismatch`
+  - `camera_component_late`
+  - `vehicle_component_late`
+  - `join_window_expired`
+  - `superseded_camera`
+  - `superseded_vehicle`
+- [ ] Join by packet key only for active mode
+- [ ] Keep Unity-frame fallback only for shadow/debug paths and label it as such
+- [ ] Emit a per-selected-frame reason field, not just cumulative timeout counters
+
+#### Stage 3F.3: Record direct per-frame timeout attribution
+
+Files:
+- `/Users/philiptullai/Documents/Coding/av/data/formats/data_format.py`
+- `/Users/philiptullai/Documents/Coding/av/data/recorder.py`
+- `/Users/philiptullai/Documents/Coding/av/av_stack/orchestrator.py`
+
+Implementation checklist:
+- [ ] Add recorder fields for:
+  - `sync_packet_selection_result`
+  - `sync_packet_join_failure_reason`
+  - `sync_packet_join_failure_side`
+  - `sync_packet_source_key_present_camera`
+  - `sync_packet_source_key_present_vehicle`
+  - `sync_packet_selected_packet_key`
+  - `sync_packet_selected_packet_id`
+  - `sync_packet_timeout_event_delta`
+- [ ] Preserve cumulative orphan/timeout counters, but do not rely on them as the only evidence
+- [ ] Ensure every fallback control frame has one direct reason field explaining why it fell back
+
+#### Stage 3F.4: Debug tool and analyzer upgrades
+
+Files:
+- `/Users/philiptullai/Documents/Coding/av/tools/drive_summary_core.py`
+- `/Users/philiptullai/Documents/Coding/av/tools/analyze/analyze_drive_overall.py`
+- `/Users/philiptullai/Documents/Coding/av/tools/analyze/verify_recording_run.py`
+- `/Users/philiptullai/Documents/Coding/av/tools/debug_visualizer/server.py`
+- `/Users/philiptullai/Documents/Coding/av/tools/debug_visualizer/visualizer.js`
+- `/Users/philiptullai/Documents/Coding/av/tools/debug_visualizer/backend/triage_engine.py`
+
+Implementation checklist:
+- [ ] Add a `Packet Join Contract` summary showing:
+  - source key present rate by side
+  - join success rate
+  - fallback selected-frame rate
+  - failure reason split
+  - failure side split
+- [ ] Add timeline/event markers for:
+  - key missing on camera side
+  - key missing on vehicle side
+  - key mismatch
+  - join-window expiry
+  - selected fallback frame
+- [ ] Update triage so it can state:
+  - `packet_timeout` due to camera-side missing key
+  - `packet_timeout` due to vehicle-side missing key
+  - not just “timeout count high”
+- [ ] Keep cumulative timeout/orphan charts, but visually demote them behind per-frame selected-fallback attribution
+
+#### Stage 3F.5: Tests
+
+Add or update:
+- `/Users/philiptullai/Documents/Coding/av/tests/test_bridge_sync_packets.py`
+- `/Users/philiptullai/Documents/Coding/av/tests/test_bridge_client_sync_packets.py`
+- `/Users/philiptullai/Documents/Coding/av/tests/test_orchestrator_sync_policy.py`
+- `/Users/philiptullai/Documents/Coding/av/tests/test_control_command_hdf5.py`
+- `/Users/philiptullai/Documents/Coding/av/tests/test_drive_summary_contract.py`
+- `/Users/philiptullai/Documents/Coding/av/tests/test_visualizer_transport_parity.py`
+
+Exact test checklist:
+- [ ] matching source-owned packet key from camera + vehicle joins successfully
+- [ ] vehicle key missing yields `join_failure_side=vehicle` and `join_failure_reason=vehicle_key_missing`
+- [ ] camera key missing yields `join_failure_side=camera` and `join_failure_reason=camera_key_missing`
+- [ ] mismatched key does not join and is labeled `packet_key_mismatch`
+- [ ] selected fallback frame writes direct reason fields into HDF5
+- [ ] CLI analyzer and PhilViz report the same reason split and side split
+- [ ] legacy recordings still load with fields marked unavailable
+
+#### Live validation order for Phase 3F
+
+1. `/Users/philiptullai/Documents/Coding/av/tracks/scenarios/highway_h2_steady.yml`
+2. `/Users/philiptullai/Documents/Coding/av/tracks/scenarios/highway_h8_curve_catchup.yml`
+3. `/Users/philiptullai/Documents/Coding/av/tracks/scenarios/hill_g1_grade_following.yml`
+
+For each, compare against the current Phase 4 baseline:
+- `/Users/philiptullai/Documents/Coding/av/data/recordings/recording_20260326_085015.h5`
+
+#### Acceptance gates for Phase 3F
+
+1. Source key present rate:
+- camera `100%`
+- vehicle `100%`
+
+2. Selected fallback rate is materially below the current `11%` tail on the highway ACC baseline.
+
+3. No selected fallback frame is unlabeled.
+
+4. Joined packets remain fresh:
+- selected payload age stays within current budget
+
+5. Analyzer and PhilViz can identify whether the remaining timeout tail is:
+- camera-side
+- vehicle-side
+- key mismatch
+- join-window expiry
+
+6. Cumulative timeout churn may remain nonzero, but direct selected-frame fallback attribution must be accurate enough that control-path loss is no longer inferred indirectly.

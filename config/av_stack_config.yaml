@@ -822,6 +822,17 @@ safety:
   lane_width: 7.0
   car_width: 1.9
   allowed_outside_lane: 1.0
+  teleport_distance_threshold: 2.0
+  teleport_guard_frames: 1
+  post_jump_cooldown_frames: 30
+  post_jump_speed_scale: 0.5
+  post_jump_steering_scale: 0.6
+  teleport_expected_motion_ratio_threshold: 1.8
+  teleport_expected_motion_margin_m: 0.75
+  teleport_hard_override_distance_m: 8.0
+  teleport_hard_override_ratio_threshold: 4.0
+  teleport_continuity_skip_frames_threshold: 3
+  teleport_continuity_warn_age_ms: 125.0
 logging:
   frame_log_interval: 30
   log_lateral_error: true
@@ -839,6 +850,24 @@ stack:
   clear_bridge_camera_queue_on_start: true
   # Background thread GETs latest front camera while the stack runs perception/control (overlap I/O).
   camera_prefetch: true
+  # Closed-loop remains on latest camera + latest vehicle. Shadow packet path records continuity only.
+  sync_packet_mode: packet_shadow
+  # When active FIFO packet ingest cannot align a required component, explicitly label and
+  # fall back to the legacy latest-path ingest instead of silently masquerading as continuity.
+  sync_packet_active_allow_legacy_fallback: true
+  # Deprecated metadata-only active resync knob. Kept for compatibility while active payload ingest evolves.
+  sync_packet_active_resync_max_discards: 8
+  # Active coherent-packet consume policy. Debug alternatives:
+  #   fifo_strict, latest_debug
+  sync_packet_consume_policy: freshest_within_budget
+  # Hard freshness budget for the selected coherent payload.
+  sync_packet_payload_max_age_ms: 250.0
+  # Soft warning budget for selected coherent payload age.
+  sync_packet_payload_warn_age_ms: 125.0
+  # Max number of queued payload packets to drain while selecting the freshest packet.
+  sync_packet_payload_max_drain_count: 128
+  # Only for debug-only latest_debug mode; never enable for promoted closed-loop paths.
+  sync_packet_payload_allow_stale_debug: false
   # POST /api/trajectory from a background thread (latest-wins) so the main loop is not blocked.
   async_trajectory_transport: true
   # Overlap GET vehicle/state with camera fetch (separate requests.Session on worker thread).

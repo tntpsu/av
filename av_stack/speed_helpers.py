@@ -1,6 +1,14 @@
 import math
 import numpy as np
-from typing import Optional, Tuple
+from typing import Optional, Tuple, Dict, Any
+
+from sync_contract import (
+    TELEPORT_GUARD_REASON_CONTINUITY_SUPPRESSED,
+    TELEPORT_GUARD_REASON_EXPECTED_MOTION_CONSISTENT,
+    TELEPORT_GUARD_REASON_HARD_OVERRIDE,
+    TELEPORT_GUARD_REASON_NONE,
+    TELEPORT_GUARD_REASON_TRUE_DISCONTINUITY,
+)
 
 
 def _slew_limit_value(previous: float, target: float, max_rate: float, dt: float) -> float:
@@ -122,3 +130,128 @@ def _is_teleport_jump(
         return False, 0.0
     distance = float(np.linalg.norm(current_position - previous_position))
     return distance > distance_threshold, distance
+
+
+def _compute_motion_continuity_metrics(
+    previous_position: Optional[np.ndarray],
+    current_position: Optional[np.ndarray],
+    speed_mps: float,
+    dt_s: float,
+) -> Tuple[float, float]:
+    """Return observed motion distance and observed/expected ratio for continuity debugging."""
+    observed_distance = 0.0
+    if previous_position is not None and current_position is not None:
+        observed_distance = float(np.linalg.norm(current_position - previous_position))
+    expected_distance = 0.0
+    if isinstance(speed_mps, (int, float)) and math.isfinite(float(speed_mps)) and dt_s > 0.0:
+        expected_distance = max(0.0, float(speed_mps) * float(dt_s))
+    ratio = float("nan")
+    if expected_distance > 1e-6:
+        ratio = observed_distance / expected_distance
+    return expected_distance, ratio
+
+
+def _classify_teleport_discontinuity(
+    previous_position: Optional[np.ndarray],
+    current_position: Optional[np.ndarray],
+    *,
+    base_distance_threshold_m: float,
+    speed_mps: float,
+    control_dt_s: float,
+    unity_dt_s: float,
+    skipped_unity_frames: int,
+    fallback_active: bool,
+    payload_selected_fresh: Optional[bool],
+    payload_selected_age_ms: Optional[float],
+    expected_motion_ratio_threshold: float,
+    expected_motion_margin_m: float,
+    hard_override_distance_m: float,
+    hard_override_ratio_threshold: float,
+    continuity_skip_frames_threshold: int,
+    continuity_warn_age_ms: float,
+) -> Dict[str, Any]:
+    """Classify large pose deltas as either true discontinuities or transport-backed continuity gaps."""
+    observed_distance = 0.0
+    if previous_position is not None and current_position is not None:
+        observed_distance = float(np.linalg.norm(current_position - previous_position))
+
+    effective_dt_s = 0.0
+    for candidate in (unity_dt_s, control_dt_s):
+        if isinstance(candidate, (int, float)) and math.isfinite(float(candidate)) and float(candidate) > 0.0:
+            effective_dt_s = max(effective_dt_s, float(candidate))
+
+    expected_motion_m = 0.0
+    if isinstance(speed_mps, (int, float)) and math.isfinite(float(speed_mps)) and effective_dt_s > 0.0:
+        expected_motion_m = max(0.0, float(speed_mps) * effective_dt_s)
+
+    motion_ratio = float("nan")
+    if expected_motion_m > 1e-6:
+        motion_ratio = observed_distance / expected_motion_m
+
+    dynamic_threshold_m = float(base_distance_threshold_m)
+    if expected_motion_m > 0.0:
+        dynamic_threshold_m = max(
+            float(base_distance_threshold_m),
+            expected_motion_m + max(0.0, float(expected_motion_margin_m)),
+            expected_motion_m * max(1.0, float(expected_motion_ratio_threshold)),
+        )
+
+    hard_override_threshold_m_effective = max(
+        float(base_distance_threshold_m),
+        float(hard_override_distance_m),
+    )
+    if expected_motion_m > 0.0:
+        hard_override_threshold_m_effective = max(
+            hard_override_threshold_m_effective,
+            expected_motion_m * max(1.0, float(hard_override_ratio_threshold)),
+        )
+
+    continuity_suspect = False
+    if int(skipped_unity_frames or 0) >= int(max(0, continuity_skip_frames_threshold)):
+        continuity_suspect = True
+    if bool(fallback_active):
+        continuity_suspect = True
+    if payload_selected_fresh is False:
+        continuity_suspect = True
+    if (
+        isinstance(payload_selected_age_ms, (int, float))
+        and math.isfinite(float(payload_selected_age_ms))
+        and float(payload_selected_age_ms) > max(0.0, float(continuity_warn_age_ms))
+    ):
+        continuity_suspect = True
+
+    base_threshold_exceeded = observed_distance > float(base_distance_threshold_m)
+    dynamic_threshold_exceeded = observed_distance > dynamic_threshold_m
+    hard_override = observed_distance > hard_override_threshold_m_effective
+
+    teleport_detected = False
+    guard_suppressed = False
+    reason_code = TELEPORT_GUARD_REASON_NONE
+    if not base_threshold_exceeded:
+        reason_code = TELEPORT_GUARD_REASON_NONE
+    elif hard_override:
+        teleport_detected = True
+        reason_code = TELEPORT_GUARD_REASON_HARD_OVERRIDE
+    elif dynamic_threshold_exceeded and not continuity_suspect:
+        teleport_detected = True
+        reason_code = TELEPORT_GUARD_REASON_TRUE_DISCONTINUITY
+    elif continuity_suspect:
+        guard_suppressed = True
+        reason_code = TELEPORT_GUARD_REASON_CONTINUITY_SUPPRESSED
+    else:
+        reason_code = TELEPORT_GUARD_REASON_EXPECTED_MOTION_CONSISTENT
+
+    return {
+        "teleport_detected": bool(teleport_detected),
+        "guard_suppressed": bool(guard_suppressed),
+        "reason_code": str(reason_code),
+        "observed_distance_m": float(observed_distance),
+        "expected_motion_m": float(expected_motion_m),
+        "motion_ratio": float(motion_ratio),
+        "base_threshold_exceeded": bool(base_threshold_exceeded),
+        "dynamic_threshold_m": float(dynamic_threshold_m),
+        "hard_override_threshold_m": float(hard_override_threshold_m_effective),
+        "continuity_suspect": bool(continuity_suspect),
+        "effective_dt_s": float(effective_dt_s),
+        "unity_dt_s": float(unity_dt_s) if isinstance(unity_dt_s, (int, float)) and math.isfinite(float(unity_dt_s)) else float("nan"),
+    }

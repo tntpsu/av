@@ -6,6 +6,7 @@ Handles camera frames, vehicle state, and control commands.
 import asyncio
 import base64
 import io
+import json
 import os
 import time
 import logging
@@ -22,6 +23,24 @@ from pydantic import BaseModel
 import uvicorn
 from PIL import Image
 from starlette.responses import Response
+
+from sync_contract import (
+    PACKET_CONSUME_POLICY_FIFO_STRICT,
+    PACKET_CONSUME_POLICY_FRESHEST_WITHIN_BUDGET,
+    PACKET_CONSUME_POLICY_LATEST_DEBUG,
+    PACKET_FALLBACK_NONE,
+    PACKET_FALLBACK_PACKET_TIMEOUT,
+    PACKET_FALLBACK_PAYLOAD_AGE_BUDGET_EXCEEDED,
+    PACKET_FALLBACK_PAYLOAD_DRAIN_CAP,
+    PACKET_MODE_PACKET_SHADOW,
+    PACKET_JOIN_SOURCE_NONE,
+    PACKET_JOIN_SOURCE_PACKET_KEY,
+    PACKET_JOIN_SOURCE_UNITY_FRAME_FALLBACK,
+    PACKET_SELECTION_SOURCE_LATEST_DEBUG,
+    PACKET_SELECTION_SOURCE_NONE,
+    PACKET_SELECTION_SOURCE_SERVER,
+    SYNC_PACKET_SCHEMA_VERSION,
+)
 
 app = FastAPI(title="AV Stack Bridge Server")
 
@@ -79,6 +98,7 @@ def _read_max_camera_queue_size() -> int:
 
 
 MAX_CAMERA_QUEUE_SIZE = _read_max_camera_queue_size()
+MAX_SYNC_PACKET_PAYLOAD_QUEUE_SIZE = 64
 vehicle_state_queue: deque = deque(maxlen=600)
 latest_vehicle_state: Optional[dict] = None
 latest_control_command: Optional[dict] = None
@@ -100,6 +120,26 @@ last_control_arrival_time: Optional[float] = None
 speed_limit_zero_streak: int = 0
 vehicle_state_sanitize_events: int = 0
 vehicle_state_sanitize_values: int = 0
+pending_packets_by_unity_frame: dict[int, dict[str, Any]] = {}
+pending_packets_by_packet_key: dict[str, dict[str, Any]] = {}
+assembled_packet_queue: deque = deque(maxlen=600)
+assembled_packet_payload_queue: deque = deque(maxlen=MAX_SYNC_PACKET_PAYLOAD_QUEUE_SIZE)
+latest_sync_packet_data: Optional[dict[str, Any]] = None
+latest_sync_packet_payload_data: Optional[dict[str, Any]] = None
+sync_packet_drop_count: int = 0
+sync_packet_payload_drop_count: int = 0
+sync_packet_orphan_camera_count: int = 0
+sync_packet_orphan_vehicle_count: int = 0
+sync_packet_timeout_count: int = 0
+sync_packet_partial_publish_count: int = 0
+sync_packet_key_match_count: int = 0
+sync_packet_unity_fallback_count: int = 0
+sync_packet_superseded_camera_count: int = 0
+sync_packet_superseded_vehicle_count: int = 0
+sync_packet_id_counter: int = 0
+
+PARTIAL_PACKET_MAX_AGE_SECONDS = 1.0
+PARTIAL_PACKET_MAX_FRAME_LAG = 6
 
 
 def _sanitize_json_compatible(value: Any) -> tuple[Any, int]:
@@ -146,6 +186,672 @@ def _normalize_camera_id(camera_id: Optional[str]) -> str:
     return camera_id or "front_center"
 
 
+def _parse_optional_float(value: Any) -> Optional[float]:
+    if value is None:
+        return None
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(parsed):
+        return None
+    return parsed
+
+
+def _parse_optional_int(value: Any) -> Optional[int]:
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _normalize_packet_key(packet_key: Any) -> Optional[str]:
+    if packet_key is None:
+        return None
+    normalized = str(packet_key).strip()
+    return normalized or None
+
+
+def _make_partial_packet(
+    *,
+    unity_frame_count: Optional[int],
+    unity_time: Optional[float],
+    now: float,
+    packet_key: Optional[str],
+) -> dict[str, Any]:
+    global sync_packet_id_counter
+    sync_packet_id_counter += 1
+    normalized_packet_key = _normalize_packet_key(packet_key)
+    return {
+        "packet_id": sync_packet_id_counter,
+        "schema_version": SYNC_PACKET_SCHEMA_VERSION,
+        "packet_key": normalized_packet_key,
+        "unity_frame_count": int(unity_frame_count) if unity_frame_count is not None else None,
+        "unity_time": float(unity_time) if unity_time is not None else None,
+        "join_source": (
+            PACKET_JOIN_SOURCE_PACKET_KEY
+            if normalized_packet_key is not None
+            else PACKET_JOIN_SOURCE_UNITY_FRAME_FALLBACK
+        ),
+        "join_key_present": normalized_packet_key is not None,
+        "created_wall_time": float(now),
+        "superseded_camera_count": 0,
+        "superseded_vehicle_count": 0,
+        "front_camera": None,
+        "vehicle_state": None,
+    }
+
+
+def _register_partial_packet(packet: dict[str, Any]) -> None:
+    packet_key = _normalize_packet_key(packet.get("packet_key"))
+    unity_frame_count = _parse_optional_int(packet.get("unity_frame_count"))
+    if packet_key is not None:
+        pending_packets_by_packet_key[packet_key] = packet
+    if unity_frame_count is not None:
+        pending_packets_by_unity_frame[unity_frame_count] = packet
+
+
+def _remove_partial_packet(packet: Optional[dict[str, Any]]) -> None:
+    if not isinstance(packet, dict):
+        return
+    packet_key = _normalize_packet_key(packet.get("packet_key"))
+    unity_frame_count = _parse_optional_int(packet.get("unity_frame_count"))
+    if packet_key is not None and pending_packets_by_packet_key.get(packet_key) is packet:
+        pending_packets_by_packet_key.pop(packet_key, None)
+    if unity_frame_count is not None and pending_packets_by_unity_frame.get(unity_frame_count) is packet:
+        pending_packets_by_unity_frame.pop(unity_frame_count, None)
+
+
+def _find_partial_packet(
+    *,
+    packet_key: Optional[str],
+    unity_frame_count: Optional[int],
+) -> Optional[dict[str, Any]]:
+    normalized_packet_key = _normalize_packet_key(packet_key)
+    if normalized_packet_key is not None:
+        packet = pending_packets_by_packet_key.get(normalized_packet_key)
+        if packet is not None:
+            return packet
+    if unity_frame_count is not None:
+        packet = pending_packets_by_unity_frame.get(int(unity_frame_count))
+        if packet is not None:
+            existing_key = _normalize_packet_key(packet.get("packet_key"))
+            if normalized_packet_key is None or existing_key in (None, normalized_packet_key):
+                return packet
+    return None
+
+
+def _evict_stale_partial_packets(current_unity_frame_count: Optional[int], now: float) -> None:
+    global sync_packet_orphan_camera_count, sync_packet_orphan_vehicle_count
+    global sync_packet_timeout_count
+
+    to_remove: list[dict[str, Any]] = []
+    unique_packets = {id(packet): packet for packet in pending_packets_by_unity_frame.values()}
+    unique_packets.update({id(packet): packet for packet in pending_packets_by_packet_key.values()})
+    for packet in unique_packets.values():
+        too_old_by_time = (float(now) - float(packet.get("created_wall_time", now))) > PARTIAL_PACKET_MAX_AGE_SECONDS
+        packet_unity_frame_count = _parse_optional_int(packet.get("unity_frame_count"))
+        too_old_by_frame = (
+            current_unity_frame_count is not None
+            and packet_unity_frame_count is not None
+            and str(packet.get("join_source") or "") != PACKET_JOIN_SOURCE_PACKET_KEY
+            and int(packet_unity_frame_count) < int(current_unity_frame_count) - PARTIAL_PACKET_MAX_FRAME_LAG
+        )
+        if not too_old_by_time and not too_old_by_frame:
+            continue
+        if packet.get("front_camera") is not None and packet.get("vehicle_state") is None:
+            sync_packet_orphan_camera_count += 1
+        elif packet.get("vehicle_state") is not None and packet.get("front_camera") is None:
+            sync_packet_orphan_vehicle_count += 1
+        sync_packet_timeout_count += 1
+        to_remove.append(packet)
+
+    for packet in to_remove:
+        _remove_partial_packet(packet)
+
+
+def _snapshot_sync_packet(packet: dict[str, Any], now: Optional[float] = None) -> dict[str, Any]:
+    now_value = float(time.time() if now is None else now)
+    front = packet.get("front_camera") or {}
+    vehicle = packet.get("vehicle_state") or {}
+    front_arrival = _parse_optional_float(front.get("arrival_wall_time"))
+    vehicle_arrival = _parse_optional_float(vehicle.get("arrival_wall_time"))
+    publish_wall_time = _parse_optional_float(packet.get("publish_wall_time"))
+    packet_age_ms = (now_value - publish_wall_time) * 1000.0 if publish_wall_time is not None else None
+    front_age_ms = (now_value - front_arrival) * 1000.0 if front_arrival is not None else None
+    vehicle_age_ms = (now_value - vehicle_arrival) * 1000.0 if vehicle_arrival is not None else None
+    front_frame = _parse_optional_int(front.get("unity_frame_count"))
+    vehicle_frame = _parse_optional_int(vehicle.get("unity_frame_count"))
+    front_vehicle_frame_delta = None
+    if front_frame is not None and vehicle_frame is not None:
+        front_vehicle_frame_delta = int(front_frame - vehicle_frame)
+    front_time = _parse_optional_float(front.get("unity_time"))
+    vehicle_time = _parse_optional_float(vehicle.get("unity_time"))
+    front_vehicle_time_delta_ms = None
+    if front_time is not None and vehicle_time is not None:
+        front_vehicle_time_delta_ms = float(front_time - vehicle_time) * 1000.0
+    payload_oldest_age_ms = None
+    if len(assembled_packet_payload_queue) > 0:
+        oldest_publish_wall_time = _parse_optional_float(assembled_packet_payload_queue[0].get("publish_wall_time"))
+        if oldest_publish_wall_time is not None:
+            payload_oldest_age_ms = (now_value - oldest_publish_wall_time) * 1000.0
+    payload_bytes = 0
+    image_array = front.get("image")
+    if isinstance(image_array, np.ndarray):
+        payload_bytes = int(image_array.nbytes)
+    join_wait_ms = None
+    created_wall_time = _parse_optional_float(packet.get("created_wall_time"))
+    if created_wall_time is not None and publish_wall_time is not None:
+        join_wait_ms = max(0.0, (publish_wall_time - created_wall_time) * 1000.0)
+    return {
+        "packet_id": int(packet.get("packet_id", -1)),
+        "schema_version": int(packet.get("schema_version", SYNC_PACKET_SCHEMA_VERSION)),
+        "mode": PACKET_MODE_PACKET_SHADOW,
+        "packet_key": _normalize_packet_key(packet.get("packet_key")),
+        "unity_frame_count": _parse_optional_int(packet.get("unity_frame_count")),
+        "unity_time": _parse_optional_float(packet.get("unity_time")),
+        "join_source": str(packet.get("join_source") or PACKET_JOIN_SOURCE_NONE),
+        "join_key_present": bool(packet.get("join_key_present", False)),
+        "join_wait_ms": join_wait_ms,
+        "complete": bool(packet.get("front_camera") is not None and packet.get("vehicle_state") is not None),
+        "fallback_active": False,
+        "fallback_reason_code": PACKET_FALLBACK_NONE,
+        "missing_front": packet.get("front_camera") is None,
+        "missing_vehicle": packet.get("vehicle_state") is None,
+        "queue_depth": len(assembled_packet_queue),
+        "drop_count": int(sync_packet_drop_count),
+        "payload_queue_depth": len(assembled_packet_payload_queue),
+        "payload_drop_count": int(sync_packet_payload_drop_count),
+        "payload_oldest_age_ms": payload_oldest_age_ms,
+        "payload_bytes": payload_bytes,
+        "payload_fallback_reason_code": PACKET_FALLBACK_NONE,
+        "orphan_camera_count": int(sync_packet_orphan_camera_count),
+        "orphan_vehicle_count": int(sync_packet_orphan_vehicle_count),
+        "timeout_count": int(sync_packet_timeout_count),
+        "key_match_count": int(sync_packet_key_match_count),
+        "unity_fallback_count": int(sync_packet_unity_fallback_count),
+        "superseded_camera_count": int(sync_packet_superseded_camera_count),
+        "superseded_vehicle_count": int(sync_packet_superseded_vehicle_count),
+        "packet_superseded_camera_count": int(packet.get("superseded_camera_count", 0) or 0),
+        "packet_superseded_vehicle_count": int(packet.get("superseded_vehicle_count", 0) or 0),
+        "packet_age_ms": packet_age_ms,
+        "front_age_ms": front_age_ms,
+        "vehicle_age_ms": vehicle_age_ms,
+        "front_vehicle_frame_delta": front_vehicle_frame_delta,
+        "front_vehicle_time_delta_ms": front_vehicle_time_delta_ms,
+        "front_camera": {
+            "camera_id": front.get("camera_id"),
+            "frame_id": _parse_optional_int(front.get("frame_id")),
+            "timestamp": _parse_optional_float(front.get("timestamp")),
+            "unity_frame_count": front_frame,
+            "unity_time": front_time,
+        },
+        "vehicle_state": {
+            "request_id": vehicle.get("request_id"),
+            "unity_frame_count": vehicle_frame,
+            "unity_time": vehicle_time,
+        },
+    }
+
+
+def _sync_packet_payload_response(packet: dict[str, Any]) -> Response:
+    return _sync_packet_payload_response_with_selection(packet, None)
+
+
+def _payload_queue_oldest_age_ms(now_value: float) -> Optional[float]:
+    if len(assembled_packet_payload_queue) <= 0:
+        return None
+    oldest_publish_wall_time = _parse_optional_float(
+        assembled_packet_payload_queue[0].get("publish_wall_time")
+    )
+    if oldest_publish_wall_time is None:
+        return None
+    return (now_value - oldest_publish_wall_time) * 1000.0
+
+
+def _selection_headers(selection_meta: dict[str, Any]) -> dict[str, str]:
+    return {
+        "X-AV-Selection-Source": _hdr_str(selection_meta.get("payload_selection_source")),
+        "X-AV-Selection-Fallback-Active": "1"
+        if bool(selection_meta.get("selection_fallback_active", False))
+        else "0",
+        "X-AV-Selection-Fallback-Reason": _hdr_str(
+            selection_meta.get("selection_fallback_reason_code")
+        ),
+        "X-AV-Selected-Payload-Age-Ms": _hdr_str(
+            selection_meta.get("payload_selected_age_ms")
+        ),
+        "X-AV-Selected-Payload-Fresh": "1"
+        if bool(selection_meta.get("payload_selected_fresh", False))
+        else "0",
+        "X-AV-Selected-Payload-Warn-Age-Exceeded": "1"
+        if bool(selection_meta.get("payload_warn_age_exceeded", False))
+        else "0",
+        "X-AV-Stale-Drop-Count": str(
+            int(selection_meta.get("payload_stale_drop_count", 0) or 0)
+        ),
+        "X-AV-Drained-Count": str(
+            int(selection_meta.get("payload_drained_count", 0) or 0)
+        ),
+        "X-AV-Max-Drained-Age-Ms": _hdr_str(
+            selection_meta.get("payload_max_drained_age_ms")
+        ),
+        "X-AV-Server-Queue-Depth-After-Select": str(
+            int(selection_meta.get("payload_server_queue_depth_after_select", 0) or 0)
+        ),
+        "X-AV-Server-Oldest-Age-Ms-After-Select": _hdr_str(
+            selection_meta.get("payload_server_oldest_age_ms_after_select")
+        ),
+    }
+
+
+def _selection_404(detail: str, selection_meta: dict[str, Any]) -> HTTPException:
+    return HTTPException(
+        status_code=404,
+        detail=detail,
+        headers=_selection_headers(selection_meta),
+    )
+
+
+def _build_selection_meta(
+    *,
+    consume_policy: str,
+    selection_source: str,
+    selected_age_ms: Optional[float],
+    warn_age_ms: float,
+    fresh: bool,
+    drained_count: int,
+    stale_drop_count: int,
+    max_drained_age_ms: Optional[float],
+    fallback_active: bool,
+    fallback_reason_code: str,
+    queue_depth_after_select: int,
+    oldest_age_after_select_ms: Optional[float],
+) -> dict[str, Any]:
+    return {
+        "consume_policy": str(consume_policy or ""),
+        "payload_selection_source": str(selection_source or PACKET_SELECTION_SOURCE_NONE),
+        "payload_selected_age_ms": (
+            float(selected_age_ms) if selected_age_ms is not None else float("nan")
+        ),
+        "payload_selected_fresh": bool(fresh),
+        "payload_warn_age_exceeded": bool(
+            selected_age_ms is not None and math.isfinite(float(selected_age_ms)) and float(selected_age_ms) > float(warn_age_ms)
+        ),
+        "payload_stale_drop_count": int(stale_drop_count),
+        "payload_drained_count": int(drained_count),
+        "payload_max_drained_age_ms": (
+            float(max_drained_age_ms) if max_drained_age_ms is not None else float("nan")
+        ),
+        "selection_fallback_active": bool(fallback_active),
+        "selection_fallback_reason_code": str(fallback_reason_code or PACKET_FALLBACK_NONE),
+        "payload_server_queue_depth_after_select": int(queue_depth_after_select),
+        "payload_server_oldest_age_ms_after_select": (
+            float(oldest_age_after_select_ms)
+            if oldest_age_after_select_ms is not None
+            else float("nan")
+        ),
+    }
+
+
+def _select_sync_packet_payload(
+    *,
+    consume_policy: str,
+    max_age_ms: float,
+    warn_age_ms: float,
+    max_drain_count: int,
+    allow_stale_debug: bool,
+) -> tuple[Optional[dict[str, Any]], dict[str, Any]]:
+    now_value = float(time.time())
+    policy = str(consume_policy or PACKET_CONSUME_POLICY_FIFO_STRICT)
+
+    def _age_ms(packet: Optional[dict[str, Any]]) -> Optional[float]:
+        if not isinstance(packet, dict):
+            return None
+        publish_wall_time = _parse_optional_float(packet.get("publish_wall_time"))
+        if publish_wall_time is None:
+            return None
+        return (now_value - publish_wall_time) * 1000.0
+
+    if policy == PACKET_CONSUME_POLICY_LATEST_DEBUG:
+        selected = latest_sync_packet_payload_data
+        selected_age_ms = _age_ms(selected)
+        fresh = bool(
+            selected is not None
+            and (
+                allow_stale_debug
+                or (
+                    selected_age_ms is not None
+                    and math.isfinite(selected_age_ms)
+                    and selected_age_ms <= float(max_age_ms)
+                )
+            )
+        )
+        fallback_reason = PACKET_FALLBACK_NONE
+        if selected is None:
+            fallback_reason = PACKET_FALLBACK_PACKET_TIMEOUT
+        elif not fresh:
+            fallback_reason = PACKET_FALLBACK_PAYLOAD_AGE_BUDGET_EXCEEDED
+        meta = _build_selection_meta(
+            consume_policy=policy,
+            selection_source=PACKET_SELECTION_SOURCE_LATEST_DEBUG,
+            selected_age_ms=selected_age_ms,
+            warn_age_ms=warn_age_ms,
+            fresh=fresh,
+            drained_count=0,
+            stale_drop_count=0,
+            max_drained_age_ms=None,
+            fallback_active=not fresh,
+            fallback_reason_code=fallback_reason,
+            queue_depth_after_select=len(assembled_packet_payload_queue),
+            oldest_age_after_select_ms=_payload_queue_oldest_age_ms(now_value),
+        )
+        return (selected if fresh else None), meta
+
+    if len(assembled_packet_payload_queue) <= 0:
+        meta = _build_selection_meta(
+            consume_policy=policy,
+            selection_source=PACKET_SELECTION_SOURCE_SERVER,
+            selected_age_ms=None,
+            warn_age_ms=warn_age_ms,
+            fresh=False,
+            drained_count=0,
+            stale_drop_count=0,
+            max_drained_age_ms=None,
+            fallback_active=True,
+            fallback_reason_code=PACKET_FALLBACK_PACKET_TIMEOUT,
+            queue_depth_after_select=0,
+            oldest_age_after_select_ms=None,
+        )
+        return None, meta
+
+    if policy == PACKET_CONSUME_POLICY_FIFO_STRICT:
+        selected = assembled_packet_payload_queue.popleft()
+        selected_age_ms = _age_ms(selected)
+        fresh = bool(
+            selected_age_ms is not None
+            and math.isfinite(selected_age_ms)
+            and selected_age_ms <= float(max_age_ms)
+        )
+        meta = _build_selection_meta(
+            consume_policy=policy,
+            selection_source=PACKET_SELECTION_SOURCE_SERVER,
+            selected_age_ms=selected_age_ms,
+            warn_age_ms=warn_age_ms,
+            fresh=fresh,
+            drained_count=0,
+            stale_drop_count=0,
+            max_drained_age_ms=None,
+            fallback_active=not fresh,
+            fallback_reason_code=(
+                PACKET_FALLBACK_NONE
+                if fresh
+                else PACKET_FALLBACK_PAYLOAD_AGE_BUDGET_EXCEEDED
+            ),
+            queue_depth_after_select=len(assembled_packet_payload_queue),
+            oldest_age_after_select_ms=_payload_queue_oldest_age_ms(now_value),
+        )
+        return (selected if fresh else None), meta
+
+    newest = assembled_packet_payload_queue[-1]
+    older_packets = list(assembled_packet_payload_queue)[:-1]
+    drained_count = len(older_packets)
+    max_drained_age_ms = None
+    if older_packets:
+        ages = [_age_ms(packet) for packet in older_packets]
+        finite_ages = [float(age) for age in ages if age is not None and math.isfinite(age)]
+        if finite_ages:
+            max_drained_age_ms = max(finite_ages)
+    if max_drain_count >= 0 and drained_count > int(max_drain_count):
+        for _ in range(min(int(max_drain_count), len(assembled_packet_payload_queue))):
+            assembled_packet_payload_queue.popleft()
+        meta = _build_selection_meta(
+            consume_policy=policy,
+            selection_source=PACKET_SELECTION_SOURCE_SERVER,
+            selected_age_ms=_age_ms(newest),
+            warn_age_ms=warn_age_ms,
+            fresh=False,
+            drained_count=min(drained_count, int(max_drain_count)),
+            stale_drop_count=min(drained_count, int(max_drain_count)),
+            max_drained_age_ms=max_drained_age_ms,
+            fallback_active=True,
+            fallback_reason_code=PACKET_FALLBACK_PAYLOAD_DRAIN_CAP,
+            queue_depth_after_select=len(assembled_packet_payload_queue),
+            oldest_age_after_select_ms=_payload_queue_oldest_age_ms(now_value),
+        )
+        return None, meta
+
+    assembled_packet_payload_queue.clear()
+    selected_age_ms = _age_ms(newest)
+    fresh = bool(
+        selected_age_ms is not None
+        and math.isfinite(selected_age_ms)
+        and selected_age_ms <= float(max_age_ms)
+    )
+    meta = _build_selection_meta(
+        consume_policy=policy,
+        selection_source=PACKET_SELECTION_SOURCE_SERVER,
+        selected_age_ms=selected_age_ms,
+        warn_age_ms=warn_age_ms,
+        fresh=fresh,
+        drained_count=drained_count,
+        stale_drop_count=drained_count,
+        max_drained_age_ms=max_drained_age_ms,
+        fallback_active=not fresh,
+        fallback_reason_code=(
+            PACKET_FALLBACK_NONE
+            if fresh
+            else PACKET_FALLBACK_PAYLOAD_AGE_BUDGET_EXCEEDED
+        ),
+        queue_depth_after_select=len(assembled_packet_payload_queue),
+        oldest_age_after_select_ms=_payload_queue_oldest_age_ms(now_value),
+    )
+    return (newest if fresh else None), meta
+
+
+def _sync_packet_payload_response_with_selection(
+    packet: dict[str, Any],
+    selection_meta: Optional[dict[str, Any]],
+) -> Response:
+    now_value = float(time.time())
+    snapshot = _snapshot_sync_packet(packet, now=now_value)
+    if selection_meta:
+        snapshot.update(selection_meta)
+        snapshot["fallback_active"] = bool(
+            selection_meta.get("selection_fallback_active", False)
+        )
+        snapshot["fallback_reason_code"] = str(
+            selection_meta.get("selection_fallback_reason_code") or PACKET_FALLBACK_NONE
+        )
+        snapshot["payload_fallback_reason_code"] = str(
+            selection_meta.get("selection_fallback_reason_code") or PACKET_FALLBACK_NONE
+        )
+    front = packet.get("front_camera") or {}
+    vehicle = packet.get("vehicle_state") or {}
+    image_array = front.get("image")
+    if not isinstance(image_array, np.ndarray):
+        raise HTTPException(status_code=500, detail="Synchronized payload missing front image bytes")
+    vehicle_state = vehicle.get("state")
+    if not isinstance(vehicle_state, dict):
+        raise HTTPException(status_code=500, detail="Synchronized payload missing vehicle state snapshot")
+
+    image_bytes = image_array.tobytes(order="C")
+    metadata = {
+        "packet": snapshot,
+        "vehicle_state": vehicle_state,
+        "front_camera": {
+            "camera_id": front.get("camera_id"),
+            "timestamp": _parse_optional_float(front.get("timestamp")),
+            "frame_id": _parse_optional_int(front.get("frame_id")),
+            "unity_frame_count": _parse_optional_int(front.get("unity_frame_count")),
+            "unity_time": _parse_optional_float(front.get("unity_time")),
+            "shape": list(image_array.shape),
+            "dtype": str(image_array.dtype),
+        },
+    }
+    boundary = f"avsync-{int(snapshot.get('packet_id', -1))}-{int(now_value * 1000)}"
+    meta_bytes = json.dumps(metadata, separators=(",", ":")).encode("utf-8")
+    body = b"".join(
+        [
+            f"--{boundary}\r\n".encode("utf-8"),
+            b"Content-Type: application/json\r\n",
+            b'Content-Disposition: form-data; name="metadata"\r\n\r\n',
+            meta_bytes,
+            b"\r\n",
+            f"--{boundary}\r\n".encode("utf-8"),
+            b"Content-Type: application/octet-stream\r\n",
+            b'Content-Disposition: form-data; name="image"; filename="front_center.rgb"\r\n\r\n',
+            image_bytes,
+            b"\r\n",
+            f"--{boundary}--\r\n".encode("utf-8"),
+        ]
+    )
+    headers = {
+        "X-AV-Packet-Id": str(snapshot.get("packet_id", "")),
+        "X-AV-Unity-Frame-Count": _hdr_str(snapshot.get("unity_frame_count")),
+        "X-AV-Payload-Bytes": str(len(image_bytes)),
+    }
+    if selection_meta:
+        headers.update(_selection_headers(selection_meta))
+    return Response(content=body, media_type=f"multipart/mixed; boundary={boundary}", headers=headers)
+
+
+def _build_payload_packet(packet: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "packet_id": int(packet.get("packet_id", -1)),
+        "schema_version": int(packet.get("schema_version", SYNC_PACKET_SCHEMA_VERSION)),
+        "packet_key": _normalize_packet_key(packet.get("packet_key")),
+        "unity_frame_count": packet.get("unity_frame_count"),
+        "unity_time": packet.get("unity_time"),
+        "join_source": packet.get("join_source"),
+        "join_key_present": bool(packet.get("join_key_present", False)),
+        "created_wall_time": packet.get("created_wall_time"),
+        "publish_wall_time": packet.get("publish_wall_time"),
+        "superseded_camera_count": int(packet.get("superseded_camera_count", 0) or 0),
+        "superseded_vehicle_count": int(packet.get("superseded_vehicle_count", 0) or 0),
+        "front_camera": packet.get("front_camera"),
+        "vehicle_state": packet.get("vehicle_state"),
+    }
+
+
+def _publish_completed_packet(packet: dict[str, Any], now: float) -> None:
+    global latest_sync_packet_data, latest_sync_packet_payload_data
+    global sync_packet_drop_count, sync_packet_payload_drop_count
+    global sync_packet_key_match_count, sync_packet_unity_fallback_count
+
+    packet["publish_wall_time"] = float(now)
+    packet["queue_depth_at_publish"] = len(assembled_packet_queue) + 1
+    if str(packet.get("join_source") or "") == PACKET_JOIN_SOURCE_PACKET_KEY:
+        sync_packet_key_match_count += 1
+    else:
+        sync_packet_unity_fallback_count += 1
+    if assembled_packet_queue.maxlen is not None and len(assembled_packet_queue) >= assembled_packet_queue.maxlen:
+        sync_packet_drop_count += 1
+    metadata_packet = _build_payload_packet(packet)
+    assembled_packet_queue.append(metadata_packet)
+    latest_sync_packet_data = metadata_packet
+    if (
+        assembled_packet_payload_queue.maxlen is not None
+        and len(assembled_packet_payload_queue) >= assembled_packet_payload_queue.maxlen
+    ):
+        sync_packet_payload_drop_count += 1
+    payload_packet = _build_payload_packet(packet)
+    assembled_packet_payload_queue.append(payload_packet)
+    latest_sync_packet_payload_data = payload_packet
+
+
+def _attach_camera_component(
+    *,
+    packet_key: Optional[str],
+    unity_frame_count: Optional[int],
+    unity_time: Optional[float],
+    component: dict[str, Any],
+    now: float,
+) -> None:
+    global sync_packet_superseded_camera_count
+    normalized_packet_key = _normalize_packet_key(packet_key)
+    if unity_frame_count is None and normalized_packet_key is None:
+        return
+    _evict_stale_partial_packets(unity_frame_count, now)
+    packet = _find_partial_packet(
+        packet_key=normalized_packet_key,
+        unity_frame_count=unity_frame_count,
+    )
+    if packet is None:
+        packet = _make_partial_packet(
+            unity_frame_count=unity_frame_count,
+            unity_time=unity_time,
+            now=now,
+            packet_key=normalized_packet_key,
+        )
+        _register_partial_packet(packet)
+    elif packet.get("front_camera") is not None:
+        sync_packet_superseded_camera_count += 1
+        packet["superseded_camera_count"] = int(packet.get("superseded_camera_count", 0) or 0) + 1
+
+    if normalized_packet_key is not None and _normalize_packet_key(packet.get("packet_key")) is None:
+        packet["packet_key"] = normalized_packet_key
+        packet["join_source"] = PACKET_JOIN_SOURCE_PACKET_KEY
+        packet["join_key_present"] = True
+        _register_partial_packet(packet)
+    if packet.get("unity_frame_count") is None and unity_frame_count is not None:
+        packet["unity_frame_count"] = int(unity_frame_count)
+        _register_partial_packet(packet)
+    packet["front_camera"] = component
+    if packet.get("unity_time") is None and unity_time is not None:
+        packet["unity_time"] = float(unity_time)
+    if packet.get("vehicle_state") is not None:
+        _publish_completed_packet(packet, now)
+        _remove_partial_packet(packet)
+
+
+def _attach_vehicle_component(
+    *,
+    packet_key: Optional[str],
+    unity_frame_count: Optional[int],
+    unity_time: Optional[float],
+    component: dict[str, Any],
+    now: float,
+) -> None:
+    global sync_packet_superseded_vehicle_count
+    normalized_packet_key = _normalize_packet_key(packet_key)
+    if unity_frame_count is None and normalized_packet_key is None:
+        return
+    _evict_stale_partial_packets(unity_frame_count, now)
+    packet = _find_partial_packet(
+        packet_key=normalized_packet_key,
+        unity_frame_count=unity_frame_count,
+    )
+    if packet is None:
+        packet = _make_partial_packet(
+            unity_frame_count=unity_frame_count,
+            unity_time=unity_time,
+            now=now,
+            packet_key=normalized_packet_key,
+        )
+        _register_partial_packet(packet)
+    elif packet.get("vehicle_state") is not None:
+        sync_packet_superseded_vehicle_count += 1
+        packet["superseded_vehicle_count"] = int(packet.get("superseded_vehicle_count", 0) or 0) + 1
+
+    if normalized_packet_key is not None and _normalize_packet_key(packet.get("packet_key")) is None:
+        packet["packet_key"] = normalized_packet_key
+        packet["join_source"] = PACKET_JOIN_SOURCE_PACKET_KEY
+        packet["join_key_present"] = True
+        _register_partial_packet(packet)
+    if packet.get("unity_frame_count") is None and unity_frame_count is not None:
+        packet["unity_frame_count"] = int(unity_frame_count)
+        _register_partial_packet(packet)
+    packet["vehicle_state"] = component
+    if packet.get("unity_time") is None and unity_time is not None:
+        packet["unity_time"] = float(unity_time)
+    if packet.get("front_camera") is not None:
+        _publish_completed_packet(packet, now)
+        _remove_partial_packet(packet)
+
+
 def _hdr_str(value: Optional[Any]) -> str:
     if value is None:
         return ""
@@ -160,6 +866,8 @@ def _raw_camera_response(
     camera_key: str,
     timestamp_value: Optional[float],
     frame_id_value: Optional[int],
+    unity_frame_count: Optional[int],
+    unity_time: Optional[float],
     queue_depth: int,
     queue_capacity: int,
     drop_count: int,
@@ -181,6 +889,8 @@ def _raw_camera_response(
         "X-AV-Camera-Id": camera_key,
         "X-AV-Timestamp": _hdr_str(timestamp_value),
         "X-AV-Frame-Id": _hdr_str(frame_id_value),
+        "X-AV-Unity-Frame-Count": _hdr_str(unity_frame_count),
+        "X-AV-Unity-Time": _hdr_str(unity_time),
         "X-AV-Queue-Depth": str(int(queue_depth)),
         "X-AV-Queue-Capacity": str(int(queue_capacity)),
         "X-AV-Drop-Count": str(int(drop_count)),
@@ -200,6 +910,12 @@ async def _decode_and_store_camera_frame(
     timestamp: str,
     frame_id: str,
     camera_id: str,
+    sync_packet_key: Optional[str] = None,
+    unity_frame_count: Optional[int] = None,
+    unity_time: Optional[float] = None,
+    realtime_since_startup: Optional[float] = None,
+    unscaled_time: Optional[float] = None,
+    arrival_wall_time: Optional[float] = None,
 ) -> None:
     global latest_camera_frame, latest_frame_timestamp, latest_frame_id
     global latest_camera_frames, latest_frame_timestamps_by_id, latest_frame_ids_by_id
@@ -209,6 +925,7 @@ async def _decode_and_store_camera_frame(
     try:
         img = Image.open(io.BytesIO(image_data))
         img_array = np.array(img)
+        stored_arrival_wall_time = float(arrival_wall_time if arrival_wall_time is not None else time.time())
         latest_camera_frames[camera_id] = img_array
         latest_frame_timestamps_by_id[camera_id] = float(timestamp)
         latest_frame_ids_by_id[camera_id] = frame_id
@@ -226,12 +943,36 @@ async def _decode_and_store_camera_frame(
                 "timestamp": float(timestamp),
                 "frame_id": frame_id,
                 "camera_id": camera_id,
+                "sync_packet_key": _normalize_packet_key(sync_packet_key),
+                "unity_frame_count": unity_frame_count,
+                "unity_time": unity_time,
+                "realtime_since_startup": realtime_since_startup,
+                "unscaled_time": unscaled_time,
+                "arrival_wall_time": stored_arrival_wall_time,
             }
         )
         if camera_id == "front_center":
             latest_camera_frame = img_array
             latest_frame_timestamp = float(timestamp)
             latest_frame_id = frame_id
+        _attach_camera_component(
+            packet_key=_normalize_packet_key(sync_packet_key),
+            unity_frame_count=unity_frame_count,
+            unity_time=unity_time,
+            component={
+                "camera_id": camera_id,
+                "timestamp": float(timestamp),
+                "frame_id": frame_id,
+                "sync_packet_key": _normalize_packet_key(sync_packet_key),
+                "unity_frame_count": unity_frame_count,
+                "unity_time": unity_time,
+                "realtime_since_startup": realtime_since_startup,
+                "unscaled_time": unscaled_time,
+                "arrival_wall_time": stored_arrival_wall_time,
+                "image": img_array,
+            },
+            now=stored_arrival_wall_time,
+        )
     finally:
         duration = time.time() - start_time
         if duration > SLOW_REQUEST_SECONDS:
@@ -272,6 +1013,10 @@ class VehicleState(BaseModel):
     requestId: int = 0
     unitySendRealtime: float = 0.0
     unitySendUtcMs: int = 0
+    syncPacketKey: Optional[str] = None
+    syncPacketCameraFrameId: Optional[int] = None
+    syncPacketCameraUnityFrameCount: Optional[int] = None
+    syncPacketCameraTimestamp: Optional[float] = None
     # Ground truth lane line positions (optional)
     # These represent the painted lane line markings, not the drivable lanes
     groundTruthLeftLaneLineX: float = 0.0  # Left lane line (painted marking) position
@@ -382,6 +1127,8 @@ class VehicleState(BaseModel):
     radar_fwd_distance_m: float = 0.0     # noisy range to lead vehicle (m)
     radar_fwd_range_rate_mps: float = 0.0 # Doppler range rate (+closing, m/s)
     radar_fwd_snr: float = 0.0            # signal-to-noise proxy (1.0 at 30m)
+    lead_collision_detected: bool = False
+    lead_collision_override_active: bool = False
 
 
 class ControlCommand(BaseModel):
@@ -441,6 +1188,9 @@ async def receive_camera_frame(
     timestamp: str = Form(...),
     frame_id: str = Form(...),
     camera_id: Optional[str] = Form(None),
+    sync_packet_key: Optional[str] = Form(None),
+    unity_frame_count: Optional[str] = Form(None),
+    unity_time: Optional[str] = Form(None),
     realtime_since_startup: Optional[str] = Form(None),
     unscaled_time: Optional[str] = Form(None),
     time_scale: Optional[str] = Form(None)
@@ -503,16 +1253,10 @@ async def receive_camera_frame(
                     )
             last_camera_timestamp[camera_key] = ts_value
 
-        def _parse_optional(value: Optional[str]) -> Optional[float]:
-            if value is None:
-                return None
-            try:
-                return float(value)
-            except ValueError:
-                return None
-
-        realtime_value = _parse_optional(realtime_since_startup)
-        unscaled_value = _parse_optional(unscaled_time)
+        realtime_value = _parse_optional_float(realtime_since_startup)
+        unscaled_value = _parse_optional_float(unscaled_time)
+        unity_time_value = _parse_optional_float(unity_time)
+        unity_frame_count_value = _parse_optional_int(unity_frame_count)
         if realtime_value is not None and last_realtime is not None:
             rt_gap = realtime_value - last_realtime
             if rt_gap > UNITY_TIME_GAP_SECONDS:
@@ -564,12 +1308,26 @@ async def receive_camera_frame(
         # Decode and store every frame to preserve deterministic capture ordering.
         global camera_decode_in_flight, camera_drop_count
         camera_decode_in_flight[camera_key] = True
-        await _decode_and_store_camera_frame(image_data, timestamp, frame_id, camera_key)
+        await _decode_and_store_camera_frame(
+            image_data,
+            timestamp,
+            frame_id,
+            camera_key,
+            sync_packet_key=_normalize_packet_key(sync_packet_key),
+            unity_frame_count=unity_frame_count_value,
+            unity_time=unity_time_value,
+            realtime_since_startup=realtime_value,
+            unscaled_time=unscaled_value,
+            arrival_wall_time=now,
+        )
         response = {
             "status": "received",
             "frame_id": frame_id,
             "timestamp": timestamp,
             "camera_id": camera_key,
+            "sync_packet_key": _normalize_packet_key(sync_packet_key),
+            "unity_frame_count": unity_frame_count_value,
+            "unity_time": unity_time_value,
             "dropped": False,
         }
         duration = time.time() - start_time
@@ -602,6 +1360,25 @@ async def receive_vehicle_state(state: VehicleState):
     latest_vehicle_state, replacements = _sanitize_json_compatible(raw_state)
     _record_vehicle_state_sanitization(replacements, context="receive_vehicle_state")
     vehicle_state_queue.append(latest_vehicle_state)
+    _attach_vehicle_component(
+        packet_key=_normalize_packet_key(state.syncPacketKey),
+        unity_frame_count=_parse_optional_int(state.unityFrameCount),
+        unity_time=_parse_optional_float(state.unityTime),
+        component={
+            "request_id": state.requestId,
+            "sync_packet_key": _normalize_packet_key(state.syncPacketKey),
+            "sync_packet_camera_frame_id": _parse_optional_int(state.syncPacketCameraFrameId),
+            "sync_packet_camera_unity_frame_count": _parse_optional_int(
+                state.syncPacketCameraUnityFrameCount
+            ),
+            "sync_packet_camera_timestamp": _parse_optional_float(state.syncPacketCameraTimestamp),
+            "unity_frame_count": _parse_optional_int(state.unityFrameCount),
+            "unity_time": _parse_optional_float(state.unityTime),
+            "arrival_wall_time": time.time(),
+            "state": dict(latest_vehicle_state or {}),
+        },
+        now=time.time(),
+    )
 
     global last_state_arrival_time, last_unity_send_realtime, last_unity_time, speed_limit_zero_streak
     duration = time.time() - start_time
@@ -826,6 +1603,8 @@ async def get_latest_camera_frame(camera_id: str = "front_center"):
     img_base64 = base64.b64encode(img_bytes).decode()
     
     frame_id_value = None
+    unity_frame_value = None
+    unity_time_value = None
     try:
         raw_frame_id = latest_frame_ids_by_id.get(camera_key)
         if raw_frame_id is None and camera_key == "front_center":
@@ -837,6 +1616,10 @@ async def get_latest_camera_frame(camera_id: str = "front_center"):
     if timestamp_value is None and camera_key == "front_center":
         timestamp_value = latest_frame_timestamp
     queue_obj = camera_frame_queues.get(camera_key)
+    if queue_obj is not None and len(queue_obj) > 0:
+        latest_item = queue_obj[-1]
+        unity_frame_value = _parse_optional_int(latest_item.get("unity_frame_count"))
+        unity_time_value = _parse_optional_float(latest_item.get("unity_time"))
     queue_depth = len(queue_obj) if queue_obj is not None else 0
     queue_capacity = int(queue_obj.maxlen) if queue_obj is not None and queue_obj.maxlen is not None else MAX_CAMERA_QUEUE_SIZE
     drop_count = int(camera_drop_count.get(camera_key, 0))
@@ -850,6 +1633,8 @@ async def get_latest_camera_frame(camera_id: str = "front_center"):
         "image": img_base64,
         "timestamp": timestamp_value,
         "frame_id": frame_id_value,
+        "unity_frame_count": unity_frame_value,
+        "unity_time": unity_time_value,
         "camera_id": camera_key,
         "shape": list(frame.shape),
         # Stream freshness/queue diagnostics (instrumentation-only)
@@ -879,6 +1664,8 @@ async def get_latest_camera_frame_raw(camera_id: str = "front_center"):
         raise HTTPException(status_code=404, detail="No camera frame available")
 
     frame_id_value = None
+    unity_frame_value = None
+    unity_time_value = None
     try:
         raw_frame_id = latest_frame_ids_by_id.get(camera_key)
         if raw_frame_id is None and camera_key == "front_center":
@@ -890,6 +1677,10 @@ async def get_latest_camera_frame_raw(camera_id: str = "front_center"):
     if timestamp_value is None and camera_key == "front_center":
         timestamp_value = latest_frame_timestamp
     queue_obj = camera_frame_queues.get(camera_key)
+    if queue_obj is not None and len(queue_obj) > 0:
+        latest_item = queue_obj[-1]
+        unity_frame_value = _parse_optional_int(latest_item.get("unity_frame_count"))
+        unity_time_value = _parse_optional_float(latest_item.get("unity_time"))
     queue_depth = len(queue_obj) if queue_obj is not None else 0
     queue_capacity = int(queue_obj.maxlen) if queue_obj is not None and queue_obj.maxlen is not None else MAX_CAMERA_QUEUE_SIZE
     drop_count = int(camera_drop_count.get(camera_key, 0))
@@ -905,6 +1696,8 @@ async def get_latest_camera_frame_raw(camera_id: str = "front_center"):
         camera_key=camera_key,
         timestamp_value=timestamp_value,
         frame_id_value=frame_id_value,
+        unity_frame_count=unity_frame_value,
+        unity_time=unity_time_value,
         queue_depth=queue_depth,
         queue_capacity=queue_capacity,
         drop_count=drop_count,
@@ -943,6 +1736,8 @@ async def get_next_camera_frame(camera_id: str = "front_center"):
         "image": img_base64,
         "timestamp": item.get("timestamp"),
         "frame_id": frame_id_value,
+        "unity_frame_count": _parse_optional_int(item.get("unity_frame_count")),
+        "unity_time": _parse_optional_float(item.get("unity_time")),
         "camera_id": camera_key,
         "shape": list(frame.shape),
         "queue_remaining": len(queue),
@@ -993,6 +1788,8 @@ async def get_next_camera_frame_raw(camera_id: str = "front_center"):
         camera_key=camera_key,
         timestamp_value=float(item.get("timestamp")) if item.get("timestamp") is not None else None,
         frame_id_value=frame_id_value,
+        unity_frame_count=_parse_optional_int(item.get("unity_frame_count")),
+        unity_time=_parse_optional_float(item.get("unity_time")),
         queue_depth=queue_depth,
         queue_capacity=queue_capacity,
         drop_count=drop_count,
@@ -1034,6 +1831,52 @@ async def get_next_vehicle_state():
     return sanitized_state
 
 
+@app.get("/api/sim/packet/latest")
+async def get_latest_sync_packet():
+    """Return the most recent complete synchronized front-camera + vehicle-state packet."""
+    if latest_sync_packet_data is None:
+        raise HTTPException(status_code=404, detail="No synchronized packet available")
+    return _snapshot_sync_packet(latest_sync_packet_data)
+
+
+@app.get("/api/sim/packet/next")
+async def get_next_sync_packet():
+    """Return the next synchronized packet in FIFO order."""
+    if len(assembled_packet_queue) == 0:
+        raise HTTPException(status_code=404, detail="No synchronized packet available")
+    packet = assembled_packet_queue.popleft()
+    return _snapshot_sync_packet(packet)
+
+
+@app.get("/api/sim/packet/latest/raw")
+async def get_latest_sync_packet_raw():
+    """Return the most recent synchronized packet with raw image payload and full vehicle state."""
+    if latest_sync_packet_payload_data is None:
+        raise HTTPException(status_code=404, detail="No synchronized payload packet available")
+    return _sync_packet_payload_response(latest_sync_packet_payload_data)
+
+
+@app.get("/api/sim/packet/next/raw")
+async def get_next_sync_packet_raw(
+    consume_policy: str = PACKET_CONSUME_POLICY_FIFO_STRICT,
+    max_age_ms: float = 250.0,
+    warn_age_ms: float = 125.0,
+    max_drain_count: int = 128,
+    allow_stale_debug: bool = False,
+):
+    """Return a synchronized payload packet selected according to the requested consume policy."""
+    packet, selection_meta = _select_sync_packet_payload(
+        consume_policy=consume_policy,
+        max_age_ms=max_age_ms,
+        warn_age_ms=warn_age_ms,
+        max_drain_count=max_drain_count,
+        allow_stale_debug=allow_stale_debug,
+    )
+    if packet is None:
+        raise _selection_404("No synchronized payload packet available", selection_meta)
+    return _sync_packet_payload_response_with_selection(packet, selection_meta)
+
+
 @app.get("/api/health")
 async def health_check():
     """Health check endpoint."""
@@ -1042,9 +1885,22 @@ async def health_check():
         "timestamp": time.time(),
         "has_camera_frame": latest_camera_frames.get("front_center") is not None or latest_camera_frame is not None,
         "has_vehicle_state": latest_vehicle_state is not None,
+        "has_sync_packet": latest_sync_packet_data is not None,
+        "has_sync_packet_payload": latest_sync_packet_payload_data is not None,
         "vehicle_state_sanitize_events": vehicle_state_sanitize_events,
         "vehicle_state_sanitize_values": vehicle_state_sanitize_values,
         "max_camera_queue_size": MAX_CAMERA_QUEUE_SIZE,
+        "sync_packet_queue_depth": len(assembled_packet_queue),
+        "sync_packet_drop_count": sync_packet_drop_count,
+        "sync_packet_payload_queue_depth": len(assembled_packet_payload_queue),
+        "sync_packet_payload_drop_count": sync_packet_payload_drop_count,
+        "sync_packet_orphan_camera_count": sync_packet_orphan_camera_count,
+        "sync_packet_orphan_vehicle_count": sync_packet_orphan_vehicle_count,
+        "sync_packet_timeout_count": sync_packet_timeout_count,
+        "sync_packet_key_match_count": sync_packet_key_match_count,
+        "sync_packet_unity_fallback_count": sync_packet_unity_fallback_count,
+        "sync_packet_superseded_camera_count": sync_packet_superseded_camera_count,
+        "sync_packet_superseded_vehicle_count": sync_packet_superseded_vehicle_count,
     }
 
 

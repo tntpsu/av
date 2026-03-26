@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from typing import Optional, Dict, Any, List
 import numpy as np
 
+from sync_contract import PACKET_MODE_LATEST_PARALLEL
+
 
 @dataclass
 class CameraFrame:
@@ -37,6 +39,52 @@ class VehicleState:
     unity_smooth_delta_time: float = 0.0
     unity_unscaled_delta_time: float = 0.0
     unity_time_scale: float = 1.0
+    sync_packet_mode: str = PACKET_MODE_LATEST_PARALLEL
+    sync_packet_schema_version: int = 0
+    sync_packet_id: int = -1
+    sync_packet_unity_frame_count: int = -1
+    sync_packet_consume_policy: str = ""
+    sync_packet_complete: Optional[bool] = None
+    sync_packet_fallback_active: Optional[bool] = None
+    sync_packet_fallback_reason_code: str = ""
+    sync_packet_queue_depth: int = 0
+    sync_packet_drop_count: int = 0
+    sync_packet_payload_queue_depth: int = 0
+    sync_packet_payload_drop_count: int = 0
+    sync_packet_orphan_camera_count: int = 0
+    sync_packet_orphan_vehicle_count: int = 0
+    sync_packet_timeout_count: int = 0
+    sync_packet_skipped_unity_frames: int = 0
+    sync_packet_age_ms: float = np.nan
+    sync_packet_payload_oldest_age_ms: float = np.nan
+    sync_packet_payload_bytes: int = 0
+    sync_packet_payload_fallback_reason_code: str = ""
+    sync_packet_payload_selected_age_ms: float = np.nan
+    sync_packet_payload_selected_fresh: Optional[bool] = None
+    sync_packet_payload_warn_age_exceeded: Optional[bool] = None
+    sync_packet_payload_stale_drop_count: int = 0
+    sync_packet_payload_drained_count: int = 0
+    sync_packet_payload_max_drained_age_ms: float = np.nan
+    sync_packet_payload_selection_source: str = ""
+    sync_packet_payload_selection_fallback_active: Optional[bool] = None
+    sync_packet_payload_selection_fallback_reason_code: str = ""
+    sync_packet_payload_server_queue_depth_after_select: int = 0
+    sync_packet_payload_server_oldest_age_ms_after_select: float = np.nan
+    sync_packet_join_source: str = ""
+    sync_packet_join_key_present: Optional[bool] = None
+    sync_packet_join_wait_ms: float = np.nan
+    sync_packet_key_match_count: int = 0
+    sync_packet_unity_fallback_count: int = 0
+    sync_packet_superseded_camera_count: int = 0
+    sync_packet_superseded_vehicle_count: int = 0
+    sync_packet_packet_superseded_camera_count: int = 0
+    sync_packet_packet_superseded_vehicle_count: int = 0
+    sync_front_age_ms: float = np.nan
+    sync_vehicle_age_ms: float = np.nan
+    sync_front_vehicle_frame_delta: float = np.nan
+    sync_front_vehicle_time_delta_ms: float = np.nan
+    sync_packet_missing_front: Optional[bool] = None
+    sync_packet_missing_vehicle: Optional[bool] = None
     # Ground truth lane positions (optional, from Unity)
     ground_truth_left_lane_line_x: float = 0.0  # Left lane line (painted marking) position
     ground_truth_right_lane_line_x: float = 0.0  # Right lane line (painted marking) position
@@ -171,10 +219,16 @@ class VehicleState:
     radar_fwd_distance_m: float = 0.0      # EMA-filtered range to lead vehicle (m)
     radar_fwd_range_rate_mps: float = 0.0  # EMA-filtered range rate (+ = closing)
     radar_fwd_snr: float = 0.0             # Signal-to-noise proxy [0, 1]
+    lead_collision_detected: bool = False
+    lead_collision_override_active: bool = False
     acc_active: float = 0.0               # 1.0 when ACC is engaged
     acc_target_gap_m: float = 0.0         # IDM desired gap (m)
     acc_gap_error_m: float = 0.0          # actual_gap − target_gap (m)
     acc_ttc_s: float = 999.0              # Time-to-collision (s); 999 = no target
+    acc_state_code: str = ""
+    acc_target_speed_mps: float = 0.0
+    acc_request_estop: bool = False
+    acc_safety_mode_code: str = "none"
 
 
 @dataclass
@@ -358,13 +412,34 @@ class ControlCommand:
     perf_control_ms: Optional[float] = None
     perf_hdf5_write_ms: Optional[float] = None
     perf_wait_input_ms: Optional[float] = None
+    teleport_detected: bool = False
+    teleport_jump_m: Optional[float] = None
+    teleport_guard_suppressed: bool = False
+    teleport_continuity_suspect: bool = False
+    teleport_guard_reason_code: str = ""
+    teleport_dynamic_threshold_m: Optional[float] = None
+    teleport_hard_override_threshold_m: Optional[float] = None
+    teleport_effective_dt_s: Optional[float] = None
+    teleport_unity_dt_s: Optional[float] = None
     # Target speed diagnostics
     target_speed_raw: Optional[float] = None
     target_speed_post_limits: Optional[float] = None
     target_speed_planned: Optional[float] = None
     target_speed_final: Optional[float] = None
+    governor_target_speed_mps: Optional[float] = None
+    acc_target_speed_mps: Optional[float] = None
+    planner_target_speed_applied_mps: Optional[float] = None
+    final_longitudinal_target_mps: Optional[float] = None
+    final_longitudinal_owner_code: str = ""
+    reference_velocity_source_code: str = ""
     target_speed_slew_active: bool = False
     target_speed_ramp_active: bool = False
+    reference_velocity_effective: Optional[float] = None
+    post_jump_cooldown_active: bool = False
+    post_jump_cooldown_frames_remaining: int = 0
+    post_jump_reason_code: str = ""
+    teleport_expected_motion_m: Optional[float] = None
+    teleport_motion_ratio: Optional[float] = None
     # Speed governor diagnostics
     speed_governor_active_limiter: str = "none"
     speed_governor_active_limiter_code: int = 0

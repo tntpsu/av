@@ -1318,6 +1318,156 @@ would show up as a `Δsteering` gate failure for reasons unrelated to ACC. Optio
 
 ---
 
+## Recovery Phase F — Longitudinal Owner Simplification and Lead-Contact Attribution
+
+This phase is required because the current highway ACC path shows a split authority bug:
+
+- ACC reduces `target_speed_post_limits`
+- but `target_speed_final`, planner target speed, `trajectory/reference_point_velocity`, and `reference_velocity_effective` stay at free-flow
+
+This phase also closes the attribution gap around the Unity lead-collision override so the next failure can be identified directly from HDF5, CLI analysis, and PhilViz.
+
+### Architectural goal
+
+Reduce the longitudinal path to one canonical owner chain:
+
+1. free-flow target
+2. governor target
+3. ACC target
+4. safety target
+5. final longitudinal target
+
+Only one stage should resolve the final target. Every downstream speed field must be derived from that result instead of carrying partially-overlapping ownership.
+
+### Phase F1 — Canonical longitudinal decision object
+
+- [ ] **F1.1** `/Users/philiptullai/Documents/Coding/av/av_stack/orchestrator.py` — introduce one per-frame longitudinal decision structure or dict returned by a dedicated resolver such as `_pf_resolve_longitudinal_target(...)`
+- [ ] **F1.2** `/Users/philiptullai/Documents/Coding/av/av_stack/orchestrator.py` — move final speed ownership out of `_pf_run_speed_governor()` and `_pf_apply_acc_override()` mutation patterns; `gov['adjusted_target_speed']` should stop being the hidden shared mutable authority
+- [ ] **F1.3** `/Users/philiptullai/Documents/Coding/av/av_stack/orchestrator.py` — final decision must explicitly contain:
+  - `free_flow_target_mps`
+  - `governor_target_mps`
+  - `acc_target_mps`
+  - `safety_target_mps`
+  - `final_target_mps`
+  - `final_owner_code`
+  - `final_owner_reason`
+  - `acc_request_estop`
+- [ ] **F1.4** `/Users/philiptullai/Documents/Coding/av/av_stack/orchestrator.py` — after final decision resolves, push the same `final_target_mps` into:
+  - planner target speed
+  - reference-point velocity
+  - `target_speed_final`
+  - `reference_velocity_effective`
+- [ ] **F1.5** `/Users/philiptullai/Documents/Coding/av/trajectory/models/trajectory_planner.py` — stop relying on stale planner-internal `self.target_speed` as the hidden owner for runtime longitudinal authority; planner velocity generation must consume the resolved final target supplied for the current frame
+
+### Phase F2 — ACC state and collapsed-gap safety
+
+- [ ] **F2.1** `/Users/philiptullai/Documents/Coding/av/control/acc_controller.py` — export ACC state explicitly per frame:
+  - `FREE_FLOW`
+  - `ACC_ACTIVE`
+  - `EMERGENCY_BRAKE`
+  - `TTC_ESTOP`
+  - `CUTOUT`
+  - `DETECTION_LOSS`
+- [ ] **F2.2** `/Users/philiptullai/Documents/Coding/av/control/acc_controller.py` — add a collapsed-gap safety branch that does not depend on positive range rate; a detected lead with gap already below the emergency floor must still request a stop or emergency brake
+- [ ] **F2.3** `/Users/philiptullai/Documents/Coding/av/control/acc_controller.py` — record whether the stop came from:
+  - TTC critical
+  - emergency brake by closing rate
+  - collapsed-gap override
+  - detection loss fallback
+- [ ] **F2.4** `/Users/philiptullai/Documents/Coding/av/unity/AVSimulation/Assets/Scripts/AVBridge.cs` — surface a dedicated lead-collision / collision-override flag in vehicle state instead of forcing analysts to infer it indirectly from `radar_fwd_distance_m = 0.1`
+- [ ] **F2.5** `/Users/philiptullai/Documents/Coding/av/unity/AVSimulation/Assets/Scripts/LeadVehicle.cs` — keep the existing collision behavior, but publish an explicit telemetry bit or reason field when collision/trigger overlap is active
+
+### Phase F3 — Recorder contract additions
+
+- [ ] **F3.1** `/Users/philiptullai/Documents/Coding/av/data/formats/data_format.py` — add:
+  - `acc_state_code`
+  - `acc_target_speed_mps`
+  - `acc_request_estop`
+  - `acc_safety_mode_code`
+  - `lead_collision_override_active`
+  - `lead_collision_detected`
+  - `planner_target_speed_applied_mps`
+  - `final_longitudinal_target_mps`
+  - `final_longitudinal_owner_code`
+  - `final_longitudinal_owner_reason`
+  - `reference_velocity_source_code`
+- [ ] **F3.2** `/Users/philiptullai/Documents/Coding/av/data/recorder.py` — persist those fields end-to-end into HDF5
+
+### Phase F4 — Debug tool and attribution upgrades
+
+- [ ] **F4.1** `/Users/philiptullai/Documents/Coding/av/tools/drive_summary_core.py` — add a `longitudinal_owner` summary block with:
+  - owner-mode histogram
+  - ACC target vs final target disagreement rate
+  - planner target vs final target disagreement rate
+  - collapsed-gap override rate
+  - lead-collision override active rate
+- [ ] **F4.2** `/Users/philiptullai/Documents/Coding/av/tools/analyze/analyze_drive_overall.py` — print a dedicated authority waterfall section for ACC recordings:
+  - free-flow
+  - governor
+  - ACC
+  - safety
+  - final target
+  - reference velocity
+- [ ] **F4.3** `/Users/philiptullai/Documents/Coding/av/tools/analyze/acc_pipeline_analysis.py` — add cards for:
+  - ACC state distribution
+  - final owner distribution
+  - ACC-to-final target mismatch events
+  - lead-collision override windows
+- [ ] **F4.4** `/Users/philiptullai/Documents/Coding/av/tools/debug_visualizer/backend/acc_pipeline.py` — expose the same waterfall and state fields to PhilViz
+- [ ] **F4.5** `/Users/philiptullai/Documents/Coding/av/tools/debug_visualizer/server.py` — add frame inspector fields for:
+  - `acc_state_code`
+  - `acc_target_speed_mps`
+  - `planner_target_speed_applied_mps`
+  - `final_longitudinal_target_mps`
+  - `final_longitudinal_owner_code`
+  - `reference_velocity_source_code`
+  - `lead_collision_override_active`
+- [ ] **F4.6** `/Users/philiptullai/Documents/Coding/av/tools/debug_visualizer/visualizer.js` — add a `Longitudinal Owner` card and timeline bands for:
+  - ACC state
+  - final owner
+  - lead-collision override
+  - target mismatch episodes
+- [ ] **F4.7** `/Users/philiptullai/Documents/Coding/av/tools/debug_visualizer/backend/issue_detector.py` — add new issue modes:
+  - `acc_owner_mismatch`
+  - `acc_collapsed_gap_no_stop`
+  - `lead_collision_override_active`
+- [ ] **F4.8** `/Users/philiptullai/Documents/Coding/av/tools/debug_visualizer/backend/triage_engine.py` — add pattern signatures:
+  - `acc_target_not_applied`
+  - `lead_contact_following_invalid`
+
+### Phase F5 — Tests
+
+- [ ] **F5.1** `/Users/philiptullai/Documents/Coding/av/tests/test_acc_controller.py` — add state-code and collapsed-gap tests:
+  - collapsed gap with zero range-rate still requests stop
+  - state code output matches the branch taken
+- [ ] **F5.2** `/Users/philiptullai/Documents/Coding/av/tests/test_acc_replay.py` — add replay assertions for target ownership:
+  - when ACC target drops, `final_longitudinal_target_mps` and `reference_velocity_effective` drop with it
+  - no mismatch between final target and planner-applied target in active ACC frames
+- [ ] **F5.3** `/Users/philiptullai/Documents/Coding/av/tests/test_control_command_hdf5.py` — verify new ownership and collision-override datasets exist
+- [ ] **F5.4** `/Users/philiptullai/Documents/Coding/av/tests/test_drive_summary_contract.py` — verify summary fields load and legacy recordings degrade cleanly
+- [ ] **F5.5** `/Users/philiptullai/Documents/Coding/av/tests/test_visualizer_transport_parity.py` or equivalent PhilViz parity test — ensure CLI and PhilViz agree on longitudinal owner and lead-collision attribution
+
+### Phase F6 — Live validation
+
+- [ ] Re-run `/Users/philiptullai/Documents/Coding/av/tracks/scenarios/highway_h2_steady.yml` with `/Users/philiptullai/Documents/Coding/av/config/acc_highway.yaml`
+- [ ] Verify on the newest recording:
+  - no sustained `0.1 m` lead-contact state without a commanded stop
+  - `acc_target_speed_mps`, `final_longitudinal_target_mps`, `trajectory/reference_point_velocity`, and `reference_velocity_effective` agree within tolerance during ACC-active frames
+  - PhilViz and CLI both attribute the final owner directly
+- [ ] Only after this passes should late-drive swerving be treated as a standalone lateral problem
+
+### Acceptance gates for Recovery Phase F
+
+1. No frame may show `acc_active=1`, `acc_gap_error_m << 0`, and `reference_velocity_effective` still pinned at free-flow.
+2. A detected lead at collapsed gap must trigger either:
+   - emergency stop
+   - emergency brake
+   - explicit invalid-run/contact labeling
+3. Debug tooling must expose the final longitudinal owner without manual inference.
+4. The latest highway ACC run must no longer produce a near-miss driven by owner mismatch.
+
+---
+
 ## Revision History
 
 | Date | Change |
@@ -1329,3 +1479,4 @@ would show up as a `Δsteering` gate failure for reasons unrelated to ACC. Optio
 | 2026-03-23 | **Testing strategy section added.** 4-layer test coverage: L1 unit (52 tests, per-phase), L2 replay synthetic (`make_acc_recording()` + `test_acc_replay.py`, 15 tests), L3 regression guard (existing `test_comfort_gate_replay` + `test_scoring_regression` + golden recording registration procedure after Phase E), L4 invariant/property/fuzz (`test_acc_properties.py`, 10 tests — IDM gap-positive invariant, EMA bounded, safety fires before contact, collision override). Phase T checklist added between Phase A and Phase B. Total new tests raised to ~67. |
 | 2026-03-23 | **Lead vehicle clarifications:** `SpeedProfiler.cs` as separate component. `respect_speed_limits: true` default — caps profile speed at per-segment limit via `min(profile_speed, segment_limit)`. Two-step enable documented: `lead_vehicle.enabled` (track YAML, spawns Unity object) and `acc.enabled` (config overlay, arms Python controller) are independent. Default first-enable config: `start_distance_m: 40m`, `speed_mps: 18m/s`, `respect_speed_limits: true`. Implementation checklist added. |
 | 2026-03-23 | **Chief AV/release engineering review — 12 gaps addressed.** P0: (1) Bumpless transfer added — disengage ramp `disengage_ramp_mps2=2.0 m/s²` + soft-engage seed + EMA cold-start re-init; (2) ACC state machine fully documented with 6-state priority table and all transition rules; (3) Grade FF + ACC interaction proven architecturally non-conflicting — documented with math; (4) ≥3 runs required for safety-gated scenarios H3/H5/H6/A2/G2. P1: A2 NMPC prerequisite gate added; roll-back contract (`acc_active_pct` guard in every consumer) made explicit acceptance criterion; lead vehicle Unity layer exclusion from ego camera culling mask; CI timing estimated (< 2s for all new tests). P2: `radar_fwd_*` field naming applied throughout (Step 7 compatible); cut-in explicitly OOD; CPU budget < 10μs noted. Total risks table expanded from 7 → 17 rows. |
+| 2026-03-26 | **Recovery Phase F added.** Documents the current highway ACC owner-mismatch failure, the collapsed-gap safety gap, and a file-by-file implementation checklist to simplify the longitudinal authority chain and add direct lead-contact attribution to HDF5, CLI analysis, and PhilViz. |

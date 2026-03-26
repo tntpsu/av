@@ -24,6 +24,17 @@ from trajectory.utils import (
     CURVE_SCHEDULER_MODE_PHASE_ACTIVE,
     smooth_curvature_distance,
 )
+from sync_contract import (
+    EFFECTIVE_TARGET_REASON_ACC_FOLLOW,
+    EFFECTIVE_TARGET_REASON_CURVE_CAP,
+    EFFECTIVE_TARGET_REASON_FALLBACK_UNKNOWN,
+    EFFECTIVE_TARGET_REASON_FEASIBILITY_BACKSTOP,
+    EFFECTIVE_TARGET_REASON_FREE_FLOW,
+    EFFECTIVE_TARGET_REASON_POST_JUMP_COOLDOWN,
+    PACKET_FALLBACK_NONE,
+    PACKET_MODE_LATEST_PARALLEL,
+    POST_JUMP_REASON_NONE,
+)
 
 from scoring_registry import (
     ACCEL_P95_GATE_MPS2,
@@ -366,6 +377,506 @@ def _read_recording_metadata_dict(h5_file: h5py.File) -> dict:
         return parsed if isinstance(parsed, dict) else {}
     except Exception:
         return {}
+
+
+def _decode_string_series(values: Optional[np.ndarray]) -> list[str]:
+    if values is None:
+        return []
+    out: list[str] = []
+    for raw in values:
+        if isinstance(raw, (bytes, bytearray)):
+            value = raw.decode("utf-8", errors="ignore")
+        else:
+            value = str(raw)
+        value = value.strip()
+        out.append(value)
+    return out
+
+
+def _finite_nonnegative(arr: Optional[np.ndarray]) -> np.ndarray:
+    if arr is None:
+        return np.array([], dtype=float)
+    values = np.asarray(arr, dtype=float).reshape(-1)
+    values = values[np.isfinite(values)]
+    if values.size == 0:
+        return np.array([], dtype=float)
+    return values[values >= 0.0]
+
+
+def _rate_from_boolish(values: Optional[np.ndarray], *, positive_threshold: float = 0.5) -> Optional[float]:
+    if values is None:
+        return None
+    arr = np.asarray(values, dtype=float).reshape(-1)
+    mask = np.isfinite(arr) & (arr >= 0.0)
+    if not np.any(mask):
+        return None
+    valid = arr[mask]
+    if valid.size == 0:
+        return None
+    return safe_float(np.mean(valid > positive_threshold) * 100.0, default=None)
+
+
+def _mode_string(values: list[str], *, ignore: Optional[set[str]] = None) -> Optional[str]:
+    cleaned = []
+    ignored = ignore or set()
+    for value in values:
+        stripped = str(value or "").strip()
+        if not stripped:
+            continue
+        if stripped in ignored:
+            continue
+        cleaned.append(stripped)
+    if not cleaned:
+        return None
+    counts: dict[str, int] = {}
+    for value in cleaned:
+        counts[value] = counts.get(value, 0) + 1
+    return max(counts.items(), key=lambda kv: (kv[1], kv[0]))[0]
+
+
+def _count_start_events(mask: np.ndarray) -> int:
+    mask = np.asarray(mask, dtype=bool).reshape(-1)
+    if mask.size == 0:
+        return 0
+    starts = mask & np.concatenate(([True], ~mask[:-1]))
+    return int(np.sum(starts))
+
+
+def _build_transport_contract_summary(data: Dict) -> Dict:
+    metadata = data.get("recording_metadata") or {}
+    stack_transport = metadata.get("stack_transport") or {}
+    packet_modes = _decode_string_series(data.get("sync_packet_mode"))
+    packet_mode = (
+        _mode_string(packet_modes)
+        or str(stack_transport.get("sync_packet_mode", "") or "").strip()
+        or PACKET_MODE_LATEST_PARALLEL
+    )
+    consume_policy = (
+        _mode_string(_decode_string_series(data.get("sync_packet_consume_policy")))
+        or str(stack_transport.get("sync_packet_consume_policy", "") or "").strip()
+        or None
+    )
+
+    packet_complete = data.get("sync_packet_complete")
+    packet_fallback = data.get("sync_packet_fallback_active")
+    packet_fallback_reason = _decode_string_series(data.get("sync_packet_fallback_reason_code"))
+    queue_depth = data.get("sync_packet_queue_depth")
+    payload_queue_depth = data.get("sync_packet_payload_queue_depth")
+    skipped_frames = data.get("sync_packet_skipped_unity_frames")
+    packet_age_ms = data.get("sync_packet_age_ms")
+    payload_oldest_age_ms = data.get("sync_packet_payload_oldest_age_ms")
+    payload_bytes = data.get("sync_packet_payload_bytes")
+    payload_selected_age_ms = data.get("sync_packet_payload_selected_age_ms")
+    payload_selected_fresh = data.get("sync_packet_payload_selected_fresh")
+    payload_warn_age_exceeded = data.get("sync_packet_payload_warn_age_exceeded")
+    payload_stale_drop_count = data.get("sync_packet_payload_stale_drop_count")
+    payload_drained_count = data.get("sync_packet_payload_drained_count")
+    payload_max_drained_age_ms = data.get("sync_packet_payload_max_drained_age_ms")
+    payload_selection_source = _decode_string_series(
+        data.get("sync_packet_payload_selection_source")
+    )
+    payload_selection_fallback_active = data.get(
+        "sync_packet_payload_selection_fallback_active"
+    )
+    payload_selection_fallback_reason = _decode_string_series(
+        data.get("sync_packet_payload_selection_fallback_reason_code")
+    )
+    payload_server_queue_depth_after_select = data.get(
+        "sync_packet_payload_server_queue_depth_after_select"
+    )
+    payload_server_oldest_age_ms_after_select = data.get(
+        "sync_packet_payload_server_oldest_age_ms_after_select"
+    )
+    join_source = _decode_string_series(data.get("sync_packet_join_source"))
+    join_key_present = data.get("sync_packet_join_key_present")
+    join_wait_ms = data.get("sync_packet_join_wait_ms")
+    key_match_count = data.get("sync_packet_key_match_count")
+    unity_fallback_count = data.get("sync_packet_unity_fallback_count")
+    superseded_camera_count = data.get("sync_packet_superseded_camera_count")
+    superseded_vehicle_count = data.get("sync_packet_superseded_vehicle_count")
+    packet_superseded_camera_count = data.get("sync_packet_packet_superseded_camera_count")
+    packet_superseded_vehicle_count = data.get("sync_packet_packet_superseded_vehicle_count")
+    front_age_ms = data.get("sync_front_age_ms")
+    vehicle_age_ms = data.get("sync_vehicle_age_ms")
+    frame_delta = data.get("sync_front_vehicle_frame_delta")
+    time_delta_ms = data.get("sync_front_vehicle_time_delta_ms")
+    missing_front = data.get("sync_packet_missing_front")
+    missing_vehicle = data.get("sync_packet_missing_vehicle")
+    drop_count = data.get("sync_packet_drop_count")
+    payload_drop_count = data.get("sync_packet_payload_drop_count")
+    payload_fallback_reason = _decode_string_series(
+        data.get("sync_packet_payload_fallback_reason_code")
+    )
+    orphan_camera_count = data.get("sync_packet_orphan_camera_count")
+    orphan_vehicle_count = data.get("sync_packet_orphan_vehicle_count")
+    timeout_count = data.get("sync_packet_timeout_count")
+    reference_velocity_effective = data.get("reference_velocity_effective")
+    target_speed_final = data.get("target_speed_final")
+    post_jump_cooldown_active = data.get("post_jump_cooldown_active")
+    teleport_detected = data.get("teleport_detected")
+    teleport_motion_ratio = data.get("teleport_motion_ratio")
+    teleport_guard_suppressed = data.get("teleport_guard_suppressed")
+    teleport_continuity_suspect = data.get("teleport_continuity_suspect")
+    teleport_guard_reason = _decode_string_series(data.get("teleport_guard_reason_code"))
+    teleport_dynamic_threshold = data.get("teleport_dynamic_threshold_m")
+
+    available = any(
+        candidate is not None
+        for candidate in (
+            packet_complete,
+            packet_fallback,
+            queue_depth,
+            payload_queue_depth,
+            skipped_frames,
+            packet_age_ms,
+            payload_oldest_age_ms,
+            payload_selected_age_ms,
+            payload_selected_fresh,
+            payload_warn_age_exceeded,
+            payload_stale_drop_count,
+            payload_drained_count,
+            payload_max_drained_age_ms,
+            payload_selection_source,
+            payload_selection_fallback_active,
+            payload_selection_fallback_reason,
+            payload_server_queue_depth_after_select,
+            payload_server_oldest_age_ms_after_select,
+            join_source,
+            join_key_present,
+            join_wait_ms,
+            key_match_count,
+            unity_fallback_count,
+            superseded_camera_count,
+            superseded_vehicle_count,
+            packet_superseded_camera_count,
+            packet_superseded_vehicle_count,
+            front_age_ms,
+            vehicle_age_ms,
+            frame_delta,
+            time_delta_ms,
+        )
+    ) or bool(stack_transport)
+
+    complete_rate = _rate_from_boolish(packet_complete)
+    fallback_rate = _rate_from_boolish(packet_fallback)
+    missing_front_rate = _rate_from_boolish(missing_front)
+    missing_vehicle_rate = _rate_from_boolish(missing_vehicle)
+    post_jump_rate = _rate_from_boolish(post_jump_cooldown_active)
+    teleport_rate = _rate_from_boolish(teleport_detected)
+    teleport_guard_suppressed_rate = _rate_from_boolish(teleport_guard_suppressed)
+    teleport_continuity_suspect_rate = _rate_from_boolish(teleport_continuity_suspect)
+    selected_fresh_rate = _rate_from_boolish(payload_selected_fresh)
+    warn_age_exceeded_rate = _rate_from_boolish(payload_warn_age_exceeded)
+
+    fallback_reason_mode = _mode_string(packet_fallback_reason, ignore={PACKET_FALLBACK_NONE})
+
+    skipped_arr = _finite_nonnegative(skipped_frames)
+    effective_arr = _finite_nonnegative(reference_velocity_effective)
+    target_final_arr = _finite_nonnegative(target_speed_final)
+    n_common = min(effective_arr.size, target_final_arr.size) if effective_arr.size and target_final_arr.size else 0
+    effective_drop_mask = np.zeros(0, dtype=bool)
+    effective_drop_count = 0
+    effective_drop_rate = None
+    if n_common > 0:
+        effective_drop_mask = effective_arr[:n_common] + 0.25 < target_final_arr[:n_common]
+        effective_drop_count = int(np.sum(effective_drop_mask))
+        effective_drop_rate = safe_float(np.mean(effective_drop_mask) * 100.0, default=None)
+
+    n_false = 0
+    false_teleport_rate = None
+    if post_jump_cooldown_active is not None:
+        cooldown_arr = np.asarray(post_jump_cooldown_active, dtype=float).reshape(-1)
+        n = cooldown_arr.size
+        if n > 0:
+            false_mask = (cooldown_arr > 0.5)
+            if skipped_arr.size:
+                raw_skipped = np.asarray(skipped_frames, dtype=float).reshape(-1)
+                skipped_mask = np.isfinite(raw_skipped[:n]) & (raw_skipped[:n] >= 2.0)
+                false_mask = false_mask & skipped_mask
+            if packet_fallback is not None:
+                fallback_arr = np.asarray(packet_fallback, dtype=float).reshape(-1)
+                m = min(false_mask.size, fallback_arr.size)
+                false_mask = false_mask[:m] & (
+                    (np.asarray(skipped_frames[:m], dtype=float) >= 2.0 if skipped_frames is not None else False)
+                    | (fallback_arr[:m] > 0.5)
+                )
+            n_false = int(np.sum(false_mask)) if false_mask.size else 0
+            false_teleport_rate = safe_float(np.mean(false_mask) * 100.0, default=None) if false_mask.size else None
+
+    schema_values = _finite_nonnegative(data.get("sync_packet_schema_version"))
+
+    drop_values = _finite_nonnegative(drop_count)
+    payload_drop_values = _finite_nonnegative(payload_drop_count)
+    payload_stale_drop_values = _finite_nonnegative(payload_stale_drop_count)
+    payload_drained_values = _finite_nonnegative(payload_drained_count)
+    orphan_camera_values = _finite_nonnegative(orphan_camera_count)
+    orphan_vehicle_values = _finite_nonnegative(orphan_vehicle_count)
+    timeout_values = _finite_nonnegative(timeout_count)
+    key_match_values = _finite_nonnegative(key_match_count)
+    unity_fallback_values = _finite_nonnegative(unity_fallback_count)
+    superseded_camera_values = _finite_nonnegative(superseded_camera_count)
+    superseded_vehicle_values = _finite_nonnegative(superseded_vehicle_count)
+
+    return {
+        "schema_version": "v1",
+        "availability": "available" if available else "unavailable",
+        "packet_mode": packet_mode,
+        "consume_policy": consume_policy,
+        "packet_schema_version": int(np.max(schema_values)) if schema_values.size else 0,
+        "packet_completeness_rate": complete_rate,
+        "fallback_active_rate": fallback_rate,
+        "fallback_reason_mode": fallback_reason_mode,
+        "payload_fallback_reason_mode": _mode_string(
+            payload_fallback_reason, ignore={PACKET_FALLBACK_NONE, ""}
+        ),
+        "missing_front_rate": missing_front_rate,
+        "missing_vehicle_rate": missing_vehicle_rate,
+        "packet_queue_depth": _finite_stats(queue_depth),
+        "payload_queue_depth": _finite_stats(payload_queue_depth),
+        "skipped_unity_frames": _finite_stats(skipped_frames),
+        "packet_age_ms": _finite_stats(packet_age_ms),
+        "payload_oldest_age_ms": _finite_stats(payload_oldest_age_ms),
+        "payload_bytes": _finite_stats(payload_bytes),
+        "payload_selected_age_ms": _finite_stats(payload_selected_age_ms),
+        "payload_selected_fresh_rate": selected_fresh_rate,
+        "payload_warn_age_exceeded_rate": warn_age_exceeded_rate,
+        "payload_stale_drop_count": _finite_stats(payload_stale_drop_count),
+        "payload_drained_count": _finite_stats(payload_drained_count),
+        "payload_max_drained_age_ms": _finite_stats(payload_max_drained_age_ms),
+        "payload_selection_source_mode": _mode_string(
+            payload_selection_source, ignore={""}
+        ),
+        "payload_selection_fallback_active_rate": _rate_from_boolish(
+            payload_selection_fallback_active
+        ),
+        "payload_selection_fallback_reason_mode": _mode_string(
+            payload_selection_fallback_reason, ignore={PACKET_FALLBACK_NONE, ""}
+        ),
+        "payload_server_queue_depth_after_select": _finite_stats(
+            payload_server_queue_depth_after_select
+        ),
+        "payload_server_oldest_age_ms_after_select": _finite_stats(
+            payload_server_oldest_age_ms_after_select
+        ),
+        "join_source_mode": _mode_string(join_source, ignore={""}),
+        "join_key_present_rate": _rate_from_boolish(join_key_present),
+        "join_wait_ms": _finite_stats(join_wait_ms),
+        "packet_superseded_camera_count": _finite_stats(packet_superseded_camera_count),
+        "packet_superseded_vehicle_count": _finite_stats(packet_superseded_vehicle_count),
+        "front_age_ms": _finite_stats(front_age_ms),
+        "vehicle_age_ms": _finite_stats(vehicle_age_ms),
+        "front_vehicle_frame_delta": _finite_stats(frame_delta),
+        "front_vehicle_time_delta_ms": _finite_stats(time_delta_ms),
+        "drop_count_max": int(np.max(drop_values)) if drop_values.size else 0,
+        "payload_drop_count_max": int(np.max(payload_drop_values)) if payload_drop_values.size else 0,
+        "payload_stale_drop_count_max": int(np.max(payload_stale_drop_values)) if payload_stale_drop_values.size else 0,
+        "payload_drained_count_max": int(np.max(payload_drained_values)) if payload_drained_values.size else 0,
+        "orphan_camera_count_max": int(np.max(orphan_camera_values)) if orphan_camera_values.size else 0,
+        "orphan_vehicle_count_max": int(np.max(orphan_vehicle_values)) if orphan_vehicle_values.size else 0,
+        "timeout_count_max": int(np.max(timeout_values)) if timeout_values.size else 0,
+        "key_match_count_max": int(np.max(key_match_values)) if key_match_values.size else 0,
+        "unity_fallback_count_max": int(np.max(unity_fallback_values)) if unity_fallback_values.size else 0,
+        "superseded_camera_count_max": int(np.max(superseded_camera_values)) if superseded_camera_values.size else 0,
+        "superseded_vehicle_count_max": int(np.max(superseded_vehicle_values)) if superseded_vehicle_values.size else 0,
+        "post_jump_cooldown_active_rate": post_jump_rate,
+        "teleport_detected_rate": teleport_rate,
+        "teleport_guard_suppressed_rate": teleport_guard_suppressed_rate,
+        "teleport_continuity_suspect_rate": teleport_continuity_suspect_rate,
+        "teleport_guard_reason_mode": _mode_string(
+            teleport_guard_reason, ignore={""}
+        ),
+        "teleport_motion_ratio_p95": _finite_stats(teleport_motion_ratio).get("p95"),
+        "teleport_dynamic_threshold_m_p95": _finite_stats(teleport_dynamic_threshold).get(
+            "p95"
+        ),
+        "effective_reference_velocity_drop_count": effective_drop_count,
+        "effective_reference_velocity_drop_rate": effective_drop_rate,
+        "false_teleport_cooldown_rate": false_teleport_rate,
+        "false_teleport_cooldown_count": n_false,
+        "limits": {
+            "packet_completeness_rate_min_pct": 99.0,
+            "fallback_active_rate_max_pct": 1.0,
+            "front_vehicle_time_delta_ms_p95_max": 20.0,
+            "skipped_unity_frames_p95_max": 1.0,
+        },
+    }
+
+
+def _classify_brake_episode_reasons(data: Dict) -> tuple[dict[str, int], list[dict]]:
+    brake = data.get("brake")
+    if brake is None:
+        return {}, []
+    brake_arr = np.asarray(brake, dtype=float).reshape(-1)
+    if brake_arr.size == 0:
+        return {}, []
+    post_jump = np.asarray(data.get("post_jump_cooldown_active"), dtype=float).reshape(-1) if data.get("post_jump_cooldown_active") is not None else None
+    acc_active = np.asarray(data.get("acc_active"), dtype=float).reshape(-1) if data.get("acc_active") is not None else None
+    lead_collision_override = np.asarray(data.get("lead_collision_override_active"), dtype=float).reshape(-1) if data.get("lead_collision_override_active") is not None else None
+    final_owner_code = _decode_string_series(data.get("final_longitudinal_owner_code"))
+    curve_cap = np.asarray(data.get("speed_governor_curve_cap_active"), dtype=float).reshape(-1) if data.get("speed_governor_curve_cap_active") is not None else None
+    feasibility = np.asarray(data.get("turn_feasibility_infeasible"), dtype=float).reshape(-1) if data.get("turn_feasibility_infeasible") is not None else None
+    reason_counts: dict[str, int] = {}
+    examples: list[dict] = []
+
+    active = brake_arr > 0.05
+    starts = np.flatnonzero(active & np.concatenate(([True], ~active[:-1])))
+    for start in starts:
+        reason = EFFECTIVE_TARGET_REASON_FALLBACK_UNKNOWN
+        if lead_collision_override is not None and start < lead_collision_override.size and lead_collision_override[start] > 0.5:
+            reason = "lead_collision_override"
+        elif final_owner_code and start < len(final_owner_code) and final_owner_code[start] in {"acc_ttc_estop", "acc_collapsed_gap_stop"}:
+            reason = final_owner_code[start]
+        elif post_jump is not None and start < post_jump.size and post_jump[start] > 0.5:
+            reason = EFFECTIVE_TARGET_REASON_POST_JUMP_COOLDOWN
+        elif feasibility is not None and start < feasibility.size and feasibility[start] > 0.5:
+            reason = EFFECTIVE_TARGET_REASON_FEASIBILITY_BACKSTOP
+        elif curve_cap is not None and start < curve_cap.size and curve_cap[start] > 0.5:
+            reason = EFFECTIVE_TARGET_REASON_CURVE_CAP
+        elif acc_active is not None and start < acc_active.size and acc_active[start] > 0.5:
+            reason = EFFECTIVE_TARGET_REASON_ACC_FOLLOW
+        else:
+            reason = EFFECTIVE_TARGET_REASON_FREE_FLOW
+        reason_counts[reason] = reason_counts.get(reason, 0) + 1
+        if len(examples) < 8:
+            examples.append(
+                {
+                    "frame": int(start),
+                    "reason": reason,
+                    "brake": safe_float(brake_arr[start], default=None),
+                    "reference_velocity_effective": safe_float(
+                        np.asarray(data.get("reference_velocity_effective"), dtype=float).reshape(-1)[start],
+                        default=None,
+                    ) if data.get("reference_velocity_effective") is not None and start < len(np.asarray(data.get("reference_velocity_effective")).reshape(-1)) else None,
+                    "target_speed_final": safe_float(
+                        np.asarray(data.get("target_speed_final"), dtype=float).reshape(-1)[start],
+                        default=None,
+                    ) if data.get("target_speed_final") is not None and start < len(np.asarray(data.get("target_speed_final")).reshape(-1)) else None,
+                }
+            )
+    return reason_counts, examples
+
+
+def _build_speed_intent_summary(data: Dict) -> Dict:
+    desired = _finite_stats(data.get("target_speed_raw"))
+    planned = _finite_stats(data.get("target_speed_planned"))
+    post_limits = _finite_stats(data.get("target_speed_post_limits"))
+    governor = _finite_stats(data.get("governor_target_speed_mps"))
+    acc_target = _finite_stats(data.get("acc_target_speed_mps"))
+    planner_applied = _finite_stats(data.get("planner_target_speed_applied_mps"))
+    final = _finite_stats(data.get("target_speed_final"))
+    planner_ref = _finite_stats(data.get("ref_velocity"))
+    effective = _finite_stats(data.get("reference_velocity_effective"))
+    final_owner = _decode_string_series(data.get("final_longitudinal_owner_code"))
+    reference_velocity_source = _decode_string_series(data.get("reference_velocity_source_code"))
+    post_jump_reason = _decode_string_series(data.get("post_jump_reason_code"))
+    reason_mode = _mode_string(post_jump_reason, ignore={POST_JUMP_REASON_NONE})
+    brake_reason_counts, brake_examples = _classify_brake_episode_reasons(data)
+
+    effective_drop_count = 0
+    effective_drop_rate = None
+    if data.get("reference_velocity_effective") is not None and data.get("target_speed_final") is not None:
+        eff = np.asarray(data.get("reference_velocity_effective"), dtype=float).reshape(-1)
+        fin = np.asarray(data.get("target_speed_final"), dtype=float).reshape(-1)
+        n = min(eff.size, fin.size)
+        if n > 0:
+            valid = np.isfinite(eff[:n]) & np.isfinite(fin[:n])
+            if np.any(valid):
+                mask = valid & (eff[:n] + 0.25 < fin[:n])
+                effective_drop_count = int(np.sum(mask))
+                effective_drop_rate = safe_float(np.mean(mask[valid]) * 100.0, default=None)
+
+    return {
+        "schema_version": "v1",
+        "availability": "available" if any(
+            stat["count"] > 0 for stat in (desired, planned, post_limits, final, planner_ref, effective)
+        ) else "unavailable",
+        "desired_target_speed_mps": desired,
+        "planned_target_speed_mps": planned,
+        "post_limits_target_speed_mps": post_limits,
+        "governor_target_speed_mps": governor,
+        "acc_target_speed_mps": acc_target,
+        "planner_target_speed_applied_mps": planner_applied,
+        "final_target_speed_mps": final,
+        "planner_reference_speed_mps": planner_ref,
+        "effective_reference_speed_mps": effective,
+        "final_longitudinal_owner_mode": _mode_string(final_owner, ignore={""}),
+        "reference_velocity_source_mode": _mode_string(reference_velocity_source, ignore={""}),
+        "effective_reason_mode": reason_mode or (
+            EFFECTIVE_TARGET_REASON_POST_JUMP_COOLDOWN
+            if (data.get("post_jump_cooldown_active") is not None and _count_start_events(np.asarray(data.get("post_jump_cooldown_active"), dtype=float) > 0.5) > 0)
+            else None
+        ),
+        "effective_reference_velocity_drop_count": effective_drop_count,
+        "effective_reference_velocity_drop_rate": effective_drop_rate,
+        "post_jump_cooldown_episode_count": _count_start_events(
+            np.asarray(data.get("post_jump_cooldown_active"), dtype=float) > 0.5
+        ) if data.get("post_jump_cooldown_active") is not None else 0,
+        "brake_episode_count": sum(brake_reason_counts.values()),
+        "brake_episode_counts_by_reason": brake_reason_counts,
+        "brake_episode_examples": brake_examples,
+    }
+
+
+def _build_run_intent_summary(data: Dict) -> Dict:
+    metadata = data.get("recording_metadata") or {}
+    provenance = data.get("recording_provenance") or {}
+    recording_type = str(metadata.get("recording_type", "unknown") or "unknown")
+    replay_type = str(provenance.get("replay_type", "unknown") or "unknown")
+    track_id = str(provenance.get("track_id", "unknown") or "unknown")
+    policy_profile = str(provenance.get("policy_profile", "unknown") or "unknown")
+    candidate_label = str(provenance.get("candidate_label", "unknown") or "unknown")
+
+    speed_limit = _finite_nonnegative(data.get("speed_limit"))
+    target_speed_final = _finite_nonnegative(data.get("target_speed_final"))
+    radar_distance = _finite_nonnegative(data.get("radar_fwd_distance_m"))
+    lead_collision_override = data.get("lead_collision_override_active")
+    acc_state_code = _decode_string_series(data.get("acc_state_code"))
+    final_longitudinal_owner_code = _decode_string_series(data.get("final_longitudinal_owner_code"))
+    acc_active = data.get("acc_active")
+    acc_active_rate = _rate_from_boolish(acc_active)
+    lead_following_active = bool(acc_active_rate is not None and acc_active_rate > 5.0)
+
+    run_target_speed_mps = safe_float(np.median(target_speed_final), default=None) if target_speed_final.size else None
+    road_speed_limit_mps = safe_float(np.median(speed_limit), default=None) if speed_limit.size else None
+    lead_distance_p50 = safe_float(np.percentile(radar_distance, 50), default=None) if radar_distance.size else None
+
+    if lead_following_active:
+        mode = "acc_follow"
+    elif recording_type not in {"unknown", "av_stack"}:
+        mode = recording_type
+    elif run_target_speed_mps is not None or road_speed_limit_mps is not None:
+        mode = "free_flow"
+    else:
+        mode = "unknown"
+
+    mismatch_reason = None
+    if (
+        road_speed_limit_mps is not None
+        and run_target_speed_mps is not None
+        and road_speed_limit_mps > run_target_speed_mps + 5.0
+        and lead_following_active
+    ):
+        mismatch_reason = "road_speed_limit_higher_than_configured_acc_target"
+
+    return {
+        "schema_version": "v1",
+        "availability": "available" if (metadata or provenance or run_target_speed_mps is not None) else "unavailable",
+        "mode": mode,
+        "recording_type": recording_type,
+        "replay_type": replay_type,
+        "track_id": track_id,
+        "policy_profile": policy_profile,
+        "candidate_label": candidate_label,
+        "run_target_speed_mps": run_target_speed_mps,
+        "road_speed_limit_expected_mps": road_speed_limit_mps,
+        "lead_following_active": lead_following_active,
+        "acc_active_rate_pct": acc_active_rate,
+        "acc_state_mode": _mode_string(acc_state_code, ignore={""}),
+        "final_longitudinal_owner_mode": _mode_string(final_longitudinal_owner_code, ignore={""}),
+        "lead_collision_override_rate_pct": _rate_from_boolish(lead_collision_override),
+        "lead_vehicle_distance_p50_m": lead_distance_p50,
+        "intent_mismatch_warning": mismatch_reason,
+    }
 
 
 def _load_track_curve_windows(track_name: str) -> dict:
@@ -1617,10 +2128,232 @@ def analyze_recording_summary(
                 )
             else:
                 raise KeyError("No timestamp source found (tried vehicle_state/timestamp, vehicle/timestamps, control/timestamps, control/timestamp)")
-                data['speed'] = np.array(f['vehicle/speed'][:]) if 'vehicle/speed' in f else None
-                data['speed_limit'] = (
-                    np.array(f['vehicle/speed_limit'][:]) if 'vehicle/speed_limit' in f else None
-                )
+            data['sync_packet_mode'] = (
+                f['vehicle/sync_packet_mode'][:] if 'vehicle/sync_packet_mode' in f else None
+            )
+            data['sync_packet_schema_version'] = (
+                np.array(f['vehicle/sync_packet_schema_version'][:])
+                if 'vehicle/sync_packet_schema_version' in f
+                else None
+            )
+            data['sync_packet_id'] = (
+                np.array(f['vehicle/sync_packet_id'][:]) if 'vehicle/sync_packet_id' in f else None
+            )
+            data['sync_packet_unity_frame_count'] = (
+                np.array(f['vehicle/sync_packet_unity_frame_count'][:])
+                if 'vehicle/sync_packet_unity_frame_count' in f
+                else None
+            )
+            data['sync_packet_consume_policy'] = (
+                f['vehicle/sync_packet_consume_policy'][:]
+                if 'vehicle/sync_packet_consume_policy' in f
+                else None
+            )
+            data['sync_packet_complete'] = (
+                np.array(f['vehicle/sync_packet_complete'][:])
+                if 'vehicle/sync_packet_complete' in f
+                else None
+            )
+            data['sync_packet_fallback_active'] = (
+                np.array(f['vehicle/sync_packet_fallback_active'][:])
+                if 'vehicle/sync_packet_fallback_active' in f
+                else None
+            )
+            data['sync_packet_fallback_reason_code'] = (
+                f['vehicle/sync_packet_fallback_reason_code'][:]
+                if 'vehicle/sync_packet_fallback_reason_code' in f
+                else None
+            )
+            data['sync_packet_queue_depth'] = (
+                np.array(f['vehicle/sync_packet_queue_depth'][:])
+                if 'vehicle/sync_packet_queue_depth' in f
+                else None
+            )
+            data['sync_packet_payload_queue_depth'] = (
+                np.array(f['vehicle/sync_packet_payload_queue_depth'][:])
+                if 'vehicle/sync_packet_payload_queue_depth' in f
+                else None
+            )
+            data['sync_packet_drop_count'] = (
+                np.array(f['vehicle/sync_packet_drop_count'][:])
+                if 'vehicle/sync_packet_drop_count' in f
+                else None
+            )
+            data['sync_packet_payload_drop_count'] = (
+                np.array(f['vehicle/sync_packet_payload_drop_count'][:])
+                if 'vehicle/sync_packet_payload_drop_count' in f
+                else None
+            )
+            data['sync_packet_orphan_camera_count'] = (
+                np.array(f['vehicle/sync_packet_orphan_camera_count'][:])
+                if 'vehicle/sync_packet_orphan_camera_count' in f
+                else None
+            )
+            data['sync_packet_orphan_vehicle_count'] = (
+                np.array(f['vehicle/sync_packet_orphan_vehicle_count'][:])
+                if 'vehicle/sync_packet_orphan_vehicle_count' in f
+                else None
+            )
+            data['sync_packet_timeout_count'] = (
+                np.array(f['vehicle/sync_packet_timeout_count'][:])
+                if 'vehicle/sync_packet_timeout_count' in f
+                else None
+            )
+            data['sync_packet_skipped_unity_frames'] = (
+                np.array(f['vehicle/sync_packet_skipped_unity_frames'][:])
+                if 'vehicle/sync_packet_skipped_unity_frames' in f
+                else None
+            )
+            data['sync_packet_age_ms'] = (
+                np.array(f['vehicle/sync_packet_age_ms'][:])
+                if 'vehicle/sync_packet_age_ms' in f
+                else None
+            )
+            data['sync_packet_payload_oldest_age_ms'] = (
+                np.array(f['vehicle/sync_packet_payload_oldest_age_ms'][:])
+                if 'vehicle/sync_packet_payload_oldest_age_ms' in f
+                else None
+            )
+            data['sync_packet_payload_bytes'] = (
+                np.array(f['vehicle/sync_packet_payload_bytes'][:])
+                if 'vehicle/sync_packet_payload_bytes' in f
+                else None
+            )
+            data['sync_packet_payload_fallback_reason_code'] = (
+                f['vehicle/sync_packet_payload_fallback_reason_code'][:]
+                if 'vehicle/sync_packet_payload_fallback_reason_code' in f
+                else None
+            )
+            data['sync_packet_payload_selected_age_ms'] = (
+                np.array(f['vehicle/sync_packet_payload_selected_age_ms'][:])
+                if 'vehicle/sync_packet_payload_selected_age_ms' in f
+                else None
+            )
+            data['sync_packet_payload_selected_fresh'] = (
+                np.array(f['vehicle/sync_packet_payload_selected_fresh'][:])
+                if 'vehicle/sync_packet_payload_selected_fresh' in f
+                else None
+            )
+            data['sync_packet_payload_warn_age_exceeded'] = (
+                np.array(f['vehicle/sync_packet_payload_warn_age_exceeded'][:])
+                if 'vehicle/sync_packet_payload_warn_age_exceeded' in f
+                else None
+            )
+            data['sync_packet_payload_stale_drop_count'] = (
+                np.array(f['vehicle/sync_packet_payload_stale_drop_count'][:])
+                if 'vehicle/sync_packet_payload_stale_drop_count' in f
+                else None
+            )
+            data['sync_packet_payload_drained_count'] = (
+                np.array(f['vehicle/sync_packet_payload_drained_count'][:])
+                if 'vehicle/sync_packet_payload_drained_count' in f
+                else None
+            )
+            data['sync_packet_payload_max_drained_age_ms'] = (
+                np.array(f['vehicle/sync_packet_payload_max_drained_age_ms'][:])
+                if 'vehicle/sync_packet_payload_max_drained_age_ms' in f
+                else None
+            )
+            data['sync_packet_payload_selection_source'] = (
+                f['vehicle/sync_packet_payload_selection_source'][:]
+                if 'vehicle/sync_packet_payload_selection_source' in f
+                else None
+            )
+            data['sync_packet_payload_selection_fallback_active'] = (
+                np.array(f['vehicle/sync_packet_payload_selection_fallback_active'][:])
+                if 'vehicle/sync_packet_payload_selection_fallback_active' in f
+                else None
+            )
+            data['sync_packet_payload_selection_fallback_reason_code'] = (
+                f['vehicle/sync_packet_payload_selection_fallback_reason_code'][:]
+                if 'vehicle/sync_packet_payload_selection_fallback_reason_code' in f
+                else None
+            )
+            data['sync_packet_payload_server_queue_depth_after_select'] = (
+                np.array(f['vehicle/sync_packet_payload_server_queue_depth_after_select'][:])
+                if 'vehicle/sync_packet_payload_server_queue_depth_after_select' in f
+                else None
+            )
+            data['sync_packet_payload_server_oldest_age_ms_after_select'] = (
+                np.array(f['vehicle/sync_packet_payload_server_oldest_age_ms_after_select'][:])
+                if 'vehicle/sync_packet_payload_server_oldest_age_ms_after_select' in f
+                else None
+            )
+            data['sync_packet_join_source'] = (
+                f['vehicle/sync_packet_join_source'][:]
+                if 'vehicle/sync_packet_join_source' in f
+                else None
+            )
+            data['sync_packet_join_key_present'] = (
+                np.array(f['vehicle/sync_packet_join_key_present'][:])
+                if 'vehicle/sync_packet_join_key_present' in f
+                else None
+            )
+            data['sync_packet_join_wait_ms'] = (
+                np.array(f['vehicle/sync_packet_join_wait_ms'][:])
+                if 'vehicle/sync_packet_join_wait_ms' in f
+                else None
+            )
+            data['sync_packet_key_match_count'] = (
+                np.array(f['vehicle/sync_packet_key_match_count'][:])
+                if 'vehicle/sync_packet_key_match_count' in f
+                else None
+            )
+            data['sync_packet_unity_fallback_count'] = (
+                np.array(f['vehicle/sync_packet_unity_fallback_count'][:])
+                if 'vehicle/sync_packet_unity_fallback_count' in f
+                else None
+            )
+            data['sync_packet_superseded_camera_count'] = (
+                np.array(f['vehicle/sync_packet_superseded_camera_count'][:])
+                if 'vehicle/sync_packet_superseded_camera_count' in f
+                else None
+            )
+            data['sync_packet_superseded_vehicle_count'] = (
+                np.array(f['vehicle/sync_packet_superseded_vehicle_count'][:])
+                if 'vehicle/sync_packet_superseded_vehicle_count' in f
+                else None
+            )
+            data['sync_packet_packet_superseded_camera_count'] = (
+                np.array(f['vehicle/sync_packet_packet_superseded_camera_count'][:])
+                if 'vehicle/sync_packet_packet_superseded_camera_count' in f
+                else None
+            )
+            data['sync_packet_packet_superseded_vehicle_count'] = (
+                np.array(f['vehicle/sync_packet_packet_superseded_vehicle_count'][:])
+                if 'vehicle/sync_packet_packet_superseded_vehicle_count' in f
+                else None
+            )
+            data['sync_front_age_ms'] = (
+                np.array(f['vehicle/sync_front_age_ms'][:])
+                if 'vehicle/sync_front_age_ms' in f
+                else None
+            )
+            data['sync_vehicle_age_ms'] = (
+                np.array(f['vehicle/sync_vehicle_age_ms'][:])
+                if 'vehicle/sync_vehicle_age_ms' in f
+                else None
+            )
+            data['sync_front_vehicle_frame_delta'] = (
+                np.array(f['vehicle/sync_front_vehicle_frame_delta'][:])
+                if 'vehicle/sync_front_vehicle_frame_delta' in f
+                else None
+            )
+            data['sync_front_vehicle_time_delta_ms'] = (
+                np.array(f['vehicle/sync_front_vehicle_time_delta_ms'][:])
+                if 'vehicle/sync_front_vehicle_time_delta_ms' in f
+                else None
+            )
+            data['sync_packet_missing_front'] = (
+                np.array(f['vehicle/sync_packet_missing_front'][:])
+                if 'vehicle/sync_packet_missing_front' in f
+                else None
+            )
+            data['sync_packet_missing_vehicle'] = (
+                np.array(f['vehicle/sync_packet_missing_vehicle'][:])
+                if 'vehicle/sync_packet_missing_vehicle' in f
+                else None
+            )
             
             # ACC / radar data (optional — sentinel zeros when ACC not fitted)
             data['acc_active'] = (
@@ -1645,6 +2378,28 @@ def analyze_recording_summary(
             data['acc_ttc_s'] = (
                 np.array(f['vehicle/acc_ttc_s'][:])
                 if 'vehicle/acc_ttc_s' in f else None
+            )
+            data['lead_collision_detected'] = (
+                np.array(f['vehicle/lead_collision_detected'][:])
+                if 'vehicle/lead_collision_detected' in f else None
+            )
+            data['lead_collision_override_active'] = (
+                np.array(f['vehicle/lead_collision_override_active'][:])
+                if 'vehicle/lead_collision_override_active' in f else None
+            )
+            data['acc_state_code'] = (
+                f['vehicle/acc_state_code'][:] if 'vehicle/acc_state_code' in f else None
+            )
+            data['acc_target_speed_mps_vehicle'] = (
+                np.array(f['vehicle/acc_target_speed_mps'][:])
+                if 'vehicle/acc_target_speed_mps' in f else None
+            )
+            data['acc_request_estop'] = (
+                np.array(f['vehicle/acc_request_estop'][:])
+                if 'vehicle/acc_request_estop' in f else None
+            )
+            data['acc_safety_mode_code'] = (
+                f['vehicle/acc_safety_mode_code'][:] if 'vehicle/acc_safety_mode_code' in f else None
             )
             data['acc_target_gap_m'] = (
                 np.array(f['vehicle/acc_target_gap_m'][:])
@@ -2201,6 +2956,111 @@ def analyze_recording_summary(
             data['target_speed_final'] = (
                 np.array(f['control/target_speed_final'][:])
                 if 'control/target_speed_final' in f
+                else None
+            )
+            data['governor_target_speed_mps'] = (
+                np.array(f['control/governor_target_speed_mps'][:])
+                if 'control/governor_target_speed_mps' in f
+                else None
+            )
+            data['acc_target_speed_mps'] = (
+                np.array(f['control/acc_target_speed_mps'][:])
+                if 'control/acc_target_speed_mps' in f
+                else None
+            )
+            data['planner_target_speed_applied_mps'] = (
+                np.array(f['control/planner_target_speed_applied_mps'][:])
+                if 'control/planner_target_speed_applied_mps' in f
+                else None
+            )
+            data['final_longitudinal_target_mps'] = (
+                np.array(f['control/final_longitudinal_target_mps'][:])
+                if 'control/final_longitudinal_target_mps' in f
+                else None
+            )
+            data['final_longitudinal_owner_code'] = (
+                f['control/final_longitudinal_owner_code'][:]
+                if 'control/final_longitudinal_owner_code' in f
+                else None
+            )
+            data['reference_velocity_source_code'] = (
+                f['control/reference_velocity_source_code'][:]
+                if 'control/reference_velocity_source_code' in f
+                else None
+            )
+            data['target_speed_raw'] = (
+                np.array(f['control/target_speed_raw'][:])
+                if 'control/target_speed_raw' in f
+                else None
+            )
+            data['target_speed_planned'] = (
+                np.array(f['control/target_speed_planned'][:])
+                if 'control/target_speed_planned' in f
+                else None
+            )
+            data['target_speed_post_limits'] = (
+                np.array(f['control/target_speed_post_limits'][:])
+                if 'control/target_speed_post_limits' in f
+                else None
+            )
+            data['reference_velocity_effective'] = (
+                np.array(f['control/reference_velocity_effective'][:])
+                if 'control/reference_velocity_effective' in f
+                else None
+            )
+            data['post_jump_cooldown_active'] = (
+                np.array(f['control/post_jump_cooldown_active'][:])
+                if 'control/post_jump_cooldown_active' in f
+                else None
+            )
+            data['post_jump_cooldown_frames_remaining'] = (
+                np.array(f['control/post_jump_cooldown_frames_remaining'][:])
+                if 'control/post_jump_cooldown_frames_remaining' in f
+                else None
+            )
+            data['post_jump_reason_code'] = (
+                f['control/post_jump_reason_code'][:]
+                if 'control/post_jump_reason_code' in f
+                else None
+            )
+            data['teleport_detected'] = (
+                np.array(f['control/teleport_detected'][:])
+                if 'control/teleport_detected' in f
+                else None
+            )
+            data['teleport_jump_m'] = (
+                np.array(f['control/teleport_jump_m'][:])
+                if 'control/teleport_jump_m' in f
+                else None
+            )
+            data['teleport_expected_motion_m'] = (
+                np.array(f['control/teleport_expected_motion_m'][:])
+                if 'control/teleport_expected_motion_m' in f
+                else None
+            )
+            data['teleport_motion_ratio'] = (
+                np.array(f['control/teleport_motion_ratio'][:])
+                if 'control/teleport_motion_ratio' in f
+                else None
+            )
+            data['teleport_guard_suppressed'] = (
+                np.array(f['control/teleport_guard_suppressed'][:])
+                if 'control/teleport_guard_suppressed' in f
+                else None
+            )
+            data['teleport_continuity_suspect'] = (
+                np.array(f['control/teleport_continuity_suspect'][:])
+                if 'control/teleport_continuity_suspect' in f
+                else None
+            )
+            data['teleport_guard_reason_code'] = (
+                f['control/teleport_guard_reason_code'][:]
+                if 'control/teleport_guard_reason_code' in f
+                else None
+            )
+            data['teleport_dynamic_threshold_m'] = (
+                np.array(f['control/teleport_dynamic_threshold_m'][:])
+                if 'control/teleport_dynamic_threshold_m' in f
                 else None
             )
             data['speed_governor_active_limiter_code'] = (
@@ -5856,9 +6716,36 @@ def analyze_recording_summary(
         recommendations.append("Reduce longitudinal jerk - add rate limiting on throttle/brake")
 
     latency_sync = _build_latency_sync_summary(data)
+    transport_contract = _build_transport_contract_summary(data)
+    speed_intent = _build_speed_intent_summary(data)
+    run_intent = _build_run_intent_summary(data)
     if not bool((latency_sync.get("cadence") or {}).get("tuning_valid", False)):
         recommendations.append(
             "Cadence quality is not tuning-valid - do not use this run for parameter decisions."
+        )
+    if (
+        transport_contract.get("availability") == "available"
+        and (transport_contract.get("fallback_active_rate") or 0.0) > 1.0
+    ):
+        recommendations.append(
+            "Sync packet fallback is active too often - fix packet continuity before promoting transport-sensitive tuning."
+        )
+    if (
+        transport_contract.get("availability") == "available"
+        and (transport_contract.get("false_teleport_cooldown_count") or 0) > 0
+    ):
+        recommendations.append(
+            "Post-jump cooldown overlaps skipped packets/fallback episodes - treat this as transport continuity, not a real teleport."
+        )
+    if (
+        speed_intent.get("effective_reference_velocity_drop_count") or 0
+    ) > 0:
+        recommendations.append(
+            "Effective controller reference drops below final target - inspect speed intent ownership before tuning longitudinal control."
+        )
+    if run_intent.get("intent_mismatch_warning"):
+        recommendations.append(
+            "Run intent differs from road-limit expectation - confirm scenario target and lead-follow mode before interpreting speed behavior."
         )
     chassis_ground = _build_chassis_ground_summary(data, n_frames=n_frames)
     if chassis_ground.get("health") == "POOR":
@@ -6006,6 +6893,20 @@ def analyze_recording_summary(
         misaligned_rate = latency_sync.get("sync_alignment", {}).get("contract_misaligned_rate")
         if misaligned_rate is not None:
             key_issues.append(f"High sync misalignment (rate={float(misaligned_rate) * 100.0:.1f}%)")
+    if transport_contract.get("availability") == "available":
+        fallback_rate = transport_contract.get("fallback_active_rate")
+        if fallback_rate is not None and float(fallback_rate) > 1.0:
+            key_issues.append(f"Sync packet fallback active ({float(fallback_rate):.1f}%)")
+        false_cooldown_count = int(transport_contract.get("false_teleport_cooldown_count", 0) or 0)
+        if false_cooldown_count > 0:
+            key_issues.append(f"Transport-linked post-jump cooldown episodes ({false_cooldown_count})")
+    effective_drop_rate = speed_intent.get("effective_reference_velocity_drop_rate")
+    if effective_drop_rate is not None and float(effective_drop_rate) > 1.0:
+        key_issues.append(
+            f"Effective controller target drops below final target ({float(effective_drop_rate):.1f}%)"
+        )
+    if run_intent.get("intent_mismatch_warning"):
+        key_issues.append("Run intent differs from road-speed expectation")
     if chassis_ground.get("health") in {"WARN", "POOR"}:
         contact_rate = chassis_ground.get("contact_rate_pct")
         penetration_max = chassis_ground.get("penetration_max_m")
@@ -6204,7 +7105,11 @@ def analyze_recording_summary(
         "turn_bias": turn_bias,
         "alignment_summary": alignment_summary,
         "latency_sync": latency_sync,
+        "transport_contract": transport_contract,
+        "speed_intent": speed_intent,
+        "run_intent": run_intent,
         "chassis_ground": chassis_ground,
+        "recording_provenance": data.get("recording_provenance") or {},
         "curvature_contract_health": {
             "schema_version": "v1",
             "availability": (

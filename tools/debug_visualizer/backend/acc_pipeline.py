@@ -87,6 +87,20 @@ def get_acc_pipeline_data(recording_path: Path) -> Optional[Dict]:
             gap_error = arr("vehicle/acc_gap_error_m")
             target_gap = arr("vehicle/acc_target_gap_m")
             speed = arr("vehicle/speed")
+            lead_collision_override = arr("vehicle/lead_collision_override_active")
+            acc_target_speed = arr("vehicle/acc_target_speed_mps")
+            final_target = arr("control/final_longitudinal_target_mps")
+            ref_effective = arr("control/reference_velocity_effective")
+            acc_state_raw = f["vehicle/acc_state_code"][:] if "vehicle/acc_state_code" in f else None
+            owner_raw = f["control/final_longitudinal_owner_code"][:] if "control/final_longitudinal_owner_code" in f else None
+            acc_state_mode = None
+            if acc_state_raw is not None and len(acc_state_raw) > 0:
+                acc_state_strings = [(s.decode("utf-8") if isinstance(s, bytes) else str(s)) for s in acc_state_raw]
+                acc_state_mode = max(set(acc_state_strings), key=acc_state_strings.count)
+            owner_mode = None
+            if owner_raw is not None and len(owner_raw) > 0:
+                owner_strings = [(s.decode("utf-8") if isinstance(s, bytes) else str(s)) for s in owner_raw]
+                owner_mode = max(set(owner_strings), key=owner_strings.count)
 
             # ── Card 1 — Radar Health ─────────────────────────────────────────
             detection_rate = float(np.mean(detected > 0.5))
@@ -202,6 +216,9 @@ def get_acc_pipeline_data(recording_path: Path) -> Optional[Dict]:
                 "ttc_critical_pct": round(ttc_critical_pct, 2),
                 "ttc_warning_pct": round(ttc_warn_pct, 2),
                 "near_miss_events": nm_events,
+                "lead_collision_override_rate_pct": round(float(np.mean(lead_collision_override > 0.5) * 100.0), 2) if lead_collision_override is not None else 0.0,
+                "acc_state_mode": acc_state_mode,
+                "final_longitudinal_owner_mode": owner_mode,
                 "near_miss_gap_m": ACC_NEAR_MISS_GAP_M,
                 "collision_frames": collision_count,
                 "ttc_series": (
@@ -231,6 +248,10 @@ def get_acc_pipeline_data(recording_path: Path) -> Optional[Dict]:
                         "range_rate_mps": round(_safe_float(range_rate[fi] if range_rate is not None else None), 2),
                         "speed_mps": round(_safe_float(speed[fi] if speed is not None else None), 1),
                         "acc_active": int(acc_active[fi] > 0.5),
+                        "acc_target_speed_mps": round(_safe_float(acc_target_speed[fi] if acc_target_speed is not None else None), 2),
+                        "final_target_speed_mps": round(_safe_float(final_target[fi] if final_target is not None else None), 2),
+                        "reference_velocity_effective": round(_safe_float(ref_effective[fi] if ref_effective is not None else None), 2),
+                        "lead_collision_override_active": int(lead_collision_override[fi] > 0.5) if lead_collision_override is not None else 0,
                     })
 
             card4 = {"worst_frames": worst_frames}

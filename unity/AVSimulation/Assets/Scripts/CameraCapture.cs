@@ -80,6 +80,12 @@ public class CameraCapture : MonoBehaviour
     private int[] bufferPendingFrameId = new int[2];
     private float[] bufferPendingTimestamp = new float[2];
     private float[] bufferPendingReadbackStart = new float[2];
+    private int[] bufferPendingUnityFrameCount = new int[2];
+    private float[] bufferPendingUnityTime = new float[2];
+    private float[] bufferPendingRealtime = new float[2];
+    private float[] bufferPendingUnscaledTime = new float[2];
+    private float[] bufferPendingTimeScale = new float[2];
+    private string[] bufferPendingPacketKey = new string[2];
 
     private Texture2D texture2D;
     private float captureInterval;
@@ -101,13 +107,28 @@ public class CameraCapture : MonoBehaviour
     private bool uploadWorkerRunning = false;
     private bool shuttingDown = false;
     private int startupGraceRemaining = 0;
+    private string latestSyncPacketKey = "";
+    private int latestSyncPacketFrameId = -1;
+    private int latestSyncPacketUnityFrameCount = -1;
+    private float latestSyncPacketTimestamp = -1f;
 
     private struct PendingUpload
     {
         public byte[] imageData;
         public float timestamp;
         public int frameId;
+        public int captureUnityFrameCount;
+        public float captureUnityTime;
+        public float captureRealtimeSinceStartup;
+        public float captureUnscaledTime;
+        public float captureTimeScale;
+        public string packetKey;
     }
+
+    public string LatestSyncPacketKey => latestSyncPacketKey;
+    public int LatestSyncPacketFrameId => latestSyncPacketFrameId;
+    public int LatestSyncPacketUnityFrameCount => latestSyncPacketUnityFrameCount;
+    public float LatestSyncPacketTimestamp => latestSyncPacketTimestamp;
     
     void Start()
     {
@@ -450,10 +471,22 @@ public class CameraCapture : MonoBehaviour
         {
 #if UNITY_2018_2_OR_NEWER
             int bufIdx = activeBufferIndex;
+            int captureUnityFrameCount = Time.frameCount;
+            float captureUnityTime = Time.time;
+            float captureRealtime = Time.realtimeSinceStartup;
+            float captureUnscaled = Time.unscaledTime;
+            float captureTimeScale = Time.timeScale;
+            string packetKey = BuildSyncPacketKey(frameId, captureUnityFrameCount);
             bufferReadbackInFlight[bufIdx] = true;
             bufferPendingFrameId[bufIdx] = frameId;
             bufferPendingTimestamp[bufIdx] = captureTime;
             bufferPendingReadbackStart[bufIdx] = nowRealtime;
+            bufferPendingUnityFrameCount[bufIdx] = captureUnityFrameCount;
+            bufferPendingUnityTime[bufIdx] = captureUnityTime;
+            bufferPendingRealtime[bufIdx] = captureRealtime;
+            bufferPendingUnscaledTime[bufIdx] = captureUnscaled;
+            bufferPendingTimeScale[bufIdx] = captureTimeScale;
+            bufferPendingPacketKey[bufIdx] = packetKey;
             AsyncGPUReadback.Request(currentRT, 0, TextureFormat.RGBA32,
                 (AsyncGPUReadbackRequest req) => OnCompleteReadback(req, bufIdx));
             // Swap to the other buffer for the next frame
@@ -483,7 +516,23 @@ public class CameraCapture : MonoBehaviour
             
             // Send to Python server
             LogFrameMarker(frameId, captureTime);
-            QueueOrSendImage(imageData, captureTime, frameId);
+            int captureUnityFrameCount = Time.frameCount;
+            float captureUnityTime = Time.time;
+            float captureRealtime = Time.realtimeSinceStartup;
+            float captureUnscaled = Time.unscaledTime;
+            float captureTimeScale = Time.timeScale;
+            string packetKey = BuildSyncPacketKey(frameId, captureUnityFrameCount);
+            QueueOrSendImage(
+                imageData,
+                captureTime,
+                frameId,
+                captureUnityFrameCount,
+                captureUnityTime,
+                captureRealtime,
+                captureUnscaled,
+                captureTimeScale,
+                packetKey
+            );
             
             frameCount++;
         }
@@ -575,6 +624,12 @@ public class CameraCapture : MonoBehaviour
         int fid = bufferPendingFrameId[bufferIndex];
         float ts = bufferPendingTimestamp[bufferIndex];
         float readbackStart = bufferPendingReadbackStart[bufferIndex];
+        int captureUnityFrameCount = bufferPendingUnityFrameCount[bufferIndex];
+        float captureUnityTime = bufferPendingUnityTime[bufferIndex];
+        float captureRealtime = bufferPendingRealtime[bufferIndex];
+        float captureUnscaled = bufferPendingUnscaledTime[bufferIndex];
+        float captureTimeScale = bufferPendingTimeScale[bufferIndex];
+        string packetKey = bufferPendingPacketKey[bufferIndex];
 
         var data = request.GetData<byte>();
         texture2D.LoadRawTextureData(data);
@@ -603,17 +658,59 @@ public class CameraCapture : MonoBehaviour
             );
         }
 
-        QueueOrSendImage(imageData, ts, fid);
+        QueueOrSendImage(
+            imageData,
+            ts,
+            fid,
+            captureUnityFrameCount,
+            captureUnityTime,
+            captureRealtime,
+            captureUnscaled,
+            captureTimeScale,
+            packetKey
+        );
         LogFrameMarker(fid, ts);
         frameCount++;
     }
 #endif
 
-    private void QueueOrSendImage(byte[] imageData, float timestamp, int frameId)
+    private string BuildSyncPacketKey(int frameId, int captureUnityFrameCount)
     {
+        return $"{cameraId}:{frameId}:{captureUnityFrameCount}";
+    }
+
+    private void QueueOrSendImage(
+        byte[] imageData,
+        float timestamp,
+        int frameId,
+        int captureUnityFrameCount,
+        float captureUnityTime,
+        float captureRealtimeSinceStartup,
+        float captureUnscaledTime,
+        float captureTimeScale,
+        string packetKey
+    )
+    {
+        latestSyncPacketKey = packetKey ?? "";
+        latestSyncPacketFrameId = frameId;
+        latestSyncPacketUnityFrameCount = captureUnityFrameCount;
+        latestSyncPacketTimestamp = timestamp;
+
         if (!gtCameraSendAsync)
         {
-            StartCoroutine(SendImageToServer(imageData, timestamp, frameId));
+            StartCoroutine(
+                SendImageToServer(
+                    imageData,
+                    timestamp,
+                    frameId,
+                    captureUnityFrameCount,
+                    captureUnityTime,
+                    captureRealtimeSinceStartup,
+                    captureUnscaledTime,
+                    captureTimeScale,
+                    packetKey
+                )
+            );
             return;
         }
 
@@ -626,6 +723,12 @@ public class CameraCapture : MonoBehaviour
             imageData = imageData,
             timestamp = timestamp,
             frameId = frameId,
+            captureUnityFrameCount = captureUnityFrameCount,
+            captureUnityTime = captureUnityTime,
+            captureRealtimeSinceStartup = captureRealtimeSinceStartup,
+            captureUnscaledTime = captureUnscaledTime,
+            captureTimeScale = captureTimeScale,
+            packetKey = packetKey,
         });
     }
 
@@ -644,7 +747,19 @@ public class CameraCapture : MonoBehaviour
                 continue;
             }
             PendingUpload item = uploadQueue.Dequeue();
-            yield return StartCoroutine(SendImageToServer(item.imageData, item.timestamp, item.frameId));
+            yield return StartCoroutine(
+                SendImageToServer(
+                    item.imageData,
+                    item.timestamp,
+                    item.frameId,
+                    item.captureUnityFrameCount,
+                    item.captureUnityTime,
+                    item.captureRealtimeSinceStartup,
+                    item.captureUnscaledTime,
+                    item.captureTimeScale,
+                    item.packetKey
+                )
+            );
         }
         uploadWorkerRunning = false;
     }
@@ -668,7 +783,17 @@ public class CameraCapture : MonoBehaviour
         }
     }
     
-    IEnumerator SendImageToServer(byte[] imageData, float timestamp, int frameId)
+    IEnumerator SendImageToServer(
+        byte[] imageData,
+        float timestamp,
+        int frameId,
+        int captureUnityFrameCount,
+        float captureUnityTime,
+        float captureRealtimeSinceStartup,
+        float captureUnscaledTime,
+        float captureTimeScale,
+        string packetKey
+    )
     {
         string url = $"{apiUrl}{cameraEndpoint}";
         float sendTimestamp = timestamp;
@@ -693,9 +818,12 @@ public class CameraCapture : MonoBehaviour
         form.AddField("timestamp", sendTimestamp.ToString("R"));
         form.AddField("frame_id", frameId.ToString());
         form.AddField("camera_id", cameraId);
-        form.AddField("realtime_since_startup", Time.realtimeSinceStartup.ToString("R"));
-        form.AddField("unscaled_time", Time.unscaledTime.ToString("R"));
-        form.AddField("time_scale", Time.timeScale.ToString("F3"));
+        form.AddField("sync_packet_key", packetKey ?? "");
+        form.AddField("unity_frame_count", captureUnityFrameCount.ToString());
+        form.AddField("unity_time", captureUnityTime.ToString("R"));
+        form.AddField("realtime_since_startup", captureRealtimeSinceStartup.ToString("R"));
+        form.AddField("unscaled_time", captureUnscaledTime.ToString("R"));
+        form.AddField("time_scale", captureTimeScale.ToString("F3"));
         
         using (UnityWebRequest request = UnityWebRequest.Post(url, form))
         {
@@ -774,4 +902,3 @@ public class CameraCapture : MonoBehaviour
         }
     }
 }
-

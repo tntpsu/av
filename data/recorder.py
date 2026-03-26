@@ -335,10 +335,16 @@ class DataRecorder:
         self.h5_file.create_dataset("vehicle/radar_fwd_distance_m",     shape=(0,), maxshape=max_shape, dtype=np.float32)
         self.h5_file.create_dataset("vehicle/radar_fwd_range_rate_mps", shape=(0,), maxshape=max_shape, dtype=np.float32)
         self.h5_file.create_dataset("vehicle/radar_fwd_snr",            shape=(0,), maxshape=max_shape, dtype=np.float32)
+        self.h5_file.create_dataset("vehicle/lead_collision_detected",  shape=(0,), maxshape=max_shape, dtype=np.int8)
+        self.h5_file.create_dataset("vehicle/lead_collision_override_active", shape=(0,), maxshape=max_shape, dtype=np.int8)
         self.h5_file.create_dataset("vehicle/acc_active",               shape=(0,), maxshape=max_shape, dtype=np.float32)
         self.h5_file.create_dataset("vehicle/acc_target_gap_m",         shape=(0,), maxshape=max_shape, dtype=np.float32)
         self.h5_file.create_dataset("vehicle/acc_gap_error_m",          shape=(0,), maxshape=max_shape, dtype=np.float32)
         self.h5_file.create_dataset("vehicle/acc_ttc_s",                shape=(0,), maxshape=max_shape, dtype=np.float32)
+        self.h5_file.create_dataset("vehicle/acc_state_code",           shape=(0,), maxshape=max_shape, dtype=h5py.string_dtype(encoding='utf-8', length=32))
+        self.h5_file.create_dataset("vehicle/acc_target_speed_mps",     shape=(0,), maxshape=max_shape, dtype=np.float32)
+        self.h5_file.create_dataset("vehicle/acc_request_estop",        shape=(0,), maxshape=max_shape, dtype=np.int8)
+        self.h5_file.create_dataset("vehicle/acc_safety_mode_code",     shape=(0,), maxshape=max_shape, dtype=h5py.string_dtype(encoding='utf-8', length=32))
         # Grade/pitch/roll telemetry (Step 3)
         self.h5_file.create_dataset(
             "vehicle/pitch_rad",
@@ -888,6 +894,282 @@ class DataRecorder:
             maxshape=max_shape,
             dtype=np.float32
         )
+        self.h5_file.create_dataset(
+            "vehicle/sync_packet_mode",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=h5py.string_dtype(encoding='utf-8', length=32)
+        )
+        self.h5_file.create_dataset(
+            "vehicle/sync_packet_schema_version",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int16
+        )
+        self.h5_file.create_dataset(
+            "vehicle/sync_packet_id",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int32
+        )
+        self.h5_file.create_dataset(
+            "vehicle/sync_packet_unity_frame_count",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int32
+        )
+        self.h5_file.create_dataset(
+            "vehicle/sync_packet_consume_policy",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=h5py.string_dtype(encoding='utf-8', length=32)
+        )
+        self.h5_file.create_dataset(
+            "vehicle/sync_packet_complete",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int8
+        )
+        self.h5_file.create_dataset(
+            "vehicle/sync_packet_fallback_active",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int8
+        )
+        self.h5_file.create_dataset(
+            "vehicle/sync_packet_fallback_reason_code",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=h5py.string_dtype(encoding='utf-8', length=32)
+        )
+        self.h5_file.create_dataset(
+            "vehicle/sync_packet_queue_depth",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int32
+        )
+        self.h5_file.create_dataset(
+            "vehicle/sync_packet_drop_count",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int32
+        )
+        self.h5_file.create_dataset(
+            "vehicle/sync_packet_payload_queue_depth",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int32
+        )
+        self.h5_file.create_dataset(
+            "vehicle/sync_packet_payload_drop_count",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int32
+        )
+        self.h5_file.create_dataset(
+            "vehicle/sync_packet_orphan_camera_count",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int32
+        )
+        self.h5_file.create_dataset(
+            "vehicle/sync_packet_orphan_vehicle_count",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int32
+        )
+        self.h5_file.create_dataset(
+            "vehicle/sync_packet_timeout_count",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int32
+        )
+        self.h5_file.create_dataset(
+            "vehicle/sync_packet_skipped_unity_frames",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int32
+        )
+        self.h5_file.create_dataset(
+            "vehicle/sync_packet_age_ms",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "vehicle/sync_packet_payload_oldest_age_ms",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "vehicle/sync_packet_payload_bytes",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int32
+        )
+        self.h5_file.create_dataset(
+            "vehicle/sync_packet_payload_fallback_reason_code",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=h5py.string_dtype(encoding='utf-8', length=32)
+        )
+        self.h5_file.create_dataset(
+            "vehicle/sync_packet_payload_selected_age_ms",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "vehicle/sync_packet_payload_selected_fresh",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int8
+        )
+        self.h5_file.create_dataset(
+            "vehicle/sync_packet_payload_warn_age_exceeded",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int8
+        )
+        self.h5_file.create_dataset(
+            "vehicle/sync_packet_payload_stale_drop_count",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int32
+        )
+        self.h5_file.create_dataset(
+            "vehicle/sync_packet_payload_drained_count",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int32
+        )
+        self.h5_file.create_dataset(
+            "vehicle/sync_packet_payload_max_drained_age_ms",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "vehicle/sync_packet_payload_selection_source",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=h5py.string_dtype(encoding='utf-8', length=32)
+        )
+        self.h5_file.create_dataset(
+            "vehicle/sync_packet_payload_selection_fallback_active",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int8
+        )
+        self.h5_file.create_dataset(
+            "vehicle/sync_packet_payload_selection_fallback_reason_code",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=h5py.string_dtype(encoding='utf-8', length=32)
+        )
+        self.h5_file.create_dataset(
+            "vehicle/sync_packet_payload_server_queue_depth_after_select",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int32
+        )
+        self.h5_file.create_dataset(
+            "vehicle/sync_packet_payload_server_oldest_age_ms_after_select",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "vehicle/sync_packet_join_source",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=h5py.string_dtype(encoding='utf-8', length=32)
+        )
+        self.h5_file.create_dataset(
+            "vehicle/sync_packet_join_key_present",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int8
+        )
+        self.h5_file.create_dataset(
+            "vehicle/sync_packet_join_wait_ms",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "vehicle/sync_packet_key_match_count",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int32
+        )
+        self.h5_file.create_dataset(
+            "vehicle/sync_packet_unity_fallback_count",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int32
+        )
+        self.h5_file.create_dataset(
+            "vehicle/sync_packet_superseded_camera_count",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int32
+        )
+        self.h5_file.create_dataset(
+            "vehicle/sync_packet_superseded_vehicle_count",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int32
+        )
+        self.h5_file.create_dataset(
+            "vehicle/sync_packet_packet_superseded_camera_count",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int32
+        )
+        self.h5_file.create_dataset(
+            "vehicle/sync_packet_packet_superseded_vehicle_count",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int32
+        )
+        self.h5_file.create_dataset(
+            "vehicle/sync_front_age_ms",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "vehicle/sync_vehicle_age_ms",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "vehicle/sync_front_vehicle_frame_delta",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "vehicle/sync_front_vehicle_time_delta_ms",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "vehicle/sync_packet_missing_front",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int8
+        )
+        self.h5_file.create_dataset(
+            "vehicle/sync_packet_missing_vehicle",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int8
+        )
         
         # NEW: Debug fields for diagnosing ground truth offset issues
         self.h5_file.create_dataset(
@@ -1174,6 +1456,42 @@ class DataRecorder:
             shape=(0,),
             maxshape=max_shape,
             dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/governor_target_speed_mps",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/acc_target_speed_mps",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/planner_target_speed_applied_mps",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/final_longitudinal_target_mps",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/final_longitudinal_owner_code",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=h5py.string_dtype(encoding='utf-8', length=32)
+        )
+        self.h5_file.create_dataset(
+            "control/reference_velocity_source_code",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=h5py.string_dtype(encoding='utf-8', length=32)
         )
         self.h5_file.create_dataset(
             "control/target_speed_slew_active",
@@ -2448,6 +2766,84 @@ class DataRecorder:
         )
         self.h5_file.create_dataset(
             "control/teleport_jump_m",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/teleport_expected_motion_m",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/teleport_motion_ratio",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/teleport_guard_suppressed",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int8
+        )
+        self.h5_file.create_dataset(
+            "control/teleport_continuity_suspect",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int8
+        )
+        self.h5_file.create_dataset(
+            "control/teleport_guard_reason_code",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=h5py.string_dtype(encoding='utf-8', length=48)
+        )
+        self.h5_file.create_dataset(
+            "control/teleport_dynamic_threshold_m",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/teleport_hard_override_threshold_m",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/teleport_effective_dt_s",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/teleport_unity_dt_s",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/post_jump_cooldown_active",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int8
+        )
+        self.h5_file.create_dataset(
+            "control/post_jump_cooldown_frames_remaining",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int16
+        )
+        self.h5_file.create_dataset(
+            "control/post_jump_reason_code",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=h5py.string_dtype(encoding='utf-8', length=32)
+        )
+        self.h5_file.create_dataset(
+            "control/reference_velocity_effective",
             shape=(0,),
             maxshape=max_shape,
             dtype=np.float32
@@ -3931,10 +4327,16 @@ class DataRecorder:
         radar_fwd_distance_m_list = []
         radar_fwd_range_rate_mps_list = []
         radar_fwd_snr_list = []
+        lead_collision_detected_list = []
+        lead_collision_override_active_list = []
         acc_active_list = []
         acc_target_gap_m_list = []
         acc_gap_error_m_list = []
         acc_ttc_s_list = []
+        acc_state_code_list = []
+        acc_target_speed_mps_list = []
+        acc_request_estop_list = []
+        acc_safety_mode_code_list = []
         pitch_rad_list = []
         roll_rad_list = []
         road_grade_list = []
@@ -4033,6 +4435,52 @@ class DataRecorder:
         stream_topdown_frame_id_reused = []
         stream_front_clock_jump = []
         stream_topdown_clock_jump = []
+        sync_packet_mode = []
+        sync_packet_schema_version = []
+        sync_packet_id = []
+        sync_packet_unity_frame_count = []
+        sync_packet_consume_policy = []
+        sync_packet_complete = []
+        sync_packet_fallback_active = []
+        sync_packet_fallback_reason_code = []
+        sync_packet_queue_depth = []
+        sync_packet_drop_count = []
+        sync_packet_payload_queue_depth = []
+        sync_packet_payload_drop_count = []
+        sync_packet_orphan_camera_count = []
+        sync_packet_orphan_vehicle_count = []
+        sync_packet_timeout_count = []
+        sync_packet_skipped_unity_frames = []
+        sync_packet_age_ms = []
+        sync_packet_payload_oldest_age_ms = []
+        sync_packet_payload_bytes = []
+        sync_packet_payload_fallback_reason_code = []
+        sync_packet_payload_selected_age_ms = []
+        sync_packet_payload_selected_fresh = []
+        sync_packet_payload_warn_age_exceeded = []
+        sync_packet_payload_stale_drop_count = []
+        sync_packet_payload_drained_count = []
+        sync_packet_payload_max_drained_age_ms = []
+        sync_packet_payload_selection_source = []
+        sync_packet_payload_selection_fallback_active = []
+        sync_packet_payload_selection_fallback_reason_code = []
+        sync_packet_payload_server_queue_depth_after_select = []
+        sync_packet_payload_server_oldest_age_ms_after_select = []
+        sync_packet_join_source = []
+        sync_packet_join_key_present = []
+        sync_packet_join_wait_ms = []
+        sync_packet_key_match_count = []
+        sync_packet_unity_fallback_count = []
+        sync_packet_superseded_camera_count = []
+        sync_packet_superseded_vehicle_count = []
+        sync_packet_packet_superseded_camera_count = []
+        sync_packet_packet_superseded_vehicle_count = []
+        sync_front_age_ms = []
+        sync_vehicle_age_ms = []
+        sync_front_vehicle_frame_delta = []
+        sync_front_vehicle_time_delta_ms = []
+        sync_packet_missing_front = []
+        sync_packet_missing_vehicle = []
         # NEW: Debug fields for diagnosing ground truth offset issues
         road_center_at_car_x = []
         road_center_at_car_y = []
@@ -4108,10 +4556,22 @@ class DataRecorder:
             radar_fwd_distance_m_list.append(float(getattr(vs, 'radar_fwd_distance_m', 0.0)))
             radar_fwd_range_rate_mps_list.append(float(getattr(vs, 'radar_fwd_range_rate_mps', 0.0)))
             radar_fwd_snr_list.append(float(getattr(vs, 'radar_fwd_snr', 0.0)))
+            lead_collision_detected_list.append(
+                1 if getattr(vs, 'lead_collision_detected', False) else 0
+            )
+            lead_collision_override_active_list.append(
+                1 if getattr(vs, 'lead_collision_override_active', False) else 0
+            )
             acc_active_list.append(float(getattr(vs, 'acc_active', 0.0)))
             acc_target_gap_m_list.append(float(getattr(vs, 'acc_target_gap_m', 0.0)))
             acc_gap_error_m_list.append(float(getattr(vs, 'acc_gap_error_m', 0.0)))
             acc_ttc_s_list.append(float(getattr(vs, 'acc_ttc_s', 999.0)))
+            acc_state_code_list.append(str(getattr(vs, 'acc_state_code', '') or ''))
+            acc_target_speed_mps_list.append(float(getattr(vs, 'acc_target_speed_mps', 0.0) or 0.0))
+            acc_request_estop_list.append(1 if getattr(vs, 'acc_request_estop', False) else 0)
+            acc_safety_mode_code_list.append(
+                str(getattr(vs, 'acc_safety_mode_code', 'none') or 'none')
+            )
             pitch_rad_list.append(
                 getattr(vs, 'pitch_rad', 0.0)
             )
@@ -4363,6 +4823,156 @@ class DataRecorder:
             stream_topdown_clock_jump.append(
                 getattr(vs, 'stream_topdown_clock_jump', 0.0)
             )
+            sync_packet_mode.append(str(getattr(vs, 'sync_packet_mode', '') or ''))
+            sync_packet_schema_version.append(int(getattr(vs, 'sync_packet_schema_version', 0) or 0))
+            sync_packet_id.append(int(getattr(vs, 'sync_packet_id', -1) or -1))
+            sync_packet_unity_frame_count.append(
+                int(getattr(vs, 'sync_packet_unity_frame_count', -1) or -1)
+            )
+            sync_packet_consume_policy.append(
+                str(getattr(vs, 'sync_packet_consume_policy', '') or '')
+            )
+            _sync_complete = getattr(vs, 'sync_packet_complete', None)
+            sync_packet_complete.append(-1 if _sync_complete is None else (1 if bool(_sync_complete) else 0))
+            _sync_fallback = getattr(vs, 'sync_packet_fallback_active', None)
+            sync_packet_fallback_active.append(
+                -1 if _sync_fallback is None else (1 if bool(_sync_fallback) else 0)
+            )
+            sync_packet_fallback_reason_code.append(
+                str(getattr(vs, 'sync_packet_fallback_reason_code', '') or '')
+            )
+            sync_packet_queue_depth.append(int(getattr(vs, 'sync_packet_queue_depth', 0) or 0))
+            sync_packet_drop_count.append(int(getattr(vs, 'sync_packet_drop_count', 0) or 0))
+            sync_packet_payload_queue_depth.append(
+                int(getattr(vs, 'sync_packet_payload_queue_depth', 0) or 0)
+            )
+            sync_packet_payload_drop_count.append(
+                int(getattr(vs, 'sync_packet_payload_drop_count', 0) or 0)
+            )
+            sync_packet_orphan_camera_count.append(
+                int(getattr(vs, 'sync_packet_orphan_camera_count', 0) or 0)
+            )
+            sync_packet_orphan_vehicle_count.append(
+                int(getattr(vs, 'sync_packet_orphan_vehicle_count', 0) or 0)
+            )
+            sync_packet_timeout_count.append(int(getattr(vs, 'sync_packet_timeout_count', 0) or 0))
+            sync_packet_skipped_unity_frames.append(
+                int(getattr(vs, 'sync_packet_skipped_unity_frames', 0) or 0)
+            )
+            sync_packet_age_ms.append(float(getattr(vs, 'sync_packet_age_ms', np.nan)))
+            sync_packet_payload_oldest_age_ms.append(
+                float(getattr(vs, 'sync_packet_payload_oldest_age_ms', np.nan))
+            )
+            sync_packet_payload_bytes.append(
+                int(getattr(vs, 'sync_packet_payload_bytes', 0) or 0)
+            )
+            sync_packet_payload_fallback_reason_code.append(
+                str(getattr(vs, 'sync_packet_payload_fallback_reason_code', '') or '')
+            )
+            sync_packet_payload_selected_age_ms.append(
+                float(getattr(vs, 'sync_packet_payload_selected_age_ms', np.nan))
+            )
+            _sync_payload_selected_fresh = getattr(vs, 'sync_packet_payload_selected_fresh', None)
+            sync_packet_payload_selected_fresh.append(
+                -1 if _sync_payload_selected_fresh is None else (1 if bool(_sync_payload_selected_fresh) else 0)
+            )
+            _sync_payload_warn_age_exceeded = getattr(vs, 'sync_packet_payload_warn_age_exceeded', None)
+            sync_packet_payload_warn_age_exceeded.append(
+                -1 if _sync_payload_warn_age_exceeded is None else (1 if bool(_sync_payload_warn_age_exceeded) else 0)
+            )
+            sync_packet_payload_stale_drop_count.append(
+                int(getattr(vs, 'sync_packet_payload_stale_drop_count', 0) or 0)
+            )
+            sync_packet_payload_drained_count.append(
+                int(getattr(vs, 'sync_packet_payload_drained_count', 0) or 0)
+            )
+            sync_packet_payload_max_drained_age_ms.append(
+                float(getattr(vs, 'sync_packet_payload_max_drained_age_ms', np.nan))
+            )
+            sync_packet_payload_selection_source.append(
+                str(getattr(vs, 'sync_packet_payload_selection_source', '') or '')
+            )
+            _sync_payload_selection_fallback = getattr(
+                vs, 'sync_packet_payload_selection_fallback_active', None
+            )
+            sync_packet_payload_selection_fallback_active.append(
+                -1
+                if _sync_payload_selection_fallback is None
+                else (1 if bool(_sync_payload_selection_fallback) else 0)
+            )
+            sync_packet_payload_selection_fallback_reason_code.append(
+                str(
+                    getattr(
+                        vs,
+                        'sync_packet_payload_selection_fallback_reason_code',
+                        '',
+                    )
+                    or ''
+                )
+            )
+            sync_packet_payload_server_queue_depth_after_select.append(
+                int(
+                    getattr(
+                        vs,
+                        'sync_packet_payload_server_queue_depth_after_select',
+                        0,
+                    )
+                    or 0
+                )
+            )
+            sync_packet_payload_server_oldest_age_ms_after_select.append(
+                float(
+                    getattr(
+                        vs,
+                        'sync_packet_payload_server_oldest_age_ms_after_select',
+                        np.nan,
+                    )
+                )
+            )
+            sync_packet_join_source.append(
+                str(getattr(vs, 'sync_packet_join_source', '') or '')
+            )
+            _sync_join_key_present = getattr(vs, 'sync_packet_join_key_present', None)
+            sync_packet_join_key_present.append(
+                -1 if _sync_join_key_present is None else (1 if bool(_sync_join_key_present) else 0)
+            )
+            sync_packet_join_wait_ms.append(
+                float(getattr(vs, 'sync_packet_join_wait_ms', np.nan))
+            )
+            sync_packet_key_match_count.append(
+                int(getattr(vs, 'sync_packet_key_match_count', 0) or 0)
+            )
+            sync_packet_unity_fallback_count.append(
+                int(getattr(vs, 'sync_packet_unity_fallback_count', 0) or 0)
+            )
+            sync_packet_superseded_camera_count.append(
+                int(getattr(vs, 'sync_packet_superseded_camera_count', 0) or 0)
+            )
+            sync_packet_superseded_vehicle_count.append(
+                int(getattr(vs, 'sync_packet_superseded_vehicle_count', 0) or 0)
+            )
+            sync_packet_packet_superseded_camera_count.append(
+                int(getattr(vs, 'sync_packet_packet_superseded_camera_count', 0) or 0)
+            )
+            sync_packet_packet_superseded_vehicle_count.append(
+                int(getattr(vs, 'sync_packet_packet_superseded_vehicle_count', 0) or 0)
+            )
+            sync_front_age_ms.append(float(getattr(vs, 'sync_front_age_ms', np.nan)))
+            sync_vehicle_age_ms.append(float(getattr(vs, 'sync_vehicle_age_ms', np.nan)))
+            sync_front_vehicle_frame_delta.append(
+                float(getattr(vs, 'sync_front_vehicle_frame_delta', np.nan))
+            )
+            sync_front_vehicle_time_delta_ms.append(
+                float(getattr(vs, 'sync_front_vehicle_time_delta_ms', np.nan))
+            )
+            _sync_missing_front = getattr(vs, 'sync_packet_missing_front', None)
+            sync_packet_missing_front.append(
+                -1 if _sync_missing_front is None else (1 if bool(_sync_missing_front) else 0)
+            )
+            _sync_missing_vehicle = getattr(vs, 'sync_packet_missing_vehicle', None)
+            sync_packet_missing_vehicle.append(
+                -1 if _sync_missing_vehicle is None else (1 if bool(_sync_missing_vehicle) else 0)
+            )
             # NEW: Debug fields for diagnosing ground truth offset issues
             road_center_at_car_x.append(getattr(vs, 'road_center_at_car_x', 0.0))
             road_center_at_car_y.append(getattr(vs, 'road_center_at_car_y', 0.0))
@@ -4424,7 +5034,10 @@ class DataRecorder:
                        "speed_limit_preview_long_min_distance",
                        "radar_fwd_detected", "radar_fwd_distance_m",
                        "radar_fwd_range_rate_mps", "radar_fwd_snr",
+                       "lead_collision_detected", "lead_collision_override_active",
                        "acc_active", "acc_target_gap_m", "acc_gap_error_m", "acc_ttc_s",
+                       "acc_state_code", "acc_target_speed_mps", "acc_request_estop",
+                       "acc_safety_mode_code",
                        "pitch_rad", "roll_rad", "road_grade",
                        "wheel_sideways_slip", "wheel_forward_slip", "wheel_contact_force",
                        "wheel_rpm", "wheel_sprung_mass", "wheel_contact_normal_y",
@@ -4486,10 +5099,24 @@ class DataRecorder:
             self.h5_file["vehicle/radar_fwd_distance_m"][current_size:]     = np.array(radar_fwd_distance_m_list, dtype=np.float32)
             self.h5_file["vehicle/radar_fwd_range_rate_mps"][current_size:] = np.array(radar_fwd_range_rate_mps_list, dtype=np.float32)
             self.h5_file["vehicle/radar_fwd_snr"][current_size:]            = np.array(radar_fwd_snr_list, dtype=np.float32)
+            self.h5_file["vehicle/lead_collision_detected"][current_size:]  = np.array(lead_collision_detected_list, dtype=np.int8)
+            self.h5_file["vehicle/lead_collision_override_active"][current_size:] = np.array(
+                lead_collision_override_active_list, dtype=np.int8
+            )
             self.h5_file["vehicle/acc_active"][current_size:]               = np.array(acc_active_list, dtype=np.float32)
             self.h5_file["vehicle/acc_target_gap_m"][current_size:]         = np.array(acc_target_gap_m_list, dtype=np.float32)
             self.h5_file["vehicle/acc_gap_error_m"][current_size:]          = np.array(acc_gap_error_m_list, dtype=np.float32)
             self.h5_file["vehicle/acc_ttc_s"][current_size:]                = np.array(acc_ttc_s_list, dtype=np.float32)
+            self.h5_file["vehicle/acc_state_code"][current_size:]           = np.array(
+                acc_state_code_list,
+                dtype=h5py.string_dtype(encoding='utf-8', length=32),
+            )
+            self.h5_file["vehicle/acc_target_speed_mps"][current_size:]     = np.array(acc_target_speed_mps_list, dtype=np.float32)
+            self.h5_file["vehicle/acc_request_estop"][current_size:]        = np.array(acc_request_estop_list, dtype=np.int8)
+            self.h5_file["vehicle/acc_safety_mode_code"][current_size:]     = np.array(
+                acc_safety_mode_code_list,
+                dtype=h5py.string_dtype(encoding='utf-8', length=32),
+            )
             self.h5_file["vehicle/pitch_rad"][current_size:] = np.array(
                 pitch_rad_list, dtype=np.float32
             )
@@ -4753,6 +5380,118 @@ class DataRecorder:
                     self.h5_file["vehicle/stream_front_clock_jump"][current_size:] = np.array(stream_front_clock_jump, dtype=np.float32)
                     self.h5_file["vehicle/stream_topdown_clock_jump"].resize((current_size + len(stream_topdown_clock_jump),))
                     self.h5_file["vehicle/stream_topdown_clock_jump"][current_size:] = np.array(stream_topdown_clock_jump, dtype=np.float32)
+                    self.h5_file["vehicle/sync_packet_mode"].resize((current_size + len(sync_packet_mode),))
+                    self.h5_file["vehicle/sync_packet_mode"][current_size:] = np.array(
+                        sync_packet_mode, dtype=h5py.string_dtype(encoding='utf-8', length=32)
+                    )
+                    self.h5_file["vehicle/sync_packet_schema_version"].resize((current_size + len(sync_packet_schema_version),))
+                    self.h5_file["vehicle/sync_packet_schema_version"][current_size:] = np.array(sync_packet_schema_version, dtype=np.int16)
+                    self.h5_file["vehicle/sync_packet_id"].resize((current_size + len(sync_packet_id),))
+                    self.h5_file["vehicle/sync_packet_id"][current_size:] = np.array(sync_packet_id, dtype=np.int32)
+                    self.h5_file["vehicle/sync_packet_unity_frame_count"].resize((current_size + len(sync_packet_unity_frame_count),))
+                    self.h5_file["vehicle/sync_packet_unity_frame_count"][current_size:] = np.array(sync_packet_unity_frame_count, dtype=np.int32)
+                    self.h5_file["vehicle/sync_packet_consume_policy"].resize((current_size + len(sync_packet_consume_policy),))
+                    self.h5_file["vehicle/sync_packet_consume_policy"][current_size:] = np.array(
+                        sync_packet_consume_policy,
+                        dtype=h5py.string_dtype(encoding='utf-8', length=32),
+                    )
+                    self.h5_file["vehicle/sync_packet_complete"].resize((current_size + len(sync_packet_complete),))
+                    self.h5_file["vehicle/sync_packet_complete"][current_size:] = np.array(sync_packet_complete, dtype=np.int8)
+                    self.h5_file["vehicle/sync_packet_fallback_active"].resize((current_size + len(sync_packet_fallback_active),))
+                    self.h5_file["vehicle/sync_packet_fallback_active"][current_size:] = np.array(sync_packet_fallback_active, dtype=np.int8)
+                    self.h5_file["vehicle/sync_packet_fallback_reason_code"].resize((current_size + len(sync_packet_fallback_reason_code),))
+                    self.h5_file["vehicle/sync_packet_fallback_reason_code"][current_size:] = np.array(
+                        sync_packet_fallback_reason_code,
+                        dtype=h5py.string_dtype(encoding='utf-8', length=32),
+                    )
+                    self.h5_file["vehicle/sync_packet_queue_depth"].resize((current_size + len(sync_packet_queue_depth),))
+                    self.h5_file["vehicle/sync_packet_queue_depth"][current_size:] = np.array(sync_packet_queue_depth, dtype=np.int32)
+                    self.h5_file["vehicle/sync_packet_drop_count"].resize((current_size + len(sync_packet_drop_count),))
+                    self.h5_file["vehicle/sync_packet_drop_count"][current_size:] = np.array(sync_packet_drop_count, dtype=np.int32)
+                    self.h5_file["vehicle/sync_packet_payload_queue_depth"].resize((current_size + len(sync_packet_payload_queue_depth),))
+                    self.h5_file["vehicle/sync_packet_payload_queue_depth"][current_size:] = np.array(sync_packet_payload_queue_depth, dtype=np.int32)
+                    self.h5_file["vehicle/sync_packet_payload_drop_count"].resize((current_size + len(sync_packet_payload_drop_count),))
+                    self.h5_file["vehicle/sync_packet_payload_drop_count"][current_size:] = np.array(sync_packet_payload_drop_count, dtype=np.int32)
+                    self.h5_file["vehicle/sync_packet_orphan_camera_count"].resize((current_size + len(sync_packet_orphan_camera_count),))
+                    self.h5_file["vehicle/sync_packet_orphan_camera_count"][current_size:] = np.array(sync_packet_orphan_camera_count, dtype=np.int32)
+                    self.h5_file["vehicle/sync_packet_orphan_vehicle_count"].resize((current_size + len(sync_packet_orphan_vehicle_count),))
+                    self.h5_file["vehicle/sync_packet_orphan_vehicle_count"][current_size:] = np.array(sync_packet_orphan_vehicle_count, dtype=np.int32)
+                    self.h5_file["vehicle/sync_packet_timeout_count"].resize((current_size + len(sync_packet_timeout_count),))
+                    self.h5_file["vehicle/sync_packet_timeout_count"][current_size:] = np.array(sync_packet_timeout_count, dtype=np.int32)
+                    self.h5_file["vehicle/sync_packet_skipped_unity_frames"].resize((current_size + len(sync_packet_skipped_unity_frames),))
+                    self.h5_file["vehicle/sync_packet_skipped_unity_frames"][current_size:] = np.array(sync_packet_skipped_unity_frames, dtype=np.int32)
+                    self.h5_file["vehicle/sync_packet_age_ms"].resize((current_size + len(sync_packet_age_ms),))
+                    self.h5_file["vehicle/sync_packet_age_ms"][current_size:] = np.array(sync_packet_age_ms, dtype=np.float32)
+                    self.h5_file["vehicle/sync_packet_payload_oldest_age_ms"].resize((current_size + len(sync_packet_payload_oldest_age_ms),))
+                    self.h5_file["vehicle/sync_packet_payload_oldest_age_ms"][current_size:] = np.array(sync_packet_payload_oldest_age_ms, dtype=np.float32)
+                    self.h5_file["vehicle/sync_packet_payload_bytes"].resize((current_size + len(sync_packet_payload_bytes),))
+                    self.h5_file["vehicle/sync_packet_payload_bytes"][current_size:] = np.array(sync_packet_payload_bytes, dtype=np.int32)
+                    self.h5_file["vehicle/sync_packet_payload_fallback_reason_code"].resize((current_size + len(sync_packet_payload_fallback_reason_code),))
+                    self.h5_file["vehicle/sync_packet_payload_fallback_reason_code"][current_size:] = np.array(
+                        sync_packet_payload_fallback_reason_code,
+                        dtype=h5py.string_dtype(encoding='utf-8', length=32),
+                    )
+                    self.h5_file["vehicle/sync_packet_payload_selected_age_ms"].resize((current_size + len(sync_packet_payload_selected_age_ms),))
+                    self.h5_file["vehicle/sync_packet_payload_selected_age_ms"][current_size:] = np.array(sync_packet_payload_selected_age_ms, dtype=np.float32)
+                    self.h5_file["vehicle/sync_packet_payload_selected_fresh"].resize((current_size + len(sync_packet_payload_selected_fresh),))
+                    self.h5_file["vehicle/sync_packet_payload_selected_fresh"][current_size:] = np.array(sync_packet_payload_selected_fresh, dtype=np.int8)
+                    self.h5_file["vehicle/sync_packet_payload_warn_age_exceeded"].resize((current_size + len(sync_packet_payload_warn_age_exceeded),))
+                    self.h5_file["vehicle/sync_packet_payload_warn_age_exceeded"][current_size:] = np.array(sync_packet_payload_warn_age_exceeded, dtype=np.int8)
+                    self.h5_file["vehicle/sync_packet_payload_stale_drop_count"].resize((current_size + len(sync_packet_payload_stale_drop_count),))
+                    self.h5_file["vehicle/sync_packet_payload_stale_drop_count"][current_size:] = np.array(sync_packet_payload_stale_drop_count, dtype=np.int32)
+                    self.h5_file["vehicle/sync_packet_payload_drained_count"].resize((current_size + len(sync_packet_payload_drained_count),))
+                    self.h5_file["vehicle/sync_packet_payload_drained_count"][current_size:] = np.array(sync_packet_payload_drained_count, dtype=np.int32)
+                    self.h5_file["vehicle/sync_packet_payload_max_drained_age_ms"].resize((current_size + len(sync_packet_payload_max_drained_age_ms),))
+                    self.h5_file["vehicle/sync_packet_payload_max_drained_age_ms"][current_size:] = np.array(sync_packet_payload_max_drained_age_ms, dtype=np.float32)
+                    self.h5_file["vehicle/sync_packet_payload_selection_source"].resize((current_size + len(sync_packet_payload_selection_source),))
+                    self.h5_file["vehicle/sync_packet_payload_selection_source"][current_size:] = np.array(
+                        sync_packet_payload_selection_source,
+                        dtype=h5py.string_dtype(encoding='utf-8', length=32),
+                    )
+                    self.h5_file["vehicle/sync_packet_payload_selection_fallback_active"].resize((current_size + len(sync_packet_payload_selection_fallback_active),))
+                    self.h5_file["vehicle/sync_packet_payload_selection_fallback_active"][current_size:] = np.array(sync_packet_payload_selection_fallback_active, dtype=np.int8)
+                    self.h5_file["vehicle/sync_packet_payload_selection_fallback_reason_code"].resize((current_size + len(sync_packet_payload_selection_fallback_reason_code),))
+                    self.h5_file["vehicle/sync_packet_payload_selection_fallback_reason_code"][current_size:] = np.array(
+                        sync_packet_payload_selection_fallback_reason_code,
+                        dtype=h5py.string_dtype(encoding='utf-8', length=32),
+                    )
+                    self.h5_file["vehicle/sync_packet_payload_server_queue_depth_after_select"].resize((current_size + len(sync_packet_payload_server_queue_depth_after_select),))
+                    self.h5_file["vehicle/sync_packet_payload_server_queue_depth_after_select"][current_size:] = np.array(sync_packet_payload_server_queue_depth_after_select, dtype=np.int32)
+                    self.h5_file["vehicle/sync_packet_payload_server_oldest_age_ms_after_select"].resize((current_size + len(sync_packet_payload_server_oldest_age_ms_after_select),))
+                    self.h5_file["vehicle/sync_packet_payload_server_oldest_age_ms_after_select"][current_size:] = np.array(sync_packet_payload_server_oldest_age_ms_after_select, dtype=np.float32)
+                    self.h5_file["vehicle/sync_packet_join_source"].resize((current_size + len(sync_packet_join_source),))
+                    self.h5_file["vehicle/sync_packet_join_source"][current_size:] = np.array(
+                        sync_packet_join_source,
+                        dtype=h5py.string_dtype(encoding='utf-8', length=32),
+                    )
+                    self.h5_file["vehicle/sync_packet_join_key_present"].resize((current_size + len(sync_packet_join_key_present),))
+                    self.h5_file["vehicle/sync_packet_join_key_present"][current_size:] = np.array(sync_packet_join_key_present, dtype=np.int8)
+                    self.h5_file["vehicle/sync_packet_join_wait_ms"].resize((current_size + len(sync_packet_join_wait_ms),))
+                    self.h5_file["vehicle/sync_packet_join_wait_ms"][current_size:] = np.array(sync_packet_join_wait_ms, dtype=np.float32)
+                    self.h5_file["vehicle/sync_packet_key_match_count"].resize((current_size + len(sync_packet_key_match_count),))
+                    self.h5_file["vehicle/sync_packet_key_match_count"][current_size:] = np.array(sync_packet_key_match_count, dtype=np.int32)
+                    self.h5_file["vehicle/sync_packet_unity_fallback_count"].resize((current_size + len(sync_packet_unity_fallback_count),))
+                    self.h5_file["vehicle/sync_packet_unity_fallback_count"][current_size:] = np.array(sync_packet_unity_fallback_count, dtype=np.int32)
+                    self.h5_file["vehicle/sync_packet_superseded_camera_count"].resize((current_size + len(sync_packet_superseded_camera_count),))
+                    self.h5_file["vehicle/sync_packet_superseded_camera_count"][current_size:] = np.array(sync_packet_superseded_camera_count, dtype=np.int32)
+                    self.h5_file["vehicle/sync_packet_superseded_vehicle_count"].resize((current_size + len(sync_packet_superseded_vehicle_count),))
+                    self.h5_file["vehicle/sync_packet_superseded_vehicle_count"][current_size:] = np.array(sync_packet_superseded_vehicle_count, dtype=np.int32)
+                    self.h5_file["vehicle/sync_packet_packet_superseded_camera_count"].resize((current_size + len(sync_packet_packet_superseded_camera_count),))
+                    self.h5_file["vehicle/sync_packet_packet_superseded_camera_count"][current_size:] = np.array(sync_packet_packet_superseded_camera_count, dtype=np.int32)
+                    self.h5_file["vehicle/sync_packet_packet_superseded_vehicle_count"].resize((current_size + len(sync_packet_packet_superseded_vehicle_count),))
+                    self.h5_file["vehicle/sync_packet_packet_superseded_vehicle_count"][current_size:] = np.array(sync_packet_packet_superseded_vehicle_count, dtype=np.int32)
+                    self.h5_file["vehicle/sync_front_age_ms"].resize((current_size + len(sync_front_age_ms),))
+                    self.h5_file["vehicle/sync_front_age_ms"][current_size:] = np.array(sync_front_age_ms, dtype=np.float32)
+                    self.h5_file["vehicle/sync_vehicle_age_ms"].resize((current_size + len(sync_vehicle_age_ms),))
+                    self.h5_file["vehicle/sync_vehicle_age_ms"][current_size:] = np.array(sync_vehicle_age_ms, dtype=np.float32)
+                    self.h5_file["vehicle/sync_front_vehicle_frame_delta"].resize((current_size + len(sync_front_vehicle_frame_delta),))
+                    self.h5_file["vehicle/sync_front_vehicle_frame_delta"][current_size:] = np.array(sync_front_vehicle_frame_delta, dtype=np.float32)
+                    self.h5_file["vehicle/sync_front_vehicle_time_delta_ms"].resize((current_size + len(sync_front_vehicle_time_delta_ms),))
+                    self.h5_file["vehicle/sync_front_vehicle_time_delta_ms"][current_size:] = np.array(sync_front_vehicle_time_delta_ms, dtype=np.float32)
+                    self.h5_file["vehicle/sync_packet_missing_front"].resize((current_size + len(sync_packet_missing_front),))
+                    self.h5_file["vehicle/sync_packet_missing_front"][current_size:] = np.array(sync_packet_missing_front, dtype=np.int8)
+                    self.h5_file["vehicle/sync_packet_missing_vehicle"].resize((current_size + len(sync_packet_missing_vehicle),))
+                    self.h5_file["vehicle/sync_packet_missing_vehicle"][current_size:] = np.array(sync_packet_missing_vehicle, dtype=np.int8)
                     
                     # NEW: Write debug fields for diagnosing ground truth offset issues
                     if len(road_center_at_car_x) > 0:
@@ -4895,6 +5634,19 @@ class DataRecorder:
         map_teleport_skip_count_list = []
         teleport_detected_list = []
         teleport_jump_m_list = []
+        teleport_expected_motion_m_list = []
+        teleport_motion_ratio_list = []
+        teleport_guard_suppressed_list = []
+        teleport_continuity_suspect_list = []
+        teleport_guard_reason_code_list = []
+        teleport_dynamic_threshold_m_list = []
+        teleport_hard_override_threshold_m_list = []
+        teleport_effective_dt_s_list = []
+        teleport_unity_dt_s_list = []
+        post_jump_cooldown_active_list = []
+        post_jump_cooldown_frames_remaining_list = []
+        post_jump_reason_code_list = []
+        reference_velocity_effective_list = []
         map_odometer_jump_rate_list = []
         curvature_contract_consistent_controller_list = []
         curvature_contract_consistent_governor_list = []
@@ -5043,6 +5795,12 @@ class DataRecorder:
         target_speed_post_limits_list = []
         target_speed_planned_list = []
         target_speed_final_list = []
+        governor_target_speed_mps_list = []
+        acc_target_speed_control_list = []
+        planner_target_speed_applied_mps_list = []
+        final_longitudinal_target_mps_list = []
+        final_longitudinal_owner_code_list = []
+        reference_velocity_source_code_list = []
         target_speed_slew_active_list = []
         target_speed_ramp_active_list = []
         speed_governor_active_limiter_code_list = []
@@ -5325,6 +6083,68 @@ class DataRecorder:
             _teleport_jump_m = getattr(cc, 'teleport_jump_m', 0.0)
             teleport_jump_m_list.append(
                 float(_teleport_jump_m) if _teleport_jump_m is not None else 0.0
+            )
+            _teleport_expected_motion_m = getattr(cc, 'teleport_expected_motion_m', np.nan)
+            teleport_expected_motion_m_list.append(
+                float(_teleport_expected_motion_m)
+                if _teleport_expected_motion_m is not None
+                else np.nan
+            )
+            _teleport_motion_ratio = getattr(cc, 'teleport_motion_ratio', np.nan)
+            teleport_motion_ratio_list.append(
+                float(_teleport_motion_ratio)
+                if _teleport_motion_ratio is not None
+                else np.nan
+            )
+            teleport_guard_suppressed_list.append(
+                1 if getattr(cc, 'teleport_guard_suppressed', False) else 0
+            )
+            teleport_continuity_suspect_list.append(
+                1 if getattr(cc, 'teleport_continuity_suspect', False) else 0
+            )
+            teleport_guard_reason_code_list.append(
+                str(getattr(cc, 'teleport_guard_reason_code', '') or '')
+            )
+            _teleport_dynamic_threshold_m = getattr(cc, 'teleport_dynamic_threshold_m', np.nan)
+            teleport_dynamic_threshold_m_list.append(
+                float(_teleport_dynamic_threshold_m)
+                if _teleport_dynamic_threshold_m is not None
+                else np.nan
+            )
+            _teleport_hard_override_threshold_m = getattr(
+                cc, 'teleport_hard_override_threshold_m', np.nan
+            )
+            teleport_hard_override_threshold_m_list.append(
+                float(_teleport_hard_override_threshold_m)
+                if _teleport_hard_override_threshold_m is not None
+                else np.nan
+            )
+            _teleport_effective_dt_s = getattr(cc, 'teleport_effective_dt_s', np.nan)
+            teleport_effective_dt_s_list.append(
+                float(_teleport_effective_dt_s)
+                if _teleport_effective_dt_s is not None
+                else np.nan
+            )
+            _teleport_unity_dt_s = getattr(cc, 'teleport_unity_dt_s', np.nan)
+            teleport_unity_dt_s_list.append(
+                float(_teleport_unity_dt_s)
+                if _teleport_unity_dt_s is not None
+                else np.nan
+            )
+            post_jump_cooldown_active_list.append(
+                1 if getattr(cc, 'post_jump_cooldown_active', False) else 0
+            )
+            post_jump_cooldown_frames_remaining_list.append(
+                int(getattr(cc, 'post_jump_cooldown_frames_remaining', 0) or 0)
+            )
+            post_jump_reason_code_list.append(
+                str(getattr(cc, 'post_jump_reason_code', '') or '')
+            )
+            _reference_velocity_effective = getattr(cc, 'reference_velocity_effective', np.nan)
+            reference_velocity_effective_list.append(
+                float(_reference_velocity_effective)
+                if _reference_velocity_effective is not None
+                else np.nan
             )
             _map_odometer_jump_rate = getattr(cc, 'map_odometer_jump_rate', np.nan)
             map_odometer_jump_rate_list.append(
@@ -5836,6 +6656,28 @@ class DataRecorder:
             target_speed_post_limits_list.append(getattr(cc, 'target_speed_post_limits', 0.0) or 0.0)
             target_speed_planned_list.append(getattr(cc, 'target_speed_planned', 0.0) or 0.0)
             target_speed_final_list.append(getattr(cc, 'target_speed_final', 0.0) or 0.0)
+            _governor_target_speed = getattr(cc, 'governor_target_speed_mps', np.nan)
+            governor_target_speed_mps_list.append(
+                float(_governor_target_speed) if _governor_target_speed is not None else np.nan
+            )
+            _acc_target_speed_control = getattr(cc, 'acc_target_speed_mps', np.nan)
+            acc_target_speed_control_list.append(
+                float(_acc_target_speed_control) if _acc_target_speed_control is not None else np.nan
+            )
+            _planner_target_speed_applied = getattr(cc, 'planner_target_speed_applied_mps', np.nan)
+            planner_target_speed_applied_mps_list.append(
+                float(_planner_target_speed_applied) if _planner_target_speed_applied is not None else np.nan
+            )
+            _final_longitudinal_target = getattr(cc, 'final_longitudinal_target_mps', np.nan)
+            final_longitudinal_target_mps_list.append(
+                float(_final_longitudinal_target) if _final_longitudinal_target is not None else np.nan
+            )
+            final_longitudinal_owner_code_list.append(
+                str(getattr(cc, 'final_longitudinal_owner_code', '') or '')
+            )
+            reference_velocity_source_code_list.append(
+                str(getattr(cc, 'reference_velocity_source_code', '') or '')
+            )
             target_speed_slew_active_list.append(1 if getattr(cc, 'target_speed_slew_active', False) else 0)
             target_speed_ramp_active_list.append(1 if getattr(cc, 'target_speed_ramp_active', False) else 0)
             speed_governor_active_limiter_code_list.append(
@@ -6182,6 +7024,13 @@ class DataRecorder:
                        "map_health_ok", "track_match_ok",
                        "map_segment_lookup_success_rate", "map_teleport_skip_count",
                        "teleport_detected", "teleport_jump_m",
+                       "teleport_expected_motion_m", "teleport_motion_ratio",
+                       "teleport_guard_suppressed", "teleport_continuity_suspect",
+                       "teleport_guard_reason_code", "teleport_dynamic_threshold_m",
+                       "teleport_hard_override_threshold_m", "teleport_effective_dt_s",
+                       "teleport_unity_dt_s",
+                       "post_jump_cooldown_active", "post_jump_cooldown_frames_remaining",
+                       "post_jump_reason_code", "reference_velocity_effective",
                        "map_odometer_jump_rate",
                        "curvature_contract_consistent_controller",
                        "curvature_contract_consistent_governor",
@@ -6309,6 +7158,11 @@ class DataRecorder:
                        "perf_wait_input_ms",
                        "target_speed_raw",
                        "target_speed_post_limits", "target_speed_planned", "target_speed_final",
+                       "governor_target_speed_mps", "acc_target_speed_mps",
+                       "planner_target_speed_applied_mps",
+                       "final_longitudinal_target_mps",
+                       "final_longitudinal_owner_code",
+                       "reference_velocity_source_code",
                        "target_speed_slew_active", "target_speed_ramp_active",
                        "speed_governor_active_limiter_code",
                        "speed_governor_active_limiter",
@@ -6520,6 +7374,47 @@ class DataRecorder:
             )
             self.h5_file["control/teleport_jump_m"][current_size:] = np.array(
                 teleport_jump_m_list, dtype=np.float32
+            )
+            self.h5_file["control/teleport_expected_motion_m"][current_size:] = np.array(
+                teleport_expected_motion_m_list, dtype=np.float32
+            )
+            self.h5_file["control/teleport_motion_ratio"][current_size:] = np.array(
+                teleport_motion_ratio_list, dtype=np.float32
+            )
+            self.h5_file["control/teleport_guard_suppressed"][current_size:] = np.array(
+                teleport_guard_suppressed_list, dtype=np.int8
+            )
+            self.h5_file["control/teleport_continuity_suspect"][current_size:] = np.array(
+                teleport_continuity_suspect_list, dtype=np.int8
+            )
+            self.h5_file["control/teleport_guard_reason_code"][current_size:] = np.array(
+                teleport_guard_reason_code_list,
+                dtype=h5py.string_dtype(encoding='utf-8', length=48),
+            )
+            self.h5_file["control/teleport_dynamic_threshold_m"][current_size:] = np.array(
+                teleport_dynamic_threshold_m_list, dtype=np.float32
+            )
+            self.h5_file["control/teleport_hard_override_threshold_m"][current_size:] = np.array(
+                teleport_hard_override_threshold_m_list, dtype=np.float32
+            )
+            self.h5_file["control/teleport_effective_dt_s"][current_size:] = np.array(
+                teleport_effective_dt_s_list, dtype=np.float32
+            )
+            self.h5_file["control/teleport_unity_dt_s"][current_size:] = np.array(
+                teleport_unity_dt_s_list, dtype=np.float32
+            )
+            self.h5_file["control/post_jump_cooldown_active"][current_size:] = np.array(
+                post_jump_cooldown_active_list, dtype=np.int8
+            )
+            self.h5_file["control/post_jump_cooldown_frames_remaining"][current_size:] = np.array(
+                post_jump_cooldown_frames_remaining_list, dtype=np.int16
+            )
+            self.h5_file["control/post_jump_reason_code"][current_size:] = np.array(
+                post_jump_reason_code_list,
+                dtype=h5py.string_dtype(encoding='utf-8', length=32),
+            )
+            self.h5_file["control/reference_velocity_effective"][current_size:] = np.array(
+                reference_velocity_effective_list, dtype=np.float32
             )
             self.h5_file["control/map_odometer_jump_rate"][current_size:] = np.array(
                 map_odometer_jump_rate_list, dtype=np.float32
@@ -6969,6 +7864,26 @@ class DataRecorder:
             self.h5_file["control/target_speed_post_limits"][current_size:] = target_speed_post_limits_list
             self.h5_file["control/target_speed_planned"][current_size:] = target_speed_planned_list
             self.h5_file["control/target_speed_final"][current_size:] = target_speed_final_list
+            self.h5_file["control/governor_target_speed_mps"][current_size:] = np.array(
+                governor_target_speed_mps_list, dtype=np.float32
+            )
+            self.h5_file["control/acc_target_speed_mps"][current_size:] = np.array(
+                acc_target_speed_control_list, dtype=np.float32
+            )
+            self.h5_file["control/planner_target_speed_applied_mps"][current_size:] = np.array(
+                planner_target_speed_applied_mps_list, dtype=np.float32
+            )
+            self.h5_file["control/final_longitudinal_target_mps"][current_size:] = np.array(
+                final_longitudinal_target_mps_list, dtype=np.float32
+            )
+            self.h5_file["control/final_longitudinal_owner_code"][current_size:] = np.array(
+                final_longitudinal_owner_code_list,
+                dtype=h5py.string_dtype(encoding='utf-8', length=32),
+            )
+            self.h5_file["control/reference_velocity_source_code"][current_size:] = np.array(
+                reference_velocity_source_code_list,
+                dtype=h5py.string_dtype(encoding='utf-8', length=32),
+            )
             self.h5_file["control/target_speed_slew_active"][current_size:] = np.array(target_speed_slew_active_list, dtype=np.int8)
             self.h5_file["control/target_speed_ramp_active"][current_size:] = np.array(target_speed_ramp_active_list, dtype=np.int8)
             self.h5_file["control/speed_governor_active_limiter_code"][current_size:] = (

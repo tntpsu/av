@@ -718,8 +718,24 @@ def get_frame_data(filename, frame_index):
                         'unity_delta_time': float(f['vehicle/unity_delta_time'][vehicle_idx]) if 'vehicle/unity_delta_time' in f and vehicle_idx is not None and vehicle_idx < len(f['vehicle/unity_delta_time']) else None,
                         'unity_smooth_delta_time': float(f['vehicle/unity_smooth_delta_time'][vehicle_idx]) if 'vehicle/unity_smooth_delta_time' in f and vehicle_idx is not None and vehicle_idx < len(f['vehicle/unity_smooth_delta_time']) else None,
                         'unity_unscaled_delta_time': float(f['vehicle/unity_unscaled_delta_time'][vehicle_idx]) if 'vehicle/unity_unscaled_delta_time' in f and vehicle_idx is not None and vehicle_idx < len(f['vehicle/unity_unscaled_delta_time']) else None,
-                        'unity_time_scale': float(f['vehicle/unity_time_scale'][vehicle_idx]) if 'vehicle/unity_time_scale' in f and vehicle_idx is not None and vehicle_idx < len(f['vehicle/unity_time_scale']) else None
+                        'unity_time_scale': float(f['vehicle/unity_time_scale'][vehicle_idx]) if 'vehicle/unity_time_scale' in f and vehicle_idx is not None and vehicle_idx < len(f['vehicle/unity_time_scale']) else None,
+                        'radar_fwd_detected': float(f['vehicle/radar_fwd_detected'][vehicle_idx]) if 'vehicle/radar_fwd_detected' in f and vehicle_idx is not None and vehicle_idx < len(f['vehicle/radar_fwd_detected']) else None,
+                        'radar_fwd_distance_m': float(f['vehicle/radar_fwd_distance_m'][vehicle_idx]) if 'vehicle/radar_fwd_distance_m' in f and vehicle_idx is not None and vehicle_idx < len(f['vehicle/radar_fwd_distance_m']) else None,
+                        'radar_fwd_range_rate_mps': float(f['vehicle/radar_fwd_range_rate_mps'][vehicle_idx]) if 'vehicle/radar_fwd_range_rate_mps' in f and vehicle_idx is not None and vehicle_idx < len(f['vehicle/radar_fwd_range_rate_mps']) else None,
+                        'acc_active': float(f['vehicle/acc_active'][vehicle_idx]) if 'vehicle/acc_active' in f and vehicle_idx is not None and vehicle_idx < len(f['vehicle/acc_active']) else None,
+                        'acc_target_gap_m': float(f['vehicle/acc_target_gap_m'][vehicle_idx]) if 'vehicle/acc_target_gap_m' in f and vehicle_idx is not None and vehicle_idx < len(f['vehicle/acc_target_gap_m']) else None,
+                        'acc_gap_error_m': float(f['vehicle/acc_gap_error_m'][vehicle_idx]) if 'vehicle/acc_gap_error_m' in f and vehicle_idx is not None and vehicle_idx < len(f['vehicle/acc_gap_error_m']) else None,
+                        'acc_ttc_s': float(f['vehicle/acc_ttc_s'][vehicle_idx]) if 'vehicle/acc_ttc_s' in f and vehicle_idx is not None and vehicle_idx < len(f['vehicle/acc_ttc_s']) else None,
+                        'acc_target_speed_mps': float(f['vehicle/acc_target_speed_mps'][vehicle_idx]) if 'vehicle/acc_target_speed_mps' in f and vehicle_idx is not None and vehicle_idx < len(f['vehicle/acc_target_speed_mps']) else None,
+                        'acc_request_estop': bool(f['vehicle/acc_request_estop'][vehicle_idx]) if 'vehicle/acc_request_estop' in f and vehicle_idx is not None and vehicle_idx < len(f['vehicle/acc_request_estop']) else False,
+                        'lead_collision_override_active': bool(f['vehicle/lead_collision_override_active'][vehicle_idx]) if 'vehicle/lead_collision_override_active' in f and vehicle_idx is not None and vehicle_idx < len(f['vehicle/lead_collision_override_active']) else False,
                     }
+                    if 'vehicle/acc_state_code' in f and vehicle_idx is not None and vehicle_idx < len(f['vehicle/acc_state_code']):
+                        raw_state = f['vehicle/acc_state_code'][vehicle_idx]
+                        frame_data['vehicle']['acc_state_code'] = raw_state.decode('utf-8', 'ignore') if isinstance(raw_state, (bytes, bytearray)) else str(raw_state)
+                    if 'vehicle/acc_safety_mode_code' in f and vehicle_idx is not None and vehicle_idx < len(f['vehicle/acc_safety_mode_code']):
+                        raw_mode = f['vehicle/acc_safety_mode_code'][vehicle_idx]
+                        frame_data['vehicle']['acc_safety_mode_code'] = raw_mode.decode('utf-8', 'ignore') if isinstance(raw_mode, (bytes, bytearray)) else str(raw_mode)
                     for stream_key in [
                         'stream_front_source_timestamp',
                         'stream_topdown_source_timestamp',
@@ -1206,6 +1222,92 @@ def get_frame_data(filename, frame_index):
                         frame_data['control']['target_speed_planned'] = float(f['control/target_speed_planned'][control_idx])
                     if 'control/target_speed_final' in f and control_idx < len(f['control/target_speed_final']):
                         frame_data['control']['target_speed_final'] = float(f['control/target_speed_final'][control_idx])
+                    if 'control/governor_target_speed_mps' in f and control_idx < len(f['control/governor_target_speed_mps']):
+                        frame_data['control']['governor_target_speed_mps'] = float(f['control/governor_target_speed_mps'][control_idx])
+                    if 'control/acc_target_speed_mps' in f and control_idx < len(f['control/acc_target_speed_mps']):
+                        frame_data['control']['acc_target_speed_mps'] = float(f['control/acc_target_speed_mps'][control_idx])
+                    if 'control/planner_target_speed_applied_mps' in f and control_idx < len(f['control/planner_target_speed_applied_mps']):
+                        frame_data['control']['planner_target_speed_applied_mps'] = float(f['control/planner_target_speed_applied_mps'][control_idx])
+                    if 'control/final_longitudinal_target_mps' in f and control_idx < len(f['control/final_longitudinal_target_mps']):
+                        frame_data['control']['final_longitudinal_target_mps'] = float(f['control/final_longitudinal_target_mps'][control_idx])
+                    if 'control/final_longitudinal_owner_code' in f and control_idx < len(f['control/final_longitudinal_owner_code']):
+                        raw_owner = f['control/final_longitudinal_owner_code'][control_idx]
+                        frame_data['control']['final_longitudinal_owner_code'] = (
+                            raw_owner.decode('utf-8', 'ignore')
+                            if isinstance(raw_owner, (bytes, bytearray))
+                            else str(raw_owner)
+                        )
+                    if 'control/reference_velocity_source_code' in f and control_idx < len(f['control/reference_velocity_source_code']):
+                        raw_source = f['control/reference_velocity_source_code'][control_idx]
+                        frame_data['control']['reference_velocity_source_code'] = (
+                            raw_source.decode('utf-8', 'ignore')
+                            if isinstance(raw_source, (bytes, bytearray))
+                            else str(raw_source)
+                        )
+                    if 'control/reference_velocity_effective' in f and control_idx < len(f['control/reference_velocity_effective']):
+                        frame_data['control']['reference_velocity_effective'] = float(
+                            f['control/reference_velocity_effective'][control_idx]
+                        )
+                    if 'control/post_jump_cooldown_active' in f and control_idx < len(f['control/post_jump_cooldown_active']):
+                        frame_data['control']['post_jump_cooldown_active'] = int(
+                            f['control/post_jump_cooldown_active'][control_idx]
+                        ) == 1
+                    if 'control/post_jump_cooldown_frames_remaining' in f and control_idx < len(f['control/post_jump_cooldown_frames_remaining']):
+                        frame_data['control']['post_jump_cooldown_frames_remaining'] = int(
+                            f['control/post_jump_cooldown_frames_remaining'][control_idx]
+                        )
+                    if 'control/post_jump_reason_code' in f and control_idx < len(f['control/post_jump_reason_code']):
+                        raw_reason = f['control/post_jump_reason_code'][control_idx]
+                        frame_data['control']['post_jump_reason_code'] = (
+                            raw_reason.decode('utf-8', 'ignore')
+                            if isinstance(raw_reason, (bytes, bytearray))
+                            else str(raw_reason)
+                        )
+                    if 'control/teleport_detected' in f and control_idx < len(f['control/teleport_detected']):
+                        frame_data['control']['teleport_detected'] = int(
+                            f['control/teleport_detected'][control_idx]
+                        ) == 1
+                    if 'control/teleport_jump_m' in f and control_idx < len(f['control/teleport_jump_m']):
+                        frame_data['control']['teleport_jump_m'] = float(f['control/teleport_jump_m'][control_idx])
+                    if 'control/teleport_expected_motion_m' in f and control_idx < len(f['control/teleport_expected_motion_m']):
+                        frame_data['control']['teleport_expected_motion_m'] = float(
+                            f['control/teleport_expected_motion_m'][control_idx]
+                        )
+                    if 'control/teleport_motion_ratio' in f and control_idx < len(f['control/teleport_motion_ratio']):
+                        frame_data['control']['teleport_motion_ratio'] = float(
+                            f['control/teleport_motion_ratio'][control_idx]
+                        )
+                    if 'control/teleport_guard_suppressed' in f and control_idx < len(f['control/teleport_guard_suppressed']):
+                        frame_data['control']['teleport_guard_suppressed'] = int(
+                            f['control/teleport_guard_suppressed'][control_idx]
+                        ) == 1
+                    if 'control/teleport_continuity_suspect' in f and control_idx < len(f['control/teleport_continuity_suspect']):
+                        frame_data['control']['teleport_continuity_suspect'] = int(
+                            f['control/teleport_continuity_suspect'][control_idx]
+                        ) == 1
+                    if 'control/teleport_guard_reason_code' in f and control_idx < len(f['control/teleport_guard_reason_code']):
+                        raw_reason = f['control/teleport_guard_reason_code'][control_idx]
+                        frame_data['control']['teleport_guard_reason_code'] = (
+                            raw_reason.decode('utf-8', 'ignore')
+                            if isinstance(raw_reason, (bytes, bytearray))
+                            else str(raw_reason)
+                        )
+                    if 'control/teleport_dynamic_threshold_m' in f and control_idx < len(f['control/teleport_dynamic_threshold_m']):
+                        frame_data['control']['teleport_dynamic_threshold_m'] = float(
+                            f['control/teleport_dynamic_threshold_m'][control_idx]
+                        )
+                    if 'control/teleport_hard_override_threshold_m' in f and control_idx < len(f['control/teleport_hard_override_threshold_m']):
+                        frame_data['control']['teleport_hard_override_threshold_m'] = float(
+                            f['control/teleport_hard_override_threshold_m'][control_idx]
+                        )
+                    if 'control/teleport_effective_dt_s' in f and control_idx < len(f['control/teleport_effective_dt_s']):
+                        frame_data['control']['teleport_effective_dt_s'] = float(
+                            f['control/teleport_effective_dt_s'][control_idx]
+                        )
+                    if 'control/teleport_unity_dt_s' in f and control_idx < len(f['control/teleport_unity_dt_s']):
+                        frame_data['control']['teleport_unity_dt_s'] = float(
+                            f['control/teleport_unity_dt_s'][control_idx]
+                        )
                     if 'control/target_speed_slew_active' in f and control_idx < len(f['control/target_speed_slew_active']):
                         frame_data['control']['target_speed_slew_active'] = int(f['control/target_speed_slew_active'][control_idx]) == 1
                     if 'control/target_speed_ramp_active' in f and control_idx < len(f['control/target_speed_ramp_active']):
@@ -2234,6 +2336,72 @@ def get_frame_data(filename, frame_index):
                     'perception': float(max_pair_diff_s["perception"] * 1000.0),
                 },
             }
+            if vehicle_idx is not None:
+                sync_vehicle_fields = {
+                    'sync_packet_mode': ('vehicle/sync_packet_mode', 'str'),
+                    'sync_packet_schema_version': ('vehicle/sync_packet_schema_version', 'int'),
+                    'sync_packet_id': ('vehicle/sync_packet_id', 'int'),
+                    'sync_packet_unity_frame_count': ('vehicle/sync_packet_unity_frame_count', 'int'),
+                    'sync_packet_consume_policy': ('vehicle/sync_packet_consume_policy', 'str'),
+                    'sync_packet_complete': ('vehicle/sync_packet_complete', 'tri_bool'),
+                    'sync_packet_fallback_active': ('vehicle/sync_packet_fallback_active', 'tri_bool'),
+                    'sync_packet_fallback_reason_code': ('vehicle/sync_packet_fallback_reason_code', 'str'),
+                    'sync_packet_queue_depth': ('vehicle/sync_packet_queue_depth', 'int'),
+                    'sync_packet_drop_count': ('vehicle/sync_packet_drop_count', 'int'),
+                    'sync_packet_payload_queue_depth': ('vehicle/sync_packet_payload_queue_depth', 'int'),
+                    'sync_packet_payload_drop_count': ('vehicle/sync_packet_payload_drop_count', 'int'),
+                    'sync_packet_orphan_camera_count': ('vehicle/sync_packet_orphan_camera_count', 'int'),
+                    'sync_packet_orphan_vehicle_count': ('vehicle/sync_packet_orphan_vehicle_count', 'int'),
+                    'sync_packet_timeout_count': ('vehicle/sync_packet_timeout_count', 'int'),
+                    'sync_packet_skipped_unity_frames': ('vehicle/sync_packet_skipped_unity_frames', 'int'),
+                    'sync_packet_age_ms': ('vehicle/sync_packet_age_ms', 'float'),
+                    'sync_packet_payload_oldest_age_ms': ('vehicle/sync_packet_payload_oldest_age_ms', 'float'),
+                    'sync_packet_payload_bytes': ('vehicle/sync_packet_payload_bytes', 'int'),
+                    'sync_packet_payload_fallback_reason_code': ('vehicle/sync_packet_payload_fallback_reason_code', 'str'),
+                    'sync_packet_payload_selected_age_ms': ('vehicle/sync_packet_payload_selected_age_ms', 'float'),
+                    'sync_packet_payload_selected_fresh': ('vehicle/sync_packet_payload_selected_fresh', 'tri_bool'),
+                    'sync_packet_payload_warn_age_exceeded': ('vehicle/sync_packet_payload_warn_age_exceeded', 'tri_bool'),
+                    'sync_packet_payload_stale_drop_count': ('vehicle/sync_packet_payload_stale_drop_count', 'int'),
+                    'sync_packet_payload_drained_count': ('vehicle/sync_packet_payload_drained_count', 'int'),
+                    'sync_packet_payload_max_drained_age_ms': ('vehicle/sync_packet_payload_max_drained_age_ms', 'float'),
+                    'sync_packet_payload_selection_source': ('vehicle/sync_packet_payload_selection_source', 'str'),
+                    'sync_packet_payload_selection_fallback_active': ('vehicle/sync_packet_payload_selection_fallback_active', 'tri_bool'),
+                    'sync_packet_payload_selection_fallback_reason_code': ('vehicle/sync_packet_payload_selection_fallback_reason_code', 'str'),
+                    'sync_packet_payload_server_queue_depth_after_select': ('vehicle/sync_packet_payload_server_queue_depth_after_select', 'int'),
+                    'sync_packet_payload_server_oldest_age_ms_after_select': ('vehicle/sync_packet_payload_server_oldest_age_ms_after_select', 'float'),
+                    'sync_packet_join_source': ('vehicle/sync_packet_join_source', 'str'),
+                    'sync_packet_join_key_present': ('vehicle/sync_packet_join_key_present', 'tri_bool'),
+                    'sync_packet_join_wait_ms': ('vehicle/sync_packet_join_wait_ms', 'float'),
+                    'sync_packet_key_match_count': ('vehicle/sync_packet_key_match_count', 'int'),
+                    'sync_packet_unity_fallback_count': ('vehicle/sync_packet_unity_fallback_count', 'int'),
+                    'sync_packet_superseded_camera_count': ('vehicle/sync_packet_superseded_camera_count', 'int'),
+                    'sync_packet_superseded_vehicle_count': ('vehicle/sync_packet_superseded_vehicle_count', 'int'),
+                    'sync_packet_packet_superseded_camera_count': ('vehicle/sync_packet_packet_superseded_camera_count', 'int'),
+                    'sync_packet_packet_superseded_vehicle_count': ('vehicle/sync_packet_packet_superseded_vehicle_count', 'int'),
+                    'sync_front_age_ms': ('vehicle/sync_front_age_ms', 'float'),
+                    'sync_vehicle_age_ms': ('vehicle/sync_vehicle_age_ms', 'float'),
+                    'sync_front_vehicle_frame_delta': ('vehicle/sync_front_vehicle_frame_delta', 'float'),
+                    'sync_front_vehicle_time_delta_ms': ('vehicle/sync_front_vehicle_time_delta_ms', 'float'),
+                    'sync_packet_missing_front': ('vehicle/sync_packet_missing_front', 'tri_bool'),
+                    'sync_packet_missing_vehicle': ('vehicle/sync_packet_missing_vehicle', 'tri_bool'),
+                }
+                for out_key, (ds_name, kind) in sync_vehicle_fields.items():
+                    if ds_name not in f or vehicle_idx >= len(f[ds_name]):
+                        continue
+                    raw_val = f[ds_name][vehicle_idx]
+                    if kind == 'str':
+                        frame_data['sync'][out_key] = (
+                            raw_val.decode('utf-8', 'ignore')
+                            if isinstance(raw_val, (bytes, bytearray))
+                            else str(raw_val)
+                        )
+                    elif kind == 'int':
+                        frame_data['sync'][out_key] = int(raw_val)
+                    elif kind == 'float':
+                        frame_data['sync'][out_key] = float(raw_val)
+                    elif kind == 'tri_bool':
+                        ival = int(raw_val)
+                        frame_data['sync'][out_key] = None if ival < 0 else bool(ival)
             
             return jsonify(sanitize_non_finite_for_json(frame_data))
     except Exception as e:

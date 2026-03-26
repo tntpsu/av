@@ -33,6 +33,25 @@ from data.formats.data_format import (
     CameraFrame, VehicleState, ControlCommand,
     PerceptionOutput, TrajectoryOutput, RecordingFrame,
 )
+from sync_contract import (
+    PACKET_CONSUME_POLICY_FIFO_STRICT,
+    PACKET_CONSUME_POLICY_FRESHEST_WITHIN_BUDGET,
+    PACKET_CONSUME_POLICY_LATEST_DEBUG,
+    PACKET_FALLBACK_MISSING_FRONT_CAMERA,
+    PACKET_FALLBACK_MISSING_VEHICLE_STATE,
+    PACKET_FALLBACK_NONE,
+    PACKET_FALLBACK_PAYLOAD_AGE_BUDGET_EXCEEDED,
+    PACKET_FALLBACK_PAYLOAD_STALE_TIMEOUT,
+    PACKET_FALLBACK_PACKET_LEGACY_PATH,
+    PACKET_FALLBACK_PACKET_QUEUE_OVERFLOW,
+    PACKET_FALLBACK_PACKET_TIMEOUT,
+    PACKET_MODE_LATEST_PARALLEL,
+    PACKET_MODE_PACKET_FIFO_ACTIVE,
+    PACKET_MODE_PACKET_SHADOW,
+    POST_JUMP_REASON_NONE,
+    POST_JUMP_REASON_TELEPORT_GUARD,
+    TELEPORT_GUARD_REASON_NONE,
+)
 
 from av_stack.lane_gating import (
     clamp_lane_center_and_width, clamp_lane_line_deltas,
@@ -45,7 +64,8 @@ from av_stack.config import ControlConfig, TrajectoryConfig, SafetyConfig, load_
 from av_stack.speed_helpers import (
     _slew_limit_value, _apply_speed_limit_preview, _apply_curve_speed_preview,
     _preview_min_distance_allows_release, _apply_target_speed_slew,
-    _apply_restart_ramp, _apply_steering_speed_guard, _is_teleport_jump,
+    _apply_restart_ramp, _apply_steering_speed_guard,
+    _classify_teleport_discontinuity,
 )
 
 log_dir = Path(__file__).parent.parent / 'tmp' / 'logs'
@@ -168,7 +188,40 @@ class AVStack:
         self._parallel_vehicle_state_fetch = bool(
             stack_cfg.get("parallel_vehicle_state_fetch", True)
         )
+        self.sync_packet_mode = str(
+            stack_cfg.get("sync_packet_mode", PACKET_MODE_PACKET_SHADOW)
+        )
+        if self.sync_packet_mode == PACKET_MODE_PACKET_FIFO_ACTIVE:
+            self._parallel_vehicle_state_fetch = False
+        self.bridge.sync_packet_mode = self.sync_packet_mode
         self.last_processed_unity_frame_count = None
+        self.last_consumed_sync_packet_id = None
+        self.last_consumed_sync_packet_unity_frame = None
+        self.post_jump_reason_code = POST_JUMP_REASON_NONE
+        self._sync_packet_active_allow_legacy_fallback = bool(
+            stack_cfg.get("sync_packet_active_allow_legacy_fallback", True)
+        )
+        self._sync_packet_active_resync_max_discards = int(
+            stack_cfg.get("sync_packet_active_resync_max_discards", 8)
+        )
+        self._sync_packet_consume_policy = str(
+            stack_cfg.get(
+                "sync_packet_consume_policy",
+                PACKET_CONSUME_POLICY_FRESHEST_WITHIN_BUDGET,
+            )
+        )
+        self._sync_packet_payload_max_age_ms = float(
+            stack_cfg.get("sync_packet_payload_max_age_ms", 250.0)
+        )
+        self._sync_packet_payload_warn_age_ms = float(
+            stack_cfg.get("sync_packet_payload_warn_age_ms", 125.0)
+        )
+        self._sync_packet_payload_max_drain_count = int(
+            stack_cfg.get("sync_packet_payload_max_drain_count", 128)
+        )
+        self._sync_packet_payload_allow_stale_debug = bool(
+            stack_cfg.get("sync_packet_payload_allow_stale_debug", False)
+        )
 
         # Consumer-side ingest: drain stale FIFO once, then overlap camera HTTP with the stack loop.
         if bool(stack_cfg.get("clear_bridge_camera_queue_on_start", True)):
@@ -181,7 +234,7 @@ class AVStack:
                     )
             except Exception as exc:
                 logger.debug("drain_camera_queue skipped: %s", exc)
-        if bool(stack_cfg.get("camera_prefetch", True)):
+        if bool(stack_cfg.get("camera_prefetch", True)) and self.sync_packet_mode != PACKET_MODE_PACKET_FIFO_ACTIVE:
             self.bridge.start_camera_prefetch("front_center")
         
         # Perception
@@ -1031,6 +1084,12 @@ class AVStack:
                     stack_cfg.get("use_raw_camera_transport", True)
                 ),
                 "camera_prefetch": bool(stack_cfg.get("camera_prefetch", True)),
+                "sync_packet_mode": self.sync_packet_mode,
+                "sync_packet_consume_policy": self._sync_packet_consume_policy,
+                "sync_packet_payload_max_age_ms": self._sync_packet_payload_max_age_ms,
+                "sync_packet_payload_warn_age_ms": self._sync_packet_payload_warn_age_ms,
+                "sync_packet_payload_max_drain_count": self._sync_packet_payload_max_drain_count,
+                "sync_packet_payload_allow_stale_debug": self._sync_packet_payload_allow_stale_debug,
                 "clear_bridge_camera_queue_on_start": bool(
                     stack_cfg.get("clear_bridge_camera_queue_on_start", True)
                 ),
@@ -1088,6 +1147,7 @@ class AVStack:
         # Teleport/jump guard state
         self.last_vehicle_position = None
         self.last_vehicle_timestamp = None
+        self.last_vehicle_unity_time = None
         self.teleport_guard_frames_remaining = 0
         self.last_teleport_distance = None
         self.last_teleport_dt = None
@@ -2255,20 +2315,69 @@ class AVStack:
                 
                 last_frame_time = time.time()
                 
-                # Get latest camera frame (optionally overlap vehicle GET on another Session)
+                # Get camera/state inputs either from active FIFO packets or the legacy latest path.
                 camera_fetch_start = time.time()
-                if self._parallel_vehicle_state_fetch:
+                sync_packet_shadow = None
+                if self.sync_packet_mode == PACKET_MODE_PACKET_FIFO_ACTIVE:
+                    active_inputs = self._capture_active_sync_packet_inputs()
+                    if active_inputs is None:
+                        if not self._sync_packet_active_allow_legacy_fallback:
+                            time.sleep(self.frame_interval)
+                            continue
+                        (
+                            frame_data,
+                            vehicle_state_dict,
+                            front_ready_mono_s,
+                            vehicle_ready_mono_s,
+                        ) = self._fetch_legacy_ingest_inputs(include_vehicle=True)
+                        sync_packet_shadow = {
+                            "fallback_active": True,
+                            "fallback_reason_code": PACKET_FALLBACK_PACKET_TIMEOUT,
+                            "continuity_skipped_unity_frames": 0,
+                        }
+                    else:
+                        frame_data = active_inputs.get("frame_data")
+                        vehicle_state_dict = active_inputs.get("vehicle_state_dict")
+                        front_ready_mono_s = float(active_inputs.get("front_ready_mono_s", 0.0))
+                        vehicle_ready_mono_s = float(active_inputs.get("vehicle_ready_mono_s", 0.0))
+                        sync_packet_shadow = active_inputs.get("packet")
+                        if frame_data is None or vehicle_state_dict is None:
+                            fallback_reason = str(
+                                (sync_packet_shadow or {}).get("fallback_reason_code")
+                                or (
+                                    PACKET_FALLBACK_MISSING_FRONT_CAMERA
+                                    if frame_data is None
+                                    else PACKET_FALLBACK_MISSING_VEHICLE_STATE
+                                )
+                            )
+                            if fallback_reason not in {
+                                PACKET_FALLBACK_MISSING_FRONT_CAMERA,
+                                PACKET_FALLBACK_MISSING_VEHICLE_STATE,
+                                PACKET_FALLBACK_PACKET_QUEUE_OVERFLOW,
+                                PACKET_FALLBACK_PACKET_TIMEOUT,
+                                PACKET_FALLBACK_PAYLOAD_STALE_TIMEOUT,
+                                PACKET_FALLBACK_PAYLOAD_AGE_BUDGET_EXCEEDED,
+                            }:
+                                fallback_reason = PACKET_FALLBACK_PACKET_TIMEOUT
+                            if not self._sync_packet_active_allow_legacy_fallback:
+                                time.sleep(self.frame_interval)
+                                continue
+                            (
+                                frame_data,
+                                vehicle_state_dict,
+                                front_ready_mono_s,
+                                vehicle_ready_mono_s,
+                            ) = self._fetch_legacy_ingest_inputs(include_vehicle=True)
+                            sync_packet_shadow = dict(sync_packet_shadow or {})
+                            sync_packet_shadow["fallback_active"] = True
+                            sync_packet_shadow["fallback_reason_code"] = fallback_reason
+                else:
                     (
                         frame_data,
                         vehicle_state_dict,
                         front_ready_mono_s,
                         vehicle_ready_mono_s,
-                    ) = self.bridge.get_latest_camera_and_vehicle_parallel()
-                else:
-                    frame_data = self.bridge.get_latest_camera_frame_with_metadata()
-                    vehicle_state_dict = None
-                    front_ready_mono_s = 0.0
-                    vehicle_ready_mono_s = 0.0
+                    ) = self._fetch_legacy_ingest_inputs()
                 camera_fetch_duration = time.time() - camera_fetch_start
                 if camera_fetch_duration > 0.1:
                     logger.warning(
@@ -2325,7 +2434,11 @@ class AVStack:
                             )
                         continue
                     self.last_camera_frame_id = camera_frame_id
-                if not self._parallel_vehicle_state_fetch:
+                if self.sync_packet_mode == PACKET_MODE_PACKET_FIFO_ACTIVE:
+                    if vehicle_state_dict is None:
+                        time.sleep(self.frame_interval)
+                        continue
+                elif not self._parallel_vehicle_state_fetch:
                     front_ready_mono_s = time.monotonic()
                     vehicle_state_dict = self.bridge.get_latest_vehicle_state()
                     if vehicle_state_dict is None:
@@ -2336,6 +2449,8 @@ class AVStack:
                     if vehicle_state_dict is None:
                         time.sleep(self.frame_interval)
                         continue
+                if sync_packet_shadow is None:
+                    sync_packet_shadow = self._capture_sync_packet_shadow()
                 input_timing = {
                     "front_ready_mono_s": float(front_ready_mono_s),
                     "vehicle_ready_mono_s": float(vehicle_ready_mono_s),
@@ -2350,6 +2465,7 @@ class AVStack:
                     vehicle_state_dict,
                     camera_frame_id=camera_frame_id,
                     camera_frame_meta=camera_frame_meta,
+                    sync_packet_shadow=sync_packet_shadow,
                     input_timing=input_timing,
                 )
                 
@@ -2394,7 +2510,285 @@ class AVStack:
             time.sleep(delay)
             delay = min(delay * 1.2, 2.0)  # Exponential backoff, max 2s
         return False
-    
+
+    def _capture_sync_packet_shadow(self) -> Optional[dict]:
+        if self.sync_packet_mode != PACKET_MODE_PACKET_SHADOW:
+            return None
+        try:
+            return self.bridge.get_latest_sync_packet()
+        except Exception as exc:
+            logger.debug("sync packet shadow fetch failed: %s", exc)
+            return None
+
+    def _compute_sync_packet_continuity(self, packet: Optional[dict]) -> int:
+        if not isinstance(packet, dict):
+            return 0
+        current_frame = packet.get("unity_frame_count")
+        try:
+            current_frame = int(current_frame) if current_frame is not None else None
+        except (TypeError, ValueError):
+            current_frame = None
+        skipped = 0
+        if (
+            current_frame is not None
+            and self.last_consumed_sync_packet_unity_frame is not None
+            and current_frame > self.last_consumed_sync_packet_unity_frame
+        ):
+            skipped = max(0, current_frame - self.last_consumed_sync_packet_unity_frame - 1)
+        packet_id = packet.get("packet_id")
+        try:
+            packet_id = int(packet_id) if packet_id is not None else None
+        except (TypeError, ValueError):
+            packet_id = None
+        if packet_id is not None:
+            self.last_consumed_sync_packet_id = packet_id
+        if current_frame is not None:
+            self.last_consumed_sync_packet_unity_frame = current_frame
+        return int(skipped)
+
+    def _fetch_legacy_ingest_inputs(self, *, include_vehicle: bool = False):
+        if self._parallel_vehicle_state_fetch:
+            return self.bridge.get_latest_camera_and_vehicle_parallel()
+        frame_data = self.bridge.get_latest_camera_frame_with_metadata()
+        vehicle_state_dict = self.bridge.get_latest_vehicle_state() if include_vehicle else None
+        front_ready_mono_s = time.monotonic() if frame_data is not None else 0.0
+        vehicle_ready_mono_s = time.monotonic() if vehicle_state_dict is not None else 0.0
+        return frame_data, vehicle_state_dict, front_ready_mono_s, vehicle_ready_mono_s
+
+    def _capture_active_sync_packet_inputs(self) -> Optional[dict]:
+        if self.sync_packet_mode != PACKET_MODE_PACKET_FIFO_ACTIVE:
+            return None
+        try:
+            payload_result = self.bridge.get_fresh_sync_packet_payload_raw(
+                consume_policy=self._sync_packet_consume_policy,
+                max_age_ms=self._sync_packet_payload_max_age_ms,
+                warn_age_ms=self._sync_packet_payload_warn_age_ms,
+                max_drain_count=self._sync_packet_payload_max_drain_count,
+                allow_stale_debug=self._sync_packet_payload_allow_stale_debug,
+            )
+        except Exception as exc:
+            logger.debug("active sync packet fetch failed: %s", exc)
+            payload_result = None
+        if payload_result is None:
+            return None
+        payload = payload_result.get("payload")
+        packet = dict((payload or {}).get("packet_meta") or {})
+        packet["consume_policy"] = str(
+            payload_result.get("consume_policy") or self._sync_packet_consume_policy
+        )
+        packet["payload_selected_age_ms"] = float(
+            payload_result.get("selected_age_ms", float("nan"))
+        )
+        packet["payload_selected_fresh"] = bool(
+            payload_result.get("selected_fresh", False)
+        )
+        packet["payload_warn_age_exceeded"] = bool(
+            payload_result.get("warn_age_exceeded", False)
+        )
+        packet["payload_stale_drop_count"] = int(
+            payload_result.get("stale_drop_count", 0) or 0
+        )
+        packet["payload_drained_count"] = int(
+            payload_result.get("drained_count", 0) or 0
+        )
+        packet["payload_max_drained_age_ms"] = float(
+            payload_result.get("max_drained_age_ms", float("nan"))
+        )
+        packet["payload_selection_source"] = str(
+            payload_result.get("selection_source") or ""
+        )
+        packet["selection_fallback_active"] = bool(
+            payload_result.get("fallback_active", False)
+        )
+        packet["selection_fallback_reason_code"] = str(
+            payload_result.get("fallback_reason_code") or PACKET_FALLBACK_NONE
+        )
+        packet["payload_server_queue_depth_after_select"] = int(
+            payload_result.get("server_queue_depth_after_select", 0) or 0
+        )
+        packet["payload_server_oldest_age_ms_after_select"] = float(
+            payload_result.get("server_oldest_age_ms_after_select", float("nan"))
+        )
+        packet["continuity_skipped_unity_frames"] = self._compute_sync_packet_continuity(packet)
+        if payload_result.get("fallback_active"):
+            packet["fallback_active"] = True
+            packet["fallback_reason_code"] = str(
+                payload_result.get("fallback_reason_code") or PACKET_FALLBACK_PACKET_TIMEOUT
+            )
+            packet["payload_fallback_reason_code"] = str(
+                payload_result.get("fallback_reason_code") or PACKET_FALLBACK_PACKET_TIMEOUT
+            )
+        else:
+            packet["payload_fallback_reason_code"] = str(
+                packet.get("payload_fallback_reason_code") or PACKET_FALLBACK_NONE
+            )
+        if payload is None:
+            return {
+                "packet": packet,
+                "frame_data": None,
+                "vehicle_state_dict": None,
+                "front_ready_mono_s": float(time.monotonic()),
+                "vehicle_ready_mono_s": float(time.monotonic()),
+            }
+        frame_data = (
+            payload.get("image"),
+            float(payload.get("timestamp") or time.time()),
+            payload.get("frame_id"),
+            dict(payload.get("camera_meta") or {}),
+        )
+        return {
+            "packet": packet,
+            "frame_data": frame_data,
+            "vehicle_state_dict": dict(payload.get("vehicle_state_dict") or {}),
+            "front_ready_mono_s": float(payload.get("front_ready_mono_s") or time.monotonic()),
+            "vehicle_ready_mono_s": float(payload.get("vehicle_ready_mono_s") or time.monotonic()),
+        }
+
+    def _apply_sync_packet_shadow(self, vehicle_state_dict: dict, packet_shadow: Optional[dict]) -> None:
+        def _to_int(value, default=-1) -> int:
+            try:
+                return int(value)
+            except (TypeError, ValueError):
+                return int(default)
+
+        def _to_float(value, default=np.nan) -> float:
+            try:
+                return float(value)
+            except (TypeError, ValueError):
+                return float(default)
+
+        active_unity_frame = _to_int(
+            vehicle_state_dict.get("unityFrameCount", vehicle_state_dict.get("unity_frame_count")),
+            default=-1,
+        )
+        packet_mode = self.sync_packet_mode
+        fallback_active = False
+        fallback_reason = PACKET_FALLBACK_NONE
+        shadow = packet_shadow or {}
+        if packet_mode == PACKET_MODE_LATEST_PARALLEL:
+            fallback_active = True
+            fallback_reason = PACKET_FALLBACK_PACKET_LEGACY_PATH
+        elif not shadow:
+            fallback_active = True
+            fallback_reason = PACKET_FALLBACK_PACKET_TIMEOUT
+
+        packet_unity_frame = _to_int(shadow.get("unity_frame_count"), default=-1)
+        continuity_skipped = shadow.get("continuity_skipped_unity_frames")
+        skipped_unity_frames = _to_int(continuity_skipped, default=-1)
+        payload_selected_fresh = shadow.get("payload_selected_fresh")
+        if payload_selected_fresh is not None:
+            payload_selected_fresh = bool(payload_selected_fresh)
+        payload_warn_age_exceeded = shadow.get("payload_warn_age_exceeded")
+        if payload_warn_age_exceeded is not None:
+            payload_warn_age_exceeded = bool(payload_warn_age_exceeded)
+        if skipped_unity_frames < 0:
+            skipped_unity_frames = 0
+            if active_unity_frame >= 0 and packet_unity_frame >= 0:
+                skipped_unity_frames = max(0, active_unity_frame - packet_unity_frame)
+
+        vehicle_state_dict.update(
+            {
+                "sync_packet_mode": packet_mode,
+                "sync_packet_schema_version": _to_int(shadow.get("schema_version"), default=0),
+                "sync_packet_id": _to_int(shadow.get("packet_id"), default=-1),
+                "sync_packet_unity_frame_count": packet_unity_frame,
+                "sync_packet_consume_policy": str(shadow.get("consume_policy") or ""),
+                "sync_packet_complete": bool(shadow.get("complete", False)),
+                "sync_packet_fallback_active": bool(fallback_active or shadow.get("fallback_active", False)),
+                "sync_packet_fallback_reason_code": str(
+                    shadow.get("fallback_reason_code") or fallback_reason
+                ),
+                "sync_packet_queue_depth": _to_int(shadow.get("queue_depth"), default=0),
+                "sync_packet_drop_count": _to_int(shadow.get("drop_count"), default=0),
+                "sync_packet_payload_queue_depth": _to_int(
+                    shadow.get("payload_queue_depth"), default=0
+                ),
+                "sync_packet_payload_drop_count": _to_int(
+                    shadow.get("payload_drop_count"), default=0
+                ),
+                "sync_packet_orphan_camera_count": _to_int(
+                    shadow.get("orphan_camera_count"), default=0
+                ),
+                "sync_packet_orphan_vehicle_count": _to_int(
+                    shadow.get("orphan_vehicle_count"), default=0
+                ),
+                "sync_packet_timeout_count": _to_int(shadow.get("timeout_count"), default=0),
+                "sync_packet_skipped_unity_frames": skipped_unity_frames,
+                "sync_packet_age_ms": _to_float(shadow.get("packet_age_ms")),
+                "sync_packet_payload_oldest_age_ms": _to_float(
+                    shadow.get("payload_oldest_age_ms")
+                ),
+                "sync_packet_payload_bytes": _to_int(shadow.get("payload_bytes"), default=0),
+                "sync_packet_payload_fallback_reason_code": str(
+                    shadow.get("payload_fallback_reason_code") or ""
+                ),
+                "sync_packet_payload_selected_age_ms": _to_float(
+                    shadow.get("payload_selected_age_ms")
+                ),
+                "sync_packet_payload_selected_fresh": payload_selected_fresh,
+                "sync_packet_payload_warn_age_exceeded": payload_warn_age_exceeded,
+                "sync_packet_payload_stale_drop_count": _to_int(
+                    shadow.get("payload_stale_drop_count"), default=0
+                ),
+                "sync_packet_payload_drained_count": _to_int(
+                    shadow.get("payload_drained_count"), default=0
+                ),
+                "sync_packet_payload_max_drained_age_ms": _to_float(
+                    shadow.get("payload_max_drained_age_ms")
+                ),
+                "sync_packet_payload_selection_source": str(
+                    shadow.get("payload_selection_source") or ""
+                ),
+                "sync_packet_payload_selection_fallback_active": bool(
+                    shadow.get("selection_fallback_active", False)
+                ),
+                "sync_packet_payload_selection_fallback_reason_code": str(
+                    shadow.get("selection_fallback_reason_code") or ""
+                ),
+                "sync_packet_payload_server_queue_depth_after_select": _to_int(
+                    shadow.get("payload_server_queue_depth_after_select"), default=0
+                ),
+                "sync_packet_payload_server_oldest_age_ms_after_select": _to_float(
+                    shadow.get("payload_server_oldest_age_ms_after_select")
+                ),
+                "sync_packet_join_source": str(shadow.get("join_source") or ""),
+                "sync_packet_join_key_present": bool(shadow.get("join_key_present", False)),
+                "sync_packet_join_wait_ms": _to_float(shadow.get("join_wait_ms")),
+                "sync_packet_key_match_count": _to_int(
+                    shadow.get("key_match_count"), default=0
+                ),
+                "sync_packet_unity_fallback_count": _to_int(
+                    shadow.get("unity_fallback_count"), default=0
+                ),
+                "sync_packet_superseded_camera_count": _to_int(
+                    shadow.get("superseded_camera_count"), default=0
+                ),
+                "sync_packet_superseded_vehicle_count": _to_int(
+                    shadow.get("superseded_vehicle_count"), default=0
+                ),
+                "sync_packet_packet_superseded_camera_count": _to_int(
+                    shadow.get("packet_superseded_camera_count"), default=0
+                ),
+                "sync_packet_packet_superseded_vehicle_count": _to_int(
+                    shadow.get("packet_superseded_vehicle_count"), default=0
+                ),
+                "sync_front_age_ms": _to_float(shadow.get("front_age_ms")),
+                "sync_vehicle_age_ms": _to_float(shadow.get("vehicle_age_ms")),
+                "sync_front_vehicle_frame_delta": _to_float(
+                    shadow.get("front_vehicle_frame_delta")
+                ),
+                "sync_front_vehicle_time_delta_ms": _to_float(
+                    shadow.get("front_vehicle_time_delta_ms")
+                ),
+                "sync_packet_missing_front": bool(
+                    shadow.get("missing_front", packet_mode != PACKET_MODE_LATEST_PARALLEL)
+                ),
+                "sync_packet_missing_vehicle": bool(
+                    shadow.get("missing_vehicle", packet_mode != PACKET_MODE_LATEST_PARALLEL)
+                ),
+            }
+        )
+
     def _process_frame(
         self,
         image: np.ndarray,
@@ -2403,12 +2797,15 @@ class AVStack:
         camera_frame_id=None,
         camera_frame_meta=None,
         topdown_frame_data=None,
+        sync_packet_shadow: Optional[dict] = None,
         input_timing: Optional[dict] = None,
     ) -> None:
         """Process a single frame through the AV stack (slim dispatcher)."""
         fv = self._pf_validate_frame(timestamp, vehicle_state_dict)
         if fv is None:
             return  # duplicate frame
+
+        self._apply_sync_packet_shadow(vehicle_state_dict, sync_packet_shadow)
 
         perf_wait_input_ms = float("nan")
         if isinstance(input_timing, dict):
@@ -2441,7 +2838,8 @@ class AVStack:
 
         t_plan0 = time.perf_counter()
         gov = self._pf_run_speed_governor(pr, gated, vehicle_state_dict, timestamp)
-        gov = self._pf_apply_acc_override(gov, vehicle_state_dict)  # Phase B: IDM override
+        gov = self._pf_apply_acc_override(gov, vehicle_state_dict)
+        gov = self._pf_resolve_longitudinal_target(gov, vehicle_state_dict)
         traj = self._pf_plan_trajectory(pr, gated, gov, vehicle_state_dict, timestamp)
         perf_planning_ms = (time.perf_counter() - t_plan0) * 1000.0
 
@@ -2521,12 +2919,73 @@ class AVStack:
 
         # Teleport/jump guard: detect sudden vehicle position discontinuities
         current_position = self._extract_position(vehicle_state_dict)
+        current_speed = float(vehicle_state_dict.get("speed", 0.0) or 0.0)
+        current_unity_time = vehicle_state_dict.get(
+            "unityTime",
+            vehicle_state_dict.get("unity_time", float("nan")),
+        )
+        try:
+            current_unity_time = float(current_unity_time)
+        except (TypeError, ValueError):
+            current_unity_time = float("nan")
+        unity_dt = float("nan")
+        if (
+            self.last_vehicle_unity_time is not None
+            and isinstance(current_unity_time, (int, float))
+            and math.isfinite(float(current_unity_time))
+        ):
+            candidate_unity_dt = float(current_unity_time) - float(self.last_vehicle_unity_time)
+            if 0.0 < candidate_unity_dt < 1.0:
+                unity_dt = candidate_unity_dt
         teleport_distance_threshold = self.safety_config.get('teleport_distance_threshold', 2.0)
-        teleport_detected, teleport_distance = _is_teleport_jump(
+        teleport_eval = _classify_teleport_discontinuity(
             self.last_vehicle_position,
             current_position,
-            teleport_distance_threshold,
+            base_distance_threshold_m=float(teleport_distance_threshold),
+            speed_mps=current_speed,
+            control_dt_s=float(control_dt),
+            unity_dt_s=float(unity_dt) if math.isfinite(unity_dt) else 0.0,
+            skipped_unity_frames=int(vehicle_state_dict.get('sync_packet_skipped_unity_frames', 0) or 0),
+            fallback_active=bool(vehicle_state_dict.get('sync_packet_fallback_active', False)),
+            payload_selected_fresh=vehicle_state_dict.get('sync_packet_payload_selected_fresh'),
+            payload_selected_age_ms=vehicle_state_dict.get('sync_packet_payload_selected_age_ms'),
+            expected_motion_ratio_threshold=float(
+                self.safety_config.get('teleport_expected_motion_ratio_threshold', 1.8)
+            ),
+            expected_motion_margin_m=float(
+                self.safety_config.get('teleport_expected_motion_margin_m', 0.75)
+            ),
+            hard_override_distance_m=float(
+                self.safety_config.get('teleport_hard_override_distance_m', 8.0)
+            ),
+            hard_override_ratio_threshold=float(
+                self.safety_config.get('teleport_hard_override_ratio_threshold', 4.0)
+            ),
+            continuity_skip_frames_threshold=int(
+                self.safety_config.get('teleport_continuity_skip_frames_threshold', 3)
+            ),
+            continuity_warn_age_ms=float(
+                self.safety_config.get(
+                    'teleport_continuity_warn_age_ms',
+                    getattr(self, '_sync_packet_payload_warn_age_ms', 125.0),
+                )
+            ),
         )
+        teleport_detected = bool(teleport_eval["teleport_detected"])
+        teleport_distance = float(teleport_eval["observed_distance_m"])
+        teleport_expected_motion_m = float(teleport_eval["expected_motion_m"])
+        teleport_motion_ratio = float(teleport_eval["motion_ratio"])
+        teleport_guard_suppressed = bool(teleport_eval["guard_suppressed"])
+        teleport_continuity_suspect = bool(teleport_eval["continuity_suspect"])
+        teleport_guard_reason_code = str(
+            teleport_eval.get("reason_code") or TELEPORT_GUARD_REASON_NONE
+        )
+        teleport_dynamic_threshold_m = float(teleport_eval["dynamic_threshold_m"])
+        teleport_hard_override_threshold_m = float(
+            teleport_eval["hard_override_threshold_m"]
+        )
+        teleport_effective_dt_s = float(teleport_eval["effective_dt_s"])
+        teleport_unity_dt_s = float(teleport_eval["unity_dt_s"])
         if teleport_detected:
             dt = None
             if self.last_vehicle_timestamp is not None:
@@ -2546,12 +3005,22 @@ class AVStack:
             self.post_jump_cooldown_frames = int(
                 self.safety_config.get('post_jump_cooldown_frames', 30)
             )
+            self.post_jump_reason_code = POST_JUMP_REASON_TELEPORT_GUARD
             logger.warning(
                 f"[Frame {self.frame_count}] [TELEPORT GUARD] Position jump detected "
                 f"({teleport_distance:.2f}m, dt={dt if dt is not None else 'N/A'}s). "
                 "Resetting controllers and skipping emergency stop for this frame."
             )
+        elif teleport_guard_suppressed and self.frame_count % 30 == 0:
+            logger.info(
+                f"[Frame {self.frame_count}] [TELEPORT GUARD] Suppressed continuity-backed jump "
+                f"({teleport_distance:.2f}m, expected={teleport_expected_motion_m:.2f}m, "
+                f"ratio={teleport_motion_ratio if math.isfinite(teleport_motion_ratio) else float('nan'):.2f}, "
+                f"skipped={int(vehicle_state_dict.get('sync_packet_skipped_unity_frames', 0) or 0)})."
+            )
         teleport_guard_active = self.teleport_guard_frames_remaining > 0
+        if self.post_jump_cooldown_frames <= 0 and not teleport_detected:
+            self.post_jump_reason_code = POST_JUMP_REASON_NONE
 
         # Grade EMA smoothing (Step 3)
         raw_grade = float(vehicle_state_dict.get('roadGrade',
@@ -2567,6 +3036,17 @@ class AVStack:
             'current_position': current_position,
             'teleport_detected': teleport_detected,
             'teleport_jump_m': float(teleport_distance),
+            'teleport_expected_motion_m': float(teleport_expected_motion_m),
+            'teleport_motion_ratio': float(teleport_motion_ratio),
+            'teleport_guard_suppressed': teleport_guard_suppressed,
+            'teleport_continuity_suspect': teleport_continuity_suspect,
+            'teleport_guard_reason_code': teleport_guard_reason_code,
+            'teleport_dynamic_threshold_m': float(teleport_dynamic_threshold_m),
+            'teleport_hard_override_threshold_m': float(
+                teleport_hard_override_threshold_m
+            ),
+            'teleport_effective_dt_s': float(teleport_effective_dt_s),
+            'teleport_unity_dt_s': float(teleport_unity_dt_s),
             'teleport_guard_active': teleport_guard_active,
             'smoothed_grade': self._smoothed_grade,
         }
@@ -4892,12 +5372,6 @@ class AVStack:
                      f"map_limit={float(speed_limit) if speed_limit else 0.0:.2f} m/s"
             )
         
-        # Update trajectory planner's target speed (if it supports dynamic updates)
-        if hasattr(self.trajectory_planner, 'planner') and hasattr(self.trajectory_planner.planner, 'target_speed'):
-            self.trajectory_planner.planner.target_speed = adjusted_target_speed
-        elif hasattr(self.trajectory_planner, 'target_speed'):
-            self.trajectory_planner.target_speed = adjusted_target_speed
-        
         # Log speed adjustment if health is degraded
         if self.perception_health_status != "healthy" and self.frame_count % 30 == 0:  # Log every second
             logger.warning(f"[Frame {self.frame_count}] ⚠️  Perception health-based speed reduction: "
@@ -4920,6 +5394,7 @@ class AVStack:
             'gov_output': gov_output,
             'adjusted_target_speed': adjusted_target_speed,
             'target_speed_final': target_speed_final,
+            'governor_target_speed_mps': adjusted_target_speed,
             'planned_accel': planned_accel,
             'curve_speed_limit': curve_speed_limit,
             'stale_speed_hold_active': stale_speed_hold_active,
@@ -5511,6 +5986,19 @@ class AVStack:
         control_dt = fv['control_dt']
         adjusted_target_speed = gov['adjusted_target_speed']
         target_speed_final = gov['target_speed_final']
+        governor_target_speed_mps = float(
+            gov.get('governor_target_speed_mps', adjusted_target_speed) or adjusted_target_speed
+        )
+        acc_target_speed_mps = gov.get('acc_target_speed_mps')
+        planner_target_speed_applied_mps = float(
+            gov.get('planner_target_speed_applied_mps', target_speed_final) or target_speed_final
+        )
+        final_longitudinal_target_mps = float(
+            gov.get('final_longitudinal_target_mps', target_speed_final) or target_speed_final
+        )
+        final_longitudinal_owner_code = str(
+            gov.get('final_longitudinal_owner_code', 'speed_governor') or 'speed_governor'
+        )
         planned_accel = gov['planned_accel']
         gov_output = gov['gov_output']
         curve_intent_speed_guardrail_active = gov['curve_intent_speed_guardrail_active']
@@ -5557,6 +6045,12 @@ class AVStack:
         speed_governor_cap_tracking_recovery_frames = int(
             gov.get('speed_governor_cap_tracking_recovery_frames', 0) or 0
         )
+        reference_velocity_effective = None
+        post_jump_cooldown_active = self.post_jump_cooldown_frames > 0
+        post_jump_reason_code = (
+            self.post_jump_reason_code if post_jump_cooldown_active else POST_JUMP_REASON_NONE
+        )
+        reference_velocity_source_code = "final_longitudinal_target"
         speed_governor_cap_tracking_hard_ceiling_applied = bool(
             gov.get('speed_governor_cap_tracking_hard_ceiling_applied', False)
         )
@@ -5629,10 +6123,14 @@ class AVStack:
                 if self.post_jump_cooldown_frames > 0:
                     cooldown_scale = self.safety_config.get('post_jump_speed_scale', 0.5)
                     reference_point['velocity'] = reference_point.get('velocity', 8.0) * cooldown_scale
+                    reference_velocity_source_code = "post_jump_cooldown"
 
                 # Limit reference velocity to prevent requesting high speeds
                 if reference_point.get('velocity', 8.0) > max_speed:
                     reference_point['velocity'] = max_speed * 0.9  # 90% of max for safety
+                    if reference_velocity_source_code == "final_longitudinal_target":
+                        reference_velocity_source_code = "safety_max_speed_cap"
+                reference_velocity_effective = float(reference_point.get('velocity', 0.0) or 0.0)
                 gov_min_speed = self.speed_governor.config.comfort_governor_min_speed
                 if gov_min_speed > 0:
                     reference_point['min_speed_floor'] = float(gov_min_speed)
@@ -5711,9 +6209,19 @@ class AVStack:
                 # mpc_elat_ramp_active is set in VehicleController from mpc_result['elat_ramp_active'].
 
                 control_command['target_speed_raw'] = base_speed
-                control_command['target_speed_post_limits'] = adjusted_target_speed
+                control_command['target_speed_post_limits'] = governor_target_speed_mps
                 control_command['target_speed_planned'] = target_speed_planned
                 control_command['target_speed_final'] = target_speed_final
+                control_command['governor_target_speed_mps'] = governor_target_speed_mps
+                control_command['acc_target_speed_mps'] = (
+                    float(acc_target_speed_mps)
+                    if acc_target_speed_mps is not None and np.isfinite(float(acc_target_speed_mps))
+                    else np.nan
+                )
+                control_command['planner_target_speed_applied_mps'] = planner_target_speed_applied_mps
+                control_command['final_longitudinal_target_mps'] = final_longitudinal_target_mps
+                control_command['final_longitudinal_owner_code'] = final_longitudinal_owner_code
+                control_command['reference_velocity_source_code'] = reference_velocity_source_code
                 control_command['target_speed_slew_active'] = target_speed_slew_active
                 control_command['target_speed_ramp_active'] = target_speed_ramp_active
                 control_command['speed_governor_active_limiter'] = gov_output.active_limiter
@@ -5968,6 +6476,52 @@ class AVStack:
         control_command.setdefault('map_odometer_jump_rate', float(map_odometer_jump_rate))
         control_command.setdefault('teleport_detected', bool(fv.get('teleport_detected', False)))
         control_command.setdefault('teleport_jump_m', float(fv.get('teleport_jump_m', 0.0)))
+        control_command.setdefault(
+            'teleport_expected_motion_m',
+            float(fv.get('teleport_expected_motion_m', np.nan)),
+        )
+        control_command.setdefault(
+            'teleport_motion_ratio',
+            float(fv.get('teleport_motion_ratio', np.nan)),
+        )
+        control_command.setdefault(
+            'teleport_guard_suppressed',
+            bool(fv.get('teleport_guard_suppressed', False)),
+        )
+        control_command.setdefault(
+            'teleport_continuity_suspect',
+            bool(fv.get('teleport_continuity_suspect', False)),
+        )
+        control_command.setdefault(
+            'teleport_guard_reason_code',
+            str(fv.get('teleport_guard_reason_code', TELEPORT_GUARD_REASON_NONE)),
+        )
+        control_command.setdefault(
+            'teleport_dynamic_threshold_m',
+            float(fv.get('teleport_dynamic_threshold_m', np.nan)),
+        )
+        control_command.setdefault(
+            'teleport_hard_override_threshold_m',
+            float(fv.get('teleport_hard_override_threshold_m', np.nan)),
+        )
+        control_command.setdefault(
+            'teleport_effective_dt_s',
+            float(fv.get('teleport_effective_dt_s', np.nan)),
+        )
+        control_command.setdefault(
+            'teleport_unity_dt_s',
+            float(fv.get('teleport_unity_dt_s', np.nan)),
+        )
+        control_command.setdefault(
+            'reference_velocity_effective',
+            float(reference_velocity_effective) if reference_velocity_effective is not None else np.nan,
+        )
+        control_command.setdefault('post_jump_cooldown_active', bool(post_jump_cooldown_active))
+        control_command.setdefault(
+            'post_jump_cooldown_frames_remaining',
+            int(self.post_jump_cooldown_frames),
+        )
+        control_command.setdefault('post_jump_reason_code', str(post_jump_reason_code))
         control_command.setdefault('curvature_contract_consistent_controller', False)
         control_command.setdefault('curvature_contract_consistent_governor', False)
         control_command.setdefault('curvature_contract_consistent_intent', False)
@@ -6388,21 +6942,18 @@ class AVStack:
 
     def _pf_apply_acc_override(self, gov: dict, vehicle_state_dict: dict) -> dict:
         """
-        Phase B — IDM longitudinal override.
+        Compute ACC diagnostics and candidate target speed.
 
-        Called after _pf_run_speed_governor and before _pf_plan_trajectory.
-        When ACC is active it caps gov['adjusted_target_speed'] to the IDM output
-        and writes ACC diagnostic fields back into vehicle_state_dict so they
-        reach both VehicleState construction (location 6) and HDF5 recording.
-
-        When TTC_ESTOP fires (Phase B stub), adjusted_target_speed is set to 0.0;
-        the existing safety layer's brake-to-stop logic handles deceleration.
+        This stage does not decide the final longitudinal owner. It only
+        computes ACC outputs and writes them into gov + vehicle_state_dict so a
+        later single-owner resolver can choose the final target once.
         """
         if not self._acc_enabled or self._acc_radar_reading is None:
             return gov
 
+        gov = dict(gov)
         ego_speed = float(vehicle_state_dict.get('speed', 0.0))
-        free_flow_target = float(gov.get('adjusted_target_speed', ego_speed))
+        free_flow_target = float(gov.get('governor_target_speed_mps', gov.get('adjusted_target_speed', ego_speed)))
         # Use a fixed frame period (governor does not expose per-frame dt)
         dt = 1.0 / 30.0
 
@@ -6418,24 +6969,74 @@ class AVStack:
         vehicle_state_dict['acc_target_gap_m'] = output.target_gap_m
         vehicle_state_dict['acc_gap_error_m'] = output.gap_error_m
         vehicle_state_dict['acc_ttc_s'] = output.ttc_s
+        vehicle_state_dict['acc_state_code'] = output.state.value
+        vehicle_state_dict['acc_target_speed_mps'] = float(output.target_speed)
+        vehicle_state_dict['acc_request_estop'] = bool(output.request_estop)
+        vehicle_state_dict['acc_safety_mode_code'] = str(output.safety_mode or "none")
+        gov['acc_active'] = float(output.acc_active)
+        gov['acc_state_code'] = output.state.value
+        gov['acc_target_speed_mps'] = float(output.target_speed)
+        gov['acc_request_estop'] = bool(output.request_estop)
+        gov['acc_target_speed_source'] = str(output.target_speed_source or "free_flow")
+        gov['acc_safety_mode_code'] = str(output.safety_mode or "none")
+        return gov
 
-        # Override governor target speed when ACC or TTC guard is active
-        if output.acc_active > 0.5 or output.request_estop:
-            gov = dict(gov)  # shallow copy — do not mutate the original
-            gov['adjusted_target_speed'] = output.target_speed
-            if output.request_estop:
-                # Phase C: latch emergency stop (same mechanism as OOL events in _pf_apply_safety)
+    def _set_planner_target_speed(self, target_speed: float) -> None:
+        if hasattr(self.trajectory_planner, 'planner') and hasattr(self.trajectory_planner.planner, 'target_speed'):
+            self.trajectory_planner.planner.target_speed = float(target_speed)
+        elif hasattr(self.trajectory_planner, 'target_speed'):
+            self.trajectory_planner.target_speed = float(target_speed)
+
+    def _pf_resolve_longitudinal_target(self, gov: dict, vehicle_state_dict: dict) -> dict:
+        """Resolve one final longitudinal owner and propagate it end-to-end."""
+        gov = dict(gov)
+        governor_target = float(gov.get('governor_target_speed_mps', gov.get('adjusted_target_speed', 0.0)) or 0.0)
+        acc_target = gov.get('acc_target_speed_mps')
+        acc_state_code = str(gov.get('acc_state_code', '') or '')
+        acc_request_estop = bool(gov.get('acc_request_estop', False))
+        final_target = governor_target
+        final_owner_code = 'speed_governor'
+
+        if acc_target is not None and np.isfinite(float(acc_target)):
+            acc_target = max(0.0, float(acc_target))
+            acc_state_active = acc_state_code not in {'', 'FREE_FLOW', 'DETECTION_LOSS', 'CUTOUT'}
+            if acc_state_active or acc_request_estop:
+                final_target = min(governor_target, acc_target)
+                final_owner_code = 'acc'
+            if acc_request_estop:
+                final_target = 0.0
+                if acc_state_code == 'COLLAPSED_GAP_STOP':
+                    final_owner_code = 'acc_collapsed_gap_stop'
+                else:
+                    final_owner_code = 'acc_ttc_estop'
                 self.emergency_stop_latched = True
                 if self.emergency_stop_latched_since_wall_time is None:
                     self.emergency_stop_latched_since_wall_time = time.time()
-                if not self.emergency_stop_logged or self.emergency_stop_type != 'acc_ttc_violation':
-                    logger.error(
-                        f"[Frame {self.frame_count}] ACC TTC_ESTOP: TTC "
-                        f"{output.ttc_s:.2f}s ≤ threshold — emergency brake latched."
-                    )
+                stop_type = (
+                    'acc_collapsed_gap_stop'
+                    if acc_state_code == 'COLLAPSED_GAP_STOP'
+                    else 'acc_ttc_violation'
+                )
+                if not self.emergency_stop_logged or self.emergency_stop_type != stop_type:
+                    if acc_state_code == 'COLLAPSED_GAP_STOP':
+                        logger.error(
+                            f"[Frame {self.frame_count}] ACC COLLAPSED_GAP_STOP: "
+                            f"lead gap {float(vehicle_state_dict.get('radar_fwd_distance_m', 0.0)):.2f} m"
+                        )
+                    else:
+                        logger.error(
+                            f"[Frame {self.frame_count}] ACC TTC_ESTOP: TTC "
+                            f"{float(vehicle_state_dict.get('acc_ttc_s', 999.0)):.2f}s ≤ threshold"
+                        )
                     self.emergency_stop_logged = True
-                    self.emergency_stop_type = 'acc_ttc_violation'
-                gov['adjusted_target_speed'] = 0.0
+                    self.emergency_stop_type = stop_type
+
+        gov['adjusted_target_speed'] = final_target
+        gov['target_speed_final'] = final_target
+        gov['final_longitudinal_target_mps'] = final_target
+        gov['final_longitudinal_owner_code'] = final_owner_code
+        gov['planner_target_speed_applied_mps'] = final_target
+        self._set_planner_target_speed(final_target)
 
         return gov
 
@@ -6527,6 +7128,17 @@ class AVStack:
             self.post_jump_cooldown_frames -= 1
         self.last_vehicle_position = current_position
         self.last_vehicle_timestamp = timestamp
+        current_unity_time = vehicle_state_dict.get(
+            'unityTime',
+            vehicle_state_dict.get('unity_time', float("nan")),
+        )
+        try:
+            current_unity_time = float(current_unity_time)
+        except (TypeError, ValueError):
+            current_unity_time = float("nan")
+        self.last_vehicle_unity_time = (
+            current_unity_time if math.isfinite(current_unity_time) else None
+        )
 
         process_duration = time.time() - process_start
         if process_duration > 0.1:
@@ -7169,6 +7781,132 @@ class AVStack:
             unity_smooth_delta_time=vehicle_state_dict.get('unitySmoothDeltaTime', vehicle_state_dict.get('unity_smooth_delta_time', 0.0)),
             unity_unscaled_delta_time=vehicle_state_dict.get('unityUnscaledDeltaTime', vehicle_state_dict.get('unity_unscaled_delta_time', 0.0)),
             unity_time_scale=vehicle_state_dict.get('unityTimeScale', vehicle_state_dict.get('unity_time_scale', 1.0)),
+            sync_packet_mode=vehicle_state_dict.get('sync_packet_mode', PACKET_MODE_LATEST_PARALLEL),
+            sync_packet_schema_version=int(vehicle_state_dict.get('sync_packet_schema_version', 0) or 0),
+            sync_packet_id=int(vehicle_state_dict.get('sync_packet_id', -1) or -1),
+            sync_packet_unity_frame_count=int(
+                vehicle_state_dict.get('sync_packet_unity_frame_count', -1) or -1
+            ),
+            sync_packet_consume_policy=vehicle_state_dict.get('sync_packet_consume_policy', ''),
+            sync_packet_complete=vehicle_state_dict.get('sync_packet_complete'),
+            sync_packet_fallback_active=vehicle_state_dict.get('sync_packet_fallback_active'),
+            sync_packet_fallback_reason_code=vehicle_state_dict.get(
+                'sync_packet_fallback_reason_code', ''
+            ),
+            sync_packet_queue_depth=int(vehicle_state_dict.get('sync_packet_queue_depth', 0) or 0),
+            sync_packet_drop_count=int(vehicle_state_dict.get('sync_packet_drop_count', 0) or 0),
+            sync_packet_payload_queue_depth=int(
+                vehicle_state_dict.get('sync_packet_payload_queue_depth', 0) or 0
+            ),
+            sync_packet_payload_drop_count=int(
+                vehicle_state_dict.get('sync_packet_payload_drop_count', 0) or 0
+            ),
+            sync_packet_orphan_camera_count=int(
+                vehicle_state_dict.get('sync_packet_orphan_camera_count', 0) or 0
+            ),
+            sync_packet_orphan_vehicle_count=int(
+                vehicle_state_dict.get('sync_packet_orphan_vehicle_count', 0) or 0
+            ),
+            sync_packet_timeout_count=int(
+                vehicle_state_dict.get('sync_packet_timeout_count', 0) or 0
+            ),
+            sync_packet_skipped_unity_frames=int(
+                vehicle_state_dict.get('sync_packet_skipped_unity_frames', 0) or 0
+            ),
+            sync_packet_age_ms=float(
+                vehicle_state_dict.get('sync_packet_age_ms', float("nan"))
+            ),
+            sync_packet_payload_oldest_age_ms=float(
+                vehicle_state_dict.get('sync_packet_payload_oldest_age_ms', float("nan"))
+            ),
+            sync_packet_payload_bytes=int(
+                vehicle_state_dict.get('sync_packet_payload_bytes', 0) or 0
+            ),
+            sync_packet_payload_fallback_reason_code=vehicle_state_dict.get(
+                'sync_packet_payload_fallback_reason_code', ''
+            ),
+            sync_packet_payload_selected_age_ms=float(
+                vehicle_state_dict.get('sync_packet_payload_selected_age_ms', float("nan"))
+            ),
+            sync_packet_payload_selected_fresh=vehicle_state_dict.get(
+                'sync_packet_payload_selected_fresh'
+            ),
+            sync_packet_payload_warn_age_exceeded=vehicle_state_dict.get(
+                'sync_packet_payload_warn_age_exceeded'
+            ),
+            sync_packet_payload_stale_drop_count=int(
+                vehicle_state_dict.get('sync_packet_payload_stale_drop_count', 0) or 0
+            ),
+            sync_packet_payload_drained_count=int(
+                vehicle_state_dict.get('sync_packet_payload_drained_count', 0) or 0
+            ),
+            sync_packet_payload_max_drained_age_ms=float(
+                vehicle_state_dict.get('sync_packet_payload_max_drained_age_ms', float("nan"))
+            ),
+            sync_packet_payload_selection_source=vehicle_state_dict.get(
+                'sync_packet_payload_selection_source', ''
+            ),
+            sync_packet_payload_selection_fallback_active=vehicle_state_dict.get(
+                'sync_packet_payload_selection_fallback_active'
+            ),
+            sync_packet_payload_selection_fallback_reason_code=vehicle_state_dict.get(
+                'sync_packet_payload_selection_fallback_reason_code', ''
+            ),
+            sync_packet_payload_server_queue_depth_after_select=int(
+                vehicle_state_dict.get(
+                    'sync_packet_payload_server_queue_depth_after_select', 0
+                )
+                or 0
+            ),
+            sync_packet_payload_server_oldest_age_ms_after_select=float(
+                vehicle_state_dict.get(
+                    'sync_packet_payload_server_oldest_age_ms_after_select',
+                    float("nan"),
+                )
+            ),
+            sync_packet_join_source=vehicle_state_dict.get('sync_packet_join_source', ''),
+            sync_packet_join_key_present=vehicle_state_dict.get('sync_packet_join_key_present'),
+            sync_packet_join_wait_ms=float(
+                vehicle_state_dict.get('sync_packet_join_wait_ms', float("nan"))
+            ),
+            sync_packet_key_match_count=int(
+                vehicle_state_dict.get('sync_packet_key_match_count', 0) or 0
+            ),
+            sync_packet_unity_fallback_count=int(
+                vehicle_state_dict.get('sync_packet_unity_fallback_count', 0) or 0
+            ),
+            sync_packet_superseded_camera_count=int(
+                vehicle_state_dict.get('sync_packet_superseded_camera_count', 0) or 0
+            ),
+            sync_packet_superseded_vehicle_count=int(
+                vehicle_state_dict.get('sync_packet_superseded_vehicle_count', 0) or 0
+            ),
+            sync_packet_packet_superseded_camera_count=int(
+                vehicle_state_dict.get(
+                    'sync_packet_packet_superseded_camera_count', 0
+                )
+                or 0
+            ),
+            sync_packet_packet_superseded_vehicle_count=int(
+                vehicle_state_dict.get(
+                    'sync_packet_packet_superseded_vehicle_count', 0
+                )
+                or 0
+            ),
+            sync_front_age_ms=float(
+                vehicle_state_dict.get('sync_front_age_ms', float("nan"))
+            ),
+            sync_vehicle_age_ms=float(
+                vehicle_state_dict.get('sync_vehicle_age_ms', float("nan"))
+            ),
+            sync_front_vehicle_frame_delta=float(
+                vehicle_state_dict.get('sync_front_vehicle_frame_delta', float("nan"))
+            ),
+            sync_front_vehicle_time_delta_ms=float(
+                vehicle_state_dict.get('sync_front_vehicle_time_delta_ms', float("nan"))
+            ),
+            sync_packet_missing_front=vehicle_state_dict.get('sync_packet_missing_front'),
+            sync_packet_missing_vehicle=vehicle_state_dict.get('sync_packet_missing_vehicle'),
             ground_truth_left_lane_line_x=gt_left_lane_line_x,
             ground_truth_right_lane_line_x=gt_right_lane_line_x,
             ground_truth_lane_center_x=gt_lane_center_x,
@@ -7495,10 +8233,20 @@ class AVStack:
             radar_fwd_distance_m=float(vehicle_state_dict.get('radar_fwd_distance_m', 0.0)),
             radar_fwd_range_rate_mps=float(vehicle_state_dict.get('radar_fwd_range_rate_mps', 0.0)),
             radar_fwd_snr=float(vehicle_state_dict.get('radar_fwd_snr', 0.0)),
+            lead_collision_detected=bool(
+                vehicle_state_dict.get('lead_collision_detected', False)
+            ),
+            lead_collision_override_active=bool(
+                vehicle_state_dict.get('lead_collision_override_active', False)
+            ),
             acc_active=float(vehicle_state_dict.get('acc_active', 0.0)),
             acc_target_gap_m=float(vehicle_state_dict.get('acc_target_gap_m', 0.0)),
             acc_gap_error_m=float(vehicle_state_dict.get('acc_gap_error_m', 0.0)),
             acc_ttc_s=float(vehicle_state_dict.get('acc_ttc_s', 999.0)),
+            acc_state_code=str(vehicle_state_dict.get('acc_state_code', '') or ''),
+            acc_target_speed_mps=float(vehicle_state_dict.get('acc_target_speed_mps', 0.0) or 0.0),
+            acc_request_estop=bool(vehicle_state_dict.get('acc_request_estop', False)),
+            acc_safety_mode_code=str(vehicle_state_dict.get('acc_safety_mode_code', 'none') or 'none'),
         )
         
         def _latency_float(key: str) -> float:
@@ -7856,12 +8604,47 @@ class AVStack:
             perf_control_ms=_latency_float("perf_control_ms"),
             perf_wait_input_ms=_latency_float("perf_wait_input_ms"),
             perf_hdf5_write_ms=float("nan"),
+            teleport_detected=bool(control_command.get('teleport_detected', False)),
+            teleport_jump_m=control_command.get('teleport_jump_m'),
+            teleport_guard_suppressed=bool(
+                control_command.get('teleport_guard_suppressed', False)
+            ),
+            teleport_continuity_suspect=bool(
+                control_command.get('teleport_continuity_suspect', False)
+            ),
+            teleport_guard_reason_code=control_command.get(
+                'teleport_guard_reason_code', TELEPORT_GUARD_REASON_NONE
+            ),
+            teleport_dynamic_threshold_m=control_command.get(
+                'teleport_dynamic_threshold_m'
+            ),
+            teleport_hard_override_threshold_m=control_command.get(
+                'teleport_hard_override_threshold_m'
+            ),
+            teleport_effective_dt_s=control_command.get('teleport_effective_dt_s'),
+            teleport_unity_dt_s=control_command.get('teleport_unity_dt_s'),
             target_speed_raw=control_command.get('target_speed_raw'),
             target_speed_post_limits=control_command.get('target_speed_post_limits'),
             target_speed_planned=control_command.get('target_speed_planned'),
             target_speed_final=control_command.get('target_speed_final'),
+            governor_target_speed_mps=control_command.get('governor_target_speed_mps'),
+            acc_target_speed_mps=control_command.get('acc_target_speed_mps'),
+            planner_target_speed_applied_mps=control_command.get('planner_target_speed_applied_mps'),
+            final_longitudinal_target_mps=control_command.get('final_longitudinal_target_mps'),
+            final_longitudinal_owner_code=control_command.get('final_longitudinal_owner_code', ''),
+            reference_velocity_source_code=control_command.get('reference_velocity_source_code', ''),
             target_speed_slew_active=bool(control_command.get('target_speed_slew_active', False)),
             target_speed_ramp_active=bool(control_command.get('target_speed_ramp_active', False)),
+            reference_velocity_effective=control_command.get('reference_velocity_effective'),
+            post_jump_cooldown_active=bool(
+                control_command.get('post_jump_cooldown_active', False)
+            ),
+            post_jump_cooldown_frames_remaining=int(
+                control_command.get('post_jump_cooldown_frames_remaining', 0) or 0
+            ),
+            post_jump_reason_code=control_command.get('post_jump_reason_code', ''),
+            teleport_expected_motion_m=control_command.get('teleport_expected_motion_m'),
+            teleport_motion_ratio=control_command.get('teleport_motion_ratio'),
             speed_governor_active_limiter=control_command.get('speed_governor_active_limiter', 'none'),
             speed_governor_active_limiter_code=control_command.get(
                 'speed_governor_active_limiter_code', 0

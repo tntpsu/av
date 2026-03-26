@@ -43,6 +43,7 @@ class ACCState(Enum):
     CUTOUT          = "CUTOUT"
     EMERGENCY_BRAKE = "EMERGENCY_BRAKE"
     TTC_ESTOP       = "TTC_ESTOP"
+    COLLAPSED_GAP_STOP = "COLLAPSED_GAP_STOP"
 
 
 @dataclass
@@ -96,6 +97,8 @@ class ACCOutput:
     ttc_s: float
     request_estop: bool
     state: ACCState
+    target_speed_source: str = "free_flow"
+    safety_mode: str = "none"
 
 
 # ── Module-level constants (used before scoring_registry is available) ────────
@@ -103,6 +106,7 @@ _TTC_ESTOP_THRESHOLD_S: float = 1.5      # Phase D wires to ACC_TTC_CRITICAL_S i
 _EMERGENCY_BRAKE_ACCEL_MPS2: float = -4.0
 _EMERGENCY_BRAKE_GAP_FACTOR: float = 1.5  # gap < factor × ego_speed → emergency brake
 _TTC_CAP: float = 999.0                   # sentinel: TTC not meaningful (no lead / pulling away)
+_COLLAPSED_GAP_STOP_M: float = 0.5
 
 
 class ACCController:
@@ -193,6 +197,26 @@ class ACCController:
                 ttc_s=ttc_s,
                 request_estop=True,
                 state=ACCState.TTC_ESTOP,
+                target_speed_source="ttc_estop",
+                safety_mode="ttc_estop",
+            )
+
+        # Lead already inside the ego safety envelope. This must not depend on
+        # positive closing rate because the sim collision override reports a
+        # collapsed gap with zero range-rate.
+        if reading.detected and reading.gap_m <= _COLLAPSED_GAP_STOP_M:
+            self._was_acc_active = False
+            self._v_target_prev = 0.0
+            return ACCOutput(
+                target_speed=0.0,
+                acc_active=1.0,
+                target_gap_m=target_gap_m,
+                gap_error_m=gap_error_m,
+                ttc_s=ttc_s,
+                request_estop=True,
+                state=ACCState.COLLAPSED_GAP_STOP,
+                target_speed_source="collapsed_gap_stop",
+                safety_mode="collapsed_gap_stop",
             )
 
         # 2. EMERGENCY_BRAKE: hard deceleration, no e-stop
@@ -210,6 +234,8 @@ class ACCController:
                 ttc_s=ttc_s,
                 request_estop=False,
                 state=ACCState.EMERGENCY_BRAKE,
+                target_speed_source="emergency_brake",
+                safety_mode="emergency_brake",
             )
 
         # 3. CUTOUT: ego too slow — disengage ramp
@@ -226,6 +252,8 @@ class ACCController:
                 ttc_s=ttc_s,
                 request_estop=False,
                 state=ACCState.CUTOUT,
+                target_speed_source="cutout_ramp",
+                safety_mode="none",
             )
 
         # 4. DETECTION_LOSS: ramp back to free-flow
@@ -241,6 +269,8 @@ class ACCController:
                 ttc_s=ttc_s,
                 request_estop=False,
                 state=ACCState.DETECTION_LOSS,
+                target_speed_source="detection_loss_ramp",
+                safety_mode="none",
             )
 
         # 5. ACC_ACTIVE: lead detected, all guards clear
@@ -268,6 +298,8 @@ class ACCController:
                 ttc_s=ttc_s,
                 request_estop=False,
                 state=ACCState.ACC_ACTIVE,
+                target_speed_source="acc_active",
+                safety_mode="none",
             )
 
         # 6. FREE_FLOW: default
@@ -288,6 +320,8 @@ class ACCController:
                 ttc_s=_TTC_CAP,
                 request_estop=False,
                 state=ACCState.FREE_FLOW,
+                target_speed_source="free_flow_ramp",
+                safety_mode="none",
             )
 
         self._was_acc_active = False
@@ -300,6 +334,8 @@ class ACCController:
             ttc_s=_TTC_CAP,
             request_estop=False,
             state=ACCState.FREE_FLOW,
+            target_speed_source="free_flow",
+            safety_mode="none",
         )
 
     # ── Private helpers ───────────────────────────────────────────────────────

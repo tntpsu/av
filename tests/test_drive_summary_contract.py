@@ -50,6 +50,9 @@ def test_drive_summary_contract_keys(tmp_path: Path) -> None:
         "turn_bias",
         "alignment_summary",
         "latency_sync",
+        "transport_contract",
+        "speed_intent",
+        "run_intent",
         "chassis_ground",
         "curvature_contract_health",
         "first_fault_chain",
@@ -64,6 +67,66 @@ def test_drive_summary_contract_keys(tmp_path: Path) -> None:
     assert summary["summary_schema_version"] == "v1"
     latency_sync = summary.get("latency_sync", {})
     assert {"schema_version", "e2e", "sync_alignment", "cadence", "overall"}.issubset(latency_sync.keys())
+    transport_contract = summary.get("transport_contract", {})
+    assert {
+        "schema_version",
+        "availability",
+        "packet_mode",
+        "consume_policy",
+        "packet_completeness_rate",
+        "fallback_active_rate",
+        "packet_queue_depth",
+        "payload_queue_depth",
+        "payload_selected_age_ms",
+        "payload_selected_fresh_rate",
+        "payload_warn_age_exceeded_rate",
+        "payload_selection_source_mode",
+        "payload_selection_fallback_reason_mode",
+        "payload_server_queue_depth_after_select",
+        "payload_server_oldest_age_ms_after_select",
+        "join_source_mode",
+        "join_key_present_rate",
+        "join_wait_ms",
+        "packet_superseded_camera_count",
+        "packet_superseded_vehicle_count",
+        "skipped_unity_frames",
+        "post_jump_cooldown_active_rate",
+        "teleport_guard_suppressed_rate",
+        "teleport_continuity_suspect_rate",
+        "teleport_guard_reason_mode",
+        "effective_reference_velocity_drop_count",
+        "limits",
+    }.issubset(transport_contract.keys())
+    speed_intent = summary.get("speed_intent", {})
+    assert {
+        "schema_version",
+        "availability",
+        "desired_target_speed_mps",
+        "post_limits_target_speed_mps",
+        "governor_target_speed_mps",
+        "acc_target_speed_mps",
+        "planner_target_speed_applied_mps",
+        "final_target_speed_mps",
+        "final_longitudinal_owner_mode",
+        "reference_velocity_source_mode",
+        "planner_reference_speed_mps",
+        "effective_reference_speed_mps",
+        "brake_episode_counts_by_reason",
+    }.issubset(speed_intent.keys())
+    run_intent = summary.get("run_intent", {})
+    assert {
+        "schema_version",
+        "availability",
+        "mode",
+        "recording_type",
+        "track_id",
+        "run_target_speed_mps",
+        "road_speed_limit_expected_mps",
+        "lead_following_active",
+        "acc_state_mode",
+        "final_longitudinal_owner_mode",
+        "lead_collision_override_rate_pct",
+    }.issubset(run_intent.keys())
     cadence = latency_sync.get("cadence", {})
     assert {"availability", "status", "stats_ms", "limits", "pass", "tuning_valid"}.issubset(
         cadence.keys()
