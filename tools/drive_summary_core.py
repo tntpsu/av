@@ -1604,6 +1604,217 @@ def _build_highway_mild_curve_contract_summary(data: Dict) -> Dict:
     return result
 
 
+def _build_mpc_gt_cross_track_contract_summary(data: Dict) -> Dict:
+    limits = {
+        "high_lateral_error_min_m": 0.50,
+        "small_at_car_cross_track_max_m": 0.12,
+        "large_lookahead_cross_track_min_m": 0.50,
+        "large_at_car_cross_track_min_m": 1.00,
+        "small_road_offset_max_m": 0.12,
+        "semantic_mismatch_on_high_error_min_pct": 50.0,
+        "absolute_coordinate_mismatch_on_high_error_min_pct": 50.0,
+        "transport_fallback_overlap_max_pct": 5.0,
+        "poor_perception_overlap_max_pct": 10.0,
+    }
+    base = {
+        "schema_version": "v1",
+        "availability": "unavailable",
+        "issue_detected": False,
+        "issue_mode": "none",
+        "high_error_frame_count": 0,
+        "high_error_frame_rate": None,
+        "semantic_mismatch_on_high_error_rate": None,
+        "semantic_mismatch_on_straight_high_error_rate": None,
+        "absolute_coordinate_mismatch_on_high_error_rate": None,
+        "small_at_car_cross_track_on_high_error_rate": None,
+        "large_lookahead_cross_track_on_high_error_rate": None,
+        "large_at_car_cross_track_on_high_error_rate": None,
+        "small_road_offset_on_high_error_rate": None,
+        "transport_fallback_overlap_on_high_error_rate": None,
+        "poor_perception_overlap_on_high_error_rate": None,
+        "curve_local_state_mode_on_high_error": None,
+        "mpc_gt_cross_track_source_mode_on_high_error": None,
+        "control_lateral_error_abs_m": _finite_stats(None),
+        "mpc_gt_cross_track_abs_m": _finite_stats(None),
+        "mpc_gt_cross_track_at_car_abs_m": _finite_stats(None),
+        "mpc_gt_cross_track_lookahead_abs_m": _finite_stats(None),
+        "gt_cross_track_delta_abs_m": _finite_stats(None),
+        "road_frame_lane_center_offset_abs_m": _finite_stats(None),
+        "limits": limits,
+    }
+
+    lateral_error = data.get("lateral_error")
+    source_cross_track = data.get("mpc_gt_cross_track_m")
+    at_car_cross_track = data.get("mpc_gt_cross_track_at_car_m")
+    lookahead_cross_track = data.get("mpc_gt_cross_track_lookahead_m")
+    road_center_offset = data.get("road_frame_lane_center_offset")
+    source_codes = _decode_string_series(data.get("mpc_gt_cross_track_source_code"))
+    curve_local_states = _decode_string_series(data.get("curve_local_state"))
+    if any(
+        candidate is None
+        for candidate in (
+            lateral_error,
+            source_cross_track,
+            at_car_cross_track,
+            lookahead_cross_track,
+        )
+    ):
+        return base
+    if not source_codes or not curve_local_states:
+        return base
+
+    n = min(
+        len(lateral_error),
+        len(source_cross_track),
+        len(at_car_cross_track),
+        len(lookahead_cross_track),
+        len(source_codes),
+        len(curve_local_states),
+    )
+    optional_series = [
+        data.get("sync_packet_fallback_active"),
+        data.get("confidence"),
+        data.get("num_lanes_detected"),
+        road_center_offset,
+    ]
+    for series in optional_series:
+        if series is not None:
+            n = min(n, len(series))
+    if n <= 0:
+        return base
+
+    lateral_error_arr = np.abs(np.asarray(lateral_error[:n], dtype=np.float64))
+    source_cross_track_arr = np.abs(np.asarray(source_cross_track[:n], dtype=np.float64))
+    at_car_cross_track_arr = np.abs(np.asarray(at_car_cross_track[:n], dtype=np.float64))
+    lookahead_cross_track_arr = np.abs(np.asarray(lookahead_cross_track[:n], dtype=np.float64))
+    delta_cross_track_arr = np.abs(lookahead_cross_track_arr - at_car_cross_track_arr)
+    road_center_offset_arr = (
+        np.abs(np.asarray(road_center_offset[:n], dtype=np.float64))
+        if road_center_offset is not None
+        else np.full(n, np.nan, dtype=np.float64)
+    )
+    sync_fallback = data.get("sync_packet_fallback_active")
+    sync_fallback_arr = (
+        np.asarray(sync_fallback[:n], dtype=np.float64)
+        if sync_fallback is not None
+        else np.zeros(n, dtype=np.float64)
+    )
+    confidence = data.get("confidence")
+    confidence_arr = (
+        np.asarray(confidence[:n], dtype=np.float64)
+        if confidence is not None
+        else np.ones(n, dtype=np.float64)
+    )
+    num_lanes = data.get("num_lanes_detected")
+    num_lanes_arr = (
+        np.asarray(num_lanes[:n], dtype=np.float64)
+        if num_lanes is not None
+        else np.full(n, 2.0, dtype=np.float64)
+    )
+
+    high_error = lateral_error_arr >= limits["high_lateral_error_min_m"]
+    small_at_car = at_car_cross_track_arr <= limits["small_at_car_cross_track_max_m"]
+    large_lookahead = lookahead_cross_track_arr >= limits["large_lookahead_cross_track_min_m"]
+    large_at_car = at_car_cross_track_arr >= limits["large_at_car_cross_track_min_m"]
+    small_road_offset = road_center_offset_arr <= limits["small_road_offset_max_m"]
+    semantic_mismatch = high_error & small_at_car & large_lookahead
+    absolute_coordinate_mismatch = high_error & large_at_car & small_road_offset
+    straight_high_error = semantic_mismatch & np.array(
+        [state == "STRAIGHT" for state in curve_local_states[:n]], dtype=bool
+    )
+    poor_perception = (confidence_arr <= 0.50) | (num_lanes_arr <= 1.5)
+    fallback_mask = sync_fallback_arr > 0.5
+    high_error_count = int(np.sum(high_error))
+
+    result = dict(base)
+    result["availability"] = "available"
+    result["high_error_frame_count"] = high_error_count
+    result["high_error_frame_rate"] = safe_float(
+        (high_error_count / max(n, 1)) * 100.0
+    )
+    result["semantic_mismatch_on_high_error_rate"] = safe_float(
+        (np.sum(semantic_mismatch) / max(high_error_count, 1)) * 100.0
+    )
+    result["semantic_mismatch_on_straight_high_error_rate"] = safe_float(
+        (np.sum(straight_high_error) / max(high_error_count, 1)) * 100.0
+    )
+    result["absolute_coordinate_mismatch_on_high_error_rate"] = safe_float(
+        (np.sum(high_error & absolute_coordinate_mismatch) / max(high_error_count, 1)) * 100.0
+    )
+    result["small_at_car_cross_track_on_high_error_rate"] = safe_float(
+        (np.sum(high_error & small_at_car) / max(high_error_count, 1)) * 100.0
+    )
+    result["large_lookahead_cross_track_on_high_error_rate"] = safe_float(
+        (np.sum(high_error & large_lookahead) / max(high_error_count, 1)) * 100.0
+    )
+    result["large_at_car_cross_track_on_high_error_rate"] = safe_float(
+        (np.sum(high_error & large_at_car) / max(high_error_count, 1)) * 100.0
+    )
+    result["small_road_offset_on_high_error_rate"] = safe_float(
+        (np.sum(high_error & small_road_offset) / max(high_error_count, 1)) * 100.0
+    )
+    result["transport_fallback_overlap_on_high_error_rate"] = safe_float(
+        (np.sum(high_error & fallback_mask) / max(high_error_count, 1)) * 100.0
+    )
+    result["poor_perception_overlap_on_high_error_rate"] = safe_float(
+        (np.sum(high_error & poor_perception) / max(high_error_count, 1)) * 100.0
+    )
+    result["curve_local_state_mode_on_high_error"] = _mode_string(
+        [curve_local_states[idx] for idx, active in enumerate(high_error) if active],
+        ignore={"", "nan", "none"},
+    )
+    result["mpc_gt_cross_track_source_mode_on_high_error"] = _mode_string(
+        [source_codes[idx] for idx, active in enumerate(high_error) if active],
+        ignore={"", "nan", "none"},
+    )
+    result["control_lateral_error_abs_m"] = _finite_stats(lateral_error_arr[high_error])
+    result["mpc_gt_cross_track_abs_m"] = _finite_stats(source_cross_track_arr[high_error])
+    result["mpc_gt_cross_track_at_car_abs_m"] = _finite_stats(at_car_cross_track_arr[high_error])
+    result["mpc_gt_cross_track_lookahead_abs_m"] = _finite_stats(
+        lookahead_cross_track_arr[high_error]
+    )
+    result["gt_cross_track_delta_abs_m"] = _finite_stats(delta_cross_track_arr[high_error])
+    result["road_frame_lane_center_offset_abs_m"] = _finite_stats(road_center_offset_arr[high_error])
+    semantic_rate = (
+        float(result["semantic_mismatch_on_high_error_rate"])
+        if result["semantic_mismatch_on_high_error_rate"] is not None
+        else 0.0
+    )
+    absolute_rate = (
+        float(result["absolute_coordinate_mismatch_on_high_error_rate"])
+        if result["absolute_coordinate_mismatch_on_high_error_rate"] is not None
+        else 0.0
+    )
+    fallback_overlap_rate = (
+        float(result["transport_fallback_overlap_on_high_error_rate"])
+        if result["transport_fallback_overlap_on_high_error_rate"] is not None
+        else 100.0
+    )
+    poor_perception_overlap_rate = (
+        float(result["poor_perception_overlap_on_high_error_rate"])
+        if result["poor_perception_overlap_on_high_error_rate"] is not None
+        else 100.0
+    )
+    semantic_issue = bool(
+        high_error_count > 0
+        and semantic_rate >= limits["semantic_mismatch_on_high_error_min_pct"]
+        and fallback_overlap_rate <= limits["transport_fallback_overlap_max_pct"]
+        and poor_perception_overlap_rate <= limits["poor_perception_overlap_max_pct"]
+    )
+    absolute_issue = bool(
+        high_error_count > 0
+        and absolute_rate >= limits["absolute_coordinate_mismatch_on_high_error_min_pct"]
+        and fallback_overlap_rate <= limits["transport_fallback_overlap_max_pct"]
+        and poor_perception_overlap_rate <= limits["poor_perception_overlap_max_pct"]
+    )
+    result["issue_detected"] = bool(semantic_issue or absolute_issue)
+    if absolute_issue:
+        result["issue_mode"] = "absolute_coordinate_mismatch"
+    elif semantic_issue:
+        result["issue_mode"] = "semantic_mismatch"
+    return result
+
+
 def _load_track_curve_windows(track_name: str) -> dict:
     safe_name = "".join(ch for ch in str(track_name or "").strip() if ch.isalnum() or ch in {"_", "-"})
     if not safe_name:
@@ -3920,6 +4131,22 @@ def analyze_recording_summary(
                 np.array(f['control/mpc_using_ground_truth'][:])
                 if 'control/mpc_using_ground_truth' in f else None
             )
+            data['mpc_gt_cross_track_m'] = (
+                np.array(f['control/mpc_gt_cross_track_m'][:])
+                if 'control/mpc_gt_cross_track_m' in f else None
+            )
+            data['mpc_gt_cross_track_at_car_m'] = (
+                np.array(f['control/mpc_gt_cross_track_at_car_m'][:])
+                if 'control/mpc_gt_cross_track_at_car_m' in f else None
+            )
+            data['mpc_gt_cross_track_lookahead_m'] = (
+                np.array(f['control/mpc_gt_cross_track_lookahead_m'][:])
+                if 'control/mpc_gt_cross_track_lookahead_m' in f else None
+            )
+            data['mpc_gt_cross_track_source_code'] = (
+                f['control/mpc_gt_cross_track_source_code'][:]
+                if 'control/mpc_gt_cross_track_source_code' in f else None
+            )
             data['mpc_feasible'] = (
                 np.array(f['control/mpc_feasible'][:])
                 if 'control/mpc_feasible' in f else None
@@ -4347,6 +4574,10 @@ def analyze_recording_summary(
             
             # Ground truth (if available)
             data['gt_center'] = np.array(f['ground_truth/lane_center_x'][:]) if 'ground_truth/lane_center_x' in f else None
+            data['gt_center_at_car'] = (
+                np.array(f['ground_truth/lane_center_x_at_car'][:])
+                if 'ground_truth/lane_center_x_at_car' in f else None
+            )
             data['gt_left'] = np.array(f['ground_truth/left_lane_line_x'][:]) if 'ground_truth/left_lane_line_x' in f else None
             data['gt_right'] = np.array(f['ground_truth/right_lane_line_x'][:]) if 'ground_truth/right_lane_line_x' in f else None
             data['gt_path_curvature'] = (
@@ -7746,6 +7977,7 @@ def analyze_recording_summary(
     speed_intent = _build_speed_intent_summary(data)
     run_intent = _build_run_intent_summary(data)
     highway_mild_curve_contract = _build_highway_mild_curve_contract_summary(data)
+    mpc_gt_cross_track_contract = _build_mpc_gt_cross_track_contract_summary(data)
     if not bool((latency_sync.get("cadence") or {}).get("tuning_valid", False)):
         recommendations.append(
             "Cadence quality is not tuning-valid - do not use this run for parameter decisions."
@@ -7778,6 +8010,15 @@ def analyze_recording_summary(
         recommendations.append(
             "Mild map-backed curve is present but recognition stays STRAIGHT and lookahead stays long - fix dynamic curve activation and lookahead shaping before steering gain tuning."
         )
+    if mpc_gt_cross_track_contract.get("issue_detected"):
+        if mpc_gt_cross_track_contract.get("issue_mode") == "absolute_coordinate_mismatch":
+            recommendations.append(
+                "MPC at-car GT cross-track looks like an absolute lane-center coordinate - compute it from the car's current pose and keep reference-path geometry debug-only."
+            )
+        else:
+            recommendations.append(
+                "MPC high-error windows are dominated by lookahead GT geometry while at-car GT stays small - split lookahead vs at-car GT cross-track and keep lookahead debug-only."
+            )
     chassis_ground = _build_chassis_ground_summary(data, n_frames=n_frames)
     if chassis_ground.get("health") == "POOR":
         recommendations.append(
@@ -7931,6 +8172,11 @@ def analyze_recording_summary(
         false_cooldown_count = int(transport_contract.get("false_teleport_cooldown_count", 0) or 0)
         if false_cooldown_count > 0:
             key_issues.append(f"Transport-linked post-jump cooldown episodes ({false_cooldown_count})")
+    if mpc_gt_cross_track_contract.get("issue_detected"):
+        if mpc_gt_cross_track_contract.get("issue_mode") == "absolute_coordinate_mismatch":
+            key_issues.append("MPC GT at-car cross-track uses absolute coordinates")
+        else:
+            key_issues.append("MPC GT cross-track semantic mismatch")
     effective_drop_rate = speed_intent.get("effective_reference_velocity_drop_rate")
     if effective_drop_rate is not None and float(effective_drop_rate) > 1.0:
         key_issues.append(
@@ -7941,6 +8187,10 @@ def analyze_recording_summary(
     if highway_mild_curve_contract.get("issue_detected"):
         key_issues.append(
             "Highway mild-curve under-activation (reference geometry mismatch on a map-backed arc)"
+        )
+    if mpc_gt_cross_track_contract.get("issue_detected"):
+        key_issues.append(
+            "MPC GT cross-track semantic mismatch (lookahead geometry used as current cross-track)"
         )
     if chassis_ground.get("health") in {"WARN", "POOR"}:
         contact_rate = chassis_ground.get("contact_rate_pct")
@@ -8144,6 +8394,7 @@ def analyze_recording_summary(
         "speed_intent": speed_intent,
         "run_intent": run_intent,
         "highway_mild_curve_contract": highway_mild_curve_contract,
+        "mpc_gt_cross_track_contract": mpc_gt_cross_track_contract,
         "chassis_ground": chassis_ground,
         "recording_provenance": data.get("recording_provenance") or {},
         "curvature_contract_health": {

@@ -507,6 +507,40 @@ PATTERNS = [
             and m.get("highway_mild_curve_poor_perception_overlap_on_high_error_rate", 1.0) < 0.10
         ),
     },
+    {
+        "id": "mpc_gt_cross_track_semantic_mismatch",
+        "name": "MPC GT cross-track semantic mismatch",
+        "severity": "instability",
+        "category": "Control",
+        "code_pointer": "unity/AVSimulation/Assets/Scripts/AVBridge.cs + av_stack/orchestrator.py",
+        "config_lever": "split lookahead GT from at-car GT; keep lookahead debug-only",
+        "fix_hint": (
+            "MPC high-error windows are dominated by large lookahead GT cross-track while at-car GT stays small. "
+            "Do not use preview lane-center geometry as current e_lat. Export and consume a true at-car selected-lane-center signal."
+        ),
+        "check": lambda m: (
+            m.get("mpc_gt_cross_track_semantic_mismatch_rate", 0.0) > 0.05
+            and m.get("highway_mild_curve_transport_fallback_overlap_on_high_error_rate", 1.0) < 0.10
+            and m.get("highway_mild_curve_poor_perception_overlap_on_high_error_rate", 1.0) < 0.10
+        ),
+    },
+    {
+        "id": "mpc_gt_cross_track_absolute_coordinate_mismatch",
+        "name": "MPC GT cross-track absolute-coordinate misuse",
+        "severity": "instability",
+        "category": "Control",
+        "code_pointer": "unity/AVSimulation/Assets/Scripts/GroundTruthReporter.cs + av_stack/orchestrator.py",
+        "config_lever": "export true at-car lane-center offset; keep reference-path geometry debug-only",
+        "fix_hint": (
+            "The at-car GT signal is too large to be a current cross-track offset while actual lane-center offset stays small. "
+            "Compute at-car GT from the vehicle's current pose on the road, not from the time-based reference path."
+        ),
+        "check": lambda m: (
+            m.get("mpc_gt_cross_track_absolute_coordinate_mismatch_rate", 0.0) > 0.05
+            and m.get("highway_mild_curve_transport_fallback_overlap_on_high_error_rate", 1.0) < 0.10
+            and m.get("highway_mild_curve_poor_perception_overlap_on_high_error_rate", 1.0) < 0.10
+        ),
+    },
     # ── ACC patterns (Step 5 — priority-0 when following_too_close) ──────────
     {
         "id": "acc_following_too_close",
@@ -1176,6 +1210,34 @@ class TriageEngine:
                     m["mpc_curvature_bias_cancellation_rate"] = (
                         float(np.sum(bias_cancel) / max(high_err_count, 1))
                     )
+                    mpc_gt_at_car = arr("control/mpc_gt_cross_track_at_car_m")
+                    mpc_gt_lookahead = arr("control/mpc_gt_cross_track_lookahead_m")
+                    if mpc_gt_at_car is not None and mpc_gt_lookahead is not None:
+                        n_gt = min(len(mpc_gt_at_car), len(mpc_gt_lookahead), len(high_err))
+                        gt_at_car = np.abs(np.asarray(mpc_gt_at_car[:n_gt], dtype=np.float64))
+                        gt_lookahead = np.abs(np.asarray(mpc_gt_lookahead[:n_gt], dtype=np.float64))
+                        high_err_gt = high_err[:n_gt]
+                        semantic_mismatch = (
+                            high_err_gt
+                            & (gt_at_car <= 0.12)
+                            & (gt_lookahead >= 0.50)
+                        )
+                        m["mpc_gt_cross_track_semantic_mismatch_rate"] = (
+                            float(np.sum(semantic_mismatch) / max(int(np.sum(high_err_gt)), 1))
+                        )
+                        road_offset = arr("vehicle/road_frame_lane_center_offset")
+                        if road_offset is not None:
+                            n_abs = min(n_gt, len(road_offset))
+                            road_abs = np.abs(np.asarray(road_offset[:n_abs], dtype=np.float64))
+                            high_err_abs = high_err[:n_abs]
+                            absolute_mismatch = (
+                                high_err_abs
+                                & (gt_at_car[:n_abs] >= 1.0)
+                                & (road_abs <= 0.12)
+                            )
+                            m["mpc_gt_cross_track_absolute_coordinate_mismatch_rate"] = (
+                                float(np.sum(absolute_mismatch) / max(int(np.sum(high_err_abs)), 1))
+                            )
 
             # Speed below target rate
             _speed = arr("vehicle/speed")
@@ -1268,6 +1330,8 @@ class TriageEngine:
             "mpc_steering_oscillation": "mpc_steering_osc_rate",
             "gt_boundary_corrupt": "gt_boundary_corrupt_frames",
             "highway_mild_curve_underactivation": "highway_mild_curve_underactivation_rate",
+            "mpc_gt_cross_track_semantic_mismatch": "mpc_gt_cross_track_semantic_mismatch_rate",
+            "mpc_gt_cross_track_absolute_coordinate_mismatch": "mpc_gt_cross_track_absolute_coordinate_mismatch_rate",
         }
         for pat in PATTERNS:
             try:

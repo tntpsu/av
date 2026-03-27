@@ -1011,3 +1011,62 @@ def test_recorder_writes_sync_packet_and_post_jump_fields(tmp_path: Path) -> Non
         assert float(h5_file["control/teleport_unity_dt_s"][0]) == pytest.approx(
             0.15, rel=1e-6
         )
+
+
+def test_recorder_writes_mpc_gt_cross_track_contract_fields(tmp_path: Path) -> None:
+    recorder = DataRecorder(str(tmp_path), recording_name="control_command_mpc_gt_contract_test")
+    try:
+        frame = RecordingFrame(
+            timestamp=0.0,
+            frame_id=0,
+            camera_frame=CameraFrame(
+                image=np.zeros((1, 1, 3), dtype=np.uint8),
+                timestamp=0.0,
+                frame_id=0,
+            ),
+            vehicle_state=VehicleState(
+                timestamp=0.0,
+                position=np.zeros(3, dtype=np.float32),
+                rotation=np.array([0.0, 0.0, 0.0, 1.0], dtype=np.float32),
+                velocity=np.zeros(3, dtype=np.float32),
+                angular_velocity=np.zeros(3, dtype=np.float32),
+                speed=0.0,
+                steering_angle=0.0,
+                motor_torque=0.0,
+                brake_torque=0.0,
+                ground_truth_left_lane_line_x=-3.0,
+                ground_truth_right_lane_line_x=3.0,
+                ground_truth_lane_center_x=0.82,
+                ground_truth_lane_center_x_lookahead=0.82,
+                ground_truth_lane_center_x_at_car=0.04,
+            ),
+            control_command=ControlCommand(
+                timestamp=0.0,
+                steering=0.0,
+                throttle=0.0,
+                brake=0.0,
+                mpc_gt_cross_track_m=0.04,
+                mpc_gt_cross_track_at_car_m=0.04,
+                mpc_gt_cross_track_lookahead_m=0.82,
+                mpc_gt_cross_track_source_code="at_car",
+            ),
+            perception_output=None,
+            trajectory_output=None,
+            unity_feedback=None,
+        )
+
+        recorder.record_frame(frame)
+        recorder.close()
+    finally:
+        if getattr(recorder, "h5_file", None) is not None:
+            recorder.close()
+
+    with h5py.File(tmp_path / "control_command_mpc_gt_contract_test.h5", "r") as h5_file:
+        assert float(h5_file["control/mpc_gt_cross_track_m"][0]) == pytest.approx(0.04, rel=1e-6)
+        assert float(h5_file["control/mpc_gt_cross_track_at_car_m"][0]) == pytest.approx(0.04, rel=1e-6)
+        assert float(h5_file["control/mpc_gt_cross_track_lookahead_m"][0]) == pytest.approx(0.82, rel=1e-6)
+        source = h5_file["control/mpc_gt_cross_track_source_code"][0]
+        if isinstance(source, bytes):
+            source = source.decode("utf-8")
+        assert str(source) == "at_car"
+        assert float(h5_file["ground_truth/lane_center_x_at_car"][0]) == pytest.approx(0.04, rel=1e-6)

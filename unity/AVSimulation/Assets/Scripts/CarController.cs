@@ -1832,7 +1832,9 @@ public class VehicleState
     // These represent the painted lane line markings, not the drivable lanes
     public float groundTruthLeftLaneLineX = 0f;  // Left lane line (painted marking) position
     public float groundTruthRightLaneLineX = 0f;  // Right lane line (painted marking) position
-    public float groundTruthLaneCenterX = 0f;  // Lane center (midpoint between lane lines)
+    public float groundTruthLaneCenterX = 0f;  // Legacy alias: selected lane center at lookahead
+    public float groundTruthLaneCenterXLookahead = 0f;  // Selected lane center at GT lookahead distance
+    public float groundTruthLaneCenterXAtCar = 0f;  // Selected lane center at the car's current position
     // NEW: Path-based steering data
     public float groundTruthDesiredHeading = 0.0f;  // Desired heading from path (degrees)
     public float groundTruthPathCurvature = 0.0f;  // Path curvature (1/meters)

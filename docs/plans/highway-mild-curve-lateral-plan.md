@@ -650,6 +650,96 @@ We should consider the root issue fixed only if:
    - `/Users/philiptullai/Documents/Coding/av/tracks/scenarios/highway_h2_steady.yml`
    - then `/Users/philiptullai/Documents/Coding/av/tracks/scenarios/highway_h8_curve_catchup.yml`
 
+## Phase H4: Split Lookahead GT Geometry From At-Car MPC Cross-Track
+
+### Why
+
+The remaining lateral issue after H3 is a semantic contract bug, not another gain problem.
+
+Current path:
+
+1. Unity exports `groundTruthLaneCenterX` at lookahead distance.
+2. `/Users/philiptullai/Documents/Coding/av/av_stack/orchestrator.py` treats it as current MPC cross-track.
+3. `/Users/philiptullai/Documents/Coding/av/control/pid_controller.py` uses it as `e_lat`.
+
+That makes MPC steer against future lane-center geometry instead of true at-car lane-center error.
+
+### New contract
+
+Split the telemetry into two explicit signals:
+
+1. `groundTruthLaneCenterXLookahead`
+   - selected lane center at the configured GT lookahead distance
+   - debug/perception-alignment metric only
+
+2. `groundTruthLaneCenterXAtCar`
+   - selected lane center at the vehicle's current position in vehicle coordinates
+   - authoritative MPC/Stanley cross-track source
+
+Keep legacy `groundTruthLaneCenterX` as a backward-compatible alias for the lookahead value, but stop using it as the runtime control input.
+
+### Files
+
+- `/Users/philiptullai/Documents/Coding/av/unity/AVSimulation/Assets/Scripts/GroundTruthReporter.cs`
+- `/Users/philiptullai/Documents/Coding/av/unity/AVSimulation/Assets/Scripts/AVBridge.cs`
+- `/Users/philiptullai/Documents/Coding/av/unity/AVSimulation/Assets/Scripts/CarController.cs`
+- `/Users/philiptullai/Documents/Coding/av/bridge/server.py`
+- `/Users/philiptullai/Documents/Coding/av/data/formats/data_format.py`
+- `/Users/philiptullai/Documents/Coding/av/data/recorder.py`
+- `/Users/philiptullai/Documents/Coding/av/av_stack/orchestrator.py`
+- `/Users/philiptullai/Documents/Coding/av/control/pid_controller.py`
+- `/Users/philiptullai/Documents/Coding/av/tools/drive_summary_core.py`
+- `/Users/philiptullai/Documents/Coding/av/tools/analyze/analyze_drive_overall.py`
+- `/Users/philiptullai/Documents/Coding/av/tools/debug_visualizer/backend/issue_detector.py`
+- `/Users/philiptullai/Documents/Coding/av/tools/debug_visualizer/backend/triage_engine.py`
+- `/Users/philiptullai/Documents/Coding/av/tools/debug_visualizer/visualizer.js`
+
+### Runtime changes
+
+1. Add a lane-aware at-car GT helper in Unity.
+2. Export both lookahead and at-car selected-lane-center metrics.
+3. Use the at-car metric for:
+   - `reference_point['gt_cross_track_m']`
+   - MPC `e_lat`
+   - Stanley GT cross-track when GT is active
+4. Preserve the lookahead metric separately for debug/perception evaluation.
+5. Record which source the controller actually used:
+   - `at_car`
+   - `legacy_lookahead`
+   - `perception_fallback`
+
+### Recorder and analysis changes
+
+Record:
+
+1. `ground_truth/lane_center_x_at_car`
+2. `control/mpc_gt_cross_track_at_car_m`
+3. `control/mpc_gt_cross_track_lookahead_m`
+4. `control/mpc_gt_cross_track_source_code`
+
+Add a dedicated summary/issue path for:
+
+- `mpc_gt_cross_track_semantic_mismatch`
+
+It should trigger when:
+
+1. `|control/mpc_gt_cross_track_lookahead_m|` is large
+2. `|control/mpc_gt_cross_track_at_car_m|` is small
+3. controller high-error windows overlap that mismatch
+4. transport/perception remain clean
+
+### Acceptance gates
+
+On `/Users/philiptullai/Documents/Coding/av/tracks/scenarios/highway_h2_steady.yml`:
+
+1. `control/mpc_gt_cross_track_source_code` should be `at_car` on the active MPC path.
+2. The semantic-mismatch issue should not fire.
+3. High-error windows should no longer be dominated by large lookahead GT with small at-car GT.
+4. Transport must remain:
+   - completeness `100%`
+   - fallback `0%`
+5. If path-tracking score remains poor after the runtime fix, treat that as a separate scoring/metric contract cleanup, not as evidence the runtime fix failed.
+
 ## Tests
 
 ### Analyzer/debug tests

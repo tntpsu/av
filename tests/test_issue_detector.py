@@ -193,3 +193,77 @@ def test_detects_mpc_curvature_bias_cancellation(tmp_path: Path) -> None:
     bias_issues = [i for i in issues if i.get("type") == "mpc_curvature_bias_cancellation"]
     assert len(bias_issues) == 1
     assert bias_issues[0]["deep_link_target"] == "summary-section-highway-mild-curve"
+
+
+def test_detects_mpc_gt_cross_track_semantic_mismatch(tmp_path: Path) -> None:
+    recording_path = tmp_path / "issue_mpc_gt_semantic_mismatch.h5"
+    n_frames = 20
+    timestamps = np.linspace(0.0, 1.9, n_frames)
+    lateral_error = np.zeros(n_frames, dtype=np.float32)
+    lateral_error[5:15] = 0.82
+    gt_used = np.zeros(n_frames, dtype=np.float32)
+    gt_used[5:15] = 0.86
+    gt_at_car = np.zeros(n_frames, dtype=np.float32)
+    gt_lookahead = np.zeros(n_frames, dtype=np.float32)
+    gt_lookahead[5:15] = 0.86
+
+    with h5py.File(recording_path, "w") as f:
+        f.create_dataset("vehicle/timestamps", data=timestamps)
+        f.create_dataset("control/steering", data=np.zeros(n_frames, dtype=np.float32))
+        f.create_dataset("control/lateral_error", data=lateral_error)
+        f.create_dataset("control/pp_lookahead_distance", data=np.full(n_frames, 9.0, dtype=np.float32))
+        f.create_dataset("control/reference_lookahead_target", data=np.full(n_frames, 14.0, dtype=np.float32))
+        f.create_dataset("control/mpc_gt_cross_track_m", data=gt_used)
+        f.create_dataset("control/mpc_gt_cross_track_at_car_m", data=gt_at_car)
+        f.create_dataset("control/mpc_gt_cross_track_lookahead_m", data=gt_lookahead)
+        f.create_dataset("trajectory/reference_point_curvature", data=np.zeros(n_frames, dtype=np.float32))
+        f.create_dataset("control/curve_intent_state", data=np.array([b"STRAIGHT"] * n_frames, dtype="S16"))
+        f.create_dataset("control/curve_local_state", data=np.array([b"STRAIGHT"] * n_frames, dtype="S16"))
+        f.create_dataset("control/sync_packet_fallback_active", data=np.zeros(n_frames, dtype=np.int8))
+        f.create_dataset("perception/confidence", data=np.ones(n_frames, dtype=np.float32))
+        f.create_dataset("perception/num_lanes_detected", data=np.full(n_frames, 2, dtype=np.int8))
+        f.create_dataset("perception/left_lane_line_x", data=np.zeros(n_frames, dtype=np.float32))
+
+    issues = detect_issues(recording_path).get("issues", [])
+    semantic_issues = [
+        i for i in issues if i.get("type") == "mpc_gt_cross_track_semantic_mismatch"
+    ]
+    assert len(semantic_issues) == 1
+    assert semantic_issues[0]["deep_link_target"] == "summary-section-mpc-gt-cross-track"
+
+
+def test_detects_mpc_gt_cross_track_absolute_coordinate_mismatch(tmp_path: Path) -> None:
+    recording_path = tmp_path / "issue_mpc_gt_absolute_mismatch.h5"
+    n_frames = 20
+    timestamps = np.linspace(0.0, 1.9, n_frames)
+    lateral_error = np.zeros(n_frames, dtype=np.float32)
+    lateral_error[5:15] = 0.82
+    gt_at_car = np.zeros(n_frames, dtype=np.float32)
+    gt_at_car[5:15] = 12.0
+    gt_lookahead = np.zeros(n_frames, dtype=np.float32)
+    gt_lookahead[5:15] = 0.92
+    road_offset = np.zeros(n_frames, dtype=np.float32)
+    road_offset[5:15] = 0.03
+
+    with h5py.File(recording_path, "w") as f:
+        f.create_dataset("vehicle/timestamps", data=timestamps)
+        f.create_dataset("vehicle/road_frame_lane_center_offset", data=road_offset)
+        f.create_dataset("control/steering", data=np.zeros(n_frames, dtype=np.float32))
+        f.create_dataset("control/lateral_error", data=lateral_error)
+        f.create_dataset("control/mpc_gt_cross_track_m", data=gt_at_car)
+        f.create_dataset("control/mpc_gt_cross_track_at_car_m", data=gt_at_car)
+        f.create_dataset("control/mpc_gt_cross_track_lookahead_m", data=gt_lookahead)
+        f.create_dataset("trajectory/reference_point_curvature", data=np.zeros(n_frames, dtype=np.float32))
+        f.create_dataset("control/curve_intent_state", data=np.array([b"STRAIGHT"] * n_frames, dtype="S16"))
+        f.create_dataset("control/curve_local_state", data=np.array([b"STRAIGHT"] * n_frames, dtype="S16"))
+        f.create_dataset("control/sync_packet_fallback_active", data=np.zeros(n_frames, dtype=np.int8))
+        f.create_dataset("perception/confidence", data=np.ones(n_frames, dtype=np.float32))
+        f.create_dataset("perception/num_lanes_detected", data=np.full(n_frames, 2, dtype=np.int8))
+        f.create_dataset("perception/left_lane_line_x", data=np.zeros(n_frames, dtype=np.float32))
+
+    issues = detect_issues(recording_path).get("issues", [])
+    absolute_issues = [
+        i for i in issues if i.get("type") == "mpc_gt_cross_track_absolute_coordinate_mismatch"
+    ]
+    assert len(absolute_issues) == 1
+    assert absolute_issues[0]["deep_link_target"] == "summary-section-mpc-gt-cross-track"

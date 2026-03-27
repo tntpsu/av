@@ -136,7 +136,9 @@ class VehicleState:
     # Ground truth lane positions (optional, from Unity)
     ground_truth_left_lane_line_x: float = 0.0  # Left lane line (painted marking) position
     ground_truth_right_lane_line_x: float = 0.0  # Right lane line (painted marking) position
-    ground_truth_lane_center_x: float = 0.0
+    ground_truth_lane_center_x: float = 0.0  # Legacy alias: selected lane center at lookahead
+    ground_truth_lane_center_x_lookahead: float = 0.0
+    ground_truth_lane_center_x_at_car: float = 0.0
     # Ground truth path information (for exact steering calculation verification)
     ground_truth_path_curvature: float = 0.0  # Path curvature (1/meters) - CRITICAL for verification!
     ground_truth_desired_heading: float = 0.0  # Desired heading (degrees) - for heading error analysis
@@ -661,6 +663,9 @@ class ControlCommand:
     mpc_fallback_active: bool = False
     mpc_consecutive_failures: int = 0
     mpc_gt_cross_track_m: float = 0.0
+    mpc_gt_cross_track_at_car_m: float = 0.0
+    mpc_gt_cross_track_lookahead_m: float = 0.0
+    mpc_gt_cross_track_source_code: str = ""
     mpc_gt_heading_error_rad: float = 0.0
     mpc_using_ground_truth: float = 0.0
     mpc_kappa_preview_used: bool = False

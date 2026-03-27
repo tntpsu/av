@@ -1179,6 +1179,7 @@ def _print_summary_report(recording_path: Path, summary: Dict, analyze_to_failur
     speed_intent = summary.get("speed_intent", {})
     run_intent = summary.get("run_intent", {})
     highway_mild_curve_contract = summary.get("highway_mild_curve_contract", {})
+    mpc_gt_cross_track_contract = summary.get("mpc_gt_cross_track_contract", {})
     chassis_ground = summary.get("chassis_ground", {})
     curve_intent_diag = summary.get("curve_intent_diagnostics", {})
     recommendations = summary.get("recommendations", [])
@@ -1972,6 +1973,63 @@ def _print_summary_report(recording_path: Path, summary: Dict, analyze_to_failur
         )
     else:
         print("   Highway Mild-Curve Contract: N/A")
+    print()
+
+    print("13B. MPC GT CROSS-TRACK CONTRACT")
+    print("-" * 80)
+    if mpc_gt_cross_track_contract.get("availability") == "available":
+        print(
+            "   Issue Detected: "
+            f"{'YES' if mpc_gt_cross_track_contract.get('issue_detected') else 'NO'}"
+        )
+        print(
+            "   Issue Mode: "
+            f"{str(mpc_gt_cross_track_contract.get('issue_mode') or 'none')}"
+        )
+        print(
+            "   High-Error Frames / Semantic Mismatch: "
+            f"{int(mpc_gt_cross_track_contract.get('high_error_frame_count') or 0)} / "
+            f"{float(mpc_gt_cross_track_contract.get('semantic_mismatch_on_high_error_rate') or 0.0):.1f}%"
+        )
+        print(
+            "   Absolute Mismatch / Straight-Mismatch / Source Mode: "
+            f"{float(mpc_gt_cross_track_contract.get('absolute_coordinate_mismatch_on_high_error_rate') or 0.0):.1f}% / "
+            f"{float(mpc_gt_cross_track_contract.get('semantic_mismatch_on_straight_high_error_rate') or 0.0):.1f}% / "
+            f"{str(mpc_gt_cross_track_contract.get('mpc_gt_cross_track_source_mode_on_high_error') or 'N/A')}"
+        )
+        print(
+            "   Small At-Car / Large Lookahead / Large At-Car / Small Road Offset: "
+            f"{float(mpc_gt_cross_track_contract.get('small_at_car_cross_track_on_high_error_rate') or 0.0):.1f}% / "
+            f"{float(mpc_gt_cross_track_contract.get('large_lookahead_cross_track_on_high_error_rate') or 0.0):.1f}% / "
+            f"{float(mpc_gt_cross_track_contract.get('large_at_car_cross_track_on_high_error_rate') or 0.0):.1f}% / "
+            f"{float(mpc_gt_cross_track_contract.get('small_road_offset_on_high_error_rate') or 0.0):.1f}%"
+        )
+        print(
+            "   Perception / Transport Overlap: "
+            f"{float(mpc_gt_cross_track_contract.get('poor_perception_overlap_on_high_error_rate') or 0.0):.1f}% / "
+            f"{float(mpc_gt_cross_track_contract.get('transport_fallback_overlap_on_high_error_rate') or 0.0):.1f}%"
+        )
+        lat_stats = mpc_gt_cross_track_contract.get("control_lateral_error_abs_m") or {}
+        src_stats = mpc_gt_cross_track_contract.get("mpc_gt_cross_track_abs_m") or {}
+        at_car_stats = mpc_gt_cross_track_contract.get("mpc_gt_cross_track_at_car_abs_m") or {}
+        lookahead_stats = mpc_gt_cross_track_contract.get("mpc_gt_cross_track_lookahead_abs_m") or {}
+        delta_stats = mpc_gt_cross_track_contract.get("gt_cross_track_delta_abs_m") or {}
+        road_offset_stats = mpc_gt_cross_track_contract.get("road_frame_lane_center_offset_abs_m") or {}
+        print(
+            "   Lateral Error / Used GT / At-Car GT / Lookahead GT (P50-P95): "
+            f"{float(lat_stats.get('p50') or 0.0):.3f}-{float(lat_stats.get('p95') or 0.0):.3f} / "
+            f"{float(src_stats.get('p50') or 0.0):.3f}-{float(src_stats.get('p95') or 0.0):.3f} / "
+            f"{float(at_car_stats.get('p50') or 0.0):.3f}-{float(at_car_stats.get('p95') or 0.0):.3f} / "
+            f"{float(lookahead_stats.get('p50') or 0.0):.3f}-{float(lookahead_stats.get('p95') or 0.0):.3f}"
+        )
+        print(
+            "   GT Delta / Road Offset / Curve Local State Mode: "
+            f"{float(delta_stats.get('p50') or 0.0):.3f}-{float(delta_stats.get('p95') or 0.0):.3f} / "
+            f"{float(road_offset_stats.get('p50') or 0.0):.3f}-{float(road_offset_stats.get('p95') or 0.0):.3f} / "
+            f"{str(mpc_gt_cross_track_contract.get('curve_local_state_mode_on_high_error') or 'N/A')}"
+        )
+    else:
+        print("   MPC GT Cross-Track Contract: N/A")
     print()
 
     print("14. CHASSIS-GROUND HEALTH")

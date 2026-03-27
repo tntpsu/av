@@ -45,6 +45,24 @@ def safe_float(value, default=0.0):
     return float(value)
 
 
+def _finite_percentile(values, pct, default=0.0):
+    arr = np.asarray(values, dtype=np.float64).reshape(-1)
+    arr = arr[np.isfinite(arr)]
+    if arr.size == 0:
+        return float(default)
+    return float(np.percentile(arr, pct))
+
+
+def _mode_value(values):
+    cleaned = [str(v) for v in values if str(v).strip().lower() not in {"", "nan", "none"}]
+    if not cleaned:
+        return "N/A"
+    counts = {}
+    for value in cleaned:
+        counts[value] = counts.get(value, 0) + 1
+    return max(counts.items(), key=lambda item: item[1])[0]
+
+
 def _agent_debug_log(hypothesis_id: str, location: str, message: str, data: Dict):
     # region agent log
     try:
@@ -80,6 +98,8 @@ def build_causal_timeline(issues: List[Dict], failure_frame: Optional[int] = Non
         "trajectory_suppressed_curve_entry": "trajectory",
         "highway_mild_curve_underactivation": "trajectory",
         "curve_sustain_collapse_rearm_cycle": "trajectory",
+        "mpc_gt_cross_track_semantic_mismatch": "control",
+        "mpc_gt_cross_track_absolute_coordinate_mismatch": "control",
         "mpc_curvature_bias_cancellation": "control",
         "speed_exceeded_feasible": "control",
         "mpc_infeasible": "control",
@@ -931,12 +951,6 @@ def detect_issues(recording_path: Path, analyze_to_failure: bool = False) -> Dic
                 min_event_len = 5
                 event_start = None
                 run_len = 0
-                def _finite_percentile(values, pct, default=0.0):
-                    arr = np.asarray(values, dtype=np.float64).reshape(-1)
-                    arr = arr[np.isfinite(arr)]
-                    if arr.size == 0:
-                        return float(default)
-                    return float(np.percentile(arr, pct))
                 for frame_idx, active in enumerate(underactivated):
                     if active:
                         if run_len == 0:
@@ -1200,6 +1214,231 @@ def detect_issues(recording_path: Path, analyze_to_failure: bool = False) -> Dic
                         "mpc_kappa_ratio_p50": _finite_percentile(kappa_ratio[idx], 50),
                         "mpc_kappa_bias_correction_p50": _finite_percentile(mpc_kappa_bias[idx], 50),
                     })
+
+                mpc_gt_cross_track = (
+                    np.array(f["control/mpc_gt_cross_track_m"][:num_frames], dtype=np.float64)
+                    if "control/mpc_gt_cross_track_m" in f
+                    else np.full(num_frames, np.nan, dtype=np.float64)
+                )
+                mpc_gt_cross_track_at_car = (
+                    np.array(f["control/mpc_gt_cross_track_at_car_m"][:num_frames], dtype=np.float64)
+                    if "control/mpc_gt_cross_track_at_car_m" in f
+                    else np.full(num_frames, np.nan, dtype=np.float64)
+                )
+                mpc_gt_cross_track_lookahead = (
+                    np.array(f["control/mpc_gt_cross_track_lookahead_m"][:num_frames], dtype=np.float64)
+                    if "control/mpc_gt_cross_track_lookahead_m" in f
+                    else np.full(num_frames, np.nan, dtype=np.float64)
+                )
+            if has_control and "control/lateral_error" in f:
+                lateral_error = np.array(f["control/lateral_error"][:], dtype=np.float64)
+                num_frames_local = len(lateral_error)
+                gt_at_car = (
+                    np.array(f["control/mpc_gt_cross_track_at_car_m"][:num_frames_local], dtype=np.float64)
+                    if "control/mpc_gt_cross_track_at_car_m" in f
+                    else None
+                )
+                gt_lookahead = (
+                    np.array(
+                        f["control/mpc_gt_cross_track_lookahead_m"][:num_frames_local],
+                        dtype=np.float64,
+                    )
+                    if "control/mpc_gt_cross_track_lookahead_m" in f
+                    else None
+                )
+                if gt_at_car is not None and gt_lookahead is not None:
+                    num_frames_local = min(
+                        num_frames_local,
+                        len(gt_at_car),
+                        len(gt_lookahead),
+                    )
+                    lat_err = np.abs(lateral_error[:num_frames_local])
+                    gt_at_car = np.abs(gt_at_car[:num_frames_local])
+                    gt_lookahead = np.abs(gt_lookahead[:num_frames_local])
+                    sync_fallback = (
+                        np.array(
+                            f["control/sync_packet_fallback_active"][:num_frames_local],
+                            dtype=np.float64,
+                        )
+                        if "control/sync_packet_fallback_active" in f
+                        else np.zeros(num_frames_local, dtype=np.float64)
+                    )
+                    confidence = (
+                        np.array(f["perception/confidence"][:num_frames_local], dtype=np.float64)
+                        if "perception/confidence" in f
+                        else np.ones(num_frames_local, dtype=np.float64)
+                    )
+                    num_lanes = (
+                        np.array(
+                            f["perception/num_lanes_detected"][:num_frames_local], dtype=np.float64
+                        )
+                        if "perception/num_lanes_detected" in f
+                        else np.full(num_frames_local, 2.0, dtype=np.float64)
+                    )
+                    curve_local_state = (
+                        np.array(
+                            [
+                                s.decode("utf-8", errors="ignore") if isinstance(s, (bytes, np.bytes_)) else str(s)
+                                for s in f["control/curve_local_state"][:num_frames_local]
+                            ],
+                            dtype=object,
+                        )
+                        if "control/curve_local_state" in f
+                        else np.array([""] * num_frames_local, dtype=object)
+                    )
+                    road_center_offset = (
+                        np.abs(
+                            np.array(
+                                f["vehicle/road_frame_lane_center_offset"][:num_frames_local],
+                                dtype=np.float64,
+                            )
+                        )
+                        if "vehicle/road_frame_lane_center_offset" in f
+                        else np.full(num_frames_local, np.nan, dtype=np.float64)
+                    )
+                    high_error = lat_err >= 0.50
+                    clean_transport = sync_fallback <= 0.5
+                    good_perception = (confidence > 0.50) & (num_lanes > 1.5)
+                    semantic_mismatch = (
+                        high_error
+                        & clean_transport
+                        & good_perception
+                        & (gt_at_car <= 0.12)
+                        & (gt_lookahead >= 0.50)
+                    )
+                    absolute_coordinate_mismatch = (
+                        high_error
+                        & clean_transport
+                        & good_perception
+                        & (gt_at_car >= 1.0)
+                        & (road_center_offset <= 0.12)
+                    )
+
+                    min_event_len = 5
+                    event_start = None
+                    run_len = 0
+                    for frame_idx, active in enumerate(semantic_mismatch):
+                        if active:
+                            if run_len == 0:
+                                event_start = frame_idx
+                            run_len += 1
+                        else:
+                            if run_len >= min_event_len and event_start is not None:
+                                event_end = frame_idx - 1
+                                idx = slice(event_start, frame_idx)
+                                issues.append({
+                                    "issue_id": "mpc_gt_cross_track_semantic_mismatch",
+                                    "frame": int(event_start),
+                                    "end_frame": int(event_end),
+                                    "type": "mpc_gt_cross_track_semantic_mismatch",
+                                    "severity": "high" if run_len >= 10 else "medium",
+                                    "description": (
+                                        f"MPC GT semantic mismatch for {run_len} frames: "
+                                        f"at-car GT p95={_finite_percentile(gt_at_car[idx], 95):.3f}m, "
+                                        f"lookahead GT p50={_finite_percentile(gt_lookahead[idx], 50):.3f}m, "
+                                        f"lateral error p50={_finite_percentile(lat_err[idx], 50):.3f}m."
+                                    ),
+                                    "duration": int(run_len),
+                                    "deep_link_target": "summary-section-mpc-gt-cross-track",
+                                    "focus_id": "diag-focus-mpc-gt-cross-track",
+                                    "curve_local_state_mode": _mode_value(
+                                        [curve_local_state[i] for i in range(event_start, frame_idx)]
+                                    ),
+                                    "mpc_gt_cross_track_at_car_p95_m": _finite_percentile(gt_at_car[idx], 95),
+                                    "mpc_gt_cross_track_lookahead_p50_m": _finite_percentile(gt_lookahead[idx], 50),
+                                    "lateral_error_p50_m": _finite_percentile(lat_err[idx], 50),
+                                })
+                            event_start = None
+                            run_len = 0
+                    if run_len >= min_event_len and event_start is not None:
+                        event_end = int(num_frames_local - 1)
+                        idx = slice(event_start, num_frames_local)
+                        issues.append({
+                            "issue_id": "mpc_gt_cross_track_semantic_mismatch",
+                            "frame": int(event_start),
+                            "end_frame": event_end,
+                            "type": "mpc_gt_cross_track_semantic_mismatch",
+                            "severity": "high" if run_len >= 10 else "medium",
+                            "description": (
+                                f"MPC GT semantic mismatch for {run_len} frames: "
+                                f"at-car GT p95={_finite_percentile(gt_at_car[idx], 95):.3f}m, "
+                                f"lookahead GT p50={_finite_percentile(gt_lookahead[idx], 50):.3f}m, "
+                                f"lateral error p50={_finite_percentile(lat_err[idx], 50):.3f}m."
+                            ),
+                            "duration": int(run_len),
+                            "deep_link_target": "summary-section-mpc-gt-cross-track",
+                            "focus_id": "diag-focus-mpc-gt-cross-track",
+                            "curve_local_state_mode": _mode_value(
+                                [curve_local_state[i] for i in range(event_start, num_frames_local)]
+                            ),
+                            "mpc_gt_cross_track_at_car_p95_m": _finite_percentile(gt_at_car[idx], 95),
+                            "mpc_gt_cross_track_lookahead_p50_m": _finite_percentile(gt_lookahead[idx], 50),
+                            "lateral_error_p50_m": _finite_percentile(lat_err[idx], 50),
+                        })
+                    event_start = None
+                    run_len = 0
+                    for frame_idx, active in enumerate(absolute_coordinate_mismatch):
+                        if active:
+                            if run_len == 0:
+                                event_start = frame_idx
+                            run_len += 1
+                        else:
+                            if run_len >= min_event_len and event_start is not None:
+                                event_end = frame_idx - 1
+                                idx = slice(event_start, frame_idx)
+                                issues.append({
+                                    "issue_id": "mpc_gt_cross_track_absolute_coordinate_mismatch",
+                                    "frame": int(event_start),
+                                    "end_frame": int(event_end),
+                                    "type": "mpc_gt_cross_track_absolute_coordinate_mismatch",
+                                    "severity": "high" if run_len >= 10 else "medium",
+                                    "description": (
+                                        f"MPC GT at-car cross-track looks like an absolute coordinate for {run_len} frames: "
+                                        f"at-car GT p50={_finite_percentile(gt_at_car[idx], 50):.3f}m, "
+                                        f"road-offset p95={_finite_percentile(road_center_offset[idx], 95):.3f}m, "
+                                        f"lateral error p50={_finite_percentile(lat_err[idx], 50):.3f}m."
+                                    ),
+                                    "duration": int(run_len),
+                                    "deep_link_target": "summary-section-mpc-gt-cross-track",
+                                    "focus_id": "diag-focus-mpc-gt-cross-track",
+                                    "curve_local_state_mode": _mode_value(
+                                        [curve_local_state[i] for i in range(event_start, frame_idx)]
+                                    ),
+                                    "mpc_gt_cross_track_at_car_p50_m": _finite_percentile(gt_at_car[idx], 50),
+                                    "road_frame_lane_center_offset_p95_m": _finite_percentile(
+                                        road_center_offset[idx], 95
+                                    ),
+                                    "lateral_error_p50_m": _finite_percentile(lat_err[idx], 50),
+                                })
+                            event_start = None
+                            run_len = 0
+                    if run_len >= min_event_len and event_start is not None:
+                        event_end = int(num_frames_local - 1)
+                        idx = slice(event_start, num_frames_local)
+                        issues.append({
+                            "issue_id": "mpc_gt_cross_track_absolute_coordinate_mismatch",
+                            "frame": int(event_start),
+                            "end_frame": event_end,
+                            "type": "mpc_gt_cross_track_absolute_coordinate_mismatch",
+                            "severity": "high" if run_len >= 10 else "medium",
+                            "description": (
+                                f"MPC GT at-car cross-track looks like an absolute coordinate for {run_len} frames: "
+                                f"at-car GT p50={_finite_percentile(gt_at_car[idx], 50):.3f}m, "
+                                f"road-offset p95={_finite_percentile(road_center_offset[idx], 95):.3f}m, "
+                                f"lateral error p50={_finite_percentile(lat_err[idx], 50):.3f}m."
+                            ),
+                            "duration": int(run_len),
+                            "deep_link_target": "summary-section-mpc-gt-cross-track",
+                            "focus_id": "diag-focus-mpc-gt-cross-track",
+                            "curve_local_state_mode": _mode_value(
+                                [curve_local_state[i] for i in range(event_start, num_frames_local)]
+                            ),
+                            "mpc_gt_cross_track_at_car_p50_m": _finite_percentile(gt_at_car[idx], 50),
+                            "road_frame_lane_center_offset_p95_m": _finite_percentile(
+                                road_center_offset[idx], 95
+                            ),
+                            "lateral_error_p50_m": _finite_percentile(lat_err[idx], 50),
+                        })
 
             # 4. DETECT PERCEPTION FAILURES (<2 lanes detected)
             if has_perception and "perception/num_lanes_detected" in f:

@@ -1164,9 +1164,15 @@ private float? lastCarT = null;
             var (leftLaneLineX, rightLaneLineX) = groundTruthReporter.GetLanePositionsAtLookahead(lookaheadDistance);
             currentState.groundTruthLeftLaneLineX = leftLaneLineX;
             currentState.groundTruthRightLaneLineX = rightLaneLineX;
-            // Calculate lane center at lookahead (use lane index from GroundTruthReporter)
-            currentState.groundTruthLaneCenterX = groundTruthReporter.GetLaneCenterAtLookahead(
+            // Export both lookahead and at-car selected-lane-center ground truth.
+            // Lookahead remains for debug/perception-alignment; at-car is the control signal.
+            float laneCenterAtLookahead = groundTruthReporter.GetLaneCenterAtLookahead(
                 lookaheadDistance,
+                groundTruthReporter.currentLane
+            );
+            currentState.groundTruthLaneCenterX = laneCenterAtLookahead;
+            currentState.groundTruthLaneCenterXLookahead = laneCenterAtLookahead;
+            currentState.groundTruthLaneCenterXAtCar = groundTruthReporter.GetLaneCenterAtCar(
                 groundTruthReporter.currentLane
             );
             

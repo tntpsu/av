@@ -1754,6 +1754,35 @@ class Visualizer {
                 html += '</div>';
             }
 
+            const mpcGtContract = summary.mpc_gt_cross_track_contract || null;
+            if (mpcGtContract && typeof mpcGtContract === 'object' && String(mpcGtContract.availability || '').toLowerCase() === 'available') {
+                const issueDetected = Boolean(mpcGtContract.issue_detected);
+                const issueColor = issueDetected ? '#ff6b6b' : '#4caf50';
+                const limits = mpcGtContract.limits || {};
+                const latErr = mpcGtContract.control_lateral_error_abs_m || {};
+                const usedGt = mpcGtContract.mpc_gt_cross_track_abs_m || {};
+                const atCarGt = mpcGtContract.mpc_gt_cross_track_at_car_abs_m || {};
+                const lookaheadGt = mpcGtContract.mpc_gt_cross_track_lookahead_abs_m || {};
+                const gtDelta = mpcGtContract.gt_cross_track_delta_abs_m || {};
+                const roadOffset = mpcGtContract.road_frame_lane_center_offset_abs_m || {};
+                html += '<div id="summary-section-mpc-gt-cross-track" style="background: #2a2a2a; padding: 1rem; border-radius: 8px; margin-bottom: 1.5rem; border-left: 4px solid #4a90e2;">';
+                html += '<h3 style="margin-top: 0; color: #4a90e2;">MPC GT Cross-Track Contract</h3>';
+                html += '<table style="width: 100%; color: #e0e0e0;">';
+                html += `<tr><td>Issue Detected:</td><td style="text-align: right; color: ${issueColor};">${issueDetected ? 'YES' : 'NO'}</td></tr>`;
+                html += `<tr><td>Issue Mode:</td><td style="text-align: right;">${this.escapeHtml(String(mpcGtContract.issue_mode || 'none'))}</td></tr>`;
+                html += `<tr><td>High-Error Frames:</td><td style="text-align: right;">${Number(mpcGtContract.high_error_frame_count || 0)}${Number.isFinite(Number(mpcGtContract.high_error_frame_rate)) ? ` (${Number(mpcGtContract.high_error_frame_rate).toFixed(1)}%)` : ''}</td></tr>`;
+                html += `<tr><td>Semantic / Absolute / Straight:</td><td style="text-align: right; color: ${issueColor};">${Number.isFinite(Number(mpcGtContract.semantic_mismatch_on_high_error_rate)) ? Number(mpcGtContract.semantic_mismatch_on_high_error_rate).toFixed(1) + '%' : 'N/A'} / ${Number.isFinite(Number(mpcGtContract.absolute_coordinate_mismatch_on_high_error_rate)) ? Number(mpcGtContract.absolute_coordinate_mismatch_on_high_error_rate).toFixed(1) + '%' : 'N/A'} / ${Number.isFinite(Number(mpcGtContract.semantic_mismatch_on_straight_high_error_rate)) ? Number(mpcGtContract.semantic_mismatch_on_straight_high_error_rate).toFixed(1) + '%' : 'N/A'}</td></tr>`;
+                html += `<tr><td>Small At-Car / Large Lookahead:</td><td style="text-align: right;">${Number.isFinite(Number(mpcGtContract.small_at_car_cross_track_on_high_error_rate)) ? Number(mpcGtContract.small_at_car_cross_track_on_high_error_rate).toFixed(1) + '%' : 'N/A'} / ${Number.isFinite(Number(mpcGtContract.large_lookahead_cross_track_on_high_error_rate)) ? Number(mpcGtContract.large_lookahead_cross_track_on_high_error_rate).toFixed(1) + '%' : 'N/A'}</td></tr>`;
+                html += `<tr><td>Large At-Car / Small Road Offset:</td><td style="text-align: right;">${Number.isFinite(Number(mpcGtContract.large_at_car_cross_track_on_high_error_rate)) ? Number(mpcGtContract.large_at_car_cross_track_on_high_error_rate).toFixed(1) + '%' : 'N/A'} / ${Number.isFinite(Number(mpcGtContract.small_road_offset_on_high_error_rate)) ? Number(mpcGtContract.small_road_offset_on_high_error_rate).toFixed(1) + '%' : 'N/A'}</td></tr>`;
+                html += `<tr><td>Source / Curve Local State Mode:</td><td style="text-align: right;">${this.escapeHtml(String(mpcGtContract.mpc_gt_cross_track_source_mode_on_high_error || 'N/A'))} / ${this.escapeHtml(String(mpcGtContract.curve_local_state_mode_on_high_error || 'N/A'))}</td></tr>`;
+                html += `<tr><td>Perception / Transport Overlap:</td><td style="text-align: right;">${Number.isFinite(Number(mpcGtContract.poor_perception_overlap_on_high_error_rate)) ? Number(mpcGtContract.poor_perception_overlap_on_high_error_rate).toFixed(1) + '%' : 'N/A'} / ${Number.isFinite(Number(mpcGtContract.transport_fallback_overlap_on_high_error_rate)) ? Number(mpcGtContract.transport_fallback_overlap_on_high_error_rate).toFixed(1) + '%' : 'N/A'}</td></tr>`;
+                html += `<tr><td>Lateral Error / Used GT (P50-P95):</td><td style="text-align: right;">${Number.isFinite(Number(latErr.p50)) ? Number(latErr.p50).toFixed(3) : 'N/A'}-${Number.isFinite(Number(latErr.p95)) ? Number(latErr.p95).toFixed(3) : 'N/A'} m / ${Number.isFinite(Number(usedGt.p50)) ? Number(usedGt.p50).toFixed(3) : 'N/A'}-${Number.isFinite(Number(usedGt.p95)) ? Number(usedGt.p95).toFixed(3) : 'N/A'} m</td></tr>`;
+                html += `<tr><td>At-Car GT / Lookahead GT (P50-P95):</td><td style="text-align: right;">${Number.isFinite(Number(atCarGt.p50)) ? Number(atCarGt.p50).toFixed(3) : 'N/A'}-${Number.isFinite(Number(atCarGt.p95)) ? Number(atCarGt.p95).toFixed(3) : 'N/A'} m / ${Number.isFinite(Number(lookaheadGt.p50)) ? Number(lookaheadGt.p50).toFixed(3) : 'N/A'}-${Number.isFinite(Number(lookaheadGt.p95)) ? Number(lookaheadGt.p95).toFixed(3) : 'N/A'} m</td></tr>`;
+                html += `<tr><td>GT Delta / Road Offset (P50-P95):</td><td style="text-align: right;">${Number.isFinite(Number(gtDelta.p50)) ? Number(gtDelta.p50).toFixed(3) : 'N/A'}-${Number.isFinite(Number(gtDelta.p95)) ? Number(gtDelta.p95).toFixed(3) : 'N/A'} m / ${Number.isFinite(Number(roadOffset.p50)) ? Number(roadOffset.p50).toFixed(3) : 'N/A'}-${Number.isFinite(Number(roadOffset.p95)) ? Number(roadOffset.p95).toFixed(3) : 'N/A'} m <span style="color:#a0a0a0;">(semantic gate: >=${Number(limits.semantic_mismatch_on_high_error_min_pct || 50).toFixed(1)}%, absolute gate: >=${Number(limits.absolute_coordinate_mismatch_on_high_error_min_pct || 50).toFixed(1)}%)</span></td></tr>`;
+                html += '</table>';
+                html += '</div>';
+            }
+
             const contractHealth = summary.curvature_contract_health || null;
             const firstFaultChain = summary.first_fault_chain || null;
             if (contractHealth && typeof contractHealth === 'object') {
@@ -10823,6 +10852,8 @@ class Visualizer {
                 name: 'MPC Sign Convention Debug',
                 signals: [
                     'control/mpc_gt_cross_track_m',
+                    'control/mpc_gt_cross_track_at_car_m',
+                    'control/mpc_gt_cross_track_lookahead_m',
                     'control/mpc_e_lat',
                     'control/lateral_error',
                     'control/mpc_gt_heading_error_rad',
@@ -10830,6 +10861,18 @@ class Visualizer {
                     'control/heading_error',
                     'control/steering',
                     'control/regime'
+                ],
+                timeKey: 'vehicle/timestamps'
+            },
+            {
+                name: 'MPC GT Contract',
+                signals: [
+                    'control/mpc_gt_cross_track_m',
+                    'control/mpc_gt_cross_track_at_car_m',
+                    'control/mpc_gt_cross_track_lookahead_m',
+                    'control/lateral_error',
+                    'vehicle/road_frame_lateral_offset',
+                    'vehicle/road_frame_lane_center_error'
                 ],
                 timeKey: 'vehicle/timestamps'
             },

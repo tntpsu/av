@@ -1341,11 +1341,21 @@ def get_frame_data(filename, frame_index):
                             frame_data['control'][mpc_key] = int(f[ds_name][control_idx]) == 1
                     for mpc_key in ['mpc_solve_time_ms', 'mpc_e_lat', 'mpc_e_heading',
                                     'mpc_kappa_ref', 'mpc_consecutive_failures',
-                                    'mpc_gt_cross_track_m', 'mpc_gt_heading_error_rad',
+                                    'mpc_gt_cross_track_m', 'mpc_gt_cross_track_at_car_m',
+                                    'mpc_gt_cross_track_lookahead_m', 'mpc_gt_heading_error_rad',
                                     'mpc_using_ground_truth', 'mpc_kappa_preview_range']:
                         ds_name = f'control/{mpc_key}'
                         if ds_name in f and control_idx < len(f[ds_name]):
                             frame_data['control'][mpc_key] = float(f[ds_name][control_idx])
+                    if 'control/mpc_gt_cross_track_source_code' in f and control_idx < len(
+                        f['control/mpc_gt_cross_track_source_code']
+                    ):
+                        value = f['control/mpc_gt_cross_track_source_code'][control_idx]
+                        frame_data['control']['mpc_gt_cross_track_source_code'] = (
+                            value.decode('utf-8', errors='ignore')
+                            if isinstance(value, (bytes, np.bytes_))
+                            else str(value)
+                        )
                     if 'control/launch_throttle_cap' in f and control_idx < len(f['control/launch_throttle_cap']):
                         frame_data['control']['launch_throttle_cap'] = float(f['control/launch_throttle_cap'][control_idx])
                     if 'control/launch_throttle_cap_active' in f and control_idx < len(f['control/launch_throttle_cap_active']):

@@ -54,6 +54,7 @@ def test_drive_summary_contract_keys(tmp_path: Path) -> None:
         "speed_intent",
         "run_intent",
         "highway_mild_curve_contract",
+        "mpc_gt_cross_track_contract",
         "chassis_ground",
         "curvature_contract_health",
         "first_fault_chain",
@@ -205,6 +206,32 @@ def test_drive_summary_contract_keys(tmp_path: Path) -> None:
         "mpc_kappa_bias_correction",
         "limits",
     }.issubset(highway_mild_curve_contract.keys())
+    mpc_gt_cross_track_contract = summary.get("mpc_gt_cross_track_contract", {})
+    assert {
+        "schema_version",
+        "availability",
+        "issue_detected",
+        "issue_mode",
+        "high_error_frame_count",
+        "semantic_mismatch_on_high_error_rate",
+        "semantic_mismatch_on_straight_high_error_rate",
+        "absolute_coordinate_mismatch_on_high_error_rate",
+        "small_at_car_cross_track_on_high_error_rate",
+        "large_lookahead_cross_track_on_high_error_rate",
+        "large_at_car_cross_track_on_high_error_rate",
+        "small_road_offset_on_high_error_rate",
+        "transport_fallback_overlap_on_high_error_rate",
+        "poor_perception_overlap_on_high_error_rate",
+        "curve_local_state_mode_on_high_error",
+        "mpc_gt_cross_track_source_mode_on_high_error",
+        "control_lateral_error_abs_m",
+        "mpc_gt_cross_track_abs_m",
+        "mpc_gt_cross_track_at_car_abs_m",
+        "mpc_gt_cross_track_lookahead_abs_m",
+        "gt_cross_track_delta_abs_m",
+        "road_frame_lane_center_offset_abs_m",
+        "limits",
+    }.issubset(mpc_gt_cross_track_contract.keys())
     cadence = latency_sync.get("cadence", {})
     assert {"availability", "status", "stats_ms", "limits", "pass", "tuning_valid"}.issubset(
         cadence.keys()
@@ -313,3 +340,41 @@ def test_drive_summary_contract_keys(tmp_path: Path) -> None:
     }.issubset(local_curve_reference.keys())
     assert isinstance(summary.get("curve_turn_events", []), list)
     assert isinstance(summary.get("curve_straight_segments", []), list)
+
+
+def test_mpc_gt_cross_track_contract_detects_absolute_coordinate_mismatch(tmp_path: Path) -> None:
+    recording = tmp_path / "mpc_gt_absolute_mismatch.h5"
+    n = 20
+    t = np.linspace(0.0, 1.9, n)
+    lat_err = np.zeros(n, dtype=np.float32)
+    lat_err[5:15] = 0.82
+    gt_used = np.zeros(n, dtype=np.float32)
+    gt_used[5:15] = 12.0
+    gt_at_car = np.zeros(n, dtype=np.float32)
+    gt_at_car[5:15] = 12.0
+    gt_lookahead = np.zeros(n, dtype=np.float32)
+    gt_lookahead[5:15] = 0.9
+    road_offset = np.zeros(n, dtype=np.float32)
+    road_offset[5:15] = 0.03
+
+    with h5py.File(recording, "w") as f:
+        f.create_dataset("vehicle/timestamps", data=t)
+        f.create_dataset("vehicle/road_frame_lane_center_offset", data=road_offset)
+        f.create_dataset("control/steering", data=np.zeros(n, dtype=np.float32))
+        f.create_dataset("control/lateral_error", data=lat_err)
+        f.create_dataset("control/mpc_gt_cross_track_m", data=gt_used)
+        f.create_dataset("control/mpc_gt_cross_track_at_car_m", data=gt_at_car)
+        f.create_dataset("control/mpc_gt_cross_track_lookahead_m", data=gt_lookahead)
+        f.create_dataset("control/mpc_gt_cross_track_source_code", data=np.array([b"at_car"] * n, dtype="S16"))
+        f.create_dataset("control/curve_local_state", data=np.array([b"STRAIGHT"] * n, dtype="S16"))
+        f.create_dataset("control/sync_packet_fallback_active", data=np.zeros(n, dtype=np.int8))
+        f.create_dataset("perception/confidence", data=np.ones(n, dtype=np.float32))
+        f.create_dataset("perception/num_lanes_detected", data=np.full(n, 2, dtype=np.int8))
+        f.create_dataset("ground_truth/left_lane_line_x", data=np.full(n, -3.5, dtype=np.float32))
+        f.create_dataset("ground_truth/right_lane_line_x", data=np.full(n, 3.5, dtype=np.float32))
+
+    summary = analyze_recording_summary(recording)
+    contract = summary.get("mpc_gt_cross_track_contract", {})
+    assert contract.get("issue_detected") is True
+    assert contract.get("issue_mode") == "absolute_coordinate_mismatch"
+    assert float(contract.get("absolute_coordinate_mismatch_on_high_error_rate") or 0.0) >= 50.0

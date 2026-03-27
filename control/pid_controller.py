@@ -5487,13 +5487,18 @@ class VehicleController:
         )
 
         if regime == ControlRegime.LINEAR_MPC and self._mpc_controller is not None:
-            # Use ground-truth cross-track and heading when available,
+            # Use at-car ground-truth cross-track and heading when available,
             # falling back to PP-derived if not.
             gt_cross_track = reference_point.get('gt_cross_track_m')
             gt_heading = reference_point.get('gt_heading_error_rad')
+            gt_cross_track_at_car = reference_point.get('gt_cross_track_at_car_m')
+            gt_cross_track_lookahead = reference_point.get('gt_cross_track_lookahead_m')
+            gt_cross_track_source_code = str(
+                reference_point.get('gt_cross_track_source_code', '') or ''
+            )
 
             if gt_cross_track is not None and gt_heading is not None:
-                # Cross-track: groundTruthLaneCenterX (camera-frame, +right).
+                # Cross-track: at-car selected lane center in vehicle coordinates (+right).
                 # Positive = lane center RIGHT of car = car LEFT of center.
                 # MPC: e_lat>0 = car RIGHT. Negate.
                 raw_e_lat = -float(gt_cross_track)
@@ -5602,6 +5607,13 @@ class VehicleController:
             lateral_metadata['mpc_fallback_active'] = mpc_result.get('mpc_fallback_active', False)
             lateral_metadata['mpc_consecutive_failures'] = mpc_result.get('mpc_consecutive_failures', 0)
             lateral_metadata['mpc_gt_cross_track_m'] = float(gt_cross_track) if gt_cross_track is not None else float('nan')
+            lateral_metadata['mpc_gt_cross_track_at_car_m'] = (
+                float(gt_cross_track_at_car) if gt_cross_track_at_car is not None else float('nan')
+            )
+            lateral_metadata['mpc_gt_cross_track_lookahead_m'] = (
+                float(gt_cross_track_lookahead) if gt_cross_track_lookahead is not None else float('nan')
+            )
+            lateral_metadata['mpc_gt_cross_track_source_code'] = gt_cross_track_source_code
             lateral_metadata['mpc_gt_heading_error_rad'] = float(gt_heading) if gt_heading is not None else float('nan')
             lateral_metadata['mpc_using_ground_truth'] = 1.0 if (gt_cross_track is not None and gt_heading is not None) else 0.0
             lateral_metadata['mpc_kappa_preview_used'] = mpc_result.get('kappa_preview_used', False)
@@ -5623,6 +5635,11 @@ class VehicleController:
             # e_lat / e_heading sign conventions: identical to LINEAR_MPC block above.
             gt_cross_track = reference_point.get('gt_cross_track_m')
             gt_heading = reference_point.get('gt_heading_error_rad')
+            gt_cross_track_at_car = reference_point.get('gt_cross_track_at_car_m')
+            gt_cross_track_lookahead = reference_point.get('gt_cross_track_lookahead_m')
+            gt_cross_track_source_code = str(
+                reference_point.get('gt_cross_track_source_code', '') or ''
+            )
 
             if gt_cross_track is not None and gt_heading is not None:
                 raw_e_lat = -float(gt_cross_track)
@@ -5744,6 +5761,13 @@ class VehicleController:
                 'mpc_consecutive_failures', active_result.get('nmpc_consecutive_failures', 0)
             )
             lateral_metadata['mpc_gt_cross_track_m'] = float(gt_cross_track) if gt_cross_track is not None else float('nan')
+            lateral_metadata['mpc_gt_cross_track_at_car_m'] = (
+                float(gt_cross_track_at_car) if gt_cross_track_at_car is not None else float('nan')
+            )
+            lateral_metadata['mpc_gt_cross_track_lookahead_m'] = (
+                float(gt_cross_track_lookahead) if gt_cross_track_lookahead is not None else float('nan')
+            )
+            lateral_metadata['mpc_gt_cross_track_source_code'] = gt_cross_track_source_code
             lateral_metadata['mpc_gt_heading_error_rad'] = float(gt_heading) if gt_heading is not None else float('nan')
             lateral_metadata['mpc_using_ground_truth'] = 1.0 if (gt_cross_track is not None and gt_heading is not None) else 0.0
             lateral_metadata['mpc_kappa_preview_used'] = False
@@ -5774,14 +5798,14 @@ class VehicleController:
             # ref_x is at the lookahead-distance point (floored to ≥4m at low speed) —
             # using it defeats the purpose of Stanley (solving the chord-error problem).
             #
-            # Prefer groundTruthLaneCenterX (same source as MPC gt_cross_track):
-            #   groundTruthLaneCenterX > 0 → lane center RIGHT of car → car LEFT → steer right.
+            # Prefer at-car selected lane center (same source as MPC gt_cross_track):
+            #   gt_cross_track > 0 → lane center RIGHT of car → car LEFT → steer right.
             #   MPC negates it because its e_lat>0 = car RIGHT. Stanley uses same sign as ref_x:
-            #   lat_error>0 → steer right. So we negate groundTruthLaneCenterX (same as MPC).
+            #   lat_error>0 → steer right. So we negate MPC's convention.
             # Fall back to ref_x if GT not available.
             gt_cross_track = reference_point.get('gt_cross_track_m')
             if gt_cross_track is not None:
-                # groundTruthLaneCenterX > 0 → lane center RIGHT of car → car is LEFT → steer right.
+                # gt_cross_track > 0 → lane center RIGHT of car → car is LEFT → steer right.
                 # Stanley: lat_error > 0 → arctan2(k*lat_error, v) > 0 → steer right.
                 # Sign: use +gt_cross_track directly (NO negation — opposite of MPC convention).
                 # MPC negates because its e_lat>0 means car-is-RIGHT; Stanley's lat_error>0 means steer-right.
@@ -5823,6 +5847,9 @@ class VehicleController:
             lateral_metadata['mpc_fallback_active'] = False
             lateral_metadata['mpc_consecutive_failures'] = 0
             lateral_metadata['mpc_gt_cross_track_m'] = 0.0
+            lateral_metadata['mpc_gt_cross_track_at_car_m'] = 0.0
+            lateral_metadata['mpc_gt_cross_track_lookahead_m'] = 0.0
+            lateral_metadata['mpc_gt_cross_track_source_code'] = ''
             lateral_metadata['mpc_gt_heading_error_rad'] = 0.0
             lateral_metadata['mpc_using_ground_truth'] = 0.0
             lateral_metadata['mpc_kappa_preview_used'] = False
@@ -5846,6 +5873,9 @@ class VehicleController:
             lateral_metadata['mpc_fallback_active'] = False
             lateral_metadata['mpc_consecutive_failures'] = 0
             lateral_metadata['mpc_gt_cross_track_m'] = 0.0
+            lateral_metadata['mpc_gt_cross_track_at_car_m'] = 0.0
+            lateral_metadata['mpc_gt_cross_track_lookahead_m'] = 0.0
+            lateral_metadata['mpc_gt_cross_track_source_code'] = ''
             lateral_metadata['mpc_gt_heading_error_rad'] = 0.0
             lateral_metadata['mpc_using_ground_truth'] = 0.0
             lateral_metadata['mpc_kappa_preview_used'] = False

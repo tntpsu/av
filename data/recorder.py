@@ -2568,6 +2568,14 @@ class DataRecorder:
         self.h5_file.create_dataset("control/mpc_fallback_active", shape=(0,), maxshape=max_shape, dtype=np.int8)
         self.h5_file.create_dataset("control/mpc_consecutive_failures", shape=(0,), maxshape=max_shape, dtype=np.int16)
         self.h5_file.create_dataset("control/mpc_gt_cross_track_m", shape=(0,), maxshape=max_shape, dtype=np.float32)
+        self.h5_file.create_dataset("control/mpc_gt_cross_track_at_car_m", shape=(0,), maxshape=max_shape, dtype=np.float32)
+        self.h5_file.create_dataset("control/mpc_gt_cross_track_lookahead_m", shape=(0,), maxshape=max_shape, dtype=np.float32)
+        self.h5_file.create_dataset(
+            "control/mpc_gt_cross_track_source_code",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=h5py.string_dtype(encoding='utf-8', length=32)
+        )
         self.h5_file.create_dataset("control/mpc_gt_heading_error_rad", shape=(0,), maxshape=max_shape, dtype=np.float32)
         self.h5_file.create_dataset("control/mpc_using_ground_truth", shape=(0,), maxshape=max_shape, dtype=np.float32)
         self.h5_file.create_dataset("control/mpc_kappa_preview_used", shape=(0,), maxshape=max_shape, dtype=np.int8)
@@ -4124,6 +4132,12 @@ class DataRecorder:
             maxshape=max_shape,
             dtype=np.float32
         )
+        self.h5_file.create_dataset(
+            "ground_truth/lane_center_x_at_car",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
         # Ground truth path information (for exact steering calculation verification)
         self.h5_file.create_dataset(
             "ground_truth/path_curvature",
@@ -4707,6 +4721,7 @@ class DataRecorder:
         gt_left_lane_line_x = []
         gt_right_lane_line_x = []
         gt_lane_center_x = []
+        gt_lane_center_x_at_car = []
         gt_path_curvature = []
         gt_desired_heading = []
         camera_8m_screen_y = []  # NEW: Camera calibration data
@@ -5046,6 +5061,9 @@ class DataRecorder:
                 gt_left_lane_line_x.append(gt_left)
                 gt_right_lane_line_x.append(gt_right)
                 gt_lane_center_x.append(getattr(vs, 'ground_truth_lane_center_x', (gt_left + gt_right) / 2.0))
+                gt_lane_center_x_at_car.append(
+                    getattr(vs, 'ground_truth_lane_center_x_at_car', 0.0)
+                )
                 gt_path_curvature.append(getattr(vs, 'ground_truth_path_curvature', 0.0))
                 gt_desired_heading.append(getattr(vs, 'ground_truth_desired_heading', 0.0))
             else:
@@ -5053,6 +5071,7 @@ class DataRecorder:
                 gt_left_lane_line_x.append(0.0)
                 gt_right_lane_line_x.append(0.0)
                 gt_lane_center_x.append(0.0)
+                gt_lane_center_x_at_car.append(0.0)
                 gt_path_curvature.append(0.0)
                 gt_desired_heading.append(0.0)
             
@@ -5900,11 +5919,13 @@ class DataRecorder:
                     expected_len = len(gt_left_lane_line_x)
                     if (len(gt_right_lane_line_x) != expected_len or 
                         len(gt_lane_center_x) != expected_len or
+                        len(gt_lane_center_x_at_car) != expected_len or
                         len(gt_path_curvature) != expected_len or
                         len(gt_desired_heading) != expected_len):
                         logger.warning(f"[RECORDER] Ground truth array length mismatch: "
                                      f"left={len(gt_left_lane_line_x)}, right={len(gt_right_lane_line_x)}, "
-                                     f"center={len(gt_lane_center_x)}, curvature={len(gt_path_curvature)}, "
+                                     f"center={len(gt_lane_center_x)}, at_car={len(gt_lane_center_x_at_car)}, "
+                                     f"curvature={len(gt_path_curvature)}, "
                                      f"heading={len(gt_desired_heading)}. Skipping ground truth write.")
                     else:
                         gt_current_size = self.h5_file["ground_truth/left_lane_line_x"].shape[0]
@@ -5913,6 +5934,7 @@ class DataRecorder:
                         self.h5_file["ground_truth/left_lane_line_x"].resize((gt_new_size,))
                         self.h5_file["ground_truth/right_lane_line_x"].resize((gt_new_size,))
                         self.h5_file["ground_truth/lane_center_x"].resize((gt_new_size,))
+                        self.h5_file["ground_truth/lane_center_x_at_car"].resize((gt_new_size,))
                         self.h5_file["ground_truth/path_curvature"].resize((gt_new_size,))
                         self.h5_file["ground_truth/desired_heading"].resize((gt_new_size,))
                         
@@ -5920,6 +5942,7 @@ class DataRecorder:
                         self.h5_file["ground_truth/left_lane_line_x"][gt_current_size:] = np.array(gt_left_lane_line_x, dtype=np.float32)
                         self.h5_file["ground_truth/right_lane_line_x"][gt_current_size:] = np.array(gt_right_lane_line_x, dtype=np.float32)
                         self.h5_file["ground_truth/lane_center_x"][gt_current_size:] = np.array(gt_lane_center_x, dtype=np.float32)
+                        self.h5_file["ground_truth/lane_center_x_at_car"][gt_current_size:] = np.array(gt_lane_center_x_at_car, dtype=np.float32)
                         self.h5_file["ground_truth/path_curvature"][gt_current_size:] = np.array(gt_path_curvature, dtype=np.float32)
                         self.h5_file["ground_truth/desired_heading"][gt_current_size:] = np.array(gt_desired_heading, dtype=np.float32)
             except Exception as e:
@@ -6822,6 +6845,9 @@ class DataRecorder:
         mpc_fallback_active_list = []
         mpc_consecutive_failures_list = []
         mpc_gt_cross_track_m_list = []
+        mpc_gt_cross_track_at_car_m_list = []
+        mpc_gt_cross_track_lookahead_m_list = []
+        mpc_gt_cross_track_source_code_list = []
         mpc_gt_heading_error_rad_list = []
         mpc_using_ground_truth_list = []
         mpc_kappa_preview_used_list = []
@@ -7869,6 +7895,15 @@ class DataRecorder:
             mpc_fallback_active_list.append(int(getattr(cc, 'mpc_fallback_active', False)))
             mpc_consecutive_failures_list.append(int(getattr(cc, 'mpc_consecutive_failures', 0)))
             mpc_gt_cross_track_m_list.append(float(getattr(cc, 'mpc_gt_cross_track_m', 0.0)))
+            mpc_gt_cross_track_at_car_m_list.append(
+                float(getattr(cc, 'mpc_gt_cross_track_at_car_m', 0.0))
+            )
+            mpc_gt_cross_track_lookahead_m_list.append(
+                float(getattr(cc, 'mpc_gt_cross_track_lookahead_m', 0.0))
+            )
+            mpc_gt_cross_track_source_code_list.append(
+                str(getattr(cc, 'mpc_gt_cross_track_source_code', '') or '')
+            )
             mpc_gt_heading_error_rad_list.append(float(getattr(cc, 'mpc_gt_heading_error_rad', 0.0)))
             mpc_using_ground_truth_list.append(float(getattr(cc, 'mpc_using_ground_truth', 0.0)))
             mpc_kappa_preview_used_list.append(int(getattr(cc, 'mpc_kappa_preview_used', False)))
@@ -8168,7 +8203,9 @@ class DataRecorder:
                        "mpc_kappa_bias_correction", "mpc_kappa_bias_ema",
                        "mpc_kappa_bias_guard_active", "mpc_kappa_bias_guard_limit",
                        "mpc_fallback_active", "mpc_consecutive_failures",
-                       "mpc_gt_cross_track_m", "mpc_gt_heading_error_rad",
+                       "mpc_gt_cross_track_m", "mpc_gt_cross_track_at_car_m",
+                       "mpc_gt_cross_track_lookahead_m", "mpc_gt_cross_track_source_code",
+                       "mpc_gt_heading_error_rad",
                        "mpc_using_ground_truth",
                        "mpc_kappa_preview_used", "mpc_kappa_preview_range",
                        "regime", "regime_blend_weight",
@@ -9128,6 +9165,16 @@ class DataRecorder:
             self.h5_file["control/mpc_fallback_active"][current_size:] = mpc_fallback_active_list
             self.h5_file["control/mpc_consecutive_failures"][current_size:] = mpc_consecutive_failures_list
             self.h5_file["control/mpc_gt_cross_track_m"][current_size:] = mpc_gt_cross_track_m_list
+            self.h5_file["control/mpc_gt_cross_track_at_car_m"][current_size:] = (
+                mpc_gt_cross_track_at_car_m_list
+            )
+            self.h5_file["control/mpc_gt_cross_track_lookahead_m"][current_size:] = (
+                mpc_gt_cross_track_lookahead_m_list
+            )
+            self.h5_file["control/mpc_gt_cross_track_source_code"][current_size:] = np.array(
+                mpc_gt_cross_track_source_code_list,
+                dtype=h5py.string_dtype(encoding='utf-8', length=32),
+            )
             self.h5_file["control/mpc_gt_heading_error_rad"][current_size:] = mpc_gt_heading_error_rad_list
             self.h5_file["control/mpc_using_ground_truth"][current_size:] = mpc_using_ground_truth_list
             self.h5_file["control/mpc_kappa_preview_used"][current_size:] = mpc_kappa_preview_used_list

@@ -741,7 +741,7 @@ public class GroundTruthReporter : MonoBehaviour
     /// <summary>
     /// Get lane positions from RoadGenerator (dynamic, for oval track).
     /// </summary>
-    (float leftX, float rightX) GetLanePositionsFromRoadGenerator()
+    (float leftX, float rightX) GetLanePositionsFromRoadGenerator(bool useReferencePath = true)
     {
         if (roadGenerator == null || carTransform == null)
         {
@@ -768,7 +768,7 @@ public class GroundTruthReporter : MonoBehaviour
             carPos = carTransform.position;  // Fallback to transform position
         }
         
-        if (useTimeBasedReference && useDynamicGroundTruth)
+        if (useReferencePath && useTimeBasedReference && useDynamicGroundTruth)
         {
             // Time-based reference: moves at constant speed around oval
             t = GetTimeBasedReferenceT();
@@ -1026,6 +1026,36 @@ public class GroundTruthReporter : MonoBehaviour
         }
 
         // Otherwise, left/right are road edges (two lanes).
+        float roadCenter = (leftX + rightX) * 0.5f;
+        if (laneIndex <= 0)
+        {
+            return roadCenter - (laneWidth * 0.25f);
+        }
+        return roadCenter + (laneWidth * 0.25f);
+    }
+
+    /// <summary>
+    /// Get selected lane center at the car's current position in vehicle coordinates.
+    /// Lane index: 0 = left, 1 = right.
+    /// </summary>
+    public float GetLaneCenterAtCar(int laneIndex = 1)
+    {
+        var (leftX, rightX) = GetLanePositionsVehicle();
+        float laneWidth = rightX - leftX;
+        if (laneWidth <= 0.0001f)
+        {
+            return (leftX + rightX) * 0.5f;
+        }
+
+        if (useCenterLineAsLeftLane)
+        {
+            if (laneIndex <= 0)
+            {
+                return leftX - (laneWidth * 0.5f);
+            }
+            return (leftX + rightX) * 0.5f;
+        }
+
         float roadCenter = (leftX + rightX) * 0.5f;
         if (laneIndex <= 0)
         {
@@ -1487,7 +1517,9 @@ public class GroundTruthReporter : MonoBehaviour
                          $"Car right={Vector3.Cross(Vector3.up, carTransform.forward).normalized}");
             }
             
-            var (leftX, rightX) = GetLanePositionsFromRoadGenerator();
+            // Vehicle coordinates should reflect the car's actual current pose, not the
+            // time-based reference path used for lookahead/debug geometry.
+            var (leftX, rightX) = GetLanePositionsFromRoadGenerator(false);
             
             // Debug log every 30 frames
             if (Time.frameCount % 30 == 0)
@@ -1569,18 +1601,7 @@ public class GroundTruthReporter : MonoBehaviour
     /// <returns>Lane center X position in vehicle coordinates</returns>
     public float GetCurrentLaneCenterVehicle()
     {
-        if (carTransform == null)
-        {
-            return 0f;
-        }
-        
-        // Get lane positions (works for both static and dynamic)
-        var (leftX, rightX) = GetLanePositionsVehicle();
-        
-        // Road center = midpoint between left and right lane lines
-        float roadCenterVehicle = (leftX + rightX) / 2.0f;
-        
-        return roadCenterVehicle;
+        return GetLaneCenterAtCar(currentLane);
     }
     
     /// <summary>
@@ -1800,4 +1821,3 @@ public class GroundTruthReporter : MonoBehaviour
         }
     }
 }
-

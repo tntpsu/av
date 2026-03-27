@@ -6503,21 +6503,56 @@ class AVStack:
                 reference_point['curve_anticipation_far_metric_rise_abs'] = anticipation_signal['far_metric_rise_abs']
                 reference_point['curve_anticipation_source'] = anticipation_signal['source']
 
-                # Ground-truth state for MPC (independent of PP lookahead geometry)
-                # Cross-track: use Unity groundTruthLaneCenterX (camera-frame x of
-                # lane center — positive = center RIGHT of car = car LEFT of center).
-                # Fall back to gated perception center if GT not available.
-                gt_lane_center_x = vehicle_state_dict.get('groundTruthLaneCenterX') or vehicle_state_dict.get('ground_truth_lane_center_x', 0.0)
-                if gt_lane_center_x != 0.0:
-                    reference_point['gt_cross_track_m'] = float(gt_lane_center_x)
+                # Ground-truth state for MPC.
+                # Use the at-car selected lane center when Unity exports it; keep the
+                # lookahead center separately for debug/perception-alignment analysis.
+                gt_lane_center_x_lookahead = vehicle_state_dict.get('groundTruthLaneCenterXLookahead')
+                if gt_lane_center_x_lookahead is None:
+                    gt_lane_center_x_lookahead = vehicle_state_dict.get(
+                        'ground_truth_lane_center_x_lookahead'
+                    )
+                if gt_lane_center_x_lookahead is None:
+                    gt_lane_center_x_lookahead = vehicle_state_dict.get('groundTruthLaneCenterX')
+                if gt_lane_center_x_lookahead is None:
+                    gt_lane_center_x_lookahead = vehicle_state_dict.get(
+                        'ground_truth_lane_center_x'
+                    )
+                gt_lane_center_x_at_car = vehicle_state_dict.get('groundTruthLaneCenterXAtCar')
+                if gt_lane_center_x_at_car is None:
+                    gt_lane_center_x_at_car = vehicle_state_dict.get(
+                        'ground_truth_lane_center_x_at_car'
+                    )
+
+                gt_cross_track = None
+                gt_cross_track_source_code = ''
+                if gt_lane_center_x_at_car is not None:
+                    gt_cross_track = float(gt_lane_center_x_at_car)
+                    gt_cross_track_source_code = 'at_car'
+                elif gt_lane_center_x_lookahead is not None:
+                    gt_cross_track = float(gt_lane_center_x_lookahead)
+                    gt_cross_track_source_code = 'legacy_lookahead'
+
+                if gt_cross_track is not None:
+                    reference_point['gt_cross_track_m'] = gt_cross_track
                 else:
                     # Gated perception lane center: same convention (+right)
                     gated_left = gated.get('left_lane_line_x')
                     gated_right = gated.get('right_lane_line_x')
                     if gated_left is not None and gated_right is not None:
                         reference_point['gt_cross_track_m'] = float(gated_left + gated_right) / 2.0
+                        gt_cross_track_source_code = 'perception_fallback'
                     else:
                         reference_point['gt_cross_track_m'] = None
+                        gt_cross_track_source_code = 'none'
+                reference_point['gt_cross_track_at_car_m'] = (
+                    float(gt_lane_center_x_at_car) if gt_lane_center_x_at_car is not None else None
+                )
+                reference_point['gt_cross_track_lookahead_m'] = (
+                    float(gt_lane_center_x_lookahead)
+                    if gt_lane_center_x_lookahead is not None
+                    else None
+                )
+                reference_point['gt_cross_track_source_code'] = gt_cross_track_source_code
                 reference_point['gt_heading_error_rad'] = float(vehicle_state_dict.get('headingDeltaDeg', 0.0)) * (np.pi / 180.0)
 
                 # 3. Control: Compute control commands
@@ -8059,7 +8094,17 @@ class AVStack:
         # FIXED: Check for ground truth data (try both camelCase and snake_case)
         gt_left_lane_line_x = vehicle_state_dict.get('groundTruthLeftLaneLineX') or vehicle_state_dict.get('ground_truth_left_lane_line_x') or vehicle_state_dict.get('groundTruthLeftLaneX') or vehicle_state_dict.get('ground_truth_left_lane_x', 0.0)  # Backward compatibility
         gt_right_lane_line_x = vehicle_state_dict.get('groundTruthRightLaneLineX') or vehicle_state_dict.get('ground_truth_right_lane_line_x') or vehicle_state_dict.get('groundTruthRightLaneX') or vehicle_state_dict.get('ground_truth_right_lane_x', 0.0)  # Backward compatibility
-        gt_lane_center_x = vehicle_state_dict.get('groundTruthLaneCenterX') or vehicle_state_dict.get('ground_truth_lane_center_x', 0.0)
+        gt_lane_center_x_lookahead = vehicle_state_dict.get('groundTruthLaneCenterXLookahead')
+        if gt_lane_center_x_lookahead is None:
+            gt_lane_center_x_lookahead = vehicle_state_dict.get('ground_truth_lane_center_x_lookahead')
+        if gt_lane_center_x_lookahead is None:
+            gt_lane_center_x_lookahead = vehicle_state_dict.get('groundTruthLaneCenterX')
+        if gt_lane_center_x_lookahead is None:
+            gt_lane_center_x_lookahead = vehicle_state_dict.get('ground_truth_lane_center_x', 0.0)
+        gt_lane_center_x_at_car = vehicle_state_dict.get('groundTruthLaneCenterXAtCar')
+        if gt_lane_center_x_at_car is None:
+            gt_lane_center_x_at_car = vehicle_state_dict.get('ground_truth_lane_center_x_at_car', 0.0)
+        gt_lane_center_x = gt_lane_center_x_lookahead
         gt_path_curvature = vehicle_state_dict.get('groundTruthPathCurvature') or vehicle_state_dict.get('ground_truth_path_curvature', 0.0)
         gt_desired_heading = vehicle_state_dict.get('groundTruthDesiredHeading') or vehicle_state_dict.get('ground_truth_desired_heading', 0.0)
 
@@ -8483,6 +8528,8 @@ class AVStack:
             ground_truth_left_lane_line_x=gt_left_lane_line_x,
             ground_truth_right_lane_line_x=gt_right_lane_line_x,
             ground_truth_lane_center_x=gt_lane_center_x,
+            ground_truth_lane_center_x_lookahead=gt_lane_center_x_lookahead,
+            ground_truth_lane_center_x_at_car=gt_lane_center_x_at_car,
             ground_truth_path_curvature=gt_path_curvature,
             ground_truth_desired_heading=gt_desired_heading,
             camera_8m_screen_y=camera_8m_screen_y,  # NEW: Camera calibration data
@@ -9489,6 +9536,15 @@ class AVStack:
             mpc_fallback_active=bool(control_command.get('mpc_fallback_active', False)),
             mpc_consecutive_failures=int(control_command.get('mpc_consecutive_failures', 0)),
             mpc_gt_cross_track_m=float(control_command.get('mpc_gt_cross_track_m', 0.0)),
+            mpc_gt_cross_track_at_car_m=float(
+                control_command.get('mpc_gt_cross_track_at_car_m', 0.0)
+            ),
+            mpc_gt_cross_track_lookahead_m=float(
+                control_command.get('mpc_gt_cross_track_lookahead_m', 0.0)
+            ),
+            mpc_gt_cross_track_source_code=str(
+                control_command.get('mpc_gt_cross_track_source_code', '') or ''
+            ),
             mpc_gt_heading_error_rad=float(control_command.get('mpc_gt_heading_error_rad', 0.0)),
             mpc_using_ground_truth=float(control_command.get('mpc_using_ground_truth', 0.0)),
             mpc_kappa_preview_used=bool(control_command.get('mpc_kappa_preview_used', False)),

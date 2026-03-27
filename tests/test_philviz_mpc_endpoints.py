@@ -301,6 +301,89 @@ def test_triage_detects_mpc_curvature_bias_cancellation(tmp_path):
     )
 
 
+def test_triage_detects_mpc_gt_cross_track_semantic_mismatch(tmp_path):
+    import sys, os
+    import h5py
+    import numpy as np
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'tools', 'debug_visualizer'))
+    from backend.triage_engine import TriageEngine
+
+    recording = tmp_path / "triage_mpc_gt_semantic_mismatch.h5"
+    n = 24
+    t = np.linspace(0.0, 2.3, n)
+    lat_err = np.zeros(n, dtype=np.float32)
+    lat_err[8:18] = 0.82
+    gt_at_car = np.zeros(n, dtype=np.float32)
+    gt_lookahead = np.zeros(n, dtype=np.float32)
+    gt_lookahead[8:18] = 0.86
+
+    with h5py.File(recording, "w") as f:
+        f.create_dataset("vehicle/timestamps", data=t)
+        f.create_dataset("control/steering", data=np.zeros(n, dtype=np.float32))
+        f.create_dataset("control/lateral_error", data=lat_err)
+        f.create_dataset("control/pp_lookahead_distance", data=np.full(n, 9.0, dtype=np.float32))
+        f.create_dataset("control/reference_lookahead_target", data=np.full(n, 14.0, dtype=np.float32))
+        f.create_dataset("control/mpc_gt_cross_track_at_car_m", data=gt_at_car)
+        f.create_dataset("control/mpc_gt_cross_track_lookahead_m", data=gt_lookahead)
+        f.create_dataset("trajectory/reference_point_curvature", data=np.zeros(n, dtype=np.float32))
+        f.create_dataset("vehicle/road_frame_lane_center_offset", data=np.full(n, 0.02, dtype=np.float32))
+        f.create_dataset("perception/confidence", data=np.ones(n, dtype=np.float32))
+        f.create_dataset("perception/num_lanes_detected", data=np.full(n, 2, dtype=np.int8))
+        f.create_dataset("control/curve_local_state", data=np.array([b"STRAIGHT"] * n, dtype="S16"))
+        f.create_dataset("control/curve_intent_state", data=np.array([b"STRAIGHT"] * n, dtype="S16"))
+        f.create_dataset("control/sync_packet_fallback_active", data=np.zeros(n, dtype=np.int8))
+
+    engine = TriageEngine(recording)
+    result = engine.generate_triage()
+    pattern_ids = [m["pattern_id"] for m in result["matched_patterns"]]
+    assert "mpc_gt_cross_track_semantic_mismatch" in pattern_ids, (
+        f"Expected mpc_gt_cross_track_semantic_mismatch pattern, got: {pattern_ids}"
+    )
+
+
+def test_triage_detects_mpc_gt_cross_track_absolute_coordinate_mismatch(tmp_path):
+    import sys, os
+    import h5py
+    import numpy as np
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'tools', 'debug_visualizer'))
+    from backend.triage_engine import TriageEngine
+
+    recording = tmp_path / "triage_mpc_gt_absolute_mismatch.h5"
+    n = 24
+    t = np.linspace(0.0, 2.3, n)
+    lat_err = np.zeros(n, dtype=np.float32)
+    lat_err[8:18] = 0.82
+    gt_at_car = np.zeros(n, dtype=np.float32)
+    gt_at_car[8:18] = 12.0
+    gt_lookahead = np.zeros(n, dtype=np.float32)
+    gt_lookahead[8:18] = 0.92
+    road_offset = np.zeros(n, dtype=np.float32)
+    road_offset[8:18] = 0.03
+
+    with h5py.File(recording, "w") as f:
+        f.create_dataset("vehicle/timestamps", data=t)
+        f.create_dataset("vehicle/road_frame_lane_center_offset", data=road_offset)
+        f.create_dataset("control/steering", data=np.zeros(n, dtype=np.float32))
+        f.create_dataset("control/lateral_error", data=lat_err)
+        f.create_dataset("control/pp_lookahead_distance", data=np.full(n, 9.0, dtype=np.float32))
+        f.create_dataset("control/reference_lookahead_target", data=np.full(n, 14.0, dtype=np.float32))
+        f.create_dataset("control/mpc_gt_cross_track_at_car_m", data=gt_at_car)
+        f.create_dataset("control/mpc_gt_cross_track_lookahead_m", data=gt_lookahead)
+        f.create_dataset("trajectory/reference_point_curvature", data=np.zeros(n, dtype=np.float32))
+        f.create_dataset("perception/confidence", data=np.ones(n, dtype=np.float32))
+        f.create_dataset("perception/num_lanes_detected", data=np.full(n, 2, dtype=np.int8))
+        f.create_dataset("control/curve_local_state", data=np.array([b"STRAIGHT"] * n, dtype="S16"))
+        f.create_dataset("control/curve_intent_state", data=np.array([b"STRAIGHT"] * n, dtype="S16"))
+        f.create_dataset("control/sync_packet_fallback_active", data=np.zeros(n, dtype=np.int8))
+
+    engine = TriageEngine(recording)
+    result = engine.generate_triage()
+    pattern_ids = [m["pattern_id"] for m in result["matched_patterns"]]
+    assert "mpc_gt_cross_track_absolute_coordinate_mismatch" in pattern_ids, (
+        f"Expected mpc_gt_cross_track_absolute_coordinate_mismatch pattern, got: {pattern_ids}"
+    )
+
+
 # ── Test 5: Layer health MPC flags ──────────────────────────────────────
 
 def test_layer_health_mpc_flags(mpc_fallback_recording):

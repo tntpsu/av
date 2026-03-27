@@ -2424,7 +2424,9 @@ class VehicleState(BaseModel):
     # These represent the painted lane line markings, not the drivable lanes
     groundTruthLeftLaneLineX: float = 0.0  # Left lane line (painted marking) position
     groundTruthRightLaneLineX: float = 0.0  # Right lane line (painted marking) position
-    groundTruthLaneCenterX: float = 0.0  # Lane center (midpoint between lane lines)
+    groundTruthLaneCenterX: float = 0.0  # Legacy alias: selected lane center at lookahead
+    groundTruthLaneCenterXLookahead: float = 0.0  # Selected lane center at GT lookahead distance
+    groundTruthLaneCenterXAtCar: float = 0.0  # Selected lane center at the car's current position
     # NEW: Path-based steering data
     groundTruthDesiredHeading: float = 0.0  # Desired heading from path (degrees)
     groundTruthPathCurvature: float = 0.0  # Path curvature (1/meters)
