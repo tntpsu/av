@@ -1033,13 +1033,84 @@ def compute_curve_phase_scheduler(
         )
     )
     local_gate_weight = float(max(0.0, min(1.0, local_proximity_weight)))
+    reentry_gate_min = max(
+        0.0, min(1.0, float(config.get("curve_local_phase_reentry_gate_min", 0.10)))
+    )
+    reentry_path_min = max(
+        0.0, min(1.0, float(config.get("curve_local_phase_reentry_path_min", 0.15)))
+    )
+    local_reentry_ready = bool(
+        local_arm_ready and (
+            local_gate_weight >= reentry_gate_min
+            or (local_in_curve_now and term_path >= reentry_path_min)
+        )
+    )
     local_preview_term = max(term_preview, term_rise) * local_gate_weight
     local_time_term = 0.0
     if bool(config.get("curve_local_phase_use_time_term", False)):
         local_time_term = term_time * local_gate_weight
+    dynamic_arm_effect_heading_term = 0.0
+    dynamic_arm_effect_lateral_shift_term = 0.0
+    dynamic_arm_effect_time_support_term = 0.0
+    dynamic_arm_effect_score = 0.0
+    if (
+        bool(config.get("curve_local_dynamic_arm_enabled", True))
+        and local_arm_ready
+        and local_gate_weight
+        >= max(0.0, min(1.0, float(config.get("curve_local_dynamic_arm_gate_min", 0.50))))
+    ):
+        arm_effect_curvature_abs = max(
+            abs(float(preview_curvature_abs)),
+            abs(float(path_curvature_abs))
+            if (local_commit_ready or local_in_curve_now)
+            else 0.0,
+        )
+        arm_horizon_m = max(0.0, float(effective_distance_start_m) * local_gate_weight)
+        if arm_effect_curvature_abs > 1e-9 and arm_horizon_m > 1e-3 and local_gate_weight > 1e-6:
+            heading_effect_rad = arm_effect_curvature_abs * arm_horizon_m
+            lateral_shift_m = 0.5 * arm_effect_curvature_abs * arm_horizon_m * arm_horizon_m
+            dynamic_arm_effect_heading_term = _normalize_curve_anticipation_term(
+                value=heading_effect_rad,
+                value_min=float(
+                    config.get("curve_local_arm_effect_heading_min_rad", 0.010)
+                ),
+                value_max=float(
+                    config.get("curve_local_arm_effect_heading_max_rad", 0.030)
+                ),
+            )
+            dynamic_arm_effect_lateral_shift_term = _normalize_curve_anticipation_term(
+                value=lateral_shift_m,
+                value_min=float(
+                    config.get("curve_local_arm_effect_lateral_shift_min_m", 0.030)
+                ),
+                value_max=float(
+                    config.get("curve_local_arm_effect_lateral_shift_max_m", 0.100)
+                ),
+            )
+            dynamic_arm_effect_score = max(
+                dynamic_arm_effect_heading_term,
+                dynamic_arm_effect_lateral_shift_term,
+            )
+            if dynamic_arm_effect_score > 1e-6 and local_reentry_ready and term_time > 1e-6:
+                dynamic_arm_effect_time_support_term = min(
+                    1.0,
+                    term_time
+                    * local_gate_weight
+                    * max(
+                        0.0,
+                        float(
+                            config.get("curve_local_arm_effect_time_support_gain", 0.20)
+                        ),
+                    ),
+                )
+                dynamic_arm_effect_score = min(
+                    1.0,
+                    dynamic_arm_effect_score + dynamic_arm_effect_time_support_term,
+                )
     local_arm_phase_raw = max(
         local_preview_term,
         local_time_term,
+        dynamic_arm_effect_score,
         term_path if local_in_curve_now else 0.0,
     ) * confidence_scale
     if local_commit_ready:
@@ -1073,21 +1144,12 @@ def compute_curve_phase_scheduler(
     entry_floor = max(0.0, min(1.0, float(config.get("curve_phase_entry_floor", 0.15))))
     commit_floor = max(entry_floor, min(1.0, float(config.get("curve_phase_commit_floor", 0.30))))
     rearm_hold_cfg = max(0, int(config.get("curve_phase_rearm_hold_frames", 4)))
-    reentry_gate_min = max(0.0, min(1.0, float(config.get("curve_local_phase_reentry_gate_min", 0.10))))
-    reentry_path_min = max(0.0, min(1.0, float(config.get("curve_local_phase_reentry_path_min", 0.15))))
-
     entry_frames = max(0, int(previous_entry_frames))
     rearm_hold_frames = max(0, int(previous_rearm_hold_frames))
 
     state = prev_state_norm
     rearm_event = False
     local_distance_ready = bool(local_commit_ready)
-    local_reentry_ready = bool(
-        local_arm_ready and (
-            local_gate_weight >= reentry_gate_min
-            or (local_in_curve_now and term_path >= reentry_path_min)
-        )
-    )
     if prev_state_norm == "COMMIT":
         if phase < off:
             state = "REARM"
@@ -1146,10 +1208,23 @@ def compute_curve_phase_scheduler(
     elif state == "COMMIT":
         phase = max(phase, commit_floor)
 
+    blocker_mode = "none"
+    if state not in {"ENTRY", "COMMIT"}:
+        if not local_arm_ready:
+            blocker_mode = "local_not_ready"
+        elif not local_reentry_ready:
+            blocker_mode = "reentry_not_ready"
+        elif local_arm_phase_raw + 1e-6 < on:
+            blocker_mode = "arm_phase_below_entry_threshold"
+        else:
+            blocker_mode = "state_hold"
+    arm_phase_deficit = max(0.0, on - local_arm_phase_raw)
+
     local_driver_terms = {
         "path": float(term_path),
         "local_preview": float(local_preview_term),
         "local_time": float(local_time_term),
+        "local_effect": float(dynamic_arm_effect_score),
     }
     active_driver_terms = [
         name for name, value in local_driver_terms.items()
@@ -1235,6 +1310,20 @@ def compute_curve_phase_scheduler(
         "curve_local_phase": float(phase),
         "curve_local_state": state,
         "curve_local_phase_source": str(local_phase_source),
+        "curve_activation_blocker_mode": str(blocker_mode),
+        "curve_local_arm_phase_deficit": float(max(0.0, min(1.0, arm_phase_deficit))),
+        "curve_local_arm_effect_score": float(
+            max(0.0, min(1.0, dynamic_arm_effect_score * confidence_scale))
+        ),
+        "curve_local_arm_effect_heading_term": float(
+            max(0.0, min(1.0, dynamic_arm_effect_heading_term * confidence_scale))
+        ),
+        "curve_local_arm_effect_lateral_shift_term": float(
+            max(0.0, min(1.0, dynamic_arm_effect_lateral_shift_term * confidence_scale))
+        ),
+        "curve_local_arm_effect_time_support_term": float(
+            max(0.0, min(1.0, dynamic_arm_effect_time_support_term * confidence_scale))
+        ),
     }
 
 
@@ -1415,6 +1504,7 @@ def compute_reference_lookahead(
     curve_local_state: str | None = None,
     current_curve_progress_ratio: float | None = None,
     curve_local_entry_severity: float | None = None,
+    curve_local_arm_effect_score: float | None = None,
     local_gate_weight: float | None = None,
     return_diagnostics: bool = False,
 ) -> float | dict[str, float | str]:
@@ -1605,11 +1695,6 @@ def compute_reference_lookahead(
             current_speed,
             entry_speed_table,
         )
-        owner_entry_progress = float(max(0.0, min(1.0, entry_weight)))
-        lookahead_target = (
-            lookahead_straight * (1.0 - entry_weight)
-            + lookahead_entry * entry_weight
-        )
         curve_local_state_normalized = str(curve_local_state or "").strip().upper()
         severity_val = 0.0
         if curve_local_entry_severity is not None:
@@ -1620,6 +1705,27 @@ def compute_reference_lookahead(
         if not math.isfinite(severity_val):
             severity_val = 0.0
         severity_val = max(0.0, min(1.0, severity_val))
+        arm_effect_val = 0.0
+        if curve_local_arm_effect_score is not None:
+            try:
+                arm_effect_val = float(curve_local_arm_effect_score)
+            except (TypeError, ValueError):
+                arm_effect_val = 0.0
+        if not math.isfinite(arm_effect_val):
+            arm_effect_val = 0.0
+        arm_effect_val = max(0.0, min(1.0, arm_effect_val))
+        if (
+            scheduler_mode == CURVE_SCHEDULER_MODE_PHASE_ACTIVE
+            and curve_local_state_normalized == "ENTRY"
+            and arm_effect_val > entry_weight + 1e-6
+        ):
+            entry_weight = float(arm_effect_val)
+            entry_weight_source = "curve_local_arm_effect"
+        owner_entry_progress = float(max(0.0, min(1.0, entry_weight)))
+        lookahead_target = (
+            lookahead_straight * (1.0 - entry_weight)
+            + lookahead_entry * entry_weight
+        )
         if (
             scheduler_mode == CURVE_SCHEDULER_MODE_PHASE_ACTIVE
             and commit_speed_table

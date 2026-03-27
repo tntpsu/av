@@ -180,11 +180,18 @@ def test_drive_summary_contract_keys(tmp_path: Path) -> None:
         "mpc_feasible_on_high_error_rate",
         "curve_intent_state_mode_on_high_error",
         "curve_local_state_mode_on_high_error",
+        "curve_activation_blocker_mode_on_high_error",
+        "curve_activation_blocker_mode_on_underactivated",
         "lateral_error_abs_m",
         "road_frame_lane_center_offset_abs_m",
         "reference_point_curvature_abs",
         "pp_lookahead_distance_m",
         "reference_lookahead_target_m",
+        "curve_local_arm_phase_deficit",
+        "curve_local_arm_effect_score",
+        "curve_local_arm_effect_heading_term",
+        "curve_local_arm_effect_lateral_shift_term",
+        "curve_local_arm_effect_time_support_term",
         "limits",
     }.issubset(highway_mild_curve_contract.keys())
     cadence = latency_sync.get("cadence", {})

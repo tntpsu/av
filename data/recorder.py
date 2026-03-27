@@ -3455,6 +3455,42 @@ class DataRecorder:
             dtype=np.int8
         )
         self.h5_file.create_dataset(
+            "control/curve_activation_blocker_mode",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=h5py.string_dtype(encoding='utf-8', length=48)
+        )
+        self.h5_file.create_dataset(
+            "control/curve_local_arm_phase_deficit",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/curve_local_arm_effect_score",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/curve_local_arm_effect_heading_term",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/curve_local_arm_effect_lateral_shift_term",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/curve_local_arm_effect_time_support_term",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
             "control/curve_local_rearm_cooldown_active",
             shape=(0,),
             maxshape=max_shape,
@@ -6531,6 +6567,12 @@ class DataRecorder:
         curve_local_distance_horizon_m_list = []
         curve_local_time_horizon_s_list = []
         curve_local_reentry_ready_list = []
+        curve_activation_blocker_mode_list = []
+        curve_local_arm_phase_deficit_list = []
+        curve_local_arm_effect_score_list = []
+        curve_local_arm_effect_heading_term_list = []
+        curve_local_arm_effect_lateral_shift_term_list = []
+        curve_local_arm_effect_time_support_term_list = []
         curve_local_rearm_cooldown_active_list = []
         curve_local_force_straight_active_list = []
         curve_local_commit_streak_frames_list = []
@@ -7169,6 +7211,24 @@ class DataRecorder:
             _curve_local_reentry_ready = getattr(cc, 'curve_local_reentry_ready', None)
             curve_local_reentry_ready_list.append(
                 -1 if _curve_local_reentry_ready is None else (1 if bool(_curve_local_reentry_ready) else 0)
+            )
+            curve_activation_blocker_mode_list.append(
+                str(getattr(cc, 'curve_activation_blocker_mode', '') or '')
+            )
+            curve_local_arm_phase_deficit_list.append(
+                float(getattr(cc, 'curve_local_arm_phase_deficit', 0.0) or 0.0)
+            )
+            curve_local_arm_effect_score_list.append(
+                float(getattr(cc, 'curve_local_arm_effect_score', 0.0) or 0.0)
+            )
+            curve_local_arm_effect_heading_term_list.append(
+                float(getattr(cc, 'curve_local_arm_effect_heading_term', 0.0) or 0.0)
+            )
+            curve_local_arm_effect_lateral_shift_term_list.append(
+                float(getattr(cc, 'curve_local_arm_effect_lateral_shift_term', 0.0) or 0.0)
+            )
+            curve_local_arm_effect_time_support_term_list.append(
+                float(getattr(cc, 'curve_local_arm_effect_time_support_term', 0.0) or 0.0)
             )
             _curve_local_rearm = getattr(cc, 'curve_local_rearm_cooldown_active', None)
             curve_local_rearm_cooldown_active_list.append(
@@ -7907,6 +7967,12 @@ class DataRecorder:
                        "curve_local_distance_horizon_m",
                        "curve_local_time_horizon_s",
                        "curve_local_reentry_ready",
+                       "curve_activation_blocker_mode",
+                       "curve_local_arm_phase_deficit",
+                       "curve_local_arm_effect_score",
+                       "curve_local_arm_effect_heading_term",
+                       "curve_local_arm_effect_lateral_shift_term",
+                       "curve_local_arm_effect_time_support_term",
                        "curve_local_rearm_cooldown_active",
                        "curve_local_force_straight_active",
                        "curve_local_commit_streak_frames",
@@ -8416,6 +8482,28 @@ class DataRecorder:
             )
             self.h5_file["control/curve_local_reentry_ready"][current_size:] = np.array(
                 curve_local_reentry_ready_list, dtype=np.int8
+            )
+            curve_activation_blocker_mode_array = np.array(
+                curve_activation_blocker_mode_list,
+                dtype=h5py.string_dtype(encoding='utf-8', length=48),
+            )
+            self.h5_file["control/curve_activation_blocker_mode"][current_size:] = (
+                curve_activation_blocker_mode_array
+            )
+            self.h5_file["control/curve_local_arm_phase_deficit"][current_size:] = (
+                curve_local_arm_phase_deficit_list
+            )
+            self.h5_file["control/curve_local_arm_effect_score"][current_size:] = (
+                curve_local_arm_effect_score_list
+            )
+            self.h5_file["control/curve_local_arm_effect_heading_term"][current_size:] = (
+                curve_local_arm_effect_heading_term_list
+            )
+            self.h5_file["control/curve_local_arm_effect_lateral_shift_term"][current_size:] = (
+                curve_local_arm_effect_lateral_shift_term_list
+            )
+            self.h5_file["control/curve_local_arm_effect_time_support_term"][current_size:] = (
+                curve_local_arm_effect_time_support_term_list
             )
             self.h5_file["control/curve_local_rearm_cooldown_active"][current_size:] = np.array(
                 curve_local_rearm_cooldown_active_list, dtype=np.int8

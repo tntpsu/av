@@ -1197,6 +1197,8 @@ def _build_highway_mild_curve_contract_summary(data: Dict) -> Dict:
         "mpc_fallback_overlap_on_high_error_rate": None,
         "curve_intent_state_mode_on_high_error": None,
         "curve_local_state_mode_on_high_error": None,
+        "curve_activation_blocker_mode_on_high_error": None,
+        "curve_activation_blocker_mode_on_underactivated": None,
         "lateral_error_abs_m": _finite_stats(None),
         "road_frame_lane_center_offset_abs_m": _finite_stats(None),
         "reference_point_curvature_abs": _finite_stats(None),
@@ -1204,6 +1206,11 @@ def _build_highway_mild_curve_contract_summary(data: Dict) -> Dict:
         "pp_lookahead_distance_m": _finite_stats(None),
         "reference_lookahead_target_m": _finite_stats(None),
         "speed_mps": _finite_stats(None),
+        "curve_local_arm_phase_deficit": _finite_stats(None),
+        "curve_local_arm_effect_score": _finite_stats(None),
+        "curve_local_arm_effect_heading_term": _finite_stats(None),
+        "curve_local_arm_effect_lateral_shift_term": _finite_stats(None),
+        "curve_local_arm_effect_time_support_term": _finite_stats(None),
         "limits": limits,
     }
     unavailable = dict(base)
@@ -1215,6 +1222,9 @@ def _build_highway_mild_curve_contract_summary(data: Dict) -> Dict:
     pp_lookahead_distance = data.get("pp_lookahead_distance")
     curve_intent_states = _decode_string_series(data.get("curve_intent_state"))
     curve_local_states = _decode_string_series(data.get("curve_local_state"))
+    curve_activation_blocker_modes = _decode_string_series(
+        data.get("curve_activation_blocker_mode")
+    )
     if any(
         candidate is None
         for candidate in (
@@ -1243,10 +1253,17 @@ def _build_highway_mild_curve_contract_summary(data: Dict) -> Dict:
         data.get("mpc_feasible"),
         data.get("mpc_fallback_active"),
         data.get("mpc_kappa_ref"),
+        data.get("curve_local_arm_phase_deficit"),
+        data.get("curve_local_arm_effect_score"),
+        data.get("curve_local_arm_effect_heading_term"),
+        data.get("curve_local_arm_effect_lateral_shift_term"),
+        data.get("curve_local_arm_effect_time_support_term"),
     ]
     for series in optional_series:
         if series is not None:
             n = min(n, len(series))
+    if curve_activation_blocker_modes:
+        n = min(n, len(curve_activation_blocker_modes))
     if n <= 0:
         return unavailable
 
@@ -1300,6 +1317,36 @@ def _build_highway_mild_curve_contract_summary(data: Dict) -> Dict:
     mpc_kappa_ref_arr = (
         np.asarray(mpc_kappa_ref[:n], dtype=np.float64)
         if mpc_kappa_ref is not None
+        else np.full(n, np.nan, dtype=np.float64)
+    )
+    arm_phase_deficit = data.get("curve_local_arm_phase_deficit")
+    arm_phase_deficit_arr = (
+        np.asarray(arm_phase_deficit[:n], dtype=np.float64)
+        if arm_phase_deficit is not None
+        else np.full(n, np.nan, dtype=np.float64)
+    )
+    arm_effect_score = data.get("curve_local_arm_effect_score")
+    arm_effect_score_arr = (
+        np.asarray(arm_effect_score[:n], dtype=np.float64)
+        if arm_effect_score is not None
+        else np.full(n, np.nan, dtype=np.float64)
+    )
+    arm_effect_heading = data.get("curve_local_arm_effect_heading_term")
+    arm_effect_heading_arr = (
+        np.asarray(arm_effect_heading[:n], dtype=np.float64)
+        if arm_effect_heading is not None
+        else np.full(n, np.nan, dtype=np.float64)
+    )
+    arm_effect_lateral = data.get("curve_local_arm_effect_lateral_shift_term")
+    arm_effect_lateral_arr = (
+        np.asarray(arm_effect_lateral[:n], dtype=np.float64)
+        if arm_effect_lateral is not None
+        else np.full(n, np.nan, dtype=np.float64)
+    )
+    arm_effect_time = data.get("curve_local_arm_effect_time_support_term")
+    arm_effect_time_arr = (
+        np.asarray(arm_effect_time[:n], dtype=np.float64)
+        if arm_effect_time is not None
         else np.full(n, np.nan, dtype=np.float64)
     )
 
@@ -1404,6 +1451,18 @@ def _build_highway_mild_curve_contract_summary(data: Dict) -> Dict:
             [curve_local_states[i] for i in high_error_idx],
             ignore={""},
         ),
+        "curve_activation_blocker_mode_on_high_error": _mode_string(
+            [curve_activation_blocker_modes[i] for i in high_error_idx]
+            if curve_activation_blocker_modes
+            else [],
+            ignore={"", "none"},
+        ),
+        "curve_activation_blocker_mode_on_underactivated": _mode_string(
+            [curve_activation_blocker_modes[i] for i in np.where(underactivated_mask)[0]]
+            if curve_activation_blocker_modes
+            else [],
+            ignore={"", "none"},
+        ),
         "lateral_error_abs_m": _finite_stats(lateral_error_arr[high_error_mask]),
         "road_frame_lane_center_offset_abs_m": _finite_stats(
             road_center_offset_arr[high_error_mask]
@@ -1415,6 +1474,21 @@ def _build_highway_mild_curve_contract_summary(data: Dict) -> Dict:
             ref_lookahead_arr[high_error_mask]
         ),
         "speed_mps": _finite_stats(speed_arr[high_error_mask]),
+        "curve_local_arm_phase_deficit": _finite_stats(
+            arm_phase_deficit_arr[high_error_mask]
+        ),
+        "curve_local_arm_effect_score": _finite_stats(
+            arm_effect_score_arr[high_error_mask]
+        ),
+        "curve_local_arm_effect_heading_term": _finite_stats(
+            arm_effect_heading_arr[high_error_mask]
+        ),
+        "curve_local_arm_effect_lateral_shift_term": _finite_stats(
+            arm_effect_lateral_arr[high_error_mask]
+        ),
+        "curve_local_arm_effect_time_support_term": _finite_stats(
+            arm_effect_time_arr[high_error_mask]
+        ),
     }
     return result
 
@@ -3437,6 +3511,38 @@ def analyze_recording_summary(
             data['curve_local_reentry_ready'] = (
                 np.array(f['control/curve_local_reentry_ready'][:])
                 if 'control/curve_local_reentry_ready' in f
+                else None
+            )
+            data['curve_activation_blocker_mode'] = None
+            if 'control/curve_activation_blocker_mode' in f:
+                _cabm = f['control/curve_activation_blocker_mode'][:]
+                data['curve_activation_blocker_mode'] = [
+                    s.decode('utf-8') if isinstance(s, (bytes, bytearray)) else str(s)
+                    for s in _cabm
+                ]
+            data['curve_local_arm_phase_deficit'] = (
+                np.array(f['control/curve_local_arm_phase_deficit'][:])
+                if 'control/curve_local_arm_phase_deficit' in f
+                else None
+            )
+            data['curve_local_arm_effect_score'] = (
+                np.array(f['control/curve_local_arm_effect_score'][:])
+                if 'control/curve_local_arm_effect_score' in f
+                else None
+            )
+            data['curve_local_arm_effect_heading_term'] = (
+                np.array(f['control/curve_local_arm_effect_heading_term'][:])
+                if 'control/curve_local_arm_effect_heading_term' in f
+                else None
+            )
+            data['curve_local_arm_effect_lateral_shift_term'] = (
+                np.array(f['control/curve_local_arm_effect_lateral_shift_term'][:])
+                if 'control/curve_local_arm_effect_lateral_shift_term' in f
+                else None
+            )
+            data['curve_local_arm_effect_time_support_term'] = (
+                np.array(f['control/curve_local_arm_effect_time_support_term'][:])
+                if 'control/curve_local_arm_effect_time_support_term' in f
                 else None
             )
             data['curve_local_commit_streak_frames'] = (

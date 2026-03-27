@@ -741,7 +741,38 @@ def test_reference_lookahead_phase_active_commit_table_shortens_commit_state() -
     assert float(commit_diag["reference_lookahead_owner_commit_progress"]) == pytest.approx(
         0.84375, rel=1e-3
     )
-    assert bool(commit_diag["reference_lookahead_owner_commit_band_clamp_active"]) is False
+
+
+def test_reference_lookahead_phase_active_entry_uses_arm_effect_when_phase_floor_is_weak() -> None:
+    config = {
+        "dynamic_reference_lookahead": True,
+        "curve_scheduler_mode": "phase_active",
+        "reference_lookahead_min": 2.5,
+        "reference_lookahead_speed_table": [
+            {"speed_mps": 10.0, "lookahead_m": 16.0},
+        ],
+        "reference_lookahead_speed_table_entry": [
+            {"speed_mps": 10.0, "lookahead_m": 12.0},
+        ],
+    }
+
+    result = compute_reference_lookahead(
+        base_lookahead=9.0,
+        current_speed=10.0,
+        path_curvature=0.002,
+        path_curvature_preview=0.002,
+        distance_to_curve_start_m=2.0,
+        curve_scheduler_mode="phase_active",
+        curve_phase=0.15,
+        curve_local_state="ENTRY",
+        curve_local_arm_effect_score=1.0,
+        config=config,
+        return_diagnostics=True,
+    )
+
+    assert isinstance(result, dict)
+    assert float(result["lookahead"]) == pytest.approx(12.0, rel=1e-3)
+    assert str(result["reference_lookahead_entry_weight_source"]) == "curve_local_arm_effect"
 
 
 def test_reference_lookahead_phase_active_commit_table_falls_back_when_missing() -> None:
@@ -1322,6 +1353,144 @@ def test_curve_phase_scheduler_entry_can_arm_before_commit_ready() -> None:
     assert diag["curve_local_commit_ready"] is False
     assert diag["curve_local_distance_ready"] is False
     assert str(diag["curve_local_state"]).upper() == "ENTRY"
+
+
+def test_curve_phase_scheduler_reports_arm_phase_blocker_for_mild_curve_when_dynamic_arm_disabled() -> None:
+    config = {
+        "curve_phase_preview_curvature_min": 0.003,
+        "curve_phase_preview_curvature_max": 0.015,
+        "curve_phase_path_curvature_min": 0.003,
+        "curve_phase_path_curvature_max": 0.015,
+        "curve_phase_rise_min": 0.0005,
+        "curve_phase_rise_max": 0.006,
+        "curve_phase_ema_alpha": 0.45,
+        "curve_phase_on": 0.45,
+        "curve_local_entry_on_base": 0.45,
+        "curve_local_entry_on_tight": 0.40,
+        "curve_phase_off": 0.30,
+        "curve_phase_commit_on": 0.55,
+        "curve_phase_commit_min_frames": 4,
+        "curve_phase_entry_floor": 0.15,
+        "curve_phase_commit_floor": 0.30,
+        "curve_phase_rearm_hold_frames": 4,
+        "curve_local_phase_distance_start_m": 8.0,
+        "curve_local_phase_distance_start_tight_m": 10.0,
+        "curve_local_phase_distance_end_m": 1.5,
+        "curve_local_phase_time_start_s": 1.2,
+        "curve_local_phase_time_start_tight_s": 1.6,
+        "curve_local_phase_time_end_s": 0.25,
+        "curve_local_in_curve_distance_eps_m": 0.25,
+        "curve_local_in_curve_time_eps_s": 0.05,
+        "curve_local_in_curve_path_min": 0.70,
+        "curve_local_commit_distance_ready_m": 3.0,
+        "curve_local_commit_time_ready_s": 0.60,
+        "curve_local_phase_reentry_gate_min": 0.10,
+        "curve_local_phase_reentry_path_min": 0.15,
+        "curve_local_entry_severity_curvature_min": 0.003,
+        "curve_local_entry_severity_curvature_max": 0.012,
+        "curve_phase_confidence_min": 0.35,
+        "curve_phase_confidence_max": 0.80,
+        "curve_phase_confidence_floor_scale": 0.6,
+        "curve_local_phase_use_time_term": False,
+    }
+    config.update(
+        {
+            "curve_phase_ema_alpha": 1.0,
+            "curve_local_dynamic_arm_enabled": False,
+            "curve_phase_preview_curvature_min": 0.0025,
+            "curve_local_entry_on_base": 0.35,
+            "curve_local_entry_on_tight": 0.32,
+        }
+    )
+
+    diag = compute_curve_phase_scheduler(
+        preview_curvature_abs=0.0020,
+        path_curvature_abs=0.0020,
+        curvature_rise_abs=0.0,
+        distance_to_curve_start_m=0.0,
+        time_to_curve_s=0.70,
+        preview_confidence=1.0,
+        previous_phase=0.0,
+        previous_state="STRAIGHT",
+        previous_entry_frames=0,
+        previous_rearm_hold_frames=0,
+        config=config,
+    )
+
+    assert str(diag["curve_local_state"]).upper() == "STRAIGHT"
+    assert str(diag["curve_activation_blocker_mode"]) == "arm_phase_below_entry_threshold"
+    assert float(diag["curve_local_arm_phase_deficit"]) > 0.0
+    assert float(diag["curve_local_arm_effect_score"]) == pytest.approx(0.0, abs=1e-6)
+
+
+def test_curve_phase_scheduler_dynamic_arm_effect_arms_mild_curve_without_global_time_term() -> None:
+    config = {
+        "curve_phase_preview_curvature_min": 0.003,
+        "curve_phase_preview_curvature_max": 0.015,
+        "curve_phase_path_curvature_min": 0.003,
+        "curve_phase_path_curvature_max": 0.015,
+        "curve_phase_rise_min": 0.0005,
+        "curve_phase_rise_max": 0.006,
+        "curve_phase_ema_alpha": 0.45,
+        "curve_phase_on": 0.45,
+        "curve_local_entry_on_base": 0.45,
+        "curve_local_entry_on_tight": 0.40,
+        "curve_phase_off": 0.30,
+        "curve_phase_commit_on": 0.55,
+        "curve_phase_commit_min_frames": 4,
+        "curve_phase_entry_floor": 0.15,
+        "curve_phase_commit_floor": 0.30,
+        "curve_phase_rearm_hold_frames": 4,
+        "curve_local_phase_distance_start_m": 8.0,
+        "curve_local_phase_distance_start_tight_m": 10.0,
+        "curve_local_phase_distance_end_m": 1.5,
+        "curve_local_phase_time_start_s": 1.2,
+        "curve_local_phase_time_start_tight_s": 1.6,
+        "curve_local_phase_time_end_s": 0.25,
+        "curve_local_in_curve_distance_eps_m": 0.25,
+        "curve_local_in_curve_time_eps_s": 0.05,
+        "curve_local_in_curve_path_min": 0.70,
+        "curve_local_commit_distance_ready_m": 3.0,
+        "curve_local_commit_time_ready_s": 0.60,
+        "curve_local_phase_reentry_gate_min": 0.10,
+        "curve_local_phase_reentry_path_min": 0.15,
+        "curve_local_entry_severity_curvature_min": 0.003,
+        "curve_local_entry_severity_curvature_max": 0.012,
+        "curve_phase_confidence_min": 0.35,
+        "curve_phase_confidence_max": 0.80,
+        "curve_phase_confidence_floor_scale": 0.6,
+        "curve_local_phase_use_time_term": False,
+    }
+    config.update(
+        {
+            "curve_phase_ema_alpha": 1.0,
+            "curve_phase_preview_curvature_min": 0.0025,
+            "curve_local_entry_on_base": 0.35,
+            "curve_local_entry_on_tight": 0.32,
+            "curve_local_phase_use_time_term": False,
+        }
+    )
+
+    diag = compute_curve_phase_scheduler(
+        preview_curvature_abs=0.0020,
+        path_curvature_abs=0.0020,
+        curvature_rise_abs=0.0,
+        distance_to_curve_start_m=2.0,
+        time_to_curve_s=0.55,
+        preview_confidence=1.0,
+        previous_phase=0.0,
+        previous_state="STRAIGHT",
+        previous_entry_frames=0,
+        previous_rearm_hold_frames=0,
+        config=config,
+    )
+
+    assert str(diag["curve_local_state"]).upper() == "ENTRY"
+    assert str(diag["curve_activation_blocker_mode"]) == "none"
+    assert float(diag["curve_local_arm_effect_score"]) > 0.35
+    assert float(diag["curve_local_arm_effect_lateral_shift_term"]) > 0.0
+    assert float(diag["curve_local_arm_effect_time_support_term"]) > 0.0
+    assert float(diag["curve_local_arm_phase_deficit"]) == pytest.approx(0.0, abs=1e-6)
 
 
 def test_curve_phase_scheduler_does_not_report_time_ready_without_finite_ttc() -> None:

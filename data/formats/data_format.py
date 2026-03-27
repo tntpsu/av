@@ -372,6 +372,12 @@ class ControlCommand:
     curve_local_distance_horizon_m: Optional[float] = None
     curve_local_time_horizon_s: Optional[float] = None
     curve_local_reentry_ready: Optional[bool] = None
+    curve_activation_blocker_mode: Optional[str] = None
+    curve_local_arm_phase_deficit: Optional[float] = None
+    curve_local_arm_effect_score: Optional[float] = None
+    curve_local_arm_effect_heading_term: Optional[float] = None
+    curve_local_arm_effect_lateral_shift_term: Optional[float] = None
+    curve_local_arm_effect_time_support_term: Optional[float] = None
     curve_local_rearm_cooldown_active: Optional[bool] = None
     curve_local_force_straight_active: Optional[bool] = None
     curve_local_commit_streak_frames: Optional[int] = None

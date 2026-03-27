@@ -295,6 +295,39 @@ The real fix should be transferable across tracks and should derive behavior fro
 
 That means the overlay values from H2 are only allowed to serve as a proof step.
 
+### Exact blocker isolated from the clean transport run
+
+The blocker is not generic “highway thresholds too high.” The concrete failing gate is:
+
+- `/Users/philiptullai/Documents/Coding/av/trajectory/utils.py`
+  - `STRAIGHT -> ENTRY` requires `local_arm_phase_raw >= entry_on_effective`
+
+On the bad windows from:
+- `/Users/philiptullai/Documents/Coding/av/data/recordings/recording_20260326_183057.h5`
+
+the scheduler already knows the curve is locally relevant:
+
+1. `curve_preview_far_phase = 1.0`
+2. `curve_local_arm_ready = 1`
+3. `curve_local_commit_ready = 1`
+4. `curve_local_reentry_ready = 1` on most high-error frames
+5. `distance_to_next_curve_start_m = 0.0` on the worst late windows
+
+but it still stays `STRAIGHT` because:
+
+1. `curve_local_arm_phase_raw p50 ~= 0.028`
+2. `curve_local_entry_on_effective p50 ~= 0.349`
+
+So the exact problem is:
+
+1. the stack recognizes the curve as near
+2. but the active arm-phase signal is built mostly from curvature-normalized terms only
+3. `curve_local_phase_use_time_term` is off, so the saturated time/proximity signal does not help arm
+4. the arm-phase never gets close to the `ENTRY` threshold
+5. the scheduler never leaves `STRAIGHT`
+
+That is the behavior H3 must fix.
+
 ### Files
 
 - `/Users/philiptullai/Documents/Coding/av/config/av_stack_config.yaml`
@@ -308,6 +341,59 @@ That means the overlay values from H2 are only allowed to serve as a proof step.
 ### Required changes
 
 Replace fixed mild-curve thresholds/lookahead behavior with dynamic regime logic.
+
+### H3 execution order
+
+1. Add blocker attribution first.
+2. Change the scheduler arm-phase construction, not just overlay thresholds.
+3. Re-run the same highway scenario.
+4. Only after the scheduler activates correctly, adjust dynamic lookahead shaping.
+
+This sequencing matters because the isolated blocker is upstream of lookahead ownership. If `curve_local_state` never enters `ENTRY`, no amount of downstream owner tuning will make the right path active.
+
+### H3.0 Add first-class blocker attribution
+
+Before changing runtime behavior, add direct blocker metrics so the next run can answer why activation did or did not happen.
+
+Files:
+- `/Users/philiptullai/Documents/Coding/av/trajectory/utils.py`
+- `/Users/philiptullai/Documents/Coding/av/av_stack/orchestrator.py`
+- `/Users/philiptullai/Documents/Coding/av/data/formats/data_format.py`
+- `/Users/philiptullai/Documents/Coding/av/data/recorder.py`
+- `/Users/philiptullai/Documents/Coding/av/tools/drive_summary_core.py`
+- `/Users/philiptullai/Documents/Coding/av/tools/analyze/analyze_drive_overall.py`
+- `/Users/philiptullai/Documents/Coding/av/tools/debug_visualizer/server.py`
+- `/Users/philiptullai/Documents/Coding/av/tools/debug_visualizer/visualizer.js`
+
+Required fields:
+
+1. `curve_activation_blocker_mode`
+   - examples:
+     - `arm_phase_below_entry_threshold`
+     - `reentry_not_ready`
+     - `startup_lockout`
+     - `force_straight`
+     - `none`
+
+2. `curve_local_arm_phase_deficit`
+   - `entry_on_effective - local_arm_phase_raw`
+
+3. `curve_local_arm_effect_score`
+4. `curve_local_arm_effect_heading_term`
+5. `curve_local_arm_effect_lateral_shift_term`
+6. `curve_local_arm_effect_time_support_term`
+
+Required summary/PhilViz items:
+
+1. blocker mode distribution on high-error mild-curve frames
+2. arm-phase raw vs effective entry threshold
+3. effect-score components side-by-side with current curvature terms
+
+The point is to make the next run say directly:
+- “the curve was near, but arm-phase was 0.03 vs threshold 0.35”
+
+not just:
+- “recognizer stayed STRAIGHT”
 
 #### H3.1 Dynamic mild-curve activation
 
@@ -330,8 +416,53 @@ Instead derive activation from a dynamic signal such as:
 
 Practical direction:
 
-- compute a mild-curve relevance score, not just `kappa > fixed_min`
-- allow long-radius arcs at high speed to activate even when raw `kappa` is only around `0.002`
+Build a new dynamic arm-effect score that can arm `ENTRY` for long-radius arcs when they are locally relevant.
+
+Required runtime change:
+
+1. keep the existing local readiness gates:
+   - `curve_local_arm_ready`
+   - `curve_local_commit_ready`
+   - `curve_local_reentry_ready`
+
+2. change the construction of `local_arm_phase_raw`
+   - current code is effectively curvature-dominated
+   - it must become an effect-based score for arming
+
+Recommended arm-effect inputs:
+
+1. map/reference curvature magnitude
+2. expected heading change over the local arm horizon
+3. expected lateral shift over the local arm horizon
+4. time-to-curve support when the curve is near and locally ready
+5. speed
+
+Recommended derived terms:
+
+1. `heading_change_est_rad`
+   - example shape: `preview_curvature_abs * effective_distance_start_m`
+
+2. `lateral_shift_est_m`
+   - example shape: `0.5 * preview_curvature_abs * effective_distance_start_m^2`
+
+3. `time_support_term`
+   - only active when:
+     - local readiness is already true
+     - preview/path evidence is nonzero
+   - this is not a blind "turn on time term globally" change
+
+4. `arm_effect_score`
+   - suggested shape:
+     - `max(heading_term, lateral_shift_term, curvature_term)`
+     - then blend/boost with time support only when locally ready
+
+Critical guardrail:
+
+1. use the dynamic arm-effect score only for arming `STRAIGHT -> ENTRY`
+2. do not use it as the sustain term through straights
+3. keep sustain anchored to actual local path/in-curve evidence so we do not recreate straight-latching on looped tracks
+
+This is the core correction for the isolated blocker.
 
 #### H3.2 Dynamic lookahead shaping
 
@@ -346,6 +477,24 @@ Expected behavior:
 3. tighter curve: stronger contraction
 4. exit: smooth unwind
 
+But do this only after H3.1 is working.
+
+Reason:
+
+1. today the owner is already `phase_active`
+2. but it cannot matter because `curve_local_state` never enters `ENTRY`
+3. fixing lookahead shaping before activation is correct would be downstream tuning against the wrong owner state
+
+Implementation target after H3.1 passes:
+
+1. keep `reference_lookahead_owner_mode = phase_active`
+2. make the entry contraction depend on:
+   - dynamic arm-effect score
+   - speed
+   - distance/time to curve
+   - curve progress
+3. keep unwind smooth and progress-based
+
 #### H3.3 Dynamic local severity
 
 Entry severity should be based on:
@@ -355,6 +504,27 @@ Entry severity should be based on:
 3. speed-scaled relevance
 
 not only raw curvature threshold crossing.
+
+Specific change:
+
+1. today `curve_local_entry_severity` is too small on the mild arc
+   - observed high-error p50: about `0.02`
+2. severity needs to reflect curve effect, not only normalized raw curvature/rise
+
+Recommended severity inputs:
+
+1. heading-change estimate
+2. lateral-shift estimate
+3. preview/path curvature persistence
+4. speed-scaled relevance
+
+Severity should influence:
+
+1. `curve_local_entry_on_effective`
+2. local distance/time horizons
+3. later lookahead shaping
+
+But severity alone is not enough; H3.1 still has to change the arming signal itself.
 
 #### H3.4 Keep the tooling aligned with the dynamic logic
 
@@ -366,14 +536,34 @@ The debug tools must show:
 
 so the new logic is directly attributable.
 
+Add explicit timeline/debug values for:
+
+1. `curve_local_arm_phase_raw`
+2. `curve_local_entry_on_effective`
+3. `curve_local_arm_phase_deficit`
+4. `curve_local_arm_effect_score`
+5. `curve_activation_blocker_mode`
+
+That is the minimum needed to avoid another blind H2-style iteration.
+
 ### Acceptance gate for H3
 
 The dynamic lift is complete only if:
 
 1. the overlay values from H2 are no longer required for the behavior
-2. mild-curve recognition still works on the highway scenario
-3. the same logic is defensible on other mild-curvature tracks
-4. PhilViz/CLI can explain activation from dynamic inputs, not hidden per-track numbers
+2. mild-curve recognition activates on the highway scenario for the right reason
+3. the dominant blocker on high-error mild-curve frames is no longer `arm_phase_below_entry_threshold`
+4. `curve_local_state` materially enters `ENTRY`/`COMMIT` on the mild arc windows
+5. long lookahead on high-error mild-curve frames materially drops
+6. the same logic is defensible on other mild-curvature tracks
+7. PhilViz/CLI can explain activation from dynamic inputs, not hidden per-track numbers
+
+Quantitative target for the first H3 pass:
+
+1. `curve_recognition_inactive_on_high_error_rate` should fall well below the current `100%`
+2. `long_lookahead_on_high_error_rate` should fall well below the current `100%`
+3. `reference_geometry_mismatch_on_high_error_rate` should materially drop from the current `100%`
+4. transport must remain at the current clean state
 
 ## Phase H4: Revalidate and Reclassify the Swerving
 
@@ -395,6 +585,8 @@ Reference recordings:
 5. `pp_lookahead_distance` on mild curves
 6. oscillation zero-cross interval and RMS growth
 7. whether the behavior still holds after removing temporary H2 overlay scaffolding
+8. `curve_activation_blocker_mode` distribution
+9. `curve_local_arm_phase_deficit` P50/P95 on mild-curve high-error windows
 
 ### Pass condition
 
@@ -405,6 +597,58 @@ We should consider the root issue fixed only if:
 3. mild-curve under-activation issue disappears or becomes rare
 4. transport remains at current clean state
 5. the behavior still holds once the solution is represented as dynamic core logic
+
+## File-by-file implementation checklist for H3
+
+### `/Users/philiptullai/Documents/Coding/av/trajectory/utils.py`
+
+1. Add dynamic arm-effect helper(s).
+2. Keep sustain logic conservative and path/in-curve based.
+3. Add blocker classification and arm-phase deficit outputs.
+4. Ensure `local_arm_phase_raw` can rise on mild high-speed arcs when locally ready.
+
+### `/Users/philiptullai/Documents/Coding/av/av_stack/orchestrator.py`
+
+1. Propagate new blocker/effect fields into `reference_point` and `control_command`.
+2. Do not add track-name branching.
+3. Keep transport and ACC paths untouched.
+
+### `/Users/philiptullai/Documents/Coding/av/config/av_stack_config.yaml`
+
+1. Add any new generic dynamic-effect parameters.
+2. Do not add highway-only permanent thresholds for this fix.
+
+### `/Users/philiptullai/Documents/Coding/av/tools/drive_summary_core.py`
+
+1. Add blocker-mode rollups.
+2. Add arm-phase-deficit summaries.
+3. Update `highway_mild_curve_contract` to state whether activation failed because of arm-phase deficit.
+
+### `/Users/philiptullai/Documents/Coding/av/tools/analyze/analyze_drive_overall.py`
+
+1. Print blocker attribution directly in the highway mild-curve section.
+2. Stop recommending generic threshold tuning if the blocker is arm-phase deficit.
+
+### `/Users/philiptullai/Documents/Coding/av/tools/debug_visualizer/visualizer.js`
+
+1. Add an activation-blocker card/timeline.
+2. Show arm-phase raw vs threshold visually.
+
+## Tests for H3
+
+1. Unit tests in `/Users/philiptullai/Documents/Coding/av/tests/` for:
+   - dynamic arm-effect score increasing on mild high-speed arcs
+   - `STRAIGHT -> ENTRY` when curve is near and effect is materially relevant
+   - no false sustain on straight segments with far preview only
+
+2. Summary/PhilViz contract tests for:
+   - blocker mode
+   - arm-phase deficit
+   - effect-score reporting
+
+3. Live validation on:
+   - `/Users/philiptullai/Documents/Coding/av/tracks/scenarios/highway_h2_steady.yml`
+   - then `/Users/philiptullai/Documents/Coding/av/tracks/scenarios/highway_h8_curve_catchup.yml`
 
 ## Tests
 

@@ -3753,6 +3753,12 @@ class AVStack:
                 "curve_local_path_sustain_active": False,
                 "curve_local_distance_ready": False,
                 "curve_local_reentry_ready": False,
+                "curve_activation_blocker_mode": "startup_ignore",
+                "curve_local_arm_phase_deficit": 0.0,
+                "curve_local_arm_effect_score": 0.0,
+                "curve_local_arm_effect_heading_term": 0.0,
+                "curve_local_arm_effect_lateral_shift_term": 0.0,
+                "curve_local_arm_effect_time_support_term": 0.0,
             }
         self._curve_phase_scheduler_state = {
             "curve_phase": float(curve_phase_diag.get("curve_phase", 0.0) or 0.0),
@@ -3791,6 +3797,9 @@ class AVStack:
             ),
             curve_local_entry_severity=float(
                 curve_phase_diag.get("curve_local_entry_severity", 0.0) or 0.0
+            ),
+            curve_local_arm_effect_score=float(
+                curve_phase_diag.get("curve_local_arm_effect_score", 0.0) or 0.0
             ),
             local_gate_weight=float(curve_phase_diag.get("curve_local_gate_weight", 0.0) or 0.0),
             return_diagnostics=True,
@@ -5997,6 +6006,24 @@ class AVStack:
             reference_point['curve_local_reentry_ready'] = bool(
                 curve_phase_diag.get("curve_local_reentry_ready", False)
             )
+            reference_point['curve_activation_blocker_mode'] = str(
+                curve_phase_diag.get("curve_activation_blocker_mode", "none") or "none"
+            )
+            reference_point['curve_local_arm_phase_deficit'] = float(
+                curve_phase_diag.get("curve_local_arm_phase_deficit", 0.0) or 0.0
+            )
+            reference_point['curve_local_arm_effect_score'] = float(
+                curve_phase_diag.get("curve_local_arm_effect_score", 0.0) or 0.0
+            )
+            reference_point['curve_local_arm_effect_heading_term'] = float(
+                curve_phase_diag.get("curve_local_arm_effect_heading_term", 0.0) or 0.0
+            )
+            reference_point['curve_local_arm_effect_lateral_shift_term'] = float(
+                curve_phase_diag.get("curve_local_arm_effect_lateral_shift_term", 0.0) or 0.0
+            )
+            reference_point['curve_local_arm_effect_time_support_term'] = float(
+                curve_phase_diag.get("curve_local_arm_effect_time_support_term", 0.0) or 0.0
+            )
             reference_point['curve_intent'] = float(curve_intent)
             reference_point['curve_intent_raw'] = float(curve_intent_raw)
             reference_point['curve_intent_state'] = str(curve_intent_state)
@@ -6852,6 +6879,30 @@ class AVStack:
         control_command.setdefault('path_curvature_source_used', 'missing_reference')
         control_command.setdefault('path_curvature_primary_abs', float(curvature_primary_abs))
         control_command.setdefault('path_curvature_lane_abs', float(curvature_lane_context_abs))
+        control_command.setdefault(
+            'curve_activation_blocker_mode',
+            str(reference_point.get('curve_activation_blocker_mode', 'none') or 'none'),
+        )
+        control_command.setdefault(
+            'curve_local_arm_phase_deficit',
+            float(reference_point.get('curve_local_arm_phase_deficit', 0.0) or 0.0),
+        )
+        control_command.setdefault(
+            'curve_local_arm_effect_score',
+            float(reference_point.get('curve_local_arm_effect_score', 0.0) or 0.0),
+        )
+        control_command.setdefault(
+            'curve_local_arm_effect_heading_term',
+            float(reference_point.get('curve_local_arm_effect_heading_term', 0.0) or 0.0),
+        )
+        control_command.setdefault(
+            'curve_local_arm_effect_lateral_shift_term',
+            float(reference_point.get('curve_local_arm_effect_lateral_shift_term', 0.0) or 0.0),
+        )
+        control_command.setdefault(
+            'curve_local_arm_effect_time_support_term',
+            float(reference_point.get('curve_local_arm_effect_time_support_term', 0.0) or 0.0),
+        )
 
         self._last_turn_feasibility_active = bool(control_command.get('turn_feasibility_active', False))
         self._last_turn_feasibility_infeasible = bool(control_command.get('turn_feasibility_infeasible', False))
@@ -8902,6 +8953,18 @@ class AVStack:
             ),
             curve_local_time_horizon_s=control_command.get('curve_local_time_horizon_s'),
             curve_local_reentry_ready=control_command.get('curve_local_reentry_ready'),
+            curve_activation_blocker_mode=control_command.get('curve_activation_blocker_mode'),
+            curve_local_arm_phase_deficit=control_command.get('curve_local_arm_phase_deficit'),
+            curve_local_arm_effect_score=control_command.get('curve_local_arm_effect_score'),
+            curve_local_arm_effect_heading_term=control_command.get(
+                'curve_local_arm_effect_heading_term'
+            ),
+            curve_local_arm_effect_lateral_shift_term=control_command.get(
+                'curve_local_arm_effect_lateral_shift_term'
+            ),
+            curve_local_arm_effect_time_support_term=control_command.get(
+                'curve_local_arm_effect_time_support_term'
+            ),
             curve_local_rearm_cooldown_active=control_command.get(
                 'curve_local_rearm_cooldown_active'
             ),

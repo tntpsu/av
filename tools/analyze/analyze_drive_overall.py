@@ -1404,7 +1404,8 @@ def _print_summary_report(recording_path: Path, summary: Dict, analyze_to_failur
             f"mildOnHighErr={(float(highway_mild_curve_contract.get('mild_curve_present_on_high_error_rate')) if highway_mild_curve_contract.get('mild_curve_present_on_high_error_rate') is not None else float('nan')):.1f}%, "
             f"recognizerInactive={(float(highway_mild_curve_contract.get('curve_recognition_inactive_on_high_error_rate')) if highway_mild_curve_contract.get('curve_recognition_inactive_on_high_error_rate') is not None else float('nan')):.1f}%, "
             f"longLook={(float(highway_mild_curve_contract.get('long_lookahead_on_high_error_rate')) if highway_mild_curve_contract.get('long_lookahead_on_high_error_rate') is not None else float('nan')):.1f}%, "
-            f"smallOffset={(float(highway_mild_curve_contract.get('reference_geometry_mismatch_on_high_error_rate')) if highway_mild_curve_contract.get('reference_geometry_mismatch_on_high_error_rate') is not None else float('nan')):.1f}%"
+            f"smallOffset={(float(highway_mild_curve_contract.get('reference_geometry_mismatch_on_high_error_rate')) if highway_mild_curve_contract.get('reference_geometry_mismatch_on_high_error_rate') is not None else float('nan')):.1f}%, "
+            f"blocker={str(highway_mild_curve_contract.get('curve_activation_blocker_mode_on_underactivated') or highway_mild_curve_contract.get('curve_activation_blocker_mode_on_high_error') or 'N/A')}"
         )
     print()
 
@@ -1919,6 +1920,11 @@ def _print_summary_report(recording_path: Path, summary: Dict, analyze_to_failur
         kappa_stats = highway_mild_curve_contract.get("mpc_kappa_ref_abs") or {}
         pp_stats = highway_mild_curve_contract.get("pp_lookahead_distance_m") or {}
         ref_ld_stats = highway_mild_curve_contract.get("reference_lookahead_target_m") or {}
+        arm_deficit_stats = highway_mild_curve_contract.get("curve_local_arm_phase_deficit") or {}
+        arm_effect_stats = highway_mild_curve_contract.get("curve_local_arm_effect_score") or {}
+        arm_heading_stats = highway_mild_curve_contract.get("curve_local_arm_effect_heading_term") or {}
+        arm_lateral_stats = highway_mild_curve_contract.get("curve_local_arm_effect_lateral_shift_term") or {}
+        arm_time_stats = highway_mild_curve_contract.get("curve_local_arm_effect_time_support_term") or {}
         print(
             "   Error / Lane Offset P50-P95: "
             f"{float(lat_stats.get('p50') or 0.0):.3f}-{float(lat_stats.get('p95') or 0.0):.3f} m / "
@@ -1930,6 +1936,18 @@ def _print_summary_report(recording_path: Path, summary: Dict, analyze_to_failur
             f"{float(kappa_stats.get('p50') or 0.0):.4f} / "
             f"{float(pp_stats.get('p50') or 0.0):.2f} / "
             f"{float(ref_ld_stats.get('p50') or 0.0):.2f}"
+        )
+        print(
+            "   Blocker / Arm Deficit / Arm Effect (P50): "
+            f"{str(highway_mild_curve_contract.get('curve_activation_blocker_mode_on_underactivated') or highway_mild_curve_contract.get('curve_activation_blocker_mode_on_high_error') or 'N/A')} / "
+            f"{float(arm_deficit_stats.get('p50') or 0.0):.3f} / "
+            f"{float(arm_effect_stats.get('p50') or 0.0):.3f}"
+        )
+        print(
+            "   Arm Effect Terms Heading / Lateral / Time (P50): "
+            f"{float(arm_heading_stats.get('p50') or 0.0):.3f} / "
+            f"{float(arm_lateral_stats.get('p50') or 0.0):.3f} / "
+            f"{float(arm_time_stats.get('p50') or 0.0):.3f}"
         )
     else:
         print("   Highway Mild-Curve Contract: N/A")
