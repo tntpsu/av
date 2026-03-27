@@ -8458,6 +8458,10 @@ def analyze_recording_summary(
         recommendations.append(
             "Run intent differs from road-limit expectation - confirm scenario target and lead-follow mode before interpreting speed behavior."
         )
+    if acc_comfort_contract.get("following_convergence_issue_detected"):
+        recommendations.append(
+            "ACC is trailing farther than the intended gap - inspect following convergence before tuning comfort or changing scenario policy."
+        )
     if highway_mild_curve_contract.get("issue_detected"):
         recommendations.append(
             "Mild map-backed curve is present but recognition stays STRAIGHT and lookahead stays long - fix dynamic curve activation and lookahead shaping before steering gain tuning."
@@ -8651,6 +8655,14 @@ def analyze_recording_summary(
         key_issues.append(
             "Highway mild-curve under-activation (reference geometry mismatch on a map-backed arc)"
         )
+    if acc_comfort_contract.get("following_convergence_issue_detected"):
+        far_trailing_rate = acc_comfort_contract.get("gap_above_target_plus_10m_rate")
+        if far_trailing_rate is not None:
+            key_issues.append(
+                f"ACC following too conservative ({float(far_trailing_rate):.1f}% > target+10m)"
+            )
+        else:
+            key_issues.append("ACC following too conservative")
     if lateral_owner_contract.get("suppress_legacy_curve_intent_warnings"):
         key_issues = [
             issue
