@@ -1727,6 +1727,24 @@ class Visualizer {
                 html += '</div>';
             }
 
+            const leadContinuity = summary.lead_continuity_contract || null;
+            if (leadContinuity && typeof leadContinuity === 'object' && String(leadContinuity.availability || '').toLowerCase() === 'available') {
+                const issueDetected = Boolean(leadContinuity.issue_detected);
+                html += '<div id="summary-section-lead-continuity-contract" style="background: #2a2a2a; padding: 1rem; border-radius: 8px; margin-bottom: 1.5rem; border-left: 4px solid #4a90e2;">';
+                html += '<h3 style="margin-top: 0; color: #4a90e2;">Lead Continuity Contract</h3>';
+                html += '<table style="width: 100%; color: #e0e0e0;">';
+                html += `<tr><td>Issue Detected:</td><td style="text-align: right; color:${issueDetected ? '#ff6b6b' : '#4caf50'};">${issueDetected ? 'YES' : 'NO'}</td></tr>`;
+                html += `<tr><td>Candidate / Missed Candidate:</td><td style="text-align: right;">${Number.isFinite(Number(leadContinuity.candidate_present_rate_pct)) ? Number(leadContinuity.candidate_present_rate_pct).toFixed(1) : 'N/A'}% / ${Number.isFinite(Number(leadContinuity.missed_candidate_rate_pct)) ? Number(leadContinuity.missed_candidate_rate_pct).toFixed(1) : 'N/A'}%</td></tr>`;
+                html += `<tr><td>Reject Mode / Issue Mode:</td><td style="text-align: right;">${this.escapeHtml(String(leadContinuity.reject_reason_mode || 'none'))} / ${this.escapeHtml(String(leadContinuity.issue_mode || 'none'))}</td></tr>`;
+                html += `<tr><td>Cone / Same-Lane / Wrong-Lane / Opposite:</td><td style="text-align: right;">${Number.isFinite(Number(leadContinuity.out_of_cone_rate_pct)) ? Number(leadContinuity.out_of_cone_rate_pct).toFixed(1) : 'N/A'}% / ${Number.isFinite(Number(leadContinuity.out_of_cone_same_lane_rate_pct)) ? Number(leadContinuity.out_of_cone_same_lane_rate_pct).toFixed(1) : 'N/A'}% / ${Number.isFinite(Number(leadContinuity.out_of_cone_wrong_lane_rate_pct)) ? Number(leadContinuity.out_of_cone_wrong_lane_rate_pct).toFixed(1) : 'N/A'}% / ${Number.isFinite(Number(leadContinuity.out_of_cone_opposite_direction_rate_pct)) ? Number(leadContinuity.out_of_cone_opposite_direction_rate_pct).toFixed(1) : 'N/A'}%</td></tr>`;
+                html += `<tr><td>Azimuth P50/P95:</td><td style="text-align: right;">${Number.isFinite(Number(leadContinuity.target_azimuth_abs_p50_deg)) ? Number(leadContinuity.target_azimuth_abs_p50_deg).toFixed(1) : 'N/A'} / ${Number.isFinite(Number(leadContinuity.target_azimuth_abs_p95_deg)) ? Number(leadContinuity.target_azimuth_abs_p95_deg).toFixed(1) : 'N/A'} deg</td></tr>`;
+                html += `<tr><td>Heading Δ P50/P95:</td><td style="text-align: right;">${Number.isFinite(Number(leadContinuity.target_heading_delta_abs_p50_deg)) ? Number(leadContinuity.target_heading_delta_abs_p50_deg).toFixed(1) : 'N/A'} / ${Number.isFinite(Number(leadContinuity.target_heading_delta_abs_p95_deg)) ? Number(leadContinuity.target_heading_delta_abs_p95_deg).toFixed(1) : 'N/A'} deg</td></tr>`;
+                html += `<tr><td>Same-Lane Conf P50/P05:</td><td style="text-align: right;">${Number.isFinite(Number(leadContinuity.same_lane_confidence_p50)) ? Number(leadContinuity.same_lane_confidence_p50).toFixed(2) : 'N/A'} / ${Number.isFinite(Number(leadContinuity.same_lane_confidence_p05)) ? Number(leadContinuity.same_lane_confidence_p05).toFixed(2) : 'N/A'}</td></tr>`;
+                html += `<tr><td>Lane Offset / Arc Distance P50:</td><td style="text-align: right;">${Number.isFinite(Number(leadContinuity.target_lane_offset_p50_m)) ? Number(leadContinuity.target_lane_offset_p50_m).toFixed(2) : 'N/A'} m / ${Number.isFinite(Number(leadContinuity.target_arc_distance_p50_m)) ? Number(leadContinuity.target_arc_distance_p50_m).toFixed(1) : 'N/A'} m</td></tr>`;
+                html += '</table>';
+                html += '</div>';
+            }
+
             const lateralOwner = summary.lateral_owner_contract || null;
             if (lateralOwner && typeof lateralOwner === 'object' && String(lateralOwner.availability || '').toLowerCase() === 'available') {
                 const healthy = Boolean(lateralOwner.authoritative_owner_healthy);

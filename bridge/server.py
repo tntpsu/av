@@ -2532,6 +2532,13 @@ class VehicleState(BaseModel):
     radar_fwd_distance_m: float = 0.0     # noisy range to lead vehicle (m)
     radar_fwd_range_rate_mps: float = 0.0 # Doppler range rate (+closing, m/s)
     radar_fwd_snr: float = 0.0            # signal-to-noise proxy (1.0 at 30m)
+    radar_fwd_candidate_present: float = 0.0
+    radar_fwd_reject_reason: str = "no_candidate"
+    radar_fwd_target_azimuth_deg: float = 0.0
+    radar_fwd_target_heading_delta_deg: float = 0.0
+    radar_fwd_target_same_lane_confidence: float = -1.0
+    radar_fwd_target_lane_offset_m: float = 0.0
+    radar_fwd_target_arc_distance_m: float = 0.0
     lead_collision_detected: bool = False
     lead_collision_override_active: bool = False
 

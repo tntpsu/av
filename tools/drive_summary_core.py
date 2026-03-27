@@ -6,6 +6,7 @@ Extracted from analyze_drive_overall.py for use in debug visualizer.
 import math
 import sys
 import json
+from collections import Counter
 from pathlib import Path
 from typing import Dict, Optional
 
@@ -2531,6 +2532,13 @@ def _build_acc_health_summary(data: Dict, n_frames: int, speed: Optional[np.ndar
     recent_detection_loss_raw = data.get('acc_recent_detection_loss')
     detection_loss_event_delta_raw = data.get('acc_detection_loss_event_delta')
     no_detect_run_length_raw = data.get('acc_no_detect_run_length')
+    candidate_present_raw = data.get('radar_fwd_candidate_present')
+    reject_reason_raw = data.get('radar_fwd_reject_reason')
+    target_azimuth_raw = data.get('radar_fwd_target_azimuth_deg')
+    target_heading_delta_raw = data.get('radar_fwd_target_heading_delta_deg')
+    same_lane_confidence_raw = data.get('radar_fwd_target_same_lane_confidence')
+    target_lane_offset_raw = data.get('radar_fwd_target_lane_offset_m')
+    target_arc_distance_raw = data.get('radar_fwd_target_arc_distance_m')
     range_rate_raw = data.get('radar_fwd_range_rate_mps')
     acc_target_speed_raw = data.get('acc_target_speed_mps')
     if acc_target_speed_raw is None:
@@ -2629,6 +2637,46 @@ def _build_acc_health_summary(data: Dict, n_frames: int, speed: Optional[np.ndar
         np.asarray(no_detect_run_length_raw[:n], dtype=float)
         if no_detect_run_length_raw is not None
         else np.zeros(n, dtype=float)
+    )
+    candidate_present_arr = (
+        np.asarray(candidate_present_raw[:n], dtype=float)
+        if candidate_present_raw is not None
+        else np.zeros(n, dtype=float)
+    )
+    if reject_reason_raw is not None:
+        reject_reason_arr = np.array(
+            [
+                value.decode() if isinstance(value, bytes) else str(value)
+                for value in reject_reason_raw[:n]
+            ],
+            dtype=object,
+        )
+    else:
+        reject_reason_arr = np.array(["none"] * n, dtype=object)
+    target_azimuth_arr = (
+        np.asarray(target_azimuth_raw[:n], dtype=float)
+        if target_azimuth_raw is not None
+        else np.full(n, np.nan)
+    )
+    target_heading_delta_arr = (
+        np.asarray(target_heading_delta_raw[:n], dtype=float)
+        if target_heading_delta_raw is not None
+        else np.full(n, np.nan)
+    )
+    same_lane_confidence_arr = (
+        np.asarray(same_lane_confidence_raw[:n], dtype=float)
+        if same_lane_confidence_raw is not None
+        else np.full(n, np.nan)
+    )
+    target_lane_offset_arr = (
+        np.asarray(target_lane_offset_raw[:n], dtype=float)
+        if target_lane_offset_raw is not None
+        else np.full(n, np.nan)
+    )
+    target_arc_distance_arr = (
+        np.asarray(target_arc_distance_raw[:n], dtype=float)
+        if target_arc_distance_raw is not None
+        else np.full(n, np.nan)
     )
 
     detected_bool = detected_arr > 0.5
@@ -2930,28 +2978,85 @@ def _build_acc_health_summary(data: Dict, n_frames: int, speed: Optional[np.ndar
         and acc_commanded_jerk_p95 <= ACC_JERK_P95_GATE_MPS3
     )
 
-    # Detection rate: frames where lead was present (target_gap_m > 0) and we detected
+    continuity_scope_mask = np.zeros(n, dtype=bool)
+    continuity_window_count = 0
+    continuity_anchor_mask = candidate_present_arr > 0.5
+    continuity_anchor_detected = continuity_anchor_mask & detected_bool
+    if np.any(continuity_anchor_detected):
+        first_detect_idx = int(np.flatnonzero(continuity_anchor_detected)[0])
+        continuity_scope_mask = continuity_anchor_mask.copy()
+        continuity_scope_mask[:first_detect_idx] = False
+        continuity_window_count = int(n - first_detect_idx)
+    # Detection rate: measured after first target acquisition while a candidate exists.
     acc_detection_rate = 1.0
-    if target_gap_raw is not None:
+    if np.any(continuity_scope_mask):
+        acc_detection_rate = float(np.mean(detected_arr[continuity_scope_mask] > 0.5))
+    elif target_gap_raw is not None:
         lead_present_mask = acc_mask & (target_gap_arr > 0.0)
         if np.any(lead_present_mask):
             acc_detection_rate = float(np.mean(detected_arr[lead_present_mask] > 0.5))
+    detection_health_mask = continuity_scope_mask & np.isfinite(recent_detection_loss_arr)
+    stable_detection_mask = continuity_scope_mask & np.isfinite(detection_stable_frames_arr)
     stable_detection_rate = (
-        float(np.mean(detection_stable_frames_arr[valid_follow_mask] >= 3.0) * 100.0)
-        if valid_follow_count > 0
-        else 0.0
+        float(np.mean(detection_stable_frames_arr[stable_detection_mask] >= 3.0) * 100.0)
+        if np.any(stable_detection_mask)
+        else (
+            float(np.mean(detection_stable_frames_arr[valid_follow_mask] >= 3.0) * 100.0)
+            if valid_follow_count > 0
+            else 0.0
+        )
     )
     recent_detection_loss_rate = (
-        float(np.mean(recent_detection_loss_arr[acc_mask & np.isfinite(recent_detection_loss_arr)] > 0.5) * 100.0)
-        if np.any(acc_mask & np.isfinite(recent_detection_loss_arr))
+        float(np.mean(recent_detection_loss_arr[detection_health_mask] > 0.5) * 100.0)
+        if np.any(detection_health_mask)
         else 0.0
     )
-    detection_loss_event_count = int(np.sum(detection_loss_event_delta_arr[np.isfinite(detection_loss_event_delta_arr)] > 0.5))
+    detection_loss_event_count = int(
+        np.sum(detection_loss_event_delta_arr[continuity_scope_mask & np.isfinite(detection_loss_event_delta_arr)] > 0.5)
+    )
     no_detect_run_length_max = (
-        int(np.max(no_detect_run_length_arr[np.isfinite(no_detect_run_length_arr)]))
-        if np.isfinite(no_detect_run_length_arr).any()
+        int(np.max(no_detect_run_length_arr[continuity_scope_mask & np.isfinite(no_detect_run_length_arr)]))
+        if np.any(continuity_scope_mask & np.isfinite(no_detect_run_length_arr))
         else 0
     )
+    continuity_base_mask = continuity_scope_mask
+    continuity_base_count = int(np.sum(continuity_base_mask))
+    continuity_miss_mask = continuity_base_mask & ~detected_bool
+    continuity_miss_count = int(np.sum(continuity_miss_mask))
+    candidate_present_rate = (
+        float(continuity_base_count / continuity_window_count * 100.0)
+        if continuity_window_count > 0
+        else 0.0
+    )
+    missed_candidate_rate = (
+        float(continuity_miss_count / continuity_base_count * 100.0)
+        if continuity_base_count > 0
+        else 0.0
+    )
+    continuity_reject_mode = "none"
+    if continuity_miss_count > 0:
+        miss_reasons = reject_reason_arr[continuity_miss_mask]
+        reason_counts = Counter(str(reason or "none") for reason in miss_reasons)
+        continuity_reject_mode = max(reason_counts.items(), key=lambda item: item[1])[0]
+
+    def _continuity_rate(reason: str) -> float:
+        if continuity_base_count <= 0:
+            return 0.0
+        return float(np.mean((reject_reason_arr[continuity_base_mask] == reason).astype(float)) * 100.0)
+
+    miss_azimuth = np.abs(target_azimuth_arr[continuity_miss_mask & np.isfinite(target_azimuth_arr)])
+    miss_heading_delta = np.abs(
+        target_heading_delta_arr[continuity_miss_mask & np.isfinite(target_heading_delta_arr)]
+    )
+    miss_same_lane_conf = same_lane_confidence_arr[
+        continuity_miss_mask & np.isfinite(same_lane_confidence_arr) & (same_lane_confidence_arr >= 0.0)
+    ]
+    miss_lane_offset = target_lane_offset_arr[
+        continuity_miss_mask & np.isfinite(target_lane_offset_arr)
+    ]
+    miss_arc_distance = target_arc_distance_arr[
+        continuity_miss_mask & np.isfinite(target_arc_distance_arr)
+    ]
     detection_issue_detected = bool(
         acc_detection_rate < ACC_DETECTION_RATE_GATE
         or recent_detection_loss_rate > 5.0
@@ -2991,6 +3096,9 @@ def _build_acc_health_summary(data: Dict, n_frames: int, speed: Optional[np.ndar
 
     return {
         "acc_active_pct": round(acc_active_pct, 2),
+        "acc_lead_continuity_available": bool(
+            candidate_present_raw is not None or reject_reason_raw is not None
+        ),
         # Tier 1
         "acc_collision_events": acc_collision_events,
         "acc_ttc_violation_events": acc_ttc_violation_events,
@@ -3057,6 +3165,23 @@ def _build_acc_health_summary(data: Dict, n_frames: int, speed: Optional[np.ndar
         "acc_no_detect_run_length_max": no_detect_run_length_max,
         "acc_detection_issue_detected": detection_issue_detected,
         "acc_detection_issue_mode": detection_issue_mode,
+        "acc_candidate_present_rate": round(candidate_present_rate, 3),
+        "acc_missed_candidate_rate": round(missed_candidate_rate, 3),
+        "acc_lead_continuity_reject_reason_mode": continuity_reject_mode,
+        "acc_out_of_cone_rate": round(_continuity_rate("out_of_cone"), 3),
+        "acc_out_of_cone_same_lane_rate": round(_continuity_rate("out_of_cone_same_lane"), 3),
+        "acc_out_of_cone_wrong_lane_rate": round(_continuity_rate("out_of_cone_wrong_lane"), 3),
+        "acc_out_of_cone_opposite_direction_rate": round(
+            _continuity_rate("out_of_cone_opposite_direction"), 3
+        ),
+        "acc_target_azimuth_abs_p50_deg": round(float(np.percentile(miss_azimuth, 50)), 3) if miss_azimuth.size > 0 else 0.0,
+        "acc_target_azimuth_abs_p95_deg": round(float(np.percentile(miss_azimuth, 95)), 3) if miss_azimuth.size > 0 else 0.0,
+        "acc_target_heading_delta_abs_p50_deg": round(float(np.percentile(miss_heading_delta, 50)), 3) if miss_heading_delta.size > 0 else 0.0,
+        "acc_target_heading_delta_abs_p95_deg": round(float(np.percentile(miss_heading_delta, 95)), 3) if miss_heading_delta.size > 0 else 0.0,
+        "acc_target_same_lane_confidence_p50": round(float(np.percentile(miss_same_lane_conf, 50)), 3) if miss_same_lane_conf.size > 0 else 0.0,
+        "acc_target_same_lane_confidence_p05": round(float(np.percentile(miss_same_lane_conf, 5)), 3) if miss_same_lane_conf.size > 0 else 0.0,
+        "acc_target_lane_offset_p50_m": round(float(np.percentile(miss_lane_offset, 50)), 3) if miss_lane_offset.size > 0 else 0.0,
+        "acc_target_arc_distance_p50_m": round(float(np.percentile(miss_arc_distance, 50)), 3) if miss_arc_distance.size > 0 else 0.0,
         "acc_emergency_brake_events": acc_emergency_brake_events,
         "gap_rmse_gate_pass": gap_rmse_gate_pass,
         "ttc_min_gate_pass": ttc_min_gate_pass,
@@ -3666,6 +3791,87 @@ def _build_acc_detection_contract_summary(acc_health: Optional[Dict]) -> Dict:
         "issue_detected": issue_detected,
         "issue_mode": str(acc_health.get("acc_detection_issue_mode") or "none"),
         "convergence_tuning_valid": not issue_detected,
+    }
+
+
+def _build_lead_continuity_contract_summary(acc_health: Optional[Dict]) -> Dict:
+    unavailable = {
+        "schema_version": "v1",
+        "availability": "unavailable",
+        "candidate_present_rate_pct": None,
+        "missed_candidate_rate_pct": None,
+        "reject_reason_mode": "none",
+        "out_of_cone_rate_pct": None,
+        "out_of_cone_same_lane_rate_pct": None,
+        "out_of_cone_wrong_lane_rate_pct": None,
+        "out_of_cone_opposite_direction_rate_pct": None,
+        "target_azimuth_abs_p50_deg": None,
+        "target_azimuth_abs_p95_deg": None,
+        "target_heading_delta_abs_p50_deg": None,
+        "target_heading_delta_abs_p95_deg": None,
+        "same_lane_confidence_p50": None,
+        "same_lane_confidence_p05": None,
+        "target_lane_offset_p50_m": None,
+        "target_arc_distance_p50_m": None,
+        "issue_detected": False,
+        "issue_mode": "none",
+    }
+    if not acc_health:
+        return unavailable
+    if not bool(acc_health.get("acc_lead_continuity_available", False)):
+        return unavailable
+
+    reject_reason_mode = str(acc_health.get("acc_lead_continuity_reject_reason_mode") or "none")
+    missed_candidate_rate = safe_float(acc_health.get("acc_missed_candidate_rate"))
+    issue_detected = bool(
+        acc_health.get("acc_detection_issue_detected", False)
+        and missed_candidate_rate is not None
+        and missed_candidate_rate > 0.0
+    )
+    issue_mode = reject_reason_mode if issue_detected else "none"
+
+    return {
+        "schema_version": "v1",
+        "availability": "available",
+        "candidate_present_rate_pct": safe_float(acc_health.get("acc_candidate_present_rate")),
+        "missed_candidate_rate_pct": missed_candidate_rate,
+        "reject_reason_mode": reject_reason_mode,
+        "out_of_cone_rate_pct": safe_float(acc_health.get("acc_out_of_cone_rate")),
+        "out_of_cone_same_lane_rate_pct": safe_float(
+            acc_health.get("acc_out_of_cone_same_lane_rate")
+        ),
+        "out_of_cone_wrong_lane_rate_pct": safe_float(
+            acc_health.get("acc_out_of_cone_wrong_lane_rate")
+        ),
+        "out_of_cone_opposite_direction_rate_pct": safe_float(
+            acc_health.get("acc_out_of_cone_opposite_direction_rate")
+        ),
+        "target_azimuth_abs_p50_deg": safe_float(
+            acc_health.get("acc_target_azimuth_abs_p50_deg")
+        ),
+        "target_azimuth_abs_p95_deg": safe_float(
+            acc_health.get("acc_target_azimuth_abs_p95_deg")
+        ),
+        "target_heading_delta_abs_p50_deg": safe_float(
+            acc_health.get("acc_target_heading_delta_abs_p50_deg")
+        ),
+        "target_heading_delta_abs_p95_deg": safe_float(
+            acc_health.get("acc_target_heading_delta_abs_p95_deg")
+        ),
+        "same_lane_confidence_p50": safe_float(
+            acc_health.get("acc_target_same_lane_confidence_p50")
+        ),
+        "same_lane_confidence_p05": safe_float(
+            acc_health.get("acc_target_same_lane_confidence_p05")
+        ),
+        "target_lane_offset_p50_m": safe_float(
+            acc_health.get("acc_target_lane_offset_p50_m")
+        ),
+        "target_arc_distance_p50_m": safe_float(
+            acc_health.get("acc_target_arc_distance_p50_m")
+        ),
+        "issue_detected": issue_detected,
+        "issue_mode": issue_mode,
     }
 
 
@@ -4306,6 +4512,33 @@ def analyze_recording_summary(
             data['radar_fwd_range_rate_mps'] = (
                 np.array(f['vehicle/radar_fwd_range_rate_mps'][:])
                 if 'vehicle/radar_fwd_range_rate_mps' in f else None
+            )
+            data['radar_fwd_candidate_present'] = (
+                np.array(f['vehicle/radar_fwd_candidate_present'][:])
+                if 'vehicle/radar_fwd_candidate_present' in f else None
+            )
+            data['radar_fwd_reject_reason'] = (
+                f['vehicle/radar_fwd_reject_reason'][:] if 'vehicle/radar_fwd_reject_reason' in f else None
+            )
+            data['radar_fwd_target_azimuth_deg'] = (
+                np.array(f['vehicle/radar_fwd_target_azimuth_deg'][:])
+                if 'vehicle/radar_fwd_target_azimuth_deg' in f else None
+            )
+            data['radar_fwd_target_heading_delta_deg'] = (
+                np.array(f['vehicle/radar_fwd_target_heading_delta_deg'][:])
+                if 'vehicle/radar_fwd_target_heading_delta_deg' in f else None
+            )
+            data['radar_fwd_target_same_lane_confidence'] = (
+                np.array(f['vehicle/radar_fwd_target_same_lane_confidence'][:])
+                if 'vehicle/radar_fwd_target_same_lane_confidence' in f else None
+            )
+            data['radar_fwd_target_lane_offset_m'] = (
+                np.array(f['vehicle/radar_fwd_target_lane_offset_m'][:])
+                if 'vehicle/radar_fwd_target_lane_offset_m' in f else None
+            )
+            data['radar_fwd_target_arc_distance_m'] = (
+                np.array(f['vehicle/radar_fwd_target_arc_distance_m'][:])
+                if 'vehicle/radar_fwd_target_arc_distance_m' in f else None
             )
             data['acc_gap_error_m'] = (
                 np.array(f['vehicle/acc_gap_error_m'][:])
@@ -8279,6 +8512,7 @@ def analyze_recording_summary(
         hotspot_attribution=hotspot_attribution,
     )
     acc_detection_contract = _build_acc_detection_contract_summary(acc_health)
+    lead_continuity_contract = _build_lead_continuity_contract_summary(acc_health)
 
     # ACC Safety layer deductions (zero when acc_health is None)
     acc_collision_penalty = 0.0
@@ -9257,6 +9491,7 @@ def analyze_recording_summary(
         "run_intent": run_intent,
         "acc_comfort_contract": acc_comfort_contract,
         "acc_detection_contract": acc_detection_contract,
+        "lead_continuity_contract": lead_continuity_contract,
         "lateral_owner_contract": lateral_owner_contract,
         "highway_mild_curve_contract": highway_mild_curve_contract,
         "mpc_gt_cross_track_contract": mpc_gt_cross_track_contract,

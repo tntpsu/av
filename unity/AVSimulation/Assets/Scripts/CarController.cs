@@ -1940,6 +1940,13 @@ public class VehicleState
     public float radar_fwd_distance_m   = 0.0f;  // noisy range to lead vehicle (m)
     public float radar_fwd_range_rate_mps = 0.0f; // Doppler range rate (+ = closing, m/s)
     public float radar_fwd_snr          = 0.0f;  // signal-to-noise proxy [0, 1]
+    public float radar_fwd_candidate_present = 0.0f;  // 1.0 when a lead candidate exists in scene
+    public string radar_fwd_reject_reason = "no_candidate";
+    public float radar_fwd_target_azimuth_deg = 0.0f;
+    public float radar_fwd_target_heading_delta_deg = 0.0f;
+    public float radar_fwd_target_same_lane_confidence = -1.0f;
+    public float radar_fwd_target_lane_offset_m = 0.0f;
+    public float radar_fwd_target_arc_distance_m = 0.0f;
     public bool lead_collision_detected = false;
     public bool lead_collision_override_active = false;
 }

@@ -2348,6 +2348,7 @@ def _print_summary_report(recording_path: Path, summary: Dict, analyze_to_failur
     acc_health = summary.get("acc_health")
     acc_comfort_contract = summary.get("acc_comfort_contract") or {}
     acc_detection_contract = summary.get("acc_detection_contract") or {}
+    lead_continuity_contract = summary.get("lead_continuity_contract") or {}
     if acc_health is not None:
         print("20. ACC PERFORMANCE")
         print("-" * 80)
@@ -2459,6 +2460,33 @@ def _print_summary_report(recording_path: Path, summary: Dict, analyze_to_failur
                 f" {acc_detection_contract.get('detection_loss_event_count', 0)} /"
                 f" {acc_detection_contract.get('no_detect_run_length_max', 0)} /"
                 f" {acc_detection_contract.get('issue_mode', 'none')}"
+            )
+        if lead_continuity_contract:
+            print(
+                f"   Candidate / Missed Candidate / Reject:"
+                f" {lead_continuity_contract.get('candidate_present_rate_pct', 0.0):.1f}% /"
+                f" {lead_continuity_contract.get('missed_candidate_rate_pct', 0.0):.1f}% /"
+                f" {lead_continuity_contract.get('reject_reason_mode', 'none')}"
+            )
+            print(
+                f"   Cone / Same-Lane / Wrong-Lane / Opposite:"
+                f" {lead_continuity_contract.get('out_of_cone_rate_pct', 0.0):.1f}% /"
+                f" {lead_continuity_contract.get('out_of_cone_same_lane_rate_pct', 0.0):.1f}% /"
+                f" {lead_continuity_contract.get('out_of_cone_wrong_lane_rate_pct', 0.0):.1f}% /"
+                f" {lead_continuity_contract.get('out_of_cone_opposite_direction_rate_pct', 0.0):.1f}%"
+            )
+            print(
+                f"   Azimuth P50/P95 / HeadingΔ P50/P95:"
+                f" {lead_continuity_contract.get('target_azimuth_abs_p50_deg', 0.0):.1f}/"
+                f"{lead_continuity_contract.get('target_azimuth_abs_p95_deg', 0.0):.1f} deg /"
+                f" {lead_continuity_contract.get('target_heading_delta_abs_p50_deg', 0.0):.1f}/"
+                f"{lead_continuity_contract.get('target_heading_delta_abs_p95_deg', 0.0):.1f} deg"
+            )
+            print(
+                f"   Same-Lane Conf P50/P05 / Arc P50:"
+                f" {lead_continuity_contract.get('same_lane_confidence_p50', 0.0):.2f}/"
+                f"{lead_continuity_contract.get('same_lane_confidence_p05', 0.0):.2f} /"
+                f" {lead_continuity_contract.get('target_arc_distance_p50_m', 0.0):.1f} m"
             )
         print()
 

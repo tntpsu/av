@@ -728,6 +728,13 @@ def test_recorder_writes_sync_packet_and_post_jump_fields(tmp_path: Path) -> Non
             sync_packet_missing_vehicle=False,
             lead_collision_detected=True,
             lead_collision_override_active=True,
+            radar_fwd_candidate_present=1.0,
+            radar_fwd_reject_reason="collision_override",
+            radar_fwd_target_azimuth_deg=6.8,
+            radar_fwd_target_heading_delta_deg=6.9,
+            radar_fwd_target_same_lane_confidence=0.92,
+            radar_fwd_target_lane_offset_m=1.8,
+            radar_fwd_target_arc_distance_m=61.3,
             acc_active=1.0,
             acc_target_gap_m=22.0,
             acc_gap_error_m=-21.9,
@@ -971,6 +978,16 @@ def test_recorder_writes_sync_packet_and_post_jump_fields(tmp_path: Path) -> Non
         assert int(h5_file["vehicle/sync_packet_packet_superseded_vehicle_count"][0]) == 1
         assert int(h5_file["vehicle/lead_collision_detected"][0]) == 1
         assert int(h5_file["vehicle/lead_collision_override_active"][0]) == 1
+        assert float(h5_file["vehicle/radar_fwd_candidate_present"][0]) == pytest.approx(1.0, rel=1e-6)
+        reject_reason = h5_file["vehicle/radar_fwd_reject_reason"][0]
+        if isinstance(reject_reason, bytes):
+            reject_reason = reject_reason.decode("utf-8")
+        assert str(reject_reason) == "collision_override"
+        assert float(h5_file["vehicle/radar_fwd_target_azimuth_deg"][0]) == pytest.approx(6.8, rel=1e-6)
+        assert float(h5_file["vehicle/radar_fwd_target_heading_delta_deg"][0]) == pytest.approx(6.9, rel=1e-6)
+        assert float(h5_file["vehicle/radar_fwd_target_same_lane_confidence"][0]) == pytest.approx(0.92, rel=1e-6)
+        assert float(h5_file["vehicle/radar_fwd_target_lane_offset_m"][0]) == pytest.approx(1.8, rel=1e-6)
+        assert float(h5_file["vehicle/radar_fwd_target_arc_distance_m"][0]) == pytest.approx(61.3, rel=1e-6)
         acc_state = h5_file["vehicle/acc_state_code"][0]
         if isinstance(acc_state, bytes):
             acc_state = acc_state.decode("utf-8")

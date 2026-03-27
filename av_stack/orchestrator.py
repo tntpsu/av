@@ -7335,6 +7335,13 @@ class AVStack:
                 'radar_fwd_distance_m': 0.0,
                 'radar_fwd_range_rate_mps': 0.0,
                 'radar_fwd_snr': 0.0,
+                'radar_fwd_candidate_present': 0.0,
+                'radar_fwd_reject_reason': 'acc_disabled',
+                'radar_fwd_target_azimuth_deg': 0.0,
+                'radar_fwd_target_heading_delta_deg': 0.0,
+                'radar_fwd_target_same_lane_confidence': -1.0,
+                'radar_fwd_target_lane_offset_m': 0.0,
+                'radar_fwd_target_arc_distance_m': 0.0,
                 'acc_active': 0.0,
                 'acc_target_gap_m': 0.0,
                 'acc_gap_error_m': 0.0,
@@ -7358,6 +7365,27 @@ class AVStack:
             'radar_fwd_distance_m': reading.gap_m,
             'radar_fwd_range_rate_mps': reading.range_rate_mps,
             'radar_fwd_snr': reading.snr,
+            'radar_fwd_candidate_present': float(
+                vehicle_state_dict.get('radar_fwd_candidate_present', 0.0) or 0.0
+            ),
+            'radar_fwd_reject_reason': str(
+                vehicle_state_dict.get('radar_fwd_reject_reason', 'none') or 'none'
+            ),
+            'radar_fwd_target_azimuth_deg': float(
+                vehicle_state_dict.get('radar_fwd_target_azimuth_deg', 0.0) or 0.0
+            ),
+            'radar_fwd_target_heading_delta_deg': float(
+                vehicle_state_dict.get('radar_fwd_target_heading_delta_deg', 0.0) or 0.0
+            ),
+            'radar_fwd_target_same_lane_confidence': float(
+                vehicle_state_dict.get('radar_fwd_target_same_lane_confidence', -1.0) or 0.0
+            ) if vehicle_state_dict.get('radar_fwd_target_same_lane_confidence', -1.0) is not None else -1.0,
+            'radar_fwd_target_lane_offset_m': float(
+                vehicle_state_dict.get('radar_fwd_target_lane_offset_m', 0.0) or 0.0
+            ),
+            'radar_fwd_target_arc_distance_m': float(
+                vehicle_state_dict.get('radar_fwd_target_arc_distance_m', 0.0) or 0.0
+            ),
             # IDM outputs filled by _pf_apply_acc_override after governor
             'acc_active': 0.0,
             'acc_target_gap_m': 0.0,
@@ -8883,6 +8911,27 @@ class AVStack:
             radar_fwd_distance_m=float(vehicle_state_dict.get('radar_fwd_distance_m', 0.0)),
             radar_fwd_range_rate_mps=float(vehicle_state_dict.get('radar_fwd_range_rate_mps', 0.0)),
             radar_fwd_snr=float(vehicle_state_dict.get('radar_fwd_snr', 0.0)),
+            radar_fwd_candidate_present=float(
+                vehicle_state_dict.get('radar_fwd_candidate_present', 0.0)
+            ),
+            radar_fwd_reject_reason=str(
+                vehicle_state_dict.get('radar_fwd_reject_reason', 'no_candidate') or 'no_candidate'
+            ),
+            radar_fwd_target_azimuth_deg=float(
+                vehicle_state_dict.get('radar_fwd_target_azimuth_deg', 0.0)
+            ),
+            radar_fwd_target_heading_delta_deg=float(
+                vehicle_state_dict.get('radar_fwd_target_heading_delta_deg', 0.0)
+            ),
+            radar_fwd_target_same_lane_confidence=float(
+                vehicle_state_dict.get('radar_fwd_target_same_lane_confidence', -1.0)
+            ),
+            radar_fwd_target_lane_offset_m=float(
+                vehicle_state_dict.get('radar_fwd_target_lane_offset_m', 0.0)
+            ),
+            radar_fwd_target_arc_distance_m=float(
+                vehicle_state_dict.get('radar_fwd_target_arc_distance_m', 0.0)
+            ),
             lead_collision_detected=bool(
                 vehicle_state_dict.get('lead_collision_detected', False)
             ),

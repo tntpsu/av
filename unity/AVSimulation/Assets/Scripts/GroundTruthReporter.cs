@@ -1383,6 +1383,70 @@ public class GroundTruthReporter : MonoBehaviour
         return (roadHeadingDeg, carHeadingDeg, headingDeltaDeg, roadLateralOffset);
     }
 
+    public bool TryGetRoadFrameMetricsAtWorldPosition(
+        Vector3 worldPos,
+        Vector3 objectForward,
+        out float roadHeadingDeg,
+        out float objectHeadingDeg,
+        out float headingDeltaDeg,
+        out float roadLateralOffset,
+        out float arcDistanceM
+    )
+    {
+        roadHeadingDeg = 0.0f;
+        objectHeadingDeg = 0.0f;
+        headingDeltaDeg = 0.0f;
+        roadLateralOffset = 0.0f;
+        arcDistanceM = 0.0f;
+
+        if (roadGenerator == null)
+        {
+            return false;
+        }
+
+        float tObject = FindClosestPointOnOval(worldPos);
+        Vector3 roadCenterAtObject = roadGenerator.GetOvalCenterPoint(tObject);
+        Vector3 roadDirection = roadGenerator.GetOvalDirection(tObject).normalized;
+        if (roadDirection.sqrMagnitude < 1e-6f)
+        {
+            return false;
+        }
+        Vector3 roadRight = Vector3.Cross(Vector3.up, roadDirection).normalized;
+
+        roadLateralOffset = Vector3.Dot(worldPos - roadCenterAtObject, roadRight);
+        roadHeadingDeg = HeadingDegFromDirection(roadDirection);
+        objectHeadingDeg = HeadingDegFromDirection(objectForward);
+        headingDeltaDeg = Mathf.DeltaAngle(roadHeadingDeg, objectHeadingDeg);
+        arcDistanceM = GetDistanceAlongPath(0f, tObject);
+        return true;
+    }
+
+    public float GetRoadWidthMeters()
+    {
+        if (roadGenerator != null)
+        {
+            return roadGenerator.roadWidth;
+        }
+        return laneWidth;
+    }
+
+    public float GetLaneCenterOffsetForLane(int laneIndex)
+    {
+        float roadWidth = GetRoadWidthMeters();
+        if (roadWidth <= 0.0f)
+        {
+            return 0.0f;
+        }
+        float laneOffset = roadWidth * 0.25f;
+        float sign = laneIndex <= 0 ? -1f : 1f;
+        return laneOffset * sign;
+    }
+
+    public float GetCurrentLaneCenterOffsetMeters()
+    {
+        return GetLaneCenterOffsetForLane(currentLane);
+    }
+
     /// <summary>
     /// Get closest-point road tangent direction at the car position.
     /// Returns false if dynamic ground-truth references are unavailable.
@@ -1691,6 +1755,21 @@ public class GroundTruthReporter : MonoBehaviour
             return 0f;
         }
         return roadGenerator.GetPathLength();
+    }
+
+    private static float HeadingDegFromDirection(Vector3 dir)
+    {
+        if (dir.sqrMagnitude < 1e-6f)
+        {
+            return 0f;
+        }
+        Vector3 n = dir.normalized;
+        float heading = Mathf.Atan2(n.x, n.z) * Mathf.Rad2Deg;
+        if (heading < 0f)
+        {
+            heading += 360f;
+        }
+        return heading;
     }
 
     public float GetDefaultSpeedLimit()

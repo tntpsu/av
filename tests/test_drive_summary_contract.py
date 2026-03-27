@@ -59,6 +59,7 @@ def test_drive_summary_contract_keys(tmp_path: Path) -> None:
         "run_intent",
         "acc_comfort_contract",
         "acc_detection_contract",
+        "lead_continuity_contract",
         "lateral_owner_contract",
         "highway_mild_curve_contract",
         "mpc_gt_cross_track_contract",
@@ -230,6 +231,28 @@ def test_drive_summary_contract_keys(tmp_path: Path) -> None:
         "scoring_artifact_likely",
         "following_convergence_issue_detected",
     }.issubset(acc_comfort_contract.keys())
+    lead_continuity_contract = summary.get("lead_continuity_contract", {})
+    assert {
+        "schema_version",
+        "availability",
+        "candidate_present_rate_pct",
+        "missed_candidate_rate_pct",
+        "reject_reason_mode",
+        "out_of_cone_rate_pct",
+        "out_of_cone_same_lane_rate_pct",
+        "out_of_cone_wrong_lane_rate_pct",
+        "out_of_cone_opposite_direction_rate_pct",
+        "target_azimuth_abs_p50_deg",
+        "target_azimuth_abs_p95_deg",
+        "target_heading_delta_abs_p50_deg",
+        "target_heading_delta_abs_p95_deg",
+        "same_lane_confidence_p50",
+        "same_lane_confidence_p05",
+        "target_lane_offset_p50_m",
+        "target_arc_distance_p50_m",
+        "issue_detected",
+        "issue_mode",
+    }.issubset(lead_continuity_contract.keys())
     acc_detection_contract = summary.get("acc_detection_contract", {})
     assert {
         "schema_version",

@@ -2537,6 +2537,146 @@ private float? lastCarT = null;
                       $"start={trackCfg.leadVehicle.startDistanceM:F0} m ahead.");
     }
 
+    private static float HeadingDegFromDirection(Vector3 dir)
+    {
+        if (dir.sqrMagnitude < 1e-6f)
+        {
+            return 0f;
+        }
+        Vector3 n = dir.normalized;
+        float heading = Mathf.Atan2(n.x, n.z) * Mathf.Rad2Deg;
+        if (heading < 0f)
+        {
+            heading += 360f;
+        }
+        return heading;
+    }
+
+    private static string ClassifyForwardRadarRejectReason(
+        float sameLaneConfidence,
+        float headingDeltaDeg,
+        bool targetOutsideCone
+    )
+    {
+        if (!targetOutsideCone)
+        {
+            return "accepted";
+        }
+
+        float absHeadingDelta = Mathf.Abs(headingDeltaDeg);
+        if (sameLaneConfidence >= 0.5f && absHeadingDelta <= 45.0f)
+        {
+            return "out_of_cone_same_lane";
+        }
+        if (absHeadingDelta >= 135.0f)
+        {
+            return "out_of_cone_opposite_direction";
+        }
+        if (sameLaneConfidence >= 0.0f && sameLaneConfidence < 0.5f)
+        {
+            return "out_of_cone_wrong_lane";
+        }
+        return "out_of_cone";
+    }
+
+    private void PopulateForwardRadarTargetDiagnostics(
+        VehicleState state,
+        Transform carTx,
+        Vector3 egoForward,
+        Vector3 leadWorldPos,
+        Vector3 leadForward
+    )
+    {
+        state.radar_fwd_candidate_present = 1.0f;
+        state.radar_fwd_target_same_lane_confidence = -1.0f;
+        state.radar_fwd_target_lane_offset_m = 0.0f;
+        state.radar_fwd_target_arc_distance_m = 0.0f;
+
+        Vector3 toLead = leadWorldPos - carTx.position;
+        if (toLead.sqrMagnitude > 1e-6f)
+        {
+            state.radar_fwd_target_azimuth_deg = Vector3.SignedAngle(
+                egoForward,
+                toLead.normalized,
+                Vector3.up
+            );
+        }
+        else
+        {
+            state.radar_fwd_target_azimuth_deg = 0.0f;
+        }
+
+        float egoHeadingDeg = HeadingDegFromDirection(egoForward);
+        float leadHeadingDeg = HeadingDegFromDirection(leadForward);
+        state.radar_fwd_target_heading_delta_deg = Mathf.DeltaAngle(egoHeadingDeg, leadHeadingDeg);
+
+        if (groundTruthReporter != null)
+        {
+            float egoRoadHeadingDeg;
+            float egoObjectHeadingDeg;
+            float egoHeadingDeltaDeg;
+            float egoRoadLateralOffset;
+            float egoArcDistanceM;
+            float leadRoadHeadingDeg;
+            float leadObjectHeadingDeg;
+            float leadHeadingDeltaDeg;
+            float leadRoadLateralOffset;
+            float leadArcDistanceM;
+            bool egoMetricsValid = groundTruthReporter.TryGetRoadFrameMetricsAtWorldPosition(
+                carTx.position,
+                egoForward,
+                out egoRoadHeadingDeg,
+                out egoObjectHeadingDeg,
+                out egoHeadingDeltaDeg,
+                out egoRoadLateralOffset,
+                out egoArcDistanceM
+            );
+            bool leadMetricsValid = groundTruthReporter.TryGetRoadFrameMetricsAtWorldPosition(
+                leadWorldPos,
+                leadForward,
+                out leadRoadHeadingDeg,
+                out leadObjectHeadingDeg,
+                out leadHeadingDeltaDeg,
+                out leadRoadLateralOffset,
+                out leadArcDistanceM
+            );
+            if (egoMetricsValid && leadMetricsValid)
+            {
+                state.radar_fwd_target_lane_offset_m = leadRoadLateralOffset;
+                float expectedLaneOffset = groundTruthReporter.GetCurrentLaneCenterOffsetMeters();
+                float laneWidth = Mathf.Max(0.1f, groundTruthReporter.GetRoadWidthMeters() * 0.5f);
+                float laneDelta = Mathf.Abs(leadRoadLateralOffset - expectedLaneOffset);
+                state.radar_fwd_target_same_lane_confidence = Mathf.Clamp01(
+                    1.0f - (laneDelta / laneWidth)
+                );
+
+                float pathLength = Mathf.Max(0.01f, groundTruthReporter.GetPathLength());
+                float arcDelta = leadArcDistanceM - egoArcDistanceM;
+                if (pathLength > 0.01f)
+                {
+                    if (arcDelta > pathLength * 0.5f)
+                    {
+                        arcDelta -= pathLength;
+                    }
+                    else if (arcDelta < -pathLength * 0.5f)
+                    {
+                        arcDelta += pathLength;
+                    }
+                }
+                state.radar_fwd_target_arc_distance_m = arcDelta;
+                return;
+            }
+        }
+
+        TrackWaypointFollower leadFollower = leadVehicle != null
+            ? leadVehicle.GetComponent<TrackWaypointFollower>()
+            : null;
+        if (leadFollower != null)
+        {
+            state.radar_fwd_target_lane_offset_m = leadFollower.laneOffsetM;
+        }
+    }
+
     /// <summary>
     /// Emulates a forward-looking Doppler radar via a SphereCast.
     /// Populates the four radar_fwd_* fields on <paramref name="state"/>.
@@ -2549,11 +2689,37 @@ private float? lastCarT = null;
         state.radar_fwd_distance_m  = 0.0f;
         state.radar_fwd_range_rate_mps = 0.0f;
         state.radar_fwd_snr         = 0.0f;
+        state.radar_fwd_candidate_present = 0.0f;
+        state.radar_fwd_reject_reason = "no_candidate";
+        state.radar_fwd_target_azimuth_deg = 0.0f;
+        state.radar_fwd_target_heading_delta_deg = 0.0f;
+        state.radar_fwd_target_same_lane_confidence = -1.0f;
+        state.radar_fwd_target_lane_offset_m = 0.0f;
+        state.radar_fwd_target_arc_distance_m = 0.0f;
         state.lead_collision_detected = false;
         state.lead_collision_override_active = false;
 
         if (leadVehicle == null || carController == null)
             return;
+
+        Transform carTx  = carController.transform;
+        Vector3   origin = carTx.position + Vector3.up * 0.5f;  // mid-bumper height
+        Vector3   fwd    = carTx.forward;
+        Vector3   leadForward = leadVehicle.transform.forward.normalized;
+
+        // Compute lead position directly from transform — avoids SphereCast hitting road geometry
+        // first (sphere radius 0.8m sweeps below road surface and is rejected before reaching lead).
+        Vector3 leadCenter = leadVehicle.transform.position + Vector3.up * (leadVehicle.vehicleBoxSize.y * 0.5f);
+        Vector3 toTarget   = leadCenter - origin;
+        float   trueDist   = toTarget.magnitude;
+
+        PopulateForwardRadarTargetDiagnostics(
+            state,
+            carTx,
+            fwd,
+            leadVehicle.transform.position,
+            leadForward
+        );
 
         // Collision override: report 0 m gap at high SNR so Python TTC guard fires immediately.
         if (leadVehicle.CollisionDetected)
@@ -2564,29 +2730,30 @@ private float? lastCarT = null;
             state.radar_fwd_distance_m     = 0.1f;   // < any TTC threshold → instant ESTOP
             state.radar_fwd_range_rate_mps = 0.0f;
             state.radar_fwd_snr            = 9.0f;   // high confidence
+            state.radar_fwd_reject_reason  = "collision_override";
             return;
         }
 
-        Transform carTx  = carController.transform;
-        Vector3   origin = carTx.position + Vector3.up * 0.5f;  // mid-bumper height
-        Vector3   fwd    = carTx.forward;
-
-        // Compute lead position directly from transform — avoids SphereCast hitting road geometry
-        // first (sphere radius 0.8m sweeps below road surface and is rejected before reaching lead).
-        Vector3 leadCenter = leadVehicle.transform.position + Vector3.up * (leadVehicle.vehicleBoxSize.y * 0.5f);
-        Vector3 toTarget   = leadCenter - origin;
-        float   trueDist   = toTarget.magnitude;
-
         // Range gate.
         if (trueDist > radarMaxRangeM)
+        {
+            state.radar_fwd_reject_reason = "out_of_range";
             return;
+        }
 
         // Angle check: lead must be within ±radarHalfAngleDeg of bore-sight.
         Vector3 toHit    = toTarget.normalized;
         float   dotAngle = Vector3.Dot(fwd, toHit);
         float   cosLimit = Mathf.Cos(radarHalfAngleDeg * Mathf.Deg2Rad);
         if (dotAngle < cosLimit)
+        {
+            state.radar_fwd_reject_reason = ClassifyForwardRadarRejectReason(
+                state.radar_fwd_target_same_lane_confidence,
+                state.radar_fwd_target_heading_delta_deg,
+                true
+            );
             return;  // target outside detection cone (e.g. lead is behind ego)
+        }
 
         // ── Gaussian noise (Box-Muller) ───────────────────────────────────────
         // u1/u2 ∈ (0,1); clamp away zero to avoid log(0).
@@ -2625,6 +2792,7 @@ private float? lastCarT = null;
         state.radar_fwd_distance_m     = noisyDist;
         state.radar_fwd_range_rate_mps = noisyRate;
         state.radar_fwd_snr            = snr;
+        state.radar_fwd_reject_reason  = "accepted";
     }
 }
 

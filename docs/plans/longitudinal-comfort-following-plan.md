@@ -375,3 +375,211 @@ The current evidence supports:
 3. unsafe outcome from blind catch-up assist
 
 It does not support another direct tuning pass inside the existing `ACC_ACTIVE` state.
+
+### L8. Curve Catch-Up Lead-Continuity Contract
+
+Goal:
+- make ACC robust to same-lane lead tracking through curves without making opposite-lane or wrong-lane vehicles capturable
+
+Reference failure:
+- `/Users/philiptullai/Documents/Coding/av/data/recordings/recording_20260327_095121.h5`
+
+Observed failure chain:
+1. H8 is still a real catch-up scenario:
+   - lead starts `200 m` ahead at `10 m/s`
+   - ego target is `15 m/s`
+2. Radar detects the lead and gap closes correctly down to roughly `61 m`, `47 m`, `29 m`, `20 m`, `15 m`, then `~8 m`
+3. During curve-entry / curved-road geometry, the forward radar repeatedly drops to zero for `10-28` frame runs
+4. ACC exits to `FREE_FLOW` / `DETECTION_LOSS`
+5. longitudinal ownership falls back to the speed governor
+6. the lead reappears only briefly in `EMERGENCY_BRAKE`, then disappears again
+7. first `lead_collision_override_active` appears at frame `715`
+
+Primary root cause hypothesis:
+- `/Users/philiptullai/Documents/Coding/av/unity/AVSimulation/Assets/Scripts/AVBridge.cs` uses a strict `±5°` forward-cone check
+- on `R500` curves, same-lane lead azimuth can exceed that even when the lead is still the correct ACC target
+- producer-side radar continuity is therefore too brittle for curve-following
+
+Files:
+- `/Users/philiptullai/Documents/Coding/av/unity/AVSimulation/Assets/Scripts/AVBridge.cs`
+- `/Users/philiptullai/Documents/Coding/av/unity/AVSimulation/Assets/Scripts/LeadVehicle.cs`
+- `/Users/philiptullai/Documents/Coding/av/control/radar_sensor.py`
+- `/Users/philiptullai/Documents/Coding/av/control/acc_controller.py`
+- `/Users/philiptullai/Documents/Coding/av/av_stack/orchestrator.py`
+- `/Users/philiptullai/Documents/Coding/av/data/formats/data_format.py`
+- `/Users/philiptullai/Documents/Coding/av/data/recorder.py`
+- `/Users/philiptullai/Documents/Coding/av/tools/drive_summary_core.py`
+- `/Users/philiptullai/Documents/Coding/av/tools/analyze/analyze_drive_overall.py`
+- `/Users/philiptullai/Documents/Coding/av/tools/debug_visualizer/server.py`
+- `/Users/philiptullai/Documents/Coding/av/tools/debug_visualizer/visualizer.js`
+
+Implementation:
+
+#### L8.1 Producer-side radar-continuity attribution
+
+Record why a lead was not returned on each frame, not just `detected=0`.
+
+Add fields:
+- `radar_fwd_candidate_present`
+- `radar_fwd_reject_reason`
+- `radar_fwd_target_azimuth_deg`
+- `radar_fwd_target_heading_delta_deg`
+- `radar_fwd_target_same_lane_confidence`
+- `radar_fwd_target_lane_offset_m`
+- `radar_fwd_target_arc_distance_m`
+
+Required reject reasons:
+- `out_of_range`
+- `out_of_cone`
+- `wrong_lane`
+- `opposite_direction`
+- `occluded_or_invalid`
+- `no_candidate`
+
+Acceptance:
+- H8 can tell us whether the dropout is really `out_of_cone`
+- we no longer have to infer producer failure from zeroed radar fields
+
+#### L8.2 Same-lane target association contract
+
+Do not let ACC depend on a pure forward-cone detector.
+
+Producer-side target selection must prefer:
+1. same-lane lead candidate
+2. positive arc-distance ahead
+3. similar heading / travel direction
+4. bounded lateral offset relative to ego lane center
+
+Reject:
+1. opposite-lane traffic
+2. oncoming traffic
+3. adjacent-lane wrong target
+4. geometrically visible but non-followable objects
+
+Important design rule:
+- do not fix H8 by blindly widening `radarHalfAngleDeg`
+- widen coverage only if it is paired with same-lane / same-direction gating
+
+Acceptance:
+- same-lane curved lead remains capturable
+- opposite-lane/oncoming candidate is explicitly rejected with `wrong_lane` or `opposite_direction`
+
+#### L8.3 Short-horizon lead continuity track
+
+ACC should not drop straight to free-flow on every brief producer miss if continuity confidence is still high.
+
+Add a small lead-continuity layer between raw radar return and ACC consumption:
+- hold last accepted lead track for a short bounded horizon
+- decay confidence with time and geometry error
+- use predicted arc-distance / lead-speed estimate during the hold
+- force exit immediately if same-lane confidence collapses
+
+This is not multi-object fusion.
+It is a bounded continuity bridge for the one authoritative same-lane lead.
+
+Suggested output fields:
+- `acc_lead_track_active`
+- `acc_lead_track_source`
+- `acc_lead_track_age_ms`
+- `acc_lead_track_confidence`
+- `acc_lead_track_hold_reason`
+- `acc_lead_track_drop_reason`
+
+Acceptance:
+- brief H8 producer misses do not hand ownership back to free-flow immediately
+- lead continuity does not persist through wrong-lane / opposite-direction evidence
+
+#### L8.4 Consumer-state changes
+
+Update ACC state semantics so temporary continuity holds are distinct from true no-lead loss.
+
+Add or derive:
+- `LEAD_TRACK_HOLD`
+- `detection_limited_following`
+- `association_limited_following`
+
+Behavior:
+1. raw no-detect with strong continuity confidence:
+   - hold bounded lead track
+   - do not immediately ramp to free-flow
+2. raw no-detect with poor same-lane confidence or stale track:
+   - enter `DETECTION_LOSS` / `FREE_FLOW` as today
+
+Acceptance:
+- H8 no longer oscillates between `ACC_ACTIVE` and `DETECTION_LOSS` on short curve misses
+- true lead loss still exits quickly
+
+#### L8.5 Tooling and triage
+
+Add direct issue types:
+- `lead_continuity_curve_dropout`
+- `wrong_lane_target_rejected`
+- `opposite_direction_target_rejected`
+- `lead_track_hold_exhausted`
+
+PhilViz/analyzer cards:
+- `Lead Continuity Contract`
+- `Lead Association Contract`
+
+They should answer directly:
+1. Did we have a real same-lane candidate?
+2. Why was it rejected?
+3. Did continuity hold bridge the miss?
+4. Did ACC fall back because the lead was truly gone, or because producer association failed?
+
+#### L8.6 Validation order
+
+1. Reproduce H8 on current baseline:
+- `/Users/philiptullai/Documents/Coding/av/tracks/scenarios/highway_h8_curve_catchup.yml`
+
+2. Add attribution only and confirm dominant reject reason.
+
+3. Implement same-lane association without continuity hold.
+
+4. Re-run H8.
+
+5. Implement bounded continuity hold only if H8 still fails due to short producer misses.
+
+6. Re-run H8 and then a same-lane steady baseline:
+- `/Users/philiptullai/Documents/Coding/av/tracks/scenarios/highway_h2_steady.yml`
+
+7. Add explicit wrong-target tests before declaring success.
+
+#### L8.7 Required new scenarios
+
+Add scenarios or validation cases for:
+1. same-lane curve catch-up:
+   - existing `H8`
+2. opposite-lane oncoming pass on curve
+3. opposite-lane oncoming pass on straight
+4. wrong-lane same-direction vehicle if the track setup supports it
+
+Promotion gate:
+- fixing H8 must not make opposite-lane/oncoming vehicles capturable by ACC
+
+### L9. ACC Robustness Scope
+
+The right target is not “similar to a top company because we widened radar coverage.”
+
+The right target is:
+1. explicit same-lane lead association
+2. short-horizon track continuity
+3. direct rejection of wrong-lane / opposite-direction candidates
+4. attribution that makes failures obvious
+
+This is directionally similar to how production systems are structured:
+- object association first
+- continuity / tracking second
+- controller consumption third
+
+What we have today is still much simpler than a top-tier production stack.
+Top programs usually rely on:
+1. multi-object tracking
+2. lane association against map / path geometry
+3. same-direction gating
+4. continuity through temporary sensor misses
+5. multi-sensor fusion, not a single narrow forward-cone producer
+
+So the answer is:
+- yes, the direction in L8 is aligned with a serious architecture
+- no, the current `±5° cone -> zero return -> free-flow` behavior is not production-grade
