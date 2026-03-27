@@ -2346,6 +2346,7 @@ def _print_summary_report(recording_path: Path, summary: Dict, analyze_to_failur
 
     # Section 16: ACC Performance (only when ACC was active)
     acc_health = summary.get("acc_health")
+    acc_comfort_contract = summary.get("acc_comfort_contract") or {}
     if acc_health is not None:
         print("20. ACC PERFORMANCE")
         print("-" * 80)
@@ -2374,14 +2375,60 @@ def _print_summary_report(recording_path: Path, summary: Dict, analyze_to_failur
         print(f"   Min Gap Observed:       {min_gap:.1f}m          (informational)")
         print()
 
+        print("   \u2500\u2500 Following Convergence (\u2192 instrumentation, not runtime tuning) \u2500\u2500\u2500")
+        print(
+            f"   Actual / Target Gap P50:{acc_health.get('acc_actual_gap_p50_m', 0.0):>10.2f} /"
+            f" {acc_health.get('acc_target_gap_p50_m', 0.0):<9.2f}m"
+        )
+        print(
+            f"   Gap Error P50 / |P95|:  {acc_health.get('acc_gap_error_p50_m', 0.0):>9.2f} /"
+            f" {acc_health.get('acc_gap_error_abs_p95_m', 0.0):<9.2f}m"
+        )
+        print(
+            f"   Gap > Target (+2/+5/+10m):"
+            f" {acc_health.get('acc_gap_above_target_plus_2m_rate', 0.0):.1f}% /"
+            f" {acc_health.get('acc_gap_above_target_plus_5m_rate', 0.0):.1f}% /"
+            f" {acc_health.get('acc_gap_above_target_plus_10m_rate', 0.0):.1f}%"
+        )
+        print(
+            f"   Following Regime Mode:  {acc_health.get('acc_following_regime_mode', 'unknown')}"
+            f"  (track/close/far/compressed="
+            f"{acc_health.get('acc_tracking_rate', 0.0):.1f}%/"
+            f"{acc_health.get('acc_closing_rate', 0.0):.1f}%/"
+            f"{acc_health.get('acc_over_conservative_trailing_rate', 0.0):.1f}%/"
+            f"{acc_health.get('acc_compressed_rate', 0.0):.1f}%)"
+        )
+        print()
+
         print("   \u2500\u2500 Following Comfort (\u2192 LongitudinalComfort layer) \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500")
         gap_rmse = acc_health.get("acc_gap_rmse_m", 0.0)
         ttc_min = acc_health.get("acc_ttc_min_s", 999.0)
-        jerk_p95 = acc_health.get("acc_jerk_p95_mps3", 0.0)
+        jerk_p95 = acc_health.get("acc_jerk_gate_value_mps3", 0.0)
         emrg = acc_health.get("acc_emergency_brake_events", 0)
         print(f"   Gap RMSE:               {gap_rmse:<9.2f}m [{_gate(gap_rmse, acc_health.get('gap_rmse_gate_pass', True))} \u2264 0.50m]")
         print(f"   TTC Minimum:            {ttc_min:<9.2f}s [{_gate(ttc_min, acc_health.get('ttc_min_gate_pass', True))} \u2265 2.00s]")
-        print(f"   Jerk P95 (ACC):         {jerk_p95:<9.1f}m/s\u00b3 [{_gate(jerk_p95, acc_health.get('jerk_gate_pass', True))} \u2264 4.0]")
+        print(
+            f"   Jerk Gate Metric:       {jerk_p95:<9.3f}m/s\u00b3"
+            f" [{_gate(jerk_p95, acc_health.get('jerk_gate_pass', True))} \u2264 4.0]"
+            f"  ({acc_health.get('acc_jerk_gate_metric_role', 'unknown')})"
+        )
+        print(
+            f"   Jerk Raw / Filtered / Commanded:"
+            f" {acc_health.get('acc_jerk_p95_raw_mps3', 0.0):.1f} /"
+            f" {acc_health.get('acc_jerk_p95_filtered_mps3', 0.0):.3f} /"
+            f" {acc_health.get('acc_commanded_jerk_p95_mps3', 0.0):.3f} m/s\u00b3"
+        )
+        print(
+            f"   Target \u0394P95 / Cmd Accel \u0394P95:"
+            f" {acc_health.get('acc_target_speed_delta_p95_mps', 0.0):.4f} m/s /"
+            f" {acc_health.get('acc_commanded_accel_delta_p95_mps2', 0.0):.4f} m/s\u00b2"
+        )
+        if acc_comfort_contract:
+            print(
+                f"   Artifact Likely / Dominant Hotspot:"
+                f" {'YES' if acc_comfort_contract.get('scoring_artifact_likely') else 'NO'} /"
+                f" {acc_comfort_contract.get('hotspot_dominant_attribution_mode', 'none')}"
+            )
         print(f"   Emergency Brake Events: {emrg}          (informational \u2014 IDM quality)")
         print()
 

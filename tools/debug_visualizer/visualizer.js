@@ -1324,6 +1324,7 @@ class Visualizer {
                 ['Transport', 'summary-section-transport-contracts'],
                 ['SpeedIntent', 'summary-section-speed-intent'],
                 ['RunIntent', 'summary-section-run-intent'],
+                ['ACCComfort', 'summary-section-acc-comfort-contract'],
                 ['Perception', 'summary-section-perception'],
                 ['Trajectory', 'summary-section-trajectory'],
                 ['PathTracking', 'summary-section-path-tracking'],
@@ -1684,6 +1685,27 @@ class Visualizer {
                 if (mismatch) {
                     html += `<tr><td>Intent Warning:</td><td style="text-align: right; color: #ff6b6b;">${this.escapeHtml(String(mismatch))}</td></tr>`;
                 }
+                html += '</table>';
+                html += '</div>';
+            }
+
+            const accComfort = summary.acc_comfort_contract || null;
+            if (accComfort && typeof accComfort === 'object' && String(accComfort.availability || '').toLowerCase() === 'available') {
+                const jerkPass = Boolean(accComfort.jerk_gate_pass);
+                const convergenceIssue = Boolean(accComfort.following_convergence_issue_detected);
+                const statusColor = jerkPass && !convergenceIssue ? '#4caf50' : '#ffb74d';
+                html += '<div id="summary-section-acc-comfort-contract" style="background: #2a2a2a; padding: 1rem; border-radius: 8px; margin-bottom: 1.5rem; border-left: 4px solid #4a90e2;">';
+                html += '<h3 style="margin-top: 0; color: #4a90e2;">ACC Comfort Contract</h3>';
+                html += '<table style="width: 100%; color: #e0e0e0;">';
+                html += `<tr><td>Following Regime:</td><td style="text-align: right; color: ${statusColor};">${this.escapeHtml(String(accComfort.following_regime_mode || 'unknown'))}</td></tr>`;
+                html += `<tr><td>Actual / Target Gap (P50):</td><td style="text-align: right;">${Number.isFinite(Number(accComfort.actual_gap_p50_m)) ? Number(accComfort.actual_gap_p50_m).toFixed(2) : 'N/A'} / ${Number.isFinite(Number(accComfort.target_gap_p50_m)) ? Number(accComfort.target_gap_p50_m).toFixed(2) : 'N/A'} m</td></tr>`;
+                html += `<tr><td>Gap Error |P50| / |P95|:</td><td style="text-align: right;">${Number.isFinite(Number(accComfort.gap_error_abs_p50_m)) ? Number(accComfort.gap_error_abs_p50_m).toFixed(2) : 'N/A'} / ${Number.isFinite(Number(accComfort.gap_error_abs_p95_m)) ? Number(accComfort.gap_error_abs_p95_m).toFixed(2) : 'N/A'} m</td></tr>`;
+                html += `<tr><td>Gap > Target (+2/+5/+10m):</td><td style="text-align: right;">${Number.isFinite(Number(accComfort.gap_above_target_plus_2m_rate)) ? Number(accComfort.gap_above_target_plus_2m_rate).toFixed(1) : 'N/A'}% / ${Number.isFinite(Number(accComfort.gap_above_target_plus_5m_rate)) ? Number(accComfort.gap_above_target_plus_5m_rate).toFixed(1) : 'N/A'}% / ${Number.isFinite(Number(accComfort.gap_above_target_plus_10m_rate)) ? Number(accComfort.gap_above_target_plus_10m_rate).toFixed(1) : 'N/A'}%</td></tr>`;
+                html += `<tr><td>Tracking / Closing / Far / Compressed:</td><td style="text-align: right;">${Number.isFinite(Number(accComfort.tracking_rate)) ? Number(accComfort.tracking_rate).toFixed(1) : 'N/A'}% / ${Number.isFinite(Number(accComfort.closing_rate)) ? Number(accComfort.closing_rate).toFixed(1) : 'N/A'}% / ${Number.isFinite(Number(accComfort.over_conservative_trailing_rate)) ? Number(accComfort.over_conservative_trailing_rate).toFixed(1) : 'N/A'}% / ${Number.isFinite(Number(accComfort.compressed_rate)) ? Number(accComfort.compressed_rate).toFixed(1) : 'N/A'}%</td></tr>`;
+                html += `<tr><td>Jerk Gate Metric:</td><td style="text-align: right; color:${jerkPass ? '#4caf50' : '#ff6b6b'};">${this.escapeHtml(String(accComfort.jerk_gate_metric_role || 'unknown'))} = ${Number.isFinite(Number(accComfort.jerk_gate_value_mps3)) ? Number(accComfort.jerk_gate_value_mps3).toFixed(3) + ' m/s³' : 'N/A'}</td></tr>`;
+                html += `<tr><td>Jerk Raw / Filtered / Commanded:</td><td style="text-align: right;">${Number.isFinite(Number(accComfort.jerk_p95_raw_mps3)) ? Number(accComfort.jerk_p95_raw_mps3).toFixed(1) : 'N/A'} / ${Number.isFinite(Number(accComfort.jerk_p95_filtered_mps3)) ? Number(accComfort.jerk_p95_filtered_mps3).toFixed(3) : 'N/A'} / ${Number.isFinite(Number(accComfort.jerk_p95_commanded_mps3)) ? Number(accComfort.jerk_p95_commanded_mps3).toFixed(3) : 'N/A'} m/s³</td></tr>`;
+                html += `<tr><td>Target ΔP95 / Cmd Accel ΔP95:</td><td style="text-align: right;">${Number.isFinite(Number(accComfort.target_speed_delta_p95_mps)) ? Number(accComfort.target_speed_delta_p95_mps).toFixed(4) + ' m/s' : 'N/A'} / ${Number.isFinite(Number(accComfort.commanded_accel_delta_p95_mps2)) ? Number(accComfort.commanded_accel_delta_p95_mps2).toFixed(4) + ' m/s²' : 'N/A'}</td></tr>`;
+                html += `<tr><td>Artifact Likely / Hotspot Mode:</td><td style="text-align: right;">${accComfort.scoring_artifact_likely ? 'YES' : 'NO'} / ${this.escapeHtml(String(accComfort.hotspot_dominant_attribution_mode || 'none'))}</td></tr>`;
                 html += '</table>';
                 html += '</div>';
             }

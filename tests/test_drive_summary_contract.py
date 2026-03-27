@@ -4,6 +4,7 @@ import h5py
 import numpy as np
 
 from tools.drive_summary_core import (
+    _build_acc_comfort_contract_summary,
     _build_lateral_owner_contract_summary,
     analyze_recording_summary,
 )
@@ -56,6 +57,7 @@ def test_drive_summary_contract_keys(tmp_path: Path) -> None:
         "transport_contract",
         "speed_intent",
         "run_intent",
+        "acc_comfort_contract",
         "lateral_owner_contract",
         "highway_mild_curve_contract",
         "mpc_gt_cross_track_contract",
@@ -169,6 +171,47 @@ def test_drive_summary_contract_keys(tmp_path: Path) -> None:
         "final_longitudinal_owner_mode",
         "lead_collision_override_rate_pct",
     }.issubset(run_intent.keys())
+    acc_comfort_contract = summary.get("acc_comfort_contract", {})
+    assert {
+        "schema_version",
+        "availability",
+        "actual_gap_p50_m",
+        "actual_gap_p95_m",
+        "target_gap_p50_m",
+        "target_gap_p95_m",
+        "gap_error_p50_m",
+        "gap_error_p95_m",
+        "gap_error_abs_p50_m",
+        "gap_error_abs_p95_m",
+        "gap_above_target_plus_2m_rate",
+        "gap_above_target_plus_5m_rate",
+        "gap_above_target_plus_10m_rate",
+        "gap_below_target_rate",
+        "following_regime_mode",
+        "tracking_rate",
+        "closing_rate",
+        "over_conservative_trailing_rate",
+        "compressed_rate",
+        "range_rate_p50_mps",
+        "target_speed_delta_p95_mps",
+        "commanded_accel_delta_p95_mps2",
+        "jerk_gate_metric_role",
+        "jerk_gate_value_mps3",
+        "jerk_gate_pass",
+        "jerk_p95_filtered_mps3",
+        "jerk_p95_raw_mps3",
+        "jerk_p95_commanded_mps3",
+        "raw_spike_dominated",
+        "hotspot_dominant_attribution_mode",
+        "hotspot_limiter_transition_rate",
+        "hotspot_speed_estimation_spike_rate",
+        "hotspot_timestamp_gap_rate",
+        "hotspot_commanded_step_rate",
+        "hotspot_high_confidence_rate",
+        "hotspot_commanded_vs_measured_mismatch_rate",
+        "scoring_artifact_likely",
+        "following_convergence_issue_detected",
+    }.issubset(acc_comfort_contract.keys())
     lateral_owner_contract = summary.get("lateral_owner_contract", {})
     assert {
         "schema_version",
@@ -392,6 +435,52 @@ def test_lateral_owner_contract_uses_authoritative_fallback_budget() -> None:
     assert summary["authoritative_owner_issue_detected"] is False
     assert summary["authoritative_owner_healthy"] is True
     assert summary["suppress_legacy_curve_intent_warnings"] is True
+
+
+def test_acc_comfort_contract_flags_artifact_and_far_trailing() -> None:
+    summary = _build_acc_comfort_contract_summary(
+        acc_health={
+            "acc_actual_gap_p50_m": 31.0,
+            "acc_actual_gap_p95_m": 80.0,
+            "acc_target_gap_p50_m": 20.0,
+            "acc_target_gap_p95_m": 23.0,
+            "acc_gap_error_p50_m": 9.5,
+            "acc_gap_error_p95_m": 60.0,
+            "acc_gap_error_abs_p50_m": 9.5,
+            "acc_gap_error_abs_p95_m": 60.0,
+            "acc_gap_above_target_plus_2m_rate": 100.0,
+            "acc_gap_above_target_plus_5m_rate": 80.0,
+            "acc_gap_above_target_plus_10m_rate": 50.0,
+            "acc_gap_below_target_rate": 0.0,
+            "acc_following_regime_mode": "over_conservative_trailing",
+            "acc_tracking_rate": 10.0,
+            "acc_closing_rate": 5.0,
+            "acc_over_conservative_trailing_rate": 70.0,
+            "acc_compressed_rate": 0.0,
+            "acc_range_rate_p50_mps": 0.1,
+            "acc_target_speed_delta_p95_mps": 0.02,
+            "acc_commanded_accel_delta_p95_mps2": 0.08,
+            "acc_jerk_gate_metric_role": "filtered_measured_gate",
+            "acc_jerk_gate_value_mps3": 2.0,
+            "jerk_gate_pass": True,
+            "acc_jerk_p95_filtered_mps3": 2.0,
+            "acc_jerk_p95_raw_mps3": 215.0,
+            "acc_commanded_jerk_p95_mps3": 0.3,
+            "acc_jerk_raw_spike_dominated": True,
+        },
+        hotspot_attribution={
+            "counts_by_attribution": {
+                "longitudinal_limiter_transition": 6,
+                "physics_or_speed_estimation_spike": 2,
+            },
+            "high_confidence_rate": 0.0,
+            "commanded_vs_measured_mismatch_rate": 0.0,
+        },
+    )
+
+    assert summary["following_convergence_issue_detected"] is True
+    assert summary["scoring_artifact_likely"] is True
+    assert summary["hotspot_dominant_attribution_mode"] == "longitudinal_limiter_transition"
 
 
 def test_mpc_gt_cross_track_contract_detects_absolute_coordinate_mismatch(tmp_path: Path) -> None:

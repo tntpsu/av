@@ -2509,6 +2509,11 @@ def _build_acc_health_summary(data: Dict, n_frames: int, speed: Optional[np.ndar
         return None
 
     acc_mask = acc_active > 0.5
+    time_arr = (
+        np.asarray(data.get("time")[:n], dtype=float)
+        if data.get("time") is not None
+        else np.arange(n, dtype=float) * 0.033
+    )
 
     # ── Gap arrays ────────────────────────────────────────────────────────────
     dist_raw = data.get('radar_fwd_distance_m')
@@ -2516,11 +2521,39 @@ def _build_acc_health_summary(data: Dict, n_frames: int, speed: Optional[np.ndar
     gap_error_raw = data.get('acc_gap_error_m')
     ttc_raw = data.get('acc_ttc_s')
     target_gap_raw = data.get('acc_target_gap_m')
+    range_rate_raw = data.get('radar_fwd_range_rate_mps')
+    acc_target_speed_raw = data.get('acc_target_speed_mps')
+    if acc_target_speed_raw is None:
+        acc_target_speed_raw = data.get('acc_target_speed_mps_vehicle')
+    cmd_accel_raw = data.get('longitudinal_accel_cmd_raw')
+    cmd_accel_smoothed_raw = data.get('longitudinal_accel_cmd_smoothed')
 
     dist_arr = np.asarray(dist_raw[:n], dtype=float) if dist_raw is not None else np.full(n, np.nan)
     detected_arr = np.asarray(detected_raw[:n], dtype=float) if detected_raw is not None else np.zeros(n)
     gap_error_arr = np.asarray(gap_error_raw[:n], dtype=float) if gap_error_raw is not None else np.full(n, np.nan)
     ttc_arr = np.asarray(ttc_raw[:n], dtype=float) if ttc_raw is not None else np.full(n, 999.0)
+    target_gap_arr = (
+        np.asarray(target_gap_raw[:n], dtype=float) if target_gap_raw is not None else np.full(n, np.nan)
+    )
+    range_rate_arr = (
+        np.asarray(range_rate_raw[:n], dtype=float) if range_rate_raw is not None else np.full(n, np.nan)
+    )
+    acc_target_speed_arr = (
+        np.asarray(acc_target_speed_raw[:n], dtype=float)
+        if acc_target_speed_raw is not None
+        else np.full(n, np.nan)
+    )
+    cmd_accel_smoothed_arr = (
+        np.asarray(cmd_accel_smoothed_raw[:n], dtype=float)
+        if cmd_accel_smoothed_raw is not None
+        else None
+    )
+    cmd_accel_raw_arr = (
+        np.asarray(cmd_accel_raw[:n], dtype=float)
+        if cmd_accel_raw is not None
+        else None
+    )
+    cmd_accel_for_jerk = cmd_accel_smoothed_arr if cmd_accel_smoothed_arr is not None else cmd_accel_raw_arr
 
     # ── Tier 1 — Hard safety ──────────────────────────────────────────────────
     acc_collision_events = int(np.sum(dist_arr[acc_mask] < 0.0))
@@ -2555,24 +2588,157 @@ def _build_acc_health_summary(data: Dict, n_frames: int, speed: Optional[np.ndar
     acc_gap_rmse_m = float(np.sqrt(np.mean(gap_error_active ** 2))) if gap_error_active.size > 0 else 0.0
     acc_ttc_min_s = float(np.min(ttc_active)) if ttc_active.size > 0 else 999.0
 
-    # Jerk in ACC-active frames
-    acc_jerk_p95 = 0.0
-    if speed is not None and len(speed) >= n:
+    valid_follow_mask = (
+        acc_mask
+        & np.isfinite(dist_arr)
+        & (dist_arr > 0.0)
+        & np.isfinite(target_gap_arr)
+        & (target_gap_arr > 0.0)
+    )
+    signed_gap_delta = np.where(valid_follow_mask, dist_arr - target_gap_arr, np.nan)
+    abs_gap_delta = np.abs(signed_gap_delta)
+    gap_delta_valid = signed_gap_delta[np.isfinite(signed_gap_delta)]
+    abs_gap_delta_valid = abs_gap_delta[np.isfinite(abs_gap_delta)]
+    actual_gap_valid = dist_arr[valid_follow_mask]
+    target_gap_valid = target_gap_arr[valid_follow_mask]
+    range_rate_valid = range_rate_arr[valid_follow_mask & np.isfinite(range_rate_arr)]
+
+    actual_gap_p50_m = float(np.percentile(actual_gap_valid, 50)) if actual_gap_valid.size > 0 else 0.0
+    actual_gap_p95_m = float(np.percentile(actual_gap_valid, 95)) if actual_gap_valid.size > 0 else 0.0
+    target_gap_p50_m = float(np.percentile(target_gap_valid, 50)) if target_gap_valid.size > 0 else 0.0
+    target_gap_p95_m = float(np.percentile(target_gap_valid, 95)) if target_gap_valid.size > 0 else 0.0
+    gap_error_p50_m = float(np.percentile(gap_delta_valid, 50)) if gap_delta_valid.size > 0 else 0.0
+    gap_error_p95_m = float(np.percentile(gap_delta_valid, 95)) if gap_delta_valid.size > 0 else 0.0
+    gap_error_abs_p50_m = float(np.percentile(abs_gap_delta_valid, 50)) if abs_gap_delta_valid.size > 0 else 0.0
+    gap_error_abs_p95_m = float(np.percentile(abs_gap_delta_valid, 95)) if abs_gap_delta_valid.size > 0 else 0.0
+    gap_above_target_plus_2m_rate = (
+        float(np.mean(gap_delta_valid > 2.0) * 100.0) if gap_delta_valid.size > 0 else 0.0
+    )
+    gap_above_target_plus_5m_rate = (
+        float(np.mean(gap_delta_valid > 5.0) * 100.0) if gap_delta_valid.size > 0 else 0.0
+    )
+    gap_above_target_plus_10m_rate = (
+        float(np.mean(gap_delta_valid > 10.0) * 100.0) if gap_delta_valid.size > 0 else 0.0
+    )
+    gap_below_target_rate = (
+        float(np.mean(gap_delta_valid < 0.0) * 100.0) if gap_delta_valid.size > 0 else 0.0
+    )
+
+    tracking_mask = valid_follow_mask & np.isfinite(signed_gap_delta) & (np.abs(signed_gap_delta) <= 2.0)
+    compressed_mask = valid_follow_mask & np.isfinite(signed_gap_delta) & (signed_gap_delta < -2.0)
+    closing_mask = (
+        valid_follow_mask
+        & np.isfinite(signed_gap_delta)
+        & (signed_gap_delta > 2.0)
+        & np.isfinite(range_rate_arr)
+        & (range_rate_arr > 0.25)
+    )
+    over_conservative_mask = (
+        valid_follow_mask
+        & np.isfinite(signed_gap_delta)
+        & (signed_gap_delta > 5.0)
+        & (
+            ~np.isfinite(range_rate_arr)
+            | (range_rate_arr <= 0.25)
+        )
+    )
+    valid_follow_count = int(np.sum(valid_follow_mask))
+
+    def _pct(mask: np.ndarray) -> float:
+        if valid_follow_count <= 0:
+            return 0.0
+        return float(np.sum(mask) / valid_follow_count * 100.0)
+
+    tracking_rate = _pct(tracking_mask)
+    compressed_rate = _pct(compressed_mask)
+    closing_rate = _pct(closing_mask)
+    over_conservative_rate = _pct(over_conservative_mask)
+    following_regime_mode = "unavailable"
+    if valid_follow_count > 0:
+        regime_rates = {
+            "tracking": tracking_rate,
+            "over_conservative_trailing": over_conservative_rate,
+            "closing": closing_rate,
+            "compressed": compressed_rate,
+        }
+        following_regime_mode = max(regime_rates.items(), key=lambda item: item[1])[0]
+
+    # Jerk metrics in ACC-active frames
+    acc_jerk_p95_raw = 0.0
+    acc_jerk_p95_filtered = 0.0
+    acc_commanded_jerk_p95 = 0.0
+    acc_target_speed_delta_p95 = 0.0
+    acc_commanded_accel_delta_p95 = 0.0
+    if speed is not None and len(speed) >= n and np.sum(acc_mask) > 2:
         spd = np.asarray(speed[:n], dtype=float)
-        if np.any(acc_mask) and np.sum(acc_mask) > 2:
-            jerk_frames = np.where(acc_mask)[0]
-            # Only compute where consecutive acc frames exist
-            if len(jerk_frames) > 1:
-                dt_nominal = 1.0 / 30.0
-                acc_acc = np.diff(spd[jerk_frames]) / dt_nominal
-                jerk_vals = np.abs(np.diff(acc_acc) / dt_nominal)
-                if jerk_vals.size > 0:
-                    acc_jerk_p95 = float(np.percentile(jerk_vals, 95))
+        active_idx = np.flatnonzero(
+            acc_mask
+            & np.isfinite(time_arr)
+            & np.isfinite(spd)
+        )
+        if active_idx.size >= 3:
+            active_time = time_arr[active_idx]
+            active_speed = spd[active_idx]
+            active_dt = np.diff(active_time)
+            active_dt = np.where(active_dt > 1e-6, active_dt, np.nan)
+
+            raw_acc = np.diff(active_speed) / active_dt
+            if raw_acc.size > 1:
+                raw_jerk = np.diff(raw_acc) / active_dt[1:]
+                raw_jerk = np.abs(raw_jerk[np.isfinite(raw_jerk)])
+                if raw_jerk.size > 0:
+                    acc_jerk_p95_raw = float(np.percentile(raw_jerk, 95))
+
+            alpha = 0.95
+            filtered_speed = np.empty_like(active_speed)
+            filtered_speed[0] = active_speed[0]
+            for i in range(1, active_speed.size):
+                filtered_speed[i] = alpha * filtered_speed[i - 1] + (1.0 - alpha) * active_speed[i]
+            filtered_acc = np.diff(filtered_speed) / active_dt
+            if filtered_acc.size > 1:
+                filtered_jerk = np.diff(filtered_acc) / active_dt[1:]
+                filtered_jerk = np.abs(filtered_jerk[np.isfinite(filtered_jerk)])
+                if filtered_jerk.size > 0:
+                    acc_jerk_p95_filtered = float(np.percentile(filtered_jerk, 95))
+
+            if cmd_accel_for_jerk is not None and len(cmd_accel_for_jerk) >= n:
+                active_cmd_accel = np.asarray(cmd_accel_for_jerk[:n], dtype=float)[active_idx]
+                valid_cmd = np.isfinite(active_cmd_accel)
+                if np.sum(valid_cmd) >= 2:
+                    cmd_vals = active_cmd_accel[valid_cmd]
+                    cmd_dt = np.diff(active_time[valid_cmd])
+                    cmd_dt = np.where(cmd_dt > 1e-6, cmd_dt, np.nan)
+                    if cmd_vals.size > 1:
+                        cmd_delta = np.abs(np.diff(cmd_vals))
+                        cmd_delta = cmd_delta[np.isfinite(cmd_delta)]
+                        if cmd_delta.size > 0:
+                            acc_commanded_accel_delta_p95 = float(np.percentile(cmd_delta, 95))
+                        cmd_jerk = np.diff(cmd_vals) / cmd_dt
+                        cmd_jerk = np.abs(cmd_jerk[np.isfinite(cmd_jerk)])
+                        if cmd_jerk.size > 0:
+                            acc_commanded_jerk_p95 = float(np.percentile(cmd_jerk, 95))
+
+            if np.isfinite(acc_target_speed_arr).any():
+                active_target = acc_target_speed_arr[active_idx]
+                active_target = active_target[np.isfinite(active_target)]
+                if active_target.size > 1:
+                    acc_target_speed_delta_p95 = float(
+                        np.percentile(np.abs(np.diff(active_target)), 95)
+                    )
+
+    jerk_metric_role = "filtered_measured_gate"
+    jerk_gate_value_mps3 = acc_jerk_p95_filtered
+    jerk_gate_pass = jerk_gate_value_mps3 <= ACC_JERK_P95_GATE_MPS3
+    raw_jerk_exceeds_gate = acc_jerk_p95_raw > ACC_JERK_P95_GATE_MPS3
+    raw_spike_dominated = bool(
+        raw_jerk_exceeds_gate
+        and acc_jerk_p95_filtered <= ACC_JERK_P95_GATE_MPS3
+        and acc_commanded_jerk_p95 <= ACC_JERK_P95_GATE_MPS3
+    )
 
     # Detection rate: frames where lead was present (target_gap_m > 0) and we detected
     acc_detection_rate = 1.0
     if target_gap_raw is not None:
-        target_gap_arr = np.asarray(target_gap_raw[:n], dtype=float)
         lead_present_mask = acc_mask & (target_gap_arr > 0.0)
         if np.any(lead_present_mask):
             acc_detection_rate = float(np.mean(detected_arr[lead_present_mask] > 0.5))
@@ -2598,7 +2764,6 @@ def _build_acc_health_summary(data: Dict, n_frames: int, speed: Optional[np.ndar
     ttc_p05_gate_pass = acc_ttc_p05_s >= ACC_TTC_MIN_GATE_S
     gap_rmse_gate_pass = acc_gap_rmse_m <= ACC_GAP_RMSE_GATE_M
     ttc_min_gate_pass = acc_ttc_min_s >= ACC_TTC_MIN_GATE_S
-    jerk_gate_pass = acc_jerk_p95 <= ACC_JERK_P95_GATE_MPS3
     detection_gate_pass = acc_detection_rate >= ACC_DETECTION_RATE_GATE
 
     return {
@@ -2619,7 +2784,33 @@ def _build_acc_health_summary(data: Dict, n_frames: int, speed: Optional[np.ndar
         # Tier 3
         "acc_gap_rmse_m": round(acc_gap_rmse_m, 3),
         "acc_ttc_min_s": round(acc_ttc_min_s, 3),
-        "acc_jerk_p95_mps3": round(acc_jerk_p95, 2),
+        "acc_actual_gap_p50_m": round(actual_gap_p50_m, 3),
+        "acc_actual_gap_p95_m": round(actual_gap_p95_m, 3),
+        "acc_target_gap_p50_m": round(target_gap_p50_m, 3),
+        "acc_target_gap_p95_m": round(target_gap_p95_m, 3),
+        "acc_gap_error_p50_m": round(gap_error_p50_m, 3),
+        "acc_gap_error_p95_m": round(gap_error_p95_m, 3),
+        "acc_gap_error_abs_p50_m": round(gap_error_abs_p50_m, 3),
+        "acc_gap_error_abs_p95_m": round(gap_error_abs_p95_m, 3),
+        "acc_gap_above_target_plus_2m_rate": round(gap_above_target_plus_2m_rate, 3),
+        "acc_gap_above_target_plus_5m_rate": round(gap_above_target_plus_5m_rate, 3),
+        "acc_gap_above_target_plus_10m_rate": round(gap_above_target_plus_10m_rate, 3),
+        "acc_gap_below_target_rate": round(gap_below_target_rate, 3),
+        "acc_following_regime_mode": following_regime_mode,
+        "acc_tracking_rate": round(tracking_rate, 3),
+        "acc_closing_rate": round(closing_rate, 3),
+        "acc_over_conservative_trailing_rate": round(over_conservative_rate, 3),
+        "acc_compressed_rate": round(compressed_rate, 3),
+        "acc_range_rate_p50_mps": round(float(np.percentile(range_rate_valid, 50)), 3) if range_rate_valid.size > 0 else 0.0,
+        "acc_target_speed_delta_p95_mps": round(acc_target_speed_delta_p95, 4),
+        "acc_commanded_accel_delta_p95_mps2": round(acc_commanded_accel_delta_p95, 4),
+        "acc_jerk_p95_mps3": round(acc_jerk_p95_filtered, 2),
+        "acc_jerk_p95_filtered_mps3": round(acc_jerk_p95_filtered, 2),
+        "acc_jerk_p95_raw_mps3": round(acc_jerk_p95_raw, 2),
+        "acc_commanded_jerk_p95_mps3": round(acc_commanded_jerk_p95, 3),
+        "acc_jerk_gate_metric_role": jerk_metric_role,
+        "acc_jerk_gate_value_mps3": round(jerk_gate_value_mps3, 3),
+        "acc_jerk_raw_spike_dominated": raw_spike_dominated,
         "acc_detection_rate": round(acc_detection_rate, 4),
         "acc_emergency_brake_events": acc_emergency_brake_events,
         "gap_rmse_gate_pass": gap_rmse_gate_pass,
@@ -2763,11 +2954,15 @@ def _build_longitudinal_hotspot_attribution(data: Dict, config: Dict, n_frames: 
         else None
     )
 
-    ctrl_cfg = config.get("control", {}).get("longitudinal", {})
-    max_accel_cfg = float(ctrl_cfg.get("max_accel", 2.5))
-    max_decel_cfg = float(ctrl_cfg.get("max_decel", 3.0))
     command_accel = None
-    if throttle is not None and brake is not None:
+    if data.get("longitudinal_accel_cmd_smoothed") is not None:
+        command_accel = np.asarray(data.get("longitudinal_accel_cmd_smoothed"), dtype=float).reshape(-1)[:n]
+    elif data.get("longitudinal_accel_cmd_raw") is not None:
+        command_accel = np.asarray(data.get("longitudinal_accel_cmd_raw"), dtype=float).reshape(-1)[:n]
+    elif throttle is not None and brake is not None:
+        ctrl_cfg = config.get("control", {}).get("longitudinal", {})
+        max_accel_cfg = float(ctrl_cfg.get("max_accel", 2.5))
+        max_decel_cfg = float(ctrl_cfg.get("max_decel", 3.0))
         command_accel = (throttle * max_accel_cfg) - (brake * max_decel_cfg)
     command_jerk = None
     if command_accel is not None:
@@ -3001,6 +3196,140 @@ def _build_longitudinal_hotspot_attribution(data: Dict, config: Dict, n_frames: 
             if mismatch_samples > 0
             else None
         ),
+    }
+
+
+def _build_acc_comfort_contract_summary(
+    acc_health: Optional[Dict],
+    hotspot_attribution: Dict,
+) -> Dict:
+    unavailable = {
+        "schema_version": "v1",
+        "availability": "unavailable",
+        "actual_gap_p50_m": None,
+        "actual_gap_p95_m": None,
+        "target_gap_p50_m": None,
+        "target_gap_p95_m": None,
+        "gap_error_p50_m": None,
+        "gap_error_p95_m": None,
+        "gap_error_abs_p50_m": None,
+        "gap_error_abs_p95_m": None,
+        "gap_above_target_plus_2m_rate": None,
+        "gap_above_target_plus_5m_rate": None,
+        "gap_above_target_plus_10m_rate": None,
+        "gap_below_target_rate": None,
+        "following_regime_mode": "unavailable",
+        "tracking_rate": None,
+        "closing_rate": None,
+        "over_conservative_trailing_rate": None,
+        "compressed_rate": None,
+        "range_rate_p50_mps": None,
+        "target_speed_delta_p95_mps": None,
+        "commanded_accel_delta_p95_mps2": None,
+        "jerk_gate_metric_role": "unknown",
+        "jerk_gate_value_mps3": None,
+        "jerk_gate_pass": None,
+        "jerk_p95_filtered_mps3": None,
+        "jerk_p95_raw_mps3": None,
+        "jerk_p95_commanded_mps3": None,
+        "raw_spike_dominated": False,
+        "hotspot_dominant_attribution_mode": "none",
+        "hotspot_limiter_transition_rate": None,
+        "hotspot_speed_estimation_spike_rate": None,
+        "hotspot_timestamp_gap_rate": None,
+        "hotspot_commanded_step_rate": None,
+        "hotspot_high_confidence_rate": None,
+        "hotspot_commanded_vs_measured_mismatch_rate": None,
+        "scoring_artifact_likely": False,
+        "following_convergence_issue_detected": False,
+    }
+    if not acc_health:
+        return unavailable
+
+    counts_by_attr = hotspot_attribution.get("counts_by_attribution") or {}
+    total_hotspots = float(sum(int(v) for v in counts_by_attr.values()))
+
+    def _attr_rate(name: str) -> float:
+        if total_hotspots <= 0.0:
+            return 0.0
+        return float(counts_by_attr.get(name, 0)) / total_hotspots * 100.0
+
+    dominant_attribution_mode = "none"
+    if counts_by_attr:
+        dominant_attribution_mode = max(
+            counts_by_attr.items(),
+            key=lambda item: int(item[1]),
+        )[0]
+
+    raw_jerk = float(acc_health.get("acc_jerk_p95_raw_mps3", 0.0) or 0.0)
+    filtered_jerk = float(acc_health.get("acc_jerk_p95_filtered_mps3", 0.0) or 0.0)
+    commanded_jerk = float(acc_health.get("acc_commanded_jerk_p95_mps3", 0.0) or 0.0)
+    jerk_gate_value = float(acc_health.get("acc_jerk_gate_value_mps3", filtered_jerk) or 0.0)
+    jerk_gate_pass = bool(acc_health.get("jerk_gate_pass", True))
+    raw_spike_dominated = bool(acc_health.get("acc_jerk_raw_spike_dominated", False))
+
+    limiter_transition_rate = _attr_rate("longitudinal_limiter_transition")
+    speed_estimation_spike_rate = _attr_rate("physics_or_speed_estimation_spike")
+    timestamp_gap_rate = _attr_rate("timestamp_gap_derivative_artifact")
+    commanded_step_rate = _attr_rate("commanded_longitudinal_step")
+
+    scoring_artifact_likely = bool(
+        raw_spike_dominated
+        and jerk_gate_pass
+        and (limiter_transition_rate + speed_estimation_spike_rate + timestamp_gap_rate) >= 50.0
+    )
+    following_convergence_issue_detected = bool(
+        float(acc_health.get("acc_gap_above_target_plus_10m_rate", 0.0) or 0.0) >= 25.0
+        or str(acc_health.get("acc_following_regime_mode") or "") == "over_conservative_trailing"
+    )
+
+    return {
+        "schema_version": "v1",
+        "availability": "available",
+        "actual_gap_p50_m": safe_float(acc_health.get("acc_actual_gap_p50_m")),
+        "actual_gap_p95_m": safe_float(acc_health.get("acc_actual_gap_p95_m")),
+        "target_gap_p50_m": safe_float(acc_health.get("acc_target_gap_p50_m")),
+        "target_gap_p95_m": safe_float(acc_health.get("acc_target_gap_p95_m")),
+        "gap_error_p50_m": safe_float(acc_health.get("acc_gap_error_p50_m")),
+        "gap_error_p95_m": safe_float(acc_health.get("acc_gap_error_p95_m")),
+        "gap_error_abs_p50_m": safe_float(acc_health.get("acc_gap_error_abs_p50_m")),
+        "gap_error_abs_p95_m": safe_float(acc_health.get("acc_gap_error_abs_p95_m")),
+        "gap_above_target_plus_2m_rate": safe_float(acc_health.get("acc_gap_above_target_plus_2m_rate")),
+        "gap_above_target_plus_5m_rate": safe_float(acc_health.get("acc_gap_above_target_plus_5m_rate")),
+        "gap_above_target_plus_10m_rate": safe_float(acc_health.get("acc_gap_above_target_plus_10m_rate")),
+        "gap_below_target_rate": safe_float(acc_health.get("acc_gap_below_target_rate")),
+        "following_regime_mode": str(acc_health.get("acc_following_regime_mode") or "unavailable"),
+        "tracking_rate": safe_float(acc_health.get("acc_tracking_rate")),
+        "closing_rate": safe_float(acc_health.get("acc_closing_rate")),
+        "over_conservative_trailing_rate": safe_float(
+            acc_health.get("acc_over_conservative_trailing_rate")
+        ),
+        "compressed_rate": safe_float(acc_health.get("acc_compressed_rate")),
+        "range_rate_p50_mps": safe_float(acc_health.get("acc_range_rate_p50_mps")),
+        "target_speed_delta_p95_mps": safe_float(acc_health.get("acc_target_speed_delta_p95_mps")),
+        "commanded_accel_delta_p95_mps2": safe_float(
+            acc_health.get("acc_commanded_accel_delta_p95_mps2")
+        ),
+        "jerk_gate_metric_role": str(acc_health.get("acc_jerk_gate_metric_role") or "unknown"),
+        "jerk_gate_value_mps3": safe_float(jerk_gate_value),
+        "jerk_gate_pass": jerk_gate_pass,
+        "jerk_p95_filtered_mps3": safe_float(filtered_jerk),
+        "jerk_p95_raw_mps3": safe_float(raw_jerk),
+        "jerk_p95_commanded_mps3": safe_float(commanded_jerk),
+        "raw_spike_dominated": raw_spike_dominated,
+        "hotspot_dominant_attribution_mode": dominant_attribution_mode,
+        "hotspot_limiter_transition_rate": safe_float(limiter_transition_rate),
+        "hotspot_speed_estimation_spike_rate": safe_float(speed_estimation_spike_rate),
+        "hotspot_timestamp_gap_rate": safe_float(timestamp_gap_rate),
+        "hotspot_commanded_step_rate": safe_float(commanded_step_rate),
+        "hotspot_high_confidence_rate": safe_float(
+            hotspot_attribution.get("high_confidence_rate")
+        ),
+        "hotspot_commanded_vs_measured_mismatch_rate": safe_float(
+            hotspot_attribution.get("commanded_vs_measured_mismatch_rate")
+        ),
+        "scoring_artifact_likely": scoring_artifact_likely,
+        "following_convergence_issue_detected": following_convergence_issue_detected,
     }
 
 
@@ -4508,6 +4837,16 @@ def analyze_recording_summary(
             data['longitudinal_limiter_transition_active'] = (
                 np.array(f['control/longitudinal_limiter_transition_active'][:])
                 if 'control/longitudinal_limiter_transition_active' in f
+                else None
+            )
+            data['longitudinal_accel_cmd_raw'] = (
+                np.array(f['control/longitudinal_accel_cmd_raw'][:])
+                if 'control/longitudinal_accel_cmd_raw' in f
+                else None
+            )
+            data['longitudinal_accel_cmd_smoothed'] = (
+                np.array(f['control/longitudinal_accel_cmd_smoothed'][:])
+                if 'control/longitudinal_accel_cmd_smoothed' in f
                 else None
             )
             data['control_timestamps'] = (
@@ -7560,6 +7899,10 @@ def analyze_recording_summary(
 
     # ── ACC health summary (optional — None when ACC inactive or not fitted) ────
     acc_health = _build_acc_health_summary(data, n_frames, speed=data.get('speed'))
+    acc_comfort_contract = _build_acc_comfort_contract_summary(
+        acc_health=acc_health,
+        hotspot_attribution=hotspot_attribution,
+    )
 
     # ACC Safety layer deductions (zero when acc_health is None)
     acc_collision_penalty = 0.0
@@ -7572,9 +7915,11 @@ def analyze_recording_summary(
         acc_near_miss_penalty = safe_float(acc_health.get("near_miss_penalty", 0.0))
         acc_ttc_warning_penalty = safe_float(acc_health.get("ttc_warning_penalty", 0.0))
         acc_hard_zero = bool(acc_health.get("hard_zero", False))
-        jerk_p95 = acc_health.get("acc_jerk_p95_mps3", 0.0) or 0.0
-        if jerk_p95 > ACC_JERK_P95_GATE_MPS3:
-            acc_jerk_penalty = safe_float(min(15.0, (jerk_p95 - ACC_JERK_P95_GATE_MPS3) * 5.0))
+        jerk_gate_value = acc_health.get("acc_jerk_gate_value_mps3", 0.0) or 0.0
+        if jerk_gate_value > ACC_JERK_P95_GATE_MPS3:
+            acc_jerk_penalty = safe_float(
+                min(15.0, (jerk_gate_value - ACC_JERK_P95_GATE_MPS3) * 5.0)
+            )
 
     layer_breakdowns = {
         "Perception": {
@@ -7661,7 +8006,7 @@ def analyze_recording_summary(
                     "limit": "<=0.61 g/s (6.0 m/s³)",
                 },
                 {
-                    "name": "ACC Following Jerk P95",
+                    "name": "ACC Following Jerk P95 (filtered)",
                     "value": acc_jerk_penalty,
                     "limit": "<=4.0 m/s³",
                 },
@@ -8465,7 +8810,7 @@ def analyze_recording_summary(
             "metric_roles": {
                 "commanded_jerk_p95": "gate",
                 "acceleration_p95_filtered": "gate",
-                "jerk_p95_filtered": "diagnostic",
+                "jerk_p95_filtered": "comfort_secondary_gate",
                 "jerk_p95": "diagnostic_raw",
             },
             "hotspot_attribution": hotspot_attribution,
@@ -8515,6 +8860,7 @@ def analyze_recording_summary(
         "transport_contract": transport_contract,
         "speed_intent": speed_intent,
         "run_intent": run_intent,
+        "acc_comfort_contract": acc_comfort_contract,
         "lateral_owner_contract": lateral_owner_contract,
         "highway_mild_curve_contract": highway_mild_curve_contract,
         "mpc_gt_cross_track_contract": mpc_gt_cross_track_contract,
