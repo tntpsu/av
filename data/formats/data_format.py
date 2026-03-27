@@ -378,6 +378,7 @@ class ControlCommand:
     curve_local_arm_effect_heading_term: Optional[float] = None
     curve_local_arm_effect_lateral_shift_term: Optional[float] = None
     curve_local_arm_effect_time_support_term: Optional[float] = None
+    curve_local_dynamic_sustain_effect_score: Optional[float] = None
     curve_local_rearm_cooldown_active: Optional[bool] = None
     curve_local_force_straight_active: Optional[bool] = None
     curve_local_commit_streak_frames: Optional[int] = None
@@ -653,6 +654,10 @@ class ControlCommand:
     mpc_e_lat: float = 0.0
     mpc_e_heading: float = 0.0
     mpc_kappa_ref: float = 0.0
+    mpc_kappa_bias_correction: float = 0.0
+    mpc_kappa_bias_ema: float = 0.0
+    mpc_kappa_bias_guard_active: bool = False
+    mpc_kappa_bias_guard_limit: float = 0.0
     mpc_fallback_active: bool = False
     mpc_consecutive_failures: int = 0
     mpc_gt_cross_track_m: float = 0.0

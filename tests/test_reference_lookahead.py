@@ -1598,6 +1598,82 @@ def test_curve_phase_scheduler_commit_requires_commit_ready() -> None:
     assert str(third["curve_local_state"]).upper() == "COMMIT"
 
 
+def test_curve_phase_scheduler_dynamic_sustain_prevents_rearm_cycle_on_mild_curve() -> None:
+    config = {
+        "curve_phase_preview_curvature_min": 0.0025,
+        "curve_phase_preview_curvature_max": 0.015,
+        "curve_phase_path_curvature_min": 0.003,
+        "curve_phase_path_curvature_max": 0.015,
+        "curve_phase_rise_min": 0.0005,
+        "curve_phase_rise_max": 0.006,
+        "curve_phase_ema_alpha": 0.45,
+        "curve_phase_on": 0.45,
+        "curve_local_entry_on_base": 0.35,
+        "curve_local_entry_on_tight": 0.32,
+        "curve_phase_off": 0.22,
+        "curve_phase_commit_on": 0.45,
+        "curve_phase_commit_min_frames": 3,
+        "curve_phase_entry_floor": 0.15,
+        "curve_phase_commit_floor": 0.30,
+        "curve_phase_rearm_hold_frames": 4,
+        "curve_local_phase_distance_start_m": 8.0,
+        "curve_local_phase_distance_start_tight_m": 10.0,
+        "curve_local_phase_distance_end_m": 1.5,
+        "curve_local_phase_time_start_s": 1.2,
+        "curve_local_phase_time_start_tight_s": 1.6,
+        "curve_local_phase_time_end_s": 0.25,
+        "curve_local_in_curve_distance_eps_m": 0.25,
+        "curve_local_in_curve_time_eps_s": 0.05,
+        "curve_local_in_curve_path_min": 0.70,
+        "curve_local_commit_distance_ready_m": 3.0,
+        "curve_local_commit_time_ready_s": 0.60,
+        "curve_local_phase_reentry_gate_min": 0.10,
+        "curve_local_phase_reentry_path_min": 0.15,
+        "curve_local_entry_severity_curvature_min": 0.003,
+        "curve_local_entry_severity_curvature_max": 0.012,
+        "curve_phase_confidence_min": 0.35,
+        "curve_phase_confidence_max": 0.80,
+        "curve_phase_confidence_floor_scale": 0.6,
+        "curve_local_phase_use_time_term": False,
+        "curve_local_dynamic_arm_enabled": True,
+        "curve_local_dynamic_sustain_enabled": True,
+        "curve_local_dynamic_sustain_gain": 0.22,
+        "curve_local_dynamic_sustain_time_support_gain": 0.08,
+        "curve_local_dynamic_sustain_max": 0.30,
+    }
+
+    phase = 0.0
+    state = "STRAIGHT"
+    entry_frames = 0
+    rearm_hold_frames = 0
+    states: list[str] = []
+    sustain_scores: list[float] = []
+    for _ in range(5):
+        diag = compute_curve_phase_scheduler(
+            preview_curvature_abs=0.0020,
+            path_curvature_abs=0.0032,
+            curvature_rise_abs=0.0,
+            distance_to_curve_start_m=0.0,
+            time_to_curve_s=0.55,
+            preview_confidence=1.0,
+            previous_phase=phase,
+            previous_state=state,
+            previous_entry_frames=entry_frames,
+            previous_rearm_hold_frames=rearm_hold_frames,
+            config=config,
+        )
+        phase = float(diag["curve_phase"])
+        state = str(diag["curve_local_state"])
+        entry_frames = int(diag["curve_phase_entry_frames"])
+        rearm_hold_frames = int(diag["curve_phase_rearm_hold_frames"])
+        states.append(state.upper())
+        sustain_scores.append(float(diag["curve_local_dynamic_sustain_effect_score"]))
+
+    assert states[0] == "ENTRY"
+    assert "REARM" not in states[:4]
+    assert max(sustain_scores) >= 0.18
+
+
 def test_reference_lookahead_returns_local_gate_weight_diagnostics() -> None:
     config = {
         "dynamic_reference_lookahead": True,

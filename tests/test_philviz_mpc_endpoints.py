@@ -211,6 +211,96 @@ def test_triage_detects_highway_mild_curve_underactivation(tmp_path):
     )
 
 
+def test_triage_detects_curve_sustain_collapse_rearm_cycle(tmp_path):
+    import sys, os
+    import h5py
+    import numpy as np
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'tools', 'debug_visualizer'))
+    from backend.triage_engine import TriageEngine
+
+    recording = tmp_path / "triage_rearm_cycle.h5"
+    n = 24
+    t = np.linspace(0.0, 2.3, n)
+    lat_err = np.zeros(n, dtype=np.float32)
+    lat_err[8:18] = 0.85
+    ref_curv = np.zeros(n, dtype=np.float32)
+    ref_curv[8:18] = 0.002
+    states = np.array([b"STRAIGHT"] * n, dtype="S16")
+    blockers = np.array([b"none"] * n, dtype="S32")
+    for idx in range(8, 18):
+        states[idx] = b"ENTRY" if idx % 2 == 0 else b"REARM"
+        blockers[idx] = b"state_hold" if idx % 2 == 1 else b"none"
+
+    with h5py.File(recording, "w") as f:
+        f.create_dataset("vehicle/timestamps", data=t)
+        f.create_dataset("control/steering", data=np.zeros(n, dtype=np.float32))
+        f.create_dataset("control/lateral_error", data=lat_err)
+        f.create_dataset("control/pp_lookahead_distance", data=np.full(n, 9.4, dtype=np.float32))
+        f.create_dataset("control/reference_lookahead_target", data=np.full(n, 14.3, dtype=np.float32))
+        f.create_dataset("trajectory/reference_point_curvature", data=ref_curv)
+        f.create_dataset("vehicle/road_frame_lane_center_offset", data=np.full(n, 0.04, dtype=np.float32))
+        f.create_dataset("perception/confidence", data=np.ones(n, dtype=np.float32))
+        f.create_dataset("perception/num_lanes_detected", data=np.full(n, 2, dtype=np.int8))
+        f.create_dataset("control/curve_intent_state", data=np.array([b"ENTRY"] * n, dtype="S16"))
+        f.create_dataset("control/curve_local_state", data=states)
+        f.create_dataset("control/curve_activation_blocker_mode", data=blockers)
+        f.create_dataset("control/curve_local_arm_phase_deficit", data=np.zeros(n, dtype=np.float32))
+        f.create_dataset("control/curve_local_sustain_phase_raw", data=np.full(n, 0.05, dtype=np.float32))
+        f.create_dataset("control/sync_packet_fallback_active", data=np.zeros(n, dtype=np.int8))
+
+    engine = TriageEngine(recording)
+    result = engine.generate_triage()
+    pattern_ids = [m["pattern_id"] for m in result["matched_patterns"]]
+    assert "curve_sustain_collapse_rearm_cycle" in pattern_ids, (
+        f"Expected curve_sustain_collapse_rearm_cycle pattern, got: {pattern_ids}"
+    )
+
+
+def test_triage_detects_mpc_curvature_bias_cancellation(tmp_path):
+    import sys, os
+    import h5py
+    import numpy as np
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'tools', 'debug_visualizer'))
+    from backend.triage_engine import TriageEngine
+
+    recording = tmp_path / "triage_mpc_bias_cancel.h5"
+    n = 24
+    t = np.linspace(0.0, 2.3, n)
+    lat_err = np.zeros(n, dtype=np.float32)
+    lat_err[8:18] = 0.86
+    ref_curv = np.zeros(n, dtype=np.float32)
+    ref_curv[8:18] = 0.002
+    mpc_kappa = np.zeros(n, dtype=np.float32)
+    mpc_kappa[8:18] = 0.0004
+    bias = np.zeros(n, dtype=np.float32)
+    bias[8:18] = -0.0016
+
+    with h5py.File(recording, "w") as f:
+        f.create_dataset("vehicle/timestamps", data=t)
+        f.create_dataset("control/steering", data=np.zeros(n, dtype=np.float32))
+        f.create_dataset("control/lateral_error", data=lat_err)
+        f.create_dataset("control/pp_lookahead_distance", data=np.full(n, 7.0, dtype=np.float32))
+        f.create_dataset("control/reference_lookahead_target", data=np.full(n, 10.2, dtype=np.float32))
+        f.create_dataset("trajectory/reference_point_curvature", data=ref_curv)
+        f.create_dataset("vehicle/road_frame_lane_center_offset", data=np.full(n, 0.04, dtype=np.float32))
+        f.create_dataset("perception/confidence", data=np.ones(n, dtype=np.float32))
+        f.create_dataset("perception/num_lanes_detected", data=np.full(n, 2, dtype=np.int8))
+        f.create_dataset("control/curve_intent_state", data=np.array([b"ENTRY"] * n, dtype="S16"))
+        f.create_dataset("control/curve_local_state", data=np.array([b"ENTRY"] * n, dtype="S16"))
+        f.create_dataset("control/sync_packet_fallback_active", data=np.zeros(n, dtype=np.int8))
+        f.create_dataset("control/mpc_feasible", data=np.ones(n, dtype=np.int8))
+        f.create_dataset("control/mpc_fallback_active", data=np.zeros(n, dtype=np.int8))
+        f.create_dataset("control/mpc_kappa_ref", data=mpc_kappa)
+        f.create_dataset("control/mpc_kappa_bias_correction", data=bias)
+
+    engine = TriageEngine(recording)
+    result = engine.generate_triage()
+    pattern_ids = [m["pattern_id"] for m in result["matched_patterns"]]
+    assert "mpc_curvature_bias_cancellation" in pattern_ids, (
+        f"Expected mpc_curvature_bias_cancellation pattern, got: {pattern_ids}"
+    )
+
+
 # ── Test 5: Layer health MPC flags ──────────────────────────────────────
 
 def test_layer_health_mpc_flags(mpc_fallback_recording):

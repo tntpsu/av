@@ -79,6 +79,8 @@ def build_causal_timeline(issues: List[Dict], failure_frame: Optional[int] = Non
         "straight_sign_mismatch": "control",
         "trajectory_suppressed_curve_entry": "trajectory",
         "highway_mild_curve_underactivation": "trajectory",
+        "curve_sustain_collapse_rearm_cycle": "trajectory",
+        "mpc_curvature_bias_cancellation": "control",
         "speed_exceeded_feasible": "control",
         "mpc_infeasible": "control",
         "mpc_solve_slow": "control",
@@ -996,6 +998,207 @@ def detect_issues(recording_path: Path, analyze_to_failure: bool = False) -> Dic
                         "pp_lookahead_distance_p50_m": _finite_percentile(pp_lookahead[idx], 50),
                         "reference_lookahead_target_p50_m": _finite_percentile(ref_lookahead[idx], 50, default=np.nan),
                         "lane_center_offset_abs_p95_m": _finite_percentile(lane_offset[idx], 95),
+                    })
+
+                curve_blocker = (
+                    np.array(
+                        [
+                            s.decode("utf-8", errors="ignore") if isinstance(s, (bytes, np.bytes_)) else str(s)
+                            for s in f["control/curve_activation_blocker_mode"][:num_frames]
+                        ],
+                        dtype=object,
+                    )
+                    if "control/curve_activation_blocker_mode" in f
+                    else np.array([""] * num_frames, dtype=object)
+                )
+                arm_phase_deficit = (
+                    np.array(f["control/curve_local_arm_phase_deficit"][:num_frames], dtype=np.float64)
+                    if "control/curve_local_arm_phase_deficit" in f
+                    else np.full(num_frames, np.nan, dtype=np.float64)
+                )
+                sustain_phase_raw = (
+                    np.array(f["control/curve_local_sustain_phase_raw"][:num_frames], dtype=np.float64)
+                    if "control/curve_local_sustain_phase_raw" in f
+                    else np.full(num_frames, np.nan, dtype=np.float64)
+                )
+                mpc_feasible = (
+                    np.array(f["control/mpc_feasible"][:num_frames], dtype=np.float64)
+                    if "control/mpc_feasible" in f
+                    else np.ones(num_frames, dtype=np.float64)
+                )
+                mpc_fallback = (
+                    np.array(f["control/mpc_fallback_active"][:num_frames], dtype=np.float64)
+                    if "control/mpc_fallback_active" in f
+                    else np.zeros(num_frames, dtype=np.float64)
+                )
+                mpc_kappa_ref = (
+                    np.array(f["control/mpc_kappa_ref"][:num_frames], dtype=np.float64)
+                    if "control/mpc_kappa_ref" in f
+                    else np.full(num_frames, np.nan, dtype=np.float64)
+                )
+                if "control/mpc_kappa_bias_correction" in f:
+                    mpc_kappa_bias = np.array(
+                        f["control/mpc_kappa_bias_correction"][:num_frames], dtype=np.float64
+                    )
+                else:
+                    mpc_kappa_bias = mpc_kappa_ref - np.array(
+                        f["trajectory/reference_point_curvature"][:num_frames], dtype=np.float64
+                    )
+
+                local_entry = np.array(
+                    [curve_local_state[i] == "ENTRY" for i in range(num_frames)], dtype=bool
+                )
+                local_rearm = np.array(
+                    [curve_local_state[i] == "REARM" for i in range(num_frames)], dtype=bool
+                )
+                blocker_state_hold = np.array(
+                    [str(curve_blocker[i]).strip().lower() == "state_hold" for i in range(num_frames)],
+                    dtype=bool,
+                )
+                arm_ready = np.isfinite(arm_phase_deficit) & (arm_phase_deficit <= 0.01)
+                sustain_collapse = (
+                    high_error
+                    & mild_curve
+                    & good_perception
+                    & clean_transport
+                    & (local_entry | local_rearm)
+                    & arm_ready
+                    & np.isfinite(sustain_phase_raw)
+                    & (sustain_phase_raw <= 0.12)
+                )
+                state_change = np.zeros(num_frames, dtype=np.int8)
+                for i in range(1, num_frames):
+                    state_change[i] = int(curve_local_state[i] != curve_local_state[i - 1])
+                transition_density = np.convolve(state_change, np.ones(5, dtype=np.int8), mode="same")
+                rearm_presence = np.convolve(local_rearm.astype(np.int8), np.ones(5, dtype=np.int8), mode="same")
+                cycle_mask = sustain_collapse & (transition_density >= 2) & (rearm_presence >= 1)
+
+                event_start = None
+                run_len = 0
+                for frame_idx, active in enumerate(cycle_mask):
+                    if active:
+                        if run_len == 0:
+                            event_start = frame_idx
+                        run_len += 1
+                    else:
+                        if run_len >= min_event_len and event_start is not None:
+                            event_end = frame_idx - 1
+                            idx = slice(event_start, frame_idx)
+                            issues.append({
+                                "issue_id": "curve_sustain_collapse_rearm_cycle",
+                                "frame": int(event_start),
+                                "end_frame": int(event_end),
+                                "type": "curve_sustain_collapse_rearm_cycle",
+                                "severity": "high" if run_len >= 10 else "medium",
+                                "description": (
+                                    f"ENTRY/REARM cycling for {run_len} frames: arming stayed ready "
+                                    f"(arm deficit p95={_finite_percentile(arm_phase_deficit[idx], 95):.3f}) but "
+                                    f"sustain stayed weak (sustain p50={_finite_percentile(sustain_phase_raw[idx], 50):.3f}); "
+                                    f"REARM frames kept long lookahead alive."
+                                ),
+                                "duration": int(run_len),
+                                "deep_link_target": "summary-section-highway-mild-curve",
+                                "focus_id": "diag-focus-highway-mild-curve",
+                                "curve_local_state_mode": "ENTRY_REARM_CYCLE",
+                                "curve_activation_blocker_mode": "state_hold",
+                                "curve_local_sustain_phase_raw_p50": _finite_percentile(sustain_phase_raw[idx], 50),
+                                "curve_local_arm_phase_deficit_p95": _finite_percentile(arm_phase_deficit[idx], 95),
+                            })
+                        event_start = None
+                        run_len = 0
+                if run_len >= min_event_len and event_start is not None:
+                    event_end = int(num_frames - 1)
+                    idx = slice(event_start, num_frames)
+                    issues.append({
+                        "issue_id": "curve_sustain_collapse_rearm_cycle",
+                        "frame": int(event_start),
+                        "end_frame": event_end,
+                        "type": "curve_sustain_collapse_rearm_cycle",
+                        "severity": "high" if run_len >= 10 else "medium",
+                        "description": (
+                            f"ENTRY/REARM cycling for {run_len} frames: arming stayed ready "
+                            f"(arm deficit p95={_finite_percentile(arm_phase_deficit[idx], 95):.3f}) but "
+                            f"sustain stayed weak (sustain p50={_finite_percentile(sustain_phase_raw[idx], 50):.3f}); "
+                            f"REARM frames kept long lookahead alive."
+                        ),
+                        "duration": int(run_len),
+                        "deep_link_target": "summary-section-highway-mild-curve",
+                        "focus_id": "diag-focus-highway-mild-curve",
+                        "curve_local_state_mode": "ENTRY_REARM_CYCLE",
+                        "curve_activation_blocker_mode": "state_hold",
+                        "curve_local_sustain_phase_raw_p50": _finite_percentile(sustain_phase_raw[idx], 50),
+                        "curve_local_arm_phase_deficit_p95": _finite_percentile(arm_phase_deficit[idx], 95),
+                    })
+
+                ref_curv_safe = np.maximum(np.abs(ref_curv), 1e-6)
+                kappa_ratio = np.divide(
+                    np.abs(mpc_kappa_ref),
+                    ref_curv_safe,
+                    out=np.zeros_like(ref_curv_safe),
+                    where=np.isfinite(np.abs(mpc_kappa_ref)),
+                )
+                bias_cancel = (
+                    high_error
+                    & mild_curve
+                    & good_perception
+                    & clean_transport
+                    & (mpc_feasible > 0.5)
+                    & (mpc_fallback <= 0.5)
+                    & np.isfinite(kappa_ratio)
+                    & (kappa_ratio <= 0.50)
+                    & np.isfinite(mpc_kappa_bias)
+                    & (np.abs(mpc_kappa_bias) >= 0.5 * np.abs(ref_curv))
+                )
+
+                event_start = None
+                run_len = 0
+                for frame_idx, active in enumerate(bias_cancel):
+                    if active:
+                        if run_len == 0:
+                            event_start = frame_idx
+                        run_len += 1
+                    else:
+                        if run_len >= min_event_len and event_start is not None:
+                            event_end = frame_idx - 1
+                            idx = slice(event_start, frame_idx)
+                            issues.append({
+                                "issue_id": "mpc_curvature_bias_cancellation",
+                                "frame": int(event_start),
+                                "end_frame": int(event_end),
+                                "type": "mpc_curvature_bias_cancellation",
+                                "severity": "high" if run_len >= 10 else "medium",
+                                "description": (
+                                    f"MPC curvature bias cancellation for {run_len} frames: "
+                                    f"|kappa_mpc|/|kappa_ref| p50={_finite_percentile(kappa_ratio[idx], 50):.3f}, "
+                                    f"bias p50={_finite_percentile(mpc_kappa_bias[idx], 50):.4f} 1/m."
+                                ),
+                                "duration": int(run_len),
+                                "deep_link_target": "summary-section-highway-mild-curve",
+                                "focus_id": "diag-focus-highway-mild-curve",
+                                "mpc_kappa_ratio_p50": _finite_percentile(kappa_ratio[idx], 50),
+                                "mpc_kappa_bias_correction_p50": _finite_percentile(mpc_kappa_bias[idx], 50),
+                            })
+                        event_start = None
+                        run_len = 0
+                if run_len >= min_event_len and event_start is not None:
+                    event_end = int(num_frames - 1)
+                    idx = slice(event_start, num_frames)
+                    issues.append({
+                        "issue_id": "mpc_curvature_bias_cancellation",
+                        "frame": int(event_start),
+                        "end_frame": event_end,
+                        "type": "mpc_curvature_bias_cancellation",
+                        "severity": "high" if run_len >= 10 else "medium",
+                        "description": (
+                            f"MPC curvature bias cancellation for {run_len} frames: "
+                            f"|kappa_mpc|/|kappa_ref| p50={_finite_percentile(kappa_ratio[idx], 50):.3f}, "
+                            f"bias p50={_finite_percentile(mpc_kappa_bias[idx], 50):.4f} 1/m."
+                        ),
+                        "duration": int(run_len),
+                        "deep_link_target": "summary-section-highway-mild-curve",
+                        "focus_id": "diag-focus-highway-mild-curve",
+                        "mpc_kappa_ratio_p50": _finite_percentile(kappa_ratio[idx], 50),
+                        "mpc_kappa_bias_correction_p50": _finite_percentile(mpc_kappa_bias[idx], 50),
                     })
 
             # 4. DETECT PERCEPTION FAILURES (<2 lanes detected)

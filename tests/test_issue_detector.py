@@ -117,3 +117,79 @@ def test_detects_highway_mild_curve_underactivation(tmp_path: Path) -> None:
 
     assert len(mild_curve_issues) == 1
     assert mild_curve_issues[0]["deep_link_target"] == "summary-section-highway-mild-curve"
+
+
+def test_detects_curve_sustain_collapse_rearm_cycle(tmp_path: Path) -> None:
+    recording_path = tmp_path / "issue_rearm_cycle.h5"
+    n_frames = 20
+    timestamps = np.linspace(0.0, 1.9, n_frames)
+    lateral_error = np.zeros(n_frames, dtype=np.float32)
+    lateral_error[5:15] = 0.82
+    ref_curvature = np.zeros(n_frames, dtype=np.float32)
+    ref_curvature[5:15] = 0.002
+    states = np.array([b"STRAIGHT"] * n_frames, dtype="S16")
+    blockers = np.array([b"none"] * n_frames, dtype="S32")
+    for idx in range(5, 15):
+        states[idx] = b"ENTRY" if idx % 2 == 0 else b"REARM"
+        blockers[idx] = b"state_hold" if idx % 2 == 1 else b"none"
+
+    with h5py.File(recording_path, "w") as f:
+        f.create_dataset("vehicle/timestamps", data=timestamps)
+        f.create_dataset("control/steering", data=np.zeros(n_frames, dtype=np.float32))
+        f.create_dataset("control/lateral_error", data=lateral_error)
+        f.create_dataset("control/pp_lookahead_distance", data=np.full(n_frames, 9.5, dtype=np.float32))
+        f.create_dataset("control/reference_lookahead_target", data=np.full(n_frames, 14.0, dtype=np.float32))
+        f.create_dataset("control/curve_local_state", data=states)
+        f.create_dataset("control/curve_intent_state", data=np.array([b"ENTRY"] * n_frames, dtype="S16"))
+        f.create_dataset("control/curve_activation_blocker_mode", data=blockers)
+        f.create_dataset("control/curve_local_arm_phase_deficit", data=np.zeros(n_frames, dtype=np.float32))
+        f.create_dataset("control/curve_local_sustain_phase_raw", data=np.full(n_frames, 0.05, dtype=np.float32))
+        f.create_dataset("control/sync_packet_fallback_active", data=np.zeros(n_frames, dtype=np.int8))
+        f.create_dataset("trajectory/reference_point_curvature", data=ref_curvature)
+        f.create_dataset("vehicle/road_frame_lane_center_offset", data=np.full(n_frames, 0.03, dtype=np.float32))
+        f.create_dataset("perception/confidence", data=np.ones(n_frames, dtype=np.float32))
+        f.create_dataset("perception/num_lanes_detected", data=np.full(n_frames, 2, dtype=np.int8))
+        f.create_dataset("perception/left_lane_line_x", data=np.zeros(n_frames, dtype=np.float32))
+
+    issues = detect_issues(recording_path).get("issues", [])
+    rearm_issues = [i for i in issues if i.get("type") == "curve_sustain_collapse_rearm_cycle"]
+    assert len(rearm_issues) == 1
+    assert rearm_issues[0]["deep_link_target"] == "summary-section-highway-mild-curve"
+
+
+def test_detects_mpc_curvature_bias_cancellation(tmp_path: Path) -> None:
+    recording_path = tmp_path / "issue_mpc_bias_cancel.h5"
+    n_frames = 20
+    timestamps = np.linspace(0.0, 1.9, n_frames)
+    lateral_error = np.zeros(n_frames, dtype=np.float32)
+    lateral_error[5:15] = 0.80
+    ref_curvature = np.zeros(n_frames, dtype=np.float32)
+    ref_curvature[5:15] = 0.002
+    mpc_kappa = np.zeros(n_frames, dtype=np.float32)
+    mpc_kappa[5:15] = 0.0004
+    bias = np.zeros(n_frames, dtype=np.float32)
+    bias[5:15] = -0.0016
+
+    with h5py.File(recording_path, "w") as f:
+        f.create_dataset("vehicle/timestamps", data=timestamps)
+        f.create_dataset("control/steering", data=np.zeros(n_frames, dtype=np.float32))
+        f.create_dataset("control/lateral_error", data=lateral_error)
+        f.create_dataset("control/pp_lookahead_distance", data=np.full(n_frames, 7.0, dtype=np.float32))
+        f.create_dataset("control/reference_lookahead_target", data=np.full(n_frames, 10.0, dtype=np.float32))
+        f.create_dataset("control/curve_local_state", data=np.array([b"ENTRY"] * n_frames, dtype="S16"))
+        f.create_dataset("control/curve_intent_state", data=np.array([b"ENTRY"] * n_frames, dtype="S16"))
+        f.create_dataset("control/sync_packet_fallback_active", data=np.zeros(n_frames, dtype=np.int8))
+        f.create_dataset("control/mpc_feasible", data=np.ones(n_frames, dtype=np.int8))
+        f.create_dataset("control/mpc_fallback_active", data=np.zeros(n_frames, dtype=np.int8))
+        f.create_dataset("control/mpc_kappa_ref", data=mpc_kappa)
+        f.create_dataset("control/mpc_kappa_bias_correction", data=bias)
+        f.create_dataset("trajectory/reference_point_curvature", data=ref_curvature)
+        f.create_dataset("vehicle/road_frame_lane_center_offset", data=np.full(n_frames, 0.04, dtype=np.float32))
+        f.create_dataset("perception/confidence", data=np.ones(n_frames, dtype=np.float32))
+        f.create_dataset("perception/num_lanes_detected", data=np.full(n_frames, 2, dtype=np.int8))
+        f.create_dataset("perception/left_lane_line_x", data=np.zeros(n_frames, dtype=np.float32))
+
+    issues = detect_issues(recording_path).get("issues", [])
+    bias_issues = [i for i in issues if i.get("type") == "mpc_curvature_bias_cancellation"]
+    assert len(bias_issues) == 1
+    assert bias_issues[0]["deep_link_target"] == "summary-section-highway-mild-curve"

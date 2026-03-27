@@ -5551,6 +5551,8 @@ class VehicleController:
                 dt=dt or 0.033,
                 kappa_horizon=kappa_horizon_for_mpc,
                 grade_rad=grade_rad,
+                curve_local_state=str(reference_point.get('curve_local_state', 'STRAIGHT') or 'STRAIGHT'),
+                curve_gate_weight=float(reference_point.get('reference_lookahead_local_gate_weight', 0.0) or 0.0),
             )
 
             if mpc_result.get('mpc_fallback_active'):
@@ -5587,6 +5589,16 @@ class VehicleController:
             )
             lateral_metadata['mpc_e_heading'] = mpc_result.get('e_heading_input', 0.0)
             lateral_metadata['mpc_kappa_ref'] = mpc_result.get('kappa_ref_used', 0.0)
+            lateral_metadata['mpc_kappa_bias_correction'] = mpc_result.get(
+                'kappa_bias_correction', 0.0
+            )
+            lateral_metadata['mpc_kappa_bias_ema'] = mpc_result.get('kappa_bias_ema', 0.0)
+            lateral_metadata['mpc_kappa_bias_guard_active'] = bool(
+                mpc_result.get('kappa_bias_guard_active', False)
+            )
+            lateral_metadata['mpc_kappa_bias_guard_limit'] = mpc_result.get(
+                'kappa_bias_guard_limit', 0.0
+            )
             lateral_metadata['mpc_fallback_active'] = mpc_result.get('mpc_fallback_active', False)
             lateral_metadata['mpc_consecutive_failures'] = mpc_result.get('mpc_consecutive_failures', 0)
             lateral_metadata['mpc_gt_cross_track_m'] = float(gt_cross_track) if gt_cross_track is not None else float('nan')
@@ -5678,6 +5690,8 @@ class VehicleController:
                     dt=frame_dt,
                     kappa_horizon=nmpc_horizon_for_controller,
                     grade_rad=grade_rad,
+                    curve_local_state=str(reference_point.get('curve_local_state', 'STRAIGHT') or 'STRAIGHT'),
+                    curve_gate_weight=float(reference_point.get('reference_lookahead_local_gate_weight', 0.0) or 0.0),
                 )
                 active_result = mpc_result
                 active_feasible_key = 'mpc_feasible'
@@ -5715,6 +5729,16 @@ class VehicleController:
             lateral_metadata['mpc_elat_ramp_active'] = False
             lateral_metadata['mpc_e_heading'] = active_result.get('e_heading_input', 0.0)
             lateral_metadata['mpc_kappa_ref'] = active_result.get('kappa_ref_used', 0.0)
+            lateral_metadata['mpc_kappa_bias_correction'] = active_result.get(
+                'kappa_bias_correction', 0.0
+            )
+            lateral_metadata['mpc_kappa_bias_ema'] = active_result.get('kappa_bias_ema', 0.0)
+            lateral_metadata['mpc_kappa_bias_guard_active'] = bool(
+                active_result.get('kappa_bias_guard_active', False)
+            )
+            lateral_metadata['mpc_kappa_bias_guard_limit'] = active_result.get(
+                'kappa_bias_guard_limit', 0.0
+            )
             lateral_metadata['mpc_fallback_active'] = active_result.get(active_fallback_key, False)
             lateral_metadata['mpc_consecutive_failures'] = active_result.get(
                 'mpc_consecutive_failures', active_result.get('nmpc_consecutive_failures', 0)

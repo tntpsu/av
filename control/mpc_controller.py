@@ -90,6 +90,12 @@ class MPCParams:
     bias_kappa_gain: float = 0.015      # curvature correction per meter of bias
     bias_max_correction: float = 0.002  # max curvature adjustment (rad/m) — never exceed 4x road κ
     bias_min_speed: float = 5.0         # only active above this speed (m/s)
+    bias_relative_guard_enabled: bool = True
+    bias_relative_guard_ratio: float = 0.50
+    bias_relative_guard_min_kappa: float = 0.001
+    bias_active_curve_preserve_enabled: bool = True
+    bias_active_curve_preserve_ratio: float = 0.75
+    bias_active_curve_gate_min: float = 0.40
 
     # Curvature preview horizon (feedforward from trajectory planner)
     curvature_preview_enabled: bool = False   # Default OFF — safe for existing configs
@@ -697,7 +703,9 @@ class MPCController:
                          kappa_ref: float, v_target: float,
                          v_max: float, dt: float,
                          kappa_horizon=None,
-                         grade_rad: float = 0.0) -> dict:
+                         grade_rad: float = 0.0,
+                         curve_local_state: Optional[str] = None,
+                         curve_gate_weight: float = 0.0) -> dict:
         """
         Compute MPC steering. Called by VehicleController each frame.
 
@@ -715,6 +723,8 @@ class MPCController:
                 curvature_preview_enabled=True, replaces the constant-fill
                 κ_ref with a spatially-varying feedforward horizon.
             grade_rad: road grade in radians (positive = uphill), default 0.0
+            curve_local_state: scheduler-owned curve state (STRAIGHT/ENTRY/COMMIT/REARM)
+            curve_gate_weight: local curve relevance weight [0, 1]
 
         Returns:
             dict with: steering_normalized, accel, mpc_feasible, solve_time_ms,
@@ -739,6 +749,8 @@ class MPCController:
         # persistently (car off-center), DECREASE κ so the MPC thinks the curve
         # is weaker and steers MORE aggressively.  Hence: Δκ = −gain × bias.
         self._bias_correction = 0.0
+        bias_guard_active = False
+        bias_guard_limit = 0.0
         if self.params.bias_enabled and current_speed >= self.params.bias_min_speed:
             alpha = self.params.bias_alpha
             self._bias_ema = (1.0 - alpha) * self._bias_ema + alpha * e_lat
@@ -748,6 +760,29 @@ class MPCController:
                 -self.params.bias_max_correction,
                 self.params.bias_max_correction,
             ))
+            active_curve_state = str(curve_local_state or "").strip().upper()
+            active_curve_gate_weight = max(0.0, min(1.0, float(curve_gate_weight or 0.0)))
+            guard_limits: list[float] = []
+            if (
+                self.params.bias_relative_guard_enabled
+                and abs(kappa_ref) >= self.params.bias_relative_guard_min_kappa
+            ):
+                guard_limits.append(self.params.bias_relative_guard_ratio * abs(kappa_ref))
+            if (
+                self.params.bias_active_curve_preserve_enabled
+                and active_curve_state in {"ENTRY", "COMMIT"}
+                and active_curve_gate_weight >= self.params.bias_active_curve_gate_min
+                and abs(kappa_ref) >= self.params.bias_relative_guard_min_kappa
+                and self._bias_correction * kappa_ref < 0.0
+            ):
+                guard_limits.append(
+                    max(0.0, (1.0 - self.params.bias_active_curve_preserve_ratio) * abs(kappa_ref))
+                )
+            if guard_limits:
+                bias_guard_limit = min(self.params.bias_max_correction, *guard_limits)
+                if abs(self._bias_correction) > bias_guard_limit:
+                    self._bias_correction = math.copysign(bias_guard_limit, self._bias_correction)
+                    bias_guard_active = True
 
         # Build κ_ref horizon with bias correction applied
         _preview_used = (
@@ -869,6 +904,8 @@ class MPCController:
             'kappa_ref_used': kappa_ref + self._bias_correction,
             'kappa_bias_correction': self._bias_correction,
             'kappa_bias_ema': self._bias_ema,
+            'kappa_bias_guard_active': bias_guard_active,
+            'kappa_bias_guard_limit': bias_guard_limit,
             'kappa_preview_used': bool(_preview_used),
             'kappa_preview_range': float(np.ptp(kappa_corrected_horizon)) if _preview_used else 0.0,
         }

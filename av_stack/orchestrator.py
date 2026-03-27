@@ -6024,6 +6024,9 @@ class AVStack:
             reference_point['curve_local_arm_effect_time_support_term'] = float(
                 curve_phase_diag.get("curve_local_arm_effect_time_support_term", 0.0) or 0.0
             )
+            reference_point['curve_local_dynamic_sustain_effect_score'] = float(
+                curve_phase_diag.get("curve_local_dynamic_sustain_effect_score", 0.0) or 0.0
+            )
             reference_point['curve_intent'] = float(curve_intent)
             reference_point['curve_intent_raw'] = float(curve_intent_raw)
             reference_point['curve_intent_state'] = str(curve_intent_state)
@@ -6902,6 +6905,10 @@ class AVStack:
         control_command.setdefault(
             'curve_local_arm_effect_time_support_term',
             float(reference_point.get('curve_local_arm_effect_time_support_term', 0.0) or 0.0),
+        )
+        control_command.setdefault(
+            'curve_local_dynamic_sustain_effect_score',
+            float(reference_point.get('curve_local_dynamic_sustain_effect_score', 0.0) or 0.0),
         )
 
         self._last_turn_feasibility_active = bool(control_command.get('turn_feasibility_active', False))
@@ -8965,6 +8972,9 @@ class AVStack:
             curve_local_arm_effect_time_support_term=control_command.get(
                 'curve_local_arm_effect_time_support_term'
             ),
+            curve_local_dynamic_sustain_effect_score=control_command.get(
+                'curve_local_dynamic_sustain_effect_score'
+            ),
             curve_local_rearm_cooldown_active=control_command.get(
                 'curve_local_rearm_cooldown_active'
             ),
@@ -9466,6 +9476,16 @@ class AVStack:
             mpc_e_lat=float(control_command.get('mpc_e_lat', 0.0)),
             mpc_e_heading=float(control_command.get('mpc_e_heading', 0.0)),
             mpc_kappa_ref=float(control_command.get('mpc_kappa_ref', 0.0)),
+            mpc_kappa_bias_correction=float(
+                control_command.get('mpc_kappa_bias_correction', 0.0)
+            ),
+            mpc_kappa_bias_ema=float(control_command.get('mpc_kappa_bias_ema', 0.0)),
+            mpc_kappa_bias_guard_active=bool(
+                control_command.get('mpc_kappa_bias_guard_active', False)
+            ),
+            mpc_kappa_bias_guard_limit=float(
+                control_command.get('mpc_kappa_bias_guard_limit', 0.0)
+            ),
             mpc_fallback_active=bool(control_command.get('mpc_fallback_active', False)),
             mpc_consecutive_failures=int(control_command.get('mpc_consecutive_failures', 0)),
             mpc_gt_cross_track_m=float(control_command.get('mpc_gt_cross_track_m', 0.0)),

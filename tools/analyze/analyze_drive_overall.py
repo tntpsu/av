@@ -1405,7 +1405,9 @@ def _print_summary_report(recording_path: Path, summary: Dict, analyze_to_failur
             f"recognizerInactive={(float(highway_mild_curve_contract.get('curve_recognition_inactive_on_high_error_rate')) if highway_mild_curve_contract.get('curve_recognition_inactive_on_high_error_rate') is not None else float('nan')):.1f}%, "
             f"longLook={(float(highway_mild_curve_contract.get('long_lookahead_on_high_error_rate')) if highway_mild_curve_contract.get('long_lookahead_on_high_error_rate') is not None else float('nan')):.1f}%, "
             f"smallOffset={(float(highway_mild_curve_contract.get('reference_geometry_mismatch_on_high_error_rate')) if highway_mild_curve_contract.get('reference_geometry_mismatch_on_high_error_rate') is not None else float('nan')):.1f}%, "
-            f"blocker={str(highway_mild_curve_contract.get('curve_activation_blocker_mode_on_underactivated') or highway_mild_curve_contract.get('curve_activation_blocker_mode_on_high_error') or 'N/A')}"
+            f"blocker={str(highway_mild_curve_contract.get('curve_activation_blocker_mode_on_underactivated') or highway_mild_curve_contract.get('curve_activation_blocker_mode_on_high_error') or 'N/A')}, "
+            f"rearmCycle={(float(highway_mild_curve_contract.get('rearm_cycle_on_high_error_rate')) if highway_mild_curve_contract.get('rearm_cycle_on_high_error_rate') is not None else float('nan')):.1f}%, "
+            f"mpcBiasCancel={(float(highway_mild_curve_contract.get('mpc_bias_cancellation_on_high_error_rate')) if highway_mild_curve_contract.get('mpc_bias_cancellation_on_high_error_rate') is not None else float('nan')):.1f}%"
         )
     print()
 
@@ -1925,6 +1927,11 @@ def _print_summary_report(recording_path: Path, summary: Dict, analyze_to_failur
         arm_heading_stats = highway_mild_curve_contract.get("curve_local_arm_effect_heading_term") or {}
         arm_lateral_stats = highway_mild_curve_contract.get("curve_local_arm_effect_lateral_shift_term") or {}
         arm_time_stats = highway_mild_curve_contract.get("curve_local_arm_effect_time_support_term") or {}
+        sustain_stats = highway_mild_curve_contract.get("curve_local_sustain_phase_raw") or {}
+        sustain_effect_stats = highway_mild_curve_contract.get("curve_local_dynamic_sustain_effect_score") or {}
+        path_term_stats = highway_mild_curve_contract.get("curve_phase_term_path") or {}
+        kappa_ratio_stats = highway_mild_curve_contract.get("mpc_kappa_ratio_to_reference") or {}
+        bias_stats = highway_mild_curve_contract.get("mpc_kappa_bias_correction") or {}
         print(
             "   Error / Lane Offset P50-P95: "
             f"{float(lat_stats.get('p50') or 0.0):.3f}-{float(lat_stats.get('p95') or 0.0):.3f} m / "
@@ -1948,6 +1955,20 @@ def _print_summary_report(recording_path: Path, summary: Dict, analyze_to_failur
             f"{float(arm_heading_stats.get('p50') or 0.0):.3f} / "
             f"{float(arm_lateral_stats.get('p50') or 0.0):.3f} / "
             f"{float(arm_time_stats.get('p50') or 0.0):.3f}"
+        )
+        print(
+            "   Sustain / REARM / MPC Bias Rates: "
+            f"{float(highway_mild_curve_contract.get('sustain_phase_collapse_on_high_error_rate') or 0.0):.1f}% / "
+            f"{float(highway_mild_curve_contract.get('rearm_cycle_on_high_error_rate') or 0.0):.1f}% / "
+            f"{float(highway_mild_curve_contract.get('mpc_bias_cancellation_on_high_error_rate') or 0.0):.1f}%"
+        )
+        print(
+            "   Sustain Raw / Dynamic Sustain / Path / κ Ratio / Bias (P50): "
+            f"{float(sustain_stats.get('p50') or 0.0):.3f} / "
+            f"{float(sustain_effect_stats.get('p50') or 0.0):.3f} / "
+            f"{float(path_term_stats.get('p50') or 0.0):.3f} / "
+            f"{float(kappa_ratio_stats.get('p50') or 0.0):.3f} / "
+            f"{float(bias_stats.get('p50') or 0.0):.4f}"
         )
     else:
         print("   Highway Mild-Curve Contract: N/A")

@@ -1175,6 +1175,10 @@ def _build_highway_mild_curve_contract_summary(data: Dict) -> Dict:
         "transport_fallback_overlap_max_pct": 5.0,
         "underactivated_on_high_error_min_pct": 50.0,
         "reference_geometry_mismatch_on_high_error_min_pct": 50.0,
+        "sustain_phase_collapse_max": 0.12,
+        "rearm_cycle_on_high_error_min_pct": 15.0,
+        "mpc_curvature_softness_ratio_max": 0.50,
+        "mpc_bias_cancellation_on_high_error_min_pct": 20.0,
     }
     base = {
         "schema_version": "v1",
@@ -1191,10 +1195,16 @@ def _build_highway_mild_curve_contract_summary(data: Dict) -> Dict:
         "long_lookahead_on_high_error_rate": None,
         "reference_geometry_mismatch_on_high_error_rate": None,
         "underactivated_tracking_on_high_error_rate": None,
+        "sustain_phase_collapse_on_high_error_rate": None,
+        "rearm_cycle_on_high_error_rate": None,
+        "mpc_curvature_softness_on_high_error_rate": None,
+        "mpc_bias_cancellation_on_high_error_rate": None,
         "transport_fallback_overlap_on_high_error_rate": None,
         "poor_perception_overlap_on_high_error_rate": None,
         "mpc_feasible_on_high_error_rate": None,
         "mpc_fallback_overlap_on_high_error_rate": None,
+        "rearm_cycle_issue_detected": False,
+        "mpc_bias_cancellation_issue_detected": False,
         "curve_intent_state_mode_on_high_error": None,
         "curve_local_state_mode_on_high_error": None,
         "curve_activation_blocker_mode_on_high_error": None,
@@ -1211,6 +1221,11 @@ def _build_highway_mild_curve_contract_summary(data: Dict) -> Dict:
         "curve_local_arm_effect_heading_term": _finite_stats(None),
         "curve_local_arm_effect_lateral_shift_term": _finite_stats(None),
         "curve_local_arm_effect_time_support_term": _finite_stats(None),
+        "curve_local_sustain_phase_raw": _finite_stats(None),
+        "curve_phase_term_path": _finite_stats(None),
+        "curve_local_dynamic_sustain_effect_score": _finite_stats(None),
+        "mpc_kappa_ratio_to_reference": _finite_stats(None),
+        "mpc_kappa_bias_correction": _finite_stats(None),
         "limits": limits,
     }
     unavailable = dict(base)
@@ -1258,6 +1273,10 @@ def _build_highway_mild_curve_contract_summary(data: Dict) -> Dict:
         data.get("curve_local_arm_effect_heading_term"),
         data.get("curve_local_arm_effect_lateral_shift_term"),
         data.get("curve_local_arm_effect_time_support_term"),
+        data.get("curve_local_sustain_phase_raw"),
+        data.get("curve_phase_term_path"),
+        data.get("curve_local_dynamic_sustain_effect_score"),
+        data.get("mpc_kappa_bias_correction"),
     ]
     for series in optional_series:
         if series is not None:
@@ -1349,6 +1368,30 @@ def _build_highway_mild_curve_contract_summary(data: Dict) -> Dict:
         if arm_effect_time is not None
         else np.full(n, np.nan, dtype=np.float64)
     )
+    sustain_phase_raw = data.get("curve_local_sustain_phase_raw")
+    sustain_phase_raw_arr = (
+        np.asarray(sustain_phase_raw[:n], dtype=np.float64)
+        if sustain_phase_raw is not None
+        else np.full(n, np.nan, dtype=np.float64)
+    )
+    phase_term_path = data.get("curve_phase_term_path")
+    phase_term_path_arr = (
+        np.asarray(phase_term_path[:n], dtype=np.float64)
+        if phase_term_path is not None
+        else np.full(n, np.nan, dtype=np.float64)
+    )
+    dynamic_sustain_effect = data.get("curve_local_dynamic_sustain_effect_score")
+    dynamic_sustain_effect_arr = (
+        np.asarray(dynamic_sustain_effect[:n], dtype=np.float64)
+        if dynamic_sustain_effect is not None
+        else np.full(n, np.nan, dtype=np.float64)
+    )
+    mpc_kappa_bias_correction = data.get("mpc_kappa_bias_correction")
+    mpc_kappa_bias_correction_arr = (
+        np.asarray(mpc_kappa_bias_correction[:n], dtype=np.float64)
+        if mpc_kappa_bias_correction is not None
+        else (mpc_kappa_ref_arr - np.asarray(ref_curvature[:n], dtype=np.float64))
+    )
 
     high_error_mask = lateral_error_arr >= limits["high_lateral_error_min_m"]
     mild_curve_mask = (
@@ -1382,6 +1425,43 @@ def _build_highway_mild_curve_contract_summary(data: Dict) -> Dict:
         & long_lookahead_mask
         & small_lane_offset_mask
     )
+    state_entry_mask = np.array(
+        [str(v or "").strip().upper() == "ENTRY" for v in curve_local_states[:n]],
+        dtype=bool,
+    )
+    state_rearm_mask = np.array(
+        [str(v or "").strip().upper() == "REARM" for v in curve_local_states[:n]],
+        dtype=bool,
+    )
+    blocker_state_hold_mask = np.array(
+        [str(v or "").strip().lower() == "state_hold" for v in curve_activation_blocker_modes[:n]]
+        if curve_activation_blocker_modes
+        else np.zeros(n, dtype=bool),
+        dtype=bool,
+    )
+    arm_phase_ready_mask = np.isfinite(arm_phase_deficit_arr) & (arm_phase_deficit_arr <= 0.01)
+    sustain_collapse_mask = (
+        high_error_mask
+        & mild_curve_mask
+        & (state_entry_mask | state_rearm_mask)
+        & arm_phase_ready_mask
+        & np.isfinite(sustain_phase_raw_arr)
+        & (sustain_phase_raw_arr <= limits["sustain_phase_collapse_max"])
+    )
+    rearm_cycle_mask = sustain_collapse_mask & state_rearm_mask & blocker_state_hold_mask
+    ref_curvature_safe = np.maximum(ref_curvature_arr, 1e-6)
+    mpc_kappa_ratio_arr = np.abs(mpc_kappa_ref_arr) / ref_curvature_safe
+    mpc_curvature_softness_mask = (
+        high_error_mask
+        & mild_curve_mask
+        & mpc_feasible_mask
+        & (mpc_kappa_ratio_arr <= limits["mpc_curvature_softness_ratio_max"])
+    )
+    mpc_bias_cancellation_mask = (
+        mpc_curvature_softness_mask
+        & np.isfinite(mpc_kappa_bias_correction_arr)
+        & (np.abs(mpc_kappa_bias_correction_arr) >= 0.5 * ref_curvature_arr)
+    )
 
     high_error_count = int(np.sum(high_error_mask))
 
@@ -1402,6 +1482,10 @@ def _build_highway_mild_curve_contract_summary(data: Dict) -> Dict:
     underactivated_on_high_error_rate = _pct_of_high_error(underactivated_mask)
     mismatch_on_high_error_rate = _pct_of_high_error(small_lane_offset_mask)
     transport_overlap_rate = _pct_of_high_error(transport_fallback_mask)
+    sustain_collapse_rate = _pct_of_high_error(sustain_collapse_mask)
+    rearm_cycle_rate = _pct_of_high_error(rearm_cycle_mask)
+    mpc_curvature_softness_rate = _pct_of_high_error(mpc_curvature_softness_mask)
+    mpc_bias_cancellation_rate = _pct_of_high_error(mpc_bias_cancellation_mask)
 
     result = {
         **base,
@@ -1437,12 +1521,26 @@ def _build_highway_mild_curve_contract_summary(data: Dict) -> Dict:
         "long_lookahead_on_high_error_rate": _pct_of_high_error(long_lookahead_mask),
         "reference_geometry_mismatch_on_high_error_rate": mismatch_on_high_error_rate,
         "underactivated_tracking_on_high_error_rate": underactivated_on_high_error_rate,
+        "sustain_phase_collapse_on_high_error_rate": sustain_collapse_rate,
+        "rearm_cycle_on_high_error_rate": rearm_cycle_rate,
+        "mpc_curvature_softness_on_high_error_rate": mpc_curvature_softness_rate,
+        "mpc_bias_cancellation_on_high_error_rate": mpc_bias_cancellation_rate,
         "transport_fallback_overlap_on_high_error_rate": transport_overlap_rate,
         "poor_perception_overlap_on_high_error_rate": _pct_of_high_error(
             poor_perception_mask
         ),
         "mpc_feasible_on_high_error_rate": _pct_of_high_error(mpc_feasible_mask),
         "mpc_fallback_overlap_on_high_error_rate": _pct_of_high_error(mpc_fallback_mask),
+        "rearm_cycle_issue_detected": bool(
+            high_error_count >= 10
+            and safe_float(rearm_cycle_rate, default=0.0)
+            >= limits["rearm_cycle_on_high_error_min_pct"]
+        ),
+        "mpc_bias_cancellation_issue_detected": bool(
+            high_error_count >= 10
+            and safe_float(mpc_bias_cancellation_rate, default=0.0)
+            >= limits["mpc_bias_cancellation_on_high_error_min_pct"]
+        ),
         "curve_intent_state_mode_on_high_error": _mode_string(
             [curve_intent_states[i] for i in high_error_idx],
             ignore={""},
@@ -1488,6 +1586,19 @@ def _build_highway_mild_curve_contract_summary(data: Dict) -> Dict:
         ),
         "curve_local_arm_effect_time_support_term": _finite_stats(
             arm_effect_time_arr[high_error_mask]
+        ),
+        "curve_local_sustain_phase_raw": _finite_stats(
+            sustain_phase_raw_arr[high_error_mask]
+        ),
+        "curve_phase_term_path": _finite_stats(phase_term_path_arr[high_error_mask]),
+        "curve_local_dynamic_sustain_effect_score": _finite_stats(
+            dynamic_sustain_effect_arr[high_error_mask]
+        ),
+        "mpc_kappa_ratio_to_reference": _finite_stats(
+            mpc_kappa_ratio_arr[high_error_mask]
+        ),
+        "mpc_kappa_bias_correction": _finite_stats(
+            mpc_kappa_bias_correction_arr[high_error_mask]
         ),
     }
     return result
@@ -3545,6 +3656,11 @@ def analyze_recording_summary(
                 if 'control/curve_local_arm_effect_time_support_term' in f
                 else None
             )
+            data['curve_local_dynamic_sustain_effect_score'] = (
+                np.array(f['control/curve_local_dynamic_sustain_effect_score'][:])
+                if 'control/curve_local_dynamic_sustain_effect_score' in f
+                else None
+            )
             data['curve_local_commit_streak_frames'] = (
                 np.array(f['control/curve_local_commit_streak_frames'][:])
                 if 'control/curve_local_commit_streak_frames' in f
@@ -3815,6 +3931,22 @@ def analyze_recording_summary(
             data['mpc_kappa_ref'] = (
                 np.array(f['control/mpc_kappa_ref'][:])
                 if 'control/mpc_kappa_ref' in f else None
+            )
+            data['mpc_kappa_bias_correction'] = (
+                np.array(f['control/mpc_kappa_bias_correction'][:])
+                if 'control/mpc_kappa_bias_correction' in f else None
+            )
+            data['mpc_kappa_bias_ema'] = (
+                np.array(f['control/mpc_kappa_bias_ema'][:])
+                if 'control/mpc_kappa_bias_ema' in f else None
+            )
+            data['mpc_kappa_bias_guard_active'] = (
+                np.array(f['control/mpc_kappa_bias_guard_active'][:])
+                if 'control/mpc_kappa_bias_guard_active' in f else None
+            )
+            data['mpc_kappa_bias_guard_limit'] = (
+                np.array(f['control/mpc_kappa_bias_guard_limit'][:])
+                if 'control/mpc_kappa_bias_guard_limit' in f else None
             )
             data['mpc_fallback_active'] = (
                 np.array(f['control/mpc_fallback_active'][:])

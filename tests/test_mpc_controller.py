@@ -305,6 +305,10 @@ def test_params_from_config():
     # Defaults for unspecified
     assert p.q_heading == 5.0
     assert p.r_steer_rate == 1.0
+    assert p.bias_relative_guard_enabled is True
+    assert p.bias_relative_guard_ratio == 0.5
+    assert p.bias_active_curve_preserve_enabled is True
+    assert p.bias_active_curve_preserve_ratio == 0.75
 
 
 # ---------------------------------------------------------------------------
@@ -416,6 +420,60 @@ def test_kappa_transition_params_from_config():
     p = MPCParams.from_config(cfg)
     assert p.kappa_transition_warmup_enabled is False
     assert abs(p.kappa_transition_threshold - 0.003) < 1e-9
+
+
+def test_bias_guard_clamps_correction_relative_to_reference_curvature():
+    ctrl = _make_controller(
+        mpc_bias_enabled=True,
+        mpc_bias_alpha=1.0,
+        mpc_bias_kappa_gain=1.0,
+        mpc_bias_max_correction=0.01,
+        mpc_bias_relative_guard_enabled=True,
+        mpc_bias_relative_guard_ratio=0.5,
+        mpc_bias_relative_guard_min_kappa=0.001,
+    )
+
+    r = _solve(ctrl, e_lat=1.0, kappa=0.002, speed=12.0)
+
+    assert r["mpc_feasible"]
+    assert r["kappa_bias_guard_active"] is True
+    assert r["kappa_bias_guard_limit"] == pytest.approx(0.001, rel=1e-6)
+    assert r["kappa_bias_correction"] == pytest.approx(-0.001, rel=1e-6)
+    assert r["kappa_ref_used"] == pytest.approx(0.001, rel=1e-6)
+
+
+def test_active_curve_bias_guard_preserves_majority_of_reference_curvature():
+    ctrl = _make_controller(
+        mpc_bias_enabled=True,
+        mpc_bias_alpha=1.0,
+        mpc_bias_kappa_gain=1.0,
+        mpc_bias_max_correction=0.01,
+        mpc_bias_relative_guard_enabled=True,
+        mpc_bias_relative_guard_ratio=0.5,
+        mpc_bias_relative_guard_min_kappa=0.001,
+        mpc_bias_active_curve_preserve_enabled=True,
+        mpc_bias_active_curve_preserve_ratio=0.75,
+        mpc_bias_active_curve_gate_min=0.4,
+    )
+
+    r = ctrl.compute_steering(
+        e_lat=1.0,
+        e_heading=0.0,
+        current_speed=12.0,
+        last_delta_norm=0.0,
+        kappa_ref=0.002,
+        v_target=12.0,
+        v_max=15.0,
+        dt=0.033,
+        curve_local_state="ENTRY",
+        curve_gate_weight=1.0,
+    )
+
+    assert r["mpc_feasible"]
+    assert r["kappa_bias_guard_active"] is True
+    assert r["kappa_bias_guard_limit"] == pytest.approx(0.0005, rel=1e-6)
+    assert r["kappa_bias_correction"] == pytest.approx(-0.0005, rel=1e-6)
+    assert r["kappa_ref_used"] == pytest.approx(0.0015, rel=1e-6)
 
 
 # ---------------------------------------------------------------------------

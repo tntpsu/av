@@ -472,6 +472,41 @@ PATTERNS = [
             and m.get("highway_mild_curve_poor_perception_overlap_on_high_error_rate", 1.0) < 0.10
         ),
     },
+    {
+        "id": "curve_sustain_collapse_rearm_cycle",
+        "name": "Curve sustain collapse / REARM cycling",
+        "severity": "instability",
+        "category": "Trajectory",
+        "code_pointer": "trajectory/utils.py:1116-1196",
+        "config_lever": "dynamic sustain effect / ENTRY-to-REARM sustain hysteresis",
+        "fix_hint": (
+            "Curve arming is active, but sustain remains too weak and the scheduler alternates "
+            "ENTRY for ~2 frames then REARM for ~1 frame. Strengthen dynamic sustain for active mild curves "
+            "instead of re-tuning track-specific thresholds."
+        ),
+        "check": lambda m: (
+            m.get("curve_sustain_collapse_rearm_cycle_rate", 0.0) > 0.05
+            and m.get("highway_mild_curve_transport_fallback_overlap_on_high_error_rate", 1.0) < 0.10
+            and m.get("highway_mild_curve_poor_perception_overlap_on_high_error_rate", 1.0) < 0.10
+        ),
+    },
+    {
+        "id": "mpc_curvature_bias_cancellation",
+        "name": "MPC curvature bias cancellation",
+        "severity": "instability",
+        "category": "Control",
+        "code_pointer": "control/mpc_controller.py:742-764",
+        "config_lever": "trajectory.mpc.mpc_bias_* / dynamic bias guard",
+        "fix_hint": (
+            "MPC receives the correct map/reference curvature, then cancels too much of it with bias correction. "
+            "Clamp bias as a fraction of |kappa_ref| for active curves, or disable the highway bias override."
+        ),
+        "check": lambda m: (
+            m.get("mpc_curvature_bias_cancellation_rate", 0.0) > 0.05
+            and m.get("highway_mild_curve_transport_fallback_overlap_on_high_error_rate", 1.0) < 0.10
+            and m.get("highway_mild_curve_poor_perception_overlap_on_high_error_rate", 1.0) < 0.10
+        ),
+    },
     # ── ACC patterns (Step 5 — priority-0 when following_too_close) ──────────
     {
         "id": "acc_following_too_close",
@@ -949,6 +984,13 @@ class TriageEngine:
                 sync_fallback = arr("control/sync_packet_fallback_active")
                 perception_conf = arr("perception/confidence")
                 num_lanes = arr("perception/num_lanes_detected")
+                curve_blocker = arr("control/curve_activation_blocker_mode")
+                arm_phase_deficit = arr("control/curve_local_arm_phase_deficit")
+                sustain_phase_raw = arr("control/curve_local_sustain_phase_raw")
+                mpc_kappa_ref = arr("control/mpc_kappa_ref")
+                mpc_bias = arr("control/mpc_kappa_bias_correction")
+                mpc_feasible_arr = arr("control/mpc_feasible")
+                mpc_fallback_arr = arr("control/mpc_fallback_active")
 
                 min_len = min(
                     len(lat_err),
@@ -966,6 +1008,20 @@ class TriageEngine:
                     min_len = min(min_len, len(perception_conf))
                 if num_lanes is not None:
                     min_len = min(min_len, len(num_lanes))
+                if curve_blocker is not None:
+                    min_len = min(min_len, len(curve_blocker))
+                if arm_phase_deficit is not None:
+                    min_len = min(min_len, len(arm_phase_deficit))
+                if sustain_phase_raw is not None:
+                    min_len = min(min_len, len(sustain_phase_raw))
+                if mpc_kappa_ref is not None:
+                    min_len = min(min_len, len(mpc_kappa_ref))
+                if mpc_bias is not None:
+                    min_len = min(min_len, len(mpc_bias))
+                if mpc_feasible_arr is not None:
+                    min_len = min(min_len, len(mpc_feasible_arr))
+                if mpc_fallback_arr is not None:
+                    min_len = min(min_len, len(mpc_fallback_arr))
 
                 if min_len > 0:
                     lat_abs = np.abs(np.asarray(lat_err[:min_len], dtype=float))
@@ -992,6 +1048,48 @@ class TriageEngine:
                         if num_lanes is not None
                         else np.full(min_len, 2.0, dtype=float)
                     )
+                    blocker_arr = (
+                        np.asarray(curve_blocker[:min_len])
+                        if curve_blocker is not None
+                        else np.array([""] * min_len, dtype=object)
+                    )
+                    blocker_arr = np.array([
+                        v.decode("utf-8", errors="ignore").strip().lower()
+                        if isinstance(v, (bytes, bytearray, np.bytes_))
+                        else str(v).strip().lower()
+                        for v in blocker_arr
+                    ], dtype=object)
+                    arm_deficit_arr = (
+                        np.asarray(arm_phase_deficit[:min_len], dtype=float)
+                        if arm_phase_deficit is not None
+                        else np.full(min_len, np.nan, dtype=float)
+                    )
+                    sustain_arr = (
+                        np.asarray(sustain_phase_raw[:min_len], dtype=float)
+                        if sustain_phase_raw is not None
+                        else np.full(min_len, np.nan, dtype=float)
+                    )
+                    mpc_kappa_arr = (
+                        np.asarray(mpc_kappa_ref[:min_len], dtype=float)
+                        if mpc_kappa_ref is not None
+                        else np.full(min_len, np.nan, dtype=float)
+                    )
+                    ref_signed = np.asarray(ref_curvature[:min_len], dtype=float)
+                    mpc_bias_arr = (
+                        np.asarray(mpc_bias[:min_len], dtype=float)
+                        if mpc_bias is not None
+                        else (mpc_kappa_arr - ref_signed)
+                    )
+                    mpc_feasible_mask = (
+                        np.asarray(mpc_feasible_arr[:min_len], dtype=float) > 0.5
+                        if mpc_feasible_arr is not None
+                        else np.ones(min_len, dtype=bool)
+                    )
+                    mpc_fallback_mask = (
+                        np.asarray(mpc_fallback_arr[:min_len], dtype=float) > 0.5
+                        if mpc_fallback_arr is not None
+                        else np.zeros(min_len, dtype=bool)
+                    )
                     high_err = lat_abs >= 0.5
                     mild_curve = (ref_curv_abs >= 0.0015) & (ref_curv_abs <= 0.0035)
                     small_offset = road_abs <= 0.12
@@ -1000,10 +1098,60 @@ class TriageEngine:
                         and (curve_local_state[i] not in {"ENTRY", "COMMIT"})
                         for i in range(min_len)
                     ], dtype=bool)
+                    local_entry = np.array(
+                        [curve_local_state[i] == "ENTRY" for i in range(min_len)],
+                        dtype=bool,
+                    )
+                    local_rearm = np.array(
+                        [curve_local_state[i] == "REARM" for i in range(min_len)],
+                        dtype=bool,
+                    )
                     long_look = (pp_look >= 8.0) | (ref_look >= 12.0)
                     poor_perception = (conf_arr < 0.5) | (lanes_arr < 2.0)
                     fallback_mask = fallback_arr > 0.5
                     underactivated = high_err & mild_curve & recognizer_inactive & long_look & small_offset
+                    arm_ready = np.isfinite(arm_deficit_arr) & (arm_deficit_arr <= 0.01)
+                    sustain_collapse = (
+                        high_err
+                        & mild_curve
+                        & (local_entry | local_rearm)
+                        & arm_ready
+                        & np.isfinite(sustain_arr)
+                        & (sustain_arr <= 0.12)
+                    )
+                    state_change = np.zeros(min_len, dtype=np.int8)
+                    state_change[1:] = np.array(
+                        [curve_local_state[i] != curve_local_state[i - 1] for i in range(1, min_len)],
+                        dtype=np.int8,
+                    )
+                    transition_density = np.convolve(
+                        state_change, np.ones(5, dtype=np.int8), mode="same"
+                    )
+                    rearm_presence = np.convolve(
+                        local_rearm.astype(np.int8), np.ones(5, dtype=np.int8), mode="same"
+                    )
+                    rearm_cycle = (
+                        sustain_collapse
+                        & (transition_density >= 2)
+                        & (rearm_presence >= 1)
+                        & np.array([v == "state_hold" for v in blocker_arr], dtype=bool)
+                    )
+                    ref_safe = np.maximum(np.abs(ref_signed), 1e-6)
+                    kappa_ratio = np.divide(
+                        np.abs(mpc_kappa_arr),
+                        ref_safe,
+                        out=np.zeros_like(ref_safe),
+                        where=np.isfinite(np.abs(mpc_kappa_arr)),
+                    )
+                    bias_cancel = (
+                        high_err
+                        & mild_curve
+                        & mpc_feasible_mask
+                        & ~mpc_fallback_mask
+                        & (kappa_ratio <= 0.50)
+                        & np.isfinite(mpc_bias_arr)
+                        & (np.abs(mpc_bias_arr) >= 0.5 * np.abs(ref_signed))
+                    )
 
                     high_err_count = int(np.sum(high_err))
                     m["highway_mild_curve_underactivation_rate"] = float(np.mean(underactivated))
@@ -1021,6 +1169,12 @@ class TriageEngine:
                     )
                     m["highway_mild_curve_long_lookahead_on_high_error_rate"] = (
                         float(np.sum(high_err & long_look) / max(high_err_count, 1))
+                    )
+                    m["curve_sustain_collapse_rearm_cycle_rate"] = (
+                        float(np.sum(rearm_cycle) / max(high_err_count, 1))
+                    )
+                    m["mpc_curvature_bias_cancellation_rate"] = (
+                        float(np.sum(bias_cancel) / max(high_err_count, 1))
                     )
 
             # Speed below target rate

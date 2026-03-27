@@ -1714,6 +1714,15 @@ class Visualizer {
                 const armHeading = highwayMildCurve.curve_local_arm_effect_heading_term || {};
                 const armLateral = highwayMildCurve.curve_local_arm_effect_lateral_shift_term || {};
                 const armTime = highwayMildCurve.curve_local_arm_effect_time_support_term || {};
+                const sustainRaw = highwayMildCurve.curve_local_sustain_phase_raw || {};
+                const sustainEffect = highwayMildCurve.curve_local_dynamic_sustain_effect_score || {};
+                const pathTerm = highwayMildCurve.curve_phase_term_path || {};
+                const rearmCycleRate = Number(highwayMildCurve.rearm_cycle_on_high_error_rate);
+                const sustainCollapseRate = Number(highwayMildCurve.sustain_phase_collapse_on_high_error_rate);
+                const mpcSoftRate = Number(highwayMildCurve.mpc_curvature_softness_on_high_error_rate);
+                const mpcBiasCancelRate = Number(highwayMildCurve.mpc_bias_cancellation_on_high_error_rate);
+                const mpcKappaRatio = highwayMildCurve.mpc_kappa_ratio_to_reference || {};
+                const mpcBias = highwayMildCurve.mpc_kappa_bias_correction || {};
                 const blockerMode = String(
                     highwayMildCurve.curve_activation_blocker_mode_on_underactivated
                     || highwayMildCurve.curve_activation_blocker_mode_on_high_error
@@ -1736,6 +1745,10 @@ class Visualizer {
                 html += `<tr><td>PP Lookahead / Ref Lookahead (P50):</td><td style="text-align: right;">${Number.isFinite(Number(ppLook.p50)) ? Number(ppLook.p50).toFixed(2) + ' m' : 'N/A'} / ${Number.isFinite(Number(refLook.p50)) ? Number(refLook.p50).toFixed(2) + ' m' : 'N/A'}</td></tr>`;
                 html += `<tr><td>Arm Deficit / Effect Score (P50):</td><td style="text-align: right;">${Number.isFinite(Number(armDeficit.p50)) ? Number(armDeficit.p50).toFixed(3) : 'N/A'} / ${Number.isFinite(Number(armEffect.p50)) ? Number(armEffect.p50).toFixed(3) : 'N/A'}</td></tr>`;
                 html += `<tr><td>Arm Effect Terms H / L / T (P50):</td><td style="text-align: right;">${Number.isFinite(Number(armHeading.p50)) ? Number(armHeading.p50).toFixed(3) : 'N/A'} / ${Number.isFinite(Number(armLateral.p50)) ? Number(armLateral.p50).toFixed(3) : 'N/A'} / ${Number.isFinite(Number(armTime.p50)) ? Number(armTime.p50).toFixed(3) : 'N/A'}</td></tr>`;
+                html += `<tr><td>Sustain Raw / Dynamic Sustain / Path Term (P50):</td><td style="text-align: right;">${Number.isFinite(Number(sustainRaw.p50)) ? Number(sustainRaw.p50).toFixed(3) : 'N/A'} / ${Number.isFinite(Number(sustainEffect.p50)) ? Number(sustainEffect.p50).toFixed(3) : 'N/A'} / ${Number.isFinite(Number(pathTerm.p50)) ? Number(pathTerm.p50).toFixed(3) : 'N/A'}</td></tr>`;
+                html += `<tr><td>Sustain Collapse / REARM Cycle:</td><td style="text-align: right;">${Number.isFinite(sustainCollapseRate) ? sustainCollapseRate.toFixed(1) + '%' : 'N/A'} / ${Number.isFinite(rearmCycleRate) ? rearmCycleRate.toFixed(1) + '%' : 'N/A'}</td></tr>`;
+                html += `<tr><td>MPC κ Ratio / Bias Cancel Rate:</td><td style="text-align: right;">${Number.isFinite(Number(mpcKappaRatio.p50)) ? Number(mpcKappaRatio.p50).toFixed(3) : 'N/A'} / ${Number.isFinite(mpcBiasCancelRate) ? mpcBiasCancelRate.toFixed(1) + '%' : 'N/A'}</td></tr>`;
+                html += `<tr><td>MPC Bias Corr (P50) / Softness Rate:</td><td style="text-align: right;">${Number.isFinite(Number(mpcBias.p50)) ? Number(mpcBias.p50).toFixed(4) : 'N/A'} / ${Number.isFinite(mpcSoftRate) ? mpcSoftRate.toFixed(1) + '%' : 'N/A'}</td></tr>`;
                 html += `<tr><td>Speed (P50):</td><td style="text-align: right;">${Number.isFinite(Number(speedStats.p50)) ? Number(speedStats.p50).toFixed(2) + ' m/s' : 'N/A'}</td></tr>`;
                 html += '</table>';
                 html += '</div>';

@@ -2561,6 +2561,10 @@ class DataRecorder:
         self.h5_file.create_dataset("control/mpc_e_lat", shape=(0,), maxshape=max_shape, dtype=np.float32)
         self.h5_file.create_dataset("control/mpc_e_heading", shape=(0,), maxshape=max_shape, dtype=np.float32)
         self.h5_file.create_dataset("control/mpc_kappa_ref", shape=(0,), maxshape=max_shape, dtype=np.float32)
+        self.h5_file.create_dataset("control/mpc_kappa_bias_correction", shape=(0,), maxshape=max_shape, dtype=np.float32)
+        self.h5_file.create_dataset("control/mpc_kappa_bias_ema", shape=(0,), maxshape=max_shape, dtype=np.float32)
+        self.h5_file.create_dataset("control/mpc_kappa_bias_guard_active", shape=(0,), maxshape=max_shape, dtype=np.int8)
+        self.h5_file.create_dataset("control/mpc_kappa_bias_guard_limit", shape=(0,), maxshape=max_shape, dtype=np.float32)
         self.h5_file.create_dataset("control/mpc_fallback_active", shape=(0,), maxshape=max_shape, dtype=np.int8)
         self.h5_file.create_dataset("control/mpc_consecutive_failures", shape=(0,), maxshape=max_shape, dtype=np.int16)
         self.h5_file.create_dataset("control/mpc_gt_cross_track_m", shape=(0,), maxshape=max_shape, dtype=np.float32)
@@ -3486,6 +3490,12 @@ class DataRecorder:
         )
         self.h5_file.create_dataset(
             "control/curve_local_arm_effect_time_support_term",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/curve_local_dynamic_sustain_effect_score",
             shape=(0,),
             maxshape=max_shape,
             dtype=np.float32
@@ -6573,6 +6583,7 @@ class DataRecorder:
         curve_local_arm_effect_heading_term_list = []
         curve_local_arm_effect_lateral_shift_term_list = []
         curve_local_arm_effect_time_support_term_list = []
+        curve_local_dynamic_sustain_effect_score_list = []
         curve_local_rearm_cooldown_active_list = []
         curve_local_force_straight_active_list = []
         curve_local_commit_streak_frames_list = []
@@ -6804,6 +6815,10 @@ class DataRecorder:
         mpc_e_lat_list = []
         mpc_e_heading_list = []
         mpc_kappa_ref_list = []
+        mpc_kappa_bias_correction_list = []
+        mpc_kappa_bias_ema_list = []
+        mpc_kappa_bias_guard_active_list = []
+        mpc_kappa_bias_guard_limit_list = []
         mpc_fallback_active_list = []
         mpc_consecutive_failures_list = []
         mpc_gt_cross_track_m_list = []
@@ -7229,6 +7244,9 @@ class DataRecorder:
             )
             curve_local_arm_effect_time_support_term_list.append(
                 float(getattr(cc, 'curve_local_arm_effect_time_support_term', 0.0) or 0.0)
+            )
+            curve_local_dynamic_sustain_effect_score_list.append(
+                float(getattr(cc, 'curve_local_dynamic_sustain_effect_score', 0.0) or 0.0)
             )
             _curve_local_rearm = getattr(cc, 'curve_local_rearm_cooldown_active', None)
             curve_local_rearm_cooldown_active_list.append(
@@ -7844,6 +7862,10 @@ class DataRecorder:
             mpc_e_lat_list.append(float(getattr(cc, 'mpc_e_lat', 0.0)))
             mpc_e_heading_list.append(float(getattr(cc, 'mpc_e_heading', 0.0)))
             mpc_kappa_ref_list.append(float(getattr(cc, 'mpc_kappa_ref', 0.0)))
+            mpc_kappa_bias_correction_list.append(float(getattr(cc, 'mpc_kappa_bias_correction', 0.0)))
+            mpc_kappa_bias_ema_list.append(float(getattr(cc, 'mpc_kappa_bias_ema', 0.0)))
+            mpc_kappa_bias_guard_active_list.append(int(getattr(cc, 'mpc_kappa_bias_guard_active', False)))
+            mpc_kappa_bias_guard_limit_list.append(float(getattr(cc, 'mpc_kappa_bias_guard_limit', 0.0)))
             mpc_fallback_active_list.append(int(getattr(cc, 'mpc_fallback_active', False)))
             mpc_consecutive_failures_list.append(int(getattr(cc, 'mpc_consecutive_failures', 0)))
             mpc_gt_cross_track_m_list.append(float(getattr(cc, 'mpc_gt_cross_track_m', 0.0)))
@@ -7973,6 +7995,7 @@ class DataRecorder:
                        "curve_local_arm_effect_heading_term",
                        "curve_local_arm_effect_lateral_shift_term",
                        "curve_local_arm_effect_time_support_term",
+                       "curve_local_dynamic_sustain_effect_score",
                        "curve_local_rearm_cooldown_active",
                        "curve_local_force_straight_active",
                        "curve_local_commit_streak_frames",
@@ -8142,6 +8165,8 @@ class DataRecorder:
                        "pp_speed_norm_scale", "pp_map_ff_applied",
                        "mpc_feasible", "mpc_solve_time_ms",
                        "mpc_e_lat", "mpc_e_heading", "mpc_kappa_ref",
+                       "mpc_kappa_bias_correction", "mpc_kappa_bias_ema",
+                       "mpc_kappa_bias_guard_active", "mpc_kappa_bias_guard_limit",
                        "mpc_fallback_active", "mpc_consecutive_failures",
                        "mpc_gt_cross_track_m", "mpc_gt_heading_error_rad",
                        "mpc_using_ground_truth",
@@ -8504,6 +8529,9 @@ class DataRecorder:
             )
             self.h5_file["control/curve_local_arm_effect_time_support_term"][current_size:] = (
                 curve_local_arm_effect_time_support_term_list
+            )
+            self.h5_file["control/curve_local_dynamic_sustain_effect_score"][current_size:] = (
+                curve_local_dynamic_sustain_effect_score_list
             )
             self.h5_file["control/curve_local_rearm_cooldown_active"][current_size:] = np.array(
                 curve_local_rearm_cooldown_active_list, dtype=np.int8
@@ -9087,6 +9115,16 @@ class DataRecorder:
             self.h5_file["control/mpc_e_lat"][current_size:] = mpc_e_lat_list
             self.h5_file["control/mpc_e_heading"][current_size:] = mpc_e_heading_list
             self.h5_file["control/mpc_kappa_ref"][current_size:] = mpc_kappa_ref_list
+            self.h5_file["control/mpc_kappa_bias_correction"][current_size:] = (
+                mpc_kappa_bias_correction_list
+            )
+            self.h5_file["control/mpc_kappa_bias_ema"][current_size:] = mpc_kappa_bias_ema_list
+            self.h5_file["control/mpc_kappa_bias_guard_active"][current_size:] = (
+                mpc_kappa_bias_guard_active_list
+            )
+            self.h5_file["control/mpc_kappa_bias_guard_limit"][current_size:] = (
+                mpc_kappa_bias_guard_limit_list
+            )
             self.h5_file["control/mpc_fallback_active"][current_size:] = mpc_fallback_active_list
             self.h5_file["control/mpc_consecutive_failures"][current_size:] = mpc_consecutive_failures_list
             self.h5_file["control/mpc_gt_cross_track_m"][current_size:] = mpc_gt_cross_track_m_list

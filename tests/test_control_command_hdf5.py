@@ -148,6 +148,7 @@ def test_recorder_writes_curve_phase_scheduler_fields(tmp_path: Path) -> None:
                 curve_local_arm_effect_heading_term=0.21,
                 curve_local_arm_effect_lateral_shift_term=0.29,
                 curve_local_arm_effect_time_support_term=0.08,
+                curve_local_dynamic_sustain_effect_score=0.24,
                 curve_local_rearm_cooldown_active=False,
                 curve_local_force_straight_active=False,
                 curve_local_commit_streak_frames=3,
@@ -206,6 +207,10 @@ def test_recorder_writes_curve_phase_scheduler_fields(tmp_path: Path) -> None:
                 pp_curve_local_lookahead_post_floor=4.7,
                 pp_curve_local_shorten_slew_active=True,
                 pp_curve_local_shorten_delta_m=0.4,
+                mpc_kappa_bias_correction=-0.0014,
+                mpc_kappa_bias_ema=0.093,
+                mpc_kappa_bias_guard_active=True,
+                mpc_kappa_bias_guard_limit=0.0010,
             ),
             perception_output=None,
             trajectory_output=None,
@@ -304,6 +309,9 @@ def test_recorder_writes_curve_phase_scheduler_fields(tmp_path: Path) -> None:
         assert float(
             h5_file["control/curve_local_arm_effect_time_support_term"][0]
         ) == pytest.approx(0.08, rel=1e-6)
+        assert float(
+            h5_file["control/curve_local_dynamic_sustain_effect_score"][0]
+        ) == pytest.approx(0.24, rel=1e-6)
         assert int(h5_file["control/curve_local_rearm_cooldown_active"][0]) == 0
         assert int(h5_file["control/curve_local_force_straight_active"][0]) == 0
         assert int(h5_file["control/curve_local_commit_streak_frames"][0]) == 3
@@ -443,6 +451,14 @@ def test_recorder_writes_curve_phase_scheduler_fields(tmp_path: Path) -> None:
         )
         assert float(h5_file["control/pp_curve_local_shorten_delta_m"][0]) == pytest.approx(
             0.4, rel=1e-6
+        )
+        assert float(h5_file["control/mpc_kappa_bias_correction"][0]) == pytest.approx(
+            -0.0014, rel=1e-6
+        )
+        assert float(h5_file["control/mpc_kappa_bias_ema"][0]) == pytest.approx(0.093, rel=1e-6)
+        assert int(h5_file["control/mpc_kappa_bias_guard_active"][0]) == 1
+        assert float(h5_file["control/mpc_kappa_bias_guard_limit"][0]) == pytest.approx(
+            0.0010, rel=1e-6
         )
 
 

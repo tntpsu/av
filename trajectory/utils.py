@@ -1049,10 +1049,14 @@ def compute_curve_phase_scheduler(
     local_time_term = 0.0
     if bool(config.get("curve_local_phase_use_time_term", False)):
         local_time_term = term_time * local_gate_weight
+    prev_state_norm = str(previous_state or "STRAIGHT").strip().upper()
+    if prev_state_norm not in {"STRAIGHT", "ENTRY", "COMMIT", "REARM"}:
+        prev_state_norm = "STRAIGHT"
     dynamic_arm_effect_heading_term = 0.0
     dynamic_arm_effect_lateral_shift_term = 0.0
     dynamic_arm_effect_time_support_term = 0.0
     dynamic_arm_effect_score = 0.0
+    dynamic_sustain_effect_score = 0.0
     if (
         bool(config.get("curve_local_dynamic_arm_enabled", True))
         and local_arm_ready
@@ -1107,6 +1111,48 @@ def compute_curve_phase_scheduler(
                     1.0,
                     dynamic_arm_effect_score + dynamic_arm_effect_time_support_term,
                 )
+    dynamic_sustain_enabled = bool(config.get("curve_local_dynamic_sustain_enabled", True))
+    dynamic_sustain_gate_min = max(
+        0.0, min(1.0, float(config.get("curve_local_dynamic_sustain_gate_min", 0.40)))
+    )
+    dynamic_sustain_path_min = max(
+        0.0, min(1.0, float(config.get("curve_local_dynamic_sustain_path_min", 5e-4)))
+    )
+    dynamic_sustain_gain = max(
+        0.0, float(config.get("curve_local_dynamic_sustain_gain", 0.22))
+    )
+    dynamic_sustain_time_support_gain = max(
+        0.0, float(config.get("curve_local_dynamic_sustain_time_support_gain", 0.08))
+    )
+    dynamic_sustain_max = max(
+        0.0, min(1.0, float(config.get("curve_local_dynamic_sustain_max", 0.30)))
+    )
+    if (
+        dynamic_sustain_enabled
+        and local_gate_weight >= dynamic_sustain_gate_min
+        and term_path >= dynamic_sustain_path_min
+        and (
+            local_commit_ready
+            or local_in_curve_now
+            or prev_state_norm in {"ENTRY", "COMMIT"}
+        )
+    ):
+        dynamic_sustain_effect_score = min(
+            dynamic_sustain_max,
+            max(
+                term_path,
+                dynamic_arm_effect_score * dynamic_sustain_gain,
+            ),
+        )
+        if local_commit_ready and term_time > 1e-6:
+            dynamic_sustain_effect_score = min(
+                dynamic_sustain_max,
+                dynamic_sustain_effect_score
+                + min(
+                    dynamic_sustain_max,
+                    term_time * local_gate_weight * dynamic_sustain_time_support_gain,
+                ),
+            )
     local_arm_phase_raw = max(
         local_preview_term,
         local_time_term,
@@ -1116,7 +1162,12 @@ def compute_curve_phase_scheduler(
     if local_commit_ready:
         # Locally committed (vehicle within commit_distance_ready_m of curve start, or
         # physically in-curve): sustain with all terms, including far preview.
-        local_sustain_phase_raw = max(term_path, local_preview_term, local_time_term) * confidence_scale
+        local_sustain_phase_raw = max(
+            term_path,
+            local_preview_term,
+            local_time_term,
+            dynamic_sustain_effect_score,
+        ) * confidence_scale
     else:
         # Not locally committed: only actual road curvature at the vehicle sustains phase.
         # Far preview (term_preview / local_preview_term) is suppressed — it represents
@@ -1125,9 +1176,6 @@ def compute_curve_phase_scheduler(
         # s_loop) where the next curve is always visible in the preview window.
         local_sustain_phase_raw = term_path * confidence_scale
 
-    prev_state_norm = str(previous_state or "STRAIGHT").strip().upper()
-    if prev_state_norm not in {"STRAIGHT", "ENTRY", "COMMIT", "REARM"}:
-        prev_state_norm = "STRAIGHT"
     alpha = float(config.get("curve_phase_ema_alpha", 0.45))
     alpha = max(0.0, min(1.0, alpha))
     prev_phase = float(previous_phase) if math.isfinite(float(previous_phase)) else 0.0
@@ -1323,6 +1371,9 @@ def compute_curve_phase_scheduler(
         ),
         "curve_local_arm_effect_time_support_term": float(
             max(0.0, min(1.0, dynamic_arm_effect_time_support_term * confidence_scale))
+        ),
+        "curve_local_dynamic_sustain_effect_score": float(
+            max(0.0, min(1.0, dynamic_sustain_effect_score * confidence_scale))
         ),
     }
 
