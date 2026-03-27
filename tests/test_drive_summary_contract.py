@@ -58,6 +58,7 @@ def test_drive_summary_contract_keys(tmp_path: Path) -> None:
         "speed_intent",
         "run_intent",
         "acc_comfort_contract",
+        "acc_detection_contract",
         "lateral_owner_contract",
         "highway_mild_curve_contract",
         "mpc_gt_cross_track_contract",
@@ -179,10 +180,18 @@ def test_drive_summary_contract_keys(tmp_path: Path) -> None:
         "actual_gap_p95_m",
         "target_gap_p50_m",
         "target_gap_p95_m",
+        "dynamic_gap_p50_m",
+        "dynamic_gap_p95_m",
+        "equilibrium_gap_p50_m",
+        "equilibrium_gap_p95_m",
         "gap_error_p50_m",
         "gap_error_p95_m",
         "gap_error_abs_p50_m",
         "gap_error_abs_p95_m",
+        "dynamic_gap_error_p50_m",
+        "dynamic_gap_error_abs_p95_m",
+        "equilibrium_gap_error_p50_m",
+        "equilibrium_gap_error_abs_p95_m",
         "gap_above_target_plus_2m_rate",
         "gap_above_target_plus_5m_rate",
         "gap_above_target_plus_10m_rate",
@@ -191,10 +200,19 @@ def test_drive_summary_contract_keys(tmp_path: Path) -> None:
         "tracking_rate",
         "closing_rate",
         "over_conservative_trailing_rate",
+        "policy_limited_tracking_rate",
+        "lead_limited_tracking_rate",
+        "equilibrium_limited_tracking_rate",
+        "detection_limited_following_rate",
         "compressed_rate",
         "range_rate_p50_mps",
+        "lead_speed_estimate_p50_mps",
+        "lead_speed_estimate_p95_mps",
+        "closure_reserve_p50_mps",
+        "closure_reserve_p95_mps",
         "target_speed_delta_p95_mps",
         "commanded_accel_delta_p95_mps2",
+        "convergence_issue_reason_mode",
         "jerk_gate_metric_role",
         "jerk_gate_value_mps3",
         "jerk_gate_pass",
@@ -212,6 +230,19 @@ def test_drive_summary_contract_keys(tmp_path: Path) -> None:
         "scoring_artifact_likely",
         "following_convergence_issue_detected",
     }.issubset(acc_comfort_contract.keys())
+    acc_detection_contract = summary.get("acc_detection_contract", {})
+    assert {
+        "schema_version",
+        "availability",
+        "detection_rate_pct",
+        "stable_detection_rate_pct",
+        "recent_detection_loss_rate_pct",
+        "detection_loss_event_count",
+        "no_detect_run_length_max",
+        "issue_detected",
+        "issue_mode",
+        "convergence_tuning_valid",
+    }.issubset(acc_detection_contract.keys())
     lateral_owner_contract = summary.get("lateral_owner_contract", {})
     assert {
         "schema_version",
@@ -437,27 +468,43 @@ def test_lateral_owner_contract_uses_authoritative_fallback_budget() -> None:
     assert summary["suppress_legacy_curve_intent_warnings"] is True
 
 
-def test_acc_comfort_contract_flags_artifact_and_far_trailing() -> None:
+def test_acc_comfort_contract_flags_artifact_and_policy_limited_following() -> None:
     summary = _build_acc_comfort_contract_summary(
         acc_health={
             "acc_actual_gap_p50_m": 31.0,
             "acc_actual_gap_p95_m": 80.0,
             "acc_target_gap_p50_m": 20.0,
             "acc_target_gap_p95_m": 23.0,
+            "acc_dynamic_gap_p50_m": 21.0,
+            "acc_dynamic_gap_p95_m": 24.0,
+            "acc_equilibrium_gap_p50_m": 60.0,
+            "acc_equilibrium_gap_p95_m": 90.0,
             "acc_gap_error_p50_m": 9.5,
             "acc_gap_error_p95_m": 60.0,
             "acc_gap_error_abs_p50_m": 9.5,
             "acc_gap_error_abs_p95_m": 60.0,
+            "acc_dynamic_gap_error_p50_m": 8.5,
+            "acc_dynamic_gap_error_abs_p95_m": 59.0,
+            "acc_equilibrium_gap_error_p50_m": -29.0,
+            "acc_equilibrium_gap_error_abs_p95_m": 22.0,
             "acc_gap_above_target_plus_2m_rate": 100.0,
             "acc_gap_above_target_plus_5m_rate": 80.0,
             "acc_gap_above_target_plus_10m_rate": 50.0,
             "acc_gap_below_target_rate": 0.0,
-            "acc_following_regime_mode": "over_conservative_trailing",
+            "acc_following_regime_mode": "policy_limited_tracking",
             "acc_tracking_rate": 10.0,
             "acc_closing_rate": 5.0,
             "acc_over_conservative_trailing_rate": 70.0,
+            "acc_policy_limited_tracking_rate": 70.0,
+            "acc_lead_limited_tracking_rate": 5.0,
+            "acc_equilibrium_limited_tracking_rate": 5.0,
+            "acc_detection_limited_following_rate": 0.0,
             "acc_compressed_rate": 0.0,
             "acc_range_rate_p50_mps": 0.1,
+            "acc_lead_speed_estimate_p50_mps": 12.0,
+            "acc_lead_speed_estimate_p95_mps": 12.2,
+            "acc_closure_reserve_p50_mps": 0.8,
+            "acc_closure_reserve_p95_mps": 1.2,
             "acc_target_speed_delta_p95_mps": 0.02,
             "acc_commanded_accel_delta_p95_mps2": 0.08,
             "acc_jerk_gate_metric_role": "filtered_measured_gate",
@@ -479,6 +526,7 @@ def test_acc_comfort_contract_flags_artifact_and_far_trailing() -> None:
     )
 
     assert summary["following_convergence_issue_detected"] is True
+    assert summary["convergence_issue_reason_mode"] == "policy_limited_tracking"
     assert summary["scoring_artifact_likely"] is True
     assert summary["hotspot_dominant_attribution_mode"] == "longitudinal_limiter_transition"
 

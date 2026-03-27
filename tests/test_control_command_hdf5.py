@@ -736,6 +736,16 @@ def test_recorder_writes_sync_packet_and_post_jump_fields(tmp_path: Path) -> Non
             acc_target_speed_mps=0.0,
             acc_request_estop=True,
             acc_safety_mode_code="collapsed_gap_stop",
+            acc_idm_dynamic_gap_m=22.4,
+            acc_idm_equilibrium_gap_m=44.8,
+            acc_idm_accel_mps2=-3.2,
+            acc_lead_speed_estimate_mps=0.0,
+            acc_closure_reserve_mps=0.0,
+            acc_convergence_mode="compressed",
+            acc_detection_stable_frames=9.0,
+            acc_recent_detection_loss=True,
+            acc_detection_loss_event_delta=1.0,
+            acc_no_detect_run_length=4.0,
         )
         frame = RecordingFrame(
             timestamp=0.0,
@@ -967,6 +977,19 @@ def test_recorder_writes_sync_packet_and_post_jump_fields(tmp_path: Path) -> Non
         assert str(acc_state) == "COLLAPSED_GAP_STOP"
         assert float(h5_file["vehicle/acc_target_speed_mps"][0]) == pytest.approx(0.0, rel=1e-6)
         assert int(h5_file["vehicle/acc_request_estop"][0]) == 1
+        assert float(h5_file["vehicle/acc_idm_dynamic_gap_m"][0]) == pytest.approx(22.4, rel=1e-6)
+        assert float(h5_file["vehicle/acc_idm_equilibrium_gap_m"][0]) == pytest.approx(44.8, rel=1e-6)
+        assert float(h5_file["vehicle/acc_idm_accel_mps2"][0]) == pytest.approx(-3.2, rel=1e-6)
+        assert float(h5_file["vehicle/acc_lead_speed_estimate_mps"][0]) == pytest.approx(0.0, rel=1e-6)
+        assert float(h5_file["vehicle/acc_closure_reserve_mps"][0]) == pytest.approx(0.0, rel=1e-6)
+        convergence_mode = h5_file["vehicle/acc_convergence_mode"][0]
+        if isinstance(convergence_mode, bytes):
+            convergence_mode = convergence_mode.decode("utf-8")
+        assert str(convergence_mode) == "compressed"
+        assert float(h5_file["vehicle/acc_detection_stable_frames"][0]) == pytest.approx(9.0, rel=1e-6)
+        assert int(h5_file["vehicle/acc_recent_detection_loss"][0]) == 1
+        assert float(h5_file["vehicle/acc_detection_loss_event_delta"][0]) == pytest.approx(1.0, rel=1e-6)
+        assert float(h5_file["vehicle/acc_no_detect_run_length"][0]) == pytest.approx(4.0, rel=1e-6)
         assert int(h5_file["control/post_jump_cooldown_active"][0]) == 1
         assert int(h5_file["control/post_jump_cooldown_frames_remaining"][0]) == 17
         reason = h5_file["control/post_jump_reason_code"][0]

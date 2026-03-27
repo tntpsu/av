@@ -345,6 +345,16 @@ class DataRecorder:
         self.h5_file.create_dataset("vehicle/acc_target_speed_mps",     shape=(0,), maxshape=max_shape, dtype=np.float32)
         self.h5_file.create_dataset("vehicle/acc_request_estop",        shape=(0,), maxshape=max_shape, dtype=np.int8)
         self.h5_file.create_dataset("vehicle/acc_safety_mode_code",     shape=(0,), maxshape=max_shape, dtype=h5py.string_dtype(encoding='utf-8', length=32))
+        self.h5_file.create_dataset("vehicle/acc_idm_dynamic_gap_m",    shape=(0,), maxshape=max_shape, dtype=np.float32)
+        self.h5_file.create_dataset("vehicle/acc_idm_equilibrium_gap_m", shape=(0,), maxshape=max_shape, dtype=np.float32)
+        self.h5_file.create_dataset("vehicle/acc_idm_accel_mps2",       shape=(0,), maxshape=max_shape, dtype=np.float32)
+        self.h5_file.create_dataset("vehicle/acc_lead_speed_estimate_mps", shape=(0,), maxshape=max_shape, dtype=np.float32)
+        self.h5_file.create_dataset("vehicle/acc_closure_reserve_mps",  shape=(0,), maxshape=max_shape, dtype=np.float32)
+        self.h5_file.create_dataset("vehicle/acc_convergence_mode",     shape=(0,), maxshape=max_shape, dtype=h5py.string_dtype(encoding='utf-8', length=48))
+        self.h5_file.create_dataset("vehicle/acc_detection_stable_frames", shape=(0,), maxshape=max_shape, dtype=np.float32)
+        self.h5_file.create_dataset("vehicle/acc_recent_detection_loss", shape=(0,), maxshape=max_shape, dtype=np.int8)
+        self.h5_file.create_dataset("vehicle/acc_detection_loss_event_delta", shape=(0,), maxshape=max_shape, dtype=np.float32)
+        self.h5_file.create_dataset("vehicle/acc_no_detect_run_length", shape=(0,), maxshape=max_shape, dtype=np.float32)
         # Grade/pitch/roll telemetry (Step 3)
         self.h5_file.create_dataset(
             "vehicle/pitch_rad",
@@ -4685,6 +4695,16 @@ class DataRecorder:
         acc_target_speed_mps_list = []
         acc_request_estop_list = []
         acc_safety_mode_code_list = []
+        acc_idm_dynamic_gap_m_list = []
+        acc_idm_equilibrium_gap_m_list = []
+        acc_idm_accel_mps2_list = []
+        acc_lead_speed_estimate_mps_list = []
+        acc_closure_reserve_mps_list = []
+        acc_convergence_mode_list = []
+        acc_detection_stable_frames_list = []
+        acc_recent_detection_loss_list = []
+        acc_detection_loss_event_delta_list = []
+        acc_no_detect_run_length_list = []
         pitch_rad_list = []
         roll_rad_list = []
         road_grade_list = []
@@ -4969,6 +4989,20 @@ class DataRecorder:
             acc_safety_mode_code_list.append(
                 str(getattr(vs, 'acc_safety_mode_code', 'none') or 'none')
             )
+            acc_idm_dynamic_gap_m_list.append(float(getattr(vs, 'acc_idm_dynamic_gap_m', 0.0)))
+            acc_idm_equilibrium_gap_m_list.append(float(getattr(vs, 'acc_idm_equilibrium_gap_m', 0.0)))
+            acc_idm_accel_mps2_list.append(float(getattr(vs, 'acc_idm_accel_mps2', 0.0)))
+            acc_lead_speed_estimate_mps_list.append(float(getattr(vs, 'acc_lead_speed_estimate_mps', 0.0)))
+            acc_closure_reserve_mps_list.append(float(getattr(vs, 'acc_closure_reserve_mps', 0.0)))
+            acc_convergence_mode_list.append(
+                str(getattr(vs, 'acc_convergence_mode', 'unavailable') or 'unavailable')
+            )
+            acc_detection_stable_frames_list.append(float(getattr(vs, 'acc_detection_stable_frames', 0.0)))
+            acc_recent_detection_loss_list.append(
+                1 if getattr(vs, 'acc_recent_detection_loss', False) else 0
+            )
+            acc_detection_loss_event_delta_list.append(float(getattr(vs, 'acc_detection_loss_event_delta', 0.0)))
+            acc_no_detect_run_length_list.append(float(getattr(vs, 'acc_no_detect_run_length', 0.0)))
             pitch_rad_list.append(
                 getattr(vs, 'pitch_rad', 0.0)
             )
@@ -5723,7 +5757,12 @@ class DataRecorder:
                        "lead_collision_detected", "lead_collision_override_active",
                        "acc_active", "acc_target_gap_m", "acc_gap_error_m", "acc_ttc_s",
                        "acc_state_code", "acc_target_speed_mps", "acc_request_estop",
-                       "acc_safety_mode_code",
+                       "acc_safety_mode_code", "acc_idm_dynamic_gap_m",
+                       "acc_idm_equilibrium_gap_m", "acc_idm_accel_mps2",
+                       "acc_lead_speed_estimate_mps", "acc_closure_reserve_mps",
+                       "acc_convergence_mode", "acc_detection_stable_frames",
+                       "acc_recent_detection_loss", "acc_detection_loss_event_delta",
+                       "acc_no_detect_run_length",
                        "pitch_rad", "roll_rad", "road_grade",
                        "wheel_sideways_slip", "wheel_forward_slip", "wheel_contact_force",
                        "wheel_rpm", "wheel_sprung_mass", "wheel_contact_normal_y",
@@ -5803,6 +5842,19 @@ class DataRecorder:
                 acc_safety_mode_code_list,
                 dtype=h5py.string_dtype(encoding='utf-8', length=32),
             )
+            self.h5_file["vehicle/acc_idm_dynamic_gap_m"][current_size:]    = np.array(acc_idm_dynamic_gap_m_list, dtype=np.float32)
+            self.h5_file["vehicle/acc_idm_equilibrium_gap_m"][current_size:] = np.array(acc_idm_equilibrium_gap_m_list, dtype=np.float32)
+            self.h5_file["vehicle/acc_idm_accel_mps2"][current_size:]       = np.array(acc_idm_accel_mps2_list, dtype=np.float32)
+            self.h5_file["vehicle/acc_lead_speed_estimate_mps"][current_size:] = np.array(acc_lead_speed_estimate_mps_list, dtype=np.float32)
+            self.h5_file["vehicle/acc_closure_reserve_mps"][current_size:]  = np.array(acc_closure_reserve_mps_list, dtype=np.float32)
+            self.h5_file["vehicle/acc_convergence_mode"][current_size:]     = np.array(
+                acc_convergence_mode_list,
+                dtype=h5py.string_dtype(encoding='utf-8', length=48),
+            )
+            self.h5_file["vehicle/acc_detection_stable_frames"][current_size:] = np.array(acc_detection_stable_frames_list, dtype=np.float32)
+            self.h5_file["vehicle/acc_recent_detection_loss"][current_size:] = np.array(acc_recent_detection_loss_list, dtype=np.int8)
+            self.h5_file["vehicle/acc_detection_loss_event_delta"][current_size:] = np.array(acc_detection_loss_event_delta_list, dtype=np.float32)
+            self.h5_file["vehicle/acc_no_detect_run_length"][current_size:] = np.array(acc_no_detect_run_length_list, dtype=np.float32)
             self.h5_file["vehicle/pitch_rad"][current_size:] = np.array(
                 pitch_rad_list, dtype=np.float32
             )

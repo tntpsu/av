@@ -279,6 +279,16 @@ class VehicleState:
     acc_target_speed_mps: float = 0.0
     acc_request_estop: bool = False
     acc_safety_mode_code: str = "none"
+    acc_idm_dynamic_gap_m: float = 0.0
+    acc_idm_equilibrium_gap_m: float = 0.0
+    acc_idm_accel_mps2: float = 0.0
+    acc_lead_speed_estimate_mps: float = 0.0
+    acc_closure_reserve_mps: float = 0.0
+    acc_convergence_mode: str = "unavailable"
+    acc_detection_stable_frames: float = 0.0
+    acc_recent_detection_loss: bool = False
+    acc_detection_loss_event_delta: float = 0.0
+    acc_no_detect_run_length: float = 0.0
 
 
 @dataclass

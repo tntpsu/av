@@ -7339,6 +7339,16 @@ class AVStack:
                 'acc_target_gap_m': 0.0,
                 'acc_gap_error_m': 0.0,
                 'acc_ttc_s': 999.0,
+                'acc_idm_dynamic_gap_m': 0.0,
+                'acc_idm_equilibrium_gap_m': 0.0,
+                'acc_idm_accel_mps2': 0.0,
+                'acc_lead_speed_estimate_mps': 0.0,
+                'acc_closure_reserve_mps': 0.0,
+                'acc_convergence_mode': 'unavailable',
+                'acc_detection_stable_frames': 0.0,
+                'acc_recent_detection_loss': 0.0,
+                'acc_detection_loss_event_delta': 0.0,
+                'acc_no_detect_run_length': 0.0,
             }
 
         reading = self.acc_sensor.read_frame(vehicle_state_dict)
@@ -7353,6 +7363,16 @@ class AVStack:
             'acc_target_gap_m': 0.0,
             'acc_gap_error_m': 0.0,
             'acc_ttc_s': 999.0,
+            'acc_idm_dynamic_gap_m': 0.0,
+            'acc_idm_equilibrium_gap_m': 0.0,
+            'acc_idm_accel_mps2': 0.0,
+            'acc_lead_speed_estimate_mps': 0.0,
+            'acc_closure_reserve_mps': 0.0,
+            'acc_convergence_mode': 'unavailable',
+            'acc_detection_stable_frames': 0.0,
+            'acc_recent_detection_loss': 0.0,
+            'acc_detection_loss_event_delta': 0.0,
+            'acc_no_detect_run_length': 0.0,
         }
 
     def _pf_apply_acc_override(self, gov: dict, vehicle_state_dict: dict) -> dict:
@@ -7388,6 +7408,16 @@ class AVStack:
         vehicle_state_dict['acc_target_speed_mps'] = float(output.target_speed)
         vehicle_state_dict['acc_request_estop'] = bool(output.request_estop)
         vehicle_state_dict['acc_safety_mode_code'] = str(output.safety_mode or "none")
+        vehicle_state_dict['acc_idm_dynamic_gap_m'] = float(output.dynamic_gap_m)
+        vehicle_state_dict['acc_idm_equilibrium_gap_m'] = float(output.equilibrium_gap_m)
+        vehicle_state_dict['acc_idm_accel_mps2'] = float(output.idm_accel_mps2)
+        vehicle_state_dict['acc_lead_speed_estimate_mps'] = float(output.lead_speed_estimate_mps)
+        vehicle_state_dict['acc_closure_reserve_mps'] = float(output.closure_reserve_mps)
+        vehicle_state_dict['acc_convergence_mode'] = str(output.convergence_mode or "unavailable")
+        vehicle_state_dict['acc_detection_stable_frames'] = float(output.detection_stable_frames)
+        vehicle_state_dict['acc_recent_detection_loss'] = 1.0 if output.recent_detection_loss else 0.0
+        vehicle_state_dict['acc_detection_loss_event_delta'] = float(output.detection_loss_event_delta)
+        vehicle_state_dict['acc_no_detect_run_length'] = float(output.no_detect_run_length)
         gov['acc_active'] = float(output.acc_active)
         gov['acc_state_code'] = output.state.value
         gov['acc_target_speed_mps'] = float(output.target_speed)
@@ -8867,6 +8897,16 @@ class AVStack:
             acc_target_speed_mps=float(vehicle_state_dict.get('acc_target_speed_mps', 0.0) or 0.0),
             acc_request_estop=bool(vehicle_state_dict.get('acc_request_estop', False)),
             acc_safety_mode_code=str(vehicle_state_dict.get('acc_safety_mode_code', 'none') or 'none'),
+            acc_idm_dynamic_gap_m=float(vehicle_state_dict.get('acc_idm_dynamic_gap_m', 0.0)),
+            acc_idm_equilibrium_gap_m=float(vehicle_state_dict.get('acc_idm_equilibrium_gap_m', 0.0)),
+            acc_idm_accel_mps2=float(vehicle_state_dict.get('acc_idm_accel_mps2', 0.0)),
+            acc_lead_speed_estimate_mps=float(vehicle_state_dict.get('acc_lead_speed_estimate_mps', 0.0)),
+            acc_closure_reserve_mps=float(vehicle_state_dict.get('acc_closure_reserve_mps', 0.0)),
+            acc_convergence_mode=str(vehicle_state_dict.get('acc_convergence_mode', 'unavailable') or 'unavailable'),
+            acc_detection_stable_frames=float(vehicle_state_dict.get('acc_detection_stable_frames', 0.0)),
+            acc_recent_detection_loss=bool(vehicle_state_dict.get('acc_recent_detection_loss', False)),
+            acc_detection_loss_event_delta=float(vehicle_state_dict.get('acc_detection_loss_event_delta', 0.0)),
+            acc_no_detect_run_length=float(vehicle_state_dict.get('acc_no_detect_run_length', 0.0)),
         )
         
         def _latency_float(key: str) -> float:

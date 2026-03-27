@@ -149,6 +149,22 @@ class TestIDMFormula:
         assert out.acc_active == pytest.approx(1.0)
         assert out.state == ACCState.ACC_ACTIVE
 
+    def test_acc_output_exports_gap_contract_telemetry(self):
+        ctrl = _make_controller()
+        out = ctrl.compute_target_speed(12.0, 12.5, _reading(gap_m=30.0, range_rate_mps=0.1), DT)
+        assert out.dynamic_gap_m > 0.0
+        assert out.equilibrium_gap_m >= out.dynamic_gap_m
+        assert out.lead_speed_estimate_mps == pytest.approx(11.9, rel=1e-6)
+        assert out.convergence_mode in {
+            "tracking_dynamic_gap",
+            "equilibrium_limited_tracking",
+            "policy_limited_tracking",
+            "lead_limited_tracking",
+        }
+        assert out.detection_stable_frames == 1
+        assert out.recent_detection_loss is False
+        assert out.detection_loss_event_delta == 0
+
 
 # ─── Soft-engage (bumpless transfer) ─────────────────────────────────────────
 

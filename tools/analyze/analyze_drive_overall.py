@@ -2347,6 +2347,7 @@ def _print_summary_report(recording_path: Path, summary: Dict, analyze_to_failur
     # Section 16: ACC Performance (only when ACC was active)
     acc_health = summary.get("acc_health")
     acc_comfort_contract = summary.get("acc_comfort_contract") or {}
+    acc_detection_contract = summary.get("acc_detection_contract") or {}
     if acc_health is not None:
         print("20. ACC PERFORMANCE")
         print("-" * 80)
@@ -2377,12 +2378,16 @@ def _print_summary_report(recording_path: Path, summary: Dict, analyze_to_failur
 
         print("   \u2500\u2500 Following Convergence (\u2192 instrumentation, not runtime tuning) \u2500\u2500\u2500")
         print(
-            f"   Actual / Target Gap P50:{acc_health.get('acc_actual_gap_p50_m', 0.0):>10.2f} /"
-            f" {acc_health.get('acc_target_gap_p50_m', 0.0):<9.2f}m"
+            f"   Actual / Simple / Dynamic Gap P50:"
+            f"{acc_health.get('acc_actual_gap_p50_m', 0.0):>8.2f} /"
+            f" {acc_health.get('acc_target_gap_p50_m', 0.0):>6.2f} /"
+            f" {acc_health.get('acc_dynamic_gap_p50_m', 0.0):<6.2f}m"
         )
         print(
-            f"   Gap Error P50 / |P95|:  {acc_health.get('acc_gap_error_p50_m', 0.0):>9.2f} /"
-            f" {acc_health.get('acc_gap_error_abs_p95_m', 0.0):<9.2f}m"
+            f"   Simple / Dynamic / Eq Gap Error P50:"
+            f" {acc_health.get('acc_gap_error_p50_m', 0.0):>7.2f} /"
+            f" {acc_health.get('acc_dynamic_gap_error_p50_m', 0.0):>7.2f} /"
+            f" {acc_health.get('acc_equilibrium_gap_error_p50_m', 0.0):<7.2f}m"
         )
         print(
             f"   Gap > Target (+2/+5/+10m):"
@@ -2392,11 +2397,19 @@ def _print_summary_report(recording_path: Path, summary: Dict, analyze_to_failur
         )
         print(
             f"   Following Regime Mode:  {acc_health.get('acc_following_regime_mode', 'unknown')}"
-            f"  (track/close/far/compressed="
+            f"  (track/close/policy/lead/eq/detect/compressed="
             f"{acc_health.get('acc_tracking_rate', 0.0):.1f}%/"
             f"{acc_health.get('acc_closing_rate', 0.0):.1f}%/"
-            f"{acc_health.get('acc_over_conservative_trailing_rate', 0.0):.1f}%/"
+            f"{acc_health.get('acc_policy_limited_tracking_rate', 0.0):.1f}%/"
+            f"{acc_health.get('acc_lead_limited_tracking_rate', 0.0):.1f}%/"
+            f"{acc_health.get('acc_equilibrium_limited_tracking_rate', 0.0):.1f}%/"
+            f"{acc_health.get('acc_detection_limited_following_rate', 0.0):.1f}%/"
             f"{acc_health.get('acc_compressed_rate', 0.0):.1f}%)"
+        )
+        print(
+            f"   Lead Speed / Closure Reserve P50:"
+            f" {acc_health.get('acc_lead_speed_estimate_p50_mps', 0.0):.2f} /"
+            f" {acc_health.get('acc_closure_reserve_p50_mps', 0.0):.2f} m/s"
         )
         print()
 
@@ -2435,6 +2448,18 @@ def _print_summary_report(recording_path: Path, summary: Dict, analyze_to_failur
         print("   \u2500\u2500 Sensing \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500")
         det_rate = acc_health.get("acc_detection_rate", 1.0)
         print(f"   Detection Rate:         {det_rate * 100.0:<9.1f}% [{_gate(det_rate, acc_health.get('detection_gate_pass', True))} \u2265 95%]")
+        if acc_detection_contract:
+            print(
+                f"   Stable Detection / Recent Loss:"
+                f" {acc_detection_contract.get('stable_detection_rate_pct', 0.0):.1f}% /"
+                f" {acc_detection_contract.get('recent_detection_loss_rate_pct', 0.0):.1f}%"
+            )
+            print(
+                f"   Loss Events / Max No-Detect / Mode:"
+                f" {acc_detection_contract.get('detection_loss_event_count', 0)} /"
+                f" {acc_detection_contract.get('no_detect_run_length_max', 0)} /"
+                f" {acc_detection_contract.get('issue_mode', 'none')}"
+            )
         print()
 
     print("=" * 80)

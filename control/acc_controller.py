@@ -99,6 +99,16 @@ class ACCOutput:
     state: ACCState
     target_speed_source: str = "free_flow"
     safety_mode: str = "none"
+    dynamic_gap_m: float = 0.0
+    equilibrium_gap_m: float = 0.0
+    idm_accel_mps2: float = 0.0
+    lead_speed_estimate_mps: float = 0.0
+    closure_reserve_mps: float = 0.0
+    convergence_mode: str = "unavailable"
+    detection_stable_frames: int = 0
+    recent_detection_loss: bool = False
+    detection_loss_event_delta: int = 0
+    no_detect_run_length: int = 0
 
 
 # ── Module-level constants (used before scoring_registry is available) ────────
@@ -128,6 +138,7 @@ class ACCController:
         self._detection_loss_count: int = 0
         self._rearm_count: int = 0
         self._in_loss: bool = False
+        self._detection_stable_frames: int = 0
         # Bumpless transfer state
         self._was_acc_active: bool = False
         self._v_target_prev: float = 0.0
@@ -137,6 +148,7 @@ class ACCController:
         self._detection_loss_count = 0
         self._rearm_count = 0
         self._in_loss = False
+        self._detection_stable_frames = 0
         self._was_acc_active = False
         self._v_target_prev = 0.0
 
@@ -165,8 +177,10 @@ class ACCController:
             ttc_s = reading.gap_m / max(reading.range_rate_mps, 1e-6)
 
         # ── Detection counters ────────────────────────────────────────────────
+        detection_loss_event_delta = 0
         if reading.detected:
             self._detection_loss_count = 0
+            self._detection_stable_frames += 1
             if self._in_loss:
                 self._rearm_count += 1
                 # Re-arm when enough consecutive detected frames AND above cutout speed
@@ -175,26 +189,102 @@ class ACCController:
                     self._in_loss = False
                     self._rearm_count = 0
         else:
+            if self._detection_loss_count == 0:
+                detection_loss_event_delta = 1
             self._rearm_count = 0
             self._detection_loss_count += 1
+            self._detection_stable_frames = 0
             if self._detection_loss_count >= p.fallback_frames:
                 self._in_loss = True
+
+        recent_detection_loss = bool(
+            self._detection_loss_count > 0 or self._in_loss or self._rearm_count > 0
+        )
+        no_detect_run_length = int(self._detection_loss_count if not reading.detected else 0)
 
         # ── Desired gap and gap error ─────────────────────────────────────────
         target_gap_m = p.min_gap_m + ego_speed * p.time_headway_s
         gap_error_m = (reading.gap_m - target_gap_m) if reading.detected else 0.0
+        dynamic_gap_m = (
+            self._dynamic_gap(ego_speed=ego_speed, delta_v=reading.range_rate_mps)
+            if reading.detected
+            else 0.0
+        )
+        idm_accel_mps2 = (
+            self._idm(
+                ego_speed=ego_speed,
+                free_flow_speed=free_flow_target,
+                gap=reading.gap_m,
+                delta_v=reading.range_rate_mps,
+            )
+            if reading.detected
+            else 0.0
+        )
+        equilibrium_gap_m = (
+            self._equilibrium_gap(
+                ego_speed=ego_speed,
+                free_flow_speed=free_flow_target,
+                dynamic_gap_m=dynamic_gap_m,
+            )
+            if reading.detected
+            else 0.0
+        )
+        lead_speed_estimate_mps = (
+            self._lead_speed_estimate(ego_speed=ego_speed, delta_v=reading.range_rate_mps)
+            if reading.detected
+            else 0.0
+        )
+
+        def _build_output(
+            *,
+            target_speed: float,
+            acc_active: float,
+            request_estop: bool,
+            state: ACCState,
+            target_speed_source: str,
+            safety_mode: str,
+        ) -> ACCOutput:
+            closure_reserve_mps = (
+                float(target_speed) - lead_speed_estimate_mps if reading.detected else 0.0
+            )
+            return ACCOutput(
+                target_speed=float(target_speed),
+                acc_active=acc_active,
+                target_gap_m=target_gap_m,
+                gap_error_m=gap_error_m,
+                ttc_s=ttc_s,
+                request_estop=request_estop,
+                state=state,
+                target_speed_source=target_speed_source,
+                safety_mode=safety_mode,
+                dynamic_gap_m=dynamic_gap_m,
+                equilibrium_gap_m=equilibrium_gap_m,
+                idm_accel_mps2=idm_accel_mps2,
+                lead_speed_estimate_mps=lead_speed_estimate_mps,
+                closure_reserve_mps=closure_reserve_mps,
+                convergence_mode=self._classify_convergence(
+                    detected=reading.detected,
+                    gap=reading.gap_m,
+                    dynamic_gap_m=dynamic_gap_m,
+                    equilibrium_gap_m=equilibrium_gap_m,
+                    target_speed=float(target_speed),
+                    lead_speed_estimate_mps=lead_speed_estimate_mps,
+                    recent_detection_loss=recent_detection_loss,
+                ),
+                detection_stable_frames=int(self._detection_stable_frames),
+                recent_detection_loss=recent_detection_loss,
+                detection_loss_event_delta=int(detection_loss_event_delta),
+                no_detect_run_length=no_detect_run_length,
+            )
 
         # ── State machine — highest priority first ────────────────────────────
 
         # 1. TTC_ESTOP: fires emergency_stop — overrides everything
         if reading.detected and ttc_s < _TTC_ESTOP_THRESHOLD_S:
             self._was_acc_active = False
-            return ACCOutput(
+            return _build_output(
                 target_speed=0.0,
                 acc_active=0.0,
-                target_gap_m=target_gap_m,
-                gap_error_m=gap_error_m,
-                ttc_s=ttc_s,
                 request_estop=True,
                 state=ACCState.TTC_ESTOP,
                 target_speed_source="ttc_estop",
@@ -207,12 +297,9 @@ class ACCController:
         if reading.detected and reading.gap_m <= _COLLAPSED_GAP_STOP_M:
             self._was_acc_active = False
             self._v_target_prev = 0.0
-            return ACCOutput(
+            return _build_output(
                 target_speed=0.0,
                 acc_active=1.0,
-                target_gap_m=target_gap_m,
-                gap_error_m=gap_error_m,
-                ttc_s=ttc_s,
                 request_estop=True,
                 state=ACCState.COLLAPSED_GAP_STOP,
                 target_speed_source="collapsed_gap_stop",
@@ -226,12 +313,9 @@ class ACCController:
             v_emergency = max(0.0, ego_speed + _EMERGENCY_BRAKE_ACCEL_MPS2 * dt)
             self._v_target_prev = v_emergency
             self._was_acc_active = False
-            return ACCOutput(
+            return _build_output(
                 target_speed=v_emergency,
                 acc_active=1.0,
-                target_gap_m=target_gap_m,
-                gap_error_m=gap_error_m,
-                ttc_s=ttc_s,
                 request_estop=False,
                 state=ACCState.EMERGENCY_BRAKE,
                 target_speed_source="emergency_brake",
@@ -244,12 +328,9 @@ class ACCController:
             v_ramped = self._ramp(self._v_target_prev, free_flow_target, dt)
             self._v_target_prev = v_ramped
             self._was_acc_active = False
-            return ACCOutput(
+            return _build_output(
                 target_speed=v_ramped,
                 acc_active=0.0,
-                target_gap_m=target_gap_m,
-                gap_error_m=gap_error_m,
-                ttc_s=ttc_s,
                 request_estop=False,
                 state=ACCState.CUTOUT,
                 target_speed_source="cutout_ramp",
@@ -261,12 +342,9 @@ class ACCController:
             v_ramped = self._ramp(self._v_target_prev, free_flow_target, dt)
             self._v_target_prev = v_ramped
             self._was_acc_active = False
-            return ACCOutput(
+            return _build_output(
                 target_speed=v_ramped,
                 acc_active=0.0,
-                target_gap_m=target_gap_m,
-                gap_error_m=gap_error_m,
-                ttc_s=ttc_s,
                 request_estop=False,
                 state=ACCState.DETECTION_LOSS,
                 target_speed_source="detection_loss_ramp",
@@ -279,23 +357,14 @@ class ACCController:
             if not self._was_acc_active:
                 self._v_target_prev = ego_speed
 
-            a_idm = self._idm(
-                ego_speed=ego_speed,
-                free_flow_speed=free_flow_target,
-                gap=reading.gap_m,
-                delta_v=reading.range_rate_mps,
-            )
             v_target = float(
-                max(0.0, min(free_flow_target, self._v_target_prev + a_idm * dt))
+                max(0.0, min(free_flow_target, self._v_target_prev + idm_accel_mps2 * dt))
             )
             self._v_target_prev = v_target
             self._was_acc_active = True
-            return ACCOutput(
+            return _build_output(
                 target_speed=v_target,
                 acc_active=1.0,
-                target_gap_m=target_gap_m,
-                gap_error_m=gap_error_m,
-                ttc_s=ttc_s,
                 request_estop=False,
                 state=ACCState.ACC_ACTIVE,
                 target_speed_source="acc_active",
@@ -312,12 +381,9 @@ class ACCController:
             # Keep _was_acc_active=True while still ramping (ramp must reach free_flow_target
             # before we snap to True free-flow — avoids re-triggering ramp next call)
             self._was_acc_active = v_ramped < free_flow_target - 1e-4
-            return ACCOutput(
+            return _build_output(
                 target_speed=v_ramped,
                 acc_active=0.0,
-                target_gap_m=target_gap_m,
-                gap_error_m=0.0,
-                ttc_s=_TTC_CAP,
                 request_estop=False,
                 state=ACCState.FREE_FLOW,
                 target_speed_source="free_flow_ramp",
@@ -326,12 +392,9 @@ class ACCController:
 
         self._was_acc_active = False
         self._v_target_prev = free_flow_target
-        return ACCOutput(
+        return _build_output(
             target_speed=free_flow_target,
             acc_active=0.0,
-            target_gap_m=target_gap_m,
-            gap_error_m=0.0,
-            ttc_s=_TTC_CAP,
             request_estop=False,
             state=ACCState.FREE_FLOW,
             target_speed_source="free_flow",
@@ -383,3 +446,48 @@ class ACCController:
         return float(
             max(-4.0 * p.comfortable_decel_mps2, min(p.max_accel_mps2, a_idm))
         )
+
+    def _dynamic_gap(self, ego_speed: float, delta_v: float) -> float:
+        p = self._p
+        sqrt_ab = math.sqrt(p.max_accel_mps2 * p.comfortable_decel_mps2)
+        return float(
+            p.min_gap_m + max(0.0, ego_speed * p.time_headway_s + ego_speed * delta_v / (2.0 * sqrt_ab))
+        )
+
+    def _equilibrium_gap(self, ego_speed: float, free_flow_speed: float, dynamic_gap_m: float) -> float:
+        v0 = max(free_flow_speed, 1e-6)
+        ratio_v = min(0.999, max(0.0, (ego_speed / v0) ** 4))
+        denom = max(1e-3, 1.0 - ratio_v)
+        # Cap for telemetry stability; the exact asymptote is not useful in summaries.
+        return float(min(max(dynamic_gap_m, 0.0) / math.sqrt(denom), self._p.detection_range_m * 4.0))
+
+    def _lead_speed_estimate(self, ego_speed: float, delta_v: float) -> float:
+        return float(max(0.0, ego_speed - delta_v))
+
+    def _classify_convergence(
+        self,
+        *,
+        detected: bool,
+        gap: float,
+        dynamic_gap_m: float,
+        equilibrium_gap_m: float,
+        target_speed: float,
+        lead_speed_estimate_mps: float,
+        recent_detection_loss: bool,
+    ) -> str:
+        if not detected:
+            return "detection_limited_following" if recent_detection_loss else "unavailable"
+
+        dynamic_gap_error = gap - dynamic_gap_m
+        closure_reserve = float(target_speed) - float(lead_speed_estimate_mps)
+        if recent_detection_loss:
+            return "detection_limited_following"
+        if dynamic_gap_error < -2.0:
+            return "compressed"
+        if abs(dynamic_gap_error) <= 2.0:
+            return "tracking_dynamic_gap"
+        if equilibrium_gap_m > gap + 5.0 and closure_reserve <= 0.5:
+            return "equilibrium_limited_tracking"
+        if closure_reserve <= 0.1:
+            return "lead_limited_tracking"
+        return "policy_limited_tracking"

@@ -2521,10 +2521,21 @@ def _build_acc_health_summary(data: Dict, n_frames: int, speed: Optional[np.ndar
     gap_error_raw = data.get('acc_gap_error_m')
     ttc_raw = data.get('acc_ttc_s')
     target_gap_raw = data.get('acc_target_gap_m')
+    dynamic_gap_raw = data.get('acc_idm_dynamic_gap_m')
+    equilibrium_gap_raw = data.get('acc_idm_equilibrium_gap_m')
+    idm_accel_raw = data.get('acc_idm_accel_mps2')
+    lead_speed_estimate_raw = data.get('acc_lead_speed_estimate_mps')
+    closure_reserve_raw = data.get('acc_closure_reserve_mps')
+    convergence_mode_raw = data.get('acc_convergence_mode')
+    detection_stable_frames_raw = data.get('acc_detection_stable_frames')
+    recent_detection_loss_raw = data.get('acc_recent_detection_loss')
+    detection_loss_event_delta_raw = data.get('acc_detection_loss_event_delta')
+    no_detect_run_length_raw = data.get('acc_no_detect_run_length')
     range_rate_raw = data.get('radar_fwd_range_rate_mps')
     acc_target_speed_raw = data.get('acc_target_speed_mps')
     if acc_target_speed_raw is None:
         acc_target_speed_raw = data.get('acc_target_speed_mps_vehicle')
+    final_target_raw = data.get('target_speed_final')
     cmd_accel_raw = data.get('longitudinal_accel_cmd_raw')
     cmd_accel_smoothed_raw = data.get('longitudinal_accel_cmd_smoothed')
 
@@ -2535,6 +2546,11 @@ def _build_acc_health_summary(data: Dict, n_frames: int, speed: Optional[np.ndar
     target_gap_arr = (
         np.asarray(target_gap_raw[:n], dtype=float) if target_gap_raw is not None else np.full(n, np.nan)
     )
+    speed_arr = (
+        np.asarray(speed[:n], dtype=float)
+        if speed is not None and len(speed) >= n
+        else np.full(n, np.nan)
+    )
     range_rate_arr = (
         np.asarray(range_rate_raw[:n], dtype=float) if range_rate_raw is not None else np.full(n, np.nan)
     )
@@ -2543,6 +2559,158 @@ def _build_acc_health_summary(data: Dict, n_frames: int, speed: Optional[np.ndar
         if acc_target_speed_raw is not None
         else np.full(n, np.nan)
     )
+    final_target_arr = (
+        np.asarray(final_target_raw[:n], dtype=float)
+        if final_target_raw is not None
+        else np.full(n, np.nan)
+    )
+    if dynamic_gap_raw is not None:
+        dynamic_gap_arr = np.asarray(dynamic_gap_raw[:n], dtype=float)
+    else:
+        sqrt_ab = math.sqrt(2.0 * 3.0)
+        dynamic_gap_arr = np.where(
+            np.isfinite(speed_arr) & np.isfinite(range_rate_arr),
+            2.0 + np.maximum(0.0, speed_arr * 1.5 + speed_arr * range_rate_arr / (2.0 * sqrt_ab)),
+            target_gap_arr,
+        )
+    if equilibrium_gap_raw is not None:
+        equilibrium_gap_arr = np.asarray(equilibrium_gap_raw[:n], dtype=float)
+    else:
+        denom_speed = np.where(np.isfinite(final_target_arr) & (final_target_arr > 1e-6), final_target_arr, np.nan)
+        ratio_v = np.where(
+            np.isfinite(speed_arr) & np.isfinite(denom_speed),
+            np.clip((speed_arr / denom_speed) ** 4, 0.0, 0.999),
+            np.nan,
+        )
+        equilibrium_gap_arr = np.where(
+            np.isfinite(dynamic_gap_arr) & np.isfinite(ratio_v),
+            np.minimum(dynamic_gap_arr / np.sqrt(np.maximum(1e-3, 1.0 - ratio_v)), 240.0),
+            np.nan,
+        )
+    idm_accel_arr = (
+        np.asarray(idm_accel_raw[:n], dtype=float)
+        if idm_accel_raw is not None
+        else np.full(n, np.nan)
+    )
+    lead_speed_estimate_arr = (
+        np.asarray(lead_speed_estimate_raw[:n], dtype=float)
+        if lead_speed_estimate_raw is not None
+        else np.where(
+            np.isfinite(speed_arr) & np.isfinite(range_rate_arr),
+            np.maximum(0.0, speed_arr - range_rate_arr),
+            np.nan,
+        )
+    )
+    closure_reserve_arr = (
+        np.asarray(closure_reserve_raw[:n], dtype=float)
+        if closure_reserve_raw is not None
+        else np.where(
+            np.isfinite(acc_target_speed_arr) & np.isfinite(lead_speed_estimate_arr),
+            acc_target_speed_arr - lead_speed_estimate_arr,
+            np.nan,
+        )
+    )
+    detection_stable_frames_arr = (
+        np.asarray(detection_stable_frames_raw[:n], dtype=float)
+        if detection_stable_frames_raw is not None
+        else np.zeros(n, dtype=float)
+    )
+    recent_detection_loss_arr = (
+        np.asarray(recent_detection_loss_raw[:n], dtype=float)
+        if recent_detection_loss_raw is not None
+        else np.zeros(n, dtype=float)
+    )
+    detection_loss_event_delta_arr = (
+        np.asarray(detection_loss_event_delta_raw[:n], dtype=float)
+        if detection_loss_event_delta_raw is not None
+        else np.zeros(n, dtype=float)
+    )
+    no_detect_run_length_arr = (
+        np.asarray(no_detect_run_length_raw[:n], dtype=float)
+        if no_detect_run_length_raw is not None
+        else np.zeros(n, dtype=float)
+    )
+
+    detected_bool = detected_arr > 0.5
+    if detection_stable_frames_raw is None:
+        run = 0
+        for i, flag in enumerate(detected_bool):
+            if flag:
+                run += 1
+                detection_stable_frames_arr[i] = float(run)
+            else:
+                run = 0
+                detection_stable_frames_arr[i] = 0.0
+    if no_detect_run_length_raw is None:
+        run = 0
+        for i, flag in enumerate(detected_bool):
+            if flag:
+                run = 0
+                no_detect_run_length_arr[i] = 0.0
+            else:
+                run += 1
+                no_detect_run_length_arr[i] = float(run)
+    if detection_loss_event_delta_raw is None:
+        detection_loss_event_delta_arr = np.zeros(n, dtype=float)
+        if n > 0:
+            prev = True
+            for i, flag in enumerate(detected_bool):
+                if (not flag) and prev:
+                    detection_loss_event_delta_arr[i] = 1.0
+                prev = bool(flag)
+    if recent_detection_loss_raw is None:
+        recent_detection_loss_arr = np.where(
+            detected_bool,
+            (detection_stable_frames_arr < 3.0).astype(float),
+            1.0,
+        )
+
+    def _classify_convergence_fallback(idx: int) -> str:
+        if not detected_bool[idx]:
+            return "detection_limited_following" if recent_detection_loss_arr[idx] > 0.5 else "unavailable"
+        gap_val = dist_arr[idx]
+        dynamic_gap_val = dynamic_gap_arr[idx]
+        equilibrium_gap_val = equilibrium_gap_arr[idx]
+        target_speed_val = acc_target_speed_arr[idx]
+        lead_speed_val = lead_speed_estimate_arr[idx]
+        if recent_detection_loss_arr[idx] > 0.5:
+            return "detection_limited_following"
+        if np.isfinite(gap_val) and np.isfinite(dynamic_gap_val):
+            dynamic_gap_error = gap_val - dynamic_gap_val
+            if dynamic_gap_error < -2.0:
+                return "compressed"
+            if abs(dynamic_gap_error) <= 2.0:
+                return "tracking_dynamic_gap"
+        closure_reserve_val = (
+            target_speed_val - lead_speed_val
+            if np.isfinite(target_speed_val) and np.isfinite(lead_speed_val)
+            else np.nan
+        )
+        if (
+            np.isfinite(equilibrium_gap_val)
+            and np.isfinite(gap_val)
+            and equilibrium_gap_val > gap_val + 5.0
+            and np.isfinite(closure_reserve_val)
+            and closure_reserve_val <= 0.5
+        ):
+            return "equilibrium_limited_tracking"
+        if np.isfinite(closure_reserve_val) and closure_reserve_val <= 0.1:
+            return "lead_limited_tracking"
+        return "policy_limited_tracking"
+
+    if convergence_mode_raw is not None:
+        convergence_mode_arr = np.array(
+            [
+                value.decode() if isinstance(value, bytes) else str(value)
+                for value in convergence_mode_raw[:n]
+            ],
+            dtype=object,
+        )
+    else:
+        convergence_mode_arr = np.array(
+            [_classify_convergence_fallback(i) for i in range(n)],
+            dtype=object,
+        )
     cmd_accel_smoothed_arr = (
         np.asarray(cmd_accel_smoothed_raw[:n], dtype=float)
         if cmd_accel_smoothed_raw is not None
@@ -2597,20 +2765,44 @@ def _build_acc_health_summary(data: Dict, n_frames: int, speed: Optional[np.ndar
     )
     signed_gap_delta = np.where(valid_follow_mask, dist_arr - target_gap_arr, np.nan)
     abs_gap_delta = np.abs(signed_gap_delta)
+    dynamic_gap_delta = np.where(valid_follow_mask, dist_arr - dynamic_gap_arr, np.nan)
+    abs_dynamic_gap_delta = np.abs(dynamic_gap_delta)
+    equilibrium_gap_delta = np.where(valid_follow_mask, dist_arr - equilibrium_gap_arr, np.nan)
+    abs_equilibrium_gap_delta = np.abs(equilibrium_gap_delta)
     gap_delta_valid = signed_gap_delta[np.isfinite(signed_gap_delta)]
     abs_gap_delta_valid = abs_gap_delta[np.isfinite(abs_gap_delta)]
     actual_gap_valid = dist_arr[valid_follow_mask]
     target_gap_valid = target_gap_arr[valid_follow_mask]
+    dynamic_gap_valid = dynamic_gap_arr[valid_follow_mask & np.isfinite(dynamic_gap_arr)]
+    equilibrium_gap_valid = equilibrium_gap_arr[valid_follow_mask & np.isfinite(equilibrium_gap_arr)]
+    dynamic_gap_delta_valid = dynamic_gap_delta[np.isfinite(dynamic_gap_delta)]
+    abs_dynamic_gap_delta_valid = abs_dynamic_gap_delta[np.isfinite(abs_dynamic_gap_delta)]
+    equilibrium_gap_delta_valid = equilibrium_gap_delta[np.isfinite(equilibrium_gap_delta)]
+    abs_equilibrium_gap_delta_valid = abs_equilibrium_gap_delta[np.isfinite(abs_equilibrium_gap_delta)]
+    lead_speed_estimate_valid = lead_speed_estimate_arr[valid_follow_mask & np.isfinite(lead_speed_estimate_arr)]
+    closure_reserve_valid = closure_reserve_arr[valid_follow_mask & np.isfinite(closure_reserve_arr)]
     range_rate_valid = range_rate_arr[valid_follow_mask & np.isfinite(range_rate_arr)]
 
     actual_gap_p50_m = float(np.percentile(actual_gap_valid, 50)) if actual_gap_valid.size > 0 else 0.0
     actual_gap_p95_m = float(np.percentile(actual_gap_valid, 95)) if actual_gap_valid.size > 0 else 0.0
     target_gap_p50_m = float(np.percentile(target_gap_valid, 50)) if target_gap_valid.size > 0 else 0.0
     target_gap_p95_m = float(np.percentile(target_gap_valid, 95)) if target_gap_valid.size > 0 else 0.0
+    dynamic_gap_p50_m = float(np.percentile(dynamic_gap_valid, 50)) if dynamic_gap_valid.size > 0 else 0.0
+    dynamic_gap_p95_m = float(np.percentile(dynamic_gap_valid, 95)) if dynamic_gap_valid.size > 0 else 0.0
+    equilibrium_gap_p50_m = float(np.percentile(equilibrium_gap_valid, 50)) if equilibrium_gap_valid.size > 0 else 0.0
+    equilibrium_gap_p95_m = float(np.percentile(equilibrium_gap_valid, 95)) if equilibrium_gap_valid.size > 0 else 0.0
     gap_error_p50_m = float(np.percentile(gap_delta_valid, 50)) if gap_delta_valid.size > 0 else 0.0
     gap_error_p95_m = float(np.percentile(gap_delta_valid, 95)) if gap_delta_valid.size > 0 else 0.0
     gap_error_abs_p50_m = float(np.percentile(abs_gap_delta_valid, 50)) if abs_gap_delta_valid.size > 0 else 0.0
     gap_error_abs_p95_m = float(np.percentile(abs_gap_delta_valid, 95)) if abs_gap_delta_valid.size > 0 else 0.0
+    dynamic_gap_error_p50_m = float(np.percentile(dynamic_gap_delta_valid, 50)) if dynamic_gap_delta_valid.size > 0 else 0.0
+    dynamic_gap_error_abs_p95_m = float(np.percentile(abs_dynamic_gap_delta_valid, 95)) if abs_dynamic_gap_delta_valid.size > 0 else 0.0
+    equilibrium_gap_error_p50_m = float(np.percentile(equilibrium_gap_delta_valid, 50)) if equilibrium_gap_delta_valid.size > 0 else 0.0
+    equilibrium_gap_error_abs_p95_m = float(np.percentile(abs_equilibrium_gap_delta_valid, 95)) if abs_equilibrium_gap_delta_valid.size > 0 else 0.0
+    lead_speed_estimate_p50_mps = float(np.percentile(lead_speed_estimate_valid, 50)) if lead_speed_estimate_valid.size > 0 else 0.0
+    lead_speed_estimate_p95_mps = float(np.percentile(lead_speed_estimate_valid, 95)) if lead_speed_estimate_valid.size > 0 else 0.0
+    closure_reserve_p50_mps = float(np.percentile(closure_reserve_valid, 50)) if closure_reserve_valid.size > 0 else 0.0
+    closure_reserve_p95_mps = float(np.percentile(closure_reserve_valid, 95)) if closure_reserve_valid.size > 0 else 0.0
     gap_above_target_plus_2m_rate = (
         float(np.mean(gap_delta_valid > 2.0) * 100.0) if gap_delta_valid.size > 0 else 0.0
     )
@@ -2624,24 +2816,20 @@ def _build_acc_health_summary(data: Dict, n_frames: int, speed: Optional[np.ndar
         float(np.mean(gap_delta_valid < 0.0) * 100.0) if gap_delta_valid.size > 0 else 0.0
     )
 
-    tracking_mask = valid_follow_mask & np.isfinite(signed_gap_delta) & (np.abs(signed_gap_delta) <= 2.0)
-    compressed_mask = valid_follow_mask & np.isfinite(signed_gap_delta) & (signed_gap_delta < -2.0)
+    tracking_mask = valid_follow_mask & (convergence_mode_arr == "tracking_dynamic_gap")
+    compressed_mask = valid_follow_mask & (convergence_mode_arr == "compressed")
     closing_mask = (
         valid_follow_mask
         & np.isfinite(signed_gap_delta)
         & (signed_gap_delta > 2.0)
         & np.isfinite(range_rate_arr)
         & (range_rate_arr > 0.25)
+        & (convergence_mode_arr != "detection_limited_following")
     )
-    over_conservative_mask = (
-        valid_follow_mask
-        & np.isfinite(signed_gap_delta)
-        & (signed_gap_delta > 5.0)
-        & (
-            ~np.isfinite(range_rate_arr)
-            | (range_rate_arr <= 0.25)
-        )
-    )
+    over_conservative_mask = valid_follow_mask & (convergence_mode_arr == "policy_limited_tracking")
+    lead_limited_mask = valid_follow_mask & (convergence_mode_arr == "lead_limited_tracking")
+    equilibrium_limited_mask = valid_follow_mask & (convergence_mode_arr == "equilibrium_limited_tracking")
+    detection_limited_mask = valid_follow_mask & (convergence_mode_arr == "detection_limited_following")
     valid_follow_count = int(np.sum(valid_follow_mask))
 
     def _pct(mask: np.ndarray) -> float:
@@ -2653,13 +2841,19 @@ def _build_acc_health_summary(data: Dict, n_frames: int, speed: Optional[np.ndar
     compressed_rate = _pct(compressed_mask)
     closing_rate = _pct(closing_mask)
     over_conservative_rate = _pct(over_conservative_mask)
+    lead_limited_rate = _pct(lead_limited_mask)
+    equilibrium_limited_rate = _pct(equilibrium_limited_mask)
+    detection_limited_rate = _pct(detection_limited_mask)
     following_regime_mode = "unavailable"
     if valid_follow_count > 0:
         regime_rates = {
             "tracking": tracking_rate,
-            "over_conservative_trailing": over_conservative_rate,
+            "policy_limited_tracking": over_conservative_rate,
             "closing": closing_rate,
             "compressed": compressed_rate,
+            "lead_limited_tracking": lead_limited_rate,
+            "equilibrium_limited_tracking": equilibrium_limited_rate,
+            "detection_limited_following": detection_limited_rate,
         }
         following_regime_mode = max(regime_rates.items(), key=lambda item: item[1])[0]
 
@@ -2742,6 +2936,35 @@ def _build_acc_health_summary(data: Dict, n_frames: int, speed: Optional[np.ndar
         lead_present_mask = acc_mask & (target_gap_arr > 0.0)
         if np.any(lead_present_mask):
             acc_detection_rate = float(np.mean(detected_arr[lead_present_mask] > 0.5))
+    stable_detection_rate = (
+        float(np.mean(detection_stable_frames_arr[valid_follow_mask] >= 3.0) * 100.0)
+        if valid_follow_count > 0
+        else 0.0
+    )
+    recent_detection_loss_rate = (
+        float(np.mean(recent_detection_loss_arr[acc_mask & np.isfinite(recent_detection_loss_arr)] > 0.5) * 100.0)
+        if np.any(acc_mask & np.isfinite(recent_detection_loss_arr))
+        else 0.0
+    )
+    detection_loss_event_count = int(np.sum(detection_loss_event_delta_arr[np.isfinite(detection_loss_event_delta_arr)] > 0.5))
+    no_detect_run_length_max = (
+        int(np.max(no_detect_run_length_arr[np.isfinite(no_detect_run_length_arr)]))
+        if np.isfinite(no_detect_run_length_arr).any()
+        else 0
+    )
+    detection_issue_detected = bool(
+        acc_detection_rate < ACC_DETECTION_RATE_GATE
+        or recent_detection_loss_rate > 5.0
+        or no_detect_run_length_max >= 3
+    )
+    detection_issue_mode = "none"
+    if detection_issue_detected:
+        if acc_detection_rate < ACC_DETECTION_RATE_GATE:
+            detection_issue_mode = "low_detection_rate"
+        elif no_detect_run_length_max >= 3:
+            detection_issue_mode = "dropout_run"
+        else:
+            detection_issue_mode = "recent_detection_loss"
 
     # Emergency brake events (transitions into state where gap_error extremely negative)
     acc_emergency_brake_events = 0
@@ -2788,10 +3011,18 @@ def _build_acc_health_summary(data: Dict, n_frames: int, speed: Optional[np.ndar
         "acc_actual_gap_p95_m": round(actual_gap_p95_m, 3),
         "acc_target_gap_p50_m": round(target_gap_p50_m, 3),
         "acc_target_gap_p95_m": round(target_gap_p95_m, 3),
+        "acc_dynamic_gap_p50_m": round(dynamic_gap_p50_m, 3),
+        "acc_dynamic_gap_p95_m": round(dynamic_gap_p95_m, 3),
+        "acc_equilibrium_gap_p50_m": round(equilibrium_gap_p50_m, 3),
+        "acc_equilibrium_gap_p95_m": round(equilibrium_gap_p95_m, 3),
         "acc_gap_error_p50_m": round(gap_error_p50_m, 3),
         "acc_gap_error_p95_m": round(gap_error_p95_m, 3),
         "acc_gap_error_abs_p50_m": round(gap_error_abs_p50_m, 3),
         "acc_gap_error_abs_p95_m": round(gap_error_abs_p95_m, 3),
+        "acc_dynamic_gap_error_p50_m": round(dynamic_gap_error_p50_m, 3),
+        "acc_dynamic_gap_error_abs_p95_m": round(dynamic_gap_error_abs_p95_m, 3),
+        "acc_equilibrium_gap_error_p50_m": round(equilibrium_gap_error_p50_m, 3),
+        "acc_equilibrium_gap_error_abs_p95_m": round(equilibrium_gap_error_abs_p95_m, 3),
         "acc_gap_above_target_plus_2m_rate": round(gap_above_target_plus_2m_rate, 3),
         "acc_gap_above_target_plus_5m_rate": round(gap_above_target_plus_5m_rate, 3),
         "acc_gap_above_target_plus_10m_rate": round(gap_above_target_plus_10m_rate, 3),
@@ -2800,8 +3031,16 @@ def _build_acc_health_summary(data: Dict, n_frames: int, speed: Optional[np.ndar
         "acc_tracking_rate": round(tracking_rate, 3),
         "acc_closing_rate": round(closing_rate, 3),
         "acc_over_conservative_trailing_rate": round(over_conservative_rate, 3),
+        "acc_policy_limited_tracking_rate": round(over_conservative_rate, 3),
+        "acc_lead_limited_tracking_rate": round(lead_limited_rate, 3),
+        "acc_equilibrium_limited_tracking_rate": round(equilibrium_limited_rate, 3),
+        "acc_detection_limited_following_rate": round(detection_limited_rate, 3),
         "acc_compressed_rate": round(compressed_rate, 3),
         "acc_range_rate_p50_mps": round(float(np.percentile(range_rate_valid, 50)), 3) if range_rate_valid.size > 0 else 0.0,
+        "acc_lead_speed_estimate_p50_mps": round(lead_speed_estimate_p50_mps, 3),
+        "acc_lead_speed_estimate_p95_mps": round(lead_speed_estimate_p95_mps, 3),
+        "acc_closure_reserve_p50_mps": round(closure_reserve_p50_mps, 3),
+        "acc_closure_reserve_p95_mps": round(closure_reserve_p95_mps, 3),
         "acc_target_speed_delta_p95_mps": round(acc_target_speed_delta_p95, 4),
         "acc_commanded_accel_delta_p95_mps2": round(acc_commanded_accel_delta_p95, 4),
         "acc_jerk_p95_mps3": round(acc_jerk_p95_filtered, 2),
@@ -2812,6 +3051,12 @@ def _build_acc_health_summary(data: Dict, n_frames: int, speed: Optional[np.ndar
         "acc_jerk_gate_value_mps3": round(jerk_gate_value_mps3, 3),
         "acc_jerk_raw_spike_dominated": raw_spike_dominated,
         "acc_detection_rate": round(acc_detection_rate, 4),
+        "acc_detection_stable_rate": round(stable_detection_rate, 3),
+        "acc_recent_detection_loss_rate": round(recent_detection_loss_rate, 3),
+        "acc_detection_loss_event_count": detection_loss_event_count,
+        "acc_no_detect_run_length_max": no_detect_run_length_max,
+        "acc_detection_issue_detected": detection_issue_detected,
+        "acc_detection_issue_mode": detection_issue_mode,
         "acc_emergency_brake_events": acc_emergency_brake_events,
         "gap_rmse_gate_pass": gap_rmse_gate_pass,
         "ttc_min_gate_pass": ttc_min_gate_pass,
@@ -3210,10 +3455,18 @@ def _build_acc_comfort_contract_summary(
         "actual_gap_p95_m": None,
         "target_gap_p50_m": None,
         "target_gap_p95_m": None,
+        "dynamic_gap_p50_m": None,
+        "dynamic_gap_p95_m": None,
+        "equilibrium_gap_p50_m": None,
+        "equilibrium_gap_p95_m": None,
         "gap_error_p50_m": None,
         "gap_error_p95_m": None,
         "gap_error_abs_p50_m": None,
         "gap_error_abs_p95_m": None,
+        "dynamic_gap_error_p50_m": None,
+        "dynamic_gap_error_abs_p95_m": None,
+        "equilibrium_gap_error_p50_m": None,
+        "equilibrium_gap_error_abs_p95_m": None,
         "gap_above_target_plus_2m_rate": None,
         "gap_above_target_plus_5m_rate": None,
         "gap_above_target_plus_10m_rate": None,
@@ -3222,10 +3475,19 @@ def _build_acc_comfort_contract_summary(
         "tracking_rate": None,
         "closing_rate": None,
         "over_conservative_trailing_rate": None,
+        "policy_limited_tracking_rate": None,
+        "lead_limited_tracking_rate": None,
+        "equilibrium_limited_tracking_rate": None,
+        "detection_limited_following_rate": None,
         "compressed_rate": None,
         "range_rate_p50_mps": None,
+        "lead_speed_estimate_p50_mps": None,
+        "lead_speed_estimate_p95_mps": None,
+        "closure_reserve_p50_mps": None,
+        "closure_reserve_p95_mps": None,
         "target_speed_delta_p95_mps": None,
         "commanded_accel_delta_p95_mps2": None,
+        "convergence_issue_reason_mode": "none",
         "jerk_gate_metric_role": "unknown",
         "jerk_gate_value_mps3": None,
         "jerk_gate_pass": None,
@@ -3278,10 +3540,37 @@ def _build_acc_comfort_contract_summary(
         and jerk_gate_pass
         and (limiter_transition_rate + speed_estimation_spike_rate + timestamp_gap_rate) >= 50.0
     )
-    following_convergence_issue_detected = bool(
-        float(acc_health.get("acc_gap_above_target_plus_10m_rate", 0.0) or 0.0) >= 25.0
-        or str(acc_health.get("acc_following_regime_mode") or "") == "over_conservative_trailing"
-    )
+    convergence_issue_reason_mode = "none"
+    following_regime_mode = str(acc_health.get("acc_following_regime_mode") or "unavailable")
+    detection_limited_rate = float(acc_health.get("acc_detection_limited_following_rate", 0.0) or 0.0)
+    policy_limited_rate = float(acc_health.get("acc_policy_limited_tracking_rate", 0.0) or 0.0)
+    equilibrium_limited_rate = float(acc_health.get("acc_equilibrium_limited_tracking_rate", 0.0) or 0.0)
+    lead_limited_rate = float(acc_health.get("acc_lead_limited_tracking_rate", 0.0) or 0.0)
+    closing_rate = float(acc_health.get("acc_closing_rate", 0.0) or 0.0)
+    closure_reserve_p50 = float(acc_health.get("acc_closure_reserve_p50_mps", 0.0) or 0.0)
+    if following_regime_mode == "detection_limited_following" or detection_limited_rate >= 25.0:
+        convergence_issue_reason_mode = "detection_limited_following"
+        following_convergence_issue_detected = False
+    elif equilibrium_limited_rate >= 30.0 and closure_reserve_p50 <= 0.5:
+        convergence_issue_reason_mode = "equilibrium_limited_tracking"
+        following_convergence_issue_detected = False
+    elif lead_limited_rate >= 25.0:
+        convergence_issue_reason_mode = "lead_limited_tracking"
+        following_convergence_issue_detected = False
+    elif (
+        (following_regime_mode == "policy_limited_tracking" or policy_limited_rate >= 25.0)
+        and policy_limited_rate >= 50.0
+        and closing_rate < 25.0
+        and equilibrium_limited_rate < 25.0
+    ):
+        convergence_issue_reason_mode = "policy_limited_tracking"
+        following_convergence_issue_detected = True
+    elif closing_rate >= 25.0:
+        convergence_issue_reason_mode = "closing"
+        following_convergence_issue_detected = False
+    else:
+        convergence_issue_reason_mode = following_regime_mode
+        following_convergence_issue_detected = False
 
     return {
         "schema_version": "v1",
@@ -3290,26 +3579,43 @@ def _build_acc_comfort_contract_summary(
         "actual_gap_p95_m": safe_float(acc_health.get("acc_actual_gap_p95_m")),
         "target_gap_p50_m": safe_float(acc_health.get("acc_target_gap_p50_m")),
         "target_gap_p95_m": safe_float(acc_health.get("acc_target_gap_p95_m")),
+        "dynamic_gap_p50_m": safe_float(acc_health.get("acc_dynamic_gap_p50_m")),
+        "dynamic_gap_p95_m": safe_float(acc_health.get("acc_dynamic_gap_p95_m")),
+        "equilibrium_gap_p50_m": safe_float(acc_health.get("acc_equilibrium_gap_p50_m")),
+        "equilibrium_gap_p95_m": safe_float(acc_health.get("acc_equilibrium_gap_p95_m")),
         "gap_error_p50_m": safe_float(acc_health.get("acc_gap_error_p50_m")),
         "gap_error_p95_m": safe_float(acc_health.get("acc_gap_error_p95_m")),
         "gap_error_abs_p50_m": safe_float(acc_health.get("acc_gap_error_abs_p50_m")),
         "gap_error_abs_p95_m": safe_float(acc_health.get("acc_gap_error_abs_p95_m")),
+        "dynamic_gap_error_p50_m": safe_float(acc_health.get("acc_dynamic_gap_error_p50_m")),
+        "dynamic_gap_error_abs_p95_m": safe_float(acc_health.get("acc_dynamic_gap_error_abs_p95_m")),
+        "equilibrium_gap_error_p50_m": safe_float(acc_health.get("acc_equilibrium_gap_error_p50_m")),
+        "equilibrium_gap_error_abs_p95_m": safe_float(acc_health.get("acc_equilibrium_gap_error_abs_p95_m")),
         "gap_above_target_plus_2m_rate": safe_float(acc_health.get("acc_gap_above_target_plus_2m_rate")),
         "gap_above_target_plus_5m_rate": safe_float(acc_health.get("acc_gap_above_target_plus_5m_rate")),
         "gap_above_target_plus_10m_rate": safe_float(acc_health.get("acc_gap_above_target_plus_10m_rate")),
         "gap_below_target_rate": safe_float(acc_health.get("acc_gap_below_target_rate")),
-        "following_regime_mode": str(acc_health.get("acc_following_regime_mode") or "unavailable"),
+        "following_regime_mode": following_regime_mode,
         "tracking_rate": safe_float(acc_health.get("acc_tracking_rate")),
         "closing_rate": safe_float(acc_health.get("acc_closing_rate")),
         "over_conservative_trailing_rate": safe_float(
             acc_health.get("acc_over_conservative_trailing_rate")
         ),
+        "policy_limited_tracking_rate": safe_float(acc_health.get("acc_policy_limited_tracking_rate")),
+        "lead_limited_tracking_rate": safe_float(acc_health.get("acc_lead_limited_tracking_rate")),
+        "equilibrium_limited_tracking_rate": safe_float(acc_health.get("acc_equilibrium_limited_tracking_rate")),
+        "detection_limited_following_rate": safe_float(acc_health.get("acc_detection_limited_following_rate")),
         "compressed_rate": safe_float(acc_health.get("acc_compressed_rate")),
         "range_rate_p50_mps": safe_float(acc_health.get("acc_range_rate_p50_mps")),
+        "lead_speed_estimate_p50_mps": safe_float(acc_health.get("acc_lead_speed_estimate_p50_mps")),
+        "lead_speed_estimate_p95_mps": safe_float(acc_health.get("acc_lead_speed_estimate_p95_mps")),
+        "closure_reserve_p50_mps": safe_float(acc_health.get("acc_closure_reserve_p50_mps")),
+        "closure_reserve_p95_mps": safe_float(acc_health.get("acc_closure_reserve_p95_mps")),
         "target_speed_delta_p95_mps": safe_float(acc_health.get("acc_target_speed_delta_p95_mps")),
         "commanded_accel_delta_p95_mps2": safe_float(
             acc_health.get("acc_commanded_accel_delta_p95_mps2")
         ),
+        "convergence_issue_reason_mode": convergence_issue_reason_mode,
         "jerk_gate_metric_role": str(acc_health.get("acc_jerk_gate_metric_role") or "unknown"),
         "jerk_gate_value_mps3": safe_float(jerk_gate_value),
         "jerk_gate_pass": jerk_gate_pass,
@@ -3330,6 +3636,36 @@ def _build_acc_comfort_contract_summary(
         ),
         "scoring_artifact_likely": scoring_artifact_likely,
         "following_convergence_issue_detected": following_convergence_issue_detected,
+    }
+
+
+def _build_acc_detection_contract_summary(acc_health: Optional[Dict]) -> Dict:
+    unavailable = {
+        "schema_version": "v1",
+        "availability": "unavailable",
+        "detection_rate_pct": None,
+        "stable_detection_rate_pct": None,
+        "recent_detection_loss_rate_pct": None,
+        "detection_loss_event_count": None,
+        "no_detect_run_length_max": None,
+        "issue_detected": False,
+        "issue_mode": "none",
+        "convergence_tuning_valid": None,
+    }
+    if not acc_health:
+        return unavailable
+    issue_detected = bool(acc_health.get("acc_detection_issue_detected", False))
+    return {
+        "schema_version": "v1",
+        "availability": "available",
+        "detection_rate_pct": safe_float((acc_health.get("acc_detection_rate") or 0.0) * 100.0),
+        "stable_detection_rate_pct": safe_float(acc_health.get("acc_detection_stable_rate")),
+        "recent_detection_loss_rate_pct": safe_float(acc_health.get("acc_recent_detection_loss_rate")),
+        "detection_loss_event_count": int(acc_health.get("acc_detection_loss_event_count", 0) or 0),
+        "no_detect_run_length_max": int(acc_health.get("acc_no_detect_run_length_max", 0) or 0),
+        "issue_detected": issue_detected,
+        "issue_mode": str(acc_health.get("acc_detection_issue_mode") or "none"),
+        "convergence_tuning_valid": not issue_detected,
     }
 
 
@@ -4004,6 +4340,45 @@ def analyze_recording_summary(
             data['acc_target_gap_m'] = (
                 np.array(f['vehicle/acc_target_gap_m'][:])
                 if 'vehicle/acc_target_gap_m' in f else None
+            )
+            data['acc_idm_dynamic_gap_m'] = (
+                np.array(f['vehicle/acc_idm_dynamic_gap_m'][:])
+                if 'vehicle/acc_idm_dynamic_gap_m' in f else None
+            )
+            data['acc_idm_equilibrium_gap_m'] = (
+                np.array(f['vehicle/acc_idm_equilibrium_gap_m'][:])
+                if 'vehicle/acc_idm_equilibrium_gap_m' in f else None
+            )
+            data['acc_idm_accel_mps2'] = (
+                np.array(f['vehicle/acc_idm_accel_mps2'][:])
+                if 'vehicle/acc_idm_accel_mps2' in f else None
+            )
+            data['acc_lead_speed_estimate_mps'] = (
+                np.array(f['vehicle/acc_lead_speed_estimate_mps'][:])
+                if 'vehicle/acc_lead_speed_estimate_mps' in f else None
+            )
+            data['acc_closure_reserve_mps'] = (
+                np.array(f['vehicle/acc_closure_reserve_mps'][:])
+                if 'vehicle/acc_closure_reserve_mps' in f else None
+            )
+            data['acc_convergence_mode'] = (
+                f['vehicle/acc_convergence_mode'][:] if 'vehicle/acc_convergence_mode' in f else None
+            )
+            data['acc_detection_stable_frames'] = (
+                np.array(f['vehicle/acc_detection_stable_frames'][:])
+                if 'vehicle/acc_detection_stable_frames' in f else None
+            )
+            data['acc_recent_detection_loss'] = (
+                np.array(f['vehicle/acc_recent_detection_loss'][:])
+                if 'vehicle/acc_recent_detection_loss' in f else None
+            )
+            data['acc_detection_loss_event_delta'] = (
+                np.array(f['vehicle/acc_detection_loss_event_delta'][:])
+                if 'vehicle/acc_detection_loss_event_delta' in f else None
+            )
+            data['acc_no_detect_run_length'] = (
+                np.array(f['vehicle/acc_no_detect_run_length'][:])
+                if 'vehicle/acc_no_detect_run_length' in f else None
             )
 
             # Control data
@@ -7903,6 +8278,7 @@ def analyze_recording_summary(
         acc_health=acc_health,
         hotspot_attribution=hotspot_attribution,
     )
+    acc_detection_contract = _build_acc_detection_contract_summary(acc_health)
 
     # ACC Safety layer deductions (zero when acc_health is None)
     acc_collision_penalty = 0.0
@@ -8458,9 +8834,13 @@ def analyze_recording_summary(
         recommendations.append(
             "Run intent differs from road-limit expectation - confirm scenario target and lead-follow mode before interpreting speed behavior."
         )
-    if acc_comfort_contract.get("following_convergence_issue_detected"):
+    if acc_detection_contract.get("issue_detected"):
         recommendations.append(
-            "ACC is trailing farther than the intended gap - inspect following convergence before tuning comfort or changing scenario policy."
+            "ACC detection stability is not good enough for convergence tuning - fix radar/dropout behavior before changing following policy."
+        )
+    elif acc_comfort_contract.get("following_convergence_issue_detected"):
+        recommendations.append(
+            "ACC following appears policy-limited after corrected IDM gap semantics - inspect acquisition policy before changing comfort or scenario assumptions."
         )
     if highway_mild_curve_contract.get("issue_detected"):
         recommendations.append(
@@ -8655,14 +9035,17 @@ def analyze_recording_summary(
         key_issues.append(
             "Highway mild-curve under-activation (reference geometry mismatch on a map-backed arc)"
         )
-    if acc_comfort_contract.get("following_convergence_issue_detected"):
-        far_trailing_rate = acc_comfort_contract.get("gap_above_target_plus_10m_rate")
-        if far_trailing_rate is not None:
+    if acc_detection_contract.get("issue_detected"):
+        recent_loss_rate = acc_detection_contract.get("recent_detection_loss_rate_pct")
+        issue_mode = str(acc_detection_contract.get("issue_mode") or "none")
+        if recent_loss_rate is not None:
             key_issues.append(
-                f"ACC following too conservative ({float(far_trailing_rate):.1f}% > target+10m)"
+                f"ACC detection stability issue ({issue_mode}, recent-loss={float(recent_loss_rate):.1f}%)"
             )
         else:
-            key_issues.append("ACC following too conservative")
+            key_issues.append(f"ACC detection stability issue ({issue_mode})")
+    elif acc_comfort_contract.get("following_convergence_issue_detected"):
+        key_issues.append("ACC following is policy-limited after corrected IDM gap semantics")
     if lateral_owner_contract.get("suppress_legacy_curve_intent_warnings"):
         key_issues = [
             issue
@@ -8873,6 +9256,7 @@ def analyze_recording_summary(
         "speed_intent": speed_intent,
         "run_intent": run_intent,
         "acc_comfort_contract": acc_comfort_contract,
+        "acc_detection_contract": acc_detection_contract,
         "lateral_owner_contract": lateral_owner_contract,
         "highway_mild_curve_contract": highway_mild_curve_contract,
         "mpc_gt_cross_track_contract": mpc_gt_cross_track_contract,
