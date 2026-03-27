@@ -1688,6 +1688,25 @@ class Visualizer {
                 html += '</div>';
             }
 
+            const lateralOwner = summary.lateral_owner_contract || null;
+            if (lateralOwner && typeof lateralOwner === 'object' && String(lateralOwner.availability || '').toLowerCase() === 'available') {
+                const healthy = Boolean(lateralOwner.authoritative_owner_healthy);
+                const ownerColor = healthy ? '#4caf50' : '#ffb74d';
+                html += '<div id="summary-section-lateral-owner-contract" style="background: #2a2a2a; padding: 1rem; border-radius: 8px; margin-bottom: 1.5rem; border-left: 4px solid #4a90e2;">';
+                html += '<h3 style="margin-top: 0; color: #4a90e2;">Lateral Owner Contract</h3>';
+                html += '<table style="width: 100%; color: #e0e0e0;">';
+                html += `<tr><td>Owner Summary Mode:</td><td style="text-align: right; color: ${ownerColor};">${this.escapeHtml(String(lateralOwner.owner_summary_mode || 'N/A'))}</td></tr>`;
+                html += `<tr><td>Primary Owner:</td><td style="text-align: right;">${this.escapeHtml(String(lateralOwner.primary_owner_mode || 'N/A'))}</td></tr>`;
+                html += `<tr><td>Authoritative Owner Healthy:</td><td style="text-align: right; color: ${ownerColor};">${healthy ? 'YES' : 'NO'}</td></tr>`;
+                html += `<tr><td>Legacy Curve-Intent Class:</td><td style="text-align: right;">${this.escapeHtml(String(lateralOwner.curve_intent_owner_class || 'N/A'))}</td></tr>`;
+                html += `<tr><td>Local / Turn-In / Local Ref / GT Classes:</td><td style="text-align: right;">${this.escapeHtml(String(lateralOwner.curve_local_owner_class || 'N/A'))} / ${this.escapeHtml(String(lateralOwner.turn_in_owner_class || 'N/A'))} / ${this.escapeHtml(String(lateralOwner.local_curve_reference_owner_class || 'N/A'))} / ${this.escapeHtml(String(lateralOwner.gt_cross_track_owner_class || 'N/A'))}</td></tr>`;
+                html += `<tr><td>Turn-In Fallback / Local Ref Fallback:</td><td style="text-align: right;">${Number.isFinite(Number(lateralOwner.turn_in_owner_fallback_active_rate)) ? Number(lateralOwner.turn_in_owner_fallback_active_rate).toFixed(1) + '%' : 'N/A'} / ${Number.isFinite(Number(lateralOwner.local_curve_reference_fallback_active_rate)) ? Number(lateralOwner.local_curve_reference_fallback_active_rate).toFixed(1) + '%' : 'N/A'}</td></tr>`;
+                html += `<tr><td>Highway Mild-Curve / GT Contract Issues:</td><td style="text-align: right;">${lateralOwner.highway_mild_curve_issue_detected ? 'YES' : 'NO'} / ${lateralOwner.mpc_gt_cross_track_issue_detected ? 'YES' : 'NO'}</td></tr>`;
+                html += `<tr><td>Suppress Legacy Curve-Intent Warnings:</td><td style="text-align: right;">${lateralOwner.suppress_legacy_curve_intent_warnings ? 'YES' : 'NO'}</td></tr>`;
+                html += '</table>';
+                html += '</div>';
+            }
+
             const highwayMildCurve = summary.highway_mild_curve_contract || null;
             if (highwayMildCurve && typeof highwayMildCurve === 'object' && String(highwayMildCurve.availability || '').toLowerCase() === 'available') {
                 const issueDetected = Boolean(highwayMildCurve.issue_detected);
@@ -1738,7 +1757,7 @@ class Visualizer {
                 html += `<tr><td>Underactivated Tracking Rate:</td><td style="text-align: right; color: ${issueColor};">${Number.isFinite(underactivatedRate) ? `${underactivatedRate.toFixed(1)}% <span style="color:#a0a0a0;">(limit: >=${Number(limits.underactivated_on_high_error_min_pct || 50).toFixed(1)}%)</span>` : 'N/A'}</td></tr>`;
                 html += `<tr><td>Poor Perception / Transport Overlap:</td><td style="text-align: right;">${Number.isFinite(poorPerceptionRate) ? poorPerceptionRate.toFixed(1) + '%' : 'N/A'} / ${Number.isFinite(transportOverlapRate) ? transportOverlapRate.toFixed(1) + '%' : 'N/A'}</td></tr>`;
                 html += `<tr><td>MPC Feasible On High Error:</td><td style="text-align: right;">${Number.isFinite(mpcFeasibleRate) ? mpcFeasibleRate.toFixed(1) + '%' : 'N/A'}</td></tr>`;
-                html += `<tr><td>Curve Intent / Local State Mode:</td><td style="text-align: right;">${this.escapeHtml(String(highwayMildCurve.curve_intent_state_mode_on_high_error || 'N/A'))} / ${this.escapeHtml(String(highwayMildCurve.curve_local_state_mode_on_high_error || 'N/A'))}</td></tr>`;
+                html += `<tr><td>Legacy Intent / Local State Mode:</td><td style="text-align: right;">${this.escapeHtml(String(highwayMildCurve.curve_intent_state_mode_on_high_error || 'N/A'))} / ${this.escapeHtml(String(highwayMildCurve.curve_local_state_mode_on_high_error || 'N/A'))}</td></tr>`;
                 html += `<tr><td>Activation Blocker:</td><td style="text-align: right; color: ${issueColor};">${this.escapeHtml(blockerMode)}</td></tr>`;
                 html += `<tr><td>Error / Lane Offset (P50-P95):</td><td style="text-align: right;">${Number.isFinite(Number(latErr.p50)) ? Number(latErr.p50).toFixed(3) : 'N/A'}-${Number.isFinite(Number(latErr.p95)) ? Number(latErr.p95).toFixed(3) : 'N/A'} m / ${Number.isFinite(Number(laneOffset.p50)) ? Number(laneOffset.p50).toFixed(3) : 'N/A'}-${Number.isFinite(Number(laneOffset.p95)) ? Number(laneOffset.p95).toFixed(3) : 'N/A'} m</td></tr>`;
                 html += `<tr><td>Ref κ / MPC κ (P50):</td><td style="text-align: right;">${Number.isFinite(Number(refCurve.p50)) ? Number(refCurve.p50).toFixed(4) : 'N/A'} / ${Number.isFinite(Number(mpcKappa.p50)) ? Number(mpcKappa.p50).toFixed(4) : 'N/A'}</td></tr>`;

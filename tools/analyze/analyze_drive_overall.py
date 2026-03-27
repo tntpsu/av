@@ -1178,6 +1178,7 @@ def _print_summary_report(recording_path: Path, summary: Dict, analyze_to_failur
     transport_contract = summary.get("transport_contract", {})
     speed_intent = summary.get("speed_intent", {})
     run_intent = summary.get("run_intent", {})
+    lateral_owner_contract = summary.get("lateral_owner_contract", {})
     highway_mild_curve_contract = summary.get("highway_mild_curve_contract", {})
     mpc_gt_cross_track_contract = summary.get("mpc_gt_cross_track_contract", {})
     chassis_ground = summary.get("chassis_ground", {})
@@ -1281,9 +1282,20 @@ def _print_summary_report(recording_path: Path, summary: Dict, analyze_to_failur
             "   Oscillation Amplitude Runaway: "
             f"{'YES' if control_smoothness.get('oscillation_amplitude_runaway') else 'NO'}"
         )
-    if curve_intent_diag.get("available"):
+    if lateral_owner_contract.get("availability") == "available":
         print(
-            "   Curve Intent Arm Early Rate: "
+            "   Lateral Owner Contract: "
+            f"mode={lateral_owner_contract.get('owner_summary_mode') or 'N/A'}, "
+            f"primary={lateral_owner_contract.get('primary_owner_mode') or 'N/A'}, "
+            f"healthy={'YES' if lateral_owner_contract.get('authoritative_owner_healthy') else 'NO'}, "
+            f"legacyIntentSuppressed={'YES' if lateral_owner_contract.get('suppress_legacy_curve_intent_warnings') else 'NO'}"
+        )
+    if curve_intent_diag.get("available"):
+        proxy_label = "Legacy Curve-Intent Proxy"
+        if lateral_owner_contract.get("suppress_legacy_curve_intent_warnings"):
+            proxy_label += " (compatibility only)"
+        print(
+            f"   {proxy_label} Arm Early Rate: "
             f"{curve_intent_diag.get('arm_early_enough_rate', 0.0):.1f}%"
         )
         undercall_rate = curve_intent_diag.get('undercall_frame_rate')
@@ -1291,16 +1303,16 @@ def _print_summary_report(recording_path: Path, summary: Dict, analyze_to_failur
             skip_reason = curve_intent_diag.get('undercall_skipped_reason', 'unknown')
             gt_max = curve_intent_diag.get('gt_max_curvature', 0.0)
             print(
-                f"   Curve Intent Undercall Rate: N/A "
+                f"   {proxy_label} Undercall Rate: N/A "
                 f"({skip_reason}, GT max κ={gt_max:.4f})"
             )
         else:
             print(
-                "   Curve Intent Undercall Rate: "
+                f"   {proxy_label} Undercall Rate: "
                 f"{undercall_rate:.1f}%"
             )
         print(
-            "   Curve Intent Curvature Ratio P50/P95: "
+            f"   {proxy_label} Curvature Ratio P50/P95: "
             f"{curve_intent_diag.get('curvature_ratio_p50') or 0.0:.2f} / "
             f"{curve_intent_diag.get('curvature_ratio_p95') or 0.0:.2f}"
         )

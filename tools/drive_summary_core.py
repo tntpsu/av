@@ -1619,6 +1619,7 @@ def _build_mpc_gt_cross_track_contract_summary(data: Dict) -> Dict:
     base = {
         "schema_version": "v1",
         "availability": "unavailable",
+        "owner_class": "authoritative",
         "issue_detected": False,
         "issue_mode": "none",
         "high_error_frame_count": 0,
@@ -1813,6 +1814,100 @@ def _build_mpc_gt_cross_track_contract_summary(data: Dict) -> Dict:
     elif semantic_issue:
         result["issue_mode"] = "semantic_mismatch"
     return result
+
+
+def _build_lateral_owner_contract_summary(
+    curve_intent_diag: Dict,
+    curve_local_contract: Dict,
+    turn_in_owner: Dict,
+    local_curve_reference: Dict,
+    highway_mild_curve_contract: Dict,
+    mpc_gt_cross_track_contract: Dict,
+) -> Dict:
+    turn_in_limits = turn_in_owner.get("limits") or {}
+    local_ref_limits = local_curve_reference.get("limits") or {}
+    turn_in_fallback_rate = (
+        float(turn_in_owner.get("fallback_active_rate"))
+        if turn_in_owner.get("fallback_active_rate") is not None
+        else 0.0
+    )
+    local_ref_fallback_rate = (
+        float(local_curve_reference.get("fallback_active_rate"))
+        if local_curve_reference.get("fallback_active_rate") is not None
+        else 0.0
+    )
+    turn_in_fallback_limit = (
+        float(turn_in_limits.get("fallback_active_rate_max_pct"))
+        if turn_in_limits.get("fallback_active_rate_max_pct") is not None
+        else 0.0
+    )
+    local_ref_fallback_limit = (
+        float(local_ref_limits.get("fallback_active_rate_max_pct"))
+        if local_ref_limits.get("fallback_active_rate_max_pct") is not None
+        else 0.0
+    )
+    local_curve_issue_detected = bool(
+        float(curve_local_contract.get("curve_local_active_straight_rate", 0.0) or 0.0) > 5.0
+        or int(curve_local_contract.get("curve_local_arm_without_ready_count", 0) or 0) > 0
+        or int(curve_local_contract.get("curve_local_commit_without_ready_count", 0) or 0) > 0
+        or int(curve_local_contract.get("curve_local_reentry_without_gate_count", 0) or 0) > 0
+        or int(curve_local_contract.get("curve_local_watchdog_pingpong_count", 0) or 0) > 0
+        or int(curve_local_contract.get("curve_local_commit_without_distance_ready_count", 0) or 0) > 0
+        or int(curve_local_contract.get("curve_lookahead_collapse_violation_count", 0) or 0) > 0
+    )
+    authoritative_owner_available = bool(
+        curve_local_contract.get("curve_local_contract_available")
+        or turn_in_owner.get("availability") == "available"
+        or local_curve_reference.get("availability") == "available"
+        or mpc_gt_cross_track_contract.get("availability") == "available"
+    )
+    authoritative_owner_issue_detected = bool(
+        local_curve_issue_detected
+        or bool(highway_mild_curve_contract.get("issue_detected"))
+        or bool(mpc_gt_cross_track_contract.get("issue_detected"))
+        or turn_in_fallback_rate > (turn_in_fallback_limit + 1e-6)
+        or local_ref_fallback_rate > (local_ref_fallback_limit + 1e-6)
+    )
+    authoritative_owner_healthy = bool(
+        authoritative_owner_available and not authoritative_owner_issue_detected
+    )
+    primary_owner_mode = (
+        str(turn_in_owner.get("owner_mode") or "")
+        or str(local_curve_reference.get("mode") or "")
+        or "unavailable"
+    )
+    if authoritative_owner_healthy:
+        owner_summary_mode = "authoritative_clean"
+    elif authoritative_owner_available:
+        owner_summary_mode = "authoritative_issue"
+    else:
+        owner_summary_mode = "legacy_only"
+    return {
+        "schema_version": "v1",
+        "availability": "available" if authoritative_owner_available else "unavailable",
+        "owner_summary_mode": owner_summary_mode,
+        "primary_owner_mode": primary_owner_mode,
+        "curve_intent_owner_class": "legacy_proxy",
+        "curve_local_owner_class": "authoritative",
+        "turn_in_owner_class": "authoritative",
+        "local_curve_reference_owner_class": "authoritative",
+        "gt_cross_track_owner_class": "authoritative",
+        "authoritative_owner_available": bool(authoritative_owner_available),
+        "authoritative_owner_issue_detected": bool(authoritative_owner_issue_detected),
+        "authoritative_owner_healthy": bool(authoritative_owner_healthy),
+        "local_curve_issue_detected": bool(local_curve_issue_detected),
+        "turn_in_owner_fallback_active_rate": safe_float(turn_in_fallback_rate),
+        "local_curve_reference_fallback_active_rate": safe_float(local_ref_fallback_rate),
+        "highway_mild_curve_issue_detected": bool(highway_mild_curve_contract.get("issue_detected")),
+        "mpc_gt_cross_track_issue_detected": bool(mpc_gt_cross_track_contract.get("issue_detected")),
+        "legacy_curve_intent_available": bool(curve_intent_diag.get("available")),
+        "legacy_curve_intent_proxy_only": bool(
+            curve_intent_diag.get("available") and authoritative_owner_healthy
+        ),
+        "suppress_legacy_curve_intent_warnings": bool(
+            curve_intent_diag.get("available") and authoritative_owner_healthy
+        ),
+    }
 
 
 def _load_track_curve_windows(track_name: str) -> dict:
@@ -5901,6 +5996,7 @@ def analyze_recording_summary(
     # 9. CURVE INTENT DIAGNOSTICS
     curve_intent_diag = {
         "available": False,
+        "owner_class": "legacy_proxy",
         "arm_signal_available": False,
         "curve_event_count": 0,
         "armed_curve_event_count": 0,
@@ -6052,6 +6148,7 @@ def analyze_recording_summary(
 
     curve_local_contract = {
         "availability": "unavailable",
+        "owner_class": "authoritative",
         "curve_local_contract_available": False,
         "curve_preview_far_active_straight_rate": 0.0,
         "curve_local_active_straight_rate": 0.0,
@@ -7675,6 +7772,7 @@ def analyze_recording_summary(
 
     turn_in_owner = {
         "availability": "unavailable",
+        "owner_class": "authoritative",
         "owner_mode": None,
         "entry_weight_source": None,
         "fallback_active_rate": None,
@@ -7751,6 +7849,7 @@ def analyze_recording_summary(
 
     local_curve_reference = {
         "availability": "unavailable",
+        "owner_class": "authoritative",
         "mode": None,
         "active_rate": None,
         "shadow_only_rate": None,
@@ -7978,6 +8077,14 @@ def analyze_recording_summary(
     run_intent = _build_run_intent_summary(data)
     highway_mild_curve_contract = _build_highway_mild_curve_contract_summary(data)
     mpc_gt_cross_track_contract = _build_mpc_gt_cross_track_contract_summary(data)
+    lateral_owner_contract = _build_lateral_owner_contract_summary(
+        curve_intent_diag=curve_intent_diag,
+        curve_local_contract=curve_local_contract,
+        turn_in_owner=turn_in_owner,
+        local_curve_reference=local_curve_reference,
+        highway_mild_curve_contract=highway_mild_curve_contract,
+        mpc_gt_cross_track_contract=mpc_gt_cross_track_contract,
+    )
     if not bool((latency_sync.get("cadence") or {}).get("tuning_valid", False)):
         recommendations.append(
             "Cadence quality is not tuning-valid - do not use this run for parameter decisions."
@@ -8028,6 +8135,17 @@ def analyze_recording_summary(
         recommendations.append(
             "Chassis-ground health is WARN - reduce chassis contact risk and eliminate fallback activations."
         )
+    if lateral_owner_contract.get("suppress_legacy_curve_intent_warnings"):
+        legacy_recommendation_prefixes = (
+            "Curve intent arms too late/misses entries",
+            "Controller is undercalling curvature in curves",
+            "Curve intent COMMIT streak is too long",
+        )
+        recommendations = [
+            rec
+            for rec in recommendations
+            if not any(rec.startswith(prefix) for prefix in legacy_recommendation_prefixes)
+        ]
     
     # Key issues
     key_issues = []
@@ -8188,10 +8306,14 @@ def analyze_recording_summary(
         key_issues.append(
             "Highway mild-curve under-activation (reference geometry mismatch on a map-backed arc)"
         )
-    if mpc_gt_cross_track_contract.get("issue_detected"):
-        key_issues.append(
-            "MPC GT cross-track semantic mismatch (lookahead geometry used as current cross-track)"
-        )
+    if lateral_owner_contract.get("suppress_legacy_curve_intent_warnings"):
+        key_issues = [
+            issue
+            for issue in key_issues
+            if not issue.startswith("Curve intent late arm")
+            and not issue.startswith("Curvature undercall")
+        ]
+    key_issues = list(dict.fromkeys(key_issues))
     if chassis_ground.get("health") in {"WARN", "POOR"}:
         contact_rate = chassis_ground.get("contact_rate_pct")
         penetration_max = chassis_ground.get("penetration_max_m")
@@ -8393,6 +8515,7 @@ def analyze_recording_summary(
         "transport_contract": transport_contract,
         "speed_intent": speed_intent,
         "run_intent": run_intent,
+        "lateral_owner_contract": lateral_owner_contract,
         "highway_mild_curve_contract": highway_mild_curve_contract,
         "mpc_gt_cross_track_contract": mpc_gt_cross_track_contract,
         "chassis_ground": chassis_ground,

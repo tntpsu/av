@@ -3,7 +3,10 @@ from pathlib import Path
 import h5py
 import numpy as np
 
-from tools.drive_summary_core import analyze_recording_summary
+from tools.drive_summary_core import (
+    _build_lateral_owner_contract_summary,
+    analyze_recording_summary,
+)
 
 
 def _write_minimal_recording(path: Path) -> None:
@@ -53,6 +56,7 @@ def test_drive_summary_contract_keys(tmp_path: Path) -> None:
         "transport_contract",
         "speed_intent",
         "run_intent",
+        "lateral_owner_contract",
         "highway_mild_curve_contract",
         "mpc_gt_cross_track_contract",
         "chassis_ground",
@@ -165,6 +169,29 @@ def test_drive_summary_contract_keys(tmp_path: Path) -> None:
         "final_longitudinal_owner_mode",
         "lead_collision_override_rate_pct",
     }.issubset(run_intent.keys())
+    lateral_owner_contract = summary.get("lateral_owner_contract", {})
+    assert {
+        "schema_version",
+        "availability",
+        "owner_summary_mode",
+        "primary_owner_mode",
+        "curve_intent_owner_class",
+        "curve_local_owner_class",
+        "turn_in_owner_class",
+        "local_curve_reference_owner_class",
+        "gt_cross_track_owner_class",
+        "authoritative_owner_available",
+        "authoritative_owner_issue_detected",
+        "authoritative_owner_healthy",
+        "local_curve_issue_detected",
+        "turn_in_owner_fallback_active_rate",
+        "local_curve_reference_fallback_active_rate",
+        "highway_mild_curve_issue_detected",
+        "mpc_gt_cross_track_issue_detected",
+        "legacy_curve_intent_available",
+        "legacy_curve_intent_proxy_only",
+        "suppress_legacy_curve_intent_warnings",
+    }.issubset(lateral_owner_contract.keys())
     highway_mild_curve_contract = summary.get("highway_mild_curve_contract", {})
     assert {
         "schema_version",
@@ -340,6 +367,31 @@ def test_drive_summary_contract_keys(tmp_path: Path) -> None:
     }.issubset(local_curve_reference.keys())
     assert isinstance(summary.get("curve_turn_events", []), list)
     assert isinstance(summary.get("curve_straight_segments", []), list)
+
+
+def test_lateral_owner_contract_uses_authoritative_fallback_budget() -> None:
+    summary = _build_lateral_owner_contract_summary(
+        curve_intent_diag={"available": True},
+        curve_local_contract={"curve_local_contract_available": True},
+        turn_in_owner={
+            "availability": "available",
+            "owner_mode": "phase_active",
+            "fallback_active_rate": 0.0,
+            "limits": {"fallback_active_rate_max_pct": 1.0},
+        },
+        local_curve_reference={
+            "availability": "available",
+            "mode": "shadow",
+            "fallback_active_rate": 0.09,
+            "limits": {"fallback_active_rate_max_pct": 5.0},
+        },
+        highway_mild_curve_contract={"issue_detected": False},
+        mpc_gt_cross_track_contract={"availability": "available", "issue_detected": False},
+    )
+
+    assert summary["authoritative_owner_issue_detected"] is False
+    assert summary["authoritative_owner_healthy"] is True
+    assert summary["suppress_legacy_curve_intent_warnings"] is True
 
 
 def test_mpc_gt_cross_track_contract_detects_absolute_coordinate_mismatch(tmp_path: Path) -> None:
