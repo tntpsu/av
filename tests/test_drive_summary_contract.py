@@ -57,6 +57,7 @@ def test_drive_summary_contract_keys(tmp_path: Path) -> None:
         "transport_contract",
         "speed_intent",
         "run_intent",
+        "wrong_target_contract",
         "acc_comfort_contract",
         "acc_detection_contract",
         "lead_continuity_contract",
@@ -173,6 +174,21 @@ def test_drive_summary_contract_keys(tmp_path: Path) -> None:
         "final_longitudinal_owner_mode",
         "lead_collision_override_rate_pct",
     }.issubset(run_intent.keys())
+    wrong_target_contract = summary.get("wrong_target_contract", {})
+    assert {
+        "schema_version",
+        "availability",
+        "scenario_class",
+        "expected_reject_only",
+        "contract_pass",
+        "reject_reason_mode",
+        "association_eligible_rate_pct",
+        "track_active_rate_pct",
+        "raw_detect_rate_pct",
+        "continuity_hold_rate_pct",
+        "acc_follow_contamination_detected",
+        "quality_reference_valid",
+    }.issubset(wrong_target_contract.keys())
     acc_comfort_contract = summary.get("acc_comfort_contract", {})
     assert {
         "schema_version",

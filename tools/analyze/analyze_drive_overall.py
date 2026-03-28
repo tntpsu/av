@@ -1178,6 +1178,7 @@ def _print_summary_report(recording_path: Path, summary: Dict, analyze_to_failur
     transport_contract = summary.get("transport_contract", {})
     speed_intent = summary.get("speed_intent", {})
     run_intent = summary.get("run_intent", {})
+    wrong_target_contract = summary.get("wrong_target_contract", {})
     lateral_owner_contract = summary.get("lateral_owner_contract", {})
     highway_mild_curve_contract = summary.get("highway_mild_curve_contract", {})
     mpc_gt_cross_track_contract = summary.get("mpc_gt_cross_track_contract", {})
@@ -1904,7 +1905,36 @@ def _print_summary_report(recording_path: Path, summary: Dict, analyze_to_failur
         print("   Run Intent: N/A")
     print()
 
-    print("13. HIGHWAY MILD-CURVE CONTRACT")
+    print("13. WRONG-TARGET CONTRACT")
+    print("-" * 80)
+    if wrong_target_contract.get("availability") == "available":
+        print(
+            "   Scenario / Reject-Only / Contract Pass: "
+            f"{wrong_target_contract.get('scenario_class') or 'unknown'} / "
+            f"{'YES' if wrong_target_contract.get('expected_reject_only') else 'NO'} / "
+            f"{'YES' if wrong_target_contract.get('contract_pass') else 'NO'}"
+        )
+        print(
+            "   Reject Reason / Assoc Eligible / Track Active: "
+            f"{wrong_target_contract.get('reject_reason_mode') or 'none'} / "
+            f"{float(wrong_target_contract.get('association_eligible_rate_pct') or 0.0):.1f}% / "
+            f"{float(wrong_target_contract.get('track_active_rate_pct') or 0.0):.1f}%"
+        )
+        print(
+            "   Raw Detect / Continuity Hold / ACC Contamination: "
+            f"{float(wrong_target_contract.get('raw_detect_rate_pct') or 0.0):.1f}% / "
+            f"{float(wrong_target_contract.get('continuity_hold_rate_pct') or 0.0):.1f}% / "
+            f"{'YES' if wrong_target_contract.get('acc_follow_contamination_detected') else 'NO'}"
+        )
+        print(
+            "   Quality Reference Valid: "
+            f"{'YES' if wrong_target_contract.get('quality_reference_valid') else 'NO'}"
+        )
+    else:
+        print("   Wrong-Target Contract: N/A")
+    print()
+
+    print("14. HIGHWAY MILD-CURVE CONTRACT")
     print("-" * 80)
     if highway_mild_curve_contract.get("availability") == "available":
         print(
@@ -1987,7 +2017,7 @@ def _print_summary_report(recording_path: Path, summary: Dict, analyze_to_failur
         print("   Highway Mild-Curve Contract: N/A")
     print()
 
-    print("13B. MPC GT CROSS-TRACK CONTRACT")
+    print("15. MPC GT CROSS-TRACK CONTRACT")
     print("-" * 80)
     if mpc_gt_cross_track_contract.get("availability") == "available":
         print(
@@ -2044,7 +2074,7 @@ def _print_summary_report(recording_path: Path, summary: Dict, analyze_to_failur
         print("   MPC GT Cross-Track Contract: N/A")
     print()
 
-    print("14. CHASSIS-GROUND HEALTH")
+    print("16. CHASSIS-GROUND HEALTH")
     print("-" * 80)
     chassis_availability = str(chassis_ground.get("availability", "unavailable")).lower()
     if chassis_availability == "available":
@@ -2093,7 +2123,7 @@ def _print_summary_report(recording_path: Path, summary: Dict, analyze_to_failur
 
     contract_health = summary.get("curvature_contract_health", {})
     first_fault_chain = summary.get("first_fault_chain", {})
-    print("15. CURVATURE CONTRACT HEALTH")
+    print("17. CURVATURE CONTRACT HEALTH")
     print("-" * 80)
     if str(contract_health.get("availability", "unavailable")).lower() == "available":
         limits = contract_health.get("limits", {})
@@ -2226,7 +2256,7 @@ def _print_summary_report(recording_path: Path, summary: Dict, analyze_to_failur
             )
     print()
 
-    print("16. SAFETY METRICS")
+    print("18. SAFETY METRICS")
     print("-" * 80)
     print(f"   Out-of-Lane Events: {int(safety.get('out_of_lane_events', 0))}")
     print(f"   Out-of-Lane Time: {safety.get('out_of_lane_time', 0.0):.1f}%")
@@ -2249,7 +2279,7 @@ def _print_summary_report(recording_path: Path, summary: Dict, analyze_to_failur
 
     mpc_health = summary.get("mpc_health")
     if mpc_health and mpc_health.get("mpc_frames", 0) > 0:
-        print("17. MPC HEALTH")
+        print("19. MPC HEALTH")
         print("-" * 80)
         lmpc_n = mpc_health.get('lmpc_frames', mpc_health['mpc_frames'])
         nmpc_n = mpc_health.get('nmpc_frames', 0)
@@ -2322,7 +2352,7 @@ def _print_summary_report(recording_path: Path, summary: Dict, analyze_to_failur
             pass
         print()
 
-    print("18. RECOMMENDATIONS")
+    print("20. RECOMMENDATIONS")
     print("-" * 80)
     if recommendations:
         for idx, recommendation in enumerate(recommendations, 1):
@@ -2334,7 +2364,7 @@ def _print_summary_report(recording_path: Path, summary: Dict, analyze_to_failur
     # Section 15: Grade Impact (only for graded recordings)
     grade_metrics = summary.get("grade_metrics")
     if grade_metrics is not None:
-        print("19. GRADE IMPACT")
+        print("21. GRADE IMPACT")
         print("-" * 80)
         print(f"   Max Grade: {grade_metrics['grade_max_pct']:.1f}%"
               f"    Pitch P95: {grade_metrics['pitch_p95_deg']:.1f}\u00b0")
@@ -2350,7 +2380,7 @@ def _print_summary_report(recording_path: Path, summary: Dict, analyze_to_failur
     acc_detection_contract = summary.get("acc_detection_contract") or {}
     lead_continuity_contract = summary.get("lead_continuity_contract") or {}
     if acc_health is not None:
-        print("20. ACC PERFORMANCE")
+        print("22. ACC PERFORMANCE")
         print("-" * 80)
         print(f"   ACC Active: {acc_health['acc_active_pct']:.1f}% of frames")
         print()

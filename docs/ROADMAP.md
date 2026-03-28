@@ -603,6 +603,16 @@ explaining persistent lateral offset independent of control/perception tuning.
 **Gate:** No collision, min TTC ≥ 2.0s, jerk P95 ≤ 4.0 m/s³, gap RMSE ≤ 0.5m, no lateral regression
 **Unlocks:** Longitudinal planning that reacts to the world, not just the road
 
+**Current Step 5 status (2026-03-27):**
+- same-lane lead association through curves is working on validated highway scenarios
+- single-actor wrong-target rejection now has explicit coverage for:
+  - adjacent-lane same-direction actor
+  - oncoming straight actor
+- mixed traffic is still pending:
+  - no simultaneous lead + distractor traffic yet
+  - no multi-actor association/ranking yet
+- wrong-target reject scenarios are useful ACC contract checks, but are not yet clean full-stack trajectory references because free-flow highway runs can still expose a separate mild-curve lateral weakness
+
 ---
 
 ### Simulation Infrastructure — Tiled Road Collision (Backlog)

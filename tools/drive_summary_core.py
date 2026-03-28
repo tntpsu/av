@@ -4033,6 +4033,100 @@ def _build_lead_continuity_contract_summary(acc_health: Optional[Dict]) -> Dict:
     }
 
 
+def _build_wrong_target_contract_summary(
+    data: Dict,
+    run_intent: Dict,
+    lead_continuity_contract: Dict,
+) -> Dict:
+    unavailable = {
+        "schema_version": "v1",
+        "availability": "unavailable",
+        "scenario_class": "none",
+        "expected_reject_only": False,
+        "contract_pass": None,
+        "reject_reason_mode": "none",
+        "association_eligible_rate_pct": None,
+        "track_active_rate_pct": None,
+        "raw_detect_rate_pct": None,
+        "continuity_hold_rate_pct": None,
+        "acc_follow_contamination_detected": None,
+        "quality_reference_valid": None,
+    }
+
+    track_id = str(run_intent.get("track_id") or "")
+    if "_reject" not in track_id:
+        return unavailable
+
+    scenario_class = "wrong_target_reject"
+    if "oncoming" in track_id:
+        scenario_class = "oncoming_reject"
+    elif "adjacent_lane" in track_id:
+        scenario_class = "adjacent_lane_reject"
+
+    candidate_present_rate = safe_float(lead_continuity_contract.get("candidate_present_rate_pct"))
+    association_rate = safe_float(lead_continuity_contract.get("association_eligible_rate_pct"))
+    track_active_rate = safe_float(lead_continuity_contract.get("track_active_rate_pct"))
+    raw_detect_rate = safe_float(lead_continuity_contract.get("raw_detect_rate_pct"))
+    continuity_hold_rate = safe_float(lead_continuity_contract.get("continuity_hold_rate_pct"))
+    reject_reason_mode = str(lead_continuity_contract.get("reject_reason_mode") or "none")
+    acc_follow_contamination = bool(run_intent.get("lead_following_active"))
+
+    if lead_continuity_contract.get("availability") != "available":
+        candidate_present_rate = _rate_from_boolish(data.get("radar_fwd_candidate_present"))
+        association_rate = _rate_from_boolish(data.get("radar_fwd_association_eligible"))
+        track_active_rate = _rate_from_boolish(data.get("radar_fwd_track_active"))
+        raw_detect_rate = _rate_from_boolish(data.get("radar_fwd_detected"))
+        reject_reason_mode = (
+            _mode_string(
+                _decode_string_series(data.get("radar_fwd_reject_reason")),
+                ignore={"", "none", "no_candidate", "accepted", "acc_disabled"},
+            )
+            or "none"
+        )
+        track_source_values = _decode_string_series(data.get("radar_fwd_track_source"))
+        if track_source_values:
+            continuity_hold_mask = np.array(
+                [value == "continuity_hold" for value in track_source_values],
+                dtype=bool,
+            )
+            continuity_hold_rate = safe_float(
+                float(np.mean(continuity_hold_mask) * 100.0),
+                default=None,
+            )
+        else:
+            continuity_hold_rate = 0.0
+
+    contract_pass = (
+        not acc_follow_contamination
+        and (candidate_present_rate is not None and candidate_present_rate > 0.0)
+        and (association_rate is None or association_rate <= 0.0)
+        and (track_active_rate is None or track_active_rate <= 0.0)
+        and (raw_detect_rate is None or raw_detect_rate <= 0.0)
+        and (continuity_hold_rate is None or continuity_hold_rate <= 0.0)
+        and reject_reason_mode in {
+            "wrong_lane",
+            "opposite_direction",
+            "out_of_cone_wrong_lane",
+            "out_of_cone_opposite_direction",
+        }
+    )
+
+    return {
+        "schema_version": "v1",
+        "availability": "available",
+        "scenario_class": scenario_class,
+        "expected_reject_only": True,
+        "contract_pass": bool(contract_pass),
+        "reject_reason_mode": reject_reason_mode,
+        "association_eligible_rate_pct": association_rate,
+        "track_active_rate_pct": track_active_rate,
+        "raw_detect_rate_pct": raw_detect_rate,
+        "continuity_hold_rate_pct": continuity_hold_rate,
+        "acc_follow_contamination_detected": acc_follow_contamination,
+        "quality_reference_valid": False,
+    }
+
+
 def _detect_control_mode(data):
     regime = data.get('regime')
     if regime is not None:
@@ -9213,6 +9307,11 @@ def analyze_recording_summary(
     transport_contract = _build_transport_contract_summary(data)
     speed_intent = _build_speed_intent_summary(data)
     run_intent = _build_run_intent_summary(data)
+    wrong_target_contract = _build_wrong_target_contract_summary(
+        data=data,
+        run_intent=run_intent,
+        lead_continuity_contract=lead_continuity_contract,
+    )
     highway_mild_curve_contract = _build_highway_mild_curve_contract_summary(data)
     mpc_gt_cross_track_contract = _build_mpc_gt_cross_track_contract_summary(data)
     lateral_owner_contract = _build_lateral_owner_contract_summary(
@@ -9272,6 +9371,10 @@ def analyze_recording_summary(
             recommendations.append(
                 "MPC high-error windows are dominated by lookahead GT geometry while at-car GT stays small - split lookahead vs at-car GT cross-track and keep lookahead debug-only."
             )
+    if wrong_target_contract.get("availability") == "available" and wrong_target_contract.get("contract_pass"):
+        recommendations.append(
+            "Wrong-target reject contract passed - treat this run as ACC association coverage, not as a clean trajectory tuning reference."
+        )
     chassis_ground = _build_chassis_ground_summary(data, n_frames=n_frames)
     if chassis_ground.get("health") == "POOR":
         recommendations.append(
@@ -9441,6 +9544,9 @@ def analyze_recording_summary(
             key_issues.append("MPC GT at-car cross-track uses absolute coordinates")
         else:
             key_issues.append("MPC GT cross-track semantic mismatch")
+    if wrong_target_contract.get("availability") == "available":
+        if not wrong_target_contract.get("contract_pass"):
+            key_issues.append("Wrong-target reject contract failed")
     effective_drop_rate = speed_intent.get("effective_reference_velocity_drop_rate")
     if effective_drop_rate is not None and float(effective_drop_rate) > 1.0:
         key_issues.append(
@@ -9672,6 +9778,7 @@ def analyze_recording_summary(
         "transport_contract": transport_contract,
         "speed_intent": speed_intent,
         "run_intent": run_intent,
+        "wrong_target_contract": wrong_target_contract,
         "acc_comfort_contract": acc_comfort_contract,
         "acc_detection_contract": acc_detection_contract,
         "lead_continuity_contract": lead_continuity_contract,

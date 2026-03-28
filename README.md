@@ -11,6 +11,8 @@ A complete autonomous vehicle stack implementing perception, trajectory planning
 - **Trajectory Planning**: Rule-based path planning with reference point smoothing and bias correction
 - **Control**: Pure Pursuit (default) with PID/Stanley alternatives; feedforward (path curvature) + feedback (error correction)
 - **Speed Planning**: Jerk-limited speed planner for smooth curve and limit transitions
+- **ACC / Lead Following**: Same-lane lead following on validated highway scenarios with producer-side lead association and continuity tracking
+- **Single-Actor Wrong-Target Coverage**: Isolated adjacent-lane same-direction and oncoming straight reject scenarios for ACC validation
 - **Ground Truth Following**: Direct velocity control mode for precise ground truth path following
 - **Data Recording**: Automatic HDF5 recording of all frames, vehicle state (including Unity time/frame count), control commands, and ground truth data
 - **Analysis Tools**: Comprehensive analysis suite for evaluating drive performance
@@ -20,6 +22,12 @@ A complete autonomous vehicle stack implementing perception, trajectory planning
 
 ### Operational Design Domain
 See [docs/ODD.md](docs/ODD.md) for the system's operational design domain — track constraints, sensor assumptions, control modes, and known limitations.
+
+Current traffic-model scope:
+- one scripted traffic actor at a time
+- same-lane lead following supported
+- isolated wrong-target reject scenarios supported
+- mixed traffic is not yet supported
 
 ### 🔧 Current Architecture
 
