@@ -31,6 +31,9 @@ public class TrackWaypointFollower : MonoBehaviour
              "Use roadWidth/4 for the right lane of a 2-lane road.")]
     public float laneOffsetM = 0.0f;
 
+    [Tooltip("Travel direction along the sampled path: +1 = same direction, -1 = opposite direction.")]
+    public int travelDirectionSign = 1;
+
     [Tooltip("When false the follower does not advance. Set to true by AVBridge " +
              "when the first Python control command is received so the lead vehicle " +
              "starts at the same time as the ego car.")]
@@ -40,6 +43,8 @@ public class TrackWaypointFollower : MonoBehaviour
     private SpeedProfiler _profiler;
     private int    _waypointIndex  = 0;
     private float  _segmentProgress = 0.0f;  // fraction [0,1] between current and next wp
+    private List<float> _cumulativeDistances = new List<float>();
+    private float _totalPathLength = 0.0f;
 
     /// <summary>Current arc-distance from the start waypoint (m).</summary>
     public float ArcDistance { get; private set; } = 0.0f;
@@ -55,17 +60,40 @@ public class TrackWaypointFollower : MonoBehaviour
         _profiler = GetComponent<SpeedProfiler>();
     }
 
+    public void SetTravelDirection(string travelDirection)
+    {
+        travelDirectionSign = string.Equals(travelDirection, "opposite", System.StringComparison.OrdinalIgnoreCase) ? -1 : 1;
+    }
+
     /// <summary>Teleport to the waypoint nearest to the given arc distance.</summary>
     public void SetArcDistance(float targetDistanceM, List<float> cumulativeDistances)
     {
         if (waypoints == null || waypoints.Count < 2 || cumulativeDistances == null)
             return;
 
+        _cumulativeDistances = cumulativeDistances;
+        _totalPathLength = cumulativeDistances.Count > 0
+            ? cumulativeDistances[cumulativeDistances.Count - 1]
+            : 0.0f;
+
+        SetArcDistanceInternal(targetDistanceM);
+    }
+
+    private void SetArcDistanceInternal(float targetDistanceM)
+    {
+        float normalizedDistance = NormalizeArcDistance(targetDistanceM);
+
+        if (waypoints == null || waypoints.Count < 2 || _cumulativeDistances == null || _cumulativeDistances.Count < 2)
+        {
+            ArcDistance = normalizedDistance;
+            return;
+        }
+
         // Find segment containing targetDistanceM
         int idx = 0;
-        for (int i = 0; i < cumulativeDistances.Count - 1; i++)
+        for (int i = 0; i < _cumulativeDistances.Count - 1; i++)
         {
-            if (cumulativeDistances[i + 1] >= targetDistanceM)
+            if (_cumulativeDistances[i + 1] >= normalizedDistance)
             {
                 idx = i;
                 break;
@@ -76,13 +104,13 @@ public class TrackWaypointFollower : MonoBehaviour
         _waypointIndex = idx;
 
         float segLen = Vector3.Distance(waypoints[idx], waypoints[idx + 1]);
-        float remain  = targetDistanceM - cumulativeDistances[idx];
+        float remain  = normalizedDistance - _cumulativeDistances[idx];
         _segmentProgress = segLen > 0.001f
             ? Mathf.Clamp01(remain / segLen)
             : 0f;
 
         UpdateTransform();
-        ArcDistance = targetDistanceM;
+        ArcDistance = normalizedDistance;
     }
 
     void FixedUpdate()
@@ -97,61 +125,38 @@ public class TrackWaypointFollower : MonoBehaviour
         float dt = Time.fixedDeltaTime;
         float speed = _profiler != null ? _profiler.GetSpeed(dt) : 0.0f;
         CurrentSpeed = speed;
-        float distanceToTravel = speed * dt;
+        float signedDistance = speed * dt * travelDirectionSign;
 
-        Advance(distanceToTravel, dt);
+        Advance(signedDistance, dt);
     }
 
-    private void Advance(float dist, float dt)
+    private void Advance(float signedDistance, float dt)
     {
         if (waypoints.Count < 2)
             return;
 
         Vector3 posBefore = transform.position;
-
-        while (dist > 0.001f)
+        float targetArcDistance = ArcDistance + signedDistance;
+        if (!loop)
         {
-            int nextIdx = _waypointIndex + 1;
-            if (nextIdx >= waypoints.Count)
+            if (targetArcDistance <= 0.0f)
             {
-                if (loop)
-                {
-                    nextIdx = 0;
-                }
-                else
-                {
-                    CurrentSpeed = 0.0f;
-                    return;
-                }
+                targetArcDistance = 0.0f;
+                CurrentSpeed = 0.0f;
             }
-
-            Vector3 current = waypoints[_waypointIndex];
-            Vector3 next    = waypoints[nextIdx];
-            float segLen    = Vector3.Distance(current, next);
-            float remaining = segLen * (1.0f - _segmentProgress);
-
-            if (dist >= remaining)
+            else if (targetArcDistance >= _totalPathLength)
             {
-                dist -= remaining;
-                _segmentProgress = 0.0f;
-                _waypointIndex   = nextIdx;
-                if (_waypointIndex == 0)
-                    ArcDistance = 0.0f;  // wrapped
-            }
-            else
-            {
-                _segmentProgress += dist / Mathf.Max(segLen, 0.001f);
-                dist = 0.0f;
+                targetArcDistance = _totalPathLength;
+                CurrentSpeed = 0.0f;
             }
         }
 
-        UpdateTransform();
+        SetArcDistanceInternal(targetArcDistance);
         Vector3 posAfter = transform.position;
         if (dt > 0.0001f)
         {
             Velocity = (posAfter - posBefore) / dt;
         }
-        ArcDistance += CurrentSpeed * dt;
     }
 
     private void UpdateTransform()
@@ -166,12 +171,33 @@ public class TrackWaypointFollower : MonoBehaviour
         Vector3 to   = waypoints[nextIdx];
 
         Vector3 centerPos = Vector3.Lerp(from, to, _segmentProgress);
-        Vector3 fwd = (to != from) ? (to - from).normalized : transform.forward;
+        Vector3 pathFwd = (to != from) ? (to - from).normalized : transform.forward;
+        Vector3 fwd = travelDirectionSign >= 0 ? pathFwd : -pathFwd;
 
         // Apply lateral lane offset: Vector3.Cross(up, fwd) = right-hand side of travel.
         Vector3 right = Vector3.Cross(Vector3.up, fwd);
         transform.position = centerPos + right * laneOffsetM;
 
         transform.rotation = Quaternion.LookRotation(fwd, Vector3.up);
+    }
+
+    private float NormalizeArcDistance(float targetDistanceM)
+    {
+        if (_totalPathLength <= 0.0f)
+        {
+            return Mathf.Max(0.0f, targetDistanceM);
+        }
+
+        if (!loop)
+        {
+            return Mathf.Clamp(targetDistanceM, 0.0f, _totalPathLength);
+        }
+
+        float normalized = targetDistanceM % _totalPathLength;
+        if (normalized < 0.0f)
+        {
+            normalized += _totalPathLength;
+        }
+        return normalized;
     }
 }

@@ -2560,7 +2560,8 @@ private float? lastCarT = null;
         if (showDebugInfo)
             Debug.Log($"AVBridge: Lead vehicle spawned — profile={trackCfg.leadVehicle.speedProfileType}, " +
                       $"speed={trackCfg.leadVehicle.speedMps:F1} m/s, " +
-                      $"start={trackCfg.leadVehicle.startDistanceM:F0} m ahead.");
+                      $"start={trackCfg.leadVehicle.startDistanceM:F0} m ahead, " +
+                      $"direction={trackCfg.leadVehicle.travelDirection}.");
     }
 
     private static float HeadingDegFromDirection(Vector3 dir)

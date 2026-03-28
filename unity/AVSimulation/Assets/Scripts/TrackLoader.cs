@@ -306,6 +306,9 @@ public static class TrackLoader
             case "start_distance_m":
                 if (TryParseFloat(value, out float sd)) lv.startDistanceM = sd;
                 break;
+            case "travel_direction":
+                lv.travelDirection = Unquote(value).ToLowerInvariant();
+                break;
             case "speed_profile":  // "type: …" nested block — handled on next line
             case "type":
                 lv.speedProfileType = Unquote(value).ToLowerInvariant();

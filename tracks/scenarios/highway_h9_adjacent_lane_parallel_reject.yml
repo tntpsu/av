@@ -1,0 +1,71 @@
+# H9 — Adjacent-lane parallel reject (highway_65)
+# Single traffic actor in the opposite lane, same direction, slower than ego.
+# This is a wrong-target rejection case, not a lead-follow case.
+# Expected:
+# - candidate may be visible to the producer
+# - reject mode should remain `wrong_lane`
+# - same-lane association stays off
+# - continuity hold stays off
+# - ACC must not enter following because of this actor
+
+name: highway_65
+road_width: 7.2
+lane_line_width: 0.2
+sample_spacing: 1.0
+loop: true
+start_distance: 10.0
+speed_limit_mph: 65.0
+segments:
+  - type: straight
+    length: 550
+    speed_limit_mph: 65.0
+  - type: arc
+    radius: 500
+    angle_deg: 90
+    direction: left
+    speed_limit_mph: 65.0
+  - type: arc
+    radius: 500
+    angle_deg: 90
+    direction: right
+    speed_limit_mph: 65.0
+  - type: straight
+    length: 400
+    speed_limit_mph: 65.0
+  - type: arc
+    radius: 500
+    angle_deg: 90
+    direction: left
+    speed_limit_mph: 65.0
+  - type: straight
+    length: 550
+    speed_limit_mph: 65.0
+  - type: arc
+    radius: 500
+    angle_deg: 90
+    direction: left
+    speed_limit_mph: 65.0
+  - type: straight
+    length: 400
+    speed_limit_mph: 65.0
+  - type: arc
+    radius: 500
+    angle_deg: 90
+    direction: left
+    speed_limit_mph: 65.0
+  - type: straight
+    length: 400
+    speed_limit_mph: 65.0
+  - type: arc
+    radius: 500
+    angle_deg: 90
+    direction: left
+    speed_limit_mph: 65.0
+
+lead_vehicle:
+  enabled: true
+  start_distance_m: 30.0
+  lane_offset_m: -1.8
+  speed_profile:
+    type: constant
+    speed_mps: 12.0

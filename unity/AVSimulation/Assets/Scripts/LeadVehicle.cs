@@ -61,6 +61,7 @@ public class LeadVehicle : MonoBehaviour
         _follower.waypoints        = waypoints;
         _follower.loop             = trackLoop;
         _follower.laneOffsetM      = cfg.laneOffsetM;
+        _follower.SetTravelDirection(cfg.travelDirection);
         _follower.isMovementEnabled = false;
 
         // Place at start_distance_m ahead of arc origin

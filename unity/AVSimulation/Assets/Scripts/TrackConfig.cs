@@ -10,6 +10,7 @@ public class LeadVehicleConfig
 {
     public bool enabled = false;
     public float startDistanceM = 40.0f;     // arc-distance offset ahead of ego spawn
+    public string travelDirection = "same";  // same | opposite
     public string speedProfileType = "constant"; // constant | hard_brake | accel_away | stop_go | slower
     public float speedMps = 20.0f;           // base speed for profile
     public float brakeAtTimeS = 5.0f;        // hard_brake: time after start when lead brakes

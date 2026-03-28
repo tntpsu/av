@@ -639,6 +639,237 @@ Add scenarios or validation cases for:
 Promotion gate:
 - fixing H8 must not make opposite-lane/oncoming vehicles capturable by ACC
 
+#### L8.8 Current simulator capability gap
+
+We do not fully have first-class oncoming-traffic support today.
+
+What exists now:
+1. `LeadVehicleConfig` in `/Users/philiptullai/Documents/Coding/av/unity/AVSimulation/Assets/Scripts/TrackConfig.cs` supports:
+   - `startDistanceM`
+   - `speedProfileType`
+   - `speedMps`
+   - `laneOffsetM`
+2. `LeadVehicle.Initialise(...)` in `/Users/philiptullai/Documents/Coding/av/unity/AVSimulation/Assets/Scripts/LeadVehicle.cs` always configures `TrackWaypointFollower` to move in the track waypoint order.
+3. `TrackWaypointFollower` in `/Users/philiptullai/Documents/Coding/av/unity/AVSimulation/Assets/Scripts/TrackWaypointFollower.cs` always advances forward along the sampled path.
+
+What is missing:
+1. a scenario/config field for travel direction
+2. reverse traversal of the track path
+3. a first-class notion of when an oncoming actor should meet and pass the ego
+4. validation semantics for "correctly rejected by ACC"
+
+So:
+1. we can place a vehicle in another lane with `lane_offset_m`
+2. we cannot yet make that actor drive toward the ego on the same track with a supported scenario contract
+
+#### L8.9 Simulator extension for opposite-lane/oncoming coverage
+
+Goal:
+- add first-class scenario support for opposite-direction actors so ACC wrong-target coverage is reproducible and attributable
+
+Files:
+- `/Users/philiptullai/Documents/Coding/av/unity/AVSimulation/Assets/Scripts/TrackConfig.cs`
+- `/Users/philiptullai/Documents/Coding/av/unity/AVSimulation/Assets/Scripts/TrackLoader.cs`
+- `/Users/philiptullai/Documents/Coding/av/unity/AVSimulation/Assets/Scripts/LeadVehicle.cs`
+- `/Users/philiptullai/Documents/Coding/av/unity/AVSimulation/Assets/Scripts/TrackWaypointFollower.cs`
+- `/Users/philiptullai/Documents/Coding/av/unity/AVSimulation/Assets/Scripts/AVBridge.cs`
+- `/Users/philiptullai/Documents/Coding/av/tools/drive_summary_core.py`
+- `/Users/philiptullai/Documents/Coding/av/tools/analyze/analyze_drive_overall.py`
+
+Implementation:
+
+1. Extend lead-vehicle scenario config.
+- Add fields to `LeadVehicleConfig`:
+  - `travelDirection = "same"` where allowed values are `same | opposite`
+  - `spawnArcDistanceM`
+  - `despawnArcDistanceM` or `passUntilArcDistanceM`
+  - optional `activationTimeS`
+  - optional `targetPassArcDistanceM`
+- Keep `startDistanceM` as a compatibility alias for same-direction cases.
+
+2. Extend YAML parsing.
+- In `TrackLoader.ParseLeadVehicleKeyValue(...)`, parse:
+  - `travel_direction`
+  - `spawn_arc_distance_m`
+  - `despawn_arc_distance_m`
+  - `activation_time_s`
+  - `target_pass_arc_distance_m`
+- Define compatibility behavior:
+  - if `travel_direction` is omitted, default to `same`
+  - if only `start_distance_m` is given, map it to the current same-direction path
+
+3. Add reverse traversal to `TrackWaypointFollower`.
+- Add an explicit direction multiplier or enum.
+- Support:
+  - forward arc advance
+  - reverse arc advance
+  - correct heading/orientation for reverse path traversal
+  - correct sign convention for `laneOffsetM` relative to the actual travel direction
+- `SetArcDistance(...)` should remain arc-based, but movement must be able to decrease arc distance when direction is `opposite`.
+
+4. Make oncoming initialization deterministic.
+- `LeadVehicle.Initialise(...)` should accept the new direction and spawn fields.
+- For `travelDirection = opposite`:
+  - spawn the actor at `spawnArcDistanceM` on the path
+  - move it with reverse traversal
+  - use `laneOffsetM` for the opposite lane relative to its travel direction
+- Do not infer pass timing from random initial placement.
+
+5. Add explicit pass timing semantics.
+- Preferred contract:
+  - `target_pass_arc_distance_m` means "the oncoming actor should cross the ego near this ego arc-distance"
+- Implementation options:
+  - compute actor spawn from ego start, actor speed, and target pass arc
+  - or allow direct `spawn_arc_distance_m` and use `target_pass_arc_distance_m` only as a validation check
+- Keep this deterministic; do not rely on approximate human tuning of distances.
+
+6. Add producer telemetry for wrong-target scenarios.
+- Extend `AVBridge` telemetry so wrong-target scenarios can be verified directly:
+  - candidate direction class
+  - association-eligibility outcome
+  - reject reason
+  - relative arc/ahead status
+- Expected reject reasons in oncoming coverage:
+  - `opposite_direction`
+  - `wrong_lane`
+
+7. Add scenario-level validation helpers.
+- For each wrong-target scenario, the analysis should answer:
+  - was a candidate present?
+  - was it same-lane eligible?
+  - was it correctly rejected?
+  - did ACC ever enter following because of it?
+
+#### L8.10 How to initialize oncoming traffic and guarantee the pass point
+
+Use an explicit deterministic contract, not manual trial-and-error.
+
+Recommended scenario contract:
+1. ego starts at a known arc distance:
+   - existing `start_distance`
+2. oncoming actor declares:
+   - `travel_direction: opposite`
+   - `lane_offset_m`
+   - `speed_mps`
+   - `target_pass_arc_distance_m`
+3. the loader/runtime computes `spawn_arc_distance_m` so the actor and ego arrive at the pass point at the same time
+
+For example:
+1. choose an ego start and speed profile
+2. choose a pass point on the track, such as a point in the middle of a curve or on a straight
+3. choose oncoming speed
+4. solve:
+   - ego travel time from ego start to pass point
+   - oncoming travel time from actor spawn to pass point in reverse direction
+5. initialize the actor so those times match
+
+Acceptance:
+1. pass-point error stays within a small tolerance, e.g. `< 5 m`
+2. the actor remains in the opposite lane throughout the pass
+3. ACC never accepts the target as followable
+4. reject reason is stable and attributable
+
+#### L8.11 Required wrong-target coverage set
+
+Add these scenarios after the simulator extension lands:
+
+1. `highway_oncoming_straight_reject`
+- same road
+- opposite lane
+- opposite direction
+- pass point on a straight
+- expected:
+  - candidate may be visible
+  - reject mode `opposite_direction` or `wrong_lane`
+  - ACC never enters following
+
+2. `highway_oncoming_curve_reject`
+- same road
+- opposite lane
+- opposite direction
+- pass point on an `R500` curve
+- expected:
+  - same-lane association remains disabled
+  - continuity hold remains disabled
+  - ACC never enters following
+
+3. `highway_adjacent_lane_same_direction_reject`
+- adjacent lane
+- same direction
+- nearby enough to be geometrically tempting
+- expected:
+  - reject mode `wrong_lane`
+  - no continuity hold
+  - no ACC following
+
+4. keep `highway_h8_curve_catchup.yml` as the positive control
+- same-lane
+- same direction
+- curve catch-up
+- expected:
+  - association may activate
+  - ACC stays active
+  - no collision override
+
+#### L8.12 Validation order for wrong-target robustness
+
+1. Implement config + reverse traversal only.
+2. Add one straight oncoming scenario and verify the actor actually passes the ego at the planned arc point.
+3. Add telemetry assertions before ACC assertions.
+4. Run:
+   - positive control `H8`
+   - oncoming straight reject
+   - oncoming curve reject
+   - adjacent-lane same-direction reject
+5. Only pass the phase if:
+   - `H8` still follows correctly
+   - oncoming and wrong-lane scenarios are explicitly rejected
+   - no reject scenario ever produces `ACC_ACTIVE` because of the wrong target
+
+#### L8.13 Interim adjacent-lane same-direction coverage
+
+This is the right immediate path before mixed traffic.
+
+Reason:
+1. the current simulator is still single-actor
+2. adjacent-lane same-direction coverage does not require reverse traversal
+3. it tests the same wrong-target association contract we care about
+4. it isolates lane-association mistakes without adding multi-actor ambiguity
+
+What we can support with the current actor model:
+1. one vehicle in the adjacent lane
+2. moving in the same waypoint direction as ego
+3. with deterministic arc-distance placement and speed
+
+That is enough to answer:
+1. does ACC wrongly capture a nearby same-direction vehicle in the other lane?
+2. does same-lane association stay off?
+3. does continuity hold stay off?
+
+Recommended interim scenario contract:
+1. keep one actor only
+2. set:
+   - `travel_direction: same`
+   - `lane_offset_m` to the adjacent lane center
+   - `spawn_arc_distance_m` or `start_distance_m`
+   - `speed_mps`
+3. choose one of two regimes:
+   - `adjacent_lane_parallel_reject`
+   - `adjacent_lane_overtake_reject`
+
+Preferred first case:
+- `adjacent_lane_parallel_reject`
+- actor stays near ego longitudinally for long enough to be a tempting false target
+- expected:
+  - candidate may be visible
+  - reject mode `wrong_lane`
+  - `association_eligible_rate_pct = 0`
+  - `same_lane_association_rate_pct = 0`
+  - `continuity_hold_rate_pct = 0`
+  - ACC never enters following because of it
+
+This should land before mixed traffic because it gives us a clean wrong-lane rejection test with much lower simulator complexity.
+
 ### L9. ACC Robustness Scope
 
 The right target is not “similar to a top company because we widened radar coverage.”
@@ -665,3 +896,116 @@ Top programs usually rely on:
 So the answer is:
 - yes, the direction in L8 is aligned with a serious architecture
 - no, the current `±5° cone -> zero return -> free-flow` behavior is not production-grade
+
+### L10. Mixed-Traffic Scenario Support
+
+Goal:
+- support one authoritative same-lane lead while additional traffic actors exist in adjacent or opposite lanes
+
+This is the first point where we can truthfully test:
+1. follow a real lead
+2. while a different vehicle is present in the other lane
+3. without letting ACC switch to the wrong target
+
+This should come after L8, not before it.
+
+Reason:
+1. L8 proves wrong-target rejection in isolation
+2. mixed traffic adds actor enumeration, association ranking, and pass-timing complexity
+3. if we skip isolation, failures will be harder to attribute
+
+#### L10.1 Required simulator contract
+
+Files:
+- `/Users/philiptullai/Documents/Coding/av/unity/AVSimulation/Assets/Scripts/TrackConfig.cs`
+- `/Users/philiptullai/Documents/Coding/av/unity/AVSimulation/Assets/Scripts/TrackLoader.cs`
+- `/Users/philiptullai/Documents/Coding/av/unity/AVSimulation/Assets/Scripts/LeadVehicle.cs`
+- `/Users/philiptullai/Documents/Coding/av/unity/AVSimulation/Assets/Scripts/TrackWaypointFollower.cs`
+- `/Users/philiptullai/Documents/Coding/av/unity/AVSimulation/Assets/Scripts/AVBridge.cs`
+
+Implementation:
+1. replace singular `lead_vehicle` ownership with list-based actor ownership
+2. add `traffic_actors:` scenario syntax with per-actor fields:
+   - `role: lead | traffic`
+   - `travel_direction: same | opposite`
+   - `lane_offset_m`
+   - `speed_profile`
+   - `spawn_arc_distance_m`
+   - optional `target_pass_arc_distance_m`
+   - optional `despawn_arc_distance_m`
+3. preserve backward compatibility by mapping legacy `lead_vehicle:` into one `traffic_actor` with role `lead`
+
+#### L10.2 Actor roles and association rules
+
+Producer-side association must explicitly separate:
+1. followable lead candidates
+2. visible but non-followable traffic actors
+
+Rules:
+1. only one actor may be the followable ACC target at a time
+2. `role=lead` is not sufficient by itself; the actor must also be:
+   - same-lane
+   - same-direction
+   - positive arc-distance ahead
+3. `role=traffic` actors are never followable by ACC
+4. oncoming or wrong-lane actors are always reject-only inputs
+
+#### L10.3 Mixed-traffic initialization
+
+Use deterministic actor setup.
+
+Example mixed-traffic case:
+1. actor A:
+   - `role: lead`
+   - `travel_direction: same`
+   - same lane
+   - slower speed
+2. actor B:
+   - `role: traffic`
+   - `travel_direction: opposite` or `same`
+   - other lane
+   - timed to pass or ride near ego during lead following
+
+Initialization rule:
+1. choose the ego start point
+2. choose the lead-follow segment
+3. choose when the secondary actor should be nearest ego
+4. solve spawn arc distances from those timing constraints
+
+Do not initialize mixed traffic by hand-tuning random distances until it "looks right."
+
+#### L10.4 Required mixed-traffic coverage
+
+Add after L8 passes:
+
+1. `mixed_follow_lead_oncoming_straight`
+- same-lane lead ahead
+- oncoming actor in opposite lane on straight
+- expected:
+  - ACC follows lead
+  - oncoming actor stays reject-only
+
+2. `mixed_follow_lead_oncoming_curve`
+- same-lane lead ahead
+- oncoming actor in opposite lane on curve
+- expected:
+  - ACC follows lead
+  - oncoming actor never becomes association-eligible
+
+3. `mixed_follow_lead_adjacent_same_direction`
+- same-lane lead ahead
+- nearby same-direction actor in adjacent lane
+- expected:
+  - ACC follows the same-lane lead
+  - adjacent-lane actor is rejected as `wrong_lane`
+
+#### L10.5 Promotion gate
+
+Do not declare mixed-traffic robustness complete until:
+1. single-actor H8 still passes
+2. single-actor wrong-target reject cases still pass
+3. mixed-traffic cases keep ACC locked to the correct same-lane lead
+4. no mixed-traffic case produces:
+   - `same_lane_association` from the wrong actor
+   - continuity hold on the wrong actor
+   - `ACC_ACTIVE` against an adjacent-lane or oncoming target
