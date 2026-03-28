@@ -735,6 +735,13 @@ def test_recorder_writes_sync_packet_and_post_jump_fields(tmp_path: Path) -> Non
             radar_fwd_target_same_lane_confidence=0.92,
             radar_fwd_target_lane_offset_m=1.8,
             radar_fwd_target_arc_distance_m=61.3,
+            radar_fwd_association_eligible=1.0,
+            radar_fwd_track_active=1.0,
+            radar_fwd_track_source="same_lane_association",
+            radar_fwd_track_age_ms=0.0,
+            radar_fwd_track_confidence=0.92,
+            radar_fwd_track_hold_reason="none",
+            radar_fwd_track_drop_reason="none",
             acc_active=1.0,
             acc_target_gap_m=22.0,
             acc_gap_error_m=-21.9,
@@ -988,6 +995,22 @@ def test_recorder_writes_sync_packet_and_post_jump_fields(tmp_path: Path) -> Non
         assert float(h5_file["vehicle/radar_fwd_target_same_lane_confidence"][0]) == pytest.approx(0.92, rel=1e-6)
         assert float(h5_file["vehicle/radar_fwd_target_lane_offset_m"][0]) == pytest.approx(1.8, rel=1e-6)
         assert float(h5_file["vehicle/radar_fwd_target_arc_distance_m"][0]) == pytest.approx(61.3, rel=1e-6)
+        assert float(h5_file["vehicle/radar_fwd_association_eligible"][0]) == pytest.approx(1.0, rel=1e-6)
+        assert float(h5_file["vehicle/radar_fwd_track_active"][0]) == pytest.approx(1.0, rel=1e-6)
+        track_source = h5_file["vehicle/radar_fwd_track_source"][0]
+        if isinstance(track_source, bytes):
+            track_source = track_source.decode("utf-8")
+        assert str(track_source) == "same_lane_association"
+        assert float(h5_file["vehicle/radar_fwd_track_age_ms"][0]) == pytest.approx(0.0, rel=1e-6)
+        assert float(h5_file["vehicle/radar_fwd_track_confidence"][0]) == pytest.approx(0.92, rel=1e-6)
+        track_hold_reason = h5_file["vehicle/radar_fwd_track_hold_reason"][0]
+        if isinstance(track_hold_reason, bytes):
+            track_hold_reason = track_hold_reason.decode("utf-8")
+        assert str(track_hold_reason) == "none"
+        track_drop_reason = h5_file["vehicle/radar_fwd_track_drop_reason"][0]
+        if isinstance(track_drop_reason, bytes):
+            track_drop_reason = track_drop_reason.decode("utf-8")
+        assert str(track_drop_reason) == "none"
         acc_state = h5_file["vehicle/acc_state_code"][0]
         if isinstance(acc_state, bytes):
             acc_state = acc_state.decode("utf-8")

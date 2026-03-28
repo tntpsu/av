@@ -7342,6 +7342,13 @@ class AVStack:
                 'radar_fwd_target_same_lane_confidence': -1.0,
                 'radar_fwd_target_lane_offset_m': 0.0,
                 'radar_fwd_target_arc_distance_m': 0.0,
+                'radar_fwd_association_eligible': 0.0,
+                'radar_fwd_track_active': 0.0,
+                'radar_fwd_track_source': 'none',
+                'radar_fwd_track_age_ms': 0.0,
+                'radar_fwd_track_confidence': 0.0,
+                'radar_fwd_track_hold_reason': 'none',
+                'radar_fwd_track_drop_reason': 'none',
                 'acc_active': 0.0,
                 'acc_target_gap_m': 0.0,
                 'acc_gap_error_m': 0.0,
@@ -7385,6 +7392,27 @@ class AVStack:
             ),
             'radar_fwd_target_arc_distance_m': float(
                 vehicle_state_dict.get('radar_fwd_target_arc_distance_m', 0.0) or 0.0
+            ),
+            'radar_fwd_association_eligible': float(
+                vehicle_state_dict.get('radar_fwd_association_eligible', 0.0) or 0.0
+            ),
+            'radar_fwd_track_active': float(
+                vehicle_state_dict.get('radar_fwd_track_active', 0.0) or 0.0
+            ),
+            'radar_fwd_track_source': str(
+                vehicle_state_dict.get('radar_fwd_track_source', 'none') or 'none'
+            ),
+            'radar_fwd_track_age_ms': float(
+                vehicle_state_dict.get('radar_fwd_track_age_ms', 0.0) or 0.0
+            ),
+            'radar_fwd_track_confidence': float(
+                vehicle_state_dict.get('radar_fwd_track_confidence', 0.0) or 0.0
+            ),
+            'radar_fwd_track_hold_reason': str(
+                vehicle_state_dict.get('radar_fwd_track_hold_reason', 'none') or 'none'
+            ),
+            'radar_fwd_track_drop_reason': str(
+                vehicle_state_dict.get('radar_fwd_track_drop_reason', 'none') or 'none'
             ),
             # IDM outputs filled by _pf_apply_acc_override after governor
             'acc_active': 0.0,
@@ -8931,6 +8959,27 @@ class AVStack:
             ),
             radar_fwd_target_arc_distance_m=float(
                 vehicle_state_dict.get('radar_fwd_target_arc_distance_m', 0.0)
+            ),
+            radar_fwd_association_eligible=float(
+                vehicle_state_dict.get('radar_fwd_association_eligible', 0.0)
+            ),
+            radar_fwd_track_active=float(
+                vehicle_state_dict.get('radar_fwd_track_active', 0.0)
+            ),
+            radar_fwd_track_source=str(
+                vehicle_state_dict.get('radar_fwd_track_source', 'none') or 'none'
+            ),
+            radar_fwd_track_age_ms=float(
+                vehicle_state_dict.get('radar_fwd_track_age_ms', 0.0)
+            ),
+            radar_fwd_track_confidence=float(
+                vehicle_state_dict.get('radar_fwd_track_confidence', 0.0)
+            ),
+            radar_fwd_track_hold_reason=str(
+                vehicle_state_dict.get('radar_fwd_track_hold_reason', 'none') or 'none'
+            ),
+            radar_fwd_track_drop_reason=str(
+                vehicle_state_dict.get('radar_fwd_track_drop_reason', 'none') or 'none'
             ),
             lead_collision_detected=bool(
                 vehicle_state_dict.get('lead_collision_detected', False)

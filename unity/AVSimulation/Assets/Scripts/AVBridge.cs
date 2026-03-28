@@ -93,6 +93,20 @@ public class AVBridge : MonoBehaviour
     public float radarMaxRangeM = 150.0f;
     [Tooltip("Maximum off-axis angle for detection (degrees). SphereCast result clamped.")]
     public float radarHalfAngleDeg = 5.0f;
+    [Tooltip("Maximum off-axis angle for same-lane associated lead capture (degrees). Only used with same-lane/same-direction gating.")]
+    public float radarAssociationHalfAngleDeg = 12.0f;
+    [Tooltip("Minimum same-lane confidence required for associated lead capture.")]
+    public float radarAssociationSameLaneConfidenceMin = 0.75f;
+    [Tooltip("Maximum absolute heading delta for same-direction lead association (degrees).")]
+    public float radarAssociationHeadingDeltaMaxDeg = 45.0f;
+    [Tooltip("Minimum positive arc distance ahead required for associated lead capture (m).")]
+    public float radarAssociationMinArcAheadM = 1.0f;
+    [Tooltip("Maximum short continuity-hold age for a same-lane lead track (seconds).")]
+    public float radarContinuityHoldMaxSeconds = 0.6f;
+    [Tooltip("Maximum off-axis angle allowed while using short continuity hold (degrees).")]
+    public float radarContinuityHoldHalfAngleDeg = 18.0f;
+    [Tooltip("Minimum continuity confidence required to keep a held same-lane lead track active.")]
+    public float radarContinuityHoldMinConfidence = 0.35f;
     [Tooltip("Distance measurement Gaussian noise sigma (m).")]
     public float radarDistanceNoiseSigma = 0.15f;
     [Tooltip("Range-rate Doppler noise sigma (m/s).")]
@@ -160,6 +174,18 @@ private float? lastCarT = null;
         public int updateId;
         public SyncPacketSourceBundleContext bundle;
     }
+
+    private class ForwardLeadTrack
+    {
+        public bool active;
+        public float lastAcceptedRealtime;
+        public float lastGapM;
+        public float lastRangeRateMps;
+        public float lastConfidence;
+        public string source = "none";
+    }
+
+    private readonly ForwardLeadTrack forwardLeadTrack = new ForwardLeadTrack();
 
     private void RefreshSourceBundleInflightCounts()
     {
@@ -2579,6 +2605,182 @@ private float? lastCarT = null;
         return "out_of_cone";
     }
 
+    private float EffectiveRadarAssociationHalfAngleDeg()
+    {
+        return radarAssociationHalfAngleDeg > 0.0f ? radarAssociationHalfAngleDeg : 12.0f;
+    }
+
+    private float EffectiveRadarAssociationSameLaneConfidenceMin()
+    {
+        return radarAssociationSameLaneConfidenceMin > 0.0f ? radarAssociationSameLaneConfidenceMin : 0.75f;
+    }
+
+    private float EffectiveRadarAssociationHeadingDeltaMaxDeg()
+    {
+        return radarAssociationHeadingDeltaMaxDeg > 0.0f ? radarAssociationHeadingDeltaMaxDeg : 45.0f;
+    }
+
+    private float EffectiveRadarAssociationMinArcAheadM()
+    {
+        return radarAssociationMinArcAheadM > 0.0f ? radarAssociationMinArcAheadM : 1.0f;
+    }
+
+    private float EffectiveRadarContinuityHoldMaxSeconds()
+    {
+        return radarContinuityHoldMaxSeconds > 0.0f ? radarContinuityHoldMaxSeconds : 0.6f;
+    }
+
+    private float EffectiveRadarContinuityHoldHalfAngleDeg()
+    {
+        return radarContinuityHoldHalfAngleDeg > 0.0f ? radarContinuityHoldHalfAngleDeg : 18.0f;
+    }
+
+    private float EffectiveRadarContinuityHoldMinConfidence()
+    {
+        return radarContinuityHoldMinConfidence > 0.0f ? radarContinuityHoldMinConfidence : 0.35f;
+    }
+
+    private bool IsSameLaneLeadEligible(VehicleState state, float trueDist)
+    {
+        float sameLaneConfidence = state.radar_fwd_target_same_lane_confidence;
+        if (sameLaneConfidence < EffectiveRadarAssociationSameLaneConfidenceMin())
+        {
+            return false;
+        }
+
+        if (Mathf.Abs(state.radar_fwd_target_heading_delta_deg) > EffectiveRadarAssociationHeadingDeltaMaxDeg())
+        {
+            return false;
+        }
+
+        if (state.radar_fwd_target_arc_distance_m <= EffectiveRadarAssociationMinArcAheadM())
+        {
+            return false;
+        }
+
+        if (trueDist > radarMaxRangeM)
+        {
+            return false;
+        }
+
+        return true;
+    }
+
+    private float ComputeLeadTrackConfidence(VehicleState state, float azimuthAbsDeg, float ageSeconds)
+    {
+        float sameLaneConfidence = Mathf.Clamp01(state.radar_fwd_target_same_lane_confidence);
+        float headingScore = 1.0f - Mathf.Clamp01(
+            Mathf.Abs(state.radar_fwd_target_heading_delta_deg) / Mathf.Max(1.0f, EffectiveRadarAssociationHeadingDeltaMaxDeg())
+        );
+        float azimuthScore = 1.0f - Mathf.Clamp01(
+            azimuthAbsDeg / Mathf.Max(1.0f, EffectiveRadarContinuityHoldHalfAngleDeg())
+        );
+        float ageScore = 1.0f - Mathf.Clamp01(
+            ageSeconds / Mathf.Max(0.01f, EffectiveRadarContinuityHoldMaxSeconds())
+        );
+        return Mathf.Clamp01(Mathf.Min(sameLaneConfidence, headingScore, azimuthScore, ageScore));
+    }
+
+    private void RefreshForwardLeadTrack(
+        VehicleState state,
+        float gapM,
+        float rangeRateMps,
+        float confidence,
+        string source
+    )
+    {
+        forwardLeadTrack.active = true;
+        forwardLeadTrack.lastAcceptedRealtime = Time.realtimeSinceStartup;
+        forwardLeadTrack.lastGapM = gapM;
+        forwardLeadTrack.lastRangeRateMps = rangeRateMps;
+        forwardLeadTrack.lastConfidence = Mathf.Clamp01(confidence);
+        forwardLeadTrack.source = source ?? "none";
+        state.radar_fwd_track_active = 1.0f;
+        state.radar_fwd_track_source = forwardLeadTrack.source;
+        state.radar_fwd_track_age_ms = 0.0f;
+        state.radar_fwd_track_confidence = forwardLeadTrack.lastConfidence;
+    }
+
+    private void DropForwardLeadTrack(VehicleState state, string reason)
+    {
+        if (forwardLeadTrack.active)
+        {
+            state.radar_fwd_track_drop_reason = string.IsNullOrEmpty(reason) ? "dropped" : reason;
+        }
+        forwardLeadTrack.active = false;
+        forwardLeadTrack.lastAcceptedRealtime = 0.0f;
+        forwardLeadTrack.lastGapM = 0.0f;
+        forwardLeadTrack.lastRangeRateMps = 0.0f;
+        forwardLeadTrack.lastConfidence = 0.0f;
+        forwardLeadTrack.source = "none";
+        state.radar_fwd_track_active = 0.0f;
+        state.radar_fwd_track_source = "none";
+        state.radar_fwd_track_age_ms = 0.0f;
+        state.radar_fwd_track_confidence = 0.0f;
+    }
+
+    private bool TryApplyForwardLeadHold(
+        VehicleState state,
+        float trueDist,
+        float noisyRate,
+        float snr,
+        float azimuthAbsDeg,
+        bool sameLaneAssociated,
+        out float confidence
+    )
+    {
+        confidence = 0.0f;
+        if (!forwardLeadTrack.active)
+        {
+            return false;
+        }
+
+        float ageSeconds = Mathf.Max(0.0f, Time.realtimeSinceStartup - forwardLeadTrack.lastAcceptedRealtime);
+        state.radar_fwd_track_active = 1.0f;
+        state.radar_fwd_track_source = forwardLeadTrack.source;
+        state.radar_fwd_track_age_ms = ageSeconds * 1000.0f;
+
+        if (!sameLaneAssociated)
+        {
+            DropForwardLeadTrack(state, "association_lost");
+            return false;
+        }
+
+        if (ageSeconds > EffectiveRadarContinuityHoldMaxSeconds())
+        {
+            DropForwardLeadTrack(state, "hold_expired");
+            return false;
+        }
+
+        if (azimuthAbsDeg > EffectiveRadarContinuityHoldHalfAngleDeg())
+        {
+            DropForwardLeadTrack(state, "hold_angle_exceeded");
+            return false;
+        }
+
+        confidence = ComputeLeadTrackConfidence(state, azimuthAbsDeg, ageSeconds);
+        state.radar_fwd_track_confidence = confidence;
+        if (confidence < EffectiveRadarContinuityHoldMinConfidence())
+        {
+            DropForwardLeadTrack(state, "hold_confidence_low");
+            return false;
+        }
+
+        state.radar_fwd_detected = 1.0f;
+        state.radar_fwd_distance_m = Mathf.Max(0.1f, trueDist);
+        state.radar_fwd_range_rate_mps = noisyRate;
+        state.radar_fwd_snr = Mathf.Max(0.05f, snr * confidence);
+        state.radar_fwd_reject_reason = "accepted";
+        state.radar_fwd_track_source = "continuity_hold";
+        state.radar_fwd_track_hold_reason = "same_lane_curve_dropout";
+        state.radar_fwd_track_confidence = confidence;
+        forwardLeadTrack.active = true;
+        forwardLeadTrack.lastGapM = state.radar_fwd_distance_m;
+        forwardLeadTrack.lastRangeRateMps = state.radar_fwd_range_rate_mps;
+        forwardLeadTrack.lastConfidence = confidence;
+        return true;
+    }
+
     private void PopulateForwardRadarTargetDiagnostics(
         VehicleState state,
         Transform carTx,
@@ -2696,11 +2898,21 @@ private float? lastCarT = null;
         state.radar_fwd_target_same_lane_confidence = -1.0f;
         state.radar_fwd_target_lane_offset_m = 0.0f;
         state.radar_fwd_target_arc_distance_m = 0.0f;
+        state.radar_fwd_association_eligible = 0.0f;
+        state.radar_fwd_track_active = forwardLeadTrack.active ? 1.0f : 0.0f;
+        state.radar_fwd_track_source = forwardLeadTrack.active ? forwardLeadTrack.source : "none";
+        state.radar_fwd_track_age_ms = 0.0f;
+        state.radar_fwd_track_confidence = forwardLeadTrack.active ? forwardLeadTrack.lastConfidence : 0.0f;
+        state.radar_fwd_track_hold_reason = "none";
+        state.radar_fwd_track_drop_reason = "none";
         state.lead_collision_detected = false;
         state.lead_collision_override_active = false;
 
         if (leadVehicle == null || carController == null)
+        {
+            DropForwardLeadTrack(state, "no_candidate");
             return;
+        }
 
         Transform carTx  = carController.transform;
         Vector3   origin = carTx.position + Vector3.up * 0.5f;  // mid-bumper height
@@ -2712,6 +2924,7 @@ private float? lastCarT = null;
         Vector3 leadCenter = leadVehicle.transform.position + Vector3.up * (leadVehicle.vehicleBoxSize.y * 0.5f);
         Vector3 toTarget   = leadCenter - origin;
         float   trueDist   = toTarget.magnitude;
+        float   targetAzimuthAbsDeg = 0.0f;
 
         PopulateForwardRadarTargetDiagnostics(
             state,
@@ -2720,6 +2933,7 @@ private float? lastCarT = null;
             leadVehicle.transform.position,
             leadForward
         );
+        targetAzimuthAbsDeg = Mathf.Abs(state.radar_fwd_target_azimuth_deg);
 
         // Collision override: report 0 m gap at high SNR so Python TTC guard fires immediately.
         if (leadVehicle.CollisionDetected)
@@ -2731,6 +2945,18 @@ private float? lastCarT = null;
             state.radar_fwd_range_rate_mps = 0.0f;
             state.radar_fwd_snr            = 9.0f;   // high confidence
             state.radar_fwd_reject_reason  = "collision_override";
+            RefreshForwardLeadTrack(state, state.radar_fwd_distance_m, 0.0f, 1.0f, "collision_override");
+            return;
+        }
+
+        bool sameLaneEligible = IsSameLaneLeadEligible(state, trueDist);
+        bool sameLaneAssociatedCapture = sameLaneEligible && targetAzimuthAbsDeg <= EffectiveRadarAssociationHalfAngleDeg();
+        state.radar_fwd_association_eligible = sameLaneEligible ? 1.0f : 0.0f;
+        if (state.radar_fwd_target_same_lane_confidence >= 0.0f && !sameLaneEligible)
+        {
+            float absHeadingDelta = Mathf.Abs(state.radar_fwd_target_heading_delta_deg);
+            state.radar_fwd_reject_reason = absHeadingDelta >= 135.0f ? "opposite_direction" : "wrong_lane";
+            DropForwardLeadTrack(state, state.radar_fwd_reject_reason);
             return;
         }
 
@@ -2738,21 +2964,62 @@ private float? lastCarT = null;
         if (trueDist > radarMaxRangeM)
         {
             state.radar_fwd_reject_reason = "out_of_range";
+            DropForwardLeadTrack(state, "out_of_range");
             return;
         }
+
+        Vector3 egoVel  = Vector3.zero;
+        Rigidbody carRb = carController.GetComponent<Rigidbody>();
+        if (carRb != null)
+        {
+            egoVel = carRb.velocity;
+        }
+        Vector3 leadVel = leadVehicle.Velocity;
+        Vector3 relVel = egoVel - leadVel;
+        float radialRate = Vector3.Dot(relVel, fwd);
 
         // Angle check: lead must be within ±radarHalfAngleDeg of bore-sight.
         Vector3 toHit    = toTarget.normalized;
         float   dotAngle = Vector3.Dot(fwd, toHit);
         float   cosLimit = Mathf.Cos(radarHalfAngleDeg * Mathf.Deg2Rad);
+        float   assocCosLimit = Mathf.Cos(EffectiveRadarAssociationHalfAngleDeg() * Mathf.Deg2Rad);
         if (dotAngle < cosLimit)
         {
-            state.radar_fwd_reject_reason = ClassifyForwardRadarRejectReason(
+            string rejectReason = ClassifyForwardRadarRejectReason(
                 state.radar_fwd_target_same_lane_confidence,
                 state.radar_fwd_target_heading_delta_deg,
                 true
             );
-            return;  // target outside detection cone (e.g. lead is behind ego)
+            state.radar_fwd_reject_reason = rejectReason;
+
+            // Raw radar rejected the lead, but the same-lane association path is allowed
+            // to keep a bounded current-frame capture for curved-road continuity.
+            if (sameLaneAssociatedCapture && dotAngle >= assocCosLimit)
+            {
+                state.radar_fwd_reject_reason = "accepted";
+                state.radar_fwd_track_hold_reason = "none";
+                state.radar_fwd_track_drop_reason = "none";
+            }
+            else if (
+                rejectReason == "out_of_cone_same_lane"
+                && TryApplyForwardLeadHold(
+                    state,
+                    trueDist,
+                    radialRate,
+                    1.0f,
+                    targetAzimuthAbsDeg,
+                    sameLaneEligible,
+                    out float heldConfidence
+                )
+            )
+            {
+                return;
+            }
+            else
+            {
+                DropForwardLeadTrack(state, rejectReason);
+                return;  // target outside detection cone (e.g. lead is behind ego)
+            }
         }
 
         // ── Gaussian noise (Box-Muller) ───────────────────────────────────────
@@ -2767,14 +3034,6 @@ private float? lastCarT = null;
         // ── Doppler range-rate ────────────────────────────────────────────────
         // Radial relative velocity along radar bore-sight (positive = closing).
         // We need ego velocity: approximate from CarController Rigidbody if present.
-        Vector3 egoVel  = Vector3.zero;
-        Rigidbody carRb = carController.GetComponent<Rigidbody>();
-        if (carRb != null) egoVel = carRb.velocity;
-
-        Vector3 leadVel   = leadVehicle.Velocity;
-        Vector3 relVel    = egoVel - leadVel;          // closing if positive along fwd
-        float   radialRate = Vector3.Dot(relVel, fwd); // m/s closing rate
-
         // Add Doppler noise (second independent Gaussian sample).
         float u3    = Mathf.Max(1e-6f, UnityEngine.Random.value);
         float u4    = UnityEngine.Random.value;
@@ -2793,6 +3052,13 @@ private float? lastCarT = null;
         state.radar_fwd_range_rate_mps = noisyRate;
         state.radar_fwd_snr            = snr;
         state.radar_fwd_reject_reason  = "accepted";
+        RefreshForwardLeadTrack(
+            state,
+            noisyDist,
+            noisyRate,
+            ComputeLeadTrackConfidence(state, targetAzimuthAbsDeg, 0.0f),
+            dotAngle < cosLimit ? "same_lane_association" : "raw_detected"
+        );
     }
 }
 

@@ -1947,6 +1947,13 @@ public class VehicleState
     public float radar_fwd_target_same_lane_confidence = -1.0f;
     public float radar_fwd_target_lane_offset_m = 0.0f;
     public float radar_fwd_target_arc_distance_m = 0.0f;
+    public float radar_fwd_association_eligible = 0.0f;
+    public float radar_fwd_track_active = 0.0f;
+    public string radar_fwd_track_source = "none";
+    public float radar_fwd_track_age_ms = 0.0f;
+    public float radar_fwd_track_confidence = 0.0f;
+    public string radar_fwd_track_hold_reason = "none";
+    public string radar_fwd_track_drop_reason = "none";
     public bool lead_collision_detected = false;
     public bool lead_collision_override_active = false;
 }

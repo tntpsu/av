@@ -276,6 +276,13 @@ class VehicleState:
     radar_fwd_target_same_lane_confidence: float = -1.0
     radar_fwd_target_lane_offset_m: float = 0.0
     radar_fwd_target_arc_distance_m: float = 0.0
+    radar_fwd_association_eligible: float = 0.0
+    radar_fwd_track_active: float = 0.0
+    radar_fwd_track_source: str = "none"
+    radar_fwd_track_age_ms: float = 0.0
+    radar_fwd_track_confidence: float = 0.0
+    radar_fwd_track_hold_reason: str = "none"
+    radar_fwd_track_drop_reason: str = "none"
     lead_collision_detected: bool = False
     lead_collision_override_active: bool = False
     acc_active: float = 0.0               # 1.0 when ACC is engaged

@@ -464,6 +464,30 @@ Acceptance:
 - same-lane curved lead remains capturable
 - opposite-lane/oncoming candidate is explicitly rejected with `wrong_lane` or `opposite_direction`
 
+Detailed implementation:
+1. Keep the existing raw `±5°` cone as the strict radar acceptance cone.
+2. Add a second, wider association envelope that is only used when all of these are true:
+   - `same_lane_confidence >= assoc_same_lane_confidence_min`
+   - `abs(target_heading_delta_deg) <= assoc_same_direction_heading_delta_max_deg`
+   - `target_arc_distance_m > assoc_min_arc_ahead_m`
+   - `target_arc_distance_m <= radarMaxRangeM + assoc_arc_slack_m`
+   - `abs(target_azimuth_deg) <= assoc_half_angle_deg`
+3. When the wider association envelope is used, mark the output source explicitly as `same_lane_association`.
+4. Never use the wider association envelope for:
+   - negative or near-zero arc distance
+   - low same-lane confidence
+   - large opposite-direction heading deltas
+5. Keep all existing reject-reason telemetry and extend it with source/hold telemetry rather than replacing it.
+
+Files:
+- `/Users/philiptullai/Documents/Coding/av/unity/AVSimulation/Assets/Scripts/AVBridge.cs`
+- `/Users/philiptullai/Documents/Coding/av/unity/AVSimulation/Assets/Scripts/CarController.cs`
+- `/Users/philiptullai/Documents/Coding/av/data/formats/data_format.py`
+- `/Users/philiptullai/Documents/Coding/av/data/recorder.py`
+- `/Users/philiptullai/Documents/Coding/av/tools/drive_summary_core.py`
+- `/Users/philiptullai/Documents/Coding/av/tools/analyze/analyze_drive_overall.py`
+- `/Users/philiptullai/Documents/Coding/av/tests/test_drive_summary_contract.py`
+
 #### L8.3 Short-horizon lead continuity track
 
 ACC should not drop straight to free-flow on every brief producer miss if continuity confidence is still high.
@@ -488,6 +512,53 @@ Suggested output fields:
 Acceptance:
 - brief H8 producer misses do not hand ownership back to free-flow immediately
 - lead continuity does not persist through wrong-lane / opposite-direction evidence
+
+Detailed implementation:
+1. Keep one producer-owned forward-lead continuity track in Unity.
+2. Seed or refresh the track only from:
+   - `accepted_raw`
+   - `same_lane_association`
+3. Track state:
+   - `active`
+   - `source`
+   - `age_ms`
+   - `confidence`
+   - `last_gap_m`
+   - `last_range_rate_mps`
+   - `last_same_lane_confidence`
+   - `hold_reason`
+   - `drop_reason`
+4. Permit hold only when all of these remain true:
+   - last accepted target was same-lane and same-direction
+   - current candidate still exists
+   - current candidate remains same-lane eligible
+   - hold age stays under `continuity_hold_max_ms`
+   - predicted gap remains positive and bounded
+5. Force-drop immediately on:
+   - `wrong_lane`
+   - `opposite_direction`
+   - `target_arc_distance_m <= 0`
+   - confidence decay below `continuity_hold_min_confidence`
+6. Surface held detections to Python as normal forward-radar detections, but with explicit source telemetry so summaries can distinguish:
+   - raw detection
+   - same-lane association
+   - continuity hold
+7. Do not move the continuity logic into ACC state handling first. Fix the producer contract before adding consumer-side state complexity.
+
+New telemetry:
+- `radar_fwd_track_active`
+- `radar_fwd_track_source`
+- `radar_fwd_track_age_ms`
+- `radar_fwd_track_confidence`
+- `radar_fwd_track_hold_reason`
+- `radar_fwd_track_drop_reason`
+- `radar_fwd_association_eligible`
+
+Acceptance gates:
+- H8 failure mode is no longer `out_of_cone_same_lane`
+- H2 remains clean
+- no held frame is labeled with `wrong_lane` or `opposite_direction`
+- continuity-hold usage is bounded and attributable
 
 #### L8.4 Consumer-state changes
 
@@ -544,6 +615,17 @@ They should answer directly:
 - `/Users/philiptullai/Documents/Coding/av/tracks/scenarios/highway_h2_steady.yml`
 
 7. Add explicit wrong-target tests before declaring success.
+
+Concrete execution order:
+1. Expand plan and implement telemetry fields first.
+2. Implement same-lane association.
+3. Rebuild Unity player and run:
+   - `/Users/philiptullai/Documents/Coding/av/tracks/scenarios/highway_h8_curve_catchup.yml`
+4. If H8 still shows `out_of_cone_same_lane`, enable bounded continuity hold.
+5. Re-run:
+   - `/Users/philiptullai/Documents/Coding/av/tracks/scenarios/highway_h8_curve_catchup.yml`
+   - `/Users/philiptullai/Documents/Coding/av/tracks/scenarios/highway_h2_steady.yml`
+6. Only after H8/H2 are stable, add dedicated wrong-target scenarios or synthetic tests.
 
 #### L8.7 Required new scenarios
 

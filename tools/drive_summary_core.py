@@ -2539,6 +2539,13 @@ def _build_acc_health_summary(data: Dict, n_frames: int, speed: Optional[np.ndar
     same_lane_confidence_raw = data.get('radar_fwd_target_same_lane_confidence')
     target_lane_offset_raw = data.get('radar_fwd_target_lane_offset_m')
     target_arc_distance_raw = data.get('radar_fwd_target_arc_distance_m')
+    association_eligible_raw = data.get('radar_fwd_association_eligible')
+    track_active_raw = data.get('radar_fwd_track_active')
+    track_source_raw = data.get('radar_fwd_track_source')
+    track_age_ms_raw = data.get('radar_fwd_track_age_ms')
+    track_confidence_raw = data.get('radar_fwd_track_confidence')
+    track_hold_reason_raw = data.get('radar_fwd_track_hold_reason')
+    track_drop_reason_raw = data.get('radar_fwd_track_drop_reason')
     range_rate_raw = data.get('radar_fwd_range_rate_mps')
     acc_target_speed_raw = data.get('acc_target_speed_mps')
     if acc_target_speed_raw is None:
@@ -2678,6 +2685,56 @@ def _build_acc_health_summary(data: Dict, n_frames: int, speed: Optional[np.ndar
         if target_arc_distance_raw is not None
         else np.full(n, np.nan)
     )
+    association_eligible_arr = (
+        np.asarray(association_eligible_raw[:n], dtype=float)
+        if association_eligible_raw is not None
+        else np.zeros(n, dtype=float)
+    )
+    track_active_arr = (
+        np.asarray(track_active_raw[:n], dtype=float)
+        if track_active_raw is not None
+        else np.zeros(n, dtype=float)
+    )
+    if track_source_raw is not None:
+        track_source_arr = np.array(
+            [
+                value.decode() if isinstance(value, bytes) else str(value)
+                for value in track_source_raw[:n]
+            ],
+            dtype=object,
+        )
+    else:
+        track_source_arr = np.array(["none"] * n, dtype=object)
+    track_age_ms_arr = (
+        np.asarray(track_age_ms_raw[:n], dtype=float)
+        if track_age_ms_raw is not None
+        else np.full(n, np.nan)
+    )
+    track_confidence_arr = (
+        np.asarray(track_confidence_raw[:n], dtype=float)
+        if track_confidence_raw is not None
+        else np.full(n, np.nan)
+    )
+    if track_hold_reason_raw is not None:
+        track_hold_reason_arr = np.array(
+            [
+                value.decode() if isinstance(value, bytes) else str(value)
+                for value in track_hold_reason_raw[:n]
+            ],
+            dtype=object,
+        )
+    else:
+        track_hold_reason_arr = np.array(["none"] * n, dtype=object)
+    if track_drop_reason_raw is not None:
+        track_drop_reason_arr = np.array(
+            [
+                value.decode() if isinstance(value, bytes) else str(value)
+                for value in track_drop_reason_raw[:n]
+            ],
+            dtype=object,
+        )
+    else:
+        track_drop_reason_arr = np.array(["none"] * n, dtype=object)
 
     detected_bool = detected_arr > 0.5
     if detection_stable_frames_raw is None:
@@ -3033,11 +3090,64 @@ def _build_acc_health_summary(data: Dict, n_frames: int, speed: Optional[np.ndar
         if continuity_base_count > 0
         else 0.0
     )
+    association_eligible_rate = (
+        float(np.mean(association_eligible_arr[continuity_base_mask] > 0.5) * 100.0)
+        if continuity_base_count > 0
+        else 0.0
+    )
+    track_active_rate = (
+        float(np.mean(track_active_arr[continuity_base_mask] > 0.5) * 100.0)
+        if continuity_base_count > 0
+        else 0.0
+    )
     continuity_reject_mode = "none"
     if continuity_miss_count > 0:
         miss_reasons = reject_reason_arr[continuity_miss_mask]
         reason_counts = Counter(str(reason or "none") for reason in miss_reasons)
         continuity_reject_mode = max(reason_counts.items(), key=lambda item: item[1])[0]
+
+    detected_scope_mask = continuity_base_mask & detected_bool
+    track_source_mode = "none"
+    if np.any(detected_scope_mask):
+        source_counts = Counter(str(source or "none") for source in track_source_arr[detected_scope_mask])
+        track_source_mode = max(source_counts.items(), key=lambda item: item[1])[0]
+
+    continuity_hold_mask = detected_scope_mask & (track_source_arr == "continuity_hold")
+    same_lane_association_mask = detected_scope_mask & (track_source_arr == "same_lane_association")
+    raw_detect_mask = detected_scope_mask & (track_source_arr == "raw_detected")
+    continuity_hold_rate = (
+        float(np.mean(continuity_hold_mask[continuity_base_mask]) * 100.0)
+        if continuity_base_count > 0
+        else 0.0
+    )
+    same_lane_association_rate = (
+        float(np.mean(same_lane_association_mask[continuity_base_mask]) * 100.0)
+        if continuity_base_count > 0
+        else 0.0
+    )
+    raw_detect_rate = (
+        float(np.mean(raw_detect_mask[continuity_base_mask]) * 100.0)
+        if continuity_base_count > 0
+        else 0.0
+    )
+    hold_reason_mode = "none"
+    if np.any(continuity_hold_mask):
+        hold_counts = Counter(
+            str(reason or "none")
+            for reason in track_hold_reason_arr[continuity_hold_mask]
+            if str(reason or "none") != "none"
+        )
+        if hold_counts:
+            hold_reason_mode = max(hold_counts.items(), key=lambda item: item[1])[0]
+    drop_reason_mode = "none"
+    drop_reason_mask = continuity_base_mask & (track_drop_reason_arr != "none")
+    if np.any(drop_reason_mask):
+        drop_counts = Counter(str(reason or "none") for reason in track_drop_reason_arr[drop_reason_mask])
+        drop_reason_mode = max(drop_counts.items(), key=lambda item: item[1])[0]
+    continuity_hold_age_valid = track_age_ms_arr[continuity_hold_mask & np.isfinite(track_age_ms_arr)]
+    continuity_hold_conf_valid = track_confidence_arr[
+        continuity_hold_mask & np.isfinite(track_confidence_arr)
+    ]
 
     def _continuity_rate(reason: str) -> float:
         if continuity_base_count <= 0:
@@ -3167,6 +3277,20 @@ def _build_acc_health_summary(data: Dict, n_frames: int, speed: Optional[np.ndar
         "acc_detection_issue_mode": detection_issue_mode,
         "acc_candidate_present_rate": round(candidate_present_rate, 3),
         "acc_missed_candidate_rate": round(missed_candidate_rate, 3),
+        "acc_association_eligible_rate": round(association_eligible_rate, 3),
+        "acc_track_active_rate": round(track_active_rate, 3),
+        "acc_track_source_mode": track_source_mode,
+        "acc_raw_detect_rate": round(raw_detect_rate, 3),
+        "acc_same_lane_association_rate": round(same_lane_association_rate, 3),
+        "acc_continuity_hold_rate": round(continuity_hold_rate, 3),
+        "acc_continuity_hold_reason_mode": hold_reason_mode,
+        "acc_continuity_drop_reason_mode": drop_reason_mode,
+        "acc_continuity_hold_age_p95_ms": round(
+            float(np.percentile(continuity_hold_age_valid, 95)), 3
+        ) if continuity_hold_age_valid.size > 0 else 0.0,
+        "acc_continuity_hold_confidence_p50": round(
+            float(np.percentile(continuity_hold_conf_valid, 50)), 3
+        ) if continuity_hold_conf_valid.size > 0 else 0.0,
         "acc_lead_continuity_reject_reason_mode": continuity_reject_mode,
         "acc_out_of_cone_rate": round(_continuity_rate("out_of_cone"), 3),
         "acc_out_of_cone_same_lane_rate": round(_continuity_rate("out_of_cone_same_lane"), 3),
@@ -3813,6 +3937,16 @@ def _build_lead_continuity_contract_summary(acc_health: Optional[Dict]) -> Dict:
         "same_lane_confidence_p05": None,
         "target_lane_offset_p50_m": None,
         "target_arc_distance_p50_m": None,
+        "association_eligible_rate_pct": None,
+        "track_active_rate_pct": None,
+        "track_source_mode": "none",
+        "raw_detect_rate_pct": None,
+        "same_lane_association_rate_pct": None,
+        "continuity_hold_rate_pct": None,
+        "continuity_hold_reason_mode": "none",
+        "continuity_drop_reason_mode": "none",
+        "continuity_hold_age_p95_ms": None,
+        "continuity_hold_confidence_p50": None,
         "issue_detected": False,
         "issue_mode": "none",
     }
@@ -3869,6 +4003,30 @@ def _build_lead_continuity_contract_summary(acc_health: Optional[Dict]) -> Dict:
         ),
         "target_arc_distance_p50_m": safe_float(
             acc_health.get("acc_target_arc_distance_p50_m")
+        ),
+        "association_eligible_rate_pct": safe_float(
+            acc_health.get("acc_association_eligible_rate")
+        ),
+        "track_active_rate_pct": safe_float(acc_health.get("acc_track_active_rate")),
+        "track_source_mode": str(acc_health.get("acc_track_source_mode") or "none"),
+        "raw_detect_rate_pct": safe_float(acc_health.get("acc_raw_detect_rate")),
+        "same_lane_association_rate_pct": safe_float(
+            acc_health.get("acc_same_lane_association_rate")
+        ),
+        "continuity_hold_rate_pct": safe_float(
+            acc_health.get("acc_continuity_hold_rate")
+        ),
+        "continuity_hold_reason_mode": str(
+            acc_health.get("acc_continuity_hold_reason_mode") or "none"
+        ),
+        "continuity_drop_reason_mode": str(
+            acc_health.get("acc_continuity_drop_reason_mode") or "none"
+        ),
+        "continuity_hold_age_p95_ms": safe_float(
+            acc_health.get("acc_continuity_hold_age_p95_ms")
+        ),
+        "continuity_hold_confidence_p50": safe_float(
+            acc_health.get("acc_continuity_hold_confidence_p50")
         ),
         "issue_detected": issue_detected,
         "issue_mode": issue_mode,
@@ -4539,6 +4697,31 @@ def analyze_recording_summary(
             data['radar_fwd_target_arc_distance_m'] = (
                 np.array(f['vehicle/radar_fwd_target_arc_distance_m'][:])
                 if 'vehicle/radar_fwd_target_arc_distance_m' in f else None
+            )
+            data['radar_fwd_association_eligible'] = (
+                np.array(f['vehicle/radar_fwd_association_eligible'][:])
+                if 'vehicle/radar_fwd_association_eligible' in f else None
+            )
+            data['radar_fwd_track_active'] = (
+                np.array(f['vehicle/radar_fwd_track_active'][:])
+                if 'vehicle/radar_fwd_track_active' in f else None
+            )
+            data['radar_fwd_track_source'] = (
+                f['vehicle/radar_fwd_track_source'][:] if 'vehicle/radar_fwd_track_source' in f else None
+            )
+            data['radar_fwd_track_age_ms'] = (
+                np.array(f['vehicle/radar_fwd_track_age_ms'][:])
+                if 'vehicle/radar_fwd_track_age_ms' in f else None
+            )
+            data['radar_fwd_track_confidence'] = (
+                np.array(f['vehicle/radar_fwd_track_confidence'][:])
+                if 'vehicle/radar_fwd_track_confidence' in f else None
+            )
+            data['radar_fwd_track_hold_reason'] = (
+                f['vehicle/radar_fwd_track_hold_reason'][:] if 'vehicle/radar_fwd_track_hold_reason' in f else None
+            )
+            data['radar_fwd_track_drop_reason'] = (
+                f['vehicle/radar_fwd_track_drop_reason'][:] if 'vehicle/radar_fwd_track_drop_reason' in f else None
             )
             data['acc_gap_error_m'] = (
                 np.array(f['vehicle/acc_gap_error_m'][:])

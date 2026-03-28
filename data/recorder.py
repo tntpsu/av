@@ -342,6 +342,13 @@ class DataRecorder:
         self.h5_file.create_dataset("vehicle/radar_fwd_target_same_lane_confidence", shape=(0,), maxshape=max_shape, dtype=np.float32)
         self.h5_file.create_dataset("vehicle/radar_fwd_target_lane_offset_m", shape=(0,), maxshape=max_shape, dtype=np.float32)
         self.h5_file.create_dataset("vehicle/radar_fwd_target_arc_distance_m", shape=(0,), maxshape=max_shape, dtype=np.float32)
+        self.h5_file.create_dataset("vehicle/radar_fwd_association_eligible", shape=(0,), maxshape=max_shape, dtype=np.float32)
+        self.h5_file.create_dataset("vehicle/radar_fwd_track_active", shape=(0,), maxshape=max_shape, dtype=np.float32)
+        self.h5_file.create_dataset("vehicle/radar_fwd_track_source", shape=(0,), maxshape=max_shape, dtype=h5py.string_dtype(encoding='utf-8', length=64))
+        self.h5_file.create_dataset("vehicle/radar_fwd_track_age_ms", shape=(0,), maxshape=max_shape, dtype=np.float32)
+        self.h5_file.create_dataset("vehicle/radar_fwd_track_confidence", shape=(0,), maxshape=max_shape, dtype=np.float32)
+        self.h5_file.create_dataset("vehicle/radar_fwd_track_hold_reason", shape=(0,), maxshape=max_shape, dtype=h5py.string_dtype(encoding='utf-8', length=64))
+        self.h5_file.create_dataset("vehicle/radar_fwd_track_drop_reason", shape=(0,), maxshape=max_shape, dtype=h5py.string_dtype(encoding='utf-8', length=64))
         self.h5_file.create_dataset("vehicle/lead_collision_detected",  shape=(0,), maxshape=max_shape, dtype=np.int8)
         self.h5_file.create_dataset("vehicle/lead_collision_override_active", shape=(0,), maxshape=max_shape, dtype=np.int8)
         self.h5_file.create_dataset("vehicle/acc_active",               shape=(0,), maxshape=max_shape, dtype=np.float32)
@@ -4699,6 +4706,13 @@ class DataRecorder:
         radar_fwd_target_same_lane_confidence_list = []
         radar_fwd_target_lane_offset_m_list = []
         radar_fwd_target_arc_distance_m_list = []
+        radar_fwd_association_eligible_list = []
+        radar_fwd_track_active_list = []
+        radar_fwd_track_source_list = []
+        radar_fwd_track_age_ms_list = []
+        radar_fwd_track_confidence_list = []
+        radar_fwd_track_hold_reason_list = []
+        radar_fwd_track_drop_reason_list = []
         lead_collision_detected_list = []
         lead_collision_override_active_list = []
         acc_active_list = []
@@ -5003,6 +5017,23 @@ class DataRecorder:
             )
             radar_fwd_target_arc_distance_m_list.append(
                 float(getattr(vs, 'radar_fwd_target_arc_distance_m', 0.0))
+            )
+            radar_fwd_association_eligible_list.append(
+                float(getattr(vs, 'radar_fwd_association_eligible', 0.0))
+            )
+            radar_fwd_track_active_list.append(float(getattr(vs, 'radar_fwd_track_active', 0.0)))
+            radar_fwd_track_source_list.append(
+                str(getattr(vs, 'radar_fwd_track_source', 'none') or 'none')
+            )
+            radar_fwd_track_age_ms_list.append(float(getattr(vs, 'radar_fwd_track_age_ms', 0.0)))
+            radar_fwd_track_confidence_list.append(
+                float(getattr(vs, 'radar_fwd_track_confidence', 0.0))
+            )
+            radar_fwd_track_hold_reason_list.append(
+                str(getattr(vs, 'radar_fwd_track_hold_reason', 'none') or 'none')
+            )
+            radar_fwd_track_drop_reason_list.append(
+                str(getattr(vs, 'radar_fwd_track_drop_reason', 'none') or 'none')
             )
             lead_collision_detected_list.append(
                 1 if getattr(vs, 'lead_collision_detected', False) else 0
@@ -5791,6 +5822,13 @@ class DataRecorder:
                        "radar_fwd_target_same_lane_confidence",
                        "radar_fwd_target_lane_offset_m",
                        "radar_fwd_target_arc_distance_m",
+                       "radar_fwd_association_eligible",
+                       "radar_fwd_track_active",
+                       "radar_fwd_track_source",
+                       "radar_fwd_track_age_ms",
+                       "radar_fwd_track_confidence",
+                       "radar_fwd_track_hold_reason",
+                       "radar_fwd_track_drop_reason",
                        "lead_collision_detected", "lead_collision_override_active",
                        "acc_active", "acc_target_gap_m", "acc_gap_error_m", "acc_ttc_s",
                        "acc_state_code", "acc_target_speed_mps", "acc_request_estop",
@@ -5882,6 +5920,30 @@ class DataRecorder:
             )
             self.h5_file["vehicle/radar_fwd_target_arc_distance_m"][current_size:] = np.array(
                 radar_fwd_target_arc_distance_m_list, dtype=np.float32
+            )
+            self.h5_file["vehicle/radar_fwd_association_eligible"][current_size:] = np.array(
+                radar_fwd_association_eligible_list, dtype=np.float32
+            )
+            self.h5_file["vehicle/radar_fwd_track_active"][current_size:] = np.array(
+                radar_fwd_track_active_list, dtype=np.float32
+            )
+            self.h5_file["vehicle/radar_fwd_track_source"][current_size:] = np.array(
+                radar_fwd_track_source_list,
+                dtype=h5py.string_dtype(encoding='utf-8', length=64),
+            )
+            self.h5_file["vehicle/radar_fwd_track_age_ms"][current_size:] = np.array(
+                radar_fwd_track_age_ms_list, dtype=np.float32
+            )
+            self.h5_file["vehicle/radar_fwd_track_confidence"][current_size:] = np.array(
+                radar_fwd_track_confidence_list, dtype=np.float32
+            )
+            self.h5_file["vehicle/radar_fwd_track_hold_reason"][current_size:] = np.array(
+                radar_fwd_track_hold_reason_list,
+                dtype=h5py.string_dtype(encoding='utf-8', length=64),
+            )
+            self.h5_file["vehicle/radar_fwd_track_drop_reason"][current_size:] = np.array(
+                radar_fwd_track_drop_reason_list,
+                dtype=h5py.string_dtype(encoding='utf-8', length=64),
             )
             self.h5_file["vehicle/lead_collision_detected"][current_size:]  = np.array(lead_collision_detected_list, dtype=np.int8)
             self.h5_file["vehicle/lead_collision_override_active"][current_size:] = np.array(

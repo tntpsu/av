@@ -2488,6 +2488,24 @@ def _print_summary_report(recording_path: Path, summary: Dict, analyze_to_failur
                 f"{lead_continuity_contract.get('same_lane_confidence_p05', 0.0):.2f} /"
                 f" {lead_continuity_contract.get('target_arc_distance_p50_m', 0.0):.1f} m"
             )
+            print(
+                f"   Assoc Eligible / Track Active / Source:"
+                f" {lead_continuity_contract.get('association_eligible_rate_pct', 0.0):.1f}% /"
+                f" {lead_continuity_contract.get('track_active_rate_pct', 0.0):.1f}% /"
+                f" {lead_continuity_contract.get('track_source_mode', 'none')}"
+            )
+            print(
+                f"   Raw / Assoc / Hold:"
+                f" {lead_continuity_contract.get('raw_detect_rate_pct', 0.0):.1f}% /"
+                f" {lead_continuity_contract.get('same_lane_association_rate_pct', 0.0):.1f}% /"
+                f" {lead_continuity_contract.get('continuity_hold_rate_pct', 0.0):.1f}%"
+            )
+            print(
+                f"   Hold Reason / Drop / Age P95:"
+                f" {lead_continuity_contract.get('continuity_hold_reason_mode', 'none')} /"
+                f" {lead_continuity_contract.get('continuity_drop_reason_mode', 'none')} /"
+                f" {lead_continuity_contract.get('continuity_hold_age_p95_ms', 0.0):.1f} ms"
+            )
         print()
 
     print("=" * 80)
