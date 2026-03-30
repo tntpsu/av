@@ -119,6 +119,60 @@ def test_detects_highway_mild_curve_underactivation(tmp_path: Path) -> None:
     assert mild_curve_issues[0]["deep_link_target"] == "summary-section-highway-mild-curve"
 
 
+def test_detects_highway_preactivation_curve_authority_missing(tmp_path: Path) -> None:
+    recording_path = tmp_path / "issue_preactivation_missing.h5"
+    n_frames = 20
+    timestamps = np.linspace(0.0, 1.9, n_frames)
+    lateral_error = np.zeros(n_frames, dtype=np.float32)
+    lateral_error[6:14] = 0.82
+    ref_curvature = np.zeros(n_frames, dtype=np.float32)
+    ref_curvature[6:14] = 0.002
+    pre_weight = np.zeros(n_frames, dtype=np.float32)
+    pre_weight[6:14] = 0.62
+    pre_active = np.zeros(n_frames, dtype=np.int8)
+
+    with h5py.File(recording_path, "w") as f:
+        f.create_dataset("vehicle/timestamps", data=timestamps)
+        f.create_dataset("control/steering", data=np.zeros(n_frames, dtype=np.float32))
+        f.create_dataset("control/lateral_error", data=lateral_error)
+        f.create_dataset("control/pp_lookahead_distance", data=np.full(n_frames, 11.0, dtype=np.float32))
+        f.create_dataset("control/reference_lookahead_target", data=np.full(n_frames, 16.0, dtype=np.float32))
+        f.create_dataset(
+            "control/curve_intent_state",
+            data=np.array([b"STRAIGHT"] * n_frames, dtype="S16"),
+        )
+        f.create_dataset(
+            "control/curve_local_state",
+            data=np.array([b"STRAIGHT"] * n_frames, dtype="S16"),
+        )
+        f.create_dataset(
+            "control/curve_preactivation_authority_weight",
+            data=pre_weight,
+        )
+        f.create_dataset(
+            "control/curve_preactivation_authority_active",
+            data=pre_active,
+        )
+        f.create_dataset(
+            "control/curve_preactivation_blocker_mode",
+            data=np.array([b"local_not_ready"] * n_frames, dtype="S32"),
+        )
+        f.create_dataset("control/sync_packet_fallback_active", data=np.zeros(n_frames, dtype=np.int8))
+        f.create_dataset("trajectory/reference_point_curvature", data=ref_curvature)
+        f.create_dataset("vehicle/road_frame_lane_center_offset", data=np.full(n_frames, 0.03, dtype=np.float32))
+        f.create_dataset("perception/confidence", data=np.ones(n_frames, dtype=np.float32))
+        f.create_dataset("perception/num_lanes_detected", data=np.full(n_frames, 2, dtype=np.int8))
+        f.create_dataset("perception/left_lane_line_x", data=np.zeros(n_frames, dtype=np.float32))
+
+    issues = detect_issues(recording_path).get("issues", [])
+    preactivation_issues = [
+        i for i in issues if i.get("type") == "highway_preactivation_curve_authority_missing"
+    ]
+
+    assert len(preactivation_issues) == 1
+    assert preactivation_issues[0]["deep_link_target"] == "summary-section-highway-mild-curve"
+
+
 def test_detects_curve_sustain_collapse_rearm_cycle(tmp_path: Path) -> None:
     recording_path = tmp_path / "issue_rearm_cycle.h5"
     n_frames = 20
@@ -155,6 +209,164 @@ def test_detects_curve_sustain_collapse_rearm_cycle(tmp_path: Path) -> None:
     rearm_issues = [i for i in issues if i.get("type") == "curve_sustain_collapse_rearm_cycle"]
     assert len(rearm_issues) == 1
     assert rearm_issues[0]["deep_link_target"] == "summary-section-highway-mild-curve"
+
+
+def test_detects_high_speed_mild_curve_active_authority_insufficient(tmp_path: Path) -> None:
+    recording_path = tmp_path / "issue_active_authority_insufficient.h5"
+    n_frames = 20
+    timestamps = np.linspace(0.0, 1.9, n_frames)
+    lateral_error = np.zeros(n_frames, dtype=np.float32)
+    lateral_error[5:15] = 0.82
+    ref_curvature = np.zeros(n_frames, dtype=np.float32)
+    ref_curvature[5:15] = 0.002
+    preserve_weight = np.zeros(n_frames, dtype=np.float32)
+    preserve_weight[5:15] = 0.10
+    curve_cap_speed = np.full(n_frames, 14.45, dtype=np.float32)
+    vehicle_speed = np.full(n_frames, 14.50, dtype=np.float32)
+
+    with h5py.File(recording_path, "w") as f:
+        f.create_dataset("vehicle/timestamps", data=timestamps)
+        f.create_dataset("vehicle/speed", data=vehicle_speed)
+        f.create_dataset("control/steering", data=np.zeros(n_frames, dtype=np.float32))
+        f.create_dataset("control/lateral_error", data=lateral_error)
+        f.create_dataset("control/pp_lookahead_distance", data=np.full(n_frames, 8.0, dtype=np.float32))
+        f.create_dataset("control/reference_lookahead_target", data=np.full(n_frames, 10.0, dtype=np.float32))
+        f.create_dataset("control/curve_local_state", data=np.array([b"ENTRY"] * n_frames, dtype="S16"))
+        f.create_dataset("control/curve_intent_state", data=np.array([b"ENTRY"] * n_frames, dtype="S16"))
+        f.create_dataset("control/local_curve_reference_active", data=np.ones(n_frames, dtype=np.int8))
+        f.create_dataset(
+            "control/mpc_kappa_active_curve_preserve_weight",
+            data=preserve_weight,
+        )
+        f.create_dataset(
+            "control/speed_governor_curve_cap_speed",
+            data=curve_cap_speed,
+        )
+        f.create_dataset(
+            "control/speed_governor_curve_cap_reason",
+            data=np.array([b"commit"] * n_frames, dtype="S32"),
+        )
+        f.create_dataset("control/sync_packet_fallback_active", data=np.zeros(n_frames, dtype=np.int8))
+        f.create_dataset("trajectory/reference_point_curvature", data=ref_curvature)
+        f.create_dataset("vehicle/road_frame_lane_center_offset", data=np.full(n_frames, 0.03, dtype=np.float32))
+        f.create_dataset("perception/confidence", data=np.ones(n_frames, dtype=np.float32))
+        f.create_dataset("perception/num_lanes_detected", data=np.full(n_frames, 2, dtype=np.int8))
+        f.create_dataset("perception/left_lane_line_x", data=np.zeros(n_frames, dtype=np.float32))
+
+    issues = detect_issues(recording_path).get("issues", [])
+    active_issues = [
+        i for i in issues if i.get("type") == "high_speed_mild_curve_active_authority_insufficient"
+    ]
+    assert len(active_issues) == 1
+    assert active_issues[0]["deep_link_target"] == "summary-section-highway-mild-curve"
+    assert active_issues[0]["root_cause"] == "curve_cap_ineffective"
+
+
+def test_detects_local_curve_reference_shadow_insufficient(tmp_path: Path) -> None:
+    recording_path = tmp_path / "issue_local_curve_reference_shadow_insufficient.h5"
+    n_frames = 20
+    timestamps = np.linspace(0.0, 1.9, n_frames)
+    lateral_error = np.zeros(n_frames, dtype=np.float32)
+    lateral_error[5:15] = 0.95
+    ref_curvature = np.zeros(n_frames, dtype=np.float32)
+    ref_curvature[5:15] = 0.002
+    raw_delta = np.zeros(n_frames, dtype=np.float32)
+    raw_delta[5:15] = 0.90
+    capped_delta = np.zeros(n_frames, dtype=np.float32)
+    capped_delta[5:15] = 0.03
+
+    with h5py.File(recording_path, "w") as f:
+        f.create_dataset("vehicle/timestamps", data=timestamps)
+        f.create_dataset("vehicle/speed", data=np.full(n_frames, 14.5, dtype=np.float32))
+        f.create_dataset("control/steering", data=np.zeros(n_frames, dtype=np.float32))
+        f.create_dataset("control/lateral_error", data=lateral_error)
+        f.create_dataset("control/pp_lookahead_distance", data=np.full(n_frames, 6.5, dtype=np.float32))
+        f.create_dataset("control/reference_lookahead_target", data=np.full(n_frames, 10.0, dtype=np.float32))
+        f.create_dataset("control/curve_local_state", data=np.array([b"ENTRY"] * n_frames, dtype="S16"))
+        f.create_dataset("control/curve_intent_state", data=np.array([b"ENTRY"] * n_frames, dtype="S16"))
+        f.create_dataset("control/local_curve_reference_active", data=np.ones(n_frames, dtype=np.int8))
+        f.create_dataset("control/local_curve_reference_shadow_only", data=np.ones(n_frames, dtype=np.int8))
+        f.create_dataset("control/local_curve_reference_raw_delta_m", data=raw_delta)
+        f.create_dataset("control/local_curve_reference_capped_delta_m", data=capped_delta)
+        f.create_dataset(
+            "control/local_curve_reference_shadow_promotion_reason",
+            data=np.array([b""] * n_frames, dtype="S32"),
+        )
+        f.create_dataset("control/sync_packet_fallback_active", data=np.zeros(n_frames, dtype=np.int8))
+        f.create_dataset("trajectory/reference_point_curvature", data=ref_curvature)
+        f.create_dataset("vehicle/road_frame_lane_center_offset", data=np.full(n_frames, 0.03, dtype=np.float32))
+        f.create_dataset("perception/confidence", data=np.ones(n_frames, dtype=np.float32))
+        f.create_dataset("perception/num_lanes_detected", data=np.full(n_frames, 2, dtype=np.int8))
+        f.create_dataset("perception/left_lane_line_x", data=np.zeros(n_frames, dtype=np.float32))
+
+    issues = detect_issues(recording_path).get("issues", [])
+    shadow_issues = [
+        i for i in issues if i.get("type") == "local_curve_reference_shadow_insufficient"
+    ]
+    assert len(shadow_issues) == 1
+    assert shadow_issues[0]["root_cause"] == "shadow_only_local_arc"
+    assert shadow_issues[0]["deep_link_target"] == "summary-section-highway-mild-curve"
+
+
+def test_detects_wrong_target_distractor_reference_divergence(tmp_path: Path) -> None:
+    recording_path = tmp_path / "issue_wrong_target_distractor_divergence.h5"
+    n_frames = 20
+    timestamps = np.linspace(0.0, 1.9, n_frames)
+    lateral_error = np.zeros(n_frames, dtype=np.float32)
+    lateral_error[5:15] = 0.88
+    ref_curvature = np.zeros(n_frames, dtype=np.float32)
+    ref_curvature[5:15] = 0.002
+    raw_delta = np.zeros(n_frames, dtype=np.float32)
+    raw_delta[5:15] = 1.30
+    capped_delta = np.zeros(n_frames, dtype=np.float32)
+    capped_delta[5:15] = 0.45
+
+    with h5py.File(recording_path, "w") as f:
+        f.create_dataset("vehicle/timestamps", data=timestamps)
+        f.create_dataset("vehicle/speed", data=np.full(n_frames, 14.4, dtype=np.float32))
+        f.create_dataset(
+            "vehicle/radar_fwd_candidate_present",
+            data=np.ones(n_frames, dtype=np.float32),
+        )
+        f.create_dataset(
+            "vehicle/radar_fwd_reject_reason",
+            data=np.array([b"opposite_direction"] * n_frames, dtype="S32"),
+        )
+        f.create_dataset("control/steering", data=np.zeros(n_frames, dtype=np.float32))
+        f.create_dataset("control/lateral_error", data=lateral_error)
+        f.create_dataset("control/pp_lookahead_distance", data=np.full(n_frames, 7.0, dtype=np.float32))
+        f.create_dataset("control/reference_lookahead_target", data=np.full(n_frames, 10.0, dtype=np.float32))
+        f.create_dataset("control/curve_local_state", data=np.array([b"ENTRY"] * n_frames, dtype="S16"))
+        f.create_dataset("control/curve_intent_state", data=np.array([b"ENTRY"] * n_frames, dtype="S16"))
+        f.create_dataset("control/local_curve_reference_active", data=np.ones(n_frames, dtype=np.int8))
+        f.create_dataset(
+            "control/local_curve_reference_guarded_bounded_active",
+            data=np.ones(n_frames, dtype=np.int8),
+        )
+        f.create_dataset(
+            "control/local_curve_reference_guarded_bounded_reason",
+            data=np.array([b"distractor_opposite_direction"] * n_frames, dtype="S40"),
+        )
+        f.create_dataset("control/local_curve_reference_raw_delta_m", data=raw_delta)
+        f.create_dataset("control/local_curve_reference_capped_delta_m", data=capped_delta)
+        f.create_dataset(
+            "control/local_curve_reference_blend_weight",
+            data=np.full(n_frames, 0.35, dtype=np.float32),
+        )
+        f.create_dataset("control/sync_packet_fallback_active", data=np.zeros(n_frames, dtype=np.int8))
+        f.create_dataset("trajectory/reference_point_curvature", data=ref_curvature)
+        f.create_dataset("vehicle/road_frame_lane_center_offset", data=np.full(n_frames, 0.03, dtype=np.float32))
+        f.create_dataset("perception/confidence", data=np.ones(n_frames, dtype=np.float32))
+        f.create_dataset("perception/num_lanes_detected", data=np.full(n_frames, 2, dtype=np.int8))
+        f.create_dataset("perception/left_lane_line_x", data=np.zeros(n_frames, dtype=np.float32))
+
+    issues = detect_issues(recording_path).get("issues", [])
+    distractor_issues = [
+        i for i in issues if i.get("type") == "wrong_target_distractor_reference_divergence"
+    ]
+    assert len(distractor_issues) == 1
+    assert distractor_issues[0]["root_cause"] == "wrong_target_distractor_reference_divergence"
+    assert distractor_issues[0]["deep_link_target"] == "summary-section-highway-mild-curve"
 
 
 def test_detects_mpc_curvature_bias_cancellation(tmp_path: Path) -> None:
@@ -267,3 +479,211 @@ def test_detects_mpc_gt_cross_track_absolute_coordinate_mismatch(tmp_path: Path)
     ]
     assert len(absolute_issues) == 1
     assert absolute_issues[0]["deep_link_target"] == "summary-section-mpc-gt-cross-track"
+
+
+def test_does_not_flag_absolute_coordinate_mismatch_for_road_frame_control_source(tmp_path: Path) -> None:
+    recording_path = tmp_path / "issue_mpc_gt_absolute_mismatch_road_frame_ok.h5"
+    n_frames = 20
+    timestamps = np.linspace(0.0, 1.9, n_frames)
+    lateral_error = np.zeros(n_frames, dtype=np.float32)
+    lateral_error[5:15] = 0.82
+    gt_at_car = np.zeros(n_frames, dtype=np.float32)
+    gt_at_car[5:15] = 1.20
+    gt_lookahead = np.zeros(n_frames, dtype=np.float32)
+    gt_lookahead[5:15] = 1.10
+    road_offset = np.zeros(n_frames, dtype=np.float32)
+    road_offset[5:15] = 0.03
+
+    with h5py.File(recording_path, "w") as f:
+        f.create_dataset("vehicle/timestamps", data=timestamps)
+        f.create_dataset("vehicle/road_frame_lane_center_offset", data=road_offset)
+        f.create_dataset("control/steering", data=np.zeros(n_frames, dtype=np.float32))
+        f.create_dataset("control/lateral_error", data=lateral_error)
+        f.create_dataset("control/mpc_gt_cross_track_m", data=gt_at_car)
+        f.create_dataset("control/mpc_gt_cross_track_at_car_m", data=gt_at_car)
+        f.create_dataset("control/mpc_gt_cross_track_lookahead_m", data=gt_lookahead)
+        f.create_dataset(
+            "control/mpc_gt_cross_track_control_source_code",
+            data=np.array([b"road_frame_at_car"] * n_frames, dtype="S32"),
+        )
+        f.create_dataset("trajectory/reference_point_curvature", data=np.zeros(n_frames, dtype=np.float32))
+        f.create_dataset("control/curve_intent_state", data=np.array([b"ENTRY"] * n_frames, dtype="S16"))
+        f.create_dataset("control/curve_local_state", data=np.array([b"ENTRY"] * n_frames, dtype="S16"))
+        f.create_dataset("control/sync_packet_fallback_active", data=np.zeros(n_frames, dtype=np.int8))
+        f.create_dataset("perception/confidence", data=np.ones(n_frames, dtype=np.float32))
+        f.create_dataset("perception/num_lanes_detected", data=np.full(n_frames, 2, dtype=np.int8))
+        f.create_dataset("perception/left_lane_line_x", data=np.zeros(n_frames, dtype=np.float32))
+
+    issues = detect_issues(recording_path).get("issues", [])
+    absolute_issues = [
+        i for i in issues if i.get("type") == "mpc_gt_cross_track_absolute_coordinate_mismatch"
+    ]
+    assert absolute_issues == []
+
+
+def test_detects_mpc_gt_cross_track_vehicle_frame_semantic_mismatch(tmp_path: Path) -> None:
+    recording_path = tmp_path / "issue_mpc_gt_vehicle_frame_semantic_mismatch.h5"
+    n_frames = 20
+    timestamps = np.linspace(0.0, 1.9, n_frames)
+    lateral_error = np.zeros(n_frames, dtype=np.float32)
+    lateral_error[5:15] = 0.82
+    gt_vehicle = np.zeros(n_frames, dtype=np.float32)
+    gt_vehicle[5:15] = 0.92
+    gt_road = np.zeros(n_frames, dtype=np.float32)
+    gt_road[5:15] = 0.03
+    gt_lookahead = np.zeros(n_frames, dtype=np.float32)
+    gt_lookahead[5:15] = 1.05
+
+    with h5py.File(recording_path, "w") as f:
+        f.create_dataset("vehicle/timestamps", data=timestamps)
+        f.create_dataset("control/steering", data=np.zeros(n_frames, dtype=np.float32))
+        f.create_dataset("control/lateral_error", data=lateral_error)
+        f.create_dataset("control/mpc_gt_cross_track_m", data=gt_vehicle)
+        f.create_dataset("control/mpc_gt_cross_track_at_car_m", data=gt_vehicle)
+        f.create_dataset("control/mpc_gt_cross_track_vehicle_frame_at_car_m", data=gt_vehicle)
+        f.create_dataset("control/mpc_gt_cross_track_road_frame_at_car_m", data=gt_road)
+        f.create_dataset("control/mpc_gt_cross_track_lookahead_m", data=gt_lookahead)
+        f.create_dataset(
+            "control/mpc_gt_cross_track_control_source_code",
+            data=np.array([b"vehicle_frame_at_car"] * n_frames, dtype="S32"),
+        )
+        f.create_dataset("trajectory/reference_point_curvature", data=np.zeros(n_frames, dtype=np.float32))
+        f.create_dataset("control/curve_intent_state", data=np.array([b"ENTRY"] * n_frames, dtype="S16"))
+        f.create_dataset("control/curve_local_state", data=np.array([b"ENTRY"] * n_frames, dtype="S16"))
+        f.create_dataset("control/sync_packet_fallback_active", data=np.zeros(n_frames, dtype=np.int8))
+        f.create_dataset("perception/confidence", data=np.ones(n_frames, dtype=np.float32))
+        f.create_dataset("perception/num_lanes_detected", data=np.full(n_frames, 2, dtype=np.int8))
+        f.create_dataset("perception/left_lane_line_x", data=np.zeros(n_frames, dtype=np.float32))
+
+    issues = detect_issues(recording_path).get("issues", [])
+    semantic_issues = [
+        i for i in issues if i.get("type") == "mpc_gt_cross_track_vehicle_frame_semantic_mismatch"
+    ]
+    assert len(semantic_issues) == 1
+    assert semantic_issues[0]["deep_link_target"] == "summary-section-mpc-gt-cross-track"
+
+
+def test_detects_wrong_target_straight_reference_drift(tmp_path: Path) -> None:
+    recording_path = tmp_path / "issue_wrong_target_straight_reference_drift.h5"
+    n_frames = 20
+    timestamps = np.linspace(0.0, 1.9, n_frames)
+    lateral_error = np.zeros(n_frames, dtype=np.float32)
+    lateral_error[5:15] = 0.82
+
+    with h5py.File(recording_path, "w") as f:
+        f.create_dataset("vehicle/timestamps", data=timestamps)
+        f.create_dataset("control/steering", data=np.zeros(n_frames, dtype=np.float32))
+        f.create_dataset("control/lateral_error", data=lateral_error)
+        f.create_dataset("control/pp_lookahead_distance", data=np.full(n_frames, 12.0, dtype=np.float32))
+        f.create_dataset(
+            "control/reference_lookahead_target",
+            data=np.full(n_frames, 16.0, dtype=np.float32),
+        )
+        f.create_dataset("trajectory/reference_point_curvature", data=np.zeros(n_frames, dtype=np.float32))
+        f.create_dataset(
+            "control/reference_distractor_guard_active",
+            data=np.concatenate(
+                [
+                    np.zeros(5, dtype=np.int8),
+                    np.ones(10, dtype=np.int8),
+                    np.zeros(5, dtype=np.int8),
+                ]
+            ),
+        )
+        f.create_dataset(
+            "control/reference_distractor_guard_center_error_m",
+            data=np.concatenate(
+                [
+                    np.zeros(5, dtype=np.float32),
+                    np.full(10, 0.82, dtype=np.float32),
+                    np.zeros(5, dtype=np.float32),
+                ]
+            ),
+        )
+        f.create_dataset(
+            "control/reference_distractor_guard_expected_center_x_m",
+            data=np.concatenate(
+                [
+                    np.zeros(5, dtype=np.float32),
+                    np.full(10, 0.10, dtype=np.float32),
+                    np.zeros(5, dtype=np.float32),
+                ]
+            ),
+        )
+        f.create_dataset(
+            "control/reference_distractor_guard_trigger_weight",
+            data=np.concatenate(
+                [
+                    np.zeros(5, dtype=np.float32),
+                    np.full(10, 0.88, dtype=np.float32),
+                    np.zeros(5, dtype=np.float32),
+                ]
+            ),
+        )
+        f.create_dataset("vehicle/road_frame_lane_center_offset", data=np.full(n_frames, 0.03, dtype=np.float32))
+        f.create_dataset("vehicle/radar_fwd_candidate_present", data=np.ones(n_frames, dtype=np.int8))
+        f.create_dataset(
+            "vehicle/radar_fwd_reject_reason",
+            data=np.array([b"wrong_lane"] * n_frames, dtype="S32"),
+        )
+        f.create_dataset(
+            "control/curve_local_state",
+            data=np.array([b"STRAIGHT"] * n_frames, dtype="S16"),
+        )
+        f.create_dataset(
+            "control/curve_intent_state",
+            data=np.array([b"STRAIGHT"] * n_frames, dtype="S16"),
+        )
+        f.create_dataset("control/sync_packet_fallback_active", data=np.zeros(n_frames, dtype=np.int8))
+        f.create_dataset("perception/confidence", data=np.ones(n_frames, dtype=np.float32))
+        f.create_dataset("perception/num_lanes_detected", data=np.full(n_frames, 2, dtype=np.int8))
+        f.create_dataset("perception/left_lane_line_x", data=np.zeros(n_frames, dtype=np.float32))
+
+    issues = detect_issues(recording_path).get("issues", [])
+    drift_issues = [i for i in issues if i.get("type") == "wrong_target_straight_reference_drift"]
+    assert len(drift_issues) == 1
+    assert drift_issues[0]["deep_link_target"] == "summary-section-wrong-target-contract"
+
+
+def test_detects_ego_lane_contract_invalid(tmp_path: Path) -> None:
+    recording_path = tmp_path / "issue_ego_lane_contract_invalid.h5"
+    n_frames = 20
+    timestamps = np.linspace(0.0, 1.9, n_frames)
+
+    with h5py.File(recording_path, "w") as f:
+        f.create_dataset("vehicle/timestamps", data=timestamps)
+        f.create_dataset("control/steering", data=np.zeros(n_frames, dtype=np.float32))
+        f.create_dataset("control/lateral_error", data=np.full(n_frames, 0.2, dtype=np.float32))
+        f.create_dataset("control/pp_lookahead_distance", data=np.full(n_frames, 12.0, dtype=np.float32))
+        f.create_dataset("control/curve_local_state", data=np.array([b"STRAIGHT"] * n_frames, dtype="S16"))
+        f.create_dataset("control/curve_intent_state", data=np.array([b"STRAIGHT"] * n_frames, dtype="S16"))
+        f.create_dataset("control/sync_packet_fallback_active", data=np.zeros(n_frames, dtype=np.int8))
+        f.create_dataset("trajectory/reference_point_curvature", data=np.zeros(n_frames, dtype=np.float32))
+        f.create_dataset("vehicle/road_frame_lane_center_offset", data=np.zeros(n_frames, dtype=np.float32))
+        f.create_dataset("vehicle/radar_fwd_candidate_present", data=np.ones(n_frames, dtype=np.int8))
+        f.create_dataset(
+            "vehicle/radar_fwd_reject_reason",
+            data=np.array([b"wrong_lane"] * n_frames, dtype="S32"),
+        )
+        f.create_dataset("ground_truth/selected_lane_index", data=np.ones(n_frames, dtype=np.int8))
+        f.create_dataset("ground_truth/ego_lane_index", data=np.zeros(n_frames, dtype=np.int8))
+        f.create_dataset("ground_truth/lane_selection_matches_ego", data=np.zeros(n_frames, dtype=np.int8))
+        f.create_dataset(
+            "ground_truth/lane_selection_source",
+            data=np.array([b"selected_lane_override"] * n_frames, dtype="S32"),
+        )
+        f.create_dataset(
+            "ground_truth/selected_lane_cross_track_road_frame_at_car",
+            data=np.full(n_frames, 0.55, dtype=np.float32),
+        )
+        f.create_dataset(
+            "ground_truth/ego_lane_cross_track_road_frame_at_car",
+            data=np.full(n_frames, 0.05, dtype=np.float32),
+        )
+        f.create_dataset("perception/confidence", data=np.ones(n_frames, dtype=np.float32))
+        f.create_dataset("perception/num_lanes_detected", data=np.full(n_frames, 2, dtype=np.int8))
+
+    issues = detect_issues(recording_path).get("issues", [])
+    ego_lane_issues = [i for i in issues if i.get("type") == "ego_lane_contract_invalid"]
+    assert len(ego_lane_issues) == 1
+    assert ego_lane_issues[0]["root_cause"] == "ego_lane_contract_invalid"

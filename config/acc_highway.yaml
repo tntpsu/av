@@ -40,6 +40,94 @@ control:
 
 trajectory:
   target_speed: 15.0
+  local_curve_reference_mode: shadow
+  local_curve_reference_shadow_promote_enabled: true
+  local_curve_reference_shadow_promote_active_use_speed_gate: false
+  local_curve_reference_shadow_promote_speed_on: 13.0
+  local_curve_reference_shadow_promote_speed_full: 15.0
+  local_curve_reference_shadow_promote_curvature_on: 0.0015
+  local_curve_reference_shadow_promote_curvature_full: 0.0020
+  local_curve_reference_shadow_promote_raw_delta_on_m: 0.35
+  local_curve_reference_shadow_promote_raw_delta_full_m: 0.85
+  local_curve_reference_shadow_promote_weight_min: 0.35
+  local_curve_reference_shadow_promote_weight_min_active: 0.25
+  local_curve_reference_shadow_promote_blend_floor_on: 0.15
+  local_curve_reference_shadow_promote_blend_floor_full: 0.35
+  local_curve_reference_preactive_enabled: true
+  local_curve_reference_preactive_speed_on: 12.5
+  local_curve_reference_preactive_speed_full: 14.5
+  local_curve_reference_preactive_curvature_on: 0.0015
+  local_curve_reference_preactive_curvature_full: 0.0020
+  local_curve_reference_preactive_distance_start_m: 55.0
+  local_curve_reference_preactive_distance_end_m: 12.0
+  local_curve_reference_preactive_weight_min: 0.20
+  local_curve_reference_preactive_blend_floor_on: 0.10
+  local_curve_reference_preactive_blend_floor_full: 0.22
+  local_curve_reference_distractor_guard_enabled: true
+  local_curve_reference_distractor_guard_speed_on: 12.5
+  local_curve_reference_distractor_guard_speed_full: 14.5
+  local_curve_reference_distractor_guard_curvature_on: 0.0015
+  local_curve_reference_distractor_guard_curvature_full: 0.0020
+  local_curve_reference_distractor_guard_raw_delta_on_m: 0.90
+  local_curve_reference_distractor_guard_raw_delta_full_m: 2.20
+  local_curve_reference_distractor_guard_active_raw_delta_on_m: 0.60
+  local_curve_reference_distractor_guard_active_raw_delta_full_m: 1.20
+  local_curve_reference_distractor_guard_progress_start: 0.18
+  local_curve_reference_distractor_guard_progress_end: 0.45
+  local_curve_reference_distractor_guard_weight_min: 0.35
+  local_curve_reference_distractor_guard_active_weight_min: 0.20
+  local_curve_reference_distractor_guard_on_frames: 2
+  local_curve_reference_distractor_guard_off_frames: 3
+  local_curve_reference_distractor_guard_min_dwell_frames: 8
+  local_curve_reference_distractor_guard_blend_floor_on: 0.24
+  local_curve_reference_distractor_guard_blend_floor_full: 0.46
+  local_curve_reference_distractor_guard_max_blend_on: 0.24
+  local_curve_reference_distractor_guard_max_blend_full: 0.46
+  local_curve_reference_distractor_guard_active_blend_floor_on: 0.38
+  local_curve_reference_distractor_guard_active_blend_floor_full: 0.62
+  local_curve_reference_distractor_guard_active_max_blend_on: 0.42
+  local_curve_reference_distractor_guard_active_max_blend_full: 0.72
+  local_curve_reference_distractor_guard_active_ignore_progress_gate: true
+  local_curve_reference_distractor_guard_unwind_start: 0.18
+  local_curve_reference_distractor_guard_unwind_end: 0.45
+  local_curve_reference_distractor_guard_active_unwind_start: 0.45
+  local_curve_reference_distractor_guard_active_unwind_end: 0.75
+  reference_distractor_guard_enabled: true
+  reference_distractor_guard_straight_curvature_max: 0.0010
+  reference_distractor_guard_speed_on: 8.5
+  reference_distractor_guard_speed_full: 12.5
+  reference_distractor_guard_center_error_on_m: 0.45
+  reference_distractor_guard_center_error_full_m: 0.90
+  reference_distractor_guard_width_error_on_m: 0.60
+  reference_distractor_guard_width_error_full_m: 1.20
+  reference_distractor_guard_weight_min: 0.35
+  reference_distractor_guard_wrong_target_use_at_car_center: true
+  reference_distractor_guard_wrong_target_center_error_on_m: 0.20
+  reference_distractor_guard_wrong_target_center_error_full_m: 0.45
+  reference_distractor_guard_wrong_target_width_error_on_m: 0.25
+  reference_distractor_guard_wrong_target_width_error_full_m: 0.50
+  reference_distractor_guard_wrong_target_weight_min: 0.20
+  reference_distractor_guard_on_frames: 2
+  reference_distractor_guard_off_frames: 3
+  reference_distractor_guard_min_dwell_frames: 8
+  reference_distractor_guard_blend_on: 0.75
+  reference_distractor_guard_blend_full: 1.00
+  reference_distractor_guard_wrong_target_blend_on: 0.90
+  reference_distractor_guard_wrong_target_blend_full: 1.00
+  reference_distractor_input_guard_enabled: true
+  reference_distractor_input_guard_straight_curvature_max: 0.0010
+  reference_distractor_input_guard_speed_on: 8.5
+  reference_distractor_input_guard_speed_full: 12.5
+  reference_distractor_input_guard_center_error_on_m: 0.20
+  reference_distractor_input_guard_center_error_full_m: 0.45
+  reference_distractor_input_guard_width_error_on_m: 0.25
+  reference_distractor_input_guard_width_error_full_m: 0.50
+  reference_distractor_input_guard_weight_min: 0.20
+  reference_distractor_input_guard_on_frames: 2
+  reference_distractor_input_guard_off_frames: 3
+  reference_distractor_input_guard_min_dwell_frames: 8
+  reference_distractor_input_guard_suppress_lane_coeffs: true
+  reference_distractor_input_guard_seed_center_history: true
   # Disable distance-based EMA curvature smoothing for highway/ACC scenarios.
   # The base config enables EMA with a 12m window. At startup (v≈0) the EMA
   # decays at only 2m/s × 1/30s = 0.067m/frame → time constant ≈ 6s. A lane-
@@ -53,6 +141,16 @@ trajectory:
   curve_phase_commit_min_frames: 3
   curve_local_entry_on_base: 0.35
   curve_local_entry_on_tight: 0.32
+  # H6: keep early mild-curve authority attribution aligned with mpc_highway.
+  curve_preactivation_speed_on: 13.0
+  curve_preactivation_speed_full: 15.0
+  curve_preactivation_curvature_on: 0.0015
+  curve_preactivation_curvature_full: 0.0020
+  curve_preactivation_distance_near_m: 0.0
+  curve_preactivation_distance_far_m: 30.0
+  curve_preactivation_preview_phase_min: 0.25
+  curve_preactivation_active_weight_min: 0.35
+  curve_preactivation_lookahead_floor_m: 10.0
   speed_planner:
     accel_speed_max: 15.0
     decel_speed_max: 15.0
@@ -64,6 +162,14 @@ trajectory:
   speed_governor:
     curve_preview_enabled: false
     curve_cap_use_preview_curvature: false
+    curve_cap_active_mild_enabled: true
+    curve_cap_active_mild_gate_min: 0.40
+    curve_cap_active_mild_speed_on: 13.0
+    curve_cap_active_mild_speed_full: 15.0
+    curve_cap_active_mild_curvature_on: 0.0015
+    curve_cap_active_mild_curvature_full: 0.0020
+    curve_cap_active_mild_entry_reduction_mps: 0.8
+    curve_cap_active_mild_commit_reduction_mps: 1.6
   mpc:
     mpc_q_lat_terminal_scale: 1.0
     mpc_v_max: 17.0
@@ -72,6 +178,15 @@ trajectory:
     mpc_bias_kappa_gain: 0.015
     mpc_bias_max_correction: 0.002
     mpc_bias_min_speed: 5.0
+    # Shared active mild-curve preserve defaults. Keep explicit here and in mpc_highway so
+    # lateral authority does not silently depend on code defaults.
+    bias_active_curve_preserve_dynamic_enabled: true
+    bias_active_curve_preserve_speed_on: 13.0
+    bias_active_curve_preserve_speed_full: 15.0
+    bias_active_curve_preserve_curvature_on: 0.0015
+    bias_active_curve_preserve_curvature_full: 0.0020
+    bias_active_curve_preserve_full_ratio: 1.0
+    bias_active_curve_same_sign_guard_ratio: 0.25
 
 safety:
   max_speed: 17.0

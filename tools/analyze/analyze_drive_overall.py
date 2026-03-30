@@ -1179,6 +1179,7 @@ def _print_summary_report(recording_path: Path, summary: Dict, analyze_to_failur
     speed_intent = summary.get("speed_intent", {})
     run_intent = summary.get("run_intent", {})
     wrong_target_contract = summary.get("wrong_target_contract", {})
+    ego_lane_contract = summary.get("ego_lane_contract", {})
     lateral_owner_contract = summary.get("lateral_owner_contract", {})
     highway_mild_curve_contract = summary.get("highway_mild_curve_contract", {})
     mpc_gt_cross_track_contract = summary.get("mpc_gt_cross_track_contract", {})
@@ -1405,10 +1406,12 @@ def _print_summary_report(recording_path: Path, summary: Dict, analyze_to_failur
         print(
             "   Local Arc Reference: "
             f"mode={local_curve_reference.get('mode') or 'N/A'}, "
+            f"requested={local_curve_reference.get('requested_mode') or 'N/A'}, "
             f"source={local_curve_reference.get('source_mode') or 'N/A'}, "
             f"fallbackReason={local_curve_reference.get('fallback_reason_mode') or 'N/A'}, "
             f"activeRate={(float(local_curve_reference.get('active_rate')) if local_curve_reference.get('active_rate') is not None else float('nan')):.1f}%, "
             f"fallbackRate={(float(local_curve_reference.get('fallback_active_rate')) if local_curve_reference.get('fallback_active_rate') is not None else float('nan')):.1f}%, "
+            f"shadowPromoteRate={(float(local_curve_reference.get('shadow_promotion_active_rate')) if local_curve_reference.get('shadow_promotion_active_rate') is not None else float('nan')):.1f}%, "
             f"plannerDeltaP50={(float(local_curve_reference.get('planner_delta_p50_m')) if local_curve_reference.get('planner_delta_p50_m') is not None else float('nan')):.2f} m"
         )
     if highway_mild_curve_contract.get("availability") == "available":
@@ -1419,6 +1422,8 @@ def _print_summary_report(recording_path: Path, summary: Dict, analyze_to_failur
             f"recognizerInactive={(float(highway_mild_curve_contract.get('curve_recognition_inactive_on_high_error_rate')) if highway_mild_curve_contract.get('curve_recognition_inactive_on_high_error_rate') is not None else float('nan')):.1f}%, "
             f"longLook={(float(highway_mild_curve_contract.get('long_lookahead_on_high_error_rate')) if highway_mild_curve_contract.get('long_lookahead_on_high_error_rate') is not None else float('nan')):.1f}%, "
             f"smallOffset={(float(highway_mild_curve_contract.get('reference_geometry_mismatch_on_high_error_rate')) if highway_mild_curve_contract.get('reference_geometry_mismatch_on_high_error_rate') is not None else float('nan')):.1f}%, "
+            f"preactiveMissing={(float(highway_mild_curve_contract.get('preactivation_authority_missing_on_high_error_rate')) if highway_mild_curve_contract.get('preactivation_authority_missing_on_high_error_rate') is not None else float('nan')):.1f}%, "
+            f"shadowInsufficient={(float(highway_mild_curve_contract.get('active_state_shadow_insufficient_on_high_error_rate')) if highway_mild_curve_contract.get('active_state_shadow_insufficient_on_high_error_rate') is not None else float('nan')):.1f}%, "
             f"blocker={str(highway_mild_curve_contract.get('curve_activation_blocker_mode_on_underactivated') or highway_mild_curve_contract.get('curve_activation_blocker_mode_on_high_error') or 'N/A')}, "
             f"rearmCycle={(float(highway_mild_curve_contract.get('rearm_cycle_on_high_error_rate')) if highway_mild_curve_contract.get('rearm_cycle_on_high_error_rate') is not None else float('nan')):.1f}%, "
             f"mpcBiasCancel={(float(highway_mild_curve_contract.get('mpc_bias_cancellation_on_high_error_rate')) if highway_mild_curve_contract.get('mpc_bias_cancellation_on_high_error_rate') is not None else float('nan')):.1f}%"
@@ -1930,6 +1935,40 @@ def _print_summary_report(recording_path: Path, summary: Dict, analyze_to_failur
             "   Quality Reference Valid: "
             f"{'YES' if wrong_target_contract.get('quality_reference_valid') else 'NO'}"
         )
+        print(
+            "   Reference Divergence / RawΔ / BlendWt P50: "
+            f"{'YES' if wrong_target_contract.get('reference_divergence_issue_detected') else 'NO'} / "
+            f"{float(wrong_target_contract.get('reference_divergence_raw_delta_p50_m') or 0.0):.3f} m / "
+            f"{float(wrong_target_contract.get('reference_divergence_blend_weight_p50') or 0.0):.3f}"
+        )
+        print(
+            "   Straight Drift / CenterErr P50 / ExpectedCenter P50 / TriggerWt P50: "
+            f"{'YES' if wrong_target_contract.get('straight_reference_drift_issue_detected') else 'NO'} / "
+            f"{float(wrong_target_contract.get('straight_reference_drift_center_error_p50_m') or 0.0):.3f} m / "
+            f"{float(wrong_target_contract.get('straight_reference_drift_expected_center_x_p50_m') or 0.0):.3f} m / "
+            f"{float(wrong_target_contract.get('straight_reference_drift_trigger_weight_p50') or 0.0):.3f}"
+        )
+        print(
+            "   Input Guard Active / SuppressCoeff / CenterErr P50 / WidthErr P50 / TriggerWt P50: "
+            f"{float(wrong_target_contract.get('input_guard_active_rate_pct') or 0.0):.1f}% / "
+            f"{float(wrong_target_contract.get('input_guard_suppressed_lane_coeffs_rate_pct') or 0.0):.1f}% / "
+            f"{float(wrong_target_contract.get('input_guard_center_error_p50_m') or 0.0):.3f} m / "
+            f"{float(wrong_target_contract.get('input_guard_width_error_p50_m') or 0.0):.3f} m / "
+            f"{float(wrong_target_contract.get('input_guard_trigger_weight_p50') or 0.0):.3f}"
+        )
+        if ego_lane_contract.get("availability") == "available":
+            print(
+                "   Ego Lane / Selected Lane / Source / MatchesEgo: "
+                f"{ego_lane_contract.get('ego_lane_index_mode') or 'unknown'} / "
+                f"{ego_lane_contract.get('selected_lane_index_mode') or 'unknown'} / "
+                f"{ego_lane_contract.get('lane_selection_source_mode') or 'unknown'} / "
+                f"{float(ego_lane_contract.get('selected_matches_ego_rate_pct') or 0.0):.1f}%"
+            )
+            print(
+                "   Ego-Lane Contract / |Selected-Ego Δ| P50: "
+                f"{'YES' if ego_lane_contract.get('issue_detected') else 'NO'} / "
+                f"{float(ego_lane_contract.get('selected_vs_ego_cross_track_delta_p50_m') or 0.0):.3f} m"
+            )
     else:
         print("   Wrong-Target Contract: N/A")
     print()
@@ -1942,10 +1981,21 @@ def _print_summary_report(recording_path: Path, summary: Dict, analyze_to_failur
             f"{'YES' if highway_mild_curve_contract.get('issue_detected') else 'NO'}"
         )
         print(
-            "   High-Error / Mild-Curve / Underactivated: "
+            "   Scenario Family: "
+            f"{str(highway_mild_curve_contract.get('scenario_family_mode') or 'unknown')}"
+        )
+        print(
+            "   High-Error / Mild-Curve / Underactivated / Active-State: "
             f"{int(highway_mild_curve_contract.get('high_error_frame_count') or 0)} frames / "
             f"{float(highway_mild_curve_contract.get('mild_curve_present_on_high_error_rate') or 0.0):.1f}% / "
-            f"{float(highway_mild_curve_contract.get('underactivated_tracking_on_high_error_rate') or 0.0):.1f}%"
+            f"{float(highway_mild_curve_contract.get('underactivated_tracking_on_high_error_rate') or 0.0):.1f}% / "
+            f"{float(highway_mild_curve_contract.get('active_state_tracking_failure_on_high_error_rate') or 0.0):.1f}%"
+        )
+        print(
+            "   Shadow Insufficient / Shadow Promotion / Requested Mode: "
+            f"{float(highway_mild_curve_contract.get('active_state_shadow_insufficient_on_high_error_rate') or 0.0):.1f}% / "
+            f"{float(highway_mild_curve_contract.get('active_state_shadow_promotion_active_on_high_error_rate') or 0.0):.1f}% / "
+            f"{highway_mild_curve_contract.get('local_curve_reference_requested_mode_on_active_state_failure') or 'N/A'}"
         )
         print(
             "   Recognition Inactive / Long Lookahead / Small Offset: "
@@ -2005,6 +2055,104 @@ def _print_summary_report(recording_path: Path, summary: Dict, analyze_to_failur
             f"{float(highway_mild_curve_contract.get('rearm_cycle_on_high_error_rate') or 0.0):.1f}% / "
             f"{float(highway_mild_curve_contract.get('mpc_bias_cancellation_on_high_error_rate') or 0.0):.1f}%"
         )
+        pre_weight_stats = highway_mild_curve_contract.get("curve_preactivation_authority_weight") or {}
+        pre_preview_stats = highway_mild_curve_contract.get("curve_preactivation_preview_weight") or {}
+        pre_speed_stats = highway_mild_curve_contract.get("curve_preactivation_speed_weight") or {}
+        pre_curv_stats = highway_mild_curve_contract.get("curve_preactivation_curvature_weight") or {}
+        pre_dist_stats = highway_mild_curve_contract.get("curve_preactivation_distance_weight") or {}
+        pre_kappa_floor_stats = highway_mild_curve_contract.get("curve_preactivation_kappa_floor") or {}
+        pre_lookahead_stats = highway_mild_curve_contract.get("curve_preactivation_lookahead_target") or {}
+        pre_speed_cap_stats = highway_mild_curve_contract.get("curve_preactivation_speed_cap_target") or {}
+        print(
+            "   Preactivation Candidate / Active / Missing: "
+            f"{float(highway_mild_curve_contract.get('preactivation_candidate_on_high_error_rate') or 0.0):.1f}% / "
+            f"{float(highway_mild_curve_contract.get('preactivation_authority_active_on_high_error_rate') or 0.0):.1f}% / "
+            f"{float(highway_mild_curve_contract.get('preactivation_authority_missing_on_high_error_rate') or 0.0):.1f}%"
+        )
+        print(
+            "   Preactivation Blocker / Weight / Preview / Speed / Curvature / Distance (P50): "
+            f"{str(highway_mild_curve_contract.get('curve_preactivation_blocker_mode_on_high_error') or 'N/A')} / "
+            f"{float(pre_weight_stats.get('p50') or 0.0):.3f} / "
+            f"{float(pre_preview_stats.get('p50') or 0.0):.3f} / "
+            f"{float(pre_speed_stats.get('p50') or 0.0):.3f} / "
+            f"{float(pre_curv_stats.get('p50') or 0.0):.3f} / "
+            f"{float(pre_dist_stats.get('p50') or 0.0):.3f}"
+        )
+        print(
+            "   Preactivation κ Floor / Lookahead / Speed Cap (P50): "
+            f"{float(pre_kappa_floor_stats.get('p50') or 0.0):.4f} / "
+            f"{float(pre_lookahead_stats.get('p50') or 0.0):.2f} / "
+            f"{float(pre_speed_cap_stats.get('p50') or 0.0):.2f}"
+        )
+        active_preserve_stats = highway_mild_curve_contract.get(
+            "mpc_kappa_active_curve_preserve_weight_active_state"
+        ) or {}
+        active_cap_speed_stats = highway_mild_curve_contract.get(
+            "speed_governor_curve_cap_speed_active_state_m"
+        ) or {}
+        active_cap_margin_stats = highway_mild_curve_contract.get(
+            "speed_governor_curve_cap_margin_active_state_mps"
+        ) or {}
+        guarded_weight_stats = highway_mild_curve_contract.get(
+            "local_curve_reference_guarded_bounded_trigger_weight"
+        ) or {}
+        guarded_blend_floor_stats = highway_mild_curve_contract.get(
+            "local_curve_reference_guarded_bounded_blend_floor"
+        ) or {}
+        authority_weight_stats = highway_mild_curve_contract.get(
+            "mpc_kappa_active_mild_curve_authority_weight_active_state"
+        ) or {}
+        authority_ratio_stats = highway_mild_curve_contract.get(
+            "mpc_kappa_active_mild_curve_authority_ratio_active_state"
+        ) or {}
+        authority_speed_stats = highway_mild_curve_contract.get(
+            "mpc_kappa_active_mild_curve_authority_speed_weight"
+        ) or {}
+        authority_curvature_stats = highway_mild_curve_contract.get(
+            "mpc_kappa_active_mild_curve_authority_curvature_weight"
+        ) or {}
+        authority_gate_stats = highway_mild_curve_contract.get(
+            "mpc_kappa_active_mild_curve_authority_gate_weight"
+        ) or {}
+        print(
+            "   Active-State Failure / Preserve Low / Cap Ineffective: "
+            f"{float(highway_mild_curve_contract.get('active_state_tracking_failure_on_high_error_rate') or 0.0):.1f}% / "
+            f"{float(highway_mild_curve_contract.get('active_state_preserve_weight_low_on_high_error_rate') or 0.0):.1f}% / "
+            f"{float(highway_mild_curve_contract.get('active_state_curve_cap_ineffective_on_high_error_rate') or 0.0):.1f}%"
+        )
+        print(
+            "   Active Authority Active / Speed-Gated / Reason: "
+            f"{float(highway_mild_curve_contract.get('active_mild_curve_authority_active_on_high_error_rate') or 0.0):.1f}% / "
+            f"{float(highway_mild_curve_contract.get('active_mild_curve_authority_speed_gated_on_high_error_rate') or 0.0):.1f}% / "
+            f"{str(highway_mild_curve_contract.get('mpc_active_mild_curve_authority_reason_mode_on_high_error') or 'N/A')}"
+        )
+        print(
+            "   Wrong-Target Divergence / Guarded Active / Guarded Reason: "
+            f"{float(highway_mild_curve_contract.get('wrong_target_distractor_reference_divergence_on_high_error_rate') or 0.0):.1f}% / "
+            f"{float(highway_mild_curve_contract.get('distractor_guarded_bounded_active_on_high_error_rate') or 0.0):.1f}% / "
+            f"{str(highway_mild_curve_contract.get('local_curve_reference_guarded_bounded_reason_mode_on_high_error') or 'N/A')}"
+        )
+        print(
+            "   Active-State Local / Cap Reason / PreserveWt / Cap Speed / Cap Margin (P50): "
+            f"{str(highway_mild_curve_contract.get('curve_local_state_mode_on_active_state_failure') or 'N/A')} / "
+            f"{str(highway_mild_curve_contract.get('speed_governor_curve_cap_reason_mode_on_active_state_failure') or 'N/A')} / "
+            f"{float(active_preserve_stats.get('p50') or 0.0):.3f} / "
+            f"{float(active_cap_speed_stats.get('p50') or 0.0):.2f} / "
+            f"{float(active_cap_margin_stats.get('p50') or 0.0):.2f}"
+        )
+        print(
+            "   Guarded TriggerWt / Guarded Blend Floor (P50): "
+            f"{float(guarded_weight_stats.get('p50') or 0.0):.3f} / "
+            f"{float(guarded_blend_floor_stats.get('p50') or 0.0):.3f}"
+        )
+        print(
+            "   Active Authority Weight / Ratio / Speed / Curvature / Gate (P50): "
+            f"{float(authority_weight_stats.get('p50') or 0.0):.3f} / "
+            f"{float(authority_ratio_stats.get('p50') or 0.0):.3f} / "
+            f"{float(authority_speed_stats.get('p50') or 0.0):.3f} / "
+            f"{float(authority_curvature_stats.get('p50') or 0.0):.3f} / "
+            f"{float(authority_gate_stats.get('p50') or 0.0):.3f}"
+        )
         print(
             "   Sustain Raw / Dynamic Sustain / Path / κ Ratio / Bias (P50): "
             f"{float(sustain_stats.get('p50') or 0.0):.3f} / "
@@ -2029,22 +2177,24 @@ def _print_summary_report(recording_path: Path, summary: Dict, analyze_to_failur
             f"{str(mpc_gt_cross_track_contract.get('issue_mode') or 'none')}"
         )
         print(
-            "   High-Error Frames / Semantic Mismatch: "
+            "   High-Error Frames / Legacy Semantic Mismatch: "
             f"{int(mpc_gt_cross_track_contract.get('high_error_frame_count') or 0)} / "
             f"{float(mpc_gt_cross_track_contract.get('semantic_mismatch_on_high_error_rate') or 0.0):.1f}%"
         )
         print(
-            "   Absolute Mismatch / Straight-Mismatch / Source Mode: "
+            "   Vehicle-Frame Mismatch / Absolute Mismatch / Straight-Mismatch / Control Source: "
+            f"{float(mpc_gt_cross_track_contract.get('vehicle_frame_semantic_mismatch_on_high_error_rate') or 0.0):.1f}% / "
             f"{float(mpc_gt_cross_track_contract.get('absolute_coordinate_mismatch_on_high_error_rate') or 0.0):.1f}% / "
             f"{float(mpc_gt_cross_track_contract.get('semantic_mismatch_on_straight_high_error_rate') or 0.0):.1f}% / "
-            f"{str(mpc_gt_cross_track_contract.get('mpc_gt_cross_track_source_mode_on_high_error') or 'N/A')}"
+            f"{str(mpc_gt_cross_track_contract.get('mpc_gt_cross_track_control_source_mode_on_high_error') or 'N/A')}"
         )
         print(
-            "   Small At-Car / Large Lookahead / Large At-Car / Small Road Offset: "
+            "   Small Road-Frame / Large Vehicle-Frame / Small At-Car / Large Lookahead / Large At-Car: "
+            f"{float(mpc_gt_cross_track_contract.get('small_road_frame_cross_track_on_high_error_rate') or 0.0):.1f}% / "
+            f"{float(mpc_gt_cross_track_contract.get('large_vehicle_frame_cross_track_on_high_error_rate') or 0.0):.1f}% / "
             f"{float(mpc_gt_cross_track_contract.get('small_at_car_cross_track_on_high_error_rate') or 0.0):.1f}% / "
             f"{float(mpc_gt_cross_track_contract.get('large_lookahead_cross_track_on_high_error_rate') or 0.0):.1f}% / "
-            f"{float(mpc_gt_cross_track_contract.get('large_at_car_cross_track_on_high_error_rate') or 0.0):.1f}% / "
-            f"{float(mpc_gt_cross_track_contract.get('small_road_offset_on_high_error_rate') or 0.0):.1f}%"
+            f"{float(mpc_gt_cross_track_contract.get('large_at_car_cross_track_on_high_error_rate') or 0.0):.1f}%"
         )
         print(
             "   Perception / Transport Overlap: "
@@ -2054,20 +2204,24 @@ def _print_summary_report(recording_path: Path, summary: Dict, analyze_to_failur
         lat_stats = mpc_gt_cross_track_contract.get("control_lateral_error_abs_m") or {}
         src_stats = mpc_gt_cross_track_contract.get("mpc_gt_cross_track_abs_m") or {}
         at_car_stats = mpc_gt_cross_track_contract.get("mpc_gt_cross_track_at_car_abs_m") or {}
+        road_frame_stats = mpc_gt_cross_track_contract.get("mpc_gt_cross_track_road_frame_at_car_abs_m") or {}
+        vehicle_frame_stats = mpc_gt_cross_track_contract.get("mpc_gt_cross_track_vehicle_frame_at_car_abs_m") or {}
         lookahead_stats = mpc_gt_cross_track_contract.get("mpc_gt_cross_track_lookahead_abs_m") or {}
         delta_stats = mpc_gt_cross_track_contract.get("gt_cross_track_delta_abs_m") or {}
-        road_offset_stats = mpc_gt_cross_track_contract.get("road_frame_lane_center_offset_abs_m") or {}
+        vehicle_vs_road_stats = mpc_gt_cross_track_contract.get("vehicle_vs_road_frame_cross_track_delta_abs_m") or {}
         print(
-            "   Lateral Error / Used GT / At-Car GT / Lookahead GT (P50-P95): "
+            "   Lateral Error / Used GT / Road-Frame GT / Vehicle-Frame GT / Lookahead GT (P50-P95): "
             f"{float(lat_stats.get('p50') or 0.0):.3f}-{float(lat_stats.get('p95') or 0.0):.3f} / "
             f"{float(src_stats.get('p50') or 0.0):.3f}-{float(src_stats.get('p95') or 0.0):.3f} / "
+            f"{float(road_frame_stats.get('p50') or 0.0):.3f}-{float(road_frame_stats.get('p95') or 0.0):.3f} / "
+            f"{float(vehicle_frame_stats.get('p50') or 0.0):.3f}-{float(vehicle_frame_stats.get('p95') or 0.0):.3f} / "
             f"{float(at_car_stats.get('p50') or 0.0):.3f}-{float(at_car_stats.get('p95') or 0.0):.3f} / "
             f"{float(lookahead_stats.get('p50') or 0.0):.3f}-{float(lookahead_stats.get('p95') or 0.0):.3f}"
         )
         print(
-            "   GT Delta / Road Offset / Curve Local State Mode: "
+            "   GT Delta / Vehicle-vs-Road Delta / Curve Local State Mode: "
             f"{float(delta_stats.get('p50') or 0.0):.3f}-{float(delta_stats.get('p95') or 0.0):.3f} / "
-            f"{float(road_offset_stats.get('p50') or 0.0):.3f}-{float(road_offset_stats.get('p95') or 0.0):.3f} / "
+            f"{float(vehicle_vs_road_stats.get('p50') or 0.0):.3f}-{float(vehicle_vs_road_stats.get('p95') or 0.0):.3f} / "
             f"{str(mpc_gt_cross_track_contract.get('curve_local_state_mode_on_high_error') or 'N/A')}"
         )
     else:

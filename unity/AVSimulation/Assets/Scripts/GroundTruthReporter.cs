@@ -7,6 +7,9 @@ using UnityEngine;
 /// </summary>
 public class GroundTruthReporter : MonoBehaviour
 {
+    private const int LeftLaneIndex = 0;
+    private const int RightLaneIndex = 1;
+
     [Header("Lane Configuration (Straight Road Only)")]
     [Tooltip("Left lane line X position in world coordinates (straight road only)")]
     public float leftLaneXWorld = -3.6f;  // Left edge of road/lane
@@ -18,8 +21,8 @@ public class GroundTruthReporter : MonoBehaviour
     public float laneWidth = 7.2f;  // Default single-lane width (straight-road only)
     
     [Header("Current Lane")]
-    [Tooltip("Which lane the car is in (0=left, 1=right)")]
-    public int currentLane = 1; // Right lane by default
+    [Tooltip("Selected lane index for GT/debug outputs (0=left, 1=right). This is not an authoritative ego-lane contract.")]
+    public int currentLane = RightLaneIndex; // Right lane by default
     
     [Header("Road Detection")]
     [Tooltip("Auto-detect RoadGenerator for dynamic ground truth (oval track)")]
@@ -54,6 +57,7 @@ public class GroundTruthReporter : MonoBehaviour
     
     void Start()
     {
+        currentLane = NormalizeLaneIndex(currentLane);
         commandLineCenterLineAsLeftLane = GetCommandLineBool("--gt-centerline-as-left-lane");
         if (commandLineCenterLineAsLeftLane.HasValue)
         {
@@ -286,6 +290,53 @@ public class GroundTruthReporter : MonoBehaviour
             Debug.Log($"GroundTruthReporter: Auto-detect disabled - using STATIC ground truth. " +
                      $"leftLaneXWorld={leftLaneXWorld}m, rightLaneXWorld={rightLaneXWorld}m, laneWidth={laneWidth}m");
         }
+    }
+
+    private int NormalizeLaneIndex(int laneIndex)
+    {
+        return laneIndex <= 0 ? LeftLaneIndex : RightLaneIndex;
+    }
+
+    public int GetConfiguredEgoLaneIndex()
+    {
+        return startInRightLane ? RightLaneIndex : LeftLaneIndex;
+    }
+
+    public int GetSelectedLaneIndex()
+    {
+        return NormalizeLaneIndex(currentLane);
+    }
+
+    public bool SelectedLaneMatchesEgoLane()
+    {
+        return GetSelectedLaneIndex() == GetConfiguredEgoLaneIndex();
+    }
+
+    public string GetLaneSelectionSource()
+    {
+        return SelectedLaneMatchesEgoLane() ? "ego_start_lane" : "selected_lane_override";
+    }
+
+    public string GetLaneSelectionReason()
+    {
+        return SelectedLaneMatchesEgoLane()
+            ? (startInRightLane ? "start_in_right_lane" : "start_in_left_lane")
+            : "current_lane_override";
+    }
+
+    public float GetEgoLaneCenterAtCar()
+    {
+        return GetLaneCenterAtCar(GetConfiguredEgoLaneIndex());
+    }
+
+    public float GetEgoLaneCenterAtLookahead(float lookaheadDistance = 8.0f)
+    {
+        return GetLaneCenterAtLookahead(lookaheadDistance, GetConfiguredEgoLaneIndex());
+    }
+
+    public float GetEgoLaneCenterOffsetRoadFrame()
+    {
+        return GetLaneCenterOffsetForLane(GetConfiguredEgoLaneIndex());
     }
 
     public static bool? ParseCommandLineBool(string[] args, string name)

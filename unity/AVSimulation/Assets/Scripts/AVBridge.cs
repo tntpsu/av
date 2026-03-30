@@ -1190,17 +1190,26 @@ private float? lastCarT = null;
             var (leftLaneLineX, rightLaneLineX) = groundTruthReporter.GetLanePositionsAtLookahead(lookaheadDistance);
             currentState.groundTruthLeftLaneLineX = leftLaneLineX;
             currentState.groundTruthRightLaneLineX = rightLaneLineX;
-            // Export both lookahead and at-car selected-lane-center ground truth.
-            // Lookahead remains for debug/perception-alignment; at-car is the control signal.
+            // Export both lookahead and at-car selected-lane-center geometry.
+            // These remain useful for debug/perception alignment, but the control
+            // GT cross-track should come from the dedicated road-frame field below.
+            int selectedLaneIndex = groundTruthReporter.GetSelectedLaneIndex();
+            int egoLaneIndex = groundTruthReporter.GetConfiguredEgoLaneIndex();
             float laneCenterAtLookahead = groundTruthReporter.GetLaneCenterAtLookahead(
                 lookaheadDistance,
-                groundTruthReporter.currentLane
+                selectedLaneIndex
             );
             currentState.groundTruthLaneCenterX = laneCenterAtLookahead;
             currentState.groundTruthLaneCenterXLookahead = laneCenterAtLookahead;
             currentState.groundTruthLaneCenterXAtCar = groundTruthReporter.GetLaneCenterAtCar(
-                groundTruthReporter.currentLane
+                selectedLaneIndex
             );
+            currentState.groundTruthSelectedLaneIndex = selectedLaneIndex;
+            currentState.groundTruthEgoLaneIndex = egoLaneIndex;
+            currentState.groundTruthLaneSelectionSource = groundTruthReporter.GetLaneSelectionSource();
+            currentState.groundTruthLaneSelectionReason = groundTruthReporter.GetLaneSelectionReason();
+            currentState.groundTruthLaneSelectionMatchesEgo = groundTruthReporter.SelectedLaneMatchesEgoLane();
+            currentState.groundTruthEgoLaneCenterXAtCar = groundTruthReporter.GetEgoLaneCenterAtCar();
             
             // NEW: Add path heading for path-based steering
             float desiredHeading = groundTruthReporter.GetDesiredHeading(5.0f);
@@ -1357,6 +1366,16 @@ private float? lastCarT = null;
             currentState.carHeadingDeg = carHeadingDeg;
             currentState.headingDeltaDeg = headingDeltaDeg;
             currentState.roadFrameLateralOffset = roadLateralOffset;
+            float selectedLaneCenterOffsetRoadFrame = groundTruthReporter.GetLaneCenterOffsetForLane(
+                selectedLaneIndex
+            );
+            currentState.groundTruthSelectedLaneCenterOffsetRoadFrame = selectedLaneCenterOffsetRoadFrame;
+            currentState.groundTruthSelectedLaneCrossTrackRoadFrameAtCar =
+                roadLateralOffset - selectedLaneCenterOffsetRoadFrame;
+            float egoLaneCenterOffsetRoadFrame = groundTruthReporter.GetEgoLaneCenterOffsetRoadFrame();
+            currentState.groundTruthEgoLaneCenterOffsetRoadFrame = egoLaneCenterOffsetRoadFrame;
+            currentState.groundTruthEgoLaneCrossTrackRoadFrameAtCar =
+                roadLateralOffset - egoLaneCenterOffsetRoadFrame;
             float headingRad = roadHeadingDeg * Mathf.Deg2Rad;
             Vector3 roadRight = new Vector3(Mathf.Cos(headingRad), 0f, -Mathf.Sin(headingRad));
             float laneCenterOffset = Vector3.Dot(roadCenterAtLookahead - roadCenterAtCar, roadRight);

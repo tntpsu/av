@@ -337,8 +337,13 @@ def build_local_curve_reference(
 
     result: dict[str, float | bool | str] = {
         "local_curve_reference_mode": mode,
+        "local_curve_reference_requested_mode": mode,
         "local_curve_reference_active": False,
         "local_curve_reference_shadow_only": mode == LOCAL_CURVE_REFERENCE_MODE_SHADOW,
+        "local_curve_reference_shadow_promotion_active": False,
+        "local_curve_reference_shadow_promotion_weight": 0.0,
+        "local_curve_reference_shadow_promotion_blend_floor": 0.0,
+        "local_curve_reference_shadow_promotion_reason": "",
         "local_curve_reference_valid": False,
         "local_curve_reference_source": "inactive",
         "local_curve_reference_fallback_active": False,
@@ -362,9 +367,69 @@ def build_local_curve_reference(
         return result
 
     state = str(curve_local_state or "").strip().upper()
+    preactive_mode = False
+    preactive_weight = 0.0
     if state not in {"ENTRY", "COMMIT"}:
-        result["local_curve_reference_fallback_reason"] = "state_inactive"
-        return result
+        if not bool(config.get("local_curve_reference_preactive_enabled", False)):
+            result["local_curve_reference_fallback_reason"] = "state_inactive"
+            return result
+        preactive_speed_weight = _normalize_curve_anticipation_term(
+            value=max(0.0, float(current_speed_mps)),
+            value_min=float(
+                config.get("local_curve_reference_preactive_speed_on", 12.5) or 12.5
+            ),
+            value_max=float(
+                config.get("local_curve_reference_preactive_speed_full", 14.5) or 14.5
+            ),
+        )
+        preview_metric = 0.0
+        for candidate in (
+            preview_curvature_abs,
+            road_curvature_abs,
+            base_reference_point.get("curvature"),
+        ):
+            try:
+                preview_metric = abs(float(candidate or 0.0))
+            except (TypeError, ValueError):
+                preview_metric = 0.0
+            if math.isfinite(preview_metric) and preview_metric > 1e-6:
+                break
+        preactive_curvature_weight = _normalize_curve_anticipation_term(
+            value=preview_metric,
+            value_min=float(
+                config.get("local_curve_reference_preactive_curvature_on", 0.0015)
+                or 0.0015
+            ),
+            value_max=float(
+                config.get("local_curve_reference_preactive_curvature_full", 0.0020)
+                or 0.0020
+            ),
+        )
+        preactive_distance_weight = _compute_reverse_distance_progress(
+            distance_to_curve_start_m,
+            start_m=float(
+                config.get("local_curve_reference_preactive_distance_start_m", 50.0)
+                or 50.0
+            ),
+            end_m=float(
+                config.get("local_curve_reference_preactive_distance_end_m", 10.0)
+                or 10.0
+            ),
+        )
+        preactive_weight = min(
+            preactive_speed_weight,
+            preactive_curvature_weight,
+            preactive_distance_weight,
+        )
+        result["local_curve_reference_shadow_promotion_weight"] = float(preactive_weight)
+        preactive_min = float(
+            config.get("local_curve_reference_preactive_weight_min", 0.30) or 0.30
+        )
+        if preactive_weight < preactive_min:
+            result["local_curve_reference_fallback_reason"] = "state_inactive"
+            return result
+        state = "PREACTIVE"
+        preactive_mode = True
 
     distance_table = _parse_local_curve_reference_distance_table(config)
     if not distance_table:
@@ -492,6 +557,8 @@ def build_local_curve_reference(
     entry_progress = _progress_between(phase, entry_phase_on, entry_phase_full)
     commit_progress = _progress_between(phase, commit_phase_on, commit_phase_full)
     progress_weight = entry_progress if state == "ENTRY" else max(entry_progress, commit_progress)
+    if state == "PREACTIVE":
+        progress_weight = 0.0
 
     unwind_weight = 0.0
     if current_curve_progress_ratio is not None:
@@ -530,8 +597,112 @@ def build_local_curve_reference(
     # -- Bounded correction mode: entry-only gating + safety cap --
     raw_delta_m = math.hypot(arc_x - base_x, arc_y - base_y)
     cap_active = False
+    requested_mode = mode
+    effective_mode = mode
 
-    if mode == LOCAL_CURVE_REFERENCE_MODE_BOUNDED:
+    if preactive_mode and requested_mode == LOCAL_CURVE_REFERENCE_MODE_SHADOW:
+        blend_floor_on = float(
+            config.get("local_curve_reference_preactive_blend_floor_on", 0.10) or 0.10
+        )
+        blend_floor_full = float(
+            config.get("local_curve_reference_preactive_blend_floor_full", 0.22) or 0.22
+        )
+        blend_floor_on = max(0.0, min(1.0, blend_floor_on))
+        blend_floor_full = max(blend_floor_on, min(1.0, blend_floor_full))
+        promoted_blend_floor = _lerp_clamped(
+            blend_floor_on,
+            blend_floor_full,
+            preactive_weight,
+        )
+        blend_weight = max(blend_weight, promoted_blend_floor)
+        effective_mode = LOCAL_CURVE_REFERENCE_MODE_BOUNDED
+        result["local_curve_reference_mode"] = effective_mode
+        result["local_curve_reference_shadow_only"] = False
+        result["local_curve_reference_shadow_promotion_active"] = True
+        result["local_curve_reference_shadow_promotion_blend_floor"] = float(
+            promoted_blend_floor
+        )
+        result["local_curve_reference_shadow_promotion_reason"] = (
+            "preactive_speed_curvature_distance"
+        )
+    elif requested_mode == LOCAL_CURVE_REFERENCE_MODE_SHADOW and bool(
+        config.get("local_curve_reference_shadow_promote_enabled", False)
+    ):
+        speed_weight = _normalize_curve_anticipation_term(
+            value=max(0.0, float(current_speed_mps)),
+            value_min=float(
+                config.get("local_curve_reference_shadow_promote_speed_on", 13.0) or 13.0
+            ),
+            value_max=float(
+                config.get("local_curve_reference_shadow_promote_speed_full", 15.0) or 15.0
+            ),
+        )
+        if state in {"ENTRY", "COMMIT"} and not bool(
+            config.get("local_curve_reference_shadow_promote_active_use_speed_gate", False)
+        ):
+            speed_weight = 1.0
+        curvature_weight_promo = _normalize_curve_anticipation_term(
+            value=curvature_abs,
+            value_min=float(
+                config.get("local_curve_reference_shadow_promote_curvature_on", 0.0015)
+                or 0.0015
+            ),
+            value_max=float(
+                config.get("local_curve_reference_shadow_promote_curvature_full", 0.0020)
+                or 0.0020
+            ),
+        )
+        raw_delta_weight = _normalize_curve_anticipation_term(
+            value=raw_delta_m,
+            value_min=float(
+                config.get("local_curve_reference_shadow_promote_raw_delta_on_m", 0.35)
+                or 0.35
+            ),
+            value_max=float(
+                config.get("local_curve_reference_shadow_promote_raw_delta_full_m", 0.85)
+                or 0.85
+            ),
+        )
+        promotion_weight = min(speed_weight, curvature_weight_promo, raw_delta_weight)
+        promotion_active_min = float(
+            config.get(
+                "local_curve_reference_shadow_promote_weight_min_active",
+                config.get("local_curve_reference_shadow_promote_weight_min", 0.35),
+            )
+            if state in {"ENTRY", "COMMIT"}
+            else config.get("local_curve_reference_shadow_promote_weight_min", 0.35)
+            or 0.35
+        )
+        result["local_curve_reference_shadow_promotion_weight"] = float(promotion_weight)
+        if promotion_weight >= promotion_active_min:
+            blend_floor_on = float(
+                config.get("local_curve_reference_shadow_promote_blend_floor_on", 0.15)
+                or 0.15
+            )
+            blend_floor_full = float(
+                config.get("local_curve_reference_shadow_promote_blend_floor_full", 0.35)
+                or 0.35
+            )
+            blend_floor_on = max(0.0, min(1.0, blend_floor_on))
+            blend_floor_full = max(blend_floor_on, min(1.0, blend_floor_full))
+            promoted_blend_floor = _lerp_clamped(
+                blend_floor_on,
+                blend_floor_full,
+                promotion_weight,
+            )
+            blend_weight = max(blend_weight, promoted_blend_floor)
+            effective_mode = LOCAL_CURVE_REFERENCE_MODE_BOUNDED
+            result["local_curve_reference_mode"] = effective_mode
+            result["local_curve_reference_shadow_only"] = False
+            result["local_curve_reference_shadow_promotion_active"] = True
+            result["local_curve_reference_shadow_promotion_blend_floor"] = float(
+                promoted_blend_floor
+            )
+            result["local_curve_reference_shadow_promotion_reason"] = (
+                "speed_curvature_raw_delta"
+            )
+
+    if effective_mode == LOCAL_CURVE_REFERENCE_MODE_BOUNDED:
         # 1. Blend ceiling (safety)
         max_blend = float(config.get("local_curve_reference_max_blend", 0.7) or 0.7)
         max_blend = max(0.0, min(1.0, max_blend))
@@ -558,6 +729,33 @@ def build_local_curve_reference(
                 )
                 blend_weight *= entry_fade
 
+        # Optional guarded unwind for early-curve bounded takeover.
+        # This is kept off by default and is only enabled by orchestrator-side
+        # guarded ownership when a rejected distractor is correlating with a
+        # large planner/local-arc divergence.
+        if bool(config.get("local_curve_reference_bounded_progress_unwind_enabled", False)):
+            start = float(
+                config.get("local_curve_reference_bounded_progress_unwind_start", 0.18)
+                or 0.18
+            )
+            end = float(
+                config.get("local_curve_reference_bounded_progress_unwind_end", 0.45)
+                or 0.45
+            )
+            if current_curve_progress_ratio is not None:
+                try:
+                    guarded_progress = float(current_curve_progress_ratio)
+                except (TypeError, ValueError):
+                    guarded_progress = float("nan")
+                if math.isfinite(guarded_progress):
+                    guarded_progress = max(0.0, min(1.0, guarded_progress))
+                    guarded_fade = 1.0 - _progress_between(
+                        guarded_progress,
+                        start,
+                        end,
+                    )
+                    blend_weight *= guarded_fade
+
     # Compute blended correction
     dx = blend_weight * (arc_x - base_x)
     dy = blend_weight * (arc_y - base_y)
@@ -565,7 +763,7 @@ def build_local_curve_reference(
     applied_delta = math.hypot(dx, dy)
 
     # 3. Safety delta cap (high ceiling — not the primary limiter)
-    if mode == LOCAL_CURVE_REFERENCE_MODE_BOUNDED:
+    if effective_mode == LOCAL_CURVE_REFERENCE_MODE_BOUNDED:
         delta_cap_m = float(config.get("local_curve_reference_delta_cap_m", 1.5) or 1.5)
         delta_cap_m = max(0.01, delta_cap_m)
         if applied_delta > delta_cap_m:
@@ -584,6 +782,8 @@ def build_local_curve_reference(
 
     result.update(
         {
+            "local_curve_reference_mode": effective_mode,
+            "local_curve_reference_requested_mode": requested_mode,
             "local_curve_reference_active": blend_weight > 1e-3,
             "local_curve_reference_valid": True,
             "local_curve_reference_source": curvature_source,

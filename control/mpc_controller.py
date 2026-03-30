@@ -96,6 +96,21 @@ class MPCParams:
     bias_active_curve_preserve_enabled: bool = True
     bias_active_curve_preserve_ratio: float = 0.75
     bias_active_curve_gate_min: float = 0.40
+    bias_active_curve_preserve_dynamic_enabled: bool = True
+    bias_active_curve_preserve_speed_on: float = 13.0
+    bias_active_curve_preserve_speed_full: float = 15.0
+    bias_active_curve_preserve_curvature_on: float = 0.0015
+    bias_active_curve_preserve_curvature_full: float = 0.0020
+    bias_active_curve_preserve_full_ratio: float = 1.0
+    bias_active_curve_same_sign_guard_ratio: float = 0.25
+    active_mild_curve_authority_enabled: bool = True
+    active_mild_curve_authority_gate_min: float = 0.35
+    active_mild_curve_authority_speed_on: float = 11.5
+    active_mild_curve_authority_speed_full: float = 13.0
+    active_mild_curve_authority_curvature_on: float = 0.0015
+    active_mild_curve_authority_curvature_full: float = 0.0020
+    active_mild_curve_authority_ratio: float = 0.88
+    active_mild_curve_authority_full_ratio: float = 1.0
 
     # Curvature preview horizon (feedforward from trajectory planner)
     curvature_preview_enabled: bool = False   # Default OFF — safe for existing configs
@@ -705,7 +720,8 @@ class MPCController:
                          kappa_horizon=None,
                          grade_rad: float = 0.0,
                          curve_local_state: Optional[str] = None,
-                         curve_gate_weight: float = 0.0) -> dict:
+                         curve_gate_weight: float = 0.0,
+                         local_curve_reference_active: bool = False) -> dict:
         """
         Compute MPC steering. Called by VehicleController each frame.
 
@@ -725,6 +741,7 @@ class MPCController:
             grade_rad: road grade in radians (positive = uphill), default 0.0
             curve_local_state: scheduler-owned curve state (STRAIGHT/ENTRY/COMMIT/REARM)
             curve_gate_weight: local curve relevance weight [0, 1]
+            local_curve_reference_active: whether the local curve reference is valid/active
 
         Returns:
             dict with: steering_normalized, accel, mpc_feasible, solve_time_ms,
@@ -751,6 +768,28 @@ class MPCController:
         self._bias_correction = 0.0
         bias_guard_active = False
         bias_guard_limit = 0.0
+        active_curve_preserve_ratio = float(self.params.bias_active_curve_preserve_ratio)
+        active_curve_preserve_active = False
+        active_curve_preserve_weight = 0.0
+        active_mild_curve_authority_active = False
+        active_mild_curve_authority_weight = 0.0
+        active_mild_curve_authority_ratio = 0.0
+        active_mild_curve_authority_reason = "disabled"
+        active_mild_curve_authority_speed_weight = 0.0
+        active_mild_curve_authority_curvature_weight = 0.0
+        active_mild_curve_authority_gate_weight = 0.0
+
+        def _norm_weight(value: float, value_on: float, value_full: float) -> float:
+            if not np.isfinite(value):
+                return 0.0
+            if value_full <= value_on:
+                return 1.0 if value >= value_on else 0.0
+            if value <= value_on:
+                return 0.0
+            if value >= value_full:
+                return 1.0
+            return float((value - value_on) / max(1e-6, value_full - value_on))
+
         if self.params.bias_enabled and current_speed >= self.params.bias_min_speed:
             alpha = self.params.bias_alpha
             self._bias_ema = (1.0 - alpha) * self._bias_ema + alpha * e_lat
@@ -773,16 +812,131 @@ class MPCController:
                 and active_curve_state in {"ENTRY", "COMMIT"}
                 and active_curve_gate_weight >= self.params.bias_active_curve_gate_min
                 and abs(kappa_ref) >= self.params.bias_relative_guard_min_kappa
-                and self._bias_correction * kappa_ref < 0.0
             ):
-                guard_limits.append(
-                    max(0.0, (1.0 - self.params.bias_active_curve_preserve_ratio) * abs(kappa_ref))
-                )
+                if self.params.bias_active_curve_preserve_dynamic_enabled:
+                    speed_on = float(self.params.bias_active_curve_preserve_speed_on)
+                    speed_full = float(self.params.bias_active_curve_preserve_speed_full)
+                    if speed_full <= speed_on:
+                        speed_weight = 1.0 if current_speed >= speed_on else 0.0
+                    elif current_speed <= speed_on:
+                        speed_weight = 0.0
+                    elif current_speed >= speed_full:
+                        speed_weight = 1.0
+                    else:
+                        speed_weight = (current_speed - speed_on) / max(1e-6, speed_full - speed_on)
+                    curv_on = float(self.params.bias_active_curve_preserve_curvature_on)
+                    curv_full = float(self.params.bias_active_curve_preserve_curvature_full)
+                    abs_kappa_ref = abs(kappa_ref)
+                    if curv_full <= curv_on:
+                        curvature_weight = 1.0 if abs_kappa_ref >= curv_on else 0.0
+                    elif abs_kappa_ref <= curv_on:
+                        curvature_weight = 0.0
+                    elif abs_kappa_ref >= curv_full:
+                        curvature_weight = 1.0
+                    else:
+                        curvature_weight = (abs_kappa_ref - curv_on) / max(1e-6, curv_full - curv_on)
+                    gate_weight = (
+                        (active_curve_gate_weight - self.params.bias_active_curve_gate_min)
+                        / max(1e-6, 1.0 - self.params.bias_active_curve_gate_min)
+                    )
+                    gate_weight = max(0.0, min(1.0, gate_weight))
+                    active_curve_preserve_weight = max(
+                        0.0,
+                        min(1.0, speed_weight * curvature_weight * gate_weight),
+                    )
+                    active_curve_preserve_ratio = float(
+                        max(
+                            self.params.bias_active_curve_preserve_ratio,
+                            self.params.bias_active_curve_preserve_ratio
+                            + (
+                                self.params.bias_active_curve_preserve_full_ratio
+                                - self.params.bias_active_curve_preserve_ratio
+                            )
+                            * active_curve_preserve_weight,
+                        )
+                    )
+                active_curve_preserve_active = active_curve_preserve_weight > 0.0
+                if self._bias_correction * kappa_ref > 0.0 and active_curve_preserve_active:
+                    same_sign_guard_ratio = float(self.params.bias_relative_guard_ratio)
+                    same_sign_guard_ratio = max(
+                        0.0,
+                        min(
+                            same_sign_guard_ratio,
+                            same_sign_guard_ratio
+                            - (
+                                same_sign_guard_ratio
+                                - float(self.params.bias_active_curve_same_sign_guard_ratio)
+                            )
+                            * active_curve_preserve_weight,
+                        ),
+                    )
+                    guard_limits.append(same_sign_guard_ratio * abs(kappa_ref))
+                elif self._bias_correction * kappa_ref < 0.0:
+                    guard_limits.append(
+                        max(0.0, (1.0 - active_curve_preserve_ratio) * abs(kappa_ref))
+                    )
             if guard_limits:
                 bias_guard_limit = min(self.params.bias_max_correction, *guard_limits)
                 if abs(self._bias_correction) > bias_guard_limit:
                     self._bias_correction = math.copysign(bias_guard_limit, self._bias_correction)
                     bias_guard_active = True
+
+        active_curve_state = str(curve_local_state or "").strip().upper()
+        active_curve_gate_weight = max(0.0, min(1.0, float(curve_gate_weight or 0.0)))
+        abs_kappa_ref = abs(float(kappa_ref))
+        if not self.params.active_mild_curve_authority_enabled:
+            active_mild_curve_authority_reason = "disabled"
+        elif active_curve_state not in {"ENTRY", "COMMIT"}:
+            active_mild_curve_authority_reason = "state_inactive"
+        elif not bool(local_curve_reference_active):
+            active_mild_curve_authority_reason = "local_reference_inactive"
+        else:
+            active_mild_curve_authority_speed_weight = _norm_weight(
+                float(current_speed),
+                float(self.params.active_mild_curve_authority_speed_on),
+                float(self.params.active_mild_curve_authority_speed_full),
+            )
+            active_mild_curve_authority_curvature_weight = _norm_weight(
+                abs_kappa_ref,
+                float(self.params.active_mild_curve_authority_curvature_on),
+                float(self.params.active_mild_curve_authority_curvature_full),
+            )
+            active_mild_curve_authority_gate_weight = _norm_weight(
+                active_curve_gate_weight,
+                float(self.params.active_mild_curve_authority_gate_min),
+                1.0,
+            )
+            active_mild_curve_authority_weight = max(
+                0.0,
+                min(
+                    1.0,
+                    active_mild_curve_authority_speed_weight
+                    * active_mild_curve_authority_curvature_weight
+                    * active_mild_curve_authority_gate_weight,
+                ),
+            )
+            active_mild_curve_authority_active = active_mild_curve_authority_weight > 0.0
+            active_mild_curve_authority_ratio = float(
+                max(
+                    self.params.active_mild_curve_authority_ratio,
+                    self.params.active_mild_curve_authority_ratio
+                    + (
+                        self.params.active_mild_curve_authority_full_ratio
+                        - self.params.active_mild_curve_authority_ratio
+                    )
+                    * active_mild_curve_authority_weight,
+                )
+            )
+            if active_mild_curve_authority_active:
+                active_mild_curve_authority_reason = "active"
+            elif active_mild_curve_authority_speed_weight <= 0.0:
+                active_mild_curve_authority_reason = "speed_below_on"
+            elif active_mild_curve_authority_curvature_weight <= 0.0:
+                active_mild_curve_authority_reason = "curvature_below_on"
+            elif active_mild_curve_authority_gate_weight <= 0.0:
+                active_mild_curve_authority_reason = "gate_below_min"
+            else:
+                active_mild_curve_authority_reason = "inactive"
 
         # Build κ_ref horizon with bias correction applied
         _preview_used = (
@@ -797,6 +951,20 @@ class MPCController:
             # Fallback: constant curvature (current behavior)
             kappa_corrected = kappa_ref + self._bias_correction
             kappa_corrected_horizon = np.full(self.solver._N, kappa_corrected)
+        if active_mild_curve_authority_active and abs_kappa_ref >= 1e-6:
+            if _preview_used:
+                base_sign = np.sign(np.where(np.abs(kappa_base) > 1e-6, kappa_base, kappa_ref))
+                floor_abs = active_mild_curve_authority_ratio * np.maximum(np.abs(kappa_base), abs_kappa_ref)
+                kappa_corrected_horizon = base_sign * np.maximum(
+                    np.abs(kappa_corrected_horizon),
+                    floor_abs,
+                )
+            else:
+                floor_abs = active_mild_curve_authority_ratio * abs_kappa_ref
+                kappa_corrected_horizon = np.full(
+                    self.solver._N,
+                    math.copysign(max(abs(kappa_corrected_horizon[0]), floor_abs), kappa_ref),
+                )
         kappa_horizon = kappa_corrected_horizon
 
         # --- Arc-entry kappa-transition warmup ---
@@ -901,11 +1069,21 @@ class MPCController:
             'e_lat_ema': self._elat_ema,   # EMA state (for diagnostics)
             'elat_ramp_active': elat_ramp_active,  # True when rate limiter clamped step
             'e_heading_input': e_heading,
-            'kappa_ref_used': kappa_ref + self._bias_correction,
+            'kappa_ref_used': float(kappa_corrected_horizon[0]) if kappa_corrected_horizon.size > 0 else (kappa_ref + self._bias_correction),
             'kappa_bias_correction': self._bias_correction,
             'kappa_bias_ema': self._bias_ema,
             'kappa_bias_guard_active': bias_guard_active,
             'kappa_bias_guard_limit': bias_guard_limit,
+            'kappa_active_curve_preserve_ratio': active_curve_preserve_ratio,
+            'kappa_active_curve_preserve_active': active_curve_preserve_active,
+            'kappa_active_curve_preserve_weight': active_curve_preserve_weight,
+            'kappa_active_mild_curve_authority_active': active_mild_curve_authority_active,
+            'kappa_active_mild_curve_authority_weight': active_mild_curve_authority_weight,
+            'kappa_active_mild_curve_authority_ratio': active_mild_curve_authority_ratio,
+            'kappa_active_mild_curve_authority_reason': active_mild_curve_authority_reason,
+            'kappa_active_mild_curve_authority_speed_weight': active_mild_curve_authority_speed_weight,
+            'kappa_active_mild_curve_authority_curvature_weight': active_mild_curve_authority_curvature_weight,
+            'kappa_active_mild_curve_authority_gate_weight': active_mild_curve_authority_gate_weight,
             'kappa_preview_used': bool(_preview_used),
             'kappa_preview_range': float(np.ptp(kappa_corrected_horizon)) if _preview_used else 0.0,
         }

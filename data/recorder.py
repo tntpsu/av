@@ -129,13 +129,51 @@ class DataRecorder:
         from dataclasses import fields
 
         cfg_public = {k: v for k, v in config.items() if not str(k).startswith("_")}
+        trajectory_cfg = cfg_public.get("trajectory", {}) or {}
         snap: Dict[str, Any] = {
             "config_overlay_path": (
                 str(Path(config_path).resolve()) if config_path else None
             ),
             "trajectory": {
-                "target_speed": cfg_public.get("trajectory", {}).get("target_speed"),
-                "mpc": dict(cfg_public.get("trajectory", {}).get("mpc", {})),
+                "target_speed": trajectory_cfg.get("target_speed"),
+                "reference_lookahead": trajectory_cfg.get("reference_lookahead"),
+                "local_curve_reference_mode": trajectory_cfg.get(
+                    "local_curve_reference_mode"
+                ),
+                "local_curve_reference_target_distance_table": trajectory_cfg.get(
+                    "local_curve_reference_target_distance_table"
+                ),
+                "local_curve_reference_shadow_promote_enabled": trajectory_cfg.get(
+                    "local_curve_reference_shadow_promote_enabled"
+                ),
+                "local_curve_reference_shadow_promote_speed_on": trajectory_cfg.get(
+                    "local_curve_reference_shadow_promote_speed_on"
+                ),
+                "local_curve_reference_shadow_promote_speed_full": trajectory_cfg.get(
+                    "local_curve_reference_shadow_promote_speed_full"
+                ),
+                "local_curve_reference_shadow_promote_curvature_on": trajectory_cfg.get(
+                    "local_curve_reference_shadow_promote_curvature_on"
+                ),
+                "local_curve_reference_shadow_promote_curvature_full": trajectory_cfg.get(
+                    "local_curve_reference_shadow_promote_curvature_full"
+                ),
+                "local_curve_reference_shadow_promote_raw_delta_on_m": trajectory_cfg.get(
+                    "local_curve_reference_shadow_promote_raw_delta_on_m"
+                ),
+                "local_curve_reference_shadow_promote_raw_delta_full_m": trajectory_cfg.get(
+                    "local_curve_reference_shadow_promote_raw_delta_full_m"
+                ),
+                "local_curve_reference_shadow_promote_weight_min": trajectory_cfg.get(
+                    "local_curve_reference_shadow_promote_weight_min"
+                ),
+                "local_curve_reference_shadow_promote_blend_floor_on": trajectory_cfg.get(
+                    "local_curve_reference_shadow_promote_blend_floor_on"
+                ),
+                "local_curve_reference_shadow_promote_blend_floor_full": trajectory_cfg.get(
+                    "local_curve_reference_shadow_promote_blend_floor_full"
+                ),
+                "mpc": dict(trajectory_cfg.get("mpc", {})),
             },
             "perception": {
                 "lane_width_min_m": cfg_public.get("perception", {}).get(
@@ -2589,13 +2627,36 @@ class DataRecorder:
         self.h5_file.create_dataset("control/mpc_kappa_bias_ema", shape=(0,), maxshape=max_shape, dtype=np.float32)
         self.h5_file.create_dataset("control/mpc_kappa_bias_guard_active", shape=(0,), maxshape=max_shape, dtype=np.int8)
         self.h5_file.create_dataset("control/mpc_kappa_bias_guard_limit", shape=(0,), maxshape=max_shape, dtype=np.float32)
+        self.h5_file.create_dataset("control/mpc_kappa_active_curve_preserve_ratio", shape=(0,), maxshape=max_shape, dtype=np.float32)
+        self.h5_file.create_dataset("control/mpc_kappa_active_curve_preserve_active", shape=(0,), maxshape=max_shape, dtype=np.int8)
+        self.h5_file.create_dataset("control/mpc_kappa_active_curve_preserve_weight", shape=(0,), maxshape=max_shape, dtype=np.float32)
+        self.h5_file.create_dataset("control/mpc_kappa_active_mild_curve_authority_active", shape=(0,), maxshape=max_shape, dtype=np.int8)
+        self.h5_file.create_dataset("control/mpc_kappa_active_mild_curve_authority_weight", shape=(0,), maxshape=max_shape, dtype=np.float32)
+        self.h5_file.create_dataset("control/mpc_kappa_active_mild_curve_authority_ratio", shape=(0,), maxshape=max_shape, dtype=np.float32)
+        self.h5_file.create_dataset(
+            "control/mpc_kappa_active_mild_curve_authority_reason",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=h5py.string_dtype(encoding='utf-8', length=32)
+        )
+        self.h5_file.create_dataset("control/mpc_kappa_active_mild_curve_authority_speed_weight", shape=(0,), maxshape=max_shape, dtype=np.float32)
+        self.h5_file.create_dataset("control/mpc_kappa_active_mild_curve_authority_curvature_weight", shape=(0,), maxshape=max_shape, dtype=np.float32)
+        self.h5_file.create_dataset("control/mpc_kappa_active_mild_curve_authority_gate_weight", shape=(0,), maxshape=max_shape, dtype=np.float32)
         self.h5_file.create_dataset("control/mpc_fallback_active", shape=(0,), maxshape=max_shape, dtype=np.int8)
         self.h5_file.create_dataset("control/mpc_consecutive_failures", shape=(0,), maxshape=max_shape, dtype=np.int16)
         self.h5_file.create_dataset("control/mpc_gt_cross_track_m", shape=(0,), maxshape=max_shape, dtype=np.float32)
         self.h5_file.create_dataset("control/mpc_gt_cross_track_at_car_m", shape=(0,), maxshape=max_shape, dtype=np.float32)
+        self.h5_file.create_dataset("control/mpc_gt_cross_track_road_frame_at_car_m", shape=(0,), maxshape=max_shape, dtype=np.float32)
+        self.h5_file.create_dataset("control/mpc_gt_cross_track_vehicle_frame_at_car_m", shape=(0,), maxshape=max_shape, dtype=np.float32)
         self.h5_file.create_dataset("control/mpc_gt_cross_track_lookahead_m", shape=(0,), maxshape=max_shape, dtype=np.float32)
         self.h5_file.create_dataset(
             "control/mpc_gt_cross_track_source_code",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=h5py.string_dtype(encoding='utf-8', length=32)
+        )
+        self.h5_file.create_dataset(
+            "control/mpc_gt_cross_track_control_source_code",
             shape=(0,),
             maxshape=max_shape,
             dtype=h5py.string_dtype(encoding='utf-8', length=32)
@@ -3533,6 +3594,66 @@ class DataRecorder:
             dtype=np.float32
         )
         self.h5_file.create_dataset(
+            "control/curve_preactivation_authority_weight",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/curve_preactivation_authority_active",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int8
+        )
+        self.h5_file.create_dataset(
+            "control/curve_preactivation_blocker_mode",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=h5py.string_dtype(encoding='utf-8', length=48)
+        )
+        self.h5_file.create_dataset(
+            "control/curve_preactivation_preview_weight",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/curve_preactivation_speed_weight",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/curve_preactivation_curvature_weight",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/curve_preactivation_distance_weight",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/curve_preactivation_kappa_floor",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/curve_preactivation_lookahead_target",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/curve_preactivation_speed_cap_target",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
             "control/curve_local_rearm_cooldown_active",
             shape=(0,),
             maxshape=max_shape,
@@ -3779,6 +3900,12 @@ class DataRecorder:
             dtype=h5py.string_dtype(encoding='utf-8', length=16)
         )
         self.h5_file.create_dataset(
+            "control/local_curve_reference_requested_mode",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=h5py.string_dtype(encoding='utf-8', length=16)
+        )
+        self.h5_file.create_dataset(
             "control/local_curve_reference_active",
             shape=(0,),
             maxshape=max_shape,
@@ -3786,6 +3913,222 @@ class DataRecorder:
         )
         self.h5_file.create_dataset(
             "control/local_curve_reference_shadow_only",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int8
+        )
+        self.h5_file.create_dataset(
+            "control/local_curve_reference_shadow_promotion_active",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int8
+        )
+        self.h5_file.create_dataset(
+            "control/local_curve_reference_shadow_promotion_weight",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/local_curve_reference_shadow_promotion_blend_floor",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/local_curve_reference_shadow_promotion_reason",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=h5py.string_dtype(encoding='utf-8', length=32)
+        )
+        self.h5_file.create_dataset(
+            "control/local_curve_reference_guarded_bounded_active",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int8
+        )
+        self.h5_file.create_dataset(
+            "control/local_curve_reference_guarded_bounded_reason",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=h5py.string_dtype(encoding='utf-8', length=40)
+        )
+        self.h5_file.create_dataset(
+            "control/local_curve_reference_guarded_bounded_dwell_frames",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int32
+        )
+        self.h5_file.create_dataset(
+            "control/local_curve_reference_guarded_bounded_trigger_raw_delta_m",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/local_curve_reference_guarded_bounded_exit_raw_delta_m",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/local_curve_reference_guarded_bounded_trigger_weight",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/local_curve_reference_guarded_bounded_blend_floor",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/reference_distractor_guard_active",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int8
+        )
+        self.h5_file.create_dataset(
+            "control/reference_distractor_guard_reason",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=h5py.string_dtype(encoding='utf-8', length=40)
+        )
+        self.h5_file.create_dataset(
+            "control/reference_distractor_guard_dwell_frames",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int32
+        )
+        self.h5_file.create_dataset(
+            "control/reference_distractor_guard_trigger_center_error_m",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/reference_distractor_guard_exit_center_error_m",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/reference_distractor_guard_center_error_m",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/reference_distractor_guard_width_error_m",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/reference_distractor_guard_trigger_weight",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/reference_distractor_guard_blend_weight",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/reference_distractor_guard_expected_center_x_m",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/reference_distractor_guard_expected_heading_rad",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/reference_distractor_input_guard_active",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int8
+        )
+        self.h5_file.create_dataset(
+            "control/reference_distractor_input_guard_reason",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=h5py.string_dtype(encoding='utf-8', length=40)
+        )
+        self.h5_file.create_dataset(
+            "control/reference_distractor_input_guard_dwell_frames",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int32
+        )
+        self.h5_file.create_dataset(
+            "control/reference_distractor_input_guard_trigger_center_error_m",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/reference_distractor_input_guard_exit_center_error_m",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/reference_distractor_input_guard_center_error_m",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/reference_distractor_input_guard_width_error_m",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/reference_distractor_input_guard_trigger_weight",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/reference_distractor_input_guard_expected_center_x_m",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/reference_distractor_input_guard_synthetic_left_lane_x_m",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/reference_distractor_input_guard_synthetic_right_lane_x_m",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/reference_distractor_input_guard_synthetic_lane_width_m",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/reference_distractor_input_guard_suppressed_lane_coeffs",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int8
+        )
+        self.h5_file.create_dataset(
+            "control/reference_distractor_input_guard_center_history_seeded",
             shape=(0,),
             maxshape=max_shape,
             dtype=np.int8
@@ -4158,6 +4501,66 @@ class DataRecorder:
         )
         self.h5_file.create_dataset(
             "ground_truth/lane_center_x_at_car",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "ground_truth/selected_lane_index",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int8
+        )
+        self.h5_file.create_dataset(
+            "ground_truth/ego_lane_index",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int8
+        )
+        self.h5_file.create_dataset(
+            "ground_truth/lane_selection_source",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=h5py.string_dtype(encoding='utf-8', length=64)
+        )
+        self.h5_file.create_dataset(
+            "ground_truth/lane_selection_reason",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=h5py.string_dtype(encoding='utf-8', length=64)
+        )
+        self.h5_file.create_dataset(
+            "ground_truth/lane_selection_matches_ego",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int8
+        )
+        self.h5_file.create_dataset(
+            "ground_truth/ego_lane_center_x_at_car",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "ground_truth/selected_lane_center_offset_road_frame",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "ground_truth/selected_lane_cross_track_road_frame_at_car",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "ground_truth/ego_lane_center_offset_road_frame",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "ground_truth/ego_lane_cross_track_road_frame_at_car",
             shape=(0,),
             maxshape=max_shape,
             dtype=np.float32
@@ -4770,6 +5173,16 @@ class DataRecorder:
         gt_right_lane_line_x = []
         gt_lane_center_x = []
         gt_lane_center_x_at_car = []
+        gt_selected_lane_index = []
+        gt_ego_lane_index = []
+        gt_lane_selection_source = []
+        gt_lane_selection_reason = []
+        gt_lane_selection_matches_ego = []
+        gt_ego_lane_center_x_at_car = []
+        gt_selected_lane_center_offset_road_frame = []
+        gt_selected_lane_cross_track_road_frame_at_car = []
+        gt_ego_lane_center_offset_road_frame = []
+        gt_ego_lane_cross_track_road_frame_at_car = []
         gt_path_curvature = []
         gt_desired_heading = []
         camera_8m_screen_y = []  # NEW: Camera calibration data
@@ -5160,6 +5573,36 @@ class DataRecorder:
                 gt_lane_center_x_at_car.append(
                     getattr(vs, 'ground_truth_lane_center_x_at_car', 0.0)
                 )
+                gt_selected_lane_index.append(
+                    int(getattr(vs, 'ground_truth_selected_lane_index', 0) or 0)
+                )
+                gt_ego_lane_index.append(
+                    int(getattr(vs, 'ground_truth_ego_lane_index', 0) or 0)
+                )
+                gt_lane_selection_source.append(
+                    str(getattr(vs, 'ground_truth_lane_selection_source', '') or '')
+                )
+                gt_lane_selection_reason.append(
+                    str(getattr(vs, 'ground_truth_lane_selection_reason', '') or '')
+                )
+                gt_lane_selection_matches_ego.append(
+                    1 if getattr(vs, 'ground_truth_lane_selection_matches_ego', True) else 0
+                )
+                gt_ego_lane_center_x_at_car.append(
+                    getattr(vs, 'ground_truth_ego_lane_center_x_at_car', 0.0)
+                )
+                gt_selected_lane_center_offset_road_frame.append(
+                    getattr(vs, 'ground_truth_selected_lane_center_offset_road_frame', 0.0)
+                )
+                gt_selected_lane_cross_track_road_frame_at_car.append(
+                    getattr(vs, 'ground_truth_selected_lane_cross_track_road_frame_at_car', 0.0)
+                )
+                gt_ego_lane_center_offset_road_frame.append(
+                    getattr(vs, 'ground_truth_ego_lane_center_offset_road_frame', 0.0)
+                )
+                gt_ego_lane_cross_track_road_frame_at_car.append(
+                    getattr(vs, 'ground_truth_ego_lane_cross_track_road_frame_at_car', 0.0)
+                )
                 gt_path_curvature.append(getattr(vs, 'ground_truth_path_curvature', 0.0))
                 gt_desired_heading.append(getattr(vs, 'ground_truth_desired_heading', 0.0))
             else:
@@ -5168,6 +5611,16 @@ class DataRecorder:
                 gt_right_lane_line_x.append(0.0)
                 gt_lane_center_x.append(0.0)
                 gt_lane_center_x_at_car.append(0.0)
+                gt_selected_lane_index.append(0)
+                gt_ego_lane_index.append(0)
+                gt_lane_selection_source.append("")
+                gt_lane_selection_reason.append("")
+                gt_lane_selection_matches_ego.append(1)
+                gt_ego_lane_center_x_at_car.append(0.0)
+                gt_selected_lane_center_offset_road_frame.append(0.0)
+                gt_selected_lane_cross_track_road_frame_at_car.append(0.0)
+                gt_ego_lane_center_offset_road_frame.append(0.0)
+                gt_ego_lane_cross_track_road_frame_at_car.append(0.0)
                 gt_path_curvature.append(0.0)
                 gt_desired_heading.append(0.0)
             
@@ -6093,11 +6546,28 @@ class DataRecorder:
                     if (len(gt_right_lane_line_x) != expected_len or 
                         len(gt_lane_center_x) != expected_len or
                         len(gt_lane_center_x_at_car) != expected_len or
+                        len(gt_selected_lane_index) != expected_len or
+                        len(gt_ego_lane_index) != expected_len or
+                        len(gt_lane_selection_source) != expected_len or
+                        len(gt_lane_selection_reason) != expected_len or
+                        len(gt_lane_selection_matches_ego) != expected_len or
+                        len(gt_ego_lane_center_x_at_car) != expected_len or
+                        len(gt_selected_lane_center_offset_road_frame) != expected_len or
+                        len(gt_selected_lane_cross_track_road_frame_at_car) != expected_len or
+                        len(gt_ego_lane_center_offset_road_frame) != expected_len or
+                        len(gt_ego_lane_cross_track_road_frame_at_car) != expected_len or
                         len(gt_path_curvature) != expected_len or
                         len(gt_desired_heading) != expected_len):
                         logger.warning(f"[RECORDER] Ground truth array length mismatch: "
                                      f"left={len(gt_left_lane_line_x)}, right={len(gt_right_lane_line_x)}, "
                                      f"center={len(gt_lane_center_x)}, at_car={len(gt_lane_center_x_at_car)}, "
+                                     f"selected_lane_index={len(gt_selected_lane_index)}, ego_lane_index={len(gt_ego_lane_index)}, "
+                                     f"selection_source={len(gt_lane_selection_source)}, selection_reason={len(gt_lane_selection_reason)}, "
+                                     f"selection_matches_ego={len(gt_lane_selection_matches_ego)}, ego_center_at_car={len(gt_ego_lane_center_x_at_car)}, "
+                                     f"selected_center_offset={len(gt_selected_lane_center_offset_road_frame)}, "
+                                     f"selected_cross_track={len(gt_selected_lane_cross_track_road_frame_at_car)}, "
+                                     f"ego_center_offset={len(gt_ego_lane_center_offset_road_frame)}, "
+                                     f"ego_cross_track={len(gt_ego_lane_cross_track_road_frame_at_car)}, "
                                      f"curvature={len(gt_path_curvature)}, "
                                      f"heading={len(gt_desired_heading)}. Skipping ground truth write.")
                     else:
@@ -6108,6 +6578,16 @@ class DataRecorder:
                         self.h5_file["ground_truth/right_lane_line_x"].resize((gt_new_size,))
                         self.h5_file["ground_truth/lane_center_x"].resize((gt_new_size,))
                         self.h5_file["ground_truth/lane_center_x_at_car"].resize((gt_new_size,))
+                        self.h5_file["ground_truth/selected_lane_index"].resize((gt_new_size,))
+                        self.h5_file["ground_truth/ego_lane_index"].resize((gt_new_size,))
+                        self.h5_file["ground_truth/lane_selection_source"].resize((gt_new_size,))
+                        self.h5_file["ground_truth/lane_selection_reason"].resize((gt_new_size,))
+                        self.h5_file["ground_truth/lane_selection_matches_ego"].resize((gt_new_size,))
+                        self.h5_file["ground_truth/ego_lane_center_x_at_car"].resize((gt_new_size,))
+                        self.h5_file["ground_truth/selected_lane_center_offset_road_frame"].resize((gt_new_size,))
+                        self.h5_file["ground_truth/selected_lane_cross_track_road_frame_at_car"].resize((gt_new_size,))
+                        self.h5_file["ground_truth/ego_lane_center_offset_road_frame"].resize((gt_new_size,))
+                        self.h5_file["ground_truth/ego_lane_cross_track_road_frame_at_car"].resize((gt_new_size,))
                         self.h5_file["ground_truth/path_curvature"].resize((gt_new_size,))
                         self.h5_file["ground_truth/desired_heading"].resize((gt_new_size,))
                         
@@ -6116,6 +6596,16 @@ class DataRecorder:
                         self.h5_file["ground_truth/right_lane_line_x"][gt_current_size:] = np.array(gt_right_lane_line_x, dtype=np.float32)
                         self.h5_file["ground_truth/lane_center_x"][gt_current_size:] = np.array(gt_lane_center_x, dtype=np.float32)
                         self.h5_file["ground_truth/lane_center_x_at_car"][gt_current_size:] = np.array(gt_lane_center_x_at_car, dtype=np.float32)
+                        self.h5_file["ground_truth/selected_lane_index"][gt_current_size:] = np.array(gt_selected_lane_index, dtype=np.int8)
+                        self.h5_file["ground_truth/ego_lane_index"][gt_current_size:] = np.array(gt_ego_lane_index, dtype=np.int8)
+                        self.h5_file["ground_truth/lane_selection_source"][gt_current_size:] = np.array(gt_lane_selection_source, dtype=object)
+                        self.h5_file["ground_truth/lane_selection_reason"][gt_current_size:] = np.array(gt_lane_selection_reason, dtype=object)
+                        self.h5_file["ground_truth/lane_selection_matches_ego"][gt_current_size:] = np.array(gt_lane_selection_matches_ego, dtype=np.int8)
+                        self.h5_file["ground_truth/ego_lane_center_x_at_car"][gt_current_size:] = np.array(gt_ego_lane_center_x_at_car, dtype=np.float32)
+                        self.h5_file["ground_truth/selected_lane_center_offset_road_frame"][gt_current_size:] = np.array(gt_selected_lane_center_offset_road_frame, dtype=np.float32)
+                        self.h5_file["ground_truth/selected_lane_cross_track_road_frame_at_car"][gt_current_size:] = np.array(gt_selected_lane_cross_track_road_frame_at_car, dtype=np.float32)
+                        self.h5_file["ground_truth/ego_lane_center_offset_road_frame"][gt_current_size:] = np.array(gt_ego_lane_center_offset_road_frame, dtype=np.float32)
+                        self.h5_file["ground_truth/ego_lane_cross_track_road_frame_at_car"][gt_current_size:] = np.array(gt_ego_lane_cross_track_road_frame_at_car, dtype=np.float32)
                         self.h5_file["ground_truth/path_curvature"][gt_current_size:] = np.array(gt_path_curvature, dtype=np.float32)
                         self.h5_file["ground_truth/desired_heading"][gt_current_size:] = np.array(gt_desired_heading, dtype=np.float32)
             except Exception as e:
@@ -6780,6 +7270,16 @@ class DataRecorder:
         curve_local_arm_effect_lateral_shift_term_list = []
         curve_local_arm_effect_time_support_term_list = []
         curve_local_dynamic_sustain_effect_score_list = []
+        curve_preactivation_authority_weight_list = []
+        curve_preactivation_authority_active_list = []
+        curve_preactivation_blocker_mode_list = []
+        curve_preactivation_preview_weight_list = []
+        curve_preactivation_speed_weight_list = []
+        curve_preactivation_curvature_weight_list = []
+        curve_preactivation_distance_weight_list = []
+        curve_preactivation_kappa_floor_list = []
+        curve_preactivation_lookahead_target_list = []
+        curve_preactivation_speed_cap_target_list = []
         curve_local_rearm_cooldown_active_list = []
         curve_local_force_straight_active_list = []
         curve_local_commit_streak_frames_list = []
@@ -6821,8 +7321,45 @@ class DataRecorder:
         reference_lookahead_entry_shorten_guard_active_list = []
         reference_lookahead_entry_shorten_guard_delta_m_list = []
         local_curve_reference_mode_list = []
+        local_curve_reference_requested_mode_list = []
         local_curve_reference_active_list = []
         local_curve_reference_shadow_only_list = []
+        local_curve_reference_shadow_promotion_active_list = []
+        local_curve_reference_shadow_promotion_weight_list = []
+        local_curve_reference_shadow_promotion_blend_floor_list = []
+        local_curve_reference_shadow_promotion_reason_list = []
+        local_curve_reference_guarded_bounded_active_list = []
+        local_curve_reference_guarded_bounded_reason_list = []
+        local_curve_reference_guarded_bounded_dwell_frames_list = []
+        local_curve_reference_guarded_bounded_trigger_raw_delta_m_list = []
+        local_curve_reference_guarded_bounded_exit_raw_delta_m_list = []
+        local_curve_reference_guarded_bounded_trigger_weight_list = []
+        local_curve_reference_guarded_bounded_blend_floor_list = []
+        reference_distractor_guard_active_list = []
+        reference_distractor_guard_reason_list = []
+        reference_distractor_guard_dwell_frames_list = []
+        reference_distractor_guard_trigger_center_error_m_list = []
+        reference_distractor_guard_exit_center_error_m_list = []
+        reference_distractor_guard_center_error_m_list = []
+        reference_distractor_guard_width_error_m_list = []
+        reference_distractor_guard_trigger_weight_list = []
+        reference_distractor_guard_blend_weight_list = []
+        reference_distractor_guard_expected_center_x_m_list = []
+        reference_distractor_guard_expected_heading_rad_list = []
+        reference_distractor_input_guard_active_list = []
+        reference_distractor_input_guard_reason_list = []
+        reference_distractor_input_guard_dwell_frames_list = []
+        reference_distractor_input_guard_trigger_center_error_m_list = []
+        reference_distractor_input_guard_exit_center_error_m_list = []
+        reference_distractor_input_guard_center_error_m_list = []
+        reference_distractor_input_guard_width_error_m_list = []
+        reference_distractor_input_guard_trigger_weight_list = []
+        reference_distractor_input_guard_expected_center_x_m_list = []
+        reference_distractor_input_guard_synthetic_left_lane_x_m_list = []
+        reference_distractor_input_guard_synthetic_right_lane_x_m_list = []
+        reference_distractor_input_guard_synthetic_lane_width_m_list = []
+        reference_distractor_input_guard_suppressed_lane_coeffs_list = []
+        reference_distractor_input_guard_center_history_seeded_list = []
         local_curve_reference_valid_list = []
         local_curve_reference_source_list = []
         local_curve_reference_fallback_active_list = []
@@ -7015,12 +7552,25 @@ class DataRecorder:
         mpc_kappa_bias_ema_list = []
         mpc_kappa_bias_guard_active_list = []
         mpc_kappa_bias_guard_limit_list = []
+        mpc_kappa_active_curve_preserve_ratio_list = []
+        mpc_kappa_active_curve_preserve_active_list = []
+        mpc_kappa_active_curve_preserve_weight_list = []
+        mpc_kappa_active_mild_curve_authority_active_list = []
+        mpc_kappa_active_mild_curve_authority_weight_list = []
+        mpc_kappa_active_mild_curve_authority_ratio_list = []
+        mpc_kappa_active_mild_curve_authority_reason_list = []
+        mpc_kappa_active_mild_curve_authority_speed_weight_list = []
+        mpc_kappa_active_mild_curve_authority_curvature_weight_list = []
+        mpc_kappa_active_mild_curve_authority_gate_weight_list = []
         mpc_fallback_active_list = []
         mpc_consecutive_failures_list = []
         mpc_gt_cross_track_m_list = []
         mpc_gt_cross_track_at_car_m_list = []
+        mpc_gt_cross_track_road_frame_at_car_m_list = []
+        mpc_gt_cross_track_vehicle_frame_at_car_m_list = []
         mpc_gt_cross_track_lookahead_m_list = []
         mpc_gt_cross_track_source_code_list = []
+        mpc_gt_cross_track_control_source_code_list = []
         mpc_gt_heading_error_rad_list = []
         mpc_using_ground_truth_list = []
         mpc_kappa_preview_used_list = []
@@ -7447,6 +7997,49 @@ class DataRecorder:
             curve_local_dynamic_sustain_effect_score_list.append(
                 float(getattr(cc, 'curve_local_dynamic_sustain_effect_score', 0.0) or 0.0)
             )
+            curve_preactivation_authority_weight_list.append(
+                float(getattr(cc, 'curve_preactivation_authority_weight', 0.0) or 0.0)
+            )
+            _curve_preactivation_active = getattr(cc, 'curve_preactivation_authority_active', None)
+            curve_preactivation_authority_active_list.append(
+                -1
+                if _curve_preactivation_active is None
+                else (1 if bool(_curve_preactivation_active) else 0)
+            )
+            curve_preactivation_blocker_mode_list.append(
+                str(getattr(cc, 'curve_preactivation_blocker_mode', 'none') or 'none')
+            )
+            curve_preactivation_preview_weight_list.append(
+                float(getattr(cc, 'curve_preactivation_preview_weight', 0.0) or 0.0)
+            )
+            curve_preactivation_speed_weight_list.append(
+                float(getattr(cc, 'curve_preactivation_speed_weight', 0.0) or 0.0)
+            )
+            curve_preactivation_curvature_weight_list.append(
+                float(getattr(cc, 'curve_preactivation_curvature_weight', 0.0) or 0.0)
+            )
+            curve_preactivation_distance_weight_list.append(
+                float(getattr(cc, 'curve_preactivation_distance_weight', 0.0) or 0.0)
+            )
+            curve_preactivation_kappa_floor_list.append(
+                float(getattr(cc, 'curve_preactivation_kappa_floor', 0.0) or 0.0)
+            )
+            _curve_preactivation_lookahead = getattr(
+                cc, 'curve_preactivation_lookahead_target', np.nan
+            )
+            curve_preactivation_lookahead_target_list.append(
+                float(_curve_preactivation_lookahead)
+                if _curve_preactivation_lookahead is not None
+                else np.nan
+            )
+            _curve_preactivation_speed_cap = getattr(
+                cc, 'curve_preactivation_speed_cap_target', np.nan
+            )
+            curve_preactivation_speed_cap_target_list.append(
+                float(_curve_preactivation_speed_cap)
+                if _curve_preactivation_speed_cap is not None
+                else np.nan
+            )
             _curve_local_rearm = getattr(cc, 'curve_local_rearm_cooldown_active', None)
             curve_local_rearm_cooldown_active_list.append(
                 -1 if _curve_local_rearm is None else (1 if bool(_curve_local_rearm) else 0)
@@ -7600,6 +8193,9 @@ class DataRecorder:
             local_curve_reference_mode_list.append(
                 str(getattr(cc, 'local_curve_reference_mode', '') or '')
             )
+            local_curve_reference_requested_mode_list.append(
+                str(getattr(cc, 'local_curve_reference_requested_mode', '') or '')
+            )
             _local_curve_reference_active = getattr(cc, 'local_curve_reference_active', None)
             local_curve_reference_active_list.append(
                 -1 if _local_curve_reference_active is None else (1 if bool(_local_curve_reference_active) else 0)
@@ -7607,6 +8203,262 @@ class DataRecorder:
             _local_curve_reference_shadow_only = getattr(cc, 'local_curve_reference_shadow_only', None)
             local_curve_reference_shadow_only_list.append(
                 -1 if _local_curve_reference_shadow_only is None else (1 if bool(_local_curve_reference_shadow_only) else 0)
+            )
+            _local_curve_reference_shadow_promotion_active = getattr(
+                cc, 'local_curve_reference_shadow_promotion_active', None
+            )
+            local_curve_reference_shadow_promotion_active_list.append(
+                -1 if _local_curve_reference_shadow_promotion_active is None else (1 if bool(_local_curve_reference_shadow_promotion_active) else 0)
+            )
+            local_curve_reference_shadow_promotion_weight_list.append(
+                float(getattr(cc, 'local_curve_reference_shadow_promotion_weight', 0.0) or 0.0)
+            )
+            local_curve_reference_shadow_promotion_blend_floor_list.append(
+                float(
+                    getattr(
+                        cc,
+                        'local_curve_reference_shadow_promotion_blend_floor',
+                        0.0,
+                    )
+                    or 0.0
+                )
+            )
+            local_curve_reference_shadow_promotion_reason_list.append(
+                str(getattr(cc, 'local_curve_reference_shadow_promotion_reason', '') or '')
+            )
+            _local_curve_reference_guarded_bounded_active = getattr(
+                cc, 'local_curve_reference_guarded_bounded_active', None
+            )
+            local_curve_reference_guarded_bounded_active_list.append(
+                -1
+                if _local_curve_reference_guarded_bounded_active is None
+                else (1 if bool(_local_curve_reference_guarded_bounded_active) else 0)
+            )
+            local_curve_reference_guarded_bounded_reason_list.append(
+                str(getattr(cc, 'local_curve_reference_guarded_bounded_reason', 'inactive') or 'inactive')
+            )
+            local_curve_reference_guarded_bounded_dwell_frames_list.append(
+                int(getattr(cc, 'local_curve_reference_guarded_bounded_dwell_frames', 0) or 0)
+            )
+            local_curve_reference_guarded_bounded_trigger_raw_delta_m_list.append(
+                float(_guard_trigger_raw_delta)
+                if (
+                    (_guard_trigger_raw_delta := getattr(
+                        cc,
+                        'local_curve_reference_guarded_bounded_trigger_raw_delta_m',
+                        np.nan,
+                    ))
+                    is not None
+                )
+                else np.nan
+            )
+            local_curve_reference_guarded_bounded_exit_raw_delta_m_list.append(
+                float(_guard_exit_raw_delta)
+                if (
+                    (_guard_exit_raw_delta := getattr(
+                        cc,
+                        'local_curve_reference_guarded_bounded_exit_raw_delta_m',
+                        np.nan,
+                    ))
+                    is not None
+                )
+                else np.nan
+            )
+            local_curve_reference_guarded_bounded_trigger_weight_list.append(
+                float(
+                    getattr(
+                        cc,
+                        'local_curve_reference_guarded_bounded_trigger_weight',
+                        0.0,
+                    )
+                    or 0.0
+                )
+            )
+            local_curve_reference_guarded_bounded_blend_floor_list.append(
+                float(
+                    getattr(
+                        cc,
+                        'local_curve_reference_guarded_bounded_blend_floor',
+                        0.0,
+                    )
+                    or 0.0
+                )
+            )
+            _reference_distractor_guard_active = getattr(
+                cc, 'reference_distractor_guard_active', None
+            )
+            reference_distractor_guard_active_list.append(
+                -1
+                if _reference_distractor_guard_active is None
+                else (1 if bool(_reference_distractor_guard_active) else 0)
+            )
+            reference_distractor_guard_reason_list.append(
+                str(getattr(cc, 'reference_distractor_guard_reason', 'inactive') or 'inactive')
+            )
+            reference_distractor_guard_dwell_frames_list.append(
+                int(getattr(cc, 'reference_distractor_guard_dwell_frames', 0) or 0)
+            )
+            reference_distractor_guard_trigger_center_error_m_list.append(
+                float(_ref_guard_trigger_center)
+                if (
+                    (_ref_guard_trigger_center := getattr(
+                        cc,
+                        'reference_distractor_guard_trigger_center_error_m',
+                        np.nan,
+                    ))
+                    is not None
+                )
+                else np.nan
+            )
+            reference_distractor_guard_exit_center_error_m_list.append(
+                float(_ref_guard_exit_center)
+                if (
+                    (_ref_guard_exit_center := getattr(
+                        cc,
+                        'reference_distractor_guard_exit_center_error_m',
+                        np.nan,
+                    ))
+                    is not None
+                )
+                else np.nan
+            )
+            reference_distractor_guard_center_error_m_list.append(
+                float(getattr(cc, 'reference_distractor_guard_center_error_m', 0.0) or 0.0)
+            )
+            reference_distractor_guard_width_error_m_list.append(
+                float(getattr(cc, 'reference_distractor_guard_width_error_m', 0.0) or 0.0)
+            )
+            reference_distractor_guard_trigger_weight_list.append(
+                float(getattr(cc, 'reference_distractor_guard_trigger_weight', 0.0) or 0.0)
+            )
+            reference_distractor_guard_blend_weight_list.append(
+                float(getattr(cc, 'reference_distractor_guard_blend_weight', 0.0) or 0.0)
+            )
+            reference_distractor_guard_expected_center_x_m_list.append(
+                float(_ref_guard_expected_center)
+                if (
+                    (_ref_guard_expected_center := getattr(
+                        cc,
+                        'reference_distractor_guard_expected_center_x_m',
+                        np.nan,
+                    ))
+                    is not None
+                )
+                else np.nan
+            )
+            reference_distractor_guard_expected_heading_rad_list.append(
+                float(getattr(cc, 'reference_distractor_guard_expected_heading_rad', 0.0) or 0.0)
+            )
+            _reference_distractor_input_guard_active = getattr(
+                cc, 'reference_distractor_input_guard_active', None
+            )
+            reference_distractor_input_guard_active_list.append(
+                -1
+                if _reference_distractor_input_guard_active is None
+                else (1 if bool(_reference_distractor_input_guard_active) else 0)
+            )
+            reference_distractor_input_guard_reason_list.append(
+                str(getattr(cc, 'reference_distractor_input_guard_reason', 'inactive') or 'inactive')
+            )
+            reference_distractor_input_guard_dwell_frames_list.append(
+                int(getattr(cc, 'reference_distractor_input_guard_dwell_frames', 0) or 0)
+            )
+            reference_distractor_input_guard_trigger_center_error_m_list.append(
+                float(_input_guard_trigger_center)
+                if (
+                    (_input_guard_trigger_center := getattr(
+                        cc,
+                        'reference_distractor_input_guard_trigger_center_error_m',
+                        np.nan,
+                    ))
+                    is not None
+                )
+                else np.nan
+            )
+            reference_distractor_input_guard_exit_center_error_m_list.append(
+                float(_input_guard_exit_center)
+                if (
+                    (_input_guard_exit_center := getattr(
+                        cc,
+                        'reference_distractor_input_guard_exit_center_error_m',
+                        np.nan,
+                    ))
+                    is not None
+                )
+                else np.nan
+            )
+            reference_distractor_input_guard_center_error_m_list.append(
+                float(getattr(cc, 'reference_distractor_input_guard_center_error_m', 0.0) or 0.0)
+            )
+            reference_distractor_input_guard_width_error_m_list.append(
+                float(getattr(cc, 'reference_distractor_input_guard_width_error_m', 0.0) or 0.0)
+            )
+            reference_distractor_input_guard_trigger_weight_list.append(
+                float(getattr(cc, 'reference_distractor_input_guard_trigger_weight', 0.0) or 0.0)
+            )
+            reference_distractor_input_guard_expected_center_x_m_list.append(
+                float(_input_guard_expected_center)
+                if (
+                    (_input_guard_expected_center := getattr(
+                        cc,
+                        'reference_distractor_input_guard_expected_center_x_m',
+                        np.nan,
+                    ))
+                    is not None
+                )
+                else np.nan
+            )
+            reference_distractor_input_guard_synthetic_left_lane_x_m_list.append(
+                float(_input_guard_left_lane)
+                if (
+                    (_input_guard_left_lane := getattr(
+                        cc,
+                        'reference_distractor_input_guard_synthetic_left_lane_x_m',
+                        np.nan,
+                    ))
+                    is not None
+                )
+                else np.nan
+            )
+            reference_distractor_input_guard_synthetic_right_lane_x_m_list.append(
+                float(_input_guard_right_lane)
+                if (
+                    (_input_guard_right_lane := getattr(
+                        cc,
+                        'reference_distractor_input_guard_synthetic_right_lane_x_m',
+                        np.nan,
+                    ))
+                    is not None
+                )
+                else np.nan
+            )
+            reference_distractor_input_guard_synthetic_lane_width_m_list.append(
+                float(_input_guard_lane_width)
+                if (
+                    (_input_guard_lane_width := getattr(
+                        cc,
+                        'reference_distractor_input_guard_synthetic_lane_width_m',
+                        np.nan,
+                    ))
+                    is not None
+                )
+                else np.nan
+            )
+            _reference_distractor_input_guard_suppressed_lane_coeffs = getattr(
+                cc, 'reference_distractor_input_guard_suppressed_lane_coeffs', None
+            )
+            reference_distractor_input_guard_suppressed_lane_coeffs_list.append(
+                -1
+                if _reference_distractor_input_guard_suppressed_lane_coeffs is None
+                else (1 if bool(_reference_distractor_input_guard_suppressed_lane_coeffs) else 0)
+            )
+            _reference_distractor_input_guard_center_history_seeded = getattr(
+                cc, 'reference_distractor_input_guard_center_history_seeded', None
+            )
+            reference_distractor_input_guard_center_history_seeded_list.append(
+                -1
+                if _reference_distractor_input_guard_center_history_seeded is None
+                else (1 if bool(_reference_distractor_input_guard_center_history_seeded) else 0)
             )
             _local_curve_reference_valid = getattr(cc, 'local_curve_reference_valid', None)
             local_curve_reference_valid_list.append(
@@ -8065,17 +8917,56 @@ class DataRecorder:
             mpc_kappa_bias_ema_list.append(float(getattr(cc, 'mpc_kappa_bias_ema', 0.0)))
             mpc_kappa_bias_guard_active_list.append(int(getattr(cc, 'mpc_kappa_bias_guard_active', False)))
             mpc_kappa_bias_guard_limit_list.append(float(getattr(cc, 'mpc_kappa_bias_guard_limit', 0.0)))
+            mpc_kappa_active_curve_preserve_ratio_list.append(
+                float(getattr(cc, 'mpc_kappa_active_curve_preserve_ratio', 0.0))
+            )
+            mpc_kappa_active_curve_preserve_active_list.append(
+                int(getattr(cc, 'mpc_kappa_active_curve_preserve_active', False))
+            )
+            mpc_kappa_active_curve_preserve_weight_list.append(
+                float(getattr(cc, 'mpc_kappa_active_curve_preserve_weight', 0.0))
+            )
+            mpc_kappa_active_mild_curve_authority_active_list.append(
+                int(getattr(cc, 'mpc_kappa_active_mild_curve_authority_active', False))
+            )
+            mpc_kappa_active_mild_curve_authority_weight_list.append(
+                float(getattr(cc, 'mpc_kappa_active_mild_curve_authority_weight', 0.0))
+            )
+            mpc_kappa_active_mild_curve_authority_ratio_list.append(
+                float(getattr(cc, 'mpc_kappa_active_mild_curve_authority_ratio', 0.0))
+            )
+            mpc_kappa_active_mild_curve_authority_reason_list.append(
+                str(getattr(cc, 'mpc_kappa_active_mild_curve_authority_reason', 'inactive') or 'inactive')
+            )
+            mpc_kappa_active_mild_curve_authority_speed_weight_list.append(
+                float(getattr(cc, 'mpc_kappa_active_mild_curve_authority_speed_weight', 0.0))
+            )
+            mpc_kappa_active_mild_curve_authority_curvature_weight_list.append(
+                float(getattr(cc, 'mpc_kappa_active_mild_curve_authority_curvature_weight', 0.0))
+            )
+            mpc_kappa_active_mild_curve_authority_gate_weight_list.append(
+                float(getattr(cc, 'mpc_kappa_active_mild_curve_authority_gate_weight', 0.0))
+            )
             mpc_fallback_active_list.append(int(getattr(cc, 'mpc_fallback_active', False)))
             mpc_consecutive_failures_list.append(int(getattr(cc, 'mpc_consecutive_failures', 0)))
             mpc_gt_cross_track_m_list.append(float(getattr(cc, 'mpc_gt_cross_track_m', 0.0)))
             mpc_gt_cross_track_at_car_m_list.append(
                 float(getattr(cc, 'mpc_gt_cross_track_at_car_m', 0.0))
             )
+            mpc_gt_cross_track_road_frame_at_car_m_list.append(
+                float(getattr(cc, 'mpc_gt_cross_track_road_frame_at_car_m', 0.0))
+            )
+            mpc_gt_cross_track_vehicle_frame_at_car_m_list.append(
+                float(getattr(cc, 'mpc_gt_cross_track_vehicle_frame_at_car_m', 0.0))
+            )
             mpc_gt_cross_track_lookahead_m_list.append(
                 float(getattr(cc, 'mpc_gt_cross_track_lookahead_m', 0.0))
             )
             mpc_gt_cross_track_source_code_list.append(
                 str(getattr(cc, 'mpc_gt_cross_track_source_code', '') or '')
+            )
+            mpc_gt_cross_track_control_source_code_list.append(
+                str(getattr(cc, 'mpc_gt_cross_track_control_source_code', '') or '')
             )
             mpc_gt_heading_error_rad_list.append(float(getattr(cc, 'mpc_gt_heading_error_rad', 0.0)))
             mpc_using_ground_truth_list.append(float(getattr(cc, 'mpc_using_ground_truth', 0.0)))
@@ -8204,6 +9095,16 @@ class DataRecorder:
                        "curve_local_arm_effect_lateral_shift_term",
                        "curve_local_arm_effect_time_support_term",
                        "curve_local_dynamic_sustain_effect_score",
+                       "curve_preactivation_authority_weight",
+                       "curve_preactivation_authority_active",
+                       "curve_preactivation_blocker_mode",
+                       "curve_preactivation_preview_weight",
+                       "curve_preactivation_speed_weight",
+                       "curve_preactivation_curvature_weight",
+                       "curve_preactivation_distance_weight",
+                       "curve_preactivation_kappa_floor",
+                       "curve_preactivation_lookahead_target",
+                       "curve_preactivation_speed_cap_target",
                        "curve_local_rearm_cooldown_active",
                        "curve_local_force_straight_active",
                        "curve_local_commit_streak_frames",
@@ -8245,8 +9146,45 @@ class DataRecorder:
                        "reference_lookahead_entry_shorten_guard_active",
                        "reference_lookahead_entry_shorten_guard_delta_m",
                        "local_curve_reference_mode",
+                       "local_curve_reference_requested_mode",
                        "local_curve_reference_active",
                        "local_curve_reference_shadow_only",
+                       "local_curve_reference_shadow_promotion_active",
+                       "local_curve_reference_shadow_promotion_weight",
+                       "local_curve_reference_shadow_promotion_blend_floor",
+                       "local_curve_reference_shadow_promotion_reason",
+                       "local_curve_reference_guarded_bounded_active",
+                       "local_curve_reference_guarded_bounded_reason",
+                       "local_curve_reference_guarded_bounded_dwell_frames",
+                       "local_curve_reference_guarded_bounded_trigger_raw_delta_m",
+                       "local_curve_reference_guarded_bounded_exit_raw_delta_m",
+                       "local_curve_reference_guarded_bounded_trigger_weight",
+                       "local_curve_reference_guarded_bounded_blend_floor",
+                       "reference_distractor_guard_active",
+                       "reference_distractor_guard_reason",
+                       "reference_distractor_guard_dwell_frames",
+                       "reference_distractor_guard_trigger_center_error_m",
+                       "reference_distractor_guard_exit_center_error_m",
+                       "reference_distractor_guard_center_error_m",
+                       "reference_distractor_guard_width_error_m",
+                       "reference_distractor_guard_trigger_weight",
+                       "reference_distractor_guard_blend_weight",
+                       "reference_distractor_guard_expected_center_x_m",
+                       "reference_distractor_guard_expected_heading_rad",
+                       "reference_distractor_input_guard_active",
+                       "reference_distractor_input_guard_reason",
+                       "reference_distractor_input_guard_dwell_frames",
+                       "reference_distractor_input_guard_trigger_center_error_m",
+                       "reference_distractor_input_guard_exit_center_error_m",
+                       "reference_distractor_input_guard_center_error_m",
+                       "reference_distractor_input_guard_width_error_m",
+                       "reference_distractor_input_guard_trigger_weight",
+                       "reference_distractor_input_guard_expected_center_x_m",
+                       "reference_distractor_input_guard_synthetic_left_lane_x_m",
+                       "reference_distractor_input_guard_synthetic_right_lane_x_m",
+                       "reference_distractor_input_guard_synthetic_lane_width_m",
+                       "reference_distractor_input_guard_suppressed_lane_coeffs",
+                       "reference_distractor_input_guard_center_history_seeded",
                        "local_curve_reference_valid",
                        "local_curve_reference_source",
                        "local_curve_reference_fallback_active",
@@ -8375,9 +9313,22 @@ class DataRecorder:
                        "mpc_e_lat", "mpc_e_heading", "mpc_kappa_ref",
                        "mpc_kappa_bias_correction", "mpc_kappa_bias_ema",
                        "mpc_kappa_bias_guard_active", "mpc_kappa_bias_guard_limit",
+                       "mpc_kappa_active_curve_preserve_ratio",
+                       "mpc_kappa_active_curve_preserve_active",
+                       "mpc_kappa_active_curve_preserve_weight",
+                       "mpc_kappa_active_mild_curve_authority_active",
+                       "mpc_kappa_active_mild_curve_authority_weight",
+                       "mpc_kappa_active_mild_curve_authority_ratio",
+                       "mpc_kappa_active_mild_curve_authority_reason",
+                       "mpc_kappa_active_mild_curve_authority_speed_weight",
+                       "mpc_kappa_active_mild_curve_authority_curvature_weight",
+                       "mpc_kappa_active_mild_curve_authority_gate_weight",
                        "mpc_fallback_active", "mpc_consecutive_failures",
                        "mpc_gt_cross_track_m", "mpc_gt_cross_track_at_car_m",
+                       "mpc_gt_cross_track_road_frame_at_car_m",
+                       "mpc_gt_cross_track_vehicle_frame_at_car_m",
                        "mpc_gt_cross_track_lookahead_m", "mpc_gt_cross_track_source_code",
+                       "mpc_gt_cross_track_control_source_code",
                        "mpc_gt_heading_error_rad",
                        "mpc_using_ground_truth",
                        "mpc_kappa_preview_used", "mpc_kappa_preview_range",
@@ -8743,6 +9694,40 @@ class DataRecorder:
             self.h5_file["control/curve_local_dynamic_sustain_effect_score"][current_size:] = (
                 curve_local_dynamic_sustain_effect_score_list
             )
+            self.h5_file["control/curve_preactivation_authority_weight"][current_size:] = (
+                curve_preactivation_authority_weight_list
+            )
+            self.h5_file["control/curve_preactivation_authority_active"][current_size:] = np.array(
+                curve_preactivation_authority_active_list, dtype=np.int8
+            )
+            curve_preactivation_blocker_mode_array = np.array(
+                curve_preactivation_blocker_mode_list,
+                dtype=h5py.string_dtype(encoding='utf-8', length=48),
+            )
+            self.h5_file["control/curve_preactivation_blocker_mode"][current_size:] = (
+                curve_preactivation_blocker_mode_array
+            )
+            self.h5_file["control/curve_preactivation_preview_weight"][current_size:] = (
+                curve_preactivation_preview_weight_list
+            )
+            self.h5_file["control/curve_preactivation_speed_weight"][current_size:] = (
+                curve_preactivation_speed_weight_list
+            )
+            self.h5_file["control/curve_preactivation_curvature_weight"][current_size:] = (
+                curve_preactivation_curvature_weight_list
+            )
+            self.h5_file["control/curve_preactivation_distance_weight"][current_size:] = (
+                curve_preactivation_distance_weight_list
+            )
+            self.h5_file["control/curve_preactivation_kappa_floor"][current_size:] = (
+                curve_preactivation_kappa_floor_list
+            )
+            self.h5_file["control/curve_preactivation_lookahead_target"][current_size:] = (
+                curve_preactivation_lookahead_target_list
+            )
+            self.h5_file["control/curve_preactivation_speed_cap_target"][current_size:] = (
+                curve_preactivation_speed_cap_target_list
+            )
             self.h5_file["control/curve_local_rearm_cooldown_active"][current_size:] = np.array(
                 curve_local_rearm_cooldown_active_list, dtype=np.int8
             )
@@ -8880,11 +9865,142 @@ class DataRecorder:
             self.h5_file["control/local_curve_reference_mode"][current_size:] = (
                 local_curve_reference_mode_array
             )
+            local_curve_reference_requested_mode_array = np.array(
+                local_curve_reference_requested_mode_list,
+                dtype=h5py.string_dtype(encoding='utf-8', length=16),
+            )
+            self.h5_file["control/local_curve_reference_requested_mode"][current_size:] = (
+                local_curve_reference_requested_mode_array
+            )
             self.h5_file["control/local_curve_reference_active"][current_size:] = np.array(
                 local_curve_reference_active_list, dtype=np.int8
             )
             self.h5_file["control/local_curve_reference_shadow_only"][current_size:] = np.array(
                 local_curve_reference_shadow_only_list, dtype=np.int8
+            )
+            self.h5_file["control/local_curve_reference_shadow_promotion_active"][current_size:] = np.array(
+                local_curve_reference_shadow_promotion_active_list, dtype=np.int8
+            )
+            self.h5_file["control/local_curve_reference_shadow_promotion_weight"][current_size:] = (
+                local_curve_reference_shadow_promotion_weight_list
+            )
+            self.h5_file["control/local_curve_reference_shadow_promotion_blend_floor"][current_size:] = (
+                local_curve_reference_shadow_promotion_blend_floor_list
+            )
+            local_curve_reference_shadow_promotion_reason_array = np.array(
+                local_curve_reference_shadow_promotion_reason_list,
+                dtype=h5py.string_dtype(encoding='utf-8', length=32),
+            )
+            self.h5_file["control/local_curve_reference_shadow_promotion_reason"][current_size:] = (
+                local_curve_reference_shadow_promotion_reason_array
+            )
+            self.h5_file["control/local_curve_reference_guarded_bounded_active"][current_size:] = np.array(
+                local_curve_reference_guarded_bounded_active_list, dtype=np.int8
+            )
+            local_curve_reference_guarded_bounded_reason_array = np.array(
+                local_curve_reference_guarded_bounded_reason_list,
+                dtype=h5py.string_dtype(encoding='utf-8', length=40),
+            )
+            self.h5_file["control/local_curve_reference_guarded_bounded_reason"][current_size:] = (
+                local_curve_reference_guarded_bounded_reason_array
+            )
+            self.h5_file["control/local_curve_reference_guarded_bounded_dwell_frames"][current_size:] = (
+                local_curve_reference_guarded_bounded_dwell_frames_list
+            )
+            self.h5_file["control/local_curve_reference_guarded_bounded_trigger_raw_delta_m"][current_size:] = (
+                local_curve_reference_guarded_bounded_trigger_raw_delta_m_list
+            )
+            self.h5_file["control/local_curve_reference_guarded_bounded_exit_raw_delta_m"][current_size:] = (
+                local_curve_reference_guarded_bounded_exit_raw_delta_m_list
+            )
+            self.h5_file["control/local_curve_reference_guarded_bounded_trigger_weight"][current_size:] = (
+                local_curve_reference_guarded_bounded_trigger_weight_list
+            )
+            self.h5_file["control/local_curve_reference_guarded_bounded_blend_floor"][current_size:] = (
+                local_curve_reference_guarded_bounded_blend_floor_list
+            )
+            self.h5_file["control/reference_distractor_guard_active"][current_size:] = np.array(
+                reference_distractor_guard_active_list, dtype=np.int8
+            )
+            reference_distractor_guard_reason_array = np.array(
+                reference_distractor_guard_reason_list,
+                dtype=h5py.string_dtype(encoding='utf-8', length=40),
+            )
+            self.h5_file["control/reference_distractor_guard_reason"][current_size:] = (
+                reference_distractor_guard_reason_array
+            )
+            self.h5_file["control/reference_distractor_guard_dwell_frames"][current_size:] = (
+                reference_distractor_guard_dwell_frames_list
+            )
+            self.h5_file["control/reference_distractor_guard_trigger_center_error_m"][current_size:] = (
+                reference_distractor_guard_trigger_center_error_m_list
+            )
+            self.h5_file["control/reference_distractor_guard_exit_center_error_m"][current_size:] = (
+                reference_distractor_guard_exit_center_error_m_list
+            )
+            self.h5_file["control/reference_distractor_guard_center_error_m"][current_size:] = (
+                reference_distractor_guard_center_error_m_list
+            )
+            self.h5_file["control/reference_distractor_guard_width_error_m"][current_size:] = (
+                reference_distractor_guard_width_error_m_list
+            )
+            self.h5_file["control/reference_distractor_guard_trigger_weight"][current_size:] = (
+                reference_distractor_guard_trigger_weight_list
+            )
+            self.h5_file["control/reference_distractor_guard_blend_weight"][current_size:] = (
+                reference_distractor_guard_blend_weight_list
+            )
+            self.h5_file["control/reference_distractor_guard_expected_center_x_m"][current_size:] = (
+                reference_distractor_guard_expected_center_x_m_list
+            )
+            self.h5_file["control/reference_distractor_guard_expected_heading_rad"][current_size:] = (
+                reference_distractor_guard_expected_heading_rad_list
+            )
+            self.h5_file["control/reference_distractor_input_guard_active"][current_size:] = np.array(
+                reference_distractor_input_guard_active_list, dtype=np.int8
+            )
+            reference_distractor_input_guard_reason_array = np.array(
+                reference_distractor_input_guard_reason_list,
+                dtype=self.h5_file["control/reference_distractor_input_guard_reason"].dtype,
+            )
+            self.h5_file["control/reference_distractor_input_guard_reason"][current_size:] = (
+                reference_distractor_input_guard_reason_array
+            )
+            self.h5_file["control/reference_distractor_input_guard_dwell_frames"][current_size:] = np.array(
+                reference_distractor_input_guard_dwell_frames_list, dtype=np.int32
+            )
+            self.h5_file["control/reference_distractor_input_guard_trigger_center_error_m"][current_size:] = (
+                reference_distractor_input_guard_trigger_center_error_m_list
+            )
+            self.h5_file["control/reference_distractor_input_guard_exit_center_error_m"][current_size:] = (
+                reference_distractor_input_guard_exit_center_error_m_list
+            )
+            self.h5_file["control/reference_distractor_input_guard_center_error_m"][current_size:] = (
+                reference_distractor_input_guard_center_error_m_list
+            )
+            self.h5_file["control/reference_distractor_input_guard_width_error_m"][current_size:] = (
+                reference_distractor_input_guard_width_error_m_list
+            )
+            self.h5_file["control/reference_distractor_input_guard_trigger_weight"][current_size:] = (
+                reference_distractor_input_guard_trigger_weight_list
+            )
+            self.h5_file["control/reference_distractor_input_guard_expected_center_x_m"][current_size:] = (
+                reference_distractor_input_guard_expected_center_x_m_list
+            )
+            self.h5_file["control/reference_distractor_input_guard_synthetic_left_lane_x_m"][current_size:] = (
+                reference_distractor_input_guard_synthetic_left_lane_x_m_list
+            )
+            self.h5_file["control/reference_distractor_input_guard_synthetic_right_lane_x_m"][current_size:] = (
+                reference_distractor_input_guard_synthetic_right_lane_x_m_list
+            )
+            self.h5_file["control/reference_distractor_input_guard_synthetic_lane_width_m"][current_size:] = (
+                reference_distractor_input_guard_synthetic_lane_width_m_list
+            )
+            self.h5_file["control/reference_distractor_input_guard_suppressed_lane_coeffs"][current_size:] = np.array(
+                reference_distractor_input_guard_suppressed_lane_coeffs_list, dtype=np.int8
+            )
+            self.h5_file["control/reference_distractor_input_guard_center_history_seeded"][current_size:] = np.array(
+                reference_distractor_input_guard_center_history_seeded_list, dtype=np.int8
             )
             self.h5_file["control/local_curve_reference_valid"][current_size:] = np.array(
                 local_curve_reference_valid_list, dtype=np.int8
@@ -9335,17 +10451,58 @@ class DataRecorder:
             self.h5_file["control/mpc_kappa_bias_guard_limit"][current_size:] = (
                 mpc_kappa_bias_guard_limit_list
             )
+            self.h5_file["control/mpc_kappa_active_curve_preserve_ratio"][current_size:] = (
+                mpc_kappa_active_curve_preserve_ratio_list
+            )
+            self.h5_file["control/mpc_kappa_active_curve_preserve_active"][current_size:] = (
+                mpc_kappa_active_curve_preserve_active_list
+            )
+            self.h5_file["control/mpc_kappa_active_curve_preserve_weight"][current_size:] = (
+                mpc_kappa_active_curve_preserve_weight_list
+            )
+            self.h5_file["control/mpc_kappa_active_mild_curve_authority_active"][current_size:] = (
+                mpc_kappa_active_mild_curve_authority_active_list
+            )
+            self.h5_file["control/mpc_kappa_active_mild_curve_authority_weight"][current_size:] = (
+                mpc_kappa_active_mild_curve_authority_weight_list
+            )
+            self.h5_file["control/mpc_kappa_active_mild_curve_authority_ratio"][current_size:] = (
+                mpc_kappa_active_mild_curve_authority_ratio_list
+            )
+            self.h5_file["control/mpc_kappa_active_mild_curve_authority_reason"][current_size:] = np.array(
+                mpc_kappa_active_mild_curve_authority_reason_list,
+                dtype=h5py.string_dtype(encoding='utf-8', length=32),
+            )
+            self.h5_file["control/mpc_kappa_active_mild_curve_authority_speed_weight"][current_size:] = (
+                mpc_kappa_active_mild_curve_authority_speed_weight_list
+            )
+            self.h5_file["control/mpc_kappa_active_mild_curve_authority_curvature_weight"][current_size:] = (
+                mpc_kappa_active_mild_curve_authority_curvature_weight_list
+            )
+            self.h5_file["control/mpc_kappa_active_mild_curve_authority_gate_weight"][current_size:] = (
+                mpc_kappa_active_mild_curve_authority_gate_weight_list
+            )
             self.h5_file["control/mpc_fallback_active"][current_size:] = mpc_fallback_active_list
             self.h5_file["control/mpc_consecutive_failures"][current_size:] = mpc_consecutive_failures_list
             self.h5_file["control/mpc_gt_cross_track_m"][current_size:] = mpc_gt_cross_track_m_list
             self.h5_file["control/mpc_gt_cross_track_at_car_m"][current_size:] = (
                 mpc_gt_cross_track_at_car_m_list
             )
+            self.h5_file["control/mpc_gt_cross_track_road_frame_at_car_m"][current_size:] = (
+                mpc_gt_cross_track_road_frame_at_car_m_list
+            )
+            self.h5_file["control/mpc_gt_cross_track_vehicle_frame_at_car_m"][current_size:] = (
+                mpc_gt_cross_track_vehicle_frame_at_car_m_list
+            )
             self.h5_file["control/mpc_gt_cross_track_lookahead_m"][current_size:] = (
                 mpc_gt_cross_track_lookahead_m_list
             )
             self.h5_file["control/mpc_gt_cross_track_source_code"][current_size:] = np.array(
                 mpc_gt_cross_track_source_code_list,
+                dtype=h5py.string_dtype(encoding='utf-8', length=32),
+            )
+            self.h5_file["control/mpc_gt_cross_track_control_source_code"][current_size:] = np.array(
+                mpc_gt_cross_track_control_source_code_list,
                 dtype=h5py.string_dtype(encoding='utf-8', length=32),
             )
             self.h5_file["control/mpc_gt_heading_error_rad"][current_size:] = mpc_gt_heading_error_rad_list

@@ -1180,6 +1180,15 @@ def _build_highway_mild_curve_contract_summary(data: Dict) -> Dict:
         "rearm_cycle_on_high_error_min_pct": 15.0,
         "mpc_curvature_softness_ratio_max": 0.50,
         "mpc_bias_cancellation_on_high_error_min_pct": 20.0,
+        "preactivation_missing_on_high_error_min_pct": 20.0,
+        "active_state_issue_on_high_error_min_pct": 20.0,
+        "active_state_shadow_insufficient_raw_delta_min_m": 0.25,
+        "active_state_shadow_cap_ratio_max": 0.10,
+        "active_state_shadow_insufficient_on_high_error_min_pct": 20.0,
+        "active_state_preserve_weight_low_max": 0.25,
+        "active_state_preserve_low_on_high_error_min_pct": 20.0,
+        "active_state_curve_cap_effective_margin_mps": 0.20,
+        "active_state_curve_cap_ineffective_on_high_error_min_pct": 40.0,
     }
     base = {
         "schema_version": "v1",
@@ -1200,16 +1209,40 @@ def _build_highway_mild_curve_contract_summary(data: Dict) -> Dict:
         "rearm_cycle_on_high_error_rate": None,
         "mpc_curvature_softness_on_high_error_rate": None,
         "mpc_bias_cancellation_on_high_error_rate": None,
+        "preactivation_candidate_on_high_error_rate": None,
+        "preactivation_authority_active_on_high_error_rate": None,
+        "preactivation_authority_missing_on_high_error_rate": None,
+        "active_state_tracking_failure_on_high_error_rate": None,
+        "active_state_shadow_insufficient_on_high_error_rate": None,
+        "active_state_shadow_promotion_active_on_high_error_rate": None,
+        "wrong_target_distractor_reference_divergence_on_high_error_rate": None,
+        "distractor_guarded_bounded_active_on_high_error_rate": None,
+        "active_state_preserve_weight_low_on_high_error_rate": None,
+        "active_state_curve_cap_ineffective_on_high_error_rate": None,
+        "active_mild_curve_authority_active_on_high_error_rate": None,
+        "active_mild_curve_authority_speed_gated_on_high_error_rate": None,
         "transport_fallback_overlap_on_high_error_rate": None,
         "poor_perception_overlap_on_high_error_rate": None,
         "mpc_feasible_on_high_error_rate": None,
         "mpc_fallback_overlap_on_high_error_rate": None,
+        "preactivation_issue_detected": False,
+        "active_state_issue_detected": False,
+        "wrong_target_distractor_reference_divergence_issue_detected": False,
+        "active_mild_curve_authority_issue_detected": False,
         "rearm_cycle_issue_detected": False,
         "mpc_bias_cancellation_issue_detected": False,
+        "scenario_family_mode": None,
         "curve_intent_state_mode_on_high_error": None,
         "curve_local_state_mode_on_high_error": None,
+        "curve_local_state_mode_on_active_state_failure": None,
         "curve_activation_blocker_mode_on_high_error": None,
         "curve_activation_blocker_mode_on_underactivated": None,
+        "curve_preactivation_blocker_mode_on_high_error": None,
+        "speed_governor_curve_cap_reason_mode_on_active_state_failure": None,
+        "local_curve_reference_requested_mode_on_active_state_failure": None,
+        "local_curve_reference_shadow_promotion_reason_mode_on_high_error": None,
+        "local_curve_reference_guarded_bounded_reason_mode_on_high_error": None,
+        "mpc_active_mild_curve_authority_reason_mode_on_high_error": None,
         "lateral_error_abs_m": _finite_stats(None),
         "road_frame_lane_center_offset_abs_m": _finite_stats(None),
         "reference_point_curvature_abs": _finite_stats(None),
@@ -1225,6 +1258,28 @@ def _build_highway_mild_curve_contract_summary(data: Dict) -> Dict:
         "curve_local_sustain_phase_raw": _finite_stats(None),
         "curve_phase_term_path": _finite_stats(None),
         "curve_local_dynamic_sustain_effect_score": _finite_stats(None),
+        "curve_preactivation_authority_weight": _finite_stats(None),
+        "curve_preactivation_preview_weight": _finite_stats(None),
+        "curve_preactivation_speed_weight": _finite_stats(None),
+        "curve_preactivation_curvature_weight": _finite_stats(None),
+        "curve_preactivation_distance_weight": _finite_stats(None),
+        "curve_preactivation_kappa_floor": _finite_stats(None),
+        "curve_preactivation_lookahead_target": _finite_stats(None),
+        "curve_preactivation_speed_cap_target": _finite_stats(None),
+        "mpc_kappa_active_curve_preserve_weight_active_state": _finite_stats(None),
+        "mpc_kappa_active_mild_curve_authority_weight_active_state": _finite_stats(None),
+        "mpc_kappa_active_mild_curve_authority_ratio_active_state": _finite_stats(None),
+        "mpc_kappa_active_mild_curve_authority_speed_weight": _finite_stats(None),
+        "mpc_kappa_active_mild_curve_authority_curvature_weight": _finite_stats(None),
+        "mpc_kappa_active_mild_curve_authority_gate_weight": _finite_stats(None),
+        "speed_governor_curve_cap_speed_active_state_m": _finite_stats(None),
+        "speed_governor_curve_cap_margin_active_state_mps": _finite_stats(None),
+        "local_curve_reference_raw_delta_active_state_m": _finite_stats(None),
+        "local_curve_reference_capped_delta_active_state_m": _finite_stats(None),
+        "local_curve_reference_cap_ratio_active_state": _finite_stats(None),
+        "local_curve_reference_shadow_promotion_weight": _finite_stats(None),
+        "local_curve_reference_guarded_bounded_trigger_weight": _finite_stats(None),
+        "local_curve_reference_guarded_bounded_blend_floor": _finite_stats(None),
         "mpc_kappa_ratio_to_reference": _finite_stats(None),
         "mpc_kappa_bias_correction": _finite_stats(None),
         "limits": limits,
@@ -1278,6 +1333,31 @@ def _build_highway_mild_curve_contract_summary(data: Dict) -> Dict:
         data.get("curve_phase_term_path"),
         data.get("curve_local_dynamic_sustain_effect_score"),
         data.get("mpc_kappa_bias_correction"),
+        data.get("curve_preactivation_authority_weight"),
+        data.get("curve_preactivation_authority_active"),
+        data.get("curve_preactivation_blocker_mode"),
+        data.get("curve_preactivation_preview_weight"),
+        data.get("curve_preactivation_speed_weight"),
+        data.get("curve_preactivation_curvature_weight"),
+        data.get("curve_preactivation_distance_weight"),
+        data.get("curve_preactivation_kappa_floor"),
+        data.get("curve_preactivation_lookahead_target"),
+        data.get("curve_preactivation_speed_cap_target"),
+        data.get("local_curve_reference_shadow_only"),
+        data.get("local_curve_reference_raw_delta_m"),
+        data.get("local_curve_reference_capped_delta_m"),
+        data.get("local_curve_reference_shadow_promotion_active"),
+        data.get("local_curve_reference_shadow_promotion_weight"),
+        data.get("local_curve_reference_guarded_bounded_active"),
+        data.get("local_curve_reference_guarded_bounded_trigger_weight"),
+        data.get("local_curve_reference_guarded_bounded_blend_floor"),
+        data.get("mpc_kappa_active_mild_curve_authority_active"),
+        data.get("mpc_kappa_active_mild_curve_authority_weight"),
+        data.get("mpc_kappa_active_mild_curve_authority_ratio"),
+        data.get("mpc_kappa_active_mild_curve_authority_reason"),
+        data.get("mpc_kappa_active_mild_curve_authority_speed_weight"),
+        data.get("mpc_kappa_active_mild_curve_authority_curvature_weight"),
+        data.get("mpc_kappa_active_mild_curve_authority_gate_weight"),
     ]
     for series in optional_series:
         if series is not None:
@@ -1303,6 +1383,13 @@ def _build_highway_mild_curve_contract_summary(data: Dict) -> Dict:
         if speed is not None
         else np.full(n, np.nan, dtype=np.float64)
     )
+    radar_candidate_present = data.get("radar_fwd_candidate_present")
+    radar_candidate_present_arr = (
+        np.asarray(radar_candidate_present[:n], dtype=np.float64)
+        if radar_candidate_present is not None
+        else np.zeros(n, dtype=np.float64)
+    )
+    radar_reject_reasons = _decode_string_series(data.get("radar_fwd_reject_reason"))
     sync_fallback = data.get("sync_packet_fallback_active")
     sync_fallback_arr = (
         np.asarray(sync_fallback[:n], dtype=np.float64)
@@ -1393,6 +1480,212 @@ def _build_highway_mild_curve_contract_summary(data: Dict) -> Dict:
         if mpc_kappa_bias_correction is not None
         else (mpc_kappa_ref_arr - np.asarray(ref_curvature[:n], dtype=np.float64))
     )
+    preactivation_authority_weight = data.get("curve_preactivation_authority_weight")
+    preactivation_authority_weight_arr = (
+        np.asarray(preactivation_authority_weight[:n], dtype=np.float64)
+        if preactivation_authority_weight is not None
+        else np.zeros(n, dtype=np.float64)
+    )
+    preactivation_authority_active = data.get("curve_preactivation_authority_active")
+    preactivation_authority_active_arr = (
+        np.asarray(preactivation_authority_active[:n], dtype=np.float64)
+        if preactivation_authority_active is not None
+        else np.zeros(n, dtype=np.float64)
+    )
+    preactivation_blocker_modes = _decode_string_series(
+        data.get("curve_preactivation_blocker_mode")
+    )
+    preactivation_preview_weight = data.get("curve_preactivation_preview_weight")
+    preactivation_preview_weight_arr = (
+        np.asarray(preactivation_preview_weight[:n], dtype=np.float64)
+        if preactivation_preview_weight is not None
+        else np.zeros(n, dtype=np.float64)
+    )
+    preactivation_speed_weight = data.get("curve_preactivation_speed_weight")
+    preactivation_speed_weight_arr = (
+        np.asarray(preactivation_speed_weight[:n], dtype=np.float64)
+        if preactivation_speed_weight is not None
+        else np.zeros(n, dtype=np.float64)
+    )
+    preactivation_curvature_weight = data.get("curve_preactivation_curvature_weight")
+    preactivation_curvature_weight_arr = (
+        np.asarray(preactivation_curvature_weight[:n], dtype=np.float64)
+        if preactivation_curvature_weight is not None
+        else np.zeros(n, dtype=np.float64)
+    )
+    preactivation_distance_weight = data.get("curve_preactivation_distance_weight")
+    preactivation_distance_weight_arr = (
+        np.asarray(preactivation_distance_weight[:n], dtype=np.float64)
+        if preactivation_distance_weight is not None
+        else np.zeros(n, dtype=np.float64)
+    )
+    preactivation_kappa_floor = data.get("curve_preactivation_kappa_floor")
+    preactivation_kappa_floor_arr = (
+        np.asarray(preactivation_kappa_floor[:n], dtype=np.float64)
+        if preactivation_kappa_floor is not None
+        else np.full(n, np.nan, dtype=np.float64)
+    )
+    preactivation_lookahead_target = data.get("curve_preactivation_lookahead_target")
+    preactivation_lookahead_target_arr = (
+        np.asarray(preactivation_lookahead_target[:n], dtype=np.float64)
+        if preactivation_lookahead_target is not None
+        else np.full(n, np.nan, dtype=np.float64)
+    )
+    preactivation_speed_cap_target = data.get("curve_preactivation_speed_cap_target")
+    preactivation_speed_cap_target_arr = (
+        np.asarray(preactivation_speed_cap_target[:n], dtype=np.float64)
+        if preactivation_speed_cap_target is not None
+        else np.full(n, np.nan, dtype=np.float64)
+    )
+    local_curve_reference_requested_modes = _decode_string_series(
+        data.get("local_curve_reference_requested_mode")
+    )
+    local_curve_reference_shadow_promotion_reasons = _decode_string_series(
+        data.get("local_curve_reference_shadow_promotion_reason")
+    )
+    local_curve_reference_guarded_bounded_reasons = _decode_string_series(
+        data.get("local_curve_reference_guarded_bounded_reason")
+    )
+    local_curve_reference_shadow_only = data.get("local_curve_reference_shadow_only")
+    local_curve_reference_shadow_only_arr = (
+        np.asarray(local_curve_reference_shadow_only[:n], dtype=np.float64)
+        if local_curve_reference_shadow_only is not None
+        else np.zeros(n, dtype=np.float64)
+    )
+    local_curve_reference_raw_delta = data.get("local_curve_reference_raw_delta_m")
+    local_curve_reference_raw_delta_arr = (
+        np.asarray(local_curve_reference_raw_delta[:n], dtype=np.float64)
+        if local_curve_reference_raw_delta is not None
+        else np.full(n, np.nan, dtype=np.float64)
+    )
+    local_curve_reference_capped_delta = data.get("local_curve_reference_capped_delta_m")
+    local_curve_reference_capped_delta_arr = (
+        np.asarray(local_curve_reference_capped_delta[:n], dtype=np.float64)
+        if local_curve_reference_capped_delta is not None
+        else np.full(n, np.nan, dtype=np.float64)
+    )
+    local_curve_reference_cap_ratio_arr = np.divide(
+        local_curve_reference_capped_delta_arr,
+        local_curve_reference_raw_delta_arr,
+        out=np.full(n, np.nan, dtype=np.float64),
+        where=np.abs(local_curve_reference_raw_delta_arr) > 1e-6,
+    )
+    local_curve_reference_shadow_promotion_active = data.get(
+        "local_curve_reference_shadow_promotion_active"
+    )
+    local_curve_reference_shadow_promotion_active_arr = (
+        np.asarray(local_curve_reference_shadow_promotion_active[:n], dtype=np.float64)
+        if local_curve_reference_shadow_promotion_active is not None
+        else np.zeros(n, dtype=np.float64)
+    )
+    local_curve_reference_shadow_promotion_weight = data.get(
+        "local_curve_reference_shadow_promotion_weight"
+    )
+    local_curve_reference_shadow_promotion_weight_arr = (
+        np.asarray(local_curve_reference_shadow_promotion_weight[:n], dtype=np.float64)
+        if local_curve_reference_shadow_promotion_weight is not None
+        else np.full(n, np.nan, dtype=np.float64)
+    )
+    local_curve_reference_guarded_bounded_active = data.get(
+        "local_curve_reference_guarded_bounded_active"
+    )
+    local_curve_reference_guarded_bounded_active_arr = (
+        np.asarray(local_curve_reference_guarded_bounded_active[:n], dtype=np.float64)
+        if local_curve_reference_guarded_bounded_active is not None
+        else np.zeros(n, dtype=np.float64)
+    )
+    local_curve_reference_guarded_bounded_trigger_weight = data.get(
+        "local_curve_reference_guarded_bounded_trigger_weight"
+    )
+    local_curve_reference_guarded_bounded_trigger_weight_arr = (
+        np.asarray(local_curve_reference_guarded_bounded_trigger_weight[:n], dtype=np.float64)
+        if local_curve_reference_guarded_bounded_trigger_weight is not None
+        else np.full(n, np.nan, dtype=np.float64)
+    )
+    local_curve_reference_guarded_bounded_blend_floor = data.get(
+        "local_curve_reference_guarded_bounded_blend_floor"
+    )
+    local_curve_reference_guarded_bounded_blend_floor_arr = (
+        np.asarray(local_curve_reference_guarded_bounded_blend_floor[:n], dtype=np.float64)
+        if local_curve_reference_guarded_bounded_blend_floor is not None
+        else np.full(n, np.nan, dtype=np.float64)
+    )
+    active_mild_curve_authority_active = data.get("mpc_kappa_active_mild_curve_authority_active")
+    active_mild_curve_authority_active_arr = (
+        np.asarray(active_mild_curve_authority_active[:n], dtype=np.float64)
+        if active_mild_curve_authority_active is not None
+        else np.zeros(n, dtype=np.float64)
+    )
+    active_mild_curve_authority_weight = data.get("mpc_kappa_active_mild_curve_authority_weight")
+    active_mild_curve_authority_weight_arr = (
+        np.asarray(active_mild_curve_authority_weight[:n], dtype=np.float64)
+        if active_mild_curve_authority_weight is not None
+        else np.zeros(n, dtype=np.float64)
+    )
+    active_mild_curve_authority_ratio = data.get("mpc_kappa_active_mild_curve_authority_ratio")
+    active_mild_curve_authority_ratio_arr = (
+        np.asarray(active_mild_curve_authority_ratio[:n], dtype=np.float64)
+        if active_mild_curve_authority_ratio is not None
+        else np.zeros(n, dtype=np.float64)
+    )
+    active_mild_curve_authority_reasons = _decode_string_series(
+        data.get("mpc_kappa_active_mild_curve_authority_reason")
+    )
+    active_mild_curve_authority_speed_weight = data.get(
+        "mpc_kappa_active_mild_curve_authority_speed_weight"
+    )
+    active_mild_curve_authority_speed_weight_arr = (
+        np.asarray(active_mild_curve_authority_speed_weight[:n], dtype=np.float64)
+        if active_mild_curve_authority_speed_weight is not None
+        else np.zeros(n, dtype=np.float64)
+    )
+    active_mild_curve_authority_curvature_weight = data.get(
+        "mpc_kappa_active_mild_curve_authority_curvature_weight"
+    )
+    active_mild_curve_authority_curvature_weight_arr = (
+        np.asarray(active_mild_curve_authority_curvature_weight[:n], dtype=np.float64)
+        if active_mild_curve_authority_curvature_weight is not None
+        else np.zeros(n, dtype=np.float64)
+    )
+    active_mild_curve_authority_gate_weight = data.get(
+        "mpc_kappa_active_mild_curve_authority_gate_weight"
+    )
+    active_mild_curve_authority_gate_weight_arr = (
+        np.asarray(active_mild_curve_authority_gate_weight[:n], dtype=np.float64)
+        if active_mild_curve_authority_gate_weight is not None
+        else np.zeros(n, dtype=np.float64)
+    )
+    local_curve_reference_active = data.get("local_curve_reference_active")
+    local_curve_reference_active_arr = (
+        np.asarray(local_curve_reference_active[:n], dtype=np.float64)
+        if local_curve_reference_active is not None
+        else np.zeros(n, dtype=np.float64)
+    )
+    local_curve_reference_blend_weight = data.get("local_curve_reference_blend_weight")
+    local_curve_reference_blend_weight_arr = (
+        np.asarray(local_curve_reference_blend_weight[:n], dtype=np.float64)
+        if local_curve_reference_blend_weight is not None
+        else np.full(n, np.nan, dtype=np.float64)
+    )
+    curve_cap_speed = data.get("speed_governor_curve_cap_speed")
+    curve_cap_speed_arr = (
+        np.asarray(curve_cap_speed[:n], dtype=np.float64)
+        if curve_cap_speed is not None
+        else np.full(n, np.nan, dtype=np.float64)
+    )
+    curve_cap_margin = data.get("speed_governor_curve_cap_margin_mps")
+    curve_cap_margin_arr = (
+        np.asarray(curve_cap_margin[:n], dtype=np.float64)
+        if curve_cap_margin is not None
+        else np.full(n, np.nan, dtype=np.float64)
+    )
+    curve_cap_reasons = _decode_string_series(data.get("speed_governor_curve_cap_reason"))
+    mpc_active_curve_preserve_weight = data.get("mpc_kappa_active_curve_preserve_weight")
+    mpc_active_curve_preserve_weight_arr = (
+        np.asarray(mpc_active_curve_preserve_weight[:n], dtype=np.float64)
+        if mpc_active_curve_preserve_weight is not None
+        else np.zeros(n, dtype=np.float64)
+    )
 
     high_error_mask = lateral_error_arr >= limits["high_lateral_error_min_m"]
     mild_curve_mask = (
@@ -1463,8 +1756,113 @@ def _build_highway_mild_curve_contract_summary(data: Dict) -> Dict:
         & np.isfinite(mpc_kappa_bias_correction_arr)
         & (np.abs(mpc_kappa_bias_correction_arr) >= 0.5 * ref_curvature_arr)
     )
+    preactivation_candidate_mask = (
+        high_error_mask
+        & mild_curve_mask
+        & small_lane_offset_mask
+        & (~poor_perception_mask)
+        & (~transport_fallback_mask)
+        & mpc_feasible_mask
+        & (preactivation_authority_weight_arr >= 0.35)
+    )
+    preactivation_active_mask = (
+        preactivation_candidate_mask & (preactivation_authority_active_arr > 0.5)
+    )
+    preactivation_missing_mask = (
+        preactivation_candidate_mask & (~preactivation_active_mask)
+    )
+    active_state_failure_mask = (
+        high_error_mask
+        & mild_curve_mask
+        & (~curve_local_inactive_mask)
+        & small_lane_offset_mask
+        & (~poor_perception_mask)
+        & (~transport_fallback_mask)
+        & mpc_feasible_mask
+    )
+    active_state_shadow_insufficient_mask = (
+        active_state_failure_mask
+        & (local_curve_reference_shadow_only_arr > 0.5)
+        & np.isfinite(local_curve_reference_raw_delta_arr)
+        & (local_curve_reference_raw_delta_arr >= limits["active_state_shadow_insufficient_raw_delta_min_m"])
+        & np.isfinite(local_curve_reference_cap_ratio_arr)
+        & (local_curve_reference_cap_ratio_arr <= limits["active_state_shadow_cap_ratio_max"])
+    )
+    active_state_shadow_promotion_active_mask = (
+        active_state_failure_mask
+        & (local_curve_reference_shadow_promotion_active_arr > 0.5)
+    )
+    wrong_target_reject_mask = np.array(
+        [
+            (radar_candidate_present_arr[i] > 0.5)
+            and i < len(radar_reject_reasons)
+            and radar_reject_reasons[i] in {"wrong_lane", "opposite_direction"}
+            for i in range(n)
+        ],
+        dtype=bool,
+    )
+    distractor_guarded_bounded_active_mask = (
+        active_state_failure_mask & (local_curve_reference_guarded_bounded_active_arr > 0.5)
+    )
+    wrong_target_distractor_reference_divergence_mask = (
+        high_error_mask
+        & wrong_target_reject_mask
+        & (~poor_perception_mask)
+        & (~transport_fallback_mask)
+        & np.isfinite(local_curve_reference_raw_delta_arr)
+        & (local_curve_reference_raw_delta_arr >= 0.75)
+        & (
+            (
+                (local_curve_reference_active_arr > 0.5)
+                & np.isfinite(local_curve_reference_blend_weight_arr)
+                & (local_curve_reference_blend_weight_arr <= 0.40)
+            )
+            | curve_local_inactive_mask
+        )
+    )
+    active_state_preserve_low_mask = (
+        active_state_failure_mask
+        & np.isfinite(mpc_active_curve_preserve_weight_arr)
+        & (mpc_active_curve_preserve_weight_arr <= limits["active_state_preserve_weight_low_max"])
+    )
+    active_mild_curve_authority_active_mask = (
+        active_state_failure_mask
+        & (active_mild_curve_authority_active_arr > 0.5)
+    )
+    active_mild_curve_authority_speed_gated_mask = (
+        active_state_failure_mask
+        & (active_mild_curve_authority_active_arr <= 0.5)
+        & np.array(
+            [
+                str(active_mild_curve_authority_reasons[i] if i < len(active_mild_curve_authority_reasons) else "").strip().lower() == "speed_below_on"
+                for i in range(n)
+            ],
+            dtype=bool,
+        )
+    )
+    active_state_curve_cap_ineffective_mask = (
+        active_state_failure_mask
+        & (
+            (~np.isfinite(curve_cap_speed_arr))
+            | (curve_cap_speed_arr <= 0.0)
+            | (curve_cap_speed_arr >= (speed_arr - limits["active_state_curve_cap_effective_margin_mps"]))
+        )
+    )
 
     high_error_count = int(np.sum(high_error_mask))
+    acc_active = data.get("acc_active")
+    acc_active_arr = (
+        np.asarray(acc_active[:n], dtype=np.float64)
+        if acc_active is not None
+        else np.zeros(n, dtype=np.float64)
+    )
+    track_id = str((data.get("recording_provenance") or {}).get("track_id") or "")
+    if "_reject" in track_id:
+        scenario_family_mode = "wrong_target_reject_only"
+    elif np.mean(acc_active_arr > 0.5) > 0.20:
+        scenario_family_mode = "acc_follow_mild_curve"
+    else:
+        scenario_family_mode = "freeflow_mild_curve"
 
     def _pct(mask: np.ndarray) -> Optional[float]:
         if mask.size == 0:
@@ -1487,18 +1885,64 @@ def _build_highway_mild_curve_contract_summary(data: Dict) -> Dict:
     rearm_cycle_rate = _pct_of_high_error(rearm_cycle_mask)
     mpc_curvature_softness_rate = _pct_of_high_error(mpc_curvature_softness_mask)
     mpc_bias_cancellation_rate = _pct_of_high_error(mpc_bias_cancellation_mask)
+    preactivation_candidate_rate = _pct_of_high_error(preactivation_candidate_mask)
+    preactivation_active_rate = _pct_of_high_error(preactivation_active_mask)
+    preactivation_missing_rate = _pct_of_high_error(preactivation_missing_mask)
+    active_state_failure_rate = _pct_of_high_error(active_state_failure_mask)
+    active_state_shadow_insufficient_rate = _pct_of_high_error(
+        active_state_shadow_insufficient_mask
+    )
+    active_state_shadow_promotion_active_rate = _pct_of_high_error(
+        active_state_shadow_promotion_active_mask
+    )
+    distractor_guarded_bounded_active_rate = _pct_of_high_error(
+        distractor_guarded_bounded_active_mask
+    )
+    wrong_target_distractor_reference_divergence_rate = _pct_of_high_error(
+        wrong_target_distractor_reference_divergence_mask
+    )
+    active_state_preserve_low_rate = _pct_of_high_error(active_state_preserve_low_mask)
+    active_state_curve_cap_ineffective_rate = _pct_of_high_error(
+        active_state_curve_cap_ineffective_mask
+    )
 
     result = {
         **base,
         "availability": "available",
         "issue_detected": bool(
-            high_error_count >= 10
-            and safe_float(underactivated_on_high_error_rate, default=0.0)
-            >= limits["underactivated_on_high_error_min_pct"]
-            and safe_float(mismatch_on_high_error_rate, default=0.0)
-            >= limits["reference_geometry_mismatch_on_high_error_min_pct"]
-            and safe_float(transport_overlap_rate, default=0.0)
-            <= limits["transport_fallback_overlap_max_pct"]
+            (
+                high_error_count >= 10
+                and safe_float(underactivated_on_high_error_rate, default=0.0)
+                >= limits["underactivated_on_high_error_min_pct"]
+                and safe_float(mismatch_on_high_error_rate, default=0.0)
+                >= limits["reference_geometry_mismatch_on_high_error_min_pct"]
+                and safe_float(transport_overlap_rate, default=0.0)
+                <= limits["transport_fallback_overlap_max_pct"]
+            )
+            or (
+                high_error_count >= 10
+                and safe_float(preactivation_missing_rate, default=0.0)
+                >= limits["preactivation_missing_on_high_error_min_pct"]
+            )
+            or (
+                high_error_count >= 10
+                and safe_float(wrong_target_distractor_reference_divergence_rate, default=0.0)
+                >= limits["active_state_issue_on_high_error_min_pct"]
+            )
+            or (
+                high_error_count >= 10
+                and safe_float(active_state_failure_rate, default=0.0)
+                >= limits["active_state_issue_on_high_error_min_pct"]
+                and (
+                    safe_float(active_state_shadow_insufficient_rate, default=0.0)
+                    >= limits["active_state_shadow_insufficient_on_high_error_min_pct"]
+                    or
+                    safe_float(active_state_preserve_low_rate, default=0.0)
+                    >= limits["active_state_preserve_low_on_high_error_min_pct"]
+                    or safe_float(active_state_curve_cap_ineffective_rate, default=0.0)
+                    >= limits["active_state_curve_cap_ineffective_on_high_error_min_pct"]
+                )
+            )
         ),
         "high_error_frame_count": high_error_count,
         "high_error_frame_rate": _pct(high_error_mask),
@@ -1526,12 +1970,68 @@ def _build_highway_mild_curve_contract_summary(data: Dict) -> Dict:
         "rearm_cycle_on_high_error_rate": rearm_cycle_rate,
         "mpc_curvature_softness_on_high_error_rate": mpc_curvature_softness_rate,
         "mpc_bias_cancellation_on_high_error_rate": mpc_bias_cancellation_rate,
+        "preactivation_candidate_on_high_error_rate": preactivation_candidate_rate,
+        "preactivation_authority_active_on_high_error_rate": preactivation_active_rate,
+        "preactivation_authority_missing_on_high_error_rate": preactivation_missing_rate,
+        "active_state_tracking_failure_on_high_error_rate": active_state_failure_rate,
+        "active_state_shadow_insufficient_on_high_error_rate": (
+            active_state_shadow_insufficient_rate
+        ),
+        "active_state_shadow_promotion_active_on_high_error_rate": (
+            active_state_shadow_promotion_active_rate
+        ),
+        "wrong_target_distractor_reference_divergence_on_high_error_rate": (
+            wrong_target_distractor_reference_divergence_rate
+        ),
+        "distractor_guarded_bounded_active_on_high_error_rate": (
+            distractor_guarded_bounded_active_rate
+        ),
+        "active_state_preserve_weight_low_on_high_error_rate": active_state_preserve_low_rate,
+        "active_state_curve_cap_ineffective_on_high_error_rate": (
+            active_state_curve_cap_ineffective_rate
+        ),
+        "active_mild_curve_authority_active_on_high_error_rate": _pct_of_high_error(
+            active_mild_curve_authority_active_mask
+        ),
+        "active_mild_curve_authority_speed_gated_on_high_error_rate": _pct_of_high_error(
+            active_mild_curve_authority_speed_gated_mask
+        ),
         "transport_fallback_overlap_on_high_error_rate": transport_overlap_rate,
         "poor_perception_overlap_on_high_error_rate": _pct_of_high_error(
             poor_perception_mask
         ),
         "mpc_feasible_on_high_error_rate": _pct_of_high_error(mpc_feasible_mask),
         "mpc_fallback_overlap_on_high_error_rate": _pct_of_high_error(mpc_fallback_mask),
+        "preactivation_issue_detected": bool(
+            high_error_count >= 10
+            and safe_float(preactivation_missing_rate, default=0.0)
+            >= limits["preactivation_missing_on_high_error_min_pct"]
+        ),
+        "active_state_issue_detected": bool(
+            high_error_count >= 10
+            and safe_float(active_state_failure_rate, default=0.0)
+            >= limits["active_state_issue_on_high_error_min_pct"]
+            and (
+                safe_float(active_state_shadow_insufficient_rate, default=0.0)
+                >= limits["active_state_shadow_insufficient_on_high_error_min_pct"]
+                or
+                safe_float(active_state_preserve_low_rate, default=0.0)
+                >= limits["active_state_preserve_low_on_high_error_min_pct"]
+                or safe_float(active_state_curve_cap_ineffective_rate, default=0.0)
+                >= limits["active_state_curve_cap_ineffective_on_high_error_min_pct"]
+            )
+        ),
+        "wrong_target_distractor_reference_divergence_issue_detected": bool(
+            high_error_count >= 10
+            and safe_float(wrong_target_distractor_reference_divergence_rate, default=0.0)
+            >= limits["active_state_issue_on_high_error_min_pct"]
+        ),
+        "active_mild_curve_authority_issue_detected": bool(
+            high_error_count >= 10
+            and safe_float(
+                _pct_of_high_error(active_mild_curve_authority_speed_gated_mask), default=0.0
+            ) >= limits["active_state_issue_on_high_error_min_pct"]
+        ),
         "rearm_cycle_issue_detected": bool(
             high_error_count >= 10
             and safe_float(rearm_cycle_rate, default=0.0)
@@ -1542,12 +2042,17 @@ def _build_highway_mild_curve_contract_summary(data: Dict) -> Dict:
             and safe_float(mpc_bias_cancellation_rate, default=0.0)
             >= limits["mpc_bias_cancellation_on_high_error_min_pct"]
         ),
+        "scenario_family_mode": scenario_family_mode,
         "curve_intent_state_mode_on_high_error": _mode_string(
             [curve_intent_states[i] for i in high_error_idx],
             ignore={""},
         ),
         "curve_local_state_mode_on_high_error": _mode_string(
             [curve_local_states[i] for i in high_error_idx],
+            ignore={""},
+        ),
+        "curve_local_state_mode_on_active_state_failure": _mode_string(
+            [curve_local_states[i] for i in np.where(active_state_failure_mask)[0]],
             ignore={""},
         ),
         "curve_activation_blocker_mode_on_high_error": _mode_string(
@@ -1561,6 +2066,49 @@ def _build_highway_mild_curve_contract_summary(data: Dict) -> Dict:
             if curve_activation_blocker_modes
             else [],
             ignore={"", "none"},
+        ),
+        "curve_preactivation_blocker_mode_on_high_error": _mode_string(
+            [preactivation_blocker_modes[i] for i in high_error_idx]
+            if preactivation_blocker_modes
+            else [],
+            ignore={"", "none"},
+        ),
+        "local_curve_reference_requested_mode_on_active_state_failure": _mode_string(
+            [
+                local_curve_reference_requested_modes[i]
+                for i in np.where(active_state_failure_mask)[0]
+            ]
+            if local_curve_reference_requested_modes
+            else [],
+            ignore={""},
+        ),
+        "local_curve_reference_shadow_promotion_reason_mode_on_high_error": _mode_string(
+            [
+                local_curve_reference_shadow_promotion_reasons[i]
+                for i in high_error_idx
+            ]
+            if local_curve_reference_shadow_promotion_reasons
+            else [],
+            ignore={""},
+        ),
+        "local_curve_reference_guarded_bounded_reason_mode_on_high_error": _mode_string(
+            [
+                local_curve_reference_guarded_bounded_reasons[i]
+                for i in high_error_idx
+            ]
+            if local_curve_reference_guarded_bounded_reasons
+            else [],
+            ignore={""},
+        ),
+        "mpc_active_mild_curve_authority_reason_mode_on_high_error": _mode_string(
+            [active_mild_curve_authority_reasons[i] for i in high_error_idx]
+            if active_mild_curve_authority_reasons
+            else [],
+            ignore={""},
+        ),
+        "speed_governor_curve_cap_reason_mode_on_active_state_failure": _mode_string(
+            [curve_cap_reasons[i] for i in np.where(active_state_failure_mask)[0] if i < len(curve_cap_reasons)],
+            ignore={""},
         ),
         "lateral_error_abs_m": _finite_stats(lateral_error_arr[high_error_mask]),
         "road_frame_lane_center_offset_abs_m": _finite_stats(
@@ -1595,6 +2143,72 @@ def _build_highway_mild_curve_contract_summary(data: Dict) -> Dict:
         "curve_local_dynamic_sustain_effect_score": _finite_stats(
             dynamic_sustain_effect_arr[high_error_mask]
         ),
+        "curve_preactivation_authority_weight": _finite_stats(
+            preactivation_authority_weight_arr[high_error_mask]
+        ),
+        "curve_preactivation_preview_weight": _finite_stats(
+            preactivation_preview_weight_arr[high_error_mask]
+        ),
+        "curve_preactivation_speed_weight": _finite_stats(
+            preactivation_speed_weight_arr[high_error_mask]
+        ),
+        "curve_preactivation_curvature_weight": _finite_stats(
+            preactivation_curvature_weight_arr[high_error_mask]
+        ),
+        "curve_preactivation_distance_weight": _finite_stats(
+            preactivation_distance_weight_arr[high_error_mask]
+        ),
+        "curve_preactivation_kappa_floor": _finite_stats(
+            preactivation_kappa_floor_arr[high_error_mask]
+        ),
+        "curve_preactivation_lookahead_target": _finite_stats(
+            preactivation_lookahead_target_arr[high_error_mask]
+        ),
+        "curve_preactivation_speed_cap_target": _finite_stats(
+            preactivation_speed_cap_target_arr[high_error_mask]
+        ),
+        "mpc_kappa_active_curve_preserve_weight_active_state": _finite_stats(
+            mpc_active_curve_preserve_weight_arr[active_state_failure_mask]
+        ),
+        "mpc_kappa_active_mild_curve_authority_weight_active_state": _finite_stats(
+            active_mild_curve_authority_weight_arr[active_state_failure_mask]
+        ),
+        "mpc_kappa_active_mild_curve_authority_ratio_active_state": _finite_stats(
+            active_mild_curve_authority_ratio_arr[active_state_failure_mask]
+        ),
+        "mpc_kappa_active_mild_curve_authority_speed_weight": _finite_stats(
+            active_mild_curve_authority_speed_weight_arr[high_error_mask]
+        ),
+        "mpc_kappa_active_mild_curve_authority_curvature_weight": _finite_stats(
+            active_mild_curve_authority_curvature_weight_arr[high_error_mask]
+        ),
+        "mpc_kappa_active_mild_curve_authority_gate_weight": _finite_stats(
+            active_mild_curve_authority_gate_weight_arr[high_error_mask]
+        ),
+        "speed_governor_curve_cap_speed_active_state_m": _finite_stats(
+            curve_cap_speed_arr[active_state_failure_mask]
+        ),
+        "speed_governor_curve_cap_margin_active_state_mps": _finite_stats(
+            curve_cap_margin_arr[active_state_failure_mask]
+        ),
+        "local_curve_reference_raw_delta_active_state_m": _finite_stats(
+            local_curve_reference_raw_delta_arr[active_state_failure_mask]
+        ),
+        "local_curve_reference_capped_delta_active_state_m": _finite_stats(
+            local_curve_reference_capped_delta_arr[active_state_failure_mask]
+        ),
+        "local_curve_reference_cap_ratio_active_state": _finite_stats(
+            local_curve_reference_cap_ratio_arr[active_state_failure_mask]
+        ),
+        "local_curve_reference_shadow_promotion_weight": _finite_stats(
+            local_curve_reference_shadow_promotion_weight_arr[high_error_mask]
+        ),
+        "local_curve_reference_guarded_bounded_trigger_weight": _finite_stats(
+            local_curve_reference_guarded_bounded_trigger_weight_arr[high_error_mask]
+        ),
+        "local_curve_reference_guarded_bounded_blend_floor": _finite_stats(
+            local_curve_reference_guarded_bounded_blend_floor_arr[high_error_mask]
+        ),
         "mpc_kappa_ratio_to_reference": _finite_stats(
             mpc_kappa_ratio_arr[high_error_mask]
         ),
@@ -1611,8 +2225,12 @@ def _build_mpc_gt_cross_track_contract_summary(data: Dict) -> Dict:
         "small_at_car_cross_track_max_m": 0.12,
         "large_lookahead_cross_track_min_m": 0.50,
         "large_at_car_cross_track_min_m": 1.00,
+        "small_road_frame_cross_track_max_m": 0.12,
+        "large_vehicle_frame_cross_track_min_m": 0.50,
+        "vehicle_vs_road_frame_delta_min_m": 0.35,
         "small_road_offset_max_m": 0.12,
         "semantic_mismatch_on_high_error_min_pct": 50.0,
+        "vehicle_frame_semantic_mismatch_on_high_error_min_pct": 50.0,
         "absolute_coordinate_mismatch_on_high_error_min_pct": 50.0,
         "transport_fallback_overlap_max_pct": 5.0,
         "poor_perception_overlap_max_pct": 10.0,
@@ -1626,21 +2244,29 @@ def _build_mpc_gt_cross_track_contract_summary(data: Dict) -> Dict:
         "high_error_frame_count": 0,
         "high_error_frame_rate": None,
         "semantic_mismatch_on_high_error_rate": None,
+        "vehicle_frame_semantic_mismatch_on_high_error_rate": None,
         "semantic_mismatch_on_straight_high_error_rate": None,
         "absolute_coordinate_mismatch_on_high_error_rate": None,
         "small_at_car_cross_track_on_high_error_rate": None,
         "large_lookahead_cross_track_on_high_error_rate": None,
         "large_at_car_cross_track_on_high_error_rate": None,
+        "small_road_frame_cross_track_on_high_error_rate": None,
+        "large_vehicle_frame_cross_track_on_high_error_rate": None,
         "small_road_offset_on_high_error_rate": None,
         "transport_fallback_overlap_on_high_error_rate": None,
         "poor_perception_overlap_on_high_error_rate": None,
         "curve_local_state_mode_on_high_error": None,
         "mpc_gt_cross_track_source_mode_on_high_error": None,
+        "mpc_gt_cross_track_control_source_mode_on_high_error": None,
         "control_lateral_error_abs_m": _finite_stats(None),
         "mpc_gt_cross_track_abs_m": _finite_stats(None),
         "mpc_gt_cross_track_at_car_abs_m": _finite_stats(None),
+        "mpc_gt_cross_track_road_frame_at_car_abs_m": _finite_stats(None),
+        "mpc_gt_cross_track_vehicle_frame_at_car_abs_m": _finite_stats(None),
         "mpc_gt_cross_track_lookahead_abs_m": _finite_stats(None),
         "gt_cross_track_delta_abs_m": _finite_stats(None),
+        "vehicle_vs_road_frame_cross_track_delta_abs_m": _finite_stats(None),
+        "road_frame_selected_lane_cross_track_abs_m": _finite_stats(None),
         "road_frame_lane_center_offset_abs_m": _finite_stats(None),
         "limits": limits,
     }
@@ -1648,9 +2274,13 @@ def _build_mpc_gt_cross_track_contract_summary(data: Dict) -> Dict:
     lateral_error = data.get("lateral_error")
     source_cross_track = data.get("mpc_gt_cross_track_m")
     at_car_cross_track = data.get("mpc_gt_cross_track_at_car_m")
+    road_frame_cross_track = data.get("mpc_gt_cross_track_road_frame_at_car_m")
+    vehicle_frame_cross_track = data.get("mpc_gt_cross_track_vehicle_frame_at_car_m")
     lookahead_cross_track = data.get("mpc_gt_cross_track_lookahead_m")
+    road_frame_selected_lane_cross_track = data.get("gt_selected_lane_cross_track_road_frame_at_car")
     road_center_offset = data.get("road_frame_lane_center_offset")
     source_codes = _decode_string_series(data.get("mpc_gt_cross_track_source_code"))
+    control_source_codes = _decode_string_series(data.get("mpc_gt_cross_track_control_source_code"))
     curve_local_states = _decode_string_series(data.get("curve_local_state"))
     if any(
         candidate is None
@@ -1662,13 +2292,22 @@ def _build_mpc_gt_cross_track_contract_summary(data: Dict) -> Dict:
         )
     ):
         return base
-    if not source_codes or not curve_local_states:
+    if vehicle_frame_cross_track is None:
+        vehicle_frame_cross_track = at_car_cross_track
+    if road_frame_cross_track is None:
+        road_frame_cross_track = road_frame_selected_lane_cross_track
+    if not control_source_codes:
+        control_source_codes = source_codes
+    if not source_codes:
+        source_codes = control_source_codes
+    if not source_codes or not control_source_codes or not curve_local_states:
         return base
 
     n = min(
         len(lateral_error),
         len(source_cross_track),
         len(at_car_cross_track),
+        len(control_source_codes),
         len(lookahead_cross_track),
         len(source_codes),
         len(curve_local_states),
@@ -1678,6 +2317,9 @@ def _build_mpc_gt_cross_track_contract_summary(data: Dict) -> Dict:
         data.get("confidence"),
         data.get("num_lanes_detected"),
         road_center_offset,
+        road_frame_cross_track,
+        vehicle_frame_cross_track,
+        road_frame_selected_lane_cross_track,
     ]
     for series in optional_series:
         if series is not None:
@@ -1688,8 +2330,24 @@ def _build_mpc_gt_cross_track_contract_summary(data: Dict) -> Dict:
     lateral_error_arr = np.abs(np.asarray(lateral_error[:n], dtype=np.float64))
     source_cross_track_arr = np.abs(np.asarray(source_cross_track[:n], dtype=np.float64))
     at_car_cross_track_arr = np.abs(np.asarray(at_car_cross_track[:n], dtype=np.float64))
+    road_frame_cross_track_arr = (
+        np.abs(np.asarray(road_frame_cross_track[:n], dtype=np.float64))
+        if road_frame_cross_track is not None
+        else np.full(n, np.nan, dtype=np.float64)
+    )
+    vehicle_frame_cross_track_arr = (
+        np.abs(np.asarray(vehicle_frame_cross_track[:n], dtype=np.float64))
+        if vehicle_frame_cross_track is not None
+        else at_car_cross_track_arr.copy()
+    )
     lookahead_cross_track_arr = np.abs(np.asarray(lookahead_cross_track[:n], dtype=np.float64))
     delta_cross_track_arr = np.abs(lookahead_cross_track_arr - at_car_cross_track_arr)
+    vehicle_vs_road_delta_arr = np.abs(vehicle_frame_cross_track_arr - road_frame_cross_track_arr)
+    road_frame_selected_lane_cross_track_arr = (
+        np.abs(np.asarray(road_frame_selected_lane_cross_track[:n], dtype=np.float64))
+        if road_frame_selected_lane_cross_track is not None
+        else road_frame_cross_track_arr.copy()
+    )
     road_center_offset_arr = (
         np.abs(np.asarray(road_center_offset[:n], dtype=np.float64))
         if road_center_offset is not None
@@ -1718,9 +2376,32 @@ def _build_mpc_gt_cross_track_contract_summary(data: Dict) -> Dict:
     small_at_car = at_car_cross_track_arr <= limits["small_at_car_cross_track_max_m"]
     large_lookahead = lookahead_cross_track_arr >= limits["large_lookahead_cross_track_min_m"]
     large_at_car = at_car_cross_track_arr >= limits["large_at_car_cross_track_min_m"]
+    small_road_frame = road_frame_cross_track_arr <= limits["small_road_frame_cross_track_max_m"]
+    large_vehicle_frame = (
+        vehicle_frame_cross_track_arr >= limits["large_vehicle_frame_cross_track_min_m"]
+    )
     small_road_offset = road_center_offset_arr <= limits["small_road_offset_max_m"]
     semantic_mismatch = high_error & small_at_car & large_lookahead
-    absolute_coordinate_mismatch = high_error & large_at_car & small_road_offset
+    vehicle_frame_semantic_mismatch = (
+        high_error
+        & np.array(
+            [code == "vehicle_frame_at_car" for code in control_source_codes[:n]],
+            dtype=bool,
+        )
+        & large_vehicle_frame
+        & small_road_frame
+        & (vehicle_vs_road_delta_arr >= limits["vehicle_vs_road_frame_delta_min_m"])
+    )
+    control_source_is_road_frame = np.array(
+        [code == "road_frame_at_car" for code in control_source_codes[:n]],
+        dtype=bool,
+    )
+    absolute_coordinate_mismatch = (
+        high_error
+        & large_at_car
+        & small_road_offset
+        & ~control_source_is_road_frame
+    )
     straight_high_error = semantic_mismatch & np.array(
         [state == "STRAIGHT" for state in curve_local_states[:n]], dtype=bool
     )
@@ -1737,6 +2418,9 @@ def _build_mpc_gt_cross_track_contract_summary(data: Dict) -> Dict:
     result["semantic_mismatch_on_high_error_rate"] = safe_float(
         (np.sum(semantic_mismatch) / max(high_error_count, 1)) * 100.0
     )
+    result["vehicle_frame_semantic_mismatch_on_high_error_rate"] = safe_float(
+        (np.sum(vehicle_frame_semantic_mismatch) / max(high_error_count, 1)) * 100.0
+    )
     result["semantic_mismatch_on_straight_high_error_rate"] = safe_float(
         (np.sum(straight_high_error) / max(high_error_count, 1)) * 100.0
     )
@@ -1751,6 +2435,12 @@ def _build_mpc_gt_cross_track_contract_summary(data: Dict) -> Dict:
     )
     result["large_at_car_cross_track_on_high_error_rate"] = safe_float(
         (np.sum(high_error & large_at_car) / max(high_error_count, 1)) * 100.0
+    )
+    result["small_road_frame_cross_track_on_high_error_rate"] = safe_float(
+        (np.sum(high_error & small_road_frame) / max(high_error_count, 1)) * 100.0
+    )
+    result["large_vehicle_frame_cross_track_on_high_error_rate"] = safe_float(
+        (np.sum(high_error & large_vehicle_frame) / max(high_error_count, 1)) * 100.0
     )
     result["small_road_offset_on_high_error_rate"] = safe_float(
         (np.sum(high_error & small_road_offset) / max(high_error_count, 1)) * 100.0
@@ -1769,17 +2459,38 @@ def _build_mpc_gt_cross_track_contract_summary(data: Dict) -> Dict:
         [source_codes[idx] for idx, active in enumerate(high_error) if active],
         ignore={"", "nan", "none"},
     )
+    result["mpc_gt_cross_track_control_source_mode_on_high_error"] = _mode_string(
+        [control_source_codes[idx] for idx, active in enumerate(high_error) if active],
+        ignore={"", "nan", "none"},
+    )
     result["control_lateral_error_abs_m"] = _finite_stats(lateral_error_arr[high_error])
     result["mpc_gt_cross_track_abs_m"] = _finite_stats(source_cross_track_arr[high_error])
     result["mpc_gt_cross_track_at_car_abs_m"] = _finite_stats(at_car_cross_track_arr[high_error])
+    result["mpc_gt_cross_track_road_frame_at_car_abs_m"] = _finite_stats(
+        road_frame_cross_track_arr[high_error]
+    )
+    result["mpc_gt_cross_track_vehicle_frame_at_car_abs_m"] = _finite_stats(
+        vehicle_frame_cross_track_arr[high_error]
+    )
     result["mpc_gt_cross_track_lookahead_abs_m"] = _finite_stats(
         lookahead_cross_track_arr[high_error]
     )
     result["gt_cross_track_delta_abs_m"] = _finite_stats(delta_cross_track_arr[high_error])
+    result["vehicle_vs_road_frame_cross_track_delta_abs_m"] = _finite_stats(
+        vehicle_vs_road_delta_arr[high_error]
+    )
+    result["road_frame_selected_lane_cross_track_abs_m"] = _finite_stats(
+        road_frame_selected_lane_cross_track_arr[high_error]
+    )
     result["road_frame_lane_center_offset_abs_m"] = _finite_stats(road_center_offset_arr[high_error])
     semantic_rate = (
         float(result["semantic_mismatch_on_high_error_rate"])
         if result["semantic_mismatch_on_high_error_rate"] is not None
+        else 0.0
+    )
+    vehicle_frame_semantic_rate = (
+        float(result["vehicle_frame_semantic_mismatch_on_high_error_rate"])
+        if result["vehicle_frame_semantic_mismatch_on_high_error_rate"] is not None
         else 0.0
     )
     absolute_rate = (
@@ -1803,14 +2514,23 @@ def _build_mpc_gt_cross_track_contract_summary(data: Dict) -> Dict:
         and fallback_overlap_rate <= limits["transport_fallback_overlap_max_pct"]
         and poor_perception_overlap_rate <= limits["poor_perception_overlap_max_pct"]
     )
+    vehicle_frame_semantic_issue = bool(
+        high_error_count > 0
+        and vehicle_frame_semantic_rate
+        >= limits["vehicle_frame_semantic_mismatch_on_high_error_min_pct"]
+        and fallback_overlap_rate <= limits["transport_fallback_overlap_max_pct"]
+        and poor_perception_overlap_rate <= limits["poor_perception_overlap_max_pct"]
+    )
     absolute_issue = bool(
         high_error_count > 0
         and absolute_rate >= limits["absolute_coordinate_mismatch_on_high_error_min_pct"]
         and fallback_overlap_rate <= limits["transport_fallback_overlap_max_pct"]
         and poor_perception_overlap_rate <= limits["poor_perception_overlap_max_pct"]
     )
-    result["issue_detected"] = bool(semantic_issue or absolute_issue)
-    if absolute_issue:
+    result["issue_detected"] = bool(semantic_issue or vehicle_frame_semantic_issue or absolute_issue)
+    if vehicle_frame_semantic_issue:
+        result["issue_mode"] = "vehicle_frame_semantic_mismatch"
+    elif absolute_issue:
         result["issue_mode"] = "absolute_coordinate_mismatch"
     elif semantic_issue:
         result["issue_mode"] = "semantic_mismatch"
@@ -1903,10 +2623,10 @@ def _build_lateral_owner_contract_summary(
         "mpc_gt_cross_track_issue_detected": bool(mpc_gt_cross_track_contract.get("issue_detected")),
         "legacy_curve_intent_available": bool(curve_intent_diag.get("available")),
         "legacy_curve_intent_proxy_only": bool(
-            curve_intent_diag.get("available") and authoritative_owner_healthy
+            curve_intent_diag.get("available") and authoritative_owner_available
         ),
         "suppress_legacy_curve_intent_warnings": bool(
-            curve_intent_diag.get("available") and authoritative_owner_healthy
+            curve_intent_diag.get("available") and authoritative_owner_available
         ),
     }
 
@@ -4051,6 +4771,20 @@ def _build_wrong_target_contract_summary(
         "continuity_hold_rate_pct": None,
         "acc_follow_contamination_detected": None,
         "quality_reference_valid": None,
+        "reference_divergence_issue_detected": None,
+        "reference_divergence_rate_pct": None,
+        "reference_divergence_raw_delta_p50_m": None,
+        "reference_divergence_blend_weight_p50": None,
+        "straight_reference_drift_issue_detected": None,
+        "straight_reference_drift_rate_pct": None,
+        "straight_reference_drift_center_error_p50_m": None,
+        "straight_reference_drift_expected_center_x_p50_m": None,
+        "straight_reference_drift_trigger_weight_p50": None,
+        "input_guard_active_rate_pct": None,
+        "input_guard_suppressed_lane_coeffs_rate_pct": None,
+        "input_guard_center_error_p50_m": None,
+        "input_guard_width_error_p50_m": None,
+        "input_guard_trigger_weight_p50": None,
     }
 
     track_id = str(run_intent.get("track_id") or "")
@@ -4110,6 +4844,233 @@ def _build_wrong_target_contract_summary(
             "out_of_cone_opposite_direction",
         }
     )
+    lateral_error = data.get("lateral_error")
+    local_curve_reference_raw_delta = data.get("local_curve_reference_raw_delta_m")
+    local_curve_reference_blend_weight = data.get("local_curve_reference_blend_weight")
+    guard_center_error = data.get("reference_distractor_guard_center_error_m")
+    guard_expected_center_x = data.get("reference_distractor_guard_expected_center_x_m")
+    guard_trigger_weight = data.get("reference_distractor_guard_trigger_weight")
+    guard_active = data.get("reference_distractor_guard_active")
+    input_guard_active = data.get("reference_distractor_input_guard_active")
+    input_guard_center_error = data.get("reference_distractor_input_guard_center_error_m")
+    input_guard_width_error = data.get("reference_distractor_input_guard_width_error_m")
+    input_guard_trigger_weight = data.get("reference_distractor_input_guard_trigger_weight")
+    input_guard_suppressed_lane_coeffs = data.get(
+        "reference_distractor_input_guard_suppressed_lane_coeffs"
+    )
+    reference_point_curvature = data.get("reference_point_curvature")
+    confidence = data.get("confidence")
+    sync_packet_fallback = data.get("sync_packet_fallback_active")
+    reference_divergence_issue_detected = False
+    reference_divergence_rate_pct = None
+    reference_divergence_raw_delta_p50_m = None
+    reference_divergence_blend_weight_p50 = None
+    straight_reference_drift_issue_detected = False
+    straight_reference_drift_rate_pct = None
+    straight_reference_drift_center_error_p50_m = None
+    straight_reference_drift_expected_center_x_p50_m = None
+    straight_reference_drift_trigger_weight_p50 = None
+    input_guard_active_rate_pct = _rate_from_boolish(input_guard_active)
+    input_guard_suppressed_lane_coeffs_rate_pct = _rate_from_boolish(
+        input_guard_suppressed_lane_coeffs
+    )
+    input_guard_center_error_p50_m = None
+    input_guard_width_error_p50_m = None
+    input_guard_trigger_weight_p50 = None
+    if (
+        lateral_error is not None
+        and local_curve_reference_raw_delta is not None
+        and local_curve_reference_blend_weight is not None
+    ):
+        n = min(len(lateral_error), len(local_curve_reference_raw_delta), len(local_curve_reference_blend_weight))
+        high_error = np.abs(np.asarray(lateral_error[:n], dtype=np.float64)) >= 0.5
+        raw_delta = np.asarray(local_curve_reference_raw_delta[:n], dtype=np.float64)
+        blend_weight = np.asarray(local_curve_reference_blend_weight[:n], dtype=np.float64)
+        confidence_arr = (
+            np.asarray(confidence[:n], dtype=np.float64)
+            if confidence is not None
+            else np.ones(n, dtype=np.float64)
+        )
+        transport_arr = (
+            np.asarray(sync_packet_fallback[:n], dtype=np.float64)
+            if sync_packet_fallback is not None
+            else np.zeros(n, dtype=np.float64)
+        )
+        reject_values = _decode_string_series(data.get("radar_fwd_reject_reason"))[:n]
+        candidate_arr = (
+            np.asarray(data.get("radar_fwd_candidate_present")[:n], dtype=np.float64)
+            if data.get("radar_fwd_candidate_present") is not None
+            else np.zeros(n, dtype=np.float64)
+        )
+        divergence_mask = (
+            high_error
+            & (candidate_arr > 0.5)
+            & np.array(
+                [
+                    value in {
+                        "wrong_lane",
+                        "opposite_direction",
+                        "out_of_cone_wrong_lane",
+                        "out_of_cone_opposite_direction",
+                    }
+                    for value in reject_values
+                ],
+                dtype=bool,
+            )
+            & (confidence_arr >= 0.5)
+            & (transport_arr <= 0.5)
+            & np.isfinite(raw_delta)
+            & (raw_delta >= 0.75)
+            & np.isfinite(blend_weight)
+            & (blend_weight <= 0.40)
+        )
+        if np.any(high_error):
+            reference_divergence_rate_pct = safe_float(np.mean(divergence_mask[high_error]) * 100.0)
+        if np.any(divergence_mask):
+            reference_divergence_issue_detected = True
+            reference_divergence_raw_delta_p50_m = safe_float(
+                np.percentile(raw_delta[divergence_mask], 50)
+            )
+            reference_divergence_blend_weight_p50 = safe_float(
+                np.percentile(blend_weight[divergence_mask], 50)
+            )
+
+    if (
+        lateral_error is not None
+        and guard_center_error is not None
+        and guard_expected_center_x is not None
+    ):
+        optional_lengths = [len(lateral_error), len(guard_center_error), len(guard_expected_center_x)]
+        if guard_trigger_weight is not None:
+            optional_lengths.append(len(guard_trigger_weight))
+        if guard_active is not None:
+            optional_lengths.append(len(guard_active))
+        if reference_point_curvature is not None:
+            optional_lengths.append(len(reference_point_curvature))
+        if confidence is not None:
+            optional_lengths.append(len(confidence))
+        if sync_packet_fallback is not None:
+            optional_lengths.append(len(sync_packet_fallback))
+        if data.get("radar_fwd_candidate_present") is not None:
+            optional_lengths.append(len(data.get("radar_fwd_candidate_present")))
+        n = min(optional_lengths)
+        if n > 0:
+            lateral_error_arr = np.abs(np.asarray(lateral_error[:n], dtype=np.float64))
+            guard_center_error_arr = np.asarray(guard_center_error[:n], dtype=np.float64)
+            guard_expected_center_x_arr = np.asarray(
+                guard_expected_center_x[:n], dtype=np.float64)
+            guard_trigger_weight_arr = (
+                np.asarray(guard_trigger_weight[:n], dtype=np.float64)
+                if guard_trigger_weight is not None
+                else np.zeros(n, dtype=np.float64)
+            )
+            guard_active_arr = (
+                np.asarray(guard_active[:n], dtype=np.float64)
+                if guard_active is not None
+                else np.zeros(n, dtype=np.float64)
+            )
+            reference_curvature_arr = (
+                np.abs(np.asarray(reference_point_curvature[:n], dtype=np.float64))
+                if reference_point_curvature is not None
+                else np.zeros(n, dtype=np.float64)
+            )
+            confidence_arr = (
+                np.asarray(confidence[:n], dtype=np.float64)
+                if confidence is not None
+                else np.ones(n, dtype=np.float64)
+            )
+            transport_arr = (
+                np.asarray(sync_packet_fallback[:n], dtype=np.float64)
+                if sync_packet_fallback is not None
+                else np.zeros(n, dtype=np.float64)
+            )
+            candidate_arr = (
+                np.asarray(data.get("radar_fwd_candidate_present")[:n], dtype=np.float64)
+                if data.get("radar_fwd_candidate_present") is not None
+                else np.zeros(n, dtype=np.float64)
+            )
+            reject_values = _decode_string_series(data.get("radar_fwd_reject_reason"))[:n]
+            straight_drift_mask = (
+                (lateral_error_arr >= 0.5)
+                & (candidate_arr > 0.5)
+                & np.array(
+                    [
+                        value in {
+                            "wrong_lane",
+                            "opposite_direction",
+                            "out_of_cone_wrong_lane",
+                            "out_of_cone_opposite_direction",
+                        }
+                        for value in reject_values
+                    ],
+                    dtype=bool,
+                )
+                & (confidence_arr >= 0.5)
+                & (transport_arr <= 0.5)
+                & (guard_active_arr > 0.5)
+                & np.isfinite(guard_center_error_arr)
+                & np.isfinite(guard_expected_center_x_arr)
+                & (reference_curvature_arr <= 7.5e-4)
+                & (guard_center_error_arr >= 0.50)
+            )
+            high_error_mask = lateral_error_arr >= 0.5
+            if np.any(high_error_mask):
+                straight_reference_drift_rate_pct = safe_float(
+                    np.mean(straight_drift_mask[high_error_mask]) * 100.0
+                )
+            if np.any(straight_drift_mask):
+                straight_reference_drift_issue_detected = True
+                straight_reference_drift_center_error_p50_m = safe_float(
+                    np.percentile(guard_center_error_arr[straight_drift_mask], 50)
+                )
+                straight_reference_drift_expected_center_x_p50_m = safe_float(
+                    np.percentile(guard_expected_center_x_arr[straight_drift_mask], 50)
+                )
+                straight_reference_drift_trigger_weight_p50 = safe_float(
+                    np.percentile(guard_trigger_weight_arr[straight_drift_mask], 50)
+                )
+
+    if (
+        input_guard_active is not None
+        and input_guard_center_error is not None
+        and input_guard_width_error is not None
+    ):
+        optional_lengths = [
+            len(input_guard_active),
+            len(input_guard_center_error),
+            len(input_guard_width_error),
+        ]
+        if input_guard_trigger_weight is not None:
+            optional_lengths.append(len(input_guard_trigger_weight))
+        n = min(optional_lengths) if optional_lengths else 0
+        if n > 0:
+            input_guard_active_arr = np.asarray(input_guard_active[:n], dtype=np.float64)
+            input_guard_center_error_arr = np.asarray(
+                input_guard_center_error[:n], dtype=np.float64
+            )
+            input_guard_width_error_arr = np.asarray(
+                input_guard_width_error[:n], dtype=np.float64
+            )
+            input_guard_trigger_weight_arr = (
+                np.asarray(input_guard_trigger_weight[:n], dtype=np.float64)
+                if input_guard_trigger_weight is not None
+                else np.zeros(n, dtype=np.float64)
+            )
+            input_guard_mask = (
+                (input_guard_active_arr > 0.5)
+                & np.isfinite(input_guard_center_error_arr)
+                & np.isfinite(input_guard_width_error_arr)
+            )
+            if np.any(input_guard_mask):
+                input_guard_center_error_p50_m = safe_float(
+                    np.percentile(input_guard_center_error_arr[input_guard_mask], 50)
+                )
+                input_guard_width_error_p50_m = safe_float(
+                    np.percentile(input_guard_width_error_arr[input_guard_mask], 50)
+                )
+                input_guard_trigger_weight_p50 = safe_float(
+                    np.percentile(input_guard_trigger_weight_arr[input_guard_mask], 50)
+                )
 
     return {
         "schema_version": "v1",
@@ -4123,7 +5084,111 @@ def _build_wrong_target_contract_summary(
         "raw_detect_rate_pct": raw_detect_rate,
         "continuity_hold_rate_pct": continuity_hold_rate,
         "acc_follow_contamination_detected": acc_follow_contamination,
-        "quality_reference_valid": False,
+        "quality_reference_valid": bool(
+            contract_pass
+            and not reference_divergence_issue_detected
+            and not straight_reference_drift_issue_detected
+        ),
+        "reference_divergence_issue_detected": reference_divergence_issue_detected,
+        "reference_divergence_rate_pct": reference_divergence_rate_pct,
+        "reference_divergence_raw_delta_p50_m": reference_divergence_raw_delta_p50_m,
+        "reference_divergence_blend_weight_p50": reference_divergence_blend_weight_p50,
+        "straight_reference_drift_issue_detected": straight_reference_drift_issue_detected,
+        "straight_reference_drift_rate_pct": straight_reference_drift_rate_pct,
+        "straight_reference_drift_center_error_p50_m": straight_reference_drift_center_error_p50_m,
+        "straight_reference_drift_expected_center_x_p50_m": straight_reference_drift_expected_center_x_p50_m,
+        "straight_reference_drift_trigger_weight_p50": straight_reference_drift_trigger_weight_p50,
+        "input_guard_active_rate_pct": input_guard_active_rate_pct,
+        "input_guard_suppressed_lane_coeffs_rate_pct": input_guard_suppressed_lane_coeffs_rate_pct,
+        "input_guard_center_error_p50_m": input_guard_center_error_p50_m,
+        "input_guard_width_error_p50_m": input_guard_width_error_p50_m,
+        "input_guard_trigger_weight_p50": input_guard_trigger_weight_p50,
+    }
+
+
+def _build_ego_lane_contract_summary(data: Dict) -> Dict:
+    selected_lane_index = data.get("gt_selected_lane_index")
+    ego_lane_index = data.get("gt_ego_lane_index")
+    selection_source = data.get("gt_lane_selection_source")
+    selection_reason = data.get("gt_lane_selection_reason")
+    selection_matches_ego = data.get("gt_lane_selection_matches_ego")
+    selected_cross_track = data.get("gt_selected_lane_cross_track_road_frame_at_car")
+    ego_cross_track = data.get("gt_ego_lane_cross_track_road_frame_at_car")
+
+    if (
+        selected_lane_index is None
+        and ego_lane_index is None
+        and selection_source is None
+        and selection_reason is None
+        and selection_matches_ego is None
+    ):
+        return {
+            "schema_version": "v1",
+            "availability": "unavailable",
+            "selected_lane_index_mode": "unknown",
+            "ego_lane_index_mode": "unknown",
+            "lane_selection_source_mode": "unknown",
+            "lane_selection_reason_mode": "unknown",
+            "selected_matches_ego_rate_pct": None,
+            "selected_vs_ego_cross_track_delta_p50_m": None,
+            "selected_vs_ego_cross_track_mismatch_rate_pct": None,
+            "issue_detected": None,
+            "issue_mode": "none",
+        }
+
+    selected_lane_index_mode = (
+        _mode_string([str(v) for v in np.asarray(selected_lane_index).reshape(-1)])
+        if selected_lane_index is not None
+        else None
+    ) or "unknown"
+    ego_lane_index_mode = (
+        _mode_string([str(v) for v in np.asarray(ego_lane_index).reshape(-1)])
+        if ego_lane_index is not None
+        else None
+    ) or "unknown"
+    lane_selection_source_mode = _mode_string(_decode_string_series(selection_source)) or "unknown"
+    lane_selection_reason_mode = _mode_string(_decode_string_series(selection_reason)) or "unknown"
+    selected_matches_ego_rate_pct = _rate_from_boolish(selection_matches_ego)
+    selected_vs_ego_cross_track_delta_p50_m = None
+    selected_vs_ego_cross_track_mismatch_rate_pct = None
+
+    if selected_cross_track is not None and ego_cross_track is not None:
+        n = min(len(selected_cross_track), len(ego_cross_track))
+        if n > 0:
+            selected_arr = np.asarray(selected_cross_track[:n], dtype=np.float64)
+            ego_arr = np.asarray(ego_cross_track[:n], dtype=np.float64)
+            finite = np.isfinite(selected_arr) & np.isfinite(ego_arr)
+            if np.any(finite):
+                delta = np.abs(selected_arr[finite] - ego_arr[finite])
+                selected_vs_ego_cross_track_delta_p50_m = safe_float(np.percentile(delta, 50))
+                selected_vs_ego_cross_track_mismatch_rate_pct = safe_float(
+                    np.mean(delta >= 0.20) * 100.0
+                )
+
+    issue_mode = "none"
+    issue_detected = False
+    if selected_matches_ego_rate_pct is not None and selected_matches_ego_rate_pct < 99.9:
+        issue_detected = True
+        issue_mode = "selected_lane_differs_from_ego"
+    elif (
+        selected_vs_ego_cross_track_mismatch_rate_pct is not None
+        and selected_vs_ego_cross_track_mismatch_rate_pct > 5.0
+    ):
+        issue_detected = True
+        issue_mode = "selected_vs_ego_cross_track_divergence"
+
+    return {
+        "schema_version": "v1",
+        "availability": "available",
+        "selected_lane_index_mode": selected_lane_index_mode,
+        "ego_lane_index_mode": ego_lane_index_mode,
+        "lane_selection_source_mode": lane_selection_source_mode,
+        "lane_selection_reason_mode": lane_selection_reason_mode,
+        "selected_matches_ego_rate_pct": selected_matches_ego_rate_pct,
+        "selected_vs_ego_cross_track_delta_p50_m": selected_vs_ego_cross_track_delta_p50_m,
+        "selected_vs_ego_cross_track_mismatch_rate_pct": selected_vs_ego_cross_track_mismatch_rate_pct,
+        "issue_detected": issue_detected,
+        "issue_mode": issue_mode,
     }
 
 
@@ -5343,6 +6408,10 @@ def analyze_recording_summary(
                 np.array(f['control/local_curve_reference_mode'][:])
                 if 'control/local_curve_reference_mode' in f else None
             )
+            data['local_curve_reference_requested_mode'] = (
+                np.array(f['control/local_curve_reference_requested_mode'][:])
+                if 'control/local_curve_reference_requested_mode' in f else None
+            )
             data['local_curve_reference_active'] = (
                 np.array(f['control/local_curve_reference_active'][:])
                 if 'control/local_curve_reference_active' in f else None
@@ -5350,6 +6419,86 @@ def analyze_recording_summary(
             data['local_curve_reference_shadow_only'] = (
                 np.array(f['control/local_curve_reference_shadow_only'][:])
                 if 'control/local_curve_reference_shadow_only' in f else None
+            )
+            data['local_curve_reference_shadow_promotion_active'] = (
+                np.array(f['control/local_curve_reference_shadow_promotion_active'][:])
+                if 'control/local_curve_reference_shadow_promotion_active' in f else None
+            )
+            data['local_curve_reference_shadow_promotion_weight'] = (
+                np.array(f['control/local_curve_reference_shadow_promotion_weight'][:])
+                if 'control/local_curve_reference_shadow_promotion_weight' in f else None
+            )
+            data['local_curve_reference_shadow_promotion_blend_floor'] = (
+                np.array(f['control/local_curve_reference_shadow_promotion_blend_floor'][:])
+                if 'control/local_curve_reference_shadow_promotion_blend_floor' in f else None
+            )
+            data['local_curve_reference_shadow_promotion_reason'] = (
+                np.array(f['control/local_curve_reference_shadow_promotion_reason'][:])
+                if 'control/local_curve_reference_shadow_promotion_reason' in f else None
+            )
+            data['local_curve_reference_guarded_bounded_active'] = (
+                np.array(f['control/local_curve_reference_guarded_bounded_active'][:])
+                if 'control/local_curve_reference_guarded_bounded_active' in f else None
+            )
+            data['local_curve_reference_guarded_bounded_reason'] = (
+                np.array(f['control/local_curve_reference_guarded_bounded_reason'][:])
+                if 'control/local_curve_reference_guarded_bounded_reason' in f else None
+            )
+            data['local_curve_reference_guarded_bounded_dwell_frames'] = (
+                np.array(f['control/local_curve_reference_guarded_bounded_dwell_frames'][:])
+                if 'control/local_curve_reference_guarded_bounded_dwell_frames' in f else None
+            )
+            data['local_curve_reference_guarded_bounded_trigger_raw_delta_m'] = (
+                np.array(f['control/local_curve_reference_guarded_bounded_trigger_raw_delta_m'][:])
+                if 'control/local_curve_reference_guarded_bounded_trigger_raw_delta_m' in f else None
+            )
+            data['local_curve_reference_guarded_bounded_exit_raw_delta_m'] = (
+                np.array(f['control/local_curve_reference_guarded_bounded_exit_raw_delta_m'][:])
+                if 'control/local_curve_reference_guarded_bounded_exit_raw_delta_m' in f else None
+            )
+            data['local_curve_reference_guarded_bounded_trigger_weight'] = (
+                np.array(f['control/local_curve_reference_guarded_bounded_trigger_weight'][:])
+                if 'control/local_curve_reference_guarded_bounded_trigger_weight' in f else None
+            )
+            data['local_curve_reference_guarded_bounded_blend_floor'] = (
+                np.array(f['control/local_curve_reference_guarded_bounded_blend_floor'][:])
+                if 'control/local_curve_reference_guarded_bounded_blend_floor' in f else None
+            )
+            data['reference_distractor_guard_active'] = (
+                np.array(f['control/reference_distractor_guard_active'][:])
+                if 'control/reference_distractor_guard_active' in f else None
+            )
+            data['reference_distractor_guard_center_error_m'] = (
+                np.array(f['control/reference_distractor_guard_center_error_m'][:])
+                if 'control/reference_distractor_guard_center_error_m' in f else None
+            )
+            data['reference_distractor_guard_trigger_weight'] = (
+                np.array(f['control/reference_distractor_guard_trigger_weight'][:])
+                if 'control/reference_distractor_guard_trigger_weight' in f else None
+            )
+            data['reference_distractor_guard_expected_center_x_m'] = (
+                np.array(f['control/reference_distractor_guard_expected_center_x_m'][:])
+                if 'control/reference_distractor_guard_expected_center_x_m' in f else None
+            )
+            data['reference_distractor_input_guard_active'] = (
+                np.array(f['control/reference_distractor_input_guard_active'][:])
+                if 'control/reference_distractor_input_guard_active' in f else None
+            )
+            data['reference_distractor_input_guard_center_error_m'] = (
+                np.array(f['control/reference_distractor_input_guard_center_error_m'][:])
+                if 'control/reference_distractor_input_guard_center_error_m' in f else None
+            )
+            data['reference_distractor_input_guard_width_error_m'] = (
+                np.array(f['control/reference_distractor_input_guard_width_error_m'][:])
+                if 'control/reference_distractor_input_guard_width_error_m' in f else None
+            )
+            data['reference_distractor_input_guard_trigger_weight'] = (
+                np.array(f['control/reference_distractor_input_guard_trigger_weight'][:])
+                if 'control/reference_distractor_input_guard_trigger_weight' in f else None
+            )
+            data['reference_distractor_input_guard_suppressed_lane_coeffs'] = (
+                np.array(f['control/reference_distractor_input_guard_suppressed_lane_coeffs'][:])
+                if 'control/reference_distractor_input_guard_suppressed_lane_coeffs' in f else None
             )
             data['local_curve_reference_valid'] = (
                 np.array(f['control/local_curve_reference_valid'][:])
@@ -5370,6 +6519,14 @@ def analyze_recording_summary(
             data['local_curve_reference_blend_weight'] = (
                 np.array(f['control/local_curve_reference_blend_weight'][:])
                 if 'control/local_curve_reference_blend_weight' in f else None
+            )
+            data['local_curve_reference_raw_delta_m'] = (
+                np.array(f['control/local_curve_reference_raw_delta_m'][:])
+                if 'control/local_curve_reference_raw_delta_m' in f else None
+            )
+            data['local_curve_reference_capped_delta_m'] = (
+                np.array(f['control/local_curve_reference_capped_delta_m'][:])
+                if 'control/local_curve_reference_capped_delta_m' in f else None
             )
             data['local_curve_reference_progress_weight'] = (
                 np.array(f['control/local_curve_reference_progress_weight'][:])
@@ -5448,6 +6605,14 @@ def analyze_recording_summary(
                 np.array(f['control/mpc_gt_cross_track_at_car_m'][:])
                 if 'control/mpc_gt_cross_track_at_car_m' in f else None
             )
+            data['mpc_gt_cross_track_road_frame_at_car_m'] = (
+                np.array(f['control/mpc_gt_cross_track_road_frame_at_car_m'][:])
+                if 'control/mpc_gt_cross_track_road_frame_at_car_m' in f else None
+            )
+            data['mpc_gt_cross_track_vehicle_frame_at_car_m'] = (
+                np.array(f['control/mpc_gt_cross_track_vehicle_frame_at_car_m'][:])
+                if 'control/mpc_gt_cross_track_vehicle_frame_at_car_m' in f else None
+            )
             data['mpc_gt_cross_track_lookahead_m'] = (
                 np.array(f['control/mpc_gt_cross_track_lookahead_m'][:])
                 if 'control/mpc_gt_cross_track_lookahead_m' in f else None
@@ -5455,6 +6620,10 @@ def analyze_recording_summary(
             data['mpc_gt_cross_track_source_code'] = (
                 f['control/mpc_gt_cross_track_source_code'][:]
                 if 'control/mpc_gt_cross_track_source_code' in f else None
+            )
+            data['mpc_gt_cross_track_control_source_code'] = (
+                f['control/mpc_gt_cross_track_control_source_code'][:]
+                if 'control/mpc_gt_cross_track_control_source_code' in f else None
             )
             data['mpc_feasible'] = (
                 np.array(f['control/mpc_feasible'][:])
@@ -5652,6 +6821,13 @@ def analyze_recording_summary(
                 if 'control/speed_governor_curve_cap_margin_mps' in f
                 else None
             )
+            data['speed_governor_curve_cap_reason'] = None
+            if 'control/speed_governor_curve_cap_reason' in f:
+                _sgcr = f['control/speed_governor_curve_cap_reason'][:]
+                data['speed_governor_curve_cap_reason'] = [
+                    s.decode('utf-8') if isinstance(s, (bytes, bytearray)) else str(s)
+                    for s in _sgcr
+                ]
             data['speed_governor_cap_tracking_active'] = (
                 np.array(f['control/speed_governor_cap_tracking_active'][:])
                 if 'control/speed_governor_cap_tracking_active' in f
@@ -5707,6 +6883,46 @@ def analyze_recording_summary(
             data['turn_feasibility_speed_limit_mps'] = (
                 np.array(f['control/turn_feasibility_speed_limit_mps'][:])
                 if 'control/turn_feasibility_speed_limit_mps' in f
+                else None
+            )
+            data['mpc_kappa_active_curve_preserve_weight'] = (
+                np.array(f['control/mpc_kappa_active_curve_preserve_weight'][:])
+                if 'control/mpc_kappa_active_curve_preserve_weight' in f
+                else None
+            )
+            data['mpc_kappa_active_mild_curve_authority_active'] = (
+                np.array(f['control/mpc_kappa_active_mild_curve_authority_active'][:])
+                if 'control/mpc_kappa_active_mild_curve_authority_active' in f
+                else None
+            )
+            data['mpc_kappa_active_mild_curve_authority_weight'] = (
+                np.array(f['control/mpc_kappa_active_mild_curve_authority_weight'][:])
+                if 'control/mpc_kappa_active_mild_curve_authority_weight' in f
+                else None
+            )
+            data['mpc_kappa_active_mild_curve_authority_ratio'] = (
+                np.array(f['control/mpc_kappa_active_mild_curve_authority_ratio'][:])
+                if 'control/mpc_kappa_active_mild_curve_authority_ratio' in f
+                else None
+            )
+            data['mpc_kappa_active_mild_curve_authority_reason'] = (
+                f['control/mpc_kappa_active_mild_curve_authority_reason'][:]
+                if 'control/mpc_kappa_active_mild_curve_authority_reason' in f
+                else None
+            )
+            data['mpc_kappa_active_mild_curve_authority_speed_weight'] = (
+                np.array(f['control/mpc_kappa_active_mild_curve_authority_speed_weight'][:])
+                if 'control/mpc_kappa_active_mild_curve_authority_speed_weight' in f
+                else None
+            )
+            data['mpc_kappa_active_mild_curve_authority_curvature_weight'] = (
+                np.array(f['control/mpc_kappa_active_mild_curve_authority_curvature_weight'][:])
+                if 'control/mpc_kappa_active_mild_curve_authority_curvature_weight' in f
+                else None
+            )
+            data['mpc_kappa_active_mild_curve_authority_gate_weight'] = (
+                np.array(f['control/mpc_kappa_active_mild_curve_authority_gate_weight'][:])
+                if 'control/mpc_kappa_active_mild_curve_authority_gate_weight' in f
                 else None
             )
             data['longitudinal_accel_capped'] = (
@@ -5896,6 +7112,46 @@ def analyze_recording_summary(
             data['gt_center_at_car'] = (
                 np.array(f['ground_truth/lane_center_x_at_car'][:])
                 if 'ground_truth/lane_center_x_at_car' in f else None
+            )
+            data['gt_selected_lane_index'] = (
+                np.array(f['ground_truth/selected_lane_index'][:])
+                if 'ground_truth/selected_lane_index' in f else None
+            )
+            data['gt_ego_lane_index'] = (
+                np.array(f['ground_truth/ego_lane_index'][:])
+                if 'ground_truth/ego_lane_index' in f else None
+            )
+            data['gt_lane_selection_source'] = (
+                f['ground_truth/lane_selection_source'][:]
+                if 'ground_truth/lane_selection_source' in f else None
+            )
+            data['gt_lane_selection_reason'] = (
+                f['ground_truth/lane_selection_reason'][:]
+                if 'ground_truth/lane_selection_reason' in f else None
+            )
+            data['gt_lane_selection_matches_ego'] = (
+                np.array(f['ground_truth/lane_selection_matches_ego'][:])
+                if 'ground_truth/lane_selection_matches_ego' in f else None
+            )
+            data['gt_ego_lane_center_x_at_car'] = (
+                np.array(f['ground_truth/ego_lane_center_x_at_car'][:])
+                if 'ground_truth/ego_lane_center_x_at_car' in f else None
+            )
+            data['gt_selected_lane_center_offset_road_frame'] = (
+                np.array(f['ground_truth/selected_lane_center_offset_road_frame'][:])
+                if 'ground_truth/selected_lane_center_offset_road_frame' in f else None
+            )
+            data['gt_selected_lane_cross_track_road_frame_at_car'] = (
+                np.array(f['ground_truth/selected_lane_cross_track_road_frame_at_car'][:])
+                if 'ground_truth/selected_lane_cross_track_road_frame_at_car' in f else None
+            )
+            data['gt_ego_lane_center_offset_road_frame'] = (
+                np.array(f['ground_truth/ego_lane_center_offset_road_frame'][:])
+                if 'ground_truth/ego_lane_center_offset_road_frame' in f else None
+            )
+            data['gt_ego_lane_cross_track_road_frame_at_car'] = (
+                np.array(f['ground_truth/ego_lane_cross_track_road_frame_at_car'][:])
+                if 'ground_truth/ego_lane_cross_track_road_frame_at_car' in f else None
             )
             data['gt_left'] = np.array(f['ground_truth/left_lane_line_x'][:]) if 'ground_truth/left_lane_line_x' in f else None
             data['gt_right'] = np.array(f['ground_truth/right_lane_line_x'][:]) if 'ground_truth/right_lane_line_x' in f else None
@@ -7446,8 +8702,42 @@ def analyze_recording_summary(
     entry_weight_source_series = data.get("reference_lookahead_entry_weight_source")
     fallback_active_series = data.get("reference_lookahead_fallback_active")
     local_arc_mode_series = data.get("local_curve_reference_mode")
+    local_arc_requested_mode_series = data.get("local_curve_reference_requested_mode")
     local_arc_active_series = data.get("local_curve_reference_active")
     local_arc_shadow_only_series = data.get("local_curve_reference_shadow_only")
+    local_arc_shadow_promotion_active_series = data.get(
+        "local_curve_reference_shadow_promotion_active"
+    )
+    local_arc_shadow_promotion_weight_series = data.get(
+        "local_curve_reference_shadow_promotion_weight"
+    )
+    local_arc_shadow_promotion_blend_floor_series = data.get(
+        "local_curve_reference_shadow_promotion_blend_floor"
+    )
+    local_arc_shadow_promotion_reason_series = data.get(
+        "local_curve_reference_shadow_promotion_reason"
+    )
+    local_arc_guarded_active_series = data.get(
+        "local_curve_reference_guarded_bounded_active"
+    )
+    local_arc_guarded_reason_series = data.get(
+        "local_curve_reference_guarded_bounded_reason"
+    )
+    local_arc_guarded_dwell_series = data.get(
+        "local_curve_reference_guarded_bounded_dwell_frames"
+    )
+    local_arc_guarded_trigger_raw_delta_series = data.get(
+        "local_curve_reference_guarded_bounded_trigger_raw_delta_m"
+    )
+    local_arc_guarded_exit_raw_delta_series = data.get(
+        "local_curve_reference_guarded_bounded_exit_raw_delta_m"
+    )
+    local_arc_guarded_trigger_weight_series = data.get(
+        "local_curve_reference_guarded_bounded_trigger_weight"
+    )
+    local_arc_guarded_blend_floor_series = data.get(
+        "local_curve_reference_guarded_bounded_blend_floor"
+    )
     local_arc_valid_series = data.get("local_curve_reference_valid")
     local_arc_source_series = data.get("local_curve_reference_source")
     local_arc_fallback_active_series = data.get("local_curve_reference_fallback_active")
@@ -9083,12 +10373,24 @@ def analyze_recording_summary(
         "availability": "unavailable",
         "owner_class": "authoritative",
         "mode": None,
+        "requested_mode": None,
         "active_rate": None,
         "shadow_only_rate": None,
+        "shadow_promotion_active_rate": None,
+        "shadow_promotion_weight_p50": None,
+        "shadow_promotion_blend_floor_p50": None,
+        "guarded_bounded_active_rate": None,
+        "guarded_bounded_reason_mode": None,
+        "guarded_bounded_dwell_p95_frames": None,
+        "guarded_bounded_trigger_weight_p50": None,
+        "guarded_bounded_blend_floor_p50": None,
+        "guarded_bounded_trigger_raw_delta_p50_m": None,
+        "guarded_bounded_exit_raw_delta_p50_m": None,
         "valid_rate": None,
         "fallback_active_rate": None,
         "source_mode": None,
         "fallback_reason_mode": None,
+        "shadow_promotion_reason_mode": None,
         "blend_weight_p50": None,
         "progress_weight_p50": None,
         "planner_delta_p50_m": None,
@@ -9108,9 +10410,18 @@ def analyze_recording_summary(
         all_indices = np.arange(n_frames, dtype=int)
         local_curve_reference["availability"] = "available"
         local_curve_reference["mode"] = _masked_mode_string(local_arc_mode_series, all_indices)
+        local_curve_reference["requested_mode"] = _masked_mode_string(
+            local_arc_requested_mode_series, all_indices
+        )
         local_curve_reference["source_mode"] = _masked_mode_string(local_arc_source_series, all_indices)
         local_curve_reference["fallback_reason_mode"] = _masked_mode_string(
             local_arc_fallback_reason_series, all_indices
+        )
+        local_curve_reference["shadow_promotion_reason_mode"] = _masked_mode_string(
+            local_arc_shadow_promotion_reason_series, all_indices
+        )
+        local_curve_reference["guarded_bounded_reason_mode"] = _masked_mode_string(
+            local_arc_guarded_reason_series, all_indices
         )
         if local_arc_active_series is not None:
             active_vals = np.asarray(local_arc_active_series[:n_frames], dtype=np.float64)
@@ -9125,6 +10436,24 @@ def analyze_recording_summary(
             if np.any(valid_mask):
                 local_curve_reference["shadow_only_rate"] = safe_float(
                     np.mean(shadow_vals[valid_mask] > 0.5) * 100.0
+                )
+        if local_arc_shadow_promotion_active_series is not None:
+            promo_vals = np.asarray(
+                local_arc_shadow_promotion_active_series[:n_frames], dtype=np.float64
+            )
+            valid_mask = np.isfinite(promo_vals) & (promo_vals >= 0.0)
+            if np.any(valid_mask):
+                local_curve_reference["shadow_promotion_active_rate"] = safe_float(
+                    np.mean(promo_vals[valid_mask] > 0.5) * 100.0
+                )
+        if local_arc_guarded_active_series is not None:
+            guarded_vals = np.asarray(
+                local_arc_guarded_active_series[:n_frames], dtype=np.float64
+            )
+            valid_mask = np.isfinite(guarded_vals) & (guarded_vals >= 0.0)
+            if np.any(valid_mask):
+                local_curve_reference["guarded_bounded_active_rate"] = safe_float(
+                    np.mean(guarded_vals[valid_mask] > 0.5) * 100.0
                 )
         if local_arc_valid_series is not None:
             valid_vals = np.asarray(local_arc_valid_series[:n_frames], dtype=np.float64)
@@ -9143,6 +10472,33 @@ def analyze_recording_summary(
         for key, arr, pct in (
             ("blend_weight_p50", local_arc_blend_weight_series, 50),
             ("progress_weight_p50", local_arc_progress_weight_series, 50),
+            ("shadow_promotion_weight_p50", local_arc_shadow_promotion_weight_series, 50),
+            (
+                "shadow_promotion_blend_floor_p50",
+                local_arc_shadow_promotion_blend_floor_series,
+                50,
+            ),
+            ("guarded_bounded_dwell_p95_frames", local_arc_guarded_dwell_series, 95),
+            (
+                "guarded_bounded_trigger_weight_p50",
+                local_arc_guarded_trigger_weight_series,
+                50,
+            ),
+            (
+                "guarded_bounded_blend_floor_p50",
+                local_arc_guarded_blend_floor_series,
+                50,
+            ),
+            (
+                "guarded_bounded_trigger_raw_delta_p50_m",
+                local_arc_guarded_trigger_raw_delta_series,
+                50,
+            ),
+            (
+                "guarded_bounded_exit_raw_delta_p50_m",
+                local_arc_guarded_exit_raw_delta_series,
+                50,
+            ),
             ("planner_delta_p50_m", local_arc_vs_planner_delta_series, 50),
             ("planner_delta_p95_m", local_arc_vs_planner_delta_series, 95),
             ("target_distance_p50_m", local_arc_target_distance_series, 50),
@@ -9312,6 +10668,7 @@ def analyze_recording_summary(
         run_intent=run_intent,
         lead_continuity_contract=lead_continuity_contract,
     )
+    ego_lane_contract = _build_ego_lane_contract_summary(data)
     highway_mild_curve_contract = _build_highway_mild_curve_contract_summary(data)
     mpc_gt_cross_track_contract = _build_mpc_gt_cross_track_contract_summary(data)
     lateral_owner_contract = _build_lateral_owner_contract_summary(
@@ -9358,12 +10715,33 @@ def analyze_recording_summary(
         recommendations.append(
             "ACC following appears policy-limited after corrected IDM gap semantics - inspect acquisition policy before changing comfort or scenario assumptions."
         )
-    if highway_mild_curve_contract.get("issue_detected"):
+    if highway_mild_curve_contract.get("preactivation_issue_detected"):
+        recommendations.append(
+            "High-speed mild curve needs earlier authority than local activation currently provides - add bounded pre-activation lookahead/speed/curvature authority before changing steering gains."
+        )
+    elif highway_mild_curve_contract.get("wrong_target_distractor_reference_divergence_issue_detected"):
+        recommendations.append(
+            "A rejected wrong-target actor is correlating with a large planner/local-arc divergence on the mild curve - add a sustained guarded-bounded local-reference backstop before increasing generic lateral authority."
+        )
+    elif highway_mild_curve_contract.get("active_state_issue_detected"):
+        if float(highway_mild_curve_contract.get("active_state_shadow_insufficient_on_high_error_rate") or 0.0) > 0.0:
+            recommendations.append(
+                "High-speed mild curve is already active locally, but the local map arc is still shadow-only while planner/local-arc delta is large - promote bounded local-arc authority before more speed-cap tuning."
+            )
+        else:
+            recommendations.append(
+                "High-speed mild curve is already active locally, but cap/authority is still insufficient - tighten active mild-curve speed feasibility and active-state curve authority before changing generic steering gains."
+            )
+    elif highway_mild_curve_contract.get("issue_detected"):
         recommendations.append(
             "Mild map-backed curve is present but recognition stays STRAIGHT and lookahead stays long - fix dynamic curve activation and lookahead shaping before steering gain tuning."
         )
     if mpc_gt_cross_track_contract.get("issue_detected"):
-        if mpc_gt_cross_track_contract.get("issue_mode") == "absolute_coordinate_mismatch":
+        if mpc_gt_cross_track_contract.get("issue_mode") == "vehicle_frame_semantic_mismatch":
+            recommendations.append(
+                "MPC is using vehicle-frame lane-center geometry as cross-track - switch control to the road-frame selected-lane cross-track and keep vehicle-frame GT debug-only."
+            )
+        elif mpc_gt_cross_track_contract.get("issue_mode") == "absolute_coordinate_mismatch":
             recommendations.append(
                 "MPC at-car GT cross-track looks like an absolute lane-center coordinate - compute it from the car's current pose and keep reference-path geometry debug-only."
             )
@@ -9375,6 +10753,18 @@ def analyze_recording_summary(
         recommendations.append(
             "Wrong-target reject contract passed - treat this run as ACC association coverage, not as a clean trajectory tuning reference."
         )
+        if ego_lane_contract.get("issue_detected"):
+            recommendations.append(
+                "Selected-lane GT diverges from the explicit ego-lane contract - fix lane-selection semantics before increasing reject-only guard authority."
+            )
+        if wrong_target_contract.get("straight_reference_drift_issue_detected"):
+            recommendations.append(
+                "Reject-only straight lane_positions center error stays large while the wrong target is already rejected - fix lane_positions center/width robustness before changing lateral gains."
+            )
+        elif wrong_target_contract.get("reference_divergence_issue_detected"):
+            recommendations.append(
+                "Rejected wrong-target distractor still pulls planner/local reference apart after ACC reject - strengthen guarded bounded local-reference takeover before changing generic steering authority."
+            )
     chassis_ground = _build_chassis_ground_summary(data, n_frames=n_frames)
     if chassis_ground.get("health") == "POOR":
         recommendations.append(
@@ -9540,13 +10930,25 @@ def analyze_recording_summary(
         if false_cooldown_count > 0:
             key_issues.append(f"Transport-linked post-jump cooldown episodes ({false_cooldown_count})")
     if mpc_gt_cross_track_contract.get("issue_detected"):
-        if mpc_gt_cross_track_contract.get("issue_mode") == "absolute_coordinate_mismatch":
+        if mpc_gt_cross_track_contract.get("issue_mode") == "vehicle_frame_semantic_mismatch":
+            key_issues.append("MPC GT uses vehicle-frame lane-center geometry")
+        elif mpc_gt_cross_track_contract.get("issue_mode") == "absolute_coordinate_mismatch":
             key_issues.append("MPC GT at-car cross-track uses absolute coordinates")
         else:
             key_issues.append("MPC GT cross-track semantic mismatch")
     if wrong_target_contract.get("availability") == "available":
         if not wrong_target_contract.get("contract_pass"):
             key_issues.append("Wrong-target reject contract failed")
+        elif ego_lane_contract.get("issue_detected"):
+            key_issues.append("Selected-lane anchor diverges from ego-lane contract")
+        elif wrong_target_contract.get("straight_reference_drift_issue_detected"):
+            key_issues.append(
+                "Reject-only straight lane_positions center error stays large before curve entry"
+            )
+        elif wrong_target_contract.get("reference_divergence_issue_detected"):
+            key_issues.append(
+                "Rejected wrong-target distractor is still pulling planner/local reference apart"
+            )
     effective_drop_rate = speed_intent.get("effective_reference_velocity_drop_rate")
     if effective_drop_rate is not None and float(effective_drop_rate) > 1.0:
         key_issues.append(
@@ -9554,7 +10956,24 @@ def analyze_recording_summary(
         )
     if run_intent.get("intent_mismatch_warning"):
         key_issues.append("Run intent differs from road-speed expectation")
-    if highway_mild_curve_contract.get("issue_detected"):
+    if highway_mild_curve_contract.get("preactivation_issue_detected"):
+        key_issues.append(
+            "Highway mild-curve needs earlier pre-activation authority"
+        )
+    elif highway_mild_curve_contract.get("wrong_target_distractor_reference_divergence_issue_detected"):
+        key_issues.append(
+            "Rejected wrong-target distractor is still pulling planner/local reference apart on a mild curve"
+        )
+    elif highway_mild_curve_contract.get("active_state_issue_detected"):
+        if float(highway_mild_curve_contract.get("active_state_shadow_insufficient_on_high_error_rate") or 0.0) > 0.0:
+            key_issues.append(
+                "Highway mild-curve local arc stays shadow-only when planner/local-arc delta is large"
+            )
+        else:
+            key_issues.append(
+                "Highway mild-curve active-state authority is insufficient at speed"
+            )
+    elif highway_mild_curve_contract.get("issue_detected"):
         key_issues.append(
             "Highway mild-curve under-activation (reference geometry mismatch on a map-backed arc)"
         )
@@ -9779,6 +11198,7 @@ def analyze_recording_summary(
         "speed_intent": speed_intent,
         "run_intent": run_intent,
         "wrong_target_contract": wrong_target_contract,
+        "ego_lane_contract": ego_lane_contract,
         "acc_comfort_contract": acc_comfort_contract,
         "acc_detection_contract": acc_detection_contract,
         "lead_continuity_contract": lead_continuity_contract,

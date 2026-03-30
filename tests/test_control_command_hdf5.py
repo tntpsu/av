@@ -149,6 +149,16 @@ def test_recorder_writes_curve_phase_scheduler_fields(tmp_path: Path) -> None:
                 curve_local_arm_effect_lateral_shift_term=0.29,
                 curve_local_arm_effect_time_support_term=0.08,
                 curve_local_dynamic_sustain_effect_score=0.24,
+                curve_preactivation_authority_weight=0.58,
+                curve_preactivation_authority_active=False,
+                curve_preactivation_blocker_mode="local_not_ready",
+                curve_preactivation_preview_weight=0.86,
+                curve_preactivation_speed_weight=0.74,
+                curve_preactivation_curvature_weight=1.0,
+                curve_preactivation_distance_weight=0.65,
+                curve_preactivation_kappa_floor=0.0016,
+                curve_preactivation_lookahead_target=10.0,
+                curve_preactivation_speed_cap_target=13.6,
                 curve_local_rearm_cooldown_active=False,
                 curve_local_force_straight_active=False,
                 curve_local_commit_streak_frames=3,
@@ -183,8 +193,45 @@ def test_recorder_writes_curve_phase_scheduler_fields(tmp_path: Path) -> None:
                 reference_lookahead_entry_shorten_guard_active=True,
                 reference_lookahead_entry_shorten_guard_delta_m=0.35,
                 local_curve_reference_mode="shadow",
+                local_curve_reference_requested_mode="shadow",
                 local_curve_reference_active=True,
                 local_curve_reference_shadow_only=True,
+                local_curve_reference_shadow_promotion_active=False,
+                local_curve_reference_shadow_promotion_weight=0.0,
+                local_curve_reference_shadow_promotion_blend_floor=0.0,
+                local_curve_reference_shadow_promotion_reason="",
+                local_curve_reference_guarded_bounded_active=True,
+                local_curve_reference_guarded_bounded_reason="distractor_opposite_direction",
+                local_curve_reference_guarded_bounded_dwell_frames=6,
+                local_curve_reference_guarded_bounded_trigger_raw_delta_m=1.42,
+                local_curve_reference_guarded_bounded_exit_raw_delta_m=np.nan,
+                local_curve_reference_guarded_bounded_trigger_weight=0.64,
+                local_curve_reference_guarded_bounded_blend_floor=0.41,
+                reference_distractor_guard_active=True,
+                reference_distractor_guard_reason="distractor_opposite_direction",
+                reference_distractor_guard_dwell_frames=5,
+                reference_distractor_guard_trigger_center_error_m=0.74,
+                reference_distractor_guard_exit_center_error_m=np.nan,
+                reference_distractor_guard_center_error_m=0.82,
+                reference_distractor_guard_width_error_m=1.08,
+                reference_distractor_guard_trigger_weight=0.61,
+                reference_distractor_guard_blend_weight=0.90,
+                reference_distractor_guard_expected_center_x_m=0.03,
+                reference_distractor_guard_expected_heading_rad=0.0,
+                reference_distractor_input_guard_active=True,
+                reference_distractor_input_guard_reason="distractor_opposite_direction",
+                reference_distractor_input_guard_dwell_frames=5,
+                reference_distractor_input_guard_trigger_center_error_m=0.61,
+                reference_distractor_input_guard_exit_center_error_m=np.nan,
+                reference_distractor_input_guard_center_error_m=0.52,
+                reference_distractor_input_guard_width_error_m=0.34,
+                reference_distractor_input_guard_trigger_weight=0.96,
+                reference_distractor_input_guard_expected_center_x_m=0.02,
+                reference_distractor_input_guard_synthetic_left_lane_x_m=-1.78,
+                reference_distractor_input_guard_synthetic_right_lane_x_m=1.82,
+                reference_distractor_input_guard_synthetic_lane_width_m=3.60,
+                reference_distractor_input_guard_suppressed_lane_coeffs=True,
+                reference_distractor_input_guard_center_history_seeded=True,
                 local_curve_reference_valid=True,
                 local_curve_reference_source="road_curvature",
                 local_curve_reference_fallback_active=False,
@@ -211,6 +258,9 @@ def test_recorder_writes_curve_phase_scheduler_fields(tmp_path: Path) -> None:
                 mpc_kappa_bias_ema=0.093,
                 mpc_kappa_bias_guard_active=True,
                 mpc_kappa_bias_guard_limit=0.0010,
+                mpc_kappa_active_curve_preserve_ratio=0.92,
+                mpc_kappa_active_curve_preserve_active=True,
+                mpc_kappa_active_curve_preserve_weight=0.68,
             ),
             perception_output=None,
             trajectory_output=None,
@@ -312,6 +362,35 @@ def test_recorder_writes_curve_phase_scheduler_fields(tmp_path: Path) -> None:
         assert float(
             h5_file["control/curve_local_dynamic_sustain_effect_score"][0]
         ) == pytest.approx(0.24, rel=1e-6)
+        assert float(
+            h5_file["control/curve_preactivation_authority_weight"][0]
+        ) == pytest.approx(0.58, rel=1e-6)
+        assert int(h5_file["control/curve_preactivation_authority_active"][0]) == 0
+        pre_blocker = h5_file["control/curve_preactivation_blocker_mode"][0]
+        if isinstance(pre_blocker, bytes):
+            pre_blocker = pre_blocker.decode("utf-8")
+        assert str(pre_blocker) == "local_not_ready"
+        assert float(
+            h5_file["control/curve_preactivation_preview_weight"][0]
+        ) == pytest.approx(0.86, rel=1e-6)
+        assert float(
+            h5_file["control/curve_preactivation_speed_weight"][0]
+        ) == pytest.approx(0.74, rel=1e-6)
+        assert float(
+            h5_file["control/curve_preactivation_curvature_weight"][0]
+        ) == pytest.approx(1.0, rel=1e-6)
+        assert float(
+            h5_file["control/curve_preactivation_distance_weight"][0]
+        ) == pytest.approx(0.65, rel=1e-6)
+        assert float(
+            h5_file["control/curve_preactivation_kappa_floor"][0]
+        ) == pytest.approx(0.0016, rel=1e-6)
+        assert float(
+            h5_file["control/curve_preactivation_lookahead_target"][0]
+        ) == pytest.approx(10.0, rel=1e-6)
+        assert float(
+            h5_file["control/curve_preactivation_speed_cap_target"][0]
+        ) == pytest.approx(13.6, rel=1e-6)
         assert int(h5_file["control/curve_local_rearm_cooldown_active"][0]) == 0
         assert int(h5_file["control/curve_local_force_straight_active"][0]) == 0
         assert int(h5_file["control/curve_local_commit_streak_frames"][0]) == 3
@@ -388,12 +467,122 @@ def test_recorder_writes_curve_phase_scheduler_fields(tmp_path: Path) -> None:
         if isinstance(local_arc_mode, bytes):
             local_arc_mode = local_arc_mode.decode("utf-8")
         assert str(local_arc_mode) == "shadow"
+        local_arc_requested_mode = h5_file["control/local_curve_reference_requested_mode"][0]
+        if isinstance(local_arc_requested_mode, bytes):
+            local_arc_requested_mode = local_arc_requested_mode.decode("utf-8")
+        assert str(local_arc_requested_mode) == "shadow"
         assert float(h5_file["control/local_curve_reference_active"][0]) == pytest.approx(
             1.0, rel=1e-6
         )
         assert float(h5_file["control/local_curve_reference_shadow_only"][0]) == pytest.approx(
             1.0, rel=1e-6
         )
+        assert float(
+            h5_file["control/local_curve_reference_shadow_promotion_active"][0]
+        ) == pytest.approx(0.0, rel=1e-6)
+        assert float(
+            h5_file["control/local_curve_reference_shadow_promotion_weight"][0]
+        ) == pytest.approx(0.0, rel=1e-6)
+        assert float(
+            h5_file["control/local_curve_reference_shadow_promotion_blend_floor"][0]
+        ) == pytest.approx(0.0, rel=1e-6)
+        shadow_reason = h5_file["control/local_curve_reference_shadow_promotion_reason"][0]
+        if isinstance(shadow_reason, bytes):
+            shadow_reason = shadow_reason.decode("utf-8")
+        assert str(shadow_reason) == ""
+        assert float(
+            h5_file["control/local_curve_reference_guarded_bounded_active"][0]
+        ) == pytest.approx(1.0, rel=1e-6)
+        guarded_reason = h5_file["control/local_curve_reference_guarded_bounded_reason"][0]
+        if isinstance(guarded_reason, bytes):
+            guarded_reason = guarded_reason.decode("utf-8")
+        assert str(guarded_reason) == "distractor_opposite_direction"
+        assert int(h5_file["control/local_curve_reference_guarded_bounded_dwell_frames"][0]) == 6
+        assert float(
+            h5_file["control/local_curve_reference_guarded_bounded_trigger_raw_delta_m"][0]
+        ) == pytest.approx(1.42, rel=1e-6)
+        assert np.isnan(
+            float(h5_file["control/local_curve_reference_guarded_bounded_exit_raw_delta_m"][0])
+        )
+        assert float(
+            h5_file["control/local_curve_reference_guarded_bounded_trigger_weight"][0]
+        ) == pytest.approx(0.64, rel=1e-6)
+        assert float(
+            h5_file["control/local_curve_reference_guarded_bounded_blend_floor"][0]
+        ) == pytest.approx(0.41, rel=1e-6)
+        assert float(
+            h5_file["control/reference_distractor_guard_active"][0]
+        ) == pytest.approx(1.0, rel=1e-6)
+        distractor_reason = h5_file["control/reference_distractor_guard_reason"][0]
+        if isinstance(distractor_reason, bytes):
+            distractor_reason = distractor_reason.decode("utf-8")
+        assert str(distractor_reason) == "distractor_opposite_direction"
+        assert int(h5_file["control/reference_distractor_guard_dwell_frames"][0]) == 5
+        assert float(
+            h5_file["control/reference_distractor_guard_trigger_center_error_m"][0]
+        ) == pytest.approx(0.74, rel=1e-6)
+        assert np.isnan(
+            float(h5_file["control/reference_distractor_guard_exit_center_error_m"][0])
+        )
+        assert float(
+            h5_file["control/reference_distractor_guard_center_error_m"][0]
+        ) == pytest.approx(0.82, rel=1e-6)
+        assert float(
+            h5_file["control/reference_distractor_guard_width_error_m"][0]
+        ) == pytest.approx(1.08, rel=1e-6)
+        assert float(
+            h5_file["control/reference_distractor_guard_trigger_weight"][0]
+        ) == pytest.approx(0.61, rel=1e-6)
+        assert float(
+            h5_file["control/reference_distractor_guard_blend_weight"][0]
+        ) == pytest.approx(0.90, rel=1e-6)
+        assert float(
+            h5_file["control/reference_distractor_guard_expected_center_x_m"][0]
+        ) == pytest.approx(0.03, rel=1e-6)
+        assert float(
+            h5_file["control/reference_distractor_guard_expected_heading_rad"][0]
+        ) == pytest.approx(0.0, rel=1e-6)
+        assert float(
+            h5_file["control/reference_distractor_input_guard_active"][0]
+        ) == pytest.approx(1.0, rel=1e-6)
+        input_reason = h5_file["control/reference_distractor_input_guard_reason"][0]
+        if isinstance(input_reason, bytes):
+            input_reason = input_reason.decode("utf-8")
+        assert str(input_reason) == "distractor_opposite_direction"
+        assert int(h5_file["control/reference_distractor_input_guard_dwell_frames"][0]) == 5
+        assert float(
+            h5_file["control/reference_distractor_input_guard_trigger_center_error_m"][0]
+        ) == pytest.approx(0.61, rel=1e-6)
+        assert np.isnan(
+            float(h5_file["control/reference_distractor_input_guard_exit_center_error_m"][0])
+        )
+        assert float(
+            h5_file["control/reference_distractor_input_guard_center_error_m"][0]
+        ) == pytest.approx(0.52, rel=1e-6)
+        assert float(
+            h5_file["control/reference_distractor_input_guard_width_error_m"][0]
+        ) == pytest.approx(0.34, rel=1e-6)
+        assert float(
+            h5_file["control/reference_distractor_input_guard_trigger_weight"][0]
+        ) == pytest.approx(0.96, rel=1e-6)
+        assert float(
+            h5_file["control/reference_distractor_input_guard_expected_center_x_m"][0]
+        ) == pytest.approx(0.02, rel=1e-6)
+        assert float(
+            h5_file["control/reference_distractor_input_guard_synthetic_left_lane_x_m"][0]
+        ) == pytest.approx(-1.78, rel=1e-6)
+        assert float(
+            h5_file["control/reference_distractor_input_guard_synthetic_right_lane_x_m"][0]
+        ) == pytest.approx(1.82, rel=1e-6)
+        assert float(
+            h5_file["control/reference_distractor_input_guard_synthetic_lane_width_m"][0]
+        ) == pytest.approx(3.60, rel=1e-6)
+        assert float(
+            h5_file["control/reference_distractor_input_guard_suppressed_lane_coeffs"][0]
+        ) == pytest.approx(1.0, rel=1e-6)
+        assert float(
+            h5_file["control/reference_distractor_input_guard_center_history_seeded"][0]
+        ) == pytest.approx(1.0, rel=1e-6)
         assert float(h5_file["control/local_curve_reference_valid"][0]) == pytest.approx(
             1.0, rel=1e-6
         )
@@ -459,6 +648,13 @@ def test_recorder_writes_curve_phase_scheduler_fields(tmp_path: Path) -> None:
         assert int(h5_file["control/mpc_kappa_bias_guard_active"][0]) == 1
         assert float(h5_file["control/mpc_kappa_bias_guard_limit"][0]) == pytest.approx(
             0.0010, rel=1e-6
+        )
+        assert float(h5_file["control/mpc_kappa_active_curve_preserve_ratio"][0]) == pytest.approx(
+            0.92, rel=1e-6
+        )
+        assert int(h5_file["control/mpc_kappa_active_curve_preserve_active"][0]) == 1
+        assert float(h5_file["control/mpc_kappa_active_curve_preserve_weight"][0]) == pytest.approx(
+            0.68, rel=1e-6
         )
 
 
@@ -1102,16 +1298,29 @@ def test_recorder_writes_mpc_gt_cross_track_contract_fields(tmp_path: Path) -> N
                 ground_truth_lane_center_x=0.82,
                 ground_truth_lane_center_x_lookahead=0.82,
                 ground_truth_lane_center_x_at_car=0.04,
+                ground_truth_selected_lane_index=1,
+                ground_truth_ego_lane_index=1,
+                ground_truth_lane_selection_source="ego_start_lane",
+                ground_truth_lane_selection_reason="start_in_right_lane",
+                ground_truth_lane_selection_matches_ego=True,
+                ground_truth_ego_lane_center_x_at_car=0.04,
+                ground_truth_selected_lane_center_offset_road_frame=0.90,
+                ground_truth_selected_lane_cross_track_road_frame_at_car=0.03,
+                ground_truth_ego_lane_center_offset_road_frame=0.90,
+                ground_truth_ego_lane_cross_track_road_frame_at_car=0.03,
             ),
             control_command=ControlCommand(
                 timestamp=0.0,
                 steering=0.0,
                 throttle=0.0,
                 brake=0.0,
-                mpc_gt_cross_track_m=0.04,
+                mpc_gt_cross_track_m=0.03,
                 mpc_gt_cross_track_at_car_m=0.04,
+                mpc_gt_cross_track_road_frame_at_car_m=0.03,
+                mpc_gt_cross_track_vehicle_frame_at_car_m=0.04,
                 mpc_gt_cross_track_lookahead_m=0.82,
-                mpc_gt_cross_track_source_code="at_car",
+                mpc_gt_cross_track_source_code="road_frame_at_car",
+                mpc_gt_cross_track_control_source_code="road_frame_at_car",
             ),
             perception_output=None,
             trajectory_output=None,
@@ -1125,11 +1334,33 @@ def test_recorder_writes_mpc_gt_cross_track_contract_fields(tmp_path: Path) -> N
             recorder.close()
 
     with h5py.File(tmp_path / "control_command_mpc_gt_contract_test.h5", "r") as h5_file:
-        assert float(h5_file["control/mpc_gt_cross_track_m"][0]) == pytest.approx(0.04, rel=1e-6)
+        assert float(h5_file["control/mpc_gt_cross_track_m"][0]) == pytest.approx(0.03, rel=1e-6)
         assert float(h5_file["control/mpc_gt_cross_track_at_car_m"][0]) == pytest.approx(0.04, rel=1e-6)
+        assert float(h5_file["control/mpc_gt_cross_track_road_frame_at_car_m"][0]) == pytest.approx(0.03, rel=1e-6)
+        assert float(h5_file["control/mpc_gt_cross_track_vehicle_frame_at_car_m"][0]) == pytest.approx(0.04, rel=1e-6)
         assert float(h5_file["control/mpc_gt_cross_track_lookahead_m"][0]) == pytest.approx(0.82, rel=1e-6)
         source = h5_file["control/mpc_gt_cross_track_source_code"][0]
         if isinstance(source, bytes):
             source = source.decode("utf-8")
-        assert str(source) == "at_car"
+        assert str(source) == "road_frame_at_car"
+        control_source = h5_file["control/mpc_gt_cross_track_control_source_code"][0]
+        if isinstance(control_source, bytes):
+            control_source = control_source.decode("utf-8")
+        assert str(control_source) == "road_frame_at_car"
         assert float(h5_file["ground_truth/lane_center_x_at_car"][0]) == pytest.approx(0.04, rel=1e-6)
+        assert int(h5_file["ground_truth/selected_lane_index"][0]) == 1
+        assert int(h5_file["ground_truth/ego_lane_index"][0]) == 1
+        source = h5_file["ground_truth/lane_selection_source"][0]
+        if isinstance(source, bytes):
+            source = source.decode("utf-8")
+        assert str(source) == "ego_start_lane"
+        reason = h5_file["ground_truth/lane_selection_reason"][0]
+        if isinstance(reason, bytes):
+            reason = reason.decode("utf-8")
+        assert str(reason) == "start_in_right_lane"
+        assert int(h5_file["ground_truth/lane_selection_matches_ego"][0]) == 1
+        assert float(h5_file["ground_truth/ego_lane_center_x_at_car"][0]) == pytest.approx(0.04, rel=1e-6)
+        assert float(h5_file["ground_truth/selected_lane_center_offset_road_frame"][0]) == pytest.approx(0.90, rel=1e-6)
+        assert float(h5_file["ground_truth/selected_lane_cross_track_road_frame_at_car"][0]) == pytest.approx(0.03, rel=1e-6)
+        assert float(h5_file["ground_truth/ego_lane_center_offset_road_frame"][0]) == pytest.approx(0.90, rel=1e-6)
+        assert float(h5_file["ground_truth/ego_lane_cross_track_road_frame_at_car"][0]) == pytest.approx(0.03, rel=1e-6)

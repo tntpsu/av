@@ -2376,6 +2376,247 @@ def test_bounded_mode_entry_phase_has_full_correction() -> None:
     assert float(result["local_curve_reference_vs_planner_delta_m"]) > 0.1
 
 
+def test_shadow_mode_promotes_to_bounded_when_highway_delta_is_large() -> None:
+    config = {
+        "local_curve_reference_mode": "shadow",
+        "local_curve_reference_target_distance_table": [
+            {"speed_mps": 0.0, "target_distance_m": 5.0},
+            {"speed_mps": 15.0, "target_distance_m": 7.0},
+        ],
+        "local_curve_reference_entry_phase_on": 0.25,
+        "local_curve_reference_entry_phase_full": 0.65,
+        "local_curve_reference_commit_phase_on": 0.65,
+        "local_curve_reference_commit_phase_full": 0.90,
+        "local_curve_reference_curvature_min": 0.0015,
+        "local_curve_reference_curvature_max": 0.015,
+        "local_curve_reference_tight_distance_scale_min": 0.78,
+        "local_curve_reference_delta_cap_m": 1.5,
+        "local_curve_reference_max_blend": 0.35,
+        "local_curve_reference_shadow_promote_enabled": True,
+        "local_curve_reference_shadow_promote_speed_on": 13.0,
+        "local_curve_reference_shadow_promote_speed_full": 15.0,
+        "local_curve_reference_shadow_promote_curvature_on": 0.0015,
+        "local_curve_reference_shadow_promote_curvature_full": 0.0020,
+        "local_curve_reference_shadow_promote_raw_delta_on_m": 0.35,
+        "local_curve_reference_shadow_promote_raw_delta_full_m": 0.85,
+        "local_curve_reference_shadow_promote_weight_min": 0.35,
+        "local_curve_reference_shadow_promote_weight_min_active": 0.25,
+        "local_curve_reference_shadow_promote_blend_floor_on": 0.15,
+        "local_curve_reference_shadow_promote_blend_floor_full": 0.35,
+    }
+
+    result = build_local_curve_reference(
+        current_speed_mps=14.5,
+        curve_local_state="ENTRY",
+        curve_local_phase=0.30,
+        curve_local_entry_severity=0.8,
+        distance_to_curve_start_m=2.0,
+        current_curve_progress_ratio=None,
+        road_curvature_abs=0.002,
+        road_curvature_signed=0.002,
+        preview_curvature_abs=0.002,
+        preview_curvature_signed=0.002,
+        base_reference_point={"x": 0.0, "y": 6.5, "heading": 0.0, "curvature": 0.002},
+        config=config,
+    )
+
+    assert result["local_curve_reference_requested_mode"] == "shadow"
+    assert result["local_curve_reference_mode"] == "bounded"
+    assert result["local_curve_reference_shadow_only"] is False
+    assert result["local_curve_reference_shadow_promotion_active"] is True
+    assert float(result["local_curve_reference_shadow_promotion_weight"]) >= 0.35
+    assert float(result["local_curve_reference_shadow_promotion_blend_floor"]) >= 0.15
+    assert float(result["local_curve_reference_blend_weight"]) >= float(
+        result["local_curve_reference_shadow_promotion_blend_floor"]
+    )
+
+
+def test_shadow_mode_active_threshold_holds_bounded_through_entry() -> None:
+    config = {
+        "local_curve_reference_mode": "shadow",
+        "local_curve_reference_target_distance_table": [
+            {"speed_mps": 0.0, "target_distance_m": 5.0},
+            {"speed_mps": 15.0, "target_distance_m": 7.0},
+        ],
+        "local_curve_reference_entry_phase_on": 0.25,
+        "local_curve_reference_entry_phase_full": 0.65,
+        "local_curve_reference_curvature_min": 0.0015,
+        "local_curve_reference_curvature_max": 0.015,
+        "local_curve_reference_shadow_promote_enabled": True,
+        "local_curve_reference_shadow_promote_active_use_speed_gate": True,
+        "local_curve_reference_shadow_promote_speed_on": 13.0,
+        "local_curve_reference_shadow_promote_speed_full": 15.0,
+        "local_curve_reference_shadow_promote_curvature_on": 0.0015,
+        "local_curve_reference_shadow_promote_curvature_full": 0.0020,
+        "local_curve_reference_shadow_promote_raw_delta_on_m": 0.35,
+        "local_curve_reference_shadow_promote_raw_delta_full_m": 0.85,
+        "local_curve_reference_shadow_promote_weight_min": 0.35,
+        "local_curve_reference_shadow_promote_weight_min_active": 0.25,
+        "local_curve_reference_shadow_promote_blend_floor_on": 0.15,
+        "local_curve_reference_shadow_promote_blend_floor_full": 0.35,
+    }
+
+    result = build_local_curve_reference(
+        current_speed_mps=13.75,
+        curve_local_state="ENTRY",
+        curve_local_phase=0.30,
+        curve_local_entry_severity=0.8,
+        distance_to_curve_start_m=2.0,
+        current_curve_progress_ratio=None,
+        road_curvature_abs=0.002,
+        road_curvature_signed=0.002,
+        preview_curvature_abs=0.002,
+        preview_curvature_signed=0.002,
+        base_reference_point={"x": 0.0, "y": 6.5, "heading": 0.0, "curvature": 0.002},
+        config=config,
+    )
+
+    assert 0.25 <= float(result["local_curve_reference_shadow_promotion_weight"]) < 0.35
+    assert result["local_curve_reference_mode"] == "bounded"
+    assert result["local_curve_reference_shadow_promotion_active"] is True
+
+
+def test_shadow_mode_active_promotion_can_ignore_speed_gate() -> None:
+    config = {
+        "local_curve_reference_mode": "shadow",
+        "local_curve_reference_target_distance_table": [
+            {"speed_mps": 0.0, "target_distance_m": 5.0},
+            {"speed_mps": 15.0, "target_distance_m": 7.0},
+        ],
+        "local_curve_reference_entry_phase_on": 0.25,
+        "local_curve_reference_entry_phase_full": 0.65,
+        "local_curve_reference_curvature_min": 0.0015,
+        "local_curve_reference_curvature_max": 0.015,
+        "local_curve_reference_shadow_promote_enabled": True,
+        "local_curve_reference_shadow_promote_active_use_speed_gate": False,
+        "local_curve_reference_shadow_promote_speed_on": 13.0,
+        "local_curve_reference_shadow_promote_speed_full": 15.0,
+        "local_curve_reference_shadow_promote_curvature_on": 0.0015,
+        "local_curve_reference_shadow_promote_curvature_full": 0.0020,
+        "local_curve_reference_shadow_promote_raw_delta_on_m": 0.35,
+        "local_curve_reference_shadow_promote_raw_delta_full_m": 0.85,
+        "local_curve_reference_shadow_promote_weight_min": 0.35,
+        "local_curve_reference_shadow_promote_weight_min_active": 0.25,
+        "local_curve_reference_shadow_promote_blend_floor_on": 0.15,
+        "local_curve_reference_shadow_promote_blend_floor_full": 0.35,
+    }
+
+    result = build_local_curve_reference(
+        current_speed_mps=12.7,
+        curve_local_state="ENTRY",
+        curve_local_phase=0.30,
+        curve_local_entry_severity=0.8,
+        distance_to_curve_start_m=2.0,
+        current_curve_progress_ratio=None,
+        road_curvature_abs=0.002,
+        road_curvature_signed=0.002,
+        preview_curvature_abs=0.002,
+        preview_curvature_signed=0.002,
+        base_reference_point={"x": 0.0, "y": 6.5, "heading": 0.0, "curvature": 0.002},
+        config=config,
+    )
+
+    assert float(result["local_curve_reference_shadow_promotion_weight"]) >= 0.25
+    assert result["local_curve_reference_mode"] == "bounded"
+    assert result["local_curve_reference_shadow_promotion_active"] is True
+
+
+def test_shadow_mode_preactivates_before_entry_when_curve_is_near() -> None:
+    config = {
+        "local_curve_reference_mode": "shadow",
+        "local_curve_reference_target_distance_table": [
+            {"speed_mps": 0.0, "target_distance_m": 5.0},
+            {"speed_mps": 15.0, "target_distance_m": 7.0},
+        ],
+        "local_curve_reference_curvature_min": 0.0015,
+        "local_curve_reference_curvature_max": 0.015,
+        "local_curve_reference_preactive_enabled": True,
+        "local_curve_reference_preactive_speed_on": 12.5,
+        "local_curve_reference_preactive_speed_full": 14.5,
+        "local_curve_reference_preactive_curvature_on": 0.0015,
+        "local_curve_reference_preactive_curvature_full": 0.0020,
+        "local_curve_reference_preactive_distance_start_m": 55.0,
+        "local_curve_reference_preactive_distance_end_m": 12.0,
+        "local_curve_reference_preactive_weight_min": 0.20,
+        "local_curve_reference_preactive_blend_floor_on": 0.10,
+        "local_curve_reference_preactive_blend_floor_full": 0.22,
+    }
+
+    result = build_local_curve_reference(
+        current_speed_mps=14.3,
+        curve_local_state="STRAIGHT",
+        curve_local_phase=0.0,
+        curve_local_entry_severity=0.0,
+        distance_to_curve_start_m=42.0,
+        current_curve_progress_ratio=None,
+        road_curvature_abs=0.0,
+        road_curvature_signed=0.0,
+        preview_curvature_abs=0.002,
+        preview_curvature_signed=0.002,
+        base_reference_point={"x": 0.0, "y": 16.0, "heading": 0.0, "curvature": 0.0},
+        config=config,
+    )
+
+    assert result["local_curve_reference_requested_mode"] == "shadow"
+    assert result["local_curve_reference_mode"] == "bounded"
+    assert result["local_curve_reference_shadow_promotion_active"] is True
+    assert result["local_curve_reference_shadow_promotion_reason"] == "preactive_speed_curvature_distance"
+    assert float(result["local_curve_reference_blend_weight"]) >= 0.10
+
+
+def test_bounded_progress_unwind_reduces_blend_in_entry_when_enabled() -> None:
+    config = {
+        "local_curve_reference_mode": "bounded",
+        "local_curve_reference_target_distance_table": [
+            {"speed_mps": 0.0, "target_distance_m": 5.0},
+            {"speed_mps": 15.0, "target_distance_m": 7.0},
+        ],
+        "local_curve_reference_entry_phase_on": 0.25,
+        "local_curve_reference_entry_phase_full": 0.65,
+        "local_curve_reference_curvature_min": 0.0015,
+        "local_curve_reference_curvature_max": 0.015,
+        "local_curve_reference_max_blend": 0.50,
+        "local_curve_reference_bounded_progress_unwind_enabled": True,
+        "local_curve_reference_bounded_progress_unwind_start": 0.18,
+        "local_curve_reference_bounded_progress_unwind_end": 0.45,
+    }
+
+    early = build_local_curve_reference(
+        current_speed_mps=14.3,
+        curve_local_state="ENTRY",
+        curve_local_phase=0.30,
+        curve_local_entry_severity=0.8,
+        distance_to_curve_start_m=2.0,
+        current_curve_progress_ratio=0.05,
+        road_curvature_abs=0.002,
+        road_curvature_signed=0.002,
+        preview_curvature_abs=0.002,
+        preview_curvature_signed=0.002,
+        base_reference_point={"x": 0.0, "y": 6.5, "heading": 0.0, "curvature": 0.002},
+        config=config,
+    )
+    late = build_local_curve_reference(
+        current_speed_mps=14.3,
+        curve_local_state="ENTRY",
+        curve_local_phase=0.30,
+        curve_local_entry_severity=0.8,
+        distance_to_curve_start_m=2.0,
+        current_curve_progress_ratio=0.40,
+        road_curvature_abs=0.002,
+        road_curvature_signed=0.002,
+        preview_curvature_abs=0.002,
+        preview_curvature_signed=0.002,
+        base_reference_point={"x": 0.0, "y": 6.5, "heading": 0.0, "curvature": 0.002},
+        config=config,
+    )
+
+    assert early["local_curve_reference_mode"] == "bounded"
+    assert late["local_curve_reference_mode"] == "bounded"
+    assert float(early["local_curve_reference_blend_weight"]) > float(
+        late["local_curve_reference_blend_weight"]
+    )
+
+
 # ---------------------------------------------------------------------------
 # Curve phase scheduler: local-relevance sustain gating
 # ---------------------------------------------------------------------------

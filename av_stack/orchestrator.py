@@ -1371,6 +1371,24 @@ class AVStack:
         self._curve_anticipation_active = False
         self._curve_anticipation_on_counter = 0
         self._curve_anticipation_off_counter = 0
+        self._local_curve_reference_distractor_guard_active = False
+        self._local_curve_reference_distractor_guard_on_counter = 0
+        self._local_curve_reference_distractor_guard_off_counter = 0
+        self._local_curve_reference_distractor_guard_dwell_frames = 0
+        self._local_curve_reference_distractor_guard_trigger_raw_delta_m = float("nan")
+        self._local_curve_reference_distractor_guard_last_exit_raw_delta_m = float("nan")
+        self._reference_distractor_guard_active = False
+        self._reference_distractor_guard_on_counter = 0
+        self._reference_distractor_guard_off_counter = 0
+        self._reference_distractor_guard_dwell_frames = 0
+        self._reference_distractor_guard_trigger_center_error_m = float("nan")
+        self._reference_distractor_guard_last_exit_center_error_m = float("nan")
+        self._reference_distractor_input_guard_active = False
+        self._reference_distractor_input_guard_on_counter = 0
+        self._reference_distractor_input_guard_off_counter = 0
+        self._reference_distractor_input_guard_dwell_frames = 0
+        self._reference_distractor_input_guard_trigger_center_error_m = float("nan")
+        self._reference_distractor_input_guard_last_exit_center_error_m = float("nan")
         self._curve_anticipation_prev_far_metric = None
 
     def _load_reference_entry_track_profile(self, track_name: str) -> None:
@@ -2164,6 +2182,972 @@ class AVStack:
                 self._curve_anticipation_on_counter = 0
                 self._curve_anticipation_off_counter = 0
         return float(score_filtered), bool(self._curve_anticipation_active)
+
+    @staticmethod
+    def _normalize_distractor_guard_term(value: float, value_min: float, value_max: float) -> float:
+        try:
+            value_f = float(value)
+        except (TypeError, ValueError):
+            return 0.0
+        if not math.isfinite(value_f):
+            return 0.0
+        if value_max <= value_min:
+            return 1.0 if value_f >= value_min else 0.0
+        if value_f <= value_min:
+            return 0.0
+        if value_f >= value_max:
+            return 1.0
+        alpha = (value_f - value_min) / max(1e-6, value_max - value_min)
+        return float(alpha * alpha * (3.0 - 2.0 * alpha))
+
+    @staticmethod
+    def _reverse_distractor_guard_progress(value: float | None, start: float, end: float) -> float:
+        if value is None:
+            return 1.0
+        try:
+            progress = float(value)
+        except (TypeError, ValueError):
+            return 1.0
+        if not math.isfinite(progress):
+            return 1.0
+        progress = max(0.0, min(1.0, progress))
+        if end <= start:
+            return 0.0 if progress >= start else 1.0
+        if progress <= start:
+            return 1.0
+        if progress >= end:
+            return 0.0
+        alpha = (progress - start) / max(1e-6, end - start)
+        smooth = alpha * alpha * (3.0 - 2.0 * alpha)
+        return float(1.0 - smooth)
+
+    def _update_local_curve_reference_distractor_guard(
+        self,
+        *,
+        vehicle_state_dict: dict,
+        local_curve_reference: dict,
+        current_speed_mps: float,
+        curve_local_state: str,
+        current_curve_progress_ratio: float | None,
+        road_curvature_abs: float | None,
+        preview_curvature_abs: float | None,
+    ) -> dict:
+        trajectory_cfg = self.trajectory_config if isinstance(self.trajectory_config, dict) else {}
+        result = {
+            "active": False,
+            "reason": "inactive",
+            "dwell_frames": int(self._local_curve_reference_distractor_guard_dwell_frames),
+            "trigger_raw_delta_m": float(self._local_curve_reference_distractor_guard_trigger_raw_delta_m),
+            "exit_raw_delta_m": float(self._local_curve_reference_distractor_guard_last_exit_raw_delta_m),
+            "trigger_weight": 0.0,
+            "guard_blend_floor": 0.0,
+            "guard_max_blend": 0.0,
+            "rebuild": False,
+            "config_override": None,
+        }
+        if not bool(trajectory_cfg.get("local_curve_reference_distractor_guard_enabled", True)):
+            self._local_curve_reference_distractor_guard_active = False
+            self._local_curve_reference_distractor_guard_on_counter = 0
+            self._local_curve_reference_distractor_guard_off_counter = 0
+            self._local_curve_reference_distractor_guard_dwell_frames = 0
+            self._local_curve_reference_distractor_guard_trigger_raw_delta_m = float("nan")
+            return result
+
+        candidate_present = float(vehicle_state_dict.get("radar_fwd_candidate_present", 0.0) or 0.0) > 0.5
+        reject_reason = str(vehicle_state_dict.get("radar_fwd_reject_reason", "none") or "none")
+        wrong_target_rejected = candidate_present and reject_reason in {"wrong_lane", "opposite_direction"}
+        local_valid = bool(local_curve_reference.get("local_curve_reference_valid", False))
+        local_fallback = bool(local_curve_reference.get("local_curve_reference_fallback_active", False))
+        raw_delta_m = float(local_curve_reference.get("local_curve_reference_raw_delta_m", 0.0) or 0.0)
+        curve_state = str(curve_local_state or "").strip().upper()
+        active_state = curve_state in {"ENTRY", "COMMIT"}
+        state_ok = curve_state in {"STRAIGHT", "REARM", "ENTRY", "COMMIT"}
+        curvature_metric = 0.0
+        for candidate in (
+            road_curvature_abs,
+            preview_curvature_abs,
+            local_curve_reference.get("local_curve_reference_arc_curvature_abs"),
+        ):
+            try:
+                curvature_metric = abs(float(candidate or 0.0))
+            except (TypeError, ValueError):
+                curvature_metric = 0.0
+            if math.isfinite(curvature_metric) and curvature_metric > 1e-6:
+                break
+
+        speed_on = float(
+            trajectory_cfg.get(
+                "local_curve_reference_distractor_guard_active_speed_on",
+                trajectory_cfg.get("local_curve_reference_distractor_guard_speed_on", 12.5),
+            )
+            if active_state
+            else trajectory_cfg.get("local_curve_reference_distractor_guard_speed_on", 12.5)
+            or 12.5
+        )
+        speed_full = float(
+            trajectory_cfg.get(
+                "local_curve_reference_distractor_guard_active_speed_full",
+                trajectory_cfg.get("local_curve_reference_distractor_guard_speed_full", 14.5),
+            )
+            if active_state
+            else trajectory_cfg.get("local_curve_reference_distractor_guard_speed_full", 14.5)
+            or 14.5
+        )
+        speed_weight = self._normalize_distractor_guard_term(
+            current_speed_mps,
+            speed_on,
+            speed_full,
+        )
+        curvature_on = float(
+            trajectory_cfg.get(
+                "local_curve_reference_distractor_guard_active_curvature_on",
+                trajectory_cfg.get("local_curve_reference_distractor_guard_curvature_on", 0.0015),
+            )
+            if active_state
+            else trajectory_cfg.get("local_curve_reference_distractor_guard_curvature_on", 0.0015)
+            or 0.0015
+        )
+        curvature_full = float(
+            trajectory_cfg.get(
+                "local_curve_reference_distractor_guard_active_curvature_full",
+                trajectory_cfg.get("local_curve_reference_distractor_guard_curvature_full", 0.0020),
+            )
+            if active_state
+            else trajectory_cfg.get("local_curve_reference_distractor_guard_curvature_full", 0.0020)
+            or 0.0020
+        )
+        curvature_weight = self._normalize_distractor_guard_term(
+            curvature_metric,
+            curvature_on,
+            curvature_full,
+        )
+        raw_delta_on = float(
+            trajectory_cfg.get(
+                "local_curve_reference_distractor_guard_active_raw_delta_on_m",
+                trajectory_cfg.get("local_curve_reference_distractor_guard_raw_delta_on_m", 0.90),
+            )
+            if active_state
+            else trajectory_cfg.get("local_curve_reference_distractor_guard_raw_delta_on_m", 0.90)
+            or 0.90
+        )
+        raw_delta_full = float(
+            trajectory_cfg.get(
+                "local_curve_reference_distractor_guard_active_raw_delta_full_m",
+                trajectory_cfg.get("local_curve_reference_distractor_guard_raw_delta_full_m", 2.20),
+            )
+            if active_state
+            else trajectory_cfg.get("local_curve_reference_distractor_guard_raw_delta_full_m", 2.20)
+            or 2.20
+        )
+        raw_delta_weight = self._normalize_distractor_guard_term(
+            raw_delta_m,
+            raw_delta_on,
+            raw_delta_full,
+        )
+        early_progress_weight = self._reverse_distractor_guard_progress(
+            current_curve_progress_ratio,
+            float(
+                trajectory_cfg.get("local_curve_reference_distractor_guard_progress_start", 0.18)
+                or 0.18
+            ),
+            float(
+                trajectory_cfg.get("local_curve_reference_distractor_guard_progress_end", 0.45)
+                or 0.45
+            ),
+        )
+        progress_gate_weight = (
+            1.0
+            if active_state
+            and bool(
+                trajectory_cfg.get(
+                    "local_curve_reference_distractor_guard_active_ignore_progress_gate",
+                    True,
+                )
+            )
+            else early_progress_weight
+        )
+        trigger_weight = 0.0
+        if (
+            wrong_target_rejected
+            and local_valid
+            and not local_fallback
+            and state_ok
+            and raw_delta_m > 1e-6
+        ):
+            trigger_weight = min(
+                speed_weight,
+                curvature_weight,
+                raw_delta_weight,
+                progress_gate_weight,
+            )
+        result["trigger_weight"] = float(trigger_weight)
+
+        active_min = float(
+            trajectory_cfg.get(
+                "local_curve_reference_distractor_guard_active_weight_min",
+                trajectory_cfg.get("local_curve_reference_distractor_guard_weight_min", 0.35),
+            )
+            if active_state
+            else trajectory_cfg.get("local_curve_reference_distractor_guard_weight_min", 0.35)
+            or 0.35
+        )
+        qualifies = trigger_weight >= active_min
+        on_frames = max(
+            1,
+            int(trajectory_cfg.get("local_curve_reference_distractor_guard_on_frames", 2)),
+        )
+        off_frames = max(
+            1,
+            int(trajectory_cfg.get("local_curve_reference_distractor_guard_off_frames", 3)),
+        )
+        min_dwell_frames = max(
+            1,
+            int(trajectory_cfg.get("local_curve_reference_distractor_guard_min_dwell_frames", 8)),
+        )
+
+        if self._local_curve_reference_distractor_guard_active:
+            self._local_curve_reference_distractor_guard_dwell_frames += 1
+            if qualifies:
+                self._local_curve_reference_distractor_guard_off_counter = 0
+            else:
+                self._local_curve_reference_distractor_guard_off_counter += 1
+                self._local_curve_reference_distractor_guard_last_exit_raw_delta_m = float(raw_delta_m)
+            if (
+                self._local_curve_reference_distractor_guard_dwell_frames >= min_dwell_frames
+                and self._local_curve_reference_distractor_guard_off_counter >= off_frames
+            ):
+                self._local_curve_reference_distractor_guard_active = False
+                self._local_curve_reference_distractor_guard_off_counter = 0
+                self._local_curve_reference_distractor_guard_dwell_frames = 0
+                self._local_curve_reference_distractor_guard_trigger_raw_delta_m = float("nan")
+        else:
+            self._local_curve_reference_distractor_guard_dwell_frames = 0
+            if qualifies:
+                self._local_curve_reference_distractor_guard_on_counter += 1
+            else:
+                self._local_curve_reference_distractor_guard_on_counter = 0
+            if self._local_curve_reference_distractor_guard_on_counter >= on_frames:
+                self._local_curve_reference_distractor_guard_active = True
+                self._local_curve_reference_distractor_guard_on_counter = 0
+                self._local_curve_reference_distractor_guard_off_counter = 0
+                self._local_curve_reference_distractor_guard_dwell_frames = 1
+                self._local_curve_reference_distractor_guard_trigger_raw_delta_m = float(raw_delta_m)
+                self._local_curve_reference_distractor_guard_last_exit_raw_delta_m = float("nan")
+
+        if not self._local_curve_reference_distractor_guard_active:
+            result["reason"] = (
+                "wrong_target_not_present"
+                if not wrong_target_rejected
+                else (
+                    "local_reference_invalid"
+                    if not local_valid or local_fallback
+                    else (
+                        "state_not_eligible"
+                        if not state_ok
+                        else "trigger_below_min"
+                    )
+                )
+            )
+            return result
+
+        blend_floor_on = float(
+            trajectory_cfg.get(
+                "local_curve_reference_distractor_guard_active_blend_floor_on",
+                trajectory_cfg.get("local_curve_reference_distractor_guard_blend_floor_on", 0.24),
+            )
+            if active_state
+            else trajectory_cfg.get("local_curve_reference_distractor_guard_blend_floor_on", 0.24)
+            or 0.24
+        )
+        blend_floor_full = float(
+            trajectory_cfg.get(
+                "local_curve_reference_distractor_guard_active_blend_floor_full",
+                trajectory_cfg.get("local_curve_reference_distractor_guard_blend_floor_full", 0.46),
+            )
+            if active_state
+            else trajectory_cfg.get("local_curve_reference_distractor_guard_blend_floor_full", 0.46)
+            or 0.46
+        )
+        max_blend_on = float(
+            trajectory_cfg.get(
+                "local_curve_reference_distractor_guard_active_max_blend_on",
+                trajectory_cfg.get("local_curve_reference_distractor_guard_max_blend_on", 0.24),
+            )
+            if active_state
+            else trajectory_cfg.get("local_curve_reference_distractor_guard_max_blend_on", 0.24)
+            or 0.24
+        )
+        max_blend_full = float(
+            trajectory_cfg.get(
+                "local_curve_reference_distractor_guard_active_max_blend_full",
+                trajectory_cfg.get("local_curve_reference_distractor_guard_max_blend_full", 0.46),
+            )
+            if active_state
+            else trajectory_cfg.get("local_curve_reference_distractor_guard_max_blend_full", 0.46)
+            or 0.46
+        )
+        guard_blend_floor = (
+            blend_floor_on
+            if trigger_weight <= 1e-6
+            else (
+                blend_floor_on + (blend_floor_full - blend_floor_on) * trigger_weight
+            )
+        )
+        guard_max_blend = (
+            max_blend_on
+            if trigger_weight <= 1e-6
+            else (
+                max_blend_on + (max_blend_full - max_blend_on) * trigger_weight
+            )
+        )
+        guard_blend_floor = max(0.0, min(1.0, guard_blend_floor))
+        guard_max_blend = max(guard_blend_floor, min(1.0, guard_max_blend))
+        guarded_cfg = dict(trajectory_cfg)
+        guarded_cfg["local_curve_reference_shadow_promote_blend_floor_on"] = guard_blend_floor
+        guarded_cfg["local_curve_reference_shadow_promote_blend_floor_full"] = guard_blend_floor
+        guarded_cfg["local_curve_reference_preactive_blend_floor_on"] = min(guard_blend_floor, 0.30)
+        guarded_cfg["local_curve_reference_preactive_blend_floor_full"] = min(guard_blend_floor, 0.34)
+        guarded_cfg["local_curve_reference_max_blend"] = guard_max_blend
+        guarded_cfg["local_curve_reference_bounded_progress_unwind_enabled"] = True
+        guarded_cfg["local_curve_reference_bounded_progress_unwind_start"] = float(
+            trajectory_cfg.get(
+                "local_curve_reference_distractor_guard_active_unwind_start",
+                trajectory_cfg.get("local_curve_reference_distractor_guard_unwind_start", 0.18),
+            )
+            if active_state
+            else trajectory_cfg.get("local_curve_reference_distractor_guard_unwind_start", 0.18)
+            or 0.18
+        )
+        guarded_cfg["local_curve_reference_bounded_progress_unwind_end"] = float(
+            trajectory_cfg.get(
+                "local_curve_reference_distractor_guard_active_unwind_end",
+                trajectory_cfg.get("local_curve_reference_distractor_guard_unwind_end", 0.45),
+            )
+            if active_state
+            else trajectory_cfg.get("local_curve_reference_distractor_guard_unwind_end", 0.45)
+            or 0.45
+        )
+
+        result.update(
+            {
+                "active": True,
+                "reason": f"distractor_{reject_reason}",
+                "dwell_frames": int(self._local_curve_reference_distractor_guard_dwell_frames),
+                "trigger_raw_delta_m": float(
+                    self._local_curve_reference_distractor_guard_trigger_raw_delta_m
+                ),
+                "exit_raw_delta_m": float(self._local_curve_reference_distractor_guard_last_exit_raw_delta_m),
+                "guard_blend_floor": float(guard_blend_floor),
+                "guard_max_blend": float(guard_max_blend),
+                "rebuild": True,
+                "config_override": guarded_cfg,
+            }
+        )
+        return result
+
+    def _update_reference_distractor_guard(
+        self,
+        *,
+        vehicle_state_dict: dict,
+        reference_point: dict | None,
+        left_lane_line_x: float | None,
+        right_lane_line_x: float | None,
+        current_speed_mps: float,
+        current_path_curvature: float | None,
+        curve_local_state: str,
+    ) -> dict:
+        trajectory_cfg = self.trajectory_config if isinstance(self.trajectory_config, dict) else {}
+        result = {
+            "active": False,
+            "reason": "inactive",
+            "dwell_frames": int(self._reference_distractor_guard_dwell_frames),
+            "trigger_center_error_m": float(self._reference_distractor_guard_trigger_center_error_m),
+            "exit_center_error_m": float(self._reference_distractor_guard_last_exit_center_error_m),
+            "trigger_weight": 0.0,
+            "guard_blend_weight": 0.0,
+            "center_error_m": 0.0,
+            "width_error_m": 0.0,
+            "expected_center_x_m": float("nan"),
+            "expected_heading_rad": 0.0,
+            "reference_override": None,
+        }
+        if not bool(trajectory_cfg.get("reference_distractor_guard_enabled", True)):
+            self._reference_distractor_guard_active = False
+            self._reference_distractor_guard_on_counter = 0
+            self._reference_distractor_guard_off_counter = 0
+            self._reference_distractor_guard_dwell_frames = 0
+            self._reference_distractor_guard_trigger_center_error_m = float("nan")
+            self._reference_distractor_guard_last_exit_center_error_m = float("nan")
+            return result
+
+        candidate_present = float(vehicle_state_dict.get("radar_fwd_candidate_present", 0.0) or 0.0) > 0.5
+        reject_reason = str(vehicle_state_dict.get("radar_fwd_reject_reason", "none") or "none")
+        wrong_target_rejected = candidate_present and reject_reason in {"wrong_lane", "opposite_direction"}
+        ref_method = str((reference_point or {}).get("method", "") or "")
+
+        curve_state = str(curve_local_state or "").strip().upper()
+        curvature_abs = 0.0
+        try:
+            curvature_abs = abs(float(current_path_curvature or 0.0))
+        except (TypeError, ValueError):
+            curvature_abs = 0.0
+        straight_like = curve_state in {"STRAIGHT", "REARM"} and curvature_abs <= float(
+            trajectory_cfg.get("reference_distractor_guard_straight_curvature_max", 0.0010) or 0.0010
+        )
+
+        gt_center_lookahead = vehicle_state_dict.get("groundTruthLaneCenterXLookahead")
+        if gt_center_lookahead is None:
+            gt_center_lookahead = vehicle_state_dict.get("groundTruthLaneCenterX")
+        gt_center_at_car = vehicle_state_dict.get("groundTruthLaneCenterXAtCar")
+        ego_center_at_car = vehicle_state_dict.get("groundTruthEgoLaneCenterXAtCar")
+        try:
+            gt_center_lookahead = (
+                float(gt_center_lookahead)
+                if gt_center_lookahead is not None and math.isfinite(float(gt_center_lookahead))
+                else None
+            )
+        except (TypeError, ValueError):
+            gt_center_lookahead = None
+        try:
+            gt_center_at_car = (
+                float(gt_center_at_car)
+                if gt_center_at_car is not None and math.isfinite(float(gt_center_at_car))
+                else None
+            )
+        except (TypeError, ValueError):
+            gt_center_at_car = None
+        try:
+            ego_center_at_car = (
+                float(ego_center_at_car)
+                if ego_center_at_car is not None and math.isfinite(float(ego_center_at_car))
+                else None
+            )
+        except (TypeError, ValueError):
+            ego_center_at_car = None
+
+        use_at_car_anchor = bool(
+            wrong_target_rejected
+            and straight_like
+            and ref_method == "lane_positions"
+            and (ego_center_at_car is not None or gt_center_at_car is not None)
+            and bool(
+                trajectory_cfg.get(
+                    "reference_distractor_guard_wrong_target_use_at_car_center",
+                    True,
+                )
+            )
+        )
+        at_car_anchor = ego_center_at_car if ego_center_at_car is not None else gt_center_at_car
+        expected_center_x = at_car_anchor if use_at_car_anchor else gt_center_lookahead
+        if expected_center_x is None:
+            expected_center_x = at_car_anchor
+        result["expected_center_x_m"] = (
+            float(expected_center_x) if expected_center_x is not None else float("nan")
+        )
+
+        if reference_point is not None:
+            center_x = reference_point.get("perception_center_x", reference_point.get("x", 0.0))
+            try:
+                center_x = float(center_x or 0.0)
+            except (TypeError, ValueError):
+                center_x = 0.0
+        else:
+            center_x = 0.0
+
+        lane_width = None
+        try:
+            if left_lane_line_x is not None and right_lane_line_x is not None:
+                lane_width = float(right_lane_line_x) - float(left_lane_line_x)
+        except (TypeError, ValueError):
+            lane_width = None
+        target_lane_width = float(trajectory_cfg.get("target_lane_width_m", 3.6) or 3.6)
+        center_error_m = (
+            abs(center_x - float(expected_center_x))
+            if expected_center_x is not None
+            else 0.0
+        )
+        width_error_m = (
+            abs(float(lane_width) - target_lane_width)
+            if lane_width is not None and math.isfinite(float(lane_width))
+            else 0.0
+        )
+        result["center_error_m"] = float(center_error_m)
+        result["width_error_m"] = float(width_error_m)
+
+        speed_weight = self._normalize_distractor_guard_term(
+            current_speed_mps,
+            float(trajectory_cfg.get("reference_distractor_guard_speed_on", 8.5) or 8.5),
+            float(trajectory_cfg.get("reference_distractor_guard_speed_full", 12.5) or 12.5),
+        )
+        center_error_on = float(
+            trajectory_cfg.get(
+                "reference_distractor_guard_wrong_target_center_error_on_m",
+                trajectory_cfg.get("reference_distractor_guard_center_error_on_m", 0.45),
+            )
+            if use_at_car_anchor
+            else trajectory_cfg.get("reference_distractor_guard_center_error_on_m", 0.45)
+            or 0.45
+        )
+        center_error_full = float(
+            trajectory_cfg.get(
+                "reference_distractor_guard_wrong_target_center_error_full_m",
+                trajectory_cfg.get("reference_distractor_guard_center_error_full_m", 0.90),
+            )
+            if use_at_car_anchor
+            else trajectory_cfg.get("reference_distractor_guard_center_error_full_m", 0.90)
+            or 0.90
+        )
+        center_weight = self._normalize_distractor_guard_term(
+            center_error_m,
+            center_error_on,
+            center_error_full,
+        )
+        width_error_on = float(
+            trajectory_cfg.get(
+                "reference_distractor_guard_wrong_target_width_error_on_m",
+                trajectory_cfg.get("reference_distractor_guard_width_error_on_m", 0.60),
+            )
+            if use_at_car_anchor
+            else trajectory_cfg.get("reference_distractor_guard_width_error_on_m", 0.60)
+            or 0.60
+        )
+        width_error_full = float(
+            trajectory_cfg.get(
+                "reference_distractor_guard_wrong_target_width_error_full_m",
+                trajectory_cfg.get("reference_distractor_guard_width_error_full_m", 1.20),
+            )
+            if use_at_car_anchor
+            else trajectory_cfg.get("reference_distractor_guard_width_error_full_m", 1.20)
+            or 1.20
+        )
+        width_weight = self._normalize_distractor_guard_term(
+            width_error_m,
+            width_error_on,
+            width_error_full,
+        )
+        trigger_weight = 0.0
+        if (
+            wrong_target_rejected
+            and straight_like
+            and reference_point is not None
+            and ref_method == "lane_positions"
+            and expected_center_x is not None
+        ):
+            trigger_weight = min(speed_weight, max(center_weight, width_weight))
+        result["trigger_weight"] = float(trigger_weight)
+
+        active_min = float(
+            trajectory_cfg.get(
+                "reference_distractor_guard_wrong_target_weight_min",
+                trajectory_cfg.get("reference_distractor_guard_weight_min", 0.35),
+            )
+            if use_at_car_anchor
+            else trajectory_cfg.get("reference_distractor_guard_weight_min", 0.35)
+            or 0.35
+        )
+        qualifies = trigger_weight >= active_min
+        on_frames = max(1, int(trajectory_cfg.get("reference_distractor_guard_on_frames", 2) or 2))
+        off_frames = max(1, int(trajectory_cfg.get("reference_distractor_guard_off_frames", 3) or 3))
+        min_dwell_frames = max(
+            1,
+            int(trajectory_cfg.get("reference_distractor_guard_min_dwell_frames", 8) or 8),
+        )
+
+        if self._reference_distractor_guard_active:
+            self._reference_distractor_guard_dwell_frames += 1
+            if qualifies:
+                self._reference_distractor_guard_off_counter = 0
+            else:
+                self._reference_distractor_guard_off_counter += 1
+                self._reference_distractor_guard_last_exit_center_error_m = float(center_error_m)
+            if (
+                self._reference_distractor_guard_dwell_frames >= min_dwell_frames
+                and self._reference_distractor_guard_off_counter >= off_frames
+            ):
+                self._reference_distractor_guard_active = False
+                self._reference_distractor_guard_off_counter = 0
+                self._reference_distractor_guard_dwell_frames = 0
+                self._reference_distractor_guard_trigger_center_error_m = float("nan")
+        else:
+            self._reference_distractor_guard_dwell_frames = 0
+            if qualifies:
+                self._reference_distractor_guard_on_counter += 1
+            else:
+                self._reference_distractor_guard_on_counter = 0
+            if self._reference_distractor_guard_on_counter >= on_frames:
+                self._reference_distractor_guard_active = True
+                self._reference_distractor_guard_on_counter = 0
+                self._reference_distractor_guard_off_counter = 0
+                self._reference_distractor_guard_dwell_frames = 1
+                self._reference_distractor_guard_trigger_center_error_m = float(center_error_m)
+                self._reference_distractor_guard_last_exit_center_error_m = float("nan")
+
+        if not self._reference_distractor_guard_active:
+            result["reason"] = (
+                "wrong_target_not_present"
+                if not wrong_target_rejected
+                else (
+                    "state_not_straight"
+                    if not straight_like
+                    else (
+                        "map_center_unavailable"
+                        if expected_center_x is None
+                        else (
+                            "ref_method_not_lane_positions"
+                            if ref_method != "lane_positions"
+                            else "trigger_below_min"
+                        )
+                    )
+                )
+            )
+            return result
+
+        blend_on = float(
+            trajectory_cfg.get(
+                "reference_distractor_guard_wrong_target_blend_on",
+                trajectory_cfg.get("reference_distractor_guard_blend_on", 0.75),
+            )
+            if use_at_car_anchor
+            else trajectory_cfg.get("reference_distractor_guard_blend_on", 0.75)
+            or 0.75
+        )
+        blend_full = float(
+            trajectory_cfg.get(
+                "reference_distractor_guard_wrong_target_blend_full",
+                trajectory_cfg.get("reference_distractor_guard_blend_full", 1.0),
+            )
+            if use_at_car_anchor
+            else trajectory_cfg.get("reference_distractor_guard_blend_full", 1.0)
+            or 1.0
+        )
+        guard_blend_weight = (
+            blend_on
+            if trigger_weight <= 1e-6
+            else (
+                blend_on + (blend_full - blend_on) * trigger_weight
+            )
+        )
+        guard_blend_weight = max(0.0, min(1.0, guard_blend_weight))
+
+        guarded_ref = dict(reference_point or {})
+        base_x = float(guarded_ref.get("x", 0.0) or 0.0)
+        base_heading = float(guarded_ref.get("heading", 0.0) or 0.0)
+        expected_heading = 0.0
+        if (
+            not use_at_car_anchor
+            and gt_center_at_car is not None
+            and gt_center_lookahead is not None
+            and reference_point is not None
+        ):
+            lookahead_y = float(reference_point.get("y", 0.0) or 0.0)
+            if lookahead_y > 1e-3:
+                expected_heading = float(np.arctan2(gt_center_lookahead - gt_center_at_car, lookahead_y))
+        result["expected_heading_rad"] = float(expected_heading)
+        guarded_ref["reference_distractor_guard_base_x"] = float(base_x)
+        guarded_ref["reference_distractor_guard_base_heading"] = float(base_heading)
+        guarded_ref["x"] = float((1.0 - guard_blend_weight) * base_x + guard_blend_weight * float(expected_center_x))
+        guarded_ref["heading"] = float(
+            (1.0 - guard_blend_weight) * base_heading + guard_blend_weight * expected_heading
+        )
+        guarded_ref["method"] = "distractor_guarded_map_lane"
+        guarded_ref["reference_distractor_guard_active"] = True
+        guarded_ref["reference_distractor_guard_reason"] = f"distractor_{reject_reason}"
+        guarded_ref["reference_distractor_guard_dwell_frames"] = int(
+            self._reference_distractor_guard_dwell_frames
+        )
+        guarded_ref["reference_distractor_guard_trigger_center_error_m"] = float(
+            self._reference_distractor_guard_trigger_center_error_m
+        )
+        guarded_ref["reference_distractor_guard_exit_center_error_m"] = float(
+            self._reference_distractor_guard_last_exit_center_error_m
+        )
+        guarded_ref["reference_distractor_guard_center_error_m"] = float(center_error_m)
+        guarded_ref["reference_distractor_guard_width_error_m"] = float(width_error_m)
+        guarded_ref["reference_distractor_guard_trigger_weight"] = float(trigger_weight)
+        guarded_ref["reference_distractor_guard_blend_weight"] = float(guard_blend_weight)
+        guarded_ref["reference_distractor_guard_expected_center_x_m"] = float(expected_center_x)
+        guarded_ref["reference_distractor_guard_expected_heading_rad"] = float(expected_heading)
+
+        result.update(
+            {
+                "active": True,
+                "reason": f"distractor_{reject_reason}",
+                "dwell_frames": int(self._reference_distractor_guard_dwell_frames),
+                "trigger_center_error_m": float(
+                    self._reference_distractor_guard_trigger_center_error_m
+                ),
+                "exit_center_error_m": float(
+                    self._reference_distractor_guard_last_exit_center_error_m
+                ),
+                "guard_blend_weight": float(guard_blend_weight),
+                "reference_override": guarded_ref,
+            }
+        )
+        return result
+
+    def _update_reference_distractor_input_guard(
+        self,
+        *,
+        vehicle_state_dict: dict,
+        left_lane_line_x: float | None,
+        right_lane_line_x: float | None,
+        current_speed_mps: float,
+        current_path_curvature: float | None,
+        curve_local_state: str,
+    ) -> dict:
+        trajectory_cfg = self.trajectory_config if isinstance(self.trajectory_config, dict) else {}
+        result = {
+            "active": False,
+            "reason": "inactive",
+            "dwell_frames": int(self._reference_distractor_input_guard_dwell_frames),
+            "trigger_center_error_m": float(
+                self._reference_distractor_input_guard_trigger_center_error_m
+            ),
+            "exit_center_error_m": float(
+                self._reference_distractor_input_guard_last_exit_center_error_m
+            ),
+            "trigger_weight": 0.0,
+            "center_error_m": 0.0,
+            "width_error_m": 0.0,
+            "expected_center_x_m": float("nan"),
+            "synthetic_left_lane_x_m": float("nan"),
+            "synthetic_right_lane_x_m": float("nan"),
+            "synthetic_lane_width_m": float("nan"),
+            "suppress_lane_coeffs": False,
+            "center_history_seeded": False,
+            "lane_positions_override": None,
+            "center_trajectory_x_m": float("nan"),
+        }
+        if not bool(trajectory_cfg.get("reference_distractor_input_guard_enabled", True)):
+            self._reference_distractor_input_guard_active = False
+            self._reference_distractor_input_guard_on_counter = 0
+            self._reference_distractor_input_guard_off_counter = 0
+            self._reference_distractor_input_guard_dwell_frames = 0
+            self._reference_distractor_input_guard_trigger_center_error_m = float("nan")
+            self._reference_distractor_input_guard_last_exit_center_error_m = float("nan")
+            return result
+
+        candidate_present = float(vehicle_state_dict.get("radar_fwd_candidate_present", 0.0) or 0.0) > 0.5
+        reject_reason = str(vehicle_state_dict.get("radar_fwd_reject_reason", "none") or "none")
+        wrong_target_rejected = candidate_present and reject_reason in {"wrong_lane", "opposite_direction"}
+
+        curve_state = str(curve_local_state or "").strip().upper()
+        curvature_abs = 0.0
+        try:
+            curvature_abs = abs(float(current_path_curvature or 0.0))
+        except (TypeError, ValueError):
+            curvature_abs = 0.0
+        straight_like = curve_state in {"STRAIGHT", "REARM"} and curvature_abs <= float(
+            trajectory_cfg.get("reference_distractor_input_guard_straight_curvature_max", 0.0010)
+            or 0.0010
+        )
+
+        ego_center_at_car = vehicle_state_dict.get("groundTruthEgoLaneCenterXAtCar")
+        if ego_center_at_car is None:
+            ego_center_at_car = vehicle_state_dict.get("ground_truth_ego_lane_center_x_at_car")
+        gt_center_at_car = vehicle_state_dict.get("groundTruthLaneCenterXAtCar")
+        if gt_center_at_car is None:
+            gt_center_at_car = vehicle_state_dict.get("ground_truth_lane_center_x_at_car")
+        try:
+            ego_center_at_car = (
+                float(ego_center_at_car)
+                if ego_center_at_car is not None and math.isfinite(float(ego_center_at_car))
+                else None
+            )
+        except (TypeError, ValueError):
+            ego_center_at_car = None
+        try:
+            gt_center_at_car = (
+                float(gt_center_at_car)
+                if gt_center_at_car is not None and math.isfinite(float(gt_center_at_car))
+                else None
+            )
+        except (TypeError, ValueError):
+            gt_center_at_car = None
+
+        expected_center_x = ego_center_at_car if ego_center_at_car is not None else gt_center_at_car
+        result["expected_center_x_m"] = (
+            float(expected_center_x) if expected_center_x is not None else float("nan")
+        )
+
+        lane_width = None
+        center_x = None
+        try:
+            if left_lane_line_x is not None and right_lane_line_x is not None:
+                lane_width = float(right_lane_line_x) - float(left_lane_line_x)
+                center_x = (float(left_lane_line_x) + float(right_lane_line_x)) * 0.5
+        except (TypeError, ValueError):
+            lane_width = None
+            center_x = None
+        target_lane_width = float(trajectory_cfg.get("target_lane_width_m", 3.6) or 3.6)
+        center_error_m = (
+            abs(float(center_x) - float(expected_center_x))
+            if center_x is not None and expected_center_x is not None
+            else 0.0
+        )
+        width_error_m = (
+            abs(float(lane_width) - target_lane_width)
+            if lane_width is not None and math.isfinite(float(lane_width))
+            else 0.0
+        )
+        result["center_error_m"] = float(center_error_m)
+        result["width_error_m"] = float(width_error_m)
+
+        speed_weight = self._normalize_distractor_guard_term(
+            current_speed_mps,
+            float(trajectory_cfg.get("reference_distractor_input_guard_speed_on", 8.5) or 8.5),
+            float(trajectory_cfg.get("reference_distractor_input_guard_speed_full", 12.5) or 12.5),
+        )
+        center_weight = self._normalize_distractor_guard_term(
+            center_error_m,
+            float(
+                trajectory_cfg.get(
+                    "reference_distractor_input_guard_center_error_on_m",
+                    0.20,
+                )
+                or 0.20
+            ),
+            float(
+                trajectory_cfg.get(
+                    "reference_distractor_input_guard_center_error_full_m",
+                    0.45,
+                )
+                or 0.45
+            ),
+        )
+        width_weight = self._normalize_distractor_guard_term(
+            width_error_m,
+            float(
+                trajectory_cfg.get(
+                    "reference_distractor_input_guard_width_error_on_m",
+                    0.25,
+                )
+                or 0.25
+            ),
+            float(
+                trajectory_cfg.get(
+                    "reference_distractor_input_guard_width_error_full_m",
+                    0.50,
+                )
+                or 0.50
+            ),
+        )
+        trigger_weight = 0.0
+        if (
+            wrong_target_rejected
+            and straight_like
+            and expected_center_x is not None
+            and center_x is not None
+        ):
+            trigger_weight = min(speed_weight, max(center_weight, width_weight))
+        result["trigger_weight"] = float(trigger_weight)
+
+        active_min = float(
+            trajectory_cfg.get("reference_distractor_input_guard_weight_min", 0.20) or 0.20
+        )
+        qualifies = trigger_weight >= active_min
+        on_frames = max(
+            1,
+            int(trajectory_cfg.get("reference_distractor_input_guard_on_frames", 2) or 2),
+        )
+        off_frames = max(
+            1,
+            int(trajectory_cfg.get("reference_distractor_input_guard_off_frames", 3) or 3),
+        )
+        min_dwell_frames = max(
+            1,
+            int(
+                trajectory_cfg.get("reference_distractor_input_guard_min_dwell_frames", 8)
+                or 8
+            ),
+        )
+
+        if self._reference_distractor_input_guard_active:
+            self._reference_distractor_input_guard_dwell_frames += 1
+            if qualifies:
+                self._reference_distractor_input_guard_off_counter = 0
+            else:
+                self._reference_distractor_input_guard_off_counter += 1
+                self._reference_distractor_input_guard_last_exit_center_error_m = float(
+                    center_error_m
+                )
+            if (
+                self._reference_distractor_input_guard_dwell_frames >= min_dwell_frames
+                and self._reference_distractor_input_guard_off_counter >= off_frames
+            ):
+                self._reference_distractor_input_guard_active = False
+                self._reference_distractor_input_guard_off_counter = 0
+                self._reference_distractor_input_guard_dwell_frames = 0
+                self._reference_distractor_input_guard_trigger_center_error_m = float("nan")
+        else:
+            self._reference_distractor_input_guard_dwell_frames = 0
+            if qualifies:
+                self._reference_distractor_input_guard_on_counter += 1
+            else:
+                self._reference_distractor_input_guard_on_counter = 0
+            if self._reference_distractor_input_guard_on_counter >= on_frames:
+                self._reference_distractor_input_guard_active = True
+                self._reference_distractor_input_guard_on_counter = 0
+                self._reference_distractor_input_guard_off_counter = 0
+                self._reference_distractor_input_guard_dwell_frames = 1
+                self._reference_distractor_input_guard_trigger_center_error_m = float(
+                    center_error_m
+                )
+                self._reference_distractor_input_guard_last_exit_center_error_m = float("nan")
+
+        if not self._reference_distractor_input_guard_active:
+            result["reason"] = (
+                "wrong_target_not_present"
+                if not wrong_target_rejected
+                else (
+                    "state_not_straight"
+                    if not straight_like
+                    else (
+                        "ego_lane_center_unavailable"
+                        if expected_center_x is None
+                        else ("lane_positions_unavailable" if center_x is None else "trigger_below_min")
+                    )
+                )
+            )
+            return result
+
+        synthetic_left = float(expected_center_x) - 0.5 * target_lane_width
+        synthetic_right = float(expected_center_x) + 0.5 * target_lane_width
+        result.update(
+            {
+                "active": True,
+                "reason": f"distractor_{reject_reason}",
+                "dwell_frames": int(self._reference_distractor_input_guard_dwell_frames),
+                "trigger_center_error_m": float(
+                    self._reference_distractor_input_guard_trigger_center_error_m
+                ),
+                "exit_center_error_m": float(
+                    self._reference_distractor_input_guard_last_exit_center_error_m
+                ),
+                "expected_center_x_m": float(expected_center_x),
+                "synthetic_left_lane_x_m": float(synthetic_left),
+                "synthetic_right_lane_x_m": float(synthetic_right),
+                "synthetic_lane_width_m": float(target_lane_width),
+                "suppress_lane_coeffs": bool(
+                    trajectory_cfg.get(
+                        "reference_distractor_input_guard_suppress_lane_coeffs",
+                        True,
+                    )
+                ),
+                "center_history_seeded": bool(
+                    trajectory_cfg.get(
+                        "reference_distractor_input_guard_seed_center_history",
+                        True,
+                    )
+                ),
+                "lane_positions_override": {
+                    "left_lane_line_x": float(synthetic_left),
+                    "right_lane_line_x": float(synthetic_right),
+                },
+                "center_trajectory_x_m": float(expected_center_x),
+            }
+        )
+        return result
 
     def _compute_curve_anticipation_signal(
         self,
@@ -5567,6 +6551,26 @@ class AVStack:
                 and np.isfinite(float(gated.get("distance_to_curve_start_m")))
                 else None
             ),
+            curve_local_state=str(
+                pr.get(
+                    "curve_local_state",
+                    gated.get("curve_local_state", "STRAIGHT"),
+                )
+                or "STRAIGHT"
+            ),
+            curve_local_gate_weight=float(
+                pr.get(
+                    "reference_lookahead_local_gate_weight",
+                    gated.get("reference_lookahead_local_gate_weight", 0.0),
+                )
+                or 0.0
+            ),
+            local_curve_reference_active=bool(
+                pr.get(
+                    "local_curve_reference_active",
+                    gated.get("local_curve_reference_active", False),
+                )
+            ),
         )
 
         adjusted_target_speed = gov_output.target_speed
@@ -5818,9 +6822,73 @@ class AVStack:
         planned_accel = gov['planned_accel']
         using_stale_data = gated['using_stale_data']
         dynamic_horizon_diag = gated.get('dynamic_horizon_diag', {})
+        curve_local_state = str(
+            curve_phase_diag.get("curve_local_state", curve_phase_diag.get("curve_phase_state", "STRAIGHT"))
+            or "STRAIGHT"
+        )
+        reference_distractor_input_guard = self._update_reference_distractor_input_guard(
+            vehicle_state_dict=vehicle_state_dict,
+            left_lane_line_x=left_lane_line_x,
+            right_lane_line_x=right_lane_line_x,
+            current_speed_mps=(
+                float(current_speed)
+                if isinstance(current_speed, (int, float)) and math.isfinite(float(current_speed))
+                else 0.0
+            ),
+            current_path_curvature=(
+                float(current_path_curvature)
+                if isinstance(current_path_curvature, (int, float))
+                and math.isfinite(float(current_path_curvature))
+                else 0.0
+            ),
+            curve_local_state=curve_local_state,
+        )
+        planner_lane_coeffs = lane_coeffs
+        reference_lane_coeffs = lane_coeffs
+        reference_lane_positions = {
+            'left_lane_line_x': left_lane_line_x,
+            'right_lane_line_x': right_lane_line_x,
+        }
+        if reference_distractor_input_guard.get("lane_positions_override") is not None:
+            reference_lane_positions = dict(reference_distractor_input_guard["lane_positions_override"])
+        if bool(reference_distractor_input_guard.get("suppress_lane_coeffs", False)):
+            if lane_coeffs is None:
+                planner_lane_coeffs = []
+            else:
+                planner_lane_coeffs = [None for _ in lane_coeffs]
+            reference_lane_coeffs = None
+        if (
+            bool(reference_distractor_input_guard.get("center_history_seeded", False))
+            and math.isfinite(
+                float(reference_distractor_input_guard.get("expected_center_x_m", float("nan")))
+            )
+            and hasattr(self.trajectory_planner, "_center_x_history")
+        ):
+            seeded_center = float(reference_distractor_input_guard["expected_center_x_m"])
+            history_len = max(
+                3,
+                min(
+                    5,
+                    int(getattr(self.trajectory_planner, "_center_x_history_max", 5) or 5),
+                ),
+            )
+            self.trajectory_planner._center_x_history = [seeded_center] * history_len
 
         # 2. Trajectory Planning: Plan path
-        trajectory = self.trajectory_planner.plan(lane_coeffs, vehicle_state_dict)
+        trajectory = self.trajectory_planner.plan(planner_lane_coeffs, vehicle_state_dict)
+        guarded_center_trajectory_x = reference_distractor_input_guard.get("center_trajectory_x_m")
+        if (
+            reference_distractor_input_guard.get("active")
+            and isinstance(guarded_center_trajectory_x, (int, float))
+            and math.isfinite(float(guarded_center_trajectory_x))
+            and trajectory is not None
+            and getattr(trajectory, "points", None)
+        ):
+            guarded_center_trajectory_x = float(guarded_center_trajectory_x)
+            for point in trajectory.points:
+                point.x = guarded_center_trajectory_x
+                point.heading = 0.0
+                point.curvature = 0.0
         oracle_points_xy = self._extract_oracle_points_xy(vehicle_state_dict)
         trajectory_source_active = self.trajectory_source if self.trajectory_source in ("planner", "oracle") else "planner"
         
@@ -5844,8 +6912,8 @@ class AVStack:
         reference_point = self.trajectory_planner.get_reference_point(
             trajectory, 
             lookahead=reference_lookahead,
-            lane_coeffs=lane_coeffs,  # Pass lane coefficients for direct computation
-            lane_positions={'left_lane_line_x': left_lane_line_x, 'right_lane_line_x': right_lane_line_x},  # Preferred: use vehicle coords
+            lane_coeffs=reference_lane_coeffs,  # Pass lane coefficients for direct computation
+            lane_positions=reference_lane_positions,  # Preferred: use vehicle coords
             use_direct=True,  # Use direct midpoint computation
             timestamp=timestamp,  # Pass timestamp for time gap detection
             confidence=confidence,
@@ -6146,6 +7214,102 @@ class AVStack:
                 and math.isfinite(float(time_to_curve_s))
                 else None
             )
+            reference_distractor_guard = self._update_reference_distractor_guard(
+                vehicle_state_dict=vehicle_state_dict,
+                reference_point=reference_point,
+                left_lane_line_x=left_lane_line_x,
+                right_lane_line_x=right_lane_line_x,
+                current_speed_mps=(
+                    float(current_speed)
+                    if isinstance(current_speed, (int, float)) and math.isfinite(float(current_speed))
+                    else 0.0
+                ),
+                current_path_curvature=(
+                    float(current_path_curvature)
+                    if isinstance(current_path_curvature, (int, float))
+                    and math.isfinite(float(current_path_curvature))
+                    else 0.0
+                ),
+                curve_local_state=str(
+                    curve_local_state
+                ),
+            )
+            if reference_distractor_guard.get("reference_override") is not None:
+                reference_point = dict(reference_distractor_guard["reference_override"])
+            else:
+                reference_point["reference_distractor_guard_active"] = False
+                reference_point["reference_distractor_guard_reason"] = str(
+                    reference_distractor_guard.get("reason", "inactive") or "inactive"
+                )
+                reference_point["reference_distractor_guard_dwell_frames"] = int(
+                    reference_distractor_guard.get("dwell_frames", 0) or 0
+                )
+                reference_point["reference_distractor_guard_trigger_center_error_m"] = float(
+                    reference_distractor_guard.get("trigger_center_error_m", float("nan"))
+                )
+                reference_point["reference_distractor_guard_exit_center_error_m"] = float(
+                    reference_distractor_guard.get("exit_center_error_m", float("nan"))
+                )
+                reference_point["reference_distractor_guard_center_error_m"] = float(
+                    reference_distractor_guard.get("center_error_m", 0.0) or 0.0
+                )
+                reference_point["reference_distractor_guard_width_error_m"] = float(
+                    reference_distractor_guard.get("width_error_m", 0.0) or 0.0
+                )
+                reference_point["reference_distractor_guard_trigger_weight"] = float(
+                    reference_distractor_guard.get("trigger_weight", 0.0) or 0.0
+                )
+                reference_point["reference_distractor_guard_blend_weight"] = float(
+                    reference_distractor_guard.get("guard_blend_weight", 0.0) or 0.0
+                )
+                reference_point["reference_distractor_guard_expected_center_x_m"] = float(
+                    reference_distractor_guard.get("expected_center_x_m", float("nan"))
+                )
+                reference_point["reference_distractor_guard_expected_heading_rad"] = float(
+                    reference_distractor_guard.get("expected_heading_rad", 0.0) or 0.0
+                )
+            reference_point["reference_distractor_input_guard_active"] = bool(
+                reference_distractor_input_guard.get("active", False)
+            )
+            reference_point["reference_distractor_input_guard_reason"] = str(
+                reference_distractor_input_guard.get("reason", "inactive") or "inactive"
+            )
+            reference_point["reference_distractor_input_guard_dwell_frames"] = int(
+                reference_distractor_input_guard.get("dwell_frames", 0) or 0
+            )
+            reference_point["reference_distractor_input_guard_trigger_center_error_m"] = float(
+                reference_distractor_input_guard.get("trigger_center_error_m", float("nan"))
+            )
+            reference_point["reference_distractor_input_guard_exit_center_error_m"] = float(
+                reference_distractor_input_guard.get("exit_center_error_m", float("nan"))
+            )
+            reference_point["reference_distractor_input_guard_center_error_m"] = float(
+                reference_distractor_input_guard.get("center_error_m", 0.0) or 0.0
+            )
+            reference_point["reference_distractor_input_guard_width_error_m"] = float(
+                reference_distractor_input_guard.get("width_error_m", 0.0) or 0.0
+            )
+            reference_point["reference_distractor_input_guard_trigger_weight"] = float(
+                reference_distractor_input_guard.get("trigger_weight", 0.0) or 0.0
+            )
+            reference_point["reference_distractor_input_guard_expected_center_x_m"] = float(
+                reference_distractor_input_guard.get("expected_center_x_m", float("nan"))
+            )
+            reference_point["reference_distractor_input_guard_synthetic_left_lane_x_m"] = float(
+                reference_distractor_input_guard.get("synthetic_left_lane_x_m", float("nan"))
+            )
+            reference_point["reference_distractor_input_guard_synthetic_right_lane_x_m"] = float(
+                reference_distractor_input_guard.get("synthetic_right_lane_x_m", float("nan"))
+            )
+            reference_point["reference_distractor_input_guard_synthetic_lane_width_m"] = float(
+                reference_distractor_input_guard.get("synthetic_lane_width_m", float("nan"))
+            )
+            reference_point["reference_distractor_input_guard_suppressed_lane_coeffs"] = bool(
+                reference_distractor_input_guard.get("suppress_lane_coeffs", False)
+            )
+            reference_point["reference_distractor_input_guard_center_history_seeded"] = bool(
+                reference_distractor_input_guard.get("center_history_seeded", False)
+            )
 
         if trajectory_source_active == 'oracle':
             oracle_ref = self._build_oracle_reference_point(
@@ -6208,33 +7372,37 @@ class AVStack:
                 and math.isfinite(float(local_curve_progress_ratio))
             ):
                 local_curve_progress_ratio = None
+            local_curve_speed_mps = (
+                float(current_speed)
+                if isinstance(current_speed, (int, float)) and math.isfinite(float(current_speed))
+                else float(reference_point.get("velocity", 0.0) or 0.0)
+            )
+            curve_local_state = str(
+                reference_point.get(
+                    "curve_local_state",
+                    curve_phase_diag.get("curve_local_state", "STRAIGHT"),
+                )
+                or "STRAIGHT"
+            )
+            curve_local_phase = float(
+                reference_point.get(
+                    "curve_local_phase",
+                    curve_phase_diag.get("curve_local_phase", 0.0),
+                )
+                or 0.0
+            )
+            curve_local_entry_severity = float(
+                reference_point.get(
+                    "curve_local_entry_severity",
+                    curve_phase_diag.get("curve_local_entry_severity", 0.0),
+                )
+                or 0.0
+            )
             local_curve_reference = build_local_curve_reference(
-                current_speed_mps=(
-                    float(current_speed)
-                    if isinstance(current_speed, (int, float)) and math.isfinite(float(current_speed))
-                    else float(reference_point.get("velocity", 0.0) or 0.0)
-                ),
-                curve_local_state=str(
-                    reference_point.get(
-                        "curve_local_state",
-                        curve_phase_diag.get("curve_local_state", "STRAIGHT"),
-                    )
-                    or "STRAIGHT"
-                ),
-                curve_local_phase=float(
-                    reference_point.get(
-                        "curve_local_phase",
-                        curve_phase_diag.get("curve_local_phase", 0.0),
-                    )
-                    or 0.0
-                ),
-                curve_local_entry_severity=float(
-                    reference_point.get(
-                        "curve_local_entry_severity",
-                        curve_phase_diag.get("curve_local_entry_severity", 0.0),
-                    )
-                    or 0.0
-                ),
+                current_speed_mps=local_curve_speed_mps,
+                curve_local_state=curve_local_state,
+                curve_local_phase=curve_local_phase,
+                curve_local_entry_severity=curve_local_entry_severity,
                 distance_to_curve_start_m=(
                     float(distance_to_curve_start_m)
                     if isinstance(distance_to_curve_start_m, (int, float))
@@ -6268,6 +7436,89 @@ class AVStack:
                 ),
                 base_reference_point=reference_point,
                 config=self.trajectory_config,
+            )
+            distractor_guard = self._update_local_curve_reference_distractor_guard(
+                vehicle_state_dict=vehicle_state_dict,
+                local_curve_reference=local_curve_reference,
+                current_speed_mps=local_curve_speed_mps,
+                curve_local_state=curve_local_state,
+                current_curve_progress_ratio=local_curve_progress_ratio,
+                road_curvature_abs=(
+                    float(curvature_primary_abs)
+                    if isinstance(curvature_primary_abs, (int, float))
+                    and math.isfinite(float(curvature_primary_abs))
+                    else None
+                ),
+                preview_curvature_abs=(
+                    float(preview_curvature_abs)
+                    if isinstance(preview_curvature_abs, (int, float))
+                    and math.isfinite(float(preview_curvature_abs))
+                    else None
+                ),
+            )
+            if distractor_guard.get("rebuild") and distractor_guard.get("config_override") is not None:
+                local_curve_reference = build_local_curve_reference(
+                    current_speed_mps=local_curve_speed_mps,
+                    curve_local_state=curve_local_state,
+                    curve_local_phase=curve_local_phase,
+                    curve_local_entry_severity=curve_local_entry_severity,
+                    distance_to_curve_start_m=(
+                        float(distance_to_curve_start_m)
+                        if isinstance(distance_to_curve_start_m, (int, float))
+                        and math.isfinite(float(distance_to_curve_start_m))
+                        else None
+                    ),
+                    current_curve_progress_ratio=local_curve_progress_ratio,
+                    road_curvature_abs=(
+                        float(curvature_primary_abs)
+                        if isinstance(curvature_primary_abs, (int, float))
+                        and math.isfinite(float(curvature_primary_abs))
+                        else None
+                    ),
+                    road_curvature_signed=(
+                        float(current_path_curvature)
+                        if isinstance(current_path_curvature, (int, float))
+                        and math.isfinite(float(current_path_curvature))
+                        else None
+                    ),
+                    preview_curvature_abs=(
+                        float(preview_curvature_abs)
+                        if isinstance(preview_curvature_abs, (int, float))
+                        and math.isfinite(float(preview_curvature_abs))
+                        else None
+                    ),
+                    preview_curvature_signed=(
+                        float(preview_curvature_signed)
+                        if isinstance(preview_curvature_signed, (int, float))
+                        and math.isfinite(float(preview_curvature_signed))
+                        else None
+                    ),
+                    base_reference_point=reference_point,
+                    config=distractor_guard["config_override"],
+                )
+                local_curve_reference["local_curve_reference_requested_mode"] = (
+                    "distractor_guarded_bounded"
+                )
+            local_curve_reference["local_curve_reference_guarded_bounded_active"] = bool(
+                distractor_guard.get("active", False)
+            )
+            local_curve_reference["local_curve_reference_guarded_bounded_reason"] = str(
+                distractor_guard.get("reason", "inactive") or "inactive"
+            )
+            local_curve_reference["local_curve_reference_guarded_bounded_dwell_frames"] = int(
+                distractor_guard.get("dwell_frames", 0) or 0
+            )
+            local_curve_reference["local_curve_reference_guarded_bounded_trigger_raw_delta_m"] = float(
+                distractor_guard.get("trigger_raw_delta_m", float("nan"))
+            )
+            local_curve_reference["local_curve_reference_guarded_bounded_exit_raw_delta_m"] = float(
+                distractor_guard.get("exit_raw_delta_m", float("nan"))
+            )
+            local_curve_reference["local_curve_reference_guarded_bounded_trigger_weight"] = float(
+                distractor_guard.get("trigger_weight", 0.0) or 0.0
+            )
+            local_curve_reference["local_curve_reference_guarded_bounded_blend_floor"] = float(
+                distractor_guard.get("guard_blend_floor", 0.0) or 0.0
             )
             for key, value in local_curve_reference.items():
                 reference_point[key] = value
@@ -6522,19 +7773,42 @@ class AVStack:
                     gt_lane_center_x_at_car = vehicle_state_dict.get(
                         'ground_truth_lane_center_x_at_car'
                     )
+                gt_lane_cross_track_road_frame_at_car = vehicle_state_dict.get(
+                    'groundTruthSelectedLaneCrossTrackRoadFrameAtCar'
+                )
+                if gt_lane_cross_track_road_frame_at_car is None:
+                    gt_lane_cross_track_road_frame_at_car = vehicle_state_dict.get(
+                        'ground_truth_selected_lane_cross_track_road_frame_at_car'
+                    )
 
                 gt_cross_track = None
                 gt_cross_track_source_code = ''
-                if gt_lane_center_x_at_car is not None:
+                if gt_lane_cross_track_road_frame_at_car is not None:
+                    gt_cross_track = float(gt_lane_cross_track_road_frame_at_car)
+                    gt_cross_track_source_code = 'road_frame_at_car'
+                elif gt_lane_center_x_at_car is not None:
                     gt_cross_track = float(gt_lane_center_x_at_car)
-                    gt_cross_track_source_code = 'at_car'
+                    gt_cross_track_source_code = 'vehicle_frame_at_car'
                 elif gt_lane_center_x_lookahead is not None:
                     gt_cross_track = float(gt_lane_center_x_lookahead)
                     gt_cross_track_source_code = 'legacy_lookahead'
 
                 if gt_cross_track is not None:
                     reference_point['gt_cross_track_m'] = gt_cross_track
-                else:
+                if gt_lane_cross_track_road_frame_at_car is not None:
+                    reference_point['gt_cross_track_road_frame_at_car_m'] = float(
+                        gt_lane_cross_track_road_frame_at_car
+                    )
+                if gt_lane_center_x_at_car is not None:
+                    reference_point['gt_cross_track_at_car_m'] = float(gt_lane_center_x_at_car)
+                    reference_point['gt_cross_track_vehicle_frame_at_car_m'] = float(
+                        gt_lane_center_x_at_car
+                    )
+                if gt_lane_center_x_lookahead is not None:
+                    reference_point['gt_cross_track_lookahead_m'] = float(
+                        gt_lane_center_x_lookahead
+                    )
+                if gt_cross_track is None:
                     # Gated perception lane center: same convention (+right)
                     gated_left = gated.get('left_lane_line_x')
                     gated_right = gated.get('right_lane_line_x')
@@ -6552,6 +7826,7 @@ class AVStack:
                     if gt_lane_center_x_lookahead is not None
                     else None
                 )
+                reference_point['gt_cross_track_control_source_code'] = gt_cross_track_source_code
                 reference_point['gt_cross_track_source_code'] = gt_cross_track_source_code
                 reference_point['gt_heading_error_rad'] = float(vehicle_state_dict.get('headingDeltaDeg', 0.0)) * (np.pi / 180.0)
 
@@ -6945,6 +8220,51 @@ class AVStack:
             'curve_local_dynamic_sustain_effect_score',
             float(reference_point.get('curve_local_dynamic_sustain_effect_score', 0.0) or 0.0),
         )
+        curve_preactivation_diag = self._compute_curve_preactivation_diag(
+            reference_point=reference_point,
+            control_command=control_command,
+            current_speed=float(current_speed),
+        )
+        control_command.setdefault(
+            'curve_preactivation_authority_weight',
+            float(curve_preactivation_diag.get('curve_preactivation_authority_weight', 0.0)),
+        )
+        control_command.setdefault(
+            'curve_preactivation_authority_active',
+            bool(curve_preactivation_diag.get('curve_preactivation_authority_active', False)),
+        )
+        control_command.setdefault(
+            'curve_preactivation_blocker_mode',
+            str(curve_preactivation_diag.get('curve_preactivation_blocker_mode', 'none') or 'none'),
+        )
+        control_command.setdefault(
+            'curve_preactivation_preview_weight',
+            float(curve_preactivation_diag.get('curve_preactivation_preview_weight', 0.0)),
+        )
+        control_command.setdefault(
+            'curve_preactivation_speed_weight',
+            float(curve_preactivation_diag.get('curve_preactivation_speed_weight', 0.0)),
+        )
+        control_command.setdefault(
+            'curve_preactivation_curvature_weight',
+            float(curve_preactivation_diag.get('curve_preactivation_curvature_weight', 0.0)),
+        )
+        control_command.setdefault(
+            'curve_preactivation_distance_weight',
+            float(curve_preactivation_diag.get('curve_preactivation_distance_weight', 0.0)),
+        )
+        control_command.setdefault(
+            'curve_preactivation_kappa_floor',
+            float(curve_preactivation_diag.get('curve_preactivation_kappa_floor', 0.0)),
+        )
+        control_command.setdefault(
+            'curve_preactivation_lookahead_target',
+            float(curve_preactivation_diag.get('curve_preactivation_lookahead_target', np.nan)),
+        )
+        control_command.setdefault(
+            'curve_preactivation_speed_cap_target',
+            float(curve_preactivation_diag.get('curve_preactivation_speed_cap_target', np.nan)),
+        )
 
         self._last_turn_feasibility_active = bool(control_command.get('turn_feasibility_active', False))
         self._last_turn_feasibility_infeasible = bool(control_command.get('turn_feasibility_infeasible', False))
@@ -6960,6 +8280,248 @@ class AVStack:
 
         control_command['brake_override'] = brake_override
         return control_command
+
+    def _compute_curve_preactivation_diag(
+        self,
+        reference_point: dict,
+        control_command: dict,
+        current_speed: float,
+    ) -> dict[str, object]:
+        """Build behavior-neutral diagnostics for early mild-curve authority."""
+        trajectory_cfg = self.trajectory_config if isinstance(self.trajectory_config, dict) else {}
+        mpc_cfg = trajectory_cfg.get('mpc', {}) if isinstance(trajectory_cfg.get('mpc', {}), dict) else {}
+
+        def _norm(value: float, value_on: float, value_full: float) -> float:
+            if not np.isfinite(value):
+                return 0.0
+            if value_full <= value_on:
+                return 1.0 if value >= value_on else 0.0
+            if value <= value_on:
+                return 0.0
+            if value >= value_full:
+                return 1.0
+            return float((value - value_on) / max(1e-6, value_full - value_on))
+
+        speed_on = float(
+            trajectory_cfg.get(
+                'curve_preactivation_speed_on',
+                mpc_cfg.get('bias_active_curve_preserve_speed_on', 13.0),
+            )
+        )
+        speed_full = float(
+            trajectory_cfg.get(
+                'curve_preactivation_speed_full',
+                mpc_cfg.get('bias_active_curve_preserve_speed_full', 15.0),
+            )
+        )
+        curvature_on = float(
+            trajectory_cfg.get(
+                'curve_preactivation_curvature_on',
+                mpc_cfg.get('bias_active_curve_preserve_curvature_on', 0.0015),
+            )
+        )
+        curvature_full = float(
+            trajectory_cfg.get(
+                'curve_preactivation_curvature_full',
+                mpc_cfg.get('bias_active_curve_preserve_curvature_full', 0.0020),
+            )
+        )
+        preview_phase_min = float(
+            trajectory_cfg.get('curve_preactivation_preview_phase_min', 0.25)
+        )
+        distance_near_m = float(
+            trajectory_cfg.get('curve_preactivation_distance_near_m', 0.0)
+        )
+        distance_far_m = float(
+            trajectory_cfg.get('curve_preactivation_distance_far_m', 30.0)
+        )
+        active_weight_min = float(
+            trajectory_cfg.get('curve_preactivation_active_weight_min', 0.35)
+        )
+        lookahead_floor_m = float(
+            trajectory_cfg.get('curve_preactivation_lookahead_floor_m', 10.0)
+        )
+        base_preserve_ratio = float(
+            mpc_cfg.get('bias_active_curve_preserve_ratio', 0.75)
+        )
+        full_preserve_ratio = float(
+            mpc_cfg.get('bias_active_curve_preserve_full_ratio', 1.0)
+        )
+
+        curve_local_state = str(
+            reference_point.get('curve_local_state', control_command.get('curve_local_state', ''))
+            or ''
+        ).strip().upper()
+        blocker_hint = str(
+            reference_point.get(
+                'curve_activation_blocker_mode',
+                control_command.get('curve_activation_blocker_mode', 'none'),
+            )
+            or 'none'
+        ).strip() or 'none'
+        preview_far_phase = float(
+            reference_point.get(
+                'curve_preview_far_phase',
+                control_command.get('curve_preview_far_phase', 0.0),
+            )
+            or 0.0
+        )
+        preview_weight = _norm(preview_far_phase, preview_phase_min, 1.0)
+
+        curvature_primary_abs = float(
+            control_command.get(
+                'curvature_primary_abs',
+                reference_point.get('road_curvature_abs', reference_point.get('curvature_primary_abs', 0.0)),
+            )
+            or 0.0
+        )
+        curvature_primary_abs = abs(curvature_primary_abs)
+        if curvature_primary_abs <= 1e-6:
+            curvature_primary_abs = abs(
+                float(reference_point.get('reference_point_curvature', 0.0) or 0.0)
+            )
+        curvature_weight = _norm(curvature_primary_abs, curvature_on, curvature_full)
+
+        distance_to_curve_start = float(
+            reference_point.get(
+                'distance_to_next_curve_start_m',
+                control_command.get('distance_to_next_curve_start_m', np.nan),
+            )
+        )
+        if np.isfinite(distance_to_curve_start):
+            if distance_far_m <= distance_near_m:
+                distance_weight = 1.0 if distance_to_curve_start <= distance_near_m else 0.0
+            elif distance_to_curve_start <= distance_near_m:
+                distance_weight = 1.0
+            elif distance_to_curve_start >= distance_far_m:
+                distance_weight = 0.0
+            else:
+                distance_weight = 1.0 - (
+                    (distance_to_curve_start - distance_near_m)
+                    / max(1e-6, distance_far_m - distance_near_m)
+                )
+        else:
+            distance_weight = 0.0
+
+        speed_weight = _norm(float(current_speed), speed_on, speed_full)
+        authority_weight = max(
+            0.0,
+            min(1.0, speed_weight * curvature_weight * max(preview_weight, distance_weight)),
+        )
+
+        ref_lookahead_target = float(
+            control_command.get(
+                'reference_lookahead_target',
+                reference_point.get('reference_lookahead_target', np.nan),
+            )
+        )
+        pp_lookahead = float(
+            control_command.get(
+                'pp_lookahead_distance',
+                reference_point.get('pp_lookahead_distance', np.nan),
+            )
+        )
+        lookahead_floor = max(
+            lookahead_floor_m,
+            pp_lookahead if np.isfinite(pp_lookahead) and pp_lookahead > 0.0 else lookahead_floor_m,
+        )
+        if np.isfinite(ref_lookahead_target):
+            preactivation_lookahead_target = float(
+                ref_lookahead_target
+                - authority_weight * max(0.0, ref_lookahead_target - lookahead_floor)
+            )
+        else:
+            preactivation_lookahead_target = float('nan')
+
+        final_target_speed = float(
+            control_command.get(
+                'target_speed_final',
+                control_command.get(
+                    'planner_target_speed_applied_mps',
+                    control_command.get('final_longitudinal_target_mps', np.nan),
+                ),
+            )
+        )
+        turn_speed_limit = float(
+            control_command.get('turn_feasibility_speed_limit_mps', np.nan)
+        )
+        curve_cap_speed = float(
+            control_command.get('speed_governor_curve_cap_speed', np.nan)
+        )
+        speed_cap_candidates = [
+            candidate
+            for candidate in (turn_speed_limit, curve_cap_speed)
+            if np.isfinite(candidate) and candidate > 0.0
+        ]
+        speed_cap_floor = min(speed_cap_candidates) if speed_cap_candidates else float('nan')
+        if np.isfinite(final_target_speed) and np.isfinite(speed_cap_floor):
+            preactivation_speed_cap_target = float(
+                final_target_speed
+                - authority_weight * max(0.0, final_target_speed - speed_cap_floor)
+            )
+        else:
+            preactivation_speed_cap_target = float('nan')
+
+        preserve_ratio = float(
+            base_preserve_ratio
+            + (full_preserve_ratio - base_preserve_ratio) * authority_weight
+        )
+        kappa_floor = float(curvature_primary_abs * preserve_ratio)
+
+        local_active = curve_local_state in {'ENTRY', 'COMMIT'}
+        lookahead_engaged = bool(
+            np.isfinite(ref_lookahead_target)
+            and np.isfinite(preactivation_lookahead_target)
+            and ref_lookahead_target <= (preactivation_lookahead_target + 0.25)
+        )
+        speed_cap_engaged = bool(
+            np.isfinite(speed_cap_floor)
+            and (
+                bool(control_command.get('speed_governor_curve_cap_active', False))
+                or (
+                    np.isfinite(turn_speed_limit)
+                    and np.isfinite(final_target_speed)
+                    and turn_speed_limit < final_target_speed - 0.05
+                )
+            )
+        )
+        authority_active = bool(
+            (not local_active)
+            and authority_weight >= active_weight_min
+            and (lookahead_engaged or speed_cap_engaged)
+        )
+
+        if local_active:
+            blocker_mode = 'local_state_active'
+        elif authority_active:
+            blocker_mode = 'none'
+        elif blocker_hint and blocker_hint.lower() not in {'', 'none'}:
+            blocker_mode = blocker_hint
+        elif preview_weight <= 0.0:
+            blocker_mode = 'preview_inactive'
+        elif speed_weight <= 0.0:
+            blocker_mode = 'speed_below_on'
+        elif curvature_weight <= 0.0:
+            blocker_mode = 'curvature_below_on'
+        elif distance_weight <= 0.0:
+            blocker_mode = 'distance_far'
+        elif authority_weight < active_weight_min:
+            blocker_mode = 'weight_below_min'
+        else:
+            blocker_mode = 'authority_not_applied'
+
+        return {
+            'curve_preactivation_authority_weight': float(authority_weight),
+            'curve_preactivation_authority_active': bool(authority_active),
+            'curve_preactivation_blocker_mode': str(blocker_mode),
+            'curve_preactivation_preview_weight': float(preview_weight),
+            'curve_preactivation_speed_weight': float(speed_weight),
+            'curve_preactivation_curvature_weight': float(curvature_weight),
+            'curve_preactivation_distance_weight': float(distance_weight),
+            'curve_preactivation_kappa_floor': float(kappa_floor),
+            'curve_preactivation_lookahead_target': float(preactivation_lookahead_target),
+            'curve_preactivation_speed_cap_target': float(preactivation_speed_cap_target),
+        }
 
     def _pf_apply_safety(self, cmd: dict, traj: dict, gated: dict, gov: dict, vehicle_state_dict: dict, fv: dict, timestamp: float) -> dict:
         """Apply emergency stop, lateral error bounds, out-of-bounds detection. Returns updated cmd dict."""
@@ -8190,6 +9752,68 @@ class AVStack:
         gt_lane_center_x_at_car = vehicle_state_dict.get('groundTruthLaneCenterXAtCar')
         if gt_lane_center_x_at_car is None:
             gt_lane_center_x_at_car = vehicle_state_dict.get('ground_truth_lane_center_x_at_car', 0.0)
+        gt_selected_lane_index = vehicle_state_dict.get('groundTruthSelectedLaneIndex')
+        if gt_selected_lane_index is None:
+            gt_selected_lane_index = vehicle_state_dict.get('ground_truth_selected_lane_index', 0)
+        gt_ego_lane_index = vehicle_state_dict.get('groundTruthEgoLaneIndex')
+        if gt_ego_lane_index is None:
+            gt_ego_lane_index = vehicle_state_dict.get('ground_truth_ego_lane_index', 0)
+        gt_lane_selection_source = str(
+            vehicle_state_dict.get('groundTruthLaneSelectionSource')
+            or vehicle_state_dict.get('ground_truth_lane_selection_source')
+            or ''
+        )
+        gt_lane_selection_reason = str(
+            vehicle_state_dict.get('groundTruthLaneSelectionReason')
+            or vehicle_state_dict.get('ground_truth_lane_selection_reason')
+            or ''
+        )
+        gt_lane_selection_matches_ego = vehicle_state_dict.get(
+            'groundTruthLaneSelectionMatchesEgo'
+        )
+        if gt_lane_selection_matches_ego is None:
+            gt_lane_selection_matches_ego = vehicle_state_dict.get(
+                'ground_truth_lane_selection_matches_ego',
+                True,
+            )
+        gt_ego_lane_center_x_at_car = vehicle_state_dict.get('groundTruthEgoLaneCenterXAtCar')
+        if gt_ego_lane_center_x_at_car is None:
+            gt_ego_lane_center_x_at_car = vehicle_state_dict.get(
+                'ground_truth_ego_lane_center_x_at_car',
+                0.0,
+            )
+        gt_selected_lane_center_offset_road_frame = vehicle_state_dict.get(
+            'groundTruthSelectedLaneCenterOffsetRoadFrame'
+        )
+        if gt_selected_lane_center_offset_road_frame is None:
+            gt_selected_lane_center_offset_road_frame = vehicle_state_dict.get(
+                'ground_truth_selected_lane_center_offset_road_frame',
+                0.0,
+            )
+        gt_selected_lane_cross_track_road_frame_at_car = vehicle_state_dict.get(
+            'groundTruthSelectedLaneCrossTrackRoadFrameAtCar'
+        )
+        if gt_selected_lane_cross_track_road_frame_at_car is None:
+            gt_selected_lane_cross_track_road_frame_at_car = vehicle_state_dict.get(
+                'ground_truth_selected_lane_cross_track_road_frame_at_car',
+                0.0,
+            )
+        gt_ego_lane_center_offset_road_frame = vehicle_state_dict.get(
+            'groundTruthEgoLaneCenterOffsetRoadFrame'
+        )
+        if gt_ego_lane_center_offset_road_frame is None:
+            gt_ego_lane_center_offset_road_frame = vehicle_state_dict.get(
+                'ground_truth_ego_lane_center_offset_road_frame',
+                0.0,
+            )
+        gt_ego_lane_cross_track_road_frame_at_car = vehicle_state_dict.get(
+            'groundTruthEgoLaneCrossTrackRoadFrameAtCar'
+        )
+        if gt_ego_lane_cross_track_road_frame_at_car is None:
+            gt_ego_lane_cross_track_road_frame_at_car = vehicle_state_dict.get(
+                'ground_truth_ego_lane_cross_track_road_frame_at_car',
+                0.0,
+            )
         gt_lane_center_x = gt_lane_center_x_lookahead
         gt_path_curvature = vehicle_state_dict.get('groundTruthPathCurvature') or vehicle_state_dict.get('ground_truth_path_curvature', 0.0)
         gt_desired_heading = vehicle_state_dict.get('groundTruthDesiredHeading') or vehicle_state_dict.get('ground_truth_desired_heading', 0.0)
@@ -8616,6 +10240,20 @@ class AVStack:
             ground_truth_lane_center_x=gt_lane_center_x,
             ground_truth_lane_center_x_lookahead=gt_lane_center_x_lookahead,
             ground_truth_lane_center_x_at_car=gt_lane_center_x_at_car,
+            ground_truth_selected_lane_index=int(gt_selected_lane_index or 0),
+            ground_truth_ego_lane_index=int(gt_ego_lane_index or 0),
+            ground_truth_lane_selection_source=gt_lane_selection_source,
+            ground_truth_lane_selection_reason=gt_lane_selection_reason,
+            ground_truth_lane_selection_matches_ego=bool(gt_lane_selection_matches_ego),
+            ground_truth_ego_lane_center_x_at_car=float(gt_ego_lane_center_x_at_car or 0.0),
+            ground_truth_selected_lane_center_offset_road_frame=gt_selected_lane_center_offset_road_frame,
+            ground_truth_selected_lane_cross_track_road_frame_at_car=gt_selected_lane_cross_track_road_frame_at_car,
+            ground_truth_ego_lane_center_offset_road_frame=float(
+                gt_ego_lane_center_offset_road_frame or 0.0
+            ),
+            ground_truth_ego_lane_cross_track_road_frame_at_car=float(
+                gt_ego_lane_cross_track_road_frame_at_car or 0.0
+            ),
             ground_truth_path_curvature=gt_path_curvature,
             ground_truth_desired_heading=gt_desired_heading,
             camera_8m_screen_y=camera_8m_screen_y,  # NEW: Camera calibration data
@@ -9160,6 +10798,36 @@ class AVStack:
             curve_local_dynamic_sustain_effect_score=control_command.get(
                 'curve_local_dynamic_sustain_effect_score'
             ),
+            curve_preactivation_authority_weight=control_command.get(
+                'curve_preactivation_authority_weight'
+            ),
+            curve_preactivation_authority_active=control_command.get(
+                'curve_preactivation_authority_active'
+            ),
+            curve_preactivation_blocker_mode=control_command.get(
+                'curve_preactivation_blocker_mode'
+            ),
+            curve_preactivation_preview_weight=control_command.get(
+                'curve_preactivation_preview_weight'
+            ),
+            curve_preactivation_speed_weight=control_command.get(
+                'curve_preactivation_speed_weight'
+            ),
+            curve_preactivation_curvature_weight=control_command.get(
+                'curve_preactivation_curvature_weight'
+            ),
+            curve_preactivation_distance_weight=control_command.get(
+                'curve_preactivation_distance_weight'
+            ),
+            curve_preactivation_kappa_floor=control_command.get(
+                'curve_preactivation_kappa_floor'
+            ),
+            curve_preactivation_lookahead_target=control_command.get(
+                'curve_preactivation_lookahead_target'
+            ),
+            curve_preactivation_speed_cap_target=control_command.get(
+                'curve_preactivation_speed_cap_target'
+            ),
             curve_local_rearm_cooldown_active=control_command.get(
                 'curve_local_rearm_cooldown_active'
             ),
@@ -9269,11 +10937,122 @@ class AVStack:
             local_curve_reference_mode=control_command.get(
                 'local_curve_reference_mode'
             ),
+            local_curve_reference_requested_mode=control_command.get(
+                'local_curve_reference_requested_mode'
+            ),
             local_curve_reference_active=control_command.get(
                 'local_curve_reference_active'
             ),
             local_curve_reference_shadow_only=control_command.get(
                 'local_curve_reference_shadow_only'
+            ),
+            local_curve_reference_shadow_promotion_active=control_command.get(
+                'local_curve_reference_shadow_promotion_active'
+            ),
+            local_curve_reference_shadow_promotion_weight=control_command.get(
+                'local_curve_reference_shadow_promotion_weight'
+            ),
+            local_curve_reference_shadow_promotion_blend_floor=control_command.get(
+                'local_curve_reference_shadow_promotion_blend_floor'
+            ),
+            local_curve_reference_shadow_promotion_reason=control_command.get(
+                'local_curve_reference_shadow_promotion_reason'
+            ),
+            local_curve_reference_guarded_bounded_active=control_command.get(
+                'local_curve_reference_guarded_bounded_active'
+            ),
+            local_curve_reference_guarded_bounded_reason=control_command.get(
+                'local_curve_reference_guarded_bounded_reason'
+            ),
+            local_curve_reference_guarded_bounded_dwell_frames=control_command.get(
+                'local_curve_reference_guarded_bounded_dwell_frames'
+            ),
+            local_curve_reference_guarded_bounded_trigger_raw_delta_m=control_command.get(
+                'local_curve_reference_guarded_bounded_trigger_raw_delta_m'
+            ),
+            local_curve_reference_guarded_bounded_exit_raw_delta_m=control_command.get(
+                'local_curve_reference_guarded_bounded_exit_raw_delta_m'
+            ),
+            local_curve_reference_guarded_bounded_trigger_weight=control_command.get(
+                'local_curve_reference_guarded_bounded_trigger_weight'
+            ),
+            local_curve_reference_guarded_bounded_blend_floor=control_command.get(
+                'local_curve_reference_guarded_bounded_blend_floor'
+            ),
+            reference_distractor_guard_active=control_command.get(
+                'reference_distractor_guard_active'
+            ),
+            reference_distractor_guard_reason=control_command.get(
+                'reference_distractor_guard_reason'
+            ),
+            reference_distractor_guard_dwell_frames=control_command.get(
+                'reference_distractor_guard_dwell_frames'
+            ),
+            reference_distractor_guard_trigger_center_error_m=control_command.get(
+                'reference_distractor_guard_trigger_center_error_m'
+            ),
+            reference_distractor_guard_exit_center_error_m=control_command.get(
+                'reference_distractor_guard_exit_center_error_m'
+            ),
+            reference_distractor_guard_center_error_m=control_command.get(
+                'reference_distractor_guard_center_error_m'
+            ),
+            reference_distractor_guard_width_error_m=control_command.get(
+                'reference_distractor_guard_width_error_m'
+            ),
+            reference_distractor_guard_trigger_weight=control_command.get(
+                'reference_distractor_guard_trigger_weight'
+            ),
+            reference_distractor_guard_blend_weight=control_command.get(
+                'reference_distractor_guard_blend_weight'
+            ),
+            reference_distractor_guard_expected_center_x_m=control_command.get(
+                'reference_distractor_guard_expected_center_x_m'
+            ),
+            reference_distractor_guard_expected_heading_rad=control_command.get(
+                'reference_distractor_guard_expected_heading_rad'
+            ),
+            reference_distractor_input_guard_active=control_command.get(
+                'reference_distractor_input_guard_active'
+            ),
+            reference_distractor_input_guard_reason=control_command.get(
+                'reference_distractor_input_guard_reason'
+            ),
+            reference_distractor_input_guard_dwell_frames=control_command.get(
+                'reference_distractor_input_guard_dwell_frames'
+            ),
+            reference_distractor_input_guard_trigger_center_error_m=control_command.get(
+                'reference_distractor_input_guard_trigger_center_error_m'
+            ),
+            reference_distractor_input_guard_exit_center_error_m=control_command.get(
+                'reference_distractor_input_guard_exit_center_error_m'
+            ),
+            reference_distractor_input_guard_center_error_m=control_command.get(
+                'reference_distractor_input_guard_center_error_m'
+            ),
+            reference_distractor_input_guard_width_error_m=control_command.get(
+                'reference_distractor_input_guard_width_error_m'
+            ),
+            reference_distractor_input_guard_trigger_weight=control_command.get(
+                'reference_distractor_input_guard_trigger_weight'
+            ),
+            reference_distractor_input_guard_expected_center_x_m=control_command.get(
+                'reference_distractor_input_guard_expected_center_x_m'
+            ),
+            reference_distractor_input_guard_synthetic_left_lane_x_m=control_command.get(
+                'reference_distractor_input_guard_synthetic_left_lane_x_m'
+            ),
+            reference_distractor_input_guard_synthetic_right_lane_x_m=control_command.get(
+                'reference_distractor_input_guard_synthetic_right_lane_x_m'
+            ),
+            reference_distractor_input_guard_synthetic_lane_width_m=control_command.get(
+                'reference_distractor_input_guard_synthetic_lane_width_m'
+            ),
+            reference_distractor_input_guard_suppressed_lane_coeffs=control_command.get(
+                'reference_distractor_input_guard_suppressed_lane_coeffs'
+            ),
+            reference_distractor_input_guard_center_history_seeded=control_command.get(
+                'reference_distractor_input_guard_center_history_seeded'
             ),
             local_curve_reference_valid=control_command.get(
                 'local_curve_reference_valid'
@@ -9671,17 +11450,56 @@ class AVStack:
             mpc_kappa_bias_guard_limit=float(
                 control_command.get('mpc_kappa_bias_guard_limit', 0.0)
             ),
+            mpc_kappa_active_curve_preserve_ratio=float(
+                control_command.get('mpc_kappa_active_curve_preserve_ratio', 0.0)
+            ),
+            mpc_kappa_active_curve_preserve_active=bool(
+                control_command.get('mpc_kappa_active_curve_preserve_active', False)
+            ),
+            mpc_kappa_active_curve_preserve_weight=float(
+                control_command.get('mpc_kappa_active_curve_preserve_weight', 0.0)
+            ),
+            mpc_kappa_active_mild_curve_authority_active=bool(
+                control_command.get('mpc_kappa_active_mild_curve_authority_active', False)
+            ),
+            mpc_kappa_active_mild_curve_authority_weight=float(
+                control_command.get('mpc_kappa_active_mild_curve_authority_weight', 0.0)
+            ),
+            mpc_kappa_active_mild_curve_authority_ratio=float(
+                control_command.get('mpc_kappa_active_mild_curve_authority_ratio', 0.0)
+            ),
+            mpc_kappa_active_mild_curve_authority_reason=str(
+                control_command.get('mpc_kappa_active_mild_curve_authority_reason', '') or ''
+            ),
+            mpc_kappa_active_mild_curve_authority_speed_weight=float(
+                control_command.get('mpc_kappa_active_mild_curve_authority_speed_weight', 0.0)
+            ),
+            mpc_kappa_active_mild_curve_authority_curvature_weight=float(
+                control_command.get('mpc_kappa_active_mild_curve_authority_curvature_weight', 0.0)
+            ),
+            mpc_kappa_active_mild_curve_authority_gate_weight=float(
+                control_command.get('mpc_kappa_active_mild_curve_authority_gate_weight', 0.0)
+            ),
             mpc_fallback_active=bool(control_command.get('mpc_fallback_active', False)),
             mpc_consecutive_failures=int(control_command.get('mpc_consecutive_failures', 0)),
             mpc_gt_cross_track_m=float(control_command.get('mpc_gt_cross_track_m', 0.0)),
             mpc_gt_cross_track_at_car_m=float(
                 control_command.get('mpc_gt_cross_track_at_car_m', 0.0)
             ),
+            mpc_gt_cross_track_road_frame_at_car_m=float(
+                control_command.get('mpc_gt_cross_track_road_frame_at_car_m', 0.0)
+            ),
+            mpc_gt_cross_track_vehicle_frame_at_car_m=float(
+                control_command.get('mpc_gt_cross_track_vehicle_frame_at_car_m', 0.0)
+            ),
             mpc_gt_cross_track_lookahead_m=float(
                 control_command.get('mpc_gt_cross_track_lookahead_m', 0.0)
             ),
             mpc_gt_cross_track_source_code=str(
                 control_command.get('mpc_gt_cross_track_source_code', '') or ''
+            ),
+            mpc_gt_cross_track_control_source_code=str(
+                control_command.get('mpc_gt_cross_track_control_source_code', '') or ''
             ),
             mpc_gt_heading_error_rad=float(control_command.get('mpc_gt_heading_error_rad', 0.0)),
             mpc_using_ground_truth=float(control_command.get('mpc_using_ground_truth', 0.0)),

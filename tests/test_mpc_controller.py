@@ -309,6 +309,10 @@ def test_params_from_config():
     assert p.bias_relative_guard_ratio == 0.5
     assert p.bias_active_curve_preserve_enabled is True
     assert p.bias_active_curve_preserve_ratio == 0.75
+    assert p.bias_active_curve_preserve_dynamic_enabled is True
+    assert p.bias_active_curve_preserve_speed_on == 13.0
+    assert p.bias_active_curve_preserve_full_ratio == 1.0
+    assert p.bias_active_curve_same_sign_guard_ratio == 0.25
 
 
 # ---------------------------------------------------------------------------
@@ -474,6 +478,92 @@ def test_active_curve_bias_guard_preserves_majority_of_reference_curvature():
     assert r["kappa_bias_guard_limit"] == pytest.approx(0.0005, rel=1e-6)
     assert r["kappa_bias_correction"] == pytest.approx(-0.0005, rel=1e-6)
     assert r["kappa_ref_used"] == pytest.approx(0.0015, rel=1e-6)
+
+
+def test_active_curve_bias_guard_tightens_at_high_speed_on_mild_curve():
+    ctrl = _make_controller(
+        mpc_bias_enabled=True,
+        mpc_bias_alpha=1.0,
+        mpc_bias_kappa_gain=1.0,
+        mpc_bias_max_correction=0.01,
+        mpc_bias_relative_guard_enabled=True,
+        mpc_bias_relative_guard_ratio=0.5,
+        mpc_bias_relative_guard_min_kappa=0.001,
+        mpc_bias_active_curve_preserve_enabled=True,
+        mpc_bias_active_curve_preserve_ratio=0.75,
+        mpc_bias_active_curve_gate_min=0.4,
+        mpc_bias_active_curve_preserve_dynamic_enabled=True,
+        mpc_bias_active_curve_preserve_speed_on=13.0,
+        mpc_bias_active_curve_preserve_speed_full=15.0,
+        mpc_bias_active_curve_preserve_curvature_on=0.0015,
+        mpc_bias_active_curve_preserve_curvature_full=0.0020,
+        mpc_bias_active_curve_preserve_full_ratio=1.0,
+    )
+
+    r = ctrl.compute_steering(
+        e_lat=1.0,
+        e_heading=0.0,
+        current_speed=15.0,
+        last_delta_norm=0.0,
+        kappa_ref=0.002,
+        v_target=15.0,
+        v_max=15.0,
+        dt=0.033,
+        curve_local_state="ENTRY",
+        curve_gate_weight=1.0,
+    )
+
+    assert r["mpc_feasible"]
+    assert r["kappa_active_curve_preserve_active"] is True
+    assert r["kappa_active_curve_preserve_weight"] == pytest.approx(1.0, rel=1e-6)
+    assert r["kappa_active_curve_preserve_ratio"] == pytest.approx(1.0, rel=1e-6)
+    assert r["kappa_bias_guard_active"] is True
+    assert r["kappa_bias_guard_limit"] == pytest.approx(0.0, abs=1e-9)
+    assert r["kappa_bias_correction"] == pytest.approx(0.0, abs=1e-9)
+    assert r["kappa_ref_used"] == pytest.approx(0.002, rel=1e-6)
+
+
+def test_active_curve_same_sign_bias_guard_limits_over_amplification():
+    ctrl = _make_controller(
+        mpc_bias_enabled=True,
+        mpc_bias_alpha=1.0,
+        mpc_bias_kappa_gain=1.0,
+        mpc_bias_max_correction=0.01,
+        mpc_bias_relative_guard_enabled=True,
+        mpc_bias_relative_guard_ratio=0.5,
+        mpc_bias_relative_guard_min_kappa=0.001,
+        mpc_bias_active_curve_preserve_enabled=True,
+        mpc_bias_active_curve_preserve_ratio=0.75,
+        mpc_bias_active_curve_gate_min=0.4,
+        mpc_bias_active_curve_preserve_dynamic_enabled=True,
+        mpc_bias_active_curve_preserve_speed_on=13.0,
+        mpc_bias_active_curve_preserve_speed_full=15.0,
+        mpc_bias_active_curve_preserve_curvature_on=0.0015,
+        mpc_bias_active_curve_preserve_curvature_full=0.0020,
+        mpc_bias_active_curve_preserve_full_ratio=1.0,
+        mpc_bias_active_curve_same_sign_guard_ratio=0.25,
+    )
+
+    r = ctrl.compute_steering(
+        e_lat=-1.0,
+        e_heading=0.0,
+        current_speed=15.0,
+        last_delta_norm=0.0,
+        kappa_ref=0.002,
+        v_target=15.0,
+        v_max=15.0,
+        dt=0.033,
+        curve_local_state="ENTRY",
+        curve_gate_weight=1.0,
+    )
+
+    assert r["mpc_feasible"]
+    assert r["kappa_active_curve_preserve_active"] is True
+    assert r["kappa_active_curve_preserve_weight"] == pytest.approx(1.0, rel=1e-6)
+    assert r["kappa_bias_guard_active"] is True
+    assert r["kappa_bias_guard_limit"] == pytest.approx(0.0005, rel=1e-6)
+    assert r["kappa_bias_correction"] == pytest.approx(0.0005, rel=1e-6)
+    assert r["kappa_ref_used"] == pytest.approx(0.0025, rel=1e-6)
 
 
 # ---------------------------------------------------------------------------

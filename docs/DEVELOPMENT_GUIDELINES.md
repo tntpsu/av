@@ -73,6 +73,48 @@ Control systems (PID controllers, steering, speed control) are complex and sign 
 
 ---
 
+### 4. Lock Semantic Contracts Before Authority Tuning
+
+**The Problem:**
+We spent multiple iterations tuning bounded authority, speed caps, and guarded reference takeover before proving the lane-anchor semantics were correct. That risks strengthening the wrong reference instead of fixing the source contract.
+
+**The Lesson:**
+- **Define the semantic owner first** - e.g. explicit ego-lane contract, selected-lane contract, control-frame contract
+- **Export both the operational signal and the debug signal** when they differ
+- **Teach the analyzer to compare contracts directly** before changing control authority
+- **Do not tune downstream authority** until the upstream anchor semantics are proven correct
+
+**Checklist:**
+- [ ] Is there an explicit semantic contract for the signal being trusted?
+- [ ] Does telemetry distinguish selected/reference/debug variants?
+- [ ] Do the summary and issue detector flag contract mismatches directly?
+- [ ] Have we proven the trusted anchor is the right one on the failing scenario?
+
+---
+
+### 5. Compare Like-With-Like Metrics
+
+**The Problem:**
+We repeatedly compared signals from different frames or meanings, then over-interpreted the mismatch as a control bug.
+
+**The Lesson:**
+- **Never compare two metrics unless they share the same frame and semantic meaning**
+- **Label road-frame, vehicle-frame, at-car, and lookahead explicitly**
+- **Promote the comparison into tooling** once it becomes part of a debugging loop
+
+**Examples to avoid:**
+- selected-lane cross-track vs road-center lookahead offset
+- vehicle-frame lane-center projection vs road-frame cross-track
+- reject-contract pass vs full trajectory quality score
+- lookahead `reference_point_x` vs at-car lane-center anchor
+- generic proxy metrics when the runtime already exports a guard-native error signal
+
+**Rule for guarded-reference debugging:**
+- If a guard computes `center_error_m`, `width_error_m`, or a trigger weight at runtime, use those exact fields in triage.
+- Do not recreate the contract later from a different pair of signals unless the runtime fields are missing.
+
+---
+
 ## Testing Best Practices
 
 ### When to Write Tests
@@ -176,4 +218,3 @@ When debugging control issues:
 > **"Test empirically, not theoretically. Data beats reasoning."**
 
 When in doubt, write a test. When fixing a bug, write a test first. When reasoning about signs, test with concrete examples.
-

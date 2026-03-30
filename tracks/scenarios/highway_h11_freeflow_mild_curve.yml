@@ -1,0 +1,65 @@
+# H11 — Free-flow mild-curve lateral reference (highway_65)
+# No traffic actor. Dedicated lateral-quality reproducer for the full-speed highway
+# mild-curve path.
+# Expected:
+# - free-flow run intent
+# - no ACC lead following
+# - transport/traffic contracts irrelevant
+# - trajectory score should be used as the primary gate
+
+name: highway_65
+road_width: 7.2
+lane_line_width: 0.2
+sample_spacing: 1.0
+loop: true
+start_distance: 10.0
+speed_limit_mph: 65.0
+segments:
+  - type: straight
+    length: 550
+    speed_limit_mph: 65.0
+  - type: arc
+    radius: 500
+    angle_deg: 90
+    direction: left
+    speed_limit_mph: 65.0
+  - type: arc
+    radius: 500
+    angle_deg: 90
+    direction: right
+    speed_limit_mph: 65.0
+  - type: straight
+    length: 400
+    speed_limit_mph: 65.0
+  - type: arc
+    radius: 500
+    angle_deg: 90
+    direction: left
+    speed_limit_mph: 65.0
+  - type: straight
+    length: 550
+    speed_limit_mph: 65.0
+  - type: arc
+    radius: 500
+    angle_deg: 90
+    direction: left
+    speed_limit_mph: 65.0
+  - type: straight
+    length: 400
+    speed_limit_mph: 65.0
+  - type: arc
+    radius: 500
+    angle_deg: 90
+    direction: left
+    speed_limit_mph: 65.0
+  - type: straight
+    length: 400
+    speed_limit_mph: 65.0
+  - type: arc
+    radius: 500
+    angle_deg: 90
+    direction: left
+    speed_limit_mph: 65.0
+
+lead_vehicle:
+  enabled: false

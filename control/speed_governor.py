@@ -106,6 +106,14 @@ class SpeedGovernorConfig:
     curve_cap_rise_min: float = 0.0005
     curve_cap_peak_lat_accel_g: float = 0.26
     curve_cap_use_preview_curvature: bool = True
+    curve_cap_active_mild_enabled: bool = False
+    curve_cap_active_mild_gate_min: float = 0.40
+    curve_cap_active_mild_speed_on: float = 13.0
+    curve_cap_active_mild_speed_full: float = 15.0
+    curve_cap_active_mild_curvature_on: float = 0.0015
+    curve_cap_active_mild_curvature_full: float = 0.0020
+    curve_cap_active_mild_entry_reduction_mps: float = 0.8
+    curve_cap_active_mild_commit_reduction_mps: float = 1.6
     feasibility_backstop_enabled: bool = True
     feasibility_backstop_on_frames: int = 3
     feasibility_backstop_overspeed_margin_mps: float = 0.2
@@ -187,6 +195,9 @@ class SpeedGovernor:
         turn_feasibility_speed_limit_mps: Optional[float] = None,
         turn_feasibility_infeasible: bool = False,
         distance_to_curve: Optional[float] = None,
+        curve_local_state: Optional[str] = None,
+        curve_local_gate_weight: float = 0.0,
+        local_curve_reference_active: bool = False,
     ) -> SpeedGovernorOutput:
         """Compute the target speed for the longitudinal controller.
 
@@ -203,6 +214,9 @@ class SpeedGovernor:
             curve_rise: Local curvature rise proxy from phase scheduler.
             turn_feasibility_speed_limit_mps: Feasibility-based speed ceiling from controller.
             turn_feasibility_infeasible: Whether turn feasibility is currently infeasible.
+            curve_local_state: Local curve scheduler state.
+            curve_local_gate_weight: Local curve relevance weight [0, 1].
+            local_curve_reference_active: Whether the local curve reference is authoritative.
 
         Returns:
             SpeedGovernorOutput with target speed and diagnostics.
@@ -243,6 +257,9 @@ class SpeedGovernor:
                 curve_intent=curve_intent,
                 curve_intent_state=curve_intent_state,
                 curve_rise=curve_rise,
+                curve_local_state=curve_local_state,
+                curve_local_gate_weight=curve_local_gate_weight,
+                local_curve_reference_active=local_curve_reference_active,
             )
         )
         if curve_cap_speed is not None and not self.config.curve_cap_shadow_mode:
@@ -436,6 +453,9 @@ class SpeedGovernor:
         curve_intent: float,
         curve_intent_state: Optional[str],
         curve_rise: float,
+        curve_local_state: Optional[str],
+        curve_local_gate_weight: float,
+        local_curve_reference_active: bool,
     ) -> tuple[Optional[float], bool, str, float]:
         """Compute optional curve capability cap speed and diagnostics."""
         if not self.config.curve_cap_enabled:
@@ -493,12 +513,77 @@ class SpeedGovernor:
         cap_speed = min(float(current_target), math.sqrt(max(0.0, v_entry_sq)))
         cap_speed = max(self.config.curve_cap_min_speed_mps, cap_speed - self.config.curve_cap_margin_mps)
 
+        reason = "commit" if commit_active else ("entry" if entry_active else "rise")
+        local_state = str(curve_local_state or "").strip().upper()
+        if local_state in {"ENTRY", "COMMIT"}:
+            dynamic_state = local_state
+        elif commit_active:
+            dynamic_state = "COMMIT"
+        elif entry_active:
+            dynamic_state = "ENTRY"
+        else:
+            dynamic_state = str(curve_intent_state or "").strip().upper()
+        dynamic_state_active = dynamic_state in {"ENTRY", "COMMIT"}
+        if self.config.curve_cap_active_mild_enabled and dynamic_state_active:
+            gate_min = float(self.config.curve_cap_active_mild_gate_min)
+            gate_signal = float(curve_local_gate_weight or 0.0)
+            gate_signal = max(gate_signal, curve_intent_state_weight(dynamic_state))
+            if gate_signal <= 0.0 and not bool(local_curve_reference_active):
+                gate_signal = intent_value
+            gate_signal = max(0.0, min(1.0, gate_signal))
+            if gate_signal >= gate_min:
+                if gate_min >= 1.0:
+                    gate_weight = 1.0
+                else:
+                    gate_weight = max(
+                        0.0,
+                        min(1.0, (gate_signal - gate_min) / max(1e-6, 1.0 - gate_min)),
+                    )
+                speed_on = float(self.config.curve_cap_active_mild_speed_on)
+                speed_full = float(self.config.curve_cap_active_mild_speed_full)
+                if speed_full <= speed_on:
+                    speed_weight = 1.0 if float(current_speed) >= speed_on else 0.0
+                elif float(current_speed) <= speed_on:
+                    speed_weight = 0.0
+                elif float(current_speed) >= speed_full:
+                    speed_weight = 1.0
+                else:
+                    speed_weight = (float(current_speed) - speed_on) / max(1e-6, speed_full - speed_on)
+                curvature_on = float(self.config.curve_cap_active_mild_curvature_on)
+                curvature_full = float(self.config.curve_cap_active_mild_curvature_full)
+                if curvature_full <= curvature_on:
+                    curvature_weight = 1.0 if k_used >= curvature_on else 0.0
+                elif k_used <= curvature_on:
+                    curvature_weight = 0.0
+                elif k_used >= curvature_full:
+                    curvature_weight = 1.0
+                else:
+                    curvature_weight = (k_used - curvature_on) / max(1e-6, curvature_full - curvature_on)
+                dynamic_weight = max(
+                    0.0,
+                    min(1.0, speed_weight * curvature_weight * gate_weight),
+                )
+                if dynamic_weight > 0.0:
+                    reduction = (
+                        float(self.config.curve_cap_active_mild_commit_reduction_mps)
+                        if dynamic_state == "COMMIT"
+                        else float(self.config.curve_cap_active_mild_entry_reduction_mps)
+                    )
+                    dynamic_cap = max(
+                        self.config.curve_cap_min_speed_mps,
+                        float(current_target) - reduction * dynamic_weight,
+                    )
+                    if dynamic_cap < cap_speed - 1e-6:
+                        cap_speed = dynamic_cap
+                        reason = (
+                            "commit_dynamic_mild" if dynamic_state == "COMMIT" else "entry_dynamic_mild"
+                        )
+
         if self.config.curve_cap_hysteresis_enabled and self._curve_cap_last_speed is not None:
             release_ceiling = self._curve_cap_last_speed + self.config.curve_cap_hysteresis_mps
             cap_speed = min(cap_speed, release_ceiling)
         self._curve_cap_last_speed = cap_speed
 
-        reason = "commit" if commit_active else ("entry" if entry_active else "rise")
         margin_mps = max(0.0, float(current_target) - float(cap_speed))
         return float(cap_speed), True, reason, float(margin_mps)
 
@@ -740,6 +825,54 @@ def build_speed_governor(trajectory_cfg: dict, speed_planner_cfg: dict) -> Speed
             gov_cfg_section.get(
                 "curve_cap_use_preview_curvature",
                 trajectory_cfg.get("curve_cap_use_preview_curvature", True),
+            )
+        ),
+        curve_cap_active_mild_enabled=bool(
+            gov_cfg_section.get(
+                "curve_cap_active_mild_enabled",
+                trajectory_cfg.get("curve_cap_active_mild_enabled", False),
+            )
+        ),
+        curve_cap_active_mild_gate_min=float(
+            gov_cfg_section.get(
+                "curve_cap_active_mild_gate_min",
+                trajectory_cfg.get("curve_cap_active_mild_gate_min", 0.40),
+            )
+        ),
+        curve_cap_active_mild_speed_on=float(
+            gov_cfg_section.get(
+                "curve_cap_active_mild_speed_on",
+                trajectory_cfg.get("curve_cap_active_mild_speed_on", 13.0),
+            )
+        ),
+        curve_cap_active_mild_speed_full=float(
+            gov_cfg_section.get(
+                "curve_cap_active_mild_speed_full",
+                trajectory_cfg.get("curve_cap_active_mild_speed_full", 15.0),
+            )
+        ),
+        curve_cap_active_mild_curvature_on=float(
+            gov_cfg_section.get(
+                "curve_cap_active_mild_curvature_on",
+                trajectory_cfg.get("curve_cap_active_mild_curvature_on", 0.0015),
+            )
+        ),
+        curve_cap_active_mild_curvature_full=float(
+            gov_cfg_section.get(
+                "curve_cap_active_mild_curvature_full",
+                trajectory_cfg.get("curve_cap_active_mild_curvature_full", 0.0020),
+            )
+        ),
+        curve_cap_active_mild_entry_reduction_mps=float(
+            gov_cfg_section.get(
+                "curve_cap_active_mild_entry_reduction_mps",
+                trajectory_cfg.get("curve_cap_active_mild_entry_reduction_mps", 0.8),
+            )
+        ),
+        curve_cap_active_mild_commit_reduction_mps=float(
+            gov_cfg_section.get(
+                "curve_cap_active_mild_commit_reduction_mps",
+                trajectory_cfg.get("curve_cap_active_mild_commit_reduction_mps", 1.6),
             )
         ),
         feasibility_backstop_enabled=bool(

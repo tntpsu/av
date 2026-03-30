@@ -97,8 +97,16 @@ def build_causal_timeline(issues: List[Dict], failure_frame: Optional[int] = Non
         "straight_sign_mismatch": "control",
         "trajectory_suppressed_curve_entry": "trajectory",
         "highway_mild_curve_underactivation": "trajectory",
+        "highway_preactivation_curve_authority_missing": "trajectory",
+        "local_curve_reference_shadow_insufficient": "trajectory",
+        "wrong_target_distractor_reference_divergence": "trajectory",
+        "wrong_target_straight_reference_drift": "trajectory",
+        "ego_lane_contract_invalid": "trajectory",
+        "high_speed_mild_curve_active_authority_insufficient": "trajectory",
+        "active_mild_curve_preserve_speed_gated": "trajectory",
         "curve_sustain_collapse_rearm_cycle": "trajectory",
         "mpc_gt_cross_track_semantic_mismatch": "control",
+        "mpc_gt_cross_track_vehicle_frame_semantic_mismatch": "control",
         "mpc_gt_cross_track_absolute_coordinate_mismatch": "control",
         "mpc_curvature_bias_cancellation": "control",
         "speed_exceeded_feasible": "control",
@@ -1014,6 +1022,911 @@ def detect_issues(recording_path: Path, analyze_to_failure: bool = False) -> Dic
                         "lane_center_offset_abs_p95_m": _finite_percentile(lane_offset[idx], 95),
                     })
 
+                preactivation_weight = (
+                    np.array(
+                        f["control/curve_preactivation_authority_weight"][:num_frames],
+                        dtype=np.float64,
+                    )
+                    if "control/curve_preactivation_authority_weight" in f
+                    else np.zeros(num_frames, dtype=np.float64)
+                )
+                preactivation_active = (
+                    np.array(
+                        f["control/curve_preactivation_authority_active"][:num_frames],
+                        dtype=np.float64,
+                    )
+                    if "control/curve_preactivation_authority_active" in f
+                    else np.zeros(num_frames, dtype=np.float64)
+                )
+                preactivation_blocker = (
+                    np.array(
+                        [
+                            s.decode("utf-8", errors="ignore") if isinstance(s, (bytes, np.bytes_)) else str(s)
+                            for s in f["control/curve_preactivation_blocker_mode"][:num_frames]
+                        ],
+                        dtype=object,
+                    )
+                    if "control/curve_preactivation_blocker_mode" in f
+                    else np.array([""] * num_frames, dtype=object)
+                )
+                preactivation_preview_weight = (
+                    np.array(
+                        f["control/curve_preactivation_preview_weight"][:num_frames],
+                        dtype=np.float64,
+                    )
+                    if "control/curve_preactivation_preview_weight" in f
+                    else np.zeros(num_frames, dtype=np.float64)
+                )
+                preactivation_speed_weight = (
+                    np.array(
+                        f["control/curve_preactivation_speed_weight"][:num_frames],
+                        dtype=np.float64,
+                    )
+                    if "control/curve_preactivation_speed_weight" in f
+                    else np.zeros(num_frames, dtype=np.float64)
+                )
+                preactivation_curvature_weight = (
+                    np.array(
+                        f["control/curve_preactivation_curvature_weight"][:num_frames],
+                        dtype=np.float64,
+                    )
+                    if "control/curve_preactivation_curvature_weight" in f
+                    else np.zeros(num_frames, dtype=np.float64)
+                )
+                preactivation_distance_weight = (
+                    np.array(
+                        f["control/curve_preactivation_distance_weight"][:num_frames],
+                        dtype=np.float64,
+                    )
+                    if "control/curve_preactivation_distance_weight" in f
+                    else np.zeros(num_frames, dtype=np.float64)
+                )
+                preactivation_lookahead_target = (
+                    np.array(
+                        f["control/curve_preactivation_lookahead_target"][:num_frames],
+                        dtype=np.float64,
+                    )
+                    if "control/curve_preactivation_lookahead_target" in f
+                    else np.full(num_frames, np.nan, dtype=np.float64)
+                )
+                preactivation_speed_cap_target = (
+                    np.array(
+                        f["control/curve_preactivation_speed_cap_target"][:num_frames],
+                        dtype=np.float64,
+                    )
+                    if "control/curve_preactivation_speed_cap_target" in f
+                    else np.full(num_frames, np.nan, dtype=np.float64)
+                )
+                preactivation_missing = (
+                    high_error
+                    & mild_curve
+                    & small_lane_offset
+                    & good_perception
+                    & clean_transport
+                    & (preactivation_weight >= 0.35)
+                    & (preactivation_active <= 0.5)
+                    & np.array(
+                        [
+                            (curve_local_state[i] not in {"ENTRY", "COMMIT"})
+                            or (str(preactivation_blocker[i]).strip().lower() == "local_not_ready")
+                            for i in range(num_frames)
+                        ],
+                        dtype=bool,
+                    )
+                )
+
+                event_start = None
+                run_len = 0
+                for frame_idx, active in enumerate(preactivation_missing):
+                    if active:
+                        if run_len == 0:
+                            event_start = frame_idx
+                        run_len += 1
+                    else:
+                        if run_len >= min_event_len and event_start is not None:
+                            event_end = frame_idx - 1
+                            idx = slice(event_start, frame_idx)
+                            issues.append({
+                                "issue_id": "highway_preactivation_curve_authority_missing",
+                                "frame": int(event_start),
+                                "end_frame": int(event_end),
+                                "type": "highway_preactivation_curve_authority_missing",
+                                "severity": "high" if run_len >= 10 else "medium",
+                                "description": (
+                                    f"High-speed mild curve needed earlier authority for {run_len} frames: "
+                                    f"weight p50={_finite_percentile(preactivation_weight[idx], 50):.3f}, "
+                                    f"blocker={_mode_value(preactivation_blocker[idx])}, "
+                                    f"preview/speed/curvature/distance p50="
+                                    f"{_finite_percentile(preactivation_preview_weight[idx], 50):.3f}/"
+                                    f"{_finite_percentile(preactivation_speed_weight[idx], 50):.3f}/"
+                                    f"{_finite_percentile(preactivation_curvature_weight[idx], 50):.3f}/"
+                                    f"{_finite_percentile(preactivation_distance_weight[idx], 50):.3f}, "
+                                    f"lookahead target p50={_finite_percentile(preactivation_lookahead_target[idx], 50, default=np.nan):.2f}m, "
+                                    f"speed-cap target p50={_finite_percentile(preactivation_speed_cap_target[idx], 50, default=np.nan):.2f}m/s."
+                                ),
+                                "duration": int(run_len),
+                                "deep_link_target": "summary-section-highway-mild-curve",
+                                "focus_id": "diag-focus-highway-mild-curve",
+                                "curve_preactivation_blocker_mode": _mode_value(preactivation_blocker[idx]),
+                            })
+                        event_start = None
+                        run_len = 0
+                if run_len >= min_event_len and event_start is not None:
+                    event_end = int(num_frames - 1)
+                    idx = slice(event_start, num_frames)
+                    issues.append({
+                        "issue_id": "highway_preactivation_curve_authority_missing",
+                        "frame": int(event_start),
+                        "end_frame": int(event_end),
+                        "type": "highway_preactivation_curve_authority_missing",
+                        "severity": "high" if run_len >= 10 else "medium",
+                        "description": (
+                            f"High-speed mild curve needed earlier authority for {run_len} frames: "
+                            f"weight p50={_finite_percentile(preactivation_weight[idx], 50):.3f}, "
+                            f"blocker={_mode_value(preactivation_blocker[idx])}, "
+                            f"preview/speed/curvature/distance p50="
+                            f"{_finite_percentile(preactivation_preview_weight[idx], 50):.3f}/"
+                            f"{_finite_percentile(preactivation_speed_weight[idx], 50):.3f}/"
+                            f"{_finite_percentile(preactivation_curvature_weight[idx], 50):.3f}/"
+                            f"{_finite_percentile(preactivation_distance_weight[idx], 50):.3f}, "
+                            f"lookahead target p50={_finite_percentile(preactivation_lookahead_target[idx], 50, default=np.nan):.2f}m, "
+                            f"speed-cap target p50={_finite_percentile(preactivation_speed_cap_target[idx], 50, default=np.nan):.2f}m/s."
+                        ),
+                        "duration": int(run_len),
+                        "deep_link_target": "summary-section-highway-mild-curve",
+                        "focus_id": "diag-focus-highway-mild-curve",
+                        "curve_preactivation_blocker_mode": _mode_value(preactivation_blocker[idx]),
+                    })
+
+                local_curve_reference_active = (
+                    np.array(
+                        f["control/local_curve_reference_active"][:num_frames],
+                        dtype=np.float64,
+                    )
+                    if "control/local_curve_reference_active" in f
+                    else np.ones(num_frames, dtype=np.float64)
+                )
+                local_curve_reference_shadow_only = (
+                    np.array(
+                        f["control/local_curve_reference_shadow_only"][:num_frames],
+                        dtype=np.float64,
+                    )
+                    if "control/local_curve_reference_shadow_only" in f
+                    else np.zeros(num_frames, dtype=np.float64)
+                )
+                local_curve_reference_raw_delta = (
+                    np.array(
+                        f["control/local_curve_reference_raw_delta_m"][:num_frames],
+                        dtype=np.float64,
+                    )
+                    if "control/local_curve_reference_raw_delta_m" in f
+                    else np.full(num_frames, np.nan, dtype=np.float64)
+                )
+                local_curve_reference_capped_delta = (
+                    np.array(
+                        f["control/local_curve_reference_capped_delta_m"][:num_frames],
+                        dtype=np.float64,
+                    )
+                    if "control/local_curve_reference_capped_delta_m" in f
+                    else np.full(num_frames, np.nan, dtype=np.float64)
+                )
+                local_curve_reference_cap_ratio = np.divide(
+                    local_curve_reference_capped_delta,
+                    local_curve_reference_raw_delta,
+                    out=np.full(num_frames, np.nan, dtype=np.float64),
+                    where=np.abs(local_curve_reference_raw_delta) > 1e-6,
+                )
+                local_curve_reference_shadow_promotion_reason = (
+                    np.array(
+                        [
+                            s.decode("utf-8", errors="ignore") if isinstance(s, (bytes, np.bytes_)) else str(s)
+                            for s in f["control/local_curve_reference_shadow_promotion_reason"][:num_frames]
+                        ],
+                        dtype=object,
+                    )
+                    if "control/local_curve_reference_shadow_promotion_reason" in f
+                    else np.array([""] * num_frames, dtype=object)
+                )
+                local_curve_reference_guarded_bounded_active = (
+                    np.array(
+                        f["control/local_curve_reference_guarded_bounded_active"][:num_frames],
+                        dtype=np.float64,
+                    )
+                    if "control/local_curve_reference_guarded_bounded_active" in f
+                    else np.zeros(num_frames, dtype=np.float64)
+                )
+                local_curve_reference_guarded_bounded_reason = (
+                    np.array(
+                        [
+                            s.decode("utf-8", errors="ignore") if isinstance(s, (bytes, np.bytes_)) else str(s)
+                            for s in f["control/local_curve_reference_guarded_bounded_reason"][:num_frames]
+                        ],
+                        dtype=object,
+                    )
+                    if "control/local_curve_reference_guarded_bounded_reason" in f
+                    else np.array([""] * num_frames, dtype=object)
+                )
+                local_curve_reference_blend_weight = (
+                    np.array(
+                        f["control/local_curve_reference_blend_weight"][:num_frames],
+                        dtype=np.float64,
+                    )
+                    if "control/local_curve_reference_blend_weight" in f
+                    else np.full(num_frames, np.nan, dtype=np.float64)
+                )
+                radar_candidate_present = (
+                    np.array(
+                        f["vehicle/radar_fwd_candidate_present"][:num_frames],
+                        dtype=np.float64,
+                    )
+                    if "vehicle/radar_fwd_candidate_present" in f
+                    else np.zeros(num_frames, dtype=np.float64)
+                )
+                radar_reject_reason = (
+                    np.array(
+                        [
+                            s.decode("utf-8", errors="ignore") if isinstance(s, (bytes, np.bytes_)) else str(s)
+                            for s in f["vehicle/radar_fwd_reject_reason"][:num_frames]
+                        ],
+                        dtype=object,
+                    )
+                    if "vehicle/radar_fwd_reject_reason" in f
+                    else np.array([""] * num_frames, dtype=object)
+                )
+                reference_point_x = (
+                    np.array(
+                        f["trajectory/reference_point_x"][:num_frames],
+                        dtype=np.float64,
+                    )
+                    if "trajectory/reference_point_x" in f
+                    else np.full(num_frames, np.nan, dtype=np.float64)
+                )
+                reference_distractor_guard_active = (
+                    np.array(
+                        f["control/reference_distractor_guard_active"][:num_frames],
+                        dtype=np.float64,
+                    )
+                    if "control/reference_distractor_guard_active" in f
+                    else np.zeros(num_frames, dtype=np.float64)
+                )
+                reference_distractor_guard_center_error_m = (
+                    np.array(
+                        f["control/reference_distractor_guard_center_error_m"][:num_frames],
+                        dtype=np.float64,
+                    )
+                    if "control/reference_distractor_guard_center_error_m" in f
+                    else np.full(num_frames, np.nan, dtype=np.float64)
+                )
+                reference_distractor_guard_expected_center_x_m = (
+                    np.array(
+                        f["control/reference_distractor_guard_expected_center_x_m"][:num_frames],
+                        dtype=np.float64,
+                    )
+                    if "control/reference_distractor_guard_expected_center_x_m" in f
+                    else np.full(num_frames, np.nan, dtype=np.float64)
+                )
+                reference_distractor_guard_trigger_weight = (
+                    np.array(
+                        f["control/reference_distractor_guard_trigger_weight"][:num_frames],
+                        dtype=np.float64,
+                    )
+                    if "control/reference_distractor_guard_trigger_weight" in f
+                    else np.full(num_frames, np.nan, dtype=np.float64)
+                )
+                gt_center_at_car = (
+                    np.array(
+                        f["ground_truth/lane_center_x_at_car"][:num_frames],
+                        dtype=np.float64,
+                    )
+                    if "ground_truth/lane_center_x_at_car" in f
+                    else np.full(num_frames, np.nan, dtype=np.float64)
+                )
+                gt_selected_lane_index = (
+                    np.array(
+                        f["ground_truth/selected_lane_index"][:num_frames],
+                        dtype=np.int32,
+                    )
+                    if "ground_truth/selected_lane_index" in f
+                    else np.zeros(num_frames, dtype=np.int32)
+                )
+                gt_ego_lane_index = (
+                    np.array(
+                        f["ground_truth/ego_lane_index"][:num_frames],
+                        dtype=np.int32,
+                    )
+                    if "ground_truth/ego_lane_index" in f
+                    else np.zeros(num_frames, dtype=np.int32)
+                )
+                gt_lane_selection_source = (
+                    np.array(
+                        [
+                            s.decode("utf-8", errors="ignore") if isinstance(s, (bytes, np.bytes_)) else str(s)
+                            for s in f["ground_truth/lane_selection_source"][:num_frames]
+                        ],
+                        dtype=object,
+                    )
+                    if "ground_truth/lane_selection_source" in f
+                    else np.array([""] * num_frames, dtype=object)
+                )
+                gt_lane_selection_matches_ego = (
+                    np.array(
+                        f["ground_truth/lane_selection_matches_ego"][:num_frames],
+                        dtype=np.float64,
+                    )
+                    if "ground_truth/lane_selection_matches_ego" in f
+                    else np.ones(num_frames, dtype=np.float64)
+                )
+                gt_selected_lane_cross_track_road_frame_at_car = (
+                    np.array(
+                        f["ground_truth/selected_lane_cross_track_road_frame_at_car"][:num_frames],
+                        dtype=np.float64,
+                    )
+                    if "ground_truth/selected_lane_cross_track_road_frame_at_car" in f
+                    else np.full(num_frames, np.nan, dtype=np.float64)
+                )
+                gt_ego_lane_cross_track_road_frame_at_car = (
+                    np.array(
+                        f["ground_truth/ego_lane_cross_track_road_frame_at_car"][:num_frames],
+                        dtype=np.float64,
+                    )
+                    if "ground_truth/ego_lane_cross_track_road_frame_at_car" in f
+                    else np.full(num_frames, np.nan, dtype=np.float64)
+                )
+                active_curve_preserve_weight = (
+                    np.array(
+                        f["control/mpc_kappa_active_curve_preserve_weight"][:num_frames],
+                        dtype=np.float64,
+                    )
+                    if "control/mpc_kappa_active_curve_preserve_weight" in f
+                    else np.zeros(num_frames, dtype=np.float64)
+                )
+                active_mild_curve_authority_weight = (
+                    np.array(
+                        f["control/mpc_kappa_active_mild_curve_authority_weight"][:num_frames],
+                        dtype=np.float64,
+                    )
+                    if "control/mpc_kappa_active_mild_curve_authority_weight" in f
+                    else np.zeros(num_frames, dtype=np.float64)
+                )
+                active_mild_curve_authority_ratio = (
+                    np.array(
+                        f["control/mpc_kappa_active_mild_curve_authority_ratio"][:num_frames],
+                        dtype=np.float64,
+                    )
+                    if "control/mpc_kappa_active_mild_curve_authority_ratio" in f
+                    else np.zeros(num_frames, dtype=np.float64)
+                )
+                active_mild_curve_authority_reason = (
+                    np.array(
+                        [
+                            s.decode("utf-8", errors="ignore") if isinstance(s, (bytes, np.bytes_)) else str(s)
+                            for s in f["control/mpc_kappa_active_mild_curve_authority_reason"][:num_frames]
+                        ],
+                        dtype=object,
+                    )
+                    if "control/mpc_kappa_active_mild_curve_authority_reason" in f
+                    else np.array([""] * num_frames, dtype=object)
+                )
+                curve_cap_speed = (
+                    np.array(
+                        f["control/speed_governor_curve_cap_speed"][:num_frames],
+                        dtype=np.float64,
+                    )
+                    if "control/speed_governor_curve_cap_speed" in f
+                    else np.full(num_frames, np.nan, dtype=np.float64)
+                )
+                curve_cap_reason = (
+                    np.array(
+                        [
+                            s.decode("utf-8", errors="ignore") if isinstance(s, (bytes, np.bytes_)) else str(s)
+                            for s in f["control/speed_governor_curve_cap_reason"][:num_frames]
+                        ],
+                        dtype=object,
+                    )
+                    if "control/speed_governor_curve_cap_reason" in f
+                    else np.array([""] * num_frames, dtype=object)
+                )
+                speed_arr = (
+                    np.array(f["vehicle/speed"][:num_frames], dtype=np.float64)
+                    if "vehicle/speed" in f
+                    else np.full(num_frames, np.nan, dtype=np.float64)
+                )
+                local_active = np.array(
+                    [curve_local_state[i] in {"ENTRY", "COMMIT"} for i in range(num_frames)],
+                    dtype=bool,
+                )
+                active_state_failure = (
+                    high_error
+                    & mild_curve
+                    & local_active
+                    & (local_curve_reference_active > 0.5)
+                    & small_lane_offset
+                    & good_perception
+                    & clean_transport
+                )
+                active_shadow_insufficient = (
+                    active_state_failure
+                    & (local_curve_reference_shadow_only > 0.5)
+                    & np.isfinite(local_curve_reference_raw_delta)
+                    & (local_curve_reference_raw_delta >= 0.25)
+                    & np.isfinite(local_curve_reference_cap_ratio)
+                    & (local_curve_reference_cap_ratio <= 0.10)
+                )
+                wrong_target_distractor_reference_divergence = (
+                    high_error
+                    & (radar_candidate_present > 0.5)
+                    & np.array(
+                        [
+                            radar_reject_reason[i] in {"wrong_lane", "opposite_direction"}
+                            for i in range(num_frames)
+                        ],
+                        dtype=bool,
+                    )
+                    & good_perception
+                    & clean_transport
+                    & np.isfinite(local_curve_reference_raw_delta)
+                    & (local_curve_reference_raw_delta >= 0.75)
+                    & (
+                        (
+                            (local_curve_reference_active > 0.5)
+                            & np.isfinite(local_curve_reference_blend_weight)
+                            & (local_curve_reference_blend_weight <= 0.40)
+                        )
+                        | (~local_active)
+                    )
+                )
+                wrong_target_straight_reference_drift = (
+                    high_error
+                    & small_lane_offset
+                    & np.array(
+                        [curve_local_state[i] in {"STRAIGHT", "REARM"} for i in range(num_frames)],
+                        dtype=bool,
+                    )
+                    & (radar_candidate_present > 0.5)
+                    & np.array(
+                        [
+                            radar_reject_reason[i] in {"wrong_lane", "opposite_direction"}
+                            for i in range(num_frames)
+                        ],
+                        dtype=bool,
+                    )
+                    & good_perception
+                    & clean_transport
+                    & (reference_distractor_guard_active > 0.5)
+                    & np.isfinite(reference_distractor_guard_center_error_m)
+                    & (np.abs(ref_curv) <= 7.5e-4)
+                    & (reference_distractor_guard_center_error_m >= 0.50)
+                )
+                ego_lane_contract_invalid = (
+                    (radar_candidate_present > 0.5)
+                    & np.array(
+                        [
+                            radar_reject_reason[i] in {"wrong_lane", "opposite_direction"}
+                            for i in range(num_frames)
+                        ],
+                        dtype=bool,
+                    )
+                    & clean_transport
+                    & (
+                        (gt_selected_lane_index != gt_ego_lane_index)
+                        | (gt_lane_selection_matches_ego <= 0.5)
+                        | (
+                            np.isfinite(gt_selected_lane_cross_track_road_frame_at_car)
+                            & np.isfinite(gt_ego_lane_cross_track_road_frame_at_car)
+                            & (
+                                np.abs(
+                                    gt_selected_lane_cross_track_road_frame_at_car
+                                    - gt_ego_lane_cross_track_road_frame_at_car
+                                )
+                                >= 0.20
+                            )
+                        )
+                    )
+                )
+                active_preserve_low = (
+                    active_state_failure
+                    & (~active_shadow_insufficient)
+                    & np.isfinite(active_curve_preserve_weight)
+                    & (active_curve_preserve_weight <= 0.25)
+                )
+                active_curve_cap_ineffective = (
+                    active_state_failure
+                    & (~active_shadow_insufficient)
+                    & (
+                        (~np.isfinite(curve_cap_speed))
+                        | (~np.isfinite(speed_arr))
+                        | (curve_cap_speed <= 0.0)
+                        | (curve_cap_speed >= (speed_arr - 0.20))
+                    )
+                )
+                active_state_issue = active_state_failure & (~active_shadow_insufficient) & (
+                    active_preserve_low | active_curve_cap_ineffective
+                )
+                active_mild_curve_preserve_speed_gated = (
+                    active_state_failure
+                    & (~active_shadow_insufficient)
+                    & np.isfinite(active_mild_curve_authority_weight)
+                    & (active_mild_curve_authority_weight <= 0.05)
+                    & np.array(
+                        [
+                            str(active_mild_curve_authority_reason[i] or "").strip().lower()
+                            == "speed_below_on"
+                            for i in range(num_frames)
+                        ],
+                        dtype=bool,
+                    )
+                )
+
+                event_start = None
+                run_len = 0
+                for frame_idx, active in enumerate(active_shadow_insufficient):
+                    if active:
+                        if run_len == 0:
+                            event_start = frame_idx
+                        run_len += 1
+                    else:
+                        if run_len >= min_event_len and event_start is not None:
+                            event_end = frame_idx - 1
+                            idx = slice(event_start, frame_idx)
+                            issues.append({
+                                "issue_id": "local_curve_reference_shadow_insufficient",
+                                "frame": int(event_start),
+                                "end_frame": int(event_end),
+                                "type": "local_curve_reference_shadow_insufficient",
+                                "severity": "high" if run_len >= 10 else "medium",
+                                "description": (
+                                    f"Local curve reference stays shadow-only for {run_len} frames while planner/local-arc "
+                                    f"delta is materially large: raw_delta p50={_finite_percentile(local_curve_reference_raw_delta[idx], 50):.3f}m, "
+                                    f"applied_delta p50={_finite_percentile(local_curve_reference_capped_delta[idx], 50):.3f}m, "
+                                    f"cap_ratio p50={_finite_percentile(local_curve_reference_cap_ratio[idx], 50):.3f}, "
+                                    f"promotion={_mode_value(local_curve_reference_shadow_promotion_reason[idx])}."
+                                ),
+                                "duration": int(run_len),
+                                "deep_link_target": "summary-section-highway-mild-curve",
+                                "focus_id": "diag-focus-highway-mild-curve",
+                                "root_cause": "shadow_only_local_arc",
+                            })
+                        event_start = None
+                        run_len = 0
+                if run_len >= min_event_len and event_start is not None:
+                    event_end = int(num_frames - 1)
+                    idx = slice(event_start, num_frames)
+                    issues.append({
+                        "issue_id": "local_curve_reference_shadow_insufficient",
+                        "frame": int(event_start),
+                        "end_frame": int(event_end),
+                        "type": "local_curve_reference_shadow_insufficient",
+                        "severity": "high" if run_len >= 10 else "medium",
+                        "description": (
+                            f"Local curve reference stays shadow-only for {run_len} frames while planner/local-arc "
+                            f"delta is materially large: raw_delta p50={_finite_percentile(local_curve_reference_raw_delta[idx], 50):.3f}m, "
+                            f"applied_delta p50={_finite_percentile(local_curve_reference_capped_delta[idx], 50):.3f}m, "
+                            f"cap_ratio p50={_finite_percentile(local_curve_reference_cap_ratio[idx], 50):.3f}, "
+                            f"promotion={_mode_value(local_curve_reference_shadow_promotion_reason[idx])}."
+                        ),
+                        "duration": int(run_len),
+                        "deep_link_target": "summary-section-highway-mild-curve",
+                        "focus_id": "diag-focus-highway-mild-curve",
+                        "root_cause": "shadow_only_local_arc",
+                    })
+
+                event_start = None
+                run_len = 0
+                for frame_idx, active in enumerate(wrong_target_distractor_reference_divergence):
+                    if active:
+                        if run_len == 0:
+                            event_start = frame_idx
+                        run_len += 1
+                    else:
+                        if run_len >= min_event_len and event_start is not None:
+                            event_end = frame_idx - 1
+                            idx = slice(event_start, frame_idx)
+                            issues.append({
+                                "issue_id": "wrong_target_distractor_reference_divergence",
+                                "frame": int(event_start),
+                                "end_frame": int(event_end),
+                                "type": "wrong_target_distractor_reference_divergence",
+                                "severity": "high" if run_len >= 10 else "medium",
+                                "description": (
+                                    f"Rejected wrong-target distractor correlates with sustained planner/local-arc divergence "
+                                    f"for {run_len} frames: reject={_mode_value(radar_reject_reason[idx])}, "
+                                    f"raw_delta p50={_finite_percentile(local_curve_reference_raw_delta[idx], 50):.3f}m, "
+                                    f"blend_wt p50={_finite_percentile(local_curve_reference_blend_weight[idx], 50):.3f}, "
+                                    f"applied_delta p50={_finite_percentile(local_curve_reference_capped_delta[idx], 50):.3f}m, "
+                                    f"guard_active_rate={float(np.mean(local_curve_reference_guarded_bounded_active[idx] > 0.5) * 100.0):.1f}%, "
+                                    f"guard_reason={_mode_value(local_curve_reference_guarded_bounded_reason[idx])}."
+                                ),
+                                "duration": int(run_len),
+                                "deep_link_target": "summary-section-highway-mild-curve",
+                                "focus_id": "diag-focus-highway-mild-curve",
+                                "root_cause": "wrong_target_distractor_reference_divergence",
+                            })
+                        event_start = None
+                        run_len = 0
+                if run_len >= min_event_len and event_start is not None:
+                    event_end = int(num_frames - 1)
+                    idx = slice(event_start, num_frames)
+                    issues.append({
+                        "issue_id": "wrong_target_distractor_reference_divergence",
+                        "frame": int(event_start),
+                        "end_frame": int(event_end),
+                        "type": "wrong_target_distractor_reference_divergence",
+                        "severity": "high" if run_len >= 10 else "medium",
+                        "description": (
+                            f"Rejected wrong-target distractor correlates with sustained planner/local-arc divergence "
+                            f"for {run_len} frames: reject={_mode_value(radar_reject_reason[idx])}, "
+                            f"raw_delta p50={_finite_percentile(local_curve_reference_raw_delta[idx], 50):.3f}m, "
+                            f"blend_wt p50={_finite_percentile(local_curve_reference_blend_weight[idx], 50):.3f}, "
+                            f"applied_delta p50={_finite_percentile(local_curve_reference_capped_delta[idx], 50):.3f}m, "
+                            f"guard_active_rate={float(np.mean(local_curve_reference_guarded_bounded_active[idx] > 0.5) * 100.0):.1f}%, "
+                            f"guard_reason={_mode_value(local_curve_reference_guarded_bounded_reason[idx])}."
+                        ),
+                        "duration": int(run_len),
+                        "deep_link_target": "summary-section-highway-mild-curve",
+                        "focus_id": "diag-focus-highway-mild-curve",
+                        "root_cause": "wrong_target_distractor_reference_divergence",
+                    })
+
+                event_start = None
+                run_len = 0
+                for frame_idx, active in enumerate(wrong_target_straight_reference_drift):
+                    if active:
+                        if run_len == 0:
+                            event_start = frame_idx
+                        run_len += 1
+                    else:
+                        if run_len >= min_event_len and event_start is not None:
+                            event_end = frame_idx - 1
+                            idx = slice(event_start, frame_idx)
+                            issues.append({
+                                "issue_id": "wrong_target_straight_reference_drift",
+                                "frame": int(event_start),
+                                "end_frame": int(event_end),
+                                "type": "wrong_target_straight_reference_drift",
+                                "severity": "high" if run_len >= 10 else "medium",
+                                "description": (
+                                    f"Rejected wrong-target actor correlates with sustained straight-road lane_positions center error "
+                                    f"for {run_len} frames: reject={_mode_value(radar_reject_reason[idx])}, "
+                                    f"center_err p50={_finite_percentile(reference_distractor_guard_center_error_m[idx], 50):.3f}m, "
+                                    f"expected_center p50={_finite_percentile(reference_distractor_guard_expected_center_x_m[idx], 50):.3f}m, "
+                                    f"trigger_wt p50={_finite_percentile(reference_distractor_guard_trigger_weight[idx], 50):.3f}."
+                                ),
+                                "duration": int(run_len),
+                                "deep_link_target": "summary-section-wrong-target-contract",
+                                "focus_id": "summary-section-wrong-target-contract",
+                                "root_cause": "wrong_target_straight_reference_drift",
+                            })
+                        event_start = None
+                        run_len = 0
+                if run_len >= min_event_len and event_start is not None:
+                    event_end = int(num_frames - 1)
+                    idx = slice(event_start, num_frames)
+                    issues.append({
+                        "issue_id": "wrong_target_straight_reference_drift",
+                        "frame": int(event_start),
+                        "end_frame": int(event_end),
+                        "type": "wrong_target_straight_reference_drift",
+                        "severity": "high" if run_len >= 10 else "medium",
+                        "description": (
+                            f"Rejected wrong-target actor correlates with sustained straight-road lane_positions center error "
+                            f"for {run_len} frames: reject={_mode_value(radar_reject_reason[idx])}, "
+                            f"center_err p50={_finite_percentile(reference_distractor_guard_center_error_m[idx], 50):.3f}m, "
+                            f"expected_center p50={_finite_percentile(reference_distractor_guard_expected_center_x_m[idx], 50):.3f}m, "
+                            f"trigger_wt p50={_finite_percentile(reference_distractor_guard_trigger_weight[idx], 50):.3f}."
+                        ),
+                        "duration": int(run_len),
+                        "deep_link_target": "summary-section-wrong-target-contract",
+                        "focus_id": "summary-section-wrong-target-contract",
+                        "root_cause": "wrong_target_straight_reference_drift",
+                    })
+
+                event_start = None
+                run_len = 0
+                for frame_idx, active in enumerate(ego_lane_contract_invalid):
+                    if active:
+                        if run_len == 0:
+                            event_start = frame_idx
+                        run_len += 1
+                    else:
+                        if run_len >= min_event_len and event_start is not None:
+                            event_end = frame_idx - 1
+                            idx = slice(event_start, frame_idx)
+                            issues.append({
+                                "issue_id": "ego_lane_contract_invalid",
+                                "frame": int(event_start),
+                                "end_frame": int(event_end),
+                                "type": "ego_lane_contract_invalid",
+                                "severity": "high" if run_len >= 10 else "medium",
+                                "description": (
+                                    f"Selected-lane GT diverges from explicit ego-lane contract for {run_len} frames: "
+                                    f"selected_lane={_mode_value(gt_selected_lane_index[idx])}, "
+                                    f"ego_lane={_mode_value(gt_ego_lane_index[idx])}, "
+                                    f"selection_source={_mode_value(gt_lane_selection_source[idx])}, "
+                                    f"|selected-ego cross-track| p50="
+                                    f"{_finite_percentile(np.abs(gt_selected_lane_cross_track_road_frame_at_car[idx] - gt_ego_lane_cross_track_road_frame_at_car[idx]), 50):.3f}m."
+                                ),
+                                "duration": int(run_len),
+                                "deep_link_target": "summary-section-wrong-target-contract",
+                                "focus_id": "summary-section-wrong-target-contract",
+                                "root_cause": "ego_lane_contract_invalid",
+                            })
+                        event_start = None
+                        run_len = 0
+                if run_len >= min_event_len and event_start is not None:
+                    event_end = int(num_frames - 1)
+                    idx = slice(event_start, num_frames)
+                    issues.append({
+                        "issue_id": "ego_lane_contract_invalid",
+                        "frame": int(event_start),
+                        "end_frame": int(event_end),
+                        "type": "ego_lane_contract_invalid",
+                        "severity": "high" if run_len >= 10 else "medium",
+                        "description": (
+                            f"Selected-lane GT diverges from explicit ego-lane contract for {run_len} frames: "
+                            f"selected_lane={_mode_value(gt_selected_lane_index[idx])}, "
+                            f"ego_lane={_mode_value(gt_ego_lane_index[idx])}, "
+                            f"selection_source={_mode_value(gt_lane_selection_source[idx])}, "
+                            f"|selected-ego cross-track| p50="
+                            f"{_finite_percentile(np.abs(gt_selected_lane_cross_track_road_frame_at_car[idx] - gt_ego_lane_cross_track_road_frame_at_car[idx]), 50):.3f}m."
+                        ),
+                        "duration": int(run_len),
+                        "deep_link_target": "summary-section-wrong-target-contract",
+                        "focus_id": "summary-section-wrong-target-contract",
+                        "root_cause": "ego_lane_contract_invalid",
+                    })
+
+                event_start = None
+                run_len = 0
+                for frame_idx, active in enumerate(active_state_issue):
+                    if active:
+                        if run_len == 0:
+                            event_start = frame_idx
+                        run_len += 1
+                    else:
+                        if run_len >= min_event_len and event_start is not None:
+                            event_end = frame_idx - 1
+                            idx = slice(event_start, frame_idx)
+                            cap_frames = int(np.sum(active_curve_cap_ineffective[idx]))
+                            preserve_frames = int(np.sum(active_preserve_low[idx]))
+                            if cap_frames >= preserve_frames and cap_frames > 0:
+                                root_cause = "curve_cap_ineffective"
+                            elif preserve_frames > 0:
+                                root_cause = "active_preserve_underweighted"
+                            else:
+                                root_cause = "active_curve_authority_insufficient"
+                            issues.append({
+                                "issue_id": "high_speed_mild_curve_active_authority_insufficient",
+                                "frame": int(event_start),
+                                "end_frame": int(event_end),
+                                "type": "high_speed_mild_curve_active_authority_insufficient",
+                                "severity": "high" if run_len >= 10 else "medium",
+                                "description": (
+                                    f"High-speed mild curve is already locally active for {run_len} frames, "
+                                    f"but active authority is still insufficient: root={root_cause}, "
+                                    f"local_state={_mode_value(np.asarray(curve_local_state[idx], dtype=object))}, "
+                                    f"curve_cap_reason={_mode_value(curve_cap_reason[idx])}, "
+                                    f"preserve_wt p50={_finite_percentile(active_curve_preserve_weight[idx], 50):.3f}, "
+                                    f"cap_speed p50={_finite_percentile(curve_cap_speed[idx], 50, default=np.nan):.2f}m/s, "
+                                    f"speed p50={_finite_percentile(speed_arr[idx], 50, default=np.nan):.2f}m/s."
+                                ),
+                                "duration": int(run_len),
+                                "deep_link_target": "summary-section-highway-mild-curve",
+                                "focus_id": "diag-focus-highway-mild-curve",
+                                "root_cause": root_cause,
+                                "curve_local_state_mode": _mode_value(
+                                    np.asarray(curve_local_state[idx], dtype=object)
+                                ),
+                                "speed_governor_curve_cap_reason_mode": _mode_value(curve_cap_reason[idx]),
+                                "mpc_kappa_active_curve_preserve_weight_p50": _finite_percentile(
+                                    active_curve_preserve_weight[idx], 50
+                                ),
+                                "speed_governor_curve_cap_speed_p50_mps": _finite_percentile(
+                                    curve_cap_speed[idx], 50, default=np.nan
+                                ),
+                                "vehicle_speed_p50_mps": _finite_percentile(
+                                    speed_arr[idx], 50, default=np.nan
+                                ),
+                            })
+                        event_start = None
+                        run_len = 0
+                if run_len >= min_event_len and event_start is not None:
+                    event_end = int(num_frames - 1)
+                    idx = slice(event_start, num_frames)
+                    cap_frames = int(np.sum(active_curve_cap_ineffective[idx]))
+                    preserve_frames = int(np.sum(active_preserve_low[idx]))
+                    if cap_frames >= preserve_frames and cap_frames > 0:
+                        root_cause = "curve_cap_ineffective"
+                    elif preserve_frames > 0:
+                        root_cause = "active_preserve_underweighted"
+                    else:
+                        root_cause = "active_curve_authority_insufficient"
+                    issues.append({
+                        "issue_id": "high_speed_mild_curve_active_authority_insufficient",
+                        "frame": int(event_start),
+                        "end_frame": int(event_end),
+                        "type": "high_speed_mild_curve_active_authority_insufficient",
+                        "severity": "high" if run_len >= 10 else "medium",
+                        "description": (
+                            f"High-speed mild curve is already locally active for {run_len} frames, "
+                            f"but active authority is still insufficient: root={root_cause}, "
+                            f"local_state={_mode_value(np.asarray(curve_local_state[idx], dtype=object))}, "
+                            f"curve_cap_reason={_mode_value(curve_cap_reason[idx])}, "
+                            f"preserve_wt p50={_finite_percentile(active_curve_preserve_weight[idx], 50):.3f}, "
+                            f"cap_speed p50={_finite_percentile(curve_cap_speed[idx], 50, default=np.nan):.2f}m/s, "
+                            f"speed p50={_finite_percentile(speed_arr[idx], 50, default=np.nan):.2f}m/s."
+                        ),
+                        "duration": int(run_len),
+                        "deep_link_target": "summary-section-highway-mild-curve",
+                        "focus_id": "diag-focus-highway-mild-curve",
+                        "root_cause": root_cause,
+                        "curve_local_state_mode": _mode_value(
+                            np.asarray(curve_local_state[idx], dtype=object)
+                        ),
+                        "speed_governor_curve_cap_reason_mode": _mode_value(curve_cap_reason[idx]),
+                        "mpc_kappa_active_curve_preserve_weight_p50": _finite_percentile(
+                            active_curve_preserve_weight[idx], 50
+                        ),
+                        "speed_governor_curve_cap_speed_p50_mps": _finite_percentile(
+                            curve_cap_speed[idx], 50, default=np.nan
+                        ),
+                        "vehicle_speed_p50_mps": _finite_percentile(
+                            speed_arr[idx], 50, default=np.nan
+                        ),
+                    })
+
+                event_start = None
+                run_len = 0
+                for frame_idx, active in enumerate(active_mild_curve_preserve_speed_gated):
+                    if active:
+                        if run_len == 0:
+                            event_start = frame_idx
+                        run_len += 1
+                    else:
+                        if run_len >= min_event_len and event_start is not None:
+                            event_end = frame_idx - 1
+                            idx = slice(event_start, frame_idx)
+                            issues.append({
+                                "issue_id": "active_mild_curve_preserve_speed_gated",
+                                "frame": int(event_start),
+                                "end_frame": int(event_end),
+                                "type": "active_mild_curve_preserve_speed_gated",
+                                "severity": "high" if run_len >= 10 else "medium",
+                                "description": (
+                                    f"Active mild-curve authority stays speed-gated for {run_len} frames while the "
+                                    f"curve is already locally active: speed p50={_finite_percentile(speed_arr[idx], 50, default=np.nan):.2f}m/s, "
+                                    f"authority_wt p50={_finite_percentile(active_mild_curve_authority_weight[idx], 50):.3f}, "
+                                    f"authority_ratio p50={_finite_percentile(active_mild_curve_authority_ratio[idx], 50):.3f}, "
+                                    f"state={_mode_value(np.asarray(curve_local_state[idx], dtype=object))}."
+                                ),
+                                "duration": int(run_len),
+                                "deep_link_target": "summary-section-highway-mild-curve",
+                                "focus_id": "diag-focus-highway-mild-curve",
+                                "root_cause": "active_mild_curve_preserve_speed_gated",
+                            })
+                        event_start = None
+                        run_len = 0
+                if run_len >= min_event_len and event_start is not None:
+                    event_end = int(num_frames - 1)
+                    idx = slice(event_start, num_frames)
+                    issues.append({
+                        "issue_id": "active_mild_curve_preserve_speed_gated",
+                        "frame": int(event_start),
+                        "end_frame": int(event_end),
+                        "type": "active_mild_curve_preserve_speed_gated",
+                        "severity": "high" if run_len >= 10 else "medium",
+                        "description": (
+                            f"Active mild-curve authority stays speed-gated for {run_len} frames while the "
+                            f"curve is already locally active: speed p50={_finite_percentile(speed_arr[idx], 50, default=np.nan):.2f}m/s, "
+                            f"authority_wt p50={_finite_percentile(active_mild_curve_authority_weight[idx], 50):.3f}, "
+                            f"authority_ratio p50={_finite_percentile(active_mild_curve_authority_ratio[idx], 50):.3f}, "
+                            f"state={_mode_value(np.asarray(curve_local_state[idx], dtype=object))}."
+                        ),
+                        "duration": int(run_len),
+                        "deep_link_target": "summary-section-highway-mild-curve",
+                        "focus_id": "diag-focus-highway-mild-curve",
+                        "root_cause": "active_mild_curve_preserve_speed_gated",
+                    })
+
                 curve_blocker = (
                     np.array(
                         [
@@ -1225,10 +2138,37 @@ def detect_issues(recording_path: Path, analyze_to_failure: bool = False) -> Dic
                     if "control/mpc_gt_cross_track_at_car_m" in f
                     else np.full(num_frames, np.nan, dtype=np.float64)
                 )
+                mpc_gt_cross_track_road_frame = (
+                    np.array(
+                        f["control/mpc_gt_cross_track_road_frame_at_car_m"][:num_frames],
+                        dtype=np.float64,
+                    )
+                    if "control/mpc_gt_cross_track_road_frame_at_car_m" in f
+                    else np.full(num_frames, np.nan, dtype=np.float64)
+                )
+                mpc_gt_cross_track_vehicle_frame = (
+                    np.array(
+                        f["control/mpc_gt_cross_track_vehicle_frame_at_car_m"][:num_frames],
+                        dtype=np.float64,
+                    )
+                    if "control/mpc_gt_cross_track_vehicle_frame_at_car_m" in f
+                    else mpc_gt_cross_track_at_car.copy()
+                )
                 mpc_gt_cross_track_lookahead = (
                     np.array(f["control/mpc_gt_cross_track_lookahead_m"][:num_frames], dtype=np.float64)
                     if "control/mpc_gt_cross_track_lookahead_m" in f
                     else np.full(num_frames, np.nan, dtype=np.float64)
+                )
+                mpc_gt_cross_track_control_source = (
+                    np.array(
+                        [
+                            s.decode("utf-8", errors="ignore") if isinstance(s, (bytes, np.bytes_)) else str(s)
+                            for s in f["control/mpc_gt_cross_track_control_source_code"][:num_frames]
+                        ],
+                        dtype=object,
+                    )
+                    if "control/mpc_gt_cross_track_control_source_code" in f
+                    else np.array([""] * num_frames, dtype=object)
                 )
             if has_control and "control/lateral_error" in f:
                 lateral_error = np.array(f["control/lateral_error"][:], dtype=np.float64)
@@ -1238,6 +2178,22 @@ def detect_issues(recording_path: Path, analyze_to_failure: bool = False) -> Dic
                     if "control/mpc_gt_cross_track_at_car_m" in f
                     else None
                 )
+                gt_road_frame = (
+                    np.array(
+                        f["control/mpc_gt_cross_track_road_frame_at_car_m"][:num_frames_local],
+                        dtype=np.float64,
+                    )
+                    if "control/mpc_gt_cross_track_road_frame_at_car_m" in f
+                    else None
+                )
+                gt_vehicle_frame = (
+                    np.array(
+                        f["control/mpc_gt_cross_track_vehicle_frame_at_car_m"][:num_frames_local],
+                        dtype=np.float64,
+                    )
+                    if "control/mpc_gt_cross_track_vehicle_frame_at_car_m" in f
+                    else gt_at_car
+                )
                 gt_lookahead = (
                     np.array(
                         f["control/mpc_gt_cross_track_lookahead_m"][:num_frames_local],
@@ -1246,15 +2202,41 @@ def detect_issues(recording_path: Path, analyze_to_failure: bool = False) -> Dic
                     if "control/mpc_gt_cross_track_lookahead_m" in f
                     else None
                 )
+                control_source_codes = (
+                    np.array(
+                        [
+                            s.decode("utf-8", errors="ignore") if isinstance(s, (bytes, np.bytes_)) else str(s)
+                            for s in f["control/mpc_gt_cross_track_control_source_code"][:num_frames_local]
+                        ],
+                        dtype=object,
+                    )
+                    if "control/mpc_gt_cross_track_control_source_code" in f
+                    else np.array([""] * num_frames_local, dtype=object)
+                )
                 if gt_at_car is not None and gt_lookahead is not None:
                     num_frames_local = min(
                         num_frames_local,
                         len(gt_at_car),
+                        len(gt_road_frame) if gt_road_frame is not None else num_frames_local,
+                        len(gt_vehicle_frame) if gt_vehicle_frame is not None else num_frames_local,
                         len(gt_lookahead),
+                        len(control_source_codes),
                     )
                     lat_err = np.abs(lateral_error[:num_frames_local])
                     gt_at_car = np.abs(gt_at_car[:num_frames_local])
+                    gt_road_frame = (
+                        np.abs(gt_road_frame[:num_frames_local])
+                        if gt_road_frame is not None
+                        else np.full(num_frames_local, np.nan, dtype=np.float64)
+                    )
+                    gt_vehicle_frame = (
+                        np.abs(gt_vehicle_frame[:num_frames_local])
+                        if gt_vehicle_frame is not None
+                        else gt_at_car.copy()
+                    )
                     gt_lookahead = np.abs(gt_lookahead[:num_frames_local])
+                    control_source_codes = control_source_codes[:num_frames_local]
+
                     sync_fallback = (
                         np.array(
                             f["control/sync_packet_fallback_active"][:num_frames_local],
@@ -1306,57 +2288,55 @@ def detect_issues(recording_path: Path, analyze_to_failure: bool = False) -> Dic
                         & (gt_at_car <= 0.12)
                         & (gt_lookahead >= 0.50)
                     )
+                    vehicle_frame_semantic_mismatch = (
+                        high_error
+                        & clean_transport
+                        & good_perception
+                        & np.array([code == "vehicle_frame_at_car" for code in control_source_codes], dtype=bool)
+                        & (gt_vehicle_frame >= 0.50)
+                        & (gt_road_frame <= 0.12)
+                        & (np.abs(gt_vehicle_frame - gt_road_frame) >= 0.35)
+                    )
                     absolute_coordinate_mismatch = (
                         high_error
                         & clean_transport
                         & good_perception
                         & (gt_at_car >= 1.0)
                         & (road_center_offset <= 0.12)
+                        & np.array(
+                            [code != "road_frame_at_car" for code in control_source_codes],
+                            dtype=bool,
+                        )
                     )
 
-                    min_event_len = 5
-                    event_start = None
-                    run_len = 0
-                    for frame_idx, active in enumerate(semantic_mismatch):
-                        if active:
-                            if run_len == 0:
-                                event_start = frame_idx
-                            run_len += 1
-                        else:
-                            if run_len >= min_event_len and event_start is not None:
-                                event_end = frame_idx - 1
-                                idx = slice(event_start, frame_idx)
-                                issues.append({
-                                    "issue_id": "mpc_gt_cross_track_semantic_mismatch",
-                                    "frame": int(event_start),
-                                    "end_frame": int(event_end),
-                                    "type": "mpc_gt_cross_track_semantic_mismatch",
-                                    "severity": "high" if run_len >= 10 else "medium",
-                                    "description": (
-                                        f"MPC GT semantic mismatch for {run_len} frames: "
-                                        f"at-car GT p95={_finite_percentile(gt_at_car[idx], 95):.3f}m, "
-                                        f"lookahead GT p50={_finite_percentile(gt_lookahead[idx], 50):.3f}m, "
-                                        f"lateral error p50={_finite_percentile(lat_err[idx], 50):.3f}m."
-                                    ),
-                                    "duration": int(run_len),
-                                    "deep_link_target": "summary-section-mpc-gt-cross-track",
-                                    "focus_id": "diag-focus-mpc-gt-cross-track",
-                                    "curve_local_state_mode": _mode_value(
-                                        [curve_local_state[i] for i in range(event_start, frame_idx)]
-                                    ),
-                                    "mpc_gt_cross_track_at_car_p95_m": _finite_percentile(gt_at_car[idx], 95),
-                                    "mpc_gt_cross_track_lookahead_p50_m": _finite_percentile(gt_lookahead[idx], 50),
-                                    "lateral_error_p50_m": _finite_percentile(lat_err[idx], 50),
-                                })
-                            event_start = None
-                            run_len = 0
-                    if run_len >= min_event_len and event_start is not None:
-                        event_end = int(num_frames_local - 1)
-                        idx = slice(event_start, num_frames_local)
-                        issues.append({
+                    def _append_gt_issue_runs(mask: np.ndarray, issue_id: str, build_issue) -> None:
+                        min_event_len = 5
+                        event_start = None
+                        run_len = 0
+                        for frame_idx, active in enumerate(mask):
+                            if active:
+                                if run_len == 0:
+                                    event_start = frame_idx
+                                run_len += 1
+                            else:
+                                if run_len >= min_event_len and event_start is not None:
+                                    event_end = frame_idx - 1
+                                    idx = slice(event_start, frame_idx)
+                                    issues.append(build_issue(event_start, event_end, idx, run_len))
+                                event_start = None
+                                run_len = 0
+                        if run_len >= min_event_len and event_start is not None:
+                            event_end = int(num_frames_local - 1)
+                            idx = slice(event_start, num_frames_local)
+                            issues.append(build_issue(event_start, event_end, idx, run_len))
+
+                    _append_gt_issue_runs(
+                        semantic_mismatch,
+                        "mpc_gt_cross_track_semantic_mismatch",
+                        lambda event_start, event_end, idx, run_len: {
                             "issue_id": "mpc_gt_cross_track_semantic_mismatch",
                             "frame": int(event_start),
-                            "end_frame": event_end,
+                            "end_frame": int(event_end),
                             "type": "mpc_gt_cross_track_semantic_mismatch",
                             "severity": "high" if run_len >= 10 else "medium",
                             "description": (
@@ -1369,56 +2349,46 @@ def detect_issues(recording_path: Path, analyze_to_failure: bool = False) -> Dic
                             "deep_link_target": "summary-section-mpc-gt-cross-track",
                             "focus_id": "diag-focus-mpc-gt-cross-track",
                             "curve_local_state_mode": _mode_value(
-                                [curve_local_state[i] for i in range(event_start, num_frames_local)]
+                                [curve_local_state[i] for i in range(event_start, event_end + 1)]
                             ),
                             "mpc_gt_cross_track_at_car_p95_m": _finite_percentile(gt_at_car[idx], 95),
                             "mpc_gt_cross_track_lookahead_p50_m": _finite_percentile(gt_lookahead[idx], 50),
                             "lateral_error_p50_m": _finite_percentile(lat_err[idx], 50),
-                        })
-                    event_start = None
-                    run_len = 0
-                    for frame_idx, active in enumerate(absolute_coordinate_mismatch):
-                        if active:
-                            if run_len == 0:
-                                event_start = frame_idx
-                            run_len += 1
-                        else:
-                            if run_len >= min_event_len and event_start is not None:
-                                event_end = frame_idx - 1
-                                idx = slice(event_start, frame_idx)
-                                issues.append({
-                                    "issue_id": "mpc_gt_cross_track_absolute_coordinate_mismatch",
-                                    "frame": int(event_start),
-                                    "end_frame": int(event_end),
-                                    "type": "mpc_gt_cross_track_absolute_coordinate_mismatch",
-                                    "severity": "high" if run_len >= 10 else "medium",
-                                    "description": (
-                                        f"MPC GT at-car cross-track looks like an absolute coordinate for {run_len} frames: "
-                                        f"at-car GT p50={_finite_percentile(gt_at_car[idx], 50):.3f}m, "
-                                        f"road-offset p95={_finite_percentile(road_center_offset[idx], 95):.3f}m, "
-                                        f"lateral error p50={_finite_percentile(lat_err[idx], 50):.3f}m."
-                                    ),
-                                    "duration": int(run_len),
-                                    "deep_link_target": "summary-section-mpc-gt-cross-track",
-                                    "focus_id": "diag-focus-mpc-gt-cross-track",
-                                    "curve_local_state_mode": _mode_value(
-                                        [curve_local_state[i] for i in range(event_start, frame_idx)]
-                                    ),
-                                    "mpc_gt_cross_track_at_car_p50_m": _finite_percentile(gt_at_car[idx], 50),
-                                    "road_frame_lane_center_offset_p95_m": _finite_percentile(
-                                        road_center_offset[idx], 95
-                                    ),
-                                    "lateral_error_p50_m": _finite_percentile(lat_err[idx], 50),
-                                })
-                            event_start = None
-                            run_len = 0
-                    if run_len >= min_event_len and event_start is not None:
-                        event_end = int(num_frames_local - 1)
-                        idx = slice(event_start, num_frames_local)
-                        issues.append({
+                        },
+                    )
+                    _append_gt_issue_runs(
+                        vehicle_frame_semantic_mismatch,
+                        "mpc_gt_cross_track_vehicle_frame_semantic_mismatch",
+                        lambda event_start, event_end, idx, run_len: {
+                            "issue_id": "mpc_gt_cross_track_vehicle_frame_semantic_mismatch",
+                            "frame": int(event_start),
+                            "end_frame": int(event_end),
+                            "type": "mpc_gt_cross_track_vehicle_frame_semantic_mismatch",
+                            "severity": "high" if run_len >= 10 else "medium",
+                            "description": (
+                                f"MPC control is using vehicle-frame GT cross-track for {run_len} frames: "
+                                f"vehicle-frame GT p50={_finite_percentile(gt_vehicle_frame[idx], 50):.3f}m, "
+                                f"road-frame GT p95={_finite_percentile(gt_road_frame[idx], 95):.3f}m, "
+                                f"lateral error p50={_finite_percentile(lat_err[idx], 50):.3f}m."
+                            ),
+                            "duration": int(run_len),
+                            "deep_link_target": "summary-section-mpc-gt-cross-track",
+                            "focus_id": "diag-focus-mpc-gt-cross-track",
+                            "curve_local_state_mode": _mode_value(
+                                [curve_local_state[i] for i in range(event_start, event_end + 1)]
+                            ),
+                            "mpc_gt_cross_track_vehicle_frame_p50_m": _finite_percentile(gt_vehicle_frame[idx], 50),
+                            "mpc_gt_cross_track_road_frame_p95_m": _finite_percentile(gt_road_frame[idx], 95),
+                            "lateral_error_p50_m": _finite_percentile(lat_err[idx], 50),
+                        },
+                    )
+                    _append_gt_issue_runs(
+                        absolute_coordinate_mismatch,
+                        "mpc_gt_cross_track_absolute_coordinate_mismatch",
+                        lambda event_start, event_end, idx, run_len: {
                             "issue_id": "mpc_gt_cross_track_absolute_coordinate_mismatch",
                             "frame": int(event_start),
-                            "end_frame": event_end,
+                            "end_frame": int(event_end),
                             "type": "mpc_gt_cross_track_absolute_coordinate_mismatch",
                             "severity": "high" if run_len >= 10 else "medium",
                             "description": (
@@ -1431,22 +2401,23 @@ def detect_issues(recording_path: Path, analyze_to_failure: bool = False) -> Dic
                             "deep_link_target": "summary-section-mpc-gt-cross-track",
                             "focus_id": "diag-focus-mpc-gt-cross-track",
                             "curve_local_state_mode": _mode_value(
-                                [curve_local_state[i] for i in range(event_start, num_frames_local)]
+                                [curve_local_state[i] for i in range(event_start, event_end + 1)]
                             ),
                             "mpc_gt_cross_track_at_car_p50_m": _finite_percentile(gt_at_car[idx], 50),
                             "road_frame_lane_center_offset_p95_m": _finite_percentile(
                                 road_center_offset[idx], 95
                             ),
                             "lateral_error_p50_m": _finite_percentile(lat_err[idx], 50),
-                        })
+                        },
+                    )
 
             # 4. DETECT PERCEPTION FAILURES (<2 lanes detected)
+            consecutive_failures = 0
+            failure_start = None
             if has_perception and "perception/num_lanes_detected" in f:
                 num_lanes = np.array(f["perception/num_lanes_detected"][:num_frames])
                 
                 # Find consecutive frames with <2 lanes
-                consecutive_failures = 0
-                failure_start = None
                 for frame_idx in range(len(num_lanes)):
                     if num_lanes[frame_idx] < 2:
                         if failure_start is None:

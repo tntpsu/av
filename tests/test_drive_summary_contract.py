@@ -1,7 +1,9 @@
+import json
 from pathlib import Path
 
 import h5py
 import numpy as np
+import pytest
 
 from tools.drive_summary_core import (
     _build_acc_comfort_contract_summary,
@@ -188,6 +190,20 @@ def test_drive_summary_contract_keys(tmp_path: Path) -> None:
         "continuity_hold_rate_pct",
         "acc_follow_contamination_detected",
         "quality_reference_valid",
+        "reference_divergence_issue_detected",
+        "reference_divergence_rate_pct",
+        "reference_divergence_raw_delta_p50_m",
+        "reference_divergence_blend_weight_p50",
+        "straight_reference_drift_issue_detected",
+        "straight_reference_drift_rate_pct",
+        "straight_reference_drift_center_error_p50_m",
+        "straight_reference_drift_expected_center_x_p50_m",
+        "straight_reference_drift_trigger_weight_p50",
+        "input_guard_active_rate_pct",
+        "input_guard_suppressed_lane_coeffs_rate_pct",
+        "input_guard_center_error_p50_m",
+        "input_guard_width_error_p50_m",
+        "input_guard_trigger_weight_p50",
     }.issubset(wrong_target_contract.keys())
     acc_comfort_contract = summary.get("acc_comfort_contract", {})
     assert {
@@ -333,6 +349,25 @@ def test_drive_summary_contract_keys(tmp_path: Path) -> None:
         "curve_local_state_mode_on_high_error",
         "curve_activation_blocker_mode_on_high_error",
         "curve_activation_blocker_mode_on_underactivated",
+        "preactivation_candidate_on_high_error_rate",
+        "preactivation_authority_active_on_high_error_rate",
+        "preactivation_authority_missing_on_high_error_rate",
+        "preactivation_issue_detected",
+        "active_state_tracking_failure_on_high_error_rate",
+        "active_state_shadow_insufficient_on_high_error_rate",
+        "active_state_shadow_promotion_active_on_high_error_rate",
+        "wrong_target_distractor_reference_divergence_on_high_error_rate",
+        "distractor_guarded_bounded_active_on_high_error_rate",
+        "active_state_preserve_weight_low_on_high_error_rate",
+        "active_state_curve_cap_ineffective_on_high_error_rate",
+        "active_state_issue_detected",
+        "wrong_target_distractor_reference_divergence_issue_detected",
+        "curve_preactivation_blocker_mode_on_high_error",
+        "curve_local_state_mode_on_active_state_failure",
+        "local_curve_reference_requested_mode_on_active_state_failure",
+        "local_curve_reference_shadow_promotion_reason_mode_on_high_error",
+        "local_curve_reference_guarded_bounded_reason_mode_on_high_error",
+        "speed_governor_curve_cap_reason_mode_on_active_state_failure",
         "sustain_phase_collapse_on_high_error_rate",
         "rearm_cycle_on_high_error_rate",
         "mpc_curvature_softness_on_high_error_rate",
@@ -352,6 +387,23 @@ def test_drive_summary_contract_keys(tmp_path: Path) -> None:
         "curve_local_sustain_phase_raw",
         "curve_phase_term_path",
         "curve_local_dynamic_sustain_effect_score",
+        "curve_preactivation_authority_weight",
+        "curve_preactivation_preview_weight",
+        "curve_preactivation_speed_weight",
+        "curve_preactivation_curvature_weight",
+        "curve_preactivation_distance_weight",
+        "curve_preactivation_kappa_floor",
+        "curve_preactivation_lookahead_target",
+        "curve_preactivation_speed_cap_target",
+        "mpc_kappa_active_curve_preserve_weight_active_state",
+        "speed_governor_curve_cap_speed_active_state_m",
+        "speed_governor_curve_cap_margin_active_state_mps",
+        "local_curve_reference_raw_delta_active_state_m",
+        "local_curve_reference_capped_delta_active_state_m",
+        "local_curve_reference_cap_ratio_active_state",
+        "local_curve_reference_shadow_promotion_weight",
+        "local_curve_reference_guarded_bounded_trigger_weight",
+        "local_curve_reference_guarded_bounded_blend_floor",
         "mpc_kappa_ratio_to_reference",
         "mpc_kappa_bias_correction",
         "limits",
@@ -364,9 +416,12 @@ def test_drive_summary_contract_keys(tmp_path: Path) -> None:
         "issue_mode",
         "high_error_frame_count",
         "semantic_mismatch_on_high_error_rate",
+        "vehicle_frame_semantic_mismatch_on_high_error_rate",
         "semantic_mismatch_on_straight_high_error_rate",
         "absolute_coordinate_mismatch_on_high_error_rate",
         "small_at_car_cross_track_on_high_error_rate",
+        "small_road_frame_cross_track_on_high_error_rate",
+        "large_vehicle_frame_cross_track_on_high_error_rate",
         "large_lookahead_cross_track_on_high_error_rate",
         "large_at_car_cross_track_on_high_error_rate",
         "small_road_offset_on_high_error_rate",
@@ -374,11 +429,16 @@ def test_drive_summary_contract_keys(tmp_path: Path) -> None:
         "poor_perception_overlap_on_high_error_rate",
         "curve_local_state_mode_on_high_error",
         "mpc_gt_cross_track_source_mode_on_high_error",
+        "mpc_gt_cross_track_control_source_mode_on_high_error",
         "control_lateral_error_abs_m",
         "mpc_gt_cross_track_abs_m",
         "mpc_gt_cross_track_at_car_abs_m",
+        "mpc_gt_cross_track_road_frame_at_car_abs_m",
+        "mpc_gt_cross_track_vehicle_frame_at_car_abs_m",
         "mpc_gt_cross_track_lookahead_abs_m",
         "gt_cross_track_delta_abs_m",
+        "vehicle_vs_road_frame_cross_track_delta_abs_m",
+        "road_frame_selected_lane_cross_track_abs_m",
         "road_frame_lane_center_offset_abs_m",
         "limits",
     }.issubset(mpc_gt_cross_track_contract.keys())
@@ -473,12 +533,17 @@ def test_drive_summary_contract_keys(tmp_path: Path) -> None:
     assert {
         "availability",
         "mode",
+        "requested_mode",
         "active_rate",
         "shadow_only_rate",
+        "shadow_promotion_active_rate",
+        "shadow_promotion_weight_p50",
+        "shadow_promotion_blend_floor_p50",
         "valid_rate",
         "fallback_active_rate",
         "source_mode",
         "fallback_reason_mode",
+        "shadow_promotion_reason_mode",
         "blend_weight_p50",
         "progress_weight_p50",
         "planner_delta_p50_m",
@@ -514,6 +579,32 @@ def test_lateral_owner_contract_uses_authoritative_fallback_budget() -> None:
 
     assert summary["authoritative_owner_issue_detected"] is False
     assert summary["authoritative_owner_healthy"] is True
+    assert summary["suppress_legacy_curve_intent_warnings"] is True
+
+
+def test_lateral_owner_contract_suppresses_legacy_curve_intent_when_authoritative_path_exists() -> None:
+    summary = _build_lateral_owner_contract_summary(
+        curve_intent_diag={"available": True},
+        curve_local_contract={"curve_local_contract_available": True},
+        turn_in_owner={
+            "availability": "available",
+            "owner_mode": "phase_active",
+            "fallback_active_rate": 0.0,
+            "limits": {"fallback_active_rate_max_pct": 1.0},
+        },
+        local_curve_reference={
+            "availability": "available",
+            "mode": "shadow",
+            "fallback_active_rate": 0.0,
+            "limits": {"fallback_active_rate_max_pct": 5.0},
+        },
+        highway_mild_curve_contract={"issue_detected": True},
+        mpc_gt_cross_track_contract={"availability": "available", "issue_detected": False},
+    )
+
+    assert summary["authoritative_owner_available"] is True
+    assert summary["authoritative_owner_issue_detected"] is True
+    assert summary["authoritative_owner_healthy"] is False
     assert summary["suppress_legacy_curve_intent_warnings"] is True
 
 
@@ -616,3 +707,228 @@ def test_mpc_gt_cross_track_contract_detects_absolute_coordinate_mismatch(tmp_pa
     assert contract.get("issue_detected") is True
     assert contract.get("issue_mode") == "absolute_coordinate_mismatch"
     assert float(contract.get("absolute_coordinate_mismatch_on_high_error_rate") or 0.0) >= 50.0
+
+
+def test_mpc_gt_cross_track_contract_detects_vehicle_frame_semantic_mismatch(tmp_path: Path) -> None:
+    recording = tmp_path / "mpc_gt_vehicle_frame_semantic_mismatch.h5"
+    n = 20
+    t = np.linspace(0.0, 1.9, n)
+    lat_err = np.zeros(n, dtype=np.float32)
+    lat_err[5:15] = 0.82
+    gt_used = np.zeros(n, dtype=np.float32)
+    gt_used[5:15] = 0.92
+    gt_at_car = np.zeros(n, dtype=np.float32)
+    gt_at_car[5:15] = 0.92
+    gt_road = np.zeros(n, dtype=np.float32)
+    gt_road[5:15] = 0.03
+    gt_lookahead = np.zeros(n, dtype=np.float32)
+    gt_lookahead[5:15] = 1.05
+
+    with h5py.File(recording, "w") as f:
+        f.create_dataset("vehicle/timestamps", data=t)
+        f.create_dataset("control/steering", data=np.zeros(n, dtype=np.float32))
+        f.create_dataset("control/lateral_error", data=lat_err)
+        f.create_dataset("control/mpc_gt_cross_track_m", data=gt_used)
+        f.create_dataset("control/mpc_gt_cross_track_at_car_m", data=gt_at_car)
+        f.create_dataset("control/mpc_gt_cross_track_vehicle_frame_at_car_m", data=gt_at_car)
+        f.create_dataset("control/mpc_gt_cross_track_road_frame_at_car_m", data=gt_road)
+        f.create_dataset("control/mpc_gt_cross_track_lookahead_m", data=gt_lookahead)
+        f.create_dataset(
+            "control/mpc_gt_cross_track_control_source_code",
+            data=np.array([b"vehicle_frame_at_car"] * n, dtype="S32"),
+        )
+        f.create_dataset(
+            "control/mpc_gt_cross_track_source_code",
+            data=np.array([b"vehicle_frame_at_car"] * n, dtype="S32"),
+        )
+        f.create_dataset("control/curve_local_state", data=np.array([b"ENTRY"] * n, dtype="S16"))
+        f.create_dataset("control/sync_packet_fallback_active", data=np.zeros(n, dtype=np.int8))
+        f.create_dataset("perception/confidence", data=np.ones(n, dtype=np.float32))
+        f.create_dataset("perception/num_lanes_detected", data=np.full(n, 2, dtype=np.int8))
+        f.create_dataset(
+            "ground_truth/selected_lane_cross_track_road_frame_at_car",
+            data=gt_road,
+        )
+
+    summary = analyze_recording_summary(recording)
+    contract = summary.get("mpc_gt_cross_track_contract", {})
+    assert contract.get("issue_detected") is True
+    assert contract.get("issue_mode") == "vehicle_frame_semantic_mismatch"
+    assert (
+        float(contract.get("vehicle_frame_semantic_mismatch_on_high_error_rate") or 0.0)
+        >= 50.0
+    )
+
+
+def test_wrong_target_contract_surfaces_reference_divergence_from_loaded_raw_delta(tmp_path: Path) -> None:
+    recording = tmp_path / "wrong_target_divergence.h5"
+    n = 12
+    t = np.linspace(0.0, 1.1, n)
+    metadata = {"recording_provenance": {"track_id": "highway_h10_oncoming_straight_reject"}}
+
+    with h5py.File(recording, "w") as f:
+        f.attrs["metadata"] = json.dumps(metadata)
+        f.create_dataset("vehicle/timestamps", data=t)
+        f.create_dataset("vehicle/speed", data=np.full(n, 14.0, dtype=np.float32))
+        f.create_dataset("control/steering", data=np.zeros(n, dtype=np.float32))
+        f.create_dataset("control/lateral_error", data=np.full(n, 0.8, dtype=np.float32))
+        f.create_dataset("control/heading_error", data=np.zeros(n, dtype=np.float32))
+        f.create_dataset("control/total_error", data=np.zeros(n, dtype=np.float32))
+        f.create_dataset("control/pid_integral", data=np.zeros(n, dtype=np.float32))
+        f.create_dataset("control/emergency_stop", data=np.zeros(n, dtype=np.int8))
+        f.create_dataset("control/sync_packet_fallback_active", data=np.zeros(n, dtype=np.int8))
+        f.create_dataset(
+            "control/local_curve_reference_blend_weight",
+            data=np.full(n, 0.35, dtype=np.float32),
+        )
+        f.create_dataset(
+            "control/local_curve_reference_raw_delta_m",
+            data=np.full(n, 1.1, dtype=np.float32),
+        )
+        f.create_dataset(
+            "control/local_curve_reference_capped_delta_m",
+            data=np.full(n, 0.4, dtype=np.float32),
+        )
+        f.create_dataset("trajectory/reference_point_x", data=np.full(n, -0.9, dtype=np.float32))
+        f.create_dataset(
+            "trajectory/reference_point_curvature",
+            data=np.full(n, 0.002, dtype=np.float32),
+        )
+        f.create_dataset(
+            "ground_truth/lane_center_x_at_car",
+            data=np.full(n, -0.2, dtype=np.float32),
+        )
+        f.create_dataset("vehicle/radar_fwd_candidate_present", data=np.ones(n, dtype=np.int8))
+        f.create_dataset(
+            "vehicle/radar_fwd_reject_reason",
+            data=np.array([b"opposite_direction"] * n, dtype="S32"),
+        )
+        f.create_dataset("perception/confidence", data=np.ones(n, dtype=np.float32))
+        f.create_dataset("perception/num_lanes_detected", data=np.full(n, 2, dtype=np.int8))
+        f.create_dataset("ground_truth/left_lane_line_x", data=np.full(n, -3.5, dtype=np.float32))
+        f.create_dataset("ground_truth/right_lane_line_x", data=np.full(n, 3.5, dtype=np.float32))
+
+    summary = analyze_recording_summary(recording)
+    contract = summary["wrong_target_contract"]
+    assert contract["availability"] == "available"
+    assert contract["reference_divergence_issue_detected"] is True
+    assert contract["reference_divergence_raw_delta_p50_m"] == pytest.approx(1.1, rel=1e-3)
+    assert contract["reference_divergence_blend_weight_p50"] == pytest.approx(0.35, rel=1e-3)
+
+
+def test_wrong_target_contract_surfaces_straight_reference_drift(tmp_path: Path) -> None:
+    recording = tmp_path / "wrong_target_straight_drift.h5"
+    n = 12
+    t = np.linspace(0.0, 1.1, n)
+    metadata = {"recording_provenance": {"track_id": "highway_h9_adjacent_lane_parallel_reject"}}
+
+    with h5py.File(recording, "w") as f:
+        f.attrs["metadata"] = json.dumps(metadata)
+        f.create_dataset("vehicle/timestamps", data=t)
+        f.create_dataset("vehicle/speed", data=np.full(n, 14.0, dtype=np.float32))
+        f.create_dataset("control/steering", data=np.zeros(n, dtype=np.float32))
+        f.create_dataset("control/lateral_error", data=np.full(n, 0.8, dtype=np.float32))
+        f.create_dataset("control/heading_error", data=np.zeros(n, dtype=np.float32))
+        f.create_dataset("control/total_error", data=np.zeros(n, dtype=np.float32))
+        f.create_dataset("control/pid_integral", data=np.zeros(n, dtype=np.float32))
+        f.create_dataset("control/emergency_stop", data=np.zeros(n, dtype=np.int8))
+        f.create_dataset("control/sync_packet_fallback_active", data=np.zeros(n, dtype=np.int8))
+        f.create_dataset("trajectory/reference_point_curvature", data=np.zeros(n, dtype=np.float32))
+        f.create_dataset("control/reference_distractor_guard_active", data=np.ones(n, dtype=np.int8))
+        f.create_dataset("control/reference_distractor_guard_center_error_m", data=np.full(n, 0.85, dtype=np.float32))
+        f.create_dataset("control/reference_distractor_guard_expected_center_x_m", data=np.full(n, 0.10, dtype=np.float32))
+        f.create_dataset("control/reference_distractor_guard_trigger_weight", data=np.full(n, 0.90, dtype=np.float32))
+        f.create_dataset("control/reference_distractor_input_guard_active", data=np.ones(n, dtype=np.int8))
+        f.create_dataset(
+            "control/reference_distractor_input_guard_center_error_m",
+            data=np.full(n, 0.42, dtype=np.float32),
+        )
+        f.create_dataset(
+            "control/reference_distractor_input_guard_width_error_m",
+            data=np.full(n, 0.31, dtype=np.float32),
+        )
+        f.create_dataset(
+            "control/reference_distractor_input_guard_trigger_weight",
+            data=np.full(n, 0.95, dtype=np.float32),
+        )
+        f.create_dataset(
+            "control/reference_distractor_input_guard_suppressed_lane_coeffs",
+            data=np.ones(n, dtype=np.int8),
+        )
+        f.create_dataset("vehicle/radar_fwd_candidate_present", data=np.ones(n, dtype=np.int8))
+        f.create_dataset(
+            "vehicle/radar_fwd_reject_reason",
+            data=np.array([b"wrong_lane"] * n, dtype="S32"),
+        )
+        f.create_dataset("perception/confidence", data=np.ones(n, dtype=np.float32))
+        f.create_dataset("perception/num_lanes_detected", data=np.full(n, 2, dtype=np.int8))
+        f.create_dataset("ground_truth/left_lane_line_x", data=np.full(n, -3.5, dtype=np.float32))
+        f.create_dataset("ground_truth/right_lane_line_x", data=np.full(n, 3.5, dtype=np.float32))
+
+    summary = analyze_recording_summary(recording)
+    contract = summary["wrong_target_contract"]
+    assert contract["availability"] == "available"
+    assert contract["straight_reference_drift_issue_detected"] is True
+    assert contract["straight_reference_drift_center_error_p50_m"] == pytest.approx(0.85, rel=1e-3)
+    assert contract["straight_reference_drift_trigger_weight_p50"] == pytest.approx(0.90, rel=1e-3)
+    assert contract["input_guard_active_rate_pct"] == pytest.approx(100.0, rel=1e-3)
+    assert contract["input_guard_suppressed_lane_coeffs_rate_pct"] == pytest.approx(100.0, rel=1e-3)
+    assert contract["input_guard_center_error_p50_m"] == pytest.approx(0.42, rel=1e-3)
+    assert contract["input_guard_width_error_p50_m"] == pytest.approx(0.31, rel=1e-3)
+    assert contract["input_guard_trigger_weight_p50"] == pytest.approx(0.95, rel=1e-3)
+    assert contract["quality_reference_valid"] is False
+
+
+def test_ego_lane_contract_surfaces_selected_vs_ego_mismatch(tmp_path: Path) -> None:
+    recording = tmp_path / "ego_lane_contract_mismatch.h5"
+    n = 12
+    t = np.linspace(0.0, 1.1, n)
+    metadata = {"recording_provenance": {"track_id": "highway_h10_oncoming_straight_reject"}}
+
+    with h5py.File(recording, "w") as f:
+        f.attrs["metadata"] = json.dumps(metadata)
+        f.create_dataset("vehicle/timestamps", data=t)
+        f.create_dataset("vehicle/speed", data=np.full(n, 14.0, dtype=np.float32))
+        f.create_dataset("control/steering", data=np.zeros(n, dtype=np.float32))
+        f.create_dataset("control/lateral_error", data=np.full(n, 0.2, dtype=np.float32))
+        f.create_dataset("control/heading_error", data=np.zeros(n, dtype=np.float32))
+        f.create_dataset("control/total_error", data=np.zeros(n, dtype=np.float32))
+        f.create_dataset("control/pid_integral", data=np.zeros(n, dtype=np.float32))
+        f.create_dataset("control/emergency_stop", data=np.zeros(n, dtype=np.int8))
+        f.create_dataset("control/sync_packet_fallback_active", data=np.zeros(n, dtype=np.int8))
+        f.create_dataset("vehicle/radar_fwd_candidate_present", data=np.ones(n, dtype=np.int8))
+        f.create_dataset(
+            "vehicle/radar_fwd_reject_reason",
+            data=np.array([b"opposite_direction"] * n, dtype="S32"),
+        )
+        f.create_dataset("ground_truth/selected_lane_index", data=np.ones(n, dtype=np.int8))
+        f.create_dataset("ground_truth/ego_lane_index", data=np.zeros(n, dtype=np.int8))
+        f.create_dataset(
+            "ground_truth/lane_selection_source",
+            data=np.array([b"selected_lane_override"] * n, dtype="S32"),
+        )
+        f.create_dataset(
+            "ground_truth/lane_selection_reason",
+            data=np.array([b"current_lane_override"] * n, dtype="S32"),
+        )
+        f.create_dataset("ground_truth/lane_selection_matches_ego", data=np.zeros(n, dtype=np.int8))
+        f.create_dataset(
+            "ground_truth/selected_lane_cross_track_road_frame_at_car",
+            data=np.full(n, 0.55, dtype=np.float32),
+        )
+        f.create_dataset(
+            "ground_truth/ego_lane_cross_track_road_frame_at_car",
+            data=np.full(n, 0.05, dtype=np.float32),
+        )
+        f.create_dataset("perception/confidence", data=np.ones(n, dtype=np.float32))
+        f.create_dataset("perception/num_lanes_detected", data=np.full(n, 2, dtype=np.int8))
+        f.create_dataset("ground_truth/left_lane_line_x", data=np.full(n, -3.5, dtype=np.float32))
+        f.create_dataset("ground_truth/right_lane_line_x", data=np.full(n, 3.5, dtype=np.float32))
+
+    summary = analyze_recording_summary(recording)
+    contract = summary["ego_lane_contract"]
+    assert contract["availability"] == "available"
+    assert contract["issue_detected"] is True
+    assert contract["issue_mode"] == "selected_lane_differs_from_ego"
+    assert contract["selected_lane_index_mode"] == "1"
+    assert contract["ego_lane_index_mode"] == "0"

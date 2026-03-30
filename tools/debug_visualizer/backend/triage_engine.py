@@ -473,6 +473,122 @@ PATTERNS = [
         ),
     },
     {
+        "id": "highway_preactivation_curve_authority_missing",
+        "name": "Highway pre-activation authority missing",
+        "severity": "instability",
+        "category": "Trajectory",
+        "code_pointer": "trajectory/utils.py + av_stack/orchestrator.py: early mild-curve authority before local ENTRY",
+        "config_lever": "shared highway pre-activation speed/curvature/distance weighting",
+        "fix_hint": (
+            "The curve is materially relevant at highway speed before local curve state is authoritative, "
+            "but no bounded early authority is active. Add pre-activation lookahead/speed/curvature authority "
+            "before re-tuning steering or stretching the active-curve preserve path."
+        ),
+        "check": lambda m: (
+            m.get("highway_preactivation_curve_authority_missing_rate", 0.0) > 0.05
+            and m.get("highway_mild_curve_reference_geometry_mismatch_on_high_error_rate", 0.0) > 0.50
+            and m.get("highway_mild_curve_transport_fallback_overlap_on_high_error_rate", 1.0) < 0.10
+            and m.get("highway_mild_curve_poor_perception_overlap_on_high_error_rate", 1.0) < 0.10
+        ),
+    },
+    {
+        "id": "local_curve_reference_shadow_insufficient",
+        "name": "Local curve reference shadow-only when authority is needed",
+        "severity": "instability",
+        "category": "Trajectory",
+        "code_pointer": "trajectory/utils.py + av_stack/orchestrator.py",
+        "config_lever": "highway local-arc shadow promotion / bounded authority",
+        "fix_hint": (
+            "The local map-backed arc is being computed, but it remains shadow-only while the planner/local-arc delta is materially large. "
+            "Promote the local arc to bounded authority in the highway failure regime before more speed-cap or generic steering tuning."
+        ),
+        "check": lambda m: (
+            m.get("local_curve_reference_shadow_insufficient_rate", 0.0) > 0.05
+            and m.get("highway_mild_curve_transport_fallback_overlap_on_high_error_rate", 1.0) < 0.10
+            and m.get("highway_mild_curve_poor_perception_overlap_on_high_error_rate", 1.0) < 0.10
+        ),
+    },
+    {
+        "id": "wrong_target_distractor_reference_divergence",
+        "name": "Rejected distractor still pulls reference ownership",
+        "severity": "instability",
+        "category": "Trajectory",
+        "code_pointer": "av_stack/orchestrator.py + trajectory/utils.py",
+        "config_lever": "distractor-guarded bounded local-reference takeover",
+        "fix_hint": (
+            "A wrong-lane or opposite-direction actor is correctly rejected for ACC, but the planner/local-arc "
+            "divergence still grows in the same window. Add a sustained guarded-bounded local-reference backstop "
+            "instead of widening target capture or increasing generic steering authority."
+        ),
+        "check": lambda m: (
+            m.get("wrong_target_distractor_reference_divergence_rate", 0.0) > 0.05
+            and m.get("highway_mild_curve_transport_fallback_overlap_on_high_error_rate", 1.0) < 0.10
+            and m.get("highway_mild_curve_poor_perception_overlap_on_high_error_rate", 1.0) < 0.10
+        ),
+    },
+    {
+        "id": "wrong_target_straight_reference_drift",
+        "name": "Rejected distractor still bends straight-road reference",
+        "severity": "instability",
+        "category": "Trajectory",
+        "code_pointer": "av_stack/orchestrator.py",
+        "config_lever": "straight wrong-target reference guard",
+        "fix_hint": (
+            "A wrong-lane or opposite-direction actor is correctly rejected, but the straight-road "
+            "lane_positions reference still drifts away from the ego lane. Anchor the straight reject "
+            "guard to at-car selected-lane GT before increasing generic lateral authority."
+        ),
+        "check": lambda m: m.get("wrong_target_straight_reference_drift_rate", 0.0) > 0.05,
+    },
+    {
+        "id": "ego_lane_contract_invalid",
+        "name": "Selected lane anchor diverges from ego-lane contract",
+        "severity": "instability",
+        "category": "Trajectory",
+        "code_pointer": "unity/AVSimulation/Assets/Scripts/GroundTruthReporter.cs + AVBridge.cs",
+        "config_lever": "explicit ego-lane selection contract",
+        "fix_hint": (
+            "The reject-only guards are anchored to selected-lane GT, but selected-lane semantics diverge from the explicit ego-lane contract. "
+            "Export ego-lane selection explicitly and anchor reject-only guards to ego-lane GT before raising authority."
+        ),
+        "check": lambda m: m.get("ego_lane_contract_invalid_rate", 0.0) > 0.05,
+    },
+    {
+        "id": "high_speed_mild_curve_active_authority_insufficient",
+        "name": "High-speed mild-curve active authority insufficient",
+        "severity": "instability",
+        "category": "Trajectory",
+        "code_pointer": "control/speed_governor.py + control/mpc_controller.py",
+        "config_lever": "active mild-curve speed feasibility + active-state curve authority",
+        "fix_hint": (
+            "The mild curve is already locally active, but the active-state speed cap and curvature authority are still too weak. "
+            "Tighten active mild-curve feasibility and bound same-sign curvature amplification before changing generic steering gains."
+        ),
+        "check": lambda m: (
+            m.get("high_speed_mild_curve_active_authority_insufficient_rate", 0.0) > 0.05
+            and m.get("highway_mild_curve_transport_fallback_overlap_on_high_error_rate", 1.0) < 0.10
+            and m.get("highway_mild_curve_poor_perception_overlap_on_high_error_rate", 1.0) < 0.10
+        ),
+    },
+    {
+        "id": "active_mild_curve_preserve_speed_gated",
+        "name": "Active mild-curve authority still speed-gated",
+        "severity": "instability",
+        "category": "Trajectory",
+        "code_pointer": "control/mpc_controller.py",
+        "config_lever": "active mild-curve authority dynamic speed gate",
+        "fix_hint": (
+            "The curve is already locally active, but the dedicated mild-curve authority path never turns on because "
+            "its speed gate starts above the ACC-follow operating band. Lower the dynamic authority on-threshold or "
+            "make it state-aware before changing generic steering gains."
+        ),
+        "check": lambda m: (
+            m.get("active_mild_curve_preserve_speed_gated_rate", 0.0) > 0.05
+            and m.get("highway_mild_curve_transport_fallback_overlap_on_high_error_rate", 1.0) < 0.10
+            and m.get("highway_mild_curve_poor_perception_overlap_on_high_error_rate", 1.0) < 0.10
+        ),
+    },
+    {
         "id": "curve_sustain_collapse_rearm_cycle",
         "name": "Curve sustain collapse / REARM cycling",
         "severity": "instability",
@@ -520,6 +636,23 @@ PATTERNS = [
         ),
         "check": lambda m: (
             m.get("mpc_gt_cross_track_semantic_mismatch_rate", 0.0) > 0.05
+            and m.get("highway_mild_curve_transport_fallback_overlap_on_high_error_rate", 1.0) < 0.10
+            and m.get("highway_mild_curve_poor_perception_overlap_on_high_error_rate", 1.0) < 0.10
+        ),
+    },
+    {
+        "id": "mpc_gt_cross_track_vehicle_frame_semantic_mismatch",
+        "name": "MPC GT uses vehicle-frame lane-center geometry",
+        "severity": "instability",
+        "category": "Control",
+        "code_pointer": "unity/AVSimulation/Assets/Scripts/GroundTruthReporter.cs + control/pid_controller.py",
+        "config_lever": "control must consume road-frame selected-lane cross-track, not vehicle-frame lane-center X",
+        "fix_hint": (
+            "LMPC is consuming vehicle-frame selected-lane-center geometry as e_lat while also consuming heading error separately. "
+            "Export a true road-frame selected-lane cross-track at the car and make that the authoritative control GT."
+        ),
+        "check": lambda m: (
+            m.get("mpc_gt_cross_track_vehicle_frame_semantic_mismatch_rate", 0.0) > 0.05
             and m.get("highway_mild_curve_transport_fallback_overlap_on_high_error_rate", 1.0) < 0.10
             and m.get("highway_mild_curve_poor_perception_overlap_on_high_error_rate", 1.0) < 0.10
         ),
@@ -1189,6 +1322,205 @@ class TriageEngine:
 
                     high_err_count = int(np.sum(high_err))
                     m["highway_mild_curve_underactivation_rate"] = float(np.mean(underactivated))
+                    preactivation_weight_arr = arr("control/curve_preactivation_authority_weight")
+                    preactivation_active_arr = arr("control/curve_preactivation_authority_active")
+                    if (
+                        preactivation_weight_arr is not None
+                        and preactivation_active_arr is not None
+                    ):
+                        pre_len = min(
+                            len(preactivation_weight_arr),
+                            len(preactivation_active_arr),
+                            len(high_err),
+                            len(mild_curve),
+                            len(small_offset),
+                            len(poor_perception),
+                            len(fallback_mask),
+                        )
+                        pre_weight = np.asarray(preactivation_weight_arr[:pre_len], dtype=np.float64)
+                        pre_active = np.asarray(preactivation_active_arr[:pre_len], dtype=np.float64) > 0.5
+                        pre_high_err = high_err[:pre_len]
+                        pre_mild_curve = mild_curve[:pre_len]
+                        pre_small_offset = small_offset[:pre_len]
+                        pre_poor_perception = poor_perception[:pre_len]
+                        pre_fallback = fallback_mask[:pre_len]
+                        pre_candidate = (
+                            pre_high_err
+                            & pre_mild_curve
+                            & pre_small_offset
+                            & ~pre_poor_perception
+                            & ~pre_fallback
+                            & np.isfinite(pre_weight)
+                            & (pre_weight >= 0.35)
+                        )
+                        pre_missing = pre_candidate & ~pre_active
+                        m["highway_preactivation_curve_authority_missing_rate"] = (
+                            float(np.sum(pre_missing) / max(int(np.sum(pre_high_err)), 1))
+                        )
+                    local_ref_active_arr = arr("control/local_curve_reference_active")
+                    active_preserve_weight_arr = arr("control/mpc_kappa_active_curve_preserve_weight")
+                    curve_cap_speed_arr = arr("control/speed_governor_curve_cap_speed")
+                    speed_series_arr = arr("vehicle/speed")
+                    if (
+                        local_ref_active_arr is not None
+                        and active_preserve_weight_arr is not None
+                        and curve_cap_speed_arr is not None
+                        and speed_series_arr is not None
+                    ):
+                        active_len = min(
+                            len(local_ref_active_arr),
+                            len(active_preserve_weight_arr),
+                            len(curve_cap_speed_arr),
+                            len(speed_series_arr),
+                            len(high_err),
+                            len(mild_curve),
+                            len(small_offset),
+                            len(poor_perception),
+                            len(fallback_mask),
+                            len(curve_local_state_arr),
+                        )
+                        local_ref_active = np.asarray(local_ref_active_arr[:active_len], dtype=np.float64) > 0.5
+                        preserve_weight = np.asarray(
+                            active_preserve_weight_arr[:active_len], dtype=np.float64
+                        )
+                        cap_speed = np.asarray(curve_cap_speed_arr[:active_len], dtype=np.float64)
+                        speed_now = np.asarray(speed_series_arr[:active_len], dtype=np.float64)
+                        active_high_err = high_err[:active_len]
+                        active_mild_curve = mild_curve[:active_len]
+                        active_small_offset = small_offset[:active_len]
+                        active_poor_perception = poor_perception[:active_len]
+                        active_fallback = fallback_mask[:active_len]
+                        local_active = np.array(
+                            [
+                                curve_local_state_arr[i] in {"ENTRY", "COMMIT"}
+                                for i in range(active_len)
+                            ],
+                            dtype=bool,
+                        )
+                        active_failure = (
+                            active_high_err
+                            & active_mild_curve
+                            & local_active
+                            & local_ref_active
+                            & active_small_offset
+                            & ~active_poor_perception
+                            & ~active_fallback
+                        )
+                        local_ref_shadow_only_arr = arr("control/local_curve_reference_shadow_only")
+                        local_ref_raw_delta_arr = arr("control/local_curve_reference_raw_delta_m")
+                        local_ref_capped_delta_arr = arr("control/local_curve_reference_capped_delta_m")
+                        active_shadow_issue = np.zeros(active_len, dtype=bool)
+                        if (
+                            local_ref_shadow_only_arr is not None
+                            and local_ref_raw_delta_arr is not None
+                            and local_ref_capped_delta_arr is not None
+                        ):
+                            local_ref_shadow_only = (
+                                np.asarray(local_ref_shadow_only_arr[:active_len], dtype=np.float64) > 0.5
+                            )
+                            local_ref_raw_delta = np.asarray(
+                                local_ref_raw_delta_arr[:active_len], dtype=np.float64
+                            )
+                            local_ref_capped_delta = np.asarray(
+                                local_ref_capped_delta_arr[:active_len], dtype=np.float64
+                            )
+                            local_ref_cap_ratio = np.divide(
+                                local_ref_capped_delta,
+                                local_ref_raw_delta,
+                                out=np.full(active_len, np.nan, dtype=np.float64),
+                                where=np.abs(local_ref_raw_delta) > 1e-6,
+                            )
+                            active_shadow_issue = (
+                                active_failure
+                                & local_ref_shadow_only
+                                & np.isfinite(local_ref_raw_delta)
+                                & (local_ref_raw_delta >= 0.25)
+                                & np.isfinite(local_ref_cap_ratio)
+                                & (local_ref_cap_ratio <= 0.10)
+                            )
+                        radar_candidate_present_arr = arr("vehicle/radar_fwd_candidate_present")
+                        radar_reject_reason_arr = arr("vehicle/radar_fwd_reject_reason")
+                        wrong_target_divergence = np.zeros(active_len, dtype=bool)
+                        if (
+                            radar_candidate_present_arr is not None
+                            and radar_reject_reason_arr is not None
+                            and local_ref_raw_delta_arr is not None
+                        ):
+                            radar_candidate_present = (
+                                np.asarray(radar_candidate_present_arr[:active_len], dtype=np.float64)
+                                > 0.5
+                            )
+                            radar_reject_reason = np.asarray(
+                                [
+                                    s.decode("utf-8", errors="ignore") if isinstance(s, (bytes, np.bytes_)) else str(s)
+                                    for s in radar_reject_reason_arr[:active_len]
+                                ],
+                                dtype=object,
+                            )
+                            local_ref_raw_delta = np.asarray(
+                                local_ref_raw_delta_arr[:active_len], dtype=np.float64
+                            )
+                            wrong_target_divergence = (
+                                active_failure
+                                & radar_candidate_present
+                                & np.array(
+                                    [
+                                        radar_reject_reason[i] in {"wrong_lane", "opposite_direction"}
+                                        for i in range(active_len)
+                                    ],
+                                    dtype=bool,
+                                )
+                                & np.isfinite(local_ref_raw_delta)
+                                & (local_ref_raw_delta >= 0.75)
+                            )
+                        active_preserve_low = (
+                            active_failure
+                            & ~active_shadow_issue
+                            & np.isfinite(preserve_weight)
+                            & (preserve_weight <= 0.25)
+                        )
+                        active_cap_ineffective = (
+                            active_failure
+                            & ~active_shadow_issue
+                            & (
+                                (~np.isfinite(cap_speed))
+                                | (~np.isfinite(speed_now))
+                                | (cap_speed <= 0.0)
+                                | (cap_speed >= (speed_now - 0.20))
+                            )
+                        )
+                        active_issue = active_failure & ~active_shadow_issue & (
+                            active_preserve_low | active_cap_ineffective
+                        )
+                        m["local_curve_reference_shadow_insufficient_rate"] = (
+                            float(np.sum(active_shadow_issue) / max(int(np.sum(active_high_err)), 1))
+                        )
+                        m["wrong_target_distractor_reference_divergence_rate"] = (
+                            float(np.sum(wrong_target_divergence) / max(int(np.sum(active_high_err)), 1))
+                        )
+                        m["wrong_target_straight_reference_drift_rate"] = float(
+                            summary.get("wrong_target_contract", {}).get(
+                                "straight_reference_drift_rate_pct",
+                                0.0,
+                            )
+                            or 0.0
+                        ) / 100.0
+                        m["ego_lane_contract_invalid_rate"] = float(
+                            summary.get("ego_lane_contract", {}).get(
+                                "selected_vs_ego_cross_track_mismatch_rate_pct",
+                                0.0,
+                            )
+                            or 0.0
+                        ) / 100.0
+                        m["high_speed_mild_curve_active_authority_insufficient_rate"] = (
+                            float(np.sum(active_issue) / max(int(np.sum(active_high_err)), 1))
+                        )
+                        m["active_mild_curve_preserve_speed_gated_rate"] = float(
+                            summary.get("highway_mild_curve_contract", {}).get(
+                                "active_mild_curve_authority_speed_gated_on_high_error_rate",
+                                0.0,
+                            ) or 0.0
+                        ) / 100.0
                     m["highway_mild_curve_reference_geometry_mismatch_on_high_error_rate"] = (
                         float(np.sum(high_err & small_offset) / max(high_err_count, 1))
                     )
@@ -1211,10 +1543,28 @@ class TriageEngine:
                         float(np.sum(bias_cancel) / max(high_err_count, 1))
                     )
                     mpc_gt_at_car = arr("control/mpc_gt_cross_track_at_car_m")
+                    mpc_gt_vehicle = arr("control/mpc_gt_cross_track_vehicle_frame_at_car_m")
+                    if mpc_gt_vehicle is None:
+                        mpc_gt_vehicle = mpc_gt_at_car
+                    mpc_gt_road = arr("control/mpc_gt_cross_track_road_frame_at_car_m")
                     mpc_gt_lookahead = arr("control/mpc_gt_cross_track_lookahead_m")
                     if mpc_gt_at_car is not None and mpc_gt_lookahead is not None:
                         n_gt = min(len(mpc_gt_at_car), len(mpc_gt_lookahead), len(high_err))
+                        if mpc_gt_vehicle is not None:
+                            n_gt = min(n_gt, len(mpc_gt_vehicle))
+                        if mpc_gt_road is not None:
+                            n_gt = min(n_gt, len(mpc_gt_road))
                         gt_at_car = np.abs(np.asarray(mpc_gt_at_car[:n_gt], dtype=np.float64))
+                        gt_vehicle = (
+                            np.abs(np.asarray(mpc_gt_vehicle[:n_gt], dtype=np.float64))
+                            if mpc_gt_vehicle is not None
+                            else gt_at_car.copy()
+                        )
+                        gt_road = (
+                            np.abs(np.asarray(mpc_gt_road[:n_gt], dtype=np.float64))
+                            if mpc_gt_road is not None
+                            else None
+                        )
                         gt_lookahead = np.abs(np.asarray(mpc_gt_lookahead[:n_gt], dtype=np.float64))
                         high_err_gt = high_err[:n_gt]
                         semantic_mismatch = (
@@ -1225,6 +1575,16 @@ class TriageEngine:
                         m["mpc_gt_cross_track_semantic_mismatch_rate"] = (
                             float(np.sum(semantic_mismatch) / max(int(np.sum(high_err_gt)), 1))
                         )
+                        if gt_road is not None:
+                            vehicle_frame_semantic = (
+                                high_err_gt
+                                & (gt_vehicle >= 0.50)
+                                & (gt_road <= 0.12)
+                                & (np.abs(gt_vehicle - gt_road) >= 0.35)
+                            )
+                            m["mpc_gt_cross_track_vehicle_frame_semantic_mismatch_rate"] = (
+                                float(np.sum(vehicle_frame_semantic) / max(int(np.sum(high_err_gt)), 1))
+                            )
                         road_offset = arr("vehicle/road_frame_lane_center_offset")
                         if road_offset is not None:
                             n_abs = min(n_gt, len(road_offset))
@@ -1330,7 +1690,15 @@ class TriageEngine:
             "mpc_steering_oscillation": "mpc_steering_osc_rate",
             "gt_boundary_corrupt": "gt_boundary_corrupt_frames",
             "highway_mild_curve_underactivation": "highway_mild_curve_underactivation_rate",
+            "highway_preactivation_curve_authority_missing": "highway_preactivation_curve_authority_missing_rate",
+            "ego_lane_contract_invalid": "ego_lane_contract_invalid_rate",
+            "local_curve_reference_shadow_insufficient": "local_curve_reference_shadow_insufficient_rate",
+            "wrong_target_distractor_reference_divergence": "wrong_target_distractor_reference_divergence_rate",
+            "wrong_target_straight_reference_drift": "wrong_target_straight_reference_drift_rate",
+            "high_speed_mild_curve_active_authority_insufficient": "high_speed_mild_curve_active_authority_insufficient_rate",
+            "active_mild_curve_preserve_speed_gated": "active_mild_curve_preserve_speed_gated_rate",
             "mpc_gt_cross_track_semantic_mismatch": "mpc_gt_cross_track_semantic_mismatch_rate",
+            "mpc_gt_cross_track_vehicle_frame_semantic_mismatch": "mpc_gt_cross_track_vehicle_frame_semantic_mismatch_rate",
             "mpc_gt_cross_track_absolute_coordinate_mismatch": "mpc_gt_cross_track_absolute_coordinate_mismatch_rate",
         }
         for pat in PATTERNS:

@@ -12,6 +12,8 @@ Tests the SpeedGovernor in isolation (no av_stack.py dependency):
 
 import math
 
+import pytest
+
 from control.speed_governor import (
     SpeedGovernor,
     SpeedGovernorConfig,
@@ -64,6 +66,22 @@ def _make_governor(
         curve_cap_rise_min=float(overrides.get("curve_cap_rise_min", 0.0005)),
         curve_cap_peak_lat_accel_g=float(overrides.get("curve_cap_peak_lat_accel_g", 0.26)),
         curve_cap_use_preview_curvature=bool(overrides.get("curve_cap_use_preview_curvature", True)),
+        curve_cap_active_mild_enabled=bool(overrides.get("curve_cap_active_mild_enabled", False)),
+        curve_cap_active_mild_gate_min=float(overrides.get("curve_cap_active_mild_gate_min", 0.40)),
+        curve_cap_active_mild_speed_on=float(overrides.get("curve_cap_active_mild_speed_on", 13.0)),
+        curve_cap_active_mild_speed_full=float(overrides.get("curve_cap_active_mild_speed_full", 15.0)),
+        curve_cap_active_mild_curvature_on=float(
+            overrides.get("curve_cap_active_mild_curvature_on", 0.0015)
+        ),
+        curve_cap_active_mild_curvature_full=float(
+            overrides.get("curve_cap_active_mild_curvature_full", 0.0020)
+        ),
+        curve_cap_active_mild_entry_reduction_mps=float(
+            overrides.get("curve_cap_active_mild_entry_reduction_mps", 0.8)
+        ),
+        curve_cap_active_mild_commit_reduction_mps=float(
+            overrides.get("curve_cap_active_mild_commit_reduction_mps", 1.6)
+        ),
         feasibility_backstop_enabled=bool(overrides.get("feasibility_backstop_enabled", True)),
         feasibility_backstop_on_frames=int(overrides.get("feasibility_backstop_on_frames", 3)),
         feasibility_backstop_overspeed_margin_mps=float(
@@ -645,6 +663,80 @@ class TestCurveCapAuthority:
         assert first.curve_cap_speed is not None
         assert second.curve_cap_speed is not None
         assert second.curve_cap_speed <= first.curve_cap_speed + 0.21
+
+    def test_active_mild_curve_cap_tightens_entry_speed_when_local_curve_is_active(self):
+        gov = _make_governor(
+            max_lat_accel_g=0.8,
+            planner_enabled=False,
+            horizon_enabled=False,
+            preview_enabled=False,
+            curve_cap_enabled=True,
+            curve_cap_shadow_mode=False,
+            curve_cap_estimator_enabled=False,
+            curve_cap_use_preview_curvature=False,
+            curve_cap_active_mild_enabled=True,
+            curve_cap_active_mild_gate_min=0.40,
+            curve_cap_active_mild_speed_on=13.0,
+            curve_cap_active_mild_speed_full=15.0,
+            curve_cap_active_mild_curvature_on=0.0015,
+            curve_cap_active_mild_curvature_full=0.0020,
+            curve_cap_active_mild_entry_reduction_mps=0.8,
+        )
+        out = gov.compute_target_speed(
+            track_speed_limit=15.0,
+            curvature=0.002,
+            preview_curvature=None,
+            perception_horizon_m=30.0,
+            current_speed=15.0,
+            timestamp=0.0,
+            curve_intent=0.9,
+            curve_intent_state="ENTRY",
+            curve_rise=0.001,
+            curve_local_state="ENTRY",
+            curve_local_gate_weight=1.0,
+            local_curve_reference_active=True,
+        )
+        assert out.curve_cap_active is True
+        assert out.curve_cap_reason == "entry_dynamic_mild"
+        assert out.curve_cap_speed == pytest.approx(14.2, rel=1e-6)
+        assert out.target_speed <= 14.2 + 1e-6
+
+    def test_active_mild_curve_cap_falls_back_to_intent_score_when_local_state_not_available(self):
+        gov = _make_governor(
+            max_lat_accel_g=0.8,
+            planner_enabled=False,
+            horizon_enabled=False,
+            preview_enabled=False,
+            curve_cap_enabled=True,
+            curve_cap_shadow_mode=False,
+            curve_cap_estimator_enabled=False,
+            curve_cap_use_preview_curvature=False,
+            curve_cap_active_mild_enabled=True,
+            curve_cap_active_mild_gate_min=0.40,
+            curve_cap_active_mild_speed_on=13.0,
+            curve_cap_active_mild_speed_full=15.0,
+            curve_cap_active_mild_curvature_on=0.0015,
+            curve_cap_active_mild_curvature_full=0.0020,
+            curve_cap_active_mild_commit_reduction_mps=1.6,
+        )
+        out = gov.compute_target_speed(
+            track_speed_limit=15.0,
+            curvature=0.002,
+            preview_curvature=None,
+            perception_horizon_m=30.0,
+            current_speed=15.0,
+            timestamp=0.0,
+            curve_intent=0.55,
+            curve_intent_state="STRAIGHT",
+            curve_rise=0.001,
+            curve_local_state="STRAIGHT",
+            curve_local_gate_weight=0.0,
+            local_curve_reference_active=False,
+        )
+        assert out.curve_cap_active is True
+        assert out.curve_cap_reason == "commit_dynamic_mild"
+        assert out.curve_cap_speed == pytest.approx(13.4, rel=1e-6)
+        assert out.target_speed <= 13.4 + 1e-6
 
 
 class TestFeasibilityBackstop:

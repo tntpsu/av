@@ -1834,7 +1834,17 @@ public class VehicleState
     public float groundTruthRightLaneLineX = 0f;  // Right lane line (painted marking) position
     public float groundTruthLaneCenterX = 0f;  // Legacy alias: selected lane center at lookahead
     public float groundTruthLaneCenterXLookahead = 0f;  // Selected lane center at GT lookahead distance
-    public float groundTruthLaneCenterXAtCar = 0f;  // Selected lane center at the car's current position
+    public float groundTruthLaneCenterXAtCar = 0f;  // Selected lane center at the car's current position in vehicle frame
+    public int groundTruthSelectedLaneIndex = 0;  // Selected lane index used for GT/debug geometry
+    public int groundTruthEgoLaneIndex = 0;  // Explicit ego-lane index for guard/control contracts
+    public string groundTruthLaneSelectionSource = "unknown";  // How selected lane was chosen
+    public string groundTruthLaneSelectionReason = "unknown";  // Why selected lane was chosen
+    public bool groundTruthLaneSelectionMatchesEgo = true;  // Whether selected lane equals explicit ego lane
+    public float groundTruthEgoLaneCenterXAtCar = 0f;  // Ego-lane center at car in vehicle frame
+    public float groundTruthSelectedLaneCenterOffsetRoadFrame = 0f;  // Selected lane center offset from road center (m, +right)
+    public float groundTruthSelectedLaneCrossTrackRoadFrameAtCar = 0f;  // Car cross-track vs selected lane center in road frame (m, +right)
+    public float groundTruthEgoLaneCenterOffsetRoadFrame = 0f;  // Ego-lane center offset from road center (m, +right)
+    public float groundTruthEgoLaneCrossTrackRoadFrameAtCar = 0f;  // Car cross-track vs ego-lane center in road frame (m, +right)
     // NEW: Path-based steering data
     public float groundTruthDesiredHeading = 0.0f;  // Desired heading from path (degrees)
     public float groundTruthPathCurvature = 0.0f;  // Path curvature (1/meters)

@@ -2426,7 +2426,17 @@ class VehicleState(BaseModel):
     groundTruthRightLaneLineX: float = 0.0  # Right lane line (painted marking) position
     groundTruthLaneCenterX: float = 0.0  # Legacy alias: selected lane center at lookahead
     groundTruthLaneCenterXLookahead: float = 0.0  # Selected lane center at GT lookahead distance
-    groundTruthLaneCenterXAtCar: float = 0.0  # Selected lane center at the car's current position
+    groundTruthLaneCenterXAtCar: float = 0.0  # Selected lane center at the car's current position in vehicle frame
+    groundTruthSelectedLaneIndex: int = 0
+    groundTruthEgoLaneIndex: int = 0
+    groundTruthLaneSelectionSource: str = ""
+    groundTruthLaneSelectionReason: str = ""
+    groundTruthLaneSelectionMatchesEgo: bool = True
+    groundTruthEgoLaneCenterXAtCar: float = 0.0
+    groundTruthSelectedLaneCenterOffsetRoadFrame: float = 0.0  # Selected lane center offset from road center (+right)
+    groundTruthSelectedLaneCrossTrackRoadFrameAtCar: float = 0.0  # Car cross-track vs selected lane center in road frame (+right)
+    groundTruthEgoLaneCenterOffsetRoadFrame: float = 0.0
+    groundTruthEgoLaneCrossTrackRoadFrameAtCar: float = 0.0
     # NEW: Path-based steering data
     groundTruthDesiredHeading: float = 0.0  # Desired heading from path (degrees)
     groundTruthPathCurvature: float = 0.0  # Path curvature (1/meters)

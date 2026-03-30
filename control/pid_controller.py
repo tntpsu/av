@@ -3705,11 +3705,177 @@ class LateralController:
                 'local_curve_reference_mode': str(
                     reference_point.get('local_curve_reference_mode', 'off') or 'off'
                 ),
+                'local_curve_reference_requested_mode': str(
+                    reference_point.get('local_curve_reference_requested_mode', 'off') or 'off'
+                ),
                 'local_curve_reference_active': bool(
                     reference_point.get('local_curve_reference_active', False)
                 ),
                 'local_curve_reference_shadow_only': bool(
                     reference_point.get('local_curve_reference_shadow_only', False)
+                ),
+                'local_curve_reference_shadow_promotion_active': bool(
+                    reference_point.get('local_curve_reference_shadow_promotion_active', False)
+                ),
+                'local_curve_reference_shadow_promotion_weight': float(
+                    reference_point.get('local_curve_reference_shadow_promotion_weight', 0.0) or 0.0
+                ),
+                'local_curve_reference_shadow_promotion_blend_floor': float(
+                    reference_point.get(
+                        'local_curve_reference_shadow_promotion_blend_floor',
+                        0.0,
+                    )
+                    or 0.0
+                ),
+                'local_curve_reference_shadow_promotion_reason': str(
+                    reference_point.get('local_curve_reference_shadow_promotion_reason', '') or ''
+                ),
+                'local_curve_reference_guarded_bounded_active': bool(
+                    reference_point.get('local_curve_reference_guarded_bounded_active', False)
+                ),
+                'local_curve_reference_guarded_bounded_reason': str(
+                    reference_point.get('local_curve_reference_guarded_bounded_reason', 'inactive')
+                    or 'inactive'
+                ),
+                'local_curve_reference_guarded_bounded_dwell_frames': int(
+                    reference_point.get('local_curve_reference_guarded_bounded_dwell_frames', 0)
+                    or 0
+                ),
+                'local_curve_reference_guarded_bounded_trigger_raw_delta_m': float(
+                    reference_point.get(
+                        'local_curve_reference_guarded_bounded_trigger_raw_delta_m',
+                        float('nan'),
+                    )
+                ),
+                'local_curve_reference_guarded_bounded_exit_raw_delta_m': float(
+                    reference_point.get(
+                        'local_curve_reference_guarded_bounded_exit_raw_delta_m',
+                        float('nan'),
+                    )
+                ),
+                'local_curve_reference_guarded_bounded_trigger_weight': float(
+                    reference_point.get(
+                        'local_curve_reference_guarded_bounded_trigger_weight',
+                        0.0,
+                    )
+                    or 0.0
+                ),
+                'local_curve_reference_guarded_bounded_blend_floor': float(
+                    reference_point.get(
+                        'local_curve_reference_guarded_bounded_blend_floor',
+                        0.0,
+                    )
+                    or 0.0
+                ),
+                'reference_distractor_guard_active': bool(
+                    reference_point.get('reference_distractor_guard_active', False)
+                ),
+                'reference_distractor_guard_reason': str(
+                    reference_point.get('reference_distractor_guard_reason', 'inactive')
+                    or 'inactive'
+                ),
+                'reference_distractor_guard_dwell_frames': int(
+                    reference_point.get('reference_distractor_guard_dwell_frames', 0) or 0
+                ),
+                'reference_distractor_guard_trigger_center_error_m': float(
+                    reference_point.get(
+                        'reference_distractor_guard_trigger_center_error_m',
+                        float('nan'),
+                    )
+                ),
+                'reference_distractor_guard_exit_center_error_m': float(
+                    reference_point.get(
+                        'reference_distractor_guard_exit_center_error_m',
+                        float('nan'),
+                    )
+                ),
+                'reference_distractor_guard_center_error_m': float(
+                    reference_point.get('reference_distractor_guard_center_error_m', 0.0) or 0.0
+                ),
+                'reference_distractor_guard_width_error_m': float(
+                    reference_point.get('reference_distractor_guard_width_error_m', 0.0) or 0.0
+                ),
+                'reference_distractor_guard_trigger_weight': float(
+                    reference_point.get('reference_distractor_guard_trigger_weight', 0.0) or 0.0
+                ),
+                'reference_distractor_guard_blend_weight': float(
+                    reference_point.get('reference_distractor_guard_blend_weight', 0.0) or 0.0
+                ),
+                'reference_distractor_guard_expected_center_x_m': float(
+                    reference_point.get(
+                        'reference_distractor_guard_expected_center_x_m',
+                        float('nan'),
+                    )
+                ),
+                'reference_distractor_guard_expected_heading_rad': float(
+                    reference_point.get('reference_distractor_guard_expected_heading_rad', 0.0) or 0.0
+                ),
+                'reference_distractor_input_guard_active': bool(
+                    reference_point.get('reference_distractor_input_guard_active', False)
+                ),
+                'reference_distractor_input_guard_reason': str(
+                    reference_point.get('reference_distractor_input_guard_reason', 'inactive')
+                    or 'inactive'
+                ),
+                'reference_distractor_input_guard_dwell_frames': int(
+                    reference_point.get('reference_distractor_input_guard_dwell_frames', 0) or 0
+                ),
+                'reference_distractor_input_guard_trigger_center_error_m': float(
+                    reference_point.get(
+                        'reference_distractor_input_guard_trigger_center_error_m',
+                        float('nan'),
+                    )
+                ),
+                'reference_distractor_input_guard_exit_center_error_m': float(
+                    reference_point.get(
+                        'reference_distractor_input_guard_exit_center_error_m',
+                        float('nan'),
+                    )
+                ),
+                'reference_distractor_input_guard_center_error_m': float(
+                    reference_point.get('reference_distractor_input_guard_center_error_m', 0.0) or 0.0
+                ),
+                'reference_distractor_input_guard_width_error_m': float(
+                    reference_point.get('reference_distractor_input_guard_width_error_m', 0.0) or 0.0
+                ),
+                'reference_distractor_input_guard_trigger_weight': float(
+                    reference_point.get('reference_distractor_input_guard_trigger_weight', 0.0) or 0.0
+                ),
+                'reference_distractor_input_guard_expected_center_x_m': float(
+                    reference_point.get(
+                        'reference_distractor_input_guard_expected_center_x_m',
+                        float('nan'),
+                    )
+                ),
+                'reference_distractor_input_guard_synthetic_left_lane_x_m': float(
+                    reference_point.get(
+                        'reference_distractor_input_guard_synthetic_left_lane_x_m',
+                        float('nan'),
+                    )
+                ),
+                'reference_distractor_input_guard_synthetic_right_lane_x_m': float(
+                    reference_point.get(
+                        'reference_distractor_input_guard_synthetic_right_lane_x_m',
+                        float('nan'),
+                    )
+                ),
+                'reference_distractor_input_guard_synthetic_lane_width_m': float(
+                    reference_point.get(
+                        'reference_distractor_input_guard_synthetic_lane_width_m',
+                        float('nan'),
+                    )
+                ),
+                'reference_distractor_input_guard_suppressed_lane_coeffs': bool(
+                    reference_point.get(
+                        'reference_distractor_input_guard_suppressed_lane_coeffs',
+                        False,
+                    )
+                ),
+                'reference_distractor_input_guard_center_history_seeded': bool(
+                    reference_point.get(
+                        'reference_distractor_input_guard_center_history_seeded',
+                        False,
+                    )
                 ),
                 'local_curve_reference_valid': bool(
                     reference_point.get('local_curve_reference_valid', False)
@@ -4437,18 +4603,6 @@ class LongitudinalController:
             else:
                 self.last_accel_cmd = accel_cmd
 
-            # DEBUG: trace brake onset — any negative accel_cmd
-            if accel_cmd < -0.2:
-                import logging as _dbg_log
-                _dbg_log.getLogger(__name__).warning(
-                    f"[LONG_DEBUG] accel_cmd={accel_cmd:.4f} raw_err={raw_speed_error:.3f} "
-                    f"ref_vel={reference_velocity:.2f} speed={current_speed:.2f} "
-                    f"smoothed_desired={self.smoothed_desired_accel:.4f} "
-                    f"desired_accel_pre_ema={desired_accel:.4f} "
-                    f"last_accel_cmd={self.last_accel_cmd:.4f} "
-                    f"ref_accel={reference_accel} drag={self.speed_drag_gain*current_speed:.4f} "
-                    f"continuous={self.continuous_accel_control}"
-                )
             if accel_cmd >= 0.0:
                 throttle = (accel_cmd / self._effective_max_accel) if self._effective_max_accel > 0.0 else 0.0
                 if self.throttle_curve_gamma != 1.0:
@@ -4688,16 +4842,6 @@ class LongitudinalController:
         elif not self.continuous_accel_control:
             self.last_accel_cmd = (throttle * self.max_accel) - (brake * self.max_decel)
         
-        if (
-            reference_velocity is not None
-            and self.overspeed_brake_max > 0.0
-            and raw_speed_error < -self.overspeed_brake_threshold
-        ):
-            import logging as _dbg_log2
-            _dbg_log2.getLogger(__name__).warning(
-                f"[OVERSPEED_BRAKE] ref_vel={reference_velocity:.3f} speed={current_speed:.3f} "
-                f"raw_err={raw_speed_error:.3f} threshold={self.overspeed_brake_threshold:.3f}"
-            )
         if (
             reference_velocity is not None
             and self.overspeed_brake_max > 0.0
@@ -5492,16 +5636,32 @@ class VehicleController:
             gt_cross_track = reference_point.get('gt_cross_track_m')
             gt_heading = reference_point.get('gt_heading_error_rad')
             gt_cross_track_at_car = reference_point.get('gt_cross_track_at_car_m')
+            gt_cross_track_road_frame_at_car = reference_point.get(
+                'gt_cross_track_road_frame_at_car_m'
+            )
+            gt_cross_track_vehicle_frame_at_car = reference_point.get(
+                'gt_cross_track_vehicle_frame_at_car_m',
+                gt_cross_track_at_car,
+            )
             gt_cross_track_lookahead = reference_point.get('gt_cross_track_lookahead_m')
             gt_cross_track_source_code = str(
-                reference_point.get('gt_cross_track_source_code', '') or ''
+                reference_point.get(
+                    'gt_cross_track_control_source_code',
+                    reference_point.get('gt_cross_track_source_code', ''),
+                )
+                or ''
             )
 
             if gt_cross_track is not None and gt_heading is not None:
-                # Cross-track: at-car selected lane center in vehicle coordinates (+right).
-                # Positive = lane center RIGHT of car = car LEFT of center.
-                # MPC: e_lat>0 = car RIGHT. Negate.
-                raw_e_lat = -float(gt_cross_track)
+                if gt_cross_track_source_code == 'road_frame_at_car':
+                    # Road-frame selected-lane cross-track: positive means the
+                    # car is right of the selected lane center, which matches
+                    # MPC e_lat>0 directly.
+                    raw_e_lat = float(gt_cross_track)
+                else:
+                    # Vehicle-frame lane-center geometry: positive means lane
+                    # center is right of the car, so the car is left of center.
+                    raw_e_lat = -float(gt_cross_track)
                 # Heading: headingDeltaDeg positive = car pointed RIGHT.
                 # MPC: e_heading>0 = car pointed RIGHT (so e_lat increases via
                 # e_lat += v*e_heading*dt when car drifts rightward). Same sign.
@@ -5558,6 +5718,9 @@ class VehicleController:
                 grade_rad=grade_rad,
                 curve_local_state=str(reference_point.get('curve_local_state', 'STRAIGHT') or 'STRAIGHT'),
                 curve_gate_weight=float(reference_point.get('reference_lookahead_local_gate_weight', 0.0) or 0.0),
+                local_curve_reference_active=bool(
+                    reference_point.get('local_curve_reference_active', False)
+                ),
             )
 
             if mpc_result.get('mpc_fallback_active'):
@@ -5604,16 +5767,55 @@ class VehicleController:
             lateral_metadata['mpc_kappa_bias_guard_limit'] = mpc_result.get(
                 'kappa_bias_guard_limit', 0.0
             )
+            lateral_metadata['mpc_kappa_active_curve_preserve_ratio'] = mpc_result.get(
+                'kappa_active_curve_preserve_ratio', 0.0
+            )
+            lateral_metadata['mpc_kappa_active_curve_preserve_active'] = bool(
+                mpc_result.get('kappa_active_curve_preserve_active', False)
+            )
+            lateral_metadata['mpc_kappa_active_curve_preserve_weight'] = mpc_result.get(
+                'kappa_active_curve_preserve_weight', 0.0
+            )
+            lateral_metadata['mpc_kappa_active_mild_curve_authority_active'] = bool(
+                mpc_result.get('kappa_active_mild_curve_authority_active', False)
+            )
+            lateral_metadata['mpc_kappa_active_mild_curve_authority_weight'] = mpc_result.get(
+                'kappa_active_mild_curve_authority_weight', 0.0
+            )
+            lateral_metadata['mpc_kappa_active_mild_curve_authority_ratio'] = mpc_result.get(
+                'kappa_active_mild_curve_authority_ratio', 0.0
+            )
+            lateral_metadata['mpc_kappa_active_mild_curve_authority_reason'] = str(
+                mpc_result.get('kappa_active_mild_curve_authority_reason', 'inactive') or 'inactive'
+            )
+            lateral_metadata['mpc_kappa_active_mild_curve_authority_speed_weight'] = mpc_result.get(
+                'kappa_active_mild_curve_authority_speed_weight', 0.0
+            )
+            lateral_metadata['mpc_kappa_active_mild_curve_authority_curvature_weight'] = mpc_result.get(
+                'kappa_active_mild_curve_authority_curvature_weight', 0.0
+            )
+            lateral_metadata['mpc_kappa_active_mild_curve_authority_gate_weight'] = mpc_result.get(
+                'kappa_active_mild_curve_authority_gate_weight', 0.0
+            )
             lateral_metadata['mpc_fallback_active'] = mpc_result.get('mpc_fallback_active', False)
             lateral_metadata['mpc_consecutive_failures'] = mpc_result.get('mpc_consecutive_failures', 0)
             lateral_metadata['mpc_gt_cross_track_m'] = float(gt_cross_track) if gt_cross_track is not None else float('nan')
             lateral_metadata['mpc_gt_cross_track_at_car_m'] = (
                 float(gt_cross_track_at_car) if gt_cross_track_at_car is not None else float('nan')
             )
+            lateral_metadata['mpc_gt_cross_track_road_frame_at_car_m'] = (
+                float(gt_cross_track_road_frame_at_car)
+                if gt_cross_track_road_frame_at_car is not None else float('nan')
+            )
+            lateral_metadata['mpc_gt_cross_track_vehicle_frame_at_car_m'] = (
+                float(gt_cross_track_vehicle_frame_at_car)
+                if gt_cross_track_vehicle_frame_at_car is not None else float('nan')
+            )
             lateral_metadata['mpc_gt_cross_track_lookahead_m'] = (
                 float(gt_cross_track_lookahead) if gt_cross_track_lookahead is not None else float('nan')
             )
             lateral_metadata['mpc_gt_cross_track_source_code'] = gt_cross_track_source_code
+            lateral_metadata['mpc_gt_cross_track_control_source_code'] = gt_cross_track_source_code
             lateral_metadata['mpc_gt_heading_error_rad'] = float(gt_heading) if gt_heading is not None else float('nan')
             lateral_metadata['mpc_using_ground_truth'] = 1.0 if (gt_cross_track is not None and gt_heading is not None) else 0.0
             lateral_metadata['mpc_kappa_preview_used'] = mpc_result.get('kappa_preview_used', False)
@@ -5636,13 +5838,27 @@ class VehicleController:
             gt_cross_track = reference_point.get('gt_cross_track_m')
             gt_heading = reference_point.get('gt_heading_error_rad')
             gt_cross_track_at_car = reference_point.get('gt_cross_track_at_car_m')
+            gt_cross_track_road_frame_at_car = reference_point.get(
+                'gt_cross_track_road_frame_at_car_m'
+            )
+            gt_cross_track_vehicle_frame_at_car = reference_point.get(
+                'gt_cross_track_vehicle_frame_at_car_m',
+                gt_cross_track_at_car,
+            )
             gt_cross_track_lookahead = reference_point.get('gt_cross_track_lookahead_m')
             gt_cross_track_source_code = str(
-                reference_point.get('gt_cross_track_source_code', '') or ''
+                reference_point.get(
+                    'gt_cross_track_control_source_code',
+                    reference_point.get('gt_cross_track_source_code', ''),
+                )
+                or ''
             )
 
             if gt_cross_track is not None and gt_heading is not None:
-                raw_e_lat = -float(gt_cross_track)
+                if gt_cross_track_source_code == 'road_frame_at_car':
+                    raw_e_lat = float(gt_cross_track)
+                else:
+                    raw_e_lat = -float(gt_cross_track)
                 raw_e_heading = float(gt_heading)
             else:
                 raw_e_lat = -float(lateral_metadata.get('lateral_error', 0.0))
@@ -5764,10 +5980,19 @@ class VehicleController:
             lateral_metadata['mpc_gt_cross_track_at_car_m'] = (
                 float(gt_cross_track_at_car) if gt_cross_track_at_car is not None else float('nan')
             )
+            lateral_metadata['mpc_gt_cross_track_road_frame_at_car_m'] = (
+                float(gt_cross_track_road_frame_at_car)
+                if gt_cross_track_road_frame_at_car is not None else float('nan')
+            )
+            lateral_metadata['mpc_gt_cross_track_vehicle_frame_at_car_m'] = (
+                float(gt_cross_track_vehicle_frame_at_car)
+                if gt_cross_track_vehicle_frame_at_car is not None else float('nan')
+            )
             lateral_metadata['mpc_gt_cross_track_lookahead_m'] = (
                 float(gt_cross_track_lookahead) if gt_cross_track_lookahead is not None else float('nan')
             )
             lateral_metadata['mpc_gt_cross_track_source_code'] = gt_cross_track_source_code
+            lateral_metadata['mpc_gt_cross_track_control_source_code'] = gt_cross_track_source_code
             lateral_metadata['mpc_gt_heading_error_rad'] = float(gt_heading) if gt_heading is not None else float('nan')
             lateral_metadata['mpc_using_ground_truth'] = 1.0 if (gt_cross_track is not None and gt_heading is not None) else 0.0
             lateral_metadata['mpc_kappa_preview_used'] = False
@@ -5848,8 +6073,11 @@ class VehicleController:
             lateral_metadata['mpc_consecutive_failures'] = 0
             lateral_metadata['mpc_gt_cross_track_m'] = 0.0
             lateral_metadata['mpc_gt_cross_track_at_car_m'] = 0.0
+            lateral_metadata['mpc_gt_cross_track_road_frame_at_car_m'] = 0.0
+            lateral_metadata['mpc_gt_cross_track_vehicle_frame_at_car_m'] = 0.0
             lateral_metadata['mpc_gt_cross_track_lookahead_m'] = 0.0
             lateral_metadata['mpc_gt_cross_track_source_code'] = ''
+            lateral_metadata['mpc_gt_cross_track_control_source_code'] = ''
             lateral_metadata['mpc_gt_heading_error_rad'] = 0.0
             lateral_metadata['mpc_using_ground_truth'] = 0.0
             lateral_metadata['mpc_kappa_preview_used'] = False
@@ -5874,8 +6102,11 @@ class VehicleController:
             lateral_metadata['mpc_consecutive_failures'] = 0
             lateral_metadata['mpc_gt_cross_track_m'] = 0.0
             lateral_metadata['mpc_gt_cross_track_at_car_m'] = 0.0
+            lateral_metadata['mpc_gt_cross_track_road_frame_at_car_m'] = 0.0
+            lateral_metadata['mpc_gt_cross_track_vehicle_frame_at_car_m'] = 0.0
             lateral_metadata['mpc_gt_cross_track_lookahead_m'] = 0.0
             lateral_metadata['mpc_gt_cross_track_source_code'] = ''
+            lateral_metadata['mpc_gt_cross_track_control_source_code'] = ''
             lateral_metadata['mpc_gt_heading_error_rad'] = 0.0
             lateral_metadata['mpc_using_ground_truth'] = 0.0
             lateral_metadata['mpc_kappa_preview_used'] = False
