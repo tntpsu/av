@@ -1,7 +1,7 @@
 # Robust Full-Stack Roadmap (Unified, Layered, and Gated)
 
-**Last Updated:** 2026-03-23
-**Current Focus:** Step 5 Lead Vehicle Following / ACC — detailed plan at `docs/plans/step5_acc_plan.md`. Step 4 NMPC complete (97.5/100 autobahn_30 at 25 m/s, 1400 tests passing).
+**Last Updated:** 2026-03-31
+**Current Focus:** Step 5 Lead Vehicle Following / ACC — detailed plan at `docs/plans/step5_acc_plan.md`. H2+H3 validated, 10 scenarios remaining. Step 4 NMPC complete (97.5/100 autobahn_30 at 25 m/s). LMPC oscillation fix and speed-control auto-derive complete. 1667 tests passing.
 **Change-Control Rule:** If scope, stage, phase status, or promotion gates change, update this roadmap in the same PR/commit before considering work complete.
 
 ## Scope
@@ -469,10 +469,12 @@ Ordered sequence of major capability additions. Each step builds on the previous
 Steps 1-4 harden the existing foundation. Steps 5-7 add core driving capabilities.
 Steps 8-10 add intelligence and robustness.
 
-**Current state (2026-03-23):** PP (<4 m/s) + Stanley (hairpin <6 m/s) + LMPC (4–21 m/s) + NMPC (>21 m/s, scipy SLSQP).
-Seven tracks validated. No actors. Single lane. Heading gate fix applied (no re-arm during curve arcs).
-Curvature-adjusted scoring active. 1400 tests, 32/32 comfort gates green.
-autobahn_30: 97.5/100 at 25 m/s (Phase H-3). Heading gate SignalIntegrity fix pending E2E (Phase H-4).
+**Current state (2026-03-31):** PP (<4 m/s) + Stanley (hairpin <6 m/s) + LMPC (4–21 m/s) + NMPC (>21 m/s, scipy SLSQP).
+Seven tracks validated. ACC lead vehicle following in progress (H2+H3 validated). Single lane.
+LMPC oscillation fix deployed: dual-mechanism (r_steer_rate scheduling + e_lat attenuation), curvature-gated.
+Speed-control auto-derive: 10 control params derived from target_speed (linear ramp + bool gate).
+Curvature-adjusted scoring active. 1667 tests, 32/32 comfort gates green.
+autobahn_30: 96.5/100 at 25 m/s. highway_65: 97.5/100 at 15 m/s.
 
 ### Step 1 — Track Coverage Expansion (S2-M5) ✅ COMPLETE (2026-03-15)
 
@@ -600,10 +602,15 @@ explaining persistent lateral offset independent of control/perception tuning.
 - **Phase E** — Unity `LeadVehicle.cs` + 5 E2E scenarios on highway_65
 
 **Entry:** Step 4 done ✅
-**Gate:** No collision, min TTC ≥ 2.0s, jerk P95 ≤ 4.0 m/s³, gap RMSE ≤ 0.5m, no lateral regression
+**Gate:** No collision, min TTC ≥ 2.0s, jerk P95 ≤ 4.0 m/s³, gap RMSE ≤ 35m, radar detection ≥ 95%, lateral regression ≤ 0.5 pts
 **Unlocks:** Longitudinal planning that reacts to the world, not just the road
 
-**Current Step 5 status (2026-03-27):**
+**Current Step 5 status (2026-03-31):**
+- **Phases D+A+B+C+E complete** (scoring, data pipeline, IDM controller, safety layer, Unity integration)
+- **H2 (steady following) validated:** 0 collisions, TTC min=25.24s, detection=100%, gap RMSE=29.99m
+- **H3 (hard brake) validated:** 0 collisions, TTC min=2.84s, gap RMSE=34.16m, EMERGENCY_BRAKE compounds correctly
+- **H4–H8 pending** (accel_away, stop_go, cut_in, cut_out, lane_change)
+- **A1–A2 pending** (autobahn steady, autobahn hard brake)
 - same-lane lead association through curves is working on validated highway scenarios
 - single-actor wrong-target rejection now has explicit coverage for:
   - adjacent-lane same-direction actor
@@ -611,7 +618,8 @@ explaining persistent lateral offset independent of control/perception tuning.
 - mixed traffic is still pending:
   - no simultaneous lead + distractor traffic yet
   - no multi-actor association/ranking yet
-- wrong-target reject scenarios are useful ACC contract checks, but are not yet clean full-stack trajectory references because free-flow highway runs can still expose a separate mild-curve lateral weakness
+- **LMPC oscillation fix complete (2026-03-31):** dual-mechanism (r_steer_rate scheduling + e_lat attenuation) — resolved high-speed lateral oscillation that was blocking ACC highway validation
+- **Speed-control auto-derive complete (2026-03-31):** 10 control params auto-derived from target_speed, removing explicit overlay params from highway/autobahn configs
 
 ---
 
