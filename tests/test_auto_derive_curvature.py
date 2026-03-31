@@ -521,6 +521,8 @@ class TestMPCWeightDerivation:
 # =============================================================================
 
 SPEED_PARAMS = AVStack._SPEED_DEPENDENT_PARAMS
+SPEED_CONTROL_PARAMS = AVStack._SPEED_CONTROL_SCALING_PARAMS
+SPEED_BOOL_PARAMS = AVStack._SPEED_BOOL_GATE_PARAMS
 
 
 def _derive_commit_dist(
@@ -586,6 +588,282 @@ class TestSpeedParamDerivation:
         """Every entry in _SPEED_DEPENDENT_PARAMS has a matching base config key."""
         config = load_config()
         for (section_path, key), (base_val, *_) in SPEED_PARAMS.items():
+            parts = section_path.split(".")
+            cfg_section = config
+            for part in parts:
+                assert part in cfg_section, (
+                    f"Section '{section_path}' not found in base config"
+                )
+                cfg_section = cfg_section[part]
+            assert key in cfg_section, (
+                f"Key '{key}' not found in base config at '{section_path}'"
+            )
+
+
+# =============================================================================
+# Test 10: Speed-control scaling param auto-derivation
+# =============================================================================
+
+def _speed_control_derive(
+    key: tuple[str, str],
+    target_speed: float,
+) -> float:
+    """Compute expected auto-derived value for a speed-control scaling param."""
+    base, onset, slope, floor_val, ceil_val = SPEED_CONTROL_PARAMS[key]
+    excess = max(0.0, target_speed - onset)
+    return round(min(ceil_val, max(floor_val, base + slope * excess)), 6)
+
+
+class TestSpeedControlScaling:
+    """Tests for speed-control scaling auto-derivation (_SPEED_CONTROL_SCALING_PARAMS)."""
+
+    # ── steering_smoothing_alpha ──
+
+    def test_smoothing_alpha_at_base_speed(self):
+        """At 12 m/s (base), steering_smoothing_alpha = 0.92 (no change)."""
+        val = _speed_control_derive(
+            ("control.lateral", "steering_smoothing_alpha"), 12.0
+        )
+        assert abs(val - 0.92) < 1e-5
+
+    def test_smoothing_alpha_at_highway(self):
+        """At 15 m/s (highway), steering_smoothing_alpha ≈ 0.30."""
+        val = _speed_control_derive(
+            ("control.lateral", "steering_smoothing_alpha"), 15.0
+        )
+        assert abs(val - 0.30) < 0.01, f"Expected ~0.30, got {val}"
+
+    def test_smoothing_alpha_at_autobahn(self):
+        """At 25 m/s (autobahn), steering_smoothing_alpha = 0.30 (clamped at floor)."""
+        val = _speed_control_derive(
+            ("control.lateral", "steering_smoothing_alpha"), 25.0
+        )
+        assert abs(val - 0.30) < 1e-5
+
+    def test_smoothing_alpha_lateral_control_at_highway(self):
+        """lateral_control mirror: 0.70 → 0.30 at 15 m/s."""
+        val = _speed_control_derive(
+            ("lateral_control", "steering_smoothing_alpha"), 15.0
+        )
+        assert abs(val - 0.30) < 0.01, f"Expected ~0.30, got {val}"
+
+    # ── pp_feedback_gain ──
+
+    def test_feedback_gain_at_base_speed(self):
+        """At 12 m/s, pp_feedback_gain = 0.075 (base, no change)."""
+        val = _speed_control_derive(
+            ("control.lateral", "pp_feedback_gain"), 12.0
+        )
+        assert abs(val - 0.075) < 1e-5
+
+    def test_feedback_gain_at_highway(self):
+        """At 15 m/s, pp_feedback_gain = 0.0 (disabled)."""
+        val = _speed_control_derive(
+            ("control.lateral", "pp_feedback_gain"), 15.0
+        )
+        assert abs(val - 0.0) < 1e-5
+
+    # ── curve_feedforward_gain ──
+
+    def test_feedforward_zero_at_highway(self):
+        """At 15 m/s, curve_feedforward_gain = 0.0."""
+        val = _speed_control_derive(
+            ("control.lateral", "curve_feedforward_gain"), 15.0
+        )
+        assert abs(val - 0.0) < 1e-5
+
+    def test_feedforward_threshold_zero_at_highway(self):
+        """At 15 m/s, curve_feedforward_threshold = 0.0."""
+        val = _speed_control_derive(
+            ("control.lateral", "curve_feedforward_threshold"), 15.0
+        )
+        assert abs(val - 0.0) < 1e-5
+
+    # ── pp_map_ff_gain ──
+
+    def test_map_ff_gain_increases_at_highway(self):
+        """At 15 m/s, pp_map_ff_gain = 1.0 (increased from base 0.8)."""
+        val = _speed_control_derive(
+            ("control.lateral", "pp_map_ff_gain"), 15.0
+        )
+        assert abs(val - 1.0) < 0.01
+
+    # ── pp_speed_norm_min_scale ──
+
+    def test_speed_norm_scale_at_highway(self):
+        """At 15 m/s, pp_speed_norm_min_scale ≈ 0.60."""
+        val = _speed_control_derive(
+            ("control.lateral", "pp_speed_norm_min_scale"), 15.0
+        )
+        assert abs(val - 0.601) < 0.01, f"Expected ~0.60, got {val}"
+
+    def test_speed_norm_scale_at_autobahn(self):
+        """At 25 m/s, pp_speed_norm_min_scale = 0.50 (clamped at floor)."""
+        val = _speed_control_derive(
+            ("control.lateral", "pp_speed_norm_min_scale"), 25.0
+        )
+        assert abs(val - 0.50) < 1e-5
+
+    # ── speed_drag_gain ──
+
+    def test_drag_gain_at_highway(self):
+        """At 15 m/s, speed_drag_gain ≈ 0.012."""
+        val = _speed_control_derive(
+            ("control.longitudinal", "speed_drag_gain"), 15.0
+        )
+        assert abs(val - 0.012) < 0.002, f"Expected ~0.012, got {val}"
+
+    def test_drag_gain_at_autobahn(self):
+        """At 25 m/s, speed_drag_gain = 0.008 (clamped at floor)."""
+        val = _speed_control_derive(
+            ("control.longitudinal", "speed_drag_gain"), 25.0
+        )
+        assert abs(val - 0.008) < 1e-5
+
+    # ── accel_target_smoothing_alpha ──
+
+    def test_accel_smoothing_at_highway(self):
+        """At 15 m/s, accel_target_smoothing_alpha ≈ 0.60."""
+        val = _speed_control_derive(
+            ("control.longitudinal", "accel_target_smoothing_alpha"), 15.0
+        )
+        assert abs(val - 0.599) < 0.01, f"Expected ~0.60, got {val}"
+
+    def test_accel_smoothing_at_autobahn(self):
+        """At 25 m/s, accel_target_smoothing_alpha = 0.50 (clamped at floor)."""
+        val = _speed_control_derive(
+            ("control.longitudinal", "accel_target_smoothing_alpha"), 25.0
+        )
+        assert abs(val - 0.50) < 1e-5
+
+    # ── Monotonicity and bounds ──
+
+    def test_decreasing_params_monotonic(self):
+        """All negative-slope params decrease monotonically with speed."""
+        speeds = [10.0, 12.0, 14.0, 16.0, 20.0, 25.0, 30.0]
+        for key, (base, onset, slope, floor_val, ceil_val) in SPEED_CONTROL_PARAMS.items():
+            if slope >= 0:
+                continue
+            values = [_speed_control_derive(key, v) for v in speeds]
+            for i in range(1, len(values)):
+                assert values[i] <= values[i - 1] + 1e-9, (
+                    f"{key}: non-monotonic at {speeds[i]} m/s "
+                    f"({values[i]} > {values[i-1]})"
+                )
+
+    def test_increasing_params_monotonic(self):
+        """All positive-slope params increase monotonically with speed."""
+        speeds = [10.0, 12.0, 14.0, 16.0, 20.0, 25.0, 30.0]
+        for key, (base, onset, slope, floor_val, ceil_val) in SPEED_CONTROL_PARAMS.items():
+            if slope <= 0:
+                continue
+            values = [_speed_control_derive(key, v) for v in speeds]
+            for i in range(1, len(values)):
+                assert values[i] >= values[i - 1] - 1e-9, (
+                    f"{key}: non-monotonic at {speeds[i]} m/s "
+                    f"({values[i]} < {values[i-1]})"
+                )
+
+    def test_all_params_within_bounds(self):
+        """Derived values never exceed floor/ceiling bounds."""
+        for key, (base, onset, slope, floor_val, ceil_val) in SPEED_CONTROL_PARAMS.items():
+            for speed in [0.0, 5.0, 12.0, 15.0, 25.0, 50.0]:
+                val = _speed_control_derive(key, speed)
+                assert val >= floor_val - 1e-9, (
+                    f"{key} at {speed} m/s: {val} < floor {floor_val}"
+                )
+                assert val <= ceil_val + 1e-9, (
+                    f"{key} at {speed} m/s: {val} > ceiling {ceil_val}"
+                )
+
+    def test_overlay_key_wins_over_speed_control_derive(self):
+        """Explicit overlay prevents speed-control scaling auto-derive."""
+        config = _build_mock_config(
+            overlay={"control": {"lateral": {"steering_smoothing_alpha": 0.5}}}
+        )
+        # The overlay sets 0.5 explicitly — auto-derive should NOT override it
+        overlay = config.get("_raw_overlay", {})
+        ctrl_overlay = overlay.get("control", {}).get("lateral", {})
+        assert "steering_smoothing_alpha" in ctrl_overlay
+
+    def test_speed_control_params_exist_in_base_config(self):
+        """Every entry in _SPEED_CONTROL_SCALING_PARAMS has a matching base config key."""
+        config = load_config()
+        for (section_path, key), (base_val, *_) in SPEED_CONTROL_PARAMS.items():
+            parts = section_path.split(".")
+            cfg_section = config
+            for part in parts:
+                assert part in cfg_section, (
+                    f"Section '{section_path}' not found in base config"
+                )
+                cfg_section = cfg_section[part]
+            assert key in cfg_section, (
+                f"Key '{key}' not found in base config at '{section_path}'"
+            )
+            # Verify base value matches config
+            actual = cfg_section[key]
+            assert abs(float(actual) - base_val) < 1e-6, (
+                f"{section_path}.{key}: base config has {actual}, "
+                f"table says {base_val}"
+            )
+
+    def test_base_values_match_config(self):
+        """Table base values must equal base config values (no silent drift)."""
+        config = load_config()
+        for (section_path, key), (base_val, *_) in SPEED_CONTROL_PARAMS.items():
+            parts = section_path.split(".")
+            cfg_section = config
+            for part in parts:
+                cfg_section = cfg_section[part]
+            assert abs(float(cfg_section[key]) - base_val) < 1e-6, (
+                f"{section_path}.{key}: config={cfg_section[key]}, table={base_val}"
+            )
+
+
+# =============================================================================
+# Test 11: Speed boolean gate param auto-derivation
+# =============================================================================
+
+
+class TestSpeedBoolGate:
+    """Tests for speed boolean gate auto-derivation (_SPEED_BOOL_GATE_PARAMS)."""
+
+    def test_speed_norm_disabled_at_base(self):
+        """At 12 m/s, pp_speed_norm_enabled = False (base speed below threshold)."""
+        base_val, threshold = SPEED_BOOL_PARAMS[
+            ("control.lateral", "pp_speed_norm_enabled")
+        ]
+        derived = (not base_val) if 12.0 > threshold else base_val
+        assert derived is False
+
+    def test_speed_norm_enabled_at_highway(self):
+        """At 15 m/s, pp_speed_norm_enabled = True (above 13 m/s threshold)."""
+        base_val, threshold = SPEED_BOOL_PARAMS[
+            ("control.lateral", "pp_speed_norm_enabled")
+        ]
+        derived = (not base_val) if 15.0 > threshold else base_val
+        assert derived is True
+
+    def test_speed_norm_enabled_at_autobahn(self):
+        """At 25 m/s, pp_speed_norm_enabled = True."""
+        base_val, threshold = SPEED_BOOL_PARAMS[
+            ("control.lateral", "pp_speed_norm_enabled")
+        ]
+        derived = (not base_val) if 25.0 > threshold else base_val
+        assert derived is True
+
+    def test_speed_norm_disabled_at_threshold(self):
+        """At exactly 13.0 m/s (threshold), pp_speed_norm_enabled = False (not strict >)."""
+        base_val, threshold = SPEED_BOOL_PARAMS[
+            ("control.lateral", "pp_speed_norm_enabled")
+        ]
+        derived = (not base_val) if 13.0 > threshold else base_val
+        assert derived is False
+
+    def test_bool_params_exist_in_base_config(self):
+        """Every entry in _SPEED_BOOL_GATE_PARAMS has a matching base config key."""
+        config = load_config()
+        for (section_path, key), (base_val, threshold) in SPEED_BOOL_PARAMS.items():
             parts = section_path.split(".")
             cfg_section = config
             for part in parts:

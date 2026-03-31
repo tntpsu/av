@@ -1544,6 +1544,59 @@ class AVStack:
         ("trajectory", "curve_local_commit_distance_ready_m"): (3.0, 0.75, 0.40, 10.0),
     }
 
+    # ── Speed-control scaling params ──────────────────────────────────────────
+    # Each entry: (section_path, key) → (base, onset, slope_per_mps, floor, ceiling)
+    # Formula: derived = clamp(base + slope × max(0, v - onset), floor, ceiling)
+    # Negative slope → param decreases with speed (e.g., smoothing, drag).
+    # Positive slope → param increases with speed (e.g., map FF gain).
+    # Fitted so highway (15 m/s) and autobahn (25 m/s) get exact overlay values.
+    # Explicit overlay always wins.
+    _SPEED_CONTROL_SCALING_PARAMS: dict[
+        tuple[str, str], tuple[float, float, float, float, float]
+    ] = {
+        # steering_smoothing_alpha: 0.92 at ≤12 → 0.30 at 15+ m/s
+        # Phase lag from high alpha is fine at low speed but causes oscillation at 15+ m/s.
+        ("control.lateral", "steering_smoothing_alpha"):
+            (0.92, 12.0, -0.207, 0.30, 0.92),
+        ("lateral_control", "steering_smoothing_alpha"):
+            (0.70, 12.0, -0.133, 0.30, 0.70),
+        # pp_feedback_gain: integral term amplifies oscillation at high speed
+        ("control.lateral", "pp_feedback_gain"):
+            (0.075, 12.0, -0.025, 0.0, 0.075),
+        # curve_feedforward: perception noise curvature creates positive feedback at speed
+        # Slope -1/3 ensures gain reaches exactly 0.0 at 15 m/s (3 m/s above onset)
+        ("control.lateral", "curve_feedforward_gain"):
+            (1.0, 12.0, -1.0 / 3.0, 0.0, 1.0),
+        ("control.lateral", "curve_feedforward_threshold"):
+            (0.012, 12.0, -0.004, 0.0, 0.012),
+        # pp_map_ff_gain: stronger map feedforward at high speed (less reliance on perception)
+        # Slope 1/3 ensures gain reaches exactly 1.0 at 15 m/s
+        ("control.lateral", "pp_map_ff_gain"):
+            (0.8, 12.0, 1.0 / 15.0, 0.8, 1.0),
+        # pp_speed_norm_min_scale: quadratic floor for PP gain normalization
+        # At 15 m/s: 0.70 - 0.033×3 = 0.60; at 25 m/s: clamped to 0.50
+        ("control.lateral", "pp_speed_norm_min_scale"):
+            (0.70, 12.0, -0.033, 0.50, 0.70),
+        # speed_drag_gain: lighter braking at high speed (less decel authority needed)
+        ("control.longitudinal", "speed_drag_gain"):
+            (0.035, 12.0, -0.0077, 0.008, 0.035),
+        # accel_target_smoothing_alpha: more responsive accel tracking at high speed
+        ("control.longitudinal", "accel_target_smoothing_alpha"):
+            (0.86, 12.0, -0.087, 0.50, 0.86),
+    }
+
+    # ── Speed boolean gate params ─────────────────────────────────────────────
+    # Each entry: (section_path, key) → (base_value, speed_threshold)
+    # When target_speed > threshold, value flips to NOT base_value.
+    # Explicit overlay always wins.
+    _SPEED_BOOL_GATE_PARAMS: dict[
+        tuple[str, str], tuple[bool, float]
+    ] = {
+        # pp_speed_norm_enabled: normalize PP gain by speed at high speed
+        # Without this, PP gain v/L grows linearly → oscillation.
+        ("control.lateral", "pp_speed_norm_enabled"): (False, 13.0),
+    }
+
     def _derive_curvature_thresholds(self) -> None:
         """Auto-derive curvature thresholds from track geometry using 4th-root scaling.
 
@@ -1668,19 +1721,14 @@ class AVStack:
             )
 
     def _derive_speed_params(self) -> None:
-        """Auto-derive speed-dependent trajectory parameters from target_speed.
+        """Auto-derive speed-dependent parameters from target_speed.
 
-        Formula: derived = clamp(max(base, target_speed × time_const), base, max)
-
-        Uses a tighter time constant (tc_tight) for tracks where κ_max exceeds
-        mpc_max_curvature (tight curves, short straights between arcs) to avoid
-        the curve-local state latching on straights between back-to-back turns.
-
-        Key parameter: curve_local_commit_distance_ready_m
-          At 12 m/s (hill_highway) with 0.75s constant → 9.0m
-          At 15 m/s (highway)     with 0.75s constant → 11.25m
-          At 12 m/s (s_loop/hairpin, tight κ) with 0.40s → 4.8m
-          s_loop/mixed_radius explicit overlay (8.0m) always wins.
+        Three derivation tables:
+        1. _SPEED_DEPENDENT_PARAMS: distance/time params using time-constant formula
+           derived = clamp(max(base, v × tc), base, max)
+        2. _SPEED_CONTROL_SCALING_PARAMS: control gains using linear ramp formula
+           derived = clamp(base + slope × max(0, v - onset), floor, ceiling)
+        3. _SPEED_BOOL_GATE_PARAMS: boolean gates that flip above a speed threshold
 
         Only applies when curve_auto_derive is enabled. Explicit overlay keys win.
         """
@@ -1705,24 +1753,42 @@ class AVStack:
         raw_overlay = self.config.get("_raw_overlay", {})
 
         derived_count = 0
+
+        # ── Table 1: time-constant params (commit distance, etc.) ──
         for (section_path, key), (base_val, tc_gentle, tc_tight, max_val) in \
                 self._SPEED_DEPENDENT_PARAMS.items():
-            parts = section_path.split(".")
-            cfg_section = self.config
-            overlay_section = raw_overlay
-            for part in parts:
-                cfg_section = cfg_section.setdefault(part, {})
-                overlay_section = (
-                    overlay_section.get(part, {})
-                    if isinstance(overlay_section, dict) else {}
-                )
-
-            # Explicit overlay wins
+            cfg_section, overlay_section = self._resolve_config_section(
+                section_path, raw_overlay
+            )
             if isinstance(overlay_section, dict) and key in overlay_section:
                 continue
-
             time_const = tc_tight if is_tight_track else tc_gentle
             derived = round(min(max_val, max(base_val, target_speed * time_const)), 6)
+            cfg_section[key] = derived
+            derived_count += 1
+
+        # ── Table 2: linear-ramp control scaling params ──
+        for (section_path, key), (base_val, onset, slope, floor_val, ceil_val) in \
+                self._SPEED_CONTROL_SCALING_PARAMS.items():
+            cfg_section, overlay_section = self._resolve_config_section(
+                section_path, raw_overlay
+            )
+            if isinstance(overlay_section, dict) and key in overlay_section:
+                continue
+            excess = max(0.0, target_speed - onset)
+            derived = round(min(ceil_val, max(floor_val, base_val + slope * excess)), 6)
+            cfg_section[key] = derived
+            derived_count += 1
+
+        # ── Table 3: boolean speed gates ──
+        for (section_path, key), (base_val, threshold) in \
+                self._SPEED_BOOL_GATE_PARAMS.items():
+            cfg_section, overlay_section = self._resolve_config_section(
+                section_path, raw_overlay
+            )
+            if isinstance(overlay_section, dict) and key in overlay_section:
+                continue
+            derived = (not base_val) if target_speed > threshold else base_val
             cfg_section[key] = derived
             derived_count += 1
 
@@ -1732,6 +1798,21 @@ class AVStack:
                 "tight_track=%s, derived %d speed-dependent param(s)",
                 target_speed, kappa_max, is_tight_track, derived_count,
             )
+
+    def _resolve_config_section(
+        self, section_path: str, raw_overlay: dict
+    ) -> tuple[dict, dict]:
+        """Resolve a dotted section path into config and overlay sub-dicts."""
+        parts = section_path.split(".")
+        cfg_section = self.config
+        overlay_section = raw_overlay
+        for part in parts:
+            cfg_section = cfg_section.setdefault(part, {})
+            overlay_section = (
+                overlay_section.get(part, {})
+                if isinstance(overlay_section, dict) else {}
+            )
+        return cfg_section, overlay_section
 
     def _update_track_odometer(self, vehicle_state_dict: dict) -> float:
         """Accumulate driven distance from vehicle position for map-based lookups.

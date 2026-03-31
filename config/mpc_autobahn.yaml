@@ -15,14 +15,9 @@
 
 control:
   lateral:
-    # High-speed PP settings (active only during Stanley/PP phases at <5 m/s)
-    steering_smoothing_alpha: 0.3     # match highway (0.2 too little damping for 600m straights)
-    pp_feedback_gain: 0.0             # pure geometric PP — PID integral unstable at high speed
-    curve_feedforward_gain: 0.0       # noise curvature creates positive feedback at speed
-    curve_feedforward_threshold: 0.0
-    pp_speed_norm_enabled: true       # normalise PP gain by speed (base: disabled)
-    pp_speed_norm_min_scale: 0.50     # quadratic floor at 25 m/s: scale=(12/25)²=0.23 clamped to 0.5
-    pp_map_ff_gain: 1.0
+    # Auto-derived from target_speed (see _SPEED_CONTROL_SCALING_PARAMS):
+    #   steering_smoothing_alpha, pp_feedback_gain, curve_feedforward_gain/threshold,
+    #   pp_speed_norm_enabled, pp_speed_norm_min_scale, pp_map_ff_gain
     # Curve intent — tuned for gentle R600 geometry and 25 m/s approach speed
     curve_intent_arm_preview_min: 0.001     # fires at κ≥0.001 (base: 0.003; needed for R600 at κ=0.00167)
     curve_intent_arm_rise_min: 0.0001
@@ -33,8 +28,7 @@ control:
   longitudinal:
     target_speed: 25.0      # m/s — crosses LMPC→NMPC boundary (20+1=21 m/s upshift)
     max_speed: 28.0         # headroom above target
-    speed_drag_gain: 0.008  # very light drag at 25 m/s (highway: 0.012, base: 0.035)
-    accel_target_smoothing_alpha: 0.5   # responsive (base: 0.86)
+    # speed_drag_gain, accel_target_smoothing_alpha: auto-derived from target_speed
   regime:
     # NMPC upshift: speed > lmpc_max_speed_mps + upshift_hysteresis = 21 m/s
     lmpc_max_speed_mps: 20.0           # threshold already in RegimeConfig default; explicit here for clarity
@@ -84,6 +78,4 @@ trajectory:
 
 safety:
   max_speed: 28.0             # safety ceiling above target (base: 14.0; raised for autobahn)
-
-lateral_control:
-  steering_smoothing_alpha: 0.3   # match highway (0.2 too little damping for 600m straights)
+# lateral_control.steering_smoothing_alpha: auto-derived from target_speed

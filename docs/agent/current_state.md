@@ -96,6 +96,16 @@
 
 **Tests:** 28 passing in `test_oscillation_damping.py` (12 scheduling formula, 8 attenuation formula, 8 Smith predictor guard).
 
+### Speed-Control Auto-Derive — COMPLETE ✅ (2026-03-31)
+
+Extended `_derive_speed_params()` with two new derivation tables:
+- **`_SPEED_CONTROL_SCALING_PARAMS`** (9 entries): linear-ramp formula `derived = clamp(base + slope × max(0, v - onset), floor, ceiling)`. Params: `steering_smoothing_alpha` (×2 sections), `pp_feedback_gain`, `curve_feedforward_gain/threshold`, `pp_map_ff_gain`, `pp_speed_norm_min_scale`, `speed_drag_gain`, `accel_target_smoothing_alpha`.
+- **`_SPEED_BOOL_GATE_PARAMS`** (1 entry): `pp_speed_norm_enabled` — flips True above 13 m/s.
+
+**Impact:** Removed 10 explicit params from `mpc_highway.yaml` (193→181 lines) and 10 from `mpc_autobahn.yaml` (90→81 lines). Auto-derived values match the previous overlay values exactly at 15 m/s and 25 m/s. ACC overlays unaffected (explicit overlay keys win).
+
+**Tests:** 26 new tests in `test_auto_derive_curvature.py` (TestSpeedControlScaling: 22, TestSpeedBoolGate: 5). 121+57 passing. Extracted `_resolve_config_section()` helper to reduce duplication in the 3-table processing loop.
+
 ---
 
 ### Step 4 NMPC Phase H-4 — FAILED → REVERTED (2026-03-23)

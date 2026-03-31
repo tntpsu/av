@@ -8,26 +8,18 @@
 #       --track-yaml tracks/highway_65.yml --duration 60
 
 # ── Remaining overlay keys (future task: auto-derive from track geometry) ──
-# Speed settings (target_speed, max_speed): could derive from track speed_limit_mph
-# steering_smoothing_alpha: could auto-scale with speed (higher speed → more smoothing)
-# pp_feedback_gain/curve_feedforward: could auto-disable at high speed
-# pp_speed_norm: could auto-enable when target_speed > threshold
-# pp_map_ff_gain: could auto-scale with curvature range
 # Curve intent params: could auto-derive from arc geometry (radius, spacing)
-# speed_drag_gain, accel_target_smoothing_alpha: could auto-scale with speed
 # curve_phase thresholds: could auto-derive from κ_max
 # speed_governor settings: could auto-set when map curvature available
 # MPC weights/bias: could auto-derive from κ_max (low κ → soft q_lat + bias enabled)
+#
+# Auto-derived from target_speed (see _SPEED_CONTROL_SCALING_PARAMS):
+#   steering_smoothing_alpha, pp_feedback_gain, curve_feedforward_gain/threshold,
+#   pp_speed_norm_enabled, pp_speed_norm_min_scale, pp_map_ff_gain,
+#   speed_drag_gain, accel_target_smoothing_alpha
 
 control:
   lateral:
-    steering_smoothing_alpha: 0.3   # fast response (base: 0.9 → too much phase lag at highway speed)
-    pp_feedback_gain: 0.0           # pure geometric PP; PID integral amplifies oscillation at 15 m/s
-    curve_feedforward_gain: 0.0     # noise curvature on straight highway creates positive feedback
-    curve_feedforward_threshold: 0.0
-    pp_speed_norm_enabled: true     # normalize PP gain by speed (disabled in base)
-    pp_speed_norm_min_scale: 0.60   # quadratic floor: at 15 m/s scale=(12/15)²=0.64 (base: 0.7)
-    pp_map_ff_gain: 1.0             # stronger map feedforward (base: 0.8)
     # Curve intent — calibrated for gentle highway geometry and higher speed
     curve_intent_startup_ignore_frames: 45
     curve_intent_arm_preview_min: 0.002
@@ -42,8 +34,6 @@ control:
   longitudinal:
     target_speed: 15.0
     max_speed: 18.0
-    speed_drag_gain: 0.012          # lighter drag at highway speed (base: 0.035)
-    accel_target_smoothing_alpha: 0.6   # more responsive (base: 0.86)
 
 trajectory:
   target_speed: 15.0
@@ -188,6 +178,4 @@ trajectory:
 
 safety:
   max_speed: 15.0
-
-lateral_control:
-  steering_smoothing_alpha: 0.3   # mirror of control.lateral above (dual registration in orchestrator)
+# lateral_control.steering_smoothing_alpha: auto-derived from target_speed
