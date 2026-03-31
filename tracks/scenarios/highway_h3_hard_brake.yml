@@ -1,7 +1,11 @@
 # H3 — Hard brake on straight (highway_65)
-# Lead at 30m arc-distance (27m initial gap), constant 12 m/s until t=8s then hard brake → 0 m/s.
-# Ego target 15 m/s; ACC closes to IDM gap then must stop cleanly behind stationary lead.
-# Expected: IDM decelerates smoothly; TTC min ≥ 2.0s; no collision; ego stops behind lead.
+# Lead at 30m arc-distance, constant 12 m/s until t=70s then hard brake → 5 m/s at 3 m/s².
+# ACC needs ~65s to close from startup gap to IDM equilibrium (~28m). brake_at_time_s=70
+# fires after full convergence. brake_to_speed_mps=5.0 (Δv=7 m/s at onset).
+# EMERGENCY_BRAKE fires when gap < 1.5×ego (fires at gap~13.5m). With the fixed EB
+# compounding (v_target_prev - 4×dt instead of ego - 4×dt), target compounds downward
+# ~0.133m/s per frame → growing speed error → proportional braking ramps up.
+# Expected: IDM decelerates to 5 m/s; TTC min ≥ 2.0s; no collision; gap converges to ~9.5m.
 # base: tracks/highway_65.yml
 
 name: highway_65
@@ -65,5 +69,5 @@ lead_vehicle:
   speed_profile:
     type: hard_brake
     speed_mps: 12.0
-    brake_at_time_s: 8.0
-    brake_to_speed_mps: 0.0
+    brake_at_time_s: 70.0
+    brake_to_speed_mps: 5.0

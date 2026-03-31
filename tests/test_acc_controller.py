@@ -284,6 +284,41 @@ class TestDetectionLossHysteresis:
         assert out.state == ACCState.ACC_ACTIVE
 
 
+class TestEmergencyBrake:
+    def test_eb_target_compounds_downward(self):
+        """EB target must compound from v_target_prev, not reset to ego each frame.
+
+        With the old ego_speed-based formula the target stays ~0.133m/s below ego
+        (only ~0.04 m/s² effective brake).  With compounding, the error grows and
+        the speed controller applies meaningful braking.
+        """
+        ctrl = _make_controller()
+        # Seed ACC_ACTIVE state
+        for _ in range(5):
+            ctrl.compute_target_speed(12.0, 15.0, _reading(gap_m=30.0, range_rate_mps=0.0), DT)
+
+        # Trigger EMERGENCY_BRAKE: gap=10 < 1.5*12=18, range_rate=4.0 (closing)
+        ego = 12.0
+        prev_target = None
+        for i in range(10):
+            out = ctrl.compute_target_speed(ego, 15.0, _reading(gap_m=10.0, range_rate_mps=4.0), DT)
+            assert out.state == ACCState.EMERGENCY_BRAKE
+            if prev_target is not None:
+                # Target must strictly decrease each frame (compounds, not ego-0.133)
+                assert out.target_speed < prev_target, (
+                    f"Frame {i}: EB target did not decrease: {prev_target:.4f} → {out.target_speed:.4f}"
+                )
+            prev_target = out.target_speed
+
+        # After 10 EB frames with dt=1/30: target drops by ~10 * 4 * (1/30) = 1.33 m/s
+        initial_target = 12.0  # seeded to ego on first ACC frame
+        expected_drop = 10 * 4.0 * DT
+        assert initial_target - out.target_speed >= expected_drop * 0.8, (
+            f"EB compounding too slow: dropped {initial_target - out.target_speed:.3f}m/s, "
+            f"expected >= {expected_drop*0.8:.3f}m/s"
+        )
+
+
 class TestCollapsedGapSafety:
     def test_collapsed_gap_triggers_estop_even_without_positive_range_rate(self):
         ctrl = _make_controller()

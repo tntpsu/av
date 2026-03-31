@@ -777,6 +777,7 @@ class ControlCommand:
     mpc_smith_e_lat_predicted: float = 0.0     # Smith-predicted e_lat fed to MPC
     mpc_smith_e_heading_predicted: float = 0.0 # Smith-predicted e_heading fed to MPC
     mpc_delay_frames_used: int = 0             # Number of delay frames used in Smith predictor
+    mpc_r_steer_rate_effective: float = 0.0   # Speed-scheduled r_steer_rate used by MPC QP
     grade_compensation_active: float = 0.0     # 1.0 when grade compensation is active (|grade| > 0.001)
     effective_max_accel: float = 0.0          # Grade-adjusted max acceleration (m/s²)
     # Silent e_lat dropout detection: e_lat≈0 but perception NOT flagged stale.

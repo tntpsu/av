@@ -175,8 +175,12 @@ PATTERNS = [
         "name": "Lateral oscillation (positive osc_slope)",
         "severity": "instability",
         "code_pointer": "control/pid_controller.py:pure_pursuit_steer() (~line 1400)",
-        "config_lever": "control.lateral.pp_feedback_gain",
-        "fix_hint": "Reduce pp_feedback_gain (0.10 → 0.08). If persists: increase reference_smoothing (0.75 → 0.80).",
+        "config_lever": "control.lateral.pp_feedback_gain / trajectory.mpc.mpc_r_steer_rate_scheduling_enabled / trajectory.mpc.mpc_elat_speed_atten_rate",
+        "fix_hint": (
+            "If PP-mode: reduce pp_feedback_gain (0.10→0.08) or increase reference_smoothing. "
+            "If MPC-mode at speed: enable r_steer_rate scheduling (mpc_r_steer_rate_scheduling_enabled: true) "
+            "and/or increase mpc_elat_speed_atten_rate (gain reduction on straights). Both are curvature-gated."
+        ),
         "check": lambda m: m.get("osc_slope", -1) > 0.0,
     },
     {
@@ -194,8 +198,8 @@ PATTERNS = [
         "name": "MPC infeasible QP bursts (>0.5% frames)",
         "severity": "instability",
         "code_pointer": "control/mpc_controller.py:MPCSolver.solve()",
-        "config_lever": "mpc_q_lat / mpc_r_steer_rate",
-        "fix_hint": "MPC QP solver returning infeasible. Check constraint bounds or reduce q_lat to widen feasible region.",
+        "config_lever": "mpc_q_lat / mpc_r_steer_rate (note: r_steer_rate may be speed-scheduled — check mpc_r_steer_rate_effective in HDF5)",
+        "fix_hint": "MPC QP solver returning infeasible. Check constraint bounds or reduce q_lat to widen feasible region. If r_steer_rate scheduling is active, high effective rate may over-constrain the QP.",
         "check": lambda m: m.get("mpc_available", False) and m.get("mpc_infeasible_rate", 0) > 0.005,
     },
     {
@@ -422,8 +426,17 @@ PATTERNS = [
         "severity": "instability",
         "category": "Control",
         "code_pointer": "control/mpc_controller.py:MPCSolver.solve()",
-        "config_lever": "trajectory.mpc.mpc_q_lat / trajectory.mpc.mpc_r_steer_rate",
-        "fix_hint": "MPC steering sign-changes >30% of MPC frames. Lower q_lat or raise r_steer_rate to reduce aggressiveness.",
+        "config_lever": (
+            "trajectory.mpc.mpc_r_steer_rate_scheduling_enabled (rate penalty) / "
+            "trajectory.mpc.mpc_elat_speed_atten_rate (gain reduction) / "
+            "trajectory.mpc.mpc_q_lat / trajectory.mpc.mpc_r_steer_rate"
+        ),
+        "fix_hint": (
+            "MPC sign-changes >30%. Two-mechanism fix: (1) enable r_steer_rate scheduling "
+            "(penalizes steering rate at speed), (2) raise mpc_elat_speed_atten_rate (reduces "
+            "loop gain on straights). Both curvature-gated (kappa_off). If already enabled, "
+            "increase mpc_r_steer_rate_speed_gain or mpc_elat_speed_atten_rate."
+        ),
         "check": lambda m: m.get("mpc_available", False) and m.get("mpc_steering_osc_rate", 0) > 0.30,
     },
     # GT boundary corruption (Step 3D)

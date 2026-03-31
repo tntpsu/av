@@ -16,7 +16,7 @@
 control:
   lateral:
     # High-speed PP settings (active only during Stanley/PP phases at <5 m/s)
-    steering_smoothing_alpha: 0.2     # fast response (highway: 0.3; faster at 25 m/s)
+    steering_smoothing_alpha: 0.3     # match highway (0.2 too little damping for 600m straights)
     pp_feedback_gain: 0.0             # pure geometric PP — PID integral unstable at high speed
     curve_feedforward_gain: 0.0       # noise curvature creates positive feedback at speed
     curve_feedforward_threshold: 0.0
@@ -66,8 +66,10 @@ trajectory:
     mpc_bias_kappa_gain: 0.015
     mpc_bias_max_correction: 0.002
     mpc_bias_min_speed: 5.0
-    mpc_r_steer_rate: 1.5       # slightly looser rate penalty at high speed (base: 2.0)
-    mpc_horizon: 25             # extend horizon: 25×0.1s = 2.5s = 62.5m at 25 m/s
+    # Scheduling with curvature gating (kappa_off=0.005). Inherit base r_steer_rate=3.5,
+    # onset=12, gain=0.80, max_scale=3.0 — identical to highway for consistent v/L damping.
+    mpc_r_steer_rate_scheduling_enabled: true
+    mpc_horizon: 25             # 25×0.1s = 2.5s = 62.5m at 25 m/s
   nmpc:
     nmpc_enabled: true          # activate NMPC for this track
     nmpc_horizon: 20
@@ -84,4 +86,4 @@ safety:
   max_speed: 28.0             # safety ceiling above target (base: 14.0; raised for autobahn)
 
 lateral_control:
-  steering_smoothing_alpha: 0.2   # mirror of control.lateral above
+  steering_smoothing_alpha: 0.3   # match highway (0.2 too little damping for 600m straights)

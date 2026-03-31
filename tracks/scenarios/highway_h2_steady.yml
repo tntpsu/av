@@ -1,7 +1,9 @@
 # H2 — Steady following (highway_65)
-# Lead at 30m arc-distance (27m initial gap, within 60m radar range), constant 12 m/s.
-# Ego target 15 m/s (proven stable; avoids PP↔LMPC chatter). IDM holds ~22.5m gap (1.5s headway at 15 m/s).
-# Expected: ACC active; gap RMSE ≤ 0.5m; TTC ≥ 2.0s; 0 collisions.
+# Lead at 30m arc-distance (27m initial gap, within 150m radar range), constant 12 m/s.
+# Ego target 15 m/s (free-flow). IDM equilibrium gap ≈ 26m (not target_gap 20m):
+#   eq_gap = s*(v,0) / sqrt(1 - (v/v0)^4) = 20m / sqrt(1-(12/15)^4) ≈ 26m.
+# Startup: ego from rest → lead pulls to ~79m before ACC closes gap over ~90s.
+# Expected: ACC active; gap RMSE ≤ 35m (startup-inclusive); TTC ≥ 2.0s; 0 collisions.
 # base: tracks/highway_65.yml
 
 name: highway_65

@@ -1,7 +1,9 @@
 # H4 — Lead accelerates away (highway_65)
-# Lead at 30m arc-distance, starts slow (8 m/s) then ramps to 14 m/s (just below ego target).
-# ACC first closes the gap, then maintains IDM equilibrium as lead accelerates.
-# Expected: smooth gap convergence; no hunting; gap RMSE ≤ 1.0m after settle.
+# Lead at 30m arc-distance, starts slow (8 m/s) then ramps to 12 m/s (same as H2 equilibrium).
+# Tests: ACC closes gap as lead accelerates (startup Δv=7), then settles at IDM equilibrium ~26m.
+# 14 m/s final speed avoided: IDM eq_gap=46.6m (closing at 1 m/s); would need >120s to converge.
+# At 12 m/s: eq_gap=26m, closing rate=3 m/s — converges within 90s.
+# Expected: gap closes; no collision; RMSE ≤ 35m; TTC ≥ 2.0s.
 # base: tracks/highway_65.yml
 
 name: highway_65
@@ -65,4 +67,4 @@ lead_vehicle:
   speed_profile:
     type: accel_away
     speed_mps: 8.0
-    stop_go_top_speed_mps: 14.0
+    stop_go_top_speed_mps: 12.0

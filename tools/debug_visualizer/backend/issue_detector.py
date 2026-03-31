@@ -3312,6 +3312,19 @@ def detect_issues(recording_path: Path, analyze_to_failure: bool = False) -> Dic
                         sign_changes = np.sum(np.diff(np.sign(mpc_steer_vals)) != 0)
                         osc_rate = sign_changes / len(mpc_frames) if len(mpc_frames) > 0 else 0
                         if osc_rate > 0.3:  # > 30% of frames have sign change = hunting
+                            # Report damping mechanism state for diagnosis
+                            _r_eff_key = "control/mpc_r_steer_rate_effective"
+                            _r_eff_info = ""
+                            if _r_eff_key in f:
+                                _r_eff = np.array(f[_r_eff_key][:num_frames])
+                                _r_mpc = _r_eff[mpc_frames]
+                                _r_mean = float(np.mean(_r_mpc)) if len(_r_mpc) > 0 else 0.0
+                                _r_max = float(np.max(_r_mpc)) if len(_r_mpc) > 0 else 0.0
+                                _sched_active = _r_max > _r_mean * 1.01  # scheduling varies r_eff
+                                _r_eff_info = (
+                                    f" | r_steer_rate_eff mean={_r_mean:.1f} max={_r_max:.1f}"
+                                    f" sched={'ON' if _sched_active else 'OFF/flat'}"
+                                )
                             issues.append({
                                 "frame": int(mpc_frames[0]),
                                 "type": "mpc_oscillation",
@@ -3319,6 +3332,7 @@ def detect_issues(recording_path: Path, analyze_to_failure: bool = False) -> Dic
                                 "message": (
                                     f"MPC steering oscillation detected: {sign_changes} sign changes "
                                     f"in {len(mpc_frames)} MPC frames ({osc_rate:.1%} rate)"
+                                    f"{_r_eff_info}"
                                 ),
                             })
 

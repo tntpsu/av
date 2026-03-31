@@ -79,6 +79,10 @@ def load_recording(path: Path) -> dict:
         data["mpc_smith_e_heading_predicted"] = _get("control/mpc_smith_e_heading_predicted")
         data["mpc_delay_frames_used"]       = _get("control/mpc_delay_frames_used")
 
+        # 2.8.5 — r_steer_rate scheduling + 2.8.6 — e_lat attenuation
+        data["mpc_r_steer_rate_effective"]  = _get("control/mpc_r_steer_rate_effective")
+        data["mpc_e_lat"]                   = _get("control/mpc_e_lat")
+
         # Step 5 — NMPC telemetry
         data["nmpc_used"]                   = _get("control/nmpc_used")
         data["nmpc_feasible"]               = _get("control/nmpc_feasible")
@@ -282,6 +286,42 @@ def print_report(path: Path, data: dict):
         print(f"  Delay frames used P50: {p50_d}  (expected: see mpc_delay_frames config)")
     else:
         print("  [Field mpc_delay_frames_used not in recording]")
+
+    # ── 2.8.5 r_steer_rate scheduling ──────────────────────────────────────
+    print(f"\n{thin}")
+    print("2.8.5 — r_steer_rate scheduling")
+    rsr_eff = data.get("mpc_r_steer_rate_effective")
+    if rsr_eff is not None:
+        rsr_mpc = rsr_eff[:n][mpc_mask]
+        if len(rsr_mpc) > 0:
+            print(f"  Effective r_steer_rate: Mean={np.mean(rsr_mpc):.3f}  "
+                  f"Min={np.min(rsr_mpc):.3f}  Max={np.max(rsr_mpc):.3f}")
+            transitions = int(np.sum(np.abs(np.diff(rsr_mpc)) > 0.1))
+            print(f"  Band transitions: {transitions}")
+            if np.max(rsr_mpc) - np.min(rsr_mpc) < 0.01:
+                print(f"  NOTE: Scheduling appears INACTIVE (constant value)")
+        else:
+            print("  [No MPC frames for scheduling analysis]")
+    else:
+        print("  [Field mpc_r_steer_rate_effective not in recording]")
+
+    # ── 2.8.6 e_lat speed attenuation ──────────────────────────────────────
+    print(f"\n{thin}")
+    print("2.8.6 — e_lat speed attenuation")
+    mpc_elat = data.get("mpc_e_lat")
+    if raw_e is not None and mpc_elat is not None:
+        raw_mpc = np.abs(raw_e[:n][mpc_mask])
+        inp_mpc = np.abs(mpc_elat[:n][mpc_mask])
+        valid = raw_mpc > 0.01
+        if valid.sum() > 10:
+            ratio = inp_mpc[valid] / raw_mpc[valid]
+            r_p50 = float(np.median(ratio))
+            print(f"  MPC/raw |e_lat| ratio P50: {r_p50:.3f}  "
+                  f"({'ACTIVE' if r_p50 < 0.95 else 'inactive/minimal'})")
+        else:
+            print("  [Insufficient valid frames]")
+    else:
+        print("  [Smith raw or mpc_e_lat fields not in recording]")
 
     # ── MPC state quality ────────────────────────────────────────────────────
     print(f"\n{thin}")

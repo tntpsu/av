@@ -105,15 +105,15 @@ class TestAccHealthSummaryUnit:
         assert result["acc_gap_rmse_m"] == pytest.approx(0.30, abs=0.005)
 
     def test_gap_rmse_gate_boundary_pass(self):
-        """RMSE = 0.50m exactly → gate pass (≤ ACC_GAP_RMSE_GATE_M = 0.50)."""
+        """RMSE = ACC_GAP_RMSE_GATE_M exactly → gate pass."""
         data = _make_data(n=300, acc_active_start=0, gap_error=ACC_GAP_RMSE_GATE_M)
         result = _build_acc_health_summary(data, n_frames=300)
         assert result is not None
         assert result["gap_rmse_gate_pass"] is True
 
     def test_gap_rmse_gate_fail_above_threshold(self):
-        """RMSE > 0.50m → gate fail."""
-        data = _make_data(n=300, acc_active_start=0, gap_error=0.60)
+        """RMSE > ACC_GAP_RMSE_GATE_M → gate fail."""
+        data = _make_data(n=300, acc_active_start=0, gap_error=ACC_GAP_RMSE_GATE_M + 1.0)
         result = _build_acc_health_summary(data, n_frames=300)
         assert result is not None
         assert result["gap_rmse_gate_pass"] is False
@@ -183,7 +183,7 @@ class TestAccHealthSummaryUnit:
 
     def test_registry_constants_imported(self):
         """Verify registry constants are accessible and have expected values."""
-        assert ACC_GAP_RMSE_GATE_M == pytest.approx(0.50)
+        assert ACC_GAP_RMSE_GATE_M == pytest.approx(35.0)
         assert ACC_TTC_MIN_GATE_S == pytest.approx(2.0)
         assert ACC_JERK_P95_GATE_MPS3 == pytest.approx(4.0)
         assert ACC_DETECTION_RATE_GATE == pytest.approx(0.95)

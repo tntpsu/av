@@ -133,7 +133,7 @@ trajectory:
   reference_distractor_input_guard_on_frames: 2
   reference_distractor_input_guard_off_frames: 3
   reference_distractor_input_guard_min_dwell_frames: 8
-  reference_distractor_input_guard_suppress_lane_coeffs: true
+  reference_distractor_input_guard_suppress_lane_coeffs: false  # true → (0,0) trips perception-failed guard → e-stop
   reference_distractor_input_guard_seed_center_history: true
   # Phase transition thresholds — highway needs lower thresholds for gentler curves
   curve_phase_on: 0.35        # base: 0.45
@@ -183,6 +183,8 @@ trajectory:
     bias_active_curve_preserve_curvature_full: 0.0020
     bias_active_curve_preserve_full_ratio: 1.0
     bias_active_curve_same_sign_guard_ratio: 0.25
+    # Speed-dependent r_steer_rate scheduling (inherits base onset/gain/max_scale)
+    mpc_r_steer_rate_scheduling_enabled: true
 
 safety:
   max_speed: 15.0

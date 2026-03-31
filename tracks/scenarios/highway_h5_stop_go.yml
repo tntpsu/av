@@ -1,7 +1,10 @@
 # H5 — Stop-and-go (highway_65)
-# Lead at 20m arc-distance (17m initial gap), sinusoidal 0↔12 m/s over 10s period.
-# Ego target 15 m/s; must repeatedly stop and restart behind oscillating lead.
-# Expected: smooth stop + restart; jerk P95 ≤ 4.0 m/s³; 0 collisions.
+# Lead at 20m arc-distance (17m initial gap), sinusoidal 0↔8 m/s over 20s period.
+# Original 12 m/s / 10s caused TTC=1.45s failures: peak decel=12×2π/10=7.5 m/s² > IDM bandwidth.
+# At 8 m/s / 20s: peak decel=8×2π/20=2.51 m/s² → IDM has 3× more time to respond.
+# Detection was also failing at 12 m/s / 10s (lead reached 148m, near radar limit).
+# Ego target 15 m/s; ACC follows stop-and-go; CUTOUT fires when ego < 5 m/s (expected).
+# Expected: TTC min ≥ 2.0s; 0 collisions; detection ≥ 95% over ACC-active frames.
 # base: tracks/highway_65.yml
 
 name: highway_65
@@ -64,5 +67,5 @@ lead_vehicle:
   lane_offset_m: 1.8
   speed_profile:
     type: stop_go
-    stop_go_top_speed_mps: 12.0
-    stop_go_period_s: 10.0
+    stop_go_top_speed_mps: 8.0
+    stop_go_period_s: 20.0

@@ -1,382 +1,460 @@
 """
 Deep analysis of oscillation to identify root cause.
 Systematically investigates different parts of the system to find what's causing oscillation.
+
+Supports both PID and MPC regimes. Curvature-segmented analysis identifies whether
+oscillation is a straight-line or curve-tracking problem.
+
+Usage:
+    python tools/analyze/analyze_oscillation_root_cause.py [recording.h5] [--plot]
 """
 
+import argparse
 import h5py
 import numpy as np
-import matplotlib.pyplot as plt
 from pathlib import Path
 import sys
-from scipy import signal
-from scipy.fft import fft, fftfreq
 
-def analyze_oscillation_root_cause(recording_file: str):
+try:
+    from scipy import signal as scipy_signal
+    from scipy.fft import fft, fftfreq
+    HAS_SCIPY = True
+except ImportError:
+    HAS_SCIPY = False
+
+try:
+    import matplotlib.pyplot as plt
+    HAS_MATPLOTLIB = True
+except ImportError:
+    HAS_MATPLOTLIB = False
+
+
+def _safe(f, key):
+    """Read HDF5 dataset as float array, returning None if missing."""
+    if key not in f:
+        return None
+    return np.asarray(f[key][:], dtype=float)
+
+
+def analyze_oscillation_root_cause(recording_file: str, plot: bool = False):
     """Deep dive into oscillation to find root cause."""
-    
+
     print("=" * 80)
     print("OSCILLATION ROOT CAUSE ANALYSIS")
     print("=" * 80)
     print()
-    
+
     with h5py.File(recording_file, 'r') as f:
-        # Load data
-        lateral_error = f['control/lateral_error'][:]
-        steering = f['control/steering'][:]
-        heading_error = f.get('control/heading_error', None)
-        total_error = f.get('control/total_error', None)
-        pid_integral = f.get('control/pid_integral', None)
-        pid_derivative = f.get('control/pid_derivative', None)
-        ref_x = f.get('trajectory/reference_point_x', None)
-        ref_heading = f.get('trajectory/reference_point_heading', None)
-        vehicle_speed = f.get('vehicle/speed', None)
-        
-        if heading_error is not None:
-            heading_error = heading_error[:]
-        if total_error is not None:
-            total_error = total_error[:]
-        if pid_integral is not None:
-            pid_integral = pid_integral[:]
-        if pid_derivative is not None:
-            pid_derivative = pid_derivative[:]
-        if ref_x is not None:
-            ref_x = ref_x[:]
-        if ref_heading is not None:
-            ref_heading = ref_heading[:]
-        if vehicle_speed is not None:
-            vehicle_speed = vehicle_speed[:]
-        
-        timestamps = f.get('control/timestamps', f.get('camera/timestamps', None))
+        # Core signals
+        lateral_error = np.asarray(f['control/lateral_error'][:], dtype=float)
+        steering = np.asarray(f['control/steering'][:], dtype=float)
+        heading_error = _safe(f, 'control/heading_error')
+        vehicle_speed = _safe(f, 'vehicle/speed')
+        regime = _safe(f, 'control/regime')
+
+        # MPC signals
+        mpc_e_lat = _safe(f, 'control/mpc_e_lat')
+        smith_raw = _safe(f, 'control/mpc_smith_raw_e_lat')
+        smith_pred = _safe(f, 'control/mpc_smith_e_lat_predicted')
+        recovery = _safe(f, 'control/mpc_recovery_mode_suppressed')
+        r_steer_rate_eff = _safe(f, 'control/mpc_r_steer_rate_effective')
+
+        # Trajectory signals
+        ref_x = _safe(f, 'trajectory/reference_point_x')
+        raw_ref_x = _safe(f, 'trajectory/diag_raw_ref_x')
+        smooth_ref_x = _safe(f, 'trajectory/diag_smoothed_ref_x')
+        curvature = _safe(f, 'trajectory/reference_point_curvature')
+
+        # PID signals (legacy, for PP analysis)
+        pid_integral = _safe(f, 'control/pid_integral')
+
+        timestamps = _safe(f, 'vehicle/timestamps')
+        if timestamps is None:
+            timestamps = _safe(f, 'control/timestamps')
         if timestamps is not None:
-            timestamps = timestamps[:]
-            time_seconds = (timestamps - timestamps[0]) if len(timestamps) > 0 else np.arange(len(lateral_error)) / 30.0
+            time_seconds = timestamps - timestamps[0]
         else:
             time_seconds = np.arange(len(lateral_error)) / 30.0
-        
-        dt = np.mean(np.diff(time_seconds)) if len(time_seconds) > 1 else 1.0/30.0
-        
-        print("OSCILLATION CHARACTERISTICS:")
+
+        dt = np.mean(np.diff(time_seconds)) if len(time_seconds) > 1 else 1.0 / 30.0
+        n = len(lateral_error)
+
+        # Build masks
+        mpc_mask = regime >= 0.5 if regime is not None else np.zeros(n, dtype=bool)
+        pp_mask = ~mpc_mask
+        curve_mask = np.abs(curvature) > 0.0005 if curvature is not None else np.zeros(n, dtype=bool)
+        straight_mask = ~curve_mask
+        straight_mpc = straight_mask & mpc_mask
+        curve_mpc = curve_mask & mpc_mask
+
+        # ── 1. Frequency analysis ──
+        print("1. OSCILLATION CHARACTERISTICS")
         print("-" * 80)
-        
-        # Frequency analysis
-        abs_lateral_error = np.abs(lateral_error)
-        sign_changes = np.sum(np.diff(np.sign(lateral_error)) != 0)
-        oscillation_freq = sign_changes / time_seconds[-1] if time_seconds[-1] > 0 else 0
-        print(f"  Oscillation frequency: {oscillation_freq:.2f} Hz")
-        print(f"  Sign changes: {sign_changes} over {time_seconds[-1]:.2f}s")
-        print()
-        
-        # FFT analysis to find dominant frequencies
-        if len(lateral_error) > 10:
-            # Remove DC component
-            lateral_error_centered = lateral_error - np.mean(lateral_error)
-            fft_vals = fft(lateral_error_centered)
-            fft_freqs = fftfreq(len(lateral_error_centered), dt)
-            
-            # Get positive frequencies only
-            positive_freqs = fft_freqs[:len(fft_freqs)//2]
-            positive_fft = np.abs(fft_vals[:len(fft_vals)//2])
-            
-            # Find dominant frequency
-            dominant_idx = np.argmax(positive_fft[1:]) + 1  # Skip DC
-            dominant_freq = positive_freqs[dominant_idx]
-            dominant_magnitude = positive_fft[dominant_idx]
-            
-            print(f"  Dominant frequency (FFT): {dominant_freq:.2f} Hz")
-            print(f"  Dominant magnitude: {dominant_magnitude:.2f}")
-            
-            # Find top 3 frequencies
-            top3_indices = np.argsort(positive_fft[1:])[-3:][::-1] + 1
-            print(f"  Top 3 frequencies:")
-            for i, idx in enumerate(top3_indices, 1):
-                if idx < len(positive_freqs):
-                    print(f"    {i}. {positive_freqs[idx]:.2f} Hz (magnitude: {positive_fft[idx]:.2f})")
-            print()
-        
-        # Phase analysis: Check if steering leads or lags error
-        print("PHASE ANALYSIS (Steering vs Error):")
-        print("-" * 80)
-        if len(lateral_error) > 10 and len(steering) > 10:
-            # Cross-correlation to find phase relationship
-            # Normalize signals
-            error_norm = (lateral_error - np.mean(lateral_error)) / (np.std(lateral_error) + 1e-10)
-            steering_norm = (steering - np.mean(steering)) / (np.std(steering) + 1e-10)
-            
-            # Cross-correlation
-            correlation = np.correlate(error_norm, steering_norm, mode='full')
-            lags = np.arange(-len(lateral_error)+1, len(lateral_error))
-            
-            # Find lag with maximum correlation
-            max_corr_idx = np.argmax(np.abs(correlation))
-            max_lag = lags[max_corr_idx]
-            max_corr = correlation[max_corr_idx]
-            
-            lag_time = max_lag * dt
-            print(f"  Max correlation: {max_corr:.3f} at lag: {max_lag} frames ({lag_time:.3f}s)")
-            
-            if abs(lag_time) < 0.1:
-                print(f"  ✓ Steering and error are in phase (no significant delay)")
-            elif lag_time > 0:
-                print(f"  ⚠️  Steering LAGS error by {lag_time:.3f}s (delayed response)")
-            else:
-                print(f"  ⚠️  Steering LEADS error by {abs(lag_time):.3f}s (anticipatory)")
-            print()
-        
-        # Check for controller fighting itself
-        print("CONTROLLER STABILITY ANALYSIS:")
-        print("-" * 80)
-        
-        # Check if steering is proportional to error (should be)
-        significant = (np.abs(lateral_error) > 0.05) & (np.abs(steering) > 0.02)
-        if np.sum(significant) > 10:
-            error_significant = lateral_error[significant]
-            steering_significant = steering[significant]
-            
-            # Linear regression: steering = k * error
-            correlation_coef = np.corrcoef(error_significant, steering_significant)[0, 1]
-            print(f"  Steering-error correlation: {correlation_coef:.3f}")
-            
-            if correlation_coef > 0.7:
-                print(f"  ✓ Strong positive correlation (steering follows error correctly)")
-            elif correlation_coef > 0.3:
-                print(f"  ⚠️  Weak correlation (steering not strongly following error)")
-            else:
-                print(f"  ⚠️  Very weak correlation (steering not following error)")
-            
-            # Calculate effective gain
-            if np.std(error_significant) > 0.001:
-                effective_gain = np.std(steering_significant) / np.std(error_significant)
-                print(f"  Effective gain (steering/error): {effective_gain:.3f}")
-                print(f"  (Config kp=0.5, but effective gain may differ due to total_error calculation)")
-        print()
-        
-        # PID component analysis
-        if total_error is not None and pid_integral is not None:
-            print("PID COMPONENT ANALYSIS:")
-            print("-" * 80)
-            
-            # Estimate PID components (approximate)
-            # P component: proportional to error
-            # I component: integral
-            # D component: derivative of error
-            
-            # Check if integral is contributing to oscillation
-            integral_abs = np.abs(pid_integral)
-            error_abs = np.abs(lateral_error)
-            
-            # Correlation between integral and error
-            if len(integral_abs) > 10:
-                integral_error_corr = np.corrcoef(integral_abs, error_abs)[0, 1]
-                print(f"  Integral-error correlation: {integral_error_corr:.3f}")
-                
-                if integral_error_corr > 0.5:
-                    print(f"  ⚠️  High correlation - integral may be contributing to oscillation")
-                else:
-                    print(f"  ✓ Low correlation - integral not driving oscillation")
-            
-            # Check integral accumulation
-            first_third = integral_abs[:len(integral_abs)//3]
-            last_third = integral_abs[2*len(integral_abs)//3:]
-            accumulation = np.mean(last_third) / np.mean(first_third) if np.mean(first_third) > 0 else 0
-            print(f"  Integral accumulation: {accumulation:.2f}x")
-            print()
-        
-        # Trajectory stability analysis
-        if ref_x is not None:
-            print("TRAJECTORY STABILITY ANALYSIS:")
-            print("-" * 80)
-            
-            ref_x_std = np.std(ref_x)
-            ref_x_mean = np.mean(np.abs(ref_x))
-            print(f"  ref_x std: {ref_x_std:.4f} m")
-            print(f"  ref_x mean abs: {ref_x_mean:.4f} m")
-            
-            # Check if trajectory is oscillating
-            ref_x_sign_changes = np.sum(np.diff(np.sign(ref_x)) != 0)
-            ref_x_oscillation_freq = ref_x_sign_changes / time_seconds[-1] if time_seconds[-1] > 0 else 0
-            print(f"  ref_x oscillation frequency: {ref_x_oscillation_freq:.2f} Hz")
-            
-            # Correlation between trajectory and error
-            if len(ref_x) == len(lateral_error):
-                trajectory_error_corr = np.corrcoef(ref_x, lateral_error)[0, 1]
-                print(f"  Trajectory-error correlation: {trajectory_error_corr:.3f}")
-                
-                if abs(trajectory_error_corr) > 0.7:
-                    print(f"  ⚠️  High correlation - trajectory oscillation may be driving error oscillation")
-                elif abs(trajectory_error_corr) > 0.3:
-                    print(f"  ⚠️  Moderate correlation - trajectory may contribute to oscillation")
-                else:
-                    print(f"  ✓ Low correlation - trajectory not driving oscillation")
-            print()
-        
-        # Heading error analysis
-        if heading_error is not None:
-            print("HEADING ERROR ANALYSIS:")
-            print("-" * 80)
-            
-            heading_error_abs = np.abs(heading_error)
-            heading_oscillation = np.sum(np.diff(np.sign(heading_error)) != 0)
-            heading_oscillation_freq = heading_oscillation / time_seconds[-1] if time_seconds[-1] > 0 else 0
-            print(f"  Heading error oscillation frequency: {heading_oscillation_freq:.2f} Hz")
-            
-            # Correlation with lateral error
-            if len(heading_error) == len(lateral_error):
-                heading_lateral_corr = np.corrcoef(heading_error, lateral_error)[0, 1]
-                print(f"  Heading-lateral error correlation: {heading_lateral_corr:.3f}")
-                
-                if abs(heading_lateral_corr) > 0.7:
-                    print(f"  ⚠️  High correlation - heading error may be driving lateral oscillation")
-            print()
-        
-        # System response analysis
-        print("SYSTEM RESPONSE ANALYSIS:")
-        print("-" * 80)
-        
-        # Check if system is over-damped, under-damped, or critically damped
-        # Look at error response to steering changes
-        if len(lateral_error) > 20:
-            # Find peaks in error
-            error_peaks, _ = signal.find_peaks(abs_lateral_error, height=0.05, distance=5)
-            
-            if len(error_peaks) > 2:
-                # Calculate damping ratio (simplified)
-                peak_values = abs_lateral_error[error_peaks]
-                if len(peak_values) > 1:
-                    # Check if peaks are decreasing (damped) or constant/increasing (under-damped)
-                    peak_ratio = peak_values[-1] / peak_values[0] if peak_values[0] > 0 else 0
-                    
-                    if peak_ratio < 0.5:
-                        print(f"  ✓ Over-damped: Peaks decreasing ({peak_ratio:.2f}x)")
-                    elif peak_ratio < 1.0:
-                        print(f"  ⚠️  Under-damped: Peaks decreasing slowly ({peak_ratio:.2f}x)")
-                    else:
-                        print(f"  ⚠️  Unstable: Peaks not decreasing ({peak_ratio:.2f}x)")
-        print()
-        
-        # Root cause hypotheses
-        print("=" * 80)
-        print("ROOT CAUSE HYPOTHESES (Prioritized):")
-        print("=" * 80)
-        
-        hypotheses = []
-        confidence = []
-        
-        # Hypothesis 1: Controller gain too high
-        if total_error is not None:
-            significant = (np.abs(lateral_error) > 0.05) & (np.abs(steering) > 0.02)
-            if np.sum(significant) > 10:
-                error_sig = lateral_error[significant]
-                steering_sig = steering[significant]
-                if np.std(error_sig) > 0.001:
-                    effective_gain = np.std(steering_sig) / np.std(error_sig)
-                    if effective_gain > 2.0:
-                        hypotheses.append("Controller gain too high (effective gain > 2.0)")
-                        confidence.append(0.8)
-        
-        # Hypothesis 2: PID integral windup
-        if pid_integral is not None:
-            first_third = np.abs(pid_integral[:len(pid_integral)//3])
-            last_third = np.abs(pid_integral[2*len(pid_integral)//3:])
-            accumulation = np.mean(last_third) / np.mean(first_third) if np.mean(first_third) > 0 else 0
-            if accumulation > 1.5:
-                hypotheses.append(f"PID integral windup ({accumulation:.2f}x accumulation)")
-                confidence.append(0.9)
-        
-        # Hypothesis 3: Trajectory oscillation
-        if ref_x is not None:
-            ref_x_sign_changes = np.sum(np.diff(np.sign(ref_x)) != 0)
-            ref_x_oscillation_freq = ref_x_sign_changes / time_seconds[-1] if time_seconds[-1] > 0 else 0
-            if ref_x_oscillation_freq > 5.0:
-                hypotheses.append(f"Trajectory oscillation ({ref_x_oscillation_freq:.2f} Hz)")
-                confidence.append(0.7)
-            
-            if len(ref_x) == len(lateral_error):
-                trajectory_error_corr = np.corrcoef(ref_x, lateral_error)[0, 1]
-                if abs(trajectory_error_corr) > 0.7:
-                    hypotheses.append("Trajectory oscillation driving error oscillation")
-                    confidence.append(0.8)
-        
-        # Hypothesis 4: Insufficient damping
-        if pid_derivative is not None:
-            # Check if derivative term is active
-            derivative_abs = np.abs(pid_derivative)
-            if np.mean(derivative_abs) < 0.01:
-                hypotheses.append("Insufficient damping (derivative term too small)")
-                confidence.append(0.6)
-        
-        # Hypothesis 5: Delayed response
-        if len(lateral_error) > 10 and len(steering) > 10:
-            error_norm = (lateral_error - np.mean(lateral_error)) / (np.std(lateral_error) + 1e-10)
-            steering_norm = (steering - np.mean(steering)) / (np.std(steering) + 1e-10)
-            correlation = np.correlate(error_norm, steering_norm, mode='full')
-            lags = np.arange(-len(lateral_error)+1, len(lateral_error))
-            max_corr_idx = np.argmax(np.abs(correlation))
-            max_lag = lags[max_corr_idx]
-            lag_time = max_lag * dt
-            if abs(lag_time) > 0.1:
-                hypotheses.append(f"Delayed response (lag: {lag_time:.3f}s)")
-                confidence.append(0.7)
-        
-        # Hypothesis 6: Reference point smoothing delay
-        if ref_x is not None and len(ref_x) > 10:
-            # Check if ref_x is smoothed (has less variation than it should)
-            # Compare ref_x variation to what we'd expect from lane detection
-            ref_x_std = np.std(ref_x)
-            if ref_x_std < 0.01:  # Very low variation suggests heavy smoothing
-                hypotheses.append("Reference point over-smoothed (causing delayed response)")
-                confidence.append(0.6)
-        
-        # Sort by confidence
-        if hypotheses:
-            sorted_hypotheses = sorted(zip(hypotheses, confidence), key=lambda x: x[1], reverse=True)
-            for i, (hyp, conf) in enumerate(sorted_hypotheses, 1):
-                print(f"  {i}. [{conf:.1f}] {hyp}")
-        else:
-            print("  No clear hypotheses identified")
-        print()
-        
-        # Investigation plan
-        print("=" * 80)
-        print("INVESTIGATION PLAN:")
-        print("=" * 80)
-        print()
-        print("STEP 1: Verify controller gains")
-        print("  - Check config: kp, ki, kd values")
-        print("  - Measure effective gain (steering/error ratio)")
-        print("  - Compare to theoretical gain")
-        print()
-        print("STEP 2: Analyze PID components separately")
-        print("  - Check if P, I, or D term is driving oscillation")
-        print("  - Verify integral reset/decay is working")
-        print("  - Check derivative term magnitude")
-        print()
-        print("STEP 3: Check trajectory stability")
-        print("  - Verify ref_x is stable (not oscillating)")
-        print("  - Check if trajectory smoothing is causing delay")
-        print("  - Verify lane detection is stable")
-        print()
-        print("STEP 4: System response analysis")
-        print("  - Check phase relationship (steering vs error)")
-        print("  - Verify response time is appropriate")
-        print("  - Check for delays in pipeline")
-        print()
-        print("STEP 5: Test with modified parameters")
-        print("  - Reduce kp to see if oscillation decreases")
-        print("  - Increase kd to add more damping")
-        print("  - Adjust smoothing parameters")
+
+        sign_changes = int(np.sum(np.diff(np.sign(lateral_error)) != 0))
+        duration = float(time_seconds[-1]) if len(time_seconds) > 0 else 1.0
+        osc_freq = sign_changes / duration if duration > 0 else 0
+        print(f"   Sign-change frequency: {osc_freq:.2f} Hz ({sign_changes} changes over {duration:.1f}s)")
+
+        if HAS_SCIPY and len(lateral_error) > 10:
+            centered = lateral_error - np.mean(lateral_error)
+            fft_vals = fft(centered)
+            fft_freqs = fftfreq(len(centered), dt)
+            pos_freqs = fft_freqs[:len(fft_freqs) // 2]
+            pos_fft = np.abs(fft_vals[:len(fft_vals) // 2])
+            if len(pos_fft) > 1:
+                dom_idx = np.argmax(pos_fft[1:]) + 1
+                print(f"   Dominant FFT frequency: {pos_freqs[dom_idx]:.2f} Hz (magnitude: {pos_fft[dom_idx]:.2f})")
+                top3 = np.argsort(pos_fft[1:])[-3:][::-1] + 1
+                for rank, idx in enumerate(top3, 1):
+                    if idx < len(pos_freqs):
+                        print(f"     #{rank}: {pos_freqs[idx]:.3f} Hz  mag={pos_fft[idx]:.2f}")
+
+        # Growth rate
+        if n > 60:
+            window = max(10, n // 20)
+            rms = np.array([np.sqrt(np.mean(lateral_error[max(0, i - window):i + 1] ** 2))
+                            for i in range(n)])
+            first_q = rms[:n // 4]
+            last_q = rms[3 * n // 4:]
+            growth = (np.mean(last_q) - np.mean(first_q)) / duration if duration > 0 else 0
+            print(f"   RMS growth: {np.mean(first_q):.3f}m → {np.mean(last_q):.3f}m  slope={growth:.4f} m/s")
+            runaway = "YES" if growth > 0.001 else "NO"
+            print(f"   Amplitude runaway: {runaway}")
         print()
 
+        # ── 2. Regime breakdown ──
+        print("2. REGIME BREAKDOWN")
+        print("-" * 80)
+        print(f"   MPC frames: {int(mpc_mask.sum())}/{n} ({100 * mpc_mask.mean():.1f}%)")
+        print(f"   PP frames:  {int(pp_mask.sum())}/{n} ({100 * pp_mask.mean():.1f}%)")
+        print(f"   Curve frames: {int(curve_mask.sum())}  Straight: {int(straight_mask.sum())}")
+        print(f"   Curve+MPC: {int(curve_mpc.sum())}  Straight+MPC: {int(straight_mpc.sum())}")
+        print()
+
+        # ── 3. Segmented lateral error ──
+        print("3. LATERAL ERROR BY SEGMENT")
+        print("-" * 80)
+        for label, mask in [("All", np.ones(n, dtype=bool)),
+                            ("Straight+MPC", straight_mpc),
+                            ("Curve+MPC", curve_mpc),
+                            ("PP", pp_mask)]:
+            if mask.sum() > 0:
+                ae = np.abs(lateral_error[mask])
+                print(f"   {label:15s}  P50={np.median(ae):.3f}  P95={np.percentile(ae, 95):.3f}  "
+                      f"Max={np.max(ae):.3f}  RMSE={np.sqrt(np.mean(ae ** 2)):.3f}  ({int(mask.sum())} frames)")
+        print()
+
+        # ── 4. Trajectory smoothing lag ──
+        if raw_ref_x is not None and smooth_ref_x is not None:
+            m = min(len(raw_ref_x), len(smooth_ref_x), n)
+            lag = smooth_ref_x[:m] - raw_ref_x[:m]
+
+            print("4. TRAJECTORY SMOOTHING LAG")
+            print("-" * 80)
+            for label, mask in [("All", np.ones(m, dtype=bool)),
+                                ("Straight+MPC", straight_mpc[:m]),
+                                ("Curve+MPC", curve_mpc[:m])]:
+                if mask.sum() > 0:
+                    al = np.abs(lag[mask])
+                    print(f"   {label:15s}  P50={np.median(al):.4f}m  P95={np.percentile(al, 95):.4f}m  "
+                          f"Max={np.max(al):.4f}m")
+
+            # Lag as % of error — the smoking-gun metric
+            cm = curve_mpc[:m]
+            if cm.sum() > 10:
+                abs_lag_c = np.abs(lag[cm])
+                abs_elat_c = np.abs(lateral_error[:m][cm])
+                safe_elat = np.maximum(abs_elat_c, 1e-6)
+                lag_pct = abs_lag_c / safe_elat
+                corr = float(np.corrcoef(abs_lag_c, abs_elat_c)[0, 1])
+                print()
+                print(f"   Curve lag as % of error:  P50={100 * np.median(lag_pct):.1f}%  "
+                      f"P95={100 * np.percentile(lag_pct, 95):.1f}%")
+                causal = "CAUSAL" if abs(corr) > 0.5 else "weak" if abs(corr) > 0.2 else "none"
+                print(f"   Lag-error correlation:    {corr:.3f}  ({causal})")
+                dominates = np.percentile(lag_pct, 95) > 0.5
+                print(f"   >>> Smoothing lag dominates curve error: {'YES — FIX EMA FLOOR' if dominates else 'NO'}")
+            print()
+
+        # ── 5. MPC error pipeline ──
+        if smith_raw is not None and mpc_e_lat is not None and mpc_mask.sum() > 0:
+            print("5. MPC ERROR PIPELINE (raw → Smith → attenuation → MPC input)")
+            print("-" * 80)
+            m = min(len(smith_raw), len(mpc_e_lat), n)
+            for label, mask in [("All MPC", mpc_mask[:m]),
+                                ("Curve+MPC", curve_mpc[:m]),
+                                ("Straight+MPC", straight_mpc[:m])]:
+                if mask.sum() > 0:
+                    raw = np.abs(smith_raw[:m][mask])
+                    final = np.abs(mpc_e_lat[:m][mask])
+                    ratio = np.median(final / np.maximum(raw, 1e-6))
+                    print(f"   {label:15s}  raw_P50={np.median(raw):.3f}  final_P50={np.median(final):.3f}  "
+                          f"ratio={ratio:.3f}")
+            print()
+
+        # ── 6. Recovery mode ──
+        if recovery is not None and mpc_mask.sum() > 0:
+            print("6. RECOVERY MODE SUPPRESSION")
+            print("-" * 80)
+            rec = recovery[:n]
+            rec_all = float(rec[mpc_mask].mean()) * 100
+            print(f"   All MPC:       {rec_all:.1f}%  ({int(rec[mpc_mask].sum())}/{int(mpc_mask.sum())})")
+            if curve_mpc.sum() > 0:
+                rec_c = float(rec[curve_mpc].mean()) * 100
+                flag = "ELEVATED" if rec_c > 10 else "OK"
+                print(f"   Curve+MPC:     {rec_c:.1f}%  [{flag}]")
+            if straight_mpc.sum() > 0:
+                rec_s = float(rec[straight_mpc].mean()) * 100
+                print(f"   Straight+MPC:  {rec_s:.1f}%")
+            print()
+
+        # ── 7. Sign agreement (Smith predictor relevance) ──
+        if heading_error is not None and mpc_mask.sum() > 0:
+            print("7. SIGN AGREEMENT (Smith predictor relevance)")
+            print("-" * 80)
+            m = min(len(heading_error), n)
+            for label, mask in [("All MPC", mpc_mask[:m]),
+                                ("Curve+MPC", curve_mpc[:m]),
+                                ("Straight+MPC", straight_mpc[:m])]:
+                if mask.sum() > 0:
+                    sa = (lateral_error[:m][mask] * heading_error[:m][mask]) >= 0
+                    print(f"   {label:15s}  agree={100 * sa.mean():.1f}%  "
+                          f"({'guard inactive — no-op' if sa.mean() > 0.95 else 'guard active'})")
+            print()
+
+        # ── 8. Phase analysis ──
+        print("8. PHASE ANALYSIS (steering vs error)")
+        print("-" * 80)
+        if n > 10:
+            e_norm = (lateral_error - np.mean(lateral_error)) / (np.std(lateral_error) + 1e-10)
+            s_norm = (steering - np.mean(steering)) / (np.std(steering) + 1e-10)
+            corr = np.correlate(e_norm, s_norm, mode='full')
+            lags = np.arange(-n + 1, n)
+            max_idx = np.argmax(np.abs(corr))
+            max_lag = lags[max_idx]
+            lag_time = max_lag * dt
+            print(f"   Max correlation: {corr[max_idx]:.3f} at lag={max_lag} frames ({lag_time:.3f}s)")
+            if abs(lag_time) < 0.1:
+                print(f"   Steering and error are in phase")
+            elif lag_time > 0:
+                print(f"   Steering LAGS error by {lag_time:.3f}s")
+            else:
+                print(f"   Steering LEADS error by {abs(lag_time):.3f}s")
+        print()
+
+        # ── 9. Speed context ──
+        if vehicle_speed is not None:
+            print("9. SPEED CONTEXT")
+            print("-" * 80)
+            for label, mask in [("All", np.ones(n, dtype=bool)),
+                                ("Straight+MPC", straight_mpc),
+                                ("Curve+MPC", curve_mpc)]:
+                if mask.sum() > 0:
+                    sp = vehicle_speed[:n][mask]
+                    print(f"   {label:15s}  P50={np.median(sp):.1f}  P95={np.percentile(sp, 95):.1f}  "
+                          f"Max={np.max(sp):.1f} m/s")
+            print()
+
+        # ── 10. r_steer_rate scheduling ──
+        if r_steer_rate_eff is not None and mpc_mask.sum() > 0:
+            print("-" * 60)
+            print("r_STEER_RATE SCHEDULING")
+            print("-" * 60)
+            rsr = r_steer_rate_eff[:n]
+            rsr_mpc = rsr[mpc_mask]
+            print(f"   Mean effective r_steer_rate: {np.mean(rsr_mpc):.3f}")
+            print(f"   P95  effective r_steer_rate: {np.percentile(rsr_mpc, 95):.3f}")
+            print(f"   Min/Max: {np.min(rsr_mpc):.3f} / {np.max(rsr_mpc):.3f}")
+            if vehicle_speed is not None:
+                sp_mpc = vehicle_speed[:n][mpc_mask]
+                if len(sp_mpc) > 10:
+                    cc = np.corrcoef(sp_mpc, rsr_mpc)[0, 1]
+                    print(f"   Speed-r_steer_rate correlation: {cc:.3f}")
+            # Count band transitions (r_steer_rate changes > 0.1)
+            diffs = np.abs(np.diff(rsr_mpc))
+            transitions = int(np.sum(diffs > 0.1))
+            print(f"   Band transitions: {transitions}")
+            if np.max(rsr_mpc) - np.min(rsr_mpc) < 0.01:
+                print("   ⚠ Scheduling appears INACTIVE (constant r_steer_rate)")
+            print()
+
+        # ── 10b. e_lat speed attenuation ──
+        if mpc_e_lat is not None and smith_raw is not None and mpc_mask.sum() > 10:
+            print("-" * 60)
+            print("e_LAT SPEED ATTENUATION")
+            print("-" * 60)
+            raw_mpc = np.abs(smith_raw[:n][mpc_mask])
+            inp_mpc = np.abs(mpc_e_lat[:n][mpc_mask])
+            valid = raw_mpc > 0.01
+            if valid.sum() > 10:
+                ratio = inp_mpc[valid] / raw_mpc[valid]
+                print(f"   MPC/raw |e_lat| ratio P50: {np.median(ratio):.3f}")
+                print(f"   MPC/raw |e_lat| ratio P05: {np.percentile(ratio, 5):.3f}")
+                if np.median(ratio) < 0.95:
+                    print(f"   Attenuation ACTIVE (ratio < 1.0 = gain reduced on straights)")
+                else:
+                    print(f"   Attenuation INACTIVE or minimal (ratio ≈ 1.0)")
+                # Check if attenuation correlates with speed
+                if vehicle_speed is not None:
+                    sp_valid = vehicle_speed[:n][mpc_mask][valid]
+                    if len(sp_valid) > 10:
+                        cc = np.corrcoef(sp_valid, ratio)[0, 1]
+                        print(f"   Speed-attenuation correlation: {cc:.3f}")
+            else:
+                print("   Insufficient valid frames for attenuation analysis")
+            print()
+
+        # ── 11. Automated root cause attribution ──
+        print("=" * 80)
+        print("ROOT CAUSE ATTRIBUTION")
+        print("=" * 80)
+        findings = []
+
+        # Check smoothing lag dominance
+        if raw_ref_x is not None and smooth_ref_x is not None:
+            m = min(len(raw_ref_x), len(smooth_ref_x), n)
+            lag = smooth_ref_x[:m] - raw_ref_x[:m]
+            cm = curve_mpc[:m]
+            if cm.sum() > 10:
+                abs_lag_c = np.abs(lag[cm])
+                abs_elat_c = np.abs(lateral_error[:m][cm])
+                lag_pct_p95 = np.percentile(abs_lag_c / np.maximum(abs_elat_c, 1e-6), 95)
+                if lag_pct_p95 > 0.5:
+                    findings.append(("HIGH", f"EMA smoothing lag dominates curve error "
+                                     f"(lag={100 * lag_pct_p95:.0f}% of error at P95). "
+                                     f"Fix: curvature-gate the EMA floor."))
+
+        # Check recovery mode
+        if recovery is not None and curve_mpc.sum() > 0:
+            rec_curve = float(recovery[:n][curve_mpc].mean()) * 100
+            if rec_curve > 10:
+                findings.append(("HIGH", f"Recovery mode elevated on curves: {rec_curve:.0f}% "
+                                 f"(baseline ~3%). MPC knows it's in trouble."))
+
+        # Check e_lat attenuation on curves
+        if smith_raw is not None and mpc_e_lat is not None and curve_mpc.sum() > 0:
+            m = min(len(smith_raw), len(mpc_e_lat), n)
+            cm = curve_mpc[:m]
+            raw = np.abs(smith_raw[:m][cm])
+            final = np.abs(mpc_e_lat[:m][cm])
+            ratio = np.median(final / np.maximum(raw, 1e-6))
+            if ratio < 0.8:
+                findings.append(("MEDIUM", f"MPC e_lat attenuation active on curves "
+                                 f"(ratio={ratio:.2f}). MPC is starved of error signal. "
+                                 f"Fix: curvature-gate the attenuation."))
+
+        # Check Smith predictor relevance
+        if heading_error is not None and mpc_mask.sum() > 0:
+            m = min(len(heading_error), n)
+            sa = (lateral_error[:m][mpc_mask[:m]] * heading_error[:m][mpc_mask[:m]]) >= 0
+            if sa.mean() > 0.95:
+                findings.append(("INFO", f"Smith predictor guard is a no-op "
+                                 f"({100 * sa.mean():.0f}% sign agreement). "
+                                 f"Consider removing or making it curvature-aware."))
+
+        # Check amplitude runaway
+        if n > 60:
+            window = max(10, n // 20)
+            rms = np.array([np.sqrt(np.mean(lateral_error[max(0, i - window):i + 1] ** 2))
+                            for i in range(n)])
+            first_q = rms[:n // 4]
+            last_q = rms[3 * n // 4:]
+            growth = (np.mean(last_q) - np.mean(first_q)) / duration
+            if growth > 0.003:
+                findings.append(("HIGH", f"Oscillation amplitude runaway "
+                                 f"(growth={growth:.4f} m/s). "
+                                 f"Loop gain exceeds 1.0 at operating speed."))
+            elif growth > 0.001:
+                findings.append(("MEDIUM", f"Oscillation amplitude growing "
+                                 f"(growth={growth:.4f} m/s)."))
+
+        if findings:
+            for sev, msg in findings:
+                print(f"   [{sev:6s}] {msg}")
+        else:
+            print("   No clear root cause identified from signal analysis.")
+        print()
+
+    # Plot if requested
+    if plot and HAS_MATPLOTLIB:
+        _plot_oscillation(recording_file)
+    elif plot and not HAS_MATPLOTLIB:
+        print("WARNING: --plot requested but matplotlib not installed. Skipping plots.")
+
+
+def _plot_oscillation(recording_file: str):
+    """Generate matplotlib plots for visual diagnosis."""
+    import matplotlib.pyplot as plt
+
+    with h5py.File(recording_file, 'r') as f:
+        e_lat = np.asarray(f['control/lateral_error'][:], dtype=float)
+        steer = np.asarray(f['control/steering'][:], dtype=float)
+        speed = _safe(f, 'vehicle/speed')
+        curv = _safe(f, 'trajectory/reference_point_curvature')
+        raw_x = _safe(f, 'trajectory/diag_raw_ref_x')
+        smooth_x = _safe(f, 'trajectory/diag_smoothed_ref_x')
+
+    n = len(e_lat)
+    frames = np.arange(n)
+
+    fig, axes = plt.subplots(4, 1, figsize=(14, 10), sharex=True)
+
+    axes[0].plot(frames, e_lat, label='lateral_error', linewidth=0.8)
+    axes[0].set_ylabel('Lateral Error (m)')
+    axes[0].legend()
+    axes[0].grid(True, alpha=0.3)
+
+    axes[1].plot(frames, steer, label='steering', linewidth=0.8, color='orange')
+    axes[1].set_ylabel('Steering')
+    axes[1].legend()
+    axes[1].grid(True, alpha=0.3)
+
+    if raw_x is not None and smooth_x is not None:
+        m = min(len(raw_x), len(smooth_x), n)
+        axes[2].plot(frames[:m], raw_x[:m], label='raw_ref_x', linewidth=0.8, alpha=0.7)
+        axes[2].plot(frames[:m], smooth_x[:m], label='smooth_ref_x', linewidth=0.8)
+        axes[2].plot(frames[:m], smooth_x[:m] - raw_x[:m], label='smoothing_lag', linewidth=0.8, color='red')
+        axes[2].set_ylabel('Reference X / Lag (m)')
+        axes[2].legend()
+        axes[2].grid(True, alpha=0.3)
+
+    if curv is not None:
+        m = min(len(curv), n)
+        ax3 = axes[3]
+        ax3.plot(frames[:m], curv[:m], label='curvature', linewidth=0.8, color='green')
+        ax3.axhline(y=0.0005, color='gray', linestyle='--', alpha=0.5, label='curve threshold')
+        ax3.set_ylabel('Curvature (1/m)')
+        ax3.legend()
+        ax3.grid(True, alpha=0.3)
+
+    axes[-1].set_xlabel('Frame')
+    plt.suptitle(f'Oscillation Root Cause — {Path(recording_file).name}')
+    plt.tight_layout()
+    plt.savefig('oscillation_root_cause.png', dpi=150)
+    print(f"Plot saved to oscillation_root_cause.png")
+    plt.show()
+
+
 if __name__ == "__main__":
-    if len(sys.argv) < 2:
+    parser = argparse.ArgumentParser(description="Oscillation root cause analysis")
+    parser.add_argument("recording", nargs="?", default=None, help="Recording HDF5 file")
+    parser.add_argument("--plot", action="store_true", help="Generate matplotlib plots (requires matplotlib)")
+    parser.add_argument("--latest", action="store_true", help="Use latest recording")
+    args = parser.parse_args()
+
+    if args.recording:
+        recording_file = args.recording
+    elif args.latest or args.recording is None:
         recordings = sorted(Path('data/recordings').glob('*.h5'), key=lambda p: p.stat().st_mtime, reverse=True)
         if recordings:
             recording_file = str(recordings[0])
             print(f"Using latest recording: {recording_file}\n")
         else:
-            print("No recordings found. Usage: python tools/analyze_oscillation_root_cause.py <recording.h5>")
+            print("No recordings found.")
             sys.exit(1)
     else:
-        recording_file = sys.argv[1]
-    
-    analyze_oscillation_root_cause(recording_file)
+        print("Usage: python tools/analyze/analyze_oscillation_root_cause.py [recording.h5] [--plot]")
+        sys.exit(1)
 
+    analyze_oscillation_root_cause(recording_file, plot=args.plot)

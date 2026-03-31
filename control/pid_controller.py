@@ -5689,7 +5689,28 @@ class VehicleController:
             delay_frames = len(self._steering_ring_buffer)
             total_delay_dt = delay_frames * frame_dt
             predicted_e_heading = raw_e_heading  # heading changes slowly
-            predicted_e_lat = raw_e_lat + v_now * raw_e_heading * total_delay_dt
+            # Smith predictor oscillation guard: attenuate heading correction
+            # when sign(e_lat) != sign(e_heading) — this is the oscillation
+            # inflection point where the predictor overshoots.
+            _mpc_cfg_sp = self._full_config.get('trajectory', {}).get('mpc', {})
+            _sp_disagree_gain = float(_mpc_cfg_sp.get('smith_predictor_disagreement_gain', 0.3))
+            _sign_agree = (raw_e_lat * raw_e_heading) >= 0
+            _sp_gain = 1.0 if _sign_agree else _sp_disagree_gain
+            predicted_e_lat = raw_e_lat + _sp_gain * v_now * raw_e_heading * total_delay_dt
+
+            # Speed-adaptive e_lat attenuation — reduces effective loop gain on
+            # high-speed straights (complements r_steer_rate scheduling which only
+            # penalizes rate). Curvature-gated to preserve curve tracking authority.
+            _atten_onset = float(_mpc_cfg_sp.get('mpc_elat_speed_atten_onset', 12.0))
+            _atten_rate = float(_mpc_cfg_sp.get('mpc_elat_speed_atten_rate', 0.04))
+            _atten_min = float(_mpc_cfg_sp.get('mpc_elat_speed_atten_min', 0.5))
+            _atten_kappa_off = float(_mpc_cfg_sp.get('mpc_elat_speed_atten_kappa_off', 0.005))
+            if v_now > _atten_onset:
+                _atten_kappa = abs(float(reference_point.get('curvature', 0.0) or 0.0))
+                _atten_kgate = max(0.0, min(1.0, 1.0 - _atten_kappa / max(1e-6, _atten_kappa_off)))
+                _atten_raw = max(_atten_min, 1.0 - _atten_rate * (v_now - _atten_onset))
+                _atten_factor = 1.0 - (1.0 - _atten_raw) * _atten_kgate
+                predicted_e_lat *= _atten_factor
 
             # Build MPC curvature preview horizon: interpolate distance-sampled
             # curvature from the trajectory planner to MPC time steps.
@@ -5750,6 +5771,7 @@ class VehicleController:
 
             lateral_metadata['mpc_feasible'] = mpc_result.get('mpc_feasible', False)
             lateral_metadata['mpc_solve_time_ms'] = mpc_result.get('solve_time_ms', 0.0)
+            lateral_metadata['mpc_r_steer_rate_effective'] = mpc_result.get('r_steer_rate_effective', 0.0)
             lateral_metadata['mpc_e_lat'] = mpc_result.get('e_lat_input', 0.0)
             # True when MPC e_lat ramp limiter clamped a frame-to-frame step (HDF5 diagnostic).
             lateral_metadata['mpc_elat_ramp_active'] = bool(

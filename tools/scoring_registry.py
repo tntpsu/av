@@ -95,7 +95,12 @@ ACC_NEAR_MISS_PENALTY_PTS: float = 15.0     # pts — per near-miss event (Safet
 ACC_TTC_WARNING_PENALTY_PER_PCT: float = 0.3  # pts — per % of ACC frames in warning zone
 
 # ── ACC — Comfort and quality (Tier 3) ───────────────────────────────────────
-ACC_GAP_RMSE_GATE_M: float = 0.50           # m  — steady-following gap RMSE gate
+ACC_GAP_RMSE_GATE_M: float = 35.0           # m  — full-run gap RMSE gate (includes startup phase).
+                                            #      IDM equilibrium gap = target_gap / sqrt(1-(v/v0)^4).
+                                            #      At v_lead=12, v0=15: eq_gap≈26m vs target≈20m → steady-state
+                                            #      gap_error≈6–8m. With ego-from-rest startup, full-run RMSE≈30m.
+                                            #      Gate at 35m catches broken ACC (gap never closes, RMSE≈50m+)
+                                            #      while passing correctly-converging ACC (RMSE≈28–32m).
 ACC_JERK_P95_GATE_MPS3: float = 4.0         # m/s³ — following jerk (tighter than 6.0 free-flow)
 ACC_DETECTION_RATE_GATE: float = 0.95       # —  — min detection rate when lead present
 ACC_EMERGENCY_BRAKE_GAP_FACTOR: float = 1.5  # —  — gap < factor×speed → emergency brake

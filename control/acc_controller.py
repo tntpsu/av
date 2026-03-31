@@ -115,6 +115,10 @@ class ACCOutput:
 _TTC_ESTOP_THRESHOLD_S: float = 1.5      # Phase D wires to ACC_TTC_CRITICAL_S in registry
 _EMERGENCY_BRAKE_ACCEL_MPS2: float = -4.0
 _EMERGENCY_BRAKE_GAP_FACTOR: float = 1.5  # gap < factor × ego_speed → emergency brake
+_EMERGENCY_BRAKE_ABS_GAP_M: float = 3.0  # absolute floor: fire regardless of ego speed if gap < 3m
+                                           # Prevents IDM sign-flip re-collision after TTC_ESTOP:
+                                           # at ego≈0.05 m/s, speed-proportional check needs gap<0.075m
+                                           # (useless). Absolute 3m fires well before contact.
 _TTC_CAP: float = 999.0                   # sentinel: TTC not meaningful (no lead / pulling away)
 _COLLAPSED_GAP_STOP_M: float = 0.5
 
@@ -307,10 +311,17 @@ class ACCController:
             )
 
         # 2. EMERGENCY_BRAKE: hard deceleration, no e-stop
+        # Use v_target_prev as the integration base (not ego_speed) so the target
+        # compounds downward at _EMERGENCY_BRAKE_ACCEL_MPS2 per second rather than
+        # resetting to ego-0.133m/s each frame (which produces only ~0.036 m/s² brake).
         if (reading.detected
-                and reading.gap_m < _EMERGENCY_BRAKE_GAP_FACTOR * ego_speed
+                and (reading.gap_m < _EMERGENCY_BRAKE_GAP_FACTOR * ego_speed
+                     or reading.gap_m < _EMERGENCY_BRAKE_ABS_GAP_M)
                 and reading.range_rate_mps > 0.0):
-            v_emergency = max(0.0, ego_speed + _EMERGENCY_BRAKE_ACCEL_MPS2 * dt)
+            # Cap integration base at ego_speed on EB entry so we never target
+            # above current speed (which would cause acceleration into the lead).
+            v_start = min(ego_speed, self._v_target_prev)
+            v_emergency = max(0.0, v_start + _EMERGENCY_BRAKE_ACCEL_MPS2 * dt)
             self._v_target_prev = v_emergency
             self._was_acc_active = False
             return _build_output(
@@ -357,8 +368,17 @@ class ACCController:
             if not self._was_acc_active:
                 self._v_target_prev = ego_speed
 
+            # When IDM says decelerate, don't integrate from above ego_speed.
+            # Without this cap, _v_target_prev built up while lead was at peak speed
+            # (e.g. 8 m/s) causes the target to stay above ego during lead decel,
+            # making the car accelerate into the decelerating lead for several frames.
+            idm_base = (
+                min(self._v_target_prev, ego_speed)
+                if idm_accel_mps2 < 0.0
+                else self._v_target_prev
+            )
             v_target = float(
-                max(0.0, min(free_flow_target, self._v_target_prev + idm_accel_mps2 * dt))
+                max(0.0, min(free_flow_target, idm_base + idm_accel_mps2 * dt))
             )
             self._v_target_prev = v_target
             self._was_acc_active = True

@@ -56,6 +56,17 @@ class MPCParams:
     r_accel: float = 0.05                   # accel magnitude
     r_steer_rate: float = 1.0              # steering rate — PRIMARY COMFORT KNOB
 
+    # Speed-dependent r_steer_rate scheduling (gain-scheduled MPC)
+    # At higher speeds, bicycle model gain v/L increases → loop gain crosses stability
+    # boundary → lateral oscillation. Scheduling r_steer_rate with speed damps this.
+    # Uses solver re-init on speed band crossings (OSQP P matrix is immutable).
+    r_steer_rate_scheduling_enabled: bool = False
+    r_steer_rate_speed_onset: float = 12.0       # m/s where scaling begins
+    r_steer_rate_speed_gain: float = 0.15        # multiplier per m/s above onset
+    r_steer_rate_max_scale: float = 3.0          # cap: r_eff ≤ r_base × max_scale
+    r_steer_rate_band_hysteresis: float = 1.0    # m/s hysteresis to prevent chattering
+    r_steer_rate_kappa_off: float = 0.005        # curvature where scheduling deactivates (R200; R600/R500 keep scheduling)
+
     # Constraints
     delta_rate_max: float = 0.5             # max Δδ_norm per step
     max_accel: float = 1.2                  # m/s²
@@ -189,12 +200,33 @@ class MPCSolver:
         self._warm_y = None
         self._nz = 0
         self._nc = 0
+        self._current_r_steer_rate = params.r_steer_rate
+        self._speed_band_center: float = 0.0
         self._build_qp()
 
     def _get_horizon(self, speed: float) -> int:
         if self.p.speed_adaptive_horizon and speed >= self.p.speed_adaptive_threshold_mps:
             return self.p.speed_adaptive_n_high
         return self.p.horizon
+
+    def _get_effective_r_steer_rate(self, speed: float, kappa: float = 0.0) -> float:
+        """Compute speed-scheduled r_steer_rate with curvature gating.
+
+        At speeds above onset, r_steer_rate scales linearly to counteract
+        the bicycle model's v/L gain increase. On curves (high kappa),
+        scheduling deactivates so MPC retains full tracking authority.
+        """
+        if not self.p.r_steer_rate_scheduling_enabled:
+            return self.p.r_steer_rate
+        excess = max(0.0, speed - self.p.r_steer_rate_speed_onset)
+        scale = min(1.0 + self.p.r_steer_rate_speed_gain * excess,
+                    self.p.r_steer_rate_max_scale)
+        # Curvature gate: ramp scale toward 1.0 on curves
+        kappa_abs = abs(kappa)
+        kappa_off = max(1e-6, self.p.r_steer_rate_kappa_off)
+        kappa_gate = max(0.0, min(1.0, 1.0 - kappa_abs / kappa_off))
+        gated_scale = 1.0 + (scale - 1.0) * kappa_gate
+        return self.p.r_steer_rate * gated_scale
 
     @staticmethod
     def _feedforward_delta_norm(kappa: float, wheelbase_m: float, max_steer_rad: float) -> float:
@@ -247,7 +279,7 @@ class MPCSolver:
         for k in range(N - 1):
             idx_k = k * (nx + nu) + nx       # δ_norm at step k
             idx_k1 = (k + 1) * (nx + nu) + nx  # δ_norm at step k+1
-            r_sr = self.p.r_steer_rate
+            r_sr = self._current_r_steer_rate
 
             # (δ[k+1] - δ[k])² = δ[k+1]² - 2·δ[k]·δ[k+1] + δ[k]²
             # Add to diagonal
@@ -278,7 +310,7 @@ class MPCSolver:
             idx_d0 = nx  # delta[0] sits at position nx in the decision vector
             rows.append(idx_d0)
             cols.append(idx_d0)
-            vals.append(self.p.r_steer_rate)
+            vals.append(self._current_r_steer_rate)
 
         P = sparse.csc_matrix((vals, (rows, cols)), shape=(nz, nz))
         # OSQP requires upper-triangular P
@@ -434,9 +466,20 @@ class MPCSolver:
         nx, nu = self._nx, self._nu
         nz = self._nz
 
-        # Check for horizon change
+        # Check for horizon change or r_steer_rate scheduling band crossing
         new_N = self._get_horizon(v)
-        if new_N != N:
+        kappa_now = float(kappa_ref_horizon[0]) if kappa_ref_horizon is not None and len(kappa_ref_horizon) > 0 else 0.0
+        new_r_sr = self._get_effective_r_steer_rate(v, kappa_now)
+        need_rebuild = (new_N != N)
+
+        # Speed-band hysteresis: only rebuild for r_steer_rate if change is meaningful
+        if abs(new_r_sr - self._current_r_steer_rate) > 0.1:
+            if abs(v - self._speed_band_center) > self.p.r_steer_rate_band_hysteresis:
+                self._current_r_steer_rate = new_r_sr
+                self._speed_band_center = v
+                need_rebuild = True
+
+        if need_rebuild:
             self._N = new_N
             self._build_qp()
             self._warm_x = None
@@ -597,7 +640,7 @@ class MPCSolver:
                 for k in range(N)
             ], dtype=float)
 
-            r_sr = self.p.r_steer_rate
+            r_sr = self._current_r_steer_rate
             for k in range(N - 1):
                 dff = delta_ff[k + 1] - delta_ff[k]
                 if dff == 0.0:
@@ -611,7 +654,7 @@ class MPCSolver:
         # Combined with the extra r_sr diagonal in P (added in _build_qp), this
         # implements the full 0.5*r_sr*(delta[0] - last_delta_norm)^2 cost.
         if self.p.first_step_rate_enabled:
-            q_new[nx] += -self.p.r_steer_rate * last_delta_norm
+            q_new[nx] += -self._current_r_steer_rate * last_delta_norm
 
         # --- Solve ---
         try:
@@ -678,6 +721,7 @@ class MPCSolver:
             'solve_time_ms': solve_ms,
             'predicted_trajectory': predicted,
             'osqp_status': res.info.status,
+            'r_steer_rate_effective': self._current_r_steer_rate,
         }
 
 
@@ -1086,6 +1130,7 @@ class MPCController:
             'kappa_active_mild_curve_authority_gate_weight': active_mild_curve_authority_gate_weight,
             'kappa_preview_used': bool(_preview_used),
             'kappa_preview_range': float(np.ptp(kappa_corrected_horizon)) if _preview_used else 0.0,
+            'r_steer_rate_effective': result.get('r_steer_rate_effective', self.params.r_steer_rate),
         }
 
     def reset(self):

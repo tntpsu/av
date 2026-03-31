@@ -668,6 +668,8 @@ trajectory:
   heading_zero_quad_threshold: 0.005
   heading_zero_curvature_guard: 0.001
   smoothing_alpha_curve_reduction: 0.15
+  # Speed-adaptive EMA floor removed — oscillation damping now handled by
+  # gain-scheduled r_steer_rate in the MPC controller (trajectory.mpc section).
   ref_x_rate_limit_curvature_min: 0.001
   ref_x_rate_limit_curvature_scale_max: 5.0
   traj_heading_zero_gate_center_a_on_abs_max: 0.004
@@ -740,6 +742,21 @@ trajectory:
     mpc_r_steer: 0.05
     mpc_r_accel: 0.2
     mpc_r_steer_rate: 3.5                           # CHANGED: 2.0 → 3.5 (penalises steering-rate changes more heavily; directly damps the ~0.5 Hz oscillation whose period matches the 2 s MPC horizon)
+    # Speed-dependent r_steer_rate scheduling: scales r_steer_rate with speed
+    # to counteract bicycle model v/L gain increase. r_eff = r_base * min(1 + gain*(v-onset), max_scale).
+    mpc_r_steer_rate_scheduling_enabled: true
+    mpc_r_steer_rate_speed_onset: 12.0      # m/s where scaling begins
+    mpc_r_steer_rate_speed_gain: 0.80       # multiplier per m/s above onset (0.40→growth halved but still positive)
+    mpc_r_steer_rate_max_scale: 3.0         # cap: r_eff ≤ r_base × max_scale
+    mpc_r_steer_rate_band_hysteresis: 1.0   # m/s hysteresis to prevent solver rebuild chattering
+    mpc_r_steer_rate_kappa_off: 0.005      # curvature where scheduling fully deactivates (R200=0.005; R600/R500 keep scheduling)
+    # Speed-adaptive e_lat attenuation — reduces loop gain on high-speed straights.
+    # Complements r_steer_rate scheduling (which only penalizes rate, not gain).
+    # Curvature-gated: on curves (κ>kappa_off) attenuation is off → full tracking authority.
+    mpc_elat_speed_atten_onset: 12.0       # m/s where attenuation begins
+    mpc_elat_speed_atten_rate: 0.10        # gain reduction per m/s above onset (at 14→0.75, at 20→0.50)
+    mpc_elat_speed_atten_min: 0.5          # minimum attenuation factor (never below 50%)
+    mpc_elat_speed_atten_kappa_off: 0.005  # curvature where attenuation deactivates
     mpc_delta_rate_max: 0.15        # max Δδ_norm per step
     # Noise-jitter fixes (2026-02-17):
     # Fix A — first-step QP rate cost: adds 0.5*r_steer_rate*(delta[0]-last)^2 to the
@@ -777,6 +794,10 @@ trajectory:
     mpc_bias_enabled: false
     mpc_max_steering_rate_per_frame: 0.15  # safety net rate limiter (rad/frame) — much looser than PP
     mpc_delay_frames: 2                    # Smith predictor delay buffer length (frames; ~66ms at 30fps)
+    smith_predictor_disagreement_gain: 0.3  # Attenuate heading correction when sign(e_lat) != sign(e_heading) (oscillation inflection)
+    # e_lat speed attenuation — complements r_steer_rate scheduling.
+    # Scheduling penalizes steering rate; attenuation reduces effective loop gain on straights.
+    # Both curvature-gated (kappa_off=0.005) to preserve curve tracking authority.
     mpc_grade_clamp_rad: 0.15             # Max grade input to MPC (~8.5°)
     mpc_grade_ff_gain: 1.8                # Unity WheelCollider physics calibration
   # ── NMPC (Step 5) ────────────────────────────────────────────────────────────

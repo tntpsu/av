@@ -1,10 +1,15 @@
 # AV Stack — Agent Memory: Tasks
 
-**Last updated:** 2026-03-24
+**Last updated:** 2026-03-31
 
 ---
 
 ## Current Focus
+
+**Step 5 ACC in progress. LMPC oscillation fix COMPLETE ✅ (2026-03-31). Highway 97.5, Autobahn 96.4.**
+
+### LMPC Oscillation Fix — DONE ✅ (2026-03-31)
+Dual-mechanism: r_steer_rate speed scheduling (rate penalty) + e_lat speed attenuation (gain reduction), both curvature-gated (kappa_off=0.005). 28 tests passing. All diagnostic tools updated.
 
 **Step 4 NMPC — COMPLETE ✅ (2026-03-23). Best: H-3 97.5/100, 0 e-stops. Step 5 ACC plan ready.**
 

@@ -163,6 +163,17 @@ def analyze_mpc_pipeline(filepath: Path) -> Optional[Dict]:
         rl_n = int(np.sum(rl[mpc_mask] > 0.5)) if rl is not None else None
         rl_rate = _safe_float(rl_n / mpc_n) if rl_n is not None else None
 
+        # 2.8.5 — r_steer_rate scheduling
+        rsr_eff = _load(f, "control/mpc_r_steer_rate_effective", n)
+        rsr_mean = rsr_min = rsr_max = rsr_transitions = None
+        if rsr_eff is not None:
+            rsr_mpc = rsr_eff[mpc_mask]
+            if len(rsr_mpc) > 0:
+                rsr_mean = _safe_float(float(np.mean(rsr_mpc)))
+                rsr_min = _safe_float(float(np.min(rsr_mpc)))
+                rsr_max = _safe_float(float(np.max(rsr_mpc)))
+                rsr_transitions = int(np.sum(np.abs(np.diff(rsr_mpc)) > 0.1))
+
         # 2.8.4 — Smith predictor
         raw_e  = _load(f, "control/mpc_smith_raw_e_lat", n)
         pred_e = _load(f, "control/mpc_smith_e_lat_predicted", n)
@@ -173,6 +184,17 @@ def analyze_mpc_pipeline(filepath: Path) -> Optional[Dict]:
             smith_delta_p50 = _safe_float(_pct(sd, 50))
             smith_delta_p95 = _safe_float(_pct(sd, 95))
         delay_p50 = int(np.median(delay[mpc_mask])) if delay is not None else None
+
+        # 2.8.6 — e_lat speed attenuation (loop gain reduction)
+        mpc_e_lat = _load(f, "control/mpc_e_lat", n)
+        elat_atten_ratio = None
+        if raw_e is not None and mpc_e_lat is not None:
+            # ratio of |MPC input| / |raw| — < 1.0 means attenuation active
+            _raw_mpc = np.abs(raw_e[mpc_mask])
+            _inp_mpc = np.abs(mpc_e_lat[mpc_mask])
+            _valid = _raw_mpc > 0.01  # avoid div-by-zero on near-zero errors
+            if np.sum(_valid) > 10:
+                elat_atten_ratio = _safe_float(float(np.median(_inp_mpc[_valid] / _raw_mpc[_valid])))
 
         card2 = {
             # 2.8.1
@@ -195,6 +217,13 @@ def analyze_mpc_pipeline(filepath: Path) -> Optional[Dict]:
             "smith_delta_p50": smith_delta_p50,
             "smith_delta_p95": smith_delta_p95,
             "smith_delay_frames_p50": delay_p50,
+            # 2.8.5
+            "r_steer_rate_eff_mean": rsr_mean,
+            "r_steer_rate_eff_min": rsr_min,
+            "r_steer_rate_eff_max": rsr_max,
+            "r_steer_rate_band_transitions": rsr_transitions,
+            # 2.8.6
+            "elat_atten_ratio": elat_atten_ratio,
         }
 
         # ── Card 3: MPC State Quality ────────────────────────────────────────

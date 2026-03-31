@@ -2692,6 +2692,157 @@ def _print_summary_report(recording_path: Path, summary: Dict, analyze_to_failur
             )
         print()
 
+    # Section 23: Trajectory Smoothing & Curve-Segmented Diagnostics
+    # Root-cause diagnostic for speed-adaptive smoothing regression.
+    # Segments lateral error, smoothing lag, and MPC recovery by straight vs curve.
+    try:
+        import h5py as _h5
+        with _h5.File(recording_path, "r") as f:
+            _has_fields = all(k in f for k in [
+                "trajectory/diag_raw_ref_x",
+                "trajectory/diag_smoothed_ref_x",
+                "trajectory/reference_point_curvature",
+                "control/lateral_error",
+                "control/regime",
+            ])
+            if _has_fields:
+                _raw_x = np.array(f["trajectory/diag_raw_ref_x"][:], dtype=float)
+                _smooth_x = np.array(f["trajectory/diag_smoothed_ref_x"][:], dtype=float)
+                _curv = np.array(f["trajectory/reference_point_curvature"][:], dtype=float)
+                _e_lat = np.array(f["control/lateral_error"][:], dtype=float)
+                _regime = np.array(f["control/regime"][:], dtype=float)
+                _speed = np.array(f["vehicle/speed"][:], dtype=float) if "vehicle/speed" in f else np.zeros_like(_e_lat)
+                _mpc_e_lat = np.array(f["control/mpc_e_lat"][:], dtype=float) if "control/mpc_e_lat" in f else None
+                _recovery = np.array(f["control/mpc_recovery_mode_suppressed"][:], dtype=float) if "control/mpc_recovery_mode_suppressed" in f else None
+                _smith_raw = np.array(f["control/mpc_smith_raw_e_lat"][:], dtype=float) if "control/mpc_smith_raw_e_lat" in f else None
+                _smith_pred = np.array(f["control/mpc_smith_e_lat_predicted"][:], dtype=float) if "control/mpc_smith_e_lat_predicted" in f else None
+
+                _n = min(len(_raw_x), len(_smooth_x), len(_curv), len(_e_lat), len(_regime))
+                _raw_x = _raw_x[:_n]; _smooth_x = _smooth_x[:_n]; _curv = _curv[:_n]
+                _e_lat = _e_lat[:_n]; _regime = _regime[:_n]; _speed = _speed[:_n]
+
+                _mpc_mask = _regime >= 0.5
+                _curve_mask = np.abs(_curv) > 0.0005
+                _straight_mpc = (~_curve_mask) & _mpc_mask
+                _curve_mpc = _curve_mask & _mpc_mask
+                _lag = _smooth_x - _raw_x
+
+                print("23. TRAJECTORY SMOOTHING & CURVE DIAGNOSTICS")
+                print("-" * 80)
+
+                # --- Smoothing lag ---
+                print("   ── Smoothing Lag (smoothed_ref_x − raw_ref_x) ────────────────")
+                for _lbl, _mask in [("All", np.ones(_n, dtype=bool)), ("Straight+MPC", _straight_mpc), ("Curve+MPC", _curve_mpc)]:
+                    if _mask.sum() > 0:
+                        _al = np.abs(_lag[_mask])
+                        print(f"   {_lbl:15s}  P50={np.median(_al):.4f}m  P95={np.percentile(_al,95):.4f}m  Max={np.max(_al):.4f}m")
+                print()
+
+                # --- Lag as % of error (smoking-gun metric) ---
+                if _curve_mpc.sum() > 10:
+                    _abs_lag_c = np.abs(_lag[_curve_mpc])
+                    _abs_elat_c = np.abs(_e_lat[_curve_mpc])
+                    _safe_elat = np.maximum(_abs_elat_c, 1e-6)
+                    _lag_pct = _abs_lag_c / _safe_elat
+                    _corr = float(np.corrcoef(_abs_lag_c, _abs_elat_c)[0, 1]) if _curve_mpc.sum() > 10 else 0.0
+                    print("   ── Smoothing Lag vs Lateral Error (curve+MPC) ─────────────")
+                    print(f"   Lag as % of |e_lat|:  P50={100*np.median(_lag_pct):.1f}%  P95={100*np.percentile(_lag_pct,95):.1f}%")
+                    print(f"   Lag-error correlation: {_corr:.3f}  ({'CAUSAL' if abs(_corr) > 0.5 else 'weak' if abs(_corr) > 0.2 else 'none'})")
+                    _lag_flag = "YES" if np.percentile(_lag_pct, 95) > 0.5 else "NO"
+                    print(f"   Smoothing lag dominates curve error: {_lag_flag}")
+                    print()
+
+                # --- Segmented lateral error ---
+                print("   ── Lateral Error by Segment ──────────────────────────────────")
+                for _lbl, _mask in [("Straight+MPC", _straight_mpc), ("Curve+MPC", _curve_mpc)]:
+                    if _mask.sum() > 0:
+                        _ae = np.abs(_e_lat[_mask])
+                        print(f"   {_lbl:15s}  P50={np.median(_ae):.3f}m  P95={np.percentile(_ae,95):.3f}m  Max={np.max(_ae):.3f}m  ({_mask.sum()} frames)")
+                print()
+
+                # --- MPC e_lat by segment (what MPC actually sees) ---
+                if _mpc_e_lat is not None:
+                    _me = _mpc_e_lat[:_n]
+                    print("   ── MPC e_lat by Segment (post Smith+attenuation) ─────────")
+                    for _lbl, _mask in [("Straight+MPC", _straight_mpc), ("Curve+MPC", _curve_mpc)]:
+                        if _mask.sum() > 0:
+                            _ame = np.abs(_me[_mask])
+                            print(f"   {_lbl:15s}  P50={np.median(_ame):.3f}m  P95={np.percentile(_ame,95):.3f}m")
+                    # Attenuation ratio
+                    if _smith_raw is not None and _mpc_mask.sum() > 0:
+                        _sr = np.abs(_smith_raw[:_n][_mpc_mask])
+                        _me_mpc = np.abs(_me[_mpc_mask])
+                        _safe_sr = np.maximum(_sr, 1e-6)
+                        _ratio = _me_mpc / _safe_sr
+                        print(f"   MPC/raw ratio (P50):  {np.median(_ratio):.3f}  (1.0=no attenuation, <1.0=attenuated)")
+                    print()
+
+                # --- Recovery mode ---
+                if _recovery is not None:
+                    _rec = _recovery[:_n]
+                    print("   ── Recovery Mode Suppression ─────────────────────────────")
+                    _rec_all = float(_rec[_mpc_mask].mean()) * 100 if _mpc_mask.sum() > 0 else 0
+                    print(f"   All MPC:       {_rec_all:.1f}%  ({int(_rec[_mpc_mask].sum())}/{int(_mpc_mask.sum())} frames)")
+                    if _curve_mpc.sum() > 0:
+                        _rec_curve = float(_rec[_curve_mpc].mean()) * 100
+                        _rec_flag = "ELEVATED" if _rec_curve > 10 else "OK"
+                        print(f"   Curve+MPC:     {_rec_curve:.1f}%  [{_rec_flag}]  (gate: <=10%)")
+                    if _straight_mpc.sum() > 0:
+                        _rec_str = float(_rec[_straight_mpc].mean()) * 100
+                        print(f"   Straight+MPC:  {_rec_str:.1f}%")
+                    print()
+
+                # --- Sign agreement (Smith predictor relevance) ---
+                _e_head = np.array(f["control/heading_error"][:_n], dtype=float) if "control/heading_error" in f else None
+                if _e_head is not None and _mpc_mask.sum() > 0:
+                    _sa = (_e_lat[_mpc_mask] * _e_head[_mpc_mask]) >= 0
+                    _sa_pct = float(_sa.mean()) * 100
+                    print("   ── Sign Agreement (Smith predictor relevance) ─────────────")
+                    print(f"   All MPC sign agree: {_sa_pct:.1f}%  ({'Smith guard inactive' if _sa_pct > 95 else 'Smith guard active'})")
+                    print()
+
+                # --- Speed in segments ---
+                print("   ── Speed by Segment ─────────────────────────────────────────")
+                if _straight_mpc.sum() > 0:
+                    print(f"   Straight+MPC:  P50={np.median(_speed[_straight_mpc]):.1f}  Max={np.max(_speed[_straight_mpc]):.1f} m/s")
+                if _curve_mpc.sum() > 0:
+                    print(f"   Curve+MPC:     P50={np.median(_speed[_curve_mpc]):.1f}  Max={np.max(_speed[_curve_mpc]):.1f} m/s")
+                print()
+
+                # --- r_steer_rate scheduling ---
+                if "control/mpc_r_steer_rate_effective" in f:
+                    _rsr = np.array(f["control/mpc_r_steer_rate_effective"][:_n], dtype=float)
+                    _rsr_mpc = _rsr[_mpc_mask]
+                    if len(_rsr_mpc) > 0:
+                        print("   ── r_steer_rate Scheduling ──────────────────────────────────")
+                        print(f"   Effective r_steer_rate:  Mean={np.mean(_rsr_mpc):.3f}  Min={np.min(_rsr_mpc):.3f}  Max={np.max(_rsr_mpc):.3f}")
+                        _rsr_diffs = np.abs(np.diff(_rsr_mpc))
+                        _rsr_transitions = int(np.sum(_rsr_diffs > 0.1))
+                        print(f"   Band transitions: {_rsr_transitions}")
+                        if np.max(_rsr_mpc) - np.min(_rsr_mpc) < 0.01:
+                            print(f"   NOTE: Scheduling appears INACTIVE (constant value)")
+                        print()
+                # Dual-mechanism summary: scheduling (rate) + attenuation (gain)
+                _has_sched = "control/mpc_r_steer_rate_effective" in f
+                _has_atten = False
+                if "control/mpc_smith_raw_e_lat" in f and "control/mpc_e_lat" in f:
+                    _raw_all = np.abs(np.array(f["control/mpc_smith_raw_e_lat"][:_n], dtype=float))
+                    _inp_all = np.abs(np.array(f["control/mpc_e_lat"][:_n], dtype=float))
+                    _va = (_raw_all > 0.01) & _mpc_mask
+                    if _va.sum() > 10:
+                        _atten_ratio = float(np.median(_inp_all[_va] / _raw_all[_va]))
+                        _has_atten = _atten_ratio < 0.95
+                print(f"   ── Oscillation Damping Status ────────────────────────────")
+                print(f"   r_steer_rate scheduling (rate penalty): {'ACTIVE' if _has_sched else 'N/A'}")
+                print(f"   e_lat speed attenuation (gain reduction): {'ACTIVE' if _has_atten else 'inactive/minimal'}")
+                print()
+
+    except Exception as _exc:
+        print("23. TRAJECTORY SMOOTHING & CURVE DIAGNOSTICS")
+        print("-" * 80)
+        print(f"   (skipped — {_exc})")
+        print()
+
     print("=" * 80)
 
 

@@ -257,6 +257,7 @@ class TrajectoryPlanningInference:
         self._ref_x_rate_limit_curvature_min = float(ref_x_rate_limit_curvature_min)
         self._ref_x_rate_limit_curvature_scale_max = float(ref_x_rate_limit_curvature_scale_max)
         self._last_curvature: float = 0.0
+
         self._curvature_increasing_frames: int = 0
         self._last_raw_x: float = 0.0
         self._raw_x_rate_history: list = []

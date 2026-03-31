@@ -31,6 +31,9 @@ control:
     max_speed: 14.0
     speed_drag_gain: 0.020
     accel_target_smoothing_alpha: 0.75
+    # ACC override sets adjusted_target_speed but does NOT update reference_accel.
+    # With accel_tracking=true the inner accel PID fights the ACC speed command → oscillation.
+    accel_tracking_enabled: false
 
 trajectory:
   target_speed: 12.0

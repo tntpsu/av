@@ -11518,6 +11518,7 @@ class AVStack:
             mpc_smith_e_lat_predicted=float(control_command.get('mpc_smith_e_lat_predicted', 0.0)),
             mpc_smith_e_heading_predicted=float(control_command.get('mpc_smith_e_heading_predicted', 0.0)),
             mpc_delay_frames_used=int(control_command.get('mpc_delay_frames_used', 0)),
+            mpc_r_steer_rate_effective=float(control_command.get('mpc_r_steer_rate_effective', 0.0)),
             grade_compensation_active=1.0 if abs(getattr(self, '_smoothed_grade', 0.0)) > 0.001 else 0.0,
             diag_silent_elat_dropout_active=bool(control_command.get('diag_silent_elat_dropout_active', False)),
             mpc_elat_ramp_active=bool(control_command.get('mpc_elat_ramp_active', False)),

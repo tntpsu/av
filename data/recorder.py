@@ -2678,6 +2678,7 @@ class DataRecorder:
         self.h5_file.create_dataset("control/mpc_smith_e_lat_predicted", shape=(0,), maxshape=max_shape, dtype=np.float32)
         self.h5_file.create_dataset("control/mpc_smith_e_heading_predicted", shape=(0,), maxshape=max_shape, dtype=np.float32)
         self.h5_file.create_dataset("control/mpc_delay_frames_used", shape=(0,), maxshape=max_shape, dtype=np.int8)
+        self.h5_file.create_dataset("control/mpc_r_steer_rate_effective", shape=(0,), maxshape=max_shape, dtype=np.float32)
         self.h5_file.create_dataset("control/grade_compensation_active", shape=(0,), maxshape=max_shape, dtype=np.float32)
         self.h5_file.create_dataset("control/effective_max_accel", shape=(0,), maxshape=max_shape, dtype=np.float32)
         self.h5_file.create_dataset("control/nmpc_used", shape=(0,), maxshape=max_shape, dtype=np.float32)
@@ -7588,6 +7589,7 @@ class DataRecorder:
         mpc_smith_e_lat_predicted_list = []
         mpc_smith_e_heading_predicted_list = []
         mpc_delay_frames_used_list = []
+        mpc_r_steer_rate_effective_list = []
         grade_compensation_active_list = []
         effective_max_accel_list = []
         diag_silent_elat_dropout_active_list = []
@@ -8985,6 +8987,7 @@ class DataRecorder:
             mpc_smith_e_lat_predicted_list.append(float(getattr(cc, 'mpc_smith_e_lat_predicted', 0.0)))
             mpc_smith_e_heading_predicted_list.append(float(getattr(cc, 'mpc_smith_e_heading_predicted', 0.0)))
             mpc_delay_frames_used_list.append(int(getattr(cc, 'mpc_delay_frames_used', 0)))
+            mpc_r_steer_rate_effective_list.append(float(getattr(cc, 'mpc_r_steer_rate_effective', 0.0)))
             grade_compensation_active_list.append(float(getattr(cc, 'grade_compensation_active', 0.0)))
             effective_max_accel_list.append(float(getattr(cc, 'effective_max_accel', 0.0)))
             diag_silent_elat_dropout_active_list.append(
@@ -9339,6 +9342,7 @@ class DataRecorder:
                        "mpc_rate_limiter_active",
                        "mpc_smith_raw_e_lat", "mpc_smith_e_lat_predicted",
                        "mpc_smith_e_heading_predicted", "mpc_delay_frames_used",
+                       "mpc_r_steer_rate_effective",
                        "grade_compensation_active",
                        "diag_silent_elat_dropout_active",
                        "mpc_elat_ramp_active",
@@ -10522,6 +10526,7 @@ class DataRecorder:
             self.h5_file["control/mpc_smith_e_lat_predicted"][current_size:] = mpc_smith_e_lat_predicted_list
             self.h5_file["control/mpc_smith_e_heading_predicted"][current_size:] = mpc_smith_e_heading_predicted_list
             self.h5_file["control/mpc_delay_frames_used"][current_size:] = mpc_delay_frames_used_list
+            self.h5_file["control/mpc_r_steer_rate_effective"][current_size:] = np.array(mpc_r_steer_rate_effective_list, dtype=np.float32)
             self.h5_file["control/grade_compensation_active"][current_size:] = np.array(grade_compensation_active_list, dtype=np.float32)
             self.h5_file["control/effective_max_accel"][current_size:] = np.array(effective_max_accel_list, dtype=np.float32)
             self.h5_file["control/diag_silent_elat_dropout_active"][current_size:] = np.array(
