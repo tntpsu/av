@@ -9,6 +9,8 @@
 
 # ── Inherit highway lateral/MPC tuning ────────────────────────────────────────
 control:
+  interframe_extrapolation:
+    enabled: true
   lateral:
     steering_smoothing_alpha: 0.3
     pp_feedback_gain: 0.02  # Restored from 0.0: geometric-only PP can't hold 1.8m spawn offset at low ACC speeds (0-6 m/s stop-and-go). 0.02 gives position correction without the integral oscillation seen at 15 m/s with base 0.075.

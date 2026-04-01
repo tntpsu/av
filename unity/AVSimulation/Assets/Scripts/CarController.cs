@@ -1492,15 +1492,28 @@ public class CarController : MonoBehaviour
             }
         }
         
-        // FIXED: Hard speed limit - cap velocity at the END after all forces are applied
-        // This ensures the limit is enforced regardless of any forces applied earlier
-        // CRITICAL: This is the LAST line - it overrides any physics forces that exceeded the limit
-        // Recalculate speed after applying forces (in case forces increased it)
+        // Braking safety backstop: if Python is commanding strong brake but speed is still
+        // rising (WheelCollider brake torque ineffective — e.g. wheels not grounded or friction
+        // saturated), apply direct velocity reduction as a last resort. Without this, the car
+        // accelerates uncontrollably to the track speed limit (e.g. 29 m/s) while Python's
+        // brake command has no effect.
         currentVelocity = rb.linearVelocity;
         currentSpeed = currentVelocity.magnitude;
+        if (brakeInput > 0.3f && effectiveThrottle < 0.01f && currentSpeed > 1.0f)
+        {
+            // Apply direct deceleration proportional to brake input
+            // At brakeInput=1.0: decelerate at ~5 m/s² (strong but not jarring)
+            float decelRate = brakeInput * 5.0f * Time.fixedDeltaTime;
+            float newSpeed = Mathf.Max(0.0f, currentSpeed - decelRate);
+            rb.linearVelocity = currentVelocity.normalized * newSpeed;
+            currentVelocity = rb.linearVelocity;
+            currentSpeed = newSpeed;
+        }
+
+        // Hard speed limit - cap velocity at the END after all forces are applied.
+        // This ensures the limit is enforced regardless of any forces applied earlier.
         if (currentSpeed > effectiveMaxSpeed)
         {
-            // Cap velocity to max speed immediately
             rb.linearVelocity = currentVelocity.normalized * effectiveMaxSpeed;
         }
 
