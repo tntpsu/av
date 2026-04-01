@@ -4943,8 +4943,14 @@ class LongitudinalController:
             and current_speed < self.low_speed_speed_threshold
             and throttle > 0.0
         ):
-            # Avoid brake+throttle overlap at low speed (launch smoothness).
-            brake = 0.0
+            # Avoid brake+throttle overlap at low speed.
+            # If controller intentionally computed brake (before limits), the throttle
+            # is a smoothing/rate-limit artifact — zero throttle, keep brake.
+            # Otherwise zero brake for launch smoothness (original behavior).
+            if self.last_brake_before_limits > 0.0:
+                throttle = 0.0
+            else:
+                brake = 0.0
         if throttle > 0.0 and brake > 0.0:
             # Enforce mutual exclusivity to prevent oscillation spikes.
             if raw_speed_error >= 0.0:

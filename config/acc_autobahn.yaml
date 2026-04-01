@@ -11,6 +11,8 @@
 
 # ── Inherit autobahn NMPC tuning (from mpc_autobahn.yaml) ─────────────────────
 control:
+  interframe_extrapolation:
+    enabled: true
   lateral:
     steering_smoothing_alpha: 0.2
     pp_feedback_gain: 0.0

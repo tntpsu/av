@@ -13,6 +13,8 @@
 
 # ── Inherit hill_highway lateral tuning (no MPC overlay — q_lat auto-derived) ─
 control:
+  interframe_extrapolation:
+    enabled: true
   lateral:
     steering_smoothing_alpha: 0.6       # gentler than highway (R100 corners, lower speed)
     pp_feedback_gain: 0.0
