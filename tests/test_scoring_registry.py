@@ -238,3 +238,17 @@ class TestGradeConstants:
     def test_grade_transition_blend_m(self):
         from scoring_registry import GRADE_TRANSITION_BLEND_M
         assert GRADE_TRANSITION_BLEND_M == 3.0
+
+
+class TestInterframeConstants:
+    def test_interframe_stale_gt_threshold_ms(self):
+        from scoring_registry import INTERFRAME_STALE_GT_THRESHOLD_MS
+        assert INTERFRAME_STALE_GT_THRESHOLD_MS == 50.0
+
+    def test_interframe_e_lat_divergence_threshold_m(self):
+        from scoring_registry import INTERFRAME_E_LAT_DIVERGENCE_THRESHOLD_M
+        assert INTERFRAME_E_LAT_DIVERGENCE_THRESHOLD_M == 0.2
+
+    def test_interframe_max_updates_per_cycle(self):
+        from scoring_registry import INTERFRAME_MAX_UPDATES_PER_CYCLE
+        assert INTERFRAME_MAX_UPDATES_PER_CYCLE == 3

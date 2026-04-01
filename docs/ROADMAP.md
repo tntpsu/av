@@ -471,10 +471,11 @@ Steps 8-10 add intelligence and robustness.
 
 **Current state (2026-03-31):** PP (<4 m/s) + Stanley (hairpin <6 m/s) + LMPC (4–21 m/s) + NMPC (>21 m/s, scipy SLSQP).
 Seven tracks validated. ACC lead vehicle following in progress (H2+H3 validated). Single lane.
-LMPC oscillation fix deployed: dual-mechanism (r_steer_rate scheduling + e_lat attenuation), curvature-gated.
+LMPC oscillation fix: ramp limiter disabled (root cause), r_steer_rate scheduling, Smith delay cap.
+Inter-frame control extrapolation validated: 17.7 Hz effective rate → 97.3/100, 0 e-stops on highway.
 Speed-control auto-derive: 10 control params derived from target_speed (linear ramp + bool gate).
-Curvature-adjusted scoring active. 1667 tests, 32/32 comfort gates green.
-autobahn_30: 96.5/100 at 25 m/s. highway_65: 97.5/100 at 15 m/s.
+Curvature-adjusted scoring active. 1667+ tests, 32/32 comfort gates green.
+autobahn_30: 96.5/100 at 25 m/s. highway_65: 97.3/100 at 15 m/s (with inter-frame).
 
 ### Step 1 — Track Coverage Expansion (S2-M5) ✅ COMPLETE (2026-03-15)
 
@@ -618,7 +619,7 @@ explaining persistent lateral offset independent of control/perception tuning.
 - mixed traffic is still pending:
   - no simultaneous lead + distractor traffic yet
   - no multi-actor association/ranking yet
-- **LMPC oscillation fix complete (2026-03-31):** dual-mechanism (r_steer_rate scheduling + e_lat attenuation) — resolved high-speed lateral oscillation that was blocking ACC highway validation
+- **LMPC oscillation fix complete (2026-03-31→04-01):** Root cause was e_lat ramp limiter (0.05 m/frame) creating limit cycle, NOT insufficient gain. Ramp disabled, r_steer_rate scheduling kept, Smith delay cap at 80ms. Inter-frame control extrapolation added (Tier 1): lightweight MPC at ~17.7 Hz between camera frames → 97.3/100, 0 e-stops on highway. Key bug: function-internal `time.sleep(frame_interval)` throttled inter-frame to camera rate — removed.
 - **Speed-control auto-derive complete (2026-03-31):** 10 control params auto-derived from target_speed, removing explicit overlay params from highway/autobahn configs
 
 ---

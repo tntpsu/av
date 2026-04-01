@@ -280,75 +280,34 @@ class TestSmithPredictorGuard:
 
 
 # ---------------------------------------------------------------------------
-# e_lat speed attenuation (complements r_steer_rate scheduling)
+# Ramp limiter production-disabled guards
 # ---------------------------------------------------------------------------
 
-def _elat_attenuation(
-    e_lat: float,
-    speed: float,
-    kappa: float = 0.0,
-    onset: float = 12.0,
-    rate: float = 0.10,
-    min_factor: float = 0.5,
-    kappa_off: float = 0.005,
-) -> float:
-    """Mirror the e_lat attenuation formula in pid_controller.py."""
-    if speed <= onset:
-        return e_lat
-    kappa_gate = max(0.0, min(1.0, 1.0 - abs(kappa) / max(1e-6, kappa_off)))
-    raw_factor = max(min_factor, 1.0 - rate * (speed - onset))
-    factor = 1.0 - (1.0 - raw_factor) * kappa_gate
-    return e_lat * factor
+class TestRampLimiterProductionDisabled:
+    """Verify the e_lat ramp limiter is disabled in production config.
 
+    The ramp limiter (mpc_elat_ramp_rate_m_per_frame) was found to cause a
+    self-sustaining limit cycle: at 0.05 m/frame it caps MPC error tracking
+    to 4-17% of true GT cross-track change during oscillation (0.10-0.15
+    m/frame), creating phase lag that amplifies the oscillation. Disabled
+    2026-03-31.
+    """
 
-class TestElatSpeedAttenuation:
-    """Verify e_lat speed attenuation formula."""
+    def test_mpc_params_default_ramp_disabled(self):
+        """MPCParams dataclass default must be 0.0 (disabled)."""
+        pytest.importorskip("osqp")
+        from control.mpc_controller import MPCParams
+        assert MPCParams().elat_ramp_rate_m_per_frame == 0.0
 
-    def test_below_onset_no_attenuation(self):
-        for speed in [0.0, 5.0, 10.0, 12.0]:
-            assert _elat_attenuation(1.0, speed) == 1.0
-
-    def test_above_onset_attenuates(self):
-        result = _elat_attenuation(1.0, 14.0)
-        # rate=0.10, excess=2 → factor = 0.80
-        assert abs(result - 0.80) < 1e-9
-
-    def test_high_speed_clamps_at_min(self):
-        result = _elat_attenuation(1.0, 30.0)
-        # rate=0.10, excess=18 → raw = 1-1.8 = -0.8, clamped to 0.5
-        assert abs(result - 0.5) < 1e-9
-
-    def test_on_curve_no_attenuation(self):
-        """At κ >= kappa_off, attenuation is fully disabled."""
-        result = _elat_attenuation(1.0, 20.0, kappa=0.005)
-        assert abs(result - 1.0) < 1e-9
-
-    def test_partial_curvature_gating(self):
-        """At κ = kappa_off/2, half the attenuation is applied."""
-        result = _elat_attenuation(1.0, 14.0, kappa=0.0025)
-        # raw_factor = 0.80, kappa_gate = 1 - 0.0025/0.005 = 0.5
-        # factor = 1 - (1-0.80)*0.5 = 1 - 0.10 = 0.90
-        assert abs(result - 0.90) < 1e-9
-
-    def test_preserves_sign(self):
-        """Attenuation preserves e_lat sign."""
-        pos = _elat_attenuation(0.5, 14.0)
-        neg = _elat_attenuation(-0.5, 14.0)
-        assert pos > 0
-        assert neg < 0
-        assert abs(pos + neg) < 1e-9
-
-    def test_monotonically_decreasing_with_speed(self):
-        speeds = np.linspace(0, 40, 200)
-        results = [abs(_elat_attenuation(1.0, s)) for s in speeds]
-        for i in range(1, len(results)):
-            assert results[i] <= results[i - 1] + 1e-9
-
-    def test_never_amplifies(self):
-        """Attenuation factor is always <= 1.0."""
-        for speed in np.linspace(0, 50, 300):
-            for kappa in [0.0, 0.001, 0.003, 0.005, 0.010]:
-                assert abs(_elat_attenuation(1.0, speed, kappa)) <= 1.0 + 1e-9
+    def test_base_config_ramp_disabled(self):
+        """Base config av_stack_config.yaml must have ramp = 0.0."""
+        import yaml
+        from pathlib import Path
+        cfg_path = Path(__file__).resolve().parent.parent / "config" / "av_stack_config.yaml"
+        with open(cfg_path) as f:
+            cfg = yaml.safe_load(f)
+        ramp = cfg["trajectory"]["mpc"]["mpc_elat_ramp_rate_m_per_frame"]
+        assert ramp == 0.0, f"Ramp limiter must be disabled (0.0), got {ramp}"
 
 
 # ---------------------------------------------------------------------------
@@ -388,3 +347,59 @@ class TestMPCParamsSchedulingConfig:
         assert abs(p.r_steer_rate_speed_gain - 0.12) < 1e-9
         assert abs(p.r_steer_rate_max_scale - 2.5) < 1e-9
         assert abs(p.r_steer_rate_band_hysteresis - 2.0) < 1e-9
+
+
+# ---------------------------------------------------------------------------
+# Smith predictor wall-clock delay cap
+# ---------------------------------------------------------------------------
+
+def _smith_predictor_total_delay(
+    delay_frames: int,
+    frame_dt: float,
+    max_delay_s: float,
+) -> float:
+    """Mirror the wall-clock cap logic in pid_controller.py."""
+    raw = delay_frames * frame_dt
+    if max_delay_s > 0:
+        return min(raw, max_delay_s)
+    return raw
+
+
+class TestSmithPredictorDelayCap:
+    """Verify wall-clock cap on Smith predictor delay (prevents 4× overshoot
+    when camera rate drops below designed 30 fps)."""
+
+    def test_no_clamp_at_30fps(self):
+        """At 30 fps, 2 × 0.033 = 0.066s < 0.080s cap → no clamp."""
+        total = _smith_predictor_total_delay(2, 0.033, 0.080)
+        assert abs(total - 0.066) < 1e-6
+
+    def test_clamp_at_7hz(self):
+        """At 7.5 fps, 2 × 0.133 = 0.266s → clamped to 0.080s."""
+        total = _smith_predictor_total_delay(2, 0.133, 0.080)
+        assert abs(total - 0.080) < 1e-6
+
+    def test_clamp_at_extreme_low_rate(self):
+        """At 3 fps, 2 × 0.333 = 0.666s → clamped to 0.080s."""
+        total = _smith_predictor_total_delay(2, 0.333, 0.080)
+        assert abs(total - 0.080) < 1e-6
+
+    def test_zero_disables_cap(self):
+        """max_delay_s=0.0 disables cap (legacy behavior)."""
+        total = _smith_predictor_total_delay(2, 0.133, 0.0)
+        assert abs(total - 0.266) < 1e-6
+
+    def test_custom_cap_value(self):
+        """Custom max_delay_s=0.120 respected."""
+        total = _smith_predictor_total_delay(2, 0.133, 0.120)
+        assert abs(total - 0.120) < 1e-6
+
+    def test_config_key_in_base_yaml(self):
+        """Verify smith_predictor_max_delay_s exists in base config."""
+        import yaml
+        from pathlib import Path
+        cfg_path = Path(__file__).resolve().parent.parent / "config" / "av_stack_config.yaml"
+        with open(cfg_path) as f:
+            cfg = yaml.safe_load(f)
+        val = cfg["trajectory"]["mpc"]["smith_predictor_max_delay_s"]
+        assert val == 0.080, f"Expected 0.080, got {val}"

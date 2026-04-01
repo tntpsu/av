@@ -2688,6 +2688,13 @@ class DataRecorder:
         self.h5_file.create_dataset("control/nmpc_iterations", shape=(0,), maxshape=max_shape, dtype=np.int16)
         self.h5_file.create_dataset("control/nmpc_fallback_active", shape=(0,), maxshape=max_shape, dtype=np.int8)
         self.h5_file.create_dataset("control/nmpc_consecutive_failures", shape=(0,), maxshape=max_shape, dtype=np.int16)
+        # Inter-frame control extrapolation diagnostics
+        self.h5_file.create_dataset("control/interframe_active", shape=(0,), maxshape=max_shape, dtype=np.float32)
+        self.h5_file.create_dataset("control/interframe_updates_this_cycle", shape=(0,), maxshape=max_shape, dtype=np.int16)
+        self.h5_file.create_dataset("control/interframe_total_count", shape=(0,), maxshape=max_shape, dtype=np.int32)
+        self.h5_file.create_dataset("control/interframe_last_e_lat", shape=(0,), maxshape=max_shape, dtype=np.float32)
+        self.h5_file.create_dataset("control/interframe_last_e_heading", shape=(0,), maxshape=max_shape, dtype=np.float32)
+        self.h5_file.create_dataset("control/interframe_dt_actual", shape=(0,), maxshape=max_shape, dtype=np.float32)
         self.h5_file.create_dataset(
             "control/diag_silent_elat_dropout_active",
             shape=(0,),
@@ -7601,6 +7608,12 @@ class DataRecorder:
         nmpc_iterations_list = []
         nmpc_fallback_active_list = []
         nmpc_consecutive_failures_list = []
+        interframe_active_list = []
+        interframe_updates_this_cycle_list = []
+        interframe_total_count_list = []
+        interframe_last_e_lat_list = []
+        interframe_last_e_heading_list = []
+        interframe_dt_actual_list = []
         accel_feedforward_list = []
         brake_feedforward_list = []
         accel_capped_list = []
@@ -9003,6 +9016,12 @@ class DataRecorder:
             nmpc_iterations_list.append(int(getattr(cc, 'nmpc_iterations', 0)))
             nmpc_fallback_active_list.append(int(getattr(cc, 'nmpc_fallback_active', False)))
             nmpc_consecutive_failures_list.append(int(getattr(cc, 'nmpc_consecutive_failures', 0)))
+            interframe_active_list.append(float(getattr(cc, 'interframe_active', 0.0)))
+            interframe_updates_this_cycle_list.append(int(getattr(cc, 'interframe_updates_this_cycle', 0)))
+            interframe_total_count_list.append(int(getattr(cc, 'interframe_total_count', 0)))
+            interframe_last_e_lat_list.append(float(getattr(cc, 'interframe_last_e_lat', 0.0)))
+            interframe_last_e_heading_list.append(float(getattr(cc, 'interframe_last_e_heading', 0.0)))
+            interframe_dt_actual_list.append(float(getattr(cc, 'interframe_dt_actual', 0.0)))
 
         if timestamps:
             current_size = self.h5_file["control/timestamps"].shape[0]
@@ -9349,7 +9368,10 @@ class DataRecorder:
                        "effective_max_accel",
                        "nmpc_used", "nmpc_feasible", "nmpc_solve_time_ms",
                        "nmpc_cost", "nmpc_iterations",
-                       "nmpc_fallback_active", "nmpc_consecutive_failures"]:
+                       "nmpc_fallback_active", "nmpc_consecutive_failures",
+                       "interframe_active", "interframe_updates_this_cycle",
+                       "interframe_total_count", "interframe_last_e_lat",
+                       "interframe_last_e_heading", "interframe_dt_actual"]:
                 self.h5_file[f"control/{key}"].resize((new_size,))
             
             # Write data
@@ -10542,6 +10564,12 @@ class DataRecorder:
             self.h5_file["control/nmpc_iterations"][current_size:] = np.array(nmpc_iterations_list, dtype=np.int16)
             self.h5_file["control/nmpc_fallback_active"][current_size:] = np.array(nmpc_fallback_active_list, dtype=np.int8)
             self.h5_file["control/nmpc_consecutive_failures"][current_size:] = np.array(nmpc_consecutive_failures_list, dtype=np.int16)
+            self.h5_file["control/interframe_active"][current_size:] = np.array(interframe_active_list, dtype=np.float32)
+            self.h5_file["control/interframe_updates_this_cycle"][current_size:] = np.array(interframe_updates_this_cycle_list, dtype=np.int16)
+            self.h5_file["control/interframe_total_count"][current_size:] = np.array(interframe_total_count_list, dtype=np.int32)
+            self.h5_file["control/interframe_last_e_lat"][current_size:] = np.array(interframe_last_e_lat_list, dtype=np.float32)
+            self.h5_file["control/interframe_last_e_heading"][current_size:] = np.array(interframe_last_e_heading_list, dtype=np.float32)
+            self.h5_file["control/interframe_dt_actual"][current_size:] = np.array(interframe_dt_actual_list, dtype=np.float32)
 
     def _write_perception_outputs(self, frames: List[RecordingFrame]):
         """Write perception outputs to HDF5."""

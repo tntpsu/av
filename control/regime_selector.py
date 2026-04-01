@@ -116,6 +116,14 @@ class RegimeSelector:
     def blend_progress(self) -> float:
         return self._blend_progress
 
+    def peek(self) -> Tuple[ControlRegime, float]:
+        """Return current regime and blend weight WITHOUT advancing state.
+
+        Used by inter-frame control extrapolation to check regime without
+        triggering hysteresis transitions (those only happen on camera frames).
+        """
+        return self._active_regime, self._blend_progress
+
     def update(
         self,
         speed: float,

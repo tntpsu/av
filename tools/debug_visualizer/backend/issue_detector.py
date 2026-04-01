@@ -3530,6 +3530,61 @@ def detect_issues(recording_path: Path, analyze_to_failure: bool = False) -> Dic
                                         "fields": {"jerk_mps3": float(jerk_arr[ji])},
                                     })
 
+            # ── Inter-frame extrapolation issues ────────────────────────────────
+            if 'control/interframe_active' in f:
+                if_active_raw = np.array(f['control/interframe_active'][:num_frames], dtype=float)
+                if_updates_raw = np.array(f['control/interframe_updates_this_cycle'][:num_frames], dtype=float) if 'control/interframe_updates_this_cycle' in f else None
+                if_e_lat_raw = np.array(f['control/interframe_last_e_lat'][:num_frames], dtype=float) if 'control/interframe_last_e_lat' in f else None
+                mpc_e_lat_raw = np.array(f['control/mpc_e_lat'][:num_frames], dtype=float) if 'control/mpc_e_lat' in f else None
+
+                if_mask = if_active_raw > 0.5
+                if np.any(if_mask):
+                    # Stale GT: inter-frame at max for many consecutive cycles
+                    if if_updates_raw is not None:
+                        at_max = if_mask & (if_updates_raw >= 3.0)
+                        # Find runs of 10+ consecutive at-max frames
+                        run_len, run_count = 0, 0
+                        for fi in range(len(at_max)):
+                            if at_max[fi]:
+                                run_len += 1
+                                if run_len == 10:
+                                    issues.append({
+                                        "frame": int(fi - 9),
+                                        "type": "interframe_camera_bottleneck",
+                                        "severity": "warning",
+                                        "description": (
+                                            f"Inter-frame at max updates for 10+ consecutive "
+                                            f"frames starting at frame {fi - 9}. Camera pipeline stuck."
+                                        ),
+                                        "fields": {},
+                                        "end_frame": int(fi),
+                                    })
+                                    run_count += 1
+                            else:
+                                run_len = 0
+
+                    # e_lat divergence: inter-frame e_lat vs next camera e_lat
+                    if if_e_lat_raw is not None and mpc_e_lat_raw is not None:
+                        divergence = np.abs(if_e_lat_raw[:-1] - mpc_e_lat_raw[1:])
+                        div_frames = np.where(if_mask[:-1] & (divergence > 0.2))[0]
+                        for fr in div_frames[:20]:
+                            issues.append({
+                                "frame": int(fr),
+                                "type": "interframe_e_lat_divergence",
+                                "severity": "warning",
+                                "description": (
+                                    f"Inter-frame e_lat diverges {divergence[fr]:.3f}m from "
+                                    f"next camera frame (threshold 0.2m). "
+                                    f"if_e_lat={if_e_lat_raw[fr]:.3f}, "
+                                    f"next_mpc_e_lat={mpc_e_lat_raw[fr+1]:.3f}"
+                                ),
+                                "fields": {
+                                    "interframe_e_lat": float(if_e_lat_raw[fr]),
+                                    "next_mpc_e_lat": float(mpc_e_lat_raw[fr + 1]),
+                                    "divergence_m": float(divergence[fr]),
+                                },
+                            })
+
             # Sort issues by frame number
             issues.sort(key=lambda x: x["frame"])
             for idx, issue in enumerate(issues):

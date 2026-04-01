@@ -1,15 +1,18 @@
 # AV Stack — Agent Memory: Tasks
 
-**Last updated:** 2026-03-31
+**Last updated:** 2026-04-01
 
 ---
 
 ## Current Focus
 
-**Step 5 ACC in progress. LMPC oscillation fix COMPLETE ✅ (2026-03-31). Highway 97.5, Autobahn 96.4.**
+**Step 5 ACC in progress. Inter-frame control extrapolation VALIDATED ✅ (2026-04-01). Highway 97.3/100, 0 e-stops. Autobahn 96.4.**
+
+### Inter-Frame Control Extrapolation — DONE ✅ (2026-04-01)
+Lightweight MPC updates between camera frames using fresh GT vehicle state. Effective rate: 17.7 Hz (camera 11.3 Hz + ~1 interframe/cycle). Smith delay cap at 80ms. Key bug fixed: `_run_interframe_update()` had `time.sleep(self.frame_interval)` on every exit — main loop already rate-limits at 25ms, so internal sleeps were throttling. 35 tests in `test_interframe_extrapolation.py`. Enabled in `mpc_highway.yaml`.
 
 ### LMPC Oscillation Fix — DONE ✅ (2026-03-31)
-Dual-mechanism: r_steer_rate speed scheduling (rate penalty) + e_lat speed attenuation (gain reduction), both curvature-gated (kappa_off=0.005). 28 tests passing. All diagnostic tools updated.
+Root cause: e_lat ramp limiter (0.05 m/frame) created limit cycle. Ramp disabled, r_steer_rate scheduling kept, e_lat attenuation removed. 28 tests passing. All diagnostic tools updated.
 
 **Step 4 NMPC — COMPLETE ✅ (2026-03-23). Best: H-3 97.5/100, 0 e-stops. Step 5 ACC plan ready.**
 

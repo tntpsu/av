@@ -92,6 +92,14 @@ def load_recording(path: Path) -> dict:
         data["nmpc_fallback_active"]        = _get("control/nmpc_fallback_active")
         data["nmpc_consecutive_failures"]   = _get("control/nmpc_consecutive_failures")
 
+        # Inter-frame extrapolation
+        data["interframe_active"]              = _get("control/interframe_active")
+        data["interframe_updates_this_cycle"]  = _get("control/interframe_updates_this_cycle")
+        data["interframe_total_count"]         = _get("control/interframe_total_count")
+        data["interframe_last_e_lat"]          = _get("control/interframe_last_e_lat")
+        data["interframe_last_e_heading"]      = _get("control/interframe_last_e_heading")
+        data["interframe_dt_actual"]           = _get("control/interframe_dt_actual")
+
         data["n"] = n or 0
     return data
 
@@ -399,6 +407,64 @@ def print_report(path: Path, data: dict):
             print(f"  NLP cost median: {_fmt(np.median(cs),'.1f')}  "
                   f"std: {_fmt(cost_spread,'.1f')}  "
                   f"(high std → warm-start diverging)")
+
+    # ── Inter-frame control extrapolation ────────────────────────────────────
+    if_active = data.get("interframe_active")
+    if if_active is not None and np.any(if_active[:n] > 0.5):
+        print(f"\n{thin}")
+        print("Inter-frame control extrapolation")
+        if_arr = if_active[:n]
+        if_mask = if_arr > 0.5
+        if_count = int(np.sum(if_mask))
+        if_total_arr = data.get("interframe_total_count")
+        if_updates = data.get("interframe_updates_this_cycle")
+        if_dt = data.get("interframe_dt_actual")
+        if_e_lat_arr = data.get("interframe_last_e_lat")
+
+        total_updates = int(if_total_arr[n - 1]) if if_total_arr is not None else if_count
+        speed_arr = data.get("speed")
+        duration_s = n / 30.0  # approximate
+        cam_hz = n / max(1.0, duration_s)
+        eff_hz = (n + total_updates) / max(1.0, duration_s)
+        print(f"  Camera rate:         ~{cam_hz:.1f} Hz")
+        print(f"  Effective rate:      ~{eff_hz:.1f} Hz (camera + {total_updates} inter-frame)")
+        print(f"  Inter-frame active:  {if_count}/{n} frames ({if_count/max(1,n)*100:.0f}%)")
+
+        if if_updates is not None:
+            up = if_updates[:n][if_mask].astype(float)
+            if len(up) > 0:
+                at_max_pct = float(np.mean(up >= 3.0) * 100.0)
+                print(f"  Updates/cycle:       mean={np.mean(up):.1f}  "
+                      f"P50={np.median(up):.0f}  at_max={at_max_pct:.0f}%")
+
+        if if_dt is not None:
+            dt_vals = if_dt[:n][if_mask].astype(float)
+            dt_vals = dt_vals[dt_vals > 0]
+            if len(dt_vals) > 0:
+                print(f"  Inter-frame dt:      P50={np.median(dt_vals)*1000:.1f}ms  "
+                      f"P95={np.percentile(dt_vals, 95)*1000:.1f}ms  "
+                      f"max={np.max(dt_vals)*1000:.1f}ms")
+
+        if if_e_lat_arr is not None and e_lat is not None:
+            div = np.abs(if_e_lat_arr[:n-1] - e_lat[1:n])[if_mask[:n-1]]
+            if len(div) > 0:
+                print(f"  GT divergence:       mean={np.mean(div):.4f}m  "
+                      f"P95={np.percentile(div, 95):.4f}m  "
+                      f"max={np.max(div):.4f}m")
+                over_02 = float(np.mean(div > 0.2) * 100.0)
+                if over_02 > 0:
+                    print(f"  Divergence > 0.2m:   {over_02:.1f}% of inter-frame cycles")
+
+        # Steering delta at inter-frame boundaries
+        if if_e_lat_arr is not None:
+            steer_arr = data.get("steering")
+            if steer_arr is not None:
+                steer_delta = np.abs(np.diff(steer_arr[:n]))
+                if_steer_delta = steer_delta[if_mask[:n-1]]
+                noif_steer_delta = steer_delta[~if_mask[:n-1]]
+                if len(if_steer_delta) > 0 and len(noif_steer_delta) > 0:
+                    print(f"  Steering delta:      if={np.mean(if_steer_delta):.4f}  "
+                          f"no-if={np.mean(noif_steer_delta):.4f}")
 
     # ── Top-10 worst MPC frames ───────────────────────────────────────────────
     print(f"\n{thin}")

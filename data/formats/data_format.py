@@ -793,6 +793,13 @@ class ControlCommand:
     nmpc_iterations: int = 0             # SLSQP iterations used (spike → near constraint boundary)
     nmpc_fallback_active: bool = False    # True when NMPC failed → LMPC fallback active
     nmpc_consecutive_failures: int = 0   # Consecutive NMPC solver failures
+    # Inter-frame control extrapolation diagnostics
+    interframe_active: float = 0.0           # 1.0 if inter-frame ran this cycle
+    interframe_updates_this_cycle: int = 0   # Count of inter-frame updates since last camera
+    interframe_total_count: int = 0          # Cumulative inter-frame update count
+    interframe_last_e_lat: float = 0.0       # Last GT e_lat used by inter-frame
+    interframe_last_e_heading: float = 0.0   # Last GT heading used by inter-frame
+    interframe_dt_actual: float = 0.0        # Actual inter-frame dt (seconds)
 
 
 @dataclass

@@ -37,6 +37,11 @@ control:
 
 trajectory:
   target_speed: 12.0
+  # Distractor guards: lower speed thresholds for ACC (full-strength at following speeds)
+  reference_distractor_guard_speed_on: 3.0
+  reference_distractor_guard_speed_full: 6.0
+  reference_distractor_input_guard_speed_on: 3.0
+  reference_distractor_input_guard_speed_full: 6.0
   speed_planner:
     accel_speed_max: 12.0
     decel_speed_max: 12.0

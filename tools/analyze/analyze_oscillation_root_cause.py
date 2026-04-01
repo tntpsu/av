@@ -279,31 +279,10 @@ def analyze_oscillation_root_cause(recording_file: str, plot: bool = False):
                 print("   ⚠ Scheduling appears INACTIVE (constant r_steer_rate)")
             print()
 
-        # ── 10b. e_lat speed attenuation ──
-        if mpc_e_lat is not None and smith_raw is not None and mpc_mask.sum() > 10:
-            print("-" * 60)
-            print("e_LAT SPEED ATTENUATION")
-            print("-" * 60)
-            raw_mpc = np.abs(smith_raw[:n][mpc_mask])
-            inp_mpc = np.abs(mpc_e_lat[:n][mpc_mask])
-            valid = raw_mpc > 0.01
-            if valid.sum() > 10:
-                ratio = inp_mpc[valid] / raw_mpc[valid]
-                print(f"   MPC/raw |e_lat| ratio P50: {np.median(ratio):.3f}")
-                print(f"   MPC/raw |e_lat| ratio P05: {np.percentile(ratio, 5):.3f}")
-                if np.median(ratio) < 0.95:
-                    print(f"   Attenuation ACTIVE (ratio < 1.0 = gain reduced on straights)")
-                else:
-                    print(f"   Attenuation INACTIVE or minimal (ratio ≈ 1.0)")
-                # Check if attenuation correlates with speed
-                if vehicle_speed is not None:
-                    sp_valid = vehicle_speed[:n][mpc_mask][valid]
-                    if len(sp_valid) > 10:
-                        cc = np.corrcoef(sp_valid, ratio)[0, 1]
-                        print(f"   Speed-attenuation correlation: {cc:.3f}")
-            else:
-                print("   Insufficient valid frames for attenuation analysis")
-            print()
+        # ── 10b. e_lat speed attenuation — REMOVED (2026-03-31) ──
+        # Speed-adaptive e_lat attenuation was removed. Root cause of oscillation was
+        # the e_lat ramp limiter (0.05 m/frame), not insufficient gain reduction.
+        # r_steer_rate scheduling handles v/L gain compensation correctly via QP cost.
 
         # ── 11. Automated root cause attribution ──
         print("=" * 80)
@@ -331,18 +310,6 @@ def analyze_oscillation_root_cause(recording_file: str, plot: bool = False):
             if rec_curve > 10:
                 findings.append(("HIGH", f"Recovery mode elevated on curves: {rec_curve:.0f}% "
                                  f"(baseline ~3%). MPC knows it's in trouble."))
-
-        # Check e_lat attenuation on curves
-        if smith_raw is not None and mpc_e_lat is not None and curve_mpc.sum() > 0:
-            m = min(len(smith_raw), len(mpc_e_lat), n)
-            cm = curve_mpc[:m]
-            raw = np.abs(smith_raw[:m][cm])
-            final = np.abs(mpc_e_lat[:m][cm])
-            ratio = np.median(final / np.maximum(raw, 1e-6))
-            if ratio < 0.8:
-                findings.append(("MEDIUM", f"MPC e_lat attenuation active on curves "
-                                 f"(ratio={ratio:.2f}). MPC is starved of error signal. "
-                                 f"Fix: curvature-gate the attenuation."))
 
         # Check Smith predictor relevance
         if heading_error is not None and mpc_mask.sum() > 0:
@@ -375,6 +342,77 @@ def analyze_oscillation_root_cause(recording_file: str, plot: bool = False):
         else:
             print("   No clear root cause identified from signal analysis.")
         print()
+
+        # ── 12. Inter-frame diagnostics ──
+        if_active = _safe(f, 'control/interframe_active')
+        if if_active is not None and np.any(if_active > 0.5):
+            print("12. INTER-FRAME CONTROL EXTRAPOLATION")
+            print("-" * 80)
+            if_mask = if_active > 0.5
+            if_count = int(np.sum(if_mask))
+            if_total = _safe(f, 'control/interframe_total_count')
+            if_updates = _safe(f, 'control/interframe_updates_this_cycle')
+            if_dt = _safe(f, 'control/interframe_dt_actual')
+            if_e_lat = _safe(f, 'control/interframe_last_e_lat')
+
+            total = int(if_total[-1]) if if_total is not None and len(if_total) > 0 else if_count
+            camera_frames = n
+            effective_hz = (camera_frames + total) / max(1.0, time_seconds[-1]) if len(time_seconds) > 0 else 0
+            camera_hz = camera_frames / max(1.0, time_seconds[-1]) if len(time_seconds) > 0 else 0
+
+            # Target rate: camera + max_interframe_updates per camera cycle
+            # Default: 3 updates/cycle → target ≈ camera_hz * (1 + 3)
+            target_hz = camera_hz * 4.0 if camera_hz > 0 else 30.0
+            rate_ratio = effective_hz / target_hz if target_hz > 0 else 0.0
+
+            print(f"  Camera frames:       {camera_frames}")
+            print(f"  Inter-frame updates: {total}")
+            print(f"  Camera rate:         {camera_hz:.1f} Hz")
+            print(f"  Effective rate:      {effective_hz:.1f} Hz (camera + inter-frame)")
+            print(f"  Target rate:         {target_hz:.1f} Hz (camera × 4)")
+            if rate_ratio < 0.6:
+                print(f"  >>> RATE THROTTLED: {rate_ratio:.0%} of target — check for hidden sleeps in inter-frame path")
+            elif rate_ratio < 0.85:
+                print(f"  >>> Rate below target: {rate_ratio:.0%} — possibly limited by Unity physics update rate")
+
+            if if_updates is not None:
+                up_active = if_updates[if_mask]
+                if len(up_active) > 0:
+                    at_max = float(np.mean(up_active >= 3.0) * 100.0)
+                    print(f"  Updates/cycle:       P50={np.median(up_active):.0f}  "
+                          f"mean={np.mean(up_active):.1f}  at_max={at_max:.0f}%")
+
+            if if_dt is not None:
+                dt_active = if_dt[if_mask]
+                if len(dt_active) > 0:
+                    dt_p50_ms = np.median(dt_active) * 1000.0
+                    dt_p95_ms = np.percentile(dt_active, 95) * 1000.0
+                    print(f"  Inter-frame dt:      P50={dt_p50_ms:.1f}ms  "
+                          f"P95={dt_p95_ms:.1f}ms")
+                    # Anomaly: if P50 dt ≈ camera interval, inter-frame is sleeping too long
+                    camera_dt_ms = (1000.0 / camera_hz) if camera_hz > 0 else 133.0
+                    if dt_p50_ms > camera_dt_ms * 0.7:
+                        print(f"  >>> DT ANOMALY: P50 dt ({dt_p50_ms:.0f}ms) ≈ camera interval "
+                              f"({camera_dt_ms:.0f}ms) — inter-frame path likely contains a sleep "
+                              f"at camera rate instead of inter-frame rate")
+
+            if if_e_lat is not None and mpc_e_lat is not None:
+                el_if = if_e_lat[if_mask]
+                # Compare inter-frame e_lat to next camera mpc_e_lat
+                divergence = np.abs(if_e_lat[:-1] - mpc_e_lat[1:])[if_mask[:-1]]
+                if len(divergence) > 0:
+                    print(f"  GT divergence:       mean={np.mean(divergence):.4f}m  "
+                          f"P95={np.percentile(divergence, 95):.4f}m  "
+                          f"max={np.max(divergence):.4f}m")
+                    pct_over = float(np.mean(divergence > 0.2) * 100.0)
+                    if pct_over > 0:
+                        print(f"  Divergence > 0.2m:   {pct_over:.1f}% of inter-frame updates")
+            print()
+        else:
+            print("12. INTER-FRAME CONTROL EXTRAPOLATION")
+            print("-" * 80)
+            print("  Inter-frame not active in this recording.")
+            print()
 
     # Plot if requested
     if plot and HAS_MATPLOTLIB:

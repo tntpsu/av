@@ -176,6 +176,10 @@ trajectory:
     # Speed-dependent r_steer_rate scheduling (inherits base onset/gain/max_scale)
     mpc_r_steer_rate_scheduling_enabled: true
 
+control:
+  interframe_extrapolation:
+    enabled: true
+
 safety:
   max_speed: 15.0
 # lateral_control.steering_smoothing_alpha: auto-derived from target_speed

@@ -103,8 +103,8 @@ trajectory:
   local_curve_reference_distractor_guard_active_unwind_end: 0.75
   reference_distractor_guard_enabled: true
   reference_distractor_guard_straight_curvature_max: 0.0010
-  reference_distractor_guard_speed_on: 8.5
-  reference_distractor_guard_speed_full: 12.5
+  reference_distractor_guard_speed_on: 3.0       # lowered for ACC: guards must be full-strength at 8-12 m/s following speeds
+  reference_distractor_guard_speed_full: 6.0
   reference_distractor_guard_center_error_on_m: 0.45
   reference_distractor_guard_center_error_full_m: 0.90
   reference_distractor_guard_width_error_on_m: 0.60
@@ -125,8 +125,8 @@ trajectory:
   reference_distractor_guard_wrong_target_blend_full: 1.00
   reference_distractor_input_guard_enabled: true
   reference_distractor_input_guard_straight_curvature_max: 0.0010
-  reference_distractor_input_guard_speed_on: 8.5
-  reference_distractor_input_guard_speed_full: 12.5
+  reference_distractor_input_guard_speed_on: 3.0   # lowered for ACC: guards must be full-strength at 8-12 m/s following speeds
+  reference_distractor_input_guard_speed_full: 6.0
   reference_distractor_input_guard_center_error_on_m: 0.20
   reference_distractor_input_guard_center_error_full_m: 0.45
   reference_distractor_input_guard_width_error_on_m: 0.25

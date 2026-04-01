@@ -5682,35 +5682,28 @@ class VehicleController:
             #
             # Model: e_lat[k+delay] ≈ e_lat[k] + v*e_heading[k]*delay_dt
             #
+            # Smith predictor config.
+            _mpc_cfg_sp = self._full_config.get('trajectory', {}).get('mpc', {})
             # mpc_delay_frames is configurable: start with 2 (matches measured
             # ~2-frame effective loop delay) and tune up cautiously with data.
+            # Wall-clock cap: when camera rate drops below 30 fps, frame_dt
+            # grows and delay_frames * frame_dt overshoots the physical delay.
+            # Cap at smith_predictor_max_delay_s to prevent 4× overshoot at
+            # ~7.5 fps camera delivery rates.
             frame_dt = dt or 0.033
             v_now = float(current_state.get('speed', 0.0))
             delay_frames = len(self._steering_ring_buffer)
-            total_delay_dt = delay_frames * frame_dt
+            _max_delay_s = float(_mpc_cfg_sp.get('smith_predictor_max_delay_s', 0.080))
+            _raw_delay = delay_frames * frame_dt
+            total_delay_dt = min(_raw_delay, _max_delay_s) if _max_delay_s > 0 else _raw_delay
             predicted_e_heading = raw_e_heading  # heading changes slowly
             # Smith predictor oscillation guard: attenuate heading correction
             # when sign(e_lat) != sign(e_heading) — this is the oscillation
             # inflection point where the predictor overshoots.
-            _mpc_cfg_sp = self._full_config.get('trajectory', {}).get('mpc', {})
             _sp_disagree_gain = float(_mpc_cfg_sp.get('smith_predictor_disagreement_gain', 0.3))
             _sign_agree = (raw_e_lat * raw_e_heading) >= 0
             _sp_gain = 1.0 if _sign_agree else _sp_disagree_gain
             predicted_e_lat = raw_e_lat + _sp_gain * v_now * raw_e_heading * total_delay_dt
-
-            # Speed-adaptive e_lat attenuation — reduces effective loop gain on
-            # high-speed straights (complements r_steer_rate scheduling which only
-            # penalizes rate). Curvature-gated to preserve curve tracking authority.
-            _atten_onset = float(_mpc_cfg_sp.get('mpc_elat_speed_atten_onset', 12.0))
-            _atten_rate = float(_mpc_cfg_sp.get('mpc_elat_speed_atten_rate', 0.04))
-            _atten_min = float(_mpc_cfg_sp.get('mpc_elat_speed_atten_min', 0.5))
-            _atten_kappa_off = float(_mpc_cfg_sp.get('mpc_elat_speed_atten_kappa_off', 0.005))
-            if v_now > _atten_onset:
-                _atten_kappa = abs(float(reference_point.get('curvature', 0.0) or 0.0))
-                _atten_kgate = max(0.0, min(1.0, 1.0 - _atten_kappa / max(1e-6, _atten_kappa_off)))
-                _atten_raw = max(_atten_min, 1.0 - _atten_rate * (v_now - _atten_onset))
-                _atten_factor = 1.0 - (1.0 - _atten_raw) * _atten_kgate
-                predicted_e_lat *= _atten_factor
 
             # Build MPC curvature preview horizon: interpolate distance-sampled
             # curvature from the trajectory planner to MPC time steps.
@@ -5886,11 +5879,14 @@ class VehicleController:
                 raw_e_lat = -float(lateral_metadata.get('lateral_error', 0.0))
                 raw_e_heading = float(lateral_metadata.get('heading_error', 0.0))
 
-            # Delay compensation (same linear model as LMPC)
+            # Delay compensation (same linear model as LMPC, same wall-clock cap)
+            _nmpc_mpc_cfg = self._full_config.get('trajectory', {}).get('mpc', {})
             frame_dt = dt or 0.033
             v_now = float(current_state.get('speed', 0.0))
             delay_frames = len(self._steering_ring_buffer)
-            total_delay_dt = delay_frames * frame_dt
+            _max_delay_s = float(_nmpc_mpc_cfg.get('smith_predictor_max_delay_s', 0.080))
+            _raw_delay = delay_frames * frame_dt
+            total_delay_dt = min(_raw_delay, _max_delay_s) if _max_delay_s > 0 else _raw_delay
             predicted_e_lat = raw_e_lat + v_now * raw_e_heading * total_delay_dt
 
             # Kappa horizon: interpolate to NMPC time steps.
@@ -6190,6 +6186,72 @@ class VehicleController:
 
         return result
     
+    def compute_interframe_steering(
+        self,
+        e_lat: float,
+        e_heading: float,
+        speed: float,
+        curvature: float,
+        dt: float,
+        grade_rad: float = 0.0,
+    ) -> Optional[dict]:
+        """Lightweight MPC update for inter-frame control extrapolation.
+
+        Called between camera frames with fresh GT vehicle state.  Bypasses
+        perception, trajectory planning, and Smith predictor delay compensation
+        (the GT state IS current — no prediction needed).
+
+        Returns a dict with 'steering' (radians) and diagnostics, or None if
+        the current regime is not MPC or the solver fails.
+        """
+        from control.regime_selector import ControlRegime
+
+        # Read-only regime check (no hysteresis advance)
+        regime, blend = self._regime_selector.peek()
+        if regime not in (ControlRegime.LINEAR_MPC, ControlRegime.NONLINEAR_MPC):
+            return None
+        if self._mpc_controller is None:
+            return None
+
+        # Run MPC with fresh GT state — no Smith predictor, no delay compensation
+        mpc_result = self._mpc_controller.compute_steering(
+            e_lat=e_lat,
+            e_heading=e_heading,
+            current_speed=speed,
+            last_delta_norm=self._last_steering_norm,
+            kappa_ref=curvature,
+            v_target=self.longitudinal_controller.target_speed,
+            v_max=float(self.longitudinal_controller.max_speed),
+            dt=dt or 0.033,
+            grade_rad=grade_rad,
+        )
+
+        if mpc_result is None or mpc_result.get('mpc_fallback_active'):
+            return None
+
+        steering = float(mpc_result['steering_normalized']) * self.lateral_controller.max_steering
+
+        # Rate limit (same as full-frame path, scaled to inter-frame dt)
+        _mpc_cfg_rt = self._full_config.get('trajectory', {}).get('mpc', {})
+        mpc_max_rate = float(_mpc_cfg_rt.get('mpc_max_steering_rate_per_frame', 0.15))
+        # Scale rate limit by dt ratio (inter-frame dt / typical frame dt)
+        dt_scale = max(0.5, min(2.0, (dt or 0.033) / 0.033))
+        scaled_max_rate = mpc_max_rate * dt_scale
+        delta = steering - self._last_mpc_steering
+        rate_limited = False
+        if abs(delta) > scaled_max_rate:
+            steering = self._last_mpc_steering + float(np.sign(delta)) * scaled_max_rate
+            rate_limited = True
+
+        return {
+            'steering': steering,
+            'mpc_feasible': mpc_result.get('mpc_feasible', True),
+            'interframe': True,
+            'rate_limited': rate_limited,
+            'e_lat': e_lat,
+            'e_heading': e_heading,
+        }
+
     def update_last_steering_norm(self, actual_steering: float) -> None:
         """Update _last_steering_norm and Smith predictor ring buffer with actual sent steering.
 

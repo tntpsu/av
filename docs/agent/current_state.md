@@ -1,7 +1,7 @@
 # AV Stack — Agent Memory: Current State
 
-**Last updated:** 2026-03-31
-**Current milestone:** Step 5 ACC — Phases D + A + B + C + E complete. H2 + H3 validated (2026-03-30). 1667 tests passing. Continuing E2E validation (remaining 10 scenarios).
+**Last updated:** 2026-04-01
+**Current milestone:** Step 5 ACC — Phases D + A + B + C + E complete. H2 + H3 validated (2026-03-30). Inter-frame control extrapolation validated (97.3/100 highway, 0 e-stops). Continuing E2E validation (remaining 10 scenarios).
 
 ---
 
@@ -64,6 +64,47 @@
 **Promotion gates:** 0 collisions, TTC min ≥ 2.0s, Gap RMSE ≤ 35m, Jerk P95 ≤ 4.0 m/s³, radar detection ≥ 95%, lateral regression ≤ 0.5pts.
 **Tests: 1666 passing** (up from 1538).
 **Implementation checklist:** see `docs/plans/step5_acc_plan.md § Implementation Checklist` — A1–A12 → B1–B8 → C1–C4 → D1–D12 → E-H1–G2 → P1–P7.
+
+---
+
+### Inter-Frame Control Extrapolation — VALIDATED ✅ (2026-04-01)
+
+**Problem:** Camera pipeline delivers at 7.5 Hz (132ms between frames), but MPC needs 30+ Hz. Smith predictor delay overshoots 4× (266ms vs designed 66ms). MPC corrections reinforce error 80% of the time → growing oscillation Q1=0.007m → Q4=0.408m RMSE over 100s.
+
+**Two-tier fix:**
+
+1. **Tier 2 (Smith delay cap):** `smith_predictor_max_delay_s: 0.080` caps Smith predictor delay at 80ms wall-clock, preventing 4× overshoot at low camera rates. 6 tests in test_oscillation_damping.py.
+
+2. **Tier 1 (Inter-frame extrapolation):** Lightweight MPC updates between camera frames using fresh GT vehicle state. **Enabled** in `mpc_highway.yaml` (`control.interframe_extrapolation.enabled: true`). Achieves ~17.7 Hz effective rate (camera 11.3 Hz + ~1 interframe/cycle).
+
+**E2E results (recording_20260401_132806.h5):**
+- **97.3/100**, 0 e-stops, 100% time in lane, 100% centeredness
+- Straight+MPC RMSE: 0.025m (was 0.146m baseline)
+- Growth slope: 0.0013 m/s (was 0.0047 baseline) — 72% reduction
+- MPC utilization: 95.3% (was 49% baseline)
+- Remaining 0.248m curve RMSE is MPC tracking at κ=0.002, not oscillation
+
+**Critical bug fixed:** `_run_interframe_update()` had `time.sleep(self.frame_interval)` (133ms) on every exit path. The main loop already rate-limits at 25ms — the redundant sleeps limited effective rate to ~10.8 Hz. Removed all sleeps, rate doubled to 17.7 Hz.
+
+**Files changed:**
+- `control/pid_controller.py`: Smith delay cap (LMPC + NMPC paths) + `compute_interframe_steering()` method
+- `control/regime_selector.py`: `peek()` method (read-only regime check)
+- `av_stack/config.py`: `InterframeConfig` dataclass
+- `av_stack/orchestrator.py`: `_run_interframe_update()` + init state + context stashing
+- `config/av_stack_config.yaml`: `smith_predictor_max_delay_s` + `control.interframe_extrapolation` section
+- `config/mpc_highway.yaml`: `control.interframe_extrapolation.enabled: true`
+- `data/formats/data_format.py`: 6 interframe fields on ControlCommand
+- `data/recorder.py`: 6-location HDF5 registration for interframe fields
+- `tools/scoring_registry.py`: 3 INTERFRAME_* constants
+- `tools/debug_visualizer/backend/triage_engine.py`: 2 patterns + metric extraction
+- `tools/debug_visualizer/backend/issue_detector.py`: 2 issue types
+- `tools/debug_visualizer/backend/layer_health.py`: `interframe_active` flag
+- `tools/analyze/analyze_oscillation_root_cause.py`: Section 12
+- `tools/analyze/mpc_pipeline_analysis.py`: Inter-frame section + field loading
+
+**Tests:** 35 tests in `test_interframe_extrapolation.py` (21 pass, 14 skipped without osqp). 3 scoring registry guard tests. 6 Smith delay cap tests.
+
+**Guards:** max updates/cycle, regime gate (MPC-only), stale GT, e_lat jump, speed jump, vehicle state failure.
 
 ---
 

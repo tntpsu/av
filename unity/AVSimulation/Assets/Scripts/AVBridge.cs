@@ -96,9 +96,9 @@ public class AVBridge : MonoBehaviour
     [Tooltip("Maximum off-axis angle for same-lane associated lead capture (degrees). Only used with same-lane/same-direction gating.")]
     public float radarAssociationHalfAngleDeg = 12.0f;
     [Tooltip("Minimum same-lane confidence required for associated lead capture.")]
-    public float radarAssociationSameLaneConfidenceMin = 0.75f;
+    public float radarAssociationSameLaneConfidenceMin = 0.40f;
     [Tooltip("Maximum absolute heading delta for same-direction lead association (degrees).")]
-    public float radarAssociationHeadingDeltaMaxDeg = 45.0f;
+    public float radarAssociationHeadingDeltaMaxDeg = 60.0f;
     [Tooltip("Minimum positive arc distance ahead required for associated lead capture (m).")]
     public float radarAssociationMinArcAheadM = 1.0f;
     [Tooltip("Maximum short continuity-hold age for a same-lane lead track (seconds).")]
@@ -2632,12 +2632,12 @@ private float? lastCarT = null;
 
     private float EffectiveRadarAssociationSameLaneConfidenceMin()
     {
-        return radarAssociationSameLaneConfidenceMin > 0.0f ? radarAssociationSameLaneConfidenceMin : 0.75f;
+        return radarAssociationSameLaneConfidenceMin > 0.0f ? radarAssociationSameLaneConfidenceMin : 0.40f;
     }
 
     private float EffectiveRadarAssociationHeadingDeltaMaxDeg()
     {
-        return radarAssociationHeadingDeltaMaxDeg > 0.0f ? radarAssociationHeadingDeltaMaxDeg : 45.0f;
+        return radarAssociationHeadingDeltaMaxDeg > 0.0f ? radarAssociationHeadingDeltaMaxDeg : 60.0f;
     }
 
     private float EffectiveRadarAssociationMinArcAheadM()

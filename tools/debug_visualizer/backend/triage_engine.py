@@ -175,11 +175,11 @@ PATTERNS = [
         "name": "Lateral oscillation (positive osc_slope)",
         "severity": "instability",
         "code_pointer": "control/pid_controller.py:pure_pursuit_steer() (~line 1400)",
-        "config_lever": "control.lateral.pp_feedback_gain / trajectory.mpc.mpc_r_steer_rate_scheduling_enabled / trajectory.mpc.mpc_elat_speed_atten_rate",
+        "config_lever": "control.lateral.pp_feedback_gain / trajectory.mpc.mpc_r_steer_rate_scheduling_enabled",
         "fix_hint": (
             "If PP-mode: reduce pp_feedback_gain (0.10→0.08) or increase reference_smoothing. "
-            "If MPC-mode at speed: enable r_steer_rate scheduling (mpc_r_steer_rate_scheduling_enabled: true) "
-            "and/or increase mpc_elat_speed_atten_rate (gain reduction on straights). Both are curvature-gated."
+            "If MPC-mode at speed: enable r_steer_rate scheduling (mpc_r_steer_rate_scheduling_enabled: true). "
+            "Scheduling is curvature-gated. Also verify mpc_elat_ramp_rate_m_per_frame is 0.0 (ramp limiter causes limit cycles)."
         ),
         "check": lambda m: m.get("osc_slope", -1) > 0.0,
     },
@@ -428,14 +428,12 @@ PATTERNS = [
         "code_pointer": "control/mpc_controller.py:MPCSolver.solve()",
         "config_lever": (
             "trajectory.mpc.mpc_r_steer_rate_scheduling_enabled (rate penalty) / "
-            "trajectory.mpc.mpc_elat_speed_atten_rate (gain reduction) / "
             "trajectory.mpc.mpc_q_lat / trajectory.mpc.mpc_r_steer_rate"
         ),
         "fix_hint": (
-            "MPC sign-changes >30%. Two-mechanism fix: (1) enable r_steer_rate scheduling "
-            "(penalizes steering rate at speed), (2) raise mpc_elat_speed_atten_rate (reduces "
-            "loop gain on straights). Both curvature-gated (kappa_off). If already enabled, "
-            "increase mpc_r_steer_rate_speed_gain or mpc_elat_speed_atten_rate."
+            "MPC sign-changes >30%. Fix: enable r_steer_rate scheduling "
+            "(penalizes steering rate at speed, curvature-gated). If already enabled, "
+            "increase mpc_r_steer_rate_speed_gain. Also verify mpc_elat_ramp_rate_m_per_frame is 0.0."
         ),
         "check": lambda m: m.get("mpc_available", False) and m.get("mpc_steering_osc_rate", 0) > 0.30,
     },
@@ -748,6 +746,64 @@ PATTERNS = [
             "Increase time_headway_s and comfortable_decel_mps2."
         ),
         "check": lambda m: m.get("acc_active", False) and m.get("acc_gap_sign_changes_per_min", 0.0) > 20.0,
+    },
+    # ── Inter-frame control extrapolation ────────────────────────────────────
+    {
+        "id": "interframe_e_lat_divergence",
+        "name": "Inter-frame GT diverges from camera GT (e_lat drift between frames)",
+        "severity": "instability",
+        "category": "Control",
+        "code_pointer": "av_stack/orchestrator.py:_run_interframe_update()",
+        "config_lever": "control.interframe_extrapolation.max_e_lat_jump_m ↓; check GT freshness",
+        "fix_hint": (
+            "Inter-frame e_lat diverges > 0.2m from the next camera frame's GT. "
+            "The lightweight MPC is using stale curvature or the GT signal is noisy. "
+            "Check interframe_last_e_lat vs next camera mpc_e_lat. "
+            "Reduce max_interframe_updates or tighten stale_vehicle_state_ms."
+        ),
+        "check": lambda m: (
+            m.get("interframe_active_pct", 0.0) > 5.0
+            and m.get("interframe_e_lat_divergence_mean", 0.0) > 0.2
+        ),
+    },
+    {
+        "id": "camera_pipeline_bottleneck",
+        "name": "Camera pipeline bottleneck (inter-frame at max every cycle)",
+        "severity": "instability",
+        "category": "Control",
+        "code_pointer": "av_stack/orchestrator.py:run() loop",
+        "config_lever": "Investigate camera delivery rate; increase max_interframe_updates",
+        "fix_hint": (
+            "Inter-frame updates are hitting max_interframe_updates on > 80% of "
+            "camera cycles, meaning the camera pipeline is consistently slow. "
+            "This is expected at 7.5 Hz camera rate with max_updates=3. "
+            "If rate improves, this pattern should disappear. "
+            "Consider increasing max_interframe_updates if control quality is still poor."
+        ),
+        "check": lambda m: (
+            m.get("interframe_active_pct", 0.0) > 5.0
+            and m.get("interframe_at_max_pct", 0.0) > 80.0
+        ),
+    },
+    {
+        "id": "interframe_rate_throttled",
+        "name": "Inter-frame rate throttled (effective rate << target)",
+        "severity": "instability",
+        "category": "Control",
+        "code_pointer": "av_stack/orchestrator.py:_run_interframe_update()",
+        "config_lever": "Check for time.sleep() inside _run_interframe_update(); verify min_interframe_dt_s",
+        "fix_hint": (
+            "Inter-frame is active but effective rate is below 60% of target "
+            "(camera_hz × 4). Common cause: a time.sleep() inside the inter-frame "
+            "function using camera frame_interval instead of min_interframe_dt_s. "
+            "The main loop rate limiter should own all timing — inter-frame functions "
+            "should return immediately."
+        ),
+        "check": lambda m: (
+            m.get("interframe_active_pct", 0.0) > 5.0
+            and m.get("interframe_at_max_pct", 0.0) < 10.0
+            and m.get("interframe_rate_ratio", 1.0) < 0.6
+        ),
     },
 ]
 
@@ -1669,6 +1725,46 @@ class TriageEngine:
                             m["acc_detection_rate"] = float(np.mean(det_arr[lead_frames] > 0.5))
             else:
                 m["acc_active"] = False
+
+            # Inter-frame control extrapolation metrics
+            if_active_raw = arr("control/interframe_active")
+            if if_active_raw is not None:
+                if_arr = if_active_raw[:n].astype(float)
+                if_mask = if_arr > 0.5
+                m["interframe_active_pct"] = float(np.mean(if_mask) * 100.0)
+
+                if np.any(if_mask):
+                    # Check if inter-frame at max updates consistently
+                    if_updates = arr("control/interframe_updates_this_cycle")
+                    if if_updates is not None:
+                        up_arr = if_updates[:n].astype(float)
+                        # Frames where inter-frame was active and at max (3)
+                        at_max = if_mask & (up_arr >= 3.0)
+                        if_active_count = max(1, int(np.sum(if_mask)))
+                        m["interframe_at_max_pct"] = float(np.sum(at_max) / if_active_count * 100.0)
+
+                    # Rate ratio: effective rate vs target (camera × 4)
+                    if_total_arr = arr("control/interframe_total_count")
+                    _ts = control_ts if control_ts is not None else arr("control/timestamps")
+                    if if_total_arr is not None and len(if_total_arr) > 0:
+                        total_if = int(if_total_arr[n - 1]) if n > 0 else 0
+                        duration_s = float(_ts[n - 1]) if _ts is not None and n > 0 and len(_ts) > 0 else 1.0
+                        if duration_s > 0:
+                            eff_hz = (n + total_if) / duration_s
+                            cam_hz = n / duration_s
+                            target_hz = cam_hz * 4.0 if cam_hz > 0 else 30.0
+                            m["interframe_rate_ratio"] = eff_hz / target_hz if target_hz > 0 else 1.0
+
+                    # e_lat divergence: compare interframe_last_e_lat to next-frame mpc_e_lat
+                    if_e_lat = arr("control/interframe_last_e_lat")
+                    mpc_e_lat = arr("control/mpc_e_lat")
+                    if if_e_lat is not None and mpc_e_lat is not None:
+                        if_el = if_e_lat[:n].astype(float)
+                        mpc_el = mpc_e_lat[:n].astype(float)
+                        # Compare inter-frame e_lat to NEXT camera frame's mpc_e_lat
+                        divergence = np.abs(if_el[:-1] - mpc_el[1:])[if_mask[:-1]]
+                        if len(divergence) > 0:
+                            m["interframe_e_lat_divergence_mean"] = float(np.mean(divergence))
 
         return m
 

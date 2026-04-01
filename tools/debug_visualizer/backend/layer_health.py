@@ -227,6 +227,12 @@ class LayerHealthAnalyzer:
                     score -= 0.50
                     flags.append("nmpc_fallback")
 
+        # Inter-frame extrapolation flag (informational — no score penalty)
+        if "control/interframe_active" in f:
+            if_active = self._scalar(f, "control/interframe_active", i, default=0.0)
+            if if_active > 0.5:
+                flags.append("interframe_active")
+
         # Grade compensation flag (informational — no score penalty)
         if "vehicle/road_grade" in f:
             road_grade_val = abs(self._scalar(f, "vehicle/road_grade", i, default=0.0))

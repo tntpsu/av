@@ -60,6 +60,37 @@ class SafetyConfig:
     allowed_outside_lane: float = 1.0  # Allowed distance outside lane before emergency stop (meters)
 
 
+@dataclass
+class InterframeConfig:
+    """Inter-frame control extrapolation configuration.
+
+    When enabled, runs lightweight MPC updates between camera frames using
+    fresh GT vehicle state, decoupling the control rate from camera delivery.
+    """
+    enabled: bool = False
+    max_interframe_updates: int = 3
+    min_interframe_dt_s: float = 0.025
+    stale_vehicle_state_ms: float = 50.0
+    max_e_lat_jump_m: float = 0.5
+    max_speed_change_mps: float = 3.0
+    recording_mode: str = "summary"
+    regime_gate: str = "mpc_only"
+
+    @classmethod
+    def from_config(cls, config: dict) -> "InterframeConfig":
+        section = config.get("control", {}).get("interframe_extrapolation", {})
+        return cls(
+            enabled=bool(section.get("enabled", cls.enabled)),
+            max_interframe_updates=int(section.get("max_interframe_updates", cls.max_interframe_updates)),
+            min_interframe_dt_s=float(section.get("min_interframe_dt_s", cls.min_interframe_dt_s)),
+            stale_vehicle_state_ms=float(section.get("stale_vehicle_state_ms", cls.stale_vehicle_state_ms)),
+            max_e_lat_jump_m=float(section.get("max_e_lat_jump_m", cls.max_e_lat_jump_m)),
+            max_speed_change_mps=float(section.get("max_speed_change_mps", cls.max_speed_change_mps)),
+            recording_mode=str(section.get("recording_mode", cls.recording_mode)),
+            regime_gate=str(section.get("regime_gate", cls.regime_gate)),
+        )
+
+
 def _deep_merge(base: dict, overlay: dict) -> dict:
     """Recursively merge overlay into base.
 

@@ -57,6 +57,11 @@ trajectory:
   speed_planner:
     accel_speed_max: 25.0
     decel_speed_max: 25.0
+  # Distractor guards: lower speed thresholds for ACC (full-strength at following speeds)
+  reference_distractor_guard_speed_on: 3.0
+  reference_distractor_guard_speed_full: 6.0
+  reference_distractor_input_guard_speed_on: 3.0
+  reference_distractor_input_guard_speed_full: 6.0
   speed_governor:
     curve_preview_enabled: false
     curve_cap_use_preview_curvature: false
@@ -74,9 +79,9 @@ trajectory:
     mpc_bias_kappa_gain: 0.010
     mpc_bias_max_correction: 0.002
     mpc_bias_min_speed: 8.0
-    # LMPC at 14–20 m/s needs r=1.5 for R600 curve tracking. Speed-adaptive
-    # e_lat attenuation + curvature gating prevents the straight-line oscillation
-    # that r=1.5 previously caused. Mirrors mpc_autobahn.yaml.
+    # LMPC at 14–20 m/s needs r=1.5 for R600 curve tracking. r_steer_rate
+    # scheduling + curvature gating prevents straight-line oscillation.
+    # Mirrors mpc_autobahn.yaml.
     mpc_r_steer_rate: 1.5
     mpc_horizon: 25
   nmpc:

@@ -1124,6 +1124,22 @@ class AVStack:
         # perf_wait_input_ms: gap from previous control_sent_mono_s to this inputs_ready_mono_s
         self._prev_frame_control_sent_mono_s: Optional[float] = None
 
+        # Inter-frame control extrapolation (Tier 1)
+        from av_stack.config import InterframeConfig
+        self._interframe_cfg = InterframeConfig.from_config(config)
+        self._interframe_enabled = self._interframe_cfg.enabled
+        self._last_full_frame_context: Optional[dict] = None
+        self._interframe_count_since_camera: int = 0
+        self._interframe_updates_last_cycle: int = 0
+        self._interframe_total_count: int = 0
+        self._last_interframe_vehicle_state: Optional[dict] = None
+        self._last_interframe_wall_time: float = 0.0
+        self._last_sent_throttle: float = 0.0
+        self._last_sent_brake: float = 0.0
+        self._interframe_last_e_lat: float = 0.0
+        self._interframe_last_e_heading: float = 0.0
+        self._interframe_dt_actual: float = 0.0
+
         # Grade EMA smoothing (Step 3)
         grade_ema_alpha = float(control_cfg.get('grade_ema_alpha', 0.3))
         self._grade_ema_alpha = grade_ema_alpha
@@ -3377,12 +3393,22 @@ class AVStack:
                         logger.info(f"Reached duration limit: {duration}s")
                         break
                 
-                # Rate limiting: maintain target FPS
+                # Rate limiting: maintain target FPS.
+                # When inter-frame extrapolation is enabled, poll at a faster rate
+                # (min_interframe_dt_s) so we can run lightweight MPC updates between
+                # camera deliveries. The camera fetch returns None when no new frame
+                # is available, triggering the inter-frame path.
                 current_time = time.time()
                 elapsed = current_time - last_frame_time
-                if elapsed < self.frame_interval:
-                    time.sleep(self.frame_interval - elapsed)
-                
+                if self._interframe_enabled:
+                    # Poll at inter-frame rate (25ms default) instead of camera rate
+                    _if_dt = self._interframe_cfg.min_interframe_dt_s
+                    if elapsed < _if_dt:
+                        time.sleep(_if_dt - elapsed)
+                else:
+                    if elapsed < self.frame_interval:
+                        time.sleep(self.frame_interval - elapsed)
+
                 last_frame_time = time.time()
                 
                 # Get camera/state inputs either from active FIFO packets or the legacy latest path.
@@ -3463,8 +3489,12 @@ class AVStack:
                 if frame_data is None:
                     if camera_wait_start is None:
                         camera_wait_start = time.time()
-                    # No frame available - don't spam, just wait
-                    time.sleep(self.frame_interval)
+                    # Inter-frame control extrapolation: run lightweight MPC
+                    # between camera frames using fresh GT vehicle state.
+                    if self._interframe_enabled and self._last_full_frame_context is not None:
+                        self._run_interframe_update()
+                    elif not self._interframe_enabled:
+                        time.sleep(self.frame_interval)
                     continue
                 if camera_wait_start is not None:
                     wait_duration = time.time() - camera_wait_start
@@ -3507,6 +3537,10 @@ class AVStack:
                                 f"[Frame {self.frame_count}] Skipping duplicate camera frame "
                                 f"(camera_frame_id={camera_frame_id})."
                             )
+                        # Inter-frame: duplicate camera = no new perception data.
+                        # Run lightweight MPC with fresh GT state instead.
+                        if self._interframe_enabled and self._last_full_frame_context is not None:
+                            self._run_interframe_update()
                         continue
                     self.last_camera_frame_id = camera_frame_id
                 if self.sync_packet_mode == PACKET_MODE_PACKET_FIFO_ACTIVE:
@@ -4237,6 +4271,20 @@ class AVStack:
         actual_steering = float(cmd.get('steering', 0.0))
         self.controller.update_last_steering_norm(actual_steering)
         cmd['mpc_last_steering_actual'] = actual_steering
+        # Stash last sent throttle/brake for inter-frame hold
+        self._last_sent_throttle = float(cmd.get('throttle', 0.0))
+        self._last_sent_brake = float(cmd.get('brake', 0.0))
+        # Stash inter-frame context: curvature, regime, grade, GT source
+        if self._interframe_enabled:
+            # Snapshot the count BEFORE resetting (used in ControlCommand construction)
+            self._interframe_updates_last_cycle = self._interframe_count_since_camera
+            self._last_full_frame_context = {
+                'curvature_signed': float(gated.get('current_path_curvature', 0.0)),
+                'grade_rad': float(fv.get('smoothed_grade', 0.0)),
+                'regime': int(cmd.get('regime', 0)),
+                'gt_cross_track_source_code': str(cmd.get('mpc_gt_cross_track_source_code', '') or ''),
+            }
+            self._interframe_count_since_camera = 0
         latency_ctx = self._pf_send_control(
             cmd,
             traj,
@@ -4264,6 +4312,116 @@ class AVStack:
                         latency_ctx=latency_ctx)
         self._pf_update_frame_state(fv, gated, pr, cmd, timestamp,
                                     vehicle_state_dict=vehicle_state_dict, traj=traj)
+
+    # ------------------------------------------------------------------
+    # Inter-frame control extrapolation
+    # ------------------------------------------------------------------
+
+    def _run_interframe_update(self) -> None:
+        """Run lightweight MPC update between camera frames using fresh GT state.
+
+        Fetches vehicle state (independent of camera), extracts GT e_lat/e_heading,
+        runs MPC without Smith predictor, and sends steering. Holds throttle/brake
+        from last camera frame.
+        """
+        import math as _math
+
+        t0 = time.time()
+        cfg = self._interframe_cfg
+        ctx = self._last_full_frame_context
+
+        # Guard: max inter-frame updates per camera cycle
+        if self._interframe_count_since_camera >= cfg.max_interframe_updates:
+            return
+
+        # Guard: regime gate (MPC only)
+        _ctx_regime = ctx.get('regime', 0)
+        if cfg.regime_gate == "mpc_only" and _ctx_regime == 0:
+            return
+
+        # Fetch fresh vehicle state (no camera needed)
+        try:
+            vehicle_state_dict = self.bridge.get_latest_vehicle_state()
+        except Exception as _exc:
+            logger.debug("Interframe: vehicle state fetch failed: %s", _exc)
+            return
+        if vehicle_state_dict is None:
+            logger.debug("Interframe: vehicle state is None")
+            return
+
+        # Stale guard: same Unity frame → skip
+        vs_time = float(vehicle_state_dict.get('unityTime', 0.0))
+        if self._last_interframe_vehicle_state is not None:
+            prev_time = float(self._last_interframe_vehicle_state.get('unityTime', 0.0))
+            if abs(vs_time - prev_time) < 1e-6:
+                return
+
+        # Extract GT signals
+        source_code = ctx.get('gt_cross_track_source_code', '')
+        gt_raw = vehicle_state_dict.get(
+            'groundTruthSelectedLaneCrossTrackRoadFrameAtCar',
+            vehicle_state_dict.get('groundTruthLaneCenterXAtCar'),
+        )
+        heading_deg = float(vehicle_state_dict.get('headingDeltaDeg', 0.0))
+        speed = float(vehicle_state_dict.get('speed', 0.0))
+
+        if gt_raw is None:
+            return
+
+        # Convert to MPC convention
+        if source_code == 'road_frame_at_car' or 'RoadFrame' in str(
+            vehicle_state_dict.get('groundTruthSelectedLaneCrossTrackRoadFrameAtCar', '')
+        ):
+            e_lat = float(gt_raw)
+        else:
+            e_lat = -float(gt_raw)
+        e_heading = heading_deg * (_math.pi / 180.0)
+
+        # Discontinuity guards
+        if self._last_interframe_vehicle_state is not None:
+            prev_e_lat = self._last_interframe_vehicle_state.get('_e_lat', 0.0)
+            prev_speed = float(self._last_interframe_vehicle_state.get('speed', 0.0))
+            if abs(e_lat - prev_e_lat) > cfg.max_e_lat_jump_m:
+                self._last_interframe_vehicle_state = None
+                return
+            if abs(speed - prev_speed) > cfg.max_speed_change_mps:
+                return
+
+        # Compute dt from wall clock
+        now = time.time()
+        dt = now - self._last_interframe_wall_time if self._last_interframe_wall_time > 0 else self.frame_interval
+        dt = max(dt, cfg.min_interframe_dt_s)
+
+        # Call lightweight MPC (no Smith predictor, no perception)
+        result = self.controller.compute_interframe_steering(
+            e_lat=e_lat,
+            e_heading=e_heading,
+            speed=speed,
+            curvature=ctx.get('curvature_signed', 0.0),
+            dt=dt,
+            grade_rad=ctx.get('grade_rad', 0.0),
+        )
+
+        if result is not None and result.get('steering') is not None:
+            steering = float(result['steering'])
+            # Send to Unity (fire-and-forget)
+            self.bridge.set_control_command(
+                steering=steering,
+                throttle=self._last_sent_throttle,
+                brake=self._last_sent_brake,
+            )
+            # Commit steering state so next MPC call uses this as warm-start
+            self.controller.update_last_steering_norm(steering)
+            self._interframe_count_since_camera += 1
+            self._interframe_total_count += 1
+            self._interframe_last_e_lat = e_lat
+            self._interframe_last_e_heading = e_heading
+            self._interframe_dt_actual = dt
+
+        # Stash vehicle state for next inter-frame call
+        self._last_interframe_vehicle_state = dict(vehicle_state_dict)
+        self._last_interframe_vehicle_state['_e_lat'] = e_lat
+        self._last_interframe_wall_time = now
 
     # ------------------------------------------------------------------
     # _pf_* sub-methods — extracted from _process_frame
@@ -11610,6 +11768,12 @@ class AVStack:
             nmpc_iterations=int(control_command.get('nmpc_iterations', 0)),
             nmpc_fallback_active=bool(control_command.get('nmpc_fallback_active', False)),
             nmpc_consecutive_failures=int(control_command.get('nmpc_consecutive_failures', 0)),
+            interframe_active=1.0 if self._interframe_enabled and getattr(self, '_interframe_updates_last_cycle', 0) > 0 else 0.0,
+            interframe_updates_this_cycle=getattr(self, '_interframe_updates_last_cycle', 0),
+            interframe_total_count=self._interframe_total_count,
+            interframe_last_e_lat=self._interframe_last_e_lat,
+            interframe_last_e_heading=self._interframe_last_e_heading,
+            interframe_dt_actual=self._interframe_dt_actual,
             effective_max_accel=float(getattr(
                 getattr(getattr(self, 'controller', None), 'longitudinal_controller', None),
                 '_effective_max_accel', 0.0)),
