@@ -158,13 +158,20 @@ class TestEmergencyBrake:
         assert out.request_estop is False
 
     def test_emergency_brake_magnitude(self):
-        """v_target ≈ ego_speed + EMERGENCY_BRAKE_ACCEL × dt (no jerk limiter here)."""
+        """v_target compounds from _v_target_prev (not ego_speed) each EB frame."""
         ctrl = _make_ctrl()
         v = 20.0
+        # Seed ACC_ACTIVE so _v_target_prev ≈ ego_speed (IDM steady-state).
+        for _ in range(3):
+            ctrl.compute_target_speed(v, 25.0, _reading(gap_m=30.0), DT)
+        v_prev = ctrl._v_target_prev
+        # Now trigger EB: gap < 1.5×v AND closing.
         gap = _EMERGENCY_BRAKE_GAP_FACTOR * v * 0.5
         r = _reading(gap_m=gap, range_rate_mps=5.0)
         out = ctrl.compute_target_speed(v, 25.0, r, DT)
-        expected_v = max(0.0, v + _EMERGENCY_BRAKE_ACCEL_MPS2 * DT)
+        # v_start = min(ego, _v_target_prev), then + BRAKE_ACCEL × dt.
+        v_start = min(v, v_prev)
+        expected_v = max(0.0, v_start + _EMERGENCY_BRAKE_ACCEL_MPS2 * DT)
         assert out.target_speed == pytest.approx(expected_v, abs=1e-6)
 
 

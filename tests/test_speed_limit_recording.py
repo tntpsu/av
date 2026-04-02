@@ -27,6 +27,12 @@ def test_record_frame_accepts_speed_limit():
     av_stack.frame_count = 0
     av_stack.recorder = DummyRecorder()
     av_stack.bridge = None
+    av_stack._interframe_enabled = False
+    av_stack._interframe_updates_last_cycle = 0
+    av_stack._interframe_total_count = 0
+    av_stack._interframe_last_e_lat = 0.0
+    av_stack._interframe_last_e_heading = 0.0
+    av_stack._interframe_dt_actual = 0.0
     mock_planner = Mock()
     mock_planner.get_last_generation_diagnostics.return_value = {}
     av_stack.trajectory_planner = mock_planner

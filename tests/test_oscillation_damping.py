@@ -106,19 +106,22 @@ class TestRSteerRateSchedulingMPC:
     """Integration tests: verify MPCSolver uses scheduling correctly.
     Requires osqp — tests are skipped if not installed."""
 
+    _DT = 0.033
+
     def _make_solver(self, scheduling_enabled=True, **overrides):
         """Create an MPCSolver with scheduling params."""
         pytest.importorskip("osqp")
         from control.mpc_controller import MPCParams, MPCSolver
         kwargs = dict(
             horizon=10,
-            dt=0.033,
+            dt=self._DT,
             r_steer_rate=3.5,
             r_steer_rate_scheduling_enabled=scheduling_enabled,
             r_steer_rate_speed_onset=12.0,
             r_steer_rate_speed_gain=0.15,
             r_steer_rate_max_scale=3.0,
             r_steer_rate_band_hysteresis=1.0,
+            r_steer_rate_straight_damping_enabled=False,
             first_step_rate_enabled=True,
             ff_alignment_enabled=False,
         )
@@ -126,12 +129,18 @@ class TestRSteerRateSchedulingMPC:
         params = MPCParams(**kwargs)
         return MPCSolver(params)
 
+    def _kappa_horizon(self, n=10):
+        """Return a zero-curvature horizon array (straight road)."""
+        import numpy as np
+        return np.zeros(n)
+
     def test_scheduling_disabled_returns_base(self):
         """When disabled, solve returns base r_steer_rate."""
         solver = self._make_solver(scheduling_enabled=False)
         result = solver.solve(
             e_lat=0.1, e_heading=0.01, v=20.0,
-            last_delta_norm=0.0, v_target=15.0, v_max=20.0
+            last_delta_norm=0.0, kappa_ref_horizon=self._kappa_horizon(),
+            v_target=15.0, v_max=20.0, dt=self._DT,
         )
         assert result['r_steer_rate_effective'] == 3.5
 
@@ -140,7 +149,8 @@ class TestRSteerRateSchedulingMPC:
         solver = self._make_solver(scheduling_enabled=True)
         result = solver.solve(
             e_lat=0.1, e_heading=0.01, v=20.0,
-            last_delta_norm=0.0, v_target=15.0, v_max=20.0
+            last_delta_norm=0.0, kappa_ref_horizon=self._kappa_horizon(),
+            v_target=15.0, v_max=20.0, dt=self._DT,
         )
         expected = 3.5 * (1.0 + 0.15 * 8)  # 7.7
         assert abs(result['r_steer_rate_effective'] - expected) < 0.2
@@ -148,16 +158,19 @@ class TestRSteerRateSchedulingMPC:
     def test_hysteresis_prevents_chattering(self):
         """Small speed fluctuations within hysteresis band don't trigger rebuild."""
         solver = self._make_solver(scheduling_enabled=True)
+        kh = self._kappa_horizon()
         # First solve at 14 m/s — sets band center
         solver.solve(
             e_lat=0.1, e_heading=0.01, v=14.0,
-            last_delta_norm=0.0, v_target=15.0, v_max=20.0
+            last_delta_norm=0.0, kappa_ref_horizon=kh,
+            v_target=15.0, v_max=20.0, dt=self._DT,
         )
         r_at_14 = solver._current_r_steer_rate
         # Solve at 14.5 m/s — within 1.0 hysteresis
         solver.solve(
             e_lat=0.1, e_heading=0.01, v=14.5,
-            last_delta_norm=0.0, v_target=15.0, v_max=20.0
+            last_delta_norm=0.0, kappa_ref_horizon=kh,
+            v_target=15.0, v_max=20.0, dt=self._DT,
         )
         assert solver._current_r_steer_rate == r_at_14, (
             "r_steer_rate should not change within hysteresis band"
@@ -166,16 +179,19 @@ class TestRSteerRateSchedulingMPC:
     def test_band_crossing_triggers_rebuild(self):
         """Speed crossing beyond hysteresis triggers r_steer_rate update."""
         solver = self._make_solver(scheduling_enabled=True)
+        kh = self._kappa_horizon()
         # Solve at 14 m/s
         solver.solve(
             e_lat=0.1, e_heading=0.01, v=14.0,
-            last_delta_norm=0.0, v_target=15.0, v_max=20.0
+            last_delta_norm=0.0, kappa_ref_horizon=kh,
+            v_target=15.0, v_max=20.0, dt=self._DT,
         )
         r_at_14 = solver._current_r_steer_rate
         # Solve at 20 m/s — well beyond hysteresis
         solver.solve(
             e_lat=0.1, e_heading=0.01, v=20.0,
-            last_delta_norm=0.0, v_target=20.0, v_max=25.0
+            last_delta_norm=0.0, kappa_ref_horizon=kh,
+            v_target=20.0, v_max=25.0, dt=self._DT,
         )
         r_at_20 = solver._current_r_steer_rate
         assert r_at_20 > r_at_14, (
@@ -188,13 +204,16 @@ class TestRSteerRateSchedulingMPC:
         solver_low = self._make_solver(scheduling_enabled=True)
         solver_high = self._make_solver(scheduling_enabled=True)
 
+        # Use small errors so neither solver saturates the steering constraint.
         result_low = solver_low.solve(
-            e_lat=0.3, e_heading=0.05, v=12.0,
-            last_delta_norm=0.0, v_target=12.0, v_max=15.0
+            e_lat=0.05, e_heading=0.01, v=12.0,
+            last_delta_norm=0.0, kappa_ref_horizon=self._kappa_horizon(),
+            v_target=12.0, v_max=15.0, dt=self._DT,
         )
         result_high = solver_high.solve(
-            e_lat=0.3, e_heading=0.05, v=20.0,
-            last_delta_norm=0.0, v_target=20.0, v_max=25.0
+            e_lat=0.05, e_heading=0.01, v=20.0,
+            last_delta_norm=0.0, kappa_ref_horizon=self._kappa_horizon(),
+            v_target=20.0, v_max=25.0, dt=self._DT,
         )
         # Higher r_steer_rate should produce less aggressive steering
         # (more rate penalty → smaller first step)
