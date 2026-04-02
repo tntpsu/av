@@ -106,6 +106,11 @@ ACC_DETECTION_RATE_GATE: float = 0.95       # —  — min detection rate when l
 ACC_EMERGENCY_BRAKE_GAP_FACTOR: float = 1.5  # —  — gap < factor×speed → emergency brake
 ACC_MIN_ACTIVE_FRAME_RATE: float = 0.10     # —  — min fraction for ACC section to activate
 
+# ── Oscillation amplitude growth ─────────────────────────────────────────────
+OSCILLATION_AMPLITUDE_GROWTH_THRESHOLD_MPS: float = 0.001  # m/s — RMS growth slope below this is benign
+OSCILLATION_AMPLITUDE_GROWTH_SCALE: float = 5000.0         # penalty per unit slope (0.001→0, 0.003→10)
+OSCILLATION_AMPLITUDE_GROWTH_MAX_PENALTY: float = 15.0     # max points deducted in Control layer
+
 # ── Inter-frame control extrapolation ─────────────────────────────────────────
 INTERFRAME_STALE_GT_THRESHOLD_MS: float = 50.0     # ms — skip inter-frame if GT older than this
 INTERFRAME_E_LAT_DIVERGENCE_THRESHOLD_M: float = 0.2  # m — flag if inter-frame e_lat diverges from camera

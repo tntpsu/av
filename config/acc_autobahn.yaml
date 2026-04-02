@@ -1,115 +1,58 @@
-# ACC autobahn overlay — Step 5 ACC scenarios A1 and A2.
+# ACC autobahn overlay — inherits mpc_autobahn.yaml, adds ACC-specific overrides.
 #
-# Inherits autobahn-30 NMPC settings plus enables ACC.
-# Key constraint: ACC + NMPC must coexist without regime interference.
-# At 25 m/s the NMPC controller is active; IDM speed commands flow through
-# the standard speed governor → NMPC receives adjusted_target_speed.
+# ACC + NMPC coexistence: IDM speed commands flow through speed governor → NMPC
+# receives adjusted_target_speed. At 25 m/s the NMPC controller is active.
 #
 # Usage:
 #   ./start_av_stack.sh --config config/acc_autobahn.yaml \
 #       --track-yaml tracks/scenarios/autobahn_a1_steady.yml --duration 120
 
-# ── Inherit autobahn NMPC tuning (from mpc_autobahn.yaml) ─────────────────────
+_inherits: mpc_autobahn.yaml
+
 control:
-  interframe_extrapolation:
-    enabled: true
   lateral:
-    steering_smoothing_alpha: 0.2
-    pp_feedback_gain: 0.0
-    curve_feedforward_gain: 0.0
-    curve_feedforward_threshold: 0.0
-    pp_speed_norm_enabled: true
-    pp_speed_norm_min_scale: 0.50
-    pp_map_ff_gain: 1.0
-    curve_intent_arm_preview_min: 0.001
-    curve_intent_arm_rise_min: 0.0001
-    curve_intent_arm_distance_time_headway_s: 1.5
-    curve_intent_arm_distance_min_m: 10.0
-    curve_intent_arm_distance_max_m: 60.0
+    # Curve intent overrides for ACC (longer hold times for following stability)
     curve_intent_rearm_exit_hysteresis: 3.0
     curve_intent_rearm_min_frames: 15
     curve_intent_max_commit_frames: 120
     curve_intent_force_straight_hold_frames: 30
-    curve_intent_startup_ignore_frames: 60
   longitudinal:
-    target_speed: 25.0
     max_speed: 30.0
-    speed_drag_gain: 0.008
-    accel_target_smoothing_alpha: 0.5
-    # ACC override sets adjusted_target_speed but does NOT update reference_accel.
-    # With accel_tracking=true the inner accel PID fights the ACC speed command → oscillation.
+    # Disable accel-tracking PID: ACC updates target_speed, not reference_accel.
     accel_tracking_enabled: false
-  regime:
-    # NMPC upshift: speed > lmpc_max_speed_mps + upshift_hysteresis = 21 m/s
-    lmpc_max_speed_mps: 20.0
-    lmpc_max_heading_error_rad: 0.25
-    upshift_hysteresis_mps: 1.0
-    downshift_hysteresis_mps: 1.0
-    min_hold_frames: 20
 
 trajectory:
-  target_speed: 25.0
-  # Curve phase thresholds — gentler for R600 (κ=0.00167) geometry (mirrors mpc_autobahn)
-  curve_phase_on: 0.30
-  curve_phase_off: 0.18
-  curve_phase_commit_on: 0.38
-  curve_phase_commit_min_frames: 3
-  curve_local_entry_on_base: 0.30
-  curve_local_entry_on_tight: 0.25
-  speed_planner:
-    accel_speed_max: 25.0
-    decel_speed_max: 25.0
   # Distractor guards: lower speed thresholds for ACC (full-strength at following speeds)
   reference_distractor_guard_speed_on: 3.0
   reference_distractor_guard_speed_full: 6.0
   reference_distractor_input_guard_speed_on: 3.0
   reference_distractor_input_guard_speed_full: 6.0
   speed_governor:
-    curve_preview_enabled: false
-    curve_cap_use_preview_curvature: false
-    # Disable horizon guardrail for autobahn. Base config limits max speed to
-    # sqrt(2 × 1.2 × ~94m) ≈ 15 m/s via perception-horizon cap. At 25 m/s target
-    # this blocks ACC from ever reaching cruise speed (stalls at 14.8 m/s in DETECTION_LOSS).
-    # Autobahn is a controlled straight + gentle curve track; NMPC + IDM provide
-    # adequate longitudinal safety without the horizon cap.
+    # Disable horizon guardrail: base config caps at ~15 m/s via perception-horizon;
+    # at 25 m/s target this blocks ACC. NMPC + IDM provide adequate safety.
     speed_horizon_guardrail_enabled: false
   mpc:
-    mpc_q_lat_terminal_scale: 1.0
     mpc_v_max: 30.0
-    mpc_bias_enabled: true
+    # Bias tuning differs from parent (gentler for ACC stability)
     mpc_bias_alpha: 0.003
     mpc_bias_kappa_gain: 0.010
-    mpc_bias_max_correction: 0.002
     mpc_bias_min_speed: 8.0
-    # LMPC at 14–20 m/s needs r=1.5 for R600 curve tracking. r_steer_rate
-    # scheduling + curvature gating prevents straight-line oscillation.
-    # Mirrors mpc_autobahn.yaml.
     mpc_r_steer_rate: 1.5
-    mpc_horizon: 25
   nmpc:
-    nmpc_enabled: true      # activate NMPC (speed > 21 m/s triggers upshift from LMPC)
-    nmpc_horizon: 20
-    nmpc_dt: 0.10
-    nmpc_q_lat: 2.0
-    nmpc_q_heading: 5.0
     nmpc_max_accel_mps2: 3.0
     nmpc_max_decel_mps2: 4.0
     nmpc_max_steer_rate: 0.30
     nmpc_v_max: 30.0
-    nmpc_fallback_lmpc: true  # fall back to LMPC (not PP) on solver failure
 
 safety:
   max_speed: 28.0
-
-lateral_control:
-  steering_smoothing_alpha: 0.2
 
 # ── ACC: enabled for autobahn scenarios ───────────────────────────────────────
 acc:
   enabled: true
   gap_alpha: 0.30
   rate_alpha: 0.20
-  target_gap_time_headway_s: 1.5        # standard T headway
+  target_gap_time_headway_s: 1.5
   min_gap_s0_m: 2.0
   idm_max_accel_mps2: 2.0
   idm_comfortable_decel_mps2: 2.5

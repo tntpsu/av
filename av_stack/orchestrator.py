@@ -938,6 +938,9 @@ class AVStack:
 
         # Store config for use in _process_frame
         self.config = config
+        # Sync target_speed to speed_planner BEFORE SpeedPlanner construction
+        # reads accel_speed_max / decel_speed_max from the config dict.
+        self._sync_target_speed()
         self.control_config = control_cfg
         self.trajectory_config = trajectory_cfg
         self.trajectory_source = str(trajectory_cfg.get('trajectory_source', 'planner')).lower()
@@ -1372,6 +1375,7 @@ class AVStack:
         self._derive_curvature_thresholds()
         self._derive_mpc_weights()
         self._derive_speed_params()
+        self._sync_target_speed()
 
         # Canonical map-free curve anticipation (trajectory-owned signal).
         self.curve_anticipation_enabled = bool(
@@ -1814,6 +1818,34 @@ class AVStack:
                 "tight_track=%s, derived %d speed-dependent param(s)",
                 target_speed, kappa_max, is_tight_track, derived_count,
             )
+
+    def _sync_target_speed(self) -> None:
+        """Auto-propagate trajectory.target_speed → control + speed_planner.
+
+        Eliminates the need to set target_speed in multiple locations.
+        trajectory.target_speed is the single source of truth; this syncs it to
+        control.longitudinal.target_speed and (unless explicitly overridden)
+        to speed_planner.accel_speed_max / decel_speed_max.
+        """
+        traj_speed = self.config.get("trajectory", {}).get("target_speed")
+        if traj_speed is None:
+            return
+        self.config.setdefault("control", {}).setdefault(
+            "longitudinal", {}
+        )["target_speed"] = traj_speed
+        raw = self.config.get("_raw_overlay", {})
+        sp = self.config.setdefault("trajectory", {}).setdefault(
+            "speed_planner", {}
+        )
+        raw_sp = raw.get("trajectory", {}).get("speed_planner", {}) if isinstance(raw, dict) else {}
+        if "accel_speed_max" not in raw_sp:
+            sp["accel_speed_max"] = traj_speed
+        if "decel_speed_max" not in raw_sp:
+            sp["decel_speed_max"] = traj_speed
+        logger.info(
+            "[TARGET_SPEED_SYNC] trajectory.target_speed=%.1f → synced to control + speed_planner",
+            traj_speed,
+        )
 
     def _resolve_config_section(
         self, section_path: str, raw_overlay: dict
@@ -4390,7 +4422,7 @@ class AVStack:
         # Compute dt from wall clock
         now = time.time()
         dt = now - self._last_interframe_wall_time if self._last_interframe_wall_time > 0 else self.frame_interval
-        dt = max(dt, cfg.min_interframe_dt_s)
+        dt = max(cfg.min_interframe_dt_s, min(dt, cfg.max_interframe_dt_s))
 
         # Call lightweight MPC (no Smith predictor, no perception)
         result = self.controller.compute_interframe_steering(
@@ -8621,12 +8653,11 @@ class AVStack:
             )
         curvature_weight = _norm(curvature_primary_abs, curvature_on, curvature_full)
 
-        distance_to_curve_start = float(
-            reference_point.get(
-                'distance_to_next_curve_start_m',
-                control_command.get('distance_to_next_curve_start_m', np.nan),
-            )
+        _raw_dist = reference_point.get(
+            'distance_to_next_curve_start_m',
+            control_command.get('distance_to_next_curve_start_m', None),
         )
+        distance_to_curve_start = float(_raw_dist) if _raw_dist is not None else np.nan
         if np.isfinite(distance_to_curve_start):
             if distance_far_m <= distance_near_m:
                 distance_weight = 1.0 if distance_to_curve_start <= distance_near_m else 0.0

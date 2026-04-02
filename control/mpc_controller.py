@@ -47,6 +47,11 @@ class MPCParams:
     q_lat_terminal_scale: float = 3.0
     q_heading_terminal_scale: float = 3.0
 
+    # Lateral velocity damping: penalises (e_lat[k+1] - e_lat[k])² in the QP cost.
+    # Since ė_lat = v·e_heading, this acts as speed-scaled heading damping.
+    # Provides inherent oscillation suppression without per-track tuning.
+    q_lat_rate: float = 2.0                # lateral velocity damping — OSCILLATION DAMPING KNOB
+
     # Input cost weights
     # r_steer is kept near-zero intentionally. A non-trivial value biases the QP toward
     # δ=0 on every step, causing the solver to systematically understeer on curves.
@@ -66,6 +71,14 @@ class MPCParams:
     r_steer_rate_max_scale: float = 3.0          # cap: r_eff ≤ r_base × max_scale
     r_steer_rate_band_hysteresis: float = 1.0    # m/s hysteresis to prevent chattering
     r_steer_rate_kappa_off: float = 0.005        # curvature where scheduling deactivates (R200; R600/R500 keep scheduling)
+
+    # Curvature-adaptive r_steer_rate reduction (straight-line oscillation fix)
+    # On low-κ sections, MPC needs responsive corrections to prevent drift accumulation.
+    # r_eff *= max(straight_min_scale, κ / straight_kappa_on) when κ < straight_kappa_on.
+    # Active independently of speed scheduling. Does NOT require rebuild (uses same band).
+    r_steer_rate_straight_damping_enabled: bool = True
+    r_steer_rate_straight_kappa_on: float = 0.002   # curvature below which reduction activates
+    r_steer_rate_straight_min_scale: float = 0.3     # minimum: r_eff ≥ 30% of base (floor)
 
     # Constraints
     delta_rate_max: float = 0.5             # max Δδ_norm per step
@@ -103,7 +116,8 @@ class MPCParams:
     bias_min_speed: float = 5.0         # only active above this speed (m/s)
     bias_relative_guard_enabled: bool = True
     bias_relative_guard_ratio: float = 0.50
-    bias_relative_guard_min_kappa: float = 0.001
+    bias_relative_guard_min_kappa: float = 0.0005
+    bias_ema_abs_max: float = 0.5     # absolute clamp on _bias_ema accumulator (meters)
     bias_active_curve_preserve_enabled: bool = True
     bias_active_curve_preserve_ratio: float = 0.75
     bias_active_curve_gate_min: float = 0.40
@@ -216,17 +230,31 @@ class MPCSolver:
         the bicycle model's v/L gain increase. On curves (high kappa),
         scheduling deactivates so MPC retains full tracking authority.
         """
+        r_base = self.p.r_steer_rate
+
+        # Curvature-adaptive reduction: lower r_steer_rate on straights where
+        # MPC needs faster corrections to prevent oscillation buildup.
+        if self.p.r_steer_rate_straight_damping_enabled:
+            kappa_abs = abs(kappa)
+            kappa_on = max(1e-6, self.p.r_steer_rate_straight_kappa_on)
+            straight_scale = max(
+                self.p.r_steer_rate_straight_min_scale,
+                min(1.0, kappa_abs / kappa_on),
+            )
+            r_base = r_base * straight_scale
+
         if not self.p.r_steer_rate_scheduling_enabled:
-            return self.p.r_steer_rate
+            return r_base
+
         excess = max(0.0, speed - self.p.r_steer_rate_speed_onset)
         scale = min(1.0 + self.p.r_steer_rate_speed_gain * excess,
                     self.p.r_steer_rate_max_scale)
         # Curvature gate: ramp scale toward 1.0 on curves
-        kappa_abs = abs(kappa)
+        kappa_abs_v = abs(kappa)
         kappa_off = max(1e-6, self.p.r_steer_rate_kappa_off)
-        kappa_gate = max(0.0, min(1.0, 1.0 - kappa_abs / kappa_off))
+        kappa_gate = max(0.0, min(1.0, 1.0 - kappa_abs_v / kappa_off))
         gated_scale = 1.0 + (scale - 1.0) * kappa_gate
-        return self.p.r_steer_rate * gated_scale
+        return r_base * gated_scale
 
     @staticmethod
     def _feedforward_delta_norm(kappa: float, wheelbase_m: float, max_steer_rad: float) -> float:
@@ -265,8 +293,7 @@ class MPCSolver:
         P_diag[term_base + 1] = self.p.q_heading * self.p.q_heading_terminal_scale
         P_diag[term_base + 2] = self.p.q_speed
 
-        # Steering rate penalty: r_steer_rate * (δ[k+1] - δ[k])²
-        # This adds off-diagonal terms. We build a triplet list for P.
+        # Off-diagonal terms via COO triplets (OSQP requires upper-triangular P)
         rows, cols, vals = [], [], []
         for i in range(nz):
             if P_diag[i] != 0.0:
@@ -274,15 +301,33 @@ class MPCSolver:
                 cols.append(i)
                 vals.append(P_diag[i])
 
-        # Steering rate: affects δ_norm at step k (index k*(nx+nu)+nx)
-        # and δ_norm at step k+1 (index (k+1)*(nx+nu)+nx)
+        # Lateral velocity damping: q_lat_rate * (e_lat[k+1] - e_lat[k])²
+        # Since ė_lat ≈ v·e_heading·dt, this penalises lateral drift rate,
+        # providing inherent oscillation damping that scales with speed through
+        # the dynamics model.  Same off-diagonal pattern as r_steer_rate below.
+        q_lr = self.p.q_lat_rate
+        if q_lr > 0.0:
+            for k in range(N - 1):
+                idx_k = k * (nx + nu)            # e_lat at step k
+                idx_k1 = (k + 1) * (nx + nu)     # e_lat at step k+1
+                rows.append(idx_k)
+                cols.append(idx_k)
+                vals.append(q_lr)
+                rows.append(idx_k1)
+                cols.append(idx_k1)
+                vals.append(q_lr)
+                i_lo, i_hi = min(idx_k, idx_k1), max(idx_k, idx_k1)
+                rows.append(i_lo)
+                cols.append(i_hi)
+                vals.append(-q_lr)
+
+        # Steering rate penalty: r_steer_rate * (δ[k+1] - δ[k])²
         for k in range(N - 1):
             idx_k = k * (nx + nu) + nx       # δ_norm at step k
             idx_k1 = (k + 1) * (nx + nu) + nx  # δ_norm at step k+1
             r_sr = self._current_r_steer_rate
 
             # (δ[k+1] - δ[k])² = δ[k+1]² - 2·δ[k]·δ[k+1] + δ[k]²
-            # Add to diagonal
             rows.append(idx_k)
             cols.append(idx_k)
             vals.append(r_sr)
@@ -837,6 +882,12 @@ class MPCController:
         if self.params.bias_enabled and current_speed >= self.params.bias_min_speed:
             alpha = self.params.bias_alpha
             self._bias_ema = (1.0 - alpha) * self._bias_ema + alpha * e_lat
+            if self.params.bias_ema_abs_max > 0:
+                self._bias_ema = float(np.clip(
+                    self._bias_ema,
+                    -self.params.bias_ema_abs_max,
+                    self.params.bias_ema_abs_max,
+                ))
             raw_correction = -self.params.bias_kappa_gain * self._bias_ema
             self._bias_correction = float(np.clip(
                 raw_correction,

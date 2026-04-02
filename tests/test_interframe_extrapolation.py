@@ -110,7 +110,7 @@ class TestInterframeConfig:
             raw = yaml.safe_load(f)
         section = raw.get("control", {}).get("interframe_extrapolation", {})
         assert "enabled" in section
-        assert section["enabled"] is False  # off by default
+        assert section["enabled"] is True  # promoted to base default (validated on all tracks)
         assert section["max_interframe_updates"] == 3
 
 

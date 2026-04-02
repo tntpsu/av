@@ -1,244 +1,67 @@
-# ACC highway overlay — merges on top of config/mpc_highway.yaml (which itself overlays av_stack_config.yaml).
+# ACC highway overlay — inherits mpc_highway.yaml, adds ACC-specific overrides.
 #
-# Enables ACC with standard time-headway for Step 5 E2E scenarios on highway_65.
-# Ego target: 15 m/s (proven stable operating point; avoids PP↔LMPC regime chatter > 14 m/s).
+# Enables ACC with wider time-headway for Step 5 E2E scenarios on highway_65.
+# Ego target: 15 m/s (inherited from mpc_highway).
 #
 # Usage:
 #   ./start_av_stack.sh --config config/acc_highway.yaml \
 #       --track-yaml tracks/scenarios/highway_h2_steady.yml --duration 90
 
-# ── Inherit highway lateral/MPC tuning ────────────────────────────────────────
+_inherits: mpc_highway.yaml
+
 control:
-  interframe_extrapolation:
-    enabled: true
   lateral:
-    steering_smoothing_alpha: 0.3
-    pp_feedback_gain: 0.02  # Restored from 0.0: geometric-only PP can't hold 1.8m spawn offset at low ACC speeds (0-6 m/s stop-and-go). 0.02 gives position correction without the integral oscillation seen at 15 m/s with base 0.075.
-    curve_feedforward_gain: 0.0
-    curve_feedforward_threshold: 0.0
-    pp_speed_norm_enabled: true
-    pp_speed_norm_min_scale: 0.60
-    pp_map_ff_gain: 1.0
-    curve_intent_startup_ignore_frames: 45
-    curve_intent_arm_preview_min: 0.002
-    curve_intent_arm_rise_min: 0.0002
-    curve_intent_arm_distance_time_headway_s: 1.2
-    curve_intent_arm_distance_min_m: 6.0
-    curve_intent_arm_distance_max_m: 45.0
-    curve_intent_rearm_exit_hysteresis: 2.0
-    curve_intent_rearm_min_frames: 12
-    curve_intent_max_commit_frames: 80
-    curve_intent_force_straight_hold_frames: 24
+    # Position correction for low-speed stop-and-go (auto-derive gives ~0.0 at 15 m/s)
+    pp_feedback_gain: 0.02
   longitudinal:
-    target_speed: 15.0
     max_speed: 17.0
-    speed_drag_gain: 0.010
-    accel_target_smoothing_alpha: 0.6
-    # ACC overspeed brake — allow stronger deceleration for stop-and-go following.
-    # Base config (max=0.18) gives ~1.8 m/s² decel; with jerk-ramp delay the car
-    # closes ~5m before reaching full authority.  Lower threshold + higher max allows
-    # earlier onset and ~4-5 m/s² peak decel while the jerk limiter still smooths it.
-    # Gain raised 0.40→1.50: at overspeed=0.3 m/s, brake goes from 0.08→0.31,
-    # giving ~2.2 m/s² decel when IDM first signals braking during sinusoidal approach.
+    # ACC overspeed brake — stronger deceleration for stop-and-go following.
     overspeed_brake_threshold: 0.1
     overspeed_brake_max: 0.90
     overspeed_brake_gain: 1.50
-    # Disable accel-tracking PID for ACC scenarios.
-    # When ACC overrides target_speed, the speed planner's planned_accel is stale.
-    # With accel_tracking_enabled=True the accel PID fights the ACC speed command,
-    # causing repeated brake episodes (measured: brake=0.18, ~15-frame drops to 6.5 m/s).
+    # Disable accel-tracking PID: ACC updates target_speed, not reference_accel.
     accel_tracking_enabled: false
 
 trajectory:
-  target_speed: 15.0
-  local_curve_reference_mode: shadow
-  local_curve_reference_shadow_promote_enabled: true
-  local_curve_reference_shadow_promote_active_use_speed_gate: false
-  local_curve_reference_shadow_promote_speed_on: 13.0
-  local_curve_reference_shadow_promote_speed_full: 15.0
-  local_curve_reference_shadow_promote_curvature_on: 0.0015
-  local_curve_reference_shadow_promote_curvature_full: 0.0020
-  local_curve_reference_shadow_promote_raw_delta_on_m: 0.35
-  local_curve_reference_shadow_promote_raw_delta_full_m: 0.85
-  local_curve_reference_shadow_promote_weight_min: 0.35
-  local_curve_reference_shadow_promote_weight_min_active: 0.25
-  local_curve_reference_shadow_promote_blend_floor_on: 0.15
-  local_curve_reference_shadow_promote_blend_floor_full: 0.35
-  local_curve_reference_preactive_enabled: true
-  local_curve_reference_preactive_speed_on: 12.5
-  local_curve_reference_preactive_speed_full: 14.5
-  local_curve_reference_preactive_curvature_on: 0.0015
-  local_curve_reference_preactive_curvature_full: 0.0020
-  local_curve_reference_preactive_distance_start_m: 55.0
-  local_curve_reference_preactive_distance_end_m: 12.0
-  local_curve_reference_preactive_weight_min: 0.20
-  local_curve_reference_preactive_blend_floor_on: 0.10
-  local_curve_reference_preactive_blend_floor_full: 0.22
-  local_curve_reference_distractor_guard_enabled: true
-  local_curve_reference_distractor_guard_speed_on: 12.5
-  local_curve_reference_distractor_guard_speed_full: 14.5
-  local_curve_reference_distractor_guard_curvature_on: 0.0015
-  local_curve_reference_distractor_guard_curvature_full: 0.0020
-  local_curve_reference_distractor_guard_raw_delta_on_m: 0.90
-  local_curve_reference_distractor_guard_raw_delta_full_m: 2.20
-  local_curve_reference_distractor_guard_active_raw_delta_on_m: 0.60
-  local_curve_reference_distractor_guard_active_raw_delta_full_m: 1.20
-  local_curve_reference_distractor_guard_progress_start: 0.18
-  local_curve_reference_distractor_guard_progress_end: 0.45
-  local_curve_reference_distractor_guard_weight_min: 0.35
-  local_curve_reference_distractor_guard_active_weight_min: 0.20
-  local_curve_reference_distractor_guard_on_frames: 2
-  local_curve_reference_distractor_guard_off_frames: 3
-  local_curve_reference_distractor_guard_min_dwell_frames: 8
-  local_curve_reference_distractor_guard_blend_floor_on: 0.24
-  local_curve_reference_distractor_guard_blend_floor_full: 0.46
-  local_curve_reference_distractor_guard_max_blend_on: 0.24
-  local_curve_reference_distractor_guard_max_blend_full: 0.46
-  local_curve_reference_distractor_guard_active_blend_floor_on: 0.38
-  local_curve_reference_distractor_guard_active_blend_floor_full: 0.62
-  local_curve_reference_distractor_guard_active_max_blend_on: 0.42
-  local_curve_reference_distractor_guard_active_max_blend_full: 0.72
-  local_curve_reference_distractor_guard_active_ignore_progress_gate: true
-  local_curve_reference_distractor_guard_unwind_start: 0.18
-  local_curve_reference_distractor_guard_unwind_end: 0.45
-  local_curve_reference_distractor_guard_active_unwind_start: 0.45
-  local_curve_reference_distractor_guard_active_unwind_end: 0.75
-  reference_distractor_guard_enabled: true
-  reference_distractor_guard_straight_curvature_max: 0.0010
-  reference_distractor_guard_speed_on: 3.0       # lowered for ACC: guards must be full-strength at 8-12 m/s following speeds
+  # Distractor guards: lower speed thresholds for ACC (full-strength at 8-12 m/s following)
+  reference_distractor_guard_speed_on: 3.0
   reference_distractor_guard_speed_full: 6.0
-  reference_distractor_guard_center_error_on_m: 0.45
-  reference_distractor_guard_center_error_full_m: 0.90
-  reference_distractor_guard_width_error_on_m: 0.60
-  reference_distractor_guard_width_error_full_m: 1.20
-  reference_distractor_guard_weight_min: 0.35
-  reference_distractor_guard_wrong_target_use_at_car_center: true
-  reference_distractor_guard_wrong_target_center_error_on_m: 0.20
-  reference_distractor_guard_wrong_target_center_error_full_m: 0.45
-  reference_distractor_guard_wrong_target_width_error_on_m: 0.25
-  reference_distractor_guard_wrong_target_width_error_full_m: 0.50
-  reference_distractor_guard_wrong_target_weight_min: 0.20
-  reference_distractor_guard_on_frames: 2
-  reference_distractor_guard_off_frames: 3
-  reference_distractor_guard_min_dwell_frames: 8
-  reference_distractor_guard_blend_on: 0.75
-  reference_distractor_guard_blend_full: 1.00
-  reference_distractor_guard_wrong_target_blend_on: 0.90
-  reference_distractor_guard_wrong_target_blend_full: 1.00
-  reference_distractor_input_guard_enabled: true
-  reference_distractor_input_guard_straight_curvature_max: 0.0010
-  reference_distractor_input_guard_speed_on: 3.0   # lowered for ACC: guards must be full-strength at 8-12 m/s following speeds
+  reference_distractor_input_guard_speed_on: 3.0
   reference_distractor_input_guard_speed_full: 6.0
-  reference_distractor_input_guard_center_error_on_m: 0.20
-  reference_distractor_input_guard_center_error_full_m: 0.45
-  reference_distractor_input_guard_width_error_on_m: 0.25
-  reference_distractor_input_guard_width_error_full_m: 0.50
-  reference_distractor_input_guard_weight_min: 0.20
-  reference_distractor_input_guard_on_frames: 2
-  reference_distractor_input_guard_off_frames: 3
-  reference_distractor_input_guard_min_dwell_frames: 8
-  reference_distractor_input_guard_suppress_lane_coeffs: false  # true → (0,0) trips perception-failed guard → e-stop
-  reference_distractor_input_guard_seed_center_history: true
-  # Disable distance-based EMA curvature smoothing for highway/ACC scenarios.
-  # The base config enables EMA with a 12m window. At startup (v≈0) the EMA
-  # decays at only 2m/s × 1/30s = 0.067m/frame → time constant ≈ 6s. A lane-
-  # detection spike at frame 0 (κ≈0.3) would freeze the comfort governor at
-  # 3.0 m/s for ~90 frames, blocking ACC engagement. With smoothing off, the
-  # governor's 5-frame max-history clears the spike in 6 frames (0.2s).
+  # Disable distance-based EMA curvature smoothing: at v≈0 the EMA decays slowly,
+  # freezing the comfort governor at 3.0 m/s for ~90 frames, blocking ACC engagement.
   curvature_smoothing_enabled: false
-  curve_phase_on: 0.35
-  curve_phase_off: 0.22
-  curve_phase_commit_on: 0.45
-  curve_phase_commit_min_frames: 3
-  curve_local_entry_on_base: 0.35
-  curve_local_entry_on_tight: 0.32
-  # H6: keep early mild-curve authority attribution aligned with mpc_highway.
-  curve_preactivation_speed_on: 13.0
-  curve_preactivation_speed_full: 15.0
-  curve_preactivation_curvature_on: 0.0015
-  curve_preactivation_curvature_full: 0.0020
-  curve_preactivation_distance_near_m: 0.0
-  curve_preactivation_distance_far_m: 30.0
-  curve_preactivation_preview_phase_min: 0.25
-  curve_preactivation_active_weight_min: 0.35
-  curve_preactivation_lookahead_floor_m: 10.0
   speed_planner:
-    accel_speed_max: 15.0
-    decel_speed_max: 15.0
-    # Zero the bias so the planner targets exactly 15.0 m/s (= target_speed).
-    # Base config has speed_limit_bias: -0.2 → planner targets 14.6 m/s when
-    # target=14.8; once _last_speed reaches 14.6, planned_accel turns negative and
-    # the accel-tracking PID winds up a brake command. Zeroing eliminates that source.
+    # Zero bias so planner targets exactly 15.0 m/s (base has -0.2 → 14.6 → brake wind-up)
     speed_limit_bias: 0.0
-  speed_governor:
-    curve_preview_enabled: false
-    curve_cap_use_preview_curvature: false
-    curve_cap_active_mild_enabled: true
-    curve_cap_active_mild_gate_min: 0.40
-    curve_cap_active_mild_speed_on: 13.0
-    curve_cap_active_mild_speed_full: 15.0
-    curve_cap_active_mild_curvature_on: 0.0015
-    curve_cap_active_mild_curvature_full: 0.0020
-    curve_cap_active_mild_entry_reduction_mps: 0.8
-    curve_cap_active_mild_commit_reduction_mps: 1.6
   mpc:
-    mpc_q_lat_terminal_scale: 1.0
     mpc_v_max: 17.0
-    mpc_bias_enabled: true
-    mpc_bias_alpha: 0.005
-    mpc_bias_kappa_gain: 0.015
-    mpc_bias_max_correction: 0.002
-    mpc_bias_min_speed: 5.0
-    # Shared active mild-curve preserve defaults. Keep explicit here and in mpc_highway so
-    # lateral authority does not silently depend on code defaults.
-    bias_active_curve_preserve_dynamic_enabled: true
-    bias_active_curve_preserve_speed_on: 13.0
-    bias_active_curve_preserve_speed_full: 15.0
-    bias_active_curve_preserve_curvature_on: 0.0015
-    bias_active_curve_preserve_curvature_full: 0.0020
-    bias_active_curve_preserve_full_ratio: 1.0
-    bias_active_curve_same_sign_guard_ratio: 0.25
 
 safety:
   max_speed: 17.0
-  # Disable GT lane-boundary check for ACC scenarios. At low ACC speeds (0–8 m/s)
-  # the heading oscillates during stop-and-go following. A 5–8° heading error with
-  # 8m lookahead projects the road center off-center, making the check fire even
-  # when the car is physically inside the road. pp_feedback_gain=0.02 maintains
-  # valid lateral position; the GT check adds no safety value and blocks recovery.
+  # Disable GT lane-boundary check: at low ACC speeds heading oscillates during
+  # stop-and-go, projecting road center off-center and triggering false e-stops.
   emergency_stop_use_gt_lane_boundaries: false
-  # Raise perception-based out-of-bounds threshold for ACC scenarios.
-  # The lead vehicle at lane_offset_m=1.8 causes perception to report the lane
-  # center 1.0–1.4m to the right of true center (camera sees lead as lane boundary).
-  # This makes lat_err grow to ~-1.9m while GT cross-track = 0.000m (car is actually
-  # at road center). With default allowed_outside_lane=1.0 the threshold is 1.85m,
-  # which the false-perception error exceeds. Raising to 3.5 sets threshold to ~3.35m
-  # — a real physical excursion before e-stop fires, while GT=0 confirms safety.
+  # Raise OOB threshold: lead vehicle at 1.8m offset biases perception lane center
+  # by ~1.0-1.4m right. GT cross-track=0 but perceived lat_err reaches -1.9m.
   allowed_outside_lane: 3.5
-
-lateral_control:
-  steering_smoothing_alpha: 0.3
 
 # ── ACC: enabled for all highway scenarios ────────────────────────────────────
 acc:
   enabled: true
   gap_alpha: 0.30
   rate_alpha: 0.20
-  target_gap_time_headway_s: 2.5  # Increased 1.5→2.5: stop-and-go requires larger headway so IDM brakes early (leads decelerate 8→0 m/s; at 1.5s IDM accelerates into a slowing lead).
+  target_gap_time_headway_s: 2.5  # Increased 1.5→2.5: stop-and-go needs early IDM braking
   min_gap_s0_m: 2.0
   idm_max_accel_mps2: 2.0
   idm_comfortable_decel_mps2: 2.5
-  cutout_speed_mps: 0.05  # Stop-and-go: IDM equilibrium at 3m gap = (3-2)/2.5 = 0.40 m/s > 0.05.
-  # With cutout=0.5: CUTOUT fires at v<0.5, ramps to 15, ego overshoots → IDM brakes → v<0.5 → loop.
-  # Ego stuck at ~0.5 m/s; lead pulls >150m away; detection 53%. With cutout=0.05:
-  # IDM equilibrium 0.40 m/s > 0.05 → ACC_ACTIVE handles low-speed following without oscillation.
+  cutout_speed_mps: 0.05  # Stop-and-go: IDM equilibrium at 3m gap = 0.40 m/s > 0.05
   fallback_frames: 5
   reengage_frames: 3
   disengage_ramp_mps2: 2.0
   detection_range_m: 150.0
 
 stack:
-  # Patch Set F: highway-first active FIFO packet ingest.
   sync_packet_mode: packet_fifo_active
   sync_packet_active_allow_legacy_fallback: true
   sync_packet_consume_policy: freshest_within_budget

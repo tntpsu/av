@@ -60,6 +60,9 @@ from scoring_registry import (
     ACC_JERK_P95_GATE_MPS3,
     ACC_DETECTION_RATE_GATE,
     ACC_MIN_ACTIVE_FRAME_RATE,
+    OSCILLATION_AMPLITUDE_GROWTH_THRESHOLD_MPS,
+    OSCILLATION_AMPLITUDE_GROWTH_SCALE,
+    OSCILLATION_AMPLITUDE_GROWTH_MAX_PENALTY,
 )
 
 G_MPS2 = 9.80665
@@ -8375,6 +8378,16 @@ def analyze_recording_summary(
     control_oscillation_penalty = safe_float(
         min(15, max(0.0, oscillation_frequency - 1.0) * 7.0)
     )
+    # Amplitude growth penalty: penalises oscillation whose RMS envelope is growing
+    # over the run, even if frequency is low.  oscillation_rms_growth_slope_mps is
+    # computed upstream (rolling-window linear fit on |e_lat| RMS).
+    control_oscillation_growth_penalty = safe_float(
+        min(
+            OSCILLATION_AMPLITUDE_GROWTH_MAX_PENALTY,
+            max(0.0, oscillation_rms_growth_slope_mps - OSCILLATION_AMPLITUDE_GROWTH_THRESHOLD_MPS)
+            * OSCILLATION_AMPLITUDE_GROWTH_SCALE,
+        )
+    )
     control_sign_mismatch_penalty = safe_float(
         min(12, straight_sign_mismatch_rate * 0.2) if straight_sign_mismatch_rate > 5.0 else 0.0
     )
@@ -10163,6 +10176,11 @@ def analyze_recording_summary(
                     "limit": "<=1.0Hz",
                 },
                 {
+                    "name": "Oscillation Growth",
+                    "value": control_oscillation_growth_penalty,
+                    "limit": f"<={OSCILLATION_AMPLITUDE_GROWTH_THRESHOLD_MPS*1000:.0f}mm/s slope",
+                },
+                {
                     "name": "Straight Sign Mismatch",
                     "value": control_sign_mismatch_penalty,
                     "limit": "<=5%",
@@ -11028,6 +11046,7 @@ def analyze_recording_summary(
                 "perception_instability_penalty": perception_instability_penalty,
                 "out_of_lane_penalty": safety_out_of_lane_penalty,
                 "straight_sign_mismatch_penalty": control_sign_mismatch_penalty,
+                "oscillation_growth_penalty": control_oscillation_growth_penalty,
                 "layer_weights": layer_weights,
                 "layer_scores": layer_scores,
                 "layer_weighted_contributions": weighted_contributions,
@@ -11220,10 +11239,9 @@ def analyze_recording_summary(
                 else "unavailable"
             ),
             "primary_source_mode": (
-                max(
-                    (
-                        (src, cnt)
-                        for src, cnt in {
+                (lambda _src_counts: max(_src_counts, key=lambda kv: kv[1])[0] if _src_counts else "unknown")(
+                    list(
+                        {
                             str(s).strip(): int(
                                 sum(
                                     1
@@ -11234,9 +11252,8 @@ def analyze_recording_summary(
                             for s in set(data.get("curvature_primary_source") or [])
                             if str(s).strip()
                         }.items()
-                    ),
-                    key=lambda kv: kv[1],
-                )[0]
+                    )
+                )
                 if data.get("curvature_primary_source")
                 else "unknown"
             ),

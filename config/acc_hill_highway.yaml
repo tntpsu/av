@@ -11,12 +11,12 @@
 #   ./start_av_stack.sh --config config/acc_hill_highway.yaml \
 #       --track-yaml tracks/scenarios/hill_g1_grade_following.yml --duration 90
 
-# ── Inherit hill_highway lateral tuning (no MPC overlay — q_lat auto-derived) ─
+_inherits: mpc_hill_highway.yaml
+
 control:
-  interframe_extrapolation:
-    enabled: true
   lateral:
-    steering_smoothing_alpha: 0.6       # gentler than highway (R100 corners, lower speed)
+    # Hill-highway lateral: gentler smoothing for R100 corners at lower speed
+    steering_smoothing_alpha: 0.6
     pp_feedback_gain: 0.0
     curve_feedforward_gain: 0.0
     curve_feedforward_threshold: 0.0
@@ -29,12 +29,9 @@ control:
     curve_intent_arm_distance_max_m: 25.0
     curve_intent_startup_ignore_frames: 30
   longitudinal:
-    target_speed: 12.0
     max_speed: 14.0
     speed_drag_gain: 0.020
     accel_target_smoothing_alpha: 0.75
-    # ACC override sets adjusted_target_speed but does NOT update reference_accel.
-    # With accel_tracking=true the inner accel PID fights the ACC speed command → oscillation.
     accel_tracking_enabled: false
 
 trajectory:
@@ -44,9 +41,6 @@ trajectory:
   reference_distractor_guard_speed_full: 6.0
   reference_distractor_input_guard_speed_on: 3.0
   reference_distractor_input_guard_speed_full: 6.0
-  speed_planner:
-    accel_speed_max: 12.0
-    decel_speed_max: 12.0
   speed_governor:
     curve_preview_enabled: true
 

@@ -1,7 +1,7 @@
 {
     "schema_version": "1",
     "description": "Frozen per-track metric baselines for scoring regression detection. Values from Phase 2.9 golden recordings (2026-03-15). Update only after validating new golden recordings.",
-    "frozen_at": "2026-03-15",
+    "frozen_at": "2026-04-01",
     "tolerances": {
         "overall_score": 2.0,
         "lateral_error_adj_rmse": 0.03,
@@ -29,13 +29,13 @@
             "commanded_jerk_p95": 1.440
         },
         "sweeping_highway": {
-            "overall_score": 93.6,
+            "overall_score": 91.4,
             "lateral_error_adj_rmse": 0.247,
             "accel_p95_filtered": 1.363,
             "commanded_jerk_p95": 1.440
         },
         "mixed_radius": {
-            "overall_score": 94.1,
+            "overall_score": 91.9,
             "lateral_error_adj_rmse": 0.214,
             "accel_p95_filtered": 1.254,
             "commanded_jerk_p95": 1.440

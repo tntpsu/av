@@ -26,7 +26,6 @@ control:
     curve_intent_arm_distance_max_m: 60.0
     curve_intent_startup_ignore_frames: 60
   longitudinal:
-    target_speed: 25.0      # m/s — crosses LMPC→NMPC boundary (20+1=21 m/s upshift)
     max_speed: 28.0         # headroom above target
     # speed_drag_gain, accel_target_smoothing_alpha: auto-derived from target_speed
   regime:
@@ -38,7 +37,7 @@ control:
     min_hold_frames: 20                # slightly shorter hold (25 m/s → regime changes are fast)
 
 trajectory:
-  target_speed: 25.0        # mirror of control.longitudinal.target_speed (dual registration)
+  target_speed: 25.0        # single source — synced to control.longitudinal + speed_planner
   # Curve phase thresholds — gentler for R600 (κ=0.00167) geometry
   curve_phase_on: 0.30
   curve_phase_off: 0.18
@@ -46,9 +45,7 @@ trajectory:
   curve_phase_commit_min_frames: 3
   curve_local_entry_on_base: 0.30
   curve_local_entry_on_tight: 0.25
-  speed_planner:
-    accel_speed_max: 25.0
-    decel_speed_max: 25.0
+  speed_planner: {}          # accel/decel_speed_max auto-synced from target_speed
   speed_governor:
     curve_preview_enabled: false          # map κ for speed cap (avoids perception noise)
     curve_cap_use_preview_curvature: false

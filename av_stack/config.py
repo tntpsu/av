@@ -75,6 +75,7 @@ class InterframeConfig:
     max_speed_change_mps: float = 3.0
     recording_mode: str = "summary"
     regime_gate: str = "mpc_only"
+    max_interframe_dt_s: float = 0.10
 
     @classmethod
     def from_config(cls, config: dict) -> "InterframeConfig":
@@ -88,6 +89,7 @@ class InterframeConfig:
             max_speed_change_mps=float(section.get("max_speed_change_mps", cls.max_speed_change_mps)),
             recording_mode=str(section.get("recording_mode", cls.recording_mode)),
             regime_gate=str(section.get("regime_gate", cls.regime_gate)),
+            max_interframe_dt_s=float(section.get("max_interframe_dt_s", cls.max_interframe_dt_s)),
         )
 
 
@@ -139,9 +141,24 @@ def load_config(config_path: Optional[str] = None) -> dict:
 
     with open(overlay_path, "r") as f:
         overlay = yaml.safe_load(f) or {}
+
+    # Single-level inheritance: merge parent overlay between base and child
+    inherits = overlay.pop("_inherits", None)
+    if inherits:
+        parent_path = base_path.parent / inherits
+        if parent_path.exists():
+            with open(parent_path, "r") as f:
+                parent = yaml.safe_load(f) or {}
+            parent.pop("_inherits", None)  # no recursive chains
+            config = _deep_merge(config, parent)
+            logger.info("Inherited config from %s", parent_path)
+        else:
+            logger.warning("Inherited config not found: %s", parent_path)
+
     logger.info("Merged config overlay from %s", overlay_path)
     merged = _deep_merge(config, overlay)
     # Stash raw overlay so downstream code (e.g. _derive_curvature_thresholds)
     # can distinguish explicit overlay keys from base defaults.
+    # Only the CHILD overlay's keys go here — parent keys are transparent to auto-derive.
     merged["_raw_overlay"] = overlay
     return merged

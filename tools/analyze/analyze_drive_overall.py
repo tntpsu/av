@@ -2603,7 +2603,7 @@ def _print_summary_report(recording_path: Path, summary: Dict, analyze_to_failur
         ttc_min = acc_health.get("acc_ttc_min_s", 999.0)
         jerk_p95 = acc_health.get("acc_jerk_gate_value_mps3", 0.0)
         emrg = acc_health.get("acc_emergency_brake_events", 0)
-        print(f"   Gap RMSE:               {gap_rmse:<9.2f}m [{_gate(gap_rmse, acc_health.get('gap_rmse_gate_pass', True))} \u2264 0.50m]")
+        print(f"   Gap RMSE:               {gap_rmse:<9.2f}m [{_gate(gap_rmse, acc_health.get('gap_rmse_gate_pass', True))} \u2264 {acc_health.get('acc_gap_rmse_gate_m', 35.0):.0f}m]")
         print(f"   TTC Minimum:            {ttc_min:<9.2f}s [{_gate(ttc_min, acc_health.get('ttc_min_gate_pass', True))} \u2265 2.00s]")
         print(
             f"   Jerk Gate Metric:       {jerk_p95:<9.3f}m/s\u00b3"

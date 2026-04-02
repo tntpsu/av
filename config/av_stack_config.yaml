@@ -4,9 +4,10 @@ control:
   # When enabled, fetches fresh GT vehicle state between camera frames and
   # runs lightweight MPC at ~30 Hz even when camera delivers at ~7.5 Hz.
   interframe_extrapolation:
-    enabled: false                    # Master switch (opt-in)
+    enabled: true                     # Validated on all tracks — decouples control rate from camera
     max_interframe_updates: 3         # Max inter-frame updates per camera cycle
     min_interframe_dt_s: 0.025        # Floor on inter-frame dt (prevents busy-spin)
+    max_interframe_dt_s: 0.10         # Ceiling on inter-frame dt (prevents steering discontinuity)
     stale_vehicle_state_ms: 50.0      # Max GT age before skipping update
     max_e_lat_jump_m: 0.5             # Discontinuity guard threshold
     max_speed_change_mps: 3.0         # Speed discontinuity guard threshold
@@ -746,7 +747,8 @@ trajectory:
     mpc_wheelbase_m: 2.5
     mpc_max_steer_rad: 0.5236       # 30° physical max steering angle
     mpc_q_lat: 0.5
-    mpc_q_heading: 5.0
+    mpc_q_lat_rate: 0.0              # lateral velocity damping (0=disabled) — tuned via E2E validation
+    mpc_q_heading: 10.0              # RAISED 5→10: provides phase lead — heading error (derivative of lateral) is penalised more heavily, preventing oscillation buildup
     mpc_q_speed: 2.0
     # r_steer: 10:1 cost ratio vs q_lat=0.5. Near-zero (0.0001) caused
     # oscillation at curve entries (no magnitude damping). 0.5 (old value)
@@ -763,6 +765,12 @@ trajectory:
     mpc_r_steer_rate_max_scale: 3.0         # cap: r_eff ≤ r_base × max_scale
     mpc_r_steer_rate_band_hysteresis: 1.0   # m/s hysteresis to prevent solver rebuild chattering
     mpc_r_steer_rate_kappa_off: 0.005      # curvature where scheduling fully deactivates (R200=0.005; R600/R500 keep scheduling)
+    # Curvature-adaptive r_steer_rate reduction for straight-line phase margin.
+    # On low-κ sections, reduce r_steer_rate so MPC corrects drift faster.
+    # r_eff *= max(min_scale, κ/kappa_on).  On curves (κ >= kappa_on), scale=1.0 (no change).
+    mpc_r_steer_rate_straight_damping_enabled: false  # disabled: lowering r_steer_rate alone increases overshoot; see q_heading approach
+    mpc_r_steer_rate_straight_kappa_on: 0.002
+    mpc_r_steer_rate_straight_min_scale: 0.3
     mpc_delta_rate_max: 0.15        # max Δδ_norm per step
     # Noise-jitter fixes (2026-02-17):
     # Fix A — first-step QP rate cost: adds 0.5*r_steer_rate*(delta[0]-last)^2 to the
@@ -798,6 +806,8 @@ trajectory:
     # on its own. Leaving bias_enabled=True would fight the direct feedback
     # by slowly reducing kappa when e_lat persists, creating a new equilibrium.
     mpc_bias_enabled: false
+    mpc_bias_relative_guard_min_kappa: 0.0005  # lowered from 0.001: ACC highway κ≈0.0009 must trigger guard
+    mpc_bias_ema_abs_max: 0.5                  # absolute clamp on bias EMA accumulator (meters)
     mpc_max_steering_rate_per_frame: 0.15  # safety net rate limiter (rad/frame) — much looser than PP
     mpc_delay_frames: 2                    # Smith predictor delay buffer length (frames; ~66ms at 30fps)
     smith_predictor_max_delay_s: 0.080      # Wall-clock cap on Smith predictor delay (prevents 4x overshoot at low camera rates; 0=disabled)

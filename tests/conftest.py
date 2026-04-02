@@ -48,8 +48,8 @@ BASELINE_SCORES: dict[str, float] = {
     "s_loop":           96.7,   # +1.1 from curvature adjustment on R40 turns
     "highway_65":       96.2,   # unchanged — no curves
     "hairpin_15":       91.6,   # Stanley k=3.0 (was PP 79.0). Trajectory green (83.4) with curv-adj.
-    "sweeping_highway": 93.6,   # +0.1 from curvature adjustment
-    "mixed_radius":     94.1,   # +0.2 from curvature adjustment
+    "sweeping_highway": 91.4,   # was 93.6; -2.2 from oscillation growth penalty (2026-04-01)
+    "mixed_radius":     91.9,   # was 94.1; -2.2 from oscillation growth penalty (2026-04-01)
 }
 
 # Per-track score tolerances (default 2.0). Wider for tracks with structural variance.

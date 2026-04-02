@@ -252,3 +252,17 @@ class TestInterframeConstants:
     def test_interframe_max_updates_per_cycle(self):
         from scoring_registry import INTERFRAME_MAX_UPDATES_PER_CYCLE
         assert INTERFRAME_MAX_UPDATES_PER_CYCLE == 3
+
+
+class TestOscillationAmplitudeGrowthConstants:
+    def test_threshold(self):
+        from scoring_registry import OSCILLATION_AMPLITUDE_GROWTH_THRESHOLD_MPS
+        assert OSCILLATION_AMPLITUDE_GROWTH_THRESHOLD_MPS == 0.001
+
+    def test_scale(self):
+        from scoring_registry import OSCILLATION_AMPLITUDE_GROWTH_SCALE
+        assert OSCILLATION_AMPLITUDE_GROWTH_SCALE == 5000.0
+
+    def test_max_penalty(self):
+        from scoring_registry import OSCILLATION_AMPLITUDE_GROWTH_MAX_PENALTY
+        assert OSCILLATION_AMPLITUDE_GROWTH_MAX_PENALTY == 15.0
