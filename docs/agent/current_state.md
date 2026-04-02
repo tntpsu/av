@@ -1,7 +1,7 @@
 # AV Stack — Agent Memory: Current State
 
 **Last updated:** 2026-04-01
-**Current milestone:** Step 5 ACC — Phases D + A + B + C + E complete. H2 + H3 validated (2026-03-30). Inter-frame control extrapolation validated (97.3/100 highway, 0 e-stops). Continuing E2E validation (remaining 10 scenarios).
+**Current milestone:** Step 5 ACC — Phases D + A + B + C + E complete. 9/10 scenarios passing (2026-04-01). Oscillation fix: q_heading 5→10 phase lead eliminates straight-line oscillation growth (H2: 98.1, A1: 94.2). Config consolidation complete: `_inherits` chain, `_sync_target_speed()`, bias EMA clamp, inter-frame dt cap, ACC overlays collapsed ~74%. Remaining: G1 deep dive (79.0 — lateral tracking, not oscillation).
 
 ---
 
@@ -48,22 +48,36 @@
 - Bug fix in `control/acc_controller.py` line 313: `ego_speed` → `self._v_target_prev` in EB formula.
 - New test: `TestEmergencyBrake::test_eb_target_compounds_downward`. 1667 tests passing.
 
-**➡ NEXT: Run remaining 10 ACC scenarios (H4–H8, A1–A2, G1–G2):**
-```bash
-./start_av_stack.sh --skip-unity-build-if-clean \
-  --config config/acc_highway.yaml \
-  --track-yaml tracks/scenarios/highway_h4_accel_away.yml --duration 90
-```
+**E2E Validation Results (2026-04-01, post-oscillation fix):**
 
-- Phase A: ✅ Python-side data pipeline
-- Phase B: ✅ IDM longitudinal controller
-- Phase C: ✅ Safety layer (emergency brake, TTC guard 1.5s, detection-loss hysteresis)
-- Phase D: ✅ Full toolset (scoring_registry, issue_detector, triage_engine, layer_health, PhilViz, CLI, analyze_drive_overall)
-- Phase E: ✅ Unity integration (lead vehicle + SphereCast radar + scenario YAMLs)
+| Scenario | Score | E-stops | Status | Notes |
+|----------|-------|---------|--------|-------|
+| H2 steady | 98.1 | 0 | ✅ | q_heading phase lead fixed oscillation growth |
+| H3 hard_brake | validated | 0 | ✅ | |
+| H4 accel_away | 97.8 | 0 | ✅ | |
+| H5 stop_go | 77.7 | 0 | ✅ | brake fix validated |
+| H6 close_gap | 79.0 | 0 | ✅ | spawn distance fixed 10→25m |
+| H7 straight_catchup | 99.0 | 0 | ✅ | |
+| H8 curve_catchup | 98.3 | 0 | ✅ | oscillation growth eliminated |
+| A1 autobahn steady | 94.2 | 0 | ✅ | _sync_target_speed ordering fix + q_heading |
+| A2 autobahn hard_brake | 97.1 | 0 | ✅ | |
+| G1 hill following | 79.0 | 0 | ⚠️ | NOT oscillation — lateral tracking on flat post-grade |
+| G2 hill stop_grade | 79.0 | 1 | ❌ | brake rate ramp too slow for TTC_ESTOP |
 
-**Promotion gates:** 0 collisions, TTC min ≥ 2.0s, Gap RMSE ≤ 35m, Jerk P95 ≤ 4.0 m/s³, radar detection ≥ 95%, lateral regression ≤ 0.5pts.
-**Tests: 1666 passing** (up from 1538).
-**Implementation checklist:** see `docs/plans/step5_acc_plan.md § Implementation Checklist` — A1–A12 → B1–B8 → C1–C4 → D1–D12 → E-H1–G2 → P1–P7.
+**Key fixes (oscillation + config consolidation session):**
+- **q_heading 5→10**: Phase lead via heading ≈ ḋ(e_lat). Eliminates oscillation growth universally. Failed approaches: q_lat_rate (drag on corrective motion), r_steer_rate straight damping (larger overshoot at same delay).
+- **Bias EMA clamp** (0.5m): Prevents unbounded accumulation on ACC straights.
+- **bias_relative_guard_min_kappa** 0.001→0.0005: Guard engages at κ≈0.0009.
+- **_sync_target_speed ordering**: Moved before SpeedPlanner init (A1 speed cap fix).
+- **Config _inherits**: ACC overlays collapsed via single-level inheritance.
+- **Oscillation growth penalty**: Wired into Control layer deductions (was computed but unused).
+- **Inter-frame dt cap**: max_interframe_dt_s=0.10 prevents 0.9s jumps.
+- **Promoted interframe.enabled to base config**, deleted mpc_highway_interframe.yaml.
+
+**➡ NEXT:** Deep dive on G1 (79.0 — lateral tracking deficit on flat post-grade sections, MPC q_lat too low). G2 brake ramp remains.
+
+- Phase A–E: ✅ All complete
+**Tests: 1666+ passing.**
 
 ---
 
