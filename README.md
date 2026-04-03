@@ -54,7 +54,7 @@ Data Recorder (HDF5) ← All sensor data + commands + ground truth
 - **Control**: `control/pid_controller.py` - Pure Pursuit (default), PID/Stanley alternatives; feedforward + feedback
 - **Bridge**: `bridge/server.py` - FastAPI server for Unity-Python communication
 - **Data**: `data/recorder.py` - HDF5 recording with ground truth support
-- **Main Stack**: `av_stack.py` - Integration of all components
+- **Main Stack**: `av_stack/orchestrator.py` - Integration of all components (AVStack class)
 
 ## Quick Start
 

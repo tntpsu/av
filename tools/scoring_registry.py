@@ -116,6 +116,39 @@ INTERFRAME_STALE_GT_THRESHOLD_MS: float = 50.0     # ms — skip inter-frame if 
 INTERFRAME_E_LAT_DIVERGENCE_THRESHOLD_M: float = 0.2  # m — flag if inter-frame e_lat diverges from camera
 INTERFRAME_MAX_UPDATES_PER_CYCLE: int = 3          # max inter-frame updates between camera frames
 
+# ── L_eff online wheelbase estimation ───────────────────────────────────────
+LEFF_NOMINAL_M: float = 2.5                  # m  — kinematic wheelbase (no adaptation)
+LEFF_BOUNDS_MIN_M: float = 1.5               # m  — hard safety clamp (60% of nominal)
+LEFF_BOUNDS_MAX_M: float = 8.0               # m  — hard safety clamp (320% of nominal; high due to actuator delay)
+LEFF_EXCITATION_THRESHOLD: float = 0.01      # —  — min |v·δ·δ_max·dt| per frame for RLS update
+
+# ── Dynamic bicycle model / tire estimation ────────────────────────────────
+TIRE_CF_NOMINAL: float = 40000.0              # N/rad — front cornering stiffness nominal
+TIRE_CR_NOMINAL: float = 40000.0              # N/rad — rear cornering stiffness nominal
+TIRE_CF_BOUNDS_MIN: float = 15000.0           # N/rad — hard lower safety clamp
+TIRE_CF_BOUNDS_MAX: float = 80000.0           # N/rad — hard upper safety clamp
+TIRE_CR_BOUNDS_MIN: float = 15000.0           # N/rad — hard lower safety clamp
+TIRE_CR_BOUNDS_MAX: float = 80000.0           # N/rad — hard upper safety clamp
+TIRE_SLIP_ANGLE_LINEAR_MAX_RAD: float = 0.087 # rad (~5°) — linear tire region limit
+TIRE_SLIP_ANGLE_SATURATION_RAD: float = 0.15  # rad (~8.6°) — saturation onset
+TIRE_EKF_INNOVATION_P95_GATE: float = 0.05    # rad/s — yaw rate innovation P95 gate
+TIRE_EKF_INNOVATION_DIVERGENCE: float = 0.15  # rad/s — innovation above this = divergent
+TIRE_EKF_IMU_YAW_RATE_P95_GATE: float = 0.30      # rad/s — IMU yaw rate P95 sanity check
+TIRE_EKF_IMU_SIGNAL_PRESENCE_GATE: float = 0.95    # min fraction of frames with non-zero IMU
+TIRE_UNDERSTEER_GRADIENT_NOMINAL: float = 0.002  # rad/(m/s²) — expected K_us
+TIRE_UNDERSTEER_GRADIENT_MAX: float = 0.01    # rad/(m/s²) — anomalous understeer threshold
+
+# ── Vehicle geometry sanity bounds ───────────────────────────────────────────
+VEHICLE_LF_MIN_M: float = 0.5                # m — min distance CoG to front axle
+VEHICLE_LF_MAX_M: float = 3.0                # m — max distance CoG to front axle
+VEHICLE_LR_MIN_M: float = 0.5                # m — min distance CoG to rear axle
+VEHICLE_LR_MAX_M: float = 3.0                # m — max distance CoG to rear axle
+VEHICLE_MASS_MIN_KG: float = 500.0            # kg — min vehicle mass
+VEHICLE_MASS_MAX_KG: float = 5000.0           # kg — max vehicle mass
+VEHICLE_IZ_MIN_KGMM: float = 200.0           # kg*m² — min yaw inertia
+VEHICLE_IZ_MAX_KGMM: float = 10000.0         # kg*m² — max yaw inertia
+GEOMETRY_OVERRIDE_FRAME_DEADLINE: int = 30    # frames — must receive Unity params within this
+
 # ── Benign stale reasons ─────────────────────────────────────────────────────
 BENIGN_STALE_REASONS: frozenset[str] = frozenset({"left_lane_low_visibility"})
 

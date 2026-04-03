@@ -1,7 +1,7 @@
 # AV Stack — Agent Memory: Current State
 
-**Last updated:** 2026-04-01
-**Current milestone:** Step 5 ACC — Phases D + A + B + C + E complete. 9/10 scenarios passing (2026-04-01). Oscillation fix: q_heading 5→10 phase lead eliminates straight-line oscillation growth (H2: 98.1, A1: 94.2). Config consolidation complete: `_inherits` chain, `_sync_target_speed()`, bias EMA clamp, inter-frame dt cap, ACC overlays collapsed ~74%. Remaining: G1 deep dive (79.0 — lateral tracking, not oscillation).
+**Last updated:** 2026-04-02
+**Current milestone:** Step 5 ACC — Phases D + A + B + C + E complete. 9/10 scenarios passing (2026-04-01). Dynamic bicycle model (Phase D–E) implemented but disabled — deep root cause shows steady-state model bias (not entry transients) caps score at 79. Config consolidation complete. Remaining: G1 deep dive, G2 brake ramp.
 
 ---
 
@@ -76,8 +76,38 @@
 
 **➡ NEXT:** Deep dive on G1 (79.0 — lateral tracking deficit on flat post-grade sections, MPC q_lat too low). G2 brake ramp remains.
 
-- Phase A–E: ✅ All complete
-**Tests: 1666+ passing.**
+---
+
+### Dynamic Bicycle Model MPC + IMU Yaw Rate EKF — IN PROGRESS (2026-04-02)
+
+**Full dynamic bicycle model implementation complete** (Phases A–O):
+- Phases A–O: 5-state dynamic bicycle model, EKF tire estimator, config, diagnostics, 29 tests
+
+**Root cause of 79/100 score (from curve-phase decomposition diagnostic):**
+1. **Steady-state model bias** (not entry transients) is 100% of curve error (bias_ratio=1.00)
+2. EKF diverges because derived yaw rate measurement (heading finite differences) is 2× noisier than IMU
+3. IMU angular_velocity.y already exists in every recording — never used
+
+**IMU Yaw Rate Integration (industry standard — Waymo/Aurora/Motional):**
+Plan: `.claude/plans/delightful-tickling-puddle.md`
+
+| Phase | Status | Details |
+|-------|--------|---------|
+| 1. Config/Params | ✅ | `tire_ekf_use_imu_yaw_rate`, `tire_ekf_imu_yaw_rate_r=0.001` in MPCParams + YAML |
+| 2. Plumbing | ✅ | orchestrator→pid_controller→mpc_controller: `angular_velocity_y` + sign correction |
+| 3. HDF5 recording | ✅ | `mpc_yaw_rate_measurement` + `mpc_imu_yaw_rate_raw` across 6 locations |
+| 4. Scoring registry | ✅ | `TIRE_EKF_IMU_YAW_RATE_P95_GATE`, `TIRE_EKF_IMU_SIGNAL_PRESENCE_GATE` |
+| 5. Diagnostics | ✅ | mpc_pipeline_analysis IMU section, issue_detector (2), triage (1), layer_health (1) |
+| 6. Tests | ✅ | 7 new in `TestTireEKFWithIMU` + 2 scoring registry guards = 36+71 passing |
+| 7. E2E validation | ⬜ | Awaiting full test suite + hill_highway E2E run |
+
+**Key design decisions:**
+- Sign convention: `r_imu = -angularVelocity.y` (Unity: negative Y = left turn; MPC: positive)
+- R=0.001 for IMU (10× tighter than derived R=0.01) — reflects direct physics measurement
+- Graceful fallback: if `imu_yaw_rate=None`, reverts to derived measurement
+- `mpc_hill_highway.yaml` enables full chain: dynamic_model + tire_ekf + IMU yaw rate
+
+**Tests: 36 dynamic bicycle (29+7) + 71 scoring registry (69+2).**
 
 ---
 

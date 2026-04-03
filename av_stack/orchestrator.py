@@ -1118,6 +1118,11 @@ class AVStack:
         # State
         self.running = False
         self.frame_count = 0
+        self._unity_geometry_applied = False
+        self._unity_lf = 0.0
+        self._unity_lr = 0.0
+        self._unity_mass = 0.0
+        self._unity_iz = 0.0
         self.target_fps = float(stack_cfg.get("target_loop_hz", 30.0))
         self.frame_interval = 1.0 / max(self.target_fps, 1e-3)
         self.topdown_recording_interval_frames = int(
@@ -1544,7 +1549,7 @@ class AVStack:
     _MPC_WEIGHT_AUTO_DERIVE_PARAMS: dict[
         tuple[str, str], tuple[float, float, float, float, float]
     ] = {
-        ("trajectory.mpc",  "mpc_q_lat"):  (0.5, 15.0, 0.002, 1.0, 4.0),
+        ("trajectory.mpc",  "mpc_q_lat"):  (1.0, 15.0, 0.002, 1.0, 4.0),
         ("trajectory.nmpc", "nmpc_q_lat"): (0.7, 15.0, 0.002, 1.0, 5.0),
     }
 
@@ -4424,6 +4429,9 @@ class AVStack:
         dt = now - self._last_interframe_wall_time if self._last_interframe_wall_time > 0 else self.frame_interval
         dt = max(cfg.min_interframe_dt_s, min(dt, cfg.max_interframe_dt_s))
 
+        # IMU yaw rate: negate Unity convention (negative Y = left turn)
+        _imu_yaw_rate = -float(vehicle_state_dict.get('angularVelocity', {}).get('y', 0.0))
+
         # Call lightweight MPC (no Smith predictor, no perception)
         result = self.controller.compute_interframe_steering(
             e_lat=e_lat,
@@ -4432,6 +4440,7 @@ class AVStack:
             curvature=ctx.get('curvature_signed', 0.0),
             dt=dt,
             grade_rad=ctx.get('grade_rad', 0.0),
+            imu_yaw_rate=_imu_yaw_rate,
         )
 
         if result is not None and result.get('steering') is not None:
@@ -8110,8 +8119,27 @@ class AVStack:
                         'roadCenterReferenceT',
                         vehicle_state_dict.get('road_center_reference_t')
                     ),
+                    'angular_velocity_y': float(
+                        vehicle_state_dict.get('angularVelocity', {}).get('y', 0.0)
+                    ),
+                    'dynamic_model_lf': float(vehicle_state_dict.get('dynamicModelLf', 0.0)),
+                    'dynamic_model_lr': float(vehicle_state_dict.get('dynamicModelLr', 0.0)),
+                    'dynamic_model_mass': float(vehicle_state_dict.get('dynamicModelMass', 0.0)),
+                    'dynamic_model_iz': float(vehicle_state_dict.get('dynamicModelIz', 0.0)),
                 }
                 
+                # One-shot: apply Unity ground truth geometry to MPC params
+                if not self._unity_geometry_applied:
+                    if vehicle_state_dict.get('dynamicModelParamsReady', False):
+                        _lf = float(vehicle_state_dict.get('dynamicModelLf', 0.0))
+                        _lr = float(vehicle_state_dict.get('dynamicModelLr', 0.0))
+                        _mass = float(vehicle_state_dict.get('dynamicModelMass', 0.0))
+                        _iz = float(vehicle_state_dict.get('dynamicModelIz', 0.0))
+                        if (0.5 < _lf < 3.0 and 0.5 < _lr < 3.0
+                                and 500 < _mass < 5000 and 200 < _iz < 10000):
+                            self._apply_unity_geometry(_lf, _lr, _mass, _iz)
+                            self._unity_geometry_applied = True
+
                 # Get control command with metadata for recording
                 control_command = self.controller.compute_control(
                     current_state,
@@ -9262,6 +9290,37 @@ class AVStack:
             'acc_detection_loss_event_delta': 0.0,
             'acc_no_detect_run_length': 0.0,
         }
+
+    def _apply_unity_geometry(self, lf: float, lr: float, mass: float, iz: float):
+        """One-shot: override MPC dynamic model geometry from Unity ground truth."""
+        mpc = getattr(self.controller, '_mpc_controller', None)
+        if mpc is None:
+            return
+        old_lf = mpc.params.vehicle_lf_m
+        old_lr = mpc.params.vehicle_lr_m
+        mpc.params.vehicle_lf_m = lf
+        mpc.params.vehicle_lr_m = lr
+        mpc.params.vehicle_mass_kg = mass
+        mpc.params.vehicle_iz_kgm2 = iz
+        # Reset EKF state so it converges from correct geometry baseline
+        import numpy as np
+        mpc._tire_theta = np.array([mpc.params.tire_cf_nominal, mpc.params.tire_cr_nominal])
+        mpc._tire_P = np.eye(2) * 1e6
+        mpc._tire_ekf_update_count = 0
+        mpc._tire_ekf_divergent_count = 0
+        mpc._v_y_est = 0.0
+        mpc._yaw_rate_est = 0.0
+        # Store for recording
+        self._unity_lf = lf
+        self._unity_lr = lr
+        self._unity_mass = mass
+        self._unity_iz = iz
+        logger.info(
+            f"Unity geometry override applied: "
+            f"lf={old_lf:.3f}→{lf:.3f}m lr={old_lr:.3f}→{lr:.3f}m "
+            f"mass={mass:.1f}kg Iz={iz:.1f}kg*m² "
+            f"K_us={mass*lr/(2*(lf+lr)*mpc.params.tire_cf_nominal) - mass*lf/(2*(lf+lr)*mpc.params.tire_cr_nominal):.4f}"
+        )
 
     def _pf_apply_acc_override(self, gov: dict, vehicle_state_dict: dict) -> dict:
         """
@@ -11775,6 +11834,29 @@ class AVStack:
             mpc_using_ground_truth=float(control_command.get('mpc_using_ground_truth', 0.0)),
             mpc_kappa_preview_used=bool(control_command.get('mpc_kappa_preview_used', False)),
             mpc_kappa_preview_range=float(control_command.get('mpc_kappa_preview_range', 0.0)),
+            mpc_leff_value=float(control_command.get('mpc_leff_value', 0.0)),
+            mpc_leff_theta=float(control_command.get('mpc_leff_theta', 0.0)),
+            mpc_leff_P=float(control_command.get('mpc_leff_P', 0.0)),
+            mpc_leff_innovation=float(control_command.get('mpc_leff_innovation', 0.0)),
+            mpc_leff_update_count=int(control_command.get('mpc_leff_update_count', 0)),
+            mpc_tire_cf=float(control_command.get('mpc_tire_cf', 0.0)),
+            mpc_tire_cr=float(control_command.get('mpc_tire_cr', 0.0)),
+            mpc_tire_ekf_innovation=float(control_command.get('mpc_tire_ekf_innovation', 0.0)),
+            mpc_tire_ekf_P_trace=float(control_command.get('mpc_tire_ekf_P_trace', 0.0)),
+            mpc_tire_slip_angle_front=float(control_command.get('mpc_tire_slip_angle_front', 0.0)),
+            mpc_tire_slip_angle_rear=float(control_command.get('mpc_tire_slip_angle_rear', 0.0)),
+            mpc_tire_understeer_gradient=float(control_command.get('mpc_tire_understeer_gradient', 0.0)),
+            mpc_dynamic_model_active=int(control_command.get('mpc_dynamic_model_active', 0)),
+            mpc_tire_ekf_update_count=int(control_command.get('mpc_tire_ekf_update_count', 0)),
+            mpc_v_y_estimate=float(control_command.get('mpc_v_y_estimate', 0.0)),
+            mpc_yaw_rate_estimate=float(control_command.get('mpc_yaw_rate_estimate', 0.0)),
+            mpc_yaw_rate_measurement=float(control_command.get('mpc_yaw_rate_measurement', 0.0)),
+            mpc_imu_yaw_rate_raw=float(control_command.get('mpc_imu_yaw_rate_raw', 0.0)),
+            mpc_unity_geometry_lf=float(getattr(self, '_unity_lf', 0.0)),
+            mpc_unity_geometry_lr=float(getattr(self, '_unity_lr', 0.0)),
+            mpc_unity_geometry_mass=float(getattr(self, '_unity_mass', 0.0)),
+            mpc_unity_geometry_iz=float(getattr(self, '_unity_iz', 0.0)),
+            mpc_unity_geometry_active=bool(getattr(self, '_unity_geometry_applied', False)),
             regime=int(control_command.get('regime', 0)),
             regime_blend_weight=float(control_command.get('regime_blend_weight', 1.0)),
             stanley_active=float(control_command.get('stanley_active', 0.0)),

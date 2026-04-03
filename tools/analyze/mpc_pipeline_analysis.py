@@ -18,6 +18,10 @@ from pathlib import Path
 import h5py
 import numpy as np
 
+# Scoring gate import
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from scoring_registry import TIRE_EKF_INNOVATION_P95_GATE
+
 
 # ──────────────────────────────────────────────────────────────────────────────
 # HDF5 loading helpers
@@ -91,6 +95,37 @@ def load_recording(path: Path) -> dict:
         data["nmpc_iterations"]             = _get("control/nmpc_iterations")
         data["nmpc_fallback_active"]        = _get("control/nmpc_fallback_active")
         data["nmpc_consecutive_failures"]   = _get("control/nmpc_consecutive_failures")
+
+        # L_eff estimation
+        data["mpc_leff_value"]                 = _get("control/mpc_leff_value")
+        data["mpc_leff_theta"]                 = _get("control/mpc_leff_theta")
+        data["mpc_leff_innovation"]            = _get("control/mpc_leff_innovation")
+        data["mpc_leff_update_count"]          = _get("control/mpc_leff_update_count")
+
+        # Tire estimation (dynamic bicycle)
+        data["mpc_tire_cf"]                    = _get("control/mpc_tire_cf")
+        data["mpc_tire_cr"]                    = _get("control/mpc_tire_cr")
+        data["mpc_tire_ekf_innovation"]        = _get("control/mpc_tire_ekf_innovation")
+        data["mpc_tire_ekf_P_trace"]           = _get("control/mpc_tire_ekf_P_trace")
+        data["mpc_tire_slip_angle_front"]      = _get("control/mpc_tire_slip_angle_front")
+        data["mpc_tire_slip_angle_rear"]       = _get("control/mpc_tire_slip_angle_rear")
+        data["mpc_tire_understeer_gradient"]   = _get("control/mpc_tire_understeer_gradient")
+        data["mpc_dynamic_model_active"]       = _get("control/mpc_dynamic_model_active")
+        data["mpc_tire_ekf_update_count"]      = _get("control/mpc_tire_ekf_update_count")
+        data["mpc_v_y_estimate"]               = _get("control/mpc_v_y_estimate")
+        data["mpc_yaw_rate_estimate"]          = _get("control/mpc_yaw_rate_estimate")
+        data["mpc_yaw_rate_measurement"]       = _get("control/mpc_yaw_rate_measurement")
+        data["mpc_imu_yaw_rate_raw"]           = _get("control/mpc_imu_yaw_rate_raw")
+
+        # IMU raw signal (3-axis angular velocity from Unity)
+        data["vehicle_angular_velocity"]       = _get("vehicle/angular_velocity")
+
+        # Unity geometry override
+        data["mpc_unity_geometry_lf"]          = _get("control/mpc_unity_geometry_lf")
+        data["mpc_unity_geometry_lr"]          = _get("control/mpc_unity_geometry_lr")
+        data["mpc_unity_geometry_mass"]        = _get("control/mpc_unity_geometry_mass")
+        data["mpc_unity_geometry_iz"]          = _get("control/mpc_unity_geometry_iz")
+        data["mpc_unity_geometry_active"]      = _get("control/mpc_unity_geometry_active")
 
         # Inter-frame extrapolation
         data["interframe_active"]              = _get("control/interframe_active")
@@ -331,6 +366,156 @@ def print_report(path: Path, data: dict):
     else:
         print("  [Smith raw or mpc_e_lat fields not in recording]")
 
+    # ── L_eff Estimation ──────────────────────────────────────────────────────
+    leff_val = data.get("mpc_leff_value")
+    if leff_val is not None and np.any(leff_val[:n] != 0):
+        print(f"\n{thin}")
+        print("L_eff Estimation")
+        lv = leff_val[:n]
+        leff_innov = data.get("mpc_leff_innovation")
+        leff_upd   = data.get("mpc_leff_update_count")
+
+        mpc_leff = lv[mpc_mask]
+        print(f"  L_eff final:     {mpc_leff[-1]:.3f} m  (nominal: 2.500 m)")
+        print(f"  L_eff range:     [{np.min(mpc_leff):.3f}, {np.max(mpc_leff):.3f}] m")
+        print(f"  L_eff mean:      {np.mean(mpc_leff):.3f} m")
+
+        if leff_innov is not None:
+            innov_mpc = np.abs(leff_innov[:n][mpc_mask])
+            print(f"  Innovation P95:  {np.percentile(innov_mpc, 95):.4f} rad")
+
+        if leff_upd is not None:
+            upd_mpc = leff_upd[:n][mpc_mask]
+            total_updates = int(np.max(upd_mpc)) if len(upd_mpc) > 0 else 0
+            print(f"  Updates:         {total_updates} frames")
+
+        if len(mpc_leff) > 100:
+            tail_std = float(np.std(mpc_leff[-100:]))
+            status = "\u2713 converged" if tail_std < 0.01 else "\u26a0 still adapting"
+            print(f"  Tail stability:  \u03c3={tail_std:.4f} m {status}")
+
+    # ── Tire Estimation (Dynamic Bicycle) ──────────────────────────────────
+    tire_cf = data.get("mpc_tire_cf")
+    if tire_cf is not None and np.any(tire_cf[:n] != 0):
+        print(f"\n{thin}")
+        print("Tire Estimation (Dynamic Bicycle)")
+        cf = tire_cf[:n]
+        cr = data.get("mpc_tire_cr")
+        dyn_active = data.get("mpc_dynamic_model_active")
+        tire_innov = data.get("mpc_tire_ekf_innovation")
+        slip_f = data.get("mpc_tire_slip_angle_front")
+        slip_r = data.get("mpc_tire_slip_angle_rear")
+        k_us = data.get("mpc_tire_understeer_gradient")
+        tire_upd = data.get("mpc_tire_ekf_update_count")
+
+        # Dynamic model active rate (MPC frames only)
+        if dyn_active is not None:
+            da_mpc = dyn_active[:n][mpc_mask]
+            da_pct = float(np.mean(da_mpc > 0.5) * 100.0)
+            da_yes = "YES" if da_pct > 50 else "NO"
+            print(f"  Dynamic model active:    {da_yes} ({da_pct:.1f}% of MPC frames)")
+        else:
+            print("  Dynamic model active:    [field not in recording]")
+
+        # C_f / C_r final
+        cf_mpc = cf[mpc_mask]
+        if len(cf_mpc) > 0:
+            print(f"  C_f final:               {cf_mpc[-1]:,.0f} N/rad (nominal: 40,000)")
+        if cr is not None:
+            cr_mpc = cr[:n][mpc_mask]
+            if len(cr_mpc) > 0:
+                print(f"  C_r final:               {cr_mpc[-1]:,.0f} N/rad (nominal: 40,000)")
+
+        # Understeer gradient
+        if k_us is not None:
+            kus_mpc = k_us[:n][mpc_mask]
+            if len(kus_mpc) > 0:
+                print(f"  Understeer gradient K_us: {kus_mpc[-1]:.4f} rad/(m/s\u00b2)")
+
+        # EKF innovation P95 with gate
+        if tire_innov is not None:
+            innov_mpc = np.abs(tire_innov[:n][mpc_mask])
+            if len(innov_mpc) > 0:
+                innov_p95 = float(np.percentile(innov_mpc, 95))
+                gate = "PASS" if innov_p95 < TIRE_EKF_INNOVATION_P95_GATE else "FAIL"
+                print(f"  EKF innovation P95:      {innov_p95:.4f} rad/s  "
+                      f"[{gate} < {TIRE_EKF_INNOVATION_P95_GATE}]")
+
+        # Slip angles
+        if slip_f is not None:
+            sf_mpc = np.abs(slip_f[:n][mpc_mask])
+            if len(sf_mpc) > 0:
+                sf_p95 = float(np.percentile(sf_mpc, 95))
+                print(f"  Slip angle front P95:    {sf_p95:.3f} rad ({np.degrees(sf_p95):.1f} deg)")
+        if slip_r is not None:
+            sr_mpc = np.abs(slip_r[:n][mpc_mask])
+            if len(sr_mpc) > 0:
+                sr_p95 = float(np.percentile(sr_mpc, 95))
+                print(f"  Slip angle rear P95:     {sr_p95:.3f} rad ({np.degrees(sr_p95):.1f} deg)")
+
+        # EKF updates
+        if tire_upd is not None:
+            upd_mpc = tire_upd[:n][mpc_mask]
+            total_updates = int(np.max(upd_mpc)) if len(upd_mpc) > 0 else 0
+            print(f"  EKF updates:             {total_updates} frames")
+
+    # ── Unity Geometry Override ────────────────────────────────────────────
+    geo_lf = data.get("mpc_unity_geometry_lf")
+    geo_active = data.get("mpc_unity_geometry_active")
+    if geo_lf is not None and np.any(geo_lf[:n] > 0):
+        lf_val = float(geo_lf[n - 1])
+        lr_val = float(data.get("mpc_unity_geometry_lr", np.zeros(1))[n - 1])
+        mass_val = float(data.get("mpc_unity_geometry_mass", np.zeros(1))[n - 1])
+        iz_val = float(data.get("mpc_unity_geometry_iz", np.zeros(1))[n - 1])
+        active = bool(geo_active[n - 1]) if geo_active is not None else False
+        print(f"\n{thin}")
+        print("Unity Geometry Override")
+        print(f"  Status:          {'ACTIVE' if active else 'INACTIVE'}")
+        print(f"  l_f:             {lf_val:.3f} m")
+        print(f"  l_r:             {lr_val:.3f} m")
+        print(f"  Wheelbase:       {lf_val + lr_val:.3f} m")
+        print(f"  Asymmetry ratio: {lf_val / (lf_val + lr_val):.3f} (0.5 = symmetric)")
+        print(f"  Mass:            {mass_val:.1f} kg")
+        print(f"  Iz:              {iz_val:.1f} kg*m²")
+        _cr = data.get("mpc_tire_cr")
+        if tire_cf is not None and _cr is not None:
+            cf_final = float(tire_cf[n - 1]) if tire_cf[n - 1] > 0 else 40000.0
+            cr_final = float(_cr[n - 1]) if _cr[n - 1] > 0 else 40000.0
+            L = lf_val + lr_val
+            if L > 0 and cf_final > 0 and cr_final > 0:
+                K_us = mass_val * lr_val / (2 * L * cf_final) - mass_val * lf_val / (2 * L * cr_final)
+                print(f"  K_us (understeer): {K_us:.4f} rad/(m/s²) "
+                      f"[{'physical' if K_us > 0.0005 else 'near-neutral'}]")
+
+    # ── IMU Yaw Rate Quality ───────────────────────────────────────────────
+    imu_raw = data.get("mpc_imu_yaw_rate_raw")
+    yr_meas = data.get("mpc_yaw_rate_measurement")
+    if imu_raw is not None and mpc_mask is not None and np.sum(mpc_mask) > 0:
+        imu_mpc = np.abs(imu_raw[:n][mpc_mask])
+        nonzero_frac = float(np.mean(imu_mpc > 1e-6))
+        print(f"\n{thin}")
+        print("IMU Yaw Rate Quality")
+
+        # Determine source from yaw_rate_measurement vs derived comparison
+        if yr_meas is not None:
+            yr_mpc = np.abs(yr_meas[:n][mpc_mask])
+            print(f"  |yaw_rate_meas| P50 / P95 / MAX: "
+                  f"{_fmt(np.percentile(yr_mpc,50))} / {_fmt(np.percentile(yr_mpc,95))} / "
+                  f"{_fmt(np.max(yr_mpc))} rad/s")
+        print(f"  |IMU raw|        P50 / P95 / MAX: "
+              f"{_fmt(np.percentile(imu_mpc,50))} / {_fmt(np.percentile(imu_mpc,95))} / "
+              f"{_fmt(np.max(imu_mpc))} rad/s")
+        print(f"  Signal present:  {nonzero_frac*100:.0f}% "
+              f"[{'PASS' if nonzero_frac >= 0.95 else 'FAIL'} >= 95%]")
+
+        # Compare IMU vs derived jitter if we have heading data
+        if yr_meas is not None and len(yr_mpc) > 2:
+            imu_jitter = float(np.std(np.diff(imu_mpc)))
+            meas_jitter = float(np.std(np.diff(yr_mpc)))
+            if meas_jitter > 1e-9:
+                ratio = imu_jitter / meas_jitter
+                print(f"  IMU jitter σ(Δ): {imu_jitter:.4f} rad/s²")
+
     # ── MPC state quality ────────────────────────────────────────────────────
     print(f"\n{thin}")
     print("MPC State Quality")
@@ -465,6 +650,80 @@ def print_report(path: Path, data: dict):
                 if len(if_steer_delta) > 0 and len(noif_steer_delta) > 0:
                     print(f"  Steering delta:      if={np.mean(if_steer_delta):.4f}  "
                           f"no-if={np.mean(noif_steer_delta):.4f}")
+
+    # ── Curve-Phase Decomposition ──────────────────────────────────────────────
+    kappa_arr = data.get("mpc_kappa_ref")
+    if kappa_arr is not None and e_lat is not None:
+        print(f"\n{thin}")
+        print("Curve-Phase Decomposition  (entry 20% / steady 60% / exit 20%)")
+        kappa = kappa_arr[:n]
+        mpc_elat_full = e_lat[:n]
+        speed_arr = data.get("speed")
+
+        # Detect contiguous curve runs where |κ| > 0.005 (R < 200m)
+        curve_kappa_threshold = 0.005
+        curve_bit = np.abs(kappa) > curve_kappa_threshold
+        diff_c = np.diff(curve_bit.astype(int))
+        c_starts = np.where(diff_c == 1)[0] + 1
+        c_ends = np.where(diff_c == -1)[0] + 1
+        if curve_bit[0]:
+            c_starts = np.concatenate([[0], c_starts])
+        if curve_bit[-1]:
+            c_ends = np.concatenate([c_ends, [n]])
+
+        # Filter to substantial curves (> 30 frames ≈ 1 sec)
+        curves = [(int(s), int(e)) for s, e in zip(c_starts, c_ends) if e - s > 30]
+
+        if not curves:
+            print("  [No substantial curves detected (|κ| > 0.005 for > 30 frames)]")
+        else:
+            all_entry, all_steady, all_exit = [], [], []
+            for ci, (cs, ce) in enumerate(curves):
+                nf = ce - cs
+                entry_end = cs + nf // 5
+                exit_start = ce - nf // 5
+                if entry_end >= exit_start:
+                    continue  # curve too short for meaningful split
+
+                entry_e = np.abs(mpc_elat_full[cs:entry_end])
+                steady_e = np.abs(mpc_elat_full[entry_end:exit_start])
+                exit_e = np.abs(mpc_elat_full[exit_start:ce])
+                all_entry.extend(entry_e)
+                all_steady.extend(steady_e)
+                all_exit.extend(exit_e)
+
+                spd_str = f"  v={np.mean(speed_arr[cs:ce]):.1f}" if speed_arr is not None else ""
+                kap_mean = float(np.mean(np.abs(kappa[cs:ce])))
+                print(f"\n  C{ci+1} [{cs}..{ce}] ({nf}fr){spd_str}m/s  κ={kap_mean:.4f}")
+                print(f"    {'Phase':<8} {'frames':>6}  {'P50':>6}  {'P95':>6}  {'MAX':>6}")
+                for label, arr_phase in [("ENTRY", entry_e), ("STEADY", steady_e), ("EXIT", exit_e)]:
+                    print(f"    {label:<8} {len(arr_phase):>6d}  "
+                          f"{np.percentile(arr_phase, 50):>6.3f}  "
+                          f"{np.percentile(arr_phase, 95):>6.3f}  "
+                          f"{np.max(arr_phase):>6.3f}")
+
+            if all_entry:
+                ae, ase, axe = np.array(all_entry), np.array(all_steady), np.array(all_exit)
+                print(f"\n  ── AGGREGATE across {len(curves)} curves ──")
+                print(f"    {'Phase':<8} {'frames':>6}  {'P50':>6}  {'P95':>6}  {'MAX':>6}")
+                for label, ap in [("ENTRY", ae), ("STEADY", ase), ("EXIT", axe)]:
+                    print(f"    {label:<8} {len(ap):>6d}  "
+                          f"{np.percentile(ap, 50):>6.3f}  "
+                          f"{np.percentile(ap, 95):>6.3f}  "
+                          f"{np.max(ap):>6.3f}")
+
+                # Diagnosis: is the bottleneck entry transients or steady-state tracking?
+                entry_p50 = float(np.percentile(ae, 50))
+                steady_p50 = float(np.percentile(ase, 50))
+                if steady_p50 > entry_p50 * 1.1:
+                    diagnosis = "STEADY-STATE dominated — model bias, not turn-in latency"
+                elif entry_p50 > steady_p50 * 1.3:
+                    diagnosis = "ENTRY dominated — late turn-in or authority gap"
+                else:
+                    diagnosis = "MIXED — both entry and steady-state contribute"
+                print(f"\n  Diagnosis: {diagnosis}")
+                print(f"    Entry P50={entry_p50:.3f}m  Steady P50={steady_p50:.3f}m  "
+                      f"ratio={entry_p50/max(steady_p50,0.001):.2f}")
 
     # ── Top-10 worst MPC frames ───────────────────────────────────────────────
     print(f"\n{thin}")

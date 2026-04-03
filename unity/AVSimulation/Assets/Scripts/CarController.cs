@@ -173,6 +173,13 @@ public class CarController : MonoBehaviour
     private WheelCollider rearLeftWheel;
     private WheelCollider rearRightWheel;
     private bool wheelCollidersReady = false;
+
+    // Dynamic bicycle model geometry (computed from Rigidbody + WheelColliders)
+    private float _dynamicModelLf = 0f;
+    private float _dynamicModelLr = 0f;
+    private float _dynamicModelMass = 0f;
+    private float _dynamicModelIz = 0f;
+    private bool _dynamicModelParamsReady = false;
     private bool wheelOrientationLogged = false;
     private Collider bodyCollider;
     private float effectiveChassisGroundMinClearanceM = 0.08f;
@@ -258,7 +265,7 @@ public class CarController : MonoBehaviour
             // NOTE: Unity has both 'drag' (old) and 'linearDamping' (new) - set both to 0
             rb.linearDamping = 0f;
             rb.angularDamping = 0f;
-            
+
             // In GT mode we directly move the rigidbody; interpolation can cause visual bounce.
             rb.interpolation = RigidbodyInterpolation.None;
             // Also set the old 'drag' property if it exists (for compatibility)
@@ -337,6 +344,56 @@ public class CarController : MonoBehaviour
         Debug.Log(
             $"WheelColliders: ready={wheelCollidersReady} boundsCenter={bounds.center} " +
             $"halfWidth={halfWidth:F2} halfLength={halfLength:F2} wheelRadius={wheelRadius:F2}"
+        );
+    }
+
+    /// <summary>
+    /// Compute dynamic bicycle model geometry from Rigidbody and WheelCollider positions.
+    /// Must be called after first physics step (inertiaTensor not ready in Start/Awake).
+    /// </summary>
+    private void ComputeDynamicModelParams()
+    {
+        if (rb == null || !wheelCollidersReady) return;
+
+        Vector3 com = rb.centerOfMass;  // local space
+        Vector3 frontAxle = 0.5f * (frontLeftWheel.transform.localPosition
+                                   + frontRightWheel.transform.localPosition);
+        Vector3 rearAxle  = 0.5f * (rearLeftWheel.transform.localPosition
+                                   + rearRightWheel.transform.localPosition);
+
+        float wcLf = Mathf.Abs(frontAxle.z - com.z);
+        float wcLr = Mathf.Abs(rearAxle.z - com.z);
+
+        // WheelCollider positions may not match declared wheelbase (collider bounds
+        // are often smaller). Use declared wheelbaseMeters with CoM offset ratio.
+        float wcWheelbase = wcLf + wcLr;
+        if (wcWheelbase > 0.01f)
+        {
+            // Scale WheelCollider-based split to match declared wheelbase
+            float ratio = wcLf / wcWheelbase;
+            _dynamicModelLf = ratio * wheelbaseMeters;
+            _dynamicModelLr = (1.0f - ratio) * wheelbaseMeters;
+        }
+        else
+        {
+            // Fallback: split declared wheelbase 50/50
+            _dynamicModelLf = wheelbaseMeters * 0.5f;
+            _dynamicModelLr = wheelbaseMeters * 0.5f;
+        }
+
+        _dynamicModelMass = rb.mass;
+        _dynamicModelIz = rb.inertiaTensor.y;  // yaw axis inertia
+
+        _dynamicModelParamsReady = (_dynamicModelLf > 0.3f && _dynamicModelLr > 0.3f
+                                    && _dynamicModelMass > 100f && _dynamicModelIz > 10f);
+
+        Debug.Log(
+            $"DynamicModelParams: ready={_dynamicModelParamsReady} " +
+            $"lf={_dynamicModelLf:F3}m lr={_dynamicModelLr:F3}m " +
+            $"(WC: lf={wcLf:F3} lr={wcLr:F3} L={wcWheelbase:F3}) " +
+            $"declared_L={wheelbaseMeters:F3}m " +
+            $"mass={_dynamicModelMass:F1}kg Iz={_dynamicModelIz:F1}kg*m^2 " +
+            $"com={com}"
         );
     }
 
@@ -885,6 +942,12 @@ public class CarController : MonoBehaviour
                 }
             }
             lastFixedUpdateRealtime = realtimeNow;
+        }
+
+        // One-shot: compute dynamic model geometry from Rigidbody after first physics step
+        if (wheelCollidersReady && !_dynamicModelParamsReady)
+        {
+            ComputeDynamicModelParams();
         }
 
         // Update position tracking for teleportation detection (even in physics mode)
@@ -1705,6 +1768,11 @@ public class CarController : MonoBehaviour
             brakeTorque = brakeInput * brakeForce,
             maxSteerAngle = maxSteerAngle,
             wheelbaseMeters = wheelbaseMeters,
+            dynamicModelLf = _dynamicModelLf,
+            dynamicModelLr = _dynamicModelLr,
+            dynamicModelMass = _dynamicModelMass,
+            dynamicModelIz = _dynamicModelIz,
+            dynamicModelParamsReady = _dynamicModelParamsReady,
             fixedDeltaTime = Time.fixedDeltaTime,
             unityTime = Time.time,
             unityFrameCount = Time.frameCount,
@@ -1795,6 +1863,12 @@ public class VehicleState
     public float brakeTorque;
     public float maxSteerAngle = 35f;
     public float wheelbaseMeters = 2.5f;
+    // Dynamic bicycle model geometry (from Rigidbody + WheelColliders)
+    public float dynamicModelLf = 0.0f;
+    public float dynamicModelLr = 0.0f;
+    public float dynamicModelMass = 0.0f;
+    public float dynamicModelIz = 0.0f;
+    public bool dynamicModelParamsReady = false;
     public float fixedDeltaTime = 0.02f;
     public float unityTime = 0.0f;
     public int unityFrameCount = 0;

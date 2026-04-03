@@ -17,7 +17,7 @@ Dynamics (discrete, Frenet error model, small-angle linearization):
 import logging
 import math
 import time
-from dataclasses import dataclass, fields
+from dataclasses import dataclass, fields, replace as _dc_replace
 from typing import Dict, Optional
 
 import numpy as np
@@ -137,6 +137,40 @@ class MPCParams:
     active_mild_curve_authority_ratio: float = 0.88
     active_mild_curve_authority_full_ratio: float = 1.0
 
+    # Online effective wheelbase estimation (RLS on heading prediction error)
+    leff_estimation_enabled: bool = False       # off by default — safe for all configs
+    leff_forgetting_factor: float = 0.995       # λ — RLS memory (~200-frame window)
+    leff_initial_P: float = 100.0               # initial RLS covariance (high = fast initial learning)
+    leff_min_speed_mps: float = 3.0             # only update when v > this (low-speed kinematics unreliable)
+    leff_min_excitation: float = 0.01            # min |regressor| to update (avoid division noise)
+    leff_bounds_min: float = 1.5                # hard clamp — never go below 1.5m
+    leff_bounds_max: float = 8.0                # hard clamp — never go above 8.0m
+
+    # Dynamic bicycle model (disabled by default — kinematic model remains active)
+    dynamic_model_enabled: bool = False
+    vehicle_mass_kg: float = 1500.0             # kg — Unity Rigidbody mass
+    vehicle_iz_kgm2: float = 1250.0             # kg·m² — yaw inertia (from collider geometry)
+    vehicle_lf_m: float = 1.125                 # m — CoG to front axle
+    vehicle_lr_m: float = 1.125                 # m — CoG to rear axle
+    tire_cf_nominal: float = 40000.0            # N/rad — front cornering stiffness initial
+    tire_cr_nominal: float = 40000.0            # N/rad — rear cornering stiffness initial
+    q_vy: float = 0.5                           # lateral velocity state cost
+    q_yawrate: float = 1.0                      # yaw rate state cost
+
+    # EKF tire cornering stiffness estimation
+    tire_ekf_enabled: bool = False
+    tire_ekf_process_noise: float = 100.0       # Q diagonal — C_f/C_r drift per step
+    tire_ekf_measurement_noise: float = 0.01    # R — yaw rate measurement noise (rad/s)²
+    tire_ekf_min_speed_mps: float = 5.0         # no update below this (v_y/v_x singularity)
+    tire_ekf_cf_min: float = 15000.0            # N/rad — hard lower clamp
+    tire_ekf_cf_max: float = 80000.0            # N/rad — hard upper clamp
+    tire_ekf_cr_min: float = 15000.0            # N/rad — hard lower clamp
+    tire_ekf_cr_max: float = 80000.0            # N/rad — hard upper clamp
+    tire_ekf_innovation_divergence_threshold: float = 0.15  # rad/s
+    tire_ekf_slip_saturation_rad: float = 0.15  # pause EKF when |α| exceeds this
+    tire_ekf_use_imu_yaw_rate: bool = True       # Use direct IMU gyro (industry standard)
+    tire_ekf_imu_yaw_rate_r: float = 0.001       # (rad/s)² — measurement noise for IMU gyro
+
     # Curvature preview horizon (feedforward from trajectory planner)
     curvature_preview_enabled: bool = False   # Default OFF — safe for existing configs
     curvature_preview_gain: float = 1.0       # Scale factor for preview curvature
@@ -207,7 +241,10 @@ class MPCSolver:
     def __init__(self, params: MPCParams):
         self.p = params
         self._N = params.horizon
-        self._nx = 3   # [e_lat, e_heading, v]
+        if params.dynamic_model_enabled:
+            self._nx = 5   # [e_lat, e_heading, v_y, r, v_x]
+        else:
+            self._nx = 3   # [e_lat, e_heading, v]
         self._nu = 2   # [δ_norm, a]
         self._prob: Optional[osqp.OSQP] = None
         self._warm_x = None
@@ -266,6 +303,23 @@ class MPCSolver:
         """
         return math.atan(wheelbase_m * kappa) / max_steer_rad
 
+    @staticmethod
+    def _feedforward_delta_norm_dynamic(kappa: float, v_x: float,
+                                         C_f: float, C_r: float,
+                                         l_f: float, l_r: float,
+                                         mass: float, max_steer_rad: float) -> float:
+        """Dynamic bicycle model steady-state feedforward with understeer gradient.
+
+        δ_ss = L·κ + K_us·v²·κ  where K_us = (m/L)·(l_r/C_f − l_f/C_r).
+        At low speed or zero curvature, reduces to kinematic feedforward.
+        """
+        L = l_f + l_r
+        if abs(C_f) < 1.0 or abs(C_r) < 1.0:
+            return math.atan(L * kappa) / max_steer_rad
+        K_us = (mass / L) * (l_r / C_f - l_f / C_r)
+        delta_rad = L * kappa + K_us * v_x * v_x * kappa
+        return delta_rad / max_steer_rad
+
     # ----- QP construction -----
 
     def _build_qp(self):
@@ -277,12 +331,18 @@ class MPCSolver:
 
         # --- P (Hessian): block diagonal ---
         P_diag = np.zeros(nz)
+        _dyn = self.p.dynamic_model_enabled
         for k in range(N):
             base = k * (nx + nu)
             # State cost at step k
             P_diag[base + 0] = self.p.q_lat
             P_diag[base + 1] = self.p.q_heading
-            P_diag[base + 2] = self.p.q_speed
+            if _dyn:
+                P_diag[base + 2] = self.p.q_vy         # v_y cost
+                P_diag[base + 3] = self.p.q_yawrate     # yaw rate cost
+                P_diag[base + 4] = self.p.q_speed        # v_x cost
+            else:
+                P_diag[base + 2] = self.p.q_speed
             # Input cost at step k
             P_diag[base + nx + 0] = self.p.r_steer
             P_diag[base + nx + 1] = self.p.r_accel
@@ -291,7 +351,12 @@ class MPCSolver:
         term_base = N * (nx + nu)
         P_diag[term_base + 0] = self.p.q_lat * self.p.q_lat_terminal_scale
         P_diag[term_base + 1] = self.p.q_heading * self.p.q_heading_terminal_scale
-        P_diag[term_base + 2] = self.p.q_speed
+        if _dyn:
+            P_diag[term_base + 2] = self.p.q_vy
+            P_diag[term_base + 3] = self.p.q_yawrate
+            P_diag[term_base + 4] = self.p.q_speed
+        else:
+            P_diag[term_base + 2] = self.p.q_speed
 
         # Off-diagonal terms via COO triplets (OSQP requires upper-triangular P)
         rows, cols, vals = [], [], []
@@ -396,23 +461,43 @@ class MPCSolver:
         self._dyn_row_start = nx  # first dynamics row index in A
         for k in range(N):
             row = sparse.lil_matrix((nx, nz))
-            # x[k] block (columns k*(nx+nu) .. k*(nx+nu)+nx-1)
             x_col = k * (nx + nu)
-            row[0, x_col + 0] = 1.0    # e_lat → e_lat
-            row[0, x_col + 1] = _EPS   # v*dt (updated per-solve)
-            row[1, x_col + 1] = 1.0    # e_heading → e_heading
-            row[2, x_col + 2] = 1.0    # v → v
-
-            # u[k] block
             u_col = k * (nx + nu) + nx
-            row[1, u_col + 0] = _EPS   # (v/L)*δ_max*dt (updated per-solve)
-            row[2, u_col + 1] = _EPS   # dt (updated per-solve)
-
-            # -I for x[k+1]
             x_next_col = (k + 1) * (nx + nu) if k < N - 1 else N * (nx + nu)
-            row[0, x_next_col + 0] = -1.0
-            row[1, x_next_col + 1] = -1.0
-            row[2, x_next_col + 2] = -1.0
+
+            if _dyn:
+                # Dynamic bicycle: 5 states [e_lat, e_heading, v_y, r, v_x]
+                # A_k (5×5) — all potentially-nonzero entries need placeholders
+                row[0, x_col + 0] = 1.0    # e_lat → e_lat
+                row[0, x_col + 1] = _EPS   # v_x*dt (heading coupling)
+                row[0, x_col + 2] = _EPS   # dt (v_y coupling)
+                row[1, x_col + 1] = 1.0    # e_heading → e_heading
+                row[1, x_col + 3] = _EPS   # dt (yaw rate coupling)
+                row[2, x_col + 2] = _EPS   # v_y self-coupling (tire damping)
+                row[2, x_col + 3] = _EPS   # v_y ← r coupling
+                row[3, x_col + 2] = _EPS   # r ← v_y coupling
+                row[3, x_col + 3] = _EPS   # r self-coupling (tire damping)
+                row[4, x_col + 4] = 1.0    # v_x → v_x
+                # B_k (5×2) — steering affects v_y and r; accel affects v_x
+                row[2, u_col + 0] = _EPS   # C_f*δ_max/m*dt
+                row[3, u_col + 0] = _EPS   # C_f*l_f*δ_max/Iz*dt
+                row[4, u_col + 1] = _EPS   # dt
+                # -I for x[k+1]
+                for s in range(nx):
+                    row[s, x_next_col + s] = -1.0
+            else:
+                # Kinematic bicycle: 3 states [e_lat, e_heading, v]
+                row[0, x_col + 0] = 1.0    # e_lat → e_lat
+                row[0, x_col + 1] = _EPS   # v*dt (updated per-solve)
+                row[1, x_col + 1] = 1.0    # e_heading → e_heading
+                row[2, x_col + 2] = 1.0    # v → v
+                # B_k
+                row[1, u_col + 0] = _EPS   # (v/L)*δ_max*dt
+                row[2, u_col + 1] = _EPS   # dt
+                # -I for x[k+1]
+                row[0, x_next_col + 0] = -1.0
+                row[1, x_next_col + 1] = -1.0
+                row[2, x_next_col + 2] = -1.0
 
             A_rows.append(row.tocsc())
             l_parts.append(np.zeros(nx))
@@ -429,21 +514,48 @@ class MPCSolver:
             l_parts.append(np.array([-1.0, -self.p.max_decel]))
             u_parts.append(np.array([1.0, self.p.max_accel]))
 
-        # ---- 4. State bounds (speed only): for k = 0..N ----
+        # ---- 4. State bounds ----
+        # Kinematic: speed only (1 row per step).
+        # Dynamic: v_y, r, and v_x (3 rows per step).
         self._state_row_start = nx + N * nx + N * nu
-        for k in range(N + 1):
-            row = sparse.lil_matrix((1, nz))
-            if k < N:
-                x_col = k * (nx + nu) + 2   # v at step k
-            else:
-                x_col = N * (nx + nu) + 2   # v at terminal
-            row[0, x_col] = 1.0
-            A_rows.append(row.tocsc())
-            l_parts.append(np.array([self.p.v_min]))
-            u_parts.append(np.array([self.p.v_max]))
+        if _dyn:
+            # Bound v_y (index 2), r (index 3), v_x (index 4) per step
+            self._state_rows_per_step = 3
+            for k in range(N + 1):
+                x_base = k * (nx + nu) if k < N else N * (nx + nu)
+                # v_y bound
+                row_vy = sparse.lil_matrix((1, nz))
+                row_vy[0, x_base + 2] = 1.0
+                A_rows.append(row_vy.tocsc())
+                l_parts.append(np.array([-2.0]))     # |v_y| ≤ 2.0 m/s
+                u_parts.append(np.array([2.0]))
+                # r bound
+                row_r = sparse.lil_matrix((1, nz))
+                row_r[0, x_base + 3] = 1.0
+                A_rows.append(row_r.tocsc())
+                l_parts.append(np.array([-1.0]))      # |r| ≤ 1.0 rad/s
+                u_parts.append(np.array([1.0]))
+                # v_x bound
+                row_vx = sparse.lil_matrix((1, nz))
+                row_vx[0, x_base + 4] = 1.0
+                A_rows.append(row_vx.tocsc())
+                l_parts.append(np.array([self.p.v_min]))
+                u_parts.append(np.array([self.p.v_max]))
+        else:
+            self._state_rows_per_step = 1
+            for k in range(N + 1):
+                row = sparse.lil_matrix((1, nz))
+                if k < N:
+                    x_col = k * (nx + nu) + 2   # v at step k
+                else:
+                    x_col = N * (nx + nu) + 2   # v at terminal
+                row[0, x_col] = 1.0
+                A_rows.append(row.tocsc())
+                l_parts.append(np.array([self.p.v_min]))
+                u_parts.append(np.array([self.p.v_max]))
 
         # ---- 5. Steering rate: for k = 0..N-2 ----
-        self._rate_row_start = nx + N * nx + N * nu + (N + 1)
+        self._rate_row_start = nx + N * nx + N * nu + (N + 1) * self._state_rows_per_step
         for k in range(N - 1):
             row = sparse.lil_matrix((1, nz))
             idx_k = k * (nx + nu) + nx       # δ_norm at step k
@@ -458,6 +570,16 @@ class MPCSolver:
         l = np.concatenate(l_parts)
         u = np.concatenate(u_parts)
         self._nc = len(l)
+
+        # Build (row, col) → CSC data index map for fast in-place updates.
+        # This avoids the tolil()→tocsc() roundtrip in solve() that changes
+        # the sparse structure and forces expensive OSQP re-setup.
+        A.sort_indices()
+        self._A_idx: dict[tuple[int, int], int] = {}
+        indptr, indices = A.indptr, A.indices
+        for c in range(A.shape[1]):
+            for pos in range(indptr[c], indptr[c + 1]):
+                self._A_idx[(int(indices[pos]), c)] = int(pos)
 
         # Linear cost vector (zeros — updated each solve)
         q = np.zeros(nz)
@@ -487,7 +609,9 @@ class MPCSolver:
     def solve(self, e_lat: float, e_heading: float, v: float,
               last_delta_norm: float, kappa_ref_horizon: np.ndarray,
               v_target: float, v_max: float, dt: float,
-              grade_rad: float = 0.0) -> dict:
+              grade_rad: float = 0.0,
+              tire_cf: float = 40000.0, tire_cr: float = 40000.0,
+              v_y_init: float = 0.0, r_init: float = 0.0) -> dict:
         """
         Solve QP for one frame.
 
@@ -501,10 +625,14 @@ class MPCSolver:
             v_max: speed limit (m/s)
             dt: timestep (s)
             grade_rad: road grade in radians (positive = uphill), default 0.0
+            tire_cf: front cornering stiffness (N/rad), dynamic model only
+            tire_cr: rear cornering stiffness (N/rad), dynamic model only
+            v_y_init: lateral velocity (m/s), dynamic model only
+            r_init: yaw rate (rad/s), dynamic model only
 
         Returns:
             dict with: steering_normalized, accel, feasible, solve_time_ms,
-                        predicted_trajectory (N+1, 3)
+                        predicted_trajectory (N+1, nx)
         """
         t0 = time.perf_counter()
         N = self._N
@@ -550,10 +678,14 @@ class MPCSolver:
 
         # --- Update dynamics in A matrix and c vector ---
         # For each step k, linearize around operating point.
-        # We update A's nonzero entries in-place via the CSC data array.
-        A_new = self._A.tolil()
+        # Update entries directly in the CSC data array via the pre-built
+        # index map (self._A_idx).  This preserves the sparse structure so
+        # OSQP's update(Ax=...) succeeds without a full re-setup.
+        A_data = self._A.data
+        _ai = self._A_idx   # (row, col) → data index
         l_new = self._l.copy()
         u_new = self._u.copy()
+        _dyn = self.p.dynamic_model_enabled
 
         c_vec = []  # affine terms for dynamics
         for k in range(N):
@@ -563,57 +695,82 @@ class MPCSolver:
             x_next_col = (k + 1) * (nx + nu) if k < N - 1 else N * (nx + nu)
             kk = kappa[k]
 
-            # A_k matrix (state transition)
-            # e_lat: e_lat + v*e_heading*dt  (Frenet: no κ term)
-            A_new[dyn_row + 0, x_col + 0] = 1.0
-            A_new[dyn_row + 0, x_col + 1] = v_safe * dt        # ∂e_lat/∂e_heading
-            A_new[dyn_row + 0, x_col + 2] = 0.0                # linearized: ignore ∂/∂v for now
+            if _dyn:
+                # ── Dynamic bicycle model (5 states) ──────────────────────
+                C_f = tire_cf
+                C_r = tire_cr
+                m = self.p.vehicle_mass_kg
+                Iz = self.p.vehicle_iz_kgm2
+                l_f = self.p.vehicle_lf_m
+                l_r = self.p.vehicle_lr_m
+                vx = max(v_safe, 3.0)  # conservative clamp for tire force / v_x
 
-            # e_heading: e_heading + (v/L)*δ_norm*δ_max*dt - κ*v*dt
-            A_new[dyn_row + 1, x_col + 0] = 0.0
-            A_new[dyn_row + 1, x_col + 1] = 1.0
-            A_new[dyn_row + 1, x_col + 2] = 0.0
+                # A_k (5×5) — see plan for full derivation
+                # Row 0: e_lat[k+1] = e_lat + vx·e_heading·dt + v_y·dt
+                A_data[_ai[(dyn_row + 0, x_col + 0)]] = 1.0
+                A_data[_ai[(dyn_row + 0, x_col + 1)]] = vx * dt
+                A_data[_ai[(dyn_row + 0, x_col + 2)]] = dt         # v_y coupling
+                # Row 1: e_heading[k+1] = e_heading + r·dt (−κ·vx·dt in c_k)
+                A_data[_ai[(dyn_row + 1, x_col + 1)]] = 1.0
+                A_data[_ai[(dyn_row + 1, x_col + 3)]] = dt         # yaw rate coupling
+                # Row 2: v_y dynamics (tire lateral forces)
+                A_data[_ai[(dyn_row + 2, x_col + 2)]] = 1.0 - (C_f + C_r) / (m * vx) * dt
+                A_data[_ai[(dyn_row + 2, x_col + 3)]] = (-vx - (C_f * l_f - C_r * l_r) / (m * vx)) * dt
+                # Row 3: yaw rate dynamics (tire yaw moments)
+                A_data[_ai[(dyn_row + 3, x_col + 2)]] = -(C_f * l_f - C_r * l_r) / (Iz * vx) * dt
+                A_data[_ai[(dyn_row + 3, x_col + 3)]] = 1.0 - (C_f * l_f**2 + C_r * l_r**2) / (Iz * vx) * dt
+                # Row 4: v_x[k+1] = v_x + a·dt
+                A_data[_ai[(dyn_row + 4, x_col + 4)]] = 1.0
 
-            # v: v + a*dt
-            A_new[dyn_row + 2, x_col + 0] = 0.0
-            A_new[dyn_row + 2, x_col + 1] = 0.0
-            A_new[dyn_row + 2, x_col + 2] = 1.0
+                # B_k (5×2)
+                A_data[_ai[(dyn_row + 2, u_col + 0)]] = C_f * self.p.max_steer_rad / m * dt
+                A_data[_ai[(dyn_row + 3, u_col + 0)]] = C_f * l_f * self.p.max_steer_rad / Iz * dt
+                A_data[_ai[(dyn_row + 4, u_col + 1)]] = dt
 
-            # B_k matrix (input)
-            steer_gain = (v_safe / self.p.wheelbase_m) * self.p.max_steer_rad * dt
-            A_new[dyn_row + 0, u_col + 0] = 0.0       # δ doesn't directly affect e_lat
-            A_new[dyn_row + 0, u_col + 1] = 0.0       # a doesn't affect e_lat
-            A_new[dyn_row + 1, u_col + 0] = steer_gain  # (v/L)*δ_max*dt
-            A_new[dyn_row + 1, u_col + 1] = 0.0
-            A_new[dyn_row + 2, u_col + 0] = 0.0
-            A_new[dyn_row + 2, u_col + 1] = dt
+                # -I for x[k+1] — these are constant but included for completeness
+                for s in range(nx):
+                    A_data[_ai[(dyn_row + s, x_next_col + s)]] = -1.0
 
-            # -I for x[k+1]
-            A_new[dyn_row + 0, x_next_col + 0] = -1.0
-            A_new[dyn_row + 1, x_next_col + 1] = -1.0
-            A_new[dyn_row + 2, x_next_col + 2] = -1.0
+                # Affine term c_k
+                c_vec.append(np.array([
+                    0.0,                           # c_lat
+                    -kk * vx * dt,                 # c_heading (curvature)
+                    0.0,                           # c_vy
+                    0.0,                           # c_r
+                    gravity_accel_offset * dt,     # c_vx (grade)
+                ]))
+            else:
+                # ── Kinematic bicycle model (3 states) ────────────────────
+                # A_k matrix (state transition) — only update varying entries
+                A_data[_ai[(dyn_row + 0, x_col + 1)]] = v_safe * dt
 
-            # Affine term c_k (curvature feedforward)
-            # NOTE: c_lat must be 0.  In Frenet error coordinates, curvature
-            # affects only heading (ė_ψ = v·κ_car − v·κ_road).  The lateral
-            # equation is ė_y = v·sin(e_ψ) ≈ v·e_ψ — no κ term.  A nonzero
-            # c_lat creates phantom lateral drift that causes limit-cycle
-            # oscillation on curved roads (see Phase 2.8 root-cause analysis).
-            c_lat = 0.0
-            c_head = -kk * v_safe * dt              # −κ·v·dt
-            c_v = gravity_accel_offset * dt          # −g·sin(θ)·dt (grade compensation)
-            c_vec.append(np.array([c_lat, c_head, c_v]))
+                # B_k matrix (input)
+                steer_gain = (v_safe / self.p.wheelbase_m) * self.p.max_steer_rad * dt
+                A_data[_ai[(dyn_row + 1, u_col + 0)]] = steer_gain
+                A_data[_ai[(dyn_row + 2, u_col + 1)]] = dt
 
-        A_csc = A_new.tocsc()
+                # Affine term c_k
+                c_lat = 0.0
+                c_head = -kk * v_safe * dt
+                c_v = gravity_accel_offset * dt
+                c_vec.append(np.array([c_lat, c_head, c_v]))
 
         # --- Update constraint bounds ---
         # 1. Initial state
         l_new[0] = e_lat
         l_new[1] = e_heading
-        l_new[2] = v_safe
         u_new[0] = e_lat
         u_new[1] = e_heading
-        u_new[2] = v_safe
+        if _dyn:
+            l_new[2] = v_y_init
+            l_new[3] = r_init
+            l_new[4] = v_safe
+            u_new[2] = v_y_init
+            u_new[3] = r_init
+            u_new[4] = v_safe
+        else:
+            l_new[2] = v_safe
+            u_new[2] = v_safe
 
         # 2. Dynamics: l = u = -c_k (equality constraints)
         for k in range(N):
@@ -632,11 +789,21 @@ class MPCSolver:
             l_new[idx + 1] = -(self.p.max_decel + abs_gravity)   # accel lower bound
             u_new[idx + 1] = self.p.max_accel + abs_gravity       # accel upper bound
 
-        # 4. State bounds (speed): update v_max
+        # 4. State bounds: update v_max (and v_y/r bounds for dynamic model)
         state_start = self._state_row_start
+        sps = self._state_rows_per_step
         for k in range(N + 1):
-            l_new[state_start + k] = self.p.v_min
-            u_new[state_start + k] = v_max
+            if _dyn:
+                base = state_start + k * sps
+                l_new[base + 0] = -2.0          # v_y lower
+                u_new[base + 0] = 2.0            # v_y upper
+                l_new[base + 1] = -1.0           # r lower
+                u_new[base + 1] = 1.0            # r upper
+                l_new[base + 2] = self.p.v_min   # v_x lower
+                u_new[base + 2] = v_max           # v_x upper
+            else:
+                l_new[state_start + k] = self.p.v_min
+                u_new[state_start + k] = v_max
 
         # 5. Steering rate bounds — add constraint for first step vs last_delta_norm
         # We handle this by augmenting: the first steering rate isn't in the N-1
@@ -650,15 +817,14 @@ class MPCSolver:
 
         # --- Update linear cost q ---
         q_new = np.zeros(nz)
+        _v_idx = 4 if _dyn else 2  # speed state index
         for k in range(N):
             base = k * (nx + nu)
-            # Speed tracking: q_speed * (v - v_target)² = q_speed * v² - 2*q_speed*v_target*v + const
-            # Linear term: -2 * q_speed * v_target (but OSQP uses 0.5*z'Pz + q'z, so factor is -q_speed*v_target)
-            q_new[base + 2] = -self.p.q_speed * v_target
+            q_new[base + _v_idx] = -self.p.q_speed * v_target
 
         # Terminal speed tracking
         term_base = N * (nx + nu)
-        q_new[term_base + 2] = -self.p.q_speed * v_target
+        q_new[term_base + _v_idx] = -self.p.q_speed * v_target
 
         # --- 2DOF feedforward alignment (rate bias only) ---
         # Recenters the steering-RATE cost at Δδ_ff rather than 0, so MPC does not
@@ -680,10 +846,19 @@ class MPCSolver:
         # compensated for is gone. Part A's overcorrection when the car has lateral
         # offset was causing persistent centeredness regression on curves.
         if self.p.ff_alignment_enabled:
-            delta_ff = np.array([
-                self._feedforward_delta_norm(kappa[k], self.p.wheelbase_m, self.p.max_steer_rad)
-                for k in range(N)
-            ], dtype=float)
+            if _dyn:
+                delta_ff = np.array([
+                    self._feedforward_delta_norm_dynamic(
+                        kappa[k], v_safe, tire_cf, tire_cr,
+                        self.p.vehicle_lf_m, self.p.vehicle_lr_m,
+                        self.p.vehicle_mass_kg, self.p.max_steer_rad)
+                    for k in range(N)
+                ], dtype=float)
+            else:
+                delta_ff = np.array([
+                    self._feedforward_delta_norm(kappa[k], self.p.wheelbase_m, self.p.max_steer_rad)
+                    for k in range(N)
+                ], dtype=float)
 
             r_sr = self._current_r_steer_rate
             for k in range(N - 1):
@@ -703,12 +878,12 @@ class MPCSolver:
 
         # --- Solve ---
         try:
-            self._prob.update(Ax=A_csc.data, q=q_new, l=l_new, u=u_new)
+            self._prob.update(Ax=self._A.data, q=q_new, l=l_new, u=u_new)
         except Exception:
-            # If structure changed, need full setup
+            # If structure changed (e.g. after horizon rebuild), need full setup
             self._prob = osqp.OSQP()
             self._prob.setup(
-                self._P, q_new, A_csc, l_new, u_new,
+                self._P, q_new, self._A, l_new, u_new,
                 warm_start=True, verbose=False,
                 max_iter=200, eps_abs=1e-4, eps_rel=1e-4,
                 polish=True, adaptive_rho=True,
@@ -731,7 +906,7 @@ class MPCSolver:
                 'accel': 0.0,
                 'feasible': False,
                 'solve_time_ms': solve_ms,
-                'predicted_trajectory': np.zeros((N + 1, 3)),
+                'predicted_trajectory': np.zeros((N + 1, nx)),
                 'osqp_status': res.info.status,
             }
 
@@ -753,7 +928,7 @@ class MPCSolver:
         self._warm_y = res.y.copy() if res.y is not None else None
 
         # Extract predicted trajectory for diagnostics
-        predicted = np.zeros((N + 1, 3))
+        predicted = np.zeros((N + 1, nx))
         for k in range(N):
             base = k * (nx + nu)
             predicted[k] = z[base:base + nx]
@@ -801,6 +976,22 @@ class MPCController:
         # so we can cap frame-to-frame steps when perception snaps back from a
         # silent dropout (e_lat was ≈0, now suddenly large).
         self._prev_elat_ramp: float = 0.0
+        # Online effective wheelbase (RLS on heading prediction error)
+        self._leff_theta: float = 1.0 / self.params.wheelbase_m  # θ = 1/L_eff
+        self._leff_P: float = self.params.leff_initial_P          # RLS covariance (scalar)
+        self._leff_heading_prev: float = 0.0                       # e_heading at previous frame
+        self._leff_steering_prev: float = 0.0                      # δ_norm at previous frame
+        self._leff_speed_prev: float = 0.0                         # speed at previous frame
+        self._leff_update_count: int = 0                           # frames where RLS updated
+        # Online tire cornering stiffness estimation (EKF)
+        self._tire_theta = np.array([self.params.tire_cf_nominal,
+                                      self.params.tire_cr_nominal], dtype=float)
+        self._tire_P = np.eye(2) * 1e6                           # high initial uncertainty
+        self._tire_ekf_update_count: int = 0
+        self._tire_ekf_divergent_count: int = 0                  # consecutive divergent frames
+        self._v_y_est: float = 0.0                               # lateral velocity estimate
+        self._yaw_rate_est: float = 0.0                          # yaw rate estimate
+        self._e_heading_prev_tire: float = 0.0                   # heading at previous frame (for EKF)
 
     def compute_steering(self, e_lat: float, e_heading: float,
                          current_speed: float, last_delta_norm: float,
@@ -810,7 +1001,8 @@ class MPCController:
                          grade_rad: float = 0.0,
                          curve_local_state: Optional[str] = None,
                          curve_gate_weight: float = 0.0,
-                         local_curve_reference_active: bool = False) -> dict:
+                         local_curve_reference_active: bool = False,
+                         imu_yaw_rate: Optional[float] = None) -> dict:
         """
         Compute MPC steering. Called by VehicleController each frame.
 
@@ -1119,6 +1311,22 @@ class MPCController:
                 elat_ramp_active = True
         self._prev_elat_ramp = e_lat_qp
 
+        # --- Online effective wheelbase estimation (RLS) ---
+        # Update θ = 1/L_eff from heading prediction error BEFORE solving,
+        # then inject L_eff into the solver's dynamics model.
+        # NOTE: Use actual frame dt for RLS (time between heading measurements),
+        # NOT self.params.dt (MPC planning step). The RLS models what happened
+        # between real measurements, not the MPC's internal prediction horizon.
+        leff_result = self._update_leff(e_heading, current_speed, last_delta_norm, kappa_ref, dt)
+        if self.params.leff_estimation_enabled:
+            self.solver.p = _dc_replace(self.solver.p, wheelbase_m=self.leff)
+
+        # EKF tire estimation — update before solve so solver gets latest C_f/C_r
+        tire_result = self._update_tire_ekf(
+            e_heading, current_speed, last_delta_norm, kappa_ref, dt,
+            imu_yaw_rate=imu_yaw_rate,
+        )
+
         # Use the configured MPC prediction step (params.dt), NOT the frame dt.
         # The solver plans N steps of params.dt each (e.g. 20×0.1=2.0 s horizon).
         # Passing the frame dt (0.033 s) shrinks the horizon to 0.66 s, making
@@ -1126,7 +1334,11 @@ class MPCController:
         result = self.solver.solve(
             e_lat_qp, e_heading, current_speed, last_delta_norm,
             kappa_horizon, v_target, v_max, self.params.dt,
-            grade_rad=grade_rad
+            grade_rad=grade_rad,
+            tire_cf=tire_result['tire_cf'],
+            tire_cr=tire_result['tire_cr'],
+            v_y_init=tire_result.get('v_y_estimate', 0.0),
+            r_init=tire_result.get('yaw_rate_estimate', 0.0),
         )
 
         # Restore default max_iter after warmup solve
@@ -1182,6 +1394,26 @@ class MPCController:
             'kappa_preview_used': bool(_preview_used),
             'kappa_preview_range': float(np.ptp(kappa_corrected_horizon)) if _preview_used else 0.0,
             'r_steer_rate_effective': result.get('r_steer_rate_effective', self.params.r_steer_rate),
+            'leff_value': leff_result['leff_value'],
+            'leff_theta': leff_result['leff_theta'],
+            'leff_P': leff_result['leff_P'],
+            'leff_updated': leff_result['leff_updated'],
+            'leff_innovation': leff_result['leff_innovation'],
+            'leff_update_count': leff_result['leff_update_count'],
+            # Tire estimation (dynamic bicycle)
+            'tire_cf': tire_result['tire_cf'],
+            'tire_cr': tire_result['tire_cr'],
+            'tire_ekf_innovation': tire_result['tire_ekf_innovation'],
+            'tire_ekf_P_trace': tire_result['tire_ekf_P_trace'],
+            'tire_slip_angle_front': tire_result['tire_slip_angle_front'],
+            'tire_slip_angle_rear': tire_result['tire_slip_angle_rear'],
+            'tire_understeer_gradient': tire_result['tire_understeer_gradient'],
+            'dynamic_model_active': tire_result['dynamic_model_active'],
+            'tire_ekf_update_count': tire_result['tire_ekf_update_count'],
+            'v_y_estimate': tire_result['v_y_estimate'],
+            'yaw_rate_estimate': tire_result['yaw_rate_estimate'],
+            'yaw_rate_measurement': tire_result.get('yaw_rate_measurement', 0.0),
+            'yaw_rate_source': tire_result.get('yaw_rate_source', 'derived'),
         }
 
     def reset(self):
@@ -1197,3 +1429,266 @@ class MPCController:
         self._last_kappa_ref = 0.0
         self._elat_ema = 0.0
         self._prev_elat_ramp = 0.0
+        # L_eff: reset to nominal (don't reset update_count — it's cumulative diagnostic)
+        self._leff_theta = 1.0 / self.params.wheelbase_m
+        self._leff_P = self.params.leff_initial_P
+        self._leff_heading_prev = 0.0
+        self._leff_steering_prev = 0.0
+        self._leff_speed_prev = 0.0
+        self._leff_update_count = 0
+        # Tire EKF: reset to nominal
+        self._tire_theta = np.array([self.params.tire_cf_nominal,
+                                      self.params.tire_cr_nominal], dtype=float)
+        self._tire_P = np.eye(2) * 1e6
+        self._tire_ekf_update_count = 0
+        self._tire_ekf_divergent_count = 0
+        self._v_y_est = 0.0
+        self._yaw_rate_est = 0.0
+        self._e_heading_prev_tire = 0.0
+
+    @property
+    def leff(self) -> float:
+        """Current effective wheelbase estimate (meters)."""
+        if not self.params.leff_estimation_enabled:
+            return self.params.wheelbase_m
+        return 1.0 / self._leff_theta
+
+    def _update_leff(self, e_heading: float, current_speed: float,
+                     last_delta_norm: float, kappa_ref: float, dt: float) -> dict:
+        """
+        RLS update for effective wheelbase from heading prediction error.
+
+        Model: e_heading[k] = e_heading[k-1] + θ·h[k-1] − κ·v·dt
+        where θ = 1/L_eff and h = v·δ·δ_max·dt (regressor).
+
+        Innovation: ε = e_heading[k] − predicted_e_heading[k]
+        RLS updates θ to minimize ε² with exponential forgetting.
+        """
+        leff_updated = False
+        leff_innovation = 0.0
+
+        if not self.params.leff_estimation_enabled:
+            return {
+                'leff_value': self.params.wheelbase_m,
+                'leff_theta': self._leff_theta,
+                'leff_P': self._leff_P,
+                'leff_updated': False,
+                'leff_innovation': 0.0,
+                'leff_update_count': self._leff_update_count,
+            }
+
+        v_prev = self._leff_speed_prev
+        delta_prev = self._leff_steering_prev
+
+        # Regressor: h = v · δ_norm · δ_max · dt
+        h = v_prev * delta_prev * self.params.max_steer_rad * dt
+
+        # Predicted heading (using current θ estimate)
+        predicted_heading = (
+            self._leff_heading_prev
+            + self._leff_theta * h
+            - kappa_ref * v_prev * dt
+        )
+
+        # Innovation (prediction error)
+        leff_innovation = e_heading - predicted_heading
+
+        # Gate: only update if excitation is sufficient and speed is adequate
+        if (abs(h) >= self.params.leff_min_excitation
+                and v_prev >= self.params.leff_min_speed_mps):
+
+            lam = self.params.leff_forgetting_factor
+
+            # Scalar RLS update: K = P·h / (λ + h·P·h)
+            Ph = self._leff_P * h
+            denom = lam + h * Ph
+            if abs(denom) > 1e-12:
+                K = Ph / denom
+                self._leff_theta += K * leff_innovation
+                self._leff_P = (self._leff_P - K * h * self._leff_P) / lam
+
+                # Clamp θ to safety bounds (θ = 1/L, so bounds are inverted)
+                theta_min = 1.0 / self.params.leff_bounds_max  # smallest θ = longest L
+                theta_max = 1.0 / self.params.leff_bounds_min  # largest θ = shortest L
+                self._leff_theta = max(theta_min, min(theta_max, self._leff_theta))
+
+                # Clamp P to prevent numerical blowup
+                self._leff_P = max(0.01, min(1e6, self._leff_P))
+
+                leff_updated = True
+                self._leff_update_count += 1
+
+        # Store current frame for next iteration
+        self._leff_heading_prev = e_heading
+        self._leff_steering_prev = last_delta_norm
+        self._leff_speed_prev = current_speed
+
+        return {
+            'leff_value': self.leff,
+            'leff_theta': self._leff_theta,
+            'leff_P': self._leff_P,
+            'leff_updated': leff_updated,
+            'leff_innovation': leff_innovation,
+            'leff_update_count': self._leff_update_count,
+        }
+
+    def _compute_understeer_gradient(self, C_f: float, C_r: float) -> float:
+        """Compute understeer gradient K_us = (m/L)·(l_r/C_f − l_f/C_r)."""
+        L = self.params.vehicle_lf_m + self.params.vehicle_lr_m
+        if abs(C_f) < 1.0 or abs(C_r) < 1.0 or L < 0.1:
+            return 0.0
+        return (self.params.vehicle_mass_kg / L) * (
+            self.params.vehicle_lr_m / C_f - self.params.vehicle_lf_m / C_r
+        )
+
+    def _update_tire_ekf(self, e_heading: float, current_speed: float,
+                          last_delta_norm: float, kappa_ref: float,
+                          dt: float,
+                          imu_yaw_rate: Optional[float] = None) -> dict:
+        """
+        EKF update for tire cornering stiffness [C_f, C_r].
+
+        Measurement: IMU gyroscope yaw rate (preferred) or derived from heading rate.
+        Model: dynamic bicycle yaw dynamics.
+        Only updates when dynamic_model_enabled AND tire_ekf_enabled.
+        """
+        C_f, C_r = self._tire_theta
+        _nominal = {
+            'tire_cf': float(C_f),
+            'tire_cr': float(C_r),
+            'tire_ekf_innovation': 0.0,
+            'tire_ekf_P_trace': float(np.trace(self._tire_P)),
+            'tire_slip_angle_front': 0.0,
+            'tire_slip_angle_rear': 0.0,
+            'tire_understeer_gradient': self._compute_understeer_gradient(C_f, C_r),
+            'dynamic_model_active': self.params.dynamic_model_enabled,
+            'tire_ekf_update_count': self._tire_ekf_update_count,
+            'v_y_estimate': self._v_y_est,
+            'yaw_rate_estimate': self._yaw_rate_est,
+            'yaw_rate_measurement': 0.0,
+            'yaw_rate_source': 'imu' if (self.params.tire_ekf_use_imu_yaw_rate and imu_yaw_rate is not None) else 'derived',
+        }
+
+        if not self.params.dynamic_model_enabled:
+            self._e_heading_prev_tire = e_heading
+            return _nominal
+
+        if dt <= 0.0:
+            self._e_heading_prev_tire = e_heading
+            return _nominal
+
+        v_x = max(current_speed, 3.0)  # clamp to avoid singularity
+        l_f = self.params.vehicle_lf_m
+        l_r = self.params.vehicle_lr_m
+        m = self.params.vehicle_mass_kg
+        Iz = self.params.vehicle_iz_kgm2
+
+        # Measurement model: prefer IMU gyroscope when available (industry standard)
+        if self.params.tire_ekf_use_imu_yaw_rate and imu_yaw_rate is not None:
+            r_meas = imu_yaw_rate
+            R_meas = self.params.tire_ekf_imu_yaw_rate_r
+        else:
+            # Fallback: derive from heading error finite differences
+            r_meas = (e_heading - self._e_heading_prev_tire) / dt + kappa_ref * v_x
+            R_meas = self.params.tire_ekf_measurement_noise
+
+        # Compute slip angles using current estimates
+        delta_rad = last_delta_norm * self.params.max_steer_rad
+        alpha_f = delta_rad - (self._v_y_est + l_f * self._yaw_rate_est) / v_x
+        alpha_r = -(self._v_y_est - l_r * self._yaw_rate_est) / v_x
+
+        # Predict yaw rate from current theta
+        r_pred = self._yaw_rate_est + (
+            l_f * C_f * alpha_f - l_r * C_r * alpha_r
+        ) / Iz * dt
+
+        # Innovation
+        innovation = r_meas - r_pred
+
+        # --- C_f/C_r EKF update (only when tire_ekf_enabled) ---
+        ekf_updated = False
+        if self.params.tire_ekf_enabled:
+            if (current_speed >= self.params.tire_ekf_min_speed_mps
+                    and abs(alpha_f) < self.params.tire_ekf_slip_saturation_rad
+                    and abs(alpha_r) < self.params.tire_ekf_slip_saturation_rad
+                    and self._tire_ekf_divergent_count < 10):
+
+                # Process noise
+                Q = np.eye(2) * self.params.tire_ekf_process_noise * dt
+                R = R_meas
+
+                # Predict covariance
+                P_pred = self._tire_P + Q
+
+                # Jacobian H = dr_pred/d[C_f, C_r]
+                H = np.array([
+                    l_f * alpha_f * dt / Iz,
+                    -l_r * alpha_r * dt / Iz,
+                ])
+
+                # Innovation covariance
+                S = float(H @ P_pred @ H) + R
+                if abs(S) > 1e-12:
+                    K = P_pred @ H / S  # Kalman gain (2,)
+
+                    # Update
+                    self._tire_theta = self._tire_theta + K * innovation
+                    self._tire_P = (np.eye(2) - np.outer(K, H)) @ P_pred
+
+                    # Clamp to safety bounds
+                    self._tire_theta[0] = np.clip(
+                        self._tire_theta[0],
+                        self.params.tire_ekf_cf_min,
+                        self.params.tire_ekf_cf_max
+                    )
+                    self._tire_theta[1] = np.clip(
+                        self._tire_theta[1],
+                        self.params.tire_ekf_cr_min,
+                        self.params.tire_ekf_cr_max
+                    )
+
+                    # Clamp P to prevent blowup
+                    self._tire_P = np.clip(self._tire_P, -1e8, 1e8)
+                    np.fill_diagonal(self._tire_P,
+                                     np.clip(np.diag(self._tire_P), 0.01, 1e8))
+
+                    ekf_updated = True
+                    self._tire_ekf_update_count += 1
+
+            # Divergence tracking
+            if abs(innovation) > self.params.tire_ekf_innovation_divergence_threshold:
+                self._tire_ekf_divergent_count += 1
+            else:
+                self._tire_ekf_divergent_count = 0
+
+        # --- v_y and yaw rate estimation (ALWAYS runs when dynamic model active) ---
+        # These are needed for correct initial state in the QP, regardless of
+        # whether C_f/C_r are being estimated online.
+        C_f_new, C_r_new = self._tire_theta
+        F_yf = C_f_new * alpha_f
+        F_yr = C_r_new * alpha_r
+        v_y_dot = (F_yf + F_yr) / m - v_x * self._yaw_rate_est
+        self._v_y_est = 0.95 * (self._v_y_est + v_y_dot * dt) + 0.05 * 0.0
+
+        # Update yaw rate estimate (blend measurement and model)
+        self._yaw_rate_est = 0.7 * r_meas + 0.3 * r_pred
+
+        # Store heading for next frame
+        self._e_heading_prev_tire = e_heading
+
+        return {
+            'tire_cf': float(self._tire_theta[0]),
+            'tire_cr': float(self._tire_theta[1]),
+            'tire_ekf_innovation': float(innovation),
+            'tire_ekf_P_trace': float(np.trace(self._tire_P)),
+            'tire_slip_angle_front': float(alpha_f),
+            'tire_slip_angle_rear': float(alpha_r),
+            'tire_understeer_gradient': self._compute_understeer_gradient(
+                self._tire_theta[0], self._tire_theta[1]),
+            'dynamic_model_active': True,
+            'tire_ekf_update_count': self._tire_ekf_update_count,
+            'v_y_estimate': float(self._v_y_est),
+            'yaw_rate_estimate': float(self._yaw_rate_est),
+            'yaw_rate_measurement': float(r_meas),
+            'yaw_rate_source': 'imu' if (self.params.tire_ekf_use_imu_yaw_rate and imu_yaw_rate is not None) else 'derived',
+        }

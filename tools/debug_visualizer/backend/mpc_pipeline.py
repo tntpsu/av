@@ -1,10 +1,13 @@
 """MPC Pipeline diagnostic backend — Phase 2.8.
 
-Exposes four analysis cards for the PhilViz "MPC Pipeline" tab:
+Exposes seven analysis cards for the PhilViz "MPC Pipeline" tab:
   Card 1 — Regime Health (distribution, transitions, blend continuity)
   Card 2 — Pipeline Fix Status (2.8.1 recovery, 2.8.2 feedback, 2.8.3 rate, 2.8.4 Smith)
   Card 3 — MPC State Quality (e_lat, e_heading, solve time)
   Card 4 — Severe Frame Inspector (top-N frames by |mpc_e_lat|)
+  Card 5 — NMPC Solver Health (Step 5)
+  Card 6 — L_eff Estimation (wheelbase adaptation convergence)
+  Card 7 — Tire Estimation (dynamic bicycle EKF cornering stiffness)
 
 Returns None for PP-only recordings (no MPC fields).
 """
@@ -138,6 +141,9 @@ def analyze_mpc_pipeline(filepath: Path) -> Optional[Dict]:
                 "card2": None,
                 "card3": None,
                 "card4": None,
+                "card5": None,
+                "card6": None,
+                "card7": None,
             }
 
         # ── Card 2: Pipeline Fix Status ──────────────────────────────────────
@@ -321,6 +327,65 @@ def analyze_mpc_pipeline(filepath: Path) -> Optional[Dict]:
                 "max_consecutive_failures": int(np.max(nmpc_consec)) if nmpc_consec is not None else 0,
             }
 
+        # ── Card 6: L_eff Estimation ─────────────────────────────────────
+        card6 = None
+        mpc_leff_raw = _load(f, "control/mpc_leff_value", n)
+        leff_innov_raw = _load(f, "control/mpc_leff_innovation", n)
+        if (mpc_leff_raw is not None and leff_innov_raw is not None
+                and np.any(mpc_leff_raw != 0)):
+            mpc_leff = mpc_leff_raw[mpc_mask]
+            leff_innov_mpc = leff_innov_raw[mpc_mask]
+            if len(mpc_leff) > 0:
+                converged = (
+                    "yes" if len(mpc_leff) > 100 and np.std(mpc_leff[-100:]) < 0.01
+                    else "no"
+                )
+                card6 = {
+                    "title": "L_eff Estimation",
+                    "items": [
+                        f"L_eff final: {mpc_leff[-1]:.3f} m (nominal: 2.500 m)",
+                        f"L_eff range: [{np.min(mpc_leff):.3f}, {np.max(mpc_leff):.3f}] m",
+                        f"Innovation P95: {_safe_float(_pct(np.abs(leff_innov_mpc), 95)):.4f} rad",
+                        f"Converged: {converged}",
+                    ],
+                }
+
+        # ── Card 7: Tire Estimation (Dynamic Bicycle) ─────────────────────
+        card7 = None
+        tire_cf_raw = _load(f, "control/mpc_tire_cf", n)
+        tire_cr_raw = _load(f, "control/mpc_tire_cr", n)
+        tire_innov_raw = _load(f, "control/mpc_tire_ekf_innovation", n)
+        tire_kus_raw = _load(f, "control/mpc_tire_understeer_gradient", n)
+        if (tire_cf_raw is not None and np.any(tire_cf_raw != 0)):
+            cf_mpc = tire_cf_raw[mpc_mask]
+            cr_mpc = tire_cr_raw[mpc_mask] if tire_cr_raw is not None else np.array([])
+            if len(cf_mpc) > 0:
+                items = [
+                    f"C_f final: {cf_mpc[-1]:,.0f} N/rad (nominal: 40,000)",
+                ]
+                if len(cr_mpc) > 0:
+                    items.append(f"C_r final: {cr_mpc[-1]:,.0f} N/rad (nominal: 40,000)")
+                if tire_kus_raw is not None:
+                    kus_mpc = tire_kus_raw[mpc_mask]
+                    if len(kus_mpc) > 0:
+                        items.append(f"Understeer gradient K_us: {kus_mpc[-1]:.4f} rad/(m/s\u00b2)")
+                if tire_innov_raw is not None:
+                    innov_mpc = np.abs(tire_innov_raw[mpc_mask])
+                    if len(innov_mpc) > 0:
+                        innov_p95 = _safe_float(_pct(innov_mpc, 95))
+                        gate = "PASS" if innov_p95 < 0.05 else "FAIL"
+                        items.append(f"Innovation P95: {innov_p95:.4f} rad/s [{gate} < 0.05]")
+                # Convergence: std of last 100 C_f values < 100 → converged
+                converged = (
+                    "yes" if len(cf_mpc) > 100 and np.std(cf_mpc[-100:]) < 100
+                    else "no"
+                )
+                items.append(f"Converged: {converged}")
+                card7 = {
+                    "title": "Tire Estimation",
+                    "items": items,
+                }
+
         return {
             "has_mpc": True,
             "recording": filepath.name,
@@ -329,4 +394,6 @@ def analyze_mpc_pipeline(filepath: Path) -> Optional[Dict]:
             "card3": card3,
             "card4": card4,
             "card5": card5,
+            "card6": card6,
+            "card7": card7,
         }

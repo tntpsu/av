@@ -17,6 +17,8 @@ import yaml
 from backend.layer_health import (
     CTRL_JERK_GATE, CTRL_JERK_ALERT,
     LOOKAHEAD_CONCERN_M, BENIGN_STALE_REASONS,
+    TIRE_EKF_INNOVATION_DIVERGENCE,
+    TIRE_SLIP_ANGLE_SATURATION_RAD,
 )
 
 
@@ -685,6 +687,37 @@ PATTERNS = [
             and m.get("highway_mild_curve_poor_perception_overlap_on_high_error_rate", 1.0) < 0.10
         ),
     },
+    # ── Tire estimation patterns (dynamic bicycle MPC) ──────────────────────
+    {
+        "id": "tire_saturation",
+        "name": "Tire saturation (slip angle exceeds linear range)",
+        "severity": "instability",
+        "category": "Control",
+        "code_pointer": "control/mpc_controller.py:_update_tire_ekf()",
+        "config_lever": "mpc_tire_ekf_slip_saturation_rad / target speed",
+        "fix_hint": "Tire operating beyond linear range. Reduce target speed or widen tire saturation bounds.",
+        "check": lambda m: m.get("tire_saturation_rate", 0) > 0.02,
+    },
+    {
+        "id": "tire_ekf_divergence",
+        "name": "EKF tire estimation diverging (innovation exceeds threshold)",
+        "severity": "instability",
+        "category": "Control",
+        "code_pointer": "control/mpc_controller.py:_update_tire_ekf()",
+        "config_lever": "mpc_tire_ekf_measurement_noise / mpc_tire_ekf_process_noise",
+        "fix_hint": "Increase measurement noise R (trust model more) or decrease process noise Q.",
+        "check": lambda m: m.get("tire_ekf_divergence_rate", 0) > 0.05,
+    },
+    {
+        "id": "tire_understeer_anomaly",
+        "name": "Anomalous understeer gradient (K_us > 0.010)",
+        "severity": "comfort",
+        "category": "Control",
+        "code_pointer": "control/mpc_controller.py:_compute_understeer_gradient()",
+        "config_lever": "mpc_tire_cf_nominal / mpc_tire_cr_nominal",
+        "fix_hint": "C_f/C_r estimates may have drifted. Consider resetting EKF or adjusting nominal values.",
+        "check": lambda m: m.get("tire_understeer_gradient_max", 0) > 0.010,
+    },
     # ── ACC patterns (Step 5 — priority-0 when following_too_close) ──────────
     {
         "id": "acc_following_too_close",
@@ -803,6 +836,39 @@ PATTERNS = [
             m.get("interframe_active_pct", 0.0) > 5.0
             and m.get("interframe_at_max_pct", 0.0) < 10.0
             and m.get("interframe_rate_ratio", 1.0) < 0.6
+        ),
+    },
+    {
+        "id": "ekf_measurement_degraded",
+        "name": "EKF yaw rate measurement degraded (IMU signal missing or derived fallback)",
+        "severity": "instability",
+        "category": "Control",
+        "code_pointer": "control/mpc_controller.py:_update_tire_ekf()",
+        "config_lever": "mpc_tire_ekf_use_imu_yaw_rate / mpc_tire_ekf_imu_yaw_rate_r",
+        "fix_hint": (
+            "IMU yaw rate signal missing or using derived fallback for >5% of MPC frames. "
+            "Check angular_velocity pipeline from Unity. Verify angularVelocity.y is non-zero "
+            "in vehicle state packets."
+        ),
+        "check": lambda m: (
+            m.get("imu_yaw_rate_missing_pct", 0.0) > 5.0
+        ),
+    },
+    {
+        "id": "geometry_override_missing",
+        "name": "Dynamic model running without Unity geometry override (symmetric fallback)",
+        "severity": "instability",
+        "category": "Control",
+        "code_pointer": "av_stack/orchestrator.py:_apply_unity_geometry()",
+        "config_lever": "mpc_vehicle_lf_m / mpc_vehicle_lr_m (fallback defaults)",
+        "fix_hint": (
+            "Unity did not send dynamicModelParamsReady=true. "
+            "MPC using l_f=l_r=1.125m → K_us=0 → EKF drives C_f/C_r to bounds. "
+            "Check CarController.ComputeDynamicModelParams() is called in FixedUpdate."
+        ),
+        "check": lambda m: (
+            m.get("dynamic_model_active_pct", 0.0) > 50.0
+            and not m.get("geometry_override_active", True)
         ),
     },
 ]
@@ -1013,6 +1079,29 @@ class TriageEngine:
                 )
             else:
                 m["nmpc_available"] = False
+
+            # Tire estimation metrics (dynamic bicycle MPC)
+            tire_slip_f = arr("control/mpc_tire_slip_angle_front")
+            tire_slip_r = arr("control/mpc_tire_slip_angle_rear")
+            tire_innov = arr("control/mpc_tire_ekf_innovation")
+            tire_us = arr("control/mpc_tire_understeer_gradient")
+            dyn_active = arr("control/mpc_dynamic_model_active")
+
+            if dyn_active is not None and np.any(dyn_active > 0.5):
+                dyn_mask = dyn_active > 0.5
+                # Saturation rate
+                if tire_slip_f is not None and tire_slip_r is not None:
+                    sat = (np.abs(tire_slip_f[dyn_mask]) > TIRE_SLIP_ANGLE_SATURATION_RAD) | (
+                        np.abs(tire_slip_r[dyn_mask]) > TIRE_SLIP_ANGLE_SATURATION_RAD
+                    )
+                    m["tire_saturation_rate"] = float(np.mean(sat)) if len(sat) > 0 else 0.0
+                # EKF divergence rate
+                if tire_innov is not None:
+                    div = np.abs(tire_innov[dyn_mask]) > TIRE_EKF_INNOVATION_DIVERGENCE
+                    m["tire_ekf_divergence_rate"] = float(np.mean(div)) if len(div) > 0 else 0.0
+                # Understeer gradient max
+                if tire_us is not None:
+                    m["tire_understeer_gradient_max"] = float(np.max(tire_us[dyn_mask]))
 
             # Heading gate suppression on curves (SignalIntegrity, Step 5)
             # Uses approach_threshold=0.0005 to match drive_summary_core.py scoring.
@@ -1809,6 +1898,9 @@ class TriageEngine:
             "mpc_gt_cross_track_semantic_mismatch": "mpc_gt_cross_track_semantic_mismatch_rate",
             "mpc_gt_cross_track_vehicle_frame_semantic_mismatch": "mpc_gt_cross_track_vehicle_frame_semantic_mismatch_rate",
             "mpc_gt_cross_track_absolute_coordinate_mismatch": "mpc_gt_cross_track_absolute_coordinate_mismatch_rate",
+            "tire_saturation": "tire_saturation_rate",
+            "tire_ekf_divergence": "tire_ekf_divergence_rate",
+            "tire_understeer_anomaly": "tire_understeer_gradient_max",
         }
         for pat in PATTERNS:
             try:

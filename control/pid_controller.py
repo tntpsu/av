@@ -5725,6 +5725,9 @@ class VehicleController:
                 mpc_distances = np.arange(1, mpc_N + 1) * v_interp * mpc_dt
                 kappa_horizon_for_mpc = np.interp(mpc_distances, horizon_d, horizon_k)
 
+            # IMU yaw rate: negate Unity convention (negative Y = left turn)
+            _imu_yaw_rate = -float(current_state.get('angular_velocity_y', 0.0))
+
             mpc_result = self._mpc_controller.compute_steering(
                 e_lat=predicted_e_lat,
                 e_heading=raw_e_heading,
@@ -5741,6 +5744,7 @@ class VehicleController:
                 local_curve_reference_active=bool(
                     reference_point.get('local_curve_reference_active', False)
                 ),
+                imu_yaw_rate=_imu_yaw_rate,
             )
 
             if mpc_result.get('mpc_fallback_active'):
@@ -5846,6 +5850,24 @@ class VehicleController:
             lateral_metadata['mpc_smith_e_lat_predicted'] = predicted_e_lat
             lateral_metadata['mpc_smith_e_heading_predicted'] = predicted_e_heading
             lateral_metadata['mpc_delay_frames_used'] = delay_frames
+            lateral_metadata['mpc_leff_value'] = mpc_result.get('leff_value', 0.0)
+            lateral_metadata['mpc_leff_theta'] = mpc_result.get('leff_theta', 0.0)
+            lateral_metadata['mpc_leff_P'] = mpc_result.get('leff_P', 0.0)
+            lateral_metadata['mpc_leff_innovation'] = mpc_result.get('leff_innovation', 0.0)
+            lateral_metadata['mpc_leff_update_count'] = mpc_result.get('leff_update_count', 0)
+            lateral_metadata['mpc_tire_cf'] = mpc_result.get('tire_cf', 0.0)
+            lateral_metadata['mpc_tire_cr'] = mpc_result.get('tire_cr', 0.0)
+            lateral_metadata['mpc_tire_ekf_innovation'] = mpc_result.get('tire_ekf_innovation', 0.0)
+            lateral_metadata['mpc_tire_ekf_P_trace'] = mpc_result.get('tire_ekf_P_trace', 0.0)
+            lateral_metadata['mpc_tire_slip_angle_front'] = mpc_result.get('tire_slip_angle_front', 0.0)
+            lateral_metadata['mpc_tire_slip_angle_rear'] = mpc_result.get('tire_slip_angle_rear', 0.0)
+            lateral_metadata['mpc_tire_understeer_gradient'] = mpc_result.get('tire_understeer_gradient', 0.0)
+            lateral_metadata['mpc_dynamic_model_active'] = int(bool(mpc_result.get('dynamic_model_active', 0)))
+            lateral_metadata['mpc_tire_ekf_update_count'] = mpc_result.get('tire_ekf_update_count', 0)
+            lateral_metadata['mpc_v_y_estimate'] = mpc_result.get('v_y_estimate', 0.0)
+            lateral_metadata['mpc_yaw_rate_estimate'] = mpc_result.get('yaw_rate_estimate', 0.0)
+            lateral_metadata['mpc_yaw_rate_measurement'] = mpc_result.get('yaw_rate_measurement', 0.0)
+            lateral_metadata['mpc_imu_yaw_rate_raw'] = _imu_yaw_rate if _imu_yaw_rate is not None else 0.0
             self._last_steering_norm = steering / max(1e-6, self.lateral_controller.max_steering)
             lateral_metadata['stanley_active'] = 0.0
 
@@ -5949,6 +5971,7 @@ class VehicleController:
                     grade_rad=grade_rad,
                     curve_local_state=str(reference_point.get('curve_local_state', 'STRAIGHT') or 'STRAIGHT'),
                     curve_gate_weight=float(reference_point.get('reference_lookahead_local_gate_weight', 0.0) or 0.0),
+                    imu_yaw_rate=_imu_yaw_rate,
                 )
                 active_result = mpc_result
                 active_feasible_key = 'mpc_feasible'
@@ -6200,6 +6223,7 @@ class VehicleController:
         curvature: float,
         dt: float,
         grade_rad: float = 0.0,
+        imu_yaw_rate: float = None,
     ) -> Optional[dict]:
         """Lightweight MPC update for inter-frame control extrapolation.
 
@@ -6230,6 +6254,7 @@ class VehicleController:
             v_max=float(self.longitudinal_controller.max_speed),
             dt=dt or 0.033,
             grade_rad=grade_rad,
+            imu_yaw_rate=imu_yaw_rate,
         )
 
         if mpc_result is None or mpc_result.get('mpc_fallback_active'):

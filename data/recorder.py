@@ -2625,6 +2625,29 @@ class DataRecorder:
         self.h5_file.create_dataset("control/mpc_kappa_ref", shape=(0,), maxshape=max_shape, dtype=np.float32)
         self.h5_file.create_dataset("control/mpc_kappa_bias_correction", shape=(0,), maxshape=max_shape, dtype=np.float32)
         self.h5_file.create_dataset("control/mpc_kappa_bias_ema", shape=(0,), maxshape=max_shape, dtype=np.float32)
+        self.h5_file.create_dataset("control/mpc_leff_value", shape=(0,), maxshape=max_shape, dtype=np.float32)
+        self.h5_file.create_dataset("control/mpc_leff_theta", shape=(0,), maxshape=max_shape, dtype=np.float32)
+        self.h5_file.create_dataset("control/mpc_leff_P", shape=(0,), maxshape=max_shape, dtype=np.float32)
+        self.h5_file.create_dataset("control/mpc_leff_innovation", shape=(0,), maxshape=max_shape, dtype=np.float32)
+        self.h5_file.create_dataset("control/mpc_leff_update_count", shape=(0,), maxshape=max_shape, dtype=np.int32)
+        self.h5_file.create_dataset("control/mpc_tire_cf", shape=(0,), maxshape=max_shape, dtype=np.float32)
+        self.h5_file.create_dataset("control/mpc_tire_cr", shape=(0,), maxshape=max_shape, dtype=np.float32)
+        self.h5_file.create_dataset("control/mpc_tire_ekf_innovation", shape=(0,), maxshape=max_shape, dtype=np.float32)
+        self.h5_file.create_dataset("control/mpc_tire_ekf_P_trace", shape=(0,), maxshape=max_shape, dtype=np.float32)
+        self.h5_file.create_dataset("control/mpc_tire_slip_angle_front", shape=(0,), maxshape=max_shape, dtype=np.float32)
+        self.h5_file.create_dataset("control/mpc_tire_slip_angle_rear", shape=(0,), maxshape=max_shape, dtype=np.float32)
+        self.h5_file.create_dataset("control/mpc_tire_understeer_gradient", shape=(0,), maxshape=max_shape, dtype=np.float32)
+        self.h5_file.create_dataset("control/mpc_dynamic_model_active", shape=(0,), maxshape=max_shape, dtype=np.int8)
+        self.h5_file.create_dataset("control/mpc_tire_ekf_update_count", shape=(0,), maxshape=max_shape, dtype=np.int32)
+        self.h5_file.create_dataset("control/mpc_v_y_estimate", shape=(0,), maxshape=max_shape, dtype=np.float32)
+        self.h5_file.create_dataset("control/mpc_yaw_rate_estimate", shape=(0,), maxshape=max_shape, dtype=np.float32)
+        self.h5_file.create_dataset("control/mpc_yaw_rate_measurement", shape=(0,), maxshape=max_shape, dtype=np.float32)
+        self.h5_file.create_dataset("control/mpc_imu_yaw_rate_raw", shape=(0,), maxshape=max_shape, dtype=np.float32)
+        self.h5_file.create_dataset("control/mpc_unity_geometry_lf", shape=(0,), maxshape=max_shape, dtype=np.float32)
+        self.h5_file.create_dataset("control/mpc_unity_geometry_lr", shape=(0,), maxshape=max_shape, dtype=np.float32)
+        self.h5_file.create_dataset("control/mpc_unity_geometry_mass", shape=(0,), maxshape=max_shape, dtype=np.float32)
+        self.h5_file.create_dataset("control/mpc_unity_geometry_iz", shape=(0,), maxshape=max_shape, dtype=np.float32)
+        self.h5_file.create_dataset("control/mpc_unity_geometry_active", shape=(0,), maxshape=max_shape, dtype=np.int8)
         self.h5_file.create_dataset("control/mpc_kappa_bias_guard_active", shape=(0,), maxshape=max_shape, dtype=np.int8)
         self.h5_file.create_dataset("control/mpc_kappa_bias_guard_limit", shape=(0,), maxshape=max_shape, dtype=np.float32)
         self.h5_file.create_dataset("control/mpc_kappa_active_curve_preserve_ratio", shape=(0,), maxshape=max_shape, dtype=np.float32)
@@ -7558,6 +7581,29 @@ class DataRecorder:
         mpc_kappa_ref_list = []
         mpc_kappa_bias_correction_list = []
         mpc_kappa_bias_ema_list = []
+        mpc_leff_value_list = []
+        mpc_leff_theta_list = []
+        mpc_leff_P_list = []
+        mpc_leff_innovation_list = []
+        mpc_leff_update_count_list = []
+        mpc_tire_cf_list = []
+        mpc_tire_cr_list = []
+        mpc_tire_ekf_innovation_list = []
+        mpc_tire_ekf_P_trace_list = []
+        mpc_tire_slip_angle_front_list = []
+        mpc_tire_slip_angle_rear_list = []
+        mpc_tire_understeer_gradient_list = []
+        mpc_dynamic_model_active_list = []
+        mpc_tire_ekf_update_count_list = []
+        mpc_v_y_estimate_list = []
+        mpc_yaw_rate_estimate_list = []
+        mpc_yaw_rate_measurement_list = []
+        mpc_imu_yaw_rate_raw_list = []
+        mpc_unity_geometry_lf_list = []
+        mpc_unity_geometry_lr_list = []
+        mpc_unity_geometry_mass_list = []
+        mpc_unity_geometry_iz_list = []
+        mpc_unity_geometry_active_list = []
         mpc_kappa_bias_guard_active_list = []
         mpc_kappa_bias_guard_limit_list = []
         mpc_kappa_active_curve_preserve_ratio_list = []
@@ -8930,6 +8976,29 @@ class DataRecorder:
             mpc_kappa_ref_list.append(float(getattr(cc, 'mpc_kappa_ref', 0.0)))
             mpc_kappa_bias_correction_list.append(float(getattr(cc, 'mpc_kappa_bias_correction', 0.0)))
             mpc_kappa_bias_ema_list.append(float(getattr(cc, 'mpc_kappa_bias_ema', 0.0)))
+            mpc_leff_value_list.append(float(getattr(cc, 'mpc_leff_value', 0.0)))
+            mpc_leff_theta_list.append(float(getattr(cc, 'mpc_leff_theta', 0.0)))
+            mpc_leff_P_list.append(float(getattr(cc, 'mpc_leff_P', 0.0)))
+            mpc_leff_innovation_list.append(float(getattr(cc, 'mpc_leff_innovation', 0.0)))
+            mpc_leff_update_count_list.append(int(getattr(cc, 'mpc_leff_update_count', 0)))
+            mpc_tire_cf_list.append(float(getattr(cc, 'mpc_tire_cf', 0.0)))
+            mpc_tire_cr_list.append(float(getattr(cc, 'mpc_tire_cr', 0.0)))
+            mpc_tire_ekf_innovation_list.append(float(getattr(cc, 'mpc_tire_ekf_innovation', 0.0)))
+            mpc_tire_ekf_P_trace_list.append(float(getattr(cc, 'mpc_tire_ekf_P_trace', 0.0)))
+            mpc_tire_slip_angle_front_list.append(float(getattr(cc, 'mpc_tire_slip_angle_front', 0.0)))
+            mpc_tire_slip_angle_rear_list.append(float(getattr(cc, 'mpc_tire_slip_angle_rear', 0.0)))
+            mpc_tire_understeer_gradient_list.append(float(getattr(cc, 'mpc_tire_understeer_gradient', 0.0)))
+            mpc_dynamic_model_active_list.append(int(getattr(cc, 'mpc_dynamic_model_active', 0)))
+            mpc_tire_ekf_update_count_list.append(int(getattr(cc, 'mpc_tire_ekf_update_count', 0)))
+            mpc_v_y_estimate_list.append(float(getattr(cc, 'mpc_v_y_estimate', 0.0)))
+            mpc_yaw_rate_estimate_list.append(float(getattr(cc, 'mpc_yaw_rate_estimate', 0.0)))
+            mpc_yaw_rate_measurement_list.append(float(getattr(cc, 'mpc_yaw_rate_measurement', 0.0)))
+            mpc_imu_yaw_rate_raw_list.append(float(getattr(cc, 'mpc_imu_yaw_rate_raw', 0.0)))
+            mpc_unity_geometry_lf_list.append(float(getattr(cc, 'mpc_unity_geometry_lf', 0.0)))
+            mpc_unity_geometry_lr_list.append(float(getattr(cc, 'mpc_unity_geometry_lr', 0.0)))
+            mpc_unity_geometry_mass_list.append(float(getattr(cc, 'mpc_unity_geometry_mass', 0.0)))
+            mpc_unity_geometry_iz_list.append(float(getattr(cc, 'mpc_unity_geometry_iz', 0.0)))
+            mpc_unity_geometry_active_list.append(int(getattr(cc, 'mpc_unity_geometry_active', False)))
             mpc_kappa_bias_guard_active_list.append(int(getattr(cc, 'mpc_kappa_bias_guard_active', False)))
             mpc_kappa_bias_guard_limit_list.append(float(getattr(cc, 'mpc_kappa_bias_guard_limit', 0.0)))
             mpc_kappa_active_curve_preserve_ratio_list.append(
@@ -9334,6 +9403,18 @@ class DataRecorder:
                        "mpc_feasible", "mpc_solve_time_ms",
                        "mpc_e_lat", "mpc_e_heading", "mpc_kappa_ref",
                        "mpc_kappa_bias_correction", "mpc_kappa_bias_ema",
+                       "mpc_leff_value", "mpc_leff_theta", "mpc_leff_P",
+                       "mpc_leff_innovation", "mpc_leff_update_count",
+                       "mpc_tire_cf", "mpc_tire_cr",
+                       "mpc_tire_ekf_innovation", "mpc_tire_ekf_P_trace",
+                       "mpc_tire_slip_angle_front", "mpc_tire_slip_angle_rear",
+                       "mpc_tire_understeer_gradient", "mpc_dynamic_model_active",
+                       "mpc_tire_ekf_update_count", "mpc_v_y_estimate",
+                       "mpc_yaw_rate_estimate",
+                       "mpc_yaw_rate_measurement", "mpc_imu_yaw_rate_raw",
+                       "mpc_unity_geometry_lf", "mpc_unity_geometry_lr",
+                       "mpc_unity_geometry_mass", "mpc_unity_geometry_iz",
+                       "mpc_unity_geometry_active",
                        "mpc_kappa_bias_guard_active", "mpc_kappa_bias_guard_limit",
                        "mpc_kappa_active_curve_preserve_ratio",
                        "mpc_kappa_active_curve_preserve_active",
@@ -10471,6 +10552,29 @@ class DataRecorder:
                 mpc_kappa_bias_correction_list
             )
             self.h5_file["control/mpc_kappa_bias_ema"][current_size:] = mpc_kappa_bias_ema_list
+            self.h5_file["control/mpc_leff_value"][current_size:] = mpc_leff_value_list
+            self.h5_file["control/mpc_leff_theta"][current_size:] = mpc_leff_theta_list
+            self.h5_file["control/mpc_leff_P"][current_size:] = mpc_leff_P_list
+            self.h5_file["control/mpc_leff_innovation"][current_size:] = mpc_leff_innovation_list
+            self.h5_file["control/mpc_leff_update_count"][current_size:] = mpc_leff_update_count_list
+            self.h5_file["control/mpc_tire_cf"][current_size:] = mpc_tire_cf_list
+            self.h5_file["control/mpc_tire_cr"][current_size:] = mpc_tire_cr_list
+            self.h5_file["control/mpc_tire_ekf_innovation"][current_size:] = mpc_tire_ekf_innovation_list
+            self.h5_file["control/mpc_tire_ekf_P_trace"][current_size:] = mpc_tire_ekf_P_trace_list
+            self.h5_file["control/mpc_tire_slip_angle_front"][current_size:] = mpc_tire_slip_angle_front_list
+            self.h5_file["control/mpc_tire_slip_angle_rear"][current_size:] = mpc_tire_slip_angle_rear_list
+            self.h5_file["control/mpc_tire_understeer_gradient"][current_size:] = mpc_tire_understeer_gradient_list
+            self.h5_file["control/mpc_dynamic_model_active"][current_size:] = np.array(mpc_dynamic_model_active_list, dtype=np.int8)
+            self.h5_file["control/mpc_tire_ekf_update_count"][current_size:] = mpc_tire_ekf_update_count_list
+            self.h5_file["control/mpc_v_y_estimate"][current_size:] = mpc_v_y_estimate_list
+            self.h5_file["control/mpc_yaw_rate_estimate"][current_size:] = mpc_yaw_rate_estimate_list
+            self.h5_file["control/mpc_yaw_rate_measurement"][current_size:] = mpc_yaw_rate_measurement_list
+            self.h5_file["control/mpc_imu_yaw_rate_raw"][current_size:] = mpc_imu_yaw_rate_raw_list
+            self.h5_file["control/mpc_unity_geometry_lf"][current_size:] = mpc_unity_geometry_lf_list
+            self.h5_file["control/mpc_unity_geometry_lr"][current_size:] = mpc_unity_geometry_lr_list
+            self.h5_file["control/mpc_unity_geometry_mass"][current_size:] = mpc_unity_geometry_mass_list
+            self.h5_file["control/mpc_unity_geometry_iz"][current_size:] = mpc_unity_geometry_iz_list
+            self.h5_file["control/mpc_unity_geometry_active"][current_size:] = mpc_unity_geometry_active_list
             self.h5_file["control/mpc_kappa_bias_guard_active"][current_size:] = (
                 mpc_kappa_bias_guard_active_list
             )

@@ -40,6 +40,8 @@ from scoring_registry import (  # noqa: E402
     ACC_TTC_MIN_GATE_S,
     ACC_NEAR_MISS_GAP_M,
     ACC_GAP_RMSE_GATE_M,
+    TIRE_EKF_INNOVATION_DIVERGENCE,
+    TIRE_SLIP_ANGLE_SATURATION_RAD,
 )
 
 
@@ -239,6 +241,35 @@ class LayerHealthAnalyzer:
             grade_comp_val = self._scalar(f, "control/grade_compensation_active", i, default=0.0)
             if road_grade_val > 0.02 and grade_comp_val < 0.5:
                 flags.append("grade_compensation_missing")
+
+        # Tire estimation health (dynamic bicycle model)
+        if "control/mpc_dynamic_model_active" in f:
+            dyn_active = self._scalar(f, "control/mpc_dynamic_model_active", i, default=0)
+            if dyn_active > 0.5:
+                ekf_innov = abs(self._scalar(f, "control/mpc_tire_ekf_innovation", i, default=0.0))
+                if ekf_innov > TIRE_EKF_INNOVATION_DIVERGENCE:
+                    score -= 0.15
+                    flags.append("tire_ekf_diverging")
+                slip_f = abs(self._scalar(f, "control/mpc_tire_slip_angle_front", i, default=0.0))
+                if slip_f > TIRE_SLIP_ANGLE_SATURATION_RAD:
+                    score -= 0.10
+                    flags.append("tire_front_saturated")
+                slip_r = abs(self._scalar(f, "control/mpc_tire_slip_angle_rear", i, default=0.0))
+                if slip_r > TIRE_SLIP_ANGLE_SATURATION_RAD:
+                    score -= 0.10
+                    flags.append("tire_rear_saturated")
+
+                # IMU yaw rate signal health (when dynamic model active)
+                imu_raw = abs(self._scalar(f, "control/mpc_imu_yaw_rate_raw", i, default=0.0))
+                if imu_raw < 1e-6:
+                    score -= 0.20
+                    flags.append("imu_signal_missing")
+
+                # Unity geometry override health
+                geo_active = self._scalar(f, "control/mpc_unity_geometry_active", i, default=0)
+                if not geo_active:
+                    score -= 0.10
+                    flags.append("geometry_override_missing")
 
         return {"score": max(0.0, min(1.0, score)), "flags": flags}
 

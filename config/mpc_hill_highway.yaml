@@ -1,10 +1,14 @@
-# Hill highway track overlay
+# Hill highway track overlay — Option A
 #
 # Run with:
 #   ./start_av_stack.sh --track-yaml tracks/hill_highway.yml --duration 120
 #
-# No active overrides vs base config (tight_scale=0.70 was reverted after E2E validation
-# showed it worsened curve lateral centering: C1 +9%, C2 +17% mean e_lat vs tight_scale=0.50).
-# The PP rescue mechanism is driven by pp_floor, not tight_scale — wrong lever.
+# Kinematic model + L_eff feedforward + IMU yaw rate for state estimation.
+# No per-track tuning — all params auto-derived from base config + track geometry.
 
-trajectory: {}
+trajectory:
+  mpc:
+    mpc_dynamic_model_enabled: false
+    mpc_leff_estimation_enabled: true
+    mpc_tire_ekf_enabled: false
+    mpc_tire_ekf_use_imu_yaw_rate: true

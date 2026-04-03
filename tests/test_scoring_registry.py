@@ -254,6 +254,120 @@ class TestInterframeConstants:
         assert INTERFRAME_MAX_UPDATES_PER_CYCLE == 3
 
 
+class TestLeffConstants:
+    def test_leff_nominal(self):
+        from scoring_registry import LEFF_NOMINAL_M
+        assert LEFF_NOMINAL_M == 2.5
+
+    def test_leff_bounds_min(self):
+        from scoring_registry import LEFF_BOUNDS_MIN_M
+        assert LEFF_BOUNDS_MIN_M == 1.5
+
+    def test_leff_bounds_max(self):
+        from scoring_registry import LEFF_BOUNDS_MAX_M
+        assert LEFF_BOUNDS_MAX_M == 8.0
+
+    def test_leff_excitation_threshold(self):
+        from scoring_registry import LEFF_EXCITATION_THRESHOLD
+        assert LEFF_EXCITATION_THRESHOLD == 0.01
+
+
+class TestTireConstants:
+    def test_tire_cf_nominal(self):
+        from scoring_registry import TIRE_CF_NOMINAL
+        assert TIRE_CF_NOMINAL == 40000.0
+
+    def test_tire_cr_nominal(self):
+        from scoring_registry import TIRE_CR_NOMINAL
+        assert TIRE_CR_NOMINAL == 40000.0
+
+    def test_tire_cf_bounds_min(self):
+        from scoring_registry import TIRE_CF_BOUNDS_MIN
+        assert TIRE_CF_BOUNDS_MIN == 15000.0
+
+    def test_tire_cf_bounds_max(self):
+        from scoring_registry import TIRE_CF_BOUNDS_MAX
+        assert TIRE_CF_BOUNDS_MAX == 80000.0
+
+    def test_tire_cr_bounds_min(self):
+        from scoring_registry import TIRE_CR_BOUNDS_MIN
+        assert TIRE_CR_BOUNDS_MIN == 15000.0
+
+    def test_tire_cr_bounds_max(self):
+        from scoring_registry import TIRE_CR_BOUNDS_MAX
+        assert TIRE_CR_BOUNDS_MAX == 80000.0
+
+    def test_tire_slip_angle_linear_max(self):
+        from scoring_registry import TIRE_SLIP_ANGLE_LINEAR_MAX_RAD
+        assert TIRE_SLIP_ANGLE_LINEAR_MAX_RAD == 0.087
+
+    def test_tire_slip_angle_saturation(self):
+        from scoring_registry import TIRE_SLIP_ANGLE_SATURATION_RAD
+        assert TIRE_SLIP_ANGLE_SATURATION_RAD == 0.15
+
+    def test_tire_ekf_innovation_p95_gate(self):
+        from scoring_registry import TIRE_EKF_INNOVATION_P95_GATE
+        assert TIRE_EKF_INNOVATION_P95_GATE == 0.05
+
+    def test_tire_ekf_innovation_divergence(self):
+        from scoring_registry import TIRE_EKF_INNOVATION_DIVERGENCE
+        assert TIRE_EKF_INNOVATION_DIVERGENCE == 0.15
+
+    def test_tire_ekf_imu_yaw_rate_p95_gate(self):
+        from scoring_registry import TIRE_EKF_IMU_YAW_RATE_P95_GATE
+        assert TIRE_EKF_IMU_YAW_RATE_P95_GATE == 0.30
+
+    def test_tire_ekf_imu_signal_presence_gate(self):
+        from scoring_registry import TIRE_EKF_IMU_SIGNAL_PRESENCE_GATE
+        assert TIRE_EKF_IMU_SIGNAL_PRESENCE_GATE == 0.95
+
+    def test_tire_understeer_gradient_nominal(self):
+        from scoring_registry import TIRE_UNDERSTEER_GRADIENT_NOMINAL
+        assert TIRE_UNDERSTEER_GRADIENT_NOMINAL == 0.002
+
+    def test_tire_understeer_gradient_max(self):
+        from scoring_registry import TIRE_UNDERSTEER_GRADIENT_MAX
+        assert TIRE_UNDERSTEER_GRADIENT_MAX == 0.01
+
+
+class TestVehicleGeometryConstants:
+    def test_vehicle_lf_min(self):
+        from scoring_registry import VEHICLE_LF_MIN_M
+        assert VEHICLE_LF_MIN_M == 0.5
+
+    def test_vehicle_lf_max(self):
+        from scoring_registry import VEHICLE_LF_MAX_M
+        assert VEHICLE_LF_MAX_M == 3.0
+
+    def test_vehicle_lr_min(self):
+        from scoring_registry import VEHICLE_LR_MIN_M
+        assert VEHICLE_LR_MIN_M == 0.5
+
+    def test_vehicle_lr_max(self):
+        from scoring_registry import VEHICLE_LR_MAX_M
+        assert VEHICLE_LR_MAX_M == 3.0
+
+    def test_vehicle_mass_min(self):
+        from scoring_registry import VEHICLE_MASS_MIN_KG
+        assert VEHICLE_MASS_MIN_KG == 500.0
+
+    def test_vehicle_mass_max(self):
+        from scoring_registry import VEHICLE_MASS_MAX_KG
+        assert VEHICLE_MASS_MAX_KG == 5000.0
+
+    def test_vehicle_iz_min(self):
+        from scoring_registry import VEHICLE_IZ_MIN_KGMM
+        assert VEHICLE_IZ_MIN_KGMM == 200.0
+
+    def test_vehicle_iz_max(self):
+        from scoring_registry import VEHICLE_IZ_MAX_KGMM
+        assert VEHICLE_IZ_MAX_KGMM == 10000.0
+
+    def test_geometry_override_frame_deadline(self):
+        from scoring_registry import GEOMETRY_OVERRIDE_FRAME_DEADLINE
+        assert GEOMETRY_OVERRIDE_FRAME_DEADLINE == 30
+
+
 class TestOscillationAmplitudeGrowthConstants:
     def test_threshold(self):
         from scoring_registry import OSCILLATION_AMPLITUDE_GROWTH_THRESHOLD_MPS

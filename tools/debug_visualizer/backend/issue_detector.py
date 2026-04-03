@@ -30,6 +30,11 @@ from scoring_registry import (  # noqa: E402
     ACC_NEAR_MISS_GAP_M,
     ACC_JERK_P95_GATE_MPS3,
     ACC_MIN_ACTIVE_FRAME_RATE,
+    TIRE_SLIP_ANGLE_SATURATION_RAD,
+    TIRE_EKF_INNOVATION_DIVERGENCE,
+    TIRE_CF_BOUNDS_MIN, TIRE_CF_BOUNDS_MAX,
+    TIRE_CR_BOUNDS_MIN, TIRE_CR_BOUNDS_MAX,
+    TIRE_UNDERSTEER_GRADIENT_MAX,
 )
 
 
@@ -109,6 +114,10 @@ def build_causal_timeline(issues: List[Dict], failure_frame: Optional[int] = Non
         "mpc_gt_cross_track_vehicle_frame_semantic_mismatch": "control",
         "mpc_gt_cross_track_absolute_coordinate_mismatch": "control",
         "mpc_curvature_bias_cancellation": "control",
+        "tire_saturation": "control",
+        "tire_ekf_divergence": "control",
+        "tire_stiffness_at_bounds": "control",
+        "tire_understeer_anomaly": "control",
         "speed_exceeded_feasible": "control",
         "mpc_infeasible": "control",
         "mpc_solve_slow": "control",
@@ -3385,6 +3394,229 @@ def detect_issues(recording_path: Path, analyze_to_failure: bool = False) -> Dic
                                 ),
                             })
 
+            # ── Section 12: TIRE ESTIMATION FAILURE MODES (dynamic bicycle MPC) ──
+            if "control/mpc_dynamic_model_active" in f:
+                dyn_active = np.array(f["control/mpc_dynamic_model_active"][:num_frames], dtype=np.float64)
+                dyn_mask = dyn_active > 0.5
+
+                # 12a. tire_saturation: slip angle exceeds linear range
+                slip_front = (
+                    np.array(f["control/mpc_tire_slip_angle_front"][:num_frames], dtype=np.float64)
+                    if "control/mpc_tire_slip_angle_front" in f
+                    else np.zeros(num_frames, dtype=np.float64)
+                )
+                slip_rear = (
+                    np.array(f["control/mpc_tire_slip_angle_rear"][:num_frames], dtype=np.float64)
+                    if "control/mpc_tire_slip_angle_rear" in f
+                    else np.zeros(num_frames, dtype=np.float64)
+                )
+                tire_sat_mask = dyn_mask & (
+                    (np.abs(slip_front) > TIRE_SLIP_ANGLE_SATURATION_RAD)
+                    | (np.abs(slip_rear) > TIRE_SLIP_ANGLE_SATURATION_RAD)
+                )
+                min_event_len = 5
+                event_start = None
+                run_len = 0
+                for frame_idx in range(num_frames):
+                    if tire_sat_mask[frame_idx]:
+                        if run_len == 0:
+                            event_start = frame_idx
+                        run_len += 1
+                    else:
+                        if run_len >= min_event_len and event_start is not None:
+                            event_end = frame_idx - 1
+                            issues.append({
+                                "issue_id": "tire_saturation",
+                                "frame": int(event_start),
+                                "end_frame": int(event_end),
+                                "type": "tire_saturation",
+                                "severity": "high" if run_len >= 20 else "medium",
+                                "description": (
+                                    f"Tire saturation for {run_len} frames: "
+                                    f"|slip_f| p95={_finite_percentile(np.abs(slip_front[event_start:frame_idx]), 95):.4f} rad, "
+                                    f"|slip_r| p95={_finite_percentile(np.abs(slip_rear[event_start:frame_idx]), 95):.4f} rad "
+                                    f"(threshold={TIRE_SLIP_ANGLE_SATURATION_RAD:.3f} rad)."
+                                ),
+                                "duration": int(run_len),
+                            })
+                        event_start = None
+                        run_len = 0
+                if run_len >= min_event_len and event_start is not None:
+                    event_end = int(num_frames - 1)
+                    issues.append({
+                        "issue_id": "tire_saturation",
+                        "frame": int(event_start),
+                        "end_frame": event_end,
+                        "type": "tire_saturation",
+                        "severity": "high" if run_len >= 20 else "medium",
+                        "description": (
+                            f"Tire saturation for {run_len} frames: "
+                            f"|slip_f| p95={_finite_percentile(np.abs(slip_front[event_start:num_frames]), 95):.4f} rad, "
+                            f"|slip_r| p95={_finite_percentile(np.abs(slip_rear[event_start:num_frames]), 95):.4f} rad "
+                            f"(threshold={TIRE_SLIP_ANGLE_SATURATION_RAD:.3f} rad)."
+                        ),
+                        "duration": int(run_len),
+                    })
+
+                # 12b. tire_ekf_divergence: EKF innovation exceeds threshold
+                ekf_innov = (
+                    np.array(f["control/mpc_tire_ekf_innovation"][:num_frames], dtype=np.float64)
+                    if "control/mpc_tire_ekf_innovation" in f
+                    else np.zeros(num_frames, dtype=np.float64)
+                )
+                ekf_div_mask = dyn_mask & (np.abs(ekf_innov) > TIRE_EKF_INNOVATION_DIVERGENCE)
+                min_event_len = 10
+                event_start = None
+                run_len = 0
+                for frame_idx in range(num_frames):
+                    if ekf_div_mask[frame_idx]:
+                        if run_len == 0:
+                            event_start = frame_idx
+                        run_len += 1
+                    else:
+                        if run_len >= min_event_len and event_start is not None:
+                            event_end = frame_idx - 1
+                            issues.append({
+                                "issue_id": "tire_ekf_divergence",
+                                "frame": int(event_start),
+                                "end_frame": int(event_end),
+                                "type": "tire_ekf_divergence",
+                                "severity": "high",
+                                "description": (
+                                    f"EKF tire estimation diverging for {run_len} frames: "
+                                    f"|innovation| p95={_finite_percentile(np.abs(ekf_innov[event_start:frame_idx]), 95):.4f} rad/s "
+                                    f"(threshold={TIRE_EKF_INNOVATION_DIVERGENCE:.3f} rad/s)."
+                                ),
+                                "duration": int(run_len),
+                            })
+                        event_start = None
+                        run_len = 0
+                if run_len >= min_event_len and event_start is not None:
+                    event_end = int(num_frames - 1)
+                    issues.append({
+                        "issue_id": "tire_ekf_divergence",
+                        "frame": int(event_start),
+                        "end_frame": event_end,
+                        "type": "tire_ekf_divergence",
+                        "severity": "high",
+                        "description": (
+                            f"EKF tire estimation diverging for {run_len} frames: "
+                            f"|innovation| p95={_finite_percentile(np.abs(ekf_innov[event_start:num_frames]), 95):.4f} rad/s "
+                            f"(threshold={TIRE_EKF_INNOVATION_DIVERGENCE:.3f} rad/s)."
+                        ),
+                        "duration": int(run_len),
+                    })
+
+                # 12c. tire_stiffness_at_bounds: C_f or C_r railed at safety clamp
+                tire_cf = (
+                    np.array(f["control/mpc_tire_cf"][:num_frames], dtype=np.float64)
+                    if "control/mpc_tire_cf" in f
+                    else np.full(num_frames, 40000.0, dtype=np.float64)
+                )
+                tire_cr = (
+                    np.array(f["control/mpc_tire_cr"][:num_frames], dtype=np.float64)
+                    if "control/mpc_tire_cr" in f
+                    else np.full(num_frames, 40000.0, dtype=np.float64)
+                )
+                stiffness_bounds_mask = dyn_mask & (
+                    (tire_cf <= TIRE_CF_BOUNDS_MIN + 1)
+                    | (tire_cf >= TIRE_CF_BOUNDS_MAX - 1)
+                    | (tire_cr <= TIRE_CR_BOUNDS_MIN + 1)
+                    | (tire_cr >= TIRE_CR_BOUNDS_MAX - 1)
+                )
+                min_event_len = 50
+                event_start = None
+                run_len = 0
+                for frame_idx in range(num_frames):
+                    if stiffness_bounds_mask[frame_idx]:
+                        if run_len == 0:
+                            event_start = frame_idx
+                        run_len += 1
+                    else:
+                        if run_len >= min_event_len and event_start is not None:
+                            event_end = frame_idx - 1
+                            issues.append({
+                                "issue_id": "tire_stiffness_at_bounds",
+                                "frame": int(event_start),
+                                "end_frame": int(event_end),
+                                "type": "tire_stiffness_at_bounds",
+                                "severity": "medium",
+                                "description": (
+                                    f"Tire stiffness at safety bounds for {run_len} frames: "
+                                    f"C_f range=[{tire_cf[event_start:frame_idx].min():.0f}, {tire_cf[event_start:frame_idx].max():.0f}] N/rad, "
+                                    f"C_r range=[{tire_cr[event_start:frame_idx].min():.0f}, {tire_cr[event_start:frame_idx].max():.0f}] N/rad "
+                                    f"(bounds=[{TIRE_CF_BOUNDS_MIN:.0f}, {TIRE_CF_BOUNDS_MAX:.0f}])."
+                                ),
+                                "duration": int(run_len),
+                            })
+                        event_start = None
+                        run_len = 0
+                if run_len >= min_event_len and event_start is not None:
+                    event_end = int(num_frames - 1)
+                    issues.append({
+                        "issue_id": "tire_stiffness_at_bounds",
+                        "frame": int(event_start),
+                        "end_frame": event_end,
+                        "type": "tire_stiffness_at_bounds",
+                        "severity": "medium",
+                        "description": (
+                            f"Tire stiffness at safety bounds for {run_len} frames: "
+                            f"C_f range=[{tire_cf[event_start:num_frames].min():.0f}, {tire_cf[event_start:num_frames].max():.0f}] N/rad, "
+                            f"C_r range=[{tire_cr[event_start:num_frames].min():.0f}, {tire_cr[event_start:num_frames].max():.0f}] N/rad "
+                            f"(bounds=[{TIRE_CF_BOUNDS_MIN:.0f}, {TIRE_CF_BOUNDS_MAX:.0f}])."
+                        ),
+                        "duration": int(run_len),
+                    })
+
+                # 12d. tire_understeer_anomaly: understeer gradient exceeds threshold
+                understeer_grad = (
+                    np.array(f["control/mpc_tire_understeer_gradient"][:num_frames], dtype=np.float64)
+                    if "control/mpc_tire_understeer_gradient" in f
+                    else np.zeros(num_frames, dtype=np.float64)
+                )
+                us_anomaly_mask = dyn_mask & (understeer_grad > TIRE_UNDERSTEER_GRADIENT_MAX)
+                min_event_len = 30
+                event_start = None
+                run_len = 0
+                for frame_idx in range(num_frames):
+                    if us_anomaly_mask[frame_idx]:
+                        if run_len == 0:
+                            event_start = frame_idx
+                        run_len += 1
+                    else:
+                        if run_len >= min_event_len and event_start is not None:
+                            event_end = frame_idx - 1
+                            issues.append({
+                                "issue_id": "tire_understeer_anomaly",
+                                "frame": int(event_start),
+                                "end_frame": int(event_end),
+                                "type": "tire_understeer_anomaly",
+                                "severity": "medium",
+                                "description": (
+                                    f"Anomalous understeer gradient for {run_len} frames: "
+                                    f"K_us p95={_finite_percentile(understeer_grad[event_start:frame_idx], 95):.5f} rad/(m/s²) "
+                                    f"(threshold={TIRE_UNDERSTEER_GRADIENT_MAX:.3f})."
+                                ),
+                                "duration": int(run_len),
+                            })
+                        event_start = None
+                        run_len = 0
+                if run_len >= min_event_len and event_start is not None:
+                    event_end = int(num_frames - 1)
+                    issues.append({
+                        "issue_id": "tire_understeer_anomaly",
+                        "frame": int(event_start),
+                        "end_frame": event_end,
+                        "type": "tire_understeer_anomaly",
+                        "severity": "medium",
+                        "description": (
+                            f"Anomalous understeer gradient for {run_len} frames: "
+                            f"K_us p95={_finite_percentile(understeer_grad[event_start:num_frames], 95):.5f} rad/(m/s²) "
+                            f"(threshold={TIRE_UNDERSTEER_GRADIENT_MAX:.3f})."
+                        ),
+                        "duration": int(run_len),
+                    })
+
             # 10. ACC ISSUES (guarded on acc_active field presence and min activity)
             if 'vehicle/acc_active' in f:
                 acc_active_raw = np.array(f['vehicle/acc_active'][:num_frames], dtype=float)
@@ -3584,6 +3816,72 @@ def detect_issues(recording_path: Path, analyze_to_failure: bool = False) -> Dic
                                     "divergence_m": float(divergence[fr]),
                                 },
                             })
+
+                    # IMU yaw rate missing (zero signal during MPC)
+                    imu_raw = None
+                    if "control/mpc_imu_yaw_rate_raw" in f:
+                        imu_raw = np.array(f["control/mpc_imu_yaw_rate_raw"][:num_frames], dtype=float)
+                    if imu_raw is not None and mpc_e_lat_raw is not None:
+                        mpc_active = np.abs(mpc_e_lat_raw) > 0  # proxy: MPC active when e_lat nonzero
+                        imu_missing = mpc_active & (np.abs(imu_raw) < 1e-6)
+                        missing_runs = 0
+                        for fr in range(num_frames):
+                            if imu_missing[fr]:
+                                missing_runs += 1
+                                if missing_runs == 10:
+                                    issues.append({
+                                        "frame": int(fr - 9),
+                                        "type": "imu_yaw_rate_missing",
+                                        "severity": "high",
+                                        "description": (
+                                            f"IMU yaw rate signal zero for 10+ consecutive MPC frames "
+                                            f"starting at frame {fr - 9}. EKF measurement degraded."
+                                        ),
+                                        "fields": {"run_length": missing_runs},
+                                    })
+                            else:
+                                missing_runs = 0
+
+                    # IMU yaw rate spike
+                    if imu_raw is not None:
+                        spike_frames = np.where(np.abs(imu_raw) > 1.0)[0]
+                        spike_run = 0
+                        for fr in spike_frames:
+                            spike_run += 1
+                            if spike_run >= 3:
+                                issues.append({
+                                    "frame": int(fr),
+                                    "type": "imu_yaw_rate_spike",
+                                    "severity": "medium",
+                                    "description": (
+                                        f"IMU yaw rate spike: {imu_raw[fr]:.3f} rad/s "
+                                        f"(threshold 1.0 rad/s)"
+                                    ),
+                                    "fields": {
+                                        "imu_yaw_rate": float(imu_raw[fr]),
+                                    },
+                                })
+                                spike_run = 0
+
+                    # Geometry override missing (dynamic model active without Unity params)
+                    geo_active_raw = None
+                    if "control/mpc_unity_geometry_active" in f:
+                        geo_active_raw = np.array(f["control/mpc_unity_geometry_active"][:num_frames], dtype=float)
+                    dyn_active_raw = None
+                    if "control/mpc_dynamic_model_active" in f:
+                        dyn_active_raw = np.array(f["control/mpc_dynamic_model_active"][:num_frames], dtype=float)
+                    if (dyn_active_raw is not None and geo_active_raw is not None
+                            and np.any(dyn_active_raw > 0.5) and not np.any(geo_active_raw > 0.5)):
+                        issues.append({
+                            "frame": 0,
+                            "type": "geometry_override_missing",
+                            "severity": "high",
+                            "description": (
+                                "Dynamic model active but Unity geometry override never applied. "
+                                "MPC using fallback l_f=l_r=1.125m (symmetric, zero understeer)."
+                            ),
+                            "fields": {},
+                        })
 
             # Sort issues by frame number
             issues.sort(key=lambda x: x["frame"])

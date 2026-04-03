@@ -2385,6 +2385,11 @@ class VehicleState(BaseModel):
     # Vehicle parameters from Unity
     maxSteerAngle: float = 30.0
     wheelbaseMeters: float = 2.5
+    dynamicModelLf: float = 0.0
+    dynamicModelLr: float = 0.0
+    dynamicModelMass: float = 0.0
+    dynamicModelIz: float = 0.0
+    dynamicModelParamsReady: bool = False
     fixedDeltaTime: float = 0.02
     unityTime: float = 0.0
     unityFrameCount: int = 0

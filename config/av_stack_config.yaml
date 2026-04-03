@@ -746,7 +746,7 @@ trajectory:
     mpc_dt: 0.1                     # prediction step (2s horizon at 20 steps)
     mpc_wheelbase_m: 2.5
     mpc_max_steer_rad: 0.5236       # 30° physical max steering angle
-    mpc_q_lat: 0.5
+    mpc_q_lat: 1.0
     mpc_q_lat_rate: 0.0              # lateral velocity damping (0=disabled) — tuned via E2E validation
     mpc_q_heading: 10.0              # RAISED 5→10: provides phase lead — heading error (derivative of lateral) is penalised more heavily, preventing oscillation buildup
     mpc_q_speed: 2.0
@@ -756,7 +756,7 @@ trajectory:
     # enough to close ~0.4m curve offsets, stable enough to not oscillate.
     mpc_r_steer: 0.05
     mpc_r_accel: 0.2
-    mpc_r_steer_rate: 3.5                           # CHANGED: 2.0 → 3.5 (penalises steering-rate changes more heavily; directly damps the ~0.5 Hz oscillation whose period matches the 2 s MPC horizon)
+    mpc_r_steer_rate: 2.0                           # CHANGED: 3.5 → 2.0 (q_heading=10 now provides phase-lead oscillation damping; r_steer_rate=3.5 was over-damping, causing 0.46m steady-state offset in curves)
     # Speed-dependent r_steer_rate scheduling: scales r_steer_rate with speed
     # to counteract bicycle model v/L gain increase. r_eff = r_base * min(1 + gain*(v-onset), max_scale).
     mpc_r_steer_rate_scheduling_enabled: true
@@ -814,6 +814,37 @@ trajectory:
     smith_predictor_disagreement_gain: 0.3  # Attenuate heading correction when sign(e_lat) != sign(e_heading) (oscillation inflection)
     mpc_grade_clamp_rad: 0.15             # Max grade input to MPC (~8.5°)
     mpc_grade_ff_gain: 1.8                # Unity WheelCollider physics calibration
+    # ── Online effective wheelbase estimation (RLS) ────────────────────────────
+    mpc_leff_estimation_enabled: false    # off by default — enable per-track as validated
+    mpc_leff_forgetting_factor: 0.995     # λ — exponential forgetting (~200-frame window)
+    mpc_leff_initial_P: 100.0             # initial RLS covariance (high → fast initial learning)
+    mpc_leff_min_speed_mps: 3.0           # only update when v > this (low-speed kinematics unreliable)
+    mpc_leff_min_excitation: 0.01         # min |v·δ·δ_max·dt| per frame to trigger RLS update
+    mpc_leff_bounds_min: 1.5              # hard safety clamp — never go below 1.5m
+    mpc_leff_bounds_max: 8.0              # hard safety clamp — never go above 8.0m
+  # ── Dynamic bicycle model ──────────────────────────────────────────────────
+    mpc_dynamic_model_enabled: false       # off by default — kinematic model active
+    mpc_vehicle_mass_kg: 1500.0
+    mpc_vehicle_iz_kgm2: 1250.0
+    mpc_vehicle_lf_m: 1.125
+    mpc_vehicle_lr_m: 1.125
+    mpc_tire_cf_nominal: 40000.0
+    mpc_tire_cr_nominal: 40000.0
+    mpc_q_vy: 0.5
+    mpc_q_yawrate: 1.0
+  # ── EKF tire cornering stiffness estimation ────────────────────────────────
+    mpc_tire_ekf_enabled: false
+    mpc_tire_ekf_process_noise: 100.0
+    mpc_tire_ekf_measurement_noise: 0.01
+    mpc_tire_ekf_min_speed_mps: 5.0
+    mpc_tire_ekf_cf_min: 15000.0
+    mpc_tire_ekf_cf_max: 80000.0
+    mpc_tire_ekf_cr_min: 15000.0
+    mpc_tire_ekf_cr_max: 80000.0
+    mpc_tire_ekf_innovation_divergence_threshold: 0.15
+    mpc_tire_ekf_slip_saturation_rad: 0.15
+    mpc_tire_ekf_use_imu_yaw_rate: true
+    mpc_tire_ekf_imu_yaw_rate_r: 0.001
   # ── NMPC (Step 5) ────────────────────────────────────────────────────────────
   # Nonlinear MPC using full bicycle kinematics (sin/tan, no small-angle approximation).
   # Activates when regime == NONLINEAR_MPC (speed > lmpc_max_speed_mps or
