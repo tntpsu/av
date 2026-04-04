@@ -63,6 +63,8 @@ from scoring_registry import (
     OSCILLATION_AMPLITUDE_GROWTH_THRESHOLD_MPS,
     OSCILLATION_AMPLITUDE_GROWTH_SCALE,
     OSCILLATION_AMPLITUDE_GROWTH_MAX_PENALTY,
+    PERCEPTION_BLIND_RATE_GATE,
+    PERCEPTION_BLIND_PENALTY_MAX,
 )
 
 G_MPS2 = 9.80665
@@ -7091,6 +7093,7 @@ def analyze_recording_summary(
             data['num_lanes_detected'] = np.array(f['perception/num_lanes_detected'][:]) if 'perception/num_lanes_detected' in f else None
             data['confidence'] = np.array(f['perception/confidence'][:]) if 'perception/confidence' in f else None
             data['using_stale_data'] = np.array(f['perception/using_stale_data'][:]) if 'perception/using_stale_data' in f else None
+            data['blind_active'] = np.array(f['perception/blind_active'][:]) if 'perception/blind_active' in f else None
             data['fit_points_left'] = (
                 f['perception/fit_points_left'][:] if 'perception/fit_points_left' in f else None
             )
@@ -7862,7 +7865,13 @@ def analyze_recording_summary(
                 hard_count += 1
         stale_hard_rate = safe_float(hard_count / n_frames * 100)
         stale_fallback_visibility_rate = safe_float(fallback_count / n_frames * 100)
-    
+
+    # Blind perception rate (both lane positions zero/None)
+    blind_perception_rate = 0.0
+    if data.get('blind_active') is not None and n_frames > 0:
+        blind_active = np.asarray(data['blind_active'][:n_frames])
+        blind_perception_rate = safe_float(np.mean(blind_active > 0) * 100)
+
     # NEW: Calculate perception stability metrics (lane position/width variance)
     # High variance indicates perception instability even if not caught by stale_data
     perception_stability_score = 100.0  # Start at 100, penalize for instability
@@ -8367,6 +8376,9 @@ def analyze_recording_summary(
     perception_instability_penalty = safe_float(min(20, perception_instability_penalty))
     lane_jitter_penalty = safe_float(min(10, max(0.0, lane_line_jitter_p95 - 0.30) * 30.0))
     reference_jitter_penalty = safe_float(min(10, max(0.0, reference_jitter_p95 - 0.15) * 40.0))
+    blind_perception_penalty = safe_float(
+        min(PERCEPTION_BLIND_PENALTY_MAX, max(0.0, blind_perception_rate - PERCEPTION_BLIND_RATE_GATE * 100) * 0.5)
+    )
 
     trajectory_lateral_rmse_penalty = safe_float(min(30, lateral_error_adj_rmse * 50))
     trajectory_lateral_p95_penalty = safe_float(min(20, max(0.0, lateral_error_adj_p95 - LATERAL_P95_GATE_M) * 35.0))
@@ -10140,6 +10152,11 @@ def analyze_recording_summary(
                     "value": reference_jitter_penalty,
                     "limit": "<=0.15m",
                 },
+                {
+                    "name": "Blind Perception (no detection)",
+                    "value": blind_perception_penalty,
+                    "limit": f"<={PERCEPTION_BLIND_RATE_GATE*100:.0f}%",
+                },
             ],
         },
         "Trajectory": {
@@ -11194,6 +11211,8 @@ def analyze_recording_summary(
             "stale_raw_rate": safe_float(stale_raw_rate),
             "stale_hard_rate": safe_float(stale_hard_rate),
             "stale_fallback_visibility_rate": safe_float(stale_fallback_visibility_rate),
+            "blind_perception_rate": safe_float(blind_perception_rate),
+            "blind_perception_penalty": safe_float(blind_perception_penalty),
             "perception_stability_score": safe_float(perception_stability_score),
             "lane_position_variance": safe_float(lane_position_variance),
             "lane_width_variance": safe_float(lane_width_variance),

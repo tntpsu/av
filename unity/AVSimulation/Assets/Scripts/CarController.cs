@@ -1188,7 +1188,9 @@ public class CarController : MonoBehaviour
                 }
                 
                 // In GT mode use direct position assignment for deterministic path progression.
-                rb.position = referencePosition;
+                // Add ride height offset so camera perspective matches physics-based AV mode
+                // (WheelCollider suspension lifts the chassis ~0.30m above road surface).
+                rb.position = referencePosition + new Vector3(0, 0.30f, 0);
                 
                 // Update last position tracking
                 lastPosition = rb.position;

@@ -43,6 +43,13 @@ For canonical startup/replay script behavior and defaults, use `docs/SCRIPT_RUNB
 - **[correlate_debug_with_state.py](#correlate_debug_with_statepy)** - Correlate debug visualizer data with vehicle state
 - **[align_tests_with_unity.py](#align_tests_with_unitypy)** - Align test coordinate assumptions with Unity
 
+### Segmentation Model Training
+- **[segmentation/train_pipeline.sh](#segmentationtrain_pipelinesh)** - End-to-end overnight pipeline: collect GT data, generate pseudo-labels, train model
+- **[segmentation/collect_training_data.sh](#segmentationcollect_training_datash)** - Batch GT data collection across all tracks, speeds, and lighting
+- **[segmentation/preview_segmentation_masks.py](#segmentationpreview_segmentation_maskspy)** - Visualize seg model output or CV detector masks on recording frames
+- **[segmentation/track_length.py](#segmentationtrack_lengthpy)** - Compute track length and safe one-lap duration from YAML
+- See **[training/TRAINING_GUIDE.md](../training/TRAINING_GUIDE.md)** for full documentation
+
 ### Analysis Wrappers
 - **[analyze.py](#analyzepy)** - Wrapper for comprehensive analysis (see `analyze/README.md`)
 

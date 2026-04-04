@@ -150,7 +150,7 @@ Car now reaches 25 m/s (11.7% overspeed rate at target=25). Speed RMSE 5.3 m/s =
 | Curvature measurement errors cascade to speed + steering | High | T-032: better perception; T-022 control sensitivity analysis (tooling exists) |
 | 100+ config params, no automated regression | High | T-033: CI A/B batch testing |
 | Perception stale-frame fallback breaks silently | Medium | Add explicit logging + stale-frame rate metric in analyzer |
-| CV fallback accuracy degrades on curves | Medium | T-032: train segmentation model |
+| Segmentation model untrained / mislabeled | Critical | T-032: retrain with multi-track GT data. Pipeline ready: `./tools/segmentation/train_pipeline.sh`. See `training/TRAINING_GUIDE.md` |
 | Temporal sync issues under CPU load | Medium | Latency injection tooling exists (`--lock-latency-ms`) |
 
 ---

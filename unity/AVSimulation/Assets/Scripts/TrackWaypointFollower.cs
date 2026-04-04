@@ -8,8 +8,9 @@ using UnityEngine;
 /// Each FixedUpdate the object is translated along the track centerline
 /// at the speed returned by SpeedProfiler, wrapping at track end if loop=true.
 ///
-/// The transform is placed ON the track surface (Y = waypoint.y) so grade
-/// changes are handled correctly — no separate grade FF needed.
+/// The transform is placed above the track surface (Y = waypoint.y + rideHeightOffsetM)
+/// to match the ego car's suspension-lifted ride height. Grade changes are
+/// handled correctly — no separate grade FF needed.
 ///
 /// Lane offset: laneOffsetM shifts the vehicle perpendicular to the road
 /// tangent at each frame. Positive = right-hand side of travel direction
@@ -30,6 +31,11 @@ public class TrackWaypointFollower : MonoBehaviour
     [Tooltip("Lateral offset from centerline (m). Positive = right lane. " +
              "Use roadWidth/4 for the right lane of a 2-lane road.")]
     public float laneOffsetM = 0.0f;
+
+    [Tooltip("Vertical offset above track surface (m). Match this to the ego car's " +
+             "effective ride height so the camera perspective is consistent between GT and AV runs. " +
+             "AV car: WheelCollider suspension 0.35m at 15% compression ≈ 0.30m lift.")]
+    public float rideHeightOffsetM = 0.30f;
 
     [Tooltip("Travel direction along the sampled path: +1 = same direction, -1 = opposite direction.")]
     public int travelDirectionSign = 1;
@@ -176,7 +182,7 @@ public class TrackWaypointFollower : MonoBehaviour
 
         // Apply lateral lane offset: Vector3.Cross(up, fwd) = right-hand side of travel.
         Vector3 right = Vector3.Cross(Vector3.up, fwd);
-        transform.position = centerPos + right * laneOffsetM;
+        transform.position = centerPos + right * laneOffsetM + new Vector3(0, rideHeightOffsetM, 0);
 
         transform.rotation = Quaternion.LookRotation(fwd, Vector3.up);
     }

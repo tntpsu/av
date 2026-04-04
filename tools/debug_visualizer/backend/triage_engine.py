@@ -119,6 +119,15 @@ PATTERNS = [
         "check": lambda m: m.get("single_lane_rate", 0) > 0.30,
     },
     {
+        "id": "perc_blind_no_detection",
+        "name": "Perception blind (no lane detection >5% frames)",
+        "severity": "safety",
+        "code_pointer": "av_stack/orchestrator.py:_pf_score_perception_health()",
+        "config_lever": "N/A — seg model or CV fallback must detect lanes",
+        "fix_hint": "Segmentation model returned zero masks. Check model checkpoint, camera exposure, or retrain on scenario imagery.",
+        "check": lambda m: m.get("blind_perception_rate", 0) > 0.05,
+    },
+    {
         "id": "traj_ref_rate_clamped",
         "name": "Trajectory jitter (ref rate clamp active >20% frames)",
         "severity": "instability",
@@ -951,6 +960,9 @@ class TriageEngine:
                 m["stale_rate"] = float(np.mean(stale.astype(bool)))
             if n_lanes is not None:
                 m["single_lane_rate"] = float(np.mean(n_lanes == 1))
+            blind = arr("perception/blind_active")
+            if blind is not None:
+                m["blind_perception_rate"] = float(np.mean(blind.astype(bool)))
 
             # Trajectory
             clamped = arr("trajectory/diag_ref_x_rate_limit_active")  # actual field name
@@ -1901,6 +1913,7 @@ class TriageEngine:
             "tire_saturation": "tire_saturation_rate",
             "tire_ekf_divergence": "tire_ekf_divergence_rate",
             "tire_understeer_anomaly": "tire_understeer_gradient_max",
+            "perc_blind_no_detection": "blind_perception_rate",
         }
         for pat in PATTERNS:
             try:

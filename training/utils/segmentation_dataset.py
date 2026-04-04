@@ -21,7 +21,11 @@ def build_label_mask(yellow_mask: np.ndarray, white_mask: np.ndarray) -> np.ndar
     """
     Build a single-channel label mask.
 
-    0 = background, 1 = left lane (yellow), 2 = right lane (white).
+    0 = background, 1 = left lane (yellow center line), 2 = right lane (white right edge).
+
+    White pixels to the LEFT of the yellow center line are set to background (0),
+    not class 2. This prevents the left-side white edge line (oncoming lane boundary)
+    from being mislabeled as the right lane boundary.
     """
     if yellow_mask.shape != white_mask.shape:
         raise ValueError("yellow_mask and white_mask must have the same shape")
@@ -30,7 +34,23 @@ def build_label_mask(yellow_mask: np.ndarray, white_mask: np.ndarray) -> np.ndar
 
     label_mask = np.zeros_like(yellow_mask, dtype=np.uint8)
     label_mask[yellow_mask > 0] = 1
-    label_mask[white_mask > 0] = 2
+
+    # Find the yellow center line's x-position per row to filter white pixels.
+    # Only white pixels to the RIGHT of the yellow line are class 2 (right edge).
+    h, w = yellow_mask.shape
+    filtered_white = white_mask.copy()
+    for y in range(h):
+        yellow_cols = np.where(yellow_mask[y] > 0)[0]
+        if len(yellow_cols) > 0:
+            # Yellow center line median x in this row
+            yellow_x = int(np.median(yellow_cols))
+            # Zero out white pixels to the left of the yellow line
+            filtered_white[y, :yellow_x] = 0
+        else:
+            # No yellow reference in this row — use image center as fallback
+            filtered_white[y, :w // 2] = 0
+
+    label_mask[filtered_white > 0] = 2
     return label_mask
 
 

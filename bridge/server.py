@@ -2576,6 +2576,8 @@ class ControlCommand(BaseModel):
     randomize_request_id: int = 0  # Deduplicate randomization requests
     randomize_seed: Optional[int] = None  # Optional seed for repeatability
     emergency_stop: bool = False  # Emergency stop flag from AV stack
+    sun_altitude_deg: float = -1.0  # Sun altitude (0=horizon, 90=overhead, -1=no change)
+    sun_azimuth_deg: float = -1.0   # Sun azimuth (0=north, 90=east, -1=no change)
 
 
 class GroundTruthMode(BaseModel):

@@ -1238,6 +1238,8 @@ class UnityBridgeClient:
         randomize_start: bool = False,
         randomize_request_id: int = 0,
         randomize_seed: int | None = None,
+        sun_altitude_deg: float = -1.0,
+        sun_azimuth_deg: float = -1.0,
     ) -> dict:
         command = {
             "steering": float(steering),
@@ -1247,6 +1249,8 @@ class UnityBridgeClient:
             "ground_truth_speed": float(ground_truth_speed),
             "randomize_start": bool(randomize_start),
             "randomize_request_id": int(randomize_request_id),
+            "sun_altitude_deg": float(sun_altitude_deg),
+            "sun_azimuth_deg": float(sun_azimuth_deg),
         }
         if randomize_seed is not None:
             command["randomize_seed"] = int(randomize_seed)
@@ -1348,6 +1352,8 @@ class UnityBridgeClient:
         randomize_start: bool = False,
         randomize_request_id: int = 0,
         randomize_seed: int | None = None,
+        sun_altitude_deg: float = -1.0,
+        sun_azimuth_deg: float = -1.0,
     ) -> bool:
         """Enqueue a control command for fire-and-forget delivery to Unity.
 
@@ -1374,6 +1380,8 @@ class UnityBridgeClient:
             randomize_start=randomize_start,
             randomize_request_id=randomize_request_id,
             randomize_seed=randomize_seed,
+            sun_altitude_deg=sun_altitude_deg,
+            sun_azimuth_deg=sun_azimuth_deg,
         )
         # Latest-wins: drain any unsent command, then enqueue the new one.
         try:

@@ -43,7 +43,7 @@ After completing work, update the relevant `docs/agent/*.md` files.
 - **Lateral mode:** Pure Pursuit (not PID, not Stanley, not MPC)
 - **PID pipeline:** Bypassed in PP mode (S1-M35)
 - **Target speed:** 12.0 m/s
-- **Perception:** CV fallback active (segmentation model likely untrained)
+- **Perception:** Segmentation model active but needs retraining (current checkpoint mislabels car hood as lane). Retraining pipeline ready: `./tools/segmentation/train_pipeline.sh`. See `training/TRAINING_GUIDE.md`.
 
 ---
 

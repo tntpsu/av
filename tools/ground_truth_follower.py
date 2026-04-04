@@ -204,6 +204,8 @@ class GroundTruthFollower:
         fast_record: bool = False,
         record_state_lag_frames: int = 0,
         stream_sync_policy: str = "aligned",
+        sun_altitude_deg: float = -1.0,
+        sun_azimuth_deg: float = -1.0,
     ):
         """
         Initialize ground truth follower.
@@ -240,6 +242,8 @@ class GroundTruthFollower:
         self._vehicle_state_history = deque(maxlen=self.record_state_lag_frames + 4)
         self._strict_missing_feedback_streak = 0
         self._strict_invalid_feedback_streak = 0
+        self.sun_altitude_deg = float(sun_altitude_deg)
+        self.sun_azimuth_deg = float(sun_azimuth_deg)
         
         # Speed control PID parameters (tuned for Unity physics)
         # Unity: motorForce=400, brake uses damping + velocity reduction
@@ -929,6 +933,8 @@ class GroundTruthFollower:
                         randomize_start=False,
                         randomize_request_id=0,
                         randomize_seed=None,
+                        sun_altitude_deg=self.sun_altitude_deg,
+                        sun_azimuth_deg=self.sun_azimuth_deg,
                     )
                     feedback = self.bridge.get_latest_unity_feedback()
                     if feedback:
@@ -1216,7 +1222,9 @@ class GroundTruthFollower:
                         ground_truth_speed=effective_target_speed,
                         randomize_start=control_command_dict.get('randomize_start', False),
                         randomize_request_id=control_command_dict.get('randomize_request_id', 0),
-                        randomize_seed=control_command_dict.get('randomize_seed')
+                        randomize_seed=control_command_dict.get('randomize_seed'),
+                        sun_altitude_deg=self.sun_altitude_deg,
+                        sun_azimuth_deg=self.sun_azimuth_deg,
                     )
                     if control_success and self.randomize_pending:
                         self.randomize_pending = False
@@ -1333,7 +1341,9 @@ class GroundTruthFollower:
                                 ground_truth_speed=effective_target_speed,
                                 randomize_start=control_command_dict.get('randomize_start', False),
                                 randomize_request_id=control_command_dict.get('randomize_request_id', 0),
-                                randomize_seed=control_command_dict.get('randomize_seed')
+                                randomize_seed=control_command_dict.get('randomize_seed'),
+                                sun_altitude_deg=self.sun_altitude_deg,
+                                sun_azimuth_deg=self.sun_azimuth_deg,
                             )
                     except:
                         pass
@@ -1471,7 +1481,11 @@ def main():
         default="data/segmentation_dataset/checkpoints/segnet_best.pt",
         help="Segmentation checkpoint path (default: segnet_best.pt)",
     )
-    
+    parser.add_argument("--sun-altitude", type=float, default=-1.0,
+                       help="Sun altitude in degrees (0=horizon, 45=default, 90=overhead, -1=no change)")
+    parser.add_argument("--sun-azimuth", type=float, default=-1.0,
+                       help="Sun azimuth in degrees (0=north, 90=east, 180=south, -1=no change)")
+
     args = parser.parse_args()
     
     selected_level = {
@@ -1513,6 +1527,8 @@ def main():
         fast_record=args.fast_record,
         record_state_lag_frames=args.record_state_lag_frames,
         stream_sync_policy=args.stream_sync_policy,
+        sun_altitude_deg=args.sun_altitude,
+        sun_azimuth_deg=args.sun_azimuth,
     )
     
     try:

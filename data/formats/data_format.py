@@ -856,6 +856,9 @@ class PerceptionOutput:
     perception_timestamp_frozen: bool = False  # True if perception timestamp did not advance
     perception_clamp_events: Optional[List[str]] = None  # Clamp/override events for debugging
     reject_reason: Optional[str] = None  # Primary reason lane positions were rejected
+    # Blind perception detection
+    perception_blind: bool = False  # True when both lane positions are zero/None for N consecutive frames
+    consecutive_no_detection_frames: int = 0  # Count of consecutive frames with no lane geometry
     # NEW: Points used for polynomial fitting (for debug visualization)
     fit_points_left: Optional[np.ndarray] = None  # [[x, y], ...] points used for left lane fit
     fit_points_right: Optional[np.ndarray] = None  # [[x, y], ...] points used for right lane fit

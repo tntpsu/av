@@ -127,6 +127,12 @@ class LayerHealthAnalyzer:
             score -= 0.15
             flags.append("gate_fired")
 
+        # Blind perception (weight 0.35) — no lane detection at all
+        blind = int(self._scalar(f, "perception/blind_active", i, default=0))
+        if blind:
+            score -= 0.35
+            flags.append("blind")
+
         return {"score": max(0.0, min(1.0, score)), "flags": flags}
 
     def _score_trajectory(self, f: h5py.File, i: int) -> dict:

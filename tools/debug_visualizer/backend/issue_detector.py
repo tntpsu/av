@@ -94,6 +94,7 @@ def build_causal_timeline(issues: List[Dict], failure_frame: Optional[int] = Non
         "extreme_coefficients": "perception",
         "perception_instability": "perception",
         "perception_failure": "perception",
+        "perception_blind": "perception",
         "perception_lane_jitter": "perception",
         "right_lane_low_visibility": "perception",
         "right_lane_edge_contact": "perception",
@@ -2530,6 +2531,35 @@ def detect_issues(recording_path: Path, analyze_to_failure: bool = False) -> Dic
                         "duration": int(consecutive_failures)
                     })
             
+            # 4b. DETECT BLIND PERCEPTION (zero lane positions for N+ consecutive frames)
+            if "perception/blind_active" in f:
+                blind = np.array(f["perception/blind_active"][:num_frames])
+                blind_start = None
+                for fi in range(len(blind)):
+                    if blind[fi]:
+                        if blind_start is None:
+                            blind_start = fi
+                    else:
+                        if blind_start is not None:
+                            duration = fi - blind_start
+                            issues.append({
+                                "frame": int(blind_start),
+                                "type": "perception_blind",
+                                "severity": "critical",
+                                "description": f"Blind perception: no lane detection for {duration} frames (starting at frame {blind_start})",
+                                "duration": int(duration),
+                            })
+                            blind_start = None
+                if blind_start is not None:
+                    duration = len(blind) - blind_start
+                    issues.append({
+                        "frame": int(blind_start),
+                        "type": "perception_blind",
+                        "severity": "critical",
+                        "description": f"Blind perception: no lane detection for {duration} frames (to end of recording)",
+                        "duration": int(duration),
+                    })
+
             # 5. DETECT NEGATIVE STEERING/REFERENCE CORRELATION WINDOWS
             if "trajectory/reference_point_x" in f and has_control:
                 ref_x = np.array(f["trajectory/reference_point_x"][:num_frames])

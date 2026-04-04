@@ -149,6 +149,11 @@ VEHICLE_IZ_MIN_KGMM: float = 200.0           # kg*m² — min yaw inertia
 VEHICLE_IZ_MAX_KGMM: float = 10000.0         # kg*m² — max yaw inertia
 GEOMETRY_OVERRIDE_FRAME_DEADLINE: int = 30    # frames — must receive Unity params within this
 
+# ── Blind perception gates ────────────────────────────────────────────────────
+PERCEPTION_BLIND_RATE_GATE: float = 0.05       # —     — max fraction of frames with no lane detection
+PERCEPTION_BLIND_CONSECUTIVE_GATE: int = 5     # frames — consecutive no-detection before blind flag
+PERCEPTION_BLIND_PENALTY_MAX: float = 25.0     # pts   — max perception layer deduction for blind
+
 # ── Benign stale reasons ─────────────────────────────────────────────────────
 BENIGN_STALE_REASONS: frozenset[str] = frozenset({"left_lane_low_visibility"})
 

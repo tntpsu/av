@@ -35,6 +35,8 @@ GT_CAMERA_SEND_ASYNC="true"
 GT_REDUCE_TOPDOWN_RATE="true"
 GT_ROTATION_FROM_ROAD_FRAME="false"
 GT_DISABLE_MOVE_ROTATION="false"
+SUN_ALTITUDE_DEG="-1"
+SUN_AZIMUTH_DEG="-1"
 
 TMP_TRACK_PATH=""
 UNITY_PID=""
@@ -106,6 +108,14 @@ while [[ $# -gt 0 ]]; do
             ;;
         --arc-radius)
             ARC_RADIUS="$2"
+            shift 2
+            ;;
+        --sun-altitude)
+            SUN_ALTITUDE_DEG="$2"
+            shift 2
+            ;;
+        --sun-azimuth)
+            SUN_AZIMUTH_DEG="$2"
             shift 2
             ;;
         --random-start)
@@ -381,6 +391,13 @@ if [ -n "$GT_RECORD_STATE_LAG_FRAMES" ]; then
 fi
 if [ -n "$STREAM_SYNC_POLICY" ]; then
     GT_ARGS+=(--stream-sync-policy "$STREAM_SYNC_POLICY")
+fi
+
+if [ "$SUN_ALTITUDE_DEG" != "-1" ]; then
+    GT_ARGS+=(--sun-altitude "$SUN_ALTITUDE_DEG")
+fi
+if [ "$SUN_AZIMUTH_DEG" != "-1" ]; then
+    GT_ARGS+=(--sun-azimuth "$SUN_AZIMUTH_DEG")
 fi
 
 echo "Starting ground truth follower (log level: $LOG_LEVEL)..."

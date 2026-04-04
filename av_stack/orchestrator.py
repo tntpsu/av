@@ -1190,6 +1190,10 @@ class AVStack:
             if isinstance(self.config, dict) else 0.02
         )
 
+        # Blind perception detection
+        self.consecutive_no_detection_frames = 0
+        self.perception_blind = False
+
         # NEW: Perception health monitoring
         self.consecutive_bad_detection_frames = 0  # Track consecutive frames with <2 lanes
         self.perception_health_history = []  # Recent detection quality (True/False for good/bad)
@@ -6714,6 +6718,39 @@ class AVStack:
         instability_width_change = gated['instability_width_change']
         instability_center_shift = gated['instability_center_shift']
 
+        # ── Blind perception detection ──────────────────────────────────
+        # Check if both lane positions are zero/None (no usable detection).
+        _left_det = actual_detected_left_lane_x
+        _right_det = actual_detected_right_lane_x
+        _is_no_detection = (
+            (_left_det is None or abs(_left_det) < 1e-6)
+            and (_right_det is None or abs(_right_det) < 1e-6)
+        )
+        if _is_no_detection:
+            self.consecutive_no_detection_frames += 1
+        else:
+            self.consecutive_no_detection_frames = 0
+
+        from tools.scoring_registry import PERCEPTION_BLIND_CONSECUTIVE_GATE
+        self.perception_blind = (
+            self.consecutive_no_detection_frames >= PERCEPTION_BLIND_CONSECUTIVE_GATE
+        )
+        if self.perception_blind:
+            if "blind_no_detection" not in bad_events:
+                bad_events.append("blind_no_detection")
+            # Force stale fallback so the controller uses last good values
+            if not using_stale_data and self.previous_left_lane_x is not None:
+                using_stale_data = True
+                stale_data_reason = "no_detection"
+                left_lane_line_x = self.previous_left_lane_x
+                right_lane_line_x = self.previous_right_lane_x
+            if self.consecutive_no_detection_frames % 30 == 0:
+                logger.warning(
+                    f"[Frame {self.frame_count}] ⚠️  Perception BLIND: "
+                    f"{self.consecutive_no_detection_frames} consecutive frames "
+                    f"with no lane detection"
+                )
+
         # CRITICAL: Update last_timestamp at the END of processing (after all timestamp comparisons)
         self.last_timestamp = timestamp
 
@@ -6744,6 +6781,8 @@ class AVStack:
             perception_bad_events_recent=recent_bad_events,
             perception_timestamp_frozen=timestamp_frozen,
             perception_clamp_events=clamp_events if clamp_events else None,
+            perception_blind=self.perception_blind,
+            consecutive_no_detection_frames=self.consecutive_no_detection_frames,
             reject_reason=finalize_reject_reason(reject_reason, stale_data_reason, clamp_events),
             # NEW: Points used for polynomial fitting (for debug visualization)
             fit_points_left=fit_points_left,

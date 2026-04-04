@@ -2205,6 +2205,12 @@ private float? lastCarT = null;
                         Debug.Log("[COMMAND RECEIVED] AVBridge: Random start already handled; skipping.");
                     }
                     
+                    // Apply scene lighting if requested (-1 = no change)
+                    if (command.sun_altitude_deg >= 0f || command.sun_azimuth_deg >= 0f)
+                    {
+                        ApplySunLighting(command.sun_altitude_deg, command.sun_azimuth_deg);
+                    }
+
                     // CRITICAL: Auto-enable AV control when first command is received
                     // This ensures the car responds to Python commands without manual setup
                     if (!enableAVControl || !carController.avControlEnabled)
@@ -2528,6 +2534,50 @@ private float? lastCarT = null;
                         $"{limitMph:F0} mph", limitValueStyle);
                 }
             }
+        }
+    }
+
+    // ── Scene lighting control ─────────────────────────────────────────────────
+
+    private Light _cachedSunLight;
+    private bool _sunLightSearched = false;
+
+    /// <summary>
+    /// Apply sun altitude and azimuth to the scene's directional light.
+    /// altitude_deg: 0=horizon, 45=default, 90=overhead. -1=no change.
+    /// azimuth_deg: 0=north, 90=east, 180=south. -1=no change.
+    /// </summary>
+    private void ApplySunLighting(float altitudeDeg, float azimuthDeg)
+    {
+        if (!_sunLightSearched)
+        {
+            _sunLightSearched = true;
+            Light[] allLights = FindObjectsOfType<Light>();
+            Debug.Log($"AVBridge.ApplySunLighting: Found {allLights.Length} lights in scene");
+            foreach (Light l in allLights)
+            {
+                Debug.Log($"  Light: '{l.gameObject.name}' type={l.type}");
+                if (l.type == LightType.Directional)
+                {
+                    _cachedSunLight = l;
+                    Debug.Log($"  -> Using '{l.gameObject.name}' as sun light");
+                    break;
+                }
+            }
+            if (_cachedSunLight == null)
+                Debug.LogWarning("AVBridge.ApplySunLighting: No directional light found!");
+        }
+
+        if (_cachedSunLight == null) return;
+
+        Vector3 oldEuler = _cachedSunLight.transform.eulerAngles;
+        Vector3 euler = oldEuler;
+        if (altitudeDeg >= 0f) euler.x = altitudeDeg;
+        if (azimuthDeg >= 0f) euler.y = azimuthDeg;
+        if (euler != oldEuler)
+        {
+            _cachedSunLight.transform.eulerAngles = euler;
+            Debug.Log($"AVBridge.ApplySunLighting: Changed sun from ({oldEuler.x:F1}, {oldEuler.y:F1}) to ({euler.x:F1}, {euler.y:F1})");
         }
     }
 
@@ -3099,6 +3149,9 @@ public class ControlCommand
     public bool randomize_start = false;
     public int randomize_request_id = 0;
     public int randomize_seed = -1;
+    // Scene lighting: sun altitude in degrees (0=horizon, 90=overhead, -1=no change)
+    public float sun_altitude_deg = -1.0f;
+    public float sun_azimuth_deg = -1.0f;
 }
 
 [System.Serializable]

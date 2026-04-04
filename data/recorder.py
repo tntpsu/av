@@ -4464,6 +4464,18 @@ class DataRecorder:
             maxshape=max_shape,
             dtype=np.bool_
         )
+        self.h5_file.create_dataset(
+            "perception/blind_active",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int8
+        )
+        self.h5_file.create_dataset(
+            "perception/consecutive_no_detection_frames",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int32
+        )
         # NEW: Diagnostic fields for perception instability
         self.h5_file.create_dataset(
             "perception/actual_detected_left_lane_x",
@@ -10704,6 +10716,8 @@ class DataRecorder:
         bad_events_recent_list = []
         clamp_events_list = []
         timestamp_frozen_list = []
+        blind_active_list = []
+        consecutive_no_detection_frames_list = []
         # NEW: Points used for polynomial fitting
         fit_points_left_list = []
         fit_points_right_list = []
@@ -10752,6 +10766,12 @@ class DataRecorder:
             )
             timestamp_frozen_list.append(
                 bool(getattr(po, 'perception_timestamp_frozen', False))
+            )
+            blind_active_list.append(
+                int(getattr(po, 'perception_blind', False))
+            )
+            consecutive_no_detection_frames_list.append(
+                getattr(po, 'consecutive_no_detection_frames', 0)
             )
             # NEW: Points used for polynomial fitting
             # Store as JSON strings since HDF5 doesn't handle variable-length arrays well
@@ -10824,6 +10844,8 @@ class DataRecorder:
             self.h5_file["perception/perception_bad_events_recent"].resize((new_size,))
             self.h5_file["perception/perception_clamp_events"].resize((new_size,))
             self.h5_file["perception/perception_timestamp_frozen"].resize((new_size,))
+            self.h5_file["perception/blind_active"].resize((new_size,))
+            self.h5_file["perception/consecutive_no_detection_frames"].resize((new_size,))
             # NEW: Resize instability diagnostic datasets
             self.h5_file["perception/actual_detected_left_lane_x"].resize((new_size,))
             self.h5_file["perception/actual_detected_right_lane_x"].resize((new_size,))
@@ -10874,6 +10896,12 @@ class DataRecorder:
             self.h5_file["perception/perception_clamp_events"][current_size:] = clamp_events_array
             self.h5_file["perception/perception_timestamp_frozen"][current_size:] = np.array(
                 timestamp_frozen_list, dtype=np.bool_
+            )
+            self.h5_file["perception/blind_active"][current_size:] = np.array(
+                blind_active_list, dtype=np.int8
+            )
+            self.h5_file["perception/consecutive_no_detection_frames"][current_size:] = np.array(
+                consecutive_no_detection_frames_list, dtype=np.int32
             )
             # NEW: Write fit_points (as JSON strings)
             fit_points_left_array = np.array(fit_points_left_list, dtype=h5py.string_dtype(encoding='utf-8', length=10000))
