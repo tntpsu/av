@@ -3170,6 +3170,15 @@ def _build_mpc_health_summary(data: Dict, n_frames: int) -> Optional[Dict]:
     failures = data.get('mpc_consecutive_failures')
     max_consec = int(np.max(failures[:n_frames])) if failures is not None else None
 
+    # Lateral accel budget exceeded rate
+    a_lat_arr = data.get('regime_lateral_accel_mps2')
+    a_thr_arr = data.get('regime_lateral_accel_threshold_mps2')
+    if a_lat_arr is not None and a_thr_arr is not None and mpc_frames > 0:
+        exceeded = a_lat_arr[:n_frames][mpc_mask] > a_thr_arr[:n_frames][mpc_mask]
+        budget_exceeded_rate = float(np.mean(exceeded))
+    else:
+        budget_exceeded_rate = None
+
     # NMPC-specific metrics
     nmpc_feasible_arr = data.get('nmpc_feasible')
     nmpc_feasibility_rate = (
@@ -3202,6 +3211,8 @@ def _build_mpc_health_summary(data: Dict, n_frames: int) -> Optional[Dict]:
         "solve_time_max_ms": round(mx, 3) if mx is not None else None,
         "solve_time_gate_pass": solve_gate,
         "fallback_rate": round(fallback_rate, 5) if fallback_rate is not None else None,
+        "budget_exceeded_rate": round(budget_exceeded_rate, 5) if budget_exceeded_rate is not None else None,
+        "budget_exceeded_gate_pass": budget_exceeded_rate < 0.01 if budget_exceeded_rate is not None else None,
         "max_consecutive_failures": max_consec,
         "nmpc_feasibility_rate": round(nmpc_feasibility_rate, 5) if nmpc_feasibility_rate is not None else None,
         "nmpc_solve_time_p95_ms": round(nmpc_solve_p95, 3) if nmpc_solve_p95 is not None else None,

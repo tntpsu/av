@@ -2690,6 +2690,8 @@ class DataRecorder:
         self.h5_file.create_dataset("control/mpc_kappa_preview_range", shape=(0,), maxshape=max_shape, dtype=np.float32)
         self.h5_file.create_dataset("control/regime", shape=(0,), maxshape=max_shape, dtype=np.int8)
         self.h5_file.create_dataset("control/regime_blend_weight", shape=(0,), maxshape=max_shape, dtype=np.float32)
+        self.h5_file.create_dataset("control/regime_lateral_accel_mps2", shape=(0,), maxshape=max_shape, dtype=np.float32)
+        self.h5_file.create_dataset("control/regime_lateral_accel_threshold_mps2", shape=(0,), maxshape=max_shape, dtype=np.float32)
         self.h5_file.create_dataset("control/stanley_active", shape=(0,), maxshape=max_shape, dtype=np.float32)
         self.h5_file.create_dataset("control/stanley_heading_term", shape=(0,), maxshape=max_shape, dtype=np.float32)
         self.h5_file.create_dataset("control/stanley_crosstrack_term", shape=(0,), maxshape=max_shape, dtype=np.float32)
@@ -7643,6 +7645,8 @@ class DataRecorder:
         mpc_kappa_preview_range_list = []
         regime_list = []
         regime_blend_weight_list = []
+        regime_lateral_accel_mps2_list = []
+        regime_lateral_accel_threshold_mps2_list = []
         stanley_active_list = []
         stanley_heading_term_list = []
         stanley_crosstrack_term_list = []
@@ -9070,6 +9074,8 @@ class DataRecorder:
             mpc_kappa_preview_range_list.append(float(getattr(cc, 'mpc_kappa_preview_range', 0.0)))
             regime_list.append(int(getattr(cc, 'regime', 0)))
             regime_blend_weight_list.append(float(getattr(cc, 'regime_blend_weight', 1.0)))
+            regime_lateral_accel_mps2_list.append(float(getattr(cc, 'regime_lateral_accel_mps2', 0.0)))
+            regime_lateral_accel_threshold_mps2_list.append(float(getattr(cc, 'regime_lateral_accel_threshold_mps2', 0.0)))
             stanley_active_list.append(float(getattr(cc, 'stanley_active', 0.0)))
             stanley_heading_term_list.append(float(getattr(cc, 'stanley_heading_term', 0.0)))
             stanley_crosstrack_term_list.append(float(getattr(cc, 'stanley_crosstrack_term', 0.0)))
@@ -9448,6 +9454,7 @@ class DataRecorder:
                        "mpc_using_ground_truth",
                        "mpc_kappa_preview_used", "mpc_kappa_preview_range",
                        "regime", "regime_blend_weight",
+                       "regime_lateral_accel_mps2", "regime_lateral_accel_threshold_mps2",
                        "stanley_active", "stanley_heading_term", "stanley_crosstrack_term",
                        "mpc_recovery_mode_suppressed",
                        "mpc_last_steering_pre_modify", "mpc_last_steering_actual",
@@ -10653,6 +10660,8 @@ class DataRecorder:
             self.h5_file["control/mpc_kappa_preview_range"][current_size:] = mpc_kappa_preview_range_list
             self.h5_file["control/regime"][current_size:] = regime_list
             self.h5_file["control/regime_blend_weight"][current_size:] = regime_blend_weight_list
+            self.h5_file["control/regime_lateral_accel_mps2"][current_size:] = regime_lateral_accel_mps2_list
+            self.h5_file["control/regime_lateral_accel_threshold_mps2"][current_size:] = regime_lateral_accel_threshold_mps2_list
             self.h5_file["control/stanley_active"][current_size:] = stanley_active_list
             self.h5_file["control/stanley_heading_term"][current_size:] = stanley_heading_term_list
             self.h5_file["control/stanley_crosstrack_term"][current_size:] = stanley_crosstrack_term_list

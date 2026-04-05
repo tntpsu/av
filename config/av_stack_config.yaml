@@ -319,12 +319,14 @@ control:
   grade_ema_alpha: 0.15               # Grade signal EMA smoothing (no-op when grade=0)
   regime:
     enabled: true
-    mpc_min_speed_mps: 3.0              # Step 4: MPC primary above this (+ upshift_hysteresis)
-    mpc_max_curvature: 0.020            # Step 4: PP fallback above this κ (R50 boundary)
-    mpc_curvature_hysteresis: 0.003     # Step 4: re-engage MPC at κ < 0.017
-    pp_max_speed_mps: 10.0              # Legacy (overridden by mpc_min_speed_mps in _compute_desired)
-    upshift_hysteresis_mps: 1.0
-    downshift_hysteresis_mps: 1.0
+    # Lateral acceleration budget (replaces speed + curvature proxy logic)
+    mpc_max_lateral_accel_mps2: 1.5     # κ×v² budget — MPC→PP when exceeded (m/s²)
+    mpc_lateral_accel_hysteresis_mps2: 0.3  # dead band ± around threshold (m/s²)
+    mpc_min_speed_absolute_mps: 2.0     # hard speed floor — MPC needs nonzero velocity (m/s)
+    mpc_max_map_curvature: 0.020       # map κ above this → PP (MPC linearization degrades at R<50)
+    # Deprecated (kept for backward compat — lateral accel budget replaces these):
+    # mpc_min_speed_mps, mpc_max_curvature, mpc_curvature_hysteresis,
+    # upshift_hysteresis_mps, downshift_hysteresis_mps, pp_max_speed_mps
     blend_frames: 15
     min_hold_frames: 30
     # Stanley low-speed regime (Phase 2.9)

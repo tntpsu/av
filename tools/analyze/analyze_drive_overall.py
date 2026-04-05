@@ -2451,6 +2451,9 @@ def _print_summary_report(recording_path: Path, summary: Dict, analyze_to_failur
             )
         if mpc_health.get("fallback_rate") is not None:
             print(f"   LMPC Fallback Rate: {mpc_health['fallback_rate'] * 100:.2f}%")
+        if mpc_health.get("budget_exceeded_rate") is not None:
+            gate = "PASS" if mpc_health.get("budget_exceeded_gate_pass") else "FAIL"
+            print(f"   Lateral Accel Budget Exceeded: {mpc_health['budget_exceeded_rate'] * 100:.3f}% [{gate}] (gate: <1.0%)")
         if mpc_health.get("max_consecutive_failures") is not None:
             print(f"   LMPC Max Consecutive Failures: {mpc_health['max_consecutive_failures']}")
         if nmpc_n > 0:

@@ -6,8 +6,8 @@
 #   ./start_av_stack.sh --config config/mpc_sloop.yaml \
 #       --track-yaml tracks/s_loop.yml --duration 60
 #
-# NOTE: MPC does NOT activate on s_loop (cap-tracked speed 4-7 m/s, curvature guard blocks at κ>0.020).
-# Explicit mpc_min_speed_mps override prevents brief MPC engagement on short straights.
+# NOTE: MPC does NOT activate on s_loop (cap-tracked speed 4-7 m/s, lateral accel budget
+# exceeds threshold on R40/R50 corners). No per-track regime override needed.
 
 # ── Remaining overlay keys (future task: auto-derive from track geometry) ──
 # commit_distance_ready_m: approach-length dependent; could derive from min straight segment length
@@ -18,8 +18,5 @@ control:
     # worked when the blind gate bug froze stale centered data — PP geometric with no FF
     # cannot track curves when live perception has smoothing delay.  Re-enabled for seg model.
     pp_map_ff_enabled: true
-  regime:
-    mpc_min_speed_mps: 10.0     # Step 4: disable MPC on s_loop (speeds 4-7 m/s, tight curves)
-
 trajectory:
   curve_local_commit_distance_ready_m: 8.0  # track-specific (base: 3.0); long s_loop approaches support early COMMIT

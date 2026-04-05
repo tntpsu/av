@@ -123,6 +123,7 @@ def build_causal_timeline(issues: List[Dict], failure_frame: Optional[int] = Non
         "mpc_infeasible": "control",
         "mpc_solve_slow": "control",
         "mpc_fallback": "control",
+        "regime_budget_exceeded": "control",
         "high_lateral_error": "downstream",
         "out_of_lane": "downstream",
         "emergency_stop": "downstream",
@@ -3114,6 +3115,25 @@ def detect_issues(recording_path: Path, analyze_to_failure: bool = False) -> Dic
                             ),
                             "frames": [int(x) for x in fallback_frames[:20]],
                             "first_frame": int(fallback_frames[0]),
+                        })
+
+                # Lateral accel budget exceeded (MPC active beyond linear tire region)
+                if 'control/regime_lateral_accel_mps2' in f and 'control/regime_lateral_accel_threshold_mps2' in f:
+                    a_lat = np.array(f['control/regime_lateral_accel_mps2'][:num_frames])
+                    a_thr = np.array(f['control/regime_lateral_accel_threshold_mps2'][:num_frames])
+                    exceeded_frames = np.where(mpc_mask & (a_lat > a_thr))[0]
+                    if len(exceeded_frames) > 0:
+                        issues.append({
+                            "frame": int(exceeded_frames[0]),
+                            "type": "regime_budget_exceeded",
+                            "severity": "warning",
+                            "description": (
+                                f"MPC active beyond lateral accel budget on {len(exceeded_frames)} frame(s). "
+                                f"Max a_lat: {float(np.max(a_lat[exceeded_frames])):.2f} m/s². "
+                                f"First at frame {int(exceeded_frames[0])}."
+                            ),
+                            "frames": [int(x) for x in exceeded_frames[:20]],
+                            "first_frame": int(exceeded_frames[0]),
                         })
 
                 # NMPC-specific issues (regime == 2)

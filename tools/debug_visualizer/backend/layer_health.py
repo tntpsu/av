@@ -219,6 +219,12 @@ class LayerHealthAnalyzer:
                 if self._scalar(f, "control/mpc_fallback_active", i, default=0.0) > 0.5:
                     score -= 0.50
                     flags.append("mpc_fallback")
+                # Lateral accel budget exceeded — MPC active beyond linear tire region
+                a_lat = self._scalar(f, "control/regime_lateral_accel_mps2", i, default=0.0)
+                a_thr = self._scalar(f, "control/regime_lateral_accel_threshold_mps2", i, default=999.0)
+                if a_lat > a_thr:
+                    score -= 0.25
+                    flags.append("regime_budget_exceeded")
 
             if regime_val >= 1.5:  # NMPC active
                 if self._scalar(f, "control/nmpc_feasible", i, default=1.0) < 0.5:

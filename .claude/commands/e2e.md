@@ -47,7 +47,22 @@ Special cases:
 - If user provides a config override, use it: `--config config/<user_config>.yaml`
 - **NEVER omit `--track-yaml`** — car falls through road without it
 
-Wait for the run to complete. If the run fails (non-zero exit), report the error and stop.
+Wait for the run to complete.
+
+**Crash prevention (Unity stability):**
+Unity degrades after ~36 consecutive launch/kill cycles. To prevent segfaults:
+- If this is part of a multi-track validation sweep (e.g., regression testing 5+ tracks), **force a Unity player rebuild every 6 runs** by omitting `--skip-unity-build-if-clean` on every 6th invocation.
+- If the run fails with a segfault (exit code 139 or "Segmentation fault" in output), **force rebuild and retry once**:
+  ```bash
+  ./start_av_stack.sh --build-unity-player \
+    --config config/<overlay>.yaml \
+    --track-yaml tracks/<track>.yml \
+    --duration <seconds>
+  ```
+- If a recording is produced but is < 500KB, treat it as a failed run (empty stub from crashed Unity). Delete it and retry with forced rebuild.
+- When running A/B batches (`run_ab_batch.py` with ≥5 runs), note that the batch script handles its own launches — warn the user if total runs across all tracks in the session exceeds 30.
+
+If the run fails (non-zero exit) after retry, report the error and stop.
 
 ## Step 3 — Analyze
 
@@ -85,8 +100,8 @@ From the analysis output, extract and evaluate against gates from `tools/scoring
 
 ### Scoring gates:
 - Overall score (note vs baseline if available in `tests/fixtures/scoring_baselines.json`)
-- Every layer score >= 60
-- Trajectory layer >= 80
+- Every layer score >= `LAYER_SCORE_MIN_PASS` from `tools/scoring_registry.py` (currently 95)
+- Read the current value from scoring_registry.py — do not hardcode
 
 ## Step 5 — Output structured report
 
@@ -124,7 +139,26 @@ VERDICT: PASS / FAIL
 ============================================================
 ```
 
-## Step 6 — Diagnose recommendation
+## Step 6 — Overlay Dependency Audit (on FAIL)
+
+If VERDICT is FAIL and the scenario uses a config overlay, check whether the overlay contains parameters that work around a base-config or code limitation:
+
+1. Read the config overlay used for this scenario
+2. For each non-geometry parameter in the overlay (anything other than track YAML, duration, speed limits derived from track geometry), check if ≥2 other overlays in `config/mpc_*.yaml` override the same parameter or subsystem
+3. If ≥2 overlays work around the same subsystem, flag it as an architecture smell
+
+```
+OVERLAY AUDIT:
+  Overlay: config/<overlay>.yaml
+  Workaround params: <list of params that work around base config/code limitations>
+  Same subsystem overrides in other overlays: <count> (<list>)
+  Architecture smell: yes/no
+  → If yes: <subsystem> has <N> track-specific workarounds — architecture review needed before tuning
+```
+
+If architecture smell is detected, recommend `/plan-feature` for an architecture fix rather than further tuning.
+
+## Step 7 — Diagnose recommendation
 
 If VERDICT is FAIL, classify the primary failure using the same priority table as `/diagnose`:
 
@@ -136,8 +170,8 @@ If VERDICT is FAIL, classify the primary failure using the same priority table a
 | 4 | lateral | Lateral RMSE > 0.40 |
 | 5 | comfort | Jerk or accel gate fail |
 | 6 | perception | Detection < 80% |
-| 7 | trajectory | Trajectory layer < 80 |
-| 8 | control | Control layer < 80 |
+| 7 | trajectory | Trajectory layer < LAYER_SCORE_MIN_PASS |
+| 8 | control | Control layer < LAYER_SCORE_MIN_PASS |
 
 Then output:
 

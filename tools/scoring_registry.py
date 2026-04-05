@@ -33,6 +33,9 @@ CURVATURE_FLOOR_COEFF: float = 3.0      # arc-chord tracking error floor coeffic
 STEERING_JERK_PENALTY_CAP: float = 18.0 # norm/s² — penalty applied above this cap
 HEADING_PENALTY_FLOOR_DEG: float = 10.0 # degrees — heading RMSE penalty floor
 
+# ── Layer score pass gate ────────────────────────────────────────────────────
+LAYER_SCORE_MIN_PASS: float = 95.0      # —  — every layer must score >= this to pass
+
 # ── Layer health thresholds (shared with triage_engine via re-export) ────────
 PERCEPTION_CONF_FLOOR: float = 0.1      # confidence below this → hard fallback
 TRAJ_REF_ERROR_MAX_M: float = 2.0       # lateral ref error > this → full penalty
@@ -56,8 +59,13 @@ MPC_FALLBACK_RATE_GATE: float = 0.005         # — max fallback rate
 MPC_REGIME_CHATTER_PER_MIN: float = 6.0       # transitions/min — chatter threshold
 MPC_STEERING_OSC_RATE_GATE: float = 0.30      # — steering sign-change rate gate
 MPC_HEADING_ERROR_P95_RAD: float = 0.25       # rad — heading error P95 gate
-MPC_MIN_SPEED_DEFAULT_MPS: float = 3.0        # m/s — default MPC min speed (Step 4)
-MPC_MAX_CURVATURE_DEFAULT: float = 0.020      # 1/m — default curvature guard (R50, Step 4)
+MPC_MIN_SPEED_DEFAULT_MPS: float = 3.0        # m/s — DEPRECATED: replaced by lateral accel budget
+MPC_MAX_CURVATURE_DEFAULT: float = 0.020      # 1/m — DEPRECATED: replaced by lateral accel budget
+
+# ── Regime lateral acceleration budget (replaces speed/curvature proxies) ────
+MPC_MAX_LATERAL_ACCEL_MPS2: float = 1.5       # m/s² — κ×v² budget; MPC→PP above this
+MPC_LATERAL_ACCEL_HYSTERESIS_MPS2: float = 0.3  # m/s² — dead band ±0.3 around threshold
+MPC_MIN_SPEED_ABSOLUTE_MPS: float = 2.0       # m/s — hard floor; MPC needs nonzero speed
 
 # ── NMPC thresholds (Step 5) ─────────────────────────────────────────────────
 NMPC_SOLVE_TIME_BUDGET_MS: float = 20.0       # ms — hard solve budget (scipy SLSQP warm-started)

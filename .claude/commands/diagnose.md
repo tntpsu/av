@@ -81,7 +81,34 @@ python3 tools/analyze/counterfactual_layer_swap.py <recording>
 ```
 And suggest opening PhilViz: `python3 tools/debug_visualizer/server.py` → Triage + Blame tabs.
 
-## Step 5 — Synthesize and output
+## Step 5 — Fix Level Triage
+
+Before recommending any fix, classify it and check for robustness:
+
+```
+FIX LEVEL TRIAGE:
+  Level: TUNING / CONFIG / CODE PATCH / ARCHITECTURE
+    - TUNING: adjusting existing numeric params within their intended range
+    - CONFIG: adding/changing config knobs (new params, new overlay keys)
+    - CODE PATCH: changing priority/ordering/logic within existing architecture
+    - ARCHITECTURE: changing how components interact, what signals drive decisions
+  Proxy stacking: yes/no
+    (Are multiple params approximating the same physical quantity?
+     e.g., speed threshold + curvature guard + per-track overrides all
+     approximating "can MPC handle this curve?")
+  Overlay workarounds: <count> tracks with overlays working around this subsystem
+    (If ≥2 overlays patch the same subsystem → architecture review needed)
+  Cross-track: would this fix eliminate per-track workarounds? yes/no
+  If ARCHITECTURE: describe what the unified signal/abstraction should be
+```
+
+**Rules:**
+- NEVER recommend per-track overlay changes as the primary fix for systemic issues
+- If ≥2 track overlays work around the same subsystem, flag it as an architecture smell
+- Always prefer the fix level that eliminates the most per-track workarounds
+- Label any per-track suggestion as "BAND-AID — not recommended" if a robust alternative exists
+
+## Step 6 — Synthesize and output
 
 Present a structured summary:
 
@@ -95,12 +122,19 @@ PRIMARY ISSUE: <category>
   Symptom: <what the metric shows>
   Root cause hint: <what the tool output suggests>
 
+FIX LEVEL TRIAGE:
+  Level: <level>
+  Proxy stacking: <yes/no — detail if yes>
+  Overlay workarounds: <count> (<list subsystem>)
+  Cross-track robust: <yes/no>
+
 RECOMMENDED NEXT STEPS:
   1. <specific action — e.g. "/trace brake_onset to see reference_velocity at brake frames">
   2. <second action>
   3. <third action if needed>
 
 A/B TEST NEEDED: yes/no (yes if a config change is being considered)
+  If yes, specify regression tracks: /e2e <track1>, /e2e <track2>, ...
 ```
 
 Gate thresholds: `tools/scoring_registry.py`

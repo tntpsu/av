@@ -8,10 +8,11 @@
 #       --track-yaml tracks/mixed_radius.yml --duration 60
 #
 # NOTE: This track exercises the full PP↔MPC regime transition range.
-#   R40 corner:  cap speed ~8.85 m/s (0.20g) → PP only (below 9.5 m/s hysteresis threshold)
-#   R150 corner: target-speed limited to 12 m/s → MPC active
-#   R200 corner + straights: 12 m/s → MPC active
-#   curve_cap_peak_lat_accel_g: 0.20 keeps R40 in PP regime (base 0.26 → 10.1 m/s → MPC oscillation).
+#   R40 corner:  cap speed ~8.85 m/s (0.20g), κ×v²=1.89 → PP (exceeds 1.5 lateral accel budget)
+#   R60 corner:  cap speed ~8.9 m/s, κ×v²=1.33 → MPC (within budget)
+#   R150 corner: target-speed limited to 12 m/s, κ×v²=0.87 → MPC active
+#   R200 corner + straights: 12 m/s, κ×v²=0.65 → MPC active
+#   curve_cap_peak_lat_accel_g: 0.20 keeps R40 under cap speed.
 
 # ── Remaining overlay keys (future task: auto-derive from track geometry) ──
 # commit_distance_ready_m: approach-length dependent; could derive from min straight segment length
@@ -23,8 +24,7 @@
 control:
   longitudinal:
     max_speed: 14.0                    # headroom above target (base: 12.0)
-  regime:
-    mpc_min_speed_mps: 9.0             # Step 4: MPC above 10 m/s only (R40 cap=8.85 m/s stays in PP)
+  # regime: no per-track overrides — lateral accel budget handles R40 PP↔MPC automatically
 
 trajectory:
   curve_local_commit_distance_ready_m: 8.0  # track-specific (base: 3.0); mixed_radius approach geometry supports early COMMIT

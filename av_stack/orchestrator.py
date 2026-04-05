@@ -912,6 +912,12 @@ class AVStack:
             pp_map_ff_entry_boost=float(
                 lateral_cfg.get('pp_map_ff_entry_boost', 1.0)
             ),
+            pp_map_ff_entry_boost_kappa_ref=float(
+                lateral_cfg.get('pp_map_ff_entry_boost_kappa_ref', 0.025)
+            ),
+            pp_map_ff_entry_boost_kappa_max=float(
+                lateral_cfg.get('pp_map_ff_entry_boost_kappa_max', 0.045)
+            ),
             pp_ref_jump_clamp=lateral_cfg.get('pp_ref_jump_clamp', 0.5),
             pp_stale_decay=lateral_cfg.get('pp_stale_decay', 0.98),
             pp_max_steering_rate=lateral_cfg.get('pp_max_steering_rate', 0.4),
@@ -11921,6 +11927,8 @@ class AVStack:
             mpc_unity_geometry_active=bool(getattr(self, '_unity_geometry_applied', False)),
             regime=int(control_command.get('regime', 0)),
             regime_blend_weight=float(control_command.get('regime_blend_weight', 1.0)),
+            regime_lateral_accel_mps2=float(control_command.get('regime_lateral_accel_mps2', 0.0)),
+            regime_lateral_accel_threshold_mps2=float(control_command.get('regime_lateral_accel_threshold_mps2', 0.0)),
             stanley_active=float(control_command.get('stanley_active', 0.0)),
             stanley_heading_term=float(control_command.get('stanley_heading_term', 0.0)),
             stanley_crosstrack_term=float(control_command.get('stanley_crosstrack_term', 0.0)),

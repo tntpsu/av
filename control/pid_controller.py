@@ -250,6 +250,8 @@ class LateralController:
                  pp_map_ff_curvature_max_clip: float = 0.08,
                  pp_map_ff_phase_gate_enabled: bool = False,
                  pp_map_ff_entry_boost: float = 1.0,
+                 pp_map_ff_entry_boost_kappa_ref: float = 0.025,
+                 pp_map_ff_entry_boost_kappa_max: float = 0.045,
                  pp_ref_jump_clamp: float = 0.5,
                  pp_stale_decay: float = 0.98,
                  pp_max_steering_rate: float = 0.4,
@@ -503,7 +505,12 @@ class LateralController:
         self.pp_map_ff_curvature_min = max(0.0, float(pp_map_ff_curvature_min))
         self.pp_map_ff_curvature_max_clip = max(0.001, float(pp_map_ff_curvature_max_clip))
         self.pp_map_ff_phase_gate_enabled = bool(pp_map_ff_phase_gate_enabled)
-        self.pp_map_ff_entry_boost = max(0.0, float(pp_map_ff_entry_boost))
+        self.pp_map_ff_entry_boost = max(1.0, float(pp_map_ff_entry_boost))
+        self.pp_map_ff_entry_boost_kappa_ref = max(0.001, float(pp_map_ff_entry_boost_kappa_ref))
+        self.pp_map_ff_entry_boost_kappa_max = max(
+            self.pp_map_ff_entry_boost_kappa_ref + 0.001,
+            float(pp_map_ff_entry_boost_kappa_max),
+        )
         self.pp_ref_jump_clamp = max(0.1, float(pp_ref_jump_clamp))
         self.pp_stale_decay = float(np.clip(pp_stale_decay, 0.5, 1.0))
         self.pp_max_steering_rate = max(0.05, float(pp_max_steering_rate))
@@ -3320,6 +3327,7 @@ class LateralController:
                 'path_curvature_raw': raw_ref_curvature,
                 'path_curvature_source_used': path_curvature_source_used,
                 'path_curvature_primary_abs': primary_curvature_abs,
+                'curvature_map_abs': abs(float(reference_point.get('curvature_map_abs', 0.0) or 0.0)),
                 'path_curvature_lane_abs': lane_curvature_abs,
                 'curve_feedforward_gain_scheduled': curve_gain_scheduled,
                 'curve_feedforward_scale': curve_feedforward_scale,
@@ -5236,6 +5244,8 @@ class VehicleController:
                  pp_map_ff_curvature_max_clip: float = 0.08,
                  pp_map_ff_phase_gate_enabled: bool = False,
                  pp_map_ff_entry_boost: float = 1.0,
+                 pp_map_ff_entry_boost_kappa_ref: float = 0.025,
+                 pp_map_ff_entry_boost_kappa_max: float = 0.045,
                  pp_ref_jump_clamp: float = 0.5,
                  pp_stale_decay: float = 0.98,
                  pp_max_steering_rate: float = 0.4,
@@ -5480,6 +5490,8 @@ class VehicleController:
             pp_map_ff_curvature_max_clip=pp_map_ff_curvature_max_clip,
             pp_map_ff_phase_gate_enabled=pp_map_ff_phase_gate_enabled,
             pp_map_ff_entry_boost=pp_map_ff_entry_boost,
+            pp_map_ff_entry_boost_kappa_ref=pp_map_ff_entry_boost_kappa_ref,
+            pp_map_ff_entry_boost_kappa_max=pp_map_ff_entry_boost_kappa_max,
             pp_ref_jump_clamp=pp_ref_jump_clamp,
             pp_stale_decay=pp_stale_decay,
             pp_max_steering_rate=pp_max_steering_rate,
@@ -5656,11 +5668,18 @@ class VehicleController:
         if self._nmpc_controller is not None and self._nmpc_controller._fallback_active:
             mpc_fallback = True
         _regime_curvature = abs(float(
-            lateral_metadata.get('curvature_primary_abs', 0.0) or 0.0
+            lateral_metadata.get('path_curvature_primary_abs', 0.0) or 0.0
         ))
+        # Use max of map-at-car and preview curvature for regime guard —
+        # preview looks ahead ~25m so the guard fires BEFORE entering tight curves
+        _regime_map_curvature = max(
+            abs(float(lateral_metadata.get('curvature_map_abs', 0.0) or 0.0)),
+            abs(float(lateral_metadata.get('curve_phase_preview_curvature_abs', 0.0) or 0.0)),
+        )
         regime, blend_weight = self._regime_selector.update(
             speed=float(current_state.get('speed', 0.0)),
             curvature_abs=_regime_curvature,
+            map_curvature_abs=_regime_map_curvature,
             mpc_fallback_active=mpc_fallback,
         )
 
@@ -6196,6 +6215,13 @@ class VehicleController:
 
         lateral_metadata['regime'] = int(regime)
         lateral_metadata['regime_blend_weight'] = float(blend_weight)
+        lateral_metadata['regime_lateral_accel_mps2'] = float(self._regime_selector.last_lateral_accel)
+        _budget_thr = self._regime_selector.config.mpc_max_lateral_accel_mps2
+        _budget_hyst = self._regime_selector.config.mpc_lateral_accel_hysteresis_mps2
+        if regime in (1, 2):  # MPC active — downshift threshold
+            lateral_metadata['regime_lateral_accel_threshold_mps2'] = float(_budget_thr + _budget_hyst)
+        else:  # PP active — upshift threshold
+            lateral_metadata['regime_lateral_accel_threshold_mps2'] = float(_budget_thr - _budget_hyst)
         # Keep steering in lateral_metadata for consistency
         lateral_metadata['steering'] = steering
         

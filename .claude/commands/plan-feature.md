@@ -29,7 +29,66 @@ INDUSTRY CONTEXT:
   What we're NOT doing: <rejected ad-hoc alternatives and why>
 ```
 
-## Step 3 — Root cause grounding
+## Step 3 — Fix Level Classification & Robustness Gate
+
+Before designing anything, classify what kind of change this is and verify cross-track robustness:
+
+### 3a — Classify the change level
+
+```
+FIX LEVEL CLASSIFICATION:
+  Level: TUNING / CONFIG / CODE PATCH / ARCHITECTURE
+    - TUNING: adjusting existing numeric params within their intended range
+    - CONFIG: adding/changing config knobs (new params, new overlay keys)
+    - CODE PATCH: changing priority/ordering/logic within existing architecture
+    - ARCHITECTURE: changing how components interact, what signals drive decisions,
+      or what abstractions exist
+```
+
+### 3b — Proxy stacking audit
+
+Check whether the subsystem being modified has multiple parameters that approximate the same physical quantity:
+
+```
+PROXY STACKING AUDIT:
+  Physical quantity being controlled: <what the params are really trying to decide>
+  Parameters that approximate it:
+    - <param1> in <file> — <what it controls>
+    - <param2> in <file> — <what it controls>
+    ...
+  Per-track overrides for this subsystem: <count> overlays (<list>)
+  Proxy stacking detected: yes/no
+  → If yes: consider unifying around the actual physical quantity instead of
+    adding another proxy parameter
+```
+
+### 3c — Cross-track robustness check
+
+For EVERY track in `tracks/*.yml`, answer:
+1. Does this change alter behavior on this track? (yes/no/marginal)
+2. If yes, does it improve, degrade, or have no net effect?
+3. Does this change eliminate any existing per-track overlay workaround?
+
+```
+CROSS-TRACK IMPACT:
+  | Track          | Behavior change? | Effect        | Overlay eliminated? |
+  |----------------|-----------------|---------------|---------------------|
+  | highway_65     | no              | —             | —                   |
+  | s_loop         | yes             | improved      | mpc_min_speed_mps   |
+  | ...            | ...             | ...           | ...                 |
+  
+  Tracks improved: <count>
+  Tracks degraded: <count> — BLOCK if any degraded without justification
+  Overlays eliminated: <count>
+```
+
+**Rules:**
+- If ARCHITECTURE level: the plan MUST show how it eliminates ≥1 per-track workaround
+- If the change adds a new per-track overlay parameter: justify why it can't be auto-derived or unified
+- If ≥2 overlays work around the same subsystem and the plan doesn't address it: flag and reconsider
+- Prefer changes that make the system more physics-based (e.g., lateral accel budget) over heuristic-based (speed thresholds + curvature guards)
+
+## Step 4 — Root cause grounding
 
 Tie the plan to specific data, not hypotheses:
 - Reference exact metric values from recent E2E runs or recordings
@@ -46,7 +105,7 @@ ROOT CAUSE:
   Regression guardrails: <what must NOT break>
 ```
 
-## Step 4 — Design the implementation phases
+## Step 5 — Design the implementation phases
 
 Break into phases following this mandatory checklist. Not all phases apply to every feature — mark N/A where appropriate, but **explicitly justify** skipping any phase.
 
@@ -109,7 +168,7 @@ Plus:
 - `CLAUDE.md` — update critical files table, constraints, or fragile areas if needed
 - Memory files — capture non-obvious learnings, pitfalls, or validated approaches
 
-## Step 5 — Output the plan
+## Step 6 — Output the plan
 
 Use Plan mode (EnterPlanMode) to present the plan. Structure:
 

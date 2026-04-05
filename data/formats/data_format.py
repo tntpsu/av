@@ -789,6 +789,8 @@ class ControlCommand:
     mpc_kappa_preview_range: float = 0.0
     regime: int = 0                    # -1=Stanley, 0=PP, 1=LMPC, 2=NMPC
     regime_blend_weight: float = 1.0
+    regime_lateral_accel_mps2: float = 0.0       # κ×v² used for regime decision (m/s²)
+    regime_lateral_accel_threshold_mps2: float = 0.0  # effective threshold with hysteresis (m/s²)
     stanley_active: float = 0.0        # 1.0 when Stanley formula applied this frame
     stanley_heading_term: float = 0.0  # Heading error component of Stanley steering (rad)
     stanley_crosstrack_term: float = 0.0  # Cross-track arctan component of Stanley steering (rad)

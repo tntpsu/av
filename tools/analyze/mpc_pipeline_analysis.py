@@ -83,6 +83,10 @@ def load_recording(path: Path) -> dict:
         data["mpc_smith_e_heading_predicted"] = _get("control/mpc_smith_e_heading_predicted")
         data["mpc_delay_frames_used"]       = _get("control/mpc_delay_frames_used")
 
+        # Lateral accel budget (regime selector)
+        data["regime_lateral_accel"]        = _get("control/regime_lateral_accel_mps2")
+        data["regime_lateral_accel_thr"]    = _get("control/regime_lateral_accel_threshold_mps2")
+
         # 2.8.5 — r_steer_rate scheduling + 2.8.6 — e_lat attenuation
         data["mpc_r_steer_rate_effective"]  = _get("control/mpc_r_steer_rate_effective")
         data["mpc_e_lat"]                   = _get("control/mpc_e_lat")
@@ -365,6 +369,30 @@ def print_report(path: Path, data: dict):
             print("  [Insufficient valid frames]")
     else:
         print("  [Smith raw or mpc_e_lat fields not in recording]")
+
+    # ── 2.8.7 Lateral accel budget ──────────────────────────────────────────
+    print(f"\n{thin}")
+    print("2.8.7 — Lateral acceleration budget (regime selector)")
+    a_lat = data.get("regime_lateral_accel")
+    a_thr = data.get("regime_lateral_accel_thr")
+    if a_lat is not None and mpc_n > 0:
+        a_lat_mpc = a_lat[:n][mpc_mask]
+        p50 = float(np.percentile(a_lat_mpc, 50))
+        p95 = float(np.percentile(a_lat_mpc, 95))
+        mx = float(np.max(a_lat_mpc))
+        print(f"  a_lat (κ×v²) during MPC — P50: {p50:.3f}  P95: {p95:.3f}  Max: {mx:.3f} m/s²")
+        if a_thr is not None:
+            exceeded = a_lat_mpc > a_thr[:n][mpc_mask]
+            exc_n = int(np.sum(exceeded))
+            exc_pct = exc_n / mpc_n * 100
+            gate = "green" if exc_pct < 1.0 else ("yellow" if exc_pct < 5.0 else "red")
+            print(f"  Budget exceeded: {exc_n}/{mpc_n} MPC frames ({exc_pct:.2f}%)  [{gate}]")
+            headroom = (a_thr[:n][mpc_mask] - a_lat_mpc) / np.maximum(a_thr[:n][mpc_mask], 0.01)
+            print(f"  Budget headroom — P50: {float(np.percentile(headroom, 50)):.2f}  P5: {float(np.percentile(headroom, 5)):.2f}")
+        else:
+            print("  [Threshold field not in recording]")
+    else:
+        print("  [Field regime_lateral_accel_mps2 not in recording]")
 
     # ── L_eff Estimation ──────────────────────────────────────────────────────
     leff_val = data.get("mpc_leff_value")

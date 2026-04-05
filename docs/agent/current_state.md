@@ -1,7 +1,32 @@
 # AV Stack — Agent Memory: Current State
 
-**Last updated:** 2026-04-02
-**Current milestone:** Step 5 ACC — Phases D + A + B + C + E complete. 9/10 scenarios passing (2026-04-01). Dynamic bicycle model (Phase D–E) implemented but disabled — deep root cause shows steady-state model bias (not entry transients) caps score at 79. Config consolidation complete. Remaining: G1 deep dive, G2 brake ramp.
+**Last updated:** 2026-04-05
+**Current milestone:** S2-M1 — Phase-gated map FF + blind perception fix + seg model pipeline + lateral accel budget regime selector. 3/6 tracks passing (highway 98.9, s_loop 94.3, sweeping 96.6). 3 tracks failing: mixed 79, hairpin 79 (e-stop), hill 79. Trajectory layer (late turn-in, PP floor rescue) is primary blocker on mixed — not regime selection.
+
+### Lateral Accel Budget Regime Selector — VALIDATED (2026-04-05)
+
+Replaced 6 proxy parameters (speed threshold + curvature guard + per-track mpc_min_speed_mps overrides) with unified `κ×v²` lateral acceleration budget. Threshold=1.5 m/s², hysteresis=±0.3, speed floor=2.0 m/s. Eliminated 3 per-track overlay workarounds (s_loop, hairpin, mixed_radius `mpc_min_speed_mps`).
+
+**Key finding:** On mixed_radius R40 corner, actual reference curvature at car position is ~0.017 (not 0.025 from track geometry) because MPC tracks a wider arc. Peak a_lat=1.31 m/s² → within budget → MPC correctly stays active. Budget plumbing was initially broken (wrong dict key `curvature_primary_abs` vs `path_curvature_primary_abs`), fixed.
+
+Files changed: `regime_selector.py`, `pid_controller.py`, `orchestrator.py`, `data_format.py`, `recorder.py`, `av_stack_config.yaml`, 3 overlay configs, `scoring_registry.py`, 6 diagnostic tools, 49 tests (all pass).
+
+### Phase-Gated Map FF — VALIDATED (2026-04-04)
+
+Suppresses preview-curvature FF on STRAIGHT state (eliminates jerk from FF/centering oscillation), boosts 1.8× during ENTRY (earlier turn-in). s_loop control layer 80→100. Config: `pp_map_ff_phase_gate_enabled: true`, `pp_map_ff_entry_boost: 1.8`.
+
+### Track Sweep Status (2026-04-05)
+
+| Track | Baseline | Current | Status |
+|-------|----------|---------|--------|
+| highway | 96.2 | 98.9 | PASS |
+| s_loop | 96.7 | 94.3 | PASS |
+| sweeping | 91.4 | 96.6 | PASS |
+| mixed | 91.9 | 79.0 | FAIL — trajectory 74.5, late turn-in, oscillation growth |
+| hairpin | 91.6 | 79.0 | FAIL — e-stop frame 414, trajectory 71.9 |
+| hill | N/A | 79.0 | FAIL — trajectory 69.3, heading suppression -13.9 |
+
+**Next:** Diagnose mixed (most comparable to s_loop), then hairpin (entry boost too aggressive at κ=0.067), then hill (grade + heading suppression). Scoring baselines need updating from pre-seg-model era.
 
 ---
 

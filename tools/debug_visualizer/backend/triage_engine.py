@@ -232,11 +232,20 @@ PATTERNS = [
         "check": lambda m: m.get("mpc_available", False) and m.get("mpc_fallback_rate", 0) > 0.005,
     },
     {
+        "id": "regime_budget_exceeded",
+        "name": "MPC active beyond lateral accel budget (>1% MPC frames)",
+        "severity": "instability",
+        "code_pointer": "control/regime_selector.py:RegimeSelector._compute_desired()",
+        "config_lever": "regime.mpc_max_lateral_accel_mps2 / regime.mpc_lateral_accel_hysteresis_mps2",
+        "fix_hint": "MPC active while κ×v² exceeds budget. Lateral demand exceeds linear tire region. Check hold timer or lower budget threshold.",
+        "check": lambda m: m.get("mpc_available", False) and m.get("regime_budget_exceeded_rate", 0) > 0.01,
+    },
+    {
         "id": "mpc_regime_chatter",
         "name": "Regime chatter (>6 switches/min)",
         "severity": "comfort",
         "code_pointer": "control/regime_selector.py:RegimeSelector.update()",
-        "config_lever": "regime.hysteresis_speed_mps",
+        "config_lever": "regime.mpc_lateral_accel_hysteresis_mps2",
         "fix_hint": "Frequent PP↔MPC switches. Widen hysteresis band or increase blend ramp duration.",
         "check": lambda m: m.get("mpc_available", False) and m.get("mpc_regime_changes_per_min", 0) > 6.0,
     },
@@ -1037,6 +1046,15 @@ class TriageEngine:
                 m["mpc_max_consecutive_failures"] = (
                     int(np.max(mpc_failures)) if mpc_failures is not None else 0
                 )
+
+                # Lateral accel budget exceeded rate
+                a_lat_arr = arr("control/regime_lateral_accel_mps2")
+                a_thr_arr = arr("control/regime_lateral_accel_threshold_mps2")
+                if a_lat_arr is not None and a_thr_arr is not None and np.any(mpc_mask):
+                    exceeded = a_lat_arr[mpc_mask] > a_thr_arr[mpc_mask]
+                    m["regime_budget_exceeded_rate"] = float(np.mean(exceeded))
+                else:
+                    m["regime_budget_exceeded_rate"] = 0.0
 
                 # Regime chatter
                 regime_changes = int(np.sum(np.diff(regime) != 0)) if len(regime) > 1 else 0
