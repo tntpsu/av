@@ -331,10 +331,10 @@ control:
     min_hold_frames: 30
     # Stanley low-speed regime (Phase 2.9)
     stanley_enabled: true              # Activates when regime.enabled=true
-    stanley_max_speed_mps: 5.0         # Below this speed → Stanley (m/s)
-    stanley_upshift_hysteresis_mps: 0.5   # Must exceed 5.5 m/s to leave Stanley
-    stanley_downshift_hysteresis_mps: 0.5 # Must drop below 4.5 m/s to enter Stanley
-    stanley_blend_frames: 10           # 0.33s blend at 30 Hz
+    stanley_max_speed_mps: 3.0         # Below this speed → Stanley (m/s) — lowered from 5.0 to keep PP on curve entries
+    stanley_upshift_hysteresis_mps: 0.5   # Must exceed 3.5 m/s to leave Stanley
+    stanley_downshift_hysteresis_mps: 0.5 # Must drop below 2.5 m/s to enter Stanley
+    stanley_blend_frames: 10           # 0.77s at 13 FPS — smooth low-speed transition
     stanley_min_hold_frames: 15        # 0.5s hold before switching
     # Do not hand off to Stanley when path curvature is clearly “on a curve”
     # (brief speed dip during C-braking was tripping Stanley at v<4.5 m/s with κ≈0.01,

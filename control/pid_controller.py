@@ -5608,6 +5608,7 @@ class VehicleController:
 
         self._last_steering_norm = 0.0
         self._last_mpc_steering = 0.0  # for MPC-aware rate limiter (2.8.3)
+        self._last_regime_steering = 0.0  # for regime transition blend (2.9.1)
         _mpc_cfg = self._full_config.get('trajectory', {}).get('mpc', {})
         _delay_frames = int(_mpc_cfg.get('mpc_delay_frames', 2))
         self._steering_ring_buffer = [0.0] * _delay_frames  # delay buffer for 2.8.4
@@ -6213,6 +6214,17 @@ class VehicleController:
             lateral_metadata['mpc_delay_frames_used'] = 0
             self._last_mpc_steering = 0.0  # reset when PP is active
 
+        # --- Regime transition blend for PP return (2.9.1) ---
+        # When transitioning FROM Stanley/MPC back TO PP, blend_weight < 1.0 but
+        # no regime-specific block applies blending (those only blend when their
+        # controller IS the active regime).  Without this, the output jumps from
+        # the previous controller's value to PP's value in one frame → jerk spike.
+        if regime == ControlRegime.PURE_PURSUIT and blend_weight < 1.0:
+            steering = self._last_regime_steering + blend_weight * (
+                steering - self._last_regime_steering
+            )
+        self._last_regime_steering = steering
+
         lateral_metadata['regime'] = int(regime)
         lateral_metadata['regime_blend_weight'] = float(blend_weight)
         lateral_metadata['regime_lateral_accel_mps2'] = float(self._regime_selector.last_lateral_accel)
@@ -6366,6 +6378,7 @@ class VehicleController:
             self._nmpc_controller.reset()
         self._last_steering_norm = 0.0
         self._last_mpc_steering = 0.0
+        self._last_regime_steering = 0.0
         _mpc_cfg = self._full_config.get('trajectory', {}).get('mpc', {})
         _delay_frames = int(_mpc_cfg.get('mpc_delay_frames', 2))
         self._steering_ring_buffer = [0.0] * _delay_frames
