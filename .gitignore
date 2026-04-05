@@ -47,7 +47,9 @@ ENV/
 !tests/**/*.hdf5
 captures/
 data/segmentation_dataset/
+data/recordings/
 data/reports/gates/
+data/reports/failure_packets/
 tracks/generated/
 
 # Logs
@@ -57,6 +59,7 @@ tensorboard_logs/
 wandb/
 
 # Unity
+unity/**/mono_crash.*.json
 unity/**/Library/
 unity/**/Temp/
 unity/**/obj/
