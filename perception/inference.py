@@ -284,6 +284,9 @@ class LaneDetectionInference:
         with torch.no_grad():
             logits = self.segmentation_model(tensor)
             pred = torch.argmax(logits, dim=1).squeeze(0).cpu().numpy().astype(np.uint8)
+        # Mask out bottom 20% (car hood) — matches CV detector ROI and training label prep
+        hood_start = int(pred.shape[0] * 0.80)
+        pred[hood_start:, :] = 0
         lane_coeffs, fit_left, fit_right, mask_resized = self._mask_to_lane_data(
             pred, original_shape
         )

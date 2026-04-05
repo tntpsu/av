@@ -248,6 +248,8 @@ class LateralController:
                  pp_map_ff_wheelbase_m: float = 2.5,
                  pp_map_ff_curvature_min: float = 0.005,
                  pp_map_ff_curvature_max_clip: float = 0.08,
+                 pp_map_ff_phase_gate_enabled: bool = False,
+                 pp_map_ff_entry_boost: float = 1.0,
                  pp_ref_jump_clamp: float = 0.5,
                  pp_stale_decay: float = 0.98,
                  pp_max_steering_rate: float = 0.4,
@@ -500,6 +502,8 @@ class LateralController:
         self.pp_map_ff_wheelbase_m = max(0.5, float(pp_map_ff_wheelbase_m))
         self.pp_map_ff_curvature_min = max(0.0, float(pp_map_ff_curvature_min))
         self.pp_map_ff_curvature_max_clip = max(0.001, float(pp_map_ff_curvature_max_clip))
+        self.pp_map_ff_phase_gate_enabled = bool(pp_map_ff_phase_gate_enabled)
+        self.pp_map_ff_entry_boost = max(0.0, float(pp_map_ff_entry_boost))
         self.pp_ref_jump_clamp = max(0.1, float(pp_ref_jump_clamp))
         self.pp_stale_decay = float(np.clip(pp_stale_decay, 0.5, 1.0))
         self.pp_max_steering_rate = max(0.05, float(pp_max_steering_rate))
@@ -863,6 +867,17 @@ class LateralController:
                 )
         else:
             path_curvature_for_map_ff = 0.0
+        # Preview-based FF fallback: when primary curvature is zero (car hasn't
+        # reached the curve yet), use curvature_preview_abs from the 30m lookahead
+        # horizon. This gives ~71 frames of advance steering on curve approach.
+        _preview_curv_abs = float(reference_point.get('curvature_preview_abs', 0.0) or 0.0)
+        if (
+            abs(path_curvature_for_map_ff) < self.pp_map_ff_curvature_min
+            and _preview_curv_abs >= self.pp_map_ff_curvature_min
+        ):
+            _preview_sign = np.sign(desired_heading) if desired_heading != 0.0 else 1.0
+            path_curvature_for_map_ff = float(_preview_curv_abs) * float(_preview_sign)
+            path_curvature_source_used = "curvature_preview_abs"
         dt = float(dt) if dt is not None and np.isfinite(float(dt)) else 0.033
         dt = float(np.clip(dt, 1e-3, 0.25))
         hold_frames = int(round(self.curvature_stale_hold_seconds / dt)) if dt > 0.0 else 0
@@ -2385,7 +2400,7 @@ class LateralController:
 
             if (
                 self.pp_map_ff_enabled
-                and str(path_curvature_source_used) == "curvature_primary_abs"
+                and str(path_curvature_source_used) in ("curvature_primary_abs", "curvature_preview_abs")
                 and abs(float(path_curvature_for_map_ff)) >= self.pp_map_ff_curvature_min
             ):
                 _raw_curv = float(
@@ -2404,6 +2419,15 @@ class LateralController:
                         self.max_steering,
                     )
                 )
+                # Phase-gate: suppress preview-based FF on straights between
+                # curves (where preview κ is always-on on looped tracks) and
+                # boost during ENTRY to overcome the centering correction and
+                # start turning into the curve before the car reaches it.
+                if self.pp_map_ff_phase_gate_enabled:
+                    if curve_local_state == "ENTRY":
+                        _pp_map_ff_applied *= self.pp_map_ff_entry_boost
+                    elif curve_local_state not in ("COMMIT",):
+                        _pp_map_ff_applied = 0.0
                 steering_before_limits = float(steering_before_limits) + _pp_map_ff_applied
 
             rate_in = steering_before_limits
@@ -5210,6 +5234,8 @@ class VehicleController:
                  pp_map_ff_wheelbase_m: float = 2.5,
                  pp_map_ff_curvature_min: float = 0.005,
                  pp_map_ff_curvature_max_clip: float = 0.08,
+                 pp_map_ff_phase_gate_enabled: bool = False,
+                 pp_map_ff_entry_boost: float = 1.0,
                  pp_ref_jump_clamp: float = 0.5,
                  pp_stale_decay: float = 0.98,
                  pp_max_steering_rate: float = 0.4,
@@ -5452,6 +5478,8 @@ class VehicleController:
             pp_map_ff_wheelbase_m=pp_map_ff_wheelbase_m,
             pp_map_ff_curvature_min=pp_map_ff_curvature_min,
             pp_map_ff_curvature_max_clip=pp_map_ff_curvature_max_clip,
+            pp_map_ff_phase_gate_enabled=pp_map_ff_phase_gate_enabled,
+            pp_map_ff_entry_boost=pp_map_ff_entry_boost,
             pp_ref_jump_clamp=pp_ref_jump_clamp,
             pp_stale_decay=pp_stale_decay,
             pp_max_steering_rate=pp_max_steering_rate,

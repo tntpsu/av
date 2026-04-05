@@ -906,6 +906,12 @@ class AVStack:
             pp_map_ff_curvature_max_clip=float(
                 lateral_cfg.get('pp_map_ff_curvature_max_clip', 0.08)
             ),
+            pp_map_ff_phase_gate_enabled=bool(
+                lateral_cfg.get('pp_map_ff_phase_gate_enabled', False)
+            ),
+            pp_map_ff_entry_boost=float(
+                lateral_cfg.get('pp_map_ff_entry_boost', 1.0)
+            ),
             pp_ref_jump_clamp=lateral_cfg.get('pp_ref_jump_clamp', 0.5),
             pp_stale_decay=lateral_cfg.get('pp_stale_decay', 0.98),
             pp_max_steering_rate=lateral_cfg.get('pp_max_steering_rate', 0.4),
@@ -5334,6 +5340,11 @@ class AVStack:
                 # Prevents the lane-midpoint evaluation point from reaching into an
                 # upcoming curve, which biases center_x by κ·Δd²/2.  Logic lives in
                 # compute_lane_midpoint_clamp() for testability.
+                #
+                # Skip for segmentation mode: the seg model's polynomial fit already
+                # captures lane curvature, so there's no contamination to clamp.
+                # The clamp also causes the fallback y-position formula to evaluate
+                # at the wrong image row, producing invalid widths.
                 _lm_threshold = float(
                     self.trajectory_config.get(
                         'lane_midpoint_max_curve_contamination_m', 0.05
@@ -5347,17 +5358,20 @@ class AVStack:
                 _kappa_preview = abs(float(geo.get('preview_curvature_abs', 0.0) or 0.0))
                 _dist_to_curve = geo.get('distance_to_curve_start_m')
                 _in_curve_now = abs(float(geo.get('curvature_map_abs', 0.0) or 0.0)) > 0.003
-                coord_conversion_distance, coord_distance_was_clamped = compute_lane_midpoint_clamp(
-                    lookahead_m=coord_conversion_distance,
-                    kappa_preview=_kappa_preview,
-                    dist_to_curve_m=(
-                        float(_dist_to_curve)
-                        if _dist_to_curve is not None else None
-                    ),
-                    in_curve=_in_curve_now,
-                    threshold_m=_lm_threshold,
-                    min_distance_m=_lm_min_dist,
-                )
+                if detection_method == "segmentation":
+                    coord_distance_was_clamped = False
+                else:
+                    coord_conversion_distance, coord_distance_was_clamped = compute_lane_midpoint_clamp(
+                        lookahead_m=coord_conversion_distance,
+                        kappa_preview=_kappa_preview,
+                        dist_to_curve_m=(
+                            float(_dist_to_curve)
+                            if _dist_to_curve is not None else None
+                        ),
+                        in_curve=_in_curve_now,
+                        threshold_m=_lm_threshold,
+                        min_distance_m=_lm_min_dist,
+                    )
                 if coord_distance_was_clamped:
                     logger.debug(
                         f"[LANE_MIDPOINT_CLAMP] fr={self.frame_count} "
@@ -5499,13 +5513,18 @@ class AVStack:
                     logger.debug(f"[Frame {self.frame_count}] [DEBUG] About to call _convert_image_to_vehicle_coords")
                     logger.debug(f"[Frame {self.frame_count}] [DEBUG] left_x_image={left_x_image:.1f}, right_x_image={right_x_image:.1f}, y={y_image_at_lookahead:.1f}, dist={conversion_distance:.2f}m")
                 
+                # Segmentation model pixel positions are geometrically correct
+                # and don't need the CV detector's distance_scaling_factor.
+                _skip_dist_scale = (detection_method == "segmentation")
                 left_x_vehicle, _ = planner._convert_image_to_vehicle_coords(
                     left_x_image, y_image_at_lookahead, lookahead_distance=conversion_distance,
-                    horizontal_fov_override=camera_horizontal_fov if camera_horizontal_fov and camera_horizontal_fov > 0 else None
+                    horizontal_fov_override=camera_horizontal_fov if camera_horizontal_fov and camera_horizontal_fov > 0 else None,
+                    skip_distance_scaling=_skip_dist_scale,
                 )
                 right_x_vehicle, _ = planner._convert_image_to_vehicle_coords(
                     right_x_image, y_image_at_lookahead, lookahead_distance=conversion_distance,
-                    horizontal_fov_override=camera_horizontal_fov if camera_horizontal_fov and camera_horizontal_fov > 0 else None
+                    horizontal_fov_override=camera_horizontal_fov if camera_horizontal_fov and camera_horizontal_fov > 0 else None,
+                    skip_distance_scaling=_skip_dist_scale,
                 )
                 calculated_lane_width = right_x_vehicle - left_x_vehicle
                 
@@ -6720,8 +6739,12 @@ class AVStack:
 
         # ── Blind perception detection ──────────────────────────────────
         # Check if both lane positions are zero/None (no usable detection).
-        _left_det = actual_detected_left_lane_x
-        _right_det = actual_detected_right_lane_x
+        # CRITICAL: Use the final lane positions (left_lane_line_x / right_lane_line_x),
+        # NOT actual_detected_* which is only populated on *rejected* detections.
+        # actual_detected_* stays None when detection is accepted normally, which
+        # was incorrectly triggering blind mode on every valid frame.
+        _left_det = left_lane_line_x
+        _right_det = right_lane_line_x
         _is_no_detection = (
             (_left_det is None or abs(_left_det) < 1e-6)
             and (_right_det is None or abs(_right_det) < 1e-6)

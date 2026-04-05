@@ -830,10 +830,11 @@ class RuleBasedTrajectoryPlanner:
         offset_coeffs[-1] += offset  # Adjust constant term
         return offset_coeffs
     
-    def _convert_image_to_vehicle_coords(self, x_pixels: float, y_pixels: float, 
+    def _convert_image_to_vehicle_coords(self, x_pixels: float, y_pixels: float,
                                          lookahead_distance: float = 15.0,
                                          horizontal_fov_override: Optional[float] = None,
-                                         debug_trace: Optional[Dict[str, Any]] = None) -> Tuple[float, float]:
+                                         debug_trace: Optional[Dict[str, Any]] = None,
+                                         skip_distance_scaling: bool = False) -> Tuple[float, float]:
         """
         Convert image pixel coordinates to vehicle coordinates.
         
@@ -863,11 +864,13 @@ class RuleBasedTrajectoryPlanner:
         # Otherwise, fall back to calculating from y_pixels
         using_provided_distance = False
         if lookahead_distance is not None and lookahead_distance >= 0:
-            # Use provided lookahead_distance, but apply scaling factor to account for camera pitch
-            # When camera looks down, point 8m straight ahead in camera space is actually
-            # closer in world space when projected to ground (e.g., 7m instead of 8m)
-            # This scaling factor corrects the coordinate conversion to match reality
-            actual_distance = lookahead_distance * self.distance_scaling_factor
+            # Apply scaling factor to account for camera pitch (CV detector calibration).
+            # The segmentation model's pixel positions are geometrically correct and
+            # don't need this correction — skip_distance_scaling bypasses it.
+            if skip_distance_scaling:
+                actual_distance = float(lookahead_distance)
+            else:
+                actual_distance = lookahead_distance * self.distance_scaling_factor
             using_provided_distance = True
         else:
             # Fallback: estimate distance from y_pixels position

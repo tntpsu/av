@@ -86,7 +86,7 @@ else
         COLLECT_ARGS+=(--speeds $CUSTOM_SPEEDS)
     fi
 
-    if ! ./tools/segmentation/collect_training_data.sh "${COLLECT_ARGS[@]}" 2>&1 | tee -a "$LOG_FILE"; then
+    if ! ./tools/segmentation/collect_training_data.sh ${COLLECT_ARGS[@]+"${COLLECT_ARGS[@]}"} 2>&1 | tee -a "$LOG_FILE"; then
         log "ERROR: Collection failed. Check log above."
         exit 1
     fi

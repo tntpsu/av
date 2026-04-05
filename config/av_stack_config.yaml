@@ -63,6 +63,8 @@ control:
     pp_speed_norm_min_scale: 0.70
     pp_map_ff_enabled: true
     pp_map_ff_gain: 0.8
+    pp_map_ff_phase_gate_enabled: true   # suppress preview-FF on STRAIGHT, boost during ENTRY
+    pp_map_ff_entry_boost: 1.8           # 1.8× FF during ENTRY state for earlier turn-in
     pp_map_ff_wheelbase_m: 2.5
     pp_map_ff_curvature_min: 0.005
     pp_map_ff_curvature_max_clip: 0.08
@@ -956,8 +958,8 @@ perception:
   low_visibility_fallback_blend_alpha: 0.35
   low_visibility_fallback_max_consecutive_frames: 8
   low_visibility_fallback_center_shift_cap_m: 0.25
-  segmentation_fit_min_row_ratio: 0.45
-  segmentation_fit_max_row_ratio: 0.75
+  segmentation_fit_min_row_ratio: 0.20
+  segmentation_fit_max_row_ratio: 0.80
   segmentation_ransac_enabled: true
   segmentation_ransac_residual_px: 10.0
   segmentation_ransac_min_inliers: 8

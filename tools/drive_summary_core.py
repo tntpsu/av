@@ -5251,6 +5251,8 @@ def _compute_grade_metrics(data: Dict, n_frames: int) -> Optional[Dict]:
 
     rg = road_grade[:n_frames]
     pr = pitch_rad[:n_frames]
+    if len(rg) == 0 or len(pr) == 0:
+        return None
     speed = data.get('speed')
     speed_arr = speed[:n_frames] if speed is not None else None
 

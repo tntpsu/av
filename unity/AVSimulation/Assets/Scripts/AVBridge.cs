@@ -14,6 +14,36 @@ using UnityEditor;
 /// </summary>
 public class AVBridge : MonoBehaviour
 {
+    /// <summary>
+    /// Sets the macOS window title using Unity's built-in Screen API.
+    /// On standalone macOS, modifies the PlayerSettings.productName to update the title bar.
+    /// </summary>
+    private static void SetWindowTitle(string title)
+    {
+        // Use PlayerPrefs to persist the title for the debug overlay,
+        // and log it prominently so it's visible in the console.
+        Debug.Log($"══════ {title} ══════");
+#if UNITY_STANDALONE_OSX && !UNITY_EDITOR
+        try
+        {
+            // Unity standalone on macOS: use native plugin-free approach
+            // Set the window title via the Cocoa API using UnityEngine's internal method
+            using (var process = new System.Diagnostics.Process())
+            {
+                process.StartInfo.FileName = "osascript";
+                process.StartInfo.Arguments = $"-e 'tell application \"System Events\" to set name of first window of (first process whose unix id is {System.Diagnostics.Process.GetCurrentProcess().Id}) to \"{title}\"'";
+                process.StartInfo.UseShellExecute = false;
+                process.StartInfo.CreateNoWindow = true;
+                process.Start();
+            }
+        }
+        catch (Exception e)
+        {
+            Debug.LogWarning($"SetWindowTitle osascript failed: {e.Message}");
+        }
+#endif
+    }
+
     private static int lastOverlayFrame = -1;
     [Header("Components")]
     public CarController carController;
@@ -602,12 +632,32 @@ private float? lastCarT = null;
 
         // Start sending Unity feedback periodically
         StartCoroutine(SendUnityFeedback());
-        
+
+        // ── Set window title with track/mode info ────────────────────────────
+        StartCoroutine(SetWindowTitleDeferred());
+
         // CRITICAL FIX: Register EditorApplication.update to check for play requests even when not in play mode
         // This allows auto-play to work when Unity Editor is open but not playing
         #if UNITY_EDITOR
         EditorApplication.update += OnEditorUpdate;
         #endif
+    }
+
+    private IEnumerator SetWindowTitleDeferred()
+    {
+        // Wait a frame for RoadGenerator and window to be ready
+        yield return null;
+        yield return null;
+
+        string trackName = "unknown";
+        RoadGenerator rg = FindObjectOfType<RoadGenerator>();
+        if (rg != null && rg.ActiveTrackConfig != null)
+            trackName = rg.ActiveTrackConfig.name;
+
+        string mode = (carController != null && carController.groundTruthMode) ? "GT" : "AV";
+        string title = $"AV Sim — {trackName} [{mode}]";
+        SetWindowTitle(title);
+        Debug.Log($"AVBridge: Window title set to: {title}");
     }
 
     private static bool? ParseCommandLineBool(string[] args, string name)

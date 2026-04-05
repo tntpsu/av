@@ -180,6 +180,14 @@ def prepare_dataset(
                             continue
 
                         h, w = lane_color_mask.shape
+
+                        # Exclude bottom 20% of image (car hood) from masks.
+                        # The CV detector's ROI excludes this area, but the raw
+                        # color masks in debug_info include the full image.
+                        hood_start = int(h * 0.80)
+                        lane_color_mask[hood_start:, :] = 0
+                        yellow_mask[hood_start:, :] = 0
+
                         white_mask = build_white_mask_from_combined(
                             lane_color_mask, yellow_mask, image_center_x=w // 2
                         )

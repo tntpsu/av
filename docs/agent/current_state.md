@@ -730,7 +730,7 @@ with stale-propagation banners and replay-mode locked-layer context.
 ### Known Incomplete Items
 
 1. **MPC controller (`control/mpc_controller.py`):** Active via `mpc_sloop.yaml` / `mpc_highway.yaml` / `mpc_mixed.yaml` / `mpc_hill_highway.yaml`. PP is default when no MPC overlay loaded.
-2. **Segmentation model:** IS active (`detection_method = "segmentation"` 100% of frames). CLAUDE.md "CV fallback active" note is outdated.
+2. **Segmentation model:** IS active (`detection_method = "segmentation"` 100% of frames). CLAUDE.md "CV fallback active" note is outdated. **Retrained 2026-04-03:** 3 tracks (oval, s_loop, circle), 8,655 images, val_loss 0.0021/20 epochs. 6 tracks failed GT collection due to Unity segfault after ~36 consecutive launches (accumulated instability, not track-specific). Remaining tracks needing collection: hairpin, highway_65, mixed_radius, sweeping_highway, hill_highway, autobahn_30 — run with Unity rebuild between tracks.
 3. **Speed error RMSE on highway:** 1.19 m/s — structural (vehicle accelerates ~15s to reach 12 m/s target); not a control bug
 
 ---
