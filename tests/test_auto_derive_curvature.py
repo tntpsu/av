@@ -448,15 +448,18 @@ class TestMPCWeightDerivation:
     """Tests for MPC cost function weight auto-derivation (_derive_mpc_weights)."""
 
     def test_highway_reference_no_change(self):
-        """At highway reference point (v=15, κ=0.002), q_lat stays at base 0.5."""
+        """At highway reference point (v=15, κ=0.002), q_lat stays at base."""
+        base = MPC_WEIGHT_PARAMS[("trajectory.mpc", "mpc_q_lat")][0]
         q = _derive_mpc_q_lat(0.002, v_target=15.0)
-        assert abs(q - 0.5) < 1e-6, f"Expected 0.5 at reference operating point, got {q}"
+        assert abs(q - base) < 1e-6, f"Expected {base} at reference operating point, got {q}"
 
     def test_hill_highway_q_lat_increases(self):
-        """At hill_highway (v=12, κ=0.010), q_lat scales up (~1.6)."""
+        """At hill_highway (v=12, κ=0.010), q_lat scales up from base."""
+        base = MPC_WEIGHT_PARAMS[("trajectory.mpc", "mpc_q_lat")][0]
         q = _derive_mpc_q_lat(0.010, v_target=12.0)
-        assert q > 0.5, "q_lat should increase for R100 track at 12 m/s"
-        assert 1.4 < q < 2.0, f"Expected ~1.60, got {q}"
+        assert q > base, f"q_lat should increase for R100 track at 12 m/s (base={base})"
+        expected_ratio = 3.2  # (12²×0.010) / (15²×0.002) = 1.44/0.45 = 3.2
+        assert abs(q / base - expected_ratio) < 0.1, f"Expected ratio ~{expected_ratio}, got {q/base}"
 
     def test_q_lat_formula_exact(self):
         """Verify exact formula: base × (v²×κ_mpc / v_ref²×κ_ref)^exponent."""
@@ -478,8 +481,9 @@ class TestMPCWeightDerivation:
 
     def test_q_lat_never_below_base(self):
         """Low centripetal demand does not reduce q_lat below base."""
+        base = MPC_WEIGHT_PARAMS[("trajectory.mpc", "mpc_q_lat")][0]
         q = _derive_mpc_q_lat(0.001, v_target=5.0)  # v=5, κ=0.001 → tiny a_lat
-        assert q >= 0.5, f"q_lat should never drop below base 0.5, got {q}"
+        assert q >= base, f"q_lat should never drop below base {base}, got {q}"
 
     def test_q_lat_cap_enforced(self):
         """Derived value is capped at max_value (4.0)."""

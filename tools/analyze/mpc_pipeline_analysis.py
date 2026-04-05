@@ -87,6 +87,15 @@ def load_recording(path: Path) -> dict:
         data["regime_lateral_accel"]        = _get("control/regime_lateral_accel_mps2")
         data["regime_lateral_accel_thr"]    = _get("control/regime_lateral_accel_threshold_mps2")
 
+        # MPC reference alignment
+        data["mpc_e_lat_ref_source"]       = None
+        data["mpc_e_lat_ref_divergence"]   = _get("control/mpc_e_lat_reference_divergence_m")
+        if "control/mpc_e_lat_reference_source" in f:
+            raw = f["control/mpc_e_lat_reference_source"][:]
+            data["mpc_e_lat_ref_source"] = np.array(
+                [s.decode() if isinstance(s, bytes) else str(s) for s in raw]
+            )
+
         # 2.8.5 — r_steer_rate scheduling + 2.8.6 — e_lat attenuation
         data["mpc_r_steer_rate_effective"]  = _get("control/mpc_r_steer_rate_effective")
         data["mpc_e_lat"]                   = _get("control/mpc_e_lat")
@@ -570,6 +579,34 @@ def print_report(path: Path, data: dict):
     if fallback is not None:
         fb = int(np.sum(fallback[:n][mpc_mask] > 0.5))
         print(f"  Fallback activations: {fb} / {mpc_n}  ({fb/mpc_n*100:.1f}%)")
+
+    # ── MPC Reference Alignment ─────────────────────────────────────────────
+    ref_source = data.get("mpc_e_lat_ref_source")
+    ref_div = data.get("mpc_e_lat_ref_divergence")
+    if ref_source is not None or ref_div is not None:
+        print(f"\n{thin}")
+        print("MPC Reference Alignment")
+        if ref_source is not None and mpc_n > 0:
+            mpc_sources = ref_source[:n][mpc_mask]
+            unique, counts = np.unique(mpc_sources, return_counts=True)
+            for src, cnt in zip(unique, counts):
+                print(f"  Reference source: {src} ({cnt/mpc_n*100:.1f}% of MPC frames)")
+        if ref_div is not None and mpc_n > 0:
+            div = ref_div[:n][mpc_mask]
+            abs_div = np.abs(div)
+            print(f"  Reference divergence (lookahead - at_car):")
+            print(f"    P50: {np.percentile(abs_div,50):.3f}m  "
+                  f"P95: {np.percentile(abs_div,95):.3f}m  "
+                  f"Max: {np.max(abs_div):.3f}m")
+        # Alignment check: correlation between mpc_e_lat and -lateral_error
+        lat_err = data.get("lateral_error")
+        e_lat = data.get("mpc_e_lat")
+        if lat_err is not None and e_lat is not None and mpc_n > 10:
+            le = lat_err[:n][mpc_mask]
+            el = e_lat[:n][mpc_mask]
+            corr = float(np.corrcoef(el, -le)[0, 1]) if np.std(el) > 1e-9 and np.std(le) > 1e-9 else 0.0
+            gate = "PASS" if corr > 0.95 else ("WARN" if corr > 0.80 else "FAIL")
+            print(f"  Correlation(mpc_e_lat, -lateral_error): {corr:.3f}  [{gate} > 0.95]")
 
     # ── Step 5 — NMPC section ────────────────────────────────────────────────
     if nmpc_n > 0:

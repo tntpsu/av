@@ -2679,6 +2679,13 @@ class DataRecorder:
             dtype=h5py.string_dtype(encoding='utf-8', length=32)
         )
         self.h5_file.create_dataset(
+            "control/mpc_e_lat_reference_source",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=h5py.string_dtype(encoding='utf-8', length=32)
+        )
+        self.h5_file.create_dataset("control/mpc_e_lat_reference_divergence_m", shape=(0,), maxshape=max_shape, dtype=np.float32)
+        self.h5_file.create_dataset(
             "control/mpc_gt_cross_track_control_source_code",
             shape=(0,),
             maxshape=max_shape,
@@ -7639,6 +7646,8 @@ class DataRecorder:
         mpc_gt_cross_track_lookahead_m_list = []
         mpc_gt_cross_track_source_code_list = []
         mpc_gt_cross_track_control_source_code_list = []
+        mpc_e_lat_reference_source_list = []
+        mpc_e_lat_reference_divergence_m_list = []
         mpc_gt_heading_error_rad_list = []
         mpc_using_ground_truth_list = []
         mpc_kappa_preview_used_list = []
@@ -9068,6 +9077,12 @@ class DataRecorder:
             mpc_gt_cross_track_control_source_code_list.append(
                 str(getattr(cc, 'mpc_gt_cross_track_control_source_code', '') or '')
             )
+            mpc_e_lat_reference_source_list.append(
+                str(getattr(cc, 'mpc_e_lat_reference_source', '') or '')
+            )
+            mpc_e_lat_reference_divergence_m_list.append(
+                float(getattr(cc, 'mpc_e_lat_reference_divergence_m', 0.0))
+            )
             mpc_gt_heading_error_rad_list.append(float(getattr(cc, 'mpc_gt_heading_error_rad', 0.0)))
             mpc_using_ground_truth_list.append(float(getattr(cc, 'mpc_using_ground_truth', 0.0)))
             mpc_kappa_preview_used_list.append(int(getattr(cc, 'mpc_kappa_preview_used', False)))
@@ -9450,6 +9465,7 @@ class DataRecorder:
                        "mpc_gt_cross_track_vehicle_frame_at_car_m",
                        "mpc_gt_cross_track_lookahead_m", "mpc_gt_cross_track_source_code",
                        "mpc_gt_cross_track_control_source_code",
+                       "mpc_e_lat_reference_source", "mpc_e_lat_reference_divergence_m",
                        "mpc_gt_heading_error_rad",
                        "mpc_using_ground_truth",
                        "mpc_kappa_preview_used", "mpc_kappa_preview_range",
@@ -10653,6 +10669,13 @@ class DataRecorder:
             self.h5_file["control/mpc_gt_cross_track_control_source_code"][current_size:] = np.array(
                 mpc_gt_cross_track_control_source_code_list,
                 dtype=h5py.string_dtype(encoding='utf-8', length=32),
+            )
+            self.h5_file["control/mpc_e_lat_reference_source"][current_size:] = np.array(
+                mpc_e_lat_reference_source_list,
+                dtype=h5py.string_dtype(encoding='utf-8', length=32),
+            )
+            self.h5_file["control/mpc_e_lat_reference_divergence_m"][current_size:] = (
+                mpc_e_lat_reference_divergence_m_list
             )
             self.h5_file["control/mpc_gt_heading_error_rad"][current_size:] = mpc_gt_heading_error_rad_list
             self.h5_file["control/mpc_using_ground_truth"][current_size:] = mpc_using_ground_truth_list

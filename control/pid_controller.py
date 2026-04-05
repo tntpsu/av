@@ -5706,16 +5706,30 @@ class VehicleController:
                 or ''
             )
 
+            # MPC reference source selection (Phase 3.0):
+            # - lookahead_gt: GT cross-track at PP lookahead point — aligns MPC
+            #   target with scored lateral_error. Eliminates curve reference
+            #   divergence (at-car vs lookahead offset grows with κ).
+            # - at_car_gt: GT cross-track at car position (legacy, closest-point).
+            # - fallback_pp: -lateral_error from path planner (no GT available).
+            _use_lookahead_ref = self._full_config.get(
+                'trajectory', {},
+            ).get('mpc', {}).get('mpc_e_lat_use_lookahead_reference', True)
+
+            _mpc_e_lat_ref_source = 'fallback_pp'
             if gt_cross_track is not None and gt_heading is not None:
-                if gt_cross_track_source_code == 'road_frame_at_car':
-                    # Road-frame selected-lane cross-track: positive means the
-                    # car is right of the selected lane center, which matches
-                    # MPC e_lat>0 directly.
+                if _use_lookahead_ref and gt_cross_track_lookahead is not None:
+                    # Lookahead reference: same point PP steers toward and scoring
+                    # measures. Sign: vehicle-frame, positive = lane center RIGHT
+                    # of car = car LEFT of center. MPC e_lat>0 = car RIGHT. Negate.
+                    raw_e_lat = -float(gt_cross_track_lookahead)
+                    _mpc_e_lat_ref_source = 'lookahead_gt'
+                elif gt_cross_track_source_code == 'road_frame_at_car':
                     raw_e_lat = float(gt_cross_track)
+                    _mpc_e_lat_ref_source = 'at_car_gt'
                 else:
-                    # Vehicle-frame lane-center geometry: positive means lane
-                    # center is right of the car, so the car is left of center.
                     raw_e_lat = -float(gt_cross_track)
+                    _mpc_e_lat_ref_source = 'at_car_gt'
                 # Heading: headingDeltaDeg positive = car pointed RIGHT.
                 # MPC: e_heading>0 = car pointed RIGHT (so e_lat increases via
                 # e_lat += v*e_heading*dt when car drifts rightward). Same sign.
@@ -5724,8 +5738,6 @@ class VehicleController:
                 # Fallback: PP lateral_error = ref_x (positive = ref RIGHT of car
                 # = car LEFT). MPC e_lat>0 = car RIGHT. Negate.
                 raw_e_lat = -float(lateral_metadata.get('lateral_error', 0.0))
-                # PP heading_error sign convention: use as-is (best effort,
-                # ground-truth path is preferred when available).
                 raw_e_heading = float(lateral_metadata.get('heading_error', 0.0))
 
             # 2.8.4: Configurable multi-frame delay compensation.
@@ -5891,6 +5903,14 @@ class VehicleController:
             lateral_metadata['mpc_gt_cross_track_control_source_code'] = gt_cross_track_source_code
             lateral_metadata['mpc_gt_heading_error_rad'] = float(gt_heading) if gt_heading is not None else float('nan')
             lateral_metadata['mpc_using_ground_truth'] = 1.0 if (gt_cross_track is not None and gt_heading is not None) else 0.0
+            # Phase 3.0: reference alignment telemetry
+            lateral_metadata['mpc_e_lat_reference_source'] = _mpc_e_lat_ref_source
+            if gt_cross_track_lookahead is not None and gt_cross_track is not None:
+                lateral_metadata['mpc_e_lat_reference_divergence_m'] = (
+                    float(gt_cross_track_lookahead) - float(gt_cross_track)
+                )
+            else:
+                lateral_metadata['mpc_e_lat_reference_divergence_m'] = 0.0
             lateral_metadata['mpc_kappa_preview_used'] = mpc_result.get('kappa_preview_used', False)
             lateral_metadata['mpc_kappa_preview_range'] = mpc_result.get('kappa_preview_range', 0.0)
             lateral_metadata['mpc_last_steering_pre_modify'] = steering  # value before orchestrator post-hoc mods
@@ -6090,6 +6110,13 @@ class VehicleController:
             lateral_metadata['mpc_gt_cross_track_control_source_code'] = gt_cross_track_source_code
             lateral_metadata['mpc_gt_heading_error_rad'] = float(gt_heading) if gt_heading is not None else float('nan')
             lateral_metadata['mpc_using_ground_truth'] = 1.0 if (gt_cross_track is not None and gt_heading is not None) else 0.0
+            lateral_metadata['mpc_e_lat_reference_source'] = _mpc_e_lat_ref_source
+            if gt_cross_track_lookahead is not None and gt_cross_track is not None:
+                lateral_metadata['mpc_e_lat_reference_divergence_m'] = (
+                    float(gt_cross_track_lookahead) - float(gt_cross_track)
+                )
+            else:
+                lateral_metadata['mpc_e_lat_reference_divergence_m'] = 0.0
             lateral_metadata['mpc_kappa_preview_used'] = False
             lateral_metadata['mpc_kappa_preview_range'] = 0.0
             lateral_metadata['mpc_last_steering_pre_modify'] = steering
@@ -6175,6 +6202,8 @@ class VehicleController:
             lateral_metadata['mpc_gt_cross_track_control_source_code'] = ''
             lateral_metadata['mpc_gt_heading_error_rad'] = 0.0
             lateral_metadata['mpc_using_ground_truth'] = 0.0
+            lateral_metadata['mpc_e_lat_reference_source'] = 'inactive'
+            lateral_metadata['mpc_e_lat_reference_divergence_m'] = 0.0
             lateral_metadata['mpc_kappa_preview_used'] = False
             lateral_metadata['mpc_kappa_preview_range'] = 0.0
             lateral_metadata['mpc_last_steering_pre_modify'] = 0.0
@@ -6204,6 +6233,8 @@ class VehicleController:
             lateral_metadata['mpc_gt_cross_track_control_source_code'] = ''
             lateral_metadata['mpc_gt_heading_error_rad'] = 0.0
             lateral_metadata['mpc_using_ground_truth'] = 0.0
+            lateral_metadata['mpc_e_lat_reference_source'] = 'inactive'
+            lateral_metadata['mpc_e_lat_reference_divergence_m'] = 0.0
             lateral_metadata['mpc_kappa_preview_used'] = False
             lateral_metadata['mpc_kappa_preview_range'] = 0.0
             lateral_metadata['mpc_last_steering_pre_modify'] = 0.0

@@ -783,6 +783,8 @@ class ControlCommand:
     mpc_gt_cross_track_lookahead_m: float = 0.0
     mpc_gt_cross_track_source_code: str = ""
     mpc_gt_cross_track_control_source_code: str = ""
+    mpc_e_lat_reference_source: str = ""
+    mpc_e_lat_reference_divergence_m: float = 0.0
     mpc_gt_heading_error_rad: float = 0.0
     mpc_using_ground_truth: float = 0.0
     mpc_kappa_preview_used: bool = False

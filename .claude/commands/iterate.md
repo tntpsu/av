@@ -172,7 +172,17 @@ Rules:
 - If 2+ overlays work around same subsystem → minimum ARCHITECTURE
 - NEVER recommend per-track overlay as primary fix
 
-### 2e2 — Signal locality check (preview vs at-car)
+### 2e2 — Regime transition completeness check
+
+When diagnosing comfort issues (jerk spikes, steering discontinuities), check whether regime transition blending is symmetric:
+
+- **Blend asymmetry:** Each controller regime (Stanley, MPC, NMPC) applies its own blend logic when IT is the active regime. But the "base" controller (PP) may not have blend logic for transitions TO it. This means Stanley→PP and MPC→PP transitions can produce full-step jumps in steering output.
+- **How to detect:** Look for jerk spikes at regime transition frames. If `regime_blend_weight < 1.0` but the steering output jumps discontinuously, the blend is only applied in one direction.
+- **Fix pattern:** Track `_last_regime_steering` at the orchestrator level and apply blend when returning to PP with `blend_weight < 1.0`.
+
+This was learned when a 46.3 steering jerk spike on sloop at frame ~145 was traced to the Stanley→PP handoff — blend_weight was correctly ramping, but PP's code path had no blend logic.
+
+### 2e3 — Signal locality check (preview vs at-car)
 
 When a fix uses sensor signals for control decisions (e.g., curvature for regime selection), verify whether the signal needs lookahead:
 
@@ -294,6 +304,16 @@ Use the `/e2e` skill workflow:
 ```
 /e2e <target_track>
 ```
+
+### 6a1 — Run duration sanity check
+
+**CRITICAL:** Before running `/e2e`, verify the run duration matches the track geometry:
+
+- **Non-looping tracks** (e.g., sloop — net 0° heading, car drives off end after ~1.5 laps): use `--duration 60` for a single clean lap. Duration 120 produces ~1740 frames that hit track-end geometry → OOL events and inflated RMSE.
+- **Looping tracks** (e.g., mixed_radius, highway): can use longer durations, but prefer single-lap runs for consistency. Duration 120 on mixed produces 2-lap runs that average more tracking errors.
+- **Default:** Use `--duration 60` unless you have a specific reason for longer runs. Single-lap scores are more stable and comparable across iterations.
+
+Check track geometry: `tracks/<track>.yml` — if the waypoints don't form a closed circuit, the track doesn't loop.
 
 ### 6a2 — Validate code changes BEFORE tuning
 

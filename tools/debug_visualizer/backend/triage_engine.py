@@ -873,6 +873,20 @@ PATTERNS = [
         ),
     },
     {
+        "id": "mpc_reference_divergence",
+        "name": "MPC reference divergence high — lookahead vs at-car reference mismatch",
+        "severity": "instability",
+        "category": "Control",
+        "code_pointer": "control/pid_controller.py:compute_control() (~line 5710)",
+        "config_lever": "trajectory.mpc.mpc_e_lat_use_lookahead_reference",
+        "fix_hint": (
+            "MPC e_lat reference divergence P95 > 0.20m. "
+            "Check mpc_e_lat_use_lookahead_reference is true. "
+            "If already true, the lookahead GT signal may be stale or unavailable."
+        ),
+        "check": lambda m: m.get("mpc_ref_divergence_p95", 0.0) > 0.20,
+    },
+    {
         "id": "geometry_override_missing",
         "name": "Dynamic model running without Unity geometry override (symmetric fallback)",
         "severity": "instability",
@@ -1082,6 +1096,15 @@ class TriageEngine:
                     )
                 else:
                     m["mpc_kappa_divergence_p95"] = 0.0
+
+                # MPC reference alignment divergence
+                ref_div = arr("control/mpc_e_lat_reference_divergence_m")
+                if ref_div is not None and np.any(mpc_mask):
+                    m["mpc_ref_divergence_p95"] = float(
+                        np.percentile(np.abs(ref_div[mpc_mask]), 95)
+                    )
+                else:
+                    m["mpc_ref_divergence_p95"] = 0.0
             else:
                 m["mpc_available"] = False
 

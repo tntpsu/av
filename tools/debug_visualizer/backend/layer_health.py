@@ -226,6 +226,12 @@ class LayerHealthAnalyzer:
                     score -= 0.25
                     flags.append("regime_budget_exceeded")
 
+                # MPC reference divergence (informational — no score penalty)
+                if "control/mpc_e_lat_reference_divergence_m" in f:
+                    ref_div = abs(self._scalar(f, "control/mpc_e_lat_reference_divergence_m", i, default=0.0))
+                    if ref_div > 0.15:
+                        flags.append("mpc_reference_divergence_high")
+
             if regime_val >= 1.5:  # NMPC active
                 if self._scalar(f, "control/nmpc_feasible", i, default=1.0) < 0.5:
                     score -= 0.40

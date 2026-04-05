@@ -115,6 +115,7 @@ def build_causal_timeline(issues: List[Dict], failure_frame: Optional[int] = Non
         "mpc_gt_cross_track_vehicle_frame_semantic_mismatch": "control",
         "mpc_gt_cross_track_absolute_coordinate_mismatch": "control",
         "mpc_curvature_bias_cancellation": "control",
+        "mpc_reference_misaligned": "control",
         "tire_saturation": "control",
         "tire_ekf_divergence": "control",
         "tire_stiffness_at_bounds": "control",
@@ -3135,6 +3136,26 @@ def detect_issues(recording_path: Path, analyze_to_failure: bool = False) -> Dic
                             "frames": [int(x) for x in exceeded_frames[:20]],
                             "first_frame": int(exceeded_frames[0]),
                         })
+
+                # MPC reference alignment — weak correlation between mpc_e_lat and -lateral_error
+                if 'control/mpc_e_lat' in f and 'control/lateral_error' in f and np.sum(mpc_mask) > 30:
+                    _mpc_el = np.array(f['control/mpc_e_lat'][:num_frames], dtype=float)
+                    _lat_err = np.array(f['control/lateral_error'][:num_frames], dtype=float)
+                    _el_m = _mpc_el[mpc_mask]
+                    _le_m = _lat_err[mpc_mask]
+                    if np.std(_el_m) > 1e-9 and np.std(_le_m) > 1e-9:
+                        _corr = float(np.corrcoef(_el_m, -_le_m)[0, 1])
+                        if _corr < 0.90:
+                            issues.append({
+                                "frame": int(np.where(mpc_mask)[0][0]),
+                                "type": "mpc_reference_misaligned",
+                                "severity": "warning",
+                                "description": (
+                                    f"MPC reference misaligned: correlation(mpc_e_lat, -lateral_error) = {_corr:.3f} "
+                                    f"(expect > 0.90). MPC may be optimizing a different reference than what gets scored."
+                                ),
+                                "correlation": _corr,
+                            })
 
                 # NMPC-specific issues (regime == 2)
                 nmpc_mask = regime >= 1.5

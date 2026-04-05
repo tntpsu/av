@@ -11898,6 +11898,12 @@ class AVStack:
             mpc_gt_cross_track_control_source_code=str(
                 control_command.get('mpc_gt_cross_track_control_source_code', '') or ''
             ),
+            mpc_e_lat_reference_source=str(
+                control_command.get('mpc_e_lat_reference_source', '') or ''
+            ),
+            mpc_e_lat_reference_divergence_m=float(
+                control_command.get('mpc_e_lat_reference_divergence_m', 0.0)
+            ),
             mpc_gt_heading_error_rad=float(control_command.get('mpc_gt_heading_error_rad', 0.0)),
             mpc_using_ground_truth=float(control_command.get('mpc_using_ground_truth', 0.0)),
             mpc_kappa_preview_used=bool(control_command.get('mpc_kappa_preview_used', False)),

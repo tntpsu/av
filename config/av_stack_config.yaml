@@ -323,7 +323,7 @@ control:
     mpc_max_lateral_accel_mps2: 1.5     # κ×v² budget — MPC→PP when exceeded (m/s²)
     mpc_lateral_accel_hysteresis_mps2: 0.3  # dead band ± around threshold (m/s²)
     mpc_min_speed_absolute_mps: 2.0     # hard speed floor — MPC needs nonzero velocity (m/s)
-    mpc_max_map_curvature: 0.020       # map κ above this → PP (MPC linearization degrades at R<50)
+    mpc_max_map_curvature: 0.015       # map κ above this → PP (MPC linearization degrades at R<67; was 0.020/R50)
     # Deprecated (kept for backward compat — lateral accel budget replaces these):
     # mpc_min_speed_mps, mpc_max_curvature, mpc_curvature_hysteresis,
     # upshift_hysteresis_mps, downshift_hysteresis_mps, pp_max_speed_mps
@@ -786,6 +786,10 @@ trajectory:
     #   only 3.7% (perception noise is slow/correlated, not white noise). The EMA added ~7
     #   frames of lag to curve-entry corrections, increasing curve e_lat RMSE by +81%
     #   (0.22m→0.40m) and dropping score 92.3→91.7. Alpha=1.0 = no filtering (unfiltered).
+    # MPC reference alignment: use lookahead GT cross-track for e_lat instead of at-car.
+    # Aligns MPC's optimization target with the scored lateral_error (lookahead reference).
+    # At-car reference diverges from scored reference on curves (std=0.10m on R200).
+    mpc_e_lat_use_lookahead_reference: true
     mpc_elat_ema_alpha: 1.0
     mpc_elat_deadband_m: 0.0
     # Fix C — dropout recovery rate limiter: DISABLED (2026-03-31).

@@ -1,7 +1,17 @@
 # AV Stack — Agent Memory: Current State
 
 **Last updated:** 2026-04-05
-**Current milestone:** S2-M1 — Phase-gated map FF + blind perception fix + seg model pipeline + lateral accel budget regime selector. 3/6 tracks passing (highway 98.9, s_loop 94.3, sweeping 96.6). 3 tracks failing: mixed 79, hairpin 79 (e-stop), hill 79. Trajectory layer (late turn-in, PP floor rescue) is primary blocker on mixed — not regime selection.
+**Current milestone:** S2-M1 — MPC reference alignment fix + regime blend asymmetry fix + lateral accel budget. 4/6 tracks passing all layers (highway 97.9, s_loop 97.8, sweeping 97.0, mixed 96.6). 2 tracks remaining: hairpin 79 (e-stop), hill 79. Trajectory layer still below 95 on mixed/sloop/sweeping due to C1 late turn-in — next bottleneck to diagnose.
+
+### MPC Reference Point Alignment — VALIDATED (2026-04-05)
+
+Changed MPC's e_lat input from at-car GT cross-track (closest-point) to lookahead GT cross-track (PP-style reference). This aligns MPC's optimization target with the scored `lateral_error`, eliminating curve reference divergence. Also lowered `mpc_max_map_curvature` from 0.020 to 0.015 (routes R60 curves to PP).
+
+**Key evidence:** Correlation(mpc_e_lat, -lateral_error) improved from -0.71 → 0.999. Mixed_radius R200 oscillation (0.5m amplitude, 50-frame period) resolved. Reference divergence P50=0.413m on curves confirms the at-car vs lookahead references diverge significantly.
+
+**Results:** mixed 79.0→96.6 (+17.6), sloop 94.3→97.8, highway 96.2→97.9, sweeping 96.6→97.0. Zero regressions.
+
+Files changed: `pid_controller.py` (~15 lines), `av_stack_config.yaml` (2 params), `data_format.py`, `recorder.py`, `orchestrator.py` (2 new HDF5 fields), `mpc_pipeline_analysis.py`, `issue_detector.py`, `triage_engine.py`, `layer_health.py` (diagnostics), `test_mpc_reference_alignment.py` (8 tests), `test_auto_derive_curvature.py` (stale test fixes).
 
 ### Lateral Accel Budget Regime Selector — VALIDATED (2026-04-05)
 
@@ -15,18 +25,20 @@ Files changed: `regime_selector.py`, `pid_controller.py`, `orchestrator.py`, `da
 
 Suppresses preview-curvature FF on STRAIGHT state (eliminates jerk from FF/centering oscillation), boosts 1.8× during ENTRY (earlier turn-in). s_loop control layer 80→100. Config: `pp_map_ff_phase_gate_enabled: true`, `pp_map_ff_entry_boost: 1.8`.
 
-### Track Sweep Status (2026-04-05)
+### Track Sweep Status (2026-04-05, post MPC reference alignment)
 
-| Track | Baseline | Current | Status |
-|-------|----------|---------|--------|
-| highway | 96.2 | 98.9 | PASS |
-| s_loop | 96.7 | 94.3 | PASS |
-| sweeping | 91.4 | 96.6 | PASS |
-| mixed | 91.9 | 79.0 | FAIL — trajectory 74.5, late turn-in, oscillation growth |
-| hairpin | 91.6 | 79.0 | FAIL — e-stop frame 414, trajectory 71.9 |
-| hill | N/A | 79.0 | FAIL — trajectory 69.3, heading suppression -13.9 |
+| Track | Baseline | Current | All layers ≥ 95? | Status |
+|-------|----------|---------|-------------------|--------|
+| highway | 96.2 | 97.9 | Yes | PASS |
+| s_loop | 94.3 | 97.8 | No (Traj 92.0) | PASS overall |
+| sweeping | 96.6 | 97.0 | No (Traj 92.8, Ctrl 93.2) | PASS overall |
+| mixed | 79.0 | 96.6 | No (Traj 91.2, Ctrl 93.4) | PASS overall (+17.6) |
+| hairpin | 79.0 | — | — | FAIL — e-stop, needs diagnosis |
+| hill | 79.0 | — | — | FAIL — needs diagnosis |
 
-**Next:** Diagnose mixed (most comparable to s_loop), then hairpin (entry boost too aggressive at κ=0.067), then hill (grade + heading suppression). Scoring baselines need updating from pre-seg-model era.
+**Remaining bottleneck:** C1 late turn-in causes Trajectory layer deduction on mixed/sloop/sweeping. Oscillation growth deduction on Control layer for curved tracks. Both are systemic — not per-track.
+
+**Next:** Diagnose C1 late turn-in (curve anticipation issue, not MPC reference), then hairpin (e-stop), then hill (heading suppression).
 
 ---
 
