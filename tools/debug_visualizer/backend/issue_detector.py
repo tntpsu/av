@@ -3465,6 +3465,29 @@ def detect_issues(recording_path: Path, analyze_to_failure: bool = False) -> Dic
                                 ),
                             })
 
+            # ── Section 11b: FLOOR-CURVATURE MISMATCH (physics PP floor) ──
+            floor_active_key = "control/pp_curve_local_floor_active"
+            if floor_active_key in f and "control/curvature_primary_abs" in f:
+                _floor_active = np.array(f[floor_active_key][:num_frames], dtype=np.float64)
+                _kappa_abs = np.array(f["control/curvature_primary_abs"][:num_frames], dtype=np.float64)
+                min_len = min(len(_floor_active), len(_kappa_abs), num_frames)
+                _floor_active = _floor_active[:min_len]
+                _kappa_abs = _kappa_abs[:min_len]
+                mismatch_mask = (_floor_active > 0.5) & (np.abs(_kappa_abs) < 0.002)
+                mismatch_frames = np.where(mismatch_mask)[0]
+                if len(mismatch_frames) >= 2:
+                    for fr in mismatch_frames[:20]:
+                        issues.append({
+                            "frame": int(fr),
+                            "type": "floor_curvature_mismatch",
+                            "severity": "low",
+                            "message": (
+                                f"Floor formula curvature mismatch: floor binding "
+                                f"but κ={_kappa_abs[fr]:.4f} (nearly straight) — "
+                                f"curvature preview may be lagging"
+                            ),
+                        })
+
             # ── Section 12: TIRE ESTIMATION FAILURE MODES (dynamic bicycle MPC) ──
             if "control/mpc_dynamic_model_active" in f:
                 dyn_active = np.array(f["control/mpc_dynamic_model_active"][:num_frames], dtype=np.float64)

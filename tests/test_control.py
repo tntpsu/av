@@ -2980,3 +2980,93 @@ def test_pp_rate_ramp_converges():
         f"Jerk-limited steering {meta['steering']:.4f} didn't converge to "
         f"target {meta_nj['steering']:.4f} after 30 frames"
     )
+
+
+# ── Physics-based PP floor formula tests ──────────────────────────────
+
+
+def _make_floor_formula_controller(**overrides):
+    defaults = dict(
+        kp=1.0, ki=0.0, kd=0.1, control_mode="pure_pursuit",
+        pp_feedback_gain=0.0, max_steering=0.6,
+        pp_curve_local_lookahead_floor_enabled=True,
+        pp_curve_local_floor_formula_enabled=True,
+        pp_curve_local_floor_target_error_m=0.04,
+        pp_curve_local_floor_speed_time_constant_s=0.4,
+        pp_curve_local_floor_absolute_min_m=2.0,
+        pp_curve_local_floor_curvature_clamp=0.001,
+    )
+    defaults.update(overrides)
+    return LateralController(**defaults)
+
+
+def test_floor_formula_matches_physics_on_tight_curve():
+    """R40 (κ=0.025): floor = sqrt(8*40*0.04) = 3.578m"""
+    ctrl = _make_floor_formula_controller()
+    result = ctrl._compute_pp_curve_local_floor_formula(5.0, 0.025)
+    import math
+    expected = math.sqrt(8.0 * 40.0 * 0.04)  # 3.578
+    assert result == pytest.approx(expected, rel=1e-3)
+
+
+def test_floor_formula_matches_physics_on_gentle_curve():
+    """R200 (κ=0.005): floor = sqrt(8*200*0.04) = 8.0m"""
+    ctrl = _make_floor_formula_controller()
+    result = ctrl._compute_pp_curve_local_floor_formula(11.0, 0.005)
+    import math
+    expected = math.sqrt(8.0 * 200.0 * 0.04)  # 8.0
+    assert result == pytest.approx(expected, rel=1e-3)
+
+
+def test_floor_formula_speed_dominates_on_straight():
+    """κ≈0 (clamped to 0.001, R=1000): curvature term = sqrt(320) = 17.9m.
+    Speed term at 12 m/s = 0.4*12 = 4.8m. Curvature wins at R=1000."""
+    ctrl = _make_floor_formula_controller()
+    result = ctrl._compute_pp_curve_local_floor_formula(12.0, 0.0)
+    import math
+    # κ clamped to 0.001 → R=1000, curvature term = sqrt(8*1000*0.04) = 17.9
+    expected_curv = math.sqrt(8.0 * 1000.0 * 0.04)
+    assert result == pytest.approx(expected_curv, rel=1e-3)
+
+
+def test_floor_formula_absolute_min_dominates_at_rest():
+    """speed=0, κ=0: speed term=0, curvature term large, Ld_min=2.0.
+    Curvature wins (R=1000 → 17.9m) but that's fine — floor is a MINIMUM."""
+    ctrl = _make_floor_formula_controller()
+    result = ctrl._compute_pp_curve_local_floor_formula(0.0, 0.0)
+    assert result >= 2.0  # at least Ld_min
+
+
+def test_floor_formula_clamps_extreme_curvature():
+    """κ=0.2 → R=5m: floor = sqrt(8*5*0.04) = sqrt(1.6) = 1.26m.
+    But Ld_min=2.0m wins."""
+    ctrl = _make_floor_formula_controller()
+    result = ctrl._compute_pp_curve_local_floor_formula(2.0, 0.2)
+    assert result == pytest.approx(2.0, rel=1e-3)  # Ld_min dominates
+
+
+def test_floor_formula_disabled_uses_table_fallback():
+    """When formula disabled, uses speed table."""
+    ctrl = _make_floor_formula_controller(
+        pp_curve_local_floor_formula_enabled=False,
+        pp_curve_local_lookahead_floor_speed_table=[
+            {'speed_mps': 0.0, 'lookahead_m': 4.0},
+            {'speed_mps': 10.0, 'lookahead_m': 5.5},
+        ],
+        pp_curve_local_floor_state_min="ENTRY",
+    )
+    ref = _pp_ref(0.0, 3.0, curvature=0.025)
+    ref['curve_local_state'] = 'ENTRY'
+    ref['reference_lookahead_local_gate_weight'] = 1.0
+    meta = ctrl.compute_steering(0.0, ref, return_metadata=True,
+                                  current_speed=5.0, dt=0.077)
+    # Table at 5 m/s: lerp(4.0, 5.5, 0.5) = 4.75m
+    assert meta['pp_curve_local_floor_m'] == pytest.approx(4.75, rel=1e-2)
+
+
+def test_floor_formula_zero_curvature_safe():
+    """κ=0 doesn't cause division by zero — clamped to curvature_clamp."""
+    ctrl = _make_floor_formula_controller()
+    result = ctrl._compute_pp_curve_local_floor_formula(10.0, 0.0)
+    assert result > 0.0
+    assert result < 100.0  # sanity: shouldn't be astronomical

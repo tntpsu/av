@@ -51,6 +51,12 @@ python3 tools/analyze/mpc_pipeline_analysis.py --latest
 Then suggest: `/trace regime_transition` to inspect PP↔MPC switch conditions.
 
 ### If `lateral_error_issue`:
+First, run the signal chain blame trace to identify the lookahead bottleneck:
+```bash
+python3 tools/analyze/trace_curve_entry.py <recording>
+```
+Use the BLAME output to determine which mechanism in the lookahead chain is the constraint before running deeper diagnostics.
+
 ```bash
 python3 tools/analyze/build_failure_packet.py <recording>
 python3 tools/analyze/analyze_phase_to_failure.py <recording>
@@ -110,6 +116,8 @@ FIX LEVEL TRIAGE:
 
 ## Step 6 — Synthesize and output
 
+If the primary issue is lateral error or late turn-in, include the PP Lookahead Signal Chain diagram from docs/agent/architecture.md in your diagnostic output to show which mechanism is the bottleneck.
+
 Present a structured summary:
 
 ```
@@ -121,6 +129,7 @@ Overall Score: <score>/100
 PRIMARY ISSUE: <category>
   Symptom: <what the metric shows>
   Root cause hint: <what the tool output suggests>
+  Pareto rank: <if this deduction appears in /pareto, show rank and cross-track Σ pts>
 
 FIX LEVEL TRIAGE:
   Level: <level>

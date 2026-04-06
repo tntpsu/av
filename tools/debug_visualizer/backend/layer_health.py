@@ -289,6 +289,13 @@ class LayerHealthAnalyzer:
                     score -= 0.10
                     flags.append("geometry_override_missing")
 
+        # PP floor formula curvature mismatch (informational, 0 pts deduction)
+        if "control/pp_curve_local_floor_active" in f:
+            floor_active = self._scalar(f, "control/pp_curve_local_floor_active", i, default=0.0)
+            kappa_abs = self._scalar(f, "control/curvature_primary_abs", i, default=0.0)
+            if floor_active > 0.5 and abs(kappa_abs) < 0.002:
+                flags.append("pp_floor_formula_mismatch")
+
         return {"score": max(0.0, min(1.0, score)), "flags": flags}
 
     def _score_acc(self, f: h5py.File, i: int) -> dict:

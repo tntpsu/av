@@ -260,6 +260,11 @@ class LateralController:
                  pp_curve_local_lookahead_floor_speed_table: Optional[list] = None,
                  pp_curve_local_shorten_slew_m_per_frame: float = 0.0,
                  pp_curve_local_floor_state_min: str = "ENTRY",
+                 pp_curve_local_floor_formula_enabled: bool = False,
+                 pp_curve_local_floor_target_error_m: float = 0.04,
+                 pp_curve_local_floor_speed_time_constant_s: float = 0.4,
+                 pp_curve_local_floor_absolute_min_m: float = 2.0,
+                 pp_curve_local_floor_curvature_clamp: float = 0.001,
                  feedback_gain_min: float = 1.0,
                  feedback_gain_max: float = 1.2,
                  feedback_gain_curvature_min: float = 0.002,
@@ -526,6 +531,11 @@ class LateralController:
         ).strip().upper()
         if self.pp_curve_local_floor_state_min not in {"ENTRY", "COMMIT"}:
             self.pp_curve_local_floor_state_min = "ENTRY"
+        self.pp_curve_local_floor_formula_enabled = bool(pp_curve_local_floor_formula_enabled)
+        self.pp_curve_local_floor_target_error_m = max(0.001, float(pp_curve_local_floor_target_error_m))
+        self.pp_curve_local_floor_speed_time_constant_s = max(0.0, float(pp_curve_local_floor_speed_time_constant_s))
+        self.pp_curve_local_floor_absolute_min_m = max(0.5, float(pp_curve_local_floor_absolute_min_m))
+        self.pp_curve_local_floor_curvature_clamp = max(1e-6, float(pp_curve_local_floor_curvature_clamp))
         self.pp_curve_local_lookahead_floor_speed_table = []
         for row in pp_curve_local_lookahead_floor_speed_table or []:
             if not isinstance(row, dict):
@@ -778,6 +788,19 @@ class LateralController:
                 ratio = (speed - left_speed) / max(1e-6, right_speed - left_speed)
                 return float(left_floor + ratio * (right_floor - left_floor))
         return float(table[-1][1])
+
+    def _compute_pp_curve_local_floor_formula(self, speed_mps: float, curvature: float) -> float:
+        """Physics-based PP floor: Ld = max(sqrt(8R*e_target), k*speed, Ld_min).
+
+        Adapts the floor to curve radius automatically — no speed table needed.
+        """
+        import math as _math
+        abs_kappa = max(abs(float(curvature)), self.pp_curve_local_floor_curvature_clamp)
+        R = 1.0 / abs_kappa
+        ld_curvature = _math.sqrt(8.0 * R * self.pp_curve_local_floor_target_error_m)
+        ld_speed = self.pp_curve_local_floor_speed_time_constant_s * max(0.0, float(speed_mps))
+        ld_min = self.pp_curve_local_floor_absolute_min_m
+        return float(max(ld_curvature, ld_speed, ld_min))
 
     def compute_steering(self, current_heading: float, reference_point: dict,
                         vehicle_position: Optional[np.ndarray] = None,
@@ -1321,9 +1344,16 @@ class LateralController:
                         if current_speed is not None and np.isfinite(float(current_speed))
                         else float(reference_point.get("velocity", 0.0) or 0.0)
                     )
-                    pp_curve_local_floor_m = float(
-                        self._lookup_pp_curve_local_floor(speed_for_floor)
-                    )
+                    if self.pp_curve_local_floor_formula_enabled:
+                        pp_curve_local_floor_m = float(
+                            self._compute_pp_curve_local_floor_formula(
+                                speed_for_floor, path_curvature_for_map_ff
+                            )
+                        )
+                    else:
+                        pp_curve_local_floor_m = float(
+                            self._lookup_pp_curve_local_floor(speed_for_floor)
+                        )
                     if ld < pp_curve_local_floor_m - 1e-6:
                         pp_curve_local_floor_active = True
                     ld = max(ld, pp_curve_local_floor_m)
@@ -2426,15 +2456,14 @@ class LateralController:
                         self.max_steering,
                     )
                 )
-                # Phase-gate: suppress preview-based FF on straights between
-                # curves (where preview κ is always-on on looped tracks) and
-                # boost during ENTRY to overcome the centering correction and
-                # start turning into the curve before the car reaches it.
+                # Proportional FF: scale by local_gate_weight (0→1 smoothstep
+                # from curve phase scheduler) instead of binary state gate.
+                # Provides continuous ramp into curves, eliminating step-response
+                # lateral error at ENTRY transitions.
                 if self.pp_map_ff_phase_gate_enabled:
-                    if curve_local_state == "ENTRY":
-                        _pp_map_ff_applied *= self.pp_map_ff_entry_boost
-                    elif curve_local_state not in ("COMMIT",):
-                        _pp_map_ff_applied = 0.0
+                    _pp_map_ff_applied *= float(
+                        max(0.0, min(1.0, reference_lookahead_local_gate_weight))
+                    )
                 steering_before_limits = float(steering_before_limits) + _pp_map_ff_applied
 
             rate_in = steering_before_limits
@@ -5254,6 +5283,11 @@ class VehicleController:
                  pp_curve_local_lookahead_floor_speed_table: Optional[list] = None,
                  pp_curve_local_shorten_slew_m_per_frame: float = 0.0,
                  pp_curve_local_floor_state_min: str = "ENTRY",
+                 pp_curve_local_floor_formula_enabled: bool = False,
+                 pp_curve_local_floor_target_error_m: float = 0.04,
+                 pp_curve_local_floor_speed_time_constant_s: float = 0.4,
+                 pp_curve_local_floor_absolute_min_m: float = 2.0,
+                 pp_curve_local_floor_curvature_clamp: float = 0.001,
                  feedback_gain_min: float = 1.0,
                  feedback_gain_max: float = 1.2,
                  feedback_gain_curvature_min: float = 0.002,
@@ -5788,12 +5822,14 @@ class VehicleController:
             # IMU yaw rate: negate Unity convention (negative Y = left turn)
             _imu_yaw_rate = -float(current_state.get('angular_velocity_y', 0.0))
 
+            _kappa_for_mpc = float(reference_point.get('curvature', 0.0) or 0.0)
+
             mpc_result = self._mpc_controller.compute_steering(
                 e_lat=predicted_e_lat,
                 e_heading=raw_e_heading,
                 current_speed=float(current_state.get('speed', 0.0)),
                 last_delta_norm=self._last_steering_norm,
-                kappa_ref=float(reference_point.get('curvature', 0.0) or 0.0),
+                kappa_ref=_kappa_for_mpc,
                 v_target=float(reference_point.get('velocity') or self.longitudinal_controller.target_speed),
                 v_max=float(self.longitudinal_controller.max_speed),
                 dt=dt or 0.033,

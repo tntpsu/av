@@ -352,3 +352,55 @@ After any intentional scoring formula change or new golden recording registratio
 1. Update `tests/fixtures/scoring_baselines.json` with new metric values
 2. Update `BASELINE_SCORES` in `tests/conftest.py` if overall scores changed
 3. Run full suite to confirm green
+
+## PP Lookahead Signal Chain
+
+The PP lookahead distance passes through 10+ mechanisms. When diagnosing lateral error or late turn-in, trace this chain to find the tightest constraint:
+
+```
+Map geometry ─► preview_κ (exact, lag-free)
+                    │
+Distance/Time ─► local_gate_weight (smoothstep, lag-free, 0→1)
+                    │
+                    ▼
+           ┌── entry_weight (= local_gate_weight in proportional mode)
+           │
+           ▼
+  Ld_target = lerp(Ld_straight_table, Ld_entry_table, entry_weight)
+           │
+           ▼ severity_scale (0.8-1.0, based on entry_severity × local_gate_weight)
+           │
+           ▼ tight_curve_scale (0.5-1.0, smoothstep on path κ > 0.01)
+           │
+           ▼ min floor (reference_lookahead_min = 2.5m)
+           │
+           ▼ global slew (shorten: -0.35m/frame, lengthen: +0.20m/frame)
+           │
+           ▼ entry shorten guard (-0.20m/frame, gated by lgw ≥ 0.2 + distance)
+           │
+           ▼ [controller] PP floor: max(sqrt(8R×e_target), k×speed, 2.0m) — physics-based, gated by ENTRY
+           │
+           ▼ [controller] floor slew (-0.15m/frame)
+           │
+           ▼ Final Ld → PP geometric steering: δ = arctan(2L·sin(α) / Ld)
+
+  Phase state machine (STRAIGHT→ENTRY→COMMIT):
+    - Still runs for diagnostics, scoring, late turn-in detection
+    - Still gates PP floor (safety backstop)
+    - Still gates regime selection (PP vs MPC)
+    - Does NOT gate lookahead blend, FF, or shorten guard (proportional mode)
+
+  Key parameters:
+    Entry table:  reference_lookahead_speed_table_entry (7-10m)
+    Commit table: reference_lookahead_speed_table_commit (4-7.5m)
+    PP floor:     physics formula: max(sqrt(8R×e_target), k×v, Ld_min) — e_target=0.04, k=0.4, Ld_min=2.0
+    Slew rates:   reference_lookahead_slew_rate_shorten_m_per_frame (0.35)
+    Time arm:     curve_local_phase_time_start_s (1.2s)
+```
+
+**Diagnostic checklist for late turn-in:**
+1. Check `entryOnP50` — if < 0.45, the EMA hasn't crossed threshold (but this no longer gates lookahead in proportional mode)
+2. Check `ppLdMin` — if > 6m, the lookahead isn't contracting enough (entry table too conservative or slew limiting)
+3. Check `floorRescueMax` — if > 1.0m, the PP floor is doing heavy lifting (planner-side contraction insufficient)
+4. Check `preLdStepMin` — if large negative, lookahead is collapsing abruptly (slew or guard issue)
+5. Check `entrySevP50` — if < 0.3, severity scaling isn't applying (curvature too gentle for severity threshold)

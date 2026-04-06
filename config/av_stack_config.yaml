@@ -44,27 +44,33 @@ control:
     # The 5.2m floor during curves provides a stable PP operating point; the dynamic horizon
     # driving to 3.2m without the floor backstop creates oscillation.
     # Floor rescue is benign; the real issue is late turn-in (+13-15fr on C1/C3).
-    pp_curve_local_lookahead_floor_speed_table:
+    pp_curve_local_lookahead_floor_speed_table:  # lowered at low speed (s_loop/hairpin 3-7 m/s)
     - speed_mps: 0.0
-      lookahead_m: 4.0
+      lookahead_m: 2.5
     - speed_mps: 4.5
-      lookahead_m: 4.4
-    - speed_mps: 6.5
-      lookahead_m: 4.8
+      lookahead_m: 3.0
+    - speed_mps: 7.0
+      lookahead_m: 3.5
     - speed_mps: 8.0
       lookahead_m: 5.2
     - speed_mps: 12.0
       lookahead_m: 5.6
     pp_curve_local_shorten_slew_m_per_frame: 0.15
     pp_curve_local_floor_state_min: ENTRY
+    # Physics-based floor: Ld = max(sqrt(8R*e_target), k*speed, Ld_min)
+    pp_curve_local_floor_formula_enabled: true
+    pp_curve_local_floor_target_error_m: 0.04
+    pp_curve_local_floor_speed_time_constant_s: 0.4
+    pp_curve_local_floor_absolute_min_m: 2.0
+    pp_curve_local_floor_curvature_clamp: 0.001
     pp_min_lookahead: 0.5
     pp_speed_norm_enabled: false
     pp_speed_norm_reference_mps: 12.0
     pp_speed_norm_min_scale: 0.70
     pp_map_ff_enabled: true
-    pp_map_ff_gain: 0.8
-    pp_map_ff_phase_gate_enabled: true   # suppress preview-FF on STRAIGHT, boost during ENTRY
-    pp_map_ff_entry_boost: 1.8           # 1.8× FF during ENTRY state for earlier turn-in
+    pp_map_ff_gain: 1.0                  # raised 0.8→1.0: proportional ramp replaces 1.8× step
+    pp_map_ff_phase_gate_enabled: true   # now proportional: FF *= local_gate_weight (0→1 smoothstep)
+    pp_map_ff_entry_boost: 1.8           # unused — proportional mode ignores this
     pp_map_ff_wheelbase_m: 2.5
     pp_map_ff_curvature_min: 0.005
     pp_map_ff_curvature_max_clip: 0.08
@@ -386,21 +392,21 @@ trajectory:
     lookahead_m: 17.0
   - speed_mps: 17.0
     lookahead_m: 19.0
-  reference_lookahead_speed_table_entry:  # promoted from s_loop+mixed_radius overlays (both had identical values)
+  reference_lookahead_speed_table_entry:  # lowered from 10→6m at high speed for proportional blend
   - speed_mps: 0.0
-    lookahead_m: 7.0
+    lookahead_m: 5.0
   - speed_mps: 4.47
-    lookahead_m: 8.0
+    lookahead_m: 5.5
   - speed_mps: 8.94
-    lookahead_m: 9.0
+    lookahead_m: 6.0
   - speed_mps: 11.18
-    lookahead_m: 10.0
+    lookahead_m: 6.0
   - speed_mps: 13.41
-    lookahead_m: 10.0
+    lookahead_m: 6.5
   - speed_mps: 15.0
-    lookahead_m: 10.0
+    lookahead_m: 7.0
   - speed_mps: 17.0
-    lookahead_m: 10.0
+    lookahead_m: 7.0
   reference_lookahead_speed_table_commit:
   - speed_mps: 0.0
     lookahead_m: 4.0
@@ -481,15 +487,15 @@ trajectory:
   curve_local_phase_distance_start_m: 10.0  # promoted from overlays (base was 8.0)
   curve_local_phase_distance_start_tight_m: 10.0  # unchanged from original base
   curve_local_phase_distance_end_m: 1.5
-  curve_local_phase_time_start_s: 0.0
-  curve_local_phase_time_start_tight_s: 0.0
+  curve_local_phase_time_start_s: 1.2    # arm 1.2s before curve (13.2m at 11 m/s, 4.8m at 4 m/s)
+  curve_local_phase_time_start_tight_s: 1.2
   curve_local_phase_time_end_s: 0.25
   curve_local_in_curve_distance_eps_m: 0.25
   curve_local_in_curve_time_eps_s: 0.05
   curve_local_in_curve_path_min: 0.7
   curve_local_commit_distance_ready_m: 3.0  # track-specific; 8.0 works on s_loop/mixed_radius (long approaches) but causes straight-latch on hairpin (short straights + back-to-back arcs)
   curve_local_commit_time_ready_s: 0.60
-  curve_local_phase_use_time_term: false
+  curve_local_phase_use_time_term: true   # speed-adaptive arm: max(distance, time) prevents per-track overlays
   curve_local_phase_reentry_gate_min: 0.08
   curve_local_phase_reentry_path_min: 0.15
   curve_phase_ema_alpha: 0.45
@@ -749,7 +755,13 @@ trajectory:
     mpc_horizon: 20
     mpc_dt: 0.1                     # prediction step (2s horizon at 20 steps)
     mpc_wheelbase_m: 2.5
-    mpc_max_steer_rad: 0.5236       # 30° physical max steering angle
+    mpc_feedforward_wheelbase_m: 3.65 # sysid-calibrated L_eff at ~10m/s (K_us=0.012, gain=0.684)
+    mpc_max_steer_rad: 0.5236       # 30° — fallback when speed_dependent_steer disabled
+    # Speed-dependent max steer angle (matches Unity CarController.cs lines 1398-1403)
+    mpc_speed_dependent_steer_enabled: true
+    mpc_max_steer_low_speed_rad: 0.5236    # 30° (Unity maxSteerAngleLowSpeed)
+    mpc_max_steer_high_speed_rad: 0.2793   # 16° (Unity maxSteerAngleHighSpeed)
+    mpc_max_steer_speed_saturation_mps: 12.0  # Unity maxSteerAngleFullSpeed
     mpc_q_lat: 1.0
     mpc_q_lat_rate: 0.0              # lateral velocity damping (0=disabled) — tuned via E2E validation
     mpc_q_heading: 10.0              # RAISED 5→10: provides phase lead — heading error (derivative of lateral) is penalised more heavily, preventing oscillation buildup
@@ -823,7 +835,7 @@ trajectory:
     mpc_grade_clamp_rad: 0.15             # Max grade input to MPC (~8.5°)
     mpc_grade_ff_gain: 1.8                # Unity WheelCollider physics calibration
     # ── Online effective wheelbase estimation (RLS) ────────────────────────────
-    mpc_leff_estimation_enabled: false    # off by default — enable per-track as validated
+    mpc_leff_estimation_enabled: false    # off — RLS unstable on curve transitions (κ=0 but heading changing); needs model fix first
     mpc_leff_forgetting_factor: 0.995     # λ — exponential forgetting (~200-frame window)
     mpc_leff_initial_P: 100.0             # initial RLS covariance (high → fast initial learning)
     mpc_leff_min_speed_mps: 3.0           # only update when v > this (low-speed kinematics unreliable)
@@ -831,13 +843,13 @@ trajectory:
     mpc_leff_bounds_min: 1.5              # hard safety clamp — never go below 1.5m
     mpc_leff_bounds_max: 8.0              # hard safety clamp — never go above 8.0m
   # ── Dynamic bicycle model ──────────────────────────────────────────────────
-    mpc_dynamic_model_enabled: false       # off by default — kinematic model active
+    mpc_dynamic_model_enabled: false        # dynamic model regressed (v_y noise); kinematic + calibrated FF
     mpc_vehicle_mass_kg: 1500.0
     mpc_vehicle_iz_kgm2: 1250.0
     mpc_vehicle_lf_m: 1.125
     mpc_vehicle_lr_m: 1.125
-    mpc_tire_cf_nominal: 40000.0
-    mpc_tire_cr_nominal: 40000.0
+    mpc_tire_cf_nominal: 29000.0           # from steady-state sysid (L_eff=3.65m @ 10m/s)
+    mpc_tire_cr_nominal: 52000.0           # C_r/C_f ratio ~1.8 from offline sysid
     mpc_q_vy: 0.5
     mpc_q_yawrate: 1.0
   # ── EKF tire cornering stiffness estimation ────────────────────────────────

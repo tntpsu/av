@@ -55,6 +55,8 @@ After completing work, update the relevant `docs/agent/*.md` files.
 4. **Do not commit** unless explicitly asked
 5. **Config changes only** — prefer YAML tuning over code changes when possible
 6. **Run comfort gate tests** when touching the analysis pipeline — see Testing Protocol below
+7. **Log fixes after commits** — run `/log-fix` after any commit that fixes an issue (feeds `/process-health` Pareto)
+8. **Physics-first design** — before adding any config parameter, ask: "What physical quantity does this approximate? Can we compute it directly?" Prefer `sqrt(8R×e_target)` over speed lookup tables.
 
 ---
 

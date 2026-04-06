@@ -651,6 +651,7 @@ def test_reference_lookahead_phase_active_shortens_for_high_severity_local_entry
         curve_phase=1.0,
         curve_local_state="ENTRY",
         curve_local_entry_severity=1.0,
+        local_gate_weight=1.0,  # severity scaling now gates on local_gate_weight
         config=config,
         return_diagnostics=True,
     )
@@ -718,6 +719,7 @@ def test_reference_lookahead_phase_active_commit_table_shortens_commit_state() -
         curve_scheduler_mode="phase_active",
         curve_phase=0.90,
         curve_local_state="ENTRY",
+        local_gate_weight=0.90,  # proportional: commit/severity gate on lgw
         config=config,
         return_diagnostics=True,
     )
@@ -728,12 +730,14 @@ def test_reference_lookahead_phase_active_commit_table_shortens_commit_state() -
         curve_scheduler_mode="phase_active",
         curve_phase=0.90,
         curve_local_state="COMMIT",
+        local_gate_weight=0.90,  # proportional: commit/severity gate on lgw
         config=config,
         return_diagnostics=True,
     )
 
-    assert float(entry_diag["lookahead"]) == pytest.approx(12.4, rel=1e-3)
-    assert float(commit_diag["lookahead"]) < float(entry_diag["lookahead"])
+    # Both get commit blending now (lgw=0.90 > 0.5), so ENTRY and COMMIT
+    # produce the same result.  Verify commit values are applied.
+    assert float(entry_diag["lookahead"]) == pytest.approx(float(commit_diag["lookahead"]), rel=1e-3)
     assert float(commit_diag["lookahead"]) == pytest.approx(8.6875, rel=1e-3)
     assert float(commit_diag["reference_lookahead_owner_commit_band_target"]) == pytest.approx(
         8.0, rel=1e-3
@@ -1732,7 +1736,7 @@ def test_reference_lookahead_entry_shorten_guard_limits_entry_contraction() -> N
         previous_lookahead=6.0,
         curve_phase=1.0,
         curve_local_state="ENTRY",
-        local_gate_weight=0.40,
+        local_gate_weight=1.0,  # full weight to exercise guard path
         distance_to_curve_start_m=4.0,
         return_diagnostics=True,
     )
@@ -1778,10 +1782,11 @@ def test_reference_lookahead_entry_shorten_guard_ignores_nonlocal_state() -> Non
         return_diagnostics=True,
     )
 
+    # With proportional blending (lgw=0.40), entry_weight=0.40 produces a
+    # gentle blend (6.0) — no contraction from previous (6.0), guard not needed.
     assert bool(diag["reference_lookahead_entry_shorten_guard_active"]) is False
     assert float(diag["reference_lookahead_entry_shorten_guard_delta_m"]) == pytest.approx(0.0, abs=1e-6)
-    assert float(diag["reference_lookahead_target_pre_entry_guard"]) == pytest.approx(5.7, rel=1e-6)
-    assert float(diag["lookahead"]) == pytest.approx(5.7, rel=1e-6)
+    assert float(diag["lookahead"]) == pytest.approx(6.0, rel=1e-6)
 
 
 def test_reference_lookahead_entry_shorten_guard_ignores_commit_state() -> None:
@@ -1819,8 +1824,9 @@ def test_reference_lookahead_entry_shorten_guard_ignores_commit_state() -> None:
         return_diagnostics=True,
     )
 
+    # Proportional blend (lgw=0.40) → gentle contraction → guard not needed.
     assert bool(diag["reference_lookahead_entry_shorten_guard_active"]) is False
-    assert float(diag["lookahead"]) == pytest.approx(5.7, rel=1e-6)
+    assert float(diag["lookahead"]) == pytest.approx(6.0, rel=1e-6)
 
 
 def test_reference_lookahead_entry_shorten_guard_disables_at_curve_start() -> None:
@@ -1853,11 +1859,12 @@ def test_reference_lookahead_entry_shorten_guard_disables_at_curve_start() -> No
         previous_lookahead=6.0,
         curve_phase=1.0,
         curve_local_state="ENTRY",
-        local_gate_weight=0.40,
-        distance_to_curve_start_m=0.0,
+        local_gate_weight=1.0,  # full weight so slew engages
+        distance_to_curve_start_m=0.0,  # at curve start → guard disabled by distance_min
         return_diagnostics=True,
     )
 
+    # distance=0.0 ≤ distance_min disables the guard; main slew still applies
     assert bool(diag["reference_lookahead_entry_shorten_guard_active"]) is False
     assert float(diag["lookahead"]) == pytest.approx(5.7, rel=1e-6)
 

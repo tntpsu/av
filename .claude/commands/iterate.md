@@ -497,9 +497,16 @@ Promotion checklist:
   [ ] Update baselines: tests/fixtures/scoring_baselines.json
   [ ] Update docs: docs/agent/current_state.md
   [ ] Run full test suite: pytest tests/ -v
+  [ ] Log fixes: /log-fix for each fix applied (updates improvement_log.json)
   [ ] Commit changes
 ============================================================
 ```
+
+### Log fixes to improvement history
+
+For EACH fix applied during the iterate loop, record it to the improvement log using `/log-fix`.
+This feeds the `/process-health` Pareto that tracks where issues originate and how to prevent them.
+Include: process stage (design/implementation/testing), root cause, detection method, and iterations to find.
 
 ---
 

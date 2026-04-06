@@ -1164,7 +1164,9 @@ def compute_curve_phase_scheduler(
     entry_on_tight = float(config.get("curve_local_entry_on_tight", entry_on_base))
     entry_on_effective = _lerp_clamped(entry_on_base, entry_on_tight, entry_severity)
 
-    far_preview_phase = max(term_preview, term_time) * confidence_scale
+    # term_time feeds only through local_time_term (proximity-gated), not the
+    # global far_preview path — prevents heading-suppression leak on straights.
+    far_preview_phase = term_preview * confidence_scale
     local_gate_terms = _compute_local_curve_relevance_terms(
         distance_to_curve_start_m=distance_to_curve_start_m,
         time_to_curve_s=time_to_curve_s,
@@ -1654,16 +1656,15 @@ def _apply_entry_local_shorten_guard(
     if target >= prev:
         return target, False, 0.0
 
+    # State gate removed: distance + local_gate_weight gates below are
+    # sufficient to prevent spurious activation.  The state gate added
+    # EMA lag that delayed lookahead contraction on curve approach.
     state_min = str(
         config.get("reference_lookahead_entry_shorten_state_min", "ENTRY") or "ENTRY"
     ).strip().upper()
     state_max = str(
         config.get("reference_lookahead_entry_shorten_state_max", "ENTRY") or "ENTRY"
     ).strip().upper()
-    if _curve_state_rank(curve_local_state) < _curve_state_rank(state_min):
-        return target, False, 0.0
-    if _curve_state_rank(curve_local_state) > _curve_state_rank(state_max):
-        return target, False, 0.0
 
     gate_min = max(
         0.0,
@@ -1922,13 +1923,28 @@ def compute_reference_lookahead(
             return float(binary_weight), source_used
 
         if scheduler_mode == CURVE_SCHEDULER_MODE_PHASE_ACTIVE:
+            # Use lag-free local_gate_weight (smoothstep proximity) instead
+            # of EMA-lagged curve_local_phase for the lookahead blend.
+            # The EMA adds 5-15 frame delay; local_gate_weight responds
+            # directly to distance/time-to-curve signals.
+            gate_value = 0.0
+            if local_gate_weight is not None:
+                try:
+                    gate_value = float(local_gate_weight)
+                except (TypeError, ValueError):
+                    gate_value = 0.0
             phase_value = 0.0
             if curve_phase is not None:
                 try:
                     phase_value = float(curve_phase)
                 except (TypeError, ValueError):
                     phase_value = 0.0
-            if math.isfinite(phase_value):
+            if math.isfinite(gate_value) and gate_value > 1e-6:
+                phase_used = max(0.0, min(1.0, gate_value))
+                entry_weight = phase_used
+                owner_mode = CURVE_SCHEDULER_MODE_PHASE_ACTIVE
+                entry_weight_source = "local_gate_weight"
+            elif math.isfinite(phase_value):
                 phase_used = max(0.0, min(1.0, phase_value))
                 entry_weight = phase_used
                 owner_mode = CURVE_SCHEDULER_MODE_PHASE_ACTIVE
@@ -1977,10 +1993,20 @@ def compute_reference_lookahead(
             lookahead_straight * (1.0 - entry_weight)
             + lookahead_entry * entry_weight
         )
+        # Compute _lgw once for both commit blending and severity scaling.
+        _lgw = 0.0
+        if local_gate_weight is not None:
+            try:
+                _lgw = max(0.0, min(1.0, float(local_gate_weight)))
+            except (TypeError, ValueError):
+                _lgw = 0.0
+        # Commit blending: proportional to local_gate_weight, not gated
+        # by COMMIT state.  phase_on=0.75 ensures commit values only
+        # activate when lgw > 0.75 (very close to or inside curve).
         if (
             scheduler_mode == CURVE_SCHEDULER_MODE_PHASE_ACTIVE
             and commit_speed_table
-            and curve_local_state_normalized == "COMMIT"
+            and _lgw > 0.5
         ):
             phase_on = float(
                 config.get("reference_lookahead_phase_active_commit_phase_on", 0.75)
@@ -2008,9 +2034,10 @@ def compute_reference_lookahead(
                 lookahead_target * (1.0 - owner_commit_progress)
                 + lookahead_commit * owner_commit_progress
             )
+        # Severity scaling: proportional to _lgw (computed above).
         if (
             scheduler_mode == CURVE_SCHEDULER_MODE_PHASE_ACTIVE
-            and curve_local_state_normalized == "ENTRY"
+            and _lgw > 0.1
         ):
             scale_min = float(
                 config.get("reference_lookahead_phase_active_entry_scale_min", 1.0)

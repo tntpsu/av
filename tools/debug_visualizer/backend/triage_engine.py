@@ -483,6 +483,19 @@ PATTERNS = [
         ),
         "check": lambda m: m.get("floor_rescue_rate", 0.0) > 0.05,
     },
+    # PP floor formula curvature lag (physics floor diagnostic)
+    {
+        "id": "pp_floor_formula_curvature_lag",
+        "name": "PP floor formula curvature lag",
+        "severity": "comfort",
+        "category": "Control",
+        "code_pointer": "control/pid_controller.py:_compute_pp_curve_local_floor_formula()",
+        "fix_hint": (
+            "Physics floor using stale curvature — floor is binding on straight-like "
+            "curvature. Check curvature preview source and preview horizon distance."
+        ),
+        "check": lambda m: m.get("floor_curvature_mismatch_rate", 0.0) > 0.03,
+    },
     {
         "id": "highway_mild_curve_underactivation",
         "name": "Highway mild-curve under-activation",
@@ -1333,6 +1346,19 @@ class TriageEngine:
                 else:
                     m["floor_rescue_rate"] = 0.0
                     m["floor_rescue_count"] = 0
+
+            # Floor-curvature mismatch (physics floor diagnostic)
+            _floor_active = arr("control/pp_curve_local_floor_active")
+            _kappa_ff = arr("control/path_curvature_for_map_ff")
+            if _kappa_ff is None:
+                _kappa_ff = arr("control/curvature_primary_abs")
+            if _floor_active is not None and _kappa_ff is not None:
+                fa = np.asarray(_floor_active, dtype=np.float64) > 0.5
+                kf = np.abs(np.asarray(_kappa_ff, dtype=np.float64))
+                mismatch = fa & (kf < 0.002)
+                m["floor_curvature_mismatch_rate"] = float(np.mean(mismatch)) if len(mismatch) > 0 else 0.0
+            else:
+                m["floor_curvature_mismatch_rate"] = 0.0
 
             # Mild-curve under-activation: high control error on a mild map-backed arc,
             # recognizer stayed STRAIGHT, lookahead stayed long, actual lane offset stayed small.

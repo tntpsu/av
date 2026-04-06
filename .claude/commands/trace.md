@@ -42,6 +42,14 @@ Fields: `control/steering_hard_clip_active`, `control/steering_before_limits`, `
 **estop** (trigger: `emergency_stop == 1`)
 Fields: `control/emergency_stop`, `control/lateral_error`, `vehicle/speed`, `vehicle/acc_ttc_s`, `vehicle/acc_gap_error_m`, `control/brake`, `control/throttle`
 
+### If event_type is `curve_entry`:
+Run the signal chain blame trace:
+```bash
+python3 tools/analyze/trace_curve_entry.py <recording_or_--latest>
+```
+
+This traces the full PP lookahead signal chain at each curve event and identifies the tightest constraint (blame attribution). Use this when `/diagnose` identifies lateral error or late turn-in as the primary issue.
+
 ## Step 3 — Generate and immediately run the trace script
 
 Generate and execute this script using the Bash tool:
