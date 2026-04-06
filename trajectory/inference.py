@@ -109,6 +109,10 @@ class TrajectoryPlanningInference:
             'traj_heading_zero_gate_time_to_curve_release_s',
             1.35,
         )
+        traj_heading_zero_gate_proportional_enabled = kwargs.pop(
+            'traj_heading_zero_gate_proportional_enabled',
+            False,
+        )
         direct_reference_curvature_gain = kwargs.pop(
             'direct_reference_curvature_gain',
             1.0,
@@ -219,10 +223,14 @@ class TrajectoryPlanningInference:
         self.traj_heading_zero_gate_time_to_curve_release_s = float(
             max(0.0, traj_heading_zero_gate_time_to_curve_release_s)
         )
+        self.traj_heading_zero_gate_proportional_enabled = bool(
+            traj_heading_zero_gate_proportional_enabled
+        )
         # Map-based preview curvature passed from orchestrator each frame; used to release
         # the heading-zero gate early when a curve is imminent even before the lane
         # polynomial or vehicle heading has reached the hysteretic off-threshold.
         self._map_preview_curvature_abs: float = 0.0
+        self._heading_gate_local_gate_weight: float = 0.0
         
         # NEW: Solution 5 - Reference Point Smoothing with Bias Compensation
         # Track smoothed reference point bias for compensation
@@ -242,6 +250,7 @@ class TrajectoryPlanningInference:
         self.ref_debug_counter = 0
         self.last_reference_diagnostics: Dict[str, float] = {}
         self.heading_zero_gate_active = False
+        self.heading_zero_gate_weight = 0.0
         # Per-frame curve context from orchestrator (heading-zero gate release helpers).
         self._heading_gate_curve_preview_far_upcoming: bool = False
         self._heading_gate_curve_preview_far_phase: float = 0.0
@@ -263,12 +272,24 @@ class TrajectoryPlanningInference:
         self._raw_x_rate_history: list = []
         self._raw_x_rate_history_max: int = 5
 
+    @staticmethod
+    def _heading_gate_smoothstep(value: float, low: float, high: float) -> float:
+        """Smoothstep 0→1 as value goes from low→high."""
+        if high <= low:
+            return 1.0 if value >= low else 0.0
+        t = max(0.0, min(1.0, (value - low) / (high - low)))
+        return t * t * (3.0 - 2.0 * t)
+
     def _update_heading_zero_gate(
         self,
         lane_coeffs: Optional[List[Optional[np.ndarray]]],
         raw_heading_rad: float,
-    ) -> bool:
-        """Hysteretic straightness gate using both center-a and raw heading."""
+    ) -> float:
+        """Straightness gate — proportional or binary mode.
+
+        Proportional mode: returns continuous weight 0.0 (curve) to 1.0 (straight).
+        Binary mode (legacy): returns 0.0 or 1.0.
+        """
         center_a_abs = np.nan
         if lane_coeffs is not None:
             valid_lanes = [coeffs for coeffs in lane_coeffs if coeffs is not None]
@@ -279,8 +300,39 @@ class TrajectoryPlanningInference:
                     center_a_abs = abs(0.5 * (float(c0[0]) + float(c1[0])))
 
         heading_abs = abs(float(raw_heading_rad)) if np.isfinite(float(raw_heading_rad)) else np.nan
-        active = bool(self.heading_zero_gate_active)
 
+        if self.traj_heading_zero_gate_proportional_enabled:
+            # Proportional mode: continuous weight replaces binary gate.
+            # Smoothstep on heading: 1.0 when heading < on_threshold, 0.0 when > off_threshold
+            heading_weight = 1.0 - self._heading_gate_smoothstep(
+                heading_abs if np.isfinite(heading_abs) else 1.0,
+                self.traj_heading_zero_gate_heading_on_abs_rad,
+                self.traj_heading_zero_gate_heading_off_abs_rad,
+            )
+            # Smoothstep on center_a: same pattern
+            if np.isfinite(center_a_abs):
+                center_a_weight = 1.0 - self._heading_gate_smoothstep(
+                    center_a_abs,
+                    self.traj_heading_zero_gate_center_a_on_abs_max,
+                    self.traj_heading_zero_gate_center_a_off_abs_max,
+                )
+            else:
+                center_a_weight = 0.0
+
+            straight_confidence = heading_weight * center_a_weight
+
+            # Curve proximity: local_gate_weight (speed-adaptive, lag-free)
+            curve_proximity = max(0.0, min(1.0, float(self._heading_gate_local_gate_weight)))
+
+            gate_weight = straight_confidence * (1.0 - curve_proximity)
+            gate_weight = max(0.0, min(1.0, gate_weight))
+
+            self.heading_zero_gate_weight = gate_weight
+            self.heading_zero_gate_active = gate_weight > 0.5
+            return gate_weight
+
+        # Legacy binary mode (unchanged)
+        active = bool(self.heading_zero_gate_active)
         if active:
             sched = str(self._heading_gate_curve_phase_state or "STRAIGHT").strip().upper()
             release_sched = (
@@ -301,9 +353,6 @@ class TrajectoryPlanningInference:
             if (
                 (np.isfinite(center_a_abs) and center_a_abs > self.traj_heading_zero_gate_center_a_off_abs_max)
                 or (np.isfinite(heading_abs) and heading_abs > self.traj_heading_zero_gate_heading_off_abs_rad)
-                # Proactively release the gate when the map sees an upcoming curve.  This
-                # prevents the gate from staying latched into curve entry just because the
-                # heading hasn't reached the hysteretic off-threshold yet.
                 or (self._map_preview_curvature_abs > self.traj_heading_zero_gate_curvature_preview_off_threshold)
                 or release_sched
                 or release_far
@@ -320,6 +369,7 @@ class TrajectoryPlanningInference:
                 active = True
 
         self.heading_zero_gate_active = active
+        self.heading_zero_gate_weight = 1.0 if active else 0.0
         return active
 
     def _compute_target_ref_from_coeffs(
@@ -561,7 +611,8 @@ class TrajectoryPlanningInference:
                            curve_preview_far_upcoming: bool = False,
                            curve_preview_far_phase: float = 0.0,
                            curve_phase_state: str = "STRAIGHT",
-                           time_to_curve_s: Optional[float] = None) -> Optional[Dict]:
+                           time_to_curve_s: Optional[float] = None,
+                           local_gate_weight: float = 0.0) -> Optional[Dict]:
         """
         Get reference point at specified lookahead distance.
         Can use direct midpoint computation (simpler, more accurate) or trajectory-based.
@@ -581,6 +632,10 @@ class TrajectoryPlanningInference:
         # Expose map-based preview curvature to the heading-zero gate so it can release
         # proactively when a curve is imminent, rather than waiting for heading to build.
         self._map_preview_curvature_abs = float(preview_curvature_abs)
+        try:
+            self._heading_gate_local_gate_weight = max(0.0, min(1.0, float(local_gate_weight)))
+        except (TypeError, ValueError):
+            self._heading_gate_local_gate_weight = 0.0
         self._heading_gate_curve_preview_far_upcoming = bool(curve_preview_far_upcoming)
         try:
             self._heading_gate_curve_preview_far_phase = float(curve_preview_far_phase)
@@ -724,7 +779,7 @@ class TrajectoryPlanningInference:
                     float(curvature_preview) if curvature_preview is not None else 0.0
                 )
                 raw_ref_point['diag_heading_zero_gate_active'] = (
-                    1.0 if self._update_heading_zero_gate(lane_coeffs, heading) else 0.0
+                    float(self._update_heading_zero_gate(lane_coeffs, heading))
                 )
                 raw_ref_point['diag_small_heading_gate_active'] = (
                     1.0 if abs(np.degrees(float(heading))) < 1.0 else 0.0

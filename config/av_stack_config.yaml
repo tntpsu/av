@@ -706,6 +706,9 @@ trajectory:
   traj_heading_zero_gate_far_preview_phase_min: 0.06
   traj_heading_zero_gate_release_on_scheduler_entry_commit: true
   traj_heading_zero_gate_time_to_curve_release_s: 1.35
+  # Proportional mode: replace binary on/off with continuous 0→1 weight.
+  # Eliminates gate oscillation on looping tracks (585 cycles → smooth transition).
+  traj_heading_zero_gate_proportional_enabled: true
   dynamic_effective_horizon_enabled: true
   dynamic_effective_horizon_min_m: 3.0
   dynamic_effective_horizon_max_m: 20.0

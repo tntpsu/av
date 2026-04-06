@@ -363,6 +363,9 @@ class AVStack:
             traj_heading_zero_gate_time_to_curve_release_s=float(
                 trajectory_cfg.get('traj_heading_zero_gate_time_to_curve_release_s', 1.35)
             ),
+            traj_heading_zero_gate_proportional_enabled=bool(
+                trajectory_cfg.get('traj_heading_zero_gate_proportional_enabled', False)
+            ),
             center_spline_enabled=trajectory_cfg.get('center_spline_enabled', False),
             center_spline_degree=trajectory_cfg.get('center_spline_degree', 2),
             center_spline_samples=trajectory_cfg.get('center_spline_samples', 20),
@@ -7288,6 +7291,7 @@ class AVStack:
             curve_preview_far_phase=float(curve_phase_diag.get("curve_preview_far_phase", 0.0) or 0.0),
             curve_phase_state=str(curve_phase_diag.get("curve_phase_state", "STRAIGHT") or "STRAIGHT"),
             time_to_curve_s=_ttc_kw,
+            local_gate_weight=float(curve_phase_diag.get("curve_local_gate_weight", 0.0) or 0.0),
         )
         if reference_point is not None:
             reference_point['lookahead_entry_preview_source'] = preview_entry_source
