@@ -50,6 +50,20 @@ python3 tools/analyze/trace_curve_entry.py <recording_or_--latest>
 
 This traces the full PP lookahead signal chain at each curve event and identifies the tightest constraint (blame attribution). Use this when `/diagnose` identifies lateral error or late turn-in as the primary issue.
 
+### If event_type is `regime_transition`:
+```bash
+python3 tools/analyze/trace_regime_transition.py <recording_or_--latest>
+```
+
+Traces PP↔MPC regime transitions — blend weight, steering jerk, discontinuities at handoff. Use this when `/diagnose` identifies jerk spikes or steering discontinuities at controller handoff points.
+
+### If event_type is `heading_suppression`:
+```bash
+python3 tools/analyze/trace_heading_suppression.py <recording_or_--latest>
+```
+
+Traces heading zero gate activation/release — which signal triggers suppression and release. Use this when `/diagnose` identifies heading suppression persisting into curves or late turn-in from heading gate.
+
 ## Step 3 — Generate and immediately run the trace script
 
 Generate and execute this script using the Bash tool:
