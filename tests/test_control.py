@@ -3001,32 +3001,28 @@ def _make_floor_formula_controller(**overrides):
 
 
 def test_floor_formula_matches_physics_on_tight_curve():
-    """R40 (κ=0.025): floor = sqrt(8*40*0.04) = 3.578m"""
+    """R40 (κ=0.025): physics=3.58m, speed=0.4*5=2.0m → min(3.58, 2.0) = 2.0m"""
     ctrl = _make_floor_formula_controller()
     result = ctrl._compute_pp_curve_local_floor_formula(5.0, 0.025)
-    import math
-    expected = math.sqrt(8.0 * 40.0 * 0.04)  # 3.578
-    assert result == pytest.approx(expected, rel=1e-3)
+    # min(physics=3.58, speed=2.0) = 2.0 → max(2.0, Ld_min=2.0) = 2.0
+    assert result == pytest.approx(2.0, rel=1e-3)
 
 
 def test_floor_formula_matches_physics_on_gentle_curve():
-    """R200 (κ=0.005): floor = sqrt(8*200*0.04) = 8.0m"""
+    """R200 (κ=0.005): physics=8.0m, speed=0.4*11=4.4m → min(8.0, 4.4) = 4.4m"""
     ctrl = _make_floor_formula_controller()
     result = ctrl._compute_pp_curve_local_floor_formula(11.0, 0.005)
-    import math
-    expected = math.sqrt(8.0 * 200.0 * 0.04)  # 8.0
-    assert result == pytest.approx(expected, rel=1e-3)
+    # min(physics=8.0, speed=4.4) = 4.4 → max(4.4, 2.0) = 4.4
+    assert result == pytest.approx(4.4, rel=1e-3)
 
 
-def test_floor_formula_speed_dominates_on_straight():
-    """κ≈0 (clamped to 0.001, R=1000): curvature term = sqrt(320) = 17.9m.
-    Speed term at 12 m/s = 0.4*12 = 4.8m. Curvature wins at R=1000."""
+def test_floor_formula_speed_caps_on_straight():
+    """κ≈0 (R=1000): physics=17.9m, speed=0.4*12=4.8m → min(17.9, 4.8) = 4.8m.
+    Speed term caps the floor on straights/gentle curves."""
     ctrl = _make_floor_formula_controller()
     result = ctrl._compute_pp_curve_local_floor_formula(12.0, 0.0)
-    import math
-    # κ clamped to 0.001 → R=1000, curvature term = sqrt(8*1000*0.04) = 17.9
-    expected_curv = math.sqrt(8.0 * 1000.0 * 0.04)
-    assert result == pytest.approx(expected_curv, rel=1e-3)
+    # min(17.9, 4.8) = 4.8 → max(4.8, 2.0) = 4.8
+    assert result == pytest.approx(4.8, rel=1e-3)
 
 
 def test_floor_formula_absolute_min_dominates_at_rest():

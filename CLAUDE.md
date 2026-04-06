@@ -63,8 +63,8 @@ After completing work, update the relevant `docs/agent/*.md` files.
 ## Workflow Commands
 
 ```bash
-# Run AV stack (60s on s_loop track)
-./start_av_stack.sh --launch-unity --unity-auto-play --duration 60
+# Run AV stack (60s on s_loop track — builds player automatically)
+./start_av_stack.sh --duration 60 --track-yaml tracks/s_loop.yml
 
 # Ground truth baseline
 ./start_ground_truth.sh --track-yaml tracks/s_loop.yml --duration 60
@@ -87,7 +87,7 @@ pytest tests/ -v
 ## Diagnostic Cycle
 
 ```
-1. Run: ./start_av_stack.sh --launch-unity --unity-auto-play --duration 60
+1. Run: ./start_av_stack.sh --duration 60 --track-yaml tracks/s_loop.yml
 2. Analyze: python tools/analyze/analyze_drive_overall.py --latest
 3. Inspect frames: python tools/debug_visualizer/server.py
 4. Layer isolation: python tools/analyze/counterfactual_layer_swap.py

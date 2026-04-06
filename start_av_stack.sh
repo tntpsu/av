@@ -3,20 +3,23 @@
 # AV Stack Startup Script
 # Starts the Python bridge server and AV stack for testing
 #
-# Usage:
-#   ./start_av_stack.sh                    # Interactive mode (prompts to kill existing processes)
-#   ./start_av_stack.sh --force            # Auto-kill existing processes and start
-#   ./start_av_stack.sh --launch-unity      # Launch Unity automatically
-#   ./start_av_stack.sh --unity-auto-play   # Launch Unity and auto-enter play mode
-#   ./start_av_stack.sh --build-unity-player  # Build Unity player (macOS)
-#   ./start_av_stack.sh --skip-unity-build-if-clean  # Skip build if no Unity changes
-#   ./start_av_stack.sh --run-unity-player    # Run Unity player executable (macOS)
-#   ./start_av_stack.sh --build-unity-player --run-unity-player  # Build then run (exec path)
-#   ./start_av_stack.sh --build-unity-player --open-built-app       # Build then macOS open(1)
-#   ./start_av_stack.sh --build-unity-player --no-run-unity-player  # Build only; start .app yourself
-#   ./start_av_stack.sh --record            # Start with data recording enabled
-#   ./start_av_stack.sh --duration 60       # Run for 60 seconds (similar to ground_truth_follower.py)
-#   ./start_av_stack.sh --duration 30 --launch-unity  # Run for 30 seconds and launch Unity
+# Usage (standard):
+#   ./start_av_stack.sh --duration 60 --track-yaml tracks/s_loop.yml
+#     → builds player (if needed), runs it, records for 60s, shuts down
+#
+#   ./start_av_stack.sh --skip-unity-build-if-clean --duration 60 --track-yaml tracks/mixed_radius.yml
+#     → skips build if no Unity changes, runs, records
+#
+# Options:
+#   --duration <sec>             Run for N seconds then stop
+#   --track-yaml <path>          Load track geometry from YAML
+#   --skip-unity-build-if-clean  Skip Unity build when no C# changes detected
+#   --config <path>              Load overlay config (e.g., config/mpc_highway.yaml)
+#   --no-run-unity-player        Build only; start .app yourself
+#   --force                      Auto-kill existing processes
+#
+# DEPRECATED (will error):
+#   --launch-unity, --unity-auto-play  → use default build+run instead
 
 set -e  # Exit on error
 
@@ -115,13 +118,22 @@ while [[ $# -gt 0 ]]; do
             shift
             ;;
         --launch-unity|-u)
-            LAUNCH_UNITY=true
-            shift
+            echo -e "${RED}╔══════════════════════════════════════════════════════════╗${NC}"
+            echo -e "${RED}║  OBSOLETE: --launch-unity is deprecated.                ║${NC}"
+            echo -e "${RED}║                                                          ║${NC}"
+            echo -e "${RED}║  Use instead:                                            ║${NC}"
+            echo -e "${RED}║    ./start_av_stack.sh --build-unity-player \\            ║${NC}"
+            echo -e "${RED}║        --run-unity-player --duration 60 \\                ║${NC}"
+            echo -e "${RED}║        --track-yaml tracks/<track>.yml                   ║${NC}"
+            echo -e "${RED}║                                                          ║${NC}"
+            echo -e "${RED}║  This builds the standalone player and runs it directly. ║${NC}"
+            echo -e "${RED}║  No Unity Editor needed.                                 ║${NC}"
+            echo -e "${RED}╚══════════════════════════════════════════════════════════╝${NC}"
+            exit 1
             ;;
         --unity-auto-play|-p)
-            LAUNCH_UNITY=true
-            UNITY_AUTO_PLAY=true
-            shift
+            echo -e "${RED}OBSOLETE: --unity-auto-play is deprecated. Use --build-unity-player --run-unity-player instead.${NC}"
+            exit 1
             ;;
         --keep-unity-open)
             KEEP_UNITY_OPEN=true
@@ -187,15 +199,15 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-# Default: auto-launch built player (unless Editor, open-built-app, or explicit opt-out).
-if [ "$LAUNCH_UNITY" = true ]; then
+# Default: always build + run the standalone player.
+# Unity Editor launch paths are deprecated (exit with error above).
+if [ "$NO_RUN_UNITY_PLAYER" = true ]; then
     RUN_UNITY_PLAYER=false
 elif [ "$OPEN_BUILT_APP" = true ]; then
     RUN_UNITY_PLAYER=false
-elif [ "$NO_RUN_UNITY_PLAYER" = true ]; then
-    RUN_UNITY_PLAYER=false
 else
     RUN_UNITY_PLAYER=true
+    BUILD_UNITY_PLAYER=true  # auto-build if running player
 fi
 
 echo -e "${BLUE}╔══════════════════════════════════════════════════════════╗${NC}"
@@ -487,23 +499,11 @@ if [ -z "${AV_POLICY_PROFILE:-}" ]; then
     export AV_POLICY_PROFILE
 fi
 
-if [ "$LAUNCH_UNITY" = true ]; then
-    echo -e "${BLUE}Launching Unity...${NC}"
-    UNITY_ARGS=""
-    if [ "$UNITY_AUTO_PLAY" = true ]; then
-        UNITY_ARGS="--auto-play"
-    fi
-    "$SCRIPT_DIR/launch_unity.sh" $UNITY_ARGS &
-    UNITY_SCRIPT_PID=$!
-    echo -e "${GREEN}✓ Unity launched (Script PID: $UNITY_SCRIPT_PID)${NC}"
-    echo ""
-    
-    # Try to find Unity process PID (more reliable for shutdown)
-    sleep 2  # Give Unity time to start
-    UNITY_PID=$(pgrep -f "Unity.*AVSimulation" | head -1 || echo "")
-    if [ ! -z "$UNITY_PID" ]; then
-        echo -e "${GREEN}✓ Unity process found (PID: $UNITY_PID)${NC}"
-    fi
+# Unity Editor launch path — DEPRECATED. Kept for reference only.
+# Use --build-unity-player --run-unity-player instead.
+if false; then  # was: [ "$LAUNCH_UNITY" = true ]
+    echo -e "${RED}OBSOLETE: Unity Editor launch is deprecated. Use --build-unity-player --run-unity-player.${NC}"
+    exit 1
 else
     if [ "$RUN_UNITY_PLAYER" = true ] || [ "$OPEN_BUILT_APP" = true ]; then
         echo -e "${GREEN}Built player in use — ensure it is running and connected to the bridge.${NC}"

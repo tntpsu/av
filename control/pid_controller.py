@@ -790,9 +790,13 @@ class LateralController:
         return float(table[-1][1])
 
     def _compute_pp_curve_local_floor_formula(self, speed_mps: float, curvature: float) -> float:
-        """Physics-based PP floor: Ld = max(sqrt(8R*e_target), k*speed, Ld_min).
+        """Physics-based PP floor: Ld = max(min(sqrt(8R*e_target), k*speed), Ld_min).
 
-        Adapts the floor to curve radius automatically — no speed table needed.
+        The curvature term is the Ld that gives tracking error = e_target (upper
+        bound on useful Ld).  The speed term is the stability floor (prevents
+        oscillation at short Ld).  min() takes the lesser — physics caps the
+        speed floor on tight curves, speed caps the physics on gentle curves.
+        No speed table needed.
         """
         import math as _math
         abs_kappa = max(abs(float(curvature)), self.pp_curve_local_floor_curvature_clamp)
@@ -800,7 +804,7 @@ class LateralController:
         ld_curvature = _math.sqrt(8.0 * R * self.pp_curve_local_floor_target_error_m)
         ld_speed = self.pp_curve_local_floor_speed_time_constant_s * max(0.0, float(speed_mps))
         ld_min = self.pp_curve_local_floor_absolute_min_m
-        return float(max(ld_curvature, ld_speed, ld_min))
+        return float(max(min(ld_curvature, ld_speed), ld_min))
 
     def compute_steering(self, current_heading: float, reference_point: dict,
                         vehicle_position: Optional[np.ndarray] = None,

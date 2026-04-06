@@ -934,6 +934,21 @@ class AVStack:
             pp_curve_local_floor_state_min=lateral_cfg.get(
                 'pp_curve_local_floor_state_min', 'ENTRY'
             ),
+            pp_curve_local_floor_formula_enabled=bool(
+                lateral_cfg.get('pp_curve_local_floor_formula_enabled', False)
+            ),
+            pp_curve_local_floor_target_error_m=float(
+                lateral_cfg.get('pp_curve_local_floor_target_error_m', 0.04)
+            ),
+            pp_curve_local_floor_speed_time_constant_s=float(
+                lateral_cfg.get('pp_curve_local_floor_speed_time_constant_s', 0.4)
+            ),
+            pp_curve_local_floor_absolute_min_m=float(
+                lateral_cfg.get('pp_curve_local_floor_absolute_min_m', 2.0)
+            ),
+            pp_curve_local_floor_curvature_clamp=float(
+                lateral_cfg.get('pp_curve_local_floor_curvature_clamp', 0.001)
+            ),
             feedback_gain_min=lateral_cfg.get('feedback_gain_min', 1.0),
             feedback_gain_max=lateral_cfg.get('feedback_gain_max', 1.2),
             feedback_gain_curvature_min=lateral_cfg.get('feedback_gain_curvature_min', 0.002),
