@@ -184,6 +184,12 @@ class DataRecorder:
                 ),
             },
             "safety": {"max_speed": cfg_public.get("safety", {}).get("max_speed")},
+            "control": {
+                "lateral": {
+                    k: v for k, v in (cfg_public.get("control", {}).get("lateral", {})).items()
+                    if isinstance(v, (bool, int, float, str, type(None)))
+                },
+            },
             "stack": {
                 k: (cfg_public.get("stack") or {}).get(k)
                 for k in (

@@ -254,6 +254,13 @@ Before proposing ANY fix, check the bottleneck mechanism for these 5 design smel
 - Fix pattern: Make the planner/controller aware of the constraint, plan smooth approach
 - Session examples: steering ceiling→motion profile with demand-aware tapering
 
+**Smell 6: Wrapper forwarding gap**
+- Is the controller instantiated through a wrapper class (e.g., VehicleController→LateralController)?
+- Are new config params added to the wrapper's constructor but NOT forwarded to the inner controller?
+- Pattern: "config flag is true but feature is disabled at runtime", "unit tests pass but e2e doesn't"
+- Fix pattern: Add a forwarding test, or use config-object passthrough to eliminate explicit forwarding
+- Session example: 12 params (physics floor, motion profile) silently dropped by VehicleController
+
 ```
 DESIGN SMELL CHECK
 ============================================================

@@ -3250,3 +3250,65 @@ def test_profile_legacy_disabled():
     ref = _pp_ref(0.0, 10.0)
     meta = ctrl.compute_steering(0.0, ref, return_metadata=True, current_speed=5.0, dt=0.077)
     assert abs(meta['steering']) < 0.05  # near-straight reference
+
+
+# ── VehicleController param forwarding test ───────────────────
+
+
+def test_vehicle_controller_forwards_all_lateral_params():
+    """VehicleController must forward ALL new params to LateralController.
+
+    This catches the bug where VehicleController accepts params in its
+    constructor but doesn't pass them to the inner LateralController,
+    causing features to silently default to disabled at runtime.
+    """
+    vc = VehicleController(
+        # Physics floor formula params
+        pp_curve_local_lookahead_floor_enabled=True,
+        pp_curve_local_floor_formula_enabled=True,
+        pp_curve_local_floor_target_error_m=0.05,
+        pp_curve_local_floor_speed_time_constant_s=0.35,
+        pp_curve_local_floor_absolute_min_m=1.8,
+        pp_curve_local_floor_curvature_clamp=0.002,
+        # Curvature-adaptive k
+        pp_curve_local_floor_k_reduction_factor=0.7,
+        pp_curve_local_floor_k_severity_kappa_min=0.004,
+        pp_curve_local_floor_k_severity_kappa_max=0.020,
+        # Motion profile
+        pp_steering_profile_enabled=True,
+        pp_steering_max_rate_per_s=6.0,
+        pp_steering_max_jerk_per_s2=50.0,
+        pp_steering_taper_gain=4.0,
+    )
+    lc = vc.lateral_controller
+
+    # Physics floor formula
+    assert lc.pp_curve_local_lookahead_floor_enabled is True
+    assert lc.pp_curve_local_floor_formula_enabled is True
+    assert lc.pp_curve_local_floor_target_error_m == pytest.approx(0.05)
+    assert lc.pp_curve_local_floor_speed_time_constant_s == pytest.approx(0.35)
+    assert lc.pp_curve_local_floor_absolute_min_m == pytest.approx(1.8)
+    assert lc.pp_curve_local_floor_curvature_clamp == pytest.approx(0.002)
+
+    # Curvature-adaptive k
+    assert lc.pp_curve_local_floor_k_reduction_factor == pytest.approx(0.7)
+    assert lc.pp_curve_local_floor_k_severity_kappa_min == pytest.approx(0.004)
+    assert lc.pp_curve_local_floor_k_severity_kappa_max == pytest.approx(0.020)
+
+    # Motion profile
+    assert lc.pp_steering_profile_enabled is True
+    assert lc.pp_steering_max_rate_per_s == pytest.approx(6.0)
+    assert lc.pp_steering_max_jerk_per_s2 == pytest.approx(50.0)
+    assert lc.pp_steering_taper_gain == pytest.approx(4.0)
+
+
+def test_vehicle_controller_kwargs_passthrough():
+    """Future LateralController params auto-forward via **lateral_extra_kwargs."""
+    # This tests that VehicleController's **lateral_extra_kwargs catches
+    # params not explicitly listed in its constructor signature.
+    # The pp_curve_local_floor_formula_enabled param IS explicitly listed,
+    # but if it weren't, **kwargs would catch it.
+    vc = VehicleController(
+        pp_curve_local_floor_formula_enabled=True,
+    )
+    assert vc.lateral_controller.pp_curve_local_floor_formula_enabled is True

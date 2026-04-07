@@ -98,6 +98,7 @@ DESIGN SMELL CHECK (mandatory — check BEFORE assigning fix level):
   □ Frame-rate dependent formula (dt²)?   → convert to physical units
   □ Static lookup table for physics qty?  → replace with first-principles formula
   □ Post-hoc clamp creating discontinuity? → make planner aware of constraint
+  □ Wrapper forwarding gap?                → verify config reaches inner controller via recording
 
   Smells detected: <count>
   → If ≥1: minimum ARCHITECTURE level. Run /plan-feature.

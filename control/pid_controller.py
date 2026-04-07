@@ -5414,19 +5414,15 @@ class VehicleController:
                  feedback_gain_curvature_max: float = 0.015,
                  curvature_stale_hold_seconds: float = 0.30,
                  curvature_stale_hold_min_abs: float = 0.0005,
-                 full_config: dict = None):
+                 full_config: dict = None,
+                 **lateral_extra_kwargs):
         """
         Initialize vehicle controller.
-        
-        Args:
-            lateral_kp: Lateral proportional gain
-            lateral_ki: Lateral integral gain
-            lateral_kd: Lateral derivative gain
-            longitudinal_kp: Longitudinal proportional gain
-            longitudinal_ki: Longitudinal integral gain
-            longitudinal_kd: Longitudinal derivative gain
-            lookahead_distance: Lookahead distance (meters)
-            target_speed: Target speed (m/s)
+
+        lateral_extra_kwargs: Any additional kwargs are forwarded to
+        LateralController, preventing wrapper forwarding gaps when new
+        params are added to LateralController but not explicitly listed
+        in VehicleController's constructor.
         """
         # Set error_clip default if not provided
         if lateral_error_clip is None:
@@ -5672,7 +5668,8 @@ class VehicleController:
             feedback_gain_curvature_max=feedback_gain_curvature_max,
             curvature_stale_hold_seconds=curvature_stale_hold_seconds,
             curvature_stale_hold_min_abs=curvature_stale_hold_min_abs,
-            grade_steering_damping_gain=grade_steering_damping_gain
+            grade_steering_damping_gain=grade_steering_damping_gain,
+            **lateral_extra_kwargs,
         )
         self.longitudinal_controller = LongitudinalController(
             kp=longitudinal_kp,
