@@ -63,7 +63,7 @@ control:
       lookahead_m: 5.2
     - speed_mps: 12.0
       lookahead_m: 5.6
-    pp_curve_local_shorten_slew_m_per_frame: 0.15
+    pp_curve_local_shorten_slew_m_per_frame: 0.0  # disabled: unified contraction rate at trajectory level
     pp_curve_local_floor_state_min: ENTRY
     # Physics-based floor: Ld = max(sqrt(8R*e_target), k*speed, Ld_min)
     pp_curve_local_floor_formula_enabled: true
@@ -526,9 +526,13 @@ trajectory:
   curve_context_curve_start_curvature: 0.006
   curve_context_curvature_gain: 6.0
   reference_lookahead_slew_rate_m_per_frame: 0.25
-  reference_lookahead_slew_rate_shorten_m_per_frame: 0.35
+  reference_lookahead_slew_rate_shorten_m_per_frame: 0.0  # disabled: unified contraction rate
   reference_lookahead_slew_rate_lengthen_m_per_frame: 0.2
-  reference_lookahead_entry_shorten_slew_m_per_frame: 0.20
+  reference_lookahead_entry_shorten_slew_m_per_frame: 0.0  # disabled: unified contraction rate
+  # Unified physics-based contraction rate (replaces 3 independent slew limits)
+  lookahead_contraction_a_lat_budget: 2.5    # m/s², lateral accel budget for Ld contraction
+  lookahead_contraction_rate_floor: 0.10     # m/frame, minimum rate (prevents stalling)
+  lookahead_contraction_rate_ceiling: 0.60   # m/frame, maximum rate
   reference_lookahead_entry_shorten_state_min: ENTRY
   reference_lookahead_entry_shorten_state_max: ENTRY
   reference_lookahead_entry_shorten_gate_min: 0.20

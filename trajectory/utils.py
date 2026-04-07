@@ -1595,15 +1595,41 @@ def compute_curve_phase_scheduler(
     }
 
 
+def _compute_max_contraction_rate(
+    speed_mps: float,
+    current_ld: float,
+    config: Mapping[str, object],
+) -> float:
+    """Physics-based max lookahead contraction rate (m/frame).
+
+    Derived from PP steering sensitivity: d(steer)/d(Ld) ~ 1/Ld²
+    and lateral accel: a_lat ~ v² × d(steer) / L.
+    Solving for max ΔLd: max_rate = a_lat_budget × Ld² / (2 × v²).
+
+    Fast contraction is safe when Ld is large (small steering effect per
+    meter of Ld change). Slow contraction near apex prevents jerk spikes.
+    """
+    a_lat = float(config.get("lookahead_contraction_a_lat_budget", 2.5))
+    floor = float(config.get("lookahead_contraction_rate_floor", 0.10))
+    ceiling = float(config.get("lookahead_contraction_rate_ceiling", 0.60))
+    ld = max(float(current_ld), 2.0)
+    v = max(float(speed_mps), 1.0)
+    physics_rate = a_lat * ld * ld / (2.0 * v * v)
+    return max(floor, min(ceiling, physics_rate))
+
+
 def _apply_lookahead_slew_limit(
     lookahead_m: float,
     previous_lookahead_m: float | None,
     config: Mapping[str, object],
+    speed_mps: float = 5.0,
 ) -> float:
     """
     Limit frame-to-frame lookahead change for stability.
 
-    The limit is in meters per frame to avoid requiring loop timing assumptions.
+    Shorten direction uses physics-based contraction rate when
+    lookahead_contraction_a_lat_budget > 0 (unified mode), otherwise
+    falls back to legacy fixed slew rates.
     """
     legacy_slew = float(config.get("reference_lookahead_slew_rate_m_per_frame", 0.0))
     shorten_slew = float(config.get("reference_lookahead_slew_rate_shorten_m_per_frame", 0.0))
@@ -1614,6 +1640,15 @@ def _apply_lookahead_slew_limit(
     if not math.isfinite(prev):
         return float(lookahead_m)
     delta = float(lookahead_m) - prev
+
+    # Unified physics-based contraction for shorten direction
+    a_lat_budget = float(config.get("lookahead_contraction_a_lat_budget", 0.0))
+    if a_lat_budget > 0.0 and delta < 0.0:
+        max_delta = _compute_max_contraction_rate(speed_mps, prev, config)
+        if -delta > max_delta:
+            return prev - max_delta
+        return float(lookahead_m)
+
     if shorten_slew > 0.0 or lengthen_slew > 0.0:
         if delta >= 0.0:
             max_delta = lengthen_slew if lengthen_slew > 0.0 else legacy_slew
@@ -1829,15 +1864,24 @@ def compute_reference_lookahead(
         target = float(lookahead_target)
         target *= _compute_tight_curve_scale(abs(path_curvature), config)
         target = max(min_lookahead, target)
-        after_global_slew = _apply_lookahead_slew_limit(target, previous_lookahead, config)
-        after_entry_guard, entry_guard_active, entry_guard_delta = _apply_entry_local_shorten_guard(
-            after_global_slew,
-            previous_lookahead,
-            curve_local_state=curve_local_state,
-            local_gate_weight=local_gate_weight,
-            distance_to_curve_start_m=distance_to_curve_start_m,
-            config=config,
+        after_global_slew = _apply_lookahead_slew_limit(
+            target, previous_lookahead, config, speed_mps=current_speed,
         )
+        # Entry guard is subsumed by unified contraction rate when active
+        _unified_active = float(config.get("lookahead_contraction_a_lat_budget", 0.0)) > 0.0
+        if _unified_active:
+            after_entry_guard = after_global_slew
+            entry_guard_active = False
+            entry_guard_delta = 0.0
+        else:
+            after_entry_guard, entry_guard_active, entry_guard_delta = _apply_entry_local_shorten_guard(
+                after_global_slew,
+                previous_lookahead,
+                curve_local_state=curve_local_state,
+                local_gate_weight=local_gate_weight,
+                distance_to_curve_start_m=distance_to_curve_start_m,
+                config=config,
+            )
         if return_diagnostics:
             return {
                 "lookahead": float(after_entry_guard),

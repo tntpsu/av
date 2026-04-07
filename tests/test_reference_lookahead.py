@@ -2,6 +2,7 @@ import pytest
 
 from control.pid_controller import LateralController
 from trajectory.utils import (
+    _compute_max_contraction_rate,
     _fast_onset_smooth,
     _smoothstep_01,
     build_local_curve_reference,
@@ -2868,3 +2869,45 @@ def test_fast_onset_sharpness_one_equals_linear():
         assert _fast_onset_smooth(t, 1.0) == pytest.approx(
             t, abs=1e-9
         ), f"sharpness=1 not linear at t={t}"
+
+
+# ── Unified contraction rate tests ─────────────────────────────
+
+
+_CONTRACTION_CFG = {
+    "lookahead_contraction_a_lat_budget": 2.5,
+    "lookahead_contraction_rate_floor": 0.10,
+    "lookahead_contraction_rate_ceiling": 0.60,
+}
+
+
+def test_contraction_rate_high_speed_high_ld():
+    """At v=10, Ld=8: rate = 2.5*64/200 = 0.80, clamped to ceiling 0.60."""
+    rate = _compute_max_contraction_rate(10.0, 8.0, _CONTRACTION_CFG)
+    assert rate == pytest.approx(0.60, abs=0.01), f"Expected ceiling 0.60, got {rate:.3f}"
+
+
+def test_contraction_rate_high_speed_low_ld():
+    """At v=10, Ld=3: rate = 2.5*9/200 = 0.1125. Slow near apex."""
+    rate = _compute_max_contraction_rate(10.0, 3.0, _CONTRACTION_CFG)
+    assert 0.10 < rate < 0.20, f"Expected ~0.11, got {rate:.3f}"
+
+
+def test_contraction_rate_low_speed():
+    """At v=5, Ld=4: rate = 2.5*16/50 = 0.80, clamped to 0.60. Low speed = safe."""
+    rate = _compute_max_contraction_rate(5.0, 4.0, _CONTRACTION_CFG)
+    assert rate == pytest.approx(0.60, abs=0.01), f"Expected ceiling 0.60, got {rate:.3f}"
+
+
+def test_contraction_rate_floor_respected():
+    """At v=10, Ld=2 (floor): rate = 2.5*4/200 = 0.05, floored to 0.10."""
+    rate = _compute_max_contraction_rate(10.0, 2.0, _CONTRACTION_CFG)
+    assert rate == pytest.approx(0.10, abs=0.01), f"Expected floor 0.10, got {rate:.3f}"
+
+
+def test_contraction_rate_proportional_to_ld_squared():
+    """Rate scales with Ld² at constant speed."""
+    r4 = _compute_max_contraction_rate(8.0, 4.0, _CONTRACTION_CFG)
+    r6 = _compute_max_contraction_rate(8.0, 6.0, _CONTRACTION_CFG)
+    # r6/r4 should be ~(6/4)² = 2.25 (before clamping)
+    assert r6 > r4, f"Rate should increase with Ld: r4={r4:.3f}, r6={r6:.3f}"
