@@ -142,6 +142,19 @@ def _smoothstep_01(value: float) -> float:
     return ratio * ratio * (3.0 - 2.0 * ratio)
 
 
+def _fast_onset_smooth(value: float, sharpness: float = 0.7) -> float:
+    """Smooth ramp with controllable onset speed.
+
+    Blends between cubic hermite (sharpness=0, zero derivative at t=0)
+    and linear (sharpness=1, immediate onset).  At sharpness=0.7 the
+    derivative at t=0 is 0.7 instead of 0.0, recovering ~8 frames of
+    the cubic hermite's slow-start delay in the curve anticipation chain.
+    """
+    t = max(0.0, min(1.0, float(value)))
+    cubic = t * t * (3.0 - 2.0 * t)
+    return cubic + sharpness * (t - cubic)
+
+
 def _lerp_clamped(start: float, end: float, weight: float) -> float:
     """Clamp weight to [0, 1] and linearly interpolate."""
     ratio = max(0.0, min(1.0, float(weight)))
@@ -918,6 +931,8 @@ def _compute_local_curve_relevance_terms(
         ),
     )
 
+    ramp_sharpness = float(config.get("curve_local_phase_ramp_sharpness", 0.7))
+
     distance_weight = 0.0
     has_distance = (
         distance_to_curve_start_m is not None
@@ -942,7 +957,7 @@ def _compute_local_curve_relevance_terms(
                 distance_weight = 0.0
             else:
                 ratio = (start_m - distance_m) / max(1e-6, start_m - end_m)
-                distance_weight = _smoothstep_01(ratio)
+                distance_weight = _fast_onset_smooth(ratio, ramp_sharpness)
 
     time_weight = 0.0
     has_time = time_to_curve_s is not None and math.isfinite(float(time_to_curve_s))
@@ -965,7 +980,7 @@ def _compute_local_curve_relevance_terms(
                 time_weight = 0.0
             else:
                 ratio = (start_s - time_s) / max(1e-6, start_s - end_s)
-                time_weight = _smoothstep_01(ratio)
+                time_weight = _fast_onset_smooth(ratio, ramp_sharpness)
 
     return {
         "path": float(path_weight),

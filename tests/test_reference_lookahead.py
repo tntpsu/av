@@ -2,6 +2,8 @@ import pytest
 
 from control.pid_controller import LateralController
 from trajectory.utils import (
+    _fast_onset_smooth,
+    _smoothstep_01,
     build_local_curve_reference,
     compute_curve_anticipation_score,
     compute_curve_phase_scheduler,
@@ -2821,3 +2823,48 @@ def test_phase_decays_faster_on_straight_after_gating() -> None:
         f"final_state={final_state}, final_phase={final_phase:.3f}. "
         f"Phase trace: {[r['curve_local_phase'] for r in results]}"
     )
+
+
+# ── Fast-onset ramp tests ──────────────────────────────────────
+
+
+def test_fast_onset_boundaries():
+    """f(0)=0 and f(1)=1 for all sharpness values."""
+    for s in [0.0, 0.3, 0.5, 0.7, 1.0]:
+        assert _fast_onset_smooth(0.0, s) == pytest.approx(0.0), f"f(0) != 0 at sharpness={s}"
+        assert _fast_onset_smooth(1.0, s) == pytest.approx(1.0), f"f(1) != 1 at sharpness={s}"
+
+
+def test_fast_onset_monotonic():
+    """Output is monotonically increasing for sharpness=0.7."""
+    prev = 0.0
+    for i in range(1, 101):
+        t = i / 100.0
+        val = _fast_onset_smooth(t, 0.7)
+        assert val >= prev - 1e-9, f"Non-monotonic at t={t}: {val} < {prev}"
+        prev = val
+
+
+def test_fast_onset_faster_than_cubic():
+    """At t=0.3, sharpness=0.7 produces higher output than cubic hermite."""
+    cubic = _smoothstep_01(0.3)
+    fast = _fast_onset_smooth(0.3, 0.7)
+    assert fast > cubic + 0.01, (
+        f"Fast onset not faster than cubic at t=0.3: fast={fast:.3f} vs cubic={cubic:.3f}"
+    )
+
+
+def test_fast_onset_sharpness_zero_equals_cubic():
+    """sharpness=0 reproduces exact cubic hermite behavior."""
+    for t in [0.0, 0.1, 0.25, 0.5, 0.75, 0.9, 1.0]:
+        assert _fast_onset_smooth(t, 0.0) == pytest.approx(
+            _smoothstep_01(t), abs=1e-9
+        ), f"sharpness=0 diverges from cubic at t={t}"
+
+
+def test_fast_onset_sharpness_one_equals_linear():
+    """sharpness=1 produces pure linear output."""
+    for t in [0.0, 0.1, 0.25, 0.5, 0.75, 0.9, 1.0]:
+        assert _fast_onset_smooth(t, 1.0) == pytest.approx(
+            t, abs=1e-9
+        ), f"sharpness=1 not linear at t={t}"
