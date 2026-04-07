@@ -120,33 +120,58 @@ Symptom is: SYSTEMIC (N tracks) / ISOLATED (target only)
 ============================================================
 ```
 
-### 2c — Signal sufficiency check
+### 2c — Complete investigation protocol (run ALL checks before presenting diagnosis)
 
-Do we have the HDF5 fields needed to fully understand this issue?
+The diagnosis must be COMPLETE before presenting to the user. Do NOT present a preliminary diagnosis that requires further investigation — that wastes an iteration.
 
-Check the relevant fields exist in the recording:
+**Step 2c1 — Signal sufficiency check:**
+Check the HDF5 recording has all fields needed for the issue category:
 ```python
 import h5py
 f = h5py.File("<recording>", "r")
-# Check for expected fields based on issue category
+# Check fields based on issue category
+```
+If critical signals are missing → `/instrument` + `/e2e` BEFORE continuing.
+
+**Step 2c2 — Root cause disambiguation plan:**
+List ALL possible root causes for the symptom. For EACH, specify what check would confirm or rule it out:
+```
+DISAMBIGUATION PLAN
+============================================================
+Symptom: <what the metric shows>
+Possible causes:
+  A: <cause A> — check: <specific trace/analysis/data query>
+  B: <cause B> — check: <specific trace/analysis/data query>
+  C: <cause C> — check: <specific trace/analysis/data query>
+============================================================
 ```
 
-If critical signals are missing:
+**Step 2c3 — Run ALL disambiguation checks:**
+Execute ALL checks from the plan IN ONE PASS. Use parallel Agent calls when possible. Use existing recording data where possible — only re-run e2e if signals are missing.
+
+Checks to consider per issue type:
+- **Lateral error**: `trace_curve_entry.py` (blame), HDF5 lookahead/floor/FF analysis
+- **Oscillation**: Check correlation with regime transitions (`trace_regime_transition.py`), grade angle, speed cap, floor activation
+- **Jerk spikes**: Check frame drops (dt gaps), ceiling hits, regime handoffs
+- **Heading suppression**: `trace_heading_suppression.py`, gate weight analysis
+- **Safety (e-stops)**: Failure frame inspection, steering authority at curve apex
+
+**Step 2c4 — Confirm root cause with evidence:**
 ```
-SIGNAL GAP: <field_name> not recorded
-→ Run /instrument to add it
-→ Then /e2e <target> to get a new recording with the signal
-→ Restart from step 2a
+ROOT CAUSE CONFIRMED
+============================================================
+Symptom: <metric>
+Investigated:
+  A: <cause A> — RULED OUT because <evidence>
+  B: <cause B> — CONFIRMED because <evidence>
+  C: <cause C> — RULED OUT because <evidence>
+
+Root cause: <B — specific description>
+Evidence: <specific frames, signals, correlations>
+============================================================
 ```
 
-### 2d — Ambiguity check
-
-Could multiple root causes produce this symptom?
-
-- If YES and the root cause is unclear → run `/trace <event_type>` on target track
-  - Also run `/trace` on another affected track if symptom is systemic — compare patterns
-  - Use trace output to narrow the root cause
-- If NO, root cause is clear → proceed
+Only proceed to Step 2e (fix level) after the root cause is CONFIRMED, not hypothesized.
 
 ### 2e — Classify fix level
 
@@ -256,14 +281,25 @@ Priority: safety > correctness > performance > comfort
 ```
 Fix ONE issue per iteration. The exception: if two issues share a root cause, they're one fix.
 
-### 2g — Present diagnosis to user — CHECKPOINT
+### 2g — Present COMPLETE diagnosis to user — CHECKPOINT
+
+The diagnosis presented here must be COMPLETE — all disambiguation done, root cause confirmed with evidence, design smells checked. The user should NOT need to say "investigate more."
 
 ```
-ITERATION <N> — DIAGNOSIS
+ITERATION <N> — DIAGNOSIS (COMPLETE)
 ============================================================
 Primary issue: <category>
-Root cause: <description>
-Affected tracks: <list with severity>
+
+ROOT CAUSE (confirmed):
+  <description with specific evidence>
+  Investigated & ruled out: <list of alternatives with why>
+
+DESIGN SMELL CHECK:
+  <results of 5-smell check>
+
+CROSS-TRACK:
+  <which other tracks share this root cause>
+
 Fix level: <level>
 Proposed approach: <1-2 sentence summary>
 
