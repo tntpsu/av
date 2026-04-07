@@ -192,6 +192,62 @@ When a fix uses sensor signals for control decisions (e.g., curvature for regime
 
 This was learned when the map curvature guard initially used at-car curvature only — it fired too late on sloop, causing MPC to remain active into tight curves before the hold timer could complete the transition.
 
+### 2e4 — Design smell checker (MANDATORY — run BEFORE proposing fix level)
+
+Before proposing ANY fix, check the bottleneck mechanism for these 5 design smells. If ANY smell is detected, the fix level is minimum ARCHITECTURE — do NOT propose TUNING or CODE PATCH.
+
+**Smell 1: Binary gate on continuous signal**
+- Is the mechanism a binary on/off (state machine, threshold crossing)?
+- Does the underlying signal vary continuously?
+- Pattern: "gate oscillates", "threshold sensitivity", "release conditions fight activation"
+- Fix pattern: Replace with proportional weight (0→1 smoothstep)
+- Session examples: lookahead blend (EMA→local_gate_weight), heading gate (binary→proportional weight)
+
+**Smell 2: Proxy stacking (multiple params ≈ one quantity)**
+- Are there 2+ parameters that all approximate the same physical decision?
+- Do they interact adversely (one overrides another, conflicting thresholds)?
+- Pattern: "rate limit + jerk limit + ceiling clip", "speed table + curvature guard + per-track overlay"
+- Fix pattern: Unify into one physics-based formula or planner
+- Session examples: PP floor (speed table→sqrt(8R*e)), steering (3 limiters→motion profile)
+
+**Smell 3: Frame-rate dependent formula**
+- Does the formula use dt or dt² in a way that changes behavior on frame drops?
+- Pattern: "jerk × dt²", "rate per frame", values that change at different FPS
+- Fix pattern: Convert to physical units (per-second), verify dt-independence
+- Session examples: jerk limiter (dt²→per-second), rate limit (per-frame→per-second)
+
+**Smell 4: Static lookup table for physics quantity**
+- Is a hand-tuned table approximating something computable from physics?
+- Pattern: "speed table", "curvature table", "per-track config"
+- Fix pattern: Replace with formula from first principles
+- Session examples: PP floor table→sqrt(8R*e_target), entry table lowered
+
+**Smell 5: Post-hoc clamp (independent limiter after the fact)**
+- Is the mechanism a clamp/clip applied AFTER the main computation?
+- Does it create discontinuities (step changes, ceiling hits)?
+- Pattern: "ceiling creates jerk spike", "clamp overrides the controller"
+- Fix pattern: Make the planner/controller aware of the constraint, plan smooth approach
+- Session examples: steering ceiling→motion profile with demand-aware tapering
+
+```
+DESIGN SMELL CHECK
+============================================================
+Bottleneck mechanism: <what's being modified>
+
+  □ Smell 1 — Binary gate?     <yes/no — describe if yes>
+  □ Smell 2 — Proxy stacking?  <yes/no — list params if yes>
+  □ Smell 3 — Frame-dependent? <yes/no — show formula if yes>
+  □ Smell 4 — Static table?    <yes/no — what physics it approximates>
+  □ Smell 5 — Post-hoc clamp?  <yes/no — what discontinuity it creates>
+
+  Smells detected: <count>
+  → If ≥ 1: minimum ARCHITECTURE. Use /plan-feature.
+  → If 0: TUNING or CODE PATCH may be appropriate.
+============================================================
+```
+
+**This check is MANDATORY.** Do NOT skip it. The process health Pareto shows 73% of issues originate at the design level — catching design smells here prevents 3 rounds of escalation.
+
 ### 2f — Multi-issue prioritization
 
 If diagnosis found multiple issues:

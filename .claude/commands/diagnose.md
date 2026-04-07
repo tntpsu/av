@@ -92,6 +92,16 @@ And suggest opening PhilViz: `python3 tools/debug_visualizer/server.py` → Tria
 Before recommending any fix, classify it and check for robustness:
 
 ```
+DESIGN SMELL CHECK (mandatory — check BEFORE assigning fix level):
+  □ Binary gate on continuous signal?     → proportional weight
+  □ Proxy stacking (≥2 params ≈ 1 qty)?  → unify into physics formula
+  □ Frame-rate dependent formula (dt²)?   → convert to physical units
+  □ Static lookup table for physics qty?  → replace with first-principles formula
+  □ Post-hoc clamp creating discontinuity? → make planner aware of constraint
+
+  Smells detected: <count>
+  → If ≥1: minimum ARCHITECTURE level. Run /plan-feature.
+
 FIX LEVEL TRIAGE:
   Level: TUNING / CONFIG / CODE PATCH / ARCHITECTURE
     - TUNING: adjusting existing numeric params within their intended range
@@ -112,6 +122,7 @@ FIX LEVEL TRIAGE:
 - NEVER recommend per-track overlay changes as the primary fix for systemic issues
 - If ≥2 track overlays work around the same subsystem, flag it as an architecture smell
 - Always prefer the fix level that eliminates the most per-track workarounds
+- If ANY design smell detected, minimum level is ARCHITECTURE — do not propose tuning or code patch
 - Label any per-track suggestion as "BAND-AID — not recommended" if a robust alternative exists
 
 ## Step 6 — Synthesize and output
