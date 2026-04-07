@@ -7,12 +7,24 @@ The user's request is: $ARGUMENTS
 If $ARGUMENTS contains a file path (ends in `.h5`), use that file.
 Otherwise use `--latest`.
 
-## Step 2 — Always run the primary analysis first
+## Step 2 — Run primary analysis AND triage engine
+
+Run BOTH the analysis AND the PhilViz triage engine. The triage engine has 20+ pattern detectors (floor_rescue, heading_oscillation, regime_blend, etc.) that catch known issues automatically — don't rediscover them manually.
 
 ```bash
+# Primary analysis (metrics + key issues)
 python3 tools/analyze/analyze_drive_overall.py --latest
+
+# Triage engine (pattern detection — catches known issues instantly)
+python3 tools/analyze/run_gate_and_triage.py --latest
 ```
-(or `python3 tools/analyze/analyze_drive_overall.py <path>` if a file was specified)
+
+**Read the triage output FIRST.** If the triage engine identifies a known pattern (e.g., `traj_curve_late_turn_in`, `pp_floor_formula_curvature_lag`, `heading_gate_oscillation`), use that as the primary diagnosis — don't repeat the investigation manually.
+
+Also run the signal chain blame trace for lateral/trajectory issues:
+```bash
+python3 tools/analyze/trace_curve_entry.py --latest
+```
 
 ## Step 3 — Classify the primary issue
 

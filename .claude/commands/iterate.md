@@ -89,10 +89,22 @@ Don't just focus on the target — list every track that fails the goal. Check i
 
 ### 2a — Primary diagnosis on target track
 
-Run the `/diagnose` skill workflow on the target track's latest recording:
-1. `python3 tools/analyze/analyze_drive_overall.py --latest` (or specific recording)
-2. Classify primary issue using the priority table from `/diagnose`
-3. Run the targeted diagnostic tools for that category
+Run ALL three diagnostic tools — analysis, triage engine, and trace:
+```bash
+# 1. Primary metrics
+python3 tools/analyze/analyze_drive_overall.py <recording>
+
+# 2. Triage engine (20+ pattern detectors — catches known issues instantly)
+python3 tools/analyze/run_gate_and_triage.py <recording>
+
+# 3. Signal chain blame (for lateral/trajectory issues)
+python3 tools/analyze/trace_curve_entry.py <recording>
+```
+
+**Read triage output FIRST.** If the triage engine matches a known pattern, use that as the diagnosis — don't rediscover it manually. The triage engine knows about: floor_rescue, heading_oscillation, regime_blend, curvature_lag, and 15+ other patterns from PhilViz.
+
+4. Classify primary issue using the priority table from `/diagnose`
+5. Run additional targeted tools only if triage didn't identify the pattern
 
 ### 2b — Cross-track symptom correlation
 
