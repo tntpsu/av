@@ -19,15 +19,37 @@ Extract per-track baseline scores.
 
 ## Step 3 — Run e2e on each track
 
-For each track, run:
+Run tracks in this order with rebuilds between batches:
+
 ```bash
-./start_av_stack.sh --build-unity-player --skip-unity-build-if-clean --run-unity-player --duration 60 --track-yaml tracks/<track>.yml
+# Batch 1 (full rebuild): tracks 1-3
+./start_av_stack.sh --duration 60 --track-yaml tracks/<track1>.yml
+./start_av_stack.sh --skip-unity-build-if-clean --duration 60 --track-yaml tracks/<track2>.yml
+./start_av_stack.sh --skip-unity-build-if-clean --duration 60 --track-yaml tracks/<track3>.yml
+
+# Batch 2 (rebuild): tracks 4-6
+./start_av_stack.sh --duration 60 --track-yaml tracks/<track4>.yml
+./start_av_stack.sh --skip-unity-build-if-clean --duration 60 --track-yaml tracks/<track5>.yml
+./start_av_stack.sh --skip-unity-build-if-clean --duration 60 --track-yaml tracks/<track6>.yml
 ```
+
+After each run, verify recording > 500KB and > 200 frames before continuing.
 
 **Guards:**
 - s_loop is non-looping — use `--duration 60`
-- After 6 consecutive runs, force rebuild (omit `--skip-unity-build-if-clean`)
-- If recording < 500KB → Unity health issue, rebuild and retry (don't count)
+- **Unity health protocol (CRITICAL):**
+  - Force a full player rebuild before the FIRST run (no `--skip-unity-build-if-clean` on first track)
+  - After every 3 tracks, force another rebuild to prevent segfaults
+  - If recording < 500KB or < 200 frames → Unity health issue → rebuild and retry
+  - If 2 consecutive failures on same track → skip that track, note as "UNITY HEALTH FAIL"
+  - Unity segfaults after ~36 consecutive launch/kill cycles — a full sweep of 6 tracks
+    with retries could hit this limit. If you see exit code 139, stop and rebuild.
+
+After the FIRST recording, verify config reached runtime:
+```bash
+python3 -c "import h5py,json; f=h5py.File('<recording>','r'); lat=json.loads(f['meta/runtime_config_json'][0]).get('control',{}).get('lateral',{}); print('formula_enabled:', lat.get('pp_curve_local_floor_formula_enabled')); print('profile_enabled:', lat.get('pp_steering_profile_enabled'))"
+```
+If either shows `None` or `False` when expected `True` → config wiring issue. Stop and fix before continuing.
 
 After each run, analyze:
 ```bash
