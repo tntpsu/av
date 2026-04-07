@@ -3068,6 +3068,55 @@ def test_floor_formula_zero_curvature_safe():
     assert result < 100.0  # sanity: shouldn't be astronomical
 
 
+def test_floor_formula_k_reduces_on_tight_curve():
+    """κ=0.01 (R100) → k drops below 0.4, floor < 5.2m at 13 m/s."""
+    ctrl = _make_floor_formula_controller(
+        pp_curve_local_floor_k_reduction_factor=0.6,
+        pp_curve_local_floor_k_severity_kappa_min=0.003,
+        pp_curve_local_floor_k_severity_kappa_max=0.015,
+    )
+    result = ctrl._compute_pp_curve_local_floor_formula(13.0, 0.01)
+    # severity ≈ 0.7 at κ=0.01, k_eff ≈ 0.4 × (1 - 0.7×0.6) ≈ 0.23
+    # ld_speed ≈ 0.23 × 13 = 3.0
+    assert result < 5.2, f"Floor should be reduced: {result:.2f}"
+    assert result < 4.0, f"Floor should be well below 4.0: {result:.2f}"
+
+
+def test_floor_formula_k_unchanged_on_gentle_curve():
+    """κ=0.002 → severity ≈ 0, k stays at 0.4."""
+    ctrl = _make_floor_formula_controller(
+        pp_curve_local_floor_k_reduction_factor=0.6,
+        pp_curve_local_floor_k_severity_kappa_min=0.003,
+        pp_curve_local_floor_k_severity_kappa_max=0.015,
+    )
+    result = ctrl._compute_pp_curve_local_floor_formula(12.0, 0.002)
+    # severity ≈ 0, k_eff ≈ 0.4, ld_speed = 4.8
+    assert result == pytest.approx(4.8, rel=0.05)
+
+
+def test_floor_formula_k_reduction_bounded():
+    """κ=0.1 (extreme) → severity=1.0, k=0.4×(1-0.6)=0.16."""
+    ctrl = _make_floor_formula_controller(
+        pp_curve_local_floor_k_reduction_factor=0.6,
+        pp_curve_local_floor_k_severity_kappa_min=0.003,
+        pp_curve_local_floor_k_severity_kappa_max=0.015,
+    )
+    result = ctrl._compute_pp_curve_local_floor_formula(10.0, 0.1)
+    # severity=1.0, k_eff=0.4×0.4=0.16, ld_speed=1.6 → but Ld_min=2.0 wins
+    assert result == pytest.approx(2.0, rel=0.05)
+
+
+def test_floor_formula_k_reduction_disabled():
+    """reduction_factor=0 → k always 0.4, same as before."""
+    ctrl = _make_floor_formula_controller(
+        pp_curve_local_floor_k_reduction_factor=0.0,
+    )
+    result_with = ctrl._compute_pp_curve_local_floor_formula(13.0, 0.01)
+    ctrl2 = _make_floor_formula_controller()  # default has no reduction
+    result_without = ctrl2._compute_pp_curve_local_floor_formula(13.0, 0.01)
+    assert result_with == pytest.approx(result_without, rel=1e-6)
+
+
 # ── Steering motion profile tests ─────────────────────────────
 
 

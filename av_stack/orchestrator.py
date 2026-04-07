@@ -964,6 +964,15 @@ class AVStack:
             pp_curve_local_floor_curvature_clamp=float(
                 lateral_cfg.get('pp_curve_local_floor_curvature_clamp', 0.001)
             ),
+            pp_curve_local_floor_k_reduction_factor=float(
+                lateral_cfg.get('pp_curve_local_floor_k_reduction_factor', 0.0)
+            ),
+            pp_curve_local_floor_k_severity_kappa_min=float(
+                lateral_cfg.get('pp_curve_local_floor_k_severity_kappa_min', 0.003)
+            ),
+            pp_curve_local_floor_k_severity_kappa_max=float(
+                lateral_cfg.get('pp_curve_local_floor_k_severity_kappa_max', 0.015)
+            ),
             feedback_gain_min=lateral_cfg.get('feedback_gain_min', 1.0),
             feedback_gain_max=lateral_cfg.get('feedback_gain_max', 1.2),
             feedback_gain_curvature_min=lateral_cfg.get('feedback_gain_curvature_min', 0.002),

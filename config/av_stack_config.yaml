@@ -68,6 +68,10 @@ control:
     pp_curve_local_floor_target_error_m: 0.04
     pp_curve_local_floor_speed_time_constant_s: 0.4
     pp_curve_local_floor_absolute_min_m: 2.0
+    # Curvature-adaptive k: tight curves get shorter stability floor
+    pp_curve_local_floor_k_reduction_factor: 0.6       # max 60% reduction at full severity
+    pp_curve_local_floor_k_severity_kappa_min: 0.003   # severity starts ramping
+    pp_curve_local_floor_k_severity_kappa_max: 0.015   # severity = 1.0
     pp_curve_local_floor_curvature_clamp: 0.001
     pp_min_lookahead: 0.5
     pp_speed_norm_enabled: false

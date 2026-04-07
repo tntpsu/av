@@ -269,6 +269,9 @@ class LateralController:
                  pp_curve_local_floor_speed_time_constant_s: float = 0.4,
                  pp_curve_local_floor_absolute_min_m: float = 2.0,
                  pp_curve_local_floor_curvature_clamp: float = 0.001,
+                 pp_curve_local_floor_k_reduction_factor: float = 0.0,
+                 pp_curve_local_floor_k_severity_kappa_min: float = 0.003,
+                 pp_curve_local_floor_k_severity_kappa_max: float = 0.015,
                  feedback_gain_min: float = 1.0,
                  feedback_gain_max: float = 1.2,
                  feedback_gain_curvature_min: float = 0.002,
@@ -544,6 +547,9 @@ class LateralController:
         self.pp_curve_local_floor_speed_time_constant_s = max(0.0, float(pp_curve_local_floor_speed_time_constant_s))
         self.pp_curve_local_floor_absolute_min_m = max(0.5, float(pp_curve_local_floor_absolute_min_m))
         self.pp_curve_local_floor_curvature_clamp = max(1e-6, float(pp_curve_local_floor_curvature_clamp))
+        self.pp_curve_local_floor_k_reduction_factor = max(0.0, min(0.95, float(pp_curve_local_floor_k_reduction_factor)))
+        self.pp_curve_local_floor_k_severity_kappa_min = max(0.0, float(pp_curve_local_floor_k_severity_kappa_min))
+        self.pp_curve_local_floor_k_severity_kappa_max = max(0.001, float(pp_curve_local_floor_k_severity_kappa_max))
         self.pp_curve_local_lookahead_floor_speed_table = []
         for row in pp_curve_local_lookahead_floor_speed_table or []:
             if not isinstance(row, dict):
@@ -811,7 +817,18 @@ class LateralController:
         abs_kappa = max(abs(float(curvature)), self.pp_curve_local_floor_curvature_clamp)
         R = 1.0 / abs_kappa
         ld_curvature = _math.sqrt(8.0 * R * self.pp_curve_local_floor_target_error_m)
-        ld_speed = self.pp_curve_local_floor_speed_time_constant_s * max(0.0, float(speed_mps))
+        # Curvature-adaptive k: tight curves reduce the stability margin
+        _lo = self.pp_curve_local_floor_k_severity_kappa_min
+        _hi = self.pp_curve_local_floor_k_severity_kappa_max
+        if _hi <= _lo:
+            severity = 1.0 if abs_kappa >= _lo else 0.0
+        else:
+            _t = max(0.0, min(1.0, (abs_kappa - _lo) / (_hi - _lo)))
+            severity = _t * _t * (3.0 - 2.0 * _t)  # smoothstep
+        k_eff = self.pp_curve_local_floor_speed_time_constant_s * (
+            1.0 - severity * self.pp_curve_local_floor_k_reduction_factor
+        )
+        ld_speed = k_eff * max(0.0, float(speed_mps))
         ld_min = self.pp_curve_local_floor_absolute_min_m
         return float(max(min(ld_curvature, ld_speed), ld_min))
 
@@ -5388,6 +5405,9 @@ class VehicleController:
                  pp_curve_local_floor_speed_time_constant_s: float = 0.4,
                  pp_curve_local_floor_absolute_min_m: float = 2.0,
                  pp_curve_local_floor_curvature_clamp: float = 0.001,
+                 pp_curve_local_floor_k_reduction_factor: float = 0.0,
+                 pp_curve_local_floor_k_severity_kappa_min: float = 0.003,
+                 pp_curve_local_floor_k_severity_kappa_max: float = 0.015,
                  feedback_gain_min: float = 1.0,
                  feedback_gain_max: float = 1.2,
                  feedback_gain_curvature_min: float = 0.002,
