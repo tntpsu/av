@@ -107,6 +107,7 @@ class TestRLSConvergence:
         ctrl = MPCController.__new__(MPCController)
         ctrl.params = params
         ctrl.solver = None  # not needed for _update_leff
+        ctrl._max_steer_at_speed = lambda speed: ctrl.params.max_steer_rad
         ctrl._leff_theta = 1.0 / 2.5
         ctrl._leff_P = params.leff_initial_P
         ctrl._leff_heading_prev = 0.0
@@ -123,6 +124,7 @@ class TestRLSConvergence:
         ctrl = MPCController.__new__(MPCController)
         ctrl.params = params
         ctrl.solver = None
+        ctrl._max_steer_at_speed = lambda speed: ctrl.params.max_steer_rad
         ctrl._leff_theta = 1.0 / 2.5
         ctrl._leff_P = params.leff_initial_P
         ctrl._leff_heading_prev = 0.0
@@ -141,6 +143,7 @@ class TestSafetyBounds:
         ctrl = MPCController.__new__(MPCController)
         ctrl.params = params
         ctrl.solver = None
+        ctrl._max_steer_at_speed = lambda speed: ctrl.params.max_steer_rad
         ctrl._leff_theta = 1.0 / 2.5
         ctrl._leff_P = params.leff_initial_P
         ctrl._leff_heading_prev = 0.0
@@ -168,6 +171,7 @@ class TestGating:
         ctrl = MPCController.__new__(MPCController)
         ctrl.params = params
         ctrl.solver = None
+        ctrl._max_steer_at_speed = lambda speed: ctrl.params.max_steer_rad
         ctrl._leff_theta = 1.0 / 2.5
         ctrl._leff_P = params.leff_initial_P
         ctrl._leff_heading_prev = 0.0
@@ -185,6 +189,7 @@ class TestGating:
         ctrl = MPCController.__new__(MPCController)
         ctrl.params = params
         ctrl.solver = None
+        ctrl._max_steer_at_speed = lambda speed: ctrl.params.max_steer_rad
         ctrl._leff_theta = 1.0 / 2.5
         ctrl._leff_P = params.leff_initial_P
         ctrl._leff_heading_prev = 0.0
@@ -221,6 +226,7 @@ class TestReset:
         ctrl = MPCController.__new__(MPCController)
         ctrl.params = params
         ctrl.solver = type('FakeSolver', (), {'_warm_x': None, '_warm_y': None})()
+        ctrl._max_steer_at_speed = lambda speed: ctrl.params.max_steer_rad
         ctrl._leff_theta = 1.0 / 2.5
         ctrl._leff_P = params.leff_initial_P
         ctrl._leff_heading_prev = 0.0
@@ -255,6 +261,7 @@ class TestForgettingFactor:
         ctrl = MPCController.__new__(MPCController)
         ctrl.params = params
         ctrl.solver = None
+        ctrl._max_steer_at_speed = lambda speed: ctrl.params.max_steer_rad
         ctrl._leff_theta = 1.0 / 2.5
         ctrl._leff_P = params.leff_initial_P
         ctrl._leff_heading_prev = 0.0
@@ -287,6 +294,7 @@ class TestInnovationSign:
         ctrl = MPCController.__new__(MPCController)
         ctrl.params = params
         ctrl.solver = None
+        ctrl._max_steer_at_speed = lambda speed: ctrl.params.max_steer_rad
         ctrl._leff_theta = 1.0 / 2.0  # θ_model = 0.5 > θ_true = 0.333
         ctrl._leff_P = params.leff_initial_P
         ctrl._leff_heading_prev = 0.0
@@ -319,6 +327,7 @@ class TestCovarianceBoundedness:
         ctrl = MPCController.__new__(MPCController)
         ctrl.params = params
         ctrl.solver = None
+        ctrl._max_steer_at_speed = lambda speed: ctrl.params.max_steer_rad
         ctrl._leff_theta = 1.0 / 2.5
         ctrl._leff_P = params.leff_initial_P
         ctrl._leff_heading_prev = 0.0

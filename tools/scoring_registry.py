@@ -114,6 +114,10 @@ ACC_DETECTION_RATE_GATE: float = 0.95       # —  — min detection rate when l
 ACC_EMERGENCY_BRAKE_GAP_FACTOR: float = 1.5  # —  — gap < factor×speed → emergency brake
 ACC_MIN_ACTIVE_FRAME_RATE: float = 0.10     # —  — min fraction for ACC section to activate
 
+# ── Steering profile reversal ────────────────────────────────────────────────
+PROFILE_REVERSAL_URGENCY_HIGH: float = 0.8      # — urgency above this = "high urgency" event
+PROFILE_REVERSAL_TRACKING_ERROR_M: float = 0.10  # m — post-reversal steering error threshold
+
 # ── Oscillation amplitude growth ─────────────────────────────────────────────
 OSCILLATION_AMPLITUDE_GROWTH_THRESHOLD_MPS: float = 0.001  # m/s — RMS growth slope below this is benign
 OSCILLATION_AMPLITUDE_GROWTH_SCALE: float = 5000.0         # penalty per unit slope (0.001→0, 0.003→10)

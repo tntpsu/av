@@ -11,12 +11,12 @@ def test_build_label_mask_assigns_classes():
     yellow = np.zeros((4, 4), dtype=np.uint8)
     white = np.zeros((4, 4), dtype=np.uint8)
     yellow[0, 0] = 255
-    white[1, 1] = 255
+    white[1, 3] = 255  # must be to the RIGHT of yellow line / image center
 
     label = build_label_mask(yellow, white)
 
     assert label[0, 0] == 1
-    assert label[1, 1] == 2
+    assert label[1, 3] == 2
     assert label[2, 2] == 0
 
 

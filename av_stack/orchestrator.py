@@ -937,6 +937,12 @@ class AVStack:
             pp_steering_taper_gain=float(
                 lateral_cfg.get('pp_steering_taper_gain', 3.0)
             ),
+            pp_steering_reversal_taper_factor=float(
+                lateral_cfg.get('pp_steering_reversal_taper_factor', 0.7)
+            ),
+            pp_steering_reversal_curvature_min=float(
+                lateral_cfg.get('pp_steering_reversal_curvature_min', 0.003)
+            ),
             pp_curve_local_lookahead_floor_enabled=bool(
                 lateral_cfg.get('pp_curve_local_lookahead_floor_enabled', False)
             ),
@@ -1649,10 +1655,9 @@ class AVStack:
             (1.0, 12.0, -1.0 / 3.0, 0.0, 1.0),
         ("control.lateral", "curve_feedforward_threshold"):
             (0.012, 12.0, -0.004, 0.0, 0.012),
-        # pp_map_ff_gain: stronger map feedforward at high speed (less reliance on perception)
-        # Slope 1/3 ensures gain reaches exactly 1.0 at 15 m/s
+        # pp_map_ff_gain: map feedforward gain (raised 0.8→1.0 when proportional ramp replaced step)
         ("control.lateral", "pp_map_ff_gain"):
-            (0.8, 12.0, 1.0 / 15.0, 0.8, 1.0),
+            (1.0, 12.0, 0.0, 1.0, 1.0),
         # pp_speed_norm_min_scale: quadratic floor for PP gain normalization
         # At 15 m/s: 0.70 - 0.033×3 = 0.60; at 25 m/s: clamped to 0.50
         ("control.lateral", "pp_speed_norm_min_scale"):
@@ -7317,6 +7322,7 @@ class AVStack:
         if reference_point is not None:
             reference_point['lookahead_entry_preview_source'] = preview_entry_source
             reference_point['curvature_preview'] = float(preview_curvature_abs)
+            reference_point['curvature_preview_signed'] = float(preview_curvature_signed)
             reference_point['curvature_primary_abs'] = float(curvature_primary_abs)
             reference_point['curvature_primary_source'] = str(curvature_primary_source)
             reference_point['curvature_map_abs'] = float(curvature_map_abs)
@@ -11868,6 +11874,9 @@ class AVStack:
             pp_ref_jump_clamped=bool(control_command.get('pp_ref_jump_clamped', 0) > 0.5),
             pp_stale_hold_active=bool(control_command.get('pp_stale_hold_active', 0) > 0.5),
             pp_steering_jerk_limited=bool(control_command.get('pp_steering_jerk_limited', 0) > 0.5),
+            pp_profile_reversal_detected=bool(control_command.get('pp_profile_reversal_detected', False)),
+            pp_profile_reversal_urgency=float(control_command.get('pp_profile_reversal_urgency', 0.0)),
+            pp_profile_effective_taper=float(control_command.get('pp_profile_effective_taper', 0.0)),
             pp_effective_steering_rate=float(control_command.get('pp_effective_steering_rate', 0.0)),
             pp_pipeline_bypass_active=bool(control_command.get('pp_pipeline_bypass_active', 0) > 0.5),
             pp_speed_norm_scale=float(control_command.get('pp_speed_norm_scale', 1.0)),

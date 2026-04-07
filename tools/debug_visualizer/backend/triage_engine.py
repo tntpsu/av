@@ -916,6 +916,15 @@ PATTERNS = [
             and not m.get("geometry_override_active", True)
         ),
     },
+    {
+        "id": "steering_profile_reversal_tracking",
+        "name": "Steering profile slow on direction reversal",
+        "severity": "comfort",
+        "code_pointer": "pid_controller.py:_compute_steering_profile_step(~839)",
+        "config_lever": "control.pp_steering_reversal_taper_factor",
+        "fix_hint": "Increase reversal_taper_factor to reduce taper earlier; check time_to_curve_s accuracy",
+        "check": lambda m: m.get("steering_profile_reversal_slow_count", 0) >= 3,
+    },
 ]
 
 SEVERITY_ORDER = {"safety": 0, "instability": 1, "comfort": 2}

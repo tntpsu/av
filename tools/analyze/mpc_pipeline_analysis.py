@@ -87,6 +87,11 @@ def load_recording(path: Path) -> dict:
         data["regime_lateral_accel"]        = _get("control/regime_lateral_accel_mps2")
         data["regime_lateral_accel_thr"]    = _get("control/regime_lateral_accel_threshold_mps2")
 
+        # Steering profile reversal
+        data["pp_profile_reversal_detected"]  = _get("control/pp_profile_reversal_detected")
+        data["pp_profile_reversal_urgency"]   = _get("control/pp_profile_reversal_urgency")
+        data["pp_profile_effective_taper"]     = _get("control/pp_profile_effective_taper")
+
         # MPC reference alignment
         data["mpc_e_lat_ref_source"]       = None
         data["mpc_e_lat_ref_divergence"]   = _get("control/mpc_e_lat_reference_divergence_m")
@@ -276,6 +281,34 @@ def print_report(path: Path, data: dict):
     delta_str = _fmt(max_delta_at_trans)
     gate = "PASS" if not np.isnan(max_delta_at_trans) and max_delta_at_trans < 0.05 else "FAIL"
     print(f"  Max |Δsteering| at transition: {delta_str}  [{gate} < 0.05]")
+
+    # ── 2.8.8 Steering profile reversal (PP feature — runs regardless of MPC) ──
+    print(f"\n{thin}")
+    print("2.8.8 — Steering profile reversal")
+    rev_urgency = data.get("pp_profile_reversal_urgency")
+    rev_detected = data.get("pp_profile_reversal_detected")
+    if rev_urgency is not None and rev_detected is not None:
+        rev_u = rev_urgency[:n]
+        rev_d = rev_detected[:n]
+        rev_mask = rev_d > 0.5
+        rev_count = int(np.sum(rev_mask))
+        if rev_count > 0:
+            rev_u_active = rev_u[rev_mask]
+            print(f"  Reversal events: {rev_count}/{n} frames ({rev_count/n*100:.1f}%)")
+            print(f"  Urgency P50/P95/Max: {_fmt(np.percentile(rev_u_active, 50))} / "
+                  f"{_fmt(np.percentile(rev_u_active, 95))} / {_fmt(np.max(rev_u_active))}")
+            eff_taper = data.get("pp_profile_effective_taper")
+            if eff_taper is not None:
+                et_active = eff_taper[:n][rev_mask]
+                print(f"  Effective taper P50/P95: {_fmt(np.percentile(et_active, 50))} / "
+                      f"{_fmt(np.percentile(et_active, 95))}")
+            high_urg = int(np.sum(rev_u_active > 0.8))
+            gate = "green" if high_urg == 0 else ("yellow" if high_urg < 5 else "red")
+            print(f"  High urgency (>0.8): {high_urg} frames  [{gate}]")
+        else:
+            print("  No reversal events detected (0 frames with reversal_detected=True)")
+    else:
+        print("  [Fields pp_profile_reversal_* not in recording]")
 
     if mpc_n == 0:
         print("\n[No MPC frames — PP-only recording. Phase 2.8 diagnostics skipped.]\n")

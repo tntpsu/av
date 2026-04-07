@@ -2601,6 +2601,24 @@ class DataRecorder:
             dtype=np.float32
         )
         self.h5_file.create_dataset(
+            "control/pp_profile_reversal_detected",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/pp_profile_reversal_urgency",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/pp_profile_effective_taper",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
             "control/pp_effective_steering_rate",
             shape=(0,),
             maxshape=max_shape,
@@ -7597,6 +7615,9 @@ class DataRecorder:
         pp_ref_jump_clamped_list = []
         pp_stale_hold_active_list = []
         pp_steering_jerk_limited_list = []
+        pp_profile_reversal_detected_list = []
+        pp_profile_reversal_urgency_list = []
+        pp_profile_effective_taper_list = []
         pp_effective_steering_rate_list = []
         pp_pipeline_bypass_active_list = []
         pp_speed_norm_scale_list = []
@@ -8996,6 +9017,9 @@ class DataRecorder:
             pp_ref_jump_clamped_list.append(float(getattr(cc, 'pp_ref_jump_clamped', False)))
             pp_stale_hold_active_list.append(float(getattr(cc, 'pp_stale_hold_active', False)))
             pp_steering_jerk_limited_list.append(float(getattr(cc, 'pp_steering_jerk_limited', False)))
+            pp_profile_reversal_detected_list.append(float(getattr(cc, 'pp_profile_reversal_detected', False)))
+            pp_profile_reversal_urgency_list.append(float(getattr(cc, 'pp_profile_reversal_urgency', 0.0)))
+            pp_profile_effective_taper_list.append(float(getattr(cc, 'pp_profile_effective_taper', 0.0)))
             pp_effective_steering_rate_list.append(float(getattr(cc, 'pp_effective_steering_rate', 0.0)))
             pp_pipeline_bypass_active_list.append(float(getattr(cc, 'pp_pipeline_bypass_active', False)))
             pp_speed_norm_scale_list.append(float(getattr(cc, 'pp_speed_norm_scale', 1.0)))
@@ -9436,7 +9460,10 @@ class DataRecorder:
                        "pp_curve_local_lookahead_pre_floor", "pp_curve_local_lookahead_post_floor",
                        "pp_curve_local_shorten_slew_active", "pp_curve_local_shorten_delta_m",
                        "pp_ref_jump_clamped", "pp_stale_hold_active",
-                       "pp_steering_jerk_limited", "pp_effective_steering_rate",
+                       "pp_steering_jerk_limited",
+                       "pp_profile_reversal_detected", "pp_profile_reversal_urgency",
+                       "pp_profile_effective_taper",
+                       "pp_effective_steering_rate",
                        "pp_pipeline_bypass_active",
                        "pp_speed_norm_scale", "pp_map_ff_applied",
                        "mpc_feasible", "mpc_solve_time_ms",
@@ -10580,6 +10607,9 @@ class DataRecorder:
             self.h5_file["control/pp_ref_jump_clamped"][current_size:] = pp_ref_jump_clamped_list
             self.h5_file["control/pp_stale_hold_active"][current_size:] = pp_stale_hold_active_list
             self.h5_file["control/pp_steering_jerk_limited"][current_size:] = pp_steering_jerk_limited_list
+            self.h5_file["control/pp_profile_reversal_detected"][current_size:] = pp_profile_reversal_detected_list
+            self.h5_file["control/pp_profile_reversal_urgency"][current_size:] = pp_profile_reversal_urgency_list
+            self.h5_file["control/pp_profile_effective_taper"][current_size:] = pp_profile_effective_taper_list
             self.h5_file["control/pp_effective_steering_rate"][current_size:] = pp_effective_steering_rate_list
             self.h5_file["control/pp_pipeline_bypass_active"][current_size:] = pp_pipeline_bypass_active_list
             self.h5_file["control/pp_speed_norm_scale"][current_size:] = pp_speed_norm_scale_list

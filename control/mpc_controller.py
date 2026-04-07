@@ -36,7 +36,16 @@ class MPCParams:
     horizon: int = 20
     dt: float = 0.033
     wheelbase_m: float = 2.5
-    max_steer_rad: float = 0.5236           # 30°
+    max_steer_rad: float = 0.5236           # 30° (fallback when speed_dependent_steer disabled)
+
+    # Speed-dependent max steering angle (matches Unity CarController.cs lines 1398-1403)
+    # Unity lerps max steer from low_speed_rad at 0 m/s to high_speed_rad at saturation_mps.
+    speed_dependent_steer_enabled: bool = False
+    max_steer_low_speed_rad: float = 0.5236     # 30° (Unity maxSteerAngleLowSpeed)
+    max_steer_high_speed_rad: float = 0.2793    # 16° (Unity maxSteerAngleHighSpeed)
+    max_steer_speed_saturation_mps: float = 12.0  # Unity maxSteerAngleFullSpeed
+
+    feedforward_wheelbase_m: float = 0.0    # 0 = use wheelbase_m; >0 = separate FF wheelbase (decouples FF from dynamics)
 
     # State cost weights
     q_lat: float = 10.0                     # lateral tracking
@@ -253,7 +262,19 @@ class MPCSolver:
         self._nc = 0
         self._current_r_steer_rate = params.r_steer_rate
         self._speed_band_center: float = 0.0
+        # Feedforward wheelbase: decouples FF (curve-entry ramp) from dynamics model
+        self._ff_wheelbase_m = params.feedforward_wheelbase_m if params.feedforward_wheelbase_m > 0 else params.wheelbase_m
         self._build_qp()
+
+    def _max_steer_at_speed(self, speed: float) -> float:
+        """Return max steering angle (rad) at the given speed.
+
+        Matches Unity CarController.cs Lerp(lowSpeed, highSpeed, InverseLerp(0, fullSpeed, speed)).
+        """
+        if not self.p.speed_dependent_steer_enabled:
+            return self.p.max_steer_rad
+        t = min(max(speed, 0.0) / self.p.max_steer_speed_saturation_mps, 1.0)
+        return self.p.max_steer_low_speed_rad * (1.0 - t) + self.p.max_steer_high_speed_rad * t
 
     def _get_horizon(self, speed: float) -> int:
         if self.p.speed_adaptive_horizon and speed >= self.p.speed_adaptive_threshold_mps:
@@ -723,8 +744,9 @@ class MPCSolver:
                 A_data[_ai[(dyn_row + 4, x_col + 4)]] = 1.0
 
                 # B_k (5×2)
-                A_data[_ai[(dyn_row + 2, u_col + 0)]] = C_f * self.p.max_steer_rad / m * dt
-                A_data[_ai[(dyn_row + 3, u_col + 0)]] = C_f * l_f * self.p.max_steer_rad / Iz * dt
+                _ms = self._max_steer_at_speed(vx)
+                A_data[_ai[(dyn_row + 2, u_col + 0)]] = C_f * _ms / m * dt
+                A_data[_ai[(dyn_row + 3, u_col + 0)]] = C_f * l_f * _ms / Iz * dt
                 A_data[_ai[(dyn_row + 4, u_col + 1)]] = dt
 
                 # -I for x[k+1] — these are constant but included for completeness
@@ -745,7 +767,7 @@ class MPCSolver:
                 A_data[_ai[(dyn_row + 0, x_col + 1)]] = v_safe * dt
 
                 # B_k matrix (input)
-                steer_gain = (v_safe / self.p.wheelbase_m) * self.p.max_steer_rad * dt
+                steer_gain = (v_safe / self.p.wheelbase_m) * self._max_steer_at_speed(v_safe) * dt
                 A_data[_ai[(dyn_row + 1, u_col + 0)]] = steer_gain
                 A_data[_ai[(dyn_row + 2, u_col + 1)]] = dt
 
@@ -846,17 +868,18 @@ class MPCSolver:
         # compensated for is gone. Part A's overcorrection when the car has lateral
         # offset was causing persistent centeredness regression on curves.
         if self.p.ff_alignment_enabled:
+            _ms_ff = self._max_steer_at_speed(v_safe)
             if _dyn:
                 delta_ff = np.array([
                     self._feedforward_delta_norm_dynamic(
                         kappa[k], v_safe, tire_cf, tire_cr,
                         self.p.vehicle_lf_m, self.p.vehicle_lr_m,
-                        self.p.vehicle_mass_kg, self.p.max_steer_rad)
+                        self.p.vehicle_mass_kg, _ms_ff)
                     for k in range(N)
                 ], dtype=float)
             else:
                 delta_ff = np.array([
-                    self._feedforward_delta_norm(kappa[k], self.p.wheelbase_m, self.p.max_steer_rad)
+                    self._feedforward_delta_norm(kappa[k], self._ff_wheelbase_m, _ms_ff)
                     for k in range(N)
                 ], dtype=float)
 
@@ -976,6 +999,8 @@ class MPCController:
         # so we can cap frame-to-frame steps when perception snaps back from a
         # silent dropout (e_lat was ≈0, now suddenly large).
         self._prev_elat_ramp: float = 0.0
+        # Delegate speed-dependent steering to solver for use in EKF/RLS
+        self._max_steer_at_speed = self.solver._max_steer_at_speed
         # Online effective wheelbase (RLS on heading prediction error)
         self._leff_theta: float = 1.0 / self.params.wheelbase_m  # θ = 1/L_eff
         self._leff_P: float = self.params.leff_initial_P          # RLS covariance (scalar)
@@ -1481,7 +1506,7 @@ class MPCController:
         delta_prev = self._leff_steering_prev
 
         # Regressor: h = v · δ_norm · δ_max · dt
-        h = v_prev * delta_prev * self.params.max_steer_rad * dt
+        h = v_prev * delta_prev * self._max_steer_at_speed(v_prev) * dt
 
         # Predicted heading (using current θ estimate)
         predicted_heading = (
@@ -1593,7 +1618,7 @@ class MPCController:
             R_meas = self.params.tire_ekf_measurement_noise
 
         # Compute slip angles using current estimates
-        delta_rad = last_delta_norm * self.params.max_steer_rad
+        delta_rad = last_delta_norm * self._max_steer_at_speed(v_x)
         alpha_f = delta_rad - (self._v_y_est + l_f * self._yaw_rate_est) / v_x
         alpha_r = -(self._v_y_est - l_r * self._yaw_rate_est) / v_x
 

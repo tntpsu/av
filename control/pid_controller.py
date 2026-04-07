@@ -260,6 +260,8 @@ class LateralController:
                  pp_steering_max_rate_per_s: float = 5.2,
                  pp_steering_max_jerk_per_s2: float = 40.0,
                  pp_steering_taper_gain: float = 3.0,
+                 pp_steering_reversal_taper_factor: float = 0.7,
+                 pp_steering_reversal_curvature_min: float = 0.003,
                  pp_curve_local_lookahead_floor_enabled: bool = False,
                  pp_curve_local_lookahead_floor_speed_table: Optional[list] = None,
                  pp_curve_local_shorten_slew_m_per_frame: float = 0.0,
@@ -531,6 +533,8 @@ class LateralController:
         self.pp_steering_max_rate_per_s = max(0.1, float(pp_steering_max_rate_per_s))
         self.pp_steering_max_jerk_per_s2 = max(0.1, float(pp_steering_max_jerk_per_s2))
         self.pp_steering_taper_gain = max(0.1, float(pp_steering_taper_gain))
+        self.pp_steering_reversal_taper_factor = max(0.0, min(1.0, float(pp_steering_reversal_taper_factor)))
+        self.pp_steering_reversal_curvature_min = max(0.0, float(pp_steering_reversal_curvature_min))
         self.pp_curve_local_lookahead_floor_enabled = bool(
             pp_curve_local_lookahead_floor_enabled
         )
@@ -838,14 +842,20 @@ class LateralController:
         current: float,
         current_rate_per_s: float,
         dt: float,
+        curvature_preview_signed: float = 0.0,
+        time_to_reversal_s: float = None,
     ) -> tuple:
         """Trapezoidal motion profile: one step toward demand.
 
-        Returns (new_steering, new_rate_per_s, profile_limited).
+        Returns (new_steering, new_rate_per_s, profile_limited, reversal_urgency).
 
         Uses demand-aware tapering (rate ∝ error) to prevent overshoot
         and ceiling-induced jerk spikes.  Replaces rate clamp + jerk clamp
         + ceiling clip with one unified profile.
+
+        Preview-aware: when an upcoming curvature reversal is detected
+        (preview sign ≠ demand sign), taper gain is reduced proportionally
+        to the urgency of the reversal (traversal_distance / time_available).
         """
         max_rate = self.pp_steering_max_rate_per_s
         max_jerk = self.pp_steering_max_jerk_per_s2
@@ -868,8 +878,27 @@ class LateralController:
         if error < 0:
             eff_error = -eff_error
 
+        # Preview-aware taper modulation
+        urgency = 0.0
+        effective_taper = taper
+        reversal_detected = (
+            abs(curvature_preview_signed) > self.pp_steering_reversal_curvature_min
+            and time_to_reversal_s is not None
+            and time_to_reversal_s > 0
+            and curvature_preview_signed * float(demand) < 0  # opposite signs
+            and abs(float(demand)) > 0.01
+        )
+        if reversal_detected:
+            # Physics: steering implied by preview curvature
+            # steering_normalized ≈ wheelbase × curvature (same mapping as PP)
+            preview_steer_est = self.pp_map_ff_wheelbase_m * curvature_preview_signed
+            preview_steer_est = max(-ceiling, min(ceiling, preview_steer_est))
+            traversal = abs(float(current) - preview_steer_est)
+            urgency = min(1.0, traversal / (time_to_reversal_s * max_rate))
+            effective_taper = taper * (1.0 - self.pp_steering_reversal_taper_factor * urgency)
+
         # Desired rate: proportional to error (tapers near target/ceiling)
-        desired_rate = taper * eff_error
+        desired_rate = effective_taper * eff_error
         desired_rate = max(-max_rate, min(max_rate, desired_rate))
 
         # Jerk limit: bound rate change per second
@@ -890,7 +919,7 @@ class LateralController:
         new_steering = float(current) + new_rate * dt
         new_steering = max(-ceiling, min(ceiling, new_steering))
 
-        return float(new_steering), float(new_rate), bool(limited)
+        return float(new_steering), float(new_rate), bool(limited), float(urgency)
 
     def compute_steering(self, current_heading: float, reference_point: dict,
                         vehicle_position: Optional[np.ndarray] = None,
@@ -1365,6 +1394,7 @@ class LateralController:
         pp_ref_jump_clamped = False
         pp_stale_hold_active = False
         pp_steering_jerk_limited = False
+        _profile_urgency = 0.0
         pp_curve_local_floor_active = False
         pp_curve_local_floor_m = 0.0
         pp_curve_local_lookahead_pre_floor = 0.0
@@ -2509,6 +2539,7 @@ class LateralController:
             ) = self._apply_steering_rate_limit_transition(max_steering_rate)
             steering_rate_limit_effective_smoothed = steering_rate_limit_effective
             pp_steering_jerk_limited = False
+            _profile_urgency = 0.0
 
             if (
                 self.pp_speed_norm_enabled
@@ -2561,12 +2592,17 @@ class LateralController:
 
             if self.pp_steering_profile_enabled:
                 # Unified motion profile: rate + jerk + ceiling in one step
-                steering, self._profile_rate_per_s, pp_steering_jerk_limited = (
+                _preview_signed = float(
+                    reference_point.get('curvature_preview_signed', 0.0) or 0.0
+                )
+                steering, self._profile_rate_per_s, pp_steering_jerk_limited, _profile_urgency = (
                     self._compute_steering_profile_step(
                         demand=rate_in,
                         current=self.last_steering,
                         current_rate_per_s=self._profile_rate_per_s,
                         dt=dt,
+                        curvature_preview_signed=_preview_signed,
+                        time_to_reversal_s=time_to_next_curve_start_s,
                     )
                 )
                 steering_before_limits = steering
@@ -3693,6 +3729,11 @@ class LateralController:
                 'pp_map_ff_applied': float(_pp_map_ff_applied),
                 'pp_steering_jerk_limited': float(pp_steering_jerk_limited) if pp_pipeline_bypass_active else 0.0,
                 'pp_effective_steering_rate': float(self._pp_last_steering_rate) if pp_pipeline_bypass_active else 0.0,
+                'pp_profile_reversal_urgency': float(_profile_urgency) if pp_pipeline_bypass_active else 0.0,
+                'pp_profile_reversal_detected': bool(_profile_urgency > 0.0) if pp_pipeline_bypass_active else False,
+                'pp_profile_effective_taper': float(
+                    self.pp_steering_taper_gain * (1.0 - self.pp_steering_reversal_taper_factor * _profile_urgency)
+                ) if pp_pipeline_bypass_active and self.pp_steering_profile_enabled else float(self.pp_steering_taper_gain),
                 'pp_pipeline_bypass_active': float(pp_pipeline_bypass_active),
                 'feedback_gain_scheduled': feedback_gain,
                 'total_error_scaled': total_error,
@@ -5396,6 +5437,8 @@ class VehicleController:
                  pp_steering_max_rate_per_s: float = 5.2,
                  pp_steering_max_jerk_per_s2: float = 40.0,
                  pp_steering_taper_gain: float = 3.0,
+                 pp_steering_reversal_taper_factor: float = 0.7,
+                 pp_steering_reversal_curvature_min: float = 0.003,
                  pp_curve_local_lookahead_floor_enabled: bool = False,
                  pp_curve_local_lookahead_floor_speed_table: Optional[list] = None,
                  pp_curve_local_shorten_slew_m_per_frame: float = 0.0,
@@ -5662,6 +5705,8 @@ class VehicleController:
             pp_steering_max_rate_per_s=pp_steering_max_rate_per_s,
             pp_steering_max_jerk_per_s2=pp_steering_max_jerk_per_s2,
             pp_steering_taper_gain=pp_steering_taper_gain,
+            pp_steering_reversal_taper_factor=pp_steering_reversal_taper_factor,
+            pp_steering_reversal_curvature_min=pp_steering_reversal_curvature_min,
             feedback_gain_min=feedback_gain_min,
             feedback_gain_max=feedback_gain_max,
             feedback_gain_curvature_min=feedback_gain_curvature_min,

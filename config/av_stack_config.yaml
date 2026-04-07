@@ -40,10 +40,12 @@ control:
     pp_max_steering_jerk: 18.0
     # Steering motion profile planner (replaces rate clamp + jerk clamp + ceiling clip)
     # Unified trapezoidal profile with demand-aware tapering — no overshoot, no ceiling jerk.
-    pp_steering_profile_enabled: false   # disabled until architecture fix: preview-aware demand planning
+    pp_steering_profile_enabled: true    # re-enabled with preview-aware reversal urgency (replaces rate+jerk+clip pipeline)
     pp_steering_max_rate_per_s: 5.2        # physical: 0.4/frame ÷ 0.077s/frame
-    pp_steering_max_jerk_per_s2: 40.0      # smooth ramp to max_rate in ~0.13s
+    pp_steering_max_jerk_per_s2: 20.0      # must stay below scoring gate (18.0 norm/s²)
     pp_steering_taper_gain: 3.0            # rate = min(max_rate, gain × |error|)
+    pp_steering_reversal_taper_factor: 0.7 # urgency=1.0 → taper drops to 30% of nominal
+    pp_steering_reversal_curvature_min: 0.003  # |κ_preview| below this → no reversal detection
     pp_curve_local_lookahead_floor_enabled: true
     # 2026-03-22: Attempted lower floor (to 2.5-3.0m) to eliminate floor rescue — reverted.
     # Lowering the floor increased adj_rmse 0.297→0.349m and C3 peak error 0.465→0.809m.

@@ -685,8 +685,8 @@ class TestSpeedControlScaling:
 
     # ── pp_map_ff_gain ──
 
-    def test_map_ff_gain_increases_at_highway(self):
-        """At 15 m/s, pp_map_ff_gain = 1.0 (increased from base 0.8)."""
+    def test_map_ff_gain_constant_at_highway(self):
+        """pp_map_ff_gain = 1.0 at all speeds (base=1.0, no speed scaling)."""
         val = _speed_control_derive(
             ("control.lateral", "pp_map_ff_gain"), 15.0
         )

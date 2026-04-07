@@ -727,6 +727,9 @@ class ControlCommand:
     pp_ref_jump_clamped: bool = False
     pp_stale_hold_active: bool = False
     pp_steering_jerk_limited: bool = False
+    pp_profile_reversal_detected: bool = False
+    pp_profile_reversal_urgency: float = 0.0
+    pp_profile_effective_taper: float = 0.0
     pp_effective_steering_rate: float = 0.0
     pp_pipeline_bypass_active: bool = False
     pp_speed_norm_scale: float = 1.0

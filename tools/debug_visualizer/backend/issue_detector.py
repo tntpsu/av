@@ -120,6 +120,7 @@ def build_causal_timeline(issues: List[Dict], failure_frame: Optional[int] = Non
         "tire_ekf_divergence": "control",
         "tire_stiffness_at_bounds": "control",
         "tire_understeer_anomaly": "control",
+        "steering_profile_reversal_slow": "control",
         "speed_exceeded_feasible": "control",
         "mpc_infeasible": "control",
         "mpc_solve_slow": "control",
@@ -3710,6 +3711,24 @@ def detect_issues(recording_path: Path, analyze_to_failure: bool = False) -> Dic
                         ),
                         "duration": int(run_len),
                     })
+
+            # Steering profile reversal tracking
+            if "control/pp_profile_reversal_urgency" in f:
+                _rev_urgency = f["control/pp_profile_reversal_urgency"]
+                _rev_detected = f["control/pp_profile_reversal_detected"]
+                for frame_idx in range(num_frames):
+                    if (float(_rev_detected[frame_idx]) > 0.5
+                            and float(_rev_urgency[frame_idx]) > 0.8):
+                        issues.append({
+                            "frame": int(frame_idx),
+                            "type": "steering_profile_reversal_slow",
+                            "severity": "medium",
+                            "description": (
+                                f"Steering profile reversal urgency "
+                                f"{float(_rev_urgency[frame_idx]):.2f} > 0.8"
+                            ),
+                            "urgency": float(_rev_urgency[frame_idx]),
+                        })
 
             # 10. ACC ISSUES (guarded on acc_active field presence and min activity)
             if 'vehicle/acc_active' in f:

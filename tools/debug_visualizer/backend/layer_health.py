@@ -42,6 +42,7 @@ from scoring_registry import (  # noqa: E402
     ACC_GAP_RMSE_GATE_M,
     TIRE_EKF_INNOVATION_DIVERGENCE,
     TIRE_SLIP_ANGLE_SATURATION_RAD,
+    PROFILE_REVERSAL_URGENCY_HIGH,
 )
 
 
@@ -295,6 +296,12 @@ class LayerHealthAnalyzer:
             kappa_abs = self._scalar(f, "control/curvature_primary_abs", i, default=0.0)
             if floor_active > 0.5 and abs(kappa_abs) < 0.002:
                 flags.append("pp_floor_formula_mismatch")
+
+        # Steering profile reversal urgency
+        _rev_urg = self._scalar(f, "control/pp_profile_reversal_urgency", i, default=0.0)
+        if _rev_urg > PROFILE_REVERSAL_URGENCY_HIGH:
+            score -= 0.05
+            flags.append("profile_reversal_high_urgency")
 
         return {"score": max(0.0, min(1.0, score)), "flags": flags}
 

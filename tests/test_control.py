@@ -3142,7 +3142,7 @@ def test_profile_reaches_demand_without_overshoot():
     rate = 0.0
     max_steer = 0.0
     for _ in range(50):
-        current, rate, _ = ctrl._compute_steering_profile_step(demand, current, rate, dt)
+        current, rate, _, _ = ctrl._compute_steering_profile_step(demand, current, rate, dt)
         max_steer = max(max_steer, current)
     assert max_steer <= demand + 0.01, f"Overshoot: max={max_steer:.3f} > demand={demand}"
     assert abs(current - demand) < 0.05, f"Didn't reach demand: current={current:.3f}"
@@ -3155,7 +3155,7 @@ def test_profile_respects_ceiling():
     current = 0.0
     rate = 0.0
     for _ in range(50):
-        current, rate, _ = ctrl._compute_steering_profile_step(0.9, current, rate, dt)
+        current, rate, _, _ = ctrl._compute_steering_profile_step(0.9, current, rate, dt)
     assert current <= 0.7 + 1e-6, f"Exceeded ceiling: {current:.3f}"
 
 
@@ -3167,7 +3167,7 @@ def test_profile_no_jerk_at_ceiling():
     rate = 0.0
     rates = []
     for _ in range(50):
-        current, rate, _ = ctrl._compute_steering_profile_step(0.9, current, rate, dt)
+        current, rate, _, _ = ctrl._compute_steering_profile_step(0.9, current, rate, dt)
         rates.append(rate)
     # Compute jerk from rate changes
     import numpy as np
@@ -3184,10 +3184,10 @@ def test_profile_tapers_near_demand():
     rate = 0.0
     # Run until close to demand
     for _ in range(20):
-        current, rate, _ = ctrl._compute_steering_profile_step(0.5, current, rate, dt)
+        current, rate, _, _ = ctrl._compute_steering_profile_step(0.5, current, rate, dt)
     rate_near_demand = abs(rate)
     # Rate when far from demand
-    current2, rate2, _ = ctrl._compute_steering_profile_step(0.5, 0.0, 0.0, dt)
+    current2, rate2, _, _ = ctrl._compute_steering_profile_step(0.5, 0.0, 0.0, dt)
     rate_far = abs(rate2)
     # Rate near demand should be less than rate far from demand (after initial jerk ramp)
     assert rate_near_demand < rate_far + 0.5, "Rate should taper near demand"
@@ -3202,7 +3202,7 @@ def test_profile_jerk_bounded():
     rates = []
     # Sharp demand change: 0 → 0.6
     for _ in range(30):
-        current, rate, _ = ctrl._compute_steering_profile_step(0.6, current, rate, dt)
+        current, rate, _, _ = ctrl._compute_steering_profile_step(0.6, current, rate, dt)
         rates.append(rate)
     import numpy as np
     rates = np.array(rates)
@@ -3217,11 +3217,11 @@ def test_profile_dt_independent():
     # 13 FPS: 13 steps × 0.077s = 1.0s
     c1, r1 = 0.0, 0.0
     for _ in range(13):
-        c1, r1, _ = ctrl1._compute_steering_profile_step(0.5, c1, r1, 0.077)
+        c1, r1, _, _ = ctrl1._compute_steering_profile_step(0.5, c1, r1, 0.077)
     # 26 FPS: 26 steps × 0.0385s = 1.0s
     c2, r2 = 0.0, 0.0
     for _ in range(26):
-        c2, r2, _ = ctrl2._compute_steering_profile_step(0.5, c2, r2, 0.0385)
+        c2, r2, _, _ = ctrl2._compute_steering_profile_step(0.5, c2, r2, 0.0385)
     assert abs(c1 - c2) < 0.05, f"dt-dependent: 13FPS={c1:.3f}, 26FPS={c2:.3f}"
 
 
@@ -3234,10 +3234,10 @@ def test_profile_reversal_smooth():
     rates = []
     # Ramp to +0.3, then flip to -0.3
     for _ in range(15):
-        current, rate, _ = ctrl._compute_steering_profile_step(0.3, current, rate, dt)
+        current, rate, _, _ = ctrl._compute_steering_profile_step(0.3, current, rate, dt)
         rates.append(rate)
     for _ in range(30):
-        current, rate, _ = ctrl._compute_steering_profile_step(-0.3, current, rate, dt)
+        current, rate, _, _ = ctrl._compute_steering_profile_step(-0.3, current, rate, dt)
         rates.append(rate)
     import numpy as np
     jerk = np.abs(np.diff(np.array(rates))) / dt
@@ -3250,6 +3250,165 @@ def test_profile_legacy_disabled():
     ref = _pp_ref(0.0, 10.0)
     meta = ctrl.compute_steering(0.0, ref, return_metadata=True, current_speed=5.0, dt=0.077)
     assert abs(meta['steering']) < 0.05  # near-straight reference
+
+
+# ── Preview-aware reversal tests ────────────────────────────
+
+
+def test_profile_reversal_preview_reduces_taper():
+    """When a reversal is imminent, urgency > 0 reduces effective taper."""
+    ctrl = _make_profile_controller()
+    dt = 0.077
+    demand = 0.3
+    current = 0.1
+    rate = 1.0
+
+    # Without preview: no reversal signals
+    _, _, _, urg_none = ctrl._compute_steering_profile_step(
+        demand, current, rate, dt,
+    )
+    s_none, _, _, _ = ctrl._compute_steering_profile_step(
+        demand, current, rate, dt,
+    )
+
+    # With preview: imminent reversal (opposite sign curvature, 0.3s away)
+    s_rev, _, _, urg_rev = ctrl._compute_steering_profile_step(
+        demand, current, rate, dt,
+        curvature_preview_signed=-0.02,
+        time_to_reversal_s=0.3,
+    )
+
+    assert urg_none == 0.0, "No preview → urgency must be 0"
+    assert urg_rev > 0.0, f"Reversal preview → urgency must be > 0, got {urg_rev:.3f}"
+    # With reduced taper, less aggressive chase toward demand
+    assert abs(s_rev - current) <= abs(s_none - current) + 1e-6, (
+        "Reversal should reduce or equal step size"
+    )
+
+
+def test_profile_reversal_urgency_zero_when_far():
+    """Far reversal (5s away) → urgency ≈ 0, behavior unchanged."""
+    ctrl = _make_profile_controller()
+    dt = 0.077
+
+    # Baseline: no preview
+    s_base, _, _, _ = ctrl._compute_steering_profile_step(0.3, 0.0, 0.0, dt)
+
+    # Far reversal: 5s away
+    s_far, _, _, urg = ctrl._compute_steering_profile_step(
+        0.3, 0.0, 0.0, dt,
+        curvature_preview_signed=-0.005,
+        time_to_reversal_s=5.0,
+    )
+
+    # Urgency should be very low (traversal ~0.3 / (5.0 * 5.2) ≈ 0.012)
+    assert urg < 0.05, f"Far reversal urgency too high: {urg:.3f}"
+    # Behavior should be nearly identical to no-preview
+    assert abs(s_far - s_base) < 0.01, f"Far reversal changed behavior: {abs(s_far - s_base):.4f}"
+
+
+def test_profile_reversal_urgency_high_when_imminent():
+    """Imminent reversal (0.1s, large traversal) → urgency near 1.0."""
+    ctrl = _make_profile_controller()
+    dt = 0.077
+
+    _, _, _, urg = ctrl._compute_steering_profile_step(
+        0.3, 0.2, 2.0, dt,
+        curvature_preview_signed=-0.025,  # R40 left
+        time_to_reversal_s=0.1,
+    )
+
+    # traversal ≈ |0.2 - (-0.0625)| = 0.2625, required_rate = 0.2625/0.1 = 2.625
+    # urgency = 2.625 / 5.2 ≈ 0.50
+    assert urg > 0.3, f"Imminent reversal urgency too low: {urg:.3f}"
+
+
+def test_profile_no_reversal_when_signs_agree():
+    """Same-sign preview → no modulation, urgency = 0."""
+    ctrl = _make_profile_controller()
+    dt = 0.077
+
+    s_base, _, _, _ = ctrl._compute_steering_profile_step(0.3, 0.0, 0.0, dt)
+    s_agree, _, _, urg = ctrl._compute_steering_profile_step(
+        0.3, 0.0, 0.0, dt,
+        curvature_preview_signed=0.02,  # same sign as demand
+        time_to_reversal_s=0.5,
+    )
+
+    assert urg == 0.0, f"Same-sign preview should have 0 urgency, got {urg:.3f}"
+    assert abs(s_agree - s_base) < 1e-9, "Same-sign preview should not change behavior"
+
+
+def test_profile_s_loop_reversal_scenario():
+    """R40 right→left: ramp +0.3 then flip with 0.5s preview warning.
+
+    Must: (1) no jerk spike, (2) reach -0.3 within 2s.
+    """
+    ctrl = _make_profile_controller()
+    dt = 0.077
+    current = 0.0
+    rate = 0.0
+    rates = []
+
+    # Phase 1: ramp toward +0.3 for 0.5s (7 frames) — no reversal yet
+    for _ in range(7):
+        current, rate, _, _ = ctrl._compute_steering_profile_step(
+            0.3, current, rate, dt,
+        )
+        rates.append(rate)
+
+    # Phase 2: 0.5s before reversal — preview signals opposite curvature
+    for i in range(7):
+        time_remaining = 0.5 - i * dt
+        current, rate, _, urg = ctrl._compute_steering_profile_step(
+            0.3, current, rate, dt,
+            curvature_preview_signed=-0.025,  # R40 left
+            time_to_reversal_s=max(0.01, time_remaining),
+        )
+        rates.append(rate)
+
+    # Phase 3: demand flips to -0.3 (reversal happened)
+    for _ in range(26):  # ~2s
+        current, rate, _, _ = ctrl._compute_steering_profile_step(
+            -0.3, current, rate, dt,
+        )
+        rates.append(rate)
+
+    # Check 1: jerk bounded throughout
+    import numpy as np
+    jerk = np.abs(np.diff(np.array(rates))) / dt
+    assert np.max(jerk) <= 40.0 + 1.0, f"Reversal jerk spike: {np.max(jerk):.1f}"
+
+    # Check 2: reaches -0.3 within 2s total
+    assert abs(current - (-0.3)) < 0.1, (
+        f"Didn't reach -0.3 after reversal: current={current:.3f}"
+    )
+
+
+def test_profile_constant_radius_regression():
+    """Constant demand + same-sign preview → identical to original, no urgency."""
+    ctrl = _make_profile_controller()
+    dt = 0.077
+    demand = 0.3
+
+    # Run without preview
+    c1, r1 = 0.0, 0.0
+    for _ in range(50):
+        c1, r1, _, _ = ctrl._compute_steering_profile_step(demand, c1, r1, dt)
+
+    # Run with same-sign preview (should be identical)
+    c2, r2 = 0.0, 0.0
+    urgencies = []
+    for _ in range(50):
+        c2, r2, _, urg = ctrl._compute_steering_profile_step(
+            demand, c2, r2, dt,
+            curvature_preview_signed=0.02,
+            time_to_reversal_s=1.0,
+        )
+        urgencies.append(urg)
+
+    assert abs(c1 - c2) < 1e-9, f"Same-sign preview changed result: {c1:.6f} vs {c2:.6f}"
+    assert all(u == 0.0 for u in urgencies), "Same-sign preview produced non-zero urgency"
 
 
 # ── VehicleController param forwarding test ───────────────────
