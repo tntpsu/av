@@ -256,6 +256,10 @@ class LateralController:
                  pp_stale_decay: float = 0.98,
                  pp_max_steering_rate: float = 0.4,
                  pp_max_steering_jerk: float = 30.0,
+                 pp_steering_profile_enabled: bool = False,
+                 pp_steering_max_rate_per_s: float = 5.2,
+                 pp_steering_max_jerk_per_s2: float = 40.0,
+                 pp_steering_taper_gain: float = 3.0,
                  pp_curve_local_lookahead_floor_enabled: bool = False,
                  pp_curve_local_lookahead_floor_speed_table: Optional[list] = None,
                  pp_curve_local_shorten_slew_m_per_frame: float = 0.0,
@@ -520,6 +524,10 @@ class LateralController:
         self.pp_stale_decay = float(np.clip(pp_stale_decay, 0.5, 1.0))
         self.pp_max_steering_rate = max(0.05, float(pp_max_steering_rate))
         self.pp_max_steering_jerk = max(0.0, float(pp_max_steering_jerk))
+        self.pp_steering_profile_enabled = bool(pp_steering_profile_enabled)
+        self.pp_steering_max_rate_per_s = max(0.1, float(pp_steering_max_rate_per_s))
+        self.pp_steering_max_jerk_per_s2 = max(0.1, float(pp_steering_max_jerk_per_s2))
+        self.pp_steering_taper_gain = max(0.1, float(pp_steering_taper_gain))
         self.pp_curve_local_lookahead_floor_enabled = bool(
             pp_curve_local_lookahead_floor_enabled
         )
@@ -561,6 +569,7 @@ class LateralController:
         self._pp_last_valid_steering = 0.0
         self._pp_stale_frames = 0
         self._pp_last_steering_rate = 0.0
+        self._profile_rate_per_s = 0.0
         self._pp_last_local_lookahead = None
         self.smoothed_path_curvature = 0.0
         self.feedback_gain_min = feedback_gain_min
@@ -805,6 +814,66 @@ class LateralController:
         ld_speed = self.pp_curve_local_floor_speed_time_constant_s * max(0.0, float(speed_mps))
         ld_min = self.pp_curve_local_floor_absolute_min_m
         return float(max(min(ld_curvature, ld_speed), ld_min))
+
+    def _compute_steering_profile_step(
+        self,
+        demand: float,
+        current: float,
+        current_rate_per_s: float,
+        dt: float,
+    ) -> tuple:
+        """Trapezoidal motion profile: one step toward demand.
+
+        Returns (new_steering, new_rate_per_s, profile_limited).
+
+        Uses demand-aware tapering (rate ∝ error) to prevent overshoot
+        and ceiling-induced jerk spikes.  Replaces rate clamp + jerk clamp
+        + ceiling clip with one unified profile.
+        """
+        max_rate = self.pp_steering_max_rate_per_s
+        max_jerk = self.pp_steering_max_jerk_per_s2
+        taper = self.pp_steering_taper_gain
+        ceiling = self.max_steering
+
+        # Effective demand: clip to ceiling
+        eff_demand = max(-ceiling, min(ceiling, float(demand)))
+
+        # Error to demand
+        error = eff_demand - float(current)
+
+        # Distance to ceiling (whichever bound is closer in the direction of travel)
+        if error >= 0:
+            ceil_margin = ceiling - float(current)
+        else:
+            ceil_margin = float(current) + ceiling  # distance to -ceiling
+        # Use the smaller of demand-error and ceiling-margin
+        eff_error = min(abs(error), abs(ceil_margin))
+        if error < 0:
+            eff_error = -eff_error
+
+        # Desired rate: proportional to error (tapers near target/ceiling)
+        desired_rate = taper * eff_error
+        desired_rate = max(-max_rate, min(max_rate, desired_rate))
+
+        # Jerk limit: bound rate change per second
+        if dt > 1e-6:
+            rate_delta = desired_rate - float(current_rate_per_s)
+            max_rate_delta = max_jerk * dt
+            limited = abs(rate_delta) > max_rate_delta + 1e-9
+            if limited:
+                rate_delta = max(-max_rate_delta, min(max_rate_delta, rate_delta))
+            new_rate = float(current_rate_per_s) + rate_delta
+        else:
+            new_rate = desired_rate
+            limited = False
+
+        new_rate = max(-max_rate, min(max_rate, new_rate))
+
+        # Step
+        new_steering = float(current) + new_rate * dt
+        new_steering = max(-ceiling, min(ceiling, new_steering))
+
+        return float(new_steering), float(new_rate), bool(limited)
 
     def compute_steering(self, current_heading: float, reference_point: dict,
                         vehicle_position: Optional[np.ndarray] = None,
@@ -2471,37 +2540,56 @@ class LateralController:
                 steering_before_limits = float(steering_before_limits) + _pp_map_ff_applied
 
             rate_in = steering_before_limits
-            desired_rate = steering_before_limits - self.last_steering
-            steering_rate_limit_requested_delta = abs(desired_rate)
+            steering_rate_limit_requested_delta = abs(steering_before_limits - self.last_steering)
 
-            if not hasattr(self, '_steering_rate_limit_active'):
-                max_initial_rate = 0.25
-                desired_rate = np.clip(desired_rate, -max_initial_rate, max_initial_rate)
+            if self.pp_steering_profile_enabled:
+                # Unified motion profile: rate + jerk + ceiling in one step
+                steering, self._profile_rate_per_s, pp_steering_jerk_limited = (
+                    self._compute_steering_profile_step(
+                        demand=rate_in,
+                        current=self.last_steering,
+                        current_rate_per_s=self._profile_rate_per_s,
+                        dt=dt,
+                    )
+                )
+                steering_before_limits = steering
+                effective_rate = steering - self.last_steering
+                steering_rate_limited_active = abs(steering_before_limits - rate_in) > 1e-6
+                steering_rate_limited_delta = abs(steering_before_limits - rate_in)
+                self._pp_last_steering_rate = float(effective_rate)
                 self._steering_rate_limit_active = True
-                self._pp_last_steering_rate = desired_rate
-
-            if self.pp_max_steering_jerk > 0.0 and dt > 0.0:
-                max_rate_delta = self.pp_max_steering_jerk * dt * dt
-                rate_delta = desired_rate - self._pp_last_steering_rate
-                if abs(rate_delta) > max_rate_delta:
-                    rate_delta = np.clip(rate_delta, -max_rate_delta, max_rate_delta)
-                    pp_steering_jerk_limited = True
-                effective_rate = self._pp_last_steering_rate + rate_delta
             else:
-                effective_rate = desired_rate
+                # Legacy pipeline (rate clamp + jerk clamp + ceiling clip)
+                desired_rate = steering_before_limits - self.last_steering
 
-            effective_rate = np.clip(
-                effective_rate,
-                -steering_rate_limit_effective,
-                steering_rate_limit_effective,
-            )
-            max_rate_to_ceil = self.max_steering - self.last_steering
-            min_rate_to_floor = -self.max_steering - self.last_steering
-            effective_rate = np.clip(effective_rate, min_rate_to_floor, max_rate_to_ceil)
+                if not hasattr(self, '_steering_rate_limit_active'):
+                    max_initial_rate = 0.25
+                    desired_rate = np.clip(desired_rate, -max_initial_rate, max_initial_rate)
+                    self._steering_rate_limit_active = True
+                    self._pp_last_steering_rate = desired_rate
 
-            steering_before_limits = self.last_steering + effective_rate
-            steering_rate_limited_delta = abs(steering_before_limits - rate_in)
-            steering_rate_limited_active = steering_rate_limited_delta > 1e-6
+                if self.pp_max_steering_jerk > 0.0 and dt > 0.0:
+                    max_rate_delta = self.pp_max_steering_jerk * dt * dt
+                    rate_delta = desired_rate - self._pp_last_steering_rate
+                    if abs(rate_delta) > max_rate_delta:
+                        rate_delta = np.clip(rate_delta, -max_rate_delta, max_rate_delta)
+                        pp_steering_jerk_limited = True
+                    effective_rate = self._pp_last_steering_rate + rate_delta
+                else:
+                    effective_rate = desired_rate
+
+                effective_rate = np.clip(
+                    effective_rate,
+                    -steering_rate_limit_effective,
+                    steering_rate_limit_effective,
+                )
+                max_rate_to_ceil = self.max_steering - self.last_steering
+                min_rate_to_floor = -self.max_steering - self.last_steering
+                effective_rate = np.clip(effective_rate, min_rate_to_floor, max_rate_to_ceil)
+
+                steering_before_limits = self.last_steering + effective_rate
+                steering_rate_limited_delta = abs(steering_before_limits - rate_in)
+                steering_rate_limited_active = steering_rate_limited_delta > 1e-6
 
             steering_post_rate_limit = steering_before_limits
             steering_rate_limit_margin = steering_rate_limit_effective - steering_rate_limit_requested_delta
@@ -2516,13 +2604,17 @@ class LateralController:
             # Skip sign flip override -- PP doesn't have sign lag
             steering_post_sign_flip = steering_before_limits
 
-            # Hard clip (safety, always active)
-            steering = np.clip(
-                steering_before_limits,
-                -self.max_steering,
-                self.max_steering,
-            )
-            steering_hard_clip_delta = abs(steering - steering_before_limits)
+            if not self.pp_steering_profile_enabled:
+                # Hard clip (safety, always active) — legacy only
+                # Profile mode handles ceiling internally
+                steering = np.clip(
+                    steering_before_limits,
+                    -self.max_steering,
+                    self.max_steering,
+                )
+            else:
+                steering = steering_before_limits
+            steering_hard_clip_delta = abs(steering - steering_post_sign_flip)
             steering_hard_clip_active = steering_hard_clip_delta > 1e-6
             steering_post_hard_clip = steering
             self._pp_last_steering_rate = float(steering - self.last_steering)
@@ -5283,6 +5375,10 @@ class VehicleController:
                  pp_stale_decay: float = 0.98,
                  pp_max_steering_rate: float = 0.4,
                  pp_max_steering_jerk: float = 30.0,
+                 pp_steering_profile_enabled: bool = False,
+                 pp_steering_max_rate_per_s: float = 5.2,
+                 pp_steering_max_jerk_per_s2: float = 40.0,
+                 pp_steering_taper_gain: float = 3.0,
                  pp_curve_local_lookahead_floor_enabled: bool = False,
                  pp_curve_local_lookahead_floor_speed_table: Optional[list] = None,
                  pp_curve_local_shorten_slew_m_per_frame: float = 0.0,

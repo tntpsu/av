@@ -3066,3 +3066,138 @@ def test_floor_formula_zero_curvature_safe():
     result = ctrl._compute_pp_curve_local_floor_formula(10.0, 0.0)
     assert result > 0.0
     assert result < 100.0  # sanity: shouldn't be astronomical
+
+
+# ── Steering motion profile tests ─────────────────────────────
+
+
+def _make_profile_controller(**overrides):
+    defaults = dict(
+        kp=1.0, ki=0.0, kd=0.1, control_mode="pure_pursuit",
+        pp_feedback_gain=0.0, max_steering=0.7,
+        pp_steering_profile_enabled=True,
+        pp_steering_max_rate_per_s=5.2,
+        pp_steering_max_jerk_per_s2=40.0,
+        pp_steering_taper_gain=3.0,
+    )
+    defaults.update(overrides)
+    return LateralController(**defaults)
+
+
+def test_profile_reaches_demand_without_overshoot():
+    """Steering ramps to demand=0.5 and never exceeds it."""
+    ctrl = _make_profile_controller()
+    dt = 0.077
+    demand = 0.5
+    current = 0.0
+    rate = 0.0
+    max_steer = 0.0
+    for _ in range(50):
+        current, rate, _ = ctrl._compute_steering_profile_step(demand, current, rate, dt)
+        max_steer = max(max_steer, current)
+    assert max_steer <= demand + 0.01, f"Overshoot: max={max_steer:.3f} > demand={demand}"
+    assert abs(current - demand) < 0.05, f"Didn't reach demand: current={current:.3f}"
+
+
+def test_profile_respects_ceiling():
+    """Demand beyond ceiling (0.7) → output never exceeds ceiling."""
+    ctrl = _make_profile_controller()
+    dt = 0.077
+    current = 0.0
+    rate = 0.0
+    for _ in range(50):
+        current, rate, _ = ctrl._compute_steering_profile_step(0.9, current, rate, dt)
+    assert current <= 0.7 + 1e-6, f"Exceeded ceiling: {current:.3f}"
+
+
+def test_profile_no_jerk_at_ceiling():
+    """No jerk spike when steering approaches ceiling."""
+    ctrl = _make_profile_controller()
+    dt = 0.077
+    current = 0.0
+    rate = 0.0
+    rates = []
+    for _ in range(50):
+        current, rate, _ = ctrl._compute_steering_profile_step(0.9, current, rate, dt)
+        rates.append(rate)
+    # Compute jerk from rate changes
+    import numpy as np
+    rates = np.array(rates)
+    jerk = np.diff(rates) / dt
+    assert np.max(np.abs(jerk)) < 45.0, f"Jerk spike: {np.max(np.abs(jerk)):.1f}/s²"
+
+
+def test_profile_tapers_near_demand():
+    """Rate decreases as steering approaches demand."""
+    ctrl = _make_profile_controller()
+    dt = 0.077
+    current = 0.0
+    rate = 0.0
+    # Run until close to demand
+    for _ in range(20):
+        current, rate, _ = ctrl._compute_steering_profile_step(0.5, current, rate, dt)
+    rate_near_demand = abs(rate)
+    # Rate when far from demand
+    current2, rate2, _ = ctrl._compute_steering_profile_step(0.5, 0.0, 0.0, dt)
+    rate_far = abs(rate2)
+    # Rate near demand should be less than rate far from demand (after initial jerk ramp)
+    assert rate_near_demand < rate_far + 0.5, "Rate should taper near demand"
+
+
+def test_profile_jerk_bounded():
+    """|jerk| stays below max_jerk_per_s2 on all frames."""
+    ctrl = _make_profile_controller()
+    dt = 0.077
+    current = 0.0
+    rate = 0.0
+    rates = []
+    # Sharp demand change: 0 → 0.6
+    for _ in range(30):
+        current, rate, _ = ctrl._compute_steering_profile_step(0.6, current, rate, dt)
+        rates.append(rate)
+    import numpy as np
+    rates = np.array(rates)
+    jerk = np.abs(np.diff(rates)) / dt
+    assert np.max(jerk) <= 40.0 + 1.0, f"Jerk exceeded: {np.max(jerk):.1f} > 40.0"
+
+
+def test_profile_dt_independent():
+    """Same demand at different dt → similar final steering after same wall time."""
+    ctrl1 = _make_profile_controller()
+    ctrl2 = _make_profile_controller()
+    # 13 FPS: 13 steps × 0.077s = 1.0s
+    c1, r1 = 0.0, 0.0
+    for _ in range(13):
+        c1, r1, _ = ctrl1._compute_steering_profile_step(0.5, c1, r1, 0.077)
+    # 26 FPS: 26 steps × 0.0385s = 1.0s
+    c2, r2 = 0.0, 0.0
+    for _ in range(26):
+        c2, r2, _ = ctrl2._compute_steering_profile_step(0.5, c2, r2, 0.0385)
+    assert abs(c1 - c2) < 0.05, f"dt-dependent: 13FPS={c1:.3f}, 26FPS={c2:.3f}"
+
+
+def test_profile_reversal_smooth():
+    """Demand flips sign → smooth reversal without jerk spike."""
+    ctrl = _make_profile_controller()
+    dt = 0.077
+    current = 0.0
+    rate = 0.0
+    rates = []
+    # Ramp to +0.3, then flip to -0.3
+    for _ in range(15):
+        current, rate, _ = ctrl._compute_steering_profile_step(0.3, current, rate, dt)
+        rates.append(rate)
+    for _ in range(30):
+        current, rate, _ = ctrl._compute_steering_profile_step(-0.3, current, rate, dt)
+        rates.append(rate)
+    import numpy as np
+    jerk = np.abs(np.diff(np.array(rates))) / dt
+    assert np.max(jerk) <= 40.0 + 1.0, f"Reversal jerk: {np.max(jerk):.1f}"
+
+
+def test_profile_legacy_disabled():
+    """profile_enabled=False → old pipeline used (jerk_limited stays False for simple demand)."""
+    ctrl = _make_profile_controller(pp_steering_profile_enabled=False)
+    ref = _pp_ref(0.0, 10.0)
+    meta = ctrl.compute_steering(0.0, ref, return_metadata=True, current_speed=5.0, dt=0.077)
+    assert abs(meta['steering']) < 0.05  # near-straight reference

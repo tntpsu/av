@@ -925,6 +925,18 @@ class AVStack:
             pp_stale_decay=lateral_cfg.get('pp_stale_decay', 0.98),
             pp_max_steering_rate=lateral_cfg.get('pp_max_steering_rate', 0.4),
             pp_max_steering_jerk=lateral_cfg.get('pp_max_steering_jerk', 30.0),
+            pp_steering_profile_enabled=bool(
+                lateral_cfg.get('pp_steering_profile_enabled', False)
+            ),
+            pp_steering_max_rate_per_s=float(
+                lateral_cfg.get('pp_steering_max_rate_per_s', 5.2)
+            ),
+            pp_steering_max_jerk_per_s2=float(
+                lateral_cfg.get('pp_steering_max_jerk_per_s2', 40.0)
+            ),
+            pp_steering_taper_gain=float(
+                lateral_cfg.get('pp_steering_taper_gain', 3.0)
+            ),
             pp_curve_local_lookahead_floor_enabled=bool(
                 lateral_cfg.get('pp_curve_local_lookahead_floor_enabled', False)
             ),
