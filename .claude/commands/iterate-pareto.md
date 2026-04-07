@@ -21,7 +21,7 @@ Oscillation Growth                14.7        3/5              sweeping (-6.8)
 ...
 ```
 
-## Step 2 — Select target
+## Step 2 — Select target and classify fix level
 
 Pick the #1 Pareto item (highest Σ pts lost). Identify:
 - **Target track**: the track where this deduction is WORST
@@ -30,11 +30,55 @@ Pick the #1 Pareto item (highest Σ pts lost). Identify:
 
 If the target track has a stale recording, run `/e2e <track>` first to get fresh data.
 
+### 2a — Fix-level classification (MANDATORY before dispatch)
+
+Before dispatching to `/iterate`, classify the fix level. The hierarchy is:
+1. **ARCHITECTURE** — component interactions, signal paths, what data drives decisions
+2. **CODE PATCH** — logic changes within existing architecture
+3. **CONFIG** — adding/changing config knobs
+4. **TUNING** — adjusting existing numeric params within their intended range
+
+**Quick classification rules (from Pareto data alone, no full diagnosis needed):**
+- Symptom hits **4+ tracks** at similar severity → likely ARCHITECTURE or CODE PATCH (systemic)
+- Symptom is in **Trajectory** layer with "late turn-in" issues → ARCHITECTURE (lookahead/anticipation)
+- Symptom is in **Control** layer with "oscillation growth" on curved tracks → investigate if scoring artifact vs real issue
+- Symptom is in **1-2 tracks** only → may be TUNING or CONFIG
+- Prior `/iterate` cycles failed to fix this deduction → escalate one level
+
+### 2b — Architecture gate
+
+**If fix level is ARCHITECTURE:**
+- Do NOT dispatch to `/iterate` (which will waste E2E cycles trying to tune)
+- Instead, recommend `/plan-feature` with the Pareto evidence
+- Present the architecture issue and ask the user
+
+```
+PARETO #1 CLASSIFIED AS ARCHITECTURE
+════════════════════════════════════════
+Issue: <deduction_name> — <Σ pts> across <N> tracks
+Classification: ARCHITECTURE
+Reason: <why architecture, not tuning>
+
+This issue cannot be fixed by tuning existing parameters.
+→ Recommended: /plan-feature <description>
+→ Skip to Pareto #2? (if actionable at lower fix level)
+════════════════════════════════════════
+```
+
+Wait for user decision before continuing. Options:
+- Run `/plan-feature` for the architecture fix
+- Skip to next Pareto item
+- Override and attempt `/iterate` anyway
+
+**If fix level is CODE PATCH, CONFIG, or TUNING:**
+- Proceed to Step 3 (dispatch to `/iterate`)
+
 Present:
 ```
 PARETO-DRIVEN TARGET
 ════════════════════════════════════════
 Pareto #1: <deduction_name> — <Σ pts> across <N> tracks
+Fix level: <TUNING/CONFIG/CODE PATCH>
 Worst track: <track> (<pts> pts lost)
 Target: /iterate <track> <layer>
 ════════════════════════════════════════
@@ -75,6 +119,7 @@ Cross-track benefit: <list of other tracks improved>
 - Max cycles reached
 - /iterate failed with safety guard (e-stop, >5pt regression)
 - All tracks have all layers ≥ 95
+- All remaining Pareto items are classified ARCHITECTURE (need /plan-feature, not /iterate)
 
 **Continue if:**
 - Top-of-pareto Σ pts ≥ 5
