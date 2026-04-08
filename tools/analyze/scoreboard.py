@@ -33,6 +33,8 @@ def extract_scores(recordings_dir: Path, filter_track: str = None,
             summary = analyze_recording_summary(rec, analyze_to_failure=True)
             track_id = (summary.get("run_intent") or {}).get("track_id") or "unknown"
 
+            if track_id == "unknown":
+                continue  # skip crashed/empty recordings
             if filter_track and track_id != filter_track:
                 continue
             if not specific_file and not limit and track_id in seen_tracks:
@@ -73,7 +75,7 @@ def extract_scores(recordings_dir: Path, filter_track: str = None,
                 "lat_rmse": round(summary.get("path_tracking", {}).get(
                     "lateral_error_rmse", 0), 3),
                 "centered_pct": round(summary.get("path_tracking", {}).get(
-                    "centeredness_pct", 0), 1),
+                    "time_in_lane_centered", 0), 1),
                 "osc_ded": round(osc_ded, 1),
                 "estops": int(c.get("emergency_stops", 0)),
                 "deductions": deductions,
@@ -182,11 +184,31 @@ def print_scoreboard(results: list):
 
         print("────────────────────────────────────────────────────────────────────")
 
+    # ── Compact comparison table ──────────────────────────────────────────
     n = len(results)
-    print(f"\nSUMMARY: {all_layers_pass}/{n} tracks all layers ≥ 95"
-          f"  │  {sum(1 for r in results if r['score'] >= 95)}/{n} overall ≥ 95")
-    print(f"         Comfort: {all_comfort_clear}/{n} all comfort clear"
-          f"  │  E-stops: {total_estops} total")
+    # Sort by score descending for the table
+    table_results = sorted(results, key=lambda r: -r["score"])
+
+    print("\n\nSCORE TABLE")
+    print("═══════════════════════════════════════════════════════════════════════════════════════════")
+    print(f"{'Track':<18s} {'Score':>5s}  {'Time':>5s}  {'RMSE':>5s}  {'Ctr%':>4s}  "
+          f"{'Safe':>4s}  {'Perc':>4s}  {'Traj':>4s}  {'Ctrl':>4s}  {'SigI':>4s}  "
+          f"{'StJrk':>5s}  {'E-st':>4s}")
+    print("─" * 93)
+    for r in table_results:
+        ls = r["layers"]
+        gate = "✓" if r["score"] >= 95 else "✗"
+        print(f"{r['track']:<18s} {r['score']:5.1f}{gate} "
+              f"{r['duration_s']:5.0f}s {r['lat_rmse']:5.3f} {r['centered_pct']:4.0f}%  "
+              f"{ls.get('Safety', 0):4.0f}  {ls.get('Perception', 0):4.0f}  "
+              f"{ls.get('Trajectory', 0):4.0f}  {ls.get('Control', 0):4.0f}  "
+              f"{ls.get('SignalIntegrity', 0):4.0f}  "
+              f"{r['steer_jerk']:5.1f}  {r['estops']:4d}")
+    print("─" * 93)
+    print(f"{'SUMMARY':<18s}       "
+          f"{all_layers_pass}/{n} all layers ≥ 95  │  "
+          f"{sum(1 for r in results if r['score'] >= 95)}/{n} overall ≥ 95  │  "
+          f"Comfort: {all_comfort_clear}/{n}  │  E-stops: {total_estops}")
 
     # Pareto top 3
     if all_deductions:
