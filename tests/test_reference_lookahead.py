@@ -8,6 +8,7 @@ from trajectory.utils import (
     build_local_curve_reference,
     compute_curve_anticipation_score,
     compute_curve_phase_scheduler,
+    compute_map_predictive_lookahead,
     compute_reference_lookahead,
 )
 
@@ -2911,3 +2912,83 @@ def test_contraction_rate_proportional_to_ld_squared():
     r6 = _compute_max_contraction_rate(8.0, 6.0, _CONTRACTION_CFG)
     # r6/r4 should be ~(6/4)² = 2.25 (before clamping)
     assert r6 > r4, f"Rate should increase with Ld: r4={r4:.3f}, r6={r6:.3f}"
+
+
+# ── Map-predictive lookahead tests ─────────────────────────────
+
+
+_MAP_PRED_CFG = {
+    "map_predictive_lookahead_enabled": True,
+    "map_predictive_lookahead_blend_distance_m": 20.0,
+    "map_predictive_lookahead_e_target_m": 0.04,
+    "map_predictive_lookahead_k_speed": 0.4,
+    "map_predictive_lookahead_curvature_min": 0.001,
+}
+
+
+def test_map_predictive_straight_returns_straight_ld():
+    """No curves in horizon → returns straight Ld unchanged."""
+    kappas = [0.0] * 30
+    dists = [float(i + 1) for i in range(30)]
+    ld = compute_map_predictive_lookahead(kappas, dists, 10.0, _MAP_PRED_CFG, ld_straight=10.0)
+    assert ld == pytest.approx(10.0, abs=0.01)
+
+
+def test_map_predictive_tight_curve_contracts():
+    """R40 curve at 5m → Ld contracts well below straight."""
+    kappas = [0.0] * 30
+    dists = [float(i + 1) for i in range(30)]
+    kappas[4] = 0.025  # R40 at 5m
+    ld = compute_map_predictive_lookahead(kappas, dists, 10.0, _MAP_PRED_CFG, ld_straight=10.0)
+    assert ld < 7.0, f"R40 at 5m should contract: got {ld:.2f}"
+
+
+def test_map_predictive_far_curve_minimal_effect():
+    """R40 curve at 25m → minimal contraction (far away, blend ≈ 0)."""
+    kappas = [0.0] * 30
+    dists = [float(i + 1) for i in range(30)]
+    kappas[24] = 0.025  # R40 at 25m
+    ld = compute_map_predictive_lookahead(kappas, dists, 10.0, _MAP_PRED_CFG, ld_straight=10.0)
+    assert ld > 9.0, f"R40 at 25m should barely affect: got {ld:.2f}"
+
+
+def test_map_predictive_blend_is_distance_proportional():
+    """Closer curves produce more contraction than far curves."""
+    kappas_near = [0.0] * 30
+    kappas_far = [0.0] * 30
+    dists = [float(i + 1) for i in range(30)]
+    kappas_near[2] = 0.025  # R40 at 3m
+    kappas_far[14] = 0.025  # R40 at 15m
+    ld_near = compute_map_predictive_lookahead(kappas_near, dists, 10.0, _MAP_PRED_CFG, ld_straight=10.0)
+    ld_far = compute_map_predictive_lookahead(kappas_far, dists, 10.0, _MAP_PRED_CFG, ld_straight=10.0)
+    assert ld_near < ld_far, f"Near curve should contract more: near={ld_near:.2f}, far={ld_far:.2f}"
+
+
+def test_map_predictive_min_over_horizon():
+    """Tightest curve in horizon determines the target."""
+    kappas = [0.0] * 30
+    dists = [float(i + 1) for i in range(30)]
+    kappas[4] = 0.010  # R100 at 5m (gentle)
+    kappas[9] = 0.025  # R40 at 10m (tight)
+    ld = compute_map_predictive_lookahead(kappas, dists, 10.0, _MAP_PRED_CFG, ld_straight=10.0)
+    # Should be tighter than R100 alone
+    ld_gentle_only = compute_map_predictive_lookahead(
+        [0.0]*4 + [0.010] + [0.0]*25, dists, 10.0, _MAP_PRED_CFG, ld_straight=10.0
+    )
+    assert ld <= ld_gentle_only + 0.01, f"Tight curve should pull target: ld={ld:.2f}, gentle={ld_gentle_only:.2f}"
+
+
+def test_map_predictive_no_horizon_returns_default():
+    """None or empty horizon → returns ld_straight."""
+    ld_none = compute_map_predictive_lookahead(None, None, 10.0, _MAP_PRED_CFG, ld_straight=10.0)
+    ld_empty = compute_map_predictive_lookahead([], [], 10.0, _MAP_PRED_CFG, ld_straight=10.0)
+    assert ld_none == pytest.approx(10.0)
+    assert ld_empty == pytest.approx(10.0)
+
+
+def test_map_predictive_respects_ld_min():
+    """Even extreme curvature can't go below ld_min=2.5."""
+    kappas = [0.1] * 30  # R10 everywhere — extreme
+    dists = [float(i + 1) for i in range(30)]
+    ld = compute_map_predictive_lookahead(kappas, dists, 10.0, _MAP_PRED_CFG, ld_straight=10.0)
+    assert ld >= 2.5, f"Should respect ld_min=2.5: got {ld:.2f}"

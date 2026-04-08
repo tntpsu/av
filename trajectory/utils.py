@@ -1791,6 +1791,50 @@ def _compute_tight_curve_scale(abs_curvature: float, config: Mapping[str, object
     return 1.0 + (tight_scale - 1.0) * blend
 
 
+def compute_map_predictive_lookahead(
+    curvature_horizon_signed: list | None,
+    horizon_distances: list | None,
+    speed_mps: float,
+    config: Mapping[str, object],
+    ld_straight: float = 10.0,
+) -> float:
+    """Compute ideal lookahead from map curvature horizon.
+
+    Scans the curvature horizon (30m at 1m resolution) and returns the Ld
+    demanded by the tightest upcoming curve, blended linearly with approach
+    distance so contraction is gradual.  Uses the same ``sqrt(8R*e_target)``
+    physics formula as the PP floor, promoted from backstop to primary target.
+    """
+    if not curvature_horizon_signed or not horizon_distances:
+        return float(ld_straight)
+
+    e_target = float(config.get("map_predictive_lookahead_e_target_m", 0.04))
+    k_speed = float(config.get("map_predictive_lookahead_k_speed", 0.4))
+    kappa_min = float(config.get("map_predictive_lookahead_curvature_min", 0.001))
+    blend_dist = float(config.get("map_predictive_lookahead_blend_distance_m", 20.0))
+    ld_min = 2.5
+    v = max(float(speed_mps), 1.0)
+
+    ld_target = float(ld_straight)
+    for i, kappa in enumerate(curvature_horizon_signed):
+        abs_k = abs(float(kappa))
+        if abs_k < kappa_min:
+            continue
+        R = 1.0 / abs_k
+        ld_curve = math.sqrt(8.0 * R * e_target)
+        ld_at_speed = k_speed * v
+        ld_for_curve = max(min(ld_curve, ld_at_speed), ld_min)
+
+        # Distance-weighted: linear blend — at d=0 use curve Ld, at d=blend_dist use straight
+        d = float(horizon_distances[i]) if i < len(horizon_distances) else blend_dist
+        blend = max(0.0, min(1.0, 1.0 - d / max(blend_dist, 1.0)))
+        ld_blended = ld_straight * (1.0 - blend) + ld_for_curve * blend
+
+        ld_target = min(ld_target, ld_blended)
+
+    return max(ld_min, ld_target)
+
+
 def compute_reference_lookahead(
     base_lookahead: float,
     current_speed: float,
@@ -1808,6 +1852,8 @@ def compute_reference_lookahead(
     curve_local_entry_severity: float | None = None,
     curve_local_arm_effect_score: float | None = None,
     local_gate_weight: float | None = None,
+    curvature_horizon_signed: list | None = None,
+    curvature_horizon_distances: list | None = None,
     return_diagnostics: bool = False,
 ) -> float | dict[str, float | str]:
     """
@@ -1816,6 +1862,10 @@ def compute_reference_lookahead(
     If dual speed tables are configured, lookahead is blended by curvature.
     If only single speed table is configured, it remains the source of truth.
     Otherwise, legacy scale-based dynamic lookahead is used.
+
+    When ``map_predictive_lookahead_enabled`` is true and curvature horizon
+    data is available, the target is pulled down by the physics-derived
+    ``compute_map_predictive_lookahead()`` before slew limiting.
     """
     scheduler_mode = resolve_curve_scheduler_mode(
         config=config,
@@ -1836,6 +1886,8 @@ def compute_reference_lookahead(
                 "reference_lookahead_local_gate_weight": 0.0,
                 "reference_lookahead_entry_shorten_guard_active": False,
                 "reference_lookahead_entry_shorten_guard_delta_m": 0.0,
+                "map_predictive_ld_target": float(base_lookahead),
+                "map_predictive_active": False,
             }
         return base_lookahead
 
@@ -1864,6 +1916,26 @@ def compute_reference_lookahead(
         target = float(lookahead_target)
         target *= _compute_tight_curve_scale(abs(path_curvature), config)
         target = max(min_lookahead, target)
+
+        # Map-predictive lookahead: pull target down when map demands it
+        _map_pred_active = False
+        _map_pred_ld = float(target)
+        if (
+            bool(config.get("map_predictive_lookahead_enabled", False))
+            and curvature_horizon_signed
+            and curvature_horizon_distances
+        ):
+            _map_pred_ld = compute_map_predictive_lookahead(
+                curvature_horizon_signed,
+                curvature_horizon_distances,
+                current_speed,
+                config,
+                ld_straight=float(target),
+            )
+            if _map_pred_ld < target - 0.01:
+                target = _map_pred_ld
+                _map_pred_active = True
+
         after_global_slew = _apply_lookahead_slew_limit(
             target, previous_lookahead, config, speed_mps=current_speed,
         )
@@ -1928,6 +2000,8 @@ def compute_reference_lookahead(
                 ),
                 "reference_lookahead_entry_shorten_guard_active": bool(entry_guard_active),
                 "reference_lookahead_entry_shorten_guard_delta_m": float(entry_guard_delta),
+                "map_predictive_ld_target": float(_map_pred_ld),
+                "map_predictive_active": bool(_map_pred_active),
             }
         return float(after_entry_guard)
 

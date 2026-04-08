@@ -5126,6 +5126,8 @@ class AVStack:
                 curve_phase_diag.get("curve_local_arm_effect_score", 0.0) or 0.0
             ),
             local_gate_weight=float(curve_phase_diag.get("curve_local_gate_weight", 0.0) or 0.0),
+            curvature_horizon_signed=self._map_curvature_preview_horizon_signed,
+            curvature_horizon_distances=self._map_curvature_preview_horizon_distances,
             return_diagnostics=True,
         )
         if isinstance(reference_lookahead_result, dict):
