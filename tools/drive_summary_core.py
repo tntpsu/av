@@ -9798,6 +9798,30 @@ def analyze_recording_summary(
                             and int(steering_onset_frame) >= int(curve_start_frame)
                         )
                     )
+                    # Classify curve error pattern: late_turn_in vs apex_cutting
+                    # Late turn-in: error peaks early then recovers (transient)
+                    # Apex cutting: error stays on one side throughout (sustained bias)
+                    _curve_lat = lat_err_arr[selected_curve_run]
+                    _curve_n = len(_curve_lat)
+                    if _curve_n >= 4:
+                        _same_sign_rate = 1.0 - np.sum(np.diff(np.sign(_curve_lat)) != 0) / max(_curve_n - 1, 1)
+                        _mean_err = float(np.mean(_curve_lat))
+                        _peak_in_first_third = peak_idx_local < _curve_n / 3
+                        # Apex cutting: >80% same sign, meaning sustained one-sided bias
+                        _is_apex_cutting = _same_sign_rate > 0.8 and abs(_mean_err) > 0.10
+                        # Late turn-in: error peaks early and recovers
+                        _is_late_turn_in_pattern = _peak_in_first_third and not _is_apex_cutting
+                        event["curve_error_pattern"] = (
+                            "apex_cutting" if _is_apex_cutting
+                            else "late_turn_in" if _is_late_turn_in_pattern
+                            else "mixed"
+                        )
+                        event["curve_error_same_sign_rate"] = safe_float(_same_sign_rate)
+                        event["curve_error_mean_m"] = safe_float(_mean_err)
+                    else:
+                        event["curve_error_pattern"] = "too_short"
+                        event["curve_error_same_sign_rate"] = None
+                        event["curve_error_mean_m"] = None
                     if pp_track is not None:
                         pp_slice = pp_track[selected_curve_run]
                         pp_slice = pp_slice[np.isfinite(pp_slice) & (pp_slice > 0.0)]
@@ -10917,8 +10941,13 @@ def analyze_recording_summary(
                 f"Reference lookahead fallback active ({float(fallback_rate):.1f}% frames)"
             )
     for event in curve_turn_events:
-        if bool(event.get("late_turn_in", False)):
-            curve_idx = event.get("curve_index", "?")
+        curve_idx = event.get("curve_index", "?")
+        error_pattern = event.get("curve_error_pattern")
+        if error_pattern == "apex_cutting":
+            mean_err = event.get("curve_error_mean_m")
+            mean_str = f", bias={float(mean_err):+.3f} m" if mean_err is not None else ""
+            key_issues.append(f"Apex cutting on C{curve_idx}{mean_str}")
+        elif bool(event.get("late_turn_in", False)):
             key_issues.append(f"Late turn-in on C{curve_idx}")
         rescue_delta_max = event.get("pp_floor_rescue_delta_max_m")
         if rescue_delta_max is not None and float(rescue_delta_max) > 1.0:

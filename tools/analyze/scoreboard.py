@@ -96,12 +96,35 @@ def _check_min(val, gate): return "✓" if val >= gate else "✗"
 def _layer_mark(score): return "✓" if score >= 95 else "✗"
 
 
+def _load_baselines() -> dict:
+    """Load frozen baselines from scoring_baselines.json."""
+    bl_path = Path(__file__).resolve().parents[2] / "tests" / "fixtures" / "scoring_baselines.json"
+    if bl_path.exists():
+        with open(bl_path) as f:
+            return json.load(f).get("tracks", {})
+    return {}
+
+
+def _delta_str(val, baseline, higher_is_better=True, fmt=".1f"):
+    """Format a delta string like '+2.1' or '-0.3' with direction indicator."""
+    delta = val - baseline
+    if abs(delta) < 0.05:
+        return ""
+    sign = "+" if delta > 0 else ""
+    # Green arrow if improving, red if regressing
+    good = (delta > 0) if higher_is_better else (delta < 0)
+    arrow = "▲" if good else "▼"
+    return f" {arrow}{sign}{delta:{fmt}}"
+
+
 def print_scoreboard(results: list):
     """Print human-readable scoreboard."""
     if not results:
         print("No recordings found. Run the stack first:")
         print("  ./start_av_stack.sh --duration 60 --track-yaml tracks/s_loop.yml")
         return
+
+    baselines = _load_baselines()
 
     print("TRACK SCOREBOARD")
     print("════════════════════════════════════════════════════════════════════")
@@ -115,10 +138,15 @@ def print_scoreboard(results: list):
     for r in results:
         cap_str = f"  (capped: {r['cap']})" if r["cap"] != "none" else ""
         status = "PASS" if r["score"] >= 95 else "NEEDS WORK"
+        bl = baselines.get(r["track"], {})
+
         print(f"\nTrack: {r['track']}  │  Recording: {r['file']}")
-        print(f"Overall: {r['score']}/100  {status}{cap_str}")
+        score_delta = _delta_str(r["score"], bl.get("overall_score", r["score"])) if bl else ""
+        print(f"Overall: {r['score']}/100  {status}{score_delta}{cap_str}")
+        rmse_delta = _delta_str(r["lat_rmse"], bl.get("lateral_error_adj_rmse", r["lat_rmse"]),
+                                higher_is_better=False, fmt=".3f") if bl else ""
         print(f"Drive: {r['duration_s']}s  │  {r['frames']} frames  │  "
-              f"RMSE {r['lat_rmse']}m  │  Centered {r['centered_pct']}%")
+              f"RMSE {r['lat_rmse']}m{rmse_delta}  │  Centered {r['centered_pct']}%")
 
         # Layer scores (exclude LongitudinalComfort — shown in Comfort section)
         print("\n  Layer Scores:")
@@ -190,21 +218,37 @@ def print_scoreboard(results: list):
     table_results = sorted(results, key=lambda r: -r["score"])
 
     print("\n\nSCORE TABLE")
-    print("═══════════════════════════════════════════════════════════════════════════════════════════")
-    print(f"{'Track':<18s} {'Score':>5s}  {'Time':>5s}  {'RMSE':>5s}  {'Ctr%':>4s}  "
+    print("═══════════════════════════════════════════════════════════════════════════════════════════════════════")
+    print(f"{'Track':<18s} {'Score':>5s} {'Δbl':>6s}  {'Time':>5s}  {'RMSE':>5s} {'Δbl':>7s}  {'Ctr%':>4s}  "
           f"{'Safe':>4s}  {'Perc':>4s}  {'Traj':>4s}  {'Ctrl':>4s}  {'SigI':>4s}  "
           f"{'StJrk':>5s}  {'E-st':>4s}")
-    print("─" * 93)
+    print("─" * 105)
     for r in table_results:
         ls = r["layers"]
+        bl = baselines.get(r["track"], {})
         gate = "✓" if r["score"] >= 95 else "✗"
-        print(f"{r['track']:<18s} {r['score']:5.1f}{gate} "
-              f"{r['duration_s']:5.0f}s {r['lat_rmse']:5.3f} {r['centered_pct']:4.0f}%  "
+
+        # Score delta
+        if bl and "overall_score" in bl:
+            sd = r["score"] - bl["overall_score"]
+            score_d = f"{sd:+.1f}" if abs(sd) >= 0.05 else "  —"
+        else:
+            score_d = "  —"
+
+        # RMSE delta (lower is better)
+        if bl and "lateral_error_adj_rmse" in bl:
+            rd = r["lat_rmse"] - bl["lateral_error_adj_rmse"]
+            rmse_d = f"{rd:+.3f}" if abs(rd) >= 0.001 else "   —"
+        else:
+            rmse_d = "   —"
+
+        print(f"{r['track']:<18s} {r['score']:5.1f}{gate} {score_d:>6s} "
+              f"{r['duration_s']:5.0f}s {r['lat_rmse']:5.3f} {rmse_d:>7s} {r['centered_pct']:4.0f}%  "
               f"{ls.get('Safety', 0):4.0f}  {ls.get('Perception', 0):4.0f}  "
               f"{ls.get('Trajectory', 0):4.0f}  {ls.get('Control', 0):4.0f}  "
               f"{ls.get('SignalIntegrity', 0):4.0f}  "
               f"{r['steer_jerk']:5.1f}  {r['estops']:4d}")
-    print("─" * 93)
+    print("─" * 105)
     print(f"{'SUMMARY':<18s}       "
           f"{all_layers_pass}/{n} all layers ≥ 95  │  "
           f"{sum(1 for r in results if r['score'] >= 95)}/{n} overall ≥ 95  │  "

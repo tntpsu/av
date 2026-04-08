@@ -2659,9 +2659,26 @@ class LateralController:
                     -steering_rate_limit_effective,
                     steering_rate_limit_effective,
                 )
+                # Anti-saturation ramp: taper rate so steering decelerates
+                # smoothly to zero before hitting the ±ceiling.
+                # Constraint: after this step, remaining margin must allow
+                # the rate to decelerate to zero.  Solve v² ≤ 2a(d-v):
+                #   v ≤ -a + sqrt(a² + 2ad)  where a=decel/frame, d=margin
                 max_rate_to_ceil = self.max_steering - self.last_steering
                 min_rate_to_floor = -self.max_steering - self.last_steering
-                effective_rate = np.clip(effective_rate, min_rate_to_floor, max_rate_to_ceil)
+                if self.pp_max_steering_jerk > 0.0 and dt > 0.0:
+                    a = self.pp_max_steering_jerk * dt * dt
+                    if max_rate_to_ceil > 0:
+                        ramp_pos = -a + np.sqrt(a * a + 2.0 * a * max_rate_to_ceil)
+                    else:
+                        ramp_pos = 0.0
+                    if -min_rate_to_floor > 0:
+                        ramp_neg = -a + np.sqrt(a * a + 2.0 * a * (-min_rate_to_floor))
+                    else:
+                        ramp_neg = 0.0
+                    effective_rate = np.clip(effective_rate, -ramp_neg, ramp_pos)
+                else:
+                    effective_rate = np.clip(effective_rate, min_rate_to_floor, max_rate_to_ceil)
 
                 steering_before_limits = self.last_steering + effective_rate
                 steering_rate_limited_delta = abs(steering_before_limits - rate_in)

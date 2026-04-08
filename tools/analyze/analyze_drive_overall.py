@@ -2394,7 +2394,10 @@ def _print_summary_report(recording_path: Path, summary: Dict, analyze_to_failur
                 f"preLdStepMin={(float(shorten_step_min) if shorten_step_min is not None else float('nan')):.3f} m/fr, "
                 f"floorRescueMax={(float(rescue_delta_max) if rescue_delta_max is not None else float('nan')):.3f} m, "
                 f"floorRescueMean={(float(rescue_delta_mean) if rescue_delta_mean is not None else float('nan')):.3f} m, "
-                f"lateTurnIn={'YES' if event.get('late_turn_in') else 'NO'}"
+                f"lateTurnIn={'YES' if event.get('late_turn_in') else 'NO'}, "
+                f"errorPattern={event.get('curve_error_pattern', 'N/A')}, "
+                f"sameSign={'{:.0%}'.format(float(event['curve_error_same_sign_rate'])) if event.get('curve_error_same_sign_rate') is not None else 'N/A'}, "
+                f"meanErr={'{:+.3f}'.format(float(event['curve_error_mean_m'])) if event.get('curve_error_mean_m') is not None else 'N/A'} m"
             )
     curve_straight_segments = summary.get("curve_straight_segments", [])
     if curve_straight_segments:
