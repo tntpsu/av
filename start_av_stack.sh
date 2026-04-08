@@ -605,13 +605,21 @@ cleanup() {
         else
             if [ ! -z "$UNITY_PLAYER_PID" ]; then
                 echo -e "${BLUE}Shutting down Unity player (PID: $UNITY_PLAYER_PID)...${NC}"
+                # Send TERM and wait for Application.Quit() to complete gracefully
+                # (Unity needs time to run OnDestroy, release GPU/Metal resources)
                 kill -TERM $UNITY_PLAYER_PID 2>/dev/null || true
-                sleep 2
+                for i in $(seq 1 10); do
+                    if ! kill -0 $UNITY_PLAYER_PID 2>/dev/null; then
+                        echo -e "${GREEN}✓ Unity player closed gracefully${NC}"
+                        break
+                    fi
+                    sleep 0.5
+                done
+                # Only force-kill if still alive after 5s
                 if kill -0 $UNITY_PLAYER_PID 2>/dev/null; then
-                    echo -e "${YELLOW}Unity player still running, forcing shutdown...${NC}"
+                    echo -e "${YELLOW}Unity player still running after 5s, forcing shutdown...${NC}"
                     kill -9 $UNITY_PLAYER_PID 2>/dev/null || true
-                else
-                    echo -e "${GREEN}✓ Unity player closed gracefully${NC}"
+                    sleep 2  # Give OS time to reclaim GPU resources after hard kill
                 fi
             else
                 echo -e "${YELLOW}Unity player PID not tracked; please close it manually if needed${NC}"

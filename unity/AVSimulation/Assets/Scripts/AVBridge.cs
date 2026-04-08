@@ -2070,6 +2070,8 @@ private float? lastCarT = null;
                         Debug.Log($"[COMMAND RECEIVED] AVBridge: Shutdown response: {jsonResponse}");
                         #if UNITY_EDITOR
                         EditorApplication.isPlaying = false;
+                        #else
+                        Application.Quit();
                         #endif
                     }
                     else
@@ -2093,6 +2095,8 @@ private float? lastCarT = null;
                 Debug.Log($"[COMMAND RECEIVED] AVBridge: ⚠️ BRIDGE DISCONNECTED - Connection error, exiting play mode...");
                 #if UNITY_EDITOR
                 EditorApplication.isPlaying = false;
+                #else
+                Application.Quit();
                 #endif
             }
             // Other errors (timeout, etc.) - don't exit play mode
