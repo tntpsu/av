@@ -534,7 +534,7 @@ trajectory:
   lookahead_contraction_rate_floor: 0.10     # m/frame, minimum rate (prevents stalling)
   lookahead_contraction_rate_ceiling: 0.60   # m/frame, maximum rate
   # Map-predictive lookahead (replaces reactive smoothstep as primary path)
-  map_predictive_lookahead_enabled: true
+  map_predictive_lookahead_enabled: false  # disabled: causes swerving — over-contracts lookahead, needs investigation
   map_predictive_lookahead_blend_distance_m: 20.0   # linear blend horizon (m)
   map_predictive_lookahead_e_target_m: 0.04          # target tracking error for sqrt(8R*e)
   map_predictive_lookahead_k_speed: 0.4              # speed stability constant (Ld_min = k*v)
