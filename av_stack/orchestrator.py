@@ -943,6 +943,9 @@ class AVStack:
             pp_steering_reversal_curvature_min=float(
                 lateral_cfg.get('pp_steering_reversal_curvature_min', 0.003)
             ),
+            pp_steering_jerk_lateral_budget=float(
+                lateral_cfg.get('pp_steering_jerk_lateral_budget', 6.0)
+            ),
             pp_curve_local_lookahead_floor_enabled=bool(
                 lateral_cfg.get('pp_curve_local_lookahead_floor_enabled', False)
             ),

@@ -262,6 +262,7 @@ class LateralController:
                  pp_steering_taper_gain: float = 3.0,
                  pp_steering_reversal_taper_factor: float = 0.7,
                  pp_steering_reversal_curvature_min: float = 0.003,
+                 pp_steering_jerk_lateral_budget: float = 6.0,
                  pp_curve_local_lookahead_floor_enabled: bool = False,
                  pp_curve_local_lookahead_floor_speed_table: Optional[list] = None,
                  pp_curve_local_shorten_slew_m_per_frame: float = 0.0,
@@ -535,6 +536,7 @@ class LateralController:
         self.pp_steering_taper_gain = max(0.1, float(pp_steering_taper_gain))
         self.pp_steering_reversal_taper_factor = max(0.0, min(1.0, float(pp_steering_reversal_taper_factor)))
         self.pp_steering_reversal_curvature_min = max(0.0, float(pp_steering_reversal_curvature_min))
+        self.pp_steering_jerk_lateral_budget = max(0.1, float(pp_steering_jerk_lateral_budget))
         self.pp_curve_local_lookahead_floor_enabled = bool(
             pp_curve_local_lookahead_floor_enabled
         )
@@ -844,6 +846,7 @@ class LateralController:
         dt: float,
         curvature_preview_signed: float = 0.0,
         time_to_reversal_s: float = None,
+        speed_mps: float = 5.0,
     ) -> tuple:
         """Trapezoidal motion profile: one step toward demand.
 
@@ -856,11 +859,28 @@ class LateralController:
         Preview-aware: when an upcoming curvature reversal is detected
         (preview sign ≠ demand sign), taper gain is reduced proportionally
         to the urgency of the reversal (traversal_distance / time_available).
+
+        Jerk limit is speed-adaptive: derived from lateral jerk comfort
+        budget (m/s³) via vehicle dynamics.  Tighter at high speed (where
+        the same steering change produces more lateral force), looser at
+        low speed (where fast response is safe).
         """
         max_rate = self.pp_steering_max_rate_per_s
-        max_jerk = self.pp_steering_max_jerk_per_s2
         taper = self.pp_steering_taper_gain
         ceiling = self.max_steering
+
+        # Speed-adaptive jerk limit from lateral jerk budget:
+        #   j_lat = v² × steer_jerk × max_steer_rad / (steer_norm × wheelbase)
+        #   → max_steer_jerk = j_lat_budget × wheelbase × steer_norm / (v² × max_steer_rad)
+        import math as _math
+        _v = max(float(speed_mps), 1.0)
+        _wheelbase = self.pp_map_ff_wheelbase_m  # 2.5m
+        _max_steer_rad = _math.radians(30.0)  # 0.524 rad
+        max_jerk = (
+            self.pp_steering_jerk_lateral_budget
+            * _wheelbase * ceiling
+            / (_v * _v * _max_steer_rad)
+        )
 
         # Effective demand: clip to ceiling
         eff_demand = max(-ceiling, min(ceiling, float(demand)))
@@ -897,7 +917,9 @@ class LateralController:
             urgency = min(1.0, traversal / (time_to_reversal_s * max_rate))
             effective_taper = taper * (1.0 - self.pp_steering_reversal_taper_factor * urgency)
 
-        # Desired rate: proportional to error (tapers near target/ceiling)
+        # Desired rate: proportional to error (tapers near target/ceiling).
+        # The speed-adaptive jerk limit constrains rate-of-change, preventing
+        # swerving. The taper gain handles deceleration near the target.
         desired_rate = effective_taper * eff_error
         desired_rate = max(-max_rate, min(max_rate, desired_rate))
 
@@ -2603,6 +2625,7 @@ class LateralController:
                         dt=dt,
                         curvature_preview_signed=_preview_signed,
                         time_to_reversal_s=time_to_next_curve_start_s,
+                        speed_mps=float(current_speed) if current_speed is not None else 5.0,
                     )
                 )
                 steering_before_limits = steering
@@ -5439,6 +5462,7 @@ class VehicleController:
                  pp_steering_taper_gain: float = 3.0,
                  pp_steering_reversal_taper_factor: float = 0.7,
                  pp_steering_reversal_curvature_min: float = 0.003,
+                 pp_steering_jerk_lateral_budget: float = 6.0,
                  pp_curve_local_lookahead_floor_enabled: bool = False,
                  pp_curve_local_lookahead_floor_speed_table: Optional[list] = None,
                  pp_curve_local_shorten_slew_m_per_frame: float = 0.0,
@@ -5707,6 +5731,7 @@ class VehicleController:
             pp_steering_taper_gain=pp_steering_taper_gain,
             pp_steering_reversal_taper_factor=pp_steering_reversal_taper_factor,
             pp_steering_reversal_curvature_min=pp_steering_reversal_curvature_min,
+            pp_steering_jerk_lateral_budget=pp_steering_jerk_lateral_budget,
             feedback_gain_min=feedback_gain_min,
             feedback_gain_max=feedback_gain_max,
             feedback_gain_curvature_min=feedback_gain_curvature_min,

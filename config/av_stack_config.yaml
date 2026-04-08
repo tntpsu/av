@@ -40,9 +40,10 @@ control:
     pp_max_steering_jerk: 18.0
     # Steering motion profile planner (replaces rate clamp + jerk clamp + ceiling clip)
     # Unified trapezoidal profile with demand-aware tapering — no overshoot, no ceiling jerk.
-    pp_steering_profile_enabled: true    # re-enabled with preview-aware reversal urgency (replaces rate+jerk+clip pipeline)
+    pp_steering_profile_enabled: false   # disabled on s_loop: taper-based profile can't match legacy bang-bang on R40 reversals
     pp_steering_max_rate_per_s: 5.2        # physical: 0.4/frame ÷ 0.077s/frame
-    pp_steering_max_jerk_per_s2: 20.0      # must stay below scoring gate (18.0 norm/s²)
+    pp_steering_max_jerk_per_s2: 20.0      # legacy fallback (only used if lateral budget is 0)
+    pp_steering_jerk_lateral_budget: 6.0   # m/s³ — matches comfort gate; derives speed-adaptive jerk limit
     pp_steering_taper_gain: 3.0            # rate = min(max_rate, gain × |error|)
     pp_steering_reversal_taper_factor: 0.7 # urgency=1.0 → taper drops to 30% of nominal
     pp_steering_reversal_curvature_min: 0.003  # |κ_preview| below this → no reversal detection
