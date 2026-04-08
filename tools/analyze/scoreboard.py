@@ -64,10 +64,16 @@ def extract_scores(recordings_dir: Path, filter_track: str = None,
                 "track": track_id,
                 "score": round(es.get("overall_score", 0), 1),
                 "cap": es.get("score_breakdown", {}).get("cap_reason", "none"),
+                "duration_s": round(es.get("drive_duration", 0), 1),
+                "frames": int(es.get("total_frames", 0)),
                 "layers": {k: round(v, 1) for k, v in ls.items()},
                 "accel_p95": round(c.get("acceleration_p95_filtered", 0), 3),
                 "jerk_p95": round(c.get("commanded_jerk_p95", 0), 3),
                 "steer_jerk": round(c.get("steering_jerk_max", 0), 1),
+                "lat_rmse": round(summary.get("path_tracking", {}).get(
+                    "lateral_error_rmse", 0), 3),
+                "centered_pct": round(summary.get("path_tracking", {}).get(
+                    "centeredness_pct", 0), 1),
                 "osc_ded": round(osc_ded, 1),
                 "estops": int(c.get("emergency_stops", 0)),
                 "deductions": deductions,
@@ -109,6 +115,8 @@ def print_scoreboard(results: list):
         status = "PASS" if r["score"] >= 95 else "NEEDS WORK"
         print(f"\nTrack: {r['track']}  │  Recording: {r['file']}")
         print(f"Overall: {r['score']}/100  {status}{cap_str}")
+        print(f"Drive: {r['duration_s']}s  │  {r['frames']} frames  │  "
+              f"RMSE {r['lat_rmse']}m  │  Centered {r['centered_pct']}%")
 
         # Layer scores (exclude LongitudinalComfort — shown in Comfort section)
         print("\n  Layer Scores:")
