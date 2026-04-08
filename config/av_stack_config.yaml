@@ -900,7 +900,7 @@ trajectory:
   # warm-started from previous solution for sub-10ms typical solve time.
   # All keys use nmpc_ prefix to distinguish from LMPC (mpc_) params.
   nmpc:
-    nmpc_enabled: true              # enabled in base — activates on tight curves (κ ≥ nmpc_curvature_threshold)
+    nmpc_enabled: false             # disabled: NMPC e_lat sign convention needs proper investigation (correlation -0.998)
     nmpc_horizon: 20                # N prediction steps
     nmpc_dt: 0.1                   # prediction step duration (s) — matches LMPC dt
     nmpc_q_lat: 0.7                # lateral error weight — BASE; auto-derived from v²κ when curve_auto_derive:true (0.7@15m/s/κ0.002 → ~1.94@25m/s)
