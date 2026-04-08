@@ -52,8 +52,9 @@ class RegimeConfig:
     blend_frames: int = 15                         # Frames to linearly blend PP↔LMPC transition
     min_hold_frames: int = 30                      # Frames desired must be stable before switch
     # ── LMPC↔NMPC (independent of PP↔LMPC) ─────────────────────────────────────
-    lmpc_max_speed_mps: float = 20.0               # Above this → NMPC (future)
-    lmpc_max_heading_error_rad: float = 0.25       # Above this → NMPC (future)
+    lmpc_max_speed_mps: float = 20.0               # Above this → NMPC
+    lmpc_max_heading_error_rad: float = 0.25       # Above this → NMPC
+    nmpc_curvature_threshold: float = 0.015        # Map κ above this → NMPC (tight curves need nonlinear model)
     lmpc_nmpc_blend_frames: int = 30               # Blend frames for LMPC↔NMPC (2× default)
     lmpc_nmpc_min_hold_frames: int = 40            # Hold frames for LMPC↔NMPC (longer = less chatter)
     # ── Deprecated (kept for backward compat; lateral accel budget replaces) ────
@@ -100,6 +101,7 @@ class RegimeConfig:
             "mpc_min_speed_absolute_mps", "mpc_max_map_curvature",
             "blend_frames", "min_hold_frames",
             "lmpc_max_speed_mps", "lmpc_max_heading_error_rad",
+            "nmpc_curvature_threshold",
             "lmpc_nmpc_blend_frames", "lmpc_nmpc_min_hold_frames",
             "stanley_enabled", "stanley_max_speed_mps",
             "stanley_upshift_hysteresis_mps", "stanley_downshift_hysteresis_mps",
@@ -298,27 +300,39 @@ class RegimeSelector:
         min_speed = self.config.mpc_min_speed_absolute_mps
         max_map_curv = self.config.mpc_max_map_curvature
 
-        # Map curvature guard: track geometry too tight for MPC linearization
-        map_curv_exceeds = max_map_curv > 0.0 and map_curvature_abs >= max_map_curv
+        # Map curvature guard: track geometry too tight for LINEAR MPC
+        map_curv_exceeds_lmpc = max_map_curv > 0.0 and map_curvature_abs >= max_map_curv
+
+        # NMPC curvature trigger: tight curves need nonlinear model
+        nmpc_curv_threshold = self.config.nmpc_curvature_threshold
+        nmpc_curvature_triggered = nmpc_curv_threshold > 0.0 and map_curvature_abs >= nmpc_curv_threshold
+
+        # NMPC trigger: speed OR heading OR curvature
+        nmpc_desired = (
+            speed > self.config.lmpc_max_speed_mps
+            or abs(heading_error) > self.config.lmpc_max_heading_error_rad
+            or nmpc_curvature_triggered
+        )
 
         if self._active_regime in (ControlRegime.LINEAR_MPC, ControlRegime.NONLINEAR_MPC):
-            # Currently in MPC — downshift to PP if budget exceeded, map curvature
-            # too tight, or speed too low
-            if a_lat > threshold + hyst or map_curv_exceeds or speed < min_speed:
-                return ControlRegime.PURE_PURSUIT
-            # Upshift to NMPC: above lmpc_max or large heading error
-            if (
-                speed > self.config.lmpc_max_speed_mps
-                or abs(heading_error) > self.config.lmpc_max_heading_error_rad
-            ):
+            # Currently in MPC — check if NMPC should handle tight curves
+            if nmpc_desired:
                 return ControlRegime.NONLINEAR_MPC
+            # Downshift to PP only if budget exceeded AND curvature doesn't need NMPC
+            if (a_lat > threshold + hyst or speed < min_speed) and not nmpc_curvature_triggered:
+                return ControlRegime.PURE_PURSUIT
+            # Curvature exceeds LMPC guard but below NMPC threshold → PP
+            if map_curv_exceeds_lmpc and not nmpc_curvature_triggered:
+                return ControlRegime.PURE_PURSUIT
             return ControlRegime.LINEAR_MPC
         else:
-            # Currently in PP — upshift to MPC if within budget, map curvature
-            # acceptable, and above min speed
+            # Currently in PP — route to NMPC if curvature demands it
+            if nmpc_curvature_triggered and speed > min_speed:
+                return ControlRegime.NONLINEAR_MPC
+            # Upshift to LMPC if within budget and curvature OK
             if (
                 a_lat < threshold - hyst
-                and not map_curv_exceeds
+                and not map_curv_exceeds_lmpc
                 and speed > min_speed
             ):
                 return ControlRegime.LINEAR_MPC

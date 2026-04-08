@@ -53,14 +53,17 @@ def _make_selector(
     return RegimeSelector(cfg)
 
 
-def _run_n(selector, speed, n, heading_error=0.0, curvature_abs=0.0):
+def _run_n(selector, speed, n, heading_error=0.0, curvature_abs=0.0, map_curvature_abs=None):
     """Drive selector for n frames at constant speed. Returns (regime, blend) of last frame."""
+    if map_curvature_abs is None:
+        map_curvature_abs = curvature_abs
     result = None
     for _ in range(n):
         result = selector.update(
             speed=speed,
             heading_error=heading_error,
             curvature_abs=curvature_abs,
+            map_curvature_abs=map_curvature_abs,
         )
     return result
 
@@ -248,19 +251,18 @@ def test_reset_from_nmpc_returns_to_pp():
 
 # ─── 9. Curvature guard blocks NMPC upshift ──────────────────────────────────
 
-def test_curvature_guard_blocks_nmpc_upshift():
-    """On tight curve (κ > mpc_max_curvature), even high speed should stay in PP."""
+def test_curvature_guard_routes_to_nmpc_not_pp():
+    """On tight curve (κ > mpc_max_curvature), NMPC handles it instead of PP."""
     sel = _make_selector(
         mpc_max_curvature=0.020,
         mpc_curvature_hysteresis=0.003,
         lmpc_max_speed_mps=20.0,
         min_hold_frames=5,
     )
-    # Try to reach NMPC on tight curve
-    regime, _ = _run_n(sel, speed=25.0, n=30, curvature_abs=0.025)
-    # Should be blocked in PP (curvature guard), never reach NMPC or LMPC
-    assert regime == ControlRegime.PURE_PURSUIT, (
-        f"Expected PP (curvature guard), got {regime}"
+    # High speed on tight curve — NMPC should handle it (not PP)
+    regime, _ = _run_n(sel, speed=25.0, n=60, curvature_abs=0.025)
+    assert regime == ControlRegime.NONLINEAR_MPC, (
+        f"Tight curve should route to NMPC, got {regime}"
     )
 
 
@@ -321,3 +323,46 @@ def test_lmpc_nmpc_blend_frames_default_independent_of_pp_lmpc_blend():
     assert cfg.lmpc_nmpc_min_hold_frames == 40
     assert cfg.blend_frames == 15         # PP↔LMPC unchanged
     assert cfg.min_hold_frames == 30      # PP↔LMPC unchanged
+
+
+# ── Curvature-based NMPC routing ──────────────────────────────────────────
+
+
+def test_nmpc_activates_on_high_curvature():
+    """κ=0.025 at v=5 should route to NMPC, not PP."""
+    sel = _make_selector()
+    # First get into LMPC (low curvature, moderate speed)
+    _run_n(sel, speed=8.0, n=20, curvature_abs=0.005)
+    # Now increase curvature above threshold — should upshift to NMPC
+    regime, _ = _run_n(sel, speed=8.0, n=60, curvature_abs=0.025)
+    assert regime == ControlRegime.NONLINEAR_MPC, (
+        f"High curvature should route to NMPC, got {regime}"
+    )
+
+
+def test_nmpc_deactivates_on_low_curvature():
+    """κ=0.005 at v=8 should stay in LMPC, not NMPC."""
+    sel = _make_selector()
+    _run_n(sel, speed=8.0, n=20, curvature_abs=0.005)
+    regime, _ = _run_n(sel, speed=8.0, n=20, curvature_abs=0.005)
+    assert regime == ControlRegime.LINEAR_MPC, (
+        f"Low curvature should stay LMPC, got {regime}"
+    )
+
+
+def test_pp_routes_to_nmpc_on_tight_curve():
+    """From PP, κ=0.025 should route directly to NMPC."""
+    sel = _make_selector()
+    # Start in PP (low speed)
+    _run_n(sel, speed=1.0, n=10, curvature_abs=0.0)
+    # Speed up on tight curve — should go to NMPC, not PP
+    regime, _ = _run_n(sel, speed=5.0, n=60, curvature_abs=0.025)
+    assert regime == ControlRegime.NONLINEAR_MPC, (
+        f"PP on tight curve should route to NMPC, got {regime}"
+    )
+
+
+def test_nmpc_curvature_threshold_configurable():
+    """nmpc_curvature_threshold from config controls the routing."""
+    cfg = RegimeConfig(nmpc_curvature_threshold=0.030)
+    assert cfg.nmpc_curvature_threshold == 0.030

@@ -362,6 +362,7 @@ control:
     # LMPC → NMPC upshift thresholds (Step 5)
     lmpc_max_speed_mps: 20.0           # above this + upshift_hysteresis → NONLINEAR_MPC
     lmpc_max_heading_error_rad: 0.25   # large heading error → NONLINEAR_MPC (LMPC linearisation breaks)
+    nmpc_curvature_threshold: 0.015    # map κ above this → NMPC (tight curves need nonlinear model)
 trajectory:
   trajectory_source: planner
   # Lane midpoint coordinate conversion uses the full PP lookahead distance to evaluate
@@ -899,7 +900,7 @@ trajectory:
   # warm-started from previous solution for sub-10ms typical solve time.
   # All keys use nmpc_ prefix to distinguish from LMPC (mpc_) params.
   nmpc:
-    nmpc_enabled: false             # opt-in — enable via per-track overlay (e.g. mpc_autobahn.yaml)
+    nmpc_enabled: true              # enabled in base — activates on tight curves (κ ≥ nmpc_curvature_threshold)
     nmpc_horizon: 20                # N prediction steps
     nmpc_dt: 0.1                   # prediction step duration (s) — matches LMPC dt
     nmpc_q_lat: 0.7                # lateral error weight — BASE; auto-derived from v²κ when curve_auto_derive:true (0.7@15m/s/κ0.002 → ~1.94@25m/s)
