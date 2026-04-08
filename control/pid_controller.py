@@ -6223,6 +6223,9 @@ class VehicleController:
                 raw_e_lat = -float(lateral_metadata.get('lateral_error', 0.0))
                 raw_e_heading = float(lateral_metadata.get('heading_error', 0.0))
 
+            # IMU yaw rate (same extraction as LMPC block)
+            _imu_yaw_rate = -float(current_state.get('angular_velocity_y', 0.0))
+
             # Delay compensation (same linear model as LMPC, same wall-clock cap)
             _nmpc_mpc_cfg = self._full_config.get('trajectory', {}).get('mpc', {})
             frame_dt = dt or 0.033
