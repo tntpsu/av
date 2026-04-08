@@ -6200,11 +6200,22 @@ class VehicleController:
                 or ''
             )
 
+            _use_lookahead_ref = self._full_config.get(
+                'trajectory', {},
+            ).get('mpc', {}).get('mpc_e_lat_use_lookahead_reference', True)
+
             if gt_cross_track is not None and gt_heading is not None:
-                if gt_cross_track_source_code == 'road_frame_at_car':
+                if _use_lookahead_ref and gt_cross_track_lookahead is not None:
+                    # Lookahead reference: same point PP steers toward and scoring
+                    # measures — aligns NMPC optimization target with scored metric.
+                    raw_e_lat = -float(gt_cross_track_lookahead)
+                    _mpc_e_lat_ref_source = 'lookahead_gt'
+                elif gt_cross_track_source_code == 'road_frame_at_car':
                     raw_e_lat = float(gt_cross_track)
+                    _mpc_e_lat_ref_source = 'at_car_gt'
                 else:
                     raw_e_lat = -float(gt_cross_track)
+                    _mpc_e_lat_ref_source = 'at_car_gt'
                 raw_e_heading = float(gt_heading)
             else:
                 raw_e_lat = -float(lateral_metadata.get('lateral_error', 0.0))
