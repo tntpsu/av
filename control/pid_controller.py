@@ -6250,7 +6250,6 @@ class VehicleController:
             kappa_ref = float(reference_point.get('curvature', 0.0) or 0.0)
             v_target = float(reference_point.get('velocity') or self.longitudinal_controller.target_speed)
             v_max = float(self.longitudinal_controller.max_speed)
-            _mpc_e_lat_ref_source = 'nmpc'  # default for NMPC path
 
             # Try NMPC first; fall back to LMPC if unavailable or in fallback state
             nmpc_used = False
