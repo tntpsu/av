@@ -478,7 +478,11 @@ class SpeedGovernor:
         entry_active = intent_value >= self.config.curve_cap_entry_intent_min
         commit_active = intent_value >= self.config.curve_cap_commit_intent_min
         rise_active = float(curve_rise) >= self.config.curve_cap_rise_min
-        if not (entry_active or commit_active or rise_active):
+        # Map curvature preview bypasses perception-based intent gate:
+        # if the map says a curve is ahead (k_preview > curvature_min), that
+        # is sufficient intent — no need for perception-based curve_intent.
+        map_preview_active = k_preview >= self.config.curve_cap_curvature_min
+        if not (entry_active or commit_active or rise_active or map_preview_active):
             self._curve_cap_last_speed = None
             return None, False, "intent_low", 0.0
 

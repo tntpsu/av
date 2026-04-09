@@ -1,14 +1,14 @@
 # Hairpin track overlay — merges on top of config/av_stack_config.yaml at runtime.
 #
 # Only parameters that differ from base are listed here.
-# Track: hairpin_15 (R15 turn, κ≈0.067, peak speed ~4.0 m/s under 0.20g cap)
+# Track: hairpin_15 (R15 turn, κ≈0.067, peak speed ~4.4 m/s under 0.20g cap)
 # Usage:
 #   ./start_av_stack.sh --config config/mpc_hairpin.yaml \
 #       --track-yaml tracks/hairpin_15.yml --duration 60
 #
 # MPC-primary: NMPC activates on tight curves (κ ≥ 0.015). Stanley only below 2 m/s.
-# No per-track regime or Stanley overrides needed.
 
 trajectory:
+  target_speed: 5.0                      # hairpin: short straights, R15 curves → low target
   speed_governor:
-    curve_cap_peak_lat_accel_g: 0.20   # keep R15 under 5.4 m/s (base 0.26 → 6.2 m/s at R15)
+    curve_cap_peak_lat_accel_g: 0.20     # keep R15 under 5.4 m/s
