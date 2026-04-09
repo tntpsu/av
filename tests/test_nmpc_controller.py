@@ -217,6 +217,52 @@ class TestNMPCSolverSolve:
             assert len(solver._warm_u) == 2 * N
 
 
+class TestNMPCSignConvention:
+    """Verify NMPC steers in the same direction as LMPC for the same e_lat input."""
+
+    def test_positive_e_lat_steers_negative(self, solver):
+        """e_lat > 0 (car right of center) → steer left (negative delta)."""
+        N = solver.p.horizon
+        kappa = np.zeros(N)
+        result = solver.solve(0.3, 0.0, 5.0, 0.0, kappa, 5.0, 10.0, 0.077)
+        assert result['feasible']
+        assert result['steering_normalized'] < -0.01, (
+            f"Expected negative steering for positive e_lat, got {result['steering_normalized']:.4f}"
+        )
+
+    def test_negative_e_lat_steers_positive(self, solver):
+        """e_lat < 0 (car left of center) → steer right (positive delta)."""
+        N = solver.p.horizon
+        kappa = np.zeros(N)
+        result = solver.solve(-0.3, 0.0, 5.0, 0.0, kappa, 5.0, 10.0, 0.077)
+        assert result['feasible']
+        assert result['steering_normalized'] > 0.01, (
+            f"Expected positive steering for negative e_lat, got {result['steering_normalized']:.4f}"
+        )
+
+    def test_nmpc_matches_lmpc_direction(self):
+        """NMPC and LMPC must steer the same direction for the same e_lat."""
+        from control.mpc_controller import MPCController
+        lmpc = MPCController({})
+        nmpc = NMPCController({})
+        for e_lat in [0.3, -0.3, 0.1, -0.5]:
+            lr = lmpc.compute_steering(
+                e_lat=e_lat, e_heading=0.0, current_speed=5.0,
+                last_delta_norm=0.0, kappa_ref=0.0,
+                v_target=5.0, v_max=10.0, dt=0.077,
+            )
+            nr = nmpc.compute_steering(
+                e_lat=e_lat, e_heading=0.0, current_speed=5.0,
+                last_delta_norm=0.0, kappa_ref=0.0,
+                v_target=5.0, v_max=10.0, dt=0.077,
+            )
+            l_steer = lr['steering_normalized']
+            n_steer = nr['steering_normalized']
+            assert l_steer * n_steer > 0, (
+                f"Sign mismatch at e_lat={e_lat}: LMPC={l_steer:.4f}, NMPC={n_steer:.4f}"
+            )
+
+
 # ─── NMPCController tests ─────────────────────────────────────────────────────
 
 class TestNMPCController:

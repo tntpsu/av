@@ -362,7 +362,7 @@ control:
     # LMPC → NMPC upshift thresholds (Step 5)
     lmpc_max_speed_mps: 20.0           # above this + upshift_hysteresis → NONLINEAR_MPC
     lmpc_max_heading_error_rad: 0.25   # large heading error → NONLINEAR_MPC (LMPC linearisation breaks)
-    nmpc_curvature_threshold: 0.0      # disabled: NMPC e_lat sign convention needs investigation. Set to 0.015 when NMPC is ready.
+    nmpc_curvature_threshold: 0.015    # κ above this → NMPC (LMPC linearization degrades at R<67m)
 trajectory:
   trajectory_source: planner
   # Lane midpoint coordinate conversion uses the full PP lookahead distance to evaluate
@@ -900,10 +900,10 @@ trajectory:
   # warm-started from previous solution for sub-10ms typical solve time.
   # All keys use nmpc_ prefix to distinguish from LMPC (mpc_) params.
   nmpc:
-    nmpc_enabled: false             # disabled: NMPC e_lat sign convention needs proper investigation (correlation -0.998)
+    nmpc_enabled: true              # re-enabled: sign convention verified (same as LMPC — negate gt_cross_track)
     nmpc_horizon: 20                # N prediction steps
     nmpc_dt: 0.1                   # prediction step duration (s) — matches LMPC dt
-    nmpc_q_lat: 0.7                # lateral error weight — BASE; auto-derived from v²κ when curve_auto_derive:true (0.7@15m/s/κ0.002 → ~1.94@25m/s)
+    nmpc_q_lat: 10.0               # lateral error weight — matched to LMPC for tight curve tracking
     nmpc_q_heading: 5.0            # heading error weight
     nmpc_r_steer: 1.0e-4           # steering magnitude cost (near-zero — same philosophy as LMPC)
     nmpc_r_steer_rate: 1.5         # steering rate cost — PRIMARY comfort knob for NMPC

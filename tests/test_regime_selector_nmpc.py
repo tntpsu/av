@@ -110,12 +110,12 @@ def test_nmpc_not_reached_below_lmpc_max():
     assert regime == ControlRegime.LINEAR_MPC, f"Expected LMPC at 18 m/s, got {regime}"
 
 
-def test_nmpc_requires_lmpc_as_intermediate():
-    """NMPC must not be reachable directly from PP — requires PP→LMPC→NMPC path."""
+def test_nmpc_requires_hold_from_lmpc():
+    """NMPC not reachable on first frame — hold timer prevents immediate transition."""
     sel = _make_selector(lmpc_max_speed_mps=20.0, min_hold_frames=5)
-    # Jump directly to high speed from startup (PP state)
+    # Jump directly to high speed from startup (LMPC state)
     regime_early, _ = sel.update(speed=25.0)
-    # On the very first frame from PP at high speed, we should be upshifting toward LMPC, not NMPC
+    # On the very first frame at high speed, hold timer not met → still LMPC
     assert regime_early != ControlRegime.NONLINEAR_MPC
 
 
@@ -236,17 +236,17 @@ def test_blend_weight_transitions_smoothly_lmpc_to_nmpc():
 
 # ─── 8. Reset ─────────────────────────────────────────────────────────────────
 
-def test_reset_from_nmpc_returns_to_pp():
-    """reset() should return selector to PP regardless of current NMPC state."""
+def test_reset_from_nmpc_returns_to_lmpc():
+    """reset() should return selector to LMPC (MPC-primary default)."""
     sel = _make_selector(lmpc_max_speed_mps=20.0, min_hold_frames=5)
     _settle_in_lmpc(sel)
     _run_n(sel, speed=22.0, n=30)
 
     sel.reset()
-    assert sel.active_regime == ControlRegime.PURE_PURSUIT
+    assert sel.active_regime == ControlRegime.LINEAR_MPC
     regime, blend = sel.update(speed=22.0)
-    # First frame after reset: still PP (hold timer resets)
-    assert blend == pytest.approx(1.0) or regime == ControlRegime.PURE_PURSUIT
+    # First frame after reset: LMPC (hold timer resets before NMPC transition)
+    assert regime == ControlRegime.LINEAR_MPC
 
 
 # ─── 9. Curvature guard blocks NMPC upshift ──────────────────────────────────

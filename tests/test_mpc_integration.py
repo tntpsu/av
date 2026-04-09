@@ -80,6 +80,7 @@ def _base_cfg(regime_enabled: bool = False, **mpc_overrides) -> dict:
                 "downshift_hysteresis_mps": 1.0,
                 "blend_frames": 15,
                 "min_hold_frames": 2,  # short for tests
+                "stanley_enabled": False,  # disable Stanley to test PP/MPC transitions cleanly
             },
         },
         "trajectory": {"mpc": mpc},
@@ -159,9 +160,12 @@ class TestMPCEnabled:
         assert vc._mpc_controller is not None
 
     def test_low_speed_stays_pp(self):
-        """Below pp_max_speed_mps=10.0 → PURE_PURSUIT."""
+        """Below mpc_min_speed_absolute_mps (2.0) → PURE_PURSUIT after hold frames."""
         vc = _make_vehicle_controller(regime_enabled=True)
-        result = vc.compute_control(_state(speed=6.0), _ref(), return_metadata=True)
+        # MPC-primary: default is LMPC. Need min_hold_frames (2) at sub-minimum
+        # speed before regime selector switches to PP.
+        for _ in range(4):
+            result = vc.compute_control(_state(speed=1.5), _ref(), return_metadata=True)
         assert result["regime"] == 0  # PURE_PURSUIT
 
     def test_high_speed_shifts_to_mpc(self):
@@ -197,9 +201,15 @@ class TestMPCEnabled:
         for _ in range(4):
             vc.compute_control(_state(speed=12.0), _ref(), return_metadata=True)
         vc.reset()
-        # After reset, low speed must be PP again
-        result = vc.compute_control(_state(speed=5.0), _ref(), return_metadata=True)
-        assert result["regime"] == 0  # PURE_PURSUIT back after reset
+        # After reset, regime returns to LMPC (MPC-primary default).
+        # Verify reset worked by checking regime is LMPC (1), not stuck in some
+        # other state. Then verify sub-minimum speed transitions to PP.
+        result = vc.compute_control(_state(speed=8.0), _ref(), return_metadata=True)
+        assert result["regime"] == 1  # LMPC (MPC-primary default after reset)
+        # Now drive at sub-minimum speed to trigger PP fallback
+        for _ in range(4):
+            result = vc.compute_control(_state(speed=1.5), _ref(), return_metadata=True)
+        assert result["regime"] == 0  # PURE_PURSUIT at sub-minimum speed
 
 
 # ---------------------------------------------------------------------------

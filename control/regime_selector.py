@@ -1,21 +1,20 @@
 """
-Hierarchical control regime selector.
+MPC-primary hierarchical control regime selector.
 
-Routes lateral control to the appropriate algorithm based on lateral acceleration
-budget (κ×v²), speed, and error magnitude. Provides hysteresis and smooth blending.
+Routes lateral control to MPC by default, with PP as fallback only (solver failure
+or sub-minimum-speed). LMPC handles moderate curvature; NMPC handles tight curves
+where LMPC's linearization degrades.
 
-Regime thresholds (defaults, all configurable via YAML control.regime.*):
-  v < stanley_max_speed_mps (5.0 m/s) − hysteresis → STANLEY (low-speed precise)
-  κ×v² > mpc_max_lateral_accel_mps2 (1.5) + hyst   → PURE_PURSUIT (budget exceeded)
-  κ_map > mpc_max_map_curvature (0.020)             → PURE_PURSUIT (linearization limit)
-  v < mpc_min_speed_absolute_mps (2.0)              → PURE_PURSUIT (speed floor)
-  κ×v² < mpc_max_lateral_accel_mps2 − hyst          → LINEAR_MPC (primary controller)
-  v > lmpc_max_speed_mps (20 m/s)                   → NONLINEAR_MPC (future — Phase 2.7)
+Regime hierarchy (MPC-primary):
+  v < stanley_max_speed_mps              → STANLEY (very low speed / parking)
+  v < mpc_min_speed_absolute_mps (2.0)   → PURE_PURSUIT (MPC needs nonzero speed)
+  κ_map ≥ nmpc_curvature_threshold       → NONLINEAR_MPC (tight curves, R ≤ 67m)
+  v > lmpc_max_speed_mps (20 m/s)        → NONLINEAR_MPC (high speed)
+  |heading_error| > threshold            → NONLINEAR_MPC (large heading error)
+  otherwise                              → LINEAR_MPC (default)
 
-The lateral accel budget unifies the former speed threshold + curvature guard into
-a single physics-based decision: MPC's linear model degrades when lateral tire force
-(∝ κv²) approaches the nonlinear region. One threshold replaces 6 proxy parameters
-and eliminates per-track mpc_min_speed_mps overrides.
+PP is NOT a desired regime above min_speed — it only activates via mpc_fallback_active
+(when the MPC solver fails consecutively).
 
 Hysteresis prevents chatter near threshold.
 min_hold_frames prevents transient spikes from triggering switches.
@@ -133,8 +132,8 @@ class RegimeSelector:
 
     def __init__(self, config: RegimeConfig):
         self.config = config
-        self._active_regime = ControlRegime.PURE_PURSUIT
-        self._target_regime = ControlRegime.PURE_PURSUIT
+        self._active_regime = ControlRegime.LINEAR_MPC
+        self._target_regime = ControlRegime.LINEAR_MPC
         self._blend_progress = 1.0    # 1.0 = fully settled in active regime
         self._hold_counter = 0
         self._last_a_lat = 0.0        # κ×v² from last update (for HDF5 recording)
@@ -244,9 +243,9 @@ class RegimeSelector:
         return self._active_regime, self._blend_progress
 
     def reset(self) -> None:
-        """Reset to PP, no blend in progress. Call after e-stop or teleport."""
-        self._active_regime = ControlRegime.PURE_PURSUIT
-        self._target_regime = ControlRegime.PURE_PURSUIT
+        """Reset to LMPC (default), no blend in progress. Call after e-stop or teleport."""
+        self._active_regime = ControlRegime.LINEAR_MPC
+        self._target_regime = ControlRegime.LINEAR_MPC
         self._blend_progress = 1.0
         self._hold_counter = 0
         self._last_a_lat = 0.0
@@ -254,25 +253,28 @@ class RegimeSelector:
     def _compute_desired(self, speed: float, heading_error: float,
                          curvature_abs: float = 0.0,
                          map_curvature_abs: float = 0.0) -> ControlRegime:
-        """Compute desired regime based on lateral accel budget, map curvature, speed, and heading.
+        """Compute desired regime. MPC-primary architecture — PP is fallback only.
 
-        Two distinct physical constraints for PP↔MPC:
-          1. Lateral force budget (κ×v²): can MPC's tires handle this?
-          2. Linearization quality (κ_map): can MPC's model represent this curvature?
+        Hierarchy (MPC-primary):
+          Stanley: v < stanley_max_speed_mps (very low speed / parking)
+          PP:      v < mpc_min_speed_absolute_mps (MPC needs nonzero speed)
+          NMPC:    κ_map ≥ nmpc_curvature_threshold OR v > lmpc_max_speed OR
+                   |heading_error| > lmpc_max_heading_error_rad
+          LMPC:    default for everything else
 
-        Architecture:
-          Stanley: v < 4.5 m/s (parking/hairpin) — speed-based, not a proxy
-          PP:      κ×v² > budget + hyst (lateral demand exceeds MPC linear range)
-          PP:      κ_map > mpc_max_map_curvature (MPC linearization degrades)
-          PP:      v < min_speed_absolute (MPC needs nonzero speed)
-          MPC:     κ×v² < budget − hyst AND κ_map ≤ max AND v > min_speed (within budget)
-          NMPC:    v > lmpc_max_speed OR |heading_error| > threshold (future)
+        PP is never a "desired" regime above min_speed — it only activates via
+        mpc_fallback_active (solver failure) handled in update().
         """
-        thr_inhibit = float(self.config.stanley_inhibit_curvature_abs)
-        inhibit_stanley_on_curve = thr_inhibit > 0.0 and curvature_abs > thr_inhibit
+        # Record lateral accel for HDF5 telemetry (informational only)
+        self._last_a_lat = curvature_abs * speed * speed
 
-        # --- Stanley low-speed regime (Phase 2.9, unchanged) ---
+        min_speed = self.config.mpc_min_speed_absolute_mps
+
+        # --- Stanley low-speed regime ---
         if self.config.stanley_enabled:
+            thr_inhibit = float(self.config.stanley_inhibit_curvature_abs)
+            inhibit_stanley_on_curve = thr_inhibit > 0.0 and curvature_abs > thr_inhibit
+
             stanley_up = (
                 self.config.stanley_max_speed_mps + self.config.stanley_upshift_hysteresis_mps
             )
@@ -280,60 +282,26 @@ class RegimeSelector:
                 self.config.stanley_max_speed_mps - self.config.stanley_downshift_hysteresis_mps
             )
             if self._active_regime == ControlRegime.STANLEY:
-                if (
-                    not inhibit_stanley_on_curve
-                    and speed <= stanley_up
-                ):
+                if not inhibit_stanley_on_curve and speed <= stanley_up:
                     return ControlRegime.STANLEY
             else:
-                if (
-                    not inhibit_stanley_on_curve
-                    and speed < stanley_down
-                ):
+                if not inhibit_stanley_on_curve and speed < stanley_down:
                     return ControlRegime.STANLEY
 
-        # --- Lateral acceleration budget + map curvature guard ---
-        a_lat = curvature_abs * speed * speed           # κ × v²
-        self._last_a_lat = a_lat
-        threshold = self.config.mpc_max_lateral_accel_mps2
-        hyst = self.config.mpc_lateral_accel_hysteresis_mps2
-        min_speed = self.config.mpc_min_speed_absolute_mps
-        max_map_curv = self.config.mpc_max_map_curvature
+        # --- Speed floor: MPC needs nonzero speed ---
+        if speed < min_speed:
+            return ControlRegime.PURE_PURSUIT
 
-        # Map curvature guard: track geometry too tight for LINEAR MPC
-        map_curv_exceeds_lmpc = max_map_curv > 0.0 and map_curvature_abs >= max_map_curv
-
-        # NMPC curvature trigger: tight curves need nonlinear model
+        # --- NMPC for tight curves, high speed, or large heading error ---
         nmpc_curv_threshold = self.config.nmpc_curvature_threshold
         nmpc_curvature_triggered = nmpc_curv_threshold > 0.0 and map_curvature_abs >= nmpc_curv_threshold
 
-        # NMPC trigger: speed OR heading OR curvature
-        nmpc_desired = (
-            speed > self.config.lmpc_max_speed_mps
+        if (
+            nmpc_curvature_triggered
+            or speed > self.config.lmpc_max_speed_mps
             or abs(heading_error) > self.config.lmpc_max_heading_error_rad
-            or nmpc_curvature_triggered
-        )
+        ):
+            return ControlRegime.NONLINEAR_MPC
 
-        if self._active_regime in (ControlRegime.LINEAR_MPC, ControlRegime.NONLINEAR_MPC):
-            # Currently in MPC — check if NMPC should handle tight curves
-            if nmpc_desired:
-                return ControlRegime.NONLINEAR_MPC
-            # Downshift to PP only if budget exceeded AND curvature doesn't need NMPC
-            if (a_lat > threshold + hyst or speed < min_speed) and not nmpc_curvature_triggered:
-                return ControlRegime.PURE_PURSUIT
-            # Curvature exceeds LMPC guard but below NMPC threshold → PP
-            if map_curv_exceeds_lmpc and not nmpc_curvature_triggered:
-                return ControlRegime.PURE_PURSUIT
-            return ControlRegime.LINEAR_MPC
-        else:
-            # Currently in PP — route to NMPC if curvature demands it
-            if nmpc_curvature_triggered and speed > min_speed:
-                return ControlRegime.NONLINEAR_MPC
-            # Upshift to LMPC if within budget and curvature OK
-            if (
-                a_lat < threshold - hyst
-                and not map_curv_exceeds_lmpc
-                and speed > min_speed
-            ):
-                return ControlRegime.LINEAR_MPC
-            return ControlRegime.PURE_PURSUIT
+        # --- Default: LMPC ---
+        return ControlRegime.LINEAR_MPC

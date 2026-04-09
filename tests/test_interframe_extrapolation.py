@@ -123,7 +123,7 @@ class TestRegimeSelectorPeek:
     def test_peek_returns_current_state(self):
         sel = RegimeSelector(RegimeConfig(enabled=True))
         regime, blend = sel.peek()
-        assert regime == ControlRegime.PURE_PURSUIT
+        assert regime == ControlRegime.LINEAR_MPC  # MPC-primary: default is LMPC
         assert blend == 1.0
 
     def test_peek_does_not_advance_hysteresis(self):
@@ -141,11 +141,16 @@ class TestRegimeSelectorPeek:
 
     def test_peek_during_blend(self):
         sel = RegimeSelector(RegimeConfig(
-            enabled=True, min_hold_frames=1, blend_frames=10
+            enabled=True, min_hold_frames=1, blend_frames=10,
+            stanley_enabled=False,
         ))
-        # Trigger transition to MPC
+        # MPC-primary: default regime is LMPC. Force PP via sub-minimum speed,
+        # then transition back to LMPC to observe a blend.
         for _ in range(2):
-            sel.update(speed=15.0)
+            sel.update(speed=0.5)  # below mpc_min_speed_absolute_mps → PP
+        assert sel.peek()[0] == ControlRegime.PURE_PURSUIT
+        # Now drive above min speed to trigger transition back to LMPC
+        sel.update(speed=15.0)
         regime, blend = sel.peek()
         assert regime == ControlRegime.LINEAR_MPC
         assert 0.0 <= blend < 1.0  # mid-blend

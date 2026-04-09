@@ -34,6 +34,9 @@ def _make_selector(
     blend_frames=15,
     min_hold_frames=30,
     stanley_enabled=False,
+    lmpc_nmpc_min_hold_frames=5,
+    lmpc_nmpc_blend_frames=3,
+    nmpc_curvature_threshold=0.015,
 ) -> RegimeSelector:
     """Create a selector with lateral accel budget params (new architecture)."""
     cfg = RegimeConfig(
@@ -44,15 +47,21 @@ def _make_selector(
         blend_frames=blend_frames,
         min_hold_frames=min_hold_frames,
         stanley_enabled=stanley_enabled,
+        lmpc_nmpc_min_hold_frames=lmpc_nmpc_min_hold_frames,
+        lmpc_nmpc_blend_frames=lmpc_nmpc_blend_frames,
+        nmpc_curvature_threshold=nmpc_curvature_threshold,
     )
     return RegimeSelector(cfg)
 
 
-def _run_n(selector, speed, n=35, curvature_abs=0.0) -> tuple:
+def _run_n(selector, speed, n=35, curvature_abs=0.0, map_curvature_abs=None) -> tuple:
     """Run selector for n frames at constant speed. Returns last result."""
+    if map_curvature_abs is None:
+        map_curvature_abs = curvature_abs
     result = None
     for _ in range(n):
-        result = selector.update(speed=speed, curvature_abs=curvature_abs)
+        result = selector.update(speed=speed, curvature_abs=curvature_abs,
+                                 map_curvature_abs=map_curvature_abs)
     return result
 
 
@@ -121,16 +130,17 @@ def test_zero_curvature_upshift():
 # ---------------------------------------------------------------------------
 
 def test_high_alat_downshift():
-    """MPC active, then a_lat rises above threshold + hyst → PP."""
+    """MPC-primary: high a_lat with κ ≥ 0.015 routes to NMPC (not PP).
+    κ=0.025 ≥ nmpc_curvature_threshold (0.015) → NMPC handles tight curves."""
     sel = _make_selector(min_hold_frames=5)
     # Settle into MPC: v=12, κ=0.005 → a_lat=0.72
     _run_n(sel, speed=12.0, n=10, curvature_abs=0.005)
     assert sel.active_regime == ControlRegime.LINEAR_MPC
 
-    # Increase curvature: v=8.7, κ=0.025 → a_lat=1.89 > 1.8
+    # Increase curvature: v=8.7, κ=0.025 ≥ 0.015 → NMPC
     regime, _ = _run_n(sel, speed=8.7, n=10, curvature_abs=0.025)
-    assert regime == ControlRegime.PURE_PURSUIT, \
-        f"Expected PP at a_lat=1.89, got {regime}"
+    assert regime == ControlRegime.NONLINEAR_MPC, \
+        f"Expected NMPC at κ=0.025 (≥0.015), got {regime}"
 
 
 def test_mpc_stays_when_alat_below_downshift():
@@ -172,20 +182,21 @@ def test_budget_hysteresis_no_chatter():
 
 
 def test_budget_hysteresis_band():
-    """Verify exact dead band boundaries: upshift at <1.2, no upshift at 1.25."""
-    # a_lat = 1.25 → NOT < threshold-hyst (1.2) → stays PP
+    """MPC-primary: a_lat no longer drives PP routing. LMPC stays regardless of a_lat.
+    Both a_lat=1.25 and a_lat=1.10 stay in LMPC (κ < 0.015, speed above floor)."""
+    # a_lat = 1.25, κ=0.0125 < 0.015 → LMPC (MPC-primary, no PP routing)
     sel = _make_selector(min_hold_frames=5)
     # v=10, κ=0.0125 → a_lat=1.25
     regime, _ = _run_n(sel, speed=10.0, n=20, curvature_abs=0.0125)
-    assert regime == ControlRegime.PURE_PURSUIT, \
-        f"Expected PP at a_lat=1.25 (inside dead band), got {regime}"
+    assert regime == ControlRegime.LINEAR_MPC, \
+        f"Expected LMPC at a_lat=1.25 (MPC-primary, κ<0.015), got {regime}"
 
-    # a_lat = 1.10 → < 1.2 → should upshift to MPC
+    # a_lat = 1.10 → also LMPC
     sel2 = _make_selector(min_hold_frames=5)
     # v=10, κ=0.011 → a_lat=1.10
     regime, _ = _run_n(sel2, speed=10.0, n=20, curvature_abs=0.011)
     assert regime == ControlRegime.LINEAR_MPC, \
-        f"Expected MPC at a_lat=1.10 (below upshift threshold), got {regime}"
+        f"Expected LMPC at a_lat=1.10 (MPC-primary), got {regime}"
 
 
 # ---------------------------------------------------------------------------
@@ -193,18 +204,14 @@ def test_budget_hysteresis_band():
 # ---------------------------------------------------------------------------
 
 def test_upshift_requires_hold():
+    """MPC-primary: starts in LMPC, so first frame is already LMPC (no hold needed).
+    Verify that LMPC is active from the start at normal speed."""
     sel = _make_selector(min_hold_frames=30, blend_frames=15)
-    # a_lat=0 (straight), speed=12 → desired=MPC but hold not met
-    for frame in range(29):
-        regime, _ = sel.update(speed=12.0, curvature_abs=0.0)
-        assert regime == ControlRegime.PURE_PURSUIT, \
-            f"Should still be PP at frame {frame}, hold not met"
-
-    # Frame 30: hold counter hits min_hold_frames → switch
+    # MPC-primary: first frame at v=12, κ=0 → already LMPC
     regime, blend = sel.update(speed=12.0, curvature_abs=0.0)
     assert regime == ControlRegime.LINEAR_MPC, \
-        "Expected switch to LINEAR_MPC at frame 30"
-    assert blend < 1.0, "Blend should be < 1.0 immediately after switch"
+        f"MPC-primary: should be LMPC from first frame, got {regime}"
+    assert blend == 1.0, "No transition needed — already in LMPC"
 
 
 # ---------------------------------------------------------------------------
@@ -212,16 +219,17 @@ def test_upshift_requires_hold():
 # ---------------------------------------------------------------------------
 
 def test_blend_weight_ramp():
+    """MPC-primary: starts in LMPC, so verify blend ramp on LMPC→NMPC transition."""
     sel = _make_selector(min_hold_frames=5, blend_frames=15)
-    # Trigger switch quickly
+    # Already in LMPC from init — verify
     _run_n(sel, speed=12.0, n=6, curvature_abs=0.0)
     assert sel.active_regime == ControlRegime.LINEAR_MPC
-    assert sel.blend_progress < 1.0
+    assert sel.blend_progress == 1.0  # settled, no transition in progress
 
-    # Collect blend values over 20 frames
+    # Trigger LMPC→NMPC transition via high curvature (κ=0.025 ≥ 0.015)
     blends = []
-    for _ in range(20):
-        _, w = sel.update(speed=12.0, curvature_abs=0.0)
+    for _ in range(30):
+        _, w = sel.update(speed=12.0, curvature_abs=0.025)
         blends.append(w)
 
     # Must be monotonically non-decreasing
@@ -229,8 +237,8 @@ def test_blend_weight_ramp():
         assert blends[i] >= blends[i - 1], \
             f"Blend not monotone at index {i}: {blends[i-1]:.3f} → {blends[i]:.3f}"
 
-    # Must reach 1.0 within blend_frames
-    assert blends[-1] == 1.0, f"Blend did not reach 1.0 in 20 frames: {blends[-1]}"
+    # Must reach 1.0 by end
+    assert blends[-1] == 1.0, f"Blend did not reach 1.0 in 30 frames: {blends[-1]}"
 
 
 # ---------------------------------------------------------------------------
@@ -255,12 +263,13 @@ def test_fallback_forces_pp():
 # ---------------------------------------------------------------------------
 
 def test_reset_clears_state():
+    """MPC-primary: reset returns to LMPC (not PP)."""
     sel = _make_selector(min_hold_frames=5)
     _run_n(sel, speed=12.0, n=10, curvature_abs=0.0)
     assert sel.active_regime == ControlRegime.LINEAR_MPC
 
     sel.reset()
-    assert sel.active_regime == ControlRegime.PURE_PURSUIT
+    assert sel.active_regime == ControlRegime.LINEAR_MPC
     assert sel.blend_progress == 1.0
     assert sel.last_lateral_accel == 0.0
 
@@ -294,23 +303,22 @@ def test_peek_does_not_advance():
 # Cross-track budget tests (the specific scenarios from the plan)
 # ---------------------------------------------------------------------------
 
-def test_budget_r40_at_8p7_forces_pp():
-    """mixed_radius R40 corner: v=8.7, κ=0.025 → a_lat=1.89 > 1.8 → PP.
+def test_budget_r40_at_8p7_routes_nmpc():
+    """mixed_radius R40 corner: v=8.7, κ=0.025 → NMPC (κ ≥ 0.015).
 
-    This is THE root cause scenario: MPC was stuck on R40 under the old
-    speed-threshold logic because 8.7 m/s fell in the hysteresis dead band.
-    The lateral accel budget correctly identifies this as beyond MPC's
-    linear tire region.
+    MPC-primary architecture: tight curves route to NMPC, not PP.
+    The lateral accel budget is still computed for telemetry but
+    does not drive PP routing.
     """
     sel = _make_selector(min_hold_frames=5)
     # Start in MPC on a gentle section
     _run_n(sel, speed=11.4, n=10, curvature_abs=0.002)
     assert sel.active_regime == ControlRegime.LINEAR_MPC
 
-    # Enter R40 corner: a_lat = 0.025 × 8.7² = 1.89
+    # Enter R40 corner: κ=0.025 ≥ 0.015 → NMPC
     regime, _ = _run_n(sel, speed=8.7, n=10, curvature_abs=0.025)
-    assert regime == ControlRegime.PURE_PURSUIT, \
-        f"Expected PP on R40 at 8.7 m/s (a_lat=1.89), got {regime}"
+    assert regime == ControlRegime.NONLINEAR_MPC, \
+        f"Expected NMPC on R40 at 8.7 m/s (κ=0.025 ≥ 0.015), got {regime}"
 
 
 def test_budget_r200_at_11p4_keeps_mpc():
@@ -337,27 +345,27 @@ def test_budget_r100_at_11p4_keeps_mpc():
         f"Expected MPC on R100 at 11.4 m/s (a_lat=1.30), got {regime}"
 
 
-def test_budget_r50_at_9p9_forces_pp():
-    """Circle/oval R50: v=9.9, κ=0.020 → a_lat=1.96 → PP."""
+def test_budget_r50_at_9p9_routes_nmpc():
+    """Circle/oval R50: v=9.9, κ=0.020 → NMPC (κ ≥ 0.015)."""
     sel = _make_selector(min_hold_frames=5)
     _run_n(sel, speed=11.4, n=10, curvature_abs=0.002)  # start MPC
     assert sel.active_regime == ControlRegime.LINEAR_MPC
 
     regime, _ = _run_n(sel, speed=9.9, n=10, curvature_abs=0.020)
-    assert regime == ControlRegime.PURE_PURSUIT, \
-        f"Expected PP on R50 at 9.9 m/s (a_lat=1.96), got {regime}"
+    assert regime == ControlRegime.NONLINEAR_MPC, \
+        f"Expected NMPC on R50 at 9.9 m/s (κ=0.020 ≥ 0.015), got {regime}"
 
 
-def test_budget_r60_at_8p9_keeps_mpc():
-    """mixed_radius R60: v=8.9, κ=0.017 → a_lat=1.35 → MPC stays (in dead band)."""
+def test_budget_r60_at_8p9_routes_nmpc():
+    """mixed_radius R60: v=8.9, κ=0.017 ≥ 0.015 → NMPC (tight curve)."""
     sel = _make_selector(min_hold_frames=5)
     # Enter MPC on gentle section first
-    _run_n(sel, speed=11.4, n=10, curvature_abs=0.002)  # a_lat=0.26
+    _run_n(sel, speed=11.4, n=10, curvature_abs=0.002)
     assert sel.active_regime == ControlRegime.LINEAR_MPC
-    # R60 corner: a_lat=1.35 < 1.8 → MPC stays
+    # R60 corner: κ=0.017 ≥ 0.015 → NMPC
     regime, _ = _run_n(sel, speed=8.9, n=10, curvature_abs=0.017)
-    assert regime == ControlRegime.LINEAR_MPC, \
-        f"Expected MPC on R60 at 8.9 m/s (a_lat=1.35), got {regime}"
+    assert regime == ControlRegime.NONLINEAR_MPC, \
+        f"Expected NMPC on R60 at 8.9 m/s (κ=0.017 ≥ 0.015), got {regime}"
 
 
 @pytest.mark.parametrize("track,speed,kappa,expected_regime", [
@@ -368,37 +376,29 @@ def test_budget_r60_at_8p9_keeps_mpc():
     ("hill R100", 11.4, 0.010, ControlRegime.LINEAR_MPC),        # a_lat=1.30
     ("mixed R200", 11.4, 0.005, ControlRegime.LINEAR_MPC),       # a_lat=0.65
     ("mixed R150", 11.4, 0.007, ControlRegime.LINEAR_MPC),       # a_lat=0.87
-    ("mixed R60", 8.9, 0.017, ControlRegime.LINEAR_MPC),         # a_lat=1.33
-    ("mixed R40", 8.7, 0.025, ControlRegime.PURE_PURSUIT),       # a_lat=1.89
-    ("circle R50", 9.9, 0.020, ControlRegime.PURE_PURSUIT),      # a_lat=1.96
-    ("oval R50", 9.9, 0.020, ControlRegime.PURE_PURSUIT),        # a_lat=1.96
+    ("mixed R60", 8.9, 0.017, ControlRegime.NONLINEAR_MPC),       # κ≥0.015 → NMPC
+    ("mixed R40", 8.7, 0.025, ControlRegime.NONLINEAR_MPC),      # κ≥0.015 → NMPC
+    ("circle R50", 9.9, 0.020, ControlRegime.NONLINEAR_MPC),     # κ≥0.015 → NMPC
+    ("oval R50", 9.9, 0.020, ControlRegime.NONLINEAR_MPC),       # κ≥0.015 → NMPC
 ], ids=lambda x: x if isinstance(x, str) else "")
 def test_budget_sweep_all_tracks(track, speed, kappa, expected_regime):
-    """Parameterized cross-track budget sweep.
+    """Parameterized cross-track budget sweep (MPC-primary).
 
     Each row represents the tightest corner on a track at its typical
-    operating speed. The lateral accel budget must route every track
-    correctly without per-track overrides.
+    operating speed. MPC-primary: LMPC is default, NMPC for κ ≥ 0.015.
+    PP only reachable via fallback or speed < min_speed.
     """
     sel = _make_selector(min_hold_frames=3)
     sel.config.stanley_enabled = False
 
-    a_lat = kappa * speed * speed
-    threshold = 1.5
-    hyst = 0.3
-
-    if expected_regime == ControlRegime.PURE_PURSUIT:
-        # Start in MPC to test downshift
-        _run_n(sel, speed=11.4, n=10, curvature_abs=0.002)
-        assert sel.active_regime == ControlRegime.LINEAR_MPC
-        regime, _ = _run_n(sel, speed=speed, n=10, curvature_abs=kappa)
-    elif a_lat > threshold - hyst:
-        # a_lat in dead band — can only stay in MPC, can't upshift from PP
+    # MPC-primary: start in LMPC, run at target speed/curvature
+    # For NMPC cases, start from LMPC on gentle section first
+    if expected_regime == ControlRegime.NONLINEAR_MPC:
         _run_n(sel, speed=11.4, n=10, curvature_abs=0.002)
         assert sel.active_regime == ControlRegime.LINEAR_MPC
         regime, _ = _run_n(sel, speed=speed, n=10, curvature_abs=kappa)
     else:
-        # Test upshift from PP (a_lat below upshift threshold)
+        # LMPC cases — run directly (already starts in LMPC)
         regime, _ = _run_n(sel, speed=speed, n=10, curvature_abs=kappa)
 
     assert regime == expected_regime, \
@@ -411,26 +411,23 @@ def test_budget_sweep_all_tracks(track, speed, kappa, expected_regime):
 # ---------------------------------------------------------------------------
 
 def test_full_sweep_speed_and_budget():
-    """Sweep v and κ → verify correct regimes across the envelope."""
+    """Sweep v and κ → verify correct regimes across the envelope (MPC-primary)."""
     sel = _make_selector(min_hold_frames=3)
     sel.config.stanley_enabled = False
 
-    # Low speed → PP (speed floor)
+    # Low speed → PP (speed floor: v < 2.0)
     _run_n(sel, speed=1.5, n=10, curvature_abs=0.005)
     assert sel.active_regime == ControlRegime.PURE_PURSUIT
 
-    # Medium speed, low κ → MPC (a_lat = 0.32)
+    # Medium speed, low κ → LMPC (default regime, κ < 0.015)
     _run_n(sel, speed=8.0, n=10, curvature_abs=0.005)
     assert sel.active_regime == ControlRegime.LINEAR_MPC
 
-    # Medium speed, high κ → PP (a_lat = 64×0.025 = 1.6; from MPC, need >1.8)
-    # Actually 1.6 < 1.8, so stays MPC. Use higher κ to exceed downshift.
-    # v=8, κ=0.030 → a_lat=1.92 > 1.8
+    # Medium speed, high κ → NMPC (κ=0.030 ≥ 0.015)
     _run_n(sel, speed=8.0, n=10, curvature_abs=0.030)
-    assert sel.active_regime == ControlRegime.PURE_PURSUIT
+    assert sel.active_regime == ControlRegime.NONLINEAR_MPC
 
-    # Back to low κ → must clear upshift threshold (a_lat < 1.2)
-    # v=8, κ=0.010 → a_lat=0.64 < 1.2 → MPC
+    # Back to low κ → LMPC (κ=0.010 < 0.015)
     _run_n(sel, speed=8.0, n=10, curvature_abs=0.010)
     assert sel.active_regime == ControlRegime.LINEAR_MPC
 
@@ -633,11 +630,10 @@ def test_stanley_hysteresis_no_chatter():
 
 
 def test_stanley_full_speed_sweep():
-    """Speed sweep exercises Stanley, PP, and LMPC regimes.
+    """Speed sweep exercises Stanley, LMPC, and NMPC regimes (MPC-primary).
 
-    With the lateral accel budget, PP only appears when a_lat is in the
-    dead band or above the upshift threshold. We use curvature to create
-    a PP-worthy a_lat at mid speed.
+    MPC-primary: PP only reachable via fallback or speed < min_speed.
+    Mid-speed with κ < 0.015 goes to LMPC. High κ goes to NMPC.
     """
     sel = _make_stanley_selector(
         stanley_max_speed_mps=5.0,
@@ -651,20 +647,17 @@ def test_stanley_full_speed_sweep():
         regime, _ = sel.update(speed=2.0, curvature_abs=0.0)
         regimes_seen.add(regime)
 
-    # Phase 2: mid speed, high curvature → PP (v=7.0, κ=0.030 → a_lat=1.47)
-    # From Stanley, exits to PP because a_lat is in dead band (1.2-1.8)
-    # and not below upshift threshold
+    # Phase 2: mid speed, low curvature → LMPC (v=7.0, κ=0.005 < 0.015)
     for _ in range(20):
-        regime, _ = sel.update(speed=7.0, curvature_abs=0.030)
+        regime, _ = sel.update(speed=7.0, curvature_abs=0.005)
         regimes_seen.add(regime)
 
-    # Phase 3: high speed, straight → MPC (v=14.0, κ=0 → a_lat=0)
+    # Phase 3: high speed, straight → LMPC (v=14.0, κ=0 → a_lat=0)
     for _ in range(20):
         regime, _ = sel.update(speed=14.0, curvature_abs=0.0)
         regimes_seen.add(regime)
 
     assert ControlRegime.STANLEY in regimes_seen, "Expected STANLEY in sweep"
-    assert ControlRegime.PURE_PURSUIT in regimes_seen, "Expected PP in sweep"
     assert ControlRegime.LINEAR_MPC in regimes_seen, "Expected LMPC in sweep"
 
 
