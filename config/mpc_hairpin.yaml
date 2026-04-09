@@ -11,4 +11,4 @@
 
 trajectory:
   speed_governor:
-    curve_cap_peak_lat_accel_g: 0.12   # keep R15 under 4.2 m/s — NMPC needs margin to track at low speed
+    curve_cap_peak_lat_accel_g: 0.20   # keep R15 under 5.4 m/s (base 0.26 → 6.2 m/s at R15)

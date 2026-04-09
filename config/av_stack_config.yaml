@@ -756,7 +756,7 @@ trajectory:
     comfort_governor_min_speed: 3.0
     curvature_calibration_scale: 2.5
     curvature_history_frames: 5
-    curve_preview_enabled: true
+    curve_preview_enabled: false          # use map κ for speed cap (exact, available from track YAML)
     curve_preview_lookahead_scale: 1.6
     curve_preview_max_decel_mps2: 1.2
     curve_preview_min_curvature: 0.002
@@ -773,7 +773,7 @@ trajectory:
     curve_cap_curvature_min: 0.002
     curve_cap_rise_min: 0.0005
     curve_cap_peak_lat_accel_g: 0.26
-    curve_cap_use_preview_curvature: true
+    curve_cap_use_preview_curvature: false  # use map κ not perception preview (avoids noise/delay)
   lane_position_smoothing_alpha: 0.2
   ref_point_jump_clamp_x: 0.15
   ref_point_jump_clamp_heading: 0.08
