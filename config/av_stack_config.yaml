@@ -350,7 +350,7 @@ control:
     min_hold_frames: 30
     # Stanley low-speed regime (Phase 2.9)
     stanley_enabled: true              # Activates when regime.enabled=true
-    stanley_max_speed_mps: 3.0         # Below this speed → Stanley (m/s) — lowered from 5.0 to keep PP on curve entries
+    stanley_max_speed_mps: 2.0         # Below this speed → Stanley (m/s) — matches mpc_min_speed_absolute_mps (MPC-primary)
     stanley_upshift_hysteresis_mps: 0.5   # Must exceed 3.5 m/s to leave Stanley
     stanley_downshift_hysteresis_mps: 0.5 # Must drop below 2.5 m/s to enter Stanley
     stanley_blend_frames: 10           # 0.77s at 13 FPS — smooth low-speed transition
