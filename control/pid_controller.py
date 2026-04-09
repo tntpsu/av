@@ -6223,19 +6223,15 @@ class VehicleController:
 
             if gt_cross_track is not None and gt_heading is not None:
                 if _use_lookahead_ref and gt_cross_track_lookahead is not None:
-                    # Lookahead reference: same point PP steers toward and scoring
-                    # measures. NMPC internal convention matches gt_cross_track
-                    # sign directly (no negation needed — opposite of LMPC block).
-                    # Verified: LMPC negates and gets corr(mpc_e_lat, lat_err)=-1.
-                    # NMPC must also get corr=-1, which requires NO negation here
-                    # because the NMPC solver internally handles the sign mapping.
-                    raw_e_lat = float(gt_cross_track_lookahead)
+                    # Same negation as LMPC: gt_cross_track_lookahead > 0 = car LEFT.
+                    # Both solvers use e_lat > 0 = car RIGHT. Negate.
+                    raw_e_lat = -float(gt_cross_track_lookahead)
                     _mpc_e_lat_ref_source = 'lookahead_gt'
                 elif gt_cross_track_source_code == 'road_frame_at_car':
                     raw_e_lat = float(gt_cross_track)
                     _mpc_e_lat_ref_source = 'at_car_gt'
                 else:
-                    raw_e_lat = float(gt_cross_track)
+                    raw_e_lat = -float(gt_cross_track)
                     _mpc_e_lat_ref_source = 'at_car_gt'
                 raw_e_heading = float(gt_heading)
             else:

@@ -909,6 +909,7 @@ trajectory:
     nmpc_r_steer_rate: 1.5         # steering rate cost — PRIMARY comfort knob for NMPC
     nmpc_q_lat_terminal_scale: 3.0 # terminal state lateral weight multiplier
     nmpc_q_heading_terminal_scale: 3.0
+    nmpc_understeer_gradient: 0.025  # K_us: L_eff = L + K_us*v² (from sysid, accounts for tire slip)
     nmpc_delta_rate_max: 0.5       # max normalised steering change per step
     nmpc_max_accel: 3.0            # m/s²
     nmpc_max_decel: 4.0            # m/s²

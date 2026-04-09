@@ -14,8 +14,9 @@ Vs LMPC (mpc_controller.py):
   Solver: LMPC uses OSQP (QP, ~1 ms), NMPC uses scipy SLSQP (NLP, ≤20 ms budget)
 
 Nonlinear bicycle dynamics (Frenet error frame, discrete, exact):
+  L_eff           = L + K_us · v²   (effective wheelbase with understeer gradient)
   e_lat[k+1]     = e_lat[k] + v[k] · sin(e_heading[k]) · dt
-  e_heading[k+1] = e_heading[k] + (v[k]/L) · tan(δ_norm[k] · δ_max) · dt − κ[k] · v[k] · dt
+  e_heading[k+1] = e_heading[k] + (v[k]/L_eff) · tan(δ_norm[k] · δ_max) · dt − κ[k] · v[k] · dt
   v[k+1]         = v[k] + (a[k] + gravity_offset) · dt
 
 State:  x = [e_lat, e_heading, v]
@@ -87,6 +88,11 @@ class NMPCParams:
     max_iter: int = 50                  # SLSQP iteration limit
     max_consecutive_failures: int = 3
 
+    # Understeer gradient: L_eff(v) = wheelbase_m + understeer_gradient * v²
+    # Accounts for tire slip at speed; from sysid (tools/analyze/sysid_dynamic_model.py).
+    # 0.0 = use geometric wheelbase (kinematic model).
+    understeer_gradient: float = 0.025
+
     # Startup warmup: first warmup_frames after activation use last_delta=0
     # to allow SLSQP to find a feasible point when cold-starting from PP.
     warmup_frames: int = 5
@@ -155,6 +161,8 @@ class NMPCSolver:
         states[0, 1] = e_heading0
         states[0, 2] = v0
 
+        K_us = p.understeer_gradient
+
         for k in range(N):
             e_l = states[k, 0]
             e_h = states[k, 1]
@@ -164,11 +172,11 @@ class NMPCSolver:
             kk = kappa[k]
 
             delta = delta_norm * dmax
+            L_eff = L + K_us * v * v
 
             states[k + 1, 0] = e_l + v * math.sin(e_h) * dt
-            # Clamp tan argument away from singularity (max_steer_rad=30° → tan=0.577, safe)
             states[k + 1, 1] = (
-                e_h + (v / L) * math.tan(delta) * dt - kk * v * dt
+                e_h + (v / L_eff) * math.tan(delta) * dt - kk * v * dt
             )
             v_next = v + (a + gravity_offset) * dt
             states[k + 1, 2] = max(p.v_min, min(v_max_eff, v_next))
@@ -212,6 +220,8 @@ class NMPCSolver:
         L = p.wheelbase_m
         dmax = p.max_steer_rad
 
+        K_us = p.understeer_gradient
+
         # ── Forward pass: simulate dynamics and cache per-step quantities ──
         states = np.empty((N + 1, 3))
         states[0] = [e_lat0, e_heading0, v0]
@@ -220,6 +230,7 @@ class NMPCSolver:
         cos_eh = np.empty(N)       # cos(e_heading[k])
         tan_d = np.empty(N)        # tan(delta[k])
         cos2_d = np.empty(N)       # cos²(delta[k])
+        L_eff_arr = np.empty(N)    # effective wheelbase at each step
         v_clamped = np.zeros(N)    # True when v_{k+1} was clamped
 
         for k in range(N):
@@ -234,9 +245,11 @@ class NMPCSolver:
             cos_eh[k] = math.cos(e_h)
             tan_d[k] = math.tan(delta)
             cos2_d[k] = cd * cd
+            L_eff = L + K_us * v * v
+            L_eff_arr[k] = L_eff
 
             states[k + 1, 0] = e_l + v * sin_eh[k] * dt
-            states[k + 1, 1] = e_h + (v / L) * tan_d[k] * dt - kk * v * dt
+            states[k + 1, 1] = e_h + (v / L_eff) * tan_d[k] * dt - kk * v * dt
             v_next = v + (a + gravity_offset) * dt
             if v_next <= p.v_min or v_next >= v_max_eff:
                 v_clamped[k] = 1.0   # gradient through clamp = 0
@@ -302,25 +315,23 @@ class NMPCSolver:
         for k in range(N - 1, -1, -1):
             e_l, e_h, v = states[k]
             kk = kappa[k]
+            Lk = L_eff_arr[k]
 
             # B_k^T · λ: control gradient from dynamics
-            # B_k^T[0, :] = [0, (v/L)*(dmax/cos²δ)*dt, 0]
-            # B_k^T[1, :] = [0, 0, dt]  — zeroed if v was clamped
-            steer_gain = (v / L) * (dmax / cos2_d[k]) * dt
+            # B_k[1,0] = (v/L_eff)*(dmax/cos²δ)*dt
+            steer_gain = (v / Lk) * (dmax / cos2_d[k]) * dt
             grad[2 * k] += steer_gain * lam[1]
             if not v_clamped[k]:
                 grad[2 * k + 1] += dt * lam[2]
 
             # A_k^T · λ + ∂c_k/∂x_k  (backward adjoint step)
-            # A_k^T:
-            #   row 0: [1, 0, 0]
-            #   row 1: [v·cos(eₕ)·dt, 1, 0]
-            #   row 2: [sin(eₕ)·dt,   (1/L)·tan(δ)·dt − κ·dt,   1 (0 if clamped)]
-            # Note: A_k[1, 2] = (1/L)·tan(δ)·dt − κ·dt (not v/L — v is not a factor here)
+            # A_k[1, 2] = ∂e_heading_{k+1}/∂v_k
+            #   = [(L - K_us·v²) / L_eff²] · tan(δ) · dt − κ · dt
+            a12 = ((L - K_us * v * v) / (Lk * Lk)) * tan_d[k] * dt - kk * dt
             new_lam_0 = lam[0]
             new_lam_1 = v * cos_eh[k] * dt * lam[0] + lam[1]
             new_lam_2 = (sin_eh[k] * dt * lam[0]
-                         + ((1.0 / L) * tan_d[k] * dt - kk * dt) * lam[1]
+                         + a12 * lam[1]
                          + (0.0 if v_clamped[k] else lam[2]))
             lam = np.array([
                 new_lam_0 + dc_dx[k, 0],
