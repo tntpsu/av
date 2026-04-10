@@ -1405,6 +1405,8 @@ class AVStack:
         ).strip()
         self._reference_entry_track_total_length_m: Optional[float] = None
         self._reference_entry_track_curves: list[dict] = []
+        self._track_loop: bool = True  # assume looping unless YAML says otherwise
+        self._gt_boundary_corrupt_streak: int = 0  # consecutive frames with corrupt GT boundaries
         # Odometry-based track position: accumulate driven distance each frame
         # so the YAML segment lookup works without Unity sending roadCenterReferenceT.
         self._track_odometer_m: float = 0.0
@@ -1544,6 +1546,7 @@ class AVStack:
             if distance_cursor > 1e-3 and curves:
                 self._reference_entry_track_total_length_m = float(distance_cursor)
                 self._reference_entry_track_curves = curves
+                self._track_loop = bool(cfg.get('loop', True))
                 self._track_profile_loaded = True
                 # Seed odometer at the track's spawn offset so segment lookups
                 # are correct from frame 0 without needing Unity to send
@@ -1552,11 +1555,12 @@ class AVStack:
                 self._track_odometer_m = start_dist
                 self._track_odometer_last_pos = None
                 logger.info(
-                    "[LOOKAHEAD_ENTRY] Loaded track profile '%s' curves=%d total=%.2fm start_dist=%.1fm",
+                    "[LOOKAHEAD_ENTRY] Loaded track profile '%s' curves=%d total=%.2fm start_dist=%.1fm loop=%s",
                     track_name,
                     len(curves),
                     self._reference_entry_track_total_length_m,
                     start_dist,
+                    self._track_loop,
                 )
         except Exception as exc:
             logger.warning("[LOOKAHEAD_ENTRY] Failed to load track profile '%s': %s", track_name, exc)
@@ -1945,7 +1949,7 @@ class AVStack:
             if 0.0 < delta < 5.0:  # guard against teleports
                 self._track_odometer_m += delta
                 total = float(self._reference_entry_track_total_length_m)
-                if total > 0.0:
+                if total > 0.0 and self._track_loop:
                     self._track_odometer_m = self._track_odometer_m % total
             elif delta >= 5.0:
                 self._map_odometer_teleport_skip_count += 1
@@ -3494,7 +3498,22 @@ class AVStack:
                     if elapsed >= duration:
                         logger.info(f"Reached duration limit: {duration}s")
                         break
-                
+
+                # End-of-track check for non-looping tracks.
+                # Stop gracefully before the car drives off the road mesh.
+                if (
+                    not self._track_loop
+                    and self._reference_entry_track_total_length_m is not None
+                    and self._track_odometer_m >= self._reference_entry_track_total_length_m - 5.0
+                ):
+                    logger.info(
+                        "End of non-looping track reached (odometer=%.1fm, total=%.1fm). "
+                        "Stopping gracefully.",
+                        self._track_odometer_m,
+                        self._reference_entry_track_total_length_m,
+                    )
+                    break
+
                 # Rate limiting: maintain target FPS.
                 # When inter-frame extrapolation is enabled, poll at a faster rate
                 # (min_interframe_dt_s) so we can run lightweight MPC updates between
@@ -9023,16 +9042,28 @@ class AVStack:
                 if gt_left_lane_line_x is not None and gt_right_lane_line_x is not None:
                     gt_left_lane_line_x = float(gt_left_lane_line_x)
                     gt_right_lane_line_x = float(gt_right_lane_line_x)
-                    # Step 3D: Sanity filter — reject corrupt GT boundaries (>50m)
-                    # GroundTruthReporter can produce 5000+ m values at track mesh seams
-                    gt_sanity_limit = 50.0
+                    # Step 3D: Sanity filter — reject corrupt GT boundaries (>20m)
+                    # GroundTruthReporter produces garbage values at track mesh seams
+                    # and non-looping track ends. 20m is generous — widest roads are ~7m.
+                    gt_sanity_limit = 20.0
                     if abs(gt_left_lane_line_x) > gt_sanity_limit or abs(gt_right_lane_line_x) > gt_sanity_limit:
-                        logger.warning(
-                            f"[Frame {self.frame_count}] GT boundary corrupt: "
-                            f"left={gt_left_lane_line_x:.1f}m, right={gt_right_lane_line_x:.1f}m — skipping GT e-stop"
-                        )
+                        self._gt_boundary_corrupt_streak = getattr(self, '_gt_boundary_corrupt_streak', 0) + 1
+                        if self._gt_boundary_corrupt_streak <= 3:
+                            logger.warning(
+                                f"[Frame {self.frame_count}] GT boundary corrupt: "
+                                f"left={gt_left_lane_line_x:.1f}m, right={gt_right_lane_line_x:.1f}m — skipping GT e-stop"
+                            )
+                        if self._gt_boundary_corrupt_streak >= 10:
+                            logger.info(
+                                f"[Frame {self.frame_count}] GT boundaries corrupt for "
+                                f"{self._gt_boundary_corrupt_streak} consecutive frames — "
+                                f"likely end of track. Stopping gracefully."
+                            )
+                            self.running = False
                         gt_left_lane_line_x = None
                         gt_right_lane_line_x = None
+                    else:
+                        self._gt_boundary_corrupt_streak = 0
                     gt_bounds_available = (
                         gt_left_lane_line_x is not None
                         and gt_right_lane_line_x is not None
