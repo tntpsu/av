@@ -2351,6 +2351,37 @@ def _print_summary_report(recording_path: Path, summary: Dict, analyze_to_failur
             f"{first_fault_chain.get('first_speed_above_feasibility_frame')}"
         )
         print(f"     first_boundary_breach_frame: {first_fault_chain.get('first_boundary_breach_frame')}")
+    # Compute odometer from recording for curve event cross-checking.
+    # Uses actual vehicle position deltas (not speed integral) for accuracy.
+    _odo_at_frame: dict[int, float] = {}
+    _track_total_m: float = 0.0
+    try:
+        import h5py as _h5
+        with _h5.File(str(recording_path), 'r') as _hf:
+            _pos = _hf['vehicle/position'][:]
+            _deltas = np.linalg.norm(np.diff(_pos[:, [0, 2]], axis=0), axis=1)
+            _start_dist = 0.0
+            try:
+                _cfg_json = _hf['meta/runtime_config_json'][()]
+                if isinstance(_cfg_json, bytes):
+                    _cfg_json = _cfg_json.decode()
+                import json
+                _rt_cfg = json.loads(_cfg_json)
+                _start_dist = float(_rt_cfg.get('start_distance', 0.0) or 0.0)
+            except Exception:
+                pass
+            _cum_odo = np.cumsum(np.insert(_deltas, 0, 0.0)) + _start_dist
+            for i in range(len(_cum_odo)):
+                _odo_at_frame[i] = float(_cum_odo[i])
+            # Track total length from curve intent diagnostics
+            _tw = curve_intent_diag.get("track_windows", {})
+            if isinstance(_tw, dict):
+                _track_total_m = float(_tw.get("total_length_m", 0.0) or 0.0)
+            if _track_total_m <= 0:
+                _track_total_m = float(summary.get("track_total_length_m", 0.0) or 0.0)
+    except Exception:
+        pass
+
     curve_turn_events = summary.get("curve_turn_events", [])
     if curve_turn_events:
         print("   Curve Turn Events:")
@@ -2381,9 +2412,12 @@ def _print_summary_report(recording_path: Path, summary: Dict, analyze_to_failur
             owner_mode = event.get("reference_lookahead_owner_mode")
             owner_source = event.get("reference_lookahead_entry_weight_source")
             fallback_rate = event.get("reference_lookahead_fallback_active_rate")
+            _entry_fr = event.get('entry_frame', 0)
+            _odo_val = _odo_at_frame.get(_entry_fr if isinstance(_entry_fr, int) else 0)
+            _odo_text = f"{_odo_val:.0f}m" if _odo_val is not None else "N/A"
             print(
-                f"     C{event.get('curve_index', '?')}: entry={event.get('entry_frame')}, "
-                f"exit={event.get('exit_frame')}, peak|lat|={float(event.get('peak_lateral_error_m', 0.0)):.3f} m, "
+                f"     C{event.get('curve_index', '?')}: entry={_entry_fr}, "
+                f"exit={event.get('exit_frame')}, odo={_odo_text}, peak|lat|={float(event.get('peak_lateral_error_m', 0.0)):.3f} m, "
                 f"curveStart={curve_start_frame}, ppLdMin={pp_text}, onset={onset_text}, onsetVsStart={onset_delta_text}, "
                 f"entrySevP50={(float(entry_severity_p50) if entry_severity_p50 is not None else float('nan')):.2f}, "
                 f"entryOnP50={(float(entry_on_p50) if entry_on_p50 is not None else float('nan')):.2f}, "
@@ -2511,6 +2545,22 @@ def _print_summary_report(recording_path: Path, summary: Dict, analyze_to_failur
         except Exception:
             pass
         print()
+
+    # Track-end detection: flag if recording ended near the track boundary
+    if _odo_at_frame and _track_total_m > 0:
+        _final_odo = max(_odo_at_frame.values()) if _odo_at_frame else 0.0
+        _laps = _final_odo / _track_total_m
+        _remaining = _track_total_m - (_final_odo % _track_total_m)
+        if _remaining < 10.0 or _laps >= 0.95:
+            _fail_frame = executive.get("failure_frame")
+            _has_estop = any("Emergency stop" in str(r) or "emergency" in str(r).lower()
+                             for r in recommendations)
+            if _has_estop or _fail_frame:
+                print("   *** TRACK-END NOTE: Recording ended near track boundary "
+                      f"(odo={_final_odo:.0f}m, track={_track_total_m:.0f}m, "
+                      f"laps={_laps:.2f}). Emergency stop may be caused by "
+                      "driving off the end of a non-looping track, not a control failure. ***")
+                print()
 
     print("20. RECOMMENDATIONS")
     print("-" * 80)

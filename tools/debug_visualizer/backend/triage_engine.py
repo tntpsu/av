@@ -925,6 +925,26 @@ PATTERNS = [
         "fix_hint": "Increase reversal_taper_factor to reduce taper earlier; check time_to_curve_s accuracy",
         "check": lambda m: m.get("steering_profile_reversal_slow_count", 0) >= 3,
     },
+    {
+        "id": "false_curve_anticipation",
+        "name": "Curve anticipation active while far from curve (distance weight ≈ 0)",
+        "severity": "instability",
+        "code_pointer": "trajectory/utils.py:compute_curve_anticipation_score(~line 200)",
+        "config_lever": "trajectory.reference_lookahead_entry_distance_start_m",
+        "fix_hint": "Preview curvature saturates anticipation score far from curve. "
+                    "Check curve_anticipation_distance_weight — should be near 0 when >20m from curve.",
+        "check": lambda m: m.get("false_curve_anticipation_rate", 0) > 0.10,
+    },
+    {
+        "id": "nmpc_low_speed_fallback",
+        "name": "NMPC fallback concentrated at low speed (<5 m/s)",
+        "severity": "instability",
+        "code_pointer": "control/nmpc_controller.py:NMPCSolver.solve(~line 471)",
+        "config_lever": "trajectory.nmpc.nmpc_dt_max / SLSQP ftol",
+        "fix_hint": "NMPC solver can't converge at low speed (flat cost landscape). "
+                    "Check speed-band fallback breakdown in mpc_pipeline_analysis.",
+        "check": lambda m: m.get("nmpc_low_speed_fallback_rate", 0) > 0.30,
+    },
 ]
 
 SEVERITY_ORDER = {"safety": 0, "instability": 1, "comfort": 2}
@@ -1152,8 +1172,24 @@ class TriageEngine:
                     float(np.mean(nmpc_fallback[nmpc_mask]))
                     if nmpc_fallback is not None else 0.0
                 )
+
+                # NMPC low-speed fallback: fallback rate at <5 m/s
+                speed_arr = arr("vehicle/speed")
+                if nmpc_fallback is not None and speed_arr is not None:
+                    _low_speed_nmpc = nmpc_mask & (speed_arr < 5.0)
+                    if np.sum(_low_speed_nmpc) > 0:
+                        m["nmpc_low_speed_fallback_rate"] = float(
+                            np.mean(nmpc_fallback[_low_speed_nmpc])
+                        )
             else:
                 m["nmpc_available"] = False
+
+            # Curve anticipation false positive: active while distance weight ≈ 0
+            antic_active = arr("control/curve_anticipation_active")
+            antic_dist_w = arr("control/curve_anticipation_distance_weight")
+            if antic_active is not None and antic_dist_w is not None:
+                _far_and_active = (antic_active.astype(bool)) & (antic_dist_w < 0.05)
+                m["false_curve_anticipation_rate"] = float(np.mean(_far_and_active))
 
             # Tire estimation metrics (dynamic bicycle MPC)
             tire_slip_f = arr("control/mpc_tire_slip_angle_front")
@@ -1990,6 +2026,8 @@ class TriageEngine:
             "tire_ekf_divergence": "tire_ekf_divergence_rate",
             "tire_understeer_anomaly": "tire_understeer_gradient_max",
             "perc_blind_no_detection": "blind_perception_rate",
+            "false_curve_anticipation": "false_curve_anticipation_rate",
+            "nmpc_low_speed_fallback": "nmpc_low_speed_fallback_rate",
         }
         for pat in PATTERNS:
             try:

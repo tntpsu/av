@@ -676,6 +676,25 @@ def print_report(path: Path, data: dict):
             fb_n = int(np.sum(nmpc_fb[:n][nmpc_mask] > 0.5))
             print(f"  Fallback-active frames: {fb_n}/{nmpc_n}  ({fb_n/nmpc_n*100:.2f}%)")
 
+        # Speed-band fallback breakdown — highlights low-speed convergence issues
+        speed_arr = data.get("speed")
+        if nmpc_fb is not None and speed_arr is not None:
+            _fb = nmpc_fb[:n][nmpc_mask]
+            _spd = speed_arr[:n][nmpc_mask]
+            _bands = [(0, 3, "0-3"), (3, 5, "3-5"), (5, 8, "5-8"), (8, 999, "8+")]
+            _rows = []
+            for lo, hi, label in _bands:
+                mask_band = (_spd >= lo) & (_spd < hi)
+                cnt = int(np.sum(mask_band))
+                if cnt > 0:
+                    fb_rate = float(np.mean(_fb[mask_band])) * 100
+                    _rows.append((label, cnt, fb_rate))
+            if _rows:
+                print("  Fallback by speed band:")
+                for label, cnt, fb_rate in _rows:
+                    flag = "  ← LOW-SPEED ISSUE" if fb_rate > 20 and label in ("0-3", "3-5") else ""
+                    print(f"    {label:>4} m/s: {cnt:>4} frames, fallback {fb_rate:>5.1f}%{flag}")
+
         if nmpc_iters is not None:
             it = nmpc_iters[:n][nmpc_mask]
             print(f"  SLSQP iterations P50 / P95 / MAX: "

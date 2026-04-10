@@ -26,6 +26,18 @@ Also run the signal chain blame trace for lateral/trajectory issues:
 python3 tools/analyze/trace_curve_entry.py --latest
 ```
 
+## Step 2.5 — Odometer sanity check for curve events
+
+If the analysis reports curve events (C1, C2, etc.), cross-check them against the actual track position using the odometer (`odo=` field in the curve event output). Compare the `odo` value to the track YAML segment layout:
+
+1. Read `tracks/<track>.yml` to get segment start/end distances
+2. For each curve event, check: does the `odo` value fall within an actual arc segment?
+3. If a curve event's `odo` falls on a straight segment, it's a **false positive** — flag it and do not treat it as a real curve failure
+
+Also check the TRACK-END NOTE in the analysis output. If present, the emergency stop may be from driving off a non-looping track, not a control failure.
+
+This prevents wasting time diagnosing false curve detections on straights (e.g., hairpin_15 "C1"/"C2" were on the 80m straight, not real curves).
+
 ## Step 3 — Classify the primary issue
 
 Parse the output to identify the issue category. Use **first match** from this priority list:
