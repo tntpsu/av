@@ -1813,6 +1813,7 @@ class LateralController:
         curve_anticipation_term_curvature = 0.0
         curve_anticipation_term_heading = 0.0
         curve_anticipation_term_far_rise = 0.0
+        curve_anticipation_distance_weight = 1.0
         curve_scheduler_mode = str(reference_point.get("curve_scheduler_mode", "") or "")
         curve_phase = 0.0
         curve_phase_raw = 0.0
@@ -1892,6 +1893,12 @@ class LateralController:
             )
         except (TypeError, ValueError):
             curve_anticipation_term_far_rise = 0.0
+        try:
+            curve_anticipation_distance_weight = float(
+                reference_point.get("curve_anticipation_distance_weight", 1.0) or 1.0
+            )
+        except (TypeError, ValueError):
+            curve_anticipation_distance_weight = 1.0
         try:
             curve_phase = float(reference_point.get("curve_phase", 0.0) or 0.0)
             if not np.isfinite(curve_phase):
@@ -3797,6 +3804,7 @@ class LateralController:
                 'curve_anticipation_term_curvature': curve_anticipation_term_curvature,
                 'curve_anticipation_term_heading': curve_anticipation_term_heading,
                 'curve_anticipation_term_far_rise': curve_anticipation_term_far_rise,
+                'curve_anticipation_distance_weight': curve_anticipation_distance_weight,
                 'curve_scheduler_mode': curve_scheduler_mode,
                 'curve_phase': curve_phase,
                 'curve_phase_raw': curve_phase_raw,
@@ -6252,19 +6260,30 @@ class VehicleController:
             predicted_e_lat = raw_e_lat + v_now * raw_e_heading * total_delay_dt
 
             # Kappa horizon: interpolate to NMPC time steps.
-            # Use NMPC controller's dt/N when available; fall back to LMPC's.
+            # Speed-adaptive dt: scale prediction step so the horizon covers
+            # a fixed distance (~30m) regardless of speed.
             _active_ctrl = self._nmpc_controller if self._nmpc_controller is not None else self._mpc_controller
+            _nmpc_p = _active_ctrl.params
+            v_interp = max(v_now, 0.5)
+            # At low speed, cap dt_max tighter to keep the prediction horizon
+            # manageable.  At v=3: effective_dt_max=0.32 (horizon ~6m).
+            # At v>=10: effective_dt_max=0.6+ (unchanged from base dt_max).
+            _speed_ratio = min(v_interp / 10.0, 1.0)
+            _effective_dt_max = min(_nmpc_p.dt_max, 0.2 + 0.4 * _speed_ratio)
+            nmpc_dt_eff = float(np.clip(
+                _nmpc_p.horizon_distance_m / (_nmpc_p.horizon * v_interp),
+                _nmpc_p.dt_min, _effective_dt_max,
+            ))
+
             nmpc_horizon_for_controller = None
             _ch_signed = reference_point.get('curvature_horizon_signed')
             _ch_distances = reference_point.get('curvature_horizon_distances')
             if _ch_signed is not None and _ch_distances is not None and len(_ch_signed) > 0:
                 horizon_d = np.array(_ch_distances)
                 horizon_k = np.array(_ch_signed)
-                v_interp = max(v_now, 0.5)
-                ctrl_dt = _active_ctrl.params.dt
                 ctrl_N = (_active_ctrl.solver._N if hasattr(_active_ctrl.solver, '_N')
-                          else _active_ctrl.params.horizon)
-                ctrl_distances = np.arange(1, ctrl_N + 1) * v_interp * ctrl_dt
+                          else _nmpc_p.horizon)
+                ctrl_distances = np.arange(1, ctrl_N + 1) * v_interp * nmpc_dt_eff
                 nmpc_horizon_for_controller = np.interp(ctrl_distances, horizon_d, horizon_k)
 
             kappa_ref = float(reference_point.get('curvature', 0.0) or 0.0)
@@ -6286,6 +6305,7 @@ class VehicleController:
                     dt=frame_dt,
                     kappa_horizon=nmpc_horizon_for_controller,
                     grade_rad=grade_rad,
+                    prediction_dt=nmpc_dt_eff,
                 )
                 if not self._nmpc_controller.should_fallback_to_lmpc:
                     nmpc_used = True

@@ -187,6 +187,7 @@ def compute_curve_anticipation_score(
     heading_delta_abs: float,
     far_geometry_rise_abs: float,
     config: Mapping[str, object],
+    distance_to_curve_start_m: float | None = None,
 ) -> dict[str, float]:
     """
     Compute map-free curve-anticipation score from trajectory/preview evidence.
@@ -198,10 +199,22 @@ def compute_curve_anticipation_score(
     - `term_far_rise`: rise in far-horizon geometry magnitude.
 
     The raw score is the max of terms to avoid suppressing a strong single cue.
+
+    When *distance_to_curve_start_m* is provided, preview curvature is discounted
+    by distance so that far-ahead curves don't saturate the anticipation score
+    while the car is still on a straight.
     """
+    # Discount preview curvature by proximity to the curve.
+    # At >=20m: weight=0 (preview ignored). At <=6m: weight=1 (full preview).
+    # When distance is unknown (None), preserve full preview (backward compat).
+    if distance_to_curve_start_m is not None:
+        _dist_weight = _compute_entry_distance_weight(distance_to_curve_start_m, config)
+    else:
+        _dist_weight = 1.0
+    weighted_preview = abs(float(preview_curvature_abs)) * _dist_weight
     curvature_metric = max(
         abs(float(path_curvature_abs)),
-        abs(float(preview_curvature_abs)),
+        weighted_preview,
     )
     term_curvature = _normalize_curve_anticipation_term(
         value=curvature_metric,
@@ -224,6 +237,7 @@ def compute_curve_anticipation_score(
         "term_heading": float(term_heading),
         "term_far_rise": float(term_far_rise),
         "score_raw": float(score_raw),
+        "distance_weight": float(_dist_weight),
     }
 
 

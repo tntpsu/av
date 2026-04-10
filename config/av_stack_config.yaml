@@ -902,7 +902,10 @@ trajectory:
   nmpc:
     nmpc_enabled: true              # re-enabled: sign convention verified (same as LMPC — negate gt_cross_track)
     nmpc_horizon: 20                # N prediction steps
-    nmpc_dt: 0.1                   # prediction step duration (s) — matches LMPC dt
+    nmpc_dt: 0.1                   # base prediction step duration (s) — scaled by speed-adaptive logic
+    nmpc_horizon_distance_m: 50.0  # target prediction distance (m) — dt scales to cover this
+    nmpc_dt_min: 0.1               # min dt (high speed) — fine temporal resolution
+    nmpc_dt_max: 0.75              # max dt (low speed) — allows 50m horizon at 3.3+ m/s
     nmpc_q_lat: 10.0               # lateral error weight — matched to LMPC for tight curve tracking
     nmpc_q_heading: 5.0            # heading error weight
     nmpc_r_steer: 1.0e-4           # steering magnitude cost (near-zero — same philosophy as LMPC)

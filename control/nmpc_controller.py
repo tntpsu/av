@@ -88,6 +88,13 @@ class NMPCParams:
     max_iter: int = 50                  # SLSQP iteration limit
     max_consecutive_failures: int = 3
 
+    # Speed-adaptive dt: scale prediction dt so the horizon covers a fixed distance.
+    # dt_eff = clip(horizon_distance_m / (horizon * v), dt_min, dt_max)
+    # At 4 m/s: dt=0.375 → 30m horizon. At 15 m/s: dt=0.1 → 30m horizon.
+    horizon_distance_m: float = 50.0    # target lookahead distance (m)
+    dt_min: float = 0.1                 # min prediction dt (high speed)
+    dt_max: float = 0.75                # max prediction dt (low speed)
+
     # Understeer gradient: L_eff(v) = wheelbase_m + understeer_gradient * v²
     # Accounts for tire slip at speed; from sysid (tools/analyze/sysid_dynamic_model.py).
     # 0.0 = use geometric wheelbase (kinematic model).
@@ -344,7 +351,8 @@ class NMPCSolver:
     def solve(self, e_lat: float, e_heading: float, v: float,
                last_delta_norm: float, kappa_ref_horizon: np.ndarray,
                v_target: float, v_max: float, dt: float,
-               grade_rad: float = 0.0) -> dict:
+               grade_rad: float = 0.0,
+               prediction_dt: Optional[float] = None) -> dict:
         """
         Solve NMPC NLP for one frame.
 
@@ -356,17 +364,24 @@ class NMPCSolver:
             kappa_ref_horizon: array of N reference curvatures (1/m) from map
             v_target: desired speed (m/s)
             v_max: track speed limit (m/s) — combined with p.v_max
-            dt: frame timestep (s) — NOT used for prediction (p.dt is used instead)
+            dt: frame timestep (s) — NOT used for prediction
             grade_rad: road grade in radians (positive = uphill)
+            prediction_dt: override for prediction step size (s). When set,
+                overrides p.dt for this solve — used by speed-adaptive horizon.
 
         Returns:
             dict: steering_normalized, accel, feasible, solve_time_ms,
                   predicted_trajectory (N+1, 3), nmpc_cost, nmpc_iterations,
-                  slsqp_status
+                  slsqp_status, prediction_dt_used
         """
         t0 = time.perf_counter()
         p = self.p
         N = p.horizon
+
+        # Speed-adaptive dt: temporarily override p.dt for this solve
+        original_dt = p.dt
+        if prediction_dt is not None:
+            p.dt = prediction_dt
 
         # Curvature horizon: extend or truncate to exactly N steps
         kappa = np.zeros(N)
@@ -453,7 +468,15 @@ class NMPCSolver:
                 jac=True,
                 bounds=bounds,
                 constraints=constraints,
-                options={'maxiter': p.max_iter, 'ftol': 1e-6, 'disp': False},
+                options={
+                    'maxiter': p.max_iter,
+                    # Relax ftol at low speed where the cost landscape is
+                    # nearly flat (steering barely changes e_lat when v is
+                    # small).  At v>=8 m/s: 1e-6 (no change).  At v=3 m/s:
+                    # ~6e-5.  Prevents hitting iteration limit on straights.
+                    'ftol': max(1e-6, 1e-4 * (1.0 - min(v_safe / 8.0, 1.0))),
+                    'disp': False,
+                },
             )
             solve_ms = (time.perf_counter() - t0) * 1000.0
 
@@ -467,7 +490,7 @@ class NMPCSolver:
                 self._warm_u = u_opt.copy()
                 predicted = self._rollout(u_opt, e_lat, e_heading, v_safe,
                                           kappa, gravity_offset, v_max_eff)
-                return {
+                result = {
                     'steering_normalized': delta_norm_0,
                     'accel': accel_0,
                     'feasible': True,
@@ -476,9 +499,13 @@ class NMPCSolver:
                     'nmpc_cost': float(opt.fun),
                     'nmpc_iterations': int(opt.nit),
                     'slsqp_status': int(opt.status),
+                    'prediction_dt_used': p.dt,
                 }
+                p.dt = original_dt
+                return result
 
             # Infeasible / failed
+            p.dt = original_dt
             return {
                 'steering_normalized': 0.0,
                 'accel': 0.0,
@@ -488,9 +515,11 @@ class NMPCSolver:
                 'nmpc_cost': float('nan'),
                 'nmpc_iterations': int(opt.nit),
                 'slsqp_status': int(opt.status),
+                'prediction_dt_used': original_dt if prediction_dt is None else prediction_dt,
             }
 
         except Exception as exc:
+            p.dt = original_dt
             solve_ms = (time.perf_counter() - t0) * 1000.0
             logger.error("NMPCSolver: unexpected exception: %s", exc)
             return {
@@ -502,6 +531,7 @@ class NMPCSolver:
                 'nmpc_cost': float('nan'),
                 'nmpc_iterations': 0,
                 'slsqp_status': -1,
+                'prediction_dt_used': original_dt if prediction_dt is None else prediction_dt,
             }
 
 
@@ -541,6 +571,7 @@ class NMPCController:
         dt: float,
         kappa_horizon=None,
         grade_rad: float = 0.0,
+        prediction_dt: Optional[float] = None,
     ) -> dict:
         """
         Compute NMPC steering for one frame.  Signature mirrors MPCController.
@@ -585,6 +616,7 @@ class NMPCController:
             e_lat, e_heading, current_speed, last_d,
             kappa_arr, v_target, v_max, p.dt,
             grade_rad=grade_rad,
+            prediction_dt=prediction_dt,
         )
 
         self._frames_since_reset += 1
@@ -620,6 +652,7 @@ class NMPCController:
             'e_lat_input': e_lat,
             'e_heading_input': e_heading,
             'kappa_ref_used': float(kappa_arr[0]),
+            'nmpc_prediction_dt': result.get('prediction_dt_used', p.dt),
         }
 
     def reset(self) -> None:

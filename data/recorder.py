@@ -3844,6 +3844,12 @@ class DataRecorder:
             dtype=np.float32
         )
         self.h5_file.create_dataset(
+            "control/curve_anticipation_distance_weight",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
             "control/reference_lookahead_target",
             shape=(0,),
             maxshape=max_shape,
@@ -7377,6 +7383,7 @@ class DataRecorder:
         curve_anticipation_term_curvature_list = []
         curve_anticipation_term_heading_list = []
         curve_anticipation_term_far_rise_list = []
+        curve_anticipation_distance_weight_list = []
         reference_lookahead_target_list = []
         reference_lookahead_target_pre_entry_guard_list = []
         reference_lookahead_after_slew_list = []
@@ -8222,6 +8229,9 @@ class DataRecorder:
             )
             curve_anticipation_term_far_rise_list.append(
                 float(getattr(cc, 'curve_anticipation_term_far_rise', 0.0) or 0.0)
+            )
+            curve_anticipation_distance_weight_list.append(
+                float(getattr(cc, 'curve_anticipation_distance_weight', 1.0) or 1.0)
             )
             reference_lookahead_target_list.append(
                 float(getattr(cc, 'reference_lookahead_target', 0.0) or 0.0)
@@ -9280,6 +9290,7 @@ class DataRecorder:
                        "curve_anticipation_term_curvature",
                        "curve_anticipation_term_heading",
                        "curve_anticipation_term_far_rise",
+                       "curve_anticipation_distance_weight",
                        "reference_lookahead_target",
                        "reference_lookahead_target_pre_entry_guard",
                        "reference_lookahead_after_slew",
@@ -9967,6 +9978,9 @@ class DataRecorder:
             )
             self.h5_file["control/curve_anticipation_term_far_rise"][current_size:] = (
                 curve_anticipation_term_far_rise_list
+            )
+            self.h5_file["control/curve_anticipation_distance_weight"][current_size:] = (
+                curve_anticipation_distance_weight_list
             )
             self.h5_file["control/reference_lookahead_target"][current_size:] = (
                 reference_lookahead_target_list

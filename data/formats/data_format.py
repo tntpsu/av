@@ -446,6 +446,7 @@ class ControlCommand:
     curve_anticipation_term_curvature: Optional[float] = None
     curve_anticipation_term_heading: Optional[float] = None
     curve_anticipation_term_far_rise: Optional[float] = None
+    curve_anticipation_distance_weight: Optional[float] = None
     reference_lookahead_target: Optional[float] = None
     reference_lookahead_target_pre_entry_guard: Optional[float] = None
     reference_lookahead_after_slew: Optional[float] = None

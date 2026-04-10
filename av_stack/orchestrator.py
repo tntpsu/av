@@ -3351,6 +3351,7 @@ class AVStack:
         *,
         path_curvature: float,
         preview_curvature_abs: float,
+        distance_to_curve_start_m: float | None = None,
     ) -> dict:
         """Compute trajectory-owned curve anticipation signal (shadow-safe)."""
         if not self.curve_anticipation_enabled:
@@ -3409,6 +3410,7 @@ class AVStack:
             heading_delta_abs=float(heading_delta_abs),
             far_geometry_rise_abs=float(far_metric_rise_abs),
             config=self.trajectory_config,
+            distance_to_curve_start_m=distance_to_curve_start_m,
         )
         score_raw = float(score_terms.get('score_raw', 0.0))
         score, active = self._update_curve_anticipation_state(score_raw)
@@ -3423,6 +3425,7 @@ class AVStack:
             "heading_delta_abs": float(heading_delta_abs),
             "far_metric_abs": float(far_metric_abs),
             "far_metric_rise_abs": float(far_metric_rise_abs),
+            "distance_weight": float(score_terms.get('distance_weight', 1.0)),
             "source": source,
         }
     
@@ -4919,7 +4922,7 @@ class AVStack:
 
         # Build map-based curvature preview horizon for MPC feedforward.
         # Sample signed curvature at 1m intervals ahead from the current position.
-        _horizon_max_m = 30.0  # enough for 2s at 15 m/s
+        _horizon_max_m = 50.0  # enough for NMPC speed-adaptive horizon at low speed
         _horizon_step_m = 1.0
         _n_horizon = int(_horizon_max_m / _horizon_step_m)
         _horizon_distances = [
@@ -8140,6 +8143,7 @@ class AVStack:
                     reference_point,
                     path_curvature=float(current_path_curvature),
                     preview_curvature_abs=float(preview_curvature_abs),
+                    distance_to_curve_start_m=gated.get('distance_to_curve_start_m'),
                 )
                 reference_point['curve_anticipation_score'] = anticipation_signal['score']
                 reference_point['curve_anticipation_score_raw'] = anticipation_signal['score_raw']
@@ -8151,6 +8155,7 @@ class AVStack:
                 reference_point['curve_anticipation_far_metric_abs'] = anticipation_signal['far_metric_abs']
                 reference_point['curve_anticipation_far_metric_rise_abs'] = anticipation_signal['far_metric_rise_abs']
                 reference_point['curve_anticipation_source'] = anticipation_signal['source']
+                reference_point['curve_anticipation_distance_weight'] = anticipation_signal['distance_weight']
 
                 # Ground-truth state for MPC.
                 # Use the at-car selected lane center when Unity exports it; keep the
@@ -8956,11 +8961,17 @@ class AVStack:
         if reference_point is None:
             return control_command
 
-        # NEW: Safety bounds check for lateral error
-        # Critical: Prevent divergence and enable recovery
-        # 89.4% steering direction errors and 8.95m max error indicate need for safety bounds
-        # FIXED: lateral_error is now always in control_command (from vehicle_controller.py)
-        lateral_error_abs = abs(control_command.get('lateral_error', 0.0))
+        # Safety bounds check for lateral error
+        # Use GT at-car cross-track (road-frame) for emergency stop decisions.
+        # The control command's lateral_error uses the PP lookahead reference, which
+        # diverges geometrically on tight curves (e.g. R15 hairpins: at-car=0.18m but
+        # lookahead=1.87m). Using lookahead triggers false emergency stops when the car
+        # is actually centered. Fall back to control lateral_error if GT unavailable.
+        _gt_at_car = reference_point.get('gt_cross_track_road_frame_at_car_m') if reference_point else None
+        if _gt_at_car is not None:
+            lateral_error_abs = abs(float(_gt_at_car))
+        else:
+            lateral_error_abs = abs(control_command.get('lateral_error', 0.0))
         
         # CRITICAL: Emergency stop when car goes out of bounds
         # When perception fails and we keep using stale data, the car can drive off the road
@@ -11323,6 +11334,9 @@ class AVStack:
             ),
             curve_anticipation_term_far_rise=control_command.get(
                 'curve_anticipation_term_far_rise'
+            ),
+            curve_anticipation_distance_weight=control_command.get(
+                'curve_anticipation_distance_weight'
             ),
             reference_lookahead_target=control_command.get(
                 'reference_lookahead_target'
