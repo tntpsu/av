@@ -58,7 +58,7 @@ class NMPCParams:
     q_speed: float = 1.0               # speed tracking
 
     # Terminal cost multipliers
-    q_lat_terminal_scale: float = 3.0
+    q_lat_terminal_scale: float = 5.0
     q_heading_terminal_scale: float = 3.0
 
     # Input cost weights
@@ -66,6 +66,7 @@ class NMPCParams:
     r_steer: float = 1e-4               # steering magnitude (numerical stability only)
     r_accel: float = 0.05              # accel magnitude
     r_steer_rate: float = 1.5          # steering rate — PRIMARY COMFORT KNOB
+    r_steer_ff_mag: float = 0.0        # feedforward magnitude penalty (0=disabled)
 
     # Constraints
     delta_rate_max: float = 0.5         # max Δδ_norm per step
@@ -296,6 +297,12 @@ class NMPCSolver:
                 d_rate -= (ff_cur - ff_prev)
             r_rate[k] = d_rate
             cost += p.r_steer_rate * d_rate * d_rate
+
+            # Feedforward magnitude penalty: anchor δ to kinematic feedforward
+            if p.r_steer_ff_mag > 0.0 and delta_ff is not None:
+                ff_err = cur_d - delta_ff[k]
+                cost += p.r_steer_ff_mag * ff_err * ff_err
+                dc_du[2 * k] += 2.0 * p.r_steer_ff_mag * ff_err
 
         # Terminal cost
         e_l_T, e_h_T, v_T = states[N]
