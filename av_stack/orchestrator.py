@@ -1576,7 +1576,12 @@ class AVStack:
                     try:
                         gov_cfg_section = self.trajectory_config.get('speed_governor', {})
                         vp_section = self.trajectory_config.get('velocity_profiler', {})
-                        a_lat_max_g = float(gov_cfg_section.get('comfort_governor_max_lat_accel_g', 0.20))
+                        # Use controller tracking budget (calibrated from closed-loop data),
+                        # NOT the tire/comfort limit. Falls back to comfort limit if not set.
+                        a_lat_max_g = float(vp_section.get(
+                            'a_lat_tracking_budget_g',
+                            gov_cfg_section.get('comfort_governor_max_lat_accel_g', 0.20),
+                        ))
                         vp_config = VelocityProfilerConfig(
                             a_lat_max_mps2=a_lat_max_g * 9.81,
                             a_lon_accel_mps2=float(vp_section.get('a_lon_accel_mps2', 2.0)),

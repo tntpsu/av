@@ -238,18 +238,17 @@ class SpeedGovernor:
         comfort_speed = self._compute_comfort_speed(stabilized_curvature)
         target = min(target, comfort_speed)
 
-        # --- 1b. Velocity profile (replaces preview + curve_cap when active) ---
+        # --- 1b. Velocity profile (additional speed ceiling — does NOT skip
+        #     preview/curve_cap, which have side effects on lateral controller) ---
         profile_active_flag = False
         if profile_speed is not None and not profile_shadow_mode:
             target = min(target, float(profile_speed))
             profile_active_flag = True
 
-        # --- 2. Curve preview (skipped when velocity profile is active) ---
-        preview_speed = None
-        if profile_speed is None or profile_shadow_mode:
-            preview_speed = self._compute_preview_speed(target, preview_curvature, distance_to_curve)
-            if preview_speed is not None:
-                target = min(target, preview_speed)
+        # --- 2. Curve preview (always runs — side effects feed curve intent/lookahead) ---
+        preview_speed = self._compute_preview_speed(target, preview_curvature, distance_to_curve)
+        if preview_speed is not None:
+            target = min(target, preview_speed)
 
         # --- 3. Perception horizon guardrail ---
         horizon_speed, horizon_active, horizon_margin, eff_horizon, horizon_diag = (
@@ -260,28 +259,23 @@ class SpeedGovernor:
         if horizon_speed is not None:
             target = min(target, horizon_speed)
 
-        # --- 3b. Curve capability cap (skipped when velocity profile is active) ---
-        curve_cap_speed = None
-        curve_cap_active = False
-        curve_cap_reason = "profile_active"
-        curve_cap_margin_mps = 0.0
-        if profile_speed is None or profile_shadow_mode:
-            curve_cap_speed, curve_cap_active, curve_cap_reason, curve_cap_margin_mps = (
-                self._compute_curve_cap_speed(
-                    current_target=target,
-                    current_speed=current_speed,
-                    curvature=curvature,
-                    preview_curvature=preview_curvature,
-                    curve_intent=curve_intent,
-                    curve_intent_state=curve_intent_state,
-                    curve_rise=curve_rise,
-                    curve_local_state=curve_local_state,
-                    curve_local_gate_weight=curve_local_gate_weight,
-                    local_curve_reference_active=local_curve_reference_active,
-                )
+        # --- 3b. Curve capability cap (always runs — side effects feed intent state) ---
+        curve_cap_speed, curve_cap_active, curve_cap_reason, curve_cap_margin_mps = (
+            self._compute_curve_cap_speed(
+                current_target=target,
+                current_speed=current_speed,
+                curvature=curvature,
+                preview_curvature=preview_curvature,
+                curve_intent=curve_intent,
+                curve_intent_state=curve_intent_state,
+                curve_rise=curve_rise,
+                curve_local_state=curve_local_state,
+                curve_local_gate_weight=curve_local_gate_weight,
+                local_curve_reference_active=local_curve_reference_active,
             )
-            if curve_cap_speed is not None and not self.config.curve_cap_shadow_mode:
-                target = min(target, curve_cap_speed)
+        )
+        if curve_cap_speed is not None and not self.config.curve_cap_shadow_mode:
+            target = min(target, curve_cap_speed)
 
         # --- 3c. Feasibility mismatch backstop ---
         feasibility_backstop_active = False
