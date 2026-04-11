@@ -918,7 +918,7 @@ trajectory:
     nmpc_q_heading: 5.0            # heading error weight
     nmpc_r_steer: 1.0e-4           # steering magnitude cost (near-zero — same philosophy as LMPC)
     nmpc_r_steer_rate: 1.5         # steering rate cost — PRIMARY comfort knob for NMPC
-    nmpc_r_steer_ff_mag: 8.0       # feedforward magnitude penalty — anchors δ to kinematic feedforward
+    nmpc_r_steer_ff_mag: 0.0       # feedforward magnitude penalty — DISABLED pending tuning
     nmpc_q_lat_terminal_scale: 5.0 # terminal state lateral weight multiplier (raised from 3.0)
     nmpc_q_heading_terminal_scale: 3.0
     nmpc_understeer_gradient: 0.025  # K_us: L_eff = L + K_us*v² (from sysid, accounts for tire slip)
