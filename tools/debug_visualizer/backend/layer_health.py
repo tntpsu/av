@@ -303,6 +303,20 @@ class LayerHealthAnalyzer:
             score -= 0.05
             flags.append("profile_reversal_high_urgency")
 
+        # Velocity profile tracking (weight 0.15 when active)
+        if "control/velocity_profile_speed_mps" in f:
+            vp_speed = self._scalar(f, "control/velocity_profile_speed_mps", i, default=-1.0)
+            vp_active = self._scalar(f, "control/velocity_profile_active", i, default=0.0)
+            if vp_active > 0.5 and vp_speed > 0:
+                flags.append("velocity_profile_active")
+                vehicle_speed = self._scalar(f, "vehicle/speed", i, default=0.0)
+                overshoot = vehicle_speed - vp_speed
+                if overshoot > 1.5:
+                    score -= 0.15
+                    flags.append("velocity_profile_overspeed")
+                elif overshoot > 0.5:
+                    flags.append("velocity_profile_margin_low")
+
         return {"score": max(0.0, min(1.0, score)), "flags": flags}
 
     def _score_acc(self, f: h5py.File, i: int) -> dict:

@@ -27,6 +27,7 @@ from control.pid_controller import VehicleController
 from control.acc_controller import ACCController, ACCParams
 from control.radar_sensor import ForwardRadarSensor
 from control.speed_governor import build_speed_governor, SpeedGovernorOutput
+from trajectory.velocity_profiler import VelocityProfiler, VelocityProfilerConfig, VelocityProfile
 from control.regime_selector import ControlRegime
 from data.recorder import DataRecorder
 from data.formats.data_format import (
@@ -1417,6 +1418,13 @@ class AVStack:
         self._track_profile_loaded: bool = False
         self._runtime_track_id: str = ""
         self._map_segment_lookup_count: int = 0
+        # Velocity profile (pre-computed speed vs station)
+        self._velocity_profiler: Optional[VelocityProfiler] = None
+        self._velocity_profile: Optional[VelocityProfile] = None
+        self._velocity_profile_base: Optional[VelocityProfile] = None  # base copy for ACC reset
+        vp_cfg = trajectory_cfg.get('velocity_profiler', {})
+        self._velocity_profiler_enabled: bool = bool(vp_cfg.get('enabled', False))
+        self._velocity_profiler_shadow_mode: bool = bool(vp_cfg.get('shadow_mode', True))
         self._map_segment_lookup_success_count: int = 0
         self._map_odometer_update_count: int = 0
         self._map_odometer_teleport_skip_count: int = 0
@@ -1562,6 +1570,39 @@ class AVStack:
                     start_dist,
                     self._track_loop,
                 )
+
+                # --- Build velocity profile if enabled ---
+                if self._velocity_profiler_enabled:
+                    try:
+                        gov_cfg_section = self.trajectory_config.get('speed_governor', {})
+                        vp_section = self.trajectory_config.get('velocity_profiler', {})
+                        a_lat_max_g = float(gov_cfg_section.get('comfort_governor_max_lat_accel_g', 0.20))
+                        vp_config = VelocityProfilerConfig(
+                            a_lat_max_mps2=a_lat_max_g * 9.81,
+                            a_lon_accel_mps2=float(vp_section.get('a_lon_accel_mps2', 2.0)),
+                            a_lon_brake_mps2=float(vp_section.get('a_lon_brake_mps2', 1.8)),
+                            v_max_mps=float(self.original_target_speed),
+                            min_speed_mps=float(gov_cfg_section.get('comfort_governor_min_speed', 3.0)),
+                            sample_spacing_m=float(cfg.get('sample_spacing', 1.0)),
+                        )
+                        self._velocity_profiler = VelocityProfiler(vp_config)
+                        self._velocity_profile = self._velocity_profiler.build_profile(
+                            curves=curves,
+                            total_length_m=float(distance_cursor),
+                            is_loop=self._track_loop,
+                        )
+                        self._velocity_profile_base = self._velocity_profile
+                        logger.info(
+                            "[VELOCITY_PROFILE] Built profile: %d stations, v_min=%.2f v_max=%.2f a_lat=%.2fg",
+                            len(self._velocity_profile.stations_m),
+                            float(self._velocity_profile.speeds_mps.min()),
+                            float(self._velocity_profile.speeds_mps.max()),
+                            a_lat_max_g,
+                        )
+                    except Exception as exc:
+                        logger.warning("[VELOCITY_PROFILE] Failed to build: %s", exc)
+                        self._velocity_profiler = None
+                        self._velocity_profile = None
         except Exception as exc:
             logger.warning("[LOOKAHEAD_ENTRY] Failed to load track profile '%s': %s", track_name, exc)
             self._reference_entry_track_total_length_m = None
@@ -6949,6 +6990,17 @@ class AVStack:
         if stale_speed_hold_active and current_speed > 0:
             effective_track_limit = min(effective_track_limit, float(current_speed))
 
+        # --- Velocity profile lookup (if available) ---
+        profile_speed = None
+        if (
+            self._velocity_profiler_enabled
+            and self._velocity_profiler is not None
+            and self._velocity_profile is not None
+        ):
+            profile_speed = self._velocity_profiler.lookup_speed(
+                self._velocity_profile, self._track_odometer_m
+            )
+
         # --- Speed Governor: single call replaces 12 serial suppression layers ---
         gov_output: SpeedGovernorOutput = self.speed_governor.compute_target_speed(
             track_speed_limit=effective_track_limit,
@@ -6989,6 +7041,8 @@ class AVStack:
                     gated.get("local_curve_reference_active", False),
                 )
             ),
+            profile_speed=profile_speed,
+            profile_shadow_mode=self._velocity_profiler_shadow_mode,
         )
 
         adjusted_target_speed = gov_output.target_speed
@@ -7184,6 +7238,11 @@ class AVStack:
                 if gov_output.feasibility_backstop_speed is not None
                 else -1.0
             ),
+            'velocity_profile_speed_mps': (
+                float(gov_output.profile_speed) if gov_output.profile_speed is not None else -1.0
+            ),
+            'velocity_profile_active': bool(gov_output.profile_active),
+            'velocity_profile_station_m': float(self._track_odometer_m),
         }
 
     def _pf_plan_trajectory(self, pr: dict, gated: dict, gov: dict, vehicle_state_dict: dict, timestamp: float) -> dict:
@@ -8077,6 +8136,15 @@ class AVStack:
         speed_governor_cap_tracking_hard_ceiling_applied = bool(
             gov.get('speed_governor_cap_tracking_hard_ceiling_applied', False)
         )
+        velocity_profile_speed_mps = float(
+            gov.get('velocity_profile_speed_mps', -1.0) or -1.0
+        )
+        velocity_profile_active = bool(
+            gov.get('velocity_profile_active', False)
+        )
+        velocity_profile_station_m = float(
+            gov.get('velocity_profile_station_m', 0.0) or 0.0
+        )
         curvature_primary_abs = float(gated.get('curvature_primary_abs', abs(current_path_curvature)) or 0.0)
         curvature_primary_source = str(gated.get('curvature_primary_source', 'lane_context') or 'lane_context')
         curvature_map_abs = float(gated.get('curvature_map_abs', 0.0) or 0.0)
@@ -8359,6 +8427,9 @@ class AVStack:
                 control_command['speed_governor_cap_tracking_hard_ceiling_applied'] = bool(
                     speed_governor_cap_tracking_hard_ceiling_applied
                 )
+                control_command['velocity_profile_speed_mps'] = float(velocity_profile_speed_mps)
+                control_command['velocity_profile_active'] = bool(velocity_profile_active)
+                control_command['velocity_profile_station_m'] = float(velocity_profile_station_m)
                 control_command['curve_intent_speed_guardrail_active'] = bool(
                     curve_intent_speed_guardrail_active
                 )
@@ -9531,6 +9602,29 @@ class AVStack:
         gov['acc_request_estop'] = bool(output.request_estop)
         gov['acc_target_speed_source'] = str(output.target_speed_source or "free_flow")
         gov['acc_safety_mode_code'] = str(output.safety_mode or "none")
+
+        # --- Velocity profile: inject lead vehicle as dynamic constraint ---
+        if (
+            self._velocity_profiler_enabled
+            and self._velocity_profiler is not None
+            and self._velocity_profile_base is not None
+        ):
+            reading = self._acc_radar_reading
+            acc_state_active = output.state.value not in (
+                'FREE_FLOW', 'DETECTION_LOSS', 'CUTOUT', '',
+            )
+            if acc_state_active and reading is not None and reading.detected and reading.gap_m > 0:
+                lead_station = self._track_odometer_m + reading.gap_m
+                lead_speed = max(0.0, ego_speed + reading.range_rate_mps)
+                self._velocity_profile = self._velocity_profiler.rebuild_with_constraint(
+                    self._velocity_profile_base,
+                    lead_station,
+                    lead_speed,
+                )
+            else:
+                # No active lead — restore base profile
+                self._velocity_profile = self._velocity_profile_base
+
         return gov
 
     def _set_planner_target_speed(self, target_speed: float) -> None:
@@ -11735,6 +11829,9 @@ class AVStack:
             speed_governor_cap_tracking_hard_ceiling_applied=bool(
                 control_command.get('speed_governor_cap_tracking_hard_ceiling_applied', False)
             ),
+            velocity_profile_speed_mps=control_command.get('velocity_profile_speed_mps'),
+            velocity_profile_active=bool(control_command.get('velocity_profile_active', False)),
+            velocity_profile_station_m=float(control_command.get('velocity_profile_station_m', 0.0) or 0.0),
             launch_throttle_cap=control_command.get('launch_throttle_cap'),
             launch_throttle_cap_active=bool(control_command.get('launch_throttle_cap_active', False)),
             steering_pre_rate_limit=control_command.get('steering_pre_rate_limit'),

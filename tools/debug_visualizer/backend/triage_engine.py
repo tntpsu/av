@@ -241,6 +241,24 @@ PATTERNS = [
         "check": lambda m: m.get("mpc_available", False) and m.get("regime_budget_exceeded_rate", 0) > 0.01,
     },
     {
+        "id": "velocity_profile_overspeed",
+        "name": "Vehicle exceeds velocity profile speed (>1% frames)",
+        "severity": "instability",
+        "code_pointer": "trajectory/velocity_profiler.py:VelocityProfiler.lookup_speed()",
+        "config_lever": "trajectory.velocity_profiler.a_lon_brake_mps2",
+        "fix_hint": "Speed planner can't track the profile braking ramp. Increase a_lon_brake or check speed planner jerk limits.",
+        "check": lambda m: m.get("velocity_profile_overspeed_rate", 0) > 0.01,
+    },
+    {
+        "id": "velocity_profile_underspeed",
+        "name": "Premature deceleration below profile target (>3% frames)",
+        "severity": "comfort",
+        "code_pointer": "control/speed_governor.py:SpeedGovernor.compute_target_speed()",
+        "config_lever": "trajectory.velocity_profiler.shadow_mode",
+        "fix_hint": "Vehicle braking too early or too hard relative to profile. If shadow_mode=true, legacy chain may conflict with profile.",
+        "check": lambda m: m.get("velocity_profile_underspeed_rate", 0) > 0.03,
+    },
+    {
         "id": "mpc_regime_chatter",
         "name": "Regime chatter (>6 switches/min)",
         "severity": "comfort",
@@ -2028,6 +2046,8 @@ class TriageEngine:
             "perc_blind_no_detection": "blind_perception_rate",
             "false_curve_anticipation": "false_curve_anticipation_rate",
             "nmpc_low_speed_fallback": "nmpc_low_speed_fallback_rate",
+            "velocity_profile_overspeed": "velocity_profile_overspeed_rate",
+            "velocity_profile_underspeed": "velocity_profile_underspeed_rate",
         }
         for pat in PATTERNS:
             try:

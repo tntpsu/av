@@ -1971,6 +1971,24 @@ class DataRecorder:
             dtype=np.int8
         )
         self.h5_file.create_dataset(
+            "control/velocity_profile_speed_mps",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
+            "control/velocity_profile_active",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int8
+        )
+        self.h5_file.create_dataset(
+            "control/velocity_profile_station_m",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
+        self.h5_file.create_dataset(
             "control/launch_throttle_cap",
             shape=(0,),
             maxshape=max_shape,
@@ -7517,6 +7535,9 @@ class DataRecorder:
         speed_governor_cap_tracking_mode_list = []
         speed_governor_cap_tracking_recovery_frames_list = []
         speed_governor_cap_tracking_hard_ceiling_applied_list = []
+        velocity_profile_speed_mps_list = []
+        velocity_profile_active_list = []
+        velocity_profile_station_m_list = []
         launch_throttle_cap_list = []
         launch_throttle_cap_active_list = []
         steering_pre_rate_limit_list = []
@@ -8816,6 +8837,15 @@ class DataRecorder:
             speed_governor_cap_tracking_hard_ceiling_applied_list.append(
                 1 if getattr(cc, 'speed_governor_cap_tracking_hard_ceiling_applied', False) else 0
             )
+            velocity_profile_speed_mps_list.append(
+                float(getattr(cc, 'velocity_profile_speed_mps', None) or -1.0)
+            )
+            velocity_profile_active_list.append(
+                1 if getattr(cc, 'velocity_profile_active', False) else 0
+            )
+            velocity_profile_station_m_list.append(
+                float(getattr(cc, 'velocity_profile_station_m', 0.0) or 0.0)
+            )
             launch_throttle_cap_list.append(getattr(cc, 'launch_throttle_cap', 0.0) or 0.0)
             launch_throttle_cap_active_list.append(1 if getattr(cc, 'launch_throttle_cap_active', False) else 0)
             steering_pre_rate_limit_list.append(getattr(cc, 'steering_pre_rate_limit', 0.0) or 0.0)
@@ -9408,6 +9438,9 @@ class DataRecorder:
                        "speed_governor_cap_tracking_mode",
                        "speed_governor_cap_tracking_recovery_frames",
                        "speed_governor_cap_tracking_hard_ceiling_applied",
+                       "velocity_profile_speed_mps",
+                       "velocity_profile_active",
+                       "velocity_profile_station_m",
                        "launch_throttle_cap", "launch_throttle_cap_active",
                        "steering_pre_rate_limit", "steering_post_rate_limit",
                        "steering_post_jerk_limit", "steering_post_sign_flip",
@@ -10394,6 +10427,15 @@ class DataRecorder:
             )
             self.h5_file["control/speed_governor_cap_tracking_hard_ceiling_applied"][current_size:] = np.array(
                 speed_governor_cap_tracking_hard_ceiling_applied_list, dtype=np.int8
+            )
+            self.h5_file["control/velocity_profile_speed_mps"][current_size:] = np.array(
+                velocity_profile_speed_mps_list, dtype=np.float32
+            )
+            self.h5_file["control/velocity_profile_active"][current_size:] = np.array(
+                velocity_profile_active_list, dtype=np.int8
+            )
+            self.h5_file["control/velocity_profile_station_m"][current_size:] = np.array(
+                velocity_profile_station_m_list, dtype=np.float32
             )
             self.h5_file["control/launch_throttle_cap"][current_size:] = launch_throttle_cap_list
             self.h5_file["control/launch_throttle_cap_active"][current_size:] = np.array(launch_throttle_cap_active_list, dtype=np.int8)

@@ -598,6 +598,10 @@ class ControlCommand:
     speed_governor_cap_tracking_mode_code: int = 0
     speed_governor_cap_tracking_recovery_frames: int = 0
     speed_governor_cap_tracking_hard_ceiling_applied: bool = False
+    # Velocity profile diagnostics
+    velocity_profile_speed_mps: Optional[float] = None
+    velocity_profile_active: bool = False
+    velocity_profile_station_m: float = 0.0
     # Launch throttle ramp diagnostics
     launch_throttle_cap: Optional[float] = None
     launch_throttle_cap_active: bool = False

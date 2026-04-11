@@ -774,6 +774,14 @@ trajectory:
     curve_cap_rise_min: 0.0005
     curve_cap_peak_lat_accel_g: 0.26
     curve_cap_use_preview_curvature: true   # use lookahead κ for cap — needed for sharp curve entries (hairpin R15)
+  velocity_profiler:
+    enabled: true                          # master switch for velocity profile
+    shadow_mode: true                      # compute + log to HDF5 but don't override governor
+    a_lon_accel_mps2: 2.0                  # forward pass: max longitudinal acceleration
+    a_lon_brake_mps2: 1.8                  # backward pass: max comfortable braking
+    # a_lat_max reuses speed_governor.comfort_governor_max_lat_accel_g (single source of truth)
+    # v_max reuses trajectory.target_speed (single source of truth)
+    # min_speed reuses speed_governor.comfort_governor_min_speed (single source of truth)
   lane_position_smoothing_alpha: 0.2
   ref_point_jump_clamp_x: 0.15
   ref_point_jump_clamp_heading: 0.08

@@ -126,6 +126,8 @@ def build_causal_timeline(issues: List[Dict], failure_frame: Optional[int] = Non
         "mpc_solve_slow": "control",
         "mpc_fallback": "control",
         "regime_budget_exceeded": "control",
+        "velocity_profile_overspeed": "control",
+        "velocity_profile_underspeed": "trajectory",
         "high_lateral_error": "downstream",
         "out_of_lane": "downstream",
         "emergency_stop": "downstream",
@@ -3994,6 +3996,54 @@ def detect_issues(recording_path: Path, analyze_to_failure: bool = False) -> Dic
                                 "MPC using fallback l_f=l_r=1.125m (symmetric, zero understeer)."
                             ),
                             "fields": {},
+                        })
+
+            # 12. DETECT VELOCITY PROFILE VIOLATIONS
+            if 'control/velocity_profile_speed_mps' in f and has_vehicle:
+                vp_speed = np.array(f['control/velocity_profile_speed_mps'][:num_frames])
+                vp_active = None
+                if 'control/velocity_profile_active' in f:
+                    vp_active = np.array(f['control/velocity_profile_active'][:num_frames])
+                # Only check where profile is valid (>0)
+                vp_valid = vp_speed > 0
+                if vp_active is not None:
+                    vp_valid = vp_valid & (vp_active > 0.5)
+                if np.any(vp_valid):
+                    overspeed = vp_valid & (speed_arr > vp_speed + 1.0)
+                    overspeed_count = int(np.sum(overspeed))
+                    if overspeed_count >= 5:
+                        overspeed_frames_idx = np.where(overspeed)[0]
+                        max_excess = float(np.max(speed_arr[overspeed] - vp_speed[overspeed]))
+                        issues.append({
+                            "frame": int(overspeed_frames_idx[0]),
+                            "end_frame": int(overspeed_frames_idx[-1]),
+                            "type": "velocity_profile_overspeed",
+                            "severity": "high" if max_excess > 2.0 else "medium",
+                            "description": (
+                                f"Vehicle exceeds velocity profile by >{max_excess:.1f} m/s "
+                                f"on {overspeed_count} frame(s)."
+                            ),
+                            "duration": overspeed_count,
+                            "max_excess_mps": max_excess,
+                        })
+                    # Underspeed on straights (profile ≈ v_max but vehicle much slower)
+                    vp_high = vp_valid & (vp_speed > 10.0)  # on straights, profile ≈ v_max
+                    underspeed = vp_high & (speed_arr < vp_speed - 3.0)
+                    underspeed_count = int(np.sum(underspeed))
+                    if underspeed_count >= 10:
+                        underspeed_frames_idx = np.where(underspeed)[0]
+                        max_deficit = float(np.max(vp_speed[underspeed] - speed_arr[underspeed]))
+                        issues.append({
+                            "frame": int(underspeed_frames_idx[0]),
+                            "end_frame": int(underspeed_frames_idx[-1]),
+                            "type": "velocity_profile_underspeed",
+                            "severity": "medium",
+                            "description": (
+                                f"Vehicle {max_deficit:.1f} m/s below profile target on straight "
+                                f"({underspeed_count} frames). Possible premature braking."
+                            ),
+                            "duration": underspeed_count,
+                            "max_deficit_mps": max_deficit,
                         })
 
             # Sort issues by frame number
