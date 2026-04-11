@@ -129,8 +129,14 @@ Rule-based planner (no ML). Per-frame pipeline:
 6. Output: (ref_x, ref_y, heading, target_speed)
 
 Supporting modules:
+- `trajectory/velocity_profiler.py` — **pre-computed velocity profile** over full reference path.
+  3-pass algorithm (curvature-limited → backward braking → forward accel) from track YAML geometry.
+  Acts as additive speed ceiling alongside preview/curve_cap (does NOT replace them — they have
+  side effects on curve intent, lookahead, feedforward). Uses `a_lat_tracking_budget_g: 0.05`
+  (controller tracking capability, not tire limit). Lookup by odometer each frame.
+  Supports ACC dynamic recomputation via `rebuild_with_constraint()`.
 - `trajectory/speed_planner.py` — jerk-limited speed profile, cap-tracking, dip-frame fixes
-- `trajectory/speed_governor.py` — curve-aware speed cap, cap-tracking, hard ceiling
+- `control/speed_governor.py` — curve-aware speed cap, cap-tracking, hard ceiling
 
 ### 5. Control — `control/pid_controller.py` (3,901 lines)
 
@@ -237,7 +243,7 @@ Controls lookahead contraction as the car approaches curves. Three phases:
 4. _pf_run_perception: image → lane polynomial coefficients (segmentation CNN)
 5. _pf_compute_lane_geometry: map curvature lookup + curve-phase scheduler update
 6. _pf_apply_lane_gating: EMA smoothing, jump clamping, outlier rejection
-7. _pf_run_speed_governor: v_max from map κ, cap-tracking
+7. _pf_run_speed_governor: velocity profile lookup + v_max from map κ, cap-tracking
 8. _pf_plan_trajectory: ref point (smoothed) + lookahead (phase-contracted)
 9. _pf_compute_steering: PP or MPC → steering + throttle/brake
 10. _pf_apply_safety: rate/jerk limit, emergency stop latch, lateral bounds

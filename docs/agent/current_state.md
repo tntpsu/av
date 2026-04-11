@@ -1,7 +1,19 @@
 # AV Stack — Agent Memory: Current State
 
-**Last updated:** 2026-04-05
-**Current milestone:** S2-M1 — MPC reference alignment fix + regime blend asymmetry fix + lateral accel budget. 4/6 tracks passing all layers (highway 97.9, s_loop 97.8, sweeping 97.0, mixed 96.6). 2 tracks remaining: hairpin 79 (e-stop), hill 79. Trajectory layer still below 95 on mixed/sloop/sweeping due to C1 late turn-in — next bottleneck to diagnose.
+**Last updated:** 2026-04-10
+**Current milestone:** S2-M1 — Velocity profile activated. 5/7 tracks ≥ 95 (highway 98.4, autobahn 98.3, sweeping 98.1, mixed 97.5, hill 96.8). s_loop 93.4 and hairpin 92.4 limited by pre-existing lateral tracking, not profile. 0 e-stops, 0 OOL across all 7 tracks.
+
+### Pre-computed Velocity Profile — ACTIVATED (2026-04-10)
+
+Replaced reactive curvature preview/cap/anticipation scalar chain with forward+backward kinematic velocity profile over full track geometry. Profile acts as **additive speed ceiling** alongside existing preview/curve_cap (which continue running for side effects on curve intent, lookahead, feedforward).
+
+**Key learning:** Initial attempt replaced preview+curve_cap entirely → score dropped 97→79 with OOL events. Keeping them running restored scores. Also: `a_lat_max_g=0.20` (tire limit) is wrong for speed planning — calibrated `a_lat_tracking_budget_g=0.05` from 3298 curve frames of closed-loop lateral error data. This matches what top companies do (plan against controller capability, not tire physics).
+
+**Results (7-track sweep):** highway=98.4, autobahn=98.3, sweeping=98.1, mixed=97.5, hill=96.8, s_loop=93.4, hairpin=92.4. All 0 e-stops, 0 OOL.
+
+Files changed: `trajectory/velocity_profiler.py` (new, 285 lines), `control/speed_governor.py`, `av_stack/orchestrator.py`, `config/av_stack_config.yaml`, `data/formats/data_format.py`, `data/recorder.py`, 3 diagnostic tools, `tests/test_velocity_profiler.py` (19 tests).
+
+Commits: fc78ad8 (shadow mode), c93f800 (activation with tracking budget).
 
 ### MPC Reference Point Alignment — VALIDATED (2026-04-05)
 

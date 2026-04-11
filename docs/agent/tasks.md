@@ -6,7 +6,15 @@
 
 ## Current Focus
 
-**Step 5 ACC in progress. Inter-frame control extrapolation VALIDATED ✅ (2026-04-01). Highway 97.3/100, 0 e-stops. Autobahn 96.4.**
+**Velocity profile ACTIVATED ✅ (2026-04-10). 5/7 tracks ≥ 95, 0 e-stops, 0 OOL. Step 5 ACC in progress.**
+
+### Pre-computed Velocity Profile — DONE ✅ (2026-04-10)
+Forward+backward kinematic velocity profile from track geometry. Additive speed ceiling alongside existing preview/curve_cap chain. `a_lat_tracking_budget_g: 0.05` calibrated from closed-loop data. 19 unit tests, diagnostic tooling across 3 tools, ACC dynamic recomputation ready. Next: improve lateral controller → raise tracking budget → profile becomes binding constraint → faster curve speeds.
+
+**Follow-ups (deferred):**
+- Remove ~29 deprecated curve_preview/curve_cap/anticipation params (only after profile is binding)
+- Eliminate per-track speed overlays (hairpin target_speed, mixed curve_cap_peak_lat_accel_g)
+- Validate ACC scenarios with profile active
 
 ### Inter-Frame Control Extrapolation — DONE ✅ (2026-04-01)
 Lightweight MPC updates between camera frames using fresh GT vehicle state. Effective rate: 17.7 Hz (camera 11.3 Hz + ~1 interframe/cycle). Smith delay cap at 80ms. Key bug fixed: `_run_interframe_update()` had `time.sleep(self.frame_interval)` on every exit — main loop already rate-limits at 25ms, so internal sleeps were throttling. 35 tests in `test_interframe_extrapolation.py`. Enabled in `mpc_highway.yaml`.
