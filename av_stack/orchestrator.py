@@ -1407,10 +1407,12 @@ class AVStack:
         self._reference_entry_track_total_length_m: Optional[float] = None
         self._reference_entry_track_curves: list[dict] = []
         self._track_loop: bool = True  # assume looping unless YAML says otherwise
+        self._track_loop_verified: bool = False  # True once car passes total_length with clean GT
         self._gt_boundary_corrupt_streak: int = 0  # consecutive frames with corrupt GT boundaries
         # Odometry-based track position: accumulate driven distance each frame
         # so the YAML segment lookup works without Unity sending roadCenterReferenceT.
         self._track_odometer_m: float = 0.0
+        self._track_odometer_unwrapped_m: float = 0.0  # never wraps — for end-of-track detection
         self._track_odometer_last_pos: Optional[np.ndarray] = None
         self._track_map_curvature: float = 0.0  # curvature at current odometer position
         self._map_curvature_preview_horizon_signed: Optional[list] = None
@@ -1561,6 +1563,7 @@ class AVStack:
                 # roadCenterReferenceT.
                 start_dist = float(cfg.get('start_distance', 0.0) or 0.0)
                 self._track_odometer_m = start_dist
+                self._track_odometer_unwrapped_m = start_dist
                 self._track_odometer_last_pos = None
                 logger.info(
                     "[LOOKAHEAD_ENTRY] Loaded track profile '%s' curves=%d total=%.2fm start_dist=%.1fm loop=%s",
@@ -1643,7 +1646,7 @@ class AVStack:
         # control.lateral section — feedforward & map FF curvature gates
         ("control.lateral", "curve_feedforward_curvature_min"): 0.001,
         ("control.lateral", "curve_feedforward_curvature_max"): 0.015,
-        ("control.lateral", "pp_map_ff_curvature_min"): 0.005,
+        # pp_map_ff_curvature_min removed — floor is 0.0 (atan(L×κ) is self-limiting)
     }
 
     # ── MPC cost weight auto-derive parameters ────────────────────────────────
@@ -1994,6 +1997,7 @@ class AVStack:
             delta = float(np.linalg.norm(pos - self._track_odometer_last_pos))
             if 0.0 < delta < 5.0:  # guard against teleports
                 self._track_odometer_m += delta
+                self._track_odometer_unwrapped_m += delta
                 total = float(self._reference_entry_track_total_length_m)
                 if total > 0.0 and self._track_loop:
                     self._track_odometer_m = self._track_odometer_m % total
@@ -3545,20 +3549,44 @@ class AVStack:
                         logger.info(f"Reached duration limit: {duration}s")
                         break
 
-                # End-of-track check for non-looping tracks.
-                # Stop gracefully before the car drives off the road mesh.
+                # End-of-track check.  Uses the unwrapped odometer so it works
+                # even when YAML says loop:true but Unity doesn't loop the mesh.
                 if (
-                    not self._track_loop
+                    not self._track_loop_verified
                     and self._reference_entry_track_total_length_m is not None
-                    and self._track_odometer_m >= self._reference_entry_track_total_length_m - 5.0
+                    and self._track_odometer_unwrapped_m
+                    >= self._reference_entry_track_total_length_m - 5.0
                 ):
-                    logger.info(
-                        "End of non-looping track reached (odometer=%.1fm, total=%.1fm). "
-                        "Stopping gracefully.",
-                        self._track_odometer_m,
-                        self._reference_entry_track_total_length_m,
-                    )
-                    break
+                    if not self._track_loop:
+                        # Explicitly non-looping: stop immediately.
+                        logger.info(
+                            "End of non-looping track reached (odometer=%.1fm, total=%.1fm). "
+                            "Stopping gracefully.",
+                            self._track_odometer_unwrapped_m,
+                            self._reference_entry_track_total_length_m,
+                        )
+                        break
+                    elif self._gt_boundary_corrupt_streak >= 3:
+                        # YAML says loop but GT boundaries are gone — Unity didn't loop.
+                        logger.info(
+                            "Track claims loop=true but GT boundaries corrupt for %d frames "
+                            "at odometer=%.1fm/%.1fm — stopping gracefully.",
+                            self._gt_boundary_corrupt_streak,
+                            self._track_odometer_unwrapped_m,
+                            self._reference_entry_track_total_length_m,
+                        )
+                        break
+                    elif (
+                        self._track_odometer_unwrapped_m
+                        >= self._reference_entry_track_total_length_m + 10.0
+                    ):
+                        # Drove 10m past total_length with clean GT — track truly loops.
+                        self._track_loop_verified = True
+                        logger.info(
+                            "Track loop verified at odometer=%.1fm (total=%.1fm).",
+                            self._track_odometer_unwrapped_m,
+                            self._reference_entry_track_total_length_m,
+                        )
 
                 # Rate limiting: maintain target FPS.
                 # When inter-frame extrapolation is enabled, poll at a faster rate

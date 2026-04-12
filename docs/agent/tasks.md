@@ -160,6 +160,7 @@ Car now reaches 25 m/s (11.7% overspeed rate at target=25). Speed RMSE 5.3 m/s =
 | Perception stale-frame fallback breaks silently | Medium | Add explicit logging + stale-frame rate metric in analyzer |
 | Segmentation model untrained / mislabeled | Critical | T-032: retrain with multi-track GT data. Pipeline ready: `./tools/segmentation/train_pipeline.sh`. See `training/TRAINING_GUIDE.md` |
 | Temporal sync issues under CPU load | Medium | Latency injection tooling exists (`--lock-latency-ms`) |
+| Runtime track-end stop bypassed on loop:true tracks | Medium | T-080: Unity doesn't loop some track meshes even when YAML says `loop: true`. Odometer stop (orchestrator:3551) only fires when `_track_loop=False`. Need runtime auto-detection (e.g., GT boundary corruption or odometer > total_length) to override the YAML flag and stop gracefully before OOL. |
 
 ---
 

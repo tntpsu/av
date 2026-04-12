@@ -1,7 +1,19 @@
 # AV Stack — Agent Memory: Current State
 
-**Last updated:** 2026-04-10
-**Current milestone:** S2-M1 — Velocity profile activated. 5/7 tracks ≥ 95 (highway 98.4, autobahn 98.3, sweeping 98.1, mixed 97.5, hill 96.8). s_loop 93.4 and hairpin 92.4 limited by pre-existing lateral tracking, not profile. 0 e-stops, 0 OOL across all 7 tracks.
+**Last updated:** 2026-04-11
+**Current milestone:** S2-M1 — FF curvature floor removed. 7/7 tracks ≥ 95 (autobahn 99.0, highway 98.9, s_loop 98.9, mixed 98.6, sweeping 98.0, hairpin 97.1, hill 95.5). 0 e-stops, 0 OOL.
+
+### FF Curvature Floor Removal — VALIDATED (2026-04-11)
+
+Removed `pp_map_ff_curvature_min: 0.005 → 0.0`. The hard floor blocked feedforward steering on R500 highway curves (κ=0.002 < 0.005), forcing PP geometric steering alone to track gentle curves. The `atan(L×κ)` formula is self-limiting at low curvature and the phase gate (`local_gate_weight`) already handles spatial gating, making the floor redundant.
+
+**Key evidence:** highway_65 scored 79.0 with floor active — curve lateral error P50=0.389m, oscillation runaway, Map FF=0 on all curves. After removal: 98.9, curve P50=0.115m, oscillation resolved, late turn-in fixed.
+
+**Results (7-track sweep):** autobahn=99.0, highway=98.9, s_loop=98.9, mixed=98.6, sweeping=98.0, hairpin=97.1, hill=95.5. Zero regressions — floor was already inactive on tracks with κ > 0.005.
+
+**Known issue:** T-080 — runtime track-end stop logic (`orchestrator:3551`) doesn't fire when YAML says `loop: true` but Unity doesn't loop the mesh. Caused false OOL events on s_loop/hairpin with --duration 120 (car drives past track end). Shorter durations avoid the issue.
+
+Commit: 34fe6d5.
 
 ### Pre-computed Velocity Profile — ACTIVATED (2026-04-10)
 
