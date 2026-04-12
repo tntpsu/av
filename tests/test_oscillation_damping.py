@@ -177,6 +177,53 @@ class TestRSteerRateCurvatureDamping:
             assert r < 3.5, f"r_eff={r:.2f} at κ={kappa} exceeds safe limit 3.5"
 
 
+class TestQLatCurvatureScheduling:
+    """Verify curvature-scheduled q_lat for MPC curve-entry tracking."""
+
+    def test_zero_gain_no_effect(self):
+        pytest.importorskip("osqp")
+        from control.mpc_controller import MPCParams, MPCSolver
+        p = MPCParams(q_lat=1.0, q_lat_kappa_gain=0.0)
+        s = MPCSolver(p)
+        assert s._get_effective_q_lat(0.01) == 1.0
+
+    def test_gain_increases_q_lat_on_curves(self):
+        pytest.importorskip("osqp")
+        from control.mpc_controller import MPCParams, MPCSolver
+        p = MPCParams(q_lat=1.0, q_lat_kappa_gain=300.0, q_lat_kappa_saturate=0.015)
+        s = MPCSolver(p)
+        # κ=0.010 → scale = 1 + 300*0.010 = 4.0 → q_lat = 4.0
+        assert abs(s._get_effective_q_lat(0.010) - 4.0) < 1e-9
+
+    def test_saturates_at_ceiling(self):
+        pytest.importorskip("osqp")
+        from control.mpc_controller import MPCParams, MPCSolver
+        p = MPCParams(q_lat=1.0, q_lat_kappa_gain=300.0, q_lat_kappa_saturate=0.015)
+        s = MPCSolver(p)
+        # κ=0.067 (hairpin) > saturate → capped at scale = 1 + 300*0.015 = 5.5
+        assert abs(s._get_effective_q_lat(0.067) - 5.5) < 1e-9
+
+    def test_straight_gets_no_scaling(self):
+        pytest.importorskip("osqp")
+        from control.mpc_controller import MPCParams, MPCSolver
+        p = MPCParams(q_lat=2.0, q_lat_kappa_gain=300.0, q_lat_kappa_saturate=0.015)
+        s = MPCSolver(p)
+        assert abs(s._get_effective_q_lat(0.0) - 2.0) < 1e-9
+
+    def test_q_lat_used_in_qp_build(self):
+        """Verify _current_q_lat propagates to the P matrix diagonal."""
+        pytest.importorskip("osqp")
+        from control.mpc_controller import MPCParams, MPCSolver
+        p = MPCParams(q_lat=1.0, q_lat_kappa_gain=300.0, q_lat_kappa_saturate=0.015)
+        s = MPCSolver(p)
+        # Initially q_lat = 1.0
+        assert s._current_q_lat == 1.0
+        # Simulate kappa change that triggers rebuild
+        s._current_q_lat = 4.0
+        s._build_qp()
+        # P matrix should now use 4.0 for the lateral state cost
+
+
 class TestRSteerRateSchedulingMPC:
     """Integration tests: verify MPCSolver uses scheduling correctly.
     Requires osqp — tests are skipped if not installed."""

@@ -83,6 +83,11 @@ class MPCParams:
     r_steer_rate_kappa_gain: float = 0.0         # r_steer_rate increase per unit κ (proportional curve damping)
     r_steer_rate_kappa_saturate: float = 0.015   # κ ceiling for curvature scaling (R67)
 
+    # Curvature-scheduled q_lat: increase lateral tracking weight on curves
+    # so MPC pre-steers into curves instead of accepting entry error.
+    q_lat_kappa_gain: float = 0.0               # q_lat increase per unit κ
+    q_lat_kappa_saturate: float = 0.015          # κ ceiling for q_lat scaling
+
     # Curvature-adaptive r_steer_rate reduction (straight-line oscillation fix)
     # On low-κ sections, MPC needs responsive corrections to prevent drift accumulation.
     # r_eff *= max(straight_min_scale, κ / straight_kappa_on) when κ < straight_kappa_on.
@@ -263,6 +268,7 @@ class MPCSolver:
         self._nz = 0
         self._nc = 0
         self._current_r_steer_rate = params.r_steer_rate
+        self._current_q_lat = params.q_lat
         self._speed_band_center: float = 0.0
         self._kappa_band_center: float = 0.0
         # Feedforward wheelbase: decouples FF (curve-entry ramp) from dynamics model
@@ -326,6 +332,21 @@ class MPCSolver:
         effective_scale = max(speed_scale, kappa_curve_scale)
         return r_base * effective_scale
 
+    def _get_effective_q_lat(self, kappa: float = 0.0) -> float:
+        """Compute curvature-scheduled q_lat.
+
+        Higher curvature → higher q_lat → MPC values lateral tracking more
+        on curves, making pre-steering cheaper than accepting entry error.
+        """
+        q_base = self.p.q_lat
+        if self.p.q_lat_kappa_gain <= 0:
+            return q_base
+        kappa_abs = abs(kappa)
+        scale = 1.0 + self.p.q_lat_kappa_gain * min(
+            kappa_abs, self.p.q_lat_kappa_saturate
+        )
+        return q_base * scale
+
     @staticmethod
     def _feedforward_delta_norm(kappa: float, wheelbase_m: float, max_steer_rad: float) -> float:
         """Bicycle-model kinematic feedforward steering for curvature κ, normalized to [-1, 1].
@@ -367,8 +388,8 @@ class MPCSolver:
         _dyn = self.p.dynamic_model_enabled
         for k in range(N):
             base = k * (nx + nu)
-            # State cost at step k
-            P_diag[base + 0] = self.p.q_lat
+            # State cost at step k (q_lat uses scheduled value)
+            P_diag[base + 0] = self._current_q_lat
             P_diag[base + 1] = self.p.q_heading
             if _dyn:
                 P_diag[base + 2] = self.p.q_vy         # v_y cost
@@ -382,7 +403,7 @@ class MPCSolver:
 
         # Terminal state cost
         term_base = N * (nx + nu)
-        P_diag[term_base + 0] = self.p.q_lat * self.p.q_lat_terminal_scale
+        P_diag[term_base + 0] = self._current_q_lat * self.p.q_lat_terminal_scale
         P_diag[term_base + 1] = self.p.q_heading * self.p.q_heading_terminal_scale
         if _dyn:
             P_diag[term_base + 2] = self.p.q_vy
@@ -688,6 +709,15 @@ class MPCSolver:
                 self._kappa_band_center = kappa_now
                 need_rebuild = True
 
+        # q_lat curvature scheduling: rebuild when q_lat changes meaningfully
+        new_q_lat = self._get_effective_q_lat(kappa_now)
+        if abs(new_q_lat - self._current_q_lat) > 0.2:
+            kappa_crossed = abs(kappa_now - self._kappa_band_center) > 0.003
+            if kappa_crossed or need_rebuild:
+                self._current_q_lat = new_q_lat
+                self._kappa_band_center = kappa_now
+                need_rebuild = True
+
         if need_rebuild:
             self._N = new_N
             self._build_qp()
@@ -980,6 +1010,7 @@ class MPCSolver:
             'predicted_trajectory': predicted,
             'osqp_status': res.info.status,
             'r_steer_rate_effective': self._current_r_steer_rate,
+            'q_lat_effective': self._current_q_lat,
         }
 
 

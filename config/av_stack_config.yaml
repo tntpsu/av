@@ -810,6 +810,8 @@ trajectory:
     mpc_max_steer_high_speed_rad: 0.2793   # 16° (Unity maxSteerAngleHighSpeed)
     mpc_max_steer_speed_saturation_mps: 12.0  # Unity maxSteerAngleFullSpeed
     mpc_q_lat: 1.0
+    mpc_q_lat_kappa_gain: 150.0      # q_lat increase per unit κ — makes MPC pre-steer into curves
+    mpc_q_lat_kappa_saturate: 0.010  # κ ceiling (R100) — caps scale at 1 + 150×0.010 = 2.5×
     mpc_q_lat_rate: 0.0              # lateral velocity damping (0=disabled) — tuned via E2E validation
     mpc_q_heading: 10.0              # RAISED 5→10: provides phase lead — heading error (derivative of lateral) is penalised more heavily, preventing oscillation buildup
     mpc_q_speed: 2.0
