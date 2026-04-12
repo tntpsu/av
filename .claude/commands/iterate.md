@@ -185,6 +185,25 @@ Evidence: <specific frames, signals, correlations>
 
 Only proceed to Step 2e (fix level) after the root cause is CONFIRMED, not hypothesized.
 
+### 2d2 — Industry context check (MANDATORY)
+
+Before proposing any fix approach, state how top AV companies handle this class of problem:
+
+```
+INDUSTRY CONTEXT:
+  Problem class: <e.g., steering jerk, late curve turn-in, oscillation>
+  Standard approach: <what Waymo/Aurora/Cruise/Comma do>
+  Why it applies: <1 sentence>
+  Anti-pattern to avoid: <ad-hoc fix that creates tech debt>
+```
+
+This prevents reinventing solutions with known-good industry patterns. Examples from this project:
+- FF curvature floor (0.005→0.0): top companies use proportional atan(L×κ) with no floor
+- Steering jerk: top companies use a universal output limiter after all controllers, not per-controller soft constraints
+- Regime selection: top companies use κ×v² lateral acceleration budget, not speed thresholds + curvature guards
+
+If the standard industry approach differs from the proposed fix, explain why — or adopt the standard approach.
+
 ### 2e — Classify fix level
 
 Based on the full picture (not just one track):

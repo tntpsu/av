@@ -111,7 +111,24 @@ python3 tools/analyze/counterfactual_layer_swap.py <recording>
 ```
 And suggest opening PhilViz: `python3 tools/debug_visualizer/server.py` → Triage + Blame tabs.
 
-## Step 5 — Fix Level Triage
+## Step 5 — Industry Context Check
+
+Before proposing a fix, briefly state how top AV companies handle this class of problem:
+
+```
+INDUSTRY CONTEXT:
+  Problem class: <e.g., steering jerk on tight curves, late curve turn-in, oscillation>
+  Standard approach: <what Waymo/Aurora/Cruise/Comma do — e.g., unified output
+    rate/jerk limiter, gain-scheduled MPC, curvature-proportional feedforward>
+  Why it applies: <1 sentence on why the standard approach fits our system>
+  Anti-pattern to avoid: <common ad-hoc fix that top companies don't use —
+    e.g., per-track overlays, binary gates on continuous signals, post-hoc clamps
+    without controller awareness>
+```
+
+This check prevents reinventing solutions that have known-good industry patterns, and flags ad-hoc fixes that will create technical debt.
+
+## Step 6 — Fix Level Triage
 
 Before recommending any fix, classify it and check for robustness:
 
@@ -150,7 +167,7 @@ FIX LEVEL TRIAGE:
 - If ANY design smell detected, minimum level is ARCHITECTURE — do not propose tuning or code patch
 - Label any per-track suggestion as "BAND-AID — not recommended" if a robust alternative exists
 
-## Step 6 — Synthesize and output
+## Step 7 — Synthesize and output
 
 If the primary issue is lateral error or late turn-in, include the PP Lookahead Signal Chain diagram from docs/agent/architecture.md in your diagnostic output to show which mechanism is the bottleneck.
 
