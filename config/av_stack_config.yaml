@@ -783,6 +783,16 @@ trajectory:
     a_lon_brake_mps2: 1.8                  # backward pass: max comfortable braking
     # v_max reuses trajectory.target_speed (single source of truth)
     # min_speed reuses speed_governor.comfort_governor_min_speed (single source of truth)
+  lookahead_profiler:
+    enabled: true                          # master switch for map-predictive lookahead
+    preview_horizon_m: 40.0               # how far ahead to scan κ (~3.3s at 12 m/s)
+    e_target_m: 0.04                      # tracking error budget, matches PP floor formula
+    k_speed_min: 0.35                     # Ld floor = k × v_profile(s)
+    contraction_rate: 0.30                # m/m of travel (9m→3m takes 20m = 1.7s at 12 m/s)
+    extension_rate: 0.10                  # m/m of travel (3m→9m takes 60m, gentle recovery)
+    curvature_min: 0.001                  # ignore κ below this
+    # ld_max reuses trajectory.reference_lookahead (single source of truth)
+    # ld_min reuses trajectory.reference_lookahead_min (single source of truth)
   lane_position_smoothing_alpha: 0.2
   ref_point_jump_clamp_x: 0.15
   ref_point_jump_clamp_heading: 0.08

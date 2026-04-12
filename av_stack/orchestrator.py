@@ -28,6 +28,7 @@ from control.acc_controller import ACCController, ACCParams
 from control.radar_sensor import ForwardRadarSensor
 from control.speed_governor import build_speed_governor, SpeedGovernorOutput
 from trajectory.velocity_profiler import VelocityProfiler, VelocityProfilerConfig, VelocityProfile
+from trajectory.lookahead_profiler import LookaheadProfiler, LookaheadProfilerConfig, LookaheadProfile
 from control.regime_selector import ControlRegime
 from data.recorder import DataRecorder
 from data.formats.data_format import (
@@ -1427,6 +1428,11 @@ class AVStack:
         vp_cfg = trajectory_cfg.get('velocity_profiler', {})
         self._velocity_profiler_enabled: bool = bool(vp_cfg.get('enabled', False))
         self._velocity_profiler_shadow_mode: bool = bool(vp_cfg.get('shadow_mode', True))
+        # Lookahead profile (pre-computed Ld vs station)
+        self._lookahead_profiler = None  # Optional[LookaheadProfiler]
+        self._lookahead_profile = None   # Optional[LookaheadProfile]
+        lp_cfg = trajectory_cfg.get('lookahead_profiler', {})
+        self._lookahead_profiler_enabled: bool = bool(lp_cfg.get('enabled', False))
         self._map_segment_lookup_success_count: int = 0
         self._map_odometer_update_count: int = 0
         self._map_odometer_teleport_skip_count: int = 0
@@ -1611,6 +1617,45 @@ class AVStack:
                         logger.warning("[VELOCITY_PROFILE] Failed to build: %s", exc)
                         self._velocity_profiler = None
                         self._velocity_profile = None
+
+                # --- Build lookahead profile ---
+                if self._lookahead_profiler_enabled:
+                    try:
+                        lp_section = self.trajectory_config.get('lookahead_profiler', {})
+                        _ld_max = float(self.trajectory_config.get('reference_lookahead', 9.0))
+                        _ld_min = float(self.trajectory_config.get('reference_lookahead_min', 2.5))
+                        lp_config = LookaheadProfilerConfig(
+                            preview_horizon_m=float(lp_section.get('preview_horizon_m', 40.0)),
+                            e_target_m=float(lp_section.get('e_target_m', 0.04)),
+                            k_speed_min=float(lp_section.get('k_speed_min', 0.35)),
+                            ld_max_m=_ld_max,
+                            ld_min_m=_ld_min,
+                            contraction_rate=float(lp_section.get('contraction_rate', 0.30)),
+                            extension_rate=float(lp_section.get('extension_rate', 0.10)),
+                            sample_spacing_m=float(cfg.get('sample_spacing', 1.0)),
+                            curvature_min=float(lp_section.get('curvature_min', 0.001)),
+                        )
+                        self._lookahead_profiler = LookaheadProfiler(lp_config)
+                        v_stations = self._velocity_profile.stations_m if self._velocity_profile else None
+                        v_speeds = self._velocity_profile.speeds_mps if self._velocity_profile else None
+                        self._lookahead_profile = self._lookahead_profiler.build_profile(
+                            curves=curves,
+                            total_length_m=float(distance_cursor),
+                            is_loop=self._track_loop,
+                            v_profile_speeds=v_speeds,
+                            v_profile_stations=v_stations,
+                        )
+                        logger.info(
+                            "[LOOKAHEAD_PROFILE] Built profile: %d stations, Ld_min=%.2f Ld_max=%.2f",
+                            len(self._lookahead_profile.stations_m),
+                            float(self._lookahead_profile.lookaheads_m.min()),
+                            float(self._lookahead_profile.lookaheads_m.max()),
+                        )
+                    except Exception as exc:
+                        logger.warning("[LOOKAHEAD_PROFILE] Failed to build: %s", exc)
+                        self._lookahead_profiler = None
+                        self._lookahead_profile = None
+
         except Exception as exc:
             logger.warning("[LOOKAHEAD_ENTRY] Failed to load track profile '%s': %s", track_name, exc)
             self._reference_entry_track_total_length_m = None
@@ -5191,6 +5236,17 @@ class AVStack:
             ),
         }
 
+        # Lookahead profile lookup (pre-computed Ld from track geometry)
+        _lookahead_profile_ld = None
+        if (
+            self._lookahead_profiler_enabled
+            and self._lookahead_profiler is not None
+            and self._lookahead_profile is not None
+        ):
+            _lookahead_profile_ld = self._lookahead_profiler.lookup_lookahead(
+                self._lookahead_profile, self._track_odometer_m
+            )
+
         reference_lookahead_result = compute_reference_lookahead(
             base_lookahead=float(base_reference_lookahead),
             current_speed=float(current_speed),
@@ -5226,6 +5282,7 @@ class AVStack:
             local_gate_weight=float(curve_phase_diag.get("curve_local_gate_weight", 0.0) or 0.0),
             curvature_horizon_signed=self._map_curvature_preview_horizon_signed,
             curvature_horizon_distances=self._map_curvature_preview_horizon_distances,
+            lookahead_profile_ld=_lookahead_profile_ld,
             return_diagnostics=True,
         )
         if isinstance(reference_lookahead_result, dict):

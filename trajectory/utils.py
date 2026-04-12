@@ -1868,6 +1868,7 @@ def compute_reference_lookahead(
     local_gate_weight: float | None = None,
     curvature_horizon_signed: list | None = None,
     curvature_horizon_distances: list | None = None,
+    lookahead_profile_ld: float | None = None,
     return_diagnostics: bool = False,
 ) -> float | dict[str, float | str]:
     """
@@ -1931,7 +1932,17 @@ def compute_reference_lookahead(
         target *= _compute_tight_curve_scale(abs(path_curvature), config)
         target = max(min_lookahead, target)
 
-        # Map-predictive lookahead: pull target down when map demands it
+        # Lookahead profile ceiling: pre-computed Ld(s) from track geometry.
+        # Pulls target down (never up) so contraction starts before curve entry.
+        _profile_active = False
+        _profile_ld = float(target)
+        if lookahead_profile_ld is not None:
+            _profile_ld = float(lookahead_profile_ld)
+            if _profile_ld < target - 0.01:
+                target = _profile_ld
+                _profile_active = True
+
+        # Map-predictive lookahead (legacy per-frame version, typically disabled)
         _map_pred_active = False
         _map_pred_ld = float(target)
         if (
@@ -2016,6 +2027,8 @@ def compute_reference_lookahead(
                 "reference_lookahead_entry_shorten_guard_delta_m": float(entry_guard_delta),
                 "map_predictive_ld_target": float(_map_pred_ld),
                 "map_predictive_active": bool(_map_pred_active),
+                "lookahead_profile_ld": float(_profile_ld),
+                "lookahead_profile_active": bool(_profile_active),
             }
         return float(after_entry_guard)
 
