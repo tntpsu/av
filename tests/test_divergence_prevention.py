@@ -86,16 +86,16 @@ class TestDivergencePrevention:
                 pytest.skip("Not enough frames")
 
             # Corrective steering convention (MPC-primary and PP both):
-            # lat_err > 0 (car right of center) → steering < 0 (steer left to correct)
-            # lat_err < 0 (car left of center) → steering > 0 (steer right to correct)
-            # So opposite sign = CORRECT (steering opposes error to correct it).
-            # Same sign = wrong direction.
+            # lat_err > 0 (car left of center) → steering > 0 (steer right to correct)
+            # lat_err < 0 (car right of center) → steering < 0 (steer left to correct)
+            # So same sign = CORRECT (steering corrects toward center).
+            # Opposite sign = wrong direction.
             significant = (np.abs(lat_err) > 0.1) & (np.abs(steering) > 0.05)
 
             if np.sum(significant) > 0:
-                # Same sign = wrong direction (steering reinforces error instead of correcting)
-                wrong_dir = ((lat_err[significant] > 0) & (steering[significant] > 0)) | \
-                           ((lat_err[significant] < 0) & (steering[significant] < 0))
+                # Opposite sign = wrong direction (steering reinforces error instead of correcting)
+                wrong_dir = ((lat_err[significant] > 0) & (steering[significant] < 0)) | \
+                           ((lat_err[significant] < 0) & (steering[significant] > 0))
                 wrong_pct = 100 * np.sum(wrong_dir) / np.sum(significant)
 
                 # Should have < 50% wrong direction
