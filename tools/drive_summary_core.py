@@ -7548,17 +7548,28 @@ def analyze_recording_summary(
                 oscillation_zero_crossing_rate_hz = safe_float(zero_crossings / duration_s)
 
                 # Track amplitude growth using 2s rolling RMS windows (step 1s).
+                # Compute on straight-only frames to avoid counting steady-state
+                # curve tracking bias as oscillation growth (regime-change artifact).
                 window_s = 2.0
                 step_s = 1.0
+                # Build straight mask from curvature
+                _kappa_osc = data.get('curvature_map_abs')
+                if _kappa_osc is not None:
+                    _kappa_arr = np.asarray(_kappa_osc[:n_frames], dtype=float)
+                    _kappa_arr = _kappa_arr[finite_mask]
+                    _straight_mask_osc = _kappa_arr < 0.003
+                else:
+                    _straight_mask_osc = np.ones(len(e_series), dtype=bool)
                 rms_times = []
                 rms_values = []
                 start_t = float(t_series[0])
                 end_t = float(t_series[-1])
                 while start_t + window_s <= end_t + 1e-9:
-                    mask = (t_series >= start_t) & (t_series < (start_t + window_s))
-                    if np.sum(mask) >= 3:
+                    t_mask = (t_series >= start_t) & (t_series < (start_t + window_s))
+                    win_mask = t_mask & _straight_mask_osc
+                    if np.sum(win_mask) >= 3:
                         rms_times.append(start_t + (window_s * 0.5))
-                        rms_values.append(float(np.sqrt(np.mean(e_series[mask] ** 2))))
+                        rms_values.append(float(np.sqrt(np.mean(e_series[win_mask] ** 2))))
                     start_t += step_s
                 oscillation_rms_windows_count = int(len(rms_values))
                 if rms_values:
