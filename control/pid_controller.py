@@ -5867,6 +5867,10 @@ class VehicleController:
         self._last_steering_norm = 0.0
         self._last_mpc_steering = 0.0  # for MPC-aware rate limiter (2.8.3)
         self._last_regime_steering = 0.0  # for regime transition blend (2.9.1)
+        # Universal output jerk limiter — applied after ALL controllers (PP, MPC, NMPC)
+        self._output_jerk_last_rate = 0.0
+        _lat_cfg = self._full_config.get('control', {}).get('lateral', {})
+        self._output_max_steering_jerk = float(_lat_cfg.get('output_max_steering_jerk', 0.0))
         _mpc_cfg = self._full_config.get('trajectory', {}).get('mpc', {})
         _delay_frames = int(_mpc_cfg.get('mpc_delay_frames', 2))
         self._steering_ring_buffer = [0.0] * _delay_frames  # delay buffer for 2.8.4
@@ -6551,6 +6555,24 @@ class VehicleController:
             lateral_metadata['regime_lateral_accel_threshold_mps2'] = float(_budget_thr + _budget_hyst)
         else:  # PP active — upshift threshold
             lateral_metadata['regime_lateral_accel_threshold_mps2'] = float(_budget_thr - _budget_hyst)
+        # Universal output jerk limiter — hard safety net after all controllers
+        # Uses own last_steering to avoid inconsistency with per-controller tracking
+        output_jerk_limited = False
+        if self._output_max_steering_jerk > 0.0 and dt and dt > 0.0:
+            output_last = getattr(self, '_output_jerk_last_steering', steering)
+            steer_change = steering - output_last
+            current_rate = steer_change / dt
+            rate_delta = current_rate - self._output_jerk_last_rate
+            max_rate_delta = self._output_max_steering_jerk * dt
+            if abs(rate_delta) > max_rate_delta:
+                rate_delta = float(np.clip(rate_delta, -max_rate_delta, max_rate_delta))
+                limited_rate = self._output_jerk_last_rate + rate_delta
+                steering = output_last + limited_rate * dt
+                output_jerk_limited = True
+            self._output_jerk_last_rate = (steering - output_last) / dt
+            self._output_jerk_last_steering = steering
+        lateral_metadata['output_jerk_limited'] = output_jerk_limited
+
         # Keep steering in lateral_metadata for consistency
         lateral_metadata['steering'] = steering
         

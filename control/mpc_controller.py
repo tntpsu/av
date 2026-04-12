@@ -79,7 +79,9 @@ class MPCParams:
     r_steer_rate_speed_gain: float = 0.15        # multiplier per m/s above onset
     r_steer_rate_max_scale: float = 3.0          # cap: r_eff ≤ r_base × max_scale
     r_steer_rate_band_hysteresis: float = 1.0    # m/s hysteresis to prevent chattering
-    r_steer_rate_kappa_off: float = 0.005        # curvature where scheduling deactivates (R200; R600/R500 keep scheduling)
+    r_steer_rate_kappa_off: float = 0.005        # curvature where speed scheduling deactivates (legacy)
+    r_steer_rate_kappa_gain: float = 0.0         # r_steer_rate increase per unit κ (proportional curve damping)
+    r_steer_rate_kappa_saturate: float = 0.015   # κ ceiling for curvature scaling (R67)
 
     # Curvature-adaptive r_steer_rate reduction (straight-line oscillation fix)
     # On low-κ sections, MPC needs responsive corrections to prevent drift accumulation.
@@ -262,6 +264,7 @@ class MPCSolver:
         self._nc = 0
         self._current_r_steer_rate = params.r_steer_rate
         self._speed_band_center: float = 0.0
+        self._kappa_band_center: float = 0.0
         # Feedforward wheelbase: decouples FF (curve-entry ramp) from dynamics model
         self._ff_wheelbase_m = params.feedforward_wheelbase_m if params.feedforward_wheelbase_m > 0 else params.wheelbase_m
         self._build_qp()
@@ -307,12 +310,21 @@ class MPCSolver:
         excess = max(0.0, speed - self.p.r_steer_rate_speed_onset)
         scale = min(1.0 + self.p.r_steer_rate_speed_gain * excess,
                     self.p.r_steer_rate_max_scale)
-        # Curvature gate: ramp scale toward 1.0 on curves
+        # Speed scheduling with curvature gate (existing)
         kappa_abs_v = abs(kappa)
         kappa_off = max(1e-6, self.p.r_steer_rate_kappa_off)
         kappa_gate = max(0.0, min(1.0, 1.0 - kappa_abs_v / kappa_off))
-        gated_scale = 1.0 + (scale - 1.0) * kappa_gate
-        return r_base * gated_scale
+        speed_scale = 1.0 + (scale - 1.0) * kappa_gate
+
+        # Curvature damping: proportional floor on curves
+        # Higher κ → higher r_steer_rate → less jerk on tight curves
+        kappa_curve_scale = 1.0 + self.p.r_steer_rate_kappa_gain * min(
+            kappa_abs_v, self.p.r_steer_rate_kappa_saturate
+        )
+
+        # Max of speed scheduling and curvature damping
+        effective_scale = max(speed_scale, kappa_curve_scale)
+        return r_base * effective_scale
 
     @staticmethod
     def _feedforward_delta_norm(kappa: float, wheelbase_m: float, max_steer_rad: float) -> float:
@@ -666,11 +678,14 @@ class MPCSolver:
         new_r_sr = self._get_effective_r_steer_rate(v, kappa_now)
         need_rebuild = (new_N != N)
 
-        # Speed-band hysteresis: only rebuild for r_steer_rate if change is meaningful
+        # Hysteresis: only rebuild for r_steer_rate if change is meaningful
         if abs(new_r_sr - self._current_r_steer_rate) > 0.1:
-            if abs(v - self._speed_band_center) > self.p.r_steer_rate_band_hysteresis:
+            speed_crossed = abs(v - self._speed_band_center) > self.p.r_steer_rate_band_hysteresis
+            kappa_crossed = abs(kappa_now - self._kappa_band_center) > 0.003
+            if speed_crossed or kappa_crossed:
                 self._current_r_steer_rate = new_r_sr
                 self._speed_band_center = v
+                self._kappa_band_center = kappa_now
                 need_rebuild = True
 
         if need_rebuild:

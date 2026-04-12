@@ -21,13 +21,24 @@ def _effective_r_steer_rate(
     gain: float = 0.15,
     max_scale: float = 3.0,
     enabled: bool = True,
+    kappa: float = 0.0,
+    kappa_off: float = 0.005,
+    kappa_gain: float = 0.0,
+    kappa_saturate: float = 0.015,
 ) -> float:
     """Mirror the formula in mpc_controller.py _get_effective_r_steer_rate."""
     if not enabled:
         return r_base
     excess = max(0.0, speed - onset)
     scale = min(1.0 + gain * excess, max_scale)
-    return r_base * scale
+    # Speed scheduling with curvature gate
+    kappa_abs = abs(kappa)
+    kappa_gate = max(0.0, min(1.0, 1.0 - kappa_abs / max(1e-6, kappa_off)))
+    speed_scale = 1.0 + (scale - 1.0) * kappa_gate
+    # Curvature damping: proportional floor
+    kappa_curve_scale = 1.0 + kappa_gain * min(kappa_abs, kappa_saturate)
+    effective_scale = max(speed_scale, kappa_curve_scale)
+    return r_base * effective_scale
 
 
 class TestRSteerRateScheduling:
@@ -100,6 +111,70 @@ class TestRSteerRateScheduling:
         )
         # scale = 1 + 0.10 * 10 = 2.0 → clamped at 2.0 → r = 4.0
         assert abs(r - 4.0) < 1e-9
+
+
+class TestRSteerRateCurvatureDamping:
+    """Verify curvature-proportional r_steer_rate damping."""
+
+    def test_zero_kappa_gain_no_effect(self):
+        """When kappa_gain=0 (default), curvature has no effect."""
+        r = _effective_r_steer_rate(5.0, r_base=2.0, kappa=0.010, kappa_gain=0.0)
+        assert abs(r - 2.0) < 1e-9
+
+    def test_kappa_gain_increases_r_on_curves(self):
+        """Curvature damping raises r_steer_rate proportionally."""
+        # κ=0.010, gain=30 → kappa_curve_scale = 1 + 30*0.010 = 1.30
+        r = _effective_r_steer_rate(
+            5.0, r_base=2.0, kappa=0.010, kappa_gain=30.0, kappa_saturate=0.015
+        )
+        assert abs(r - 2.0 * 1.30) < 1e-9
+
+    def test_kappa_saturates_at_ceiling(self):
+        """Curvature scaling saturates at kappa_saturate."""
+        # κ=0.067 (hairpin) > saturate=0.015 → capped
+        # kappa_curve_scale = 1 + 30*0.015 = 1.45
+        r = _effective_r_steer_rate(
+            5.0, r_base=2.0, kappa=0.067, kappa_gain=30.0, kappa_saturate=0.015
+        )
+        assert abs(r - 2.0 * 1.45) < 1e-9
+
+    def test_straight_gets_minimal_effect(self):
+        """On straights (κ≈0), curvature damping is negligible."""
+        r = _effective_r_steer_rate(
+            12.0, r_base=2.0, kappa=0.001, kappa_gain=30.0, kappa_saturate=0.015
+        )
+        # kappa_curve_scale = 1 + 30*0.001 = 1.03 → r = 2.06
+        assert abs(r - 2.0 * 1.03) < 1e-9
+
+    def test_speed_dominates_on_fast_straights(self):
+        """Speed scheduling beats curvature damping at high speed on pure straights."""
+        # Speed=20, onset=12, gain=0.15 → raw speed scale = 2.2
+        # κ=0.0 → kappa_gate=1.0, speed_scale = 2.2, kappa_curve_scale = 1.0
+        # max(2.2, 1.0) = 2.2 → r = 3.5 * 2.2 = 7.7
+        r = _effective_r_steer_rate(
+            20.0, r_base=3.5, kappa=0.0, kappa_gain=30.0, kappa_saturate=0.015
+        )
+        assert abs(r - 3.5 * 2.2) < 1e-9
+
+    def test_curvature_dominates_on_slow_curves(self):
+        """Curvature damping beats speed scheduling on slow tight curves."""
+        # Speed=6 (below onset=12) → speed_scale = 1.0
+        # κ=0.025, gain=30, saturate=0.015 → kappa_curve_scale = 1 + 30*0.015 = 1.45
+        # max(1.0, 1.45) = 1.45 → r = 2.0 * 1.45 = 2.90
+        r = _effective_r_steer_rate(
+            6.0, r_base=2.0, kappa=0.025, kappa_gain=30.0, kappa_saturate=0.015
+        )
+        assert abs(r - 2.0 * 1.45) < 1e-9
+
+    def test_r_eff_stays_below_historic_problem_value(self):
+        """With gain=30, saturate=0.015, r_eff never reaches 3.5 (known problem)."""
+        # Max kappa_curve_scale = 1 + 30*0.015 = 1.45
+        # r_eff = 2.0 * 1.45 = 2.90 < 3.5
+        for kappa in [0.01, 0.02, 0.05, 0.10]:
+            r = _effective_r_steer_rate(
+                5.0, r_base=2.0, kappa=kappa, kappa_gain=30.0, kappa_saturate=0.015
+            )
+            assert r < 3.5, f"r_eff={r:.2f} at κ={kappa} exceeds safe limit 3.5"
 
 
 class TestRSteerRateSchedulingMPC:

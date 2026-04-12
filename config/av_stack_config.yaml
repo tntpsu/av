@@ -38,6 +38,7 @@ control:
     # 2026-03-22: 0.070 A/B vs 0.075 failed promotion (see GRADE_LATERAL_TUNING.md); keep 0.075 until a gated win.
     pp_feedback_gain: 0.075
     pp_max_steering_jerk: 18.0
+    output_max_steering_jerk: 18.0   # universal hard cap after ALL controllers (PP/MPC/NMPC)
     # Steering motion profile planner (replaces rate clamp + jerk clamp + ceiling clip)
     # Unified trapezoidal profile with demand-aware tapering — no overshoot, no ceiling jerk.
     pp_steering_profile_enabled: false   # disabled on s_loop: taper-based profile can't match legacy bang-bang on R40 reversals
@@ -816,7 +817,9 @@ trajectory:
     mpc_r_steer_rate_speed_gain: 0.80       # multiplier per m/s above onset (0.40→growth halved but still positive)
     mpc_r_steer_rate_max_scale: 3.0         # cap: r_eff ≤ r_base × max_scale
     mpc_r_steer_rate_band_hysteresis: 1.0   # m/s hysteresis to prevent solver rebuild chattering
-    mpc_r_steer_rate_kappa_off: 0.005      # curvature where scheduling fully deactivates (R200=0.005; R600/R500 keep scheduling)
+    mpc_r_steer_rate_kappa_off: 0.005      # LEGACY — only affects speed scheduling gate (kept for backward compat)
+    mpc_r_steer_rate_kappa_gain: 30.0     # r_steer_rate increase per unit κ — proportional curve damping
+    mpc_r_steer_rate_kappa_saturate: 0.015  # κ ceiling for scaling (R67) — caps r_eff at r_base × (1 + gain × saturate)
     # Curvature-adaptive r_steer_rate reduction for straight-line phase margin.
     # On low-κ sections, reduce r_steer_rate so MPC corrects drift faster.
     # r_eff *= max(min_scale, κ/kappa_on).  On curves (κ >= kappa_on), scale=1.0 (no change).
