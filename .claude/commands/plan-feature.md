@@ -105,6 +105,60 @@ ROOT CAUSE:
   Regression guardrails: <what must NOT break>
 ```
 
+## Step 4b — Mechanism Verification (MANDATORY before designing)
+
+Before designing anything, verify the proposed approach actually changes behavior at the problem frames. This is a 30-second numerical check that prevents building the wrong solution.
+
+1. **Extract existing signal values** at the 5 worst frames from the diagnosis:
+   - What is the current value of the signal you plan to modify?
+   - What outcome does it produce (e.g., Ld=3.28m, steering=0.05)?
+
+2. **Compute what the proposed fix would produce** at those same frames:
+   - If adding a ceiling/floor: is the proposed value MORE restrictive than existing?
+   - If adding a scaling factor: does the scaling actually change the outcome?
+   - If replacing a mechanism: does the new mechanism produce a different output?
+
+3. **Compare and decide:**
+   ```
+   MECHANISM VERIFICATION
+   ============================================================
+   Frame    Existing signal    Proposed signal    Changes outcome?
+   1595     Ld=3.28m          profile=5.66m      NO (ceiling is higher)
+   ...
+   
+   Verdict: PROCEED / STOP (if proposed doesn't change ≥3 of 5 worst frames)
+   ============================================================
+   ```
+
+**If the proposed mechanism doesn't change the outcome at the problem frames, STOP.** Re-diagnose — the bottleneck is elsewhere. Common traps:
+- Ceiling on a signal that's already lower than your ceiling (lookahead profiler lesson)
+- Floor on a signal that's already higher than your floor
+- Scaling a parameter that's already saturated or bypassed
+- Fixing a subsystem that's not the active controller at the problem frames (e.g., tuning MPC when PP is active)
+
+## Step 4c — Prior Investigation Cross-Reference
+
+Before designing from scratch, check whether prior investigations already characterized this root cause:
+
+1. Search `docs/agent/tasks.md` for task IDs referencing this symptom
+2. Search `MEMORY.md` for related project/feedback memories
+3. Search `docs/agent/current_state.md` for "DEFERRED" items on this topic
+
+```
+PRIOR INVESTIGATION CHECK
+============================================================
+  Related tasks: <T-XXX — what it found, when>
+  Related memories: <memory file — key finding>
+  Prior root cause: <what was already determined>
+  Prior attempts: <what was tried and why it didn't work>
+  
+  Does the current proposal conflict with prior findings? YES/NO
+  If YES: explain why the new approach overcomes the prior limitation
+============================================================
+```
+
+**If a prior investigation already characterized the root cause, surface that finding.** Don't re-derive what T-078 already proved — build on it.
+
 ## Step 5 — Design the implementation phases
 
 Break into phases following this mandatory checklist. Not all phases apply to every feature — mark N/A where appropriate, but **explicitly justify** skipping any phase.

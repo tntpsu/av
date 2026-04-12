@@ -21,6 +21,32 @@ Oscillation Growth                14.7        3/5              sweeping (-6.8)
 ...
 ```
 
+## Step 1.5 — Prior Investigation Cross-Reference (MANDATORY)
+
+Before selecting a target, check whether the top Pareto items have been investigated before:
+
+1. Search `docs/agent/tasks.md` for deferred tasks referencing the deduction name
+2. Search `MEMORY.md` for related project/feedback memories
+3. If a prior investigation exists, summarize: what was found, what was tried, why it was deferred
+
+```
+PRIOR INVESTIGATION CHECK
+============================================================
+  Pareto #1: <deduction> — prior task: <T-XXX or "none">
+    Prior finding: <root cause if known>
+    Prior attempt: <what was tried>
+    Status: <resolved / deferred / not investigated>
+  
+  Pareto #2: <deduction> — prior task: <T-XXX or "none">
+    ...
+============================================================
+```
+
+**If a deferred investigation already characterized the root cause:**
+- Do NOT dispatch /iterate with the same approach that was already tried
+- Present the prior finding and ask: "Prior investigation found X. Should we try a different approach, or skip to the next Pareto item?"
+- If the prior approach failed because of a specific limitation, the new approach must address that limitation explicitly
+
 ## Step 2 — Select target and classify fix level
 
 Pick the #1 Pareto item (highest Σ pts lost). Identify:

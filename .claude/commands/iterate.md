@@ -87,6 +87,32 @@ Don't just focus on the target — list every track that fails the goal. Check i
 
 ## Step 2 — DIAGNOSE (holistic, cross-track)
 
+### 2-pre — Prior Investigation Cross-Reference (MANDATORY)
+
+Before diagnosing from scratch, check whether prior investigations already characterized this symptom:
+
+1. Search `docs/agent/tasks.md` for deferred tasks (T-XXX) referencing this symptom
+2. Search memory files in `MEMORY.md` for related project/feedback memories
+3. Search `docs/agent/current_state.md` for "DEFERRED" items on this topic
+
+```
+PRIOR INVESTIGATION CHECK
+============================================================
+  Related tasks: <T-XXX — what it found, when, why deferred>
+  Related memories: <memory file — key finding>
+  Prior root cause: <what was already determined>
+  Prior attempts: <what was tried and why it didn't work>
+  
+  Does the current symptom match the prior root cause? YES/NO
+  If YES: skip redundant diagnosis, build on the prior finding
+============================================================
+```
+
+**If a prior investigation already characterized the root cause, do NOT re-diagnose.** State the prior finding, verify it still holds with current data, and proceed to fix-level triage. This prevents:
+- Re-discovering what T-078 already proved (wasted E2E cycles)
+- Building the wrong solution because you didn't see the prior evidence
+- Contradicting prior findings without acknowledging the discrepancy
+
 ### 2a — Primary diagnosis on target track
 
 Run ALL three diagnostic tools — analysis, triage engine, and trace:

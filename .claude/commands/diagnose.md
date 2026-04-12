@@ -54,6 +54,37 @@ Parse the output to identify the issue category. Use **first match** from this p
 | 8 | `control_issue` | Control layer score < 80 |
 | 9 | `unknown` | Overall score < 90 but no specific layer clearly red |
 
+## Step 3.5 — Blame Disambiguation
+
+When the blame output names a signal (e.g., "Ld_target SHORT", "entry_severity LOW", "FF negligible"), disambiguate the failure mode before accepting it as the root cause. A blame label describes WHAT is wrong, not WHY or WHERE to fix it.
+
+For each blame label, ask:
+
+| Blame label | Possible meanings | How to disambiguate |
+|-------------|-------------------|---------------------|
+| "Ld_target SHORT" | (a) Ld contracted too late (onset timing) | Check onset frame vs curve start frame |
+| | (b) Ld contracted to wrong value | Compare Ld at curve vs physics ideal sqrt(8R×e) |
+| | (c) Controller ignores Ld (e.g., MPC cost trade-off) | Check if MPC pre-steers despite Ld being correct |
+| "entry_severity LOW" | (a) Curve too gentle to trigger | Check κ vs severity thresholds |
+| | (b) Severity scaling is correct but insufficient | Check if higher severity would actually help |
+| "FF negligible" | (a) FF floor blocks activation | Check κ vs ff_curvature_min |
+| | (b) FF gain too low | Check FF contribution vs geometric demand |
+| | (c) FF is correct but controller overrides it | Check total steer vs FF alone |
+
+```
+BLAME DISAMBIGUATION
+============================================================
+  Blame: <label from trace_curve_entry>
+  Meaning (a): <description> — <evidence for/against>
+  Meaning (b): <description> — <evidence for/against>
+  
+  Root cause: <which meaning, with evidence>
+  Actionable subsystem: <what to fix — may differ from the blamed signal>
+============================================================
+```
+
+**Critical:** "Ld_target SHORT" does NOT always mean "fix Ld." If the controller's cost function accepts entry error as optimal (MPC q_lat trade-off), fixing Ld won't help — the controller will still not pre-steer. The actionable subsystem may be the controller weights, not the lookahead chain.
+
 ## Step 4 — Run the targeted tools
 
 ### If `safety_issue`:
