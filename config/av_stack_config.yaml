@@ -85,7 +85,7 @@ control:
     pp_map_ff_phase_gate_enabled: true   # now proportional: FF *= local_gate_weight (0→1 smoothstep)
     pp_map_ff_entry_boost: 1.8           # unused — proportional mode ignores this
     pp_map_ff_wheelbase_m: 2.5
-    pp_map_ff_curvature_min: 0.005
+    pp_map_ff_curvature_min: 0.0     # removed hard floor — atan(L×κ) is self-limiting; phase gate handles spatial gating
     pp_map_ff_curvature_max_clip: 0.08
     pp_ref_jump_clamp: 0.5
     pp_stale_decay: 0.98
