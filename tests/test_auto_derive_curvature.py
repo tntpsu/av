@@ -458,17 +458,20 @@ class TestMPCWeightDerivation:
         base = MPC_WEIGHT_PARAMS[("trajectory.mpc", "mpc_q_lat")][0]
         q = _derive_mpc_q_lat(0.010, v_target=12.0)
         assert q > base, f"q_lat should increase for R100 track at 12 m/s (base={base})"
-        expected_ratio = 3.2  # (12²×0.010) / (15²×0.002) = 1.44/0.45 = 3.2
-        assert abs(q / base - expected_ratio) < 0.1, f"Expected ratio ~{expected_ratio}, got {q/base}"
+        # ratio = (12²×0.010) / (15²×0.002) = 1.44/0.45 = 3.2
+        # but capped at max_val, so use max_val / base as expected ratio
+        _, _, _, _, max_val = MPC_WEIGHT_PARAMS[("trajectory.mpc", "mpc_q_lat")]
+        expected = min(max_val, base * 3.2)
+        assert abs(q - expected) < 0.1, f"Expected q_lat ~{expected}, got {q}"
 
     def test_q_lat_formula_exact(self):
         """Verify exact formula: base × (v²×κ_mpc / v_ref²×κ_ref)^exponent."""
-        base, v_ref, ref_kappa, exponent, _ = MPC_WEIGHT_PARAMS[("trajectory.mpc", "mpc_q_lat")]
+        base, v_ref, ref_kappa, exponent, max_val = MPC_WEIGHT_PARAMS[("trajectory.mpc", "mpc_q_lat")]
         kappa, v_target = 0.010, 12.0
         a_lat_active = (v_target ** 2) * kappa
         a_lat_ref = (v_ref ** 2) * ref_kappa
         ratio = a_lat_active / a_lat_ref
-        expected = round(min(4.0, max(base, base * (ratio ** exponent))), 6)
+        expected = round(min(max_val, max(base, base * (ratio ** exponent))), 6)
         assert abs(_derive_mpc_q_lat(kappa, v_target=v_target) - expected) < 1e-9
 
     def test_curvature_clamped_to_mpc_max(self):

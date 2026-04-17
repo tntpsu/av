@@ -1,7 +1,41 @@
 # AV Stack — Agent Memory: Current State
 
-**Last updated:** 2026-04-11
+**Last updated:** 2026-04-15
 **Current milestone:** S2-M1 — FF curvature floor removed. 7/7 tracks ≥ 95 (autobahn 99.0, highway 98.9, s_loop 98.9, mixed 98.6, sweeping 98.0, hairpin 97.1, hill 95.5). 0 e-stops, 0 OOL.
+
+### Physics-Based Regime Boundary Analysis — NEW (2026-04-15)
+
+Added `tools/analyze/analyze_regime_boundaries.py` — offline analysis tool that computes expected tracking error for PP, LMPC, and NMPC from first-principles physics at every (κ, v) operating point across all 9 tracks. Replaces empirical threshold tuning with analytic crossover computation.
+
+**Key findings from the analysis:**
+- PP beats LMPC above κ ≈ 0.008 (R < 125m) at typical speeds due to LMPC model-plant mismatch (L=2.5 vs L_eff=3.65) and rate penalty entry transients
+- NMPC dominates everywhere above ~4 m/s due to no model mismatch and high q_lat (10 vs 2)
+- The regime boundary is speed-dependent — a single κ threshold cannot capture the physics. The tool suggests `mpc_max_map_curvature: 0.0054` and `nmpc_curvature_threshold: 0.001` from the crossover analysis
+- LMPC error decomposition shows **curve entry transient** (rate penalty limiting steering ramp) is the dominant error source, not steady-state cost trade-off
+
+**Usage:** `python3 tools/analyze/analyze_regime_boundaries.py --all` for full analysis, `--suggest` for config suggestions, `--decompose` for LMPC error breakdown.
+
+**Next step:** Wire the physics crossover computation into the runtime regime selector (replace static thresholds with dynamic `e_pp(v,κ) vs e_lmpc(v,κ)` comparison), then validate with cross-track E2E sweep.
+
+### MPC QP Reformulations — Two Approaches Tested, Both Disabled (2026-04-13)
+
+**Goal:** Break past RMSE 0.111m floor at q_lat=2.0 and/or extend stability boundary beyond q_lat≈2.5.
+
+**1. 2DOF Feedforward/Feedback Decomposition** (`mpc_ff_decomposition_enabled: false`)
+Reformulates QP so decision variable is `epsilon = delta - delta_ff` instead of `delta`. Curvature cancels in dynamics (99.9% cancellation verified) — MPC sees a straight-road problem. Result: only marginal 2% RMSE improvement because MPC already discovers feedforward within 2 frames. 22 tests in `test_mpc_ff_decomposition.py`.
+
+**2. Preview-Weighted q_lat / Stage Cost Shaping** (`mpc_q_lat_preview_step0_scale: 1.0`)
+q_lat ramps linearly from `step0_scale` at step 0 to 1.0 at step N-1 in P matrix diagonal. No warm-start impact (ramp is static). At scale=0.7: halves jerk (5.1 vs ~10) but does NOT improve RMSE. Does NOT shift stability boundary (q_lat=3.0+scale=0.7 still regresses). Score matches baseline (98.6). 15 tests in `test_mpc_preview_weighting.py`.
+
+**Key finding — RMSE ceiling:**
+- RMSE 0.111m at q_lat=2.0 is a hard floor set by **kinematic model plant mismatch**
+- Neither 2DOF decomposition nor preview weighting can push past it
+- The stability boundary (q_lat≈2.5) is NOT a step-0 phenomenon — it's whole-horizon model-plant mismatch
+- **Next avenue:** better plant model via system identification (`tools/analyze/sysid_dynamic_model.py`), or frequency-dependent damping
+
+**Files changed:** `control/mpc_controller.py` (2DOF + preview weighting + diagnostics), `config/av_stack_config.yaml` (new params, all disabled), `tests/test_mpc_ff_decomposition.py` (22 tests), `tests/test_mpc_preview_weighting.py` (15 tests), `tools/analyze/diagnose_ff_decomp.py` (diagnostic with stability boundary sweep).
+
+**Config state:** `mpc_q_lat: 2.0` (unchanged), `mpc_ff_decomposition_enabled: false`, `mpc_q_lat_preview_step0_scale: 1.0`, `mpc_actuator_model_enabled: false`.
 
 ### FF Curvature Floor Removal — VALIDATED (2026-04-11)
 

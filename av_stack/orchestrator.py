@@ -1710,7 +1710,7 @@ class AVStack:
     _MPC_WEIGHT_AUTO_DERIVE_PARAMS: dict[
         tuple[str, str], tuple[float, float, float, float, float]
     ] = {
-        ("trajectory.mpc",  "mpc_q_lat"):  (1.0, 15.0, 0.002, 1.0, 4.0),
+        ("trajectory.mpc",  "mpc_q_lat"):  (2.0, 15.0, 0.002, 1.0, 2.5),  # base=2.0 validated; >2.5 oscillates at current r_steer_rate=2.0
         ("trajectory.nmpc", "nmpc_q_lat"): (10.0, 15.0, 0.002, 1.0, 50.0),
     }
 
@@ -8426,6 +8426,10 @@ class AVStack:
                     'dynamic_model_lr': float(vehicle_state_dict.get('dynamicModelLr', 0.0)),
                     'dynamic_model_mass': float(vehicle_state_dict.get('dynamicModelMass', 0.0)),
                     'dynamic_model_iz': float(vehicle_state_dict.get('dynamicModelIz', 0.0)),
+                    'steering_angle_actual_deg': float(
+                        vehicle_state_dict.get('steeringAngleActual',
+                            vehicle_state_dict.get('steering_angle_actual', 0.0))
+                    ),
                 }
                 
                 # One-shot: apply Unity ground truth geometry to MPC params

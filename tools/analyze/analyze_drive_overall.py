@@ -2899,6 +2899,227 @@ def _print_summary_report(recording_path: Path, summary: Dict, analyze_to_failur
         print(f"   (skipped — {_exc})")
         print()
 
+    # ── Section 24: Curvature Distribution ──────────────────────────────────────
+    # Shows what κ values exist on this track and how frames distribute across bins.
+    # Helps decide regime thresholds without ad-hoc HDF5 inspection.
+    try:
+        import h5py as _h5
+        with _h5.File(recording_path, "r") as f:
+            _has_curv = "control/curvature_map_abs" in f or "control/curvature_primary_abs" in f
+            if _has_curv:
+                # Prefer map curvature (stable, from track geometry); fall back to primary
+                _curv_key = "control/curvature_map_abs" if "control/curvature_map_abs" in f else "control/curvature_primary_abs"
+                _kappa = np.abs(np.array(f[_curv_key][:], dtype=float))
+                _n_k = len(_kappa)
+
+                print("24. CURVATURE DISTRIBUTION")
+                print("-" * 80)
+                print(f"   Source: {_curv_key.split('/')[-1]}  ({_n_k} frames)")
+                print(f"   Range: κ = {np.min(_kappa):.6f} – {np.max(_kappa):.6f}  (R = {1/max(np.max(_kappa), 1e-6):.0f} – {1/max(np.min(_kappa[_kappa > 1e-6]), 1e-6):.0f} m)" if np.any(_kappa > 1e-6) else f"   Range: κ = 0 (straight track)")
+                print()
+
+                # Histogram bins — adaptive based on data range
+                _bins = [0.0, 0.001, 0.003, 0.005, 0.008, 0.010, 0.015, 0.020, 0.030, 0.050, 1.0]
+                _bin_labels = ["0–0.001 (straight)", "0.001–0.003 (gentle)", "0.003–0.005 (mild)",
+                               "0.005–0.008 (moderate)", "0.008–0.010 (firm)", "0.010–0.015 (tight)",
+                               "0.015–0.020 (R50–67)", "0.020–0.030 (R33–50)", "0.030–0.050 (R20–33)",
+                               "0.050+ (R<20)"]
+                print("   ── Curvature Histogram ───────────────────────────────────────")
+                print(f"   {'Bin':30s}  {'Frames':>7s}  {'%':>6s}  {'Bar'}")
+                _max_bar = 40
+                for i in range(len(_bins) - 1):
+                    _count = int(np.sum((_kappa >= _bins[i]) & (_kappa < _bins[i+1])))
+                    _pct = 100.0 * _count / max(_n_k, 1)
+                    _bar_len = int(round(_pct / 100.0 * _max_bar))
+                    if _count > 0:
+                        print(f"   {_bin_labels[i]:30s}  {_count:7d}  {_pct:5.1f}%  {'█' * _bar_len}")
+
+                # Unique values (detect quantized maps)
+                _unique = np.unique(np.round(_kappa, 6))
+                if len(_unique) <= 10:
+                    print(f"\n   Discrete values detected ({len(_unique)}): {', '.join(f'{v:.4f}' for v in _unique)}")
+                    print(f"   NOTE: Map curvature is quantized — threshold selection between discrete values is equivalent")
+                print()
+    except Exception as _exc:
+        print("24. CURVATURE DISTRIBUTION")
+        print("-" * 80)
+        print(f"   (skipped — {_exc})")
+        print()
+
+    # ── Section 25: Per-Regime Error Breakdown ──────────────────────────────────
+    # Lateral RMSE separately for each control regime (PP, LMPC, NMPC, Stanley).
+    # Answers: "which controller is responsible for tracking errors?"
+    try:
+        import h5py as _h5
+        with _h5.File(recording_path, "r") as f:
+            _has_regime = all(k in f for k in ["control/regime", "control/lateral_error",
+                                                "control/regime_blend_weight"])
+            if _has_regime:
+                _regime = np.array(f["control/regime"][:], dtype=float)
+                _e_lat = np.abs(np.array(f["control/lateral_error"][:], dtype=float))
+                _blend = np.array(f["control/regime_blend_weight"][:], dtype=float)
+                _speed = np.array(f["vehicle/speed"][:], dtype=float) if "vehicle/speed" in f else np.zeros_like(_e_lat)
+                _curv_key = "control/curvature_map_abs" if "control/curvature_map_abs" in f else \
+                            "control/curvature_primary_abs" if "control/curvature_primary_abs" in f else None
+                _kappa = np.abs(np.array(f[_curv_key][:], dtype=float)) if _curv_key else np.zeros_like(_e_lat)
+                _n_r = min(len(_regime), len(_e_lat), len(_blend), len(_speed), len(_kappa))
+                _regime = _regime[:_n_r]; _e_lat = _e_lat[:_n_r]; _blend = _blend[:_n_r]
+                _speed = _speed[:_n_r]; _kappa = _kappa[:_n_r]
+
+                # Regime masks (settled = blend >= 0.95 to exclude transition frames)
+                _settled = _blend >= 0.95
+                _transition = ~_settled
+                _curve_mask = _kappa > 0.003
+
+                _regime_defs = [
+                    ("Stanley",  -1.0, -0.5),   # regime < -0.5
+                    ("PP",        0.0,  0.5),   # -0.5 <= regime < 0.5
+                    ("LMPC",      1.0,  1.5),   # 0.5 <= regime < 1.5
+                    ("NMPC",      2.0,  2.5),   # 1.5 <= regime < 2.5
+                ]
+
+                print("25. PER-REGIME ERROR BREAKDOWN")
+                print("-" * 80)
+                print(f"   {'Regime':10s}  {'Frames':>7s}  {'%':>5s}  {'RMSE':>7s}  {'P50':>7s}  {'P95':>7s}  {'Speed P50':>9s}  {'κ P50':>8s}")
+                print(f"   {'─'*10}  {'─'*7}  {'─'*5}  {'─'*7}  {'─'*7}  {'─'*7}  {'─'*9}  {'─'*8}")
+
+                for _name, _val, _hi in _regime_defs:
+                    _mask = _settled & (_regime >= (_val - 0.5)) & (_regime < _hi)
+                    _cnt = int(_mask.sum())
+                    if _cnt == 0:
+                        continue
+                    _pct = 100.0 * _cnt / max(_n_r, 1)
+                    _rmse = float(np.sqrt(np.mean(_e_lat[_mask] ** 2)))
+                    _p50 = float(np.median(_e_lat[_mask]))
+                    _p95 = float(np.percentile(_e_lat[_mask], 95))
+                    _sp50 = float(np.median(_speed[_mask]))
+                    _kp50 = float(np.median(_kappa[_mask]))
+                    print(f"   {_name:10s}  {_cnt:7d}  {_pct:4.1f}%  {_rmse:6.4f}m  {_p50:6.4f}m  {_p95:6.4f}m  {_sp50:8.1f}  {_kp50:7.5f}")
+
+                # Transition frames
+                _t_cnt = int(_transition.sum())
+                if _t_cnt > 0:
+                    _t_pct = 100.0 * _t_cnt / max(_n_r, 1)
+                    _t_rmse = float(np.sqrt(np.mean(_e_lat[_transition] ** 2)))
+                    _t_p50 = float(np.median(_e_lat[_transition]))
+                    _t_p95 = float(np.percentile(_e_lat[_transition], 95))
+                    _t_sp50 = float(np.median(_speed[_transition]))
+                    _t_kp50 = float(np.median(_kappa[_transition]))
+                    print(f"   {'Transition':10s}  {_t_cnt:7d}  {_t_pct:4.1f}%  {_t_rmse:6.4f}m  {_t_p50:6.4f}m  {_t_p95:6.4f}m  {_t_sp50:8.1f}  {_t_kp50:7.5f}")
+                print()
+
+                # Curve vs straight per regime
+                print("   ── Curve vs Straight (per regime, settled only) ─────────────")
+                print(f"   {'Regime':10s}  {'Segment':10s}  {'RMSE':>7s}  {'P50':>7s}  {'Frames':>7s}")
+                for _name, _val, _hi in _regime_defs:
+                    _r_mask = _settled & (_regime >= (_val - 0.5)) & (_regime < _hi)
+                    for _seg_name, _seg_mask in [("Straight", ~_curve_mask), ("Curve", _curve_mask)]:
+                        _combined = _r_mask & _seg_mask
+                        _cnt = int(_combined.sum())
+                        if _cnt < 5:
+                            continue
+                        _rmse = float(np.sqrt(np.mean(_e_lat[_combined] ** 2)))
+                        _p50 = float(np.median(_e_lat[_combined]))
+                        print(f"   {_name:10s}  {_seg_name:10s}  {_rmse:6.4f}m  {_p50:6.4f}m  {_cnt:7d}")
+                print()
+    except Exception as _exc:
+        print("25. PER-REGIME ERROR BREAKDOWN")
+        print("-" * 80)
+        print(f"   (skipped — {_exc})")
+        print()
+
+    # ── Section 26: Model-Plant Comparison ──────────────────────────────────────
+    # Compares MPC's commanded steering vs actual vehicle response.
+    # Detects model-plant mismatch (the root cause of MPC under/over-steering).
+    try:
+        import h5py as _h5
+        with _h5.File(recording_path, "r") as f:
+            _has_mp = all(k in f for k in ["control/steering", "vehicle/steering_angle_actual",
+                                            "control/regime"])
+            if _has_mp:
+                _steer_cmd = np.array(f["control/steering"][:], dtype=float)
+                _steer_actual_raw = np.array(f["vehicle/steering_angle_actual"][:], dtype=float)
+                _regime = np.array(f["control/regime"][:], dtype=float)
+                _speed = np.array(f["vehicle/speed"][:], dtype=float) if "vehicle/speed" in f else np.zeros_like(_steer_cmd)
+                _n_mp = min(len(_steer_cmd), len(_steer_actual_raw), len(_regime), len(_speed))
+                _steer_cmd = _steer_cmd[:_n_mp]; _steer_actual_raw = _steer_actual_raw[:_n_mp]
+                _regime = _regime[:_n_mp]; _speed = _speed[:_n_mp]
+
+                # Normalize actual steering (stored in degrees) to same scale as command
+                # Command is in radians (max_steering), actual is in degrees
+                _max_steer_deg = float(np.percentile(np.abs(_steer_actual_raw[_steer_actual_raw != 0]), 99)) if np.any(_steer_actual_raw != 0) else 30.0
+                _max_steer_cmd = float(np.percentile(np.abs(_steer_cmd[_steer_cmd != 0]), 99)) if np.any(_steer_cmd != 0) else 0.7
+
+                # MPC heading prediction vs actual
+                _mpc_e_heading = np.array(f["control/mpc_e_heading"][:_n_mp], dtype=float) if "control/mpc_e_heading" in f else None
+                _gt_heading = np.array(f["control/heading_error"][:_n_mp], dtype=float) if "control/heading_error" in f else None
+                _mpc_e_lat = np.array(f["control/mpc_e_lat"][:_n_mp], dtype=float) if "control/mpc_e_lat" in f else None
+                _lat_error = np.abs(np.array(f["control/lateral_error"][:_n_mp], dtype=float)) if "control/lateral_error" in f else None
+
+                _mpc_mask = _regime >= 0.5
+                _mpc_frames = int(_mpc_mask.sum())
+
+                print("26. MODEL-PLANT COMPARISON")
+                print("-" * 80)
+
+                if _mpc_frames < 10:
+                    print(f"   MPC active {_mpc_frames} frames — insufficient for comparison")
+                else:
+                    # Steering command vs actual tracking
+                    _cmd_mpc = _steer_cmd[_mpc_mask]
+                    _act_mpc = _steer_actual_raw[_mpc_mask]
+                    # Convert actual to radians for comparison (Unity uses degrees, negate for sign)
+                    _act_rad = np.radians(-_act_mpc)
+                    _steer_delta = _cmd_mpc - _act_rad
+                    _steer_corr = float(np.corrcoef(_cmd_mpc, _act_rad)[0, 1]) if _mpc_frames > 10 else 0.0
+
+                    print(f"   ── Steering Command vs Actual (MPC frames) ────────────────")
+                    print(f"   Command P50/P95:  {np.median(np.abs(_cmd_mpc)):.4f} / {np.percentile(np.abs(_cmd_mpc), 95):.4f} rad")
+                    print(f"   Actual P50/P95:   {np.median(np.abs(_act_rad)):.4f} / {np.percentile(np.abs(_act_rad), 95):.4f} rad")
+                    print(f"   Delta P50/P95:    {np.median(np.abs(_steer_delta)):.4f} / {np.percentile(np.abs(_steer_delta), 95):.4f} rad")
+                    print(f"   Correlation:      {_steer_corr:.4f}")
+                    _track_flag = "GOOD" if abs(_steer_corr) > 0.95 else "MISMATCH" if abs(_steer_corr) < 0.8 else "MODERATE"
+                    print(f"   Tracking quality: {_track_flag}")
+                    print()
+
+                    # MPC e_lat vs scorer's lateral error (reference alignment check)
+                    if _mpc_e_lat is not None and _lat_error is not None:
+                        _me = np.abs(_mpc_e_lat[_mpc_mask])
+                        _le = _lat_error[_mpc_mask]
+                        _ref_corr = float(np.corrcoef(_me, _le)[0, 1]) if _mpc_frames > 10 else 0.0
+                        _ref_ratio = float(np.median(_me / np.maximum(_le, 1e-6)))
+                        _ref_gap = float(np.median(_le - _me))
+                        print(f"   ── MPC Reference Alignment ────────────────────────────────")
+                        print(f"   MPC e_lat P50:    {np.median(_me):.4f}m")
+                        print(f"   Scorer lat P50:   {np.median(_le):.4f}m")
+                        print(f"   Median gap:       {_ref_gap:.4f}m  (scorer − MPC)")
+                        print(f"   Ratio (MPC/scor): {_ref_ratio:.3f}  (1.0 = aligned)")
+                        print(f"   Correlation:      {_ref_corr:.4f}")
+                        _align_flag = "ALIGNED" if abs(_ref_gap) < 0.05 and _ref_corr > 0.9 else \
+                                      "OFFSET" if abs(_ref_gap) >= 0.05 and _ref_corr > 0.7 else "DIVERGED"
+                        print(f"   Reference health: {_align_flag}")
+                        print()
+
+                    # Heading prediction accuracy
+                    if _mpc_e_heading is not None and _gt_heading is not None:
+                        _mh = _mpc_e_heading[_mpc_mask]
+                        _gh = _gt_heading[_mpc_mask]
+                        _h_corr = float(np.corrcoef(_mh, _gh)[0, 1]) if _mpc_frames > 10 else 0.0
+                        _h_rmse = float(np.sqrt(np.mean((_mh - _gh) ** 2)))
+                        print(f"   ── Heading Prediction Accuracy ────────────────────────────")
+                        print(f"   MPC heading P50:  {np.median(np.abs(_mh)):.4f} rad")
+                        print(f"   GT heading P50:   {np.median(np.abs(_gh)):.4f} rad")
+                        print(f"   Heading RMSE:     {_h_rmse:.4f} rad")
+                        print(f"   Correlation:      {_h_corr:.4f}")
+                        print()
+
+                print()
+    except Exception as _exc:
+        print("26. MODEL-PLANT COMPARISON")
+        print("-" * 80)
+        print(f"   (skipped — {_exc})")
+        print()
+
     print("=" * 80)
 
 

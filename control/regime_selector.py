@@ -50,6 +50,7 @@ class RegimeConfig:
     # ── Transition smoothing ───────────────────────────────────────────────────
     blend_frames: int = 15                         # Frames to linearly blend PP↔LMPC transition
     min_hold_frames: int = 30                      # Frames desired must be stable before switch
+    fallback_recovery_frames: int = 30             # MPC retry after this many PP frames in fallback
     # ── LMPC↔NMPC (independent of PP↔LMPC) ─────────────────────────────────────
     lmpc_max_speed_mps: float = 20.0               # Above this → NMPC
     lmpc_max_heading_error_rad: float = 0.25       # Above this → NMPC
@@ -137,6 +138,7 @@ class RegimeSelector:
         self._blend_progress = 1.0    # 1.0 = fully settled in active regime
         self._hold_counter = 0
         self._last_a_lat = 0.0        # κ×v² from last update (for HDF5 recording)
+        self._fallback_pp_frames = 0  # frames spent in PP due to MPC fallback
 
     @property
     def active_regime(self) -> ControlRegime:
@@ -249,6 +251,7 @@ class RegimeSelector:
         self._blend_progress = 1.0
         self._hold_counter = 0
         self._last_a_lat = 0.0
+        self._fallback_pp_frames = 0
 
     def _compute_desired(self, speed: float, heading_error: float,
                          curvature_abs: float = 0.0,
@@ -302,6 +305,14 @@ class RegimeSelector:
             or abs(heading_error) > self.config.lmpc_max_heading_error_rad
         ):
             return ControlRegime.NONLINEAR_MPC
+
+        # --- LMPC curvature ceiling (safety net) ---
+        # When NMPC is active (nmpc_curvature_threshold < this), NMPC check
+        # fires first and this guard is unreachable.  When NMPC is disabled,
+        # routes tight curves to PP instead of LMPC.
+        lmpc_max_curv = self.config.mpc_max_map_curvature
+        if lmpc_max_curv > 0.0 and map_curvature_abs >= lmpc_max_curv:
+            return ControlRegime.PURE_PURSUIT
 
         # --- Default: LMPC ---
         return ControlRegime.LINEAR_MPC

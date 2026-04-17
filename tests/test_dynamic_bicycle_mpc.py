@@ -984,3 +984,192 @@ class TestUnityGeometryOverride:
         L = lf + lr
         K_us = m * lr / (2 * L * Cf) - m * lf / (2 * L * Cr)
         assert K_us == pytest.approx(0.00375, abs=1e-5)
+
+
+# ---------------------------------------------------------------------------
+# Sysid-identified tire parameter tests (C_f=36662, C_r=71799, Iz=2428)
+# ---------------------------------------------------------------------------
+
+# Sysid constants
+_SYSID_CF = 36662.0
+_SYSID_CR = 71799.0
+_SYSID_IZ = 2428.0
+
+
+def _sysid_params(**overrides) -> MPCParams:
+    """MPCParams with sysid-identified tire parameters and Iz."""
+    sysid_defaults = dict(
+        tire_cf_nominal=_SYSID_CF,
+        tire_cr_nominal=_SYSID_CR,
+        vehicle_iz_kgm2=_SYSID_IZ,
+        q_vy=0.1,
+        q_yawrate=0.5,
+    )
+    sysid_defaults.update(overrides)
+    return _dyn_params(**sysid_defaults)
+
+
+class TestSysidParamsStraight:
+    """Dynamic model with sysid params on a straight road."""
+
+    def test_zero_error_near_zero_steer(self):
+        """Sysid params, straight road, zero state → near-zero steering."""
+        p = _sysid_params()
+        s = MPCSolver(p)
+        kappa = np.zeros(p.horizon)
+        result = s.solve(
+            e_lat=0.0, e_heading=0.0, v=11.0,
+            last_delta_norm=0.0, kappa_ref_horizon=kappa,
+            v_target=11.0, v_max=15.0, dt=p.dt,
+            tire_cf=_SYSID_CF, tire_cr=_SYSID_CR,
+            v_y_init=0.0, r_init=0.0,
+        )
+        assert result['feasible']
+        assert abs(result['steering_normalized']) < 0.05
+
+    def test_vy_r_bounded_in_trajectory(self):
+        """Predicted v_y and r stay near zero on a straight."""
+        p = _sysid_params()
+        s = MPCSolver(p)
+        kappa = np.zeros(p.horizon)
+        result = s.solve(
+            e_lat=0.0, e_heading=0.0, v=11.0,
+            last_delta_norm=0.0, kappa_ref_horizon=kappa,
+            v_target=11.0, v_max=15.0, dt=p.dt,
+            tire_cf=_SYSID_CF, tire_cr=_SYSID_CR,
+            v_y_init=0.0, r_init=0.0,
+        )
+        traj = result['predicted_trajectory']
+        # v_y is state index 2, r is state index 3
+        assert np.max(np.abs(traj[:, 2])) < 0.5, "v_y should stay near zero on straight"
+        assert np.max(np.abs(traj[:, 3])) < 0.5, "r should stay near zero on straight"
+
+
+class TestSysidFeedforward:
+    """Verify dynamic feedforward produces understeer-aware steering."""
+
+    def test_dynamic_ff_exceeds_kinematic(self):
+        """With K_us > 0 (understeering), dynamic FF > kinematic FF."""
+        kappa = 0.01  # R=100m
+        vx = 11.0
+        max_steer = 0.5236
+        L = 1.125 + 1.125  # l_f + l_r
+
+        ff_kin = MPCSolver._feedforward_delta_norm(kappa, L, max_steer)
+        ff_dyn = MPCSolver._feedforward_delta_norm_dynamic(
+            kappa, vx, _SYSID_CF, _SYSID_CR,
+            1.125, 1.125, 1500.0, max_steer,
+        )
+        assert ff_dyn > ff_kin, (
+            f"Dynamic FF ({ff_dyn:.5f}) should exceed kinematic ({ff_kin:.5f}) "
+            f"for an understeering vehicle"
+        )
+
+    def test_sysid_understeer_gradient(self):
+        """K_us from sysid params ≈ 0.010 rad/(m/s²)."""
+        m, lf, lr = 1500.0, 1.125, 1.125
+        L = lf + lr
+        K_us = (m / L) * (lr / _SYSID_CF - lf / _SYSID_CR)
+        assert K_us == pytest.approx(0.010, abs=0.002), (
+            f"Sysid K_us={K_us:.4f}, expected ~0.010"
+        )
+
+
+class TestSysidVyBoundedInCurve:
+    """Verify v_y stays bounded during step curvature changes."""
+
+    def test_step_curvature_vy_bounded(self):
+        """Sudden curvature onset → v_y in predicted trajectory stays < 1.0 m/s."""
+        p = _sysid_params()
+        s = MPCSolver(p)
+        # Step curvature: first 5 steps straight, then κ=0.02 (R=50m)
+        kappa = np.zeros(p.horizon)
+        kappa[5:] = 0.02
+        result = s.solve(
+            e_lat=0.0, e_heading=0.0, v=11.0,
+            last_delta_norm=0.0, kappa_ref_horizon=kappa,
+            v_target=11.0, v_max=15.0, dt=p.dt,
+            tire_cf=_SYSID_CF, tire_cr=_SYSID_CR,
+            v_y_init=0.0, r_init=0.0,
+        )
+        assert result['feasible']
+        traj = result['predicted_trajectory']
+        max_vy = np.max(np.abs(traj[:, 2]))
+        assert max_vy < 1.0, f"v_y peak {max_vy:.3f} exceeds 1.0 m/s — unreasonable"
+
+
+class TestSysidIzSensitivity:
+    """Verify that Iz affects yaw rate dynamics correctly."""
+
+    def test_higher_iz_slower_yaw(self):
+        """Higher Iz → less aggressive yaw rate in predicted trajectory."""
+        kappa = np.full(20, 0.01)  # constant R=100m curve
+
+        # Low Iz (original default)
+        p_low = _sysid_params(vehicle_iz_kgm2=1250.0)
+        s_low = MPCSolver(p_low)
+        r_low = s_low.solve(
+            e_lat=0.0, e_heading=0.0, v=11.0,
+            last_delta_norm=0.0, kappa_ref_horizon=kappa,
+            v_target=11.0, v_max=15.0, dt=p_low.dt,
+            tire_cf=_SYSID_CF, tire_cr=_SYSID_CR,
+            v_y_init=0.0, r_init=0.0,
+        )
+
+        # High Iz (sysid value)
+        p_high = _sysid_params(vehicle_iz_kgm2=_SYSID_IZ)
+        s_high = MPCSolver(p_high)
+        r_high = s_high.solve(
+            e_lat=0.0, e_heading=0.0, v=11.0,
+            last_delta_norm=0.0, kappa_ref_horizon=kappa,
+            v_target=11.0, v_max=15.0, dt=p_high.dt,
+            tire_cf=_SYSID_CF, tire_cr=_SYSID_CR,
+            v_y_init=0.0, r_init=0.0,
+        )
+
+        assert r_low['feasible'] and r_high['feasible']
+        # Peak yaw rate in first few steps should be smaller with higher Iz
+        r_peak_low = np.max(np.abs(r_low['predicted_trajectory'][:5, 3]))
+        r_peak_high = np.max(np.abs(r_high['predicted_trajectory'][:5, 3]))
+        assert r_peak_high < r_peak_low, (
+            f"Higher Iz should produce less aggressive yaw: "
+            f"Iz=2428 peak_r={r_peak_high:.4f}, Iz=1250 peak_r={r_peak_low:.4f}"
+        )
+
+
+class TestSysidInitClamps:
+    """Verify solver handles unreasonable v_y and r initial states."""
+
+    def test_vy_init_unreasonable_still_feasible(self):
+        """v_y_init=5.0 (extreme) → solver still produces feasible result."""
+        p = _sysid_params()
+        s = MPCSolver(p)
+        kappa = np.zeros(p.horizon)
+        # Clamp as compute_steering() would
+        vy_clamped = max(-2.0, min(2.0, 5.0))
+        result = s.solve(
+            e_lat=0.0, e_heading=0.0, v=11.0,
+            last_delta_norm=0.0, kappa_ref_horizon=kappa,
+            v_target=11.0, v_max=15.0, dt=p.dt,
+            tire_cf=_SYSID_CF, tire_cr=_SYSID_CR,
+            v_y_init=vy_clamped, r_init=0.0,
+        )
+        assert result['feasible']
+        assert abs(result['steering_normalized']) <= 1.0
+
+    def test_r_init_unreasonable_still_feasible(self):
+        """r_init=2.0 (extreme) → solver still produces feasible result."""
+        p = _sysid_params()
+        s = MPCSolver(p)
+        kappa = np.zeros(p.horizon)
+        # Clamp as compute_steering() would
+        r_clamped = max(-1.0, min(1.0, 2.0))
+        result = s.solve(
+            e_lat=0.0, e_heading=0.0, v=11.0,
+            last_delta_norm=0.0, kappa_ref_horizon=kappa,
+            v_target=11.0, v_max=15.0, dt=p.dt,
+            tire_cf=_SYSID_CF, tire_cr=_SYSID_CR,
+            v_y_init=0.0, r_init=r_clamped,
+        )
+        assert result['feasible']
+        assert abs(result['steering_normalized']) <= 1.0

@@ -23,6 +23,7 @@ from typing import Dict, Optional
 import numpy as np
 import osqp
 from scipy import sparse
+from scipy.linalg import expm
 
 logger = logging.getLogger(__name__)
 
@@ -56,6 +57,12 @@ class MPCParams:
     q_lat_terminal_scale: float = 3.0
     q_heading_terminal_scale: float = 3.0
 
+    # Preview weighting: linear ramp on q_lat across the horizon.
+    # step0_scale < 1.0 softens early-horizon lateral penalty (reduces oscillation),
+    # while later steps retain full weight (preserves curve pre-steering).
+    # step0_scale = 1.0 (default): identical to current uniform behavior.
+    q_lat_preview_step0_scale: float = 1.0
+
     # Lateral velocity damping: penalises (e_lat[k+1] - e_lat[k])² in the QP cost.
     # Since ė_lat = v·e_heading, this acts as speed-scaled heading damping.
     # Provides inherent oscillation suppression without per-track tuning.
@@ -85,8 +92,19 @@ class MPCParams:
 
     # Curvature-scheduled q_lat: increase lateral tracking weight on curves
     # so MPC pre-steers into curves instead of accepting entry error.
+    #
+    # The κv² safety fade prevents the schedule from pushing q_lat past the
+    # model-plant-mismatch stability boundary on tight curves. On low-κv²
+    # operating points (straights, highway R500), the full κ amplification
+    # applies; as κv² approaches the fade_end threshold, the amplification
+    # is linearly faded back to 1.0 (base q_lat). This aligns with the
+    # existing lateral-accel budget in regime_selector (threshold 1.5 m/s²).
+    #
+    # Setting fade_end = 0 or very large disables the fade (legacy behaviour).
     q_lat_kappa_gain: float = 0.0               # q_lat increase per unit κ
     q_lat_kappa_saturate: float = 0.015          # κ ceiling for q_lat scaling
+    q_lat_lat_accel_fade_start_mps2: float = 0.5  # κv² below this → full amplification
+    q_lat_lat_accel_fade_end_mps2: float = 1.2    # κv² above this → no amplification (base q_lat)
 
     # Curvature-adaptive r_steer_rate reduction (straight-line oscillation fix)
     # On low-κ sections, MPC needs responsive corrections to prevent drift accumulation.
@@ -118,6 +136,7 @@ class MPCParams:
     # Solve budget
     max_solve_time_ms: float = 8.0
     max_consecutive_failures: int = 3
+    fallback_recovery_frames: int = 30  # try again after this many frames in fallback
 
     # Startup warmup: relax constraints for first N frames after activation
     warmup_frames: int = 5
@@ -165,13 +184,21 @@ class MPCParams:
     # Dynamic bicycle model (disabled by default — kinematic model remains active)
     dynamic_model_enabled: bool = False
     vehicle_mass_kg: float = 1500.0             # kg — Unity Rigidbody mass
-    vehicle_iz_kgm2: float = 1250.0             # kg·m² — yaw inertia (from collider geometry)
+    vehicle_iz_kgm2: float = 1250.0             # kg·m² — yaw inertia (default; sysid value 2428 in config)
     vehicle_lf_m: float = 1.125                 # m — CoG to front axle
     vehicle_lr_m: float = 1.125                 # m — CoG to rear axle
-    tire_cf_nominal: float = 40000.0            # N/rad — front cornering stiffness initial
-    tire_cr_nominal: float = 40000.0            # N/rad — rear cornering stiffness initial
+    tire_cf_nominal: float = 40000.0            # N/rad — front cornering stiffness (default; sysid 36662 in config)
+    tire_cr_nominal: float = 40000.0            # N/rad — rear cornering stiffness (default; sysid 71799 in config)
     q_vy: float = 0.5                           # lateral velocity state cost
     q_yawrate: float = 1.0                      # yaw rate state cost
+
+    # v_y observer: fuses model prediction with rear wheel sideways slip measurement
+    vy_observer_enabled: bool = True
+    vy_observer_alpha: float = 0.8              # model weight (0.0=pure meas, 1.0=pure model)
+
+    # Steering gain calibration: ratio of Unity's actual max steer to our
+    # _max_steer_at_speed().  Measured from E2E data (desired/expected ≈ 0.78).
+    steer_gain_ratio: float = 0.78
 
     # EKF tire cornering stiffness estimation
     tire_ekf_enabled: bool = False
@@ -187,6 +214,15 @@ class MPCParams:
     tire_ekf_use_imu_yaw_rate: bool = True       # Use direct IMU gyro (industry standard)
     tire_ekf_imu_yaw_rate_r: float = 0.001       # (rad/s)² — measurement noise for IMU gyro
 
+    # Steering actuator model: augments the kinematic model with a 4th state
+    # δ_actual that tracks δ_cmd through a first-order lag + rate limit.
+    # This makes MPC "see through" the physical steering delay and pre-steer.
+    # Measured from Unity telemetry: τ≈0.70s, rate≈5.5°/s.
+    actuator_model_enabled: bool = False
+    actuator_tau_s: float = 0.70               # first-order time constant (seconds)
+    actuator_rate_limit_deg_per_s: float = 90.0  # max actuator rate (°/s) — matches Unity steeringRateLimitDegPerSec
+    q_actuator: float = 0.0                    # state cost on δ_actual (0 = no penalty on position itself)
+
     # Curvature preview horizon (feedforward from trajectory planner)
     curvature_preview_enabled: bool = False   # Default OFF — safe for existing configs
     curvature_preview_gain: float = 1.0       # Scale factor for preview curvature
@@ -200,6 +236,15 @@ class MPCParams:
     # On straight roads (κ=0) the correction is exactly zero — no behavior change.
     ff_alignment_enabled: bool = True
 
+    # Full 2DOF feedforward decomposition: reformulates the QP so the decision
+    # variable is ε = δ − δ_ff (correction from feedforward) instead of δ (total
+    # steering).  The kinematic curvature term cancels in the dynamics, so the MPC
+    # sees a near-straight-road problem.  Feedforward handles curve tracking;
+    # MPC feedback handles residual errors.  This allows q_lat to stay low (stable)
+    # while achieving tracking accuracy equivalent to much higher q_lat.
+    # Subsumes ff_alignment for the rate cost (ff_alignment is skipped when active).
+    ff_decomposition_enabled: bool = False
+
     # First-step quadratic rate cost: adds r_steer_rate*(delta[0] - last_delta_norm)^2
     # to the QP.  The within-horizon rate loop only penalises pairs (k, k+1) for
     # k=0..N-2; the jump from the *previously applied* steering to delta[0] is only
@@ -208,6 +253,21 @@ class MPCParams:
     # is the structural root of noise-driven steering jerk.
     # Enabling this makes r_steer_rate symmetric: the same cost applies to each step.
     first_step_rate_enabled: bool = True
+
+    # Delay-compensated MPC: forward-simulate d committed steps before QP.
+    # The optimizer's first free decision aligns with the first frame where
+    # the steering command actually takes effect, eliminating the structural
+    # cause of oscillation at high q_lat.
+    delay_compensation_enabled: bool = False
+    delay_compensation_frames: int = 2         # d = committed pipeline frames
+
+    # Lookahead-augmented cost: feeds at-car e_lat to the dynamics model
+    # (where bicycle model predictions are accurate) and penalises the
+    # lookahead cross-track error  e_lat + Ld·e_heading  in the QP cost.
+    # This decouples model accuracy from anticipatory tracking: the dynamics
+    # stay correct while the cost looks ahead.
+    # Requires the caller to pass at-car e_lat and the lookahead distance Ld.
+    lookahead_cost_enabled: bool = False
 
     # Lateral-error EMA pre-filter: smooth the e_lat signal before passing to the QP.
     # Perception noise (σ≈0.05 m) creates alternating-sign e_lat measurements that
@@ -259,6 +319,8 @@ class MPCSolver:
         self._N = params.horizon
         if params.dynamic_model_enabled:
             self._nx = 5   # [e_lat, e_heading, v_y, r, v_x]
+        elif params.actuator_model_enabled:
+            self._nx = 4   # [e_lat, e_heading, v, δ_actual]
         else:
             self._nx = 3   # [e_lat, e_heading, v]
         self._nu = 2   # [δ_norm, a]
@@ -269,10 +331,13 @@ class MPCSolver:
         self._nc = 0
         self._current_r_steer_rate = params.r_steer_rate
         self._current_q_lat = params.q_lat
+        self._current_Ld: float = 0.0              # lookahead distance for augmented cost
         self._speed_band_center: float = 0.0
         self._kappa_band_center: float = 0.0
         # Feedforward wheelbase: decouples FF (curve-entry ramp) from dynamics model
         self._ff_wheelbase_m = params.feedforward_wheelbase_m if params.feedforward_wheelbase_m > 0 else params.wheelbase_m
+        # 2DOF decomposition state: track previous frame's δ_ff for first-step reference
+        self._last_delta_ff: float = 0.0
         self._build_qp()
 
     def _max_steer_at_speed(self, speed: float) -> float:
@@ -332,20 +397,53 @@ class MPCSolver:
         effective_scale = max(speed_scale, kappa_curve_scale)
         return r_base * effective_scale
 
-    def _get_effective_q_lat(self, kappa: float = 0.0) -> float:
-        """Compute curvature-scheduled q_lat.
+    def _get_effective_q_lat(self, kappa: float = 0.0, speed: float = 0.0) -> float:
+        """Compute curvature-scheduled q_lat with lateral-acceleration safety fade.
 
-        Higher curvature → higher q_lat → MPC values lateral tracking more
-        on curves, making pre-steering cheaper than accepting entry error.
+        Two-term schedule:
+          1) κ amplification — higher |κ| → higher q_lat (pre-steer into curves)
+          2) κv² fade        — as lateral acceleration approaches the MPC
+                                stability boundary, the amplification fades
+                                back to 1.0 (base q_lat) to prevent oscillation
+                                driven by kinematic model-plant mismatch.
+
+        Operating-point examples (q_lat=2.0, gain=150, saturate=0.010,
+        fade=0.5→1.2):
+          - Straight (κ≈0, v=15):      κv²=0    fade=1.0 q_lat=2.00
+          - Highway R500 (κ=.002, v=15): κv²=0.45 fade=1.0 q_lat=2.60
+          - Mixed R100 (κ=.010, v=10): κv²=1.0  fade=0.29 q_lat=2.43
+          - s_loop R40 (κ=.025, v=7):  κv²=1.23 fade=0.0  q_lat=2.00
+
+        Fade disabled (legacy) when fade_end <= fade_start.
         """
         q_base = self.p.q_lat
         if self.p.q_lat_kappa_gain <= 0:
             return q_base
         kappa_abs = abs(kappa)
-        scale = 1.0 + self.p.q_lat_kappa_gain * min(
+
+        # κ amplification (original term)
+        kappa_scale = 1.0 + self.p.q_lat_kappa_gain * min(
             kappa_abs, self.p.q_lat_kappa_saturate
         )
-        return q_base * scale
+
+        # κv² safety fade: linearly reduce amplification above fade_start,
+        # fully off at fade_end. Guards against divide-by-zero if params are
+        # misconfigured (fade_end <= fade_start → fade disabled).
+        fade_start = self.p.q_lat_lat_accel_fade_start_mps2
+        fade_end = self.p.q_lat_lat_accel_fade_end_mps2
+        if fade_end > fade_start:
+            lat_accel = kappa_abs * speed * speed
+            if lat_accel <= fade_start:
+                fade = 1.0
+            elif lat_accel >= fade_end:
+                fade = 0.0
+            else:
+                fade = 1.0 - (lat_accel - fade_start) / (fade_end - fade_start)
+        else:
+            fade = 1.0  # fade disabled → legacy behaviour
+
+        effective_scale = 1.0 + (kappa_scale - 1.0) * fade
+        return q_base * effective_scale
 
     @staticmethod
     def _feedforward_delta_norm(kappa: float, wheelbase_m: float, max_steer_rad: float) -> float:
@@ -386,15 +484,28 @@ class MPCSolver:
         # --- P (Hessian): block diagonal ---
         P_diag = np.zeros(nz)
         _dyn = self.p.dynamic_model_enabled
+        _act = self.p.actuator_model_enabled and not _dyn  # actuator only with kinematic
+        _step0_scale = self.p.q_lat_preview_step0_scale
+        _la_cost = self.p.lookahead_cost_enabled and self._current_Ld > 0.0
+        _Ld = self._current_Ld
         for k in range(N):
             base = k * (nx + nu)
-            # State cost at step k (q_lat uses scheduled value)
-            P_diag[base + 0] = self._current_q_lat
-            P_diag[base + 1] = self.p.q_heading
+            # State cost at step k — q_lat ramps from step0_scale to 1.0
+            _alpha = k / (N - 1) if N > 1 else 1.0
+            _w_k = _step0_scale + (1.0 - _step0_scale) * _alpha
+            P_diag[base + 0] = self._current_q_lat * _w_k
+            # Lookahead-augmented cost: q_lat·(e_lat + Ld·e_heading)²
+            # expands to q_lat·e_lat² + q_heading·e_heading² + q_lat·Ld²·e_heading²
+            # plus cross-term (added below in off-diag section).
+            _la_heading_aug = self._current_q_lat * _Ld * _Ld * _w_k if _la_cost else 0.0
+            P_diag[base + 1] = self.p.q_heading + _la_heading_aug
             if _dyn:
                 P_diag[base + 2] = self.p.q_vy         # v_y cost
                 P_diag[base + 3] = self.p.q_yawrate     # yaw rate cost
                 P_diag[base + 4] = self.p.q_speed        # v_x cost
+            elif _act:
+                P_diag[base + 2] = self.p.q_speed
+                P_diag[base + 3] = self.p.q_actuator    # δ_actual state cost
             else:
                 P_diag[base + 2] = self.p.q_speed
             # Input cost at step k
@@ -403,12 +514,17 @@ class MPCSolver:
 
         # Terminal state cost
         term_base = N * (nx + nu)
-        P_diag[term_base + 0] = self._current_q_lat * self.p.q_lat_terminal_scale
-        P_diag[term_base + 1] = self.p.q_heading * self.p.q_heading_terminal_scale
+        _q_lat_term = self._current_q_lat * self.p.q_lat_terminal_scale
+        P_diag[term_base + 0] = _q_lat_term
+        _la_heading_term = _q_lat_term * _Ld * _Ld if _la_cost else 0.0
+        P_diag[term_base + 1] = self.p.q_heading * self.p.q_heading_terminal_scale + _la_heading_term
         if _dyn:
             P_diag[term_base + 2] = self.p.q_vy
             P_diag[term_base + 3] = self.p.q_yawrate
             P_diag[term_base + 4] = self.p.q_speed
+        elif _act:
+            P_diag[term_base + 2] = self.p.q_speed
+            P_diag[term_base + 3] = self.p.q_actuator
         else:
             P_diag[term_base + 2] = self.p.q_speed
 
@@ -419,6 +535,21 @@ class MPCSolver:
                 rows.append(i)
                 cols.append(i)
                 vals.append(P_diag[i])
+
+        # Lookahead-augmented cost cross-terms: q_lat * Ld * e_lat * e_heading
+        # at each horizon step (upper-triangular: e_lat idx < e_heading idx).
+        if _la_cost:
+            for k in range(N):
+                base = k * (nx + nu)
+                _alpha = k / (N - 1) if N > 1 else 1.0
+                _w_k = _step0_scale + (1.0 - _step0_scale) * _alpha
+                rows.append(base + 0)       # e_lat row
+                cols.append(base + 1)       # e_heading col (upper triangle)
+                vals.append(self._current_q_lat * _Ld * _w_k)
+            # Terminal cross-term
+            rows.append(term_base + 0)
+            cols.append(term_base + 1)
+            vals.append(_q_lat_term * _Ld)
 
         # Lateral velocity damping: q_lat_rate * (e_lat[k+1] - e_lat[k])²
         # Since ė_lat ≈ v·e_heading·dt, this penalises lateral drift rate,
@@ -539,6 +670,21 @@ class MPCSolver:
                 # -I for x[k+1]
                 for s in range(nx):
                     row[s, x_next_col + s] = -1.0
+            elif _act:
+                # Kinematic + actuator: 4 states [e_lat, e_heading, v, δ_actual]
+                # Steering gain uses δ_actual (state) instead of δ_cmd (input).
+                row[0, x_col + 0] = 1.0    # e_lat → e_lat
+                row[0, x_col + 1] = _EPS   # v*dt (heading coupling, updated per-solve)
+                row[1, x_col + 1] = 1.0    # e_heading → e_heading
+                row[1, x_col + 3] = _EPS   # (v/L)*δ_max*dt — steering via δ_actual
+                row[2, x_col + 2] = 1.0    # v → v
+                row[3, x_col + 3] = _EPS   # (1 - dt/τ) — actuator self-decay
+                # B_k: δ_cmd only drives the actuator, not heading directly
+                row[3, u_col + 0] = _EPS   # dt/τ — command → actuator
+                row[2, u_col + 1] = _EPS   # dt — accel → speed
+                # -I for x[k+1]
+                for s in range(nx):
+                    row[s, x_next_col + s] = -1.0
             else:
                 # Kinematic bicycle: 3 states [e_lat, e_heading, v]
                 row[0, x_col + 0] = 1.0    # e_lat → e_lat
@@ -595,6 +741,23 @@ class MPCSolver:
                 A_rows.append(row_vx.tocsc())
                 l_parts.append(np.array([self.p.v_min]))
                 u_parts.append(np.array([self.p.v_max]))
+        elif _act:
+            # Actuator model: bound speed (index 2) and δ_actual (index 3) per step
+            self._state_rows_per_step = 2
+            for k in range(N + 1):
+                x_base = k * (nx + nu) if k < N else N * (nx + nu)
+                # speed bound
+                row_v = sparse.lil_matrix((1, nz))
+                row_v[0, x_base + 2] = 1.0
+                A_rows.append(row_v.tocsc())
+                l_parts.append(np.array([self.p.v_min]))
+                u_parts.append(np.array([self.p.v_max]))
+                # δ_actual bound (normalized -1..1)
+                row_da = sparse.lil_matrix((1, nz))
+                row_da[0, x_base + 3] = 1.0
+                A_rows.append(row_da.tocsc())
+                l_parts.append(np.array([-1.0]))
+                u_parts.append(np.array([1.0]))
         else:
             self._state_rows_per_step = 1
             for k in range(N + 1):
@@ -665,7 +828,10 @@ class MPCSolver:
               v_target: float, v_max: float, dt: float,
               grade_rad: float = 0.0,
               tire_cf: float = 40000.0, tire_cr: float = 40000.0,
-              v_y_init: float = 0.0, r_init: float = 0.0) -> dict:
+              v_y_init: float = 0.0, r_init: float = 0.0,
+              delta_actual_norm: Optional[float] = None,
+              committed_steering_norm: Optional[list] = None,
+              lookahead_distance: float = 0.0) -> dict:
         """
         Solve QP for one frame.
 
@@ -683,6 +849,8 @@ class MPCSolver:
             tire_cr: rear cornering stiffness (N/rad), dynamic model only
             v_y_init: lateral velocity (m/s), dynamic model only
             r_init: yaw rate (rad/s), dynamic model only
+            delta_actual_norm: actual steering position [-1, 1] from Unity
+                feedback (actuator model only). None = use last_delta_norm.
 
         Returns:
             dict with: steering_normalized, accel, feasible, solve_time_ms,
@@ -709,13 +877,25 @@ class MPCSolver:
                 self._kappa_band_center = kappa_now
                 need_rebuild = True
 
-        # q_lat curvature scheduling: rebuild when q_lat changes meaningfully
-        new_q_lat = self._get_effective_q_lat(kappa_now)
+        # q_lat curvature scheduling: rebuild when q_lat changes meaningfully.
+        # Passes speed for the κv² safety fade (prevents oscillation near the
+        # lateral-accel stability boundary; see _get_effective_q_lat).
+        new_q_lat = self._get_effective_q_lat(kappa_now, v)
         if abs(new_q_lat - self._current_q_lat) > 0.2:
             kappa_crossed = abs(kappa_now - self._kappa_band_center) > 0.003
             if kappa_crossed or need_rebuild:
                 self._current_q_lat = new_q_lat
                 self._kappa_band_center = kappa_now
+                need_rebuild = True
+
+        # Lookahead-augmented cost: rebuild when Ld changes enough to affect
+        # cross-terms.  Ld scales with speed so this piggybacks on the speed
+        # band hysteresis — typical Ld range is 3–9 m; a 0.5 m jump changes
+        # the cross-term by q_lat*0.5 ≈ 5, which is meaningful.
+        if self.p.lookahead_cost_enabled:
+            _new_Ld = max(lookahead_distance, 0.0)
+            if abs(_new_Ld - self._current_Ld) > 0.5:
+                self._current_Ld = _new_Ld
                 need_rebuild = True
 
         if need_rebuild:
@@ -734,13 +914,103 @@ class MPCSolver:
             if n_copy < N:
                 kappa[n_copy:] = kappa[n_copy - 1] if n_copy > 0 else 0.0
 
-        # Clamp speed for numerical stability
-        v_safe = max(v, 0.5)
+        # Clamp speed for numerical stability AND constraint feasibility.
+        # v_safe must be >= v_min (speed floor constraint in QP).
+        # No CFL floor needed: exact discretization (expm) is unconditionally
+        # stable at any speed > 0.
+        _v_floor = self.p.v_min
+        v_safe = max(v, 0.5, _v_floor)
 
         # Grade compensation: clamp and compute gravity offset (Step 3)
         grade_clamped = max(-self.p.grade_clamp_rad,
                             min(self.p.grade_clamp_rad, grade_rad))
         gravity_accel_offset = -9.81 * math.sin(grade_clamped) * self.p.grade_ff_gain  # m/s²
+
+        # --- Delay compensation: forward-simulate committed steps ---
+        # The first d steps of the horizon correspond to already-committed steering
+        # commands in the pipeline. Forward-simulate through them so the QP's initial
+        # state is where the car WILL BE when the first free command takes effect.
+        _delay_comp = (
+            self.p.delay_compensation_enabled
+            and committed_steering_norm is not None
+            and len(committed_steering_norm) > 0
+            and v_safe >= 3.0  # forward sim uses max(v, 3.0) — meaningless below
+        )
+        _delay_last_committed = last_delta_norm  # fallback when disabled
+
+        if _delay_comp:
+            _delay_d = min(len(committed_steering_norm), N)
+            _dyn_dc = self.p.dynamic_model_enabled
+
+            if _dyn_dc:
+                x_sim = np.array([e_lat, e_heading, v_y_init, r_init, v_safe])
+            else:
+                x_sim = np.array([e_lat, e_heading, v_safe])
+
+            for k_d in range(_delay_d):
+                kk = kappa[k_d]
+                u_steer = committed_steering_norm[k_d]
+
+                if _dyn_dc:
+                    C_f, C_r = tire_cf, tire_cr
+                    m = self.p.vehicle_mass_kg
+                    Iz = self.p.vehicle_iz_kgm2
+                    l_f, l_r = self.p.vehicle_lf_m, self.p.vehicle_lr_m
+                    vx = max(x_sim[4], 3.0)
+                    _ms = self._max_steer_at_speed(vx)
+
+                    # Same A_k as QP dynamics (lines 870-885)
+                    x_next = np.zeros(5)
+                    x_next[0] = x_sim[0] + vx * x_sim[1] * dt + x_sim[2] * dt
+                    x_next[1] = x_sim[1] + x_sim[3] * dt - kk * vx * dt
+                    x_next[2] = (x_sim[2] * (1.0 - (C_f + C_r) / (m * vx) * dt)
+                                 + x_sim[3] * (-vx - (C_f * l_f - C_r * l_r) / (m * vx)) * dt
+                                 + u_steer * C_f * _ms / m * dt)
+                    x_next[3] = (x_sim[2] * (-(C_f * l_f - C_r * l_r) / (Iz * vx)) * dt
+                                 + x_sim[3] * (1.0 - (C_f * l_f**2 + C_r * l_r**2) / (Iz * vx) * dt)
+                                 + u_steer * C_f * l_f * _ms / Iz * dt)
+                    x_next[4] = x_sim[4] + gravity_accel_offset * dt
+                    x_sim = x_next
+                else:
+                    # Kinematic model
+                    _ms = self._max_steer_at_speed(v_safe)
+                    steer_gain = (v_safe / self.p.wheelbase_m) * _ms * dt
+                    x_next = np.zeros(3)
+                    x_next[0] = x_sim[0] + v_safe * x_sim[1] * dt
+                    x_next[1] = x_sim[1] + u_steer * steer_gain - kk * v_safe * dt
+                    x_next[2] = x_sim[2] + gravity_accel_offset * dt
+                    x_sim = x_next
+
+            # Override initial state with forward-simulated state
+            e_lat = float(x_sim[0])
+            e_heading = float(x_sim[1])
+            if _dyn_dc:
+                v_y_init = float(x_sim[2])
+                r_init = float(x_sim[3])
+                v_safe = max(float(x_sim[4]), 0.5)
+            else:
+                v_safe = max(float(x_sim[2]), 0.5)
+
+            # Last committed command for first-step rate constraint
+            _delay_last_committed = committed_steering_norm[-1]
+
+            # Shift kappa horizon — QP step 0 now corresponds to road at t+d
+            kappa = np.roll(kappa, -_delay_d)
+            if _delay_d < N:
+                kappa[-_delay_d:] = kappa[-_delay_d - 1]
+
+        # --- 2DOF feedforward decomposition: pre-compute δ_ff horizon ---
+        _dyn = self.p.dynamic_model_enabled
+        _ff_decomp = self.p.ff_decomposition_enabled and not _dyn
+        _delta_ff = None
+        _diag_c_head_raw = 0.0
+        _diag_c_head_after = 0.0
+        if _ff_decomp:
+            _ms_ff = self._max_steer_at_speed(v_safe)
+            _delta_ff = np.array([
+                self._feedforward_delta_norm(kappa[k], self._ff_wheelbase_m, _ms_ff)
+                for k in range(N)
+            ], dtype=float)
 
         # --- Update dynamics in A matrix and c vector ---
         # For each step k, linearize around operating point.
@@ -752,6 +1022,16 @@ class MPCSolver:
         l_new = self._l.copy()
         u_new = self._u.copy()
         _dyn = self.p.dynamic_model_enabled
+        _act = self.p.actuator_model_enabled and not _dyn
+
+        # Pre-compute actuator alpha for all steps (constant across horizon)
+        if _act:
+            _act_alpha = min(dt / max(self.p.actuator_tau_s, dt), 1.0)  # dt/τ, clamp ≤1
+            _act_rate_limit_norm = (
+                math.radians(self.p.actuator_rate_limit_deg_per_s)
+                / max(self._max_steer_at_speed(v_safe), 0.01)
+                * dt
+            )  # max Δδ_actual_norm per step
 
         c_vec = []  # affine terms for dynamics
         for k in range(N):
@@ -771,7 +1051,18 @@ class MPCSolver:
                 l_r = self.p.vehicle_lr_m
                 vx = max(v_safe, 3.0)  # conservative clamp for tire force / v_x
 
-                # A_k (5×5) — see plan for full derivation
+                # ── Exact discretization (matrix exponential) ───────────
+                # The v_y/r 2×2 subblock has stiff eigenvalues that make
+                # forward Euler oscillate at low speed.  expm is unconditionally
+                # stable: λ_discrete = exp(λ_continuous·dt) ∈ (0,1) always.
+                a22 = -(C_f + C_r) / (m * vx)
+                a23 = -vx - (C_f * l_f - C_r * l_r) / (m * vx)
+                a32 = -(C_f * l_f - C_r * l_r) / (Iz * vx)
+                a33 = -(C_f * l_f**2 + C_r * l_r**2) / (Iz * vx)
+                _Ac22 = np.array([[a22, a23], [a32, a33]])
+                _eM = expm(_Ac22 * dt)  # 2×2 exact discrete A for v_y/r
+
+                # A_k (5×5)
                 # Row 0: e_lat[k+1] = e_lat + vx·e_heading·dt + v_y·dt
                 A_data[_ai[(dyn_row + 0, x_col + 0)]] = 1.0
                 A_data[_ai[(dyn_row + 0, x_col + 1)]] = vx * dt
@@ -779,19 +1070,26 @@ class MPCSolver:
                 # Row 1: e_heading[k+1] = e_heading + r·dt (−κ·vx·dt in c_k)
                 A_data[_ai[(dyn_row + 1, x_col + 1)]] = 1.0
                 A_data[_ai[(dyn_row + 1, x_col + 3)]] = dt         # yaw rate coupling
-                # Row 2: v_y dynamics (tire lateral forces)
-                A_data[_ai[(dyn_row + 2, x_col + 2)]] = 1.0 - (C_f + C_r) / (m * vx) * dt
-                A_data[_ai[(dyn_row + 2, x_col + 3)]] = (-vx - (C_f * l_f - C_r * l_r) / (m * vx)) * dt
-                # Row 3: yaw rate dynamics (tire yaw moments)
-                A_data[_ai[(dyn_row + 3, x_col + 2)]] = -(C_f * l_f - C_r * l_r) / (Iz * vx) * dt
-                A_data[_ai[(dyn_row + 3, x_col + 3)]] = 1.0 - (C_f * l_f**2 + C_r * l_r**2) / (Iz * vx) * dt
+                # Row 2-3: v_y/r dynamics via exact discretization
+                A_data[_ai[(dyn_row + 2, x_col + 2)]] = _eM[0, 0]
+                A_data[_ai[(dyn_row + 2, x_col + 3)]] = _eM[0, 1]
+                A_data[_ai[(dyn_row + 3, x_col + 2)]] = _eM[1, 0]
+                A_data[_ai[(dyn_row + 3, x_col + 3)]] = _eM[1, 1]
                 # Row 4: v_x[k+1] = v_x + a·dt
                 A_data[_ai[(dyn_row + 4, x_col + 4)]] = 1.0
 
-                # B_k (5×2)
-                _ms = self._max_steer_at_speed(vx)
-                A_data[_ai[(dyn_row + 2, u_col + 0)]] = C_f * _ms / m * dt
-                A_data[_ai[(dyn_row + 3, u_col + 0)]] = C_f * l_f * _ms / Iz * dt
+                # B_k (5×2) — ZOH: B_d = A_c^{-1}(A_d - I)·B_c
+                # Scale max_steer by calibrated gain ratio (Unity applies
+                # ~78% of our _max_steer_at_speed prediction).
+                _ms = self._max_steer_at_speed(vx) * self.p.steer_gain_ratio
+                _Bc22 = np.array([C_f * _ms / m, C_f * l_f * _ms / Iz])
+                _det = a22 * a33 - a23 * a32
+                if abs(_det) > 1e-10:
+                    _Bd22 = np.linalg.solve(_Ac22, (_eM - np.eye(2)) @ _Bc22)
+                else:
+                    _Bd22 = _Bc22 * dt  # fallback (near-singular)
+                A_data[_ai[(dyn_row + 2, u_col + 0)]] = _Bd22[0]
+                A_data[_ai[(dyn_row + 3, u_col + 0)]] = _Bd22[1]
                 A_data[_ai[(dyn_row + 4, u_col + 1)]] = dt
 
                 # -I for x[k+1] — these are constant but included for completeness
@@ -806,6 +1104,34 @@ class MPCSolver:
                     0.0,                           # c_r
                     gravity_accel_offset * dt,     # c_vx (grade)
                 ]))
+            elif _act:
+                # ── Kinematic + actuator model (4 states) ────────────────
+                # Row 0: e_lat[k+1] = e_lat + v·e_heading·dt
+                A_data[_ai[(dyn_row + 0, x_col + 1)]] = v_safe * dt
+
+                # Row 1: e_heading[k+1] = e_heading + (v/L)·δ_actual·δ_max·dt − κ·v·dt
+                # Steering gain now comes from δ_actual STATE, not δ_cmd input
+                steer_gain = (v_safe / self.p.wheelbase_m) * self._max_steer_at_speed(v_safe) * dt
+                A_data[_ai[(dyn_row + 1, x_col + 3)]] = steer_gain  # δ_actual → heading
+
+                # Row 2: v[k+1] = v + a·dt
+                A_data[_ai[(dyn_row + 2, u_col + 1)]] = dt
+
+                # Row 3: δ_actual[k+1] = (1-α)·δ_actual + α·δ_cmd
+                A_data[_ai[(dyn_row + 3, x_col + 3)]] = 1.0 - _act_alpha  # self-decay
+                A_data[_ai[(dyn_row + 3, u_col + 0)]] = _act_alpha         # command input
+
+                # -I for x[k+1]
+                for s in range(nx):
+                    A_data[_ai[(dyn_row + s, x_next_col + s)]] = -1.0
+
+                # Affine term c_k
+                c_vec.append(np.array([
+                    0.0,                           # c_lat
+                    -kk * v_safe * dt,             # c_heading (curvature)
+                    gravity_accel_offset * dt,     # c_v (grade)
+                    0.0,                           # c_delta_actual
+                ]))
             else:
                 # ── Kinematic bicycle model (3 states) ────────────────────
                 # A_k matrix (state transition) — only update varying entries
@@ -818,7 +1144,16 @@ class MPCSolver:
 
                 # Affine term c_k
                 c_lat = 0.0
-                c_head = -kk * v_safe * dt
+                c_head_raw = -kk * v_safe * dt
+                c_head = c_head_raw
+                # 2DOF: add steer_gain × δ_ff to cancel curvature in dynamics.
+                # After this, ε=0 is the steady-state for curve following.
+                if _ff_decomp:
+                    c_head += steer_gain * _delta_ff[k]
+                    if k == 0:
+                        _diag_c_head_raw = c_head_raw
+                        _diag_c_head_after = c_head
+                        _diag_steer_gain = steer_gain
                 c_v = gravity_accel_offset * dt
                 c_vec.append(np.array([c_lat, c_head, c_v]))
 
@@ -835,6 +1170,16 @@ class MPCSolver:
             u_new[2] = v_y_init
             u_new[3] = r_init
             u_new[4] = v_safe
+        elif _act:
+            l_new[2] = v_safe
+            u_new[2] = v_safe
+            # δ_actual initial: use Unity feedback if available, else last command
+            _da_init = float(
+                delta_actual_norm if delta_actual_norm is not None else last_delta_norm
+            )
+            _da_init = max(-1.0, min(1.0, _da_init))
+            l_new[3] = _da_init
+            u_new[3] = _da_init
         else:
             l_new[2] = v_safe
             u_new[2] = v_safe
@@ -868,6 +1213,12 @@ class MPCSolver:
                 u_new[base + 1] = 1.0            # r upper
                 l_new[base + 2] = self.p.v_min   # v_x lower
                 u_new[base + 2] = v_max           # v_x upper
+            elif _act:
+                base = state_start + k * sps
+                l_new[base + 0] = self.p.v_min   # speed lower
+                u_new[base + 0] = v_max            # speed upper
+                l_new[base + 1] = -1.0             # δ_actual lower
+                u_new[base + 1] = 1.0              # δ_actual upper
             else:
                 l_new[state_start + k] = self.p.v_min
                 u_new[state_start + k] = v_max
@@ -877,14 +1228,26 @@ class MPCSolver:
         # rate constraints. Instead, we adjust the first δ bounds to enforce rate.
         # Restrict first input δ to [last - rate_max, last + rate_max]
         input_start = self._input_row_start
-        delta_lo = max(-1.0, last_delta_norm - self.p.delta_rate_max)
-        delta_hi = min(1.0, last_delta_norm + self.p.delta_rate_max)
-        l_new[input_start + 0] = delta_lo  # first δ lower
-        u_new[input_start + 0] = delta_hi  # first δ upper
+        if _ff_decomp:
+            # 2DOF: bounds on ε[0] such that total δ[0] = ε[0] + δ_ff[0]
+            # stays within [last_δ - rate_max, last_δ + rate_max].
+            # ε[0] ∈ [last_δ - δ_ff[0] - rate_max, last_δ - δ_ff[0] + rate_max]
+            # Also clamp so total δ stays in [-1, 1]: ε ∈ [-1-δ_ff[0], 1-δ_ff[0]]
+            _dff0 = _delta_ff[0]
+            _rate_ref = _delay_last_committed if _delay_comp else last_delta_norm
+            _eps_center = _rate_ref - _dff0
+            delta_lo = max(-1.0 - _dff0, _eps_center - self.p.delta_rate_max)
+            delta_hi = min(1.0 - _dff0, _eps_center + self.p.delta_rate_max)
+        else:
+            _rate_ref = _delay_last_committed if _delay_comp else last_delta_norm
+            delta_lo = max(-1.0, _rate_ref - self.p.delta_rate_max)
+            delta_hi = min(1.0, _rate_ref + self.p.delta_rate_max)
+        l_new[input_start + 0] = delta_lo  # first ε/δ lower
+        u_new[input_start + 0] = delta_hi  # first ε/δ upper
 
         # --- Update linear cost q ---
         q_new = np.zeros(nz)
-        _v_idx = 4 if _dyn else 2  # speed state index
+        _v_idx = 4 if _dyn else 2   # speed state index (same for actuator: [e_lat, e_heading, v, δ_actual])
         for k in range(N):
             base = k * (nx + nu)
             q_new[base + _v_idx] = -self.p.q_speed * v_target
@@ -903,16 +1266,9 @@ class MPCSolver:
         #   q[idx_k1] -= r_sr · Δff_k     (δ[k+1] position)
         # where Δff_k = δ_ff[k+1] − δ_ff[k].
         #
-        # This only fires when κ is CHANGING (curve entry/exit). On constant-κ arcs
-        # and on straights, Δff_k = 0 everywhere → correction is zero.
-        # It does NOT bias toward any absolute δ value, so it never fights lateral
-        # error corrections needed to re-center the car after a disturbance.
-        #
-        # NOTE: Part A (magnitude bias toward δ_ff) was intentionally removed.
-        # With r_steer reduced to near-zero, the original δ=0 bias that Part A
-        # compensated for is gone. Part A's overcorrection when the car has lateral
-        # offset was causing persistent centeredness regression on curves.
-        if self.p.ff_alignment_enabled:
+        # Skipped when ff_decomposition is active: the variable substitution
+        # ε = δ − δ_ff inherently makes the rate cost apply to Δε, not Δδ.
+        if self.p.ff_alignment_enabled and not _ff_decomp:
             _ms_ff = self._max_steer_at_speed(v_safe)
             if _dyn:
                 delta_ff = np.array([
@@ -942,7 +1298,13 @@ class MPCSolver:
         # Combined with the extra r_sr diagonal in P (added in _build_qp), this
         # implements the full 0.5*r_sr*(delta[0] - last_delta_norm)^2 cost.
         if self.p.first_step_rate_enabled:
-            q_new[nx] += -self._current_r_steer_rate * last_delta_norm
+            _rate_ref = _delay_last_committed if _delay_comp else last_delta_norm
+            if _ff_decomp:
+                # 2DOF: reference is last_ε = last_δ - last_δ_ff
+                _last_eps = _rate_ref - self._last_delta_ff
+                q_new[nx] += -self._current_r_steer_rate * _last_eps
+            else:
+                q_new[nx] += -self._current_r_steer_rate * _rate_ref
 
         # --- Solve ---
         try:
@@ -969,6 +1331,13 @@ class MPCSolver:
 
         # Check feasibility
         if res.info.status not in ('solved', 'solved_inaccurate'):
+            logger.debug(
+                "MPC QP infeasible: status=%s, v=%.1f, e_lat=%.4f, e_heading=%.4f, "
+                "last_delta=%.4f, kappa0=%.5f, q_lat=%.1f, rate_max=%.3f",
+                res.info.status, v, e_lat, e_heading,
+                last_delta_norm, kappa[0], self._current_q_lat,
+                self.p.delta_rate_max,
+            )
             return {
                 'steering_normalized': 0.0,
                 'accel': 0.0,
@@ -981,7 +1350,13 @@ class MPCSolver:
         z = res.x
 
         # Extract first control input: u[0] = z[nx : nx+nu]
-        delta_norm_0 = float(np.clip(z[nx + 0], -1.0, 1.0))
+        if _ff_decomp:
+            # QP solved for ε (correction); total steering = ε + δ_ff
+            delta_norm_0 = float(np.clip(z[nx + 0] + _delta_ff[0], -1.0, 1.0))
+            self._last_delta_ff = float(_delta_ff[0])
+        else:
+            delta_norm_0 = float(np.clip(z[nx + 0], -1.0, 1.0))
+            self._last_delta_ff = 0.0
         accel_0 = float(np.clip(z[nx + 1], -self.p.max_decel, self.p.max_accel))
 
         # Store warm-start: shift solution by one step
@@ -1002,7 +1377,7 @@ class MPCSolver:
             predicted[k] = z[base:base + nx]
         predicted[N] = z[N * (nx + nu):N * (nx + nu) + nx]
 
-        return {
+        result = {
             'steering_normalized': delta_norm_0,
             'accel': accel_0,
             'feasible': True,
@@ -1012,6 +1387,32 @@ class MPCSolver:
             'r_steer_rate_effective': self._current_r_steer_rate,
             'q_lat_effective': self._current_q_lat,
         }
+        # Delay compensation diagnostics
+        result['delay_comp_active'] = _delay_comp
+        if _delay_comp:
+            result['delay_comp_e_lat_predicted'] = float(e_lat)
+            result['delay_comp_e_heading_predicted'] = float(e_heading)
+            result['delay_comp_last_committed_norm'] = float(_delay_last_committed)
+        # Lookahead-augmented cost diagnostics
+        result['lookahead_cost_active'] = bool(
+            self.p.lookahead_cost_enabled and self._current_Ld > 0.0
+        )
+        result['lookahead_cost_Ld'] = float(self._current_Ld)
+        # 2DOF decomposition diagnostics
+        if _ff_decomp:
+            result['ff_decomp_delta_ff'] = float(_delta_ff[0])
+            result['ff_decomp_epsilon'] = float(z[nx + 0])
+            result['ff_decomp_c_head_raw'] = float(_diag_c_head_raw)
+            result['ff_decomp_c_head_after'] = float(_diag_c_head_after)
+            result['ff_decomp_cancel_ratio'] = (
+                1.0 - abs(_diag_c_head_after) / max(abs(_diag_c_head_raw), 1e-12)
+            ) if abs(_diag_c_head_raw) > 1e-8 else 0.0
+        # Actuator model diagnostics: predicted δ_actual at step 0 and end of horizon
+        if _act:
+            result['actuator_delta_actual_init'] = float(predicted[0, 3])
+            result['actuator_delta_actual_terminal'] = float(predicted[N, 3])
+            result['actuator_alpha'] = _act_alpha
+        return result
 
 
 # ---------------------------------------------------------------------------
@@ -1032,6 +1433,7 @@ class MPCController:
         self.solver = MPCSolver(self.params)
         self._consecutive_failures = 0
         self._fallback_active = False
+        self._fallback_frames = 0       # frames spent in fallback — for recovery
         self._last_steering = 0.0
         self._frames_since_reset = 0
         # Lateral bias estimator: slow EMA of e_lat → curvature correction
@@ -1073,7 +1475,11 @@ class MPCController:
                          curve_local_state: Optional[str] = None,
                          curve_gate_weight: float = 0.0,
                          local_curve_reference_active: bool = False,
-                         imu_yaw_rate: Optional[float] = None) -> dict:
+                         imu_yaw_rate: Optional[float] = None,
+                         delta_actual_norm: Optional[float] = None,
+                         committed_steering_norm: Optional[list] = None,
+                         lookahead_distance: float = 0.0,
+                         wheel_sideways_slip: Optional[np.ndarray] = None) -> dict:
         """
         Compute MPC steering. Called by VehicleController each frame.
 
@@ -1396,20 +1802,35 @@ class MPCController:
         tire_result = self._update_tire_ekf(
             e_heading, current_speed, last_delta_norm, kappa_ref, dt,
             imu_yaw_rate=imu_yaw_rate,
+            wheel_sideways_slip=wheel_sideways_slip,
+            delta_actual_norm=delta_actual_norm,
         )
 
         # Use the configured MPC prediction step (params.dt), NOT the frame dt.
         # The solver plans N steps of params.dt each (e.g. 20×0.1=2.0 s horizon).
         # Passing the frame dt (0.033 s) shrinks the horizon to 0.66 s, making
         # the terminal cost dominate and causing aggressive overcorrection.
+        # Clamp v_y and yaw rate estimates to physically reasonable bounds
+        # to prevent estimator divergence from destabilizing the QP.
+        _vy_init = max(-2.0, min(2.0, tire_result.get('v_y_estimate', 0.0)))
+        _r_init = max(-1.0, min(1.0, tire_result.get('yaw_rate_estimate', 0.0)))
+
+        # Skip delay compensation during warmup — QP cold-starts with
+        # no warm-start data; forward-simulating committed commands on an
+        # uninitialised state makes infeasibility worse.
+        _committed = committed_steering_norm if not _in_warmup else None
+
         result = self.solver.solve(
             e_lat_qp, e_heading, current_speed, last_delta_norm,
             kappa_horizon, v_target, v_max, self.params.dt,
             grade_rad=grade_rad,
             tire_cf=tire_result['tire_cf'],
             tire_cr=tire_result['tire_cr'],
-            v_y_init=tire_result.get('v_y_estimate', 0.0),
-            r_init=tire_result.get('yaw_rate_estimate', 0.0),
+            v_y_init=_vy_init,
+            r_init=_r_init,
+            delta_actual_norm=delta_actual_norm,
+            committed_steering_norm=_committed,
+            lookahead_distance=lookahead_distance,
         )
 
         # Restore default max_iter after warmup solve
@@ -1425,14 +1846,11 @@ class MPCController:
             self._consecutive_failures += 1
             if self._consecutive_failures >= self.params.max_consecutive_failures:
                 self._fallback_active = True
-                logger.warning(
-                    "MPC: fallback activated after %d consecutive failures",
-                    self._consecutive_failures
-                )
             result['steering_normalized'] = self._last_steering
         else:
             self._consecutive_failures = 0
             self._fallback_active = False
+            self._fallback_frames = 0
             self._last_steering = result['steering_normalized']
 
         return {
@@ -1485,6 +1903,13 @@ class MPCController:
             'yaw_rate_estimate': tire_result['yaw_rate_estimate'],
             'yaw_rate_measurement': tire_result.get('yaw_rate_measurement', 0.0),
             'yaw_rate_source': tire_result.get('yaw_rate_source', 'derived'),
+            # Solver-level diagnostics (forwarded from QP result)
+            'lookahead_cost_active': result.get('lookahead_cost_active', False),
+            'lookahead_cost_Ld': result.get('lookahead_cost_Ld', 0.0),
+            'delay_comp_active': result.get('delay_comp_active', False),
+            'delay_comp_e_lat_predicted': result.get('delay_comp_e_lat_predicted', 0.0),
+            'delay_comp_e_heading_predicted': result.get('delay_comp_e_heading_predicted', 0.0),
+            'delay_comp_last_committed_norm': result.get('delay_comp_last_committed_norm', 0.0),
         }
 
     def reset(self):
@@ -1493,6 +1918,7 @@ class MPCController:
         self.solver._warm_y = None
         self._consecutive_failures = 0
         self._fallback_active = False
+        self._fallback_frames = 0
         self._last_steering = 0.0
         self._frames_since_reset = 0
         self._bias_ema = 0.0
@@ -1615,7 +2041,9 @@ class MPCController:
     def _update_tire_ekf(self, e_heading: float, current_speed: float,
                           last_delta_norm: float, kappa_ref: float,
                           dt: float,
-                          imu_yaw_rate: Optional[float] = None) -> dict:
+                          imu_yaw_rate: Optional[float] = None,
+                          wheel_sideways_slip: Optional[np.ndarray] = None,
+                          delta_actual_norm: Optional[float] = None) -> dict:
         """
         EKF update for tire cornering stiffness [C_f, C_r].
 
@@ -1664,14 +2092,39 @@ class MPCController:
             R_meas = self.params.tire_ekf_measurement_noise
 
         # Compute slip angles using current estimates
-        delta_rad = last_delta_norm * self._max_steer_at_speed(v_x)
+        # Use ACTUAL steering angle for state estimation (not commanded).
+        # The command-to-actual ratio can be 3:1 at low speed (Unity WheelCollider
+        # dynamics); using commanded steering overestimates front slip angle by 3×,
+        # causing wrong tire force predictions and model-plant divergence.
+        if delta_actual_norm is not None:
+            delta_rad = delta_actual_norm * self._max_steer_at_speed(v_x)
+        else:
+            delta_rad = last_delta_norm * self._max_steer_at_speed(v_x)
         alpha_f = delta_rad - (self._v_y_est + l_f * self._yaw_rate_est) / v_x
         alpha_r = -(self._v_y_est - l_r * self._yaw_rate_est) / v_x
 
-        # Predict yaw rate from current theta
-        r_pred = self._yaw_rate_est + (
-            l_f * C_f * alpha_f - l_r * C_r * alpha_r
-        ) / Iz * dt
+        # Predict v_y and yaw rate via exact discretization (matrix exponential).
+        # Forward Euler oscillates at low speed (discrete eigenvalue < 0 at
+        # vx < 5 m/s); expm is unconditionally stable.
+        _a22 = -(C_f + C_r) / (m * v_x)
+        _a23 = -v_x - (C_f * l_f - C_r * l_r) / (m * v_x)
+        _a32 = -(C_f * l_f - C_r * l_r) / (Iz * v_x)
+        _a33 = -(C_f * l_f**2 + C_r * l_r**2) / (Iz * v_x)
+        _Ac = np.array([[_a22, _a23], [_a32, _a33]])
+        _eM_obs = expm(_Ac * dt)
+
+        # ZOH input: B_d = A_c^{-1}(A_d - I)·B_c  (input = delta_rad this frame)
+        _Bc_obs = np.array([C_f * delta_rad / m, C_f * l_f * delta_rad / Iz])
+        _det_obs = _a22 * _a33 - _a23 * _a32
+        if abs(_det_obs) > 1e-10:
+            _Bd_obs = np.linalg.solve(_Ac, (_eM_obs - np.eye(2)) @ _Bc_obs)
+        else:
+            _Bd_obs = _Bc_obs * dt
+
+        _state_obs = np.array([self._v_y_est, self._yaw_rate_est])
+        _state_pred = _eM_obs @ _state_obs + _Bd_obs
+        v_y_pred_expm = _state_pred[0]
+        r_pred = _state_pred[1]
 
         # Innovation
         innovation = r_meas - r_pred
@@ -1733,13 +2186,19 @@ class MPCController:
                 self._tire_ekf_divergent_count = 0
 
         # --- v_y and yaw rate estimation (ALWAYS runs when dynamic model active) ---
-        # These are needed for correct initial state in the QP, regardless of
-        # whether C_f/C_r are being estimated online.
-        C_f_new, C_r_new = self._tire_theta
-        F_yf = C_f_new * alpha_f
-        F_yr = C_r_new * alpha_r
-        v_y_dot = (F_yf + F_yr) / m - v_x * self._yaw_rate_est
-        self._v_y_est = 0.95 * (self._v_y_est + v_y_dot * dt) + 0.05 * 0.0
+        # Uses expm-based prediction computed above (v_y_pred_expm, r_pred).
+        # v_y observer: fuse expm model prediction with rear wheel sideways slip
+        if (self.params.vy_observer_enabled
+                and wheel_sideways_slip is not None
+                and len(wheel_sideways_slip) >= 4):
+            rear_slip_avg = 0.5 * (wheel_sideways_slip[2] + wheel_sideways_slip[3])
+            # Unity WheelCollider slip sign is opposite to SAE convention
+            v_y_meas = v_x * rear_slip_avg + l_r * r_meas
+            alpha = self.params.vy_observer_alpha
+            self._v_y_est = alpha * v_y_pred_expm + (1.0 - alpha) * v_y_meas
+        else:
+            # Fallback: model-only with decay toward zero
+            self._v_y_est = 0.95 * v_y_pred_expm + 0.05 * 0.0
 
         # Update yaw rate estimate (blend measurement and model)
         self._yaw_rate_est = 0.7 * r_meas + 0.3 * r_pred
@@ -1759,6 +2218,11 @@ class MPCController:
             'dynamic_model_active': True,
             'tire_ekf_update_count': self._tire_ekf_update_count,
             'v_y_estimate': float(self._v_y_est),
+            'v_y_observer_active': bool(
+                self.params.vy_observer_enabled
+                and wheel_sideways_slip is not None
+                and len(wheel_sideways_slip) >= 4
+            ),
             'yaw_rate_estimate': float(self._yaw_rate_est),
             'yaw_rate_measurement': float(r_meas),
             'yaw_rate_source': 'imu' if (self.params.tire_ekf_use_imu_yaw_rate and imu_yaw_rate is not None) else 'derived',

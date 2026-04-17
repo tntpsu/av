@@ -5930,6 +5930,17 @@ class VehicleController:
         )
         if self._nmpc_controller is not None and self._nmpc_controller._fallback_active:
             mpc_fallback = True
+        # Fallback recovery: after spending N frames in PP due to fallback,
+        # reset both MPC controllers so they get another chance. The warmup
+        # system relaxes constraints for the first few frames.
+        if mpc_fallback and self._mpc_controller is not None:
+            self._mpc_controller._fallback_frames += 1
+            _recovery_frames = self._mpc_controller.params.fallback_recovery_frames
+            if self._mpc_controller._fallback_frames >= _recovery_frames:
+                self._mpc_controller.reset()
+                if self._nmpc_controller is not None:
+                    self._nmpc_controller.reset()
+                mpc_fallback = False
         _regime_curvature = abs(float(
             lateral_metadata.get('path_curvature_primary_abs', 0.0) or 0.0
         ))
@@ -5974,9 +5985,15 @@ class VehicleController:
             #   divergence (at-car vs lookahead offset grows with κ).
             # - at_car_gt: GT cross-track at car position (legacy, closest-point).
             # - fallback_pp: -lateral_error from path planner (no GT available).
-            _use_lookahead_ref = self._full_config.get(
-                'trajectory', {},
-            ).get('mpc', {}).get('mpc_e_lat_use_lookahead_reference', True)
+            _mpc_cfg_ref = self._full_config.get('trajectory', {}).get('mpc', {})
+            _use_lookahead_ref = bool(_mpc_cfg_ref.get('mpc_e_lat_use_lookahead_reference', True))
+            _la_cost_enabled = bool(_mpc_cfg_ref.get('mpc_lookahead_cost_enabled', False))
+            # Lookahead-augmented cost: adds (e_lat + Ld*e_heading)² cross-terms
+            # to the QP cost.  Originally disabled lookahead ref (at-car e_lat +
+            # cross-terms ≈ lookahead penalty), but on tight curves the linear
+            # projection Ld*e_heading under-predicts the true lookahead offset.
+            # Keep the lookahead reference so MPC tracks the correct target;
+            # the cross-terms still help with anticipation.
 
             _mpc_e_lat_ref_source = 'fallback_pp'
             if gt_cross_track is not None and gt_heading is not None:
@@ -6003,35 +6020,43 @@ class VehicleController:
                 raw_e_heading = float(lateral_metadata.get('heading_error', 0.0))
 
             # 2.8.4: Configurable multi-frame delay compensation.
-            # Predict where the vehicle will be when the current command takes
-            # effect. Uses the linear kinematic model; heading is assumed to
-            # change slowly so e_heading is held constant (this avoids amplifying
-            # ring-buffer transients from PP→MPC transitions).
+            # Two modes:
+            #   A) Smith predictor (legacy): linear kinematic forward prediction
+            #   B) QP delay compensation: forward-simulate committed steps inside
+            #      the QP solver using the full dynamics model — subsumes Smith.
             #
-            # Model: e_lat[k+delay] ≈ e_lat[k] + v*e_heading[k]*delay_dt
-            #
-            # Smith predictor config.
             _mpc_cfg_sp = self._full_config.get('trajectory', {}).get('mpc', {})
-            # mpc_delay_frames is configurable: start with 2 (matches measured
-            # ~2-frame effective loop delay) and tune up cautiously with data.
-            # Wall-clock cap: when camera rate drops below 30 fps, frame_dt
-            # grows and delay_frames * frame_dt overshoots the physical delay.
-            # Cap at smith_predictor_max_delay_s to prevent 4× overshoot at
-            # ~7.5 fps camera delivery rates.
+            _delay_comp_enabled = bool(_mpc_cfg_sp.get('mpc_delay_compensation_enabled', False))
             frame_dt = dt or 0.033
             v_now = float(current_state.get('speed', 0.0))
             delay_frames = len(self._steering_ring_buffer)
-            _max_delay_s = float(_mpc_cfg_sp.get('smith_predictor_max_delay_s', 0.080))
-            _raw_delay = delay_frames * frame_dt
-            total_delay_dt = min(_raw_delay, _max_delay_s) if _max_delay_s > 0 else _raw_delay
-            predicted_e_heading = raw_e_heading  # heading changes slowly
-            # Smith predictor oscillation guard: attenuate heading correction
-            # when sign(e_lat) != sign(e_heading) — this is the oscillation
-            # inflection point where the predictor overshoots.
-            _sp_disagree_gain = float(_mpc_cfg_sp.get('smith_predictor_disagreement_gain', 0.3))
-            _sign_agree = (raw_e_lat * raw_e_heading) >= 0
-            _sp_gain = 1.0 if _sign_agree else _sp_disagree_gain
-            predicted_e_lat = raw_e_lat + _sp_gain * v_now * raw_e_heading * total_delay_dt
+
+            if _delay_comp_enabled:
+                # QP delay compensation active — pass raw state; the solver
+                # forward-simulates committed steps with the full model.
+                predicted_e_lat = raw_e_lat
+                predicted_e_heading = raw_e_heading
+            else:
+                # Smith predictor (legacy path).
+                # Predict where the vehicle will be when the current command
+                # takes effect. Uses linear kinematic model.
+                _max_delay_s = float(_mpc_cfg_sp.get('smith_predictor_max_delay_s', 0.080))
+                _raw_delay = delay_frames * frame_dt
+                total_delay_dt = min(_raw_delay, _max_delay_s) if _max_delay_s > 0 else _raw_delay
+                predicted_e_heading = raw_e_heading  # heading changes slowly
+                # Smith predictor oscillation guard: attenuate heading correction
+                # when sign(e_lat) != sign(e_heading) — this is the oscillation
+                # inflection point where the predictor overshoots.
+                _sp_disagree_gain = float(_mpc_cfg_sp.get('smith_predictor_disagreement_gain', 0.3))
+                _sign_agree = (raw_e_lat * raw_e_heading) >= 0
+                _sp_gain = 1.0 if _sign_agree else _sp_disagree_gain
+                predicted_e_lat = raw_e_lat + _sp_gain * v_now * raw_e_heading * total_delay_dt
+
+            # Normalize ring buffer for QP delay compensation
+            _committed_norm = None
+            if _delay_comp_enabled and self._steering_ring_buffer:
+                _max_steer = self.lateral_controller.max_steering
+                _committed_norm = [s / max(1e-6, _max_steer) for s in self._steering_ring_buffer]
 
             # Build MPC curvature preview horizon: interpolate distance-sampled
             # curvature from the trajectory planner to MPC time steps.
@@ -6052,6 +6077,26 @@ class VehicleController:
 
             _kappa_for_mpc = float(reference_point.get('curvature', 0.0) or 0.0)
 
+            # Convert Unity steering_angle_actual (degrees) to normalized [-1, 1]
+            # for actuator-augmented MPC. Sign convention: Unity uses opposite sign.
+            _steer_actual_deg = float(current_state.get('steering_angle_actual_deg', 0.0))
+            _max_steer_deg = math.degrees(
+                self._mpc_controller.solver._max_steer_at_speed(
+                    float(current_state.get('speed', 0.0))
+                )
+            )
+            _delta_actual_norm = (
+                -_steer_actual_deg / max(_max_steer_deg, 1.0)
+                if _max_steer_deg > 0.1 else None
+            )
+
+            # Lookahead distance for augmented cost (0 when disabled or at
+            # crawl speed — no anticipation needed, and Ld*heading augmentation
+            # can cause infeasibility before the car reaches cruising speed).
+            _mpc_Ld = 0.0
+            if _la_cost_enabled and v_now >= 3.0:
+                _mpc_Ld = float(reference_point.get('reference_lookahead_active', 0.0) or 0.0)
+
             mpc_result = self._mpc_controller.compute_steering(
                 e_lat=predicted_e_lat,
                 e_heading=raw_e_heading,
@@ -6069,6 +6114,10 @@ class VehicleController:
                     reference_point.get('local_curve_reference_active', False)
                 ),
                 imu_yaw_rate=_imu_yaw_rate,
+                delta_actual_norm=_delta_actual_norm,
+                committed_steering_norm=_committed_norm,
+                lookahead_distance=_mpc_Ld,
+                wheel_sideways_slip=current_state.get('wheel_sideways_slip'),
             )
 
             if mpc_result.get('mpc_fallback_active'):
@@ -6229,9 +6278,11 @@ class VehicleController:
                 or ''
             )
 
-            _use_lookahead_ref = self._full_config.get(
-                'trajectory', {},
-            ).get('mpc', {}).get('mpc_e_lat_use_lookahead_reference', True)
+            _mpc_cfg_ref2 = self._full_config.get('trajectory', {}).get('mpc', {})
+            _use_lookahead_ref = bool(_mpc_cfg_ref2.get('mpc_e_lat_use_lookahead_reference', True))
+            _la_cost_enabled = bool(_mpc_cfg_ref2.get('mpc_lookahead_cost_enabled', False))
+            if _la_cost_enabled:
+                _use_lookahead_ref = False
 
             if gt_cross_track is not None and gt_heading is not None:
                 if _use_lookahead_ref and gt_cross_track_lookahead is not None:
@@ -6294,6 +6345,15 @@ class VehicleController:
             v_target = float(reference_point.get('velocity') or self.longitudinal_controller.target_speed)
             v_max = float(self.longitudinal_controller.max_speed)
 
+            # Negate curvature for NMPC: orchestrator convention is negative=left turn,
+            # but the NMPC kinematic model (e_heading -= κ*v*dt) expects positive=left.
+            # Same sign mismatch as IMU yaw rate (line 6075-6076).
+            nmpc_kappa_ref = -kappa_ref
+            nmpc_kappa_horizon = (
+                -nmpc_horizon_for_controller if nmpc_horizon_for_controller is not None
+                else None
+            )
+
             # Try NMPC first; fall back to LMPC if unavailable or in fallback state
             nmpc_used = False
             nmpc_result = None
@@ -6303,11 +6363,11 @@ class VehicleController:
                     e_heading=raw_e_heading,
                     current_speed=v_now,
                     last_delta_norm=self._last_steering_norm,
-                    kappa_ref=kappa_ref,
+                    kappa_ref=nmpc_kappa_ref,
                     v_target=v_target,
                     v_max=v_max,
                     dt=frame_dt,
-                    kappa_horizon=nmpc_horizon_for_controller,
+                    kappa_horizon=nmpc_kappa_horizon,
                     grade_rad=grade_rad,
                     prediction_dt=nmpc_dt_eff,
                 )
@@ -6316,6 +6376,9 @@ class VehicleController:
 
             # LMPC fallback (or LMPC-primary when NMPC unavailable)
             if not nmpc_used:
+                _mpc_Ld2 = 0.0
+                if _la_cost_enabled and v_now >= 3.0:
+                    _mpc_Ld2 = float(reference_point.get('reference_lookahead_active', 0.0) or 0.0)
                 mpc_result = self._mpc_controller.compute_steering(
                     e_lat=predicted_e_lat,
                     e_heading=raw_e_heading,
@@ -6330,6 +6393,8 @@ class VehicleController:
                     curve_local_state=str(reference_point.get('curve_local_state', 'STRAIGHT') or 'STRAIGHT'),
                     curve_gate_weight=float(reference_point.get('reference_lookahead_local_gate_weight', 0.0) or 0.0),
                     imu_yaw_rate=_imu_yaw_rate,
+                    lookahead_distance=_mpc_Ld2,
+                    wheel_sideways_slip=current_state.get('wheel_sideways_slip'),
                 )
                 active_result = mpc_result
                 active_feasible_key = 'mpc_feasible'

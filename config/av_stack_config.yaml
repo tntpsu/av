@@ -343,7 +343,7 @@ control:
     mpc_max_lateral_accel_mps2: 1.5     # κ×v² budget — MPC→PP when exceeded (m/s²)
     mpc_lateral_accel_hysteresis_mps2: 0.3  # dead band ± around threshold (m/s²)
     mpc_min_speed_absolute_mps: 2.0     # hard speed floor — MPC needs nonzero velocity (m/s)
-    mpc_max_map_curvature: 0.015       # map κ above this → PP (MPC linearization degrades at R<67; was 0.020/R50)
+    mpc_max_map_curvature: 0.015       # map κ above this → PP (LMPC model-plant mismatch too large at R<67m)
     # Deprecated (kept for backward compat — lateral accel budget replaces these):
     # mpc_min_speed_mps, mpc_max_curvature, mpc_curvature_hysteresis,
     # upshift_hysteresis_mps, downshift_hysteresis_mps, pp_max_speed_mps
@@ -363,7 +363,7 @@ control:
     # LMPC → NMPC upshift thresholds (Step 5)
     lmpc_max_speed_mps: 20.0           # above this + upshift_hysteresis → NONLINEAR_MPC
     lmpc_max_heading_error_rad: 0.25   # large heading error → NONLINEAR_MPC (LMPC linearisation breaks)
-    nmpc_curvature_threshold: 0.015    # κ above this → NMPC (LMPC linearization degrades at R<67m)
+    nmpc_curvature_threshold: 1.0       # effectively disabled — NMPC kinematic model not ready (needs dynamic bicycle)
 trajectory:
   trajectory_source: planner
   # Lane midpoint coordinate conversion uses the full PP lookahead distance to evaluate
@@ -809,9 +809,16 @@ trajectory:
     mpc_max_steer_low_speed_rad: 0.5236    # 30° (Unity maxSteerAngleLowSpeed)
     mpc_max_steer_high_speed_rad: 0.2793   # 16° (Unity maxSteerAngleHighSpeed)
     mpc_max_steer_speed_saturation_mps: 12.0  # Unity maxSteerAngleFullSpeed
-    mpc_q_lat: 1.0
-    mpc_q_lat_kappa_gain: 150.0      # q_lat increase per unit κ — makes MPC pre-steer into curves
-    mpc_q_lat_kappa_saturate: 0.010  # κ ceiling (R100) — caps scale at 1 + 150×0.010 = 2.5×
+    mpc_q_lat: 2.0                  # base value; wheelbase fix should eliminate steady-state curve bias
+    mpc_q_lat_preview_step0_scale: 1.0  # 1.0=uniform (current); <1.0 softens step-0 lateral penalty
+    # Curvature-scheduled q_lat with κv² safety fade:
+    # - On mild curves (low κv²): amplifies q_lat to reduce entry error (highway +35 pts validated)
+    # - Near stability boundary (high κv²): fades back to base q_lat to prevent oscillation
+    #   (matches the 1.5 m/s² budget in regime_selector)
+    mpc_q_lat_kappa_gain: 150.0                 # restored from bd505cd; safe now due to κv² fade
+    mpc_q_lat_kappa_saturate: 0.010             # κ ceiling (R100); matches bd505cd
+    mpc_q_lat_lat_accel_fade_start_mps2: 0.5    # κv² below this → full amplification
+    mpc_q_lat_lat_accel_fade_end_mps2: 1.2      # κv² above this → base q_lat only (safe)
     mpc_q_lat_rate: 0.0              # lateral velocity damping (0=disabled) — tuned via E2E validation
     mpc_q_heading: 10.0              # RAISED 5→10: provides phase lead — heading error (derivative of lateral) is penalised more heavily, preventing oscillation buildup
     mpc_q_speed: 2.0
@@ -821,7 +828,7 @@ trajectory:
     # enough to close ~0.4m curve offsets, stable enough to not oscillate.
     mpc_r_steer: 0.05
     mpc_r_accel: 0.2
-    mpc_r_steer_rate: 2.0                           # CHANGED: 3.5 → 2.0 (q_heading=10 now provides phase-lead oscillation damping; r_steer_rate=3.5 was over-damping, causing 0.46m steady-state offset in curves)
+    mpc_r_steer_rate: 2.0                           # 2.0: minimum stable value (1.0 causes oscillation; 3.5 causes 0.46m offset)
     # Speed-dependent r_steer_rate scheduling: scales r_steer_rate with speed
     # to counteract bicycle model v/L gain increase. r_eff = r_base * min(1 + gain*(v-onset), max_scale).
     mpc_r_steer_rate_scheduling_enabled: true
@@ -830,7 +837,7 @@ trajectory:
     mpc_r_steer_rate_max_scale: 3.0         # cap: r_eff ≤ r_base × max_scale
     mpc_r_steer_rate_band_hysteresis: 1.0   # m/s hysteresis to prevent solver rebuild chattering
     mpc_r_steer_rate_kappa_off: 0.005      # LEGACY — only affects speed scheduling gate (kept for backward compat)
-    mpc_r_steer_rate_kappa_gain: 30.0     # r_steer_rate increase per unit κ — proportional curve damping
+    mpc_r_steer_rate_kappa_gain: 0.0      # disabled: was increasing rate penalty on curves, causing 0.44m steady-state offset
     mpc_r_steer_rate_kappa_saturate: 0.015  # κ ceiling for scaling (R67) — caps r_eff at r_base × (1 + gain × saturate)
     # Curvature-adaptive r_steer_rate reduction for straight-line phase margin.
     # On low-κ sections, reduce r_steer_rate so MPC corrects drift faster.
@@ -838,6 +845,13 @@ trajectory:
     mpc_r_steer_rate_straight_damping_enabled: false  # disabled: lowering r_steer_rate alone increases overshoot; see q_heading approach
     mpc_r_steer_rate_straight_kappa_on: 0.002
     mpc_r_steer_rate_straight_min_scale: 0.3
+    # 2DOF feedforward decomposition
+    mpc_ff_decomposition_enabled: false
+    # Steering actuator model
+    mpc_actuator_model_enabled: false
+    mpc_actuator_tau_s: 0.70
+    mpc_actuator_rate_limit_deg_per_s: 90.0
+    mpc_q_actuator: 0.0
     mpc_delta_rate_max: 0.15        # max Δδ_norm per step
     # Noise-jitter fixes (2026-02-17):
     # Fix A — first-step QP rate cost: adds 0.5*r_steer_rate*(delta[0]-last)^2 to the
@@ -883,6 +897,15 @@ trajectory:
     mpc_delay_frames: 2                    # Smith predictor delay buffer length (frames; ~66ms at 30fps)
     smith_predictor_max_delay_s: 0.080      # Wall-clock cap on Smith predictor delay (prevents 4x overshoot at low camera rates; 0=disabled)
     smith_predictor_disagreement_gain: 0.3  # Attenuate heading correction when sign(e_lat) != sign(e_heading) (oscillation inflection)
+    mpc_delay_compensation_enabled: false    # forward-simulate committed steps before QP (subsumes Smith predictor)
+    mpc_delay_compensation_frames: 2        # must match mpc_delay_frames
+    # ── Lookahead-augmented cost ──────────────────────────────────────────────
+    # Feeds at-car e_lat to the dynamics model (where the bicycle model is
+    # accurate) and penalises the lookahead cross-track e_lat + Ld·e_heading
+    # in the QP cost via cross-terms.  Decouples model accuracy from
+    # anticipatory tracking — the dynamics stay correct while the cost looks
+    # ahead.  Replaces direct lookahead reference (mpc_e_lat_use_lookahead_reference).
+    mpc_lookahead_cost_enabled: false       # disabled: using lookahead reference directly instead
     mpc_grade_clamp_rad: 0.15             # Max grade input to MPC (~8.5°)
     mpc_grade_ff_gain: 1.8                # Unity WheelCollider physics calibration
     # ── Online effective wheelbase estimation (RLS) ────────────────────────────
@@ -894,15 +917,19 @@ trajectory:
     mpc_leff_bounds_min: 1.5              # hard safety clamp — never go below 1.5m
     mpc_leff_bounds_max: 8.0              # hard safety clamp — never go above 8.0m
   # ── Dynamic bicycle model ──────────────────────────────────────────────────
-    mpc_dynamic_model_enabled: false        # dynamic model regressed (v_y noise); kinematic + calibrated FF
+    mpc_dynamic_model_enabled: false         # expm is stable but steering gain mismatch causes curve regression; needs mpc_steer_gain_ratio calibration
     mpc_vehicle_mass_kg: 1500.0
-    mpc_vehicle_iz_kgm2: 1250.0
+    mpc_vehicle_iz_kgm2: 2428.0            # from Unity ground truth (matches sysid fitting)
     mpc_vehicle_lf_m: 1.125
     mpc_vehicle_lr_m: 1.125
-    mpc_tire_cf_nominal: 29000.0           # from steady-state sysid (L_eff=3.65m @ 10m/s)
-    mpc_tire_cr_nominal: 52000.0           # C_r/C_f ratio ~1.8 from offline sysid
-    mpc_q_vy: 0.5
-    mpc_q_yawrate: 1.0
+    mpc_tire_cf_nominal: 36662.0           # from sysid NNLS on mixed_radius (R²=0.974)
+    mpc_tire_cr_nominal: 71799.0           # C_r/C_f ≈ 1.96, vehicle understeers
+    mpc_q_vy: 0.1                          # light regularizer — tire forces provide natural v_y damping
+    mpc_q_yawrate: 0.5                     # moderate — don't fight yaw into curves
+  # ── v_y observer (wheel-slip measurement fusion) ───────────────────────────
+    mpc_steer_gain_ratio: 1.0              # calibrated gain ratio (Unity vs model max_steer); 0.78 measured but causes mpc_e_lat divergence at track boundaries
+    mpc_vy_observer_enabled: true          # fuse model v_y prediction with rear wheel slip measurement
+    mpc_vy_observer_alpha: 0.8             # complementary filter model weight (0.8 = 80% model, 20% meas)
   # ── EKF tire cornering stiffness estimation ────────────────────────────────
     mpc_tire_ekf_enabled: false
     mpc_tire_ekf_process_noise: 100.0
@@ -924,11 +951,11 @@ trajectory:
   # All keys use nmpc_ prefix to distinguish from LMPC (mpc_) params.
   nmpc:
     nmpc_enabled: true              # re-enabled: sign convention verified (same as LMPC — negate gt_cross_track)
-    nmpc_horizon: 20                # N prediction steps
+    nmpc_horizon: 12                # N prediction steps (reduced from 20 — faster solve, still 4+s preview at 4 m/s)
     nmpc_dt: 0.1                   # base prediction step duration (s) — scaled by speed-adaptive logic
-    nmpc_horizon_distance_m: 50.0  # target prediction distance (m) — dt scales to cover this
+    nmpc_horizon_distance_m: 25.0  # target prediction distance (m) — 50m was too far at low speed (dt=0.625, 12.5s horizon)
     nmpc_dt_min: 0.1               # min dt (high speed) — fine temporal resolution
-    nmpc_dt_max: 0.75              # max dt (low speed) — allows 50m horizon at 3.3+ m/s
+    nmpc_dt_max: 0.35              # max dt (low speed) — keeps curve resolution at ~1.4m/step at 4 m/s
     nmpc_q_lat: 10.0               # lateral error weight — matched to LMPC for tight curve tracking
     nmpc_q_heading: 5.0            # heading error weight
     nmpc_r_steer: 1.0e-4           # steering magnitude cost (near-zero — same philosophy as LMPC)
@@ -936,13 +963,14 @@ trajectory:
     nmpc_r_steer_ff_mag: 0.0       # feedforward magnitude penalty — DISABLED pending tuning
     nmpc_q_lat_terminal_scale: 5.0 # terminal state lateral weight multiplier (raised from 3.0)
     nmpc_q_heading_terminal_scale: 3.0
+    nmpc_wheelbase_m: 3.25           # sysid L_eff≈3.65m at v=4 → wheelbase=3.65-0.025*16=3.25 (up from default 2.5)
     nmpc_understeer_gradient: 0.025  # K_us: L_eff = L + K_us*v² (from sysid, accounts for tire slip)
     nmpc_delta_rate_max: 0.5       # max normalised steering change per step
     nmpc_max_accel: 3.0            # m/s²
     nmpc_max_decel: 4.0            # m/s²
     nmpc_v_min: 1.0                # m/s
     nmpc_v_max: 35.0               # m/s (covers full NMPC speed envelope)
-    nmpc_max_solve_ms: 20.0        # solver time budget; fallback to LMPC if exceeded
+    nmpc_max_solve_ms: 30.0        # solver time budget; raised from 20 — SLSQP needs ~15-20ms with 25m horizon
     nmpc_max_iter: 50              # SLSQP max iterations per frame
     nmpc_ftol: 1.0e-4              # SLSQP function value tolerance
     nmpc_fallback_lmpc: true       # true=fall back to LMPC on failure; false=fall back to PP

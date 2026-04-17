@@ -1,12 +1,12 @@
 # AV Stack — Agent Memory: Tasks
 
-**Last updated:** 2026-04-01
+**Last updated:** 2026-04-13
 
 ---
 
 ## Current Focus
 
-**Velocity profile ACTIVATED ✅ (2026-04-10). 5/7 tracks ≥ 95, 0 e-stops, 0 OOL. Step 5 ACC in progress.**
+**MPC QP reformulations tested (2DOF + preview weighting) — both disabled, RMSE ceiling confirmed at 0.111m from kinematic model-plant mismatch. Next: system identification or frequency-dependent damping.**
 
 ### Pre-computed Velocity Profile — DONE ✅ (2026-04-10)
 Forward+backward kinematic velocity profile from track geometry. Additive speed ceiling alongside existing preview/curve_cap chain. `a_lat_tracking_budget_g: 0.05` calibrated from closed-loop data. 19 unit tests, diagnostic tooling across 3 tools, ACC dynamic recomputation ready. Next: improve lateral controller → raise tracking budget → profile becomes binding constraint → faster curve speeds.
@@ -105,6 +105,9 @@ Car now reaches 25 m/s (11.7% overspeed rate at target=25). Speed RMSE 5.3 m/s =
 | ACC Phase A | Python data pipeline: VehicleState +8 fields, DataRecorder 5 HDF5 locations × 8 fields (vehicle/radar_fwd_* + vehicle/acc_*), orchestrator _pf_run_acc_sensor + init + VehicleState injection, config acc: block (enabled=false). test_lead_vehicle_data_pipeline.py extended to 23 tests. 0 regressions. 1403 tests total. | 2026-03-23 |
 | ACC Phase B | IDM longitudinal controller: acc_controller.py (ACCState enum, ACCParams + from_config(), ACCOutput, ACCController — 6-state machine + IDM + bumpless transfer). Orchestrator: ACCController init, _pf_run_acc_sensor stores RadarReading, new _pf_apply_acc_override (between governor and trajectory planner). Config: 5 new acc keys. test_acc_controller.py 15 tests all passing. 1525 tests total, 0 regressions. | 2026-03-24 |
 | ACC Phase C | Safety layer wiring: emergency_stop_latched set in _pf_apply_acc_override when TTC_ESTOP fires (reason='acc_ttc_violation', same latch mechanism as OOL events). test_acc_safety.py 16 tests — TTC guard boundaries (< threshold), EMERGENCY_BRAKE conditions (gap factor, range_rate sign, priority), detection-loss hysteresis (5 frames, 3 re-arm). 1538 tests total, 0 regressions. | 2026-03-24 |
+| MPC 2DOF FF | 2DOF feedforward/feedback decomposition in mpc_controller.py. QP variable ε=δ−δ_ff, curvature cancels (99.9%). Marginal 2% RMSE improvement — MPC already finds FF in 2 frames. Disabled (`mpc_ff_decomposition_enabled: false`). 22 tests. Diagnostic: diagnose_ff_decomp.py. | 2026-04-13 |
+| MPC preview q_lat | Preview-weighted stage cost shaping: q_lat ramps from step0_scale to 1.0 across horizon. At scale=0.7: halves jerk but no RMSE gain, does not shift stability boundary. Disabled (`mpc_q_lat_preview_step0_scale: 1.0`). 15 tests. | 2026-04-13 |
+| RMSE ceiling | Confirmed RMSE 0.111m floor at q_lat=2.0 is kinematic model-plant mismatch. Neither QP reformulation breaks it. Stability boundary (q_lat≈2.5) is whole-horizon, not step-0. Next: sysid or frequency-dependent damping. | 2026-04-13 |
 
 ---
 
@@ -142,6 +145,7 @@ Car now reaches 25 m/s (11.7% overspeed rate at target=25). Speed RMSE 5.3 m/s =
 | T-078 | Lookahead contraction smoothing at curve entry (late turn-in) | **DEFERRED (2026-03-22)** — root cause: MPC cost function trade-off (needs q_lat=11.5 → hunting risk). PP floor rescue is benign. Baseline 94.9/100 accepted. |
 | 3.5 | 2DOF FF alignment (`ff_alignment_enabled`) | **✅ Validated (2026-03-22)** — A/B: +0.4 pts, jerk 9.2→18.0 without it (cap hit), adj_rmse 0.297→0.309m without. Stays enabled (default=True). |
 | 4 | NMPC + full hierarchical hybrid | **✅ COMPLETE (2026-03-23)** — H-3 97.5/100, 0 e-stops, 25 m/s |
+| 4.5 | MPC QP reformulations (2DOF + preview weighting) | **Tested, DISABLED (2026-04-13)** — RMSE 0.111m ceiling is kinematic model-plant mismatch. Next: sysid dynamic model or frequency-dependent damping. |
 | 5 | Lead vehicle following / ACC | **Plan updated (2026-03-23)** — `docs/plans/step5_acc_plan.md`. Simulated radar (SphereCast + Doppler), NOT GT. `RadarSensor` ABC → reusable for Step 7 BSM. Full toolset: scoring_registry, issue_detector, triage_engine, layer_health, PhilViz ACC tab, CLI tool. ~52 new tests. Begin Phase A. |
 | 6 | Multi-lane perception + map | Pending |
 | 7 | Lane change planning + execution | Pending |
@@ -161,6 +165,7 @@ Car now reaches 25 m/s (11.7% overspeed rate at target=25). Speed RMSE 5.3 m/s =
 | Segmentation model untrained / mislabeled | Critical | T-032: retrain with multi-track GT data. Pipeline ready: `./tools/segmentation/train_pipeline.sh`. See `training/TRAINING_GUIDE.md` |
 | Temporal sync issues under CPU load | Medium | Latency injection tooling exists (`--lock-latency-ms`) |
 | Runtime track-end stop bypassed on loop:true tracks | Medium | T-080: Unity doesn't loop some track meshes even when YAML says `loop: true`. Odometer stop (orchestrator:3551) only fires when `_track_loop=False`. Need runtime auto-detection (e.g., GT boundary corruption or odometer > total_length) to override the YAML flag and stop gracefully before OOL. |
+| RMSE 0.111m floor from kinematic model-plant mismatch | Medium | Kinematic bicycle model limits MPC tracking accuracy. QP reformulations (2DOF, preview weighting) cannot break through. Next: system identification of dynamic plant model (`tools/analyze/sysid_dynamic_model.py`) or frequency-dependent damping. |
 
 ---
 
@@ -206,3 +211,6 @@ Car now reaches 25 m/s (11.7% overspeed rate at target=25). Speed RMSE 5.3 m/s =
 | — | Step 5 Phase B: IDM controller (ACCState, ACCParams.from_config, ACCOutput, ACCController 6-state machine, orchestrator wire-up with bumpless transfer) | Step 5 | 2026-03-24 |
 | — | Step 5 Phase C: Safety layer (emergency_stop_latched wired from _pf_apply_acc_override, TTC strict-< boundary, detection-loss hysteresis) | Step 5 | 2026-03-24 |
 | — | Step 5 Phase E: Unity integration (SpeedProfiler.cs, TrackWaypointFollower.cs, LeadVehicle.cs, TrackConfig.cs LeadVehicleConfig, TrackLoader.cs parser bugfix, CarController.cs +4 radar fields, AVBridge.cs SpawnLeadVehicle + ComputeForwardRadar, RoadGenerator.cs public ActiveTrackConfig, 3 acc_*.yaml overlays, 11 scenario YAMLs in tracks/scenarios/) | Step 5 | 2026-03-24 |
+| — | MPC 2DOF FF decomposition: QP variable ε=δ−δ_ff, 99.9% curvature cancellation, marginal gain, disabled. 22 tests + diagnostic tool. | Step 4.5 | 2026-04-13 |
+| — | MPC preview-weighted q_lat: stage cost shaping (step0_scale ramp), halves jerk at 0.7 but no RMSE gain, disabled. 15 tests. | Step 4.5 | 2026-04-13 |
+| — | RMSE ceiling analysis: confirmed 0.111m floor from kinematic model-plant mismatch, stability boundary is whole-horizon not step-0. | Step 4.5 | 2026-04-13 |

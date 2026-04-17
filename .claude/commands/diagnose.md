@@ -103,10 +103,29 @@ Then suggest: `/trace brake_onset` and `/trace speed_drop` to inspect the signal
 ```bash
 python3 tools/analyze/mpc_pipeline_analysis.py --latest
 ```
+Also check sections 24–26 from the primary analysis:
+- **§24 Curvature Distribution:** shows whether the track has enough low-κ sections for LMPC, and whether the map is quantized (affecting regime threshold selection)
+- **§25 Per-Regime Error Breakdown:** shows RMSE per controller (PP vs LMPC vs NMPC) and per segment (curve vs straight) — identifies which controller is responsible for tracking errors
+- **§26 Model-Plant Comparison:** shows steering command vs actual, MPC reference alignment health, and heading prediction accuracy — detects model-plant mismatch
+
+Run the physics-based regime boundary analysis to check if the regime selector config matches physics:
+```bash
+python3 tools/analyze/analyze_regime_boundaries.py <track_name> --decompose
+```
+This computes expected tracking error for PP, LMPC, and NMPC from first principles (chord error, model-plant mismatch, cost trade-offs) and shows the optimal controller at each (κ, v) operating point. If the suggested thresholds differ from config, the regime selector may be routing to the wrong controller.
+
 Then suggest: `/trace regime_transition` to inspect PP↔MPC switch conditions.
 
 ### If `lateral_error_issue`:
-First, run the signal chain blame trace to identify the lookahead bottleneck:
+First, check **§25 Per-Regime Error Breakdown** from the primary analysis. If a specific regime (PP, LMPC, NMPC) dominates the error, focus on that controller. If errors appear during transitions, check blend_frames and min_hold_frames config.
+
+Then check if the regime selector is routing to the right controller for this track's operating points:
+```bash
+python3 tools/analyze/analyze_regime_boundaries.py <track_name> --decompose
+```
+Compare the "Winner" column against what the regime selector actually chose (from §25). If physics says NMPC but config routes to LMPC or PP, the regime config needs updating.
+
+Then run the signal chain blame trace to identify the lookahead bottleneck:
 ```bash
 python3 tools/analyze/trace_curve_entry.py <recording>
 ```

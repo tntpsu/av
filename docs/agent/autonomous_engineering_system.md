@@ -57,7 +57,10 @@ This document describes the near-autonomous engineering system built for the AV 
 | `/validate` | Gate checks (comfort, scoring, ACC) | Fully automatic |
 | `/plan-feature` | Architecture plan with industry context | Semi-auto (human approval) |
 | `/log-fix` | Record fix to improvement log | Semi-auto (human classifies root cause) |
+| `/log-experiment` | Record ALL attempts (success + failure) to experiment journal | Semi-auto |
 | `/process-health` | Continuous improvement Pareto | Fully automatic |
+| `analyze_convergence.py` | Spinning-wheels detector: flags repeated failures with same root cause | Fully automatic |
+| `analyze_regime_boundaries.py` | Physics-based regime boundary: replaces empirical threshold tuning | Fully automatic |
 | `/update-arch` | Keep architecture docs current | Fully automatic |
 | `/instrument` | Add/remove debug probes | Fully automatic |
 | `/run` | Resolve scenario → exact command | Fully automatic |

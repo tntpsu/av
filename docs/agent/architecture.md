@@ -220,7 +220,9 @@ Controls lookahead contraction as the car approaches curves. Three phases:
 
 | Tool | Purpose |
 |---|---|
-| `analyze_drive_overall.py --latest` | Primary 14-section summary report |
+| `analyze_drive_overall.py --latest` | Primary 26-section summary report (includes curvature histogram §24, per-regime error breakdown §25, model-plant comparison §26) |
+| `analyze_regime_boundaries.py [track] --all` | Physics-based regime boundary analysis: computes PP/LMPC/NMPC expected error from first principles, derives optimal controller at each (κ,v) operating point, suggests regime config thresholds |
+| `analyze_convergence.py [--metric X] [--track Y]` | Experiment convergence detector: reads experiment journal, flags spinning-wheels patterns (repeated failures with same root cause), recommends escalation from tuning to architecture |
 | `run_ab_batch.py` | A/B config comparison (≥5 runs each) |
 | `mpc_pipeline_analysis.py --latest` | Phase 2.8 MPC pipeline health (regime, fix status, state quality, worst frames) |
 | `counterfactual_layer_swap.py` | Layer isolation (perception/trajectory/control attribution) |

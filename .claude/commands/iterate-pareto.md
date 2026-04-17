@@ -25,22 +25,38 @@ Oscillation Growth                14.7        3/5              sweeping (-6.8)
 
 Before selecting a target, check whether the top Pareto items have been investigated before:
 
-1. Search `docs/agent/tasks.md` for deferred tasks referencing the deduction name
-2. Search `MEMORY.md` for related project/feedback memories
-3. If a prior investigation exists, summarize: what was found, what was tried, why it was deferred
+1. **Run the convergence detector** on the top Pareto items' target metrics:
+```bash
+python3 tools/analyze/analyze_convergence.py
+```
+If ANY top Pareto item maps to a CRITICAL ceiling (3+ failed attempts with same root cause), **skip it** — it cannot be fixed by tuning or code patch. Flag it as ARCHITECTURE and move to the next Pareto item.
+
+2. Search `docs/agent/tasks.md` for deferred tasks referencing the deduction name
+3. Search `MEMORY.md` for related project/feedback memories
+4. If a prior investigation exists, summarize: what was found, what was tried, why it was deferred
 
 ```
 PRIOR INVESTIGATION CHECK
 ============================================================
+  Convergence detector: <CLEAR / WARNING / CRITICAL per item>
+  
   Pareto #1: <deduction> — prior task: <T-XXX or "none">
+    Convergence: <CLEAR/WARNING/CRITICAL — N failed attempts, root cause>
     Prior finding: <root cause if known>
     Prior attempt: <what was tried>
-    Status: <resolved / deferred / not investigated>
+    Status: <resolved / deferred / ceiling / not investigated>
   
   Pareto #2: <deduction> — prior task: <T-XXX or "none">
+    Convergence: <status>
     ...
 ============================================================
 ```
+
+**If a CRITICAL ceiling is detected:**
+- Do NOT dispatch /iterate — it will waste E2E cycles hitting the same wall
+- Auto-classify as ARCHITECTURE (skip Step 2a)
+- Present the ceiling evidence and recommend `/plan-feature`
+- Move to next Pareto item if user doesn't want architecture work now
 
 **If a deferred investigation already characterized the root cause:**
 - Do NOT dispatch /iterate with the same approach that was already tried
@@ -187,3 +203,6 @@ Promotion checklist:
 - Scores: `/scores` skill
 - Process health: `/process-health` skill
 - Sweep: `/sweep` skill
+- Convergence detector: `tools/analyze/analyze_convergence.py`
+- Experiment journal: `data/reports/experiment_journal.json` (log via `/log-experiment`)
+- Regime boundaries: `tools/analyze/analyze_regime_boundaries.py`

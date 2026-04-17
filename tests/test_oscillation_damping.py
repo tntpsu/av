@@ -224,6 +224,104 @@ class TestQLatCurvatureScheduling:
         # P matrix should now use 4.0 for the lateral state cost
 
 
+class TestQLatLatAccelFade:
+    """Verify κv² safety fade attenuates q_lat amplification near the
+    lateral-accel stability boundary. Prevents model-plant-mismatch
+    oscillation on tight curves while preserving benefit on mild curves."""
+
+    def _params(self, **overrides):
+        from control.mpc_controller import MPCParams
+        defaults = dict(
+            q_lat=2.0,
+            q_lat_kappa_gain=150.0,
+            q_lat_kappa_saturate=0.010,
+            q_lat_lat_accel_fade_start_mps2=0.5,
+            q_lat_lat_accel_fade_end_mps2=1.2,
+        )
+        defaults.update(overrides)
+        return MPCParams(**defaults)
+
+    def test_mild_curve_full_amplification(self):
+        """Highway R500 @ 15 m/s: κv²=0.45 ≤ fade_start → full amplification."""
+        pytest.importorskip("osqp")
+        from control.mpc_controller import MPCSolver
+        s = MPCSolver(self._params())
+        # κ=0.002, v=15 → κv²=0.45, fade=1.0
+        # kappa_scale = 1 + 150*0.002 = 1.3 → q_lat = 2.0 * 1.3 = 2.6
+        q = s._get_effective_q_lat(0.002, 15.0)
+        assert abs(q - 2.6) < 1e-6, f"expected 2.6, got {q:.4f}"
+
+    def test_tight_curve_full_fade_to_base(self):
+        """s_loop R40 @ 7 m/s: κv²=1.225 ≥ fade_end → fade to base q_lat."""
+        pytest.importorskip("osqp")
+        from control.mpc_controller import MPCSolver
+        s = MPCSolver(self._params())
+        # κ=0.025, v=7 → κv²=1.225, fade=0 → q_lat = base 2.0
+        q = s._get_effective_q_lat(0.025, 7.0)
+        assert abs(q - 2.0) < 1e-6, f"expected 2.0 (fade to base), got {q:.4f}"
+
+    def test_moderate_curve_partial_fade(self):
+        """Moderate operating point: fade linearly interpolates."""
+        pytest.importorskip("osqp")
+        from control.mpc_controller import MPCSolver
+        s = MPCSolver(self._params())
+        # κ=0.010, v=10 → κv²=1.0
+        # fade = 1 - (1.0 - 0.5)/(1.2 - 0.5) = 1 - 0.7143 = 0.2857
+        # kappa_scale = 1 + 150*0.010 = 2.5
+        # effective_scale = 1 + (2.5 - 1)*0.2857 = 1.4286
+        # q_lat = 2.0 * 1.4286 = 2.857
+        q = s._get_effective_q_lat(0.010, 10.0)
+        assert abs(q - 2.857) < 0.01, f"expected ~2.857, got {q:.4f}"
+
+    def test_straight_unaffected(self):
+        """Straight: κ=0 → no amplification regardless of speed."""
+        pytest.importorskip("osqp")
+        from control.mpc_controller import MPCSolver
+        s = MPCSolver(self._params())
+        assert abs(s._get_effective_q_lat(0.0, 15.0) - 2.0) < 1e-9
+
+    def test_fade_boundary_monotonic(self):
+        """q_lat must decrease monotonically as κv² crosses from
+        fade_start to fade_end, never exceeding the no-fade value."""
+        pytest.importorskip("osqp")
+        from control.mpc_controller import MPCSolver
+        s = MPCSolver(self._params())
+        # Sweep fixed κ=0.010, increasing v → increasing κv²
+        prev = None
+        for v in [3.0, 5.0, 7.0, 10.0, 12.0]:
+            q = s._get_effective_q_lat(0.010, v)
+            if prev is not None:
+                assert q <= prev + 1e-9, (
+                    f"non-monotonic: q={q:.4f} at v={v}, prev={prev:.4f}"
+                )
+            prev = q
+
+    def test_legacy_behavior_when_fade_disabled(self):
+        """When fade_end <= fade_start, behavior matches pre-fade code."""
+        pytest.importorskip("osqp")
+        from control.mpc_controller import MPCSolver
+        # Set fade_end = 0 to disable fade (<=fade_start)
+        s = MPCSolver(self._params(q_lat_lat_accel_fade_end_mps2=0.0,
+                                    q_lat_lat_accel_fade_start_mps2=0.0))
+        # κ=0.010, any v → kappa_scale = 1 + 150*0.010 = 2.5 → q_lat = 5.0
+        q_at_v3 = s._get_effective_q_lat(0.010, 3.0)
+        q_at_v15 = s._get_effective_q_lat(0.010, 15.0)
+        assert abs(q_at_v3 - 5.0) < 1e-6
+        assert abs(q_at_v15 - 5.0) < 1e-6
+        assert abs(q_at_v3 - q_at_v15) < 1e-9  # speed-independent when disabled
+
+    def test_speed_defaults_to_zero_backward_compat(self):
+        """Calls without speed arg default speed=0 → full amplification
+        (matches original κ-only schedule for backward compatibility)."""
+        pytest.importorskip("osqp")
+        from control.mpc_controller import MPCSolver
+        s = MPCSolver(self._params(q_lat=1.0, q_lat_kappa_gain=300.0,
+                                    q_lat_kappa_saturate=0.015))
+        # κ=0.010, speed=0 (default) → κv²=0, fade=1.0
+        # kappa_scale = 1 + 300*0.010 = 4.0 → q_lat = 4.0
+        assert abs(s._get_effective_q_lat(0.010) - 4.0) < 1e-9
+
+
 class TestRSteerRateSchedulingMPC:
     """Integration tests: verify MPCSolver uses scheduling correctly.
     Requires osqp — tests are skipped if not installed."""

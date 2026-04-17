@@ -59,23 +59,13 @@ autobahn        ??      ??          ??          ??        no baseline
 
 ### 1c — Build operating envelope
 
-Read all track YAMLs in `tracks/*.yml` and extract geometry:
+Run the physics-based regime boundary analysis instead of manually listing geometry:
+```bash
+python3 tools/analyze/analyze_regime_boundaries.py --all
+```
+This computes expected tracking error for PP, LMPC, and NMPC from first principles at each track's operating points, identifies the optimal controller per segment, and suggests regime config values. Use this to verify the regime selector config matches physics — if the tool says NMPC should handle a segment but config routes to PP, that's a regime misconfiguration, not a tuning problem.
 
-```
-OPERATING ENVELOPE
-============================================================
-Track           Min R    Max κ      Speed range    Key regime
-highway_65      500      0.002      11-12 m/s      MPC only
-sweeping        300      0.003      10-12 m/s      MPC only
-autobahn        600      0.002      12-15 m/s      MPC only
-hill            100      0.010      8-12 m/s       MPC + transitions
-mixed_radius    40       0.025      5-12 m/s       PP + MPC + transitions
-sloop           40       0.025      4-9 m/s        PP dominant
-hairpin         15       0.067      3-6 m/s        PP only
-oval            50       0.020      9-11 m/s       Transition zone
-circle          50       0.020      9-11 m/s       Transition zone
-============================================================
-```
+If the suggested `mpc_max_map_curvature` or `nmpc_curvature_threshold` differ significantly from current config, prioritize fixing the regime boundary before tuning individual controller gains.
 
 This envelope is the reference for predicting impact of any fix.
 
@@ -91,13 +81,21 @@ Don't just focus on the target — list every track that fails the goal. Check i
 
 Before diagnosing from scratch, check whether prior investigations already characterized this symptom:
 
-1. Search `docs/agent/tasks.md` for deferred tasks (T-XXX) referencing this symptom
-2. Search memory files in `MEMORY.md` for related project/feedback memories
-3. Search `docs/agent/current_state.md` for "DEFERRED" items on this topic
+1. **Run the convergence detector** to check for spinning-wheels patterns:
+```bash
+python3 tools/analyze/analyze_convergence.py --metric <target_metric> --track <target_track>
+```
+If this reports a CRITICAL ceiling (3+ failed attempts with the same root cause), **STOP.** Do not attempt another tuning/code fix. The metric has an architectural ceiling. Recommend `/plan-feature` to redesign the subsystem instead.
+
+2. Search `docs/agent/tasks.md` for deferred tasks (T-XXX) referencing this symptom
+3. Search memory files in `MEMORY.md` for related project/feedback memories
+4. Search `docs/agent/current_state.md` for "DEFERRED" items on this topic
 
 ```
 PRIOR INVESTIGATION CHECK
 ============================================================
+  Convergence detector: <CLEAR / WARNING / CRITICAL>
+    If WARNING+: <root cause>, <N failed attempts>, <approaches tried>
   Related tasks: <T-XXX — what it found, when, why deferred>
   Related memories: <memory file — key finding>
   Prior root cause: <what was already determined>
@@ -105,6 +103,7 @@ PRIOR INVESTIGATION CHECK
   
   Does the current symptom match the prior root cause? YES/NO
   If YES: skip redundant diagnosis, build on the prior finding
+  If CRITICAL ceiling: STOP — recommend /plan-feature instead
 ============================================================
 ```
 
@@ -112,6 +111,7 @@ PRIOR INVESTIGATION CHECK
 - Re-discovering what T-078 already proved (wasted E2E cycles)
 - Building the wrong solution because you didn't see the prior evidence
 - Contradicting prior findings without acknowledging the discrepancy
+- Spinning wheels on an architectural ceiling that can't be tuned away
 
 ### 2a — Primary diagnosis on target track
 
@@ -128,6 +128,11 @@ python3 tools/analyze/trace_curve_entry.py <recording>
 ```
 
 **Read triage output FIRST.** If the triage engine matches a known pattern, use that as the diagnosis — don't rediscover it manually. The triage engine knows about: floor_rescue, heading_oscillation, regime_blend, curvature_lag, and 15+ other patterns from PhilViz.
+
+**Check §24–26 from the primary analysis** for regime/controller diagnostics:
+- **§24 Curvature Distribution:** what κ values exist on this track, whether the map is quantized
+- **§25 Per-Regime Error Breakdown:** RMSE per controller (PP/LMPC/NMPC) and per segment — identifies which controller owns the tracking error. Do NOT write ad-hoc HDF5 scripts for this data.
+- **§26 Model-Plant Comparison:** steering command-vs-actual, reference alignment, heading prediction accuracy
 
 4. Classify primary issue using the priority table from `/diagnose`
 5. Run additional targeted tools only if triage didn't identify the pattern
