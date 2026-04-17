@@ -29,11 +29,14 @@ public class ShaderPrewarmer : MonoBehaviour
     [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.BeforeSceneLoad)]
     private static void PrewarmShadersEarly()
     {
-        // WarmupAllShaders forces compilation of every loaded shader variant.
-        // This may take 100-500ms on first launch but eliminates per-frame
-        // compilation stalls that cause 200-300ms gaps in camera delivery.
-        Shader.WarmupAllShaders();
-        Debug.Log("ShaderPrewarmer: [BeforeSceneLoad] WarmupAllShaders complete.");
+        // Shader.WarmupAllShaders() deterministically crashes in NEON matrix
+        // code on Apple Silicon under Unity 6 + macOS 26 (EXC_BAD_ACCESS at
+        // 0x4e4f5f, reproduced 2026-04-16). Unity 6's default async shader
+        // compilation replaces the need for explicit prewarmup — shaders
+        // compile in the background with a placeholder substitute, avoiding
+        // both the upfront cost AND the per-frame stalls this prewarmer was
+        // originally designed to prevent.
+        Debug.Log("ShaderPrewarmer: [BeforeSceneLoad] skipped — Unity 6 async compilation handles this.");
     }
 
     /// <summary>
@@ -52,10 +55,9 @@ public class ShaderPrewarmer : MonoBehaviour
 
         if (useGenericWarmup)
         {
-            // Second pass catches any shaders loaded between BeforeSceneLoad
-            // and scene Awake (e.g., shaders on dynamically-spawned prefabs).
-            Shader.WarmupAllShaders();
-            Debug.Log("ShaderPrewarmer: [Awake] WarmupAllShaders complete.");
+            // Disabled for same reason as PrewarmShadersEarly() — crashes on
+            // Apple Silicon + Unity 6. Async compilation is the replacement.
+            Debug.Log("ShaderPrewarmer: [Awake] generic warmup skipped — Unity 6 async compilation handles this.");
         }
     }
 }
