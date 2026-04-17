@@ -819,7 +819,7 @@ trajectory:
     mpc_max_steer_low_speed_rad: 0.5236    # 30° (Unity maxSteerAngleLowSpeed)
     mpc_max_steer_high_speed_rad: 0.2793   # 16° (Unity maxSteerAngleHighSpeed)
     mpc_max_steer_speed_saturation_mps: 12.0  # Unity maxSteerAngleFullSpeed
-    mpc_q_lat: 2.0                  # base value; wheelbase fix should eliminate steady-state curve bias
+    mpc_q_lat: 1.0                  # base value — E2E validated; base=2.0 caused oscillation runaway on highway_65 (99.5→59.0)
     mpc_q_lat_preview_step0_scale: 1.0  # 1.0=uniform (current); <1.0 softens step-0 lateral penalty
     # Curvature-scheduled q_lat with κv² safety fade:
     # - On mild curves (low κv²): amplifies q_lat to reduce entry error (highway +35 pts validated)

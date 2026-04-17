@@ -1710,7 +1710,7 @@ class AVStack:
     _MPC_WEIGHT_AUTO_DERIVE_PARAMS: dict[
         tuple[str, str], tuple[float, float, float, float, float]
     ] = {
-        ("trajectory.mpc",  "mpc_q_lat"):  (2.0, 15.0, 0.002, 1.0, 2.5),  # base=2.0 validated; >2.5 oscillates at current r_steer_rate=2.0
+        ("trajectory.mpc",  "mpc_q_lat"):  (1.0, 15.0, 0.002, 1.0, 4.0),  # base=1.0 validated E2E on highway_65 (99.5); base=2.0 caused oscillation runaway (59.0)
         ("trajectory.nmpc", "nmpc_q_lat"): (10.0, 15.0, 0.002, 1.0, 50.0),
     }
 

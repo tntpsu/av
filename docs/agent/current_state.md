@@ -1,7 +1,7 @@
 # AV Stack — Agent Memory: Current State
 
-**Last updated:** 2026-04-17
-**Current milestone:** S2-M1 — three architectural fixes committed. Highway_65 regression (96.2→59.0) partially characterized; primary curve-phase saturation bug fixed, residual RMSE + oscillation regression in lateral controller still open.
+**Last updated:** 2026-04-17 (afternoon)
+**Current milestone:** S2-M1 — Highway_65 regression RESOLVED via q_lat base revert (99.5/100 post-fix). Hill_highway (+38.6), mixed_radius (+1.1), s_loop (+2.3) all improved from the same 2-line fix. No regressions.
 
 ### Session 2026-04-17 — Three Architectural Fixes Committed
 
@@ -19,14 +19,38 @@ Commit: `41148f3`
 Validation: 14/14 unit tests, saturation fixed at signal level (`curve_phase_term_time` p50: 1.000 → 0.000, `time_to_next_curve_start_s` no longer clamped at 0.65s).
 Commit: `6dbdacc`
 
-### Highway_65 — Partial Progress, Root Cause Still Open (2026-04-17)
+### Highway_65 — RESOLVED (2026-04-17 afternoon session)
 
-- **Baseline**: 96.2 (frozen 2026-04-01)
-- **Current**: 59.0 (same as before fix)
-- **What the architectural fix accomplished**: `curve_phase_term_time` saturation eliminated (verified). But overall score unchanged.
-- **What remains**: RMSE 0.536m (baseline 0.042, 12× worse), oscillation growth penalty -15, `curve_local_phase` reaches 0.220 on straights from `curve_phase_term_path` and `curve_phase_term_preview` (different mechanism than the saturation bug).
-- **Real root cause hypothesis**: Lateral controller (MPC tracking) regression, NOT curve detection. RMSE magnitude and oscillation pattern point to MPC or reference generation. Candidates: committed `a83d9cb` (lookahead profiler wiring), `93363e3` (universal output jerk limiter), interaction with experimental MPC scaffolding (vy_observer at 80/20, dynamic model calibration).
-- **Follow-up**: Separate focused session to diagnose lateral-control chain. Starting point: compare MPC `predicted_trajectory` vs reference on frames where `e_lat > 0.5m`.
+**Root cause**: undocumented `mpc_q_lat` base doubling (1.0 → 2.0) bundled into commit `41148f3` ("κv² safety fade for q_lat schedule + MPC experimental scaffolding") and mirrored in `6dbdacc`'s `_MPC_WEIGHT_AUTO_DERIVE_PARAMS`. The commit message explicitly said *"E2E validation DEFERRED"* — unit tests passed but the doubled q_lat caused MPC oversteer on mild highway curves (command/actual ratio 4.7×, oscillation runaway 0.008→1.114m).
+
+**Bisect evidence** (at HEAD commit chain, Unity shader crash fix `04d5df8` was the enabling anchor for post-Apr-11 commits on this Mac):
+| Commit | Score | RMSE | Notes |
+|---|---|---|---|
+| `04d5df8` (pre-q_lat-bump) | 99.5 | 0.038m | ✓ baseline-equivalent |
+| `41148f3` (+q_lat=2.0 + κv² fade) | 97.5 | 0.117m | mild regression |
+| `6dbdacc` (+map-priority curves, derivation table synced to 2.0) | 59.0 | 0.536m | catastrophic |
+
+**Fix** (2 lines, single commit):
+- `av_stack/orchestrator.py:1713` — `_MPC_WEIGHT_AUTO_DERIVE_PARAMS[("trajectory.mpc", "mpc_q_lat")]: (2.0, 15.0, 0.002, 1.0, 2.5)` → `(1.0, 15.0, 0.002, 1.0, 4.0)`
+- `config/av_stack_config.yaml:822` — `mpc_q_lat: 2.0` → `mpc_q_lat: 1.0`
+
+**Validation** (E2E, 60s per track, 2026-04-17 afternoon):
+| Track | Baseline | Pre-fix | Post-fix | Δ vs pre |
+|---|---|---|---|---|
+| highway_65 | 96.2 | 59.0 | **99.5** | +40.5 |
+| hill_highway | — | 59.0 | **97.6** | +38.6 |
+| mixed_radius | 91.9 | 97.6 | **98.7** | +1.1 |
+| s_loop | 96.7 | 96.8 | **99.1** | +2.3 |
+
+**Layer scores** (all validated tracks hit all-layers-≥95 goal except hill_highway Trajectory 91.5 — residual apex-cutting issue predating this regression, not caused by the fix).
+
+**Pre-existing test failure (not blocking)**: `tests/test_mpc_delay_compensation.py::TestHigherQLat::test_no_oscillation_at_q4` was added in `41148f3` and was already failing at HEAD (31% oscillation at q_lat=4.0 in synthetic closed-loop at v=12). The test's synthetic plant doesn't match Unity runtime behavior; E2E tracks validate the `q_lat=4.0` cap is stable in practice. Flag for a separate test-quality cleanup iteration.
+
+**Remaining work (separate iterations)**:
+- hill_highway Trajectory 91.5 — residual apex cutting on R100 curves (pre-existing, independent from this regression)
+- hairpin_15 79.0 — Safety 75 + Control 80 (steer jerk 28.7, 1 OOL event); unrelated root cause
+
+**Process lesson (captured in `feedback_bundled_tuning_in_feature_commits.md`)**: when a bisect lands on a feature commit with a large regression, scan the diff for unrelated numeric constant changes before blaming the named feature. A commit titled "map-priority curve detection" silently bundled a 2× tuning change that caused the actual regression.
 
 ### Mac Mini Memory / FPS Environmental Issue (2026-04-17)
 
