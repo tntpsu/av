@@ -216,6 +216,41 @@ Evidence: <specific frames, signals, correlations>
 
 Only proceed to Step 2e (fix level) after the root cause is CONFIRMED, not hypothesized.
 
+### 2d — Regression origin check (MANDATORY if baseline regressed)
+
+If the target track shows a score drop vs its frozen baseline (Δbl < -2.0 in scoreboard), check whether recent commits correlate with the regression. This is the difference between "the system has always had this limitation" and "we broke it last week" — the fix path is fundamentally different.
+
+1. Find the last 10 commits that touched the subsystem the root cause implicates:
+   ```bash
+   git log --oneline -10 -- <relevant_files>
+   ```
+
+2. Check commit dates vs the baseline recording date:
+   ```bash
+   # Baseline freeze date (from scoring_baselines.json mtime or git log on the fixture):
+   git log -1 --format=%ci tests/fixtures/scoring_baselines.json
+   ```
+   Commits made AFTER the baseline was frozen are suspects.
+
+3. If ≥1 suspect commit exists AND the subsystem it touches matches the
+   confirmed root cause from Step 2c4 → this becomes a "revert-or-forward-fix"
+   decision point. Record suspect commits for presentation at Step 2g.
+
+```
+REGRESSION ORIGIN
+============================================================
+  Baseline date: <date>
+  Current score vs baseline: <score> (Δbl <delta>)
+  Suspect commits (touched root-cause subsystem after baseline):
+    <sha> <date>  <title>
+    <sha> <date>  <title>
+  Bisect needed: YES/NO
+  Revert viable: YES/NO (YES = reverting cleanly restores baseline)
+============================================================
+```
+
+**If bisect is needed to identify which of multiple suspects caused it**, run the bisect as part of disambiguation — one `/e2e` per suspect commit with `git stash`/`git revert` between runs. The bisect result feeds into Step 2g fix options.
+
 ### 2d2 — Industry context check (MANDATORY)
 
 Before proposing any fix approach, state how top AV companies handle this class of problem:
@@ -370,13 +405,36 @@ CROSS-TRACK:
   <which other tracks share this root cause>
 
 Fix level: <level>
-Proposed approach: <1-2 sentence summary>
 
-Proceed? (or suggest different approach)
+FIX OPTIONS (enumerate ALL viable paths — do NOT collapse to one):
+
+  If suspect commits exist from Step 2d:
+    A. REVERT <sha> — restores baseline behavior
+       Tradeoff: loses feature <X> that the commit added
+       Risk: <low/med/high>
+       Estimated effort: <minutes/hours>
+
+    B. FORWARD-FIX — keep feature <X>, repair the regression
+       Approach: <1-sentence summary>
+       Risk: <low/med/high>
+       Estimated effort: <hours/days>
+
+  If architectural alternatives exist:
+    C. <alternative approach>
+       Tradeoff: <what it gains / loses>
+
+  If only one viable path: state that explicitly and say why alternatives
+  were ruled out.
+
+Proposed approach (if only one path) OR recommended option (if multiple):
+  <letter + 1-2 sentence rationale>
+
+User decision required — do NOT proceed with implementation until user
+picks an option (or confirms the single viable path).
 ============================================================
 ```
 
-**WAIT for user confirmation before proceeding.** This is mandatory for all iterations.
+**WAIT for user confirmation before proceeding.** This is mandatory for all iterations. When multiple fix options exist, the user picks the option — do NOT auto-select even if one option is obviously cheaper, because the tradeoff (e.g., losing a feature) may matter more than the cost.
 
 ---
 
@@ -601,7 +659,20 @@ If any `/e2e` run:
 → Retry the run. Do NOT count as an iteration.
 → After 6 total E2E runs in this session, force a rebuild on the next run.
 
-### 8g — MAX ITERATIONS (hard stop)
+### 8g — REVERT AVAILABLE (pause + ask)
+If Step 2d found suspect commits AND the fix level is ARCHITECTURE or CODE PATCH
+AND the user has not yet been presented with revert-vs-forward-fix options at Step 2g:
+
+→ Pause. Do NOT proceed to Step 3 (PLAN). Return to Step 2g with fix options enumerated.
+→ Rationale: architecture work is expensive; reverting a recent commit may be
+  10 minutes and solves the immediate regression. The user should make that
+  call explicitly before any planning work starts.
+
+This guard is asymmetric from the others: most guards stop on failure. This
+one stops on *option availability* — the skill should not silently eliminate
+a cheap option without the user knowing it existed.
+
+### 8h — MAX ITERATIONS (hard stop)
 If iteration count reaches the max (default 5):
 
 → Stop. Report progress:
