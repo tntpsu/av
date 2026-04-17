@@ -1,7 +1,36 @@
 # AV Stack — Agent Memory: Current State
 
-**Last updated:** 2026-04-15
-**Current milestone:** S2-M1 — FF curvature floor removed. 7/7 tracks ≥ 95 (autobahn 99.0, highway 98.9, s_loop 98.9, mixed 98.6, sweeping 98.0, hairpin 97.1, hill 95.5). 0 e-stops, 0 OOL.
+**Last updated:** 2026-04-17
+**Current milestone:** S2-M1 — three architectural fixes committed. Highway_65 regression (96.2→59.0) partially characterized; primary curve-phase saturation bug fixed, residual RMSE + oscillation regression in lateral controller still open.
+
+### Session 2026-04-17 — Three Architectural Fixes Committed
+
+**1. Unity shader crash on Mac Mini (Apple Silicon + macOS 26) — FIXED ✅**
+Deterministic crash `EXC_BAD_ACCESS at 0x4e4f5f` in `MultiplyMatrixArrayWithBase4x4_NEON` during `Shader.WarmupAllShaders()`. Disabled both call sites in `unity/AVSimulation/Assets/Scripts/ShaderPrewarmer.cs`. Unity 6's default async shader compilation replaces the need for explicit prewarmup.
+Commit: `04d5df8`
+
+**2. κv² safety fade for curvature-scheduled q_lat — IMPLEMENTED ✅**
+MPC's `q_lat_kappa_schedule` amplifies tracking weight on curves but caused oscillation on tight curves (above stability boundary q_lat≈2.5). Added κv² fade: full amplification at low lateral accel, linear fade to base q_lat as κv² approaches the 1.5 m/s² budget. Aligns with regime_selector's existing lateral-accel budget.
+Validation: 12/12 unit tests, s_loop 99.0 PASS.
+Commit: `41148f3`
+
+**3. Map-priority curve detection in `get_curve_context` — IMPLEMENTED ✅**
+`curve_phase_term_time` was permanently saturating at 1.0 on highway straights due to vision-derived `curvature_combined = 6.0 × max(κ_raw, κ_heading)` at ds[0]≈8m exceeding the 0.006 threshold from lane-fit noise. Replaced with map-priority architecture: clean ground-truth κ with physics-based 0.010 threshold (R100), continuous `curve_proximity_score` output, hardened vision fallback (near-field skip, window median, hysteresis), defensive fallback on all-zero map.
+Validation: 14/14 unit tests, saturation fixed at signal level (`curve_phase_term_time` p50: 1.000 → 0.000, `time_to_next_curve_start_s` no longer clamped at 0.65s).
+Commit: `6dbdacc`
+
+### Highway_65 — Partial Progress, Root Cause Still Open (2026-04-17)
+
+- **Baseline**: 96.2 (frozen 2026-04-01)
+- **Current**: 59.0 (same as before fix)
+- **What the architectural fix accomplished**: `curve_phase_term_time` saturation eliminated (verified). But overall score unchanged.
+- **What remains**: RMSE 0.536m (baseline 0.042, 12× worse), oscillation growth penalty -15, `curve_local_phase` reaches 0.220 on straights from `curve_phase_term_path` and `curve_phase_term_preview` (different mechanism than the saturation bug).
+- **Real root cause hypothesis**: Lateral controller (MPC tracking) regression, NOT curve detection. RMSE magnitude and oscillation pattern point to MPC or reference generation. Candidates: committed `a83d9cb` (lookahead profiler wiring), `93363e3` (universal output jerk limiter), interaction with experimental MPC scaffolding (vy_observer at 80/20, dynamic model calibration).
+- **Follow-up**: Separate focused session to diagnose lateral-control chain. Starting point: compare MPC `predicted_trajectory` vs reference on frames where `e_lat > 0.5m`.
+
+### Mac Mini Memory / FPS Environmental Issue (2026-04-17)
+
+Mac Mini memory pressure (21 GB used, 2.8 GB free, swapping) caused Unity to run at 1.9 FPS instead of the normal 11+ FPS, making E2E validation unreliable. Culprits: leftover Codex.app processes (~2.2 GB), 14 zombie Playwright Chrome instances (~800 MB), XProtect scanning. After cleanup, FPS recovered to 21.5. **Lesson**: check memory pressure before trusting E2E results; low FPS ≠ code regression.
 
 ### Physics-Based Regime Boundary Analysis — NEW (2026-04-15)
 
