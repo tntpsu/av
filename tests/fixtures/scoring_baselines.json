@@ -1,7 +1,7 @@
 {
     "schema_version": "1",
-    "description": "Frozen per-track metric baselines for scoring regression detection. Values from Phase 2.9 golden recordings (2026-03-15). Update only after validating new golden recordings.",
-    "frozen_at": "2026-04-01",
+    "description": "Frozen per-track metric baselines for scoring regression detection. Values from 2026-04-17 post-q_lat-revert goldens (commit 535724d). Update only after validating new golden recordings per CLAUDE.md 3-step protocol.",
+    "frozen_at": "2026-04-17",
     "tolerances": {
         "overall_score": 2.0,
         "lateral_error_adj_rmse": 0.03,
@@ -11,16 +11,16 @@
     },
     "tracks": {
         "s_loop": {
-            "overall_score": 96.7,
-            "lateral_error_adj_rmse": 0.128,
-            "accel_p95_filtered": 1.315,
-            "commanded_jerk_p95": 1.440
+            "overall_score": 99.1,
+            "lateral_error_adj_rmse": 0.067,
+            "accel_p95_filtered": 0.691,
+            "commanded_jerk_p95": 0.624
         },
         "highway_65": {
-            "overall_score": 96.2,
-            "lateral_error_adj_rmse": 0.042,
-            "accel_p95_filtered": 1.084,
-            "commanded_jerk_p95": 1.440
+            "overall_score": 99.5,
+            "lateral_error_adj_rmse": 0.038,
+            "accel_p95_filtered": 0.552,
+            "commanded_jerk_p95": 0.624
         },
         "hairpin_15": {
             "overall_score": 91.6,
@@ -35,10 +35,16 @@
             "commanded_jerk_p95": 1.440
         },
         "mixed_radius": {
-            "overall_score": 91.9,
-            "lateral_error_adj_rmse": 0.214,
-            "accel_p95_filtered": 1.254,
-            "commanded_jerk_p95": 1.440
+            "overall_score": 98.7,
+            "lateral_error_adj_rmse": 0.095,
+            "accel_p95_filtered": 0.633,
+            "commanded_jerk_p95": 0.624
+        },
+        "hill_highway": {
+            "overall_score": 97.6,
+            "lateral_error_adj_rmse": 0.171,
+            "accel_p95_filtered": 0.882,
+            "commanded_jerk_p95": 0.624
         }
     }
 }
