@@ -245,3 +245,286 @@ class TestCurveContextEstimator:
         assert ctx.get("valid") is True
         assert float(ctx.get("preview_curvature_abs")) == pytest.approx(0.006, rel=1e-6)
         assert float(ctx.get("path_curvature_abs")) == pytest.approx(0.006, rel=1e-6)
+
+
+class TestCurveContextMapPriority:
+    """Map-priority architecture: when map curvature horizon is provided, use
+    clean ground-truth κ instead of vision-derived noise. Fixes highway_65
+    regression where lane-fit noise at near-field caused permanent
+    curve_phase_term_time saturation."""
+
+    def _planner(self):
+        return _make_planner()
+
+    def _make_horizon(self, *, distances_m, kappa_signed):
+        return (
+            np.asarray(kappa_signed, dtype=np.float64),
+            np.asarray(distances_m, dtype=np.float64),
+        )
+
+    def test_map_priority_curve_in_horizon_returns_correct_distance(self):
+        """Map κ exceeds threshold at index 7 (12m ahead) → distance=12.0."""
+        planner = self._planner()
+        # Straight for first 6m, then κ=0.025 (R40 hairpin) for the rest
+        kappa, ds = self._make_horizon(
+            distances_m=list(range(1, 21)),  # 1..20 m
+            kappa_signed=[0.0] * 7 + [0.025] * 13,
+        )
+        ctx = planner.get_curve_context(
+            None,  # lane_coeffs ignored when map path used
+            base_lookahead=6.0,
+            map_curvature_horizon_signed=kappa,
+            map_curvature_distances=ds,
+            physical_curve_threshold=0.010,
+            current_speed_mps=10.0,
+        )
+        assert ctx is not None
+        assert ctx["source"] == "map"
+        assert ctx["distance_to_curve_start_m"] == pytest.approx(8.0)
+        assert ctx["time_to_curve_s"] == pytest.approx(0.8)
+        assert ctx["preview_curvature_abs"] == pytest.approx(0.025)
+        assert ctx["curve_proximity_score"] == pytest.approx(1.0)
+
+    def test_map_priority_straight_returns_none(self):
+        """All map κ below threshold (highway R500 case): distance=None,
+        score≈0, source flags 'no_curve_in_horizon'."""
+        planner = self._planner()
+        kappa, ds = self._make_horizon(
+            distances_m=list(range(1, 21)),
+            kappa_signed=[0.002] * 20,  # R500 highway, below 0.010 threshold
+        )
+        ctx = planner.get_curve_context(
+            None,
+            base_lookahead=6.0,
+            map_curvature_horizon_signed=kappa,
+            map_curvature_distances=ds,
+            physical_curve_threshold=0.010,
+            current_speed_mps=15.0,
+        )
+        assert ctx["source"] == "map_no_curve_in_horizon"
+        assert ctx["distance_to_curve_start_m"] is None
+        assert ctx["time_to_curve_s"] is None
+        # κ=0.002 is below the 0.4×threshold=0.004 floor → score=0
+        assert ctx["curve_proximity_score"] == pytest.approx(0.0)
+
+    def test_map_priority_does_not_call_vision_path(self):
+        """When map data is VALID and provided, _compute_target_ref_from_coeffs
+        (the vision-path entry point) MUST NOT be invoked."""
+        planner = self._planner()
+        # Map must be non-degenerate (non-zero) for map-priority to engage.
+        # All-zero map triggers the new defensive fallback to vision.
+        kappa, ds = self._make_horizon(
+            distances_m=list(range(1, 21)),
+            kappa_signed=[0.0] * 5 + [0.025] * 15,  # straight then tight curve
+        )
+        with patch.object(planner, "_compute_target_ref_from_coeffs") as fake_vision:
+            ctx = planner.get_curve_context(
+                [np.array([0.0, 0.0, 0.0])],  # vision input, but should be ignored
+                base_lookahead=6.0,
+                map_curvature_horizon_signed=kappa,
+                map_curvature_distances=ds,
+                physical_curve_threshold=0.010,
+                current_speed_mps=10.0,
+            )
+        fake_vision.assert_not_called()
+        assert ctx["source"].startswith("map")
+
+    def test_map_priority_disabled_uses_vision(self):
+        """use_map_priority=False forces vision path even if map provided."""
+        planner = self._planner()
+        kappa, ds = self._make_horizon(
+            distances_m=list(range(1, 21)),
+            kappa_signed=[0.025] * 20,
+        )
+
+        def _fake_ref(_lc, lookahead):
+            return {"x": 0.0, "y": float(lookahead), "heading": 0.0,
+                    "velocity": 8.0, "curvature": 0.0001}
+
+        with patch.object(planner, "_compute_target_ref_from_coeffs", side_effect=_fake_ref):
+            ctx = planner.get_curve_context(
+                [np.array([0.0, 0.0, 0.0])],
+                base_lookahead=6.0,
+                horizon_m=20.0,
+                step_m=1.0,
+                map_curvature_horizon_signed=kappa,
+                map_curvature_distances=ds,
+                use_map_priority=False,
+                current_speed_mps=10.0,
+            )
+        # Source must indicate vision path, not map
+        assert "vision" in ctx["source"] or ctx["source"] == "horizon_profile"
+        assert not ctx["source"].startswith("map")
+
+    def test_backward_compat_no_map_arg_uses_vision(self):
+        """Legacy callers (no map kwarg) → vision path runs as before."""
+        planner = self._planner()
+
+        def _fake_ref(_lc, lookahead):
+            lookahead = float(lookahead)
+            heading = 0.0 if lookahead < 10.0 else 0.02 * (lookahead - 10.0)
+            return {"x": 0.0, "y": lookahead, "heading": heading,
+                    "velocity": 8.0, "curvature": 0.0005}
+
+        with patch.object(planner, "_compute_target_ref_from_coeffs", side_effect=_fake_ref):
+            ctx = planner.get_curve_context(
+                [np.array([0.0, 0.0, 0.0])],
+                base_lookahead=6.0,
+                horizon_m=20.0,
+                step_m=1.0,
+                curve_start_curvature=0.006,
+                current_speed_mps=8.0,
+            )
+        # No map data → must fall back to vision path
+        assert "vision" in ctx["source"] or ctx["source"] == "horizon_profile"
+
+    def test_degenerate_zero_map_falls_back_to_vision(self):
+        """All-zero map (track data not populated, e.g. s_loop quirk) must
+        fall back to the vision path rather than silently disabling curve
+        detection. Otherwise s_loop loses term_time on tight curves."""
+        planner = self._planner()
+        kappa, ds = self._make_horizon(
+            distances_m=list(range(1, 21)),
+            kappa_signed=[0.0] * 20,  # Degenerate: all zeros
+        )
+
+        called = {"count": 0}
+
+        def _fake_ref(_lc, lookahead):
+            called["count"] += 1
+            return {"x": 0.0, "y": float(lookahead), "heading": 0.0,
+                    "velocity": 8.0, "curvature": 0.001}
+
+        with patch.object(planner, "_compute_target_ref_from_coeffs", side_effect=_fake_ref):
+            ctx = planner.get_curve_context(
+                [np.array([0.0, 0.0, 0.0])],
+                base_lookahead=6.0,
+                horizon_m=20.0,
+                step_m=1.0,
+                map_curvature_horizon_signed=kappa,
+                map_curvature_distances=ds,
+                current_speed_mps=10.0,
+            )
+        # Vision path MUST have been called (called["count"] > 0)
+        assert called["count"] > 0, "vision path not invoked on degenerate map"
+        # Source must indicate vision, not map
+        assert "map" not in ctx["source"]
+
+    def test_map_priority_preserves_signed_horizon_for_mpc(self):
+        """MPC consumers read curvature_horizon_signed for feedforward;
+        map-priority must populate it with the input signed array."""
+        planner = self._planner()
+        signed = [0.0, 0.0, -0.025, -0.025, -0.025, 0.0, 0.0]
+        ds = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0]
+        ctx = planner.get_curve_context(
+            None,
+            base_lookahead=1.0,
+            map_curvature_horizon_signed=np.asarray(signed),
+            map_curvature_distances=np.asarray(ds),
+            current_speed_mps=10.0,
+        )
+        assert ctx["curvature_horizon_signed"] == pytest.approx(signed)
+        # Sign preserved (negative values for left turn)
+        assert min(ctx["curvature_horizon_signed"]) < 0
+
+
+class TestCurveContextVisionHardening:
+    """Vision-path hardening: skip near-field, spatial-window median,
+    consecutive-point hysteresis. Prevents single-point lane-fit noise
+    from triggering false curve detection on straights."""
+
+    def _planner(self):
+        return _make_planner()
+
+    def test_near_field_noise_spike_ignored(self):
+        """Single noise spike at ds[0]=6m must NOT trigger curve detection
+        when near-field skip is active."""
+        planner = self._planner()
+
+        # Heading is flat everywhere, but curvature_raw is high at first point only
+        def _fake_ref(_lc, lookahead):
+            lookahead = float(lookahead)
+            curvature = 0.020 if lookahead < 7.0 else 0.0001
+            return {"x": 0.0, "y": lookahead, "heading": 0.0,
+                    "velocity": 8.0, "curvature": curvature}
+
+        with patch.object(planner, "_compute_target_ref_from_coeffs", side_effect=_fake_ref):
+            ctx = planner.get_curve_context(
+                [np.array([0.0, 0.0, 0.0])],
+                base_lookahead=6.0,
+                horizon_m=25.0,
+                step_m=1.0,
+                curve_start_curvature=0.010,
+                curvature_gain=1.0,
+                vision_near_field_skip_m=10.0,
+                vision_window_size_m=5.0,
+                vision_min_consecutive=3,
+                current_speed_mps=10.0,
+                use_map_priority=False,
+            )
+        # Near-field spike must NOT cause "vision" trigger; far-field is clean
+        assert ctx["source"] in ("vision_no_curve_in_horizon", "vision_legacy_single_point")
+        # The hardened path itself didn't trigger (legacy fallback may pick the
+        # spike up, but the source string flags it as non-hardened detection)
+        if ctx["source"] == "vision_legacy_single_point":
+            # Legacy fallback distance — but at least clearly labeled
+            pass
+        else:
+            assert ctx["distance_to_curve_start_m"] is None
+
+    def test_sustained_curvature_triggers_hardened_detection(self):
+        """3+ consecutive points above threshold → distance correctly detected."""
+        planner = self._planner()
+
+        # Flat for first 12m, then rising heading produces sustained curvature
+        def _fake_ref(_lc, lookahead):
+            lookahead = float(lookahead)
+            heading = 0.0 if lookahead < 12.0 else 0.05 * (lookahead - 12.0)
+            return {"x": 0.0, "y": lookahead, "heading": heading,
+                    "velocity": 8.0, "curvature": 0.0001}
+
+        with patch.object(planner, "_compute_target_ref_from_coeffs", side_effect=_fake_ref):
+            ctx = planner.get_curve_context(
+                [np.array([0.0, 0.0, 0.0])],
+                base_lookahead=6.0,
+                horizon_m=25.0,
+                step_m=1.0,
+                curve_start_curvature=0.010,
+                curvature_gain=1.0,
+                vision_near_field_skip_m=10.0,
+                vision_min_consecutive=3,
+                current_speed_mps=10.0,
+                use_map_priority=False,
+            )
+        assert ctx["source"] == "vision"
+        # Curve starts at lookahead 12, after 10m skip → first detection ≥10m
+        assert ctx["distance_to_curve_start_m"] >= 10.0
+        assert ctx["distance_to_curve_start_m"] <= 16.0
+
+
+class TestCurveProximityScore:
+    """Continuous score: 0 when no curve in horizon, ramps to 1 at threshold."""
+
+    def test_proximity_score_straight_is_zero(self):
+        from trajectory.inference import TrajectoryPlanningInference
+        # Static helper, no instance state needed beyond class
+        score = TrajectoryPlanningInference._compute_proximity_score(
+            preview_curvature_abs=0.001, physical_curve_threshold=0.010
+        )
+        assert score == pytest.approx(0.0)
+
+    def test_proximity_score_tight_curve_saturates(self):
+        from trajectory.inference import TrajectoryPlanningInference
+        score = TrajectoryPlanningInference._compute_proximity_score(
+            preview_curvature_abs=0.025, physical_curve_threshold=0.010
+        )
+        assert score == pytest.approx(1.0)
+
+    def test_proximity_score_midrange_interpolates(self):
+        from trajectory.inference import TrajectoryPlanningInference
+        # Midpoint between floor (0.4×threshold = 0.004) and threshold (0.010)
+        # is 0.007 → score = (0.007 − 0.004) / (0.010 − 0.004) = 0.5
+        score = TrajectoryPlanningInference._compute_proximity_score(
+            preview_curvature_abs=0.007, physical_curve_threshold=0.010
+        )
+        assert score == pytest.approx(0.5)

@@ -2220,6 +2220,17 @@ class AVStack:
         curvature_horizon_distances = None
 
         try:
+            # Map-priority curve detection: pass the pre-computed map curvature
+            # horizon (built earlier in the per-frame logic) so get_curve_context
+            # can use clean ground-truth κ instead of noise-amplified vision.
+            # The fields are populated whether or not map data is valid; the
+            # callee falls back to vision when the array is empty/None.
+            _map_horizon_signed = getattr(
+                self, "_map_curvature_preview_horizon_signed", None
+            )
+            _map_horizon_distances = getattr(
+                self, "_map_curvature_preview_horizon_distances", None
+            )
             if lane_coeffs is not None:
                 curve_context = self.trajectory_planner.get_curve_context(
                     lane_coeffs,
@@ -2246,29 +2257,65 @@ class AVStack:
                         self.trajectory_config.get("curve_context_curvature_gain", 6.0)
                     ),
                     current_speed_mps=float(current_speed_mps),
+                    map_curvature_horizon_signed=_map_horizon_signed,
+                    map_curvature_distances=_map_horizon_distances,
+                    physical_curve_threshold=float(
+                        self.trajectory_config.get(
+                            "curve_context_physical_curve_threshold", 0.010
+                        )
+                    ),
+                    use_map_priority=bool(
+                        self.trajectory_config.get(
+                            "curve_context_use_map_priority", True
+                        )
+                    ),
+                    vision_near_field_skip_m=float(
+                        self.trajectory_config.get(
+                            "curve_context_vision_near_field_skip_m", 10.0
+                        )
+                    ),
+                    vision_window_size_m=float(
+                        self.trajectory_config.get(
+                            "curve_context_vision_window_size_m", 5.0
+                        )
+                    ),
+                    vision_min_consecutive=int(
+                        self.trajectory_config.get(
+                            "curve_context_vision_min_consecutive", 3
+                        )
+                    ),
                 )
                 if isinstance(curve_context, dict) and bool(curve_context.get("valid", False)):
                     preview_curvature_abs = float(
                         curve_context.get("preview_curvature_abs", preview_curvature_abs)
                     )
-                    # path_curvature_abs from get_curve_context has curvature_gain already
-                    # applied (e.g. ×6) for intent sensitivity. Normalise back to physical
-                    # 1/m units so lane_context_curvature_abs stays comparable to the map
-                    # value and the contract divergence check is not inflated by the gain.
-                    _curve_context_gain = max(
-                        1.0,
-                        float(
-                            self.trajectory_config.get("curve_context_curvature_gain", 1.0)
-                        ),
-                    )
-                    path_curvature_abs = (
-                        float(curve_context.get("path_curvature_abs", path_curvature_abs))
-                        / _curve_context_gain
-                    )
+                    _ctx_source = str(curve_context.get("source", "horizon_profile"))
+                    # The vision path applies `curvature_gain` (≈6×) to amplify
+                    # near-field κ for intent sensitivity, so we divide it back
+                    # out here for the lane_context contract value (physical
+                    # units). The map-priority path returns physical κ already
+                    # (no gain), so we pass it through unchanged.
+                    if _ctx_source.startswith("map"):
+                        path_curvature_abs = float(
+                            curve_context.get("path_curvature_abs", path_curvature_abs)
+                        )
+                    else:
+                        _curve_context_gain = max(
+                            1.0,
+                            float(
+                                self.trajectory_config.get(
+                                    "curve_context_curvature_gain", 1.0
+                                )
+                            ),
+                        )
+                        path_curvature_abs = (
+                            float(curve_context.get("path_curvature_abs", path_curvature_abs))
+                            / _curve_context_gain
+                        )
                     distance_to_curve_start_m = curve_context.get("distance_to_curve_start_m")
                     time_to_curve_s = curve_context.get("time_to_curve_s")
                     preview_confidence = float(curve_context.get("confidence", np.nan))
-                    preview_source = str(curve_context.get("source", "horizon_profile"))
+                    preview_source = _ctx_source
                     # MPC curvature preview: signed horizon + distance arrays
                     curvature_horizon_signed = curve_context.get("curvature_horizon_signed")
                     curvature_horizon_distances = curve_context.get("distance_horizon_m")

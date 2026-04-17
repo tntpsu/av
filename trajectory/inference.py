@@ -468,17 +468,85 @@ class TrajectoryPlanningInference:
         curve_start_curvature: float = 0.006,
         curvature_gain: float = 1.0,
         current_speed_mps: Optional[float] = None,
+        # Map-priority architecture (preferred path when map data available):
+        map_curvature_horizon_signed: Optional[np.ndarray] = None,
+        map_curvature_distances: Optional[np.ndarray] = None,
+        physical_curve_threshold: float = 0.010,
+        use_map_priority: bool = True,
+        # Vision-fallback hardening (only used when map unavailable or disabled):
+        vision_near_field_skip_m: float = 10.0,
+        vision_window_size_m: float = 5.0,
+        vision_min_consecutive: int = 3,
     ) -> Optional[Dict[str, Any]]:
         """
-        Estimate map-free upcoming curve context from a sampled lane-curvature horizon.
+        Estimate upcoming curve context for higher-level scheduling.
 
-        Returns a compact contract used by higher-level curve-intent scheduling:
-        - path_curvature_abs: near-field curvature estimate at base lookahead
-        - preview_curvature_abs: horizon peak curvature estimate
-        - distance_to_curve_start_m: first distance where curvature exceeds threshold
-        - time_to_curve_s: distance_to_curve_start / speed when speed is valid
-        - confidence: sample coverage score (0..1)
+        Two execution paths:
+          1. **Map-priority** (preferred): when ``map_curvature_horizon_signed``
+             and ``map_curvature_distances`` are provided and ``use_map_priority``
+             is True, the function uses the clean ground-truth map curvature
+             with a single physics-based threshold (``physical_curve_threshold``,
+             default 0.010 = R100). No gain, no heading-derivative fallback,
+             no noise.
+          2. **Vision fallback** (legacy + hardened): when map is unavailable,
+             derives curvature from lane-fit and heading derivative as before,
+             but with three new noise-rejection steps:
+               (a) skip the near-field where lane-fit noise dominates
+               (b) spatial-window median over a sliding window
+               (c) hysteresis — require N consecutive points above threshold
+
+        Returns a compact contract for ``compute_curve_phase_scheduler``:
+          - path_curvature_abs:        near-field curvature estimate
+          - preview_curvature_abs:     horizon peak curvature estimate
+          - distance_to_curve_start_m: first distance where κ ≥ threshold
+                                        (None when no curve in horizon)
+          - time_to_curve_s:           distance / speed (None when speed invalid)
+          - curve_proximity_score:     continuous [0,1] — how much of the horizon
+                                        is "curve-like" (replaces binary reliance)
+          - source:                    which path produced the result
+                                        ("map" / "map_no_curve_in_horizon" /
+                                         "vision" / "vision_no_curve_in_horizon")
+          - confidence:                sample coverage 0..1
+
+        Backward compatibility: when called with only the legacy kwargs
+        (no map data), behaviour matches the pre-fix vision path with the
+        new hardening applied. Set ``use_map_priority=False`` to force the
+        vision branch even if map data is supplied.
         """
+        # ── Map-priority branch ───────────────────────────────────────────
+        # Validity check: map data must (a) be present, (b) have correct shape,
+        # AND (c) have at least one finite non-zero value. The degenerate all-
+        # zero case occurs when the orchestrator's _track_map_curvature data
+        # isn't populated for the active track (e.g., s_loop track loading
+        # quirk — see project_sloop_nonlooping memory). Trusting an all-zero
+        # signal would silently disable curve detection on tracks where the
+        # vision path was the de-facto source. Defensive: fall back to vision.
+        _map_valid = (
+            use_map_priority
+            and map_curvature_horizon_signed is not None
+            and map_curvature_distances is not None
+            and len(map_curvature_horizon_signed) >= 3
+            and len(map_curvature_distances) == len(map_curvature_horizon_signed)
+        )
+        if _map_valid:
+            _map_arr = np.asarray(map_curvature_horizon_signed, dtype=np.float64)
+            _max_abs = float(np.max(np.abs(_map_arr[np.isfinite(_map_arr)]))) if np.any(np.isfinite(_map_arr)) else 0.0
+            if _max_abs < 1e-4:
+                # Degenerate map — fall through to vision
+                _map_valid = False
+        if _map_valid:
+            return self._curve_context_from_map(
+                map_curvature_horizon_signed=np.asarray(
+                    map_curvature_horizon_signed, dtype=np.float64
+                ),
+                map_curvature_distances=np.asarray(
+                    map_curvature_distances, dtype=np.float64
+                ),
+                physical_curve_threshold=float(physical_curve_threshold),
+                current_speed_mps=current_speed_mps,
+            )
+
+        # ── Vision fallback (legacy + hardened) ───────────────────────────
         if lane_coeffs is None:
             return None
 
@@ -537,11 +605,20 @@ class TrajectoryPlanningInference:
         path_curvature_abs = float(curvature_combined[0])
         preview_curvature_abs = float(np.max(curvature_combined))
 
-        curve_mask = curvature_combined >= start_threshold
-        if np.any(curve_mask):
-            distance_to_curve_start_m: Optional[float] = float(ds[np.argmax(curve_mask)])
-        else:
-            distance_to_curve_start_m = None
+        # Vision-fallback hardening (skip near-field + spatial-window median +
+        # hysteresis). When the new hardened detection finds nothing, fall back
+        # to the original single-point cross to preserve backward compatibility
+        # with consumers that expect an answer (the scheduler is None-safe, but
+        # raising the threshold from 0.006 to 0.010 already filters most noise).
+        distance_to_curve_start_m, _vision_source = self._vision_curve_detection(
+            ds=ds,
+            curvature_combined=curvature_combined,
+            start_threshold=start_threshold,
+            near_field_skip_m=float(vision_near_field_skip_m),
+            window_size_m=float(vision_window_size_m),
+            min_consecutive=int(vision_min_consecutive),
+            step_m=step,
+        )
 
         time_to_curve_s: Optional[float] = None
         if (
@@ -555,13 +632,21 @@ class TrajectoryPlanningInference:
         sample_coverage = float(len(refs) / max(len(lookaheads), 1))
         confidence = max(0.0, min(1.0, sample_coverage))
 
+        # Continuous curve-proximity score (replaces binary reliance for new
+        # consumers; legacy consumers still use distance_to_curve_start_m).
+        curve_proximity_score = self._compute_proximity_score(
+            preview_curvature_abs=preview_curvature_abs,
+            physical_curve_threshold=float(physical_curve_threshold),
+        )
+
         return {
             "valid": True,
-            "source": "horizon_profile",
+            "source": _vision_source,
             "path_curvature_abs": float(path_curvature_abs),
             "preview_curvature_abs": float(preview_curvature_abs),
             "distance_to_curve_start_m": distance_to_curve_start_m,
             "time_to_curve_s": time_to_curve_s,
+            "curve_proximity_score": float(curve_proximity_score),
             "confidence": float(confidence),
             "sample_count": int(len(refs)),
             "sample_coverage": float(sample_coverage),
@@ -573,6 +658,146 @@ class TrajectoryPlanningInference:
             "distance_horizon_m": ds.tolist(),
             "curvature_horizon_signed": curvature_raw_signed.tolist(),
         }
+
+    @staticmethod
+    def _compute_proximity_score(
+        *,
+        preview_curvature_abs: float,
+        physical_curve_threshold: float,
+    ) -> float:
+        """Continuous [0,1] score: 0 when no upcoming curvature, 1 when peak
+        curvature in horizon meets/exceeds the physical threshold. Uses a
+        simple linear ramp from 0.4×threshold (noise floor) to threshold.
+        """
+        thr = max(1e-4, float(physical_curve_threshold))
+        floor = 0.4 * thr
+        peak = max(0.0, float(preview_curvature_abs))
+        if peak <= floor:
+            return 0.0
+        if peak >= thr:
+            return 1.0
+        return float((peak - floor) / (thr - floor))
+
+    def _curve_context_from_map(
+        self,
+        *,
+        map_curvature_horizon_signed: np.ndarray,
+        map_curvature_distances: np.ndarray,
+        physical_curve_threshold: float,
+        current_speed_mps: Optional[float],
+    ) -> Dict[str, Any]:
+        """Map-priority curve detection (cleaner than vision; no noise)."""
+        kappa_signed = np.asarray(map_curvature_horizon_signed, dtype=np.float64)
+        kappa_signed = np.where(np.isfinite(kappa_signed), kappa_signed, 0.0)
+        kappa_abs = np.abs(kappa_signed)
+        ds = np.asarray(map_curvature_distances, dtype=np.float64)
+
+        path_curvature_abs = float(kappa_abs[0]) if len(kappa_abs) > 0 else 0.0
+        preview_curvature_abs = float(np.max(kappa_abs))
+
+        threshold = max(1e-4, float(physical_curve_threshold))
+        tight_mask = kappa_abs >= threshold
+        if np.any(tight_mask):
+            idx = int(np.argmax(tight_mask))
+            distance_to_curve_start_m: Optional[float] = float(ds[idx])
+            source = "map"
+        else:
+            distance_to_curve_start_m = None
+            source = "map_no_curve_in_horizon"
+
+        time_to_curve_s: Optional[float] = None
+        if (
+            distance_to_curve_start_m is not None
+            and isinstance(current_speed_mps, (int, float))
+            and np.isfinite(float(current_speed_mps))
+            and float(current_speed_mps) > 0.3
+        ):
+            time_to_curve_s = float(distance_to_curve_start_m / float(current_speed_mps))
+
+        curve_proximity_score = self._compute_proximity_score(
+            preview_curvature_abs=preview_curvature_abs,
+            physical_curve_threshold=threshold,
+        )
+
+        return {
+            "valid": True,
+            "source": source,
+            "path_curvature_abs": path_curvature_abs,
+            "preview_curvature_abs": preview_curvature_abs,
+            "distance_to_curve_start_m": distance_to_curve_start_m,
+            "time_to_curve_s": time_to_curve_s,
+            "curve_proximity_score": float(curve_proximity_score),
+            "confidence": 1.0,  # map data is ground-truth
+            "sample_count": int(len(kappa_abs)),
+            "sample_coverage": 1.0,
+            "horizon_start_m": float(ds[0]) if len(ds) > 0 else 0.0,
+            "horizon_end_m": float(ds[-1]) if len(ds) > 0 else 0.0,
+            "horizon_step_m": float(ds[1] - ds[0]) if len(ds) > 1 else 1.0,
+            "curvature_horizon": kappa_abs.tolist(),
+            "distance_horizon_m": ds.tolist(),
+            "curvature_horizon_signed": kappa_signed.tolist(),
+        }
+
+    @staticmethod
+    def _vision_curve_detection(
+        *,
+        ds: np.ndarray,
+        curvature_combined: np.ndarray,
+        start_threshold: float,
+        near_field_skip_m: float,
+        window_size_m: float,
+        min_consecutive: int,
+        step_m: float,
+    ) -> tuple:
+        """Hardened vision detection: skip near-field, window-median, hysteresis.
+
+        Returns (distance_to_curve_start_m, source).
+        Falls back to the legacy single-point cross when the hardened path
+        finds nothing — preserves the existing behaviour for tracks that
+        legitimately exit the horizon below the threshold.
+        """
+        if len(ds) < 3:
+            return None, "vision_no_curve_in_horizon"
+
+        # 1) Skip near-field where lane-fit noise dominates
+        skip_idx = int(np.searchsorted(ds, max(0.0, float(near_field_skip_m))))
+        skip_idx = max(0, min(skip_idx, len(ds) - 3))
+        ds_far = ds[skip_idx:]
+        kappa_far = curvature_combined[skip_idx:]
+
+        # 2) Spatial-window median to reject single-point spikes
+        win = max(1, int(round(float(window_size_m) / max(1e-3, float(step_m)))))
+        win = min(win, max(1, len(kappa_far)))
+        if win > 1:
+            # Rolling median via a manually padded view (no SciPy dependency)
+            pad = win // 2
+            padded = np.concatenate([
+                np.full(pad, kappa_far[0]),
+                kappa_far,
+                np.full(win - pad - 1, kappa_far[-1]),
+            ])
+            kappa_smoothed = np.array(
+                [np.median(padded[i:i + win]) for i in range(len(kappa_far))]
+            )
+        else:
+            kappa_smoothed = kappa_far
+
+        # 3) Hysteresis — require N consecutive points above threshold
+        n_consec = max(1, int(min_consecutive))
+        for i in range(len(kappa_smoothed) - n_consec + 1):
+            if np.all(kappa_smoothed[i:i + n_consec] >= start_threshold):
+                return float(ds_far[i]), "vision"
+
+        # Legacy fallback: any single-point cross of original signal
+        # (preserves prior behaviour at locations where the hardened path
+        # legitimately found nothing — typically tracks with very short
+        # curve segments in the horizon)
+        legacy_mask = curvature_combined >= start_threshold
+        if np.any(legacy_mask):
+            # Mark as "vision" but with weaker confidence via source string
+            return float(ds[int(np.argmax(legacy_mask))]), "vision_legacy_single_point"
+
+        return None, "vision_no_curve_in_horizon"
     
     def plan(self, lane_coeffs: List[Optional[np.ndarray]], 
              vehicle_state: Optional[Dict] = None) -> Trajectory:

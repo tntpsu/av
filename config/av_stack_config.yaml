@@ -526,8 +526,18 @@ trajectory:
   curve_phase_rearm_hold_frames: 4
   curve_context_preview_horizon_m: 25.0
   curve_context_preview_step_m: 1.0
-  curve_context_curve_start_curvature: 0.006
-  curve_context_curvature_gain: 6.0
+  curve_context_curve_start_curvature: 0.006   # vision-fallback only (deprecated when use_map_priority=true)
+  curve_context_curvature_gain: 6.0            # vision-fallback only (deprecated when use_map_priority=true)
+  # Map-priority curve detection (architectural fix for highway_65 regression):
+  # On tracks with map data, use map curvature (clean ground truth) instead of
+  # vision-derived gain×max(raw, heading) which produces noise-amplified false
+  # triggers on highway straights (curvature_combined ≥ 0.006 from lane noise).
+  curve_context_use_map_priority: true                # master switch; false = legacy vision-only
+  curve_context_physical_curve_threshold: 0.010       # κ ≥ R100 = "tight enough to need controller prep"
+  # Vision fallback hardening (only used when map unavailable OR use_map_priority=false)
+  curve_context_vision_near_field_skip_m: 10.0        # skip first N m of horizon (lane-fit noise dominates)
+  curve_context_vision_window_size_m: 5.0             # spatial window for median aggregation
+  curve_context_vision_min_consecutive: 3             # hysteresis — require N consecutive points > threshold
   reference_lookahead_slew_rate_m_per_frame: 0.25
   reference_lookahead_slew_rate_shorten_m_per_frame: 0.0  # disabled: unified contraction rate
   reference_lookahead_slew_rate_lengthen_m_per_frame: 0.2
