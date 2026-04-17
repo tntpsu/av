@@ -202,5 +202,23 @@
     "prevention": "Architecture review against industry standard (Waymo/Apollo velocity profiling) before building reactive chain. Physics-first design rule: if the quantity is a spatial function, don't collapse it to a scalar.",
     "detection_method": "Architecture analysis \u2014 hairpin failure cascade traced to scalar collapse of spatial curvature function. Calibration data (3298 curve frames) used to derive a_lat_tracking_budget_g=0.05.",
     "detection_delay_iterations": 2
+  },
+  {
+    "date": "2026-04-17",
+    "commit_summary": "Revert mpc_q_lat base 2.0\u21921.0 \u2014 undocumented tuning bundled in 41148f3 caused highway_65 59.0 regression",
+    "issue": "Undocumented 2\u00d7 doubling of MPC lateral weight (mpc_q_lat base 1.0\u21922.0) was bundled into commit 41148f3 (named '\u03bav\u00b2 safety fade') and mirrored in 6dbdacc's _MPC_WEIGHT_AUTO_DERIVE_PARAMS. Caused MPC oversteer (command/actual 4.7\u00d7) and oscillation runaway (0.008\u21921.114m) on mild highway curves. Commit explicitly said 'E2E validation DEFERRED'; only unit tests run before merge.",
+    "deduction_eliminated": "+82.5 points total across 4 tracks: highway_65 +40.5 (59.0\u219299.5), hill_highway +38.6 (59.0\u219297.6), s_loop +2.3, mixed_radius +1.1",
+    "tracks_affected": [
+      "highway_65",
+      "hill_highway",
+      "mixed_radius",
+      "s_loop"
+    ],
+    "root_cause": "Feature commit 41148f3 bundled an unrelated 2-line tuning change (mpc_q_lat base 1.0\u21922.0, max cap 4.0\u21922.5) with the \u03bav\u00b2 safety fade feature. The commit message did not mention the tuning change, had a misleading inline comment 'base=2.0 validated' (only unit-test validated), and explicitly deferred E2E validation. No gate prevented the merge.",
+    "process_stage": "testing",
+    "process_sub": "testing/missing-coverage",
+    "prevention": "Add a pre-merge rule: any diff touching _MPC_WEIGHT_AUTO_DERIVE_PARAMS or config/av_stack_config.yaml tuning keys requires an E2E validation record (minimum 60s run on highway_65 + one curve-heavy track). Also consider a pre-commit hook that detects numeric constant changes in tuning files and requires explicit --e2e-validated flag in the commit message.",
+    "detection_method": "/iterate skill \u2014 bisect via /e2e at intermediate commits (3 runs), then git diff inspection revealed bundled q_lat change; scope-creep guard 8e caught attempted revert as too large, forcing targeted tuning-only fix",
+    "detection_delay_iterations": 1
   }
 ]
