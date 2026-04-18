@@ -1,7 +1,43 @@
 # AV Stack — Agent Memory: Current State
 
-**Last updated:** 2026-04-18
-**Current milestone:** S2-M1 — 4 of 5 tracks meeting all-layers-≥95 goal. Hairpin_15 at 95.7 (overall passes, Control layer 80 — residual jerk-measurement issue documented as T-JERK-MEAS for future session).
+**Last updated:** 2026-04-18 (evening)
+**Current milestone:** S2-M1 — **5 of 5 tracks meeting all-layers-≥95 goal.** Hairpin_15 98.7/100 (Control 100) after PP recovery term landed. T-JERK-MEAS resolved.
+
+### Session 2026-04-18 (evening) — PP recovery term landed; hairpin_15 all-layers-≥95 achieved
+
+**Goal:** Execute `/plan-feature` plan at `.claude/plans/greedy-swimming-naur.md` — replace orchestrator post-limiter steering multiplier with a continuous upstream lateral-error correction term.
+
+**What shipped:**
+1. **Config (Phase A):** 7 new keys under `pp_controller:` — `pp_recovery_term_enabled`, `_shadow_mode`, `_e_lat_lo_m`, `_e_lat_hi_m`, `_beta`, `_lpf_tau_s`, `_signal_use_at_car`. Safety block `max_lateral_error`/`recovery_lateral_error` retained unchanged (comment notes they're DEPRECATED for steering authority; throttle reduction still uses `recovery_lateral_error`).
+2. **Algorithm (Phase B, `control/pid_controller.py:2618`):** Continuous smoothstep(|e_lat_eff|, lo=1.0, hi=2.0) × beta × |steering_before_limits| × sign(e_lat), 1st-order LPF (τ=0.20s) on term output. Injected upstream of rate/jerk limiters. `e_lat_eff = max(|lookahead|, |gt_at_car|)` for robustness to R15 signal disagreement. Term = 0 below 1.0 m (silent on 4 validated tracks), smoothly ramps through 1.0–2.0 m, full gain above 2.0 m.
+3. **Orchestrator (Phase C1, `av_stack/orchestrator.py:9420-9443`):** DELETED HARD LIMIT (1.5×) and RECOVERY (1.2×) steering multiplier branches. Retained throttle reductions (0.5×/0.8×) and emergency-stop branch. MPC-suppression flags retained for telemetry continuity.
+4. **HDF5 telemetry (Phase C2+C3):** 4 new `control/*` fields added via 6-location pattern — `lateral_error_recovery_term_applied_rad` (f32), `_smoothstep_weight` (f32), `_e_lat_source` (S16), `_shadow_mode` (i8).
+5. **Tests (Phase F):** 12 unit tests in `tests/test_pp_recovery_term.py` + 4 orchestrator integration tests in `tests/test_orchestrator_recovery_mode.py` — all pass.
+6. **Diagnostics (Phase E):** `issue_detector.py` (`recovery_term_saturated` + `_thrashing`), `triage_engine.py` (`recovery_signal_disagreement` pattern), `layer_health.py` (per-frame flags), `analyze_drive_overall.py` (§27 Recovery Term Activity section), PhilViz frame inspector (4 new fields).
+
+**Validation (Phase G):**
+
+| Track | Baseline | Active-mode | Δ | Control | Jerk max |
+|---|---|---|---|---|---|
+| hairpin_15 (primary) | 91.6 (79 live) | **98.7** | **+7.1** | 80 → **100** | 30.08 → **18.0** |
+| highway_65 | 99.5 | 99.5 | 0.0 | 100 | — |
+| s_loop | 99.1 | 99.1 | 0.0 | 100 | — |
+| mixed_radius | 98.7 | 98.6 | -0.1 | 100 | — |
+| hill_highway | 97.6 | 97.7 | +0.1 | 100 | — |
+
+All non-hairpin tracks within frozen tolerances; no re-baselining needed. §27 recovery-term telemetry on hairpin: active 18.4% frames, 100% `at_car` source (confirms the signal-disagreement sub-question — the `recovery_signal_disagreement` triage pattern was designed precisely for this regime), 0 saturation events.
+
+**Baselines re-frozen (Phase G3):**
+- `tests/fixtures/scoring_baselines.json` — hairpin_15: 91.6 → 98.7 (adj_rmse 0.220 → 0.097, accel_p95 1.167 → 0.702, cj 1.440 → 0.624)
+- `tests/conftest.py` BASELINE_SCORES + SCORE_TOLERANCES (hairpin tightened 3.0 → 2.0, Stanley variance no longer present)
+- `tests/fixtures/golden_recordings.json` — hairpin_15 golden → `recording_20260418_185440.h5`
+- 57/57 scoring+comfort tests PASS
+
+**Memory updates:**
+- NEW: `project_pp_recovery_term.md` — architecture, gain calibration, cross-track results, signal-source stats
+- SUPERSEDED: `project_recovery_mode_post_limiter.md` — retained as historical evidence, header updated to `[RESOLVED 2026-04-18]`
+- MEMORY.md index updated
+- `docs/agent/tasks.md` — T-JERK-MEAS marked `✅ Resolved (2026-04-18)`
 
 ### Session 2026-04-18 — Hairpin Iteration 2 Partial Close
 
@@ -18,6 +54,40 @@
 - Limiter flag `pp_steering_jerk_limited` is 0 on those peak frames (limiter did not fire)
 - Hypothesis: interframe_extrapolation (enabled at config:7) runs control at ~30 Hz between camera frames (~11 Hz on hairpin); jerk limiter operates on per-control-step dt, but analyzer computes jerk across Unity camera frames. Multi-update aggregation across camera intervals can produce measured jerk > limiter's per-step guarantee.
 - This is NOT a simple tuning change. Proper fix is in a different subsystem than all the candidates explored this session (rate-limit cascade, jerk-limit config value).
+
+### Session 2026-04-18 (afternoon) — T-JERK-MEAS root cause CORRECTED; /plan-feature initiated
+
+Iteration 3 on hairpin_15 (Option A: instrument-then-decide). HDF5 diagnostic pass against `recording_20260418_105316.h5` (1288 frames) refuted the prior interframe hypothesis and pinned the real culprit.
+
+**Refutation of the interframe hypothesis:**
+- `interframe_active=0` at every one of the 11 analyzer-measured jerk outliers.
+- `interframe_updates_this_cycle=0` at every outlier.
+- `interframe_active>0` on only 6/1288 frames (0.5%) overall — cannot explain a repeated failure mode.
+
+**True root cause identified:**
+- `av_stack/orchestrator.py:9420-9443` RECOVERY MODE multiplies `control_command['steering']` by 1.2× *after* the jerk limiter when `lateral_error_abs > recovery_lateral_error` (1.0 m, `config/av_stack_config.yaml:996`).
+- On hairpin, 249/767 frames (32%) have `steering / steering_post_jerk_limit ≈ 1.2` exactly — the multiplier is constantly toggling.
+- 9/11 analyzer-measured jerk outliers fall inside the 1.2×-active set. At those frames, `steering_jerk_limit_requested_rate_delta=0` — the per-step limiter chain didn't run because the final steering value is written *downstream* of its output.
+- Perfect correlation: `ground_truth/ego_lane_cross_track_road_frame_at_car > 1.0 m` at 100% of recovery-active frames, vs 0.10% of non-active frames.
+
+**Signal disagreement (open sub-question for the plan):**
+- Analyzer RMSE=0.162 m, P95=0.333 m, time-in-lane=100%, centeredness=99.1%.
+- `control/lateral_error` (PP lookahead) ≤ 0.35 m.
+- `mpc_gt_cross_track_lookahead_m` ≤ 0.004 m.
+- `ground_truth/ego_lane_cross_track_road_frame_at_car` = 1.0–1.3 m on 32% of hairpin frames.
+- One signal has an R15-specific bias or projection issue; the plan-feature investigation must reconcile this before committing to a fix mechanism.
+
+**Design smells:**
+- Smell 1 (binary gate on continuous signal): `lateral_error > 1.0` → on/off 1.2×.
+- Smell 5 (post-hoc clamp): multiplier applied after all limiters, so rate/jerk/output limiters cannot see or smooth the discontinuity.
+
+**Fix path chosen: E — ARCHITECTURE via `/plan-feature`**
+Replace post-limiter multiplier with a unified lateral-error correction term that feeds INTO the control pipeline through the existing limiters. Addresses both smells together. Cross-track implications: the same code path governs all tracks; plan must sample s_loop / mixed_radius for similar false triggers.
+
+**Memory updates:**
+- NEW: `project_recovery_mode_post_limiter.md` — confirmed root cause, evidence, don't-do list, code refs.
+- SUPERSEDED: `project_interframe_jerk_measurement_gap.md` — refuted hypothesis preserved as a process lesson (the single HDF5 query that would have refuted it was not run in the prior session).
+- `MEMORY.md` index updated.
 
 **Process lessons captured:**
 - `feedback_bundled_tuning_in_feature_commits.md` — scan feature commits for unrelated numeric constant changes

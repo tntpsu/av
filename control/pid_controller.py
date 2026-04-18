@@ -252,6 +252,14 @@ class LateralController:
                  pp_map_ff_entry_boost: float = 1.0,
                  pp_map_ff_entry_boost_kappa_ref: float = 0.025,
                  pp_map_ff_entry_boost_kappa_max: float = 0.045,
+                 # Lateral-error recovery term (replaces orchestrator post-limiter multiplier)
+                 pp_recovery_term_enabled: bool = False,
+                 pp_recovery_term_shadow_mode: bool = True,
+                 pp_recovery_e_lat_lo_m: float = 1.0,
+                 pp_recovery_e_lat_hi_m: float = 2.0,
+                 pp_recovery_term_beta: float = 0.5,
+                 pp_recovery_term_lpf_tau_s: float = 0.20,
+                 pp_recovery_signal_use_at_car: bool = True,
                  pp_ref_jump_clamp: float = 0.5,
                  pp_stale_decay: float = 0.98,
                  pp_max_steering_rate: float = 0.4,
@@ -526,6 +534,18 @@ class LateralController:
             self.pp_map_ff_entry_boost_kappa_ref + 0.001,
             float(pp_map_ff_entry_boost_kappa_max),
         )
+        # Lateral-error recovery term (replaces orchestrator post-limiter multiplier)
+        self.pp_recovery_term_enabled = bool(pp_recovery_term_enabled)
+        self.pp_recovery_term_shadow_mode = bool(pp_recovery_term_shadow_mode)
+        self.pp_recovery_e_lat_lo_m = max(0.0, float(pp_recovery_e_lat_lo_m))
+        self.pp_recovery_e_lat_hi_m = max(
+            self.pp_recovery_e_lat_lo_m + 1e-3,
+            float(pp_recovery_e_lat_hi_m),
+        )
+        self.pp_recovery_term_beta = max(0.0, float(pp_recovery_term_beta))
+        self.pp_recovery_term_lpf_tau_s = max(0.0, float(pp_recovery_term_lpf_tau_s))
+        self.pp_recovery_signal_use_at_car = bool(pp_recovery_signal_use_at_car)
+        self._recovery_term_last: float = 0.0  # LPF state for recovery term
         self.pp_ref_jump_clamp = max(0.1, float(pp_ref_jump_clamp))
         self.pp_stale_decay = float(np.clip(pp_stale_decay, 0.5, 1.0))
         self.pp_max_steering_rate = max(0.05, float(pp_max_steering_rate))
@@ -2616,6 +2636,63 @@ class LateralController:
                     )
                 steering_before_limits = float(steering_before_limits) + _pp_map_ff_applied
 
+            # ───────────────────────────────────────────────────────────────────
+            # Lateral-error recovery term (replaces orchestrator post-limiter 1.2×/1.5× multiplier).
+            # Continuous in |e_lat| (no binary gate), proportional to |steering_before_limits|,
+            # injected UPSTREAM of the rate/jerk limiters so actuator safety is preserved
+            # and any smoothstep transient is absorbed by the limiter chain.
+            # Design ref: project_recovery_mode_post_limiter.md, /plan-feature 2026-04-18.
+            # ───────────────────────────────────────────────────────────────────
+            recovery_term_applied_rad = 0.0
+            recovery_smoothstep_weight = 0.0
+            recovery_e_lat_source = 'none'
+            if self.pp_recovery_term_enabled:
+                e_lat_lookahead_abs = abs(float(lateral_error_for_control))
+                e_lat_at_car_abs = 0.0
+                if self.pp_recovery_signal_use_at_car:
+                    _at_car = reference_point.get('gt_cross_track_road_frame_at_car_m')
+                    if _at_car is not None:
+                        try:
+                            e_lat_at_car_abs = abs(float(_at_car))
+                        except (TypeError, ValueError):
+                            e_lat_at_car_abs = 0.0
+                e_lat_effective = max(e_lat_lookahead_abs, e_lat_at_car_abs)
+                recovery_e_lat_source = (
+                    'at_car' if e_lat_at_car_abs > e_lat_lookahead_abs else 'lookahead'
+                )
+                # Smoothstep from lo (term=0) to hi (term=full). Linear ramp here —
+                # cubic smoothstep is unnecessary; the LPF below owns smoothness.
+                _denom = max(1e-6, self.pp_recovery_e_lat_hi_m - self.pp_recovery_e_lat_lo_m)
+                recovery_smoothstep_weight = float(np.clip(
+                    (e_lat_effective - self.pp_recovery_e_lat_lo_m) / _denom,
+                    0.0, 1.0,
+                ))
+                # Proportional to current steering magnitude — matches current multiplier
+                # semantics (1.5× = +0.5 × |steering|). Signed by the error so the push
+                # is always toward lane center.
+                _sign = 1.0 if float(lateral_error_for_control) >= 0.0 else -1.0
+                recovery_term_raw = (
+                    self.pp_recovery_term_beta
+                    * recovery_smoothstep_weight
+                    * abs(float(steering_before_limits))
+                    * _sign
+                )
+                # 1st-order LPF on the term output itself (not on e_lat) so abrupt
+                # smoothstep transitions on geometry discontinuities don't inject a
+                # step the downstream limiters must absorb. The term owns smoothness;
+                # the limiters own actuator safety.
+                if dt and dt > 0.0 and self.pp_recovery_term_lpf_tau_s > 0.0:
+                    _alpha = dt / (self.pp_recovery_term_lpf_tau_s + dt)
+                    self._recovery_term_last = (
+                        (1.0 - _alpha) * float(self._recovery_term_last)
+                        + _alpha * recovery_term_raw
+                    )
+                else:
+                    self._recovery_term_last = float(recovery_term_raw)
+                recovery_term_applied_rad = float(self._recovery_term_last)
+                if not self.pp_recovery_term_shadow_mode:
+                    steering_before_limits = float(steering_before_limits) + recovery_term_applied_rad
+
             rate_in = steering_before_limits
             steering_rate_limit_requested_delta = abs(steering_before_limits - self.last_steering)
 
@@ -3774,6 +3851,11 @@ class LateralController:
                 'pp_stale_hold_active': float(pp_stale_hold_active),
                 'pp_speed_norm_scale': float(_pp_speed_norm_scale),
                 'pp_map_ff_applied': float(_pp_map_ff_applied),
+                # Lateral-error recovery term telemetry (see project_recovery_mode_post_limiter.md)
+                'lateral_error_recovery_term_applied_rad': float(recovery_term_applied_rad) if pp_pipeline_bypass_active else 0.0,
+                'lateral_error_recovery_smoothstep_weight': float(recovery_smoothstep_weight) if pp_pipeline_bypass_active else 0.0,
+                'lateral_error_recovery_e_lat_source': str(recovery_e_lat_source) if pp_pipeline_bypass_active else 'none',
+                'lateral_error_recovery_shadow_mode': int(bool(self.pp_recovery_term_shadow_mode)) if pp_pipeline_bypass_active else 0,
                 'pp_steering_jerk_limited': float(pp_steering_jerk_limited) if pp_pipeline_bypass_active else 0.0,
                 'pp_effective_steering_rate': float(self._pp_last_steering_rate) if pp_pipeline_bypass_active else 0.0,
                 'pp_profile_reversal_urgency': float(_profile_urgency) if pp_pipeline_bypass_active else 0.0,
@@ -4283,6 +4365,9 @@ class LateralController:
         self._last_lateral_error_smoothing_alpha_effective = float(
             self.base_error_smoothing_alpha
         )
+        # Zero the recovery-term LPF state so the e-stop latch release starts
+        # from zero (avoids injecting a stale term into the post-reset frame).
+        self._recovery_term_last = 0.0
 
     def compute_stanley_from_errors(
         self,
@@ -5477,6 +5562,13 @@ class VehicleController:
                  pp_map_ff_entry_boost: float = 1.0,
                  pp_map_ff_entry_boost_kappa_ref: float = 0.025,
                  pp_map_ff_entry_boost_kappa_max: float = 0.045,
+                 pp_recovery_term_enabled: bool = False,
+                 pp_recovery_term_shadow_mode: bool = True,
+                 pp_recovery_e_lat_lo_m: float = 1.0,
+                 pp_recovery_e_lat_hi_m: float = 2.0,
+                 pp_recovery_term_beta: float = 0.5,
+                 pp_recovery_term_lpf_tau_s: float = 0.20,
+                 pp_recovery_signal_use_at_car: bool = True,
                  pp_ref_jump_clamp: float = 0.5,
                  pp_stale_decay: float = 0.98,
                  pp_max_steering_rate: float = 0.4,
@@ -5734,6 +5826,13 @@ class VehicleController:
             pp_map_ff_entry_boost=pp_map_ff_entry_boost,
             pp_map_ff_entry_boost_kappa_ref=pp_map_ff_entry_boost_kappa_ref,
             pp_map_ff_entry_boost_kappa_max=pp_map_ff_entry_boost_kappa_max,
+            pp_recovery_term_enabled=pp_recovery_term_enabled,
+            pp_recovery_term_shadow_mode=pp_recovery_term_shadow_mode,
+            pp_recovery_e_lat_lo_m=pp_recovery_e_lat_lo_m,
+            pp_recovery_e_lat_hi_m=pp_recovery_e_lat_hi_m,
+            pp_recovery_term_beta=pp_recovery_term_beta,
+            pp_recovery_term_lpf_tau_s=pp_recovery_term_lpf_tau_s,
+            pp_recovery_signal_use_at_car=pp_recovery_signal_use_at_car,
             pp_ref_jump_clamp=pp_ref_jump_clamp,
             pp_stale_decay=pp_stale_decay,
             pp_max_steering_rate=pp_max_steering_rate,

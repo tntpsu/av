@@ -4046,6 +4046,87 @@ def detect_issues(recording_path: Path, analyze_to_failure: bool = False) -> Dic
                             "max_deficit_mps": max_deficit,
                         })
 
+            # === Lateral-error recovery term diagnostics ===
+            # Design ref: project_recovery_mode_post_limiter.md
+            # Two failure modes on the proportional recovery term:
+            #  (1) saturation  — smoothstep_weight == 1.0 for >=3 frames means
+            #      the car is in true off-road territory (|e_lat| > hi threshold).
+            #      This is a safety signal, not a controller bug, but worth
+            #      surfacing so operators know the healing mechanism is pinned.
+            #  (2) thrashing   — weight crosses {0,1} boundaries >=4 times/sec
+            #      indicates input signal is pathologically noisy or LPF tau is
+            #      too short. If this fires, the LPF isn't absorbing transients.
+            if "control/lateral_error_recovery_smoothstep_weight" in f:
+                try:
+                    weight_arr = np.array(
+                        f["control/lateral_error_recovery_smoothstep_weight"][:num_frames],
+                        dtype=np.float64,
+                    )
+                    # Saturation runs
+                    saturated_mask = weight_arr >= 0.999
+                    run_start = None
+                    for i, sat in enumerate(saturated_mask):
+                        if sat and run_start is None:
+                            run_start = i
+                        elif not sat and run_start is not None:
+                            run_len = i - run_start
+                            if run_len >= 3:
+                                issues.append({
+                                    "frame": int(run_start),
+                                    "end_frame": int(i - 1),
+                                    "type": "recovery_term_saturated",
+                                    "severity": "high" if run_len >= 10 else "medium",
+                                    "description": (
+                                        f"Recovery term saturated (weight=1.0) for {run_len} frames "
+                                        f"— |e_lat| exceeds hi threshold. Car is in off-road regime; "
+                                        f"upstream planner/safety should intervene."
+                                    ),
+                                    "duration": int(run_len),
+                                })
+                            run_start = None
+                    if run_start is not None:
+                        run_len = len(saturated_mask) - run_start
+                        if run_len >= 3:
+                            issues.append({
+                                "frame": int(run_start),
+                                "end_frame": int(len(saturated_mask) - 1),
+                                "type": "recovery_term_saturated",
+                                "severity": "high" if run_len >= 10 else "medium",
+                                "description": (
+                                    f"Recovery term saturated (weight=1.0) for {run_len} frames "
+                                    f"— |e_lat| exceeds hi threshold."
+                                ),
+                                "duration": int(run_len),
+                            })
+
+                    # Thrashing: count boundary crossings of {0, 1} in 1-sec windows
+                    active_mask = weight_arr > 0.01
+                    # transitions 0<->nonzero and saturated<->not
+                    low_edge = np.diff(active_mask.astype(np.int8))
+                    # Assume ~30 Hz; 1-sec = 30 frames
+                    win = 30
+                    if len(low_edge) >= win:
+                        # Count |edges| in a sliding sum of length win
+                        abs_edges = np.abs(low_edge)
+                        window_counts = np.convolve(abs_edges, np.ones(win, dtype=np.int32), mode="valid")
+                        thrash_idxs = np.where(window_counts >= 4)[0]
+                        if len(thrash_idxs) > 0:
+                            issues.append({
+                                "frame": int(thrash_idxs[0]),
+                                "end_frame": int(thrash_idxs[-1] + win),
+                                "type": "recovery_term_thrashing",
+                                "severity": "medium",
+                                "description": (
+                                    f"Recovery term weight thrashing: >=4 boundary crossings "
+                                    f"in a 1-second window (starts at frame {int(thrash_idxs[0])}). "
+                                    f"LPF tau may be too short, or e_lat signal is pathologically noisy."
+                                ),
+                                "duration": int(len(thrash_idxs)),
+                            })
+                except Exception:
+                    # Dataset present but unreadable — don't crash the whole detector.
+                    pass
+
             # Sort issues by frame number
             issues.sort(key=lambda x: x["frame"])
             for idx, issue in enumerate(issues):

@@ -45,10 +45,11 @@ COMFORT_GATES: dict[str, float] = _REGISTRY_COMFORT_GATES
 # Baseline scores — curvature-adjusted scoring (2026-03-15).
 # hairpin_15 replaced with Stanley k=3.0 golden (was PP 79.0).
 # 2026-04-17: re-baselined after q_lat=1.0 revert (commit 535724d) for 4 tracks.
+# 2026-04-18: hairpin_15 re-baselined after PP recovery term landed (replaces orchestrator post-limiter multiplier).
 BASELINE_SCORES: dict[str, float] = {
     "s_loop":           99.1,   # 2026-04-17 post q_lat=1.0 revert (was 96.7)
     "highway_65":       99.5,   # 2026-04-17 post q_lat=1.0 revert (was 96.2)
-    "hairpin_15":       91.6,   # Stanley k=3.0. NOT re-baselined — current live 79.0, pending hairpin iteration.
+    "hairpin_15":       98.7,   # 2026-04-18 PP recovery term landed (was 91.6 Stanley, 79.0 live PP)
     "sweeping_highway": 91.4,   # NOT re-baselined — no fresh run this cycle.
     "mixed_radius":     98.7,   # 2026-04-17 post q_lat=1.0 revert (was 91.9)
     "hill_highway":     97.6,   # 2026-04-17 first registration (apex cutting residual keeps Trajectory at 91.5)
@@ -58,7 +59,7 @@ BASELINE_SCORES: dict[str, float] = {
 SCORE_TOLERANCES: dict[str, float] = {
     "s_loop":           2.0,
     "highway_65":       2.0,
-    "hairpin_15":       3.0,   # Stanley k=3.0 is consistent (91.5-91.6 across 3 runs)
+    "hairpin_15":       2.0,   # 2026-04-18: PP recovery term is deterministic; tightened from 3.0 (Stanley era)
     "sweeping_highway": 3.0,   # modest variance from bias estimator convergence timing
     "mixed_radius":     3.0,   # PP↔MPC hybrid; MPC-active runs within 0.3pts
     "hill_highway":     3.0,   # new registration — conservative tolerance until multi-session stability data

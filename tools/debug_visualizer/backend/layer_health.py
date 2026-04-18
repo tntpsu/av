@@ -254,6 +254,20 @@ class LayerHealthAnalyzer:
             if if_active > 0.5:
                 flags.append("interframe_active")
 
+        # Lateral-error recovery term active (informational — no score penalty).
+        # The term is a healing mechanism that fires when |e_lat| > lo threshold;
+        # its presence is not a failure mode, it's the system smoothly pushing
+        # back toward the lane. Flag surfaces the activity to inspectors.
+        # See project_recovery_mode_post_limiter.md.
+        if "control/lateral_error_recovery_smoothstep_weight" in f:
+            rec_w = self._scalar(
+                f, "control/lateral_error_recovery_smoothstep_weight", i, default=0.0
+            )
+            if rec_w > 0.01:
+                flags.append("recovery_term_active")
+            if rec_w >= 0.999:
+                flags.append("recovery_term_saturated")
+
         # Grade compensation flag (informational — no score penalty)
         if "vehicle/road_grade" in f:
             road_grade_val = abs(self._scalar(f, "vehicle/road_grade", i, default=0.0))

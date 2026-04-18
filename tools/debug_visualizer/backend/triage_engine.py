@@ -195,6 +195,24 @@ PATTERNS = [
         "check": lambda m: m.get("osc_slope", -1) > 0.0,
     },
     {
+        "id": "recovery_signal_disagreement",
+        "name": "Recovery term driven by at-car despite low lateral RMSE",
+        "severity": "instability",
+        "code_pointer": "control/pid_controller.py:LateralController — recovery term block (~line 2640)",
+        "config_lever": "pp_recovery_signal_use_at_car / lookahead projection in trajectory/inference.py",
+        "fix_hint": (
+            "Recovery term is firing off GT at-car on >20% of active frames while "
+            "analyzer lateral RMSE is <0.5m — a classic R15-hairpin signal-disagreement "
+            "regime. Investigate the lookahead-vs-at-car projection (not controller tuning): "
+            "on tight curves, PP lookahead (≤0.35m) and GT at-car (1.0–1.3m) diverge "
+            "geometrically and the controller sees them differently than the analyzer."
+        ),
+        "check": lambda m: (
+            m.get("recovery_at_car_source_rate", 0.0) > 0.20
+            and m.get("lateral_rmse_m", 1.0) < 0.5
+        ),
+    },
+    {
         "id": "traj_curvature_error",
         "name": "Curvature measurement outliers (>2% frames)",
         "severity": "comfort",
@@ -1069,6 +1087,7 @@ class TriageEngine:
             if lat_err is not None:
                 abs_err = np.abs(lat_err)
                 m["lateral_p95"] = float(np.percentile(abs_err, 95))
+                m["lateral_rmse_m"] = float(np.sqrt(np.mean(lat_err ** 2)))
                 x = np.arange(len(abs_err))
                 m["osc_slope"] = float(np.polyfit(x, abs_err, 1)[0])
             max_accel, max_decel = _load_longitudinal_limits()
@@ -1996,6 +2015,30 @@ class TriageEngine:
                         divergence = np.abs(if_el[:-1] - mpc_el[1:])[if_mask[:-1]]
                         if len(divergence) > 0:
                             m["interframe_e_lat_divergence_mean"] = float(np.mean(divergence))
+
+            # === Recovery term diagnostics (project_recovery_mode_post_limiter.md) ===
+            # Two aggregate metrics used by the recovery_signal_disagreement pattern:
+            #   recovery_term_active_rate  — fraction of frames with weight > 0.01
+            #   recovery_at_car_source_rate — of frames where the term is active,
+            #     fraction where at_car dominated lookahead as the driving signal.
+            # A high at_car dominance + low analyzer lateral RMSE is the R15-hairpin
+            # "signals disagree" regime — it tells the next investigator to check
+            # the lookahead-vs-at-car projection, not the controller tuning.
+            weight = arr("control/lateral_error_recovery_smoothstep_weight")
+            source = arr("control/lateral_error_recovery_e_lat_source")
+            if weight is not None:
+                active_mask = weight > 0.01
+                active_count = int(np.sum(active_mask))
+                m["recovery_term_active_rate"] = float(active_count / max(1, len(weight)))
+                if source is not None and active_count > 0:
+                    # S16 fixed-string HDF5 dataset — compare as bytes.
+                    src_active = source[active_mask]
+                    at_car_flag = np.array(
+                        [bytes(s).rstrip(b"\x00").rstrip() == b"at_car" for s in src_active]
+                    )
+                    m["recovery_at_car_source_rate"] = float(np.mean(at_car_flag))
+                else:
+                    m["recovery_at_car_source_rate"] = 0.0
 
         return m
 

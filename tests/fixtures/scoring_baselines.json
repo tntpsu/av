@@ -1,7 +1,7 @@
 {
     "schema_version": "1",
-    "description": "Frozen per-track metric baselines for scoring regression detection. Values from 2026-04-17 post-q_lat-revert goldens (commit 535724d). Update only after validating new golden recordings per CLAUDE.md 3-step protocol.",
-    "frozen_at": "2026-04-17",
+    "description": "Frozen per-track metric baselines for scoring regression detection. 2026-04-17 post-q_lat-revert goldens (commit 535724d) for 4 tracks; hairpin_15 re-baselined 2026-04-18 after PP recovery term landed (replaces orchestrator post-limiter multiplier). Update only after validating new golden recordings per CLAUDE.md 3-step protocol.",
+    "frozen_at": "2026-04-18",
     "tolerances": {
         "overall_score": 2.0,
         "lateral_error_adj_rmse": 0.03,
@@ -23,10 +23,10 @@
             "commanded_jerk_p95": 0.624
         },
         "hairpin_15": {
-            "overall_score": 91.6,
-            "lateral_error_adj_rmse": 0.220,
-            "accel_p95_filtered": 1.167,
-            "commanded_jerk_p95": 1.440
+            "overall_score": 98.7,
+            "lateral_error_adj_rmse": 0.097,
+            "accel_p95_filtered": 0.702,
+            "commanded_jerk_p95": 0.624
         },
         "sweeping_highway": {
             "overall_score": 91.4,

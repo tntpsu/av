@@ -923,6 +923,27 @@ class AVStack:
             pp_map_ff_entry_boost_kappa_max=float(
                 lateral_cfg.get('pp_map_ff_entry_boost_kappa_max', 0.045)
             ),
+            pp_recovery_term_enabled=bool(
+                lateral_cfg.get('pp_recovery_term_enabled', False)
+            ),
+            pp_recovery_term_shadow_mode=bool(
+                lateral_cfg.get('pp_recovery_term_shadow_mode', True)
+            ),
+            pp_recovery_e_lat_lo_m=float(
+                lateral_cfg.get('pp_recovery_e_lat_lo_m', 1.0)
+            ),
+            pp_recovery_e_lat_hi_m=float(
+                lateral_cfg.get('pp_recovery_e_lat_hi_m', 2.0)
+            ),
+            pp_recovery_term_beta=float(
+                lateral_cfg.get('pp_recovery_term_beta', 0.5)
+            ),
+            pp_recovery_term_lpf_tau_s=float(
+                lateral_cfg.get('pp_recovery_term_lpf_tau_s', 0.20)
+            ),
+            pp_recovery_signal_use_at_car=bool(
+                lateral_cfg.get('pp_recovery_signal_use_at_car', True)
+            ),
             pp_ref_jump_clamp=lateral_cfg.get('pp_ref_jump_clamp', 0.5),
             pp_stale_decay=lateral_cfg.get('pp_stale_decay', 0.98),
             pp_max_steering_rate=lateral_cfg.get('pp_max_steering_rate', 0.4),
@@ -9417,29 +9438,28 @@ class AVStack:
         mpc_recovery_mode_suppressed = False
         if not emergency_stop_triggered:
             mpc_active = int(control_command.get('regime', 0)) == int(ControlRegime.LINEAR_MPC)
+            # Steering multiplier (1.2× / 1.5× post-limiter) was DELETED 2026-04-18.
+            # It bypassed the rate/jerk limiter chain, producing a binary-gate sawtooth
+            # that measured as 30+ rad/s³ jerk on 32% of hairpin frames. The equivalent
+            # continuous correction now fires upstream of the limiters as a proportional
+            # recovery term in LateralController (pp_recovery_term_*).
+            # Throttle reduction is retained — throttle has its own smoothing, and
+            # "slow down when far from lane" remains a valid safety behavior independent
+            # of the steering multiplier.
+            # Design ref: project_recovery_mode_post_limiter.md
             if lateral_error_abs > max_lateral_error:
-                # Hard limit: Error exceeds 2.0m - aggressive correction
-                # Skip for MPC: multiplying output corrupts MPC's last_delta_norm state feedback
                 if mpc_active:
                     logger.info(f"[Frame {self.frame_count}] HARD LIMIT suppressed (MPC active): lateral_error={lateral_error_abs:.3f}m")
                     mpc_recovery_mode_suppressed = True
                 else:
-                    logger.warning(f"[Frame {self.frame_count}] HARD LIMIT: Lateral error {lateral_error_abs:.3f}m exceeds {max_lateral_error}m - aggressive correction")
-                    max_steering = self.controller.lateral_controller.max_steering
-                    steering_original = control_command.get('steering', 0.0)
-                    control_command['steering'] = np.clip(steering_original * 1.5, -max_steering, max_steering)  # 50% more aggressive
+                    logger.warning(f"[Frame {self.frame_count}] HARD LIMIT throttle reduction: lateral_error={lateral_error_abs:.3f}m exceeds {max_lateral_error}m")
                     control_command['throttle'] = control_command.get('throttle', 0.0) * 0.5
             elif lateral_error_abs > recovery_lateral_error:
-                # Recovery mode: Error exceeds 1.0m - initiate recovery
-                # Skip for MPC: multiplying output corrupts MPC's last_delta_norm state feedback
                 if mpc_active:
                     logger.info(f"[Frame {self.frame_count}] RECOVERY MODE suppressed (MPC active): lateral_error={lateral_error_abs:.3f}m")
                     mpc_recovery_mode_suppressed = True
                 else:
-                    logger.info(f"RECOVERY MODE: Lateral error {lateral_error_abs:.3f}m exceeds {recovery_lateral_error}m - initiating recovery")
-                    max_steering = self.controller.lateral_controller.max_steering
-                    steering_original = control_command.get('steering', 0.0)
-                    control_command['steering'] = np.clip(steering_original * 1.2, -max_steering, max_steering)  # 20% more aggressive
+                    logger.info(f"[Frame {self.frame_count}] RECOVERY MODE throttle reduction: lateral_error={lateral_error_abs:.3f}m exceeds {recovery_lateral_error}m")
                     control_command['throttle'] = control_command.get('throttle', 0.0) * 0.8
 
         control_command['mpc_recovery_mode_suppressed'] = mpc_recovery_mode_suppressed
@@ -12168,6 +12188,19 @@ class AVStack:
             pp_pipeline_bypass_active=bool(control_command.get('pp_pipeline_bypass_active', 0) > 0.5),
             pp_speed_norm_scale=float(control_command.get('pp_speed_norm_scale', 1.0)),
             pp_map_ff_applied=float(control_command.get('pp_map_ff_applied', 0.0)),
+            # Lateral-error recovery term (replaces orchestrator post-limiter multiplier)
+            lateral_error_recovery_term_applied_rad=float(
+                control_command.get('lateral_error_recovery_term_applied_rad', 0.0)
+            ),
+            lateral_error_recovery_smoothstep_weight=float(
+                control_command.get('lateral_error_recovery_smoothstep_weight', 0.0)
+            ),
+            lateral_error_recovery_e_lat_source=str(
+                control_command.get('lateral_error_recovery_e_lat_source', 'none')
+            ),
+            lateral_error_recovery_shadow_mode=int(
+                control_command.get('lateral_error_recovery_shadow_mode', 0)
+            ),
             mpc_feasible=bool(control_command.get('mpc_feasible', False)),
             mpc_solve_time_ms=float(control_command.get('mpc_solve_time_ms', 0.0)),
             mpc_e_lat=float(control_command.get('mpc_e_lat', 0.0)),

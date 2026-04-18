@@ -258,6 +258,14 @@ Controls lookahead contraction as the car approaches curves. Three phases:
 - Step 8 lookahead: phase-contracted via arc-distance gate (map-driven)
 - Step 9 MPC e_lat: `groundTruthLaneCenterX` (GT lane center) — not perception polynomial
 
+**Step 9 PP `steering_before_limits` — four additive terms (all upstream of rate/jerk limiter):**
+1. Geometric pure-pursuit base term from lookahead
+2. Feedback term (smoothed lateral error)
+3. Map feed-forward term (phase-gated `atan(L × κ)`, `pid_controller.py:2615`)
+4. Lateral-error recovery term (continuous smoothstep on `max(|lookahead|, |gt_at_car|)` ∈ [1.0, 2.0] m, `pid_controller.py:2618` — replaces orchestrator post-limiter 1.2×/1.5× multiplier deleted 2026-04-18)
+
+Step 10 orchestrator safety **no longer modifies** `control_command['steering']`. It still reduces `throttle` (0.5× / 0.8×) when lateral error is high and engages the emergency-stop latch on true off-road conditions. All steering authority is governed by the controller (PP or MPC) + rate/jerk limiters inside `control/pid_controller.py`.
+
 ---
 
 ## Coordinate System

@@ -1,12 +1,12 @@
 {
     "schema_version": "1",
-    "milestone": "2026-04-17 — q_lat regression fix (commit 535724d) validated across 4 tracks; hill_highway added",
-    "recorded_at": "2026-04-17",
-    "notes": "Post-fix goldens after mpc_q_lat base revert (2.0→1.0). Cross-track E2E validated highway_65 (59.0→99.5), hill_highway (59.0→97.6, new registration), mixed_radius (97.6→98.7), s_loop (96.8→99.1). hairpin_15 + sweeping_highway NOT updated — hairpin still in regression state (79.0, needs separate iteration), no fresh sweeping_highway run this cycle. All goldens recorded with --duration 60 on this Mac Mini (13 FPS, cadence healthy).",
+    "milestone": "2026-04-18 — PP recovery term landed (replaces orchestrator post-limiter steering multiplier); hairpin_15 re-registered 79.0→98.7",
+    "recorded_at": "2026-04-18",
+    "notes": "Post-fix hairpin golden after PP recovery term (continuous smoothstep, upstream of rate/jerk limiter) replaced orchestrator post-limiter 1.2×/1.5× steering multiplier. hairpin_15: 79.0 live → 98.7 (Control 80→100, jerk max 30.08→18.0). Regression sweep (4 tracks) all within tolerance of frozen 2026-04-17 baselines — no other goldens updated. sweeping_highway NOT updated — no fresh run this cycle.",
     "tracks": {
         "s_loop":            "data/recordings/recording_20260417_173502.h5",
         "highway_65":        "data/recordings/recording_20260417_173145.h5",
-        "hairpin_15":        "data/recordings/recording_20260315_190131.h5",
+        "hairpin_15":        "data/recordings/recording_20260418_185440.h5",
         "sweeping_highway":  "data/recordings/recording_20260312_100209.h5",
         "mixed_radius":      "data/recordings/recording_20260417_173342.h5",
         "hill_highway":      "data/recordings/recording_20260417_181652.h5"
@@ -14,7 +14,7 @@
     "documented_scores": {
         "s_loop":            99.1,
         "highway_65":        99.5,
-        "hairpin_15":        91.6,
+        "hairpin_15":        98.7,
         "sweeping_highway":  93.6,
         "mixed_radius":      98.7,
         "hill_highway":      97.6
@@ -41,14 +41,14 @@
             "notes": "Post q_lat=1.0 revert. Trajectory 98.1 green. Regression 96.2→59.0→99.5 (Δ +3.3 vs previous baseline)."
         },
         "hairpin_15": {
-            "lateral_rmse_m":          0.312,
-            "lateral_rmse_adj_m":      0.220,
-            "accel_p95_filtered_mps2": 1.167,
-            "commanded_jerk_p95_mps3": 1.440,
+            "lateral_rmse_m":          0.173,
+            "lateral_rmse_adj_m":      0.097,
+            "accel_p95_filtered_mps2": 0.702,
+            "commanded_jerk_p95_mps3": 0.624,
             "out_of_lane_events":      0,
             "emergency_stops":         0,
-            "duration_s":              59.9,
-            "notes": "Stanley k=3.0 regime (speed 2-4 m/s, below MPC threshold). Replaced PP golden (79/100) which had Trajectory yellow even with curvature adjustment. Stanley Trajectory layer 83.4 (green) due to lower RMSE (0.31 vs 0.44m). NOT re-baselined 2026-04-17 — current live score 79.0 (Safety 75 + Control 80 issues, pre-existing)."
+            "duration_s":              113.0,
+            "notes": "2026-04-18: PP recovery term landed (continuous smoothstep 1.0-2.0m, upstream of rate/jerk limiter). Replaces orchestrator post-limiter 1.2×/1.5× steering multiplier. Control layer 80→100 (jerk max 30.08→18.0 — now bound by pp_max_steering_jerk=18, previously bypassed by post-limiter multiplier). §27 recovery-term telemetry: active 18.4% frames, 100% at-car source, P95 term 0.053 rad, 0 saturation events. Trajectory 95.1 — residual apex cutting on C1 (late_turn_in, meanErr=-0.299m) predates this fix."
         },
         "sweeping_highway": {
             "lateral_rmse_m":          0.254,

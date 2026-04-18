@@ -2660,6 +2660,31 @@ class DataRecorder:
             maxshape=max_shape,
             dtype=np.float32
         )
+        # Lateral-error recovery term (replaces orchestrator post-limiter multiplier)
+        self.h5_file.create_dataset(
+            "control/lateral_error_recovery_term_applied_rad",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32,
+        )
+        self.h5_file.create_dataset(
+            "control/lateral_error_recovery_smoothstep_weight",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32,
+        )
+        self.h5_file.create_dataset(
+            "control/lateral_error_recovery_e_lat_source",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype="S16",
+        )
+        self.h5_file.create_dataset(
+            "control/lateral_error_recovery_shadow_mode",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int8,
+        )
         self.h5_file.create_dataset("control/mpc_feasible", shape=(0,), maxshape=max_shape, dtype=np.int8)
         self.h5_file.create_dataset("control/mpc_solve_time_ms", shape=(0,), maxshape=max_shape, dtype=np.float32)
         self.h5_file.create_dataset("control/mpc_e_lat", shape=(0,), maxshape=max_shape, dtype=np.float32)
@@ -7650,6 +7675,11 @@ class DataRecorder:
         pp_pipeline_bypass_active_list = []
         pp_speed_norm_scale_list = []
         pp_map_ff_applied_list = []
+        # Lateral-error recovery term
+        lateral_error_recovery_term_applied_rad_list = []
+        lateral_error_recovery_smoothstep_weight_list = []
+        lateral_error_recovery_e_lat_source_list = []
+        lateral_error_recovery_shadow_mode_list = []
         mpc_feasible_list = []
         mpc_solve_time_ms_list = []
         mpc_e_lat_list = []
@@ -9064,6 +9094,18 @@ class DataRecorder:
             pp_pipeline_bypass_active_list.append(float(getattr(cc, 'pp_pipeline_bypass_active', False)))
             pp_speed_norm_scale_list.append(float(getattr(cc, 'pp_speed_norm_scale', 1.0)))
             pp_map_ff_applied_list.append(float(getattr(cc, 'pp_map_ff_applied', 0.0)))
+            # Lateral-error recovery term
+            lateral_error_recovery_term_applied_rad_list.append(
+                float(getattr(cc, 'lateral_error_recovery_term_applied_rad', 0.0))
+            )
+            lateral_error_recovery_smoothstep_weight_list.append(
+                float(getattr(cc, 'lateral_error_recovery_smoothstep_weight', 0.0))
+            )
+            _e_lat_src = str(getattr(cc, 'lateral_error_recovery_e_lat_source', 'none'))
+            lateral_error_recovery_e_lat_source_list.append(_e_lat_src.encode('ascii', errors='replace')[:16])
+            lateral_error_recovery_shadow_mode_list.append(
+                int(getattr(cc, 'lateral_error_recovery_shadow_mode', 0))
+            )
             mpc_feasible_list.append(int(getattr(cc, 'mpc_feasible', False)))
             mpc_solve_time_ms_list.append(float(getattr(cc, 'mpc_solve_time_ms', 0.0)))
             mpc_e_lat_list.append(float(getattr(cc, 'mpc_e_lat', 0.0)))
@@ -9510,6 +9552,10 @@ class DataRecorder:
                        "pp_effective_steering_rate",
                        "pp_pipeline_bypass_active",
                        "pp_speed_norm_scale", "pp_map_ff_applied",
+                       "lateral_error_recovery_term_applied_rad",
+                       "lateral_error_recovery_smoothstep_weight",
+                       "lateral_error_recovery_e_lat_source",
+                       "lateral_error_recovery_shadow_mode",
                        "mpc_feasible", "mpc_solve_time_ms",
                        "mpc_e_lat", "mpc_e_heading", "mpc_kappa_ref",
                        "mpc_kappa_bias_correction", "mpc_kappa_bias_ema",
@@ -10670,6 +10716,19 @@ class DataRecorder:
             self.h5_file["control/pp_pipeline_bypass_active"][current_size:] = pp_pipeline_bypass_active_list
             self.h5_file["control/pp_speed_norm_scale"][current_size:] = pp_speed_norm_scale_list
             self.h5_file["control/pp_map_ff_applied"][current_size:] = pp_map_ff_applied_list
+            # Lateral-error recovery term
+            self.h5_file["control/lateral_error_recovery_term_applied_rad"][current_size:] = (
+                lateral_error_recovery_term_applied_rad_list
+            )
+            self.h5_file["control/lateral_error_recovery_smoothstep_weight"][current_size:] = (
+                lateral_error_recovery_smoothstep_weight_list
+            )
+            self.h5_file["control/lateral_error_recovery_e_lat_source"][current_size:] = (
+                lateral_error_recovery_e_lat_source_list
+            )
+            self.h5_file["control/lateral_error_recovery_shadow_mode"][current_size:] = (
+                lateral_error_recovery_shadow_mode_list
+            )
             self.h5_file["control/mpc_feasible"][current_size:] = mpc_feasible_list
             self.h5_file["control/mpc_solve_time_ms"][current_size:] = mpc_solve_time_ms_list
             self.h5_file["control/mpc_e_lat"][current_size:] = mpc_e_lat_list

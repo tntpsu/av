@@ -3111,6 +3111,90 @@ def _print_summary_report(recording_path: Path, summary: Dict, analyze_to_failur
         print(f"   (skipped — {_exc})")
         print()
 
+    # ── Section 27: Recovery Term Activity ──────────────────────────────────────
+    # Activity summary for the lateral-error recovery term (PP pipeline, upstream
+    # of rate/jerk limiters). Replaces the deleted orchestrator steering
+    # multiplier. Design ref: project_recovery_mode_post_limiter.md.
+    try:
+        import h5py as _h5
+        with _h5.File(recording_path, "r") as f:
+            _has_rec = "control/lateral_error_recovery_smoothstep_weight" in f
+            print("27. RECOVERY TERM ACTIVITY")
+            print("-" * 80)
+            if not _has_rec:
+                print("   (no recovery-term telemetry in recording — pre-fix run or feature disabled)")
+                print()
+            else:
+                _weight = np.array(f["control/lateral_error_recovery_smoothstep_weight"][:], dtype=float)
+                _term = np.array(
+                    f["control/lateral_error_recovery_term_applied_rad"][:], dtype=float
+                ) if "control/lateral_error_recovery_term_applied_rad" in f else None
+                _source_raw = (
+                    f["control/lateral_error_recovery_e_lat_source"][:]
+                    if "control/lateral_error_recovery_e_lat_source" in f
+                    else None
+                )
+                _shadow = (
+                    np.array(f["control/lateral_error_recovery_shadow_mode"][:], dtype=int)
+                    if "control/lateral_error_recovery_shadow_mode" in f
+                    else None
+                )
+                _n = len(_weight)
+                _active = _weight > 0.01
+                _sat = _weight >= 0.999
+                _n_active = int(_active.sum())
+                _n_sat = int(_sat.sum())
+                _active_pct = 100.0 * _n_active / max(1, _n)
+                _sat_pct = 100.0 * _n_sat / max(1, _n)
+
+                print(f"   Frames total:         {_n}")
+                print(f"   Term active (w>0.01): {_n_active} ({_active_pct:.1f}%)")
+                print(f"   Term saturated (w=1): {_n_sat} ({_sat_pct:.1f}%)")
+
+                if _term is not None and _n_active > 0:
+                    _term_active = np.abs(_term[_active])
+                    print(
+                        f"   |term_applied| rad    P50={np.median(_term_active):.4f} "
+                        f"P95={np.percentile(_term_active, 95):.4f} "
+                        f"max={np.max(_term_active):.4f}"
+                    )
+
+                if _source_raw is not None and _n_active > 0:
+                    # Fixed-length byte strings in HDF5; strip null and whitespace padding.
+                    _src_strs = [
+                        bytes(s).rstrip(b"\x00").rstrip().decode("ascii", errors="ignore")
+                        for s in _source_raw[:_n]
+                    ]
+                    _src_active = [s for s, a in zip(_src_strs, _active) if a]
+                    _at_car = sum(1 for s in _src_active if s == "at_car")
+                    _look = sum(1 for s in _src_active if s == "lookahead")
+                    print(f"   e_lat source (active): at_car={_at_car}  lookahead={_look}")
+                    if _at_car + _look > 0:
+                        _at_car_pct = 100.0 * _at_car / (_at_car + _look)
+                        _hint = ""
+                        if _at_car_pct > 20.0:
+                            _hint = (
+                                "  ← at-car dominance: check lookahead/at-car projection on curves "
+                                "(see project_proportional_curve_anticipation.md)"
+                            )
+                        print(f"   at_car dominance:     {_at_car_pct:.1f}%{_hint}")
+
+                if _shadow is not None and _n > 0:
+                    _shadow_frames = int((_shadow > 0).sum())
+                    if _shadow_frames > 0:
+                        print(
+                            f"   Shadow mode:          {_shadow_frames}/{_n} frames "
+                            f"({100.0 * _shadow_frames / _n:.1f}%) — term computed but NOT applied"
+                        )
+                    else:
+                        print(f"   Shadow mode:          0 — term applied live")
+                print()
+    except Exception as _exc:
+        print("27. RECOVERY TERM ACTIVITY")
+        print("-" * 80)
+        print(f"   (skipped — {_exc})")
+        print()
+
     print("=" * 80)
 
 

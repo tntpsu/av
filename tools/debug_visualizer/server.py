@@ -1665,6 +1665,18 @@ def get_frame_data(filename, frame_index):
                         frame_data['control']['steering_post_rate_limit'] = float(f['control/steering_post_rate_limit'][control_idx])
                     if 'control/steering_post_jerk_limit' in f and control_idx < len(f['control/steering_post_jerk_limit']):
                         frame_data['control']['steering_post_jerk_limit'] = float(f['control/steering_post_jerk_limit'][control_idx])
+                    # Lateral-error recovery term (project_recovery_mode_post_limiter.md)
+                    if 'control/lateral_error_recovery_term_applied_rad' in f and control_idx < len(f['control/lateral_error_recovery_term_applied_rad']):
+                        frame_data['control']['lateral_error_recovery_term_applied_rad'] = float(f['control/lateral_error_recovery_term_applied_rad'][control_idx])
+                    if 'control/lateral_error_recovery_smoothstep_weight' in f and control_idx < len(f['control/lateral_error_recovery_smoothstep_weight']):
+                        frame_data['control']['lateral_error_recovery_smoothstep_weight'] = float(f['control/lateral_error_recovery_smoothstep_weight'][control_idx])
+                    if 'control/lateral_error_recovery_e_lat_source' in f and control_idx < len(f['control/lateral_error_recovery_e_lat_source']):
+                        _src_raw = f['control/lateral_error_recovery_e_lat_source'][control_idx]
+                        frame_data['control']['lateral_error_recovery_e_lat_source'] = (
+                            bytes(_src_raw).rstrip(b'\x00').rstrip().decode('ascii', errors='ignore')
+                        )
+                    if 'control/lateral_error_recovery_shadow_mode' in f and control_idx < len(f['control/lateral_error_recovery_shadow_mode']):
+                        frame_data['control']['lateral_error_recovery_shadow_mode'] = int(f['control/lateral_error_recovery_shadow_mode'][control_idx])
                     if 'control/steering_post_sign_flip' in f and control_idx < len(f['control/steering_post_sign_flip']):
                         frame_data['control']['steering_post_sign_flip'] = float(f['control/steering_post_sign_flip'][control_idx])
                     if 'control/steering_post_hard_clip' in f and control_idx < len(f['control/steering_post_hard_clip']):

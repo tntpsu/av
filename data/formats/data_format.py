@@ -739,6 +739,11 @@ class ControlCommand:
     pp_pipeline_bypass_active: bool = False
     pp_speed_norm_scale: float = 1.0
     pp_map_ff_applied: float = 0.0
+    # Lateral-error recovery term (replaces orchestrator post-limiter multiplier)
+    lateral_error_recovery_term_applied_rad: float = 0.0
+    lateral_error_recovery_smoothstep_weight: float = 0.0
+    lateral_error_recovery_e_lat_source: str = 'none'
+    lateral_error_recovery_shadow_mode: int = 0
     # MPC telemetry (zero-filled when MPC is inactive)
     mpc_feasible: bool = False
     mpc_solve_time_ms: float = 0.0

@@ -88,6 +88,16 @@ control:
     pp_map_ff_wheelbase_m: 2.5
     pp_map_ff_curvature_min: 0.0     # removed hard floor — atan(L×κ) is self-limiting; phase gate handles spatial gating
     pp_map_ff_curvature_max_clip: 0.08
+    # Lateral-error recovery term (replaces orchestrator post-limiter 1.2×/1.5× steering multiplier).
+    # Continuous smoothstep proportional to |steering|, injected upstream of rate/jerk limiters.
+    # Design ref: project_recovery_mode_post_limiter.md
+    pp_recovery_term_enabled: true                # master switch
+    pp_recovery_term_shadow_mode: false           # ACTIVE — term applied upstream of rate/jerk limiters (orchestrator multiplier deleted)
+    pp_recovery_e_lat_lo_m: 1.0                   # smoothstep start (term=0 below)
+    pp_recovery_e_lat_hi_m: 2.0                   # smoothstep full (term=full gain above)
+    pp_recovery_term_beta: 0.5                    # proportional gain at full smoothstep (0.5 ≈ current 1.5× behavior)
+    pp_recovery_term_lpf_tau_s: 0.20              # 1st-order LPF on term output; smooths abrupt smoothstep transitions
+    pp_recovery_signal_use_at_car: true           # use max(|lookahead|, |gt_at_car|) vs lookahead only
     pp_ref_jump_clamp: 0.5
     pp_stale_decay: 0.98
     # 2026-03-22: 0.38 A/B vs 0.4 did not promote (see GRADE_LATERAL_TUNING.md); keep 0.4 until gated win.
@@ -992,8 +1002,9 @@ safety:
   speed_prevention_threshold: 0.9
   speed_prevention_brake_threshold: 0.95
   speed_prevention_brake_amount: 0.2
-  max_lateral_error: 2.0
-  recovery_lateral_error: 1.0
+  max_lateral_error: 2.0           # Used for throttle reduction (0.5×) and as hard-limit upper bound.
+  recovery_lateral_error: 1.0      # Used for throttle reduction (0.8×) only; steering multiplier replaced
+                                   # by control.lateral.pp_recovery_e_lat_lo_m (continuous smoothstep).
   emergency_stop_error: 4.0
   emergency_stop_release_speed: 0.2
   emergency_stop_end_run_after_seconds: 3.0
