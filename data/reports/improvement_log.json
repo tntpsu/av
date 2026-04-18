@@ -220,5 +220,20 @@
     "prevention": "Add a pre-merge rule: any diff touching _MPC_WEIGHT_AUTO_DERIVE_PARAMS or config/av_stack_config.yaml tuning keys requires an E2E validation record (minimum 60s run on highway_65 + one curve-heavy track). Also consider a pre-commit hook that detects numeric constant changes in tuning files and requires explicit --e2e-validated flag in the commit message.",
     "detection_method": "/iterate skill \u2014 bisect via /e2e at intermediate commits (3 runs), then git diff inspection revealed bundled q_lat change; scope-creep guard 8e caught attempted revert as too large, forcing targeted tuning-only fix",
     "detection_delay_iterations": 1
+  },
+  {
+    "date": "2026-04-17",
+    "commit_summary": "Reject implausible GT lane boundaries in OOL detection (hairpin_15 79.0\u219295.8)",
+    "issue": "tools/drive_summary_core.py OOL mask trusted Unity GT boundaries blindly. At track-wrap mesh seams, gt_left/gt_right can jump to \u00b11500m garbage values. The analyzer counted these as real sustained OOL events (error value 1842m), inflating Safety penalty and triggering critical_yellow_layer cap. An existing 'track-end note' at analyze_drive_overall.py:2550-2563 printed a cosmetic warning but did NOT exclude the corrupt frames from the score.",
+    "deduction_eliminated": "Hairpin_15 Safety 75 \u2192 100 (+25), OOL events 1 \u2192 0, cap released, overall score 79.0 \u2192 95.8 (+16.8). Four other tracks unchanged (GT was clean in those runs). Architectural robustness: any future track with simulator mesh seams or failed-loop issues is now protected.",
+    "tracks_affected": [
+      "hairpin_15"
+    ],
+    "root_cause": "Input validation missing on GT lane boundaries before safety-critical OOL computation. The analyzer trusted simulator output unconditionally. Compounded by a pre-existing 'fix' (track-end note) that only warned the human instead of filtering the data.",
+    "process_stage": "tooling",
+    "process_sub": "tooling/missing-detection",
+    "prevention": "Audit all sensor/GT inputs used in safety-scoring pipeline for plausibility filters. Pattern: any signal derived from simulator mesh geometry needs explicit range validation before entering scoring logic. Add a pre-commit or CI check that grep'ing for `~((gt_left <= 0) & (0 <= gt_right))` also shows a plausibility filter in the same function.",
+    "detection_method": "PhilViz triage-report API at /api/recording/.../issues surfaced `out_of_lane: max_error: 1842.964m, source: ground_truth_boundaries` \u2014 the 1842m value is physically impossible and pointed directly at GT corruption. Also surfaced by direct HDF5 inspection showing gt_left/gt_right jump at frame 1873 of hairpin recording.",
+    "detection_delay_iterations": 2
   }
 ]
