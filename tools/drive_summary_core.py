@@ -45,6 +45,7 @@ from scoring_registry import (
     OUT_OF_LANE_THRESHOLD_M,
     CATASTROPHIC_ERROR_M,
     MIN_CONSECUTIVE_OOL,
+    GT_LANE_BOUNDARY_MAX_ABS_M,
     CURVATURE_FLOOR_COEFF as _CURVATURE_FLOOR_COEFF,
     STEERING_JERK_PENALTY_CAP,
     HEADING_PENALTY_FLOOR_DEG,
@@ -7236,7 +7237,13 @@ def analyze_recording_summary(
         # Out of lane if car (x=0) is not between left/right boundaries.
         gt_left = data['gt_left']
         gt_right = data['gt_right']
-        out_of_lane_mask = ~((gt_left <= 0) & (0 <= gt_right))
+        # Plausibility filter: reject frames where GT boundaries are physically implausible
+        # (e.g., Unity mesh-seam artifacts at track wrap-around produce ±1500m values that
+        # would otherwise be counted as real OOL events). Real lane boundaries are always
+        # within ±GT_LANE_BOUNDARY_MAX_ABS_M of the vehicle.
+        gt_plausible = (np.abs(gt_left) < GT_LANE_BOUNDARY_MAX_ABS_M) & \
+                       (np.abs(gt_right) < GT_LANE_BOUNDARY_MAX_ABS_M)
+        out_of_lane_mask = ~((gt_left <= 0) & (0 <= gt_right)) & gt_plausible
         error_data = np.where(
             gt_left > 0,
             np.abs(gt_left),
@@ -8037,7 +8044,11 @@ def analyze_recording_summary(
         # Car is at x=0 in vehicle frame
         # Out of lane if: NOT (left <= 0 <= right)
         # This means: car is OUT if (left > 0) OR (right < 0)
-        out_of_lane_mask = ~((gt_left <= 0) & (0 <= gt_right))
+        # Plausibility filter: see the failure-frame detector above — rejects frames
+        # where GT boundaries are physically implausible (simulator mesh-seam artifacts).
+        gt_plausible = (np.abs(gt_left) < GT_LANE_BOUNDARY_MAX_ABS_M) & \
+                       (np.abs(gt_right) < GT_LANE_BOUNDARY_MAX_ABS_M)
+        out_of_lane_mask = ~((gt_left <= 0) & (0 <= gt_right)) & gt_plausible
         # Use sustained out-of-lane mask to avoid single-frame noise
         min_consecutive_out = MIN_CONSECUTIVE_OOL
         sustained_mask = np.zeros_like(out_of_lane_mask, dtype=bool)

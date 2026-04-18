@@ -27,6 +27,11 @@ STEERING_JERK_GATE: float = 20.0       # norm/s² — steering jerk max (test ga
 OUT_OF_LANE_THRESHOLD_M: float = 0.5   # m     — lateral error beyond this = out of lane
 CATASTROPHIC_ERROR_M: float = 2.0       # m     — lateral error beyond this = catastrophic
 MIN_CONSECUTIVE_OOL: int = 10           # frames — sustained OOL event minimum duration
+GT_LANE_BOUNDARY_MAX_ABS_M: float = 20.0  # m — GT plausibility bound. Real lane boundaries
+                                           #     are always within ±20m of the vehicle. Values
+                                           #     beyond this (e.g., Unity mesh-seam artifacts
+                                           #     producing ±1500m) are treated as missing data,
+                                           #     not as real out-of-lane events.
 
 # ── Scoring penalty thresholds ───────────────────────────────────────────────
 CURVATURE_FLOOR_COEFF: float = 3.0      # arc-chord tracking error floor coefficient

@@ -2547,20 +2547,11 @@ def _print_summary_report(recording_path: Path, summary: Dict, analyze_to_failur
         print()
 
     # Track-end detection: flag if recording ended near the track boundary
-    if _odo_at_frame and _track_total_m > 0:
-        _final_odo = max(_odo_at_frame.values()) if _odo_at_frame else 0.0
-        _laps = _final_odo / _track_total_m
-        _remaining = _track_total_m - (_final_odo % _track_total_m)
-        if _remaining < 10.0 or _laps >= 0.95:
-            _fail_frame = executive.get("failure_frame")
-            _has_estop = any("Emergency stop" in str(r) or "emergency" in str(r).lower()
-                             for r in recommendations)
-            if _has_estop or _fail_frame:
-                print("   *** TRACK-END NOTE: Recording ended near track boundary "
-                      f"(odo={_final_odo:.0f}m, track={_track_total_m:.0f}m, "
-                      f"laps={_laps:.2f}). Emergency stop may be caused by "
-                      "driving off the end of a non-looping track, not a control failure. ***")
-                print()
+    # Track-end cosmetic note removed 2026-04-17: the OOL computation in
+    # drive_summary_core.py now has GT plausibility filtering (GT_LANE_BOUNDARY_MAX_ABS_M),
+    # so mesh-seam artifacts no longer inflate the OOL count and the note's rationale
+    # ("emergency stop may be caused by driving off the end of a non-looping track")
+    # is obsolete.
 
     print("20. RECOMMENDATIONS")
     print("-" * 80)
