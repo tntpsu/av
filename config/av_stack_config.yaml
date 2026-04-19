@@ -866,7 +866,13 @@ trajectory:
     mpc_r_steer_rate_straight_kappa_on: 0.002
     mpc_r_steer_rate_straight_min_scale: 0.3
     # 2DOF feedforward decomposition
-    mpc_ff_decomposition_enabled: false
+    # ACTIVATED 2026-04-19 alongside at_car_gt_legacy e_lat mode. The lookahead
+    # bundle (7e3caf0) was supplying accidental curvature FF via d·e_h cross-
+    # coupling on curves. Removing the bundle (at_car mode) regressed
+    # mixed_radius Traj 98.7→87.7. Enabling the explicit FF path restores it
+    # via kinematic bicycle model: δ_ff = atan(L·κ_ref). See plan/decomposed-
+    # mpc-reference.md §Phase B-NEW and project_h2_damping_on_straights.md.
+    mpc_ff_decomposition_enabled: true
     # Steering actuator model
     mpc_actuator_model_enabled: false
     mpc_actuator_tau_s: 0.70
@@ -890,11 +896,11 @@ trajectory:
     #   d_frenet ≈ gt_cross_track_lookahead + Ld·sin(gt_heading_error)
     # with +0.9872 correlation and 0.051 m RMS vs gt_cross_track_at_car.
     # See .claude/plans/greedy-swimming-naur.md and project_frenet_mpc_reference.md.
-    mpc_e_lat_reference_mode: frenet_linearized   # {frenet_linearized, frenet_map_exact, lookahead_gt_legacy, at_car_gt_legacy}
-    mpc_e_lat_frenet_shadow_mode: true            # REVERTED TO SHADOW — G2 active-mode REGRESSED H2 (79→59, oscillation runaway 0.001→1.149m). Hypothesis refuted; Frenet is a better physical signal but MPC tuning relies on the legacy heading-leak for damping. See project_frenet_mpc_reference.md.
+    mpc_e_lat_reference_mode: at_car_gt_legacy    # 2026-04-19: switched from frenet_linearized. Phase 0.5 empirical analysis disproved the "Ld·sin(e_h) is PD-damping" framing (corr with d/dt(e_h) = 0.06, not >0.5). The lookahead bundle is a hidden P-gain on heading (+128 to q_heading for Ld=8, q_lat=2) causing 0.23 Hz oscillation on H2. Probe: at_car restores H2 79→98.8. mixed_radius regression handled by mpc_ff_decomposition_enabled above. See project_h2_damping_on_straights.md (CORRECTED) + plan decomposed-mpc-reference.md.
+    mpc_e_lat_frenet_shadow_mode: true            # Retained for shadow telemetry (mpc_e_lat_frenet_linearized_m, shadow_delta) during this activation window.
     # DEPRECATED: retained for one release cycle; ignored when reference_mode != *_legacy.
     # Removal target: after Phase G baseline update lands (see plan Phase H).
-    mpc_e_lat_use_lookahead_reference: true
+    mpc_e_lat_use_lookahead_reference: false      # 2026-04-19: explicitly false to match at_car_gt_legacy mode; prevents silent fallback to lookahead path.
     mpc_elat_ema_alpha: 1.0
     mpc_elat_deadband_m: 0.0
     # Fix C — dropout recovery rate limiter: DISABLED (2026-03-31).
