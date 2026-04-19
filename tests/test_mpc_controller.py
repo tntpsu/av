@@ -676,3 +676,126 @@ class TestFFAlignment:
         assert final_delta <= delta_ff_target * 3.0 + 1e-4, (
             f"Steer {final_delta:.4f} exceeds 3× δ_ff ({delta_ff_target:.4f}) — possible overshoot"
         )
+
+
+# ---------------------------------------------------------------------------
+# Frenet-frame reference integration (Phase F of project_frenet_mpc_reference)
+# Validates: the helper in pid_controller.py produces a raw_e_lat that the
+# MPC solver treats as Frenet d, not lookahead-offset. Heading-leakage
+# cancellation is the whole point of the fix.
+# ---------------------------------------------------------------------------
+
+def test_mpc_handles_frenet_reference_end_to_end():
+    """Helper-selected raw_e_lat (Frenet d) flows into MPC and yields the
+    same steering as if we fed the true Frenet d directly.
+
+    Setup: lookahead_offset=1.0 m, e_heading=-0.1 rad, Ld=8 m.
+    Expected Frenet d = 1.0 + 8*sin(-0.1) ≈ 0.2013 m (the true perpendicular
+    distance at the car). This reproduces the realistic H2 cancellation
+    case: lookahead_offset and at-car d are opposite-signed, the PLUS
+    formula cancels the heading-leak bias. Legacy code would feed
+    raw_e_lat = -1.0; Frenet feeds raw_e_lat ≈ -0.2013. The sign of the
+    PLUS formula was empirically verified in Phase 0 (+0.9872 corr,
+    0.051 m RMS vs at-car d on 2152 H2 frames).
+    """
+    from control.pid_controller import _select_mpc_e_lat_reference
+
+    Ld = 8.0
+    lookahead_offset = 1.0
+    e_heading = -0.1
+    expected_d = lookahead_offset + Ld * np.sin(e_heading)  # ≈ 0.2013
+
+    # Frenet-active selection (shadow=False).
+    sel = _select_mpc_e_lat_reference(
+        mpc_cfg={
+            'mpc_e_lat_reference_mode': 'frenet_linearized',
+            'mpc_e_lat_frenet_shadow_mode': False,
+        },
+        gt_cross_track=0.0,  # at-car d unused when Frenet active (it uses lookahead+heading)
+        gt_cross_track_lookahead=lookahead_offset,
+        gt_cross_track_source_code='road_frame_at_car',
+        gt_heading_error_rad=e_heading,
+        lookahead_distance=Ld,
+        fallback_lateral_error=0.0,
+        fallback_heading_error=0.0,
+        force_lookahead_off=False,
+    )
+    assert sel['mpc_e_lat_reference_source'] == 'frenet_linearized'
+    # Helper convention: raw_e_lat = -d (MPC sign).
+    assert abs(sel['raw_e_lat'] - (-expected_d)) < 1e-6, \
+        f"raw_e_lat={sel['raw_e_lat']}, expected {-expected_d}"
+
+    # Feed the helper-produced raw_e_lat into the MPC and compare against
+    # feeding the ground-truth d directly. They must match to solver precision.
+    ctrl_helper = _make_controller()
+    r_helper = ctrl_helper.compute_steering(
+        e_lat=sel['raw_e_lat'], e_heading=e_heading, current_speed=12.0,
+        last_delta_norm=0.0, kappa_ref=0.0,
+        v_target=12.0, v_max=15.0, dt=0.033,
+    )
+
+    ctrl_direct = _make_controller()
+    r_direct = ctrl_direct.compute_steering(
+        e_lat=-expected_d, e_heading=e_heading, current_speed=12.0,
+        last_delta_norm=0.0, kappa_ref=0.0,
+        v_target=12.0, v_max=15.0, dt=0.033,
+    )
+
+    assert r_helper['mpc_feasible'] and r_direct['mpc_feasible']
+    assert abs(r_helper['steering_normalized'] - r_direct['steering_normalized']) < 1e-6, \
+        "Helper-selected raw_e_lat must produce identical steering to direct d"
+
+    # Confirm the bug before the fix: feeding the raw lookahead_offset
+    # produces a visibly different (larger-magnitude) steer than Frenet d.
+    ctrl_bug = _make_controller()
+    r_bug = ctrl_bug.compute_steering(
+        e_lat=-lookahead_offset, e_heading=e_heading, current_speed=12.0,
+        last_delta_norm=0.0, kappa_ref=0.0,
+        v_target=12.0, v_max=15.0, dt=0.033,
+    )
+    # The buggy (legacy) input amplifies the heading error; the Frenet
+    # version should produce a less aggressive steer.
+    assert abs(r_bug['steering_normalized']) > abs(r_helper['steering_normalized']) + 1e-4, (
+        f"Legacy lookahead should over-steer vs Frenet. "
+        f"legacy={r_bug['steering_normalized']:.4f}, frenet={r_helper['steering_normalized']:.4f}"
+    )
+
+
+def test_mpc_nmpc_frenet_parity():
+    """NMPC dispatch path must share the same Frenet selection logic as
+    LMPC. The only asymmetry is force_lookahead_off=True for NMPC (its QP
+    cross-term makes the lookahead reference redundant). Both paths must
+    produce the same Frenet d when active.
+    """
+    from control.pid_controller import _select_mpc_e_lat_reference
+
+    Ld = 8.0
+    lookahead_offset = 1.0
+    e_heading = 0.1
+
+    cfg = {
+        'mpc_e_lat_reference_mode': 'frenet_linearized',
+        'mpc_e_lat_frenet_shadow_mode': False,
+    }
+    common = dict(
+        gt_cross_track=0.0,
+        gt_cross_track_lookahead=lookahead_offset,
+        gt_cross_track_source_code='road_frame_at_car',
+        gt_heading_error_rad=e_heading,
+        lookahead_distance=Ld,
+        fallback_lateral_error=0.0,
+        fallback_heading_error=0.0,
+    )
+    # LMPC call site: force_lookahead_off=False.
+    sel_lmpc = _select_mpc_e_lat_reference(mpc_cfg=cfg, force_lookahead_off=False, **common)
+    # NMPC call site: force_lookahead_off=True (simulates _la_cost_enabled).
+    sel_nmpc = _select_mpc_e_lat_reference(mpc_cfg=cfg, force_lookahead_off=True, **common)
+
+    # When mode is Frenet and shadow is off, force_lookahead_off only
+    # affects the *legacy lookahead fallback* branch — Frenet active
+    # path must be identical between LMPC and NMPC.
+    assert sel_lmpc['mpc_e_lat_reference_source'] == 'frenet_linearized'
+    assert sel_nmpc['mpc_e_lat_reference_source'] == 'frenet_linearized'
+    assert sel_lmpc['raw_e_lat'] == sel_nmpc['raw_e_lat'], \
+        "Active-Frenet path must be identical across LMPC and NMPC dispatch"
+    assert sel_lmpc['mpc_e_lat_frenet_linearized_m'] == sel_nmpc['mpc_e_lat_frenet_linearized_m']

@@ -12273,6 +12273,15 @@ class AVStack:
             mpc_e_lat_reference_divergence_m=float(
                 control_command.get('mpc_e_lat_reference_divergence_m', 0.0)
             ),
+            mpc_e_lat_frenet_linearized_m=float(
+                control_command.get('mpc_e_lat_frenet_linearized_m', 0.0)
+            ),
+            mpc_e_lat_shadow_delta_m=float(
+                control_command.get('mpc_e_lat_shadow_delta_m', 0.0)
+            ),
+            mpc_e_lat_frenet_shadow_mode=int(
+                control_command.get('mpc_e_lat_frenet_shadow_mode', 0)
+            ),
             mpc_gt_heading_error_rad=float(control_command.get('mpc_gt_heading_error_rad', 0.0)),
             mpc_using_ground_truth=float(control_command.get('mpc_using_ground_truth', 0.0)),
             mpc_kappa_preview_used=bool(control_command.get('mpc_kappa_preview_used', False)),

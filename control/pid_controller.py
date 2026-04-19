@@ -15,6 +15,143 @@ from control.nmpc_controller import NMPCController
 from control.regime_selector import ControlRegime, RegimeConfig, RegimeSelector
 
 
+def _compute_frenet_d_linearized(
+    gt_cross_track_lookahead: Optional[float],
+    gt_heading_error_rad: Optional[float],
+    lookahead_distance: float,
+) -> Optional[float]:
+    """Linearized Frenet cross-track (first-order Taylor of lookahead projection).
+
+    Phase 0 offline verification on recording_20260418_195233.h5 (2152 H2
+    frames) confirmed the sign convention of this codebase:
+
+        d_frenet_linearized = gt_cross_track_lookahead + Ld · sin(gt_heading_error)
+
+    This matches `gt_cross_track_at_car_m` (which IS Frenet d at the car) with
+    +0.9872 correlation and 0.051 m RMS. The PLUS follows because
+    `lookahead_offset` and `Ld·sin(e_h)` carry opposite signs relative to
+    at-car d during oscillation in this vehicle-frame convention — adding
+    cancels the heading-projection leakage; subtracting would amplify it.
+
+    Returns None if any input is missing or Ld <= 0.
+    """
+    if (gt_cross_track_lookahead is None
+            or gt_heading_error_rad is None
+            or lookahead_distance is None
+            or lookahead_distance <= 0.0):
+        return None
+    return (
+        float(gt_cross_track_lookahead)
+        + float(lookahead_distance) * float(np.sin(float(gt_heading_error_rad)))
+    )
+
+
+def _select_mpc_e_lat_reference(
+    mpc_cfg: dict,
+    gt_cross_track: Optional[float],
+    gt_cross_track_lookahead: Optional[float],
+    gt_cross_track_source_code: str,
+    gt_heading_error_rad: Optional[float],
+    lookahead_distance: float,
+    fallback_lateral_error: float,
+    fallback_heading_error: float,
+    force_lookahead_off: bool = False,
+) -> Dict[str, Any]:
+    """Select MPC e_lat reference with Frenet-frame support.
+
+    See `.claude/plans/greedy-swimming-naur.md` Phase B. Replaces the
+    lookahead-projection reference that added hidden Ld×q_lat gain to the
+    heading penalty (H2 regression).
+
+    mpc_cfg keys:
+      - mpc_e_lat_reference_mode: 'frenet_linearized' (default),
+        'frenet_map_exact' (Phase 2, falls through to legacy), or legacy
+        values 'lookahead_gt_legacy' / 'at_car_gt_legacy'.
+      - mpc_e_lat_frenet_shadow_mode: if True, compute Frenet candidate for
+        telemetry but feed legacy signal to MPC (rollout-safety precedent
+        from project_velocity_profile.md / project_proportional_curve_anticipation.md).
+      - mpc_e_lat_use_lookahead_reference: DEPRECATED; still consulted in
+        legacy paths and as the tie-breaker inside shadow mode.
+
+    force_lookahead_off: NMPC path sets this when `mpc_lookahead_cost_enabled`
+    is True (the cross-term cost makes the reference-lookahead redundant).
+
+    Returns dict with keys:
+      raw_e_lat, raw_e_heading, mpc_e_lat_reference_source,
+      mpc_e_lat_frenet_linearized_m, mpc_e_lat_shadow_delta_m,
+      mpc_e_lat_frenet_shadow_mode.
+    """
+    ref_mode = str(mpc_cfg.get('mpc_e_lat_reference_mode', 'frenet_linearized'))
+    shadow = bool(mpc_cfg.get('mpc_e_lat_frenet_shadow_mode', False))
+    use_lookahead_ref = bool(mpc_cfg.get('mpc_e_lat_use_lookahead_reference', True))
+    if force_lookahead_off:
+        use_lookahead_ref = False
+
+    # Always compute Frenet linearized candidate when inputs exist — populates
+    # telemetry in both shadow and active modes, and in legacy mode too.
+    d_frenet = _compute_frenet_d_linearized(
+        gt_cross_track_lookahead, gt_heading_error_rad, lookahead_distance
+    )
+    shadow_delta = (
+        float(d_frenet) - float(gt_cross_track_lookahead)
+        if (d_frenet is not None and gt_cross_track_lookahead is not None)
+        else None
+    )
+
+    frenet_requested = ref_mode == 'frenet_linearized'
+    frenet_available = d_frenet is not None
+    frenet_active = (
+        frenet_requested and frenet_available and not shadow
+        and gt_cross_track is not None and gt_heading_error_rad is not None
+    )
+    frenet_shadowed = frenet_requested and frenet_available and shadow
+
+    if frenet_active:
+        # Active Frenet: MPC consumes -d_frenet (MPC e_lat>0 = car RIGHT;
+        # at-car/lookahead convention > 0 = lane center RIGHT of car = car LEFT;
+        # so negate to flip sign — same rule as legacy lookahead_gt path).
+        raw_e_lat = -float(d_frenet)
+        ref_source = 'frenet_linearized'
+        raw_e_heading = float(gt_heading_error_rad)
+    elif gt_cross_track is not None and gt_heading_error_rad is not None:
+        # Legacy path (explicit *_legacy mode OR shadowed frenet OR
+        # unimplemented frenet_map_exact falling through).
+        wants_lookahead = (
+            ref_mode != 'at_car_gt_legacy'
+            and (use_lookahead_ref or ref_mode == 'lookahead_gt_legacy')
+            and gt_cross_track_lookahead is not None
+        )
+        if wants_lookahead:
+            raw_e_lat = -float(gt_cross_track_lookahead)
+            ref_source = 'lookahead_gt'
+        elif gt_cross_track_source_code == 'road_frame_at_car':
+            raw_e_lat = float(gt_cross_track)
+            ref_source = 'at_car_gt'
+        else:
+            raw_e_lat = -float(gt_cross_track)
+            ref_source = 'at_car_gt'
+        raw_e_heading = float(gt_heading_error_rad)
+        if frenet_shadowed:
+            ref_source = ref_source + '_shadow_frenet'
+    else:
+        raw_e_lat = -float(fallback_lateral_error)
+        raw_e_heading = float(fallback_heading_error)
+        ref_source = 'fallback_pp_shadow_frenet' if frenet_shadowed else 'fallback_pp'
+
+    return {
+        'raw_e_lat': raw_e_lat,
+        'raw_e_heading': raw_e_heading,
+        'mpc_e_lat_reference_source': ref_source,
+        'mpc_e_lat_frenet_linearized_m': (
+            float(d_frenet) if d_frenet is not None else float('nan')
+        ),
+        'mpc_e_lat_shadow_delta_m': (
+            float(shadow_delta) if shadow_delta is not None else float('nan')
+        ),
+        'mpc_e_lat_frenet_shadow_mode': 1 if shadow else 0,
+    }
+
+
 class PIDController:
     """
     PID controller with integral windup protection.
@@ -6078,45 +6215,42 @@ class VehicleController:
                 or ''
             )
 
-            # MPC reference source selection (Phase 3.0):
-            # - lookahead_gt: GT cross-track at PP lookahead point — aligns MPC
-            #   target with scored lateral_error. Eliminates curve reference
-            #   divergence (at-car vs lookahead offset grows with κ).
-            # - at_car_gt: GT cross-track at car position (legacy, closest-point).
-            # - fallback_pp: -lateral_error from path planner (no GT available).
+            # MPC reference source selection — Frenet-frame (Phase B of
+            # .claude/plans/greedy-swimming-naur.md).
+            # Default mode: 'frenet_linearized' → raw_e_lat = -d_frenet where
+            #   d_frenet = gt_cross_track_lookahead + Ld·sin(e_heading) (Phase 0
+            #   verified on H2 and hairpin; PLUS sign matches this codebase's
+            #   vehicle-frame convention, corr +0.987 vs at-car d).
+            # Shadow mode (default true at rollout): candidate computed for
+            #   telemetry but MPC still fed legacy lookahead_gt signal until
+            #   Phase G2 activation.
+            # Legacy modes preserved for one release cycle.
             _mpc_cfg_ref = self._full_config.get('trajectory', {}).get('mpc', {})
-            _use_lookahead_ref = bool(_mpc_cfg_ref.get('mpc_e_lat_use_lookahead_reference', True))
+            # Lookahead-cost augmentation flag — unrelated to Frenet reference
+            # selection, but needed below (~line 6323) to decide whether to
+            # set _mpc_Ld for the augmented MPC cost term. Kept distinct from
+            # force_lookahead_off (LMPC passes False; NMPC branch uses this
+            # flag because the NMPC QP cross-term makes the lookahead-ref
+            # redundant — LMPC's augmented cost is additive not a cross-term).
             _la_cost_enabled = bool(_mpc_cfg_ref.get('mpc_lookahead_cost_enabled', False))
-            # Lookahead-augmented cost: adds (e_lat + Ld*e_heading)² cross-terms
-            # to the QP cost.  Originally disabled lookahead ref (at-car e_lat +
-            # cross-terms ≈ lookahead penalty), but on tight curves the linear
-            # projection Ld*e_heading under-predicts the true lookahead offset.
-            # Keep the lookahead reference so MPC tracks the correct target;
-            # the cross-terms still help with anticipation.
-
-            _mpc_e_lat_ref_source = 'fallback_pp'
-            if gt_cross_track is not None and gt_heading is not None:
-                if _use_lookahead_ref and gt_cross_track_lookahead is not None:
-                    # Lookahead reference: same point PP steers toward and scoring
-                    # measures. Sign: vehicle-frame, positive = lane center RIGHT
-                    # of car = car LEFT of center. MPC e_lat>0 = car RIGHT. Negate.
-                    raw_e_lat = -float(gt_cross_track_lookahead)
-                    _mpc_e_lat_ref_source = 'lookahead_gt'
-                elif gt_cross_track_source_code == 'road_frame_at_car':
-                    raw_e_lat = float(gt_cross_track)
-                    _mpc_e_lat_ref_source = 'at_car_gt'
-                else:
-                    raw_e_lat = -float(gt_cross_track)
-                    _mpc_e_lat_ref_source = 'at_car_gt'
-                # Heading: headingDeltaDeg positive = car pointed RIGHT.
-                # MPC: e_heading>0 = car pointed RIGHT (so e_lat increases via
-                # e_lat += v*e_heading*dt when car drifts rightward). Same sign.
-                raw_e_heading = float(gt_heading)
-            else:
-                # Fallback: PP lateral_error = ref_x (positive = ref RIGHT of car
-                # = car LEFT). MPC e_lat>0 = car RIGHT. Negate.
-                raw_e_lat = -float(lateral_metadata.get('lateral_error', 0.0))
-                raw_e_heading = float(lateral_metadata.get('heading_error', 0.0))
+            _Ld_frenet = float(lateral_metadata.get('pp_lookahead_distance', 0.0) or 0.0)
+            _frenet_ref = _select_mpc_e_lat_reference(
+                mpc_cfg=_mpc_cfg_ref,
+                gt_cross_track=gt_cross_track,
+                gt_cross_track_lookahead=gt_cross_track_lookahead,
+                gt_cross_track_source_code=gt_cross_track_source_code,
+                gt_heading_error_rad=gt_heading,
+                lookahead_distance=_Ld_frenet,
+                fallback_lateral_error=float(lateral_metadata.get('lateral_error', 0.0)),
+                fallback_heading_error=float(lateral_metadata.get('heading_error', 0.0)),
+                force_lookahead_off=False,
+            )
+            raw_e_lat = _frenet_ref['raw_e_lat']
+            raw_e_heading = _frenet_ref['raw_e_heading']
+            _mpc_e_lat_ref_source = _frenet_ref['mpc_e_lat_reference_source']
+            lateral_metadata['mpc_e_lat_frenet_linearized_m'] = _frenet_ref['mpc_e_lat_frenet_linearized_m']
+            lateral_metadata['mpc_e_lat_shadow_delta_m'] = _frenet_ref['mpc_e_lat_shadow_delta_m']
+            lateral_metadata['mpc_e_lat_frenet_shadow_mode'] = _frenet_ref['mpc_e_lat_frenet_shadow_mode']
 
             # 2.8.4: Configurable multi-frame delay compensation.
             # Two modes:
@@ -6377,28 +6511,31 @@ class VehicleController:
                 or ''
             )
 
+            # MPC reference source — Frenet-frame (see LMPC block above for
+            # detailed rationale). NMPC-specific: when mpc_lookahead_cost_enabled
+            # is True, the QP cross-term makes the lookahead reference
+            # redundant — we pass force_lookahead_off=True so the legacy
+            # fallback chain drops to at_car_gt (preserves prior behavior).
             _mpc_cfg_ref2 = self._full_config.get('trajectory', {}).get('mpc', {})
-            _use_lookahead_ref = bool(_mpc_cfg_ref2.get('mpc_e_lat_use_lookahead_reference', True))
             _la_cost_enabled = bool(_mpc_cfg_ref2.get('mpc_lookahead_cost_enabled', False))
-            if _la_cost_enabled:
-                _use_lookahead_ref = False
-
-            if gt_cross_track is not None and gt_heading is not None:
-                if _use_lookahead_ref and gt_cross_track_lookahead is not None:
-                    # Same negation as LMPC: gt_cross_track_lookahead > 0 = car LEFT.
-                    # Both solvers use e_lat > 0 = car RIGHT. Negate.
-                    raw_e_lat = -float(gt_cross_track_lookahead)
-                    _mpc_e_lat_ref_source = 'lookahead_gt'
-                elif gt_cross_track_source_code == 'road_frame_at_car':
-                    raw_e_lat = float(gt_cross_track)
-                    _mpc_e_lat_ref_source = 'at_car_gt'
-                else:
-                    raw_e_lat = -float(gt_cross_track)
-                    _mpc_e_lat_ref_source = 'at_car_gt'
-                raw_e_heading = float(gt_heading)
-            else:
-                raw_e_lat = -float(lateral_metadata.get('lateral_error', 0.0))
-                raw_e_heading = float(lateral_metadata.get('heading_error', 0.0))
+            _Ld_frenet = float(lateral_metadata.get('pp_lookahead_distance', 0.0) or 0.0)
+            _frenet_ref = _select_mpc_e_lat_reference(
+                mpc_cfg=_mpc_cfg_ref2,
+                gt_cross_track=gt_cross_track,
+                gt_cross_track_lookahead=gt_cross_track_lookahead,
+                gt_cross_track_source_code=gt_cross_track_source_code,
+                gt_heading_error_rad=gt_heading,
+                lookahead_distance=_Ld_frenet,
+                fallback_lateral_error=float(lateral_metadata.get('lateral_error', 0.0)),
+                fallback_heading_error=float(lateral_metadata.get('heading_error', 0.0)),
+                force_lookahead_off=_la_cost_enabled,
+            )
+            raw_e_lat = _frenet_ref['raw_e_lat']
+            raw_e_heading = _frenet_ref['raw_e_heading']
+            _mpc_e_lat_ref_source = _frenet_ref['mpc_e_lat_reference_source']
+            lateral_metadata['mpc_e_lat_frenet_linearized_m'] = _frenet_ref['mpc_e_lat_frenet_linearized_m']
+            lateral_metadata['mpc_e_lat_shadow_delta_m'] = _frenet_ref['mpc_e_lat_shadow_delta_m']
+            lateral_metadata['mpc_e_lat_frenet_shadow_mode'] = _frenet_ref['mpc_e_lat_frenet_shadow_mode']
 
             # IMU yaw rate (same extraction as LMPC block)
             _imu_yaw_rate = -float(current_state.get('angular_velocity_y', 0.0))
@@ -6658,6 +6795,9 @@ class VehicleController:
             lateral_metadata['mpc_using_ground_truth'] = 0.0
             lateral_metadata['mpc_e_lat_reference_source'] = 'inactive'
             lateral_metadata['mpc_e_lat_reference_divergence_m'] = 0.0
+            lateral_metadata['mpc_e_lat_frenet_linearized_m'] = float('nan')
+            lateral_metadata['mpc_e_lat_shadow_delta_m'] = float('nan')
+            lateral_metadata['mpc_e_lat_frenet_shadow_mode'] = 0
             lateral_metadata['mpc_kappa_preview_used'] = False
             lateral_metadata['mpc_kappa_preview_range'] = 0.0
             lateral_metadata['mpc_last_steering_pre_modify'] = 0.0
@@ -6689,6 +6829,9 @@ class VehicleController:
             lateral_metadata['mpc_using_ground_truth'] = 0.0
             lateral_metadata['mpc_e_lat_reference_source'] = 'inactive'
             lateral_metadata['mpc_e_lat_reference_divergence_m'] = 0.0
+            lateral_metadata['mpc_e_lat_frenet_linearized_m'] = float('nan')
+            lateral_metadata['mpc_e_lat_shadow_delta_m'] = float('nan')
+            lateral_metadata['mpc_e_lat_frenet_shadow_mode'] = 0
             lateral_metadata['mpc_kappa_preview_used'] = False
             lateral_metadata['mpc_kappa_preview_range'] = 0.0
             lateral_metadata['mpc_last_steering_pre_modify'] = 0.0

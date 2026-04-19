@@ -1,10 +1,31 @@
 # AV Stack — Agent Memory: Tasks
 
-**Last updated:** 2026-04-13
+**Last updated:** 2026-04-18
 
 ---
 
 ## Current Focus
+
+### T-FRENET-MPC — Frenet-frame MPC reference (2026-04-18, Phases A–F landed, Phase G gated on user)
+
+Replace the MPC scalar `e_lat(0)` lookahead-projection input with Frenet `d`
+(linearized: `d = gt_cross_track_lookahead + Ld·sin(gt_heading_error_rad)`,
+PLUS-sign verified in Phase 0 against at-car reference on 2152 H2 frames).
+Intended to fix H2 ACC regression (Trajectory 98.1→79.0 from commit 7e3caf0
+hidden `Ld × q_lat` heading-leak gain). Shadow-mode-first rollout.
+
+- ✅ Phase 0: offline Phase-0 verification (`tools/analyze/analyze_frenet_shadow.py` confirmed PLUS formula)
+- ✅ Phase A: 3 config keys under `trajectory.mpc:`, default `frenet_linearized` + `shadow_mode=true`
+- ✅ Phase B: helpers `_compute_frenet_d_linearized` + `_select_mpc_e_lat_reference` in `control/pid_controller.py`, LMPC+NMPC call sites replaced, inactive-branch defaults safe
+- ✅ Phase C: HDF5 6-location pattern — 3 new fields (`mpc_e_lat_frenet_linearized_m`, `mpc_e_lat_shadow_delta_m`, `mpc_e_lat_frenet_shadow_mode`)
+- ✅ Phase E: diagnostics — 2 issue detectors, 2 triage patterns + 4 metrics, 2 layer-health flags, §N pipeline analysis section
+- ✅ Phase F: 14 unit tests + 2 integration tests (end-to-end MPC + LMPC/NMPC parity). Critical sign-pin test locks PLUS formula. All 44 MPC tests + 32 comfort gate tests green.
+- ⏸️ Phase G: **BLOCKED on user confirmation.** G1 shadow E2E on H2 → G2 active → G3 5-track regression sweep → G4 ACC re-sweep (H5/H6/A1/G1/G2).
+- ⏸️ Phase H: `docs/agent/architecture.md` §5 Control update (controller-side — after G2 lands); `CONFIG_GUIDE.md` docs for new keys.
+
+Plan: `.claude/plans/greedy-swimming-naur.md`. Memory: `project_frenet_mpc_reference.md`.
+
+---
 
 **MPC QP reformulations tested (2DOF + preview weighting) — both disabled, RMSE ceiling confirmed at 0.111m from kinematic model-plant mismatch. Next: system identification or frequency-dependent damping.**
 

@@ -233,6 +233,20 @@ class LayerHealthAnalyzer:
                     if ref_div > 0.15:
                         flags.append("mpc_reference_divergence_high")
 
+                # Frenet-frame reference status (informational, no penalty —
+                # Frenet is a healing mechanism, not a quality signal)
+                if "control/mpc_e_lat_reference_source" in f:
+                    try:
+                        raw = f["control/mpc_e_lat_reference_source"][i]
+                        src = (raw.decode("utf-8", errors="ignore")
+                               if isinstance(raw, (bytes, bytearray)) else str(raw))
+                        if src == "frenet_linearized":
+                            flags.append("control_mpc_reference_is_frenet")
+                        elif src.endswith("_shadow_frenet"):
+                            flags.append("control_mpc_reference_frenet_shadowed")
+                    except Exception:
+                        pass
+
             if regime_val >= 1.5:  # NMPC active
                 if self._scalar(f, "control/nmpc_feasible", i, default=1.0) < 0.5:
                     score -= 0.40

@@ -276,6 +276,27 @@ PATTERNS = [
         "fix_hint": "Vehicle braking too early or too hard relative to profile. If shadow_mode=true, legacy chain may conflict with profile.",
         "check": lambda m: m.get("velocity_profile_underspeed_rate", 0) > 0.03,
     },
+    # Frenet-frame MPC reference (greedy-swimming-naur.md Phase E)
+    {
+        "id": "frenet_shadow_suggests_regression",
+        "name": "Frenet shadow delta + lateral RMSE both high (reference is the suspect)",
+        "severity": "instability",
+        "code_pointer": "control/pid_controller.py:_select_mpc_e_lat_reference",
+        "config_lever": "trajectory.mpc.mpc_e_lat_reference_mode",
+        "fix_hint": "Shadow delta RMS >0.2 m AND lateral RMSE >0.3 m — the legacy lookahead reference is injecting heading-leak that the cost function penalizes. Activate frenet_linearized (shadow_mode=false).",
+        "check": lambda m: (m.get("frenet_shadow_delta_rms_m", 0) > 0.2
+                            and m.get("lateral_rmse_m", 0) > 0.3),
+    },
+    {
+        "id": "heading_leakage_footprint",
+        "name": "Reference divergence tracks heading error (legacy reference re-enabled?)",
+        "severity": "instability",
+        "code_pointer": "control/pid_controller.py:_select_mpc_e_lat_reference",
+        "config_lever": "trajectory.mpc.mpc_e_lat_reference_mode",
+        "fix_hint": "|corr(mpc_e_lat_reference_divergence_m, gt_heading_error)| > 0.8 while ref source is not frenet_*. This is the H2 regression signature. Switch mode back to frenet_linearized.",
+        "check": lambda m: (m.get("frenet_divergence_heading_corr", 0) > 0.8
+                            and not m.get("frenet_reference_active", False)),
+    },
     {
         "id": "mpc_regime_chatter",
         "name": "Regime chatter (>6 switches/min)",
@@ -1184,6 +1205,65 @@ class TriageEngine:
                     )
                 else:
                     m["mpc_ref_divergence_p95"] = 0.0
+
+                # Frenet-frame reference diagnostics (greedy-swimming-naur.md Phase E).
+                # frenet_shadow_delta_rms_m: RMS of d_frenet - lookahead_offset (=
+                #   +Ld·sin(e_h)). High value means heading-leak is large on this
+                #   recording, i.e., switching reference would change behavior.
+                # frenet_reference_active: True when mpc_e_lat_reference_source ==
+                #   'frenet_linearized' on the majority of MPC frames (indicates the
+                #   new reference is actually in use, not merely configured).
+                # frenet_divergence_heading_corr: |corr| between the legacy
+                #   divergence signal and heading error — H2 regression signature.
+                sd = arr("control/mpc_e_lat_shadow_delta_m")
+                if sd is not None and np.any(mpc_mask):
+                    sdm = sd[mpc_mask]
+                    finite = np.isfinite(sdm)
+                    if np.any(finite):
+                        m["frenet_shadow_delta_rms_m"] = float(
+                            np.sqrt(np.mean(sdm[finite] ** 2))
+                        )
+                        m["frenet_shadow_delta_p95_m"] = float(
+                            np.percentile(np.abs(sdm[finite]), 95)
+                        )
+                    else:
+                        m["frenet_shadow_delta_rms_m"] = 0.0
+                        m["frenet_shadow_delta_p95_m"] = 0.0
+                else:
+                    m["frenet_shadow_delta_rms_m"] = 0.0
+                    m["frenet_shadow_delta_p95_m"] = 0.0
+
+                ref_src = None
+                try:
+                    if "control/mpc_e_lat_reference_source" in f:
+                        ref_src = f["control/mpc_e_lat_reference_source"][:]
+                except Exception:
+                    ref_src = None
+                if ref_src is not None and np.any(mpc_mask):
+                    src_str = np.array([
+                        (s.decode("utf-8", errors="ignore") if isinstance(s, (bytes, bytearray)) else str(s))
+                        for s in ref_src[mpc_mask]
+                    ])
+                    m["frenet_reference_active"] = bool(
+                        np.mean([s == "frenet_linearized" for s in src_str]) > 0.5
+                    )
+                else:
+                    m["frenet_reference_active"] = False
+
+                heading_err = arr("control/mpc_gt_heading_error_rad")
+                if (ref_div is not None and heading_err is not None
+                        and np.any(mpc_mask)):
+                    rd = ref_div[mpc_mask]
+                    he = heading_err[mpc_mask]
+                    ok = np.isfinite(rd) & np.isfinite(he)
+                    if np.sum(ok) > 20 and np.std(rd[ok]) > 1e-6 and np.std(he[ok]) > 1e-6:
+                        m["frenet_divergence_heading_corr"] = float(
+                            abs(np.corrcoef(rd[ok], he[ok])[0, 1])
+                        )
+                    else:
+                        m["frenet_divergence_heading_corr"] = 0.0
+                else:
+                    m["frenet_divergence_heading_corr"] = 0.0
             else:
                 m["mpc_available"] = False
 

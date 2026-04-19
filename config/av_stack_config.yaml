@@ -883,9 +883,17 @@ trajectory:
     #   only 3.7% (perception noise is slow/correlated, not white noise). The EMA added ~7
     #   frames of lag to curve-entry corrections, increasing curve e_lat RMSE by +81%
     #   (0.22m→0.40m) and dropping score 92.3→91.7. Alpha=1.0 = no filtering (unfiltered).
-    # MPC reference alignment: use lookahead GT cross-track for e_lat instead of at-car.
-    # Aligns MPC's optimization target with the scored lateral_error (lookahead reference).
-    # At-car reference diverges from scored reference on curves (std=0.10m on R200).
+    # Frenet-frame MPC reference (industry standard: Apollo/Waymo/Aurora/Cruise/Motional).
+    # Replaces lookahead-projection e_lat which adds hidden Ld×q_lat gain to heading
+    # penalty and caused highway_h2 regression 98.1→79.0. Phase 0 offline verification
+    # on recording_20260418_195233.h5 (2152 frames) confirmed the sign convention:
+    #   d_frenet ≈ gt_cross_track_lookahead + Ld·sin(gt_heading_error)
+    # with +0.9872 correlation and 0.051 m RMS vs gt_cross_track_at_car.
+    # See .claude/plans/greedy-swimming-naur.md and project_frenet_mpc_reference.md.
+    mpc_e_lat_reference_mode: frenet_linearized   # {frenet_linearized, frenet_map_exact, lookahead_gt_legacy, at_car_gt_legacy}
+    mpc_e_lat_frenet_shadow_mode: true            # REVERTED TO SHADOW — G2 active-mode REGRESSED H2 (79→59, oscillation runaway 0.001→1.149m). Hypothesis refuted; Frenet is a better physical signal but MPC tuning relies on the legacy heading-leak for damping. See project_frenet_mpc_reference.md.
+    # DEPRECATED: retained for one release cycle; ignored when reference_mode != *_legacy.
+    # Removal target: after Phase G baseline update lands (see plan Phase H).
     mpc_e_lat_use_lookahead_reference: true
     mpc_elat_ema_alpha: 1.0
     mpc_elat_deadband_m: 0.0

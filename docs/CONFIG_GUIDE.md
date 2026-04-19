@@ -751,6 +751,29 @@ Only apply when `control.lateral.control_mode = "stanley"`:
 | `trajectory.curve_anticipation_shadow_only` | true | Anticipation is telemetry-only; no actuation |
 | `trajectory.curve_anticipation_single_owner_mode` | false | Would give anticipation exclusive control |
 
+### Deprecated — `trajectory.mpc.mpc_e_lat_use_lookahead_reference`
+
+**Status: DEPRECATED 2026-04-18**, scheduled for removal after 1 release cycle.
+
+Introduced by commit 7e3caf0 (2026-04-05) to feed the lookahead-offset ground-truth
+signal to the MPC's scalar `e_lat(0)`. Subsequently identified as the root cause of
+the highway_h2 ACC regression: the lookahead offset decomposes as
+`d_frenet + Ld·sin(e_heading) + Ld²·κ/2`, so feeding it into a cost function
+defined over `d_frenet` added hidden `Ld × q_lat` gain onto the heading penalty,
+amplifying heading noise into oscillation runaway on low-curvature tracks.
+
+Replaced by Frenet-frame reference selection via:
+
+| Parameter | Default | Modes / Values |
+|---|---|---|
+| `trajectory.mpc.mpc_e_lat_reference_mode` | `frenet_linearized` | `frenet_linearized` (active), `frenet_map_exact` (Phase 2 placeholder — falls through to legacy), `lookahead_gt_legacy`, `at_car_gt_legacy` |
+| `trajectory.mpc.mpc_e_lat_frenet_shadow_mode` | `true` (on first land) | `true` = compute Frenet candidate for telemetry but feed legacy signal to solver (shadow-mode-first rollout). `false` = active Frenet. Flip to `false` only after G1 shadow validation. |
+
+See `project_frenet_mpc_reference.md` for the formula, sign-verification evidence
+(Phase 0 on 2152 H2 frames, +0.9872 corr), and rollout status. The legacy flag is
+still consulted only inside the legacy/fallback branches — setting it in new
+configs has no effect when `mpc_e_lat_reference_mode` is a Frenet mode.
+
 ### Legacy `lateral_control` top-level section
 
 The entire `lateral_control:` section is a legacy compatibility wrapper. Its values are

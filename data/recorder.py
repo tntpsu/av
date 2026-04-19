@@ -2752,6 +2752,10 @@ class DataRecorder:
             dtype=h5py.string_dtype(encoding='utf-8', length=32)
         )
         self.h5_file.create_dataset("control/mpc_e_lat_reference_divergence_m", shape=(0,), maxshape=max_shape, dtype=np.float32)
+        # Frenet-frame MPC reference telemetry (Phase C of greedy-swimming-naur.md)
+        self.h5_file.create_dataset("control/mpc_e_lat_frenet_linearized_m", shape=(0,), maxshape=max_shape, dtype=np.float32)
+        self.h5_file.create_dataset("control/mpc_e_lat_shadow_delta_m", shape=(0,), maxshape=max_shape, dtype=np.float32)
+        self.h5_file.create_dataset("control/mpc_e_lat_frenet_shadow_mode", shape=(0,), maxshape=max_shape, dtype=np.int8)
         self.h5_file.create_dataset(
             "control/mpc_gt_cross_track_control_source_code",
             shape=(0,),
@@ -7733,6 +7737,9 @@ class DataRecorder:
         mpc_gt_cross_track_control_source_code_list = []
         mpc_e_lat_reference_source_list = []
         mpc_e_lat_reference_divergence_m_list = []
+        mpc_e_lat_frenet_linearized_m_list = []
+        mpc_e_lat_shadow_delta_m_list = []
+        mpc_e_lat_frenet_shadow_mode_list = []
         mpc_gt_heading_error_rad_list = []
         mpc_using_ground_truth_list = []
         mpc_kappa_preview_used_list = []
@@ -9195,6 +9202,15 @@ class DataRecorder:
             mpc_e_lat_reference_divergence_m_list.append(
                 float(getattr(cc, 'mpc_e_lat_reference_divergence_m', 0.0))
             )
+            mpc_e_lat_frenet_linearized_m_list.append(
+                float(getattr(cc, 'mpc_e_lat_frenet_linearized_m', 0.0))
+            )
+            mpc_e_lat_shadow_delta_m_list.append(
+                float(getattr(cc, 'mpc_e_lat_shadow_delta_m', 0.0))
+            )
+            mpc_e_lat_frenet_shadow_mode_list.append(
+                int(getattr(cc, 'mpc_e_lat_frenet_shadow_mode', 0))
+            )
             mpc_gt_heading_error_rad_list.append(float(getattr(cc, 'mpc_gt_heading_error_rad', 0.0)))
             mpc_using_ground_truth_list.append(float(getattr(cc, 'mpc_using_ground_truth', 0.0)))
             mpc_kappa_preview_used_list.append(int(getattr(cc, 'mpc_kappa_preview_used', False)))
@@ -9589,6 +9605,8 @@ class DataRecorder:
                        "mpc_gt_cross_track_lookahead_m", "mpc_gt_cross_track_source_code",
                        "mpc_gt_cross_track_control_source_code",
                        "mpc_e_lat_reference_source", "mpc_e_lat_reference_divergence_m",
+                       "mpc_e_lat_frenet_linearized_m", "mpc_e_lat_shadow_delta_m",
+                       "mpc_e_lat_frenet_shadow_mode",
                        "mpc_gt_heading_error_rad",
                        "mpc_using_ground_truth",
                        "mpc_kappa_preview_used", "mpc_kappa_preview_range",
@@ -10827,6 +10845,15 @@ class DataRecorder:
             )
             self.h5_file["control/mpc_e_lat_reference_divergence_m"][current_size:] = (
                 mpc_e_lat_reference_divergence_m_list
+            )
+            self.h5_file["control/mpc_e_lat_frenet_linearized_m"][current_size:] = (
+                mpc_e_lat_frenet_linearized_m_list
+            )
+            self.h5_file["control/mpc_e_lat_shadow_delta_m"][current_size:] = (
+                mpc_e_lat_shadow_delta_m_list
+            )
+            self.h5_file["control/mpc_e_lat_frenet_shadow_mode"][current_size:] = (
+                mpc_e_lat_frenet_shadow_mode_list
             )
             self.h5_file["control/mpc_gt_heading_error_rad"][current_size:] = mpc_gt_heading_error_rad_list
             self.h5_file["control/mpc_using_ground_truth"][current_size:] = mpc_using_ground_truth_list

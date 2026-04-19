@@ -1,7 +1,79 @@
 # AV Stack — Agent Memory: Current State
 
-**Last updated:** 2026-04-18 (evening)
-**Current milestone:** S2-M1 — **5 of 5 tracks meeting all-layers-≥95 goal.** Hairpin_15 98.7/100 (Control 100) after PP recovery term landed. T-JERK-MEAS resolved.
+**Last updated:** 2026-04-19
+**Current milestone:** S2-M1 — **5 of 5 tracks still meeting all-layers-≥95 goal.** Frenet-frame MPC reference: shadow-mode telemetry landed and validated, but **G2 activation FAILED** (H2 79→59 oscillation runaway). Config reverted to shadow-mode; activation requires accompanying MPC retuning (tracked as future work, not currently prioritized).
+
+### Session 2026-04-19 — Frenet-frame MPC reference: G1 passed, G2 activation FAILED, reverted to shadow
+
+**Plan:** `.claude/plans/greedy-swimming-naur.md` — replace MPC scalar `e_lat(0)` input with Frenet `d` to fix H2 regression (98.1→79.0 from commit 7e3caf0 hidden heading-leak).
+
+**G1 shadow-mode — PASSED every gate:**
+- Score: 79.0 (identical to legacy baseline — MPC still fed legacy signal, confirms shadow plumbing correct)
+- RMS |d_frenet − at_car_truth|: **0.047 m** (Phase 0 predicted 0.051 m — matches within 7%)
+- Correlation d_frenet ↔ at_car: **+0.988** (Phase 0 predicted +0.987)
+- Legacy lookahead vs truth: RMS 0.40 m, corr +0.51 (quantifies the reference bias the plan intended to fix — 8.5× worse than Frenet)
+- Reference source: 98.1% `lookahead_gt_shadow_frenet` (MPC legacy, logging Frenet), 1.9% inactive
+- Recording: `data/recordings/recording_20260419_135423.h5`
+
+**G2 active-mode — FAILED:**
+- Score: **79.0 → 59.0** (−20 pts, blocking)
+- Safety: 100 → 75 (Out Of Lane / Emergency Events −25) — e-stop triggered
+- Trajectory: 71 → 58 (Lateral Error RMSE 0.37 → 0.44 m)
+- Oscillation: runaway 0.001 → 1.149 m
+- **Quarter-by-quarter lateral error P95**: Q1 = **0.032 m** (excellent), Q2 1.252, Q3 1.489, Q4 1.588 (monotonic divergence)
+- Reference source: 75.3% `frenet_linearized` active, 22.7% `lookahead_gt` fallthrough, 2.0% inactive
+- Recording: `data/recordings/recording_20260419_140403.h5`
+
+**Mechanism finding (refutes the plan's hypothesis):**
+
+The plan described `lookahead = d + Ld·sin(e_heading)` as a hidden
+`Ld × q_lat` **amplifier** on heading error. Offline-verified math was correct
+(the decomposition holds), but the dynamical effect was the opposite: the
+`Ld·sin(e_h)` term acted as **PD-like DAMPING** (preview of future lateral
+position). When the car heads back toward path, the sum is smaller → less
+corrective steering → no overshoot. When heading diverges, sum is larger →
+more steering → catches divergence. Removing it exposes an under-damped
+MPC tuning: Q1 shows perfect steady-state tracking (P95=0.032 m), but no
+restoring torque under perturbation.
+
+**Actions taken:**
+1. Config REVERTED: `mpc_e_lat_frenet_shadow_mode: false → true`. MPC back on legacy signal.
+2. Helper, HDF5 telemetry, diagnostic tooling, tests — ALL KEPT. Frenet candidate still computed/logged every frame. Diagnostic value (8.5× better match to physical truth) is real.
+3. Legacy flag `mpc_e_lat_use_lookahead_reference` remains effective in shadow mode.
+4. Real bug found during G1 retry: `_la_cost_enabled` unbound variable in LMPC branch after refactor. Fixed at `control/pid_controller.py:6235`. Unit tests (44) and comfort gate (32) still green after fix.
+
+**Path forward (not started — tracked as backlog):**
+Activation requires either (a) increase `q_heading` to restore damping, (b) add explicit `q_lat_preview` cost term, or (c) implement Phase 2 `frenet_map_exact` with horizon-propagated reference. None of these are currently worth the risk for a non-blocking H2 regression when other work is open.
+
+**Memory updates:**
+- UPDATED: `project_frenet_mpc_reference.md` frontmatter marks "ACTIVATION FAILED, shadow retained"; adds full G1/G2 results table and mechanism finding.
+- `MEMORY.md` index reflects failed-activation status.
+- G3/G4 validation NOT RUN (no point running regression sweep when primary target regressed).
+
+### Session 2026-04-18 (late-evening) — Frenet-frame MPC reference landed (Phases A–F, pre-G stop)
+
+**Goal:** Execute `.claude/plans/greedy-swimming-naur.md` — replace the MPC's scalar `e_lat(0)` lookahead-projection input with the Frenet `d` the cost function is actually defined over. Intended to fix the H2 regression (commit 7e3caf0 on 2026-04-05 fed `gt_cross_track_lookahead_m` directly to `e_lat(0)`, adding hidden `Ld × q_lat` gain to heading penalty — Trajectory 98.1→79.0 on highway_h2).
+
+**What shipped (Phases A–F, not yet E2E-validated):**
+1. **Phase 0 offline:** `tools/analyze/analyze_frenet_shadow.py` ran against H2 + hairpin recordings. Sign-corrected formula `d = lookahead + Ld·sin(e_heading)` (PLUS, not MINUS) matches at-car reference with +0.9872 correlation, 0.051 m RMS on 2152 H2 frames. Plan's original MINUS formula was refuted and updated.
+2. **Phase A config:** 3 new keys under `trajectory.mpc:` — `mpc_e_lat_reference_mode` (default `frenet_linearized`), `mpc_e_lat_frenet_shadow_mode` (default `true` on land — shadow-first rollout), `mpc_e_lat_use_lookahead_reference` kept as DEPRECATED.
+3. **Phase B algorithm:** Two module-level helpers in `control/pid_controller.py` — `_compute_frenet_d_linearized` and `_select_mpc_e_lat_reference`. Both LMPC (line ~6218) and NMPC (line ~6507) call sites replaced with helper calls. NMPC passes `force_lookahead_off=_la_cost_enabled` (QP cross-term makes lookahead ref redundant). Two `inactive` branches (lines 6789, 6820) write safe NaN/0 defaults for the 3 new telemetry fields.
+4. **Phase C HDF5 (6-location pattern):** 3 new `control/*` fields — `mpc_e_lat_frenet_linearized_m` (f32), `mpc_e_lat_shadow_delta_m` (f32), `mpc_e_lat_frenet_shadow_mode` (i8). Existing `mpc_e_lat_reference_source` accepts new values `frenet_linearized`, `*_shadow_frenet`, `frenet_map_exact_not_implemented`.
+5. **Phase E diagnostics:** `issue_detector.py` (`mpc_frenet_shadow_high_delta`, `mpc_frenet_legacy_override`), `triage_engine.py` (patterns `frenet_shadow_suggests_regression`, `heading_leakage_footprint` + 4 new metrics), `layer_health.py` (informational `control_mpc_reference_is_frenet` / `_frenet_shadowed`), `mpc_pipeline_analysis.py` (§N MPC REFERENCE SOURCE).
+6. **Phase F tests:** `tests/test_mpc_frenet_reference.py` NEW, 14 unit tests covering helper, selector, sign convention, shadow mode, legacy modes, NMPC force_lookahead_off, fallback, telemetry population. **Critical sign-pin test** `test_frenet_sign_convention_matches_at_car` uses synthetic triplet to lock the PLUS formula forever. `tests/test_mpc_controller.py` +2 integration tests (end-to-end and LMPC/NMPC parity). All 44 pass. Comfort gate regression suite (32) still green.
+
+**Phase G gate (NOT YET RUN):** plan requires explicit user confirmation before burning Unity cycles. Expected sequence:
+- G1 shadow-mode E2E on H2 — legacy signal still fed to MPC, new HDF5 fields populated, §N analysis matches Phase 0 offline prediction within 15%.
+- G2 active-mode E2E on H2 — shadow_mode flipped to false. Expected: 79.0 → ≥98 restore.
+- G3 5-frozen-track regression sweep (highway_65, s_loop, mixed_radius, hairpin_15, hill_highway) — no track drops >1.0.
+- G4 ACC scenario re-sweep (H5, H6, A1, G1, G2) — confirm shared-root-cause hypothesis.
+
+**Memory updates:**
+- NEW: `project_frenet_mpc_reference.md` — formula, sign-verification evidence, shadow-rollout plan, deprecation schedule.
+- SUPERSEDED: `project_mpc_reference_alignment.md` — header pointer to new memory; body kept for audit.
+- `MEMORY.md` index updated.
+
+**DO NOT FLIP `mpc_e_lat_frenet_shadow_mode` TO FALSE** until user confirms Phase G proceed. The shadow_mode default on first land is `true`.
 
 ### Session 2026-04-18 (evening) — PP recovery term landed; hairpin_15 all-layers-≥95 achieved
 

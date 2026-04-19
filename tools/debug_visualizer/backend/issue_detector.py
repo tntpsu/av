@@ -4127,6 +4127,102 @@ def detect_issues(recording_path: Path, analyze_to_failure: bool = False) -> Dic
                     # Dataset present but unreadable — don't crash the whole detector.
                     pass
 
+            # === Frenet-frame MPC reference diagnostics ===
+            # Design ref: project_frenet_mpc_reference.md (Phase E of
+            # greedy-swimming-naur.md). Two failure modes on the Frenet reference:
+            #  (1) high shadow delta — |d_frenet - lookahead_offset| > 0.5 m for
+            #      >= 3 consecutive frames. Expected during shadow on curves;
+            #      concerning if it persists AFTER activation (suggests heading
+            #      noise the horizon is amplifying).
+            #  (2) legacy override — reference source reverts to a *_legacy or
+            #      fallback_pp value when frenet_linearized was the intended
+            #      default. Catches silent fallback due to missing GT fields.
+            if "control/mpc_e_lat_shadow_delta_m" in f:
+                try:
+                    sd = np.array(
+                        f["control/mpc_e_lat_shadow_delta_m"][:num_frames],
+                        dtype=np.float64,
+                    )
+                    shadow_mode = None
+                    if "control/mpc_e_lat_frenet_shadow_mode" in f:
+                        shadow_mode = np.array(
+                            f["control/mpc_e_lat_frenet_shadow_mode"][:num_frames],
+                            dtype=np.int8,
+                        )
+                    high_mask = np.isfinite(sd) & (np.abs(sd) > 0.5)
+                    run_start = None
+                    for i, hi in enumerate(high_mask):
+                        if hi and run_start is None:
+                            run_start = i
+                        elif not hi and run_start is not None:
+                            run_len = i - run_start
+                            if run_len >= 3:
+                                in_shadow = (
+                                    shadow_mode is not None
+                                    and int(shadow_mode[run_start]) == 1
+                                )
+                                issues.append({
+                                    "frame": int(run_start),
+                                    "end_frame": int(i - 1),
+                                    "type": "mpc_frenet_shadow_high_delta",
+                                    "severity": "low" if in_shadow else "medium",
+                                    "description": (
+                                        f"Frenet shadow delta >0.5 m for {run_len} frames "
+                                        f"({'shadow mode — informational' if in_shadow else 'ACTIVE — heading leak amplifying'})."
+                                    ),
+                                    "duration": int(run_len),
+                                })
+                            run_start = None
+                    if run_start is not None:
+                        run_len = len(high_mask) - run_start
+                        if run_len >= 3:
+                            in_shadow = (
+                                shadow_mode is not None
+                                and int(shadow_mode[run_start]) == 1
+                            )
+                            issues.append({
+                                "frame": int(run_start),
+                                "end_frame": int(len(high_mask) - 1),
+                                "type": "mpc_frenet_shadow_high_delta",
+                                "severity": "low" if in_shadow else "medium",
+                                "description": (
+                                    f"Frenet shadow delta >0.5 m for {run_len} frames "
+                                    f"({'shadow' if in_shadow else 'ACTIVE'})."
+                                ),
+                                "duration": int(run_len),
+                            })
+                except Exception:
+                    pass
+
+            if "control/mpc_e_lat_reference_source" in f:
+                try:
+                    src = f["control/mpc_e_lat_reference_source"][:num_frames]
+                    src_str = np.array([
+                        (s.decode("utf-8", errors="ignore") if isinstance(s, (bytes, bytearray)) else str(s))
+                        for s in src
+                    ])
+                    # Legacy/fallback override while regime implicates MPC
+                    legacy_mask = np.array([
+                        (v.endswith("_legacy") or v == "fallback_pp")
+                        for v in src_str
+                    ])
+                    legacy_count = int(np.sum(legacy_mask))
+                    if legacy_count >= 5:
+                        first_idx = int(np.where(legacy_mask)[0][0])
+                        issues.append({
+                            "frame": first_idx,
+                            "end_frame": int(np.where(legacy_mask)[0][-1]),
+                            "type": "mpc_frenet_legacy_override",
+                            "severity": "medium",
+                            "description": (
+                                f"MPC reference fell back to legacy/fallback on {legacy_count} frames "
+                                f"when frenet_linearized was configured. Check GT lookahead / Ld availability."
+                            ),
+                            "duration": legacy_count,
+                        })
+                except Exception:
+                    pass
+
             # Sort issues by frame number
             issues.sort(key=lambda x: x["frame"])
             for idx, issue in enumerate(issues):

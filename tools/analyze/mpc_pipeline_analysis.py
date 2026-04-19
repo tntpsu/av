@@ -100,6 +100,10 @@ def load_recording(path: Path) -> dict:
             data["mpc_e_lat_ref_source"] = np.array(
                 [s.decode() if isinstance(s, bytes) else str(s) for s in raw]
             )
+        # Frenet-frame reference telemetry (greedy-swimming-naur.md)
+        data["mpc_e_lat_frenet_linearized_m"]  = _get("control/mpc_e_lat_frenet_linearized_m")
+        data["mpc_e_lat_shadow_delta_m"]       = _get("control/mpc_e_lat_shadow_delta_m")
+        data["mpc_e_lat_frenet_shadow_mode"]   = _get("control/mpc_e_lat_frenet_shadow_mode")
 
         # 2.8.5 — r_steer_rate scheduling + 2.8.6 — e_lat attenuation
         data["mpc_r_steer_rate_effective"]  = _get("control/mpc_r_steer_rate_effective")
@@ -878,6 +882,50 @@ def print_report(path: Path, data: dict):
             )
     else:
         print("  [mpc_e_lat not available]")
+
+    print(f"\n{sep}\n")
+
+    # ── §N MPC REFERENCE SOURCE (Frenet-frame rollout diagnostic) ─────────
+    print(sep)
+    print("§N  MPC REFERENCE SOURCE  (greedy-swimming-naur.md)")
+    print(sep)
+    src = data.get("mpc_e_lat_ref_source")
+    frenet = data.get("mpc_e_lat_frenet_linearized_m")
+    delta  = data.get("mpc_e_lat_shadow_delta_m")
+    shadow_mode = data.get("mpc_e_lat_frenet_shadow_mode")
+    legacy_lookahead = data.get("mpc_e_lat_ref_divergence")  # reuse for context
+    if src is None:
+        print("  [reference source not recorded — pre-Frenet HDF5 schema]\n")
+    else:
+        n = len(src)
+        uniq, counts = np.unique(src, return_counts=True)
+        print(f"  Source distribution ({n} frames):")
+        for u, c in sorted(zip(uniq, counts), key=lambda kv: -kv[1]):
+            print(f"    {str(u):<36s}  {int(c):6d}  ({100.0*c/n:5.1f}%)")
+        print()
+        if shadow_mode is not None:
+            shadow_on = float(np.mean(np.asarray(shadow_mode) > 0.5)) * 100.0
+            print(f"  Shadow mode active: {shadow_on:5.1f}% of frames")
+        if delta is not None:
+            d = np.abs(np.asarray(delta))
+            d = d[np.isfinite(d)]
+            if d.size > 0:
+                print(f"  |shadow delta (d_frenet - lookahead)| on valid frames:")
+                print(f"    mean = {float(np.mean(d)):.4f} m")
+                print(f"    P50  = {float(np.percentile(d, 50)):.4f} m")
+                print(f"    P95  = {float(np.percentile(d, 95)):.4f} m")
+                print(f"    max  = {float(np.max(d)):.4f} m")
+                print(f"  Interpretation: delta is +Ld·sin(e_heading). Large P95 means")
+                print(f"    the legacy lookahead reference is injecting heading-leak")
+                print(f"    that the cost function penalizes as if it were d_frenet.")
+        if frenet is not None:
+            fr = np.asarray(frenet)
+            fr = fr[np.isfinite(fr)]
+            if fr.size > 0:
+                print(f"  |d_frenet_linearized|:")
+                print(f"    P50  = {float(np.percentile(np.abs(fr), 50)):.4f} m")
+                print(f"    P95  = {float(np.percentile(np.abs(fr), 95)):.4f} m")
+        print()
 
     print(f"\n{sep}\n")
 
