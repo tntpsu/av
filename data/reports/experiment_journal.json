@@ -12,7 +12,10 @@
     "root_cause_of_failure": "model_plant_mismatch",
     "root_cause_detail": "MPC already discovers feedforward within 2 frames; decomposition doesn't help because the bottleneck is L_model=2.5 vs L_eff=3.65",
     "iterations_spent": 2,
-    "files_changed": ["control/mpc_controller.py", "tests/test_mpc_ff_decomposition.py"]
+    "files_changed": [
+      "control/mpc_controller.py",
+      "tests/test_mpc_ff_decomposition.py"
+    ]
   },
   {
     "date": "2026-04-13",
@@ -25,9 +28,12 @@
     "metric_before": 0.111,
     "metric_after": 0.111,
     "root_cause_of_failure": "model_plant_mismatch",
-    "root_cause_detail": "Stability boundary (q_lat≈2.5) is whole-horizon model-plant mismatch, not step-0 aggressiveness",
+    "root_cause_detail": "Stability boundary (q_lat\u22482.5) is whole-horizon model-plant mismatch, not step-0 aggressiveness",
     "iterations_spent": 2,
-    "files_changed": ["control/mpc_controller.py", "tests/test_mpc_preview_weighting.py"]
+    "files_changed": [
+      "control/mpc_controller.py",
+      "tests/test_mpc_preview_weighting.py"
+    ]
   },
   {
     "date": "2026-04-14",
@@ -42,13 +48,16 @@
     "root_cause_of_failure": "cfl_stability",
     "root_cause_detail": "CFL stability floor forces v_safe=6.2 m/s when actual=3.9 m/s on s_loop curves, creating worse mismatch than kinematic model",
     "iterations_spent": 1,
-    "files_changed": ["control/mpc_controller.py", "config/av_stack_config.yaml"]
+    "files_changed": [
+      "control/mpc_controller.py",
+      "config/av_stack_config.yaml"
+    ]
   },
   {
     "date": "2026-04-14",
     "target_metric": "lateral_rmse",
     "target_track": "s_loop",
-    "approach": "Higher q_lat (2.0 → 5.0)",
+    "approach": "Higher q_lat (2.0 \u2192 5.0)",
     "fix_level": "TUNING",
     "hypothesis": "More aggressive lateral tracking weight reduces steady-state error",
     "outcome": "REGRESSION",
@@ -57,13 +66,15 @@
     "root_cause_of_failure": "model_plant_mismatch",
     "root_cause_detail": "q_lat > 2.5 oscillates due to model-plant mismatch amplification; higher gain amplifies the 46% understeer bias",
     "iterations_spent": 1,
-    "files_changed": ["config/av_stack_config.yaml"]
+    "files_changed": [
+      "config/av_stack_config.yaml"
+    ]
   },
   {
     "date": "2026-04-14",
     "target_metric": "lateral_rmse",
     "target_track": "s_loop",
-    "approach": "Wheelbase correction (L=2.5 → 3.65)",
+    "approach": "Wheelbase correction (L=2.5 \u2192 3.65)",
     "fix_level": "TUNING",
     "hypothesis": "Matching L_model to L_eff eliminates understeer bias",
     "outcome": "NO_IMPROVEMENT",
@@ -72,21 +83,136 @@
     "root_cause_of_failure": "transient_dominance",
     "root_cause_detail": "Curve error is transient (entry ramp), not steady-state. Fixing L helps steady-state but transient entry with rate penalty dominates",
     "iterations_spent": 1,
-    "files_changed": ["config/av_stack_config.yaml"]
+    "files_changed": [
+      "config/av_stack_config.yaml"
+    ]
   },
   {
     "date": "2026-04-14",
     "target_metric": "lateral_rmse",
     "target_track": "s_loop",
-    "approach": "Lower r_steer_rate (2.0 → 1.0)",
+    "approach": "Lower r_steer_rate (2.0 \u2192 1.0)",
     "fix_level": "TUNING",
     "hypothesis": "Less rate penalty allows faster curve entry steering ramp",
     "outcome": "REGRESSION",
     "metric_before": 0.111,
-    "metric_after": 0.40,
+    "metric_after": 0.4,
     "root_cause_of_failure": "oscillation",
-    "root_cause_detail": "Rate penalty is load-bearing for stability — reducing it with model-plant mismatch present causes oscillation",
+    "root_cause_detail": "Rate penalty is load-bearing for stability \u2014 reducing it with model-plant mismatch present causes oscillation",
     "iterations_spent": 1,
-    "files_changed": ["config/av_stack_config.yaml"]
+    "files_changed": [
+      "config/av_stack_config.yaml"
+    ]
+  },
+  {
+    "date": "2026-04-19",
+    "target_metric": "overall_score",
+    "target_track": "highway_h2",
+    "approach": "Replace MPC scalar e_lat(0) with Frenet d (linearized, d = lookahead + Ld*sin(e_heading)) instead of lookahead-projection offset",
+    "fix_level": "CODE_PATCH",
+    "hypothesis": "Lookahead projection decomposes as d + Ld*sin(e_h) + Ld^2*kappa/2, adding hidden Ld*q_lat gain to heading penalty. Feeding geometrically-correct Frenet d removes coupling; restored H2 to >=98 expected.",
+    "outcome": "REGRESSION",
+    "metric_before": 79.0,
+    "metric_after": 59.0,
+    "root_cause_of_failure": "oscillation",
+    "root_cause_detail": "The Ld*sin(e_h) term acted as PD-preview DAMPING, not amplification as hypothesized. Removing it gave MPC geometrically-correct input but exposed under-damped q_heading tuning. Q1 P95=0.032m (excellent steady-state) degraded monotonically to Q4 P95=1.588m (divergence), classic under-damped signature. Shadow telemetry retained for diagnostic value (8.5x better match to physical truth).",
+    "iterations_spent": 1,
+    "files_changed": [
+      "av_stack/orchestrator.py",
+      "config/av_stack_config.yaml",
+      "control/pid_controller.py",
+      "data/formats/data_format.py",
+      "data/recorder.py",
+      "tests/test_mpc_controller.py",
+      "tests/test_mpc_frenet_reference.py",
+      "tools/analyze/analyze_frenet_shadow.py",
+      "tools/analyze/mpc_pipeline_analysis.py",
+      "tools/debug_visualizer/backend/issue_detector.py",
+      "tools/debug_visualizer/backend/layer_health.py",
+      "tools/debug_visualizer/backend/triage_engine.py"
+    ],
+    "plan_file": ".claude/plans/greedy-swimming-naur.md",
+    "commit_sha": "9f553f2",
+    "recordings": {
+      "g1_shadow_pass": "data/recordings/recording_20260419_135423.h5",
+      "g2_active_fail": "data/recordings/recording_20260419_140403.h5"
+    },
+    "path_forward_options": [
+      "Increase q_heading to restore damping lost from removed preview",
+      "Add explicit q_lat_preview cost term on e_lat + Ld*sin(e_h) \u2014 makes preview tunable",
+      "Implement frenet_map_exact (Phase 2) with horizon-propagated reference \u2014 preview becomes structural"
+    ]
+  },
+  {
+    "date": "2026-04-19",
+    "target_metric": "overall_score",
+    "target_track": "highway_h2 + mixed_radius",
+    "approach": "PROBE: revert 7e3caf0 runtime behavior via at_car_gt_legacy flag flip",
+    "fix_level": "CONFIG",
+    "hypothesis": "If 7e3caf0 is the sole cause of H2 regression, at-car reference should restore H2 without collateral damage",
+    "outcome": "MIXED",
+    "outcome_status": "OPEN",
+    "metric_before": 79.0,
+    "metric_after": 98.8,
+    "root_cause_of_failure": "proxy_approximation",
+    "root_cause_detail": "H2 restored cleanly to 98.8 (>baseline 98.1) \u2014 confirms damping-on-straights hypothesis. mixed_radius regressed 98.7->96.6 with Trajectory layer 87.7 (late turn-in C1, apex cutting C2). 7e3caf0 is load-bearing for curves: lookahead projection bundled at-car d + Ld*sin(e_h) heading damping + Ld^2*k/2 curvature preview into one scalar. Need decomposed fix (separate cost terms).",
+    "iterations_spent": 1,
+    "files_changed": [
+      "config/av_stack_config.yaml (probe branch only)"
+    ],
+    "superseded_by": null,
+    "resolved_by": null
+  },
+  {
+    "date": "2026-04-19",
+    "target_metric": "overall_score",
+    "target_track": "highway_h2 + 5 frozen tracks",
+    "approach": "Decomposed MPC reference: at_car_gt_legacy e_lat + mpc_ff_decomposition_enabled=true. Removes hidden q_lat\u00b7Ld\u00b2 heading P-gain, adds explicit \u03b4_ff = atan(L\u00b7\u03ba_ref).",
+    "fix_level": "CODE_PATCH",
+    "hypothesis": "Phase 0.5 empirical analysis showed Ld\u00b7sin(e_h) in the 7e3caf0 bundle is a P-gain on heading (corr with d/dt(e_h) = 0.06, not damping). The bundle adds +128 to q_heading (Ld=8, q_lat=2) and a destabilizing d\u00b7e_h cross-term. Removing the bundle + activating explicit FF should restore H2 without regressing curve tracks.",
+    "outcome": "IMPROVEMENT",
+    "metric_before": 79.0,
+    "metric_after": 98.8,
+    "root_cause_of_failure": null,
+    "root_cause_detail": "Hypothesis confirmed. H2 79\u219298.8 (+19.8). All 6 tracks within \u00b12.0 baseline tolerance. Net system delta +16.9. Residual Traj softness on mixed_radius (92.6) and hill_highway (86.5) is curve-entry transient dynamics, not FF scaling (d\u00b7sign(\u03ba) P95 near zero, no understeer bias). Deferred to separate iterate target.",
+    "iterations_spent": 1,
+    "files_changed": [
+      "config/av_stack_config.yaml",
+      "tools/analyze/analyze_mpc_term_roles.py"
+    ]
+  },
+  {
+    "date": "2026-04-20",
+    "target_metric": "overall_score",
+    "target_track": "highway_h5_stop_go",
+    "approach": "Enable acc.enabled=true to re-validate ACC scenarios post decomposed-MPC lateral fix",
+    "fix_level": "CONFIG",
+    "hypothesis": "With H2 lateral regression resolved (61cc446) and ACC stack fully plumbed, re-enabling the capability flag should restore stop-go scenarios to passing.",
+    "outcome": "REGRESSION",
+    "metric_before": null,
+    "metric_after": 59.0,
+    "root_cause_of_failure": "insufficient_brake_authority",
+    "root_cause_detail": "ACC state machine correctly enters COLLAPSED_GAP_STOP + acc_request_estop on the hard-deceleration half-cycles, but idm_comfortable_decel_mps2=3.0 is insufficient to prevent collision on 0->8 m/s sinusoidal lead profile; gap collapsed to 0.10m with 1177 e-stops over 60s.",
+    "iterations_spent": 1,
+    "files_changed": [
+      "config/av_stack_config.yaml"
+    ]
+  },
+  {
+    "date": "2026-04-20",
+    "target_metric": "overall_score",
+    "target_track": "hill_g2_stop_on_grade",
+    "approach": "Enable acc.enabled=true to re-validate ACC scenarios post decomposed-MPC lateral fix",
+    "fix_level": "CONFIG",
+    "hypothesis": "Same as H5 \u2014 capability flag flip should unblock scenario validation now that lateral stack is healthy.",
+    "outcome": "REGRESSION",
+    "metric_before": null,
+    "metric_after": 79.0,
+    "root_cause_of_failure": "insufficient_brake_authority",
+    "root_cause_detail": "Same failure mode as H5 (stop-collision) with grade effects amplifying the brake-authority deficit: 885 e-stops, gap collapsed to 0.10m. idm_comfortable_decel_mps2=3.0 needs to scale with grade or be increased globally.",
+    "iterations_spent": 1,
+    "files_changed": [
+      "config/av_stack_config.yaml"
+    ]
   }
 ]
