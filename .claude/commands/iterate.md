@@ -358,16 +358,26 @@ Before proposing ANY fix, check the bottleneck mechanism for these 5 design smel
 - Fix pattern: Add a forwarding test, or use config-object passthrough to eliminate explicit forwarding
 - Session example: 12 params (physics floor, motion profile) silently dropped by VehicleController
 
+**Smell 7: Load-bearing assumption removed without verification**
+- Is the fix removing a proxy, projection, or "contamination" term from an existing signal?
+- Has the plan proven *only* that the removed term is algebraically a bias/amplifier, without checking whether it is also acting as a PD-lead, damping term, or preview signal in closed loop?
+- Pattern: "this term looks like a bug, let's remove it", "the cost function was designed for X so feeding Y must be wrong"
+- Red flag: shadow-mode metrics look great (low steady-state error) but activation produces oscillation or runaway
+- Fix pattern: BEFORE activation, empirically verify the term's dynamic role — correlate it against `d/dt(error)` and `error`-lead at problem frames. If `corr(removed_term, heading_rate) > 0.5` on the frames where the system was stable, the term was carrying damping load and cannot be removed without substituting an explicit damping/preview term.
+- Session example (2026-04-19): Frenet MPC G2 activation. Plan removed `Ld·sin(e_h)` on the theory that it was a hidden heading amplifier. Shadow Q1 P95=0.032m (excellent). Active Q4 P95=1.588m (runaway). Root cause: that term was a PD-preview damping signal on the steady-state legacy path; removing it without replacement lost closed-loop stability.
+
 ```
 DESIGN SMELL CHECK
 ============================================================
 Bottleneck mechanism: <what's being modified>
 
-  □ Smell 1 — Binary gate?     <yes/no — describe if yes>
-  □ Smell 2 — Proxy stacking?  <yes/no — list params if yes>
-  □ Smell 3 — Frame-dependent? <yes/no — show formula if yes>
-  □ Smell 4 — Static table?    <yes/no — what physics it approximates>
-  □ Smell 5 — Post-hoc clamp?  <yes/no — what discontinuity it creates>
+  □ Smell 1 — Binary gate?          <yes/no — describe if yes>
+  □ Smell 2 — Proxy stacking?       <yes/no — list params if yes>
+  □ Smell 3 — Frame-dependent?      <yes/no — show formula if yes>
+  □ Smell 4 — Static table?         <yes/no — what physics it approximates>
+  □ Smell 5 — Post-hoc clamp?       <yes/no — what discontinuity it creates>
+  □ Smell 6 — Wrapper forwarding?   <yes/no — list params if yes>
+  □ Smell 7 — Load-bearing removed? <yes/no — what closed-loop role was verified>
 
   Smells detected: <count>
   → If ≥ 1: minimum ARCHITECTURE. Use /plan-feature.

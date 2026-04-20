@@ -12,11 +12,21 @@ If you find yourself several commits later realizing you never ran this, run it 
 
 Default: `HEAD` (the commit that just landed).
 
-If `$ARGUMENTS` is a SHA or `HEAD~N`, operate on that commit instead. Capture:
+`$ARGUMENTS` parsing:
+- Empty → operate on `HEAD`
+- A SHA or `HEAD~N` → operate on that commit
+- `--retrospective` flag (alone or combined with a SHA) → skip journal-writing rituals (`/log-fix`, `/log-experiment`). Doc + validation rituals (`/update-arch`, `/update-odd`, comfort-gate) still run.
+
+Rationale for `--retrospective`: if a commit landed >24h ago, or the relevant journal entry was already logged by a different flow, writing a fresh `/log-fix` or `/log-experiment` entry pollutes the Pareto (double-counts the outcome, misattributes the date). The doc/validation rituals remain valuable regardless of age because they check current state, not historical intent.
+
+Capture:
 - Commit SHA
 - Commit message (subject + body)
+- Commit age: `git show -s --format=%ct <sha>` vs `date +%s` (seconds since commit)
 - List of files changed: `git show --stat --name-only <sha>`
 - Full diff summary: `git show --stat <sha>`
+
+**Auto-detect retrospective mode:** if commit age > 86400 (24h) and no explicit `--retrospective` flag was passed, ANNOUNCE the auto-upgrade in the report — do not silently skip. The user may still want journal entries for recent-but-not-fresh work.
 
 ## Step 2 — Classify the commit
 
@@ -58,6 +68,21 @@ Order matters:
 1. `/log-fix` or `/log-experiment` first — these feed `/process-health` and should happen while context is fresh
 2. `/update-arch` next if applicable — internal architecture truth
 3. `/update-odd` last if applicable — external contract / capability claim (depends on arch being current)
+
+### Retrospective-mode ritual filter
+
+If `--retrospective` is active (either explicit or auto-detected per Step 1):
+
+| Ritual | Runs in retrospective? | Reason |
+|---|---|---|
+| `/log-fix` | **SKIP** | Journal entry already exists or too stale to attribute; double-counting pollutes the Pareto. |
+| `/log-experiment` | **SKIP** | Same. Use `/log-experiment` directly with `outcome_status` updates instead. |
+| `/update-arch` | RUN | Checks current state, not historical intent. |
+| `/update-odd` | RUN | Same. |
+| comfort-gate / scoring regression | RUN | Validation is a snapshot, always applicable. |
+| Unity rebuild flag | RUN | Current reality check. |
+
+Each skipped ritual MUST be reported with the reason "skipped: retrospective mode (commit age: Xh)" — silent skips mask bugs in the trigger rules (per anti-pattern below).
 
 ## Step 5 — Validation gates
 

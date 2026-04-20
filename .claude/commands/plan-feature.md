@@ -136,6 +136,36 @@ Before designing anything, verify the proposed approach actually changes behavio
 - Scaling a parameter that's already saturated or bypassed
 - Fixing a subsystem that's not the active controller at the problem frames (e.g., tuning MPC when PP is active)
 
+## Step 4b.1 — Design Smell Gate (MANDATORY)
+
+Run the 7-smell check from `/iterate` §2e4 against the proposed fix. A plan that triggers ANY smell without explicit architectural justification is BLOCKED — do not emit a `## Critical files modified` section until the smell is addressed or justified in writing.
+
+```
+DESIGN SMELL GATE (plan-side)
+============================================================
+  □ Smell 1 — Binary gate on continuous signal?
+  □ Smell 2 — Proxy stacking (2+ params ≈ one quantity)?
+  □ Smell 3 — Frame-rate dependent formula?
+  □ Smell 4 — Static lookup table for physics quantity?
+  □ Smell 5 — Post-hoc clamp / independent limiter?
+  □ Smell 6 — Wrapper forwarding gap?
+  □ Smell 7 — Load-bearing assumption removed without verification?
+
+  Smells triggered: <list>
+  Architectural justification (if any triggered): <text>
+============================================================
+```
+
+**Smell 7 deserves special care in plans.** If the fix removes a proxy/projection/"contamination" term, the plan MUST include a Phase 0.5 step that empirically measures the removed term's closed-loop role (not just its algebraic meaning) on the recordings the plan cites:
+
+- `corr(removed_term, d/dt(primary_error))` — is it carrying derivative/damping load?
+- `corr(removed_term, error_at_t+Δ)` for Δ = 0.1–0.5s — is it acting as preview?
+- Frequency content — does removing it shift the closed-loop pole structure?
+
+If any of these correlations exceed 0.5 on stable frames, the term is structurally load-bearing. The plan must then include an *explicit substitute* for that role (derivative gain, preview horizon, etc.) BEFORE activation, not discover the gap at G2.
+
+**Session precedent (2026-04-19):** `project_frenet_mpc_reference.md` passed Phase 0 (algebraic verification: candidate matched at-car truth at +0.9872 correlation, RMS 0.051m) but did NOT test the removed `Ld·sin(e_h)` term's dynamic role. Activation regressed H2 79→59 because that term was supplying PD-preview damping. A Phase 0.5 check would have caught this before the HDF5 plumbing was built.
+
 ## Step 4c — Prior Investigation Cross-Reference
 
 Before designing from scratch, check whether prior investigations already characterized this root cause:
