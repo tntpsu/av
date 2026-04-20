@@ -1128,7 +1128,7 @@ lateral_control:
 
 # ── ACC — Adaptive Cruise Control (Step 5) ──────────────────────────────────
 acc:
-  enabled: false            # Phase A: data pipeline only — set true when Unity radar bridge ready
+  enabled: true             # Enabled 2026-04-19 — re-run ACC scenarios post decomposed-MPC fix
   gap_alpha: 0.30           # EMA alpha for range filtering (lower = smoother)
   rate_alpha: 0.20          # EMA alpha for range-rate filtering
   # IDM parameters
