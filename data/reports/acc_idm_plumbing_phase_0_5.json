@@ -1,0 +1,108 @@
+[
+  {
+    "recording": "data/recordings/recording_20260419_234404.h5",
+    "frames_total": 1251,
+    "gate_0_5_1": {
+      "frames_used": 0,
+      "corr_idm_vs_measured_accel": NaN,
+      "idm_p50": NaN,
+      "idm_p95_abs": NaN,
+      "measured_p50": NaN,
+      "indeterminate": true,
+      "pass": false,
+      "soft_pass": false,
+      "interpretation": "INDETERMINATE: too few safe frames in recording. Scenario does not exercise normal ACC following \u2014 use a different recording to verify IDM coherence (e.g., a highway ACC scenario without immediate emergency). This is NOT a failure signal; it's a testability gap."
+    },
+    "gate_0_5_2": {
+      "median_dt_s": 0.10000000149011612,
+      "frames_active": 1186,
+      "corr_lag_-0.3s": -0.8092302974581257,
+      "corr_lag_+0.0s": -0.8499534903147733,
+      "corr_lag_+0.3s": -0.753567321570901,
+      "corr_lag_+0.6s": -0.8194564413971523,
+      "lead_gain_vs_zero": 0.09638616874387229,
+      "pass": true,
+      "interpretation": "IDM leads future speed-error by +0.096 \u2014 anticipation confirmed."
+    },
+    "gate_0_5_3": {
+      "collision_frame": 83,
+      "window": [
+        53,
+        103
+      ],
+      "baseline_min_gap_m": 0.10003364086151123,
+      "counterfactual_1_no_relaxation": {
+        "min_gap_m": 3.0752550406648935,
+        "min_ego_speed": 0.0,
+        "max_applied_decel": -2.999999999974782,
+        "avoids_collision": true
+      },
+      "counterfactual_2_with_relaxation": {
+        "min_gap_m": 4.698275128170145,
+        "min_ego_speed": 0.0,
+        "max_applied_decel": -11.999999436852645,
+        "avoids_collision": true
+      },
+      "pass": true,
+      "interpretation": "B2 w/ relaxation holds min_gap = 4.70 m (baseline was 0.10). B2 alone achieves 3.08 m. Plan is viable."
+    },
+    "verdict": {
+      "phase_0_5_1_pass_or_indeterminate": true,
+      "phase_0_5_3_pass": true,
+      "b2_viable": true
+    }
+  },
+  {
+    "recording": "data/recordings/recording_20260420_000022.h5",
+    "frames_total": 1273,
+    "gate_0_5_1": {
+      "frames_used": 271,
+      "corr_idm_vs_measured_accel": 0.43765190957199623,
+      "idm_p50": 0.7036633491516113,
+      "idm_p95_abs": 2.4921292066574097,
+      "measured_p50": 0.10578850480670894,
+      "indeterminate": false,
+      "pass": false,
+      "soft_pass": true,
+      "interpretation": "IDM accel weakly coherent \u2014 B2 may need low-pass filter."
+    },
+    "gate_0_5_2": {
+      "median_dt_s": 0.08068561553955078,
+      "frames_active": 1154,
+      "corr_lag_-0.3s": 0.5286060542739052,
+      "corr_lag_+0.0s": 0.5986960894738674,
+      "corr_lag_+0.3s": 0.577705464893471,
+      "corr_lag_+0.6s": 0.5960979274385668,
+      "lead_gain_vs_zero": -0.020990624580396466,
+      "pass": false,
+      "interpretation": "IDM and speed-error are contemporaneous \u2014 no lead \u2014 B2 benefit less certain."
+    },
+    "gate_0_5_3": {
+      "collision_frame": 396,
+      "window": [
+        366,
+        416
+      ],
+      "baseline_min_gap_m": 0.10040593147277832,
+      "counterfactual_1_no_relaxation": {
+        "min_gap_m": -8.717220220664176,
+        "min_ego_speed": 0.9320220474763894,
+        "max_applied_decel": -3.4902818814775864,
+        "avoids_collision": false
+      },
+      "counterfactual_2_with_relaxation": {
+        "min_gap_m": -5.789493588861921,
+        "min_ego_speed": 0.0,
+        "max_applied_decel": -11.999931736221725,
+        "avoids_collision": false
+      },
+      "pass": false,
+      "interpretation": "B2 w/ relaxation holds min_gap = -5.79 m (baseline was 0.10). B2 alone achieves -8.72 m. B2 + relaxation insufficient \u2014 B1 strictly required."
+    },
+    "verdict": {
+      "phase_0_5_1_pass_or_indeterminate": true,
+      "phase_0_5_3_pass": false,
+      "b2_viable": false
+    }
+  }
+]
