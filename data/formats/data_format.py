@@ -802,6 +802,10 @@ class ControlCommand:
     mpc_e_lat_frenet_linearized_m: float = 0.0
     mpc_e_lat_shadow_delta_m: float = 0.0
     mpc_e_lat_frenet_shadow_mode: int = 0
+    # ACC IDM-accel routing telemetry (acc-idm-accel-plumbing.md — shadow-mode first)
+    reference_accel_mps2: float = 0.0             # What's fed to controller (NaN = disabled/shadow)
+    reference_accel_source: str = ""              # "acc_idm" | "shadow" | "disabled"
+    acc_idm_accel_shadow_mps2: float = 0.0        # IDM accel for logging (always populated when ACC enabled)
     mpc_gt_heading_error_rad: float = 0.0
     mpc_using_ground_truth: float = 0.0
     mpc_kappa_preview_used: bool = False

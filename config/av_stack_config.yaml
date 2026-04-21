@@ -346,6 +346,16 @@ control:
     launch_throttle_cap_max: 0.55
     launch_throttle_rearm_hysteresis: 0.5
     launch_throttle_stop_hold_seconds: 0.5
+    # ACC IDM-accel routing (acc-idm-accel-plumbing.md — shadow-mode first)
+    # When routing_enabled + not shadow + acc_active, feed acc_idm_accel_mps2 as
+    # reference_accel to the longitudinal controller instead of implicit
+    # speed-error P-control. Shadow mode: compute and log telemetry only.
+    acc_idm_accel_routing_enabled: true           # Master switch for B2 plumbing
+    acc_idm_accel_routing_shadow_mode: true       # true = log only, false = feed to controller
+    acc_idm_accel_routing_emergency_decel_floor: -3.0   # Controller floor; -12 relaxes decel in emergency states
+    acc_idm_accel_routing_emergency_jerk_max: 4.0       # Controller jerk ceiling; 10 relaxes jerk in emergency states
+    acc_idm_accel_routing_emergency_relax_in_estate: false  # Off until B2 active; widens floors in EMERGENCY_BRAKE/TTC_ESTOP/COLLAPSED_GAP_STOP
+    acc_idm_accel_routing_b1_hard_brake_bypass: false       # Safety-net: EMERGENCY_BRAKE sets brake=1.0 like TTC_ESTOP
   grade_ema_alpha: 0.15               # Grade signal EMA smoothing (no-op when grade=0)
   regime:
     enabled: true

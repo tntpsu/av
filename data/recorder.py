@@ -2756,6 +2756,15 @@ class DataRecorder:
         self.h5_file.create_dataset("control/mpc_e_lat_frenet_linearized_m", shape=(0,), maxshape=max_shape, dtype=np.float32)
         self.h5_file.create_dataset("control/mpc_e_lat_shadow_delta_m", shape=(0,), maxshape=max_shape, dtype=np.float32)
         self.h5_file.create_dataset("control/mpc_e_lat_frenet_shadow_mode", shape=(0,), maxshape=max_shape, dtype=np.int8)
+        # ACC IDM-accel routing telemetry (acc-idm-accel-plumbing.md — shadow-mode first)
+        self.h5_file.create_dataset("control/reference_accel_mps2", shape=(0,), maxshape=max_shape, dtype=np.float32)
+        self.h5_file.create_dataset(
+            "control/reference_accel_source",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=h5py.string_dtype(encoding='utf-8', length=32)
+        )
+        self.h5_file.create_dataset("control/acc_idm_accel_shadow_mps2", shape=(0,), maxshape=max_shape, dtype=np.float32)
         self.h5_file.create_dataset(
             "control/mpc_gt_cross_track_control_source_code",
             shape=(0,),
@@ -7740,6 +7749,9 @@ class DataRecorder:
         mpc_e_lat_frenet_linearized_m_list = []
         mpc_e_lat_shadow_delta_m_list = []
         mpc_e_lat_frenet_shadow_mode_list = []
+        reference_accel_mps2_list = []
+        reference_accel_source_list = []
+        acc_idm_accel_shadow_mps2_list = []
         mpc_gt_heading_error_rad_list = []
         mpc_using_ground_truth_list = []
         mpc_kappa_preview_used_list = []
@@ -9211,6 +9223,15 @@ class DataRecorder:
             mpc_e_lat_frenet_shadow_mode_list.append(
                 int(getattr(cc, 'mpc_e_lat_frenet_shadow_mode', 0))
             )
+            reference_accel_mps2_list.append(
+                float(getattr(cc, 'reference_accel_mps2', float('nan')))
+            )
+            reference_accel_source_list.append(
+                str(getattr(cc, 'reference_accel_source', '') or '')
+            )
+            acc_idm_accel_shadow_mps2_list.append(
+                float(getattr(cc, 'acc_idm_accel_shadow_mps2', 0.0))
+            )
             mpc_gt_heading_error_rad_list.append(float(getattr(cc, 'mpc_gt_heading_error_rad', 0.0)))
             mpc_using_ground_truth_list.append(float(getattr(cc, 'mpc_using_ground_truth', 0.0)))
             mpc_kappa_preview_used_list.append(int(getattr(cc, 'mpc_kappa_preview_used', False)))
@@ -9607,6 +9628,8 @@ class DataRecorder:
                        "mpc_e_lat_reference_source", "mpc_e_lat_reference_divergence_m",
                        "mpc_e_lat_frenet_linearized_m", "mpc_e_lat_shadow_delta_m",
                        "mpc_e_lat_frenet_shadow_mode",
+                       "reference_accel_mps2", "reference_accel_source",
+                       "acc_idm_accel_shadow_mps2",
                        "mpc_gt_heading_error_rad",
                        "mpc_using_ground_truth",
                        "mpc_kappa_preview_used", "mpc_kappa_preview_range",
@@ -10854,6 +10877,16 @@ class DataRecorder:
             )
             self.h5_file["control/mpc_e_lat_frenet_shadow_mode"][current_size:] = (
                 mpc_e_lat_frenet_shadow_mode_list
+            )
+            self.h5_file["control/reference_accel_mps2"][current_size:] = (
+                reference_accel_mps2_list
+            )
+            self.h5_file["control/reference_accel_source"][current_size:] = np.array(
+                reference_accel_source_list,
+                dtype=h5py.string_dtype(encoding='utf-8', length=32),
+            )
+            self.h5_file["control/acc_idm_accel_shadow_mps2"][current_size:] = (
+                acc_idm_accel_shadow_mps2_list
             )
             self.h5_file["control/mpc_gt_heading_error_rad"][current_size:] = mpc_gt_heading_error_rad_list
             self.h5_file["control/mpc_using_ground_truth"][current_size:] = mpc_using_ground_truth_list

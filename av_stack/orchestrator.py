@@ -8551,6 +8551,24 @@ class AVStack:
                     if acc_target_speed_mps is not None and np.isfinite(float(acc_target_speed_mps))
                     else np.nan
                 )
+                # ACC IDM-accel routing (acc-idm-accel-plumbing.md — shadow-mode first).
+                # When routing is enabled + not in shadow + ACC is active, feed the IDM
+                # accel into the longitudinal controller as reference_accel. Otherwise
+                # log only (shadow mode) or skip (disabled).
+                _long_cfg = self.config.get('control', {}).get('longitudinal', {})
+                _acc_routing_enabled = bool(_long_cfg.get('acc_idm_accel_routing_enabled', False))
+                _acc_routing_shadow = bool(_long_cfg.get('acc_idm_accel_routing_shadow_mode', True))
+                _acc_active_now = bool(vehicle_state_dict.get('acc_active', 0.0))
+                _idm_accel_shadow = float(vehicle_state_dict.get('acc_idm_accel_mps2', 0.0) or 0.0)
+                if _acc_routing_enabled and not _acc_routing_shadow and _acc_active_now:
+                    control_command['reference_accel_mps2'] = _idm_accel_shadow
+                    control_command['reference_accel_source'] = 'acc_idm'
+                else:
+                    control_command['reference_accel_mps2'] = float('nan')
+                    control_command['reference_accel_source'] = (
+                        'shadow' if _acc_routing_shadow else 'disabled'
+                    )
+                control_command['acc_idm_accel_shadow_mps2'] = _idm_accel_shadow
                 control_command['planner_target_speed_applied_mps'] = planner_target_speed_applied_mps
                 control_command['final_longitudinal_target_mps'] = final_longitudinal_target_mps
                 control_command['final_longitudinal_owner_code'] = final_longitudinal_owner_code
@@ -11928,6 +11946,9 @@ class AVStack:
             target_speed_final=control_command.get('target_speed_final'),
             governor_target_speed_mps=control_command.get('governor_target_speed_mps'),
             acc_target_speed_mps=control_command.get('acc_target_speed_mps'),
+            reference_accel_mps2=control_command.get('reference_accel_mps2', float('nan')),
+            reference_accel_source=control_command.get('reference_accel_source', ''),
+            acc_idm_accel_shadow_mps2=control_command.get('acc_idm_accel_shadow_mps2', 0.0),
             planner_target_speed_applied_mps=control_command.get('planner_target_speed_applied_mps'),
             final_longitudinal_target_mps=control_command.get('final_longitudinal_target_mps'),
             final_longitudinal_owner_code=control_command.get('final_longitudinal_owner_code', ''),
