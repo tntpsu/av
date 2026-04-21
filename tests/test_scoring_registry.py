@@ -380,3 +380,73 @@ class TestOscillationAmplitudeGrowthConstants:
     def test_max_penalty(self):
         from scoring_registry import OSCILLATION_AMPLITUDE_GROWTH_MAX_PENALTY
         assert OSCILLATION_AMPLITUDE_GROWTH_MAX_PENALTY == 15.0
+
+
+class TestACCEmergencyExemption:
+    """Guard the emergency-state comfort exemption introduced for ACC IDM plumbing."""
+
+    def test_emergency_states_is_frozenset(self):
+        from scoring_registry import EMERGENCY_ACC_STATES
+        assert isinstance(EMERGENCY_ACC_STATES, frozenset)
+
+    def test_emergency_states_membership(self):
+        from scoring_registry import EMERGENCY_ACC_STATES
+        assert EMERGENCY_ACC_STATES == frozenset({
+            "EMERGENCY_BRAKE", "TTC_ESTOP", "COLLAPSED_GAP_STOP",
+        })
+
+    def test_accel_emergency_gate_matches_idm_floor(self):
+        from scoring_registry import ACCEL_P95_EMERGENCY_GATE_MPS2
+        assert ACCEL_P95_EMERGENCY_GATE_MPS2 == 12.0
+
+    def test_jerk_emergency_gate_is_twice_nominal(self):
+        from scoring_registry import (
+            JERK_P95_EMERGENCY_GATE_MPS3,
+            JERK_P95_GATE_MPS3,
+        )
+        assert JERK_P95_EMERGENCY_GATE_MPS3 == 12.0
+        # Emergency gate strictly looser than nominal — otherwise exemption is meaningless.
+        assert JERK_P95_EMERGENCY_GATE_MPS3 > JERK_P95_GATE_MPS3
+
+    def test_acc_jerk_emergency_gate_strictly_looser_than_follow_gate(self):
+        from scoring_registry import (
+            ACC_JERK_P95_EMERGENCY_GATE_MPS3,
+            ACC_JERK_P95_GATE_MPS3,
+        )
+        assert ACC_JERK_P95_EMERGENCY_GATE_MPS3 == 10.0
+        assert ACC_JERK_P95_EMERGENCY_GATE_MPS3 > ACC_JERK_P95_GATE_MPS3
+
+    def test_accel_emergency_gate_strictly_looser_than_nominal(self):
+        from scoring_registry import (
+            ACCEL_P95_EMERGENCY_GATE_MPS2,
+            ACCEL_P95_GATE_MPS2,
+        )
+        assert ACCEL_P95_EMERGENCY_GATE_MPS2 > ACCEL_P95_GATE_MPS2
+
+    def test_is_emergency_acc_state_accepts_exempt_states(self):
+        from scoring_registry import is_emergency_acc_state
+        assert is_emergency_acc_state("EMERGENCY_BRAKE") is True
+        assert is_emergency_acc_state("TTC_ESTOP") is True
+        assert is_emergency_acc_state("COLLAPSED_GAP_STOP") is True
+
+    def test_is_emergency_acc_state_rejects_nominal_states(self):
+        from scoring_registry import is_emergency_acc_state
+        assert is_emergency_acc_state("ACC_ACTIVE") is False
+        assert is_emergency_acc_state("CUTOUT") is False
+        assert is_emergency_acc_state("DISABLED") is False
+
+    def test_is_emergency_acc_state_tolerates_none_and_blank(self):
+        from scoring_registry import is_emergency_acc_state
+        assert is_emergency_acc_state(None) is False
+        assert is_emergency_acc_state("") is False
+        assert is_emergency_acc_state("   ") is False
+
+    def test_is_emergency_acc_state_strips_whitespace(self):
+        from scoring_registry import is_emergency_acc_state
+        assert is_emergency_acc_state("  EMERGENCY_BRAKE  ") is True
+
+    def test_is_emergency_acc_state_is_case_sensitive(self):
+        # Controller emits uppercase state codes; guard against silent casing drift.
+        from scoring_registry import is_emergency_acc_state
+        assert is_emergency_acc_state("emergency_brake") is False
+        assert is_emergency_acc_state("Emergency_Brake") is False

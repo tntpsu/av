@@ -119,6 +119,38 @@ ACC_DETECTION_RATE_GATE: float = 0.95       # —  — min detection rate when l
 ACC_EMERGENCY_BRAKE_GAP_FACTOR: float = 1.5  # —  — gap < factor×speed → emergency brake
 ACC_MIN_ACTIVE_FRAME_RATE: float = 0.10     # —  — min fraction for ACC section to activate
 
+# ── ACC emergency-state comfort exemptions (acc-idm-accel-plumbing.md) ───────
+# When ACC state ∈ EMERGENCY_ACC_STATES, the controller is authorized to apply
+# up to IDM's floor (-12 m/s²) to prevent collision. Nominal comfort gates
+# (3.0 m/s², 6.0 m/s³) would mis-score this legitimate response as a
+# catastrophic comfort violation. These looser variants apply ONLY within
+# emergency-state frames; nominal driving still uses the base gates.
+#
+# Infrastructure only — consumers (drive_summary_core, triage_engine) wire
+# the exemption in Commit B (activation). Keeping constants unconsumed in
+# Commit A preserves zero-behavior-change for the scoring regression suite.
+EMERGENCY_ACC_STATES: frozenset[str] = frozenset({
+    "EMERGENCY_BRAKE", "TTC_ESTOP", "COLLAPSED_GAP_STOP",
+})
+ACCEL_P95_EMERGENCY_GATE_MPS2: float = 12.0  # matches IDM -12 m/s² saturation floor
+JERK_P95_EMERGENCY_GATE_MPS3: float = 12.0   # 2× nominal (6.0) for brake-onset transient
+ACC_JERK_P95_EMERGENCY_GATE_MPS3: float = 10.0  # 2.5× nominal follow-mode (4.0)
+
+
+def is_emergency_acc_state(state_code: "str | None") -> bool:
+    """Return True when state authorizes emergency-decel comfort exemption.
+
+    Consumers (drive_summary_core, triage_engine) apply looser jerk/accel
+    gates to frames where this returns True. The three exempt states
+    correspond to controller modes where collision avoidance takes
+    precedence over comfort (EMERGENCY_BRAKE, TTC_ESTOP,
+    COLLAPSED_GAP_STOP). Any other state (CUTOUT, ACC_ACTIVE, DISABLED,
+    empty string, None) returns False and stays on nominal gates.
+    """
+    if state_code is None:
+        return False
+    return str(state_code).strip() in EMERGENCY_ACC_STATES
+
 # ── Steering profile reversal ────────────────────────────────────────────────
 PROFILE_REVERSAL_URGENCY_HIGH: float = 0.8      # — urgency above this = "high urgency" event
 PROFILE_REVERSAL_TRACKING_ERROR_M: float = 0.10  # m — post-reversal steering error threshold
