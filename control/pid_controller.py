@@ -4899,7 +4899,11 @@ class LongitudinalController:
         reference_accel: Optional[float] = None,
         current_curvature: Optional[float] = None,
         min_speed_floor: Optional[float] = None,
-        grade_rad: float = 0.0
+        grade_rad: float = 0.0,
+        acc_state_code: str = "",
+        emergency_relax_enabled: bool = False,
+        emergency_decel_floor: float = -3.0,
+        emergency_jerk_max: float = 4.0,
     ) -> Tuple[float, float]:
         """
         Compute throttle and brake commands with speed smoothing and limiting.
@@ -5003,6 +5007,17 @@ class LongitudinalController:
         # Grade-zero proof: gravity_accel=0 → effective limits = base limits.
         effective_max_accel = self.max_accel + abs(gravity_accel)
         effective_max_decel = self.max_decel + abs(gravity_accel)
+        # ACC emergency-state relaxation (acc-idm-accel-plumbing.md Commit C).
+        # Mirror scoring_registry.EMERGENCY_ACC_STATES — kept in sync by the
+        # scoring-registry comfort-exemption path. When the ACC state machine is
+        # in one of these states AND relaxation is enabled AND IDM is commanding
+        # decel, widen the decel clamp and jerk ceiling so the controller can
+        # actually deliver the IDM-requested -12 m/s² instead of capping at -3.
+        _in_emergency_state = emergency_relax_enabled and str(acc_state_code).strip() in (
+            "EMERGENCY_BRAKE", "TTC_ESTOP", "COLLAPSED_GAP_STOP"
+        )
+        if _in_emergency_state:
+            effective_max_decel = max(effective_max_decel, abs(emergency_decel_floor))
         desired_accel = np.clip(desired_accel, -effective_max_decel, effective_max_accel)
         self._effective_max_accel = effective_max_accel
         self._effective_max_decel = effective_max_decel
@@ -5072,6 +5087,9 @@ class LongitudinalController:
                 # Grade-zero proof: gravity_accel=0 → grade_jerk_bonus=0. No change.
                 grade_jerk_bonus = abs(gravity_accel) * self.grade_jerk_relaxation_gain
                 dynamic_max_jerk += grade_jerk_bonus
+                # ACC emergency-state jerk ceiling widening.
+                if _in_emergency_state:
+                    dynamic_max_jerk = max(dynamic_max_jerk, emergency_jerk_max)
                 accel_cmd = np.clip(
                     accel_cmd,
                     self.last_accel_cmd - (dynamic_max_jerk * dt),
@@ -6119,7 +6137,8 @@ class VehicleController:
         dt: Optional[float] = None,
         reference_accel: Optional[float] = None,
         using_stale_perception: bool = False,
-        grade_rad: float = 0.0
+        grade_rad: float = 0.0,
+        acc_state_code: str = "",
     ) -> dict:
         """
         Compute control commands.
@@ -6883,7 +6902,12 @@ class VehicleController:
         # Keep steering in lateral_metadata for consistency
         lateral_metadata['steering'] = steering
         
-        # Longitudinal control
+        # Longitudinal control — forward acc_state_code + emergency-relax config
+        # for the IDM-accel routing path (acc-idm-accel-plumbing.md Commit C).
+        _long_cfg = self._full_config.get('control', {}).get('longitudinal', {}) if self._full_config else {}
+        _emergency_relax_enabled = bool(_long_cfg.get('acc_idm_accel_routing_emergency_relax_in_estate', False))
+        _emergency_decel_floor = float(_long_cfg.get('acc_idm_accel_routing_emergency_decel_floor', -3.0))
+        _emergency_jerk_max = float(_long_cfg.get('acc_idm_accel_routing_emergency_jerk_max', 4.0))
         throttle, brake = self.longitudinal_controller.compute_control(
             current_state.get('speed', 0.0),
             reference_point.get('velocity'),
@@ -6891,7 +6915,11 @@ class VehicleController:
             reference_accel=reference_accel,
             current_curvature=reference_point.get('curvature'),
             min_speed_floor=reference_point.get('min_speed_floor'),
-            grade_rad=grade_rad
+            grade_rad=grade_rad,
+            acc_state_code=acc_state_code,
+            emergency_relax_enabled=_emergency_relax_enabled,
+            emergency_decel_floor=_emergency_decel_floor,
+            emergency_jerk_max=_emergency_jerk_max,
         )
         
         result = {

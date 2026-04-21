@@ -214,5 +214,25 @@
     "files_changed": [
       "config/av_stack_config.yaml"
     ]
+  },
+  {
+    "date": "2026-04-20",
+    "target_metric": "acc_idm_plumbing_shadow_telemetry",
+    "target_track": "highway_h5_stop_go",
+    "approach": "Shadow-mode B2 plumbing: 6 config keys, 3 ControlCommand fields, orchestrator telemetry populate, 6-location HDF5 plumbing. Controller unchanged.",
+    "fix_level": "CODE_PATCH",
+    "hypothesis": "Shadow-mode commit should (a) populate new HDF5 datasets with valid telemetry, (b) preserve H5 baseline of ~59 exactly since no behavior changes.",
+    "outcome": "IMPROVEMENT",
+    "metric_before": 59.0,
+    "metric_after": 59.0,
+    "root_cause_of_failure": null,
+    "root_cause_detail": "Telemetry plumbing validated: Phase 0.5 finding (IDM saturates at -12 on collision frames) reproduces exactly. H5 baseline preserved at 59.0 since controller unchanged. Minor 1-frame startup lag between shadow field and native field noted for activation commit.",
+    "iterations_spent": 1,
+    "files_changed": [
+      "av_stack/orchestrator.py",
+      "config/av_stack_config.yaml",
+      "data/formats/data_format.py",
+      "data/recorder.py"
+    ]
   }
 ]

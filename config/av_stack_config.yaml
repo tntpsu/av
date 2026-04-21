@@ -351,11 +351,11 @@ control:
     # reference_accel to the longitudinal controller instead of implicit
     # speed-error P-control. Shadow mode: compute and log telemetry only.
     acc_idm_accel_routing_enabled: true           # Master switch for B2 plumbing
-    acc_idm_accel_routing_shadow_mode: true       # true = log only, false = feed to controller
-    acc_idm_accel_routing_emergency_decel_floor: -3.0   # Controller floor; -12 relaxes decel in emergency states
-    acc_idm_accel_routing_emergency_jerk_max: 4.0       # Controller jerk ceiling; 10 relaxes jerk in emergency states
-    acc_idm_accel_routing_emergency_relax_in_estate: false  # Off until B2 active; widens floors in EMERGENCY_BRAKE/TTC_ESTOP/COLLAPSED_GAP_STOP
-    acc_idm_accel_routing_b1_hard_brake_bypass: false       # Safety-net: EMERGENCY_BRAKE sets brake=1.0 like TTC_ESTOP
+    acc_idm_accel_routing_shadow_mode: false      # true = log only, false = feed to controller  (ACTIVE — acc-idm-accel-plumbing Commit C)
+    acc_idm_accel_routing_emergency_decel_floor: -12.0  # Matches IDM -12 m/s² saturation floor in exempt states
+    acc_idm_accel_routing_emergency_jerk_max: 10.0      # 2.5× nominal (4.0) for brake-onset transient
+    acc_idm_accel_routing_emergency_relax_in_estate: true   # ACTIVE: widens decel/jerk in EMERGENCY_BRAKE/TTC_ESTOP/COLLAPSED_GAP_STOP
+    acc_idm_accel_routing_b1_hard_brake_bypass: false       # Safety-net (Commit D, only if C misses goal): EMERGENCY_BRAKE sets brake=1.0 like TTC_ESTOP
   grade_ema_alpha: 0.15               # Grade signal EMA smoothing (no-op when grade=0)
   regime:
     enabled: true

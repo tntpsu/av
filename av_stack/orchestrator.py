@@ -8512,15 +8512,37 @@ class AVStack:
                             self._apply_unity_geometry(_lf, _lr, _mass, _iz)
                             self._unity_geometry_applied = True
 
+                # ACC IDM-accel routing (acc-idm-accel-plumbing.md Commit C — active).
+                # Pre-control decision: when routing is active + not in shadow + ACC
+                # is active + IDM wants to decelerate, override planner-side planned_accel
+                # with the IDM accel so it reaches the longitudinal controller directly.
+                # The post-call block below populates the telemetry fields.
+                _long_cfg_pre = self.config.get('control', {}).get('longitudinal', {})
+                _acc_routing_enabled = bool(_long_cfg_pre.get('acc_idm_accel_routing_enabled', False))
+                _acc_routing_shadow = bool(_long_cfg_pre.get('acc_idm_accel_routing_shadow_mode', True))
+                _acc_active_now = bool(vehicle_state_dict.get('acc_active', 0.0))
+                _idm_accel_shadow = float(vehicle_state_dict.get('acc_idm_accel_mps2', 0.0) or 0.0)
+                _acc_state_code_now = str(vehicle_state_dict.get('acc_state_code', '') or '')
+                _route_idm_to_ctrl = (
+                    _acc_routing_enabled
+                    and not _acc_routing_shadow
+                    and _acc_active_now
+                    and _idm_accel_shadow < 0.0  # only override on decel — accel path still planner-owned
+                )
+                _reference_accel_for_ctrl = (
+                    _idm_accel_shadow if _route_idm_to_ctrl else planned_accel
+                )
+
                 # Get control command with metadata for recording
                 control_command = self.controller.compute_control(
                     current_state,
                     reference_point,
                     return_metadata=True,
                     dt=control_dt,
-                    reference_accel=planned_accel,
+                    reference_accel=_reference_accel_for_ctrl,
                     using_stale_perception=using_stale_data,
-                    grade_rad=fv.get('smoothed_grade', 0.0)
+                    grade_rad=fv.get('smoothed_grade', 0.0),
+                    acc_state_code=_acc_state_code_now,
                 )
                 # Silent e_lat dropout detection.
                 # A "silent dropout" is when the perception layer returns e_lat≈0
@@ -8551,23 +8573,23 @@ class AVStack:
                     if acc_target_speed_mps is not None and np.isfinite(float(acc_target_speed_mps))
                     else np.nan
                 )
-                # ACC IDM-accel routing (acc-idm-accel-plumbing.md — shadow-mode first).
-                # When routing is enabled + not in shadow + ACC is active, feed the IDM
-                # accel into the longitudinal controller as reference_accel. Otherwise
-                # log only (shadow mode) or skip (disabled).
-                _long_cfg = self.config.get('control', {}).get('longitudinal', {})
-                _acc_routing_enabled = bool(_long_cfg.get('acc_idm_accel_routing_enabled', False))
-                _acc_routing_shadow = bool(_long_cfg.get('acc_idm_accel_routing_shadow_mode', True))
-                _acc_active_now = bool(vehicle_state_dict.get('acc_active', 0.0))
-                _idm_accel_shadow = float(vehicle_state_dict.get('acc_idm_accel_mps2', 0.0) or 0.0)
-                if _acc_routing_enabled and not _acc_routing_shadow and _acc_active_now:
+                # ACC IDM-accel routing telemetry. The routing decision itself
+                # was made pre-compute_control above; here we just populate the
+                # fields so downstream recorders know which path was taken.
+                if _route_idm_to_ctrl:
                     control_command['reference_accel_mps2'] = _idm_accel_shadow
                     control_command['reference_accel_source'] = 'acc_idm'
                 else:
                     control_command['reference_accel_mps2'] = float('nan')
-                    control_command['reference_accel_source'] = (
-                        'shadow' if _acc_routing_shadow else 'disabled'
-                    )
+                    if not _acc_routing_enabled:
+                        control_command['reference_accel_source'] = 'disabled'
+                    elif _acc_routing_shadow:
+                        control_command['reference_accel_source'] = 'shadow'
+                    elif not _acc_active_now:
+                        control_command['reference_accel_source'] = 'acc_inactive'
+                    else:
+                        # routing active + ACC active but IDM accel >= 0 → planner-owned path
+                        control_command['reference_accel_source'] = 'planner'
                 control_command['acc_idm_accel_shadow_mps2'] = _idm_accel_shadow
                 control_command['planner_target_speed_applied_mps'] = planner_target_speed_applied_mps
                 control_command['final_longitudinal_target_mps'] = final_longitudinal_target_mps
