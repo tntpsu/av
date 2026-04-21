@@ -66,6 +66,7 @@ from scoring_registry import (
     OSCILLATION_AMPLITUDE_GROWTH_MAX_PENALTY,
     PERCEPTION_BLIND_RATE_GATE,
     PERCEPTION_BLIND_PENALTY_MAX,
+    is_emergency_acc_state,
 )
 
 G_MPS2 = 9.80665
@@ -3247,6 +3248,19 @@ def _build_acc_health_summary(data: Dict, n_frames: int, speed: Optional[np.ndar
         return None
 
     acc_mask = acc_active > 0.5
+    # Emergency-state exemption (acc-idm-accel-plumbing.md): frames in
+    # EMERGENCY_BRAKE / TTC_ESTOP / COLLAPSED_GAP_STOP authorize IDM to command
+    # up to -12 m/s² decel. Including these frames in the nominal-comfort P95
+    # would flag intended emergency braking as discomfort. Excluded from
+    # comfort stats only; detection / regime stats still count these frames.
+    acc_state_codes = _decode_string_series(data.get("acc_state_code"))
+    if len(acc_state_codes) >= n:
+        acc_emergency_mask = np.array(
+            [is_emergency_acc_state(s) for s in acc_state_codes[:n]],
+            dtype=bool,
+        )
+    else:
+        acc_emergency_mask = np.zeros(n, dtype=bool)
     time_arr = (
         np.asarray(data.get("time")[:n], dtype=float)
         if data.get("time") is not None
@@ -3699,16 +3713,17 @@ def _build_acc_health_summary(data: Dict, n_frames: int, speed: Optional[np.ndar
         }
         following_regime_mode = max(regime_rates.items(), key=lambda item: item[1])[0]
 
-    # Jerk metrics in ACC-active frames
+    # Jerk metrics in ACC-active, non-emergency frames (comfort scope only).
     acc_jerk_p95_raw = 0.0
     acc_jerk_p95_filtered = 0.0
     acc_commanded_jerk_p95 = 0.0
     acc_target_speed_delta_p95 = 0.0
     acc_commanded_accel_delta_p95 = 0.0
-    if speed is not None and len(speed) >= n and np.sum(acc_mask) > 2:
+    acc_nominal_mask = acc_mask & ~acc_emergency_mask
+    if speed is not None and len(speed) >= n and np.sum(acc_nominal_mask) > 2:
         spd = np.asarray(speed[:n], dtype=float)
         active_idx = np.flatnonzero(
-            acc_mask
+            acc_nominal_mask
             & np.isfinite(time_arr)
             & np.isfinite(spd)
         )
@@ -7765,19 +7780,47 @@ def analyze_recording_summary(
     if data.get('speed') is not None and len(data['speed']) > 1 and len(data['time']) > 1:
         dt_series = np.diff(data['time'])
         dt_series[dt_series <= 0] = dt
+        # Emergency-state exemption (acc-idm-accel-plumbing.md): exclude
+        # EMERGENCY_BRAKE / TTC_ESTOP / COLLAPSED_GAP_STOP frames from the
+        # overall comfort P95 since IDM is authorized to command up to
+        # -12 m/s² decel in those states. diff-series-aligned masks so an
+        # exempt source frame propagates to its accel/jerk outputs.
+        _n_full = len(data['speed'])
+        _state_codes_full = _decode_string_series(data.get('acc_state_code'))
+        if len(_state_codes_full) >= _n_full:
+            _em_full = np.array(
+                [is_emergency_acc_state(s) for s in _state_codes_full[:_n_full]],
+                dtype=bool,
+            )
+        else:
+            _em_full = np.zeros(_n_full, dtype=bool)
+        # accel[i] derives from speed[i], speed[i+1] → exempt if either is emergency
+        if _n_full >= 2:
+            _accel_exempt = _em_full[:-1] | _em_full[1:]
+        else:
+            _accel_exempt = np.zeros(0, dtype=bool)
+        # jerk[i] derives from speed[i], speed[i+1], speed[i+2] → exempt if any
+        if _n_full >= 3:
+            _jerk_exempt = _em_full[:-2] | _em_full[1:-1] | _em_full[2:]
+        else:
+            _jerk_exempt = np.zeros(0, dtype=bool)
         acceleration = np.diff(data['speed']) / dt_series
         if acceleration.size > 0:
-            abs_accel = np.abs(acceleration)
-            acceleration_mean = safe_float(np.mean(abs_accel))
-            acceleration_max = safe_float(np.max(abs_accel))
-            acceleration_p95 = safe_float(np.percentile(abs_accel, 95))
+            _accel_keep = acceleration[~_accel_exempt[:acceleration.size]] if _accel_exempt.size else acceleration
+            if _accel_keep.size > 0:
+                abs_accel = np.abs(_accel_keep)
+                acceleration_mean = safe_float(np.mean(abs_accel))
+                acceleration_max = safe_float(np.max(abs_accel))
+                acceleration_p95 = safe_float(np.percentile(abs_accel, 95))
         if acceleration.size > 1:
             jerk = np.diff(acceleration) / dt_series[1:]
             if jerk.size > 0:
-                abs_jerk = np.abs(jerk)
-                jerk_mean = safe_float(np.mean(abs_jerk))
-                jerk_max = safe_float(np.max(abs_jerk))
-                jerk_p95 = safe_float(np.percentile(abs_jerk, 95))
+                _jerk_keep = jerk[~_jerk_exempt[:jerk.size]] if _jerk_exempt.size else jerk
+                if _jerk_keep.size > 0:
+                    abs_jerk = np.abs(_jerk_keep)
+                    jerk_mean = safe_float(np.mean(abs_jerk))
+                    jerk_max = safe_float(np.max(abs_jerk))
+                    jerk_p95 = safe_float(np.percentile(abs_jerk, 95))
         # Filtered speed for comfort metrics (reduce derivative noise).
         # Higher alpha = stronger filter. 0.95 brings jerk noise floor from
         # ~160 m/s³ down to ~20 m/s³ at 30 fps with 0.10 m/s velocity noise.
@@ -7788,17 +7831,21 @@ def analyze_recording_summary(
             filtered_speed[i] = alpha * filtered_speed[i - 1] + (1.0 - alpha) * data['speed'][i]
         filtered_accel = np.diff(filtered_speed) / dt_series
         if filtered_accel.size > 0:
-            abs_f_accel = np.abs(filtered_accel)
-            acceleration_mean_filtered = safe_float(np.mean(abs_f_accel))
-            acceleration_max_filtered = safe_float(np.max(abs_f_accel))
-            acceleration_p95_filtered = safe_float(np.percentile(abs_f_accel, 95))
+            _f_accel_keep = filtered_accel[~_accel_exempt[:filtered_accel.size]] if _accel_exempt.size else filtered_accel
+            if _f_accel_keep.size > 0:
+                abs_f_accel = np.abs(_f_accel_keep)
+                acceleration_mean_filtered = safe_float(np.mean(abs_f_accel))
+                acceleration_max_filtered = safe_float(np.max(abs_f_accel))
+                acceleration_p95_filtered = safe_float(np.percentile(abs_f_accel, 95))
         if filtered_accel.size > 1:
             filtered_jerk = np.diff(filtered_accel) / dt_series[1:]
             if filtered_jerk.size > 0:
-                abs_f_jerk = np.abs(filtered_jerk)
-                jerk_mean_filtered = safe_float(np.mean(abs_f_jerk))
-                jerk_max_filtered = safe_float(np.max(abs_f_jerk))
-                jerk_p95_filtered = safe_float(np.percentile(abs_f_jerk, 95))
+                _f_jerk_keep = filtered_jerk[~_jerk_exempt[:filtered_jerk.size]] if _jerk_exempt.size else filtered_jerk
+                if _f_jerk_keep.size > 0:
+                    abs_f_jerk = np.abs(_f_jerk_keep)
+                    jerk_mean_filtered = safe_float(np.mean(abs_f_jerk))
+                    jerk_max_filtered = safe_float(np.max(abs_f_jerk))
+                    jerk_p95_filtered = safe_float(np.percentile(abs_f_jerk, 95))
         # Commanded jerk proxy: d(throttle*max_accel - brake*max_decel)/dt
         # Noise-free because it uses controller command signals, not physics velocity.
         # Bounded by rate limiters: throttle_rate*max_accel/dt ≈ 3 m/s³, brake_rate*max_decel/dt ≈ 4.5 m/s³
@@ -7813,7 +7860,9 @@ def analyze_recording_summary(
                 net_accel_cmd = t_arr[:n_cmd] * max_accel_cfg - b_arr[:n_cmd] * max_decel_cfg
                 cmd_jerk = np.diff(net_accel_cmd) / dt_series[:n_cmd - 1]
                 if cmd_jerk.size > 0:
-                    commanded_jerk_p95 = safe_float(np.percentile(np.abs(cmd_jerk), 95))
+                    _cmd_jerk_keep = cmd_jerk[~_accel_exempt[:cmd_jerk.size]] if _accel_exempt.size else cmd_jerk
+                    if _cmd_jerk_keep.size > 0:
+                        commanded_jerk_p95 = safe_float(np.percentile(np.abs(_cmd_jerk_keep), 95))
         curvature = None
         if data.get('gt_path_curvature') is not None:
             curvature = data['gt_path_curvature']
