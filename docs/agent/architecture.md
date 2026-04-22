@@ -182,7 +182,27 @@ When ACC declares an emergency state, the longitudinal stack peels comfort limit
 - **Commit C.1** — skips the `jerk_cooldown_scale × 0.4` multiplier on the same emergency frames
 - **Commit D (B1)** — orchestrator-layer short-circuit on `EMERGENCY_BRAKE`: replaces `control_command` with `{steering: preserved, throttle: 0.0, brake: 1.0, emergency_stop: True, b1_bypass_active: True}`, bypassing the accel-target EMA entirely. Gated by `acc_idm_accel_routing_b1_hard_brake_bypass: true`.
 
-Two paradigms currently coexist (D short-circuits at the orchestrator; C/C.1 widen inside the controller). Unification is filed as T-ACC-UNIFY — refactor deferred until H5 harness recovery validates the two different ACC states end-to-end. G2 validation (2026-04-21, `recording_20260421_230013.h5`) showed 885 → 2 e-stops, confirming the chain works.
+**ACC pre-emergency min-gate (landed 2026-04-22 shadow-mode, plan `greedy-swimming-naur.md`):**
+The 3 mechanisms above handle the *post-transition* EMERGENCY_BRAKE / TTC_ESTOP / COLLAPSED_GAP_STOP states. They leave a 10–15 frame window *before* the state flip where IDM already demands hard brake but `longitudinal_accel_cmd_raw` is still driven by the speed-P-loop (which can be producing *positive* accel). Phase 0.5 of greedy-swimming-naur confirmed this on G2: both e-stop onsets (f371, f427) were preceded by ≥10 consecutive frames where `idm_accel_mps2 < accel_cmd_raw` in ACC_ACTIVE / CUTOUT states (max Δ +5.24 m/s²).
+
+- **Pre-limiter min-gate** — inside `LongitudinalController.compute_control` at line ~5378, right after `accel_cmd_raw = (throttle * max_accel) - (brake * max_decel)`:
+  ```
+  if state ∈ {ACC_ACTIVE, CUTOUT} and idm_accel_mps2 < min_negative:
+      accel_cmd_raw = min(accel_cmd_raw, idm_accel_mps2)
+      throttle, brake back-propagated from accel_cmd_raw
+  ```
+  Default mode is `shadow` (telemetry-only); `active` applies the clip. Dead-band (`-0.25 m/s²`) suppresses cruise-state IDM noise (H2 verified Δ max +0.13 m/s², no-op). Only reduces authority — smell-7 safe.
+
+Telemetry: `control/longitudinal_acc_idm_floor_active` (int8, 1 = gate fired this frame) and `control/longitudinal_acc_idm_floor_candidate_mps2` (float32, IDM value that would-have-clipped). Populated in shadow AND active modes.
+
+Routing authority during ACC states (post-landing):
+```
+ACC_ACTIVE / CUTOUT         : {speed_P, IDM} → min-gate → limiter → actuator
+EMERGENCY_BRAKE             : {any} → B1 (Commit D) → brake=1.0
+TTC_ESTOP / COLLAPSED_GAP_STOP : {any} → C/C.1 (widened decel/jerk) → limiter → actuator
+```
+
+Two paradigms currently coexist (D short-circuits at the orchestrator; C/C.1 widen inside the controller; floor clips inside the controller but upstream of C/C.1). Unification is filed as T-ACC-UNIFY — refactor deferred until H5 harness recovery validates the full chain end-to-end. G2 validation (2026-04-21, `recording_20260421_230013.h5`) showed 885 → 2 e-stops with Commit D; the remaining 2 are the target of the pre-emergency min-gate (activation pending Phase G2).
 
 ### 6. Curve Phase Scheduler (trajectory-owned)
 
