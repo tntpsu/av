@@ -5095,11 +5095,20 @@ class LongitudinalController:
                     self.last_accel_cmd - (dynamic_max_jerk * dt),
                     self.last_accel_cmd + (dynamic_max_jerk * dt),
                 )
-                # Bypass jerk cooldown when grade compensation is active:
-                # sustained grade FF offset causes jerk limiter to fire continuously,
-                # which permanently resets cooldown and starves throttle authority.
-                # Grade-zero proof: gravity_accel=0 → cooldown behaves as before.
-                if self.jerk_cooldown_remaining > 0 and abs(gravity_accel) < 0.1:
+                # Bypass jerk cooldown when grade compensation is active OR we
+                # are in an ACC emergency state. In both cases the jerk limiter
+                # fires continuously due to legitimate sustained demand, which
+                # permanently resets cooldown and starves authority (throttle
+                # on grades; brake on emergency). Without this bypass the
+                # per-frame *= jerk_cooldown_scale (0.4) pins accel_cmd near
+                # the nominal floor and defeats Commit C's emergency widening.
+                # Grade-zero + non-emergency proof: both guards false →
+                # cooldown behaves exactly as before.
+                if (
+                    self.jerk_cooldown_remaining > 0
+                    and abs(gravity_accel) < 0.1
+                    and not _in_emergency_state
+                ):
                     accel_cmd *= float(self.jerk_cooldown_scale)
                     self.jerk_cooldown_remaining -= 1
                 self.last_accel_cmd = accel_cmd

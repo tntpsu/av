@@ -182,6 +182,81 @@ class TestEmergencyDecelWidening:
         )
 
 
+class TestEmergencyJerkCooldownBypass:
+    """
+    Regression coverage for Commit C.1: during sustained emergency demand the
+    jerk limiter fires every frame, refreshing jerk_cooldown_remaining. Without
+    the emergency bypass, the per-frame `accel_cmd *= jerk_cooldown_scale` (0.4)
+    pins accel_cmd near the nominal floor and defeats the Commit C widening.
+
+    The default _make_controller() has jerk_cooldown_frames=0 so the base
+    widening tests don't exercise this path — live config uses 8.
+    """
+
+    def _make_controller_with_cooldown(self) -> LongitudinalController:
+        return LongitudinalController(
+            target_speed=8.0,
+            max_speed=12.0,
+            max_accel=2.5,
+            max_decel=3.0,
+            max_jerk=6.0,
+            max_jerk_min=1.5,
+            max_jerk_max=6.0,
+            accel_feedforward_gain=1.0,
+            decel_feedforward_gain=1.0,
+            continuous_accel_control=True,
+            startup_ramp_seconds=0.0,
+            startup_accel_limit=100.0,
+            startup_speed_threshold=0.0,
+            jerk_cooldown_frames=8,          # live-config value
+            jerk_cooldown_scale=0.4,         # live-config value
+        )
+
+    def test_emergency_bypasses_jerk_cooldown(self):
+        """With cooldown active (live config), emergency state must still reach -12."""
+        ctrl = self._make_controller_with_cooldown()
+        _ramp_to_steady(ctrl, 8.0, 0.033)
+        # Sustained emergency demand. With the bypass, ~16 frames at dt=0.033 and
+        # emergency_jerk_max=10 can cover the ~12 m/s² span; 200 frames is ample.
+        for _ in range(200):
+            _step(
+                ctrl,
+                current_speed=8.0,
+                reference_velocity=8.0,
+                reference_accel=-12.0,
+                dt=0.033,
+                acc_state_code="EMERGENCY_BRAKE",
+                emergency_relax_enabled=True,
+                emergency_decel_floor=-12.0,
+                emergency_jerk_max=10.0,
+            )
+        assert ctrl.last_accel_cmd <= -10.0, (
+            f"emergency state must bypass cooldown pin; got {ctrl.last_accel_cmd}"
+        )
+
+    def test_nominal_state_still_applies_cooldown(self):
+        """Outside emergency, cooldown behaves exactly as before (0.4x multiplier)."""
+        ctrl = self._make_controller_with_cooldown()
+        _ramp_to_steady(ctrl, 8.0, 0.033)
+        # Nominal state (no emergency label) — cooldown must still pin decel at
+        # ~ -3 * 0.4 = -1.2 or oscillate near that; crucially it must NOT reach -10.
+        for _ in range(200):
+            _step(
+                ctrl,
+                current_speed=8.0,
+                reference_velocity=8.0,
+                reference_accel=-12.0,
+                dt=0.033,
+                acc_state_code="ACC_ACTIVE",
+                emergency_relax_enabled=False,
+                emergency_decel_floor=-3.0,
+                emergency_jerk_max=4.0,
+            )
+        assert ctrl.last_accel_cmd > -10.0, (
+            f"non-emergency cooldown must still throttle authority; got {ctrl.last_accel_cmd}"
+        )
+
+
 class TestEmergencyJerkWidening:
     def test_emergency_brake_widens_jerk_ceiling(self):
         """Per-frame accel step should be bounded by emergency_jerk_max*dt, not nominal."""
