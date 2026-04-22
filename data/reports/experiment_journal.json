@@ -234,5 +234,48 @@
       "data/formats/data_format.py",
       "data/recorder.py"
     ]
+  },
+  {
+    "date": "2026-04-21",
+    "target_metric": "g2_e_stop_count",
+    "target_track": "hill_g2_stop_on_grade",
+    "approach": "ACC emergency brake authority: Commit C (decel/jerk widening in EMERGENCY_BRAKE/TTC_ESTOP/COLLAPSED_GAP_STOP) + C.1 (jerk cooldown bypass in emergency states) + D (B1 orchestrator short-circuit for EMERGENCY_BRAKE \u2192 brake=1.0). Joint attribution: all three commits land the result together; unit tests cover each independently.",
+    "fix_level": "CODE_PATCH",
+    "hypothesis": "IDM -12 m/s\u00b2 saturation was being clipped by three stacked comfort limiters (dynamic_max_jerk clip, jerk_cooldown_scale 0.4x multiplier, accel_target_smoothing EMA \u03b1=0.86). Each commit peels one limiter off the brake signal chain during ACC emergency states.",
+    "outcome": "IMPROVEMENT",
+    "metric_before": 885,
+    "metric_after": 2,
+    "root_cause_of_failure": null,
+    "root_cause_detail": "E2E confirmed: EMERGENCY_BRAKE frames 4/4 @ brake=1.0 (D path), COLLAPSED_GAP_STOP 2748/2778 @ brake=1.0 (C+C.1 path). 99.8 pct e-stop reduction. Safety/Trajectory/Control layers: 78/99/100. Residual 2 e-stops attributed to upstream speed-profile overspeed (feasibility overspeed 7.7 pct), NOT actuator authority \u2014 out of scope for this plan.",
+    "iterations_spent": 3,
+    "files_changed": [
+      "control/pid_controller.py",
+      "av_stack/orchestrator.py",
+      "config/av_stack_config.yaml",
+      "tests/test_acc_emergency_relaxation.py",
+      "tests/test_acc_emergency_brake_bypass.py",
+      "tools/scoring_registry.py",
+      "tools/drive_summary_core.py",
+      "data/formats/data_format.py",
+      "data/recorder.py"
+    ]
+  },
+  {
+    "date": "2026-04-22",
+    "target_metric": "signal_integrity_heading_penalty",
+    "target_track": "g2_stop_on_grade",
+    "approach": "Add minimum-sample-size guard (n_approach >= 30) to heading-suppression and rate-limit-saturation penalty formulas in drive_summary_core.py. Below threshold, rate is still computed for telemetry but no penalty is applied.",
+    "fix_level": "CODE_PATCH",
+    "hypothesis": "On straight-dominated scenarios like hill_g2 the approach-frame denominator is 2 (out of 3000+). With both of 2 frames gated, the rate computes to 100% \u2192 -25 penalty. This is a scoring artifact, not a controller bug: lateral RMSE 0.02m, time-in-lane 100%. Industry standard N>=30 sample size for binomial rate inference should cleanly separate this from curve-heavy tracks (n_approach usually >40 on the 5 frozen tracks).",
+    "outcome": "IMPROVEMENT",
+    "metric_before": 25.0,
+    "metric_after": 0.0,
+    "root_cause_of_failure": null,
+    "root_cause_detail": "Scoring-layer bug: rate metric denominator too small on straight-dominated tracks; penalty formula had no min-sample guard. Fixed by adding MIN_APPROACH_FRAMES_FOR_RATE=30. G2 SignalIntegrity 75->100, weighted 91.32->93.32. Overall still 79 due to Safety=78.3 yellow-cap (separate task T-ACC-STATE-LATE).",
+    "iterations_spent": 1,
+    "files_changed": [
+      "tools/drive_summary_core.py",
+      "tests/test_drive_summary_trajectory_health_synthetic.py"
+    ]
   }
 ]

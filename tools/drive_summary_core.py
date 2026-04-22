@@ -8544,6 +8544,15 @@ def analyze_recording_summary(
         approach_mask = np.abs(curvature_arr) > approach_threshold
         n_approach = int(np.sum(approach_mask))
 
+        # T-HEAD-SUPPR fix (2026-04-22): small-denominator guard.
+        # On straight-dominated scenarios (ACC / highway / grade) n_approach can
+        # be as small as 2 frames. The penalty formula then reduces to a coin
+        # flip (0%, 50%, 100%) driven by incidental alignment between the
+        # heading gate and 1-2 threshold-crossing frames. Minimum-sample guard
+        # matches the industry practice of not inferring a rate from N<30
+        # samples — below that, the rate is computed for telemetry but never
+        # turned into a penalty.
+        MIN_APPROACH_FRAMES_FOR_RATE = 30
         if n_approach > 0:
             heading_gate = data.get('diag_heading_zero_gate_active')
             rate_limit = data.get('diag_ref_x_rate_limit_active')
@@ -8552,7 +8561,10 @@ def analyze_recording_summary(
                 heading_suppression_rate = safe_float(
                     np.sum(heading_active & approach_mask) / n_approach * 100.0
                 )
-                if heading_suppression_rate > 20.0:
+                if (
+                    heading_suppression_rate > 20.0
+                    and n_approach >= MIN_APPROACH_FRAMES_FOR_RATE
+                ):
                     signal_integrity_heading_penalty = safe_float(
                         min(25.0, (heading_suppression_rate - 20.0) * 0.625)
                     )
@@ -8561,7 +8573,10 @@ def analyze_recording_summary(
                 rate_limit_saturation_rate = safe_float(
                     np.sum(rate_limit_active & approach_mask) / n_approach * 100.0
                 )
-                if rate_limit_saturation_rate > 30.0:
+                if (
+                    rate_limit_saturation_rate > 30.0
+                    and n_approach >= MIN_APPROACH_FRAMES_FOR_RATE
+                ):
                     signal_integrity_rate_limit_penalty = safe_float(
                         min(20.0, (rate_limit_saturation_rate - 30.0) * 0.4)
                     )

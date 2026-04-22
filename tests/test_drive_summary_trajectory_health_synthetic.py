@@ -68,6 +68,58 @@ def test_signal_integrity_penalty_when_heading_gate_on_during_approach_curvature
     assert float(heading_row.get("value", 0.0)) > 0.0
 
 
+def test_signal_integrity_heading_penalty_small_sample_guard(
+    tmp_path: Path,
+) -> None:
+    """
+    Regression for T-HEAD-SUPPR (2026-04-22): on straight-dominated scenarios
+    the approach-frame denominator can be tiny (e.g. 2 out of 3000 frames on
+    hill_g2). The heading-suppression-rate penalty must NOT fire below the
+    minimum-sample threshold (MIN_APPROACH_FRAMES_FOR_RATE=30), regardless of
+    whether the gate happens to be active on 100% of those few frames.
+    """
+    n = 200
+    path = tmp_path / "sigint_heading_small_sample.h5"
+    _base_recording(path, n)
+    with h5py.File(path, "a") as f:
+        # Only 2 frames cross the 5e-4 approach threshold — the hill_g2 signature.
+        curvature = np.full(n, 0.0, dtype=np.float32)
+        curvature[50] = 0.002
+        curvature[51] = 0.002
+        f.create_dataset(
+            "trajectory/reference_point_curvature",
+            data=curvature,
+        )
+        # Gate active on both of those 2 approach frames → raw rate = 100%.
+        # Pre-fix this would produce a -25 penalty (maxed out); post-fix the
+        # small-sample guard must zero it.
+        gate = np.zeros(n, dtype=np.float32)
+        gate[50] = 1.0
+        gate[51] = 1.0
+        # Also fire the gate on many non-approach frames so overall gate rate
+        # is high — but those must not count toward the approach-band rate.
+        gate[100:180] = 1.0
+        f.create_dataset("trajectory/diag_heading_zero_gate_active", data=gate)
+
+    summary = analyze_recording_summary(path, analyze_to_failure=False)
+    assert "error" not in summary
+    layers = summary.get("layer_scores") or {}
+    # Must be 100 — no heading-suppression penalty applied.
+    assert float(layers.get("SignalIntegrity", 0.0)) == pytest.approx(100.0, abs=0.01), (
+        f"Small-sample (n_approach=2) case must not incur heading-suppression penalty, "
+        f"got SignalIntegrity={layers.get('SignalIntegrity')}"
+    )
+    sig = (summary.get("layer_score_breakdown") or {}).get("SignalIntegrity") or {}
+    deds = sig.get("deductions") or []
+    heading_deds = [d for d in deds if "Heading" in str(d.get("name", ""))]
+    # Either no deduction entry, or an entry with value == 0.
+    if heading_deds:
+        for d in heading_deds:
+            assert float(d.get("value", 0.0)) == pytest.approx(0.0, abs=0.01), (
+                f"Heading-suppression deduction row present with non-zero value {d}"
+            )
+
+
 def test_curve_intent_arm_early_rate_marks_late_arm(tmp_path: Path) -> None:
     """One GT curve start with arm only 2 frames before → arm_early_enough_rate 0%."""
     n = 120
