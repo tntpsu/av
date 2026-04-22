@@ -1,7 +1,34 @@
 # AV Stack — Agent Memory: Current State
 
-**Last updated:** 2026-04-19
-**Current milestone:** S2-M1 — **5 of 5 tracks still meeting all-layers-≥95 goal.** Frenet-frame MPC reference: shadow-mode telemetry landed and validated, but **G2 activation FAILED** (H2 79→59 oscillation runaway). Config reverted to shadow-mode; activation requires accompanying MPC retuning (tracked as future work, not currently prioritized).
+**Last updated:** 2026-04-21
+**Current milestone:** S2-M1 — **5 of 5 tracks still meeting all-layers-≥95 goal.** ACC emergency brake authority restored on G2 (885 → 2 e-stops, 99.8% reduction) via plan `acc-idm-accel-plumbing.md`. Frenet-frame MPC reference remains in shadow-mode.
+
+### Session 2026-04-21 — ACC emergency brake authority restored on G2
+
+**Plan:** `.claude/plans/acc-idm-accel-plumbing.md` — restore actuator authority in ACC EMERGENCY_BRAKE / TTC_ESTOP / COLLAPSED_GAP_STOP states. IDM's -12 m/s² saturation was being clipped by three stacked comfort limiters.
+
+**Commits (all shipped, all gates green):**
+- **A (1a5826d)** — scoring-registry exemption infrastructure (`is_emergency_acc_state`)
+- **B (f718818)** — scoring-consumer wiring
+- **C (f79bbea)** — controller widens `effective_max_decel` and `dynamic_max_jerk` in emergency
+- **C.1 (805b305)** — jerk cooldown `× 0.4` bypass in emergency (probe found cooldown was refiring every frame under sustained demand)
+- **D (390f057)** — orchestrator B1 short-circuit: `EMERGENCY_BRAKE → brake=1.0` past all comfort limiters; 12 unit tests
+
+**G2 E2E (recording_20260421_230013.h5):**
+- Score: **79.0** (capped by critical_yellow_layer; weighted pre-cap: 91.3)
+- **E-stops: 885 → 2 (−99.8%)**
+- EMERGENCY_BRAKE: 4/4 frames @ brake=1.0 (Commit D path fires perfectly)
+- COLLAPSED_GAP_STOP: 2748/2778 frames @ brake=1.0 (Commits C+C.1 path, 98.9% coverage)
+- TTC_ESTOP: 11/16 frames @ brake=1.0 (69% — motivates T-ACC-UNIFY refactor)
+- Trajectory 98.9, Control 100.0, LongitudinalComfort 100.0, Perception 100.0
+- Residual 2 e-stops: ACC state machine transitioned LATE (8–10 frames of throttle-while-IDM-brakes before EMERGENCY_BRAKE fired). B1 fired correctly when the state finally transitioned — so the residual is an upstream decision-layer bug (T-ACC-STATE-LATE), not the actuator chain this plan fixed.
+- SignalIntegrity 75.0 (heading-suppression −25) — pre-existing, not from this plan (T-HEAD-SUPPR, in-flight this session).
+
+**G1 (H5) DEFERRED:** `recording_20260421_224130.h5` reproduced the session-start H5 harness failure (curve-cap=100%, target pinned to 2.09 m/s, bridge payload age 34 s, ACC never engaged). Two-hit tripwire set in `project_h5_harness_deferred.md`; escalate to full diagnosis on third hit.
+
+**Architecture smell noted:** Current emergency handling has two paradigms side by side — D-style orchestrator short-circuit (EMERGENCY_BRAKE) and C/C.1-style in-controller widening (TTC_ESTOP / COLLAPSED_GAP_STOP). Unification filed as T-ACC-UNIFY; refactor risk > benefit until H5 validates.
+
+---
 
 ### Session 2026-04-19 — Frenet-frame MPC reference: G1 passed, G2 activation FAILED, reverted to shadow
 

@@ -1,10 +1,59 @@
 # AV Stack — Agent Memory: Tasks
 
-**Last updated:** 2026-04-18
+**Last updated:** 2026-04-21
 
 ---
 
 ## Current Focus
+
+### T-ACC-IDM-PLUMBING — ACC emergency brake authority (2026-04-21, Commits A/B/C/C.1/D landed; G2 validated; H5 harness deferred)
+
+Restored ACC actuator authority in EMERGENCY_BRAKE / TTC_ESTOP / COLLAPSED_GAP_STOP states.
+IDM's -12 m/s² saturation was being clipped by three stacked comfort limiters; each commit peeled one off.
+
+- ✅ A (1a5826d): scoring-registry exemption infrastructure
+- ✅ B (f718818): scoring-consumer wiring
+- ✅ C (f79bbea): controller `effective_max_decel`/`dynamic_max_jerk` widening
+- ✅ C.1 (805b305): jerk cooldown `× 0.4` bypass in emergency
+- ✅ D (390f057): orchestrator B1 short-circuit — `EMERGENCY_BRAKE → brake=1.0`, 12 unit tests
+- ✅ G2 E2E validation: **885 → 2 e-stops** on `hill_g2_stop_on_grade.yml` (99.8% reduction).
+  EMERGENCY_BRAKE 4/4 @ brake=1.0 (D path), COLLAPSED_GAP_STOP 2748/2778 @ brake=1.0 (C+C.1 path).
+  Weighted 91.3, capped to 79.0 by yellow-Safety (2 residual e-stops) + yellow-SignalIntegrity (heading suppression).
+- ⏸️ G1 (H5): **DEFERRED** — track harness failure prevented lead engagement (see `project_h5_harness_deferred.md` memory tripwire; escalate on third hit).
+- 🟡 Phase H (docs): in progress this session.
+- 🟢 Plan closed as "mechanism proven." Residuals tracked as separate tasks below.
+
+Recording: `recording_20260421_230013.h5`. Plan: `.claude/plans/acc-idm-accel-plumbing.md`.
+
+#### Follow-ups from T-ACC-IDM-PLUMBING (separately scoped)
+
+- **T-HEAD-SUPPR — SignalIntegrity "heading suppression on curves" -25 deduction.**
+  Present on G2 (score 79 capped by SignalIntegrity=75). Pre-exists this plan.
+  Start: `/diagnose data/recordings/recording_20260421_230013.h5` focused on
+  heading-suppression rate. If tunable → `/iterate`; if architectural → `/plan-feature`.
+  **Executing this session.**
+- **T-ACC-STATE-LATE — 2 residual G2 e-stops: ACC state machine transitions late.**
+  Frame-level inspection of `recording_20260421_230013.h5` showed: (a) at onset-1,
+  ACC_ACTIVE held for 8 frames while IDM demanded -5 m/s² but the controller
+  applied +throttle; (b) at onset-2, 10+ frames of CUTOUT with a closing lead
+  before state flipped to EMERGENCY_BRAKE. B1 fires correctly the frame the state
+  finally transitions — the bug is upstream in the ACC decision layer, not the
+  actuator chain. Possibly the same routing gap flagged in
+  `project_acc_brake_authority_findings.md` for H5. Start: `/diagnose` + `/plan-feature`.
+- **T-ACC-UNIFY — Post-Phase-G refactor: unify all three ACC emergency states under D's orchestrator short-circuit.**
+  G2 evidence: EMERGENCY_BRAKE (D path) hits brake=1.0 on 100% of frames; COLLAPSED_GAP_STOP (C+C.1 path)
+  on 98.9%; TTC_ESTOP only 69% (16 frames total, but notable gap). Current architecture has
+  two paradigms — orchestrator short-circuit vs in-controller widening — which is a design
+  smell. Refactor: move TTC_ESTOP + COLLAPSED_GAP_STOP routing into the orchestrator's
+  `_apply_acc_emergency_override()`, delete emergency-aware branches from `pid_controller.py`
+  (net -60 LOC, -3 config flags). Defer until G2 + H5 fully validated — refactor risk > benefit today.
+- **T-B1-HDF5-PLUMBING — Wire `control/b1_bypass_active` into HDF5 via the 6-location pattern.**
+  The flag is set on `control_command` in D but isn't recorded; proof of B1 firing on G2 was
+  inferred from brake=1.0 during EMERGENCY_BRAKE rather than observed directly. Small; maybe 30 min.
+- **T-H5-HARNESS — Diagnose H5 harness deterministic failure.**
+  Two-hit tripwire set in `project_h5_harness_deferred.md`. Symptoms: curve-cap=100% /
+  target=2.09 m/s / bridge payload age 34s on what should be straight highway stop-go.
+  Escalate to full diagnostic session on third hit OR if same symptom appears on any other track.
 
 ### T-FRENET-MPC — Frenet-frame MPC reference (2026-04-18, Phases A–F landed, Phase G gated on user)
 

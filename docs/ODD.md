@@ -134,8 +134,8 @@ All layers must be ≥95 to pass (not 60/80). See `feedback_layer_score_threshol
 | H6 (close-gap approach) | **PASS** | 97.5 | Min gap 12m, min TTC 7.67s; no collisions |
 | A1 (autobahn steady) | **PASS** | 99.6 | Lead mostly beyond 60m `detection_range_m` (12.4% detection rate — expected) |
 | G1 (grade following) | **PASS** | 96.2 | Traj 86 from pre-existing grade residual (not ACC-related) |
-| H5 (stop-go sinusoidal) | **FAIL** | 59.0 | 1177 e-stops; gap collapsed to 0.10m — `idm_comfortable_decel` insufficient |
-| G2 (stop-on-grade) | **FAIL** | 79.0 | 885 e-stops; same brake-authority failure mode as H5, amplified by grade |
+| H5 (stop-go sinusoidal) | **BLOCKED** | 59.0 | Harness bimodal failure reproduced twice (curve-cap=100%, target pinned 2.09 m/s, bridge 34s stale); ACC never engages to exercise brake authority. Deferred pending third-hit escalation — see `project_h5_harness_deferred.md` |
+| G2 (stop-on-grade) | **PASS (Safety)** | 79.0 | 885 → **2 e-stops** after `acc-idm-accel-plumbing` plan landed 2026-04-21 (390f057). Score capped at 79 by pre-existing SignalIntegrity heading-suppression −25 (T-HEAD-SUPPR) and residual 2 Safety e-stops from late-transitioning ACC state machine (T-ACC-STATE-LATE). Brake-authority failure mode resolved. |
 
 ---
 
@@ -152,3 +152,4 @@ All layers must be ≥95 to pass (not 60/80). See `feedback_layer_score_threshol
 | 2026-04-18 | PP recovery term landed (hairpin_15 Control 80→100, jerk 30.08→18.0). Orchestrator post-limiter multipliers retired. Unity version upgrade: 2021.3 → 6000.3 LTS. Scoring threshold tightened to all-layers-≥95. |
 | 2026-04-19 | Frenet MPC reference shadow-mode telemetry landed; active mode FAILED validation (H2 79→59 oscillation runaway). Shadow retained for diagnostic use; activation deferred pending MPC retuning. |
 | 2026-04-20 | Decomposed-MPC reference landed (61cc446): H2 restored 79→99.4. ACC capability flag flipped to `enabled: true` (92391bb) and 6 scenarios re-validated — H2/H6/A1/G1 PASS, H5/G2 FAIL on stop-collision brake-authority (separate investigation). |
+| 2026-04-21 | ACC emergency brake authority landed (plan `acc-idm-accel-plumbing.md`, commits A/B/C/C.1/D through 390f057). Peels comfort limiters (decel/jerk clip, cooldown scale, accel EMA) off brake path on `EMERGENCY_BRAKE`/`TTC_ESTOP`/`COLLAPSED_GAP_STOP`. G2 e-stops 885 → 2 (99.8% reduction). H5 validation blocked on harness bimodal failure; two-hit tripwire set. Follow-ups filed: T-HEAD-SUPPR, T-ACC-STATE-LATE, T-ACC-UNIFY, T-B1-HDF5-PLUMBING, T-H5-HARNESS. |

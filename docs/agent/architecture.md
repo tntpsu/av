@@ -176,6 +176,14 @@ Always use `self._full_config.get('trajectory', {}).get('mpc', {}).get('mpc_*', 
 - Jerk cap: 1.0–4.0 m/s³ (distance-to-target based)
 - Cap-tracking: corrects under-speed during curve exits (`cap_tracking_enabled: true`)
 
+**ACC emergency brake authority (landed 2026-04-21, plan `acc-idm-accel-plumbing.md`):**
+When ACC declares an emergency state, the longitudinal stack peels comfort limiters off the brake path so IDM's -12 m/s² demand reaches the actuator instead of being attenuated to nominal comfort levels:
+- **Commit C** — decel/jerk widening inside the controller for `TTC_ESTOP`/`COLLAPSED_GAP_STOP` (bypasses `effective_max_decel` / `dynamic_max_jerk` clips)
+- **Commit C.1** — skips the `jerk_cooldown_scale × 0.4` multiplier on the same emergency frames
+- **Commit D (B1)** — orchestrator-layer short-circuit on `EMERGENCY_BRAKE`: replaces `control_command` with `{steering: preserved, throttle: 0.0, brake: 1.0, emergency_stop: True, b1_bypass_active: True}`, bypassing the accel-target EMA entirely. Gated by `acc_idm_accel_routing_b1_hard_brake_bypass: true`.
+
+Two paradigms currently coexist (D short-circuits at the orchestrator; C/C.1 widen inside the controller). Unification is filed as T-ACC-UNIFY — refactor deferred until H5 harness recovery validates the two different ACC states end-to-end. G2 validation (2026-04-21, `recording_20260421_230013.h5`) showed 885 → 2 e-stops, confirming the chain works.
+
 ### 6. Curve Phase Scheduler (trajectory-owned)
 
 Controls lookahead contraction as the car approaches curves. Three phases:
