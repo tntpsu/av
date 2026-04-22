@@ -48,7 +48,7 @@ For each file touched in the diff, fire the matching ritual:
 |---|---|
 | `control/pid_controller.py`, `av_stack/orchestrator.py`, `control/regime_selector.py`, `control/mpc_controller.py`, `trajectory/inference.py`, `trajectory/utils.py` | Recommend `/update-arch` — the pipeline diagram in `docs/agent/architecture.md` may be stale |
 | `config/av_stack_config.yaml` (target_speed, regime selector keys, controller enablement flags, new capability gates) | Recommend `/update-odd` — capability envelope may have shifted. Also run `python tools/ci/check_config_regression.py --base HEAD~1 --critical-only` to surface scoring-critical param changes |
-| `tools/drive_summary_core.py`, `tools/analyze/run_gate_and_triage.py`, `data/recorder.py`, `tools/scoring_registry.py` | REQUIRE running Tier 1 comfort gate tests per CLAUDE.md: `pytest tests/test_comfort_gate_replay.py -v -k "Synthetic or Boundary"` |
+| `tools/drive_summary_core.py`, `tools/analyze/run_gate_and_triage.py`, `data/recorder.py`, `tools/scoring_registry.py` | REQUIRE running Tier 1 comfort gate tests per CLAUDE.md: `pytest tests/test_comfort_gate_replay.py -v -k "Synthetic or Boundary"` AND recommend `/revalidate --golden` — scoring code changes invalidate historical baselines, so every recording-based comparison downstream (iterate, sweep, log-experiment pre/post) must be re-grounded before use. |
 | Any file above + config change | Run scoring regression suite: `pytest tests/test_scoring_regression.py -v` |
 | Unity `.cs` files under `unity/AVSimulation/Assets/Scripts/` | Flag: Unity player rebuild needed before next `/e2e`; note in output |
 | `tests/fixtures/*.json`, `tests/conftest.py` | Baselines changed — verify re-freeze was intentional (cross-check commit message) |

@@ -105,8 +105,13 @@ If PASS:
   → Run /log-fix to record any fixes applied
 ```
 
+## When to use `/revalidate` instead
+
+`/sweep` runs fresh Unity on every track — expensive. If the change you're validating is a **scoring code change** (e.g., a new penalty formula, a gate threshold shift) and the controller/trajectory code is untouched, `/revalidate --golden` re-scores the existing golden recordings under the new scoring code without burning Unity cycles and classifies each layer's delta as pipeline-drift vs controller-change. Use `/sweep` when the controller changed; use `/revalidate` when only the scoring changed; use both when both changed.
+
 ## References
 - Baselines: `tests/fixtures/scoring_baselines.json`
 - Track YAMLs: `tracks/*.yml`
 - Analysis: `tools/analyze/analyze_drive_overall.py`
 - Gate thresholds: `tools/scoring_registry.py`
+- Scoring-only complement: `/revalidate`

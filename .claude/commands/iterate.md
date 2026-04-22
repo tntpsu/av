@@ -36,10 +36,13 @@ For tracks without recent recordings, note them as "no baseline."
 **CRITICAL:** Recordings made before code changes are INVALID baselines for validating those changes. Before trusting any existing recording:
 
 1. Check when the recording was made: `ls -lt data/recordings/*.h5`
-2. Check when key source files were last modified: `git log -1 --format=%ci control/regime_selector.py control/pid_controller.py`
-3. If ANY code file was modified AFTER the recording was created → that recording cannot validate the code change. Re-run `/e2e` on that track first.
+2. Check when key source files were last modified: `git log -1 --format=%ci control/regime_selector.py control/pid_controller.py av_stack/orchestrator.py trajectory/inference.py`
+3. If ANY **controller/trajectory** code file was modified AFTER the recording was created → the recording cannot validate the code change. Re-run `/e2e` on that track first.
+4. If ANY **scoring** code file was modified after the recording (`tools/drive_summary_core.py`, `tools/scoring_registry.py`, `tools/analyze/run_gate_and_triage.py`) → run **`/revalidate <recording>`** first. The score you see from `analyze_drive_overall.py` reflects the NEW scoring, not the recording's as-recorded score. Diffing that against a pre-scoring-change baseline gives a false result. `/revalidate` classifies the delta as pipeline-drift vs controller-change and tells you whether the baseline needs updating before you can trust any iterate-loop outcome.
 
-This prevents the mistake of: changing the regime selector, then "validating" on sloop with a recording made BEFORE the change — which shows old behavior, not new.
+This prevents two mistakes:
+- Changing the regime selector, then "validating" on sloop with a recording made BEFORE the change — shows old behavior, not new.
+- Changing a scoring penalty, then treating the recording's re-scored value as evidence of controller improvement — it's just the penalty being lifted.
 
 ### 1b — Build baseline table
 

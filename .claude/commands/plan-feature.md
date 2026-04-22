@@ -244,6 +244,7 @@ Plus:
 - Regression tracks (must not break)
 - Expected score improvement with reasoning
 - Use `/e2e <track>` for each validation run
+- **Scoring-layer plans** (any plan that modifies `tools/drive_summary_core.py`, `tools/scoring_registry.py`, or `tools/analyze/run_gate_and_triage.py`): before running fresh Unity validation, use `/revalidate --golden` to re-score existing golden recordings under the new scoring code. This separates pipeline-drift from controller-change on historical data BEFORE burning Unity cycles, and tells you whether `tests/fixtures/scoring_baselines.json` needs re-freezing. Skip this step and the new Unity runs will be compared against a baseline that was frozen under the old scoring — every delta becomes ambiguous.
 
 ### Phase H: Documentation & Memory
 - `docs/agent/current_state.md` — update with results
