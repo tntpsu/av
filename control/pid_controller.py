@@ -4869,6 +4869,8 @@ class LongitudinalController:
         self.last_accel_cmd_smoothed = 0.0
         self.last_limiter_transition_active = False
         self.last_limiter_state_code = 0.0
+        self.last_acc_idm_floor_active = 0
+        self.last_acc_idm_floor_candidate_mps2 = float('nan')
         self._limiter_state_active = False
         self._limiter_state_hold_remaining = 0
         self.jerk_cooldown_remaining = 0
@@ -4904,6 +4906,10 @@ class LongitudinalController:
         emergency_relax_enabled: bool = False,
         emergency_decel_floor: float = -3.0,
         emergency_jerk_max: float = 4.0,
+        idm_accel_mps2: Optional[float] = None,
+        acc_idm_accel_floor_mode: str = 'off',
+        acc_idm_accel_floor_states: Tuple[str, ...] = (),
+        acc_idm_accel_floor_min_negative: float = 0.0,
     ) -> Tuple[float, float]:
         """
         Compute throttle and brake commands with speed smoothing and limiting.
@@ -5370,6 +5376,31 @@ class LongitudinalController:
             throttle = 0.0
 
         accel_cmd_raw = (throttle * self.max_accel) - (brake * self.max_decel)
+
+        # --- IDM-as-accel-floor (greedy-swimming-naur.md, Phase 0.5 verified 2026-04-22)
+        # Min-gate: during ACC_ACTIVE/CUTOUT (pre-emergency), if IDM demands harder
+        # brake than the speed-P-loop is producing, clip accel_cmd_raw down to IDM.
+        # Only reduces authority (smell-7 safe — no term removed). Complements B1
+        # post-limiter bypass which handles EMERGENCY_BRAKE/TTC_ESTOP.
+        _floor_mode = str(acc_idm_accel_floor_mode or 'off').lower()
+        _floor_active = False
+        _floor_candidate = float('nan')
+        if _floor_mode != 'off' and idm_accel_mps2 is not None:
+            _gate_states = tuple(acc_idm_accel_floor_states or ())
+            _in_gate = str(acc_state_code).strip() in _gate_states
+            _idm_active = float(idm_accel_mps2) < float(acc_idm_accel_floor_min_negative)
+            if _in_gate and _idm_active:
+                _floor_candidate = float(idm_accel_mps2)
+                if _floor_candidate < accel_cmd_raw:
+                    _floor_active = True
+                    if _floor_mode == 'active':
+                        accel_cmd_raw = _floor_candidate
+                        # Back-propagate to throttle/brake using the same formula
+                        # as line above: accel = throttle*max_accel - brake*max_decel.
+                        # _floor_candidate < 0 here, so throttle→0, brake solves for it.
+                        throttle = 0.0
+                        brake = min(1.0, max(0.0, -_floor_candidate / self.max_decel)) if self.max_decel > 0.0 else 0.0
+
         accel_cmd_smoothed = accel_cmd_raw
         limiter_transition_active = False
         limiter_state_code = 1.0 if (accel_capped or jerk_capped) else 0.0
@@ -5412,6 +5443,8 @@ class LongitudinalController:
         self.last_accel_cmd_smoothed = float(accel_cmd_smoothed)
         self.last_limiter_transition_active = bool(limiter_transition_active)
         self.last_limiter_state_code = float(limiter_state_code)
+        self.last_acc_idm_floor_active = 1 if _floor_active else 0
+        self.last_acc_idm_floor_candidate_mps2 = float(_floor_candidate)
 
         self.last_throttle_before_limits = throttle
         self.last_brake_before_limits = brake
@@ -5487,6 +5520,8 @@ class LongitudinalController:
         self.last_accel_cmd_smoothed = 0.0
         self.last_limiter_transition_active = False
         self.last_limiter_state_code = 0.0
+        self.last_acc_idm_floor_active = 0
+        self.last_acc_idm_floor_candidate_mps2 = float('nan')
         self._limiter_state_active = False
         self._limiter_state_hold_remaining = 0
         self.longitudinal_mode = "coast"
@@ -6917,6 +6952,11 @@ class VehicleController:
         _emergency_relax_enabled = bool(_long_cfg.get('acc_idm_accel_routing_emergency_relax_in_estate', False))
         _emergency_decel_floor = float(_long_cfg.get('acc_idm_accel_routing_emergency_decel_floor', -3.0))
         _emergency_jerk_max = float(_long_cfg.get('acc_idm_accel_routing_emergency_jerk_max', 4.0))
+        # IDM-as-accel-floor plumbing (greedy-swimming-naur.md). Default: shadow mode.
+        _floor_mode = str(_long_cfg.get('acc_idm_accel_floor_mode', 'off'))
+        _floor_states = tuple(_long_cfg.get('acc_idm_accel_floor_states', ()) or ())
+        _floor_min_neg = float(_long_cfg.get('acc_idm_accel_floor_min_negative', 0.0))
+        _idm_accel_for_floor = current_state.get('acc_idm_accel_mps2')
         throttle, brake = self.longitudinal_controller.compute_control(
             current_state.get('speed', 0.0),
             reference_point.get('velocity'),
@@ -6929,6 +6969,10 @@ class VehicleController:
             emergency_relax_enabled=_emergency_relax_enabled,
             emergency_decel_floor=_emergency_decel_floor,
             emergency_jerk_max=_emergency_jerk_max,
+            idm_accel_mps2=_idm_accel_for_floor,
+            acc_idm_accel_floor_mode=_floor_mode,
+            acc_idm_accel_floor_states=_floor_states,
+            acc_idm_accel_floor_min_negative=_floor_min_neg,
         )
         
         result = {
@@ -6960,6 +7004,12 @@ class VehicleController:
             result['longitudinal_accel_cmd_raw'] = self.longitudinal_controller.last_accel_cmd_raw
             result['longitudinal_accel_cmd_smoothed'] = (
                 self.longitudinal_controller.last_accel_cmd_smoothed
+            )
+            result['longitudinal_acc_idm_floor_active'] = (
+                self.longitudinal_controller.last_acc_idm_floor_active
+            )
+            result['longitudinal_acc_idm_floor_candidate_mps2'] = (
+                self.longitudinal_controller.last_acc_idm_floor_candidate_mps2
             )
 
         return result

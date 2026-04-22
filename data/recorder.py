@@ -1734,6 +1734,19 @@ class DataRecorder:
             maxshape=max_shape,
             dtype=np.float32
         )
+        # IDM-as-accel-floor telemetry (greedy-swimming-naur.md)
+        self.h5_file.create_dataset(
+            "control/longitudinal_acc_idm_floor_active",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.int8
+        )
+        self.h5_file.create_dataset(
+            "control/longitudinal_acc_idm_floor_candidate_mps2",
+            shape=(0,),
+            maxshape=max_shape,
+            dtype=np.float32
+        )
         self.h5_file.create_dataset(
             "control/emergency_stop",
             shape=(0,),
@@ -7797,7 +7810,9 @@ class DataRecorder:
         longitudinal_limiter_state_code_list = []
         longitudinal_accel_cmd_raw_list = []
         longitudinal_accel_cmd_smoothed_list = []
-        
+        longitudinal_acc_idm_floor_active_list = []
+        longitudinal_acc_idm_floor_candidate_mps2_list = []
+
         for frame in frames:
             cc = frame.control_command
             timestamps.append(cc.timestamp)
@@ -7824,6 +7839,14 @@ class DataRecorder:
             )
             longitudinal_accel_cmd_smoothed_list.append(
                 float(getattr(cc, 'longitudinal_accel_cmd_smoothed', 0.0) or 0.0)
+            )
+            longitudinal_acc_idm_floor_active_list.append(
+                int(getattr(cc, 'longitudinal_acc_idm_floor_active', 0) or 0)
+            )
+            # Preserve NaN sentinel when floor did not fire (candidate is float('nan'))
+            _floor_cand = getattr(cc, 'longitudinal_acc_idm_floor_candidate_mps2', None)
+            longitudinal_acc_idm_floor_candidate_mps2_list.append(
+                float(_floor_cand) if _floor_cand is not None else float('nan')
             )
             pid_integrals.append(cc.pid_integral if cc.pid_integral is not None else 0.0)
             pid_derivatives.append(cc.pid_derivative if cc.pid_derivative is not None else 0.0)
@@ -9286,6 +9309,8 @@ class DataRecorder:
                        "longitudinal_limiter_state_code",
                        "longitudinal_accel_cmd_raw",
                        "longitudinal_accel_cmd_smoothed",
+                       "longitudinal_acc_idm_floor_active",
+                       "longitudinal_acc_idm_floor_candidate_mps2",
                        "steering_before_limits", "throttle_before_limits", "brake_before_limits",
                        "feedforward_steering", "feedback_steering",
                        "pid_integral", "pid_derivative", "pid_error",
@@ -9674,6 +9699,12 @@ class DataRecorder:
             )
             self.h5_file["control/longitudinal_accel_cmd_smoothed"][current_size:] = (
                 longitudinal_accel_cmd_smoothed_list
+            )
+            self.h5_file["control/longitudinal_acc_idm_floor_active"][current_size:] = (
+                longitudinal_acc_idm_floor_active_list
+            )
+            self.h5_file["control/longitudinal_acc_idm_floor_candidate_mps2"][current_size:] = (
+                longitudinal_acc_idm_floor_candidate_mps2_list
             )
             self.h5_file["control/steering_before_limits"][current_size:] = steering_before
             self.h5_file["control/throttle_before_limits"][current_size:] = throttle_before

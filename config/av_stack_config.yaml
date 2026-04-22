@@ -356,6 +356,15 @@ control:
     acc_idm_accel_routing_emergency_jerk_max: 10.0      # 2.5× nominal (4.0) for brake-onset transient
     acc_idm_accel_routing_emergency_relax_in_estate: true   # ACTIVE: widens decel/jerk in EMERGENCY_BRAKE/TTC_ESTOP/COLLAPSED_GAP_STOP
     acc_idm_accel_routing_b1_hard_brake_bypass: true        # ACTIVE (Commit D): EMERGENCY_BRAKE → brake=1.0 bypass; probe 2026-04-21 showed Commit C+C.1 insufficient due to upstream accel_target_smoothing EMA lag
+    # IDM-as-accel-floor (pre-emergency states — greedy-swimming-naur.md, Phase 0.5 verified 2026-04-22)
+    # Min-gate: if state in floor_states and idm < min_negative, clip accel_cmd_raw to min(speed_p, idm).
+    # Complements acc_idm_accel_routing_emergency_* (post-transition) by covering the ACC_ACTIVE/CUTOUT
+    # window where IDM demands brake but the state machine has not yet flipped.
+    acc_idm_accel_floor_mode: shadow              # {off, shadow, active}
+    acc_idm_accel_floor_states:
+      - ACC_ACTIVE
+      - CUTOUT
+    acc_idm_accel_floor_min_negative: -0.25       # dead-band (m/s²); only gate when idm < this
   grade_ema_alpha: 0.15               # Grade signal EMA smoothing (no-op when grade=0)
   regime:
     enabled: true

@@ -334,6 +334,9 @@ class ControlCommand:
     longitudinal_limiter_state_code: Optional[float] = None
     longitudinal_accel_cmd_raw: Optional[float] = None
     longitudinal_accel_cmd_smoothed: Optional[float] = None
+    # IDM-as-accel-floor (greedy-swimming-naur.md) — pre-emergency min-gate telemetry
+    longitudinal_acc_idm_floor_active: Optional[int] = None
+    longitudinal_acc_idm_floor_candidate_mps2: Optional[float] = None
     # PID internal state
     pid_integral: Optional[float] = None  # Lateral PID integral term
     pid_derivative: Optional[float] = None  # Lateral PID derivative term

@@ -11515,6 +11515,12 @@ class AVStack:
             longitudinal_accel_cmd_smoothed=control_command.get(
                 'longitudinal_accel_cmd_smoothed'
             ),
+            longitudinal_acc_idm_floor_active=control_command.get(
+                'longitudinal_acc_idm_floor_active'
+            ),
+            longitudinal_acc_idm_floor_candidate_mps2=control_command.get(
+                'longitudinal_acc_idm_floor_candidate_mps2'
+            ),
             pid_integral=control_command.get('pid_integral'),
             pid_derivative=control_command.get('pid_derivative'),
             pid_error=control_command.get('total_error'),  # Total error before PID
