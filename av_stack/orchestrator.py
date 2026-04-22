@@ -9413,6 +9413,35 @@ class AVStack:
             self.emergency_stop_logged = False
             self.emergency_stop_type = None
 
+        # B1 — ACC EMERGENCY_BRAKE hard-brake bypass (Commit D).
+        # When the ACC state machine declares EMERGENCY_BRAKE, skip the
+        # comfort-limited longitudinal stack and force brake=1.0 immediately.
+        # Rationale (probe recording_20260421_214920.h5 frames 56-67):
+        # even with Commit C widening + C.1 cooldown bypass, the upstream
+        # accel_target_smoothing EMA (α=0.86) pins the commanded decel near
+        # nominal for ~0.5s after state onset. For a 4 m/s ego at gap <3 m,
+        # that latency is the difference between miss and collision.
+        # Non-latched by default: releases brake the frame state exits
+        # EMERGENCY_BRAKE (unlike the lateral-emergency latch below which
+        # holds until release_speed clears). Steering preserved for lane
+        # keeping during the reflex.
+        _b1_bypass_enabled = bool(
+            self.control_config.get('longitudinal', {}).get(
+                'acc_idm_accel_routing_b1_hard_brake_bypass', False
+            )
+        )
+        _acc_state_raw = vehicle_state_dict.get('acc_state_code', '')
+        _acc_state_str = (
+            _acc_state_raw.decode() if isinstance(_acc_state_raw, bytes) else str(_acc_state_raw or '')
+        )
+        _b1_bypass_active = (
+            _b1_bypass_enabled and _acc_state_str == 'EMERGENCY_BRAKE'
+        )
+        # Reset per-entry log guard when the state leaves EMERGENCY_BRAKE, so
+        # the next entry re-logs (one line per episode, not one per process).
+        if not _b1_bypass_active and getattr(self, '_b1_bypass_logged', False):
+            self._b1_bypass_logged = False
+
         if self.emergency_stop_latched and current_speed > emergency_stop_release_speed:
             control_command = {
                 'steering': 0.0,
@@ -9420,6 +9449,25 @@ class AVStack:
                 'brake': 1.0,
                 'lateral_error': control_command.get('lateral_error', 0.0),
                 'emergency_stop': True,
+            }
+            emergency_stop_triggered = True
+        elif _b1_bypass_active:
+            # B1 hard-brake bypass — non-latched; preserves steering for lane
+            # keeping. Releases when state exits EMERGENCY_BRAKE.
+            if not getattr(self, '_b1_bypass_logged', False):
+                logger.warning(
+                    f"[Frame {self.frame_count}] B1 HARD-BRAKE BYPASS: "
+                    f"ACC state=EMERGENCY_BRAKE, speed={current_speed:.2f} m/s"
+                )
+                self._b1_bypass_logged = True
+            control_command = {
+                'steering': control_command.get('steering', 0.0),
+                'throttle': 0.0,
+                'brake': 1.0,
+                'lateral_error': control_command.get('lateral_error', 0.0),
+                'heading_error': control_command.get('heading_error', 0.0),
+                'emergency_stop': True,
+                'b1_bypass_active': True,
             }
             emergency_stop_triggered = True
         elif lateral_error_abs > emergency_stop_error:

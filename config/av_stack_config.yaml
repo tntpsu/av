@@ -355,7 +355,7 @@ control:
     acc_idm_accel_routing_emergency_decel_floor: -12.0  # Matches IDM -12 m/s² saturation floor in exempt states
     acc_idm_accel_routing_emergency_jerk_max: 10.0      # 2.5× nominal (4.0) for brake-onset transient
     acc_idm_accel_routing_emergency_relax_in_estate: true   # ACTIVE: widens decel/jerk in EMERGENCY_BRAKE/TTC_ESTOP/COLLAPSED_GAP_STOP
-    acc_idm_accel_routing_b1_hard_brake_bypass: false       # Safety-net (Commit D, only if C misses goal): EMERGENCY_BRAKE sets brake=1.0 like TTC_ESTOP
+    acc_idm_accel_routing_b1_hard_brake_bypass: true        # ACTIVE (Commit D): EMERGENCY_BRAKE → brake=1.0 bypass; probe 2026-04-21 showed Commit C+C.1 insufficient due to upstream accel_target_smoothing EMA lag
   grade_ema_alpha: 0.15               # Grade signal EMA smoothing (no-op when grade=0)
   regime:
     enabled: true
