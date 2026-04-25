@@ -4375,15 +4375,17 @@ def _build_longitudinal_hotspot_attribution(data: Dict, config: Dict, n_frames: 
     # chassis-ground signals indicate contact, even if other artifacts (e.g. timestamp
     # gaps) create larger spikes. This satisfies hotspot prioritization tests and
     # makes attribution consistent with chassis-ground health.
-    has_ground_contact_signal = False
-    for entry in entries:
-        if bool(entry.get("chassis_ground_contact")) or (
-            entry.get("chassis_ground_penetration_m") is not None
-            and float(entry["chassis_ground_penetration_m"]) > 1e-4
-        ):
-            has_ground_contact_signal = True
-            break
-    
+    #
+    # Scan the RAW chassis arrays here, not the hotspot entries: when a timestamp gap
+    # or similar artifact dominates the accel/jerk magnitudes, the top-N hotspots can
+    # cluster on the artifact frames and never sample the contact frames at all. The
+    # earlier "for entry in entries" check missed that case — contact existed in the
+    # recording but the precondition stayed False, so this fallback never fired.
+    has_ground_contact_signal = bool(
+        (contact is not None and (contact > 0.5).any())
+        or (penetration is not None and (penetration > 1e-4).any())
+    )
+
     if has_ground_contact_signal and "ground_contact_or_penetration" not in counts_by_attribution:
         # Pick the entry with the largest penetration (or first contact) and
         # force-attribute it to ground contact/penetration.
