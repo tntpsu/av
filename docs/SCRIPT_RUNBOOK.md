@@ -97,6 +97,35 @@ These scripts replay recordings offline and do not require Unity runtime interac
 - **Default perception mode:** Segmentation default.
 - **CV override:** `--use-cv`.
 
+### `tools/analyze/analyze_drive_overall.py`
+
+- **Purpose:** PRIMARY end-to-end drive evaluation tool. Combines path-tracking accuracy, control smoothness, perception quality, trajectory quality, system health, and safety metrics into one comprehensive report.
+- **Use when:** You want a single-command verdict on whether a recording reflects healthy or degraded behavior across the whole stack.
+
+## Debug Visualizer (PhilViz)
+
+The `tools/debug_visualizer/` tree powers the in-browser playback + diagnostics dashboard. Backend modules expose health and triage data to the visualizer; the server is the entry point.
+
+### `tools/debug_visualizer/server.py`
+
+- **Purpose:** Python server for the debug visualizer. Converts HDF5 recordings to JSON, serves camera frames, and exposes the backend modules below over HTTP.
+- **Use when:** You want to open a recording in the visualizer UI for frame-level inspection.
+
+### `tools/debug_visualizer/backend/issue_detector.py`
+
+- **Purpose:** Automatically flag problematic frames in a recording — extreme polynomial coefficients, high lateral error, perception failures, emergency stops, heading jumps.
+- **Use when:** You need a per-frame issue list rather than a global drive-summary verdict.
+
+### `tools/debug_visualizer/backend/layer_health.py`
+
+- **Purpose:** PhilViz Phase 3 layer-health scoring. Computes per-frame health scores (0.0–1.0) for each stack layer (Perception, Trajectory, Control) via a weighted linear combination of normalized signals.
+- **Use when:** You want a glanceable per-layer health timeline alongside the recording.
+
+### `tools/debug_visualizer/backend/triage_engine.py`
+
+- **Purpose:** PhilViz Phase 5 triage. Matches failure patterns against a library of known issue signatures, computes per-layer attribution, and generates an ordered action checklist (each item linked to a code pointer, config lever, and fix hint).
+- **Use when:** You want the visualizer to suggest *what to do next* about a flagged failure, not just identify it.
+
 ## Guardrails
 
 - Segmentation is the default across startup/replay tooling unless `--use-cv` is explicitly set.
