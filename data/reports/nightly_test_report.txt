@@ -1,0 +1,48 @@
+NIGHTLY TEST REPORT — 2026-04-27
+==================================
+Total: 2227 (2198 passed + 5 failed + 24 skipped + 4 xfailed + 1 xpassed)
+Passed: 2198
+Fixed: 1
+Real breaks (unfixed): 5
+Flaky: 0
+
+## FIXES APPLIED
+
+  [STALE_BASELINE] tests/test_lead_vehicle_data_pipeline.py::TestAccConfig::test_acc_enabled_false_by_default
+    — acc.enabled was intentionally set to true in config on 2026-04-19 (commit 7d7b057, comment in config
+      confirms intent); updated assertion from `is False` to `is True`
+
+## REAL BREAKS (need human review)
+
+  [REAL_BREAK] tests/test_orchestrator_recovery_mode.py::TestOrchestratorRecoveryModeDeletion::test_pp_high_lateral_error_does_not_scale_steering
+    — _fake_self() mock missing `control_config` attribute; av_stack/orchestrator.py:9429 added
+      self.control_config.get('longitudinal', {}).get('acc_idm_accel_routing_b1_hard_brake_bypass', False)
+      after this test was written; all 4 tests in this class fail for the same root cause
+    — first-failure message: AttributeError: 'types.SimpleNamespace' object has no attribute 'control_config'
+
+  [REAL_BREAK] tests/test_orchestrator_recovery_mode.py::TestOrchestratorRecoveryModeDeletion::test_pp_hard_limit_band_does_not_scale_steering
+    — same root cause as above (_fake_self() missing control_config)
+    — first-failure message: AttributeError: 'types.SimpleNamespace' object has no attribute 'control_config'
+
+  [REAL_BREAK] tests/test_orchestrator_recovery_mode.py::TestOrchestratorRecoveryModeDeletion::test_pp_recovery_band_still_reduces_throttle
+    — same root cause as above (_fake_self() missing control_config)
+    — first-failure message: AttributeError: 'types.SimpleNamespace' object has no attribute 'control_config'
+
+  [REAL_BREAK] tests/test_orchestrator_recovery_mode.py::TestOrchestratorRecoveryModeDeletion::test_emergency_stop_branch_unchanged
+    — same root cause as above (_fake_self() missing control_config)
+    — first-failure message: AttributeError: 'types.SimpleNamespace' object has no attribute 'control_config'
+
+  [REAL_BREAK] tests/test_mpc_delay_compensation.py::TestHigherQLat::test_no_oscillation_at_q4
+    — closed-loop MPC sim at q_lat=4.0 produces 31% sign-change oscillation vs threshold 15%;
+      most recent mpc_controller.py change: 41148f3 (kv^2 safety fade + experimental scaffolding)
+    — first-failure message: AssertionError: Oscillation detected: 31/99 sign changes (31%)
+      assert 0.31313131313131315 < 0.15
+
+## FLAKY
+
+  (none)
+
+## NOTES
+
+  1 xpassed (was 5 xfailed before fix): one ACC-related xfail is now unexpectedly passing,
+  consistent with the acc.enabled=true change. Not a failure — no action required.
