@@ -73,13 +73,20 @@ If you are unsure which command to run, start here first.
 
 ### `tools/nightly/run.sh`
 
-- **Purpose:** Wrapper invoked by launchd at 3am local time to run the nightly test-fix agent. Pulls `main`, invokes `claude -p` with `tools/nightly/PROMPT.md`, logs to `~/av_runtime/logs/nightly/<date>.log`.
+- **Purpose:** Wrapper invoked by launchd at 3am local time to run the nightly test-fix agent. Pulls `main`, invokes `claude -p` with `tools/nightly/PROMPT.md` under a hard 30-min watchdog timeout, logs to `~/av_runtime/logs/nightly/<date>.log`, and emails a completion summary on every exit.
 - **Unity launch behavior:** No Unity. Pytest only.
-- **Auth/permissions:** Inherits user shell `gh`/`git` auth. Runs `claude -p --permission-mode bypassPermissions` with a $5 budget cap.
+- **Auth/permissions:** Inherits user shell `gh`/`git` auth. Runs `claude -p --permission-mode bypassPermissions` with a $5 budget cap and a 1800s wall-clock timeout (subshell + sleep + kill watchdog).
 - **Use when:** Triggered automatically by launchd; do not run manually unless smoke-testing — it will open a real PR if it finds fixable failures.
 - **Install:** `cp tools/nightly/com.philtullai.av-nightly.plist ~/Library/LaunchAgents/ && launchctl load ~/Library/LaunchAgents/com.philtullai.av-nightly.plist`
 - **Uninstall:** `launchctl unload ~/Library/LaunchAgents/com.philtullai.av-nightly.plist`
-- **Companion files:** `tools/nightly/PROMPT.md` (agent prompt), `tools/nightly/RUBRIC.md` (classification rules).
+- **Companion files:** `tools/nightly/PROMPT.md` (agent prompt), `tools/nightly/RUBRIC.md` (classification rules), `tools/nightly/notify.py` (email helper).
+
+### `tools/nightly/notify.py`
+
+- **Purpose:** Send a Gmail SMTP email notification for the nightly job. Reads creds from `/Users/philtullai/ai-agents/duckAgent/.env` (reusing duckAgent's existing Gmail SMTP config). Pure stdlib — no pip deps.
+- **Use when:** Invoked from `tools/nightly/run.sh`'s EXIT trap; not normally run manually.
+- **Manual test:** `echo "test body" | python3 tools/nightly/notify.py "test subject"`
+- **Required env (loaded from duckAgent's .env if not already set):** `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, and one of `INSIGHTS_EMAIL` / `EMAIL_TO`.
 
 ## Analysis / Replay Scripts (Offline)
 
