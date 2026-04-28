@@ -50,6 +50,7 @@ data/segmentation_dataset/
 data/recordings/
 data/reports/gates/
 data/reports/failure_packets/
+data/reports/nightly_*
 tracks/generated/
 
 # Logs
