@@ -69,6 +69,18 @@ If you are unsure which command to run, start here first.
 
 - **Purpose:** Stop running AV stack processes.
 
+## Scheduled / Automation Scripts
+
+### `tools/nightly/run.sh`
+
+- **Purpose:** Wrapper invoked by launchd at 3am local time to run the nightly test-fix agent. Pulls `main`, invokes `claude -p` with `tools/nightly/PROMPT.md`, logs to `~/av_runtime/logs/nightly/<date>.log`.
+- **Unity launch behavior:** No Unity. Pytest only.
+- **Auth/permissions:** Inherits user shell `gh`/`git` auth. Runs `claude -p --permission-mode bypassPermissions` with a $5 budget cap.
+- **Use when:** Triggered automatically by launchd; do not run manually unless smoke-testing — it will open a real PR if it finds fixable failures.
+- **Install:** `cp tools/nightly/com.philtullai.av-nightly.plist ~/Library/LaunchAgents/ && launchctl load ~/Library/LaunchAgents/com.philtullai.av-nightly.plist`
+- **Uninstall:** `launchctl unload ~/Library/LaunchAgents/com.philtullai.av-nightly.plist`
+- **Companion files:** `tools/nightly/PROMPT.md` (agent prompt), `tools/nightly/RUBRIC.md` (classification rules).
+
 ## Analysis / Replay Scripts (Offline)
 
 These scripts replay recordings offline and do not require Unity runtime interaction.
