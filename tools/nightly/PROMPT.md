@@ -82,34 +82,57 @@ REAL_BREAKS=<integer>
 FLAKY=<integer>
 ```
 
-## Step 6 — Deliver: branch + PR
+## Step 6 — Deliver: branch + PR (only if there are real fixes)
+
+**Decision tree:** if Step 4 applied at least one safe fix to a tracked file,
+push a branch and open a PR. If Step 4 applied zero fixes (everything was
+REAL_BREAK / FLAKY / PASS), there is nothing to push — `git push` of an
+empty branch followed by `gh pr create` fails with `no commits between base
+and head`, which previously hung the agent. Skip the branch entirely in
+that case and exit cleanly.
 
 ```bash
 echo "step6_delivery $(date -Iseconds)" >> "$HEARTBEAT"
-DATE_TAG=$(date +%Y%m%d)
-BRANCH="nightly/$DATE_TAG"
 
-git checkout -b "$BRANCH"
+# Stage candidate fixes first, then check whether anything is actually staged.
 git add tests/
-git diff --cached --quiet || git commit -m "nightly: $FIXES fixes, $REAL_BREAKS real breaks"
-git push -u origin "$BRANCH"
-gh pr create --title "Nightly $DATE: $FIXES fixes, $REAL_BREAKS real breaks" \
-             --body "$(cat data/reports/nightly_test_report.txt)" \
-             --label nightly
-echo "step6_done $(date -Iseconds)" >> "$HEARTBEAT"
+
+if git diff --cached --quiet; then
+  # Nothing to commit — nothing to push.
+  echo "step6_done delivery=local_only $(date -Iseconds)" >> "$HEARTBEAT"
+  DELIVERY=local_only
+else
+  DATE_TAG=$(date +%Y%m%d)
+  BRANCH="nightly/$DATE_TAG"
+  git checkout -b "$BRANCH"
+  git commit -m "nightly: $FIXES fixes, $REAL_BREAKS real breaks"
+  if git push -u origin "$BRANCH" \
+     && gh pr create --title "Nightly $DATE: $FIXES fixes, $REAL_BREAKS real breaks" \
+                     --body "$(cat data/reports/nightly_test_report.txt)" \
+                     --label nightly; then
+    DELIVERY=git_pr
+    echo "step6_done delivery=git_pr $(date -Iseconds)" >> "$HEARTBEAT"
+  else
+    DELIVERY=push_failed
+    echo "step6_done delivery=push_failed $(date -Iseconds)" >> "$HEARTBEAT"
+  fi
+fi
 ```
 
-If any of these git/gh steps fails, **do not stall asking for confirmation
-— print the error, leave the report in place at `data/reports/`, and
-exit**. The launchd log captures everything; the user will see the failure
-in the morning.
+**If any git/gh step fails:** do not stall asking for confirmation — print
+the error, leave the report in place at `data/reports/`, and exit. The
+launchd wrapper sends an email with the log tail regardless of how the
+agent exits.
 
 ## End
 
-Print one summary line as your final message:
+Print one summary line as your final message — the wrapper greps for this
+line to set the email subject, so format it exactly:
 
 ```
-$DATE FIXES=$FIXES REAL_BREAKS=$REAL_BREAKS FLAKY=$FLAKY delivery=<git_pr|local_only>
+$DATE FIXES=$FIXES REAL_BREAKS=$REAL_BREAKS FLAKY=$FLAKY delivery=$DELIVERY
 ```
 
-Where `delivery=git_pr` if Step 6 succeeded, `local_only` if it didn't.
+Where `$DELIVERY` is `git_pr`, `local_only`, or `push_failed` from Step 6.
+Then exit. **Do not** generate additional analysis or commentary after this
+line — the wrapper's hard timeout doesn't wait for you to wax thoughtful.
