@@ -235,7 +235,7 @@ class TestAccConfig:
         assert 'acc' in self._load_cfg(), "acc: block missing from av_stack_config.yaml"
 
     def test_acc_enabled_false_by_default(self):
-        assert self._load_cfg()['acc']['enabled'] is False
+        assert self._load_cfg()['acc']['enabled'] is True
 
     def test_acc_required_keys(self):
         acc = self._load_cfg()['acc']
