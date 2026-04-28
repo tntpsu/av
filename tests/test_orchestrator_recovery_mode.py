@@ -40,6 +40,7 @@ def _fake_self() -> SimpleNamespace:
             "emergency_stop_use_gt_lane_boundaries": False,
             "emergency_stop_gt_lane_boundary_margin": 0.05,
         },
+        control_config={},
         last_gt_lane_width=None,
         controller=SimpleNamespace(
             lateral_controller=SimpleNamespace(reset=lambda: None),
