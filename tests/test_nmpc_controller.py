@@ -410,13 +410,23 @@ class TestNMPCControllerFallback:
             )
         assert ctrl._fallback_active is True
 
-        # Restore good solver
+        # Restore good solver. Loop up to 5 attempts — the single-call form was
+        # fragile to platform-specific SLSQP convergence variance (macOS Accelerate
+        # vs Linux OpenBLAS). The contract being tested is "fallback clears once
+        # the solver is healthy"; multi-call form expresses that robustly.
         fail_mode[0] = False
-        r = ctrl.compute_steering(
-            e_lat=0.0, e_heading=0.0, current_speed=22.0,
-            last_delta_norm=0.0, kappa_ref=0.0, v_target=22.0,
-            v_max=30.0, dt=0.033,
-        )
-        if r['nmpc_feasible']:
-            assert r['nmpc_fallback_active'] is False
-            assert r['nmpc_consecutive_failures'] == 0
+        for _ in range(5):
+            r = ctrl.compute_steering(
+                e_lat=0.0, e_heading=0.0, current_speed=22.0,
+                last_delta_norm=0.0, kappa_ref=0.0, v_target=22.0,
+                v_max=30.0, dt=0.033,
+            )
+            if r['nmpc_feasible'] and r['nmpc_fallback_active'] is False:
+                assert r['nmpc_consecutive_failures'] == 0
+                break
+        else:
+            pytest.fail(
+                f"fallback did not clear within 5 attempts after solver restored "
+                f"(last result: feasible={r['nmpc_feasible']}, "
+                f"fallback_active={r['nmpc_fallback_active']})"
+            )
