@@ -33,7 +33,7 @@ Follow it exactly.
 
 ```bash
 echo "step1_running $(date -Iseconds)" >> "$HEARTBEAT"
-python3 -m pytest tests/ -v --tb=short > /tmp/nightly_pytest.log 2>&1
+python3 -m pytest tests/ -n auto --tb=short > /tmp/nightly_pytest.log 2>&1
 PYTEST_EXIT=$?
 echo "step1_done exit=$PYTEST_EXIT $(date -Iseconds)" >> "$HEARTBEAT"
 ```
@@ -65,7 +65,7 @@ echo "step4_fixing $(date -Iseconds)" >> "$HEARTBEAT"
 Fix STALE_BASELINE, STALE_IMPORT, OBSOLETE_TEST only. Then:
 
 ```bash
-python3 -m pytest tests/ -v --tb=short > /tmp/nightly_pytest_after.log 2>&1
+python3 -m pytest tests/ -n auto --tb=short > /tmp/nightly_pytest_after.log 2>&1
 echo "step4_done $(date -Iseconds)" >> "$HEARTBEAT"
 ```
 

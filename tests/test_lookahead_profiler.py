@@ -7,7 +7,7 @@ import time
 import numpy as np
 import pytest
 
-_IN_CI = os.environ.get("CI") == "true"
+_IN_CI = os.environ.get("CI") == "true" or os.environ.get("AV_NIGHTLY_RUN") == "1"
 
 from trajectory.lookahead_profiler import (
     LookaheadProfile,

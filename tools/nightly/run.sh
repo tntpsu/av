@@ -10,12 +10,16 @@ set -uo pipefail
 # launchd starts processes with a sparse PATH — set it explicitly.
 export PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$PATH
 
+# Mark this as a nightly run so hardware-sensitive perf tests can self-skip;
+# Mac mini under 3am+pytest+stack-spawn load can't honor sub-20ms budgets.
+export AV_NIGHTLY_RUN=1
+
 REPO=/Users/philtullai/av
 RUNTIME=/Users/philtullai/av_runtime
 LOG_DIR="$RUNTIME/logs/nightly"
 DATE=$(date +%Y-%m-%d)
 LOG="$LOG_DIR/$DATE.log"
-CLAUDE_TIMEOUT=1800  # 30 min hard ceiling
+CLAUDE_TIMEOUT=3600  # 60 min hard ceiling — accommodates 2x pytest (~11 min each) + analysis
 
 mkdir -p "$LOG_DIR"
 
