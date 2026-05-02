@@ -181,6 +181,24 @@ Car now reaches 25 m/s (11.7% overspeed rate at target=25). Speed RMSE 5.3 m/s =
 
 ---
 
+### T-NMPC-COLD-START-DETERMINISM — NMPC sign-determinism fix across BLAS (2026-05-02)
+
+NMPC SLSQP cold-start at `kappa=0` with non-zero `e_lat` was producing different signs on Mac Accelerate vs Linux OpenBLAS, blocking CI since 2026-04-12. Root cause: `x0` was set to `_feedforward_delta_norm(kappa=0, ...) = 0`, putting SLSQP at the saddle point of a near-symmetric cost surface. BLAS arithmetic noise tipped the basin choice.
+
+**Fix:** Added a sign-preserving lateral-error seed to cold-start `x0[0]` in `control/nmpc_controller.py` (after the existing curvature feedforward). Magnitude is bounded to `cold_start_e_lat_seed_max_frac × max_steer_rad` (default 10%) so it doesn't dominate SLSQP optimization.
+
+- ✅ Phase 0: `tools/analyze/validate_nmpc_cold_start.py` confirmed root cause; gain sweep showed gain≥0.3 produces deterministic sign across `e_lat ∈ [-1, 1]`
+- ✅ Phase A: 2 new fields in `NMPCParams` (`cold_start_e_lat_seed_gain=0.5`, `cold_start_e_lat_seed_max_frac=0.10`) with `from_config` mapping
+- ✅ Phase B: cold-start path in `SLSQPNMPCSolver.solve()` adds `x0[0] += clip(-e_lat * gain, ±seed_max)` after curvature feedforward
+- ✅ Phase F: 6 new unit tests in `TestColdStartSeed` class — applied/zero/clipped/disabled/no-warm-start coverage. All 91 controller tests + xdist regression suite green
+- ⏸️ Phase G2 (E2E hairpin_15 validation): deferred to next session — change only affects first-frame cold-start; warm-start chain takes over from frame 2; production behavior change is negligible
+- ⏸️ Phase G1 (golden recording revalidation): deferred — no scoring code changed, expected delta = 0
+- ⏸️ Phase H (memory file capturing the solver-cold-start-determinism pattern): deferred
+
+**Why fields were added at code level:** This is a CODE PATCH, not config tuning. The two fields exist as config knobs only to enable disable/tune via YAML if a future regression appears (rollback in 30 sec without code revert).
+
+**Production impact:** Minimal. NMPC is gated `kappa ≥ 0.015` in production, so the cold-start saddle case (straight road + non-zero e_lat) is rarely hit. When it is, warm-start dominates from frame 2.
+
 ## Backlog (immediate)
 
 | ID | Task | Rationale |

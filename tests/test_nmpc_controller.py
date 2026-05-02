@@ -272,6 +272,95 @@ class TestNMPCSignConvention:
             )
 
 
+class TestColdStartSeed:
+    """Sign-preserving cold-start seed (BLAS-determinism fix, 2026-05-02).
+
+    Without the seed, NMPC's cold-start x0 is zeros + curvature-feedforward.
+    On a straight road (kappa=0) with non-zero e_lat, x0[0]=0 puts SLSQP at
+    the saddle point of a near-symmetric cost surface; tiny BLAS arithmetic
+    noise tips the basin choice (Mac Accelerate vs Linux OpenBLAS divergence).
+    The seed adds a small bias proportional to -sign(e_lat).
+    """
+
+    def _capture_x0(self, monkeypatch, solver, e_lat: float):
+        """Run solve() once, capture the x0 passed to scipy.optimize.minimize."""
+        captured = {}
+        from scipy import optimize as _opt
+        original_minimize = _opt.minimize
+
+        def spy(fun, x0, *args, **kwargs):
+            captured['x0'] = np.array(x0).copy()
+            return original_minimize(fun, x0, *args, **kwargs)
+
+        monkeypatch.setattr(
+            'control.nmpc_controller.minimize', spy
+        )
+        N = solver.p.horizon
+        solver.solve(
+            e_lat=e_lat, e_heading=0.0, v=5.0, last_delta_norm=0.0,
+            kappa_ref_horizon=np.zeros(N), v_target=5.0, v_max=10.0,
+            dt=0.077, grade_rad=0.0,
+        )
+        return captured['x0']
+
+    def test_seed_applied_for_negative_e_lat_on_straight(self, monkeypatch, solver):
+        """Cold-start with e_lat=-0.3, kappa=0: x0[0] must be positive (non-saddle)."""
+        x0 = self._capture_x0(monkeypatch, solver, e_lat=-0.3)
+        assert x0[0] > 0.0, (
+            f"Expected positive seed for negative e_lat (-sign(e_lat)), got x0[0]={x0[0]:.4f}. "
+            f"Without the seed, x0[0]=0 puts SLSQP at the saddle point."
+        )
+
+    def test_seed_applied_for_positive_e_lat_on_straight(self, monkeypatch, solver):
+        """Cold-start with e_lat=+0.3, kappa=0: x0[0] must be negative (mirror case)."""
+        x0 = self._capture_x0(monkeypatch, solver, e_lat=0.3)
+        assert x0[0] < 0.0, (
+            f"Expected negative seed for positive e_lat, got x0[0]={x0[0]:.4f}"
+        )
+
+    def test_seed_zero_when_e_lat_zero(self, monkeypatch, solver):
+        """Cold-start with e_lat=0, kappa=0: x0[0] should be 0 (no bias needed)."""
+        x0 = self._capture_x0(monkeypatch, solver, e_lat=0.0)
+        assert abs(x0[0]) < 1e-9, f"Expected zero seed when e_lat=0, got x0[0]={x0[0]:.4f}"
+
+    def test_seed_clipped_at_max(self, monkeypatch, solver):
+        """Large |e_lat| must clip to cold_start_e_lat_seed_max_frac × max_steer_rad."""
+        x0 = self._capture_x0(monkeypatch, solver, e_lat=-10.0)
+        seed_max = solver.p.cold_start_e_lat_seed_max_frac * solver.p.max_steer_rad
+        # x0[0] = feedforward(0) + clipped_seed = 0 + seed_max
+        assert abs(x0[0] - seed_max) < 1e-9, (
+            f"Expected clipped seed = {seed_max:.4f}, got x0[0]={x0[0]:.4f}"
+        )
+
+    def test_seed_disabled_when_gain_zero(self, monkeypatch):
+        """Setting gain=0 must restore pre-fix behavior (x0[0]=0 at kappa=0)."""
+        p = NMPCParams(cold_start_e_lat_seed_gain=0.0)
+        solver = NMPCSolver(p)
+        x0 = self._capture_x0(monkeypatch, solver, e_lat=-0.3)
+        assert abs(x0[0]) < 1e-9, (
+            f"Expected zero seed when gain=0 (disabled), got x0[0]={x0[0]:.4f}"
+        )
+
+    def test_seed_does_not_apply_to_warm_start(self, monkeypatch, solver):
+        """Warm-start path must use _warm_u, not the cold-start seed."""
+        # First solve seeds _warm_u
+        N = solver.p.horizon
+        solver.solve(
+            e_lat=0.1, e_heading=0.0, v=5.0, last_delta_norm=0.0,
+            kappa_ref_horizon=np.zeros(N), v_target=5.0, v_max=10.0,
+            dt=0.077, grade_rad=0.0,
+        )
+        assert solver._warm_u is not None, "warm_u not set after first solve"
+        # Capture x0 on second solve (warm-start path)
+        warm_u_before = solver._warm_u.copy()
+        x0 = self._capture_x0(monkeypatch, solver, e_lat=-0.3)
+        # Warm-start is shifted by 2: x0[0] should equal warm_u[2], NOT seed value
+        assert abs(x0[0] - warm_u_before[2]) < 1e-9, (
+            f"Warm-start x0[0]={x0[0]:.4f} does not match warm_u[2]={warm_u_before[2]:.4f}; "
+            f"cold-start seed must not apply to warm-start path"
+        )
+
+
 # ─── NMPCController tests ─────────────────────────────────────────────────────
 
 class TestNMPCController:

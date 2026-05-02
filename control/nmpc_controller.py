@@ -108,6 +108,17 @@ class NMPCParams:
     # On failure: fallback to LMPC (True) vs hold last steering (False)
     fallback_lmpc: bool = True
 
+    # Cold-start sign-preserving seed: when no warm-start is available, the
+    # default x0=zeros + curvature-feedforward puts SLSQP at the saddle point
+    # of a near-symmetric cost surface for non-zero e_lat on straight roads.
+    # BLAS arithmetic noise then determines which basin SLSQP descends into
+    # (Mac Accelerate vs Linux OpenBLAS divergence). A small proportional
+    # bias on x0[0] toward -sign(e_lat) breaks the symmetry deterministically.
+    # Set gain=0.0 to disable. max_frac caps the seed to a fraction of
+    # max_steer_rad so it doesn't dominate SLSQP optimization.
+    cold_start_e_lat_seed_gain: float = 0.5
+    cold_start_e_lat_seed_max_frac: float = 0.10
+
     @classmethod
     def from_config(cls, cfg: dict) -> "NMPCParams":
         """Load from config dict: cfg['trajectory']['nmpc']['nmpc_<field>']."""
@@ -428,6 +439,16 @@ class SLSQPNMPCSolver:
                 x0[2 * k] = self._feedforward_delta_norm(
                     kappa[k], p.wheelbase_m, p.max_steer_rad
                 )
+            # Sign-preserving e_lat seed: bias x0[0] toward -sign(e_lat) so
+            # SLSQP doesn't start at a near-saddle on straight roads with
+            # non-zero e_lat. Without this, BLAS arithmetic noise tips the
+            # basin choice (CI Linux OpenBLAS vs local Mac Accelerate).
+            if p.cold_start_e_lat_seed_gain > 0.0:
+                seed_max = p.cold_start_e_lat_seed_max_frac * p.max_steer_rad
+                x0[0] += float(np.clip(
+                    -e_lat * p.cold_start_e_lat_seed_gain,
+                    -seed_max, seed_max,
+                ))
 
         # ── Bounds ───────────────────────────────────────────────────────────
         # First δ is also rate-limited from last_delta_norm (hard box).

@@ -152,6 +152,12 @@ These scripts replay recordings offline and do not require Unity runtime interac
 - **Default perception mode:** Segmentation default.
 - **CV override:** `--use-cv`.
 
+### `tools/analyze/validate_nmpc_cold_start.py`
+
+- **Purpose:** Phase 0 oracle for the NMPC sign-determinism fix (2026-05-02). Reproduces the SLSQP cold-start saddle behavior at `kappa=0` with non-zero `e_lat` and shows the proposed seed value across a sweep of `(e_lat, gain)` pairs. Used to confirm root cause and tune the cold-start seed gain before touching the controller code.
+- **Use when:** Investigating any future BLAS-determinism regression in NMPC, or when tuning `cold_start_e_lat_seed_gain` / `cold_start_e_lat_seed_max_frac` in `NMPCParams`.
+- **Manual:** `python3 tools/analyze/validate_nmpc_cold_start.py --gain-sweep`
+
 ### `tools/analyze/analyze_drive_overall.py`
 
 - **Purpose:** PRIMARY end-to-end drive evaluation tool. Combines path-tracking accuracy, control smoothness, perception quality, trajectory quality, system health, and safety metrics into one comprehensive report.
