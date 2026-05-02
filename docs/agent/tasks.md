@@ -241,6 +241,9 @@ NMPC SLSQP cold-start at `kappa=0` with non-zero `e_lat` was producing different
 | 8 | Prediction (other vehicle trajectories) | Pending |
 | 9 | Intersection handling | Pending |
 | 10 | End-to-end robustness + regression | Pending |
+| T-PHILVIZ-MOBILE | PhilViz mobile-friendly CSS — responsive breakpoints, touch-optimized controls, large tap targets, no hover-only interactions. User now accesses via VPN from mobile (2026-05-02). | **Queued** |
+| T-PHILVIZ-PICKER | Track / scenario multi-select picker widget — lists `tracks/*.yml` + `tracks/scenarios/*.yml`, supports 1-or-many selection. Standalone reusable widget that other pages consume. | **Queued** (depends on MOBILE) |
+| T-PHILVIZ-SKILLS | Skills runner page — web UI to trigger slash commands (`/sweep`, `/e2e`, `/acc-sweep`, `/diagnose`, etc.). Open design questions: SSE vs polling vs websockets for output streaming; cancel UX for long-running skills (some are 15+ min); auth model (currently VPN-only perimeter, no per-user auth). | **Queued** (depends on PICKER) |
 
 ---
 
