@@ -174,6 +174,18 @@ The `tools/debug_visualizer/` tree powers the in-browser playback + diagnostics 
 - **MCP/auth:** spawns claude-p with `--strict-mcp-config --mcp-config '{"mcpServers":{}}' --permission-mode bypassPermissions --no-session-persistence` (matches nightly wrapper pattern). Hardcoded budget cap `$5.00`. Sets `AV_NIGHTLY_RUN=1` so hardware-sensitive tests self-skip.
 - **Storage:** in-process job dict, `MAX_BUFFER_LINES=5000` per job. No persistence across server restarts (acceptable for V1).
 
+### `tools/debug_visualizer/server.py` — Skills + Tracks + Configs + Sites APIs (added 2026-05-02)
+
+The PhilViz Flask server gained these endpoints to power the Skills page UI:
+- `GET /api/skills/list` — discover slash commands from `.claude/commands/*.md`
+- `POST /api/skills/run` — spawn `claude -p` with the chosen skill (returns `job_id`)
+- `GET /api/skills/jobs` — recent runs (last 20)
+- `GET /api/skills/stream/<job_id>` — SSE stream of subprocess output (reconnect-safe via `?last=`)
+- `POST /api/skills/cancel/<job_id>` — SIGTERM the subprocess group
+- `GET /api/tracks/list` — `tracks/*.yml` and `tracks/scenarios/*.yml` for the picker
+- `GET /api/configs/list` — `config/*.yaml` for the config picker
+- `GET /api/sites/list` — reads `~/.philviz_sites.json` (auto-creates with sensible defaults if missing) for the cross-site nav drawer
+
 ### `tools/debug_visualizer/server.py`
 
 - **Purpose:** Python server for the debug visualizer. Converts HDF5 recordings to JSON, serves camera frames, and exposes the backend modules below over HTTP.

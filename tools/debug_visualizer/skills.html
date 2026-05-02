@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>PhilViz · Skills</title>
-    <link rel="stylesheet" href="style.css?v=skills_v1">
+    <link rel="stylesheet" href="style.css?v=skills_v2_pickers_drawer">
 </head>
 <body>
     <div class="container">
@@ -45,12 +45,37 @@
                     </div>
                     <p class="phv-skill-description" id="phv-skill-description"></p>
 
+                    <details class="phv-picker" open>
+                        <summary class="phv-picker-summary">
+                            <span class="phv-picker-title">Tracks</span>
+                            <span class="phv-picker-count" id="phv-tracks-count">0 selected</span>
+                        </summary>
+                        <div class="phv-picker-body">
+                            <div class="phv-picker-section-label">Base tracks</div>
+                            <div class="phv-checkbox-grid" id="phv-tracks-base"></div>
+                            <div class="phv-picker-section-label" style="margin-top:0.6rem;">ACC scenarios</div>
+                            <div class="phv-checkbox-grid" id="phv-tracks-scenarios"></div>
+                        </div>
+                    </details>
+
+                    <details class="phv-picker">
+                        <summary class="phv-picker-summary">
+                            <span class="phv-picker-title">Config</span>
+                            <span class="phv-picker-count" id="phv-config-current">default</span>
+                        </summary>
+                        <div class="phv-picker-body">
+                            <select id="phv-config-select" class="phv-config-select">
+                                <option value="">(default — av_stack_config)</option>
+                            </select>
+                        </div>
+                    </details>
+
                     <label for="phv-args-input" class="phv-args-label">
                         Arguments
                         <span class="phv-args-hint" id="phv-args-hint"></span>
                     </label>
                     <textarea id="phv-args-input" class="phv-args-input"
-                              placeholder="Optional arguments — passed as $ARGUMENTS to the skill"
+                              placeholder="Auto-built from selections above. Edit freely — what's here is what's passed to the skill as $ARGUMENTS"
                               rows="2"></textarea>
 
                     <div class="phv-run-actions">
@@ -82,6 +107,21 @@
             </a>
         </nav>
     </div>
-    <script src="skills.js?v=skills_v1"></script>
+    <!-- Hamburger drawer (cross-site nav) -->
+    <div class="phv-drawer-backdrop" id="phv-drawer-backdrop"></div>
+    <aside class="phv-drawer" id="phv-drawer" aria-hidden="true">
+        <div class="phv-drawer-header">
+            <h2 class="phv-section-title" style="margin:0;">My sites</h2>
+            <button class="phv-drawer-close" id="phv-drawer-close" aria-label="Close">✕</button>
+        </div>
+        <div class="phv-sites-list" id="phv-sites-list">
+            <div class="phv-empty">Loading…</div>
+        </div>
+        <p class="phv-drawer-footer">
+            Edit <code>~/.philviz_sites.json</code> to customize this list.
+        </p>
+    </aside>
+    <script src="nav.js?v=nav_v1"></script>
+    <script src="skills.js?v=skills_v2"></script>
 </body>
 </html>

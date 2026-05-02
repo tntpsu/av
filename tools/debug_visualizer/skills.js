@@ -21,9 +21,16 @@
         outputMeta: document.getElementById("phv-output-meta"),
         output: document.getElementById("phv-output"),
         backBtn: document.getElementById("phv-back-btn"),
+        tracksBase: document.getElementById("phv-tracks-base"),
+        tracksScenarios: document.getElementById("phv-tracks-scenarios"),
+        tracksCount: document.getElementById("phv-tracks-count"),
+        configSelect: document.getElementById("phv-config-select"),
+        configCurrent: document.getElementById("phv-config-current"),
     };
 
     let selectedSkill = null;
+    let tracksData = { tracks: [], scenarios: [] };
+    let configsData = { configs: [], default: "av_stack_config" };
     let activeJobId = null;
     let activeStream = null;
     let lineCount = 0;
@@ -42,20 +49,67 @@
         selectedSkill = skill;
         els.skillName.textContent = "/" + skill.name;
         els.skillDesc.textContent = skill.description || "(no description)";
-        els.argsHint.textContent = skill.takes_args ? "(this skill uses $ARGUMENTS)" : "";
-        els.argsInput.value = "";
+        els.argsHint.textContent = skill.takes_args ? "(this skill uses $ARGUMENTS)" : "(this skill ignores arguments)";
+        // Clear all picker selections + free-text args
+        document.querySelectorAll('.phv-track-cb input[type="checkbox"]').forEach((cb) => (cb.checked = false));
+        if (els.configSelect) els.configSelect.value = "";
+        rebuildArgs();
         els.outputWrap.style.display = "none";
         els.output.textContent = "";
         els.jobStatus.textContent = "";
         els.runBtn.disabled = false;
         els.cancelBtn.style.display = "none";
         showRunPanel();
-        // Highlight the selected row
         document.querySelectorAll(".phv-skill-row.selected").forEach((r) => {
             r.classList.remove("selected");
         });
         const row = document.querySelector(`.phv-skill-row[data-skill="${skill.name}"]`);
         if (row) row.classList.add("selected");
+    }
+
+    function rebuildArgs() {
+        // Compose args = "<tracks...> [config=<name>]". User can still edit freely.
+        const checked = Array.from(
+            document.querySelectorAll('.phv-track-cb input[type="checkbox"]:checked')
+        ).map((cb) => cb.value);
+        const config = els.configSelect ? els.configSelect.value : "";
+        const parts = [...checked];
+        if (config) parts.push(`config=${config}`);
+        els.argsInput.value = parts.join(" ");
+        if (els.tracksCount) els.tracksCount.textContent = `${checked.length} selected`;
+        if (els.configCurrent) els.configCurrent.textContent = config || "default";
+    }
+
+    function renderTracks(data) {
+        tracksData = data;
+        const renderGroup = (container, items) => {
+            container.innerHTML = items
+                .map(
+                    (t) => `
+                <label class="phv-track-cb" title="${escapeHtml(t)}">
+                    <input type="checkbox" value="${escapeHtml(t)}">
+                    <span>${escapeHtml(t)}</span>
+                </label>`
+                )
+                .join("");
+            container.querySelectorAll('input[type="checkbox"]').forEach((cb) => {
+                cb.addEventListener("change", rebuildArgs);
+            });
+        };
+        renderGroup(els.tracksBase, data.tracks || []);
+        renderGroup(els.tracksScenarios, data.scenarios || []);
+    }
+
+    function renderConfigs(data) {
+        configsData = data;
+        if (!els.configSelect) return;
+        const opts = [`<option value="">(default — ${escapeHtml(data.default)})</option>`];
+        (data.configs || []).forEach((c) => {
+            if (c === data.default) return;  // already in default option
+            opts.push(`<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`);
+        });
+        els.configSelect.innerHTML = opts.join("");
+        els.configSelect.addEventListener("change", rebuildArgs);
     }
 
     function renderSkills(skills) {
@@ -232,7 +286,28 @@
     els.cancelBtn.addEventListener("click", cancelJob);
     els.backBtn.addEventListener("click", hideRunPanel);
 
+    async function loadTracks() {
+        try {
+            const r = await fetch("/api/tracks/list");
+            renderTracks(await r.json());
+        } catch (e) {
+            // silent — pickers stay empty
+        }
+    }
+    async function loadConfigs() {
+        try {
+            const r = await fetch("/api/configs/list");
+            renderConfigs(await r.json());
+        } catch (e) {
+            // silent
+        }
+    }
+
     refreshSkills();
     refreshJobs();
+    loadTracks();
+    loadConfigs();
     setInterval(refreshJobs, 5000);
+    // Drawer init lives in nav.js (also loaded by index.html so the hamburger
+    // works on the Analysis page too).
 })();

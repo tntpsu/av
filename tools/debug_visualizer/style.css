@@ -1008,3 +1008,99 @@ body {
 @media (prefers-reduced-motion: reduce) {
     .phv-job-status-dot.running { animation: none; }
 }
+
+/* ── Pickers (multi-select tracks + config dropdown inside Skills) ──── */
+.phv-picker {
+    background: #0e0e0e; border: 1px solid #2a2a2a; border-radius: 6px;
+    padding: 0; margin: 0;
+}
+.phv-picker[open] { padding-bottom: 0.6rem; }
+.phv-picker-summary {
+    list-style: none; cursor: pointer; padding: 0.6rem 0.8rem;
+    display: flex; justify-content: space-between; align-items: center;
+    user-select: none; min-height: 44px;
+}
+.phv-picker-summary::-webkit-details-marker { display: none; }
+.phv-picker-summary::before {
+    content: "▸"; color: #6b7280; margin-right: 0.5rem; font-size: 0.7rem;
+    transition: transform 0.15s;
+}
+.phv-picker[open] .phv-picker-summary::before { transform: rotate(90deg); }
+.phv-picker-title { color: #cfd8dc; font-size: 0.9rem; font-weight: 600; flex: 1; }
+.phv-picker-count { font-size: 0.75rem; color: #9aa0a6; }
+.phv-picker-body { padding: 0 0.8rem; }
+.phv-picker-section-label {
+    font-size: 0.7rem; color: #6b7280; text-transform: uppercase;
+    letter-spacing: 0.05em; margin-bottom: 0.3rem;
+}
+.phv-checkbox-grid {
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+    gap: 0.3rem;
+}
+.phv-track-cb {
+    display: flex; align-items: center; gap: 0.4rem;
+    padding: 0.4rem 0.5rem; background: #1a1a1a; border: 1px solid #2a2a2a;
+    border-radius: 4px; cursor: pointer; min-height: 36px;
+    font-family: ui-monospace, monospace; font-size: 0.78rem; color: #b8c4ce;
+}
+.phv-track-cb:hover { background: #232323; }
+.phv-track-cb input[type="checkbox"] {
+    width: 16px; height: 16px; flex-shrink: 0; accent-color: #4a7ab8;
+}
+.phv-track-cb input[type="checkbox"]:checked + span { color: #fff; font-weight: 600; }
+.phv-track-cb:has(input:checked) { background: #1f3146; border-color: #4a7ab8; }
+.phv-config-select {
+    width: 100%; background: #1a1a1a; color: #e0e0e0;
+    border: 1px solid #2a2a2a; border-radius: 4px; padding: 0.5rem;
+    font-size: 0.85rem; min-height: 44px;
+}
+
+/* ── Hamburger drawer (cross-site nav) ─────────────────────────────── */
+.phv-drawer-backdrop {
+    position: fixed; inset: 0; background: rgba(0, 0, 0, 0.5);
+    opacity: 0; pointer-events: none;
+    transition: opacity 0.2s ease; z-index: 200;
+}
+.phv-drawer-backdrop.open { opacity: 1; pointer-events: auto; }
+.phv-drawer {
+    position: fixed; top: 0; left: 0; bottom: 0;
+    width: min(320px, 85vw);
+    background: #161616; border-right: 1px solid #2a2a2a;
+    transform: translateX(-100%);
+    transition: transform 0.2s ease; z-index: 201;
+    padding: 1rem; overflow-y: auto;
+    padding-top: calc(1rem + env(safe-area-inset-top));
+    padding-bottom: calc(1rem + env(safe-area-inset-bottom));
+    display: flex; flex-direction: column; gap: 0.75rem;
+}
+.phv-drawer.open { transform: translateX(0); }
+.phv-drawer-header {
+    display: flex; justify-content: space-between; align-items: center;
+}
+.phv-drawer-close {
+    background: transparent; color: #9aa0a6; border: 1px solid #444;
+    border-radius: 6px; padding: 0.4rem 0.6rem; font-size: 1rem;
+    cursor: pointer; min-height: 44px; min-width: 44px;
+}
+.phv-sites-list { display: flex; flex-direction: column; gap: 0.3rem; }
+.phv-site-row {
+    display: flex; align-items: center; gap: 0.7rem;
+    padding: 0.7rem 0.8rem; min-height: 48px;
+    background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 6px;
+    color: #cfd8dc; text-decoration: none; font-size: 0.9rem;
+}
+.phv-site-row:hover { background: #232323; border-color: #444; }
+.phv-site-icon { font-size: 1.4rem; flex-shrink: 0; width: 24px; text-align: center; }
+.phv-site-name { flex: 1; }
+.phv-drawer-footer {
+    margin-top: auto; padding-top: 0.5rem; border-top: 1px solid #2a2a2a;
+    font-size: 0.75rem; color: #6b7280;
+}
+.phv-drawer-footer code {
+    background: #0e0e0e; padding: 0.1rem 0.3rem; border-radius: 3px;
+    color: #b8c4ce;
+}
+
+/* On desktop the hamburger is hidden by default — but for the drawer to be
+   accessible, we show it always now. Override the desktop default. */
+.phv-hamburger { display: inline-block; }

@@ -4427,6 +4427,55 @@ def api_skills_cancel(job_id):
     return jsonify({"cancelled": ok})
 
 
+@app.route('/api/tracks/list')
+def api_tracks_list():
+    """List available track YAMLs, separated into base tracks and ACC scenarios."""
+    repo = Path(__file__).resolve().parents[2]
+    tracks_dir = repo / "tracks"
+    base = sorted(p.stem for p in tracks_dir.glob("*.yml")) if tracks_dir.is_dir() else []
+    scen_dir = tracks_dir / "scenarios"
+    scenarios = sorted(p.stem for p in scen_dir.glob("*.yml")) if scen_dir.is_dir() else []
+    return jsonify({"tracks": base, "scenarios": scenarios})
+
+
+@app.route('/api/configs/list')
+def api_configs_list():
+    """List available config YAMLs in config/."""
+    repo = Path(__file__).resolve().parents[2]
+    config_dir = repo / "config"
+    configs = sorted(p.stem for p in config_dir.glob("*.yaml")) if config_dir.is_dir() else []
+    # Mark the default first
+    default = "av_stack_config"
+    return jsonify({"configs": configs, "default": default})
+
+
+@app.route('/api/sites/list')
+def api_sites_list():
+    """Return user-configurable site directory from ~/.philviz_sites.json.
+
+    Creates a sensible default if the file doesn't exist yet — auto-detected
+    services that were listening when this endpoint was first added (2026-05-02).
+    """
+    sites_path = Path.home() / ".philviz_sites.json"
+    if not sites_path.is_file():
+        default_sites = [
+            {"name": "PhilViz Analysis", "url": "/", "icon": "🎬"},
+            {"name": "PhilViz Skills", "url": "/skills", "icon": "⚡"},
+            {"name": "EvenHub simulator", "url": "http://localhost:9903", "icon": "👓"},
+            {"name": "Vite dev server", "url": "http://localhost:5177", "icon": "🛠"},
+            {"name": "Ollama", "url": "http://localhost:11434", "icon": "🦙"},
+        ]
+        try:
+            sites_path.write_text(json.dumps(default_sites, indent=2))
+        except OSError:
+            pass
+        return jsonify(default_sites)
+    try:
+        return jsonify(json.loads(sites_path.read_text()))
+    except (OSError, json.JSONDecodeError) as e:
+        return jsonify({"error": f"failed to read {sites_path}: {e}"}), 500
+
+
 @app.route('/<path:filename>')
 def serve_static(filename):
     """Serve static files (JS, CSS)."""
