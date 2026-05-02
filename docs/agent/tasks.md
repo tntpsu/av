@@ -233,8 +233,9 @@ Active nightly jobs (launchd, see `tools/nightly/`):
 | Job | Schedule | Purpose | Status |
 |---|---|---|---|
 | fix-tests | Daily 2:00 AM | Run pytest, autofix STALE_BASELINE/IMPORT/OBSOLETE_TEST, open PR for fixes, report REAL_BREAK / FLAKY | ✅ Active (2026-05-01) |
-| sweep | Daily 3:00 AM | Cross-track regression sweep via `/sweep`, email digest of score deltas vs baselines | ✅ Active (2026-05-01) |
-| process-health | Sunday 4:00 AM | Weekly Pareto digest via `/process-health` from `data/reports/improvement_log.json` | ✅ Active (2026-05-01) |
+| sweep (lateral) | Daily 3:00 AM | Cross-track regression sweep via `/sweep`, email digest of score deltas vs baselines. **Lateral base tracks only** | ✅ Active (2026-05-01) |
+| acc-sweep | Daily 4:00 AM | ACC scenario sweep via `/acc-sweep`, verifies each `tracks/scenarios/*.yml` against its `Expected:` header gate criteria. Per-scenario PASS/FAIL/WARN/SKIPPED/AMBIGUOUS | ✅ Active (2026-05-02) |
+| process-health | Sunday 5:00 AM | Weekly Pareto digest via `/process-health` from `data/reports/improvement_log.json` (moved from 4am to make room for acc-sweep) | ✅ Active (2026-05-01, rescheduled 2026-05-02) |
 
 Deferred (advisory list — add when there's appetite for more inbox volume):
 
@@ -246,6 +247,10 @@ Deferred (advisory list — add when there's appetite for more inbox volume):
 | Memory hygiene | Monthly | S | Surface SUPERSEDED entries and 60+ day untouched memories from `~/.claude/projects/-Users-philtullai-av/memory/`; ask which to prune |
 | Performance metric trend dashboard | Daily snapshot, weekly digest | M | Snapshot per-track scores to a CSV/SQLite; weekly trend email shows e.g. "lateral RMSE drifted +0.02m over 14d" before crossing the gate |
 | Config drift digest | Weekly Fri | S | Wrap `tools/ci/check_config_regression.py --base origin/main~7d` in a digest of "what config changed this week and which scoring tests it affects" |
+| `recording_provenance.scenario_id` HDF5 field | One-shot refactor | M | Add scenario filename to recording metadata at recorder.py write time; downstream consumers (scoreboard, sweep, acc-sweep) can disambiguate ACC runs from lateral runs on the same base track without filename heuristics |
+| `/scores --scenarios` flag | One-shot tooling | S | Filter scoreboard.py output to ACC scenarios only; default behavior preserved. Pairs with above |
+| `/pareto` and `/iterate-pareto` ACC awareness | One-shot tooling | M | Add scenario dimension to cross-track Pareto buckets; today they bucket by base track only |
+| Per-scenario ACC baselines in `tests/fixtures/` | One-shot data | S | Establish frozen `expected_ttc_min`, `expected_collisions=0`, etc. per scenario so `/acc-sweep` can detect regressions, not just gate violations |
 
 Explicitly NOT on the roadmap (anti-pattern for unattended cron):
 

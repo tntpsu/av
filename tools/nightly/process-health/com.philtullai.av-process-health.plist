@@ -6,8 +6,9 @@
     cp tools/nightly/process-health/com.philtullai.av-process-health.plist ~/Library/LaunchAgents/
     launchctl load ~/Library/LaunchAgents/com.philtullai.av-process-health.plist
 
-  Fires every Sunday at 4:00 AM local time (after fix-tests at 2am and
-  sweep at 3am). Logs to ~/av_runtime/logs/launchd/process-health.{out,err}
+  Fires every Sunday at 5:00 AM local time (after fix-tests at 2am,
+  sweep at 3am, acc-sweep at 4am — last in the chain). Logs to
+  ~/av_runtime/logs/launchd/process-health.{out,err}
   and ~/av_runtime/logs/process-health/<date>.log.
 
   Weekday 0 = Sunday (per launchd convention; 7 also works).
@@ -36,7 +37,7 @@
 		<key>Weekday</key>
 		<integer>0</integer>
 		<key>Hour</key>
-		<integer>4</integer>
+		<integer>5</integer>
 		<key>Minute</key>
 		<integer>0</integer>
 	</dict>

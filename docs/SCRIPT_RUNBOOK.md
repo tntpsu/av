@@ -94,9 +94,22 @@ If you are unsure which command to run, start here first.
 - **Companion files:** `tools/nightly/sweep/PROMPT.md`, `.claude/commands/sweep.md` (the playbook), `tools/nightly/notify.py`.
 - **Email subject composition:** `compose_subject()` in `notify_on_exit` parses `data/reports/sweep_status.txt` directly — counts done tracks, sums regressions (delta < -2.0), counts FLAG= markers, identifies worst-delta track. Falls back to log-grep then exit-code-synthesis if the heartbeat is missing.
 
+### `tools/nightly/acc-sweep/run.sh`
+
+- **Purpose:** Wrapper invoked by launchd at 4am local time daily (after fix-tests at 2am, lateral sweep at 3am) to verify ACC scenarios in `tracks/scenarios/*.yml` against the gate criteria embedded in each scenario's YAML header. Drives the `/acc-sweep` slash command. Logs to `~/av_runtime/logs/acc-sweep/<date>.log`.
+- **Unity launch behavior:** May launch Unity if `--fresh` is requested, but the PROMPT.md hard-bans `--fresh` for unattended runs (no GUI under launchd; 14 sequential Unity launches would be a stability hazard). Default is `--quick` mode: analyze the most recent matching recording per scenario, mark SKIPPED if no recording newer than 7d.
+- **Auth/permissions:** Same MCP-disabled flags as fix-tests/sweep. $10 budget cap, 5400s (90-min) hard wall-clock timeout. Exports `AV_NIGHTLY_RUN=1`.
+- **Use when:** Triggered automatically by launchd; can be manually invoked via `launchctl start com.philtullai.av-acc-sweep` or `/acc-sweep --fresh` for end-to-end validation during the day.
+- **Install:** `cp tools/nightly/acc-sweep/com.philtullai.av-acc-sweep.plist ~/Library/LaunchAgents/ && launchctl load ~/Library/LaunchAgents/com.philtullai.av-acc-sweep.plist`
+- **Uninstall:** `launchctl unload ~/Library/LaunchAgents/com.philtullai.av-acc-sweep.plist`
+- **Read-only by design:** Never commits or opens PRs. Per-scenario PASS/FAIL/WARN/SKIPPED/AMBIGUOUS verdicts in the email digest; `data/reports/acc_sweep_report.txt` has the full report.
+- **Companion files:** `tools/nightly/acc-sweep/PROMPT.md`, `.claude/commands/acc-sweep.md` (the playbook), `tools/nightly/notify.py`.
+- **Email subject composition:** `compose_subject()` in `notify_on_exit` parses `data/reports/acc_sweep_status.txt` per-scenario lines (`scenario_<name>_done verdict=<X>`), counts each verdict type, computes gate=PASS (no FAILs) or gate=FAIL.
+- **Known V1 limitation:** ACC scenarios share `track_id` with their base track in `recording_provenance`. Disambiguation is best-effort (filename + ACC-data-presence + recency). A `recording_provenance.scenario_id` field is on the deferred roadmap (see `docs/agent/tasks.md`).
+
 ### `tools/nightly/process-health/run.sh`
 
-- **Purpose:** Wrapper invoked by launchd every Sunday at 4am to generate a weekly process-health Pareto digest. Pulls `main`, invokes `claude -p` with `tools/nightly/process-health/PROMPT.md`, which drives the `/process-health` slash command. Reads `data/reports/improvement_log.json`, computes Paretos by `process_stage` and detection efficiency, and emails the digest.
+- **Purpose:** Wrapper invoked by launchd every Sunday at 5am (moved from 4am to make room for daily acc-sweep at 4am) to generate a weekly process-health Pareto digest. Pulls `main`, invokes `claude -p` with `tools/nightly/process-health/PROMPT.md`, which drives the `/process-health` slash command. Reads `data/reports/improvement_log.json`, computes Paretos by `process_stage` and detection efficiency, and emails the digest.
 - **Unity launch behavior:** No Unity. JSON read + counts only.
 - **Auth/permissions:** Same MCP-disabled flags. $3 budget cap, 1800s (30-min) wall-clock timeout. Exports `AV_NIGHTLY_RUN=1`.
 - **Use when:** Triggered automatically Sundays. Skip if `data/reports/improvement_log.json` is missing — wrapper will report "log empty" and exit cleanly.

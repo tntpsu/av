@@ -1,4 +1,6 @@
-Run e2e on all tracks (or a subset) and compare against baselines to detect regressions.
+Run e2e on all lateral base tracks (or a subset) and compare against baselines to detect regressions.
+
+**Scope:** lateral base tracks ONLY. ACC scenarios in `tracks/scenarios/*.yml` are evaluated by `/acc-sweep` (sibling skill), which uses different gate criteria (per-scenario `Expected:` headers) and a different verdict shape (PASS/FAIL/WARN per scenario, not score-deltas vs frozen baselines).
 
 The user's request is: $ARGUMENTS
 

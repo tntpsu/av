@@ -37,14 +37,14 @@ compose_subject() {
     local passed regressions flags worst_track worst_delta gate
     # Per /sweep skill: regression = delta < -2.0. Flags are surfaced by the
     # agent in the FLAG= field (it applies the per-layer threshold itself).
-    passed=$(grep -c '^step_track_.*_done' "$hb" 2>/dev/null || echo 0)
+    passed=$(grep -c '^step_track_.*_done' "$hb" 2>/dev/null || true)
     regressions=$(awk '/^step_track_.*_done/ {
       if (match($0, /delta=(-?[0-9.]+)/)) {
         d = substr($0, RSTART+6, RLENGTH-6) + 0
         if (d < -2.0) c++
       }
     } END {print c+0}' "$hb")
-    flags=$(grep -cE '^step_track_.*_done.*FLAG=' "$hb" 2>/dev/null || echo 0)
+    flags=$(grep -cE '^step_track_.*_done.*FLAG=' "$hb" 2>/dev/null || true)
     read -r worst_track worst_delta < <(awk '
       /^step_track_.*_done/ {
         name=$1; sub(/^step_track_/,"",name); sub(/_done/,"",name);

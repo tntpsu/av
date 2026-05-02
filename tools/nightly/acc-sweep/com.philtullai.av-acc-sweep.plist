@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  launchd plist for the nightly ACC scenario sweep job. Install with:
+
+    cp tools/nightly/acc-sweep/com.philtullai.av-acc-sweep.plist ~/Library/LaunchAgents/
+    launchctl load ~/Library/LaunchAgents/com.philtullai.av-acc-sweep.plist
+
+  Fires at 4:00 AM local time daily, after the 3am lateral sweep.
+  Logs to ~/av_runtime/logs/launchd/acc-sweep.{out,err}
+  and ~/av_runtime/logs/acc-sweep/<date>.log.
+
+  Uninstall:
+
+    launchctl unload ~/Library/LaunchAgents/com.philtullai.av-acc-sweep.plist
+    rm ~/Library/LaunchAgents/com.philtullai.av-acc-sweep.plist
+-->
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>com.philtullai.av-acc-sweep</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/Users/philtullai/av/tools/nightly/acc-sweep/run.sh</string>
+	</array>
+	<key>WorkingDirectory</key>
+	<string>/Users/philtullai/av</string>
+	<key>StandardOutPath</key>
+	<string>/Users/philtullai/av_runtime/logs/launchd/acc-sweep.out</string>
+	<key>StandardErrorPath</key>
+	<string>/Users/philtullai/av_runtime/logs/launchd/acc-sweep.err</string>
+	<key>StartCalendarInterval</key>
+	<dict>
+		<key>Hour</key>
+		<integer>4</integer>
+		<key>Minute</key>
+		<integer>0</integer>
+	</dict>
+	<key>ProcessType</key>
+	<string>Background</string>
+</dict>
+</plist>
