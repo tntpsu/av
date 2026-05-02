@@ -1231,3 +1231,36 @@ body {
     #camera-grid-resize-handle,
     #panel-resize-handle { display: none !important; }
 }
+
+/* ──────────────────────────────────────────────────────────────────────── */
+/* Mobile collision fix v3 (2026-05-02) — observed: with no recording      */
+/* loaded, camera-canvas + topdown-canvas render as two giant 640x480      */
+/* black rectangles dominating the entire viewport. Camera/canvas frame    */
+/* inspection is desktop-power-user territory; mobile users overwhelmingly */
+/* want the inner data tabs (Summary/Compare/Gates/etc.). Hide the entire  */
+/* camera-panel on mobile and let the right-side .data-panel take over.    */
+/* ──────────────────────────────────────────────────────────────────────── */
+@media (max-width: 768px) {
+    #camera-panel,
+    .camera-panel { display: none !important; }
+
+    /* Right-side data panel takes the full width on mobile */
+    #data-panel,
+    .data-panel {
+        width: 100% !important;
+        min-width: 0 !important;
+        max-width: 100% !important;
+        flex: 1 1 auto !important;
+        padding: 0.5rem !important;
+    }
+
+    /* Tabs row: allow horizontal scroll if there are many tabs (which     */
+    /* there are — Summary/Compare/Gates/Issues/Diagnostics/Cadence/...)   */
+    .tabs {
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
+        flex-wrap: nowrap !important;
+        gap: 0.2rem;
+    }
+    .tab-btn { flex-shrink: 0; min-height: 40px; }
+}
