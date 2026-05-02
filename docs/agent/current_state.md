@@ -1,7 +1,24 @@
 # AV Stack — Agent Memory: Current State
 
-**Last updated:** 2026-04-21
+**Last updated:** 2026-05-02
 **Current milestone:** S2-M1 — **5 of 5 tracks still meeting all-layers-≥95 goal.** ACC emergency brake authority restored on G2 (885 → 2 e-stops, 99.8% reduction) via plan `acc-idm-accel-plumbing.md`. Frenet-frame MPC reference remains in shadow-mode.
+
+### Session 2026-05-02 — NMPC sign-determinism fix (CI green) + nightly automation expansion
+
+**Fix shipped:** `fd12559` — sign-preserving cold-start seed in `control/nmpc_controller.py` SLSQPNMPCSolver.solve(). NMPC at `kappa=0` with non-zero `e_lat` was producing different signs on Mac Accelerate vs Linux OpenBLAS, blocking CI since 2026-04-12 (12 of 14 main pushes red). Root cause: `x0[0] = _feedforward_delta_norm(0, ...) = 0` put SLSQP at the saddle point of a near-symmetric cost surface.
+
+- 6 new unit tests in `TestColdStartSeed` — applied/zero/clipped/disabled/no-warm-start coverage
+- Phase 0 oracle at `tools/analyze/validate_nmpc_cold_start.py` confirmed root cause and tuned the seed gain (default 0.5)
+- Phase G2 hairpin_15 E2E: **98.5/100 (Δ-0.2 vs baseline 98.7, within ±0.5 tolerance) — no production regression**
+- Config kill-switch: `cold_start_e_lat_seed_gain: 0.0` disables without code revert
+- Memory: `feedback_solver_cold_start_determinism.md` (general lesson), `feedback_config_kill_switch_pattern.md` (deployment pattern)
+
+**Nightly automation also expanded this session:**
+- 2am `fix-tests` (existing, --dist loadfile fix for xdist flakies)
+- 3am `sweep` (lateral, ≥95 layer threshold, parses report file for email subject)
+- 4am `acc-sweep` (NEW — 14 ACC scenarios from `tracks/scenarios/`, `--quick` default)
+- Sun 5am `process-health` (moved from 4am)
+- Roadmap: PhilViz mobile + skills UI queued (3 sessions, full design in memory)
 
 ### Session 2026-04-21 — ACC emergency brake authority restored on G2
 
