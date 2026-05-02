@@ -6,8 +6,9 @@
     cp tools/nightly/com.philtullai.av-nightly.plist ~/Library/LaunchAgents/
     launchctl load ~/Library/LaunchAgents/com.philtullai.av-nightly.plist
 
-  Fires at 3:00 AM local time. Logs to ~/av_runtime/logs/launchd/nightly.{out,err}
-  and ~/av_runtime/logs/nightly/<date>.log.
+  Fires at 2:00 AM local time (sweep job runs at 3am after this finishes).
+  Logs to ~/av_runtime/logs/launchd/nightly.{out,err} and
+  ~/av_runtime/logs/nightly/<date>.log.
 
   Uninstall:
 
@@ -31,7 +32,7 @@
 	<key>StartCalendarInterval</key>
 	<dict>
 		<key>Hour</key>
-		<integer>3</integer>
+		<integer>2</integer>
 		<key>Minute</key>
 		<integer>0</integer>
 	</dict>

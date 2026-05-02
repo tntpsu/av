@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  launchd plist for the weekly process-health digest job. Install with:
+
+    cp tools/nightly/process-health/com.philtullai.av-process-health.plist ~/Library/LaunchAgents/
+    launchctl load ~/Library/LaunchAgents/com.philtullai.av-process-health.plist
+
+  Fires every Sunday at 4:00 AM local time (after fix-tests at 2am and
+  sweep at 3am). Logs to ~/av_runtime/logs/launchd/process-health.{out,err}
+  and ~/av_runtime/logs/process-health/<date>.log.
+
+  Weekday 0 = Sunday (per launchd convention; 7 also works).
+
+  Uninstall:
+
+    launchctl unload ~/Library/LaunchAgents/com.philtullai.av-process-health.plist
+    rm ~/Library/LaunchAgents/com.philtullai.av-process-health.plist
+-->
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>com.philtullai.av-process-health</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/Users/philtullai/av/tools/nightly/process-health/run.sh</string>
+	</array>
+	<key>WorkingDirectory</key>
+	<string>/Users/philtullai/av</string>
+	<key>StandardOutPath</key>
+	<string>/Users/philtullai/av_runtime/logs/launchd/process-health.out</string>
+	<key>StandardErrorPath</key>
+	<string>/Users/philtullai/av_runtime/logs/launchd/process-health.err</string>
+	<key>StartCalendarInterval</key>
+	<dict>
+		<key>Weekday</key>
+		<integer>0</integer>
+		<key>Hour</key>
+		<integer>4</integer>
+		<key>Minute</key>
+		<integer>0</integer>
+	</dict>
+	<key>ProcessType</key>
+	<string>Background</string>
+</dict>
+</plist>

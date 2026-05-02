@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  launchd plist for the nightly cross-track regression sweep job. Install with:
+
+    cp tools/nightly/sweep/com.philtullai.av-sweep.plist ~/Library/LaunchAgents/
+    launchctl load ~/Library/LaunchAgents/com.philtullai.av-sweep.plist
+
+  Fires at 3:00 AM local time, after the 2am fix-tests job finishes.
+  Logs to ~/av_runtime/logs/launchd/sweep.{out,err}
+  and ~/av_runtime/logs/sweep/<date>.log.
+
+  Uninstall:
+
+    launchctl unload ~/Library/LaunchAgents/com.philtullai.av-sweep.plist
+    rm ~/Library/LaunchAgents/com.philtullai.av-sweep.plist
+-->
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>com.philtullai.av-sweep</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/Users/philtullai/av/tools/nightly/sweep/run.sh</string>
+	</array>
+	<key>WorkingDirectory</key>
+	<string>/Users/philtullai/av</string>
+	<key>StandardOutPath</key>
+	<string>/Users/philtullai/av_runtime/logs/launchd/sweep.out</string>
+	<key>StandardErrorPath</key>
+	<string>/Users/philtullai/av_runtime/logs/launchd/sweep.err</string>
+	<key>StartCalendarInterval</key>
+	<dict>
+		<key>Hour</key>
+		<integer>3</integer>
+		<key>Minute</key>
+		<integer>0</integer>
+	</dict>
+	<key>ProcessType</key>
+	<string>Background</string>
+</dict>
+</plist>

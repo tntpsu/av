@@ -226,6 +226,35 @@ Car now reaches 25 m/s (11.7% overspeed rate at target=25). Speed RMSE 5.3 m/s =
 
 ---
 
+## Nightly Automation Roadmap
+
+Active nightly jobs (launchd, see `tools/nightly/`):
+
+| Job | Schedule | Purpose | Status |
+|---|---|---|---|
+| fix-tests | Daily 2:00 AM | Run pytest, autofix STALE_BASELINE/IMPORT/OBSOLETE_TEST, open PR for fixes, report REAL_BREAK / FLAKY | ✅ Active (2026-05-01) |
+| sweep | Daily 3:00 AM | Cross-track regression sweep via `/sweep`, email digest of score deltas vs baselines | ✅ Active (2026-05-01) |
+| process-health | Sunday 4:00 AM | Weekly Pareto digest via `/process-health` from `data/reports/improvement_log.json` | ✅ Active (2026-05-01) |
+
+Deferred (advisory list — add when there's appetite for more inbox volume):
+
+| Idea | Cadence | Effort | Why |
+|---|---|---|---|
+| Stale-branch sweep | Weekly Sun | S | Close merged `nightly/*` branches, surface untouched-14d branches in digest |
+| Storage hygiene digest | Weekly Sun | S | List recordings + logs eligible for archival/deletion (proposes only in V1, never auto-deletes; golden recordings are sacred) |
+| Dependency staleness | Weekly | S | `pip list --outdated` digest with CVE flags; no auto-upgrade |
+| Memory hygiene | Monthly | S | Surface SUPERSEDED entries and 60+ day untouched memories from `~/.claude/projects/-Users-philtullai-av/memory/`; ask which to prune |
+| Performance metric trend dashboard | Daily snapshot, weekly digest | M | Snapshot per-track scores to a CSV/SQLite; weekly trend email shows e.g. "lateral RMSE drifted +0.02m over 14d" before crossing the gate |
+| Config drift digest | Weekly Fri | S | Wrap `tools/ci/check_config_regression.py --base origin/main~7d` in a digest of "what config changed this week and which scoring tests it affects" |
+
+Explicitly NOT on the roadmap (anti-pattern for unattended cron):
+
+- `/iterate` or `/iterate-pareto` overnight — needs human-in-the-loop classification per `feedback_iterate_fix_level.md` and `feedback_tuning_vs_architecture.md`. Only run interactively.
+- Auto-merge of nightly fix-tests PRs — even mechanical fixes deserve a human glance.
+- Code formatters/linters — single-developer research repo, on-demand `/simplify` is enough.
+
+---
+
 ## Risks
 
 | Risk | Severity | Mitigation |
