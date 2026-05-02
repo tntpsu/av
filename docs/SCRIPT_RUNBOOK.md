@@ -73,13 +73,34 @@ If you are unsure which command to run, start here first.
 
 ### `tools/nightly/run.sh`
 
-- **Purpose:** Wrapper invoked by launchd at 3am local time to run the nightly test-fix agent. Pulls `main`, invokes `claude -p` with `tools/nightly/PROMPT.md` under a hard 30-min watchdog timeout, logs to `~/av_runtime/logs/nightly/<date>.log`, and emails a completion summary on every exit.
-- **Unity launch behavior:** No Unity. Pytest only.
-- **Auth/permissions:** Inherits user shell `gh`/`git` auth. Runs `claude -p --permission-mode bypassPermissions` with a $5 budget cap and a 1800s wall-clock timeout (subshell + sleep + kill watchdog).
+- **Purpose:** Wrapper invoked by launchd at 2am local time to run the nightly test-fix agent. Pulls `main`, invokes `claude -p` with `tools/nightly/PROMPT.md` under a hard 60-min watchdog timeout, logs to `~/av_runtime/logs/nightly/<date>.log`, and emails a completion summary on every exit.
+- **Unity launch behavior:** No Unity. Pytest only (now uses `pytest -n auto` via pytest-xdist for ~7× speedup).
+- **Auth/permissions:** Inherits user shell `gh`/`git` auth. Runs `claude -p --permission-mode bypassPermissions --strict-mcp-config --mcp-config '{"mcpServers":{}}'` (MCP disabled — Google Calendar OAuth re-auth hangs under launchd's no-TTY context) with a $5 budget cap and a 3600s wall-clock timeout. Exports `AV_NIGHTLY_RUN=1` so hardware-sensitive perf tests can self-skip.
 - **Use when:** Triggered automatically by launchd; do not run manually unless smoke-testing — it will open a real PR if it finds fixable failures.
 - **Install:** `cp tools/nightly/com.philtullai.av-nightly.plist ~/Library/LaunchAgents/ && launchctl load ~/Library/LaunchAgents/com.philtullai.av-nightly.plist`
 - **Uninstall:** `launchctl unload ~/Library/LaunchAgents/com.philtullai.av-nightly.plist`
 - **Companion files:** `tools/nightly/PROMPT.md` (agent prompt), `tools/nightly/RUBRIC.md` (classification rules), `tools/nightly/notify.py` (email helper).
+
+### `tools/nightly/sweep/run.sh`
+
+- **Purpose:** Wrapper invoked by launchd at 3am local time (right after the 2am fix-tests job) to run a cross-track regression sweep. Pulls `main`, invokes `claude -p` with `tools/nightly/sweep/PROMPT.md`, which drives the `/sweep` slash command across all 6 tracks and compares scores to `tests/fixtures/scoring_baselines.json`. Logs to `~/av_runtime/logs/sweep/<date>.log`, emails a regression digest.
+- **Unity launch behavior:** May launch Unity via `start_av_stack.sh` — but the prompt defaults to `--quick` mode (analyze most recent recordings, no fresh launches) because Unity stability under launchd's no-GUI Background context is unvalidated. Stops on second consecutive Unity failure.
+- **Auth/permissions:** Same MCP-disabled flags as fix-tests. $10 budget cap, 5400s (90-min) hard wall-clock timeout. Exports `AV_NIGHTLY_RUN=1`.
+- **Use when:** Triggered automatically by launchd; can be manually invoked via `launchctl start com.philtullai.av-sweep` for end-to-end validation.
+- **Install:** `cp tools/nightly/sweep/com.philtullai.av-sweep.plist ~/Library/LaunchAgents/ && launchctl load ~/Library/LaunchAgents/com.philtullai.av-sweep.plist`
+- **Uninstall:** `launchctl unload ~/Library/LaunchAgents/com.philtullai.av-sweep.plist`
+- **Read-only by design:** Never commits or opens PRs. Reports regressions to the email; the human decides whether to investigate.
+- **Companion files:** `tools/nightly/sweep/PROMPT.md`, `.claude/commands/sweep.md` (the playbook), `tools/nightly/notify.py`.
+
+### `tools/nightly/process-health/run.sh`
+
+- **Purpose:** Wrapper invoked by launchd every Sunday at 4am to generate a weekly process-health Pareto digest. Pulls `main`, invokes `claude -p` with `tools/nightly/process-health/PROMPT.md`, which drives the `/process-health` slash command. Reads `data/reports/improvement_log.json`, computes Paretos by `process_stage` and detection efficiency, and emails the digest.
+- **Unity launch behavior:** No Unity. JSON read + counts only.
+- **Auth/permissions:** Same MCP-disabled flags. $3 budget cap, 1800s (30-min) wall-clock timeout. Exports `AV_NIGHTLY_RUN=1`.
+- **Use when:** Triggered automatically Sundays. Skip if `data/reports/improvement_log.json` is missing — wrapper will report "log empty" and exit cleanly.
+- **Install:** `cp tools/nightly/process-health/com.philtullai.av-process-health.plist ~/Library/LaunchAgents/ && launchctl load ~/Library/LaunchAgents/com.philtullai.av-process-health.plist`
+- **Uninstall:** `launchctl unload ~/Library/LaunchAgents/com.philtullai.av-process-health.plist`
+- **Companion files:** `tools/nightly/process-health/PROMPT.md`, `.claude/commands/process-health.md`, `tools/nightly/notify.py`.
 
 ### `tools/nightly/notify.py`
 
