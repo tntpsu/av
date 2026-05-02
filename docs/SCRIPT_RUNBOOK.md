@@ -74,7 +74,7 @@ If you are unsure which command to run, start here first.
 ### `tools/nightly/run.sh`
 
 - **Purpose:** Wrapper invoked by launchd at 2am local time to run the nightly test-fix agent. Pulls `main`, invokes `claude -p` with `tools/nightly/PROMPT.md` under a hard 60-min watchdog timeout, logs to `~/av_runtime/logs/nightly/<date>.log`, and emails a completion summary on every exit.
-- **Unity launch behavior:** No Unity. Pytest only (now uses `pytest -n auto` via pytest-xdist for ~7× speedup).
+- **Unity launch behavior:** No Unity. Pytest only (uses `pytest -n auto --dist loadfile` via pytest-xdist for ~7× speedup; `--dist loadfile` groups same-module tests onto one worker so MPCController's cached state doesn't leak between parallel workers).
 - **Auth/permissions:** Inherits user shell `gh`/`git` auth. Runs `claude -p --permission-mode bypassPermissions --strict-mcp-config --mcp-config '{"mcpServers":{}}'` (MCP disabled — Google Calendar OAuth re-auth hangs under launchd's no-TTY context) with a $5 budget cap and a 3600s wall-clock timeout. Exports `AV_NIGHTLY_RUN=1` so hardware-sensitive perf tests can self-skip.
 - **Use when:** Triggered automatically by launchd; do not run manually unless smoke-testing — it will open a real PR if it finds fixable failures.
 - **Install:** `cp tools/nightly/com.philtullai.av-nightly.plist ~/Library/LaunchAgents/ && launchctl load ~/Library/LaunchAgents/com.philtullai.av-nightly.plist`

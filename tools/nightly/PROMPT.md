@@ -33,10 +33,15 @@ Follow it exactly.
 
 ```bash
 echo "step1_running $(date -Iseconds)" >> "$HEARTBEAT"
-python3 -m pytest tests/ -n auto --tb=short > /tmp/nightly_pytest.log 2>&1
+python3 -m pytest tests/ -n auto --dist loadfile --tb=short > /tmp/nightly_pytest.log 2>&1
 PYTEST_EXIT=$?
 echo "step1_done exit=$PYTEST_EXIT $(date -Iseconds)" >> "$HEARTBEAT"
 ```
+
+`--dist loadfile` groups tests-from-the-same-module onto a single worker.
+Without it, MPCController's cached `_last_steering` state leaks between
+parallel worker processes and causes 6 reproducible flakies in
+test_mpc_controller.py and test_dynamic_bicycle_mpc.py (validated 2026-05-02).
 
 Parse `passed` / `failed` counts and the FAILED test list from
 `/tmp/nightly_pytest.log`. If pytest hangs for >20 min, the launchd
@@ -65,7 +70,7 @@ echo "step4_fixing $(date -Iseconds)" >> "$HEARTBEAT"
 Fix STALE_BASELINE, STALE_IMPORT, OBSOLETE_TEST only. Then:
 
 ```bash
-python3 -m pytest tests/ -n auto --tb=short > /tmp/nightly_pytest_after.log 2>&1
+python3 -m pytest tests/ -n auto --dist loadfile --tb=short > /tmp/nightly_pytest_after.log 2>&1
 echo "step4_done $(date -Iseconds)" >> "$HEARTBEAT"
 ```
 
