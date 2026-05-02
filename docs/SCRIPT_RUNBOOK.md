@@ -80,6 +80,7 @@ If you are unsure which command to run, start here first.
 - **Install:** `cp tools/nightly/com.philtullai.av-nightly.plist ~/Library/LaunchAgents/ && launchctl load ~/Library/LaunchAgents/com.philtullai.av-nightly.plist`
 - **Uninstall:** `launchctl unload ~/Library/LaunchAgents/com.philtullai.av-nightly.plist`
 - **Companion files:** `tools/nightly/PROMPT.md` (agent prompt), `tools/nightly/RUBRIC.md` (classification rules), `tools/nightly/notify.py` (email helper).
+- **Email subject composition:** `compose_subject()` in `notify_on_exit` parses `data/reports/nightly_test_report.txt` (Fixed/Real-breaks/Flaky counts) and `data/reports/nightly_status.txt` (delivery= field) directly, instead of relying on the agent printing a literal summary line to stdout. Falls back to log-grep then exit-code-synthesis if the report file is missing.
 
 ### `tools/nightly/sweep/run.sh`
 
@@ -91,6 +92,7 @@ If you are unsure which command to run, start here first.
 - **Uninstall:** `launchctl unload ~/Library/LaunchAgents/com.philtullai.av-sweep.plist`
 - **Read-only by design:** Never commits or opens PRs. Reports regressions to the email; the human decides whether to investigate.
 - **Companion files:** `tools/nightly/sweep/PROMPT.md`, `.claude/commands/sweep.md` (the playbook), `tools/nightly/notify.py`.
+- **Email subject composition:** `compose_subject()` in `notify_on_exit` parses `data/reports/sweep_status.txt` directly — counts done tracks, sums regressions (delta < -2.0), counts FLAG= markers, identifies worst-delta track. Falls back to log-grep then exit-code-synthesis if the heartbeat is missing.
 
 ### `tools/nightly/process-health/run.sh`
 

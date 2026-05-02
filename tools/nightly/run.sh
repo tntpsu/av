@@ -25,21 +25,46 @@ mkdir -p "$LOG_DIR"
 
 cd "$REPO" || { echo "FATAL: cannot cd to $REPO" > "$LOG"; exit 1; }
 
+# Compose email subject. Tries three sources in order:
+#   1. Parse data/reports/nightly_test_report.txt (the agent's structured
+#      report — most reliable, doesn't depend on the agent printing the
+#      summary line literally to stdout).
+#   2. Grep the log for a `^DATE FIXES=...` line (legacy fallback).
+#   3. Synthesize from exit code (TIMED OUT / WRAPPER FAILED / complete).
+compose_subject() {
+  local exit_code=$1
+  local report="$REPO/data/reports/nightly_test_report.txt"
+  if [ -r "$report" ]; then
+    local fixed real_breaks flaky delivery
+    fixed=$(grep -E '^Fixed:' "$report" | head -1 | awk '{print $2}')
+    real_breaks=$(grep -E '^Real breaks' "$report" | head -1 | awk '{print $4}')
+    flaky=$(grep -E '^Flaky:' "$report" | head -1 | awk '{print $2}')
+    delivery=$(grep -E 'step6_done delivery=' "$REPO/data/reports/nightly_status.txt" 2>/dev/null \
+                 | tail -1 | sed -nE 's/.*delivery=([a-z_]+).*/\1/p')
+    [ -z "$delivery" ] && delivery=local_only
+    if [ -n "$fixed" ] && [ -n "$real_breaks" ] && [ -n "$flaky" ]; then
+      echo "av nightly $DATE: FIXES=$fixed REAL_BREAKS=$real_breaks FLAKY=$flaky delivery=$delivery"
+      return
+    fi
+  fi
+  local legacy
+  legacy=$(grep -E '^[0-9]{4}-[0-9]{2}-[0-9]{2} FIXES=' "$LOG" 2>/dev/null | tail -1)
+  if [ -n "$legacy" ]; then
+    echo "av nightly $DATE: $legacy"
+    return
+  fi
+  case "$exit_code" in
+    124|143|137) echo "av nightly $DATE: TIMED OUT after ${CLAUDE_TIMEOUT}s" ;;
+    0)           echo "av nightly $DATE: complete (exit=0, no report parsed)" ;;
+    *)           echo "av nightly $DATE: WRAPPER FAILED (exit=$exit_code)" ;;
+  esac
+}
+
 # Email on every exit, even unexpected ones (git conflict, kill, etc).
 notify_on_exit() {
   local exit_code=$?
-  local summary
-  summary=$(grep -E '^[0-9]{4}-[0-9]{2}-[0-9]{2} FIXES=' "$LOG" 2>/dev/null | tail -1)
   local subject
-  if [ -n "$summary" ]; then
-    subject="av nightly $DATE: $summary"
-  elif [ "$exit_code" = "124" ] || [ "$exit_code" = "143" ] || [ "$exit_code" = "137" ]; then
-    subject="av nightly $DATE: TIMED OUT after ${CLAUDE_TIMEOUT}s"
-  elif [ "$exit_code" = "0" ]; then
-    subject="av nightly $DATE: complete (exit=0, no summary line)"
-  else
-    subject="av nightly $DATE: WRAPPER FAILED (exit=$exit_code)"
-  fi
+  subject=$(compose_subject "$exit_code")
   tail -n 100 "$LOG" 2>/dev/null \
     | python3 "$REPO/tools/nightly/notify.py" "$subject" \
     >>"$LOG" 2>&1 \

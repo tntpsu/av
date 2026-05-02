@@ -24,21 +24,56 @@ mkdir -p "$LOG_DIR"
 
 cd "$REPO" || { echo "FATAL: cannot cd to $REPO" > "$LOG"; exit 1; }
 
-# Email on every exit, even unexpected ones.
+# Compose email subject. Tries three sources in order:
+#   1. Parse data/reports/sweep_status.txt (the agent's per-track heartbeat
+#      lines: `step_track_<name>_done score=<N> baseline=<N> delta=<N> [FLAG=...]`)
+#      — most reliable, doesn't depend on the agent printing the summary literally.
+#   2. Grep the log for a `^DATE SWEEP ...` line (legacy fallback).
+#   3. Synthesize from exit code (TIMED OUT / WRAPPER FAILED / complete).
+compose_subject() {
+  local exit_code=$1
+  local hb="$REPO/data/reports/sweep_status.txt"
+  if [ -r "$hb" ] && grep -q 'step_track_.*_done' "$hb"; then
+    local passed regressions flags worst_track worst_delta gate
+    # Per /sweep skill: regression = delta < -2.0. Flags are surfaced by the
+    # agent in the FLAG= field (it applies the per-layer threshold itself).
+    passed=$(grep -c '^step_track_.*_done' "$hb" 2>/dev/null || echo 0)
+    regressions=$(awk '/^step_track_.*_done/ {
+      if (match($0, /delta=(-?[0-9.]+)/)) {
+        d = substr($0, RSTART+6, RLENGTH-6) + 0
+        if (d < -2.0) c++
+      }
+    } END {print c+0}' "$hb")
+    flags=$(grep -cE '^step_track_.*_done.*FLAG=' "$hb" 2>/dev/null || echo 0)
+    read -r worst_track worst_delta < <(awk '
+      /^step_track_.*_done/ {
+        name=$1; sub(/^step_track_/,"",name); sub(/_done/,"",name);
+        if (match($0, /delta=(-?[0-9.]+)/)) {
+          d = substr($0, RSTART+6, RLENGTH-6) + 0
+          if (NR==1 || d < min_d) { min_d = d; min_n = name }
+        }
+      } END { if (min_n) print min_n, min_d; else print "none 0.0" }' "$hb")
+    if [ "$regressions" -eq 0 ]; then gate=PASS; else gate=FAIL; fi
+    echo "av sweep $DATE: SWEEP gate=$gate regressions=$regressions flags=$flags passed=$passed/6 worst=${worst_track}(${worst_delta})"
+    return
+  fi
+  local legacy
+  legacy=$(grep -E '^[0-9]{4}-[0-9]{2}-[0-9]{2} SWEEP ' "$LOG" 2>/dev/null | tail -1)
+  if [ -n "$legacy" ]; then
+    echo "av sweep $DATE: $legacy"
+    return
+  fi
+  case "$exit_code" in
+    124|143|137) echo "av sweep $DATE: TIMED OUT after ${CLAUDE_TIMEOUT}s" ;;
+    0)           echo "av sweep $DATE: complete (exit=0, no heartbeat parsed)" ;;
+    *)           echo "av sweep $DATE: WRAPPER FAILED (exit=$exit_code)" ;;
+  esac
+}
+
 notify_on_exit() {
   local exit_code=$?
-  local summary
-  summary=$(grep -E '^[0-9]{4}-[0-9]{2}-[0-9]{2} SWEEP ' "$LOG" 2>/dev/null | tail -1)
   local subject
-  if [ -n "$summary" ]; then
-    subject="av sweep $DATE: $summary"
-  elif [ "$exit_code" = "124" ] || [ "$exit_code" = "143" ] || [ "$exit_code" = "137" ]; then
-    subject="av sweep $DATE: TIMED OUT after ${CLAUDE_TIMEOUT}s"
-  elif [ "$exit_code" = "0" ]; then
-    subject="av sweep $DATE: complete (exit=0, no summary line)"
-  else
-    subject="av sweep $DATE: WRAPPER FAILED (exit=$exit_code)"
-  fi
+  subject=$(compose_subject "$exit_code")
   tail -n 100 "$LOG" 2>/dev/null \
     | python3 "$REPO/tools/nightly/notify.py" "$subject" \
     >>"$LOG" 2>&1 \

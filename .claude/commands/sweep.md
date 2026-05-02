@@ -71,11 +71,11 @@ Compare against baselines from `tests/fixtures/scoring_baselines.json`.
 **PASS criteria (ALL must hold):**
 - No track dropped > 2 pts overall vs baseline
 - No new e-stops (that weren't in baseline)
-- No layer dropped below 60 on any track
+- **No layer below 95 on any track** (per `feedback_layer_score_threshold` memory: 60/80 is too lenient — all layers must be ≥ 95 to genuinely pass)
 
 **Flag criteria (warnings, not failures):**
 - Any track dropped > 1 pt overall
-- Any layer dropped below 95 that was previously ≥ 95
+- Any layer between 90 and 95 (drift-warning band — investigate before it crosses gate threshold)
 
 ## Step 6 — Output
 
