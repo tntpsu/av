@@ -167,6 +167,13 @@ These scripts replay recordings offline and do not require Unity runtime interac
 
 The `tools/debug_visualizer/` tree powers the in-browser playback + diagnostics dashboard. Backend modules expose health and triage data to the visualizer; the server is the entry point.
 
+### `tools/debug_visualizer/backend/skills_runner.py`
+
+- **Purpose:** Backend module for the PhilViz Skills page (added 2026-05-02). Discovers slash commands from `.claude/commands/*.md`, spawns `claude -p` subprocesses, buffers their output line-by-line keyed by `job_id`, and supports cancel via SIGTERM. Subprocesses are detached from the HTTP connection so mobile users can disconnect/reconnect without killing in-flight skills.
+- **Use when:** Imported by `tools/debug_visualizer/server.py`. Not invoked directly. Hot-path used by `/api/skills/{list,run,jobs,stream/<id>,cancel/<id>}`.
+- **MCP/auth:** spawns claude-p with `--strict-mcp-config --mcp-config '{"mcpServers":{}}' --permission-mode bypassPermissions --no-session-persistence` (matches nightly wrapper pattern). Hardcoded budget cap `$5.00`. Sets `AV_NIGHTLY_RUN=1` so hardware-sensitive tests self-skip.
+- **Storage:** in-process job dict, `MAX_BUFFER_LINES=5000` per job. No persistence across server restarts (acceptable for V1).
+
 ### `tools/debug_visualizer/server.py`
 
 - **Purpose:** Python server for the debug visualizer. Converts HDF5 recordings to JSON, serves camera frames, and exposes the backend modules below over HTTP.

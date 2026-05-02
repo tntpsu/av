@@ -10,8 +10,11 @@
 <body>
     <div class="container">
         <!-- Header -->
-        <header class="header">
-            <h1>PhilViz <span id="philviz-build-version" style="font-size:0.8rem; color:#9aa0a6; font-weight:500;">v20260220_long_comfort_v69</span></h1>
+        <header class="header phv-header">
+            <div class="phv-brand">
+                <button class="phv-hamburger" id="phv-hamburger" aria-label="Menu">☰</button>
+                <h1>PhilViz <span class="phv-page-tag">Analysis</span><span id="philviz-build-version" style="font-size:0.7rem; color:#9aa0a6; font-weight:500; margin-left:0.4rem;">v20260220_long_comfort_v69</span></h1>
+            </div>
             <div id="recording-meta" style="display:flex; gap:0.4rem; align-items:center; margin-right:0.8rem;">
                 <span id="recording-type-badge" style="display:none; padding:0.2rem 0.5rem; border-radius:999px; font-size:0.75rem; background:#2a2a2a; color:#cfd8dc; border:1px solid #444;">type</span>
                 <span id="topdown-badge" style="display:none; padding:0.2rem 0.5rem; border-radius:999px; font-size:0.75rem; background:#2a2a2a; color:#cfd8dc; border:1px solid #444;">topdown</span>
@@ -24,6 +27,10 @@
                 <button id="export-frame-btn" class="btn btn-secondary">Export Frame</button>
                 <button id="export-video-btn" class="btn btn-secondary">Export Video</button>
             </div>
+            <nav class="phv-topnav">
+                <a href="/" class="phv-nav-link active">Analysis</a>
+                <a href="/skills" class="phv-nav-link">Skills</a>
+            </nav>
         </header>
 
         <!-- Main Content -->
@@ -1019,6 +1026,17 @@
         </div>
     </div>
 
+        <!-- Mobile bottom tab bar -->
+        <nav class="phv-bottom-tabs" aria-label="Primary navigation">
+            <a href="/" class="phv-tab active">
+                <span class="phv-tab-icon">🎬</span>
+                <span class="phv-tab-label">Analysis</span>
+            </a>
+            <a href="/skills" class="phv-tab">
+                <span class="phv-tab-icon">⚡</span>
+                <span class="phv-tab-label">Skills</span>
+            </a>
+        </nav>
     <script src="data_loader.js?v=20260218_track_curve_windows_v44"></script>
     <script src="overlay_renderer.js?v=20260213_issues_filters"></script>
     <script src="visualizer.js?v=20260222_grade_lateral_flat_focus"></script>

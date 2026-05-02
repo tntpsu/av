@@ -33,6 +33,7 @@ from summary_analyzer import analyze_recording_summary
 from diagnostics import analyze_trajectory_vs_steering, analyze_signal_chain, analyze_speed_curvature, compute_grade_diagnostics
 from issue_detector import detect_issues
 from analyze_trajectory_layer_localization import analyze_trajectory_layer_localization
+import skills_runner
 
 app = Flask(__name__)
 CORS(app)  # Enable CORS for local development
@@ -4354,6 +4355,76 @@ def run_perception_questions(filename):
     except Exception as e:
         import traceback
         return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Skills runner routes (PhilViz Skills page)
+# Registered BEFORE the catch-all serve_static so /skills, /api/skills/* aren't
+# swallowed by the static file handler.
+# ──────────────────────────────────────────────────────────────────────────────
+
+@app.route('/skills')
+def skills_page():
+    """Serve the Skills runner HTML page."""
+    response = send_from_directory(Path(__file__).parent, 'skills.html')
+    response.headers["Cache-Control"] = "no-store, max-age=0"
+    return response
+
+
+@app.route('/api/skills/list')
+def api_skills_list():
+    """Auto-discover available skills from .claude/commands/*.md."""
+    return jsonify(skills_runner.list_skills())
+
+
+@app.route('/api/skills/run', methods=['POST'])
+def api_skills_run():
+    """Spawn a `claude -p` subprocess for the given skill. Returns job_id."""
+    data = request.get_json(silent=True) or {}
+    skill = data.get("skill", "").strip()
+    args = data.get("args", "")
+    if not skill:
+        return jsonify({"error": "missing 'skill' field"}), 400
+    job_id = skills_runner.start_job(skill, args)
+    if job_id is None:
+        return jsonify({"error": f"unknown skill: {skill}"}), 404
+    return jsonify({"job_id": job_id, "skill": skill})
+
+
+@app.route('/api/skills/jobs')
+def api_skills_jobs():
+    """List recent jobs (most recent first, capped at 20)."""
+    return jsonify(skills_runner.list_jobs(limit=20))
+
+
+@app.route('/api/skills/stream/<job_id>')
+def api_skills_stream(job_id):
+    """SSE stream of subprocess output. Reconnect-safe via ?last=<index> query."""
+    from flask import Response, stream_with_context
+    last_index = request.args.get("last", "0")
+    try:
+        last_index = int(last_index)
+    except ValueError:
+        last_index = 0
+
+    def generate():
+        line_num = last_index
+        for line in skills_runner.stream_output(job_id, last_index=last_index):
+            line_num += 1
+            safe = line.replace("\n", "\\n")
+            yield f"id: {line_num}\ndata: {safe}\n\n"
+        yield "event: done\ndata: \n\n"
+
+    return Response(stream_with_context(generate()),
+                    mimetype="text/event-stream",
+                    headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
+@app.route('/api/skills/cancel/<job_id>', methods=['POST'])
+def api_skills_cancel(job_id):
+    """SIGTERM the subprocess for a running job."""
+    ok = skills_runner.cancel_job(job_id)
+    return jsonify({"cancelled": ok})
 
 
 @app.route('/<path:filename>')

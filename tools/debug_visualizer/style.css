@@ -828,3 +828,183 @@ body {
 .triage-checklist li { padding: 6px 0; border-bottom: 1px solid #222; font-size: 0.87em; }
 .triage-checklist label { cursor: pointer; display: flex; gap: 8px; align-items: flex-start; line-height: 1.4; }
 
+
+/* ──────────────────────────────────────────────────────────────────────── */
+/* PhilViz nav + Skills page + responsive (added 2026-05-02)               */
+/* ──────────────────────────────────────────────────────────────────────── */
+
+/* Header layout extension — nav links on the right (desktop) */
+.phv-header { display: flex; justify-content: space-between; align-items: center; gap: 1rem; flex-wrap: wrap; }
+.phv-brand { display: flex; align-items: center; gap: 0.5rem; }
+.phv-page-tag { font-size: 0.75rem; color: #9aa0a6; background: #2a2a2a; padding: 0.1rem 0.5rem; border-radius: 4px; margin-left: 0.4rem; vertical-align: middle; }
+.phv-hamburger { display: none; background: transparent; color: #cfd8dc; border: 1px solid #444; border-radius: 6px; padding: 0.4rem 0.6rem; font-size: 1rem; cursor: pointer; }
+.phv-topnav { display: flex; gap: 0.5rem; }
+.phv-nav-link {
+    color: #cfd8dc; text-decoration: none; padding: 0.4rem 0.8rem;
+    border-radius: 6px; font-size: 0.9rem; border: 1px solid transparent;
+}
+.phv-nav-link:hover { background: #1f1f1f; }
+.phv-nav-link.active { background: #2a2a2a; border-color: #444; color: #fff; }
+
+/* Skills page: 2-column grid, stacks on mobile */
+.phv-main-grid {
+    display: grid; grid-template-columns: minmax(280px, 360px) 1fr;
+    gap: 1rem; padding: 1rem; align-items: start;
+    /* leave room for the bottom tab bar on mobile */
+    padding-bottom: calc(1rem + env(safe-area-inset-bottom));
+}
+.phv-section-title {
+    font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.05em;
+    color: #9aa0a6; margin: 0 0 0.5rem 0; font-weight: 600;
+}
+.phv-skill-list, .phv-skill-runner {
+    background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 8px;
+    padding: 1rem; max-height: calc(100vh - 8rem); overflow-y: auto;
+}
+.phv-skill-list-items, .phv-jobs-list { display: flex; flex-direction: column; gap: 0.4rem; }
+.phv-skill-row {
+    padding: 0.75rem; border-radius: 6px; border: 1px solid #2a2a2a;
+    cursor: pointer; transition: background 0.1s, border-color 0.1s;
+    /* large tap target for mobile */
+    min-height: 44px;
+}
+.phv-skill-row:hover, .phv-skill-row:focus { background: #232323; border-color: #444; }
+.phv-skill-row.selected { background: #1f3146; border-color: #4a7ab8; }
+.phv-skill-row-name { font-family: ui-monospace, monospace; font-size: 0.9rem; color: #fff; }
+.phv-skill-row-desc { font-size: 0.8rem; color: #9aa0a6; margin-top: 0.2rem; line-height: 1.3; }
+
+.phv-job-row {
+    display: flex; align-items: center; gap: 0.5rem; padding: 0.5rem;
+    border-radius: 4px; cursor: pointer; min-height: 44px;
+}
+.phv-job-row:hover { background: #232323; }
+.phv-job-status-dot {
+    width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
+    background: #888;
+}
+.phv-job-status-dot.running { background: #fbbf24; animation: phv-pulse 1.4s ease-in-out infinite; }
+.phv-job-status-dot.ok      { background: #22c55e; }
+.phv-job-status-dot.fail    { background: #ef4444; }
+@keyframes phv-pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.3; } }
+.phv-job-skill { font-family: ui-monospace, monospace; font-size: 0.85rem; flex: 1; }
+.phv-job-meta  { font-size: 0.75rem; color: #9aa0a6; }
+
+/* Run panel */
+.phv-skill-runner { display: flex; flex-direction: column; }
+.phv-empty-state { display: flex; align-items: center; justify-content: center; min-height: 200px; color: #9aa0a6; }
+.phv-run-panel { display: flex; flex-direction: column; gap: 0.75rem; }
+.phv-run-header { display: flex; justify-content: space-between; align-items: center; }
+.phv-run-header h2 { margin: 0; font-family: ui-monospace, monospace; font-size: 1.1rem; }
+.phv-back-btn {
+    display: none; background: transparent; color: #9aa0a6; border: 1px solid #444;
+    padding: 0.4rem 0.7rem; border-radius: 6px; cursor: pointer; font-size: 0.85rem;
+}
+.phv-skill-description { color: #b8c4ce; font-size: 0.85rem; margin: 0; line-height: 1.4; }
+.phv-args-label {
+    display: flex; align-items: baseline; gap: 0.5rem;
+    font-size: 0.8rem; color: #9aa0a6; text-transform: uppercase; letter-spacing: 0.05em;
+}
+.phv-args-hint { font-size: 0.7rem; color: #fbbf24; text-transform: none; letter-spacing: 0; }
+.phv-args-input {
+    width: 100%; box-sizing: border-box; background: #0e0e0e; color: #e0e0e0;
+    border: 1px solid #2a2a2a; border-radius: 6px; padding: 0.6rem;
+    font-family: ui-monospace, monospace; font-size: 0.85rem; resize: vertical;
+}
+.phv-args-input:focus { outline: none; border-color: #4a7ab8; }
+
+.phv-run-actions { display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; }
+.phv-btn {
+    padding: 0.6rem 1rem; border-radius: 6px; border: 1px solid; cursor: pointer;
+    font-size: 0.9rem; font-weight: 600; min-height: 44px;
+}
+.phv-btn-primary { background: #2563eb; color: white; border-color: #1e40af; }
+.phv-btn-primary:hover:not(:disabled) { background: #1d4ed8; }
+.phv-btn-primary:disabled { background: #555; border-color: #555; cursor: not-allowed; opacity: 0.6; }
+.phv-btn-danger  { background: transparent; color: #ef4444; border-color: #ef4444; }
+.phv-btn-danger:hover { background: rgba(239, 68, 68, 0.15); }
+.phv-job-status { color: #9aa0a6; font-size: 0.85rem; }
+
+.phv-output-wrapper { display: flex; flex-direction: column; gap: 0.4rem; flex: 1; min-height: 200px; }
+.phv-output-header { display: flex; justify-content: space-between; align-items: center; }
+.phv-output-title { font-size: 0.8rem; color: #9aa0a6; text-transform: uppercase; letter-spacing: 0.05em; }
+.phv-output-meta  { font-size: 0.75rem; color: #6b7280; }
+.phv-output {
+    background: #0e0e0e; color: #e0e0e0;
+    border: 1px solid #2a2a2a; border-radius: 6px;
+    padding: 0.75rem; font-family: ui-monospace, monospace; font-size: 0.78rem;
+    line-height: 1.45; overflow: auto; max-height: 60vh; white-space: pre-wrap;
+    margin: 0;
+}
+
+.phv-empty, .phv-loading { color: #6b7280; font-size: 0.85rem; padding: 0.5rem; text-align: center; }
+
+/* Bottom tab bar — hidden on desktop, shown on mobile */
+.phv-bottom-tabs {
+    display: none;
+    position: fixed; bottom: 0; left: 0; right: 0;
+    background: #1a1a1a; border-top: 1px solid #2a2a2a;
+    z-index: 100;
+    padding: 0.4rem 0 calc(0.4rem + env(safe-area-inset-bottom)) 0;
+    justify-content: space-around;
+}
+.phv-tab {
+    flex: 1; display: flex; flex-direction: column; align-items: center;
+    color: #9aa0a6; text-decoration: none; padding: 0.4rem 0.5rem;
+    font-size: 0.7rem; gap: 0.2rem;
+    /* large tap target — at least 56px tall */
+    min-height: 56px; justify-content: center;
+}
+.phv-tab.active { color: #4a7ab8; }
+.phv-tab-icon  { font-size: 1.4rem; line-height: 1; }
+.phv-tab-label { font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.04em; }
+
+/* ──────────────────────────────────────────────────────────────────────── */
+/* Mobile breakpoint — applies to all PhilViz pages                         */
+/* ──────────────────────────────────────────────────────────────────────── */
+@media (max-width: 768px) {
+    /* Show hamburger + bottom tabs, hide top nav links */
+    .phv-hamburger { display: inline-block; }
+    .phv-topnav    { display: none; }
+    .phv-bottom-tabs { display: flex; }
+
+    /* Header: pack tighter, allow wrap */
+    .header { padding: 0.5rem 0.75rem; gap: 0.4rem; }
+    .header h1 { font-size: 1.1rem; }
+    .header-controls { flex-wrap: wrap; gap: 0.4rem; }
+    .recording-select { font-size: 0.85rem; padding: 0.4rem; max-width: 60vw; }
+    .btn { padding: 0.5rem 0.7rem; font-size: 0.8rem; min-height: 44px; }
+
+    /* Skills page: stack columns, allow run panel to scroll */
+    .phv-main-grid {
+        grid-template-columns: 1fr;
+        padding: 0.5rem;
+        padding-bottom: calc(72px + env(safe-area-inset-bottom));  /* clear of bottom tabs */
+    }
+    .phv-skill-list, .phv-skill-runner {
+        max-height: none; padding: 0.75rem;
+    }
+    .phv-back-btn { display: inline-block; }  /* mobile back to skill list */
+    .phv-output { max-height: 50vh; font-size: 0.7rem; }
+
+    /* Existing analysis page: reflow main-content to vertical */
+    .main-content { flex-direction: column !important; padding-bottom: calc(72px + env(safe-area-inset-bottom)); }
+    .camera-panel { width: 100% !important; max-width: 100% !important; }
+    .camera-grid-wrapper canvas { max-width: 100%; height: auto; }
+
+    /* Larger tap targets for any clickable element with .btn or button */
+    button, .btn, select, input[type="checkbox"] { min-height: 44px; }
+    label { padding: 0.3rem 0; }  /* checkbox labels in overlay-controls */
+}
+
+@media (max-width: 480px) {
+    /* Phone-portrait specifically — even tighter */
+    .header h1 { font-size: 1rem; }
+    .phv-page-tag { font-size: 0.65rem; padding: 0.05rem 0.35rem; }
+    .phv-output { font-size: 0.68rem; padding: 0.5rem; }
+    .phv-skill-row { padding: 0.6rem; }
+}
+
+/* Reduce-motion preference (mobile users with motion sensitivity) */
+@media (prefers-reduced-motion: reduce) {
+    .phv-job-status-dot.running { animation: none; }
+}

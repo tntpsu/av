@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PhilViz · Skills</title>
+    <link rel="stylesheet" href="style.css?v=skills_v1">
+</head>
+<body>
+    <div class="container">
+        <!-- Header (shared with Analysis page) -->
+        <header class="header phv-header">
+            <div class="phv-brand">
+                <button class="phv-hamburger" id="phv-hamburger" aria-label="Menu">☰</button>
+                <h1>PhilViz <span class="phv-page-tag">Skills</span></h1>
+            </div>
+            <nav class="phv-topnav">
+                <a href="/" class="phv-nav-link">Analysis</a>
+                <a href="/skills" class="phv-nav-link active">Skills</a>
+            </nav>
+        </header>
+
+        <main class="phv-main-grid">
+            <!-- Skill list -->
+            <section class="phv-skill-list" id="phv-skill-list">
+                <h2 class="phv-section-title">Available skills</h2>
+                <div class="phv-skill-list-items" id="phv-skill-list-items">
+                    <div class="phv-loading">Loading skills…</div>
+                </div>
+                <h2 class="phv-section-title" style="margin-top:1.5rem;">Recent runs</h2>
+                <div class="phv-jobs-list" id="phv-jobs-list">
+                    <div class="phv-empty">No runs yet</div>
+                </div>
+            </section>
+
+            <!-- Run panel -->
+            <section class="phv-skill-runner" id="phv-skill-runner">
+                <div class="phv-empty-state" id="phv-empty-state">
+                    <p>Select a skill on the left to run it.</p>
+                </div>
+                <div class="phv-run-panel" id="phv-run-panel" style="display:none;">
+                    <div class="phv-run-header">
+                        <h2 id="phv-skill-name">/skill</h2>
+                        <button class="phv-back-btn" id="phv-back-btn" aria-label="Back">← Back</button>
+                    </div>
+                    <p class="phv-skill-description" id="phv-skill-description"></p>
+
+                    <label for="phv-args-input" class="phv-args-label">
+                        Arguments
+                        <span class="phv-args-hint" id="phv-args-hint"></span>
+                    </label>
+                    <textarea id="phv-args-input" class="phv-args-input"
+                              placeholder="Optional arguments — passed as $ARGUMENTS to the skill"
+                              rows="2"></textarea>
+
+                    <div class="phv-run-actions">
+                        <button id="phv-run-btn" class="phv-btn phv-btn-primary">▶ Run skill</button>
+                        <button id="phv-cancel-btn" class="phv-btn phv-btn-danger" style="display:none;">✕ Cancel</button>
+                        <span id="phv-job-status" class="phv-job-status"></span>
+                    </div>
+
+                    <div class="phv-output-wrapper" id="phv-output-wrapper" style="display:none;">
+                        <div class="phv-output-header">
+                            <span class="phv-output-title">Output</span>
+                            <span class="phv-output-meta" id="phv-output-meta"></span>
+                        </div>
+                        <pre class="phv-output" id="phv-output"></pre>
+                    </div>
+                </div>
+            </section>
+        </main>
+
+        <!-- Mobile bottom tab bar -->
+        <nav class="phv-bottom-tabs" aria-label="Primary navigation">
+            <a href="/" class="phv-tab">
+                <span class="phv-tab-icon">🎬</span>
+                <span class="phv-tab-label">Analysis</span>
+            </a>
+            <a href="/skills" class="phv-tab active">
+                <span class="phv-tab-icon">⚡</span>
+                <span class="phv-tab-label">Skills</span>
+            </a>
+        </nav>
+    </div>
+    <script src="skills.js?v=skills_v1"></script>
+</body>
+</html>
