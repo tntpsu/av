@@ -1104,3 +1104,64 @@ body {
 /* On desktop the hamburger is hidden by default — but for the drawer to be
    accessible, we show it always now. Override the desktop default. */
 .phv-hamburger { display: inline-block; }
+
+/* ──────────────────────────────────────────────────────────────────────── */
+/* Header de-scrunch fix (2026-05-02) — overrides above rules               */
+/* The header had 4 flex children all competing for space, causing it to    */
+/* wrap into 2-3 rows at common viewport widths and visually crowding the   */
+/* content immediately below.                                               */
+/* ──────────────────────────────────────────────────────────────────────── */
+.phv-header {
+    /* Original .header had no wrap; allow it now but only as a clean         */
+    /* fallback. row-gap keeps wrapped rows close. align baseline so the      */
+    /* nav and controls visually line up.                                     */
+    flex-wrap: wrap;
+    row-gap: 0.35rem;
+    column-gap: 0.6rem;
+    padding: 0.6rem 1rem;       /* was 1rem all around — tighter */
+    align-items: center;
+}
+.phv-header h1 { font-size: 1.25rem; line-height: 1.2; margin: 0; }
+.phv-brand { flex-shrink: 0; }
+
+/* Nav: push to the right, stay compact, never grow. */
+.phv-topnav {
+    margin-left: auto;
+    flex-shrink: 0;
+    border-left: 1px solid #3a3a3a;
+    padding-left: 0.6rem;
+}
+.phv-nav-link { padding: 0.3rem 0.6rem; font-size: 0.82rem; }
+
+/* Recording controls: stay together, allow the dropdown to flex. */
+.header-controls { flex-wrap: nowrap; gap: 0.3rem; align-items: center; }
+.header-controls .recording-select { min-width: 0; max-width: 26vw; }
+
+/* Mobile: tabs at the bottom are the primary nav, so de-emphasize the     */
+/* desktop top nav AND shed redundant header chrome (Export buttons        */
+/* are rarely used from a phone — keep recording select + Load).           */
+@media (max-width: 768px) {
+    .phv-header {
+        padding: 0.4rem 0.6rem;
+        row-gap: 0.3rem;
+    }
+    .phv-header h1 { font-size: 1.05rem; }
+    .phv-page-tag { font-size: 0.65rem; padding: 0.05rem 0.35rem; margin-left: 0.3rem; }
+    #philviz-build-version { display: none; }   /* version text — hide on mobile */
+    .phv-topnav { display: none; }              /* (already had this; reaffirming) */
+    .phv-topnav + * , #recording-meta { margin-left: 0; }
+
+    /* Hide secondary action buttons on phone — Skills page or hamburger    */
+    /* drawer is the path for power-user actions.                            */
+    #export-frame-btn, #export-video-btn { display: none; }
+
+    .header-controls { flex-wrap: wrap; }
+    .header-controls .recording-select { max-width: 60vw; }
+}
+
+/* Phone-portrait: even more compact */
+@media (max-width: 480px) {
+    .phv-header { padding: 0.3rem 0.5rem; }
+    .phv-hamburger { padding: 0.3rem 0.5rem; min-width: 40px; min-height: 40px; }
+    #recording-meta { display: none !important; }  /* badges visible only on desktop */
+}
