@@ -11379,9 +11379,26 @@ class Visualizer {
     }
 }
 
-// Initialize visualizer when page loads
+// Initialize visualizer when page loads. Wrap in try/catch so a single
+// missing-element / null-deref / dimension-read failure during construction
+// (common when the layout has hidden panels for mobile) doesn't leave the
+// entire page silently dead. On failure, surface a small in-page indicator
+// so the user knows something's wrong without having to open dev tools.
 let visualizer;
 document.addEventListener('DOMContentLoaded', () => {
-    visualizer = new Visualizer();
-    window.visualizer = visualizer;  // Make accessible globally for onclick handlers
+    try {
+        visualizer = new Visualizer();
+        window.visualizer = visualizer;  // Make accessible globally for onclick handlers
+    } catch (e) {
+        console.error('Visualizer failed to construct:', e);
+        // In-page diagnostic banner so the failure is observable on mobile
+        // without dev tools. The recordings_bootstrap.js dropdown will still
+        // be populated, so users can at least pick a recording even though
+        // loading it will likely fail.
+        const banner = document.createElement('div');
+        banner.style.cssText = 'position:fixed;top:0;left:0;right:0;background:#7f1d1d;color:#fff;padding:0.5rem 0.75rem;font-size:0.8rem;font-family:ui-monospace,monospace;z-index:1000;text-align:center;border-bottom:2px solid #ef4444;';
+        banner.textContent = `⚠ Visualizer init failed: ${e.message} — many controls will be unresponsive. (See console.)`;
+        banner.title = e.stack || String(e);
+        document.body.insertBefore(banner, document.body.firstChild);
+    }
 });
