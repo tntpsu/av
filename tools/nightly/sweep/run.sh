@@ -53,7 +53,17 @@ compose_subject() {
           if (NR==1 || d < min_d) { min_d = d; min_n = name }
         }
       } END { if (min_n) print min_n, min_d; else print "none 0.0" }' "$hb")
-    if [ "$regressions" -eq 0 ]; then gate=PASS; else gate=FAIL; fi
+    # Gate verdict: prefer the canonical "GATE: ..." line from sweep_report.txt
+    # (which applies the layer->=95 rule too). Fall back to regressions-only
+    # check if the report file isn't present.
+    local report="$REPO/data/reports/sweep_report.txt"
+    gate=""
+    if [ -r "$report" ]; then
+      gate=$(grep -E '^GATE:' "$report" | head -1 | awk '{print $2}')
+    fi
+    if [ -z "$gate" ]; then
+      if [ "$regressions" -eq 0 ]; then gate=PASS; else gate=FAIL; fi
+    fi
     echo "av sweep $DATE: SWEEP gate=$gate regressions=$regressions flags=$flags passed=$passed/6 worst=${worst_track}(${worst_delta})"
     return
   fi

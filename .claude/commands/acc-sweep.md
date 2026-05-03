@@ -38,6 +38,33 @@ Disambiguation challenge: ACC scenarios share `track_id` with their base track i
 
 If no recording on the base track is younger than 7 days, mark scenario as `SKIPPED — no recent recording (run /e2e tracks/scenarios/<name>.yml to seed)` and move on.
 
+### Steering field gotcha (2026-05-03 finding)
+
+When verifying Δsteering criteria from a scenario's `Expected:` line, **do
+NOT use `control/calculated_steering_angle_deg`** — it's all-zero on every
+normal AV-stack recording. That field is populated *only* by
+`tools/ground_truth_follower.py`, a special tool that drives along
+ground-truth lane centers; the regular planner/controller pipeline never
+writes it (recorder writes 0 when the ControlCommand attribute is None).
+
+Use one of these instead, depending on what you want to measure:
+
+| Field                                      | What it is                                      |
+|--------------------------------------------|-------------------------------------------------|
+| `control/steering`                         | Final commanded steering [-1, 1] (use this for Δsteering) |
+| `control/steering_pre_rate_limit`          | Output of the controller before rate limiting   |
+| `control/steering_post_rate_limit`         | After rate limiter                              |
+| `control/steering_post_jerk_limit`         | After jerk limiter                              |
+| `control/steering_post_smoothing`          | After smoothing (final stage)                   |
+| `control/steering_rate_limited_active`     | Bool — was rate limit clipping?                 |
+| `control/steering_jerk_limited_active`     | Bool — was jerk limit clipping?                 |
+
+If a scenario's Δsteering criterion is "≤ 0.10" with no units, treat as
+the normalized [-1, 1] form on `control/steering`. The 2026-05-03 A2 WARN
+("calculated_steering_angle_deg reads 0.0000 throughout") was a false
+warning caused by reading the wrong field; A2's actual Δsteering is
+verifiable from `control/steering` instead.
+
 ## Step 4 — Evaluate each recording against `Expected:`
 
 Universal ACC gates (apply to every scenario, hard fails):

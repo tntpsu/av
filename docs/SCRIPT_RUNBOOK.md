@@ -92,7 +92,7 @@ If you are unsure which command to run, start here first.
 - **Uninstall:** `launchctl unload ~/Library/LaunchAgents/com.philtullai.av-sweep.plist`
 - **Read-only by design:** Never commits or opens PRs. Reports regressions to the email; the human decides whether to investigate.
 - **Companion files:** `tools/nightly/sweep/PROMPT.md`, `.claude/commands/sweep.md` (the playbook), `tools/nightly/notify.py`.
-- **Email subject composition:** `compose_subject()` in `notify_on_exit` parses `data/reports/sweep_status.txt` directly — counts done tracks, sums regressions (delta < -2.0), counts FLAG= markers, identifies worst-delta track. Falls back to log-grep then exit-code-synthesis if the heartbeat is missing.
+- **Email subject composition:** `compose_subject()` in `notify_on_exit` parses `data/reports/sweep_status.txt` directly — counts done tracks, sums regressions (delta < -2.0), counts FLAG= markers, identifies worst-delta track. **Gate verdict** is read from `data/reports/sweep_report.txt`'s canonical `GATE: ...` line so the subject reflects the same rule the agent applied (layer-≥95 AND no regressions), not a wrapper-side recomputation. Falls back to log-grep then exit-code-synthesis if files are missing.
 
 ### `tools/nightly/acc-sweep/run.sh`
 
@@ -110,6 +110,7 @@ If you are unsure which command to run, start here first.
 ### `tools/nightly/process-health/run.sh`
 
 - **Purpose:** Wrapper invoked by launchd every Sunday at 5am (moved from 4am to make room for daily acc-sweep at 4am) to generate a weekly process-health Pareto digest. Pulls `main`, invokes `claude -p` with `tools/nightly/process-health/PROMPT.md`, which drives the `/process-health` slash command. Reads `data/reports/improvement_log.json`, computes Paretos by `process_stage` and detection efficiency, and emails the digest.
+- **Email subject composition:** `compose_ph_subject()` parses `data/reports/process_health_<DATE>.md` for `Total entries: **N**` and the first non-zero stage in the Process Stage Pareto, building `PROCESS_HEALTH stage=Design(64%) entries=14`. Falls back to log-grep then exit-code if the report file is missing.
 - **Unity launch behavior:** No Unity. JSON read + counts only.
 - **Auth/permissions:** Same MCP-disabled flags. $3 budget cap, 1800s (30-min) wall-clock timeout. Exports `AV_NIGHTLY_RUN=1`.
 - **Use when:** Triggered automatically Sundays. Skip if `data/reports/improvement_log.json` is missing — wrapper will report "log empty" and exit cleanly.
