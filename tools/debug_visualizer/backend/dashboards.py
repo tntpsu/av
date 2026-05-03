@@ -436,23 +436,28 @@ def _index_recordings_by_track_id() -> dict:
 def _extract_track_id_from_h5(path: Path) -> Optional[str]:
     """Read recording_provenance.track_id from an HDF5 recording.
 
-    Provenance lives under the `metadata` group as an attribute (JSON-encoded
-    in this repo's recordings; bytes-typed in some older ones).
+    Metadata is JSON-encoded on the *root file's* `metadata` attribute
+    (matches `_read_recording_metadata_dict` in server.py:210). The
+    recording_provenance is nested inside that JSON dict.
     """
     try:
         import h5py
         import json as _json
         with h5py.File(path, "r") as f:
-            md = f.get("metadata")
-            if md is None:
+            meta_raw = f.attrs.get("metadata")
+            if meta_raw is None:
                 return None
-            prov = md.attrs.get("recording_provenance")
-            if prov is None:
+            if isinstance(meta_raw, (bytes, bytearray)):
+                meta_str = meta_raw.decode("utf-8", "ignore")
+            else:
+                meta_str = str(meta_raw)
+            data = _json.loads(meta_str)
+            if not isinstance(data, dict):
                 return None
-            if isinstance(prov, bytes):
-                prov = prov.decode("utf-8", errors="replace")
-            data = _json.loads(prov) if isinstance(prov, str) else dict(prov)
-            return data.get("track_id")
+            prov = data.get("recording_provenance", {})
+            if not isinstance(prov, dict):
+                return None
+            return prov.get("track_id")
     except Exception:
         return None
 
