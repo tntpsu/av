@@ -74,10 +74,13 @@ def parse_sweep_status() -> dict:
             "delta": delta,
             "flag": flag,
         })
-    # Enrich each track with its layer scores parsed from sweep_report.txt
+    # Enrich each track with its layer scores AND the recording used (so the UI
+    # can offer a "Load in Analysis" link that deep-jumps to that recording).
     layer_scores = _parse_lateral_layer_scores()
+    recordings_used = _parse_lateral_recordings_used()
     for t in tracks:
         t["layers"] = layer_scores.get(t["name"], {})
+        t["recording_used"] = recordings_used.get(t["name"])
     regressions = sum(1 for t in tracks if t["delta"] is not None and t["delta"] < -2.0)
     flags = sum(1 for t in tracks if t["flag"])
     gate = "FAIL" if regressions > 0 else ("FLAG" if flags > 0 else "PASS")
@@ -100,6 +103,40 @@ def parse_sweep_status() -> dict:
         },
         "file": _file_stat(hb),
     }
+
+
+def _parse_lateral_recordings_used() -> dict:
+    """Extract per-track recording filename from sweep_report.txt.
+
+    Looks for the 'Recordings used' section:
+        Recordings used (--quick, no fresh Unity launches):
+          s_loop           recording_20260419_183229.h5  (Apr 19)
+          highway_65       recording_20260419_182847.h5  (Apr 19)
+    Returns: {track_name: filename, ...}
+    """
+    text = _read_text(REPORTS / "sweep_report.txt")
+    out: dict = {}
+    in_section = False
+    for raw in text.splitlines():
+        line = raw.rstrip()
+        if "Recordings used" in line:
+            in_section = True
+            continue
+        if not in_section:
+            continue
+        if not line.strip():
+            if out:
+                break
+            continue
+        # Expect indented "track_name  recording_xxx.h5  (date)"
+        m = re.match(r"\s+(?P<track>[a-zA-Z0-9_]+)\s+(?P<file>recording_[0-9_]+\.h5)", line)
+        if m:
+            out[m.group("track")] = m.group("file")
+        else:
+            # Section ended (line that doesn't match expected shape)
+            if out:
+                break
+    return out
 
 
 def _parse_lateral_layer_scores() -> dict:

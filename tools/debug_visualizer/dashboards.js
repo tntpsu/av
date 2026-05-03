@@ -64,16 +64,22 @@
                     return `<div class="phv-layer-pill ${cls}"><span class="phv-layer-name">${escapeHtml(k)}</span><span class="phv-layer-val">${v.toFixed(1)}</span></div>`;
                 }).join("")
                 : `<div class="phv-empty">no layer data</div>`;
+            const rec = t.recording_used;
+            const recButton = rec
+                ? `<a class="phv-detail-action" href="/?recording=${encodeURIComponent(rec)}" title="Open this recording in the Analysis tab">📺 Load in Analysis · ${escapeHtml(rec)}</a>`
+                : `<span class="phv-detail-empty">(no recording filename in report)</span>`;
+            const skillsButton = `<a class="phv-detail-action" href="/skills?tracks=${encodeURIComponent(t.name)}" title="Pre-fill this track in the Skills picker">⚡ Run skill on ${escapeHtml(t.name)}</a>`;
             return `
             <div class="phv-track-row ${t.flag ? 'flagged' : ''} expandable" data-track-idx="${i}">
                 <button class="phv-row-toggle" aria-label="Show details">▸</button>
-                <a class="phv-track-name phv-mono" href="/skills?tracks=${encodeURIComponent(t.name)}" title="Run a skill on this track">${escapeHtml(t.name)}</a>
+                <span class="phv-track-name phv-mono">${escapeHtml(t.name)}</span>
                 <span class="phv-track-score">${t.score?.toFixed(1) ?? "—"}</span>
                 <span class="phv-track-baseline">${t.baseline?.toFixed(1) ?? "—"}</span>
                 ${fmtDelta(t.delta)}
                 ${t.flag ? `<span class="phv-track-flag" title="FLAG=${escapeHtml(t.flag)}">⚑</span>` : `<span class="phv-track-flag-spacer"></span>`}
             </div>
             <div class="phv-row-detail" id="phv-track-detail-${i}" style="display:none;">
+                <div class="phv-detail-actions">${recButton}${skillsButton}</div>
                 <div class="phv-layer-grid">${layersHTML}</div>
             </div>`;
         }).join("");

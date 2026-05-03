@@ -1544,3 +1544,19 @@ body {
     .phv-scenario-row.expandable > .phv-scenario-reason { display: none; }
     .phv-layer-grid { grid-template-columns: 1fr 1fr; }
 }
+
+/* Detail-row action buttons (Load in Analysis + Run skill) */
+.phv-detail-actions {
+    display: flex; flex-direction: column; gap: 0.4rem;
+    margin-bottom: 0.6rem;
+}
+.phv-detail-action {
+    display: flex; align-items: center; gap: 0.5rem;
+    padding: 0.5rem 0.6rem; min-height: 40px;
+    background: #1a1a1a; border: 1px solid #4a7ab8; border-radius: 4px;
+    color: #cfd8dc; text-decoration: none; font-size: 0.78rem;
+}
+.phv-detail-action:hover { background: #1f3146; }
+.phv-detail-empty {
+    color: #6b7280; font-size: 0.75rem; font-style: italic;
+}

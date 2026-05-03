@@ -12,6 +12,10 @@
     function init() {
         const sel = document.getElementById("recording-select");
         if (!sel) return;
+        // Honor `?recording=<filename>` deep-link from /dashboards.
+        // After populating, set the dropdown value and click Load.
+        const params = new URLSearchParams(window.location.search);
+        const wantedRecording = params.get("recording");
         // Clear placeholder if user just landed
         fetch("/api/recordings")
             .then((r) => {
@@ -52,6 +56,24 @@
                 if (currentValue) sel.value = currentValue;
                 // Tiny diagnostic so we know this fired (visible only by hover):
                 sel.title = `${recordings.length} recordings loaded by bootstrap @ ${new Date().toLocaleTimeString()}`;
+                // Deep-link: if URL has ?recording=<filename>, select + load it.
+                if (wantedRecording) {
+                    const matchOpt = Array.from(sel.options).find(
+                        (o) => o.value === wantedRecording
+                    );
+                    if (matchOpt) {
+                        sel.value = wantedRecording;
+                        // Fire change event so Visualizer notices, then click Load.
+                        sel.dispatchEvent(new Event("change", { bubbles: true }));
+                        const loadBtn = document.getElementById("load-btn");
+                        if (loadBtn) {
+                            // Defer slightly so Visualizer has a tick to wire its listeners
+                            setTimeout(() => loadBtn.click(), 100);
+                        }
+                    } else {
+                        sel.title = `Deep-link: recording '${wantedRecording}' not found in list (${recordings.length} available)`;
+                    }
+                }
             })
             .catch((err) => {
                 sel.title = `Bootstrap error: ${err.message}`;
