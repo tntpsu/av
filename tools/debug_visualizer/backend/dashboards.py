@@ -364,40 +364,117 @@ def parse_fix_tests_status() -> dict:
 def list_tracks_with_metadata() -> dict:
     """List tracks/scenarios with their latest recording metadata.
 
-    Used by the standalone /tracks picker page. For each track, finds the
-    most recent .h5 in data/recordings/ that *might* match (best-effort —
-    matches by track_id substring in the filename or just returns the
-    most recent overall as a fallback).
+    Used by the standalone /tracks page. For each track, finds the most
+    recent .h5 by reading recording_provenance.track_id from HDF5 metadata
+    (NOT by filename substring — recordings are named with timestamps).
+    For ACC scenarios, looks up by the base-track name extracted from the
+    scenario YAML's `name:` field, so e.g. `highway_h5_stop_go` resolves to
+    the most recent recording with track_id=highway_65.
     """
     tracks_dir = REPO / "tracks"
-    rec_dir = REPO / "data" / "recordings"
-
     base = sorted(p.stem for p in tracks_dir.glob("*.yml")) if tracks_dir.is_dir() else []
     scen_dir = tracks_dir / "scenarios"
     scenarios = sorted(p.stem for p in scen_dir.glob("*.yml")) if scen_dir.is_dir() else []
 
-    # Index recordings by (mtime desc) so we can return most recent first
-    recordings = []
-    if rec_dir.is_dir():
-        for p in rec_dir.glob("*.h5"):
-            try:
-                recordings.append({"name": p.name, "mtime": p.stat().st_mtime, "size": p.stat().st_size})
-            except OSError:
-                pass
-        recordings.sort(key=lambda r: r["mtime"], reverse=True)
+    by_track = _index_recordings_by_track_id()
 
-    def _latest_for(track_name: str) -> Optional[dict]:
-        # Heuristic: if any recording filename mentions the track name, prefer it.
-        # Otherwise just report None — the user can pick a recording explicitly later.
-        for r in recordings:
-            if track_name in r["name"]:
-                return r
+    def _latest_for(track_id: Optional[str]) -> Optional[dict]:
+        if not track_id:
+            return None
+        recs = by_track.get(track_id, [])
+        return recs[0] if recs else None
+
+    out_tracks = [{
+        "name": t, "kind": "base",
+        "latest_recording": _latest_for(t),
+    } for t in base]
+
+    out_scenarios = []
+    for t in scenarios:
+        base_track = _scenario_base_track(t)
+        out_scenarios.append({
+            "name": t, "kind": "scenario",
+            "base_track": base_track,
+            "latest_recording": _latest_for(base_track),
+        })
+
+    return {"tracks": out_tracks, "scenarios": out_scenarios}
+
+
+def _index_recordings_by_track_id() -> dict:
+    """Read HDF5 metadata for every recording in data/recordings/ and group
+    by recording_provenance.track_id.
+
+    Returns: {track_id: [{name, mtime, size, track_id}, ...] sorted mtime desc}
+
+    Performance: ~70ms for 484 files. Acceptable per page-load; cache later
+    if the count grows past ~5000.
+    """
+    rec_dir = REPO / "data" / "recordings"
+    by_track: dict = {}
+    if not rec_dir.is_dir():
+        return by_track
+    for p in rec_dir.glob("*.h5"):
+        track_id = _extract_track_id_from_h5(p)
+        if not track_id or track_id == "unknown":
+            continue
+        try:
+            entry = {
+                "name": p.name,
+                "mtime": p.stat().st_mtime,
+                "size": p.stat().st_size,
+                "track_id": track_id,
+            }
+            by_track.setdefault(track_id, []).append(entry)
+        except OSError:
+            pass
+    for tid in by_track:
+        by_track[tid].sort(key=lambda r: r["mtime"], reverse=True)
+    return by_track
+
+
+def _extract_track_id_from_h5(path: Path) -> Optional[str]:
+    """Read recording_provenance.track_id from an HDF5 recording.
+
+    Provenance lives under the `metadata` group as an attribute (JSON-encoded
+    in this repo's recordings; bytes-typed in some older ones).
+    """
+    try:
+        import h5py
+        import json as _json
+        with h5py.File(path, "r") as f:
+            md = f.get("metadata")
+            if md is None:
+                return None
+            prov = md.attrs.get("recording_provenance")
+            if prov is None:
+                return None
+            if isinstance(prov, bytes):
+                prov = prov.decode("utf-8", errors="replace")
+            data = _json.loads(prov) if isinstance(prov, str) else dict(prov)
+            return data.get("track_id")
+    except Exception:
         return None
 
-    return {
-        "tracks": [{"name": t, "kind": "base", "latest_recording": _latest_for(t)} for t in base],
-        "scenarios": [{"name": t, "kind": "scenario", "latest_recording": _latest_for(t)} for t in scenarios],
-    }
+
+def _scenario_base_track(scenario_name: str) -> Optional[str]:
+    """Read scenario YAML to find the base-track name (the `name:` field).
+
+    ACC scenarios overlay base tracks: e.g. tracks/scenarios/highway_h5_stop_go.yml
+    has `name: highway_65` at the top. That `name:` is what lands in the
+    recording's track_id when you run the scenario, so we look it up by that.
+    """
+    yaml_path = REPO / "tracks" / "scenarios" / f"{scenario_name}.yml"
+    if not yaml_path.is_file():
+        return None
+    try:
+        for raw in yaml_path.read_text(encoding="utf-8", errors="replace").splitlines():
+            line = raw.strip()
+            if line.startswith("name:"):
+                return line.split(":", 1)[1].strip()
+    except OSError:
+        return None
+    return None
 
 
 # ---- helpers ----
