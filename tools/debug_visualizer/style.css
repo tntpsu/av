@@ -1241,8 +1241,23 @@ body {
 /* camera-panel on mobile and let the right-side .data-panel take over.    */
 /* ──────────────────────────────────────────────────────────────────────── */
 @media (max-width: 768px) {
+    /* Camera panel: off-screen instead of display:none so the JS Visualizer */
+    /* class can still construct (it reads CSS-computed dimensions on canvas */
+    /* elements during init; display:none returns 0 and breaks downstream    */
+    /* layout math). Off-screen positioning keeps the layout computable      */
+    /* while making the panel invisible and untappable for mobile users.    */
+    /* See feedback_display_none_breaks_layout_dependent_js memory.         */
     #camera-panel,
-    .camera-panel { display: none !important; }
+    .camera-panel {
+        position: absolute !important;
+        left: -99999px !important;
+        top: 0 !important;
+        width: 1024px !important;
+        height: 768px !important;
+        pointer-events: none !important;
+        opacity: 0 !important;
+        overflow: hidden !important;
+    }
 
     /* Right-side data panel takes the full width on mobile */
     #data-panel,
