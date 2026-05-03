@@ -12443,6 +12443,23 @@ class AVStack:
                 '_effective_max_accel', 0.0)),
         )
 
+        # Populate calculated_steering_angle_deg for downstream analysis.
+        # Previously this field was set ONLY by tools/ground_truth_follower.py,
+        # so all regular AV-stack recordings had it as 0.0 (recorder.py:7858
+        # writes 0 when the attribute is None). Downstream analysis tools
+        # (notably the /acc-sweep playbook for Δsteering criteria) reasonably
+        # expected this field to be the controller's commanded steering in
+        # degrees, and reading all-zero produced false WARN findings (e.g.
+        # the 2026-05-03 A2 ACC scenario WARN). The conversion is the same
+        # as in ground_truth_follower (line 667): normalized steering * Unity's
+        # max steering angle (30° hardcoded; matches Unity's WheelCollider
+        # maxSteerAngle=30f).
+        try:
+            steer_norm = float(control_cmd.steering)
+            control_cmd.calculated_steering_angle_deg = steer_norm * 30.0
+        except (TypeError, ValueError):
+            pass
+
         # Create trajectory output
         # Include reference point as first point for analysis
         trajectory_points = None
