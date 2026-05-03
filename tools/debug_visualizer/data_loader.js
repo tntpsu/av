@@ -3,7 +3,11 @@
  * Handles loading frame data from server API and debug visualization images.
  */
 
-const API_BASE = 'http://localhost:5001/api';
+// Use relative URL so the page works when served from any host (e.g., over
+// VPN at the Mac mini's LAN IP). The previous hardcoded localhost broke
+// every API call when the page was loaded from a different origin —
+// especially mobile clients, which would resolve "localhost" to the phone.
+const API_BASE = '/api';
 window.PHILVIZ_API_BASE = API_BASE;  // For visualizer.js when page served from different origin (e.g. http.server 8000)
 
 class DataLoader {
