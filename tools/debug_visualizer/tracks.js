@@ -1,10 +1,12 @@
-// PhilViz Tracks page — multi-select picker that hands selection off to /skills
-// via ?tracks= URL param. Replaces having to type track names by hand.
+// PhilViz Tracks page (v2 — browse-with-actions, per Option B redesign).
+// Each row gets inline action buttons for the actual workflows. Multi-select
+// is intentionally gone — that pattern lives inside the Skills page now,
+// where it pairs with /sweep specifically.
+
 (function () {
     "use strict";
 
     const $ = (id) => document.getElementById(id);
-    const selected = new Set();
 
     function relTime(ts) {
         if (!ts) return "(no recording)";
@@ -22,48 +24,67 @@
         );
     }
 
+    function trackYamlPath(t) {
+        return t.kind === "scenario" ? `tracks/scenarios/${t.name}.yml` : `tracks/${t.name}.yml`;
+    }
+
+    function renderRow(t) {
+        const rec = t.latest_recording;
+        const recAge = rec ? relTime(rec.mtime) : "(no recording)";
+        const recName = rec ? rec.name : null;
+        const yamlPath = trackYamlPath(t);
+
+        // Build action buttons. Some are disabled when no recording exists.
+        const loadAction = recName
+            ? `<a class="phv-row-action" href="/?recording=${encodeURIComponent(recName)}" title="Open ${escapeHtml(recName)} in the Analysis page">
+                 <span class="phv-action-icon">📺</span>
+                 <span class="phv-action-label">Load latest</span>
+               </a>`
+            : `<span class="phv-row-action disabled" title="No recording exists for this track yet — run /e2e to create one">
+                 <span class="phv-action-icon">📺</span>
+                 <span class="phv-action-label">Load latest</span>
+               </span>`;
+        const diagnoseAction = recName
+            ? `<a class="phv-row-action" href="/skills?skill=diagnose&args=${encodeURIComponent(recName)}" title="Run /diagnose on the latest recording">
+                 <span class="phv-action-icon">🔍</span>
+                 <span class="phv-action-label">Diagnose</span>
+               </a>`
+            : `<span class="phv-row-action disabled" title="No recording — run /e2e first">
+                 <span class="phv-action-icon">🔍</span>
+                 <span class="phv-action-label">Diagnose</span>
+               </span>`;
+        const e2eAction = `<a class="phv-row-action" href="/skills?skill=e2e&args=${encodeURIComponent(yamlPath)}" title="Run a fresh Unity drive on this track">
+                <span class="phv-action-icon">🎬</span>
+                <span class="phv-action-label">Run /e2e</span>
+            </a>`;
+        const scoresAction = `<a class="phv-row-action" href="/skills?skill=scores&args=${encodeURIComponent(t.name)}" title="Show the scoreboard for this track">
+                <span class="phv-action-icon">📊</span>
+                <span class="phv-action-label">Scores</span>
+            </a>`;
+
+        return `
+            <article class="phv-tracks-row-v2">
+                <header class="phv-tracks-row-header">
+                    <span class="phv-tracks-row-name phv-mono">${escapeHtml(t.name)}</span>
+                    <span class="phv-tracks-row-meta ${rec ? "" : "muted"}" title="${escapeHtml(recName || "")}">
+                        latest: ${recAge}
+                    </span>
+                </header>
+                <div class="phv-tracks-actions-grid">
+                    ${loadAction}
+                    ${diagnoseAction}
+                    ${e2eAction}
+                    ${scoresAction}
+                </div>
+            </article>`;
+    }
+
     function renderList(container, items) {
         if (!items.length) {
             container.innerHTML = `<div class="phv-empty">(none)</div>`;
             return;
         }
-        container.innerHTML = items.map((t) => {
-            const rec = t.latest_recording;
-            const recAge = rec ? relTime(rec.mtime) : "(no recording)";
-            const recName = rec ? rec.name : "—";
-            const recCls = rec ? "" : "muted";
-            return `
-                <label class="phv-tracks-row" data-name="${escapeHtml(t.name)}">
-                    <input type="checkbox" data-name="${escapeHtml(t.name)}">
-                    <div class="phv-tracks-row-content">
-                        <span class="phv-tracks-row-name phv-mono">${escapeHtml(t.name)}</span>
-                        <span class="phv-tracks-row-meta ${recCls}" title="${escapeHtml(recName)}">latest: ${recAge}</span>
-                    </div>
-                </label>
-            `;
-        }).join("");
-        container.querySelectorAll('input[type="checkbox"]').forEach((cb) => {
-            cb.addEventListener("change", () => {
-                const n = cb.getAttribute("data-name");
-                if (cb.checked) selected.add(n); else selected.delete(n);
-                updateActions();
-            });
-        });
-    }
-
-    function updateActions() {
-        const n = selected.size;
-        $("phv-tracks-selected-count").textContent = `${n} selected`;
-        const btn = $("phv-tracks-run-btn");
-        btn.disabled = n === 0;
-        btn.textContent = n === 0 ? "⚡ Select tracks to run a skill"
-                                  : `⚡ Run skill on ${n} track${n === 1 ? "" : "s"} →`;
-    }
-
-    function goToSkills() {
-        if (selected.size === 0) return;
-        const tracks = Array.from(selected).join(" ");
-        window.location.href = `/skills?tracks=${encodeURIComponent(tracks)}`;
+        container.innerHTML = items.map(renderRow).join("");
     }
 
     async function load() {
@@ -77,6 +98,5 @@
         }
     }
 
-    $("phv-tracks-run-btn").addEventListener("click", goToSkills);
     load();
 })();

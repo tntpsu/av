@@ -1560,3 +1560,52 @@ body {
 .phv-detail-empty {
     color: #6b7280; font-size: 0.75rem; font-style: italic;
 }
+
+/* ──────────────────────────────────────────────────────────────────────── */
+/* Tracks page v2 (Option B redesign 2026-05-03) — per-track action grid    */
+/* ──────────────────────────────────────────────────────────────────────── */
+.phv-tracks-hint {
+    background: #0e0e0e; border-left: 3px solid #4a7ab8;
+    padding: 0.6rem 0.8rem; margin: 0 0 1rem 0;
+    color: #b8c4ce; font-size: 0.8rem; line-height: 1.4;
+    border-radius: 0 4px 4px 0;
+}
+.phv-tracks-hint code {
+    background: #1a1a1a; color: #fbbf24; padding: 0.1rem 0.3rem; border-radius: 3px;
+    font-size: 0.78rem;
+}
+.phv-tracks-hint a { color: #4a7ab8; }
+
+.phv-tracks-row-v2 {
+    background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 8px;
+    padding: 0.7rem 0.8rem; margin-bottom: 0.5rem;
+    display: flex; flex-direction: column; gap: 0.5rem;
+}
+.phv-tracks-row-header {
+    display: flex; justify-content: space-between; align-items: baseline; gap: 0.6rem;
+}
+/* Reuse existing .phv-tracks-row-name / .phv-tracks-row-meta styles */
+
+.phv-tracks-actions-grid {
+    display: grid; grid-template-columns: repeat(4, 1fr); gap: 0.4rem;
+}
+.phv-row-action {
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 0.2rem; padding: 0.5rem 0.3rem; min-height: 56px;
+    background: #0e0e0e; border: 1px solid #2a2a2a; border-radius: 6px;
+    color: #cfd8dc; text-decoration: none;
+    font-size: 0.7rem; text-align: center;
+    cursor: pointer; transition: background 0.1s, border-color 0.1s;
+}
+.phv-row-action:hover { background: #1f3146; border-color: #4a7ab8; }
+.phv-row-action.disabled {
+    opacity: 0.35; cursor: not-allowed; pointer-events: none;
+}
+.phv-action-icon { font-size: 1.2rem; line-height: 1; }
+.phv-action-label { color: #b8c4ce; }
+
+@media (max-width: 480px) {
+    .phv-tracks-actions-grid { grid-template-columns: repeat(2, 1fr); }
+    .phv-tracks-row-header { flex-direction: column; align-items: flex-start; gap: 0.1rem; }
+    .phv-tracks-row-meta { font-size: 0.7rem; }
+}
