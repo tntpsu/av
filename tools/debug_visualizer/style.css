@@ -1457,3 +1457,32 @@ body {
     font-size: 0.78rem; color: #b8c4ce;
 }
 .phv-context-recording-banner code { color: #4ade80; }
+
+/* ──────────────────────────────────────────────────────────────────────── */
+/* Critical fixes (2026-05-03) — three observed bugs:                       */
+/*   1. Cannot scroll on any new page (.container { height: 100vh } locks)  */
+/*   2. Recording dropdown won't open (drawers' layout boxes intercept     */
+/*      taps even when transform-translated off-screen)                    */
+/*   3. Default tab is 'all-data' → starts with a Perception section that  */
+/*      isn't a useful mobile default (changed in HTML, not CSS)           */
+/* ──────────────────────────────────────────────────────────────────────── */
+
+/* Drawers must NOT intercept taps when closed. The transform moves them   */
+/* visually but the layout box still receives pointer events.              */
+.phv-drawer { pointer-events: none; }
+.phv-drawer.open { pointer-events: auto; }
+.phv-context-drawer { pointer-events: none; }
+.phv-context-drawer.open { pointer-events: auto; }
+
+/* Mobile: let the page scroll naturally instead of being clamped to       */
+/* viewport height. The original .container layout was designed for the    */
+/* desktop split-pane scrolling model where each panel has its own         */
+/* overflow; the new mobile pages (dashboards/tracks/skills) are simple    */
+/* vertical scrolls and need the body to do the scrolling.                 */
+@media (max-width: 768px) {
+    .container {
+        height: auto !important;
+        min-height: 100vh;
+    }
+    body { overflow-y: auto !important; }
+}
