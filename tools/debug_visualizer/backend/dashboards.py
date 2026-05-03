@@ -74,6 +74,10 @@ def parse_sweep_status() -> dict:
             "delta": delta,
             "flag": flag,
         })
+    # Enrich each track with its layer scores parsed from sweep_report.txt
+    layer_scores = _parse_lateral_layer_scores()
+    for t in tracks:
+        t["layers"] = layer_scores.get(t["name"], {})
     regressions = sum(1 for t in tracks if t["delta"] is not None and t["delta"] < -2.0)
     flags = sum(1 for t in tracks if t["flag"])
     gate = "FAIL" if regressions > 0 else ("FLAG" if flags > 0 else "PASS")
@@ -96,6 +100,50 @@ def parse_sweep_status() -> dict:
         },
         "file": _file_stat(hb),
     }
+
+
+def _parse_lateral_layer_scores() -> dict:
+    """Extract per-track layer scores from sweep_report.txt.
+
+    Looks for the 'Layer scores summary' table:
+        Track            Safety  Trajectory  Control  Perception  LongComfort  SigInt
+        s_loop           100.0   96.5        100.0    100.0       100.0        100.0
+    Returns: {track_name: {layer: score, ...}, ...}
+    """
+    text = _read_text(REPORTS / "sweep_report.txt")
+    out: dict = {}
+    in_table = False
+    headers: list[str] = []
+    for raw in text.splitlines():
+        line = raw.rstrip()
+        if "Layer scores summary" in line:
+            in_table = True
+            continue
+        if not in_table:
+            continue
+        # Header row defines column names
+        if not headers and line.lstrip().startswith("Track"):
+            headers = line.split()
+            continue
+        # Blank line ends the table
+        if not line.strip():
+            if headers:
+                break
+            continue
+        # Data row
+        parts = line.split()
+        if len(parts) < 2:
+            continue
+        track = parts[0]
+        # Map remaining columns to header names (skip 'Track' header column)
+        layer_cols = headers[1:] if len(headers) > 1 else []
+        for i, col in enumerate(layer_cols, start=1):
+            if i < len(parts):
+                try:
+                    out.setdefault(track, {})[col] = float(parts[i])
+                except ValueError:
+                    pass
+    return out
 
 
 def parse_acc_sweep_status() -> dict:
@@ -127,6 +175,13 @@ def parse_acc_sweep_status() -> dict:
         reason_m = re.search(r'reason="([^"]+)"', rest)
         reason = reason_m.group(1) if reason_m else ""
         scenarios.append({"name": name, "verdict": verdict, "reason": reason})
+    # Enrich each scenario with its multi-line detail block from acc_sweep_report.txt
+    details = _parse_acc_scenario_details()
+    for s in scenarios:
+        # Match by short name (scenario_A1_done → "A1") or by full name
+        key_short = s["name"]
+        # The report lists by short codename like "A1" — try both forms
+        s["detail"] = details.get(key_short) or details.get(_short_acc_code(key_short)) or ""
     counts = {v: 0 for v in ("PASS", "FAIL", "WARN", "SKIPPED", "AMBIGUOUS", "UNKNOWN")}
     for s in scenarios:
         counts[s["verdict"]] = counts.get(s["verdict"], 0) + 1
@@ -142,6 +197,78 @@ def parse_acc_sweep_status() -> dict:
         },
         "file": _file_stat(hb),
     }
+
+
+def _short_acc_code(name: str) -> str:
+    """Extract short scenario code from longer names (e.g. 'autobahn_a1_steady' → 'A1')."""
+    m = re.search(r"(?:^|_)([aAhHgG])(\d+)(?:_|$)", name)
+    if m:
+        return f"{m.group(1).upper()}{m.group(2)}"
+    return name.upper()
+
+
+def _parse_acc_scenario_details() -> dict:
+    """Extract per-scenario multi-line detail blocks from acc_sweep_report.txt.
+
+    Looks for sections like:
+        Failures (1):
+          A1 (autobahn_a1_steady) — recording_20260502_163502.h5
+            <indented multi-line explanation>
+        Warnings (1):
+          A2 (autobahn_a2_hard_brake) — recording_...
+            <multi-line>
+        Skipped (12):
+          H2, H3, H4 — base: highway_65
+            ...
+
+    Returns: {short_code: detail_text, ...}
+    """
+    text = _read_text(REPORTS / "acc_sweep_report.txt")
+    out: dict = {}
+    current_codes: list[str] = []
+    current_lines: list[str] = []
+    in_section = False
+    section_re = re.compile(r"^(Failures|Warnings|Skipped|Ambiguous)\s*\(\d+\)\s*:")
+    # Header line for a scenario block. Two shapes:
+    #   "  A1 (autobahn_a1_steady) — recording_20260502_163502.h5"
+    #   "  H2, H3, H4 — base: highway_65"  (grouped skip)
+    block_re = re.compile(r"^\s{2}(?P<codes>[A-Z]\d+(?:,\s*[A-Z]\d+)*)\s*(\(|—)")
+
+    def _flush():
+        if current_codes and current_lines:
+            joined = "\n".join(current_lines).rstrip()
+            for code in current_codes:
+                out[code] = joined
+
+    for raw in text.splitlines():
+        line = raw.rstrip()
+        if section_re.match(line.strip()):
+            _flush()
+            current_codes = []
+            current_lines = []
+            in_section = True
+            continue
+        if not in_section:
+            continue
+        m = block_re.match(line)
+        if m:
+            _flush()
+            current_codes = [c.strip() for c in m.group("codes").split(",")]
+            current_lines = [line.lstrip()]
+            continue
+        # Continuation — indented body of the current block
+        if current_codes and (line.startswith("    ") or line.startswith("\t")):
+            current_lines.append(line.lstrip())
+            continue
+        if current_codes and line.strip() == "":
+            current_lines.append("")
+            continue
+        # Anything else ends the current block
+        _flush()
+        current_codes = []
+        current_lines = []
+    _flush()
+    return out
 
 
 def parse_fix_tests_status() -> dict:

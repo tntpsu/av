@@ -1486,3 +1486,61 @@ body {
     }
     body { overflow-y: auto !important; }
 }
+
+/* ──────────────────────────────────────────────────────────────────────── */
+/* Dashboard expandable rows (2026-05-03) — click track/scenario for detail */
+/* ──────────────────────────────────────────────────────────────────────── */
+.phv-track-row.expandable { grid-template-columns: 16px 1fr 50px 50px 60px 24px; cursor: pointer; }
+.phv-track-row.phv-track-header { grid-template-columns: 16px 1fr 50px 50px 60px 24px !important; }
+.phv-row-toggle {
+    background: transparent; border: none; color: #6b7280; cursor: pointer;
+    font-size: 0.85rem; padding: 0; min-height: 0; min-width: 0;
+}
+.phv-row-toggle-spacer { display: inline-block; width: 16px; }
+.phv-row-detail {
+    background: #0e0e0e; border-left: 3px solid #4a7ab8;
+    padding: 0.6rem 0.8rem; margin: 0.15rem 0 0.4rem;
+    border-radius: 0 4px 4px 0;
+}
+.phv-layer-grid {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    gap: 0.4rem;
+}
+.phv-layer-pill {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 0.4rem 0.6rem; border-radius: 4px;
+    background: #1a1a1a; border: 1px solid #2a2a2a;
+    font-size: 0.78rem;
+}
+.phv-layer-pill.ok   { border-color: rgba(34, 197, 94, 0.3); }
+.phv-layer-pill.warn { border-color: rgba(251, 191, 36, 0.3); background: rgba(251, 191, 36, 0.06); }
+.phv-layer-pill.fail { border-color: rgba(239, 68, 68, 0.4);  background: rgba(239, 68, 68, 0.08); }
+.phv-layer-name { color: #b8c4ce; }
+.phv-layer-val  { font-family: ui-monospace, monospace; font-weight: 700; }
+.phv-layer-pill.ok   .phv-layer-val { color: #4ade80; }
+.phv-layer-pill.warn .phv-layer-val { color: #fbbf24; }
+.phv-layer-pill.fail .phv-layer-val { color: #f87171; }
+
+.phv-scenario-row.expandable {
+    grid-template-columns: 12px 1fr 80px 1fr 16px;
+    cursor: pointer;
+}
+.phv-detail-pre {
+    margin: 0; padding: 0.6rem; background: #0a0a0a; border-radius: 4px;
+    font-family: ui-monospace, monospace; font-size: 0.72rem;
+    white-space: pre-wrap; line-height: 1.4; color: #cfd8dc;
+    max-height: 60vh; overflow-y: auto;
+}
+.phv-card-hint {
+    color: #6b7280; font-size: 0.7rem; padding: 0.4rem 0;
+    font-style: italic; text-align: center;
+}
+
+@media (max-width: 768px) {
+    .phv-track-row.expandable, .phv-track-row.phv-track-header { grid-template-columns: 16px 1fr 45px 50px 16px !important; }
+    .phv-track-row.expandable > .phv-track-baseline { display: none; }
+    .phv-track-row.phv-track-header > :nth-child(4) { display: none; }
+    .phv-scenario-row.expandable { grid-template-columns: 12px 1fr 70px 16px; }
+    .phv-scenario-row.expandable > .phv-scenario-reason { display: none; }
+    .phv-layer-grid { grid-template-columns: 1fr 1fr; }
+}

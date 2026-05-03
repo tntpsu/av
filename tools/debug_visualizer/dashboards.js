@@ -55,15 +55,28 @@
     function renderSweep(d) {
         const s = d.summary || {};
         $("phv-card-sweep-status").innerHTML = statusBadge(s.gate);
-        const tracksHTML = (d.tracks || []).map((t) => `
-            <div class="phv-track-row ${t.flag ? 'flagged' : ''}">
+        const tracksHTML = (d.tracks || []).map((t, i) => {
+            const layers = t.layers || {};
+            const layerEntries = Object.entries(layers);
+            const layersHTML = layerEntries.length
+                ? layerEntries.map(([k, v]) => {
+                    const cls = v >= 95 ? 'ok' : v >= 80 ? 'warn' : 'fail';
+                    return `<div class="phv-layer-pill ${cls}"><span class="phv-layer-name">${escapeHtml(k)}</span><span class="phv-layer-val">${v.toFixed(1)}</span></div>`;
+                }).join("")
+                : `<div class="phv-empty">no layer data</div>`;
+            return `
+            <div class="phv-track-row ${t.flag ? 'flagged' : ''} expandable" data-track-idx="${i}">
+                <button class="phv-row-toggle" aria-label="Show details">▸</button>
                 <a class="phv-track-name phv-mono" href="/skills?tracks=${encodeURIComponent(t.name)}" title="Run a skill on this track">${escapeHtml(t.name)}</a>
                 <span class="phv-track-score">${t.score?.toFixed(1) ?? "—"}</span>
                 <span class="phv-track-baseline">${t.baseline?.toFixed(1) ?? "—"}</span>
                 ${fmtDelta(t.delta)}
                 ${t.flag ? `<span class="phv-track-flag" title="FLAG=${escapeHtml(t.flag)}">⚑</span>` : `<span class="phv-track-flag-spacer"></span>`}
             </div>
-        `).join("");
+            <div class="phv-row-detail" id="phv-track-detail-${i}" style="display:none;">
+                <div class="phv-layer-grid">${layersHTML}</div>
+            </div>`;
+        }).join("");
         $("phv-card-sweep-body").innerHTML = `
             <div class="phv-stat-row">
                 <div class="phv-stat"><span class="phv-stat-label">Tracks</span><span class="phv-stat-val">${s.passed ?? 0}/6</span></div>
@@ -73,11 +86,25 @@
             </div>
             <div class="phv-track-table">
                 <div class="phv-track-row phv-track-header">
-                    <span>Track</span><span>Score</span><span>Base</span><span>Δ</span><span></span>
+                    <span></span><span>Track</span><span>Score</span><span>Base</span><span>Δ</span><span></span>
                 </div>
                 ${tracksHTML || `<div class="phv-empty">No tracks recorded</div>`}
             </div>
+            <div class="phv-card-hint">Tap any row to see its layer sub-scores (Safety, Trajectory, Control, Perception, LongComfort, SigInt).</div>
         `;
+        // Wire row-toggle clicks
+        document.querySelectorAll('#phv-card-sweep-body .phv-track-row.expandable').forEach((row) => {
+            row.addEventListener('click', (e) => {
+                if (e.target.tagName === 'A') return;  // let track-name link work
+                const i = row.getAttribute('data-track-idx');
+                const detail = document.getElementById(`phv-track-detail-${i}`);
+                if (!detail) return;
+                const open = detail.style.display !== 'none';
+                detail.style.display = open ? 'none' : 'block';
+                const toggle = row.querySelector('.phv-row-toggle');
+                if (toggle) toggle.textContent = open ? '▸' : '▾';
+            });
+        });
     }
 
     function renderAccSweep(d) {
@@ -86,14 +113,18 @@
         const verdictColor = (v) =>
             v === "PASS" ? "ok" : v === "FAIL" ? "fail" : v === "WARN" ? "warn" :
             v === "SKIPPED" ? "skip" : v === "AMBIGUOUS" ? "warn" : "neutral";
-        const scenariosHTML = (d.scenarios || []).map((sc) => `
-            <div class="phv-scenario-row">
+        const scenariosHTML = (d.scenarios || []).map((sc, i) => {
+            const hasDetail = sc.detail && sc.detail.length > 0;
+            return `
+            <div class="phv-scenario-row ${hasDetail ? 'expandable' : ''}" data-acc-idx="${i}">
                 <span class="phv-status-dot ${verdictColor(sc.verdict)}" title="${sc.verdict}"></span>
                 <a class="phv-scenario-name phv-mono" href="/skills?tracks=${encodeURIComponent(sc.name)}" title="Run a skill on this scenario">${escapeHtml(sc.name)}</a>
                 <span class="phv-scenario-verdict ${verdictColor(sc.verdict)}">${sc.verdict}</span>
                 <span class="phv-scenario-reason">${escapeHtml(sc.reason)}</span>
+                ${hasDetail ? `<button class="phv-row-toggle" aria-label="Show details">▸</button>` : `<span class="phv-row-toggle-spacer"></span>`}
             </div>
-        `).join("");
+            ${hasDetail ? `<div class="phv-row-detail" id="phv-acc-detail-${i}" style="display:none;"><pre class="phv-detail-pre">${escapeHtml(sc.detail)}</pre></div>` : ''}`;
+        }).join("");
         $("phv-card-acc-sweep-body").innerHTML = `
             <div class="phv-stat-row">
                 <div class="phv-stat"><span class="phv-stat-label">Total</span><span class="phv-stat-val">${s.total ?? 0}</span></div>
@@ -102,7 +133,20 @@
                 <div class="phv-stat"><span class="phv-stat-label">Skipped</span><span class="phv-stat-val">${s.SKIPPED ?? 0}</span></div>
             </div>
             ${scenariosHTML ? `<div class="phv-scenario-table">${scenariosHTML}</div>` : `<div class="phv-empty">No ACC sweep data yet — first run lands at 4 AM tonight</div>`}
+            <div class="phv-card-hint">Tap a row with ▸ to see the full reason from acc_sweep_report.txt.</div>
         `;
+        document.querySelectorAll('#phv-card-acc-sweep-body .phv-scenario-row.expandable').forEach((row) => {
+            row.addEventListener('click', (e) => {
+                if (e.target.tagName === 'A') return;
+                const i = row.getAttribute('data-acc-idx');
+                const detail = document.getElementById(`phv-acc-detail-${i}`);
+                if (!detail) return;
+                const open = detail.style.display !== 'none';
+                detail.style.display = open ? 'none' : 'block';
+                const toggle = row.querySelector('.phv-row-toggle');
+                if (toggle) toggle.textContent = open ? '▸' : '▾';
+            });
+        });
     }
 
     function escapeHtml(s) {
