@@ -118,9 +118,11 @@ public class AVBridge : MonoBehaviour
     public LeadVehicle leadVehicle;
     [Tooltip("SphereCast sphere radius (m). Controls detection cone width at distance.")]
     public float radarSphereRadius = 0.8f;
-    [Tooltip("Maximum radar detection range (m). Raised to 150m to match acc_highway.yaml detection_range_m; " +
-             "lead vehicle at 12 m/s escapes 60m range before ego reaches ACC cutout speed (5 m/s) at startup.")]
-    public float radarMaxRangeM = 150.0f;
+    [Tooltip("Maximum radar detection range (m). Long-range FRW radar typical " +
+             "(Bosch LRR4 / Continental ARS548 are 200-250m). Was 150m, which forced " +
+             "ACC false-rejections at autobahn distances — A1 sweep 2026-05-03 showed leads at " +
+             "35-614m arc-distance but rejected as 'wrong_lane' (actually 'out_of_range') beyond 150m.")]
+    public float radarMaxRangeM = 250.0f;
     [Tooltip("Maximum off-axis angle for detection (degrees). SphereCast result clamped.")]
     public float radarHalfAngleDeg = 5.0f;
     [Tooltip("Maximum off-axis angle for same-lane associated lead capture (degrees). Only used with same-lane/same-direction gating.")]
@@ -3078,8 +3080,40 @@ private float? lastCarT = null;
         state.radar_fwd_association_eligible = sameLaneEligible ? 1.0f : 0.0f;
         if (state.radar_fwd_target_same_lane_confidence >= 0.0f && !sameLaneEligible)
         {
+            // Diagnose WHICH gate inside IsSameLaneLeadEligible fired so the
+            // reject_reason label is honest. Previously this code defaulted
+            // every non-opposite-direction rejection to "wrong_lane" even
+            // when the actual cause was the range gate (Test 4 in
+            // IsSameLaneLeadEligible) — leading to false-positive lane-
+            // association warnings in the 2026-05-03 A1 ACC sweep (1112/1113
+            // wrong_lane rejections were actually arc_distance > radarMaxRangeM,
+            // not lateral-lane misassignments).
             float absHeadingDelta = Mathf.Abs(state.radar_fwd_target_heading_delta_deg);
-            state.radar_fwd_reject_reason = absHeadingDelta >= 135.0f ? "opposite_direction" : "wrong_lane";
+            float sameLaneConf = state.radar_fwd_target_same_lane_confidence;
+            if (absHeadingDelta >= 135.0f)
+            {
+                state.radar_fwd_reject_reason = "opposite_direction";
+            }
+            else if (trueDist > radarMaxRangeM)
+            {
+                state.radar_fwd_reject_reason = "out_of_range";
+            }
+            else if (sameLaneConf < EffectiveRadarAssociationSameLaneConfidenceMin())
+            {
+                state.radar_fwd_reject_reason = "wrong_lane";
+            }
+            else if (absHeadingDelta > EffectiveRadarAssociationHeadingDeltaMaxDeg())
+            {
+                state.radar_fwd_reject_reason = "heading_delta_too_large";
+            }
+            else if (state.radar_fwd_target_arc_distance_m <= EffectiveRadarAssociationMinArcAheadM())
+            {
+                state.radar_fwd_reject_reason = "behind_or_at_ego";
+            }
+            else
+            {
+                state.radar_fwd_reject_reason = "wrong_lane";  // last-resort
+            }
             DropForwardLeadTrack(state, state.radar_fwd_reject_reason);
             return;
         }
