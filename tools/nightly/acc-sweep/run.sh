@@ -35,7 +35,18 @@ compose_subject() {
     warned=$(grep -cE '^scenario_.*_done verdict=WARN' "$hb" 2>/dev/null || true)
     skipped=$(grep -cE '^scenario_.*_done verdict=SKIPPED' "$hb" 2>/dev/null || true)
     ambiguous=$(grep -cE '^scenario_.*_done verdict=AMBIGUOUS' "$hb" 2>/dev/null || true)
-    if [ "$failed" -eq 0 ]; then gate=PASS; else gate=FAIL; fi
+    # Gate verdict: prefer the canonical "GATE: ..." line from acc_sweep_report.txt
+    # so the wrapper subject matches the agent's actual conclusion. Same
+    # pattern as sweep/run.sh — avoids the wrapper-side recomputation drift
+    # that bit us on the lateral sweep on 2026-05-03.
+    local report="$REPO/data/reports/acc_sweep_report.txt"
+    gate=""
+    if [ -r "$report" ]; then
+      gate=$(grep -E '^GATE:' "$report" | head -1 | awk '{print $2}')
+    fi
+    if [ -z "$gate" ]; then
+      if [ "$failed" -eq 0 ]; then gate=PASS; else gate=FAIL; fi
+    fi
     echo "av acc-sweep $DATE: ACC_SWEEP gate=$gate pass=$passed fail=$failed warn=$warned skip=$skipped amb=$ambiguous total=$total"
     return
   fi

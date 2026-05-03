@@ -162,17 +162,43 @@
         );
     }
 
+    function showErrorBanner(message, detail) {
+        let banner = document.getElementById("phv-dash-error-banner");
+        if (!banner) {
+            banner = document.createElement("div");
+            banner.id = "phv-dash-error-banner";
+            banner.className = "phv-error-banner";
+            document.querySelector(".phv-dashboard-grid")?.prepend(banner);
+        }
+        banner.innerHTML = `
+            <div class="phv-error-banner-text">⚠ ${escapeHtml(message)}</div>
+            <div class="phv-error-banner-detail" title="${escapeHtml(detail || "")}">${escapeHtml((detail || "").slice(0, 200))}</div>
+            <button class="phv-error-banner-retry" id="phv-dash-retry">↻ Retry</button>
+        `;
+        document.getElementById("phv-dash-retry")?.addEventListener("click", refresh);
+    }
+    function hideErrorBanner() {
+        document.getElementById("phv-dash-error-banner")?.remove();
+    }
+
     async function refresh() {
         try {
             const r = await fetch("/api/dashboards/all");
+            if (!r.ok) {
+                throw new Error(`HTTP ${r.status} ${r.statusText}`);
+            }
             const d = await r.json();
             renderFixTests(d.fix_tests || {});
             renderSweep(d.sweep || {});
             renderAccSweep(d.acc_sweep || {});
+            hideErrorBanner();
         } catch (e) {
+            showErrorBanner(`Failed to load dashboard data`, e.message + (e.stack ? `\n\n${e.stack.slice(0, 500)}` : ""));
             ["fix-tests", "sweep", "acc-sweep"].forEach((k) => {
                 const body = $(`phv-card-${k}-body`);
-                if (body) body.innerHTML = `<div class="phv-empty">Error loading: ${escapeHtml(e.message)}</div>`;
+                if (body && body.querySelector(".phv-loading")) {
+                    body.innerHTML = `<div class="phv-empty">Couldn't load — see banner above. Last successful render preserved if any.</div>`;
+                }
             });
         }
     }

@@ -42,6 +42,15 @@ DEFAULT_TIMEOUT_S = 5400  # 90 min
 # Per-skill budget cap.
 DEFAULT_BUDGET_USD = 5.00
 
+# File-based persistence so the Skills page survives server restarts.
+# We store each job's metadata as JSON in ~/.philviz_jobs/<job_id>.json so
+# that restarting the Flask server doesn't lose recent-runs history.
+# Only metadata is persisted — output buffers stay in-memory (a restored
+# job from disk is read-only history; we don't try to reattach to its
+# subprocess).
+JOBS_DIR = Path.home() / ".philviz_jobs"
+JOBS_RETENTION_DAYS = 7
+
 
 @dataclass
 class SkillJob:
@@ -60,6 +69,84 @@ class SkillJob:
 # Module-level job registry (in-process).
 _jobs: dict[str, SkillJob] = {}
 _jobs_lock = threading.Lock()
+
+
+def _save_job_metadata(job: SkillJob) -> None:
+    """Persist job metadata to ~/.philviz_jobs/<id>.json. Called on state
+    changes so a server restart doesn't lose the last-N-runs sidebar."""
+    try:
+        JOBS_DIR.mkdir(exist_ok=True)
+        path = JOBS_DIR / f"{job.job_id}.json"
+        with job.lock:
+            payload = {
+                "job_id": job.job_id,
+                "skill": job.skill,
+                "args": job.args,
+                "started_at": job.started_at,
+                "status": job.status,
+                "exit_code": job.exit_code,
+                "completed_at": job.completed_at,
+                "lines": len(job.buffer),
+                "pid": job.proc.pid if job.proc else None,
+            }
+        import json as _json
+        path.write_text(_json.dumps(payload, indent=2))
+    except OSError:
+        pass  # Persistence is best-effort; never break the live flow
+
+
+def _is_pid_alive(pid: Optional[int]) -> bool:
+    """Cheap PID liveness check — sends signal 0 (no-op probe)."""
+    if pid is None or pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+        return True
+    except (OSError, ProcessLookupError):
+        return False
+
+
+def _restore_jobs_from_disk() -> None:
+    """On module import, hydrate the in-memory _jobs dict from disk so the
+    UI's recent-runs sidebar survives a server restart. Restored jobs are
+    metadata-only (no buffer); the UI shows them with their last-known
+    status. Jobs whose subprocess PID is no longer alive get marked
+    'orphaned' even if their last-saved status was 'running'."""
+    if not JOBS_DIR.is_dir():
+        return
+    import json as _json
+    cutoff = time.time() - JOBS_RETENTION_DAYS * 86400
+    for path in JOBS_DIR.glob("*.json"):
+        try:
+            data = _json.loads(path.read_text())
+            started = float(data.get("started_at", 0))
+            if started < cutoff:
+                path.unlink(missing_ok=True)  # Auto-prune
+                continue
+            job_id = data["job_id"]
+            job = SkillJob(
+                job_id=job_id,
+                skill=data.get("skill", ""),
+                args=data.get("args", ""),
+                started_at=started,
+            )
+            job.status = data.get("status", "unknown")
+            job.exit_code = data.get("exit_code")
+            job.completed_at = data.get("completed_at")
+            saved_pid = data.get("pid")
+            if job.status == "running" and not _is_pid_alive(saved_pid):
+                job.status = "orphaned"
+                job.buffer.append(
+                    f"[skill-runner] this job was running when the server "
+                    f"restarted; subprocess pid={saved_pid} is no longer alive."
+                )
+            with _jobs_lock:
+                _jobs[job_id] = job
+        except (OSError, ValueError, KeyError):
+            continue
+
+
+_restore_jobs_from_disk()
 
 
 def list_skills() -> list[dict]:
@@ -127,6 +214,7 @@ def _reader_thread(job: SkillJob) -> None:
             job.exit_code = job.proc.returncode if job.proc else -1
             job.completed_at = time.time()
             job.buffer.append(f"[skill-runner] exit={job.exit_code} status={job.status}")
+        _save_job_metadata(job)
 
 
 def start_job(skill: str, args: str = "",
@@ -180,6 +268,7 @@ def start_job(skill: str, args: str = "",
     with _jobs_lock:
         _jobs[job_id] = job
 
+    _save_job_metadata(job)
     threading.Thread(target=_reader_thread, args=(job,), daemon=True).start()
     return job_id
 
@@ -224,6 +313,7 @@ def cancel_job(job_id: str) -> bool:
     with job.lock:
         job.status = "cancelled"
         job.buffer.append("[skill-runner] cancel requested via SIGTERM")
+    _save_job_metadata(job)
     return True
 
 
