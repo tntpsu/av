@@ -167,6 +167,12 @@ These scripts replay recordings offline and do not require Unity runtime interac
 
 The `tools/debug_visualizer/` tree powers the in-browser playback + diagnostics dashboard. Backend modules expose health and triage data to the visualizer; the server is the entry point.
 
+### `tools/debug_visualizer/backend/dashboards.py`
+
+- **Purpose:** Backend parsers for the PhilViz Dashboards page (added 2026-05-02). Reads the same heartbeat/report files the nightly job wrappers consume to compose email subjects (`data/reports/{nightly,sweep,acc_sweep}_status.txt` and `data/reports/{nightly_test,sweep,acc_sweep}_report.txt`) and returns structured JSON for the `/dashboards` mobile-friendly view.
+- **Use when:** Imported by `tools/debug_visualizer/server.py`. Read-only; never writes to data/reports.
+- **Endpoints:** `GET /api/dashboards/all`, `/api/dashboards/sweep`, `/api/dashboards/acc-sweep`, `/api/dashboards/fix-tests`, `/api/tracks/with-metadata`.
+
 ### `tools/debug_visualizer/backend/skills_runner.py`
 
 - **Purpose:** Backend module for the PhilViz Skills page (added 2026-05-02). Discovers slash commands from `.claude/commands/*.md`, spawns `claude -p` subprocesses, buffers their output line-by-line keyed by `job_id`, and supports cancel via SIGTERM. Subprocesses are detached from the HTTP connection so mobile users can disconnect/reconnect without killing in-flight skills.

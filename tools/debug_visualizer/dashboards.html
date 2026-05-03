@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PhilViz · Dashboards</title>
+    <link rel="stylesheet" href="style.css?v=20260502_tier1">
+</head>
+<body>
+    <div class="container">
+        <header class="header phv-header">
+            <div class="phv-brand">
+                <button class="phv-hamburger" id="phv-hamburger" aria-label="Menu">☰</button>
+                <h1>PhilViz <span class="phv-page-tag">Dashboards</span></h1>
+            </div>
+            <nav class="phv-topnav">
+                <a href="/" class="phv-nav-link">Analysis</a>
+                <a href="/dashboards" class="phv-nav-link active">Dashboards</a>
+                <a href="/tracks" class="phv-nav-link">Tracks</a>
+                <a href="/skills" class="phv-nav-link">Skills</a>
+            </nav>
+        </header>
+
+        <main class="phv-dashboard-grid">
+            <section class="phv-card" id="phv-card-fix-tests">
+                <div class="phv-card-header">
+                    <h2>Fix-Tests <span class="phv-card-tag">2 AM nightly</span></h2>
+                    <span class="phv-card-status" id="phv-card-fix-tests-status">…</span>
+                </div>
+                <div class="phv-card-body" id="phv-card-fix-tests-body">
+                    <div class="phv-loading">Loading…</div>
+                </div>
+            </section>
+
+            <section class="phv-card" id="phv-card-sweep">
+                <div class="phv-card-header">
+                    <h2>Lateral Sweep <span class="phv-card-tag">3 AM nightly</span></h2>
+                    <span class="phv-card-status" id="phv-card-sweep-status">…</span>
+                </div>
+                <div class="phv-card-body" id="phv-card-sweep-body">
+                    <div class="phv-loading">Loading…</div>
+                </div>
+            </section>
+
+            <section class="phv-card" id="phv-card-acc-sweep">
+                <div class="phv-card-header">
+                    <h2>ACC Sweep <span class="phv-card-tag">4 AM nightly</span></h2>
+                    <span class="phv-card-status" id="phv-card-acc-sweep-status">…</span>
+                </div>
+                <div class="phv-card-body" id="phv-card-acc-sweep-body">
+                    <div class="phv-loading">Loading…</div>
+                </div>
+            </section>
+        </main>
+
+        <nav class="phv-bottom-tabs" aria-label="Primary navigation">
+            <a href="/" class="phv-tab"><span class="phv-tab-icon">🎬</span><span class="phv-tab-label">Analysis</span></a>
+            <a href="/dashboards" class="phv-tab active"><span class="phv-tab-icon">📊</span><span class="phv-tab-label">Results</span></a>
+            <a href="/tracks" class="phv-tab"><span class="phv-tab-icon">🛣</span><span class="phv-tab-label">Tracks</span></a>
+            <a href="/skills" class="phv-tab"><span class="phv-tab-icon">⚡</span><span class="phv-tab-label">Skills</span></a>
+        </nav>
+    </div>
+
+    <div class="phv-drawer-backdrop" id="phv-drawer-backdrop"></div>
+    <aside class="phv-drawer" id="phv-drawer" aria-hidden="true">
+        <div class="phv-drawer-header">
+            <h2 class="phv-section-title" style="margin:0;">My sites</h2>
+            <button class="phv-drawer-close" id="phv-drawer-close" aria-label="Close">✕</button>
+        </div>
+        <div class="phv-sites-list" id="phv-sites-list"><div class="phv-empty">Loading…</div></div>
+        <p class="phv-drawer-footer">Edit <code>~/.philviz_sites.json</code> to customize.</p>
+    </aside>
+
+    <script src="nav.js?v=nav_v1"></script>
+    <script src="dashboards.js?v=dash_v1"></script>
+</body>
+</html>

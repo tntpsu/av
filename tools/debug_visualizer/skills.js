@@ -303,10 +303,40 @@
         }
     }
 
-    refreshSkills();
+    // URL-param wiring runs ONCE, AFTER all loads complete (skills + tracks +
+    // configs all need to be in the DOM before we can pre-select / pre-fill).
+    async function applyUrlParamsOnce() {
+        await Promise.all([refreshSkills(), loadTracks(), loadConfigs()]);
+        const params = new URLSearchParams(window.location.search);
+        const wantSkill = params.get("skill");
+        const wantTracks = params.get("tracks");
+        const wantArgs = params.get("args");
+        if (wantSkill) {
+            // Re-fetch skill list to find the requested one (skills are now in
+            // DOM but the local variable is scoped to refreshSkills).
+            try {
+                const r = await fetch("/api/skills/list");
+                const skills = await r.json();
+                const s = skills.find((x) => x.name === wantSkill);
+                if (s) selectSkill(s);
+            } catch (e) { /* silent */ }
+        }
+        if (wantTracks) {
+            wantTracks.split(/\s+/).filter(Boolean).forEach((t) => {
+                const cb = document.querySelector(
+                    `.phv-track-cb input[type="checkbox"][value="${CSS.escape(t)}"]`
+                );
+                if (cb) cb.checked = true;
+            });
+            rebuildArgs();
+        }
+        if (wantArgs) {
+            els.argsInput.value = wantArgs;
+        }
+    }
+
     refreshJobs();
-    loadTracks();
-    loadConfigs();
+    applyUrlParamsOnce();
     setInterval(refreshJobs, 5000);
     // Drawer init lives in nav.js (also loaded by index.html so the hamburger
     // works on the Analysis page too).

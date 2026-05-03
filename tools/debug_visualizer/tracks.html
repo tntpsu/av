@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PhilViz · Tracks</title>
+    <link rel="stylesheet" href="style.css?v=20260502_tier1">
+</head>
+<body>
+    <div class="container">
+        <header class="header phv-header">
+            <div class="phv-brand">
+                <button class="phv-hamburger" id="phv-hamburger" aria-label="Menu">☰</button>
+                <h1>PhilViz <span class="phv-page-tag">Tracks</span></h1>
+            </div>
+            <nav class="phv-topnav">
+                <a href="/" class="phv-nav-link">Analysis</a>
+                <a href="/dashboards" class="phv-nav-link">Dashboards</a>
+                <a href="/tracks" class="phv-nav-link active">Tracks</a>
+                <a href="/skills" class="phv-nav-link">Skills</a>
+            </nav>
+        </header>
+
+        <main class="phv-tracks-page">
+            <div class="phv-tracks-actions">
+                <span class="phv-tracks-count" id="phv-tracks-selected-count">0 selected</span>
+                <button class="phv-btn phv-btn-primary" id="phv-tracks-run-btn" disabled>
+                    ⚡ Run skill on selection →
+                </button>
+            </div>
+
+            <section>
+                <h2 class="phv-section-title">Base tracks (lateral)</h2>
+                <div class="phv-tracks-list" id="phv-base-tracks"><div class="phv-loading">Loading…</div></div>
+            </section>
+
+            <section style="margin-top:1rem;">
+                <h2 class="phv-section-title">ACC scenarios</h2>
+                <div class="phv-tracks-list" id="phv-scenarios"><div class="phv-loading">Loading…</div></div>
+            </section>
+        </main>
+
+        <nav class="phv-bottom-tabs" aria-label="Primary navigation">
+            <a href="/" class="phv-tab"><span class="phv-tab-icon">🎬</span><span class="phv-tab-label">Analysis</span></a>
+            <a href="/dashboards" class="phv-tab"><span class="phv-tab-icon">📊</span><span class="phv-tab-label">Results</span></a>
+            <a href="/tracks" class="phv-tab active"><span class="phv-tab-icon">🛣</span><span class="phv-tab-label">Tracks</span></a>
+            <a href="/skills" class="phv-tab"><span class="phv-tab-icon">⚡</span><span class="phv-tab-label">Skills</span></a>
+        </nav>
+    </div>
+
+    <div class="phv-drawer-backdrop" id="phv-drawer-backdrop"></div>
+    <aside class="phv-drawer" id="phv-drawer" aria-hidden="true">
+        <div class="phv-drawer-header">
+            <h2 class="phv-section-title" style="margin:0;">My sites</h2>
+            <button class="phv-drawer-close" id="phv-drawer-close" aria-label="Close">✕</button>
+        </div>
+        <div class="phv-sites-list" id="phv-sites-list"><div class="phv-empty">Loading…</div></div>
+        <p class="phv-drawer-footer">Edit <code>~/.philviz_sites.json</code> to customize.</p>
+    </aside>
+
+    <script src="nav.js?v=nav_v1"></script>
+    <script src="tracks.js?v=tracks_v1"></script>
+</body>
+</html>

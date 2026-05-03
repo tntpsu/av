@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>PhilViz</title>
-    <link rel="stylesheet" href="style.css?v=20260502_v3">
+    <link rel="stylesheet" href="style.css?v=20260502_tier1">
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 </head>
 <body>
@@ -29,6 +29,8 @@
             </div>
             <nav class="phv-topnav">
                 <a href="/" class="phv-nav-link active">Analysis</a>
+                <a href="/dashboards" class="phv-nav-link">Dashboards</a>
+                <a href="/tracks" class="phv-nav-link">Tracks</a>
                 <a href="/skills" class="phv-nav-link">Skills</a>
             </nav>
         </header>
@@ -1028,15 +1030,24 @@
 
         <!-- Mobile bottom tab bar -->
         <nav class="phv-bottom-tabs" aria-label="Primary navigation">
-            <a href="/" class="phv-tab active">
-                <span class="phv-tab-icon">🎬</span>
-                <span class="phv-tab-label">Analysis</span>
-            </a>
-            <a href="/skills" class="phv-tab">
-                <span class="phv-tab-icon">⚡</span>
-                <span class="phv-tab-label">Skills</span>
-            </a>
+            <a href="/" class="phv-tab active"><span class="phv-tab-icon">🎬</span><span class="phv-tab-label">Analysis</span></a>
+            <a href="/dashboards" class="phv-tab"><span class="phv-tab-icon">📊</span><span class="phv-tab-label">Results</span></a>
+            <a href="/tracks" class="phv-tab"><span class="phv-tab-icon">🛣</span><span class="phv-tab-label">Tracks</span></a>
+            <a href="/skills" class="phv-tab"><span class="phv-tab-icon">⚡</span><span class="phv-tab-label">Skills</span></a>
         </nav>
+
+        <!-- Pattern 3: context FAB to launch a skill on the current recording -->
+        <button class="phv-context-fab" id="phv-context-fab" aria-label="Run skill on current recording" title="Run skill on this recording">⚡</button>
+        <div class="phv-context-drawer" id="phv-context-drawer">
+            <div class="phv-context-drawer-header">
+                <h3>Run a skill on this recording</h3>
+                <button class="phv-drawer-close" id="phv-context-close" aria-label="Close">✕</button>
+            </div>
+            <div class="phv-context-recording-banner" id="phv-context-banner">
+                No recording loaded — skills will run with no specific target.
+            </div>
+            <div id="phv-context-skill-rows"></div>
+        </div>
 
     <!-- Hamburger drawer (cross-site nav) — shared with /skills page -->
     <div class="phv-drawer-backdrop" id="phv-drawer-backdrop"></div>
@@ -1054,6 +1065,7 @@
     </aside>
 
     <script src="nav.js?v=nav_v1"></script>
+    <script src="context_fab.js?v=fab_v1"></script>
     <script src="data_loader.js?v=20260218_track_curve_windows_v44"></script>
     <script src="overlay_renderer.js?v=20260213_issues_filters"></script>
     <script src="visualizer.js?v=20260222_grade_lateral_flat_focus"></script>

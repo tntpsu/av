@@ -34,6 +34,7 @@ from diagnostics import analyze_trajectory_vs_steering, analyze_signal_chain, an
 from issue_detector import detect_issues
 from analyze_trajectory_layer_localization import analyze_trajectory_layer_localization
 import skills_runner
+import dashboards
 
 app = Flask(__name__)
 CORS(app)  # Enable CORS for local development
@@ -4447,6 +4448,53 @@ def api_configs_list():
     # Mark the default first
     default = "av_stack_config"
     return jsonify({"configs": configs, "default": default})
+
+
+@app.route('/dashboards')
+def dashboards_page():
+    """Mobile-friendly nightly results dashboard."""
+    response = send_from_directory(Path(__file__).parent, 'dashboards.html')
+    response.headers["Cache-Control"] = "no-store, max-age=0"
+    return response
+
+
+@app.route('/tracks')
+def tracks_page():
+    """Standalone track / scenario browser + multi-select picker."""
+    response = send_from_directory(Path(__file__).parent, 'tracks.html')
+    response.headers["Cache-Control"] = "no-store, max-age=0"
+    return response
+
+
+@app.route('/api/dashboards/all')
+def api_dashboards_all():
+    """Combined sweep + acc-sweep + fix-tests for the dashboard page."""
+    return jsonify({
+        "sweep": dashboards.parse_sweep_status(),
+        "acc_sweep": dashboards.parse_acc_sweep_status(),
+        "fix_tests": dashboards.parse_fix_tests_status(),
+    })
+
+
+@app.route('/api/dashboards/sweep')
+def api_dashboards_sweep():
+    return jsonify(dashboards.parse_sweep_status())
+
+
+@app.route('/api/dashboards/acc-sweep')
+def api_dashboards_acc_sweep():
+    return jsonify(dashboards.parse_acc_sweep_status())
+
+
+@app.route('/api/dashboards/fix-tests')
+def api_dashboards_fix_tests():
+    return jsonify(dashboards.parse_fix_tests_status())
+
+
+@app.route('/api/tracks/with-metadata')
+def api_tracks_with_metadata():
+    """Tracks list + latest recording per track (best-effort filename match)."""
+    return jsonify(dashboards.list_tracks_with_metadata())
 
 
 @app.route('/api/sites/list')
