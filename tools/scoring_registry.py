@@ -119,6 +119,43 @@ ACC_DETECTION_RATE_GATE: float = 0.95       # —  — min detection rate when l
 ACC_EMERGENCY_BRAKE_GAP_FACTOR: float = 1.5  # —  — gap < factor×speed → emergency brake
 ACC_MIN_ACTIVE_FRAME_RATE: float = 0.10     # —  — min fraction for ACC section to activate
 
+# ── ACC composite score (Proposal A, 2026-05-05) ─────────────────────────────
+# Continuous 0-100 score that lives BESIDE the gate-based PASS/FAIL verdicts.
+# Three sub-layers, weighted to a composite. Lets the sweep show trend signal
+# (am I getting better/worse) alongside the existing pass-bar signal (am I safe).
+ACC_SCORE_WEIGHT_SAFETY: float   = 0.50  # — composite weight for Safety sub-layer
+ACC_SCORE_WEIGHT_TRACKING: float = 0.30  # — composite weight for Tracking sub-layer
+ACC_SCORE_WEIGHT_BEHAVIOR: float = 0.20  # — composite weight for Behavior sub-layer
+
+# Safety sub-layer: hard safety bar. Penalizes near-misses / e-stops / TTC violations.
+ACC_SCORE_ESTOP_PENALTY: float       = 25.0  # pts per e-stop frame (capped at floor)
+ACC_SCORE_NEAR_MISS_PENALTY: float   = 15.0  # pts per near-miss event (gap<2m sustained ≥3 frames)
+ACC_SCORE_TTC_WARN_PENALTY: float    = 10.0  # pts when TTC_min in [1.5, 2.0)
+ACC_SCORE_TTC_CRIT_PENALTY: float    = 20.0  # pts when TTC_min < 1.5
+ACC_SCORE_COLLISION_FORCES_ZERO: bool = True  # 1+ collision frame → composite = 0
+
+# Tracking sub-layer: gap RMSE, hunting, gap-collapse events.
+ACC_SCORE_GAP_RMSE_FREE_M: float       = 5.0   # m   — gap RMSE below this is "free" (no deduction)
+ACC_SCORE_GAP_RMSE_PENALTY_PER_M: float = 1.0  # pts per m above the free band
+ACC_SCORE_GAP_RMSE_PENALTY_CAP: float  = 50.0  # pts max deducted from Tracking
+ACC_SCORE_HUNTING_FREE_PER_MIN: float  = 20.0  # gap-error sign-flips/min below this is "free"
+ACC_SCORE_HUNTING_PENALTY_PER_UNIT: float = 1.0   # pts per excess sign-flip/min
+ACC_SCORE_HUNTING_PENALTY_CAP: float   = 30.0    # pts max deducted from Tracking
+
+# Behavior sub-layer: longitudinal smoothness — the user-requested "are we
+# oscillating" signal. Catches "passed all gates but ride is awful" cases.
+ACC_SCORE_JERK_FREE_MPS3: float        = 4.0    # m/s³ — jerk P95 below this is free
+ACC_SCORE_JERK_PENALTY_PER_MPS3: float = 10.0   # pts per m/s³ above free band
+ACC_SCORE_JERK_PENALTY_CAP: float      = 50.0   # pts max from Behavior
+ACC_SCORE_OSC_FREE_PER_MIN: float      = 30.0   # accel_cmd sign-flips/min below this is free
+ACC_SCORE_OSC_PENALTY_PER_UNIT: float  = 1.0    # pts per excess sign-flip/min (catches hunting/oscillation)
+ACC_SCORE_OSC_PENALTY_CAP: float       = 30.0   # pts max from Behavior
+ACC_SCORE_BANGBANG_PENALTY: float      = 5.0    # pts per bang-bang event (brake+throttle within 1s)
+ACC_SCORE_BANGBANG_PENALTY_CAP: float  = 20.0   # pts max from Behavior
+
+# Activity floor — below this the run has too few ACC frames to score meaningfully.
+ACC_SCORE_MIN_ACTIVE_FRAMES: int       = 30     # frames; if fewer ACC-active, score is None
+
 # ── ACC emergency-state comfort exemptions (acc-idm-accel-plumbing.md) ───────
 # When ACC state ∈ EMERGENCY_ACC_STATES, the controller is authorized to apply
 # up to IDM's floor (-12 m/s²) to prevent collision. Nominal comfort gates

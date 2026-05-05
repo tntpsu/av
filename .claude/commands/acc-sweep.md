@@ -93,31 +93,36 @@ For each scenario, classify:
 
 ## Step 6 — Output
 
+For each scenario with a recording, run `python3 tools/analyze/acc_pipeline_analysis.py
+--file <recording.h5>` and read **Card 5** for the composite ACC score
+(0–100). Include it as a `Score` column alongside the existing `Verdict`.
+The score is a continuous trend signal (Safety/Tracking/Behavior sub-layers,
+weighted 50/30/20); the verdict is the binary pass-bar. **Both must appear** —
+neither replaces the other. Score=`n/a` when ACC was inactive or fewer than
+30 ACC-active frames.
+
 ```
 ACC SCENARIO SWEEP
-═══════════════════════════════════════════════════════════════
-Scenario              Base                Recording age  Verdict
-A1 (autobahn_a1)      autobahn            <age>          PASS/FAIL/WARN/SKIP
-A2 (autobahn_a2)      autobahn            <age>          ...
-H2 (highway_h2)       highway_65          <age>          ...
-H3 (highway_h3)       highway_65          <age>          ...
-H4 (highway_h4)       highway_65          <age>          ...
-H5 (highway_h5)       highway_65          <age>          ...
-H6 (highway_h6)       highway_65          <age>          ...
-H7 (highway_h7)       highway_65          <age>          ...
-H8 (highway_h8)       highway_65          <age>          ...
-H9 (highway_h9)       highway_65          <age>          ...
-H10 (highway_h10)     highway_65          <age>          ...
-H11 (highway_h11)     highway_65          <age>          ...
-G1 (hill_g1)          hill_highway        <age>          ...
-G2 (hill_g2)          hill_highway        <age>          ...
-═══════════════════════════════════════════════════════════════
+══════════════════════════════════════════════════════════════════════════
+Scenario              Base                Rec age  Verdict  Score   Sub
+A1 (autobahn_a1)      autobahn            <age>    PASS/FAIL/...  n/a    (ACC inactive)
+H5 (highway_h5)       highway_65          <age>    FAIL     62.5   S25 T100 B100
+H6 (highway_h6)       highway_65          <age>    FAIL     n/a    (<30 ACC frames)
+G2 (hill_g2)          hill_highway        <age>    FAIL     73.7   S60 T90 B83
+... (all scenarios)
+══════════════════════════════════════════════════════════════════════════
 GATE: PASS / FAIL  (FAIL if any scenario FAILed; SKIPPED do not block)
 
 Failures:    <list with one-line reason or "none">
 Warnings:    <list or "none">
 Skipped:     <count> — re-seed with: /e2e tracks/scenarios/<name>.yml
 Ambiguous:   <count> — base-track recording can't be uniquely attributed
+
+Score color bands:  ≥90 GREEN · 70-89 YELLOW · 40-69 ORANGE · <40 RED
+The Behavior sub-score (B) catches longitudinal oscillation / jerk / bang-bang
+behaviors that gate verdicts miss — a scenario can pass all gates but still
+report Behavior=42 (rough ride). Surface this in the Failures/Warnings text
+when the score is low even if the verdict is PASS.
 ```
 
 ## Known limitations (V1)

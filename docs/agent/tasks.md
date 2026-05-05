@@ -1,10 +1,43 @@
 # AV Stack — Agent Memory: Tasks
 
-**Last updated:** 2026-04-21
+**Last updated:** 2026-05-05
 
 ---
 
-## Current Focus
+## Queued — pick up next
+
+### T-ACC-TRIAGE-B — Overnight triage stage for ACC sweep (Proposal B)
+
+**Context:** Proposal A (ACC composite score, landed 2026-05-05) added a continuous
+0–100 score alongside the existing PASS/FAIL gates so the sweep email shows trend
+signal. Proposal B is the second half: have the nightly agent **diagnose** each
+FAIL/WARN scenario with `/diagnose` and append a hypothesis + recommended next
+step to the email. Read-only — no code changes, no PRs.
+
+**Why deferred:** A first lets us see how the *shape* of the new scores changes
+night-over-night before deciding what triage hypotheses are worth generating.
+A run, gather 2–3 nights of score data, then build B with that data informing
+the triage clustering rules.
+
+**Plan summary** (full design in conversation 2026-05-05 + memory
+`project_acc_triage_stage_b_deferred.md`):
+1. New Step 4 in `tools/nightly/acc-sweep/PROMPT.md`: for each FAIL/WARN, run
+   `/diagnose <recording>`, write a 5-line triage block per failure to the report.
+2. **Cluster identical signatures.** If H2/H6/G1/G2 all fail with `gt_right_offroad`,
+   diagnose ONCE on the worst, emit one cluster block — don't burn 4 diagnoses.
+3. **Suppress known-issue scenarios.** A1's "target_speed mismatch" is already
+   documented; agent should emit "(known issue: see project_xxx)" instead of
+   re-diagnosing.
+4. Cap at **6 `/diagnose` runs/night** (~$3 added cost; total ~$6 stays under
+   $10 budget cap).
+5. `compose_subject()` extends with `triage=N_clusters_diagnosed,M_known`.
+6. **No code/config changes from the agent.** Just hypothesis + suggested
+   next manual step.
+
+**Activate when:** A has been running ≥3 nights AND we have ≥1 score-driven
+finding the gates missed (e.g., a scenario that PASSed verdict but Behavior<70).
+
+### Current Focus
 
 ### T-ACC-IDM-PLUMBING — ACC emergency brake authority (2026-04-21, Commits A/B/C/C.1/D landed; G2 validated; H5 harness deferred)
 
