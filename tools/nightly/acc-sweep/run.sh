@@ -90,9 +90,43 @@ trap notify_on_exit EXIT
   echo "git head after pull:  $(git rev-parse --short HEAD)"
   echo
 
+  echo "--- pre-flight cadence smoke test (10s on highway_65) ---"
+  # Diagnoses the Unity-starvation-under-launchd issue (2026-05-05). If Unity
+  # can't sustain 30 FPS in this 10-second smoke test, Step 2.5 fresh /e2e
+  # launches will produce garbage data (truncated runs scoring n/a). Better
+  # to abort the fresh-run budget cleanly than to spend 5 Unity launches on
+  # data that won't score. Threshold: dt_p95 ≤ 100ms (= 10 FPS minimum).
+  PREFLIGHT_LOG="$RUNTIME/logs/acc-sweep/preflight-$DATE.log"
+  ./start_av_stack.sh --duration 10 --track-yaml tracks/highway_65.yml > "$PREFLIGHT_LOG" 2>&1 || true
+  PREFLIGHT_DT_P95=$(/opt/homebrew/bin/python3 - <<'PYEOF' 2>/dev/null || echo 9999
+import glob, os, sys
+import h5py, numpy as np
+files = sorted(glob.glob("data/recordings/*.h5"), key=os.path.getmtime)
+if not files:
+    print(9999); sys.exit(0)
+with h5py.File(files[-1], "r") as h:
+    if "camera/timestamps" not in h:
+        print(9999); sys.exit(0)
+    ts = h["camera/timestamps"][:]
+if len(ts) < 10:
+    print(9999); sys.exit(0)
+print(int(np.percentile(np.diff(ts), 95) * 1000))
+PYEOF
+)
+  echo "preflight dt_p95: ${PREFLIGHT_DT_P95}ms (threshold ≤100ms)"
+  if [ "${PREFLIGHT_DT_P95:-9999}" -gt 100 ]; then
+    export AV_NIGHTLY_NO_FRESH_E2E=1
+    echo "PRE-FLIGHT FAIL — Step 2.5 fresh /e2e disabled tonight (env var set)"
+  else
+    echo "pre-flight PASS — Step 2.5 fresh /e2e budget available"
+  fi
+  echo
+
   echo "--- claude -p (model=sonnet-4-6, budget=\$10, max=${CLAUDE_TIMEOUT}s) ---"
   # MCP servers disabled per launchd-OAuth-hang fix.
-  claude -p \
+  # caffeinate -di prevents macOS idle/display sleep during the run; covers
+  # the entire subprocess tree including any Unity processes that /e2e spawns.
+  caffeinate -di claude -p \
     --model claude-sonnet-4-6 \
     --output-format text \
     --permission-mode bypassPermissions \

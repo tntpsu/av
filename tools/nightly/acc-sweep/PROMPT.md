@@ -44,6 +44,23 @@ the wrapper does literal grep matching.
 
 ## Step 2.5 — Auto-seed fresh /e2e for stale or failing scenarios
 
+**Pre-flight gate.** Before doing ANY fresh `/e2e` work, check the env var:
+
+```bash
+if [ -n "${AV_NIGHTLY_NO_FRESH_E2E:-}" ]; then
+  echo "[skill] Step 2.5 disabled by wrapper pre-flight (cadence too slow)"
+  # Skip the entire Step 2.5 block. For each scenario that would have been
+  # re-seeded, emit:
+  echo "scenario_<name>_done verdict=SKIPPED reason=\"preflight_cadence_fail\" $(date -Iseconds)" >> "$HEARTBEAT"
+  # ... then jump to Step 3.
+fi
+```
+
+The wrapper sets this when its 10-second smoke test detects that Unity can't
+sustain 30 FPS in the current execution context (typically launchd-at-4 AM
+starvation). Honoring this saves 5 wasted Unity launches that would produce
+garbage data scoring `n/a`.
+
 After the Step 2 quick pass, you have a list of scenarios with verdicts.
 For SKIPPED, FAIL, and WARN scenarios, invoke `/e2e tracks/scenarios/<name>.yml`
 to produce a fresh recording, then re-evaluate that scenario against its

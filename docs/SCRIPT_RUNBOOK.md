@@ -98,6 +98,8 @@ If you are unsure which command to run, start here first.
 
 - **Purpose:** Wrapper invoked by launchd at 4am local time daily (after fix-tests at 2am, lateral sweep at 3am) to verify ACC scenarios in `tracks/scenarios/*.yml` against the gate criteria embedded in each scenario's YAML header. Drives the `/acc-sweep` slash command. Logs to `~/av_runtime/logs/acc-sweep/<date>.log`.
 - **Unity launch behavior:** Step 2 default is `--quick` mode (analyze most recent matching recording per scenario, mark SKIPPED if none newer than 7d). Step 2.5 then auto-invokes `/e2e tracks/scenarios/<name>.yml` for SKIPPED/FAIL/WARN scenarios up to a soft cap of `max_fresh_runs_per_night = 5` Unity launches — converts "no data" results into actual verdicts. Cap protects the 90-min wall ceiling and bounds Unity-launch-under-launchd risk. Priority order: SKIPPED first, then FAIL, then WARN.
+- **Pre-flight cadence smoke test (added 2026-05-06):** Before invoking `claude -p`, the wrapper runs a 10-second `start_av_stack.sh` on `highway_65` and parses `vehicle/timestamp_unix` for `dt_p95`. If `dt_p95 > 100ms` (i.e., < 10 FPS sustained), it sets `AV_NIGHTLY_NO_FRESH_E2E=1`; PROMPT.md honors that env var and skips Step 2.5 entirely, marking would-be re-seeds as `verdict=SKIPPED reason="preflight_cadence_fail"`. This prevents the 4-AM-Unity-starvation pattern (2026-05-05 G1 diagnosis) from poisoning the email with infra-bug-masquerading-as-control-bug data.
+- **Sleep prevention:** The `claude -p` invocation is wrapped in `caffeinate -di` so macOS idle/display sleep doesn't kick in mid-run. Covers the entire subprocess tree including any Unity processes spawned by Step 2.5 `/e2e`.
 - **Auth/permissions:** Same MCP-disabled flags as fix-tests/sweep. $10 budget cap, 5400s (90-min) hard wall-clock timeout. Exports `AV_NIGHTLY_RUN=1`.
 - **Use when:** Triggered automatically by launchd; can be manually invoked via `launchctl start com.philtullai.av-acc-sweep` or `/acc-sweep --fresh` for end-to-end validation during the day.
 - **Install:** `cp tools/nightly/acc-sweep/com.philtullai.av-acc-sweep.plist ~/Library/LaunchAgents/ && launchctl load ~/Library/LaunchAgents/com.philtullai.av-acc-sweep.plist`
@@ -173,6 +175,14 @@ The `tools/debug_visualizer/` tree powers the in-browser playback + diagnostics 
 - **Purpose:** Backend parsers for the PhilViz Dashboards page (added 2026-05-02). Reads the same heartbeat/report files the nightly job wrappers consume to compose email subjects (`data/reports/{nightly,sweep,acc_sweep}_status.txt` and `data/reports/{nightly_test,sweep,acc_sweep}_report.txt`) and returns structured JSON for the `/dashboards` mobile-friendly view.
 - **Use when:** Imported by `tools/debug_visualizer/server.py`. Read-only; never writes to data/reports.
 - **Endpoints:** `GET /api/dashboards/all`, `/api/dashboards/sweep`, `/api/dashboards/acc-sweep`, `/api/dashboards/fix-tests`, `/api/tracks/with-metadata`.
+
+### `tools/analyze/acc_pipeline_analysis.py`
+
+- **Purpose:** ACC pipeline diagnostic CLI. Five analysis cards: (1) Radar Health, (2) IDM State, (3) Safety Layer, (4) Worst Frames, (5) **Composite ACC Score** (added 2026-05-05 — Proposal A). Card 5 emits a continuous 0-100 score with three weighted sub-layers (Safety 50%, Tracking 30%, Behavior 20%) alongside the existing PASS/FAIL gate verdicts. Behavior catches longitudinal oscillation, jerk, and bang-bang that gate verdicts miss.
+- **Use when:** Invoked by humans for triage of a specific recording (`python3 tools/analyze/acc_pipeline_analysis.py --latest`). Also referenced from `tools/nightly/acc-sweep/PROMPT.md` Step 6 — the nightly agent runs it per scenario to populate the Score column in the email report.
+- **Score computation:** `_compute_acc_score(d) -> dict` is a pure function returning structured deductions; `_card5_acc_score(d)` is the human view that prints to stdout. Future callers (PhilViz cards, triage stage B) should import `_compute_acc_score` rather than re-parse text. Score=`None` when ACC ran for fewer than `ACC_SCORE_MIN_ACTIVE_FRAMES = 30` frames (run died too early to score meaningfully).
+- **Constants:** all `ACC_SCORE_*` thresholds and weights live in `tools/scoring_registry.py` (single source of truth).
+- **Tests:** `tests/test_acc_score.py` (9 tests covering clean run, collision-zero, TTC penalty, oscillation→Behavior, e-stop edge counting, missing-control-fields renorm).
 
 ### `tools/debug_visualizer/backend/skills_runner.py`
 
