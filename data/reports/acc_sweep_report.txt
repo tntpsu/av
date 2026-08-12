@@ -1,0 +1,89 @@
+ACC SCENARIO SWEEP -- 2026-08-11
+Generated: 2026-08-11 (night 89, 93rd+ pre-flight total)
+==========================================================================================
+
+PRE-FLIGHT GATE: FAILED (AV_NIGHTLY_NO_FRESH_E2E=1)
+  Wrapper smoke test detected Unity cannot sustain 30 FPS in current launchd context.
+  Step 2.5 (fresh /e2e seeding) is fully disabled for this run.
+  All quick-pass SKIPPED scenarios remain SKIPPED (not re-seeded).
+
+==========================================================================================
+QUICK-PASS RESULTS (--quick mode, 7-day freshness threshold)
+
+  Recording pool: scenario-specific track_ids confirmed via HDF5 metadata.
+  Pool age range: 96-100d (all expired; last ACC seeding session ~2026-05-06)
+  H8 / H10 / H11: no scenario-specific recording ever seeded (never run).
+
+Scenario                                       Recording                      Rec age  Verdict  Score  Notes
+------------------------------------------------------------------------------------------------------------
+A1  (autobahn_a1_steady)                       recording_20260502_163502.h5   100d     SKIPPED  n/a    preflight_cadence_fail
+A2  (autobahn_a2_hard_brake)                   recording_20260502_163633.h5   100d     SKIPPED  n/a    preflight_cadence_fail; stale: 80.5 (Yellow)
+H2  (highway_h2_steady)                        recording_20260505_041738.h5    97d     SKIPPED  n/a    preflight_cadence_fail
+H3  (highway_h3_hard_brake)                    recording_20260506_040517.h5    96d     SKIPPED  n/a    preflight_cadence_fail; stale: 66.5 (Orange)
+H4  (highway_h4_accel_away)                    recording_20260506_041031.h5    96d     SKIPPED  n/a    preflight_cadence_fail; stale: 66.5 (Orange)
+H5  (highway_h5_stop_go)                       recording_20260505_040729.h5    97d     SKIPPED  n/a    preflight_cadence_fail; stale: 62.5 (Orange)
+H6  (highway_h6_close_gap)                     recording_20260505_042719.h5    97d     SKIPPED  n/a    preflight_cadence_fail
+H7  (highway_h7_straight_catchup)              recording_20260506_041544.h5    96d     SKIPPED  n/a    preflight_cadence_fail; stale: 66.5 (Orange)
+H8  (highway_h8_curve_catchup)                 (no recording)                  n/a     SKIPPED  n/a    preflight_cadence_fail; NEVER SEEDED
+H9  (highway_h9_adjacent_lane_parallel_reject) recording_20260506_042710.h5    96d     SKIPPED  n/a    preflight_cadence_fail
+H10 (highway_h10_oncoming_straight_reject)     (no recording)                  n/a     SKIPPED  n/a    preflight_cadence_fail; NEVER SEEDED
+H11 (highway_h11_freeflow_mild_curve)          (no recording)                  n/a     SKIPPED  n/a    preflight_cadence_fail; NEVER SEEDED
+G1  (hill_g1_grade_following)                  recording_20260505_042305.h5    97d     SKIPPED  n/a    preflight_cadence_fail; stale: 73.7 (Yellow)
+G2  (hill_g2_stop_on_grade)                    recording_20260505_041430.h5    97d     SKIPPED  n/a    preflight_cadence_fail
+
+==========================================================================================
+GATE: PASS  (all SKIPPED -- no active failures; SKIPPED does not block gate)
+
+Failures:    none
+Warnings:    none
+
+Skipped:     14 -- Step 2.5 disabled (preflight_cadence_fail); re-seed manually with:
+               /e2e tracks/scenarios/autobahn_a1_steady.yml
+               /e2e tracks/scenarios/autobahn_a2_hard_brake.yml
+               /e2e tracks/scenarios/highway_h2_steady.yml
+               /e2e tracks/scenarios/highway_h3_hard_brake.yml
+               /e2e tracks/scenarios/highway_h4_accel_away.yml
+               /e2e tracks/scenarios/highway_h5_stop_go.yml
+               /e2e tracks/scenarios/highway_h6_close_gap.yml
+               /e2e tracks/scenarios/highway_h7_straight_catchup.yml
+               /e2e tracks/scenarios/highway_h8_curve_catchup.yml        [FIRST SEED]
+               /e2e tracks/scenarios/highway_h9_adjacent_lane_parallel_reject.yml
+               /e2e tracks/scenarios/highway_h10_oncoming_straight_reject.yml  [FIRST SEED]
+               /e2e tracks/scenarios/highway_h11_freeflow_mild_curve.yml       [FIRST SEED]
+               /e2e tracks/scenarios/hill_g1_grade_following.yml
+               /e2e tracks/scenarios/hill_g2_stop_on_grade.yml
+
+Ambiguous:   0
+
+==========================================================================================
+STALE SCORE CONTEXT (from last successful evaluation, pool ~96-100d ago)
+  Score color bands: >=90 GREEN  70-89 YELLOW  40-69 ORANGE  <40 RED
+  These are informational only -- too old for gate evaluation.
+
+  A2  (autobahn_a2_hard_brake)       80.5  YELLOW -- last valid run 2026-05-02
+  G1  (hill_g1_grade_following)      73.7  YELLOW -- last valid run 2026-05-05
+  H3  (highway_h3_hard_brake)        66.5  ORANGE -- last valid run 2026-05-06
+  H4  (highway_h4_accel_away)        66.5  ORANGE -- last valid run 2026-05-06
+  H7  (highway_h7_straight_catchup)  66.5  ORANGE -- last valid run 2026-05-06
+  H5  (highway_h5_stop_go)           62.5  ORANGE -- last valid run 2026-05-05
+  A1/H2/H6/H8/H9/H10/H11/G2: no stale score (never scored or data not evaluated)
+
+  NOTE: Orange scores on H3/H4/H5/H7 and Yellow on A2/G1 are a persistent signal.
+  H8/H10/H11 have never been seeded -- their first run is the highest priority for
+  new information.
+
+==========================================================================================
+ROOT CAUSE: Pool has been expired for >=96 days. Pre-flight gate trips consistently at 4am
+  under launchd (no GUI session, Unity resource-starved). This is a system-level issue,
+  not a code regression. Manual daytime re-seeding session needed.
+
+  Priority order for re-seeding (14 runs total; at ~4 min each ≈ 56 min):
+    1. H8/H10/H11 -- never seeded; any result is new information
+    2. H5 (62.5 Orange) -- worst stale score; stop-and-go is most demanding
+    3. H3/H4/H7 (66.5 Orange) -- brake and catchup scenarios
+    4. G1 (73.7 Yellow) -- grade-following + ACC coexistence
+    5. A2 (80.5 Yellow) -- autobahn hard brake at NMPC speed
+    6. A1/H2/H6/H9/G2 -- stale but no known score signal
+
+==========================================================================================
+2026-08-11 ACC_SWEEP gate=PASS pass=0 fail=0 warn=0 skip=14 amb=0 total=14
