@@ -82,6 +82,22 @@ if pgrep -f "Unity.*AVSimulation" >/dev/null 2>&1; then
     echo ""
 fi
 
+# Newest mtime of any file INSIDE a .app bundle.
+# A bundle's own directory mtime only tracks its immediate entries, so it goes
+# stale relative to its contents: on 2026-08-12 mybuild.app read 2026-04-16
+# while Contents/MacOS/AVSimulation was 2026-05-06. Using the directory mtime
+# made --skip-if-clean never fire, which in turn forced a build on every run.
+bundle_mtime() {
+    find "$1" -type f -print0 2>/dev/null | xargs -0 stat -f "%m" 2>/dev/null | sort -n | tail -1
+}
+
+STAMP_FILE="${BUILD_OUTPUT}.stamp"
+
+# Git tree hash of the Unity project. Identity of *content*, not of mtime.
+unity_tree_hash() {
+    git -C "$SCRIPT_DIR" rev-parse "HEAD:unity/AVSimulation" 2>/dev/null || true
+}
+
 if [ "$SKIP_IF_CLEAN" = true ]; then
     if command -v git >/dev/null 2>&1 && git -C "$SCRIPT_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
         if git -C "$SCRIPT_DIR" status --porcelain --untracked-files=no -- \
@@ -89,15 +105,18 @@ if [ "$SKIP_IF_CLEAN" = true ]; then
             grep -q .; then
             echo -e "${YELLOW}⚠ Unity project has changes; build will run.${NC}"
         else
-            if [ -d "$BUILD_OUTPUT" ]; then
-                latest_source=$(find "$UNITY_PROJECT_PATH/Assets" \
-                    "$UNITY_PROJECT_PATH/Packages" "$UNITY_PROJECT_PATH/ProjectSettings" \
-                    -type f -print0 | xargs -0 stat -f "%m" | sort -n | tail -1)
-                build_time=$(stat -f "%m" "$BUILD_OUTPUT")
-                if [ "$build_time" -ge "$latest_source" ]; then
-                    echo -e "${GREEN}✓ Unity player is up to date. Skipping build (--skip-if-clean).${NC}"
-                    exit 0
-                fi
+            # Do NOT compare mtimes here: the Unity build itself rewrites
+            # ProjectSettings/*.asset, so source is always >= build output and a
+            # timestamp check can never pass. Compare the built tree hash instead.
+            current_hash="$(unity_tree_hash)"
+            if [ -d "$BUILD_OUTPUT" ] && [ -f "$STAMP_FILE" ] && [ -n "$current_hash" ] \
+                && [ "$(cat "$STAMP_FILE")" = "$current_hash" ]; then
+                echo -e "${GREEN}✓ Unity player matches HEAD tree ${current_hash:0:12}. Skipping build (--skip-if-clean).${NC}"
+                exit 0
+            fi
+            if [ -d "$BUILD_OUTPUT" ] && [ ! -f "$STAMP_FILE" ]; then
+                echo -e "${YELLOW}⚠ No build stamp beside the player; cannot prove it matches HEAD. Building.${NC}"
+                echo -e "${YELLOW}  (If the existing player is known-good, seed it: unity_tree_hash > $STAMP_FILE)${NC}"
             fi
         fi
     else
@@ -106,7 +125,7 @@ if [ "$SKIP_IF_CLEAN" = true ]; then
             latest_source=$(find "$UNITY_PROJECT_PATH/Assets" \
                 "$UNITY_PROJECT_PATH/Packages" "$UNITY_PROJECT_PATH/ProjectSettings" \
                 -type f -print0 | xargs -0 stat -f "%m" | sort -n | tail -1)
-            build_time=$(stat -f "%m" "$BUILD_OUTPUT")
+            build_time=$(bundle_mtime "$BUILD_OUTPUT")
             if [ "$build_time" -ge "$latest_source" ]; then
                 echo -e "${GREEN}✓ Unity player is up to date. Skipping build (--skip-if-clean).${NC}"
                 exit 0
@@ -141,6 +160,13 @@ echo ""
 
 EXIT_CODE=$?
 if [ $EXIT_CODE -eq 0 ]; then
+    # Stamp the bundle directory so its own mtime reflects this build. Belt and
+    # braces alongside bundle_mtime(): keeps the dir honest for any other tool
+    # that stats it.
+    touch "$BUILD_OUTPUT" 2>/dev/null || true
+    # Record which Unity tree this player was built from, so --skip-if-clean can
+    # prove the player is current without relying on mtimes.
+    unity_tree_hash > "$STAMP_FILE" 2>/dev/null || true
     echo -e "${GREEN}✓ Unity player build succeeded${NC}"
 else
     echo -e "${RED}✗ Unity build failed (exit $EXIT_CODE)${NC}"

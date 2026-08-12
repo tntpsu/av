@@ -65,6 +65,29 @@ If you are unsure which command to run, start here first.
 - **Purpose:** Unity launch helper.
 - **Use when:** You want manual Unity launch flow separate from AV/GT script wrappers.
 
+### `build_unity_player.sh`
+
+- **Purpose:** Build the macOS Unity player (`unity/AVSimulation/mybuild.app`) via
+  `BuildPlayerCLI.BuildMacPlayer` in batchmode. Invoked automatically by
+  `start_av_stack.sh`; rarely run by hand.
+- **Unity launch behavior:** Runs Unity in `-batchmode -nographics -quit`. **Requires an
+  activated Unity Editor licence** — builds fail with exit 198 and
+  `"No valid Unity Editor license found"` if the licence has lapsed. Running an
+  already-built player does not need a licence.
+- **`--skip-if-clean`:** Skips the build when the Unity project is git-clean **and**
+  `mybuild.app.stamp` records the same `HEAD:unity/AVSimulation` tree hash as the current
+  HEAD. The stamp is written automatically after each successful build.
+  - Do **not** reintroduce an mtime comparison here: the Unity build rewrites
+    `ProjectSettings/*.asset`, so source mtimes are always ≥ the build output and a
+    timestamp check can never pass. A prior version also stat'd the `.app` *directory*,
+    whose mtime tracks only its immediate entries and read 2026-04-16 while the actual
+    build was 2026-05-06. Between the two, `--skip-if-clean` never fired and every run
+    was forced into a build — which, with the licence lapsed, meant no runs at all.
+  - **Seeding an existing player:** if you have a known-good player but no stamp, run
+    `git rev-parse "HEAD:unity/AVSimulation" > unity/AVSimulation/mybuild.app.stamp`.
+    The stamp is gitignored.
+- **Use when:** Unity C# / Assets / ProjectSettings changed and you need a fresh player.
+
 ### `stop_av_stack.sh`
 
 - **Purpose:** Stop running AV stack processes.

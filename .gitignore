@@ -106,3 +106,6 @@ htmlcov/
 
 # Unity Package Cache (auto-generated)
 unity/**/PackageCache/
+
+# Unity build stamp (records the tree hash a player was built from)
+unity/AVSimulation/mybuild.app.stamp
