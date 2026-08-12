@@ -1,27 +1,44 @@
 # AV Stack — Performance Brief
 
 **Last updated:** 2026-08-12
-**Status:** Baseline measured. Finding 1 investigated and closed (not a bug).
-Finding 2 is the top open item.
+**Status:** Findings 1 and 2 investigated and CLOSED (neither was a bug).
+Blocked on Finding 4a (Unity licence). Unity does 60 FPS interactively.
 **Source recording:** `data/recordings/recording_20260506_042045.h5` (720 frames,
 `highway_h9_adjacent_lane_parallel_reject`, 2026-05-06 — the most recent fresh
 Unity run at time of writing).
 
 ---
 
-## Headline
+## Headline (revised 2026-08-12 after live A/B)
 
-**Unity rendering is the bottleneck. The Python stack is not.**
+**Unity is not slow on this Mac Mini. It renders at 60 FPS interactively.**
+The 6.7 FPS figure below came from a recording made under **launchd at 4 AM**,
+and is a property of that execution context — not of the hardware.
 
-The control loop runs at **6.23 Hz** against a configured `target_loop_hz: 30`.
-Of each 145.8 ms loop period, the stack spends **69.2 ms working and 74.6 ms
-idle**, waiting for Unity to deliver the next camera frame. Unity's own render
-period is 150.0 ms (6.7 FPS).
+Two live 60 s runs on `tracks/s_loop.yml`, taken interactively on 2026-08-12:
 
-No amount of Python optimization raises the frame rate from here — the loop is
-already waiting half of every cycle. The two levers that matter are (a) making
-Unity render faster, and (b) **decoupling simulation time from wall-clock time
-so render speed stops mattering** (see *Lockstep* below).
+| | May 6 (ACC, under launchd) | Aug 12 (s_loop, interactive) |
+|---|---|---|
+| Loop rate | 6.23 Hz | **21.8 Hz** |
+| Loop period p50 | 145.8 ms | **51.7 ms** |
+| `unity_render_frame_dt_ms` | 150.0 ms (6.7 FPS) | **16.67 ms (60 FPS, vsync)** |
+| Pipeline p50 | 69.2 ms | 16.9 ms |
+| Perception p50 | 49.6 ms | 14.3 ms |
+| Severe frames (>200 ms) | 26.0% | **0.00%** |
+| `sync_packet_fallback_active` | 100% | **0%** |
+
+16.67 ms is exactly vsync. `sync_packet_skipped_unity_frames` p50 = 3 confirms
+the loop consumes roughly every third Unity frame, i.e. it is not starved.
+
+**The premise behind the acc-sweep pre-flight cadence gate (`8e95382`) — "Unity
+cannot sustain 30 FPS on this machine" — is false interactively.** Whatever
+degrades Unity under launchd (most likely lack of a window-server / GPU session
+for a headless-ish 4 AM context) is the thing to fix, and it is an environment
+problem, not a hardware or code problem.
+
+Fresh `s_loop` scored **99.0 / 100** (Trajectory 96.3, PASS) — matching the
+frozen 99.0 / 96.5 baseline almost exactly. The 91 nights of frozen scores were
+*accurate*, just stale.
 
 ---
 
@@ -146,7 +163,33 @@ symptom — that tripwire remains open and needs its own evidence.
 
 ---
 
-## Finding 2 — Perception and Unity contend for one GPU
+## Finding 2 — GPU contention: TESTED AND REFUTED (2026-08-12)
+
+**Do not pursue. Keep `use_gpu: true`.**
+
+Controlled A/B, two 60 s runs back-to-back on `tracks/s_loop.yml`, identical
+config except `perception.use_gpu`:
+
+| Metric | Arm A (`use_gpu: true`, MPS) | Arm B (`use_gpu: false`, CPU) | Verdict |
+|---|---|---|---|
+| `unity_render_frame_dt_ms` p50 | 16.67 ms | **16.67 ms** | **No change — contention refuted** |
+| `perf_perception_ms` p50 | **14.3 ms** | 29.9 ms | MPS is **2.1× faster** |
+| Loop rate | 21.8 Hz | 22.9 Hz | Both vsync-bound; no meaningful diff |
+| `perf_wait_input_ms` p50 | 34.6 ms | 3.8 ms | Slower pipeline just absorbs idle time |
+| Severe frames | 0.00% | 0.00% | Both healthy |
+
+Recordings: `recording_20260812_100323.h5` (A), `recording_20260812_100455.h5` (B).
+
+Taking perception off the GPU did **not** speed Unity up by even a rounding
+error — Unity is vsync-locked at 60 FPS in both arms and has headroom to spare.
+Meanwhile MPS is unambiguously the better placement for perception. The original
+hypothesis was reasonable (one unified-memory GPU, both consumers) but the data
+says the GPU is simply not the contended resource here.
+
+Config was restored to `use_gpu: true` after the test.
+
+<details>
+<summary>Original hypothesis (superseded — kept for the reasoning trail)</summary>
 
 `config/av_stack_config.yaml` sets `use_gpu: true`, `prefer_mps: true`, and MPS
 is available on this machine. `perception/device_utils.py::resolve_torch_device`
@@ -168,6 +211,57 @@ a sync point per frame.
 scenario, and compare `unity_render_frame_dt_ms`. If Unity's 150 ms drops,
 contention is confirmed and CPU-vs-GPU placement becomes a real scheduling
 decision rather than an assumed win.
+
+</details>
+
+---
+
+## Finding 4 — Two hard blockers stop ANY Unity run (found 2026-08-12)
+
+Both were hit while trying to run the Finding 2 experiment. Together they mean
+`start_av_stack.sh` could not launch the simulator at all, despite a
+perfectly good player sitting on disk.
+
+### 4a — Unity Editor license is not activated
+
+```
+[Licensing::Client] Error: Code 404 ... Found 0 entitlement groups and 0 free entitlements
+[Licensing::Module] Error: 'com.unity.editor.headless' was not found.
+No valid Unity Editor license found. Please activate your license.
+```
+
+`~/Library/Application Support/Unity/Unity_lic.ulf` does not exist and there is
+no `licenses/` directory. Every `start_av_stack.sh` run attempts a player build
+first, so **every run fails with exit 198**.
+
+**Requires human action:** sign in to Unity Hub and reactivate the Editor
+licence. Running an already-built player does not need a licence — only builds do.
+
+### 4b — `--skip-if-clean` never skips (bug)
+
+`build_unity_player.sh:97` compares source mtimes against:
+
+```bash
+build_time=$(stat -f "%m" "$BUILD_OUTPUT")   # mybuild.app — the DIRECTORY
+```
+
+A `.app` bundle's *directory* mtime only tracks its immediate entries. On this
+machine the bundle dir read `2026-04-16` while its actual contents
+(`Contents/MacOS/AVSimulation`, `Contents/Resources/Data/globalgamemanagers`)
+were built `2026-05-06`. So `build_time < latest_source` always holds, the skip
+never fires, and the escape hatch that would have dodged 4a was itself broken.
+
+**Fix:** either `touch "$BUILD_OUTPUT"` at the end of a successful build, or
+stat `Contents/MacOS/*` instead of the bundle directory. Filed as
+**T-UNITY-SKIP-CLEAN**.
+
+Workaround used on 2026-08-12: `touch unity/AVSimulation/mybuild.app`, after
+which `--skip-unity-build-if-clean` correctly reported *"Unity player is up to
+date"* and the run succeeded (exit 0).
+
+**The built player is current** — it postdates both `04d5df8` (Unity 6 shader
+crash fix) and `4acf393` (radar fix), so it is safe to run as-is until the
+licence is restored.
 
 ---
 
@@ -285,14 +379,23 @@ real-time for deliberate timing tests.
 
 ## Recommended order
 
-1. ~~Finding 1 — FIFO staleness~~ **CLOSED 2026-08-12, not a bug.** Left two
-   diagnostic-quality tasks behind (T-PERF-METRIC-1, T-PERF-METRIC-2).
-2. **Finding 2** — one-run GPU-contention experiment (`use_gpu: false`, read
-   `unity_render_frame_dt_ms`). Now the top open item: it is the only remaining
-   lever that could move Unity's 150 ms render period without an architecture
-   change.
-3. **Lockstep** — scope via `/plan-feature`. The structural fix; Finding 2's
-   result informs whether perception must also move off the GPU.
+1. ~~Finding 1 — FIFO staleness~~ **CLOSED 2026-08-12, not a bug.**
+   Left T-PERF-METRIC-1 and T-PERF-METRIC-2 behind.
+2. ~~Finding 2 — GPU contention~~ **CLOSED 2026-08-12, refuted by A/B.**
+   Keep `use_gpu: true`.
+3. **Finding 4a — reactivate the Unity Editor licence.** Human action. Blocks
+   every build; the highest-value single act available right now.
+4. **T-UNITY-SKIP-CLEAN (4b)** — one-line fix, restores the ability to run
+   without a build even when 4a is unresolved.
+5. **Re-seed recordings.** With 4b worked around, runs succeed *today*. Seeding
+   the 6 lateral tracks and 14 ACC scenarios ends the 91/89-night blackout and
+   unblocks `T-ACC-TRIAGE-B`.
+6. **Re-examine the launchd context.** Unity does 60 FPS interactively and
+   6.7 FPS under launchd. That delta — not the hardware — is what the acc-sweep
+   pre-flight gate has been reacting to for 94 nights.
+7. **Lockstep** — still worth scoping, but its urgency drops sharply now that
+   Unity is known to hit 60 FPS interactively. It is now an option for
+   *determinism*, not a rescue for slow hardware.
 
 Finding 3 is not worth doing until the loop is fast enough for it to register.
 
