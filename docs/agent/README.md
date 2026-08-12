@@ -73,3 +73,5 @@ Stage 2 (multi-lane) and beyond are defined in `docs/ROADMAP.md` but not yet sta
 - `docs/agent/architecture.md` — system components, data flow, execution sequence
 - `docs/agent/current_state.md` — active work, incomplete items, known issues
 - `docs/agent/tasks.md` — structured task list with priorities
+- `docs/agent/performance.md` — measured cadence/latency baseline, bottleneck
+  attribution, and the lockstep proposal (read before any FPS work)

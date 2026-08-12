@@ -21,6 +21,10 @@ Before starting any work session, read the agent docs:
 3. `docs/agent/tasks.md` — task list and priorities
 4. `docs/agent/architecture.md` — component details (read before touching any layer)
 
+Also read `docs/agent/performance.md` before any cadence/FPS/latency work — it
+holds the measured per-stage baseline and the reproduction command
+(`tools/analyze/cadence_breakdown.py`). Do not re-derive it by hand.
+
 **These docs are not self-validating — check three clocks first.** Run alongside
 the reads above:
 

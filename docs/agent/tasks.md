@@ -1,10 +1,51 @@
 # AV Stack — Agent Memory: Tasks
 
-**Last updated:** 2026-05-05
+**Last updated:** 2026-08-12
 
 ---
 
 ## Queued — pick up next
+
+### T-PERF-GPU-CONTENTION — Does perception on MPS starve Unity's renderer? (2026-08-12)
+
+**Top open perf item.** `perception.use_gpu: true` + `prefer_mps: true` places
+the segmentation net on the same Apple GPU Unity renders with; Apple Silicon has
+one unified-memory MPS device. Unity's render period is 150 ms (6.7 FPS) and
+perception costs 49.6 ms p50 — the suspicion is that they contend.
+
+**Experiment (one run, ~2 min):** set `perception.use_gpu: false`, run any
+scenario, then compare `unity_render_frame_dt_ms` against the 150.0 ms p50
+baseline in `docs/agent/performance.md`.
+
+- If Unity's render period drops → contention confirmed; CPU-vs-GPU placement
+  becomes a real scheduling decision (perception gets slower, Unity gets faster;
+  net effect on loop Hz is the thing to measure).
+- If it does not move → contention refuted; Unity's 150 ms is intrinsic and
+  lockstep is the only remaining lever.
+
+Baseline + method: `docs/agent/performance.md`. Do not re-derive by hand.
+
+### T-PERF-METRIC-1 — `stream_front_unity_dt_ms` is a misleading metric (2026-08-12)
+
+`av_stack/orchestrator.py:10432` computes it as `timestamp - unityTime`, which
+subtracts Unity's *simulation* clock from a different clock. It reports epoch
+offset plus drift, but its name implies frame age — it read as 9.3 s of
+staleness when true consumed-frame age (`stream_front_latest_age_ms`) was 39.5 ms.
+It is 7,785 ms on frame 0 and correlates +0.946 with frame index.
+
+Fix: rename to disclose it is a clock-offset diagnostic, or recompute against a
+same-domain timestamp. Small. See `feedback_field_naming_for_single_writer_provenance`.
+
+### T-PERF-METRIC-2 — `cadence_breakdown.py` emits two false-positive alerts (2026-08-12)
+
+- `QUEUE_BACKLOG` fires on `depth ≈ capacity`, but the front camera queue is a
+  `deque(maxlen=48)` ring buffer whose steady state is full. Gate it on
+  `latest_age_ms` vs the render period instead.
+- `PACKET_FALLBACK` fires on 100% fallback, but `sync_packet_mode: packet_shadow`
+  makes that the configured design. Suppress when mode is `packet_shadow`.
+
+Both currently point investigators at non-bugs; one already cost a wrong
+hypothesis this session. Small.
 
 ### T-ACC-TRIAGE-B — Overnight triage stage for ACC sweep (Proposal B)
 
