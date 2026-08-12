@@ -6,6 +6,29 @@
 
 ## Queued — pick up next
 
+### T-ACC-G2-TTC — G2 stop_on_grade TTC min 1.52 s < 2.0 s gate (2026-08-12)
+
+**Now the top ACC issue** — H5 vacated that spot by going 62.5 ORANGE → 93.9 GREEN
+on fresh data.
+
+Fresh `recording_20260812_110704.h5`: composite 73.1 YELLOW, TTC min **1.52 s**
+against a ≥2.0 s gate. 0 collisions, 0 crash signature (pitch 4.0°, roll 0.1°),
+detection 100%, ACC active 96.2%. So this is a pure longitudinal-authority gap
+on a grade, not a perception or stability problem.
+
+Note [[project_acc_brake_authority_findings]]: **do not tune
+`idm_comfortable_decel`** — the documented mechanism on G2 is actuator latency.
+Start: `/diagnose data/recordings/recording_20260812_110704.h5`.
+
+### T-ACC-DETECTION — Detection rate below the 95% gate on 5 scenarios (2026-08-12)
+
+Fresh detection rates: **G1 21.1%**, **H8 40.3%**, H2 76.9%, H4 81.0%, H3 83.9%
+(gate is ≥95%). Every one of these scenarios has 0 collisions and no crash
+signature, so detection — not control — is now the weak ACC layer.
+
+G1 (21.1%) and H8 (40.3%) are the outliers and should be diagnosed first. H8 had
+**never been seeded before 2026-08-12**, so this is its first-ever measurement.
+
 ### T-SWEEP-HW-REGRESSION — sweeping_highway 96.9 → 79.0 (2026-08-12)
 
 **New, real, and previously invisible.** Found the moment fresh recordings
