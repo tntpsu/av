@@ -8,6 +8,8 @@ Research/development system — not production safety-critical.
 
 **Stage:** Stage 2 — Robustness, Infrastructure & Speed Expansion (active)
 **Current milestone:** S2-M1 complete — automated comfort-gate CI
+**Last hand-written commit:** 2026-05-06 (`8e95382`). Since then the repo has run
+nightly automation only. Confirm this line is still accurate before relying on it.
 
 ---
 
@@ -19,7 +21,30 @@ Before starting any work session, read the agent docs:
 3. `docs/agent/tasks.md` — task list and priorities
 4. `docs/agent/architecture.md` — component details (read before touching any layer)
 
-After completing work, update the relevant `docs/agent/*.md` files.
+**These docs are not self-validating — check three clocks first.** Run alongside
+the reads above:
+
+```bash
+git log -1 --date=short --pretty='%h %ad %s'   # clock 2: last real commit
+ls -lt data/reports/*.txt | head -3            # clock 3a: automation output
+ls -lt data/recordings/*.h5 | head -3          # clock 3b: automation INPUT
+```
+
+Compare against the `**Last updated:**` line in `current_state.md` / `tasks.md`.
+If they disagree, the artifacts win. Critically: if the newest
+`data/recordings/*.h5` is more than a few days old, the nightly sweeps are
+re-analyzing frozen recordings — every score in `data/reports/sweep_report.txt`
+and `acc_sweep_report.txt` is historical, and a nightly "delta" is a baseline
+change, not a system change. Say so explicitly rather than reporting it as live.
+
+After completing work, update the relevant `docs/agent/*.md` files — including
+their `**Last updated:**` line.
+
+**Testing-policy scope:** the user-level `CLAUDE.md` makes `TESTS.md` +
+`/coverage-matrix` a ship gate across projects. **That gate does not apply
+here.** This repo predates it and uses the two protocols below (comfort-gate
+regression + scoring regression) as its coverage contract instead. Do not block
+work on a missing `TESTS.md`.
 
 ---
 
@@ -183,6 +208,12 @@ pytest tests/test_scoring_regression.py -v
 3. Trajectory layer ≥ 80 (not yellow — prevents cap regressions)
 4. Comfort gates: accel P95 ≤ 3.0, jerk P95 ≤ 6.0, e-stops = 0
 5. Key metric deltas within frozen tolerances (adj RMSE ±0.03, accel ±0.5, jerk ±1.0)
+
+> **The 60 / 80 above are drift-detection floors, NOT the pass bar.** They exist
+> so this suite fires when scoring silently collapses. The bar for calling a run
+> *good* — used by `/e2e`, `/sweep`, and `/validate` verdicts — is **every layer
+> ≥ 95**. A run with Trajectory 94.6 passes this regression suite and is still a
+> FAIL. Don't quote 60/80 as evidence a run is healthy.
 
 **Baselines file:** `tests/fixtures/scoring_baselines.json` — frozen per-track metrics.
 **Report artifact:** `data/reports/gates/latest_scoring_regression.json` — written after test run.

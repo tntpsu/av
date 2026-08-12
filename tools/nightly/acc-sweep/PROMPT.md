@@ -128,8 +128,32 @@ $DATE ACC_SWEEP gate=$GATE pass=$P fail=$F warn=$W skip=$S amb=$A total=$T
 Then exit. **Do not** generate additional commentary — the wrapper's hard
 timeout doesn't wait for you to wax thoughtful.
 
+## Step 3.5 — Update project memory as a ROLLUP, not an append
+
+Target memory: `project_acc_sweep_baseline.md`.
+
+**Default action is to EDIT THE ROLLUP IN PLACE, not to add a dated entry.**
+
+1. Compare tonight's verdicts against the `## Current state` section at the top
+   of that memory.
+2. **If they match** (every night since 2026-05-14 has been an identical
+   all-SKIPPED blackout): update only the night number, the pre-flight counter,
+   the date, and the pool ages. Update the frontmatter `description` the same
+   way. **Write nothing else.**
+3. **If tonight differs** — any scenario produced a real verdict, a score moved,
+   a scenario was freshly seeded, or a new crash signature appeared — THEN add a
+   short dated entry under `## Divergent nights` describing only what differed,
+   and refresh the rollup. A night that ends the blackout is a divergent night;
+   record it fully.
+
+Why: this memory reached 40 KB / 69 near-identical entries before being compacted
+on 2026-08-12. It is loaded on every session in this project. See the
+`feedback_nightly_memory_unbounded_append` memory.
+
 ## What NOT to do
 
+- **Do not append a new dated entry to `project_acc_sweep_baseline.md` when the
+  result is unchanged.** Update the rollup in place (Step 3.5).
 - Do not commit code or open PRs. ACC sweep is read-only — observation only.
   (Step 2.5 `/e2e` runs WRITE recordings to `data/recordings/`, but that's
   data, not code. Do not let `/e2e` trigger a code commit.)

@@ -31,6 +31,20 @@ Follow it exactly.
 
 ## Step 1 — Run the suite
 
+**IMPORTANT — use the Bash tool with `timeout: 600000`, do NOT set `run_in_background: true`.**
+Running pytest in background ends the agent turn immediately, which triggers stop hooks before
+the suite finishes. Always run synchronously so the tool call blocks until pytest exits.
+
+**KNOWN LIMITATION:** The full suite now runs for ~17 min, which exceeds the 600s Bash tool
+ceiling. The tool will background the command automatically even without `run_in_background: true`.
+If this happens (you receive a background task ID instead of blocking output):
+- **Do NOT emit any text output** — emitting text ends the agent turn, which fires the retro
+  stop hook and abandons the nightly. Issue only Read tool calls to monitor progress.
+- After the completion notification arrives, read `/tmp/nightly_pytest.log` with the Read tool.
+- If you accidentally emitted text and the retro hook fired, the retro agent should watch for
+  the task completion notification and then resume the nightly workflow from Step 2 onward.
+Do not abandon the run — the log will be there.
+
 ```bash
 echo "step1_running $(date -Iseconds)" >> "$HEARTBEAT"
 python3 -m pytest tests/ -n auto --dist loadfile --tb=short > /tmp/nightly_pytest.log 2>&1

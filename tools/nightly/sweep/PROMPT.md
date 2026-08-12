@@ -40,6 +40,20 @@ Follow it exactly. Two unattended-run additions on top of the playbook:
   burning time. Skip the rest, write the summary line with the tracks
   completed so far, and exit.
 
+## Step 1.5 — Find the latest recording per track (--quick)
+
+**Before scanning any recordings**, use the `latest_per_track()` function VERBATIM
+from the `reference_hdf5_track_id` memory. Do NOT write your own HDF5 scan code.
+The correct attribute path is `f.attrs['metadata'] → json → ['recording_provenance']['track_id']`.
+Any variation (top-level `meta.get('track_id')`, `f['recording_provenance'].attrs`, etc.)
+returns None for every recording. This exact mistake has occurred FIVE times
+(nights 17, 25, 33, 34, 76). If all tracks return NO RECORDING FOUND, the lookup
+is wrong — do not assume recordings are absent.
+
+The verbatim function is in the `reference_hdf5_track_id` memory (see MEMORY.md).
+If a track's latest recording has < 200 frames, fall back to the next-most-recent
+recording for that track.
+
 ## Step 2 — Update heartbeat between tracks
 
 ```bash
@@ -82,8 +96,34 @@ Example:
 Then exit. **Do not** generate additional commentary after this line — the
 wrapper's hard timeout doesn't wait for you to wax thoughtful.
 
+## Step 3.5 — Update project memory as a ROLLUP, not an append
+
+Target memory: `project_sweep_trajectory_flags.md`.
+
+**Default action is to EDIT THE ROLLUP IN PLACE, not to add a dated section.**
+
+1. Compare tonight's per-track scores against the `## Current state` table at
+   the top of that memory.
+2. **If they match** (the overwhelmingly common case — nights 2–91 were all
+   identical): update only the night number, the date range, and the staleness
+   arithmetic in that section. Update the frontmatter `description` the same way.
+   **Write nothing else.** Do not add a `## <date> nightly sweep` section.
+3. **If tonight differs** — any score moved, a new e-stop appeared, a track
+   errored, a fresh recording was used, or you hit the HDF5 lookup bug — THEN
+   append a short dated entry under `## Divergent nights` describing only what
+   differed, and refresh the rollup.
+
+Why: this memory reached 48 KB / 78 sections of near-identical text before being
+compacted on 2026-08-12. It is loaded on every session in this project, so the
+repetition costs real context and buries the handful of nights that actually
+mattered. See the `feedback_nightly_memory_unbounded_append` memory.
+
+The same rule applies to any other memory you touch tonight.
+
 ## What NOT to do
 
+- **Do not append a new dated section to `project_sweep_trajectory_flags.md`
+  when the result is unchanged.** Update the rollup in place (Step 3.5).
 - Do not commit code or open PRs. Sweep is read-only — it observes regressions
   and reports. Fixing them is a separate decision the human makes with full
   context after reading the email.
@@ -92,3 +132,10 @@ wrapper's hard timeout doesn't wait for you to wax thoughtful.
   and let the human decide whether to investigate.
 - Do not retry a track more than twice. If two attempts fail, mark it
   UNITY_HEALTH_FAIL and move on.
+- **Do not surface stale per-recording diagnostics as "notable."** In `--quick`
+  mode the same HDF5 files are reanalyzed each night. Signals like
+  sweeping_highway LMPC feasibility (98.75%), hill_highway MPC solve time
+  (P95=3.99ms), and contract consistency rates are frozen in those recordings —
+  they cannot have changed. Only flag a diagnostic if it is (a) new this run or
+  (b) measurably worse than a prior sweep's same recording. This mistake occurred
+  7 times (nights 4, 29, 37, 47, 52, 53, 57) before this rule was added.
