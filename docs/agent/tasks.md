@@ -64,14 +64,22 @@ named feature.
 
 Fresh recordings: `recording_20260812_102123.h5`, `recording_20260812_102440.h5`.
 
-### T-UNITY-LICENCE — Unity Editor licence not activated (2026-08-12, HUMAN ACTION)
+### ~~T-UNITY-LICENCE~~ — RESOLVED 2026-08-12
 
-Every player build fails with exit 198 (`No valid Unity Editor license found`;
-no `Unity_lic.ulf`, 0 entitlements). Sign in to Unity Hub to reactivate.
+User signed in to Unity Hub; entitlements now resolve
+(`[Licensing::Client] Successfully resolved entitlement details`) and a full
+player build succeeds. **Builds work again.**
 
-Runs currently work only because the existing 2026-05-06 player is current and
-`--skip-if-clean` now correctly skips the build (`36a9e8b`). **Any Unity C#
-change will be unbuildable until this is resolved.**
+Note for future diagnosis: **the absence of `~/Library/Application Support/Unity/Unity_lic.ulf`
+is NOT evidence of an unlicensed machine.** Unity 6 resolves entitlements through
+the Licensing Client against the signed-in account; no `.ulf` is written to that
+path. The only reliable test is attempting a build and reading the
+`[Licensing::*]` lines in `tmp/logs/unity_build.log`.
+
+Post-fix verification: fresh player built 2026-08-12 13:01, stamp auto-written
+and matching HEAD tree, `--skip-if-clean` skips correctly, and an s_loop run on
+the new player scores 99.0 / Traj 96.4 — matching the old player's 99.0 / 96.3.
+All 19 recordings seeded earlier that day remain valid as baselines.
 
 ### T-PERF-GPU-CONTENTION — Does perception on MPS starve Unity's renderer? (2026-08-12)
 
