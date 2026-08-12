@@ -47,7 +47,17 @@ Frozen recording was 2026-04-12, so the causing change landed in the
 fix (`41148f3`/`6dbdacc` follow-up), curve-context map-priority (`6dbdacc`),
 PP recovery term (2026-04-18), and the Frenet shadow work.
 
-Start: `/diagnose data/recordings/recording_20260812_102123.h5`, then bisect the
+**Lead — there is prior art on exactly this failure mode.** The diagnostic
+string comes from `active_mild_curve_authority_issue_detected` in
+`tools/drive_summary_core.py:1238`, and `docs/plans/highway-mild-curve-lateral-plan.md`
+is a full plan targeting *"highway lateral oscillation/swerving on gentle
+map-backed arcs"* at **κ ≈ 0.002** — precisely sweeping_highway's regime. Read
+that plan before designing anything; the mechanism may already be characterised,
+and the plan explicitly aimed to be "transferable to other mild-curvature
+highway tracks, not just this one recording."
+
+Start: read `docs/plans/highway-mild-curve-lateral-plan.md`, then
+`/diagnose data/recordings/recording_20260812_102123.h5`, then bisect the
 Apr 12 → May 6 range. Note `feedback_bundled_tuning_in_feature_commits` — scan
 candidate commits for unrelated numeric constant changes before blaming the
 named feature.
