@@ -6,7 +6,47 @@
 
 ## Queued — pick up next
 
+### T-SWEEP-HW-REGRESSION — sweeping_highway 96.9 → 79.0 (2026-08-12)
+
+**New, real, and previously invisible.** Found the moment fresh recordings
+resumed — 91 nights of re-analyzing the frozen 2026-04-12 recording could not
+have detected it.
+
+- Reproduced across two runs: 79.0 / Traj **77.5**, and 79.0 / Traj **75.5**
+- Weighted 93.8 → capped to 79.0 by `critical_yellow_layer` (Trajectory < 80)
+- Deduction is entirely **Lateral Error RMSE (curv-adj): −14.0**
+- Safety / Control / Perception / LongComfort / SignalIntegrity all 100.0
+- Diagnostics: *"Highway mild-curve active-state authority is insufficient at
+  speed"*; apex cutting C1 (−0.101 m), C2 (−0.166 m)
+
+Frozen recording was 2026-04-12, so the causing change landed in the
+**2026-04-12 → 2026-05-06** window. Candidates in that range include the q_lat
+fix (`41148f3`/`6dbdacc` follow-up), curve-context map-priority (`6dbdacc`),
+PP recovery term (2026-04-18), and the Frenet shadow work.
+
+Start: `/diagnose data/recordings/recording_20260812_102123.h5`, then bisect the
+Apr 12 → May 6 range. Note `feedback_bundled_tuning_in_feature_commits` — scan
+candidate commits for unrelated numeric constant changes before blaming the
+named feature.
+
+Fresh recordings: `recording_20260812_102123.h5`, `recording_20260812_102440.h5`.
+
+### T-UNITY-LICENCE — Unity Editor licence not activated (2026-08-12, HUMAN ACTION)
+
+Every player build fails with exit 198 (`No valid Unity Editor license found`;
+no `Unity_lic.ulf`, 0 entitlements). Sign in to Unity Hub to reactivate.
+
+Runs currently work only because the existing 2026-05-06 player is current and
+`--skip-if-clean` now correctly skips the build (`36a9e8b`). **Any Unity C#
+change will be unbuildable until this is resolved.**
+
 ### T-PERF-GPU-CONTENTION — Does perception on MPS starve Unity's renderer? (2026-08-12)
+
+**CLOSED 2026-08-12 — REFUTED by A/B.** `unity_render_frame_dt_ms` p50 was
+16.67 ms in both arms; MPS is 2.1× faster than CPU for perception (14.3 vs
+29.9 ms). Keep `use_gpu: true`. Full table in `docs/agent/performance.md`.
+
+<details><summary>Original hypothesis</summary>
 
 **Top open perf item.** `perception.use_gpu: true` + `prefer_mps: true` places
 the segmentation net on the same Apple GPU Unity renders with; Apple Silicon has
@@ -24,6 +64,8 @@ baseline in `docs/agent/performance.md`.
   lockstep is the only remaining lever.
 
 Baseline + method: `docs/agent/performance.md`. Do not re-derive by hand.
+
+</details>
 
 ### T-PERF-METRIC-1 — `stream_front_unity_dt_ms` is a misleading metric (2026-08-12)
 
