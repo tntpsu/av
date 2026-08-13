@@ -261,6 +261,11 @@ def _run_once(
     cmd = [
         str(START_SCRIPT),
         "--run-unity-player",
+        # An A/B batch never changes Unity C#; without this every trial rebuilt the
+        # player, which dominated wall time (a 10-trial hairpin batch spent more
+        # time building than driving). --skip-if-clean is a no-op when the Unity
+        # tree genuinely changed, so this is safe.
+        "--skip-unity-build-if-clean",
         "--duration",
         str(duration_s),
         "--track-yaml",
@@ -317,8 +322,15 @@ def main() -> int:
     parser.add_argument(
         "--fixed-start-t",
         type=float,
-        default=0.0,
-        help="Use this exact start_t for every pair (default: 0.0, start of track).",
+        default=None,
+        help=(
+            "Use this exact start_t for every pair. Default: unset — do NOT pass "
+            "--start-t, so the track YAML's own start_distance is honoured. "
+            "Passing 0.0 forces the geometric start of the track, which begins "
+            "off-lane on some tracks (hairpin_15 declares start_distance: 3.0; at "
+            "t=0.0 every run e-stops at ~frame 19 with gt_left_offroad before "
+            "reaching any curve, silently invalidating the whole batch)."
+        ),
     )
     parser.add_argument(
         "--emergency-stop-end-run-after-seconds",
@@ -345,11 +357,15 @@ def main() -> int:
         for i in range(args.repeats):
             if args.randomize_start_t:
                 pair_start_t = float(rng.uniform(0.0, 1.0))
-            else:
+            elif args.fixed_start_t is not None:
                 pair_start_t = float(args.fixed_start_t)
+            else:
+                pair_start_t = None  # honour the track YAML's own start_distance
             print(f"\n--- Pair {i+1}/{args.repeats}: A then B ---")
             if args.randomize_start_t:
                 print(f"[pair] start_t={pair_start_t:.6f} (seed={args.seed})")
+            elif pair_start_t is None:
+                print("[pair] start_t=track-default (no --start-t override)")
             else:
                 print(f"[pair] start_t={pair_start_t:.6f} (fixed)")
             for label, value, store in [("A", value_a, trials_a), ("B", value_b, trials_b)]:

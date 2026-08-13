@@ -180,6 +180,17 @@ These scripts replay recordings offline and do not require Unity runtime interac
 - **Default perception mode:** Segmentation default.
 - **CV override:** `--use-cv`.
 
+### `tools/analyze/run_ab_batch.py`
+
+- **Purpose:** Batch A/B runner for a single config parameter, with robust median/quartile stats over N paired trials. This is the promotion gate for config changes (CLAUDE.md requires ≥5 runs).
+- **Unity launch behavior:** Launches Unity once per trial — `2 × --repeats` runs total.
+- **Invocation:** `--param <dotted.key> --a <baseline> --b <treatment> --repeats 5 --track-yaml tracks/<t>.yml [--config <overlay>]`. Resolve the dotted key against the loaded YAML; e.g. `trajectory.mpc.mpc_e_lat_reference_mode`.
+- **ALWAYS check `first_failure_frame` in the summaries before trusting any metric.** If it is not `n/a`, runs were terminating early and every other statistic is computed over a truncated prefix. On 2026-08-13 a hairpin batch reported a clean-looking `lateral_error_rmse 0.055 vs 0.029` that was measured over ~20 frames before an e-stop in all 10 trials.
+- **2026-08-13 fixes:**
+  1. `--fixed-start-t` defaulted to `0.0` and was *always* passed through as `--start-t`, silently overriding each track's own `start_distance`. `hairpin_15.yml` declares `start_distance: 3.0`; at `t=0.0` the car starts off-lane and every trial e-stopped at ~frame 19 with `gt_left_offroad`, invalidating the batch while still printing plausible numbers. Default is now `None` — the track YAML wins unless you explicitly pass a value.
+  2. Added `--skip-unity-build-if-clean` to the per-trial launch. An A/B never changes Unity C#, and rebuilding the player every trial dominated wall time.
+- **Use when:** promoting any config change. Do not promote on single runs — see the hairpin case above, where a single-run 0.6-point "gate crossing" was run-to-run noise that 5 pairs refuted.
+
 ### `tools/analyze/run_gate_and_triage.py`
 
 - **Purpose:** Acceptance-gate evaluation plus the triage engine's pattern detectors (20+ known signatures). Writes a bundle to `data/reports/gates/<UTC>_gate/` containing `decision.json`, `gate_report.json`, `triage_packets/<recording>.json` and `failure_packets/<recording>/packet.json`.
