@@ -92,16 +92,56 @@ trap notify_on_exit EXIT
 
   echo "--- pre-flight cadence smoke test (10s on highway_65) ---"
   # Diagnoses the Unity-starvation-under-launchd issue (2026-05-05). If Unity
-  # can't sustain 30 FPS in this 10-second smoke test, Step 2.5 fresh /e2e
-  # launches will produce garbage data (truncated runs scoring n/a). Better
-  # to abort the fresh-run budget cleanly than to spend 5 Unity launches on
-  # data that won't score. Threshold: dt_p95 ≤ 100ms (= 10 FPS minimum).
+  # can't sustain a workable frame rate in this 10-second smoke test, Step 2.5
+  # fresh /e2e launches will produce garbage data (truncated runs scoring n/a).
+  # Better to abort the fresh-run budget cleanly than to spend 5 Unity launches
+  # on data that won't score.
+  #
+  # THRESHOLD: dt_p95 ≤ 250ms. Calibrated 2026-08-12 against real recordings on
+  # both sides. Camera delivery is QUANTIZED to 76.9ms (13 FPS) steps, so
+  # starvation does not lower the base rate — it drops whole frames, producing
+  # multiples of 76.9ms. Measured:
+  #
+  #     starved (2026-05-06, under launchd)  p50 76.9  p90 331.7  p95 364.3
+  #     healthy (2026-08-12, s_loop)         p50 76.9  p90  76.9  p95  76.9
+  #     healthy (2026-08-12, hill_highway)   p50 76.9  p90 153.8  p95 153.8
+  #     healthy (2026-08-12, highway_65)     p50 76.9  p90 153.8  p95 153.8
+  #
+  # p50 does NOT discriminate (76.9 in every case). p95 does: healthy tops out
+  # at 153.8 (one dropped frame), starved is 364.3 (~4 dropped). 250ms sits
+  # between them with margin on both sides.
+  #
+  # The previous 100ms threshold was BELOW the healthy p95 of 153.8, so it could
+  # only pass if zero frames dropped in 10 seconds. It was not a strict gate, it
+  # was an unpassable one — which is why it failed 94 consecutive nights.
+  #
+  # 2026-08-12 — two further defects fixed here; both made this gate fire on
+  # evidence it never actually gathered:
+  #
+  #   1. The smoke run omitted --skip-unity-build-if-clean, so it attempted a
+  #      full Unity player build every night. While the Editor licence was
+  #      lapsed every build failed, so no recording was produced at all.
+  #   2. The measurement then read `files[-1]` — the newest *.h5 by mtime —
+  #      regardless of whether this smoke test produced it. With no new
+  #      recording it silently scored a PREVIOUS run, so the gate reported a
+  #      cadence number for a file it had not created. (Same provenance trap as
+  #      feedback_field_naming_for_single_writer_provenance.)
+  #
+  # The run now skips the build when the player already matches HEAD, and the
+  # measurement REQUIRES a recording newer than the smoke test's start time —
+  # otherwise it returns 9999 and fails honestly.
   PREFLIGHT_LOG="$RUNTIME/logs/acc-sweep/preflight-$DATE.log"
-  ./start_av_stack.sh --duration 10 --track-yaml tracks/highway_65.yml > "$PREFLIGHT_LOG" 2>&1 || true
-  PREFLIGHT_DT_P95=$(/opt/homebrew/bin/python3 - <<'PYEOF' 2>/dev/null || echo 9999
+  PREFLIGHT_START=$(date +%s)
+  ./start_av_stack.sh --force --skip-unity-build-if-clean \
+    --duration 10 --track-yaml tracks/highway_65.yml > "$PREFLIGHT_LOG" 2>&1 || true
+  PREFLIGHT_DT_P95=$(PREFLIGHT_START="$PREFLIGHT_START" /opt/homebrew/bin/python3 - <<'PYEOF' 2>/dev/null || echo 9999
 import glob, os, sys
 import h5py, numpy as np
+start = float(os.environ.get("PREFLIGHT_START", "0"))
 files = sorted(glob.glob("data/recordings/*.h5"), key=os.path.getmtime)
+# Only accept a recording this smoke test actually produced. Scoring an older
+# file would report cadence for a run that never happened.
+files = [f for f in files if os.path.getmtime(f) >= start]
 if not files:
     print(9999); sys.exit(0)
 with h5py.File(files[-1], "r") as h:
@@ -113,8 +153,8 @@ if len(ts) < 10:
 print(int(np.percentile(np.diff(ts), 95) * 1000))
 PYEOF
 )
-  echo "preflight dt_p95: ${PREFLIGHT_DT_P95}ms (threshold ≤100ms)"
-  if [ "${PREFLIGHT_DT_P95:-9999}" -gt 100 ]; then
+  echo "preflight dt_p95: ${PREFLIGHT_DT_P95}ms (threshold ≤250ms)"
+  if [ "${PREFLIGHT_DT_P95:-9999}" -gt 250 ]; then
     export AV_NIGHTLY_NO_FRESH_E2E=1
     echo "PRE-FLIGHT FAIL — Step 2.5 fresh /e2e disabled tonight (env var set)"
   else
