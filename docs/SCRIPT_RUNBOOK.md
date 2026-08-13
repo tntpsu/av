@@ -180,6 +180,15 @@ These scripts replay recordings offline and do not require Unity runtime interac
 - **Default perception mode:** Segmentation default.
 - **CV override:** `--use-cv`.
 
+### `tools/analyze/run_gate_and_triage.py`
+
+- **Purpose:** Acceptance-gate evaluation plus the triage engine's pattern detectors (20+ known signatures). Writes a bundle to `data/reports/gates/<UTC>_gate/` containing `decision.json`, `gate_report.json`, `triage_packets/<recording>.json` and `failure_packets/<recording>/packet.json`.
+- **Unity launch behavior:** None by default (offline over existing recordings). Only launches Unity with `--execute-gates`.
+- **Invocation:** takes **`--recordings <path> --recording-track-ids <track_id>`**, *not* a positional path and *not* `--latest`. A bare positional path errors with `unrecognized arguments`.
+- **Where the answer is:** `triage_packets/*.json` → `what_failed_first` (phase/frame/type/description) and `trigger_reasons`. `failure_packets/*/packet.json` → `root_cause_bucket`. The stdout JSON only carries counts.
+- **2026-08-13 fix:** `_extract_run_metrics` used `float(curve_intent_diag.get("<key>", 0.0))` for four `curve_intent_*` fields. `.get(key, default)` returns the *stored* value when the key exists with a `None` value, so the default never applied and the tool crashed with `TypeError: float() argument must be ... not 'NoneType'` on any recording whose curve-intent diagnostics were unpopulated. Now uses the `(… or 0.0)` idiom already used elsewhere in the same function.
+- **Use when:** diagnosing any recording — run it *before* manual investigation, since its detectors catch known patterns instantly.
+
 ### `tools/analyze/counterfactual_layer_swap.py`
 
 - **Purpose:** Stage-5 matrix (trajectory-lock + control-lock) and attribution scorecard.

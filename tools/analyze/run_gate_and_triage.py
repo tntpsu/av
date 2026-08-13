@@ -283,20 +283,20 @@ def _extract_run_metrics(
         "curve_intent_available": bool(curve_intent_available),
         "curve_intent_arm_signal_available": bool(curve_intent_arm_signal_available),
         "curve_intent_arm_early_enough_rate": float(
-            curve_intent_diag.get("arm_early_enough_rate", 0.0)
+            (curve_intent_diag.get("arm_early_enough_rate") or 0.0)
         ),
         "curve_intent_undercall_frame_rate": float(
-            curve_intent_diag.get("undercall_frame_rate", 0.0)
+            (curve_intent_diag.get("undercall_frame_rate") or 0.0)
         ),
         "curve_intent_curvature_ratio_p50": float(
-            curve_intent_diag.get("curvature_ratio_p50", 0.0)
+            (curve_intent_diag.get("curvature_ratio_p50") or 0.0)
         ),
         "curve_intent_curvature_ratio_p95": float(
-            curve_intent_diag.get("curvature_ratio_p95", 0.0)
+            (curve_intent_diag.get("curvature_ratio_p95") or 0.0)
         ),
         "curve_intent_arm_early_enough": bool(
             (not curve_intent_arm_signal_available)
-            or float(curve_intent_diag.get("arm_early_enough_rate", 0.0)) >= 80.0
+            or float((curve_intent_diag.get("arm_early_enough_rate") or 0.0)) >= 80.0
         ),
         "curve_intent_undercall_detected": bool(
             curve_intent_available and curve_intent_diag.get("undercall_detected", False)
