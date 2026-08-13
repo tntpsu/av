@@ -1,89 +1,165 @@
-ACC SCENARIO SWEEP -- 2026-08-11
-Generated: 2026-08-11 (night 89, 93rd+ pre-flight total)
-==========================================================================================
+2026-08-13 ACC SCENARIO SWEEP
+Generated: 2026-08-13T04:xx (nightly agent)
+Recording pool: 2026-08-12 (1 day old — fresh re-seed from 2026-08-12; all 14 scenarios)
+Step 2.5: BLOCKED — AV_NIGHTLY_NO_FRESH_E2E=1 (cadence pre-flight failed; no Unity re-seed tonight)
 
-PRE-FLIGHT GATE: FAILED (AV_NIGHTLY_NO_FRESH_E2E=1)
-  Wrapper smoke test detected Unity cannot sustain 30 FPS in current launchd context.
-  Step 2.5 (fresh /e2e seeding) is fully disabled for this run.
-  All quick-pass SKIPPED scenarios remain SKIPPED (not re-seeded).
+ACC SCENARIO SWEEP
+══════════════════════════════════════════════════════════════════════════════════════════════
+Scenario                                Base              Rec age  Verdict  Score   Sub
+──────────────────────────────────────────────────────────────────────────────────────────────
+A1  (autobahn_a1_steady)               autobahn_30       1 day    FAIL     n/a     (ACC 3.9% — below threshold)
+A2  (autobahn_a2_hard_brake)           autobahn_30       1 day    PASS     79.0Y   S100 T50  B70
+H2  (highway_h2_steady)               highway_65        1 day    PASS     85.6Y   S100 T71.9 B70
+H3  (highway_h3_hard_brake)           highway_65        1 day    PASS     87.2Y   S100 T77.3 B70
+H4  (highway_h4_accel_away)           highway_65        1 day    PASS     87.4Y   S100 T77.9 B70
+H5  (highway_h5_stop_go)              highway_65        1 day    PASS     93.9G   S100 T99.6 B70
+H6  (highway_h6_close_gap)            highway_65        1 day    PASS     93.9G   S100 T99.8 B70
+H7  (highway_h7_straight_catchup)     highway_65        1 day    FAIL     91.2G   S100 T90.7 B70
+H8  (highway_h8_curve_catchup)        highway_65        1 day    WARN     79.0Y   S100 T50  B70
+H9  (hwy_h9_adj_lane_reject)          highway_65        1 day    PASS     n/a     (rejection — ACC correctly did not engage)
+H10 (hwy_h10_oncoming_reject)         highway_65        1 day    PASS     n/a     (rejection — ACC correctly did not engage)
+H11 (hwy_h11_freeflow_mild_curve)     highway_65        1 day    FAIL     79.0    Traj=73.6 Safety=75.0 (lateral gate)
+G1  (hill_g1_grade_following)         hill_highway      1 day    FAIL     83.3Y   S100 T64.2 B70
+G2  (hill_g2_stop_on_grade)           hill_highway      1 day    FAIL     73.1Y   S50  T93.7 B100
+══════════════════════════════════════════════════════════════════════════════════════════════
+GATE: FAIL  (5 FAILs, 1 WARN, 0 SKIPPEDs)
 
-==========================================================================================
-QUICK-PASS RESULTS (--quick mode, 7-day freshness threshold)
+Score color bands:  >=90 GREEN · 70-89 YELLOW · 40-69 ORANGE · <40 RED
 
-  Recording pool: scenario-specific track_ids confirmed via HDF5 metadata.
-  Pool age range: 96-100d (all expired; last ACC seeding session ~2026-05-06)
-  H8 / H10 / H11: no scenario-specific recording ever seeded (never run).
+──────────────────────────────────────────────────────────────────────────────────────────────
+FAILURES  (5)
+──────────────────────────────────────────────────────────────────────────────────────────────
 
-Scenario                                       Recording                      Rec age  Verdict  Score  Notes
-------------------------------------------------------------------------------------------------------------
-A1  (autobahn_a1_steady)                       recording_20260502_163502.h5   100d     SKIPPED  n/a    preflight_cadence_fail
-A2  (autobahn_a2_hard_brake)                   recording_20260502_163633.h5   100d     SKIPPED  n/a    preflight_cadence_fail; stale: 80.5 (Yellow)
-H2  (highway_h2_steady)                        recording_20260505_041738.h5    97d     SKIPPED  n/a    preflight_cadence_fail
-H3  (highway_h3_hard_brake)                    recording_20260506_040517.h5    96d     SKIPPED  n/a    preflight_cadence_fail; stale: 66.5 (Orange)
-H4  (highway_h4_accel_away)                    recording_20260506_041031.h5    96d     SKIPPED  n/a    preflight_cadence_fail; stale: 66.5 (Orange)
-H5  (highway_h5_stop_go)                       recording_20260505_040729.h5    97d     SKIPPED  n/a    preflight_cadence_fail; stale: 62.5 (Orange)
-H6  (highway_h6_close_gap)                     recording_20260505_042719.h5    97d     SKIPPED  n/a    preflight_cadence_fail
-H7  (highway_h7_straight_catchup)              recording_20260506_041544.h5    96d     SKIPPED  n/a    preflight_cadence_fail; stale: 66.5 (Orange)
-H8  (highway_h8_curve_catchup)                 (no recording)                  n/a     SKIPPED  n/a    preflight_cadence_fail; NEVER SEEDED
-H9  (highway_h9_adjacent_lane_parallel_reject) recording_20260506_042710.h5    96d     SKIPPED  n/a    preflight_cadence_fail
-H10 (highway_h10_oncoming_straight_reject)     (no recording)                  n/a     SKIPPED  n/a    preflight_cadence_fail; NEVER SEEDED
-H11 (highway_h11_freeflow_mild_curve)          (no recording)                  n/a     SKIPPED  n/a    preflight_cadence_fail; NEVER SEEDED
-G1  (hill_g1_grade_following)                  recording_20260505_042305.h5    97d     SKIPPED  n/a    preflight_cadence_fail; stale: 73.7 (Yellow)
-G2  (hill_g2_stop_on_grade)                    recording_20260505_041430.h5    97d     SKIPPED  n/a    preflight_cadence_fail
+A1 — autobahn_a1_steady
+  Criterion: ACC + NMPC active simultaneously; gap RMSE <= 0.5m
+  Failure:   ACC barely active (3.9%/1914 frames = 75 frames); lead at 20 m/s pulls away
+             from ego target speed of 12 m/s — ego never closes gap. NMPC is disabled
+             globally, so "ACC+NMPC coexistence" is structurally unverifiable. acc_pipeline
+             analysis returned n/a (below 8-10% threshold). Score: n/a.
+  Root:      Scenario targets 25 m/s ego, but active config target is 12 m/s. A1 requires
+             NMPC (disabled since project_nmpc_sloop_tuning.md) to be meaningful.
 
-==========================================================================================
-GATE: PASS  (all SKIPPED -- no active failures; SKIPPED does not block gate)
+H7 — highway_h7_straight_catchup
+  Criterion: gap closes in ~20s; steady follow after; gap RMSE <= 0.5m
+  Failure:   gap RMSE = 14.31m >> 0.5m (Expected)
+  Detail:    Detection 100%, TTC 21.1s, 0 collisions — safety gates pass cleanly. Startup
+             catch-up phase inflates the RMSE: worst frame shows gap_error=36.7m at frame 183
+             (57.6m actual gap vs ~21m desired). Score 91.2 GREEN overall.
+  Note:      The 0.5m threshold is copied from steady-follow scenarios (A1, G1); it does not
+             account for the catch-up transient inherent to H7's design. Worth reviewing
+             whether H7's Expected RMSE gate should use the 35m startup-inclusive threshold
+             like H2/H4.
 
-Failures:    none
-Warnings:    none
+H11 — highway_h11_freeflow_mild_curve
+  Criterion: trajectory score >= 95 (primary gate per Expected header)
+  Failure:   Trajectory = 73.6 / 100 (< 95 gate); Safety = 75.0 (1 out-of-lane event)
+  Detail:    Oscillation RMS runaway (start 0.002m -> end 1.388m); 37.2% of frames show
+             curve-local state latched on straights (<= 5% threshold); highway mild-curve
+             authority blocker = local_not_ready. Overall score 79.0 capped at critical_yellow.
+             LMPC RMSE 0.615m on straights confirms regression.
+  Context:   Same mild-curve regression tracked as T-SWEEP-HW-REGRESSION in
+             project_sweep_trajectory_flags.md (sweeping_highway 96.9->79.0). H11 reproduces
+             the failure on highway_65 base track.
 
-Skipped:     14 -- Step 2.5 disabled (preflight_cadence_fail); re-seed manually with:
-               /e2e tracks/scenarios/autobahn_a1_steady.yml
-               /e2e tracks/scenarios/autobahn_a2_hard_brake.yml
-               /e2e tracks/scenarios/highway_h2_steady.yml
-               /e2e tracks/scenarios/highway_h3_hard_brake.yml
-               /e2e tracks/scenarios/highway_h4_accel_away.yml
-               /e2e tracks/scenarios/highway_h5_stop_go.yml
-               /e2e tracks/scenarios/highway_h6_close_gap.yml
-               /e2e tracks/scenarios/highway_h7_straight_catchup.yml
-               /e2e tracks/scenarios/highway_h8_curve_catchup.yml        [FIRST SEED]
-               /e2e tracks/scenarios/highway_h9_adjacent_lane_parallel_reject.yml
-               /e2e tracks/scenarios/highway_h10_oncoming_straight_reject.yml  [FIRST SEED]
-               /e2e tracks/scenarios/highway_h11_freeflow_mild_curve.yml       [FIRST SEED]
-               /e2e tracks/scenarios/hill_g1_grade_following.yml
-               /e2e tracks/scenarios/hill_g2_stop_on_grade.yml
+G1 — hill_g1_grade_following
+  Criterion: ACC active across full lap; grade FF + ACC coexist; gap RMSE <= 0.5m
+  Failure:   ACC active only 18.8% of frames (Expected: full lap); detection 21.1%;
+             gap RMSE = 40.77m >> 0.5m
+  Detail:    TTC 37.2s >= 2.0s, 0 collisions — safe. But ACC lost the lead persistently
+             (21.1% detection, 2 dropout events). acc_state_code stays mostly in FREE_FLOW
+             or DETECTION_LOSS. Grade FF + ACC can't be validated when ACC is barely active.
+  Root:      Lead detection is the bottleneck on hill_highway. Possible cause: hill geometry
+             causes lead to go out of radar FOV on grade transitions.
 
-Ambiguous:   0
+G2 — hill_g2_stop_on_grade
+  Criterion: ego stops cleanly on grade; no collision; no e-stop
+  Failure:   TTC min 1.521s < 2.0s universal gate; emergency safety systems activated:
+             collapsed_gap_stop (1488/1942 frames), ttc_estop (13 frames), emergency_brake (2)
+  Detail:    acc_request_estop=1 for 1501 frames. Near-miss event: gap dropped to 0.1m
+             (sustained > 3 frames). No physical collision (gap never < 0). Grade FF propulsive
+             bias (+~0.85 m/s^2 at 5% grade) was insufficient to prevent gap collapse.
+             Score 73.1Y: Safety=50 (e-stop+near-miss deductions), Tracking=93.7, Behavior=100.
+  Context:   Same failure as 2026-08-12 night (TTC 1.52s noted in project_acc_sweep_baseline.md).
+             2nd consecutive night with this result.
 
-==========================================================================================
-STALE SCORE CONTEXT (from last successful evaluation, pool ~96-100d ago)
-  Score color bands: >=90 GREEN  70-89 YELLOW  40-69 ORANGE  <40 RED
-  These are informational only -- too old for gate evaluation.
+──────────────────────────────────────────────────────────────────────────────────────────────
+WARNINGS  (1)
+──────────────────────────────────────────────────────────────────────────────────────────────
 
-  A2  (autobahn_a2_hard_brake)       80.5  YELLOW -- last valid run 2026-05-02
-  G1  (hill_g1_grade_following)      73.7  YELLOW -- last valid run 2026-05-05
-  H3  (highway_h3_hard_brake)        66.5  ORANGE -- last valid run 2026-05-06
-  H4  (highway_h4_accel_away)        66.5  ORANGE -- last valid run 2026-05-06
-  H7  (highway_h7_straight_catchup)  66.5  ORANGE -- last valid run 2026-05-06
-  H5  (highway_h5_stop_go)           62.5  ORANGE -- last valid run 2026-05-05
-  A1/H2/H6/H8/H9/H10/H11/G2: no stale score (never scored or data not evaluated)
+H8 — highway_h8_curve_catchup
+  Explicit Expected criteria: smooth ACC engage ~60m; no hunting; jerk P95 <= 4.0
+  Status:    All explicit gates MET — jerk P95 1.66 m/s^3 <= 4.0; IDM sign changes 0/min;
+             TTC 21.2s; 0 collisions. Score 79.0 YELLOW.
+  Warning:   Detection rate 40.3% during ACC-active frames (37.7% of run); lead is
+             frequently lost. acc_state breakdown: ACC_ACTIVE=830, DETECTION_LOSS=1245,
+             FREE_FLOW=123. When lead IS detected, behavior is stable (0 hunting events).
+             Separately: overall lateral drive quality is poor — Trajectory 59.7 (RED),
+             1 out-of-lane event, oscillation amplitude runaway in lateral control.
+  Note:      Behavior metric: accel sign-flips 227.7/min (B70) — highest oscillation in the
+             ACC suite. This is a longitudinal comfort concern even though jerk P95 passes.
 
-  NOTE: Orange scores on H3/H4/H5/H7 and Yellow on A2/G1 are a persistent signal.
-  H8/H10/H11 have never been seeded -- their first run is the highest priority for
-  new information.
+──────────────────────────────────────────────────────────────────────────────────────────────
+PASSES WITH NOTABLE WARNINGS  (informational)
+──────────────────────────────────────────────────────────────────────────────────────────────
 
-==========================================================================================
-ROOT CAUSE: Pool has been expired for >=96 days. Pre-flight gate trips consistently at 4am
-  under launchd (no GUI session, Unity resource-starved). This is a system-level issue,
-  not a code regression. Manual daytime re-seeding session needed.
+A2 — Score 79.0Y: gap RMSE 56.25m (Tracking=50); accel oscillation 102.5/min (B70). NMPC
+     disabled -> regime transition test is vestigial.
+H2 — Score 85.6Y: detection rate 76.9% (32 dropout events); IDM frequently loses lead.
+H3 — Score 87.2Y: detection rate 83.9% (20 dropout events); Behavior oscillation 109.5/min.
+H4 — Score 87.4Y: detection rate 81.0% (28 dropout events); Behavior oscillation 160.4/min.
 
-  Priority order for re-seeding (14 runs total; at ~4 min each ≈ 56 min):
-    1. H8/H10/H11 -- never seeded; any result is new information
-    2. H5 (62.5 Orange) -- worst stale score; stop-and-go is most demanding
-    3. H3/H4/H7 (66.5 Orange) -- brake and catchup scenarios
-    4. G1 (73.7 Yellow) -- grade-following + ACC coexistence
-    5. A2 (80.5 Yellow) -- autobahn hard brake at NMPC speed
-    6. A1/H2/H6/H9/G2 -- stale but no known score signal
+Pattern: H2/H3/H4 all show Behavior=70 (accel oscillation >30/min) and detection < 95% on
+highway_65 steady-follow scenarios. This is a systematic issue, not scenario-specific noise.
+The detection gap (76-84%) suggests the radar pipeline frequently loses the lead at longer
+gaps (P50 gap 57-61m on H2/H3/H4 vs 16-18m on H5/H6 which have detection=100%).
 
-==========================================================================================
-2026-08-11 ACC_SWEEP gate=PASS pass=0 fail=0 warn=0 skip=14 amb=0 total=14
+──────────────────────────────────────────────────────────────────────────────────────────────
+SKIPPED  (0)
+──────────────────────────────────────────────────────────────────────────────────────────────
+
+None — all 14 scenarios have recordings <= 1 day old (fresh 2026-08-12 re-seed).
+Step 2.5 was blocked by pre-flight gate (AV_NIGHTLY_NO_FRESH_E2E=1).
+FAIL/WARN scenarios were not re-seeded tonight. To refresh:
+  /e2e tracks/scenarios/autobahn_a1_steady.yml
+  /e2e tracks/scenarios/highway_h7_straight_catchup.yml
+  /e2e tracks/scenarios/highway_h11_freeflow_mild_curve.yml
+  /e2e tracks/scenarios/hill_g1_grade_following.yml
+  /e2e tracks/scenarios/hill_g2_stop_on_grade.yml
+  /e2e tracks/scenarios/highway_h8_curve_catchup.yml  (WARN)
+
+──────────────────────────────────────────────────────────────────────────────────────────────
+AMBIGUOUS  (0)
+──────────────────────────────────────────────────────────────────────────────────────────────
+
+None — all recordings have exact scenario track_id in HDF5 metadata; no disambiguation needed.
+
+──────────────────────────────────────────────────────────────────────────────────────────────
+CRASH SIGNAL SUMMARY  (historical rollover check)
+──────────────────────────────────────────────────────────────────────────────────────────────
+
+H9: pitch max 0.089 rad (5.1 deg), roll max 0.112 rad (6.4 deg) — NORMAL
+G2: pitch max 0.069 rad (4.0 deg), roll max 0.002 rad (0.1 deg) — NORMAL
+Historical distractor-guard rollover (pitch+-83 deg/roll+-172 deg) does NOT reproduce.
+Consistent with 2026-08-12 finding in project_acc_sweep_baseline.md.
+
+──────────────────────────────────────────────────────────────────────────────────────────────
+SYSTEMATIC OBSERVATIONS
+──────────────────────────────────────────────────────────────────────────────────────────────
+
+1. Behavior oscillation (longitudinal): Every scenario scored Behavior=70 due to accel
+   sign-flips > 30/min. H8 worst at 227.7/min. H5/H6 also at 70 despite overall GREEN scores.
+   This is a longitudinal comfort regression across the entire ACC suite.
+
+2. Detection gap at longer ranges: H2/H3/H4/G1/H8 all show detection < 50% when P50 gap
+   exceeds 55m. H5/H6 show 100% detection at P50 gap 16-18m. Radar SNR drops sharply
+   at range (P50 SNR ~0.24 at 60m vs 1.00 at <30m). Long-range detection is a systematic gap.
+
+3. A1 structural failure: A1 requires NMPC active (disabled globally). Scenario can only
+   pass after NMPC re-enablement. Not a tuning issue — a prerequisite gate.
+
+4. G2 persistent failure: TTC 1.52s on 2nd consecutive night. Grade FF bias is not
+   compensating adequately for the stop-on-grade scenario. Requires IDM/grade-FF review.
+
+──────────────────────────────────────────────────────────────────────────────────────────────
+
+2026-08-13 ACC_SWEEP gate=FAIL pass=8 fail=5 warn=1 skip=0 amb=0 total=14

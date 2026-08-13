@@ -131,14 +131,29 @@ trap notify_on_exit EXIT
   # measurement REQUIRES a recording newer than the smoke test's start time —
   # otherwise it returns 9999 and fails honestly.
   PREFLIGHT_LOG="$RUNTIME/logs/acc-sweep/preflight-$DATE.log"
+  PREFLIGHT_REC_DIR="$RUNTIME/preflight_recordings"
+  mkdir -p "$PREFLIGHT_REC_DIR"
   PREFLIGHT_START=$(date +%s)
-  ./start_av_stack.sh --force --skip-unity-build-if-clean \
-    --duration 10 --track-yaml tracks/highway_65.yml > "$PREFLIGHT_LOG" 2>&1 || true
-  PREFLIGHT_DT_P95=$(PREFLIGHT_START="$PREFLIGHT_START" /opt/homebrew/bin/python3 - <<'PYEOF' 2>/dev/null || echo 9999
+  # caffeinate MUST wrap this too, not just the `claude -p` call below. Without
+  # it the smoke test launches Unity into a display-asleep context at 4am, the
+  # GPU is throttled, and the gate measures starvation it caused itself. On
+  # 2026-08-13 this read 409ms here versus 153ms for the identical command run
+  # interactively — and that false FAIL then blocked the caffeinated agent run
+  # that followed. The protection was being applied one step too late.
+  #
+  # --recording_dir keeps these 10s smoke runs OUT of data/recordings. They are
+  # ~200-frame stubs; left in the main pool they become the "latest" recording
+  # for highway_65 and the nightly sweep scores a 17s straight-only run as if it
+  # were a full lap (observed 2026-08-13: 216-frame run scored 99.9, flagged as
+  # untrustworthy in the report).
+  caffeinate -di ./start_av_stack.sh --force --skip-unity-build-if-clean \
+    --duration 10 --track-yaml tracks/highway_65.yml \
+    --recording_dir "$PREFLIGHT_REC_DIR" > "$PREFLIGHT_LOG" 2>&1 || true
+  PREFLIGHT_DT_P95=$(PREFLIGHT_START="$PREFLIGHT_START" PREFLIGHT_REC_DIR="$PREFLIGHT_REC_DIR" /opt/homebrew/bin/python3 - <<'PYEOF' 2>/dev/null || echo 9999
 import glob, os, sys
 import h5py, numpy as np
 start = float(os.environ.get("PREFLIGHT_START", "0"))
-files = sorted(glob.glob("data/recordings/*.h5"), key=os.path.getmtime)
+files = sorted(glob.glob(os.environ.get("PREFLIGHT_REC_DIR", "data/recordings") + "/*.h5"), key=os.path.getmtime)
 # Only accept a recording this smoke test actually produced. Scoring an older
 # file would report cadence for a run that never happened.
 files = [f for f in files if os.path.getmtime(f) >= start]

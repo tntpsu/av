@@ -1,30 +1,33 @@
-step0_started 2026-08-11 2026-08-11T04:00:31-04:00
-[skill] Step 2.5 disabled by wrapper pre-flight (cadence too slow)
-scenario_autobahn_a1_steady_running 2026-08-11T04:01:32-04:00
-scenario_autobahn_a1_steady_done verdict=SKIPPED reason="preflight_cadence_fail" 2026-08-11T04:01:32-04:00
-scenario_autobahn_a2_hard_brake_running 2026-08-11T04:01:32-04:00
-scenario_autobahn_a2_hard_brake_done verdict=SKIPPED reason="preflight_cadence_fail" 2026-08-11T04:01:32-04:00
-scenario_highway_h2_steady_running 2026-08-11T04:01:32-04:00
-scenario_highway_h2_steady_done verdict=SKIPPED reason="preflight_cadence_fail" 2026-08-11T04:01:32-04:00
-scenario_highway_h3_hard_brake_running 2026-08-11T04:01:32-04:00
-scenario_highway_h3_hard_brake_done verdict=SKIPPED reason="preflight_cadence_fail" 2026-08-11T04:01:32-04:00
-scenario_highway_h4_accel_away_running 2026-08-11T04:01:32-04:00
-scenario_highway_h4_accel_away_done verdict=SKIPPED reason="preflight_cadence_fail" 2026-08-11T04:01:32-04:00
-scenario_highway_h5_stop_go_running 2026-08-11T04:01:32-04:00
-scenario_highway_h5_stop_go_done verdict=SKIPPED reason="preflight_cadence_fail" 2026-08-11T04:01:32-04:00
-scenario_highway_h6_close_gap_running 2026-08-11T04:01:32-04:00
-scenario_highway_h6_close_gap_done verdict=SKIPPED reason="preflight_cadence_fail" 2026-08-11T04:01:32-04:00
-scenario_highway_h7_straight_catchup_running 2026-08-11T04:01:32-04:00
-scenario_highway_h7_straight_catchup_done verdict=SKIPPED reason="preflight_cadence_fail" 2026-08-11T04:01:32-04:00
-scenario_highway_h8_curve_catchup_running 2026-08-11T04:01:32-04:00
-scenario_highway_h8_curve_catchup_done verdict=SKIPPED reason="preflight_cadence_fail" 2026-08-11T04:01:32-04:00
-scenario_highway_h9_adjacent_lane_parallel_reject_running 2026-08-11T04:01:32-04:00
-scenario_highway_h9_adjacent_lane_parallel_reject_done verdict=SKIPPED reason="preflight_cadence_fail" 2026-08-11T04:01:32-04:00
-scenario_highway_h10_oncoming_straight_reject_running 2026-08-11T04:01:32-04:00
-scenario_highway_h10_oncoming_straight_reject_done verdict=SKIPPED reason="preflight_cadence_fail" 2026-08-11T04:01:32-04:00
-scenario_highway_h11_freeflow_mild_curve_running 2026-08-11T04:01:32-04:00
-scenario_highway_h11_freeflow_mild_curve_done verdict=SKIPPED reason="preflight_cadence_fail" 2026-08-11T04:01:32-04:00
-scenario_hill_g1_grade_following_running 2026-08-11T04:01:32-04:00
-scenario_hill_g1_grade_following_done verdict=SKIPPED reason="preflight_cadence_fail" 2026-08-11T04:01:32-04:00
-scenario_hill_g2_stop_on_grade_running 2026-08-11T04:01:32-04:00
-scenario_hill_g2_stop_on_grade_done verdict=SKIPPED reason="preflight_cadence_fail" 2026-08-11T04:01:32-04:00
+step0_started 2026-08-13 2026-08-13T04:04:04-04:00
+preflight_no_fresh_e2e AV_NIGHTLY_NO_FRESH_E2E=1 2026-08-13T04:05:25-04:00
+scenario_autobahn_a1_steady_running 2026-08-13T04:05:25-04:00
+scenario_autobahn_a2_hard_brake_running 2026-08-13T04:05:25-04:00
+scenario_highway_h2_steady_running 2026-08-13T04:05:25-04:00
+scenario_highway_h3_hard_brake_running 2026-08-13T04:05:25-04:00
+scenario_highway_h4_accel_away_running 2026-08-13T04:05:25-04:00
+scenario_highway_h5_stop_go_running 2026-08-13T04:05:25-04:00
+scenario_highway_h6_close_gap_running 2026-08-13T04:05:25-04:00
+scenario_highway_h7_straight_catchup_running 2026-08-13T04:05:25-04:00
+scenario_highway_h8_curve_catchup_running 2026-08-13T04:05:25-04:00
+scenario_highway_h9_adjacent_lane_parallel_reject_running 2026-08-13T04:05:25-04:00
+scenario_highway_h10_oncoming_straight_reject_running 2026-08-13T04:05:25-04:00
+scenario_highway_h11_freeflow_mild_curve_running 2026-08-13T04:05:25-04:00
+scenario_hill_g1_grade_following_running 2026-08-13T04:05:25-04:00
+scenario_hill_g2_stop_on_grade_running 2026-08-13T04:05:25-04:00
+step2_5_skipped preflight_cadence_fail AV_NIGHTLY_NO_FRESH_E2E=1 2026-08-13T04:13:21-04:00
+scenario_autobahn_a1_steady_done verdict=FAIL reason="ACC active only 3.9% (lead at 20 m/s pulls away from ego 12 m/s target); NMPC disabled; ACC+NMPC coexistence unverifiable; score n/a" 2026-08-13T04:13:21-04:00
+scenario_autobahn_a2_hard_brake_done verdict=PASS reason="TTC 15.20s; 0 collisions; Δsteering max 0.084≤0.10; score 79.0 YELLOW (warn: gap RMSE 56.25m, accel oscillation 102/min)" 2026-08-13T04:13:21-04:00
+scenario_highway_h2_steady_done verdict=PASS reason="gap RMSE 33.1m≤35m; TTC 45.7s; 0 collisions; score 85.6 YELLOW (warn: detection 76.9%, 32 dropouts)" 2026-08-13T04:13:21-04:00
+scenario_highway_h3_hard_brake_done verdict=PASS reason="TTC 6.51s; 0 collisions; 0 near-miss; score 87.2 YELLOW (warn: detection 83.9%, accel oscillation 110/min)" 2026-08-13T04:13:21-04:00
+scenario_highway_h4_accel_away_done verdict=PASS reason="gap RMSE 27.1m≤35m; TTC 47.3s; 0 collisions; score 87.4 YELLOW (warn: detection 81.0%, accel oscillation 160/min)" 2026-08-13T04:13:21-04:00
+scenario_highway_h5_stop_go_done verdict=PASS reason="TTC 3.06s; 0 collisions; detection 100%; score 93.9 GREEN" 2026-08-13T04:13:21-04:00
+scenario_highway_h6_close_gap_done verdict=PASS reason="TTC 11.2s; 0 collisions; detection 100%; score 93.9 GREEN" 2026-08-13T04:13:21-04:00
+scenario_highway_h7_straight_catchup_done verdict=FAIL reason="gap RMSE 14.31m >> Expected ≤ 0.5m; note: threshold appears calibrated for steady-follow only; score 91.2 GREEN" 2026-08-13T04:13:21-04:00
+scenario_highway_h8_curve_catchup_done verdict=WARN reason="detection 40.3% during ACC-active frames; overall drive Traj 59.7 RED (out-of-lane); explicit jerk/hunting criteria met; score 79.0 YELLOW" 2026-08-13T04:13:21-04:00
+scenario_highway_h9_adjacent_lane_parallel_reject_done verdict=PASS reason="ACC never engaged (0%); reject_reason=wrong_lane confirmed; no same-lane association; no rollover (pitch 5°, roll 0.1°)" 2026-08-13T04:13:21-04:00
+scenario_highway_h10_oncoming_straight_reject_done verdict=PASS reason="ACC never engaged (0%); reject_reason=opposite_direction confirmed; 0 collisions" 2026-08-13T04:13:21-04:00
+scenario_highway_h11_freeflow_mild_curve_done verdict=FAIL reason="Trajectory 73.6 < 95 gate; Safety 75.0 (out-of-lane event); oscillation amplitude runaway; overall score 79.0" 2026-08-13T04:13:21-04:00
+scenario_hill_g1_grade_following_done verdict=FAIL reason="ACC active only 18.8% (Expected: full lap); detection 21.1%; gap RMSE 40.8m >> 0.5m; score 83.3 YELLOW" 2026-08-13T04:13:21-04:00
+scenario_hill_g2_stop_on_grade_done verdict=FAIL reason="TTC min 1.52s < 2.0s gate; collapsed_gap_stop activated (1488 frames); near-miss event (gap → 0.1m); score 73.1 YELLOW" 2026-08-13T04:13:21-04:00
+GATE: FAIL pass=8 fail=5 warn=1 skip=0 amb=0 total=14 2026-08-13T04:16:02-04:00
+sweep_complete 2026-08-13T04:16:02-04:00
