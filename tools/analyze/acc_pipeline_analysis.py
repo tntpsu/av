@@ -98,8 +98,20 @@ def _load_acc_arrays(path: Path) -> dict | None:
         def ctrl(key):
             return np.array(f[key][:n], dtype=float) if key in f else None
 
+        # Real capture rate, for rate-per-minute metrics. Must NOT be assumed:
+        # this stack runs at ~13 FPS, not 30 (see docs/agent/performance.md), and
+        # a hardcoded 30 inflates every per-minute rate by ~2.3x.
+        fps_measured = None
+        if "camera/timestamps" in f:
+            _ts = np.array(f["camera/timestamps"][:n], dtype=float)
+            if _ts.size >= 2:
+                _span = float(_ts[-1] - _ts[0])
+                if _span > 0:
+                    fps_measured = (_ts.size - 1) / _span
+
         return {
             "n": n,
+            "fps": fps_measured,
             "acc_active": acc_active,
             "acc_active_pct": acc_active_pct,
             "detected": arr("vehicle/radar_fwd_detected", 0.0),
@@ -178,8 +190,13 @@ def _card2_idm_state(d: dict) -> None:
             gate = "PASS" if rmse <= ACC_GAP_RMSE_GATE_M else "FAIL"
             print(f"  Gap Error RMSE:   {rmse:.3f}m  [{gate} ≤ {ACC_GAP_RMSE_GATE_M}m]")
             print(f"  Gap Error P05/P95: {np.percentile(ge_acc, 5):.2f}m / {np.percentile(ge_acc, 95):.2f}m")
+            # Same fps bug as _sign_flips_per_min had: 30.0 was hardcoded while
+            # the stack captures at ~13 FPS. Also `max(1.0, ...)` floored the
+            # duration at one minute, silently under-reporting any run shorter
+            # than that. Use the measured rate and the real duration.
+            _fps = d.get("fps") or 30.0
             sign_changes = int(np.sum(np.diff(np.sign(ge_acc)) != 0))
-            duration_min = max(1.0, len(ge_acc) / 30.0 / 60.0)
+            duration_min = max(1.0 / 60.0, len(ge_acc) / _fps / 60.0)
             print(f"  IDM Sign Changes:  {sign_changes / duration_min:.1f}/min  "
                   f"(>20/min = hunting pattern)")
 
@@ -294,15 +311,44 @@ def _count_sustained_events(mask: np.ndarray, min_run: int = 3) -> int:
     return count
 
 
-def _sign_flips_per_min(values: np.ndarray, n_frames: int, fps: float = 30.0) -> float:
+def _sign_flips_per_min(values: np.ndarray, n_frames: int, fps: float | None = None) -> float:
     """Sign-flip rate of `values`. Used for hunting (gap_error) and oscillation (accel_cmd).
 
     Treats zeros as "same sign as previous" so a steady-zero region doesn't fake flips.
+
+    2026-08-14 — two bugs fixed here; together they inflated every reported rate
+    by ~2.5x and pegged the oscillation penalty at its cap on every scenario, so
+    the metric could neither rank scenarios nor detect improvement:
+
+      1. `fps` defaulted to 30.0 and was never passed by either call site, but
+         this stack captures at ~13 FPS. Duration was understated 2.3x, so the
+         rate was overstated by the same factor. Now takes the measured fps from
+         the recording (d["fps"]) and only falls back to 30.0 if unavailable.
+      2. The zero guard `s[s == 0] = 0` was a no-op — it assigned 0 to elements
+         already 0, so the documented "same sign as previous" behaviour never
+         happened. A signal passing through exact zero (+ -> 0 -> +) counted TWO
+         spurious flips where there was no sign change at all.
+
+    Measured effect on highway_h3_hard_brake (recording_20260812_104557):
+    109.5/min as-is -> 46.9 with real fps -> 43.0 with both fixed, against a
+    30/min free threshold. Still genuinely over, but 1.4x rather than 3.6x.
     """
     if values.size < 2:
         return 0.0
+    if fps is None or not np.isfinite(fps) or fps <= 0:
+        fps = 30.0
     s = np.sign(values)
-    s[s == 0] = 0  # leave; np.diff will produce 0 for these (no flip counted)
+    # Carry the previous non-zero sign across zeros, so flat-zero regions and
+    # zero crossings are not counted as sign changes.
+    nz = s != 0
+    if not nz.any():
+        return 0.0
+    idx = np.where(nz, np.arange(s.size), 0)
+    np.maximum.accumulate(idx, out=idx)
+    s = s[idx]
+    s = s[s != 0]
+    if s.size < 2:
+        return 0.0
     flips = int(np.sum(np.diff(s) != 0))
     duration_min = max(1.0 / 60.0, n_frames / fps / 60.0)
     return flips / duration_min
@@ -390,7 +436,7 @@ def _compute_acc_score(d: dict) -> dict | None:
                 tracking -= pen
                 tracking_deductions.append((f"gap RMSE {rmse:.2f}m (free ≤{ACC_SCORE_GAP_RMSE_FREE_M}m)", pen))
 
-            hunting_rate = _sign_flips_per_min(ge_acc, n_active)
+            hunting_rate = _sign_flips_per_min(ge_acc, n_active, d.get("fps"))
             if hunting_rate > ACC_SCORE_HUNTING_FREE_PER_MIN:
                 pen = min(ACC_SCORE_HUNTING_PENALTY_CAP,
                           (hunting_rate - ACC_SCORE_HUNTING_FREE_PER_MIN) * ACC_SCORE_HUNTING_PENALTY_PER_UNIT)
@@ -429,7 +475,7 @@ def _compute_acc_score(d: dict) -> dict | None:
         if accel is not None:
             a_acc = accel[acc_mask & np.isfinite(accel)]
             if a_acc.size > 0:
-                osc_rate = _sign_flips_per_min(a_acc, n_active)
+                osc_rate = _sign_flips_per_min(a_acc, n_active, d.get("fps"))
                 if osc_rate > ACC_SCORE_OSC_FREE_PER_MIN:
                     pen = min(ACC_SCORE_OSC_PENALTY_CAP,
                               (osc_rate - ACC_SCORE_OSC_FREE_PER_MIN) * ACC_SCORE_OSC_PENALTY_PER_UNIT)

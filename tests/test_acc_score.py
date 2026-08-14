@@ -155,3 +155,44 @@ def test_composite_weights_sum_correctly():
     # composite formula end-to-end; this test is informational, kept simple.
     score = _compute_acc_score(_make_input())
     assert score["composite"] == 100.0
+
+
+# ── Regression: sign-flip rate must use the REAL capture rate ────────────────
+# Added 2026-08-14 after `_sign_flips_per_min` was found hardcoding fps=30.0
+# while the stack captures at ~13 FPS, inflating every per-minute rate by ~2.3x
+# and pegging the oscillation penalty at its cap on every ACC scenario. The 28
+# pre-existing ACC tests all passed both before and after the fix — none of them
+# exercised the rate denominator or the zero handling.
+from acc_pipeline_analysis import _sign_flips_per_min  # noqa: E402
+
+
+class TestSignFlipsPerMin:
+    def test_rate_uses_supplied_fps_not_hardcoded_30(self):
+        """A 13 FPS recording must not be scored as if it were 30 FPS."""
+        # 100 alternating samples -> 99 flips.
+        v = np.array([1.0, -1.0] * 50)
+        n = 1300  # frames of ACC-active data
+        at_13 = _sign_flips_per_min(v, n, 13.0)
+        at_30 = _sign_flips_per_min(v, n, 30.0)
+        # 1300 frames is 100s at 13 FPS but only 43s at 30 FPS, so the bogus
+        # 30 FPS denominator inflates the rate by ~2.3x.
+        assert at_30 > at_13
+        assert at_30 / at_13 == pytest.approx(30.0 / 13.0, rel=1e-6)
+
+    def test_zeros_do_not_fake_sign_flips(self):
+        """+ -> 0 -> + is not a sign change; the old no-op guard counted two."""
+        v = np.array([1.0, 0.0, 1.0, 0.0, 1.0])
+        assert _sign_flips_per_min(v, 100, 13.0) == 0.0
+
+    def test_real_sign_change_through_zero_counts_once(self):
+        v = np.array([1.0, 0.0, -1.0])
+        n, fps = 130, 13.0
+        expected = 1 / (n / fps / 60.0)
+        assert _sign_flips_per_min(v, n, fps) == pytest.approx(expected)
+
+    def test_all_zero_signal_has_no_flips(self):
+        assert _sign_flips_per_min(np.zeros(50), 100, 13.0) == 0.0
+
+    def test_none_fps_falls_back_without_crashing(self):
+        v = np.array([1.0, -1.0, 1.0])
+        assert _sign_flips_per_min(v, 100, None) > 0.0

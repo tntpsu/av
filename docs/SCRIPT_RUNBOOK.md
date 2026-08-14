@@ -299,3 +299,17 @@ This runbook is enforced by automation:
 
 If script-like files change without updating `docs/SCRIPT_RUNBOOK.md`, the check fails.
 
+
+### `tools/analyze/acc_pipeline_analysis.py`
+
+- **Purpose:** Five-card ACC analysis (radar health, IDM state, safety layer, worst frames, composite 0–100 score). Invoked by `/acc-sweep` and the nightly ACC job.
+- **Unity launch behavior:** None — offline over an existing recording.
+- **Invocation:** `--file <path>` or `--latest`. A bare positional path errors.
+- **Silently returns no score** when `acc_active_pct < ACC_MIN_ACTIVE_FRAME_RATE` (~8–10%). For rejection scenarios (H9 adjacent-lane, H10 oncoming) and free-flow (H11) that is the *correct* outcome — ACC is meant to stay disengaged. **Do not read "n/a" as FAIL for those.**
+- **2026-08-14 fix — `_sign_flips_per_min` inflated every rate ~2.5×:**
+  1. `fps` defaulted to `30.0` and was never passed by either call site, but this stack captures at **~13 FPS** (`docs/agent/performance.md`). Duration was understated 2.3×, so every per-minute rate was overstated by the same factor. Now takes the measured rate from `d["fps"]`, derived from `camera/timestamps` in the loader.
+  2. The zero guard `s[s == 0] = 0` was a **no-op** — it assigned 0 to elements already 0, so the documented "treat zeros as same sign as previous" never happened and a signal passing through exact zero counted two spurious flips.
+  - Card 2's "IDM Sign Changes" had the same hardcoded 30.0, plus a `max(1.0, …)` that floored duration at one minute and under-reported any shorter run.
+  - **Effect:** the oscillation penalty was pegged at its −30 cap on *every* ACC scenario, so the score could neither rank scenarios nor detect improvement. After the fix, `highway_h3_hard_brake` reads 43.0/min instead of 109.5 and scores 90.6 GREEN instead of 87.2 YELLOW; H5 and H6 rise to ~99.5.
+  - Regression tests: `tests/test_acc_score.py::TestSignFlipsPerMin`. The 28 pre-existing ACC tests passed both before and after the bug — none exercised the rate denominator.
+- **If you add a per-minute metric here, take fps from `d["fps"]`. Never hardcode 30.**
