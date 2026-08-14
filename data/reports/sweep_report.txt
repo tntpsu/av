@@ -1,59 +1,68 @@
-CROSS-TRACK SWEEP — 2026-08-13 (night 92, --quick)
+CROSS-TRACK SWEEP — 2026-08-14 (Night 93, --quick)
 ═══════════════════════════════════════════════════════════════
 Track              Baseline    Now    Delta    Traj   Gate
 s_loop               99.1     99.0    -0.1    96.4   PASS
-highway_65           99.5     99.9    +0.4    99.5   FLAG (truncated 216-frame/19.8s run)
-hairpin_15           98.7     98.4    -0.3    94.4   FAIL (Traj 94.4 < 95)
-sweeping_highway     91.4*    79.0   -12.4    75.5   FAIL (T-SWEEP-HW-REGRESSION; critical_yellow_layer cap)
-mixed_radius         98.7     97.5    -1.2    92.2   FAIL (Traj 92.2 < 95) + FLAG (delta > 1 pt)
-hill_highway         97.6     96.3    -1.3    86.5   FAIL (Traj 86.5 < 95) + FLAG (delta > 1 pt)
+highway_65           99.5     99.5     0.0    98.1   PASS
+hairpin_15           98.7     98.6    -0.1    94.8   FAIL (Traj 94.8 < 95)
+sweeping_highway     91.4*    98.3    +6.9    94.0   FAIL (Traj 94.0 < 95)
+mixed_radius         98.7     98.5    -0.2    94.6   FAIL (Traj 94.6 < 95)
+hill_highway         97.6     97.6     0.0    91.2   FAIL (Traj 91.2 < 95, worst)
 ═══════════════════════════════════════════════════════════════
 GATE: FAIL
 
 * sweeping_highway baseline (91.4) is from 2026-03-12 and is stale.
-  The more accurate reference is the 2026-04-12 score (96.9),
-  making the real regression -17.9 pts (tracked as T-SWEEP-HW-REGRESSION).
 
-Regressions (> 2 pts): sweeping_highway (-12.4 vs stale baseline; -17.9 vs Apr-12 ref)
+Regressions (> 2 pts): none
 New e-stops: none
-Flags (> 1 pt or notable): mixed_radius (-1.2), hill_highway (-1.3),
-  highway_65 (truncated 216-frame run; score not representative)
+Flags (> 1 pt): none
 
 Layer scores (all tracks):
   Track              Safety  Trajectory  Control  Perception  LongComfort  SigInteg
   s_loop              100.0    96.4      100.0     100.0       100.0       100.0
-  highway_65          100.0    99.5      100.0     100.0       100.0       100.0   [truncated]
-  hairpin_15          100.0    94.4      100.0     100.0       100.0       100.0  <- FAIL
-  sweeping_highway    100.0    75.5      100.0     100.0       100.0       100.0  <- FAIL (capped)
-  mixed_radius        100.0    92.2       97.5     100.0       100.0       100.0  <- FAIL
-  hill_highway        100.0    86.5      100.0     100.0       100.0       100.0  <- FAIL
+  highway_65          100.0    98.1      100.0     100.0       100.0       100.0
+  hairpin_15          100.0    94.8      100.0     100.0       100.0       100.0  <- FAIL
+  sweeping_highway    100.0    94.0      100.0     100.0       100.0       100.0  <- FAIL
+  mixed_radius        100.0    94.6      100.0     100.0       100.0       100.0  <- FAIL
+  hill_highway        100.0    91.2      100.0     100.0       100.0       100.0  <- FAIL (worst)
 
 Recordings analyzed (--quick, verbatim latest_per_track):
-  s_loop           recording_20260812_130233.h5  (1290 frames, 117.9s)
-  highway_65       recording_20260812_221527.h5  (216 frames, 19.8s) <- TRUNCATED
-  hairpin_15       recording_20260812_101858.h5  (1288 frames, 117.2s)
-  sweeping_highway recording_20260812_102440.h5  (1290 frames, 118.6s)
-  mixed_radius     recording_20260812_102007.h5  (1297 frames, 115.6s)
-  hill_highway     recording_20260812_102235.h5  (1283 frames, 117.3s)
+  s_loop           recording_20260812_130233.h5  (1290 frames, 117.9s)  [Aug-12, same as night 92]
+  highway_65       recording_20260813_190010.h5  (1281 frames, 117.8s)  [Aug-13 NEW]
+  hairpin_15       recording_20260813_183105.h5  (1302 frames, 118.9s)  [Aug-13 NEW]
+  sweeping_highway recording_20260813_184354.h5  (1298 frames, 104.4s)  [Aug-13 NEW]
+  mixed_radius     recording_20260813_181329.h5  (1301 frames, 103.9s)  [Aug-13 NEW]
+  hill_highway     recording_20260813_103343.h5  (1286 frames, 114.8s)  [Aug-13 NEW]
 
-Context:
-  Night 92 — first nightly sweep after the 2026-08-12 Unity re-seeding.
-  All 5 full-length recordings are fresh from 2026-08-12; scores confirm
-  the 2026-08-12 daytime re-seed results within rounding.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+NOTABLE: T-SWEEP-HW-REGRESSION DOES NOT REPRODUCE ON 2026-08-13
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Aug-12 confirmed the regression twice: 79.0 (Traj 75.5 and 77.5), capped by
+critical_yellow_layer. Aug-13 fresh run scores 98.3 / Traj 94.0 — an enormous
+jump from 79.0. The regression does NOT reproduce on Aug-13.
 
-  highway_65: two consecutive truncated runs on 2026-08-12 (216 and 210 frames)
-  both pass the 200-frame floor but represent only ~17s of a 60s expected run.
-  The Apr-19 fallback (1893 frames, 98.8 score) is no longer selected because
-  the newer truncated recordings are more recent. Score 99.9 is not trustworthy.
+Key difference: the Aug-13 run was tuning-valid (cadence dt_p95=76.9ms, vs
+dt_p95=153.8ms in the Aug-12 runs that scored 79.0). A more consistent cadence
+may allow the LMPC to track curves substantially better. The Aug-13 run had
+LMPC active at 97.2% and scored comparable to the pre-regression Apr-12
+recording (96.9).
 
-  sweeping_highway T-SWEEP-HW-REGRESSION confirmed for the second consecutive
-  run. Trajectory 75.5 triggers critical_yellow_layer cap (raw weighted 93.8 → 79.0).
-  Deduction: Lateral Error RMSE (curv-adj) -14.8. Diagnostics: highway mild-curve
-  active-state authority insufficient at speed; apex cutting C2 (-0.202m).
-  Causing change landed Apr 12 → May 6 (not yet bisected).
+Status of T-SWEEP-HW-REGRESSION: DO NOT CLOSE. Two confirmed occurrences on
+Aug-12; one non-reproduction on Aug-13. Needs another fresh run to classify as
+transient cadence artifact vs intermittent regression. The cadence-score link
+is a plausible mechanism worth investigating — see cadence dt_p95 difference.
 
-  Other Traj < 95 failures (hairpin, mixed_radius, hill_highway) are the known
-  PP curve-tracking ceiling — architectural, not tunable.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STANDING ISSUE — Trajectory < 95 on all curve-heavy tracks
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Uniform deduction: "Lateral Error RMSE (curv-adj)" on 4 of 6 tracks.
+Root cause: PP curve-tracking ceiling — architectural gap, not tunable.
+Straight-dominant tracks (s_loop, highway_65) pass; curve-heavy tracks fail.
 
-  -> /diagnose sweeping_highway to investigate T-SWEEP-HW-REGRESSION
-  -> Do NOT tune the Traj < 95 pattern on other tracks (PP → LMPC architectural gap)
+Per-track curve diagnostics:
+  hairpin_15:      apex cutting C1 (-0.160m), C2 (-0.251m); local state latch 24.9%
+  sweeping_highway: apex cutting C1 (-0.100m), C2 (-0.172m); LMPC 97.2% active
+  mixed_radius:    late turn-in C1, apex cutting C2 (+0.105m); LMPC 94.6% active
+  hill_highway:    apex cutting C2 (-0.253m), C4 (-0.227m); late turn-in C3; LMPC 97.6%
+
+Recommended action: /diagnose hill_highway (worst Traj 91.2; architectural, not config).
+Do NOT tune — per feedback_iterate_fix_level, this is an arch-level fix (PP → LMPC).

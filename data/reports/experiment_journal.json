@@ -277,5 +277,27 @@
       "tools/drive_summary_core.py",
       "tests/test_drive_summary_trajectory_health_synthetic.py"
     ]
+  },
+  {
+    "date": "2026-08-13",
+    "target_metric": "lateral_error_rmse",
+    "target_track": "sweeping_highway (+ mixed_radius, highway_65, hairpin_15)",
+    "approach": "Revert trajectory.mpc.mpc_e_lat_reference_mode from at_car_gt_legacy back to lookahead_gt_legacy. 4-track A/B batch, 5 paired trials each (40 Unity runs).",
+    "fix_level": "CONFIG",
+    "hypothesis": "T-SWEEP-HW-REGRESSION traced to commit 026354a (2026-04-19), which set at_car_gt_legacy and reverted the 2026-04-05 reference-alignment fix. Triage engine reported corr(mpc_e_lat,-lateral_error)=0.718 vs >0.90 expected; the Apr-12 recording of the same track (pre-change) measured 0.986. Expect restoring lookahead to re-align the MPC target with the scored error and recover the regression.",
+    "outcome": "IMPROVEMENT",
+    "outcome_status": "OPEN",
+    "metric_before": 0.323,
+    "metric_after": 0.138,
+    "root_cause_of_failure": null,
+    "root_cause_detail": "Batched medians, disjoint quartiles on every RMSE comparison. sweeping_highway 0.323->0.138 (-57%), mixed_radius 0.179->0.107 (-40%), highway_65 0.049->0.039 (-20%), hairpin_15 0.177->0.176 (neutral; both arms pinned at the pp_max_steering_jerk 18.0 limiter). Steering jerk moved in OPPOSITE directions by track: -37% on sweeping (worst-aligned) but +65% on mixed_radius, consistent with alignment helping most where misalignment hurt most. All comfort gates unchanged (commanded_jerk_p95 0.624 in all 8 arms). Speeds identical between arms (10.13 vs 10.16 m/s), so the RMSE win is not a slow-down artifact. NOT YET PROMOTED: 14 ACC scenarios unvalidated, and mpc_ff_decomposition_enabled:true exists to compensate for the change being reverted, so its justification needs re-checking.",
+    "iterations_spent": 1,
+    "files_changed": [
+      "config/av_stack_config.yaml (tested only, restored)",
+      "tools/analyze/run_ab_batch.py",
+      "tools/analyze/run_gate_and_triage.py"
+    ],
+    "superseded_by": null,
+    "resolved_by": null
   }
 ]
