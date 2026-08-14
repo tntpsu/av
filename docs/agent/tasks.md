@@ -6,6 +6,52 @@
 
 ## Queued — pick up next
 
+### T-SCORE-SPEED-COMPLIANCE — speed/progress is not scored at all (2026-08-14)
+
+**Scoring gap, raised by the user.** The stack is scored entirely on tracking
+accuracy and comfort. There is **no deduction anywhere for speed compliance,
+progress, or journey time** — verified against the full cross-track Pareto
+(20 tracks, 13 distinct deduction names, none speed-related).
+
+What *does* exist is one-directional and partial:
+- `speed_governor.py:229` uses `track_speed_limit` as a ceiling (`target = max(0, limit)`, then only ever `min()`'d down)
+- `overspeed_on_downhill_rate` (`drive_summary_core.py:5296`) — overspeed only, downhill only
+- `road_speed_limit_higher_than_configured_acc_target` — informational flag, no score impact
+
+Measured compliance (fresh 2026-08-12/13 recordings):
+
+| Track | Limit | Mean | % of limit |
+|---|---|---|---|
+| highway_65 | 29.1 m/s | 10.1 | **35%** |
+| sweeping_highway | 29.1 m/s | 10.1 | **35%** |
+| s_loop | 11.2 m/s | 4.2 | 38% |
+| mixed_radius | 17.9 m/s | 8.9 | 50% |
+| hill_highway | 13.4 m/s | 7.2 | 54% |
+| hairpin_15 | 6.7 m/s | 4.4 | 66% (max 6.7 — **at the limit**) |
+
+**Why it matters:** the binding constraint is `a_lat_tracking_budget_g: 0.05`
+(the velocity profiler plans against controller capability, not tire limits —
+a deliberate design, see `project_velocity_profile`). Combined with an unscored
+speed axis this is a one-way ratchet: `Lateral Error RMSE` is the #1 deduction
+across 20/20 tracks, and the cheapest way to cut lateral error is to slow down.
+Nothing pushes back.
+
+`tasks.md` already states the intended loop — *"improve lateral controller →
+raise tracking budget → profile becomes binding → faster curve speeds."*
+The 2026-08-13 A/B improved lateral RMSE 40–57% on highway tracks, which is
+exactly the evidence that would justify raising the budget — but with no speed
+term in the score, that half of the loop never fires.
+
+**Proposed:** add a two-sided speed-compliance / progress term to the scoring
+layers. Two-sided matters: hairpin_15 already touches its limit, so overspeed
+penalty is as relevant as underspeed.
+
+**Blocked on:** this changes the scoring formula, so it requires baseline
+re-freezing per the Testing Protocol (`tests/fixtures/scoring_baselines.json`,
+`BASELINE_SCORES` in `tests/conftest.py`, `scoring_baselines`). Use
+`/revalidate` to capture pre/post on fixed recordings rather than fresh Unity
+runs. Do NOT land while another A/B is in flight.
+
 ### T-ACC-G2-TTC — G2 stop_on_grade TTC min 1.52 s < 2.0 s gate (2026-08-12)
 
 **Now the top ACC issue** — H5 vacated that spot by going 62.5 ORANGE → 93.9 GREEN
