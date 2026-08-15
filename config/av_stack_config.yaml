@@ -1066,6 +1066,18 @@ stack:
   # Match Unity CameraCapture.targetFPS (CarPrefab + CameraCapture.cs default).
   # 13 Hz: aligned with sustained consumer throughput (queue was pinned at 15 Hz target).
   target_loop_hz: 13.0
+  # Vehicle-fell-off-the-world detection. Tracks are a bare 7.2m mesh collider
+  # with no terrain beside them, so leaving the road means falling into void.
+  # Confirmed occurrence: recording_20260506_042710.h5 fell 46.7m undetected.
+  fall_detection:
+    enabled: true
+    # Descent rate beyond any achievable grade. max_speed x max_grade =
+    # 25 m/s x 0.10 = 2.5 m/s is the physical ceiling; free fall passes 4 m/s in
+    # 0.41s. Measured: H9 fall 47.65 m/s, steepest grade (hill_highway) 0.72 m/s.
+    # Do NOT use an absolute drop threshold — graded tracks legitimately lose ~5m.
+    descent_rate_mps: 4.0
+    airborne_frames: 5          # all four wheels off ground, consecutive frames
+    post_fall_grace_s: 2.0      # keep recording this long after the fall, then end the run
   # Use GET /api/camera/latest/raw (no JPEG round-trip). Set false for legacy bridge only.
   use_raw_camera_transport: true
   # Bridge FIFO depth per camera (freshness vs buffering). start_av_stack.sh exports AV_BRIDGE_MAX_CAMERA_QUEUE from this.

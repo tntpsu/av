@@ -1212,6 +1212,21 @@ class AVStack:
             stack_cfg.get("topdown_recording_interval_frames", 1)
         )
         self._topdown_record_tick = 0
+
+        # ── Vehicle-fell-off-the-world detection ────────────────────────────
+        # Config-gated (feedback_config_kill_switch_pattern): set
+        # stack.fall_detection.enabled: false to disable without a code revert.
+        _fall_cfg = dict(stack_cfg.get("fall_detection") or {})
+        self._fall_detector = None
+        self._fall_detected_at = None
+        self._fall_grace_s = float(_fall_cfg.get("post_fall_grace_s", 2.0))
+        if bool(_fall_cfg.get("enabled", True)):
+            from av_stack.fall_detector import FallDetector
+            self._fall_detector = FallDetector(
+                descent_rate_mps=float(_fall_cfg.get("descent_rate_mps", 4.0)),
+                airborne_frames=int(_fall_cfg.get("airborne_frames", 5)),
+            )
+
         # perf_wait_input_ms: gap from previous control_sent_mono_s to this inputs_ready_mono_s
         self._prev_frame_control_sent_mono_s: Optional[float] = None
 
@@ -3887,6 +3902,35 @@ class AVStack:
                 )
                 
                 self.frame_count += 1
+
+                # ── Vehicle-fell-off-the-world check ────────────────────────
+                # Tracks are a bare 7.2m mesh collider with no terrain beside
+                # them, so leaving the road means falling into void. Recording a
+                # vehicle falling for the rest of the run wastes Unity time and
+                # pollutes the recording with post-fall frames. Keep a short
+                # grace window so the fall itself is captured, then end the run.
+                if self._fall_detector is not None:
+                    _pos = vehicle_state_dict.get('position') or {}
+                    _fall = self._fall_detector.update(
+                        _pos.get('y') if isinstance(_pos, dict) else None,
+                        vehicle_state_dict.get('wheelContactNormalY'),
+                        frame=self.frame_count,
+                        time_s=float(timestamp),
+                    )
+                    if _fall.fallen:
+                        if self._fall_detected_at is None:
+                            self._fall_detected_at = time.time()
+                            logger.error(
+                                "[VEHICLE_FELL] frame=%s t=%.1fs %s — ending run in %.1fs",
+                                _fall.frame, _fall.time_s or 0.0, _fall.reason,
+                                self._fall_grace_s,
+                            )
+                        elif (time.time() - self._fall_detected_at) >= self._fall_grace_s:
+                            logger.error(
+                                "[VEHICLE_FELL] grace elapsed — stopping run at frame %s",
+                                self.frame_count,
+                            )
+                            break
 
                 if last_loop_time is not None:
                     loop_duration = time.time() - loop_start

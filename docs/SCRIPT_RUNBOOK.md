@@ -180,6 +180,16 @@ These scripts replay recordings offline and do not require Unity runtime interac
 - **Default perception mode:** Segmentation default.
 - **CV override:** `--use-cv`.
 
+### `av_stack/fall_detector.py` (module, not a script)
+
+- **Purpose:** detects the vehicle falling off the world. Tracks are a bare `MeshCollider` exactly `roadWidth` (7.2 m) wide with **no terrain, ground plane, or shoulder** — leaving the road means falling into void.
+- **Confirmed occurrence:** `recording_20260506_042710.h5` (H9, 2026-05-06) fell 46.7 m (pos.y 0.80 → −45.93, never recovered) with 12.5 m lateral offset and 172° roll. Nothing detected it as a fall; it scored as an ordinary out-of-lane + e-stop.
+- **Two signatures, either sufficient:** descent rate above `descent_rate_mps` (4.0) for 3 consecutive frames, or all four `wheel_contact_normal_y` at 0 for `airborne_frames` (5).
+- **Do NOT use an absolute drop threshold.** The first implementation did and false-positived on BOTH graded tracks — hill_highway and hill_g1 legitimately descend ~5 m. Descent *rate* is the physical discriminator: max_speed × max_grade = 25 × 0.10 = 2.5 m/s is the ceiling for any legitimate descent, while the H9 fall reached 47.65 m/s and the steepest grade peaks at 0.72 m/s.
+- **Runtime:** `av_stack/orchestrator.py` ends the run `post_fall_grace_s` (2.0 s) after a fall, so the event is captured but the remaining Unity time is not spent recording a vehicle falling.
+- **Config:** `stack.fall_detection.{enabled,descent_rate_mps,airborne_frames,post_fall_grace_s}`. Set `enabled: false` to disable without a code revert.
+- Tests: `tests/test_fall_detector.py` (15) — the grade negative-cases are the important half.
+
 ### `tools/analyze/analyze_ride_comfort.py`
 
 - **Purpose:** ISO 2631-1 frequency-weighted ride comfort — MSDV (Motion Sickness Dose Value), `a_w` RMS, and dominant oscillation frequency, for both the lateral (path weave) and longitudinal (speed hunting) axes.
