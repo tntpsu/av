@@ -180,6 +180,16 @@ These scripts replay recordings offline and do not require Unity runtime interac
 - **Default perception mode:** Segmentation default.
 - **CV override:** `--use-cv`.
 
+### `tools/analyze/analyze_ride_comfort.py`
+
+- **Purpose:** ISO 2631-1 frequency-weighted ride comfort — MSDV (Motion Sickness Dose Value), `a_w` RMS, and dominant oscillation frequency, for both the lateral (path weave) and longitudinal (speed hunting) axes.
+- **Unity launch behavior:** None — offline over an existing recording.
+- **Invocation:** `--file <path>` or `--latest`, optional `--window T0 T1` to restrict to a time range.
+- **Why it exists:** every other comfort gate is an amplitude percentile and therefore frequency-blind. Measured on `highway_h3`, the visible lane weave is **0.243 Hz** — inside the ISO motion-sickness band (0.1–0.5 Hz) and *below* the ride-comfort band (0.5–80 Hz) that accel/jerk P95 target. A 0.24 Hz weave and a 3 Hz shake with identical P95 score the same and feel nothing alike.
+- **Discriminates where the ACC oscillation metric saturates:** across 5 A/B pairs it separated the two MPC reference modes cleanly (MSDV median 8.35 → 5.86, ISO verdict "uncomfortable" → "fairly uncomfortable").
+- **Not yet wired into the scoring layers** — it reports, it does not gate. See T-METRIC-MSDV-WIRE.
+- Tests: `tests/test_ride_comfort.py` (18).
+
 ### `tools/analyze/run_ab_batch.py`
 
 - **Purpose:** Batch A/B runner for a single config parameter, with robust median/quartile stats over N paired trials. This is the promotion gate for config changes (CLAUDE.md requires ≥5 runs).
