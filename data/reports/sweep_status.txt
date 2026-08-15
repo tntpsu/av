@@ -1,13 +1,13 @@
-step0_started 2026-08-14 2026-08-14T03:00:15-04:00
-step_track_s_loop_running 2026-08-14T03:01:03-04:00
-step_track_highway_65_running 2026-08-14T03:01:09-04:00
-step_track_hairpin_15_running 2026-08-14T03:01:14-04:00
-step_track_sweeping_highway_running 2026-08-14T03:01:19-04:00
-step_track_mixed_radius_running 2026-08-14T03:01:23-04:00
-step_track_hill_highway_running 2026-08-14T03:01:27-04:00
-step_track_s_loop_done score=99.0 baseline=99.1 delta=-0.1 2026-08-14T03:05:00-04:00
-step_track_highway_65_done score=99.5 baseline=99.5 delta=0.0 2026-08-14T03:05:00-04:00
-step_track_hairpin_15_done score=98.6 baseline=98.7 delta=-0.1 2026-08-14T03:05:00-04:00
-step_track_sweeping_highway_done score=98.3 baseline=91.4 delta=+6.9 2026-08-14T03:05:00-04:00
-step_track_mixed_radius_done score=98.5 baseline=98.7 delta=-0.2 2026-08-14T03:05:00-04:00
-step_track_hill_highway_done score=97.6 baseline=97.6 delta=0.0 2026-08-14T03:05:00-04:00
+step0_started 2026-08-15 2026-08-15T03:00:17-04:00
+step_track_s_loop_running 2026-08-15T03:00:46-04:00
+step_track_s_loop_done score=99.0 baseline=99.1 delta=-0.1 2026-08-15T03:01:07-04:00
+step_track_highway_65_running 2026-08-15T03:01:07-04:00
+step_track_hairpin_15_running 2026-08-15T03:01:12-04:00
+step_track_sweeping_highway_running 2026-08-15T03:01:17-04:00
+step_track_mixed_radius_running 2026-08-15T03:01:21-04:00
+step_track_hill_highway_running 2026-08-15T03:01:26-04:00
+step_track_highway_65_done score=99.5 baseline=99.5 delta=0.0 2026-08-15T03:01:30-04:00
+step_track_hairpin_15_done score=98.6 baseline=98.7 delta=-0.1 2026-08-15T03:01:30-04:00
+step_track_sweeping_highway_done score=98.3 baseline=91.4 delta=+6.9 2026-08-15T03:01:30-04:00
+step_track_mixed_radius_done score=98.5 baseline=98.7 delta=-0.2 2026-08-15T03:01:30-04:00
+step_track_hill_highway_done score=97.6 baseline=97.6 delta=0.0 2026-08-15T03:01:30-04:00

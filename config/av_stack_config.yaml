@@ -1,14 +1,18 @@
 control:
+  # ── Inter-frame control extrapolation ──────────────────────────────────────
+  # Decouples MPC control rate from camera delivery rate.
+  # When enabled, fetches fresh GT vehicle state between camera frames and
+  # runs lightweight MPC at ~30 Hz even when camera delivers at ~7.5 Hz.
   interframe_extrapolation:
-    enabled: true
-    max_interframe_updates: 3
-    min_interframe_dt_s: 0.025
-    max_interframe_dt_s: 0.1
-    stale_vehicle_state_ms: 50.0
-    max_e_lat_jump_m: 0.5
-    max_speed_change_mps: 3.0
-    recording_mode: summary
-    regime_gate: mpc_only
+    enabled: true                     # Validated on all tracks — decouples control rate from camera
+    max_interframe_updates: 3         # Max inter-frame updates per camera cycle
+    min_interframe_dt_s: 0.025        # Floor on inter-frame dt (prevents busy-spin)
+    max_interframe_dt_s: 0.10         # Ceiling on inter-frame dt (prevents steering discontinuity)
+    stale_vehicle_state_ms: 50.0      # Max GT age before skipping update
+    max_e_lat_jump_m: 0.5             # Discontinuity guard threshold
+    max_speed_change_mps: 3.0         # Speed discontinuity guard threshold
+    recording_mode: "summary"         # "summary" = 1 HDF5 row/camera; "full" = every update
+    regime_gate: "mpc_only"           # "mpc_only" = only during MPC regime; "all" = always
   lateral:
     kp: 1.1
     ki: 0.004
@@ -20,25 +24,37 @@ control:
     error_clip: 1.57
     integral_limit: 0.1
     steering_smoothing_alpha: 0.92
-    grade_steering_damping_gain: 6.5
+    # Hill / grade: stronger smoothing reduction under grade (reduces lateral chatter on hill_highway).
+    # G6-L4: tune only with A/B on grade_lateral_v1 + pre-failure metrics — docs/GRADE_LATERAL_TUNING.md
+    # 2026-03-22: 7.5 A/B vs 6.5 regressed overall score + oscillation; reverted to 6.5 (see GRADE_LATERAL_TUNING.md).
+    grade_steering_damping_gain: 6.5    # Subtracted from lateral error smoothing alpha; scales with |grade| (rise/run)
     control_mode: pure_pursuit
-    stanley_k: 1.5
+    stanley_k: 1.5                 # base default; hairpin overlay sets 3.0 (validated 59→79)
     stanley_soft_speed: 2.0
     stanley_heading_weight: 1.0
-    stanley_curvature_ff_enabled: false
-    stanley_ff_slew_rate_rad: 0.05
+    stanley_curvature_ff_enabled: false  # A/B tested on hairpin: no RMSE gain, 2× steer_jerk. Dead end for reactive control.
+    stanley_ff_slew_rate_rad: 0.05       # Slew limiter for FF (rad/frame). Works mechanically, but FF itself is ineffective.
+    # PP residual PID (hill_highway oscillation mitigation): slightly lower feedback vs error loop.
+    # 2026-03-22: 0.070 A/B vs 0.075 failed promotion (see GRADE_LATERAL_TUNING.md); keep 0.075 until a gated win.
     pp_feedback_gain: 0.075
     pp_max_steering_jerk: 18.0
-    output_max_steering_jerk: 18.0
-    pp_steering_profile_enabled: false
-    pp_steering_max_rate_per_s: 5.2
-    pp_steering_max_jerk_per_s2: 20.0
-    pp_steering_jerk_lateral_budget: 6.0
-    pp_steering_taper_gain: 3.0
-    pp_steering_reversal_taper_factor: 0.7
-    pp_steering_reversal_curvature_min: 0.003
+    output_max_steering_jerk: 18.0   # universal hard cap after ALL controllers (PP/MPC/NMPC)
+    # Steering motion profile planner (replaces rate clamp + jerk clamp + ceiling clip)
+    # Unified trapezoidal profile with demand-aware tapering — no overshoot, no ceiling jerk.
+    pp_steering_profile_enabled: false   # disabled on s_loop: taper-based profile can't match legacy bang-bang on R40 reversals
+    pp_steering_max_rate_per_s: 5.2        # physical: 0.4/frame ÷ 0.077s/frame
+    pp_steering_max_jerk_per_s2: 20.0      # legacy fallback (only used if lateral budget is 0)
+    pp_steering_jerk_lateral_budget: 6.0   # m/s³ — matches comfort gate; derives speed-adaptive jerk limit
+    pp_steering_taper_gain: 3.0            # rate = min(max_rate, gain × |error|)
+    pp_steering_reversal_taper_factor: 0.7 # urgency=1.0 → taper drops to 30% of nominal
+    pp_steering_reversal_curvature_min: 0.003  # |κ_preview| below this → no reversal detection
     pp_curve_local_lookahead_floor_enabled: true
-    pp_curve_local_lookahead_floor_speed_table:
+    # 2026-03-22: Attempted lower floor (to 2.5-3.0m) to eliminate floor rescue — reverted.
+    # Lowering the floor increased adj_rmse 0.297→0.349m and C3 peak error 0.465→0.809m.
+    # The 5.2m floor during curves provides a stable PP operating point; the dynamic horizon
+    # driving to 3.2m without the floor backstop creates oscillation.
+    # Floor rescue is benign; the real issue is late turn-in (+13-15fr on C1/C3).
+    pp_curve_local_lookahead_floor_speed_table:  # lowered at low speed (s_loop/hairpin 3-7 m/s)
     - speed_mps: 0.0
       lookahead_m: 2.5
     - speed_mps: 4.5
@@ -49,36 +65,42 @@ control:
       lookahead_m: 5.2
     - speed_mps: 12.0
       lookahead_m: 5.6
-    pp_curve_local_shorten_slew_m_per_frame: 0.0
+    pp_curve_local_shorten_slew_m_per_frame: 0.0  # disabled: unified contraction rate at trajectory level
     pp_curve_local_floor_state_min: ENTRY
+    # Physics-based floor: Ld = max(sqrt(8R*e_target), k*speed, Ld_min)
     pp_curve_local_floor_formula_enabled: true
     pp_curve_local_floor_target_error_m: 0.04
     pp_curve_local_floor_speed_time_constant_s: 0.4
     pp_curve_local_floor_absolute_min_m: 2.0
-    pp_curve_local_floor_k_reduction_factor: 0.6
-    pp_curve_local_floor_k_severity_kappa_min: 0.003
-    pp_curve_local_floor_k_severity_kappa_max: 0.015
+    # Curvature-adaptive k: tight curves get shorter stability floor
+    pp_curve_local_floor_k_reduction_factor: 0.6       # max 60% reduction at full severity
+    pp_curve_local_floor_k_severity_kappa_min: 0.003   # severity starts ramping
+    pp_curve_local_floor_k_severity_kappa_max: 0.015   # severity = 1.0
     pp_curve_local_floor_curvature_clamp: 0.001
     pp_min_lookahead: 0.5
     pp_speed_norm_enabled: false
     pp_speed_norm_reference_mps: 12.0
-    pp_speed_norm_min_scale: 0.7
+    pp_speed_norm_min_scale: 0.70
     pp_map_ff_enabled: true
-    pp_map_ff_gain: 1.0
-    pp_map_ff_phase_gate_enabled: true
-    pp_map_ff_entry_boost: 1.8
+    pp_map_ff_gain: 1.0                  # raised 0.8→1.0: proportional ramp replaces 1.8× step
+    pp_map_ff_phase_gate_enabled: true   # now proportional: FF *= local_gate_weight (0→1 smoothstep)
+    pp_map_ff_entry_boost: 1.8           # unused — proportional mode ignores this
     pp_map_ff_wheelbase_m: 2.5
-    pp_map_ff_curvature_min: 0.0
+    pp_map_ff_curvature_min: 0.0     # removed hard floor — atan(L×κ) is self-limiting; phase gate handles spatial gating
     pp_map_ff_curvature_max_clip: 0.08
-    pp_recovery_term_enabled: true
-    pp_recovery_term_shadow_mode: false
-    pp_recovery_e_lat_lo_m: 1.0
-    pp_recovery_e_lat_hi_m: 2.0
-    pp_recovery_term_beta: 0.5
-    pp_recovery_term_lpf_tau_s: 0.2
-    pp_recovery_signal_use_at_car: true
+    # Lateral-error recovery term (replaces orchestrator post-limiter 1.2×/1.5× steering multiplier).
+    # Continuous smoothstep proportional to |steering|, injected upstream of rate/jerk limiters.
+    # Design ref: project_recovery_mode_post_limiter.md
+    pp_recovery_term_enabled: true                # master switch
+    pp_recovery_term_shadow_mode: false           # ACTIVE — term applied upstream of rate/jerk limiters (orchestrator multiplier deleted)
+    pp_recovery_e_lat_lo_m: 1.0                   # smoothstep start (term=0 below)
+    pp_recovery_e_lat_hi_m: 2.0                   # smoothstep full (term=full gain above)
+    pp_recovery_term_beta: 0.5                    # proportional gain at full smoothstep (0.5 ≈ current 1.5× behavior)
+    pp_recovery_term_lpf_tau_s: 0.20              # 1st-order LPF on term output; smooths abrupt smoothstep transitions
+    pp_recovery_signal_use_at_car: true           # use max(|lookahead|, |gt_at_car|) vs lookahead only
     pp_ref_jump_clamp: 0.5
     pp_stale_decay: 0.98
+    # 2026-03-22: 0.38 A/B vs 0.4 did not promote (see GRADE_LATERAL_TUNING.md); keep 0.4 until gated win.
     pp_max_steering_rate: 0.4
     feedback_gain_min: 1.05
     feedback_gain_max: 1.25
@@ -227,6 +249,7 @@ control:
     curve_commit_mode_dynamic_deficit_min: 0.03
     curve_commit_mode_retrigger_cooldown_frames: 12
     curve_mode_speed_cap_enabled: true
+    # Slightly lower cap on graded curves to ease lateral demand / oscillation coupling.
     curve_mode_speed_cap_mps: 7.0
     curve_mode_speed_cap_min_ratio: 0.55
     speed_gain_min_speed: 4.0
@@ -292,8 +315,8 @@ control:
     limiter_transition_hold_frames: 3
     limiter_transition_smoothing_alpha: 0.25
     limiter_transition_hysteresis: 0.05
-    grade_ff_gain: 1.8
-    grade_jerk_relaxation_gain: 2.0
+    grade_ff_gain: 1.8                  # Unity WheelCollider physics calibration (promoted from overlay)
+    grade_jerk_relaxation_gain: 2.0     # Jerk limit bonus per unit gravity_accel
     target_speed: 12.0
     max_speed: 12.0
     speed_smoothing: 0.3
@@ -323,49 +346,75 @@ control:
     launch_throttle_cap_max: 0.55
     launch_throttle_rearm_hysteresis: 0.5
     launch_throttle_stop_hold_seconds: 0.5
-    acc_idm_accel_routing_enabled: true
-    acc_idm_accel_routing_shadow_mode: false
-    acc_idm_accel_routing_emergency_decel_floor: -12.0
-    acc_idm_accel_routing_emergency_jerk_max: 10.0
-    acc_idm_accel_routing_emergency_relax_in_estate: true
-    acc_idm_accel_routing_b1_hard_brake_bypass: true
-    acc_idm_accel_floor_mode: shadow
+    # ACC IDM-accel routing (acc-idm-accel-plumbing.md — shadow-mode first)
+    # When routing_enabled + not shadow + acc_active, feed acc_idm_accel_mps2 as
+    # reference_accel to the longitudinal controller instead of implicit
+    # speed-error P-control. Shadow mode: compute and log telemetry only.
+    acc_idm_accel_routing_enabled: true           # Master switch for B2 plumbing
+    acc_idm_accel_routing_shadow_mode: false      # true = log only, false = feed to controller  (ACTIVE — acc-idm-accel-plumbing Commit C)
+    acc_idm_accel_routing_emergency_decel_floor: -12.0  # Matches IDM -12 m/s² saturation floor in exempt states
+    acc_idm_accel_routing_emergency_jerk_max: 10.0      # 2.5× nominal (4.0) for brake-onset transient
+    acc_idm_accel_routing_emergency_relax_in_estate: true   # ACTIVE: widens decel/jerk in EMERGENCY_BRAKE/TTC_ESTOP/COLLAPSED_GAP_STOP
+    acc_idm_accel_routing_b1_hard_brake_bypass: true        # ACTIVE (Commit D): EMERGENCY_BRAKE → brake=1.0 bypass; probe 2026-04-21 showed Commit C+C.1 insufficient due to upstream accel_target_smoothing EMA lag
+    # IDM-as-accel-floor (pre-emergency states — greedy-swimming-naur.md, Phase 0.5 verified 2026-04-22)
+    # Min-gate: if state in floor_states and idm < min_negative, clip accel_cmd_raw to min(speed_p, idm).
+    # Complements acc_idm_accel_routing_emergency_* (post-transition) by covering the ACC_ACTIVE/CUTOUT
+    # window where IDM demands brake but the state machine has not yet flipped.
+    acc_idm_accel_floor_mode: shadow              # {off, shadow, active}
     acc_idm_accel_floor_states:
-    - ACC_ACTIVE
-    - CUTOUT
-    acc_idm_accel_floor_min_negative: -0.25
-  grade_ema_alpha: 0.15
+      - ACC_ACTIVE
+      - CUTOUT
+    acc_idm_accel_floor_min_negative: -0.25       # dead-band (m/s²); only gate when idm < this
+  grade_ema_alpha: 0.15               # Grade signal EMA smoothing (no-op when grade=0)
   regime:
     enabled: true
-    mpc_max_lateral_accel_mps2: 1.5
-    mpc_lateral_accel_hysteresis_mps2: 0.3
-    mpc_min_speed_absolute_mps: 2.0
-    mpc_max_map_curvature: 0.015
+    # Lateral acceleration budget (replaces speed + curvature proxy logic)
+    mpc_max_lateral_accel_mps2: 1.5     # κ×v² budget — MPC→PP when exceeded (m/s²)
+    mpc_lateral_accel_hysteresis_mps2: 0.3  # dead band ± around threshold (m/s²)
+    mpc_min_speed_absolute_mps: 2.0     # hard speed floor — MPC needs nonzero velocity (m/s)
+    mpc_max_map_curvature: 0.015       # map κ above this → PP (LMPC model-plant mismatch too large at R<67m)
+    # Deprecated (kept for backward compat — lateral accel budget replaces these):
+    # mpc_min_speed_mps, mpc_max_curvature, mpc_curvature_hysteresis,
+    # upshift_hysteresis_mps, downshift_hysteresis_mps, pp_max_speed_mps
     blend_frames: 15
     min_hold_frames: 30
-    stanley_enabled: true
-    stanley_max_speed_mps: 2.0
-    stanley_upshift_hysteresis_mps: 0.5
-    stanley_downshift_hysteresis_mps: 0.5
-    stanley_blend_frames: 10
-    stanley_min_hold_frames: 15
+    # Stanley low-speed regime (Phase 2.9)
+    stanley_enabled: true              # Activates when regime.enabled=true
+    stanley_max_speed_mps: 2.0         # Below this speed → Stanley (m/s) — matches mpc_min_speed_absolute_mps (MPC-primary)
+    stanley_upshift_hysteresis_mps: 0.5   # Must exceed 3.5 m/s to leave Stanley
+    stanley_downshift_hysteresis_mps: 0.5 # Must drop below 2.5 m/s to enter Stanley
+    stanley_blend_frames: 10           # 0.77s at 13 FPS — smooth low-speed transition
+    stanley_min_hold_frames: 15        # 0.5s hold before switching
+    # Do not hand off to Stanley when path curvature is clearly “on a curve”
+    # (brief speed dip during C-braking was tripping Stanley at v<4.5 m/s with κ≈0.01,
+    # causing MPC→Stanley + perception dropout jerk).  0.0 disables this guard.
     stanley_inhibit_curvature_abs: 0.004
-    lmpc_max_speed_mps: 20.0
-    lmpc_max_heading_error_rad: 0.25
-    nmpc_curvature_threshold: 1.0
+    # LMPC → NMPC upshift thresholds (Step 5)
+    lmpc_max_speed_mps: 20.0           # above this + upshift_hysteresis → NONLINEAR_MPC
+    lmpc_max_heading_error_rad: 0.25   # large heading error → NONLINEAR_MPC (LMPC linearisation breaks)
+    nmpc_curvature_threshold: 1.0       # effectively disabled — NMPC kinematic model not ready (needs dynamic bicycle)
 trajectory:
   trajectory_source: planner
+  # Lane midpoint coordinate conversion uses the full PP lookahead distance to evaluate
+  # lane line positions. On short straights approaching tight curves, this lookahead can
+  # reach into the upcoming curve, contaminating center_x with curvature-induced bias.
+  # This parameter caps how far the evaluation point may extend into the upcoming curve
+  # such that the resulting lateral error stays below the threshold (meters).
+  # Formula: max_d_into_curve = sqrt(2 * threshold / kappa_preview)
+  # At kappa=0.01 (sloop): caps at 3.16m into curve. At kappa=0.003 (gentle): 5.77m.
+  # Set to 0 to disable. Default 0.05 matches the observed ~4cm baseline gap.
   lane_midpoint_max_curve_contamination_m: 0.05
+  # Hard minimum for the clamped coord_conversion_distance (meters).
   lane_midpoint_clamp_min_distance_m: 3.0
-  curve_auto_derive: true
-  curve_auto_derive_reference_kappa_max: 0.025
+  curve_auto_derive: true                # Phase 3: auto-derive curvature thresholds from track geometry
+  curve_auto_derive_reference_kappa_max: 0.025  # base config calibrated for s_loop (κ_max=0.025)
   lookahead_distance: 20.0
   point_spacing: 1.0
   target_speed: 12.0
   reference_lookahead: 9.0
   dynamic_reference_lookahead: true
-  curve_scheduler_mode: phase_active
-  reference_lookahead_phase_active_entry_scale_min: 0.9
+  curve_scheduler_mode: phase_active   # validated on s_loop + mixed_radius; highway unaffected (no curves)
+  reference_lookahead_phase_active_entry_scale_min: 0.90
   reference_lookahead_phase_active_entry_scale_severity_on: 0.35
   reference_lookahead_phase_active_entry_scale_severity_full: 0.85
   reference_lookahead_phase_active_commit_phase_on: 0.75
@@ -387,7 +436,7 @@ trajectory:
     lookahead_m: 17.0
   - speed_mps: 17.0
     lookahead_m: 19.0
-  reference_lookahead_speed_table_entry:
+  reference_lookahead_speed_table_entry:  # lowered from 10→6m at high speed for proportional blend
   - speed_mps: 0.0
     lookahead_m: 5.0
   - speed_mps: 4.47
@@ -423,14 +472,14 @@ trajectory:
   local_curve_reference_delta_cap_m: 1.5
   local_curve_reference_max_blend: 0.35
   local_curve_reference_bounded_unwind_start: 0.05
-  local_curve_reference_bounded_unwind_end: 0.6
+  local_curve_reference_bounded_unwind_end: 0.60
   local_curve_reference_enable_map_track: true
   local_curve_reference_entry_phase_on: 0.25
   local_curve_reference_entry_phase_full: 0.65
   local_curve_reference_commit_phase_on: 0.65
-  local_curve_reference_commit_phase_full: 0.9
+  local_curve_reference_commit_phase_full: 0.90
   local_curve_reference_unwind_progress_start: 0.35
-  local_curve_reference_unwind_progress_end: 0.7
+  local_curve_reference_unwind_progress_end: 0.70
   local_curve_reference_target_distance_table:
   - speed_mps: 0.0
     target_distance_m: 4.4
@@ -451,7 +500,7 @@ trajectory:
   local_curve_reference_tight_distance_scale_min: 0.82
   local_curve_reference_curvature_min: 0.003
   local_curve_reference_curvature_max: 0.015
-  local_curve_reference_max_abs_curvature: 0.02
+  local_curve_reference_max_abs_curvature: 0.020
   reference_lookahead_entry_source: track
   reference_lookahead_entry_preview_scale: 1.5
   reference_lookahead_entry_track_name: ''
@@ -462,6 +511,7 @@ trajectory:
   reference_lookahead_entry_hysteresis_off: 0.008
   reference_lookahead_entry_distance_start_m: 20.0
   reference_lookahead_entry_distance_end_m: 6.0
+  # Slightly lower min so map-preview κ builds anticipation earlier (late turn-in / heading gate).
   curve_phase_preview_curvature_min: 0.0025
   curve_phase_preview_curvature_max: 0.015
   curve_phase_path_curvature_min: 0.003
@@ -478,25 +528,25 @@ trajectory:
   curve_local_phase_path_curvature_max: 0.015
   curve_local_entry_severity_curvature_min: 0.003
   curve_local_entry_severity_curvature_max: 0.012
-  curve_local_phase_ramp_sharpness: 0.5
-  curve_local_phase_distance_start_m: 10.0
-  curve_local_phase_distance_start_tight_m: 10.0
+  curve_local_phase_ramp_sharpness: 0.5  # 0=cubic hermite (slow onset), 1=linear (instant), 0.5=moderate onset
+  curve_local_phase_distance_start_m: 10.0  # promoted from overlays (base was 8.0)
+  curve_local_phase_distance_start_tight_m: 10.0  # unchanged from original base
   curve_local_phase_distance_end_m: 1.5
-  curve_local_phase_time_start_s: 1.2
+  curve_local_phase_time_start_s: 1.2    # arm 1.2s before curve (13.2m at 11 m/s, 4.8m at 4 m/s)
   curve_local_phase_time_start_tight_s: 1.2
   curve_local_phase_time_end_s: 0.25
   curve_local_in_curve_distance_eps_m: 0.25
   curve_local_in_curve_time_eps_s: 0.05
   curve_local_in_curve_path_min: 0.7
-  curve_local_commit_distance_ready_m: 3.0
-  curve_local_commit_time_ready_s: 0.6
-  curve_local_phase_use_time_term: true
+  curve_local_commit_distance_ready_m: 3.0  # track-specific; 8.0 works on s_loop/mixed_radius (long approaches) but causes straight-latch on hairpin (short straights + back-to-back arcs)
+  curve_local_commit_time_ready_s: 0.60
+  curve_local_phase_use_time_term: true   # speed-adaptive arm: max(distance, time) prevents per-track overlays
   curve_local_phase_reentry_gate_min: 0.08
   curve_local_phase_reentry_path_min: 0.15
   curve_phase_ema_alpha: 0.45
   curve_phase_on: 0.45
   curve_local_entry_on_base: 0.45
-  curve_local_entry_on_tight: 0.4
+  curve_local_entry_on_tight: 0.40
   curve_phase_off: 0.3
   curve_phase_commit_on: 0.55
   curve_phase_commit_min_frames: 4
@@ -505,28 +555,35 @@ trajectory:
   curve_phase_rearm_hold_frames: 4
   curve_context_preview_horizon_m: 25.0
   curve_context_preview_step_m: 1.0
-  curve_context_curve_start_curvature: 0.006
-  curve_context_curvature_gain: 6.0
-  curve_context_use_map_priority: true
-  curve_context_physical_curve_threshold: 0.01
-  curve_context_vision_near_field_skip_m: 10.0
-  curve_context_vision_window_size_m: 5.0
-  curve_context_vision_min_consecutive: 3
+  curve_context_curve_start_curvature: 0.006   # vision-fallback only (deprecated when use_map_priority=true)
+  curve_context_curvature_gain: 6.0            # vision-fallback only (deprecated when use_map_priority=true)
+  # Map-priority curve detection (architectural fix for highway_65 regression):
+  # On tracks with map data, use map curvature (clean ground truth) instead of
+  # vision-derived gain×max(raw, heading) which produces noise-amplified false
+  # triggers on highway straights (curvature_combined ≥ 0.006 from lane noise).
+  curve_context_use_map_priority: true                # master switch; false = legacy vision-only
+  curve_context_physical_curve_threshold: 0.010       # κ ≥ R100 = "tight enough to need controller prep"
+  # Vision fallback hardening (only used when map unavailable OR use_map_priority=false)
+  curve_context_vision_near_field_skip_m: 10.0        # skip first N m of horizon (lane-fit noise dominates)
+  curve_context_vision_window_size_m: 5.0             # spatial window for median aggregation
+  curve_context_vision_min_consecutive: 3             # hysteresis — require N consecutive points > threshold
   reference_lookahead_slew_rate_m_per_frame: 0.25
-  reference_lookahead_slew_rate_shorten_m_per_frame: 0.0
+  reference_lookahead_slew_rate_shorten_m_per_frame: 0.0  # disabled: unified contraction rate
   reference_lookahead_slew_rate_lengthen_m_per_frame: 0.2
-  reference_lookahead_entry_shorten_slew_m_per_frame: 0.0
-  lookahead_contraction_a_lat_budget: 2.5
-  lookahead_contraction_rate_floor: 0.1
-  lookahead_contraction_rate_ceiling: 0.6
-  map_predictive_lookahead_enabled: false
-  map_predictive_lookahead_blend_distance_m: 20.0
-  map_predictive_lookahead_e_target_m: 0.04
-  map_predictive_lookahead_k_speed: 0.4
-  map_predictive_lookahead_curvature_min: 0.001
+  reference_lookahead_entry_shorten_slew_m_per_frame: 0.0  # disabled: unified contraction rate
+  # Unified physics-based contraction rate (replaces 3 independent slew limits)
+  lookahead_contraction_a_lat_budget: 2.5    # m/s², lateral accel budget for Ld contraction
+  lookahead_contraction_rate_floor: 0.10     # m/frame, minimum rate (prevents stalling)
+  lookahead_contraction_rate_ceiling: 0.60   # m/frame, maximum rate
+  # Map-predictive lookahead (replaces reactive smoothstep as primary path)
+  map_predictive_lookahead_enabled: false  # disabled: causes swerving — over-contracts lookahead, needs investigation
+  map_predictive_lookahead_blend_distance_m: 20.0   # linear blend horizon (m)
+  map_predictive_lookahead_e_target_m: 0.04          # target tracking error for sqrt(8R*e)
+  map_predictive_lookahead_k_speed: 0.4              # speed stability constant (Ld_min = k*v)
+  map_predictive_lookahead_curvature_min: 0.001      # ignore κ below this (straight)
   reference_lookahead_entry_shorten_state_min: ENTRY
   reference_lookahead_entry_shorten_state_max: ENTRY
-  reference_lookahead_entry_shorten_gate_min: 0.2
+  reference_lookahead_entry_shorten_gate_min: 0.20
   reference_lookahead_entry_shorten_distance_min_m: 0.01
   reference_lookahead_entry_shorten_distance_max_m: 8.0
   reference_lookahead_speed_table_straight: []
@@ -540,7 +597,7 @@ trajectory:
   reference_lookahead_curvature_min: 0.002
   reference_lookahead_curvature_max: 0.015
   reference_lookahead_tight_curvature_threshold: 0.01
-  reference_lookahead_tight_scale: 0.5
+  reference_lookahead_tight_scale: 0.50            # CHANGED: 0.35 → 0.50 (reduces gap between planned ref_y and PP floor, cutting floor rescue magnitude roughly in half)
   reference_lookahead_tight_blend_band: 0.006
   curve_intent_speed_guardrail_enabled: true
   curve_intent_speed_guardrail_intent_min: 0.55
@@ -700,17 +757,22 @@ trajectory:
   heading_zero_quad_threshold: 0.005
   heading_zero_curvature_guard: 0.001
   smoothing_alpha_curve_reduction: 0.15
+  # Speed-adaptive EMA floor removed — oscillation damping now handled by
+  # gain-scheduled r_steer_rate in the MPC controller (trajectory.mpc section).
   ref_x_rate_limit_curvature_min: 0.001
   ref_x_rate_limit_curvature_scale_max: 5.0
   traj_heading_zero_gate_center_a_on_abs_max: 0.004
   traj_heading_zero_gate_center_a_off_abs_max: 0.008
   traj_heading_zero_gate_heading_on_abs_rad: 0.035
   traj_heading_zero_gate_heading_off_abs_rad: 0.061
-  traj_heading_zero_gate_curvature_preview_off_threshold: 0.001
+  traj_heading_zero_gate_curvature_preview_off_threshold: 0.001   # CHANGED: 0.0015 → 0.001 (releases heading gate earlier; 0.001 is in the safe range [0.0006, 0.0025])
+  # Release heading-zero suppression when curve scheduler sees upcoming geometry (not only |κ_preview|).
   traj_heading_zero_gate_release_far_preview_enabled: true
   traj_heading_zero_gate_far_preview_phase_min: 0.06
   traj_heading_zero_gate_release_on_scheduler_entry_commit: true
   traj_heading_zero_gate_time_to_curve_release_s: 1.35
+  # Proportional mode: replace binary on/off with continuous 0→1 weight.
+  # Eliminates gate oscillation on looping tracks (585 cycles → smooth transition).
   traj_heading_zero_gate_proportional_enabled: true
   dynamic_effective_horizon_enabled: true
   dynamic_effective_horizon_min_m: 3.0
@@ -734,7 +796,7 @@ trajectory:
     comfort_governor_min_speed: 3.0
     curvature_calibration_scale: 2.5
     curvature_history_frames: 5
-    curve_preview_enabled: true
+    curve_preview_enabled: true            # anticipatory speed reduction from preview curvature (map or perception)
     curve_preview_lookahead_scale: 1.6
     curve_preview_max_decel_mps2: 1.2
     curve_preview_min_curvature: 0.002
@@ -751,70 +813,122 @@ trajectory:
     curve_cap_curvature_min: 0.002
     curve_cap_rise_min: 0.0005
     curve_cap_peak_lat_accel_g: 0.26
-    curve_cap_use_preview_curvature: true
+    curve_cap_use_preview_curvature: true   # use lookahead κ for cap — needed for sharp curve entries (hairpin R15)
   velocity_profiler:
-    enabled: true
-    shadow_mode: false
-    a_lat_tracking_budget_g: 0.05
-    a_lon_accel_mps2: 2.0
-    a_lon_brake_mps2: 1.8
+    enabled: true                          # master switch for velocity profile
+    shadow_mode: false                     # ACTIVE: profile is additional speed ceiling
+    a_lat_tracking_budget_g: 0.05          # controller tracking budget (calibrated from closed-loop data)
+    a_lon_accel_mps2: 2.0                  # forward pass: max longitudinal acceleration
+    a_lon_brake_mps2: 1.8                  # backward pass: max comfortable braking
+    # v_max reuses trajectory.target_speed (single source of truth)
+    # min_speed reuses speed_governor.comfort_governor_min_speed (single source of truth)
   lookahead_profiler:
-    enabled: true
-    preview_horizon_m: 40.0
-    e_target_m: 0.04
-    k_speed_min: 0.35
-    contraction_rate: 0.3
-    extension_rate: 0.1
-    curvature_min: 0.001
+    enabled: true                          # master switch for map-predictive lookahead
+    preview_horizon_m: 40.0               # how far ahead to scan κ (~3.3s at 12 m/s)
+    e_target_m: 0.04                      # tracking error budget, matches PP floor formula
+    k_speed_min: 0.35                     # Ld floor = k × v_profile(s)
+    contraction_rate: 0.30                # m/m of travel (9m→3m takes 20m = 1.7s at 12 m/s)
+    extension_rate: 0.10                  # m/m of travel (3m→9m takes 60m, gentle recovery)
+    curvature_min: 0.001                  # ignore κ below this
+    # ld_max reuses trajectory.reference_lookahead (single source of truth)
+    # ld_min reuses trajectory.reference_lookahead_min (single source of truth)
   lane_position_smoothing_alpha: 0.2
   ref_point_jump_clamp_x: 0.15
   ref_point_jump_clamp_heading: 0.08
   reference_x_max_abs: 3.2
   mpc:
+    # Keys must match MPCParams field names prefixed with mpc_
     mpc_horizon: 20
-    mpc_dt: 0.1
+    mpc_dt: 0.1                     # prediction step (2s horizon at 20 steps)
     mpc_wheelbase_m: 2.5
-    mpc_feedforward_wheelbase_m: 3.65
-    mpc_max_steer_rad: 0.5236
+    mpc_feedforward_wheelbase_m: 3.65 # sysid-calibrated L_eff at ~10m/s (K_us=0.012, gain=0.684)
+    mpc_max_steer_rad: 0.5236       # 30° — fallback when speed_dependent_steer disabled
+    # Speed-dependent max steer angle (matches Unity CarController.cs lines 1398-1403)
     mpc_speed_dependent_steer_enabled: true
-    mpc_max_steer_low_speed_rad: 0.5236
-    mpc_max_steer_high_speed_rad: 0.2793
-    mpc_max_steer_speed_saturation_mps: 12.0
-    mpc_q_lat: 1.0
-    mpc_q_lat_preview_step0_scale: 1.0
-    mpc_q_lat_kappa_gain: 150.0
-    mpc_q_lat_kappa_saturate: 0.01
-    mpc_q_lat_lat_accel_fade_start_mps2: 0.5
-    mpc_q_lat_lat_accel_fade_end_mps2: 1.2
-    mpc_q_lat_rate: 0.0
-    mpc_q_heading: 10.0
+    mpc_max_steer_low_speed_rad: 0.5236    # 30° (Unity maxSteerAngleLowSpeed)
+    mpc_max_steer_high_speed_rad: 0.2793   # 16° (Unity maxSteerAngleHighSpeed)
+    mpc_max_steer_speed_saturation_mps: 12.0  # Unity maxSteerAngleFullSpeed
+    mpc_q_lat: 1.0                  # base value — E2E validated; base=2.0 caused oscillation runaway on highway_65 (99.5→59.0)
+    mpc_q_lat_preview_step0_scale: 1.0  # 1.0=uniform (current); <1.0 softens step-0 lateral penalty
+    # Curvature-scheduled q_lat with κv² safety fade:
+    # - On mild curves (low κv²): amplifies q_lat to reduce entry error (highway +35 pts validated)
+    # - Near stability boundary (high κv²): fades back to base q_lat to prevent oscillation
+    #   (matches the 1.5 m/s² budget in regime_selector)
+    mpc_q_lat_kappa_gain: 150.0                 # restored from bd505cd; safe now due to κv² fade
+    mpc_q_lat_kappa_saturate: 0.010             # κ ceiling (R100); matches bd505cd
+    mpc_q_lat_lat_accel_fade_start_mps2: 0.5    # κv² below this → full amplification
+    mpc_q_lat_lat_accel_fade_end_mps2: 1.2      # κv² above this → base q_lat only (safe)
+    mpc_q_lat_rate: 0.0              # lateral velocity damping (0=disabled) — tuned via E2E validation
+    mpc_q_heading: 10.0              # RAISED 5→10: provides phase lead — heading error (derivative of lateral) is penalised more heavily, preventing oscillation buildup
     mpc_q_speed: 2.0
+    # r_steer: 10:1 cost ratio vs q_lat=0.5. Near-zero (0.0001) caused
+    # oscillation at curve entries (no magnitude damping). 0.5 (old value)
+    # caused systematic understeering. 0.05 is the middle ground: aggressive
+    # enough to close ~0.4m curve offsets, stable enough to not oscillate.
     mpc_r_steer: 0.05
     mpc_r_accel: 0.2
-    mpc_r_steer_rate: 2.0
+    mpc_r_steer_rate: 2.0                           # 2.0: minimum stable value (1.0 causes oscillation; 3.5 causes 0.46m offset)
+    # Speed-dependent r_steer_rate scheduling: scales r_steer_rate with speed
+    # to counteract bicycle model v/L gain increase. r_eff = r_base * min(1 + gain*(v-onset), max_scale).
     mpc_r_steer_rate_scheduling_enabled: true
-    mpc_r_steer_rate_speed_onset: 12.0
-    mpc_r_steer_rate_speed_gain: 0.8
-    mpc_r_steer_rate_max_scale: 3.0
-    mpc_r_steer_rate_band_hysteresis: 1.0
-    mpc_r_steer_rate_kappa_off: 0.005
-    mpc_r_steer_rate_kappa_gain: 0.0
-    mpc_r_steer_rate_kappa_saturate: 0.015
-    mpc_r_steer_rate_straight_damping_enabled: false
+    mpc_r_steer_rate_speed_onset: 12.0      # m/s where scaling begins
+    mpc_r_steer_rate_speed_gain: 0.80       # multiplier per m/s above onset (0.40→growth halved but still positive)
+    mpc_r_steer_rate_max_scale: 3.0         # cap: r_eff ≤ r_base × max_scale
+    mpc_r_steer_rate_band_hysteresis: 1.0   # m/s hysteresis to prevent solver rebuild chattering
+    mpc_r_steer_rate_kappa_off: 0.005      # LEGACY — only affects speed scheduling gate (kept for backward compat)
+    mpc_r_steer_rate_kappa_gain: 0.0      # disabled: was increasing rate penalty on curves, causing 0.44m steady-state offset
+    mpc_r_steer_rate_kappa_saturate: 0.015  # κ ceiling for scaling (R67) — caps r_eff at r_base × (1 + gain × saturate)
+    # Curvature-adaptive r_steer_rate reduction for straight-line phase margin.
+    # On low-κ sections, reduce r_steer_rate so MPC corrects drift faster.
+    # r_eff *= max(min_scale, κ/kappa_on).  On curves (κ >= kappa_on), scale=1.0 (no change).
+    mpc_r_steer_rate_straight_damping_enabled: false  # disabled: lowering r_steer_rate alone increases overshoot; see q_heading approach
     mpc_r_steer_rate_straight_kappa_on: 0.002
     mpc_r_steer_rate_straight_min_scale: 0.3
+    # 2DOF feedforward decomposition
+    # ACTIVATED 2026-04-19 alongside at_car_gt_legacy e_lat mode. The lookahead
+    # bundle (7e3caf0) was supplying accidental curvature FF via d·e_h cross-
+    # coupling on curves. Removing the bundle (at_car mode) regressed
+    # mixed_radius Traj 98.7→87.7. Enabling the explicit FF path restores it
+    # via kinematic bicycle model: δ_ff = atan(L·κ_ref). See plan/decomposed-
+    # mpc-reference.md §Phase B-NEW and project_h2_damping_on_straights.md.
     mpc_ff_decomposition_enabled: true
+    # Steering actuator model
     mpc_actuator_model_enabled: false
-    mpc_actuator_tau_s: 0.7
+    mpc_actuator_tau_s: 0.70
     mpc_actuator_rate_limit_deg_per_s: 90.0
     mpc_q_actuator: 0.0
-    mpc_delta_rate_max: 0.15
+    mpc_delta_rate_max: 0.15        # max Δδ_norm per step
+    # Noise-jitter fixes (2026-02-17):
+    # Fix A — first-step QP rate cost: adds 0.5*r_steer_rate*(delta[0]-last)^2 to the
+    #   objective so r_steer_rate is symmetric across ALL steps, not just within-horizon.
+    #   Kept: reduced max jerk 0.150→0.052 with no lateral RMSE regression.
     mpc_first_step_rate_enabled: true
-    mpc_e_lat_reference_mode: at_car_gt_legacy
-    mpc_e_lat_frenet_shadow_mode: true
-    mpc_e_lat_use_lookahead_reference: false
+    # Fix B — EMA pre-filter + deadband on e_lat: DISABLED after run analysis (2026-03-21).
+    #   In simulation, α=0.3 reduced sign-flip jitter 67%. In Unity, sign flips were already
+    #   only 3.7% (perception noise is slow/correlated, not white noise). The EMA added ~7
+    #   frames of lag to curve-entry corrections, increasing curve e_lat RMSE by +81%
+    #   (0.22m→0.40m) and dropping score 92.3→91.7. Alpha=1.0 = no filtering (unfiltered).
+    # Frenet-frame MPC reference (industry standard: Apollo/Waymo/Aurora/Cruise/Motional).
+    # Replaces lookahead-projection e_lat which adds hidden Ld×q_lat gain to heading
+    # penalty and caused highway_h2 regression 98.1→79.0. Phase 0 offline verification
+    # on recording_20260418_195233.h5 (2152 frames) confirmed the sign convention:
+    #   d_frenet ≈ gt_cross_track_lookahead + Ld·sin(gt_heading_error)
+    # with +0.9872 correlation and 0.051 m RMS vs gt_cross_track_at_car.
+    # See .claude/plans/greedy-swimming-naur.md and project_frenet_mpc_reference.md.
+    mpc_e_lat_reference_mode: lookahead_gt_legacy    # 2026-04-19: switched from frenet_linearized. Phase 0.5 empirical analysis disproved the "Ld·sin(e_h) is PD-damping" framing (corr with d/dt(e_h) = 0.06, not >0.5). The lookahead bundle is a hidden P-gain on heading (+128 to q_heading for Ld=8, q_lat=2) causing 0.23 Hz oscillation on H2. Probe: at_car restores H2 79→98.8. mixed_radius regression handled by mpc_ff_decomposition_enabled above. See project_h2_damping_on_straights.md (CORRECTED) + plan decomposed-mpc-reference.md.
+    mpc_e_lat_frenet_shadow_mode: true            # Retained for shadow telemetry (mpc_e_lat_frenet_linearized_m, shadow_delta) during this activation window.
+    # DEPRECATED: retained for one release cycle; ignored when reference_mode != *_legacy.
+    # Removal target: after Phase G baseline update lands (see plan Phase H).
+    mpc_e_lat_use_lookahead_reference: false      # 2026-04-19: explicitly false to match at_car_gt_legacy mode; prevents silent fallback to lookahead path.
     mpc_elat_ema_alpha: 1.0
     mpc_elat_deadband_m: 0.0
+    # Fix C — dropout recovery rate limiter: DISABLED (2026-03-31).
+    #   Was 0.05 m/frame to absorb perception dropout recovery jerk.
+    #   Root cause analysis revealed MPC uses GT cross-track (not perception) for e_lat,
+    #   so dropout recovery jumps don't occur. The 0.05 cap caused a self-sustaining
+    #   limit cycle: physical oscillation at 0.10-0.15 m/frame exceeded the ramp,
+    #   MPC saw 4-17% of true error, phase-lagged correction amplified oscillation.
+    #   H2 RMSE regressed 0.12→0.41m with ramp active. Disabled to restore stability.
     mpc_elat_ramp_rate_m_per_frame: 0.0
     mpc_max_accel: 3.0
     mpc_max_decel: 4.0
@@ -825,37 +939,51 @@ trajectory:
     mpc_speed_adaptive_horizon: false
     mpc_curvature_preview_enabled: true
     mpc_curvature_preview_gain: 1.0
+    # bias_correction was a workaround for r_steer=0.5 causing systematic
+    # understeering. With r_steer=0.05 the QP has enough correction authority
+    # on its own. Leaving bias_enabled=True would fight the direct feedback
+    # by slowly reducing kappa when e_lat persists, creating a new equilibrium.
     mpc_bias_enabled: false
-    mpc_bias_relative_guard_min_kappa: 0.0005
-    mpc_bias_ema_abs_max: 0.5
-    mpc_max_steering_rate_per_frame: 0.15
-    mpc_delay_frames: 2
-    smith_predictor_max_delay_s: 0.08
-    smith_predictor_disagreement_gain: 0.3
-    mpc_delay_compensation_enabled: false
-    mpc_delay_compensation_frames: 2
-    mpc_lookahead_cost_enabled: false
-    mpc_grade_clamp_rad: 0.15
-    mpc_grade_ff_gain: 1.8
-    mpc_leff_estimation_enabled: false
-    mpc_leff_forgetting_factor: 0.995
-    mpc_leff_initial_P: 100.0
-    mpc_leff_min_speed_mps: 3.0
-    mpc_leff_min_excitation: 0.01
-    mpc_leff_bounds_min: 1.5
-    mpc_leff_bounds_max: 8.0
-    mpc_dynamic_model_enabled: false
+    mpc_bias_relative_guard_min_kappa: 0.0005  # lowered from 0.001: ACC highway κ≈0.0009 must trigger guard
+    mpc_bias_ema_abs_max: 0.5                  # absolute clamp on bias EMA accumulator (meters)
+    mpc_max_steering_rate_per_frame: 0.15  # safety net rate limiter (rad/frame) — much looser than PP
+    mpc_delay_frames: 2                    # Smith predictor delay buffer length (frames; ~66ms at 30fps)
+    smith_predictor_max_delay_s: 0.080      # Wall-clock cap on Smith predictor delay (prevents 4x overshoot at low camera rates; 0=disabled)
+    smith_predictor_disagreement_gain: 0.3  # Attenuate heading correction when sign(e_lat) != sign(e_heading) (oscillation inflection)
+    mpc_delay_compensation_enabled: false    # forward-simulate committed steps before QP (subsumes Smith predictor)
+    mpc_delay_compensation_frames: 2        # must match mpc_delay_frames
+    # ── Lookahead-augmented cost ──────────────────────────────────────────────
+    # Feeds at-car e_lat to the dynamics model (where the bicycle model is
+    # accurate) and penalises the lookahead cross-track e_lat + Ld·e_heading
+    # in the QP cost via cross-terms.  Decouples model accuracy from
+    # anticipatory tracking — the dynamics stay correct while the cost looks
+    # ahead.  Replaces direct lookahead reference (mpc_e_lat_use_lookahead_reference).
+    mpc_lookahead_cost_enabled: false       # disabled: using lookahead reference directly instead
+    mpc_grade_clamp_rad: 0.15             # Max grade input to MPC (~8.5°)
+    mpc_grade_ff_gain: 1.8                # Unity WheelCollider physics calibration
+    # ── Online effective wheelbase estimation (RLS) ────────────────────────────
+    mpc_leff_estimation_enabled: false    # off — RLS unstable on curve transitions (κ=0 but heading changing); needs model fix first
+    mpc_leff_forgetting_factor: 0.995     # λ — exponential forgetting (~200-frame window)
+    mpc_leff_initial_P: 100.0             # initial RLS covariance (high → fast initial learning)
+    mpc_leff_min_speed_mps: 3.0           # only update when v > this (low-speed kinematics unreliable)
+    mpc_leff_min_excitation: 0.01         # min |v·δ·δ_max·dt| per frame to trigger RLS update
+    mpc_leff_bounds_min: 1.5              # hard safety clamp — never go below 1.5m
+    mpc_leff_bounds_max: 8.0              # hard safety clamp — never go above 8.0m
+  # ── Dynamic bicycle model ──────────────────────────────────────────────────
+    mpc_dynamic_model_enabled: false         # expm is stable but steering gain mismatch causes curve regression; needs mpc_steer_gain_ratio calibration
     mpc_vehicle_mass_kg: 1500.0
-    mpc_vehicle_iz_kgm2: 2428.0
+    mpc_vehicle_iz_kgm2: 2428.0            # from Unity ground truth (matches sysid fitting)
     mpc_vehicle_lf_m: 1.125
     mpc_vehicle_lr_m: 1.125
-    mpc_tire_cf_nominal: 36662.0
-    mpc_tire_cr_nominal: 71799.0
-    mpc_q_vy: 0.1
-    mpc_q_yawrate: 0.5
-    mpc_steer_gain_ratio: 1.0
-    mpc_vy_observer_enabled: true
-    mpc_vy_observer_alpha: 0.8
+    mpc_tire_cf_nominal: 36662.0           # from sysid NNLS on mixed_radius (R²=0.974)
+    mpc_tire_cr_nominal: 71799.0           # C_r/C_f ≈ 1.96, vehicle understeers
+    mpc_q_vy: 0.1                          # light regularizer — tire forces provide natural v_y damping
+    mpc_q_yawrate: 0.5                     # moderate — don't fight yaw into curves
+  # ── v_y observer (wheel-slip measurement fusion) ───────────────────────────
+    mpc_steer_gain_ratio: 1.0              # calibrated gain ratio (Unity vs model max_steer); 0.78 measured but causes mpc_e_lat divergence at track boundaries
+    mpc_vy_observer_enabled: true          # fuse model v_y prediction with rear wheel slip measurement
+    mpc_vy_observer_alpha: 0.8             # complementary filter model weight (0.8 = 80% model, 20% meas)
+  # ── EKF tire cornering stiffness estimation ────────────────────────────────
     mpc_tire_ekf_enabled: false
     mpc_tire_ekf_process_noise: 100.0
     mpc_tire_ekf_measurement_noise: 0.01
@@ -868,41 +996,48 @@ trajectory:
     mpc_tire_ekf_slip_saturation_rad: 0.15
     mpc_tire_ekf_use_imu_yaw_rate: true
     mpc_tire_ekf_imu_yaw_rate_r: 0.001
+  # ── NMPC (Step 5) ────────────────────────────────────────────────────────────
+  # Nonlinear MPC using full bicycle kinematics (sin/tan, no small-angle approximation).
+  # Activates when regime == NONLINEAR_MPC (speed > lmpc_max_speed_mps or
+  # |heading_error| > lmpc_max_heading_error_rad). Solved via scipy SLSQP;
+  # warm-started from previous solution for sub-10ms typical solve time.
+  # All keys use nmpc_ prefix to distinguish from LMPC (mpc_) params.
   nmpc:
-    nmpc_enabled: true
-    nmpc_horizon: 12
-    nmpc_dt: 0.1
-    nmpc_horizon_distance_m: 25.0
-    nmpc_dt_min: 0.1
-    nmpc_dt_max: 0.35
-    nmpc_q_lat: 10.0
-    nmpc_q_heading: 5.0
-    nmpc_r_steer: 0.0001
-    nmpc_r_steer_rate: 1.5
-    nmpc_r_steer_ff_mag: 0.0
-    nmpc_q_lat_terminal_scale: 5.0
+    nmpc_enabled: true              # re-enabled: sign convention verified (same as LMPC — negate gt_cross_track)
+    nmpc_horizon: 12                # N prediction steps (reduced from 20 — faster solve, still 4+s preview at 4 m/s)
+    nmpc_dt: 0.1                   # base prediction step duration (s) — scaled by speed-adaptive logic
+    nmpc_horizon_distance_m: 25.0  # target prediction distance (m) — 50m was too far at low speed (dt=0.625, 12.5s horizon)
+    nmpc_dt_min: 0.1               # min dt (high speed) — fine temporal resolution
+    nmpc_dt_max: 0.35              # max dt (low speed) — keeps curve resolution at ~1.4m/step at 4 m/s
+    nmpc_q_lat: 10.0               # lateral error weight — matched to LMPC for tight curve tracking
+    nmpc_q_heading: 5.0            # heading error weight
+    nmpc_r_steer: 1.0e-4           # steering magnitude cost (near-zero — same philosophy as LMPC)
+    nmpc_r_steer_rate: 1.5         # steering rate cost — PRIMARY comfort knob for NMPC
+    nmpc_r_steer_ff_mag: 0.0       # feedforward magnitude penalty — DISABLED pending tuning
+    nmpc_q_lat_terminal_scale: 5.0 # terminal state lateral weight multiplier (raised from 3.0)
     nmpc_q_heading_terminal_scale: 3.0
-    nmpc_wheelbase_m: 3.25
-    nmpc_understeer_gradient: 0.025
-    nmpc_delta_rate_max: 0.5
-    nmpc_max_accel: 3.0
-    nmpc_max_decel: 4.0
-    nmpc_v_min: 1.0
-    nmpc_v_max: 35.0
-    nmpc_max_solve_ms: 30.0
-    nmpc_max_iter: 50
-    nmpc_ftol: 0.0001
-    nmpc_fallback_lmpc: true
-    nmpc_warmup_frames: 5
-    nmpc_grade_ff_gain: 1.8
+    nmpc_wheelbase_m: 3.25           # sysid L_eff≈3.65m at v=4 → wheelbase=3.65-0.025*16=3.25 (up from default 2.5)
+    nmpc_understeer_gradient: 0.025  # K_us: L_eff = L + K_us*v² (from sysid, accounts for tire slip)
+    nmpc_delta_rate_max: 0.5       # max normalised steering change per step
+    nmpc_max_accel: 3.0            # m/s²
+    nmpc_max_decel: 4.0            # m/s²
+    nmpc_v_min: 1.0                # m/s
+    nmpc_v_max: 35.0               # m/s (covers full NMPC speed envelope)
+    nmpc_max_solve_ms: 30.0        # solver time budget; raised from 20 — SLSQP needs ~15-20ms with 25m horizon
+    nmpc_max_iter: 50              # SLSQP max iterations per frame
+    nmpc_ftol: 1.0e-4              # SLSQP function value tolerance
+    nmpc_fallback_lmpc: true       # true=fall back to LMPC on failure; false=fall back to PP
+    nmpc_warmup_frames: 5          # frames to relax rate constraint after activation
+    nmpc_grade_ff_gain: 1.8        # grade feedforward gain (matches LMPC)
 safety:
-  max_speed: 14.0
+  max_speed: 14.0                     # Safety ceiling (headroom above target_speed=12.0)
   emergency_brake_threshold: 1.5
   speed_prevention_threshold: 0.9
   speed_prevention_brake_threshold: 0.95
   speed_prevention_brake_amount: 0.2
-  max_lateral_error: 2.0
-  recovery_lateral_error: 1.0
+  max_lateral_error: 2.0           # Used for throttle reduction (0.5×) and as hard-limit upper bound.
+  recovery_lateral_error: 1.0      # Used for throttle reduction (0.8×) only; steering multiplier replaced
+                                   # by control.lateral.pp_recovery_e_lat_lo_m (continuous smoothstep).
   emergency_stop_error: 4.0
   emergency_stop_release_speed: 0.2
   emergency_stop_end_run_after_seconds: 3.0
@@ -926,37 +1061,61 @@ logging:
   frame_log_interval: 30
   log_lateral_error: true
   log_reference_point: true
+# Python main loop + bridge transport (see docs/plans/perf_pareto_plan_a_bridge_gpu_topdown.md)
 stack:
+  # Match Unity CameraCapture.targetFPS (CarPrefab + CameraCapture.cs default).
+  # 13 Hz: aligned with sustained consumer throughput (queue was pinned at 15 Hz target).
   target_loop_hz: 13.0
+  # Use GET /api/camera/latest/raw (no JPEG round-trip). Set false for legacy bridge only.
   use_raw_camera_transport: true
+  # Bridge FIFO depth per camera (freshness vs buffering). start_av_stack.sh exports AV_BRIDGE_MAX_CAMERA_QUEUE from this.
   bridge_max_camera_queue: 48
+  # POST /api/camera/drain_queue once at stack start to shed backlog (latest snapshot unchanged).
   clear_bridge_camera_queue_on_start: true
+  # Background thread GETs latest front camera while the stack runs perception/control (overlap I/O).
   camera_prefetch: true
+  # Closed-loop remains on latest camera + latest vehicle. Shadow packet path records continuity only.
   sync_packet_mode: packet_shadow
+  # When active FIFO packet ingest cannot align a required component, explicitly label and
+  # fall back to the legacy latest-path ingest instead of silently masquerading as continuity.
   sync_packet_active_allow_legacy_fallback: true
+  # Deprecated metadata-only active resync knob. Kept for compatibility while active payload ingest evolves.
   sync_packet_active_resync_max_discards: 8
+  # Active coherent-packet consume policy. Debug alternatives:
+  #   fifo_strict, latest_debug
   sync_packet_consume_policy: freshest_within_budget
+  # Hard freshness budget for the selected coherent payload.
   sync_packet_payload_max_age_ms: 250.0
+  # Soft warning budget for selected coherent payload age.
   sync_packet_payload_warn_age_ms: 125.0
+  # Max number of queued payload packets to drain while selecting the freshest packet.
   sync_packet_payload_max_drain_count: 128
+  # Only for debug-only latest_debug mode; never enable for promoted closed-loop paths.
   sync_packet_payload_allow_stale_debug: false
+  # POST /api/trajectory from a background thread (latest-wins) so the main loop is not blocked.
   async_trajectory_transport: true
+  # Overlap GET vehicle/state with camera fetch (separate requests.Session on worker thread).
   parallel_vehicle_state_fetch: true
+  # If true, requests uses OS/env proxy settings for the Unity bridge (rare). Default false
+  # skips macOS System Configuration proxy resolution on every localhost call (faster).
   bridge_trust_proxy_env: false
+  # Top-down for HDF5: 1=every frame, N=every Nth recorded frame, 0=never fetch.
+  # Extra bridge GET+decode each tick; increase if chasing higher control Hz.
   topdown_recording_interval_frames: 3
 perception:
   use_gpu: true
+  # Apple Silicon: use MPS when CUDA is unavailable (requires PyTorch with MPS build).
   prefer_mps: true
-  segmentation_input_size:
-  - 256
-  - 512
+  # Segmentation U-Net resize target [height, width] before inference. Default was [320, 640].
+  # [256, 512] is a conservative downscale (512×256) for cadence; validate on oval/s_loop.
+  segmentation_input_size: [256, 512]
   record_segmentation_mask: false
   low_visibility_fallback_enabled: true
   low_visibility_fallback_blend_alpha: 0.35
   low_visibility_fallback_max_consecutive_frames: 8
   low_visibility_fallback_center_shift_cap_m: 0.25
-  segmentation_fit_min_row_ratio: 0.2
-  segmentation_fit_max_row_ratio: 0.8
+  segmentation_fit_min_row_ratio: 0.20
+  segmentation_fit_max_row_ratio: 0.80
   segmentation_ransac_enabled: true
   segmentation_ransac_residual_px: 10.0
   segmentation_ransac_min_inliers: 8
@@ -985,16 +1144,20 @@ lateral_control:
   steering_smoothing_alpha: 0.7
   steering_rate_scale_min: 0.8
   steering_jerk_limit: 0.0
+
+# ── ACC — Adaptive Cruise Control (Step 5) ──────────────────────────────────
 acc:
-  enabled: true
-  gap_alpha: 0.3
-  rate_alpha: 0.2
-  target_gap_time_headway_s: 1.5
-  min_gap_s0_m: 2.0
-  idm_max_accel_mps2: 2.0
-  idm_comfortable_decel_mps2: 3.0
-  cutout_speed_mps: 5.0
-  fallback_frames: 5
-  reengage_frames: 3
-  disengage_ramp_mps2: 2.0
-  detection_range_m: 60.0
+  enabled: true             # Enabled 2026-04-19 — re-run ACC scenarios post decomposed-MPC fix
+  gap_alpha: 0.30           # EMA alpha for range filtering (lower = smoother)
+  rate_alpha: 0.20          # EMA alpha for range-rate filtering
+  # IDM parameters
+  target_gap_time_headway_s: 1.5   # Desired time headway T (s)
+  min_gap_s0_m: 2.0                # IDM minimum standstill gap s0 (m)
+  idm_max_accel_mps2: 2.0          # IDM max acceleration a (m/s²)
+  idm_comfortable_decel_mps2: 3.0  # IDM comfortable decel b (m/s²)
+  # State machine parameters
+  cutout_speed_mps: 5.0            # ACC disengages below this ego speed (m/s)
+  fallback_frames: 5               # Consecutive no-detect frames before DETECTION_LOSS
+  reengage_frames: 3               # Consecutive detected frames to re-arm from DETECTION_LOSS
+  disengage_ramp_mps2: 2.0        # Speed ramp rate on disengage (m/s²)
+  detection_range_m: 60.0          # Max radar detection range (m)

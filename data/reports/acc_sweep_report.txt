@@ -1,123 +1,115 @@
-ACC SCENARIO SWEEP — 2026-08-14
-══════════════════════════════════════════════════════════════════════════════════
-Step 2.5 DISABLED by wrapper pre-flight (AV_NIGHTLY_NO_FRESH_E2E=1; cadence gate).
-All verdicts from quick-pass on recordings from 2026-08-12 / 2026-08-13.
-══════════════════════════════════════════════════════════════════════════════════
+ACC SCENARIO SWEEP — 2026-08-15  (Night 4 post-blackout)
+Recordings: data/recordings/recording_20260814_*.h5  (age 0.5–0.7 days)
+Step 2.5 disabled: AV_NIGHTLY_NO_FRESH_E2E=1
+Sign-flip note: ceeba44 (2026-08-14) fixed 2.5× sign-flip measurement inflation.
+  Tonight's B-scores are accurate post-fix. Underlying oscillation persists.
 
-Scenario                          Base            Rec Age  Score       Sub                     Verdict
-──────────────────────────────────────────────────────────────────────────────────────────────────────
-A1 (autobahn_a1_steady)           autobahn_30     2d       n/a         (ACC active <10% thresh)  FAIL
-A2 (autobahn_a2_hard_brake)       autobahn_30     2d       79.0 YELLOW S100 T50 B70             PASS
-H2 (highway_h2_steady)            highway_65      1d       86.7 YELLOW S100 T75.7 B70           PASS
-H3 (highway_h3_hard_brake)        highway_65      2d       87.2 YELLOW S100 T77.3 B70           WARN
-H4 (highway_h4_accel_away)        highway_65      2d       87.4 YELLOW S100 T77.9 B70           WARN
-H5 (highway_h5_stop_go)           highway_65      2d       93.9 GREEN  S100 T99.6 B70           PASS
-H6 (highway_h6_close_gap)         highway_65      2d       93.9 GREEN  S100 T99.8 B70           PASS
-H7 (highway_h7_straight_catchup)  highway_65      2d       91.2 GREEN  S100 T90.7 B70           FAIL
-H8 (highway_h8_curve_catchup)     highway_65      2d       79.0 YELLOW S100 T50 B70             WARN
-H9 (adj_lane_parallel_reject)     highway_65      2d       n/a         (ACC not active; correct) PASS
-H10 (oncoming_straight_reject)    highway_65      2d       n/a         (ACC not active; correct) PASS
-H11 (freeflow_mild_curve)         highway_65      2d       79.0/73.6T  (Trajectory < 95 gate)    FAIL
-G1 (hill_g1_grade_following)      hill_highway    2d       83.3 YELLOW S100 T64.2 B70           FAIL
-G2 (hill_g2_stop_on_grade)        hill_highway    2d       73.1 YELLOW S50 T93.7 B100           FAIL
-──────────────────────────────────────────────────────────────────────────────────────────────────────
-
-Score color bands:  ≥90 GREEN · 70-89 YELLOW · 40-69 ORANGE · <40 RED
-
-══════════════════════════════════════════════════════════════════════════════════
+══════════════════════════════════════════════════════════════════════════════════════
+Scenario                              Base           Rec age  Verdict  Score   Sub
+══════════════════════════════════════════════════════════════════════════════════════
+A1  (autobahn_a1_steady)              autobahn_30     0.7d    FAIL     n/a    (ACC 4%; DETECTION_LOSS 91%)
+A2  (autobahn_a2_hard_brake)          autobahn_30     0.7d    PASS     83.6   S100 T50  B93
+H2  (highway_h2_steady)               highway_65      0.7d    PASS     92.5   S100 T77  B97
+H3  (highway_h3_hard_brake)           highway_65      0.5d    PASS     87.9   S100 T80  B70
+H4  (highway_h4_accel_away)           highway_65      0.7d    PASS     88.6   S100 T75  B80
+H5  (highway_h5_stop_go)              highway_65      0.7d    PASS     99.3   S100 T98  B100
+H6  (highway_h6_close_gap)            highway_65      0.7d    PASS    100.0   S100 T100 B100
+H7  (highway_h7_straight_catchup)     highway_65      0.7d    FAIL     95.5   S100 T90  B92
+H8  (highway_h8_curve_catchup)        highway_65      0.7d    FAIL     80.8   S100 T56  B70
+H9  (highway_h9_adj_lane_reject)      highway_65      0.7d    PASS     n/a    (wrong_lane 100%; ACC never followed)
+H10 (highway_h10_oncoming_reject)     highway_65      0.7d    PASS     n/a    (opp_dir 100%; ACC never followed)
+H11 (highway_h11_freeflow_mild_crv)   highway_65      0.7d    FAIL     59.0   (Trajectory 55 RED; capped)
+G1  (hill_g1_grade_following)         hill_highway    0.6d    FAIL     76.8   S75  T64  B100
+G2  (hill_g2_stop_on_grade)           hill_highway    0.6d    FAIL     73.0   S50  T94  B100
+══════════════════════════════════════════════════════════════════════════════════════
 GATE: FAIL
-══════════════════════════════════════════════════════════════════════════════════
 
-Summary: 6 PASS · 5 FAIL · 3 WARN · 0 SKIPPED · 0 AMBIGUOUS  (14 total)
+Score bands: ≥90 GREEN · 70-89 YELLOW · 40-69 ORANGE · <40 RED
+B = Behavior sub-score; captures longitudinal oscillation / sign-flip rate.
 
 ────────────────────────────────────────────────────────────────────────────────
-FAILURES (5)
+FAILURES (6)
 ────────────────────────────────────────────────────────────────────────────────
 
 A1 (autobahn_a1_steady):
-  ACC active only 3.9% of frames (1914 total; 75 ACC frames). Threshold is 10%.
-  acc_pipeline_analysis reports "ACC not active (acc_active_pct below threshold)."
-  Expected requires "ACC + NMPC active simultaneously; gap RMSE ≤ 0.5m."
-  Lead was at 40m arc-distance — likely out of radar range for most of the run on
-  the 600m straight + R600 arc autobahn at ego speed 25 m/s. ACC engagement is
-  the prerequisite gate; without it the scenario is structurally untestable.
-  Score: n/a.
-  Action: /e2e autobahn_a1_steady — check lead spawn position and radar range at
-  autobahn speeds (~25 m/s). Residual from Aug 12 sweep (same recording used).
+  ACC active only 4.0% of 1909 frames (DETECTION_LOSS 91.4%, CUTOUT 4.4%).
+  Expected "ACC + NMPC active simultaneously; gap RMSE ≤ 0.5m" — ACC prerequisite
+  not met. Hypothesis: ego at 25 m/s target outruns lead at 20 m/s constant;
+  overtake → lead vehicle exits forward radar cone → DETECTION_LOSS.
+  NMPC regime may be overriding ACC speed target. Unchanged from nights 1–3.
+  Score: n/a (<30 ACC-active frames). Action: /e2e to verify — check lead spawn
+  vs ego catchup timeline and whether IDM speed cap applies at autobahn speeds.
 
 H7 (highway_h7_straight_catchup):
-  Gap RMSE 14.31m exceeds scenario-specific gate ≤ 0.5m (full-run startup-inclusive
-  measurement). ACC score 91.2 GREEN — safety/tracking healthy, this is a gap
-  convergence rate failure. The scenario expects "gap closes in ~20s; steady follow."
-  Worst-frame gap = 57.62m (frame 183, startup phase). IDM sign changes = 0/min
-  (no hunting). Detection 100%, TTC 21.06s.
-  Note: The 0.5m Expected gate may be aspirational (steady-state only); if so the
-  scenario header should be updated to specify "startup-exclusive" measurement scope.
-  This may be a WARN not a FAIL if clarified by the human.
-  Action: clarify H7 Expected gate scope; if startup-inclusive, RMSE 14.31m is
-  structural (IDM starting 30m behind at 5 m/s closing rate inflates it).
-
-G1 (hill_g1_grade_following):
-  ACC active only 18.8% of frames (363 / 1929). Expected: "ACC active across full
-  lap." Detection rate 21.1% — lead vehicle radar lock severely degraded on hill
-  track. Gap RMSE 40.77m >> Expected ≤ 0.5m. Only TTC (37.23s) and collision (0)
-  are clean.
-  Root cause: lead likely exits radar range (150m) on downhill/uphill transitions
-  at 10 m/s — grade changes appear to break sustained radar lock.
-  Residual from Aug 12 sweep.
-  Action: investigate radar range vs grade geometry in hill_g1. May need to reduce
-  initial lead distance or improve low-SNR radar tracking on grade transitions.
-
-G2 (hill_g2_stop_on_grade):
-  TTC minimum 1.52s (tool) / 0.893s (raw) — hard fail on universal gate ≥ 2.0s.
-  1501 e-stop request frames (77% of run). 1 near-miss event (gap < 2.0m; min
-  observed gap 0.1m). Expected: "ego stops cleanly on grade; no e-stop (TTC-limited,
-  not free-fall)." Grade FF propulsive bias (~0.85 m/s² at 5% grade) is not being
-  overcome by IDM deceleration in time. Safety score 50.0 (e-stop + near-miss +
-  TTC deductions). Collision frames: 0 (vehicles touched but did not penetrate).
-  Residual from Aug 12 sweep (confirmed x2).
-  Action: IDM comfortable_decel tuning or grade FF authority cap — DO NOT tune
-  idm_comfortable_decel without A/B validation (memory: project_acc_brake_authority_findings).
-
-H11 (highway_h11_freeflow_mild_curve):
-  Expected: "trajectory score should be used as the primary gate." Trajectory
-  layer score 73.6 < 95 gate. Overall run score 79.0 (capped: critical_yellow_layer).
-  Lateral Error RMSE 0.2876m (comfort gate passes ≤ 0.40m), but trajectory scoring
-  deducted −14.3 pts for curvature-adjusted RMSE. Lateral Jerk P95: 0.072 m/s³
-  (excellent comfort). Regime: LMPC 97.5%. Model-plant mismatch: steering command
-  P50 0.151 rad vs actual 0.035 rad (MISMATCH). Same recording as Aug 12 and 13.
-  This reproduces T-SWEEP-HW-REGRESSION on highway_65 (see [[project_sweep_trajectory_flags]]).
-  Score: 79.0 overall / 73.6 trajectory.
-
-────────────────────────────────────────────────────────────────────────────────
-WARNINGS (3)
-────────────────────────────────────────────────────────────────────────────────
-
-H3 (highway_h3_hard_brake):
-  Detection rate 83.9% [below 95% registry threshold, not in Expected gate].
-  20 dropout events. Lead decelerated 12→5 m/s at t=70s — dropouts likely during
-  hard brake as gap and scattering change rapidly. TTC min 6.51s, 0 e-stops,
-  0 collisions. Score 87.2 YELLOW. Behavior: accel sign-flips 109.5/min.
-
-H4 (highway_h4_accel_away):
-  Detection rate 81.0% [below 95% registry threshold, not in Expected gate].
-  28 dropout events. Lead accelerated 8→12 m/s; dropouts correlate with rapid
-  gap opening (lead pulling away exits near-field detection). TTC min 47.31s,
-  0 e-stops, 0 collisions. Score 87.4 YELLOW. Behavior: accel sign-flips 160.4/min.
+  Gap RMSE 14.85m >> Expected ≤ 0.5m. P05 gap_error = 4.71m means even at
+  closest-following phases, tracking error is 4.7m vs 0.5m steady-state target.
+  Universal gates all pass (TTC 21.6s, 0 collisions, detection 100%). Score
+  95.5 GREEN (Tracking−9.8 only). The 0.5m criterion in Expected likely intends
+  steady-state only, but even P05 gap_err=4.71m fails it. IDM sign changes=0/min
+  (no hunting). Unchanged from nights 1–3.
 
 H8 (highway_h8_curve_catchup):
-  Detection rate 40.3% — by design (lead starts at 200m, beyond 150m radar range;
-  this is expected scenario behavior). Not a detection failure. ACC engaged at frame
-  728 (gap ~149m, closing). Jerk P95 ≤ 4.0 gate UNVERIFIABLE: raw velocity from
-  Unity has ~±0.2 m/s frame-to-frame noise producing jerk P95 ~62 m/s³ (measurement
-  artifact). IDM sign changes 0/min (no hunting detected). TTC 21.2s, 0 collisions,
-  0 e-stops. Score 79.0 YELLOW. Classified WARN pending proper jerk measurement.
-  Action: run analyze_drive_overall.py on H8 recording to get comfort-layer jerk P95.
+  Detection 64.4% [FAIL ≥ 95%]. 7 dropout events. Gap range min 33.4m–149.6m
+  with P50=52.9m — loss of track even at mid-range (should be within radar).
+  Gap RMSE 48.9m [FAIL ≤ 35m]. Accel sign-flips 93.2/min (B70).
+  Score 80.8 YELLOW. NEW FAIL this night (was WARN night-3 when detection
+  was "by design low" at 40.3% during approach from 200m). Tonight's dropouts
+  at close-range (P50=52.9m gap) indicate a tracking loss beyond startup design.
+  Expected "smooth ACC engage at ~60m gap; no hunting; jerk P95 ≤ 4.0" — engagement
+  at 60m gap was intermittent; hunting detectable via sign-flips.
+
+H11 (highway_h11_freeflow_mild_curve):
+  Free-flow lateral test (no traffic actor). Score 59.0 (capped: critical_red_layer).
+  Trajectory 55.0 RED (Lateral RMSE 0.5031m, gate ≤ 0.40m: −25pts). Oscillation
+  amplitude runaway: RMS 0.002→0.867m end-of-run. Curve Local latched on straights
+  30.0% frames (gate ≤ 5%). Highway mild-curve contract blocked (state_hold,
+  mildOnHighErr=81.7%). MPC reference OFFSET (ratio 1.591). Unchanged nights 1–3.
+
+G1 (hill_g1_grade_following):
+  Detection 20.4% [FAIL ≥ 95%]. ACC active only 18.1% of 1927 frames.
+  Gap RMSE 40.6m [FAIL ≤ 35m]. 1 e-stop event (Safety−25).
+  Expected "ACC active across full lap; grade FF + ACC coexist; gap RMSE ≤ 0.5m."
+  Not met on any dimension. Lead radar lock degrades severely on grade transitions
+  (P50 gap at acquisition: 61.7m — well within range; SNR P50=0.00 shows signal
+  loss). Score 76.8 YELLOW (S75). Unchanged nights 1–3.
+
+G2 (hill_g2_stop_on_grade):
+  TTC_min 1.54s [FAIL ≥ 2.0s — universal gate]. 1 e-stop event (Safety−25).
+  1 near-miss (gap=0.1m sustained ≥3 frames, Safety−15). TTC < 2.0s: 25 frames
+  (0.6% of ACC frames). No rollover: pitch max 0.068 rad, roll max 0.003 rad
+  (historical H9 pitch±83°/roll±172° does NOT reproduce on this recording).
+  Expected "ego stops cleanly on grade; no e-stop" — e-stop occurred, TTC gate
+  violated. Score 73.0 YELLOW (S50). Unchanged nights 1–3.
 
 ────────────────────────────────────────────────────────────────────────────────
-SKIPPED (0)  — none; all 14 have recordings within 7 days
+WARNINGS (0)
 ────────────────────────────────────────────────────────────────────────────────
-  None — all 14 scenarios had recordings within 7 days (Aug 12–13).
+  None. B70 oscillation noted on H3 (89.8/min) and H4 (49.8/min) but no Expected
+  criteria violated. H3 and H4 upgraded to PASS from night-3 WARN (detection
+  was 81-84%; tonight 100%/99.8% with fresh afternoon recordings post sign-flip fix).
+
+────────────────────────────────────────────────────────────────────────────────
+PASS DETAIL
+────────────────────────────────────────────────────────────────────────────────
+  A2:  TTC 15.3s; 0 coll; Δsteering max=0.017 ≤ 0.10 ✓; detection 100%; score 83.6
+       Gap RMSE 55.9m (startup-only transient; A2 Expected has no RMSE criterion).
+       Sign-flips 37.2/min (B92.8). CUTOUT 78 frames at end as lead brakes to near-stop.
+  H2:  TTC 46.3s; detection 99.7%; 0 coll; gap RMSE 28.0m ≤ 35m; score 92.5 GREEN
+  H3:  TTC 6.5s; detection 100%; 0 coll; gap RMSE 25.2m ≤ 35m; score 87.9 YELLOW
+       Sign-flips 89.8/min (B70) — over-braking oscillation on hard-brake event.
+  H4:  TTC 46.0s; detection 99.8%; 0 coll; gap RMSE 29.7m ≤ 35m; score 88.6 YELLOW
+       Sign-flips 49.8/min (B80).
+  H5:  TTC 3.3s; detection 100%; 0 coll; gap RMSE 7.4m; score 99.3 GREEN
+  H6:  TTC 11.7s; detection 100%; 0 coll; gap RMSE 5.1m; score 100.0 GREEN
+  H9:  Actor (same-dir adjacent lane) detected 100% frames; radar_fwd_reject_reason=
+       wrong_lane 100%; ACC state=DETECTION_LOSS 99.7%; ACC never entered following.
+  H10: Actor (opposite-dir) detected; radar_fwd_reject_reason=opposite_direction 100%;
+       ACC state=CUTOUT 0.2% / DETECTION_LOSS 99.8%; ACC never entered following.
+
+────────────────────────────────────────────────────────────────────────────────
+SKIPPED (0)
+────────────────────────────────────────────────────────────────────────────────
+  None. All 14 scenarios have recordings ≤ 0.7 days old from 2026-08-14 afternoon.
 
 ────────────────────────────────────────────────────────────────────────────────
 AMBIGUOUS (0)
@@ -125,30 +117,26 @@ AMBIGUOUS (0)
   None.
 
 ────────────────────────────────────────────────────────────────────────────────
+DELTA vs NIGHT-3 (2026-08-14, memory baseline)
+────────────────────────────────────────────────────────────────────────────────
+  Night-3: pass=6 fail=5 warn=3; FAILs=A1/H7/H11/G1/G2
+  Night-4: pass=8 fail=6 warn=0
+  Improved: H3 WARN→PASS (detection 81%→100%), H4 WARN→PASS (84%→99.8%)
+  Regressed: H8 WARN→FAIL (detection 40%→64% but close-range dropouts; gap RMSE 48.9m)
+  Persistent FAILs: A1, H7, H11, G1, G2 (unchanged all 4 nights)
+  Sign-flip context: night-3 used inflated rates (~2.5x per ceeba44); tonight's
+    sign-flip rates are accurate (post-fix). Oscillation is systemic but lower than
+    previously measured. B-floor at 70 still hit on H3, H8.
+
+────────────────────────────────────────────────────────────────────────────────
 CROSS-SCENARIO NOTES
 ────────────────────────────────────────────────────────────────────────────────
+  Accel sign-flips elevated across ACC scenarios (post-fix accurate rates):
+    A2: 37.2/min · H2: 33.1/min · H3: 89.8/min · H4: 49.8/min · H7: 38.0/min
+    H8: 93.2/min · G1: not reported (ACC 18% only)
+    Systemic B70 oscillation persists after sign-flip fix. IDM longitudinal control
+    issue. H3 and H8 worst cases (hard-brake and curve-catchup scenarios).
 
-Behavior oscillation (accel sign-flips) elevated system-wide across all ACC scenarios:
-  A2: 102.5/min · H2: 239.9/min · H3: 109.5/min · H4: 160.4/min
-  H5: 102.9/min · H6: 98.0/min · H7: 67.2/min · H8: 227.7/min · G1: 124.0/min
-  Behavior floor (30/min) exceeded by all. Sub-layer capped at 70/100 for all.
-  This is a system-wide IDM longitudinal oscillation pattern, not per-scenario noise.
-
-G2 e-stop and near-miss are confirmed residuals (same pattern Aug 12 + Aug 13).
-H7 gap RMSE, G1 ACC coverage, and A1 engagement failures are also Aug 12 residuals
-confirmed a second night (no regressions, no improvements in these scenarios).
-
-────────────────────────────────────────────────────────────────────────────────
-STEP 2.5 NOTE — RE-SEEDING DEFERRED
-────────────────────────────────────────────────────────────────────────────────
-  AV_NIGHTLY_NO_FRESH_E2E=1 — cadence pre-flight blocked all fresh Unity runs.
-  4 FAIL + 3 WARN scenarios would normally be re-confirmed with fresh /e2e.
-  Verdicts stand on Aug 12 recordings. To re-seed manually tomorrow:
-    /e2e tracks/scenarios/autobahn_a1_steady.yml
-    /e2e tracks/scenarios/highway_h7_straight_catchup.yml
-    /e2e tracks/scenarios/hill_g1_grade_following.yml
-    /e2e tracks/scenarios/hill_g2_stop_on_grade.yml
-
-══════════════════════════════════════════════════════════════════════════════════
-2026-08-14 ACC_SWEEP gate=FAIL pass=6 fail=5 warn=3 skip=0 amb=0 total=14
-══════════════════════════════════════════════════════════════════════════════════
+════════════════════════════════════════════════════════════════════════════════
+2026-08-15 ACC_SWEEP gate=FAIL pass=8 fail=6 warn=0 skip=0 amb=0 total=14
+════════════════════════════════════════════════════════════════════════════════

@@ -1,39 +1,32 @@
-step0_started 2026-08-14 2026-08-14T04:03:55-04:00
-[skill] Step 2.5 disabled by wrapper pre-flight (cadence too slow)
-step2_quick_pass_started 2026-08-14T04:05:19-04:00
-scenario_a1_running 2026-08-14T04:05:37-04:00
-scenario_a2_running 2026-08-14T04:05:37-04:00
-scenario_h2_running 2026-08-14T04:05:37-04:00
-scenario_h3_running 2026-08-14T04:05:37-04:00
-scenario_h4_running 2026-08-14T04:05:37-04:00
-scenario_h5_running 2026-08-14T04:07:44-04:00
-scenario_h6_running 2026-08-14T04:07:44-04:00
-scenario_h7_running 2026-08-14T04:07:44-04:00
-scenario_h8_running 2026-08-14T04:07:44-04:00
-scenario_h9_running 2026-08-14T04:07:44-04:00
-scenario_h10_running 2026-08-14T04:07:44-04:00
-scenario_h11_running 2026-08-14T04:07:44-04:00
-scenario_g1_running 2026-08-14T04:07:44-04:00
-scenario_g2_running 2026-08-14T04:07:44-04:00
-scenario_a1_done verdict=FAIL reason="ACC active only 3.9% (<10% threshold); Expected requires ACC+NMPC coexistence" 2026-08-14T04:12:58-04:00
-scenario_a2_done verdict=PASS reason="TTC 15.2s, Δsteering 0.043 ≤ 0.10, 0 e-stops; behavior oscillation noted" 2026-08-14T04:12:58-04:00
-scenario_h2_done verdict=PASS reason="TTC 46.2s, detection 98%, gap RMSE 29.3m ≤ 35m" 2026-08-14T04:12:58-04:00
-scenario_h3_done verdict=WARN reason="TTC 6.5s OK, 0 collision; detection 83.9% below 95% (not in Expected gate but notable)" 2026-08-14T04:12:58-04:00
-scenario_h4_done verdict=WARN reason="TTC 47.3s OK, RMSE 27.1m OK; detection 81.0% below 95% (not in Expected gate)" 2026-08-14T04:12:58-04:00
-scenario_h5_done verdict=PASS reason="TTC 3.06s, detection 100%, 0 collisions; score 93.9 GREEN" 2026-08-14T04:12:58-04:00
-scenario_h6_done verdict=PASS reason="TTC 11.2s, detection 100%, 0 collisions; score 93.9 GREEN" 2026-08-14T04:12:58-04:00
-scenario_h7_done verdict=FAIL reason="Gap RMSE 14.31m exceeds scenario gate ≤ 0.5m (startup-inclusive full-run measurement)" 2026-08-14T04:12:58-04:00
-scenario_h8_done verdict=WARN reason="Detection 40.3% by design (lead starts beyond radar); jerk not verifiable via velocity noise; no TTC/collision/e-stop issue" 2026-08-14T04:12:58-04:00
-scenario_h9_done verdict=PASS reason="0 ACC frames; correctly rejected adjacent-lane actor" 2026-08-14T04:12:58-04:00
-scenario_h10_done verdict=PASS reason="0 ACC frames; correctly rejected oncoming actor" 2026-08-14T04:12:58-04:00
-scenario_h11_done verdict=PASS reason="0 ACC frames; free-flow as expected" 2026-08-14T04:12:58-04:00
-scenario_g1_done verdict=FAIL reason="ACC only 18.8% active across full lap (Expected: full lap); detection 21.1%; gap RMSE 40.77m >> 0.5m" 2026-08-14T04:12:58-04:00
-scenario_g2_done verdict=FAIL reason="TTC min 1.52s < 2.0s gate; 1501 e-stop frames (78% of run); near-miss event; Expected: no e-stop" 2026-08-14T04:12:58-04:00
-step2_done 2026-08-14T04:12:58-04:00
-step3_report_written 2026-08-14T04:15:14-04:00
-GATE: FAIL
-2026-08-14 ACC_SWEEP gate=FAIL pass=7 fail=4 warn=3 skip=0 amb=0 total=14
-step4_done 2026-08-14T04:15:14-04:00
-scenario_h11_correction verdict=FAIL reason="Trajectory score 73.6 < 95 gate (same recording as 2026-08-12; Expected: trajectory is primary gate)" 2026-08-14T04:16:34-04:00
-FINAL_CORRECTED: 2026-08-14 ACC_SWEEP gate=FAIL pass=6 fail=5 warn=3 skip=0 amb=0 total=14
-sweep_complete 2026-08-14T04:17:10-04:00
+step0_started 2026-08-15 2026-08-15T04:04:02-04:00
+scenario_autobahn_a1_steady_running 2026-08-15T04:05:16-04:00
+scenario_autobahn_a2_hard_brake_running 2026-08-15T04:05:16-04:00
+scenario_highway_h10_oncoming_straight_reject_running 2026-08-15T04:05:16-04:00
+scenario_highway_h11_freeflow_mild_curve_running 2026-08-15T04:05:16-04:00
+scenario_highway_h2_steady_running 2026-08-15T04:05:16-04:00
+scenario_highway_h3_hard_brake_running 2026-08-15T04:05:16-04:00
+scenario_highway_h4_accel_away_running 2026-08-15T04:05:16-04:00
+scenario_highway_h5_stop_go_running 2026-08-15T04:05:16-04:00
+scenario_highway_h6_close_gap_running 2026-08-15T04:05:16-04:00
+scenario_highway_h7_straight_catchup_running 2026-08-15T04:05:16-04:00
+scenario_highway_h8_curve_catchup_running 2026-08-15T04:05:16-04:00
+scenario_highway_h9_adjacent_lane_parallel_reject_running 2026-08-15T04:05:16-04:00
+scenario_hill_g1_grade_following_running 2026-08-15T04:05:16-04:00
+scenario_hill_g2_stop_on_grade_running 2026-08-15T04:05:16-04:00
+[skill] Step 2.5 disabled by wrapper pre-flight (AV_NIGHTLY_NO_FRESH_E2E=1)
+scenario_autobahn_a1_steady_done verdict=FAIL reason="ACC active only 4% (DETECTION_LOSS 91%); Expected ACC+NMPC simultaneous" 2026-08-15T04:11:45-04:00
+scenario_autobahn_a2_hard_brake_done verdict=PASS reason="TTC 15.3s; 0 coll; Δsteering 0.017 ≤ 0.10; score=83.6" 2026-08-15T04:11:45-04:00
+scenario_highway_h2_steady_done verdict=PASS reason="detection 99.7%; TTC 46.3s; RMSE 28.0m ≤ 35m; score=92.5" 2026-08-15T04:11:45-04:00
+scenario_highway_h3_hard_brake_done verdict=PASS reason="TTC 6.5s; 0 coll; RMSE 25.2m; score=87.9 (B70 oscillation noted)" 2026-08-15T04:11:45-04:00
+scenario_highway_h4_accel_away_done verdict=PASS reason="detection 99.8%; TTC 46.0s; RMSE 29.7m ≤ 35m; score=88.6" 2026-08-15T04:11:45-04:00
+scenario_highway_h5_stop_go_done verdict=PASS reason="detection 100%; TTC 3.3s; 0 coll; score=99.3" 2026-08-15T04:11:45-04:00
+scenario_highway_h6_close_gap_done verdict=PASS reason="detection 100%; TTC 11.7s; 0 coll; score=100.0" 2026-08-15T04:11:45-04:00
+scenario_highway_h7_straight_catchup_done verdict=FAIL reason="gap RMSE 14.85m >> ≤ 0.5m criterion; P05 gap_err 4.7m" 2026-08-15T04:11:45-04:00
+scenario_highway_h8_curve_catchup_done verdict=FAIL reason="detection 64.4% < 95%; gap RMSE 48.9m; B70 accel sign-flips 93.2/min" 2026-08-15T04:11:45-04:00
+scenario_highway_h9_adjacent_lane_parallel_reject_done verdict=PASS reason="actor detected 100%; rejected wrong_lane 100%; ACC never entered following" 2026-08-15T04:11:45-04:00
+scenario_highway_h10_oncoming_straight_reject_done verdict=PASS reason="actor detected; rejected opposite_direction 100%; ACC never entered following" 2026-08-15T04:11:45-04:00
+scenario_highway_h11_freeflow_mild_curve_done verdict=FAIL reason="trajectory 55.0 (RED capped 59.0); RMSE 0.503m; oscillation runaway" 2026-08-15T04:11:45-04:00
+scenario_hill_g1_grade_following_done verdict=FAIL reason="detection 20.4% < 95%; ACC active 18%; RMSE 40.6m; 1 e-stop" 2026-08-15T04:11:45-04:00
+scenario_hill_g2_stop_on_grade_done verdict=FAIL reason="TTC_min 1.54s < 2.0s (universal gate); 1 e-stop; 1 near-miss gap=0.1m" 2026-08-15T04:11:45-04:00
+2026-08-15 ACC_SWEEP gate=FAIL pass=8 fail=6 warn=0 skip=0 amb=0 total=14 2026-08-15T04:15:07-04:00
+sweep_complete 2026-08-15T04:15:07-04:00
