@@ -6,6 +6,43 @@
 
 ## Queued — pick up next
 
+### T-METRIC-MSDV-WIRE — gate on ride comfort, not just amplitude (2026-08-15)
+
+`tools/analyze/analyze_ride_comfort.py` computes MSDV / `a_w` RMS / dominant
+frequency but **reports only — it does not gate anything.** Wire it into the
+LongitudinalComfort and Control layers so the 0.24 Hz weave is scoreable.
+
+Measured baseline to gate against (5 A/B pairs, highway_h3): lateral MSDV median
+**5.86** under the promoted `lookahead` mode, **8.35** under the superseded
+`at_car`. ISO 2631-1 reaction scale puts both at "fairly uncomfortable".
+
+Blocked on baseline re-freezing (Testing Protocol). Use `/revalidate` for
+pre/post on fixed recordings, not fresh Unity runs.
+
+### T-METRIC-UNCAP — saturating penalty caps destroy ranking (2026-08-15)
+
+Six caps in `scoring_registry.py`. A cap means the worst performers are
+indistinguishable and improvement is invisible until you drop below it —
+precisely where guidance matters most. Measured 2026-08-14: 3 of 10 ACC
+scenarios still pegged at a cap even after the fps fix (A2 gap RMSE 55.86 m →
+−50.0; H3/H8 oscillation → −30.0).
+
+Replace hard caps with soft-knee (log or asymptotic) scaling so severity keeps
+ranking. Affects `ACC_SCORE_*_PENALTY_CAP` and `STEERING_JERK_PENALTY_CAP`.
+
+### T-METRIC-DEADBAND — sign-flip metrics need a magnitude threshold (2026-08-15)
+
+`_sign_flips_per_min` counts sign changes with no magnitude floor, so it counts
+zero-crossings of a command that idles at −0.01 m/s² (40% of ACC frames are
+under 0.05 m/s² in magnitude). This produced a phantom "43% oscillation
+regression" that vanished entirely at a 0.05 m/s² dead-band:
+
+    db=0     at_car 62.6 / 68.6   lookahead 86.9 / 109.2   <- looks 50% worse
+    db=0.05  at_car 36.3 / 36.5   lookahead 38.7 /  33.6   <- identical
+    db=0.10  at_car 16.3 / 12.9   lookahead 15.8 /  15.1   <- both under the 30 gate
+
+Proposed `db = 0.10 m/s²`. Scoring change — needs baseline re-freeze.
+
 ### T-SCORE-SPEED-COMPLIANCE — speed/progress is not scored at all (2026-08-14)
 
 **Scoring gap, raised by the user.** The stack is scored entirely on tracking
