@@ -4749,7 +4749,8 @@ class LongitudinalController:
                  limiter_transition_enabled: bool = False,
                  limiter_transition_hold_frames: int = 3,
                  limiter_transition_smoothing_alpha: float = 0.25,
-                 limiter_transition_hysteresis: float = 0.05):
+                 limiter_transition_hysteresis: float = 0.05,
+                 acc_jerk_cooldown_bypass_states: Tuple[str, ...] = ()):
         """
         Initialize longitudinal controller.
         
@@ -4851,6 +4852,11 @@ class LongitudinalController:
             np.clip(limiter_transition_smoothing_alpha, 0.0, 1.0)
         )
         self.limiter_transition_hysteresis = max(0.0, float(limiter_transition_hysteresis))
+        # T-ACC-G2-TTC: ACC states in which the jerk cooldown must not scale the
+        # command. Empty tuple = legacy behaviour (config kill-switch).
+        self.acc_jerk_cooldown_bypass_states = tuple(
+            str(x).strip() for x in (acc_jerk_cooldown_bypass_states or ())
+        )
         self.startup_elapsed = 0.0
         self.last_throttle = 0.0
         self.last_brake = 0.0
@@ -5022,6 +5028,14 @@ class LongitudinalController:
         _in_emergency_state = emergency_relax_enabled and str(acc_state_code).strip() in (
             "EMERGENCY_BRAKE", "TTC_ESTOP", "COLLAPSED_GAP_STOP"
         )
+        # T-ACC-G2-TTC (2026-09-22): while IDM drives the command (ACC_ACTIVE /
+        # CUTOUT) the measured-jerk cap re-arms the cooldown every frame of a
+        # real stop and the ×jerk_cooldown_scale pin delivered ~6 % of IDM
+        # demand on flat ground (the −0.43 floor in the 2026-04-20 H5 probe).
+        # Same fix shape as the grade / emergency bypass below.
+        _in_cooldown_bypass_state = (
+            str(acc_state_code).strip() in self.acc_jerk_cooldown_bypass_states
+        )
         if _in_emergency_state:
             effective_max_decel = max(effective_max_decel, abs(emergency_decel_floor))
         desired_accel = np.clip(desired_accel, -effective_max_decel, effective_max_accel)
@@ -5114,6 +5128,7 @@ class LongitudinalController:
                     self.jerk_cooldown_remaining > 0
                     and abs(gravity_accel) < 0.1
                     and not _in_emergency_state
+                    and not _in_cooldown_bypass_state
                 ):
                     accel_cmd *= float(self.jerk_cooldown_scale)
                     self.jerk_cooldown_remaining -= 1
@@ -5347,7 +5362,11 @@ class LongitudinalController:
                 self.last_accel_cmd - (dynamic_max_jerk * dt),
                 self.last_accel_cmd + (dynamic_max_jerk * dt),
             )
-            if self.jerk_cooldown_remaining > 0 and abs(gravity_accel) < 0.1:
+            if (
+                self.jerk_cooldown_remaining > 0
+                and abs(gravity_accel) < 0.1
+                and not _in_cooldown_bypass_state
+            ):
                 accel_cmd_limited *= float(self.jerk_cooldown_scale)
                 self.jerk_cooldown_remaining -= 1
             if accel_cmd_limited >= 0.0:
@@ -5601,6 +5620,7 @@ class VehicleController:
                  longitudinal_limiter_transition_hold_frames: int = 3,
                  longitudinal_limiter_transition_smoothing_alpha: float = 0.25,
                  longitudinal_limiter_transition_hysteresis: float = 0.05,
+                 longitudinal_acc_jerk_cooldown_bypass_states: Tuple[str, ...] = (),
                  steering_smoothing_alpha: float = 0.7,
                  base_error_smoothing_alpha: float = 0.7,
                  heading_error_smoothing_alpha: float = 0.45,
@@ -6133,6 +6153,7 @@ class VehicleController:
             limiter_transition_hold_frames=longitudinal_limiter_transition_hold_frames,
             limiter_transition_smoothing_alpha=longitudinal_limiter_transition_smoothing_alpha,
             limiter_transition_hysteresis=longitudinal_limiter_transition_hysteresis,
+            acc_jerk_cooldown_bypass_states=longitudinal_acc_jerk_cooldown_bypass_states,
         )
 
         # --- Regime selector + MPC (wired here, OFF by default via enabled=False) ---

@@ -549,6 +549,9 @@ class AVStack:
             longitudinal_limiter_transition_smoothing_alpha=float(
                 longitudinal_cfg.get('limiter_transition_smoothing_alpha', 0.25)
             ),
+            longitudinal_acc_jerk_cooldown_bypass_states=tuple(
+                longitudinal_cfg.get('acc_jerk_cooldown_bypass_states', ()) or ()
+            ),
             longitudinal_limiter_transition_hysteresis=float(
                 longitudinal_cfg.get('limiter_transition_hysteresis', 0.05)
             ),
@@ -1097,6 +1100,7 @@ class AVStack:
         self.acc_sensor = ForwardRadarSensor(
             gap_alpha=float(acc_cfg.get('gap_alpha', 0.30)),
             rate_alpha=float(acc_cfg.get('rate_alpha', 0.20)),
+            range_offset_m=float(acc_cfg.get('radar_range_offset_m', 0.0)),
         )
         self.acc_controller = ACCController(ACCParams.from_config(acc_cfg))
         self._acc_frame_state: dict = {}
@@ -1154,6 +1158,9 @@ class AVStack:
                 "git_sha_full": git_sha_full,
                 "git_sha_short": git_sha_short,
                 "config_fingerprint_sha256": cfg_fingerprint,
+                # T-ACC-RADAR-FRAME: the recorded radar_fwd_distance_m is the sensor's
+                # filtered gap AFTER this offset. Scorers use it to recover the frame.
+                "radar_range_offset_m": float((self.config or {}).get("acc", {}).get("radar_range_offset_m", 0.0)),
                 "replay_type": replay_type,
                 "policy_profile": policy_profile,
                 "track_id": track_id,

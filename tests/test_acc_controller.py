@@ -350,6 +350,50 @@ class TestCutout:
         out = ctrl.compute_target_speed(5.0, 25.0, _reading(gap_m=20.0), DT)
         assert out.state != ACCState.CUTOUT
 
+    # T-ACC-G2-TTC (2026-09-22) — cutout_requires_no_lead
+    def test_flag_default_off_preserves_legacy_cutout(self):
+        """Kill-switch default: ACCParams() and from_config({}) leave the flag off."""
+        assert ACCParams().cutout_requires_no_lead is False
+        assert ACCParams.from_config({}).cutout_requires_no_lead is False
+
+    def test_flag_on_skips_cutout_while_lead_detected(self):
+        """Below cutout speed WITH a lead → stay ACC_ACTIVE so IDM finishes the stop.
+        The legacy CUTOUT here ramped v_target toward free-flow with a stopped car
+        7 m ahead (hill_g2 TTC_ESTOP, every night since 2026-08-12)."""
+        ctrl = _make_controller(cutout_speed_mps=5.0, cutout_requires_no_lead=True)
+        # gap 4 m < IDM desired gap s*(2 m/s, +2 m/s closing) ≈ 5.9 m → IDM brakes.
+        # (Above 3 m so the EMERGENCY_BRAKE gap floor does not pre-empt ACC_ACTIVE.)
+        out = ctrl.compute_target_speed(2.0, 25.0, _reading(gap_m=4.0, range_rate_mps=2.0), DT)
+        assert out.state == ACCState.ACC_ACTIVE
+        assert out.acc_active == pytest.approx(1.0)
+        assert out.idm_accel_mps2 < 0.0
+        assert out.target_speed < 2.0  # IDM decel delivered, not the legacy ramp toward free-flow
+
+    # T-ACC-EB-STANDSTILL (2026-09-22) — emergency_brake_min_closing_mps / abs_gap
+    def test_eb_ignores_noise_level_closing_rate_when_threshold_set(self):
+        """Stopped 2 m behind a stopped lead, EMA range-rate noise 0.02 m/s → not EB."""
+        ctrl = _make_controller(cutout_speed_mps=0.0, cutout_requires_no_lead=True,
+                                emergency_brake_min_closing_mps=0.1, emergency_brake_abs_gap_m=1.5)
+        out = ctrl.compute_target_speed(0.0, 25.0, _reading(gap_m=2.0, range_rate_mps=0.02), DT)
+        assert out.state != ACCState.EMERGENCY_BRAKE
+
+    def test_eb_still_fires_on_real_closing_inside_floor(self):
+        ctrl = _make_controller(cutout_speed_mps=0.0, cutout_requires_no_lead=True,
+                                emergency_brake_min_closing_mps=0.1, emergency_brake_abs_gap_m=1.5)
+        out = ctrl.compute_target_speed(0.5, 25.0, _reading(gap_m=1.2, range_rate_mps=0.5), DT)
+        assert out.state == ACCState.EMERGENCY_BRAKE
+
+    def test_eb_legacy_defaults_fire_on_any_positive_rate(self):
+        ctrl = _make_controller(cutout_speed_mps=0.0, cutout_requires_no_lead=True)
+        out = ctrl.compute_target_speed(0.0, 25.0, _reading(gap_m=2.0, range_rate_mps=0.02), DT)
+        assert out.state == ACCState.EMERGENCY_BRAKE
+
+    def test_flag_on_still_cuts_out_with_no_lead(self):
+        """Below cutout speed with NO lead → CUTOUT exactly as before."""
+        ctrl = _make_controller(cutout_speed_mps=5.0, cutout_requires_no_lead=True)
+        out = ctrl.compute_target_speed(2.0, 25.0, _no_lead(), DT)
+        assert out.state == ACCState.CUTOUT
+
     def test_detection_loss_count_preserved_through_cutout(self):
         """Detection-loss counter is not reset by CUTOUT state."""
         ctrl = _make_controller(cutout_speed_mps=5.0, fallback_frames=5)

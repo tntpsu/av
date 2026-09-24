@@ -274,6 +274,12 @@ control:
     speed_for_jerk_alpha: 0.8
     jerk_cooldown_frames: 8
     jerk_cooldown_scale: 0.4
+    # T-ACC-G2-TTC (2026-09-22): bypass the jerk cooldown while IDM drives the
+    # command. The measured-jerk cap re-arms the cooldown every frame of a real
+    # stop and the ×0.4 pin delivered 5.9 % of IDM demand on flat ground (the
+    # −0.43 floor in the 2026-04-20 H5 probe). Grade and emergency states
+    # already bypass it. Kill-switch: [] = legacy behaviour.
+    acc_jerk_cooldown_bypass_states: [ACC_ACTIVE, CUTOUT]
     speed_error_to_accel_gain: 0.1
     speed_error_deadband: 0.05
     speed_error_gain_under: 0.12
@@ -1172,4 +1178,31 @@ acc:
   fallback_frames: 5               # Consecutive no-detect frames before DETECTION_LOSS
   reengage_frames: 3               # Consecutive detected frames to re-arm from DETECTION_LOSS
   disengage_ramp_mps2: 2.0        # Speed ramp rate on disengage (m/s²)
+  # T-ACC-G2-TTC (2026-09-22): never CUTOUT while a lead is detected. Below
+  # cutout_speed the state machine ramps its target UP toward free-flow and the
+  # owner-resolver hands the governor target to the controller with a stopped
+  # lead metres ahead → hill_g2 TTC_ESTOP every night since 2026-08-12. With
+  # the flag on, IDM finishes the stop. Kill-switch: false = legacy behaviour.
+  # Reproducer: pytest tests/test_acc_closedloop.py
+  cutout_requires_no_lead: true
+  # T-ACC-EB-STANDSTILL (2026-09-22): EMERGENCY_BRAKE requires a real closing
+  # rate. With the legacy `> 0.0` test, Doppler noise (σ 0.05 m/s, EMA α 0.2 →
+  # ~0.02 m/s residual) re-entered EMERGENCY_BRAKE 124 times in one 90 s stop
+  # behind a stationary lead, and each entry was scored as an e-stop event
+  # (Safety 0 on a clean stop). 0.1 m/s = 5σ of the filtered noise; a real
+  # approach closes far faster than that by gap < 3 m. Kill-switch: 0.0.
+  emergency_brake_min_closing_mps: 0.1
+  # EB absolute gap floor. Legacy 3.0 m was written in the centre-to-centre
+  # frame (i.e. after contact). In the bumper frame it must sit BELOW
+  # min_gap_s0_m (2.0), otherwise IDM's own standstill point is inside the EB
+  # zone and the car creep-brakes in cycles. 1.5 m still stops a 1 m/s creep in
+  # ~0.1 m. Kill-switch: 3.0.
+  emergency_brake_abs_gap_m: 1.5
   detection_range_m: 60.0          # Max radar detection range (m)
+  # T-ACC-RADAR-FRAME (2026-09-22): Unity reports the CENTRE-TO-CENTRE range
+  # (AVBridge.cs:3048); physical contact occurred at a reported 4.34–4.64 m in
+  # every hill_g2 recording examined (median 4.43 = lead 4.5/2 + ego ≈ 2.2).
+  # Without this offset min_gap_s0_m targets a point 2.4 m INSIDE the lead and
+  # every gap gate fires after contact. Subtracted in ForwardRadarSensor.
+  # Kill-switch: 0.0 = legacy frame. Reproducer: tests/test_acc_closedloop.py
+  radar_range_offset_m: 4.43

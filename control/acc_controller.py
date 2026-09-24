@@ -6,8 +6,9 @@ at the ego vehicle's target speed.
 
 State machine (6 states, evaluated in priority order each frame):
   1. TTC_ESTOP       — TTC < 1.5s → fires emergency_stop(), overrides everything
-  2. EMERGENCY_BRAKE — gap < 1.5×v AND closing → hard -4.0 m/s² override
+  2. EMERGENCY_BRAKE — gap < 1.5×v AND closing (> emergency_brake_min_closing_mps) → hard -4.0 m/s² override
   3. CUTOUT          — ego_speed < cutout_speed_mps → disengage ramp to free-flow
+                       (skipped while a lead is detected if cutout_requires_no_lead)
   4. DETECTION_LOSS  — ≥ fallback_frames with no detection → disengage ramp
   5. ACC_ACTIVE      — normal IDM following
   6. FREE_FLOW       — default, no lead detected
@@ -59,6 +60,9 @@ class ACCParams:
     fallback_frames: int = 5             # consecutive no-detect frames before DETECTION_LOSS
     reengage_frames: int = 3             # consecutive detected frames to re-arm from DETECTION_LOSS
     disengage_ramp_mps2: float = 2.0    # ramp rate on disengage, m/s² (matches max_accel_mps2)
+    cutout_requires_no_lead: bool = False  # T-ACC-G2-TTC: never CUTOUT while a lead is detected
+    emergency_brake_min_closing_mps: float = 0.0  # T-ACC-EB-STANDSTILL: EB needs a real closing rate; 0.0 = legacy (> 0.0)
+    emergency_brake_abs_gap_m: float = 3.0        # EB absolute gap floor; must be < min_gap_m or IDM's standstill point sits inside it
 
     @classmethod
     def from_config(cls, cfg: dict) -> "ACCParams":
@@ -74,6 +78,9 @@ class ACCParams:
             fallback_frames=int(cfg.get("fallback_frames", 5)),
             reengage_frames=int(cfg.get("reengage_frames", 3)),
             disengage_ramp_mps2=float(cfg.get("disengage_ramp_mps2", 2.0)),
+            cutout_requires_no_lead=bool(cfg.get("cutout_requires_no_lead", False)),
+            emergency_brake_min_closing_mps=float(cfg.get("emergency_brake_min_closing_mps", 0.0)),
+            emergency_brake_abs_gap_m=float(cfg.get("emergency_brake_abs_gap_m", 3.0)),
         )
 
 
@@ -314,10 +321,17 @@ class ACCController:
         # Use v_target_prev as the integration base (not ego_speed) so the target
         # compounds downward at _EMERGENCY_BRAKE_ACCEL_MPS2 per second rather than
         # resetting to ego-0.133m/s each frame (which produces only ~0.036 m/s² brake).
+        # emergency_brake_min_closing_mps (T-ACC-EB-STANDSTILL, 2026-09-22): the
+        # EMA range rate never settles at exactly 0 (Unity Doppler noise σ=0.05
+        # m/s, α=0.2), so with the legacy `> 0.0` test a car stopped 2 m behind
+        # the lead re-enters EMERGENCY_BRAKE every few frames for the rest of the
+        # run — 124 phantom "e-stop events" in one 90 s recording. A real closing
+        # approach is > 0.1 m/s by the time gap < 3 m; COLLAPSED_GAP_STOP still
+        # backs this up at gap <= 0.5 m regardless of range rate.
         if (reading.detected
                 and (reading.gap_m < _EMERGENCY_BRAKE_GAP_FACTOR * ego_speed
-                     or reading.gap_m < _EMERGENCY_BRAKE_ABS_GAP_M)
-                and reading.range_rate_mps > 0.0):
+                     or reading.gap_m < p.emergency_brake_abs_gap_m)
+                and reading.range_rate_mps > p.emergency_brake_min_closing_mps):
             # Cap integration base at ego_speed on EB entry so we never target
             # above current speed (which would cause acceleration into the lead).
             v_start = min(ego_speed, self._v_target_prev)
@@ -335,7 +349,14 @@ class ACCController:
 
         # 3. CUTOUT: ego too slow — disengage ramp
         # Note: detection_loss_count is NOT reset; hysteresis state preserved.
-        if ego_speed < p.cutout_speed_mps:
+        # cutout_requires_no_lead (T-ACC-G2-TTC, 2026-09-22): with a detected
+        # lead, cutting out here ramps v_target UP toward free-flow and the
+        # owner-resolver hands the governor target to the controller while a
+        # stopped car sits metres ahead — the hill_g2 TTC_ESTOP. Stay in
+        # ACC_ACTIVE so IDM finishes the stop; standstill is then held by the
+        # EMERGENCY_BRAKE absolute gap floor.
+        cutout_allowed = not (p.cutout_requires_no_lead and reading.detected)
+        if ego_speed < p.cutout_speed_mps and cutout_allowed:
             v_ramped = self._ramp(self._v_target_prev, free_flow_target, dt)
             self._v_target_prev = v_ramped
             self._was_acc_active = False
