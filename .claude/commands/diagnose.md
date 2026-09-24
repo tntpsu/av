@@ -97,6 +97,51 @@ python3 tools/analyze/run_gate_and_triage.py <recording>
 ```bash
 python3 tools/analyze/acc_pipeline_analysis.py --latest
 ```
+
+**Then reproduce it WITHOUT Unity before reading the recording any further.**
+`tests/acc_closedloop_harness.py` closes the loop radar → ACCController →
+owner-resolver → LongitudinalController → safety clip → point-mass plant using the
+production controllers built from the real merged YAML. A scenario runs in
+< 1 s and the trace uses HDF5 field names, so it is comparable column-for-column
+with the recording. It is calibrated against a known-good (H5 PASS) and a
+known-bad (G2 TTC 1.58 vs sweep 1.54–1.67).
+
+```bash
+pytest tests/test_acc_closedloop.py -v                    # reproducers + mechanism tests
+python3 tests/acc_closedloop_harness.py                   # print the G2 trace
+```
+
+For a new scenario: add a `run_<scenario>()` shortcut (lead profile, grade,
+initial state from the recording's onset frame), confirm the harness reproduces
+the sweep's TTC/e-stop within ~10 %, THEN run counterfactuals by passing
+`acc=build_acc_controller(cfg, <param>=…)` / `longitudinal=build_longitudinal_controller(cfg, <param>=…)`.
+A knob that removes the e-stop across the `PLANT_GRID` is a cause; one that
+doesn't is a negative control — record both in `docs/agent/tasks.md`.
+
+#### ACC blame disambiguation
+
+Like the lateral table in Step 3.5: the symptom names WHAT, not WHERE to fix.
+
+| Symptom | Possible meanings | How to disambiguate (harness counterfactual) |
+|---|---|---|
+| TTC < 2.0 s approaching a stopped/slow lead | (a) CUTOUT hand-off — ego < `acc.cutout_speed_mps`, owner-resolver hands the governor's free-flow target to the controller with a lead 5–10 m ahead | `cutout_throttle_frames() > 0`; `cutout_speed_mps=0` removes the e-stop → (a). **G2 mechanism, 2026-09-22.** Fixed by `acc.cutout_requires_no_lead: true` (kill-switch). If it recurs, check that flag first. |
+| | (b) Jerk-cooldown pin — `accel_cmd_raw` sits at ≈ −0.43 while IDM demands −4…−10; `jerk_cooldown_scale` (0.4) applied every frame the measured-jerk cap re-arms it | `jerk_cooldown_frames=0` removes the e-stop → (b). Only visible where the bypass at pid_controller.py:5114 is NOT taken: flat ground (\|gravity\| < 0.1) and pre-emergency states. **Masked on grades.** Fixed by `control.longitudinal.acc_jerk_cooldown_bypass_states: [ACC_ACTIVE, CUTOUT]`. |
+| | (c) Actuator latency (the 2026-04-20 explanation) | Vary `PointMassPlant(actuator_lag_frames=0…3)`. If the e-stop appears at lag 0 too, latency is not the cause. |
+| | (d) Grade feed-forward propulsive bias (the night-27 explanation) | `grade_ff_gain=0.0` — if the e-stop persists, grade FF is not the cause. It did on G2. |
+| COLLAPSED_GAP_STOP / "near-miss" at a reported gap of 2–5 m, or `radar_fwd_track_source == collision_override` | Radar frame — `radar_fwd_distance_m` is centre-to-centre (AVBridge.cs:3048); bumpers touch at a reported ~4.43 m. `s0`, EB floor, collapsed-stop and near-miss gates are all inside the lead body. **The scorer's `distance < 0` collision count is always 0; read `vehicle/lead_collision_detected` instead.** | Fixed 2026-09-22 by `acc.radar_range_offset_m: 4.43` (ForwardRadarSensor) + scorer counting `lead_collision_detected` as collisions. If it recurs: check the flag is non-zero and equals `scoring_registry.ACC_RADAR_RANGE_OFFSET_M`; harness `_legacy_cfg` reproduces the contact. |
+| `acc_request_estop` / EMERGENCY_BRAKE frames inflated | (a) Real repeated near-misses | Check `acc_state_code` transitions, not frame counts |
+| | (b) Standstill EB latch — EMA range-rate never reaches exactly 0, `> 0.0` test stays true with gap < 3 m; B1 bypass tags every entry `emergency_stop=True` (124 phantom e-stops on a clean stop) | Fixed 2026-09-22: `acc.emergency_brake_min_closing_mps: 0.1`, `acc.emergency_brake_abs_gap_m: 1.5` (< s0), and the scorer no longer counts EMERGENCY_BRAKE frames as e-stops. If it recurs, check those two keys. |
+| Detection < 95 % | (a) Startup variance (lead at ~149 m when radar first locks) | Worst frames clustered in the first seconds → re-run before diagnosing. See `feedback_acc_stale_detection_artifact` |
+| | (b) Heading-delta classifier rejecting a valid lead (`radar_fwd_reject_reason` = opposite_direction on arcs/grades) | Lives in `unity/…/AVBridge.cs:2721–3095`, not Python. See `project_acc_radar_heading_delta_cluster` |
+
+**Do not tune `idm_comfortable_decel_mps2` for any of these** — the harness shows
+2.5→4.0 changes nothing; IDM already demands −7 to −10 and the demand is not
+being delivered (`project_acc_brake_authority_findings`).
+
+Also note `orchestrator.py:9864` steps ACC with a hardcoded `dt = 1/30` while
+frames arrive at ~1/13 s: IDM target-speed integration runs at 43 % of design
+rate. Not the G2 cause, but it changes every ACC time constant.
+
 Then suggest: `/trace brake_onset` and `/trace speed_drop` to inspect the signal chain.
 
 ### If `mpc_issue`:

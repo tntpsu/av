@@ -34,11 +34,28 @@ ls -lt data/reports/*.txt | head -3            # clock 3a: automation output
 ls -lt data/recordings/*.h5 | head -3          # clock 3b: automation INPUT
 ```
 
+**Clock 3b is not sufficient on its own — freshness is PER-TRACK.** A globally
+fresh pool can still be frozen for the consumer you care about. On 2026-09-07
+the newest recording was that same morning and 28 had landed in 8 nights, yet
+all six *lateral* base tracks were still frozen at 2026-08-15: every one of
+those 28 was an ACC scenario. The ACC sweep had unfrozen and the lateral sweep
+had not. Group by `track_id` and check the tracks the consumer in question
+actually reads — use the `latest_per_track()` function from
+`tools/nightly/sweep/PROMPT.md` verbatim. Report freshness per consumer
+("ACC live since Aug-31, lateral frozen at Aug-15"), never as one global verdict.
+
 Compare against the `**Last updated:**` line in `current_state.md` / `tasks.md`.
-If they disagree, the artifacts win. Critically: if the newest
-`data/recordings/*.h5` is more than a few days old, the nightly sweeps are
-re-analyzing frozen recordings — every score in `data/reports/sweep_report.txt`
-and `acc_sweep_report.txt` is historical, and a nightly "delta" is a baseline
+If they disagree, the artifacts win — but "the artifacts" means their *measured
+data* (mtimes, scores, recording ages), not the narrative notes inside generated
+reports. That prose is agent-written and can carry stale claims: on 2026-08-30
+`process_health_*.md` asserted "no recordings newer than 2026-05-06" when the
+newest was 2026-08-15. Verify any freshness claim against the filesystem before
+repeating it — on 2026-09-07 `sweep_report.txt` opened with "newest recording is
+2026-08-15 (23 days old)" when the newest was that morning (its conclusion was
+right for its own six tracks; its stated evidence was not). Critically: if the
+newest recording *for a given track* is more than a few days old, that sweep is
+re-analyzing frozen recordings — its scores in `data/reports/sweep_report.txt`
+or `acc_sweep_report.txt` are historical, and a nightly "delta" is a baseline
 change, not a system change. Say so explicitly rather than reporting it as live.
 
 After completing work, update the relevant `docs/agent/*.md` files — including
@@ -236,6 +253,43 @@ python tools/ci/check_config_regression.py --critical-only  # scoring-critical p
 ```
 
 ---
+
+## Testing Protocol — ACC Closed-Loop (2026-09-22)
+
+`tests/test_acc_closedloop.py` — 60 tests, ~1.7 s, no Unity. Closes the
+longitudinal loop (radar → ACC → owner-resolver → LongitudinalController → safety
+clip → point-mass plant) with the **production controllers built from the real
+merged YAML**. Harness in `tests/acc_closedloop_harness.py`; calibrated against a
+known-good (H5) and a known-bad (G2) sweep result.
+
+**Run when you touch:** `control/acc_controller.py`, the longitudinal path in
+`control/pid_controller.py`, `_pf_resolve_longitudinal_target` or the ACC
+routing in `av_stack/orchestrator.py`, or any `acc:` / `control.longitudinal:`
+YAML key.
+
+```bash
+pytest tests/test_acc_closedloop.py -v
+```
+
+**Reading the result:** `TestG2StopOnGrade` runs the production config and must
+pass. `TestG2Mechanism` / `TestFlatGroundJerkCooldownPin` deliberately run
+with the two 2026-09-22 kill-switches in their legacy position
+(`cutout_requires_no_lead=False`, `acc_jerk_cooldown_bypass_states=()`) so the
+diagnosis stays on record — they must also pass. `TestFixFlags::
+test_legacy_flags_reproduce_the_failure` is the rollback proof. **Pattern for
+the next ACC failure:** add a `run_<scenario>()` to the harness, land a
+strict-xfail reproducer, fix behind a config flag, remove the marker, keep the
+mechanism tests. A 90 s Unity A/B is confirmation, not investigation.
+
+**Radar frame (2026-09-22):** Unity's radar range is centre-to-centre — bumpers
+touch at ~4.43 m. `ForwardRadarSensor` subtracts `acc.radar_range_offset_m`
+(4.43); keep it equal to `scoring_registry.ACC_RADAR_RANGE_OFFSET_M`. The
+recorded `radar_fwd_distance_m` is the sensor's FILTERED gap after that offset
+(orchestrator.py:9760), and `recording_provenance.radar_range_offset_m` records
+which frame a file is in — pre-09-22 files are centre-to-centre. Collisions come
+from `vehicle/lead_collision_detected` (the `distance < 0` line is structurally
+0); e-stop events exclude EMERGENCY_BRAKE reflex frames. The harness models both
+frames (`_legacy_cfg`).
 
 ## Fragile Areas
 

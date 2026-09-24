@@ -1,6 +1,6 @@
 # AV Stack — Agent Memory: Tasks
 
-**Last updated:** 2026-08-12
+**Last updated:** 2026-09-22
 
 ---
 
@@ -89,19 +89,197 @@ re-freezing per the Testing Protocol (`tests/fixtures/scoring_baselines.json`,
 `/revalidate` to capture pre/post on fixed recordings rather than fresh Unity
 runs. Do NOT land while another A/B is in flight.
 
-### T-ACC-G2-TTC — G2 stop_on_grade TTC min 1.52 s < 2.0 s gate (2026-08-12)
+### T-ACC-G2-TTC — G2 stop_on_grade TTC min 1.5–1.7 s < 2.0 s gate (2026-08-12; FOUR stacked causes, all FIXED 2026-09-22/23; 15 consecutive clean stops in Unity; awaiting 04:00 sweep confirmation)
 
-**Now the top ACC issue** — H5 vacated that spot by going 62.5 ORANGE → 93.9 GREEN
-on fresh data.
+Failing deterministically every night since 2026-08-12 (TTC_min 1.52–1.67 s).
 
-Fresh `recording_20260812_110704.h5`: composite 73.1 YELLOW, TTC min **1.52 s**
-against a ≥2.0 s gate. 0 collisions, 0 crash signature (pitch 4.0°, roll 0.1°),
-detection 100%, ACC active 96.2%. So this is a pure longitudinal-authority gap
-on a grade, not a perception or stability problem.
+**Root cause found offline 2026-09-22 with the new Unity-free harness
+(`tests/acc_closedloop_harness.py`, `tests/test_acc_closedloop.py`). It is NOT
+the grade, NOT actuator latency, NOT grade feed-forward, NOT IDM decel.**
 
-Note [[project_acc_brake_authority_findings]]: **do not tune
-`idm_comfortable_decel`** — the documented mechanism on G2 is actuator latency.
-Start: `/diagnose data/recordings/recording_20260812_110704.h5`.
+Two stacked mechanisms, each pinned by a counterfactual that removes the e-stop
+across a 27-point plant-calibration grid while every other knob does not:
+
+1. **CUTOUT hand-off (dominant on grade).** Ego drops below
+   `acc.cutout_speed_mps` (3.0 on the hill overlay) ~7 m behind the now-stopped
+   lead. `ACCController` enters CUTOUT and ramps its target UP toward free-flow;
+   `_pf_resolve_longitudinal_target` treats CUTOUT as "ACC not owner" and hands
+   the governor's 12 m/s target to the longitudinal controller. Throttle 0.16
+   into a stationary car → TTC_ESTOP at ~3 m. Recording and harness show the same
+   state sequence (`ACC_ACTIVE → CUTOUT → ACC_ACTIVE → CUTOUT → EMERGENCY_BRAKE →
+   TTC_ESTOP`). `cutout_speed_mps=0` → 0 e-stops, TTC 2.26 s, stops 2.7 m behind.
+   `acc_highway.yaml` already carries `cutout_speed_mps: 0.05` for exactly this
+   reason (H5) — a per-track workaround for a base-config/state-machine defect.
+2. **Jerk-cooldown pin (dominant on flat, masked on grade).** With CUTOUT
+   disabled the flat-ground variant still e-stops: IDM demands −4…−10 m/s² and
+   `accel_cmd_raw` sits at exactly −0.432 (brake 0.18) on 32 of 40 frames — 5.9 %
+   of demand delivered. `LongitudinalController` multiplies `accel_cmd` by
+   `jerk_cooldown_scale` (0.4) every frame the cooldown is armed, and the
+   measured-jerk cap (`max_jerk` 0.7) re-arms it every frame during a real stop.
+   The bypass at `pid_controller.py:5114` fires only when |gravity| ≥ 0.1 or in an
+   emergency state — so grades hide it. This is the −0.43 "routing gap" the
+   2026-04-20 H5 probe recorded. `jerk_cooldown_frames=0` (or `scale=1.0`, or
+   `max_jerk=0`) → flat passes on all 9 plant variants.
+
+**Fix applied 2026-09-22 (uncommitted), both behind config kill-switches with
+legacy defaults in code:**
+- `acc.cutout_requires_no_lead: true` (base config) — `ACCController` skips
+  CUTOUT while `reading.detected`; IDM finishes the stop. Code default `false`.
+- `control.longitudinal.acc_jerk_cooldown_bypass_states: [ACC_ACTIVE, CUTOUT]`
+  — `LongitudinalController` adds these states to the existing grade/emergency
+  cooldown bypass at `pid_controller.py:5114` (and the legacy path). Code
+  default `()`. Plumbed via `VehicleController` → orchestrator line ~552.
+- Harness: `TestG2StopOnGrade` xfails removed → 9/9 plants pass on grade AND
+  on flat; `test_each_fix_alone_is_insufficient_on_flat` pins that both are
+  required; `TestFixFlags::test_legacy_flags_reproduce_the_failure` is the
+  rollback proof. Mechanism tests now run with legacy flags so the *why*
+  survives. 104 tests green; scoring-regression + comfort-gate suites green;
+  config detector: 2 changes, 0 scoring-critical.
+- **Unity A/B result (5 pairs, 23:08–23:25):**
+  | | A legacy | B fix |
+  |---|---|---|
+  | TTC_ESTOP runs | **5/5** | **0/5** |
+  | CUTOUT frames | 49–58 | 0 |
+  | TTC_min (sweep metric) | median 1.55 (1.50–1.77) | median 1.95 (1.53–2.17); 2/5 ≥ 2.0 |
+  | COLLAPSED_GAP_STOP at 0.10 m | 5/5 | **5/5** |
+  | post-event lateral RMSE | 4.64 m | 0.89 m |
+  Both mechanisms are gone. **G2 still fails its gate** because a third, deeper
+  cause was hiding behind them — see T-ACC-RADAR-FRAME. The sweep will still
+  say FAIL tomorrow, with a different signature (no TTC_ESTOP, no CUTOUT).
+- Not touched (separate tasks): T-ACC-DT-HARDCODE, T-ACC-EB-STANDSTILL.
+
+Negative controls (all still e-stop): `grade_ff_gain` 1.0/0.0, `idm_comfortable_decel`
+4.0, `time_headway` 3.0, `acc_dt` corrected, `accel_target_smoothing_alpha` 0.5,
+actuator lag 0 frames, lead decel 3.0, governor target 6.0/3.5, floor_mode active.
+
+Related follow-ups filed below: T-ACC-DT-HARDCODE, T-ACC-EB-STANDSTILL.
+
+### T-ACC-RADAR-FRAME — radar range is centre-to-centre; every gap threshold was inside the lead (2026-09-22; OPTION 2 APPLIED + Unity A/B VERIFIED contact 5/5→0/5)
+
+**Found by the G2 Unity A/B.** `AVBridge.cs:3048-3051`: `trueDist = |leadCenter −
+egoTransform.position|`. `LeadVehicle.OnTriggerEnter` (physical contact) fired
+at a **reported 4.34–4.64 m in all 11 hill_g2 recordings examined (median 4.43)**
+= lead half-length (box L 4.5 → 2.25) + ego half-length (~2.2). Consequences:
+
+- IDM `min_gap_s0_m: 2.0` targets a standstill point **2.4 m inside the lead**.
+  Stopping behind a stopped lead is a collision by construction.
+- `_EMERGENCY_BRAKE_ABS_GAP_M` 3.0, `_COLLAPSED_GAP_STOP_M` 0.5, near-miss 2.0:
+  all fire after contact. TTC is overstated by `4.43 / range_rate` seconds.
+- H5 "PASS 100.0" runs with a reported min gap ~5.8 m = **~0.5 m true margin**
+  (harness: 0.51 m). It physically contacted the lead on 2026-09-09.
+- Harness (`radar_range_offset_m=4.43`) reproduces the fix-arm contact;
+  subtracting the offset before `ForwardRadarSensor` (`radar_range_compensation_m`)
+  gives a clean stop 2.7 m short, 0 e-stops, TTC 2.26. Even 4.0 m works.
+  `tests/test_acc_closedloop.py::TestRadarFrame` — strict-xfail reproducer +
+  fix-direction tests.
+
+**Fix options (architecture decision — human call):**
+1. Unity: subtract half-lengths and report bumper-to-bumper (semantically right;
+   changes every historical gap number; scoring baselines and all gap gates need
+   re-freezing; C# is untested).
+2. Python: `acc.radar_range_offset_m: 4.43` applied in `ForwardRadarSensor.
+   read_frame` behind a kill-switch (default 0.0). Testable, one-line rollback,
+   same re-freeze consequences for gap-based baselines.
+3. Keep the frame, move the thresholds (s0 ≥ 6.5, EB floor ≥ 7.5, …). Rejected:
+   encodes the sensor bug in every consumer.
+Recommend 2 now, 1 as the eventual sensor-semantics fix. Either way, document the
+frame in `reference_hdf5_acc_schema_gaps`.
+
+**Applied (option 2, 2026-09-22 ~23:45, uncommitted):** `acc.radar_range_offset_m: 4.43`
+in base config; `ForwardRadarSensor(range_offset_m=…)` subtracts it before the EMA
+(collision override 0.1 → 0.0 → COLLAPSED_GAP_STOP as intended); orchestrator
+passes it from `acc_cfg`; `scoring_registry.ACC_RADAR_RANGE_OFFSET_M = 4.43` used
+by `acc_pipeline_analysis` and `drive_summary_core` near-miss. Code default 0.0 =
+kill-switch. **Correction:** the recorded `radar_fwd_distance_m` is NOT raw — orchestrator.py:9760
+writes the sensor's filtered `gap_m` into the state dict, so post-fix files store the
+bumper gap and pre-fix files centre-to-centre. `recording_provenance.radar_range_offset_m`
+(new) records which; scorers apply `ACC_RADAR_RANGE_OFFSET_M − offset_recorded`.
+Unity's raw range is not recorded anywhere (follow-up: `radar_fwd_distance_raw_m`). Harness: `TestRadarFrame` — production config no longer contacts
+(true min gap 2.7 m, TTC 2.26, 0 e-stops); `_legacy_cfg` reproduces the contact;
+±0.43 m tolerance test. `radar_fwd_distance_m` in HDF5 stays raw (centre-to-centre);
+the controller's gap = `acc_gap_error_m + acc_target_gap_m`. Unity A/B
+(`radar_range_offset_m` 0.0 vs 4.43, 5 pairs, hill_g2, 23:52–00:02):
+  | | A offset 0.0 | B offset 4.43 |
+  |---|---|---|
+  | physical contact (`lead_collision_detected`) | **5/5** | **0/5** |
+  | TTC_ESTOP / COLLAPSED runs | 5/5 | 0/5 |
+  | TTC_min (sweep metric) | 1.65 (1.52–2.25) | **2.48 (2.39–2.50)** |
+  | stop distance, bumper frame | contact | 1.55–1.63 m |
+  **First G2 runs without contact since the scenario was written.** Residual: the
+  stop ended in a 124-entry EMERGENCY_BRAKE toggle at standstill → T-ACC-EB-STANDSTILL
+  (fixed below the same night). Option 1 (Unity reports bumper gap) remains the eventual fix; when
+it lands, set this offset to 0.0 and the registry constant to 0.0 together.
+
+### T-ACC-SCORER-COLLISION-BLIND — the ACC scorer cannot count collisions (2026-09-22)
+
+`acc_pipeline_analysis.py` counts collisions as `distance < 0`. The Unity
+collision override clamps `radar_fwd_distance_m` to **0.1**, so the test is
+unsatisfiable and `ACC_SCORE_COLLISION_FORCES_ZERO` has never fired. The recorder
+writes `vehicle/lead_collision_detected` and `vehicle/lead_collision_override_active`
+on every frame; **no scorer reads them**. September ground truth from those
+fields: every `hill_g2` run (20+) was a physical contact, `hill_g1` on 09-04
+(1097 frames) and 09-07 (2027), `highway_h5_stop_go` on 09-09 (6615) — all
+reported as "0 collisions", scored as near-miss + e-stop or PASS.
+Step 1 (done 2026-09-22): Card 3 prints `Physical Contact: N frame(s)` from
+`lead_collision_detected`. **Step 2 (done 2026-09-22 ~23:45, approved):**
+`_compute_acc_score` counts those frames as collisions → `ACC_SCORE_COLLISION_FORCES_ZERO`
+now fires (`n_collision`, `n_contact_frames` in the score dict); near-miss in
+both scorers uses the bumper gap `distance − ACC_RADAR_RANGE_OFFSET_M`. Tests:
+`test_physical_contact_forces_composite_zero`, `test_near_miss_is_measured_in_bumper_frame`.
+**Baseline consequence:** every historical hill_g2 composite, hill_g1 09-04/09-07
+and highway_h5 09-09 re-score to 0; near-miss counts rise on H5/H6. The
+acc-sweep PROMPT.md carries a "Scoring changes on 2026-09-22" section so the
+nightly agent reports the shift as scorer honesty, not regression. The ACC
+composite is not part of `tests/fixtures/scoring_baselines.json` (lateral only),
+so no re-freeze of that file is needed. Same class as [[feedback_diagnostic_labels_can_be_buggy]] and
+the `radar_fwd_reject_reason` "missing field" error: the honest signal existed
+and nothing read it.
+
+### T-ACC-DT-HARDCODE — ACC stepped with dt=1/30 while frames arrive at 1/13 (2026-09-22)
+
+`av_stack/orchestrator.py:9864` — `dt = 1.0 / 30.0  # governor does not expose
+per-frame dt`. Measured frame period is 76.9 ms. `ACCController` integrates
+`idm_accel × dt` into its target speed, so every ACC time constant (IDM ramp,
+disengage ramp, emergency-brake compounding) runs at **43 % of design rate**.
+Quantified by `test_acc_dt_hardcode_slows_idm_integration_2p3x`. Not the G2
+cause (harness: correcting it alone changes nothing) but it is the same bug
+class as `ceeba44` (sign-flip rate inflated by hardcoded 30 FPS). Pass
+`fv['control_dt']` like the longitudinal controller already receives.
+
+### T-ACC-EB-STANDSTILL — EMERGENCY_BRAKE never releases at standstill (2026-09-22; FIXED + Unity A/B VERIFIED 2026-09-23)
+
+After a clean stop < 3 m behind a stopped lead, `ACCController` stays in
+EMERGENCY_BRAKE indefinitely: `_EMERGENCY_BRAKE_ABS_GAP_M` is met and
+`reading.range_rate_mps > 0.0` is satisfied by the EMA (α=0.20) decaying toward
+but never reaching zero while the raw range rate is exactly 0. Brake=1.0 via the
+B1 bypass at standstill is harmless, but it inflates emergency_brake frame
+counts in `acc_pipeline_analysis` and any "e-stop" tally built from state
+frames. Pinned by `test_emergency_brake_persists_at_standstill_with_zero_range_rate`.
+Fix: threshold the range-rate test (e.g. > 0.1 m/s) or use the raw value.
+
+**Turned out worse than cosmetic.** In the radar-offset A/B (B arm) the latch
+toggled with Doppler noise (σ 0.05 raw → ~0.02 filtered) **124 times** in one
+90 s stop, and the B1 bypass tags every EMERGENCY_BRAKE frame `emergency_stop=True`,
+so the scorer counted 124 e-stop events → Safety 0 on a clean stop. A second
+inconsistency surfaced once the frame was fixed: the EB absolute floor (3.0 m)
+was ABOVE IDM's standstill gap s0 (2.0 m), so approaching the equilibrium
+re-triggered EB in creep-brake cycles (harness: 13 entries).
+
+**Applied 2026-09-22 ~00:45 (uncommitted), kill-switches with legacy code defaults:**
+`acc.emergency_brake_min_closing_mps: 0.1` (code 0.0) and
+`acc.emergency_brake_abs_gap_m: 1.5` (code 3.0; < s0). Harness: 0 EB entries at
+standstill, final ACC_ACTIVE, parked 1.7 m short, robust across plants; H5
+unchanged. Scorer: e-stop events now exclude EMERGENCY_BRAKE frames (reflex, not
+e-stop — the controller's own taxonomy) and near-miss excludes standstill frames.
+Tests: `TestStandstillEmergencyBrakeLatch` (3), `TestCutout` EB tests (3),
+`test_emergency_brake_reflex_is_not_an_estop_event`, `test_standstill_inside_s0_is_not_a_near_miss`.
+**Unity A/B (`emergency_brake_min_closing_mps` 0.0 vs 0.1, floor 1.5 in both, 5 pairs,
+00:13–00:28):** EB entries at standstill A = 0/0/0/4/0, B = 0/0/0/0/0; both arms
+contact 0/5, TTC_min 2.45–2.54, parked 1.65–1.79 m, final state ACC_ACTIVE, e-stop
+events 0 under the new taxonomy. The floor (< s0) is the dominant fix; the threshold
+removes the residual noise re-entries. **15 consecutive non-contact hill_g2 runs
+tonight (radar-offset B arm + both arms here).** Follow-up: record `b1_bypass_active`
+so `control/emergency_stop` stops conflating reflex braking with e-stops.
 
 ### T-ACC-DETECTION — Detection rate below the 95% gate on 5 scenarios (2026-08-12)
 

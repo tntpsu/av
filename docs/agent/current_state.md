@@ -1,7 +1,66 @@
 # AV Stack — Agent Memory: Current State
 
-**Last updated:** 2026-05-02
+**Last updated:** 2026-09-22
 **Current milestone:** S2-M1 — **5 of 5 tracks still meeting all-layers-≥95 goal.** ACC emergency brake authority restored on G2 (885 → 2 e-stops, 99.8% reduction) via plan `acc-idm-accel-plumbing.md`. Frenet-frame MPC reference remains in shadow-mode.
+
+### Session 2026-09-22 — ACC closed-loop harness; G2 root cause is CUTOUT + jerk-cooldown, not grade
+
+**Built:** `tests/acc_closedloop_harness.py` + `tests/test_acc_closedloop.py` (60
+tests, 1.7 s, no Unity) — the longitudinal counterpart of
+`test_closedloop_stability.py`. Production `ACCController` and
+`LongitudinalController` from the real merged YAML; orchestrator glue reproduced
+and cited by line; point-mass plant calibrated on `recording_20260908_041941.h5`.
+Calibrated both ways: H5 PASS (harness TTC 2.03) and G2 FAIL (harness 1.58 vs
+sweep 1.54–1.67). 10 `xfail(strict)` reproducers flip to hard failures the moment
+a fix lands.
+
+**Found:** G2 fails on flat ground too. Two mechanisms — CUTOUT hands the
+governor's 12 m/s target to the controller 7 m behind a stopped lead; the
+jerk-cooldown ×0.4 pins IDM's −7 m/s² demand at −0.43 (5.9 % delivered), masked
+on grades by the |gravity| ≥ 0.1 bypass. Grade FF, actuator latency and
+`idm_comfortable_decel` are refuted as causes. Plus `orchestrator.py:9864` steps
+ACC at dt=1/30 against 1/13 frames (43 % integration rate) and EMERGENCY_BRAKE
+latches at standstill. See T-ACC-G2-TTC / T-ACC-DT-HARDCODE / T-ACC-EB-STANDSTILL.
+
+**Skill upgraded:** `/diagnose` `acc_issue` branch now runs the harness first and
+carries an ACC blame-disambiguation table.
+
+**Fix applied (later the same session, uncommitted):** two config kill-switches
+with legacy code defaults — `acc.cutout_requires_no_lead: true` and
+`control.longitudinal.acc_jerk_cooldown_bypass_states: [ACC_ACTIVE, CUTOUT]`.
+`control/acc_controller.py`, `control/pid_controller.py`,
+`av_stack/orchestrator.py`, `config/av_stack_config.yaml`. Harness xfails
+removed and passing on 9 plant calibrations, grade and flat; mechanism tests
+re-run with legacy flags; scoring-regression + comfort-gate green.
+
+**Unity A/B (5 pairs, hill_g2, 23:08–23:25):** TTC_ESTOP 5/5 → **0/5**, CUTOUT
+frames ~55 → 0, TTC_min median 1.55 → 1.95, post-event lateral RMSE 4.6 → 0.9 m.
+**But all 10 runs end in COLLAPSED_GAP_STOP at a reported 0.10 m — physical
+contact.** Root cause of the residual: `radar_fwd_distance_m` is centre-to-centre
+(AVBridge.cs:3048); contact happens at a reported ~4.43 m, so `s0=2.0`, the 3.0 m
+EB floor, the 0.5 m collapsed stop and the 2.0 m near-miss gate are all inside
+the lead. The scorer's collision test (`distance < 0`) is unsatisfiable and the
+recorded `lead_collision_detected` field is unread — G2 every night, G1 on 09-04/
+09-07 and H5 on 09-09 were contacts reported as 0 collisions. Harness upgraded
+with the radar-frame model (reproduces the contact; compensation 4.43 m → clean
+stop). **Both follow-ups applied the same night (approved):** `acc.radar_range_offset_m:
+4.43` subtracted in `ForwardRadarSensor` (kill-switch, code default 0.0);
+`scoring_registry.ACC_RADAR_RANGE_OFFSET_M`; scorer counts
+`lead_collision_detected` frames as collisions (composite → 0) and measures
+near-miss in the bumper frame (also in `drive_summary_core`). Harness with
+production config: no contact, true min gap 2.7 m, TTC 2.26, 0 e-stops. Unity
+A/B on the offset (23:52–00:02): **contact 5/5 → 0/5, TTC_min 1.65 → 2.48, all five
+above the gate** — first G2 runs without contact ever. That exposed the standstill
+EMERGENCY_BRAKE toggle (124 phantom e-stops, Safety 0 on a clean stop) → fixed:
+`acc.emergency_brake_min_closing_mps: 0.1`, `acc.emergency_brake_abs_gap_m: 1.5`,
+scorer e-stop taxonomy (EMERGENCY_BRAKE reflex ≠ e-stop) and standstill near-miss
+exclusion; provenance now records `radar_range_offset_m` so scorers are era-aware
+(the recorded `radar_fwd_distance_m` is the sensor's filtered gap, not raw). A/B on
+the EB threshold (00:13–00:28): EB entries 0–4 → 0, contact 0/10, TTC 2.45–2.54, e-stop
+events 0. **15 consecutive non-contact G2 runs tonight; fix-arm composite GREEN with
+the honest scorer.** Awaiting the 04:00 sweep as the independent confirmation. Expect tomorrow's
+acc-sweep to re-score historical G2/G1/H5 contacts to 0 — the PROMPT explains
+why. Three retro memories from 2026-09-20 also written.
 
 ### Session 2026-05-02 — NMPC sign-determinism fix (CI green) + nightly automation expansion
 
