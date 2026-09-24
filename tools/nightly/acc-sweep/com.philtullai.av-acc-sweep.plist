@@ -36,7 +36,14 @@
 		<key>Minute</key>
 		<integer>0</integer>
 	</dict>
+	<!-- Interactive, NOT Background: Background instructs launchd to apply
+	     restricted CPU/IO scheduling. This job launches Unity and must render
+	     at 30 FPS. Under Background the 4 AM preflight measured dt_p95
+	     360-436ms for 17 consecutive nights (threshold 250ms) versus 153ms for
+	     the identical command run interactively — with caffeinate already
+	     applied, which prevents sleep but does nothing about QoS throttling.
+	     Changed 2026-08-30. See memory project_unity_run_blockers. -->
 	<key>ProcessType</key>
-	<string>Background</string>
+	<string>Interactive</string>
 </dict>
 </plist>

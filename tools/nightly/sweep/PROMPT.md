@@ -120,6 +120,31 @@ mattered. See the `feedback_nightly_memory_unbounded_append` memory.
 
 The same rule applies to any other memory you touch tonight.
 
+
+## Retro step — you are NON-INTERACTIVE
+
+A `Stop` hook (defined in `~/.claude/settings.json`, fires on *every* session)
+will ask you to invoke `/retro` before exiting. Do it — with one override.
+
+**The skill's step 4 says to present a proposal and ask `Proceed?`. Do NOT ask.**
+This job runs under `claude -p` from launchd. There is no human on the other end
+of the pipe; a question here is silently discarded, the session exits 0, and the
+wrapper reports success while the lesson is lost.
+
+Instead, **write the files yourself**, then report what you wrote:
+
+- Dedupe first (skill step 3). Prefer updating an existing memory in place over
+  creating a new one — most nightly lessons are corrections to a memory that has
+  gone stale, not new rules.
+- Cap at **2 new memory files** per night. If more candidates survive dedupe,
+  write the 2 highest-value and name the rest in your output.
+- Always update `MEMORY.md` after adding a file.
+- "Nothing durable tonight" is a legitimate and common result — say it and stop.
+
+Verified cost: the acc-sweep job did exactly this on four consecutive nights
+(2026-09-05 through -08), losing every lesson at `exit=0`. See memory
+`feedback_nightly_retro_proposes_into_void`.
+
 ## What NOT to do
 
 - **Do not append a new dated section to `project_sweep_trajectory_flags.md`
