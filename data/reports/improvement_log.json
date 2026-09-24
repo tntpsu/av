@@ -235,5 +235,57 @@
     "prevention": "Audit all sensor/GT inputs used in safety-scoring pipeline for plausibility filters. Pattern: any signal derived from simulator mesh geometry needs explicit range validation before entering scoring logic. Add a pre-commit or CI check that grep'ing for `~((gt_left <= 0) & (0 <= gt_right))` also shows a plausibility filter in the same function.",
     "detection_method": "PhilViz triage-report API at /api/recording/.../issues surfaced `out_of_lane: max_error: 1842.964m, source: ground_truth_boundaries` \u2014 the 1842m value is physically impossible and pointed directly at GT corruption. Also surfaced by direct HDF5 inspection showing gt_left/gt_right jump at frame 1873 of hairpin recording.",
     "detection_delay_iterations": 2
+  },
+  {
+    "date": "2026-09-23",
+    "commit_summary": "b532c1b fix(nightly): retro step writes instead of asking; ProcessType Interactive for Unity jobs",
+    "issue": "Global Stop hook fired /retro in claude -p nightly jobs; skill step 4 ends in 'Proceed?' which no one can answer, so four nights of memory proposals exited 0 unwritten. Separately, ProcessType=Background made launchd throttle the Unity-launching agents: preflight dt_p95 360-436 ms for 17 nights vs 153 ms interactive, blocking fresh ACC data for 94 nights.",
+    "deduction_eliminated": "No score change; restored fresh ACC data (28 recordings in 8 nights) and the nightly retro's memory writes (6 new indexed memories in 11 nights).",
+    "tracks_affected": [
+      "all ACC scenarios",
+      "nightly automation"
+    ],
+    "root_cause": "Interactive defaults leaking into unattended contexts: an interactive confirmation gate in an unattended skill; a background QoS class on a job that must render at 30 FPS. caffeinate prevents sleep, not QoS throttling.",
+    "process_stage": "tooling",
+    "process_sub": "tooling/unattended-contract",
+    "prevention": "State non-interactive contracts in each PROMPT.md (heartbeat-invariant rule); when a launchd job underperforms the same command run by hand, check ProcessType before hardware.",
+    "detection_method": "three-clocks check on preflight logs; grep of nightly logs for unwritten proposals; identical dt_p95 band across 17 nights",
+    "detection_delay_iterations": 2
+  },
+  {
+    "date": "2026-09-23",
+    "commit_summary": "95294ec fix(acc): no CUTOUT while a lead is detected; bypass jerk cooldown in ACC states (+ EB closing-rate threshold and gap floor)",
+    "issue": "hill_g2 TTC_ESTOP every night since 2026-08-12. (1) Below cutout_speed_mps the ACC ramps its target toward free-flow and the owner-resolver hands the governor's 12 m/s to the controller with a stopped lead 7 m ahead. (2) Jerk cooldown x0.4 per frame pinned IDM's -7 m/s2 demand at -0.43 (5.9% delivered) on flat ground; bypass only fired for |gravity|>=0.1 or emergency states. (3) EMERGENCY_BRAKE re-entered on Doppler noise at standstill (124x per stop) with the EB floor 3.0 m above s0 2.0 m.",
+    "deduction_eliminated": "G2 Safety 50 -> 100 (TTC_ESTOP 5/5 -> 0/5 in Unity A/B; EB entries 124 -> 0); G2 composite 72.8 -> 94.7 PASS on night 42 together with the radar-frame fix.",
+    "tracks_affected": [
+      "hill_g2_stop_on_grade",
+      "highway_h5_stop_go",
+      "hill_g1_grade_following"
+    ],
+    "root_cause": "State-machine hand-off and limiter interaction, not the grade: CUTOUT semantics ignore a detected lead; the cooldown scales an IDM-driven command; EB thresholds were written in a frame where they were unreachable. Three prior write-ups blamed actuator latency, grade feed-forward and IDM decel.",
+    "process_stage": "design",
+    "process_sub": "design/signal-routing",
+    "prevention": "Reproduce ACC failures in tests/acc_closedloop_harness.py before recording forensics; every ACC state transition needs a test with a detected lead at low speed; limiter bypass conditions must enumerate the controller that owns the command.",
+    "detection_method": "tests/acc_closedloop_harness.py counterfactual sweep (13 knobs x 27-point plant grid), confirmed by run_ab_batch 5 pairs",
+    "detection_delay_iterations": 3
+  },
+  {
+    "date": "2026-09-23",
+    "commit_summary": "16c4bc6 fix(acc): compensate centre-to-centre radar range; count physical contact as collision",
+    "issue": "radar_fwd_distance_m is |leadCenter - egoTransform|; physical contact occurs at a reported ~4.43 m, so min_gap_s0_m 2.0, EB floor 3.0, collapsed-gap 0.5 and near-miss 2.0 were all inside the lead body. The scorer counted collisions as distance<0 (unsatisfiable: override clamps to 0.1) and never read vehicle/lead_collision_detected - every hill_g2 run, hill_g1 09-04/09-07 and highway_h5 09-09 were contacts reported as 0 collisions; H5 scored PASS 100 with a 0.5 m true margin.",
+    "deduction_eliminated": "G2 physical contact 5/5 -> 0/5 (Unity A/B), TTC_min 1.65 -> 2.48; scorer collision-forces-zero fires for the first time; historical G2/G1/H5 composites re-score to 0 (honesty, not regression).",
+    "tracks_affected": [
+      "hill_g2_stop_on_grade",
+      "hill_g1_grade_following",
+      "highway_h5_stop_go",
+      "highway_h6_close_gap",
+      "all ACC scenarios"
+    ],
+    "root_cause": "Sensor measurement frame never specified against the gap thresholds that consume it; the honest collision signal existed in the schema and had no reader; the harness's idealised radar hid the gap until a Unity A/B disagreed with it.",
+    "process_stage": "requirements",
+    "process_sub": "requirements/measurement-frame",
+    "prevention": "Record sensor frame/offset in provenance (done); recorder<->analyzer schema contract test asserting every safety signal has a reader; harness sensor models default to the measured frame, not the idealised one; scorer collision from lead_collision_detected.",
+    "detection_method": "Unity A/B disagreed with harness; lead_collision_detected scan across September recordings; AVBridge.cs read",
+    "detection_delay_iterations": 4
   }
 ]
