@@ -245,7 +245,7 @@ def make_acc_recording(
     acc_active_start   Frame index at which ACC engages (0 = from frame 1)
     gap_m              Float constant or callable(frame_idx) -> gap in metres
     range_rate_mps     Constant approach speed (m/s; + = closing)
-    n_near_miss_frames Frames with gap < 2.0m (injected after acc_active_start)
+    n_near_miss_frames Frames with BUMPER gap 1.5 m (recorded as 1.5 + ACC_RADAR_RANGE_OFFSET_M; injected after acc_active_start)
     n_ttc_warn_frames  Frames with TTC in [1.5, 2.5s] window
     collision          If True, inject one frame with gap = -0.1m (collision)
 
@@ -300,7 +300,11 @@ def make_acc_recording(
     if n_near_miss_frames > 0 and acc_active_start < n:
         nm_start = acc_active_start + 10
         nm_end = min(nm_start + n_near_miss_frames, n)
-        distance[nm_start:nm_end] = 1.5
+        # Recorded distance is centre-to-centre (T-ACC-RADAR-FRAME, 2026-09-22):
+        # a 1.5 m BUMPER gap is written as 1.5 + ACC_RADAR_RANGE_OFFSET_M.
+        # gap_error is the controller's (bumper-frame) quantity and stays 1.5-based.
+        from tools.scoring_registry import ACC_RADAR_RANGE_OFFSET_M as _ofs
+        distance[nm_start:nm_end] = 1.5 + _ofs
         gap_error[nm_start:nm_end] = 1.5 - target_gap[nm_start:nm_end]
 
     # Inject TTC warning zone frames (TTC in [1.5, 2.5s])

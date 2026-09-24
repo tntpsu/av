@@ -29,6 +29,7 @@ from scoring_registry import (
     ACC_TTC_WARNING_S,
     ACC_TTC_MIN_GATE_S,
     ACC_NEAR_MISS_GAP_M,
+    ACC_RADAR_RANGE_OFFSET_M,
     ACC_GAP_RMSE_GATE_M,
     ACC_DETECTION_RATE_GATE,
     ACC_JERK_P95_GATE_MPS3,
@@ -88,6 +89,26 @@ def _load_acc_arrays(path: Path) -> dict | None:
                 return np.full(n, default) if default is not None else None
             return np.array(f[key][:n], dtype=float)
 
+        def strs(key):
+            if key not in f:
+                return None
+            raw = f[key][:n]
+            return np.array([x.decode() if isinstance(x, bytes) else str(x) for x in raw])
+
+        # Radar frame (T-ACC-RADAR-FRAME). The recorded radar_fwd_distance_m is the
+        # sensor's EMA-filtered gap AFTER acc.radar_range_offset_m was subtracted
+        # (orchestrator.py:9760 writes reading.gap_m into the state dict). Recordings
+        # made before 2026-09-22 have no provenance key → offset 0 → centre-to-centre.
+        # bumper_gap = recorded − (ACC_RADAR_RANGE_OFFSET_M − offset_recorded).
+        offset_recorded = 0.0
+        try:
+            import json as _json
+            _m = f.attrs.get("metadata", "{}")
+            _m = _json.loads(_m.decode() if isinstance(_m, bytes) else _m)
+            offset_recorded = float((_m.get("recording_provenance") or {}).get("radar_range_offset_m", 0.0) or 0.0)
+        except Exception:
+            offset_recorded = 0.0
+
         acc_active = arr("vehicle/acc_active", 0.0)
         acc_active_pct = float(np.mean(acc_active > 0.5))
         if acc_active_pct < ACC_MIN_ACTIVE_FRAME_RATE:
@@ -127,6 +148,14 @@ def _load_acc_arrays(path: Path) -> dict | None:
             "long_accel_smoothed": ctrl("control/longitudinal_accel_cmd_smoothed"),
             "brake_cmd":          ctrl("control/brake"),
             "emergency_stop":     ctrl("control/emergency_stop"),
+            # Physical contact flag from LeadVehicle.OnTriggerEnter (recorder.py:396).
+            # The ONLY honest collision signal: on contact Unity clamps
+            # radar_fwd_distance_m to 0.1 (AVBridge.cs:3070), so `distance < 0`
+            # below can never be true. None on recordings that predate the field.
+            "lead_collision":     arr("vehicle/lead_collision_detected"),
+            "acc_state_code":     strs("vehicle/acc_state_code"),
+            "radar_range_offset_recorded_m": offset_recorded,
+            "bumper_frame_correction_m": ACC_RADAR_RANGE_OFFSET_M - offset_recorded,
         }
 
 
@@ -242,10 +271,14 @@ def _card3_safety_timeline(d: dict) -> None:
             print(f"  TTC < {ACC_TTC_CRITICAL_S}s (e-stop):    {ttc_crit_pct:.1f}% of ACC frames")
             print(f"  TTC {ACC_TTC_CRITICAL_S}–{ACC_TTC_WARNING_S}s (warn):    {ttc_warn_pct:.1f}% of ACC frames")
 
-    # Near-miss events
+    # Near-miss events — in the BUMPER frame (T-ACC-RADAR-FRAME): the recorded
+    # distance is centre-to-centre, contact happens at ~ACC_RADAR_RANGE_OFFSET_M.
     distance = d["distance"]
     if distance is not None:
-        nm_frames = acc_mask & (distance > 0.0) & (distance < ACC_NEAR_MISS_GAP_M)
+        corr = float(d.get("bumper_frame_correction_m", ACC_RADAR_RANGE_OFFSET_M))
+        bumper = distance - corr
+        moving = (d["speed"] > 0.5) if d.get("speed") is not None else np.ones_like(bumper, dtype=bool)
+        nm_frames = acc_mask & moving & (bumper > 0.0) & (bumper < ACC_NEAR_MISS_GAP_M)
         nm_count = 0
         run_len = 0
         for nd in nm_frames:
@@ -255,9 +288,19 @@ def _card3_safety_timeline(d: dict) -> None:
                     nm_count += 1
             else:
                 run_len = 0
-        print(f"  Near-Miss Events:  {nm_count}  (gap < {ACC_NEAR_MISS_GAP_M}m, sustained ≥3 frames)")
+        print(f"  Near-Miss Events:  {nm_count}  (bumper gap < {ACC_NEAR_MISS_GAP_M}m while moving; recorded frame offset {d.get('radar_range_offset_recorded_m', 0.0):.2f}m → correction {corr:+.2f}m; sustained ≥3 frames)")
         collision_count = int(np.sum(distance < 0.0))
         print(f"  Collision Frames:  {collision_count}  (distance < 0)")
+        # T-ACC-SCORER-COLLISION-BLIND (2026-09-22): `distance < 0` is unsatisfiable
+        # because the Unity collision override clamps the range to 0.1 m. Report the
+        # recorded contact flag alongside it. Informational only — does not change
+        # the composite score (that is a scoring change requiring a baseline
+        # re-freeze; see docs/agent/tasks.md).
+        contact = d.get("lead_collision")
+        if contact is not None:
+            contact_frames = int(np.sum(contact > 0.5))
+            marker = "  ⚠️  PHYSICAL CONTACT — treat as a collision regardless of the line above" if contact_frames > 0 else ""
+            print(f"  Physical Contact:  {contact_frames} frame(s)  (vehicle/lead_collision_detected){marker}")
 
 
 def _card4_worst_frames(d: dict, top_n: int = 5) -> None:
@@ -372,31 +415,54 @@ def _compute_acc_score(d: dict) -> dict | None:
     safety = 100.0
     safety_deductions: list[tuple[str, float]] = []
 
-    # Collisions: distance < 0 means radar reported lead position behind us.
+    # Collisions. `distance < 0` is kept for schema compatibility but is
+    # structurally unsatisfiable: the Unity collision override clamps the range
+    # to 0.1 m. The honest signal is vehicle/lead_collision_detected
+    # (T-ACC-SCORER-COLLISION-BLIND, 2026-09-22) — count its frames as collisions.
     distance = d["distance"]
     n_collision = 0
     if distance is not None:
         n_collision = int(np.sum(np.isfinite(distance) & (distance < 0.0)))
+    contact = d.get("lead_collision")
+    n_contact_frames = int(np.sum(contact > 0.5)) if contact is not None else 0
+    n_collision += n_contact_frames
     forced_zero = ACC_SCORE_COLLISION_FORCES_ZERO and n_collision > 0
 
     # Emergency stops: the orchestrator's emergency_stop flag.
     estop = d.get("emergency_stop")
     n_estop = 0
     if estop is not None:
+        flag = estop > 0.5
+        # The B1 hard-brake bypass (orchestrator.py:9505) tags every EMERGENCY_BRAKE
+        # frame with emergency_stop=True so the safety clip forces brake=1.0. That
+        # is a braking REFLEX, not an e-stop — the controller's own taxonomy
+        # reserves "e-stop" for TTC_ESTOP / COLLAPSED_GAP_STOP (acc_request_estop)
+        # and the lateral/off-road stops. Counting reflex frames produced 124
+        # "e-stop events" on a clean stop (2026-09-22). Mask them out.
+        states = d.get("acc_state_code")
+        if states is not None:
+            flag = flag & (states != "EMERGENCY_BRAKE")
         # Count distinct e-stop events (rising edges), not every frame the flag is high.
-        edges = np.diff((estop > 0.5).astype(int))
+        edges = np.diff(flag.astype(int))
         n_estop = int(np.sum(edges == 1))
         # Edge case: if the run starts already in e-stop, count that as one event.
-        if estop[0] > 0.5:
+        if flag[0]:
             n_estop += 1
     if n_estop > 0:
         pen = min(100.0, n_estop * ACC_SCORE_ESTOP_PENALTY)
         safety -= pen
         safety_deductions.append((f"{n_estop} e-stop event(s)", pen))
 
-    # Near-miss events: gap < 2m sustained ≥3 frames during ACC.
+    # Near-miss events: BUMPER gap < 2m sustained ≥3 frames during ACC. The
+    # recorded distance is centre-to-centre (T-ACC-RADAR-FRAME); contact frames
+    # are collisions, not near-misses, so they fall out via bumper <= 0.
     if distance is not None:
-        nm_mask = acc_mask & np.isfinite(distance) & (distance > 0.0) & (distance < ACC_NEAR_MISS_GAP_M)
+        bumper = distance - float(d.get("bumper_frame_correction_m", ACC_RADAR_RANGE_OFFSET_M))
+        # A near-miss is CLOSING inside the minimum gap. A car parked 1.7 m behind a
+        # stopped lead is not one — exclude standstill frames.
+        speed = d.get("speed")
+        moving = (speed > 0.5) if speed is not None else np.ones_like(bumper, dtype=bool)
+        nm_mask = acc_mask & moving & np.isfinite(bumper) & (bumper > 0.0) & (bumper < ACC_NEAR_MISS_GAP_M)
         n_nm = _count_sustained_events(nm_mask, min_run=3)
         if n_nm > 0:
             pen = n_nm * ACC_SCORE_NEAR_MISS_PENALTY
@@ -521,6 +587,7 @@ def _compute_acc_score(d: dict) -> dict | None:
         "behavior_skipped_reason": behavior_skipped_reason,
         "n_active_frames": n_active,
         "n_collision": n_collision,
+        "n_contact_frames": n_contact_frames,
         "n_estop": n_estop,
         "ttc_min": ttc_min_val,
         "deductions": {
@@ -554,7 +621,7 @@ def _card5_acc_score(d: dict) -> dict | None:
     print(f"  Sub-layers: {sub}")
     print(f"  Weights:    Safety×{ACC_SCORE_WEIGHT_SAFETY:.2f}  Tracking×{ACC_SCORE_WEIGHT_TRACKING:.2f}  Behavior×{ACC_SCORE_WEIGHT_BEHAVIOR:.2f}")
     if score["n_collision"] > 0:
-        print(f"  ⚠️  COMPOSITE FORCED TO 0 by {score['n_collision']} collision frame(s).")
+        print(f"  ⚠️  COMPOSITE FORCED TO 0 by {score['n_collision']} collision frame(s) ({score.get('n_contact_frames', 0)} physical-contact).")
 
     for layer in ("safety", "tracking", "behavior"):
         deds = score["deductions"][layer]

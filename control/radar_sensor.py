@@ -7,7 +7,13 @@ will implement the same RadarSensor interface without touching ACCController.
 
 HDF5 field names (radar_fwd_* prefix — forward-specific, Step 7 compatible):
   vehicle/radar_fwd_detected       — bool (0/1)
-  vehicle/radar_fwd_distance_m     — float32, raw range from SphereCast
+  vehicle/radar_fwd_distance_m     — float32. NOT Unity's raw range: orchestrator.py
+                                     :9760 writes this sensor's EMA-filtered gap_m back
+                                     into the state dict before recording, so the field
+                                     is the controller's gap AFTER acc.radar_range_offset_m
+                                     (recorded in provenance). Pre-2026-09-22 files:
+                                     offset 0 → centre-to-centre (bumpers touch at ~4.43 m).
+                                     Unity's raw range is not recorded anywhere.
   vehicle/radar_fwd_range_rate_mps — float32, Doppler range rate (+ = closing)
   vehicle/radar_fwd_snr            — float32, signal-to-noise proxy [0, 1]
 
@@ -63,9 +69,17 @@ class ForwardRadarSensor(RadarSensor):
     after any detection gap to avoid falsely-small gap estimates.
     """
 
-    def __init__(self, gap_alpha: float = 0.30, rate_alpha: float = 0.20) -> None:
+    def __init__(self, gap_alpha: float = 0.30, rate_alpha: float = 0.20,
+                 range_offset_m: float = 0.0) -> None:
         self._gap_alpha = gap_alpha
         self._rate_alpha = rate_alpha
+        # T-ACC-RADAR-FRAME (2026-09-22): Unity's radar_fwd_distance_m is the
+        # CENTRE-TO-CENTRE range (AVBridge.cs:3048-3051); bumpers touch at a
+        # reported ~4.43 m (lead L/2 2.25 + ego L/2 ≈ 2.2). Subtracting the
+        # offset here puts gap_m — and therefore s0, the EB gap floor, the
+        # collapsed-gap stop and TTC — in the bumper-to-bumper frame the
+        # controller was written for. 0.0 = legacy behaviour (kill-switch).
+        self._range_offset_m = max(0.0, float(range_offset_m))
         self._gap_filtered: float = 0.0
         self._rate_filtered: float = 0.0
         self._last_detected: bool = False
@@ -89,7 +103,9 @@ class ForwardRadarSensor(RadarSensor):
                 range_rate_raw=0.0,
             )
 
-        gap_raw = float(raw.get("radar_fwd_distance_m", 0.0))
+        # Collision override reports 0.1 m; after the offset that becomes 0.0 and
+        # the controller's COLLAPSED_GAP_STOP (gap <= 0.5) fires as intended.
+        gap_raw = max(0.0, float(raw.get("radar_fwd_distance_m", 0.0)) - self._range_offset_m)
         rate_raw = float(raw.get("radar_fwd_range_rate_mps", 0.0))
         snr_raw = float(raw.get("radar_fwd_snr", 0.0))
 

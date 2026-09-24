@@ -154,11 +154,14 @@ class TestAccHealthSummaryUnit:
         assert result["ttc_min_gate_pass"] is False
 
     def test_near_miss_penalty_applied(self):
-        """Near-miss events (gap < 2.0m, ≥3 frames) → near_miss_penalty > 0."""
+        """Near-miss events (BUMPER gap < 2.0m, ≥3 frames) → near_miss_penalty > 0."""
         n = 300
         acc_active = np.ones(n, dtype=float)
         dist = np.full(n, 20.0, dtype=float)
-        dist[50:60] = 1.5   # 10 frames at 1.5m (< ACC_NEAR_MISS_GAP_M = 2.0m) = 1 event
+        from tools.scoring_registry import ACC_RADAR_RANGE_OFFSET_M
+        # 10 frames at a 1.5 m BUMPER gap (< ACC_NEAR_MISS_GAP_M = 2.0m) = 1 event.
+        # The recorded distance is centre-to-centre, hence + ACC_RADAR_RANGE_OFFSET_M.
+        dist[50:60] = 1.5 + ACC_RADAR_RANGE_OFFSET_M
         data = {
             "acc_active": acc_active,
             "radar_fwd_detected": np.ones(n),

@@ -96,12 +96,14 @@ class TestStructural:
         assert np.any(dist > 0.0), "ACC active frames should have non-zero distance"
 
     def test_near_miss_frames_injected(self, tmp_path):
-        """n_near_miss_frames=5 → at least 5 frames with distance < 2.0m."""
+        """n_near_miss_frames=5 → at least 5 frames with BUMPER gap < 2.0 m."""
         p = tmp_path / "acc_near_miss.h5"
         make_acc_recording(p, duration_s=10.0, fps=30.0, n_near_miss_frames=5, acc_active_start=0)
         with h5py.File(p, "r") as f:
             dist = f["vehicle/radar_fwd_distance_m"][:]
-        near_miss = np.sum((dist > 0.0) & (dist < 2.0))
+        from tools.scoring_registry import ACC_RADAR_RANGE_OFFSET_M
+        # recorded distance is centre-to-centre: bumper gap < 2.0 ⇔ recorded < 2.0 + offset
+        near_miss = np.sum((dist > ACC_RADAR_RANGE_OFFSET_M) & (dist < 2.0 + ACC_RADAR_RANGE_OFFSET_M))
         assert near_miss >= 5, f"Expected ≥5 near-miss frames, got {near_miss}"
 
     def test_collision_frame_injected(self, tmp_path):

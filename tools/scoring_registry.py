@@ -98,6 +98,10 @@ GRADE_TRANSITION_BLEND_M: float = 3.0          # m — cosine blend radius at gr
 ACC_COLLISION_GATE: int = 0                   # events — zero tolerance; score → 0
 ACC_TTC_CRITICAL_S: float = 1.5              # s  — e-stop trigger (same path as OOL)
 ACC_NEAR_MISS_GAP_M: float = 2.0             # m  — gap < s0; inside minimum gap (orange)
+ACC_RADAR_RANGE_OFFSET_M: float = 4.43       # m  — radar_fwd_distance_m is centre-to-centre; bumpers touch at this reported
+                                              #      range (11 hill_g2 recordings, 2026-09-22). Subtract before comparing a
+                                              #      recorded distance to any physical gap threshold. Keep equal to
+                                              #      config acc.radar_range_offset_m.
 
 # ── ACC — Graduated safety thresholds (Tier 2) ───────────────────────────────
 ACC_TTC_MIN_GATE_S: float = 2.0              # s  — promotion gate (must stay above)

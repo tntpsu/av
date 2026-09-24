@@ -81,6 +81,77 @@ def test_collision_forces_composite_zero():
     assert score["n_collision"] == 1
 
 
+def test_physical_contact_forces_composite_zero():
+    """vehicle/lead_collision_detected frames are collisions even though the
+    recorded distance never goes below 0 (Unity clamps it to 0.1 on contact)."""
+    inp = _make_input()
+    inp["distance"] = np.full(600, 6.0)            # reported centre-to-centre; never < 0
+    contact = np.zeros(600); contact[400:] = 1.0
+    inp["lead_collision"] = contact
+    score = _compute_acc_score(inp)
+    assert score["n_collision"] == 200
+    assert score["n_contact_frames"] == 200
+    assert score["composite"] == 0.0
+
+
+def test_near_miss_is_measured_in_bumper_frame():
+    """A reported 5.5 m is a 1.07 m bumper gap → near-miss; a reported 7.0 m is not."""
+    inp = _make_input()
+    d = np.full(600, 20.0); d[100:110] = 5.5
+    inp["distance"] = d
+    inp["lead_collision"] = np.zeros(600)
+    inp["speed"] = np.full(600, 5.0)
+    inp["radar_range_offset_recorded_m"] = 0.0          # legacy centre-to-centre recording
+    inp["bumper_frame_correction_m"] = 4.43
+    assert _compute_acc_score(inp)["safety"] < 100.0          # near-miss deduction taken
+    d2 = np.full(600, 20.0); d2[100:110] = 7.0
+    inp["distance"] = d2
+    assert _compute_acc_score(inp)["safety"] == 100.0         # 2.57 m bumper gap: clean
+
+
+def test_emergency_brake_reflex_is_not_an_estop_event():
+    """B1 bypass tags EMERGENCY_BRAKE frames with emergency_stop=True; those are
+    reflex braking, not e-stops, and must not be counted (124 phantom events on a
+    clean stop, 2026-09-22). TTC_ESTOP frames still count."""
+    inp = _make_input()
+    n = 600
+    es = np.zeros(n); es[100:110] = 1.0; es[200:210] = 1.0; es[300:310] = 1.0
+    states = np.array(["ACC_ACTIVE"] * n, dtype=object)
+    states[100:110] = "EMERGENCY_BRAKE"; states[200:210] = "EMERGENCY_BRAKE"; states[300:310] = "TTC_ESTOP"
+    inp["emergency_stop"] = es
+    inp["acc_state_code"] = states
+    inp["lead_collision"] = np.zeros(n)
+    score = _compute_acc_score(inp)
+    assert score["safety"] == 75.0          # exactly one e-stop event (the TTC_ESTOP one)
+
+
+def test_near_miss_uses_recorded_frame_offset():
+    """Post-2026-09-22 recordings store the bumper gap (provenance offset 4.43);
+    older ones store centre-to-centre (offset 0). 1.5 m must be a near-miss in the
+    first and not in the second; 5.93 m the reverse."""
+    for offset, dist_val, expect_nm in ((4.43, 1.5, True), (0.0, 1.5, False), (0.0, 5.93, True), (4.43, 5.93, False)):
+        inp = _make_input()
+        d = np.full(600, 20.0); d[100:110] = dist_val
+        inp["distance"] = d
+        inp["lead_collision"] = np.zeros(600)
+        inp["speed"] = np.full(600, 5.0)
+        inp["radar_range_offset_recorded_m"] = offset
+        inp["bumper_frame_correction_m"] = 4.43 - offset
+        s = _compute_acc_score(inp)
+        assert (s["safety"] < 100.0) is expect_nm, (offset, dist_val, s["safety"])
+
+
+def test_standstill_inside_s0_is_not_a_near_miss():
+    inp = _make_input()
+    d = np.full(600, 20.0); d[400:] = 1.7            # parked 1.7 m behind a stopped lead
+    inp["distance"] = d
+    inp["speed"] = np.where(np.arange(600) >= 400, 0.0, 5.0)
+    inp["lead_collision"] = np.zeros(600)
+    inp["radar_range_offset_recorded_m"] = 4.43
+    inp["bumper_frame_correction_m"] = 0.0
+    assert _compute_acc_score(inp)["safety"] == 100.0
+
+
 def test_ttc_violation_deducts_safety_only():
     """TTC violation should hit Safety, leave Tracking/Behavior at 100."""
     ttc = np.full(600, 5.0)

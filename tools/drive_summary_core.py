@@ -52,6 +52,7 @@ from scoring_registry import (
     ACC_COLLISION_GATE,
     ACC_TTC_CRITICAL_S,
     ACC_NEAR_MISS_GAP_M,
+    ACC_RADAR_RANGE_OFFSET_M,
     ACC_TTC_MIN_GATE_S,
     ACC_TTC_WARNING_S,
     ACC_TTC_COMFORTABLE_S,
@@ -3586,8 +3587,15 @@ def _build_acc_health_summary(data: Dict, n_frames: int, speed: Optional[np.ndar
     ))
 
     # ── Tier 2 — Graduated safety ─────────────────────────────────────────────
-    # Near-miss: gap < ACC_NEAR_MISS_GAP_M AND gap > 0 (not collision), sustained ≥ 3 frames
-    near_miss_raw = acc_mask & (dist_arr > 0.0) & (dist_arr < ACC_NEAR_MISS_GAP_M)
+    # Near-miss: BUMPER gap < ACC_NEAR_MISS_GAP_M AND > 0 (not collision), sustained ≥ 3 frames.
+    # dist_arr is the recorded centre-to-centre range (T-ACC-RADAR-FRAME, 2026-09-22).
+    # The recorded distance is the sensor's filtered gap after the offset recorded in
+    # provenance (0 for pre-2026-09-22 files → centre-to-centre). Standstill frames
+    # are not near-misses.
+    _ofs_recorded = float(((data.get("recording_provenance") or {}).get("radar_range_offset_m", 0.0)) or 0.0)
+    _bumper = dist_arr - (ACC_RADAR_RANGE_OFFSET_M - _ofs_recorded)
+    _moving = (np.asarray(speed[:n], dtype=float) > 0.5) if speed is not None else np.ones(n, dtype=bool)
+    near_miss_raw = acc_mask & _moving & (_bumper > 0.0) & (_bumper < ACC_NEAR_MISS_GAP_M)
     near_miss_events = 0
     run_len = 0
     for flag in near_miss_raw:
