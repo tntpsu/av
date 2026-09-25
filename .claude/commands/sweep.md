@@ -65,6 +65,13 @@ For each track, extract:
 - Layer scores (Safety, Trajectory, Control, Perception, LongitudinalComfort, SignalIntegrity)
 - E-stop count
 - Key issues
+- **Speed Utilisation — vs allowed median and "% under 0.70"** from the
+  `SPEED UTILISATION (report-only)` section. Add a `Util` column to the report
+  table and one line naming the binding cap when a track is under 0.85. This is
+  REPORT-ONLY (T-METRIC-SPEED-UTILISATION): it is not a gate and must not change
+  the verdict. It exists because nothing else scores whether the car did the job —
+  hill_highway scored 97.6 at 15 mph on a 25 mph road, s_loop runs at half its
+  posted limit, and both were invisible until 2026-09-25.
 
 Compare against baselines from `tests/fixtures/scoring_baselines.json`.
 

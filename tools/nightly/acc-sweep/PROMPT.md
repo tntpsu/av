@@ -151,6 +151,29 @@ on 2026-08-12. It is loaded on every session in this project. See the
 `feedback_nightly_memory_unbounded_append` memory.
 
 
+## Detection-rate verdicts — read before FAILing anything on detection
+
+1. **Gate only on what the scenario's `Expected:` line names.** `acc_pipeline_analysis`
+   prints `[FAIL ≥95%]` next to detection on EVERY run; that is the tool's generic
+   reference bar, not a sweep gate. H8's Expected is "smooth engage at ~60 m gap;
+   no hunting; jerk P95 ≤ 4.0" — no detection criterion. Night 23 and night 43
+   both FAILed H8 on it in error.
+2. **Catch-up scenarios have run-length-dependent detection rates.** H7 and H8
+   start the lead beyond radar range BY DESIGN (H8 header: "beyond radar range at
+   start, ego drives free until ~27 s"). Whole-run detection = 1 − (out-of-range
+   seconds / run length): 514 s → 86 %, 174 s → 62 %, with 100 % detection once
+   engaged in both. A change in that number between runs of different duration is
+   NOT a regression. Compare dropout events after engage, or the engaged-phase
+   rate, and always state the run duration next to a detection percentage.
+3. **Before attributing detection loss to the radar classifier, read
+   `radar_fwd_reject_reason` and `radar_fwd_target_arc_distance_m` at the rejected
+   frames.** `out_of_range` with arc distance > 150 m means the lead outran the
+   ego — a speed/spec problem (A1: lead 20 vs ego 12; G1: ego held to 7.0 m/s on R100 by
+   the PP tracking budget, T-GOV-TRACKING-BUDGET-SPEED). `opposite_direction` at 300 m+
+   arc distance on a loop track is a car on the far side, correctly rejected.
+   Heading deltas at accepted frames on A1/G1/H8 are 0.1–5.9°: the classifier is
+   not the cluster's cause (2026-09-24 re-analysis).
+
 ## Scoring changes on 2026-09-22 — read before comparing against earlier nights
 
 Three things changed that move scores WITHOUT any controller regression:

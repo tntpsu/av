@@ -121,6 +121,17 @@ mattered. See the `feedback_nightly_memory_unbounded_append` memory.
 The same rule applies to any other memory you touch tonight.
 
 
+## Speed Utilisation column (report-only, added 2026-09-25)
+
+`analyze_drive_overall.py` now prints a `SPEED UTILISATION (report-only)`
+section. Put its "vs allowed" median in a `Util` column of the report table and,
+for any track under 0.85, one line naming the binding cap (curve_cap /
+velocity_profile / target / comfort). Do NOT treat it as a gate — the verdict
+rule is unchanged (every layer ≥ 95). Expect s_loop ≈ 0.49, hill_highway ≈ 0.55,
+mixed_radius ≈ 0.57, highway_65 ≈ 0.91 on the frozen pool; a change in these
+numbers on a fresh recording is worth a "notable" line, a change on a frozen
+recording is not (see the stale-diagnostics rule above).
+
 ## Retro step — you are NON-INTERACTIVE
 
 A `Stop` hook (defined in `~/.claude/settings.json`, fires on *every* session)

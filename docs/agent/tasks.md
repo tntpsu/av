@@ -281,14 +281,82 @@ removes the residual noise re-entries. **15 consecutive non-contact hill_g2 runs
 tonight (radar-offset B arm + both arms here).** Follow-up: record `b1_bypass_active`
 so `control/emergency_stop` stops conflating reflex braking with e-stops.
 
-### T-ACC-DETECTION — Detection rate below the 95% gate on 5 scenarios (2026-08-12)
+### T-ACC-DETECTION — Detection rate below the 95% gate on 5 scenarios (2026-08-12; RE-DIAGNOSED 2026-09-24)
 
 Fresh detection rates: **G1 21.1%**, **H8 40.3%**, H2 76.9%, H4 81.0%, H3 83.9%
 (gate is ≥95%). Every one of these scenarios has 0 collisions and no crash
 signature, so detection — not control — is now the weak ACC layer.
 
-G1 (21.1%) and H8 (40.3%) are the outliers and should be diagnosed first. H8 had
-**never been seeded before 2026-08-12**, so this is its first-ever measurement.
+**2026-09-24 re-analysis (reject-reason + arc-distance on the sweep's own
+recordings): none of A1 / G1 / H8 is a radar-classifier problem.** Heading deltas
+at accepted frames are 0.1–5.9°; the rejections are `out_of_range` because the
+lead outruns the ego. The nightly agent's 11-night "heading-delta cluster"
+narrative is refuted (memory banner added).
+- **A1:** lead 20 m/s vs ego target 12 m/s → `out_of_range` 96 %. Spec mismatch.
+  Decision: lower the A1 lead to ≤ 12 m/s or park the scenario for NMPC/high-speed.
+- **G1:** ego governed to **6.4–6.6 m/s for the whole lap** (curve cap active 100 %,
+  same on the lead-free hill_highway golden) vs a 10 m/s lead → gap > 150 m by
+  t≈80 s; `opposite_direction` 33 % is the lead 326 m around the loop, correctly
+  rejected. Root cause is the PP tracking-budget speed cap → T-GOV-TRACKING-BUDGET-SPEED.
+  **Re-specced 2026-09-25:** G1 lead 10 → 6.0 m/s (header explains the bound and
+  the restore condition: hill_highway utilisation ≥ 0.85). A1 lead 20 → 12.0 m/s
+  (ego target is 12; restore 20 with speed expansion). Both are honest bounds to
+  the ego's current capability so the scenarios measure what they are for.
+- **H8:** lead starts 200 m out BY DESIGN; whole-run detection is a run-length
+  ratio (514 s → 86 %, 174 s → 62 %; 100 % once engaged). Night 43's
+  "PASS→FAIL regression" is an artifact and a misapplied gate (H8 Expected has no
+  detection criterion; jerk 2.67 ≤ 4.0, IDM sign-changes 0 → PASS). Tooling
+  follow-up: add an engaged-phase detection rate to Card 1 and print run duration.
+- H2/H4/H3: startup variance per `feedback_acc_stale_detection_artifact`; all PASS
+  on fresh runs since.
+
+### T-METRIC-SPEED-UTILISATION — nothing scores whether the car did the job (2026-09-25; report-only line SHIPPED)
+
+Every layer scores what the car did wrong; a car parked in its lane scores 100.
+`tools/speed_utilization.py` (+ `analyze_drive_overall.py` section, sweep `Util`
+column) reports `v / speed_limit` and `v / min(speed_limit, target)` over
+eligible frames (post-startup, not ACC-following, not e-stopped, not braking
+toward a lower limit) with % of time under 0.70 and the binding cap. Pool on
+2026-09-25 (vs allowed): s_loop **0.49**, hill_highway **0.55**, mixed_radius
+0.57, hairpin 0.87, highway_65 0.91 (0.38 vs posted — the 12 m/s research
+target), H8 0.91. Binding cap on every curvy track: `curve_cap` / velocity
+profile from the 0.05 g tracking budget (T-GOV-TRACKING-BUDGET-SPEED).
+
+Step 2 (after a week of numbers): promote to a Trajectory-layer deduction or a
+"Progress" contract with gate vs-allowed median ≥ 0.85 and ≤ 10 % under 0.70;
+that is a scoring change → baseline re-freeze per protocol. Until then the
+sweep prints it and must not gate on it.
+
+### T-GOV-TRACKING-BUDGET-SPEED — ego held to 7.0 m/s on R100 by the PP tracking budget (2026-09-24)
+
+The velocity profiler (`av_stack/orchestrator.py` ~1626) plans v(s) with
+`velocity_profiler.a_lat_tracking_budget_g: 0.05` — by its own comment the
+"controller tracking budget (calibrated from closed-loop data), NOT the
+tire/comfort limit". On hill_highway (R100, κ_ref exactly 0.0100, ~⅔ of the lap
+by length) that is √(0.05·g/0.01) = **7.0 m/s**: recorded
+`velocity_profile_speed_mps` 7.00, `curve_intent_speed_guardrail_cap_mps` 7.00,
+`target_speed_planned` 6.40, mean speed 6.5, while `vehicle/speed_limit` is
+11.2 m/s (25 mph). Identical on the lead-free Aug-15 golden. The lateral sweep
+never noticed because nothing scores speed (hill_highway reads 97.6 at 15 mph).
+The 2.5× `curvature_calibration_scale` is not the binding term — it sets the
+comfort speed (8.86).
+
+This is the PP curve-tracking ceiling expressed as speed: the ego is held to the
+lateral acceleration PP can track. Consequence for ACC: G1's lead (10 m/s on
+R100 = 0.10 g) is unfollowable by specification → T-ACC-DETECTION.
+
+Decide one of:
+(a) **Re-spec G1** to the ego's capability now (lead ≤ 6.5 m/s on hill_highway)
+    so the scenario measures ACC-on-grade rather than PP's curve ceiling. Cheap,
+    honest, keeps the ACC signal.
+(b) **Raise the budget** (0.05 → ~0.10 g) — a lateral change; the budget was
+    calibrated from PP closed-loop data, so expect Trajectory to drop on the
+    four curved tracks. A/B ≥ 5 on hill_highway + s_loop + mixed_radius.
+(c) **Regime work** (LMPC/NMPC on curves, `project_mpc_primary`) which raises
+    the trackable lateral acceleration and lifts this cap for real. Stage 2.
+Recommend (a) now, (c) as the architecture item it already is. Start:
+`analyze_drive_overall.py data/recordings/recording_20260815_112837.h5` (lead-free,
+same cap) and `grep -n a_lat_tracking_budget_g config/av_stack_config.yaml av_stack/orchestrator.py`.
 
 ### T-SWEEP-HW-REGRESSION — sweeping_highway 96.9 → 79.0 (2026-08-12)
 

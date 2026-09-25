@@ -1,7 +1,34 @@
 # AV Stack — Agent Memory: Current State
 
-**Last updated:** 2026-09-22
+**Last updated:** 2026-09-25
 **Current milestone:** S2-M1 — **5 of 5 tracks still meeting all-layers-≥95 goal.** ACC emergency brake authority restored on G2 (885 → 2 e-stops, 99.8% reduction) via plan `acc-idm-accel-plumbing.md`. Frenet-frame MPC reference remains in shadow-mode.
+
+### Session 2026-09-25 — G1/A1 re-specced to ego capability; speed-utilisation metric shipped (report-only)
+
+G1 lead 10 → 6 m/s and A1 lead 20 → 12 m/s with headers explaining the bound
+and the restore condition. New `tools/speed_utilization.py` answers "did the car
+use the road it was given?": s_loop runs at **0.49** of its posted limit,
+hill_highway 0.55, mixed_radius 0.57 — all bound by the 0.05 g PP tracking budget
+(`curve_cap`); highway_65 0.91 vs allowed / 0.38 vs posted (12 m/s research
+target). Surfaced as an analyzer section and a sweep `Util` column; not a gate
+until a week of numbers is in (T-METRIC-SPEED-UTILISATION). Decision pending:
+raise the tracking budget (A/B, costs Trajectory on curved tracks) vs the LMPC
+regime work.
+
+### Session 2026-09-24 — Night-43 review: "heading-delta cluster" refuted; hill_highway governor cap found
+
+Night 43: 9 PASS / 4 FAIL / 1 WARN, G2 PASS 94.7 (n=2 at sweep level), H3/H6 fresh
+PASS. H8 PASS→FAIL was a run-length artifact (lead starts 200 m out by design;
+514 s → 86 %, 174 s → 62 %) plus a misapplied detection gate — should be PASS.
+Reject-reason + arc-distance analysis on the sweep's own recordings refutes the
+11-night A1/G1/H8 classifier narrative: heading deltas at accepted frames are
+0.1–5.9°; rejections are `out_of_range` because the lead outruns the ego. G1's
+ego is held to 7.0 m/s on R100 for the whole lap by the velocity profiler's
+`a_lat_tracking_budget_g: 0.05` — the PP curve-tracking ceiling expressed as speed;
+identical on the lead-free golden → T-GOV-TRACKING-BUDGET-SPEED (re-spec G1 or
+raise the budget / regime work). A1 is a lead-speed spec mismatch. Memory banner,
+acc-sweep PROMPT detection rules, T-ACC-DETECTION rewritten. No code changed.
+Plan change: the "port the classifier" item is dropped.
 
 ### Session 2026-09-22 — ACC closed-loop harness; G2 root cause is CUTOUT + jerk-cooldown, not grade
 
