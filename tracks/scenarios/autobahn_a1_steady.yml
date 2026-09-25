@@ -1,5 +1,12 @@
 # A1 — High-speed steady following (autobahn_30)
-# Lead at 40m arc-distance, constant 20 m/s. Ego target 25 m/s.
+# Lead at 40m arc-distance, constant 12 m/s (was 20 m/s until 2026-09-25). Ego target 12 m/s
+# (the "25 m/s" below predates the 12 m/s research target; trajectory.target_speed governs).
+#
+# LEAD SPEED IS BOUNDED BY THE EGO, NOT BY THIS SCENARIO: with the lead at 20 m/s and
+# the ego at 12, the lead left the 150 m radar range within seconds every run —
+# out_of_range 96 % of frames, 11 nights of "structural FAIL" that measured nothing.
+# At 12 m/s the ego can hold the gap and the ACC+NMPC coexistence question is testable.
+# Restore 20 m/s with the Stage-2 speed-expansion work (target >= 20 m/s).
 # Tests ACC + NMPC coexistence: NMPC active at 25 m/s; IDM adjusts target speed.
 # Expected: ACC + NMPC active simultaneously; no regime interference; gap RMSE ≤ 0.5m.
 # base: tracks/autobahn_30.yml
@@ -35,4 +42,4 @@ lead_vehicle:
   lane_offset_m: 2.0
   speed_profile:
     type: constant
-    speed_mps: 20.0
+    speed_mps: 12.0

@@ -1,9 +1,17 @@
 # G1 — Grade following (hill_highway)
-# Lead at 25m arc-distance, constant 10 m/s. Ego target 12 m/s.
+# Lead at 25m arc-distance, constant 5.5 m/s (was 10 m/s until 2026-09-25). Ego target 12 m/s.
 # Tests ACC across uphill (5% grade) and downhill (-5% grade) segments.
 # Grade FF should not fight ACC deceleration; net behavior stable on all grades.
 # Expected: ACC active across full lap; grade FF + ACC coexist; gap RMSE ≤ 0.5m.
 # base: tracks/hill_highway.yml
+#
+# LEAD SPEED IS BOUNDED BY THE EGO, NOT BY THIS SCENARIO (T-GOV-TRACKING-BUDGET-SPEED):
+# the velocity profiler holds the ego to sqrt(a_lat_tracking_budget_g * g * R) =
+# 7.0 m/s on this track's R100 arcs (0.05 g PP tracking budget), so a 10 m/s lead
+# simply drove out of radar range every lap (11 nights of "detection FAIL" that were
+# never a radar problem). At 5.5 m/s the ego (~6.4 m/s cap) closes the startup gap
+# within a 90 s run and the scenario measures what it is for. Restore
+# 10 m/s when hill_highway speed-limit utilisation (vs allowed) is >= 0.85.
 
 name: hill_highway
 road_width: 7.2
@@ -88,4 +96,4 @@ lead_vehicle:
   lane_offset_m: 1.8
   speed_profile:
     type: constant
-    speed_mps: 10.0
+    speed_mps: 5.5
