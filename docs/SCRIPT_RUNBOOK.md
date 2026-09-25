@@ -104,6 +104,7 @@ If you are unsure which command to run, start here first.
 - **Uninstall:** `launchctl unload ~/Library/LaunchAgents/com.philtullai.av-nightly.plist`
 - **Companion files:** `tools/nightly/PROMPT.md` (agent prompt), `tools/nightly/RUBRIC.md` (classification rules), `tools/nightly/notify.py` (email helper).
 - **Email subject composition:** `compose_subject()` in `notify_on_exit` parses `data/reports/nightly_test_report.txt` (Fixed/Real-breaks/Flaky counts) and `data/reports/nightly_status.txt` (delivery= field) directly, instead of relying on the agent printing a literal summary line to stdout. Falls back to log-grep then exit-code-synthesis if the report file is missing.
+- **Model (2026-09-25):** `claude -p --model claude-sonnet-5` (was `claude-sonnet-4-6`). Budget and wall-clock caps unchanged. Rationale: September's costly errors were judgement errors (H8 mis-gated twice on a rule already in memory; an 11-night 'classifier cluster' built without checking reject reasons; the `Proceed?` loop), which a stronger model addresses; cost is bounded by `--max-budget-usd`. Plan: watch two nights for budget-cap hits, then consider `claude-opus-5` for acc-sweep only (raise its cap to $15 if needed).
 
 ### `tools/nightly/sweep/run.sh`
 
@@ -116,6 +117,7 @@ If you are unsure which command to run, start here first.
 - **Read-only by design:** Never commits or opens PRs. Reports regressions to the email; the human decides whether to investigate.
 - **Companion files:** `tools/nightly/sweep/PROMPT.md`, `.claude/commands/sweep.md` (the playbook), `tools/nightly/notify.py`.
 - **Email subject composition:** `compose_subject()` in `notify_on_exit` parses `data/reports/sweep_status.txt` directly — counts done tracks, sums regressions (delta < -2.0), counts FLAG= markers, identifies worst-delta track. **Gate verdict** is read from `data/reports/sweep_report.txt`'s canonical `GATE: ...` line so the subject reflects the same rule the agent applied (layer-≥95 AND no regressions), not a wrapper-side recomputation. Falls back to log-grep then exit-code-synthesis if files are missing.
+- **Model (2026-09-25):** `claude -p --model claude-sonnet-5` (was `claude-sonnet-4-6`). Budget and wall-clock caps unchanged. Rationale: September's costly errors were judgement errors (H8 mis-gated twice on a rule already in memory; an 11-night 'classifier cluster' built without checking reject reasons; the `Proceed?` loop), which a stronger model addresses; cost is bounded by `--max-budget-usd`. Plan: watch two nights for budget-cap hits, then consider `claude-opus-5` for acc-sweep only (raise its cap to $15 if needed).
 
 ### `tools/nightly/acc-sweep/run.sh`
 
@@ -139,6 +141,7 @@ If you are unsure which command to run, start here first.
 - **Companion files:** `tools/nightly/acc-sweep/PROMPT.md`, `.claude/commands/acc-sweep.md` (the playbook), `tools/nightly/notify.py`.
 - **Email subject composition:** `compose_subject()` in `notify_on_exit` parses `data/reports/acc_sweep_status.txt` per-scenario lines (`scenario_<name>_done verdict=<X>`), counts each verdict type, computes gate=PASS (no FAILs) or gate=FAIL.
 - **Known V1 limitation:** ACC scenarios share `track_id` with their base track in `recording_provenance`. Disambiguation is best-effort (filename + ACC-data-presence + recency). A `recording_provenance.scenario_id` field is on the deferred roadmap (see `docs/agent/tasks.md`).
+- **Model (2026-09-25):** `claude -p --model claude-sonnet-5` (was `claude-sonnet-4-6`). Budget and wall-clock caps unchanged. Rationale: September's costly errors were judgement errors (H8 mis-gated twice on a rule already in memory; an 11-night 'classifier cluster' built without checking reject reasons; the `Proceed?` loop), which a stronger model addresses; cost is bounded by `--max-budget-usd`. Plan: watch two nights for budget-cap hits, then consider `claude-opus-5` for acc-sweep only (raise its cap to $15 if needed).
 
 ### `tools/nightly/process-health/run.sh`
 
@@ -150,6 +153,7 @@ If you are unsure which command to run, start here first.
 - **Install:** `cp tools/nightly/process-health/com.philtullai.av-process-health.plist ~/Library/LaunchAgents/ && launchctl load ~/Library/LaunchAgents/com.philtullai.av-process-health.plist`
 - **Uninstall:** `launchctl unload ~/Library/LaunchAgents/com.philtullai.av-process-health.plist`
 - **Companion files:** `tools/nightly/process-health/PROMPT.md`, `.claude/commands/process-health.md`, `tools/nightly/notify.py`.
+- **Model (2026-09-25):** `claude -p --model claude-sonnet-5` (was `claude-sonnet-4-6`). Budget and wall-clock caps unchanged. Rationale: September's costly errors were judgement errors (H8 mis-gated twice on a rule already in memory; an 11-night 'classifier cluster' built without checking reject reasons; the `Proceed?` loop), which a stronger model addresses; cost is bounded by `--max-budget-usd`. Plan: watch two nights for budget-cap hits, then consider `claude-opus-5` for acc-sweep only (raise its cap to $15 if needed).
 
 ### `tools/nightly/notify.py`
 
@@ -232,21 +236,21 @@ These scripts replay recordings offline and do not require Unity runtime interac
 - **Use when:** Investigating any future BLAS-determinism regression in NMPC, or when tuning `cold_start_e_lat_seed_gain` / `cold_start_e_lat_seed_max_frac` in `NMPCParams`.
 - **Manual:** `python3 tools/analyze/validate_nmpc_cold_start.py --gain-sweep`
 
-### `tools/analyze/analyze_drive_overall.py`
-
-- **Purpose:** PRIMARY end-to-end drive evaluation tool. Combines path-tracking accuracy, control smoothness, perception quality, trajectory quality, system health, and safety metrics into one comprehensive report.
-- **Use when:** You want a single-command verdict on whether a recording reflects healthy or degraded behavior across the whole stack.
 ### `tools/speed_utilization.py`
 
 - **Purpose:** Speed-limit utilisation — did the car use the road it was given? Reports `v / speed_limit` (product truth) and `v / min(speed_limit, target_speed)` (system truth; isolates governor / tracking-budget defects from the deliberately low research target) over eligible frames (after 10 s startup, not ACC-following, not e-stopped, not braking toward a lower posted limit), plus % of eligible time under 0.70 and the **binding cap** at those frames (target / velocity_profile / curve_cap / comfort). Added 2026-09-25 (T-METRIC-SPEED-UTILISATION) after hill_highway scored 97.6 while driving 15 mph on a 25 mph road and s_loop turned out to run at half its posted limit. **Report-only** — no score is changed; proposed gate: vs-allowed median ≥ 0.85 and ≤ 10 % of time under 0.70.
 - **Use when:** `python3 tools/speed_utilization.py <recording.h5>`, or via `analyze_drive_overall.py` (section "SPEED UTILISATION"). Nightly lateral sweep reports the vs-allowed median per track.
 - **Tests:** `tests/test_speed_utilization.py` (synthetic HDF5; eligibility rules, both ratios, attribution).
 
+### `tools/analyze/analyze_drive_overall.py`
+
+- **Purpose:** PRIMARY end-to-end drive evaluation tool. Combines path-tracking accuracy, control smoothness, perception quality, trajectory quality, system health, and safety metrics into one comprehensive report.
+- **Use when:** You want a single-command verdict on whether a recording reflects healthy or degraded behavior across the whole stack.
+- **Speed Utilisation section (2026-09-25):** report-only line from `tools/speed_utilization.py` — see that entry. Wrapped in try/except so a metric failure can never break the report.
 
 ## Debug Visualizer (PhilViz)
 
 The `tools/debug_visualizer/` tree powers the in-browser playback + diagnostics dashboard. Backend modules expose health and triage data to the visualizer; the server is the entry point.
-- **Speed Utilisation section (2026-09-25):** report-only line from `tools/speed_utilization.py` — see that entry. Wrapped in try/except so a metric failure can never break the report.
 
 ### `tools/debug_visualizer/backend/dashboards.py`
 
@@ -269,6 +273,7 @@ The `tools/debug_visualizer/` tree powers the in-browser playback + diagnostics 
 - **Use when:** Imported by `tools/debug_visualizer/server.py`. Not invoked directly. Hot-path used by `/api/skills/{list,run,jobs,stream/<id>,cancel/<id>}`.
 - **MCP/auth:** spawns claude-p with `--strict-mcp-config --mcp-config '{"mcpServers":{}}' --permission-mode bypassPermissions --no-session-persistence` (matches nightly wrapper pattern). Hardcoded budget cap `$5.00`. Sets `AV_NIGHTLY_RUN=1` so hardware-sensitive tests self-skip.
 - **Storage:** in-process job dict, `MAX_BUFFER_LINES=5000` per job. No persistence across server restarts (acceptable for V1).
+- **Model (2026-09-25):** `claude -p --model claude-sonnet-5` (was `claude-sonnet-4-6`). Budget and wall-clock caps unchanged. Rationale: September's costly errors were judgement errors (H8 mis-gated twice on a rule already in memory; an 11-night 'classifier cluster' built without checking reject reasons; the `Proceed?` loop), which a stronger model addresses; cost is bounded by `--max-budget-usd`. Plan: watch two nights for budget-cap hits, then consider `claude-opus-5` for acc-sweep only (raise its cap to $15 if needed).
 
 ### `tools/debug_visualizer/server.py` — Skills + Tracks + Configs + Sites APIs (added 2026-05-02)
 

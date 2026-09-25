@@ -107,12 +107,12 @@ trap notify_on_exit EXIT
   echo "git head after pull:  $(git rev-parse --short HEAD)"
   echo
 
-  echo "--- claude -p (model=sonnet-4-6, budget=\$10, max=${CLAUDE_TIMEOUT}s) ---"
+  echo "--- claude -p (model=sonnet-5, budget=\$10, max=${CLAUDE_TIMEOUT}s) ---"
   # MCP servers disabled: under launchd's non-interactive context, an
   # MCP server needing OAuth re-auth (e.g. Google Calendar) hangs the
   # whole process — strict-mcp-config + empty inline config skips them.
   claude -p \
-    --model claude-sonnet-4-6 \
+    --model claude-sonnet-5 \
     --output-format text \
     --permission-mode bypassPermissions \
     --max-budget-usd 10.00 \

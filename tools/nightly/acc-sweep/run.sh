@@ -177,12 +177,12 @@ PYEOF
   fi
   echo
 
-  echo "--- claude -p (model=sonnet-4-6, budget=\$10, max=${CLAUDE_TIMEOUT}s) ---"
+  echo "--- claude -p (model=sonnet-5, budget=\$10, max=${CLAUDE_TIMEOUT}s) ---"
   # MCP servers disabled per launchd-OAuth-hang fix.
   # caffeinate -di prevents macOS idle/display sleep during the run; covers
   # the entire subprocess tree including any Unity processes that /e2e spawns.
   caffeinate -di claude -p \
-    --model claude-sonnet-4-6 \
+    --model claude-sonnet-5 \
     --output-format text \
     --permission-mode bypassPermissions \
     --max-budget-usd 10.00 \

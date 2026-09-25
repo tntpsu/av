@@ -231,7 +231,7 @@ def start_job(skill: str, args: str = "",
 
     cmd = [
         CLAUDE_BIN, "-p",
-        "--model", "claude-sonnet-4-6",
+        "--model", "claude-sonnet-5",
         "--output-format", "text",
         "--permission-mode", "bypassPermissions",
         "--max-budget-usd", f"{budget_usd:.2f}",

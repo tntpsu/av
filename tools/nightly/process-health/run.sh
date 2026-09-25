@@ -87,9 +87,9 @@ trap notify_on_exit EXIT
   echo "git head after pull:  $(git rev-parse --short HEAD)"
   echo
 
-  echo "--- claude -p (model=sonnet-4-6, budget=\$3, max=${CLAUDE_TIMEOUT}s) ---"
+  echo "--- claude -p (model=sonnet-5, budget=\$3, max=${CLAUDE_TIMEOUT}s) ---"
   claude -p \
-    --model claude-sonnet-4-6 \
+    --model claude-sonnet-5 \
     --output-format text \
     --permission-mode bypassPermissions \
     --max-budget-usd 3.00 \
