@@ -2575,6 +2575,20 @@ def _print_summary_report(recording_path: Path, summary: Dict, analyze_to_failur
               f"    Graded Frames: {grade_metrics['graded_frames']}")
         print()
 
+    # Speed utilisation — did the car use the road it was given? Report-only
+    # (2026-09-25, T-METRIC-SPEED-UTILISATION). Every other layer scores what the
+    # car did wrong; nothing scored whether it did the job — hill_highway read
+    # 97.6 at 15 mph on a 25 mph road. Gate proposal lives in the module.
+    try:
+        from tools.speed_utilization import compute_speed_utilization, format_summary
+        _util = compute_speed_utilization(recording_path)
+    except Exception as _e:  # never let a report-only metric break the report
+        _util = None
+    print("28. SPEED UTILISATION (report-only)")
+    print("-" * 80)
+    print(format_summary(_util))
+    print()
+
     # Section 16: ACC Performance (only when ACC was active)
     acc_health = summary.get("acc_health")
     acc_comfort_contract = summary.get("acc_comfort_contract") or {}

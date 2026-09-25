@@ -236,10 +236,17 @@ These scripts replay recordings offline and do not require Unity runtime interac
 
 - **Purpose:** PRIMARY end-to-end drive evaluation tool. Combines path-tracking accuracy, control smoothness, perception quality, trajectory quality, system health, and safety metrics into one comprehensive report.
 - **Use when:** You want a single-command verdict on whether a recording reflects healthy or degraded behavior across the whole stack.
+### `tools/speed_utilization.py`
+
+- **Purpose:** Speed-limit utilisation — did the car use the road it was given? Reports `v / speed_limit` (product truth) and `v / min(speed_limit, target_speed)` (system truth; isolates governor / tracking-budget defects from the deliberately low research target) over eligible frames (after 10 s startup, not ACC-following, not e-stopped, not braking toward a lower posted limit), plus % of eligible time under 0.70 and the **binding cap** at those frames (target / velocity_profile / curve_cap / comfort). Added 2026-09-25 (T-METRIC-SPEED-UTILISATION) after hill_highway scored 97.6 while driving 15 mph on a 25 mph road and s_loop turned out to run at half its posted limit. **Report-only** — no score is changed; proposed gate: vs-allowed median ≥ 0.85 and ≤ 10 % of time under 0.70.
+- **Use when:** `python3 tools/speed_utilization.py <recording.h5>`, or via `analyze_drive_overall.py` (section "SPEED UTILISATION"). Nightly lateral sweep reports the vs-allowed median per track.
+- **Tests:** `tests/test_speed_utilization.py` (synthetic HDF5; eligibility rules, both ratios, attribution).
+
 
 ## Debug Visualizer (PhilViz)
 
 The `tools/debug_visualizer/` tree powers the in-browser playback + diagnostics dashboard. Backend modules expose health and triage data to the visualizer; the server is the entry point.
+- **Speed Utilisation section (2026-09-25):** report-only line from `tools/speed_utilization.py` — see that entry. Wrapped in try/except so a metric failure can never break the report.
 
 ### `tools/debug_visualizer/backend/dashboards.py`
 
