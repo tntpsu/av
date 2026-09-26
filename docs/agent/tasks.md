@@ -259,7 +259,8 @@ in base and the hill overlay. **Unity A/B 2026-09-26, 5 pairs each, 60 s:**
 
 **Applied:** base and hill overlay → 0.0 (kill-switch: 0.035). **Note the gate
 consequence:** the slower car passed mixed_radius's Trajectory ≥ 95 by 0.1; the
-correctly-driven car misses it by 0.4 (the frozen Aug-13 golden also reads 94.6).
+correctly-driven car misses it by 0.4 (the frozen Aug-13 golden also reads 94.6;
+n=5 per arm, A range 94.5–95.4 straddles the gate, B 93.4–94.8 all below).
 The 95.1 was bought with 4 % under-speed — the exact trap
 `project_speed_utilization_metric` warns about. Reverting to 0.035 to recover
 it is a legitimate but explicit choice. The lateral cost
@@ -290,9 +291,16 @@ Post-convergence median (gap − EQ) is +3.1 (H2, H4), +2.2 (H5), +4.3 (H6),
 regardless of track, so it is not a scenario problem. The harness converges to
 EQ exactly, so it lives in something the harness idealises: the ACC dt hardcode
 (integration at 43 % — T-ACC-DT-HARDCODE, kill-switch now wired), the α=0.3 gap
-EMA lag at 13 FPS, or radar noise. Test the dt flag first (A/B on H5, the most
-dynamic follower), then the EMA. Not the drag term — the harness shows drag does
-not bias the following gap, only free-flow.
+EMA lag at 13 FPS, or radar noise. **Narrowed 2026-09-26 (harness):** the production sensor EMA
+is IN the harness and it converges to EQ within 0.2 m; adding Unity's radar
+noise (σ 0.15 m / 0.05 m/s) and 3× that gives ≤ +0.2 m; the dt hardcode gives
+~+1 m; drag does not bias the following gap at all. So the +3–5 m lives in
+what the harness does NOT model: the Unity actuator/plant response (throttle→
+torque nonlinearity, actuator lag). Next probe: align `unity_feedback/
+actual_throttle_applied` by timestamp (it is on a −37 s clock, see
+reference_hdf5_acc_schema_gaps) and compare commanded vs delivered accel during
+steady following; then fit a first-order actuator into the harness plant and
+see if the bias appears.
 
 ### T-ACC-DT-HARDCODE — ACC stepped with dt=1/30 while frames arrive at 1/13 (2026-09-22)
 
