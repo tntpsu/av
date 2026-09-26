@@ -306,7 +306,14 @@ control:
     accel_pid_kd: 0.02
     throttle_curve_gamma: 1.4
     throttle_curve_min: 0.0
-    speed_drag_gain: 0.035
+    # T-ACC-DRAG (2026-09-26): 0.035 was an artificial brake — subtracted 0.035·v
+    # from the desired accel as a "drag feed-forward", but the plant has no drag
+    # (CarController.cs sets rb.drag = 0). With the P-only speed loop it parked
+    # the ego ~0.35 m/s under every target (A1 lost its lead at 11.36 vs 12.0).
+    # A/B 5 pairs: highway_65 shortfall +0.44 → +0.14 m/s, util 0.91 → 0.94;
+    # mixed_radius 4 % faster, lateral RMSE 0.112 → 0.123 m (PP ceiling made
+    # visible, within tolerance). Kill-switch: 0.035 restores the old behaviour.
+    speed_drag_gain: 0.0
     accel_target_smoothing_alpha: 0.86
     continuous_accel_control: true
     continuous_accel_deadband: 0.05

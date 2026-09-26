@@ -30,7 +30,7 @@ control:
     curve_intent_startup_ignore_frames: 30
   longitudinal:
     max_speed: 14.0
-    speed_drag_gain: 0.020
+    speed_drag_gain: 0.0                 # T-ACC-DRAG 2026-09-26: was 0.020 — artificial brake, see base config
     accel_target_smoothing_alpha: 0.75
     accel_tracking_enabled: false
 
