@@ -294,6 +294,9 @@ def run_closedloop(
     stop_on_collision: bool = True,
     radar_range_offset_m: float = RADAR_RANGE_OFFSET_MEASURED_M,
     contact_frames_after: int = 40,
+    radar_noise_sigma_m: float = 0.0,        # AVBridge.cs radarDistanceNoiseSigma = 0.15
+    radar_rate_noise_sigma_mps: float = 0.0, # AVBridge.cs radarRateNoiseSigma   = 0.05
+    rng_seed: int = 7,
 ) -> ClosedLoopResult:
     """Run the ACC longitudinal stack against a scripted lead.
 
@@ -338,6 +341,7 @@ def run_closedloop(
 
     res = ClosedLoopResult()
     tr = res.trace
+    _rng = __import__('numpy').random.default_rng(rng_seed)
 
     v = float(ego_speed0)
     gap = float(gap0)
@@ -357,10 +361,15 @@ def run_closedloop(
             detected = 0.0 < reported <= detection_range
             if radar_detect_fn is not None:
                 detected = detected and bool(radar_detect_fn(i, gap))
+        rr_raw = 0.0 if res.collided else v - v_lead                       # + = closing
+        if radar_noise_sigma_m > 0.0 and detected and not res.collided:
+            reported = max(0.1, reported + float(_rng.normal(0.0, radar_noise_sigma_m)))
+        if radar_rate_noise_sigma_mps > 0.0 and detected and not res.collided:
+            rr_raw = rr_raw + float(_rng.normal(0.0, radar_rate_noise_sigma_mps))
         raw = {
             "radar_fwd_detected": detected,
             "radar_fwd_distance_m": reported,
-            "radar_fwd_range_rate_mps": 0.0 if res.collided else v - v_lead,   # + = closing
+            "radar_fwd_range_rate_mps": rr_raw,
             "radar_fwd_snr": 1.0,
         }
         reading = sensor.read_frame(raw)
