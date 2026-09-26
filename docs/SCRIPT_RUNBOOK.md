@@ -94,6 +94,18 @@ If you are unsure which command to run, start here first.
 
 ## Scheduled / Automation Scripts
 
+### `tools/nightly/notify.py`
+
+- **Purpose:** Sends the nightly job email over duckAgent's Gmail SMTP credentials. Since 2026-09-25 it has a report mode: `--job <nightly|sweep|acc-sweep|process-health> --log <path>` renders the job's `data/reports/*` file into a professional HTML email (GATE badge, KPI chips, **Next steps first**, coloured results table, "Changes vs last night", one card per failure with Root cause / Action, raw report + log tail as appendix) with a plain-text alternative. Without `--job` it is the legacy plain-text body-on-stdin mailer. `--preview out.html` renders without sending; `--to` overrides the recipient.
+- **Use when:** Called from every wrapper's `notify_on_exit` trap. Manual: `tail -n 100 log | python3 tools/nightly/notify.py "subject" --job acc-sweep --log log --preview /tmp/x.html`.
+- **Failure mode:** rendering is wrapped so a parse bug degrades to the legacy body, never to a missing email.
+
+### `tools/nightly/report_render.py`
+
+- **Purpose:** Parsers + HTML/text renderer behind `notify.py --job`. One parser per job, keyed on the structures the PROMPTs contract: the canonical `GATE:` line, the results table rows, the `Changes from Night-N:` block, and per-failure blocks with `Root cause:` / `Action:` lines (acc-sweep); table + `Next action:` / `Do NOT tune` lines (sweep); the `[FIXED]/[FLAKY]/[REAL_BREAK]` items (nightly); headings of the newest `process_health_*.md`. Any parse failure is reported inside the email and falls back to the raw report.
+- **Use when:** `python3 tools/nightly/report_render.py acc-sweep --preview /tmp/acc.html --log <log>` to preview the email for the current report. **If you change a report's layout in a PROMPT, change the parser here in the same commit** — the email's "Next steps" section is only as good as the `Action:` lines the agent writes.
+- **Tests:** `tests/test_nightly_report_render.py`.
+
 ### `tools/nightly/run.sh`
 
 - **Purpose:** Wrapper invoked by launchd at 2am local time to run the nightly test-fix agent. Pulls `main`, invokes `claude -p` with `tools/nightly/PROMPT.md` under a hard 60-min watchdog timeout, logs to `~/av_runtime/logs/nightly/<date>.log`, and emails a completion summary on every exit.
@@ -105,6 +117,7 @@ If you are unsure which command to run, start here first.
 - **Companion files:** `tools/nightly/PROMPT.md` (agent prompt), `tools/nightly/RUBRIC.md` (classification rules), `tools/nightly/notify.py` (email helper).
 - **Email subject composition:** `compose_subject()` in `notify_on_exit` parses `data/reports/nightly_test_report.txt` (Fixed/Real-breaks/Flaky counts) and `data/reports/nightly_status.txt` (delivery= field) directly, instead of relying on the agent printing a literal summary line to stdout. Falls back to log-grep then exit-code-synthesis if the report file is missing.
 - **Model (2026-09-25):** `claude -p --model claude-sonnet-5` (was `claude-sonnet-4-6`). Budget and wall-clock caps unchanged. Rationale: September's costly errors were judgement errors (H8 mis-gated twice on a rule already in memory; an 11-night 'classifier cluster' built without checking reject reasons; the `Proceed?` loop), which a stronger model addresses; cost is bounded by `--max-budget-usd`. Plan: watch two nights for budget-cap hits, then consider `claude-opus-5` for acc-sweep only (raise its cap to $15 if needed).
+- **Email format (2026-09-25):** `notify_on_exit` now passes `--job <job> --log "$LOG"` to `notify.py`; the mail is the rendered HTML report (see `tools/nightly/report_render.py`) with the log tail as an appendix instead of the body.
 
 ### `tools/nightly/sweep/run.sh`
 
@@ -118,6 +131,7 @@ If you are unsure which command to run, start here first.
 - **Companion files:** `tools/nightly/sweep/PROMPT.md`, `.claude/commands/sweep.md` (the playbook), `tools/nightly/notify.py`.
 - **Email subject composition:** `compose_subject()` in `notify_on_exit` parses `data/reports/sweep_status.txt` directly — counts done tracks, sums regressions (delta < -2.0), counts FLAG= markers, identifies worst-delta track. **Gate verdict** is read from `data/reports/sweep_report.txt`'s canonical `GATE: ...` line so the subject reflects the same rule the agent applied (layer-≥95 AND no regressions), not a wrapper-side recomputation. Falls back to log-grep then exit-code-synthesis if files are missing.
 - **Model (2026-09-25):** `claude -p --model claude-sonnet-5` (was `claude-sonnet-4-6`). Budget and wall-clock caps unchanged. Rationale: September's costly errors were judgement errors (H8 mis-gated twice on a rule already in memory; an 11-night 'classifier cluster' built without checking reject reasons; the `Proceed?` loop), which a stronger model addresses; cost is bounded by `--max-budget-usd`. Plan: watch two nights for budget-cap hits, then consider `claude-opus-5` for acc-sweep only (raise its cap to $15 if needed).
+- **Email format (2026-09-25):** `notify_on_exit` now passes `--job <job> --log "$LOG"` to `notify.py`; the mail is the rendered HTML report (see `tools/nightly/report_render.py`) with the log tail as an appendix instead of the body.
 
 ### `tools/nightly/acc-sweep/run.sh`
 
@@ -142,6 +156,7 @@ If you are unsure which command to run, start here first.
 - **Email subject composition:** `compose_subject()` in `notify_on_exit` parses `data/reports/acc_sweep_status.txt` per-scenario lines (`scenario_<name>_done verdict=<X>`), counts each verdict type, computes gate=PASS (no FAILs) or gate=FAIL.
 - **Known V1 limitation:** ACC scenarios share `track_id` with their base track in `recording_provenance`. Disambiguation is best-effort (filename + ACC-data-presence + recency). A `recording_provenance.scenario_id` field is on the deferred roadmap (see `docs/agent/tasks.md`).
 - **Model (2026-09-25):** `claude -p --model claude-sonnet-5` (was `claude-sonnet-4-6`). Budget and wall-clock caps unchanged. Rationale: September's costly errors were judgement errors (H8 mis-gated twice on a rule already in memory; an 11-night 'classifier cluster' built without checking reject reasons; the `Proceed?` loop), which a stronger model addresses; cost is bounded by `--max-budget-usd`. Plan: watch two nights for budget-cap hits, then consider `claude-opus-5` for acc-sweep only (raise its cap to $15 if needed).
+- **Email format (2026-09-25):** `notify_on_exit` now passes `--job <job> --log "$LOG"` to `notify.py`; the mail is the rendered HTML report (see `tools/nightly/report_render.py`) with the log tail as an appendix instead of the body.
 
 ### `tools/nightly/process-health/run.sh`
 
@@ -154,6 +169,7 @@ If you are unsure which command to run, start here first.
 - **Uninstall:** `launchctl unload ~/Library/LaunchAgents/com.philtullai.av-process-health.plist`
 - **Companion files:** `tools/nightly/process-health/PROMPT.md`, `.claude/commands/process-health.md`, `tools/nightly/notify.py`.
 - **Model (2026-09-25):** `claude -p --model claude-sonnet-5` (was `claude-sonnet-4-6`). Budget and wall-clock caps unchanged. Rationale: September's costly errors were judgement errors (H8 mis-gated twice on a rule already in memory; an 11-night 'classifier cluster' built without checking reject reasons; the `Proceed?` loop), which a stronger model addresses; cost is bounded by `--max-budget-usd`. Plan: watch two nights for budget-cap hits, then consider `claude-opus-5` for acc-sweep only (raise its cap to $15 if needed).
+- **Email format (2026-09-25):** `notify_on_exit` now passes `--job <job> --log "$LOG"` to `notify.py`; the mail is the rendered HTML report (see `tools/nightly/report_render.py`) with the log tail as an appendix instead of the body.
 
 ### `tools/nightly/notify.py`
 

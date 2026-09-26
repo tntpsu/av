@@ -121,6 +121,15 @@ mattered. See the `feedback_nightly_memory_unbounded_append` memory.
 The same rule applies to any other memory you touch tonight.
 
 
+## Report structure contract — the email renderer parses these
+
+`tools/nightly/report_render.py` turns `sweep_report.txt` into the HTML email.
+Keep: one row per track `track  baseline  now  delta  traj  [util]  PASS|FAIL|FLAG (note)`;
+the `GATE:` line; the `Regressions … / New e-stops: / Flags …:` lines; a
+`Standing failures …:` heading with indented lines; and at least one `Next action:`
+line — it becomes the email's "Next steps". The `⚠ FROZEN RECORDINGS …` line is
+shown as a banner when present.
+
 ## Speed Utilisation column (report-only, added 2026-09-25)
 
 `analyze_drive_overall.py` now prints a `SPEED UTILISATION (report-only)`

@@ -151,6 +151,22 @@ on 2026-08-12. It is loaded on every session in this project. See the
 `feedback_nightly_memory_unbounded_append` memory.
 
 
+## Report structure contract — the email renderer parses these
+
+`tools/nightly/report_render.py` turns `acc_sweep_report.txt` into the HTML email.
+Keep these exact shapes or the email degrades to the raw text:
+
+- One results row per scenario: `ID  (track_id)  base_track  rec_age  VERDICT  score  sub-scores/note`
+  (VERDICT ∈ PASS FAIL WARN SKIP AMB). The header line and `(Night N)` in the title.
+- The canonical `GATE: PASS|FAIL` line and the `pass=N fail=N warn=N skip=N amb=N total=N` line.
+- A `Changes from Night-N (date):` heading followed by one indented line per change,
+  ending with a blank line.
+- One block per FAIL/WARN starting with `ID — track_id [recording, age]`, whose
+  indented body contains a `Root cause:` line and an `Action:` line (continuation
+  lines indented further). Every `Action:` becomes a numbered "Next step" at the top
+  of the email — write them as things a human can do tomorrow, not restatements of
+  the failure.
+
 ## Detection-rate verdicts — read before FAILing anything on detection
 
 1. **Gate only on what the scenario's `Expected:` line names.** `acc_pipeline_analysis`

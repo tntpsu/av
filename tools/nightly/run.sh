@@ -66,7 +66,7 @@ notify_on_exit() {
   local subject
   subject=$(compose_subject "$exit_code")
   tail -n 100 "$LOG" 2>/dev/null \
-    | python3 "$REPO/tools/nightly/notify.py" "$subject" \
+    | python3 "$REPO/tools/nightly/notify.py" "$subject" --job nightly --log "$LOG" \
     >>"$LOG" 2>&1 \
     || echo "notify.py failed (continuing)" >>"$LOG"
 }
