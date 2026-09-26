@@ -8578,11 +8578,20 @@ class AVStack:
                 _acc_active_now = bool(vehicle_state_dict.get('acc_active', 0.0))
                 _idm_accel_shadow = float(vehicle_state_dict.get('acc_idm_accel_mps2', 0.0) or 0.0)
                 _acc_state_code_now = str(vehicle_state_dict.get('acc_state_code', '') or '')
+                # T-ACC-EQ-BIAS (2026-09-26): with decel-only routing, IDM's positive
+                # acceleration never reached the controller; the ACC overlays also
+                # disable the accel PID, so the P-only speed loop needed a standing
+                # +1.0–1.6 m/s droop to hold speed against the plant's rolling
+                # resistance, and IDM could only supply that target lead by parking
+                # the gap 4–6 m above its own equilibrium. Routing both signs closes
+                # the loop on IDM's actual command (harness: bias +3.1 → 0.0 m).
+                # acc_idm_accel_routing_positive is the kill-switch (code default off).
+                _route_positive = bool(_long_cfg_pre.get('acc_idm_accel_routing_positive', False))
                 _route_idm_to_ctrl = (
                     _acc_routing_enabled
                     and not _acc_routing_shadow
                     and _acc_active_now
-                    and _idm_accel_shadow < 0.0  # only override on decel — accel path still planner-owned
+                    and (_idm_accel_shadow < 0.0 or _route_positive)
                 )
                 _reference_accel_for_ctrl = (
                     _idm_accel_shadow if _route_idm_to_ctrl else planned_accel
@@ -8643,7 +8652,8 @@ class AVStack:
                     elif not _acc_active_now:
                         control_command['reference_accel_source'] = 'acc_inactive'
                     else:
-                        # routing active + ACC active but IDM accel >= 0 → planner-owned path
+                        # routing active + ACC active but IDM accel >= 0 and positive
+                        # routing off → planner-owned path (legacy)
                         control_command['reference_accel_source'] = 'planner'
                 control_command['acc_idm_accel_shadow_mps2'] = _idm_accel_shadow
                 control_command['planner_target_speed_applied_mps'] = planner_target_speed_applied_mps

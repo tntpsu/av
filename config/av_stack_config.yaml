@@ -264,6 +264,13 @@ control:
     kd: 0.01
     max_accel: 1.2
     max_decel: 2.4
+    # max_jerk is the MEASURED-jerk throttle cap (pid_controller ~5300), separate from the
+    # command-side dynamic jerk limiter (max_jerk_min/max). At 13 FPS a second difference of
+    # speed is noise (G1 steady follow: |jerk| p50 2.15, p95 8.1 m/s³ vs this 0.7), so it fires
+    # on 40-54 % of frames. A/B 2026-09-26 at 6.0 (G1, 5 pairs, with and without both-sign IDM
+    # routing): comfort stayed inside gates but the gap oscillated more (post-conv RMSE 7 → 14 /
+    # 46 m) and delivered accel was capped at ~0.12 m/s² either way — a ceiling downstream of
+    # this cap (T-ACC-EQ-BIAS). Kept at 0.7 until that ceiling is found.
     max_jerk: 0.7
     max_jerk_min: 1.0
     max_jerk_max: 4.0
@@ -369,6 +376,17 @@ control:
     acc_idm_accel_routing_emergency_jerk_max: 10.0      # 2.5× nominal (4.0) for brake-onset transient
     acc_idm_accel_routing_emergency_relax_in_estate: true   # ACTIVE: widens decel/jerk in EMERGENCY_BRAKE/TTC_ESTOP/COLLAPSED_GAP_STOP
     acc_idm_accel_routing_b1_hard_brake_bypass: true        # ACTIVE (Commit D): EMERGENCY_BRAKE → brake=1.0 bypass; probe 2026-04-21 showed Commit C+C.1 insufficient due to upstream accel_target_smoothing EMA lag
+    # T-ACC-EQ-BIAS (2026-09-26): route IDM's POSITIVE acceleration too. Decel-only
+    # routing left the accel side to the P-only speed loop (ACC overlays disable the
+    # accel PID), which needs a standing +1.0–1.6 m/s droop to hold speed against
+    # rolling resistance; IDM supplied that target lead by parking the gap 4–6 m above
+    # its own equilibrium on every following scenario. Harness with a resistive plant:
+    # bias +3.1 → 0.0 m. Unity A/B (H5, G1, 5 pairs each, 2026-09-26): NOT confirmed —
+    # the routed +0.4–1.1 m/s² reached the controller and was still delivered as
+    # +0.01–0.14, because the MEASURED-jerk throttle cap (max_jerk 0.7 m/s³ on a
+    # 13 FPS second difference) fires on 40–60 % of frames. Left OFF until that cap
+    # is fixed (T-ACC-EQ-BIAS); the code path stays as a kill-switch.
+    acc_idm_accel_routing_positive: false
     # IDM-as-accel-floor (pre-emergency states — greedy-swimming-naur.md, Phase 0.5 verified 2026-04-22)
     # Min-gate: if state in floor_states and idm < min_negative, clip accel_cmd_raw to min(speed_p, idm).
     # Complements acc_idm_accel_routing_emergency_* (post-transition) by covering the ACC_ACTIVE/CUTOUT

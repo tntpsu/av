@@ -294,6 +294,8 @@ def run_closedloop(
     stop_on_collision: bool = True,
     radar_range_offset_m: float = RADAR_RANGE_OFFSET_MEASURED_M,
     contact_frames_after: int = 40,
+    route_positive_idm_accel: Optional[bool] = None,  # None → cfg acc_idm_accel_routing_positive (T-ACC-EQ-BIAS probe)
+    speed_noise_sigma_mps: float = 0.0,      # measured-speed noise seen by the controllers (Unity ≈ 0.02–0.03 at 13 FPS)
     radar_noise_sigma_m: float = 0.0,        # AVBridge.cs radarDistanceNoiseSigma = 0.15
     radar_rate_noise_sigma_mps: float = 0.0, # AVBridge.cs radarRateNoiseSigma   = 0.05
     rng_seed: int = 7,
@@ -374,8 +376,12 @@ def run_closedloop(
         }
         reading = sensor.read_frame(raw)
 
+        # ── measured speed (the controllers never see the true state) ───────
+        v_meas = v + (float(_rng.normal(0.0, speed_noise_sigma_mps)) if speed_noise_sigma_mps > 0.0 else 0.0)
+        v_meas = max(0.0, v_meas)
+
         # ── ACC (note: production steps this with a fixed 1/30 s) ───────────
-        out = acc.compute_target_speed(ego_speed=v, free_flow_target=free_flow_target,
+        out = acc.compute_target_speed(ego_speed=v_meas, free_flow_target=free_flow_target,
                                        reading=reading, dt=acc_dt)
         state = out.state.value
 
@@ -392,13 +398,15 @@ def run_closedloop(
             estop_latched = True
 
         # ── IDM → reference_accel routing  (orchestrator.py:8560) ───────────
-        route_idm = (routing_enabled and not routing_shadow
-                     and bool(out.acc_active) and out.idm_accel_mps2 < 0.0)
+        _pos_ok = (bool(lon_cfg.get("acc_idm_accel_routing_positive", False))
+                   if route_positive_idm_accel is None else bool(route_positive_idm_accel))
+        route_idm = (routing_enabled and not routing_shadow and bool(out.acc_active)
+                     and (out.idm_accel_mps2 < 0.0 or _pos_ok))
         reference_accel = out.idm_accel_mps2 if route_idm else planned_accel
 
         # ── longitudinal controller  (VehicleController.compute_control) ────
         throttle, brake = lon.compute_control(
-            current_speed=v,
+            current_speed=v_meas,
             reference_velocity=final_target,
             dt=dt,
             reference_accel=reference_accel,
@@ -415,6 +423,7 @@ def run_closedloop(
             acc_idm_accel_floor_min_negative=floor_min_neg,
         )
         accel_cmd_raw = float(getattr(lon, "last_accel_cmd_raw", float("nan")))
+        jerk_capped = bool(getattr(lon, "last_jerk_capped", False))
 
         # ── safety clip  (orchestrator.py:9445-9530) ────────────────────────
         if estop_latched and v <= release_speed:
@@ -446,6 +455,7 @@ def run_closedloop(
         tr["final_longitudinal_owner_code"].append(owner)
         tr["reference_accel_source"].append("acc_idm" if route_idm else "planner")
         tr["longitudinal_accel_cmd_raw"].append(accel_cmd_raw)
+        tr["longitudinal_jerk_capped"].append(jerk_capped)
         tr["throttle"].append(throttle)
         tr["brake"].append(brake)
         tr["safety_override"].append(forced or "")

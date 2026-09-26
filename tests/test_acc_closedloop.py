@@ -49,6 +49,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from acc_closedloop_harness import (  # noqa: E402
     ACC_DT_PRODUCTION_S,
+    run_closedloop,
     FRAME_DT_MEASURED_S,
     RADAR_RANGE_OFFSET_MEASURED_M,
     LeadProfile,
@@ -499,3 +500,55 @@ class TestRadarFrame:
         assert not r.collided, r.summary()
         assert r.min_gap() > 4.0, r.summary()          # what the sweep saw
         assert r.min_true_gap() < 1.0, r.summary()     # what was physically there
+
+
+# ===========================================================================
+# 6.  Equilibrium bias — IDM's positive acceleration must reach the controller
+# ===========================================================================
+
+class TestEquilibriumBiasRouting:
+    """T-ACC-EQ-BIAS. On every real following scenario the ego parked 4–6 m above
+    IDM's equilibrium gap with the ACC target +1.0–1.6 m/s above the ego and IDM
+    holding +0.7–1.1 m/s² that the controller never delivered: routing forwarded
+    IDM to the controller only on deceleration. With a resistive plant the
+    harness reproduces it; routing both signs removes it."""
+
+    DRAG = 0.10   # m/s² per m/s — matches Unity (throttle ~0.12 to hold 8 m/s)
+
+    @staticmethod
+    def _bias(cfg, route_positive):
+        r = run_closedloop(cfg=cfg, lead=LeadProfile(kind="constant", speed=8.0), grade_rad=0.0, ego_speed0=0.0,
+                           gap0=30.0, free_flow_target=15.0, n_frames=int(200 / FRAME_DT_MEASURED_S),
+                           plant=PointMassPlant(drag_per_mps=TestEquilibriumBiasRouting.DRAG),
+                           route_positive_idm_accel=route_positive)
+        import numpy as np
+        tr = r.trace; act = np.array(tr["acc_active"]) > 0.5; t = np.array(tr["t"]); m = act & (t > 100)
+        gap = np.array(tr["true_bumper_gap_m"]); v = np.array(tr["speed"]); ts = np.array(tr["acc_target_speed_mps"])
+        p = cfg["acc"]; vv = float(v[m].mean()); eq = (p["min_gap_s0_m"] + vv * p["target_gap_time_headway_s"]) / (1 - (vv / 15.0) ** 4) ** 0.5
+        return float(np.median(gap[m]) - eq), float(np.median(ts[m] - v[m])), r
+
+    def test_decel_only_routing_parks_above_equilibrium(self, highway_cfg):
+        bias, lead, _ = self._bias(highway_cfg, route_positive=False)
+        assert bias > 2.0, f"expected the legacy bias with a resistive plant, got {bias:+.1f} m"
+        assert lead > 1.0, f"expected the ACC target to lead the ego, got {lead:+.2f} m/s"
+
+    def test_both_sign_routing_removes_the_bias(self, highway_cfg):
+        bias, _, r = self._bias(highway_cfg, route_positive=True)
+        assert abs(bias) < 1.0, f"bias {bias:+.1f} m with positive routing"
+        assert not r.collided and r.frames_in(*ESTOP_STATES) == 0
+
+    def test_production_config_carries_the_kill_switch(self, highway_cfg, hill_cfg):
+        """Off after the 2026-09-26 Unity A/Bs (H5, G1): the routed command reached
+        the controller and was still eaten by the measured-jerk throttle cap."""
+        for cfg in (highway_cfg, hill_cfg):
+            assert cfg["control"]["longitudinal"]["acc_idm_accel_routing_positive"] is False
+
+    def test_safety_unchanged_with_positive_routing(self, highway_cfg, hill_cfg):
+        import copy
+        highway_cfg = copy.deepcopy(highway_cfg); highway_cfg['control']['longitudinal']['acc_idm_accel_routing_positive'] = True
+        hill_cfg = copy.deepcopy(hill_cfg); hill_cfg['control']['longitudinal']['acc_idm_accel_routing_positive'] = True
+        h5 = run_h5_stop_go(highway_cfg); g2 = run_g2_from_brake_onset(hill_cfg)
+        for r in (h5, g2):
+            assert not r.collided and r.frames_in(*ESTOP_STATES) == 0, r.summary()
+            assert r.ttc_min_acc_active() >= TTC_GATE_S, r.summary()
+
